@@ -1,5 +1,5 @@
 //! Settled memoized views: a settled view adds its last run to the pass in place of running, and runs when one of the
-//! settled rules breaks: the pointer over it, a bound value, inspection record or command state it read, its room, its
+//! settled rules breaks: what pointer sensing gives it, a pointer move it follows, a bound value, inspection record or command state it read, its room, its
 //! environment (theme, density, language), an animation or a repaint asked inside it. Input elsewhere in the window
 //! does not run it.
 
@@ -180,6 +180,75 @@ fn hovering_a_settled_view_runs_it_alone() {
     assert!(other > 0, "the view the pointer left runs to show its hover leaving");
     scene.settle(&mut frames);
     assert_eq!(scene.frame(&mut frames, vec![]), [0, 0], "once its hover faded, the view settles again");
+}
+
+/// A pointer that moves within one part of a settled view, once its hover has settled, leaves it settled: what
+/// sensing gives the view is the same.
+#[trial]
+fn a_move_within_a_settled_views_part_replays_it() {
+    let scene = Scene::new(false, false);
+    let mut frames = Frames::new();
+    scene.settle(&mut frames);
+    let over = Scene::button(1).1.center();
+    scene.frame(&mut frames, vec![moved(over)]);
+    scene.settle(&mut frames);
+    for step in 1..=3 {
+        let at = over + Vec2::new(step as f32, 0.0);
+        assert_eq!(scene.frame(&mut frames, vec![moved(at)]), [0, 0], "move {step} within the hovered button replays both views");
+    }
+}
+
+/// A pointer that moves onto another part of a settled view runs that view in the frame it arrives, and only it; the
+/// view settles again once its hover has.
+#[trial]
+fn a_move_onto_another_part_runs_the_view_once() {
+    let scene = Scene::new(false, false);
+    let mut frames = Frames::new();
+    scene.settle(&mut frames);
+    scene.frame(&mut frames, vec![moved(Scene::button(0).1.center())]);
+    scene.settle(&mut frames);
+    let [reader, other] = scene.frame(&mut frames, vec![moved(READER.center())]);
+    assert!(reader > 0, "the move from the button onto the scrub runs the view that shows both");
+    assert_eq!(other, 0, "the view beside it stays settled");
+    scene.settle(&mut frames);
+    assert_eq!(scene.frame(&mut frames, vec![]), [0, 0], "once its hover settled, the view replays again");
+}
+
+/// A view that marks a rect as following the pointer.
+#[derive(MemoProps)]
+struct Follower {
+    follows: bool,
+}
+
+fn follower(props: &mut Follower, ui: &mut Ui) {
+    let response = Button::new("Gamma").show(ui).response;
+    BUTTONS.with(|buttons| buttons[0].set((response.id, response.rect)));
+    if props.follows {
+        craft_ui::runtime::pointer::follows_pointer(ui.ctx(), response.rect);
+    }
+}
+
+/// A settled view whose run marked a rect as following the pointer runs on every move within it; one that marked
+/// none replays on the same moves.
+#[trial]
+fn a_view_that_follows_the_pointer_runs_on_every_move() {
+    for follows in [true, false] {
+        let show = |ui: &mut Ui| {
+            in_region(ui, Rect::from_min_size(ORIGIN, ROOM), |ui| {
+                MemoView::new("follower", Follower { follows }, follower).show(ui);
+            });
+        };
+        let mut frames = Frames::new();
+        frames.idle(30, show);
+        let over = Scene::button(0).1.center();
+        frames.frame(vec![moved(over)], show);
+        frames.idle(30, show);
+        for step in 1..=3 {
+            frames.frame(vec![moved(over + Vec2::new(step as f32, 0.0))], show);
+            let runs = runs_of(&frames.ctx, "Follower");
+            assert_eq!(runs > 0, follows, "move {step}: the view runs exactly when its run follows the pointer ({follows})");
+        }
+    }
 }
 
 /// Drags the editor right in steps; returns per frame from the press on the passes, the runs of each view, and whether

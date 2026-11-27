@@ -244,6 +244,9 @@ pub(crate) struct Shapes {
     /// What lies under the pass's hover point, found over `last` at the begin hook with the pass's egui targets:
     /// every root's hover reads it, and a press at the same point and targets reuses it.
     hover: Option<(Pos2, PressTargets, Under)>,
+    /// The egui widgets under the pass's hover point in the last finished pass, with the click and drag targets there
+    /// (`Context::widgets_at`), found once at the begin hook for every view's `sensed`.
+    hover_widgets: Option<(Vec<Id>, Option<Id>, Option<Id>)>,
     /// A press was open when the pass began: only its target hovers.
     captured: bool,
     /// The pass's tap went to a component.
@@ -403,8 +406,10 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
     let hover_targets = PressTargets { click: hits.0, drag: hits.1 };
     let hover = hover_at.map(|at| (at, hover_targets, find_under(ctx, viewport, at, hover_targets, false)));
     let captured = press_captured(ctx);
+    let hover_widgets = hover_at.and_then(|at| ctx.widgets_at(viewport, at));
     PerViewport::<Shapes>::with(ctx, viewport, |shapes| {
         shapes.hover = hover;
+        shapes.hover_widgets = hover_widgets;
         shapes.captured = captured;
         shapes.pressed_parts.clear();
     });
@@ -1064,6 +1069,60 @@ pub(crate) fn press_winner(ctx: &Context, at: Pos2, targets: PressTargets) -> Op
 /// record's borrow.
 pub(crate) fn with_hover<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(Option<&Under>, bool) -> R) -> R {
     PerViewport::<Shapes>::with(ctx, viewport, |record| f(record.hover.as_ref().map(|(_, _, under)| under), record.captured))
+}
+
+/// What pointer sensing gives a memoized view's run in the running pass (`runtime::lazy`): of the arena roots and egui
+/// widgets the run registered, the ones under the pass's hover point and what they win there. Equal answers in two
+/// passes mean every hover, part and pointer-over fact the run's components read is the same; a hover position is
+/// not part of it, as the code that reads one marks itself ([`follows_pointer`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Sensed {
+    /// The press winners and the shape that hovers beside them (`Under`), each as its kind, root, owner and part, of
+    /// the run's roots. None while a press is open: only the press's target hovers, and the press runs it.
+    hover: SmallVec<[(u8, Id, Id, Option<PartRef>); 3]>,
+    /// The run's roots with a shape under the point.
+    over: SmallVec<[Id; 4]>,
+    /// The run's egui widgets that contain the point, then its click and drag targets there.
+    widgets: SmallVec<[Id; 4]>,
+}
+
+impl Sensed {
+    /// Nothing of the run lies under the pointer.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.hover.is_empty() && self.over.is_empty() && self.widgets.is_empty()
+    }
+}
+
+/// What pointer sensing gives the arena roots `roots` and egui widgets `widgets` of a run in the running pass
+/// ([`Sensed`]): read from the pass's one resolution at the hover point.
+pub(crate) fn sensed(ctx: &Context, roots: &IdSet, widgets: &IdSet) -> Sensed {
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
+        let mut sensed = Sensed::default();
+        if let Some((_, _, under)) = &record.hover
+            && !roots.is_empty()
+        {
+            if !record.captured {
+                let found = [under.press.click, under.press.drag, under.hover_top];
+                for (kind, (winner, root)) in (0u8..).zip(found).filter_map(|(kind, found)| Some((kind, found?))) {
+                    if roots.contains(&root) {
+                        sensed.hover.push((kind, root, winner.owner, winner.part));
+                    }
+                }
+            }
+            sensed.over.extend(under.over.iter().copied().filter(|root| roots.contains(root)));
+        }
+        if let Some((contains, click, drag)) = &record.hover_widgets
+            && !widgets.is_empty()
+        {
+            sensed.widgets.extend(contains.iter().chain(click).chain(drag).copied().filter(|widget| widgets.contains(widget)));
+        }
+        sensed
+    })
+}
+
+/// The running pass's hover point, screen points; `None` while the pointer is not in the window.
+pub(crate) fn hover_point(ctx: &Context) -> Option<Pos2> {
+    with_frame(ctx, |_, hover| hover)
 }
 
 /// Whether a shape the component `id` registered shows hover in the running pass, by the pass's one resolution of

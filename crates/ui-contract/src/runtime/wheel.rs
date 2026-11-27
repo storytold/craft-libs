@@ -316,6 +316,16 @@ pub(crate) fn begin(ctx: &Context) {
     }
 }
 
+/// Whether this pass's wheel reaches one of `takers`: a share of it goes to one, or one's ease owes motion it pays in
+/// this pass.
+pub(crate) fn reaches(ctx: &Context, takers: &[Id]) -> bool {
+    !takers.is_empty()
+        && PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| {
+            state.shares.iter().any(|(owner, _)| takers.contains(owner))
+                || state.eases.iter().any(|(owner, ease)| ease.owes() && takers.contains(owner))
+        })
+}
+
 /// The component's share of this pass's wheel, left in place.
 pub(crate) fn peek(ctx: &Context, id: Id) -> Option<Wheel> {
     PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| state.shares.iter().find(|(owner, _)| *owner == id).map(|share| share.1))
