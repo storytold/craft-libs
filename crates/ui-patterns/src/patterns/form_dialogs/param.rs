@@ -583,6 +583,7 @@ pub(crate) struct RowOptions {
     eyedropper: bool,
     eyedropper_armed: bool,
     full_width: bool,
+    hide_caption: bool,
     /// The row or section stands beside the one before it ([`Param::beside`]).
     beside: bool,
     /// The field pairs with the next one in its section ([`Param::beside_next`]).
@@ -659,6 +660,11 @@ pub(crate) enum Head {
 }
 
 impl RowOptions {
+    /// Whether the field's label names it without drawing a caption.
+    pub(crate) fn hides_caption(&self) -> bool {
+        self.hide_caption
+    }
+
     /// Whether the row or section stands beside the one before it.
     pub(crate) fn beside(&self) -> bool {
         self.beside
@@ -1303,6 +1309,15 @@ impl Param {
     #[must_use]
     pub fn full_width(mut self) -> Self {
         self.options.get_or_insert_default().full_width = true;
+        self
+    }
+
+    /// For a field with a side caption, hides the caption while keeping the row label as its accessible name.
+    /// Resettable fields keep their caption and reset dot. Separate headings, radio groups and stacked sliders
+    /// keep their own captions.
+    #[must_use]
+    pub fn hide_caption(mut self) -> Self {
+        self.options.get_or_insert_default().hide_caption = true;
         self
     }
 
