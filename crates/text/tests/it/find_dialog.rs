@@ -109,3 +109,45 @@ fn escape_in_find_what_closes_the_dialog_and_returns_the_focus() {
         }
     }
 }
+
+/// Special offers the section and paragraph characters in each of its lists and, with wildcards, the range, group,
+/// exclusion, count and repeat expressions, and a picked one goes into Find what.
+#[trial]
+fn special_offers_the_character_codes_and_the_wildcard_expressions() {
+    fn click(fixture: &mut Fixture, label: &str) {
+        let target = fixture.by_label(label).unwrap_or_else(|| panic!("a node named {label}"));
+        fixture.click(&target).settle();
+    }
+    // Opens Special, checks that it offers each of `offered`, and picks `label`.
+    fn pick(fixture: &mut Fixture, offered: &[&str], label: &str) {
+        press(fixture, "Special");
+        for entry in offered {
+            assert!(fixture.by_label(entry).is_some(), "Special offers {entry}");
+        }
+        click(fixture, label);
+    }
+    let dialog = Rc::new(RefCell::new(FindReplaceDialog::new("", FindTab::Find).word(true)));
+    let shown = Rc::clone(&dialog);
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = shown.borrow_mut().show(ui, &DialogStack::default());
+    });
+    fixture.in_room(craft_ui::testing::Room::Window).settle();
+    press(&mut fixture, "Search Options");
+    let field = |name: &str| dialog.borrow().json_fields().expect("fields")[name].as_str().expect("a text field").to_owned();
+    let characters = ["Section Character  ^%", "Paragraph Character  ^v"];
+    let expressions = ["Character in Range  [-]", "Expression  ()", "Not  [!]", "Num Occurrences  {,}", "Previous 1 or More  @"];
+
+    pick(&mut fixture, &characters, "Section Character  ^%");
+    assert!(field("find").contains("^%"), "the code goes into Find what");
+
+    click(&mut fixture, "Use wildcards");
+    pick(&mut fixture, &[&characters[..], &expressions[..]].concat(), "Num Occurrences  {,}");
+    assert!(field("find").contains("{,}"), "the expression goes into Find what");
+
+    click(&mut fixture, "Replace");
+    click(&mut fixture, "Replace with:");
+    press(&mut fixture, "Special");
+    for entry in characters {
+        assert!(fixture.by_label(entry).is_some(), "Replace with's Special offers {entry}");
+    }
+}
