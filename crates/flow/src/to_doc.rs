@@ -194,8 +194,9 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
         (out.drop_cap, out.drop_cap_distance) =
             (x.drop_cap.map(|l| l.min(10)), x.drop_cap_distance.filter(|d| d.is_finite()).map(|d| d.clamp(0.0, 1584.0)));
     }
-    if let Some(bg) = p.extra.as_ref().and_then(|x| x.shading) {
-        out.shading = Some(bg);
+    if let Some(extra) = &p.extra {
+        out.shading = extra.shading;
+        out.shading_auto = extra.shading_auto && extra.shading.is_none();
     }
     if let Some(x) = &p.extra {
         out.keep_lines = x.keep_lines.or(out.keep_lines);

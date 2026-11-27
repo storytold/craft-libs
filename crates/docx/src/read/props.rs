@@ -250,6 +250,69 @@ impl PropCtx {
         shd_fill(e)
     }
 
+    /// Paragraph shading has a presence state in addition to its fixed color. In Word,
+    /// paragraph nil is ignored (MS-OI29500 §2.1.553); invalid input is not automatic shading.
+    fn paragraph_shading(&self, e: &El) -> Option<(Option<Rgb>, bool)> {
+        let val = e.attr("w:val")?;
+        if !matches!(
+            val,
+            "clear"
+                | "solid"
+                | "horzStripe"
+                | "vertStripe"
+                | "reverseDiagStripe"
+                | "diagStripe"
+                | "horzCross"
+                | "diagCross"
+                | "thinHorzStripe"
+                | "thinVertStripe"
+                | "thinReverseDiagStripe"
+                | "thinDiagStripe"
+                | "thinHorzCross"
+                | "thinDiagCross"
+                | "pct5"
+                | "pct10"
+                | "pct12"
+                | "pct15"
+                | "pct20"
+                | "pct25"
+                | "pct30"
+                | "pct35"
+                | "pct37"
+                | "pct40"
+                | "pct45"
+                | "pct50"
+                | "pct55"
+                | "pct60"
+                | "pct62"
+                | "pct65"
+                | "pct70"
+                | "pct75"
+                | "pct80"
+                | "pct85"
+                | "pct87"
+                | "pct90"
+                | "pct95"
+        ) {
+            return None;
+        }
+        // A named theme must resolve; a missing theme must not turn a failed lookup into auto.
+        // The valid none sentinel instead leaves the plain fill in charge.
+        if e.attr("w:themeFill").is_some_and(|theme| theme != "none") {
+            return self.theme_color(e, "w:themeFill", "w:themeFillTint", "w:themeFillShade").map(|color| (Some(color), false));
+        }
+        // themeFill supersedes fill, so only validate a fallback that is actually used.
+        let fill = e.attr("w:fill").map(str::trim);
+        if fill.is_some_and(|v| v != "auto" && (v.len() != 6 || !v.bytes().all(|b| b.is_ascii_hexdigit()))) {
+            return None;
+        }
+        if val == "clear" && matches!(fill, None | Some("auto")) {
+            return Some((None, true));
+        }
+        // Keep the existing fixed-color behavior for other supported patterns; no averaging.
+        self.shd_fill(e).map(|color| (Some(color), false))
+    }
+
     /// The character properties `e` (a `w:rPr`) sets: direct formatting, plus the fonts, size,
     /// weight and posture of the complex-script and East Asian text beside them.
     pub fn rpr(&self, e: &El) -> CharProps {
@@ -420,7 +483,12 @@ impl PropCtx {
                     }
                 }
                 "w:pBdr" => p.borders = Some(self.borders(k)),
-                "w:shd" => p.shading = self.shd_fill(k),
+                "w:shd" => {
+                    if let Some((color, automatic)) = self.paragraph_shading(k) {
+                        p.shading = color;
+                        p.shading_auto = automatic;
+                    }
+                }
                 "w:tabs" => {
                     let tabs: Vec<TabStop> = k.children("w:tab").take(64).filter_map(tab_stop).collect();
                     p.tabs = Some(tabs);

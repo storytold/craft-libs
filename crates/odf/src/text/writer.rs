@@ -426,6 +426,8 @@ impl Writer {
         }
         if let Some(bg) = p.extra.as_ref().and_then(|x| x.shading) {
             props.push_str(&format!(" fo:background-color=\"#{}\"", bg.hex().to_ascii_lowercase()));
+        } else if p.extra.as_ref().is_some_and(|x| x.shading_auto) {
+            props.push_str(" fo:background-color=\"transparent\"");
         }
         if let Some(c) = p.extra.as_ref().and_then(|x| x.contextual_spacing) {
             props.push_str(&format!(" style:contextual-spacing=\"{c}\""));

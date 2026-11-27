@@ -197,9 +197,11 @@ fn para_extra(doc: &Document, p: &craft_wordmodel::props::ParaProps) -> Option<B
     // Its own, else its custom style's: the kind doesn't say (it stops at Heading 6, and is the
     // heading style's where the style is based on one).
     let outline_level = p.outline_level.or_else(|| style.as_ref().and_then(|_| doc.styles.resolve_para(p).outline_level));
+    let shading = doc.styles.resolve_para(p);
     let x = craft_wordmodel::props::ParaProps {
         tabs,
-        shading: doc.styles.resolve_para(p).shading,
+        shading: shading.shading,
+        shading_auto: shading.shading_auto,
         style,
         contextual_spacing: p.contextual_spacing,
         bidi: p.bidi.filter(|b| *b),

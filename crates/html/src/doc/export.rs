@@ -277,6 +277,8 @@ fn para_attrs(p: &Para, spaced: bool) -> String {
     }
     if let Some(bg) = p.extra.as_ref().and_then(|x| x.shading) {
         css.push(format!("background-color:#{}", bg.hex()));
+    } else if p.extra.as_ref().is_some_and(|x| x.shading_auto) {
+        css.push("background-color:transparent".to_string());
     }
     if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) }
 }
@@ -564,4 +566,46 @@ pub fn export_flow(flow: &Flow, lang: &str) -> String {
     blocks_html(&flow.blocks, &mut out, 0, false);
     out.push_str("</body>\n</html>\n");
     out
+}
+
+#[cfg(test)]
+mod paragraph_shading {
+    use super::*;
+    use craft_wordmodel::Rgb;
+    use craft_wordmodel::props::ParaProps;
+
+    fn paragraph(text: &str, kind: Kind, shading: Option<Rgb>, shading_auto: bool) -> FBlock {
+        FBlock::Para(Para {
+            kind,
+            inlines: vec![Inline::Text(text.into(), Fmt::default())],
+            extra: Some(Box::new(ParaProps { shading, shading_auto, ..Default::default() })),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn paragraph_no_fill_overrides_code_background_without_merging_neighbors() {
+        // Original public-model input; no rendered document or application oracle.
+        let color = Rgb(0x24, 0x8a, 0xb6);
+        let ordinary = Flow { blocks: vec![paragraph("ordinary", Kind::Code, None, false)], ..Default::default() };
+        assert!(export_flow(&ordinary, "en").contains("<pre><code>ordinary</code></pre>"));
+        let fixed = Flow { blocks: vec![paragraph("fixed", Kind::Code, Some(color), true)], ..Default::default() };
+        assert!(export_flow(&fixed, "en").contains(&format!("<pre style=\"background-color:#{}\"><code>fixed</code></pre>", color.hex())));
+        let flow = Flow {
+            blocks: vec![
+                paragraph("before", Kind::Code, None, false),
+                paragraph("clear one", Kind::Code, None, true),
+                paragraph("clear two", Kind::Code, None, true),
+                paragraph("fixed", Kind::Code, Some(color), true),
+                paragraph("after", Kind::Code, None, false),
+                paragraph("plain clear", Kind::Normal, None, true),
+            ],
+            ..Default::default()
+        };
+        let out = export_flow(&flow, "en");
+        assert!(out.contains("<pre style=\"background-color:transparent\"><code>clear one\nclear two</code></pre>"), "{out}");
+        assert!(out.contains("<pre><code>before</code></pre>") && out.contains("<pre><code>after</code></pre>"), "{out}");
+        assert_eq!(out.matches("<pre").count(), 4, "only matching paragraph backgrounds share a pre: {out}");
+        assert!(out.contains("<p style=\"background-color:transparent\">plain clear</p>"), "{out}");
+    }
 }

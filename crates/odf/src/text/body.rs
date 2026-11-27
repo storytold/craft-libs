@@ -933,8 +933,10 @@ impl Body<'_> {
             // The ODF name for now; import makes it the document style's id.
             p.extra.get_or_insert_with(Default::default).style = Some(n);
         }
-        if let Some(bg) = look.shading {
-            p.extra.get_or_insert_with(Default::default).shading = Some(bg);
+        if look.shading.is_some() || look.shading_auto {
+            let extra = p.extra.get_or_insert_with(Default::default);
+            extra.shading = look.shading;
+            extra.shading_auto = look.shading_auto;
         }
         if let Some(c) = look.contextual {
             p.extra.get_or_insert_with(Default::default).contextual_spacing = Some(c);

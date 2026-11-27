@@ -46,6 +46,8 @@ const P_KEEP: u16 = 0x2405; // keep lines together
 const P_KEEP_FOLLOW: u16 = 0x2406; // keep with next
 const P_PAGE_BREAK_BEFORE: u16 = 0x2407;
 const P_OUTLVL: u16 = 0x2640;
+const P_SHD80: u16 = 0x442D;
+const P_SHD: u16 = 0xC64D;
 // Paragraph borders ([MS-DOC] §2.6.2). The 80 forms carry a Brc80 (palette colour), the
 // newer ones a BrcOperand: cb(1) + Brc(8, with a full COLORREF).
 const P_BRC_TOP80: u16 = 0x6424;
@@ -337,6 +339,44 @@ fn change_tabs(p: &mut ParaProps, prl: &Prl) {
     p.tabs = Some(tabs);
 }
 
+/// A paragraph SHDOperand ([MS-DOC] §§2.9.247, 2.9.249). The outer `None` means an
+/// invalid or unsupported operand, not an automatic fill. The model keeps a flat colour:
+/// solid uses the foreground, other supported patterns the background, as for table fills.
+fn paragraph_shading(op: &[u8]) -> Option<Option<Rgb>> {
+    let [10, r, g, b, auto, br, bg, bb, back_auto, lo, hi] = op else { return None };
+    let color = |r, g, b, auto| match auto {
+        0 => Some(Some(Rgb(r, g, b))),
+        0xFF => Some(None),
+        _ => None,
+    };
+    let fore = color(*r, *g, *b, *auto)?;
+    let back = color(*br, *bg, *bb, *back_auto)?;
+    let ipat = u16::from_le_bytes([*lo, *hi]);
+    // ShdAuto and the paragraph ShdNil structure both have ipatAuto and automatic
+    // COLORREFs. A lone ipatNil is distinct; do not turn it into a clearing override.
+    if !matches!(ipat, 0..=0x19 | 0x23..=0x3D) {
+        return None;
+    }
+    Some(if ipat == 1 { fore } else { back })
+}
+
+/// The older two-byte paragraph Shd80 ([MS-DOC] §2.9.248). All bits set is the
+/// specified Shd80Nil; other reserved palette or pattern values leave formatting alone.
+fn paragraph_shading80(op: &[u8]) -> Option<Option<Rgb>> {
+    let [lo, hi] = op else { return None };
+    let v = u16::from_le_bytes([*lo, *hi]);
+    if v == 0xFFFF {
+        return Some(None);
+    }
+    let fore = (v & 0x1F) as u8;
+    let back = ((v >> 5) & 0x1F) as u8;
+    let ipat = v >> 10;
+    if fore > 16 || back > 16 || !matches!(ipat, 0..=0x19 | 0x23..=0x3D) {
+        return None;
+    }
+    Some(ico(if ipat == 1 { fore } else { back }))
+}
+
 /// Apply a paragraph-property sprm.
 pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
     let tw = |v: i32| (v as f32 / 20.0).clamp(-1000.0, 1000.0);
@@ -421,6 +461,13 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
         P_OUTLVL => {
             if let Some(&l) = prl.operand.first() {
                 p.outline_level = Some(l.min(8));
+            }
+        }
+        P_SHD80 | P_SHD => {
+            let fill = if prl.op == P_SHD80 { paragraph_shading80(prl.operand) } else { paragraph_shading(prl.operand) };
+            if let Some(fill) = fill {
+                p.shading = fill;
+                p.shading_auto = fill.is_none();
             }
         }
         P_BRC_TOP80 | P_BRC_LEFT80 | P_BRC_BOTTOM80 | P_BRC_RIGHT80 | P_BRC_BETWEEN80 => {

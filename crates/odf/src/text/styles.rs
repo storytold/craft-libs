@@ -460,6 +460,8 @@ pub(super) struct ParaLook {
     /// Borders (when a side shows) and background.
     pub(super) borders: Option<Borders>,
     pub(super) shading: Option<Rgb>,
+    /// An explicitly transparent background, overriding the paragraph style.
+    pub(super) shading_auto: bool,
     /// The custom style (a common style other than Standard and the kinds' styles) the
     /// paragraph is in, by its ODF name; the formatting above is then only what the automatic
     /// styles over it add.
@@ -974,8 +976,8 @@ fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
         Some("lr-tb" | "lr" | "tb-lr") => s.rtl = Some(false),
         _ => {}
     }
-    if let Some(bg) = get(a, "fo:background-color") {
-        s.para_shading = Some(if bg.trim() == "transparent" { None } else { model::parse_color(bg) });
+    if let Some(bg) = table_background_of(a) {
+        s.para_shading = Some(bg);
     }
 }
 
@@ -1104,6 +1106,8 @@ pub(super) struct Styles {
     default_size: Option<f32>,
     /// Spacing of `style:default-style` for paragraphs.
     default_spacing: Spacing,
+    /// Default paragraph background; Some(None) explicitly clears it.
+    default_shading: Option<Option<Rgb>>,
     /// Tab stops are measured from the paragraph's indent (LibreOffice's `TabsRelativeToIndent`
     /// setting in `settings.xml`, on unless it says otherwise).
     pub(super) tabs_from_indent: bool,
@@ -1195,6 +1199,7 @@ impl Styles {
                 }
                 "paragraph-properties" if in_default && cur.is_none() => {
                     paragraph_spacing(&a, &mut self.default_spacing);
+                    self.default_shading = table_background_of(&a);
                     self.default_widows = widows(&a);
                     if let Some(d) = get(&a, "style:tab-stop-distance").and_then(length).filter(|d| d.is_finite() && *d > 0.0) {
                         self.default_tab = Some(d.clamp(1.0, MAX_LEN));
@@ -1317,6 +1322,11 @@ impl Styles {
             overlay_spacing(&mut sp, &s.spacing);
         }
         sp
+    }
+
+    /// Standard overrides the default paragraph background, including an explicit clear.
+    pub(super) fn doc_shading(&self) -> Option<Option<Rgb>> {
+        self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.para_shading).or(self.default_shading)
     }
 
     fn chain<'a>(&'a self, name: &'a str) -> Vec<(&'a str, &'a StyleInfo)> {
@@ -1586,7 +1596,27 @@ impl Styles {
                 let align = chain.iter().find_map(|(_, s)| s.align);
                 let keep_next = chain.iter().find_map(|(_, s)| s.keep_next).unwrap_or(false);
                 let contextual = chain.iter().find_map(|(_, s)| s.contextual);
-                (kind, ParaLook { kind, align, keep_next, fmt, spacing, contextual, ..Default::default() })
+                let shading = chain.iter().find_map(|(_, s)| s.para_shading).or_else(|| {
+                    // A parentless kind inherits the default style rather than Standard.
+                    chain
+                        .last()
+                        .filter(|(_, s)| s.parent.is_none() && self.default_shading != self.doc_shading())
+                        .map(|_| self.default_shading.flatten())
+                });
+                (
+                    kind,
+                    ParaLook {
+                        kind,
+                        align,
+                        keep_next,
+                        fmt,
+                        spacing,
+                        contextual,
+                        shading: shading.flatten(),
+                        shading_auto: shading == Some(None),
+                        ..Default::default()
+                    },
+                )
             })
             .collect()
     }
@@ -1644,6 +1674,9 @@ impl Styles {
         {
             fmt.extra.get_or_insert_with(Default::default).lang = Some(lang.clone());
         }
+        // A parentless style must not take Standard's background when rebased on Normal.
+        let shading =
+            s.para_shading.or_else(|| (s.parent.is_none() && self.default_shading != self.doc_shading()).then_some(self.default_shading.flatten()));
         let look = ParaLook {
             align: s.align,
             keep_next: s.keep_next == Some(true),
@@ -1651,7 +1684,8 @@ impl Styles {
             spacing: s.spacing,
             tabs: s.tabs.clone(),
             borders: s.para_borders.filter(|b| b.takes_room()),
-            shading: s.para_shading.flatten(),
+            shading: shading.flatten(),
+            shading_auto: shading == Some(None),
             contextual: s.contextual,
             rtl: s.rtl,
             ..Default::default()
@@ -1718,7 +1752,15 @@ impl Styles {
         // Borders and background: the nearest in the chain, the kind's style and Standard aside.
         let own = || chain.iter().take(kind_at).filter(|(n, s)| s.auto || *n != "Standard");
         let borders = own().find_map(|(_, s)| s.para_borders).filter(|b| b.takes_room());
-        let shading = own().find_map(|(_, s)| s.para_shading).flatten();
+        let shading = own().find_map(|(_, s)| s.para_shading).or_else(|| {
+            // A parentless automatic style also starts at the default style, not Standard.
+            chain
+                .last()
+                .filter(|(n, s)| {
+                    named.is_none() && kind == Kind::Normal && *n != "Standard" && s.parent.is_none() && self.default_shading != self.doc_shading()
+                })
+                .map(|_| self.default_shading.flatten())
+        });
         let contextual = own().find_map(|(_, s)| s.contextual);
         let rtl = own().find_map(|(_, s)| s.rtl);
         let drop_cap = own().find_map(|(_, s)| s.drop_cap);
@@ -1741,7 +1783,8 @@ impl Styles {
             spacing,
             tabs,
             borders,
-            shading,
+            shading: shading.flatten(),
+            shading_auto: shading == Some(None),
             named,
             contextual,
             rtl,

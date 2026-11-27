@@ -196,6 +196,7 @@ fn every_para_prop_round_trips() {
             TabStop { pos: 250.0, align: TabAlign::Bar, leader: TabLeader::MiddleDot },
         ]),
         shading: Some(Rgb(0xDD, 0xEE, 0xFF)),
+        shading_auto: false,
         borders: Some(Borders { top: Some(b), left: Some(Border::single(0.5)), bottom: Some(b), right: None, between: Some(b), inside_v: None }),
         suppress_hyphens: Some(true),
         suppress_line_numbers: Some(true),

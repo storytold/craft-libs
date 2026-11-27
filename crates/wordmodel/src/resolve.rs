@@ -202,6 +202,9 @@ pub struct ResolvedPara {
     pub numbering: Option<NumRef>,
     pub tabs: Vec<TabStop>,
     pub shading: Option<Rgb>,
+    /// Explicit automatic/no fixed paragraph fill, retained for format conversion.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shading_auto: bool,
     pub borders: Option<Borders>,
     /// Padding on the sides without a line (top, left, bottom, right), points. ODF's box model
     /// (XSL's) keeps it for documents opened from ODF (`Settings::odf`); Word drops it.
@@ -295,6 +298,7 @@ impl ResolvedPara {
             numbering: p.numbering.filter(|n| n.num != 0),
             tabs,
             shading: p.shading,
+            shading_auto: p.shading_auto && p.shading.is_none(),
             borders: p.borders.filter(Borders::any_drawn),
             padding: p.borders.map_or([0.0; 4], |b| {
                 [b.top, b.left, b.bottom, b.right]
@@ -666,5 +670,77 @@ mod tests {
 
         let longer = styles.resolve_para(&ParaProps { style: Some("Body".into()), kashida: Some(Kashida::Long), ..Default::default() });
         assert_eq!(longer.kashida, Kashida::Long);
+    }
+
+    #[test]
+    fn paragraph_shading_distinguishes_inherit_automatic_and_color() {
+        use crate::styles::{Style, StyleKind};
+        let yellow = Rgb::parse("FFFF00").unwrap();
+        let blue = Rgb::parse("0000FF").unwrap();
+        let mut styles = StyleSheet::builtin();
+        styles.upsert(Style {
+            id: "Shaded".into(),
+            name: "Shaded".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some("Normal".into()),
+            para: ParaProps { shading: Some(yellow), ..Default::default() },
+            ..Default::default()
+        });
+        let inherit = ParaProps { style: Some("Shaded".into()), ..Default::default() };
+        let inherited = styles.resolve_para(&inherit);
+        assert_eq!(inherited.shading, Some(yellow));
+        assert!(!inherited.shading_auto);
+        let automatic = ParaProps { shading_auto: true, ..inherit.clone() };
+        let cleared = styles.resolve_para(&automatic);
+        assert_eq!(cleared.shading, None);
+        assert!(cleared.shading_auto);
+        // A color remains authoritative even if a caller leaves the automatic marker set.
+        let color = ParaProps { shading: Some(blue), ..automatic.clone() };
+        let colored = styles.resolve_para(&color);
+        assert_eq!(colored.shading, Some(blue));
+        assert!(!colored.shading_auto);
+        styles.upsert(Style {
+            id: "Automatic".into(),
+            name: "Automatic".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some("Shaded".into()),
+            para: ParaProps { shading_auto: true, ..Default::default() },
+            ..Default::default()
+        });
+        let from_style = ParaProps { style: Some("Automatic".into()), ..Default::default() };
+        let resolved = styles.resolve_para(&from_style);
+        assert_eq!(resolved.shading, None);
+        assert!(resolved.shading_auto);
+        let recolored = styles.resolve_para(&ParaProps { shading: Some(blue), ..from_style });
+        assert_eq!(recolored.shading, Some(blue));
+        assert!(!recolored.shading_auto);
+        // An empty overlay keeps a prior explicit automatic fill instead of restoring a color.
+        let mut props = automatic;
+        props.overlay(&ParaProps::default());
+        assert!(props.shading_auto);
+        props.overlay(&ParaProps { shading: Some(blue), ..Default::default() });
+        assert_eq!(props.shading, Some(blue));
+        assert!(!props.shading_auto);
+    }
+
+    #[test]
+    fn paragraph_shading_automatic_marker_keeps_old_json_compatible() {
+        let empty = ParaProps::default();
+        let old = serde_json::to_value(&empty).unwrap();
+        assert!(old.get("shadingAuto").is_none());
+        assert_eq!(serde_json::from_value::<ParaProps>(old).unwrap(), empty);
+        let automatic = ParaProps { shading_auto: true, ..Default::default() };
+        let value = serde_json::to_value(&automatic).unwrap();
+        assert_eq!(value.get("shadingAuto"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(serde_json::from_value::<ParaProps>(value).unwrap(), automatic);
+        let styles = StyleSheet::builtin();
+        let resolved = styles.resolve_para(&empty);
+        let old_resolved = serde_json::to_value(&resolved).unwrap();
+        assert!(old_resolved.get("shadingAuto").is_none());
+        assert_eq!(serde_json::from_value::<ResolvedPara>(old_resolved).unwrap(), resolved);
+        let resolved_auto = styles.resolve_para(&automatic);
+        let encoded = serde_json::to_value(&resolved_auto).unwrap();
+        assert_eq!(encoded.get("shadingAuto"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(serde_json::from_value::<ResolvedPara>(encoded).unwrap(), resolved_auto);
     }
 }
