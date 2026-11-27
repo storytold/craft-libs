@@ -220,15 +220,26 @@ fn every_intent_has_a_declared_action(subject: &Subject) -> Result<(), String> {
         _ => None,
     };
     for story in subject.stories.iter().filter(|story| !story.covers.contains(&Required::Invalid)) {
-        for &(key, _, step) in keys.iter().filter(|(_, kept, _)| *kept) {
+        // Up and Down take the intents Right and Left do through the same code, so the sampled run leaves them out.
+        let sampled = nodes::samples_repeats();
+        for &(key, _, step) in keys.iter().filter(|(key, kept, _)| *kept && !(sampled && matches!(key, Key::ArrowUp | Key::ArrowDown))) {
             let mut fixture = input_fixture(story);
             fixture.key(Key::Tab, Modifiers::NONE);
             fixture.settle();
             let (before, was_open) = (fixture.data().snapshot(), any_expanded(fixture.tree()));
-            let declares_before = |declared| {
+            let declared_before: Vec<Declared> = {
                 let tree = fixture.tree();
-                tree.keys().into_iter().any(|node| tree.declares_key(node, declared))
+                let mut found = Vec::new();
+                for node in tree.keys() {
+                    for declared in [Declared::Expand, Declared::Collapse, Declared::Click, Declared::Increment, Declared::Decrement] {
+                        if !found.contains(&declared) && tree.declares_key(node, declared) {
+                            found.push(declared);
+                        }
+                    }
+                }
+                found
             };
+            let declares_before = |declared| declared_before.contains(&declared);
             let (can_expand, can_collapse) = (declares_before(Declared::Expand), declares_before(Declared::Collapse));
             let can_click = declares_before(Declared::Click);
             let steps_before = (declares_before(Declared::Increment), declares_before(Declared::Decrement));

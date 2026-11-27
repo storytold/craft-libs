@@ -145,6 +145,10 @@ pub(super) fn keys_move_the_lead(subject: &Subject) -> Result<(), String> {
         if lead(&fixture, &container).is_none_or(|found| found == 0) {
             return Err(format!("{name}: Page Down left the lead on the first row"));
         }
+        // One story that ran the case stands for the type under the sampling gate.
+        if super::nodes::samples_repeats() {
+            break;
+        }
     }
     Ok(())
 }
@@ -169,6 +173,10 @@ pub(super) fn click_selects_one_row(subject: &Subject) -> Result<(), String> {
         let now = rows(&fixture, container.node);
         if !now.iter().any(|row| row.node == shown[1].node && super::nodes::is_selected(&fixture, row.node)) {
             return Err(format!("{}: the clicked row does not report itself selected", story.name));
+        }
+        // One story that ran the case stands for the type under the sampling gate.
+        if super::nodes::samples_repeats() {
+            break;
         }
     }
     Ok(())
@@ -198,6 +206,10 @@ pub(super) fn type_ahead_moves_the_lead(subject: &Subject) -> Result<(), String>
         let found = lead(&fixture, &container);
         if found != Some(target) {
             return Err(format!("{}: typing `{letter}` left the lead at {found:?} of {size}, expected row {target}", story.name));
+        }
+        // One story that ran the case stands for the type under the sampling gate.
+        if super::nodes::samples_repeats() {
+            break;
         }
     }
     Ok(())
@@ -247,6 +259,10 @@ pub(super) fn rename_commits_and_cancels_once(subject: &Subject) -> Result<(), S
         if lead(&fixture, &container).is_none() {
             return Err(format!("{name}: Escape left the focus off the rows"));
         }
+        // One story that ran the case stands for the type under the sampling gate.
+        if super::nodes::samples_repeats() {
+            break;
+        }
     }
     Ok(())
 }
@@ -277,6 +293,10 @@ pub(super) fn rename_ends_when_the_editor_loses_focus(subject: &Subject) -> Resu
         }
         if fixture.tree().role_of(fixture.tree().focused_key()) == Some(Role::TEXT_INPUT) {
             return Err(format!("{name}: the rename ended and the editor still holds the focus"));
+        }
+        // One story that ran the case stands for the type under the sampling gate.
+        if super::nodes::samples_repeats() {
+            break;
         }
     }
     Ok(())
@@ -316,6 +336,10 @@ pub(super) fn keyboard_reorder_ends_once(subject: &Subject) -> Result<(), String
         let ends = moved.iter().filter(|edit| matches!(edit, EditKind::Commit | EditKind::Set)).count();
         if ends != 1 || moved.contains(&EditKind::Cancel) {
             return Err(format!("{}: a stacking key gave the reorder events {moved:?}", story.name));
+        }
+        // One story that ran the case stands for the type under the sampling gate.
+        if super::nodes::samples_repeats() {
+            break;
         }
     }
     Ok(())
@@ -374,6 +398,10 @@ pub(super) fn long_collection_builds_rows_within_the_room_only(subject: &Subject
         if shown.len() >= size {
             return Err(format!("{}: all {size} rows are built though the room holds about {}", story.name, (room.y / row) as usize + 1));
         }
+        // One story that ran the case stands for the type under the sampling gate.
+        if super::nodes::samples_repeats() {
+            break;
+        }
     }
     Ok(())
 }
@@ -413,6 +441,10 @@ pub(super) fn scroll_shows_rows_in_the_same_frame(subject: &Subject) -> Result<(
         let filled = |above: f32, below: f32| headings.iter().any(|heading| heading.rect.min.y >= above && heading.rect.max.y <= below);
         if now.windows(2).any(|pair| pair[1].rect.min.y - pair[0].rect.max.y > row && !filled(pair[0].rect.max.y, pair[1].rect.min.y)) {
             return Err(format!("{}: the frame of the scroll shows rows with a gap between them", story.name));
+        }
+        // One story that ran the case stands for the type under the sampling gate.
+        if super::nodes::samples_repeats() {
+            break;
         }
     }
     Ok(())
