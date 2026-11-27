@@ -254,6 +254,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     }
     let mut entry = OpenEntry::new(layer.id, overlay.rank, overlay.keys, shown.rect, shown.layer);
     entry.parent = parent;
+    entry.role = overlay.role;
     entry.anchor = matches!(overlay.place, Place::Anchored { .. }).then_some(anchor);
     entry.side = placed.side;
     entry.asked = placed.asked;
@@ -334,6 +335,7 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     }
     let mut entry = OpenEntry::new(layer.id, overlay.rank, overlay.keys, rect, areas::layer_of(tier, area_id(layer.id)));
     entry.parent = parent;
+    entry.role = overlay.role;
     entry.anchor = matches!(overlay.place, Place::Anchored { .. }).then_some(anchor);
     entry.side = placed.side;
     entry.asked = placed.asked;
@@ -418,6 +420,7 @@ fn show_in_popup(
     });
     overlay::end_layer(&ctx);
     let mut entry = OpenEntry::new(layer.id, overlay.rank, overlay.keys, shown.rect, shown.layer);
+    entry.role = overlay.role;
     entry.side = placed.side;
     entry.asked = placed.asked;
     entry.exiting = layer.exiting;
@@ -529,6 +532,7 @@ pub(crate) fn host_window(ctx: &Context, layer: &Layer<'_>, rect: Rect) -> Layer
     let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);
     let mut entry =
         OpenEntry::new(layer.id, overlay.rank, overlay.keys, rect, areas::layer_of(overlay::layer_tier(ctx, overlay.rank), area_id(layer.id)));
+    entry.role = overlay.role;
     entry.scoped = scope.is_some();
     entry.window = true;
     overlay::record(ctx, entry);

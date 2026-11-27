@@ -2,7 +2,7 @@
 
 use super::placement::Sizes;
 use crate::display::divider::SeparatorRule;
-use crate::style::{ComponentStyle, DataColor, Flags, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook};
+use crate::style::{ComponentStyle, DataColor, Flags, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook};
 use craft_behavior::Metrics;
 use craft_theme::{Contrast, Rgba, Stateful, States, contrast_ratio, identifiable_outline, over};
 
@@ -17,6 +17,8 @@ pub struct ListRowStyle {
     pub(super) surface: SurfaceLook,
     #[style(metrics)]
     pub(super) metrics: Metrics,
+    #[style(focus)]
+    pub(super) focus: FocusLook,
     /// The label.
     #[style(text)]
     pub(super) text: TextLook,

@@ -267,6 +267,10 @@ pub struct MenuBarOutput {
     pub open: bool,
     /// The titles alone (with "…" when it shows), from the first title's reading start to the last title's end.
     pub titles: Rect,
+    /// The width every title takes side by side with none in "…", whatever room the bar had: a host that places
+    /// controls after the titles on the same row compares it with the room it leaves the bar. Zero when the bar
+    /// shows nothing (`MenuPlacement::ScreenTop`).
+    pub natural: f32,
     /// True in the one pass where a menu of the bar opened while no menu of the bar was open when the pass began. A
     /// rerun pass in the same frame and a switch from one open title to another report false.
     pub opened: bool,
@@ -365,6 +369,8 @@ pub struct MenuBar<'a> {
     #[prop]
     keyboard: bool,
     open: bool,
+    /// The width of every title side by side, from this pass's measure or parts step.
+    natural: f32,
     /// A menu opened in this pass while none was open when it began.
     opened: bool,
 }
@@ -372,7 +378,7 @@ pub struct MenuBar<'a> {
 impl<'a> MenuBar<'a> {
     /// A bar named `label` with one title per menu, in reading order.
     pub fn new(label: impl Into<Label>, titles: Vec<MenuTitle<'a>>) -> Self {
-        MenuBar { common: Common::new(), titles, help: None, keyboard: true, open: false, opened: false }.label(label)
+        MenuBar { common: Common::new(), titles, help: None, keyboard: true, open: false, natural: 0.0, opened: false }.label(label)
     }
 
     fn in_window(env: &EnvView<'_>) -> bool {
@@ -508,7 +514,8 @@ impl Component for MenuBar<'_> {
             return Vec2::ZERO;
         }
         let (widths, height, more) = self.widths(cx);
-        let width = if cx.proposal == Proposal::Min { more } else { widths.iter().sum() };
+        self.natural = widths.iter().sum();
+        let width = if cx.proposal == Proposal::Min { more } else { self.natural };
         Vec2::new(width, height)
     }
 
@@ -521,6 +528,7 @@ impl Component for MenuBar<'_> {
             return;
         }
         let (widths, _, more) = self.widths(cx);
+        self.natural = widths.iter().sum();
         let fit = fit_titles(&widths, more, rect.width());
         let gap = Self::gap(cx);
         let mut flow = Flow::new(rect, cx.flow.is_rtl());
@@ -763,6 +771,6 @@ impl Component for MenuBar<'_> {
         let rects = Self::slots(found).into_iter().filter_map(|slot| cx.part_if_declared(Self::slot_part(slot)).map(|result| result.rect));
         let start = if cx.flow.is_rtl() { cx.rect.right_top() } else { cx.rect.left_top() };
         let titles = rects.reduce(Rect::union).unwrap_or_else(|| Rect::from_min_size(start, Vec2::ZERO));
-        MenuBarOutput { response: cx.response.clone(), open: self.open, titles, opened: self.opened }
+        MenuBarOutput { response: cx.response.clone(), open: self.open, titles, natural: self.natural, opened: self.opened }
     }
 }

@@ -59,6 +59,7 @@ pub(super) fn hidden_control(ctx: &egui::Context, input: &LabelIn<'_>, flow: Flo
     }
     match crate::layout::ambient_width(ctx, &crate::layout::LABELS, 0.0).filter(|column| *column > 0.0) {
         Some(column) if input.room >= column + gap + input.control_min => {
+            crate::layout::note_beside(ctx, &crate::layout::LABELS, input.room - gap - input.control_min);
             let (_, rest) = flow.take_start(column);
             rest.take_start(gap).1.rect()
         }
@@ -75,7 +76,10 @@ fn after_indent(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, gap: f32) -
         return 0.0;
     }
     match crate::layout::ambient_width(ctx, &crate::layout::LABELS, 0.0).filter(|column| *column > 0.0) {
-        Some(column) if input.room >= column + gap + input.control_min => column + gap,
+        Some(column) if input.room >= column + gap + input.control_min => {
+            crate::layout::note_beside(ctx, &crate::layout::LABELS, input.room - gap - input.control_min);
+            column + gap
+        }
         _ => 0.0,
     }
 }
@@ -107,15 +111,17 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
         let label = Flow::new(rest.rect(), rtl).align(Vec2::new(width, natural.y), Align::Min, Align::Min).translate(Vec2::new(0.0, drop));
         return Placed { label, control: cell, trailing: Rect::NOTHING, caption: 0.0 };
     }
+    let key = if glyph { crate::layout::GLYPHS } else { crate::layout::LABELS };
+    let mut read = false;
     let (column, stack_below) = match input.side.layout {
         FieldLayout::Beside => {
             let own = natural.x;
             // An inline form shares no label column unless it asks for one ([`CaptionColumn`]): each caption is as wide
             // as its own text.
             let shared = env.values.get::<LabelScheme>() != LabelScheme::Inline || env.values.get::<CaptionColumn>().shared();
-            let width = crate::layout::ambient_width(ctx, &if glyph { crate::layout::GLYPHS } else { crate::layout::LABELS }, own)
-                .filter(|width| shared && *width > 0.0)
-                .unwrap_or(own);
+            let width = crate::layout::ambient_width(ctx, &key, own).filter(|width| shared && *width > 0.0);
+            read = width.is_some();
+            let width = width.unwrap_or(own);
             (width, width + gap + input.control_min)
         }
         FieldLayout::Above => (natural.x, f32::INFINITY),
@@ -132,8 +138,12 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
     let caption = if matches!(input.side.layout, FieldLayout::Above | FieldLayout::Caption(_)) { column } else { 0.0 };
     // The room decides; a beside label gets the width it needs even where last frame's content was narrower. A label
     // that never sits beside stacks in an unbounded room as well.
-    let stacks = (input.room < stack_below || stack_below == f32::INFINITY)
-        && !((input.content_row || input.egui_cell) && input.side.layout == FieldLayout::Beside);
+    let pinned = (input.content_row || input.egui_cell) && input.side.layout == FieldLayout::Beside;
+    let stacks = (input.room < stack_below || stack_below == f32::INFINITY) && !pinned;
+    // A label that sits beside the group's column measured so far stacks once the column passes this.
+    if read && !stacks && !pinned {
+        crate::layout::note_beside(ctx, &key, input.room - gap - input.control_min);
+    }
     // A stacked label has the row's width at most, where its name elides; in an egui grid's cell it keeps its own.
     let column = if stacks && !input.egui_cell { column.min(input.row.width()) } else { column };
     // A beside label that does not stack takes its column, the gap and the control's least, past the row's end where

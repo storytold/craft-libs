@@ -15,3 +15,10 @@ fn exists(path: &Path) -> bool {
 mod tests {
     static SEEN: std::sync::Mutex<u32> = std::sync::Mutex::new(0);
 }
+
+#[cfg(all(test, feature = "screen-testing"))]
+mod counted {
+    thread_local! {
+        static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+}

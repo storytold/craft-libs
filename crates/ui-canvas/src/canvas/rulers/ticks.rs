@@ -13,6 +13,12 @@ pub const INCH_EIGHTHS: [u32; 3] = [8, 4, 2];
 /// The least distance between labelled ticks, in points.
 pub const LABEL_STEP_MIN: f32 = 60.0;
 
+/// The least distance between labelled ticks of a centimetre document ruler, in points: a whole centimetre at 100%
+/// (about 28 points) is labelled, as Word's ruler does.
+pub const CENTIMETRE_LABEL_STEP_MIN: f32 = 24.0;
+/// Labelled centimetre steps: 1, 2, 5, 10 times the base.
+const CENTIMETRE_STEPS: [f64; 9] = [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0];
+
 /// The metric rule's subdivisions of a labelled step.
 const METRIC_SUBDIVISIONS: f32 = 10.0;
 /// Labelled inch steps in inches: 1, 2, 5, 10 times the base.
@@ -71,6 +77,9 @@ impl StepLadder {
 pub enum TickRule<'a> {
     /// The units' own table ([`RulerUnits::step`]): decimal steps and ten subdivisions, or the host's custom table.
     Metric,
+    /// Centimetres of a document ruler: a label every centimetre with quarter centimetre ticks, or every 2, 5, 10 and so
+    /// on centimetres with halves when a centimetre is narrower than [`CENTIMETRE_LABEL_STEP_MIN`].
+    Centimetres,
     /// Inches: a label every inch (every 2, 5, 10 and so on when smaller), subdivided by the first of these counts,
     /// finest first, that keeps the ticks a tenth of the least label step apart ([`INCH_SIXTEENTHS`],
     /// [`INCH_EIGHTHS`]).
@@ -81,9 +90,14 @@ pub enum TickRule<'a> {
 }
 
 impl TickRule<'static> {
-    /// The rule for a ruler counting `kind`: Word's sixteenths for inches, `Metric` otherwise.
+    /// The rule for a document ruler counting `kind`: Word's sixteenths for inches, whole labelled centimetres for
+    /// centimetres, `Metric` otherwise.
     pub fn of_unit(kind: UnitKind) -> TickRule<'static> {
-        if kind == UnitKind::Inches { TickRule::Inches(&INCH_SIXTEENTHS) } else { TickRule::Metric }
+        match kind {
+            UnitKind::Inches => TickRule::Inches(&INCH_SIXTEENTHS),
+            UnitKind::Centimetres => TickRule::Centimetres,
+            _ => TickRule::Metric,
+        }
     }
 }
 
@@ -112,6 +126,14 @@ fn inch_step(points_per_inch: f64, finest: &[u32]) -> (f64, u32) {
     (step, subdivisions)
 }
 
+/// The labelled centimetre step and its subdivisions at `points_per_cm` screen points per centimetre.
+fn centimetre_step(points_per_cm: f64) -> (f64, u32) {
+    let step_min = f64::from(CENTIMETRE_LABEL_STEP_MIN);
+    let step = CENTIMETRE_STEPS.into_iter().find(|step| step * points_per_cm >= step_min).unwrap_or(1000.0);
+    // A whole labelled centimetre is at least 24 points wide, so its quarters are 6 points apart.
+    (step, if step > 1.0 { 2 } else { 4 })
+}
+
 /// The ticks of one ruler over `values` (ruler units from the zero point): the one tick rule of every ruler, so a
 /// text ruler or a page view's ruler shows the same ticks as the canvas's. One labelled step beyond each end is
 /// included, since a label starts right of its tick. `zoom` is screen points per document unit along the axis, as
@@ -119,6 +141,7 @@ fn inch_step(points_per_inch: f64, finest: &[u32]) -> (f64, u32) {
 pub fn ticks(units: &RulerUnits, rule: TickRule<'_>, zoom: f64, values: RangeInclusive<f64>) -> Vec<RulerTick> {
     let (step, subdivisions) = match rule {
         TickRule::Metric => units.step(zoom, LABEL_STEP_MIN),
+        TickRule::Centimetres => centimetre_step(zoom / units.per_doc),
         TickRule::Inches(finest) => inch_step(zoom / units.per_doc, finest),
         TickRule::Steps(ladder) => {
             let (tick, label) = ladder.steps(zoom / units.per_doc);
