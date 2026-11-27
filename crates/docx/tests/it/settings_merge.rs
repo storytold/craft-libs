@@ -205,6 +205,39 @@ fn do_not_track_moves_round_trips() {
     assert!(!craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap().settings.track_moves);
 }
 
+#[test]
+fn cleared_compatibility_mode_removes_it_from_merged_settings() {
+    let mut doc = craft_docx::read(&with_settings(SETTINGS)).unwrap();
+    assert_eq!(doc.settings.compat_mode, Some(15));
+    assert!(doc.passthrough.contains_key("wordcraft:settings.orig"));
+
+    // Case 1: compat_mode is set to None, and no other compat switch is enabled.
+    doc.settings.compat_mode = None;
+    let files = save(&doc);
+    let s = text(&files, "word/settings.xml");
+    assert!(!s.contains("compatibilityMode"), "expected mode removed: {s}");
+    assert!(s.contains("<w:compat>"), "expected w:compat preserved for unowned settings: {s}");
+    assert!(s.contains("overrideTableStyleFontSizeAndJustification"), "{s}");
+    assert!(s.contains("enableOpenTypeFeatures"), "{s}");
+
+    let reopened = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+    assert_eq!(reopened.settings.compat_mode, None);
+
+    // Case 2: compat_mode is set to None, but another switch is enabled.
+    doc.settings.do_not_expand_shift_return = true;
+    let files2 = save(&doc);
+    let s2 = text(&files2, "word/settings.xml");
+    assert!(!s2.contains("compatibilityMode"), "expected mode removed: {s2}");
+    assert!(s2.contains("<w:compat>"), "{s2}");
+    assert!(s2.contains("<w:doNotExpandShiftReturn/>"), "expected switch preserved: {s2}");
+    assert!(s2.contains("overrideTableStyleFontSizeAndJustification"), "{s2}");
+    assert!(s2.contains("enableOpenTypeFeatures"), "{s2}");
+
+    let reopened2 = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+    assert_eq!(reopened2.settings.compat_mode, None);
+    assert!(reopened2.settings.do_not_expand_shift_return);
+}
+
 /// Hide spelling errors and Hide grammar errors in this document only (`w:hideSpellingErrors`,
 /// `w:hideGrammaticalErrors`) are read, written once each (before `w:proofState` in a merged
 /// part), written in a generated part, and left out when they are turned off.

@@ -11,7 +11,7 @@ use crate::contract::{
 use crate::primitives::{HAlign, IconSpec, TextRun, Wrap};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::{EnvView, Label};
-use crate::style::{ComponentStyle, IconLook, Insets, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens};
+use crate::style::{ComponentStyle, FocusLook, IconLook, Insets, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens};
 use craft_behavior::{Flow, IconId, Metrics, NavShape, PartKey, Proposal, Roving, Sense};
 use craft_i18n::Format;
 use craft_theme::{Rgba, Stateful, States, Variant, variant::Tone};
@@ -61,22 +61,30 @@ pub enum NoticeIcon<'a> {
 pub struct NoticeAction {
     label: Label,
     command: Option<CommandRef>,
+    enabled: bool,
     default: bool,
 }
 
 impl NoticeAction {
     /// An action named `label`; the notice reports it as `NoticeOutput.action`.
     pub fn new(label: impl Into<Label>) -> Self {
-        NoticeAction { label: label.into(), command: None, default: false }
+        NoticeAction { label: label.into(), command: None, enabled: true, default: false }
     }
 
     /// An action that shows `command`'s label and fires it when taken; the notice reports it as well.
     pub fn command(command: impl Into<CommandRef>) -> Self {
-        NoticeAction { label: Label::Empty, command: Some(command.into()), default: false }
+        NoticeAction { label: Label::Empty, command: Some(command.into()), enabled: true, default: false }
+    }
+
+    /// Sets whether the action can be focused or taken. Disabled actions remain visible.
+    #[must_use]
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
     }
 
     /// Makes this the notice's default action: a layer with `Initial::Default` focuses it when it opens, so Enter
-    /// takes it. When several actions are marked, the last one is the default.
+    /// takes it. When several enabled actions are marked, the last one is the default.
     #[must_use]
     pub fn default_action(mut self) -> Self {
         self.default = true;
@@ -135,6 +143,8 @@ pub struct NoticeStyle {
     surface: SurfaceLook,
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
     /// The title's role and colour.
     #[style(text)]
     title: TextLook,
@@ -384,16 +394,17 @@ impl<'a> Notice<'a> {
         Button::new(label).variant(if at == 0 { Variant::PRIMARY } else { Variant::SECONDARY })
     }
 
-    /// The face of an inline or card notice's action.
-    fn link(role: TypeRole, label: Label) -> Link {
-        Link::new(label).role(role)
+    /// The face of an inline or card notice's action; a toast's reads in the card's text color.
+    fn link(&self, role: TypeRole, label: Label) -> Link {
+        let link = Link::new(label).role(role);
+        if self.layout == NoticeLayout::Toast { link.on_inverse() } else { link }
     }
 
     /// The sizes of the actions' faces; a centred notice's buttons all take the widest one's width.
     fn action_sizes(&self, cx: &MeasureCx<'_, Self>) -> Vec<Vec2> {
         let labels = self.action_labels(cx);
         if self.row() && self.layout != NoticeLayout::Bar {
-            return labels.into_iter().map(|label| cx.face(Self::link(cx.style.message.role, label))).collect();
+            return labels.into_iter().map(|label| cx.face(self.link(cx.style.message.role, label))).collect();
         }
         let sizes: Vec<Vec2> = labels.into_iter().enumerate().map(|(at, label)| cx.face(Self::button(at, label))).collect();
         if self.layout == NoticeLayout::Bar {
@@ -581,6 +592,7 @@ impl Component for Notice<'_> {
         NoticeStyle {
             surface,
             metrics: Metrics::new().padding(padding).gap(control.gap),
+            focus: cx.focus_look(),
             title,
             brand,
             byline,
@@ -761,17 +773,20 @@ impl Component for Notice<'_> {
         if let Some(more) = &texts.more {
             cx.selectable_text(MORE, &self.run(more, cx.style.more.role));
         }
-        let default = self.actions.iter().rposition(|action| action.default);
-        for (at, rect) in placed.actions.iter().enumerate() {
-            let part = cx.part(ACTION.at(at as u64), *rect).sense(Sense::CLICK | Sense::FOCUS).focusable();
-            if default == Some(at) {
-                part.default_stop();
+        let default = self.actions.iter().rposition(|action| action.enabled && action.default);
+        for (at, (action, rect)) in self.actions.iter().zip(&placed.actions).enumerate() {
+            let part = cx.part(ACTION.at(at as u64), *rect);
+            if action.enabled {
+                let part = part.sense(Sense::CLICK | Sense::FOCUS).focusable();
+                if default == Some(at) {
+                    part.default_stop();
+                }
             }
         }
         if let Some(rect) = placed.dismiss {
             cx.part(DISMISS, rect).sense(Sense::CLICK | Sense::FOCUS).focusable();
         }
-        if !self.footer_actions && (!placed.actions.is_empty() || placed.dismiss.is_some()) {
+        if !self.footer_actions && (self.actions.iter().any(|action| action.enabled) || placed.dismiss.is_some()) {
             cx.roving(Roving::new(NavShape::Flat));
         }
         self.placed = Some(placed);
@@ -779,7 +794,9 @@ impl Component for Notice<'_> {
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         for (at, action) in self.actions.iter().enumerate() {
-            if let Some(source) = cx.part_activated(ACTION.at(at as u64)) {
+            if action.enabled
+                && let Some(source) = cx.part_activated(ACTION.at(at as u64))
+            {
                 self.taken = Some(at);
                 if let Some(command) = &action.command {
                     cx.fire(command.clone(), source);
@@ -826,12 +843,12 @@ impl Component for Notice<'_> {
         for (at, (item, rect)) in std::mem::take(&mut self.content).into_iter().zip(&placed.content).enumerate() {
             item.show(ui, (CONTENT, at), *rect);
         }
-        for (at, label) in placed.labels.iter().cloned().enumerate() {
+        for (at, (action, label)) in self.actions.iter().zip(placed.labels.iter().cloned()).enumerate() {
             let part = ACTION.at(at as u64);
             if self.row() && self.layout != NoticeLayout::Bar {
-                ui.face(part, Self::link(cx.style.message.role, label));
+                ui.face(part, self.link(cx.style.message.role, label).enabled(action.enabled));
             } else {
-                ui.face(part, Self::button(at, label));
+                ui.face(part, Self::button(at, label).enabled(action.enabled));
             }
         }
         if placed.dismiss.is_some() {

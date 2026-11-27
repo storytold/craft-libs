@@ -234,16 +234,16 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
         self.hooks.overflow()
     }
 
-    fn sized(&self, ui: &Ui, id: Id, size: Vec2) -> Vec2 {
-        self.hooks.sized(self.comp.get_ref(), ui, id, size)
+    fn sized(&self, ui: &Ui, place: &Env, id: Id, size: Vec2) -> Vec2 {
+        self.hooks.sized(self.comp.get_ref(), ui, place, id, size)
     }
 
     fn arena(&self) -> bool {
         self.hooks.arena(self.comp.get_ref())
     }
 
-    fn extent(&mut self, ui: &Ui, at: ShowAt, id: Id, scx: &StyleCx<'_>) -> Vec2 {
-        self.hooks.extent(self.comp.get_ref(), ui, at, id, scx)
+    fn extent(&mut self, ui: &Ui, place: &Env, at: ShowAt, id: Id, scx: &StyleCx<'_>) -> Vec2 {
+        self.hooks.extent(self.comp.get_ref(), ui, place, at, id, scx)
     }
 
     fn pad(&self, tokens: &UiTokens) -> f32 {
@@ -307,6 +307,10 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
 
     fn paint_outset(&self, tokens: &crate::style::UiTokens) -> f32 {
         C::paint_outset(tokens)
+    }
+
+    fn fills(&self) -> Option<craft_behavior::Axis> {
+        self.comp.fills()
     }
 
     fn padding(&self, rect: Rect) -> craft_behavior::Insets {
@@ -448,8 +452,8 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
         self.hooks.focus(self.comp)
     }
 
-    fn sized(&self, ui: &Ui, id: Id, size: Vec2) -> Vec2 {
-        self.hooks.sized(self.comp, ui, id, size)
+    fn sized(&self, ui: &Ui, place: &Env, id: Id, size: Vec2) -> Vec2 {
+        self.hooks.sized(self.comp, ui, place, id, size)
     }
 
     fn fills_width(&self) -> bool {
@@ -541,15 +545,16 @@ fn measure_shape<C: Component>(
     super::measure_shape(&mut Typed::new(Held::Lent(comp), hooks), ui, id, proposal, under, purpose)
 }
 
+/// Shows a leaf in `ui`, whose children are placed under `place` (the env installed for it).
 pub(crate) fn show_leaf<C: Component + Meta<Shape = crate::contract::shape::Leaf>>(
     slot: &mut Option<C>,
     ui: &mut Ui,
-    at: ShowAt,
+    (at, place): (ShowAt, Env),
     tip: Option<TipFn<'_>>,
 ) -> C::Output {
     let mut hooks = LeafHooks { scope: held(slot).common(Internal::new()).command_scope };
     let mut typed = Typed::owned(slot, &mut hooks);
-    super::run(&mut typed, ui, at, tip);
+    super::run(&mut typed, ui, at, tip, place);
     typed.output()
 }
 
@@ -561,16 +566,18 @@ pub(crate) fn show_container_taking<C: Container, R>(
     rect: Rect,
     body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
 ) -> Inner<C::Output, R> {
-    let shown = show_container(slot, ui, ShowAt::Rect(rect), body, None);
-    crate::layout::close_flow_start_in(ui);
+    let place = Env::of(ui);
+    let shown = show_container(slot, ui, (ShowAt::Rect(rect), place.clone()), body, None);
+    crate::layout::close_flow_start(ui.ctx(), &place);
     crate::runtime::egui::alloc::advance_past(ui, rect);
     shown
 }
 
+/// Shows a container in `ui`, whose children are placed under `place` (the env installed for it).
 pub(crate) fn show_container<C: Container, R>(
     slot: &mut Option<C>,
     ui: &mut Ui,
-    at: ShowAt,
+    (at, place): (ShowAt, Env),
     body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
     tip: Option<TipFn<'_>>,
 ) -> Inner<C::Output, R> {
@@ -586,7 +593,7 @@ pub(crate) fn show_container<C: Container, R>(
     };
     let mut hooks = crate::contract::body::BodyHooks::of(held(slot), &mut call);
     let mut typed = Typed::owned(slot, &mut *hooks);
-    super::run(&mut typed, ui, at, tip);
+    super::run(&mut typed, ui, at, tip, place);
     let output = typed.output();
     let id = crate::contract::Outcome::response(&output).id;
     let settle = ran.then(|| crate::contract::settle::SettleAt { ctx: ui.ctx().clone(), body: sub(id, "body"), owner: id });
@@ -638,7 +645,8 @@ pub(crate) fn show_items<'r, C: Collection>(
 ) -> C::Output {
     let mut hooks = crate::contract::items::ItemsHooks::<C>::new(source, item);
     let mut typed = Typed::owned(slot, &mut hooks);
-    super::run(&mut typed, ui, ShowAt::Flow, None);
+    let place = Env::of(ui);
+    super::run(&mut typed, ui, ShowAt::Flow, None, place);
     typed.output()
 }
 

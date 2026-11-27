@@ -141,11 +141,16 @@ pub fn tw_u16(e: &El, attr: &str) -> Option<f32> {
     }
 }
 
+/// Return whether an XML attribute value for an `ST_OnOff` represents "off" / false.
+pub fn is_off_val(v: &str) -> bool {
+    matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE")
+}
+
 /// ST_OnOff: absent `w:val` = on; `0`, `false`, `off` = off.
 pub fn on_off(e: &El) -> bool {
     match e.attr("w:val") {
         None => true,
-        Some(v) => !matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE"),
+        Some(v) => !is_off_val(v),
     }
 }
 

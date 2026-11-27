@@ -22,10 +22,10 @@ pub enum WindowLevel {
     AlwaysOnTop,
 }
 
-/// The app's state that its palettes follow, as its windows reported it in the last frame.
+/// The app's state that its palettes follow, as its windows reported it in the last root frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct AppState {
-    /// No window of the app has focus.
+    /// Every window of the app reported that it has no focus.
     pub away: bool,
     /// The window that holds an app-modal layer, which blocks the app's other windows.
     pub modal: Option<ViewportId>,

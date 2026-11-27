@@ -136,11 +136,19 @@ pub(super) fn group_rename(groups: &[SwatchGroup], index: usize, text: &str) -> 
     (!name.is_empty() && !groups.iter().enumerate().any(|(i, g)| i != index && g.name == name)).then(|| name.to_owned())
 }
 
-/// The flat rows of the browser: each group's header, then its swatches.
+/// Whether the browser shows a header row for `group`: every group but the one with an empty name, which holds the
+/// swatches outside every group.
+fn has_header(group: &SwatchGroup) -> bool {
+    !group.name.is_empty()
+}
+
+/// The flat rows of the browser: each group's header (none for the swatches outside every group), then its swatches.
 fn flat<'a>(groups: impl IntoIterator<Item = &'a SwatchGroup>) -> Vec<SwatchKey> {
     let mut rows = Vec::new();
     for group in groups {
-        rows.push(SwatchKey::Group(group.name.clone()));
+        if has_header(group) {
+            rows.push(SwatchKey::Group(group.name.clone()));
+        }
         rows.extend(group.entries.iter().map(|e| SwatchKey::Swatch(e.name.clone())));
     }
     rows
@@ -167,10 +175,21 @@ fn resolve_move(groups: &[SwatchGroup], names: &[&str], to: usize, parent: Optio
     (group < groups.len()).then_some((group, slot))
 }
 
-/// The slot groups `names` land in when dropped at flat row `to`, counted in the groups that stay.
+/// The slot groups `names` land in when dropped at flat row `to`, counted in the groups that stay: each staying group
+/// whose first row (its header, or its first swatch when it has none) is above `to`. Groups never land above the
+/// swatches outside every group when those come first.
 fn group_slot(groups: &[SwatchGroup], names: &[&str], to: usize) -> usize {
-    let remaining = flat(groups.iter().filter(|g| !names.contains(&g.name.as_str())));
-    remaining[..to.min(remaining.len())].iter().filter(|k| matches!(k, SwatchKey::Group(_))).count()
+    let mut row = 0;
+    let mut slot = 0;
+    let mut staying = groups.iter().filter(|g| !names.contains(&g.name.as_str())).peekable();
+    let floor = usize::from(staying.peek().is_some_and(|g| !has_header(g)));
+    for group in staying {
+        if row < to {
+            slot += 1;
+        }
+        row += usize::from(has_header(group)) + group.entries.len();
+    }
+    slot.max(floor)
 }
 
 /// The `at` of each edit that moves `moved` (in library order) one by one within `order`, so that they end up together
@@ -352,8 +371,8 @@ impl SwatchLibrary {
     }
 
     /// Applies a reorder of the browser: swatches go into a group at a place, or groups to a place among the
-    /// groups. `to` counts in the flat rows (a header, then its swatches) that remain once the moved ones are
-    /// taken out. Anything else leaves the library as it is.
+    /// groups. `to` counts in the flat rows (a header, then its swatches; no header for the group with an empty
+    /// name) that remain once the moved ones are taken out. Anything else leaves the library as it is.
     pub fn apply_reorder(&mut self, mv: &ReorderMove<SwatchKey>) -> bool {
         if mv.copy {
             return false;
@@ -623,7 +642,11 @@ pub(super) fn panel_source<'a>(
     } else {
         entries().filter_map(|e| e.color().map(|color| (e.name.as_str(), color.to_srgb(cmyk)))).collect()
     };
-    PresetSource::new(SwatchInputs { groups, drawn, icons, host }, PresetFns::new(source_rows).thumb(paint_swatch))
+    let fns = PresetFns::new(source_rows).thumb(paint_swatch).accepts(|_, drag, _, _| {
+        let groups = matches!(drag.grabbed, SwatchKey::Group(_));
+        drag.keys.iter().all(|key| matches!(key, SwatchKey::Group(_)) == groups)
+    });
+    PresetSource::new(SwatchInputs { groups, drawn, icons, host }, fns)
 }
 
 fn source_rows(inputs: &SwatchInputs<'_>, env: &Env) -> Vec<PresetRow<SwatchKey>> {
@@ -641,17 +664,24 @@ fn source_rows(inputs: &SwatchInputs<'_>, env: &Env) -> Vec<PresetRow<SwatchKey>
 }
 
 /// The rows the Swatches panel lists for `groups`: each group's header, then its swatches, each named by its name and
-/// colour value (the name alone for a swatch without a colour).
+/// colour value (the name alone for a swatch without a colour). A group with an empty name holds the swatches outside
+/// every group: its swatches show at the top level, with no header.
 pub fn swatch_rows(groups: &[SwatchGroup], words: &SwatchesWords) -> Vec<PresetRow<SwatchKey>> {
     let mut rows = Vec::with_capacity(groups.len() + groups.iter().map(|g| g.entries.len()).sum::<usize>());
     for group in groups {
-        rows.push(PresetRow::group(SwatchKey::Group(group.name.clone()), group.name.as_str(), 0).count(group.entries.len()));
+        let header = has_header(group);
+        let depth = usize::from(header);
+        if header {
+            rows.push(PresetRow::group(SwatchKey::Group(group.name.clone()), group.name.as_str(), 0).count(group.entries.len()));
+        }
         for entry in &group.entries {
             let named = match entry.color() {
                 Some(color) => format!("{}, {}", entry.name, value_text(color, words.book_color.as_str())),
                 None => entry.name.clone(),
             };
-            rows.push(PresetRow::item(SwatchKey::Swatch(entry.name.clone()), entry.name.as_str(), 1).tooltip(named.clone()).accessible_name(named));
+            rows.push(
+                PresetRow::item(SwatchKey::Swatch(entry.name.clone()), entry.name.as_str(), depth).tooltip(named.clone()).accessible_name(named),
+            );
         }
     }
     rows
@@ -674,6 +704,27 @@ pub(crate) mod tests {
 
     fn group(name: &str, entries: &[&str]) -> SwatchGroup {
         SwatchGroup { name: name.to_owned(), entries: entries.iter().map(|n| SwatchEntry::new((*n).to_owned(), SwatchColor::Gray(0.5))).collect() }
+    }
+
+    /// The swatches outside every group (the group with an empty name) have no header row, so a place below them
+    /// counts them as rows: a group dropped there lands after them, and a swatch dropped there joins them. A group
+    /// dropped above them lands after them too.
+    #[trial]
+    fn drops_below_the_ungrouped_swatches_land_after_them() {
+        let library = SwatchLibrary::new(vec![group("", &["A", "B"]), group("G", &["C"]), group("H", &["D"])]);
+        let rows: Vec<_> = swatch_rows(&library.groups, &SwatchesWords::default()).into_iter().map(|row| row.key).collect();
+        assert_eq!(rows, flat(&library.groups), "the reorder counts the rows the browser shows");
+
+        for to in [0, 2] {
+            let mut moved = library.clone();
+            assert!(moved.apply_reorder(&ReorderMove::new(SwatchKey::Group("H".to_owned()), vec![SwatchKey::Group("H".to_owned())], to, false)));
+            let order: Vec<_> = moved.groups.iter().map(|g| g.name.as_str()).collect();
+            assert_eq!(order, ["", "H", "G"], "H dropped at row {to} lands below the ungrouped swatches, above G");
+        }
+
+        let mut moved = library.clone();
+        assert!(moved.apply_reorder(&ReorderMove::new(SwatchKey::Swatch("C".to_owned()), vec![SwatchKey::Swatch("C".to_owned())], 2, false)));
+        assert_eq!(moved.find("C"), Some(SwatchAt::new(0, 2)), "C joins the ungrouped swatches, after B");
     }
 
     /// Edits that move several items down or up give the order the browser's own reorder gives.

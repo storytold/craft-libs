@@ -14,7 +14,7 @@ use crate::contract::cx::{BodyCx, CxCore, Pointer as _};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
 use crate::contract::steps::ShapeKind;
 use crate::contract::{Bind, Collection, Cx, Internal, ItemCx, ItemOutput as _, PartsCx, Props, Show as _, Sizing};
-use crate::primitives::{AutoScrollMark, HiddenContent, ScrollBar, SurfaceSlot};
+use crate::primitives::{AutoScrollMark, FocusKind, FocusRing, HiddenContent, PaintShape, ScrollBar, SurfaceSlot};
 use crate::runtime::access::{self, Role};
 use crate::runtime::egui::{alloc, areas, child, response};
 use crate::runtime::env::WheelScope;
@@ -22,7 +22,7 @@ use crate::runtime::env::{AppValues, ArenaId, Env, ItemFacts, ThemeScope};
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::{focus, keys, layout_memory, lazy, overlay, wheel};
 use crate::style::auto_scroll_mark_look;
-use crate::style::{ComponentStyle as _, SurfaceKind, UiTokens, scroll_bar_look, surface_style};
+use crate::style::{ComponentStyle as _, FocusLook, StyleCx, SurfaceKind, UiTokens, scroll_bar_look, surface_style};
 use craft_behavior::{
     Axis, Buttons, CancelReason, EditEvent, Intent, ItemLayout, MiddleButton, MiddleScroll, Mixed, MoveMods, NavMove, PointerButton, PressPhase,
     Proposal, ScrollPos, ScrollSpan, SelectionModel, Sense, WheelRoom, WheelTaker,
@@ -187,13 +187,13 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         Self::props_pad(comp, tokens)
     }
 
-    fn sized(&self, comp: &C, ui: &Ui, id: Id, size: Vec2) -> Vec2 {
+    fn sized(&self, comp: &C, ui: &Ui, place: &Env, id: Id, size: Vec2) -> Vec2 {
         let sizing = comp.props(Internal::new()).sizing;
         // A collection that measured its width from its content takes that width; the column it sits in holds it.
         let width = if self.content_sized(comp) || self.from_content.0 {
             size.x
         } else {
-            crate::layout::body::fill_size(ui, id, Axis::X, size.x, self.room.x, true)
+            crate::layout::body::fill_size(ui, place, id, Axis::X, size.x, self.room.x, true)
         };
         let height = match (self.scrolls && self.room.y.is_finite(), sizing) {
             (true, Sizing::Fill | Sizing::FillHeight) if !self.from_content.1 && !self.capped => self.room.y,
@@ -211,7 +211,14 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let mut layout = self.layout.take()?;
         Arc::make_mut(&mut layout).set_view(view.size(), offset);
         let (_, order) = self.built(&layout, view, offset);
-        let rects = order.into_iter().map(|at| (self.source.key(at), self.screen(&layout, view, at, offset, rtl))).collect();
+        let rects: Vec<(C::Key, Rect)> = order.iter().map(|&at| (self.source.key(at), self.screen(&layout, view, at, offset, rtl))).collect();
+        self.row_parts.clear();
+        for (&at, (key, rect)) in order.iter().zip(&rects) {
+            let shown = rect.intersect(view);
+            if !self.source.section_stop(at) && shown.is_positive() {
+                self.row_parts.push((key_hash(key), at, shown));
+            }
+        }
         self.layout = Some(layout);
         Some(Rc::new(Rows { rects, offset, view: clear }))
     }
@@ -219,6 +226,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
     fn parts(&mut self, comp: &mut C, _: Rect, pcx: &mut PartsCx<'_, C>) {
         self.header.parts(pcx, self.offset_x as f32);
         self.edge_parts(comp, pcx);
+        self.row_parts(pcx);
         self.notch = comp.items().wheel_notch(pcx.tokens.typography.body.line_height);
         if !self.scrolls {
             return;
@@ -304,7 +312,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             self.marquee_step(comp, cx, &layout, (rect, offset, rtl), &props);
         }
         if props.hover_lead != HoverLead::Off {
-            self.hover_lead(comp, cx, &layout, seen, props.hover_lead);
+            self.hover_lead(comp, cx, &layout, props.hover_lead);
         }
         // The moves a control in the rows left that do not page them (an arrow a region's fallback collection takes)
         // navigate the rows as the collection's own keys do.
@@ -332,8 +340,20 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.requested_rename(comp, cx, &props, &layout);
         self.requested_reveal(comp, &layout);
         self.type_ahead(comp, cx, &layout, lead_at);
-        self.rest_lead(cx, &layout, seen);
-        request::record_lead(&cx.core.ctx, cx.core.id, self.lead.key.as_ref().and_then(|key| self.index_of(key)));
+        self.rest_lead(cx, &layout);
+        let lead_now = self.lead.key.as_ref().and_then(|key| self.index_of(key));
+        request::record_lead(&cx.core.ctx, cx.core.id, lead_now);
+        // A collection whose lead item shows the focus ring takes the ring around that item while it is shown, and
+        // around itself while it has no lead or its lead is not shown, so its focus always shows.
+        if comp.rings_lead() {
+            cx.core.focus_shape = Some(match lead_now.filter(|&at| layout.shown(at)) {
+                Some(at) => {
+                    let row = self.screen(&layout, rect, at, offset, rtl);
+                    focus::FocusShape::Polygon(vec![row.left_top(), row.right_top(), row.right_bottom(), row.left_bottom()])
+                }
+                None => focus::FocusShape::Rect,
+            });
+        }
         if let Some(at) = self.page_reveal.take().filter(|&at| layout.shown(at)) {
             cx.core.reveal = Some(self.screen(&layout, rect, at, ScrollPos::default(), rtl));
         }
@@ -399,8 +419,11 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let len = self.source.len();
         let tree = matches!(layout.nav(), craft_behavior::NavShape::Tree);
         focus::registration::record_tree(&ctx, id, tree);
-        let focused = focus::is_focused(&ctx, id);
+        let collection_focus = focus::facts(&ctx, id);
+        let focused = collection_focus.focused;
+        let row_focus = comp.shows_row_focus() && collection_focus.visible && collection_focus.part.is_none();
         let lead = self.lead.key.clone();
+        focus::registration::record_lead(&ctx, id, lead.as_ref().is_some_and(|key| self.index_of(key).is_some()));
         let mut lead_child = None;
         let striped = comp.items().striped;
         let mut stripe: Option<(usize, usize)> = None;
@@ -408,7 +431,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let (parent, clip) = (ui.layer_id(), rect.intersect(ui.clip_rect()));
         let forward = areas::Forward { root: id, sense: response::to_egui(cx.core.root_sense), rect: cx.core.rect.intersect(ui.clip_rect()) };
         let placed = known.placed.clone();
-        let tolerance = craft_behavior::layout_memory::measure_tolerance(crate::runtime::egui::scale::pixels_per_point(&ctx));
+        let pixels = crate::runtime::egui::scale::pixels_per_point(&ctx);
+        let tolerance = craft_behavior::layout_memory::measure_tolerance(pixels);
+        let mut lead_bounds = None;
         // What this pass measured of the rows it builds, before any of them is built: (width and height, widths).
         let fresh: Vec<(Option<Vec2>, Option<Vec2>)> = rows::measured_this_pass(&ctx, id, |fresh| {
             order
@@ -425,16 +450,21 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         // collection's: a heading named by the row's text (a row with no text makes an unnamed heading, which the access
         // lint reports).
         for &at in order.iter().filter(|&&at| self.source.section_stop(at) && layout.shown(at)) {
-            if cx.part_if_declared(section_part(&self.source.key(at))).is_none() {
-                let row = self.screen(&layout, rect, at, offset, rtl);
+            let key = self.source.key(at);
+            let row = self.screen(&layout, rect, at, offset, rtl);
+            if row_focus && lead.as_ref() == Some(&key) {
+                lead_bounds = Some((row, row, None));
+            }
+            if cx.part_if_declared(section_part(&key)).is_none() {
                 self.report_section_node(&ctx, id, at, row, cx.core.resolved.enabled);
             }
         }
         // The pointer counts as over a row only while the sensing pass puts it on this collection, so a popup or another
         // widget above it takes the hover as it does for the rows' parts.
         let outcome = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id));
-        let hover_at = ctx.pointer_latest_pos().filter(|_| outcome.hover.any());
-        let over_at = ctx.pointer_latest_pos().filter(|_| outcome.contains);
+        let under = self.row_under_pointer(&ctx, id);
+        let hover_at = under.filter(|_| outcome.hover.any());
+        let over_at = under.filter(|_| outcome.contains);
         self.hovered = None;
         let menu_open = self.drags.menu.is_some() && crate::contract::overlay::container_open::opened_from(&ctx, cx.core.id);
         // A double click on a column's edge fits the column to its widest cell among the rows built here, in view.
@@ -470,8 +500,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 let state = RowState {
                     dragging: self.drags.grabbed.as_ref() == Some(&key),
                     drop_target: matches!(&self.drags.pending, Some(PendingDrop::Drop(DropAt::Onto(over))) if *over == key),
-                    hovered: hover_at.is_some_and(|pos| row.contains(pos)),
-                    pointer_over: over_at.is_some_and(|pos| row.contains(pos)),
+                    hovered: hover_at == Some(at),
+                    pointer_over: over_at == Some(at),
                     pressed: self.pressed.as_ref().filter(|(held, _)| *held == at).map(|(_, pressed)| pressed.clone()),
                     menu_open: self.drags.menu.as_ref().is_some_and(|request| request.key == key) && menu_open,
                     activated_by_key: self.keyed_activation.as_ref() == Some(&key),
@@ -499,6 +529,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 let column_keys: Vec<craft_behavior::ColumnKey> = cells.iter().map(|(key, _)| key.clone()).collect();
                 let shown_cells = cells.clone();
                 let toggle_keys: Vec<craft_behavior::ColumnKey> = self.header.toggle_columns().map(|(key, _)| key).collect();
+                let closed_toggles: Vec<craft_behavior::ColumnKey> = toggle_keys.iter().filter(|key| !self.toggle_open(at, key)).cloned().collect();
                 let mut icx = ItemCx {
                     key: &key,
                     at,
@@ -551,6 +582,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                                     columns: column_keys,
                                     toggles: toggle_keys,
                                     toggle_keys: self.header.toggle_keys(),
+                                    closed_toggles,
                                     aligns: aligns.clone(),
                                     pressed: state.pressed.clone(),
                                     menu_open: state.menu_open,
@@ -620,6 +652,11 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     Some(tip) => item.show_at_with_tip(&mut row_ui, leaf, tip),
                     None => item.show_at(&mut row_ui, leaf),
                 };
+                if row_focus && state.lead {
+                    let clip = row_ui.clip_rect();
+                    let bounds = out.lead_focus_bounds().unwrap_or(leaf).intersect(clip);
+                    lead_bounds = Some((leaf.intersect(clip), bounds, out.lead_fill()));
+                }
                 if let Some(body) = detail {
                     // The body's stops follow the leaf's: it shows inside the item's scope, under the leaf.
                     let below = Rect::from_min_size(Pos2::new(row.min.x, leaf.max.y), Vec2::new(row.width(), f32::INFINITY));
@@ -737,6 +774,66 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 ui.painter().extend(ScrollBar::shapes(&look, track, Axis::Y, rtl, &span, &state));
             }
             middle_mark(ui, env, cx.core.memory.session::<MiddleScroll>(sub(id, "middle")), rect);
+        }
+        if row_focus && !self.visible.is_empty() {
+            // The collection owns the keyboard stop. Paint the lead or rows' viewport above the scroll fades.
+            let viewport = self.clear_of_bar(rect, scroll_bar_look(&env.tokens).thickness, rtl).intersect(clip);
+            let style = StyleCx::of_env(&ctx, env);
+            let mut look = style.focus_look();
+            let visible_bounds = |row: Rect| {
+                if row.is_positive() {
+                    Rect::from_two_pos(self.on_screen(row.min), self.on_screen(row.max)).intersect(viewport)
+                } else {
+                    Rect::NOTHING
+                }
+            };
+            let minimum_side = look.stroke.width.max(pixels.recip());
+            let fits_stroke = |bounds: Rect| bounds.width() >= minimum_side && bounds.height() >= minimum_side;
+            let (bounds, fill) = lead_bounds
+                .map(|(row, bounds, fill)| {
+                    let inset = visible_bounds(bounds);
+                    (if fits_stroke(inset) { inset } else { visible_bounds(row) }, fill)
+                })
+                .filter(|(row, _)| fits_stroke(*row))
+                .unwrap_or_else(|| {
+                    let mut bounds = viewport;
+                    if let Some(at) = lead.as_ref().and_then(|key| self.index_of(key)).filter(|&at| layout.shown(at)) {
+                        // Mark the edge the lead scrolled past, separately from the ring shown before a lead exists.
+                        let row = self.screen(&layout, rect, at, offset, rtl);
+                        let row = Rect::from_two_pos(self.on_screen(row.min), self.on_screen(row.max));
+                        let band = 2.0 * (look.stroke.width + env.tokens.stroke.thin);
+                        if row.intersect(viewport).height() >= minimum_side {
+                            if row.center().x < viewport.center().x {
+                                bounds.max.x = (bounds.min.x + band).min(bounds.max.x);
+                            } else {
+                                bounds.min.x = (bounds.max.x - band).max(bounds.min.x);
+                            }
+                        } else if row.center().y < viewport.center().y {
+                            bounds.max.y = (bounds.min.y + band).min(bounds.max.y);
+                        } else {
+                            bounds.min.y = (bounds.max.y - band).max(bounds.min.y);
+                        }
+                    }
+                    (bounds, None)
+                });
+            if bounds.is_positive() {
+                let background = surface_style(&env.tokens, SurfaceKind::under(own, env.surface)).fill.into();
+                let fill = fill.map_or(background, |fill| craft_theme::over(fill, background));
+                let minimum = craft_theme::non_text_contrast_min(style.contrast());
+                let stroke = env.tokens.color.line.focus;
+                let composite = craft_theme::over(stroke, fill);
+                let stroke = if craft_theme::contrast_ratio(composite, fill) >= minimum {
+                    composite
+                } else {
+                    craft_theme::ensure_contrast(stroke.with_alpha(u8::MAX), fill, minimum)
+                };
+                look.stroke.color = style.color(stroke).egui();
+                let outline = PaintShape::Rect(bounds, egui::CornerRadius::ZERO);
+                // Filled cells and scroll fades can change the backdrop under the ring. Keep a strip of the resolved fill inside it.
+                let backing = FocusLook::new(egui::Stroke::new(look.stroke.width + env.tokens.stroke.thin, style.color(fill).egui()), look.offset);
+                ui.painter().extend(FocusRing::shapes(&backing, FocusKind::Ring, &outline, pixels));
+                ui.painter().extend(FocusRing::shapes(&look, FocusKind::Ring, &outline, pixels));
+            }
         }
         self.layout = Some(layout);
     }
@@ -1130,12 +1227,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// Step 5 in both runs: what the rows take in the room `measuring` gives. The auto rows in view are measured
     /// first (`measure_ahead`), so the collection takes its size, and places its rows, by this pass's measure.
     fn items_extent(&mut self, comp: &C, measuring: &Measuring<'_, '_>, id: Id) -> Vec2 {
-        let (ui, scx) = (measuring.ui, measuring.scx);
+        let (ui, env, scx) = (measuring.ui, measuring.place, measuring.scx);
         let room = match measuring.at {
             ShowAt::Rect(rect) => rect.size(),
-            ShowAt::Flow => crate::layout::flow_room(ui),
+            ShowAt::Flow => crate::layout::flow_room(ui, env),
         };
-        let env = Env::of(ui);
         // The layout reads the component's own motion memory (`StyleCx::exiting`): an item leaving its source keeps
         // its room until its exit ends.
         let scx = &scx.measured_by(ui).owned_by(id, env.motion);
@@ -1145,7 +1241,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         // Where the enclosing body does not give the width, the collection takes its width from its content, whether
         // it fills or fills the width, as a container does. Held in a content-sized column it measures so, and shows
         // across the width the column settles on.
-        let held = env.content_column || crate::layout::in_grid_content_column(ui);
+        let held = env.content_column || crate::layout::in_grid_content_column(ui.ctx(), env);
         self.from_content = (!env.gives_width() && (crate::runtime::measure::active(ui.ctx()) || !held), env.content.1);
         self.header.measure(scx);
         self.header.read_content(ui.ctx(), id);
@@ -1154,7 +1250,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         // Under a body that does not give the width, the measuring run lays the rows out at the width the collection
         // asks for, so the height it reports is the one it has at that width (a grid's rows at its columns).
         let from_content = self.from_content.0 && !self.content_sized(comp);
-        let asked = (from_content && !self.source.is_empty()).then(|| self.width_from_content(comp, ui, id, room, item, scx));
+        let asked = (from_content && !self.source.is_empty()).then(|| self.width_from_content(comp, (ui, env), id, room, item, scx));
         let width = match (bounded, self.content_sized(comp)) {
             (true, false) => asked.unwrap_or(room.x),
             // No rows: the empty state has no ideal width, so it takes the room, or none where the room is unbounded.
@@ -1217,14 +1313,15 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let rows = self.content.y.max(empty).max(floor);
         let height = cap.map_or(rows, |cap| rows.min(cap)) + self.header.height;
         if !(self.scrolls && room.y.is_finite()) {
-            let wide = if from_content { asked.unwrap_or_else(|| self.width_from_content(comp, ui, id, room, item, scx)) } else { self.content.x };
+            let wide =
+                if from_content { asked.unwrap_or_else(|| self.width_from_content(comp, (ui, env), id, room, item, scx)) } else { self.content.x };
             return Vec2::new(wide, height);
         }
         // A scrolling collection in a bounded room: `Content` takes its rows up to the room, `Fill` the room.
         let wide = if self.content_sized(comp) {
             self.content.x
         } else if from_content {
-            asked.unwrap_or_else(|| self.width_from_content(comp, ui, id, room, item, scx))
+            asked.unwrap_or_else(|| self.width_from_content(comp, (ui, env), id, room, item, scx))
         } else {
             0.0
         };

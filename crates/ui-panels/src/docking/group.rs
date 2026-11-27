@@ -19,9 +19,10 @@ use crate::primitives::{IconSpec, PaintShape};
 use crate::runtime::commands::{self, CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::{self, FocusRequest, FocusTarget};
+use crate::runtime::layout_memory;
 use crate::runtime::memory::sub;
 use crate::sections::FooterBar;
-use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind, TypeRole};
+use crate::style::{ComponentStyle, Corners, FocusLook, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind, TypeRole};
 use crate::tabs::{PanelTabLook, Tab, TabKind, TabStrip, TornOff};
 use craft_behavior::{CursorIcon, CursorPriority, DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
 use craft_theme::{ControlSize, GripMark, GripShape, Tokens};
@@ -37,6 +38,9 @@ use std::sync::Arc;
 pub struct GroupGripStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The ring the grip shows while it has keyboard focus.
+    #[style(focus)]
+    focus: FocusLook,
     /// The marks a grip with [`ticks`](GroupGrip::ticks) shows.
     marks: GripMarks,
 }
@@ -166,7 +170,7 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     type Output = GroupGripOutput;
 
     fn style(cx: &StyleCx<'_>, _: GroupGripStyleKey<P>) -> GroupGripStyle {
-        GroupGripStyle { metrics: Metrics::new(), marks: GripMarks::style(cx) }
+        GroupGripStyle { metrics: Metrics::new(), focus: cx.focus_look(), marks: GripMarks::style(cx) }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -221,6 +225,21 @@ const GRIP: PartKey = PartKey::new("grip");
 fn grip_width(tokens: &Tokens) -> f32 {
     tokens.size.icon.lg + 2.0 * tokens.space.pad.regular
 }
+
+/// The least the drag band narrows to in a header too narrow for it and the shown tab: an icon's room.
+fn grip_least(tokens: &Tokens) -> f32 {
+    tokens.size.icon.lg
+}
+
+/// How many of the shown tab's first letters the header keeps room for before the drag band narrows, as many as a
+/// shrunk panel tab shows.
+const SHOWN_TAB_LETTERS: usize = 3;
+/// Where the header hands forward the width the host's items took before the tab strip, with the gap after them
+/// (`layout_memory::emit_width`), keyed under the group's body id.
+fn host_items_key(body: Id) -> Id {
+    sub(body, "host_items")
+}
+
 /// The panel menu button at the header's end edge.
 pub(super) const MENU: PartKey = PartKey::new("panel_menu");
 /// Where the group menu hangs while a context request on a tab holds it open: the request's point.
@@ -320,6 +339,9 @@ impl Outcome for DockGroupOutput {
 pub struct DockGroupStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The ring around the drag band or the panel menu button while it has keyboard focus.
+    #[style(focus)]
+    focus: FocusLook,
     header: f32,
     sizes: DockSizes,
 }
@@ -492,6 +514,34 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
         IconButton::new(self.panel_menu_icon.clone()).size(ControlSize::Sm).popup(PopupKind::Menu).label(name)
     }
 
+    /// The room the panel menu button takes past the drag band, with the gap before it; none when it does not show.
+    fn menu_room(&self, cx: &MeasureCx<'_, Self>) -> f32 {
+        if self.shows_menu_button() { cx.tokens.space.gap.item + cx.face(self.menu_face(cx.words::<DockWords>().panel_menu.clone())).x } else { 0.0 }
+    }
+
+    /// The least room the strip takes to show the shown tab's first letters: the tab as the strip builds it (icon,
+    /// count, mark and close button) with only those letters of its title, and beside other tabs the overflow
+    /// button, which is as wide as the tab is high.
+    fn shown_tab_least(&self, cx: &MeasureCx<'_, Self>) -> f32 {
+        let panels = self.panels.as_slice();
+        let tabs = strip_tabs(panels, self.closable);
+        let shown = shown_tab(panels, self.active);
+        let Some(tab) = tabs.iter().find(|tab| tab.key == shown) else { return 0.0 };
+        let letters: String = tab.title.as_str().chars().take(SHOWN_TAB_LETTERS).collect();
+        let marked = tab_marks(cx.ui.ctx(), panels).iter().any(|(key, _)| *key == shown);
+        let mut face = Tab::new(letters).kind(TabKind::Panel).panel_look(self.tab_look).closable(tab.closes).marked(marked);
+        if let Some(count) = tab.count {
+            face = face.detail(cx.env.format().integer(u64::try_from(count).unwrap_or(u64::MAX)));
+        }
+        match tab.swatch {
+            Some(Some(color)) => face = face.icon(IconSpec::swatch(color)),
+            Some(None) => face = face.icon(IconSpec::empty_swatch()),
+            None => {}
+        }
+        let size = cx.face(face);
+        if tabs.len() > 1 { size.x + size.y } else { size.x }
+    }
+
     /// Starts a drag of the whole group: its drop region shows the group's name.
     fn start_drag(&mut self, cx: &mut Cx<'_, Self>) {
         start_group_drag(cx, DragUnit::Group(self.anchor.clone()), self.active, Some(self.size), Some(cx.label()));
@@ -506,7 +556,7 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
 
     fn style(cx: &StyleCx<'_>, _: DockGroupStyleKey<P>) -> DockGroupStyle {
         let sizes = DockSizes::style(cx);
-        DockGroupStyle { metrics: Metrics::new(), header: sizes.strip, sizes }
+        DockGroupStyle { metrics: Metrics::new(), focus: cx.focus_look(), header: sizes.strip, sizes }
     }
 
     fn sense(&self) -> Sense {
@@ -520,12 +570,14 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
         let Some(slot) = cx.header_slot(HeaderEdge::End) else { return };
         let words = cx.words::<DockWords>();
         let flow = craft_behavior::Flow::new(slot, cx.flow.is_rtl());
-        let (band, rest) = flow.take_start(grip_width(cx.tokens));
+        // The band takes what the slot leaves past the panel menu button, which a narrowed header takes from the band.
+        let width = (slot.width() - self.menu_room(cx)).clamp(0.0, grip_width(cx.tokens));
+        let (band, rest) = flow.take_start(width);
         let sense = if self.movable { Sense::CLICK | Sense::DRAG | Sense::FOCUS } else { Sense::CLICK | Sense::FOCUS };
         let _ = cx.header_part(HeaderEdge::End, GRIP, band).sense(sense).focusable();
         if self.shows_menu_button() {
             // An icon button is square: its side is the slot's room past the band and the gap.
-            let side = (slot.width() - grip_width(cx.tokens) - cx.tokens.space.gap.item).max(0.0);
+            let side = (slot.width() - width - cx.tokens.space.gap.item).max(0.0);
             let end = rest.take_end(side).0;
             let height = side.min(slot.height());
             let top = if self.tab_look == PanelTabLook::Plain { slot.top() } else { slot.center().y - height / 2.0 };
@@ -680,15 +732,18 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         Some(self.open.reborrow())
     }
 
-    /// The drag band, then the panel menu button when it shows, at the header's end edge.
+    /// The drag band, then the panel menu button when it shows, at the header's end edge. In a header too narrow for
+    /// them, the host's items and the shown tab's least room, the band narrows to an icon's room, so the shown tab stays
+    /// visible. The host's items count with the width the header last handed forward for them; before it has, they
+    /// count as none.
     fn header_parts(&self, cx: &MeasureCx<'_, Self>) -> HeaderParts {
-        let band = grip_width(cx.tokens);
-        let button = if self.shows_menu_button() {
-            cx.tokens.space.gap.item + cx.face(self.menu_face(cx.words::<DockWords>().panel_menu.clone())).x
-        } else {
-            0.0
-        };
-        HeaderParts::NONE.end(band + button)
+        let button = self.menu_room(cx);
+        let parts = HeaderParts::NONE.end(grip_width(cx.tokens) + button);
+        if self.titled {
+            return parts;
+        }
+        let host = self.extra.as_ref().and_then(|_| layout_memory::width(cx.ui.ctx(), host_items_key(sub(cx.id, "body")))).unwrap_or(0.0);
+        parts.end_narrows(grip_least(cx.tokens) + button, host + self.shown_tab_least(cx))
     }
 
     fn footer(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
@@ -702,8 +757,9 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
     /// on it comes out of its outbox. A titled group shows the shown panel's title, count and close button in place of
     /// the tab row.
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        for (command, state) in self.command_states.drain(..) {
-            cx.publish(command, state);
+        // A measuring run of the header comes before the real one in some passes: both read the states.
+        for (command, state) in &self.command_states {
+            cx.publish(*command, state.clone());
         }
         while let Some((command, _)) = cx.take_command::<DockCommands>() {
             self.reported.commands.push(command);
@@ -737,7 +793,13 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                     }
                 }
                 if let Some(hook) = extra.as_mut() {
+                    // The cursor moves past each item and the gap after it, so the distance it moves is the room the
+                    // items take before the tab row.
+                    let before = ui.cursor();
                     hook.run(ui, cx);
+                    let after = ui.cursor();
+                    let took = if rtl { before.max.x - after.max.x } else { after.min.x - before.min.x };
+                    layout_memory::emit_width(ui.ctx(), host_items_key(cx.id), took.max(0.0));
                 }
                 if titled {
                     let close_name = cx.words::<DockWords>().close_panel.clone();

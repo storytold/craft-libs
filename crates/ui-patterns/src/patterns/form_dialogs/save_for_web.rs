@@ -763,7 +763,7 @@ impl<'a> SaveForWebDialog<'a> {
             let mut slice_click = None;
             let failed = failed_of(&pictures, live.selected);
             Row::new().show(ui, |ui, _| {
-                Stack::new().id_salt("preview").show(ui, |ui, _| {
+                Stack::new().fill().id_salt("preview").show(ui, |ui, _| {
                     let reads = panes::Panes {
                         words: &words,
                         units: &units,

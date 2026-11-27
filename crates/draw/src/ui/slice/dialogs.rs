@@ -6,8 +6,8 @@ use craft_behavior::Value;
 use craft_color_ui::ui::{ChosenColor, ColorChoice, NamedColor};
 use craft_theme::Srgba;
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
-use craft_ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::contract::{Bind, Entry, FieldLabelRole, Props as _, Show as _, ShowContainer as _, SideLabel};
+use craft_ui::dialog::{DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, HoldsOk, StackDialog, dialog_id};
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
@@ -194,6 +194,7 @@ pub struct SliceOptionsDialog {
     options: SliceOptions,
     kinds: Vec<SliceKind>,
     requests: HostRequests,
+    held: Option<HeldAnswer<SliceOptions>>,
 }
 
 impl SliceOptionsDialog {
@@ -204,6 +205,7 @@ impl SliceOptionsDialog {
             options,
             kinds: vec![SliceKind::Image, SliceKind::NoImage],
             requests: HostRequests::new(),
+            held: None,
         }
     }
 
@@ -217,6 +219,25 @@ impl SliceOptionsDialog {
     /// The options as the fields show them now.
     pub fn options(&self) -> &SliceOptions {
         &self.options
+    }
+}
+
+impl HoldsOk for SliceOptionsDialog {
+    type Answer = SliceOptions;
+
+    fn held_ok(mut self) -> Self {
+        self.held = Some(HeldAnswer::new());
+        self
+    }
+
+    fn take_ok(&mut self) -> Option<SliceOptions> {
+        self.held.as_mut()?.take()
+    }
+
+    fn answer_ok(&mut self, answer: Result<(), Label>) {
+        if let Some(held) = &mut self.held {
+            held.answer(answer);
+        }
     }
 }
 
@@ -333,7 +354,11 @@ impl StackDialog for SliceOptionsDialog {
         let background_labels = [&words.background_none, &words.background_matte, &words.background_white, &words.background_black];
         let measuring = craft_ui::runtime::measure::active(ui.ctx());
         let answers = if measuring { Vec::new() } else { self.requests.take_answers() };
-        let shown = FormDialog::new(words.options_title.clone(), Bind::bound(&mut self.options)).answers(answers).show(ui, |ui, form, options| {
+        let mut dialog = FormDialog::new(words.options_title.clone(), Bind::bound(&mut self.options)).answers(answers);
+        if let Some(held) = &mut self.held {
+            dialog = dialog.held(held);
+        }
+        let shown = dialog.show(ui, |ui, form, options| {
             for answer in form.take_answers() {
                 if let HostAnswer::Color { key, color, .. } = answer
                     && key == ColorChoice::CUSTOM_KEY
@@ -406,7 +431,18 @@ impl StackDialog for SliceOptionsDialog {
     }
 
     fn confirm(&mut self, _: &egui::Context) -> Option<SliceOptions> {
-        Some(self.options.clone())
+        let Some(held) = &mut self.held else { return Some(self.options.clone()) };
+        if let Some(answer) = held.finish() {
+            return Some(answer);
+        }
+        if !held.is_waiting() {
+            held.file(self.options.clone());
+        }
+        None
+    }
+
+    fn held_state(&self) -> Option<HeldOk> {
+        self.held.as_ref().and_then(HeldAnswer::state)
     }
 
     fn cancelled(&mut self, _: &egui::Context) {
@@ -518,6 +554,7 @@ pub struct DivideSlicesDialog {
     id: DialogId,
     axes: Axes,
     lengths: LengthUnits,
+    held: Option<HeldAnswer<Axes>>,
 }
 
 impl DivideSlicesDialog {
@@ -527,6 +564,7 @@ impl DivideSlicesDialog {
             id: dialog_id("slice.divide"),
             axes: Axes::of(divide),
             lengths: LengthUnits::new(UnitKind::Pixels, UnitKind::Pixels, 72.0),
+            held: None,
         }
     }
 
@@ -549,36 +587,58 @@ impl DivideSlicesDialog {
     }
 }
 
-/// One axis: its check box, then (while it is on) what the value counts and the value.
+/// One axis: its check box, then (while it is on) what the value counts and the value. Both axes show the same Divide
+/// By and value labels, so those rows describe their controls, and each control is named by its label and the axis's
+/// caption.
 fn axis_rows(ui: &mut Ui, axis: &mut AxisState, caption: &Label, words: &SliceWords, lengths: LengthUnits) {
     Field::new(caption.clone()).show(ui, |ui, _| {
         Checkbox::new(Bind::bound(&mut axis.on)).label(caption.clone()).show(ui);
     });
+    let in_axis = |control: &Label| Label::from(words.axis_control.fill(&[("control", control.as_str()), ("axis", caption.as_str())]));
     let unit = if axis.by_size { words.size.clone() } else { words.count.clone() };
-    Field::new(words.divide_by.clone()).enabled(axis.on).show(ui, |ui, _| {
-        RadioGroup::new(words.divide_by.clone(), Bind::bound(&mut axis.by_size)).show(ui, |ui, _| {
+    let describes = || SideLabel::new().role(FieldLabelRole::Describes);
+    Field::new(words.divide_by.clone()).side(describes()).enabled(axis.on).show(ui, |ui, _| {
+        RadioGroup::new(in_axis(&words.divide_by), Bind::bound(&mut axis.by_size)).show(ui, |ui, _| {
             Row::new().show(ui, |ui, _| {
                 Radio::new(false).label(words.count.clone()).show(ui);
                 Radio::new(true).label(words.size.clone()).show(ui);
             });
         });
     });
-    Field::new(unit).enabled(axis.on).show(ui, |ui, _| {
+    let value_name = in_axis(&unit);
+    Field::new(unit).side(describes()).enabled(axis.on).show(ui, |ui, _| {
         if axis.by_size {
-            let field =
-                NumberField::length(words.divide_value.clone(), Bind::given(Some(axis.size)), lengths).range(1.0..=AxisState::MAX_SIZE).show(ui);
+            let field = NumberField::length(value_name.clone(), Bind::given(Some(axis.size)), lengths).range(1.0..=AxisState::MAX_SIZE).show(ui);
             if let Some(Some(size)) = field.value().copied() {
                 axis.size = AxisState::size_of(size, axis.size);
             }
         } else {
             let max = f64::from(AxisState::MAX_COUNT);
-            let field =
-                NumberField::new(words.divide_value.clone(), Bind::given(Some(f64::from(axis.count)))).range(1.0..=max).commit_decimals(0).show(ui);
+            let field = NumberField::new(value_name.clone(), Bind::given(Some(f64::from(axis.count)))).range(1.0..=max).commit_decimals(0).show(ui);
             if let Some(Some(count)) = field.value().copied() {
                 axis.count = count.round().clamp(1.0, max) as u32;
             }
         }
     });
+}
+
+impl HoldsOk for DivideSlicesDialog {
+    type Answer = DivideSlices;
+
+    fn held_ok(mut self) -> Self {
+        self.held = Some(HeldAnswer::new());
+        self
+    }
+
+    fn take_ok(&mut self) -> Option<DivideSlices> {
+        self.held.as_mut()?.take()?.answer()
+    }
+
+    fn answer_ok(&mut self, answer: Result<(), Label>) {
+        if let Some(held) = &mut self.held {
+            held.answer(answer);
+        }
+    }
 }
 
 impl StackDialog for DivideSlicesDialog {
@@ -630,7 +690,11 @@ impl StackDialog for DivideSlicesDialog {
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<DivideSlices>> {
         let words = Env::of(ui).words::<SliceWords>();
         let lengths = self.lengths;
-        let shown = FormDialog::new(words.divide_title.clone(), Bind::bound(&mut self.axes)).show(ui, |ui, _, axes| {
+        let mut dialog = FormDialog::new(words.divide_title.clone(), Bind::bound(&mut self.axes));
+        if let Some(held) = &mut self.held {
+            dialog = dialog.held(held);
+        }
+        let shown = dialog.show(ui, |ui, _, axes| {
             FieldGroup::new(words.divide_title.clone()).show(ui, |ui, _| {
                 axis_rows(ui, &mut axes.rows, &words.horizontally, &words, lengths);
                 axis_rows(ui, &mut axes.columns, &words.vertically, &words, lengths);
@@ -645,6 +709,18 @@ impl StackDialog for DivideSlicesDialog {
     }
 
     fn confirm(&mut self, _: &egui::Context) -> Option<DivideSlices> {
-        self.axes.answer()
+        let answer = self.axes.answer();
+        let Some(held) = &mut self.held else { return answer };
+        if let Some(axes) = held.finish() {
+            return axes.answer();
+        }
+        if !held.is_waiting() && answer.is_some() {
+            held.file(self.axes);
+        }
+        None
+    }
+
+    fn held_state(&self) -> Option<HeldOk> {
+        self.held.as_ref().and_then(HeldAnswer::state)
     }
 }

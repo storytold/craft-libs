@@ -8,20 +8,21 @@ use super::{
 };
 use crate::buttons::Button;
 use crate::choice::Checkbox;
-use crate::contract::{Bind, FooterSlot, Props as _, Role, Show as _, ShowContainer as _};
+use crate::contract::{Bind, FooterSlot, Props as _, Role, Show as _, ShowCollection as _, ShowContainer as _};
 use crate::display::Text;
 use crate::layout::GridFit;
 use crate::layout_components::Grid;
 use crate::layout_components::Row;
+use crate::list::{List, ListRow};
 use crate::runtime::overlay::CloseReason;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::input::key_press;
 use crate::testing::relations::{aligned_left, apart_above, grows_with, inside, off_foot, same_column};
 use crate::testing::{Fixture, Frames, trial};
 use crate::text::TextField;
-use craft_behavior::ColumnWidth;
+use craft_behavior::{ColumnWidth, keyed};
 use craft_quit::{CloseAnswer, CloseScope};
-use egui::{Key, Modifiers, Rect, Ui, Vec2};
+use egui::{Key, Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
@@ -285,7 +286,42 @@ fn a_dialog_opens_on_its_first_field_else_its_default_button() {
     };
     assert_eq!(focus_on_open(true, true), Some("Name"), "the first field takes the focus though a check box comes first");
     assert_eq!(focus_on_open(false, true), Some("OK"), "without a field the default button takes it");
-    assert_eq!(focus_on_open(false, false), None, "without either nothing takes it");
+    assert_eq!(focus_on_open(false, false), Some("Snap"), "without either the first control takes it");
+}
+
+/// A dialog that holds a list and two buttons, with no field and no default button, opens with a control inside it
+/// focused, and Escape gives the focus back to the button that opened it.
+#[trial]
+fn a_dialog_with_no_field_or_default_takes_the_focus_and_escape_returns_it_to_the_opener() {
+    const ROWS: [&str; 2] = ["First", "Second"];
+    let open = Rc::new(Cell::new(false));
+    let opener = Rc::new(Cell::new(egui::Id::NULL));
+    let (seen, shown) = (Rc::clone(&open), Rc::clone(&opener));
+    let mut fixture = Fixture::new(move |ui| {
+        shown.set(Button::new("Open Presets").show(ui).response.id);
+        let mut now = seen.get();
+        Dialog::new("Presets").opened(Bind::bound(&mut now)).show(ui, |ui, _| {
+            List::new("Presets list").natural_height(true).show_items(ui, &keyed(&ROWS, |row| *row), &mut |key, _| ListRow::new(key.to_string()));
+            Row::new().show(ui, |ui, _| {
+                Button::new("New").show(ui);
+                Button::new("Delete").show(ui);
+            });
+        });
+        seen.set(now);
+    });
+    fixture.settle();
+    crate::runtime::focus::request(fixture.ctx(), crate::runtime::focus::FocusTarget::Id(opener.get()));
+    fixture.settle();
+    assert!(crate::testing::focus::is_focused(fixture.ctx(), opener.get()), "the opener has the focus");
+    open.set(true);
+    fixture.settle();
+    let focused = crate::testing::access::focused_key(fixture.tree());
+    let inside = ["Presets list", "First", "Second", "New", "Delete"];
+    let on = inside.into_iter().find(|label| fixture.by_label(label).is_some_and(|target| target.node == focused));
+    assert!(on.is_some(), "a control inside the dialog has the focus");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(!open.get(), "Escape closed the dialog");
+    assert!(crate::testing::focus::is_focused(fixture.ctx(), opener.get()), "the focus is back on the opener");
 }
 
 /// A dialog host showing `dialog` in a fixture, once the dialog settled.
@@ -539,6 +575,45 @@ fn a_dialog_moves_by_its_title_band_stays_on_screen_and_reopens_where_left() {
     let left = dialog(&fixture);
     reopen(&mut fixture, &open);
     assert_eq!(dialog(&fixture), left, "a reopen under the same key starts where the dialog was left");
+}
+
+/// The dialog moves by its whole top strip, as a title bar does: a drag in the frame's padding above the title, or
+/// beside it at either side, moves it too, not only a drag on the title's line (photocraft#17112).
+#[trial]
+fn a_dialog_moves_by_the_padding_around_its_title() {
+    let open = std::rc::Rc::new(Cell::new(true));
+    let mut fixture = dialog_fixture(
+        &open,
+        |dialog| dialog,
+        |ui| {
+            Text::new("Body text").show(ui);
+        },
+    );
+    fixture.room(BAND_ROOM);
+    fixture.settle();
+    let dialog = |fixture: &Fixture| fixture.by_role(Role::DIALOG).into_iter().next().expect("the dialog is shown").rect;
+    let title = |fixture: &Fixture| {
+        let band = fixture.by_role(Role::HEADING).into_iter().find(|target| fixture.tree().name_of(target.node) == Some("Options"));
+        band.expect("the title band").rect
+    };
+    let start = dialog(&fixture);
+    let line = title(&fixture);
+    let padding = crate::runtime::env::Env::of_root(fixture.ctx()).tokens.space.pad.dialog;
+    assert!(line.top() - start.top() >= padding, "the title lies inside the frame's padding: {line:?} in {start:?}");
+    let points = [
+        ("above the title", Pos2::new(line.center().x, (start.top() + line.top()) / 2.0)),
+        ("before the title", Pos2::new((start.left() + line.left()) / 2.0, line.center().y)),
+        ("after the title", Pos2::new(start.right() - 3.0, line.center().y)),
+    ];
+    for (what, at) in points {
+        let before = dialog(&fixture);
+        let at = at + (before.min - start.min);
+        fixture.drag_at(at, BAND_DRAG).settle();
+        assert_eq!(dialog(&fixture).min - before.min, BAND_DRAG, "a drag in the padding {what} moves the dialog");
+    }
+    let before = dialog(&fixture);
+    fixture.drag_at(before.center_bottom() + IN_BODY, BODY_DRAG).settle();
+    assert_eq!(dialog(&fixture), before, "a drag that starts in the body still moves nothing");
 }
 
 #[trial]

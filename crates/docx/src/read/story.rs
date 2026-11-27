@@ -49,6 +49,7 @@ const MAX_FORM: usize = 64 * 1024;
 pub struct RunCtx {
     link: Option<String>,
     link_tooltip: Option<std::sync::Arc<str>>,
+    link_history: Option<craft_wordmodel::props::LinkHistory>,
     ins: Option<u32>,
     del: Option<u32>,
 }
@@ -212,5 +213,5 @@ fn placeholder_of(s: &str) -> String {
 }
 
 fn on_off_attr(e: &El, name: &str) -> bool {
-    e.attr(name).is_some_and(|v| !matches!(v, "0" | "false" | "off"))
+    e.attr(name).is_some_and(|v| !crate::units::is_off_val(v))
 }

@@ -268,6 +268,33 @@ fn a_settled_view_runs_after_the_font_atlas_is_rebuilt() {
     assert_eq!(frame(&mut frames), 0, "then it replays again");
 }
 
+/// A run kept while AccessKit was off holds no nodes. When AccessKit turns on (a screen reader starts, automation reads
+/// the tree), a settled view runs in place of replaying, so its nodes are in the tree, then settles again. The replay
+/// audit is on throughout: every replay is compared with a real run.
+#[trial]
+fn a_settled_view_runs_when_access_kit_turns_on() {
+    let mut frames = Frames::new();
+    craft_ui::testing::audit_replays(&frames.ctx, true);
+    frames.ctx.disable_accesskit();
+    let frame = |frames: &mut Frames| {
+        frames.frame(vec![], |ui| {
+            in_region(ui, region(0), |ui| MemoView::new("title", Title { title: "Access".to_owned() }, title).show(ui));
+        });
+        (title_runs(), !frames.tree().with_role(Role::BUTTON).is_empty())
+    };
+    for _ in 0..WARM {
+        frame(&mut frames);
+    }
+    assert_eq!(frame(&mut frames), (0, false), "a settled view replays, with no nodes while AccessKit is off");
+    frames.ctx.enable_accesskit();
+    let (runs, button) = frame(&mut frames);
+    assert!(runs > 0 && button, "the view runs in the first frame with AccessKit on and reports its button");
+    for _ in 0..WARM {
+        frame(&mut frames);
+    }
+    assert_eq!(frame(&mut frames), (0, true), "then it replays again, its button still in the tree");
+}
+
 /// A view that writes its own `&mut Tracked` runs twice for the change that asked for the write, the writing run and
 /// one that reads the written value, then replays.
 #[trial]

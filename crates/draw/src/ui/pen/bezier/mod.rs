@@ -37,6 +37,9 @@ use hit_test::{Shown, nearest_on_screen, other_handles, shown_handles};
 pub(crate) use mark::paint_mark;
 pub use mark::{AnchorsShown, HitMark, SegmentMark};
 use mark::{Fill, paint_handle, segment_path, stroke};
+use model::SelectedAnchors;
+#[cfg(all(test, feature = "screen-testing"))]
+pub(crate) use model::reads;
 pub use model::{AnchorDelete, EditPath, EditSubpath, HandleSide, Knot, KnotRef, PathEdit, PathSelection};
 pub use style::BezierStyle;
 pub use words::BezierWords;
@@ -381,6 +384,8 @@ struct Scene {
     items: Vec<Item>,
     /// Over [`MAX_ANCHORS`] or hidden: outlines only.
     limited: bool,
+    /// The anchors the selection selects (none when `limited`).
+    selected: SelectedAnchors,
 }
 
 /// Paths with anchors and direction handles over a canvas, edited by the pointer and the keyboard as PhotoCraft's
@@ -470,10 +475,12 @@ impl<'a> BezierOverlay<'a> {
         let limited = self.anchors == AnchorsShown::Hidden || paths.iter().map(EditPath::anchor_count).sum::<usize>() > MAX_ANCHORS;
         let mut items = Vec::new();
         if limited {
-            return Scene { items, limited };
+            return Scene { items, limited, selected: SelectedAnchors::default() };
         }
+        let selected = SelectedAnchors::of(self.selection);
         let near = rect.expand(reach);
-        let shown = if self.anchors == AnchorsShown::Curvature { Vec::new() } else { shown_handles(paths, self.selection, self.handles, view) };
+        let shown =
+            if self.anchors == AnchorsShown::Curvature { Vec::new() } else { shown_handles(paths, self.selection, &selected, self.handles, view) };
         let mut handles = shown.iter().peekable();
         for (at, path) in paths.iter().enumerate() {
             let count = path.anchor_count();
@@ -551,7 +558,7 @@ impl<'a> BezierOverlay<'a> {
                 }
             }
         }
-        Scene { items, limited }
+        Scene { items, limited, selected }
     }
 
     /// Whether the press on `item` is the tool's.
@@ -846,7 +853,7 @@ impl<'a> BezierOverlay<'a> {
                 continue;
             }
             let Some(result) = cx.part_if_declared(item.part()) else { continue };
-            let (press, hover) = (result.press, result.hover_pos);
+            let (press, hover) = (result.press, cx.hover_pos(item.part()));
             pressed |= press.phase.is_press();
             if let Some(at) = hover {
                 let rank = match item.kind {
@@ -909,7 +916,7 @@ impl<'a> BezierOverlay<'a> {
         if matches!(self.tool, BezierTool::AddAnchor | BezierTool::DeleteAnchor)
             && let Some(result) = cx.part_if_declared(EMPTY)
         {
-            let (press, hover) = (result.press, result.hover_pos);
+            let (press, hover) = (result.press, cx.hover_pos(EMPTY));
             // The part covers the canvas background, so it owns the cursor the host tool shows off the paths too.
             if hover.is_some() {
                 let tool = if self.tool == BezierTool::AddAnchor { PathTool::AddAnchor } else { PathTool::DeleteAnchor };
@@ -1308,7 +1315,7 @@ impl Component for BezierOverlay<'_> {
         for item in &scene.items {
             let press = self.takes(item);
             let keyboard = item.kind != Kind::Segment && item.shown && focusable;
-            let selected = item.kind == Kind::Anchor && self.selection.has_anchor(item.key, item.knot);
+            let selected = item.kind == Kind::Anchor && scene.selected.has_anchor(item.key, item.knot);
             let part = cx.part(item.part(), item.shape.clone()).priority(item.priority());
             let part = if press { part.sense(PRESS) } else { part };
             let part = if keyboard {
@@ -1416,7 +1423,7 @@ impl Component for BezierOverlay<'_> {
                     draw_end(path, item.knot, item.at, fill);
                 }
                 Kind::Anchor if item.shown => {
-                    let fill = if self.selection.draws_selected(path.key, item.knot) {
+                    let fill = if scene.selected.draws_selected(path.key, item.knot) {
                         Fill::Path(style.line)
                     } else {
                         Fill::Style(if cx.part_if_declared(item.part()).is_some() {
@@ -1433,7 +1440,7 @@ impl Component for BezierOverlay<'_> {
         // The handles of anchors selected in paths the overlay does not edit: drawn, never parts.
         if !circles {
             for (at, path) in paths.iter().enumerate() {
-                for shown in other_handles(paths, at, self.selection, self.handles, &view) {
+                for shown in other_handles(paths, at, self.selection, &scene.selected, self.handles, &view) {
                     draw_end(path, shown.knot, shown.at, Fill::Style(cx.resolve(handle_fill)));
                 }
             }

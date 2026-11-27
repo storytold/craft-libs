@@ -14,7 +14,7 @@ use crate::contract::{Common, OpenChange, RowHeight, RowPressed, RowState, Show}
 use crate::primitives::{ContentPainterCx, HAlign, IconSpec, Span, TextRun};
 use crate::runtime::env::Label;
 use crate::style::DataColor;
-use craft_behavior::{ColumnKey, Cursor};
+use craft_behavior::{ColumnKey, Cursor, PartRef};
 use craft_i18n::Word;
 use craft_theme::variant::Tone;
 use craft_theme::{LabelColor, TypeRole};
@@ -399,6 +399,9 @@ pub struct ListRow<'a> {
     pub(super) toggle_columns: Vec<ColumnKey>,
     /// The keys of those toggle columns that have one, from the same facts: their cells show the key in the tooltip.
     pub(super) toggle_keys: Vec<(ColumnKey, craft_keymap::Chord)>,
+    /// The toggle columns whose cell in this row does not flip, from the same facts: their cells paint inactive and
+    /// show no hover.
+    pub(super) closed_toggles: Vec<ColumnKey>,
     pub(super) toggles: Vec<ToggleCell>,
     pub(super) texts: Vec<TextCell>,
     /// The status cells (`cell_status`), in the order added.
@@ -467,6 +470,11 @@ pub struct ListRow<'a> {
     /// The row's menu button was clicked: its rect, where the menu hangs.
     pub(super) menu: Option<Rect>,
     pub(super) label_rect: Rect,
+    /// The lead fill resolved during paint, when the row's state is available.
+    pub(super) lead_fill: Option<craft_theme::Rgba>,
+    pub(super) lead_focus_bounds: Option<egui::Rect>,
+    /// The placed rect of each cell node, by the node's part: the access step reads them as the cells' bounds.
+    pub(super) cell_bounds: Vec<(PartRef, Rect)>,
 }
 
 impl<'a> ListRow<'a> {
@@ -536,6 +544,7 @@ impl<'a> ListRow<'a> {
             selectable: Vec::new(),
             toggle_columns: Vec::new(),
             toggle_keys: Vec::new(),
+            closed_toggles: Vec::new(),
             toggles: Vec::new(),
             texts: Vec::new(),
             statuses: Vec::new(),
@@ -564,6 +573,9 @@ impl<'a> ListRow<'a> {
             open: None,
             menu: None,
             label_rect: Rect::NOTHING,
+            lead_fill: None,
+            lead_focus_bounds: None,
+            cell_bounds: Vec::new(),
         }
         .label(label)
     }

@@ -45,6 +45,7 @@ use craft_host::target::MenuPlacement;
 use craft_keymap::mnemonic;
 use craft_theme::Flags;
 use egui::{Context, Pos2, Rect, Response, Ui, Vec2};
+use std::sync::Arc;
 
 const TITLE: PartKey = PartKey::new("title");
 const MORE: PartKey = PartKey::new("more");
@@ -191,12 +192,15 @@ impl Component for TitleFace {
     }
 }
 
-/// The style of a menu bar: the titles wear row faces, which underline their mnemonics.
+/// The style of a menu bar: the titles wear row faces, which underline their mnemonics, and the title the keyboard is
+/// on is ringed with the focus look.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct MenuBarStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
 }
 
 /// A title's text without its marker, and its mnemonic: the letter and its character index in the text, none for a
@@ -207,7 +211,7 @@ type TitleText = (String, Option<(char, Option<usize>)>);
 pub struct MenuTitle<'a> {
     label: Label,
     body: Box<dyn FnMut(&mut Ui) + 'a>,
-    holds: Vec<CommandRef>,
+    holds: Arc<[CommandRef]>,
     /// The letter that opens the menu in place of the bar's own pick.
     mnemonic: Option<char>,
 }
@@ -215,7 +219,7 @@ pub struct MenuTitle<'a> {
 impl<'a> MenuTitle<'a> {
     /// A menu titled `label` (a `&` marks the mnemonic) whose rows `body` shows.
     pub fn new(label: impl Into<Label>, body: impl FnMut(&mut Ui) + 'a) -> Self {
-        MenuTitle { label: label.into(), body: Box::new(body), holds: Vec::new(), mnemonic: None }
+        MenuTitle { label: label.into(), body: Box::new(body), holds: Arc::default(), mnemonic: None }
     }
 
     /// The letter that opens the menu, in place of the bar's own pick. A letter the title lacks still opens it, with
@@ -228,8 +232,8 @@ impl<'a> MenuTitle<'a> {
 
     /// Records the title's rect for `commands` with `commands::holds` in every pass it is shown.
     #[must_use]
-    pub fn holds(mut self, commands: Vec<CommandRef>) -> Self {
-        self.holds = commands;
+    pub fn holds(mut self, commands: impl Into<Arc<[CommandRef]>>) -> Self {
+        self.holds = commands.into();
         self
     }
 }
@@ -267,6 +271,10 @@ pub struct MenuBarOutput {
     pub open: bool,
     /// The titles alone (with "…" when it shows), from the first title's reading start to the last title's end.
     pub titles: Rect,
+    /// The width every title takes side by side with none in "…", whatever room the bar had: a host that places
+    /// controls after the titles on the same row compares it with the room it leaves the bar. Zero when the bar
+    /// shows nothing (`MenuPlacement::ScreenTop`).
+    pub natural: f32,
     /// True in the one pass where a menu of the bar opened while no menu of the bar was open when the pass began. A
     /// rerun pass in the same frame and a switch from one open title to another report false.
     pub opened: bool,
@@ -310,12 +318,12 @@ struct BarFact {
 /// Whether a menu of a bar is open. The app leaves the keys to it meanwhile: its shortcuts wait until the menu
 /// closes.
 pub fn is_open(ctx: &Context) -> bool {
-    Facts::<BarFact>::of_last_pass(ctx).iter().any(|fact| fact.open)
+    Facts::<BarFact>::with_last_pass(ctx, |facts| facts.iter().any(|fact| fact.open))
 }
 
 /// Whether the keyboard is on a menu bar's titles.
 pub fn is_focused(ctx: &Context) -> bool {
-    Facts::<BarFact>::of_last_pass(ctx).iter().any(|fact| fact.focused)
+    Facts::<BarFact>::with_last_pass(ctx, |facts| facts.iter().any(|fact| fact.focused))
 }
 
 /// The titles a bar shows in a given room.
@@ -365,6 +373,8 @@ pub struct MenuBar<'a> {
     #[prop]
     keyboard: bool,
     open: bool,
+    /// The width of every title side by side, from this pass's measure or parts step.
+    natural: f32,
     /// A menu opened in this pass while none was open when it began.
     opened: bool,
 }
@@ -372,7 +382,7 @@ pub struct MenuBar<'a> {
 impl<'a> MenuBar<'a> {
     /// A bar named `label` with one title per menu, in reading order.
     pub fn new(label: impl Into<Label>, titles: Vec<MenuTitle<'a>>) -> Self {
-        MenuBar { common: Common::new(), titles, help: None, keyboard: true, open: false, opened: false }.label(label)
+        MenuBar { common: Common::new(), titles, help: None, keyboard: true, open: false, natural: 0.0, opened: false }.label(label)
     }
 
     fn in_window(env: &EnvView<'_>) -> bool {
@@ -497,8 +507,8 @@ impl Component for MenuBar<'_> {
     type Style = MenuBarStyle;
     type Output = MenuBarOutput;
 
-    fn style(_: &StyleCx<'_>, _: MenuBarStyleKey) -> MenuBarStyle {
-        MenuBarStyle { metrics: Metrics::new() }
+    fn style(cx: &StyleCx<'_>, _: MenuBarStyleKey) -> MenuBarStyle {
+        MenuBarStyle { metrics: Metrics::new(), focus: cx.focus_look() }
     }
 
     /// Every title's width; at its least (`Proposal::Min`) the width of the "…" title alone. A row that has less room
@@ -508,7 +518,8 @@ impl Component for MenuBar<'_> {
             return Vec2::ZERO;
         }
         let (widths, height, more) = self.widths(cx);
-        let width = if cx.proposal == Proposal::Min { more } else { widths.iter().sum() };
+        self.natural = widths.iter().sum();
+        let width = if cx.proposal == Proposal::Min { more } else { self.natural };
         Vec2::new(width, height)
     }
 
@@ -521,6 +532,7 @@ impl Component for MenuBar<'_> {
             return;
         }
         let (widths, _, more) = self.widths(cx);
+        self.natural = widths.iter().sum();
         let fit = fit_titles(&widths, more, rect.width());
         let gap = Self::gap(cx);
         let mut flow = Flow::new(rect, cx.flow.is_rtl());
@@ -740,7 +752,8 @@ impl Component for MenuBar<'_> {
             };
             let open = cx.core.toggles.iter().any(|toggle| toggle.part == part && toggle.open);
             // Under the pointer a title is the active row, as it is while its menu is open or the keyboard is on it.
-            let lit = open || cx.hover_pos(part).is_some() || cx.part_state(part).flags.contains(Flags::FOCUS_VISIBLE);
+            let lit =
+                open || cx.part_if_declared(part).is_some_and(|result| result.hovered) || cx.part_state(part).flags.contains(Flags::FOCUS_VISIBLE);
             let mnemonic = match slot {
                 Open::Title(at) if underlined => texts[at].1.and_then(|(_, index)| index),
                 _ => None,
@@ -763,6 +776,6 @@ impl Component for MenuBar<'_> {
         let rects = Self::slots(found).into_iter().filter_map(|slot| cx.part_if_declared(Self::slot_part(slot)).map(|result| result.rect));
         let start = if cx.flow.is_rtl() { cx.rect.right_top() } else { cx.rect.left_top() };
         let titles = rects.reduce(Rect::union).unwrap_or_else(|| Rect::from_min_size(start, Vec2::ZERO));
-        MenuBarOutput { response: cx.response.clone(), open: self.open, titles, opened: self.opened }
+        MenuBarOutput { response: cx.response.clone(), open: self.open, titles, natural: self.natural, opened: self.opened }
     }
 }
