@@ -267,14 +267,18 @@ fn the_tab_stop_position_box_shows_the_selected_stop() {
     assert!(shown_in_box(&fixture).contains("180"), "the box opens on the next free step: {:?}", shown_in_box(&fixture));
     let (empty, _, _) = shown(TabStopsDialog::new(Vec::new(), 36.0).bare(true));
     assert!(shown_in_box(&empty).starts_with("36"), "with no stops, the default interval: {:?}", shown_in_box(&empty));
+    // Set adds a stop where the box shows, and the box moves on to the next free step.
+    press(&mut fixture, "Set");
+    assert!(shown_in_box(&fixture).contains("216"), "after Set, the next free step: {:?}", shown_in_box(&fixture));
     dialog.borrow_mut().select(Some(1));
     fixture.idle(4);
     assert!(shown_in_box(&fixture).contains("144"), "the box follows the selection: {:?}", shown_in_box(&fixture));
     press(&mut fixture, "Clear");
-    assert!(shown_in_box(&fixture).contains("108"), "with nothing selected, the box shows the next free step: {:?}", shown_in_box(&fixture));
+    // Stops at 72 and 180, 144 cleared: the next free step is 216.
+    assert!(shown_in_box(&fixture).contains("216"), "with nothing selected, the box shows the next free step: {:?}", shown_in_box(&fixture));
     // Leaving the box does not take the step it shows as typed: Set adds that step.
     press(&mut fixture, "Tab stop position:");
     press(&mut fixture, "Set");
     let positions: Vec<f32> = dialog.borrow_mut().result().stops.iter().map(|stop| stop.position).collect();
-    assert_eq!(positions, vec![72.0, 108.0], "Set stepped past the last stop");
+    assert_eq!(positions, vec![72.0, 180.0, 216.0], "Set put a stop at the step the box showed");
 }

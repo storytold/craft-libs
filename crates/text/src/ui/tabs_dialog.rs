@@ -171,7 +171,9 @@ impl TabStopsDialog {
         let Some(position) = self.next_step() else { return };
         self.stops.push(TabStop { position, align: TabAlign::Left, leader: TabLeader::None });
         self.stops.sort_by(|a, b| a.position.total_cmp(&b.position));
-        self.select(self.stops.iter().position(|stop| (stop.position - position).abs() < SAME_POSITION));
+        self.selected = self.stops.iter().position(|stop| (stop.position - position).abs() < SAME_POSITION);
+        // The box moves on to the next free step, where the next Set puts a stop.
+        self.typed_position = None;
         self.edited = None;
         self.to_edit = self.selected.is_some();
     }
@@ -210,6 +212,8 @@ impl TabStopsDialog {
             self.cleared.retain(|gone| (gone - position).abs() >= SAME_POSITION);
         }
         self.selected = at(&self.stops);
+        // The box moves on to the next free step, where the next Set puts a stop.
+        self.typed_position = None;
     }
 
     /// Position order after in-place edits, merging stops within [`SAME_POSITION`] (the edited
@@ -580,8 +584,11 @@ impl TabStopsDialog {
                 self.typed_position = Some(*points as f32);
             }
         }
-        // Enter in the box is Set at the position it shows: the one typed, or the next free step.
+        // Enter in the box is Set at the position it shows (the one typed, or the next free step) while the box holds
+        // the keys; after that, Enter is OK.
+        let held = self.keys.at_frame_start(ui.ctx().cumulative_frame_nr()) == Some(NumberField::Position);
         if out.edit.submitted
+            && held
             && let Some(position) = self.typed_position.or(next)
         {
             self.set_at(position);
