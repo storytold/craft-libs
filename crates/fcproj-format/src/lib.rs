@@ -15,7 +15,7 @@ pub type Migration = fn(Value) -> Result<Value, String>;
 /// edit a shipped one.
 pub const MIGRATIONS: &[Migration] = &[
     v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6, v6_to_v7, v7_to_v8, v8_to_v9, v9_to_v10, v10_to_v11, v11_to_v12, v12_to_v13, v13_to_v14,
-    v14_to_v15, v15_to_v16, v16_to_v17, v17_to_v18, v18_to_v19,
+    v14_to_v15, v15_to_v16, v16_to_v17, v17_to_v18, v18_to_v19, v19_to_v20,
 ];
 
 /// The schema version this build writes (and the newest it reads).
@@ -269,6 +269,12 @@ fn v18_to_v19(doc: Value) -> Result<Value, String> {
     Ok(doc)
 }
 
+/// v19 → v20: effect masks may carry a colour range. Existing masks have none; older builds must
+/// refuse such projects instead of silently dropping saved colour ranges.
+fn v19_to_v20(doc: Value) -> Result<Value, String> {
+    Ok(doc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,10 +346,28 @@ mod tests {
         assert_eq!(file.project["items"]["2"]["kind"], script);
         assert_eq!(file.project["items"]["1"]["kind"], media);
     }
+    /// Schema 20 (mask colour ranges): a v19 project upgrades with its data untouched, and a v20
+    /// project with a colour range on a mask is read rather than refused as too new.
+    #[test]
+    fn v19_upgrades_and_v20_mask_colour_ranges_are_read() {
+        let mask = json!({"mode": "add"});
+        let v19 = json!({"format": FORMAT_ID, "schema_version": 19, "project": {"items": {}, "root": {}, "effects": [{"masks": [mask]}]}});
+        let up = migrate_with(MIGRATIONS, v19.clone(), 19).unwrap();
+        assert!(up["schema_version"].as_u64().unwrap() > 19);
+        assert_eq!(up["project"], v19["project"]);
+        let range = json!({"hue": [0.1, 0.2], "luma": [0.0, 0.2]});
+        let mut v20 = up;
+        v20["schema_version"] = json!(20);
+        v20["project"]["effects"][0]["masks"][0]["color"] = range.clone();
+        let bytes = serde_json::to_vec(&v20).unwrap();
+        let (file, version): (EnvelopeIn<Value>, _) = decode(&bytes).unwrap();
+        assert_eq!(version, 20);
+        assert_eq!(file.project["effects"][0]["masks"][0]["color"], range);
+    }
     #[test]
     fn rejects_wrong_future_and_damaged_envelopes() {
         assert!(matches!(detect_bytes(br#"{"format":"other","schema_version":1}"#), Err(FormatError::NotAProject(_))));
-        assert!(matches!(detect_bytes(br#"{"schema_version":20}"#), Err(FormatError::TooNew { found: 20, supported: 19 })));
+        assert!(matches!(detect_bytes(br#"{"schema_version":21}"#), Err(FormatError::TooNew { found: 21, supported: 20 })));
         assert!(matches!(detect_bytes(br#"{"schema_version":0}"#), Err(FormatError::TooOld { found: 0, oldest: 1 })));
         assert!(matches!(detect_bytes(b"{"), Err(FormatError::Corrupt(_))));
         assert!(matches!(migrate_with(MIGRATIONS, json!([]), 1), Err(FormatError::Migration { from: 1, .. })));
