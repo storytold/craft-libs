@@ -113,6 +113,7 @@ craft_ui::words! {
         also_used_by_label: template "keyboardShortcuts.alsoUsedByLabel" = "Also used by {label}";
         chord_is_reserved_by_the_system: template "keyboardShortcuts.chordIsReservedByTheSystem" = "{chord} is reserved by the system";
         a_command_can_have_at_most: template "keyboardShortcuts.aCommandCanHaveAtMost" = "A command can have at most {n} shortcuts";
+        shortcut_cannot_be_saved_in_its_scope: template "keyboardShortcuts.shortcutCannotBeSavedInItsScope" = "{chord} for {command} cannot be saved in its current scope";
         the_scope_scope_is_unknown: template "keyboardShortcuts.theScopeScopeIsUnknown" = "The scope {scope} is unknown";
         too_many_shortcuts_are_assigned: "keyboardShortcuts.tooManyShortcutsAreAssigned" = "Too many shortcuts are assigned";
         this_command_is_unknown: "keyboardShortcuts.thisCommandIsUnknown" = "This command is unknown";

@@ -659,9 +659,18 @@ impl DialogState {
                 let text = fill!(env, chord_is_used_by_label, ("chord", &chord), ("label", &env.holder_labels(&holders)));
                 self.conflict = Some(ConflictBar { command: command.clone(), old, binding, holders, text });
             }
-            ConflictMode::Steal => self.apply_and_say(env, command, old, binding, Policy::Steal),
-            ConflictMode::Keep => self.apply_and_say(env, command, old, binding, Policy::Keep),
+            ConflictMode::Steal => {
+                self.apply_and_say(env, command, old, binding, Policy::Steal);
+            }
+            ConflictMode::Keep => {
+                self.apply_and_say(env, command, old, binding, Policy::Keep);
+            }
         }
+    }
+
+    /// Reports the same refusal to an automation caller that the dialog shows to the user.
+    pub(crate) fn edit_result(&self) -> Result<(), String> {
+        self.message.as_ref().filter(|message| message.refused).map_or(Ok(()), |message| Err(message.text.clone()))
     }
 
     fn refuse(&mut self, text: String) {
@@ -687,6 +696,10 @@ impl DialogState {
             }
             Err(e) => {
                 let text = assign_error(env, &e);
+                let chord = match &e {
+                    AssignError::Unstorable { trigger, .. } => env.chord_text(trigger),
+                    _ => chord,
+                };
                 self.refuse_chord(text, chord);
                 None
             }
@@ -694,12 +707,12 @@ impl DialogState {
     }
 
     /// Applies with Steal or Keep and says what it did, with Go to Conflict (and Undo for Steal).
-    fn apply_and_say(&mut self, env: &mut Env, command: &CommandRef, old: Option<Binding>, binding: Binding, policy: Policy) {
+    fn apply_and_say(&mut self, env: &mut Env, command: &CommandRef, old: Option<Binding>, binding: Binding, policy: Policy) -> bool {
         let chord = env.chord_text(&binding.trigger);
-        let Some(a) = self.apply(env, command, old, binding, policy) else { return };
+        let Some(a) = self.apply(env, command, old, binding, policy) else { return false };
         let (holders, steal) = if policy == Policy::Steal { (&a.taken_from, true) } else { (&a.clashes, false) };
         if holders.is_empty() {
-            return;
+            return true;
         }
         let label = env.holder_labels(holders);
         let text = if steal {
@@ -709,6 +722,7 @@ impl DialogState {
         };
         let goto = holders.first().map(|h| h.command.clone());
         self.message = Some(Message { text, refused: false, goto, undo: policy == Policy::Steal, chord: Some(chord) });
+        true
     }
 
     /// Take It.
@@ -722,8 +736,9 @@ impl DialogState {
     pub(crate) fn take_it_and_go(&mut self, env: &mut Env) {
         if let Some(c) = self.conflict.take() {
             let first = c.holders.first().map(|h| h.command.clone());
-            self.apply_and_say(env, &c.command, c.old, c.binding, Policy::Steal);
-            if let Some(holder) = first {
+            if self.apply_and_say(env, &c.command, c.old, c.binding, Policy::Steal)
+                && let Some(holder) = first
+            {
                 self.go_to(env, &holder);
             }
         }
@@ -770,7 +785,14 @@ impl DialogState {
 
     /// × on a chip, or Remove.
     pub(crate) fn remove(&mut self, env: &mut Env, command: &CommandRef, binding: &Binding) {
-        self.edit(env, |s, km| s.remove(km, command, binding));
+        self.message = None;
+        let km = &mut *env.keymap;
+        let result = self.session.get_or_insert_with(|| EditSession::begin(km)).edit(km, |km| km.try_remove(command, binding));
+        match result {
+            Ok(true) => self.edited(env),
+            Ok(false) => {}
+            Err(error) => self.refuse(assign_error(env, &error)),
+        }
     }
 
     /// Remove in [`Layout::CommandLists`]: takes away the key picked among the selected command's keys.
@@ -1293,6 +1315,9 @@ fn assign_error(env: &Env, e: &AssignError) -> String {
         AssignError::TooMany => fill!(env, a_command_can_have_at_most, ("n", &MAX_BINDINGS.to_string())),
         AssignError::UnknownScope(s) => fill!(env, the_scope_scope_is_unknown, ("scope", s.as_str())),
         AssignError::Full => word!(env, too_many_shortcuts_are_assigned),
+        AssignError::Unstorable { command, trigger } => {
+            fill!(env, shortcut_cannot_be_saved_in_its_scope, ("chord", &env.chord_text(trigger)), ("command", &env.label(command)))
+        }
         AssignError::UnknownCommand => word!(env, this_command_is_unknown),
         AssignError::Taken(holders) => fill!(env, also_used_by_label, ("label", &env.holder_labels(holders))),
         AssignError::NotHoldable(t) => fill!(env, not_holdable, ("chord", &env.chord_text(t))),
