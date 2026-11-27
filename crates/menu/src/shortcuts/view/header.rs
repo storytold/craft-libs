@@ -23,7 +23,7 @@ const HOLD_DELAY_STEP: f64 = 0.05;
 /// The header for one pass.
 pub(super) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, now: f64, env: &mut Env<'_>, state: &mut DialogState) {
     if env.options.area_tabs {
-        area_tabs(ui, state);
+        area_tabs(ui, env, state);
     }
     Row::new().show(ui, |ui, _| {
         if !env.options.area_tabs {
@@ -66,11 +66,11 @@ fn holds(ui: &mut Ui, env: &mut Env<'_>, state: &mut DialogState) {
     }
 }
 
-/// Show as tabs.
-fn area_tabs(ui: &mut Ui, state: &mut DialogState) {
+/// Show as tabs, named like the Show select.
+fn area_tabs(ui: &mut Ui, env: &Env<'_>, state: &mut DialogState) {
     let titles: Vec<String> = state.areas.iter().map(|area| area.label.clone()).collect();
     let shown = state.areas.iter().position(|area| area.id == state.area).unwrap_or(0);
-    if let Some(i) = tab_strip(ui, "shortcuts.area", &titles, shown)
+    if let Some(i) = tab_strip(ui, "shortcuts.area", env.text.words().show.clone(), &titles, shown)
         && let Some(area) = state.areas.get(i)
     {
         let id = area.id.clone();

@@ -128,7 +128,7 @@ impl crate::runtime::env::EnvValue for GlyphColon {
 #[env(style)]
 #[non_exhaustive]
 pub enum LinkLabelInk {
-    /// The link look (`StyleCx::link_look`): `accent.solid`, `accent.text` at high contrast.
+    /// The link look (`StyleCx::link_look`): `accent.text`.
     #[default]
     Accent,
     /// `text.normal`, the ink of a `Link` in `Tone::Neutral`: VectorCraft's "Opacity:" and "Stroke" labels, as

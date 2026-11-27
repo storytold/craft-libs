@@ -318,7 +318,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn("test-shards: ${{ needs.platforms.outputs.audit == 'true' && 3 || 0 }}", source)
         # The Linux leg's entry, which keeps workspace crates, is named after every profile override;
         # the macOS and Windows legs' dependency-only entries after the settings that reach a
-        # dependency, so next restores main's (test_profile_overrides_name_only_workspace_members).
+        # dependency (test_profile_overrides_name_only_workspace_members).
         self.assertIn("cache-version: &cache-version v2-${{ needs.platforms.outputs.profile }}\n", source)
         self.assertIn("      cache-version: v2-${{ needs.platforms.outputs.deps-profile }}\n", source)
         self.assertIn("      deps-profile: ${{ steps.audit.outputs.deps-profile }}\n", source)

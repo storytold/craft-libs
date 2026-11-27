@@ -34,6 +34,10 @@ craft-flags = { workspace = true, optional = true }
 dirs = { version = "7", optional = true }
 log = { workspace = true, optional = true }
 
+[target.'cfg(windows)'.dependencies]
+# The token file, created with an access list of its user and SYSTEM only (MIT OR Apache-2.0, ours).
+craft-platform = { workspace = true }
+
 [dev-dependencies]
 proptest = { workspace = true }
 tempfile = "3"
