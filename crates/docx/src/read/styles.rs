@@ -435,6 +435,13 @@ impl Reader<'_> {
         // (doc numbering::custom_format_label). Saving flattens a standard-Choice pair to that
         // active format, which still beats the pre-2010 fallback the old reader kept.
         for ac in l.children("mc:AlternateContent") {
+            // The MC selector picks NO branch when no Choice matches and there is no
+            // mc:Fallback (MCContext returns nothing): this pair imports nothing and the
+            // level keeps its own format. children_of_choice's "else any Choice" arm must
+            // not import a format from a branch Word would skip.
+            if !super::story::matched_choice_exists(ac) && ac.child("mc:Fallback").is_none() {
+                continue;
+            }
             let choice = super::story::children_of_choice(ac).and_then(|b| b.child("w:numFmt"));
             match choice.and_then(|f| f.attr("w:val")) {
                 Some("custom") => {

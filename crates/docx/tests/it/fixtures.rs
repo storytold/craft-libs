@@ -5561,3 +5561,23 @@ fn empty_matched_choice_does_not_import_fallback_numfmt() {
     let back = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(back.numbering.level(1, 0).expect("level").format, craft_wordmodel::section::NumFormat::Decimal);
 }
+
+/// A `mc:Choice` whose `Requires` we do not implement and no `mc:Fallback`: the markup-compatibility
+/// selector picks NO branch (MCContext returns none), so the Choice's `w:numFmt` is neither imported
+/// nor persisted — the level keeps its own format. Importing it would let an unsupported future
+/// capability silently rewrite the numbering on the first save.
+#[test]
+fn unsupported_choice_without_fallback_imports_no_numfmt() {
+    let numbering = format!(
+        r#"<w:numbering {W_NS} xmlns:w20="http://schemas.microsoft.com/office/word/2099/wordml"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><mc:AlternateContent><mc:Choice Requires="w20"><w:numFmt w:val="upperRoman"/></mc:Choice></mc:AlternateContent><w:numFmt w:val="decimal"/><w:lvlText w:val="[%1]"/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num></w:numbering>"#
+    );
+    let bytes = docx("<w:p/>", &[], &[("word/numbering.xml", numbering.as_str())]);
+    let mut d = craft_docx::read(&bytes).unwrap();
+    let level = d.numbering.level(1, 0).expect("level");
+    assert_eq!(level.format, craft_wordmodel::section::NumFormat::Decimal, "no branch was selected, so nothing imports");
+    assert_eq!(level.custom_format, None);
+    // Save and reopen: the unsupported branch's format was not persisted either.
+    let back = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(back.numbering.level(1, 0).expect("level").format, craft_wordmodel::section::NumFormat::Decimal);
+    assert_eq!(back.numbering.level(1, 0).expect("level").custom_format, None);
+}
