@@ -88,7 +88,8 @@ network I/O and has no `unsafe` code.
   and two names of one set with the same role and tile are both kept and reported. See
   [Texture-set names](#texture-set-names).
 
-Mirrored repeat and decoding are not in the crate yet.
+DDS first-surface decoding is available with the `dds` feature. Other image decoding and
+mirrored repeat are not supported.
 
 ## Cargo features
 
@@ -96,6 +97,7 @@ No default features.
 
 | Feature | Provides | Pulls in |
 |---|---|---|
+| `dds` | decodes the first DDS surface to RGBA floats | `dds`, `bytemuck` |
 | `parallel` | generated images, display conversion, height to normal and ORM packing fill rows on several threads; the results are the same | `rayon` |
 
 Without `parallel` the crate builds for `wasm32-unknown-unknown`.

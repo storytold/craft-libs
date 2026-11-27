@@ -38,6 +38,10 @@ log = { workspace = true, optional = true }
 proptest = { workspace = true }
 tempfile = "3"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Reserve an unused control port without opening a listener, including between assertions.
+socket2 = "0.6.5"
+
 [[test]]
 name = "agents"
 required-features = ["agents"]
