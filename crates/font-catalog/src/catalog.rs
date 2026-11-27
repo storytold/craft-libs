@@ -574,6 +574,11 @@ impl Catalog {
         self.config.read().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Whether scans ask the platform's font service ([`Catalog::with_font_service`]).
+    pub(crate) fn uses_font_service(&self) -> bool {
+        self.read_config().font_service
+    }
+
     /// The environment the catalog was made for.
     pub fn env(&self) -> &FontEnv {
         &self.env
