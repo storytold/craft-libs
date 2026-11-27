@@ -551,7 +551,7 @@ impl Component for CurveGraph<'_> {
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let frame = self.frame(rect, cx.style);
         cx.part(PLOT, frame.plot)
-            .sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
+            .sense(Sense::CLICK | Sense::CONTEXT_CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
             .value_part()
             .pointer_only("the point keys and the arrow keys edit the points");
         let shown = cx.value().cloned();
@@ -559,7 +559,7 @@ impl Component for CurveGraph<'_> {
             for (i, p) in points.iter().enumerate() {
                 let reach = Rect::from_center_size(frame.map.screen(*p), Vec2::splat(2.0 * cx.style.hit));
                 cx.part(POINT.at(i as u64), reach)
-                    .sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
+                    .sense(Sense::CLICK | Sense::CONTEXT_CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
                     .priority(HitPriority::new(HitLevel::Body, 0))
                     .pointer_only("the plot's point keys select and move the points");
             }
