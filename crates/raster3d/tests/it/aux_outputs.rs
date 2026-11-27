@@ -488,3 +488,19 @@ fn the_byte_check_counts_the_auxiliary_planes() {
     let s = Scene { width: w, height: resolve_h, ..Scene::default() };
     assert_eq!(try_render_cpu_with_aux(&s, &l), Err(RenderError::TooLarge(w, resolve_h)));
 }
+
+#[test]
+fn the_auxiliary_pass_obeys_the_fallback_work_limit() {
+    let white = [1.0; 4];
+    let mut s = with_ids(quad_scene(4, 32, &[([0.0, 0.0, 4.0, 32.0], 100.0, white), ([0.0, 0.0, 4.0, 32.0], 50.0, white)]));
+    s.materials[1].alpha_mode = 1;
+    s.materials[1].base[3] = 0.0;
+    let setup = 4 * (4 * 32 + 1);
+    let limited = limits(|l| l.max_work = setup);
+    assert!(try_render_with_aux(&s, &limits(|l| l.max_work = u64::MAX)).is_ok());
+    assert!(matches!(try_render_with_aux(&s, &limited), Err(RenderError::TooMuchWork { limit, needed }) if limit == setup && needed > setup));
+    assert!(matches!(try_render_cpu_with_aux(&s, &limited), Err(RenderError::TooMuchWork { limit, needed }) if limit == setup && needed > setup));
+    s.materials[1].base[3] = 1.0;
+    assert!(try_render_with_aux(&s, &limited).is_ok());
+    assert!(try_render_cpu_with_aux(&s, &limited).is_ok());
+}
