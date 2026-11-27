@@ -744,7 +744,7 @@ impl Component for CropOverlay<'_> {
                 None => craft_behavior::PartRef { key, index: None },
             };
             let Some(result) = cx.part_if_declared(part) else { continue };
-            let (press, hover) = (result.press, result.hover_pos);
+            let (press, hover) = (result.press, cx.hover_pos(part));
             let mods = press.mods;
             match press.phase {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
@@ -796,8 +796,10 @@ impl Component for CropOverlay<'_> {
         }
         self.report.hovered = (0..=8)
             .filter_map(frame_part)
-            .find(|part| cx.hover_pos(craft_behavior::PartRef { key: FRAME, index: Some(part.index()) }).is_some())
-            .or_else(|| [TURN, OUTSIDE].into_iter().find_map(|key| cx.hover_pos(key)).map(|_| BoxPart::Outside));
+            .find(|part| cx.part_if_declared(craft_behavior::PartRef { key: FRAME, index: Some(part.index()) }).is_some_and(|result| result.hovered))
+            .or_else(|| {
+                [TURN, OUTSIDE].into_iter().any(|key| cx.part_if_declared(key).is_some_and(|result| result.hovered)).then_some(BoxPart::Outside)
+            });
         self.run_keys(cx, &space, &frame, live.drag.is_some());
         if live.drag.as_ref().is_some_and(|drag| matches!(drag.kind, Kind::Move)) {
             cx.cursor(CursorIcon::Grabbing, CursorPriority::Drag);

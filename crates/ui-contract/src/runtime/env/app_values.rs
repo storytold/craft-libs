@@ -102,6 +102,7 @@ impl AppValues {
             keyer(&**value, &mut one);
             sum = sum.wrapping_add(one.finish());
             bytes += one.bytes();
+            key.absorb(&one);
         }
         key.write(&sum.to_le_bytes());
         bytes

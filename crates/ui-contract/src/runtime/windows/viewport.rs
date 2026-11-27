@@ -47,6 +47,11 @@ pub(crate) struct ViewportOpen<'a> {
 /// resizable window's size goes out only to open it (`ViewportOpen::follows_size`).
 pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: impl FnMut(&mut Ui)) {
     let viewport = viewports::viewport_id(open.id);
+    shared(ctx, |shared| {
+        if !shared.shown.contains(&viewport) {
+            shared.shown.push(viewport);
+        }
+    });
     let opened = PerViewport::<Record>::with(ctx, viewport, |record| record.seen.is_some());
     let (size, pos) = saved_geometry(ctx, open, opened).map_or((open.size, None), |(size, pos)| (Some(size), pos));
     let pos = pos.or(open.position);
