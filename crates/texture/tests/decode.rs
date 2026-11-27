@@ -221,6 +221,33 @@ mod tiff {
     }
 
     #[test]
+    fn a_compressed_strip_must_fit_the_byte_limit() {
+        let mut packed = vec![0u8; (34usize * 9).div_ceil(8)];
+        for (i, code) in std::iter::repeat_n(256u16, 32).chain([7, 257]).enumerate() {
+            for bit in 0..9 {
+                let at = i * 9 + bit;
+                packed[at / 8] |= (((code >> (8 - bit)) & 1) as u8) << (7 - at % 8);
+            }
+        }
+        let mut file = build(1, 1, &[8], 1, None, &packed);
+        let ifd = u32::from_le_bytes(file[4..8].try_into().unwrap()) as usize;
+        let count = usize::from(u16::from_le_bytes(file[ifd..ifd + 2].try_into().unwrap()));
+        for entry in file[ifd + 2..ifd + 2 + count * 12].as_chunks_mut::<12>().0 {
+            match u16::from_le_bytes(entry[..2].try_into().unwrap()) {
+                259 => entry[8..12].copy_from_slice(&5u32.to_le_bytes()),
+                279 => entry[8..12].copy_from_slice(&(packed.len() as u32).to_le_bytes()),
+                _ => {}
+            }
+        }
+        let mut limits = Limits::default();
+        limits.max_bytes = packed.len() as u64;
+        let decoded = craft_texture::decode::tiff(&file, &limits).unwrap();
+        assert_eq!(decoded.image.data(), &[7.0 / 255.0]);
+        limits.max_bytes = 4;
+        assert!(matches!(craft_texture::decode::tiff(&file, &limits), Err(DecodeError::LimitExceeded { .. })));
+    }
+
+    #[test]
     fn a_strip_missing_rows_is_an_error() {
         let codes = ramp16();
         // Two rows, one strip each; the second strip points past the end of the file.
