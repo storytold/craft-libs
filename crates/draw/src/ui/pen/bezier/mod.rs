@@ -69,8 +69,9 @@ pub enum BezierTool {
     #[default]
     Direct,
     /// Convert Point (also the Pen with ⌥): a click on an anchor makes a corner, a drag from it pulls out smooth
-    /// handles; a handle drag moves that handle alone; a drag on a straight segment bends it, or moves the whole path
-    /// when every anchor is selected.
+    /// handles; with ⌥ held at a press on a corner anchor a drag pulls out only the dragged handle and leaves the
+    /// other where it is ([`PathEdit::Convert`] with `alone`, PhotoCraft #12740); a handle drag moves that handle
+    /// alone; a drag on a straight segment bends it, or moves the whole path when every anchor is selected.
     Convert,
     /// Anchors drawn, not edited (PhotoCraft's Path Selection and Pen tools).
     Anchors,
@@ -228,6 +229,9 @@ enum Target {
     Convert {
         path: u64,
         knot: KnotRef,
+        /// ⌥ was held at a press on a corner anchor: the drag converts one handle and leaves the
+        /// other where it is (PhotoCraft #12740).
+        alone: bool,
     },
     /// The Curvature tool's drag of one anchor, grabbed at `from`.
     CurvatureMove {
@@ -488,7 +492,7 @@ impl<'a> BezierOverlay<'a> {
                 let Some(knot) = path.knot(knot_ref) else { continue };
                 let anchor = view.to_screen(knot.anchor);
                 let sub = &path.subpaths[knot_ref.subpath];
-                let interior = sub.closed || (knot_ref.knot != 0 && knot_ref.knot + 1 != sub.knots.len());
+                let interior = Self::interior(sub, knot_ref);
                 let anchor_shown = self.selection.shows(path.key, knot_ref.subpath);
                 if near.contains(anchor) {
                     items.push(Item {
@@ -568,6 +572,12 @@ impl<'a> BezierOverlay<'a> {
 
     fn path(paths: &[EditPath], key: u64) -> Option<&EditPath> {
         paths.iter().find(|p| p.key == key)
+    }
+
+    /// Whether `knot` is an interior anchor of `sub`, the `interior` of [`BezierTool::takes`]: in a closed subpath, or
+    /// with an anchor on each side. Neither end of an open subpath is interior: those are the pen draft's.
+    fn interior(sub: &EditSubpath, knot: KnotRef) -> bool {
+        sub.closed || (knot.knot != 0 && knot.knot + 1 != sub.knots.len())
     }
 
     fn subpath_anchors(paths: &[EditPath], key: u64, subpath: usize) -> Vec<KnotRef> {
@@ -680,7 +690,13 @@ impl<'a> BezierOverlay<'a> {
             }
             (BezierTool::Convert, BezierHit::Anchor { path, knot }) => {
                 self.report.select = Some(self.selecting(path, vec![knot], None));
-                Target::Convert { path, knot }
+                // ⌥ held at a press on a corner anchor: the drag pulls out one handle and the other
+                // stays where it is (PhotoCraft #12740, measured on a closed corner square). The
+                // presses the issue lists as not measured keep today's mirrored pair: a smooth
+                // anchor, ⇧ held with ⌥, and either end anchor of an open subpath.
+                let corner = knot_at(path, knot).is_some_and(|k| !k.smooth);
+                let interior = Self::path(paths, path).and_then(|p| p.subpaths.get(knot.subpath)).is_some_and(|s| Self::interior(s, knot));
+                Target::Convert { path, knot, alone: mods.alt && !mods.shift && corner && interior }
             }
             (_, BezierHit::Anchor { path, knot }) => {
                 let from = knot_at(path, knot).map_or(Point::ZERO, |k| k.anchor);
@@ -744,7 +760,7 @@ impl<'a> BezierOverlay<'a> {
                 PathEdit::MoveHandle { path, knot, side, to, alone: tool == BezierTool::Convert || mods.alt }
             }
             &Target::Bend { path, segment, t, from } => PathEdit::BendSegment { path, segment, t, by: snapped(from + delta) - from },
-            &Target::Convert { path, knot } => PathEdit::Convert { path, knot, out: Some(snapped(view.to_doc(pointer))) },
+            &Target::Convert { path, knot, alone } => PathEdit::Convert { path, knot, out: Some(snapped(view.to_doc(pointer))), alone },
             &Target::CurvatureMove { path, knot, from } => {
                 PathEdit::MoveCurvature { path, anchors: vec![knot], by: snapped(from + locked(delta)) - from }
             }
@@ -1014,7 +1030,8 @@ impl<'a> BezierOverlay<'a> {
             return;
         }
         match held.target {
-            Target::Convert { path, knot } => self.set_always(cx, &held.start, PathEdit::Convert { path, knot, out: None }),
+            // The flag means nothing for the click: `None` is a corner either way, today's click.
+            Target::Convert { path, knot, .. } => self.set_always(cx, &held.start, PathEdit::Convert { path, knot, out: None, alone: false }),
             Target::Toggle { path, knot } => self.set(cx, &held.start, PathEdit::ToggleCurvature { path, knot }),
             Target::CurvatureInsert { path, segment, t, .. } => {
                 self.set(cx, &held.start, PathEdit::InsertCurvature { path, segment, t, by: Vec2::ZERO });

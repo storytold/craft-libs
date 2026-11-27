@@ -4,8 +4,9 @@ use craft_behavior::kurbo::{ParamCurve as _, Point, Size, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::ui::{
     AnchorDelete, AnchorTool, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef,
-    PathEdit, PathSelection, PathTool, SegmentMark,
+    PathEdit, PathMode, PathSelection, PathTool, PenMode, SegmentMark,
 };
+use craft_keymap::Mods;
 use craft_ui::canvas::{Canvas, Guide, ToolHost, tool_pass};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
@@ -138,9 +139,9 @@ fn path_edit_apply_matches_the_kernel_for_every_existing_edit() {
     assert_eq!(ep.subpaths[0].knots[2].anchor, p(100.0, 90.0));
 
     let mut ep = base();
-    assert!(PathEdit::convert(7, kr(0), None).apply(&mut ep));
+    assert!(PathEdit::convert(7, kr(0), None, false).apply(&mut ep));
     assert_eq!(ep.subpaths[0].knots[0], Knot::corner(p(0.0, 0.0)));
-    assert!(PathEdit::convert(7, kr(2), Some(p(110.0, 80.0))).apply(&mut ep));
+    assert!(PathEdit::convert(7, kr(2), Some(p(110.0, 80.0)), false).apply(&mut ep));
     assert_eq!(ep.subpaths[0].knots[2], Knot::smooth(p(100.0, 80.0), p(110.0, 80.0)));
 
     let mut ep = base();
@@ -150,7 +151,7 @@ fn path_edit_apply_matches_the_kernel_for_every_existing_edit() {
         PathEdit::move_anchors(7, vec![kr(0), kr(9)], by),
         PathEdit::move_handle(7, KnotRef::new(3, 0), HandleSide::In, to, false),
         PathEdit::bend_segment(7, kr(2), 0.5, by),
-        PathEdit::convert(7, kr(5), None),
+        PathEdit::convert(7, kr(5), None, false),
         PathEdit::toggle_curvature(7, kr(5)),
         PathEdit::insert_curvature(7, kr(0), 0.0, by),
         PathEdit::insert_anchor(7, kr(5), 0.5, by),
@@ -159,6 +160,54 @@ fn path_edit_apply_matches_the_kernel_for_every_existing_edit() {
         assert!(!e.apply(&mut ep));
         assert_eq!(ep, untouched);
     }
+}
+
+// `Convert` with `alone` (⌥ held at the press of Convert Point on a corner anchor, PhotoCraft #12740): the out
+// handle goes to `out`, the in handle stays where it is and the knot is not smooth; `None` ignores the flag.
+#[trial]
+fn path_edit_convert_alone_moves_only_the_out_handle() {
+    // The issue's measured closed corner square.
+    let square = || {
+        ops_path(EditSubpath::new(
+            [(100.0, 300.0), (300.0, 300.0), (300.0, 500.0), (100.0, 500.0)].map(|(x, y)| Knot::corner(p(x, y))).to_vec(),
+            true,
+        ))
+    };
+    let mut ep = square();
+    assert!(PathEdit::convert(7, kr(1), Some(p(350.0, 330.0)), true).apply(&mut ep));
+    let k = ep.subpaths[0].knots[1];
+    assert!(near(k.out_ctrl, p(350.0, 330.0)) && near(k.in_ctrl, p(300.0, 300.0)) && !k.smooth, "{k:?}");
+    assert_eq!(ep.subpaths[0].knots[0], Knot::corner(p(100.0, 300.0)), "the closed subpath's neighbour is untouched");
+    assert_eq!(ep.subpaths[0].knots[2], Knot::corner(p(300.0, 500.0)), "and so is the other one");
+    // Moving either handle afterwards moves only that one (the Done-when's follow-up): the knot is not smooth.
+    assert!(PathEdit::move_handle(7, kr(1), HandleSide::In, p(280.0, 300.0), false).apply(&mut ep));
+    let k = ep.subpaths[0].knots[1];
+    assert!(near(k.in_ctrl, p(280.0, 300.0)) && near(k.out_ctrl, p(350.0, 330.0)), "{k:?}");
+
+    // A corner whose in handle is already pulled out keeps it.
+    let mut ep = square();
+    ep.subpaths[0].knots[1].in_ctrl = p(300.0, 340.0);
+    assert!(PathEdit::convert(7, kr(1), Some(p(350.0, 330.0)), true).apply(&mut ep));
+    let k = ep.subpaths[0].knots[1];
+    assert!(near(k.in_ctrl, p(300.0, 340.0)) && near(k.out_ctrl, p(350.0, 330.0)) && !k.smooth, "{k:?}");
+
+    // `None` ignores the flag: still a corner with both handles retracted.
+    let mut ep = square();
+    ep.subpaths[0].knots[1].in_ctrl = p(300.0, 340.0);
+    assert!(PathEdit::convert(7, kr(1), None, true).apply(&mut ep));
+    assert_eq!(ep.subpaths[0].knots[1], Knot::corner(p(300.0, 300.0)));
+
+    // Without the flag today's mirrored smooth pair (guard: passes before and after the change).
+    let mut ep = square();
+    assert!(PathEdit::convert(7, kr(1), Some(p(350.0, 330.0)), false).apply(&mut ep));
+    assert_eq!(ep.subpaths[0].knots[1], Knot::smooth(p(300.0, 300.0), p(350.0, 330.0)));
+
+    // A knot that does not exist, and a wrong key: false, nothing changes.
+    let mut ep = square();
+    let before = ep.clone();
+    assert!(!PathEdit::convert(7, kr(9), Some(p(350.0, 330.0)), true).apply(&mut ep));
+    assert!(!PathEdit::convert(8, kr(1), Some(p(350.0, 330.0)), true).apply(&mut ep));
+    assert_eq!(ep, before);
 }
 
 // ---- the overlay on a canvas ----
@@ -1304,6 +1353,185 @@ fn a_convert_click_on_a_corner_reports_its_edit() {
     let st = h.state.borrow();
     assert!(matches!(st.changes.last(), Some(PathEdit::Convert { path: 1, out: None, .. })), "{:?}", st.changes);
     assert!(st.seen.contains(&Seen::Set), "{:?}", st.seen);
+}
+
+// Convert Point with ⌥ held at the press on a corner anchor pulls out one handle only: the dragged one follows the
+// pointer, the other stays where it is, and the point is not smooth (PhotoCraft #12740, measured on a closed corner
+// square at 100 %: drag from (300,300) by (+50,+30) gives out (350,330) and in (300,300); here path_b's closed
+// corner square, from (140,200) by (+50,+30) gives out (190,230) and in (140,200)). The drag preview shows the same
+// one-handle result as the committed step.
+#[trial]
+fn alt_convert_from_a_corner_anchor_pulls_one_handle_only() {
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::Convert);
+    let at = h.screen(p(140.0, 200.0));
+    h.fixture.hold(egui::Modifiers::ALT);
+    h.press_at(at);
+    h.move_to(at + vec2(25.0, 15.0));
+    let near1 = |a: Point, b: Point| a.distance(b) < 1e-6;
+    {
+        let st = h.state.borrow();
+        assert!(matches!(st.changes.last(), Some(PathEdit::Convert { path: 2, out: Some(_), .. })), "{:?}", st.changes);
+        let k = st.paths[1].subpaths[0].knots[1];
+        assert!(near1(k.out_ctrl, p(165.0, 215.0)) && near1(k.in_ctrl, p(140.0, 200.0)) && !k.smooth, "the preview keeps the other handle: {k:?}");
+    }
+    h.move_to(at + vec2(50.0, 30.0));
+    h.release_at(at + vec2(50.0, 30.0));
+    h.fixture.hold(egui::Modifiers::NONE);
+    let st = h.state.borrow();
+    let k = st.paths[1].subpaths[0].knots[1];
+    assert!(near1(k.out_ctrl, p(190.0, 230.0)) && near1(k.in_ctrl, p(140.0, 200.0)) && !k.smooth, "{k:?}");
+    // A closed subpath's neighbours keep their knots (the issue's Done-when).
+    assert_eq!(st.paths[1].subpaths[0].knots[0], Knot::corner(p(60.0, 200.0)));
+    assert_eq!(st.paths[1].subpaths[0].knots[2], Knot::corner(p(140.0, 260.0)));
+    // One gesture, one commit; the press selects the anchor as Convert Point's press does today.
+    assert_eq!(st.seen.iter().filter(|s| **s == Seen::Begin).count(), 1, "{:?}", st.seen);
+    assert_eq!((st.seen.first(), st.seen.last()), (Some(&Seen::Begin), Some(&Seen::Commit)), "{:?}", st.seen);
+    assert_eq!(st.selection, sel(2, &[(0, 1)]), "the press still selects the anchor");
+}
+
+// A Convert Point drag without ⌥ keeps today's mirrored smooth pair (guard test, passes before and after).
+#[trial]
+fn a_convert_drag_without_alt_keeps_the_mirrored_pair() {
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::Convert);
+    let at = h.screen(p(140.0, 200.0));
+    h.drag(at, vec2(50.0, 30.0));
+    let st = h.state.borrow();
+    let near1 = |a: Point, b: Point| a.distance(b) < 1e-6;
+    assert!(matches!(st.changes.last(), Some(PathEdit::Convert { path: 2, out: Some(o), .. }) if near1(*o, p(190.0, 230.0))), "{:?}", st.changes);
+    let k = st.paths[1].subpaths[0].knots[1];
+    assert!(near1(k.out_ctrl, p(190.0, 230.0)) && near1(k.in_ctrl, p(90.0, 170.0)) && k.smooth, "{k:?}");
+}
+
+// The ⌥ presses the issue lists as not measured keep today's mirrored pair: on a smooth anchor, with ⇧ held as
+// well, and on either end anchor of an open subpath (its first, knot 0, and its last, `knot + 1 == len`; guards,
+// each passes before and after).
+#[trial]
+fn alt_convert_keeps_todays_pair_for_the_unmeasured_presses() {
+    let near1 = |a: Point, b: Point| a.distance(b) < 1e-6;
+    let cases = [
+        ("smooth anchor", 1u64, (260.0, 60.0), (0, 2), (310.0, 90.0), (210.0, 30.0)),
+        ("corner with ⌥⇧", 2, (140.0, 200.0), (0, 1), (190.0, 230.0), (90.0, 170.0)),
+        ("open subpath first anchor", 1, (60.0, 60.0), (0, 0), (110.0, 90.0), (10.0, 30.0)),
+        ("open subpath last anchor", 1, (340.0, 160.0), (0, 3), (390.0, 190.0), (290.0, 130.0)),
+    ];
+    for (name, path, at, knot, out, in_ctrl) in cases {
+        let mut h = two_paths();
+        h.update(|st| st.tool = BezierTool::Convert);
+        let mods = if name.contains('⇧') { egui::Modifiers::ALT | egui::Modifiers::SHIFT } else { egui::Modifiers::ALT };
+        let at = h.screen(p(at.0, at.1));
+        h.fixture.hold(mods);
+        h.drag(at, vec2(50.0, 30.0));
+        h.fixture.hold(egui::Modifiers::NONE);
+        let st = h.state.borrow();
+        let k = st.paths.iter().find(|e| e.key == path).expect("path").subpaths[0].knots[knot.1];
+        assert!(near1(k.out_ctrl, p(out.0, out.1)) && near1(k.in_ctrl, p(in_ctrl.0, in_ctrl.1)) && k.smooth, "{name}: {k:?}");
+    }
+}
+
+// The emitted edit carries the flag for exactly the measured press: ⌥ at the press on a corner anchor of a closed
+// subpath sets it; a plain press, an ⌥ click (its `None` corner) and the not-measured ⌥ presses leave it false.
+#[trial]
+fn the_alt_convert_press_emits_the_alone_flag() {
+    let last = |h: &mut Harness, at: Point, mods: egui::Modifiers| {
+        h.update(|st| st.tool = BezierTool::Convert);
+        let at = h.screen(at);
+        h.fixture.hold(mods);
+        h.drag(at, vec2(50.0, 30.0));
+        h.fixture.hold(egui::Modifiers::NONE);
+        h.last_change()
+    };
+    assert!(matches!(
+        last(&mut two_paths(), p(140.0, 200.0), egui::Modifiers::ALT),
+        Some(PathEdit::Convert { path: 2, out: Some(_), alone: true, .. })
+    ));
+    assert!(matches!(
+        last(&mut two_paths(), p(140.0, 200.0), egui::Modifiers::NONE),
+        Some(PathEdit::Convert { path: 2, out: Some(_), alone: false, .. })
+    ));
+    assert!(matches!(
+        last(&mut two_paths(), p(140.0, 200.0), egui::Modifiers::ALT | egui::Modifiers::SHIFT),
+        Some(PathEdit::Convert { path: 2, out: Some(_), alone: false, .. })
+    ));
+    assert!(matches!(
+        last(&mut two_paths(), p(260.0, 60.0), egui::Modifiers::ALT),
+        Some(PathEdit::Convert { path: 1, out: Some(_), alone: false, .. })
+    ));
+    assert!(matches!(
+        last(&mut two_paths(), p(60.0, 60.0), egui::Modifiers::ALT),
+        Some(PathEdit::Convert { path: 1, out: Some(_), alone: false, .. })
+    ));
+    assert!(matches!(
+        last(&mut two_paths(), p(340.0, 160.0), egui::Modifiers::ALT),
+        Some(PathEdit::Convert { path: 1, out: Some(_), alone: false, .. })
+    ));
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::Convert);
+    let at = h.screen(p(140.0, 200.0));
+    h.fixture.hold(egui::Modifiers::ALT);
+    h.press_at(at);
+    h.release_at(at);
+    h.fixture.hold(egui::Modifiers::NONE);
+    assert!(matches!(h.last_change(), Some(PathEdit::Convert { path: 2, out: None, alone: false, .. })), "{:?}", h.last_change());
+}
+
+// The Pen with ⌥ is Convert Point: `PathMode::resolve` gives the overlay `BezierTool::Convert` for that press (the
+// ⌥ row comes before the Pen's Auto Add/Delete), so it takes today's one-handle rule too. PhotoCraft #12740 measured
+// the Convert Point tool, not this route: unmeasured but changed, and pinned here.
+#[trial]
+fn the_pen_with_alt_runs_convert_and_pulls_one_handle_too() {
+    let mode = PathMode::resolve(PathTool::Pen, Mods::ALT, false, true);
+    assert_eq!(mode.bezier, BezierTool::Convert, "the Pen with ⌥ runs the overlay's Convert tool");
+    assert_eq!(mode.draft, Some(PenMode::Pen), "and keeps the pen draft shown");
+    let mut h = two_paths();
+    h.update(|st| st.tool = mode.bezier);
+    let at = h.screen(p(140.0, 200.0));
+    h.fixture.hold(egui::Modifiers::ALT);
+    h.drag(at, vec2(50.0, 30.0));
+    h.fixture.hold(egui::Modifiers::NONE);
+    assert!(matches!(h.last_change(), Some(PathEdit::Convert { path: 2, out: Some(_), alone: true, .. })), "{:?}", h.last_change());
+    let st = h.state.borrow();
+    let k = st.paths[1].subpaths[0].knots[1];
+    assert!(near(k.out_ctrl, p(190.0, 230.0)) && near(k.in_ctrl, p(140.0, 200.0)) && !k.smooth, "one handle out, the other stays: {k:?}");
+}
+
+// The flag follows the modifiers held at the press: ⌥ at the press and released mid-drag still latches it, so the
+// preview and the commit both pull out one handle only; ⌥ pressed mid-drag on a press that began without it keeps
+// today's mirrored pair. Releasing or pressing ⌥ during a drag is a not-measured case per PhotoCraft #12740: the
+// latch is the Add Anchor ⌥ pattern (#2284), and the second half is a guard that passes before and after.
+#[trial]
+fn the_alone_flag_latches_at_the_press_and_survives_alt_released_mid_drag() {
+    let gesture = |h: &mut Harness, mods: [egui::Modifiers; 2]| {
+        let at = h.screen(p(140.0, 200.0));
+        h.fixture.hold(mods[0]);
+        h.press_at(at);
+        h.move_to(at + vec2(25.0, 15.0));
+        h.fixture.hold(mods[1]);
+        h.move_to(at + vec2(50.0, 30.0));
+        h.release_at(at + vec2(50.0, 30.0));
+        h.fixture.hold(egui::Modifiers::NONE);
+    };
+    // ⌥ at the press, released before the release: still one handle.
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::Convert);
+    gesture(&mut h, [egui::Modifiers::ALT, egui::Modifiers::NONE]);
+    {
+        let st = h.state.borrow();
+        assert!(matches!(st.changes.last(), Some(PathEdit::Convert { path: 2, out: Some(_), alone: true, .. })), "{:?}", st.changes);
+        let k = st.paths[1].subpaths[0].knots[1];
+        assert!(near(k.out_ctrl, p(190.0, 230.0)) && near(k.in_ctrl, p(140.0, 200.0)) && !k.smooth, "the released ⌥ does not undo the latch: {k:?}");
+        assert_eq!((st.seen.first(), st.seen.last()), (Some(&Seen::Begin), Some(&Seen::Commit)), "{:?}", st.seen);
+        assert_eq!(st.seen.iter().filter(|s| **s == Seen::Begin).count(), 1, "{:?}", st.seen);
+    }
+    // No ⌥ at the press, ⌥ held mid-drag: today's mirrored pair.
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::Convert);
+    gesture(&mut h, [egui::Modifiers::NONE, egui::Modifiers::ALT]);
+    let st = h.state.borrow();
+    assert!(matches!(st.changes.last(), Some(PathEdit::Convert { path: 2, out: Some(_), alone: false, .. })), "{:?}", st.changes);
+    let k = st.paths[1].subpaths[0].knots[1];
+    assert!(near(k.out_ctrl, p(190.0, 230.0)) && near(k.in_ctrl, p(90.0, 170.0)) && k.smooth, "the mid-drag ⌥ does not latch: {k:?}");
 }
 
 // The arrow keys nudge the selected anchors, ⇧ by a larger step; each press is one edit, and with the path targeted

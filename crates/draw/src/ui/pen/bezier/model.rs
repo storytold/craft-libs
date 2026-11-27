@@ -402,15 +402,19 @@ pub enum PathEdit {
         by: Vec2,
     },
     /// Convert Point: `None` makes a corner with retracted handles; `Some(out)` a smooth point
-    /// whose out handle is at `out` and whose in handle mirrors it.
+    /// whose out handle is at `out` and whose in handle mirrors it; `Some(out)` with `alone` moves
+    /// only the out handle, the in handle stays where it is and the knot is not smooth (the ⌥
+    /// press of Convert Point on a corner anchor, PhotoCraft #12740).
     #[non_exhaustive]
     Convert {
         /// The path's host key.
         path: u64,
         /// The converted anchor.
         knot: KnotRef,
-        /// The out handle of the smooth point, or `None` for a corner.
+        /// The out handle of the converted point, or `None` for a corner.
         out: Option<Point>,
+        /// Whether the in handle stays where it is instead of mirroring `out` (⌥ held at the press).
+        alone: bool,
     },
     /// The Curvature tool's drag of anchors: move them with their handles by `by` (the whole move
     /// from the press), then reflow every subpath they are on ([`EditSubpath::reflow`]).
@@ -523,9 +527,10 @@ impl PathEdit {
         PathEdit::BendSegment { path, segment, t, by }
     }
 
-    /// Converts `knot` to a corner (`out` is `None`) or to a smooth point whose out handle is at `out`.
-    pub fn convert(path: u64, knot: KnotRef, out: Option<Point>) -> Self {
-        PathEdit::Convert { path, knot, out }
+    /// Converts `knot` to a corner (`out` is `None`) or to a smooth point whose out handle is at `out`;
+    /// `alone` keeps the in handle where it is instead of mirroring `out`.
+    pub fn convert(path: u64, knot: KnotRef, out: Option<Point>, alone: bool) -> Self {
+        PathEdit::Convert { path, knot, out, alone }
     }
 
     /// The Curvature tool's move of `anchors` by `by`, with the curve reflowed.
