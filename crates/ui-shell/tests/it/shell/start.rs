@@ -590,6 +590,28 @@ fn home_screen(has_recent: bool) -> (Fixture, Log) {
     (fixture, log)
 }
 
+/// Home shown in a dialog, whose body measures with no height limit: every part gets a finite place inside the dialog,
+/// in a narrow window and a wide one.
+#[trial]
+fn the_home_screen_in_a_dialog_lays_out_inside_it() {
+    use craft_ui::contract::{Props as _, ShowContainer as _};
+    let links = [StartLink::url("Learn", None, "https://example.test/learn")];
+    let (mut view, mut sort) = (RecentView::Grid, RecentSort::Opened);
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = craft_ui::dialog::Dialog::new("Home").id_salt("home").modeless().resizable(true).show(ui, |ui, _| {
+            StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &[]).links(&links).home_layout("Photo app", &[]).show(ui)
+        });
+    });
+    for room in [egui::vec2(700.0, 500.0), egui::vec2(1400.0, 900.0)] {
+        fixture.room(room).settle();
+        let dialog = fixture.by_role(Role::DIALOG).first().expect("the dialog shows").rect;
+        for label in ["Photo app", "New…", "Open…"] {
+            let part = fixture.by_label(label).unwrap_or_else(|| panic!("{label} shows in {room:?}")).rect;
+            assert!(dialog.contains_rect(part), "{label} {part:?} lies inside the dialog {dialog:?} in {room:?}");
+        }
+    }
+}
+
 /// At a desktop width the navigation stays left of the recent files and the community links sit below it.
 #[trial]
 fn the_home_screen_places_navigation_to_the_left_of_recent_files() {

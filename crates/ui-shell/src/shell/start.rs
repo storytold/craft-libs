@@ -927,28 +927,42 @@ impl HomeLayout<'_> {
                 }
                 let room = ui.available_rect_before_wrap();
                 let wide = room.width() >= HOME_BREAKPOINT;
+                let rtl = page.env.direction.is_rtl();
+                let gap = if wide { Gap::CardRow } else { Gap::Section };
+                let stack = || Stack::new().id_salt("home-page").fill().pad(Pad::Regular).gap(gap).scroll(Scroll::vertical());
+                let mut body = |ui: &mut Ui, cx: &mut BodyCx<'_>, middle: f32| {
+                    if !wide {
+                        let _ = Row::new().gap(Gap::Tight).fill_width().show(ui, |ui, _| home_new_and_open(page, ui));
+                    }
+                    let _ = Text::new(self.title.clone()).role(TypeRole::Heading).show(ui);
+                    home_divider(ui);
+                    sections(ui, cx, middle, wide);
+                    if !wide {
+                        home_links(ui, page, "home-nav", links, Gap::Tight);
+                        home_links(ui, page, "home-footer", self.footer_links, Gap::Tight);
+                    }
+                };
+                // A room with no height limit (a body measured for its content) holds the page as tall as its content,
+                // as a fill takes its measure there; the rail scrolls in that height.
+                let room = if room.height().is_finite() {
+                    room
+                } else {
+                    let width = if wide { home_columns(room.with_max_y(room.top()), rtl).1.width() } else { room.width().min(HOME_COMPACT_WIDTH) };
+                    let height = stack().measure_in(ui, Proposal::Width(width), |ui, cx| body(ui, cx, room.top())).y;
+                    let inset = if wide { 2.0 * HOME_DESKTOP_INSET.y } else { 0.0 };
+                    Rect::from_min_size(room.min, vec2(room.width(), height + inset))
+                };
                 let content = if wide {
-                    let (rail, content) = home_columns(room, page.env.direction.is_rtl());
+                    let (rail, content) = home_columns(room, rtl);
                     self.rail(ui, page, links, rail);
                     content
                 } else {
                     Rect::from_center_size(room.center(), vec2(room.width().min(HOME_COMPACT_WIDTH), room.height()))
                 };
-                let gap = if wide { Gap::CardRow } else { Gap::Section };
-                let _ =
-                    Stack::new().id_salt("home-page").fill().pad(Pad::Regular).gap(gap).scroll(Scroll::vertical()).show_at(ui, content, |ui, cx| {
-                        let top = ui.available_rect_before_wrap().top();
-                        if !wide {
-                            let _ = Row::new().gap(Gap::Tight).fill_width().show(ui, |ui, _| home_new_and_open(page, ui));
-                        }
-                        let _ = Text::new(self.title.clone()).role(TypeRole::Heading).show(ui);
-                        home_divider(ui);
-                        sections(ui, cx, top + content.height() / 2.0, wide);
-                        if !wide {
-                            home_links(ui, page, "home-nav", links, Gap::Tight);
-                            home_links(ui, page, "home-footer", self.footer_links, Gap::Tight);
-                        }
-                    });
+                let _ = stack().show_at_taking_room(ui, content, |ui, cx| {
+                    let top = ui.available_rect_before_wrap().top();
+                    body(ui, cx, top + content.height() / 2.0);
+                });
             })
             .output
     }
