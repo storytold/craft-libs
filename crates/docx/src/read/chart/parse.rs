@@ -195,14 +195,14 @@ fn show_values(d: Option<&El>) -> Option<bool> {
     d.child("c:showVal").map(|v| v.attr("val").is_none_or(truthy))
 }
 
-/// The number format of data labels (`c:dLbls/c:numFmt`): `None` when the labels say nothing,
-/// `Some(None)` when they are linked to the source (so a chart-level format does not apply),
-/// `Some(Some(code))` for their own format code.
 /// A `c:dLbls`' `c:dLblPos`, when it gives a known one.
 fn label_position(d: Option<&El>) -> Option<LabelPos> {
     d?.child("c:dLblPos")?.attr("val").and_then(LabelPos::parse)
 }
 
+/// The number format of data labels (`c:dLbls/c:numFmt`): `None` when the labels say nothing,
+/// `Some(None)` when they are linked to the source (so a chart-level format does not apply),
+/// `Some(Some(code))` for their own format code.
 fn label_format(d: Option<&El>) -> Option<Option<String>> {
     let f = d?.child("c:numFmt")?;
     if f.attr("sourceLinked").is_some_and(truthy) {
