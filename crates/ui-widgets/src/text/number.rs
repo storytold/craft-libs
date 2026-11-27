@@ -171,8 +171,9 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     #[prop(func = "Fn(f64, i32, f64) -> f64")]
     stepper: Option<NumberStepper<'a>>,
     /// A composite may route AX increment/decrement in separate model units; editing/typing/wheel still use step.
+    /// Zero (or a non-finite amount) leaves the rule's step.
     #[prop(quantity = "step", vis = "pub(crate)")]
-    scalar_access_step: Option<f64>,
+    scalar_access_step: f64,
     /// Pointer-only fine/coarse bindings for the field, label and popup-slider scrubs.
     #[prop]
     pointer_modifiers: craft_behavior::DragModifiers,
@@ -301,7 +302,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             step: None,
             scrub_step: None,
             stepper: None,
-            scalar_access_step: None,
+            scalar_access_step: 0.0,
             pointer_modifiers: craft_behavior::DragModifiers::default(),
             unit: None,
             unit_placement: UnitPlacement::Inside,
@@ -975,7 +976,8 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             Some(value) => Numeric::new(value, rule.bounds()),
             None => Numeric::empty(rule.bounds()),
         };
-        access.numeric(numeric.step(self.scalar_access_step.filter(|step| step.is_finite() && *step > 0.0).unwrap_or(rule.step)));
+        let access_step = self.scalar_access_step;
+        access.numeric(numeric.step(if access_step.is_finite() && access_step > 0.0 { access_step } else { rule.step }));
         if let Some(unit) = self.painted_unit(cx) {
             access.unit(cx.env.resolve(&unit).as_str());
         }

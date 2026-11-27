@@ -356,7 +356,7 @@ impl Look {
             .commit_decimals(typed_decimals.unwrap_or_else(|| decimals_for_step(step)))
             .scrub_by_label()
             .pointer_modifiers(self.pointer_modifiers)
-            .scalar_access_step(self.key_policy.and_then(ScalarKeyPolicy::amount));
+            .scalar_access_step(self.key_policy.and_then(ScalarKeyPolicy::amount).unwrap_or(0.0));
         let field = match self.scrub_step {
             Some(rate) => field.scrub_step(rate),
             None => field,

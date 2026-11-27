@@ -11,7 +11,7 @@ use crate::contract::{
 };
 use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
-use crate::runtime::keys::{MoveMods, NavMove, ScalarKeyPolicy, ScalarRow, register_scalar};
+use crate::runtime::keys::{ScalarKeyPolicy, ScalarRow, register_scalar};
 use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, SurfaceStyle, TextLook, TrackLook};
 use crate::text::NumberStepper;
 use craft_behavior::intent::{MoveMods, NavMove};
