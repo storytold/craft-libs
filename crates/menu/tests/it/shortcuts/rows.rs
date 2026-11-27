@@ -120,6 +120,19 @@ fn match_case_matches_command_names_only() {
     assert_eq!(rows_for(&mut rig, "Export", "Export").len(), 1);
 }
 
+/// Ticked, a query the search folds away entirely (a zero-width space) still needs a name that holds it, so it lists
+/// nothing rather than every command.
+#[trial]
+fn with_match_case_a_query_that_folds_away_lists_nothing() {
+    let mut rig = Rig::tuned(Platform::Mac, |o| o.match_case = true);
+    assert_eq!(rows_for(&mut rig, "\u{200B}", "Save").len(), 2, "off, a folded-away query lists every command");
+    let check = match_case_box(&rig).expect("the dialog offers Match Case");
+    rig.fixture.click(&check);
+    rig.fixture.settle();
+    let rows = rows_for(&mut rig, "\u{200B}", "Save");
+    assert!(rows.is_empty(), "no name holds a zero-width space: {rows:?}");
+}
+
 /// The name of the control that holds the keyboard focus.
 fn focused(rig: &Rig) -> Option<String> {
     let tree = rig.fixture.tree();

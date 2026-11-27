@@ -318,6 +318,11 @@ impl Query {
         Query { matcher, trigger, exact }
     }
 
+    /// Whether the query lists everything: nothing left after folding, and with Match Case nothing typed either.
+    fn is_empty(&self) -> bool {
+        self.matcher.is_empty() && self.exact.as_deref().is_none_or(str::is_empty)
+    }
+
     fn hit(&self, s: &str) -> bool {
         self.matcher.score(s).is_some()
     }
@@ -331,7 +336,7 @@ impl Query {
     /// effective trigger when the query spells one, else their canonical or display text. A query
     /// that spells a chord (`cmd+s`, `⌘S`) does not also match longer chords containing its text.
     fn matches(&self, b: &CommandDef, bindings: &[Binding], text: &Say, platform: Platform) -> bool {
-        if self.matcher.is_empty() {
+        if self.is_empty() {
             return true;
         }
         if let Some(hit) = self.exact_hit(&[&b.label, &text.command(b)]) {
@@ -462,7 +467,7 @@ fn build_fixed(keymap: &Keymap, options: &Options, text: &Say, view: &View, quer
     let platform = keymap.platform();
     let mut groups: Vec<(&str, Vec<FixedLine>)> = Vec::new();
     for f in &options.fixed {
-        if !query.matcher.is_empty()
+        if !query.is_empty()
             && !query.exact_hit(&[&f.label]).unwrap_or_else(|| {
                 query.hit(&f.label)
                     || query.hit(&f.keys)
