@@ -1,0 +1,711 @@
+//! An indirect reference identifies an object number AND its generation (ISO 32000-2 §7.3.10).
+
+use std::sync::Arc;
+
+use craft_pdf::cos::{Document, ObjRef, Object, SaveOptions, XrefEntry, write_full, write_incremental};
+use hayro_syntax::object::{Dict as HayroDict, ObjectIdentifier};
+
+/// Object 3 was reused: only 3 1 R refers to the current value, never 3 0 R.
+fn reused_object() -> Arc<Vec<u8>> {
+    object_file(&[
+        (1, 0, "<< /Type /Catalog /Pages 2 0 R /Stale 3 0 R /Current 3 1 R >>"),
+        (2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"),
+        (3, 1, "42"),
+    ])
+}
+
+fn object_file(objects: &[(u32, u16, &str)]) -> Arc<Vec<u8>> {
+    object_file_with_entry(objects, None)
+}
+
+fn object_file_with_entry(objects: &[(u32, u16, &str)], changed: Option<(u32, u16, bool)>) -> Arc<Vec<u8>> {
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (num, generation, value) in objects {
+        offsets.push((*num, bytes.len(), *generation));
+        bytes.extend_from_slice(format!("{num} {generation} obj\n{value}\nendobj\n").as_bytes());
+    }
+    let xref = bytes.len();
+    let size = objects.len() + 1;
+    bytes.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
+    for (num, offset, generation) in offsets {
+        let (generation, free) = changed.filter(|(n, _, _)| *n == num).map_or((generation, false), |(_, g, free)| (g, free));
+        let (offset, kind) = if free { (0, 'f') } else { (offset, 'n') };
+        bytes.extend_from_slice(format!("{offset:010} {generation:05} {kind} \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    Arc::new(bytes)
+}
+
+fn contradictory_entry(free: bool) -> Arc<Vec<u8>> {
+    object_file_with_entry(
+        &[(1, 0, "<< /Type /Catalog /Pages 2 0 R /Stale 3 0 R /Current 3 1 R >>"), (2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"), (3, 1, "42")],
+        Some((3, if free { 2 } else { 0 }, free)),
+    )
+}
+
+#[test]
+fn contradictory_xref_generation_recovers_the_matching_header_and_records_repair() {
+    for warm in [false, true] {
+        let doc = Document::open(contradictory_entry(false)).unwrap();
+        if warm {
+            assert_eq!(*doc.try_get(3).unwrap(), Object::Int(42));
+        }
+        assert_eq!(*doc.get(ObjRef::new(3, 1)), Object::Int(42));
+        assert_eq!(*doc.resolve(&Object::Ref(ObjRef::new(3, 1))), Object::Int(42));
+        // Preserve the existing xref-matching behavior, but never accept an unrelated generation.
+        assert_eq!(*doc.get(ObjRef::new(3, 0)), Object::Int(42));
+        assert_eq!(*doc.get(ObjRef::new(3, 2)), Object::Null);
+        assert!(!doc.xref_entry_is_exact(3), "a contradictory generation is not an exact xref entry");
+        assert!(
+            doc.repair_log()
+                .iter()
+                .any(|line| { line.contains("object 3") && line.contains("xref generation 0") && line.contains("header generation 1") }),
+            "{:?}",
+            doc.repair_log()
+        );
+        let repairs = doc.repair_log().to_vec();
+        for _ in 0..3 {
+            assert_eq!(*doc.get(ObjRef::new(3, 1)), Object::Int(42));
+        }
+        assert_eq!(doc.repair_log(), repairs);
+
+        let mut edited = doc.clone();
+        edited.free(ObjRef::new(3, 1));
+        for generation in [0, 1, 2] {
+            assert_eq!(*edited.get(ObjRef::new(3, generation)), Object::Null);
+        }
+        edited.set(ObjRef::new(3, 2), Object::Int(99));
+        assert_eq!(*edited.get(ObjRef::new(3, 1)), Object::Null);
+        assert_eq!(*edited.get(ObjRef::new(3, 2)), Object::Int(99));
+        assert_eq!(*doc.get(ObjRef::new(3, 1)), Object::Int(42));
+    }
+}
+
+/// A damaged row may name generation zero while the retained object and catalog use one.
+fn contradictory_dictionary() -> Arc<Vec<u8>> {
+    object_file_with_entry(
+        &[(1, 0, "<< /Type /Catalog /Pages 2 0 R /Current 3 1 R >>"), (2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"), (3, 1, "<< /Value 42 >>")],
+        Some((3, 0, false)),
+    )
+}
+
+fn assert_repaired_dictionary(bytes: Vec<u8>, value: i32) {
+    let bytes = Arc::new(bytes);
+    let oracle = hayro_syntax::Pdf::new(bytes.clone()).unwrap();
+    let catalog = oracle.xref().get::<HayroDict<'_>>(ObjectIdentifier::new(1, 0)).unwrap();
+    assert_eq!(catalog.get::<HayroDict<'_>>(b"Current").unwrap().get::<i32>(b"Value"), Some(value));
+    let back = Document::open(bytes).unwrap();
+    let catalog = back.get(back.root().unwrap());
+    let current = back.resolve(catalog.as_dict().unwrap().get(b"Current").unwrap());
+    assert_eq!(current.as_dict().unwrap().int(b"Value"), Some(i64::from(value)));
+}
+
+#[test]
+fn repaired_header_references_survive_full_saves_and_dictionary_edits() {
+    let original = contradictory_dictionary();
+    let doc = Document::open(original.clone()).unwrap();
+    for object_streams in [false, true] {
+        assert_repaired_dictionary(write_full(&doc, &SaveOptions { object_streams, ..SaveOptions::default() }).unwrap(), 42);
+    }
+    let mut edited = doc.clone();
+    edited.update_dict(ObjRef::new(3, 1), |dict| dict.set(b"Value".to_vec(), Object::Int(77))).unwrap();
+    assert_eq!(edited.generation(3), 1);
+    let incremental = write_incremental(&edited, &SaveOptions::default()).unwrap();
+    assert!(edited.full_save_required(), "repair-aware dictionary edits normalize on full rewrite");
+    assert_repaired_dictionary(incremental, 77);
+    for object_streams in [false, true] {
+        assert_repaired_dictionary(write_full(&edited, &SaveOptions { object_streams, ..SaveOptions::default() }).unwrap(), 77);
+    }
+    let mut restored = doc.clone();
+    restored.overlay_changes_from(&edited).unwrap();
+    assert_repaired_dictionary(write_incremental(&restored, &SaveOptions::default()).unwrap(), 77);
+}
+
+#[test]
+fn free_xref_slots_never_revive_retained_object_headers() {
+    for warm in [false, true] {
+        let doc = Document::open(contradictory_entry(true)).unwrap();
+        assert!(matches!(doc.xref_entry(3), Some(XrefEntry::Free { next_generation: 2 })));
+        if warm {
+            assert_eq!(*doc.try_get(3).unwrap(), Object::Null);
+        }
+        for generation in [0, 1, 2] {
+            assert_eq!(*doc.get(ObjRef::new(3, generation)), Object::Null);
+        }
+        assert_eq!(*doc.resolve(&Object::Ref(ObjRef::new(3, 1))), Object::Null);
+        assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
+    }
+    // Control: the retained bytes really are a readable object when its slot is live.
+    let live = Document::open(contradictory_entry(false)).unwrap();
+    assert_eq!(*live.try_get(3).unwrap(), Object::Int(42));
+}
+
+#[test]
+fn incremental_generation_identity_is_visible_to_an_independent_reader() {
+    let original = reused_object();
+    let mut doc = Document::open(original.clone()).unwrap();
+    doc.set(ObjRef::new(3, 1), Object::Int(77));
+    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(bytes.starts_with(&original));
+    let oracle = hayro_syntax::Pdf::new(Arc::new(bytes)).unwrap();
+    let catalog = oracle.xref().get::<HayroDict<'_>>(ObjectIdentifier::new(1, 0)).unwrap();
+    assert_eq!(catalog.get::<i32>(b"Current"), Some(77));
+    assert_eq!(catalog.get::<i32>(b"Stale"), None);
+}
+
+#[test]
+fn generation_repair_diagnostics_are_bounded_without_disabling_recovery() {
+    let mut objects = vec![(1, 0, "<< /Type /Catalog /Pages 2 0 R >>"), (2, 0, "<< /Type /Pages /Kids [] /Count 0 >>")];
+    objects.extend((3..303).map(|num| (num, 1, "42")));
+    let bytes = object_file(&objects);
+    let bytes = String::from_utf8(bytes.as_ref().clone()).unwrap().replace("00001 n \n", "00000 n \n");
+    for materialized in [false, true] {
+        let bytes = if materialized { bytes.replace("/Size 303", "/Size 302") } else { bytes.clone() };
+        let doc = Document::open(Arc::new(bytes.into_bytes())).unwrap();
+        assert_eq!(doc.repair_log().len(), 257);
+        assert!(doc.repair_log().last().unwrap().contains("omitted after 256 objects"));
+        assert_eq!(*doc.get(ObjRef::new(3, 1)), Object::Int(42));
+        assert_eq!(*doc.get(ObjRef::new(302, 1)), Object::Int(42));
+        assert_eq!(*doc.get(ObjRef::new(302, 2)), Object::Null);
+        assert_eq!(doc.repair_log().len(), 257);
+    }
+}
+
+#[test]
+fn references_require_the_current_generation_even_with_a_warm_cache() {
+    let bytes = reused_object();
+    let oracle = hayro_syntax::Pdf::new(bytes.clone()).unwrap();
+    assert_eq!(oracle.xref().get::<i32>(ObjectIdentifier::new(3, 0)), None);
+    assert_eq!(oracle.xref().get::<i32>(ObjectIdentifier::new(3, 1)), Some(42));
+
+    let doc = Document::open(bytes).unwrap();
+    assert!(doc.repair_log().is_empty());
+    assert_eq!(*doc.get(ObjRef::new(3, 0)), Object::Null);
+    assert_eq!(*doc.try_get(3).unwrap(), Object::Int(42));
+    assert_eq!(*doc.get(ObjRef::new(3, 1)), Object::Int(42));
+    assert_eq!(*doc.get(ObjRef::new(3, 0)), Object::Null);
+    assert_eq!(*doc.resolve(&Object::Ref(ObjRef::new(3, 0))), Object::Null);
+    assert_eq!(*doc.get(ObjRef::new(3, 2)), Object::Null);
+}
+
+#[test]
+fn overlay_generation_changes_do_not_retarget_old_references_or_clones() {
+    let mut doc = Document::open(reused_object()).unwrap();
+    let snapshot = doc.clone();
+    let old = ObjRef::new(3, 1);
+    let new = ObjRef::new(3, 2);
+    doc.free(old);
+    assert_eq!(*doc.get(old), Object::Null);
+    doc.set(new, Object::Int(99));
+    assert_eq!(*doc.get(old), Object::Null);
+    assert_eq!(*doc.get(new), Object::Int(99));
+    assert_eq!(*snapshot.get(old), Object::Int(42));
+    assert_eq!(*snapshot.get(new), Object::Null);
+
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let back = Document::open(Arc::new(saved)).unwrap();
+    assert!(back.repair_log().is_empty());
+    assert_eq!(*back.get(old), Object::Null);
+    assert_eq!(*back.get(new), Object::Int(99));
+}
+
+#[test]
+fn restoring_snapshot_preserves_changes_to_nonzero_generation_objects() {
+    for generation in [1, 2] {
+        let mut saved = Document::open(reused_object()).unwrap();
+        let mut current = saved.clone();
+        let reference = ObjRef::new(3, generation);
+        current.set(reference, Object::Int(99));
+        current.update_dict(current.root().unwrap(), |catalog| catalog.set(b"Current".to_vec(), Object::Ref(reference))).unwrap();
+
+        saved.overlay_changes_from(&current).unwrap();
+        assert_eq!(*saved.get(reference), Object::Int(99), "generation {generation}");
+        let back = Document::open(Arc::new(write_incremental(&saved, &SaveOptions::default()).unwrap())).unwrap();
+        assert!(back.repair_log().is_empty());
+        assert_eq!(*back.get(reference), Object::Int(99), "generation {generation}");
+        let catalog = back.get(back.root().unwrap());
+        assert_eq!(*back.resolve(catalog.as_dict().unwrap().get(b"Current").unwrap()), Object::Int(99));
+    }
+}
+
+#[test]
+fn full_save_does_not_turn_stale_references_into_live_ones() {
+    let doc = Document::open(reused_object()).unwrap();
+    for object_streams in [false, true] {
+        let saved = write_full(&doc, &SaveOptions { object_streams, ..SaveOptions::default() }).unwrap();
+        let saved = Arc::new(saved);
+        let oracle = hayro_syntax::Pdf::new(saved.clone()).unwrap();
+        let catalog = oracle.xref().get::<HayroDict<'_>>(ObjectIdentifier::new(1, 0)).unwrap();
+        assert_eq!(catalog.get::<i32>(b"Current"), Some(42));
+        assert_eq!(catalog.get::<i32>(b"Stale"), None);
+        let back = Document::open(saved).unwrap();
+        assert!(back.repair_log().is_empty());
+        let catalog = back.get(back.root().unwrap());
+        let catalog = catalog.as_dict().unwrap();
+        assert_eq!(catalog.get(b"Stale"), Some(&Object::Null));
+        assert_eq!(*back.resolve(catalog.get(b"Current").unwrap()), Object::Int(42));
+    }
+}
+
+#[test]
+fn compressed_objects_only_accept_generation_zero() {
+    let doc = Document::open(reused_object()).unwrap();
+    let saved = write_full(&doc, &SaveOptions::default()).unwrap();
+    let back = Document::open(Arc::new(saved)).unwrap();
+    let catalog = back.get(back.root().unwrap());
+    let current = catalog.as_dict().unwrap().reference(b"Current").unwrap();
+    assert_eq!(current.generation, 0);
+    assert!(matches!(back.xref_entry(current.num), Some(XrefEntry::InStream { .. })));
+    assert_eq!(*back.get(current), Object::Int(42));
+    assert_eq!(*back.get(ObjRef::new(current.num, 1)), Object::Null);
+}
+
+#[test]
+fn indirect_stream_lengths_require_the_referenced_generation() {
+    for generation in [0, 1] {
+        // The embedded endstream is data when /Length resolves, but the existing missing-
+        // length recovery stops there when the reference is stale.
+        let stream = format!("<< /Length 4 {generation} R >>\nstream\nA\nendstream\nB\nendstream");
+        let doc = Document::open(object_file(&[
+            (1, 0, "<< /Type /Catalog /Pages 2 0 R >>"),
+            (2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"),
+            (3, 0, &stream),
+            (4, 1, "13"),
+        ]))
+        .unwrap();
+        let object = doc.get(ObjRef::new(3, 0));
+        let Object::Stream(stream) = &*object else { panic!("expected stream") };
+        assert_eq!(&stream.raw[..], if generation == 1 { b"A\nendstream\nB".as_slice() } else { b"A".as_slice() });
+    }
+}
+
+/// A newer valid row must not hide damage in a retained older revision.
+fn shadowed_generation_disagreement(materialized: bool, shifted: bool) -> Arc<Vec<u8>> {
+    let original = contradictory_dictionary();
+    let text = std::str::from_utf8(&original).unwrap();
+    let previous: usize = text.rsplit("startxref\n").next().unwrap().lines().next().unwrap().parse().unwrap();
+    let mut bytes = (*original).clone();
+    let offset = bytes.len();
+    bytes.extend_from_slice(b"3 1 obj\n<< /Value 77 >>\nendobj\n");
+    let xref = bytes.len();
+    let size = if materialized { 3 } else { 4 };
+    bytes.extend_from_slice(
+        format!("xref\n3 1\n{offset:010} 00001 n \ntrailer\n<< /Size {size} /Root 1 0 R /Prev {previous} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+    );
+    if shifted {
+        bytes.splice(..0, b"junk before the header\n".iter().copied());
+    }
+    Arc::new(bytes)
+}
+
+#[test]
+fn retained_generation_disagreements_are_reported_in_materialized_mode_too() {
+    for materialized in [false, true] {
+        for shifted in [false, true] {
+            let doc = Document::open(shadowed_generation_disagreement(materialized, shifted)).unwrap();
+            assert_eq!(doc.revisions().len(), 2, "the xref chain is retained");
+            assert!(!doc.reconstructed());
+            assert_eq!(doc.get(ObjRef::new(3, 1)).as_dict().unwrap().int(b"Value"), Some(77));
+            assert!(
+                doc.repair_log().iter().any(|line| line.contains("object 3: xref generation 0 disagrees with object header generation 1")),
+                "materialized={materialized}, shifted={shifted}: {:?}",
+                doc.repair_log()
+            );
+        }
+    }
+}
+
+#[test]
+fn repair_aware_edits_keep_both_aliases_and_full_save_normalizes_them() {
+    let mut doc = Document::open(contradictory_entry(false)).unwrap();
+    let snapshot = doc.clone();
+    doc.set_existing(ObjRef::new(3, 0), Object::Int(77)).unwrap();
+    for generation in [0, 1] {
+        assert_eq!(*doc.get(ObjRef::new(3, generation)), Object::Int(77));
+        assert_eq!(*snapshot.get(ObjRef::new(3, generation)), Object::Int(42));
+    }
+    let state = doc.read_state();
+    assert!(doc.set_existing(ObjRef::new(3, 2), Object::Int(99)).is_err());
+    assert!(state.matches(&doc));
+    assert_eq!(*doc.get(ObjRef::new(3, 2)), Object::Null);
+    let mut restored = snapshot.clone();
+    restored.overlay_changes_from(&doc).unwrap();
+    for changed in [&doc, &restored] {
+        assert!(changed.full_save_required());
+        for bytes in [
+            write_incremental(changed, &SaveOptions::default()).unwrap(),
+            write_full(changed, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap(),
+        ] {
+            let bytes = Arc::new(bytes);
+            let oracle = hayro_syntax::Pdf::new(bytes.clone()).unwrap();
+            let catalog = oracle.xref().get::<HayroDict<'_>>(ObjectIdentifier::new(1, 0)).unwrap();
+            assert_eq!(catalog.get::<i32>(b"Current"), Some(77));
+            assert_eq!(catalog.get::<i32>(b"Stale"), Some(77), "both source aliases stay live");
+            let back = Document::open(bytes).unwrap();
+            assert!(back.repair_log().is_empty(), "normalized output has no generation repairs");
+        }
+    }
+    // Explicit replacement keeps its narrower, caller-supplied generation contract.
+    doc.set(ObjRef::new(3, 2), Object::Int(99));
+    assert_eq!(*doc.get(ObjRef::new(3, 0)), Object::Null);
+    assert_eq!(*doc.get(ObjRef::new(3, 1)), Object::Null);
+    assert_eq!(*doc.get(ObjRef::new(3, 2)), Object::Int(99));
+}
+
+#[test]
+fn hybrid_generation_diagnostics_observe_rows_before_the_table_hides_them() {
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (num, generation, body) in [(1, 0, "<< /Type /Catalog /Pages 2 0 R >>"), (2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"), (3, 1, "42")] {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{num} {generation} obj\n{body}\nendobj\n").as_bytes());
+    }
+    let hybrid = bytes.len();
+    offsets.push(hybrid);
+    bytes.extend_from_slice(b"4 0 obj\n<< /Type /XRef /Size 5 /W [1 4 2] /Index [3 1] /Length 7 >>\nstream\n");
+    bytes.push(1);
+    bytes.extend_from_slice(&(offsets[2] as u32).to_be_bytes());
+    bytes.extend_from_slice(&0u16.to_be_bytes());
+    bytes.extend_from_slice(b"\nendstream\nendobj\n");
+    let xref = bytes.len();
+    bytes.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+    for (i, offset) in offsets.into_iter().enumerate() {
+        let generation = u16::from(i == 2);
+        bytes.extend_from_slice(format!("{offset:010} {generation:05} n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size 5 /Root 1 0 R /XRefStm {hybrid} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert!(!doc.reconstructed());
+    assert!(doc.xref_oddities().iter().any(|(_, num)| *num == 3), "the conflicting hybrid row is set aside");
+    assert_eq!(*doc.get(ObjRef::new(3, 1)), Object::Int(42));
+    assert_eq!(*doc.get(ObjRef::new(3, 0)), Object::Null, "the table still determines accepted references");
+    assert!(doc.repair_log().iter().any(|line| line.contains("object 3: xref generation 0 disagrees with object header generation 1")));
+}
+
+#[test]
+fn discarded_xref_repair_notes_do_not_survive_object_header_reconstruction() {
+    let bytes =
+        String::from_utf8((*contradictory_dictionary()).clone()).unwrap().replace("/Root 1 0 R", "/Root 99 0 R").replace("/Size 4", "/Size 3");
+    let doc = Document::open(Arc::new(bytes.into_bytes())).unwrap();
+    assert!(doc.reconstructed());
+    assert!(doc.repair_log().iter().all(|line| !line.contains("xref generation")), "{:?}", doc.repair_log());
+}
+
+#[test]
+fn restoring_equal_values_still_restores_the_accepted_generation_aliases() {
+    for edited in [false, true] {
+        for value in [42, 77] {
+            let mut current = Document::open(contradictory_entry(false)).unwrap();
+            if edited {
+                current.set_existing(ObjRef::new(3, 0), Object::Int(42)).unwrap();
+            }
+            let mut saved = Document::open(object_file(&[
+                (1, 0, "<< /Type /Catalog /Pages 2 0 R /Stale 3 0 R /Current 3 1 R >>"),
+                (2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"),
+                (3, 0, &value.to_string()),
+            ]))
+            .unwrap();
+            assert_eq!(*saved.get(ObjRef::new(3, 1)), Object::Null);
+            saved.overlay_changes_from(&current).unwrap();
+            for generation in [0, 1] {
+                assert_eq!(*saved.get(ObjRef::new(3, generation)), Object::Int(42), "edited={edited}, value={value}");
+            }
+            assert!(saved.full_save_required());
+        }
+    }
+}
+
+#[test]
+fn repaired_page_tree_aliases_keep_one_identity_in_full_saves() {
+    let source = object_file_with_entry(
+        &[
+            (1, 0, "<< /Type /Catalog /Pages 2 1 R /Stale 2 2 R >>"),
+            (2, 1, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            (3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>"),
+        ],
+        Some((2, 0, false)),
+    );
+    for edited in [false, true] {
+        let mut doc = Document::open(source.clone()).unwrap();
+        if edited {
+            doc.update_dict(ObjRef::new(2, 0), |dict| dict.set(b"Edited".to_vec(), Object::Bool(true))).unwrap();
+        }
+        let mut restored = Document::open(source.clone()).unwrap();
+        restored.overlay_changes_from(&doc).unwrap();
+        for current in [&doc, &restored] {
+            for object_streams in [false, true] {
+                let opts = SaveOptions { object_streams, ..SaveOptions::default() };
+                let mut saves = vec![write_full(current, &opts).unwrap()];
+                if edited {
+                    saves.push(write_incremental(current, &opts).unwrap());
+                }
+                for bytes in saves {
+                    let back = Document::open(Arc::new(bytes)).unwrap();
+                    let catalog = back.get(back.root().unwrap());
+                    let catalog = catalog.as_dict().unwrap();
+                    let pages_ref = catalog.reference(b"Pages").unwrap();
+                    let pages = back.get(pages_ref);
+                    let child_ref = pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap()[0].as_ref().unwrap();
+                    let child = back.get(child_ref);
+                    assert_eq!(child.as_dict().unwrap().reference(b"Parent"), Some(pages_ref), "edited={edited}, packed={object_streams}");
+                    assert!(matches!(catalog.get(b"Stale"), Some(Object::Null)), "unrelated generations stay null");
+                    assert!(back.repair_log().is_empty());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn restoring_explicit_sets_removes_old_generation_aliases() {
+    for value in [42, 77] {
+        let mut current = Document::open(contradictory_entry(false)).unwrap();
+        current.set(ObjRef::new(3, 0), Object::Int(42));
+        for repaired_overlay in [false, true] {
+            let mut saved = Document::open(contradictory_entry(false)).unwrap();
+            if repaired_overlay {
+                saved.set_existing(ObjRef::new(3, 0), Object::Int(value)).unwrap();
+            }
+            saved.overlay_changes_from(&current).unwrap();
+            assert_eq!(*saved.get(ObjRef::new(3, 0)), Object::Int(42));
+            assert_eq!(*saved.get(ObjRef::new(3, 1)), Object::Null, "value={value}, overlay={repaired_overlay}");
+        }
+    }
+}
+
+/// `accepted_generations` lists exactly the generations `get` resolves, for every kind of slot:
+/// a clean file slot, a damaged one (row and header disagree), a repair-aware edit, a plain
+/// edit, a freed slot, a free row, an object stream member and an unknown number.
+#[test]
+fn accepted_generations_are_the_generations_get_resolves() {
+    let agrees = |doc: &Document, num: u32, expected: &[u16]| {
+        assert_eq!(doc.accepted_generations(num), expected, "object {num}");
+        for generation in 0..8 {
+            let live = !matches!(*doc.get(ObjRef::new(num, generation)), Object::Null);
+            assert_eq!(live, expected.contains(&generation), "object {num} generation {generation}");
+        }
+    };
+    let doc = Document::open(contradictory_entry(false)).unwrap();
+    agrees(&doc, 1, &[0]);
+    agrees(&doc, 3, &[0, 1]);
+    agrees(&doc, 9, &[]);
+    let mut repaired = doc.clone();
+    repaired.set_existing(ObjRef::new(3, 0), Object::Int(77)).unwrap();
+    agrees(&repaired, 3, &[0, 1]);
+    let mut narrowed = doc.clone();
+    narrowed.set(ObjRef::new(3, 2), Object::Int(99));
+    agrees(&narrowed, 3, &[2]);
+    let mut freed = doc.clone();
+    freed.free(ObjRef::new(3, 0));
+    agrees(&freed, 3, &[]);
+    agrees(&Document::open(contradictory_entry(true)).unwrap(), 3, &[]);
+    let mut doc =
+        Document::open(object_file(&[(1, 0, "<< /Type /Catalog /Pages 2 0 R >>"), (2, 0, "<< /Type /Pages /Kids [] /Count 0 >>")])).unwrap();
+    let member = doc.add(Object::Dict(Default::default()));
+    doc.update_dict(ObjRef::new(1, 0), |c| c.set(b"Extra".to_vec(), Object::Ref(member))).unwrap();
+    let packed = Document::open(Arc::new(write_full(&doc, &SaveOptions { object_streams: true, ..SaveOptions::default() }).unwrap())).unwrap();
+    assert!(matches!(packed.xref_entry(member.num), Some(XrefEntry::InStream { .. })), "the member is in an object stream");
+    agrees(&packed, member.num, &[0]);
+}
+
+const COVER: &str = "0 0 0 rg 10 10 80 80 re f";
+const OTHER: &str = "1 0 0 rg 100 100 20 20 re f";
+
+/// A file with no usable cross-reference data (`startxref` points nowhere), so both cos and the
+/// renderer rebuild it from object headers. The page draws `page_ref`; `bodies` are the
+/// `4 G obj` content streams after it, as (generation, content), in file order (pdfcraft#6759).
+fn rebuilt_page(page_ref: &str, bodies: &[(u32, &str)]) -> Arc<Vec<u8>> {
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n\
+         3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents {page_ref} >>\nendobj\n"
+    );
+    for (generation, content) in bodies {
+        pdf.push_str(&format!("4 {generation} obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\n", content.len()));
+    }
+    pdf.push_str("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n999999\n%%EOF\n");
+    Arc::new(pdf.into_bytes())
+}
+
+/// What the renderer draws on the first page.
+fn drawn_by_renderer(bytes: Arc<Vec<u8>>) -> Option<String> {
+    let oracle = hayro_syntax::Pdf::new(bytes).ok()?;
+    let page = oracle.pages().first()?.page_stream()?.to_vec();
+    Some(String::from_utf8_lossy(&page).trim().to_string())
+}
+
+/// The first page's content stream as cos reads it.
+fn drawn_by_cos(doc: &Document) -> Option<String> {
+    let catalog = doc.get(doc.root()?);
+    let pages = doc.resolve(catalog.as_dict()?.get(b"Pages")?);
+    let page = doc.resolve(pages.as_dict()?.get(b"Kids")?.as_array()?.first()?);
+    let contents = doc.resolve(page.as_dict()?.get(b"Contents")?);
+    let Object::Stream(stream) = &*contents else { return None };
+    Some(String::from_utf8_lossy(&stream.raw).trim().to_string())
+}
+
+/// A later `4 1 obj` used to take object 4's slot, so `4 0 R` read as null in cos and a full
+/// save wrote null, while the renderer drew the generation-0 cover (pdfcraft#6759).
+#[test]
+fn a_rebuilt_index_keeps_the_generation_0_body_the_page_draws() {
+    for bodies in [&[(0, COVER), (1, OTHER)][..], &[(1, OTHER), (0, COVER)], &[(0, COVER), (1, OTHER), (2, OTHER)]] {
+        let bytes = rebuilt_page("4 0 R", bodies);
+        assert_eq!(drawn_by_renderer(bytes.clone()).as_deref(), Some(COVER), "{bodies:?}");
+        let doc = Document::open(bytes).unwrap();
+        assert!(doc.reconstructed());
+        assert!(!doc.rebuilt_with_unsettled_generations(), "{bodies:?}: only generation 0 is reached");
+        assert_eq!(drawn_by_cos(&doc).as_deref(), Some(COVER), "{bodies:?}");
+        let saved = Arc::new(write_full(&doc, &SaveOptions::default()).unwrap());
+        assert_eq!(drawn_by_renderer(saved.clone()).as_deref(), Some(COVER), "{bodies:?}");
+        assert_eq!(drawn_by_cos(&Document::open(saved).unwrap()).as_deref(), Some(COVER), "{bodies:?}");
+    }
+}
+
+#[test]
+fn a_rebuilt_index_answers_generation_0_for_an_object_with_only_another_generation() {
+    // The renderer's rebuilt table lets the last header stand in for `N 0 R` when there is no
+    // `N 0 obj` (pdfcraft#5580); cos follows it, and the header's own generation still resolves. A
+    // generation past `u16` is still another generation to the renderer, not a real `N 0 obj`.
+    for (page_ref, bodies) in [
+        ("4 0 R", &[(1, COVER)][..]),
+        ("4 1 R", &[(1, COVER)]),
+        ("4 0 R", &[(1, OTHER), (2, COVER)]),
+        ("4 2 R", &[(1, OTHER), (2, COVER)]),
+        ("4 0 R", &[(65536, OTHER), (1, COVER)]),
+    ] {
+        let bytes = rebuilt_page(page_ref, bodies);
+        assert_eq!(drawn_by_renderer(bytes.clone()).as_deref(), Some(COVER), "{page_ref} {bodies:?}");
+        let doc = Document::open(bytes).unwrap();
+        assert_eq!(drawn_by_cos(&doc).as_deref(), Some(COVER), "{page_ref} {bodies:?}");
+        let saved = Arc::new(write_full(&doc, &SaveOptions::default()).unwrap());
+        assert_eq!(drawn_by_renderer(saved).as_deref(), Some(COVER), "{page_ref} {bodies:?}");
+    }
+}
+
+#[test]
+fn a_rebuilt_index_records_a_body_it_leaves_out() {
+    // One slot holds one body: with `4 0 obj` and `4 1 obj` both live, `4 1 R` reads as null in
+    // cos though the renderer reaches it. The repair log says so: nothing is dropped unrecorded.
+    let doc = Document::open(rebuilt_page("4 0 R", &[(0, COVER), (1, OTHER), (1, OTHER)])).unwrap();
+    assert_eq!(*doc.get(ObjRef::new(4, 1)), Object::Null);
+    let noted: Vec<_> = doc.repair_log().iter().filter(|line| line.contains("left out")).collect();
+    assert_eq!(noted.len(), 1, "{:?}", doc.repair_log());
+    assert!(noted[0].contains("4 1"), "{noted:?}");
+    // Nothing left out, nothing noted.
+    let doc = Document::open(rebuilt_page("4 0 R", &[(0, COVER), (0, OTHER)])).unwrap();
+    assert!(doc.repair_log().iter().all(|line| !line.contains("left out")), "{:?}", doc.repair_log());
+}
+
+/// No usable cross-reference data, objects in file order as (number, generation, body).
+fn rebuilt_objects(objects: &[(u32, u16, &str)]) -> Arc<Vec<u8>> {
+    rebuilt_objects_rooted(objects, "1 0 R")
+}
+
+/// [`rebuilt_objects`] with the trailer's `/Root` given.
+fn rebuilt_objects_rooted(objects: &[(u32, u16, &str)], root: &str) -> Arc<Vec<u8>> {
+    let mut pdf = String::from("%PDF-1.7\n");
+    for (num, generation, body) in objects {
+        pdf.push_str(&format!("{num} {generation} obj\n{body}\nendobj\n"));
+    }
+    pdf.push_str(&format!("trailer\n<< /Size 11 /Root {root} >>\nstartxref\n999999\n%%EOF\n"));
+    Arc::new(pdf.into_bytes())
+}
+
+/// Each page's content as the renderer draws it.
+fn pages_drawn_by_renderer(bytes: Arc<Vec<u8>>) -> Vec<String> {
+    let oracle = hayro_syntax::Pdf::new(bytes).unwrap();
+    oracle.pages().iter().map(|p| String::from_utf8_lossy(p.page_stream().unwrap_or_default()).trim().to_string()).collect()
+}
+
+/// A newer revision reused number 5 as `5 1 obj`, a page its page tree lists as `5 1 R`; the
+/// older `5 0 obj` is only a stream length. Kept at generation 0, `5 1 R` read as null, the
+/// page fell out of a save, and the save was refused (PDFBOX-3785's `202097.pdf`, on pdfcraft#6767).
+#[test]
+fn a_rebuilt_index_keeps_a_reused_number_the_document_reaches() {
+    let bytes = rebuilt_objects(&[
+        (1, 0, "<< /Type /Catalog /Pages 2 0 R >>"),
+        (5, 0, "27"),
+        (6, 0, &format!("<< /Length 5 0 R >>\nstream\n{OTHER}\nendstream")),
+        (2, 0, "<< /Type /Pages /Kids [3 0 R 5 1 R] /Count 2 >>"),
+        (3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 6 0 R >>"),
+        (5, 1, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 7 0 R >>"),
+        (7, 0, &format!("<< /Length {} >>\nstream\n{COVER}\nendstream", COVER.len())),
+    ]);
+    assert_eq!(pages_drawn_by_renderer(bytes.clone()), [OTHER, COVER]);
+    let doc = Document::open(bytes).unwrap();
+    assert!(doc.reconstructed());
+    assert!(!doc.rebuilt_with_unsettled_generations(), "only generation 1 is reached");
+    assert_eq!(doc.get(ObjRef::new(5, 1)).as_dict().and_then(|d| d.name(b"Type")), Some(&b"Page"[..]));
+    let saved = Arc::new(write_full(&doc, &SaveOptions::default()).unwrap());
+    assert_eq!(pages_drawn_by_renderer(saved), [OTHER, COVER]);
+    assert!(doc.repair_log().iter().any(|line| line.contains("left out 1 objects") && line.contains("(5 0)")), "{:?}", doc.repair_log());
+}
+
+/// `4 0 R` and `4 1 R` both drawn: one slot cannot hold both, so the renderer's generation-0
+/// rule stands, the other body is noted as left out, and the document says so.
+#[test]
+fn a_rebuilt_index_keeps_generation_0_when_the_document_reaches_both() {
+    let doc = Document::open(rebuilt_page("[4 0 R 4 1 R]", &[(0, COVER), (1, OTHER)])).unwrap();
+    assert!(matches!(&*doc.get(ObjRef::new(4, 0)), Object::Stream(s) if &*s.raw == COVER.as_bytes()));
+    assert_eq!(*doc.get(ObjRef::new(4, 1)), Object::Null);
+    assert!(doc.repair_log().iter().any(|line| line.contains("left out 1 objects") && line.contains("(4 1)")), "{:?}", doc.repair_log());
+    assert!(doc.rebuilt_with_unsettled_generations());
+}
+
+/// The only trailer names `/Root 1 1 R`, and both `1 0 obj` and `1 1 obj` are catalogs. The
+/// renderer roots the document at `1 1 obj`; the trailer used to be judged against the
+/// generation-0 slot alone, so it was passed over and cos rooted the document at `1 0 obj`
+/// (raised in review of pdfcraft#6767).
+#[test]
+fn a_rebuilt_index_roots_the_document_at_the_generation_its_trailer_names() {
+    let bytes = rebuilt_objects_rooted(
+        &[
+            (1, 0, "<< /Type /Catalog /Pages 2 0 R >>"),
+            (2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            (3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 6 0 R >>"),
+            (6, 0, &format!("<< /Length {} >>\nstream\n{OTHER}\nendstream", OTHER.len())),
+            (1, 1, "<< /Type /Catalog /Pages 8 0 R >>"),
+            (8, 0, "<< /Type /Pages /Kids [9 0 R] /Count 1 >>"),
+            (9, 0, "<< /Type /Page /Parent 8 0 R /MediaBox [0 0 200 200] /Contents 7 0 R >>"),
+            (7, 0, &format!("<< /Length {} >>\nstream\n{COVER}\nendstream", COVER.len())),
+        ],
+        "1 1 R",
+    );
+    assert_eq!(pages_drawn_by_renderer(bytes.clone()), [COVER]);
+    let doc = Document::open(bytes).unwrap();
+    assert!(doc.reconstructed());
+    assert_eq!(doc.root(), Some(ObjRef::new(1, 1)));
+    assert!(!doc.rebuilt_with_unsettled_generations(), "only generation 1 is reached");
+    assert_eq!(drawn_by_cos(&doc).as_deref(), Some(COVER));
+    let saved = Arc::new(write_full(&doc, &SaveOptions::default()).unwrap());
+    assert_eq!(pages_drawn_by_renderer(saved), [COVER]);
+}
+
+/// `4 0 obj` and `4 1 obj` are object streams holding different values for member 10, and the
+/// document reaches `4 1 R` only. The renderer reads the member through the generation-0 stream,
+/// as the rebuilt index listed it; moving the slot to `4 1 obj` made a full save read it from
+/// the other stream (raised in review of pdfcraft#6767). The slot stays, and the document says a
+/// generation it reaches is left out.
+#[test]
+fn a_rebuilt_index_keeps_the_object_stream_its_members_were_read_from() {
+    let members = |value: i32| {
+        let data = format!("10 0 {value}");
+        format!("<< /Type /ObjStm /N 1 /First 5 /Length {} >>\nstream\n{data}\nendstream", data.len())
+    };
+    let bytes = rebuilt_objects(&[
+        (1, 0, "<< /Type /Catalog /Pages 2 0 R /Value 10 0 R /Streams 4 1 R >>"),
+        (2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"),
+        (4, 0, &members(41)),
+        (4, 1, &members(42)),
+    ]);
+    let oracle = hayro_syntax::Pdf::new(bytes.clone()).unwrap();
+    assert_eq!(oracle.xref().get::<i32>(ObjectIdentifier::new(10, 0)), Some(41));
+    let doc = Document::open(bytes).unwrap();
+    assert!(doc.reconstructed());
+    assert_eq!(*doc.get(ObjRef::new(10, 0)), Object::Int(41));
+    // A full save renumbers: follow the catalog's `/Value`.
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let catalog = saved.get(saved.root().unwrap());
+    assert_eq!(*saved.resolve(catalog.as_dict().unwrap().get(b"Value").unwrap()), Object::Int(41));
+    assert!(doc.rebuilt_with_unsettled_generations(), "`4 1 R` is reached and reads as null");
+}

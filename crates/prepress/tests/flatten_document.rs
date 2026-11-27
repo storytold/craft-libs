@@ -1,0 +1,222 @@
+//! Whole documents flattened: pages, boxes, metadata and shared fonts carry over, and each
+//! page's plates match the source.
+//!
+//! The test needs Inter from `CRAFT_PDF_TEST_FONT_DIR` or `~/.cache/craft-pdf-test-fonts`, and is
+//! skipped when it is missing.
+#![cfg(feature = "flatten")]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+use std::path::PathBuf;
+use std::time::Instant;
+
+use craft_pdf::syntax::object::Rect as PdfRect;
+use craft_pdf::syntax::object::dict::keys::{BLEED_BOX, TRIM_BOX};
+use craft_pdf::write::backend::color::cmyk;
+use craft_pdf::write::backend::geom::{PathBuilder, Point, Rect as KRect};
+use craft_pdf::write::backend::metadata::DateTime;
+use craft_pdf::write::backend::num::NormalizedF32;
+use craft_pdf::write::backend::page::PageSettings;
+use craft_pdf::write::backend::paint::Fill;
+use craft_pdf::write::backend::surface::Surface;
+use craft_pdf::write::backend::text::{Font, GlyphId, KrillaGlyph};
+use craft_pdf::write::backend::{GroupColorSpace, SerializeSettings};
+use craft_pdf::write::{Metadata, Writer};
+use craft_plate_test::reference;
+use craft_plate_test::structure;
+use craft_prepress::flatten::{FlattenDocumentOptions, FlattenOptions, FlattenPageOptions, flatten_document, flatten_page};
+use craft_prepress::{Options, Plates, plates};
+
+const DPI: f32 = 36.0;
+const SIZES: [(f32, f32); 3] = [(200.0, 160.0), (150.0, 200.0), (220.0, 120.0)];
+
+fn inter() -> Option<Vec<u8>> {
+    let dir = std::env::var_os(reference::FONT_DIR_ENV)
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/craft-pdf-test-fonts")))?;
+    let font = std::fs::read(dir.join(reference::FONT_FILE)).ok();
+    if font.is_none() {
+        eprintln!("skipped: no {} in {}", reference::FONT_FILE, dir.display());
+    }
+    font
+}
+
+fn fill(c: u8, m: u8, y: u8, k: u8) -> Fill {
+    Fill { paint: cmyk::Color::new(c, m, y, k).into(), ..Default::default() }
+}
+
+fn rect(s: &mut Surface<'_>, x0: f32, y0: f32, x1: f32, y1: f32, f: Fill) {
+    let mut b = PathBuilder::new();
+    b.push_rect(tiny_rect(x0, y0, x1, y1));
+    s.set_fill(Some(f));
+    s.draw_path(&b.finish().unwrap());
+}
+
+fn tiny_rect(x0: f32, y0: f32, x1: f32, y1: f32) -> craft_pdf::write::backend::geom::Rect {
+    KRect::from_ltrb(x0, y0, x1, y1).unwrap()
+}
+
+fn text(s: &mut Surface<'_>, font: &Font, face: &ttf_parser::Face<'_>, at: (f32, f32), size: f32, string: &str) {
+    let upem = f32::from(face.units_per_em());
+    let glyphs: Vec<KrillaGlyph> = string
+        .char_indices()
+        .map(|(i, c)| {
+            let id = face.glyph_index(c).unwrap();
+            let advance = f32::from(face.glyph_hor_advance(id).unwrap()) / upem;
+            KrillaGlyph::new(GlyphId::new(u32::from(id.0)), advance, 0.0, 0.0, 0.0, i..i + c.len_utf8(), None)
+        })
+        .collect();
+    s.set_fill(Some(fill(0, 0, 0, 255)));
+    s.draw_glyphs(Point::from_xy(at.0, at.1), &glyphs, font.clone(), string, size, false);
+}
+
+/// Three pages of different sizes: transparency beside text, no transparency, and transparency
+/// over text in page 1's font. Page 1 has a TrimBox and a BleedBox.
+fn three_pages(font_bytes: &[u8]) -> Vec<u8> {
+    let face = ttf_parser::Face::parse(font_bytes, 0).unwrap();
+    let font = craft_pdf::write::font(font_bytes, 0, None).unwrap();
+    let metadata = Metadata {
+        title: Some("Flatten test".into()),
+        authors: vec!["A. Writer".into()],
+        created: Some(DateTime::new(2026).month(10).day(20).hour(9).minute(30).second(0).utc_offset_hour(2)),
+        modified: Some(DateTime::new(2026).month(10).day(21).hour(16).minute(5).second(0).utc_offset_hour(2)),
+        ..Metadata::default()
+    };
+    // DeviceCMYK blending and no output intent: parsing a profile takes half a second in a debug build.
+    let settings = SerializeSettings { no_device_cs: false, group_color_space: GroupColorSpace::Cmyk, ..SerializeSettings::default() };
+    let mut writer = Writer::new(settings, metadata);
+    let mut page = |settings: PageSettings, draw: &dyn Fn(&mut Surface<'_>)| {
+        let mut page = writer.document_mut().start_page_with(settings);
+        let mut s = page.surface();
+        draw(&mut s);
+        s.finish();
+        page.finish();
+    };
+    let size = |i: usize| PageSettings::from_wh(SIZES[i].0, SIZES[i].1).unwrap();
+    page(size(0).with_trim_box(Some(tiny_rect(10.0, 10.0, 190.0, 150.0))).with_bleed_box(Some(tiny_rect(5.0, 5.0, 195.0, 155.0))), &|s| {
+        rect(s, 20.0, 20.0, 120.0, 100.0, fill(255, 0, 0, 0));
+        s.push_opacity(NormalizedF32::new(0.5).unwrap());
+        rect(s, 70.0, 60.0, 170.0, 130.0, fill(0, 255, 0, 0));
+        s.pop();
+        text(s, &font, &face, (10.0, 150.0), 10.0, "Hello");
+    });
+    page(size(1), &|s| {
+        rect(s, 10.0, 10.0, 140.0, 90.0, fill(0, 0, 255, 0));
+        text(s, &font, &face, (10.0, 150.0), 14.0, "Opaque");
+    });
+    page(size(2), &|s| {
+        text(s, &font, &face, (20.0, 60.0), 30.0, "Hello");
+        s.push_opacity(NormalizedF32::new(0.4).unwrap());
+        rect(s, 40.0, 25.0, 120.0, 80.0, fill(255, 0, 0, 0));
+        s.pop();
+        text(s, &font, &face, (20.0, 110.0), 12.0, "World");
+    });
+    writer.finish().unwrap()
+}
+
+fn opts() -> FlattenDocumentOptions {
+    FlattenDocumentOptions { flatten: FlattenOptions { raster_dpi: 72.0, ..FlattenOptions::default() }, ..FlattenDocumentOptions::default() }
+}
+
+fn separate(pdf: &[u8], page: usize) -> Plates {
+    plates(pdf, page, DPI, &Options::default()).unwrap()
+}
+
+fn tint(p: &Plates, name: &str, x: f32, y: f32) -> u8 {
+    let s = p.dpi / 72.0;
+    p.inks.lookup(name).and_then(|id| p.tint(id, (x * s) as u32, (y * s) as u32)).unwrap_or(0)
+}
+
+/// No transparency groups, soft masks in graphics states, blend modes or constant alpha.
+fn assert_opaque(pdf: &[u8]) {
+    let s = structure::summarize(pdf).unwrap();
+    assert!(s.groups.iter().all(|g| g.s != "Transparency"), "transparency groups: {:?}", s.groups);
+    for gs in &s.ext_g_states {
+        assert!(gs.smask.as_deref().is_none_or(|m| m == "None" || m.is_empty()), "soft mask: {gs:?}");
+        assert!(gs.bm.as_deref().is_none_or(|b| b == "Normal" || b == "Compatible"), "blend mode: {gs:?}");
+        assert!(gs.alpha_fill.is_none_or(|a| a >= 1.0) && gs.alpha_stroke.is_none_or(|a| a >= 1.0), "alpha: {gs:?}");
+    }
+}
+
+fn has_text(pdf: &craft_pdf::syntax::Pdf, page: usize) -> bool {
+    let pages = pdf.pages();
+    let mut ops = pages.get(page).unwrap().operations();
+    let mut found = false;
+    while let Some(op) = ops.next() {
+        found |= matches!(&**op.operator, b"Tj" | b"TJ");
+    }
+    found
+}
+
+fn count(haystack: &[u8], needle: &[u8]) -> usize {
+    haystack.windows(needle.len()).filter(|w| *w == needle).count()
+}
+
+fn page_box(pdf: &craft_pdf::syntax::Pdf, page: usize, key: &[u8]) -> Option<[f64; 4]> {
+    pdf.pages().get(page)?.raw().get::<PdfRect>(key).map(|r| [r.x0, r.y0, r.x1, r.y1])
+}
+
+#[test]
+fn a_document_flattens_page_by_page_and_keeps_boxes_metadata_and_shared_fonts() {
+    let Some(font) = inter() else { return };
+    let source = three_pages(&font);
+    let start = Instant::now();
+    let (out, report) = flatten_document(&source, &opts()).unwrap();
+    eprintln!("flatten_document: {:?}, totals {:?}", start.elapsed(), report.totals);
+
+    let doc = craft_pdf::open_slice(&out, None).unwrap();
+    let src = craft_pdf::open_slice(&source, None).unwrap();
+    assert_eq!(doc.pages().len(), 3);
+    for (i, (w, h)) in SIZES.iter().enumerate() {
+        assert_eq!(doc.pages()[i].render_dimensions(), (*w, *h), "page {i}");
+    }
+    assert_eq!(report.pages.iter().map(|(p, _)| *p).collect::<Vec<_>>(), [0, 1, 2]);
+    assert!(report.pages[0].1.flatten.flattened > 0 && report.pages[2].1.flatten.flattened > 0);
+    assert_eq!(report.pages[1].1.flatten.flattened, 0);
+    assert!(report.unflattened.is_empty() && report.other_intents.is_empty());
+
+    assert_opaque(&out);
+    for page in 0..3 {
+        assert!(has_text(&doc, page), "page {page} has live text");
+    }
+
+    // One embedded program for the font all three pages use.
+    assert_eq!(count(&source, b"/FontFile2"), 1);
+    assert_eq!(count(&out, b"/FontFile2"), 1, "the shared font is embedded once");
+
+    for key in [TRIM_BOX, BLEED_BOX] {
+        assert_eq!(page_box(&doc, 0, key), page_box(&src, 0, key));
+        assert!(page_box(&doc, 0, key).is_some());
+        assert_eq!(page_box(&doc, 1, key), None);
+    }
+
+    let info = doc.metadata();
+    assert_eq!(info.title.as_deref(), Some(b"Flatten test".as_slice()));
+    assert_eq!(info.author.as_deref(), Some(b"A. Writer".as_slice()));
+    let created = info.creation_date.unwrap();
+    assert_eq!((created.year, created.month, created.day, created.hour, created.minute), (2026, 10, 20, 9, 30));
+    let modified = info.modification_date.unwrap();
+    assert_eq!((modified.year, modified.month, modified.day, modified.hour, modified.minute), (2026, 10, 21, 16, 5));
+
+    let points: [&[(f32, f32)]; 3] = [
+        &[(40.0, 40.0), (100.0, 80.0), (150.0, 120.0), (190.0, 15.0)],
+        &[(50.0, 50.0), (100.0, 180.0)],
+        &[(110.0, 30.0), (115.0, 75.0), (180.0, 50.0)],
+    ];
+    for (page, points) in points.iter().enumerate() {
+        let (a, b) = (separate(&source, page), separate(&out, page));
+        for &(x, y) in *points {
+            for ink in ["Cyan", "Magenta", "Yellow", "Black"] {
+                let (want, got) = (tint(&a, ink, x, y), tint(&b, ink, x, y));
+                assert!(want.abs_diff(got) <= 3, "page {page} {ink} at ({x}, {y}): {got}, the source has {want}");
+            }
+        }
+    }
+
+    let single: usize = (0..3)
+        .map(|p| {
+            let opts = FlattenPageOptions { flatten: opts().flatten, ..FlattenPageOptions::default() };
+            flatten_page(&source, p, &opts).unwrap().0.len()
+        })
+        .sum();
+    eprintln!("source {} bytes; flattened document {} bytes; three flatten_page outputs {single} bytes", source.len(), out.len());
+}

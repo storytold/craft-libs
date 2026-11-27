@@ -1,10 +1,12 @@
 //! ICC v4.3 profile writer (ICC.1:2010), used for built-in and synthetic profiles.
 
+use crate::CmsError;
 use crate::clut::Clut;
 use crate::curve::Curve;
 use crate::math;
 use crate::pipeline::Stage;
 use crate::profile::{LutKind, Pcs, Profile};
+use md5::{Digest, Md5};
 
 fn s15(v: f64) -> [u8; 4] {
     ((v * 65536.0).round() as i32).to_be_bytes()
@@ -333,7 +335,7 @@ pub fn encode(p: &Profile) -> Vec<u8> {
         o.extend_from_slice(&s15(v));
     }
     o.extend_from_slice(&[0; 4]); // creator
-    o.extend_from_slice(&[0; 16]); // profile id (not computed)
+    o.extend_from_slice(&[0; 16]); // profile id, stamped below
     o.resize(128, 0);
     o.extend_from_slice(&(entries.len() as u32).to_be_bytes());
     for (sig, off, len) in &entries {
@@ -343,5 +345,30 @@ pub fn encode(p: &Profile) -> Vec<u8> {
     }
     o.extend_from_slice(&data);
     debug_assert_eq!(o.len(), size);
+    if let (Ok(id), Some(field)) = (profile_id(&o), o.get_mut(ID)) {
+        field.copy_from_slice(&id);
+    }
     o
+}
+
+/// Header bytes of the profile ID.
+const ID: std::ops::Range<usize> = 84..100;
+
+/// The profile ID of ICC profile `bytes` (ICC.1:2022 §7.2.18): the MD5 of the whole profile
+/// with the profile flags, rendering intent and profile ID fields read as zero. A stored ID can
+/// be checked against it. The profile ends at its declared size; bytes after it are not hashed
+/// (a size outside the header..data range hashes all of `bytes`, as [`Profile::parse`] reads
+/// it). `Truncated` when `bytes` is shorter than the header.
+pub fn profile_id(bytes: &[u8]) -> Result<[u8; 16], CmsError> {
+    let declared = bytes.get(..4).map_or(0, |s| s.iter().fold(0usize, |n, &b| n << 8 | usize::from(b)));
+    let bytes = if (128..=bytes.len()).contains(&declared) { bytes.get(..declared).unwrap_or(bytes) } else { bytes };
+    let header = bytes.get(..128).ok_or(CmsError::Truncated)?;
+    let mut h = header.to_vec();
+    for r in [44..48, 64..68, ID] {
+        h.get_mut(r).ok_or(CmsError::Truncated)?.fill(0);
+    }
+    let mut md5 = Md5::new();
+    md5.update(&h);
+    md5.update(bytes.get(128..).unwrap_or_default());
+    Ok(md5.finalize().into())
 }

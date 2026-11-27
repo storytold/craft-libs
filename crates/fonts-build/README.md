@@ -20,8 +20,8 @@ Give `CRAFT_FONTS_DIR` as an absolute path: Cargo runs build scripts in the pack
 ## Using it
 
 `Cargo.toml` (same `rev` as the app's other craft-libs crates). The `subset` feature goes on the
-build-dependency only: it brings in the subsetter ([skera](https://crates.io/crates/skera) and the
-fontations crates), which the app itself never needs. Cargo's resolver 2 and later (edition 2021
+build-dependency only: it brings in the subsetter (craft-font-subset, which compiles HarfBuzz's
+C++), which the app itself needs only for its own run-time subsetting. Cargo's resolver 2 and later (edition 2021
 and later) keep build-dependency features apart from the app's, so the dependency stays without
 it.
 
@@ -98,8 +98,11 @@ below), and `Embed::documents(&["Noto Sans", …])` only the families it names (
 
 `write` returns the embedded `ManifestEntry`s, for build-time checks such as "the interface face
 is present". The generated file is a slice expression of `EmbeddedFace { family, style, scripts,
-index, bytes }` literals; any struct with those fields and that name in scope works too.
-`EmbeddedFace` itself has `name()`, `has_script(tag)`, `is_cjk()` and `weight()`.
+index, bytes, role }` literals; any struct with those fields and that name in scope works too.
+`role` is the manifest line's ninth field: `Some("ui")`, `Some("mono")`, `Some("signature")` or
+`None`; craft-ui's font stack leads the Monospace family with the `mono` face and the signature
+family (`FontRef::signature()`) with the `signature` face. `EmbeddedFace` itself has `name()`,
+`has_script(tag)`, `is_cjk()` and `weight()`.
 
 ## Document fonts
 
@@ -120,6 +123,40 @@ manifest lacks is an `Error::UnknownFamilies` listing the manifest's families: a
 `CRAFT_FONTS_REQUIRED=1`, and a `cargo::warning` with an empty table otherwise, as for any
 checkout that can't be used. `scripts` and `filter` narrow the families further, for example to
 their Regular faces.
+
+## Serving the faces (web builds)
+
+`Embed::serve(dir, url_prefix)` copies the selected faces into `dir` instead of embedding them,
+and writes a table of `ServedFace { family, style, scripts, index, url, size, integrity, coverage }`
+literals for the app to fetch at run time (craft-ui's `fonts::UiFonts::served_faces` does). Each
+font file and its licence keep their path under the checkout's `fonts/` directory, and `url` is
+`url_prefix` plus that path: `serve("web/fonts", "fonts/")` copies
+`fonts/noto-sans-arabic/NotoSansArabic.ttf` to `web/fonts/noto-sans-arabic/NotoSansArabic.ttf`, with
+the URL `fonts/noto-sans-arabic/NotoSansArabic.ttf`. Faces of one collection share a file and a
+URL. `integrity` is the manifest's SHA-256 as a Subresource Integrity value. `coverage` holds the
+code points the face's `cmap` maps, as the `coverage` module encodes them (sorted ranges as LEB128
+gaps and lengths; `coverage::contains` reads them), so an app fetches a face only for characters
+it has: about 3 KB for a CJK interface face cut to an app's catalogs, under 1 KB for a full one.
+
+An interface face cut by `subset_to` is served from its cut in `OUT_DIR`, with the start of the
+cut's SHA-256 in its name (`web/fonts/ui/NotoSansTCUI-Regular.1234abcd5678ef90.ttf`) and the cut's
+own `integrity`, so changed catalogs give a new URL rather than a cached copy that fails its check.
+A relative `dir` is under the package directory. Files already there with the same bytes are not
+copied again, a deleted one is copied again on the next build, and files of faces no longer
+selected, and earlier cuts, stay.
+
+```rust
+// CJK faces only as the interface faces, cut to the app's catalogs (see below).
+let fonts = craft_fonts_build::Embed::new().subset_to(catalogs("filmcraft"));
+let written = if craft_fonts_build::target_is_wasm() {
+    fonts.serve("web/fonts", "fonts/").write("craft_fonts.rs")
+} else {
+    fonts.write("craft_fonts.rs")
+};
+```
+
+The crate includes the table as `&[ServedFace]` on wasm and `&[EmbeddedFace]` elsewhere. craft-ui's
+README shows a whole eframe web app, Trunk copy included.
 
 ## Interface faces
 
@@ -144,8 +181,8 @@ the five cuts take about 3 MB together.
   with a `cargo::warning`: a full CJK face is never embedded for the interface by accident. A
   checkout whose manifest has no interface face is a `cargo::warning` too. With `CRAFT_FONTS_REQUIRED=1` that
   makes `scripts(&["Hant"])` an error; with catalogs, an interface face satisfies it.
-- An interface face with CFF outlines is an error (`Error::NotTrueType`), even when not required:
-  the subsetter cuts TrueType (`glyf`) faces correctly, but not CFF ones.
+- Interface faces may have TrueType (`glyf`) or CFF outlines; a cut keeps its source's format and
+  extension.
 
 The catalogs come from craft-i18n. An app's build reads them from the checkout `CRAFT_I18N_DIR`
 names (craft-i18n's `docs/integration.md`); the fonts build script reads the same variable, as in
@@ -165,4 +202,6 @@ exact only for the catalogs it was cut to. It also reruns the build script when 
 One face per line, eight or nine fields separated by `" | "`; craft-fonts' `docs/integration.md`
 defines them. Lines starting with `#` are comments. A file field ending in `#<n>` names face `n` of
 a font collection (`fonts/noto-sans-cjk/NotoSansCJK.ttc#2`); without it the index is 0. The ninth
-field, `role`, is `ui` on interface faces and absent elsewhere. Fields after the ninth are ignored.
+field, `role`, is `ui` on interface faces, `mono` on the monospace face, `signature` on the signature
+face and absent elsewhere. Fields
+after the ninth are ignored.

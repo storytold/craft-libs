@@ -1,0 +1,134 @@
+diff -ruN a/src/document.rs b/src/document.rs
+--- a/src/document.rs
++++ b/src/document.rs
+@@ -16,7 +16,7 @@
+ 
+ use crate::chunk_container::ChunkContainer;
+ use crate::destination::NamedDestination;
+-use crate::error::KrillaResult;
++use crate::error::{KrillaError, KrillaResult};
+ use crate::interchange::embed::EmbeddedFile;
+ use crate::interchange::metadata::Metadata;
+ use crate::interchange::outline::Outline;
+@@ -141,6 +141,10 @@
+ 
+     /// Attempt to export the document to a PDF file.
+     pub fn finish(mut self) -> KrillaResult<Vec<u8>> {
++        if self.serializer_context.poisoned {
++            return Err(KrillaError::Poisoned);
++        }
++
+         // Write empty page if none has been created yet.
+         if self.serializer_context.page_infos().is_empty() {
+             self.start_page();
+diff -ruN a/src/error.rs b/src/error.rs
+--- a/src/error.rs
++++ b/src/error.rs
+@@ -22,6 +22,8 @@
+ /// An error in krilla.
+ #[derive(Debug, PartialEq, Eq, Clone)]
+ pub enum KrillaError {
++    /// A page or surface failed during cleanup; discard the complete document.
++    Poisoned,
+     /// An error while attempting to embed a font.
+     Font(Font, String),
+     /// A list of validation errors. Can only occur if you set the `validator` in
+@@ -59,6 +61,7 @@
+ impl Display for KrillaError {
+     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+         match self {
++            KrillaError::Poisoned => f.write_str("document contains a failed page or surface"),
+             KrillaError::Font(_, message) => write!(f, "failed to embed font: {message}"),
+             KrillaError::Validation(errors) => {
+                 let count = errors.len();
+diff -ruN a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -177,3 +177,9 @@
+ pub use interactive::*;
+ pub use interchange::*;
+ pub use serialize::SerializeSettings;
++
++/// Identifies the local patch that discards unfinished page/surface state during unwind.
++pub const CRAFT_UNWIND_SAFE_DROP: bool = true;
++
++/// Identifies the patch that rejects serialization after failed page/surface cleanup.
++pub const CRAFT_UNWIND_POISONING: bool = true;
+diff -ruN a/src/page.rs b/src/page.rs
+--- a/src/page.rs
++++ b/src/page.rs
+@@ -277,6 +277,16 @@
+ 
+ impl Drop for Page<'_> {
+     fn drop(&mut self) {
++        // Keep the document poisoned if cleanup unwinds, including an invariant failure
++        // during an explicit finish. Successful cleanup preserves any earlier poison.
++        let poisoned = std::mem::replace(&mut self.sc.poisoned, true);
++        // A drawing panic can leave page state incomplete. Discard it while
++        // unwinding; finalization here could panic again and abort the process.
++        // The caller must discard the whole document after a caught panic.
++        if std::thread::panicking() {
++            return;
++        }
++
+         // Since we cannot take ownership in `drop`, just make use `mem::take` to pick
+         // what we need.
+         let annotations = std::mem::take(&mut self.annotations);
+@@ -296,6 +306,7 @@
+             self.page_index,
+         );
+         self.sc.register_page(page);
++        self.sc.poisoned = poisoned;
+     }
+ }
+ 
+diff -ruN a/src/serialize.rs b/src/serialize.rs
+--- a/src/serialize.rs
++++ b/src/serialize.rs
+@@ -240,6 +240,8 @@
+ /// - Annotations used in the document.
+ ///   etc.
+ pub(crate) struct SerializeContext {
++    /// An unfinished or failed page/surface must never serialize as a complete document.
++    pub(crate) poisoned: bool,
+     /// The ref of the page tree.
+     page_tree_ref: Ref,
+     /// PDF 2.0 namespaces.
+@@ -294,6 +296,7 @@
+         };
+ 
+         Self {
++            poisoned: false,
+             cached_mappings: HashMap::new(),
+             pdf2_ns,
+             global_objects: GlobalObjects::default(),
+diff -ruN a/src/surface.rs b/src/surface.rs
+--- a/src/surface.rs
++++ b/src/surface.rs
+@@ -610,6 +610,16 @@
+ 
+ impl Drop for Surface<'_> {
+     fn drop(&mut self) {
++        // Keep the document poisoned if cleanup unwinds, including an invariant failure
++        // during an explicit finish. Successful cleanup preserves any earlier poison.
++        let poisoned = std::mem::replace(&mut self.sc.poisoned, true);
++        // A drawing panic can leave surface state incomplete. Discard it while
++        // unwinding; finalization here could panic again and abort the process.
++        // The caller must discard the whole document after a caught panic.
++        if std::thread::panicking() {
++            return;
++        }
++
+         let root_builder = std::mem::replace(
+             &mut self.bd.root_builder,
+             ContentBuilder::new(Transform::identity(), false, self.sc),
+@@ -623,7 +633,8 @@
+         assert!(self.push_instructions.is_empty());
+         assert!(!root_builder.active_marked_content);
+ 
+-        (self.finish_fn)(root_builder.finish(self.sc), num_mcids)
++        (self.finish_fn)(root_builder.finish(self.sc), num_mcids);
++        self.sc.poisoned = poisoned;
+     }
+ }
+ 

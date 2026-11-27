@@ -60,17 +60,25 @@ user enables `ascii_compatible`, we still write a binary header marker. 🟢
 - krilla doesn't use the `ri` or `i` operator. 🟢
 - krilla ensure that content stream has their own associated resource dictionary. 🟢
 
-6.2.3: krilla always write an `sRGB` output intent for PDF/A. 🟢
+6.2.3:
+- krilla writes an `sRGB` output intent for PDF/A, or the CMYK profile given in
+  `SerializeSettings::output_intent`. 🟢
+- krilla writes one output intent, or with `SerializeSettings::output_intent` two
+  (`GTS_PDFA1` and `GTS_PDFX`) that name the same destination profile object. 🟢
+- krilla checks only that a profile given in `SerializeSettings::output_intent` has four
+  components; that it is an output (`prtr`) profile is up to the caller. 🟣
 
 6.2.4.1: krilla overrides the `no_device_cs` property if PDF/A is selected, and
 in case CMYK is used but no profile was provided, export fails.
 
 6.2.4.2: 
 - sRGB/sGrey ICC profiles conform to ICC v4 specification. 🟢
-- krilla does not support overprinting. 🔵
+- krilla fails export if overprint mode 1 is combined with fill or stroke overprint, since
+  all CMYK is ICCBased in this mode. 🟢
 
 6.2.4.3: 
-- krilla always uses sRGB for RGB, and in addition also embeds an sRGB output intent. 🟢
+- krilla always uses sRGB for RGB, with an sRGB output intent unless
+  `SerializeSettings::output_intent` gives a CMYK one. 🟢
 - krilla always uses sGrey (except for encoding the alpha channel in images, where DeviceGray
   is required), and in addition always embeds an output intent. 🟢
 - krilla always uses an CMYK ICC profile, and always sets CMYK as the output intent. 🟢
@@ -79,7 +87,8 @@ in case CMYK is used but no profile was provided, export fails.
 6.2.4.4:
 - krilla ensures the Alternate space in Separation color spaces obeys the restrictions
   in the applicable clauses 🟢
-- krilla does not support DeviceN color spaces. 🔵
+- krilla fails export if a DeviceN color space is used: its tint transform is a PostScript
+  calculator function (`ValidationError::ContainsPostScript`). 🟢
 - krilla fails export if a Separation colorant is associated with multiple different
   fallback color spaces 🟢
 - krilla manages the `tintTransform` function and will always write the same function for
@@ -87,7 +96,9 @@ in case CMYK is used but no profile was provided, export fails.
 
 6.2.4.5: Fulfilled because patterns are treated the same as all other elements in krilla. 🟢
 
-6.2.5: krilla does not use the transfer functions, halftones, TR/HTP/RI/FL keys. 🔵
+6.2.5: krilla does not use the transfer functions, halftones, TR/HTP/RI/FL keys in graphics
+states. A soft mask's `/TR` (`Mask::with_transfer`) is a key of the soft-mask dictionary, which
+6.2.5 does not cover. 🔵
 
 6.2.6: krilla does never define a rendering intent. 🔵
 
@@ -186,7 +197,9 @@ always required. 🟢
 
 6.6.2.2: -
 
-6.6.2.3.1: krilla doesn't use any non-standard properties. 🟢
+6.6.2.3.1: krilla doesn't use any non-standard properties. `SerializeSettings::pdfx_version`
+would write `pdfxid:GTS_PDFXVersion`, which needs an extension schema that krilla does not
+write, so it is a validation error (`ValidationError::PdfxVersionWithoutExtensionSchema`). 🟢
 
 6.6.2.3.2: krilla writes the extension schemas. 🟢
 
@@ -209,7 +222,9 @@ krilla prohibits embedding files in this export mode. 🟢
 
 # 6.9 Optional content
 
-krilla does not support optional content. 🔵
+- krilla writes every optional content group with a `Name`. 🟢
+- krilla writes one optional content configuration, `D`, with the `Name` `Layers`, an `Order`
+  array that lists every group, and no `AS` key. 🟢
 
 # 6.10 Use of alternate presentations and transitions
 

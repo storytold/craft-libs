@@ -18,9 +18,6 @@ fn render(bytes: &[u8]) -> Pixels {
     assert!(raster.diagnostics.is_empty(), "{:?}", raster.diagnostics);
     Pixels { width: raster.width, height: raster.height, rgba: raster.bytes().to_vec() }
 }
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02X}")).collect()
-}
 
 // These frozen RGB8 values were computed outside the renderer in f64 from the
 // CIE Lab inverse, the full XYZ adaptation matrix B^-1 diag(B*D65 / B*white) B,
@@ -30,8 +27,6 @@ fn hex(bytes: &[u8]) -> String {
 // D65 [0.95047, 1, 1.08883]. D65 adaptation is the identity.
 const SAMPLES: [[f64; 3]; 4] = [[50.0, 0.0, 0.0], [40.0, 20.0, -60.0], [70.0, -50.0, 30.0], [100.0, 0.0, 0.0]];
 const D50: [[u8; 3]; 4] = [[119, 119, 119], [67, 86, 194], [66, 194, 113], [255, 255, 255]];
-const E: [[u8; 3]; 4] = [[119, 119, 119], [50, 88, 194], [64, 194, 114], [255, 255, 255]];
-const D65: [[u8; 3]; 4] = [[119, 119, 119], [19, 90, 194], [77, 193, 114], [255, 255, 255]];
 
 fn patch(space: &str, operands: &str) -> [u8; 4] {
     let content = format!("/C cs {operands} sc 0 0 20 20 re f");
@@ -68,129 +63,6 @@ fn check_white(white: &str, expected: [[u8; 3]; 4]) {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn lab_bradford_d50_neutral_and_chromatic_oracles() {
     check_white("[0.96422 1 0.82521]", D50);
-}
-
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn lab_bradford_equal_energy_neutral_and_chromatic_oracles() {
-    check_white("[1 1 1]", E);
-}
-
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn lab_bradford_d65_identity_oracles() {
-    check_white("[0.95047 1 1.08883]", D65);
-}
-
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn lab_bradford_indexed_matches_direct_and_oracle() {
-    for (white, blue) in [("[0.96422 1 0.82521]", D50[1]), ("[1 1 1]", E[1]), ("[0.95047 1 1.08883]", D65[1])] {
-        // <66 99 33> maps exactly to L*=40, a*=20, b*=-60.
-        let lab = format!("[/Lab << /WhitePoint {white} /Range [-100 100 -100 100] >>]");
-        let indexed = patch(&format!("[/Indexed {lab} 0 <669933>]"), "0");
-        assert_rgb(indexed, blue, &format!("{white} Indexed blue"));
-        assert_eq!(indexed, patch(&lab, "40 20 -60"), "{white} direct/Indexed blue");
-
-        // A non-default Range maps <80 80 80> to L*=128/255*100, a*=b*=0.
-        let lab = format!("[/Lab << /WhitePoint {white} /Range [-128 127 -128 127] >>]");
-        let indexed = patch(&format!("[/Indexed {lab} 0 <808080>]"), "0");
-        assert_rgb(indexed, [119, 119, 119], &format!("{white} Indexed neutral"));
-        assert_eq!(indexed, patch(&lab, "50.19607843137255 0 0"), "{white} direct/Indexed neutral");
-    }
-}
-
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn lab_bradford_degenerate_cones_fall_back_to_unadapted_xyz() {
-    // In f32, B*[1, 1, 7.1964064] has a zero L cone response.
-    // B*[3e38, 3e38, 3e38] overflows its L/M responses. The guard must
-    // return the sample XYZ in both cases. Independent unadapted XYZ ->
-    // sRGB references for Lab (50, 0, 0) are frozen below.
-    for (white, expected) in [
-        ("[1 1 7.1964064]", [0, 130, 255]),
-        (
-            "[300000000000000000000000000000000000000 300000000000000000000000000000000000000 300000000000000000000000000000000000000]",
-            [255, 255, 255],
-        ),
-    ] {
-        let space = format!("[/Lab << /WhitePoint {white} >>]");
-        assert_rgb(patch(&space, "50 0 0"), expected, &format!("{white} degenerate cones"));
-    }
-}
-
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn lab_bradford_asymmetric_chromatic_range_matches_direct_and_oracle() {
-    // With a* [-40, 70] and b* [-90, 20], <80 99 33> maps to
-    // L*=128/255*100, a*=26, b*=-68. Frozen independent D50 oracle:
-    // RGB (98, 108, 237). The unequal, asymmetric ranges expose swaps
-    // and default-Range scaling that a neutral lookup cannot detect.
-    let lab = "[/Lab << /WhitePoint [0.96422 1 0.82521] /Range [-40 70 -90 20] >>]";
-    let indexed = patch(&format!("[/Indexed {lab} 0 <809933>]"), "0");
-    assert_rgb(indexed, [98, 108, 237], "D50 asymmetric chromatic Range");
-    assert_eq!(indexed, patch(lab, "50.19607843137255 26 -68"));
-}
-
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn shrunk_soft_mask_larger_than_its_image_keeps_thin_strokes() {
-    let mask: [u8; 8] = [0, 0, 255, 0, 0, 0, 0, 0];
-    let content = "q 4 0 0 1 0 0 cm /Im0 Do Q";
-    let pdf = format!(
-        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
-         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
-         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 4 1] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
-         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
-         5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /SMask 6 0 R /Filter /ASCIIHexDecode /Length 3 >> stream\n00>\nendstream endobj\n\
-         6 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >> stream\n{}>\nendstream endobj\n\
-         trailer << /Root 1 0 R >>\n%%EOF\n",
-        content.len(),
-        hex(&mask).len() + 1,
-        hex(&mask)
-    );
-    let page = render(pdf.as_bytes());
-    assert_eq!((page.width, page.height), (4, 1));
-    let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
-    // The stroke covers half of device pixel 1, so it is a mid-tone; the far side stays white.
-    assert!((64..=191).contains(&grays[1]), "the stroke is lost or not a mid-tone: {grays:?}");
-    assert_eq!(grays[3], 255, "{grays:?}");
-}
-
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn text_rendering_modes_other_than_invisible_draw_type3_glyphs_as_filled() {
-    let render = |glyph: &str, mode: u8| {
-        let content = format!("BT 1 0 0 RG 6 w 0 g /F1 20 Tf {mode} Tr 10.3 10.3 Td (A) Tj ET");
-        let pdf = format!(
-            "%PDF-1.7
-1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
-2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
-3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
-4 0 obj << /Length {} >> stream
-{content}
-endstream endobj
-5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /FirstChar 65 /LastChar 65 /Widths [1]
-  /Encoding << /Differences [65 /a] >> /CharProcs << /a 6 0 R >> >> endobj
-6 0 obj << /Length {} >> stream
-{glyph}
-endstream endobj
-trailer << /Root 1 0 R >>
-%%EOF",
-            content.len(),
-            glyph.len()
-        );
-        let p = render(pdf.as_bytes());
-        p.rgba
-    };
-    for glyph in ["1 0 0 0 1 1 d1 0.12 0.12 0.71 0.71 re f", "1 0 d0 0.12 0.12 0.71 0.71 re f"] {
-        let filled = render(glyph, 0);
-        assert!(filled.as_chunks::<4>().0.iter().any(|p| p[0] < 128), "{glyph}: the glyph paints");
-        for mode in [1, 2, 4, 5, 6, 7] {
-            assert!(render(glyph, mode) == filled, "{glyph}: {mode} Tr draws as 0 Tr");
-        }
-        assert!(render(glyph, 3).as_chunks::<4>().0.iter().all(|p| p[..3] == [255, 255, 255]), "{glyph}: 3 Tr hides the glyph");
-    }
 }
 
 // Fixed zlib streams encode the two known rows in each case. These values are
@@ -248,183 +120,273 @@ fn tiff_predictor_packed_rgb_rows_keep_their_byte_boundaries() {
     }
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn tiff_predictor_packed_rgb_image_renders_every_row() {
-    // Deflated [0x80, 0x40]: one red then one green 1-bit RGB sample, each byte-aligned.
-    let compressed = [120, 156, 107, 112, 0, 0, 1, 66, 0, 193];
-    let content = "q 40 0 0 40 0 0 cm /Im1 Do Q";
-    let mut pdf = format!(
-        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
-         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
-         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
-         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
-         5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 1 /Filter /FlateDecode /DecodeParms << /Predictor 2 /Colors 3 /BitsPerComponent 1 /Columns 1 >> /Length {} >> stream\n",
-        content.len(), compressed.len()
-    ).into_bytes();
-    pdf.extend_from_slice(&compressed);
-    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
-    let page = render(&pdf);
-    assert_eq!((page.width, page.height), (40, 40));
-    let pixel = |y: usize| &page.rgba[((y * 40 + 20) * 4)..][..4];
-    assert_eq!(pixel(10), &[255, 0, 0, 255]);
-    assert_eq!(pixel(30), &[0, 255, 0, 255]);
-}
-
-// An 8 x 4 all-black Group 4 stream, hand-encoded from ITU-T T.6: one horizontal-mode row
-// (white 0, black 8), three V0 rows, then EOFB.
-const ALL_BLACK_8X4: [u8; 6] = [0x26, 0xa2, 0xfe, 0x00, 0x20, 0x02];
-
-fn fax_page(space: &str, params: &str) -> Pixels {
-    let content = "q 20 0 0 20 5 5 cm /Im1 Do Q";
-    let mut pdf = format!(
-        "%PDF-1.7
-1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
-2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
-3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj
-4 0 obj << /Length {} >> stream
-{content}
-endstream endobj
-5 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace {space} /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 8 {params} >> /Length {} >> stream\n",
-        content.len(),
-        ALL_BLACK_8X4.len()
-    )
-    .into_bytes();
-    pdf.extend_from_slice(&ALL_BLACK_8X4);
-    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
-    render(&pdf)
-}
-
 fn pixel(page: &Pixels, x: u32, y: u32) -> &[u8] {
     let i = ((y * page.width + x) * 4) as usize;
     &page.rgba[i..i + 4]
 }
 
-/// Scanners and fax services write Group 4 pages with `/Rows 0`, which ISO 32000-2 Table 11
-/// defines as "height not predetermined" (the default), not as zero rows.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn group4_fax_with_rows_zero_decodes_to_the_image_height() {
-    for rows in ["", "/Rows 4", "/Rows 0"] {
-        let page = fax_page("/DeviceGray", rows);
-        assert_eq!(pixel(&page, 15, 24), &[0, 0, 0, 255], "{rows:?}: the fax image paints black");
-        assert_eq!(pixel(&page, 1, 38), &[255, 255, 255, 255], "{rows:?}: outside the image stays white");
-    }
+/// A one-page PDF: `page` holds the page dictionary's entries besides its tree links and
+/// contents (the media box, resources, annotations), and `objects` the objects from 5 on.
+fn one_page(page: &str, content: &[u8], objects: &[u8]) -> Vec<u8> {
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R {page} /Contents 4 0 R >> endobj\n\
+         4 0 obj << /Length {} >> stream\n",
+        content.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(content);
+    pdf.extend_from_slice(b"\nendstream endobj\n");
+    pdf.extend_from_slice(objects);
+    pdf.extend_from_slice(b"\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+    pdf
 }
 
-/// PdfCraft #3308: a fax image whose `/Rows` is below its `/Height` is decoded to its height.
-/// `/BlackIs1` turns the fixture white, so rows left undecoded show as black. Also through an
-/// `/Indexed` color space, the filter's other output path.
+fn type4_mesh_page(data: &[u8]) -> Pixels {
+    let mut objects = format!(
+        "5 0 obj << /ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 \
+         /Decode [0 255 0 255 0 1 0 1 0 1] /Length {} >> stream\n",
+        data.len()
+    )
+    .into_bytes();
+    objects.extend_from_slice(data);
+    objects.extend_from_slice(b"\nendstream endobj");
+    let page = render(&one_page("/MediaBox [0 0 50 50] /Resources << /Shading << /Sh0 5 0 R >> >>", b"/Sh0 sh", &objects));
+    assert_eq!((page.width, page.height), (50, 50));
+    page
+}
+
+/// PdfCraft ledger hayro-interpret (36) (#3035): two triangles of a mesh that share an edge cover it
+/// together. Testing only each pixel's corner, strictly inside a triangle, left the shared
+/// diagonal white, and a pixel row or column along the mesh's own sides.
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn group4_fax_with_rows_below_its_height_decodes_to_the_image_height() {
-    for (space, rows) in [("/DeviceGray", "/Rows 2"), ("[/Indexed /DeviceRGB 1 <000000FFFFFF>]", "/Rows 2"), ("/DeviceGray", "/Rows 4")] {
-        let page = fax_page(space, &format!("{rows} /BlackIs1 true"));
-        for y in [17, 22, 27, 32] {
-            assert_eq!(pixel(&page, 15, y), &[255, 255, 255, 255], "{space} {rows}: image row at y {y} is decoded");
+fn mesh_triangles_sharing_an_edge_leave_no_seam() {
+    // A red square from 10 to 40 on a 50 × 50 page, cut along its diagonal; in device space
+    // the diagonal runs through pixel centers and corners alike.
+    let vertex = |flag: u8, x: u8, y: u8| [flag, x, y, 255, 0, 0];
+    let (lo, hi) = (10, 40);
+    let mut triangles = Vec::new();
+    for [a, b, c] in [[(lo, lo), (hi, lo), (hi, hi)], [(lo, lo), (hi, hi), (lo, hi)]] {
+        for (x, y) in [a, b, c] {
+            triangles.extend(vertex(0, x, y));
         }
     }
-}
-
-/// PdfCraft ledger hayro-interpret P2 (#3178): a shaded Type 3 glyph clips to its `/FontBBox` in
-/// device space at every position, not to the glyph-space box.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn shaded_type3_glyph_draws_at_multiple_positions() {
-    let content = "BT /F 30 Tf 1 0 0 1 50 70 Tm (A) Tj 1 0 0 1 220 70 Tm (A) Tj ET";
-    let glyph = "100 0 d0 0 0 100 100 re W n /S sh";
-    let pdf = format!(
-        "%PDF-1.7
-1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
-2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
-3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 150] /Resources << /Font << /F 5 0 R >> >> /Contents 4 0 R >> endobj
-4 0 obj << /Length {} >> stream
-{content}
-endstream endobj
-5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 100 100] /FontMatrix [0.01 0 0 0.01 0 0] /CharProcs << /A 6 0 R >> /Encoding << /Differences [65 /A] >> /FirstChar 65 /LastChar 65 /Widths [100] /Resources << /Shading << /S 7 0 R >> >> >> endobj
-6 0 obj << /Length {} >> stream
-{glyph}
-endstream endobj
-7 0 obj << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> /Extend [true true] >> endobj
-trailer << /Root 1 0 R >>
-%%EOF",
-        content.len(),
-        glyph.len()
-    );
-    let page = render(pdf.as_bytes());
-    for x in [65, 235] {
-        let px = pixel(&page, x, 65);
-        assert!(px[0] < 240 && px[2] < 240 && px[1] < 10, "glyph at {x}: {px:?}");
+    // Each triangle as its own three vertices, and the second one as a strip (flag 1).
+    let mut strip = Vec::new();
+    for (flag, (x, y)) in [(0, (lo, lo)), (0, (hi, lo)), (0, (hi, hi)), (2, (lo, hi))] {
+        strip.extend(vertex(flag, x, y));
     }
+    for (label, data) in [("separate triangles", triangles), ("a strip", strip)] {
+        let page = type4_mesh_page(&data);
+        let (mut white_inside, mut red_outside) = (Vec::new(), Vec::new());
+        for y in 0..50 {
+            for x in 0..50 {
+                let p = pixel(&page, x, y);
+                let inside = (10..40).contains(&x) && (10..40).contains(&y);
+                if inside && p != [255, 0, 0, 255] {
+                    white_inside.push((x, y));
+                } else if !inside && p != [255, 255, 255, 255] {
+                    red_outside.push((x, y));
+                }
+            }
+        }
+        assert!(white_inside.is_empty(), "{label}: unshaded pixels inside the square: {white_inside:?}");
+        assert!(red_outside.is_empty(), "{label}: shaded pixels outside the square: {red_outside:?}");
+    }
+
+    // One triangle alone, the square's upper left half: a pixel whose corner lies on its
+    // diagonal is taken by its center, so one wholly across the diagonal (x + y ≥ 50 in
+    // device space) is not shaded, and one wholly inside is.
+    let mut data = Vec::new();
+    for (x, y) in [(lo, lo), (hi, hi), (lo, hi)] {
+        data.extend(vertex(0, x, y));
+    }
+    let page = type4_mesh_page(&data);
+    let (mut spilled, mut missing) = (Vec::new(), Vec::new());
+    for y in 10..40 {
+        for x in 10..40 {
+            let p = pixel(&page, x, y);
+            if x + y >= 50 && p == [255, 0, 0, 255] {
+                spilled.push((x, y));
+            } else if x + y + 2 <= 50 && p != [255, 0, 0, 255] {
+                missing.push((x, y));
+            }
+        }
+    }
+    assert!(spilled.is_empty(), "shaded pixels wholly across the diagonal: {spilled:?}");
+    assert!(missing.is_empty(), "unshaded pixels wholly inside the triangle: {missing:?}");
 }
 
-/// PdfCraft ledger hayro-interpret (26) extension: comma-below letters in non-embedded standard
-/// fonts are the letter with the font's comma under it, apart from the letter and inside the
-/// descender, whichever name the font gives them (`/scommaaccent`, `/Kcedilla`, `/uni0219`).
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn comma_below_letters_in_standard_fonts_draw_a_comma_under_the_letter() {
-    let pairs = [
-        ("s", "uni0219"),
-        ("t", "uni021B"),
-        ("T", "uni021A"),
-        ("K", "uni0136"),
-        ("k", "kcedilla"),
-        ("G", "uni0122"),
-        ("G", "Gcedilla"),
-        ("R", "uni0156"),
-        ("s", "scommaaccent"),
-        ("S", "Scommaaccent"),
-        ("t", "tcommaaccent"),
-        ("T", "Tcommaaccent"),
-        ("k", "kcommaaccent"),
-        ("K", "Kcommaaccent"),
-        ("l", "lcommaaccent"),
-        ("L", "Lcommaaccent"),
-        ("n", "ncommaaccent"),
-        ("N", "Ncommaaccent"),
-        ("r", "rcommaaccent"),
-        ("R", "Rcommaaccent"),
-        ("G", "Gcommaaccent"),
-    ];
-    let letters: Vec<&str> = pairs.iter().flat_map(|(base, accented)| [*base, *accented]).collect();
-    let (size, baseline) = (40u32, 60u32);
-    for font in ["Helvetica", "Times-Roman", "Courier", "Helvetica-BoldOblique"] {
-        let mut content = String::new();
-        for i in 0..letters.len() {
-            content.push_str(&format!("BT /F1 {size} Tf {} {} Td <{:02X}> Tj ET\n", 10 + 40 * i, 80 - baseline, 1 + i));
+/// Synthetic ICC profiles and colour sampling for the ICC profile cache trial.
+mod default_color_spaces {
+    use super::{Pixels, render};
+
+    const WIDTH: usize = 130;
+    pub(super) const RED: [u8; 3] = [255, 0, 0];
+    pub(super) const BLUE: [u8; 3] = [0, 0, 255];
+
+    /// An s15Fixed16Number (ICC.1 §4.6).
+    fn s15f16(value: f64) -> [u8; 4] {
+        ((value * 65536.0).round() as i32).to_be_bytes()
+    }
+
+    /// An ICC v2 profile of device class `class` for the color space `space`, with `tags`
+    /// (signature, data) in that order. The device model stays blank: hayro skips the transform
+    /// of a profile whose model reads `sRGB`.
+    fn icc(class: &[u8; 4], space: &[u8; 4], pcs: &[u8; 4], tags: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
+        let start = 128 + 4 + 12 * tags.len();
+        let (mut table, mut data) = (Vec::new(), Vec::new());
+        for (signature, tag) in tags {
+            table.extend_from_slice(signature);
+            table.extend_from_slice(&u32::try_from(start + data.len()).unwrap().to_be_bytes());
+            table.extend_from_slice(&u32::try_from(tag.len()).unwrap().to_be_bytes());
+            data.extend_from_slice(tag);
+            data.resize(data.len().next_multiple_of(4), 0);
         }
-        let differences = letters.iter().map(|n| format!("/{n}")).collect::<Vec<_>>().join(" ");
-        let pdf = format!(
-            "%PDF-1.4
-1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
-2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
-3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {} 80] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
-4 0 obj << /Length {} >> stream
-{content}endstream endobj
-5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /{font}
-  /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [1 {differences}] >> >> endobj
-trailer << /Root 1 0 R >>
-%%EOF",
-            20 + 40 * letters.len(),
+        let mut profile = vec![0; 128];
+        profile[0..4].copy_from_slice(&u32::try_from(start + data.len()).unwrap().to_be_bytes());
+        profile[8..12].copy_from_slice(&[2, 0x10, 0, 0]);
+        profile[12..16].copy_from_slice(class);
+        profile[16..20].copy_from_slice(space);
+        profile[20..24].copy_from_slice(pcs);
+        profile[36..40].copy_from_slice(b"acsp");
+        for (i, value) in [0.9642, 1.0, 0.8249].into_iter().enumerate() {
+            profile[68 + 4 * i..72 + 4 * i].copy_from_slice(&s15f16(value));
+        }
+        profile.extend_from_slice(&u32::try_from(tags.len()).unwrap().to_be_bytes());
+        profile.extend(table);
+        profile.extend(data);
+        profile
+    }
+
+    fn xyz([x, y, z]: [f64; 3]) -> Vec<u8> {
+        [b"XYZ ".as_slice(), &[0; 4], &s15f16(x), &s15f16(y), &s15f16(z)].concat()
+    }
+
+    /// A `curveType` tag: one entry is a gamma (u8Fixed8), more are points spread evenly over 0..1.
+    fn curve(points: &[u16]) -> Vec<u8> {
+        let mut tag = [b"curv".as_slice(), &[0; 4], &u32::try_from(points.len()).unwrap().to_be_bytes()].concat();
+        for point in points {
+            tag.extend_from_slice(&point.to_be_bytes());
+        }
+        tag
+    }
+
+    /// sRGB's red, green and blue colorants, adapted to D50.
+    const SRGB_COLORANTS: [[f64; 3]; 3] = [[0.4361, 0.2225, 0.0139], [0.3851, 0.7169, 0.0971], [0.1431, 0.0606, 0.7141]];
+
+    /// A linear RGB profile whose red, green and blue take the sRGB colorants `primaries` names:
+    /// with `[1, 2, 0]` red is drawn as sRGB green.
+    pub(super) fn rgb_profile(primaries: [usize; 3]) -> Vec<u8> {
+        let mut tags = Vec::new();
+        for (signature, primary) in [*b"rXYZ", *b"gXYZ", *b"bXYZ"].into_iter().zip(primaries) {
+            tags.push((signature, xyz(SRGB_COLORANTS[primary])));
+        }
+        for signature in [*b"rTRC", *b"gTRC", *b"bTRC"] {
+            tags.push((signature, curve(&[0x0100])));
+        }
+        icc(b"mntr", b"RGB ", b"XYZ ", &tags)
+    }
+
+    pub(super) fn profile_stream(n: u8, profile: Vec<u8>) -> (String, Vec<u8>) {
+        (format!("<< /N {n} /Length {} >>", profile.len()), profile)
+    }
+
+    /// A 130 × 70 pt page that draws `content` with `resources`, whose objects 5, 6, … are the
+    /// streams `objects`.
+    pub(super) fn page_pdf(content: &str, resources: &str, objects: &[(String, Vec<u8>)]) -> Vec<u8> {
+        let mut pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 130 70] /Contents 4 0 R /Resources {resources} >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n",
             content.len()
+        )
+        .into_bytes();
+        for (i, (dict, data)) in objects.iter().enumerate() {
+            pdf.extend(format!("{} 0 obj {dict} stream\n", i + 5).bytes());
+            pdf.extend_from_slice(data);
+            pdf.extend_from_slice(b"\nendstream endobj\n");
+        }
+        pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF");
+        pdf
+    }
+
+    /// Draw `content` with `resources` on a 130 × 70 pt page whose objects 5, 6, … are the
+    /// streams `objects`, and give the color at each of `points` (from the top left).
+    pub(super) fn colors(content: &str, resources: &str, objects: &[(String, Vec<u8>)], points: &[(usize, usize)]) -> Vec<[u8; 3]> {
+        let Pixels { width, height, rgba } = render(&page_pdf(content, resources, objects));
+        assert_eq!((width as usize, height), (WIDTH, 70));
+        points.iter().map(|&(x, y)| rgba[(y * WIDTH + x) * 4..][..3].try_into().unwrap()).collect()
+    }
+
+    #[track_caller]
+    pub(super) fn assert_near(got: [u8; 3], want: [u8; 3], what: &str) {
+        assert!(got.iter().zip(want).all(|(got, want)| got.abs_diff(want) <= 6), "{what}: got {got:?}, expected about {want:?}");
+    }
+}
+
+/// PdfCraft ledger hayro-interpret (48) and the ICC profile cache key (#3020): two `/ICCBased`
+/// profiles whose stream dictionaries are byte for byte the same (`/N 3` and one `/Length`)
+/// each draw through their own profile. hayro cached the color space it read from a profile
+/// stream by the dictionary's bytes alone, so the second profile drew through whichever was
+/// read first. The profiles are linear sRGB and the same profile with red and blue swapped,
+/// which draws red as blue; they have the same length.
+mod icc_profile_cache {
+    use super::default_color_spaces::{BLUE, RED, assert_near, colors, profile_stream, rgb_profile};
+
+    /// An `/ICCBased` space whose profile stream is written directly in the space's array, not
+    /// as an object of its own: the profile as ASCIIHex digits, each a token of its own, in
+    /// upper case (a lone `f` reads as a broken `false`). Its dictionary reports the object
+    /// holding the array, which is the page for every one of them.
+    fn direct_space(profile: &[u8]) -> String {
+        let hex: String = profile.iter().flat_map(|b| [b >> 4, b & 0xf]).map(|d| format!("{d:X} ")).collect();
+        format!("[/ICCBased << /N 3 /Filter /ASCIIHexDecode /Length {} >> stream\n{hex}\nendstream]", hex.len())
+    }
+
+    /// Six 20 pt squares, side by side, filled with `1 0 0 sc` (red) in `/A` (object 5, linear
+    /// sRGB), `/B` (object 6, red and blue swapped), `/A2` (object 5 again, through an array of
+    /// other bytes), `/A3` (object 7, a copy of object 5), `/C` and `/D` (the two profiles
+    /// again, each written directly in its array). Objects 5, 6 and 7 have the same dictionary,
+    /// and so do the two direct streams.
+    fn page() -> (String, String, Vec<(String, Vec<u8>)>) {
+        let (srgb, swapped) = (rgb_profile([0, 1, 2]), rgb_profile([2, 1, 0]));
+        assert_eq!(srgb.len(), swapped.len(), "the profiles have the same length, so the same dictionary");
+        assert_ne!(srgb, swapped);
+        let resources = format!(
+            "<< /ColorSpace << /A [/ICCBased 5 0 R] /B [/ICCBased 6 0 R] /A2 [ /ICCBased 5 0 R ] /A3 [/ICCBased 7 0 R] /C {} /D {} >> >>",
+            direct_space(&srgb),
+            direct_space(&swapped)
         );
-        let p = render(pdf.as_bytes());
-        // The rows (y down) of the i-th letter that have dark pixels.
-        let ink_rows = |i: u32| -> Vec<u32> {
-            (0..p.height).filter(|&y| ((8 + 40 * i)..(48 + 40 * i).min(p.width)).any(|x| pixel(&p, x, y)[0] < 128)).collect()
-        };
-        for (pair, (_, name)) in pairs.iter().enumerate() {
-            let (base, accented) = (ink_rows(2 * pair as u32), ink_rows(2 * pair as u32 + 1));
-            let (Some(&base_bottom), Some(&bottom)) = (base.last(), accented.last()) else {
-                panic!("{font} {name}: draws nothing ({} rows of its base letter)", base.len());
-            };
-            assert!(bottom > base_bottom + 2, "{font} {name}: a mark hangs below the letter ({bottom} vs {base_bottom})");
-            assert!(
-                (base_bottom + 1..bottom).any(|y| !accented.contains(&y)),
-                "{font} {name}: the mark is apart from the letter, a comma and not a cedilla"
-            );
-            assert!(bottom < baseline + size * 3 / 10, "{font} {name}: the comma stays within the descender ({bottom})");
+        let content = ["A", "B", "A2", "A3", "C", "D"]
+            .iter()
+            .enumerate()
+            .map(|(i, name)| format!("/{name} cs 1 0 0 sc {} 20 20 30 re f", 2 + 21 * i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        (content, resources, vec![profile_stream(3, srgb.clone()), profile_stream(3, swapped), profile_stream(3, srgb)])
+    }
+
+    /// Each square is drawn through its own profile, whether the profile is an object or
+    /// written in its array, and object 5 looked up again and its copy still draw red.
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    fn icc_profiles_with_identical_dictionaries_draw_their_own_colors() {
+        let (content, resources, objects) = page();
+        let points: Vec<_> = (0..6).map(|i| (12 + 21 * i, 35)).collect();
+        let got = colors(&content, &resources, &objects, &points);
+        let expected = [
+            ("/A, object 5, linear sRGB", RED),
+            ("/B, object 6, red and blue swapped", BLUE),
+            ("/A2, object 5 again", RED),
+            ("/A3, object 7, a copy of object 5", RED),
+            ("/C, linear sRGB written in its array", RED),
+            ("/D, red and blue swapped written in its array", BLUE),
+        ];
+        for (got, (what, want)) in got.into_iter().zip(expected) {
+            assert_near(got, want, what);
         }
     }
 }

@@ -5,21 +5,61 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Reusable egui controls and icon catalogs for Craft frontends"
+description = "Runtime, contract, components, patterns and shell of the craft UI library, on egui"
+autotests = false
+
+[lib]
+# Every test lives in the `it` integration binary, so `cargo test` builds the library once.
+test = false
 
 [lints]
 workspace = true
 
-[dependencies]
-egui = { workspace = true }
-serde = { version = "1", features = ["derive"], optional = true }
-
 [features]
-serde = ["dep:serde"]
+suite = ["testing", "craft-ui-contract/suite", "craft-ui-widgets/suite", "craft-ui-panels/suite", "craft-ui-canvas/suite", "craft-ui-patterns/suite", "craft-ui-shell/suite"]
+default = []
+# `shell::app`: the eframe entry point.
+app = ["craft-ui-shell/app"]
+# `craft_ui::testing`: the fixture and suite runner, with every crate's test helpers.
+testing = [
+    "craft-ui-contract/testing",
+    "craft-ui-widgets/testing",
+    "craft-ui-panels/testing",
+    "craft-ui-canvas/testing",
+    "craft-ui-patterns/testing",
+    "craft-ui-shell/testing",
+]
+# `craft_ui::testing::snapshot`: stories rendered to images offscreen (desktop only).
+snapshot = ["testing", "craft-ui-contract/snapshot"]
+# Draw colour glyphs (COLR, sbix, CBDT), e.g. colour emoji.
+color_fonts = ["craft-ui-contract/color_fonts"]
+# Find installed fonts for characters the app's faces lack (desktop only).
+system_fonts = ["craft-ui-contract/system_fonts"]
+# `share`, `account`: the share dialog and the account menu (craft-cloud-ui).
+share = ["craft-cloud-ui/share"]
+# `cloud`: Open and Save against cloud storage (craft-cloud-ui).
+cloud = ["share", "craft-cloud-ui/cloud"]
+# `esign`: the request-signatures dialog (craft-cloud-ui).
+esign = ["craft-cloud-ui/esign"]
+
+[dependencies]
+craft-ui-contract = { workspace = true }
+craft-ui-widgets = { workspace = true }
+craft-ui-panels = { workspace = true }
+craft-ui-canvas = { workspace = true }
+craft-ui-patterns = { workspace = true }
+craft-ui-shell = { workspace = true }
+craft-cloud-ui = { workspace = true }
 
 [dev-dependencies]
-egui = { workspace = true, features = ["default_fonts"] }
-serde_json = "1"
-egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
-egui_kittest = { version = "0.36", features = ["wgpu"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+craft-ui = { path = ".", features = ["suite"] }
+craft-behavior = { workspace = true }
+craft-i18n = { workspace = true, features = ["collate"] }
+egui = { workspace = true }
+syn = { version = "2", features = ["full"] }
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+harness = false

@@ -85,6 +85,10 @@ impl Cacheable for TilingPattern {
             sc.register_validation_error(validation_error);
         }
 
+        if sc.uses_transparency(&self.stream.resource_dictionary) {
+            sc.mark_transparent(root_ref);
+        }
+
         let pattern_stream = FilterStreamBuilder::new_from_content_stream(
             &self.stream.content,
             &sc.serialize_settings(),

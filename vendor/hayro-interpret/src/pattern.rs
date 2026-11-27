@@ -1,7 +1,7 @@
 //! PDF patterns.
 
 use crate::cache::Cache;
-use crate::color::{Color, ColorSpace};
+use crate::color::{Color, ColorSpace, DefaultColorSpaces, Plate};
 use crate::context::{Context, InterpreterCache};
 use crate::device::Device;
 use crate::font::Glyph;
@@ -23,6 +23,10 @@ use hayro_syntax::xref::XRef;
 use kurbo::{Affine, BezPath, Rect, Shape};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// PdfCraft patch (78): the source of [`TilingPattern::instance`].
+static NEXT_TILING_INSTANCE: AtomicU64 = AtomicU64::new(0);
 
 /// A PDF pattern.
 #[derive(Debug, Clone)]
@@ -34,16 +38,19 @@ pub enum Pattern<'a> {
 }
 
 impl<'a> Pattern<'a> {
+    /// PdfCraft patch (#3018): `defaults` are those of the resources the pattern is selected
+    /// with, for a shading pattern's shading in a device space.
     pub(crate) fn new(
         object: Object<'a>,
         ctx: &Context<'a>,
         resources: &Resources<'a>,
+        defaults: &DefaultColorSpaces<'_, '_>,
     ) -> Option<Self> {
         match object {
             Object::Dict(dict) => Some(Self::Shading(ShadingPattern::new(
                 &dict,
                 &ctx.interpreter_cache.object_cache,
-                ctx.get().graphics_state.non_stroke_alpha,
+                defaults,
             )?)),
             Object::Stream(stream) => Some(Self::Tiling(Box::new(TilingPattern::new(
                 stream, ctx, resources,
@@ -60,6 +67,29 @@ impl<'a> Pattern<'a> {
                 Arc::make_mut(&mut p.shading).clip_path = transformed_clip_path;
             }
             Self::Tiling(p) => p.matrix = transform * p.matrix,
+        }
+    }
+
+    /// PdfCraft patch (46): the pattern without the fill or stroke opacity it captured when it was
+    /// set (`scn`). A stencil mask's transparency group applies the opacity in force when the mask
+    /// is drawn, so a pattern paint carrying it too drew the mask at the opacity squared (#2975).
+    pub(crate) fn without_opacity(mut self) -> Self {
+        match &mut self {
+            Self::Shading(p) => p.opacity = 1.0,
+            Self::Tiling(p) => {
+                p.non_stroking_paint = p.non_stroking_paint.clone().opaque();
+                p.stroke_paint = p.stroke_paint.clone().opaque();
+            }
+        }
+        self
+    }
+
+    /// PdfCraft patch (#3246): set the alpha of the graphics state in effect when the pattern is
+    /// painted. A `gs` can come after `scn`/`SCN`, so the alpha must not be captured when the
+    /// pattern is selected.
+    pub(crate) fn set_alpha(&mut self, alpha: f32) {
+        if let Self::Shading(p) = self {
+            p.opacity = alpha;
         }
     }
 
@@ -93,11 +123,15 @@ pub struct ShadingPattern {
 }
 
 impl ShadingPattern {
-    pub(crate) fn new(dict: &Dict<'_>, cache: &Cache, opacity: f32) -> Option<Self> {
+    pub(crate) fn new(
+        dict: &Dict<'_>,
+        cache: &Cache,
+        defaults: &DefaultColorSpaces<'_, '_>,
+    ) -> Option<Self> {
         let shading = dict.get::<Object<'_>>(SHADING).and_then(|o| {
             let (dict, stream) = dict_or_stream(&o)?;
 
-            Shading::new(dict, stream, cache)
+            Shading::new(dict, stream, cache, defaults)
         })?;
         let matrix = dict
             .get::<[f64; 6]>(MATRIX)
@@ -110,7 +144,8 @@ impl ShadingPattern {
 
         Some(Self {
             shading: Arc::new(shading),
-            opacity,
+            // PdfCraft patch (#3246): `get_paint` sets the alpha current at paint time.
+            opacity: 1.0,
             matrix,
             transfer_function: None,
         })
@@ -127,6 +162,8 @@ impl CacheKey for ShadingPattern {
 #[derive(Clone)]
 pub struct TilingPattern<'a> {
     cache_key: u128,
+    /// PdfCraft patch (78): see [`Self::instance`].
+    instance: u64,
     ctx_bbox: Rect,
     /// The bbox of the tiling pattern.
     pub bbox: Rect,
@@ -145,6 +182,30 @@ pub struct TilingPattern<'a> {
     pub(crate) settings: InterpreterSettings,
     pub(crate) xref: &'a XRef,
     nesting_depth: u32,
+}
+
+impl TilingPattern<'_> {
+    /// PdfCraft patch (35): an uncoloured pattern draws its cell in the colour it is used
+    /// with, so on a plate it draws that colour's film. A coloured pattern's cell is separated
+    /// as it is drawn.
+    pub(crate) fn for_plate(&mut self, plate: &Plate, overprint: bool, overprint_mode: u8) {
+        if !self.is_color {
+            self.stroke_paint = self
+                .stroke_paint
+                .for_plate(plate, overprint, overprint_mode);
+            self.non_stroking_paint =
+                self.non_stroking_paint
+                    .for_plate(plate, overprint, overprint_mode);
+        }
+        let simulation = plate.simulation.as_ref().map(|s| s.digest());
+        self.cache_key = hash128(&(
+            self.cache_key,
+            &plate.ink,
+            plate.overprint,
+            overprint,
+            simulation,
+        ));
+    }
 }
 
 impl Debug for TilingPattern<'_> {
@@ -204,6 +265,7 @@ impl<'a> TilingPattern<'a> {
 
         Some(Self {
             cache_key,
+            instance: NEXT_TILING_INSTANCE.fetch_add(1, Ordering::Relaxed),
             bbox,
             x_step,
             y_step,
@@ -280,6 +342,23 @@ impl<'a> TilingPattern<'a> {
         device.pop_clip_path();
 
         Some(())
+    }
+}
+
+impl TilingPattern<'_> {
+    /// PdfCraft patch (78): which setting of the pattern (`scn`/`SCN`) this is. Each setting is
+    /// numbered apart, and its copies keep the number. A coloured pattern's cell depends only on
+    /// what the setting captured (its stream, resources, settings and the bounding box then in
+    /// effect) and on the scale it is drawn at, so a renderer can draw the cell once per number
+    /// and scale for every fill of that setting. An uncoloured pattern's cell also takes the
+    /// colour and opacity of the paint, which copies can change.
+    pub fn instance(&self) -> u64 {
+        self.instance
+    }
+
+    /// Whether the pattern is coloured (`/PaintType 1`).
+    pub fn is_coloured(&self) -> bool {
+        self.is_color
     }
 }
 

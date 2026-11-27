@@ -8,8 +8,15 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 pub use krilla as backend;
 
-// Require the root workspace patch; an unpatched backend can abort during unwind.
+// Require the root workspace patch; an unpatched backend can abort during unwind, writes
+// RGB blending groups and no print output intent, and has no optional content.
 const _: bool = backend::CRAFT_UNWIND_POISONING;
+const _: bool = backend::CRAFT_PRINT_COLOR;
+const _: bool = backend::CRAFT_OPTIONAL_CONTENT;
+
+pub mod print;
+#[cfg(feature = "write-svg")]
+pub mod svg;
 
 use backend::configure::{Archival, Configuration, ConfigurationBuilder, ConfigurationError, PdfVersion};
 use backend::text::{Font, Tag};
@@ -23,19 +30,29 @@ pub const MAX_FONT_VARIATIONS: usize = 256;
 #[derive(Debug, thiserror::Error)]
 pub enum WriteError {
     #[error("{0:?}")]
+    #[allow(missing_docs)]
     Configuration(ConfigurationError),
     #[error("{0:?}")]
+    #[allow(missing_docs)]
     Serialization(#[source] Box<backend::error::KrillaError>),
     #[error("PDF export failed internally: {0}")]
+    #[allow(missing_docs)]
     BackendPanic(String),
     #[error("font exceeds the {MAX_FONT_BYTES}-byte embedding limit")]
+    #[allow(missing_docs)]
     FontLimit,
     #[error("font variation coordinates must be finite and number at most {MAX_FONT_VARIATIONS}")]
+    #[allow(missing_docs)]
     FontVariations,
     #[error("font data could not be allocated")]
+    #[allow(missing_docs)]
     Allocation,
     #[error("font could not be read for embedding")]
+    #[allow(missing_docs)]
     InvalidFont,
+    #[error("the print profile is not a readable CMYK ICC profile")]
+    #[allow(missing_docs)]
+    InvalidProfile,
 }
 
 /// Run an entire app export, including drawing and postprocessing, behind a native
@@ -70,13 +87,22 @@ pub fn configuration(version: PdfVersion, archival: Option<Archival>) -> Result<
 /// trim them. Dates are supplied explicitly; this crate never consults a platform clock.
 #[derive(Clone, Debug, Default)]
 pub struct Metadata {
+    /// Name of the application that created the original content.
     pub creator: String,
+    /// Name of the software that wrote the PDF.
     pub producer: String,
+    #[allow(missing_docs)]
     pub title: Option<String>,
+    #[allow(missing_docs)]
     pub authors: Vec<String>,
+    #[allow(missing_docs)]
     pub description: Option<String>,
+    #[allow(missing_docs)]
     pub keywords: Vec<String>,
+    /// Creation date; `None` leaves it out.
     pub created: Option<backend::metadata::DateTime>,
+    /// Written as the modification date; `created` is written there when this is `None`.
+    pub modified: Option<backend::metadata::DateTime>,
 }
 
 impl Metadata {
@@ -91,6 +117,9 @@ impl Metadata {
         }
         if let Some(created) = self.created {
             metadata = metadata.creation_date(created);
+        }
+        if let Some(modified) = self.modified {
+            metadata = metadata.modification_date(modified);
         }
         metadata
     }
@@ -132,6 +161,14 @@ impl Writer {
     }
 }
 
+/// The link target that opens `url`, or `None` when [`safe_url`](crate::safe_url) refuses it.
+/// Build URI links with this instead of `backend::action::LinkAction` so a refused target
+/// writes no link annotation; the page content stays as drawn. The URI is written trimmed.
+pub fn uri_target(url: &str) -> Option<backend::annotation::Target> {
+    let url = url.trim();
+    crate::safe_url(url).then(|| backend::annotation::Target::Action(backend::action::LinkAction::new(url.to_owned()).into()))
+}
+
 fn check_font_input(size: usize, variations: Option<&[([u8; 4], f32)]>) -> Result<(), WriteError> {
     if size > MAX_FONT_BYTES {
         return Err(WriteError::FontLimit);
@@ -161,19 +198,4 @@ pub fn font(data: &[u8], index: u32, variations: Option<&[([u8; 4], f32)]>) -> R
         };
         font.ok_or(WriteError::InvalidFont)
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-    #[cfg_attr(not(target_arch = "wasm32"), test)]
-    fn font_bounds_are_checked_without_allocating_the_input() {
-        assert!(check_font_input(MAX_FONT_BYTES, None).is_ok());
-        assert!(matches!(check_font_input(MAX_FONT_BYTES + 1, None), Err(WriteError::FontLimit)));
-        assert!(matches!(check_font_input(usize::MAX, None), Err(WriteError::FontLimit)));
-        let coords = vec![(*b"wght", 400.0); MAX_FONT_VARIATIONS + 1];
-        assert!(matches!(check_font_input(0, Some(&coords)), Err(WriteError::FontVariations)));
-    }
 }

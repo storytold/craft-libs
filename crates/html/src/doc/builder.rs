@@ -1,0 +1,1451 @@
+use super::css::{apply_style, css_len_pt, strip_important};
+use super::import::{PAGE_FONT, PAGE_HEADING_SIZES, collapse_ws};
+use super::{
+    Align, Arc, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, LineSpacing, ListInfo, Meta, Para, Rgb, Spacing, VAlign, data_uri, make_img, model,
+    parse_color,
+};
+
+/// Open elements kept at most (deeper start tags are ignored).
+const MAX_STACK: usize = 256;
+
+// ---------------------------------------------------------------------------------------------
+// Builder
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum ElKind {
+    Inline,
+    Block,
+    Heading(u8),
+    Quote,
+    Pre,
+    List(bool),
+    Li,
+    Table,
+    Tr,
+    Cell,
+    Head,
+}
+
+#[derive(Clone, Debug)]
+struct El {
+    name: String,
+    kind: ElKind,
+    fmt: Fmt,
+    /// Block or container background declared on this element (e.g. div, p, pre, table, cell),
+    /// kept separate from character shading (`fmt.background`) so child elements can explicitly
+    /// inherit it (`background: inherit` / `background-color: inherit`) and table cells can
+    /// resolve shading through transparent row groups or rows (#1786).
+    block_background: Option<Rgb>,
+    /// Margins, indents and line height its CSS states (blocks only; they don't inherit; on a
+    /// page's spans, their margins).
+    spacing: Spacing,
+    /// A page's `p` or heading: margins its CSS leaves out (or writes invalidly) are HTML's
+    /// automatic spacing.
+    auto_margins: bool,
+    align: Option<Align>,
+    preserve: bool,
+    page_break: bool,
+    page_break_after: bool,
+    /// Li: a paragraph of this item was already emitted.
+    used: bool,
+}
+
+struct TableB {
+    rows: Vec<Vec<Cell>>,
+    row: Option<Vec<Cell>>,
+    group_start: usize,
+    /// The table or one of its cells asks for borders.
+    bordered: bool,
+    /// Explicit column widths from `<col>` and childless `<colgroup>`.
+    col_widths: Vec<Option<f32>>,
+    /// Pending `<colgroup>`: `(span, width, has_child_cols)`.
+    pending_colgroup: Option<(usize, Option<f32>, bool)>,
+}
+
+impl TableB {
+    fn finish_row_group(&mut self) {
+        if let Some(row) = self.row.take() {
+            self.rows.push(row);
+        }
+        let end = self.rows.len().min(craft_wordmodel::table::MAX_ROWS);
+        if let Some(rows) = self.rows.get_mut(self.group_start..end) {
+            let mut remaining = 0u32;
+            for row in rows.iter_mut().rev() {
+                // Covered cells are inserted using the original row indices, including empty rows.
+                remaining += 1;
+                for cell in row.iter_mut().filter(|cell| cell.rowspan == 0) {
+                    cell.rowspan = remaining.clamp(1, 1000);
+                }
+            }
+        }
+        self.group_start = end;
+    }
+
+    /// Commit pending colgroup widths: if childless, push span columns with group width.
+    /// When child `<col>` elements are present, they have already received the group width
+    /// during `<col>` handling; columns from earlier groups are never backfilled.
+    fn commit_pending_colgroup(&mut self) {
+        if let Some((span, group_w, has_child_cols)) = self.pending_colgroup.take()
+            && !has_child_cols
+        {
+            for _ in 0..span {
+                if self.col_widths.len() < MAX_TABLE_COLS {
+                    self.col_widths.push(group_w);
+                }
+            }
+        }
+    }
+}
+
+struct ElementStyle {
+    fmt: Fmt,
+    block_background: Option<Rgb>,
+    align: Option<Align>,
+    preserve: bool,
+    page_break: bool,
+    page_break_after: bool,
+}
+
+fn apply_font_attributes(attrs: &[(String, String)], fmt: &mut Fmt) {
+    if let Some(color) = attr(attrs, "color").and_then(parse_color) {
+        fmt.color = Some(color);
+    }
+    if let Some(face) = attr(attrs, "face") {
+        let family = face.split(',').next().unwrap_or("").trim().to_string();
+        if model::is_mono(&family) {
+            fmt.code = true;
+        } else if !family.is_empty() {
+            fmt.font = model::kept_font(&family).or(fmt.font.take());
+        }
+    }
+    let Some(size) = attr(attrs, "size") else { return };
+    let size = size.trim();
+    let points = if let Some(rest) = size.strip_prefix('+') {
+        rest.parse::<i32>().ok().map(|delta| 3i32.saturating_add(delta))
+    } else if let Some(rest) = size.strip_prefix('-') {
+        rest.parse::<i32>().ok().map(|delta| 3i32.saturating_sub(delta))
+    } else {
+        size.parse::<i32>().ok()
+    };
+    if let Some(size) = points {
+        fmt.size = Some([7.5, 10.0, 12.0, 13.5, 18.0, 24.0, 36.0].get((size.clamp(1, 7) - 1) as usize).copied().unwrap_or(12.0));
+    }
+}
+
+/// Whether an element's `border` attribute or its CSS declares a visible border.
+fn declares_border(attrs: &[(String, String)], css: &str, is_table: bool) -> bool {
+    if is_table && attr(attrs, "border").is_some_and(|b| b.trim().parse::<u32>().map(|n| n > 0).unwrap_or(b.trim().is_empty())) {
+        return true;
+    }
+    // Each side's last declaration decides (the `style` attribute's come after the sheet's).
+    let mut sides = [false; 4];
+    for (name, value) in decls(css) {
+        let set = match name.as_str() {
+            "border" => 0..4,
+            "border-top" => 0..1,
+            "border-right" => 1..2,
+            "border-bottom" => 2..3,
+            "border-left" => 3..4,
+            _ => continue,
+        };
+        let value = value.to_ascii_lowercase();
+        let on = !value.is_empty() && !value.split_whitespace().any(|tok| matches!(tok, "none" | "hidden" | "0" | "0px" | "0pt"));
+        if let Some(s) = sides.get_mut(set) {
+            s.fill(on);
+        }
+    }
+    sides.contains(&true)
+}
+
+/// A declaration block's declarations, at most [`MAX_DECLS`]: (property in lower case, value
+/// without `!important`).
+pub(super) fn decls(css: &str) -> impl Iterator<Item = (String, &str)> {
+    css.split(';').take(MAX_DECLS).filter_map(|d| {
+        let (k, v) = d.split_once(':')?;
+        Some((k.trim().to_ascii_lowercase(), strip_important(v)))
+    })
+}
+
+/// Loads the bytes of an image an `img` names by a source other than a `data:` URI (a path
+/// relative to the HTML file). `None` when it can't be found. A picture used more than once can
+/// share one buffer.
+pub type ImageLoader<'a> = &'a dyn Fn(&str) -> Option<Arc<Vec<u8>>>;
+
+pub(super) struct Builder<'r> {
+    images: ImageLoader<'r>,
+    containers: Vec<Vec<FBlock>>,
+    cells: Vec<Cell>,
+    tables: Vec<TableB>,
+    stack: Vec<El>,
+    para: Option<Para>,
+    /// The current paragraph continues a list item (joins the previous paragraph).
+    para_cont: bool,
+    /// Pending page break from preceding elements with page-break-after or unconsumed break.
+    pending_page_break: bool,
+    /// Whether the current paragraph's first / last text was read with preserved white space
+    /// (CSS `white-space: pre…`): those edge spaces are kept when the paragraph ends.
+    pre_lead: Option<bool>,
+    pre_tail: bool,
+    meta: Meta,
+    title: Option<String>,
+    /// Rules of the page's `style` elements.
+    pub(super) sheet: Sheet,
+    /// Read as Word opens a web page ([`import_page`]), not as a pasted fragment.
+    page: bool,
+    /// What is left of [`MAX_CSS_WORK`].
+    css_work: usize,
+}
+
+fn is_void(n: &str) -> bool {
+    matches!(
+        n,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+            | "basefont"
+            | "frame"
+    )
+}
+
+pub(super) fn block_kind(n: &str) -> Option<ElKind> {
+    Some(match n {
+        "p" | "div" | "section" | "article" | "header" | "footer" | "main" | "nav" | "aside" | "figure" | "figcaption" | "address" | "dl" | "dt"
+        | "dd" | "center" | "form" | "fieldset" | "body" | "html" | "caption" | "thead" | "tbody" | "tfoot" | "details" | "summary" | "legend"
+        | "hgroup" => ElKind::Block,
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => ElKind::Heading(n.get(1..2).and_then(|d| d.parse().ok()).unwrap_or(1)),
+        "blockquote" => ElKind::Quote,
+        "pre" | "listing" | "xmp" | "plaintext" => ElKind::Pre,
+        "ul" | "menu" | "dir" => ElKind::List(false),
+        "ol" => ElKind::List(true),
+        "li" => ElKind::Li,
+        "table" => ElKind::Table,
+        "tr" => ElKind::Tr,
+        "td" | "th" => ElKind::Cell,
+        "head" => ElKind::Head,
+        _ => return None,
+    })
+}
+
+/// Closes an open `p` (HTML's "close a p element" on block starts).
+fn is_row_group(name: &str) -> bool {
+    matches!(name, "thead" | "tbody" | "tfoot")
+}
+
+fn closes_p(n: &str) -> bool {
+    matches!(
+        n,
+        "address"
+            | "article"
+            | "aside"
+            | "blockquote"
+            | "div"
+            | "dl"
+            | "fieldset"
+            | "footer"
+            | "form"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "header"
+            | "hr"
+            | "main"
+            | "nav"
+            | "ol"
+            | "p"
+            | "pre"
+            | "section"
+            | "table"
+            | "ul"
+            | "figure"
+            | "center"
+            | "dd"
+            | "dt"
+            | "li"
+    )
+}
+
+/// The paragraph spacing a block's CSS states: `margin` (and its sides) as space before / after
+/// and left / right indents, `text-indent` as the first-line indent, `line-height` as line
+/// spacing (a number or percentage: a multiple; a length: exactly). `auto` and values that don't
+/// parse state nothing.
+fn block_spacing(css: &str) -> Spacing {
+    let mut sp = Spacing::default();
+    // A length with a unit, or 0: a bare number, a percentage or a keyword states nothing.
+    let len = |v: &str| match v.trim() {
+        "0" => Some(0.0),
+        v if v.ends_with('%') || v.parse::<f32>().is_ok() || !v.starts_with(|c: char| c.is_ascii_digit() || matches!(c, '.' | '-' | '+')) => None,
+        v => css_len_pt(v).filter(|x| x.abs() <= 1584.0),
+    };
+    for (k, v) in decls(css) {
+        match k.as_str() {
+            "margin" => {
+                let parts: Vec<Option<f32>> = v.split_whitespace().map(len).collect();
+                let [top, right, bottom, left] = match parts.as_slice() {
+                    [a] => [*a; 4],
+                    [a, b] => [*a, *b, *a, *b],
+                    [a, b, c] => [*a, *b, *c, *b],
+                    [a, b, c, d] => [*a, *b, *c, *d],
+                    _ => continue,
+                };
+                sp.before = top.map(|x| x.max(0.0)).or(sp.before);
+                sp.after = bottom.map(|x| x.max(0.0)).or(sp.after);
+                sp.left = left.or(sp.left);
+                sp.right = right.or(sp.right);
+            }
+            "margin-top" => sp.before = len(v).map(|x| x.max(0.0)).or(sp.before),
+            "margin-bottom" => sp.after = len(v).map(|x| x.max(0.0)).or(sp.after),
+            "margin-left" => sp.left = len(v).or(sp.left),
+            "margin-right" => sp.right = len(v).or(sp.right),
+            "text-indent" => sp.first = len(v).or(sp.first),
+            "line-height" => {
+                let lv = v.to_ascii_lowercase();
+                let multiple = |m: f32| (m.is_finite() && m > 0.0).then(|| LineSpacing::Multiple(m.clamp(0.25, 10.0)));
+                sp.line = if let Some(pc) = lv.strip_suffix('%') {
+                    pc.trim().parse::<f32>().ok().and_then(|p| multiple(p / 100.0))
+                } else if let Ok(m) = lv.parse::<f32>() {
+                    multiple(m)
+                } else if lv == "normal" {
+                    Some(LineSpacing::Multiple(1.0))
+                } else {
+                    len(&lv).filter(|x| *x > 0.0).map(LineSpacing::Exactly)
+                }
+                .or(sp.line);
+            }
+            _ => {}
+        }
+    }
+    sp
+}
+
+/// A rule of a `style` element with a simple selector: an element name, classes or both.
+#[derive(Clone, Debug)]
+struct Rule {
+    tag: Option<String>,
+    classes: Vec<String>,
+    /// Classes count ten, an element name one.
+    specificity: usize,
+    /// Shared by the selectors of one block.
+    decls: Arc<str>,
+    /// How many declarations `decls` holds.
+    count: usize,
+}
+
+/// Most rules kept from a page's style elements.
+const MAX_RULES: usize = 10_000;
+/// Most declarations read for one element (its rules' and its `style` attribute's).
+const MAX_DECLS: usize = 512;
+/// Most declarations read from one `style` attribute.
+const INLINE_DECLS: usize = 64;
+/// Rule matching (rules looked at plus bytes gathered) one page may spend.
+const MAX_CSS_WORK: usize = 64 << 20;
+/// Most bytes of declarations gathered from the rules one element matches.
+const MAX_RULE_CSS: usize = 64 * 1024;
+/// Most of an element's classes looked up.
+const MAX_CLASSES: usize = 32;
+
+/// A page's style rules, found by the element name or a class they need.
+#[derive(Default)]
+pub(super) struct Sheet {
+    rules: Vec<Rule>,
+    /// Rules naming classes, by their first class.
+    by_class: std::collections::HashMap<String, Vec<usize>>,
+    /// Rules naming only an element, by its name.
+    by_tag: std::collections::HashMap<String, Vec<usize>>,
+    /// `*` rules.
+    any: Vec<usize>,
+}
+
+impl Sheet {
+    fn push(&mut self, r: Rule) {
+        let i = self.rules.len();
+        match (r.classes.first(), &r.tag) {
+            (Some(c), _) => self.by_class.entry(c.clone()).or_default().push(i),
+            (None, Some(t)) => self.by_tag.entry(t.clone()).or_default().push(i),
+            (None, None) => self.any.push(i),
+        }
+        self.rules.push(r);
+    }
+}
+
+/// Read the rules of a style sheet into `out`. At-rules (`@media`, `@page`…) and rules whose
+/// selectors aren't simple (descendants, pseudo-classes, attributes…) are skipped.
+pub(super) fn parse_sheet(css: &str, out: &mut Sheet) {
+    // Comments go, as do the `<!-- -->` old pages hide their styles in.
+    let mut text = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(i) = rest.find("/*") {
+        text.push_str(rest.get(..i).unwrap_or(""));
+        rest = rest.get(i + 2..).and_then(|r| r.find("*/").and_then(|j| r.get(j + 2..))).unwrap_or("");
+    }
+    text.push_str(rest);
+    let text = text.replace("<!--", " ").replace("-->", " ");
+    let mut rest = text.as_str();
+    while let Some(open) = rest.find('{') {
+        // A statement at-rule before it (`@charset "x";`, `@import url(a);`) isn't a selector.
+        let selectors = rest.get(..open).unwrap_or("").rsplit(';').next().unwrap_or("").trim();
+        let body = rest.get(open + 1..).unwrap_or("");
+        // The block's end, counting nested braces (an at-rule's own rules).
+        let mut depth = 1usize;
+        let mut end = body.len();
+        for (i, c) in body.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let decls = body.get(..end).unwrap_or("");
+        rest = body.get(end + 1..).unwrap_or("");
+        if selectors.starts_with('@') || decls.contains('{') || decls.len() > MAX_RULE_CSS {
+            continue;
+        }
+        let (count, decls) = (decls.split(';').count(), Arc::<str>::from(decls));
+        for sel in selectors.split(',') {
+            if out.rules.len() >= MAX_RULES {
+                return;
+            }
+            if let Some((tag, classes)) = simple_selector(sel.trim()) {
+                let specificity = classes.len() * 10 + usize::from(tag.is_some());
+                out.push(Rule { tag, classes, specificity, decls: decls.clone(), count });
+            }
+        }
+    }
+}
+
+/// `p`, `.note`, `p.note.wide` or `*`: (element name, classes). Class names may start with a
+/// digit (`.000003`): browsers drop such a rule, but Word's HTML import applies it, and
+/// converters write them.
+fn simple_selector(sel: &str) -> Option<(Option<String>, Vec<String>)> {
+    if sel == "*" {
+        return Some((None, Vec::new()));
+    }
+    let mut parts = sel.split('.');
+    let tag = parts.next()?;
+    let tag = if tag.is_empty() {
+        None
+    } else if tag.chars().all(|c| c.is_ascii_alphanumeric()) && tag.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        Some(tag.to_ascii_lowercase())
+    } else {
+        return None;
+    };
+    let ident = |c: &str| !c.is_empty() && c.chars().all(|ch| ch.is_alphanumeric() || ch == '_' || ch == '-');
+    let classes: Vec<String> = parts.map(str::to_string).collect();
+    if classes.iter().any(|c| !ident(c)) || (tag.is_none() && classes.is_empty()) {
+        return None;
+    }
+    Some((tag, classes))
+}
+
+impl Builder<'_> {
+    /// An element's CSS: the declarations of the style sheet rules it matches, in cascade order,
+    /// then its `style` attribute (later declarations win).
+    fn css_of(&mut self, name: &str, attrs: &[(String, String)]) -> String {
+        // The `style` attribute's first declarations always fit in what is read of the result.
+        let inline: Vec<&str> = attr(attrs, "style").unwrap_or("").split(';').take(INLINE_DECLS).collect();
+        let inline = inline.join(";");
+        let sheet = &self.sheet;
+        if sheet.rules.is_empty() || self.css_work == 0 {
+            return important_last(&inline);
+        }
+        let mut classes: Vec<&str> = attr(attrs, "class").map(|c| c.split_whitespace().take(MAX_CLASSES).collect()).unwrap_or_default();
+        classes.sort_unstable();
+        classes.dedup();
+        let mut candidates: Vec<usize> = sheet.any.clone();
+        candidates.extend(sheet.by_tag.get(name).into_iter().flatten());
+        for c in &classes {
+            candidates.extend(sheet.by_class.get(*c).into_iter().flatten());
+        }
+        let mut hits: Vec<(usize, usize)> = candidates
+            .iter()
+            .filter_map(|&i| sheet.rules.get(i).map(|r| (i, r)))
+            .filter(|(_, r)| r.tag.as_deref().is_none_or(|t| t == name) && r.classes.iter().all(|c| classes.contains(&c.as_str())))
+            .map(|(i, r)| (r.specificity, i))
+            .collect();
+        hits.sort_unstable();
+        let mut css = String::new();
+        let mut count = 0;
+        for (_, i) in hits {
+            let Some(r) = sheet.rules.get(i) else { continue };
+            if css.len() + r.decls.len() > MAX_RULE_CSS || count + r.count > MAX_DECLS - INLINE_DECLS {
+                break;
+            }
+            css.push_str(&r.decls);
+            css.push(';');
+            count += r.count;
+        }
+        // A page whose rules cost too much to apply reads on without them.
+        self.css_work = self.css_work.saturating_sub(candidates.len() + css.len());
+        css.push_str(&inline);
+        important_last(&css)
+    }
+}
+
+/// `css`'s declarations in order, the `!important` ones after the others: they win over normal
+/// ones wherever they come from (CSS Cascade 5 §6.4), an inline one over the sheet's.
+fn important_last(css: &str) -> String {
+    let (important, normal): (Vec<&str>, Vec<&str>) = css.split(';').filter(|d| !d.trim().is_empty()).partition(|d| strip_important(d) != d.trim());
+    normal.into_iter().chain(important).collect::<Vec<_>>().join(";")
+}
+
+/// The borders a cell's CSS gives it (`border`, `border-top`…: style, width and colour in any
+/// order; `windowtext` is the automatic colour). `None` when it states none.
+fn cell_borders(css: &str) -> Option<craft_wordmodel::props::Borders> {
+    use craft_wordmodel::props::{Border, BorderStyle, Borders};
+    let mut b = Borders::default();
+    let mut any = false;
+    for (k, v) in decls(css) {
+        let sides: &[u8] = match k.as_str() {
+            "border" => b"tlbr",
+            "border-top" => b"t",
+            "border-left" => b"l",
+            "border-bottom" => b"b",
+            "border-right" => b"r",
+            _ => continue,
+        };
+        // CSS's default width is `medium`.
+        let (mut style, mut width, mut color) = (None, 2.25_f32, None);
+        for tok in v.split_whitespace() {
+            let lt = tok.to_ascii_lowercase();
+            match lt.as_str() {
+                "none" | "hidden" => style = Some(BorderStyle::None),
+                "solid" => style = Some(BorderStyle::Single),
+                "double" => style = Some(BorderStyle::Double),
+                "dotted" => style = Some(BorderStyle::Dotted),
+                "dashed" => style = Some(BorderStyle::Dashed),
+                "thin" => width = 0.75,
+                "medium" => width = 2.25,
+                "thick" => width = 3.75,
+                "windowtext" => {}
+                _ => match css_len_pt(tok).filter(|_| tok.starts_with(|c: char| c.is_ascii_digit() || c == '.')) {
+                    Some(w) => width = w.clamp(0.0, 12.0),
+                    None => color = parse_color(tok).or(color),
+                },
+            }
+        }
+        // CSS draws no border without a style, or at no width.
+        let style = if width > 0.0 { style.unwrap_or(BorderStyle::None) } else { BorderStyle::None };
+        let border = Border { style, width, color, space: 0.0 };
+        for side in sides {
+            let slot = match side {
+                b't' => &mut b.top,
+                b'l' => &mut b.left,
+                b'b' => &mut b.bottom,
+                _ => &mut b.right,
+            };
+            *slot = Some(border);
+        }
+        any = true;
+    }
+    any.then_some(b)
+}
+
+/// Most columns given widths in one table.
+const MAX_TABLE_COLS: usize = 63;
+
+/// A cell's width, points: its CSS `width`, else its `width` attribute (pixels); percentages
+/// and widths that don't parse give none.
+fn cell_width(css: &str, attrs: &[(String, String)]) -> Option<f32> {
+    let from_css = decls(css).filter(|(k, v)| k == "width" && !v.ends_with('%')).filter_map(|(_, v)| css_len_pt(v));
+    let from_attr = || {
+        attr(attrs, "width")
+            .map(str::trim)
+            .filter(|v| !v.ends_with('%'))
+            .and_then(|v| v.trim_end_matches("px").trim().parse::<f32>().ok())
+            .map(|px| px * 0.75)
+    };
+    from_css.last().or_else(from_attr).filter(|w| w.is_finite() && *w > 1.0 && *w <= 1584.0)
+}
+
+fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+}
+
+impl<'r> Builder<'r> {
+    pub(super) fn new(images: ImageLoader<'r>, page: bool) -> Builder<'r> {
+        Builder {
+            images,
+            containers: vec![Vec::new()],
+            cells: Vec::new(),
+            tables: Vec::new(),
+            stack: Vec::new(),
+            para: None,
+            para_cont: false,
+            pending_page_break: false,
+            pre_lead: None,
+            pre_tail: false,
+            meta: Meta::default(),
+            title: None,
+            sheet: Sheet::default(),
+            page,
+            css_work: MAX_CSS_WORK,
+        }
+    }
+
+    fn fmt(&self) -> Fmt {
+        match self.stack.last() {
+            Some(e) => e.fmt.clone(),
+            // A web page's text is Times New Roman 12 pt unless its CSS says otherwise.
+            None if self.page => Fmt { font: Some(PAGE_FONT.into()), size: Some(12.0), ..Fmt::default() },
+            None => Fmt::default(),
+        }
+    }
+
+    fn preserve(&self) -> bool {
+        self.stack.last().is_some_and(|e| e.preserve)
+    }
+
+    pub(super) fn in_head(&self) -> bool {
+        self.stack.iter().any(|e| e.kind == ElKind::Head)
+    }
+
+    /// Paragraph context from the open elements (innermost first, up to the enclosing cell).
+    pub(super) fn start_para(&mut self) -> &mut Para {
+        if self.para.is_none() {
+            let mut p = Para::default();
+            let mut list_level: Option<(bool, usize)> = None;
+            let mut li_at: Option<usize> = None;
+            let mut lists = 0usize;
+            let mut spaced = false;
+            // A page's first span stating margins (see below).
+            let span = self
+                .stack
+                .iter()
+                .rev()
+                .take_while(|e| e.kind == ElKind::Inline)
+                .find(|e| e.spacing.before.is_some() || e.spacing.after.is_some())
+                .map(|e| (e.spacing.before, e.spacing.after));
+            for (i, e) in self.stack.iter().enumerate().rev() {
+                match e.kind {
+                    ElKind::Cell => {
+                        // CSS inherits `text-align` from the cell, its row, row group and table
+                        // (#1381); the paragraph's own (found above) wins.
+                        if p.align.is_none() {
+                            p.align = self.stack.get(..=i).and_then(|outer| {
+                                outer
+                                    .iter()
+                                    .rev()
+                                    .take_while(|o| o.kind != ElKind::Table)
+                                    .chain(outer.iter().rev().find(|o| o.kind == ElKind::Table))
+                                    .find_map(|o| o.align)
+                            });
+                        }
+                        break;
+                    }
+                    ElKind::Table => break,
+                    ElKind::Heading(n) if p.kind == Kind::Normal => p.kind = Kind::Heading(n.clamp(1, 6)),
+                    ElKind::Pre if p.kind == Kind::Normal => p.kind = Kind::Code,
+                    ElKind::Quote if p.kind == Kind::Normal => p.kind = Kind::Quote,
+                    ElKind::Li if li_at.is_none() => li_at = Some(i),
+                    ElKind::List(o) => {
+                        if list_level.is_none() {
+                            list_level = Some((o, 0));
+                        }
+                        lists += 1;
+                    }
+                    _ => {}
+                }
+                if p.align.is_none() && e.align.is_some() && e.kind != ElKind::Inline {
+                    p.align = e.align;
+                }
+                // Margins belong to the paragraph's own block, not to those around it.
+                if !spaced && e.kind != ElKind::Inline {
+                    p.spacing = e.spacing;
+                    if self.page {
+                        // Word opens a page's paragraphs with single lines; a margin a span
+                        // states replaces the one its paragraph states, and one the paragraph
+                        // leaves out is automatic spacing.
+                        let (top, bottom) = span.unwrap_or_default();
+                        let sp = &mut p.spacing;
+                        sp.before_auto = sp.before.is_none() && e.auto_margins;
+                        sp.after_auto = sp.after.is_none() && e.auto_margins;
+                        sp.before = sp.before.map(|own| top.unwrap_or(own));
+                        sp.after = sp.after.map(|own| bottom.unwrap_or(own));
+                        sp.line = sp.line.or(Some(LineSpacing::Multiple(1.0)));
+                    }
+                    spaced = true;
+                }
+            }
+            // Page text without a block of its own (straight in a cell) is single-spaced too.
+            if self.page && !spaced {
+                p.spacing.line = Some(LineSpacing::Multiple(1.0));
+            }
+            if let (Some((o, _)), Some(li)) = (list_level, li_at) {
+                p.list = Some(ListInfo { ordered: o, level: lists.saturating_sub(1).min(8) as u8, start: 1, ..Default::default() });
+                self.para_cont = self.stack.get(li).is_some_and(|e| e.used);
+                if let Some(e) = self.stack.get_mut(li) {
+                    e.used = true;
+                }
+            } else {
+                self.para_cont = false;
+            }
+            let pb_before = self.stack.iter_mut().rev().take_while(|e| e.kind != ElKind::Cell).any(|e| std::mem::take(&mut e.page_break));
+            p.page_break = pb_before || std::mem::take(&mut self.pending_page_break);
+            let block_shading = self
+                .stack
+                .iter()
+                .rev()
+                .take_while(|e| e.kind != ElKind::Cell && e.kind != ElKind::Table)
+                .filter(|e| self.page || !matches!(e.name.as_str(), "body" | "html"))
+                .find_map(|e| e.block_background);
+            if let Some(bg) = block_shading {
+                p.extra.get_or_insert_with(Default::default).shading = Some(bg);
+            }
+            self.para = Some(p);
+        }
+        self.para.get_or_insert_with(Para::default)
+    }
+
+    fn container(&mut self) -> &mut Vec<FBlock> {
+        if self.containers.is_empty() {
+            self.containers.push(Vec::new());
+        }
+        let n = self.containers.len() - 1;
+        &mut self.containers[n]
+    }
+
+    fn flush(&mut self) {
+        let Some(mut p) = self.para.take() else { return };
+        let (pre_lead, pre_tail) = (self.pre_lead.take().unwrap_or(false), std::mem::take(&mut self.pre_tail));
+        if p.kind != Kind::Code {
+            // Preserved white space keeps its spaces and tabs at the edges; line breaks there
+            // (source formatting) still go.
+            const ALL: &[char] = &[' ', '\t', '\r', '\n'];
+            const BREAKS: &[char] = &['\r', '\n'];
+            p.trim_with(if pre_lead { BREAKS } else { ALL }, if pre_tail { BREAKS } else { ALL });
+            if p.text().trim().is_empty() {
+                // Only white space (indentation between blocks): nothing to keep.
+                p.trim();
+            }
+        }
+        if p.inlines.len() == 1 && p.text() == "\u{00A0}" {
+            // `<p>&nbsp;</p>`: an empty paragraph on purpose, whose line is as high as the
+            // space's formatting makes it.
+            if let Some(Inline::Text(_, f)) = p.inlines.first() {
+                p.mark = Some(Box::new(craft_flow::char_props(f)));
+            }
+            p.inlines.clear();
+            self.para_cont = false;
+            self.container().push(FBlock::Para(p));
+            return;
+        }
+        if p.is_empty() && p.kind != Kind::Code && p.list.is_none() {
+            // Whitespace-only text between blocks.
+            return;
+        }
+        let cont = std::mem::take(&mut self.para_cont);
+        let level = p.list.map(|l| l.level);
+        let c = self.container();
+        if cont
+            && let Some(FBlock::Para(prev)) = c.last_mut()
+            && prev.list.is_some()
+            && prev.list.map(|l| l.level) == level
+        {
+            let prev_bg = prev.extra.as_ref().and_then(|x| x.shading);
+            let cont_bg = p.extra.as_ref().and_then(|x| x.shading);
+            if prev_bg != cont_bg {
+                if let Some(bg) = prev_bg {
+                    for inline in &mut prev.inlines {
+                        let fmt = match inline {
+                            Inline::Text(_, fmt) | Inline::Ruby { fmt, .. } => fmt,
+                            _ => continue,
+                        };
+                        if fmt.background.is_none() {
+                            fmt.background = Some(bg);
+                        }
+                    }
+                    if let Some(extra) = &mut prev.extra {
+                        extra.shading = None;
+                    }
+                }
+                if let Some(bg) = cont_bg {
+                    for inline in &mut p.inlines {
+                        let fmt = match inline {
+                            Inline::Text(_, fmt) | Inline::Ruby { fmt, .. } => fmt,
+                            _ => continue,
+                        };
+                        if fmt.background.is_none() {
+                            fmt.background = Some(bg);
+                        }
+                    }
+                }
+            }
+            prev.push_text("\n", &Fmt::default());
+            prev.inlines.extend(p.inlines);
+            return;
+        }
+        c.push(FBlock::Para(p));
+    }
+
+    pub(super) fn text(&mut self, t: &str) {
+        if let Some(title) = &mut self.title {
+            title.push_str(t);
+            return;
+        }
+        if self.in_head() {
+            return;
+        }
+        if t.is_empty() {
+            return;
+        }
+        let inside_table_only = matches!(
+            self.stack.iter().rev().find(|e| matches!(e.kind, ElKind::Table | ElKind::Tr | ElKind::Cell)).map(|e| e.kind),
+            Some(ElKind::Table | ElKind::Tr)
+        );
+        if inside_table_only && t.trim().is_empty() {
+            return;
+        }
+        let code = self.stack.iter().any(|e| e.kind == ElKind::Pre);
+        let f = self.fmt();
+        if code {
+            let mut first = true;
+            for line in t.split('\n') {
+                if !first {
+                    // A newline right after <pre> is ignored.
+                    let empty_start = self.para.as_ref().is_none_or(|p| p.inlines.is_empty()) && self.pre_fresh();
+                    if !empty_start {
+                        self.start_para();
+                        self.flush();
+                    }
+                }
+                first = false;
+                let line = line.trim_end_matches('\r');
+                if !line.is_empty() {
+                    self.start_para().push_text(line, &Fmt { code: false, ..f.clone() });
+                    self.mark_pre_used();
+                }
+            }
+            return;
+        }
+        if self.preserve() {
+            self.note_edge(true);
+            self.start_para().push_text(t, &f);
+            return;
+        }
+        // Collapse whitespace.
+        let mut s = String::with_capacity(t.len());
+        let mut prev_space = self.para.as_ref().is_none_or(|p| match p.inlines.last() {
+            Some(Inline::Text(x, _)) => x.ends_with([' ', '\n']),
+            Some(_) => false,
+            None => true,
+        });
+        for c in t.chars() {
+            if matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{000C}') {
+                if !prev_space {
+                    s.push(' ');
+                    prev_space = true;
+                }
+            } else {
+                s.push(c);
+                prev_space = false;
+            }
+        }
+        if s.is_empty() {
+            return;
+        }
+        self.note_edge(false);
+        self.start_para().push_text(&s, &f);
+    }
+
+    /// Record whether text about to be added keeps its white space (see `pre_lead`).
+    fn note_edge(&mut self, preserved: bool) {
+        if self.para.as_ref().is_none_or(|p| p.inlines.is_empty()) {
+            self.pre_lead = Some(preserved);
+        }
+        self.pre_tail = preserved;
+    }
+
+    /// Add a `<ruby>` element's base text and reading as one inline (#1681). Half-marked ruby (no
+    /// base, or no reading) is plain text instead: a guide that annotates nothing is no guide, and
+    /// the text it held is never lost.
+    pub(super) fn push_ruby(&mut self, base: &str, ruby: &str) {
+        let preserve = self.preserve();
+        let text = |s: &str| if preserve { s.to_string() } else { collapse_ws(s) };
+        let (base, ruby) = (text(base), text(ruby));
+        let f = self.fmt();
+        if base.is_empty() || ruby.is_empty() {
+            self.start_para().push_text(if base.is_empty() { &ruby } else { &base }, &f);
+            return;
+        }
+        self.start_para().inlines.push(Inline::Ruby { base, ruby, fmt: f });
+    }
+
+    fn pre_fresh(&self) -> bool {
+        self.stack.iter().rev().find(|e| e.kind == ElKind::Pre).is_some_and(|e| !e.used)
+    }
+
+    fn mark_pre_used(&mut self) {
+        if let Some(e) = self.stack.iter_mut().rev().find(|e| e.kind == ElKind::Pre) {
+            e.used = true;
+        }
+    }
+
+    /// Pop elements down to and including index `k`.
+    fn pop_to(&mut self, k: usize) {
+        while self.stack.len() > k {
+            let Some(e) = self.stack.pop() else { break };
+            self.close(&e);
+        }
+    }
+
+    /// Finalize an open HTML element popped from the stack.
+    ///
+    /// Side effects:
+    /// - Flushes any buffered inline text into the current block container.
+    /// - Sets `pending_page_break` if the element requests page break before or after.
+    /// - For `Cell`: pops the cell container, attaches generated blocks to the cell, and pushes into the active row.
+    /// - For `Tr`: commits any pending `<colgroup>` definitions and pushes the completed row into the active table.
+    /// - For `Table`: commits pending colgroup widths, finalizes table rows with `insert_covered` (bounded to `MAX_ROWS`),
+    ///   resolves explicit column widths from colgroups/cells, and appends the resulting table to the enclosing container.
+    fn close(&mut self, e: &El) {
+        if e.page_break_after || e.page_break {
+            self.pending_page_break = true;
+        }
+        if e.kind != ElKind::Inline {
+            self.flush();
+        }
+        match e.kind {
+            ElKind::Cell => {
+                self.flush();
+                let blocks = if self.containers.len() > 1 { self.containers.pop().unwrap_or_default() } else { Vec::new() };
+                let mut cell = self.cells.pop().unwrap_or_default();
+                cell.blocks = blocks;
+                if let Some(t) = self.tables.last_mut() {
+                    t.row.get_or_insert_with(Vec::new).push(cell);
+                }
+            }
+            ElKind::Tr => {
+                if let Some(t) = self.tables.last_mut() {
+                    t.commit_pending_colgroup();
+                    if let Some(r) = t.row.take() {
+                        t.rows.push(r);
+                    }
+                }
+            }
+            ElKind::Table => {
+                if let Some(mut t) = self.tables.pop() {
+                    t.commit_pending_colgroup();
+                    t.finish_row_group();
+                    let borderless = !t.bordered;
+                    // Keep at most MAX_ROWS rows (the model drops the rest anyway): bounds the
+                    // O(rows × rowspan) work of `insert_covered` on a table of millions of `<tr>`.
+                    let rows: Vec<_> = t.rows.into_iter().take(craft_wordmodel::table::MAX_ROWS).collect();
+                    let mut ft = FTable { rows, widths: Vec::new(), borderless, extra: None, kept: None, wrap: None };
+                    let col_widths = &t.col_widths;
+                    if !ft.rows.is_empty() {
+                        ft.insert_covered();
+                        ft.rows.retain(|r| !r.is_empty());
+                    }
+                    if !ft.rows.is_empty() {
+                        if col_widths.iter().any(Option::is_some) && ft.cols() <= MAX_TABLE_COLS {
+                            let mut widths = vec![None; ft.cols()];
+                            for (i, &cw) in col_widths.iter().take(ft.cols()).enumerate() {
+                                if let Some(w) = cw {
+                                    widths[i] = Some(w);
+                                }
+                            }
+                            for row in &ft.rows {
+                                let mut g = 0;
+                                for c in row {
+                                    if let (Some(w), Some(slot)) = (c.width, widths.get_mut(g)) {
+                                        slot.get_or_insert(w);
+                                    }
+                                    g += c.colspan.clamp(1, 63) as usize;
+                                }
+                            }
+                            if widths.iter().any(Option::is_some) {
+                                let known_sum: f32 = widths.iter().filter_map(|w| *w).sum();
+                                let known_count = widths.iter().filter(|w| w.is_some()).count();
+                                let avg = if known_count > 0 { known_sum / known_count as f32 } else { 72.0 };
+                                ft.widths = widths.into_iter().map(|w| w.unwrap_or(avg)).collect();
+                            }
+                        } else if ft.cols() <= MAX_TABLE_COLS {
+                            ft.widths_from_cells();
+                        }
+                        self.container().push(FBlock::Table(ft));
+                    }
+                }
+            }
+            ElKind::Head => {}
+            _ => {}
+        }
+    }
+
+    /// Index of the innermost open element named `name`, not looking past a table boundary
+    /// unless `cross_tables`.
+    fn find_open(&self, pred: impl Fn(&El) -> bool, stop: impl Fn(&El) -> bool) -> Option<usize> {
+        for (i, e) in self.stack.iter().enumerate().rev() {
+            if pred(e) {
+                return Some(i);
+            }
+            if stop(e) {
+                return None;
+            }
+        }
+        None
+    }
+
+    pub(super) fn close_head_for_start(&mut self, name: &str) {
+        // A body-content start tag implicitly ends an omitted </head>.
+        if !matches!(
+            name,
+            "html" | "head" | "base" | "basefont" | "bgsound" | "link" | "meta" | "noframes" | "noscript" | "script" | "style" | "template" | "title"
+        ) && let Some(k) = self.find_open(|e| e.kind == ElKind::Head, |_| false)
+        {
+            self.pop_to(k);
+        }
+    }
+
+    fn start_head_metadata(&mut self, name: &str, attrs: &[(String, String)]) -> bool {
+        match name {
+            "title" => self.title = Some(String::new()),
+            "meta" => {
+                let name = attr(attrs, "name").unwrap_or("").to_ascii_lowercase();
+                let content = attr(attrs, "content").unwrap_or("").to_string();
+                match name.as_str() {
+                    "author" => self.meta.author = content,
+                    "description" => self.meta.description = content,
+                    "keywords" => self.meta.keywords = content,
+                    "subject" => self.meta.subject = content,
+                    _ => {}
+                }
+                return true;
+            }
+            _ => {}
+        }
+        false
+    }
+
+    fn finish_row_group(&mut self) {
+        let Some(table) = self.stack.iter().rposition(|element| element.name == "table") else { return };
+        let owns_rows = self.stack.get(table).is_some_and(|element| element.kind == ElKind::Table);
+        if let Some((index, _)) = self
+            .stack
+            .iter()
+            .enumerate()
+            .skip(table + 1)
+            .find(|(_, element)| is_row_group(&element.name) || matches!(element.name.as_str(), "tr" | "td" | "th"))
+        {
+            self.pop_to(index);
+        }
+        // A table flattened at the nesting limit does not own the containing table's rows.
+        if owns_rows && let Some(table) = self.tables.last_mut() {
+            table.finish_row_group();
+        }
+    }
+
+    fn close_implicitly(&mut self, name: &str, is_table_part: bool) {
+        if closes_p(name)
+            && let Some(k) = self.find_open(|e| e.name == "p", |e| matches!(e.kind, ElKind::Cell | ElKind::Table | ElKind::Li | ElKind::Quote))
+        {
+            self.pop_to(k);
+        }
+        if matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") && self.stack.last().is_some_and(|e| matches!(e.kind, ElKind::Heading(_))) {
+            let k = self.stack.len() - 1;
+            self.pop_to(k);
+        }
+        if name == "li"
+            && let Some(k) = self.find_open(|e| e.kind == ElKind::Li, |e| matches!(e.kind, ElKind::List(_) | ElKind::Table | ElKind::Cell))
+        {
+            self.pop_to(k);
+        }
+        if matches!(name, "dt" | "dd")
+            && let Some(k) =
+                self.find_open(|e| e.name == "dt" || e.name == "dd", |e| matches!(e.kind, ElKind::Table | ElKind::Cell) || e.name == "dl")
+        {
+            self.pop_to(k);
+        }
+        if is_row_group(name) || matches!(name, "caption" | "colgroup" | "col") {
+            self.finish_row_group();
+        }
+        if is_table_part && !self.tables.is_empty() {
+            if matches!(name, "td" | "th")
+                && let Some(k) = self.find_open(|e| e.kind == ElKind::Cell, |e| matches!(e.kind, ElKind::Table | ElKind::Tr))
+            {
+                self.pop_to(k);
+            }
+            if name == "tr"
+                && let Some(k) = self.find_open(|e| matches!(e.kind, ElKind::Tr | ElKind::Cell), |e| e.kind == ElKind::Table)
+            {
+                let mut kk = k;
+                while kk > 0 && self.stack.get(kk - 1).is_some_and(|e| matches!(e.kind, ElKind::Tr | ElKind::Cell)) {
+                    kk -= 1;
+                }
+                self.pop_to(kk);
+            }
+        }
+    }
+
+    /// Process void or special HTML elements (`br`, `hr`, `wbr`, `col`, `colgroup`, `img`).
+    ///
+    /// Side effects:
+    /// - `br` / `wbr`: inserts line break or zero-width break into the active paragraph.
+    /// - `hr`: inserts a thematic horizontal rule block with borders and spacing into the container.
+    /// - `col`: extracts span and explicit CSS width, resolves against active `<colgroup>`, and appends up to `MAX_TABLE_COLS` column widths to the table.
+    /// - `colgroup`: commits any previous pending colgroup and buffers new span and width styles until child cols or closing tag arrive.
+    /// - `img`: parses dimensions, styles, and data/remote sources, creating an image block or inline image run.
+    fn start_special(&mut self, name: &str, attrs: &[(String, String)]) -> bool {
+        match name {
+            "br" => {
+                if self.stack.iter().any(|e| e.kind == ElKind::Pre) {
+                    self.start_para();
+                    self.flush();
+                } else {
+                    let fmt = self.fmt();
+                    self.start_para().push_text("\n", &fmt);
+                }
+            }
+            "hr" => {
+                self.flush();
+                self.container().push(FBlock::Para(Para::new(Kind::Rule)));
+            }
+            "wbr" => {
+                let fmt = self.fmt();
+                self.start_para().push_text("\u{200B}", &fmt);
+            }
+            "col" => {
+                let css = self.css_of(name, attrs);
+                let span = attr(attrs, "span").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, MAX_TABLE_COLS);
+                let w = cell_width(&css, attrs);
+                if let Some(t) = self.tables.last_mut() {
+                    let group_w = if let Some((_, group_w, has_child_cols)) = &mut t.pending_colgroup {
+                        *has_child_cols = true;
+                        *group_w
+                    } else {
+                        None
+                    };
+                    let effective_w = w.or(group_w);
+                    for _ in 0..span {
+                        if t.col_widths.len() < MAX_TABLE_COLS {
+                            t.col_widths.push(effective_w);
+                        }
+                    }
+                }
+            }
+            "colgroup" => {
+                let css = self.css_of(name, attrs);
+                let span = attr(attrs, "span").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, MAX_TABLE_COLS);
+                let w = cell_width(&css, attrs);
+                if let Some(t) = self.tables.last_mut() {
+                    t.commit_pending_colgroup();
+                    t.pending_colgroup = Some((span, w, false));
+                }
+            }
+            "img" => {
+                let alt = attr(attrs, "alt").unwrap_or("").to_string();
+                let dim = |key: &str| attr(attrs, key).and_then(|v| v.trim().trim_end_matches("px").trim().parse::<f32>().ok()).map(|p| p * 0.75);
+                let mut width = dim("width");
+                let mut height = dim("height");
+                if let Some(style) = attr(attrs, "style") {
+                    for decl in style.split(';') {
+                        if let Some((key, value)) = decl.split_once(':') {
+                            match key.trim().to_ascii_lowercase().as_str() {
+                                "width" => width = css_len_pt(value).or(width),
+                                "height" => height = css_len_pt(value).or(height),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                let image = attr(attrs, "src")
+                    .and_then(|src| if src.trim_start().starts_with("data:") { data_uri(src).map(Arc::new) } else { (self.images)(src.trim()) })
+                    .and_then(|data| make_img(data, width, height, &alt));
+                let fmt = self.fmt();
+                match image {
+                    Some(image) => self.start_para().inlines.push(Inline::Image(image)),
+                    None if !alt.is_empty() => self.start_para().push_text(&alt, &fmt),
+                    None => {}
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// `css`: the element's declarations in cascade order ([`Builder::css_of`]).
+    fn element_style(&self, name: &str, attrs: &[(String, String)], kind: ElKind, css: &str) -> ElementStyle {
+        let mut fmt = self.fmt();
+        let mut align = None;
+        let mut preserve = self.preserve();
+        let mut page_break = false;
+        let mut page_break_after = false;
+        match name {
+            // A header cell is bold, as in browsers and Word, unless its own CSS says otherwise.
+            "b" | "strong" | "th" => fmt.bold = true,
+            "i" | "em" | "cite" | "var" | "dfn" | "address" => fmt.italic = true,
+            "u" | "ins" => fmt.underline = true,
+            "s" | "strike" | "del" => fmt.strike = true,
+            "code" | "kbd" | "tt" | "samp" => fmt.code = true,
+            "sup" => fmt.sup = true,
+            "sub" => fmt.sub = true,
+            "small" => fmt.size = Some(fmt.size.map_or(10.0, |s| (s * 0.833).max(1.0))),
+            "big" => fmt.size = Some(fmt.size.map_or(14.0, |s| (s * 1.2).min(1638.0))),
+            "mark" => fmt.background = Some(craft_wordmodel::Rgb(255, 255, 0)),
+            "font" => apply_font_attributes(attrs, &mut fmt),
+            "a" => {
+                if let Some(href) = attr(attrs, "href").filter(|h| craft_wordmodel::link::is_safe_href(h)) {
+                    fmt.link = model::kept_link(href.trim());
+                }
+            }
+            _ => {}
+        }
+        if let Some(value) = attr(attrs, "align").filter(|_| kind != ElKind::Table) {
+            align = match value.to_ascii_lowercase().as_str() {
+                "center" | "middle" => Some(Align::Center),
+                "right" => Some(Align::Right),
+                "justify" => Some(Align::Justify),
+                "left" => Some(Align::Left),
+                _ => None,
+            };
+        }
+        if name == "center" {
+            align = Some(Align::Center);
+        }
+        if self.page
+            && let ElKind::Heading(n) = kind
+        {
+            // A page's headings are bold, black (unless they inherit a colour) and sized as
+            // browsers show them.
+            fmt.bold = true;
+            fmt.color.get_or_insert(craft_wordmodel::Rgb(0, 0, 0));
+            fmt.size = PAGE_HEADING_SIZES.get(usize::from(n.clamp(1, 6)) - 1).copied();
+        }
+        if kind != ElKind::Inline {
+            // CSS background does not inherit from inline ancestors to non-inline elements (#1786).
+            // HTML bgcolor presentational attribute supplies the initial background, which can be
+            // overridden or cleared by CSS declarations in apply_style.
+            fmt.background = attr(attrs, "bgcolor").and_then(parse_color);
+        }
+        let parent_bg = self
+            .stack
+            .last()
+            .and_then(|e| if !self.page && matches!(e.name.as_str(), "body" | "html") { None } else { e.fmt.background.or(e.block_background) });
+        apply_style(css, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after, parent_bg);
+        if kind == ElKind::Pre {
+            preserve = true;
+        }
+        // CSS background-color does not inherit to child text runs; container elements (div, p,
+        // pre, table, row groups, cells, etc.) do not set character shading (#1786). Container
+        // backgrounds are saved to `block_background` for paragraph shading on block containers,
+        // explicit child inheritance (`background: inherit`), and table cell shading, while
+        // character shading `fmt.background` is kept `None`.
+        let block_background = if kind != ElKind::Inline { fmt.background.take() } else { None };
+        let has_root_bg =
+            block_background.is_some() || self.stack.iter().any(|e| matches!(e.name.as_str(), "body" | "html") && e.block_background.is_some());
+        if !self.page && matches!(name, "body" | "html") && has_root_bg {
+            // A pasted fragment drops the root background; its foreground was chosen for that
+            // background, so drop it too rather than painting light text on the page default.
+            fmt.color = None;
+        }
+        ElementStyle { fmt, block_background, align, preserve, page_break, page_break_after }
+    }
+
+    pub(super) fn start(&mut self, name: &str, attrs: &[(String, String)], self_close: bool) {
+        if self.start_head_metadata(name, attrs) {
+            return;
+        }
+        let is_table_part = matches!(name, "tr" | "td" | "th");
+        let in_table = self.tables.len() < model::MAX_DEPTH;
+        self.close_implicitly(name, is_table_part);
+        if name == "a"
+            && !self.in_head()
+            && let Some(id) = attr(attrs, "id").or_else(|| attr(attrs, "name")).filter(|s| !s.is_empty())
+        {
+            self.start_para().inlines.push(Inline::Anchor(id.to_string()));
+        }
+        if self.start_special(name, attrs) {
+            return;
+        }
+        if is_void(name) || self_close && block_kind(name).is_none() && !matches!(name, "a" | "span") {
+            return;
+        }
+        if self.stack.len() >= MAX_STACK {
+            return;
+        }
+        let mut kind = block_kind(name).unwrap_or(ElKind::Inline);
+        if matches!(kind, ElKind::Table | ElKind::Tr | ElKind::Cell) && !in_table {
+            kind = ElKind::Block;
+        }
+        if matches!(kind, ElKind::Tr | ElKind::Cell) && self.tables.is_empty() {
+            kind = ElKind::Block;
+        }
+        if kind != ElKind::Inline {
+            self.flush();
+        }
+        let css = self.css_of(name, attrs);
+        let ElementStyle { mut fmt, block_background, align, preserve, page_break, page_break_after } = self.element_style(name, attrs, kind, &css);
+        match kind {
+            ElKind::Table => self.tables.push(TableB {
+                rows: Vec::new(),
+                row: None,
+                group_start: 0,
+                bordered: declares_border(attrs, &css, true),
+                col_widths: Vec::new(),
+                pending_colgroup: None,
+            }),
+            ElKind::Tr => {
+                if let Some(t) = self.tables.last_mut() {
+                    t.commit_pending_colgroup();
+                    if let Some(r) = t.row.take() {
+                        t.rows.push(r);
+                    }
+                    t.row = Some(Vec::new());
+                }
+            }
+            ElKind::Cell => {
+                let tb = self.find_open(|e| e.kind == ElKind::Tr, |e| e.kind == ElKind::Table).is_none();
+                if let Some(t) = self.tables.last_mut()
+                    && declares_border(attrs, &css, false)
+                {
+                    t.bordered = true;
+                }
+                if tb && let Some(t) = self.tables.last_mut() {
+                    // A cell without a row: start one.
+                    if let Some(r) = t.row.take() {
+                        t.rows.push(r);
+                    }
+                    t.row = Some(Vec::new());
+                }
+                let num = |k: &str| attr(attrs, k).and_then(|v| v.trim().parse::<u32>().ok()).map(|v| v.clamp(1, 63));
+                let colspan = num("colspan").unwrap_or(1);
+                let shading = block_background.or_else(|| {
+                    for e in self.stack.iter().rev() {
+                        if !self.page && matches!(e.name.as_str(), "body" | "html") {
+                            continue;
+                        }
+                        if let Some(bg) = e.block_background {
+                            return Some(bg);
+                        }
+                        if e.kind == ElKind::Cell {
+                            break;
+                        }
+                    }
+                    None
+                });
+                let mut valign = attr(attrs, "valign").and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
+                    "top" => Some(VAlign::Top),
+                    "middle" | "center" => Some(VAlign::Center),
+                    "bottom" => Some(VAlign::Bottom),
+                    _ => None,
+                });
+                for (_, v) in decls(&css).filter(|(k, _)| k == "vertical-align") {
+                    match v.to_ascii_lowercase().as_str() {
+                        "top" => valign = Some(VAlign::Top),
+                        "middle" | "center" => valign = Some(VAlign::Center),
+                        "bottom" => valign = Some(VAlign::Bottom),
+                        _ => {}
+                    }
+                }
+                // The last declaration wins, as in the cascade.
+                let mso_vmerge = decls(&css).filter(|(k, _)| k == "mso-yfti-vmerge").last().map(|(_, v)| v.trim().to_ascii_lowercase());
+                let is_mso_vmerge_continue = mso_vmerge.as_deref() == Some("continue");
+                let is_mso_vmerge_restart = mso_vmerge.as_deref() == Some("restart");
+                let rowspan = attr(attrs, "rowspan").and_then(|v| v.trim().parse::<u32>().ok()).map(|v| v.min(1000)).unwrap_or(1);
+                self.cells.push(Cell {
+                    blocks: Vec::new(),
+                    colspan,
+                    rowspan,
+                    covered: is_mso_vmerge_continue,
+                    header: name == "th",
+                    shading,
+                    borders: cell_borders(&css),
+                    valign,
+                    margins: None,
+                    direction: Default::default(),
+                    picture: None,
+                    width: if colspan == 1 { cell_width(&css, attrs) } else { None },
+                    vmerge_restart: is_mso_vmerge_restart,
+                    synthetic_covered: false,
+                });
+                fmt.background = None;
+                self.containers.push(Vec::new());
+            }
+            _ => {}
+        }
+        // The page's own margins (`body`, `html`) aren't its paragraphs'.
+        let spacing =
+            if (kind != ElKind::Inline || self.page) && !matches!(name, "body" | "html") { block_spacing(&css) } else { Spacing::default() };
+        let auto_margins = self.page && (name == "p" || matches!(kind, ElKind::Heading(_)));
+        self.stack.push(El {
+            name: name.to_string(),
+            kind,
+            fmt,
+            block_background,
+            spacing,
+            auto_margins,
+            align,
+            preserve,
+            page_break,
+            page_break_after,
+            used: false,
+        });
+    }
+
+    pub(super) fn end(&mut self, name: &str) {
+        if name == "title" {
+            if let Some(t) = self.title.take() {
+                self.meta.title = t.split_whitespace().collect::<Vec<_>>().join(" ");
+            }
+            return;
+        }
+        if name == "colgroup" {
+            if let Some(t) = self.tables.last_mut() {
+                t.commit_pending_colgroup();
+            }
+            return;
+        }
+        if is_row_group(name) {
+            let open = self.find_open(|element| is_row_group(&element.name), |element| element.name == "table");
+            // Without an explicit group, a row-group end tag ends the implicit group.
+            if open.is_none_or(|index| self.stack.get(index).is_some_and(|element| element.name == name)) {
+                self.finish_row_group();
+            }
+            return;
+        }
+        let crosses = matches!(name, "table");
+        let target = if matches!(name, "td" | "th") {
+            self.find_open(|e| e.kind == ElKind::Cell, |e| e.kind == ElKind::Table)
+        } else if name == "tr" {
+            self.find_open(|e| e.kind == ElKind::Tr, |e| e.kind == ElKind::Table)
+        } else {
+            self.find_open(|e| e.name == name, |e| !crosses && matches!(e.kind, ElKind::Table | ElKind::Cell))
+        };
+        if let Some(k) = target {
+            self.pop_to(k);
+        }
+    }
+
+    pub(super) fn finish(mut self) -> Flow {
+        self.pop_to(0);
+        self.flush();
+        // Unclosed cells: fold remaining containers into the body.
+        while self.containers.len() > 1 {
+            let c = self.containers.pop().unwrap_or_default();
+            self.container().extend(c);
+        }
+        let blocks = self.containers.pop().unwrap_or_default();
+        if let Some(t) = self.title.take() {
+            self.meta.title = t;
+        }
+        Flow { blocks, meta: self.meta }
+    }
+}

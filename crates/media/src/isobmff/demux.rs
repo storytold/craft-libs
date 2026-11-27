@@ -3,7 +3,7 @@
 use crate::isobmff::bytes::{BoxHeader, Cur, FourCc, boxes, find};
 use crate::isobmff::codec::{CodecConfig, SampleEntry, parse_sample_entry};
 use crate::isobmff::error::{Error, Result, invalid};
-use crate::isobmff::source::ByteSource;
+use crate::source::ByteSource;
 use std::collections::HashMap;
 
 /// Hard cap on the sample count of the whole file, all tracks and fragments (after PCM chunk merging).
@@ -59,12 +59,15 @@ impl SampleBudget {
 pub struct Sample {
     /// Absolute byte offset in the file.
     pub offset: u64,
+    /// Sample size in bytes.
     pub size: u32,
     /// Decode timestamp (raw media time, edit lists not applied).
     pub dts: i64,
     /// Presentation timestamp = dts + composition offset (raw media time).
     pub pts: i64,
+    /// Duration in the media timescale.
     pub duration: u32,
+    #[allow(missing_docs)]
     pub is_sync: bool,
     /// 1-based index into [`Track::entries`].
     pub description_index: u32,
@@ -84,16 +87,22 @@ pub struct Edit {
 /// Broad classification of a track by its handler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrackKind {
+    #[allow(missing_docs)]
     Video,
+    #[allow(missing_docs)]
     Audio,
+    #[allow(missing_docs)]
     Timecode,
+    #[allow(missing_docs)]
     Subtitle,
+    /// Any other handler type.
     Other,
 }
 
 /// A sample-to-group mapping (`sbgp`) with the matching descriptions (`sgpd`) kept raw.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct SampleGroup {
+    /// Four-character grouping type from `sbgp`/`sgpd` (for example `roll`).
     pub grouping_type: FourCc,
     /// (sample_count, group_description_index) runs.
     pub runs: Vec<(u32, u32)>,
@@ -104,9 +113,13 @@ pub struct SampleGroup {
 /// A demuxed track.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Track {
+    /// Track ID from `tkhd`, unique within the file.
     pub id: u32,
+    #[allow(missing_docs)]
     pub kind: TrackKind,
+    /// Handler type from `hdlr` (for example `vide`, `soun`).
     pub handler: FourCc,
+    /// Handler name string from `hdlr`.
     pub handler_name: String,
     /// Media timescale (`mdhd`).
     pub timescale: u32,
@@ -118,15 +131,21 @@ pub struct Track {
     pub language: String,
     /// `tkhd` presentation size (16.16 fixed point converted to integer pixels, rounded down).
     pub width: u32,
+    /// `tkhd` presentation height in integer pixels (same conversion as `width`).
     pub height: u32,
+    /// `tkhd` enabled flag.
     pub enabled: bool,
+    /// `tkhd` alternate group; tracks that share a non-zero value are alternatives of each other.
     pub alternate_group: u16,
     /// `tkhd` volume (8.8 fixed point).
     pub volume: i16,
     /// `tkhd` transformation matrix.
     pub matrix: [i32; 9],
+    /// Sample entries from `stsd`. [`Sample::description_index`] is 1-based into this list.
     pub entries: Vec<SampleEntry>,
+    /// All samples of the track in decode order.
     pub samples: Vec<Sample>,
+    /// Edit list entries from `elst`; empty when the track has none.
     pub edits: Vec<Edit>,
     /// Offset to add to raw pts to get presentation time (track timescale), derived from the
     /// leading empty edits and the first non-empty edit's `media_time`.
@@ -135,11 +154,15 @@ pub struct Track {
     pub references: Vec<(FourCc, Vec<u32>)>,
     /// Raw `sdtp` bytes (one per sample) if present.
     pub sdtp: Vec<u8>,
+    /// Sample groups (`sbgp` with matching `sgpd`) of the track.
     pub sample_groups: Vec<SampleGroup>,
     /// True if uncompressed audio samples were merged into one [`Sample`] per chunk.
     pub pcm_chunked: bool,
     sync_index: Vec<u32>,
     pts_order: Vec<u32>,
+    /// Per entry: the MPEG audio codec its first sample's frame header names, for the
+    /// [`CodecConfig::Mp3`] entries, which name no layer themselves.
+    mpeg_audio: Vec<Option<crate::CodecId>>,
 }
 
 impl Track {
@@ -147,6 +170,53 @@ impl Track {
     pub fn codec(&self) -> Option<&CodecConfig> {
         self.entries.first().map(|e| &e.codec)
     }
+
+    /// What a decoder needs for this track, in the container-neutral form the codec crates take:
+    /// [`Track::codec_params_for`] the first sample's description (the first entry for a track
+    /// without samples, or when that index names no entry). A track whose samples use more than
+    /// one description ([`Track::has_mixed_descriptions`]) needs `codec_params_for` per sample.
+    pub fn codec_params(&self) -> crate::CodecParams {
+        let first = self.samples.first().map(|s| s.description_index);
+        self.codec_params_for(first.filter(|&i| i >= 1 && i as usize <= self.entries.len()).unwrap_or(1))
+    }
+
+    /// What a decoder needs for the samples whose [`Sample::description_index`] is
+    /// `description_index` (1-based, into [`Track::entries`]); [`crate::CodecId::Unknown`] when
+    /// there is no such entry.
+    pub fn codec_params_for(&self, description_index: u32) -> crate::CodecParams {
+        let Some(entry) = description_index.checked_sub(1).and_then(|i| self.entries.get(i as usize)) else {
+            return crate::CodecParams::new(crate::CodecId::Unknown);
+        };
+        let codec = &entry.codec;
+        let id = self.mpeg_audio.get(description_index as usize - 1).copied().flatten().unwrap_or(codec.codec_id());
+        let mut p = crate::CodecParams::new(id).with_extradata(codec.extradata()).with_tag(entry.format.0);
+        if let Some(v) = &entry.video {
+            p = p.with_size(u32::from(v.width), u32::from(v.height));
+        }
+        if let Some(a) = &entry.audio {
+            p = p.with_sample_rate(a.sample_rate.round() as u32).with_channels(u16::try_from(a.channels).unwrap_or(0));
+        }
+        match codec {
+            CodecConfig::Pcm(c) => {
+                p = p.with_pcm(if c.float {
+                    crate::PcmFormat::float(c.bits, c.big_endian)
+                } else {
+                    crate::PcmFormat::int(c.bits, c.signed, c.big_endian)
+                });
+                p = p.with_sample_rate(c.sample_rate.round() as u32).with_channels(u16::try_from(c.channels).unwrap_or(0));
+            }
+            CodecConfig::Opus(o) => p = p.with_sample_rate(48_000).with_channels(u16::from(o.output_channels)),
+            _ => {}
+        }
+        p
+    }
+
+    /// True when the samples use more than one sample description, so no single
+    /// [`Track::codec_params`] describes them all.
+    pub fn has_mixed_descriptions(&self) -> bool {
+        self.samples.windows(2).any(|w| w[0].description_index != w[1].description_index)
+    }
+    /// Video parameters of the track's first sample description, or `None` for other track kinds.
     pub fn video(&self) -> Option<&crate::isobmff::codec::VideoParams> {
         self.entries.first().and_then(|e| e.video.as_ref())
     }
@@ -168,6 +238,7 @@ impl Track {
             _ => None,
         }
     }
+    /// The first sample entry's audio parameters, or `None` for non-audio tracks.
     pub fn audio(&self) -> Option<&crate::isobmff::codec::AudioParams> {
         self.entries.first().and_then(|e| e.audio.as_ref())
     }
@@ -209,10 +280,12 @@ impl Track {
 /// Text metadata from `udta` (QuickTime `©xxx` atoms and iTunes-style `meta/ilst`, incl. `keys`).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Metadata {
+    /// (key, value) pairs in file order. Keys are `©xxx` atom names or `keys` item names.
     pub entries: Vec<(String, String)>,
 }
 
 impl Metadata {
+    /// The value of the first entry whose key equals `key`.
     pub fn get(&self, key: &str) -> Option<&str> {
         self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
     }
@@ -225,8 +298,11 @@ impl Metadata {
 /// A parsed MP4/MOV file (headers and sample tables; media data stays in the source).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mp4File {
+    /// `ftyp` major brand.
     pub major_brand: FourCc,
+    /// `ftyp` minor version.
     pub minor_version: u32,
+    /// `ftyp` compatible brands.
     pub compatible_brands: Vec<FourCc>,
     /// QuickTime file (major brand `qt  ` or no `ftyp`).
     pub is_quicktime: bool,
@@ -234,7 +310,9 @@ pub struct Mp4File {
     pub timescale: u32,
     /// Movie duration in the movie timescale (`mvhd`; for fragmented files, the longest track).
     pub duration: u64,
+    /// Tracks in `trak` order. The track indices taken by other methods refer to this list.
     pub tracks: Vec<Track>,
+    /// Text metadata from `udta`.
     pub metadata: Metadata,
     /// File uses movie fragments (`mvex` present).
     pub fragmented: bool,
@@ -242,6 +320,9 @@ pub struct Mp4File {
     pub moov_offset: u64,
     /// Number of `moof` boxes found.
     pub fragment_count: usize,
+    /// Nero chapter list (`udta/chpl`), starts in the movie timescale. QuickTime chapter tracks
+    /// live in media data: read them with [`Mp4File::read_chapters`].
+    pub chpl_chapters: Vec<crate::isobmff::Chapter>,
 }
 
 impl Mp4File {
@@ -251,17 +332,67 @@ impl Mp4File {
         let s = t.samples.get(index).ok_or(Error::NoSuchSample(index))?;
         read_range(src, s.offset, s.size as u64)
     }
+    /// Index of the sample of track `track` being presented at raw media time `pts`; see [`Track::sample_at_pts`]. `None` if `track` is out of range or has no samples.
     pub fn sample_at_pts(&self, track: usize, pts: i64) -> Option<usize> {
         self.tracks.get(track)?.sample_at_pts(pts)
     }
+    /// The closest sync sample at or before `index` in track `track`, in decode order; see [`Track::sync_sample_before`]. `None` if `track` is out of range.
     pub fn sync_sample_before(&self, track: usize, index: usize) -> Option<usize> {
         Some(self.tracks.get(track)?.sync_sample_before(index))
+    }
+    /// The chapter list: the QuickTime chapter track (the text track an enabled track's `tref/chap`
+    /// points at; titles read from `src`, starts in the movie timescale, edit-adjusted) when there is
+    /// one, else the Nero `chpl` list. Empty when the file has neither.
+    ///
+    /// Chapters outside the track's first non-empty edit are left out, and one spanning that edit's
+    /// start begins where the edit does; later edits are ignored. Titles are cut to
+    /// [`MAX_CHAPTER_TITLE_BYTES`](crate::isobmff::MAX_CHAPTER_TITLE_BYTES).
+    pub fn read_chapters<S: ByteSource + ?Sized>(&self, src: &S) -> Result<Vec<crate::isobmff::Chapter>> {
+        let chap_id = self
+            .tracks
+            .iter()
+            .filter(|t| t.enabled)
+            .flat_map(|t| &t.references)
+            .find(|(k, _)| k == b"chap")
+            .and_then(|(_, ids)| ids.first().copied());
+        let Some(t) = chap_id.and_then(|id| self.tracks.iter().find(|t| t.id == id)) else { return Ok(self.chpl_chapters.clone()) };
+        let edit = t.edits.iter().find(|e| e.media_time != -1);
+        let media_start = edit.map_or(i64::MIN, |e| e.media_time);
+        let media_end = edit
+            .filter(|e| e.segment_duration > 0)
+            .map_or(i64::MAX, |e| media_start.saturating_add(rescale(i128::from(e.segment_duration), self.timescale, t.timescale)));
+        let mut out = Vec::new();
+        for s in t.samples.iter().take(crate::isobmff::MAX_CHAPTERS.saturating_mul(16)) {
+            if s.pts >= media_end || (s.pts.saturating_add(i64::from(s.duration)) <= media_start && s.pts < media_start) {
+                continue;
+            }
+            let data = read_range(src, s.offset, u64::from(s.size).min(MAX_CHAPTER_SAMPLE_BYTES))?;
+            let title = if u64::from(s.size) > MAX_CHAPTER_SAMPLE_BYTES {
+                crate::isobmff::chapters::parse_text_sample_prefix(&data)
+            } else {
+                crate::isobmff::chapters::parse_text_sample(&data)
+            };
+            let title = title.unwrap_or_default();
+            let title = crate::isobmff::chapters::truncate_utf8(&title, crate::isobmff::MAX_CHAPTER_TITLE_BYTES).to_string();
+            let pts = s.pts.max(media_start).saturating_add(t.edit_offset).max(0) as u64;
+            let start = if t.timescale == 0 {
+                0
+            } else {
+                (u128::from(pts) * u128::from(self.timescale) / u128::from(t.timescale)).min(u128::from(u64::MAX)) as u64
+            };
+            out.push(crate::isobmff::Chapter { start, title });
+        }
+        Ok(out)
     }
     /// First track of the given kind.
     pub fn track_of_kind(&self, kind: TrackKind) -> Option<usize> {
         self.tracks.iter().position(|t| t.kind == kind)
     }
 }
+
+/// Most of a chapter sample read for its title: its 16-bit length and far more title than is kept.
+/// A longer title is decoded from what this holds of it.
+const MAX_CHAPTER_SAMPLE_BYTES: u64 = 4098;
 
 fn read_range<S: ByteSource + ?Sized>(src: &S, offset: u64, size: u64) -> Result<Vec<u8>> {
     let end = offset.checked_add(size).ok_or(Error::Truncated("sample"))?;
@@ -319,6 +450,7 @@ pub fn open<S: ByteSource>(src: S) -> Result<Mp4File> {
         fragmented: false,
         moov_offset,
         fragment_count: moofs.len(),
+        chpl_chapters: Vec::new(),
     };
     if let Some(f) = &ftyp {
         let mut c = Cur::labeled(f, "ftyp");
@@ -332,6 +464,7 @@ pub fn open<S: ByteSource>(src: S) -> Result<Mp4File> {
     let mut trex: HashMap<u32, Trex> = HashMap::new();
     let mut trak_payloads = Vec::new();
     let mut meta_left = MAX_METADATA_BYTES;
+    let mut chpl = None;
     for b in boxes(&moov) {
         let b = b?;
         match &b.kind.0 {
@@ -361,10 +494,16 @@ pub fn open<S: ByteSource>(src: S) -> Result<Mp4File> {
                     }
                 }
             }
-            b"udta" => parse_udta(b.payload, &mut file.metadata, &mut meta_left),
+            b"udta" => {
+                parse_udta(b.payload, &mut file.metadata, &mut meta_left);
+                chpl = find(b.payload, b"chpl");
+            }
             b"meta" => parse_meta(b.payload, &mut file.metadata, &mut meta_left),
             _ => {}
         }
+    }
+    if let Some(p) = chpl {
+        file.chpl_chapters = crate::isobmff::chapters::parse_chpl(p, file.timescale);
     }
     let mut budget = SampleBudget::new(len);
     for p in trak_payloads {
@@ -402,8 +541,37 @@ pub fn open<S: ByteSource>(src: S) -> Result<Mp4File> {
                 tc.start_frame = Some(u32::from_be_bytes(b));
             }
         }
+        t.mpeg_audio = mpeg_audio_layers(t, &src);
     }
     Ok(file)
+}
+
+/// For each [`CodecConfig::Mp3`] entry, the layer its first sample's frame header names (these
+/// entries name none: ffmpeg stores MP2 as `mp4a` + 0x6B), else what the sample entry says
+/// (QuickTime `.mp2`, `.mp3`).
+fn mpeg_audio_layers<S: ByteSource>(t: &Track, src: &S) -> Vec<Option<crate::CodecId>> {
+    use crate::CodecId;
+    let from_header = |index: u32| {
+        let s = t.samples.iter().find(|s| s.description_index == index && s.size >= 4)?;
+        let mut b = [0u8; 4];
+        src.read_at(s.offset, &mut b).ok()?;
+        if b[0] != 0xFF || b[1] & 0xE0 != 0xE0 {
+            return None;
+        }
+        match (b[1] >> 1) & 3 {
+            3 => Some(CodecId::Mp1),
+            2 => Some(CodecId::Mp2),
+            1 => Some(CodecId::Mp3),
+            _ => None,
+        }
+    };
+    (1..)
+        .zip(&t.entries)
+        .map(|(index, e)| match e.codec {
+            CodecConfig::Mp3 => from_header(index).or(Some(if e.format == b".mp2" { CodecId::Mp2 } else { CodecId::Mp3 })),
+            _ => None,
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -457,6 +625,7 @@ fn parse_trak(p: &[u8], file: &Mp4File, file_len: u64, budget: &mut SampleBudget
         pcm_chunked: false,
         sync_index: Vec::new(),
         pts_order: Vec::new(),
+        mpeg_audio: Vec::new(),
     };
     let mut mdia = None;
     for b in boxes(p) {
@@ -570,876 +739,10 @@ fn parse_trak(p: &[u8], file: &Mp4File, file_len: u64, budget: &mut SampleBudget
     Ok(t)
 }
 
-struct SttsCursor<'a> {
-    runs: &'a [(u32, u32)],
-    run: usize,
-    used: u32,
-}
+mod metadata;
+mod moof;
+mod stbl;
 
-impl SttsCursor<'_> {
-    /// Advance by `n` samples, returning the summed duration.
-    fn take(&mut self, mut n: u64) -> u64 {
-        let mut total = 0u64;
-        while n > 0 && self.run < self.runs.len() {
-            let (count, delta) = self.runs[self.run];
-            let avail = (count - self.used) as u64;
-            let k = avail.min(n);
-            total = total.saturating_add(k.saturating_mul(delta as u64));
-            n -= k;
-            self.used += k as u32;
-            if self.used >= count {
-                self.run += 1;
-                self.used = 0;
-            }
-        }
-        total
-    }
-    fn next_value(&mut self) -> u32 {
-        while self.run < self.runs.len() && self.runs[self.run].0 == 0 {
-            self.run += 1;
-        }
-        let Some(&(_, d)) = self.runs.get(self.run) else { return 0 };
-        self.take(1);
-        d
-    }
-}
-
-fn parse_stbl(stbl: &[u8], t: &mut Track, is_qt: bool, file_len: u64, budget: &mut SampleBudget) -> Result<()> {
-    let mut stts: Vec<(u32, u32)> = Vec::new();
-    let mut ctts: Vec<(u32, u32)> = Vec::new();
-    let mut stss: Option<Vec<u32>> = None;
-    let mut stsc: Vec<(u32, u32, u32)> = Vec::new();
-    let mut const_size = 0u32;
-    let mut sample_count = 0usize;
-    let mut sizes: Vec<u32> = Vec::new();
-    let mut chunks: Vec<u64> = Vec::new();
-    let mut sbgp: Vec<(FourCc, Vec<(u32, u32)>)> = Vec::new();
-    let mut sgpd: HashMap<FourCc, Vec<Vec<u8>>> = HashMap::new();
-    for b in boxes(stbl) {
-        let b = b?;
-        let mut c = Cur::labeled(b.payload, "stbl child");
-        match &b.kind.0 {
-            b"stsd" => {
-                c.full_header()?;
-                let n = c.count(8)?;
-                for e in boxes(c.rest()).take(n) {
-                    let e = e?;
-                    t.entries.push(parse_sample_entry(e.kind, e.payload, t.handler, is_qt)?);
-                }
-            }
-            b"stts" => {
-                c.full_header()?;
-                let n = c.count(8)?;
-                stts = (0..n).map(|_| Ok((c.u32()?, c.u32()?))).collect::<Result<_>>()?;
-            }
-            b"ctts" => {
-                c.full_header()?;
-                let n = c.count(8)?;
-                ctts = (0..n).map(|_| Ok((c.u32()?, c.u32()?))).collect::<Result<_>>()?;
-            }
-            b"stss" => {
-                c.full_header()?;
-                let n = c.count(4)?;
-                let mut v: Vec<u32> = (0..n).map(|_| c.u32()).collect::<Result<_>>()?;
-                v.sort_unstable();
-                stss = Some(v);
-            }
-            b"stsc" => {
-                c.full_header()?;
-                let n = c.count(12)?;
-                stsc = (0..n).map(|_| Ok((c.u32()?, c.u32()?, c.u32()?))).collect::<Result<_>>()?;
-            }
-            b"stsz" => {
-                c.full_header()?;
-                const_size = c.u32()?;
-                let n = c.u32()? as usize;
-                if const_size == 0 {
-                    c.check_count(n, 4)?;
-                    sizes = (0..n).map(|_| c.u32()).collect::<Result<_>>()?;
-                    sample_count = n;
-                } else {
-                    // Samples of constant size must fit in the file: clamp absurd counts.
-                    sample_count = (n as u64).min(file_len / const_size as u64) as usize;
-                }
-            }
-            b"stz2" => {
-                c.full_header()?;
-                let field = c.u32()? & 0xFF;
-                let n = c.u32()? as usize;
-                let bits = match field {
-                    4 | 8 | 16 => field as usize,
-                    _ => return invalid(format!("stz2 field size {field}")),
-                };
-                if n.checked_mul(bits).is_none_or(|b| b.div_ceil(8) > c.remaining()) {
-                    return Err(Error::Truncated("stz2"));
-                }
-                let d = c.rest();
-                sizes = (0..n)
-                    .map(|i| match bits {
-                        4 => ((d[i / 2] >> if i % 2 == 0 { 4 } else { 0 }) & 0xF) as u32,
-                        8 => d[i] as u32,
-                        _ => u16::from_be_bytes([d[2 * i], d[2 * i + 1]]) as u32,
-                    })
-                    .collect();
-                sample_count = n;
-            }
-            b"stco" => {
-                c.full_header()?;
-                let n = c.count(4)?;
-                chunks = (0..n).map(|_| c.u32().map(|v| v as u64)).collect::<Result<_>>()?;
-            }
-            b"co64" => {
-                c.full_header()?;
-                let n = c.count(8)?;
-                chunks = (0..n).map(|_| c.u64()).collect::<Result<_>>()?;
-            }
-            b"sdtp" => {
-                c.full_header()?;
-                t.sdtp = c.rest().to_vec();
-            }
-            b"sbgp" => {
-                let (v, _) = c.full_header()?;
-                let gt = c.fourcc()?;
-                if v == 1 {
-                    c.u32()?;
-                }
-                let n = c.count(8)?;
-                let runs = (0..n).map(|_| Ok((c.u32()?, c.u32()?))).collect::<Result<_>>()?;
-                sbgp.push((gt, runs));
-            }
-            b"sgpd" => {
-                let (v, _) = c.full_header()?;
-                let gt = c.fourcc()?;
-                let default_len = if v >= 1 { c.u32()? } else { 0 };
-                if v >= 2 {
-                    c.u32()?;
-                }
-                let n = c.count(0)?;
-                let mut descs = Vec::new();
-                for _ in 0..n {
-                    let l = if v >= 1 && default_len == 0 { c.u32()? } else { default_len };
-                    if l == 0 {
-                        // Version 0 without known length: keep the remainder as a single entry.
-                        descs.push(c.rest().to_vec());
-                        break;
-                    }
-                    descs.push(c.bytes(l as usize)?.to_vec());
-                }
-                sgpd.insert(gt, descs);
-            }
-            _ => {}
-        }
-    }
-    t.sample_groups =
-        sbgp.into_iter().map(|(gt, runs)| SampleGroup { grouping_type: gt, runs, descriptions: sgpd.remove(&gt).unwrap_or_default() }).collect();
-    if sample_count == 0 || chunks.is_empty() || stsc.is_empty() {
-        return Ok(());
-    }
-    if stsc[0].0 == 0 || stsc.windows(2).any(|w| w[1].0 <= w[0].0) {
-        return invalid("stsc first_chunk values are not increasing from 1");
-    }
-    let pcm = match t.entries.first().map(|e| &e.codec) {
-        Some(CodecConfig::Pcm(p)) if const_size != 0 => Some(*p),
-        _ => None,
-    };
-    let mut stts_c = SttsCursor { runs: &stts, run: 0, used: 0 };
-    let mut ctts_c = SttsCursor { runs: &ctts, run: 0, used: 0 };
-    let mut samples = Vec::new();
-    let mut sidx = 0usize;
-    let mut dts = 0i64;
-    let mut stsc_i = 0usize;
-    if let Some(p) = pcm {
-        t.pcm_chunked = true;
-        let a = t.audio().cloned().unwrap_or_default();
-        // Frames come in units of `unit` frames and `unit_bytes` bytes (QuickTime v1 packets).
-        let (unit, unit_bytes) = if a.qt_version == 1 && a.bytes_per_frame > 0 && a.samples_per_packet > 0 {
-            (u64::from(a.samples_per_packet), u64::from(a.bytes_per_frame))
-        } else if const_size > 1 {
-            (1, u64::from(const_size))
-        } else {
-            (1, u64::from(p.bytes_per_frame()))
-        };
-        let frame_bytes = |frames: u64| -> u64 { (frames / unit).saturating_mul(unit_bytes) };
-        let piece_frames = pcm_piece_frames(unit, unit_bytes);
-        if chunks.len() > budget.samples {
-            return Err(Error::TooLarge("chunk count"));
-        }
-        samples.reserve(chunks.len());
-        for (ci, &off) in chunks.iter().enumerate() {
-            while stsc_i + 1 < stsc.len() && stsc[stsc_i + 1].0 as usize <= ci + 1 {
-                stsc_i += 1;
-            }
-            let spc = (stsc[stsc_i].1 as usize).min(sample_count - sidx);
-            if spc == 0 {
-                continue;
-            }
-            // A chunk past PCM_MAX_SAMPLE_BYTES becomes several samples.
-            let mut left = spc as u64;
-            let mut pos = off;
-            while left > 0 {
-                if samples.len() >= budget.samples {
-                    return Err(Error::TooLarge("sample count"));
-                }
-                let split = frame_bytes(left) > PCM_MAX_SAMPLE_BYTES;
-                let frames = if split { piece_frames } else { left };
-                let dur = stts_c.take(frames);
-                let size = frame_bytes(frames);
-                if split {
-                    // Each piece is at least half of PCM_MAX_SAMPLE_BYTES, so the file's size
-                    // bounds how many a hostile chunk size can make.
-                    budget.implied_bytes = budget.implied_bytes.checked_sub(size).ok_or(Error::TooLarge("PCM chunk size"))?;
-                }
-                samples.push(Sample {
-                    offset: pos,
-                    size: size.min(u32::MAX as u64) as u32,
-                    dts,
-                    pts: dts,
-                    duration: dur.min(u32::MAX as u64) as u32,
-                    is_sync: true,
-                    description_index: stsc[stsc_i].2,
-                });
-                dts = dts.saturating_add(dur.min(i64::MAX as u64) as i64);
-                pos = pos.saturating_add(size);
-                left -= frames;
-            }
-            sidx += spc;
-            if sidx >= sample_count {
-                break;
-            }
-        }
-    } else {
-        if const_size != 0 {
-            sample_count = sample_count.min((budget.implied_bytes / const_size as u64) as usize);
-        }
-        if sample_count > budget.samples {
-            return Err(Error::TooLarge("sample count"));
-        }
-        // Reserve only what the chunk map can place. A declared count far past it would keep
-        // capacity the budget below never charges, track after track.
-        let mut mapped = 0usize;
-        let mut map_i = 0usize;
-        for ci in 0..chunks.len() {
-            while map_i + 1 < stsc.len() && stsc[map_i + 1].0 as usize <= ci + 1 {
-                map_i += 1;
-            }
-            mapped = mapped.saturating_add(stsc.get(map_i).map_or(0, |e| e.1 as usize));
-            if mapped >= sample_count {
-                break;
-            }
-        }
-        samples.try_reserve(sample_count.min(mapped)).map_err(|_| Error::TooLarge("sample count"))?;
-        let mut stss_i = 0usize;
-        'chunks: for (ci, &off) in chunks.iter().enumerate() {
-            while stsc_i + 1 < stsc.len() && stsc[stsc_i + 1].0 as usize <= ci + 1 {
-                stsc_i += 1;
-            }
-            let (_, spc, sdi) = stsc[stsc_i];
-            let mut pos = off;
-            for _ in 0..spc {
-                if sidx >= sample_count {
-                    break 'chunks;
-                }
-                let size = if const_size != 0 { const_size } else { sizes[sidx] };
-                let duration = stts_c.next_value();
-                let cts = ctts_c.next_value() as i32 as i64;
-                let is_sync = match &stss {
-                    None => true,
-                    Some(v) => {
-                        while stss_i < v.len() && (v[stss_i] as usize) < sidx + 1 {
-                            stss_i += 1;
-                        }
-                        stss_i < v.len() && v[stss_i] as usize == sidx + 1
-                    }
-                };
-                samples.push(Sample { offset: pos, size, dts, pts: dts.saturating_add(cts), duration, is_sync, description_index: sdi });
-                pos = pos.saturating_add(size as u64);
-                dts = dts.saturating_add(duration as i64);
-                sidx += 1;
-            }
-        }
-    }
-    if pcm.is_none() && const_size != 0 {
-        budget.implied_bytes -= samples.len() as u64 * const_size as u64;
-    }
-    budget.take(samples.len())?;
-    t.samples = samples;
-    Ok(())
-}
-
-fn parse_moof(
-    moof_off: u64,
-    moof: &[u8],
-    tracks: &mut [Track],
-    track_index: &HashMap<u32, usize>,
-    trex: &HashMap<u32, Trex>,
-    next_dts: &mut [i64],
-    budget: &mut SampleBudget,
-) -> Result<()> {
-    // End of data of the previous traf, for the base-offset default of subsequent trafs.
-    let mut prev_end: Option<u64> = None;
-    for b in boxes(moof) {
-        let b = b?;
-        if b.kind != b"traf" {
-            continue;
-        }
-        let mut tfhd = None;
-        let mut tfdt = None;
-        let mut truns = Vec::new();
-        for c in boxes(b.payload) {
-            let c = c?;
-            match &c.kind.0 {
-                b"tfhd" => tfhd = Some(c.payload),
-                b"tfdt" => tfdt = Some(c.payload),
-                b"trun" => truns.push(c.payload),
-                _ => {}
-            }
-        }
-        let tfhd = tfhd.ok_or_else(|| Error::Invalid("traf without tfhd".into()))?;
-        let mut c = Cur::labeled(tfhd, "tfhd");
-        let (_, fl) = c.full_header()?;
-        let id = c.u32()?;
-        let Some(&ti) = track_index.get(&id) else { continue };
-        let d = trex.get(&id).copied().unwrap_or_default();
-        let base = if fl & 1 != 0 {
-            c.u64()?
-        } else if fl & 0x20000 != 0 {
-            moof_off
-        } else {
-            prev_end.unwrap_or(moof_off)
-        };
-        let sdi = if fl & 2 != 0 { c.u32()? } else { d.description_index };
-        let def_dur = if fl & 8 != 0 { c.u32()? } else { d.duration };
-        let def_size = if fl & 0x10 != 0 { c.u32()? } else { d.size };
-        let def_flags = if fl & 0x20 != 0 { c.u32()? } else { d.flags };
-        if let Some(p) = tfdt {
-            let mut c = Cur::labeled(p, "tfdt");
-            let (v, _) = c.full_header()?;
-            let t = if v == 1 { c.u64()? } else { c.u32()? as u64 };
-            next_dts[ti] = t.min(i64::MAX as u64) as i64;
-        }
-        let mut data_pos = base;
-        for tr in truns {
-            let mut c = Cur::labeled(tr, "trun");
-            let (v, tf) = c.full_header()?;
-            let per = [0x100u32, 0x200, 0x400, 0x800].iter().filter(|&&f| tf & f != 0).count() * 4;
-            let n = c.u32()? as usize;
-            if per > 0 {
-                c.check_count(n, per)?;
-            } else {
-                let implied = (n as u64).saturating_mul(def_size.max(1) as u64);
-                budget.implied_bytes = budget.implied_bytes.checked_sub(implied).ok_or(Error::TooLarge("trun sample count"))?;
-            }
-            budget.take(n)?;
-            if tf & 1 != 0 {
-                data_pos = base.wrapping_add_signed(c.i32()? as i64);
-            }
-            let first_flags = if tf & 4 != 0 { Some(c.u32()?) } else { None };
-            let t = &mut tracks[ti];
-            t.samples.reserve(n);
-            for i in 0..n {
-                let dur = if tf & 0x100 != 0 { c.u32()? } else { def_dur };
-                let size = if tf & 0x200 != 0 { c.u32()? } else { def_size };
-                let flags = if tf & 0x400 != 0 { c.u32()? } else { def_flags };
-                // first_sample_flags overrides the flags of the first sample only.
-                let flags = if i == 0 { first_flags.unwrap_or(flags) } else { flags };
-                let cto = if tf & 0x800 != 0 {
-                    let raw = c.u32()?;
-                    if v == 0 { raw as i64 } else { raw as i32 as i64 }
-                } else {
-                    0
-                };
-                let dts = next_dts[ti];
-                t.samples.push(Sample {
-                    offset: data_pos,
-                    size,
-                    dts,
-                    pts: dts.saturating_add(cto),
-                    duration: dur,
-                    is_sync: flags & 0x1_0000 == 0,
-                    description_index: sdi,
-                });
-                data_pos = data_pos.saturating_add(size as u64);
-                next_dts[ti] = dts.saturating_add(dur as i64);
-            }
-        }
-        prev_end = Some(data_pos);
-    }
-    Ok(())
-}
-
-/// Takes an entry of `key_len` and `value_len` bytes from `left`; false once it would not fit.
-fn charge_metadata(left: &mut usize, key_len: usize, value_len: usize) -> bool {
-    let cost = key_len.saturating_add(value_len).saturating_add(METADATA_ENTRY_COST);
-    match left.checked_sub(cost) {
-        Some(rest) => {
-            *left = rest;
-            true
-        }
-        None => false,
-    }
-}
-
-/// Length of `String::from_utf8_lossy(bytes)` without building it: each invalid sequence
-/// becomes one three-byte U+FFFD.
-fn lossy_len(bytes: &[u8]) -> usize {
-    bytes.utf8_chunks().map(|c| c.valid().len() + if c.invalid().is_empty() { 0 } else { 3 }).sum()
-}
-
-fn parse_udta(p: &[u8], md: &mut Metadata, left: &mut usize) {
-    for b in boxes(p).map_while(|b| b.ok()) {
-        if b.kind == b"meta" {
-            parse_meta(b.payload, md, left);
-        } else if b.kind.0[0] == 0xA9 && b.payload.len() >= 4 {
-            let n = u16::from_be_bytes([b.payload[0], b.payload[1]]) as usize;
-            // Charged at the stored text's length, before the value is converted.
-            let key = b.kind.to_string_lossy();
-            if let Some(s) = b.payload.get(4..4 + n)
-                && charge_metadata(left, key.len(), lossy_len(s))
-            {
-                md.entries.push((key, String::from_utf8_lossy(s).into_owned()));
-            }
-        }
-    }
-}
-
-fn parse_meta(p: &[u8], md: &mut Metadata, left: &mut usize) {
-    // QuickTime `meta` is a plain box; ISO `meta` is a full box.
-    let body = if p.len() >= 8 && &p[4..8] == b"hdlr" { p } else { p.get(4..).unwrap_or(&[]) };
-    let mut keys: Vec<String> = Vec::new();
-    if let Some(k) = find(body, b"keys") {
-        let mut c = Cur::labeled(k, "keys");
-        if c.full_header().is_ok()
-            && let Ok(n) = c.count(8)
-        {
-            for _ in 0..n {
-                let Ok(sz) = c.u32() else { break };
-                let Ok(_ns) = c.u32() else { break };
-                let Ok(name) = c.bytes((sz as usize).saturating_sub(8)) else { break };
-                keys.push(String::from_utf8_lossy(name).into_owned());
-            }
-        }
-    }
-    let Some(ilst) = find(body, b"ilst") else { return };
-    for item in boxes(ilst).map_while(|b| b.ok()) {
-        let idx = item.kind.as_u32() as usize;
-        let named = if idx >= 1 { keys.get(idx - 1) } else { None };
-        if let Some(d) = find(item.payload, b"data")
-            && d.len() >= 8
-        {
-            let ty = u32::from_be_bytes([d[0], d[1], d[2], d[3]]) & 0xFF_FFFF;
-            // Charged before the key is copied (every item naming one long key is another copy)
-            // and before the value is converted, at the lengths they will be stored at.
-            if ty == 1 || ty == 0 {
-                let fallback = if named.is_none() { Some(item.kind.to_string_lossy()) } else { None };
-                let key_len = named.or(fallback.as_ref()).map_or(0, String::len);
-                if charge_metadata(left, key_len, lossy_len(&d[8..])) {
-                    let key = named.cloned().or(fallback).unwrap_or_default();
-                    md.entries.push((key, String::from_utf8_lossy(&d[8..]).into_owned()));
-                }
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn language_codes() {
-        // "und" = 0x55C4
-        assert_eq!(parse_language(0x55C4), "und");
-        assert_eq!(parse_language(0), "eng");
-        assert_eq!(parse_language(0x15C7), "eng");
-    }
-
-    #[test]
-    fn stts_cursor() {
-        let runs = [(2, 10), (0, 99), (3, 5)];
-        let mut c = SttsCursor { runs: &runs, run: 0, used: 0 };
-        assert_eq!(c.next_value(), 10);
-        assert_eq!(c.take(3), 10 + 5 + 5);
-        assert_eq!(c.next_value(), 5);
-        assert_eq!(c.next_value(), 0);
-    }
-
-    #[test]
-    fn rejects_no_moov_and_cmov() {
-        let mut b = crate::isobmff::bytes::BoxBuf::new();
-        b.leaf(b"free", &[0; 4]);
-        assert!(matches!(open(b.buf.clone()), Err(Error::NoMoov)));
-        let m = b.start(b"moov");
-        b.leaf(b"cmov", &[]);
-        b.end(m);
-        assert!(matches!(open(b.buf), Err(Error::Unsupported(_))));
-    }
-
-    #[test]
-    fn metadata_qt_and_ilst() {
-        let mut b = crate::isobmff::bytes::BoxBuf::new();
-        let m = b.start(&[0xA9, b'n', b'a', b'm']);
-        b.u16(2);
-        b.u16(0);
-        b.bytes(b"hi");
-        b.end(m);
-        let meta = b.start_full(b"meta", 0, 0);
-        b.leaf(b"hdlr", &[0; 24]);
-        let il = b.start(b"ilst");
-        let it = b.start(&[0xA9, b'A', b'R', b'T']);
-        let d = b.start(b"data");
-        b.u32(1);
-        b.u32(0);
-        b.bytes(b"me");
-        b.end(d);
-        b.end(it);
-        b.end(il);
-        b.end(meta);
-        let mut md = Metadata::default();
-        parse_udta(&b.buf, &mut md, &mut { MAX_METADATA_BYTES });
-        assert_eq!(md.title(), Some("hi"));
-        assert_eq!(md.get("©ART"), Some("me"));
-    }
-
-    use crate::isobmff::bytes::BoxBuf;
-
-    fn full(b: &mut BoxBuf, kind: &[u8; 4], v: u8, f: impl FnOnce(&mut BoxBuf)) {
-        let m = b.start_full(kind, v, 0);
-        f(b);
-        b.end(m);
-    }
-
-    /// Hand-built file: uuid/wide/skip boxes, stz2 sizes, co64, ctts v1 with negative offsets,
-    /// stss, sdtp, sbgp/sgpd, and an edit list with a leading empty edit.
-    fn handmade(stsz_override: Option<(u32, u32)>) -> Vec<u8> {
-        let mut b = BoxBuf::new();
-        let m = b.start(b"ftyp");
-        b.bytes(b"isom");
-        b.u32(0);
-        b.bytes(b"isom");
-        b.end(m);
-        let m = b.start(b"uuid");
-        b.bytes(&[0xAB; 16]);
-        b.bytes(b"payload");
-        b.end(m);
-        b.leaf(b"wide", &[]);
-        b.leaf(b"skip", &[1, 2, 3]);
-        // mdat with 64-bit size: 4 samples of 3,1,2,4 bytes.
-        let data_start = b.len() as u64 + 16;
-        b.u32(1);
-        b.bytes(b"mdat");
-        b.u64(16 + 10);
-        b.bytes(&[1, 1, 1, 2, 3, 3, 4, 4, 4, 4]);
-        let moov = b.start(b"moov");
-        full(&mut b, b"mvhd", 0, |b| {
-            b.u32(0);
-            b.u32(0);
-            b.u32(1000);
-            b.u32(500);
-            b.zeros(80);
-        });
-        let trak = b.start(b"trak");
-        full(&mut b, b"tkhd", 0, |b| {
-            b.u32(0);
-            b.u32(0);
-            b.u32(7);
-            b.u32(0);
-            b.u32(500);
-            b.zeros(52);
-            b.u32(320 << 16);
-            b.u32(240 << 16);
-        });
-        let edts = b.start(b"edts");
-        full(&mut b, b"elst", 1, |b| {
-            b.u32(2);
-            b.u64(100);
-            b.i64(-1);
-            b.i32(0x10000);
-            b.u64(400);
-            b.i64(20);
-            b.i32(0x10000);
-        });
-        b.end(edts);
-        let mdia = b.start(b"mdia");
-        full(&mut b, b"mdhd", 0, |b| {
-            b.u32(0);
-            b.u32(0);
-            b.u32(100);
-            b.u32(40);
-            b.u16(0x15C7);
-            b.u16(0);
-        });
-        full(&mut b, b"hdlr", 0, |b| {
-            b.u32(0);
-            b.bytes(b"vide");
-            b.zeros(12);
-            b.bytes(b"Video\0");
-        });
-        let minf = b.start(b"minf");
-        let stbl = b.start(b"stbl");
-        full(&mut b, b"stsd", 0, |b| {
-            b.u32(1);
-            crate::isobmff::codec::SampleEntry::jpeg(320, 240).write(b, false).unwrap();
-        });
-        full(&mut b, b"stts", 0, |b| {
-            b.u32(1);
-            b.u32(4);
-            b.u32(10);
-        });
-        full(&mut b, b"ctts", 1, |b| {
-            b.u32(2);
-            b.u32(2);
-            b.i32(-5);
-            b.u32(2);
-            b.i32(5);
-        });
-        full(&mut b, b"stss", 0, |b| {
-            b.u32(2);
-            b.u32(3);
-            b.u32(1);
-        });
-        full(&mut b, b"stsc", 0, |b| {
-            b.u32(2);
-            b.u32(1);
-            b.u32(3);
-            b.u32(1);
-            b.u32(2);
-            b.u32(1);
-            b.u32(1);
-        });
-        match stsz_override {
-            Some((size, count)) => full(&mut b, b"stsz", 0, |b| {
-                b.u32(size);
-                b.u32(count);
-            }),
-            None => full(&mut b, b"stz2", 0, |b| {
-                b.u32(4);
-                b.u32(4);
-                b.u8(0x31);
-                b.u8(0x24);
-            }),
-        }
-        full(&mut b, b"co64", 0, |b| {
-            b.u32(2);
-            b.u64(data_start);
-            b.u64(data_start + 6);
-        });
-        full(&mut b, b"sdtp", 0, |b| b.bytes(&[0x20, 0x10, 0x10, 0x10]));
-        full(&mut b, b"sbgp", 0, |b| {
-            b.bytes(b"roll");
-            b.u32(1);
-            b.u32(4);
-            b.u32(1);
-        });
-        full(&mut b, b"sgpd", 1, |b| {
-            b.bytes(b"roll");
-            b.u32(2);
-            b.u32(1);
-            b.i16(-1);
-        });
-        b.end(stbl);
-        b.end(minf);
-        b.end(mdia);
-        b.end(trak);
-        b.end(moov);
-        // Trailing box extending to EOF (size 0).
-        b.u32(0);
-        b.bytes(b"free");
-        b.bytes(&[9; 5]);
-        b.buf
-    }
-
-    #[test]
-    fn handmade_sample_table() {
-        let d = handmade(None);
-        let f = open(d.as_slice()).unwrap();
-        assert_eq!(f.major_brand, *b"isom");
-        let t = &f.tracks[0];
-        assert_eq!((t.id, t.kind, t.timescale, t.language.as_str()), (7, TrackKind::Video, 100, "eng"));
-        assert_eq!((t.width, t.height), (320, 240));
-        assert_eq!(t.handler_name, "Video");
-        let sizes: Vec<u32> = t.samples.iter().map(|s| s.size).collect();
-        assert_eq!(sizes, [3, 1, 2, 4]);
-        let offs: Vec<u64> = t.samples.iter().map(|s| s.offset - t.samples[0].offset).collect();
-        assert_eq!(offs, [0, 3, 4, 6]);
-        let pts: Vec<i64> = t.samples.iter().map(|s| s.pts).collect();
-        assert_eq!(pts, [-5, 5, 25, 35]);
-        let sync: Vec<bool> = t.samples.iter().map(|s| s.is_sync).collect();
-        assert_eq!(sync, [true, false, true, false]);
-        for (i, want) in [vec![1u8, 1, 1], vec![2], vec![3, 3], vec![4; 4]].iter().enumerate() {
-            assert_eq!(&f.read_sample(d.as_slice(), 0, i).unwrap(), want);
-        }
-        // Empty edit of 100 movie ticks = 10 media ticks, then media starts at 20.
-        assert_eq!(t.edits.len(), 2);
-        assert_eq!(t.edit_offset, 10 - 20);
-        assert_eq!(t.presentation_pts(2), Some(15));
-        assert_eq!(t.sdtp.len(), 4);
-        assert_eq!(t.sample_groups[0].grouping_type, *b"roll");
-        assert_eq!(t.sample_groups[0].descriptions, vec![vec![0xFF, 0xFF]]);
-        assert!(f.read_sample(d.as_slice(), 0, 4).is_err());
-        assert!(f.read_sample(d.as_slice(), 1, 0).is_err());
-    }
-
-    #[test]
-    fn constant_size_samples_share_one_file_budget() {
-        // One chunk of u32::MAX constant-size samples makes a track build one sample per file
-        // byte. Repeating the track must not repeat that allocation.
-        let mut d = handmade(Some((1, u32::MAX)));
-        let p = d.windows(4).position(|w| w == b"stsc").unwrap();
-        d[p + 16..p + 20].copy_from_slice(&u32::MAX.to_be_bytes());
-        let at = d.windows(4).position(|w| w == b"trak").unwrap() - 4;
-        let size = u32::from_be_bytes(d[at..at + 4].try_into().unwrap()) as usize;
-        let trak = d[at..at + size].to_vec();
-        for _ in 0..3 {
-            d.splice(at..at, trak.iter().copied());
-        }
-        let moov = d.windows(4).position(|w| w == b"moov").unwrap() - 4;
-        let moov_size = u32::from_be_bytes(d[moov..moov + 4].try_into().unwrap()) + 3 * size as u32;
-        d[moov..moov + 4].copy_from_slice(&moov_size.to_be_bytes());
-        let f = open(d.as_slice()).unwrap();
-        assert_eq!(f.tracks.len(), 4);
-        assert!(f.tracks[0].samples.len() > d.len() / 2);
-        assert!(f.tracks.iter().map(|t| t.samples.len()).sum::<usize>() <= d.len());
-    }
-
-    #[test]
-    fn oversized_trailing_box_ends_the_scan() {
-        let mut d = handmade(None);
-        d.truncate(d.len() - 13);
-        d.extend_from_slice(&1u32.to_be_bytes());
-        d.extend_from_slice(b"free");
-        d.extend_from_slice(&u64::MAX.to_be_bytes());
-        d.extend_from_slice(&[0; 16]);
-        assert_eq!(open(d.as_slice()).unwrap().tracks[0].samples.len(), 4);
-    }
-
-    #[test]
-    fn one_long_key_named_by_many_items_stays_within_the_metadata_budget() {
-        let key = vec![b'k'; 64 * 1024];
-        let mut b = BoxBuf::new();
-        b.leaf(b"hdlr", &[0; 24]);
-        let keys = b.start_full(b"keys", 0, 0);
-        b.u32(1);
-        b.u32(8 + key.len() as u32);
-        b.bytes(b"mdta");
-        b.bytes(&key);
-        b.end(keys);
-        let il = b.start(b"ilst");
-        for _ in 0..1000 {
-            let it = b.start(&1u32.to_be_bytes());
-            let d = b.start(b"data");
-            b.u32(1);
-            b.u32(0);
-            b.bytes(b"v");
-            b.end(d);
-            b.end(it);
-        }
-        b.end(il);
-        let mut payload = vec![0; 4];
-        payload.extend_from_slice(&b.buf);
-        let mut md = Metadata::default();
-        parse_meta(&payload, &mut md, &mut { MAX_METADATA_BYTES });
-        assert!(!md.entries.is_empty() && md.entries.len() < 1000, "{}", md.entries.len());
-        assert!(md.entries.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>() <= MAX_METADATA_BYTES);
-        assert_eq!(md.entries[0].0.len(), key.len());
-    }
-
-    #[test]
-    fn metadata_is_charged_at_its_stored_length() {
-        assert_eq!(lossy_len(b"plain"), 5);
-        for bytes in [&b"a\xFFb"[..], b"\xFF\xFE\xFD", b"\xE2\x82", "\u{a9}nam".as_bytes()] {
-            assert_eq!(lossy_len(bytes), String::from_utf8_lossy(bytes).len(), "{bytes:?}");
-        }
-        // Invalid UTF-8 triples in size when converted; the budget sees the converted size.
-        let mut b = BoxBuf::new();
-        let m = b.start(&[0xA9, b'n', b'a', b'm']);
-        b.u16(1000);
-        b.u16(0);
-        b.bytes(&[0xFF; 1000]);
-        b.end(m);
-        let mut md = Metadata::default();
-        let mut left = 3000 + METADATA_ENTRY_COST + 5;
-        parse_udta(&b.buf, &mut md, &mut left);
-        assert_eq!(md.entries.len(), 1);
-        assert_eq!(md.entries[0].0.len() + md.entries[0].1.len(), 3000 + 5 - left);
-    }
-
-    #[test]
-    fn a_declared_sample_count_past_the_chunk_map_reserves_only_what_it_maps() {
-        // stsz claims u32::MAX samples; the two chunks place four.
-        let d = handmade(Some((1, u32::MAX)));
-        let f = open(d.as_slice()).unwrap();
-        assert_eq!(f.tracks[0].samples.len(), 4);
-        assert!(f.tracks[0].samples.capacity() < 64, "{}", f.tracks[0].samples.capacity());
-    }
-
-    #[test]
-    fn absurd_counts_are_bounded() {
-        // Constant-size stsz claiming 4 billion samples is clamped to what fits in the file.
-        let d = handmade(Some((1, u32::MAX)));
-        let f = open(d.as_slice()).unwrap();
-        assert!(f.tracks[0].samples.len() <= d.len());
-        // A table claiming more entries than its box holds fails cleanly.
-        let mut d = handmade(None);
-        let p = d.windows(4).position(|w| w == b"stts").unwrap();
-        d[p + 8..p + 12].copy_from_slice(&u32::MAX.to_be_bytes());
-        assert!(matches!(open(d.as_slice()), Err(Error::Truncated(_))));
-        // Box larger than its parent.
-        let mut d = handmade(None);
-        let p = d.windows(4).position(|w| w == b"stsc").unwrap();
-        d[p - 4..p].copy_from_slice(&0x7FFF_FFFFu32.to_be_bytes());
-        assert!(open(d.as_slice()).is_err());
-    }
-    /// `data` followed by zeros up to `len` bytes.
-    struct Padded(Vec<u8>, u64);
-
-    impl ByteSource for Padded {
-        fn len(&self) -> u64 {
-            self.1
-        }
-        fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
-            buf.fill(0);
-            let start = (offset as usize).min(self.0.len());
-            let end = (start + buf.len()).min(self.0.len());
-            buf[..end - start].copy_from_slice(&self.0[start..end]);
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn samples_scale_with_the_file_length() {
-        assert_eq!(SampleBudget::new(1000).samples, MIN_SAMPLE_ALLOWANCE);
-        assert_eq!(SampleBudget::new(64 << 20).samples, 16 << 20);
-        assert_eq!(SampleBudget::new(u64::MAX).samples, MAX_SAMPLES);
-        // A constant-size stsz of one-byte samples claims as many as a 64 MiB file has bytes.
-        let d = handmade(Some((1, u32::MAX)));
-        assert!(matches!(open(Padded(d, 64 << 20)), Err(Error::TooLarge(_))));
-    }
-
-    #[test]
-    fn a_pcm_chunk_past_4_gib_reads_as_bounded_samples() {
-        use crate::isobmff::{Brand, Mp4Writer, PcmConfig, TrackConfig, WriteSample, WriterOptions};
-        let pcm = PcmConfig { bits: 8, float: false, big_endian: false, signed: false, channels: 1, sample_rate: 48000.0 };
-        let mut w = Mp4Writer::new(std::io::Cursor::new(Vec::new()), WriterOptions::new(Brand::Mov)).unwrap();
-        let t = w.add_track(TrackConfig::new(SampleEntry::pcm(pcm), 48000)).unwrap();
-        w.write_sample(t, WriteSample { data: &[0; 4], duration: 0, composition_offset: 0, is_sync: true }).unwrap();
-        let mut d = w.finish_faststart().unwrap().into_inner();
-        // One chunk of u32::MAX one-byte frames, as a writer without chunk limits makes for a
-        // 4 GiB recording.
-        let frames = u32::MAX.to_be_bytes();
-        for (kind, at) in [(b"stts", 12), (b"stsz", 12), (b"stsc", 16)] {
-            let p = d.windows(4).position(|w| w == kind).unwrap();
-            d[p + at..p + at + 4].copy_from_slice(&frames);
-        }
-        // In a file too small for it, the claim is clamped to the file.
-        let f = open(d.as_slice()).unwrap();
-        assert!(f.tracks[0].samples.iter().map(|s| u64::from(s.size)).sum::<u64>() <= d.len() as u64);
-        let len = d.len() as u64 + u64::from(u32::MAX);
-        let f = open(Padded(d, len)).unwrap();
-        let s = &f.tracks[0].samples;
-        assert_eq!(s.len(), 256);
-        assert!(s.iter().all(|s| u64::from(s.size) <= PCM_MAX_SAMPLE_BYTES));
-        assert_eq!(s.iter().map(|s| u64::from(s.size)).sum::<u64>(), u64::from(u32::MAX));
-        assert_eq!(s.iter().map(|s| u64::from(s.duration)).sum::<u64>(), u64::from(u32::MAX));
-        assert!(s.windows(2).all(|w| w[1].offset == w[0].offset + u64::from(w[0].size) && w[1].dts == w[0].dts + i64::from(w[0].duration)));
-    }
-}
+use metadata::{parse_meta, parse_udta};
+use moof::parse_moof;
+use stbl::parse_stbl;
