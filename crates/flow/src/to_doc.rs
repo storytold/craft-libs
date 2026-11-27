@@ -158,6 +158,9 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
         }
         out.numbering = Some(NumRef { num, level: li.level.min(8) });
     }
+    if p.list.is_none() {
+        out.list_item = p.item.map(|l| l.min(8));
+    }
     out.align = p.align;
     if p.rtl {
         out.bidi = Some(true);
@@ -284,6 +287,18 @@ impl<'a> Builder<'a> {
 
     /// `cp` as a run may keep it: without its link and font once the runs' copies of them are
     /// over budget.
+    /// A run's properties with its tracked insertion, deletion and formatting change.
+    fn tracked_props(&mut self, f: &Fmt) -> CharProps {
+        let mut cp = self.budget(char_props(f));
+        cp.ins = f.ins.as_ref().map(|m| self.revision(RevisionKind::Insert, m));
+        cp.del = f.del.as_ref().map(|m| self.revision(RevisionKind::Delete, m));
+        if let Some(c) = &f.fmt_change {
+            let old = self.budget(char_props(&c.old));
+            cp.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, &c.mark), old);
+        }
+        cp
+    }
+
     fn budget(&mut self, mut cp: CharProps) -> CharProps {
         let n = cp.link.as_ref().map_or(0, String::len).saturating_add(cp.font.as_ref().map_or(0, String::len));
         match self.run_strings.checked_add(n).filter(|&t| t <= MAX_RUN_STRINGS) {
@@ -553,13 +568,7 @@ impl<'a> Builder<'a> {
             match i {
                 Inline::Text(t, f) => {
                     let t = clean_text(t);
-                    let mut cp = self.budget(char_props(f));
-                    cp.ins = f.ins.as_ref().map(|m| self.revision(RevisionKind::Insert, m));
-                    cp.del = f.del.as_ref().map(|m| self.revision(RevisionKind::Delete, m));
-                    if let Some(c) = &f.fmt_change {
-                        let old = self.budget(char_props(&c.old));
-                        cp.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, &c.mark), old);
-                    }
+                    let mut cp = self.tracked_props(f);
                     if p.kind == Kind::Code {
                         // Code's font comes from its style, before a change as after it.
                         if cp.font.as_deref() == Some(MONO_FONT) {
@@ -633,7 +642,8 @@ impl<'a> Builder<'a> {
                     }
                 }
                 Inline::Field { instr, result, fmt, locked } => {
-                    let cp = self.budget(char_props(fmt));
+                    // A field inserted or deleted with tracked changes keeps them (RTF `\chpgn`).
+                    let cp = self.tracked_props(fmt);
                     let (instr, result) = (clean_text(instr), clean_text(result));
                     if instr.trim().is_empty() {
                         append(&mut out, &result, &cp, None);
@@ -759,6 +769,12 @@ impl<'a> Builder<'a> {
 
     fn blocks(&mut self, blocks: &[FBlock], depth: usize) -> Blocks {
         let mut out = Blocks::new();
+        // Each list the source numbers, all of it in these blocks: a run of it after a paragraph
+        // it doesn't number may be the first to use a level.
+        let mut of_list: std::collections::HashMap<u32, Vec<ListInfo>> = std::collections::HashMap::new();
+        for li in blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { p.list } else { None }).filter(|li| li.list != 0) {
+            of_list.entry(li.list).or_default().push(li);
+        }
         let mut i = 0;
         while let Some(b) = blocks.get(i) {
             match b {
@@ -772,7 +788,14 @@ impl<'a> Builder<'a> {
                     let mut top: Option<bool> = None;
                     let id = p.list.map_or(0, |l| l.list);
                     while let Some(FBlock::Para(q)) = blocks.get(j) {
-                        let Some(li) = q.list else { break };
+                        let Some(li) = q.list else {
+                            // An item's further paragraph is in the list: it goes on after it.
+                            if super::continues_list(blocks, j).is_some() {
+                                j += 1;
+                                continue;
+                            }
+                            break;
+                        };
                         if li.list != id {
                             break;
                         }
@@ -788,7 +811,9 @@ impl<'a> Builder<'a> {
                     let num = match self.lists.get(&id) {
                         Some(num) if id != 0 => *num,
                         _ => {
-                            let num = self.new_list(&group);
+                            // First met here, so this is the only time it's asked for.
+                            let all = if id == 0 { group } else { of_list.remove(&id).unwrap_or(group) };
+                            let num = self.new_list(&all);
                             if id != 0 {
                                 self.lists.insert(id, num);
                             }
@@ -906,6 +931,41 @@ impl<'a> Builder<'a> {
                 row.cells.push(craft_wordmodel::Cell::empty());
             }
             tb.rows.push(row);
+        }
+        let starts: Vec<(usize, usize)> = (0..tb.rows.first().map_or(0, |row| row.cells.len()))
+            .filter(|&ci| tb.rows.first().and_then(|row| row.cells.get(ci)).is_some_and(|c| c.props.vmerge == VMerge::Continue))
+            .map(|ci| (ci, tb.grid_col(0, ci)))
+            .collect();
+        for (ci, g) in starts {
+            let span = tb.rows.first().map_or(1, |r| r.cells[ci].props.span);
+            let more = tb
+                .cell_at_grid(1, g)
+                .filter(|&i| tb.grid_col(1, i) == g)
+                .and_then(|i| tb.rows.get(1)?.cells.get(i))
+                .is_some_and(|c| c.props.vmerge == VMerge::Continue && c.props.span == span);
+            if let Some(cell) = tb.rows.first_mut().and_then(|r| r.cells.get_mut(ci)) {
+                cell.props.vmerge = if more { VMerge::Restart } else { VMerge::None };
+            }
+        }
+        for r in 1..tb.rows.len() {
+            for ci in 0..tb.rows[r].cells.len() {
+                if tb.rows[r].cells[ci].props.vmerge == VMerge::Continue {
+                    let g = tb.grid_col(r, ci);
+                    let span = tb.rows[r].cells[ci].props.span;
+                    let prev_r = r - 1;
+                    if let Some(up_ci) = tb.cell_at_grid(prev_r, g)
+                        && tb.grid_col(prev_r, up_ci) == g
+                        && tb.rows[prev_r].cells[up_ci].props.span == span
+                    {
+                        let up_cell = &mut tb.rows[prev_r].cells[up_ci];
+                        if up_cell.props.vmerge == VMerge::None {
+                            up_cell.props.vmerge = VMerge::Restart;
+                        }
+                    } else {
+                        tb.rows[r].cells[ci].props.vmerge = VMerge::None;
+                    }
+                }
+            }
         }
         // Its markup kept for the writer, by its place among the top's tables.
         if depth == 0 {

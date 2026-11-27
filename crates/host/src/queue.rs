@@ -16,8 +16,11 @@
 //! On wasm32 there are no threads: [`QueueOptions::default_lanes`] is 0 and the owner calls
 //! [`JobQueue::run_inline`] once per pass.
 
+use std::cmp::Reverse;
 use std::collections::VecDeque;
 use std::hash::Hash;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, ThreadId};
@@ -73,26 +76,45 @@ pub struct QueueOptions {
     pub lanes: usize,
     /// The name each lane's job is spawned with (a thread name with `ThreadJobs`).
     pub name: &'static str,
+    /// Which of two jobs of equal priority runs first.
+    pub order: QueueOrder,
+}
+
+/// Which job runs first among jobs of equal priority: the one that arrived last or first. Priority
+/// always decides first; the order only breaks ties.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum QueueOrder {
+    /// The newest job runs first: what was asked for last is what the user looks at now (a
+    /// thumbnail scrolled into view, the latest slider value).
+    #[default]
+    NewestFirst,
+    /// The oldest job runs first: every job is wanted and arrival order is the user's order (files
+    /// opened one after another).
+    OldestFirst,
 }
 
 impl QueueOptions {
     /// Lanes for this machine: the number of cores less one, at least 2 and at most 8 (4 when
-    /// the core count is unknown); 0 on wasm32.
+    /// the core count is unknown); 0 on wasm32. The core count is read once per process.
     // lightcraft: crates/preview/src/pool.rs:104 `default_threads` (cores − 1 clamped to 2..=8;
     // ours is 0 on wasm32 instead of 1, because wasm runs jobs only through `run_inline`).
     pub fn default_lanes() -> usize {
         #[cfg(target_arch = "wasm32")]
         return 0;
         #[cfg(not(target_arch = "wasm32"))]
-        thread::available_parallelism().map_or(4, |n| n.get().saturating_sub(1).clamp(2, 8))
+        {
+            static LANES: OnceLock<usize> = OnceLock::new();
+            *LANES.get_or_init(|| thread::available_parallelism().map_or(4, |n| n.get().saturating_sub(1).clamp(2, 8)))
+        }
     }
 }
 
 impl Default for QueueOptions {
-    /// [`default_lanes`](QueueOptions::default_lanes) lanes named `"craft-queue"`.
+    /// [`default_lanes`](QueueOptions::default_lanes) lanes named `"craft-queue"`, newest first.
     fn default() -> Self {
         // new: the default every library queue starts from.
-        Self { lanes: Self::default_lanes(), name: "craft-queue" }
+        Self { lanes: Self::default_lanes(), name: "craft-queue", order: QueueOrder::default() }
     }
 }
 
@@ -124,7 +146,7 @@ type QueueJob<R> = Box<dyn FnOnce(&Cancel) -> R + Send>;
 struct Queued<K, R> {
     key: K,
     priority: Priority,
-    /// Submission order: among equal priorities the newest runs first.
+    /// Submission order: among equal priorities [`QueueOrder`] picks the newest or the oldest.
     seq: u64,
     job: QueueJob<R>,
 }
@@ -157,6 +179,8 @@ struct State<K, R> {
     lanes_alive: usize,
     seq: u64,
     stopped: bool,
+    /// The tie order of [`best`](Self::best), from the queue's options.
+    order: QueueOrder,
 }
 
 struct Shared<K, R> {
@@ -186,14 +210,15 @@ impl<K, R> State<K, R> {
 }
 
 impl<K: Clone + Eq, R> State<K, R> {
-    /// Index of the best waiting job whose key is not running: highest priority, then newest.
+    /// Index of the best waiting job whose key is not running: highest priority, then the newest
+    /// or the oldest as [`QueueOrder`] says.
     fn best(&self) -> Option<usize> {
-        self.queued
-            .iter()
-            .enumerate()
-            .filter(|(_, q)| !self.running.iter().any(|r| r.key == q.key))
-            .max_by_key(|(_, q)| (q.priority, q.seq))
-            .map(|(i, _)| i)
+        let startable = self.queued.iter().enumerate().filter(|(_, q)| !self.running.iter().any(|r| r.key == q.key));
+        match self.order {
+            QueueOrder::NewestFirst => startable.max_by_key(|(_, q)| (q.priority, q.seq)),
+            QueueOrder::OldestFirst => startable.max_by_key(|(_, q)| (q.priority, Reverse(q.seq))),
+        }
+        .map(|(i, _)| i)
     }
 
     /// Moves the best startable job to `running` and returns it.
@@ -307,7 +332,8 @@ impl<K: Clone + Eq + Send + 'static, R: Send + 'static> Shared<K, R> {
 ///   replaces a queued job of the same key, so scrolling or a slider drag never builds a backlog.
 ///   A key runs one job at a time: a key's next job waits until its running one ends (overlapping
 ///   renders of one picture are mostly thrown away).
-/// - **Order.** Highest [`Priority`] first; among equal priorities the newest first.
+/// - **Order.** Highest [`Priority`] first; among equal priorities the newest first, or the oldest
+///   with [`QueueOrder::OldestFirst`] ([`QueueOptions::order`]).
 ///   [`reprioritize`](Self::reprioritize) re-ranks the waiting jobs or drops them; dropping a key
 ///   whose job runs sets its [`Cancel`] and its result is never delivered.
 /// - **Lanes.** At most [`QueueOptions::lanes`] jobs run at once, each started through the
@@ -343,7 +369,15 @@ impl<K: Clone + Eq + Hash + Send + 'static, R: Send + 'static> JobQueue<K, R> {
     /// after each finished job. No lane starts before the first [`submit`](Self::submit).
     pub fn new(jobs: Arc<dyn Jobs>, wake: Wake, options: QueueOptions) -> Self {
         // new: lanes are spawned on demand by `submit` and by a lane that ends with work waiting.
-        let state = State { queued: Vec::new(), running: Vec::new(), finished: VecDeque::new(), lanes_alive: 0, seq: 0, stopped: false };
+        let state = State {
+            queued: Vec::new(),
+            running: Vec::new(),
+            finished: VecDeque::new(),
+            lanes_alive: 0,
+            seq: 0,
+            stopped: false,
+            order: options.order,
+        };
         Self { shared: Arc::new(Shared { state: Mutex::new(state), ended: Condvar::new(), jobs, wake, options }) }
     }
 

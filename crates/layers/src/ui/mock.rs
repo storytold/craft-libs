@@ -1,21 +1,22 @@
 //! `FakeLayers`: a `LayerTree` for stories and tests.
 
-use std::cell::Cell;
-
 use craft_theme::LabelColor;
-use craft_ui::contract::Entry;
+use craft_ui::contract::{Entry, PlainData};
+use craft_ui::list::LabelUnderline;
 use craft_ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut as S, blend_entries};
 use craft_ui::runtime::env::Label;
+use craft_ui::style::DataColor;
+use egui::Color32;
 
 use super::filter::{EffectKind, FilterBy, LayerAttribute, LayerFilter, SmartKind, SmartSource};
 use super::tree::LayerRowKey;
 use super::tree::{
-    LayerInfo, LayerKind, LayerLocks, LayerPart, LayerProperties, LayerSelection, LayerTree, LayersFooterState, MaskInfo, SubRow, SubRowGroup,
-    SubRows, ThumbBadge,
+    LayerInfo, LayerKind, LayerLocks, LayerPart, LayerProperties, LayerSelection, LayerTree, LayerView, LayersFooterState, MaskInfo, SubRow,
+    SubRowGroup, SubRows, ThumbBadge,
 };
 
 /// One layer of a [`FakeLayers`] tree.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PlainData)]
 #[non_exhaustive]
 pub struct FakeLayer {
     /// The layer's id.
@@ -36,7 +37,7 @@ pub struct FakeLayer {
 
 /// A fake document's layers, kept in plain vectors: the tests' and stories' `LayerTree`. Ids are
 /// `u32`; the app's state (open groups, selection, effects open) is a field the test sets.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PlainData)]
 #[non_exhaustive]
 pub struct FakeLayers {
     /// Every layer, each group before its children, topmost first among siblings.
@@ -45,15 +46,11 @@ pub struct FakeLayers {
     pub selection: LayerSelection<u32>,
     /// The layer under the pointer on the canvas.
     pub hovered: Option<u32>,
-    /// The revision the tree reports; `None` walks every pass.
-    pub revision: Option<u64>,
     /// The layers with no visible pixels, which only the app knows: the Attribute filter's Empty.
     pub empty: Vec<u32>,
     /// The linked smart objects whose file is not there, which only the app knows: the Smart Object
     /// filter's Missing.
     pub missing: Vec<u32>,
-    info_calls: Cell<usize>,
-    sub_rows_calls: Cell<usize>,
 }
 
 impl FakeLayers {
@@ -302,14 +299,49 @@ impl FakeLayers {
         tree
     }
 
-    /// How many times `info` was called since the last [`take_info_calls`](Self::take_info_calls).
-    pub fn take_info_calls(&self) -> usize {
-        self.info_calls.replace(0)
-    }
-
-    /// How many times `sub_rows` was called since the last [`take_sub_rows_calls`](Self::take_sub_rows_calls).
-    pub fn take_sub_rows_calls(&self) -> usize {
-        self.sub_rows_calls.replace(0)
+    /// VectorCraft's rows (story `composites/layers-panel/color-bar`): a layer holding a sublayer, which holds a group
+    /// and a template path, the group holding a path with an italic solid-underlined label and an outline path with a
+    /// dashed one (neither shows a thumbnail), a horizontal and a vertical guide, and a spine; the sublayer is active.
+    pub fn row_looks() -> Self {
+        let mut tree = Self::default();
+        let tint = |red: u8, green: u8, blue: u8| Some(DataColor::new(Color32::from_rgb(red, green, blue)));
+        let layer = tree.add(None, named("Layer 1", LayerKind::Layer, |i| i.color = tint(0x4f, 0x80, 0xff)), true);
+        let sub = tree.add(Some(layer), named("Sublayer", LayerKind::Layer, |i| i.color = tint(0x2e, 0xb8, 0x5c)), true);
+        let group = tree.add(Some(sub), named("Group", LayerKind::Group, |i| i.color = tint(0xe0, 0x8a, 0x1e)), true);
+        tree.add(
+            Some(group),
+            named("Path", LayerKind::Path, |i| {
+                i.color = tint(0xe0, 0x8a, 0x1e);
+                i.thumbnail = false;
+                i.italic = true;
+                i.underline = LabelUnderline::Solid;
+            }),
+            false,
+        );
+        tree.add(
+            Some(group),
+            named("Outline Path", LayerKind::Path, |i| {
+                i.color = tint(0xe0, 0x8a, 0x1e);
+                i.thumbnail = false;
+                i.view = LayerView::Outline;
+                i.underline = LabelUnderline::Dashed;
+            }),
+            false,
+        );
+        tree.add(
+            Some(sub),
+            named("Template Path", LayerKind::Path, |i| {
+                i.color = tint(0x2e, 0xb8, 0x5c);
+                i.thumbnail = false;
+                i.view = LayerView::Template;
+            }),
+            false,
+        );
+        tree.add(Some(sub), named("Horizontal Guide", LayerKind::Guide, |i| i.color = tint(0x2e, 0xb8, 0x5c)), false);
+        tree.add(Some(sub), named("Vertical Guide", LayerKind::Guide, |i| i.color = tint(0x2e, 0xb8, 0x5c)), false);
+        tree.add(Some(layer), named("Spine", LayerKind::Spine, |i| i.color = tint(0x4f, 0x80, 0xff)), false);
+        tree.selection = LayerSelection::new(vec![sub], Some(sub), LayerPart::Pixels);
+        tree
     }
 }
 
@@ -380,7 +412,6 @@ impl LayerTree for FakeLayers {
     }
 
     fn info(&self, id: &u32) -> LayerInfo {
-        self.info_calls.set(self.info_calls.get() + 1);
         self.layer(id).map(|layer| layer.info.clone()).unwrap_or_else(|| LayerInfo::new(String::new(), LayerKind::Pixel))
     }
 
@@ -400,7 +431,6 @@ impl LayerTree for FakeLayers {
     }
 
     fn sub_rows(&self, id: &u32, group: SubRowGroup) -> Option<SubRows> {
-        self.sub_rows_calls.set(self.sub_rows_calls.get() + 1);
         let layer = self.layer(id)?;
         match group {
             SubRowGroup::Effects => layer.effects.clone(),
@@ -466,10 +496,6 @@ impl LayerTree for FakeLayers {
 
     fn hovered(&self) -> Option<u32> {
         self.hovered
-    }
-
-    fn revision(&self) -> Option<u64> {
-        self.revision
     }
 
     fn footer(&self) -> LayersFooterState {

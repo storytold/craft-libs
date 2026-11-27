@@ -98,7 +98,8 @@ pub trait Remember {
     /// The result of the job `start` returns, one per `key`: it is submitted once, cancelled when the owner is
     /// evicted, and a landed result asks for a pass.
     fn pending<K: Hash, T: Slot, E: Slot>(&mut self, key: K, start: impl FnOnce() -> Job<T, E>) -> &Pending<T, E>;
-    /// True on the first pass a shown stage exists for this id.
+    /// True on the first pass a shown stage exists for this id, and on the first pass after the id was left unshown
+    /// for a frame of its viewport (a page left and opened again), through that frame's passes.
     fn appeared(&self) -> bool;
 }
 
@@ -202,6 +203,8 @@ struct OwnerRecord {
     viewport: ViewportId,
     pass: u64,
     at: f64,
+    /// The pass of the owner's registration before `pass`, in the same viewport.
+    before: Option<u64>,
 }
 
 /// One entry the runtime keeps for a component, and the owner that is tested for its eviction.
@@ -217,24 +220,104 @@ pub(crate) struct Registry {
     slots: FastMap<(Id, u8, TypeId), SlotRecord>,
     /// Evicted slots, moved out inside the end hook; the first pipeline run of the next pass drops them.
     graveyard: Vec<Removed>,
+    /// Moves each time owners' shown lives end (`evict`, `end_shown`).
+    ended_generation: u64,
+    /// The generation at which each owner's shown life ended, until it registers again: a kept run that registered it
+    /// before then showed state that is gone (`ended_since`).
+    ended: FastMap<Id, u64>,
+    /// Writes of the saved value under each key's id made outside a component's edit (`set_saved_value`,
+    /// `forget_saved`), which a saved binding in a memoized view's props feeds.
+    saved_writes: FastMap<Id, u64>,
+    /// Session slots forgotten (`forget`), which a kept binding in a memoized view's props feeds.
+    session_writes: u64,
     /// Slot records write-back has written, for the count trials.
     #[cfg(feature = "testing")]
     written: usize,
 }
 
-/// Marks a base whose stage was written back: the frame it was first shown in, for `appeared`. A discard pass
-/// repeats the frame, so `appeared` stays true through it.
+/// Marks a base whose stage was written back, for `appeared`: the frame it appeared in and the last frame it was
+/// shown in. A discard pass repeats the frame, so `appeared` stays true through it. A frame of its viewport that did
+/// not show the base (a page left and opened again before its owner was evicted) makes its next showing an
+/// appearance again, as WordCraft told a reopened page by a gap in the frames it was drawn in.
 #[derive(Clone, Copy)]
-struct Seen(u64);
+struct Seen {
+    first: u64,
+    last: u64,
+}
+
+impl Seen {
+    /// Whether the frames since the base was last shown leave a gap before `frame`.
+    fn gap_before(self, frame: u64) -> bool {
+        self.last.saturating_add(1) < frame
+    }
+
+    /// Whether a stage of this base in `frame` is the base appearing.
+    fn appears(self, frame: u64) -> bool {
+        self.first == frame || self.gap_before(frame)
+    }
+
+    /// The mark after a write-back in `frame`.
+    fn shown(old: Option<Seen>, frame: u64) -> Seen {
+        match old {
+            Some(seen) if !seen.gap_before(frame) => Seen { first: seen.first, last: frame.max(seen.last) },
+            _ => Seen { first: frame, last: frame },
+        }
+    }
+}
 
 /// Registers `owner`'s pass, at step 3: eviction tests only owners. Shown entries of an owner not registered
 /// for 3 passes of the viewport that last showed it and 0.5 s are evicted by `evict`.
 pub(crate) fn register_owner(ctx: &Context, owner: Id) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_owner(ctx, owner));
+    crate::runtime::replay::journal(ctx, || owner, |ctx, &owner| register_owner(ctx, owner));
+    crate::runtime::replay::note_owner(ctx, owner);
     let facts = frame::facts(ctx);
     pass_state::with::<Registry, _>(ctx, |reg| {
-        reg.owners.insert(owner, OwnerRecord { viewport: facts.viewport, pass: facts.pass_nr, at: facts.now });
+        let before = match reg.owners.get(&owner) {
+            Some(last) if last.viewport == facts.viewport && last.pass == facts.pass_nr => last.before,
+            Some(last) if last.viewport == facts.viewport => Some(last.pass),
+            _ => None,
+        };
+        reg.owners.insert(owner, OwnerRecord { viewport: facts.viewport, pass: facts.pass_nr, at: facts.now, before });
+        reg.ended.remove(&owner);
     });
+}
+
+/// Whether `owner` was registered in the pass before the running one of its viewport, by a run or a replay: its
+/// component was shown there.
+pub(crate) fn shown_last_pass(ctx: &Context, owner: Id) -> bool {
+    let facts = frame::facts(ctx);
+    pass_state::with::<Registry, _>(ctx, |reg| {
+        reg.owners.get(&owner).filter(|last| last.viewport == facts.viewport).is_some_and(|last| {
+            let shown = if last.pass == facts.pass_nr { last.before } else { Some(last.pass) };
+            shown.is_some_and(|shown| shown + 1 >= facts.pass_nr)
+        })
+    })
+}
+
+/// The generation of ended shown lives now: a kept run stores it, and `ended_since` compares with it.
+pub(crate) fn ended_generation(ctx: &Context) -> u64 {
+    pass_state::with::<Registry, _>(ctx, |reg| reg.ended_generation)
+}
+
+/// Whether the shown life of one of `owners` ended after the generation `since`: a run that registered them showed
+/// shown-tier state (remembered values, drafts, text state) that memory has dropped since.
+pub(crate) fn ended_since(ctx: &Context, owners: &[Id], since: u64) -> bool {
+    pass_state::with::<Registry, _>(ctx, |reg| {
+        !reg.ended.is_empty() && owners.iter().any(|owner| reg.ended.get(owner).is_some_and(|ended| *ended > since))
+    })
+}
+
+/// How many times the saved value under `key` was written outside a component's edit, and how many times session slots
+/// were forgotten: what a saved or kept binding in a memoized view's props feeds.
+pub(crate) fn writes(ctx: &Context, key: Option<&SaveKey>) -> (u64, u64) {
+    pass_state::with::<Registry, _>(ctx, |reg| (key.and_then(|key| reg.saved_writes.get(&key.id()).copied()).unwrap_or(0), reg.session_writes))
+}
+
+/// Ends the shown lives of `owners` in the registry's generation count.
+fn end_lives(reg: &mut Registry, owners: impl IntoIterator<Item = Id>) {
+    reg.ended_generation += 1;
+    let generation = reg.ended_generation;
+    reg.ended.extend(owners.into_iter().map(|owner| (owner, generation)));
 }
 
 /// Eviction, run by the end hook. An owner that `owner_due` finds due loses its shown and press entries (a press
@@ -250,6 +333,7 @@ pub(crate) fn evict(ctx: &Context) {
             return;
         }
         reg.owners.retain(|id, _| !dead.contains(id));
+        end_lives(reg, dead.iter().copied());
         let moved = take_shown(ctx, reg, |owner| dead.contains(&owner));
         QUEUED.fetch_add(moved.len(), Ordering::Release);
         reg.graveyard.extend(moved);
@@ -262,7 +346,12 @@ pub(crate) fn evict(ctx: &Context) {
 /// hook, so the slots drop here and their dispose hooks (a running gesture's removal) report in this pass. False when
 /// `owner` has no record: its life ended already, or it never ran.
 pub(crate) fn end_shown(ctx: &Context, owner: Id) -> bool {
-    let moved = pass_state::with::<Registry, _>(ctx, |reg| reg.owners.remove(&owner).map(|_| take_shown(ctx, reg, |of| of == owner)));
+    let moved = pass_state::with::<Registry, _>(ctx, |reg| {
+        reg.owners.remove(&owner).map(|_| {
+            end_lives(reg, [owner]);
+            take_shown(ctx, reg, |of| of == owner)
+        })
+    });
     moved.is_some()
 }
 
@@ -285,6 +374,34 @@ static QUEUED: AtomicUsize = AtomicUsize::new(0);
 /// Removes the session slots under `id` (all types). The only way a session slot goes.
 pub(crate) fn forget(ctx: &Context, id: Id) {
     forget_tier(ctx, id, SESSION);
+    pass_state::with::<Registry, _>(ctx, |reg| reg.session_writes += 1);
+}
+
+/// How long a remembered value lives.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Lifetime {
+    /// The value goes through the host's saved state (the `SaveKey` tier).
+    #[default]
+    Saved,
+    /// The value lasts until the app quits.
+    Run,
+}
+
+/// The run-only value under `key`, in the session tier. It never reaches the host. It gives the default until a value
+/// is set, and it is readable outside a pass, as [`saved_value`] is.
+pub fn run_value<T: Slot>(ctx: &Context, key: &SaveKey) -> T {
+    MemoryStage::peek_session(ctx, global("craft_ui.run", key))
+}
+
+/// Sets the run-only value under `key`; see [`run_value`].
+pub fn set_run_value<T: Slot>(ctx: &Context, key: &SaveKey, value: T) {
+    let id = global("craft_ui.run", key);
+    let mut stage = MemoryStage::new(ctx, id, id, false);
+    // No component shows under the key's id, so the stage stamps no `Seen` for it.
+    stage.touched.get_mut().clear();
+    *stage.session::<T>(id) = value;
+    stage.write_back();
 }
 
 /// The saved value under `key`, outside a dialog: an app reads one SAVED value through the same store the dialogs'
@@ -302,6 +419,13 @@ pub fn set_saved_value<T: Savable>(ctx: &Context, key: &SaveKey, value: T) {
     stage.touched.get_mut().clear();
     *stage.saved::<T>(key) = value;
     stage.write_back();
+    saved_written(ctx, key);
+}
+
+/// Notes a write of the saved value under `key` outside a component's edit: a memoized view whose props bind it runs.
+fn saved_written(ctx: &Context, key: &SaveKey) {
+    pass_state::with::<Registry, _>(ctx, |reg| *reg.saved_writes.entry(key.id()).or_default() += 1);
+    crate::runtime::lazy::note_edit(ctx, crate::runtime::reads::BindKey::Saved(Id::NULL.with(key)));
 }
 
 /// Removes the saved slots of `key` and the value stored under it. The only way a saved slot goes.
@@ -311,6 +435,7 @@ pub(crate) fn forget_saved(ctx: &Context, key: &SaveKey) {
     if let Some(host) = Env::host_of(ctx) {
         forget_stored(&host, key);
     }
+    saved_written(ctx, key);
 }
 
 fn forget_tier(ctx: &Context, id: Id, tier: u8) {
@@ -453,11 +578,7 @@ impl MemoryStage {
             return;
         }
         self.claimed.borrow_mut().push(base);
-        let viewport = pass::current_viewport(&self.ctx);
-        let pass_nr = pass::pass_nr(&self.ctx, viewport);
-        let duplicate =
-            PerViewport::<Stamped<IdSet>>::with_pass(&self.ctx, viewport, pass_nr, |claimed, _| claimed.clear(), |claimed| !claimed.insert(base));
-        debug_assert!(!duplicate, "an id is the base of two open stages in one pass");
+        claim_id(&self.ctx, base, "an id is the base of two open stages in one pass");
     }
 
     /// Read-only access for `measure_in`: opens no stage.
@@ -495,46 +616,52 @@ impl MemoryStage {
         self.owner
     }
 
-    /// True for the first pass a base id is shown; per base id, so a body and its component differ.
+    /// True for the first pass a base id is shown, and for the first after a frame that did not show it; per base id,
+    /// so a body and its component differ.
     pub(crate) fn appeared_at(&self, base: Id) -> bool {
         let mut touched = self.touched.borrow_mut();
         if !touched.contains(&base) {
             touched.push(base);
         }
         let frame = pass::frame_nr(&self.ctx, pass::current_viewport(&self.ctx));
-        store::peek_copy::<Seen>(&self.ctx, base).is_none_or(|seen| seen.0 == frame)
+        store::peek_copy::<Seen>(&self.ctx, base).is_none_or(|seen| seen.appears(frame))
+    }
+
+    fn entry(&mut self, key: (u8, TypeId, Id), create: fn(&Context, bool, Id) -> Entry) -> &mut Entry {
+        let at = match self.entries.iter().position(|entry| entry.key == key) {
+            Some(at) => at,
+            None => {
+                self.entries.push(create(&self.ctx, self.peek_only, key.2));
+                self.entries.len() - 1
+            }
+        };
+        &mut self.entries[at]
     }
 
     #[allow(clippy::unreachable, reason = "the entry key holds the lifetime and the type, so the downcast cannot fail")]
     fn slot<const TIER: u8, T: Slot>(&mut self, id: Id) -> &mut T {
-        let ctx = &self.ctx;
-        let peek = self.peek_only;
-        let key = (TIER, TypeId::of::<T>(), id);
-        let at = match self.entries.iter().position(|entry| entry.key == key) {
-            Some(at) => at,
-            None => {
-                let (value, recorded): (Box<dyn Any + Send + Sync>, bool) = if peek {
-                    (Box::new(store::peek_clone::<Wrapped<TIER, T>>(ctx, id).unwrap_or_default()), false)
-                } else {
-                    // The box the slot was stored in stays the entry's value.
-                    match store::locked(ctx, |data| take_raw::<Wrapped<TIER, T>>(data, id)) {
-                        Some(boxed) if boxed.is::<Wrapped<TIER, T>>() => (boxed, true),
-                        _ => (Box::new(Wrapped::<TIER, T>::default()), false),
-                    }
-                };
-                self.entries.push(Entry {
-                    key,
-                    value,
-                    write_back: write_back::<TIER, T>,
-                    remove: remove_slot::<TIER, T>,
-                    ended: None,
-                    recorded,
-                    persist: None,
-                });
-                self.entries.len() - 1
+        fn create<const TIER: u8, T: Slot>(ctx: &Context, peek: bool, id: Id) -> Entry {
+            let (value, recorded): (Box<dyn Any + Send + Sync>, bool) = if peek {
+                (Box::new(store::peek_clone::<Wrapped<TIER, T>>(ctx, id).unwrap_or_default()), false)
+            } else {
+                // The box the slot was stored in stays the entry's value.
+                match store::take_boxed::<Wrapped<TIER, T>>(ctx, id) {
+                    Some(boxed) if boxed.is::<Wrapped<TIER, T>>() => (boxed, true),
+                    _ => (Box::new(Wrapped::<TIER, T>::default()), false),
+                }
+            };
+            Entry {
+                key: (TIER, TypeId::of::<T>(), id),
+                value,
+                write_back: write_back::<TIER, T>,
+                remove: remove_slot::<TIER, T>,
+                ended: None,
+                recorded,
+                persist: None,
             }
-        };
-        match self.entries[at].value.downcast_mut::<Wrapped<TIER, T>>() {
+        }
+        let entry = self.entry((TIER, TypeId::of::<T>(), id), create::<TIER, T>);
+        match entry.value.downcast_mut::<Wrapped<TIER, T>>() {
             Some(wrapped) => &mut wrapped.0,
             None => unreachable!("an entry's value has the type its key names"),
         }
@@ -650,7 +777,7 @@ impl MemoryStage {
                 replaced.extend((entry.write_back)(entry.value, data, id));
             }
             for base in touched {
-                if store::mark_seen(data, base, Seen(frame)) || retags {
+                if store::mark_seen(data, base, |old| Seen::shown(old, frame)) || retags {
                     record.push(((base, SHOWN, TypeId::of::<Seen>()), take_raw::<Seen>));
                 }
             }
@@ -764,6 +891,14 @@ impl<T: Hash> Hash for Sub<T> {
     }
 }
 
+/// A salt for an id made from `key`, a value that is only `Hash`: the ids egui makes also ask for `Debug`, which an
+/// app's key type need not have. Equal keys give equal salts within a run, so the id stays the same from pass to pass.
+pub fn key_salt(key: &impl Hash) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// The runtime sub-id of `base` for `tag`: the one derivation of every id the runtime makes from a component
 /// id (body, children, header, footer, layer, rows, items, popups, the gesture, `memory_at` slots, animation
 /// slots, edge and transform widgets, text and access sub-nodes).
@@ -804,9 +939,13 @@ impl<T> Default for FactRecord<T> {
 }
 
 impl<T: Clone + Send + Sync + 'static> Facts<T> {
-    /// Registers `fact` for the next pass of the running viewport.
+    /// Registers `fact` for the next pass of the running viewport. A settled view's replay registers it again.
     #[doc(hidden)]
-    pub fn register(ctx: &Context, fact: T) {
+    pub fn register(ctx: &Context, fact: T)
+    where
+        T: PartialEq + std::fmt::Debug + crate::runtime::Shift,
+    {
+        crate::runtime::replay::journal(ctx, || fact.clone(), |ctx, fact| Self::register(ctx, fact.clone()));
         Self::with_record(ctx, |record| record.this.push(fact));
     }
 
@@ -828,6 +967,18 @@ impl<T: Clone + Send + Sync + 'static> Facts<T> {
         };
         PerViewport::<Stamped<FactRecord<T>>>::with_pass(ctx, viewport, pass_nr, advance, f)
     }
+}
+
+/// Debug assertion: `id` is claimed once in a pass of its viewport, by an open stage or a memoized view's entry; a
+/// second claim fails with `what`.
+pub(crate) fn claim_id(ctx: &Context, id: Id, what: &'static str) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    let duplicate = PerViewport::<Stamped<IdSet>>::with_pass(ctx, viewport, pass_nr, |claimed, _| claimed.clear(), |claimed| !claimed.insert(id));
+    debug_assert!(!duplicate, "{what}");
 }
 
 /// Runs `f` on the session slot of `id` for a service or pattern that has no component context: the slot is read,

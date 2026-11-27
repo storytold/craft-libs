@@ -1,11 +1,12 @@
-//! Synthetic input through the window host: held presses and keys, modifiers, the wheel, Caps Lock, hover rest,
+//! Synthetic input through the window host: held presses and keys, drags, modifiers, the wheel, Caps Lock, hover rest,
 //! document coordinates and input-method compositions, as the passes see them, and the params refused before
 //! anything is queued.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use craft_automation::synthetic::{At, MAX_CLICKS, MAX_SCREEN_POINT, NO_DOCUMENT, NOT_FINITE, input_method};
+use craft_automation::access::{NO_CONTROL, NO_TREE};
+use craft_automation::synthetic::{At, Click, Focus, MAX_CLICKS, MAX_DRAG_STEPS, MAX_SCREEN_POINT, NO_DOCUMENT, NOT_FINITE, input_method};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::runtime::egui::injected::hook_without_pass;
 use craft_ui::runtime::windows::WindowHost;
@@ -32,9 +33,14 @@ struct Rig {
     passes: Rc<RefCell<Vec<Seen>>>,
 }
 
-/// Document points are screen points doubled, as a canvas at 50 % shows them.
-fn map(at: Pos2) -> Option<Pos2> {
-    Some(pos2(at.x / 2.0, at.y / 2.0))
+/// Screen points between one page's top and the next's, in a canvas that stacks its pages down the screen.
+const PAGE_STEP: f32 = 200.0;
+
+/// Document points are screen points doubled, as a canvas at 50 % shows them, with each page [`PAGE_STEP`] below
+/// the one before.
+fn map(page: usize, at: Pos2) -> Option<Pos2> {
+    let page = u16::try_from(page).ok()?;
+    Some(pos2(at.x / 2.0, at.y / 2.0 + f32::from(page) * PAGE_STEP))
 }
 
 impl Rig {
@@ -109,10 +115,58 @@ fn a_held_press_stays_down_until_its_release() {
     assert_eq!(rig.now().pos, Some(pos2(100.0, 50.0)), "the document point is mapped");
     rig.send("ui.move", json!({"x": 300, "y": 100, "coordinates": "document"}));
     assert!(rig.now().primary_down && rig.now().pos == Some(pos2(150.0, 50.0)), "a move while held drags");
+    rig.send("ui.move", json!({"x": 300, "y": 100, "coordinates": "document", "page": 1}));
+    assert_eq!(rig.now().pos, Some(pos2(150.0, 50.0 + PAGE_STEP)), "a document point is mapped on the page it names");
     rig.send("ui.release", json!({}));
     assert!(!rig.now().primary_down, "the release lets it go");
     rig.send("ui.click", json!({"x": 10, "y": 10}));
     assert!(!rig.now().primary_down, "a click without hold releases");
+}
+
+/// `ui.drag` presses at `from`, moves to `to` in `steps` even steps with the button down, releases at `to` with its
+/// modifiers held throughout, then lets them go. Each point is in its own space: `to` here is a document point.
+#[trial]
+fn a_drag_presses_moves_in_steps_and_releases_at_its_end() {
+    let mut rig = Rig::new();
+    rig.fx.settle();
+    rig.take();
+    let to = map(0, pos2(220.0, 40.0)).expect("the test map places every point");
+    rig.send("ui.drag", json!({"from": {"x": 10, "y": 20}, "to": {"x": 220, "y": 40, "coordinates": "document"}, "steps": 4, "shift": true}));
+    let after = rig.now();
+    let events: Vec<Event> = rig.take().into_iter().flat_map(|pass| pass.events).collect();
+    let buttons: Vec<(Pos2, bool, bool)> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers } => Some((*pos, *pressed, modifiers.shift)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(buttons, vec![(pos2(10.0, 20.0), true, true), (to, false, true)], "one press at `from`, one release at `to`, both with Shift");
+    let held = events.iter().skip_while(|event| !matches!(event, Event::PointerButton { pressed: true, .. }));
+    let moves: Vec<Pos2> = held
+        .take_while(|event| !matches!(event, Event::PointerButton { pressed: false, .. }))
+        .filter_map(|event| match event {
+            Event::PointerMoved(at) => Some(*at),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(moves.len(), 4, "one move per step while the button is down: {moves:?}");
+    assert!(moves.windows(2).all(|pair| pair[1].x > pair[0].x), "each step goes further towards `to`: {moves:?}");
+    assert_eq!(moves.last(), Some(&to), "the last step lands on `to`");
+    assert!(!after.primary_down && !after.shift, "the drag leaves no button or modifier held");
+}
+
+/// A drag keeps its modifiers held after its release while other input stays down, as a click does.
+#[trial]
+fn a_drag_keeps_its_modifiers_while_a_held_key_stays_down() {
+    let mut rig = Rig::new();
+    rig.send("ui.key", json!({"key": "Space", "hold": true}));
+    rig.send("ui.drag", json!({"from": {"x": 10, "y": 10}, "to": {"x": 60, "y": 10}, "steps": 2, "shift": true}));
+    let after = rig.now();
+    assert!(after.space_down && !after.primary_down, "the key stays down and the drag's button is up");
+    assert!(after.shift, "the modifiers stay with the held key");
+    rig.send("ui.release", json!({}));
+    assert!(!rig.now().space_down && !rig.now().shift, "the release lets everything go");
 }
 
 /// A move's modifiers stay held after it (a hover with modifiers); a click that holds nothing lets its own go.
@@ -179,6 +233,74 @@ fn injected_caps_lock_holds_until_cleared() {
     assert_eq!(rig.host().injected_caps_lock(), None);
 }
 
+/// Per pass: whether the waiter had its reply by the pass's end, and the pointer position the pass saw.
+type PassLog = Rc<RefCell<Vec<(bool, Option<Pos2>)>>>;
+
+/// A fixture whose UI polls `channel` at the end of each pass, as an application does after its UI, with `discard`
+/// asking egui to run the pass again on the passes it is true for; `answered` records, per pass, whether the waiter
+/// had its reply by the pass's end and the pointer position the pass saw.
+fn polling_fixture(
+    channel: Rc<RefCell<craft_automation::control::ControlChannel>>,
+    reply: Rc<std::sync::mpsc::Receiver<craft_automation::control::ControlResponse>>,
+    discard: impl Fn(usize) -> bool + 'static,
+) -> (Fixture, PassLog) {
+    let answered = Rc::new(RefCell::new(Vec::new()));
+    let seen = answered.clone();
+    let fx = Fixture::new(move |ui| {
+        let pass = seen.borrow().len();
+        if discard(pass) {
+            ui.ctx().request_discard("the test runs this pass again");
+        }
+        channel.borrow_mut().poll_input(&WindowHost::of(ui.ctx()));
+        let pos = ui.input(|i| i.pointer.latest_pos());
+        seen.borrow_mut().push((reply.try_recv().is_ok(), pos));
+    });
+    (fx, answered)
+}
+
+/// A waiter on a move is answered at the end of the pass that ran the move, not a pass later: the application polls
+/// after its UI, where the running pass has not ended yet.
+#[trial]
+fn a_waiter_is_answered_by_the_pass_that_ran_its_step() {
+    use craft_automation::control::{ControlChannel, ControlRequest, Reply};
+
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let channel = Rc::new(RefCell::new(ControlChannel::new(requests)));
+    let (req, reply) = ControlRequest::new("ui.move", json!({"x": 30, "y": 20}));
+    let (mut fx, answered) = polling_fixture(channel.clone(), Rc::new(reply), |_| false);
+    fx.idle(2);
+    answered.borrow_mut().clear();
+    let host = WindowHost::of(fx.ctx());
+    input_method("ui.move", &json!({"x": 30, "y": 20}), &host, ViewportId::ROOT, &map).expect("a method").expect("valid");
+    channel.borrow_mut().settle(req, Reply::AfterInput, None, 0.0);
+    fx.frame(Vec::new());
+    let passes = answered.borrow().clone();
+    assert_eq!(passes, vec![(true, Some(pos2(30.0, 20.0)))], "the pass that saw the move answered it");
+}
+
+/// A pass egui runs again (`request_discard`) does not answer: the pass that runs again, and draws what the step
+/// did, does.
+#[trial]
+fn a_pass_run_again_leaves_the_answer_to_its_rerun() {
+    use craft_automation::control::{ControlChannel, ControlRequest, Reply};
+
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let channel = Rc::new(RefCell::new(ControlChannel::new(requests)));
+    let (req, reply) = ControlRequest::new("ui.move", json!({"x": 30, "y": 20}));
+    let start = Rc::new(Cell::new(usize::MAX));
+    let first = start.clone();
+    let (mut fx, answered) = polling_fixture(channel.clone(), Rc::new(reply), move |pass| pass == first.get());
+    fx.idle(2);
+    start.set(answered.borrow().len());
+    let host = WindowHost::of(fx.ctx());
+    input_method("ui.move", &json!({"x": 30, "y": 20}), &host, ViewportId::ROOT, &map).expect("a method").expect("valid");
+    channel.borrow_mut().settle(req, Reply::AfterInput, None, 0.0);
+    fx.frame(Vec::new());
+    assert_eq!(fx.passes(), 2, "egui ran the discarded pass again");
+    let passes: Vec<bool> = answered.borrow()[start.get()..].iter().map(|(done, _)| *done).collect();
+    assert_eq!(passes, vec![false, true], "the rerun answers, the discarded pass does not");
+}
+
 /// A move with `rest` counts as processed only once the pointer has rested that long.
 #[trial]
 fn a_hover_rest_holds_the_reply_until_it_has_passed() {
@@ -208,12 +330,31 @@ fn injected_passes_are_the_passes_that_carry_a_step() {
 fn document_points_need_a_canvas() {
     let rig = Rig::new();
     let host = rig.host();
-    let none = |_: Pos2| None;
+    let none = |_: usize, _: Pos2| None;
     let refused = input_method("ui.move", &json!({"x": 1, "y": 1, "coordinates": "document"}), &host, ViewportId::ROOT, &none);
     assert_eq!(refused, Some(Err(NO_DOCUMENT.to_owned())));
     assert!(host.injected_idle());
     let screen = input_method("ui.move", &json!({"x": 1, "y": 1}), &host, ViewportId::ROOT, &none);
     assert_eq!(screen, Some(Ok(())));
+}
+
+/// A drag whose end cannot be placed is refused whole: its press at a screen point is not queued either. That holds
+/// for a document end without a canvas and for a control end that names no control of the window.
+#[trial]
+fn a_drag_with_an_end_it_cannot_place_queues_no_press() {
+    let mut rig = Rig::new();
+    rig.fx.settle();
+    let (host, ctx) = (rig.host(), rig.fx.ctx().clone());
+    let none = |_: usize, _: Pos2| None;
+    let params = json!({"from": {"x": 1, "y": 1}, "to": {"x": 5, "y": 5, "coordinates": "document"}});
+    assert_eq!(input_method("ui.drag", &params, &host, ViewportId::ROOT, &none), Some(Err(NO_DOCUMENT.to_owned())));
+    assert!(host.injected_idle());
+    assert!(hook_without_pass(&ctx, ViewportId::ROOT).is_empty(), "the refused drag queued nothing");
+    let params = json!({"from": {"x": 1, "y": 1}, "to": {"control": {"name": "Save"}, "x": 4}});
+    let answer = input_method("ui.drag", &params, &host, ViewportId::ROOT, &map);
+    assert!(matches!(&answer, Some(Err(error)) if error.starts_with(NO_CONTROL)), "{answer:?}");
+    assert!(host.injected_idle());
+    assert!(hook_without_pass(&ctx, ViewportId::ROOT).is_empty(), "the drag to an unplaced control queued nothing");
 }
 
 /// A step handed to the input whose pass has not run is withdrawn when the focus moved, and when the application
@@ -264,7 +405,8 @@ fn queued_input_is_withdrawn_when_its_target_changes() {
 }
 
 /// An unknown field, a wrong type, an unknown name, too many clicks or a point too far out refuses the whole request
-/// before any of it is queued: no half-queued press or held key is left behind.
+/// before any of it is queued: no half-queued press or held key is left behind. A node target takes no point, repeat,
+/// hold, modifier or button but the secondary one, and names exactly one of `id` and `label`.
 #[trial]
 fn bad_input_params_are_refused_before_anything_is_queued() {
     let mut rig = Rig::new();
@@ -277,21 +419,98 @@ fn bad_input_params_are_refused_before_anything_is_queued() {
         ("ui.click", json!({"x": 10, "button": "thumb"})),
         ("ui.click", json!({"x": 10, "hold": true, "count": MAX_CLICKS + 1})),
         ("ui.click", json!({"x": far, "hold": true})),
-        ("ui.move", json!({"x": 10, "nudge": 1})),
-        ("ui.move", json!({"x": 10, "rest": "long"})),
-        ("ui.move", json!({"x": 10, "coordinates": "page"})),
-        ("ui.move", json!({"y": -far})),
+        ("ui.move", json!({"x": 10, "y": 10, "nudge": 1})),
+        ("ui.move", json!({"x": 10, "y": 10, "rest": "long"})),
+        ("ui.move", json!({"x": 10, "y": 10, "coordinates": "page"})),
+        ("ui.move", json!({"x": 10, "y": -far})),
+        ("ui.drag", json!({"from": {"x": 10}})),
+        ("ui.drag", json!({"from": {"x": 10}, "to": {"x": 20, "nudge": 1}})),
+        ("ui.drag", json!({"from": {"x": 10}, "to": [20, 20]})),
+        ("ui.drag", json!({"from": {"x": 10}, "to": {"x": far}})),
+        ("ui.drag", json!({"from": {"x": 10}, "to": {"x": 20}, "steps": 0})),
+        ("ui.drag", json!({"from": {"x": 10}, "to": {"x": 20}, "steps": MAX_DRAG_STEPS + 1})),
+        ("ui.drag", json!({"from": {"x": 10}, "to": {"x": 20}, "x": 5})),
+        ("ui.drag", json!({"from": {"x": 10}, "to": {"control": {"name": "Save"}, "coordinates": "document"}})),
         ("ui.key", json!({"key": "A", "hold": true, "nudge": 1})),
         ("ui.key", json!({"key": 5})),
         ("ui.key", json!({"key": "NoSuchKey", "hold": true})),
         ("ui.ime", json!({"preedit": "ab", "cursor": [1, 9]})),
+        ("ui.click", json!({"x": 10, "y": 10, "label": "Save"})),
+        ("ui.click", json!({"label": "Save", "count": 2})),
+        ("ui.click", json!({"label": "Save", "hold": true})),
+        ("ui.click", json!({"label": "Save", "shift": true})),
+        ("ui.click", json!({"label": "Save", "button": "middle"})),
+        ("ui.click", json!({"id": "12", "button": "middle"})),
+        ("ui.click", json!({"id": "twelve"})),
+        ("ui.focus", json!({"id": "12", "label": "Save"})),
+        ("ui.focus", json!({})),
+        ("ui.drop", json!({"paths": []})),
+        ("ui.drop", json!({"paths": ["a.pdf"], "alt": true})),
     ];
-    for (method, params) in refused {
-        let answer = input_method(method, &params, &host, ViewportId::ROOT, &map);
+    for (method, params) in &refused {
+        let answer = input_method(method, params, &host, ViewportId::ROOT, &map);
         assert!(matches!(answer, Some(Err(_))), "{method} {params} is refused: {answer:?}");
         assert!(host.injected_idle(), "{method} {params} left nothing waiting");
         assert!(hook_without_pass(&ctx, ViewportId::ROOT).is_empty(), "{method} {params} queued nothing");
     }
+    // This window keeps no access tree, so a node request is refused there whatever it says; its parameters alone
+    // refuse the node rows, and the secondary button, a node's context menu, is allowed.
+    for (method, params) in refused.iter().filter(|(_, params)| params.get("id").is_some() || params.get("label").is_some() || params == &json!({})) {
+        let by_params = if *method == "ui.focus" { Focus::from_params(params).is_err() } else { Click::from_params(params).is_err() };
+        assert!(by_params, "{method} {params} is refused by its parameters");
+    }
+    assert!(Click::from_params(&json!({"label": "Save", "button": "secondary"})).is_ok());
+}
+
+/// A key whose press moves the focus (Tab from one field to the next) still has its release carried out: the release
+/// is not cancelled as input whose focus changed, no key stays down, and the waiter is answered as processed. The
+/// framework takes the Tab press it acts on out of egui's input, so egui's fields never read it.
+#[trial]
+fn a_key_release_is_carried_out_after_its_press_moves_focus() {
+    use craft_automation::control::{ControlChannel, ControlRequest, Reply};
+
+    let passes: Rc<RefCell<Vec<Seen>>> = Rc::default();
+    let rects = Rc::new(Cell::new([Rect::NOTHING; 2]));
+    let (seen, shown) = (passes.clone(), rects.clone());
+    let (first, second) = (Rc::new(RefCell::new(String::new())), Rc::new(RefCell::new(String::new())));
+    let fx = Fixture::new(move |ui| {
+        let a = TextField::new("First", Bind::bound(&mut *first.borrow_mut())).show(ui).response.rect;
+        let b = TextField::new("Second", Bind::bound(&mut *second.borrow_mut())).show(ui).response.rect;
+        shown.set([a, b]);
+        seen.borrow_mut().push(ui.input(|i| Seen { any_key_down: !i.keys_down.is_empty(), events: i.events.clone(), ..Seen::default() }));
+    });
+    let mut rig = Rig { fx, passes };
+    rig.fx.settle();
+    let at = rects.get()[0].center();
+    rig.send("ui.click", json!({"x": at.x, "y": at.y}));
+    let before = rig.fx.focused();
+    assert!(before.is_some(), "the click focused the first field");
+
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let mut channel = ControlChannel::new(requests);
+    let host = rig.host();
+    rig.take();
+    input_method("ui.key", &json!({"key": "Tab"}), &host, ViewportId::ROOT, &map).expect("a method").expect("valid");
+    let (req, reply) = ControlRequest::new("ui.key", json!({"key": "Tab"}));
+    channel.settle(req, Reply::AfterInput, None, 0.0);
+    let mut answer = None;
+    for _ in 0..32 {
+        rig.fx.frame(Vec::new());
+        channel.poll_input(&host);
+        answer = reply.try_recv().ok();
+        if answer.is_some() {
+            break;
+        }
+    }
+    rig.fx.frame(Vec::new());
+
+    let answer = answer.expect("the waiter is answered");
+    assert_eq!(answer["ok"], true, "processed, not cancelled: {answer}");
+    assert!(rig.fx.focused().is_some() && rig.fx.focused() != before, "the press moved the focus");
+    let passes = rig.take();
+    let tab = |event: &Event| matches!(event, Event::Key { key: Key::Tab, pressed: true, .. });
+    assert!(!passes.iter().any(|pass| pass.events.iter().any(tab)), "the Tab press the framework took reaches no field in egui");
+    assert!(passes.last().is_some_and(|pass| !pass.any_key_down), "no key stays down");
 }
 
 /// `ui.ime` queues behind the input before it: typed text, then the composition with its converted segment, then
@@ -340,12 +559,52 @@ fn ui_ime_reaches_a_focused_text_field_as_a_preedit_then_a_commit_in_order() {
 /// A NaN or infinite point of a request is an error at the request, in either coordinate space, not a panic in the pass.
 #[trial]
 fn a_point_that_is_not_finite_is_refused() {
+    let no_controls = &|_: &_| Err(NO_TREE.to_owned());
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-        for at in [At::Screen(pos2(bad, 1.0)), At::Screen(pos2(1.0, bad)), At::Document(pos2(bad, 1.0))] {
-            assert_eq!(at.resolve(&|p| Some(p)), Err(NOT_FINITE.to_owned()), "{at:?}");
+        for at in [At::Screen(pos2(bad, 1.0)), At::Screen(pos2(1.0, bad)), At::Document(pos2(bad, 1.0), 0)] {
+            assert_eq!(at.resolve(&|_, p| Some(p), no_controls), Err(NOT_FINITE.to_owned()), "{at:?}");
         }
     }
-    assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_| None), Ok(pos2(3.0, 4.0)));
+    assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_, _| None, no_controls), Ok(pos2(3.0, 4.0)));
+}
+
+/// `ui.wheel` in lines queues whole notches in the line unit, clamped; without `unit` the turn is in points; an
+/// unknown unit is refused.
+#[trial]
+fn a_wheel_in_lines_turns_by_notches() {
+    fn turn(rig: &mut Rig, params: Value) -> (egui::MouseWheelUnit, egui::Vec2) {
+        rig.send("ui.wheel", params);
+        rig.take()
+            .into_iter()
+            .flat_map(|pass| pass.events)
+            .find_map(|event| match event {
+                Event::MouseWheel { unit, delta, .. } => Some((unit, delta)),
+                _ => None,
+            })
+            .expect("a pass saw the turn")
+    }
+    let mut rig = Rig::new();
+    assert_eq!(turn(&mut rig, json!({"x": 30, "y": 20, "dy": 2.4, "unit": "lines"})), (egui::MouseWheelUnit::Line, egui::vec2(0.0, 2.0)));
+    assert_eq!(turn(&mut rig, json!({"dy": 500, "unit": "lines"})).1, egui::vec2(0.0, 100.0), "notches are clamped");
+    assert_eq!(turn(&mut rig, json!({"dy": 2.4})), (egui::MouseWheelUnit::Point, egui::vec2(0.0, 2.4)));
+    let refused = input_method("ui.wheel", &json!({"dy": 1, "unit": "pages"}), &rig.host(), ViewportId::ROOT, &map);
+    assert!(matches!(refused, Some(Err(_))), "{refused:?}");
+    assert!(rig.host().injected_idle(), "the refused turn queued nothing");
+}
+
+/// `ui.move` requires both `x` and `y`: omitting either coordinate refuses the request before anything is queued
+/// instead of silently moving to 0 on the missing axis.
+#[trial]
+fn ui_move_refuses_a_missing_coordinate() {
+    let mut rig = Rig::new();
+    rig.fx.settle();
+    let (host, ctx) = (rig.host(), rig.fx.ctx().clone());
+    for params in [json!({"x": 1}), json!({"y": 1}), json!({})] {
+        let answer = input_method("ui.move", &params, &host, ViewportId::ROOT, &map);
+        assert!(matches!(answer, Some(Err(_))), "ui.move {params} is refused: {answer:?}");
+        assert!(host.injected_idle(), "ui.move {params} left nothing waiting");
+        assert!(hook_without_pass(&ctx, ViewportId::ROOT).is_empty(), "ui.move {params} queued nothing");
+    }
 }
 
 /// A rig whose UI refuses every pressed key named in `refused`, reporting it to `channel` as the running pass's

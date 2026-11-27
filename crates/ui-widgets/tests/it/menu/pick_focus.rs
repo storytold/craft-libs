@@ -3,6 +3,7 @@
 //! Help search, undoes the typing in the text field that held focus. Any other activation that closes a menu returns
 //! focus the same way; Escape is no activation and leaves focus on the bar title.
 
+use craft_host::target::Os;
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::menu::MenuItem;
 use craft_ui::menu::bar::{MenuBar, MenuHelp, MenuTitle};
@@ -40,11 +41,13 @@ fn rig() -> Rig {
                 MenuItem::new("&About").show(ui);
             }),
         ];
-        let help = vec![HelpEntry::new(EditCommands::Undo, "Undo").with_path(["Edit"])];
+        let help = || vec![HelpEntry::new(EditCommands::Undo, "Undo").with_path(["Edit"])];
         MenuBar::new("Main menu", titles).help(MenuHelp::new(1, &help)).show(ui);
         let mut held = text.borrow_mut();
         field.set(Some(TextField::new("Name", Bind::bound(&mut *held)).show(ui).response.id));
     });
+    // The in-window menu bar and its Alt, F10 and letter keys are PC behaviour: a Mac app's menu bar is native.
+    fixture.os(Os::Linux);
     fixture.settle();
     let name = fixture.by_label("Name").expect("the text field");
     fixture.click(&name);
@@ -108,6 +111,7 @@ fn a_shortcut_pressed_on_the_focused_bar_runs_once_where_focus_was_and_gives_foc
             stop.set(Some(craft_ui::buttons::Button::new("Target").show(ui).id));
         });
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     craft_ui::runtime::focus::request(fixture.ctx(), craft_ui::runtime::focus::FocusTarget::Id(target.get().expect("the button ran")));
     fixture.settle();
@@ -118,6 +122,83 @@ fn a_shortcut_pressed_on_the_focused_bar_runs_once_where_focus_was_and_gives_foc
     fixture.settle();
     assert_eq!(count.get(), 1, "the shortcut runs once, in the scope of the stop the bar took the focus from");
     assert_eq!(fixture.focused_stop().map(|(id, _)| id), target.get(), "and the focus is back on that stop");
+}
+
+/// The commands of the access-key trial: one on a letter a title marks, one on a letter none marks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::CommandSet)]
+#[command(prefix = "barAccess", scope = "trial.barAccess")]
+#[non_exhaustive]
+pub enum BarAccessCommand {
+    #[command(label = "Brush", default = "B")]
+    Brush,
+    #[command(label = "Quick", default = "Q")]
+    Quick,
+}
+
+/// On the bar that a lone Alt or F10 focused, a plain letter is an access key, as in production's menu access mode:
+/// the letter a title marks opens that title, not the shortcut on the same letter, and a letter no title marks is
+/// swallowed, its shortcut unrun and the bar still focused.
+#[trial]
+fn a_plain_letter_on_the_focused_bar_opens_its_title_and_runs_no_shortcut() {
+    use craft_ui::contract::ShowContainer as _;
+    use craft_ui::runtime::commands::Commands as _;
+    let ran = Rc::new(RefCell::new(Vec::new()));
+    let target = Rc::new(Cell::new(None));
+    let (seen, stop) = (ran.clone(), target.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![
+            MenuTitle::new("&Edit", |ui| {
+                MenuItem::command(EditCommands::Undo).show(ui);
+            }),
+            MenuTitle::new("&Brushes", |ui| {
+                MenuItem::new("&Round").show(ui);
+            }),
+        ];
+        MenuBar::new("Main menu", titles).show(ui);
+        craft_ui::layout_components::Stack::new().command_scope(<BarAccessCommand as craft_ui::contract::CommandSet>::SCOPE).show(ui, |ui, cx| {
+            while let Some((command, _)) = cx.take_command::<BarAccessCommand>() {
+                seen.borrow_mut().push(command);
+            }
+            stop.set(Some(craft_ui::buttons::Button::new("Target").show(ui).id));
+        });
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    let button = target.get().expect("the button ran");
+    for alt in [true, false] {
+        for (key, text) in [(egui::Key::B, "b"), (egui::Key::Q, "q")] {
+            craft_ui::runtime::focus::request(fixture.ctx(), craft_ui::runtime::focus::FocusTarget::Id(button));
+            fixture.settle();
+            if alt {
+                fixture.hold(egui::Modifiers::ALT).settle();
+                fixture.hold(egui::Modifiers::NONE).settle();
+            } else {
+                fixture.key(egui::Key::F10, egui::Modifiers::NONE);
+                fixture.settle();
+            }
+            let bar = fixture.focused_stop().map(|(id, _)| id);
+            assert!(bar.is_some() && bar != Some(button), "the bar takes the keyboard (alt {alt})");
+            fixture.type_key(key, text);
+            fixture.settle();
+            assert!(ran.borrow().is_empty(), "{text:?} on the bar runs no shortcut (alt {alt}): {:?}", ran.borrow());
+            if key == egui::Key::B {
+                assert!(fixture.by_label("Round").is_some(), "b opens Brushes, whose access key it is (alt {alt})");
+                fixture.key(egui::Key::Escape, egui::Modifiers::NONE);
+                fixture.key(egui::Key::Escape, egui::Modifiers::NONE);
+            } else {
+                assert!(fixture.by_label("Round").is_none() && fixture.by_label("Undo").is_none(), "q opens no menu (alt {alt})");
+                assert_eq!(fixture.focused_stop().map(|(id, _)| id), bar, "and the bar keeps the keyboard (alt {alt})");
+                fixture.key(egui::Key::Escape, egui::Modifiers::NONE);
+            }
+            fixture.settle();
+        }
+    }
+    // Off the bar the letters are the shortcuts they are bound to.
+    craft_ui::runtime::focus::request(fixture.ctx(), craft_ui::runtime::focus::FocusTarget::Id(button));
+    fixture.settle();
+    fixture.type_key(egui::Key::Q, "q");
+    fixture.settle();
+    assert_eq!(*ran.borrow(), [BarAccessCommand::Quick], "q off the bar runs its shortcut");
 }
 
 /// A command chord pressed while a menu is open closes the menu and runs where focus was, as with the menu closed
@@ -145,6 +226,7 @@ fn a_command_shortcut_closes_an_open_menu_and_runs() {
             stop.set(Some(craft_ui::buttons::Button::new("Target").show(ui).id));
         });
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     craft_ui::runtime::focus::request(fixture.ctx(), craft_ui::runtime::focus::FocusTarget::Id(target.get().expect("the button ran")));
     fixture.settle();
@@ -207,7 +289,7 @@ fn scoped_rig() -> ScopedRig {
         let titles = vec![MenuTitle::new("&Help", |ui| {
             MenuItem::new("&About").show(ui);
         })];
-        let help = vec![HelpEntry::new(BarKeysCommand::Toggle, "Toggle")];
+        let help = || vec![HelpEntry::new(BarKeysCommand::Toggle, "Toggle")];
         MenuBar::new("Main menu", titles).help(MenuHelp::new(0, &help)).show(ui);
         craft_ui::layout_components::Stack::new().command_scope(<BarKeysCommand as craft_ui::contract::CommandSet>::SCOPE).show(ui, |ui, cx| {
             while cx.take_command::<BarKeysCommand>().is_some() {
@@ -216,6 +298,7 @@ fn scoped_rig() -> ScopedRig {
             stop.set(Some(craft_ui::buttons::Button::new("Target").show(ui).id));
         });
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     craft_ui::runtime::focus::request(fixture.ctx(), craft_ui::runtime::focus::FocusTarget::Id(target.get().expect("the button ran")));
     fixture.settle();
@@ -284,6 +367,7 @@ fn a_command_shortcut_after_moving_in_an_open_menu_runs_where_focus_was() {
             stop.set(Some(craft_ui::buttons::Button::new("Target").show(ui).id));
         });
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     craft_ui::runtime::focus::request(fixture.ctx(), craft_ui::runtime::focus::FocusTarget::Id(target.get().expect("the button ran")));
     fixture.settle();
@@ -365,6 +449,7 @@ fn an_open_menu_takes_letters_and_arrows_from_a_focused_text_field() {
         let mut held = text.borrow_mut();
         field.set(Some(TextField::new("Zoom level", Bind::bound(&mut *held)).show(ui).response.id));
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     let name = fixture.by_label("Zoom level").expect("the text field");
     fixture.click(&name);

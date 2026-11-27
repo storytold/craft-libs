@@ -1,7 +1,7 @@
 //! `TitleBar`: the app-drawn bar of a window, in the title slot of an `AppShell`.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::measure::{End, Ends, Strip};
 use super::style::TitleBarStyle;
@@ -11,6 +11,7 @@ use crate::contract::{
     PartsCx, Role, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::layout::{Placed, arrange};
+use crate::layout_components::Row;
 use crate::runtime::access::Name;
 use crate::runtime::egui::pass;
 use crate::runtime::env::Env;
@@ -23,6 +24,7 @@ use craft_behavior::{PartKey, Sense};
 use craft_host::target::{DoubleClick, WindowState};
 use craft_window::desktop::Desktop;
 use egui::{Rect, Response, Ui};
+use std::sync::Arc;
 
 /// What a title bar reports: the caption clicked and whether the window was asked to close.
 #[derive(Debug)]
@@ -35,6 +37,8 @@ pub struct TitleBarOutput {
     pub caption_clicked: Option<Caption>,
     /// The Close button was clicked. The bar never closes the window: the app runs its unsaved-documents path.
     pub close_requested: bool,
+    /// The title was activated in this pass; only a title with an action can be.
+    pub title_activated: bool,
 }
 
 impl Outcome for TitleBarOutput {
@@ -46,6 +50,9 @@ impl Outcome for TitleBarOutput {
 }
 
 /// The bar of a window whose frame the app draws.
+///
+/// The bar paints the chrome surface; `surface` names another role (`SurfaceKind::Background` for an app whose title
+/// bar is darker than its other bars).
 ///
 /// The bar fills the width of its room; its height is its content's, the caption strip's `SlotSize::TitleBar`. What it shows follows the window's frame
 /// (`WindowHost::frame`):
@@ -64,7 +71,9 @@ impl Outcome for TitleBarOutput {
 /// In an embedded shell (an app preview, a story) the bar is a picture of a window: it acts on no window and reads
 /// none. The captions show hover and report their clicks, but send no window command, and the bar has no move band. The body is the leading content; the
 /// trailing content ([`trailing`](TitleBar::trailing)) sits before the end's captions. [`show_titled`](TitleBar::show_titled)
-/// adds the title in the gap between them. Close never closes the window; see [`TitleBarOutput`].
+/// adds the title in the gap between them; [`show_fitted`](TitleBar::show_fitted) fits the trailing content after the
+/// leading content: its ranked members leave before the leading content narrows. Close never closes the window; see
+/// [`TitleBarOutput`].
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container)]
 pub struct TitleBar<'a> {
@@ -89,14 +98,106 @@ pub struct TitleBar<'a> {
     close: bool,
 }
 
-/// The facts of the window a pass of the bar reads.
-struct Window {
-    frame: Frame,
-    maximized: bool,
-    double_click: DoubleClick,
-    ends: Ends,
+/// The facts of the window a pass of a bar or a page band reads.
+pub(super) struct Window {
+    pub(super) frame: Frame,
+    pub(super) maximized: bool,
+    pub(super) double_click: DoubleClick,
+    pub(super) ends: Ends,
     /// Whether the bar acts on the running window: false in an embedded shell.
-    acts: bool,
+    pub(super) acts: bool,
+    /// The frame was given in place of the running window's (a story, a preview).
+    pub(super) given: bool,
+    /// The window the bar acts on is in OS full screen, where it has no ends.
+    pub(super) full_screen: bool,
+}
+
+/// The facts of the window a bar in `cx` draws: `frame` and `maximized` stand in for the running window's when given.
+/// In an embedded shell the bar acts on no window and reads it as a normal window.
+pub(super) fn window(cx: &BodyCx<'_>, frame: Option<Frame>, maximized: Option<bool>) -> Window {
+    let acts = !cx.shell().is_some_and(|shell| shell.region().is_some());
+    window_acting(cx, frame, maximized, acts)
+}
+
+/// [`window`] for a bar that acts on the running window when `acts`, for a caller that knows it before the shell
+/// around it is set (the shell itself).
+pub(super) fn window_acting(cx: &BodyCx<'_>, frame: Option<Frame>, maximized: Option<bool>, acts: bool) -> Window {
+    let ctx = cx.memory.ctx().clone();
+    let shell = windows::shell_of(&ctx, pass::current_viewport(&ctx));
+    let given = frame.is_some();
+    let frame = frame.unwrap_or_else(|| WindowHost::of(&ctx).frame());
+    let state = if acts { shell.window.state } else { WindowState::Normal };
+    let full_screen = state == WindowState::Fullscreen;
+    let rtl = cx.env.direction().is_rtl();
+    let ends = Ends::of(&frame, !full_screen, rtl);
+    Window {
+        frame,
+        maximized: maximized.unwrap_or(state == WindowState::Maximized),
+        double_click: shell.double_click,
+        ends,
+        acts,
+        given,
+        full_screen,
+    }
+}
+
+/// Acts on a double click on the move band of the container `cx` runs in, once a pass: maximizes, restores or
+/// minimizes the window as the platform's setting says. A bar that acts on no window does nothing.
+pub(super) fn act_on_double_click(cx: &BodyCx<'_>, window: &Window) {
+    if window.acts
+        && cx.band_double_pressed()
+        && let Some(action) = windows::double_click_action(&window.frame, window.double_click, window.maximized)
+    {
+        let ctx = cx.memory.ctx().clone();
+        WindowHost::of(&ctx).act(pass::current_viewport(&ctx), action);
+    }
+}
+
+/// Shows one end's room and buttons, and acts on a click: Minimize and Maximize go to the window the bar acts on.
+/// Returns the caption clicked in this pass; the caller decides what Close means.
+pub(super) fn show_end(ui: &mut Ui, cx: &BodyCx<'_>, end: &End, window: &Window) -> Option<Caption> {
+    let tokens = Env::of(ui).tokens.clone();
+    let height = SlotSize::TitleBar.resolve(&tokens);
+    let pad = tokens.tokens().space.pad.regular;
+    // The running window's captions take the glyphs of the desktop's icon theme; a frame given in place of the
+    // window's (a story, a preview) draws the family's own.
+    let ctx = cx.memory.ctx().clone();
+    let icons = if window.acts && !window.given { desktop_icons(&ctx) } else { None };
+    let mut buttons: Vec<Placed<'_>> = end
+        .captions
+        .iter()
+        .enumerate()
+        .map(|(index, slot)| {
+            let mut button = CaptionButton::new(slot.caption, window.ends.family).maximized(window.maximized);
+            if let Some(icons) = &icons {
+                button = button.icons(Arc::clone(icons));
+            }
+            if let Some(edge) = slot.end {
+                button = button.outermost(edge);
+            }
+            Placed::new(("caption", index), button)
+        })
+        .collect();
+    arrange(ui, &Strip::padded(end, height, pad), &mut buttons);
+    let (host, viewport) = (WindowHost::of(&ctx), pass::current_viewport(&ctx));
+    let mut clicked = None;
+    for (slot, placed) in end.captions.iter().zip(&buttons) {
+        if !placed.response().is_some_and(Response::clicked) {
+            continue;
+        }
+        clicked = Some(slot.caption);
+        match slot.caption {
+            Caption::Minimize | Caption::Maximize if !window.acts => {}
+            Caption::Minimize => {
+                host.act(viewport, WindowAction::Minimize);
+            }
+            Caption::Maximize => {
+                host.act(viewport, WindowAction::SetMaximized(!window.maximized));
+            }
+            _ => {}
+        }
+    }
+    clicked
 }
 
 impl<'a> TitleBar<'a> {
@@ -135,72 +236,46 @@ impl<'a> TitleBar<'a> {
         let native_hidden =
             !self.title_when_native && matches!(self.frame.clone().unwrap_or_else(|| WindowHost::of(ui.ctx()).frame()), Frame::Native);
         self.title = Some(title.clone());
-        self.trailing(trailing)
+        let mut activated = false;
+        let mut out = self
+            .trailing(trailing)
             .show(ui, |ui, cx| {
                 leading(ui, cx);
                 if !native_hidden {
                     let rtl = cx.env.direction().is_rtl();
                     let margin = cx.gap().unwrap_or_default();
-                    title.show_in_gap(ui, cx, cx.rect.width(), centre_line(cx, rtl), margin);
+                    activated = title.show_in_gap(ui, cx, cx.rect.width(), centre_line(cx, rtl), margin);
                 }
             })
-            .output
+            .output;
+        out.title_activated = activated;
+        out
     }
 
-    fn window(&self, cx: &BodyCx<'_>) -> Window {
-        let ctx = cx.memory.ctx().clone();
-        let shell = windows::shell_of(&ctx, pass::current_viewport(&ctx));
-        let frame = self.frame.clone().unwrap_or_else(|| WindowHost::of(&ctx).frame());
-        let acts = !cx.shell().is_some_and(|shell| shell.region().is_some());
-        let state = if acts { shell.window.state } else { WindowState::Normal };
-        let rtl = cx.env.direction().is_rtl();
-        let ends = Ends::of(&frame, state != WindowState::Fullscreen, rtl);
-        Window { frame, maximized: self.maximized.unwrap_or(state == WindowState::Maximized), double_click: shell.double_click, ends, acts }
+    /// Shows the bar with `leading` content at its start and `trailing` content before the end's captions, where the
+    /// end region joins the body's fit (`EndRegion::fit`): on a short bar the trailing members that carry a `fit_rank`
+    /// leave whole, lowest rank first, before the leading content narrows: an app bar whose menus stay whole while its
+    /// end controls go.
+    pub fn show_fitted(
+        mut self,
+        ui: &mut Ui,
+        leading: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a,
+        mut trailing: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a,
+    ) -> TitleBarOutput {
+        self.props = self.props.end(EndRegion::new().fit(true));
+        // The ranked members fit as units of the first row in the end region.
+        self.trailing(move |ui: &mut Ui, cx: &mut BodyCx<'_>| {
+            let _ = Row::new().show(ui, |ui, _| trailing(ui, cx));
+        })
+        .show(ui, leading)
+        .output
     }
 
-    /// Shows one end's room and buttons, and acts on a click: Minimize and Maximize go to the window the bar acts on,
-    /// Close is reported.
-    fn show_end(&mut self, ui: &mut Ui, cx: &BodyCx<'_>, end: &End, window: &Window) {
-        let tokens = Env::of(ui).tokens.clone();
-        let height = SlotSize::TitleBar.resolve(&tokens);
-        let pad = tokens.tokens().space.pad.regular;
-        // The running window's captions take the glyphs of the desktop's icon theme; a frame given in place of the
-        // window's (a story, a preview) draws the family's own.
-        let ctx = cx.memory.ctx().clone();
-        let icons = if window.acts && self.frame.is_none() { desktop_icons(&ctx) } else { None };
-        let mut buttons: Vec<Placed<'_>> = end
-            .captions
-            .iter()
-            .enumerate()
-            .map(|(index, slot)| {
-                let mut button = CaptionButton::new(slot.caption, window.ends.family).maximized(window.maximized);
-                if let Some(icons) = &icons {
-                    button = button.icons(icons);
-                }
-                if let Some(edge) = slot.end {
-                    button = button.outermost(edge);
-                }
-                Placed::new(("caption", index), button)
-            })
-            .collect();
-        arrange(ui, &Strip::padded(end, height, pad), &mut buttons);
-        let (host, viewport) = (WindowHost::of(&ctx), pass::current_viewport(&ctx));
-        for (slot, placed) in end.captions.iter().zip(&buttons) {
-            if !placed.response().is_some_and(Response::clicked) {
-                continue;
-            }
-            self.clicked = Some(slot.caption);
-            match slot.caption {
-                Caption::Minimize | Caption::Maximize if !window.acts => {}
-                Caption::Minimize => {
-                    host.act(viewport, WindowAction::Minimize);
-                }
-                Caption::Maximize => {
-                    host.act(viewport, WindowAction::SetMaximized(!window.maximized));
-                }
-                Caption::Close => self.close = true,
-                _ => {}
-            }
+    /// Shows one end of the bar and records its clicked caption: Close is reported, never acted on.
+    fn end_of(&mut self, ui: &mut Ui, cx: &BodyCx<'_>, end: &End, window: &Window) {
+        if let Some(caption) = show_end(ui, cx, end, window) {
+            self.clicked = Some(caption);
+            self.close |= caption == Caption::Close;
         }
     }
 }
@@ -246,7 +321,7 @@ impl Component for TitleBar<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TitleBarOutput {
-        TitleBarOutput { response: cx.response.clone(), caption_clicked: self.clicked, close_requested: self.close }
+        TitleBarOutput { response: cx.response.clone(), caption_clicked: self.clicked, close_requested: self.close, title_activated: false }
     }
 }
 
@@ -254,15 +329,9 @@ impl Container for TitleBar<'_> {
     /// The start end: the room for the traffic lights, or the captions at the start edge. A double click on the free
     /// band acts here, once a pass.
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        let window = self.window(cx);
-        if window.acts
-            && cx.band_double_pressed()
-            && let Some(action) = windows::double_click_action(&window.frame, window.double_click, window.maximized)
-        {
-            let ctx = cx.memory.ctx().clone();
-            WindowHost::of(&ctx).act(pass::current_viewport(&ctx), action);
-        }
-        self.show_end(ui, cx, &window.ends.start, &window);
+        let window = window(cx, self.frame.clone(), self.maximized);
+        act_on_double_click(cx, &window);
+        self.end_of(ui, cx, &window.ends.start, &window);
     }
 
     /// The end end: the trailing content, then the room for the lights or the captions at the end edge.
@@ -270,23 +339,24 @@ impl Container for TitleBar<'_> {
         if let Some(RegionBody(trailing)) = self.trailing.as_mut() {
             trailing(ui, cx);
         }
-        let window = self.window(cx);
-        self.show_end(ui, cx, &window.ends.end, &window);
+        let window = window(cx, self.frame.clone(), self.maximized);
+        self.end_of(ui, cx, &window.ends.end, &window);
     }
 }
 
 /// The caption glyphs of the icon theme of the desktop the runtime reports (`WindowHost::desktop`), built with
 /// `CaptionIcons::for_desktop` once per desktop value and kept for the app's bars while the desktop stays the same.
-fn desktop_icons(ctx: &egui::Context) -> Option<CaptionIcons> {
+fn desktop_icons(ctx: &egui::Context) -> Option<Arc<CaptionIcons>> {
     let desktop = WindowHost::of(ctx).desktop()?;
     let key = memory::unique("craft_ui.title_bar.desktop_icons");
-    memory::with_session(ctx, key, |kept: &mut Option<(Desktop, Option<CaptionIcons>)>| {
+    memory::with_session(ctx, key, |kept: &mut Option<(Desktop, Option<Arc<CaptionIcons>>)>| {
         if let Some((seen, icons)) = kept.as_ref()
             && *seen == desktop
         {
             return icons.clone();
         }
-        let icons = CaptionIcons::for_desktop(&desktop, kept.take().and_then(|(_, icons)| icons));
+        let previous = kept.take().and_then(|(_, icons)| icons).map(Arc::unwrap_or_clone);
+        let icons = CaptionIcons::for_desktop(&desktop, previous).map(Arc::new);
         *kept = Some((desktop, icons.clone()));
         icons
     })

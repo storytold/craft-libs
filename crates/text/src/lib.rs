@@ -3,6 +3,10 @@
 //! Shared text processing for the Craft apps. It sits below the composer: layout code calls it on
 //! plain text and a language before it shapes and places glyphs.
 //!
+//! [`embed`] is always available and classifies supplied OS/2 `fsType` flags using VectorCraft's
+//! outline-embedding compatibility policy. See its documentation for the caller's table-data
+//! responsibilities.
+//!
 //! Modules, each behind the cargo feature of the same name where they need a dependency of their
 //! own (`quotes`, `styles` and `lists` are always built):
 //! - [`hyphen`] (default): hyphenation points, with bundled US English data and optional
@@ -29,6 +33,8 @@
 //! turn on the modules that use it.
 #![warn(missing_docs)]
 
+pub mod embed;
+
 #[cfg(feature = "positioned")]
 pub mod positioned;
 
@@ -37,20 +43,20 @@ pub mod bidi;
 #[cfg(feature = "find")]
 pub mod find;
 #[cfg(all(test, feature = "find"))]
-mod find_tests;
+pub(crate) mod find_tests;
 #[cfg(feature = "hyphen")]
 pub mod hyphen;
 pub mod linebreak;
 pub mod lists;
 #[cfg(test)]
-mod lists_tests;
+pub(crate) mod lists_tests;
 pub mod quotes;
 #[cfg(feature = "segment")]
 pub mod segment;
 #[cfg(feature = "spell")]
 pub mod spell;
 #[cfg(all(test, feature = "spell"))]
-mod spell_tests;
+pub(crate) mod spell_tests;
 pub mod styles;
 #[cfg(feature = "ui")]
 pub mod ui;
@@ -58,18 +64,21 @@ pub mod ui;
 /// The stories and trials of the crate's UI, registered in craft-ui's registry.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }
 
 #[cfg(all(test, feature = "screen-testing"))]
 extern crate self as craft_text;
 #[cfg(all(test, feature = "screen-testing"))]
 #[path = "../tests/it/main.rs"]
-mod integration;
+pub(crate) mod integration;
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }
 
 /// Paragraph-wide line composition with stateful line measurement.

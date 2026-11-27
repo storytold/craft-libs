@@ -560,7 +560,7 @@ pub(crate) mod tests {
 }
 
 #[cfg(test)]
-mod run_tests {
+pub(crate) mod run_tests {
     use super::*;
 
     #[cfg(unix)]
@@ -630,7 +630,7 @@ mod run_tests {
 }
 
 #[cfg(test)]
-mod inherited_pipe_tests {
+pub(crate) mod inherited_pipe_tests {
     use super::*;
     use craft_ui::testing::trial;
     use std::io::{BufRead, BufReader, Read, Write};
@@ -716,11 +716,11 @@ mod inherited_pipe_tests {
         });
         // The output is more than 8 MB, so a failure shows only its length.
         assert_eq!(result.map(|output| output.len()), Err(HelperFailure::Unfinished("the fixture didn't finish within 5 seconds".into())));
-        // Lets the descendant go and waits until it has closed its end. The read time limit only
-        // stops a broken test.
+        // Lets the descendant go and waits until it has closed its end. The read time limit set when
+        // it connected only stops a broken test. macOS refuses socket options once both directions
+        // are shut, which happens as soon as the descendant closes its end after this shutdown.
         let mut holder = holder.expect("the direct child didn't exit while the descendant held its output");
         holder.shutdown(std::net::Shutdown::Write).unwrap();
-        holder.set_read_timeout(Some(HOLD)).unwrap();
         assert_eq!(holder.read_to_end(&mut Vec::new()).unwrap(), 0);
     }
 }
@@ -766,8 +766,9 @@ pub(crate) fn cancellable_output(mut cmd: Command, check: impl Fn() -> Result<()
     Ok(std::process::Output { status, stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() })
 }
 
-#[cfg(all(test, target_os = "linux"))]
-mod update_cancel_tests {
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+pub(crate) mod update_cancel_tests {
     use super::*;
     use craft_ui::testing::trial;
 

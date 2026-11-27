@@ -5,12 +5,12 @@
 //! The Ruler line is document state outside the undo history: the tool reports `EditEvent<Option<RulerLine>>` and the
 //! app stores the line.
 
-mod bar;
+pub(crate) mod bar;
 mod distances;
 mod model;
-mod overlay;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod overlay;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod tool;
 mod words;
 

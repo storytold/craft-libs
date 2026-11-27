@@ -21,7 +21,7 @@ pub struct FixedStyle {
 pub enum AppCommand {
     #[command(label = "Go")]
     Go,
-    #[command(label = "Save", default = "Cmd+K")]
+    #[command(label = "Save", default = "Cmd+Alt+Shift+K")]
     Save,
     #[command(label = "Play", default = "F8")]
     Play,
@@ -85,6 +85,37 @@ impl Component for Tap<'_> {
         if let Some(on) = self.on {
             on.set(craft_ui::contract::Styled::state(&cx).flags.intersects(craft_ui::style::Flags::ON));
         }
+        cx.response.clone()
+    }
+}
+
+/// A `Tap` whose role gives it no access node.
+#[derive(Component)]
+pub struct Silent {
+    #[common]
+    common: Common,
+}
+
+impl Silent {
+    pub fn new() -> Self {
+        Silent { common: Common::new() }
+    }
+}
+
+impl Component for Silent {
+    const ROLE: Role = Role::None;
+    type Style = FixedStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: SilentStyleKey) -> FixedStyle {
+        FixedStyle::default()
+    }
+
+    fn measure(&mut self, _: &craft_ui::contract::MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::new(40.0, 20.0)
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
         cx.response.clone()
     }
 }

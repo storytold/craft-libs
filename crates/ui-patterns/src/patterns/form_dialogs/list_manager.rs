@@ -1,9 +1,9 @@
 //! `ListManager`: a named list with a name box and a column of buttons that run, edit, create or delete entries.
 
 use crate::contract::{
-    Bind, CollectionEvent, NoValue, Outcome, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+    Bind, BodyCx, CollectionEvent, NoValue, Outcome, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
 };
-use crate::dialog::{Dialog, DialogOutput};
+use crate::dialog::{ButtonPlace, Dialog, DialogId, DialogOutput, DialogResult, DialogStack, StackDialog};
 use crate::display::{Shade, Text};
 use crate::form::Field;
 use crate::layout_components::Stack;
@@ -14,14 +14,18 @@ use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 use crate::style::TypeRole;
 use crate::text::TextField;
-use craft_behavior::{DisplayOrder, ItemSource, Selection};
+use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Mixed, Selection};
 use craft_i18n::Folder;
 use egui::{Response, Ui};
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+type UnderList<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
+
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The standard words of the list manager; the app's own actions bring their labels.
@@ -96,6 +100,10 @@ pub enum ActionEnabled {
     },
     /// When the name box holds a name no entry has (Create).
     OnNewName,
+    /// When the name box holds a name `name_check` accepts.
+    OnValidName,
+    /// Never: the button is shown disabled.
+    Never,
 }
 
 /// One button of the column, top to bottom.
@@ -186,6 +194,16 @@ pub struct ListManagerChoice {
     pub name: String,
 }
 
+impl ListManagerChoice {
+    /// The action id of an in-place rename ([`ListManager::renames`]). An app's own action must not use this id.
+    pub const RENAME: &'static str = "rename";
+
+    /// Whether the choice is an in-place rename.
+    pub fn is_rename(&self) -> bool {
+        self.action == Self::RENAME
+    }
+}
+
 /// What a list manager reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -207,10 +225,108 @@ impl Outcome for ListManagerOutput {
     }
 }
 
-/// What the dialog keeps while it is open: the text of the name box.
-#[derive(Clone, Default)]
-struct Session {
+/// A [`ListManager`] the [`DialogHost`](crate::dialog::DialogHost) owns, over its entries and actions. It answers with
+/// the [`ListManagerChoice`] of the action that closed it, as `HostedNewWorkspace` answers with its value; the choice
+/// of an action that keeps it open (Delete, a rename) waits for [`take_choice`](HostedListManager::take_choice).
+pub struct HostedListManager {
+    id: DialogId,
+    key: String,
+    title: Label,
+    name_label: Label,
+    entries: Vec<ListManagerEntry>,
+    actions: Vec<ListManagerAction>,
+    renames: Option<u32>,
+    /// The name box's text, kept by the dialog.
     name: String,
+    open: bool,
+    /// The choice of an action that kept the dialog open, until the host takes it.
+    choice: Option<ListManagerChoice>,
+}
+
+impl HostedListManager {
+    /// A hosted list manager for the command `key`, titled `title` over a name box labelled `name_label`, with the
+    /// buttons `actions`.
+    pub fn new(key: impl Into<String>, title: impl Into<Label>, name_label: impl Into<Label>, actions: Vec<ListManagerAction>) -> Self {
+        let key = key.into();
+        HostedListManager {
+            id: crate::dialog::dialog_id(&key),
+            key,
+            title: title.into(),
+            name_label: name_label.into(),
+            entries: Vec::new(),
+            actions,
+            renames: None,
+            name: String::new(),
+            open: true,
+            choice: None,
+        }
+    }
+
+    /// The entries the list opens with.
+    #[must_use]
+    pub fn entries(mut self, entries: Vec<ListManagerEntry>) -> Self {
+        self.entries = entries;
+        self
+    }
+
+    /// Entries of `kind` rename in place, as [`ListManager`]'s `renames`: a commit is a choice that keeps the dialog
+    /// open.
+    #[must_use]
+    pub fn renames(mut self, kind: u32) -> Self {
+        self.renames = Some(kind);
+        self
+    }
+
+    /// Replaces the entries of an open dialog; the name box keeps its text.
+    pub fn set_entries(&mut self, entries: Vec<ListManagerEntry>) {
+        self.entries = entries;
+    }
+
+    /// The choice of the last action that kept the dialog open (Delete, a rename), once.
+    pub fn take_choice(&mut self) -> Option<ListManagerChoice> {
+        self.choice.take()
+    }
+}
+
+impl StackDialog for HostedListManager {
+    type Result = ListManagerChoice;
+
+    fn id(&self) -> DialogId {
+        self.id
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ListManagerChoice>> {
+        let list = ListManager::new(self.title.clone(), self.name_label.clone(), &self.entries[..], &self.actions[..])
+            .name_box(Bind::bound(&mut self.name))
+            .opened(Bind::bound(&mut self.open));
+        let list = match self.renames {
+            Some(kind) => list.renames(kind),
+            None => list,
+        };
+        let shown = list.show(ui);
+        match (shown.closed, shown.choice) {
+            (Some(_), Some(choice)) => Some(DialogResult::Ok(choice)),
+            (Some(_), None) => Some(DialogResult::Cancel),
+            (None, choice) => {
+                if choice.is_some() {
+                    self.choice = choice;
+                }
+                None
+            }
+        }
+    }
+
+    fn key(&self) -> Option<&str> {
+        Some(&self.key)
+    }
+}
+
+/// The name box's text in `bind`: empty while a kept binding holds none.
+fn text_of(bind: &mut Bind<'_, String>, cx: &mut BodyCx<'_>) -> String {
+    match bind.reborrow().read(cx) {
+        Some(Mixed::Same(text)) => text,
+        _ => String::new(),
+    }
 }
 
 /// The rows as the list's item source: the position in the entries is the key.
@@ -246,11 +362,17 @@ fn accepts(action: &ListManagerAction, entry: &ListManagerEntry) -> bool {
     }
 }
 
-/// The action's button state for the name box's text.
-fn is_enabled(action: &ListManagerAction, entries: &[ListManagerEntry], folder: &Folder, name: &str) -> bool {
+/// The action's button state for the name box's text. `OnValidName` follows `name_check` on the trimmed name, and is
+/// "not empty" without one, so it holds for a name an entry already has (unlike `OnNewName`).
+fn is_enabled(action: &ListManagerAction, entries: &[ListManagerEntry], folder: &Folder, name: &str, name_check: Option<fn(&str) -> bool>) -> bool {
     match action.enabled {
         ActionEnabled::OnEntry { .. } => entries.iter().any(|entry| is_named(entry, folder, name) && accepts(action, entry)),
         ActionEnabled::OnNewName => !name.trim().is_empty() && !entries.iter().any(|entry| is_named(entry, folder, name)),
+        ActionEnabled::OnValidName => match name_check {
+            Some(check) => check(name.trim()),
+            None => !name.trim().is_empty(),
+        },
+        ActionEnabled::Never => false,
         _ => true,
     }
 }
@@ -263,6 +385,11 @@ fn is_enabled(action: &ListManagerAction, entries: &[ListManagerEntry], folder: 
 ///   it is enabled, Delete in the list runs the `delete` action, Escape cancels.
 /// - Actions are the buttons in a column beside the list: the first action, Cancel, then the other actions in the
 ///   given order. The app replaces `entries` between passes; the name box keeps its text.
+/// - The name box's text is one binding: the caller's with [`name_box`](ListManager::name_box), else the dialog's
+///   memory, which each open starts from the `name` prop.
+/// - Rename: with `renames`, F2 on an entry of that kind edits its name in the row. A commit puts the name in the name
+///   box, reports a choice whose action is [`ListManagerChoice::RENAME`] and leaves the dialog open; Escape reports
+///   nothing.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 pub struct ListManager<'a> {
@@ -279,12 +406,30 @@ pub struct ListManager<'a> {
     /// The name box also filters the rows to the names that match it.
     #[prop]
     searchable: bool,
-    /// The name the box opens with, with its entry selected.
+    /// The name the box opens with, with its entry selected, while the dialog keeps the text (no
+    /// [`name_box`](ListManager::name_box)).
     #[prop(into)]
     name: Option<String>,
+    /// Binds the name box's text to `bind`: the caller reads what the user typed and sets the text, which the box
+    /// shows on the next pass. The `name` prop does not apply then.
+    #[prop]
+    name_box: Option<Bind<'a, String>>,
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
+    /// Entries of this kind rename in place: a commit reports a [`ListManagerChoice`] with the `RENAME` action, the
+    /// entry's id and the trimmed name, and the dialog stays open.
+    #[prop]
+    renames: Option<u32>,
+    /// Whether a name is valid, for [`ActionEnabled::OnValidName`].
+    #[prop]
+    name_check: Option<fn(&str) -> bool>,
+    /// The second button's label when it is not Cancel.
+    #[prop(into)]
+    cancel_label: Option<Label>,
+    /// Draws `content` under the list.
+    #[prop(boxed = "FnMut(&mut Ui) + 'a", name = "under_list")]
+    under: Option<UnderList<'a>>,
 }
 
 impl<'a> ListManager<'a> {
@@ -304,13 +449,37 @@ impl<'a> ListManager<'a> {
             note: None,
             searchable: false,
             name: None,
+            name_box: None,
             open: None,
+            renames: None,
+            name_check: None,
+            cancel_label: None,
+            under: None,
         }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> ListManagerOutput {
-        let ListManager { title, name_label, entries, actions, empty, note, searchable, name, open } = self;
+        let ListManager {
+            title,
+            name_label,
+            entries,
+            actions,
+            empty,
+            note,
+            searchable,
+            name,
+            name_box,
+            open,
+            renames,
+            name_check,
+            cancel_label,
+            under,
+        } = self;
+        let under = RefCell::new(under);
+        // The dialog keeps the text unless the caller binds it; a kept text starts each open from `name`.
+        let kept = name_box.is_none();
+        let name_box = Rc::new(RefCell::new(name_box.unwrap_or_else(Bind::kept)));
         let env = Env::of(ui);
         let words = env.words::<ListManagerWords>();
         let common = env.words::<CommonWords>();
@@ -333,16 +502,18 @@ impl<'a> ListManager<'a> {
                 button
             })
             .collect();
-        buttons.push(FooterButton::new(common.cancel.clone(), DialogRole::Cancel));
-        let mut dialog = Dialog::new(title.clone()).collection_body().close_on_enter(false).side_buttons(true).buttons(buttons).settle_buttons(
-            move |cx, buttons| {
-                let folder = cx.env.folder();
-                let typed = cx.memory::<Session>().name.clone();
-                for (button, action) in buttons.iter_mut().zip(actions) {
-                    button.set_enabled(is_enabled(action, entries, &folder, &typed));
-                }
-            },
-        );
+        buttons.push(FooterButton::new(cancel_label.unwrap_or_else(|| common.cancel.clone()), DialogRole::Cancel));
+        let settled = Rc::clone(&name_box);
+        let mut dialog =
+            Dialog::new(title.clone()).collection_body().close_on_enter(true).button_place(ButtonPlace::Side).buttons(buttons).settle_buttons(
+                move |cx, buttons| {
+                    let folder = cx.env.folder();
+                    let typed = text_of(&mut settled.borrow_mut(), cx);
+                    for (button, action) in buttons.iter_mut().zip(actions) {
+                        button.set_enabled(is_enabled(action, entries, &folder, &typed, name_check));
+                    }
+                },
+            );
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
@@ -350,24 +521,25 @@ impl<'a> ListManager<'a> {
         let folder = env.folder();
         let activated = Cell::new(None::<usize>);
         let typed = RefCell::new(String::new());
+        let renamed = RefCell::new(None::<(usize, String)>);
         let shown = dialog.show(ui, |ui, cx| {
-            let mut session = cx.memory::<Session>().clone();
-            if cx.appeared()
-                && let Some(name) = &name
-            {
-                session.name.clone_from(name);
-            }
-            let session = RefCell::new(session);
+            let mut bind = name_box.borrow_mut();
+            let before = text_of(&mut bind, cx);
+            let opened = if kept && cx.appeared() { name.clone().unwrap_or_default() } else { before.clone() };
+            let text = RefCell::new(opened);
             Stack::new()
                 .header(|ui, _| {
-                    let mut session = session.borrow_mut();
+                    let mut text = text.borrow_mut();
                     Field::new(name_label.clone()).show(ui, |ui, _| {
-                        TextField::new(name_label.clone(), Bind::bound(&mut session.name)).select_on_focus().drives(list_id).show(ui);
+                        TextField::new(name_label.clone(), Bind::bound(&mut *text)).select_on_focus().drives(list_id).show(ui);
                     });
                 })
                 .footer(|ui, _| {
-                    let session = session.borrow();
-                    if let Some(entry) = entries.iter().find(|entry| is_named(entry, &folder, &session.name)) {
+                    let text = text.borrow();
+                    if let Some(under) = under.borrow_mut().as_mut() {
+                        under(ui);
+                    }
+                    if let Some(entry) = entries.iter().find(|entry| is_named(entry, &folder, &text)) {
                         Text::new(words.description.clone()).show(ui);
                         Text::new(entry.description.clone()).shade(Shade::Muted).show(ui);
                     }
@@ -376,8 +548,8 @@ impl<'a> ListManager<'a> {
                     }
                 })
                 .show(ui, |ui, _| {
-                    let mut session = session.borrow_mut();
-                    let current = entries.iter().position(|entry| is_named(entry, &folder, &session.name));
+                    let mut text = text.borrow_mut();
+                    let current = entries.iter().position(|entry| is_named(entry, &folder, &text));
                     let mut selection = current.map_or_else(Selection::default, Selection::single);
                     let source = Rows(entries);
                     let mut list = List::new(title.clone())
@@ -390,7 +562,10 @@ impl<'a> ListManager<'a> {
                         list = list.empty(empty.clone());
                     }
                     if searchable {
-                        list = list.filter(&session.name, |at| Label::from(entries[*at].name.clone()));
+                        list = list.filter(text.as_str(), |at| vec![Label::from(entries[*at].name.clone())]);
+                    }
+                    if let Some(kind) = renames {
+                        list = list.rename(true).can_rename(move |at| entries[*at].kind == kind);
                     }
                     let events = list
                         .show_items(ui, &source, &mut |at, _| {
@@ -406,34 +581,47 @@ impl<'a> ListManager<'a> {
                     if picked != current
                         && let Some(at) = picked
                     {
-                        session.name.clone_from(&entries[at].name);
+                        text.clone_from(&entries[at].name);
                     }
                     for event in events {
                         match event {
                             CollectionEvent::Activate(at) => {
-                                session.name.clone_from(&entries[at].name);
-                                let first = actions.first().filter(|action| is_enabled(action, entries, &folder, &session.name));
+                                // A lead row left unpicked by a name typed after it runs the first action on that name.
+                                if picked == Some(at) {
+                                    text.clone_from(&entries[at].name);
+                                }
+                                let first = actions.first().filter(|action| is_enabled(action, entries, &folder, &text, name_check));
                                 activated.set(first.map(|_| 0));
                             }
                             CollectionEvent::Delete(rows) => {
                                 if let Some(at) = rows.first() {
-                                    session.name.clone_from(&entries[*at].name);
+                                    text.clone_from(&entries[*at].name);
                                 }
                                 let delete = actions.iter().position(|action| action.id == DELETE);
-                                activated.set(delete.filter(|at| is_enabled(&actions[*at], entries, &folder, &session.name)));
+                                activated.set(delete.filter(|at| is_enabled(&actions[*at], entries, &folder, &text, name_check)));
+                            }
+                            CollectionEvent::Rename(EditEvent::Commit { after: rename, .. }) => {
+                                let name = rename.name.trim();
+                                if !name.is_empty() {
+                                    *text = name.to_owned();
+                                    *renamed.borrow_mut() = Some((rename.key, text.clone()));
+                                }
                             }
                             _ => {}
                         }
                     }
                 });
-            let session = session.into_inner();
-            typed.borrow_mut().clone_from(&session.name);
+            let text = text.into_inner();
+            if text != before {
+                let event = EditEvent::set(Mixed::Same(before), text.clone(), Arc::from(name_label.as_str()), None);
+                let _ = bind.reborrow().write(cx, &event);
+            }
+            typed.borrow_mut().clone_from(&text);
             if let Some(at) = activated.get()
                 && actions[at].closes
             {
                 cx.request_close_as(CloseReason::Activated);
             }
-            *cx.memory::<Session>() = session;
         });
 
         let DialogOutput { response, closed, picked } = shown.output;
@@ -443,6 +631,9 @@ impl<'a> ListManager<'a> {
             let entry = entries.iter().find(|entry| is_named(entry, &folder, &typed) && accepts(&actions[at], entry));
             ListManagerChoice { action: actions[at].id.clone(), entry: entry.map(|entry| entry.id.clone()), name: typed.trim().to_owned() }
         });
-        ListManagerOutput { response, closed, choice }
+        let rename = renamed.take().and_then(|(at, name)| {
+            entries.get(at).map(|entry| ListManagerChoice { action: ListManagerChoice::RENAME.to_owned(), entry: Some(entry.id.clone()), name })
+        });
+        ListManagerOutput { response, closed, choice: choice.or(rename) }
     }
 }

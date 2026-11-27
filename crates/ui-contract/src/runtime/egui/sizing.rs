@@ -69,7 +69,7 @@ pub(crate) fn request_discard(ctx: &Context, rerun: Rerun) {
 /// Why the running pass runs again: `None` in a frame's first pass, else the reasons the discarded pass asked for
 /// (empty when egui discarded it on its own).
 pub(crate) fn rerun_reasons(ctx: &Context) -> Option<Vec<Rerun>> {
-    if ctx.current_pass_index() == 0 {
+    if super::pass::first_of_frame(ctx) {
         return None;
     }
     let (id, pass) = (asked_id(ctx), running_pass(ctx));
@@ -83,10 +83,12 @@ pub(crate) fn discardable(ctx: &Context) -> bool {
     ctx.current_pass_index() + 1 < ctx.options(|options| options.max_passes.get())
 }
 
-/// Runs `f` in an invisible sizing pass `width` wide, from the parent's cursor, and returns what it took.
+/// Runs `f` in an invisible sizing pass `width` wide, at the start of the rest of the parent's region, and returns
+/// what it took.
 /// The parent allocates nothing.
 pub(crate) fn run_sized<R>(ui: &mut Ui, width: f32, layout: Layout, f: impl FnOnce(&mut Ui) -> R) -> (R, Vec2) {
-    let room = Rect::from_min_size(ui.cursor().min, Vec2::new(width, f32::INFINITY));
+    // The rest of the parent's region, not its cursor: a right-to-left cursor starts at negative infinity.
+    let room = Rect::from_min_size(ui.available_rect_before_wrap().min, Vec2::new(width, f32::INFINITY));
     let mut child = ui.new_child(UiBuilder::new().max_rect(room).layout(layout).sizing_pass().invisible());
     let inner = f(&mut child);
     (inner, child.min_rect().size())

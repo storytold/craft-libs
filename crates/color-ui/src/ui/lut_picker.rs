@@ -4,8 +4,7 @@
 //! [`Files`](craft_host::Files) and reads and parses it as a [`Jobs`](craft_host::Jobs) job.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
-use std::time::Instant;
+use std::sync::Arc;
 
 use craft_behavior::{EditEvent, EditEvents, Metrics, Mixed, Proposal, Sense};
 use craft_cms::lutfile::{LutError, LutFile};
@@ -16,11 +15,12 @@ use craft_ui::contract::{
 };
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::Label;
+use craft_ui::runtime::frame;
 use craft_ui::style::{ComponentStyle, StyleCx};
 use egui::{Response, Vec2};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The LUT picker's rows, English by default, and the built-in looks' names in
@@ -154,12 +154,6 @@ impl Default for Parsed {
     }
 }
 
-/// The seconds since the first scan of the process, for the rescan interval.
-fn seconds() -> u64 {
-    static START: OnceLock<Instant> = OnceLock::new();
-    START.get_or_init(Instant::now).elapsed().as_secs()
-}
-
 /// A select of LUTs.
 ///
 /// - Rows: Load 3D LUT…, None, the eight built-in looks, the LUT folder's files by name (in the language's
@@ -269,9 +263,11 @@ impl Component for LutPicker<'_> {
             state = LutState { folder: self.folder.clone(), load: state.load, ..LutState::default() };
         }
         if let Some(folder) = self.folder.clone() {
-            let key = ("lut-scan", folder.clone(), seconds() / RESCAN);
+            let key = ("lut-scan", folder.clone(), frame::stepped_clock(&cx.response.ctx, RESCAN as f64) as u64 / RESCAN);
             let started = folder.clone();
-            if let Pending::Ready(found) = cx.pending(key, move || Job::new(move |_, _| Ok::<_, ()>(Arc::new(list_folder(&started))))) {
+            if let Pending::Ready(found) =
+                cx.pending(key, move || Job::new(move |_, _| Ok::<_, ()>(Arc::new(craft_cms::lutfile::list_folder(&started)))))
+            {
                 let mut files = (**found).clone();
                 cx.env.collator().sort_by_key(&mut files, |(name, _)| name.as_str());
                 state.files = Arc::new(files);
@@ -377,31 +373,4 @@ fn builtin_name(words: &LutWords, id: &str) -> Label {
 
 fn file_name(path: &Path) -> String {
     path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned())
-}
-/// Most files [`list_folder`] lists.
-const MAX_FILES: usize = 500;
-/// Largest file [`list_folder`] lists: a 129³ `.cube` is about 60 MB.
-const MAX_BYTES: u64 = 64 << 20;
-
-/// The `.cube`, `.3dl` and `.look` files directly in `dir` as (file name, path), sorted by name
-/// without regard to case. An unreadable folder lists nothing; hidden files, subfolders and files
-/// too large to be a LUT are skipped, and a symlink to a LUT file is listed.
-fn list_folder(dir: &Path) -> FolderFiles {
-    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
-    let mut out: FolderFiles = entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
-            let extension = name.rsplit_once('.')?.1.to_ascii_lowercase();
-            if name.starts_with('.') || !matches!(extension.as_str(), "cube" | "3dl" | "look") {
-                return None;
-            }
-            let path = entry.path();
-            let meta = std::fs::metadata(&path).ok()?;
-            (meta.is_file() && meta.len() <= MAX_BYTES).then_some((name, path))
-        })
-        .collect();
-    out.sort_by_key(|(name, _)| name.to_lowercase());
-    out.truncate(MAX_FILES);
-    out
 }

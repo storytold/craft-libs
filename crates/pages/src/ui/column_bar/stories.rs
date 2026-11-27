@@ -1,7 +1,7 @@
 //! Stories of the column bar.
 
 use super::ColumnBar;
-use craft_ui::contract::{Bind, Show as _, Validity};
+use craft_ui::contract::{Show as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -14,15 +14,15 @@ fn drag_first_divider(fixture: &mut Fixture) {
 
 #[story(ColumnBar<'static>, covers = [Default], drive = Drive::Custom(drag_first_divider))]
 fn three_columns(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let widths = data.value("widths", vec![50.0, 30.0, 20.0]);
-    ColumnBar::new("Columns", Bind::bound(widths)).show(ui).into()
+    let (widths, widths_at) = data.value_at("widths", vec![50.0, 30.0, 20.0]);
+    ColumnBar::new("Columns", widths_at.bind(widths)).show(ui).into()
 }
 
 #[story(ColumnBar<'static>, covers = [Invalid], drive = Drive::Never)]
 fn a_column_without_width(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let widths = data.value("empty", vec![60.0, 0.0, 40.0]);
+    let (widths, widths_at) = data.value_at("empty", vec![60.0, 0.0, 40.0]);
     let refuse_empty = |widths: &Vec<f64>| {
         if widths.iter().any(|width| *width <= 0.0) { Validity::Refuse(Message::new("A column needs a width")) } else { Validity::Ok }
     };
-    ColumnBar::new("Columns", Bind::bound(widths).check(refuse_empty)).show(ui).into()
+    ColumnBar::new("Columns", widths_at.bind(widths).check(refuse_empty)).show(ui).into()
 }

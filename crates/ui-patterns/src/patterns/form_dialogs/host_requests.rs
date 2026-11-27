@@ -1,9 +1,13 @@
 //! `HostRequests`: what a hosted dialog's rows ask of the host, kept until the host takes it.
 
+use super::fields::DialogFields;
+use super::param::{Param, ParamKind, edited_rows};
+use super::preview::PagerStep;
 use super::rows::ParamRowsOutput;
 use crate::runtime::requests::{ColorRequest, EyedropperRequest, HostAnswer, ListingRequest, PathRequest};
 use craft_theme::Srgba;
 use egui::Pos2;
+use serde_json::Value;
 use std::path::PathBuf;
 
 /// A request to render a preview of `options`, numbered so the host's answer can be matched to the settings it was
@@ -25,8 +29,9 @@ impl<O> PreviewRequest<O> {
 }
 
 /// The requests of parameter rows that the host answers: the colour picker, the file dialog, the eyedropper and a
-/// folder listing, the click on a dialog's preview picture (an eyedropper there samples it) and a footer button that
-/// keeps the dialog open. A hosted dialog embeds one, feeds it each pass's rows with [`absorb`](HostRequests::absorb)
+/// folder listing, the click on a dialog's preview picture (an eyedropper there samples it), a step of its preview
+/// pager, a footer or row button that keeps the dialog open (one action channel: footer and row ids share one
+/// namespace) and the rows an edit changed. A hosted dialog embeds one, feeds it each pass's rows with [`absorb`](HostRequests::absorb)
 /// and offers the `take_*` methods to its host. A request stays until it is taken; a newer one of the same kind
 /// replaces it. It also keeps the colours a child picker previews in the dialog's colour rows
 /// ([`preview_color`](HostRequests::preview_color)).
@@ -37,10 +42,17 @@ pub struct HostRequests {
     eyedropper: Option<EyedropperRequest>,
     listing: Option<ListingRequest>,
     preview_click: Option<Pos2>,
-    footer_action: Option<String>,
+    action: Option<String>,
+    help_link: Option<String>,
+    sampling_ended: bool,
+    preview_step: Option<PagerStep>,
+    /// The keys of the rows an edit changed since the last take, each once.
+    edited: Vec<String>,
     /// The previewed colour of each colour row a child picker edits, by row key; one entry per key.
     previews: Vec<(String, Srgba)>,
     answers: Vec<HostAnswer>,
+    /// The ids of the actions custom rows asked the host to run, in the order asked.
+    actions: Vec<String>,
 }
 
 impl HostRequests {
@@ -63,6 +75,30 @@ impl HostRequests {
         if let Some(request) = rows.listing.take() {
             self.request_listing(request);
         }
+        if let Some(link) = rows.help_link.take() {
+            self.help_link = Some(link);
+        }
+        self.sampling_ended |= std::mem::take(&mut rows.sampling_ended);
+        self.actions.append(&mut rows.actions);
+        if let Some(id) = rows.action.take() {
+            self.request_action(id);
+        }
+        self.request_edited(std::mem::take(&mut rows.edited));
+    }
+
+    /// The ids of the actions custom rows asked the host to run since the last call, once, in the order asked.
+    pub fn take_actions(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.actions)
+    }
+
+    /// The help link a row's button reported, once.
+    pub fn take_help_link(&mut self) -> Option<String> {
+        self.help_link.take()
+    }
+
+    /// Whether an Escape ended a row's sampling since the last call, once.
+    pub fn take_sampling_ended(&mut self) -> bool {
+        std::mem::take(&mut self.sampling_ended)
     }
 
     /// Files a colour request; it replaces one not taken yet.
@@ -129,27 +165,91 @@ impl HostRequests {
 
     /// Moves the requests and answers of `other` in; its requests replace the ones not taken yet.
     pub fn extend(&mut self, other: HostRequests) {
-        let HostRequests { color, path, eyedropper, listing, preview_click, footer_action, previews, answers } = other;
+        let HostRequests {
+            color,
+            path,
+            eyedropper,
+            listing,
+            preview_click,
+            action,
+            help_link,
+            sampling_ended,
+            preview_step,
+            edited,
+            previews,
+            answers,
+            actions,
+        } = other;
+        self.actions.extend(actions);
+        self.sampling_ended |= sampling_ended;
+        self.help_link = help_link.or(self.help_link.take());
         self.color = color.or(self.color.take());
         self.path = path.or(self.path.take());
         self.eyedropper = eyedropper.or(self.eyedropper.take());
         self.listing = listing.or(self.listing.take());
         self.preview_click = preview_click.or(self.preview_click.take());
-        self.footer_action = footer_action.or(self.footer_action.take());
+        self.action = action.or(self.action.take());
+        self.preview_step = preview_step.or(self.preview_step.take());
+        self.request_edited(edited);
         for (key, color) in previews {
             self.preview_color(key, Some(color));
         }
         self.answers.extend(answers);
     }
 
-    /// Files a footer button's id the user pressed; it replaces one not taken yet.
-    pub fn request_footer_action(&mut self, id: String) {
-        self.footer_action = Some(id);
+    /// Files the id of a footer or row button the user pressed; it replaces one not taken yet.
+    pub fn request_action(&mut self, id: String) {
+        self.action = Some(id);
     }
 
-    /// The footer button id that was pressed, once.
-    pub fn take_footer_action(&mut self) -> Option<String> {
-        self.footer_action.take()
+    /// The id of the footer or row button that was pressed, once.
+    pub fn take_action(&mut self) -> Option<String> {
+        self.action.take()
+    }
+
+    /// Files the keys of rows an edit changed; a key not taken yet is kept once.
+    pub fn request_edited(&mut self, keys: impl IntoIterator<Item = String>) {
+        for key in keys {
+            if !self.edited.contains(&key) {
+                self.edited.push(key);
+            }
+        }
+    }
+
+    /// Sets `field` of `fields` to `value` through automation, by the shared parameter-field rule
+    /// ([`set_param_field`](super::set_param_field)) over `params`, and files what an edit in the row files: the rows
+    /// it changed as edited, and the listing of a files row's new folder. A hosted dialog's `set_json_field` goes
+    /// through here, so its host reads the set as the user's edit and does not write its own value over it.
+    pub fn set_field(&mut self, params: &[Param], fields: &mut DialogFields, field: &str, value: Value) -> Result<(), String> {
+        let before = fields.clone();
+        super::set_param_field(params, fields, field, value)?;
+        self.request_set(params, &before, fields);
+        Ok(())
+    }
+
+    /// Files what a set through automation of the rows `params` from `before` to `after` files ([`set_field`](Self::set_field)).
+    pub fn request_set(&mut self, params: &[Param], before: &DialogFields, after: &DialogFields) {
+        for param in params.iter().filter(|param| matches!(param.kind, ParamKind::Files { .. })) {
+            if let Some(request) = param.listing_after(before, after) {
+                self.request_listing(request);
+            }
+        }
+        self.request_edited(edited_rows(params, before, after));
+    }
+
+    /// The row keys an edit changed since the last take.
+    pub fn take_edited(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.edited)
+    }
+
+    /// Files a step of the preview pager; it replaces one not taken yet.
+    pub fn request_preview_step(&mut self, step: PagerStep) {
+        self.preview_step = Some(step);
+    }
+
+    /// The step of the preview pager, once.
+    pub fn take_preview_step(&mut self) -> Option<PagerStep> {
+        self.preview_step.take()
     }
 
     /// Files a request for the files of a folder; it replaces one not taken yet.

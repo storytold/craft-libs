@@ -716,6 +716,9 @@ pub struct Para {
     pub index: Option<Box<(std::sync::Arc<str>, usize)>>,
     /// The group of paragraphs its markup kept as read belongs to (see [`Group`]).
     pub group: Option<Box<Group>>,
+    /// A list item's further paragraph, with no number of its own (`list` is `None`): the level
+    /// of the item it belongs to.
+    pub item: Option<u8>,
 }
 
 /// Paragraphs whose markup kept as read ties them together (a comment from one to another, a
@@ -881,6 +884,10 @@ pub struct Cell {
     /// The width, points, the source gives a cell spanning one column (HTML): see
     /// [`FTable::widths_from_cells`].
     pub width: Option<f32>,
+    /// Whether the source explicitly started a vertical merge (`mso-yfti-vmerge:restart`).
+    pub vmerge_restart: bool,
+    /// Whether this covered placeholder was synthesized by [`FTable::insert_covered`].
+    pub synthetic_covered: bool,
 }
 
 /// A cell's background picture: the picture at its own size, how it fills the cell, and where an
@@ -907,6 +914,8 @@ impl Default for Cell {
             direction: Default::default(),
             picture: None,
             width: None,
+            vmerge_restart: false,
+            synthetic_covered: false,
         }
     }
 }
@@ -999,8 +1008,8 @@ impl FTable {
             let mut g = 0usize;
             let mut ci = 0usize;
             while let Some(c) = self.rows.get(r).and_then(|row| row.get(ci)) {
-                let (span, rs, covered) = (c.colspan.clamp(1, 63) as usize, c.rowspan.clamp(1, 1000) as usize, c.covered);
-                if rs > 1 && !covered {
+                let (span, rs, vmerge_restart) = (c.colspan.clamp(1, 63) as usize, c.rowspan.clamp(1, 1000) as usize, c.vmerge_restart);
+                if rs > 1 {
                     for k in 1..rs {
                         work += 1;
                         if work > MAX_COVERED_WORK {
@@ -1017,8 +1026,14 @@ impl FTable {
                             }
                             x += cc.colspan.clamp(1, 63) as usize;
                         }
+                        if at < row.len() && x == g && row[at].covered && (vmerge_restart || row[at].synthetic_covered) {
+                            // Row already has a matching explicit continuation (when this cell had
+                            // `mso-yfti-vmerge:restart`) or a synthetic placeholder from an earlier
+                            // row. Avoid adding a duplicate covered cell which would make the row ragged.
+                            continue;
+                        }
                         if row.len() < 64 {
-                            row.insert(at, Cell { colspan: span as u32, covered: true, ..Default::default() });
+                            row.insert(at, Cell { colspan: span as u32, covered: true, synthetic_covered: true, ..Default::default() });
                         }
                     }
                 }
@@ -1094,4 +1109,15 @@ pub fn ruby_as_text(inlines: &[Inline]) -> std::borrow::Cow<'_, [Inline]> {
 /// Text with characters the model reserves (U+FFFC) and stray controls removed.
 pub fn clean_text(s: &str) -> String {
     s.chars().filter(|c| *c != OBJ && (!c.is_control() || matches!(c, '\t' | '\n' | '\u{000C}' | '\u{000E}'))).collect()
+}
+
+/// Whether the paragraph at `i` in `blocks` is a list item's further paragraph, and the level of
+/// its item: HTML and Markdown keep it in its item, so the list doesn't start again after it.
+/// A plain paragraph or a heading (ODF's `text:h` may sit in a list item); the writers have no
+/// way to put the other kinds in an item.
+pub fn continues_list(blocks: &[FBlock], i: usize) -> Option<u8> {
+    match blocks.get(i) {
+        Some(FBlock::Para(p)) if p.list.is_none() && matches!(p.kind, Kind::Normal | Kind::Heading(_)) => p.item.map(|l| l.min(8)),
+        _ => None,
+    }
 }

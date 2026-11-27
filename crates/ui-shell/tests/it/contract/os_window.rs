@@ -14,7 +14,7 @@ use craft_ui::testing::trial;
 use craft_ui::testing::windows::NoWindows;
 use craft_ui_test_kit::windows::Windows;
 use craft_window::policy::{Decision, Desktop, DesktopKind};
-use egui::{Pos2, Rect, Vec2, ViewportCommand, ViewportId, vec2};
+use egui::{Align2, Pos2, Rect, Vec2, ViewportCommand, ViewportId, vec2};
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -39,7 +39,7 @@ fn a_modals_strip_stands_for_the_hit_sink() {
                 bar.set(TitleBar::new().show_titled(ui, Title::new("Landscape.psd"), |_, _| {}, |_, _| {}).response.rect);
                 let mut open = true;
                 let shown = Dialog::new("Grid options")
-                    .first_place(at)
+                    .first_place(at, Align2::LEFT_TOP)
                     .opened(Bind::bound(&mut open))
                     .buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)])
                     .show(ui, |ui, _| {

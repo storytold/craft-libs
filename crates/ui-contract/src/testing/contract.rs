@@ -3,7 +3,8 @@
 use crate::runtime::inspect::{self, Finding};
 use egui::{Context, Id};
 
-/// The steps the latest show of `id` ran, in order.
+/// The steps the latest inspected show of `id` ran, in order. Wrap the show in
+/// [`crate::runtime::inspect::record`] to collect its steps.
 pub fn steps(ctx: &Context, id: Id) -> Vec<&'static str> {
     inspect::steps_of(ctx, id)
 }
@@ -47,4 +48,34 @@ pub fn raw_widget(ui: &mut egui::Ui, rect: egui::Rect) {
 /// Allocates a widget of `size` in `ui`.
 pub fn allocate(ui: &mut egui::Ui, size: egui::Vec2) {
     crate::runtime::egui::fixture::allocate_blocker(ui, size);
+}
+
+thread_local! {
+    static PARTS_CHECK: std::cell::RefCell<Option<Vec<&'static str>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run a story with the parts declaration check enabled, and return any offending component types.
+pub fn check_parts_declarations(run: impl FnOnce()) -> Vec<&'static str> {
+    struct Reset(Option<Vec<&'static str>>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PARTS_CHECK.with(|check| *check.borrow_mut() = self.0.take());
+        }
+    }
+    let previous = PARTS_CHECK.with(|check| check.replace(Some(Vec::new())));
+    let _reset = Reset(previous);
+    run();
+    PARTS_CHECK.with(|check| check.borrow_mut().take().unwrap_or_default())
+}
+
+pub(crate) fn checking_parts() -> bool {
+    PARTS_CHECK.with(|check| check.borrow().is_some())
+}
+
+pub(crate) fn bad_parts(component: &'static str) {
+    PARTS_CHECK.with(|check| {
+        if let Some(bad) = check.borrow_mut().as_mut() {
+            bad.push(component);
+        }
+    });
 }

@@ -1,6 +1,7 @@
 //! The fit rules: which tabs, bar items or titles stay in a strip and which go to an overflow menu. [`fit`] and
-//! [`fit_whole`] assign tab widths (tabs shrink before they overflow, or keep their width); [`fit_items`] drops
-//! command items and titles from the end. All of them read no egui types.
+//! [`fit_whole`] assign tab widths (tabs shrink before they overflow, or keep their width); [`fit_items`] shortens
+//! items that have a short form, in the order their host ranks, and drops command items and titles from the end.
+//! All of them read no egui types.
 
 /// Tabs visible on a strip and tabs that need an overflow menu, all in original order.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -122,9 +123,13 @@ fn fit_keeping_selected(natural: &[f32], selected: usize, available: f32, minimu
 /// gets less than its natural width; its painter elides the label. A lone tab never reserves a
 /// button.
 ///
+/// The tabs marked in `kept` take the room after the selected tab before the others, in order while each fits; a
+/// kept tab that does not fit overflows. The others then follow the rule above. A `kept` slice that is empty or
+/// shorter than `natural` marks no tab past its end, so an empty slice gives the plain rule.
+///
 /// Dimensions are sanitized as in [`fit`], and the shown widths plus `overflow_width` never
 /// exceed the sanitized available width. Work and storage are linear in the input count.
-pub fn fit_whole(natural: &[f32], selected: usize, available: f32, overflow_width: f32) -> TabFit {
+pub fn fit_whole(natural: &[f32], selected: usize, kept: &[bool], available: f32, overflow_width: f32) -> TabFit {
     let available = tab_extent(available);
     let natural: Vec<f32> = natural.iter().map(|&w| tab_extent(w)).collect();
     if natural.iter().map(|&w| f64::from(w)).sum::<f64>() <= f64::from(available) {
@@ -138,17 +143,33 @@ pub fn fit_whole(natural: &[f32], selected: usize, available: f32, overflow_widt
     let selected = selected.min(natural.len().saturating_sub(1));
     let active = natural.get(selected).copied().unwrap_or(0.0).min(budget);
     let mut room = f64::from(budget - active);
+    let mut keep = vec![false; natural.len()];
+    if let Some(keep) = keep.get_mut(selected) {
+        *keep = true;
+    }
+    // The kept tabs take room first, then the others; each run stops at its first tab that does not fit.
+    for kept_run in [true, false] {
+        for (i, &width) in natural.iter().enumerate() {
+            if i == selected || kept.get(i).copied().unwrap_or(false) != kept_run {
+                continue;
+            }
+            if f64::from(width) > room {
+                break;
+            }
+            room -= f64::from(width);
+            if let Some(keep) = keep.get_mut(i) {
+                *keep = true;
+            }
+        }
+    }
     let mut shown = Vec::new();
     let mut overflow = Vec::new();
-    let mut full = false;
     for (i, &width) in natural.iter().enumerate() {
         if i == selected {
             shown.push((i, active));
-        } else if !full && f64::from(width) <= room {
-            room -= f64::from(width);
+        } else if keep.get(i).copied().unwrap_or(false) {
             shown.push((i, width));
         } else {
-            full = true;
             overflow.push(i);
         }
     }
@@ -186,7 +207,7 @@ fn squeeze(natural: &[f32], indices: &[usize], total: f32, minimum: f32) -> Vec<
 }
 
 /// Whether an item may move into the overflow menu, or lives there.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum FitKeep {
     /// The item leaves the strip when the room runs out, last item first.
@@ -208,12 +229,40 @@ pub struct FitItem {
     pub section: u16,
     /// Whether the item may overflow.
     pub keep: FitKeep,
+    /// The extent of the item's shorter form, if it has one.
+    pub short: Option<f32>,
+    /// The rank of the item's short form: lower ranks shorten first, and equal ranks shorten the last item first.
+    pub short_order: u16,
+    /// Whether the item keeps its full form until no more free items can leave.
+    pub short_late: bool,
 }
 
 impl FitItem {
     /// An item `extent` long in `section`.
     pub const fn new(extent: f32, section: u16, keep: FitKeep) -> Self {
-        FitItem { extent, section, keep }
+        FitItem { extent, section, keep, short: None, short_order: 0, short_late: false }
+    }
+
+    /// The item with a shorter form `extent` long, which it takes before any free item leaves unless it is late.
+    /// An item marked [`FitItem::short_late`] takes that form only after no free item is left to leave.
+    pub const fn short(mut self, extent: f32) -> Self {
+        self.short = Some(extent);
+        self
+    }
+
+    /// The item with its short form ranked `order`: lower ranks shorten first, and the last item of a rank first.
+    /// Every item ranks 0 by default.
+    pub const fn short_order(mut self, order: u16) -> Self {
+        self.short_order = order;
+        self
+    }
+
+    /// The item takes its short form only after every free item that can leave has left.
+    /// The other items go to the overflow menu before this one shortens. A free item with a late short form leaves
+    /// in its turn instead.
+    pub const fn short_late(mut self) -> Self {
+        self.short_late = true;
+        self
     }
 }
 
@@ -225,6 +274,8 @@ pub struct Fit {
     pub shown: Vec<usize>,
     /// The items in the overflow menu; empty when everything fits.
     pub overflow: Vec<usize>,
+    /// The shown items that take their shorter form, as indexes into the input.
+    pub short: Vec<usize>,
 }
 
 fn item_extent(value: f32) -> f64 {
@@ -247,24 +298,55 @@ pub fn run_extent(items: &[FitItem], shown: &[bool], gap: f64, section_gap: f64)
 }
 
 /// Decides which items stay in a strip `available` long. Everything fits and no item is `Menu`: all items show.
-/// Otherwise the `Menu` items are in the menu, and the last `Free` item leaves first, one at a time, until the rest
-/// and an overflow control `overflow_extent` long, set off by `gap`, fit; `Pinned` items stay even when they alone
-/// are longer than `available`. Negative and non-finite lengths count as zero.
+/// Otherwise the `Menu` items are in the menu, and the items with a [`FitItem::short`] form take it first, lowest
+/// [`FitItem::short_order`] first and the last item of a rank first, until the run fits (listed in [`Fit::short`]); a
+/// `Pinned` item shortens as a `Free` one does. Only then does the last `Free` item leave, one at a time, until the
+/// rest and an overflow control `overflow_extent` long, set off by `gap`, fit. When no `Free` item is left to go, the
+/// items marked [`FitItem::short_late`] take their short forms in the same order; items that left do not come back.
+/// `Pinned` items stay even when they alone are longer than `available`. Items that leave are never listed as short.
+/// Negative and non-finite lengths count as zero.
 pub fn fit_items(items: &[FitItem], available: f32, gap: f32, section_gap: f32, overflow_extent: f32) -> Fit {
     let (available, gap, section_gap, overflow_extent) =
         (item_extent(available), item_extent(gap), item_extent(section_gap), item_extent(overflow_extent));
     let mut shown: Vec<bool> = items.iter().map(|item| item.keep != FitKeep::Menu).collect();
     if shown.iter().all(|shown| *shown) && run_extent(items, &shown, gap, section_gap) <= available {
-        return Fit { shown: (0..items.len()).collect(), overflow: Vec::new() };
+        return Fit { shown: (0..items.len()).collect(), overflow: Vec::new(), short: Vec::new() };
     }
-    let fits = |shown: &[bool]| {
+    // The overflow control takes room only while some item is in the menu; a run that every item is in, shortened,
+    // needs no control.
+    let fits = |run: &[FitItem], shown: &[bool]| {
+        let extent = run_extent(run, shown, gap, section_gap);
+        if shown.iter().all(|shown| *shown) {
+            return extent <= available;
+        }
         let before_control = if shown.iter().any(|shown| *shown) { gap } else { 0.0 };
-        run_extent(items, shown, gap, section_gap) + before_control + overflow_extent <= available
+        extent + before_control + overflow_extent <= available
     };
-    while !fits(&shown) {
+    // The shadow run holds each item at the extent it takes: shortened items at their `short` extent.
+    let mut run: Vec<FitItem> = items.to_vec();
+    let mut short = vec![false; items.len()];
+    // Takes the short forms of the shown items with this `late` mark, lowest rank first and the last item of a rank
+    // first (`min_by_key` keeps the first minimum, which is the last index in a reversed scan), until the run fits.
+    let shorten = |late: bool, run: &mut [FitItem], short: &mut [bool], shown: &[bool]| {
+        while !fits(run, shown) {
+            let next = (0..items.len())
+                .rev()
+                .filter(|&at| shown[at] && !short[at] && items[at].short.is_some() && items[at].short_late == late)
+                .min_by_key(|&at| items[at].short_order);
+            let Some(next) = next else { break };
+            short[next] = true;
+            if let (Some(item), Some(extent)) = (run.get_mut(next), items[next].short) {
+                item.extent = extent;
+            }
+        }
+    };
+    shorten(false, &mut run, &mut short, &shown);
+    while !fits(&run, &shown) {
         let Some(last) = (0..items.len()).rev().find(|&at| shown[at] && items[at].keep == FitKeep::Free) else { break };
         shown[last] = false;
     }
+    shorten(true, &mut run, &mut short, &shown);
     let (kept, left): (Vec<usize>, Vec<usize>) = (0..items.len()).partition(|&at| shown[at]);
-    Fit { shown: kept, overflow: left }
+    let short = kept.iter().copied().filter(|&at| short[at]).collect();
+    Fit { shown: kept, overflow: left, short }
 }

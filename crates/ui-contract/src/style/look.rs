@@ -7,7 +7,7 @@ use egui::{Color32, CornerRadius, Stroke};
 
 /// A colour a style builder picked from tokens. `Draw` accepts only this or `DataColor`. It has no
 /// `From<Color32>`: the one constructor is `StyleCx::color`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
 pub struct StyleColor(#[doc(hidden)] pub Color32);
 
 impl StyleColor {
@@ -25,14 +25,38 @@ impl Mix for StyleColor {
 }
 
 /// A colour from data (a swatch, a layer label dot).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DataColor(#[doc(hidden)] pub Color32);
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps, crate::contract::PlainData)]
+pub struct DataColor(
+    #[doc(hidden)]
+    #[plain_data(assume = "a colour is four bytes")]
+    pub Color32,
+);
 
 impl DataColor {
     /// A data colour.
     pub const fn new(color: Color32) -> Self {
         DataColor(color)
     }
+}
+
+impl From<Color32> for DataColor {
+    fn from(color: Color32) -> Self {
+        DataColor(color)
+    }
+}
+
+/// How a text field looks where it sits: one value picks its fill, its edge and its placeholder together, so they
+/// cannot come apart.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FieldLook {
+    /// The field's own fill and edge, and the faint placeholder.
+    #[default]
+    Normal,
+    /// A field in a bar (a title bar's search box): [`StyleCx::quiet_field`](crate::style::StyleCx::quiet_field)'s
+    /// fill and edge, and the muted placeholder, which reads on the window background (`surface.background`) where
+    /// the faint one does not.
+    Quiet,
 }
 
 /// The surface a container or part sits on, which picks fill, edge, shadow and ink.
@@ -67,13 +91,34 @@ pub enum SurfaceKind {
     Scrim,
     /// An outlined box without fill.
     Frame,
+    /// The app's colour as a surface: the strong accent, square corners, no edge.
+    Brand,
 }
 
 impl SurfaceKind {
+    /// Every kind, in the order the gallery shows them.
+    pub const ALL: [SurfaceKind; 15] = [
+        SurfaceKind::Background,
+        SurfaceKind::Canvas,
+        SurfaceKind::Chrome,
+        SurfaceKind::Panel,
+        SurfaceKind::Raised,
+        SurfaceKind::Pressed,
+        SurfaceKind::Sunken,
+        SurfaceKind::Well,
+        SurfaceKind::Knob,
+        SurfaceKind::Popup,
+        SurfaceKind::Dialog,
+        SurfaceKind::Floating,
+        SurfaceKind::Scrim,
+        SurfaceKind::Frame,
+        SurfaceKind::Brand,
+    ];
+
     /// The ink text and icons read on this surface.
     pub const fn ink(self) -> super::Ink {
         match self {
-            SurfaceKind::Scrim => super::Ink::OnDark,
+            SurfaceKind::Scrim | SurfaceKind::Brand => super::Ink::OnDark,
             _ => super::Ink::OnPanel,
         }
     }
@@ -263,6 +308,19 @@ impl IconLook {
         self.ground = Some(ground);
         self
     }
+}
+
+/// How a value track (`StyleCx::track`) colours its groove and the part a value fills: a slider's and a range
+/// slider's. An app sets it once at its root (`RootEnv::values`); the default is the muted fill.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum TrackFill {
+    /// `text.muted` on a `line.control_edge` groove.
+    #[default]
+    Muted,
+    /// `accent.solid` on a `line.outline` groove: VectorCraft's.
+    Accent,
 }
 
 /// A value track: a groove with the part a value fills over it, and the marks and ticks along it. A slider, a

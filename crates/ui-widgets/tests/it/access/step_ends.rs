@@ -2,18 +2,18 @@
 //! value that wraps declares both steps at either end.
 
 use craft_ui::choice::Rating;
-use craft_ui::contract::{Bind, Props as _, Role, Show as _};
+use craft_ui::contract::{Props as _, Role, Show as _};
 use craft_ui::testing::access::Declared;
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
 use craft_ui::value_drag::AngleDial;
 use egui::Ui;
 
 fn top_rating(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    Rating::new(Bind::bound(data.value("stars", 5u8)), 5).label("Rating").show(ui).into()
+    Rating::new(data.bind("stars", 5u8), 5).label("Rating").show(ui).into()
 }
 
 fn dial_at_start(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    AngleDial::new(Bind::bound(data.value("angle", 0.0))).range(0.0..=360.0).label("Angle").show(ui).into()
+    AngleDial::new(data.bind("angle", 0.0)).range(0.0..=360.0).label("Angle").show(ui).into()
 }
 
 /// Whether the one node of `role` declares Increment and Decrement.

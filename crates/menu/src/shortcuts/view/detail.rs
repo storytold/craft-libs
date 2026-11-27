@@ -41,7 +41,7 @@ fn scope_name(env: &Env<'_>, scope: &Scope) -> String {
 }
 
 /// A binding as text, with its scope when that is not the command's home scope.
-fn binding_text(env: &Env<'_>, binding: &Binding, home: &Scope) -> String {
+pub(super) fn binding_text(env: &Env<'_>, binding: &Binding, home: &Scope) -> String {
     let chord = env.text.trigger(&binding.trigger, env.keymap.platform());
     match &binding.scope {
         Some(scope) if scope != home => env.text.words().chord_scope.fill(&[("chord", &chord), ("scope", &scope_name(env, scope))]),
@@ -49,7 +49,7 @@ fn binding_text(env: &Env<'_>, binding: &Binding, home: &Scope) -> String {
     }
 }
 
-fn label_of(env: &Env<'_>, command: &CommandRef) -> String {
+pub(super) fn label_of(env: &Env<'_>, command: &CommandRef) -> String {
     env.keymap.bindable(command).map_or_else(|| command.id.clone(), |b| env.text.command(b))
 }
 
@@ -135,7 +135,7 @@ fn defaults_line(ui: &mut Ui, env: &Env<'_>, defaults: &[Binding], home: &Scope)
 }
 
 /// New Shortcut: a recorder that takes the chord pressed, or typed entry.
-fn new_shortcut(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState, command: &CommandRef, home: &Scope) {
+pub(super) fn new_shortcut(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState, command: &CommandRef, home: &Scope) {
     let words = env.text.words();
     let title = words.new_shortcut.clone();
     if let Some(mut typed) = state.typing.clone() {
@@ -257,6 +257,6 @@ fn holders(ui: &mut Ui, env: &Env<'_>, state: &mut DialogState) {
         }
     }
     if let Some(command) = go {
-        state.go_to(&command);
+        state.go_to(env, &command);
     }
 }

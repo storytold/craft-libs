@@ -3,7 +3,7 @@ name: Suite themes
 on:
   workflow_dispatch:
   push:
-    branches: [main, next]
+    branches: [main]
     paths: ['crates/theme/**', 'crates/theme-store/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/theme.yml']
   pull_request:
     paths: ['crates/theme/**', 'crates/theme-store/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/theme.yml']
@@ -17,13 +17,14 @@ jobs:
     name: Theme lint, tests, WASM
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           # The token isn't needed after checkout; cargo runs build scripts and proc macros from
           # dependencies, so don't leave it in .git/config for that third-party code to read.
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
+          toolchain: stable
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
       - run: cargo fmt -p craft-theme --check

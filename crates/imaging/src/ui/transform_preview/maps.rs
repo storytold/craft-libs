@@ -128,6 +128,22 @@ pub struct PreviewMesh {
 }
 
 impl PreviewMesh {
+    /// Clips to a quadrilateral in normalized source texture coordinates.
+    #[must_use]
+    pub fn clipped_to_source(self, quad: [Point; 4], extent: [f32; 2]) -> PreviewMesh {
+        if !extent.iter().all(|v| v.is_finite() && *v > 0.0) {
+            return PreviewMesh::default();
+        }
+        let quad = quad.map(|p| Point::new(p.x * f64::from(extent[0]), p.y * f64::from(extent[1])));
+        clip_quad(self, quad, true)
+    }
+
+    /// Clips the preview to a convex quadrilateral in document space.
+    #[must_use]
+    pub fn clipped_to_quad(self, quad: [Point; 4]) -> PreviewMesh {
+        clip_to_quad(self, quad)
+    }
+
     /// The mesh clipped to a document of `canvas` pixels: triangles past its edges are cut in
     /// document space, also under a turned view.
     #[must_use]
@@ -325,10 +341,25 @@ pub(super) fn front_vertices(h: &Homography, n: usize) -> Vec<bool> {
 /// `mesh` with every triangle cut to the document `canvas` (0, 0)–(width, height) in document
 /// space, so the cut follows a turned view.
 pub(super) fn clip_to_canvas(mesh: PreviewMesh, canvas: [u32; 2]) -> PreviewMesh {
-    // pc: crates/ui-egui/src/tools/transform_tool/draw.rs:395 (`clip_to_canvas`).
-    let size = (f64::from(canvas[0]), f64::from(canvas[1]));
-    let inside = |p: &Point| p.x >= 0.0 && p.y >= 0.0 && p.x <= size.0 && p.y <= size.1;
-    if mesh.points.iter().all(inside) {
+    let (w, h) = (f64::from(canvas[0]), f64::from(canvas[1]));
+    clip_to_quad(mesh, [Point::new(0.0, 0.0), Point::new(w, 0.0), Point::new(w, h), Point::new(0.0, h)])
+}
+
+fn clip_to_quad(mesh: PreviewMesh, quad: [Point; 4]) -> PreviewMesh {
+    clip_quad(mesh, quad, false)
+}
+
+fn clip_quad(mesh: PreviewMesh, quad: [Point; 4], source: bool) -> PreviewMesh {
+    let cross = |a: Point, b: Point, p: Point| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+    let area: f64 = (0..4).map(|i| quad[i].x * quad[(i + 1) % 4].y - quad[(i + 1) % 4].x * quad[i].y).sum();
+    if !area.is_finite() || area.abs() < 1e-12 || (0..4).any(|i| cross(quad[i], quad[(i + 1) % 4], quad[(i + 2) % 4]) * area < 0.0) {
+        return PreviewMesh::default();
+    }
+    let distance = |edge: usize, p: Point| cross(quad[edge], quad[(edge + 1) % 4], p) * area.signum();
+    let inside = |p: &Point| (0..4).all(|edge| distance(edge, *p) >= 0.0);
+    let entirely_inside =
+        if source { mesh.uv.iter().all(|uv| inside(&Point::new(f64::from(uv[0]), f64::from(uv[1])))) } else { mesh.points.iter().all(inside) };
+    if entirely_inside {
         return mesh;
     }
     #[derive(Clone, Copy)]
@@ -344,14 +375,9 @@ pub(super) fn clip_to_canvas(mesh: PreviewMesh, canvas: [u32; 2]) -> PreviewMesh
     let mut out = PreviewMesh::default();
     for tri in mesh.indices.as_chunks::<3>().0 {
         let Some(mut poly) = tri.iter().map(|&k| vertex(k)).collect::<Option<Vec<_>>>() else { continue };
-        // Sutherland–Hodgman against the four canvas edges (`dist` >= 0 is the canvas side).
+        // Clip each triangle against the four edges, interpolating its texture coordinates.
         for edge in 0..4 {
-            let dist = |v: &Vertex| match edge {
-                0 => v.point.x,
-                1 => size.0 - v.point.x,
-                2 => v.point.y,
-                _ => size.1 - v.point.y,
-            };
+            let dist = |v: &Vertex| distance(edge, if source { Point::new(f64::from(v.uv[0]), f64::from(v.uv[1])) } else { v.point });
             let mut next = Vec::with_capacity(poly.len() + 2);
             for (k, a) in poly.iter().enumerate() {
                 let Some(b) = poly.get((k + 1) % poly.len()) else { continue };

@@ -3,7 +3,7 @@ name: Web API (page command API)
 on:
   workflow_dispatch:
   push:
-    branches: [main, next]
+    branches: [main]
     paths: ['crates/web-api/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/web-api.yml']
   pull_request:
     paths: ['crates/web-api/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/web-api.yml']
@@ -12,10 +12,10 @@ permissions:
   contents: read
 
 concurrency:
-  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
-  # run (main, manual) gets a group of its own, so it is neither cancelled nor replaced while queued.
-  group: web-api-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: web-api-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   web-api:
@@ -35,7 +35,7 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-          components: rustfmt, clippy
+          components: clippy
           targets: wasm32-unknown-unknown
       - name: Read the wasm-bindgen version from Cargo.lock
         id: wasm-bindgen
@@ -50,12 +50,6 @@ jobs:
         with:
           tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
           fallback: cargo-install
-      - run: cargo fmt --check
-      - run: cargo clippy -p craft-web-api --all-targets --locked -- -D warnings
+      # fmt, native clippy and the native tests run in the Workspace gate.
       - run: cargo clippy -p craft-web-api --all-targets --locked --target wasm32-unknown-unknown -- -D warnings
-      - name: Docs (links and missing docs)
-        run: cargo doc -p craft-web-api --no-deps --locked
-        env:
-          RUSTDOCFLAGS: -D warnings
-      - run: cargo test -p craft-web-api --locked
       - run: cargo test -p craft-web-api --locked --target wasm32-unknown-unknown

@@ -25,7 +25,7 @@ fn a_dialog_is_explained_only_when_no_backend_can_show_one() {
     assert_eq!(problem(findings(None, Some(false), false)).as_deref(), Some("no desktop portal offers a file chooser"));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
 #[trial]
 fn the_interface_list_says_whether_a_file_chooser_is_offered() {
     let xml = |name: &str, quote: char| format!("<node><interface name={quote}{name}{quote}><method name=\"OpenFile\"/></interface></node>");
@@ -36,7 +36,7 @@ fn the_interface_list_says_whether_a_file_chooser_is_offered() {
     assert!(!interface_listed(""));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
 #[trial]
 fn dbus_errors_for_a_missing_interface_mean_absent() {
     use zbus::fdo::Error as Fdo;

@@ -21,10 +21,32 @@
 
 use crate::policy::MacInset;
 
+/// How far AppKit's corner resize area reaches into a titled, resizable window along each edge: AppKit takes a press
+/// there before the content sees it and shows its resize cursor. Measured on macOS 26 as a 19 pt square at each
+/// corner, about 15 pt of it inside a square-cornered window
+/// (<https://noheger.at/blog/2026/01/11/the-struggle-of-resizing-windows-on-macos-tahoe/>); there is no published
+/// measurement for earlier releases.
+pub const RESIZE_CORNER: f32 = 15.0;
+
+/// How far AppKit's edge resize area reaches into the content between the corners: a few points; most of it lies
+/// outside the window.
+pub const RESIZE_EDGE: f32 = 4.0;
+
+/// Whether `at`, in the coordinates of a window's content of `size` (points from its top-left corner), lies in
+/// AppKit's resize areas: a [`RESIZE_CORNER`] square at each corner and a [`RESIZE_EDGE`] strip along each edge.
+pub fn in_resize_area(size: [f32; 2], at: [f32; 2]) -> bool {
+    let [w, h] = size;
+    let [x, y] = at;
+    let inside = (0.0..=w).contains(&x) && (0.0..=h).contains(&y);
+    let near = |pos: f32, len: f32, reach: f32| pos <= reach || pos >= len - reach;
+    inside && ((near(x, w, RESIZE_CORNER) && near(y, h, RESIZE_CORNER)) || near(x, w, RESIZE_EDGE) || near(y, h, RESIZE_EDGE))
+}
+
 /// The three buttons as AppKit laid them out, in points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Lights {
-    /// The zoom (rightmost) button's right edge from the window's left edge.
+    /// The far edge of the zoom button (the last of the three) from the window edge the lights start at: its right edge
+    /// from the left edge, or, with the lights at the right ([`MacInset::lights_right`]), its left edge from the right.
     pub right: f32,
     /// The lights' vertical centre below the window's top.
     pub centre_from_top: f32,
@@ -48,7 +70,7 @@ pub fn inset_from_lights(lights: Lights) -> Option<MacInset> {
         && size <= 2.0 * centre_from_top
         && centre_from_top <= MAX_CENTRE_FROM_TOP
         && right <= MAX_RIGHT;
-    sane.then(|| MacInset { leading: right + (centre_from_top - size / 2.0), centre_from_top })
+    sane.then(|| MacInset { leading: right + (centre_from_top - size / 2.0), centre_from_top, lights_right: false })
 }
 
 /// The inset for macOS `major` (26 for Tahoe) before a window exists to measure.
@@ -99,6 +121,12 @@ impl Cache {
         }
         Some(self.measured.unwrap_or_else(default))
     }
+
+    /// Whether the last measurement found the lights at the window's right end ([`MacInset::lights_right`]); false
+    /// before a window was measured.
+    pub fn lights_right(&self) -> bool {
+        self.measured.is_some_and(|inset| inset.lights_right)
+    }
 }
 
 /// The inset for the running macOS version before a window exists to measure; [`MacInset::default`] elsewhere.
@@ -120,7 +148,7 @@ pub fn os_default() -> MacInset {
 #[cfg(all(feature = "appkit", target_os = "macos"))]
 pub fn measure() -> Option<MacInset> {
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSApplication, NSWindowButton, NSWindowStyleMask};
+    use objc2_app_kit::{NSApplication, NSUserInterfaceLayoutDirection, NSWindowButton, NSWindowStyleMask};
 
     // eframe runs the app on the main thread; anywhere else AppKit is out of reach.
     let mtm = MainThreadMarker::new()?;
@@ -138,12 +166,17 @@ pub fn measure() -> Option<MacInset> {
     let zoom = window.standardWindowButton(NSWindowButton::ZoomButton)?;
     // Window coordinates count up from the bottom.
     let frame = zoom.convertRect_toView(zoom.bounds(), None);
-    let window_height = window.frame().size.height;
+    let window_size = window.frame().size;
+    // A right-to-left titlebar (a right-to-left system language) lays the lights out from the right edge, the zoom
+    // button leftmost: the reserved room is measured from that edge.
+    let lights_right = window.windowTitlebarLayoutDirection() == NSUserInterfaceLayoutDirection::RightToLeft;
+    let far = if lights_right { window_size.width - frame.origin.x } else { frame.origin.x + frame.size.width };
     inset_from_lights(Lights {
-        right: (frame.origin.x + frame.size.width) as f32,
-        centre_from_top: (window_height - (frame.origin.y + frame.size.height / 2.0)) as f32,
+        right: far as f32,
+        centre_from_top: (window_size.height - (frame.origin.y + frame.size.height / 2.0)) as f32,
         size: frame.size.height as f32,
     })
+    .map(|inset| inset.with_lights_right(lights_right))
 }
 
 /// One measurement of the first titled full-size-content window, without the cache. `None` when no such window

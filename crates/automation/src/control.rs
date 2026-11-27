@@ -5,8 +5,9 @@
 //! (`engine.execute`, `ui.inspect`, `ui.set`, `ui.dialog.*`, `ui.screenshot`, …) and hands the
 //! [`Reply`] to [`ControlChannel::settle`]. The channel replies at once, after the queued
 //! injected input has been processed ([`Reply::AfterInput`], so a following `ui.inspect` sees
-//! the effect), when a background job ends ([`Reply::AfterJob`]), or when a screenshot completes
-//! ([`Reply::Screenshot`], through [`crate::screenshot::Captures`]).
+//! the effect), when a background job ends ([`Reply::AfterJob`]), when the app answers a dialog's
+//! held OK ([`Reply::AfterHeldOk`]), or when a screenshot completes ([`Reply::Screenshot`], through
+//! [`crate::screenshot::Captures`]).
 //!
 //! Deadlines: a request still queued when its [`REPLY_DEADLINE`] passes is dropped before dispatch
 //! and the transport replies [`expired_error`] (safe to re-send); one that was dispatched and gave
@@ -14,13 +15,14 @@
 //! two happened, once, between the UI thread and the transport.
 
 use std::sync::mpsc::{Receiver, Sender};
-use std::time::Instant;
 
+use craft_ui::dialog::{DialogHost, DialogId, HeldOk};
 use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
 use serde_json::{Value, json};
+use web_time::Instant;
 
-use crate::screenshot::{Captures, DocumentId, Finished, ScreenshotRequest, screenshot_reply};
+use crate::screenshot::{Captures, DocumentId, Finished, ScreenshotParams, ScreenshotRequest, screenshot_reply};
 use crate::synthetic::TARGET_CHANGED;
 
 /// A reply: the JSON object the transport writes as one line.
@@ -112,13 +114,16 @@ pub enum Reply {
     /// Reply with this JSON now.
     Done(Value),
     /// A `ui.screenshot`: admit `token` to the queue; `path` is where the app's write authority
-    /// puts the PNG, `None` inlines it as base64 in the reply.
+    /// puts the PNG, `None` inlines it as base64 in the reply; `region` is refused at admission
+    /// when it lies outside the window.
     #[non_exhaustive]
     Screenshot {
         /// Identifies the capture; must differ from every pending token.
         token: u64,
         /// File to write the PNG to, or `None` to inline it.
         path: Option<String>,
+        /// The part of the window to capture, in points; `None` captures the whole window.
+        region: Option<egui::Rect>,
         /// The viewport to capture.
         viewport: egui::ViewportId,
     },
@@ -136,13 +141,34 @@ pub enum Reply {
     /// A command started a background job and the caller waits: reply with its result when it
     /// has been applied, or with its error or `cancelled`.
     AfterJob(JobId),
+    /// A `ui.accessTree`: hold the reply until the window's settled access tree can be read
+    /// ([`ControlChannel::poll_access_trees`]).
+    AccessTree,
+    /// A `ui.dialog.confirm` that filed the held OK of a dialog for the app: hold the reply until the
+    /// app answers it ([`ControlChannel::poll_held`]).
+    #[non_exhaustive]
+    AfterHeldOk {
+        /// The dialog whose OK is held.
+        dialog: DialogId,
+        /// Which open of the dialog ([`DialogHost::open_serial`]): a later open of the same dialog
+        /// is not the one the request confirmed.
+        open: u64,
+        /// The app's refusal of the dialog's previous OK, when this confirm filed OK again after it:
+        /// the earlier confirms still held for this open are answered with it.
+        refused: Option<String>,
+    },
 }
 
 impl Reply {
-    /// A `ui.screenshot` reply for `token` of `viewport`, writing the PNG to `path` or inlining it
-    /// when `None`.
-    pub fn screenshot(token: u64, path: Option<String>, viewport: egui::ViewportId) -> Self {
-        Self::Screenshot { token, path, viewport }
+    /// A `ui.accessTree` reply: held until the window's settled access tree is available.
+    pub fn access_tree() -> Reply {
+        Reply::AccessTree
+    }
+
+    /// A `ui.screenshot` reply for `token` of `viewport` with what [`ScreenshotParams::from_params`] read: the PNG
+    /// goes to `params.path` or is inlined when `None`, and shows `params.region` or the whole window.
+    pub fn screenshot(token: u64, params: ScreenshotParams, viewport: egui::ViewportId) -> Self {
+        Self::Screenshot { token, path: params.path, region: params.region, viewport }
     }
 
     /// [`Reply::AfterInputRequest`] for the window host's request `request`.
@@ -217,6 +243,8 @@ pub struct ControlChannel {
     rx: Receiver<ControlRequest>,
     input_waiters: Vec<InputWaiter>,
     job_waiters: Vec<(JobId, Sender<ControlResponse>)>,
+    tree_waiters: Vec<Sender<ControlResponse>>,
+    held_waiters: Vec<(DialogId, u64, Sender<ControlResponse>)>,
     /// The screenshot queue; the app calls its `issue` and `drain` from its UI and logic phases.
     pub captures: Captures,
 }
@@ -224,7 +252,14 @@ pub struct ControlChannel {
 impl ControlChannel {
     /// Attach a transport's receiver (TCP, stdin, tests).
     pub fn new(rx: Receiver<ControlRequest>) -> Self {
-        Self { rx, input_waiters: Vec::new(), job_waiters: Vec::new(), captures: Captures::default() }
+        Self {
+            rx,
+            input_waiters: Vec::new(),
+            job_waiters: Vec::new(),
+            tree_waiters: Vec::new(),
+            held_waiters: Vec::new(),
+            captures: Captures::default(),
+        }
     }
 
     /// The next request to run, claimed through [`Dispatch::start`]. Expired or abandoned
@@ -243,8 +278,16 @@ impl ControlChannel {
 
     /// Reply now, or park the reply on input, a job or a screenshot. `settle_ms` is the
     /// screenshot settle delay ([`crate::screenshot::settle_ms`] of the animation time);
-    /// `document` the identity a screenshot is attributed to.
+    /// `document` the identity a screenshot is attributed to. A screenshot is admitted at
+    /// [`motion::now`]; [`Self::settle_at`] takes the time instead.
     pub fn settle(&mut self, req: ControlRequest, outcome: Reply, document: Option<DocumentId>, settle_ms: f64) {
+        self.settle_at(req, outcome, document, settle_ms, motion::now());
+    }
+
+    /// [`Self::settle`] with a screenshot admitted at `now`: its settle delay and its
+    /// [`crate::screenshot::DEADLINE`] count from `now`, on the clock the app passes to
+    /// [`Captures::issue`] and [`Captures::drain`].
+    pub fn settle_at(&mut self, req: ControlRequest, outcome: Reply, document: Option<DocumentId>, settle_ms: f64, now: Instant) {
         let reply = req.reply;
         match outcome {
             Reply::Done(v) => {
@@ -253,8 +296,22 @@ impl ControlChannel {
             Reply::AfterInput => self.input_waiters.push(InputWaiter::new(reply, None)),
             Reply::AfterInputRequest { request } => self.input_waiters.push(InputWaiter::new(reply, Some(request))),
             Reply::AfterJob(job) => self.job_waiters.push((job, reply)),
-            Reply::Screenshot { token, path, viewport } => {
-                if let Err((reply, e)) = self.captures.admit(ScreenshotRequest { token, path, viewport, reply, document, settle_ms }, motion::now()) {
+            Reply::AccessTree => self.tree_waiters.push(reply),
+            Reply::AfterHeldOk { dialog, open, refused } => {
+                if let Some(reason) = refused {
+                    self.held_waiters.retain(|(earlier, earlier_open, tx)| {
+                        let answered = (*earlier, *earlier_open) == (dialog, open);
+                        if answered {
+                            let _ = tx.send(json!({"ok": false, "error": reason}));
+                        }
+                        !answered
+                    });
+                }
+                self.held_waiters.push((dialog, open, reply));
+            }
+            Reply::Screenshot { token, path, region, viewport } => {
+                let request = ScreenshotRequest { token, path, region, viewport, reply, document, settle_ms };
+                if let Err((reply, e)) = self.captures.admit(request, now) {
                     let _ = reply.send(json!({"ok": false, "error": e}));
                 }
             }
@@ -336,16 +393,81 @@ impl ControlChannel {
     /// Answers the [`Reply::AfterInput`] waiters from the window host's input state: with
     /// `input cancelled` when the host withdrew queued input ([`TARGET_CHANGED`]) (a request whose
     /// input ran, or whose input the withdrawal did not cover, is not cancelled), with success
-    /// once nothing is queued or in flight. Call it once per pass, at the end of the pass: it also
-    /// notes which requests' input has run.
+    /// once nothing is queued or in flight. Call it once per pass, at the end of the pass (after its
+    /// UI ran): the step that pass consumed counts as run, so the reply goes out with that pass
+    /// ([`WindowHost::injected_idle_at_pass_end`]). Called between passes, it waits for the pass. It
+    /// also notes which requests' input has run, and has the host keep its access trees, which
+    /// `control` targets and `ui.find` read.
     pub fn poll_input(&mut self, host: &WindowHost) {
+        host.keep_access_trees();
         if host.take_injected_withdrawn() {
             self.input_withdrawn(host);
         }
         self.note_ran(host);
-        if host.injected_idle() {
+        if host.injected_idle_at_pass_end() {
             self.input_processed();
         }
+    }
+
+    /// Answers the held `ui.accessTree` requests from the window host's settled access tree; a
+    /// request stays held while the host has none. Runs in the logic phase of every pass, as
+    /// [`poll_input`](Self::poll_input) does.
+    pub fn poll_access_trees(&mut self, ctx: &egui::Context) {
+        if self.tree_waiters.is_empty() {
+            return;
+        }
+        // `ui.accessTree` takes no window: it reads the main window's tree.
+        let Some(tree) = WindowHost::of(ctx).access_tree(egui::ViewportId::ROOT) else { return };
+        let update = tree.update();
+        let nodes: Vec<Value> = update
+            .nodes
+            .iter()
+            .map(|(id, node)| {
+                let children: Vec<u64> = node.children().iter().map(|child| child.0).collect();
+                let mut entry = json!({"id": id.0, "role": format!("{:?}", node.role()), "children": children});
+                if let Some(name) = node.label() {
+                    entry["name"] = json!(name);
+                }
+                if let Some(value) = node.value() {
+                    entry["value"] = json!(value);
+                }
+                if let Some(selection) = node.text_selection() {
+                    entry["textSelection"] = json!({
+                        "anchor": {"node": selection.anchor.node.0, "character": selection.anchor.character_index},
+                        "focus": {"node": selection.focus.node.0, "character": selection.focus.character_index},
+                    });
+                }
+                entry
+            })
+            .collect();
+        let root = update.tree.as_ref().map(|tree| tree.root.0);
+        let reply = json!({"ok": true, "result": {"nodes": nodes, "focus": update.focus.0, "root": root}});
+        for waiter in self.tree_waiters.drain(..) {
+            let _ = waiter.send(reply.clone());
+        }
+    }
+
+    /// Answers the held `ui.dialog.confirm` requests ([`Reply::AfterHeldOk`]) from `host`: success
+    /// once the app accepted the dialog's held OK; once it refused it, an error whose text is the
+    /// refusal's reason, English for a reason given as a `Word`; an error once the dialog closed
+    /// while it waited, also when the same dialog opened again since. A request stays held while
+    /// the app has not answered. Call it in every pass after the app answered the held OKs it
+    /// answers in that pass and before the pass runs the host ([`DialogHost::run`]), which closes a
+    /// dialog the app accepted; calling it more than once in a pass is harmless.
+    pub fn poll_held(&mut self, host: &DialogHost) {
+        self.held_waiters.retain(|(dialog, open, reply)| {
+            let answer = match host.held_state(*dialog) {
+                _ if host.open_serial(*dialog) != Some(*open) => {
+                    json!({"ok": false, "error": "the dialog closed while its OK waited for the app's answer"})
+                }
+                Some(HeldOk::Waiting) => return true,
+                Some(HeldOk::Accepted) => json!({"ok": true, "result": null}),
+                Some(HeldOk::Refused(reason)) => json!({"ok": false, "error": reason.as_str()}),
+                _ => json!({"ok": false, "error": "the app refused OK"}),
+            };
+            let _ = reply.send(answer);
+            false
+        });
     }
 
     /// Drops the host's queued input and the step in flight, and fails every
@@ -377,7 +499,7 @@ impl ControlChannel {
     pub fn finish_captures(&mut self, finished: Vec<Finished>, write: &mut crate::screenshot::PngWriter<'_>) {
         for f in finished {
             let reply = match f.result {
-                Ok(image) => screenshot_reply(f.token, image, f.path.as_deref(), write),
+                Ok(image) => screenshot_reply(f.token, image, f.region, f.geometry, f.path.as_deref(), write),
                 Err(e) => json!({"ok": false, "error": e}),
             };
             if let Some(tx) = f.reply {
@@ -388,6 +510,6 @@ impl ControlChannel {
 
     /// Waiters of every kind, for `ui.inspect`'s `pending` count and tests.
     pub fn waiting(&self) -> usize {
-        self.input_waiters.len() + self.job_waiters.len() + self.captures.pending()
+        self.input_waiters.len() + self.job_waiters.len() + self.tree_waiters.len() + self.held_waiters.len() + self.captures.pending()
     }
 }

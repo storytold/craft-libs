@@ -330,7 +330,7 @@ pub struct BorderColors {
 }
 
 /// PhotoCraft's layer label colours (`LabelColor`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, craft_ui_macros::PlainData)]
 pub enum LabelColor {
     #[allow(missing_docs)]
     Red,

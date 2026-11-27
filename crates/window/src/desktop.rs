@@ -67,11 +67,11 @@ pub fn theme_svgs<const N: usize>(theme: &str, icons: [&str; N]) -> [Option<Vec<
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", test))]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
 /// Compositors and window managers that tile, matched against the `XDG_CURRENT_DESKTOP` entries.
 const TILING: &[&str] = &["sway", "hyprland", "i3", "niri", "river", "bspwm", "awesome", "dwl", "qtile", "herbstluftwm", "leftwm", "xmonad", "dwm"];
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", test))]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
 /// The desktop kind from the first of its variables that is set (`XDG_CURRENT_DESKTOP`,
 /// `XDG_SESSION_DESKTOP`, `DESKTOP_SESSION`). `ubuntu:GNOME` and `Budgie:GNOME` count as GNOME.
 /// craft-platform's `is_gnome_session` (appearance.rs) repeats these rules; change both together.

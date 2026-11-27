@@ -2,7 +2,7 @@
 
 use super::paint::surface_ink;
 use crate::contract::run::ErasedPass;
-use crate::contract::{Component, Cx, Validity};
+use crate::contract::{Component, Cx, Hover, Validity};
 use crate::runtime::access::scope;
 use crate::runtime::motion::{Drives as _, spec};
 use crate::style::{Flags, Ink, StateSet, StyleView};
@@ -33,6 +33,11 @@ fn ease(p: &mut dyn ErasedPass<'_>, targets: [bool; 3]) -> StateMix {
     StateMix::new(hover, press, on)
 }
 
+/// The component's shown value when it is a `bool`: a two-state value, on or off.
+pub(crate) fn shown_bool<C: Component>(cx: &Cx<'_, C>) -> Option<bool> {
+    cx.shown.as_deref().and_then(|value| (value as &dyn std::any::Any).downcast_ref::<bool>()).copied()
+}
+
 /// The flags of step 12 that the component's own inputs give, for a run, a face and a collection member alike: its
 /// own `flags`, READ_ONLY and SELECTED from its props, CHECKED from a shown `bool`, MIXED from a mixed binding and the
 /// binding's validity.
@@ -44,7 +49,7 @@ pub(crate) fn value_flags<C: Component>(comp: &C, cx: &Cx<'_, C>) -> Flags {
     if cx.core.resolved.selected == Some(true) {
         flags |= Flags::SELECTED;
     }
-    if cx.shown.as_deref().and_then(|value| (value as &dyn std::any::Any).downcast_ref::<bool>()) == Some(&true) {
+    if shown_bool(cx) == Some(true) {
         flags |= Flags::CHECKED;
     }
     if cx.mixed {
@@ -98,7 +103,20 @@ pub(crate) fn state(p: &mut dyn ErasedPass<'_>, style: &dyn StyleView, open: boo
     } else {
         State::Rest
     };
-    p.shown_state().last_state = (hovered, visible);
+    let clicked = crate::runtime::egui::response::pointer_clicked(&core.response);
+    let face = core.face_mode;
+    let shown = p.shown_state();
+    let was = shown.last_state.0;
+    shown.last_state = (hovered, visible);
+    // The click is held while the pointer stays over the control and dropped in the pass it leaves. A pass that sees
+    // no click (a second pass of a frame gets no input) keeps what the first pass held.
+    shown.clicked_over = hovered && (clicked || shown.clicked_over);
+    let report = Hover { over: hovered, entered: hovered && !was, left: was && !hovered, clicked: shown.clicked_over };
+    // A face shows a look, not a stay of the pointer: it keeps no report.
+    if !face {
+        let core = p.core();
+        *core.memory.shown::<Hover>(super::ShownState::hover_slot(core.id)) = report;
+    }
     let t = ease(p, [hovered, pressed, flags.intersects(Flags::ON)]);
     let core = p.core();
     core.state = StateSet::new(state, flags, t);

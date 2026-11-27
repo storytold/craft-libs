@@ -5,16 +5,17 @@
 //! geometry and the turning. [`ReadingNav`] is the row of page-turn buttons under the columns.
 
 use craft_behavior::{IconId, Metrics, NavMove, PartKey, PressPhase, Sense};
-use craft_ui::buttons::IconButton;
+use craft_ui::buttons::{Button, IconButton};
 use craft_ui::contract::{
     Access, Animate as _, Common, Component, Cx, DisabledLook, Focus as _, Input, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _, clicked, spec,
 };
+use craft_ui::display::Text;
 use craft_ui::layout_components::Row;
 use craft_ui::primitives::textures::{Priority, TextureStoreOptions, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails, texture_side};
 use craft_ui::primitives::{PaintShape, ReadingMeasure};
 use craft_ui::runtime::commands::FireSource;
-use craft_ui::runtime::env::Env;
+use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use craft_ui::style::{ComponentStyle, DataColor, FocusLook, StyleCx, UiTokens};
 use egui::{CornerRadius, Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
@@ -22,8 +23,8 @@ use egui::{CornerRadius, Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
 use super::view::PageSource;
 use crate::layout::SCREEN_POINTS_PER_POINT;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The page-turn parts: one over each gap between the columns and one over each side margin, indexed from the left.
 /// A click on one turns toward its side and a swipe starting on one turns by the swipe's direction.
@@ -60,6 +61,8 @@ craft_ui::words! {
     pub struct ReadingViewWords {
         previous: "readingView.previous" = "Previous Screen";
         next: "readingView.next" = "Next Screen";
+        /// The position between the page-turn buttons: the screen shown and how many there are.
+        position: template "readingView.position" = "{n} / {m}";
     }
 }
 
@@ -287,7 +290,8 @@ impl Component for ReadingView<'_> {
 
     fn style(cx: &StyleCx<'_>, _: ReadingViewStyleKey) -> ReadingViewStyle {
         ReadingViewStyle {
-            metrics: Metrics::new().min_size(Vec2::new(cx.tokens.size.plot.width, cx.tokens.size.plot.height)),
+            // The width's floor is `measure`'s (`picture_width`), which a narrow room may take below the plot width.
+            metrics: Metrics::new().min_size(Vec2::new(0.0, cx.tokens.size.plot.height)),
             focus: cx.focus_look(),
             gap: cx.tokens.space.gap.section,
             reach: cx.tokens.size.hit.target,
@@ -413,7 +417,12 @@ impl Component for ReadingView<'_> {
             let along = gap + page as f32 * step - offset;
             let x = if rtl { viewport.right() - along - size.x } else { viewport.left() + along };
             let at = Rect::from_min_size(pos2(x, top), size);
-            let shown = at.intersects(viewport);
+            // A page touching the viewport's edge only (egui counts that as intersecting) is not shown: it would paint a
+            // zero-width sliver there.
+            let shown = {
+                let overlap = at.intersect(viewport);
+                overlap.width() > 0.0 && overlap.height() > 0.0
+            };
             let near = !shown && [-step, step].into_iter().any(|by| at.translate(vec2(by, 0.0)).intersects(viewport));
             if !shown && !near {
                 continue;
@@ -442,6 +451,8 @@ pub struct ReadingNavOutput {
     pub response: Response,
     /// The state's column changed: a button turned the screen.
     pub turned: bool,
+    /// The trailing button ([`ReadingNav::action`]) was clicked.
+    pub action: bool,
 }
 
 impl Outcome for ReadingNavOutput {
@@ -459,25 +470,53 @@ impl Outcome for ReadingNavOutput {
 pub struct ReadingNav<'a> {
     state: &'a mut ReadingState,
     count: usize,
+    position: bool,
+    action: Option<Label>,
 }
 
 impl<'a> ReadingNav<'a> {
     /// The buttons for a view of `count` columns in `state`.
     pub fn new(state: &'a mut ReadingState, count: usize) -> Self {
-        ReadingNav { state, count }
+        ReadingNav { state, count, position: false, action: None }
+    }
+
+    /// Shows the "n / m" position between the buttons.
+    pub fn position(mut self, shown: bool) -> Self {
+        self.position = shown;
+        self
+    }
+
+    /// Adds one trailing button named `label`, reported as [`ReadingNavOutput::action`].
+    pub fn action(mut self, label: impl Into<craft_ui::runtime::env::Label>) -> Self {
+        self.action = Some(label.into());
+        self
     }
 
     /// Shows the row.
     pub fn show(self, ui: &mut Ui) -> ReadingNavOutput {
-        let words = Env::of(ui).words::<ReadingViewWords>();
-        let (column, count) = (self.state.column, self.count);
+        let ReadingNav { state, count, position, action } = self;
+        let env = Env::of(ui);
+        let words = env.words::<ReadingViewWords>();
+        let column = state.column;
+        let position = position.then(|| {
+            let format = env.format();
+            let (at, total) = (format.integer((column + 1).min(count) as u64), format.integer(count as u64));
+            Label::from(words.position.fill(&[("n", at.as_str()), ("m", total.as_str())]))
+        });
         let mut by = 0;
+        let mut acted = false;
         let row = Row::new().show(ui, |ui, _| {
             let previous = IconButton::new(IconId::new("chevron_left")).label(words.previous.clone()).enabled(column > 0).show(ui);
+            if let Some(position) = &position {
+                Text::new(position.clone()).show(ui);
+            }
             let next = IconButton::new(IconId::new("chevron_right")).label(words.next.clone()).enabled(column + 1 < count).show(ui);
+            if let Some(label) = &action {
+                acted = clicked(&Button::new(label.clone()).show(ui));
+            }
             by = i32::from(clicked(&next)) - i32::from(clicked(&previous));
         });
-        self.state.turn(by, count);
-        ReadingNavOutput { response: row.output, turned: by != 0 }
+        state.turn(by, count);
+        ReadingNavOutput { response: row.output, turned: by != 0, action: acted }
     }
 }

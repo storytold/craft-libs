@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// How a gradient's opacity is stored, which decides the rows of its stop bar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "ui", derive(craft_ui::contract::MemoProps))]
 #[non_exhaustive]
 pub enum StopRows {
     /// Opacity stops in their own row above the ramp, colour stops below; a colour's alpha is
@@ -36,6 +37,7 @@ pub enum StopRow {
 
 /// A colour stop.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ui", derive(craft_ui::contract::MemoProps))]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ColorStop {
@@ -56,6 +58,7 @@ pub struct ColorStop {
 
 /// An opacity stop of a [`StopRows::Split`] gradient.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ui", derive(craft_ui::contract::MemoProps))]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct OpacityStop {
@@ -120,6 +123,7 @@ impl OpacityStop {
 
 /// A gradient's stops, each list sorted by location.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ui", derive(craft_ui::contract::MemoProps))]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct GradientStops {

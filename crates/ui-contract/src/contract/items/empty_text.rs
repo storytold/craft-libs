@@ -6,7 +6,7 @@ use crate::fonts::stack_facts;
 use crate::primitives::TextEnv;
 use crate::primitives::{TextRun, Wrap};
 use crate::runtime::env::{Env, Label};
-use crate::style::{ComponentStyle, Insets, StyleCx, TextLook, TypeRole, ink_color};
+use crate::style::{ComponentStyle, Insets, StyleCx, TextLook, TypeRole, UiTokens, control_metrics, ink_color};
 use craft_behavior::{Metrics, Sense};
 use craft_theme::Stateful;
 use egui::{Id, Rect, Response, Ui, Vec2};
@@ -47,13 +47,13 @@ impl EmptyText {
 /// The empty text's type role.
 const ROLE: TypeRole = TypeRole::Body;
 
-/// The height the empty text of `props.empty` takes at `width`, padding included.
-pub(in crate::contract) fn height(ui: &Ui, text: &Label, width: f32) -> f32 {
+/// The height the empty text of `props.empty` takes at `width`, padding included, in `tokens`: the collection's, which
+/// its own token scope sets.
+pub(in crate::contract) fn height(ui: &Ui, tokens: &UiTokens, text: &Label, width: f32) -> f32 {
     let env = Env::of(ui);
     let text = env.view().resolve(text);
-    let layout_env =
-        TextEnv { tokens: &env.tokens, direction: env.text_direction, ink: ink_color(&env.tokens, env.ink), fonts: stack_facts(ui.ctx()) };
-    let pad = EmptyText::padding(&env.tokens, env.control(env.size).pad_x);
+    let layout_env = TextEnv { tokens, direction: env.text_direction, ink: ink_color(tokens, env.ink), fonts: stack_facts(ui.ctx()) };
+    let pad = EmptyText::padding(tokens, control_metrics(tokens, env.size, env.line_ratio).pad_x);
     EmptyText::run(text.as_str()).layout(ui.ctx(), &layout_env, (width - pad.start - pad.end).max(0.0)).size().y + pad.top + pad.bottom
 }
 

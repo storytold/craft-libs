@@ -44,6 +44,10 @@ pub enum Container {
     MpegTs,
     /// MPEG-1/2 program stream (MPG, VOB).
     MpegPs,
+    /// Sierra VMD (Video and Music Data).
+    Vmd,
+    /// Bink (BIK).
+    Bink,
 }
 
 impl Container {
@@ -66,6 +70,8 @@ impl Container {
             Container::Mxf => "MXF",
             Container::MpegTs => "MPEG-TS",
             Container::MpegPs => "MPEG-PS",
+            Container::Vmd => "VMD",
+            Container::Bink => "Bink",
         }
     }
 }
@@ -108,6 +114,10 @@ pub enum CodecId {
     Vorbis,
     /// Speex.
     Speex,
+    /// Bink Audio, RDFT form.
+    BinkAudioRdft,
+    /// Bink Audio, DCT form.
+    BinkAudioDct,
     /// H.264 / AVC.
     H264,
     /// H.265 / HEVC.
@@ -118,6 +128,8 @@ pub enum CodecId {
     Vp8,
     /// VP9.
     Vp9,
+    /// FFV1 lossless video.
+    Ffv1,
     /// Apple ProRes.
     ProRes,
     /// Motion JPEG.
@@ -132,6 +144,12 @@ pub enum CodecId {
     Dnxhd,
     /// APV (Advanced Professional Video).
     Apv,
+    /// Sierra VMD video (8-bit paletted).
+    VmdVideo,
+    /// Sierra VMD audio (8-bit PCM or 16-bit DPCM).
+    VmdAudio,
+    /// Bink Video (Bink 1).
+    BinkVideo,
     /// A codec this crate has no identifier for.
     Unknown,
 }
@@ -156,11 +174,14 @@ impl CodecId {
             CodecId::Opus => "Opus",
             CodecId::Vorbis => "Vorbis",
             CodecId::Speex => "Speex",
+            CodecId::BinkAudioRdft => "Bink Audio (RDFT)",
+            CodecId::BinkAudioDct => "Bink Audio (DCT)",
             CodecId::H264 => "H.264",
             CodecId::Hevc => "HEVC",
             CodecId::Av1 => "AV1",
             CodecId::Vp8 => "VP8",
             CodecId::Vp9 => "VP9",
+            CodecId::Ffv1 => "FFV1",
             CodecId::ProRes => "ProRes",
             CodecId::Mjpeg => "Motion JPEG",
             CodecId::Mpeg2Video => "MPEG-2",
@@ -168,6 +189,9 @@ impl CodecId {
             CodecId::Theora => "Theora",
             CodecId::Dnxhd => "DNxHD",
             CodecId::Apv => "APV",
+            CodecId::VmdVideo => "VMD video",
+            CodecId::VmdAudio => "VMD audio",
+            CodecId::BinkVideo => "Bink Video",
             CodecId::Unknown => "unknown",
         }
     }
@@ -192,6 +216,9 @@ impl CodecId {
                 | CodecId::Opus
                 | CodecId::Vorbis
                 | CodecId::Speex
+                | CodecId::VmdAudio
+                | CodecId::BinkAudioRdft
+                | CodecId::BinkAudioDct
         )
     }
 
@@ -204,6 +231,7 @@ impl CodecId {
                 | CodecId::Av1
                 | CodecId::Vp8
                 | CodecId::Vp9
+                | CodecId::Ffv1
                 | CodecId::ProRes
                 | CodecId::Mjpeg
                 | CodecId::Mpeg2Video
@@ -211,6 +239,8 @@ impl CodecId {
                 | CodecId::Theora
                 | CodecId::Dnxhd
                 | CodecId::Apv
+                | CodecId::VmdVideo
+                | CodecId::BinkVideo
         )
     }
 }
@@ -260,6 +290,8 @@ impl PcmFormat {
 /// | H.264 / HEVC / AV1 | the `avcC` / `hvcC` / `av1C` record |
 /// | VP9 | the MP4 `vpcC` payload, or Matroska's codec feature metadata |
 /// | APV | the `apvC` record |
+/// | FFV1 | the version 3 configuration record (dimensions are required separately) |
+/// | VMD video, VMD audio | the 816-byte VMD file header |
 ///
 /// `sample_rate` and `channels` are what the container declares (for HE-AAC with implicit
 /// signalling, usually the core rate), except that Opus is always 48 kHz, the rate it decodes at;

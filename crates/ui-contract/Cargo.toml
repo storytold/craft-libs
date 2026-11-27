@@ -7,6 +7,9 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Runtime, style, fonts, primitives, the component contract, layout and the test kit of the craft UI library, on egui"
 
+[package.metadata.craft]
+reads = ["crates/font-subset/tests/data/orbitron/Orbitron[wght].ttf"]
+
 [lib]
 # Every test lives in the `it` integration binary.
 test = false
@@ -16,10 +19,10 @@ workspace = true
 
 [features]
 default = []
-# `craft_ui::testing`: the fixture and suite runner, with the snapshot renderer. One feature for all of the test kit,
-# so every test build of every crate asks the runtime for the same thing and builds it once; a crate that depends on
-# the runtime through another framework crate cannot name the runtime's features on the command line.
-testing = ["dep:libtest-mimic", "snapshot", "craft-platform/testing"]
+# `craft_ui::testing`: the fixture and helpers used by application tests.
+# The suite runner, stories, registrations and snapshots are opt-in.
+testing = ["craft-platform/testing"]
+suite = ["testing", "dep:libtest-mimic", "dep:craft-testkit", "snapshot"]
 # `craft_ui::testing::snapshot`: stories rendered to images offscreen (desktop only).
 snapshot = ["dep:egui_kittest", "dep:image"]
 # Draw colour glyphs (COLR, sbix, CBDT), e.g. colour emoji.
@@ -34,10 +37,20 @@ accesskit = "0.25"
 craft-keymap = { workspace = true, features = ["egui"] }
 craft-theme = { workspace = true }
 craft-ui-macros = { workspace = true }
+# `Tracked`: app models whose revision keys memoized views and write-through bindings.
+craft-tracked = { workspace = true }
+# `MemoKey`: SipHash-1-3 with a 128-bit output.
+siphasher = "1"
+# `MemoProps::identity`: the `TypeId` of a props type with its lifetimes erased.
+typeid = { workspace = true }
+# `CommandRef.params`, which a memo key walks.
+serde_json = { workspace = true }
 craft-settings = { workspace = true }
 toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
 egui = { workspace = true }
 libtest-mimic = { version = "0.8", optional = true }
+# The gate's sweep fraction (`hostile::divisor`), which the suite's repeat sampling follows.
+craft-testkit = { workspace = true, optional = true }
 craft-host = { workspace = true }
 # `WindowSystem` and `restore::Store`, which viewport mounts place windows through.
 # `ui`: the window crate's egui side builds once, the same for the runtime, the shell's `app` and the apps.
@@ -45,9 +58,13 @@ craft-window = { workspace = true, features = ["ui"] }
 # `quit`, which `runtime::windows::logic` routes a root close through.
 craft-quit = { workspace = true }
 # `appearance::SystemReader`, the OS appearance the root's `System` choices resolve from.
-craft-platform = { workspace = true, features = ["appearance"] }
+craft-platform = { workspace = true, features = ["appearance", "clipboard"] }
 craft-i18n = { workspace = true, features = ["collate"] }
+# `alt_code_char`, which the raw-input step decodes Alt+numpad codes with.
+
+craft-codepage = { workspace = true }
 log = "0.4"
+scoped-tls = { workspace = true }
 smallvec = { workspace = true }
 inventory = "0.3.25"
 serde = { workspace = true }
@@ -77,7 +94,9 @@ image = { version = "0.25", default-features = false, features = ["png"], option
 # The window host's end hook sets `NSWindow.movable` through craft-window's AppKit code.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # `screen::available`: whether the browser has the EyeDropper, read at install for `Caps::SCREEN_CAPTURE`.
-craft-platform = { workspace = true, features = ["screen", "browser"] }
+craft-platform = { workspace = true, features = ["screen", "browser", "clipboard"] }
+# `egui/files.rs`: a pathless dropped file's bytes, which the page reads only asynchronously.
+wasm-bindgen-futures = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 craft-window = { workspace = true, features = ["ui", "appkit"] }
@@ -89,14 +108,14 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 epaint_default_fonts = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 
 [dev-dependencies]
-craft-ui-contract = { path = ".", features = ["testing"] }
+craft-ui-contract = { path = ".", features = ["suite"] }
 craft-behavior = { workspace = true }
 craft-fonts-build = { workspace = true }
 craft-host = { workspace = true }
 craft-i18n = { workspace = true }
 craft-keymap = { workspace = true, features = ["egui"] }
 craft-theme = { workspace = true }
-craft-ui-test-kit = { workspace = true }
+craft-ui-test-kit = { workspace = true, features = ["suite"] }
 craft-window = { workspace = true }
 egui = { workspace = true }
 # The oracle for the deflated default faces (`tests/it/fonts/on_demand.rs`).

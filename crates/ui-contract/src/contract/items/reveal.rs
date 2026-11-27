@@ -1,9 +1,8 @@
 //! Bringing a row into view: a requested reveal and the scroll that does it.
 
-use super::measure::RowMeasure;
-use super::{ItemsHooks, rows};
+use super::measure::{Known, RowMeasure};
+use super::{ItemsHooks, key_hash, rows};
 use crate::contract::Collection;
-use crate::contract::collection::LeadSource;
 use crate::runtime::env::{Env, EnvView};
 use crate::runtime::memory::MemoryStage;
 use craft_behavior::{ItemLayout, Proposal, ScrollPos};
@@ -15,7 +14,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// moves to it and it scrolls into view.
     pub(super) fn requested_reveal(&mut self, comp: &C, layout: &C::ItemLayout) {
         if let Some(at) = comp.reveal().and_then(|key| self.index_of(key)).filter(|&at| !self.source.section_stop(at)) {
-            self.move_lead(at, LeadSource::Keys);
+            let key = self.source.key(at);
+            if self.lead.key.as_ref() != Some(&key) {
+                self.lead.rested = None;
+            }
+            self.lead.key = Some(key);
+            self.lead.at = at;
             self.reveal_with(layout, at);
         }
     }
@@ -37,50 +41,63 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// for the first time takes its measured height when built and moves the rows after it, so the auto rows that
     /// share the view with the revealed row, up to it, and have no kept height are built and measured first, under the
     /// rows' env `installed`, until the scroll that shows the row places it by measured heights only. The build takes
-    /// those heights (`measured_for_reveal`) and does not measure the rows again.
+    /// those heights (they are this pass's measure) and does not measure the rows again. The rows are measured with
+    /// the state `known` the pass leaves them in; returns them.
     pub(super) fn place_reveal(
         &mut self,
         comp: &C,
         ui: &Ui,
         (id, view_env, installed): (Id, EnvView<'_>, &Env),
-        layout: &mut Arc<C::ItemLayout>,
+        (layout, known): (&mut Arc<C::ItemLayout>, &Known<C::Key>),
         view: Rect,
-    ) {
-        let Some(at) = self.revealing.take().filter(|&at| layout.shown(at)) else { return };
+    ) -> Vec<usize> {
+        let mut measured = Vec::new();
+        let Some(at) = self.revealing.take().filter(|&at| layout.shown(at)) else { return measured };
         let ctx = ui.ctx().clone();
+        let (striped, tree) = (comp.items().striped, matches!(layout.nav(), craft_behavior::NavShape::Tree));
         loop {
             self.aim_reveal(layout, at, view.height());
             let mut in_view = Vec::new();
             layout.visible(ScrollPos { x: self.offset_x, y: self.offset }, view.size(), &mut in_view);
-            let source = self.source;
+            let source = &*self.source;
             let unmeasured: Vec<usize> = rows::measured_heights(&ctx, id, |height| {
                 in_view
                     .into_iter()
                     .chain([at])
                     .filter(|&row| row <= at && layout.is_auto(row) && !source.section_stop(row))
-                    .filter(|row| !self.measured_for_reveal.contains(row) && height(rows::measured_id(id, &source.key(*row))).is_none())
+                    .filter(|row| !measured.contains(row) && height(rows::measured_id(id, &source.key(*row))).is_none())
                     .collect()
             });
             if unmeasured.is_empty() {
-                return;
+                return measured;
             }
             let mut memory = MemoryStage::open_peek(&ctx, id);
             for row in unmeasured {
-                if self.measured_for_reveal.contains(&row) {
+                if measured.contains(&row) {
                     continue;
                 }
                 let rect = layout.rect(row, ScrollPos::default());
                 let mut cells = Vec::new();
                 layout.cells(row, ScrollPos::default(), &mut cells);
-                let measure = RowMeasure { at: row, rect, cells, proposal: Proposal::Width(rect.width()) };
-                let (size, _) =
-                    crate::contract::steps::measuring(&ctx, || self.measure_row(comp, ui, (id, view_env, installed), &mut memory, measure));
-                let measured = rows::measured_id(id, &self.source.key(row));
+                let odd = striped && self.stripe_run(None, row).is_multiple_of(2) && !self.source.is_section(row);
+                let (state, flags) = self.known_row(row, known, odd);
+                let measure = RowMeasure { at: row, rect, cells, state, flags, tree };
+                let (size, fits) = crate::contract::steps::measuring(&ctx, || {
+                    self.measure_row(comp, ui, (id, view_env, installed), &mut memory, measure, |measure, _, fits| {
+                        (measure(Proposal::Width(rect.width())).0, fits)
+                    })
+                });
+                let key = self.source.key(row);
+                let height_id = rows::measured_id(id, &key);
                 #[cfg(feature = "testing")]
-                crate::runtime::measure::count_row_measure(&ctx, measured);
-                rows::record_measure(&ctx, id, measured, Vec2::new(rect.width(), size.y));
+                crate::runtime::measure::count_row_measure(&ctx, height_id);
+                rows::record_measure(&ctx, id, height_id, Vec2::new(rect.width(), size.y));
                 Arc::make_mut(layout).set_height(row, size.y);
-                self.measured_for_reveal.push(row);
+                let fit = fits.then_some(size.x);
+                if rows::keep_fit(&ctx, id, key_hash(&key), fit) {
+                    Arc::make_mut(layout).set_fit(row, fit);
+                }
+                measured.push(row);
             }
             let content = layout.content_size();
             self.content = Vec2::new(content.x as f32, content.y as f32);

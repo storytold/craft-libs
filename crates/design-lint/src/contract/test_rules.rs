@@ -43,15 +43,20 @@ fn is_cfg_test(attrs: &[Attribute]) -> bool {
 }
 
 fn has_float(tokens: proc_macro2::TokenStream) -> bool {
-    tokens.into_iter().any(|t| match t {
-        TokenTree::Literal(l) => {
-            let text = l.to_string();
-            text.starts_with(|c: char| c.is_ascii_digit())
-                && (text.contains('.') || text.ends_with("f32") || text.ends_with("f64"))
-                && text.chars().take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '_')).any(|c| c.is_ascii_digit() && c != '0')
+    let mut after_dot = false;
+    tokens.into_iter().any(|t| {
+        // A literal after `.` is a tuple field (`pair.1.0` lexes as `pair`, `.`, `1.0`), not a number.
+        let field = std::mem::replace(&mut after_dot, matches!(&t, TokenTree::Punct(p) if p.as_char() == '.'));
+        match t {
+            TokenTree::Literal(l) if !field => {
+                let text = l.to_string();
+                text.starts_with(|c: char| c.is_ascii_digit())
+                    && (text.contains('.') || text.ends_with("f32") || text.ends_with("f64"))
+                    && text.chars().take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '_')).any(|c| c.is_ascii_digit() && c != '0')
+            }
+            TokenTree::Group(g) => has_float(g.stream()),
+            _ => false,
         }
-        TokenTree::Group(g) => has_float(g.stream()),
-        _ => false,
     })
 }
 

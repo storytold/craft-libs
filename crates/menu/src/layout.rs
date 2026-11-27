@@ -1,6 +1,6 @@
 //! The platform layouts of an app's menus. See the crate docs for what they do.
 
-use craft_host::target::{Os, Runtime};
+use craft_host::target::{Os, Runtime, ShellInfo};
 use craft_keymap::{Chord, CommandRef, Key, Mods};
 
 use crate::model::{Builtin, Item, ItemRole, Menu, MenuBar, MenuRole, Node, Platforms, Standard, tidy};
@@ -17,7 +17,7 @@ const CTRL_CMD_M: Chord = Chord::new(CTRL_CMD, Key::M);
 const CMD_COMMA: Chord = Chord::new(Mods::CMD, Key::Comma);
 
 /// The platform a layout is for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum Target {
     #[allow(missing_docs)]
@@ -34,7 +34,17 @@ impl Target {
     /// The platform this build runs on: `wasm32` builds are [`Target::Web`], and operating
     /// systems other than macOS and Windows are [`Target::Linux`].
     pub const fn current() -> Target {
-        match (Runtime::current(), Os::current()) {
+        Target::on(Runtime::current(), Os::current())
+    }
+
+    /// The platform of the shell a frame runs in, as [`Env`](craft_ui::runtime::env::Env) reports it: a test
+    /// or a browser can run on another operating system than the build's.
+    pub const fn of_shell(shell: &ShellInfo) -> Target {
+        Target::on(shell.runtime, shell.os)
+    }
+
+    const fn on(runtime: Runtime, os: Os) -> Target {
+        match (runtime, os) {
             (Runtime::Web, _) => Target::Web,
             (_, Os::Mac) => Target::Mac,
             (_, Os::Windows) => Target::Windows,
@@ -91,6 +101,11 @@ impl<'a> LayoutOptions<'a> {
 
     fn text(&self, english: &'static str) -> String {
         (self.label)(english).replace("{app}", self.app_name)
+    }
+
+    /// The English text of a label `text` writes, `{app}` filled in.
+    fn english_text(&self, english: &'static str) -> String {
+        english.replace("{app}", self.app_name)
     }
 
     fn standard(&self, kind: Standard) -> Node {
@@ -171,6 +186,7 @@ pub fn mac_layout(bar: &MenuBar, options: &LayoutOptions) -> Layout {
     let mut menu = Vec::new();
     if let Some(Node::Item(mut it)) = about {
         it.label = options.text("About {app}");
+        it.english = Some(options.english_text("About {app}"));
         menu.extend([Node::Item(it), Node::Separator]);
     }
     if let Some(s) = settings {
@@ -178,8 +194,9 @@ pub fn mac_layout(bar: &MenuBar, options: &LayoutOptions) -> Layout {
         menu.push(settings_node(s, comma, options, &mut clashes));
     }
     if let Some(mut l) = language {
-        if let Node::Submenu { label, .. } = &mut l {
+        if let Node::Submenu { label, english, .. } = &mut l {
             *label = options.text("Language");
+            *english = Some("Language".to_owned());
         }
         menu.push(l);
     }
@@ -218,6 +235,7 @@ pub fn mac_layout(bar: &MenuBar, options: &LayoutOptions) -> Layout {
         _ => Item::new(Builtin::Quit.command(), "").role(ItemRole::Quit),
     };
     quit.label = options.text("Quit {app}");
+    quit.english = Some(options.english_text("Quit {app}"));
     match taken(CMD_Q, std::slice::from_ref(&quit.command)) {
         Some(command) => {
             clashes.push(Clash { shortcut: CMD_Q, system: "Quit", command, resolution: "Quit has no shortcut" });
@@ -339,15 +357,19 @@ fn desktop_bar(bar: &MenuBar, target: Target, quit: Option<&'static str>, option
             _ => Item::new(Builtin::Quit.command(), "").role(ItemRole::Quit),
         };
         it.label = options.text(label);
+        it.english = Some(options.english_text(label));
         ensure_menu(&mut bar, MenuRole::File, "File", options).children.extend([Node::Separator, Node::Item(it)]);
     }
     if let Some(s) = settings {
         let s = match s {
             Node::Item(mut it) => {
                 it.label = options.text("Preferences…");
+                it.english = Some("Preferences…".to_owned());
                 Node::Item(it)
             }
-            Node::Submenu { children, role, platforms, .. } => Node::Submenu { label: options.text("Preferences"), children, role, platforms },
+            Node::Submenu { children, role, platforms, enabled, .. } => {
+                Node::Submenu { label: options.text("Preferences"), english: Some("Preferences".to_owned()), children, role, platforms, enabled }
+            }
             other => other,
         };
         ensure_menu(&mut bar, MenuRole::Edit, "Edit", options).children.extend([Node::Separator, s]);
@@ -360,6 +382,7 @@ fn desktop_bar(bar: &MenuBar, target: Target, quit: Option<&'static str>, option
     }
     if let Some(Node::Item(mut it)) = about {
         it.label = options.text("About {app}");
+        it.english = Some(options.english_text("About {app}"));
         ensure_menu(&mut bar, MenuRole::Help, "Help", options).children.extend([Node::Separator, Node::Item(it)]);
     }
     finish(&mut bar, |_| false);
@@ -373,13 +396,20 @@ fn shown_on(bar: &MenuBar, target: Target) -> MenuBar {
         let shown = nodes.iter().filter_map(|n| match n {
             Node::Item(it) if !it.platforms.contains(on) => None,
             Node::Submenu { platforms, .. } if !platforms.contains(on) => None,
-            Node::Submenu { label, children, role, platforms } => {
-                Some(Node::Submenu { label: label.clone(), children: keep(children, on, appkit), role: *role, platforms: *platforms })
-            }
+            Node::Submenu { label, english, children, role, platforms, enabled } => Some(Node::Submenu {
+                label: label.clone(),
+                english: english.clone(),
+                children: keep(children, on, appkit),
+                role: *role,
+                platforms: *platforms,
+                enabled: *enabled,
+            }),
             Node::Standard { .. } if !appkit => None,
             other => Some(other.clone()),
         });
-        tidy(shown.collect())
+        let mut kept: Vec<Node> = shown.collect();
+        tidy(&mut kept);
+        kept
     }
     let on = target.platforms();
     let menus = bar.menus.iter().map(|m| Menu { children: keep(&m.children, on, target == Target::Mac), ..m.clone() }).collect();
@@ -408,7 +438,7 @@ fn ensure_menu<'b>(bar: &'b mut MenuBar, role: MenuRole, english: &'static str, 
                 MenuRole::Help => bar.menus.len(),
                 _ => bar.menus.iter().position(|m| m.role == MenuRole::Help).unwrap_or(bar.menus.len()),
             };
-            bar.menus.insert(at, Menu::new(options.text(english), Vec::new()).role(role));
+            bar.menus.insert(at, Menu::new(options.text(english), Vec::new()).english(english).role(role));
             at
         }
     };
@@ -418,7 +448,7 @@ fn ensure_menu<'b>(bar: &'b mut MenuBar, role: MenuRole, english: &'static str, 
 /// Tidy every menu and drop the ones the moves emptied, unless `keep_empty`.
 fn finish(bar: &mut MenuBar, keep_empty: impl Fn(&Menu) -> bool) {
     for m in &mut bar.menus {
-        m.children = tidy(std::mem::take(&mut m.children));
+        tidy(&mut m.children);
     }
     bar.menus.retain(|m| !m.children.is_empty() || keep_empty(m));
 }
@@ -438,14 +468,15 @@ fn settings_node(node: Node, comma_taken: Option<CommandRef>, options: &LayoutOp
     match node {
         Node::Item(mut it) => {
             it.label = options.text("Settings…");
+            it.english = Some("Settings…".to_owned());
             give(&mut it);
             Node::Item(it)
         }
-        Node::Submenu { mut children, role, platforms, .. } => {
+        Node::Submenu { mut children, role, platforms, enabled, .. } => {
             if let Some(Node::Item(first)) = children.iter_mut().find(|n| matches!(n, Node::Item(i) if i.enabled)) {
                 give(first);
             }
-            Node::Submenu { label: options.text("Settings"), children, role, platforms }
+            Node::Submenu { label: options.text("Settings"), english: Some("Settings".to_owned()), children, role, platforms, enabled }
         }
         other => other,
     }
@@ -461,18 +492,18 @@ fn appearance_node(bar: &mut MenuBar, options: &LayoutOptions) -> Vec<Node> {
         items.push(it);
     }
     match submenu {
-        Some(Node::Submenu { mut children, role, platforms, .. }) => {
+        Some(Node::Submenu { mut children, role, platforms, enabled, .. }) => {
             if !items.is_empty() {
                 children.push(Node::Separator);
                 children.extend(items);
             }
-            vec![Node::Submenu { label: options.text("Appearance"), children, role, platforms }]
+            vec![Node::Submenu { label: options.text("Appearance"), english: Some("Appearance".to_owned()), children, role, platforms, enabled }]
         }
         _ => items,
     }
 }
 
-fn node_commands(node: &Node) -> Vec<CommandRef> {
+pub(crate) fn node_commands(node: &Node) -> Vec<CommandRef> {
     match node {
         Node::Item(it) => vec![it.command.clone()],
         Node::Submenu { children, .. } => children.iter().flat_map(node_commands).collect(),

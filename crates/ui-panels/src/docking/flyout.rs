@@ -1,10 +1,11 @@
 //! `Flyout`: the panel an icon of an iconic column opens beside the column.
 
-use crate::contract::overlay::{Anchor, Dismiss, FloatPlace, Place, PlacementChange, ResizeEdges};
+use crate::contract::overlay::{Anchor, Dismiss, FloatPlace, Outside, Place, PlacementChange, ResizeEdges};
 use crate::contract::{
-    BodyCx, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, OverlayUi, Pad, PopupHandle, Role, SizeLimits, Sizing,
+    BodyCx, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, OverlayUi, Pad, PaintUi, PopupHandle, Role,
+    SizeLimits, Sizing,
 };
-use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceKind};
 use craft_behavior::overlay::Side;
 use craft_behavior::{Metrics, Sense};
 use egui::{Pos2, Rect, Response, Ui, Vec2};
@@ -48,10 +49,13 @@ impl Outcome for FlyoutOutput {
     }
 }
 
-/// A popup beside an iconic column, on the side of the canvas, whose top left the caller places. Escape and a press
-/// outside close it; with Auto-Collapse Iconic Panels the focus leaving it closes it too. Its body is measured at the
-/// flyout's width first: the flyout is as tall as the body measures within the room below its top, and at least its
-/// `size`'s height, and the body then shows in the rect that takes.
+/// A popup beside an iconic column, on the side of the canvas, whose top left the caller places. Escape closes it; with
+/// Auto-Collapse Iconic Panels a press outside it and the focus leaving it close it too. Its body is measured at the
+/// flyout's width first: the flyout is as tall as the body measures, at most the height of `within`, and at least its
+/// `size`'s height, and the body then shows in the rect that takes. A flyout that fits below its top stays there; one
+/// taller than the room below its top moves up by what it overflows and no further, its bottom on `within`'s (the
+/// layer's keep rule moves it the least distance into its bounds), and only one taller than `within` starts at
+/// `within`'s top and scrolls.
 ///
 /// The user resizes it by its top and bottom edges, the edge away from the column and the two corners there; the
 /// column side stays. The flyout keeps no rect of its own: each step comes back in [`FlyoutShown::placed`] and the
@@ -72,15 +76,29 @@ pub struct Flyout {
     /// The least size a resize leaves the flyout.
     #[prop(quantity = "least room a resize leaves, from the dock's measured sizes, in points")]
     least: Vec2,
+    /// The flyout stands as a docked column does: [`docked`](Flyout::docked).
+    docked: bool,
     placed: Option<PlacementChange>,
 }
 
 impl Flyout {
     /// A flyout at least `size` that opens on the side `opens` of its column, in reading order (`Side::Start` or
-    /// `Side::End`), closing when the focus leaves it if `auto_collapse`.
+    /// `Side::End`), closing on a press outside it and when the focus leaves it if `auto_collapse`.
     pub fn new(opens: Side, size: Vec2, auto_collapse: bool) -> Self {
         let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(Pad::None).sizing(Sizing::Content);
-        Flyout { common: Common::new(), props, opens, size, auto_collapse, within: Rect::EVERYTHING, least: Vec2::ZERO, placed: None }
+        Flyout { common: Common::new(), props, opens, size, auto_collapse, within: Rect::EVERYTHING, least: Vec2::ZERO, docked: false, placed: None }
+    }
+
+    /// The flyout stands as a docked column does, in place of a popup's raised surface: square on `surface.panel`, with
+    /// the column's `line.border` frame and no shadow (the flyouts of a flush dock's columns,
+    /// [`DockConfig::flush_docks`](super::DockConfig::flush_docks)).
+    #[must_use]
+    pub fn docked(mut self, on: bool) -> Self {
+        if on {
+            self.props = self.props.surface(SurfaceKind::Panel);
+        }
+        self.docked = on;
+        self
     }
 
     /// The layer the flyout shows in, its top left at `top_left`: placed by the caller, resizable on every edge but
@@ -90,13 +108,18 @@ impl Flyout {
         let bounded = self.within.is_finite();
         let least = if bounded { self.least.min(self.within.size().max(Vec2::ZERO)) } else { self.least };
         // A float place as well as the caller's position: the placement pins no edge, so the edge set alone decides
-        // the grips.
+        // the grips. The host's binding opens and closes the flyout, so a command leaves it open.
         let overlay = Overlay::popover()
             .place(Place::Float(FloatPlace::at(top_left)))
             .placed_at(top_left)
             .size_limits(SizeLimits::at_least(least))
             .resize_edges(free.union(ResizeEdges::TOP).union(ResizeEdges::BOTTOM))
-            .dismiss(Dismiss::new().focus_left(self.auto_collapse))
+            .dismiss(
+                Dismiss::new()
+                    .outside(if self.auto_collapse { Outside::Close } else { Outside::Keep })
+                    .focus_left(self.auto_collapse)
+                    .commands(false),
+            )
             .body_scroll(false);
         if bounded { overlay.bounds(self.within) } else { overlay }
     }
@@ -120,8 +143,9 @@ impl Flyout {
             }
         };
         let size = self.size;
-        // A body measures no taller than the room below the top, inside the bounds.
-        let room = (self.within.bottom() - top_left.y).max(size.y);
+        // A body measures no taller than the bounds: a flyout that does not fit below its top moves up by its overflow
+        // alone, so only a body taller than the bounds is limited to them.
+        let room = self.within.height().max(size.y);
         let overlay = self.overlay(top_left, ui.is_rtl());
         self.props = self.props.mount(Mount::Layer(overlay));
         let shown = ui.show_container(popup, self, |ui, cx| {
@@ -148,6 +172,12 @@ impl Component for Flyout {
 
     fn sense(&self) -> Sense {
         Sense::empty()
+    }
+
+    fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if self.docked {
+            ui.draw().surface(cx.rect, SurfaceKind::Frame, Corners::None);
+        }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> FlyoutOutput {

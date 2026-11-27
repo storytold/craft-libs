@@ -145,6 +145,10 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                     self.insert_moving(Moving::taken(Group::new(vec![entry.panel], 0), source), to, canvas)
                 }
             },
+            Action::Restore { panel, location } => {
+                self.take(&panel).ok_or(DockError::MissingPanel)?;
+                self.restore(panel, &location)
+            }
             Action::CloseGroup { ref panel } | Action::CloseWindow { ref panel } => self.take_unit(panel, unit_of(&action)).map(|_| ()),
             Action::CloseOthers { panel } => {
                 for other in self.members(&panel, Unit::Group)? {
@@ -554,7 +558,7 @@ pub(super) fn group_location<P: Clone + Eq>(panels: &[P], panel: &P) -> Option<L
     let index = panels.iter().position(|p| p == panel)?;
     let anchor = panels.iter().find(|p| *p != panel).cloned();
     let before = panels.get(index + 1).cloned();
-    Some(Location { floating: None, anchor, placement: DockPlacement::Tab { before }, size: None, stack: None, sibling: Vec::new(), group: None })
+    Some(Location::new(anchor, DockPlacement::Tab { before }))
 }
 
 pub(super) fn first_panel<P>(node: &Node<P>) -> Option<&P> {

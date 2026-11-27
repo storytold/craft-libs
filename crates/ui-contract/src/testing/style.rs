@@ -97,7 +97,7 @@ pub fn with_cx<R>(ctx: &Context, tokens: &UiTokens, variant: Variant, size: Cont
         Scale::default(),
         Os::Linux,
         true,
-        env_key(tokens).with_line(line_ratio),
+        env_key(tokens).with_line(line_ratio).with_words(0),
         line_ratio,
     );
     f(&cx)
@@ -149,6 +149,12 @@ pub fn root_token_resolves(ctx: &Context) -> usize {
 /// Reports `contrast` as the OS's contrast preference on `ctx`, as a desktop source would.
 pub fn report_os_contrast(ctx: &Context, contrast: craft_theme::Contrast) {
     crate::runtime::env::system::report_contrast(ctx, contrast);
+}
+
+/// Reports `scale` as the OS's text scale on `ctx` (`None`: no scaling), as a desktop source would;
+/// [`crate::runtime::env::system_text_scale`] answers it.
+pub fn report_os_text_scale(ctx: &Context, scale: Option<f32>) {
+    crate::runtime::env::system::report_text_scale(ctx, scale);
 }
 
 /// Reports `dark` as the OS's colour scheme on `ctx` through the host's reader, as a desktop source would; the

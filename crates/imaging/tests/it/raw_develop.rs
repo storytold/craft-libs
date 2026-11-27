@@ -2,11 +2,13 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use craft_behavior::PixelSize;
+use craft_behavior::placement::Placement;
+use craft_behavior::{Monitor, MonitorKey, PixelSize};
+use craft_host::target::ShellInfo;
 use craft_imaging::raw::{Demosaic, RawDevelopSettings};
 use craft_imaging::scopes::ClippingMask;
 use craft_imaging::ui::raw_develop::{
@@ -15,13 +17,17 @@ use craft_imaging::ui::raw_develop::{
 use craft_imaging::ui::scopes::{ScopeFrame, ScopeReadout};
 use craft_imaging::ui::wide_angle::PreviewDone;
 use craft_imaging::ui::{ChannelColor, HistogramSet, ScopeChannel};
+use craft_ui::InstallSpec;
 use craft_ui::canvas::{PixelRect, RasterSource};
-use craft_ui::dialog::{DialogHost, DialogResult, FullWindowWorkspace as _, HostedWorkspace};
+use craft_ui::dialog::{DialogHost, DialogResult, FullWindowWorkspace as _, HostedWorkspace, OWN_WINDOW_MIN_SIZE};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::pending::Job;
+use craft_ui::testing::windows::{FakeSystem, NoWindows};
 use craft_ui::testing::{Fixture, Target, pointer, trial};
-use egui::{Color32, ColorImage, Event, Key, Modifiers, Vec2, pos2};
+use craft_ui_test_kit::windows::Windows;
+use craft_window::restore::Store;
+use egui::{Color32, ColorImage, Event, Key, Modifiers, Rect, Vec2, ViewportId, ViewportInfo, pos2};
 
 const IMAGE: [u32; 2] = [400, 200];
 
@@ -170,6 +176,99 @@ fn focus_canvas(fixture: &mut Fixture) -> Target {
     let canvas = fixture.by_role(Role::CANVAS).into_iter().next().expect("the workspace shows a canvas");
     fixture.click(&canvas).idle(2);
     canvas
+}
+
+#[trial]
+fn raw_develop_remembers_its_native_window_between_open_and_filter() {
+    let store = Arc::new(Mutex::new(Store::in_memory()));
+    let context = || Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).placement(store.clone()));
+    let first = context();
+    let mut host = DialogHost::new();
+    host.open(HostedWorkspace::new(RawDevelopWorkspace::new(open(RawTarget::OpenRaw)), Source::new()));
+
+    let inner_size = Vec2::new(1040.0, 760.0);
+    let outer_pos = pos2(118.0, 60.0);
+    first.child_info(ViewportInfo {
+        inner_rect: Some(Rect::from_min_size(pos2(120.0, 90.0), inner_size)),
+        outer_rect: Some(Rect::from_min_size(outer_pos, inner_size + Vec2::new(4.0, 32.0))),
+        native_pixels_per_point: Some(2.0),
+        ..ViewportInfo::default()
+    });
+    for _ in 0..3 {
+        first.frame(vec![], vec![], |ui| {
+            host.run(ui);
+        });
+    }
+    let saved = store.lock().unwrap().get("craft_imaging.raw_develop.window").expect("the Raw Develop window's placement was saved");
+    assert_eq!(saved.normal.size, <[f32; 2]>::from(inner_size));
+    assert_eq!(saved.position_px, Some([236, 120]));
+
+    // Windows can report a parked rectangle just before the minimized window stops painting.
+    let parked = Rect::from_min_size(pos2(-32000.0, -32000.0), Vec2::new(160.0, 40.0));
+    first.child_info(ViewportInfo {
+        inner_rect: Some(parked),
+        outer_rect: Some(parked),
+        native_pixels_per_point: Some(2.0),
+        minimized: Some(true),
+        ..ViewportInfo::default()
+    });
+    first.frame(vec![], vec![], |ui| {
+        host.run(ui);
+    });
+    assert_eq!(store.lock().unwrap().get("craft_imaging.raw_develop.window"), Some(saved), "minimizing keeps the normal placement");
+
+    let second = context();
+    let mut host = DialogHost::new();
+    host.open(HostedWorkspace::new(RawDevelopWorkspace::new(open(RawTarget::Filter)), Source::new()));
+    let output = second.frame(vec![], vec![], |ui| {
+        host.run(ui);
+    });
+    let (_, builder) = output.builders.iter().find(|(id, _)| *id != ViewportId::ROOT).expect("Raw Develop Filter opens a child window");
+    assert_eq!(builder.inner_size, Some(inner_size));
+    assert_eq!(builder.position, Some(outer_pos));
+}
+
+#[trial]
+fn raw_develop_window_keeps_its_size_when_the_saved_screen_is_gone() {
+    let store = Arc::new(Mutex::new(Store::in_memory()));
+    let mut saved = Placement::new([1040.0, 760.0], 2.0);
+    saved.position_px = Some([-4400, 120]);
+    saved.monitor = Some(MonitorKey::new("Disconnected", [3840, 2160]));
+    store.lock().unwrap().set("craft_imaging.raw_develop.window", &saved);
+
+    let screen = Monitor::new(MonitorKey::new("Attached", [3840, 2160]), [0, 0], [3840, 2160], 2.0);
+    let system = Arc::new(FakeSystem::new());
+    system.set_monitors(vec![screen]);
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), system).placement(store));
+    let mut host = DialogHost::new();
+    host.open(HostedWorkspace::new(RawDevelopWorkspace::new(open(RawTarget::OpenRaw)), Source::new()));
+    let output = windows.frame(vec![], vec![], |ui| {
+        host.run(ui);
+    });
+    let (_, builder) = output.builders.iter().find(|(id, _)| *id != ViewportId::ROOT).expect("Raw Develop opens a child window");
+    assert_eq!(builder.inner_size, Some(Vec2::new(1040.0, 760.0)));
+    let pos = builder.position.expect("the recovered position is on the attached screen");
+    assert!((0.0..=880.0).contains(&pos.x) && (0.0..=320.0).contains(&pos.y), "restored position is in reach: {pos:?}");
+}
+
+/// photocraft#16595: while the window shrank each frame, the placement store saved its size, 1 pt wide at 100 %
+/// scaling. Restored, the window opens no smaller than a full-window dialog's own window may be, and the OS keeps it
+/// there.
+#[trial]
+fn raw_develop_window_saved_while_shrinking_opens_at_its_minimum() {
+    let store = Arc::new(Mutex::new(Store::in_memory()));
+    store.lock().unwrap().set("craft_imaging.raw_develop.window", &Placement::new([1.0, 500.0], 1.0));
+    let system = Arc::new(FakeSystem::new());
+    system.set_monitors(vec![Monitor::new(MonitorKey::new("Attached", [1920, 1080]), [0, 0], [1920, 1080], 1.0)]);
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), system).placement(store));
+    let mut host = DialogHost::new();
+    host.open(HostedWorkspace::new(RawDevelopWorkspace::new(open(RawTarget::OpenRaw)), Source::new()));
+    let output = windows.frame(vec![], vec![], |ui| {
+        host.run(ui);
+    });
+    let (_, builder) = output.builders.iter().find(|(id, _)| *id != ViewportId::ROOT).expect("Raw Develop opens a child window");
+    assert_eq!(builder.inner_size, Some(Vec2::new(OWN_WINDOW_MIN_SIZE.x, 500.0)), "the saved width is raised to the minimum");
+    assert_eq!(builder.min_inner_size, Some(OWN_WINDOW_MIN_SIZE), "the OS keeps the window at least that big");
 }
 
 #[trial]
