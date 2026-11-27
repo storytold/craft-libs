@@ -2,7 +2,7 @@ name: Shared format crates
 
 on:
   push:
-    branches: [main, next]
+    branches: [main]
     paths:
       - "crates/xml/**"
       - "crates/mime/**"

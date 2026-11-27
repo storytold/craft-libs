@@ -221,6 +221,45 @@ fn a_toast_is_light_on_a_dark_theme_and_dark_on_a_light_one() {
     }
 }
 
+/// The color the first vertex of the text run `label` is painted in.
+fn text_color(shapes: &[egui::Shape], label: &str) -> Option<egui::Color32> {
+    shapes.iter().find_map(|shape| match shape {
+        egui::Shape::Vec(inner) => text_color(inner, label),
+        egui::Shape::Text(text) if text.galley.job.text == label => {
+            text.galley.rows.iter().flat_map(|row| row.row.visuals.mesh.vertices.iter()).map(|vertex| vertex.color).next()
+        }
+        _ => None,
+    })
+}
+
+/// A toast's action link reads at the 4.5:1 text minimum on the toast's card, in a light and a dark theme at both
+/// contrasts.
+#[trial]
+fn a_toast_action_link_reads_on_the_card() {
+    use craft_theme::{Contrast, Mode, Rgba, contrast_ratio};
+    for mode in [Mode::Dark, Mode::Light] {
+        for contrast in [Contrast::Standard, Contrast::High] {
+            let mut fixture = Fixture::new(|ui| {
+                Notice::new(Tone::Neutral, "Pasted").layout(NoticeLayout::Toast).action(NoticeAction::new("Undo paste")).show(ui);
+            });
+            fixture.room(Vec2::new(600.0, 200.0));
+            fixture.theme(mode, contrast).settle();
+            let shapes = fixture.frame_shapes();
+            let mut fills = Vec::new();
+            rect_fills(&shapes, &mut fills);
+            let text = fixture.texts().iter().find(|run| run.text == "Undo paste").expect("the action is painted").rect;
+            let card = fills
+                .iter()
+                .filter(|(rect, _)| rect.contains_rect(text))
+                .min_by(|a, b| a.0.area().total_cmp(&b.0.area()))
+                .expect("a card under the action");
+            let ink = text_color(&shapes, "Undo paste").expect("the action's text color");
+            let ratio = contrast_ratio(Rgba::from(ink), Rgba::from(card.1));
+            assert!(ratio >= 4.5, "{mode:?} {contrast:?}: the action reads at {ratio:.2}:1 ({ink:?} on {:?})", card.1);
+        }
+    }
+}
+
 /// A centred notice (an empty state) draws its icon large, above the message: the message starts at least a large
 /// icon's height below the top of the notice.
 #[trial]

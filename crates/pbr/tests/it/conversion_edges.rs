@@ -200,3 +200,37 @@ fn omitted_node_parameters_keep_their_identity_defaults() {
     );
     assert!(normal.read_material_strict(None).unwrap().warnings.is_empty());
 }
+
+#[test]
+fn interface_connections_report_the_unsupported_value() {
+    let doc = Document::parse(
+        br#"<materialx><nodegraph name="g"><input name="tint" type="color3" value="0.2,0.3,0.4"/>
+        <standard_surface name="S"><input name="base_color" interfacename="tint" value="0.8,0.8,0.8"/></standard_surface>
+        <output name="out" nodename="S"/></nodegraph><surfacematerial name="M">
+        <input name="surfaceshader" nodegraph="g"/></surfacematerial></materialx>"#,
+    )
+    .unwrap();
+    let converted = try_from_materialx(&doc.read_material_strict(None).unwrap()).unwrap();
+    assert!(
+        converted
+            .report
+            .items
+            .iter()
+            .any(|item| matches!(item, ReportItem::Warning(message) if message.contains("interface") && message.contains("tint")))
+    );
+}
+
+#[test]
+fn connected_image_tiling_keeps_the_resolved_scale() {
+    for connection in [r#"nodename="K""#, r#"nodegraph="g""#] {
+        let nodes = format!(
+            r#"<tiledimage name="T" type="color3"><input name="file" value="tile.png"/><input name="uvtiling" {connection}/></tiledimage>
+            <constant name="K" type="vector2"><input name="value" value="2,3"/></constant>
+            <nodegraph name="g"><constant name="K" type="vector2"><input name="value" value="2,3"/></constant><output name="out" nodename="K"/></nodegraph>"#
+        );
+        let doc = document("standard_surface", r#"<input name="base_color" nodename="T"/>"#, &nodes, "");
+        let material = doc.read_material_strict(None).unwrap();
+        assert!(material.warnings.is_empty(), "{:?}", material.warnings);
+        assert_eq!(material.uv_tiling, [2.0, 3.0]);
+    }
+}

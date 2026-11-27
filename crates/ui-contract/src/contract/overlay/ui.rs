@@ -60,10 +60,10 @@ impl<'a> OverlayUi<'a> {
         self.closed.iter().find(|(id, _)| *id == popup.id).map(|(_, reason)| *reason)
     }
 
-    /// Whether the owner lays out right to left: a layer its caller places by position mirrors its own geometry by it,
-    /// as an anchored placement mirrors the side.
+    /// Whether a layer the owner opens lays out right to left (`Scoped::layer_direction`): a layer its caller places by
+    /// position mirrors its own geometry by it, as an anchored placement mirrors the side.
     pub fn is_rtl(&self) -> bool {
-        self.env.direction.is_rtl()
+        self.env.layer_direction().is_rtl()
     }
 
     /// The anchor at the rect of the toggling part `part` of the owner. The layer's placement mirrors the side and

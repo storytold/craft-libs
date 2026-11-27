@@ -96,7 +96,7 @@ pub struct Material {
     pub shader: Shader,
     /// Resolved inputs in the supported shader table's deterministic order.
     pub inputs: Vec<(String, Value)>,
-    /// Resolved scalar displacement input, if present. Vector displacement is reported as unsupported.
+    /// Resolved displacement input, if present.
     pub displacement: Option<Value>,
     /// First valid image tiling value, or `[1, 1]`.
     pub uv_tiling: [f32; 2],
@@ -113,7 +113,7 @@ pub struct StrictMaterial {
     pub shader: Shader,
     /// Resolved inputs in the shader table's deterministic order.
     pub inputs: Vec<(String, Resolved)>,
-    /// Resolved displacement input, if present.
+    /// Resolved scalar displacement input, if present. Vector displacement is reported as unsupported.
     pub displacement: Option<Resolved>,
     /// First image tiling of two positive numbers, kept in `0.001..=1000`, or `[1, 1]`.
     pub uv_tiling: [f32; 2],
@@ -790,6 +790,10 @@ impl<'a> Resolver<'a> {
             warnings.push("a node chain is longer than 16 nodes (or loops); skipped".into());
             return Ok(None);
         }
+        if let Some(interface) = input.attr("interfacename") {
+            warnings.push(format!("interface input {interface:?} is not supported; its value was skipped"));
+            return Ok(None);
+        }
         if let Some(value) = input.attr("value") {
             let Some(values) = input_numbers(input, value) else {
                 let name = input.attr("name").unwrap_or("");
@@ -814,11 +818,17 @@ impl<'a> Resolver<'a> {
                     .or_else(|| node_scope.and_then(|g| self.graphs.get(g)).and_then(|g| g.attr("fileprefix")))
                     .or_else(|| self.root.attr("fileprefix"))
                     .unwrap_or("");
-                let uv_tiling = match child("uvtiling").and_then(|i| i.attr("value")) {
+                let uv_tiling = match child("uvtiling").filter(|input| has_authored_value(input)) {
                     None => None,
-                    Some(text) => match parse_values(text) {
-                        Some(n) if n.len() == 2 => Some([n[0], n[1]]),
-                        _ => return Err(Error::Malformed(format!("the uvtiling of image {node_name:?} is not two finite numbers"))),
+                    Some(input) => match self.value(input, node_scope, node_space, hops + 1, warnings)? {
+                        Some(Resolved::Constant { values, .. }) if values.len() == 2 => Some([values[0], values[1]]),
+                        Some(Resolved::Constant { .. }) => {
+                            return Err(Error::Malformed(format!("the uvtiling of image {node_name:?} is not two finite numbers")));
+                        }
+                        _ => {
+                            warnings.push(format!("the uvtiling of image {node_name:?} is not read"));
+                            None
+                        }
                     },
                 };
                 if let Some(offset) = child("uvoffset").filter(|input| has_authored_value(input)) {

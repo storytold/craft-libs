@@ -751,6 +751,40 @@ fn a_side_menus_row_shows_the_standard_icon() {
     assert!(menu > plain, "a side menu's icon is the standard one: {menu} against {plain}");
 }
 
+/// An icon-only button in a side menu (WordCraft's Back arrow on the File rail) reads in the menu's ink, as a `Button`
+/// row's icon does, not in the dark ghost ink that vanished on the brand surface; elsewhere it keeps its own ink.
+#[trial]
+fn a_side_menus_icon_button_reads_in_the_menus_ink() {
+    let rest = |side: bool, icon_only: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            let show = |ui: &mut Ui| {
+                if icon_only {
+                    let _ = IconButton::new(IconId::new("print")).label("Back").show(ui);
+                } else {
+                    let _ = Button::new("Print").icon(IconId::new("print")).variant(Variant::GHOST).show(ui);
+                }
+            };
+            if side {
+                with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(ControlPlace::SideMenu);
+                    },
+                    show,
+                );
+            } else {
+                show(ui);
+            }
+        });
+        fixture.settle();
+        let kind = if icon_only { std::any::type_name::<IconButton<'static>>() } else { std::any::type_name::<Button<'static>>() };
+        let style = fixture.styles_of(kind).into_iter().next().expect("the button resolved its style");
+        style.looks.icons.first().expect("the button has an icon look").color.off.rest.egui()
+    };
+    assert_eq!(rest(true, true), rest(true, false), "the icon button takes the ink of the menu's rows");
+    assert_ne!(rest(true, true), rest(false, true), "outside a side menu it keeps its own ink");
+}
+
 /// The command the arrow trial's split button is bound to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
 #[command(prefix = "splitTrial", scope = "splitTrial")]

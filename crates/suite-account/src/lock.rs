@@ -49,6 +49,8 @@ fn open_lock_file(path: &Path) -> io::Result<File> {
 /// [`Error::Io`]; `f` may return any [`Error`].
 pub(crate) fn with_lock<T>(path: &Path, f: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
     let lock = open_lock_file(path).map_err(|e| Error::Io(format!("couldn't open the lock beside {} ({e})", path.display())))?;
+    #[cfg(windows)]
+    let _prepared = crate::accounts::prepare(path);
     let start = Instant::now();
     loop {
         match lock.try_lock() {
