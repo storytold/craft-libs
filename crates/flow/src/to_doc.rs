@@ -623,6 +623,8 @@ impl<'a> Builder<'a> {
                             let link = drawing_link(i);
                             if link.is_some() || !single_drawing {
                                 cp.link = link.map(str::trim).filter(|s| !s.is_empty()).and_then(super::kept_link).map(|s| s.to_string());
+                            } else {
+                                cp.link = cp.link.take().filter(|link| super::kept_link(link).is_some());
                             }
                         }
                         cp = self.budget(cp);

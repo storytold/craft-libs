@@ -850,3 +850,57 @@ fn a_single_flow_picture_keeps_its_paragraph_mark_link() {
         }
     }
 }
+
+/// The legacy paragraph target has the same byte limit as an object's own target.
+#[test]
+fn a_single_flow_picture_bounds_its_inherited_mark_target() {
+    const OWN: &str = "https://example.com/object";
+    let prefix = "https://example.com/";
+    let remaining = craft_flow::MAX_LINK - prefix.len();
+    let ascii = format!("{prefix}{}", "a".repeat(remaining));
+    let utf8 = format!("{prefix}{}{}", "é".repeat(remaining / 2), "a".repeat(remaining % 2));
+    let ascii_over = format!("{ascii}a");
+    let utf8_over = format!("{utf8}a");
+    let bytes = Arc::new(png());
+    for (mark, links, expected) in [
+        (ascii.as_str(), vec![None], vec![Some(ascii.as_str())]),
+        (ascii_over.as_str(), vec![None], vec![None]),
+        (utf8.as_str(), vec![None], vec![Some(utf8.as_str())]),
+        (utf8_over.as_str(), vec![None], vec![None]),
+        (ascii_over.as_str(), vec![Some(OWN)], vec![Some(OWN)]),
+        (ascii_over.as_str(), vec![Some("")], vec![None]),
+        (ascii_over.as_str(), vec![Some(" \t ")], vec![None]),
+        (ascii_over.as_str(), vec![Some(ascii_over.as_str())], vec![None]),
+        (OWN, vec![Some(utf8_over.as_str())], vec![None]),
+        (ascii_over.as_str(), vec![None, None], vec![None, None]),
+        (ascii_over.as_str(), vec![Some(OWN), None], vec![Some(OWN), None]),
+        (ascii_over.as_str(), vec![None, Some(OWN)], vec![None, Some(OWN)]),
+    ] {
+        let inlines = links
+            .into_iter()
+            .map(|link| {
+                let mut picture = craft_flow::make_img(bytes.clone(), Some(12.0), Some(6.0), "original picture").unwrap();
+                picture.link = link.map(str::to_string);
+                craft_flow::Inline::Image(picture)
+            })
+            .collect();
+        let paragraph =
+            craft_flow::Para { inlines, mark: Some(Box::new(CharProps { link: Some(mark.into()), ..Default::default() })), ..Default::default() };
+        let flow = craft_flow::Flow { blocks: vec![craft_flow::FBlock::Para(paragraph)], ..Default::default() };
+        let expected: Vec<_> = expected.into_iter().map(|target| target.map(str::to_string)).collect();
+        let check = |current: &Document| {
+            assert_eq!(picture_links(current), expected, "each drawing keeps only its own or eligible inherited target");
+            let paragraph = current.body[0].as_para().unwrap();
+            assert_eq!(paragraph.objects.len(), expected.len());
+            for object in &paragraph.objects {
+                let InlineObject::Image { media, w, h, .. } = object else { panic!("the picture remains a picture") };
+                assert_eq!(current.media.get(media).unwrap().as_slice(), bytes.as_slice());
+                assert!((*w - 12.0).abs() < 0.001 && (*h - 6.0).abs() < 0.001, "the original picture size is retained");
+            }
+        };
+        let model = craft_flow::to_doc(&flow);
+        check(&model);
+        let reopened = craft_docx::read(&craft_docx::write(&model).unwrap()).unwrap();
+        check(&reopened);
+    }
+}
