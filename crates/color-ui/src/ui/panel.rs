@@ -5,7 +5,7 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
-use craft_behavior::{EditEvent, GesturePhase, IconId, Mixed};
+use craft_behavior::{EditEvent, GestureId, GesturePhase, IconId, Mixed};
 use craft_cms::convert::CmykConverter;
 use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, RgbModel, Srgba};
 use craft_ui::buttons::IconButton;
@@ -414,6 +414,8 @@ struct Kept {
     tracks: Vec<(&'static str, usize, ModelValues)>,
     /// A channel gesture is running.
     dragging: bool,
+    /// The host's complete colour before a model gesture, independent of the panel's transform.
+    opening: Option<(GestureId, PanelTarget, PickedColor)>,
     /// The ramp gesture in progress picks for the colour not edited.
     other: bool,
 }
@@ -1097,11 +1099,39 @@ impl Body<'_> {
     fn model_event(&mut self, model: &dyn ColorModel, event: EditEvent<ModelValues>) {
         let event = event.map(finite_values);
         self.kept.dragging = matches!(event.phase(), Some(GesturePhase::Begin | GesturePhase::Update));
+        if let EditEvent::Begin { id, .. } = &event {
+            self.kept.opening = self.picked().copied().map(|picked| (*id, self.target, picked));
+        }
         if let Some(values) = event.value() {
             self.remember(model, *values);
         }
         let alpha = self.color().a;
-        let event = event.map(|values| PickedColor { color: model.to_srgb(&values.values).with_alpha(alpha), model: Some(values) });
+        let mut event = event.map(|values| PickedColor { color: model.to_srgb(&values.values).with_alpha(alpha), model: Some(values) });
+        let opening = self.kept.opening.filter(|(id, target, _)| Some(*id) == event.id() && *target == self.target).map(|(_, _, picked)| picked);
+        match &mut event {
+            EditEvent::Begin { before, .. } | EditEvent::Commit { before, .. } => {
+                if let (Mixed::Same(value), Some(picked)) = (before, opening) {
+                    *value = picked;
+                }
+            }
+            EditEvent::Cancel { before: Some(Mixed::Same(value)), .. } => {
+                if let Some(picked) = opening {
+                    *value = picked;
+                    if let Some(values) = picked.model.filter(|values| values.model == model.id()) {
+                        self.remember(model, values);
+                    }
+                }
+            }
+            EditEvent::Set { before: Mixed::Same(value), .. } => {
+                if let Some(picked) = self.picked() {
+                    *value = *picked;
+                }
+            }
+            _ => {}
+        }
+        if matches!(event.phase(), Some(GesturePhase::Commit | GesturePhase::Cancel) | None) {
+            self.kept.opening = None;
+        }
         self.push(self.target, event);
     }
 

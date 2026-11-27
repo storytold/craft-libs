@@ -210,6 +210,11 @@ fn native_cmyk_panel(picked: PickedColor) -> (Fixture, Rc<RefCell<PickedColor>>,
             .edited(Some(picked))
             .shown(ColorPanelShown::Mode(ColorPanelMode::CmykSliders))
             .show(ui);
+        for (_, event) in &shown.edits {
+            if let Some(picked) = event.landed() {
+                *color.borrow_mut() = *picked;
+            }
+        }
         output.borrow_mut().extend(shown.edits);
     });
     fixture.room(COLOR_ROOM).settle();
@@ -257,6 +262,31 @@ fn fresh_host_components_replace_the_panels_remembered_components() {
     let after = last_native_pick(&edits).model.expect("the next channel edit");
     assert!(after.values[0] > fresh.values[0], "Cyan changed again");
     assert_eq!(&after.values[1..4], &fresh.values[1..4], "fresh host inks replace the older cache");
+}
+
+/// Cancel restores both the native inks and the host's display colour, even after the host applies live updates.
+#[trial]
+fn a_canceled_native_channel_drag_restores_the_hosts_original_color() {
+    let native = craft_theme::ModelValues::new("cmyk", &[12.345, 45.678, 78.912, 23.456]);
+    let picked = PickedColor::in_model(Srgba::new(0.2, 0.4, 0.6, 0.7), native);
+    let (mut fixture, host, edits) = native_cmyk_panel(picked);
+    let cyan = fixture.by_role(Role::SLIDER).into_iter().next().expect("the Cyan slider");
+    fixture.drag_hold_at(cyan.center(), Vec2::new(25.0, 0.0)).settle();
+    assert_ne!(*host.borrow(), picked, "the host applies the live channel preview");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    let canceled = edits
+        .borrow()
+        .iter()
+        .rev()
+        .find_map(|(_, event)| match event {
+            EditEvent::Cancel { before: Some(Mixed::Same(before)), .. } => Some(*before),
+            _ => None,
+        })
+        .expect("the channel drag cancels");
+    assert_eq!(canceled, picked, "Cancel carries the host's exact opening colour and model");
+    assert_eq!(*host.borrow(), picked, "the host restores the complete opening colour");
+    fixture.release_at(cyan.center() + Vec2::new(25.0, 0.0)).settle();
+    assert_eq!(*host.borrow(), picked, "release after Cancel cannot reapply the preview");
 }
 
 /// The rect of the FillStroke spectrum in Web Color for a foreground of `color`.
