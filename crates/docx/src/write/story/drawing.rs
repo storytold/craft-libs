@@ -86,6 +86,8 @@ impl Writer<'_> {
         depth: usize,
     ) -> Option<std::ops::Range<usize>> {
         let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, float, freeform, extra } = o else { return None };
+        // Taken first, so it never carries over to another shape (or one inside this box).
+        let box_del = self.box_del.take();
         let geom = freeform.as_deref().filter(|_| *kind == ShapeKind::Freeform);
         w.open("wps:wsp", &[]);
         if let Some(id) = id {
@@ -214,7 +216,10 @@ impl Writer<'_> {
             let start = w.s.len();
             w.open("w:txbxContent", &[]);
             if self.written_boxes.insert(id) {
-                let blocks = part.blocks.clone();
+                let blocks = match box_del {
+                    Some(del) => deleted_blocks(&part.blocks, del, 0),
+                    None => part.blocks.clone(),
+                };
                 self.blocks(w, &blocks, rels, false, depth + 1);
             } else {
                 w.empty("w:p", &[]);
@@ -364,6 +369,62 @@ impl Writer<'_> {
         }
         nv_props(w, "wp:docPr", (docpr, name), alt, &float.alt, float.hidden, link);
     }
+}
+
+/// Tables inside a deleted text box are marked this many levels deep (deeper ones are written
+/// as they are: the bound only limits work on hostile nesting).
+const MAX_DELETED_TABLE_DEPTH: usize = 16;
+
+/// The blocks of a text box whose shape is deleted, with every run deleted by `del`: the box goes
+/// with its anchor, so its text is written in `w:del` / `w:delText`, where readers
+/// look for deleted text. Runs already deleted keep their own revision (a move source stays `w:moveFrom` / `w:t`).
+fn deleted_blocks(blocks: &[std::sync::Arc<craft_wordmodel::Block>], del: u32, depth: usize) -> craft_wordmodel::Blocks {
+    // Cells can hold the same Arc<Block> (a shared child table at every level would
+    // otherwise be re-transformed once per referencing cell, exponentially up to the
+    // depth cap): memoize by Arc identity and depth for this one call, so each shared
+    // block transforms once per depth and the output keeps the shared references.
+    let mut memo = std::collections::HashMap::new();
+    deleted_blocks_memo(blocks, del, depth, &mut memo)
+}
+
+fn deleted_blocks_memo(
+    blocks: &[std::sync::Arc<craft_wordmodel::Block>],
+    del: u32,
+    depth: usize,
+    memo: &mut std::collections::HashMap<(usize, usize), std::sync::Arc<craft_wordmodel::Block>>,
+) -> craft_wordmodel::Blocks {
+    use craft_wordmodel::Block;
+    blocks
+        .iter()
+        .map(|b| {
+            let key = (std::sync::Arc::as_ptr(b) as usize, depth);
+            if let Some(hit) = memo.get(&key) {
+                return hit.clone();
+            }
+            let out = match &**b {
+                Block::Para(p) => {
+                    let mut p = p.clone();
+                    let len = p.len();
+                    let _ = p.format(0, len, &|c| {
+                        if c.del.is_none() {
+                            c.del = Some(del);
+                        }
+                    });
+                    std::sync::Arc::new(Block::Para(p))
+                }
+                Block::Table(t) if depth < MAX_DELETED_TABLE_DEPTH => {
+                    let mut t = t.clone();
+                    for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                        c.blocks = deleted_blocks_memo(&c.blocks, del, depth + 1, memo);
+                    }
+                    std::sync::Arc::new(Block::Table(t))
+                }
+                Block::Table(_) => b.clone(),
+            };
+            memo.insert(key, out.clone());
+            out
+        })
+        .collect()
 }
 
 /// A shape's `cNvPr`/`docPr` name: ink is "Ink <pen> <id>" (and "#<order>" when its drawing
@@ -641,5 +702,33 @@ pub(super) fn write_fill(w: &mut W, f: Option<&Fill>) {
             }
             w.close("a:gradFill");
         }
+    }
+}
+
+#[cfg(test)]
+mod deleted_blocks_tests {
+    use super::deleted_blocks;
+    use craft_wordmodel::{Block, Paragraph, Table, para_block};
+    use std::sync::Arc;
+
+    #[test]
+    fn shared_blocks_are_transformed_once_and_stay_shared() {
+        // Two cells holding the SAME inner table Arc: the transformed output must hold
+        // one shared Arc for both (transformed once), with the leaf text marked deleted.
+        let leaf = para_block(Paragraph::with_text("leaf", Default::default()));
+        let mut inner = Table::new(1, 1, 50.0);
+        inner.rows[0].cells[0].blocks = vec![leaf];
+        let inner = Arc::new(Block::Table(inner));
+        let mut outer = Table::new(1, 2, 100.0);
+        outer.rows[0].cells[0].blocks = vec![inner.clone()];
+        outer.rows[0].cells[1].blocks = vec![inner];
+        let out = deleted_blocks(&[Arc::new(Block::Table(outer))], 7, 0);
+        let outer = out[0].as_table().unwrap();
+        let a = &outer.rows[0].cells[0].blocks[0];
+        let b = &outer.rows[0].cells[1].blocks[0];
+        assert!(Arc::ptr_eq(a, b), "shared inner table was transformed more than once");
+        let inner = a.as_table().unwrap();
+        let para = inner.rows[0].cells[0].blocks[0].as_para().unwrap();
+        assert_eq!(para.props_at(0).del, Some(7));
     }
 }

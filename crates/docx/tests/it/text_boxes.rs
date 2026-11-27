@@ -260,3 +260,59 @@ fn story_shared_by_many_shapes_is_written_once() {
     // Once in the first shape and once in its VML fallback; the other shapes don't repeat it.
     assert_eq!(xml.matches(text.as_str()).count(), 2);
 }
+
+/// A paragraph whose text box is anchored in a run deleted by revision 0, a move source when
+/// `move_name` is set, saved.
+fn box_anchored_in_a_deletion(text: &str, move_name: Option<&str>) -> Vec<u8> {
+    use craft_wordmodel::{CharProps, Revision, RevisionKind};
+    let mut d = Document::from_text("x");
+    d.revisions.push(Revision {
+        kind: RevisionKind::Delete,
+        author: "Bob".into(),
+        date: "2026-05-02T10:00:00Z".into(),
+        move_name: move_name.map(Into::into),
+    });
+    d.settings.track_changes = true;
+    let o = text_box(&mut d, text, TextBody::default());
+    let del = CharProps { del: Some(0), ..Default::default() };
+    d.insert_object(&craft_wordmodel::Pos::body(0, 0), o, &del).unwrap();
+    craft_docx::write(&d).unwrap()
+}
+
+#[test]
+fn a_deleted_text_box_writes_its_text_deleted() {
+    // The box goes with its deleted anchor, so its text is deleted text too: `w:delText`, where
+    // readers look for it, not `w:t`.
+    let bytes = box_anchored_in_a_deletion("Gone with it", None);
+    let xml = document_xml(&bytes);
+    assert!(xml.contains(">Gone with it</w:delText>"), "{xml}");
+    assert!(!xml.contains(">Gone with it</w:t>"), "{xml}");
+    let r = craft_docx::read(&bytes).unwrap();
+    let id = boxes(&r)[0];
+    let para = r.parts.get(&id).unwrap().blocks[0].as_para().unwrap();
+    assert!(para.props_at(0).del.is_some(), "{para:?}");
+}
+
+#[test]
+fn a_deleted_opaque_object_writes_its_fallback_text_deleted() {
+    // The Opaque fallback is ordinary run text: in a deleted run it goes in `w:delText`,
+    // where readers look for deleted text, not `w:t` inside `w:del`.
+    use craft_wordmodel::{CharProps, Revision, RevisionKind};
+    let mut d = Document::from_text("x");
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into(), move_name: None });
+    d.settings.track_changes = true;
+    let opaque = InlineObject::Opaque { format: "docx".into(), xml: "<broken".into(), text: "Fallback gone".into() };
+    let del = CharProps { del: Some(0), ..Default::default() };
+    d.insert_object(&craft_wordmodel::Pos::body(0, 0), opaque, &del).unwrap();
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
+    assert!(xml.contains(">Fallback gone</w:delText>"), "{xml}");
+    assert!(!xml.contains(">Fallback gone</w:t>"), "{xml}");
+}
+
+#[test]
+fn a_text_box_moved_away_keeps_plain_text() {
+    // Text that moved away stays in `w:t` (§17.13.5.22), and so does its box's text.
+    let xml = document_xml(&box_anchored_in_a_deletion("Moved with it", Some("move1")));
+    assert!(xml.contains(">Moved with it</w:t>"), "{xml}");
+    assert!(!xml.contains(">Moved with it</w:delText>"), "{xml}");
+}
