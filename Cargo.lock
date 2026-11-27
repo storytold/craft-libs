@@ -4308,7 +4308,6 @@ dependencies = [
  "craft-theme",
  "craft-ui",
  "egui",
- "hypher",
  "icu_segmenter",
  "kurbo",
  "miniz_oxide 0.8.9",
@@ -4318,7 +4317,6 @@ dependencies = [
  "serde_json",
  "unicode-bidi",
  "unicode-bidi-mirroring",
- "unicode-general-category",
  "unicode-linebreak",
  "unicode-segmentation",
 ]
@@ -7346,12 +7344,6 @@ dependencies = [
  "tracing",
  "windows-registry",
 ]
-
-[[package]]
-name = "hypher"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45f2b4f6b5da34d400d4c112eadcc14512cc5d04307a8eee182586d9bebd7ce6"
 
 [[package]]
 name = "iana-time-zone"

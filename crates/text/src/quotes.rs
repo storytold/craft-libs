@@ -37,7 +37,7 @@ impl QuoteStyle {
     // new: PhotoCraft always uses English marks (pc: crates/ui-egui/src/tools/type_tool/editing.rs:186).
     // CLDR 49.0.0 (cldr-json `cldr-misc-full/main/<locale>/delimiters.json`, resolved with
     // inheritance). The table is CLDR's `delimiters` (quotationStart/End, alternateQuotationStart/End) for the
-    // languages craft-text hyphenates, Japanese, Chinese and Korean.
+    // languages hypher hyphenates, Japanese, Chinese and Korean.
     pub fn for_language(tag: &str) -> QuoteStyle {
         let lower = tag.to_ascii_lowercase();
         let mut parts = lower.split(['-', '_']);
