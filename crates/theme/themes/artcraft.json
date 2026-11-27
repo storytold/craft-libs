@@ -1,0 +1,168 @@
+{
+  "schema": "craft-design-theme",
+  "schema_version": 1,
+  "id": "craft.artcraft",
+  "name": "ArtCraft",
+  "version": 1,
+  "variants": "both",
+  "contrast_intent": "standard",
+  "seeds": {
+    "accent": "#78adf6",
+    "neutral": "#535353",
+    "status": {
+      "bad": "#ff8080",
+      "good": "#85dc6a",
+      "info": "#78adf6",
+      "warn": "#e8b046"
+    }
+  },
+  "shape": null,
+  "light": {
+    "accent.soft": "#d6d6d6",
+    "accent.solid": "#378ef0",
+    "accent.text": "#1062c4",
+    "caption.close_hover": "#c42b1c",
+    "caption.close_text": "#ffffff",
+    "line.border": "#d6d6d6",
+    "line.control_edge": "#bababa",
+    "line.divider": "#d6d6d6",
+    "line.knob_edge": "#282828",
+    "state.hover": "#e2e2e2",
+    "state.pressed": "#cecece",
+    "state.selected": "#cccccc",
+    "surface.background": "#e2e2e2",
+    "surface.canvas": "#d6d6d6",
+    "surface.panel": "#f0f0f0",
+    "surface.sunken": "#ffffff",
+    "text.faint": "#787878",
+    "text.muted": "#404040",
+    "text.normal": "#141414",
+    "text.on_accent": "#ffffff"
+  },
+  "dark": {
+    "accent.soft": "#6e6e6e",
+    "accent.solid": "#378ef0",
+    "caption.close_hover": "#c42b1c",
+    "caption.close_text": "#ffffff",
+    "line.border": "#424242",
+    "line.control_edge": "#686868",
+    "line.divider": "#3e3e3e",
+    "line.knob_edge": "#282828",
+    "state.hover": "#626262",
+    "state.pressed": "#707070",
+    "state.selected": "#6b6b6b",
+    "surface.background": "#424242",
+    "surface.canvas": "#282828",
+    "surface.panel": "#535353",
+    "surface.sunken": "#454545",
+    "text.faint": "#a0a0a0",
+    "text.muted": "#d4d4d4",
+    "text.normal": "#eeeeee",
+    "text.on_accent": "#ffffff"
+  },
+  "apps": {
+    "wordcraft": {
+      "shape": {
+        "button_radius": 4
+      },
+      "light": {
+        "accent.soft": "#dde3f8",
+        "accent.solid": "#3b5bdb",
+        "accent.text": "#2b47b5",
+        "line.border": "#e1e1e1",
+        "line.control_edge": "#8a8a8a",
+        "line.divider": "#e1e1e1",
+        "state.hover": "#e6e6e6",
+        "state.pressed": "#d6d6d6",
+        "surface.background": "#f9f9f9",
+        "surface.canvas": "#e6e6e6",
+        "surface.chrome": "#f0f0f0",
+        "surface.panel": "#ffffff",
+        "text.disabled": "#a8a8a8",
+        "text.faint": "#707070",
+        "text.muted": "#616161",
+        "text.normal": "#242424",
+        "text.on_accent": "#ffffff"
+      },
+      "dark": {
+        "accent.soft": "#2e3a66",
+        "accent.solid": "#7a93f0",
+        "accent.text": "#9cb0f5",
+        "line.border": "#3a3a3a",
+        "line.control_edge": "#7a7a7a",
+        "line.divider": "#3a3a3a",
+        "state.hover": "#3d3d3d",
+        "state.pressed": "#4a4a4a",
+        "surface.background": "#292929",
+        "surface.canvas": "#141414",
+        "surface.chrome": "#1f1f1f",
+        "surface.panel": "#2b2b2b",
+        "text.disabled": "#6a6a6a",
+        "text.faint": "#a0a0a0",
+        "text.muted": "#c8c8c8",
+        "text.normal": "#eeeeee",
+        "text.on_accent": "#11162e"
+      }
+    },
+    "pdfcraft": {
+      "light": {
+        "accent.soft": "#e3ecfd",
+        "accent.solid": "#1b63e0",
+        "accent.text": "#1755c4",
+        "line.border": "#dadade",
+        "line.divider": "#e8e8eb",
+        "state.hover": "#f0f0f3",
+        "state.pressed": "#e4e4e9",
+        "state.selected": "#e6eefd",
+        "surface.background": "#e9e9eb",
+        "surface.canvas": "#f1f1f3",
+        "surface.chrome": "#ffffff",
+        "surface.panel": "#ffffff",
+        "surface.raised": "#ffffff",
+        "surface.sunken": "#ffffff",
+        "text.faint": "#6b6b73",
+        "text.muted": "#5e5e66",
+        "text.normal": "#222226"
+      },
+      "dark": {
+        "accent.solid": "#4b8bf5",
+        "accent.text": "#8cb6fa",
+        "line.border": "#3c3c43",
+        "line.divider": "#333339",
+        "surface.background": "#1b1b1e",
+        "surface.canvas": "#19191c",
+        "surface.chrome": "#26262a",
+        "surface.panel": "#26262a",
+        "surface.raised": "#2e2e33",
+        "surface.sunken": "#1e1e22",
+        "text.faint": "#97979e",
+        "text.muted": "#aeaeb6",
+        "text.normal": "#ececef"
+      }
+    },
+    "deckcraft": {
+      "light": {
+        "accent.solid": "#d95a1a",
+        "accent.text": "#b54b16",
+        "text.on_accent": "#ffffff"
+      },
+      "dark": {
+        "accent.solid": "#f26b1d",
+        "accent.text": "#fbcdb2",
+        "text.on_accent": "#ffffff"
+      }
+    },
+    "soundcraft": {
+      "light": {
+        "accent.solid": "#3e74b4",
+        "accent.text": "#3b6eab",
+        "text.on_accent": "#ffffff"
+      },
+      "dark": {
+        "accent.solid": "#4084c4",
+        "accent.text": "#c4d9ed",
+        "text.on_accent": "#ffffff"
+      }
+    }
+  }
+}

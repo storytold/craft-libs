@@ -1,0 +1,27 @@
+# API map of the "Interface fonts: document faces" family: faces drawn as families of their own, registered on demand.
+# font-manager's `SharedFaces` and `FaceFonts` are replaced in font-manager's own map.
+
+family = "Interface fonts: document faces"
+new_module = "craft_ui::fonts"
+
+[[type]]
+name = "FaceBytes"
+old = ""
+new = "craft_ui::fonts::FaceBytes"
+status = "replaced"
+note = "New: the bytes, index and variation coordinates of a face to register."
+
+[[type]]
+name = "FaceState"
+old = ""
+new = "craft_ui::fonts::FaceState"
+status = "replaced"
+note = "New: what drawing a document face finds (ready, loading, unavailable)."
+
+[[type]]
+name = "FacesCx"
+old = ""
+new = "craft_ui::contract::FacesCx"
+status = "replaced"
+note = "New: the chapter trait `document_face(key, load) -> FaceState`, implemented for Cx, MeasureCx and ContentPainterCx. The registry (`DocumentFaces`) is crate-private: one registry per context, a per-frame budget and eviction past a cap."
+
