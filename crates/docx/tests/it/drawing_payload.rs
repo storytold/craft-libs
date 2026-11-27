@@ -108,7 +108,7 @@ fn picture_group_canvas_keep_kind() {
         float: Default::default(),
         ch_w: 100.0,
         ch_h: 50.0,
-        children: vec![GroupChild { x: 3.0, y: 4.0, obj: picture() }],
+        children: vec![GroupChild { link: None, x: 3.0, y: 4.0, obj: picture() }],
         canvas,
     };
     for original in [picture(), group(None), group(Some(CanvasStyle::default()))] {
