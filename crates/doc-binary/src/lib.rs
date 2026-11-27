@@ -283,7 +283,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     let mut doc = Document::new();
     // Word opens Word 97-2003 files in compatibility mode 11 (Word 2003); the model's default
     // 15 would apply Word 2013+ justification and line-breaking rules to them.
-    doc.settings.compat_mode = 11;
+    doc.settings.compat_mode = Some(11);
     if let Some(core) = metadata::read(&comp) {
         doc.core = core;
     }
@@ -455,7 +455,7 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
     let content = word6::content(word, &fib)?;
     let mut doc = Document::new();
     // Word opens these files in compatibility mode 11 too.
-    doc.settings.compat_mode = 11;
+    doc.settings.compat_mode = Some(11);
     if let Some(core) = metadata::read(comp) {
         doc.core = core;
     }

@@ -93,6 +93,7 @@ pub mod hr;
 pub mod hunspell;
 pub mod hyphen;
 pub mod id;
+pub mod indic;
 pub mod it;
 pub mod lang;
 mod languages;
