@@ -5562,7 +5562,9 @@ fn picture_effects_resolve_theme_colours_and_keep_their_room() {
     assert!(!float.is_bare_turn(), "the shadow and glow need room past the frame");
     let xml = text(&unzip(&craft_docx::write(&d).unwrap()), "word/document.xml");
     assert!(xml.contains(r#"<a:srgbClr val="ED7D31">"#) && xml.contains(r#"<a:srgbClr val="4472C4">"#), "{xml}");
-    assert!(attr_values(&xml, "wp:effectExtent", "l").iter().all(|v| v != "0"), "{xml}");
+    let left = attr_values(&xml, "wp:effectExtent", "l");
+    assert_eq!(left.len(), 1, "{xml}");
+    assert_ne!(left[0], "0", "{xml}");
 }
 
 /// When a list repeats a level override, the first is the one read and saved, so its themed
