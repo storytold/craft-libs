@@ -3,6 +3,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod app;
+pub mod catalog;
 pub mod desktop_entry;
 pub mod detect;
 pub mod distro;
@@ -88,9 +89,29 @@ impl From<&str> for CheckError {
     }
 }
 
-/// Checks for an update against GitHub releases for the given app.
+/// Checks for an update: defaults to the signed `getartcraft.com` catalog, falling back to
+/// GitHub releases when the catalog is unavailable, fails verification, is stale, or omits `app`.
 pub fn check_for_update(app: &App, http: &Http, current_version: &str) -> Result<Option<Release>, CheckError> {
+    let version = self_update::current_version(app, current_version).map(|v| v.to_string());
+    let effective_version = version.as_deref().unwrap_or(current_version);
+    match catalog::SignedCatalog::fetch(http) {
+        Ok(signed) => {
+            if let Some(latest) = signed.latest_for(app, false, now()) {
+                return Ok(offer_if_newer(latest, effective_version));
+            }
+        }
+        Err(why) => {
+            log::debug!("signed catalog unavailable ({why}); falling back to GitHub");
+        }
+    }
     check_releases_at(&format!("https://api.github.com/repos/{}/releases?per_page=30", app.repo), app, http, current_version)
+}
+
+/// Returns `Some(release)` when [`version::offers_update`] says `current_version` should update to it.
+fn offer_if_newer(release: Release, current_version: &str) -> Option<Release> {
+    let running = crate::version::parse(current_version)?;
+    let rel_v = release.version.as_ref()?;
+    crate::version::offers_update(rel_v, &running).then_some(release)
 }
 
 /// [`check_for_update`] against the release list at `url` (a loopback server in tests).

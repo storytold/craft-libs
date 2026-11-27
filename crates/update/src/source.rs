@@ -212,6 +212,76 @@ impl ReleaseSource for GitHubSource {
     }
 }
 
+/// Release source that defaults to the signed `getartcraft.com` catalog and falls back to
+/// `fallback` (typically [`GitHubSource`]) when the catalog is unavailable, stale, or omits a repo.
+pub struct CatalogSource<F: ReleaseSource = GitHubSource> {
+    http: Http,
+    fallback: F,
+    cached: Mutex<Option<crate::catalog::SignedCatalog>>,
+}
+
+impl<F: ReleaseSource> CatalogSource<F> {
+    /// Creates a release source that checks the signed `getartcraft.com` catalog first and falls
+    /// back to `fallback` (typically [`GitHubSource`]).
+    pub fn new(http: Http, fallback: F) -> Self {
+        Self { http, fallback, cached: Mutex::new(None) }
+    }
+
+    fn catalog(&self) -> Option<crate::catalog::SignedCatalog> {
+        let now = crate::now();
+        {
+            let guard = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(c) = guard.as_ref()
+                && c.generated_at.is_some_and(|t| now.saturating_sub(t) <= crate::catalog::MAX_AGE)
+            {
+                return Some(c.clone());
+            }
+        }
+        match crate::catalog::SignedCatalog::fetch(&self.http) {
+            Ok(fresh) => {
+                *self.cached.lock().unwrap_or_else(PoisonError::into_inner) = Some(fresh.clone());
+                Some(fresh)
+            }
+            Err(why) => {
+                log::debug!("signed catalog unavailable ({why}); falling back to GitHub");
+                None
+            }
+        }
+    }
+}
+
+impl<F: ReleaseSource> ReleaseSource for CatalogSource<F> {
+    fn latest(&self, repo: &str, prereleases: bool) -> Answer {
+        if let Some(catalog) = self.catalog()
+            && let Some(release) = catalog.latest_for_repo(repo, prereleases, crate::now())
+        {
+            return Answer { latest: LatestRelease::Found(release), source: Source::Feed };
+        }
+        self.fallback.latest(repo, prereleases)
+    }
+
+    fn cached(&self, repo: &str, prereleases: bool) -> Option<LatestRelease> {
+        if let Some(c) = self.cached.lock().unwrap_or_else(PoisonError::into_inner).as_ref()
+            && let Some(r) = c.latest_for_repo(repo, prereleases, crate::now())
+        {
+            return Some(LatestRelease::Found(r));
+        }
+        self.fallback.cached(repo, prereleases)
+    }
+
+    fn newest_tag(&self, repo: &str) -> Option<String> {
+        self.fallback.newest_tag(repo)
+    }
+
+    fn rate_limited_until(&self) -> Option<i64> {
+        self.fallback.rate_limited_until()
+    }
+
+    fn save(&self) {
+        self.fallback.save();
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
