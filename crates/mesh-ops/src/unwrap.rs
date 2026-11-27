@@ -115,7 +115,7 @@ fn smooth_normals(mesh: &Mesh) -> Vec<Vec3> {
     for &[a, b, c] in mesh.indices.as_chunks::<3>().0 {
         let (a, b, c) = (a as usize, b as usize, c as usize);
         let (Some(pa), Some(pb), Some(pc)) = (mesh.positions.get(a), mesh.positions.get(b), mesh.positions.get(c)) else { continue };
-        let face = (pb.as_dvec3() - pa.as_dvec3()).cross(pc.as_dvec3() - pa.as_dvec3());
+        let face = crate::gbuffer::face_normal([*pa, *pb, *pc]);
         for v in [a, b, c] {
             if let Some(x) = normals.get_mut(v) {
                 *x += face;
@@ -597,6 +597,15 @@ mod tests {
         for scale in [1e-25, 1e25] {
             let mesh = Mesh { positions: vec![Vec3::ZERO, Vec3::Y * scale, Vec3::Z * scale], indices: vec![0, 1, 2], ..Mesh::default() };
             assert_eq!(smooth_normals(&mesh), vec![Vec3::X; 3], "scale={scale}");
+        }
+    }
+
+    #[test]
+    fn missing_normals_preserve_cancellation_sensitive_faces() {
+        let wide = 2.0f32.powi(60);
+        for indices in [[0, 1, 2], [1, 2, 0], [2, 0, 1]] {
+            let mesh = Mesh { positions: vec![Vec3::new(wide, wide, 0.0), Vec3::ZERO, Vec3::X], indices: indices.to_vec(), ..Mesh::default() };
+            assert_eq!(smooth_normals(&mesh), vec![Vec3::Z; 3], "indices={indices:?}");
         }
     }
 

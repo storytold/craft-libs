@@ -13,7 +13,8 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   `normalize_to` centers and scales in `f64` before storing the resulting positions.
   Subdivision preserves equal subnormal position, UV, and color components at edge midpoints.
   Midpoint normals and tangent directions are normalized before conversion to `f32`.
-- **Normals and tangents.** Smooth normals are area weighted. Tangents come from MikkTSpace, which
+- **Normals and tangents.** Smooth normals use area-weighted face products computed with expansion arithmetic,
+  followed by `f64` accumulation and normalization. Tangents come from MikkTSpace, which
   glTF 2.0 recommends for meshes without tangents
   (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html>): `w` holds the bitangent sign.
   A vertex whose triangles have different tangent frames (mirrored UVs) is split into one copy

@@ -125,6 +125,14 @@ fn edge(a: DVec2, b: DVec2, p: DVec2) -> f64 {
     edge_terms(a, b, p).value()
 }
 
+pub(crate) fn face_normal(corners: [Vec3; 3]) -> glam::DVec3 {
+    let corners = corners.map(|point| point.as_dvec3());
+    glam::DVec3::from_array(std::array::from_fn(|axis| {
+        let projected = corners.map(|point| DVec2::new(point[(axis + 1) % 3], point[(axis + 2) % 3]));
+        edge(projected[0], projected[1], projected[2])
+    }))
+}
+
 fn nearest_boundary_weights(corners: [DVec2; 3], p: DVec2) -> Option<([Expansion<16>; 3], f64)> {
     let dot = |a: DVec2, b: DVec2| {
         let mut result = Expansion::<16>::new();
@@ -467,11 +475,7 @@ fn surface_at_expanded(mesh: &Mesh, t: u32, weights: [Expansion<16>; 3], denomin
         return None;
     }
     let nrm = p(&mesh.normals)?.try_normalize().map_or(Vec3::Y, |normal| normal.as_vec3());
-    let corners = [mesh.positions.get(a)?.as_dvec3(), mesh.positions.get(b)?.as_dvec3(), mesh.positions.get(c)?.as_dvec3()];
-    let normal = glam::DVec3::from_array(std::array::from_fn(|axis| {
-        let projected = corners.map(|point| DVec2::new(point[(axis + 1) % 3], point[(axis + 2) % 3]));
-        edge(projected[0], projected[1], projected[2])
-    }));
+    let normal = face_normal([*mesh.positions.get(a)?, *mesh.positions.get(b)?, *mesh.positions.get(c)?]);
     let geo_nrm = normal.try_normalize().map_or(nrm, |n| n.as_vec3());
     let [Some(ta), Some(tb), Some(tc)] = [a, b, c].map(|vertex| mesh.tangents.get(vertex)) else { return None };
     let tan = glam::DVec4::from_array(interpolate(&weights, [ta, tb, tc].map(|value| value.to_array().map(f64::from)), denominator));

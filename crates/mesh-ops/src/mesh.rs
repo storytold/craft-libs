@@ -322,15 +322,14 @@ impl Mesh {
         Ok(())
     }
 
-    /// Area-weighted smooth normals over the index buffer. The face products are summed in `f64`,
-    /// where the cross product of any two `f32` edges neither overflows nor rounds to zero, so
-    /// very small and very large faces keep their normals.
+    /// Area-weighted smooth normals over the index buffer. Face products use expansion arithmetic,
+    /// followed by `f64` accumulation and normalization.
     pub fn compute_normals(&mut self) {
         let mut normals = vec![DVec3::ZERO; self.positions.len()];
         for &[a, b, c] in self.indices.as_chunks::<3>().0 {
             let (a, b, c) = (a as usize, b as usize, c as usize);
             let (Some(pa), Some(pb), Some(pc)) = (self.positions.get(a), self.positions.get(b), self.positions.get(c)) else { continue };
-            let face = (pb.as_dvec3() - pa.as_dvec3()).cross(pc.as_dvec3() - pa.as_dvec3());
+            let face = crate::gbuffer::face_normal([*pa, *pb, *pc]);
             for v in [a, b, c] {
                 if let Some(x) = normals.get_mut(v) {
                     *x += face;
@@ -1296,6 +1295,16 @@ impl mikktspace::Geometry for Mikk<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn generated_normals_preserve_cancellation_sensitive_faces() {
+        let wide = 2.0f32.powi(60);
+        for indices in [[0, 1, 2], [1, 2, 0], [2, 0, 1]] {
+            let mut mesh = Mesh { positions: vec![Vec3::new(wide, wide, 0.0), Vec3::ZERO, Vec3::X], indices: indices.to_vec(), ..Mesh::default() };
+            mesh.compute_normals();
+            assert_eq!(mesh.normals, vec![Vec3::Z; 3], "indices={indices:?}");
+        }
+    }
+
     #[test]
     fn tangent_input_normalization_retains_finite_extreme_directions() {
         for magnitude in [1e-25, 1e20] {
