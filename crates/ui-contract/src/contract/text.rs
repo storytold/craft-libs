@@ -617,6 +617,13 @@ pub(crate) fn run<C: Component>(
     } else if state.edit_target != part.options.edit_target {
         // The old target's draft and gesture must never reach the new target's binding.
         cx.cancel(CancelReason::HostChanged);
+        let widget = adapter::text_id(id, part.key);
+        crate::runtime::egui::text_edit::clear_history(&ctx, widget);
+        crate::runtime::ime::request_interrupt(&ctx, widget);
+        // Input was folded before this part ran; discard events already queued for the old target too.
+        let _ = crate::runtime::ime::take(&ctx, widget, false);
+        // A focus change may already have handed the old composition to this adapter.
+        let _ = crate::runtime::ime::take_leaving(&ctx, widget);
         state = TextState::default();
     }
     state.edit_target = part.options.edit_target;

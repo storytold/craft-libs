@@ -353,7 +353,8 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     }
 
     /// Identifies the target of this field's edit, for a control reused across drawings or selections.
-    /// Changing the key discards the previous draft even when the two bound values are equal.
+    /// Changing the key discards the previous draft, editor Undo/Redo and input-method composition even when the
+    /// two bound values are equal. Late composition commits cannot enter the new target's draft.
     /// The field keeps its identity and focus.
     #[must_use]
     pub fn edit_target(mut self, key: impl egui::AsIdSalt) -> Self {
