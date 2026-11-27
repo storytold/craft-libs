@@ -160,13 +160,13 @@ impl Lazy {
             None
         };
         // The replay audit runs a view that would replay for real in place of the replay, and compares the two.
-        let audited = settled.as_ref().filter(|_| audits(&ctx, real)).map(|(_, _, shift)| *shift);
-        if let Some((size, ran_at, shift)) = settled
+        let audited = settled.as_ref().filter(|_| audits(&ctx, real)).map(|(_, _, _, shift)| *shift);
+        if let Some((size, fills, ran_at, shift)) = settled
             && audited.is_none()
         {
             // A real replay is where the run's content went, moved with the room.
             let rect = if real { ran_at } else { Rect::from_min_size(at_start(available, rtl, size), size) };
-            let fills = if memo && !real { lazy::fills(&ctx, id, sizing) } else { None };
+            let fills = fills.filter(|_| !real);
             let took = place_unit(ui, &env, (shrink, fills), id, rect, rtl);
             let kept = if real {
                 layout_memory::backstop(&ctx, id, size);
