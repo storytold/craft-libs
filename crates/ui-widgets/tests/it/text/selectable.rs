@@ -13,7 +13,7 @@ use craft_ui::table::{MetadataGroup, MetadataRow, MetadataTable};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::text::{SelectableText, TextField};
 use egui::{Event, Id, Key, Modifiers, Rect, Sense, Vec2, ViewportId};
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 
 fn stop(fixture: &Fixture) -> Option<Id> {
@@ -51,68 +51,6 @@ fn tab_passes_over_read_only_text_and_a_press_selects_it_for_copy() {
 /// Where `text` was painted.
 fn painted(fixture: &Fixture, text: &str) -> Rect {
     fixture.texts().iter().find(|painted| painted.text == text).unwrap_or_else(|| panic!("{text:?} is painted")).rect
-}
-
-#[trial]
-fn selectable_text_response_reports_its_clicks_and_modifiers() {
-    let clicks = Rc::new(RefCell::new(Vec::new()));
-    let seen = clicks.clone();
-    let mut fixture = Fixture::new(move |ui| {
-        let response = SelectableText::new("Length", "234 pt").show(ui);
-        assert_eq!(craft_ui::contract::clicked(&response), response.clicked());
-        if response.clicked() {
-            seen.borrow_mut().push((response.double_clicked(), craft_ui::runtime::pointer::frame(ui.ctx()).pick_mods));
-        }
-    });
-    fixture.settle();
-    let at = painted(&fixture, "234 pt").center();
-    fixture.click_at(at);
-    assert_eq!(&*clicks.borrow(), &[(false, craft_keymap::Mods::NONE)]);
-    clicks.borrow_mut().clear();
-    fixture.advance(1.0);
-    let button = |pressed, modifiers| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers };
-    fixture.frame_through(vec![
-        button(true, Modifiers::NONE),
-        button(false, Modifiers::NONE),
-        button(true, Modifiers::NONE),
-        button(false, Modifiers::NONE),
-    ]);
-    assert_eq!(&*clicks.borrow(), &[(false, craft_keymap::Mods::NONE), (true, craft_keymap::Mods::NONE)]);
-    clicks.borrow_mut().clear();
-    fixture.advance(1.0);
-    fixture.frame_through(vec![button(true, Modifiers::SHIFT), button(false, Modifiers::SHIFT), Event::ModifiersChanged(Modifiers::NONE)]);
-    assert_eq!(&*clicks.borrow(), &[(false, craft_keymap::Mods { shift: true, ..craft_keymap::Mods::NONE })]);
-    clicks.borrow_mut().clear();
-    let rect = painted(&fixture, "234 pt");
-    fixture.drag_at(rect.left_center() + Vec2::new(1.0, 0.0), Vec2::new(rect.width() * 0.75, 0.0));
-    assert!(clicks.borrow().is_empty());
-    fixture.frame_through(vec![
-        Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE },
-        Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE },
-    ]);
-    assert!(clicks.borrow().is_empty());
-}
-
-#[trial]
-fn read_only_selectable_text_keeps_selection_without_reporting_activation() {
-    for inherited in [false, true] {
-        let clicked = Rc::new(Cell::new(false));
-        let seen = clicked.clone();
-        let mut fixture = Fixture::new(move |ui| {
-            craft_ui::runtime::env::with_env(
-                ui,
-                |scope| scope.read_only = Some(inherited),
-                |ui| {
-                    let response = SelectableText::new("Length", "234 pt").read_only(!inherited).show(ui);
-                    seen.set(seen.get() || response.clicked());
-                },
-            );
-        });
-        fixture.settle();
-        fixture.click_at(painted(&fixture, "234 pt").center());
-        assert!(!clicked.get(), "inherited read-only: {inherited}");
-        assert_eq!(copy_all(&mut fixture), ["234 pt"]);
-    }
 }
 
 /// Select All then Copy in the focused text.

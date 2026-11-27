@@ -25,7 +25,6 @@ use crate::patterns::presets::{
 use crate::pickers::{Select, UnitSelect};
 
 use crate::runtime::env::{Env, Label, UnitKind, Units};
-use crate::runtime::focus::{self, FocusTarget};
 
 use crate::sections::Section;
 use crate::style::TypeRole;
@@ -418,56 +417,21 @@ fn color_table_section(ui: &mut Ui, kit: &Kit<'_>, live: &mut Live, asked: &mut 
         if !deleted.is_empty() {
             asked.table.push(ColorTableEvent { edit: ColorTableEdit::Delete, colors: deleted });
         }
-        let web_shifted = marks.and_then(|marks| marks.web_shifted.as_deref());
-        let shifted_count = web_shifted.map(|shifted| selected.iter().filter(|color| shifted.contains(color)).count());
-        // A mixed selection offers both actions. Each keeps its identity when the other appears or disappears.
-        let show_shift = shifted_count.is_none_or(|count| count == 0 || count < selected.len());
-        let show_unshift = shifted_count.is_none_or(|count| count > 0);
         let tools = [
-            show_shift.then_some(("web_colors", &words.web_shift, ColorTableEdit::WebShift)),
-            show_unshift.then_some(("undo", &words.unshift, ColorTableEdit::Unshift)),
-            Some(("lock", &words.lock, ColorTableEdit::Lock)),
-            Some(("grid", &words.make_transparent, ColorTableEdit::Transparent)),
-            Some(("trash", &words.delete_color, ColorTableEdit::Delete)),
+            ("web_colors", &words.web_shift, ColorTableEdit::WebShift),
+            ("undo", &words.unshift, ColorTableEdit::Unshift),
+            ("lock", &words.lock, ColorTableEdit::Lock),
+            ("grid", &words.make_transparent, ColorTableEdit::Transparent),
+            ("trash", &words.delete_color, ColorTableEdit::Delete),
         ];
         Row::new().id_salt("table-tools").show(ui, |ui, _| {
-            let interactive = !crate::runtime::measure::active(ui.ctx());
-            let focused_action = live.table_actions.iter().position(|id| id.is_some_and(|id| focus::is_focused(ui.ctx(), id)));
-            let mut targets = [None; 2];
-            for (index, tool) in tools.iter().enumerate() {
-                let Some((icon, label, edit)) = tool else { continue };
+            for (icon, label, edit) in &tools {
                 let button = IconButton::new(IconId::new(icon)).label((*label).clone()).enabled(!selected.is_empty()).id_salt(*icon).show(ui);
-                if !selected.is_empty()
-                    && let Some(target) = targets.get_mut(index)
-                {
-                    *target = Some(button.response.id);
-                }
                 if clicked(&button) {
-                    let colors = match (edit, web_shifted) {
-                        (ColorTableEdit::Unshift, Some(shifted)) => selected.iter().copied().filter(|color| shifted.contains(color)).collect(),
-                        _ => selected.clone(),
-                    };
-                    asked.table.push(ColorTableEvent { edit: edit.clone(), colors });
+                    asked.table.push(ColorTableEvent { edit: edit.clone(), colors: selected.clone() });
                 }
             }
             let more = IconButton::new(IconId::new("more")).label(words.table_menu.clone()).id_salt("menu").show(ui);
-            if interactive {
-                let mut recover = focused_action.is_some_and(|index| targets[index].is_none());
-                // Recover on the following frame so presses can finish choosing their own focus.
-                if live.recover_table_focus && ui.memory(|memory| memory.focused().is_none()) {
-                    if ui.input(|input| input.pointer.any_pressed() || input.key_pressed(egui::Key::Tab)) {
-                        recover = true;
-                    } else {
-                        let target = targets.into_iter().flatten().next().unwrap_or(more.response.id);
-                        focus::request(ui.ctx(), FocusTarget::Id(target));
-                    }
-                }
-                live.recover_table_focus = recover;
-                live.table_actions = targets;
-                if recover {
-                    crate::runtime::frame::request_repaint(ui.ctx());
-                }
-            }
             let orders = [
                 (&words.order_unsorted, TableOrder::Unsorted),
                 (&words.order_hue, TableOrder::Hue),
