@@ -143,6 +143,22 @@ mod tests {
         test_dict::install();
     }
 
+    /// A zero-width joiner or non-joiner after a virama (`क्` U+200D `ष`) keeps the word whole, and
+    /// the word is found under the dictionary's spelling, which has no joiner.
+    #[test]
+    fn words_with_joiners_are_one_word_and_spelled() {
+        test_dict::install();
+        for word in ["परीक्\u{200D}षण", "परीक्\u{200C}षण", "मित्\u{200D}रों"] {
+            let text = format!("घर {word} पानी।");
+            let at = text.find(word).unwrap();
+            assert!(crate::words(&text).contains(&(at, at + word.len())), "{word:?}");
+            assert!(is_correct(word), "{word:?}");
+            let issues = crate::check_text(&text, &[(0..text.len(), crate::ProofLang::Hi)]);
+            assert!(issues.is_empty(), "{word:?}: {issues:?}");
+        }
+        assert!(!is_correct("परीक्\u{200D}षणण"));
+    }
+
     #[test]
     fn user_dictionary_applies() {
         test_dict::install();
