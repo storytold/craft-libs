@@ -308,12 +308,14 @@ fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>, 
             if secondary_placed(a) || !matches!(a.child(Local("axPos")).and_then(|p| p.attr_local("val")), Some("l" | "b")) {
                 return None;
             }
-            pa.elements().any(|other| {
-                matches!(other.local(), "catAx" | "dateAx" | "valAx")
-                    && (!other.is(Local("valAx")) || val_map.get(cross) == Some(&false))
-                    && other.child(Local("axId")).and_then(|i| i.attr_local("val")) == Some(cross)
-                    && other.child(Local("crossAx")).and_then(|i| i.attr_local("val")) == Some(id)
-            }).then(|| id.to_string())
+            pa.elements()
+                .any(|other| {
+                    matches!(other.local(), "catAx" | "dateAx" | "valAx")
+                        && (!other.is(Local("valAx")) || val_map.get(cross) == Some(&false))
+                        && other.child(Local("axId")).and_then(|i| i.attr_local("val")) == Some(cross)
+                        && other.child(Local("crossAx")).and_then(|i| i.attr_local("val")) == Some(id)
+                })
+                .then(|| id.to_string())
         }) {
             return Some(id);
         }
@@ -1604,12 +1606,14 @@ mod tests {
         }
         // Published version1 called the only used value axis primary. Keep that exact
         // native-save projection, even though new imports retain the unused primary pair.
-        let xml = metadata_chart(r#"<c:barChart><c:barDir val="col"/>
+        let xml = metadata_chart(
+            r#"<c:barChart><c:barDir val="col"/>
 <c:ser><c:tx><c:v>Secondary</c:v></c:tx></c:ser><c:axId val="3"/><c:axId val="4"/></c:barChart>
 <c:catAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx>
 <c:valAx><c:axId val="2"/><c:scaling><c:max val="10"/></c:scaling><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>
 <c:catAx><c:axId val="3"/><c:axPos val="b"/><c:crossAx val="4"/></c:catAx>
-<c:valAx><c:axId val="4"/><c:scaling><c:max val="90"/></c:scaling><c:axPos val="r"/><c:crossAx val="3"/></c:valAx>"#);
+<c:valAx><c:axId val="4"/><c:scaling><c:max val="90"/></c:scaling><c:axPos val="r"/><c:crossAx val="3"/></c:valAx>"#,
+        );
         let mut old = serde_json::to_value(read_chart_xml(xml.as_bytes()).unwrap()).unwrap();
         old["rawMetadataVersion"] = serde_json::json!(1);
         old["series"][0]["secondaryAxis"] = serde_json::json!(false);
@@ -1671,44 +1675,60 @@ mod tests {
     fn review_6094076812_combo_axes_follow_each_emitted_plot_and_explicit_formats() {
         for explicit in [false, true] {
             for line_first in [false, true] {
-            let mut chart = Chart {
-                kind: ChartType::Combo,
-                categories: vec!["Category".into()],
-                series: vec![
-                    Series { name: "Primary bar".into(), kind: Some(ChartType::Bar), values: vec![Some(2.0)], ..Default::default() },
-                    Series {
-                        name: "Secondary percent bar".into(), kind: Some(ChartType::PercentBar), secondary_axis: true,
-                        values: vec![Some(7.0)], ..Default::default()
-                    },
-                ],
-                y_format: explicit.then(|| "0.00".into()),
-                y2_format: explicit.then(|| "0.000%".into()),
-                ..Default::default()
-            };
-            if line_first {
-                chart.series.insert(0, Series { name: "Primary line".into(), kind: Some(ChartType::Line), values: vec![Some(3.0)], ..Default::default() });
-                chart.series.insert(1, Series { name: "Secondary line".into(), kind: Some(ChartType::Line), secondary_axis: true, values: vec![Some(4.0)], ..Default::default() });
-            }
-            let (written, _) = crate::chart::write::chart_xml(&chart);
-            let doc = crate::xmlx::parse(&written).unwrap();
-            let plot = doc.path(&[Local("chart"), Local("plotArea")]).unwrap();
-            for (name, cat_pos, val_pos, code) in [
-                ("Primary bar", "l", "b", if explicit { "0.00" } else { "General" }),
-                ("Secondary percent bar", "r", "t", if explicit { "0.000%" } else { "0%" }),
-            ] {
-                let group = plot.children(Local("barChart")).find(|g| g.children(Local("ser")).any(|s| rich_text(s).as_deref() == Some(name))).unwrap();
-                let ids = group.children(Local("axId")).map(|a| a.attr_local("val").unwrap()).collect::<Vec<_>>();
-                assert_eq!(ids.len(), 2);
-                for (tag, id, pos) in [("catAx", ids[0], cat_pos), ("valAx", ids[1], val_pos)] {
-                    let axis = plot.children(Local(tag)).find(|a| a.child(Local("axId")).and_then(|v| v.attr_local("val")) == Some(id)).unwrap();
-                    assert_eq!(axis.child(Local("axPos")).and_then(|a| a.attr_local("val")), Some(pos));
-                    if tag == "valAx" {
-                        let format = axis.child(Local("numFmt")).unwrap();
-                        assert_eq!(format.attr_local("formatCode"), Some(code));
-                        assert_eq!(format.attr_local("sourceLinked"), Some(if explicit { "0" } else { "1" }));
+                let mut chart = Chart {
+                    kind: ChartType::Combo,
+                    categories: vec!["Category".into()],
+                    series: vec![
+                        Series { name: "Primary bar".into(), kind: Some(ChartType::Bar), values: vec![Some(2.0)], ..Default::default() },
+                        Series {
+                            name: "Secondary percent bar".into(),
+                            kind: Some(ChartType::PercentBar),
+                            secondary_axis: true,
+                            values: vec![Some(7.0)],
+                            ..Default::default()
+                        },
+                    ],
+                    y_format: explicit.then(|| "0.00".into()),
+                    y2_format: explicit.then(|| "0.000%".into()),
+                    ..Default::default()
+                };
+                if line_first {
+                    chart.series.insert(
+                        0,
+                        Series { name: "Primary line".into(), kind: Some(ChartType::Line), values: vec![Some(3.0)], ..Default::default() },
+                    );
+                    chart.series.insert(
+                        1,
+                        Series {
+                            name: "Secondary line".into(),
+                            kind: Some(ChartType::Line),
+                            secondary_axis: true,
+                            values: vec![Some(4.0)],
+                            ..Default::default()
+                        },
+                    );
+                }
+                let (written, _) = crate::chart::write::chart_xml(&chart);
+                let doc = crate::xmlx::parse(&written).unwrap();
+                let plot = doc.path(&[Local("chart"), Local("plotArea")]).unwrap();
+                for (name, cat_pos, val_pos, code) in [
+                    ("Primary bar", "l", "b", if explicit { "0.00" } else { "General" }),
+                    ("Secondary percent bar", "r", "t", if explicit { "0.000%" } else { "0%" }),
+                ] {
+                    let group =
+                        plot.children(Local("barChart")).find(|g| g.children(Local("ser")).any(|s| rich_text(s).as_deref() == Some(name))).unwrap();
+                    let ids = group.children(Local("axId")).map(|a| a.attr_local("val").unwrap()).collect::<Vec<_>>();
+                    assert_eq!(ids.len(), 2);
+                    for (tag, id, pos) in [("catAx", ids[0], cat_pos), ("valAx", ids[1], val_pos)] {
+                        let axis = plot.children(Local(tag)).find(|a| a.child(Local("axId")).and_then(|v| v.attr_local("val")) == Some(id)).unwrap();
+                        assert_eq!(axis.child(Local("axPos")).and_then(|a| a.attr_local("val")), Some(pos));
+                        if tag == "valAx" {
+                            let format = axis.child(Local("numFmt")).unwrap();
+                            assert_eq!(format.attr_local("formatCode"), Some(code));
+                            assert_eq!(format.attr_local("sourceLinked"), Some(if explicit { "0" } else { "1" }));
+                        }
                     }
                 }
-            }
             }
         }
     }
@@ -1739,7 +1759,11 @@ mod tests {
                 assert!(chart.series.iter().all(|s| s.kind == Some(ChartType::StackedLine)));
                 let model = serde_json::to_value(&chart).unwrap();
                 for (i, expected) in [visible, false, true].into_iter().enumerate() {
-                    assert_eq!(model["series"][i].get("markerVisible"), Some(&serde_json::json!(expected)), "{grouping}, visible={visible}, series={i}");
+                    assert_eq!(
+                        model["series"][i].get("markerVisible"),
+                        Some(&serde_json::json!(expected)),
+                        "{grouping}, visible={visible}, series={i}"
+                    );
                 }
                 // Simulate the published version1 native-save shape, which had no markerVisible.
                 let mut old = model.clone();
@@ -1771,5 +1795,4 @@ mod tests {
             }
         }
     }
-
 }
