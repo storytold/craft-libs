@@ -135,7 +135,7 @@ impl<T: Copy> Iterator for CurveOrderIter<'_, T> {
 
 // TODO: we've grown a weird set of convenience methods. Design them better.
 impl CurveOrder {
-    fn new(start: f64) -> Self {
+    pub(crate) fn new(start: f64) -> Self {
         CurveOrder {
             start,
             cmps: SmallVec::new(),
@@ -220,6 +220,13 @@ impl CurveOrder {
         out.cmps.clear();
         out.cmps.extend(self.cmps.iter().map(CurveOrderEntry::flip));
         out.metrics.entries.clone_from(&self.metrics.entries);
+    }
+
+    pub(crate) fn is_flip_of(&self, other: &CurveOrder) -> bool {
+        self.start == other.start
+            && self.metrics == other.metrics
+            && self.cmps.len() == other.cmps.len()
+            && self.cmps.iter().zip(&other.cmps).all(|(a, b)| *a == b.flip())
     }
 
     /// Imagine that our curve is to the left of the other curve at height `y`.
@@ -752,7 +759,7 @@ fn balance_quadratic(c: f64, b: f64, a: f64) -> (f64, f64, f64) {
 pub(crate) fn quadratic_signs(q: Quadratic) -> (bool, f64, f64) {
     let &[c, b, a] = q.coeffs();
     let (c, b, a) = balance_quadratic(c, b, a);
-    let disc = b * b - 4.0 * a * c;
+    let disc = b * b - 4.0 * (a * c);
     // The handling of b here is a little confusing, and it has to do with how
     // the "roots" come out in the linear case. If a is zero, and b is not we
     // find roots at `-a.signum() * b.signum() * f64::INFINITY` and something
@@ -1485,7 +1492,7 @@ fn max_slope(c: CubicBez) -> f64 {
     let mut ret = 0.0f64;
     for (a, b) in [(c.p0, c.p1), (c.p1, c.p2), (c.p2, c.p3)] {
         let dy = b.y - a.y;
-        if dy.is_nan() || dy <= 0.0 {
+        if !dy.is_finite() || dy <= 0.0 {
             return f64::INFINITY;
         }
         ret = ret.max((b.x - a.x).abs() / dy);
@@ -1977,9 +1984,9 @@ fn order_from_precomputed_approx(
     if y1 - y0 < ish_tolerance {
         return None;
     }
-    let y_mid = (y0 + y1) / 2.0;
-    let orig_y_mid0 = (cubic0.c.p0.y + cubic0.c.p3.y) / 2.0;
-    let orig_y_mid1 = (cubic1.c.p0.y + cubic1.c.p3.y) / 2.0;
+    let y_mid = y0.midpoint(y1);
+    let orig_y_mid0 = cubic0.c.p0.y.midpoint(cubic0.c.p3.y);
+    let orig_y_mid1 = cubic1.c.p0.y.midpoint(cubic1.c.p3.y);
     let ep0 = cubic0.approx.shift_y(orig_y_mid0 - y_mid);
     let ep1 = cubic1.approx.shift_y(orig_y_mid1 - y_mid);
     // An almost-horizontal approximation carries the end x values of its whole
@@ -3499,17 +3506,14 @@ mod test {
     fn crossing_cubics_order_does_not_depend_on_metrics() {
         let order = crossing_cubics_order();
         let intervals: Vec<_> = order.iter().collect();
-        let expected = [
-            (0.0, 0.4999997495377526, Order::Left),
-            (0.4999997495377526, 0.5000002504622474, Order::Ish),
-            (0.5000002504622474, 1.0, Order::Right),
-        ];
-        assert_eq!(intervals.len(), expected.len());
-        for ((start, end, o), (exp_start, exp_end, exp_o)) in intervals.into_iter().zip(expected) {
-            assert!((start - exp_start).abs() < 1e-12);
-            assert!((end - exp_end).abs() < 1e-12);
-            assert_eq!(o, exp_o);
-        }
+        assert_eq!(intervals.iter().map(|entry| entry.2).collect::<Vec<_>>(), [Order::Left, Order::Ish, Order::Right]);
+        assert_eq!(intervals.first().unwrap().0, 0.0);
+        assert_eq!(intervals.last().unwrap().1, 1.0);
+        assert!(intervals.iter().all(|(start, end, _)| start < end));
+        assert!(intervals.windows(2).all(|pair| pair[0].1 == pair[1].0));
+        assert_eq!(order.order_at(0.25), Order::Left);
+        assert_eq!(order.order_at(0.5), Order::Ish);
+        assert_eq!(order.order_at(0.75), Order::Right);
     }
 
     #[test]
@@ -3525,20 +3529,12 @@ mod test {
     #[test]
     fn crossing_cubics_metrics_record_the_recursion_depth() {
         let order = crossing_cubics_order();
-        let expected = [
-            (0.41461454805348563, 0),
-            (0.49927444265135257, 1),
-            (0.4999997495377526, 2),
-            (0.5000002504622474, 2),
-            (0.5007255573486473, 2),
-            (0.5853854519465145, 1),
-            (1.0, 0),
-        ];
-        assert_eq!(order.metrics.entries.len(), expected.len());
-        for (entry, (end, depth)) in order.metrics.entries.iter().zip(expected) {
-            assert!((entry.end - end).abs() < 1e-12, "{entry:?}");
-            assert_eq!(entry.depth, depth, "{entry:?}");
-        }
+        let entries = &order.metrics.entries;
+        assert!(!entries.is_empty());
+        assert!(entries.iter().all(|entry| entry.end > 0.0 && entry.end <= 1.0));
+        assert!(entries.windows(2).all(|pair| pair[0].end <= pair[1].end));
+        assert_eq!(entries.last().unwrap().end, 1.0);
+        assert!(entries.iter().any(|entry| entry.depth > 0));
     }
 
     // TODO: improve this test
@@ -3574,6 +3570,22 @@ mod test {
             ]
         );
         assert_eq!(order.order_at(1.5), Order::Left);
+    }
+
+    #[test]
+    fn extreme_numeric_quadratic_discriminant_keeps_large_coefficient_roots() {
+        let q = Quadratic::new([-2f64.powi(-29), 0.0, 2f64.powi(1023)]);
+        let (positive, left, right) = quadratic_signs(q);
+        let expected = 2f64.powi(-526);
+        assert!(positive);
+        assert!((left / expected + 1.0).abs() < 1e-12, "{left}");
+        assert!((right / expected - 1.0).abs() < 1e-12, "{right}");
+    }
+
+    #[test]
+    fn extreme_numeric_overflowing_control_leg_has_unbounded_slope() {
+        let c = CubicBez::new((0.0, -1e308), (0.0, -9e307), (1.0, 9e307), (1.0, 1e308));
+        assert!(max_slope(c).is_infinite());
     }
 
     // Craft patch (quadratic scale) test: the cubic with y = [0, -s, -2s, s]

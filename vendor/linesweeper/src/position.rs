@@ -319,8 +319,34 @@ fn settled_range(
 /// The increasing map of heights that takes `from0` to `to0` and `from1` to `to1`, or
 /// `None` when either range is empty or the map is not finite.
 fn height_map(from0: f64, from1: f64, to0: f64, to1: f64) -> Option<impl Fn(f64) -> f64> {
-    let scale = (to1 - to0) / (from1 - from0);
-    (from0 < from1 && to0 < to1 && scale.is_finite()).then_some(move |y| to0 + (y - from0) * scale)
+    let from_span = from1 - from0;
+    let to_span = to1 - to0;
+    let scale = if from_span.is_finite() && to_span.is_finite() {
+        to_span / from_span
+    } else {
+        (to1 * 0.5 - to0 * 0.5) / (from1 * 0.5 - from0 * 0.5)
+    };
+    let middle = from0.midpoint(from1);
+    (from0 < from1 && to0 < to1 && scale.is_finite()).then_some(move |y: f64| {
+        if y == from0 {
+            to0
+        } else if y == from1 {
+            to1
+        } else if scale == 0.0 {
+            let t = if from_span.is_finite() {
+                (y - from0) / from_span
+            } else {
+                (y * 0.5 - from0 * 0.5) / (from1 * 0.5 - from0 * 0.5)
+            };
+            to0 * (1.0 - t) + to1 * t
+        } else if y < from0.midpoint(middle) {
+            (y - from0).mul_add(scale, to0)
+        } else if y > middle.midpoint(from1) {
+            (y - from1).mul_add(scale, to1)
+        } else {
+            (y - middle).mul_add(scale, to0.midpoint(to1))
+        }
+    })
 }
 
 /// Cuts `c` between the points nearest `p0` and `p3`, searching from `t0` and `t3`, and
@@ -698,7 +724,7 @@ mod tests {
 
     use crate::{Segments, sweep::Correctness, topology::Topology};
 
-    use super::{PositionedOutputSeg, horizontal_error_weight};
+    use super::{PositionedOutputSeg, height_map, horizontal_error_weight, settled_cubic};
 
     #[test]
     fn error_weight() {
@@ -951,6 +977,15 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn affine_endpoints_flat_handles_keep_the_exact_target_height() {
+        let curve = CubicBez::new((0.0, -1.0), (1.0, 1.0), (2.0, 1.0), (3.0, 1.0));
+        let end = Point::new(10.0, -1e-20);
+        let placed = settled_cubic(curve, 0.0, 1.0, curve.p0, end).unwrap();
+        assert!(placed.p2.y <= placed.p3.y, "{placed:?}");
+        assert_eq!(height_map(-1.0, 1.0, -1.0, end.y).unwrap()(1.0), end.y);
     }
 
     // Craft patch (flat-end shear): the union of a shape with a copy moved by

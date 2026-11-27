@@ -673,7 +673,7 @@ impl<T, const B: usize> TreeVec<T, B> {
             Node::Leaf { data } => RevIterInner::Simple(data[..end].iter()),
             Node::Internal { .. } => {
                 let mut ret = RevTreeIter {
-                    stack: Vec::new(),
+                    stack: Stack::new(),
                     leaf: [].iter(),
                     remaining: end,
                 };
@@ -876,7 +876,7 @@ enum RevIterInner<'a, T, const B: usize> {
 // The mirror image of `TreeIter`: the stack holds the children still to visit
 // on the left, and elements come off the back of each slice.
 struct RevTreeIter<'a, T, const B: usize> {
-    stack: Vec<std::slice::Iter<'a, Box<Node<T, B>>>>,
+    stack: Stack<std::slice::Iter<'a, Box<Node<T, B>>>>,
     leaf: std::slice::Iter<'a, T>,
     remaining: usize,
 }

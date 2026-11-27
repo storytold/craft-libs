@@ -19,7 +19,6 @@ pub mod topology;
 pub mod generators;
 
 pub use geom::{Point, Segment};
-use kurbo::Shape;
 pub use segments::{SegIdx, Segments};
 
 // pub so that we can use it in fuzz tests, but it's really private
@@ -205,38 +204,6 @@ fn automatic_accuracy(paths: &[&kurbo::BezPath]) -> Result<f64, Error> {
     for path in paths {
         check_coordinates(path)?;
     }
-    // Find the extremal values, to figure out how much precision we can support.
-    // Craft patch (leading ClosePath): `BezPath::bounding_box` panics on a leading ClosePath.
-    let bounding_box = |path: &kurbo::BezPath| {
-        if matches!(path.elements().first(), Some(kurbo::PathEl::ClosePath)) {
-            kurbo::segments(segments::skip_leading_close_paths(path.iter()))
-                .map(|seg| kurbo::ParamCurveExtrema::bounding_box(&seg))
-                .reduce(|a, b| a.union(b))
-                .unwrap_or_default()
-        } else {
-            path.bounding_box()
-        }
-    };
-    let bbox = paths
-        .iter()
-        .map(|path| bounding_box(path))
-        .reduce(|a, b| a.union(b))
-        .unwrap_or_default();
-    let min = bbox.min_x().min(bbox.min_y());
-    let max = bbox.max_x().max(bbox.max_y());
-    if min.is_infinite() || max.is_infinite() {
-        return Err(Error::Infinity);
-    }
-    // If there was any NaN in the input, it should have propagated to the min and max.
-    if min.is_nan() || max.is_nan() {
-        return Err(Error::NaN);
-    }
-
-    // TODO: we did some analysis for error bounds in the case of polylines.
-    // Think more about what makes sense for curves.
-    let m_2 = min.abs().max(max.abs());
-    let eps = m_2 * (f64::EPSILON * 64.0);
-    let eps = eps.max(MIN_AUTO_EPS);
     let max_coord = paths
         .iter()
         .flat_map(|path| kurbo::segments(segments::skip_leading_close_paths(path.iter())))
@@ -250,7 +217,7 @@ fn automatic_accuracy(paths: &[&kurbo::BezPath]) -> Result<f64, Error> {
                 .max(seg.end().y.abs())
         })
         .fold(0.0, f64::max);
-    let eps = eps.max(curve::resolution_floor(max_coord));
+    let eps = MIN_AUTO_EPS.max(curve::resolution_floor(max_coord));
 
     debug_assert!(eps.is_finite());
     // Craft patch (far-point eps).
@@ -458,14 +425,14 @@ mod tests {
     #[test]
     fn automatic_accuracy_ignores_discarded_horizontal_handles() {
         let flat = BezPath::from_svg("M0 0 C1e14 0 1e14 0 0 0 Z").unwrap();
-        let square = kurbo::Rect::new(0.0, 0.0, 5.0, 5.0).to_path(0.1);
-        for (a, b) in [(&flat, &square), (&square, &flat)] {
-            assert!(binary_op_accuracy(a, b).is_ok());
-            let contours = binary_op(a, b, FillRule::NonZero, BinaryOp::Union).unwrap();
-            assert_eq!(
-                contours.contours().map(|c| c.path.area()).sum::<f64>(),
-                25.0
-            );
+        for size in [1.0, 5.0] {
+            let square = kurbo::Rect::new(0.0, 0.0, size, size).to_path(0.1);
+            let expected = binary_op_accuracy(&square, &BezPath::new()).unwrap();
+            for (a, b) in [(&flat, &square), (&square, &flat)] {
+                assert_eq!(binary_op_accuracy(a, b).unwrap(), expected);
+                let contours = binary_op(a, b, FillRule::NonZero, BinaryOp::Union).unwrap();
+                assert_eq!(contours.contours().map(|c| c.path.area()).sum::<f64>(), size * size);
+            }
         }
     }
 
@@ -508,7 +475,7 @@ mod tests {
         );
     }
     use insta::assert_ron_snapshot;
-    use kurbo::BezPath;
+    use kurbo::{BezPath, Shape};
 
     use super::*;
 

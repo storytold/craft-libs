@@ -106,10 +106,14 @@ fn intersect_lines_unscaled(l0: Line, l1: Line, tolerance: f64) -> CurveOrder {
         let dy = y1 - y0;
         if dy.is_finite() {
             y0 + dy * t
+        } else if (0.0..=1.0).contains(&t) {
+            y0 * (1.0 - t) + y1 * t
+        } else if t < 0.0 {
+            f64::NEG_INFINITY
+        } else if t > 1.0 {
+            f64::INFINITY
         } else {
-            // The range is more than f64::MAX tall, so step half of it twice.
-            let half_step = (y1 * 0.5 - y0 * 0.5) * t;
-            y0 + half_step + half_step
+            f64::NAN
         }
     };
     let z0 = height_at(t0);
@@ -159,6 +163,18 @@ fn intersect_lines_unscaled(l0: Line, l1: Line, tolerance: f64) -> CurveOrder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn affine_endpoints_crossing_preserves_an_uneven_overflowing_span() {
+        let a = 2f64.powi(1023);
+        let b = a.next_up();
+        let fixed = Line::new((0.0, -a), (0.0, b));
+        let moving = Line::new((-1.0, -a), (1.0, b));
+        let crossing = a.midpoint(-b).abs();
+        let order = intersect_lines(fixed, moving, 0.0);
+        assert_eq!(order.order_at(crossing * 0.5), Order::Right);
+        assert_eq!(order.order_at(crossing * 1.5), Order::Left);
+    }
 
     #[test]
     fn simple_intersection() {
@@ -285,6 +301,21 @@ mod tests {
         assert_eq!(order.cmps.len(), 1);
         assert_eq!(order.cmps[0].order, Order::Left);
         assert_eq!(order.cmps[0].end, h);
+    }
+
+    #[test]
+    fn subnormal_sloped_lines_keep_interior_overlap_coordinates() {
+        let h = 1e-310;
+        let sloped = Line::new((0.0, 0.0), (4.0, h));
+        let (x0, x1) = super::line_at_ys(sloped, h * 0.25, h * 0.75);
+        assert!((x0 - 1.0).abs() < 1e-12, "{x0}");
+        assert!((x1 - 3.0).abs() < 1e-12, "{x1}");
+        let other = Line::new((5.0, h * 0.25), (6.0, h * 0.75));
+        let order = intersect_lines(sloped, other, 1e-6);
+        assert_eq!(order.start, h * 0.25);
+        assert_eq!(order.cmps.len(), 1);
+        assert_eq!(order.cmps[0].order, Order::Left);
+        assert_eq!(order.cmps[0].end, h * 0.75);
     }
 
     #[test]

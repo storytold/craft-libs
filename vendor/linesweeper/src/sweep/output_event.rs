@@ -13,13 +13,14 @@ use crate::{SegIdx, num::CheapOrderedFloat};
 /// it intersects the sweep-line (i.e. [`OutputEvent::smaller_x`]).
 /// Events with the same horizontal range are ordered by segment and then by
 /// their other fields, so two events compare equal only when they are equal.
+/// NaN coordinates use total floating-point order; signed zeros compare equal.
 ///
 /// The two points, `x0` and `x1`, are in sweep-line order. This doesn't
 /// necessarily mean that `x0` is smaller than `x1`! Instead, it means that
 /// when traversing the segment in sweep-line order (i.e. in increasing `y`,
 /// and increasing `x` if the segment is horizontal) then it visits `x0`
 /// before `x1`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct OutputEvent {
     /// The first horizontal coordinate on this sweep-line that we'd hit if
     /// we were traversing the segment in sweep-line orientation.
@@ -46,6 +47,20 @@ pub struct OutputEvent {
 }
 
 impl Eq for OutputEvent {}
+
+impl PartialEq for OutputEvent {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+fn coordinate_order(a: f64, b: f64) -> std::cmp::Ordering {
+    if a == b {
+        std::cmp::Ordering::Equal
+    } else {
+        a.total_cmp(&b)
+    }
+}
 
 impl OutputEvent {
     /// The smallest `x` coordinate at which the line segment touches the sweep-line.
@@ -106,9 +121,11 @@ impl OutputEvent {
 // ordered by segment and then by the other fields, so `cmp` agrees with `==`.
 impl Ord for OutputEvent {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.cmp_x(other)
+        coordinate_order(self.smaller_x(), other.smaller_x())
+            .then_with(|| coordinate_order(self.larger_x(), other.larger_x()))
             .then_with(|| self.seg_idx.cmp(&other.seg_idx))
-            .then_with(|| CheapOrderedFloat::from(self.x0).cmp(&CheapOrderedFloat::from(other.x0)))
+            .then_with(|| coordinate_order(self.x0, other.x0))
+            .then_with(|| coordinate_order(self.x1, other.x1))
             .then_with(|| self.connected_above.cmp(&other.connected_above))
             .then_with(|| self.connected_below.cmp(&other.connected_below))
             .then_with(|| self.sweep_idx.cmp(&other.sweep_idx))
@@ -127,6 +144,30 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+
+    #[test]
+    fn comparison_contract_public_events_order_nan_coordinates_consistently() {
+        let values = [
+            -f64::NAN,
+            f64::NEG_INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
+            1.0,
+            f64::INFINITY,
+            f64::NAN,
+            f64::from_bits(f64::NAN.to_bits() + 1),
+        ];
+        let events: Vec<_> = values.into_iter().map(|x| OutputEvent::new(SegIdx(0), x, true, 2.0, true, Some(0), Some(0))).collect();
+        for a in &events {
+            assert_eq!(a, &a.clone());
+            for b in &events {
+                assert_eq!(a == b, a.cmp(b).is_eq());
+                assert_eq!(a.cmp(b), b.cmp(a).reverse());
+            }
+        }
+        assert_eq!(events.iter().cloned().collect::<BTreeSet<_>>().len(), 8);
+    }
 
     // Craft patch (output event order)
     #[test]

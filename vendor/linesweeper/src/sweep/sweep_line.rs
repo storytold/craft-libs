@@ -413,6 +413,8 @@ pub struct Sweeper<'a> {
     touch_scans: rustc_hash::FxHashSet<(SegIdx, bool)>,
     #[cfg(test)]
     touch_scan_count: usize,
+    #[cfg(test)]
+    repeat_span_visits: u64,
     // Craft patch (work limit): the most work that `next_line` lets the sweep
     // do, and whether it stopped there. The work is the segment comparisons,
     // which the two caches count, plus `position_checks`: the segment positions
@@ -473,6 +475,8 @@ impl<'segs> Sweeper<'segs> {
             touch_scans: rustc_hash::FxHashSet::default(),
             #[cfg(test)]
             touch_scan_count: 0,
+            #[cfg(test)]
+            repeat_span_visits: 0,
             work_limit: None,
             stopped_at_work_limit: false,
             position_checks: 0,
@@ -557,9 +561,8 @@ impl<'segs> Sweeper<'segs> {
 
     /// Finds `seg_idx` on the sweep line, counting the entries the binary search probes.
     fn find_position(&mut self, seg_idx: SegIdx) -> Option<usize> {
-        let pos = self.line.position(seg_idx);
-        let probes = usize::BITS - self.line.segs.len().leading_zeros();
-        self.segments_passed = self.segments_passed.saturating_add(u64::from(probes));
+        let (pos, probes) = self.line.position_with_probes(seg_idx);
+        self.segments_passed = self.segments_passed.saturating_add(probes);
         pos
     }
 
@@ -629,16 +632,25 @@ impl<'segs> Sweeper<'segs> {
     // from one of those positions to the other, in order. The hash keeps each
     // key the same size however many segments lie between the pair. The
     // position searches and the segments hashed count toward the work limit.
+    #[cfg(test)]
     fn repeat_key(&mut self, left: SegIdx, right: SegIdx) -> RepeatKey {
-        use std::hash::{Hash, Hasher};
-
         let left_pos = self.find_position(left);
         let right_pos = self.find_position(right);
+        self.repeat_key_at(left, right, left_pos, right_pos)
+    }
+
+    fn repeat_key_at(&mut self, left: SegIdx, right: SegIdx, left_pos: Option<usize>, right_pos: Option<usize>) -> RepeatKey {
+        use std::hash::{Hash, Hasher};
+
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         if let (Some(a), Some(b)) = (left_pos, right_pos) {
             let hashed = u64::try_from(a.abs_diff(b)).unwrap_or(u64::MAX).saturating_add(1);
             self.segments_passed = self.segments_passed.saturating_add(hashed);
             for entry in self.line.segs.range(a.min(b)..=a.max(b)) {
+                #[cfg(test)]
+                {
+                    self.repeat_span_visits += 1;
+                }
                 entry.seg.hash(&mut hasher);
             }
         }
@@ -725,7 +737,9 @@ impl<'segs> Sweeper<'segs> {
                 );
             }
             let (left, right) = (intersection.left, intersection.right);
-            if !handled.insert(self.repeat_key(left, right)) {
+            let left_idx = self.find_position(left).unwrap();
+            let right_idx = self.find_position(right).unwrap();
+            if left_idx < right_idx && !handled.insert(self.repeat_key_at(left, right, Some(left_idx), Some(right_idx))) {
                 let next_y = self
                     .compare_segments(left, right)
                     .iter()
@@ -743,7 +757,7 @@ impl<'segs> Sweeper<'segs> {
                 }
                 continue;
             }
-            self.handle_intersection(left, right);
+            self.handle_intersection(left, right, left_idx, right_idx);
             self.check_invariants();
         }
 
@@ -1133,9 +1147,7 @@ impl<'segs> Sweeper<'segs> {
         self.segs_needing_positions.push(pos);
     }
 
-    fn handle_intersection(&mut self, left: SegIdx, right: SegIdx) {
-        let left_idx = self.find_position(left).unwrap();
-        let right_idx = self.find_position(right).unwrap();
+    fn handle_intersection(&mut self, left: SegIdx, right: SegIdx, left_idx: usize, right_idx: usize) {
         if left_idx < right_idx {
             // We're going to put `left_seg` after `right_seg` in the
             // sweep line, and while doing so we need to "push" along
@@ -1854,9 +1866,18 @@ impl SegmentOrder {
     //
     // Craft patch (sweep position): a binary search over the keys replaces
     // the package's linear scan.
+    #[cfg(any(test, feature = "slow-asserts"))]
     fn position(&self, seg_idx: SegIdx) -> Option<usize> {
+        self.position_with_probes(seg_idx).0
+    }
+
+    fn position_with_probes(&self, seg_idx: SegIdx) -> (Option<usize>, u64) {
         let key = self.keys[seg_idx];
-        let pos = self.segs.partition_point(|entry| entry.key < key);
+        let mut probes = 0u64;
+        let pos = self.segs.partition_point(|entry| {
+            probes = probes.saturating_add(1);
+            entry.key < key
+        });
         let ret = self
             .segs
             .get(pos)
@@ -1871,7 +1892,7 @@ impl SegmentOrder {
                 .position(|x| x.seg == seg_idx || x.old_seg == Some(seg_idx))
         );
 
-        ret
+        (ret, probes)
     }
 
     // Craft patch (sweep position): inserts an entry at the given index,
@@ -3001,6 +3022,27 @@ mod tests {
         assert_eq!(sweep.repeat_key(d, a).4, first.4);
     }
 
+    #[test]
+    fn position_work_counts_every_tree_predicate_probe() {
+        let xs: Vec<_> = (0..1024).map(|n| (f64::from(n), f64::from(n))).collect();
+        let segs = mk_segs(&xs);
+        let mut sweep = Sweeper::new(&segs, 0.1);
+        for (pos, seg) in segs.indices().enumerate() {
+            sweep.line.insert(pos, SegmentOrderEntry::new(seg, &segs, 0.1));
+        }
+        for seg in segs.indices() {
+            let key = sweep.line.keys[seg];
+            let mut probes = 0u64;
+            let expected = sweep.line.segs.partition_point(|entry| {
+                probes += 1;
+                entry.key < key
+            });
+            let before = sweep.segments_passed;
+            assert_eq!(sweep.find_position(seg), Some(expected));
+            assert_eq!(sweep.segments_passed - before, probes, "segment {seg:?}");
+        }
+    }
+
     // Wide, flat shapes (x up to 1e12, y below 1e-3) whose sweep delays an
     // intersection to exactly the end of one of its segments. Handling the
     // delayed event there used to panic in `CurveOrder::entry_at`.
@@ -3089,6 +3131,7 @@ mod tests {
             while sweep.next_line(&mut bufs).is_some() {
                 lines += 1;
             }
+            assert_eq!(sweep.repeat_span_visits, 0, "ordinary coincident touches must not hash intervening spans");
             assert!(
                 sweep.touch_scan_count <= 2 * segs.len() * lines,
                 "{} touch scans for {} segments on {lines} sweep lines",

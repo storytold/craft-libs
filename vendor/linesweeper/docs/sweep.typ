@@ -720,7 +720,8 @@ Next, let's analyze the computation of the $y$ intersection point.
 #lemma[
 Suppose we have two segments $alpha$ and $beta$. Set $y_0 = y_0(alpha) or y_0(beta)$ and $y_1 = y_1(alpha) and y_1(beta)$
 (these can be computed exactly). Suppose that we can compute $alpha(y)$ and $beta(y)$ to additive accuracy $epsilon$,
-and assume that $beta(y_0) - alpha(y_0) >= 0$ and
+and assume that the floating-point additions forming the denominator below are finite,
+that $beta(y_0) - alpha(y_0) >= 0$, and
 $
 alpha(y_1) - beta(y_1) > 16/3 (epsilon + 2 epsilon_0 M).
 $
@@ -802,7 +803,8 @@ Putting all this together (and handling the "chamfers" yet):
 // Craft patch (ratio lemma): M is a floating-point number, and the proof shows the ratio lemma's assumptions hold.
 #lemma[
 Assume $M$ is a floating-point number, all line segments are inside the square $[-M/2, M/2]^2$,
-and take $delta = 64 epsilon_0 M$. If $epsilon_0 <= 1/4$ then
+and take $delta = 64 epsilon_0 M$. Assume also that the floating-point additions forming the crossing
+denominator in @lem-intersection-height-error are finite. If $epsilon_0 <= 1/4$ then
 
 - We can compute $x$ coordinates of line segments to additive accuracy $delta/8$.
 - If $alpha$ $(3 delta)/4$-crosses $beta$, we can compute a crossing height $hat(y)$ such
@@ -820,6 +822,8 @@ can compute the horizontal coordinate with error at most $(6 epsilon_0 + 4 epsil
 this is at most $7 epsilon_0 M <= delta/8$. This proves the first claim.
 
 For the second claim, we apply @lem-intersection-height-error with $epsilon = (6 epsilon_0 + 4 epsilon_0^2) M$.
+Its denominator additions are finite by the additional assumption. The coordinate bound alone does
+not imply this: each horizontal difference can be as large as $M$, and their sum can be as large as $2 M$.
 With this $epsilon$, $epsilon + 2 epsilon_0 M) <= 9 epsilon_0 M$ and so $16/3 (epsilon + 2 epsilon_0 M) <= 48 epsilon_0 M = (3 delta)/4$.
 Thus, if $alpha$ $(3 delta)/4$-crosses $beta$ then the assumptions of @lem-intersection-height-error are satisfied
 (and in the conclusion, $4 (epsilon + 2 epsilon_0) M <= 36 epsilon_0 M = (9 delta) /16 $.

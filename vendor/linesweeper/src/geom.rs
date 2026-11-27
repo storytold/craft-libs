@@ -490,11 +490,31 @@ impl Segment {
                     // long, work with half of each height, and take the
                     // weighted sum of the x coordinates.
                     let dy = p1.y - p0.y;
-                    let t = if dy.is_finite() {
-                        (y - p0.y) / dy
-                    } else {
-                        (y * 0.5 - p0.y * 0.5) / (p1.y * 0.5 - p0.y * 0.5)
-                    };
+                    if !dy.is_finite() {
+                        if y == p0.y {
+                            return p0.x;
+                        }
+                        if y == p1.y {
+                            return p1.x;
+                        }
+                        let half_y = p1.y * 0.5 - p0.y * 0.5;
+                        let half_x = p1.x * 0.5 - p0.x * 0.5;
+                        let slope = half_x / half_y;
+                        if !slope.is_normal() {
+                            let t = (y * 0.5 - p0.y * 0.5) / half_y;
+                            return (1.0 - t) * p0.x + t * p1.x;
+                        }
+                        let middle = p0.y.midpoint(p1.y);
+                        let (anchor_y, anchor_x) = if y < p0.y.midpoint(middle) {
+                            (p0.y, p0.x)
+                        } else if y > middle.midpoint(p1.y) {
+                            (p1.y, p1.x)
+                        } else {
+                            (middle, p0.x.midpoint(p1.x))
+                        };
+                        return (y - anchor_y).mul_add(slope, anchor_x);
+                    }
+                    let t = (y - p0.y) / dy;
                     let dx = p1.x - p0.x;
                     if dx.is_finite() {
                         p0.x + t * dx
@@ -572,6 +592,36 @@ impl Segment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn affine_endpoints_line_height_keeps_a_small_nonzero_offset() {
+        let line = Segment::straight(Point::new(-1e308, -1e308), Point::new(1e308, 1e308));
+        assert!((line.at_y(1.0) - 1.0).abs() <= 8.0 * f64::EPSILON);
+        assert!(line.upper(1.0, 0.0) >= 1.0);
+        assert!(line.lower(-1.0, 0.0) <= -1.0);
+    }
+
+    #[test]
+    fn extreme_line_height_preserves_a_tiny_horizontal_span() {
+        let line = Segment::straight(Point::new(0.0, -1e308), Point::new(1e-20, 1e308));
+        for (y, expected) in [(-1e308, 0.0), (-5e307, 2.5e-21), (0.0, 5e-21), (5e307, 7.5e-21), (1e308, 1e-20)] {
+            let actual = line.at_y(y);
+            assert!((actual - expected).abs() <= 1e-35, "at {y}: {actual}, expected {expected}");
+        }
+    }
+
+    #[test]
+    fn extreme_line_height_preserves_uneven_endpoint_coordinates() {
+        for line in [
+            Segment::straight(Point::new(1.0, -1e308), Point::new(1e308, 1e308)),
+            Segment::straight(Point::new(-1e308, -1e308), Point::new(-1.0, 1e308)),
+        ] {
+            assert_eq!(line.at_y(line.start().y), line.start().x);
+            assert_eq!(line.at_y(line.end().y), line.end().x);
+            assert!(line.lower(line.start().y, 0.0) <= line.start().x);
+            assert!(line.upper(line.end().y, 0.0) >= line.end().x);
+        }
+    }
 
     // Craft patch (horizontal line bounds)
     #[test]

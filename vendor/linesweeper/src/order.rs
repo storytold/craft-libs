@@ -19,6 +19,8 @@ pub struct ComparisonCache {
     // direction flips it into `flipped`.
     inner: FxHashMap<(SegIdx, SegIdx), CurveOrder>,
     flipped: Option<CurveOrder>,
+    flipped_key: Option<(SegIdx, SegIdx)>,
+    edited_flipped: FxHashMap<(SegIdx, SegIdx), CurveOrder>,
     // Craft patch (comparison cache size): `evict_ended` scans the cache once
     // it holds this many pairs.
     next_purge: usize,
@@ -49,6 +51,8 @@ impl ComparisonCache {
         ComparisonCache {
             inner: FxHashMap::default(),
             flipped: None,
+            flipped_key: None,
+            edited_flipped: FxHashMap::default(),
             next_purge: MIN_PURGE,
             accuracy,
             tolerance,
@@ -69,6 +73,8 @@ impl ComparisonCache {
         ComparisonCache {
             inner: FxHashMap::default(),
             flipped: None,
+            flipped_key: None,
+            edited_flipped: FxHashMap::default(),
             next_purge: MIN_PURGE,
             accuracy,
             tolerance,
@@ -80,6 +86,7 @@ impl ComparisonCache {
     /// Compares two segments, returning their order.
     ///
     /// Returns `None` if either segment is horizontal.
+    /// Edits to the returned order persist until its pair is evicted or the arena changes.
     pub fn compare_segments(
         &mut self,
         segments: &Segments,
@@ -91,7 +98,30 @@ impl ComparisonCache {
         if segments[i].is_horizontal() || segments[j].is_horizontal() {
             return None;
         }
-        Some(self.compare_non_horizontal_segments(segments, i, j))
+        self.compare_non_horizontal_segments(segments, i, j);
+        if i.0 < j.0 {
+            self.inner.get_mut(&(i, j))
+        } else {
+            let key = (j, i);
+            if self.edited_flipped.contains_key(&key) {
+                self.edited_flipped.get_mut(&key)
+            } else {
+                self.flipped_key = Some(key);
+                self.flipped.as_mut()
+            }
+        }
+    }
+
+    fn save_flipped_edits(&mut self) {
+        let Some(key) = self.flipped_key.take() else {
+            return;
+        };
+        if self.flipped.as_ref().zip(self.inner.get(&key))
+            .is_some_and(|(reverse, forward)| !reverse.is_flip_of(forward))
+            && let Some(reverse) = self.flipped.take()
+        {
+            self.edited_flipped.insert(key, reverse);
+        }
     }
 
     /// Compares two segments that are not horizontal, returning their order.
@@ -112,7 +142,11 @@ impl ComparisonCache {
         let arena = segments.arena_id();
         if self.arena != Some(arena) {
             self.inner.clear();
+            self.edited_flipped.clear();
+            self.flipped_key = None;
             self.arena = Some(arena);
+        } else {
+            self.save_flipped_edits();
         }
 
         let (i, j, flipped) = if i.0 < j.0 {
@@ -120,6 +154,10 @@ impl ComparisonCache {
         } else {
             (j, i, true)
         };
+
+        if flipped && let Some(order) = self.edited_flipped.get_mut(&(i, j)) {
+            return order;
+        }
 
         let stored = match self.inner.entry((i, j)) {
             Entry::Occupied(o) => o.into_mut(),
@@ -147,10 +185,15 @@ impl ComparisonCache {
         if self.inner.len() < self.next_purge {
             return;
         }
+        self.save_flipped_edits();
         self.inner
             .retain(|(i, j), _| segments[*i].end().y >= y && segments[*j].end().y >= y);
+        self.edited_flipped.retain(|key, _| self.inner.contains_key(key));
         if self.inner.len() * 4 < self.inner.capacity() {
             self.inner.shrink_to_fit();
+        }
+        if self.edited_flipped.len() * 4 < self.edited_flipped.capacity() {
+            self.edited_flipped.shrink_to_fit();
         }
         self.next_purge = self.inner.len().saturating_mul(2).max(MIN_PURGE);
     }
@@ -179,6 +222,7 @@ impl ComparisonCache {
         f: impl FnOnce(&CurveOrder) -> R,
     ) -> R {
         self.calls = self.calls.saturating_add(1);
+        self.save_flipped_edits();
         let (i, j, flipped) = if i.0 < j.0 {
             (i, j, false)
         } else {
@@ -186,6 +230,11 @@ impl ComparisonCache {
         };
 
         // Comparisons cached for another arena do not describe this one.
+        if self.arena == Some(segments.arena_id()) && flipped
+            && let Some(order) = self.edited_flipped.get(&(i, j))
+        {
+            return f(order);
+        }
         let stored = (self.arena == Some(segments.arena_id()))
             .then(|| self.inner.get(&(i, j)))
             .flatten();
@@ -293,6 +342,10 @@ fn compute(segments: &Segments, i: SegIdx, j: SegIdx, tolerance: f64, accuracy: 
     // that are not horizontal.
     debug_assert!(!segi.is_horizontal() && !segj.is_horizontal());
 
+    if segi.start().y.max(segj.start().y) > segi.end().y.min(segj.end().y) {
+        return CurveOrder::new(segi.start().y.max(segj.start().y));
+    }
+
     let forward = if let (Some(l0), Some(l1)) = (segi.as_kurbo_line(), segj.as_kurbo_line()) {
         curve::line::intersect_lines(l0, l1, tolerance)
     } else {
@@ -312,7 +365,7 @@ mod tests {
 
     use crate::{
         SegIdx, Segments,
-        curve::{CurveOrder, Order},
+        curve::{CurveOrder, MetricsEntry, Order},
     };
 
     use super::{ComparisonCache, far_apart_margin, full_comparison, order_if_far_apart};
@@ -605,6 +658,44 @@ mod tests {
     }
 
     #[test]
+    fn comparison_contract_disjoint_cubics_have_empty_orders() {
+        let mut segments = Segments::default();
+        for y in [0.0, 2.0] {
+            let mut path = BezPath::new();
+            path.move_to((0.0, y));
+            path.curve_to((0.1, y + 0.25), (-0.1, y + 0.75), (0.0, y + 1.0));
+            segments.add_non_closed_bez_path(&path).unwrap();
+        }
+        let mut cache = ComparisonCache::new(0.01, 0.005);
+        for (a, b) in [(0, 1), (1, 0)] {
+            assert!(cache.compare_segments(&segments, SegIdx(a), SegIdx(b)).unwrap().iter().next().is_none());
+        }
+    }
+
+    #[test]
+    fn mutable_reverse_comparisons_keep_their_edits() {
+        let mut segments = Segments::default();
+        for x in [0.0, 1.0, 2.0] {
+            let mut path = BezPath::new();
+            path.move_to((x, 0.0));
+            path.line_to((x, 1.0));
+            segments.add_non_closed_bez_path(&path).unwrap();
+        }
+        let mut cache = ComparisonCache::new(0.01, 0.005);
+        let forward = cache.compare_segments(&segments, SegIdx(0), SegIdx(1)).unwrap().clone();
+        let reverse = cache.compare_segments(&segments, SegIdx(1), SegIdx(0)).unwrap();
+        reverse.metrics.entries.push(MetricsEntry { end: 0.5, depth: 7 });
+        let expected = reverse.metrics.clone();
+        let mut cloned = cache.clone();
+        assert_eq!(cache.compare_segments(&segments, SegIdx(0), SegIdx(1)).unwrap().metrics, forward.metrics);
+        cache.compare_segments(&segments, SegIdx(2), SegIdx(0)).unwrap();
+        assert_eq!(cache.compare_segments(&segments, SegIdx(1), SegIdx(0)).unwrap().metrics, expected);
+        assert_eq!(cloned.compare_segments(&segments, SegIdx(1), SegIdx(0)).unwrap().metrics, expected);
+        let other_arena = segments.clone();
+        assert_eq!(cache.compare_segments(&other_arena, SegIdx(1), SegIdx(0)).unwrap().metrics, forward.metrics);
+    }
+
+    #[test]
     fn horizontal_and_cubic() {
         let mut segments = Segments::default();
         segments.add_points([(-1.0, 1.0), (2.0, 1.0)]);
@@ -728,6 +819,16 @@ mod tests {
                 std::mem::size_of::<CurveOrder>()
             );
         }
+        for i in segments.indices() {
+            for j in segments.indices() {
+                if i != j {
+                    cmp_cache.compare_segments(&segments, i, j).unwrap();
+                }
+            }
+        }
+        cmp_cache.save_flipped_edits();
+        assert_eq!(cmp_cache.inner.len(), n * (n - 1) / 2);
+        assert!(cmp_cache.edited_flipped.is_empty());
     }
 
     #[test]

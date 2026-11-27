@@ -6,13 +6,13 @@ use polycool::Quadratic;
 
 use crate::geom;
 
-/// Generate an arbitrary float in some range.
+/// Generates a float between finite, strictly increasing bounds. Invalid bounds return an error.
 pub fn float_in_range(
     start: f64,
     end: f64,
     u: &mut Unstructured<'_>,
 ) -> Result<f64, arbitrary::Error> {
-    if start >= end {
+    if !start.is_finite() || !end.is_finite() || start >= end {
         return Err(arbitrary::Error::EmptyChoose);
     }
     let num: u32 = u.arbitrary()?;
@@ -144,6 +144,20 @@ pub fn quadratic(size: f64, u: &mut Unstructured<'_>) -> Result<Quadratic, arbit
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extreme_numeric_float_bounds_are_finite_and_increasing() {
+        for (start, end) in [
+            (f64::NAN, 1.0),
+            (0.0, f64::NAN),
+            (f64::NEG_INFINITY, 1.0),
+            (0.0, f64::INFINITY),
+            (1.0, 1.0),
+            (2.0, 1.0),
+        ] {
+            assert!(float_in_range(start, end, &mut Unstructured::new(&[0; 4])).is_err());
+        }
+    }
 
     #[test]
     fn float_in_range_handles_a_range_wider_than_f64_max() {

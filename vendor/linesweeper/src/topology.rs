@@ -65,6 +65,7 @@ thread_local! {
     /// The number of path elements that `contours_for_positions` has run winding tests over
     /// on this thread, to find the piece that holds a loop split off a contour walk.
     static CONTAINER_TEST_ELEMENTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static OUTPUT_UNITS_BEFORE_MERGE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Winding numbers for binary set operations.
@@ -191,10 +192,28 @@ impl OutputLimit {
         let Some(limit) = self.limit else {
             return true;
         };
-        let units = 1usize
-            .saturating_add(windings.clockwise.storage_units())
-            .saturating_add(windings.counter_clockwise.storage_units());
+        let Some(units) = 1usize
+            .checked_add(windings.clockwise.storage_units())
+            .and_then(|units| units.checked_add(windings.counter_clockwise.storage_units()))
+        else {
+            return false;
+        };
         match self.used.checked_add(units) {
+            Some(used) if used <= limit => {
+                self.used = used;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn replace_winding<W: WindingNumber>(&mut self, before: &W, after: &W) -> bool {
+        let Some(limit) = self.limit else {
+            return true;
+        };
+        let used = self.used.checked_sub(before.storage_units())
+            .and_then(|used| used.checked_add(after.storage_units()));
+        match used {
             Some(used) if used <= limit => {
                 self.used = used;
                 true
@@ -862,7 +881,11 @@ impl<W: WindingNumber> Topology<W> {
         #[cfg(feature = "slow-asserts")]
         ret.check_invariants();
 
-        ret.merge_coincident();
+        #[cfg(test)]
+        OUTPUT_UNITS_BEFORE_MERGE.with(|count| count.set(output.used));
+        if !ret.merge_coincident(&mut output) {
+            return Err(crate::Error::WorkLimitExceeded);
+        }
 
         #[cfg(feature = "slow-asserts")]
         ret.check_invariants();
@@ -1251,7 +1274,7 @@ impl<W: WindingNumber> Topology<W> {
     /// makes it a little bit tricky is that (except for horizontal segments)
     /// we don't know whether two segments are coincident until we've processed
     /// their second endpoint.
-    fn merge_coincident(&mut self) {
+    fn merge_coincident(&mut self, output: &mut OutputLimit) -> bool {
         // `scan_west` stays as built, because `build_scan_line_orders` reads it. This copy
         // is pointed past deleted segments as the loop finds them.
         let mut live_west = self.scan_west.clone();
@@ -1299,6 +1322,12 @@ impl<W: WindingNumber> Topology<W> {
                 // All output segments are in sweep line order, so if they're
                 // coincident then they'd better both be first halves.
                 debug_assert!(cw_nbr.first_half);
+                if !output.replace_winding(
+                    &self.winding[cw_nbr.idx].counter_clockwise,
+                    &self.winding[idx].counter_clockwise,
+                ) {
+                    return false;
+                }
                 self.delete(idx);
                 self.winding[cw_nbr.idx].counter_clockwise =
                     self.winding[idx].counter_clockwise.clone();
@@ -1308,6 +1337,7 @@ impl<W: WindingNumber> Topology<W> {
                 }
             }
         }
+        true
     }
 
     /// Returns the nearest segment west of `seg` that is not deleted, following
@@ -3421,14 +3451,19 @@ mod tests {
 
     #[test]
     fn merge_only_pieces_of_one_input_curve() {
+        use kurbo::Shape as _;
+
         // Two arches whose right legs agree to within about 1e-6. The legs are deleted as
         // coincident, and the left end of one arch meets a piece of the other at a simple point.
         // The shape's area is about 0.000962; merging across the two curves gave a contour
         // of area 900.
         let path = "M0,100 C20,0 80,0 100,100 \
                     C79.99999708333333,0 20.000011666666666,0 -0.000026249999999999998,100 Z";
-        let area = contour_area_sum(path, 1e-6);
-        assert!(area < 0.002, "area {area}");
+        let bez = BezPath::from_svg(path).unwrap();
+        let top = Topology::from_path(&bez, 1e-6).unwrap();
+        let contours = top.try_contours(|w| *w != 0).unwrap();
+        let area: f64 = contours.contours().map(|c| c.path.area().abs()).sum();
+        assert!((0.0005..0.002).contains(&area), "area {area}");
     }
 
     #[test]
@@ -4265,6 +4300,71 @@ mod tests {
         assert!(Topology::<HugeWinding>::from_paths_with_work_limit(paths, 1e-6, u64::MAX).is_ok());
         let result = Topology::<HugeWinding>::from_paths_with_limits(paths, 1e-6, u64::MAX, usize::MAX);
         assert_eq!(result.err(), Some(crate::Error::WorkLimitExceeded));
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+    struct StoredTags(std::collections::BTreeMap<usize, i32>);
+
+    impl std::ops::Add for StoredTags {
+        type Output = Self;
+
+        fn add(mut self, rhs: Self) -> Self {
+            self += rhs;
+            self
+        }
+    }
+
+    impl std::ops::AddAssign for StoredTags {
+        fn add_assign(&mut self, rhs: Self) {
+            for (tag, value) in rhs.0 {
+                *self.0.entry(tag).or_default() += value;
+            }
+            self.0.retain(|_, value| *value != 0);
+        }
+    }
+
+    impl super::WindingNumber for StoredTags {
+        type Tag = usize;
+
+        fn single(tag: usize, positive: bool) -> Self {
+            Self([(tag, if positive { 1 } else { -1 })].into_iter().collect())
+        }
+
+        fn of_tag(&self, tag: usize) -> Self {
+            Self(self.0.get(&tag).map(|value| (tag, *value)).into_iter().collect())
+        }
+
+        fn storage_units(&self) -> usize {
+            self.0.len()
+        }
+    }
+
+    #[test]
+    fn output_accounting_includes_winding_growth_when_coincident_edges_merge() {
+        let mut exercised_growth = false;
+        for reversed in [false, true] {
+            let paths: Vec<_> = [10.0, 20.0, 30.0].into_iter()
+                .map(|width| rect_bez_path(0.0, 0.0, width, 10.0, reversed)).collect();
+            let tagged = || paths.iter().enumerate().map(|(tag, path)| (path, tag));
+            let topology = Topology::<StoredTags>::from_paths_with_limits(tagged(), 1e-6, u64::MAX, usize::MAX).unwrap();
+            let before = super::OUTPUT_UNITS_BEFORE_MERGE.with(std::cell::Cell::get);
+            let stored: usize = topology.winding.inner.iter()
+                .map(|winding| 1 + winding.clockwise.0.len() + winding.counter_clockwise.0.len()).sum();
+            if stored > before {
+                exercised_growth = true;
+                let limited = Topology::<StoredTags>::from_paths_with_limits(tagged(), 1e-6, u64::MAX, before);
+                assert_eq!(limited.err(), Some(crate::Error::WorkLimitExceeded), "stored {stored}, budget {before}");
+            }
+        }
+        assert!(exercised_growth);
+    }
+
+    #[test]
+    fn output_accounting_rejects_an_overflowing_winding_storage_sum() {
+        let mut output = super::OutputLimit { used: 0, limit: Some(usize::MAX) };
+        let winding = super::HalfSegmentWindingNumbers { clockwise: HugeWinding(1), counter_clockwise: HugeWinding(0) };
+        assert!(!output.take(&winding));
+        assert_eq!(output.used, 0);
     }
 
     fn run_perturbation(ps: Vec<Perturbation<F64Perturbation>>) {

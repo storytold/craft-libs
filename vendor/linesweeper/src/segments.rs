@@ -476,18 +476,32 @@ impl Segments {
         must_be_closed: bool,
     ) -> Result<(), NonClosedPath> {
         let old_len = self.segs.len();
+        struct UnenteredBatch<'a> {
+            arena: &'a mut Segments,
+            start: usize,
+            complete: bool,
+        }
+        impl Drop for UnenteredBatch<'_> {
+            fn drop(&mut self) {
+                if !self.complete {
+                    self.arena.truncate_unentered(self.start);
+                }
+            }
+        }
+        let mut batch = UnenteredBatch { arena: self, start: old_len, complete: false };
         let mut result = Ok(());
         for p in ps {
-            let path_start = self.segs.len();
-            result = self.add_path_without_updating_enter_exit(p, must_be_closed);
+            let path_start = batch.arena.segs.len();
+            result = batch.arena.add_path_without_updating_enter_exit(p, must_be_closed);
             if result.is_err() {
                 // The failing path's segments are removed, so none is left
                 // linked to an index past the end of the arena.
-                self.truncate_unentered(path_start);
+                batch.arena.truncate_unentered(path_start);
                 break;
             }
         }
-        self.update_enter_exit(old_len);
+        batch.arena.update_enter_exit(old_len);
+        batch.complete = true;
         result
     }
 
@@ -602,13 +616,7 @@ impl Segments {
     // above. `enter` and `exit` are left alone, so this is only for segments
     // that `update_enter_exit` has not seen yet.
     fn truncate(&mut self, len: usize) {
-        self.segs.inner.truncate(len);
-        self.horizontal_decomps.inner.truncate(len);
-        self.contour_prev.inner.truncate(len);
-        self.contour_next.inner.truncate(len);
-        self.orientation.inner.truncate(len);
-        self.split_from_predecessor.inner.truncate(len);
-        self.input_segs.inner.truncate(len);
+        self.truncate_unentered(len);
     }
 
     /// Construct a segment arena from a single closed polyline.
@@ -843,6 +851,36 @@ mod tests {
             segments.split_from_predecessor,
             expected.split_from_predecessor
         );
+    }
+
+    #[test]
+    fn batch_iterator_panic_preserves_the_existing_arena() {
+        for closed in [false, true] {
+            let paths = grid_paths(4, true);
+            let mut arena = Segments::default();
+            arena.add_bez_path(&paths[0]).unwrap();
+            let expected = arena.clone();
+            let mut count = 0;
+            let iter = std::iter::from_fn(|| {
+                count += 1;
+                assert_ne!(count, 3, "iterator panic after two paths");
+                Some(&paths[count])
+            });
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if closed {
+                    arena.add_bez_paths(iter).unwrap();
+                } else {
+                    arena.add_non_closed_bez_paths(iter).unwrap();
+                }
+            }));
+            assert!(result.is_err());
+            assert_same_arena(&expected, &arena);
+            assert_eq!(arena.input_segs, expected.input_segs);
+            assert_eq!(arena.split_from_predecessor, expected.split_from_predecessor);
+            arena.check_invariants();
+            arena.add_bez_path(&paths[3]).unwrap();
+            arena.check_invariants();
+        }
     }
 
     type Events = Vec<(f64, SegIdx)>;
