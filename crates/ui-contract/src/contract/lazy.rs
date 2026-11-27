@@ -160,13 +160,13 @@ impl Lazy {
             None
         };
         // The replay audit runs a view that would replay for real in place of the replay, and compares the two.
-        let audited = settled.as_ref().filter(|_| audits(&ctx, real)).map(|(_, _, shift)| *shift);
-        if let Some((size, ran_at, shift)) = settled
+        let audited = settled.as_ref().filter(|_| audits(&ctx, real)).map(|replay| replay.shift);
+        if let Some(lazy::Replay { size, fills, handed, rect: ran_at, shift }) = settled
             && audited.is_none()
         {
             // A real replay is where the run's content went, moved with the room.
             let rect = if real { ran_at } else { Rect::from_min_size(at_start(available, rtl, size), size) };
-            let fills = if memo && !real { lazy::fills(&ctx, id, sizing) } else { None };
+            let fills = fills.filter(|_| !real);
             let took = place_unit(ui, &env, (shrink, fills), id, rect, rtl);
             let kept = if real {
                 layout_memory::backstop(&ctx, id, size);
@@ -176,6 +176,7 @@ impl Lazy {
                 }
                 kept
             } else {
+                layout_memory::hand_forward_again(&ctx, &handed);
                 // The kept real run's output, laid out in that run's room and flow: a caller that measures sizes from
                 // the extent this call takes, never from rects in it.
                 lazy::kept_output(&ctx, id)
@@ -203,7 +204,9 @@ impl Lazy {
         // Its extent in the body around it comes from its content's measure, so a change inside reaches that body. The
         // content runs in the env of `ui`, as the direct children of the body around it: a plain `Lazy` keeps their
         // line, cells and shrink step, and a memoized view starts its own room on top of it.
-        let out = layout_memory::boundary(&ctx, false, || Env::run_in(&mut child, env.clone(), |child| add(child, &mut run)));
+        let content = || layout_memory::boundary(&ctx, false, || Env::run_in(&mut child, env.clone(), |child| add(child, &mut run)));
+        // A memoized view's sizing run keeps what it handed forward with its measure, for the sizing runs that take it.
+        let (out, handed) = if memo && sizing { layout_memory::handing_forward(&ctx, content) } else { (content(), Default::default()) };
         let rect = child.min_rect();
         // The child `Ui` writes its widget rect when it drops: the record holds it as written.
         drop(child);
@@ -229,7 +232,8 @@ impl Lazy {
         }
         if view.is_some() || memo {
             let registered = real.then(|| record.as_ref().map_or_else(|| focus::transcript(&ctx, mark), |record| record.focus.clone()));
-            lazy::shown(&ctx, owner, id, sizing, lazy::Measured { size: rect.size(), key, room: available, flow: place.flow, fills }, registered);
+            let measured = lazy::Measured { size: rect.size(), key, room: available, flow: place.flow, fills };
+            lazy::shown(&ctx, owner, id, sizing, (measured, handed), registered);
         }
         if let Some(view) = view
             && real

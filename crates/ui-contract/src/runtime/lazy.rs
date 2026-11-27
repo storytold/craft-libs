@@ -20,13 +20,14 @@ use crate::runtime::env::Flow;
 use crate::runtime::focus::{self, Transcript};
 use crate::runtime::frame::{self, PerViewport};
 use crate::runtime::inputs::{self, Input};
-use crate::runtime::layout_memory;
+use crate::runtime::layout_memory::{self, Handed};
 use crate::runtime::reads::BindKey;
 use crate::runtime::replay::{self, Record};
 use crate::runtime::{Clip, Shift};
 use crate::style::EnvKey;
 use egui::emath::GuiRounding as _;
 use egui::{Context, Id, IdMap, IdSet, Layout, RecordShift, Rect, Vec2};
+use smallvec::SmallVec;
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -162,6 +163,11 @@ pub(crate) enum Decision {
     Skip(Vec2),
 }
 
+/// The most sizing measures a memoized view keeps (`Entry::measures`). A body measures a view in at most two layout
+/// contexts in a pass (a capped body or a layer with a footer drafts it at its content height, then lays it out at its
+/// room); the others keep a context that returns after a change of key or room.
+const MEASURES: usize = 4;
+
 #[derive(Clone, Default)]
 struct Entry {
     /// The scroll area the child is kept under.
@@ -173,6 +179,15 @@ struct Entry {
     sizes: [Option<Measured>; 2],
     /// The pass of the last measuring run in `sizes`.
     measuring_pass: u64,
+    /// What the sizing runs that showed a memoized view measured, one per layout context (the key of the content it
+    /// showed, the flow of the body around it and the room's size), each with the last pass that measured or took it,
+    /// the most recently used last, at most `MEASURES`. A sizing run in one of these contexts replays (`settled`). A
+    /// draft taken back keeps them (`write`): a measure is a fact of its inputs, so a view a body drafts at its content
+    /// height and then lays out at its room replays in both in the next pass. A real run keeps only the ones of its own
+    /// pass (`ran`): it may show content its key does not name (a value it read was edited), which a measure of an
+    /// earlier pass does not hold. Each keeps what its run handed forward (`layout_memory::handing_forward`), which a
+    /// replay hands forward again.
+    measures: SmallVec<[(Measured, u64, Handed); MEASURES]>,
     /// What the child registered with the focus service in the last real run that showed it. Out of view the
     /// child registers it again in its place, so Tab and F6 reach its stops; it runs while one of them holds focus
     /// or a focus request asks to reveal one.
@@ -203,6 +218,13 @@ pub(crate) struct Measured {
     pub(crate) room: Rect,
     pub(crate) flow: Flow,
     pub(crate) fills: Option<craft_behavior::Axis>,
+}
+
+impl Measured {
+    /// Whether the measure is of the content keyed `key`, in `flow` and a room of the size `room`.
+    fn of(&self, key: Key, flow: Flow, room: Vec2) -> bool {
+        self.key == key && self.flow == flow && self.room.size() == room
+    }
 }
 
 /// Where a memoized view ran: it replays only at a place of the same size, layer, layout, AccessKit state, opacity, flow
@@ -388,6 +410,25 @@ impl Entry {
     fn memo(&self) -> bool {
         self.settled.as_ref().is_some_and(|settled| matches!(settled.key, Key::Memo(_)))
     }
+
+    /// Keeps the sizing measure `measured` of the pass `pass`, with what its run handed forward, as the most recently
+    /// used, in place of the one of its layout context; the least recently used goes when `MEASURES` are kept.
+    fn keep_measure(&mut self, measured: Measured, handed: Handed, pass: u64) {
+        self.measures.retain(|(kept, ..)| !kept.of(measured.key, measured.flow, measured.room.size()));
+        if self.measures.len() == MEASURES {
+            self.measures.remove(0);
+        }
+        self.measures.push((measured, pass, handed));
+    }
+
+    /// The sizing measure of the content keyed `key` in `flow` and a room of the size `room`, with what its run handed
+    /// forward, taken in the pass `pass`: it becomes the most recently used.
+    fn measure_in(&mut self, key: Key, flow: Flow, room: Vec2, pass: u64) -> Option<(Measured, Handed)> {
+        let at = self.measures.iter().position(|(kept, ..)| kept.of(key, flow, room))?;
+        let (measured, _, handed) = self.measures.remove(at);
+        self.measures.push((measured, pass, handed.clone()));
+        Some((measured, handed))
+    }
 }
 
 impl Store {
@@ -443,7 +484,8 @@ fn with<R>(ctx: &Context, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
 
 /// Runs `f` on the store as `with` does, for a write to the entry of the child `id`: inside a draft
 /// (`layout_memory::draft`) the entry as it was goes to the draft, so a measuring run taken back leaves the entry, its
-/// extents and this pass's decisions included, as it found it.
+/// extents and this pass's decisions included, as it found it. It keeps the sizing measures the draft found
+/// (`Entry::measures`): they are facts of their inputs, not state of the pass.
 fn write<R>(ctx: &Context, id: Id, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
     let drafting = layout_memory::drafting(ctx);
     let (out, before) = with(ctx, |store, pass_nr, frame| {
@@ -455,9 +497,19 @@ fn write<R>(ctx: &Context, id: Id, f: impl FnOnce(&mut Store, u64, u64) -> R) ->
         layout_memory::note_undo(
             ctx,
             Box::new(move |ctx: &Context| {
-                PerViewport::<Store>::with(ctx, viewport, |store| match before {
-                    Some(entry) => drop(store.entries.insert(id, entry)),
-                    None => drop(store.entries.remove(&id)),
+                PerViewport::<Store>::with(ctx, viewport, |store| {
+                    let now = store.entries.remove(&id);
+                    let restored = match (before, now) {
+                        (Some(entry), None) => Some(entry),
+                        (Some(entry), Some(now)) => Some(Entry { measures: now.measures, ..entry }),
+                        (None, Some(now)) if !now.measures.is_empty() => {
+                            Some(Entry { owner: now.owner, touched: now.touched, measures: now.measures, ..Entry::default() })
+                        }
+                        (None, _) => None,
+                    };
+                    if let Some(entry) = restored {
+                        store.entries.insert(id, entry);
+                    }
                 });
             }),
         );
@@ -493,13 +545,16 @@ pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -
 }
 
 /// Records what a run that showed the child `id` found: what it measured in a run of this kind and, from a real run,
-/// what it registered with the focus service.
-pub(crate) fn shown(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, measured: Measured, registered: Option<Transcript>) {
+/// what it registered with the focus service, and from a memoized view's sizing run what it handed forward.
+pub(crate) fn shown(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, (measured, handed): (Measured, Handed), registered: Option<Transcript>) {
     write(ctx, id, |store, pass_nr, frame| {
         let entry = store.touch(owner, id, frame);
         entry.sizes[usize::from(!sizing)] = Some(measured);
         if sizing {
             entry.measuring_pass = pass_nr;
+            if matches!(measured.key, Key::Memo(_)) {
+                entry.keep_measure(measured, handed, pass_nr);
+            }
         }
         if let Some(registered) = registered {
             entry.focus = Arc::new(registered);
@@ -533,15 +588,28 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
     }
 }
 
-/// Whether the memoized view `id` adds its last real run to this pass in place of running, the extent that run took in
-/// a run of this kind (`call`), the rect the kept real run takes now and the shift its record moves by. The first real
-/// run of a pass decides from what changed since that run and from its key, and every later real run of the pass takes
-/// its answer; a real run also needs a place the run can move to (`Place::shift_to`), which a measuring run cannot
-/// tell. A measuring run asks the same each time, with its own key, and decides nothing for the pass: a call that shows
-/// other content runs and leaves the decision to the calls after it. A sizing run takes the extent the last sizing run
-/// measured of the content the kept run showed (its key) in the room it offers now and in the same flow; when that
-/// sizing run showed other content or had another room or flow, or there was none, it runs once as a measuring run,
-/// which keeps no record, so the real run still replays.
+/// How a memoized view replays (`settled`).
+pub(crate) struct Replay {
+    /// The extent its kept run takes in a run of this kind.
+    pub(crate) size: Vec2,
+    /// The axis its content filled there (`Measured::fills`).
+    pub(crate) fills: Option<craft_behavior::Axis>,
+    /// What the sizing run whose measure a sizing run takes handed forward; nothing in another run.
+    pub(crate) handed: Handed,
+    /// The rect the kept real run takes now.
+    pub(crate) rect: Rect,
+    /// The shift its record moves by.
+    pub(crate) shift: RecordShift,
+}
+
+/// Whether the memoized view `id` adds its last real run to this pass in place of running, and how (`Replay`). The
+/// first real run of a pass decides from what changed since that run and from its key, and every later real run of the
+/// pass takes its answer; a real run also needs a place the run can move to (`Place::shift_to`), which a measuring run
+/// cannot tell. A measuring run asks the same each time, with its own key, and decides nothing for the pass: a call
+/// that shows other content runs and leaves the decision to the calls after it. A sizing run takes the extent a sizing
+/// run measured of the content the kept run showed (its key) in a room of the size it offers now and in the same flow
+/// (`Entry::measures`), and hands forward again what that run handed forward, which content outside the view reads in
+/// the pass; when none did, it runs once as a measuring run, which keeps no record, so the real run still replays.
 ///
 /// It replays when its last run was in an earlier pass, of this frame or an earlier one, and since then:
 /// - nothing in it moves: no animation off its end value, no repaint asked from inside it, no texture it shows still
@@ -572,15 +640,7 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - no framework input its run read outside its props has moved (`runtime::inputs`), the scroll view a nested `Lazy`
 ///   child of it decided by is the same (moved with it, `moved`), no command waits for a command scope instance of
 ///   it, and no close waits for a layer it shows.
-pub(crate) fn settled(
-    ctx: &Context,
-    owner: Option<Id>,
-    id: Id,
-    call: Call,
-    view: Option<View>,
-    key: Key,
-    moving: &[Id],
-) -> Option<(Vec2, Rect, RecordShift)> {
+pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, call: Call, view: Option<View>, key: Key, moving: &[Id]) -> Option<Replay> {
     let (place, sizing, flow) = match call {
         Call::Real(place) => (Some(place), None, place.flow),
         Call::Measuring { room, flow } => (None, room, flow),
@@ -633,24 +693,26 @@ pub(crate) fn settled(
         }
         settled.and_then(|(moved, settled)| {
             // An extent depends on the room's size, not on where the room is.
-            let size = match sizing {
+            let (size, fills, handed) = match sizing {
                 Some(room) => {
-                    entry.sizes[0]
-                        .filter(|measured| measured.key == settled.key && measured.flow == flow && measured.room.size() == room.size())?
-                        .size
+                    let (measured, handed) = entry.measure_in(settled.key, flow, room.size(), pass_nr)?;
+                    (measured.size, measured.fills, handed)
                 }
-                None => match entry.sizes[1].filter(|measured| measured.key == settled.key && measured.flow == flow) {
-                    Some(measured) => measured.size,
-                    // A real run's place has the kept run's flow (`Place::shift_to`); a measuring run checks it here.
-                    None => (settled.place.flow == flow).then(|| settled.rect.size())?,
-                },
+                None => {
+                    let fills = entry.sizes[1].or(entry.sizes[0]).and_then(|measured| measured.fills);
+                    match entry.sizes[1].filter(|measured| measured.key == settled.key && measured.flow == flow) {
+                        Some(measured) => (measured.size, fills, Handed::default()),
+                        // A real run's place has the kept run's flow (`Place::shift_to`); a measuring run checks it here.
+                        None => ((settled.place.flow == flow).then(|| settled.rect.size())?, fills, Handed::default()),
+                    }
+                }
             };
-            Some((size, moved, settled))
+            Some((size, fills, handed, moved, settled))
         })
     });
     // The pointer over it, a press that started on it, the memory of the components it showed, the framework inputs it
     // read and the commands queued for its instances are read outside the store.
-    let (size, Moved { shift, with_clip }, settled) = settled?;
+    let (size, fills, handed, Moved { shift, with_clip }, settled) = settled?;
     let rect = shift.rect(settled.rect);
     // The scroll view a nested child decided by: the run's, moved with the record, while the clip moved with it; a run
     // that lay wholly in its clip ran every nested child, which holds at any view.
@@ -670,7 +732,7 @@ pub(crate) fn settled(
         }
         return None;
     }
-    Some((size, rect, shift))
+    Some(Replay { size, fills, handed, rect, shift })
 }
 
 /// Whether something a memoized view's run read outside its props moved since: a framework input it read has another
@@ -783,6 +845,7 @@ pub(crate) struct Ran {
 /// Keeps the real run `record` of the memoized view `id`, which ran at `place` and took `rect`. A run in a pass egui
 /// will discard keeps none: egui paints nothing of that pass (`Painter::is_visible` is false in it), so the run registers
 /// invisible widgets and no nodes, which a shown pass's replay must not add. The kept record stays the last shown pass's.
+/// The view keeps the sizing measures of this pass only (`Entry::measures`).
 pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rect, Ran { key, edits, seen, view, output }: Ran) {
     if ctx.will_discard() {
         return;
@@ -800,6 +863,7 @@ pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rec
         settled.pass = pass_nr;
         if let Some(entry) = store.entries.get_mut(&id) {
             entry.settled = Some(Arc::new(settled));
+            entry.measures.retain(|(_, seen, _)| *seen == pass_nr);
         }
     });
 }
