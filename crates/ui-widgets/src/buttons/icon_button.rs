@@ -172,11 +172,19 @@ impl Component for IconButton<'_> {
     fn style(cx: &StyleCx<'_>, _: IconButtonStyleKey) -> IconButtonStyle {
         let face = face::icon_face(cx);
         let marker = MarkerStyle::of(cx);
+        let (mut surface, mut glyph) = (face.surface, face.glyph);
+        // On a side menu's brand surface the glyph reads in the menu's ink and its bands lie over the brand colour, as a
+        // `Button` row's do.
+        if cx.env::<super::ControlPlace>() == super::ControlPlace::SideMenu {
+            let (ink, fill) = super::button::side_menu_ink(cx);
+            glyph.color = ink;
+            surface.fill = fill;
+        }
         IconButtonStyle {
-            surface: face.surface,
+            surface,
             metrics: face.metrics,
             focus: face::focus(cx),
-            glyph: face.glyph,
+            glyph,
             marker: marker.side,
             marker_color: marker.color,
             marker_edge: marker.edge,

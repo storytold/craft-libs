@@ -274,7 +274,7 @@ pub(super) struct Placed {
 /// Before its size is known (a popup's first, hidden pass) it takes no side and its body is offered `content_room`, so
 /// the size it measures decides the side.
 pub(super) fn placement(ctx: &Context, layer: &Layer<'_>, covers: bool, size: Option<egui::Vec2>, bounds: Rect, anchor: Rect) -> Placed {
-    let rtl = layer.env.direction.is_rtl();
+    let rtl = layer.env.layer_direction().is_rtl();
     let cap = cap(layer.overlay, bounds, anchor);
     match &layer.overlay.place {
         Place::Anchored { side, align, flips_across, offset, clear, .. } => {

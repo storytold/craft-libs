@@ -270,7 +270,7 @@ pub(super) fn children(xml: &str, container: &str, group: &str) -> (Vec<(String,
 
 /// `xml` (a part WordCraft wrote) with `container`'s children as read: the file's (those of
 /// `group` in `defs`, in `order`; `pick` may choose WordCraft's instead, or neither), then
-/// WordCraft's own the file had none of by that key.
+/// WordCraft's own the file had none of by that key (as `fresh` gives them, by key and markup).
 fn with_as_read(
     xml: &str,
     container: &str,
@@ -278,6 +278,7 @@ fn with_as_read(
     defs: &BTreeMap<String, Arc<str>>,
     order: &[String],
     pick: &dyn Fn(&str, &str, Option<&str>) -> Option<String>,
+    fresh: &dyn Fn(&str, &str) -> String,
 ) -> String {
     let (kids, content) = children(xml, container, group);
     let Some((from, to)) = content else { return xml.to_string() };
@@ -295,7 +296,7 @@ fn with_as_read(
         if !defs.contains_key(k)
             && let Some(x) = xml.get(*a..*b)
         {
-            body.push_str(x);
+            body.push_str(&fresh(k, x));
         }
     }
     let (Some(head), Some(tail)) = (xml.get(..from), xml.get(to..)) else { return xml.to_string() };
@@ -313,14 +314,198 @@ pub(super) fn drawing_def(xml: &str) -> bool {
 
 /// `styles` (a `styles.xml` WordCraft wrote) with its `office:styles` as read: every kept
 /// child of the file's, then WordCraft's own children the file had no such of. A drawing's
-/// definition both have stays WordCraft's (see [`drawing_def`]). For a document whose style
-/// definitions are as read.
-pub(super) fn with_common_as_read(styles: &str, defs: &BTreeMap<String, Arc<str>>, order: &[String]) -> String {
-    with_as_read(styles, "office:styles", "common", defs, order, &|_, d, ours| match ours {
-        Some(o) if drawing_def(o) => Some(o.to_string()),
+/// definition both have stays WordCraft's (see [`drawing_def`]), as does one in `changed`, which
+/// the document has changed since it was read. One in `changed` that WordCraft no longer writes
+/// (a deleted style) goes.
+pub(super) fn with_common_as_read(
+    styles: &str,
+    defs: &BTreeMap<String, Arc<str>>,
+    order: &[String],
+    changed: &BTreeSet<String>,
+    rewritten: &BTreeMap<String, Option<String>>,
+    read: &std::collections::HashMap<String, String>,
+) -> String {
+    let pick = |k: &str, d: &str, ours: Option<&str>| match ours {
+        _ if rewritten.contains_key(k) => rewritten.get(k).cloned().flatten(),
+        Some(o) if drawing_def(o) || changed.contains(k) => Some(o.to_string()),
+        None if changed.contains(k) => None,
         // (The default graphic style is the file's: WordCraft's drawings say what they need.)
         _ => Some(d.to_string()),
-    })
+    };
+    // A style of WordCraft's own derives from (or is followed by) the file's style a style was
+    // read from, under the file's name ([`file_names`]): not WordCraft's copy of it, nor an
+    // unread namesake.
+    let fresh = |k: &str, d: &str| {
+        let family = if k.ends_with("|text") { "|text" } else { "" };
+        renamed(d, &|attr, v| (attr != "style:name").then(|| read.get(&format!("{v}{family}")).cloned()).flatten())
+    };
+    with_as_read(styles, "office:styles", "common", defs, order, &pick, &fresh)
+}
+
+/// What becomes of the file's styles (`defs`) that `changed` touches, by their keys: WordCraft's
+/// definition from `now` (all it would write) under the file's names, its parent and next style
+/// included, or `None` for a style it no longer has. `ids` gives the style id the import read a
+/// file's style into ([`KeptXml::style_ids`]), `ours` the name WordCraft writes an id under:
+/// paragraphs written as read name the file's. A style the import didn't read is WordCraft's only
+/// under its own name, so another of the file's styles WordCraft would have under the same id
+/// (`Base_20_Style` beside `BaseStyle`) is left alone, as is one the import didn't read named as
+/// WordCraft names one it did (`MyCustom` beside `My_20_Custom`).
+///
+/// [`KeptXml::style_ids`]: craft_wordmodel::kept::KeptXml::style_ids
+pub(super) fn rewritten_defs(
+    now: &str,
+    defs: &BTreeMap<String, Arc<str>>,
+    changed: &BTreeSet<String>,
+    ids: &BTreeMap<String, String>,
+    ours: &dyn Fn(&str) -> String,
+) -> BTreeMap<String, Option<String>> {
+    use std::collections::{HashMap, HashSet};
+    // A common style's name and its family's key suffix: a text style's name isn't a paragraph
+    // style's.
+    let style_of = |key: &str| {
+        let rest = key.strip_prefix("common:")?;
+        match rest.strip_suffix("|text") {
+            Some(name) => Some((name.to_string(), "|text")),
+            None => (!rest.contains('|')).then(|| (rest.to_string(), "")),
+        }
+    };
+    // Each of the file's styles, its family and the name WordCraft writes it under; and by that
+    // name and family, the file's name (the first the import read into it).
+    let mut styles_of: Vec<(&String, String, &str, String)> = Vec::new();
+    let mut theirs: HashMap<(&str, String), String> = HashMap::new();
+    for key in defs.keys() {
+        let Some((name, family)) = style_of(key) else { continue };
+        let mine = match ids.get(key) {
+            Some(id) => {
+                let mine = ours(id);
+                if mine != name {
+                    theirs.entry((family, mine.clone())).or_insert_with(|| name.clone());
+                }
+                mine
+            }
+            None => name.clone(),
+        };
+        styles_of.push((key, name, family, mine));
+    }
+    // The names WordCraft writes the styles the import read under, by family: one of the file's
+    // styles the import didn't read but named so (`MyCustom` beside `My_20_Custom`) isn't theirs.
+    let read: HashSet<(&str, &str)> =
+        styles_of.iter().filter(|(key, ..)| ids.contains_key(*key)).map(|(_, _, family, mine)| (*family, mine.as_str())).collect();
+    let (kids, _) = children(now, "office:styles", "common");
+    let kids: HashMap<String, (usize, usize)> = kids.into_iter().collect();
+    let mut out = BTreeMap::new();
+    for (key, name, family, mine) in &styles_of {
+        let (key, name, family) = (*key, name, *family);
+        let read_so = !ids.contains_key(key) && read.contains(&(family, mine.as_str()));
+        let mine = format!("common:{mine}{family}");
+        if !changed.contains(&mine) {
+            continue;
+        }
+        if read_so {
+            out.insert(key.clone(), defs.get(key).map(|d| d.to_string()));
+            continue;
+        }
+        // Rewritten even under its own name: its parent or next style may have another.
+        let def = kids.get(&mine).and_then(|(a, b)| now.get(*a..*b)).map(|d| {
+            renamed(d, &|attr, v| match attr {
+                // Two of the file's names can be one of WordCraft's: a style keeps its own.
+                "style:name" => Some(name.clone()),
+                _ => theirs.get(&(family, v.to_string())).cloned(),
+            })
+        });
+        out.insert(key.clone(), def);
+    }
+    out
+}
+
+/// The file's names for the styles the import read under another name than WordCraft writes them
+/// under (`ours`): by that name with its family's key suffix (`BaseStyle`, `BaseStyle|text`),
+/// unescaped, the first the import read into it where several were.
+pub(super) fn file_names(ids: &BTreeMap<String, String>, ours: &dyn Fn(&str) -> String) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for (key, id) in ids {
+        let Some(rest) = key.strip_prefix("common:") else { continue };
+        let (name, family) = rest.strip_suffix("|text").map_or((rest, ""), |n| (n, "|text"));
+        let mine = format!("{}{family}", ours(id));
+        if mine != rest {
+            out.entry(mine).or_insert_with(|| name.to_string());
+        }
+    }
+    out
+}
+
+/// The file's names for the styles the import read whose name as WordCraft writes them (`ours`)
+/// is a style of the file's the import didn't read (`MyCustom` beside `My_20_Custom`): by that
+/// name with its family's key suffix (`MyCustom`, `MyCustom|text`), unescaped. That namesake keeps
+/// its own definition ([`rewritten_defs`]), so markup written from the model names the file's
+/// style the text was read with instead.
+pub(super) fn read_names(
+    defs: &BTreeMap<String, Arc<str>>,
+    ids: &BTreeMap<String, String>,
+    ours: &dyn Fn(&str) -> String,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for (key, id) in ids {
+        let Some(rest) = key.strip_prefix("common:") else { continue };
+        let (name, family) = rest.strip_suffix("|text").map_or((rest, ""), |n| (n, "|text"));
+        let mine = format!("{}{family}", ours(id));
+        let namesake = format!("common:{mine}");
+        if mine != rest && defs.contains_key(&namesake) && !ids.contains_key(&namesake) {
+            out.entry(mine).or_insert_with(|| name.to_string());
+        }
+    }
+    out
+}
+
+/// `def` (markup WordCraft wrote) with the values of its `style:name`, `style:parent-style-name`
+/// and `style:next-style-name` attributes that `to` gives another name for (by attribute and
+/// value) renamed to that, escaped. One pass: WordCraft writes these names unescaped (they are
+/// letters, digits and `_xNN_`).
+fn renamed(def: &str, to: &dyn Fn(&str, &str) -> Option<String>) -> String {
+    const ATTRS: [&str; 3] = ["style:name", "style:parent-style-name", "style:next-style-name"];
+    let mut out = String::with_capacity(def.len());
+    let mut rest = def;
+    while let Some(at) = rest.find("=\"") {
+        let (head, tail) = rest.split_at(at + 2);
+        let attr = head.get(..at).and_then(|h| h.rsplit(|c: char| c.is_whitespace()).next()).unwrap_or("");
+        let Some(end) = tail.find('"') else { break };
+        let (value, tail) = tail.split_at(end);
+        out.push_str(head);
+        match ATTRS.contains(&attr).then(|| to(attr, value)).flatten() {
+            Some(name) => out.push_str(&super::writer::x(&name)),
+            None => out.push_str(value),
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Each child of `office:styles` in `styles` (a `styles.xml` WordCraft wrote), as a hash by its
+/// key: what to compare to tell which definitions a document has changed since it was read.
+pub(super) fn prints(styles: &str) -> BTreeMap<String, u64> {
+    use std::hash::{Hash, Hasher};
+    let (kids, _) = children(styles, "office:styles", "common");
+    kids.into_iter()
+        .filter_map(|(key, (a, b))| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            styles.get(a..b)?.hash(&mut h);
+            Some((key, h.finish()))
+        })
+        .collect()
+}
+
+/// The keys whose definition differs between `then` and `now` ([`prints`]), and those no longer
+/// in `now` (a deleted style). Standard goes with
+/// the default paragraph style: WordCraft writes Normal in the default style, and Standard empty
+/// over it, so the file's own Standard would hide a change to Normal.
+pub(super) fn changed(then: &BTreeMap<String, u64>, now: &BTreeMap<String, u64>) -> BTreeSet<String> {
+    let mut out: BTreeSet<String> = now.iter().filter(|(k, v)| then.get(*k) != Some(*v)).map(|(k, _)| k.clone()).collect();
+    out.extend(then.keys().filter(|k| !now.contains_key(*k)).cloned());
+    if out.contains("common~style:default-style~paragraph") {
+        out.insert("common:Standard".to_string());
+    }
+    out
 }
 
 /// `styles` (a `styles.xml` WordCraft wrote) with its page layouts, master pages and their
@@ -328,8 +513,9 @@ pub(super) fn with_common_as_read(styles: &str, defs: &BTreeMap<String, Arc<str>
 /// document whose page setup is as read.
 pub(super) fn with_pages_as_read(styles: &str, defs: &BTreeMap<String, Arc<str>>, order: &[String]) -> String {
     let keep_file = |_: &str, d: &str, _: Option<&str>| Some(d.to_string());
-    let s = with_as_read(styles, "office:automatic-styles", "sauto", defs, order, &keep_file);
-    with_as_read(&s, "office:master-styles", "master", defs, order, &keep_file)
+    let as_is = |_: &str, d: &str| d.to_string();
+    let s = with_as_read(styles, "office:automatic-styles", "sauto", defs, order, &keep_file, &as_is);
+    with_as_read(&s, "office:master-styles", "master", defs, order, &keep_file, &as_is)
 }
 
 /// Attribute names whose values name a definition kept markup may refer to.

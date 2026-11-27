@@ -3,6 +3,7 @@
 
 use super::column_group::{ColumnGroup, Columns};
 use crate::contract::InBar;
+use crate::runtime::access::scope;
 use crate::runtime::egui::{alloc, child};
 use crate::runtime::env::{ColumnSweep, Env, RowLine, Shrink};
 use crate::runtime::layout_memory;
@@ -546,6 +547,12 @@ pub(crate) struct ShrinkReports(IdMap<Vec<Reported>>);
 #[derive(Default)]
 pub(crate) struct LeastReports(IdMap<IdMap<f32>>);
 
+/// How much the leaves that fill each `Row` body under a label need at their least beyond what they took in its first
+/// sweep (less where they took more), by row id: the row adds it to its units' least widths as the least its label
+/// leaves it.
+#[derive(Default)]
+pub(crate) struct FillLeasts(IdMap<f32>);
+
 /// How far the units of each `Row` body asked for one this pass reach past the row's room at their ideal widths, by
 /// row id: `None` for a row whose units fit.
 #[derive(Default)]
@@ -725,6 +732,16 @@ fn level_of(ctx: &egui::Context, row: Id, unit: Id) -> (usize, Option<f32>) {
     // A level is a small whole number written as `level as f32`: the cast back is exact.
     layout_memory::shrink(ctx, shrink_key(row, unit))
         .map_or((0, None), |(found, _)| (found.took.y.max(0.0) as usize, Some(found.took.x).filter(|width| width.is_finite() && *width > 0.0)))
+}
+
+/// Reports the least width `least` of the leaf `leaf` that fills the row `row`, which took `took` in the row's first
+/// sweep, to a row that sums its controls' least widths for its label (`FillLeasts`).
+pub(crate) fn report_fill_least(ctx: &egui::Context, row: Id, took: f32, least: f32) {
+    pass_state::with::<FillLeasts, _>(ctx, |reports| {
+        if let Some(sum) = reports.0.get_mut(&row) {
+            *sum += least - took;
+        }
+    });
 }
 
 /// Reports the least width of the body unit `body` of the row `row` that asks for it.
@@ -984,11 +1001,17 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         }
         again
     };
-    let (inner, rect, mut leaves, fixed, probe, again) = crate::contract::keeping_ids(&ctx, || {
+    // A row that is the first control under a label holds every control the label's placement must leave room for.
+    let labelled = scope::label_awaiting_min(&ctx);
+    let (inner, rect, mut leaves, fixed, fills, probe, again) = crate::contract::keeping_ids(&ctx, || {
         let mut first = laid_out_child(ui, layout);
         pass_state::with::<ShrinkReports, _>(&ctx, |reports| reports.0.insert(id, Vec::new()));
+        if labelled.is_some() {
+            pass_state::with::<FillLeasts, _>(&ctx, |reports| reports.0.insert(id, 0.0));
+        }
         let inner = sweep(&mut first, Shrink::Count(id), &mut body);
         let leaves = pass_state::with::<ShrinkReports, _>(&ctx, |reports| reports.0.remove(&id)).unwrap_or_default();
+        let fills = pass_state::with::<FillLeasts, _>(&ctx, |reports| reports.0.remove(&id)).unwrap_or_default();
         let rect = first.min_rect();
         let fixed = rect.width() - leaves.iter().map(|leaf| leaf.took).sum::<f32>();
         let shortfall = fixed + leaves.iter().map(|leaf| leaf.widths.ideal).sum::<f32>() - room;
@@ -996,9 +1019,10 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         if short {
             pass_state::with::<RowShortfalls, _>(&ctx, |asked| asked.0.get_mut(&id).map(|slot| *slot = Some(shortfall)));
         }
-        let probe = room.is_finite() && short && leaves.iter().any(|leaf| leaf.body);
+        // A row under a label asks its bodies for their least whatever its room: the label's placement needs it.
+        let probe = (labelled.is_some() || (room.is_finite() && short)) && leaves.iter().any(|leaf| leaf.body);
         let again = !probe && settle(&leaves, fixed);
-        ((inner, rect, leaves, fixed, probe, again), probe || again)
+        ((inner, rect, leaves, fixed, fills, probe, again), probe || again)
     });
     let again = again || probe;
     if probe {
@@ -1019,6 +1043,9 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
             }
         }
         settle(&leaves, fixed);
+    }
+    if let Some(container) = labelled {
+        scope::record_row_min(&ctx, container, fixed + fills + leaves.iter().map(|leaf| leaf.widths.least).sum::<f32>());
     }
     if again {
         child::block(ui, None, layout, |ui| sweep(ui, Shrink::Apply(id), &mut body)).0

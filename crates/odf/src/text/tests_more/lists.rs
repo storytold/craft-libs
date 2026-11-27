@@ -166,3 +166,316 @@ fn list_level_positions_are_read_and_written() {
     assert_eq!((c.indent, c.hanging, c.align), (a.indent, a.hanging, a.align));
     assert!((e.indent - b.indent).abs() < 0.01 && (e.hanging - b.hanging).abs() < 0.01);
 }
+
+#[test]
+fn a_list_items_further_paragraphs_are_paragraphs_with_no_number() {
+    // LibreOffice writes an unnumbered entry as an item's second paragraph. It was joined to the
+    // first by a line break, losing its paragraph, and so the first's markup too.
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="1"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment fo:margin-left="1in" fo:text-indent="-0.25in"/></style:list-level-properties></text:list-level-style-number></text:list-style></office:styles></office:document-styles>"#
+    );
+    let body = r#"<text:list text:style-name="L"><text:list-header><text:p>Header</text:p></text:list-header><text:list-item><text:p>One</text:p><text:p>Still one</text:p><text:p>And again</text:p></text:list-item><text:list-item><text:p>Two</text:p></text:list-item></text:list><text:p>After</text:p>"#;
+    let content = format!("<office:document-content {NS_T}><office:body><office:text>{body}</office:text></office:body></office:document-content>");
+    let shape = |d: &craft_wordmodel::Document| {
+        d.body.iter().filter_map(|b| b.as_para()).map(|p| (p.text.clone(), p.props.numbering.is_some(), p.props.indent_left)).collect::<Vec<_>>()
+    };
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let want = |a: &[(String, bool, Option<f32>)]| {
+        let row = |t: &str| a.iter().find(|r| r.0 == t).unwrap_or_else(|| panic!("{t} in {a:?}"));
+        assert_eq!(a.len(), 6, "each its own paragraph: {a:?}");
+        for t in ["Header", "Still one", "And again"] {
+            assert!(!row(t).1, "{t} has no number: {a:?}");
+            assert_eq!(row(t).2, Some(72.0), "{t} at the item's text: {a:?}");
+        }
+        for t in ["One", "Two"] {
+            assert!(row(t).1, "{t} is numbered: {a:?}");
+        }
+        assert!(!row("After").1);
+    };
+    want(&shape(&d));
+    // The numbers go on past the unnumbered paragraph: one list.
+    let nums: Vec<u32> = d.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.numbering.map(|n| n.num)).collect();
+    assert_eq!(nums.len(), 2);
+    assert_eq!(nums[0], nums[1], "{nums:?}");
+    // And so do they written from the model, and written as read.
+    for saved in [crate::text::tests::export_model(&d).unwrap(), export(&d).unwrap()] {
+        let back = import(&saved).unwrap();
+        want(&shape(&back));
+        assert_eq!(back.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == "Header").unwrap().props.list_item, Some(0));
+        let nums: Vec<u32> = back.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.numbering.map(|n| n.num)).collect();
+        assert_eq!(nums[0], nums[1], "{nums:?}");
+    }
+    // Edited, an unnumbered paragraph is saved as edited, not as the list's kept markup said, and
+    // the list around it stays one.
+    for t in ["Header", "Still one"] {
+        let mut d = import(&package(&content, Some(&styles))).unwrap();
+        let i = d.body.iter().position(|b| b.as_para().is_some_and(|p| p.text == t)).unwrap();
+        d.insert_text(&craft_wordmodel::Pos::body(i, 0), "Edited ", &Default::default()).unwrap();
+        let back = import(&export(&d).unwrap()).unwrap();
+        let rows = shape(&back);
+        assert_eq!(rows.len(), 6, "each its own paragraph: {rows:?}");
+        assert!(!rows.iter().any(|r| r.0 == t), "{t} was edited: {rows:?}");
+        let row = rows.iter().find(|r| r.0 == format!("Edited {t}")).unwrap_or_else(|| panic!("the edit: {rows:?}"));
+        assert_eq!((row.1, row.2), (false, Some(72.0)), "{t}: no number, at the item's text: {rows:?}");
+        let nums: Vec<u32> = back.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.numbering.map(|n| n.num)).collect();
+        assert_eq!(nums.len(), 2, "{rows:?}");
+        assert_eq!(nums[0], nums[1], "{nums:?}");
+    }
+}
+
+/// A level first used after an unnumbered paragraph is still the file's: a bulleted sublist stays
+/// bulleted, a numbered one under bullets stays numbered, read and written from the model.
+#[test]
+fn a_sublist_after_an_unnumbered_paragraph_keeps_its_levels() {
+    let open = |first: &str, second: &str| {
+        let styles = format!(
+            r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L">{first}{second}</text:list-style></office:styles></office:document-styles>"#
+        );
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text><text:list text:style-name="L"><text:list-item><text:p>One</text:p><text:p>More</text:p><text:list><text:list-item><text:p>Sub</text:p></text:list-item></text:list></text:list-item></text:list></office:text></office:body></office:document-content>"#
+        );
+        import(&package(&content, Some(&styles))).unwrap()
+    };
+    let sub = |d: &Document| {
+        let p = d.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == "Sub").unwrap();
+        let n = p.props.numbering.unwrap();
+        d.numbering.level(n.num, n.level).map(|l| (n.level, l.format, l.text.clone(), l.start)).unwrap()
+    };
+    let number = |level: u8, format: &str, start: u8| {
+        format!(r#"<text:list-level-style-number text:level="{level}" style:num-format="{format}" style:num-suffix="." text:start-value="{start}"/>"#)
+    };
+    let bullet = |level: u8| format!(r#"<text:list-level-style-bullet text:level="{level}" text:bullet-char="–"/>"#);
+    let d = open(&number(1, "1", 1), &bullet(2));
+    assert_eq!(sub(&d), (1, NumFormat::Bullet, "–".to_string(), 1));
+    assert_eq!(sub(&import(&crate::text::tests::export_model(&d).unwrap()).unwrap()), sub(&d), "written from the model");
+    let d = open(&bullet(1), &number(2, "i", 3));
+    let (level, format, _, start) = sub(&d);
+    assert_eq!((level, format, start), (1, NumFormat::LowerRoman, 3));
+    assert_eq!(sub(&import(&crate::text::tests::export_model(&d).unwrap()).unwrap()), sub(&d), "written from the model");
+}
+
+/// A list item's further paragraph stays in its item in HTML and Markdown: the list goes on after it.
+#[test]
+fn a_list_items_further_paragraph_stays_in_it_in_html_and_markdown() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="1" style:num-suffix="."/></text:list-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:list text:style-name="L"><text:list-item><text:p>One</text:p><text:p>Cont</text:p></text:list-item><text:list-item><text:p>Two</text:p></text:list-item></text:list></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let html = craft_html::doc::export(&d);
+    assert_eq!(html.matches("<ol").count(), 1, "{html}");
+    assert!(html.contains("<p>Cont</p>"), "{html}");
+    let md = craft_markdown::export(&d);
+    assert!(md.contains("1. One\n\n   Cont\n\n2. Two"), "{md}");
+}
+
+/// Only a list item's own further paragraph stays in it: an indented paragraph between two lists
+/// joined by `text:continue-list` ends the list, and a last item's further paragraph (a one-item
+/// list's too) stays in it.
+#[test]
+fn only_an_items_own_further_paragraph_stays_in_it() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="1" style:num-suffix="."/></text:list-style></office:styles></office:document-styles>"#
+    );
+    let open = |body: &str| {
+        // (An indent of its own: LibreOffice writes one as an automatic style.)
+        let auto = r#"<office:automatic-styles><style:style style:name="Ind" style:family="paragraph"><style:paragraph-properties fo:margin-left="0.5in" fo:text-indent="0in"/></style:style></office:automatic-styles>"#;
+        let content =
+            format!("<office:document-content {NS_T}>{auto}<office:body><office:text>{body}</office:text></office:body></office:document-content>");
+        import(&package(&content, Some(&styles))).unwrap()
+    };
+    // A paragraph of its own between two parts of one list.
+    let d = open(
+        r#"<text:list xml:id="a" text:style-name="L"><text:list-item><text:p>One</text:p></text:list-item></text:list><text:p text:style-name="Ind">Between</text:p><text:list text:continue-list="a" text:style-name="L"><text:list-item><text:p>Two</text:p></text:list-item></text:list>"#,
+    );
+    let between = d.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == "Between").unwrap();
+    assert_eq!(between.props.indent_left, Some(36.0));
+    let html = craft_html::doc::export(&d);
+    assert_eq!(html.matches("<ol").count(), 2, "{html}");
+    assert!(!html.contains("<p>Between</p></li>") && !html.contains("<li>One<p>"), "{html}");
+    let md = craft_markdown::export(&d);
+    assert!(md.contains("\n\nBetween\n\n") && !md.contains(" Between"), "{md}");
+    // A last item's further paragraph, and a one-item list's.
+    for body in [
+        r#"<text:list text:style-name="L"><text:list-item><text:p>One</text:p></text:list-item><text:list-item><text:p>Two</text:p><text:p>Cont</text:p></text:list-item></text:list><text:p>After</text:p>"#,
+        r#"<text:list text:style-name="L"><text:list-item><text:p>Two</text:p><text:p>Cont</text:p></text:list-item></text:list><text:p>After</text:p>"#,
+    ] {
+        let d = open(body);
+        let html = craft_html::doc::export(&d);
+        assert!(html.contains("<li>Two<p>Cont</p></li>"), "{html}");
+        let md = craft_markdown::export(&d);
+        assert!(md.contains("1. Two\n\n   Cont\n\nAfter") || md.contains("2. Two\n\n   Cont\n\nAfter"), "{md}");
+    }
+}
+
+/// Written from the model, a list item's further paragraph is in its `text:list-item`, after the
+/// item's sublist, and the list stays one (#5723 review).
+#[test]
+fn a_further_paragraph_written_from_the_model_stays_in_its_item() {
+    let d = craft_markdown::import("1. One\n\n   Cont\n    - Sub\n\n   More\n\n2. Two\n");
+    let xml = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
+    let one = xml.find(">One<").unwrap();
+    let body = xml.get(one..).unwrap();
+    assert!(body.contains("Cont</text:p><text:list>"), "{xml}");
+    assert!(body.contains("Sub</text:p></text:list-item></text:list><text:p"), "{xml}");
+    assert!(body.contains("More</text:p></text:list-item><text:list-item><text:p"), "{xml}");
+    assert_eq!(xml.matches("<text:list xml:id").count(), 1, "one list: {xml}");
+    let back = import(&crate::text::tests::export_model(&d).unwrap()).unwrap();
+    let rows: Vec<_> =
+        back.body.iter().filter_map(|b| b.as_para()).map(|p| (p.text.clone(), p.props.numbering.is_some(), p.props.list_item)).collect();
+    assert_eq!(
+        rows,
+        [
+            ("One".to_string(), true, None),
+            ("Cont".to_string(), false, Some(0)),
+            ("Sub".to_string(), true, None),
+            ("More".to_string(), false, Some(0)),
+            ("Two".to_string(), true, None)
+        ],
+        "{xml}"
+    );
+}
+
+/// A list item's further paragraph opening or closing a section kept as read ends the list there,
+/// as an item doing so does: the section opens before it, or closes after it, not somewhere past.
+#[test]
+fn a_further_paragraph_opening_or_closing_a_section_ends_the_list_there() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="1" style:num-suffix="."/></text:list-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_X}><office:body><office:text><text:section text:name="S"><text:list xml:id="l1" text:style-name="L"><text:list-item><text:p>Zero</text:p></text:list-item><text:list-item><text:p>One</text:p><text:p>Cont</text:p></text:list-item></text:list></text:section><text:list text:style-name="L" text:continue-list="l1"><text:list-item><text:p>Two</text:p></text:list-item></text:list></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    // Edited, so the list is written from the model; the section's paragraphs are as read.
+    let i = d.body.iter().position(|b| b.as_para().is_some_and(|p| p.text == "One")).unwrap();
+    d.insert_text(&craft_wordmodel::Pos::body(i, 0), "Edited ", &Default::default()).unwrap();
+    let c = crate::text::tests::content_of(&export(&d).unwrap());
+    let (close, two) = (c.find("</text:section>"), c.find(">Two<"));
+    assert!(close.is_some() && two.is_some() && close < two, "the section closes before Two: {c}");
+    assert!(c.find(">Cont<") < close, "{c}");
+    // And one opening a section starts after the list: the section opens before it.
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_X}><office:body><office:text><text:list xml:id="l1" text:style-name="L"><text:list-item><text:p>One</text:p></text:list-item></text:list><text:section text:name="S"><text:list text:style-name="L" text:continue-list="l1"><text:list-header><text:p>Header</text:p></text:list-header><text:list-item><text:p>Two</text:p></text:list-item></text:list></text:section></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    let i = d.body.iter().position(|b| b.as_para().is_some_and(|p| p.text == "One")).unwrap();
+    d.insert_text(&craft_wordmodel::Pos::body(i, 0), "Edited ", &Default::default()).unwrap();
+    let c = crate::text::tests::content_of(&export(&d).unwrap());
+    let (open, header) = (c.find("<text:section"), c.find(">Header<"));
+    assert!(open.is_some() && header.is_some() && open < header, "the section opens before Header: {c}");
+}
+
+/// A heading (`text:h`) in a list item is one of its further paragraphs: it stays in its item in
+/// HTML, Markdown and ODT written from the model, and the list numbers on after it.
+#[test]
+fn a_heading_in_a_list_item_stays_in_it() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="1" style:num-suffix="."/></text:list-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_X}><office:body><office:text><text:list text:style-name="L"><text:list-item><text:p>One</text:p><text:h text:outline-level="2">Head</text:h><text:p>After</text:p></text:list-item><text:list-item><text:p>Two</text:p></text:list-item></text:list></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    let html = craft_html::doc::export(&d);
+    assert_eq!(html.matches("<ol").count(), 1, "{html}");
+    assert!(html.contains("<li>One<h2>Head</h2><p>After</p></li>"), "{html}");
+    let md = craft_markdown::export(&d);
+    assert!(md.contains("1. One\n\n   ## Head\n\n   After\n\n2. Two"), "{md}");
+    // Edited, so the list is written from the model.
+    let i = d.body.iter().position(|b| b.as_para().is_some_and(|p| p.text == "One")).unwrap();
+    d.insert_text(&craft_wordmodel::Pos::body(i, 0), "Edited ", &Default::default()).unwrap();
+    let out = export(&d).unwrap();
+    let c = crate::text::tests::content_of(&out);
+    assert!(c.contains("Edited One</text:p><text:h"), "{c}");
+    assert!(c.contains(">Head</text:h>"), "{c}");
+    assert!(c.contains("After</text:p></text:list-item><text:list-item>"), "{c}");
+    let back = import(&out).unwrap();
+    let rows: Vec<_> =
+        back.body.iter().filter_map(|b| b.as_para()).map(|p| (p.text.clone(), p.props.numbering.is_some(), p.props.list_item)).collect();
+    assert_eq!(
+        rows,
+        [
+            ("Edited One".to_string(), true, None),
+            ("Head".to_string(), false, Some(0)),
+            ("After".to_string(), false, Some(0)),
+            ("Two".to_string(), true, None)
+        ],
+        "{c}"
+    );
+    let head = back.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == "Head").unwrap();
+    assert_eq!(head.props.style.as_deref(), Some("Heading2"), "{c}");
+}
+
+#[test]
+fn zero_indent_multi_paragraph_header_survives_model_export() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="1"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment fo:margin-left="0in" fo:text-indent="0in"/></style:list-level-properties></text:list-level-style-number></text:list-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:list text:style-name="L"><text:list-header><text:p>Header</text:p><text:p>More header</text:p></text:list-header><text:list-item><text:p>One</text:p></text:list-item></text:list></office:text></office:body></office:document-content>"#
+    );
+    let doc = import(&package(&content, Some(&styles))).unwrap();
+    let bytes = crate::text::tests::export_model(&doc).unwrap();
+    let xml = crate::text::tests::entry(&bytes, "content.xml");
+    assert_eq!(xml.matches("<text:list-header>").count(), 1);
+    let back = import(&bytes).unwrap();
+    for text in ["Header", "More header"] {
+        let p = back.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == text).unwrap();
+        assert_eq!(p.props.list_item, Some(0));
+        assert!(p.props.numbering.is_none());
+    }
+}
+
+/// A sublist's header, written from the model, stays with the sublist's items in the item the
+/// sublist is in: alone or of several paragraphs, below another header, and before the item goes
+/// on after the sublist.
+#[test]
+fn a_sublists_header_written_from_the_model_stays_in_its_parent_item() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="1"/><text:list-level-style-number text:level="2" style:num-format="a"/><text:list-level-style-number text:level="3" style:num-format="i"/></text:list-style></office:styles></office:document-styles>"#
+    );
+    // The lists of `xml`, without attributes.
+    let lists = |xml: &str| -> String {
+        let (from, to) = (xml.find("<text:list ").unwrap(), xml.rfind("</text:list>").unwrap());
+        let mut out = String::new();
+        for part in xml.get(from..to).unwrap().split('<').skip(1) {
+            let (tag, text) = part.split_once('>').unwrap();
+            out.push_str(&format!("<{}>{text}", tag.split(' ').next().unwrap()));
+        }
+        out + "</text:list>"
+    };
+    let head = "<text:list-header><text:p>Sub header</text:p></text:list-header>";
+    let sub = "<text:list-item><text:p>Sub</text:p></text:list-item>";
+    for inner in [
+        format!("<text:list>{head}{sub}<text:list-item><text:p>Sub two</text:p></text:list-item></text:list>"),
+        format!(
+            "<text:p>More</text:p><text:list><text:list-header><text:p>Sub header</text:p><text:p>Second line</text:p></text:list-header>{sub}</text:list>"
+        ),
+        format!("<text:list>{head}</text:list><text:p>Parent again</text:p>"),
+        "<text:list><text:list-header><text:p>Sub header</text:p><text:list><text:list-header><text:p>Deeper</text:p></text:list-header><text:list-item><text:p>Deepest</text:p></text:list-item></text:list></text:list-header></text:list>".to_string(),
+    ] {
+        let list = |parent: &str, attrs: &str| {
+            format!(
+                "<text:list{attrs}><text:list-item><text:p>{parent}</text:p>{inner}</text:list-item><text:list-item><text:p>Next</text:p></text:list-item></text:list>"
+            )
+        };
+        let content = format!(
+            "<office:document-content {NS_T}><office:body><office:text>{}</office:text></office:body></office:document-content>",
+            list("Parent", r#" text:style-name="L""#)
+        );
+        let mut d = import(&package(&content, Some(&styles))).unwrap();
+        // Edited, so the list is written from the model.
+        let i = d.body.iter().position(|b| b.as_para().is_some_and(|p| p.text == "Parent")).unwrap();
+        d.insert_text(&craft_wordmodel::Pos::body(i, 0), "Edited ", &Default::default()).unwrap();
+        let out = export(&d).unwrap();
+        assert_eq!(lists(&crate::text::tests::content_of(&out)), list("Edited Parent", ""));
+        let rows = |d: &Document| {
+            let paras = d.body.iter().filter_map(|b| b.as_para());
+            paras.map(|p| (p.text.clone(), p.props.numbering.map(|n| n.level), p.props.list_item)).collect::<Vec<_>>()
+        };
+        assert_eq!(rows(&import(&out).unwrap()), rows(&d));
+    }
+}

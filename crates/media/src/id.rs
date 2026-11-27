@@ -46,6 +46,8 @@ pub enum Container {
     MpegPs,
     /// Sierra VMD (Video and Music Data).
     Vmd,
+    /// Bink (BIK).
+    Bink,
 }
 
 impl Container {
@@ -69,6 +71,7 @@ impl Container {
             Container::MpegTs => "MPEG-TS",
             Container::MpegPs => "MPEG-PS",
             Container::Vmd => "VMD",
+            Container::Bink => "Bink",
         }
     }
 }
@@ -111,6 +114,10 @@ pub enum CodecId {
     Vorbis,
     /// Speex.
     Speex,
+    /// Bink Audio, RDFT form.
+    BinkAudioRdft,
+    /// Bink Audio, DCT form.
+    BinkAudioDct,
     /// H.264 / AVC.
     H264,
     /// H.265 / HEVC.
@@ -141,6 +148,8 @@ pub enum CodecId {
     VmdVideo,
     /// Sierra VMD audio (8-bit PCM or 16-bit DPCM).
     VmdAudio,
+    /// Bink Video (Bink 1).
+    BinkVideo,
     /// A codec this crate has no identifier for.
     Unknown,
 }
@@ -165,6 +174,8 @@ impl CodecId {
             CodecId::Opus => "Opus",
             CodecId::Vorbis => "Vorbis",
             CodecId::Speex => "Speex",
+            CodecId::BinkAudioRdft => "Bink Audio (RDFT)",
+            CodecId::BinkAudioDct => "Bink Audio (DCT)",
             CodecId::H264 => "H.264",
             CodecId::Hevc => "HEVC",
             CodecId::Av1 => "AV1",
@@ -180,6 +191,7 @@ impl CodecId {
             CodecId::Apv => "APV",
             CodecId::VmdVideo => "VMD video",
             CodecId::VmdAudio => "VMD audio",
+            CodecId::BinkVideo => "Bink Video",
             CodecId::Unknown => "unknown",
         }
     }
@@ -205,6 +217,8 @@ impl CodecId {
                 | CodecId::Vorbis
                 | CodecId::Speex
                 | CodecId::VmdAudio
+                | CodecId::BinkAudioRdft
+                | CodecId::BinkAudioDct
         )
     }
 
@@ -226,6 +240,7 @@ impl CodecId {
                 | CodecId::Dnxhd
                 | CodecId::Apv
                 | CodecId::VmdVideo
+                | CodecId::BinkVideo
         )
     }
 }

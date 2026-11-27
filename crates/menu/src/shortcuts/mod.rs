@@ -476,6 +476,7 @@ impl<'a> ShortcutsDialog<'a> {
                             return Err(inactive());
                         }
                         state.assign_field(env);
+                        state.edit_result()?;
                     }
                     serde_json::Value::Bool(false) => {}
                     _ => return Err(rejects()),
@@ -487,6 +488,7 @@ impl<'a> ShortcutsDialog<'a> {
                         return Err(rejects());
                     }
                     state.remove(env, &command, &wanted);
+                    state.edit_result()?;
                 }
                 _ => return Err(FieldRefusal::Unknown.message(field)),
             }

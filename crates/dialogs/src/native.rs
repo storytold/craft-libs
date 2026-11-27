@@ -63,10 +63,13 @@ pub(crate) fn show<W: HasWindowHandle + HasDisplayHandle>(request: Request, pare
 
 fn show_file<W: HasWindowHandle + HasDisplayHandle>(d: FileDialog, parent: Option<&W>, reply: Reply) -> Shown {
     #[cfg(target_os = "macos")]
-    let parent = match d.kind {
+    let (parent, reply) = match d.kind {
         Kind::Open { .. } | Kind::Folder => return Shown { panel: crate::macos::show_panel(&d, reply) },
         Kind::Save => match crate::macos::sheet_parent(parent) {
-            Ok(parent) => Some(parent),
+            Ok(parent) => match crate::macos::show_save_sheet(&d, parent, reply) {
+                Ok(()) => return Shown::default(),
+                Err(reply) => (Some(parent), reply),
+            },
             Err(why) => {
                 reply.send(Answer::Unavailable(why));
                 return Shown::default();

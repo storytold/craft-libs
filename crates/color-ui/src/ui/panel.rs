@@ -446,9 +446,10 @@ pub struct ColorPanel<'a> {
     dynamic: bool,
     layout: ColorPanelLayout,
     wells: Option<([PairWell; 2], Bind<'a, Well>)>,
+    buttons: Option<[Label; 2]>,
     edited: Option<Option<PickedColor>>,
     shown: Option<ColorPanelShown>,
-    recent: &'a [Srgba],
+    recent: Option<&'a [Srgba]>,
     recent_setup: Option<RecentSetup>,
     gamut: Option<Gamut<'a>>,
 }
@@ -469,9 +470,10 @@ fn recent_setup<P: Send + Sync + 'static>(map: impl Fn(usize) -> Option<P> + Sen
 #[derive(Clone, Copy)]
 struct Inputs<'a> {
     wells: Option<&'a [PairWell; 2]>,
+    buttons: Option<&'a [Label; 2]>,
     edited: Option<&'a Option<PickedColor>>,
     shown: &'a ColorPanelShown,
-    recent: &'a [Srgba],
+    recent: Option<&'a [Srgba]>,
     recent_setup: Option<&'a RecentSetup>,
 }
 
@@ -486,9 +488,10 @@ impl<'a> ColorPanel<'a> {
             dynamic: true,
             layout: ColorPanelLayout::default(),
             wells: None,
+            buttons: None,
             edited: None,
             shown: None,
-            recent: &[],
+            recent: None,
             recent_setup: None,
             gamut: None,
         }
@@ -528,6 +531,14 @@ impl<'a> ColorPanel<'a> {
         self
     }
 
+    /// The names of the [`ColorPanelLayout::FillStroke`] layout's swap and default buttons, which are also their
+    /// tooltips: a host names the keys of its own commands there ("Swap Fill and Stroke (Shift+X)"). The panel's
+    /// words by default.
+    pub fn buttons(mut self, swap: impl Into<Label>, default: impl Into<Label>) -> Self {
+        self.buttons = Some([swap.into(), default.into()]);
+        self
+    }
+
     /// The colour the rows edit, with its model values; `None` disables the rows (mixed, None, a pattern). The edited
     /// well's colour by default.
     pub fn edited(mut self, color: Option<PickedColor>) -> Self {
@@ -541,9 +552,10 @@ impl<'a> ColorPanel<'a> {
         self
     }
 
-    /// The Recent Colors, a spaced `SwatchPalette` that wraps and drags.
+    /// The Recent Colors, a spaced `SwatchPalette` that wraps and drags. The FillStroke layout shows the captioned row
+    /// for a host that gives them, an empty list included; without them it shows no row.
     pub fn recent(mut self, colors: &'a [Srgba]) -> Self {
-        self.recent = colors;
+        self.recent = Some(colors);
         self
     }
 
@@ -561,7 +573,7 @@ impl<'a> ColorPanel<'a> {
 
     /// Shows the panel and returns this pass's edits and requests.
     pub fn show(self, ui: &mut Ui) -> ColorPanelOutput {
-        let ColorPanel { state, colors, cmyk, rgb, dynamic, layout, wells, edited, shown: rows, recent, recent_setup, gamut } = self;
+        let ColorPanel { state, colors, cmyk, rgb, dynamic, layout, wells, buttons, edited, shown: rows, recent, recent_setup, gamut } = self;
         let env = Env::of(ui);
         let (words, dialog) = (env.words::<ColorPanelWords>(), env.words::<ColorPickerDialogWords>());
         let mut held = Held::new(state);
@@ -597,6 +609,7 @@ impl<'a> ColorPanel<'a> {
                 dialog: &dialog,
                 inputs: Inputs {
                     wells: wells.as_ref(),
+                    buttons: buttons.as_ref(),
                     edited: edited.as_ref(),
                     shown: rows.as_ref().unwrap_or(&default_rows),
                     recent,
@@ -981,7 +994,8 @@ impl Body<'_> {
     }
 
     /// The foreground over the background (the host's wells when it gave them): a click on the other well edits it, a
-    /// click on the edited one asks for the picker. `FillStroke` adds the pair's swap and default buttons.
+    /// click on the edited one asks for the picker. `FillStroke` adds the pair's swap and default buttons, named by the
+    /// host's [`ColorPanel::buttons`] when it gave them.
     fn wells(&mut self, ui: &mut Ui) {
         let was = self.active;
         let mut active = was;
@@ -991,7 +1005,11 @@ impl Body<'_> {
         let pair = SwatchPair::<()>::new(self.words.wells.clone(), wells, Bind::bound(&mut active)).popover(false).frame_active(true);
         let pair = match self.layout {
             ColorPanelLayout::ForegroundBackground => pair,
-            ColorPanelLayout::FillStroke => pair.swap_button(self.words.swap_colors.clone()).default_button(self.words.default_colors.clone()),
+            ColorPanelLayout::FillStroke => {
+                let [swap, default] =
+                    self.inputs.buttons.cloned().unwrap_or_else(|| [self.words.swap_colors.clone(), self.words.default_colors.clone()]);
+                pair.swap_button(swap).default_button(default)
+            }
         };
         let pair = pair.show(ui);
         self.active = active;

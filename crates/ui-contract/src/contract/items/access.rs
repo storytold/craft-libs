@@ -11,7 +11,7 @@ use egui::{Context, Id, Rect};
 
 impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// The access sub-node of each toggle cell of row `(at, key)`, named by its cell, else by its column's header, and carrying its state,
-    /// below the row's node `item`; an AccessKit click on it reaches `toggle_by_access`.
+    /// below the row's node for the cell, else the row's node `item`; an AccessKit click on it reaches `toggle_by_access`.
     pub(super) fn report_toggle_cells(
         &self,
         ctx: &Context,
@@ -22,12 +22,16 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     ) {
         for (column, toggle) in self.header.toggle_columns() {
             let Some((_, rect)) = cells.iter().find(|(held, _)| *held == column) else { continue };
-            let Some((name, mixed)) = self.header.cell_name(ctx, item, &column, env) else { continue };
-            let mut node =
-                access::SubNode::new(TOGGLE_CELL.at(key_hash(&(key, &column))), if toggle.exclusive { Role::RADIO_BUTTON } else { Role::SWITCH });
-            node.name = access::Name::Text(name);
+            let Some(cell) = self.header.toggle_cell(ctx, item, &column, env) else { continue };
+            let role = match (toggle.exclusive, cell.check_box) {
+                (true, _) => Role::RADIO_BUTTON,
+                (false, true) => Role::CHECK_BOX,
+                (false, false) => Role::SWITCH,
+            };
+            let mut node = access::SubNode::new(TOGGLE_CELL.at(key_hash(&(key, &column))), role);
+            node.name = access::Name::Text(cell.name);
             node.flags.set(crate::style::Flags::CHECKED, self.source.toggled(at, &column));
-            node.flags.set(crate::style::Flags::MIXED, mixed);
+            node.flags.set(crate::style::Flags::MIXED, cell.mixed);
             if let Some(chord) = toggle.key {
                 node.shortcut(chord.display(crate::runtime::windows::os_of(ctx)));
             }
@@ -42,7 +46,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 active: false,
                 face: None,
                 label: "",
-                parent: item,
+                parent: cell.cell,
             };
             access::report_sub(ctx, &decl);
         }
@@ -75,7 +79,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// AccessKit requests on an item row's node or on a section row's collection node (`report_section_node`): Focus
     /// moves the lead to the row and key focus to the collection; Click also picks an item and activates it when the
-    /// collection activates on click, or activates a section; Expand and Collapse open and close rows with children.
+    /// collection activates on click, or activates a section it does not select. Expand and Collapse open and
+    /// close rows with children.
     pub(super) fn node_by_access(
         &mut self,
         comp: &C,
@@ -88,7 +93,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let (_, built) = self.built(layout, place.rect, place.offset);
         let rows: Vec<(u64, usize)> = built
             .into_iter()
-            .filter(|&at| !self.source.section_stop(at) || cx.part_if_declared(section_part(&self.source.key(at))).is_none())
+            .filter(|&at| {
+                !self.source.section_stop(at)
+                    || self.source.selectable_section(at)
+                    || cx.part_if_declared(section_part(&self.source.key(at))).is_none()
+            })
             .map(|at| (key_hash(&self.source.key(at)), at))
             .collect();
         let wanted = |request: &craft_behavior::AccessRequest| {
@@ -112,7 +121,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     }
                     focus::request_now(&cx.core.ctx, focus::FocusTarget::Id(cx.core.id));
                     if request.action == AccessAction::Click {
-                        if self.source.section_stop(at) {
+                        if self.source.section_stop(at) && !self.source.selectable_section(at) {
                             self.events.push(CollectionEvent::Activate(key));
                         } else {
                             self.click_pick(comp, at, false, false, craft_keymap::Mods::NONE);
