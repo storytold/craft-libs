@@ -35,7 +35,7 @@ pub struct ShapeBarOutput {
 
 /// The cells a Shape tool adds to the options bar, in PhotoCraft's order: the "Fill" check box and chip, the
 /// "Stroke" chip, the stroke width (0 to 288 px), the Stroke style button; then the kind's cell: Rectangle and
-/// Rounded Rectangle "Radius" (0 to 150,000), Polygon and Star "Sides" (3 to 100), Line "Weight" (1 to 10,000). A
+/// Rounded Rectangle "Radius" (0 to 150,000), Polygon and Star "Sides" (3 to 100), Line "Weight" (0 to 1,000). A
 /// pattern shown as children of a `Bar`.
 ///
 /// - The values are the selected shape layer's when one is selected, else the tool settings' (the app passes the

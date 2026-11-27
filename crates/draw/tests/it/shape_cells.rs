@@ -9,10 +9,11 @@ use craft_draw::ui::{
 };
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::contract::{Bind, ShowContainer as _};
+use craft_ui::runtime::env::Env;
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::text::RangeAlert;
-use egui::{Key, Modifiers, vec2};
-use std::cell::RefCell;
+use egui::{Key, Modifiers, Ui, vec2};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 fn start_value() -> Arrowheads {
@@ -284,4 +285,157 @@ fn a_fixed_size_typed_past_its_range_keeps_the_end_and_reports_it_once_and_an_em
     type_into(&mut fixture, "Fixed Size W", "");
     assert_eq!(host.borrow().value.fixed, (None, Some(50.0)), "an emptied field is empty");
     assert_eq!(host.borrow().alerts.len(), 1, "an emptied field reports nothing");
+}
+
+thread_local! {
+    /// The decimal mark of the region the fixtures run in, as the last pass of [`note_mark`] saw it.
+    static MARK: Cell<char> = const { Cell::new('.') };
+}
+
+/// Notes the decimal mark of `ui`'s region, so a test types and reads decimals in the region it runs in.
+fn note_mark(ui: &Ui) {
+    let half = Env::of(ui).units().number(0.5, 1..=1);
+    if let Some(mark) = half.chars().find(|c| !c.is_numeric()) {
+        MARK.with(|cell| cell.set(mark));
+    }
+}
+
+/// `number` (written with a `.`) as the region writes it.
+fn local(number: &str) -> String {
+    number.replace('.', &MARK.with(Cell::get).to_string())
+}
+
+/// The number the field named `label` shows, without its unit or digit groups.
+fn shown(fixture: &Fixture, label: &str) -> f64 {
+    let field = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} field"));
+    let text = fixture.tree().value_of(field.node).unwrap_or_default();
+    let mark = MARK.with(Cell::get);
+    let number: String = text.chars().filter(|c| c.is_ascii_digit() || *c == mark).map(|c| if c == mark { '.' } else { c }).collect();
+    number.parse().unwrap_or_else(|_| panic!("the {label} field shows a number, not {text:?}"))
+}
+
+struct WeightHost {
+    weight: f64,
+    look: ShapeAppearance,
+    alerts: Vec<RangeAlert>,
+}
+
+/// A fixture with the Line tool's options bar over a weight of `weight`.
+fn line_bar(weight: f64) -> (Fixture, Rc<RefCell<WeightHost>>) {
+    let host = Rc::new(RefCell::new(WeightHost { weight, look: ShapeAppearance::new(Paint::None, Paint::None, 2.0), alerts: Vec::new() }));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = shown.borrow_mut();
+        let WeightHost { weight, look, alerts } = &mut *held;
+        note_mark(ui);
+        let mut settings = ShapeToolSettings::default();
+        settings.line_weight = *weight;
+        let out = Bar::new("Shape options", BarKind::Options).show(ui, |ui, _| ShapeBar::new(ShapeKind::Line, &settings, look, 72.0).show(ui)).inner;
+        let Some(out) = out else { return };
+        if let Some(ShapeChange::Weight(next)) = out.events.iter().rev().find_map(|event| event.value()) {
+            *weight = *next;
+        }
+        alerts.extend(out.out_of_range);
+    });
+    fixture.settle();
+    (fixture, host)
+}
+
+#[trial]
+fn the_line_weight_takes_0_to_1000_px_with_decimals_and_reports_a_value_past_1000() {
+    let (mut fixture, host) = line_bar(3.0);
+    type_into(&mut fixture, "Weight", "0");
+    assert_eq!(host.borrow().weight, 0.0, "a weight of 0 is kept");
+    assert!(host.borrow().alerts.is_empty(), "a weight of 0 reports nothing");
+    type_into(&mut fixture, "Weight", &local("2.5"));
+    assert_eq!(host.borrow().weight, 2.5, "a decimal weight is kept as typed");
+    type_into(&mut fixture, "Weight", "1000");
+    assert_eq!(host.borrow().weight, 1000.0, "1000 is in range");
+    assert!(host.borrow().alerts.is_empty(), "values from 0 to 1000 report nothing");
+    type_into(&mut fixture, "Weight", "1001");
+    assert_eq!(host.borrow().weight, 1000.0, "1001 keeps 1000");
+    assert_eq!(host.borrow().alerts.len(), 1, "1001 is reported once");
+    type_into(&mut fixture, "Weight", "99999");
+    assert_eq!(host.borrow().weight, 1000.0, "99999 keeps 1000");
+    assert_eq!(host.borrow().alerts.len(), 2, "99999 is reported once");
+    assert_eq!(host.borrow().alerts[1].range, 0.0..=1000.0, "the alert names the field's range");
+
+    // The Shape panel's Weight of a live line holds the same range.
+    let host = Rc::new(RefCell::new(AlertingPanel {
+        shape: LiveShape::line(3.0),
+        look: ShapeAppearance::new(Paint::None, Paint::None, 2.0),
+        alerts: Vec::new(),
+    }));
+    let panel = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = panel.borrow_mut();
+        let AlertingPanel { shape, look, alerts } = &mut *held;
+        note_mark(ui);
+        let out = ShapePanel::new("Shape properties", shape, look, 72.0).show(ui);
+        if let Some(ShapeChange::Weight(next)) = out.events.iter().rev().find_map(|event| event.value()) {
+            *shape = LiveShape::line(*next);
+        }
+        alerts.extend(out.out_of_range);
+    });
+    fixture.settle();
+    type_into(&mut fixture, "Weight", "0");
+    assert_eq!(host.borrow().shape, LiveShape::line(0.0), "panel: a weight of 0 is kept");
+    assert!(host.borrow().alerts.is_empty(), "panel: a weight of 0 reports nothing");
+    type_into(&mut fixture, "Weight", "1001");
+    assert_eq!(host.borrow().shape, LiveShape::line(1000.0), "panel: 1001 keeps 1000");
+    assert_eq!(host.borrow().alerts.len(), 1, "panel: 1001 is reported once");
+}
+
+/// Types each of `cases` into the field named `label` of the open arrowhead popover: the text typed, the value the
+/// field keeps, and whether that is reported.
+fn arrow_cases(label: &str, read: fn(&Arrowheads) -> f64, cases: &[(&str, f64, bool)]) {
+    let host = Rc::new(RefCell::new(AlertingPopover { value: start_value(), open: false, alerts: Vec::new() }));
+    let popover = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = popover.borrow_mut();
+        let AlertingPopover { value, open, alerts } = &mut *held;
+        note_mark(ui);
+        let out = ArrowheadsPopover::new(Bind::given(*value), Bind::bound(open), 72.0).show(ui);
+        if let Some(next) = out.edits.iter().rev().find_map(|event| event.value()) {
+            *value = *next;
+        }
+        alerts.extend(out.out_of_range);
+    });
+    fixture.settle();
+    host.borrow_mut().open = true;
+    fixture.idle(3);
+    for &(typed, kept, reported) in cases {
+        let before = host.borrow().alerts.len();
+        type_into(&mut fixture, label, &local(typed));
+        assert_eq!(read(&host.borrow().value), kept, "{label}: {typed} keeps {kept}");
+        let after = host.borrow().alerts.len();
+        assert_eq!(after - before, usize::from(reported), "{label}: {typed} is reported {}", if reported { "once" } else { "never" });
+        fixture.settle();
+        assert_eq!(shown(&fixture, label), kept, "{label}: the field shows {kept} after {typed}");
+    }
+}
+
+#[trial]
+fn the_arrowhead_width_takes_a_tenth_to_10000_px_and_reports_a_value_outside() {
+    arrow_cases(
+        "Width",
+        |arrows| arrows.width,
+        &[
+            ("0", 0.1, true),
+            ("0.1", 0.1, false),
+            ("2.5", 2.5, false),
+            ("10000", 10_000.0, false),
+            ("10001", 10_000.0, true),
+            ("99999", 10_000.0, true),
+        ],
+    );
+}
+
+#[trial]
+fn the_arrowhead_length_takes_a_tenth_to_50000_px_and_reports_a_value_outside() {
+    arrow_cases(
+        "Length",
+        |arrows| arrows.length,
+        &[("0", 0.1, true), ("0.1", 0.1, false), ("50000", 50_000.0, false), ("50001", 50_000.0, true), ("99999", 50_000.0, true)],
+    );
 }
