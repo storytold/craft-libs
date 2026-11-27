@@ -173,7 +173,7 @@ impl EnvValue for craft_theme::ComponentSet {
 impl super::StyleValue for craft_theme::ComponentSet {}
 
 /// Where a shell pane sits.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum PaneEdge {
     /// What the edge panes leave.
