@@ -19,6 +19,9 @@
 //! A file the OS can start is, on Windows, one whose extension is `.com`, `.exe`, `.bat` or `.cmd`
 //! in any case, and on Unix one the current process has permission to execute. The search skips
 //! any other file and goes on.
+//! If a Unix permission query is unavailable, the lookup attempts to start the candidate. An
+//! execution permission denial continues the search, or rejects an explicit path. Other failures
+//! to start return [`OracleError::Start`].
 //!
 //! The program found is run once with its version argument. [`Oracle::version`] is the first
 //! non-blank line of its standard output, or of its standard error when standard output is blank.
@@ -30,6 +33,8 @@
 //! the process under every input it read (the program, the version argument, the explicit variable
 //! and its value, `PATH`, `PATHEXT`, the current directory, the install folders and the limits). A
 //! failed lookup is not cached.
+//! After one probe succeeds, concurrent and later lookups with the same cache key reuse its
+//! result. A failed probe can be retried by a waiting or later lookup.
 //!
 //! No function here panics. [`require_oracle!`](crate::require_oracle), [`require_ffmpeg!`](crate::require_ffmpeg)
 //! and [`require_ffprobe!`](crate::require_ffprobe) expand in the calling test. A missing program
@@ -38,14 +43,14 @@
 //! and returns, or fails under that module's rule for the variable's value. Every other error, such
 //! as a wrong explicit path or a timeout, fails the test.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 #[cfg(not(windows))]
@@ -439,23 +444,84 @@ impl Key {
     }
 }
 
-fn cache() -> &'static Mutex<HashMap<(Key, PathBuf), Oracle>> {
-    static CACHE: OnceLock<Mutex<HashMap<(Key, PathBuf), Oracle>>> = OnceLock::new();
+type CacheKey = (Key, PathBuf);
+type ProbeSlot = Arc<Mutex<Option<Oracle>>>;
+type OracleCache = Mutex<HashMap<CacheKey, CacheEntry>>;
+
+#[derive(Default)]
+struct CacheEntry {
+    value: ProbeSlot,
+    users: usize,
+}
+
+struct CacheLease {
+    key: CacheKey,
+    value: ProbeSlot,
+}
+
+impl Drop for CacheLease {
+    fn drop(&mut self) {
+        let mut cache = cache().lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(entry) = cache.get_mut(&self.key).filter(|entry| Arc::ptr_eq(&entry.value, &self.value)) else { return };
+        entry.users = entry.users.saturating_sub(1);
+        if entry.users == 0 && entry.value.lock().unwrap_or_else(PoisonError::into_inner).is_none() {
+            cache.remove(&self.key);
+        }
+    }
+}
+
+fn cache() -> &'static OracleCache {
+    static CACHE: OnceLock<OracleCache> = OnceLock::new();
     CACHE.get_or_init(Mutex::default)
 }
 
 /// Find, probe and cache one program. The cache lock is not held while the program runs.
 fn lookup(s: &Search<'_>, version_arg: &str, limits: ProbeLimits) -> Result<Oracle, OracleError> {
-    let path = locate(s)?;
-    let key = (Key::new(s, version_arg, limits), path.clone());
-    if let Some(hit) = cache().lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
+    lookup_with_probe(s, version_arg, limits, |path| {
+        let mut cmd = Command::new(path);
+        cmd.arg(version_arg);
+        let out = run_bounded(cmd, path, limits, &mut Observed::default())?;
+        Ok(Oracle { program: s.program.to_owned(), path: path.to_owned(), version: version_line(&out.stdout, &out.stderr) })
+    })
+}
+
+fn lookup_with_probe(
+    s: &Search<'_>,
+    version_arg: &str,
+    limits: ProbeLimits,
+    mut probe: impl FnMut(&Path) -> Result<Oracle, OracleError>,
+) -> Result<Oracle, OracleError> {
+    let mut denied = HashSet::new();
+    loop {
+        let path = if denied.is_empty() { locate(s)? } else { locate_if(s, |path| !denied.contains(path))? };
+        let key = (Key::new(s, version_arg, limits), path.clone());
+        match cached_probe(key, || {}, || probe(&path)) {
+            Err(OracleError::Start { source, .. }) if retry_denied_probe(&source) => {
+                if let Some(explicit) = s.explicit.filter(|value| !value.is_empty()) {
+                    return Err(OracleError::InvalidExplicitPath { variable: s.explicit_label.to_owned(), path: PathBuf::from(explicit) });
+                }
+                denied.insert(path);
+            }
+            result => return result,
+        }
+    }
+}
+
+fn cached_probe(key: CacheKey, ready: impl FnOnce(), probe: impl FnOnce() -> Result<Oracle, OracleError>) -> Result<Oracle, OracleError> {
+    let value = {
+        let mut cache = cache().lock().unwrap_or_else(PoisonError::into_inner);
+        let entry = cache.entry(key.clone()).or_default();
+        entry.users = entry.users.saturating_add(1);
+        Arc::clone(&entry.value)
+    };
+    let lease = CacheLease { key, value };
+    ready();
+    let mut slot = lease.value.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(hit) = slot.as_ref() {
         return Ok(hit.clone());
     }
-    let mut cmd = Command::new(&path);
-    cmd.arg(version_arg);
-    let out = run_bounded(cmd, &path, limits, &mut Observed::default())?;
-    let oracle = Oracle { program: s.program.to_owned(), path, version: version_line(&out.stdout, &out.stderr) };
-    cache().lock().unwrap_or_else(PoisonError::into_inner).insert(key, oracle.clone());
+    let oracle = probe()?;
+    *slot = Some(oracle.clone());
     Ok(oracle)
 }
 
@@ -530,7 +596,22 @@ fn startable(p: &Path, windows: bool) -> bool {
 
 #[cfg(unix)]
 fn executable(p: &Path) -> bool {
-    rustix::fs::accessat(rustix::fs::CWD, p, rustix::fs::Access::EXEC_OK, rustix::fs::AtFlags::EACCESS).is_ok()
+    execute_permission(rustix::fs::accessat(rustix::fs::CWD, p, rustix::fs::Access::EXEC_OK, rustix::fs::AtFlags::EACCESS))
+}
+
+#[cfg(unix)]
+fn execute_permission(result: rustix::io::Result<()>) -> bool {
+    !matches!(result, Err(rustix::io::Errno::ACCESS | rustix::io::Errno::NOENT | rustix::io::Errno::NOTDIR))
+}
+
+#[cfg(unix)]
+fn retry_denied_probe(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::PermissionDenied
+}
+
+#[cfg(not(unix))]
+fn retry_denied_probe(_: &io::Error) -> bool {
+    false
 }
 
 #[cfg(not(unix))]
@@ -540,13 +621,17 @@ fn executable(_: &Path) -> bool {
 
 /// The absolute path of `s.program`, in the search order the module documentation gives.
 fn locate(s: &Search<'_>) -> Result<PathBuf, OracleError> {
+    locate_if(s, |_| true)
+}
+
+fn locate_if(s: &Search<'_>, mut accept: impl FnMut(&Path) -> bool) -> Result<PathBuf, OracleError> {
     if !valid_name(s.program) {
         return Err(OracleError::InvalidName { program: s.program.to_owned() });
     }
     if let Some(explicit) = s.explicit.filter(|e| !e.is_empty()) {
         let given = PathBuf::from(explicit);
         return match anchored(&given, s.cwd) {
-            Some(p) if startable(&p, s.windows) => Ok(p),
+            Some(p) if startable(&p, s.windows) && accept(&p) => Ok(p),
             _ => Err(OracleError::InvalidExplicitPath { variable: s.explicit_label.to_owned(), path: given }),
         };
     }
@@ -556,7 +641,7 @@ fn locate(s: &Search<'_>) -> Result<PathBuf, OracleError> {
     for dir in dirs {
         for name in &names {
             let p = dir.join(name);
-            if startable(&p, s.windows) {
+            if startable(&p, s.windows) && accept(&p) {
                 return Ok(p);
             }
         }
@@ -617,18 +702,11 @@ fn spawn_reader(pipe: Option<impl Read + Send + 'static>, is_stdout: bool, cap: 
 }
 
 /// Kill the child and reap it. On Unix the child leads its own process group, and the whole group
-/// is killed first with the `kill` built into `/bin/sh` (the shell runs without `PATH`), so a
-/// process the child started that still holds the output pipes ends too. On Windows the child's
+/// is signaled directly. A process the child started that still holds the output pipes ends too. On Windows the child's
 /// job object is terminated, including descendants.
 fn kill_and_reap(child: &mut ProbeChild) {
     #[cfg(unix)]
-    let _ = Command::new("/bin/sh")
-        .args(["-c", "kill -s KILL -- \"-$1\"", "sh", &child.id().to_string()])
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    let _ = rustix::process::kill_process_group(rustix::process::Pid::from_child(child), rustix::process::Signal::KILL);
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -761,17 +839,25 @@ fn run_bounded(mut cmd: Command, path: &Path, limits: ProbeLimits, seen: &mut Ob
 /// Wait for a child whose pipes have closed. Past `deadline` it is killed and reaped, and the
 /// error is `None`; a failed wait kills and reaps it too and returns the error.
 fn wait_for_exit(child: &mut ProbeChild, deadline: Instant) -> Result<ExitStatus, Option<io::Error>> {
+    wait_for_exit_with_clock(child, deadline, Instant::now)
+}
+
+fn wait_for_exit_with_clock(child: &mut ProbeChild, deadline: Instant, mut now: impl FnMut() -> Instant) -> Result<ExitStatus, Option<io::Error>> {
     let mut pause = Duration::from_millis(1);
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return Ok(status),
+            Ok(Some(status)) if now() <= deadline => return Ok(status),
+            Ok(Some(_)) => {
+                kill_and_reap(child);
+                return Err(None);
+            }
             Ok(None) => {}
             Err(e) => {
                 kill_and_reap(child);
                 return Err(Some(e));
             }
         }
-        let left = deadline.saturating_duration_since(Instant::now());
+        let left = deadline.saturating_duration_since(now());
         if left == Duration::ZERO {
             kill_and_reap(child);
             return Err(None);
@@ -785,6 +871,115 @@ fn wait_for_exit(child: &mut ProbeChild, deadline: Instant) -> Result<ExitStatus
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn concurrent_cache_misses_share_one_successful_probe() {
+        let folder = Scratch::new("concurrent-cache");
+        let input = search("tool", None, None, &[]);
+        let key = (Key::new(&input, "--version", ProbeLimits::VERSION), folder.path().join("tool"));
+        let calls = AtomicUsize::new(0);
+        let ready = std::sync::Barrier::new(3);
+        let run = || {
+            cached_probe(
+                key.clone(),
+                || {
+                    ready.wait();
+                },
+                || {
+                    let call = calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(Oracle { program: "tool".into(), path: key.1.clone(), version: format!("banner {call}") })
+                },
+            )
+        };
+        std::thread::scope(|scope| {
+            let first = scope.spawn(run);
+            let second = scope.spawn(run);
+            ready.wait();
+            let first = first.join().unwrap().unwrap();
+            let second = second.join().unwrap().unwrap();
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(first, second);
+        });
+    }
+
+    #[test]
+    fn failed_concurrent_probes_leave_no_idle_cache_entry() {
+        let folder = Scratch::new("failed-concurrent-cache");
+        let input = search("tool", None, None, &[]);
+        let key = (Key::new(&input, "--version", ProbeLimits::VERSION), folder.path().join("tool"));
+        let ready = std::sync::Barrier::new(3);
+        let run = || {
+            cached_probe(
+                key.clone(),
+                || {
+                    ready.wait();
+                },
+                || Err(OracleError::Missing { program: "tool".into() }),
+            )
+        };
+        std::thread::scope(|scope| {
+            let first = scope.spawn(run);
+            let second = scope.spawn(run);
+            ready.wait();
+            assert!(first.join().unwrap().is_err());
+            assert!(second.join().unwrap().is_err());
+        });
+        assert!(!cache().lock().unwrap_or_else(PoisonError::into_inner).contains_key(&key));
+        let expected = Oracle { program: "tool".into(), path: key.1.clone(), version: "retry succeeded".into() };
+        assert_eq!(cached_probe(key.clone(), || {}, || Ok(expected.clone())).unwrap(), expected);
+        assert_eq!(cached_probe(key, || {}, || Err(OracleError::Missing { program: "tool".into() })).unwrap(), expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unavailable_permission_query_does_not_report_a_missing_program() {
+        use rustix::io::Errno;
+        assert!(execute_permission(Err(Errno::PERM)));
+        assert!(execute_permission(Err(Errno::NOSYS)));
+        assert!(execute_permission(Ok(())));
+        assert!(!execute_permission(Err(Errno::ACCESS)));
+        assert!(!execute_permission(Err(Errno::NOENT)));
+        assert!(!execute_permission(Err(Errno::NOTDIR)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_exit_observed_after_the_deadline_is_a_timeout() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exit 0"]);
+        let mut child = spawn(command).unwrap();
+        child.wait().unwrap();
+        let deadline = Instant::now();
+        let observed = deadline + Duration::from_secs(1);
+        let result = wait_for_exit_with_clock(&mut child, deadline, || observed);
+        assert!(matches!(result, Err(None)), "{result:?}");
+        assert!(wait_for_exit_with_clock(&mut child, deadline, || deadline).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_permission_denial_continues_the_path_search() {
+        let first = Scratch::new("denied-probe");
+        let second = Scratch::new("usable-probe");
+        let denied = first.file("tool");
+        let usable = second.file("tool");
+        let path = std::env::join_paths([first.path(), second.path()]).unwrap();
+        let input = search("tool", None, Some(&path), &[]);
+        let probe = |path: &Path| {
+            if path == denied {
+                Err(OracleError::Start { path: path.to_owned(), source: io::Error::from(io::ErrorKind::PermissionDenied) })
+            } else {
+                Ok(Oracle { program: "tool".into(), path: path.to_owned(), version: "second".into() })
+            }
+        };
+        assert_eq!(lookup_with_probe(&input, "--version", ProbeLimits::VERSION, probe).unwrap().path(), usable);
+        let explicit = search("tool", Some(denied.as_os_str()), None, &[]);
+        assert!(matches!(lookup_with_probe(&explicit, "--version", ProbeLimits::VERSION, probe), Err(OracleError::InvalidExplicitPath { .. })));
+        let other = lookup_with_probe(&input, "--other", ProbeLimits::VERSION, |path| {
+            Err(OracleError::Start { path: path.to_owned(), source: io::Error::other("not a permission denial") })
+        });
+        assert!(matches!(other, Err(OracleError::Start { path, .. }) if path == denied));
+    }
 
     /// A new folder under the system temporary folder, removed with its contents on drop.
     struct Scratch(PathBuf);

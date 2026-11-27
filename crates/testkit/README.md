@@ -251,6 +251,13 @@ The program found is run once with `version_arg` and standard input closed. `Ora
 
 On Windows, drive-relative paths such as `C:tools\qpdf.exe` use the captured current directory on the same drive, or that drive's current directory otherwise. Returned executable paths are absolute. The resolved executable path is part of the cache key.
 
+After one version probe succeeds, concurrent and later lookups with the same cache key reuse its
+result. A failed probe can be retried by a waiting or later lookup.
+If a Unix permission query is unavailable, the lookup attempts to start the candidate. An execution
+permission denial continues the search, or rejects an explicit path. Other failures to start return
+`OracleError::Start`. Unix process-group
+cleanup sends a signal directly. An exit observed after the probe deadline returns a timeout.
+
 `find_in` takes the explicit path, the `PATH` list and the install folders as arguments, so a test can search folders it made without changing the process environment.
 
 `ffmpeg_supports_format(ff, name, limits)` runs `ffmpeg -hide_banner -formats` and looks for `name` in the name column only. A run that fails to start, passes `limits` or exits with a failure status returns an error. `ffmpeg_version(ff)` reads the version from ffmpeg's banner line.
