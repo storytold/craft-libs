@@ -1,0 +1,72 @@
+//! Stories of `PointPicker`.
+
+use super::PointPicker;
+use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Validity};
+use crate::form::Field;
+use crate::layout_components::{Row, Stack};
+use crate::runtime::env::Message;
+use crate::testing::{Drive, Grip, StoryData, StoryOutput, story};
+use crate::text::NumberField;
+use craft_behavior::Mixed;
+use egui::Ui;
+
+const RANGE: std::ops::RangeInclusive<f64> = 0.0..=100.0;
+const CENTER: [f64; 2] = [50.0, 50.0];
+const RIGHT: [f64; 2] = [90.0, 50.0];
+const CAP: f64 = 80.0;
+
+/// The picker with the X and Y fields its caller shows beside it, bound to the same point (a dialog's point row).
+#[story(PointPicker<'static>, covers = [Default], drive = Drive::Step)]
+fn point_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut point = *data.value("point", Mixed::each(CENTER));
+    let shown = Row::new().show(ui, |ui, _| {
+        let picked = PointPicker::new(Bind::bound(&mut point), RANGE, RANGE).label("Blur center").show(ui);
+        Stack::new().show(ui, |ui, _| {
+            for (axis, name) in ["X", "Y"].into_iter().enumerate() {
+                let value = point[axis].same().copied();
+                let field = Field::new(name).show(ui, |ui, _| NumberField::new(name, Bind::given(value)).range(RANGE).unit("%").show(ui));
+                if let Some(typed) = field.inner.and_then(|out| out.edit.value().cloned().flatten()) {
+                    point[axis] = Mixed::Same(typed);
+                }
+            }
+        });
+        picked
+    });
+    *data.value("point", Mixed::each(CENTER)) = point;
+    shown.inner.map(Into::into).unwrap_or_default()
+}
+
+#[story(PointPicker<'static>, covers = [], drive = Drive::Drag(Grip::new(PointPicker::WELL)))]
+fn point_picker_drag(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    PointPicker::new(data.bind("point", Mixed::each(CENTER)), RANGE, RANGE).label("Blur center").show(ui).into()
+}
+
+#[story(PointPicker<'static>, covers = [Mixed], drive = Drive::Never)]
+fn point_picker_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    PointPicker::new(data.bind_mixed("mixed", Mixed::Mixed), RANGE, RANGE).label("Blur center").show(ui).into()
+}
+
+#[story(PointPicker<'static>, covers = [Invalid], drive = Drive::Never)]
+fn point_picker_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let refuse_right = |point: &[Mixed<f64>; 2]| match point[0].same() {
+        Some(x) if *x > CAP => Validity::Refuse(Message::new("Too far right")),
+        _ => Validity::Ok,
+    };
+    PointPicker::new(data.bind("over", Mixed::each(RIGHT)).check(refuse_right), RANGE, RANGE).label("Blur center").show(ui).into()
+}
+
+#[story(PointPicker<'static>, covers = [], drive = Drive::Never)]
+fn point_picker_mixed_axis(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let value = [Mixed::Same(CENTER[0]), Mixed::Mixed];
+    PointPicker::new(data.bind("axis", value), RANGE, RANGE).label("Blur center").show(ui).into()
+}
+
+#[story(PointPicker<'static>, covers = [], drive = Drive::Never)]
+fn point_picker_y_up(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    PointPicker::new(data.bind("point", Mixed::each(CENTER)), RANGE, 100.0..=0.0).label("Blur center").show(ui).into()
+}
+
+#[story(PointPicker<'static>, covers = [], drive = Drive::Never)]
+fn point_picker_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    PointPicker::new(data.bind("point", Mixed::each(CENTER)), RANGE, RANGE).label("Blur center").enabled(false).show(ui).into()
+}

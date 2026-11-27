@@ -1,0 +1,37 @@
+{
+  "id": "D04",
+  "title": "Gold at 50% opacity over C100",
+  "source": "DesignCraft DC04",
+  "page": [360, 216],
+  "inks": [{"name": "Gold", "cmyk": [0, 20, 60, 20]}],
+  "settings": {"group_cs": "cmyk"},
+  "objects": [
+    {"type": "rect", "rect": [36, 36, 180, 144], "fill": {"cmyk": [100, 0, 0, 0]}},
+    {
+      "type": "rect",
+      "rect": [144, 36, 180, 144],
+      "fill": {"spot": "Gold", "tint": 100},
+      "opacity": 0.5
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black", "Gold"],
+    "points": [
+      {"at": [90, 108], "inks": {"Cyan": 100}, "tol": 2, "note": "cyan only"},
+      {
+        "at": [180, 108],
+        "inks": {"Cyan": 50, "Gold": 50},
+        "tol": 6,
+        "note": "half the spot, half the cyan"
+      },
+      {"at": [290, 108], "inks": {"Gold": 50}, "tol": 6, "note": "spot 50% over paper"}
+    ]
+  },
+  "structure": {
+    "page_group": "DeviceCMYK",
+    "group_cs": ["none"],
+    "color_spaces": ["DeviceCMYK", "Separation(Gold, alt DeviceCMYK)"],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

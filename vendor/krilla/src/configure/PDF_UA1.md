@@ -87,7 +87,7 @@ See `README.md` for the meaning of each color.
 - krilla always generates an ID for notes. 🟢
 
 # 7.10 Optional content
-- krilla does currently not support optional content. 🔵
+- krilla writes its one optional content configuration, `D`, with a `Name`. 🟢
 
 # 7.11 Embedded files
 - krilla supports embedded files, and requires a description in this export mode. 🟢

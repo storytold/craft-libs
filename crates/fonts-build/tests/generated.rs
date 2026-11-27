@@ -1,4 +1,4 @@
-//! The table `craft-fonts-build-consumer`'s build.rs generated from the fixture compiles and holds
+//! The tables `craft-fonts-build-consumer`'s build.rs generated from the fixture compile and hold
 //! the selected faces' bytes.
 
 use craft_fonts_build_consumer::CRAFT_FONTS;

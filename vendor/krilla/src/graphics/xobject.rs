@@ -1,24 +1,38 @@
 use std::ops::DerefMut;
 use std::sync::Arc;
 
+use pdf_writer::writers::Group;
 use pdf_writer::{Finish, Name, Ref};
 
 use crate::chunk_container::ChunkContainer;
 use crate::configure::ValidationError;
 use crate::geom::Rect;
-use crate::graphics::color::{rgb, DEVICE_RGB};
+use crate::graphics::blend::GroupOptions;
+use crate::graphics::color::{rgb, DEVICE_CMYK, DEVICE_RGB};
 use crate::resource;
 use crate::resource::{Resource, Resourceable};
-use crate::serialize::{Cacheable, MaybeDeviceColorSpace, SerializeContext};
+use crate::serialize::{Cacheable, GroupColorSpace, MaybeDeviceColorSpace, SerializeContext};
 use crate::stream::{FilterStreamBuilder, Stream};
 use crate::util::{NameExt, Prehashed};
+
+/// What a group XObject is used for, which decides its `/CS` under
+/// [`GroupColorSpace::Cmyk`].
+#[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
+pub(crate) enum GroupRole {
+    /// Drawn in a page or another form: inherits the parent's blending space.
+    Content,
+    /// The `/G` of a soft mask: has no parent, so it names its blending space.
+    MaskSource,
+}
 
 #[derive(Debug, Hash, Eq, PartialEq)]
 struct Repr {
     stream: Stream,
     isolated: bool,
+    knockout: bool,
     transparency_group_color_space: bool,
     custom_bbox: Option<Rect>,
+    role: GroupRole,
 }
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq)]
@@ -28,8 +42,54 @@ impl XObject {
     pub(crate) fn new(
         stream: Stream,
         isolated: bool,
+        transparency_group_color_space: bool,
+        custom_bbox: Option<Rect>,
+    ) -> Self {
+        Self::with_role(
+            stream,
+            isolated,
+            transparency_group_color_space,
+            custom_bbox,
+            GroupRole::Content,
+        )
+    }
+
+    /// A content group with the given group attributes.
+    pub(crate) fn group(stream: Stream, options: GroupOptions) -> Self {
+        Self::build(
+            stream,
+            options.isolated,
+            options.knockout,
+            false,
+            None,
+            GroupRole::Content,
+        )
+    }
+
+    pub(crate) fn with_role(
+        stream: Stream,
+        isolated: bool,
+        transparency_group_color_space: bool,
+        custom_bbox: Option<Rect>,
+        role: GroupRole,
+    ) -> Self {
+        Self::build(
+            stream,
+            isolated,
+            false,
+            transparency_group_color_space,
+            custom_bbox,
+            role,
+        )
+    }
+
+    fn build(
+        stream: Stream,
+        isolated: bool,
+        knockout: bool,
         mut transparency_group_color_space: bool,
         custom_bbox: Option<Rect>,
+        role: GroupRole,
     ) -> Self {
         // In case a mask was invoked in the content stream, we _always_ create
         // a new transparency group. Please see <https://github.com/typst/typst/issues/5509>.
@@ -46,8 +106,10 @@ impl XObject {
         Self(Arc::new(Prehashed::new(Repr {
             stream,
             isolated,
+            knockout,
             transparency_group_color_space,
             custom_bbox,
+            role,
         })))
     }
 
@@ -73,10 +135,15 @@ impl Cacheable for XObject {
             sc.register_validation_error(validation_error.clone());
         }
 
-        let use_transparency_group = self.0.isolated || self.0.transparency_group_color_space;
+        let use_transparency_group =
+            self.0.isolated || self.0.knockout || self.0.transparency_group_color_space;
 
         if use_transparency_group {
             sc.register_validation_error(ValidationError::Transparency(sc.location));
+        }
+
+        if use_transparency_group || sc.uses_transparency(&self.0.stream.resource_dictionary) {
+            sc.mark_transparent(root_ref);
         }
 
         let serialize_settings = sc.serialize_settings();
@@ -88,13 +155,21 @@ impl Cacheable for XObject {
         //
         // So while we don't technically always need to write it, let's just play it save
         // and always add a group color space in case we have a transparency group.
-        let transparency_group_cs = if use_transparency_group {
-            Some(sc.register_colorspace(
-                chunk_container,
-                rgb::color_space(serialize_settings.no_device_cs).into(),
-            ))
-        } else {
+        //
+        // Under `GroupColorSpace::Cmyk`, content groups inherit the CMYK page group instead.
+        let transparency_group_cs = if !use_transparency_group {
             None
+        } else {
+            match (serialize_settings.group_color_space, self.0.role) {
+                (GroupColorSpace::Rgb, _) => Some(sc.register_colorspace(
+                    chunk_container,
+                    rgb::color_space(serialize_settings.no_device_cs).into(),
+                )),
+                (GroupColorSpace::Cmyk, GroupRole::Content) => None,
+                (GroupColorSpace::Cmyk, GroupRole::MaskSource) => {
+                    Some(sc.mask_group_color_space(chunk_container))
+                }
+            }
         };
 
         let x_object_stream = FilterStreamBuilder::new_from_content_stream(
@@ -125,15 +200,12 @@ impl Cacheable for XObject {
                 transparency.isolated(self.0.isolated);
             }
 
-            if let Some(transparency_group_cs) = transparency_group_cs {
-                let pdf_cs = transparency.insert(Name(b"CS"));
+            if self.0.knockout {
+                transparency.knockout(true);
+            }
 
-                match transparency_group_cs {
-                    MaybeDeviceColorSpace::DeviceRgb => pdf_cs.primitive(DEVICE_RGB.to_pdf_name()),
-                    // Can only be SRGB
-                    MaybeDeviceColorSpace::ColorSpace(cs) => pdf_cs.primitive(cs.get_ref()),
-                    _ => unreachable!(),
-                }
+            if let Some(transparency_group_cs) = transparency_group_cs {
+                write_group_color_space(transparency, transparency_group_cs);
             }
 
             transparency.finish();
@@ -142,6 +214,18 @@ impl Cacheable for XObject {
 
         x_object.finish();
         chunk_container.streams.x_objects.push(chunk);
+    }
+}
+
+/// Write the `/CS` of a transparency group: DeviceRGB, DeviceCMYK, sRGB or the CMYK profile.
+pub(crate) fn write_group_color_space(group: &mut Group<'_>, cs: MaybeDeviceColorSpace) {
+    let pdf_cs = group.insert(Name(b"CS"));
+
+    match cs {
+        MaybeDeviceColorSpace::DeviceRgb => pdf_cs.primitive(DEVICE_RGB.to_pdf_name()),
+        MaybeDeviceColorSpace::DeviceCMYK => pdf_cs.primitive(DEVICE_CMYK.to_pdf_name()),
+        MaybeDeviceColorSpace::ColorSpace(cs) => pdf_cs.primitive(cs.get_ref()),
+        _ => unreachable!(),
     }
 }
 

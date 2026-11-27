@@ -1,0 +1,72 @@
+[package]
+name = "craft-update"
+description = "Release checking, downloading, installing and self-updating for the Craft App Suite and ArtCraft Launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+autotests = false
+
+[lib]
+# The lib's test target is the crate's one test executable: its trials and, with `screen-testing`, the
+# screen tests in tests/it.
+harness = false
+
+[lints]
+workspace = true
+
+[features]
+suite = ["screen-testing", "craft-ui/suite"]
+# Opt-in migration of first party Flatpak bundles to the ArtCraft OCI remote.
+oci_migration = []
+default = []
+# Developer builds only: downloads from a mirror on loopback, and plain HTTP from remote hosts. No other feature turns it on.
+local-mirror = []
+ui = ["dep:egui", "dep:image", "dep:craft-ui", "dep:craft-host", "dep:craft-theme"]
+# The dialog stories, the updater's test seams and the integration binary `tests/it`.
+screen-testing = ["ui", "craft-ui/testing"]
+
+[dependencies]
+egui = { workspace = true, optional = true }
+craft-ui = { workspace = true, optional = true }
+# `Tone` for the dialogs' notices.
+craft-theme = { workspace = true, optional = true }
+# `Host::app` and `Host::icon_png`: the name and icon the update dialogs show.
+craft-host = { workspace = true, features = ["ui"], optional = true }
+# Decodes the app icon the update dialogs show (`Host::icon_png`); PNG only.
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = "0.4"
+tempfile = "3"
+sha2 = "0.10"
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring", "gzip", "platform-verifier"] }
+chrono = { workspace = true }
+semver = { version = "1", features = ["serde"] }
+
+[dev-dependencies]
+craft-ui = { workspace = true, features = ["suite"] }
+flate2 = "1"
+
+[target.'cfg(unix)'.dependencies]
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = "1"
+
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.55"
+dunce = "1"
+# `deflate-flate2` with flate2's default miniz_oxide backend, not zip's `deflate` (zopfli and
+# zlib-rs): Cargo unifies flate2's features across an app, and zlib-rs would switch the whole
+# app's flate2 to it, where level 1 is a static-Huffman mode that can make output larger than
+# its input (Lightcraft's 16-bit ZIP TIFFs on Windows).
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+flate2 = "1"
+winsafe = { version = "0.0.29", features = ["advapi", "kernel", "shell", "version"] }
+verifysign = "1"

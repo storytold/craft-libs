@@ -8,16 +8,90 @@ use std::sync::Arc;
 /// Maximum input accepted by the default open operation (512 MiB).
 pub const MAX_INPUT_BYTES: usize = 512 * 1024 * 1024;
 
+/// Why a PDF could not be opened.
 #[derive(Debug, thiserror::Error)]
 pub enum OpenError {
     #[error("PDF exceeds the {limit}-byte input limit")]
+    #[allow(missing_docs)]
     InputLimit { limit: usize },
     #[error("PDF input could not be allocated")]
+    #[allow(missing_docs)]
     Allocation,
     #[error("PDF parser rejected the document: {0:?}")]
+    #[allow(missing_docs)]
     Load(syntax::LoadPdfError),
     #[error("PDF parser failed internally")]
+    #[allow(missing_docs)]
     BackendPanic,
+}
+
+/// Failure of an open that accepts cooperative cancellation.
+#[derive(Debug, thiserror::Error)]
+pub enum CancellableOpenError {
+    /// The caller cancelled the open.
+    #[error("PDF opening canceled")]
+    Cancelled,
+    /// The open itself failed.
+    #[error(transparent)]
+    Open(#[from] OpenError),
+}
+
+/// Open shared input with cooperative cancellation and explicit caller limits.
+/// The callback runs on this thread. Once it requests cancellation this operation returns
+/// [`CancellableOpenError::Cancelled`]; a loaded PDF does not retain its callback.
+pub fn open_with_options_and_cancel(
+    bytes: Arc<Vec<u8>>,
+    password: Option<&str>,
+    options: &OpenOptions,
+    cancel: &syntax::Cancellation,
+) -> Result<syntax::Pdf, CancellableOpenError> {
+    guard_cancelled_open(|| read_with_cancel(bytes, password, options, cancel))
+}
+
+fn guard_cancelled_open(read: impl FnOnce() -> Result<syntax::Pdf, CancellableOpenError>) -> Result<syntax::Pdf, CancellableOpenError> {
+    catch_unwind(AssertUnwindSafe(read)).map_err(|_| CancellableOpenError::Open(OpenError::BackendPanic))?
+}
+
+fn read_with_cancel(
+    bytes: Arc<Vec<u8>>,
+    password: Option<&str>,
+    options: &OpenOptions,
+    cancel: &syntax::Cancellation,
+) -> Result<syntax::Pdf, CancellableOpenError> {
+    if cancel.requested() {
+        return Err(CancellableOpenError::Cancelled);
+    }
+    check_input_size_with(bytes.len(), options)?;
+    let result = syntax::Pdf::new_with_password_limits_and_cancel(bytes, password.unwrap_or(""), options.decode_limits, cancel);
+    result.map_err(|e| match e {
+        syntax::CancellableLoadError::Cancelled => CancellableOpenError::Cancelled,
+        syntax::CancellableLoadError::Load(e) => CancellableOpenError::Open(OpenError::Load(e)),
+    })
+}
+
+/// Copy borrowed input in bounded portions and open it with cooperative cancellation.
+/// The input bound and allocation error retain [`open_slice_with_options`]'s policy.
+pub fn open_slice_with_options_and_cancel(
+    bytes: &[u8],
+    password: Option<&str>,
+    options: &OpenOptions,
+    cancel: &syntax::Cancellation,
+) -> Result<syntax::Pdf, CancellableOpenError> {
+    guard_cancelled_open(|| {
+        if cancel.requested() {
+            return Err(CancellableOpenError::Cancelled);
+        }
+        check_input_size_with(bytes.len(), options)?;
+        let mut owned = Vec::new();
+        owned.try_reserve_exact(bytes.len()).map_err(|_| OpenError::Allocation)?;
+        for chunk in bytes.chunks(64 * 1024) {
+            if cancel.requested() {
+                return Err(CancellableOpenError::Cancelled);
+            }
+            owned.extend_from_slice(chunk);
+        }
+        read_with_cancel(Arc::new(owned), password, options, cancel)
+    })
 }
 
 /// Check the input bound before an application allocates or starts another PDF reader.
@@ -98,8 +172,10 @@ pub fn interpret_page<'a>(
     catch_unwind(AssertUnwindSafe(|| interpret::interpret_page(page, context, device))).map_err(|_| ExecutionError::BackendPanic)
 }
 
+/// Why interpreting a page failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ExecutionError {
     #[error("PDF page interpretation failed internally")]
+    #[allow(missing_docs)]
     BackendPanic,
 }

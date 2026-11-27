@@ -7,33 +7,20 @@ use super::RegionBitmap;
 use super::pattern::PatternDictionary;
 use super::{CombinationOperator, RegionSegmentInfo, Template, parse_region_segment_info};
 use crate::ScratchBuffers;
-use crate::bitmap::{Bitmap, MAX_DIMENSION, WORD_BITS};
+use crate::bitmap::{Bitmap, MAX_DIMENSION, WORD_BITS, copy_work, decode_work};
 use crate::error::{OverflowError, ParseError, RegionError, Result, bail};
 use crate::gray_scale::{GrayScaleParams, decode_gray_scale_image};
 use crate::reader::Reader;
 
 /// Decode a halftone region segment (7.4.5.2, 6.6).
-pub(crate) fn decode(
-    header: &HalftoneRegionHeader<'_>,
-    pattern_dict: &PatternDictionary,
-    ctx: &mut ScratchBuffers,
-) -> Result<RegionBitmap> {
+pub(crate) fn decode(header: &HalftoneRegionHeader<'_>, pattern_dict: &PatternDictionary, ctx: &mut ScratchBuffers) -> Result<RegionBitmap> {
     let region = &header.region_info;
 
-    let mut htreg = Bitmap::new_with(
-        region.width,
-        region.height,
-        region.x_location,
-        region.y_location,
-        header.flags.initial_pixel_color,
-    )?;
+    let mut htreg = Bitmap::new_with(region.width, region.height, region.x_location, region.y_location, header.flags.initial_pixel_color)?;
 
     decode_into(header, pattern_dict, &mut htreg, ctx)?;
 
-    Ok(RegionBitmap {
-        bitmap: htreg,
-        combination_operator: region.combination_operator,
-    })
+    Ok(RegionBitmap { bitmap: htreg, combination_operator: region.combination_operator })
 }
 
 pub(crate) fn decode_into(
@@ -42,17 +29,9 @@ pub(crate) fn decode_into(
     htreg: &mut Bitmap,
     ctx: &mut ScratchBuffers,
 ) -> Result<()> {
-    let skip_bitmap = if header.flags.enable_skip {
-        Some(compute_skip_bitmap(header, pattern_dict, htreg)?)
-    } else {
-        None
-    };
+    let skip_bitmap = if header.flags.enable_skip { Some(compute_skip_bitmap(header, pattern_dict, htreg)?) } else { None };
 
-    // "3) Set HBPP to ⌈log₂(HNUMPATS)⌉." (6.6.5)
-    let bits_per_pixel = (pattern_dict.patterns.len() as u32)
-        .saturating_sub(1)
-        .checked_ilog2()
-        .map_or(1, |n| n + 1);
+    let bits_per_pixel = bits_per_pixel(pattern_dict);
 
     // "4) Decode an image GI of size HGW by HGH with HBPP bits per pixel using
     // the gray-scale image decoding procedure as described in Annex C." (6.6.5)
@@ -73,6 +52,25 @@ pub(crate) fn decode_into(
     Ok(())
 }
 
+/// PdfCraft patch: the work of a halftone region (see `bitmap::MAX_WORK`): a bit plane of the grid
+/// for each bit of a pattern's index, a pattern copied for each cell, and the region itself. One
+/// such segment in a 795-byte PDF took 265 s.
+pub(crate) fn work(header: &HalftoneRegionHeader<'_>, patterns: &PatternDictionary) -> u64 {
+    let grid = &header.grid_position_and_size;
+    let cells = u64::from(grid.width) * u64::from(grid.height);
+    let planes = u64::from(bits_per_pixel(patterns));
+    let copied = copy_work(patterns.pattern_width, patterns.pattern_height);
+    planes
+        .saturating_mul(decode_work(grid.width, grid.height))
+        .saturating_add(cells.saturating_mul(copied))
+        .saturating_add(copy_work(header.region_info.width, header.region_info.height))
+}
+
+/// "3) Set HBPP to ⌈log₂(HNUMPATS)⌉." (6.6.5)
+fn bits_per_pixel(patterns: &PatternDictionary) -> u32 {
+    (patterns.patterns.len() as u32).saturating_sub(1).checked_ilog2().map_or(1, |n| n + 1)
+}
+
 /// Parse a halftone region segment header (7.4.5.1).
 pub(crate) fn parse<'a>(reader: &mut Reader<'a>) -> Result<HalftoneRegionHeader<'a>> {
     let region_info = parse_region_segment_info(reader)?;
@@ -83,13 +81,7 @@ pub(crate) fn parse<'a>(reader: &mut Reader<'a>) -> Result<HalftoneRegionHeader<
     let combination_operator = CombinationOperator::from_value(flags_byte >> 4)?;
     let initial_pixel_color = flags_byte & 0x80 != 0;
 
-    let flags = HalftoneRegionFlags {
-        mmr,
-        template,
-        enable_skip,
-        combination_operator,
-        initial_pixel_color,
-    };
+    let flags = HalftoneRegionFlags { mmr, template, enable_skip, combination_operator, initial_pixel_color };
 
     let grid_width = reader.read_u32().ok_or(ParseError::UnexpectedEof)?;
     let grid_height = reader.read_u32().ok_or(ParseError::UnexpectedEof)?;
@@ -97,8 +89,8 @@ pub(crate) fn parse<'a>(reader: &mut Reader<'a>) -> Result<HalftoneRegionHeader<
     if grid_width > MAX_DIMENSION || grid_height > MAX_DIMENSION {
         bail!(OverflowError::GridDimension);
     }
-    // PdfCraft patch: the product is bounded too (see `bitmap::MAX_PIXELS`).
-    if u64::from(grid_width) * u64::from(grid_height) > crate::bitmap::MAX_PIXELS {
+    // PdfCraft patch: the product is bounded too (see `bitmap::MAX_GRID_CELLS`).
+    if u64::from(grid_width) * u64::from(grid_height) > crate::bitmap::MAX_GRID_CELLS {
         bail!(OverflowError::GridDimension);
     }
 
@@ -117,20 +109,11 @@ pub(crate) fn parse<'a>(reader: &mut Reader<'a>) -> Result<HalftoneRegionHeader<
     let grid_x_vector = reader.read_u16().ok_or(ParseError::UnexpectedEof)?;
     let grid_y_vector = reader.read_u16().ok_or(ParseError::UnexpectedEof)?;
 
-    let grid_vector = HalftoneGridVector {
-        x_vector: grid_x_vector,
-        y_vector: grid_y_vector,
-    };
+    let grid_vector = HalftoneGridVector { x_vector: grid_x_vector, y_vector: grid_y_vector };
 
     let data = reader.tail().ok_or(ParseError::UnexpectedEof)?;
 
-    Ok(HalftoneRegionHeader {
-        region_info,
-        flags,
-        grid_position_and_size,
-        grid_vector,
-        data,
-    })
+    Ok(HalftoneRegionHeader { region_info, flags, grid_position_and_size, grid_vector, data })
 }
 
 /// Parsed halftone region segment flags (7.4.5.1.1).
@@ -213,11 +196,7 @@ impl GridCoords {
 }
 
 /// Compute the HSKIP bitmap (6.6.5.1).
-fn compute_skip_bitmap(
-    header: &HalftoneRegionHeader<'_>,
-    pattern_dict: &PatternDictionary,
-    htreg: &Bitmap,
-) -> Result<Vec<u32>> {
+fn compute_skip_bitmap(header: &HalftoneRegionHeader<'_>, pattern_dict: &PatternDictionary, htreg: &Bitmap) -> Result<Vec<u32>> {
     let grid = &header.grid_position_and_size;
     let pattern_width = pattern_dict.pattern_width as i32;
     let pattern_height = pattern_dict.pattern_height as i32;
@@ -225,9 +204,7 @@ fn compute_skip_bitmap(
     let region_height = htreg.height as i32;
 
     let stride = grid.width.div_ceil(32);
-    let len = stride
-        .checked_mul(grid.height)
-        .ok_or(OverflowError::BitmapDimension)? as usize;
+    let len = stride.checked_mul(grid.height).ok_or(OverflowError::BitmapDimension)? as usize;
     let mut hskip = vec![0_u32; len];
     let mut coords = GridCoords::new(grid, &header.grid_vector);
 
@@ -235,10 +212,7 @@ fn compute_skip_bitmap(
         for n_g in 0..grid.width {
             let (x, y) = coords.get();
 
-            let skip = (x + pattern_width <= 0)
-                || (x >= region_width)
-                || (y + pattern_height <= 0)
-                || (y >= region_height);
+            let skip = (x + pattern_width <= 0) || (x >= region_width) || (y + pattern_height <= 0) || (y >= region_height);
 
             if skip {
                 let word_idx = (m_g * stride + n_g / 32) as usize;
@@ -255,12 +229,7 @@ fn compute_skip_bitmap(
 }
 
 /// Render patterns into the target region (6.6.5.2).
-fn render_patterns(
-    region: &mut Bitmap,
-    gi: &[u32],
-    header: &HalftoneRegionHeader<'_>,
-    pattern_dict: &PatternDictionary,
-) -> Result<()> {
+fn render_patterns(region: &mut Bitmap, gi: &[u32], header: &HalftoneRegionHeader<'_>, pattern_dict: &PatternDictionary) -> Result<()> {
     let grid = &header.grid_position_and_size;
     let op = header.flags.combination_operator;
     let pw = pattern_dict.pattern_width;
@@ -271,11 +240,7 @@ fn render_patterns(
     let num_patterns = pattern_dict.patterns.len();
 
     // The original pattern mask has 1s in the top `pw` bits.
-    let original_mask = if pw >= WORD_BITS {
-        !0_u32
-    } else {
-        !0_u32 << (WORD_BITS - pw)
-    };
+    let original_mask = if pw >= WORD_BITS { !0_u32 } else { !0_u32 << (WORD_BITS - pw) };
 
     macro_rules! blit_rows {
         ($data:expr, $shifted:expr, $yu:expr, $first_word:expr, $two:expr,
@@ -317,12 +282,11 @@ fn render_patterns(
             }
 
             // Check whether we can use the blit fast path.
-            let shifted =
-                if x >= 0 && y >= 0 && x + pw as i32 <= region_w && y + ph as i32 <= region_h {
-                    pattern_dict.shifted_pattern(pattern_index, x as u32 % WORD_BITS)
-                } else {
-                    None
-                };
+            let shifted = if x >= 0 && y >= 0 && x + pw as i32 <= region_w && y + ph as i32 <= region_h {
+                pattern_dict.shifted_pattern(pattern_index, x as u32 % WORD_BITS)
+            } else {
+                None
+            };
 
             if let Some(shifted) = shifted {
                 let xu = x as u32;
@@ -336,79 +300,28 @@ fn render_patterns(
 
                 match op {
                     CombinationOperator::Or => {
-                        blit_rows!(
-                            region.data,
-                            shifted,
-                            yu,
-                            first_word,
-                            two,
-                            |d, s| d | s,
-                            |d, s| d | s
-                        );
+                        blit_rows!(region.data, shifted, yu, first_word, two, |d, s| d | s, |d, s| d | s);
                     }
                     CombinationOperator::Xor => {
-                        blit_rows!(
-                            region.data,
-                            shifted,
-                            yu,
-                            first_word,
-                            two,
-                            |d, s| d ^ s,
-                            |d, s| d ^ s
-                        );
+                        blit_rows!(region.data, shifted, yu, first_word, two, |d, s| d ^ s, |d, s| d ^ s);
                     }
                     CombinationOperator::And => {
                         let inv_mask0 = !(original_mask >> offset);
-                        let inv_mask1 = if offset == 0 {
-                            !0
-                        } else {
-                            !(original_mask << (WORD_BITS - offset))
-                        };
-                        blit_rows!(
-                            region.data,
-                            shifted,
-                            yu,
-                            first_word,
-                            two,
-                            |d, s| d & (s | inv_mask0),
-                            |d, s| d & (s | inv_mask1)
-                        );
+                        let inv_mask1 = if offset == 0 { !0 } else { !(original_mask << (WORD_BITS - offset)) };
+                        blit_rows!(region.data, shifted, yu, first_word, two, |d, s| d & (s | inv_mask0), |d, s| d & (s | inv_mask1));
                     }
                     CombinationOperator::Replace => {
                         let inv_mask0 = !(original_mask >> offset);
-                        let inv_mask1 = if offset == 0 {
-                            !0
-                        } else {
-                            !(original_mask << (WORD_BITS - offset))
-                        };
-                        blit_rows!(
-                            region.data,
-                            shifted,
-                            yu,
-                            first_word,
-                            two,
-                            |d, s| (d & inv_mask0) | s,
-                            |d, s| (d & inv_mask1) | s
-                        );
+                        let inv_mask1 = if offset == 0 { !0 } else { !(original_mask << (WORD_BITS - offset)) };
+                        blit_rows!(region.data, shifted, yu, first_word, two, |d, s| (d & inv_mask0) | s, |d, s| (d & inv_mask1) | s);
                     }
                     CombinationOperator::Xnor => {
                         let mask0 = original_mask >> offset;
-                        let mask1 = if offset == 0 {
-                            0
-                        } else {
-                            original_mask << (WORD_BITS - offset)
-                        };
+                        let mask1 = if offset == 0 { 0 } else { original_mask << (WORD_BITS - offset) };
                         let inv_mask0 = !mask0;
                         let inv_mask1 = !mask1;
-                        blit_rows!(
-                            region.data,
-                            shifted,
-                            yu,
-                            first_word,
-                            two,
-                            |d, s| (d & inv_mask0) | (!(d ^ s) & mask0),
-                            |d, s| (d & inv_mask1) | (!(d ^ s) & mask1)
-                        );
+                        blit_rows!(region.data, shifted, yu, first_word, two, |d, s| (d & inv_mask0) | (!(d ^ s) & mask0), |d, s| (d & inv_mask1)
+                            | (!(d ^ s) & mask1));
                     }
                 }
             } else {

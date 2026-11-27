@@ -1,0 +1,74 @@
+name: Shared video
+
+on:
+  push:
+    branches: [main, next]
+    paths: ["crates/video/**", "crates/media/**", "crates/media-testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/video.yml"]
+  pull_request:
+    paths: ["crates/video/**", "crates/media/**", "crates/media-testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/video.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A fraction of the fuzz-style cases, as in the Workspace gate; nightly.yml runs them in full.
+env:
+  CRAFT_HOSTILE_DIVISOR: "8"
+  PROPTEST_CASES: "64"
+
+concurrency:
+  group: shared-video-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    timeout-minutes: 20
+    # fmt and clippy with all features run in the Workspace gate on every OS.
+    name: Video feature sets, docs, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
+        with:
+          toolchain: "1.95"
+          components: clippy
+          targets: wasm32-unknown-unknown
+      # Each feature on its own, so code that needs another feature fails here.
+      - name: Clippy, each feature alone
+        run: |
+          for f in "" dnx vp8 prores h264 hevc vp9 vp9-decode vp9-encode av1 threads; do
+            echo "::group::features: ${f:-none}"
+            cargo clippy -p craft-video --all-targets --locked --no-default-features ${f:+--features "$f"} -- -D warnings
+            echo "::endgroup::"
+          done
+      - run: cargo doc -p craft-video --all-features --no-deps --locked
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+      - run: cargo check -p craft-video --all-features --locked --target wasm32-unknown-unknown
+  test:
+    timeout-minutes: 30
+    # The Workspace gate runs these tests on every OS without ffmpeg; this runs them with it.
+    runs-on: ubuntu-latest
+    name: Video tests with ffmpeg
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
+        with:
+          toolchain: "1.95"
+      - name: Install ffmpeg
+        run: |
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg
+      - run: cargo test -p craft-video --all-features --locked
