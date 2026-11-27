@@ -339,10 +339,8 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             face((text.unwrap_or(&Label::Empty), !muted))
         } else {
             let entries = self.entries.iter().filter(|entry| entry.is_item()).map(|entry| (entry.face_label(), true));
-            let texts = entries
-                .chain(self.unlisted_label.iter().map(|text| (text, true)))
-                .chain(self.placeholder.iter().map(|text| (text, false)))
-                .chain(std::iter::once((&mixed, false)));
+            let missing = self.unlisted_label.as_ref().map(|text| (text, true)).or_else(|| self.placeholder.as_ref().map(|text| (text, false)));
+            let texts = entries.chain(missing).chain(std::iter::once((&mixed, false)));
             texts.map(face).fold(Vec2::ZERO, Vec2::max)
         };
         Vec2::new(size.x.max(cx.style.least_width), size.y)
