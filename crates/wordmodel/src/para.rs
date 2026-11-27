@@ -13,6 +13,9 @@ use crate::props::{CharProps, ParaProps};
 use crate::section::SectionProps;
 use crate::{DocError, Result};
 
+mod source_runs;
+pub use source_runs::SourceRuns;
+
 mod file_orders;
 mod float;
 mod inline_kinds;
@@ -30,6 +33,9 @@ pub use run::{COLUMN_BREAK, LINE_BREAK, NB_HYPHEN, NBSP, OBJ, PAGE_BREAK, Run, S
 pub struct Paragraph {
     pub text: String,
     pub runs: Vec<Run>,
+    /// Original DOCX run boundaries; not part of semantic equality or layout.
+    #[serde(default, rename = "sourceRuns", skip_serializing_if = "Option::is_none")]
+    pub source_runs: Option<SourceRuns>,
     #[serde(default, skip_serializing_if = "ParaProps::is_empty")]
     pub props: ParaProps,
     /// Formatting of the paragraph mark (used when typing into an empty paragraph).
@@ -80,6 +86,7 @@ impl Paragraph {
         Paragraph {
             text: String::new(),
             runs: Vec::new(),
+            source_runs: None,
             props: ParaProps::default(),
             mark: CharProps::default(),
             objects: Vec::new(),
@@ -510,6 +517,7 @@ impl Paragraph {
         let mut tail = Paragraph {
             text: tail_text,
             runs: tail_runs,
+            source_runs: None,
             props: self.props.clone(),
             mark: if self.text.is_empty() && off == 0 { self.mark.clone() } else { carry },
             objects: tail_objs,

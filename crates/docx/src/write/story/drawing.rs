@@ -27,6 +27,14 @@ impl Writer<'_> {
     pub(super) fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
         let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, fx, .. } = o else { return };
         let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
+        let svg_rid = self.doc.svg_pictures.get(media).and_then(|key| {
+            let file = self.media_files.get(key)?;
+            if !self.doc.media.contains_key(key) {
+                return None;
+            }
+            self.used_media.insert(key.clone());
+            Some(rels.add(rt::IMAGE, &format!("media/{file}"), false))
+        });
         self.used_media.insert(media.clone());
         w.open("pic:pic", &[]);
         w.open("pic:nvPicPr", &[]);
@@ -39,7 +47,7 @@ impl Writer<'_> {
         // Brightness, contrast and transparency (#1711, #1766) as `a:blip` effects (ECMA-376
         // §20.1.8.13 CT_Blip: an unbounded choice of effects, in any order).
         let fx = fx.clamped();
-        if !fx.changes_pixels() && fx.transparency == 0 {
+        if !fx.changes_pixels() && fx.transparency == 0 && svg_rid.is_none() {
             w.empty("a:blip", &[("r:embed", &rid)]);
         } else {
             w.open("a:blip", &[("r:embed", &rid)]);
@@ -48,6 +56,13 @@ impl Writer<'_> {
             }
             if fx.bright != 0 || fx.contrast != 0 {
                 w.empty("a:lum", &[("bright", &n(i64::from(fx.bright))), ("contrast", &n(i64::from(fx.contrast)))]);
+            }
+            if let Some(id) = svg_rid {
+                w.open("a:extLst", &[]);
+                w.open("a:ext", &[("uri", "{96DAC541-7B7A-43D3-8B79-37D633B846F1}")]);
+                w.empty("asvg:svgBlip", &[("r:embed", &id)]);
+                w.close("a:ext");
+                w.close("a:extLst");
             }
             w.close("a:blip");
         }
@@ -60,15 +75,15 @@ impl Writer<'_> {
         w.close("a:stretch");
         w.close("pic:blipFill");
         w.open("pic:spPr", &[("bwMode", "auto")]);
-        xfrm(w, off, *iw, *ih, float.spin());
+        if let Some([cx, cy]) = float.picture_extent {
+            xfrm_extent(w, off, &cx.to_string(), &cy.to_string(), float.spin());
+        } else {
+            xfrm(w, off, *iw, *ih, float.spin());
+        }
         w.open("a:prstGeom", &[("prst", "rect")]);
         w.empty("a:avLst", &[]);
         w.close("a:prstGeom");
-        if let Some(radius) = fx.soft_edge_emu {
-            w.open("a:effectLst", &[]);
-            w.empty("a:softEdge", &[("rad", &n(i64::from(radius)))]);
-            w.close("a:effectLst");
-        }
+        effect_list(w, &fx.shape_effects());
         w.close("pic:spPr");
         w.close("pic:pic");
     }
@@ -186,9 +201,17 @@ impl Writer<'_> {
                 w.close("a:ln");
             }
             None => {
-                let cap = extra.cap.ooxml();
-                let ln: &[(&str, &str)] = if extra.cap.is_flat() { &[] } else { &[("cap", cap)] };
-                w.open("a:ln", ln);
+                // An invisible outline still contributes to text-box geometry.
+                // Keep its width even though no ink is painted.
+                let width = emu(stroke_width.clamp(0.0, 100.0));
+                let mut ln = Vec::new();
+                if *stroke_width > 0.0 {
+                    ln.push(("w", width.as_str()));
+                }
+                if !extra.cap.is_flat() {
+                    ln.push(("cap", extra.cap.ooxml()));
+                }
+                w.open("a:ln", &ln);
                 w.empty("a:noFill", &[]);
                 line_dash(w, &extra.dash);
                 w.close("a:ln");
@@ -517,9 +540,13 @@ fn effect_list(w: &mut W, effects: &ShapeEffects) {
 }
 
 fn xfrm(w: &mut W, (x, y): (f32, f32), cw: f32, ch: f32, spin: craft_wordmodel::geom::Spin) {
+    xfrm_extent(w, (x, y), &emu(cw.max(0.0)), &emu(ch.max(0.0)), spin);
+}
+
+fn xfrm_extent(w: &mut W, (x, y): (f32, f32), cx: &str, cy: &str, spin: craft_wordmodel::geom::Spin) {
     w.open("a:xfrm", &spin_attrs(spin).iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>());
     w.empty("a:off", &[("x", &emu(x)), ("y", &emu(y))]);
-    w.empty("a:ext", &[("cx", &emu(cw.max(0.0))), ("cy", &emu(ch.max(0.0)))]);
+    w.empty("a:ext", &[("cx", cx), ("cy", cy)]);
     w.close("a:xfrm");
 }
 

@@ -143,10 +143,15 @@ impl Writer<'_> {
         let styles = &self.doc.styles;
         let para_style = p.props.style.as_deref();
         let para_lang = crate::write::bidi::para_inherits_lang_bidi(styles, para_style);
-        let spans = crate::write::bidi::direction_spans(&p.text, rtl_para, p.run_ranges(), |c| {
+        let formatted = crate::write::bidi::direction_spans(&p.text, rtl_para, p.run_ranges(), |c| {
             para_lang || crate::write::bidi::char_style_has_lang_bidi(styles, c)
         });
+        // Equal formatting runs can share shaping in the editor, but Word's
+        // tracking/rounding is sensitive to their original XML boundaries.
+        let mut source = SourcePieces::new(p);
+        let spans = source.split(formatted);
         for (range, props) in &spans {
+            source.note(range.start, pieces.len());
             let props: &CharProps = props;
             let range = range.clone();
             let base = range.start;
@@ -245,7 +250,7 @@ impl Writer<'_> {
                     // Gather simple pieces sharing these props into one run.
                     let mut j = i;
                     while let Some((pc, pr)) = pieces.get(j) {
-                        if matches!(pc, Piece::Obj(..)) || !(std::ptr::eq(*pr, props) || *pr == props) {
+                        if (j > i && source.starts_at(j)) || matches!(pc, Piece::Obj(..)) || !(std::ptr::eq(*pr, props) || *pr == props) {
                             break;
                         }
                         j += 1;
@@ -254,7 +259,7 @@ impl Writer<'_> {
                     let moves = self.moves_of(props);
                     self.move_ranges(w, &moves);
                     self.rev_open(w, props);
-                    w.open("w:r", &[]);
+                    w.open("w:r", &source.run_attrs(i));
                     self.rpr(w, props);
                     for (pc, _) in pieces.get(i..j).unwrap_or(&[]) {
                         match pc {
@@ -353,5 +358,75 @@ impl Writer<'_> {
                 w.close(self.rev_tag(i, tag));
             }
         }
+    }
+}
+
+/// A paragraph's source text-run boundaries and their `w:rsidR`/`w:rsidRPr` ids (hints kept from
+/// the file read), mapped onto the pieces the writer emits, so runs keep their original splits.
+struct SourcePieces<'a> {
+    boundaries: &'a [usize],
+    revisions: &'a [(usize, String)],
+    edits: &'a [(usize, String)],
+    /// Index of the first piece of each formatted span, with that span's ids.
+    starts: Vec<(usize, Option<&'a str>, Option<&'a str>)>,
+}
+
+impl<'a> SourcePieces<'a> {
+    fn new(p: &'a Paragraph) -> Self {
+        let s = p.source_runs.as_ref();
+        SourcePieces {
+            boundaries: s.map_or(&[][..], |s| s.offsets_for(&p.text)),
+            revisions: s.map_or(&[][..], |s| s.formatting_revisions_for(&p.text)),
+            edits: s.map_or(&[][..], |s| s.editing_revisions_for(&p.text)),
+            starts: Vec::new(),
+        }
+    }
+
+    fn active(&self) -> bool {
+        !self.boundaries.is_empty() || !self.revisions.is_empty() || !self.edits.is_empty()
+    }
+
+    /// Split the formatted spans at the source boundaries.
+    fn split<P: Clone>(&self, formatted: Vec<(std::ops::Range<usize>, P)>) -> Vec<(std::ops::Range<usize>, P)> {
+        let mut spans = Vec::new();
+        for (range, props) in formatted {
+            let first = self.boundaries.partition_point(|&i| i <= range.start);
+            let mut start = range.start;
+            for &end in self.boundaries.get(first..).unwrap_or(&[]).iter().take_while(|&&i| i < range.end) {
+                spans.push((start..end, props.clone()));
+                start = end;
+            }
+            spans.push((start..range.end, props));
+        }
+        spans
+    }
+
+    /// The span starting at text offset `at` begins at piece `piece`.
+    fn note(&mut self, at: usize, piece: usize) {
+        if !self.active() {
+            return;
+        }
+        let source_start = self.boundaries.get(self.boundaries.partition_point(|&i| i <= at).wrapping_sub(1)).copied().unwrap_or(0);
+        let find = |ids: &'a [(usize, String)]| ids.binary_search_by_key(&source_start, |r| r.0).ok().and_then(|i| ids.get(i)).map(|r| r.1.as_str());
+        self.starts.push((piece, find(self.revisions), find(self.edits)));
+    }
+
+    /// Does a source run start at piece `j`?
+    fn starts_at(&self, j: usize) -> bool {
+        self.starts.binary_search_by_key(&j, |s| s.0).is_ok()
+    }
+
+    /// The attributes of the run starting at piece `i`.
+    fn run_attrs(&self, i: usize) -> Vec<(&'a str, &'a str)> {
+        let k = self.starts.partition_point(|s| s.0 <= i).wrapping_sub(1);
+        let Some(&(_, revision, edit)) = self.starts.get(k) else { return Vec::new() };
+        let mut attrs = Vec::new();
+        if let Some(id) = edit {
+            attrs.push(("w:rsidR", id));
+        }
+        if let Some(id) = revision {
+            attrs.push(("w:rsidRPr", id));
+        }
+        attrs
     }
 }

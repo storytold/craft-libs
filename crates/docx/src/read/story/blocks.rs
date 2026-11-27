@@ -282,6 +282,12 @@ impl Reader<'_> {
             self.doc.styles.mark_runs_as_word_draws_them(&mut para, None);
         }
         para.normalize();
+        para.source_runs = craft_wordmodel::para::SourceRuns::new_with_revisions(
+            &para.text,
+            pb.run_boundaries,
+            pb.run_formatting_revisions,
+            pb.run_editing_revisions,
+        );
         para
     }
 

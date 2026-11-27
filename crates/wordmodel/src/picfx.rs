@@ -45,6 +45,34 @@ pub struct PicFx {
     /// Radius of a DrawingML soft edge in EMUs. An absent or zero radius leaves a sharp edge.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub soft_edge_emu: Option<u32>,
+    /// DrawingML outer shadow (`a:outerShdw`), separate from the shared pixels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<PictureShadow>,
+    /// DrawingML glow (`a:glow`), separate from the shared pixels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub glow: Option<PictureGlow>,
+}
+
+/// Picture decoration uses integer OOXML units so it remains an exact, hashable
+/// part of the per-instance image style: lengths in EMUs, angles in 1/60000 degree,
+/// transparency in thousandths of a percent (ECMA-376 §20.1.8).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PictureShadow {
+    pub color: crate::props::Rgb,
+    pub transparency: u32,
+    pub blur_emu: u32,
+    pub distance_emu: u32,
+    pub angle: i32,
+    pub rot_with_shape: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PictureGlow {
+    pub color: crate::props::Rgb,
+    pub transparency: u32,
+    pub radius_emu: u32,
 }
 
 impl PicFx {
@@ -55,12 +83,50 @@ impl PicFx {
             contrast: contrast.clamp(-FX_MAX, FX_MAX),
             transparency: transparency.clamp(0, FX_MAX),
             soft_edge_emu: None,
+            shadow: None,
+            glow: None,
         }
     }
 
     /// The same corrections, each clamped to its range (for values that came from anywhere).
     pub fn clamped(self) -> PicFx {
-        PicFx::new(self.bright, self.contrast, self.transparency).with_soft_edge_emu(self.soft_edge_emu.map_or(0, i64::from))
+        PicFx::new(self.bright, self.contrast, self.transparency).with_shape_effects(self.shape_effects())
+    }
+
+    /// Convert the picture's decoration to the common shape-effects painter.
+    pub fn shape_effects(&self) -> crate::effects::ShapeEffects {
+        use crate::effects::{Glow, Shadow, ShapeEffects};
+        ShapeEffects {
+            shadow: self.shadow.map(|s| Shadow {
+                color: s.color,
+                transparency: s.transparency as f32 / 1000.0,
+                blur: s.blur_emu as f32 / 12_700.0,
+                distance: s.distance_emu as f32 / 12_700.0,
+                angle: s.angle as f32 / 60_000.0,
+                rot_with_shape: s.rot_with_shape,
+            }),
+            glow: self.glow.map(|g| Glow { color: g.color, transparency: g.transparency as f32 / 1000.0, size: g.radius_emu as f32 / 12_700.0 }),
+            soft_edge: self.soft_edge_emu.map(|r| r as f32 / 12_700.0),
+        }
+        .sanitized()
+    }
+
+    /// Retain DrawingML decoration without baking it into the original image.
+    pub fn with_shape_effects(mut self, effects: crate::effects::ShapeEffects) -> Self {
+        let effects = effects.sanitized();
+        let emu = |v: f32| (v * 12_700.0).round() as u32;
+        self.shadow = effects.shadow.map(|s| PictureShadow {
+            color: s.color,
+            transparency: (s.transparency * 1000.0).round() as u32,
+            blur_emu: emu(s.blur),
+            distance_emu: emu(s.distance),
+            angle: (s.angle * 60_000.0).round() as i32,
+            rot_with_shape: s.rot_with_shape,
+        });
+        self.glow =
+            effects.glow.map(|g| PictureGlow { color: g.color, transparency: (g.transparency * 1000.0).round() as u32, radius_emu: emu(g.size) });
+        self.soft_edge_emu = effects.soft_edge.map(emu).filter(|r| *r != 0);
+        self
     }
 
     /// Sets and bounds the picture's soft-edge radius without changing its other effects.

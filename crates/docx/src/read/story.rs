@@ -125,6 +125,9 @@ struct PB {
     text: String,
     runs: Vec<Run>,
     objects: Vec<InlineObject>,
+    run_boundaries: Vec<usize>,
+    run_formatting_revisions: Vec<(usize, String)>,
+    run_editing_revisions: Vec<(usize, String)>,
 }
 
 impl PB {
