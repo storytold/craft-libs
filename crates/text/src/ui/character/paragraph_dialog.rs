@@ -31,6 +31,7 @@ use craft_ui::dialog::{
 use craft_ui::display::Text;
 use craft_ui::form::{Field, FieldGroup, Help};
 use craft_ui::layout_components::Stack;
+use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::pickers::Select;
 use craft_ui::primitives::TextRun;
 use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
@@ -641,8 +642,18 @@ impl ParagraphDialog {
         self.word && self.format.breaks.is_some() && self.format.asian.is_some()
     }
 
-    /// Adds a Tabs page showing `tabs`'s content, in place of the Tabs… button; OK's answer carries its stops
-    /// ([`ParagraphAnswer::tabs`]). For a dialog in a window of its own, where a second window for Tabs would be one
+    /// Whether the Tabs page shows, in place of the Tabs… button: only with the pages' strip to reach it.
+    fn tabs_shown(&self) -> bool {
+        self.tabs.is_some() && self.paged()
+    }
+
+    /// Whether the dialog's values are still those of the refused `answer`: the format and the Tabs page's stops.
+    fn matches(&self, answer: &ParagraphAnswer) -> bool {
+        answer.format == self.format && self.tabs.as_ref().zip(answer.tabs.as_ref()).is_none_or(|(tabs, refused)| tabs.matches(refused))
+    }
+
+    /// Adds a Tabs page showing `tabs`'s content, in place of the Tabs… button when the dialog shows Word's pages (a
+    /// dialog without them keeps the button); OK's answer carries its stops ([`ParagraphAnswer::tabs`]). For a dialog in a window of its own, where a second window for Tabs would be one
     /// window too many.
     #[must_use]
     pub fn tabs_page(mut self, tabs: TabStopsDialog) -> Self {
@@ -899,14 +910,28 @@ impl ParagraphDialog {
     }
 
     /// The bare content: the pages beside the button column; the button picked, if any.
-    fn show_bare(&mut self, ui: &mut Ui, scope: &Scope<'_>, valid: &Cell<bool>, labels: &[Label], waiting: bool) -> Option<usize> {
+    fn show_bare(
+        &mut self,
+        ui: &mut Ui,
+        scope: &Scope<'_>,
+        valid: &Cell<bool>,
+        labels: &[Label],
+        waiting: bool,
+        refusal: Option<Label>,
+    ) -> Option<usize> {
         let mut picked = None;
+        // The body applies this pass's edits before the keys are read: the state before it says whether a key ended a
+        // tab stop's position edit, the state after whether one began.
+        let editing = self.tabs.as_ref().is_some_and(TabStopsDialog::editing);
         // The pages take a fixed width, as the dialog's do, so a window that follows its content keeps one width and
         // follows only the height of the page shown (the preview fills what it is given).
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(BARE_PAGE_WIDTH);
                 self.body(ui, scope, valid);
+                if let Some(reason) = refusal {
+                    Notice::new(Tone::Bad, reason).layout(NoticeLayout::Inline).show(ui);
+                }
             });
             ui.vertical(|ui| {
                 ui.set_width(BARE_BUTTON_WIDTH);
@@ -920,11 +945,13 @@ impl ParagraphDialog {
                 }
             });
         });
+        let editing = editing || self.tabs.as_ref().is_some_and(TabStopsDialog::editing);
         let keys = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
         picked.or(match keys {
+            // An Enter or Escape that begins or ends a tab stop's position edit is the edit's, not the dialog's.
+            _ if editing => None,
             (_, true) => Some(CANCEL),
-            // Enter in a tab stop's position ends that edit, not the dialog.
-            (true, _) if valid.get() && !waiting && !self.tabs.as_ref().is_some_and(TabStopsDialog::editing) => Some(OK),
+            (true, _) if valid.get() && !waiting => Some(OK),
             _ => None,
         })
     }
@@ -969,10 +996,10 @@ impl StackDialog for ParagraphDialog {
         let scope = Scope { words: &words, units: &units };
         let valid = Cell::new(self.out_of_range().is_empty());
         let waiting = self.held.is_waiting();
-        let refused = self.held.refusal().map(|(reason, answer)| (reason.clone(), answer.format.clone()));
+        let refused = self.held.refusal().map(|(reason, answer)| (reason.clone(), answer.clone()));
         let unchanged = Cell::new(true);
         // With the Tabs page, its button goes.
-        let buttons = if self.tabs.is_some() { 2 } else { 3 };
+        let buttons = if self.tabs_shown() { 2 } else { 3 };
         let buttons = [
             FooterButton::new(common.ok.clone(), DialogRole::Accept).stays_open(self.hold),
             FooterButton::new(common.cancel.clone(), DialogRole::Cancel),
@@ -982,10 +1009,11 @@ impl StackDialog for ParagraphDialog {
         .take(buttons);
         if self.bare {
             let labels = [common.ok.clone(), common.cancel.clone(), words.tabs.clone()];
-            let labels = &labels[..if self.tabs.is_some() { 2 } else { 3 }];
-            let picked = self.show_bare(ui, &scope, &valid, labels, waiting);
+            let labels = &labels[..if self.tabs_shown() { 2 } else { 3 }];
+            let notice = refused.as_ref().filter(|(_, answer)| self.matches(answer)).map(|(reason, _)| reason.clone());
+            let picked = self.show_bare(ui, &scope, &valid, labels, waiting, notice);
             // A refused answer stands until a field changes, as in the dialog.
-            if refused.as_ref().is_some_and(|(_, format)| *format != self.format) {
+            if refused.as_ref().is_some_and(|(_, answer)| !self.matches(answer)) {
                 self.held.clear_refusal();
             }
             return match picked {
@@ -1010,8 +1038,8 @@ impl StackDialog for ParagraphDialog {
             .refusal(|| refused.as_ref().filter(|_| unchanged.get()).map(|(reason, _)| reason.clone()))
             .show(ui, |ui, _| {
                 self.body(ui, &scope, &valid);
-                if let Some((_, format)) = &refused {
-                    unchanged.set(*format == self.format);
+                if let Some((_, answer)) = &refused {
+                    unchanged.set(self.matches(answer));
                 }
             });
         if refused.is_some() && !unchanged.get() {
