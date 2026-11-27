@@ -298,7 +298,10 @@ pub fn read(path: &Path) -> Result<Accounts, Error> {
 /// [`Error::Malformed`] forever. Every mutation here reads the file first. There would be
 /// nothing left to repair it with.
 ///
-/// Readable by this user alone where the platform has file modes. The file holds no token. It does
+/// Readable by this user alone: mode `0600` on Unix, and on Windows an access list of this user and
+/// SYSTEM only from the moment the file exists, whatever folder a portable install or
+/// [`crate::paths::ENV_VAR`] chose. On Windows the access list is protected, so a change to the
+/// folder's list does not reach the file. The file holds no token. It does
 /// say who is signed in. That is nobody else's business.
 ///
 /// Refuses a list that would serialize past `MAX_BYTES`, before any file is touched. [`read`]
@@ -317,14 +320,17 @@ pub fn write(path: &Path, accounts: &Accounts) -> Result<(), Error> {
         )));
     }
     std::fs::create_dir_all(dir).map_err(|e| Error::Io(format!("couldn't create {} ({e})", dir.display())))?;
-    use std::io::Write;
 
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let pid = std::process::id();
-    let tmp = dir.join(format!(".{}.{}.{}.tmp", path.file_name().and_then(|n| n.to_str()).unwrap_or("accounts"), stamp, pid));
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("accounts");
+    let tmp_name = format!(".{file_name}.{stamp}.{pid}.tmp");
+    #[cfg(not(windows))]
+    let tmp = dir.join(&tmp_name);
     #[cfg(unix)]
     {
         use std::fs::OpenOptions;
+        use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
         let mut file = OpenOptions::new()
             .write(true)
@@ -335,14 +341,16 @@ pub fn write(path: &Path, accounts: &Accounts) -> Result<(), Error> {
         file.write_all(&json).map_err(|e| Error::Io(format!("couldn't write {} ({e})", tmp.display())))?;
         file.sync_all().map_err(|e| Error::Io(format!("couldn't flush {} ({e})", tmp.display())))?;
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    let tmp = private_copy(path, dir, &tmp_name, &json)?;
+    #[cfg(not(any(unix, windows)))]
     {
         use std::fs::OpenOptions;
+        use std::io::Write;
         let mut file =
             OpenOptions::new().write(true).create_new(true).open(&tmp).map_err(|e| Error::Io(format!("couldn't create {} ({e})", tmp.display())))?;
         file.write_all(&json).map_err(|e| Error::Io(format!("couldn't write {} ({e})", tmp.display())))?;
         file.sync_all().map_err(|e| Error::Io(format!("couldn't flush {} ({e})", tmp.display())))?;
-        restrict(&tmp)?;
     }
     std::fs::rename(&tmp, path).map_err(|e| Error::Io(format!("couldn't replace {} ({e})", path.display())))?;
     // The flush above persisted the file's bytes. The rename changed a directory entry, and that
@@ -359,19 +367,147 @@ pub fn write(path: &Path, accounts: &Accounts) -> Result<(), Error> {
     Ok(())
 }
 
-#[cfg(not(unix))]
-fn restrict(_path: &Path) -> Result<(), Error> {
-    // A no-op today. That is a real gap this comment used to paper over. A new file in the
-    // platform configuration folder (the default `paths::Rule::Platform` home) inherits that
-    // folder's own, profile-scoped access rules. The account list is this user's alone there.
-    // `paths::Rule::Portable` and `paths::Rule::EnvVar` point `write` at whatever folder the
-    // caller named. A new file there inherits that folder's own Windows access control list,
-    // whatever it is. A shared or loosely permissioned folder in either of those two cases
-    // leaves the account list (subjects, display names, emails, never a token) readable by
-    // anyone else with access to it. Narrowing that needs a per-user Windows DACL on the file,
-    // set through the Win32 authorization API. Every binding for that API is an `unsafe fn`.
-    // This workspace forbids `unsafe_code` outright. Closing this for real needs either a
-    // maintainer-approved exception for one call site or a vetted dependency that wraps that API
-    // safely. Both are decisions for a dedicated PR. See `paths::Rule`.
-    Ok(())
+/// Write `json` to a new file beside the list at `path`, in its folder `dir`, that only this user
+/// and SYSTEM can open, and return its path for [`write`] to rename into place.
+///
+/// A new file on Windows takes its folder's access list, and a portable install or
+/// [`crate::paths::ENV_VAR`] can name a folder that lets every local user read what is created in
+/// it. Every copy is created by `owner_only::create_private_file`, which gives the file a protected
+/// access list of this user and SYSTEM only in the call that creates it. The rename keeps that
+/// list, and a later change to the folder's list does not reach it. That call runs PowerShell, so
+/// [`prepare`] creates an empty copy before the accounts lock is taken, and this function writes
+/// the list into it. Without a copy this thread prepared (a direct call, or a failed preparation),
+/// the copy is created here, named `tmp_name`.
+#[cfg(windows)]
+fn private_copy(path: &Path, dir: &Path, tmp_name: &str, json: &[u8]) -> Result<std::path::PathBuf, Error> {
+    use std::io::Write;
+    if let Some((copy, mut file)) = take_prepared(path) {
+        match file.write_all(json).and_then(|()| file.sync_all()) {
+            Ok(()) => return Ok(copy),
+            Err(e) => {
+                drop(file);
+                let _ = std::fs::remove_file(&copy);
+                log::warn!("couldn't write a prepared copy of the account list ({e}); a new one is created");
+            }
+        }
+    }
+    let tmp = dir.join(tmp_name);
+    user_sid()
+        .and_then(|me| craft_platform::owner_only::create_private_file(&tmp, &me, json))
+        .map_err(|e| Error::Io(format!("couldn't create {} for its owner only ({e})", tmp.display())))?;
+    Ok(tmp)
+}
+
+/// Copies made by [`prepare`] that wait for [`private_copy`]: the thread that made the copy, the
+/// list it is for, the copy, and the copy held open without delete sharing.
+#[cfg(windows)]
+type Prepared = Vec<(std::thread::ThreadId, std::path::PathBuf, std::path::PathBuf, std::fs::File)>;
+
+/// The copy one [`prepare`] call made. Dropping it closes and removes the copy if no write took it.
+#[cfg(windows)]
+pub(crate) struct PreparedCopy(Option<std::path::PathBuf>);
+
+#[cfg(windows)]
+impl Drop for PreparedCopy {
+    fn drop(&mut self) {
+        let Some(copy) = self.0.take() else { return };
+        let mut waiting = prepared();
+        let Some(at) = waiting.iter().position(|(_, _, waiting, _)| *waiting == copy) else { return };
+        let (_, _, copy, file) = waiting.swap_remove(at);
+        drop(waiting);
+        drop(file);
+        let _ = std::fs::remove_file(&copy);
+    }
+}
+
+/// The copies waiting for [`private_copy`].
+#[cfg(windows)]
+fn prepared() -> std::sync::MutexGuard<'static, Prepared> {
+    static PREPARED: std::sync::Mutex<Prepared> = std::sync::Mutex::new(Vec::new());
+    PREPARED.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The copy of the list at `path` that this thread prepared, with its open handle, removed from the
+/// waiting list. A copy another thread prepared is left for that thread's write.
+#[cfg(windows)]
+fn take_prepared(path: &Path) -> Option<(std::path::PathBuf, std::fs::File)> {
+    let me = std::thread::current().id();
+    let mut prepared = prepared();
+    let at = prepared.iter().position(|(thread, list, ..)| *thread == me && list == path)?;
+    let (_, _, copy, file) = prepared.swap_remove(at);
+    Some((copy, file))
+}
+
+/// This user's SID, read once per process (`whoami` is a process start).
+#[cfg(windows)]
+fn user_sid() -> std::io::Result<String> {
+    static SID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(sid) = SID.get() {
+        return Ok(sid.clone());
+    }
+    let sid = craft_platform::owner_only::current_user_sid()?;
+    Ok(SID.get_or_init(|| sid).clone())
+}
+
+/// Before the accounts lock is taken, create an empty copy of the list at `path` for its owner only
+/// and keep it open for [`private_copy`], so that the PowerShell run it needs doesn't hold the lock
+/// other processes wait on. The caller keeps the returned [`PreparedCopy`] until its change under
+/// the lock is done; a change that writes nothing then has its copy removed. A failure here is left
+/// for [`write`] to handle.
+///
+/// The copy is opened without delete sharing and then checked, so no other account can remove,
+/// rename or replace it between the check and the write. A copy that fails the check is removed.
+/// Empty copies beside the list that are at least a minute old, which ended processes left, are
+/// removed first; a copy that a running process holds open can't be, since removing it needs
+/// delete sharing.
+#[cfg(windows)]
+pub(crate) fn prepare(path: &Path) -> PreparedCopy {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use craft_platform::owner_only;
+    /// `FILE_SHARE_READ | FILE_SHARE_WRITE`: no `FILE_SHARE_DELETE`.
+    const SHARE_NO_DELETE: u32 = 0x1 | 0x2;
+    /// How old an empty copy that no process holds must be before it is removed. Another process
+    /// that is preparing its copy has it closed for a moment, between its creation and the open.
+    const LEFT_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else { return PreparedCopy(None) };
+    let Ok(me) = user_sid() else { return PreparedCopy(None) };
+    let _ = std::fs::create_dir_all(dir);
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let left = entry.file_name();
+        let left = left.to_string_lossy();
+        if left.starts_with(&format!(".{name}."))
+            && left.ends_with(".prepared.tmp")
+            && entry.metadata().is_ok_and(|meta| {
+                meta.is_file() && meta.len() == 0 && meta.modified().ok().and_then(|at| at.elapsed().ok()).is_some_and(|age| age >= LEFT_AFTER)
+            })
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    let copy = dir.join(format!(".{name}.{}.{}.prepared.tmp", std::process::id(), COUNT.fetch_add(1, Ordering::Relaxed)));
+    if let Err(e) = owner_only::create_private_file(&copy, &me, b"") {
+        log::warn!("couldn't prepare a copy of the account list for its owner only ({e})");
+        return PreparedCopy(None);
+    }
+    let checked = std::fs::OpenOptions::new().write(true).share_mode(SHARE_NO_DELETE).open(&copy).and_then(|file| {
+        match owner_only::foreign_access(&owner_only::sddl_of(&copy)?, &me) {
+            None => Ok(file),
+            Some(problem) => Err(std::io::Error::other(problem)),
+        }
+    });
+    match checked {
+        Ok(file) => {
+            prepared().push((std::thread::current().id(), path.to_path_buf(), copy.clone(), file));
+            PreparedCopy(Some(copy))
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&copy);
+            log::warn!("a prepared copy of the account list is not this user's alone ({e}); it was removed");
+            PreparedCopy(None)
+        }
+    }
 }

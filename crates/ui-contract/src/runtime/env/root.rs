@@ -38,7 +38,9 @@ pub struct RootEnv {
     /// Whether a bare Tab toggles the window's chrome in place of moving focus where the key stage's gate allows it.
     pub tab_toggles_chrome: bool,
     /// Whether Escape in a focused text field also takes the focus from it, with or without typing to revert, so the
-    /// next keys go to the window. A clearing field (a search box) still clears its text first.
+    /// next keys go to the window. A clearing field (a search box) still clears its text first. In a dialog whose Escape
+    /// closes it, modal or modeless, the field keeps the focus, and an Escape it does not take for its typing closes
+    /// the dialog.
     pub escape_leaves_fields: bool,
     /// Whether a held key's repeats run the command its chord binds again (`FirePhase::Repeat`), as a held Cmd+= keeps
     /// zooming in. A key with a hold binding, and a key held down while a modal layer opened or closed, repeat nothing.
@@ -239,8 +241,8 @@ impl RootEnv {
         self
     }
 
-    /// Sets whether painted cursor images scale with the interface zoom (the Scale Cursor Proportional to UI
-    /// preference). On by default.
+    /// Sets whether painted pointers grow with the interface zoom (the Scale Cursor Proportional to UI preference).
+    /// Off, they keep the size they have at zoom 1; a brush tip follows the canvas either way. On by default.
     pub fn cursor_follows_zoom(mut self, on: bool) -> Self {
         self.cursor_follows_zoom = on;
         self

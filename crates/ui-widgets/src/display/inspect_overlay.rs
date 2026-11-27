@@ -1,7 +1,7 @@
 //! `InspectOverlay`: the debug inspector's drawing over an inspected region ([`inspect::record`]): each element's
 //! padding, the hit areas and the focus stops numbered in Tab order, as the record of the region says.
 
-use crate::contract::{Common, Component, Cx, MeasureCx, PaintUi, Role};
+use crate::contract::{Common, Component, Cx, MeasureCx, PaintUi, Role, keep_inside};
 use crate::primitives::{Draw, PaintShape, StrokeWidth, TextRun};
 use crate::runtime::inspect::Recorded;
 use crate::style::{ComponentStyle, StyleColor, StyleCx, TypeRole};
@@ -46,6 +46,8 @@ pub struct InspectOverlayStyle {
     marquee_fill: StyleColor,
     badge: StyleColor,
     badge_text: StyleColor,
+    /// The width of the ring round a badge: `stroke.thin`.
+    badge_ring: f32,
     /// Hit areas under this size across are flagged.
     pub min_target: f32,
 }
@@ -120,6 +122,7 @@ impl Component for InspectOverlay {
             marquee_fill: cx.color(color.overlay.marquee.faded(Opacity::TINT)),
             badge: cx.color(color.status.info.solid),
             badge_text: cx.color(color.text.on_status),
+            badge_ring: cx.tokens.stroke.thin,
             min_target: cx.tokens.size.control.sm,
         }
     }
@@ -177,10 +180,13 @@ impl InspectOverlay {
             stops.sort_unstable();
             for (number, index) in stops {
                 let Some(bounds) = recorded.stop_rect(index) else { continue };
-                let centre = if rtl { bounds.right_top() } else { bounds.left_top() };
+                let corner = if rtl { bounds.right_top() } else { bounds.left_top() };
                 let run = TextRun::new(number.to_string()).role(TypeRole::Caption).color(style.badge_text);
                 let layout = draw.layout(&run, f32::INFINITY);
                 let radius = (layout.size().max_elem() / 2.0 + 2.0).max(7.0);
+                // Centred on the stop's leading top corner, moved in where that would put the badge past the drawing's edge.
+                let reach = Vec2::splat(2.0 * (radius + style.badge_ring));
+                let centre = keep_inside(Rect::from_center_size(corner, reach), cx.content_rect).center();
                 draw.fill(&PaintShape::Circle(centre, radius), style.badge);
                 draw.stroke(&PaintShape::Circle(centre, radius), StrokeWidth::Thin, style.halo);
                 draw.galley(centre - layout.size() / 2.0, &layout);
