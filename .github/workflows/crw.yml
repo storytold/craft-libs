@@ -2,7 +2,7 @@ name: Shared CRW
 
 on:
   push:
-    branches: [main, next]
+    branches: [main]
     paths: ["crates/crw/**", "scripts/fetch-crw-samples.py", "Cargo.toml", "Cargo.lock", ".github/workflows/crw.yml"]
   pull_request:
     paths: ["crates/crw/**", "scripts/fetch-crw-samples.py", "Cargo.toml", "Cargo.lock", ".github/workflows/crw.yml"]
@@ -52,7 +52,7 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-      # Pull requests restore the entry main or next saved and never write their own: the same
+      # Pull requests restore the entry main saved and never write their own: the same
       # files saved once per pull request took a share of the 10 GB cache budget.
       - name: Restore the CC0 sample files
         id: samples
