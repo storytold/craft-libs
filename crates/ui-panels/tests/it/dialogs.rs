@@ -1114,6 +1114,59 @@ fn typing_in_a_freshly_opened_dialog_replaces_its_first_field() {
     assert_eq!(typed_into, [Some("7".to_owned()), Some("7".to_owned())]);
 }
 
+/// A Strength slider field over 0.1 to 4 at 1.0, with `fixed` decimals when given: its number field's value, and every
+/// painted text after "5" is typed into the field and the clamp's range alert is shown (a modal: the field leaves the
+/// access tree under it).
+fn strength(fixed: Option<usize>) -> (String, Vec<String>) {
+    use craft_ui::contract::Bind;
+    use craft_ui::dialog::Alert;
+    use craft_ui::form::SliderField;
+    use craft_ui::runtime::env::Env;
+    use craft_ui::text::RangeAlert;
+    let alert: Rc<RefCell<Option<RangeAlert>>> = Rc::default();
+    let value = Rc::new(Cell::new(1.0));
+    let (held, seen) = (value.clone(), alert.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = held.get();
+        let slider = SliderField::new("Strength", Bind::bound(&mut now), 0.1..=4.0).step(0.01);
+        let out = match fixed {
+            Some(places) => slider.fixed_decimals(places),
+            None => slider,
+        }
+        .show(ui);
+        held.set(now);
+        if let Some(clamped) = out.out_of_range.clone() {
+            *seen.borrow_mut() = Some(clamped);
+        }
+        if let Some(clamped) = seen.borrow().as_ref() {
+            Alert::range("Strength", clamped, &Env::of(ui)).show(ui);
+        }
+    });
+    fixture.settle();
+    let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the number field");
+    let before = fixture.tree().value_of(field.node).unwrap_or_default().to_owned();
+    fixture.click(&field).settle();
+    fixture.key(egui::Key::A, Modifiers::COMMAND).type_text("5");
+    fixture.key(egui::Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(value.get(), 4.0, "5 is clamped to the end");
+    (before, fixture.texts().iter().map(|run| run.text.clone()).collect())
+}
+
+/// A slider field with fixed decimals (storytold/craft-libs#2251) shows them, zeros included, in its number field and
+/// in the range alert of a clamped value; without them it trims trailing zeros as before.
+#[trial]
+fn a_slider_fields_fixed_decimals_show_in_its_field_and_its_range_alert() {
+    let (shown, texts) = strength(Some(2));
+    assert_eq!(shown, "1.00");
+    let sentence = "A number between 0.10 and 4.00 is required. Closest value inserted.";
+    assert!(texts.iter().any(|text| text == sentence), "{texts:?}");
+
+    let (shown, texts) = strength(None);
+    assert_eq!(shown, "1");
+    let sentence = "A number between 0.1 and 4 is required. Closest value inserted.";
+    assert!(texts.iter().any(|text| text == sentence), "{texts:?}");
+}
+
 /// A prompt's readers give the title, message, paragraphs and buttons it shows under the same host, without a `Ui`.
 #[trial]
 fn a_prompts_readers_give_what_it_shows() {

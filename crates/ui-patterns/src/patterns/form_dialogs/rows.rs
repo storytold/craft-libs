@@ -851,6 +851,7 @@ impl<'p> Pass<'p> {
         let value = self.work.number(line.key).unwrap_or(*range.start());
         let option = line.param.option();
         let places = option.range_places();
+        let fixed = option.range_fixed_places();
         let step = option.range_step();
         if option.popup_slider {
             self.popup_range(ui, line, range, value, places, step);
@@ -866,6 +867,9 @@ impl<'p> Pass<'p> {
             }
             if let Some(step) = step {
                 slider = slider.step(step);
+            }
+            if let Some(places) = fixed {
+                slider = slider.fixed_decimals(places as usize);
             }
             if !option.marks().is_empty() {
                 slider = slider.marks_labelled(option.marks().iter().cloned());
@@ -902,10 +906,13 @@ impl<'p> Pass<'p> {
         }
     }
 
+    /// A range row's number field with its slider in a popup; the row's fixed decimals are shown zeros included, as on
+    /// the slider row.
     fn popup_range(&mut self, ui: &mut Ui, line: &Line<'_>, range: RangeInclusive<f64>, value: f64, places: Option<u32>, set_step: Option<f64>) {
         // Match the ordinary range row's number field precision when the caller sets no step.
         let default_step = if range.end() - range.start() <= 10.0 { 0.01 } else { 1.0 };
         let step = set_step.unwrap_or(default_step);
+        let fixed = line.param.option().range_fixed_places();
         let unit = line.param.unit.map(|kind| (kind, self.units.symbol(kind)));
         let default = line.param.default_value().and_then(number_of).map(Some);
         line.show(ui, |ui| {
@@ -921,6 +928,9 @@ impl<'p> Pass<'p> {
                 }
                 if let Some((kind, _)) = &unit {
                     field = field.unit_kind(*kind).unit_placement(UnitPlacement::After);
+                }
+                if let Some(places) = fixed {
+                    field = field.fixed_decimals(places as usize);
                 }
                 let shown = field.show(ui);
                 if let Some((_, symbol)) = &unit {

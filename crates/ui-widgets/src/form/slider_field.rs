@@ -52,11 +52,12 @@ pub struct SliderFieldStyle {
 ///
 /// The step moves the slider's keys and wheel and the field's keys, wheel and scrub; typed values snap to it unless
 /// `typed_decimals` sets their independent precision. Without a step the field steps by a hundredth on a range 10 wide
-/// or less and by 1 on a longer one, and by default rounds typed values to the places that step needs. The field and
-/// the slider are Tab stops in the order they are read: the field and then the slider when stacked, the slider and then
-/// the field when inline. A click on the row's label focuses the number field in either layout. A log or power scale
-/// curves the
-/// slider's track only: the field, typing and steps stay linear.
+/// or less and by 1 on a longer one, and by default rounds typed values to the places that step needs. The field shows
+/// at most the decimals of its unit kind (three without one), or exactly [`fixed_decimals`](Self::fixed_decimals),
+/// zeros included, and so does its range alert. The field and the slider are Tab stops in the order they are read: the
+/// field and then the slider when stacked, the slider and then the field when inline. A click on the row's label
+/// focuses the number field in either layout. A log or power scale curves the slider's track only: the field, typing
+/// and steps stay linear.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct SliderField<'a> {
     #[common]
@@ -88,6 +89,11 @@ pub struct SliderField<'a> {
     /// A unit shown after the number, for a quantity with no `UnitKind` (a font axis).
     #[prop(into)]
     unit: Option<Label>,
+    /// The field writes exactly this many decimals, zeros included ("1.00"), and its range alert writes the range's
+    /// ends at them. It leaves the step, and the places typed values are rounded to, as they are: pair it with a step
+    /// of a unit in its last place (0.01 for two).
+    #[prop]
+    fixed_decimals: Option<usize>,
     /// Whether the part of the track before the thumb is filled.
     #[prop]
     fill: bool,
@@ -163,6 +169,7 @@ impl<'a> SliderField<'a> {
             track_press: TrackPress::OnRelease,
             unit_kind: None,
             unit: None,
+            fixed_decimals: None,
             fill: true,
             track_face: None,
             thumb: SliderThumb::Round,
@@ -201,6 +208,7 @@ impl<'a> SliderField<'a> {
             wheel_step: self.wheel_step,
             unit_kind: self.unit_kind,
             unit: self.unit.clone(),
+            fixed_decimals: self.fixed_decimals,
             fill: self.fill,
             thumb: self.thumb,
             reset: self.value.reset_value().copied(),
@@ -231,6 +239,7 @@ struct Look {
     wheel_step: Option<f64>,
     unit_kind: Option<UnitKind>,
     unit: Option<Label>,
+    fixed_decimals: Option<usize>,
     fill: bool,
     thumb: SliderThumb,
     /// The reset value of the composite's own binding, which both children restore on a double click.
@@ -322,6 +331,10 @@ impl Look {
         };
         let field = match self.field_sizing {
             Some(sizing) => field.sizing(sizing),
+            None => field,
+        };
+        let field = match self.fixed_decimals {
+            Some(places) => field.fixed_decimals(places),
             None => field,
         };
         match &self.unit {

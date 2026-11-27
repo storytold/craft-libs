@@ -981,6 +981,63 @@ fn a_typed_value_past_a_rows_range_is_clamped_and_the_host_takes_one_range_alert
     assert!(!alert(), "and raises no alert");
 }
 
+/// Range rows from 0.1 to 4 at 1: Strength shows exactly two decimals, Gamma at most two, and Exposure, set both ways,
+/// as the last call says (at most two).
+fn toning(fields: &mut DialogFields) -> ParamDialog<'_> {
+    let range = || ParamKind::range(0.1, 4.0, 1.0, craft_ui::value_drag::SliderScale::Linear);
+    let params = vec![
+        Param::new("strength", "Strength", range()).fixed_decimals(2),
+        Param::new("gamma", "Gamma", range()).decimals(2),
+        Param::new("exposure", "Exposure", range()).fixed_decimals(3).decimals(2),
+    ];
+    ParamDialog::new("toning", "Toning", params).values(Bind::bound(fields))
+}
+
+// A range row with fixed decimals and a popup slider shows them in its field as well, and stores its value rounded to
+// them (storytold/craft-libs#2251).
+#[trial]
+fn a_popup_slider_range_row_shows_its_fixed_decimals() {
+    let fields = Rc::new(RefCell::new(DialogFields::new()));
+    let held = Rc::clone(&fields);
+    let mut fixture = Fixture::new(move |ui| {
+        let range = ParamKind::range(0.1, 4.0, 1.0, craft_ui::value_drag::SliderScale::Linear);
+        let params = vec![Param::new("contrast", "Contrast", range).fixed_decimals(2).popup_slider()];
+        ParamDialog::new("contrast", "Contrast", params).values(Bind::bound(&mut *held.borrow_mut())).show(ui);
+    });
+    fixture.settle();
+    let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the Contrast field");
+    assert_eq!(fixture.tree().value_of(field.node), Some("1.00"));
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("0.5");
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(fields.borrow().number("contrast"), Some(0.5));
+    let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the Contrast field");
+    assert_eq!(fixture.tree().value_of(field.node), Some("0.50"));
+}
+
+// A range row with fixed decimals (storytold/craft-libs#2251) shows them, zeros included, and stores its value
+// rounded to them as `Param::decimals` does; a row with `Param::decimals` alone still trims trailing zeros.
+#[trial]
+fn a_range_row_with_fixed_decimals_shows_them_and_rounds_to_them() {
+    let fields = Rc::new(RefCell::new(DialogFields::new()));
+    let held = Rc::clone(&fields);
+    let mut fixture = Fixture::new(move |ui| {
+        toning(&mut held.borrow_mut()).show(ui);
+    });
+    fixture.settle();
+    let shown = |fixture: &Fixture| -> Vec<String> {
+        fixture.by_role(Role::SPIN_BUTTON).iter().map(|field| fixture.tree().value_of(field.node).unwrap_or_default().to_owned()).collect()
+    };
+    assert_eq!(shown(&fixture), ["1.00", "1", "1"], "the last of decimals and fixed_decimals applies");
+
+    let strength = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the Strength field");
+    fixture.click(&strength).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("0.567");
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(fields.borrow().number("strength"), Some(0.57), "the typed value is stored at two decimals");
+    assert_eq!(shown(&fixture), ["0.57", "1", "1"]);
+}
+
 /// Runs a one-row dialog for `row`; the values of its answer are filed in the returned cell.
 fn single_row(row: Param) -> (Fixture, Rc<RefCell<Option<DialogFields>>>) {
     let answered = Rc::new(RefCell::new(None::<DialogFields>));

@@ -576,6 +576,8 @@ impl NumberUnit {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RowOptions {
     range_decimals: Option<u32>,
+    /// A Range row shows exactly its `range_decimals`, zeros included ([`Param::fixed_decimals`]).
+    range_fixed: bool,
     /// The step of a range row's slider and field ([`Param::step`]).
     range_step: Option<f64>,
     pub(crate) popup_slider: bool,
@@ -1240,13 +1242,32 @@ impl Param {
 
     /// The most digits shown after the decimal mark on a [`ParamKind::OptionalNumber`] or [`ParamKind::Range`] row
     /// (`0` for an integer); other kinds are unchanged. A Range row stores its value rounded to these digits, and `0`
-    /// stores a [`FieldValue::Int`].
+    /// stores a [`FieldValue::Int`]. On a Range row the last of this and [`fixed_decimals`](Self::fixed_decimals)
+    /// applies.
     #[must_use]
     pub fn decimals(mut self, places: u32) -> Self {
         match &mut self.kind {
             ParamKind::OptionalNumber { decimals, .. } => *decimals = places,
-            ParamKind::Range { .. } => self.options.get_or_insert_default().range_decimals = Some(places),
+            ParamKind::Range { .. } => {
+                let options = self.options.get_or_insert_default();
+                options.range_decimals = Some(places);
+                options.range_fixed = false;
+            }
             _ => {}
+        }
+        self
+    }
+
+    /// Exactly `places` digits after the decimal mark on a [`ParamKind::Range`] row, zeros included ("0.50"), in its
+    /// field and in the alert for a value typed outside its range ("between 0.10 and 4.00"); the row stores its value
+    /// rounded to them, as [`decimals`](Self::decimals) does, and the last of the two applies. Other kinds are
+    /// unchanged.
+    #[must_use]
+    pub fn fixed_decimals(mut self, places: u32) -> Self {
+        if matches!(self.kind, ParamKind::Range { .. }) {
+            let options = self.options.get_or_insert_default();
+            options.range_decimals = Some(places);
+            options.range_fixed = true;
         }
         self
     }
@@ -1519,6 +1540,11 @@ impl RowOptions {
     /// The decimals a range row stores, or `None` for as typed.
     pub(crate) fn range_places(&self) -> Option<u32> {
         self.range_decimals
+    }
+
+    /// The decimals a range row shows exactly, zeros included, or `None` for at most its stored places.
+    pub(crate) fn range_fixed_places(&self) -> Option<u32> {
+        self.range_decimals.filter(|_| self.range_fixed)
     }
 
     /// The step a range row's slider and field use: the one [`Param::step`] set, else the one its decimals imply, or
