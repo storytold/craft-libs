@@ -3,8 +3,8 @@
 #![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
 use super::{
-    BlockingOverlay, ButtonPlace, Dialog, DialogHost, DialogResult, PromptChoice, RecoveredDocument, RecoveryAnswer, RecoveryDialog, StackDialog,
-    StandardPrompt, UnsavedChangesDialog,
+    BlockingOverlay, ButtonPlace, Dialog, DialogHost, DialogResult, HostedUnsavedChangesDialog, PromptChoice, RecoveredDocument, RecoveryAnswer,
+    RecoveryDialog, StackDialog, StandardPrompt, UnsavedChangesDialog,
 };
 use crate::buttons::Button;
 use crate::choice::Checkbox;
@@ -343,7 +343,11 @@ fn apply_to_all_shows_only_with_several_documents_and_rides_the_answer() {
     // Save on macOS, Yes elsewhere.
     let save = ["Save", "Yes"];
     let unsaved = |remaining: usize, tick: bool| {
-        let (offered, result) = ticked_and_accepted(UnsavedChangesDialog::new(CloseScope::Close, "poster.pdf").remaining(remaining), tick, &save);
+        let (offered, result) = ticked_and_accepted(
+            HostedUnsavedChangesDialog::new(UnsavedChangesDialog::new(CloseScope::Close, "poster.pdf").remaining(remaining)),
+            tick,
+            &save,
+        );
         match result {
             Some(DialogResult::Ok(answer)) => (offered, answer.answer, answer.apply_to_all),
             other => panic!("the dialog answers Save: {other:?}"),

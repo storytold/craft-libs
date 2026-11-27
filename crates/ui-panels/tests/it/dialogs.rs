@@ -7,8 +7,9 @@ use craft_ui::contract::overlay::{Dismiss, Outside};
 use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{
-    Alert, ChildDialog, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, JobAnswer, JobProgress, PromptChoice, PromptKind,
-    RecoveredDocument, RecoveryAnswer, RecoveryChoice, RecoveryDialog, StackDialog, StandardPrompt, StartupStage, UnsavedChangesDialog, dialog_id,
+    Alert, ChildDialog, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, HostedUnsavedChangesDialog, JobAnswer, JobProgress,
+    PromptChoice, PromptKind, RecoveredDocument, RecoveryAnswer, RecoveryChoice, RecoveryDialog, StackDialog, StandardPrompt, StartupStage,
+    UnsavedChangesDialog, dialog_id,
 };
 use craft_ui::display::Text;
 use craft_ui::popover::Popover;
@@ -447,10 +448,10 @@ fn the_platform_chords_answer_dont_save() {
             shown.borrow_mut().run(ui);
         });
         fixture.os(os);
-        host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd"));
+        host.borrow_mut().open(HostedUnsavedChangesDialog::new(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd")));
         fixture.idle(6);
         fixture.key(key, mods).idle(4);
-        let result = host.borrow_mut().take::<UnsavedChangesDialog>();
+        let result = host.borrow_mut().take::<HostedUnsavedChangesDialog>();
         if answers {
             assert_eq!(
                 result.and_then(DialogResult::ok).map(|answer| answer.answer),
@@ -459,7 +460,7 @@ fn the_platform_chords_answer_dont_save() {
             );
             assert!(!app_saw_key.get(), "{os:?}: the press reaches nothing but the question");
         } else {
-            assert!(result.is_none() && host.borrow().is_open::<UnsavedChangesDialog>(), "{os:?}: {mods:?}+{key:?} leaves the question open");
+            assert!(result.is_none() && host.borrow().is_open::<HostedUnsavedChangesDialog>(), "{os:?}: {mods:?}+{key:?} leaves the question open");
         }
     }
 }
@@ -470,8 +471,10 @@ fn unsaved_question_keeps_long_text_inside_its_dialog() {
     let host = Rc::new(RefCell::new(DialogHost::new()));
     let mut fixture = running(&host);
     fixture.room(vec2(820.0, 520.0));
-    host.borrow_mut()
-        .open(UnsavedChangesDialog::new(CloseScope::Close, "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW.pdf"));
+    host.borrow_mut().open(HostedUnsavedChangesDialog::new(UnsavedChangesDialog::new(
+        CloseScope::Close,
+        "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW.pdf",
+    )));
     fixture.idle(6);
     // The question is an alert dialog (upstream's role for the unsaved question).
     let dialog = fixture.by_role(Role::ALERT_DIALOG).first().expect("the question").rect;
@@ -490,7 +493,7 @@ fn the_unsaved_question_orders_its_buttons_by_platform_and_answers_by_role() {
         let shown = Rc::clone(&host);
         let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
         fixture.os(os);
-        host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd"));
+        host.borrow_mut().open(HostedUnsavedChangesDialog::new(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd")));
         fixture.idle(6);
         let lefts = names.map(|name| fixture.by_label(name).unwrap_or_else(|| panic!("{os:?}: {name} shows")).rect.left());
         assert!(lefts.windows(2).all(|pair| pair[0] < pair[1]), "{os:?}: {names:?} run left to right, at {lefts:?}");
@@ -503,10 +506,10 @@ fn the_unsaved_question_orders_its_buttons_by_platform_and_answers_by_role() {
         let shown = Rc::clone(&host);
         let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
         fixture.os(Os::Windows);
-        host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd"));
+        host.borrow_mut().open(HostedUnsavedChangesDialog::new(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd")));
         fixture.idle(6);
         fixture.key(key, Modifiers::NONE).idle(4);
-        let answered = host.borrow_mut().take::<UnsavedChangesDialog>().and_then(DialogResult::ok).map(|answer| answer.answer);
+        let answered = host.borrow_mut().take::<HostedUnsavedChangesDialog>().and_then(DialogResult::ok).map(|answer| answer.answer);
         assert_eq!(answered, Some(expected), "{key:?} answers {expected:?}");
     }
 }
@@ -520,7 +523,7 @@ fn the_unsaved_dialog_exposes_alert_dialog_role_and_folds_reason_into_descriptio
     let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
 
     // 1. Without reason: Role::ALERT_DIALOG, label is "Unsaved changes", description contains the closing question.
-    host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd"));
+    host.borrow_mut().open(HostedUnsavedChangesDialog::new(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd")));
     fixture.idle(6);
     let dialogs = fixture.by_role(Role::ALERT_DIALOG);
     assert_eq!(dialogs.len(), 1, "the unsaved changes dialog exposes Role::ALERT_DIALOG");
@@ -531,12 +534,12 @@ fn the_unsaved_dialog_exposes_alert_dialog_role_and_folds_reason_into_descriptio
     assert!(desc_without_reason.contains("before closing"), "description conveys closing consequence: {desc_without_reason}");
 
     // Cancel to close
-    assert!(host.borrow_mut().cancel::<UnsavedChangesDialog>(fixture.ctx()));
+    assert!(host.borrow_mut().cancel::<HostedUnsavedChangesDialog>(fixture.ctx()));
     fixture.idle(4);
 
     // 2. With reason: Role::ALERT_DIALOG, description contains both the closing question and the save-failure reason.
     let reason_text = "Disk full or permission denied";
-    host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd").reason(reason_text));
+    host.borrow_mut().open(HostedUnsavedChangesDialog::new(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd").reason(reason_text)));
     fixture.idle(6);
     let dialogs = fixture.by_role(Role::ALERT_DIALOG);
     assert_eq!(dialogs.len(), 1, "reopened unsaved dialog with reason exposes Role::ALERT_DIALOG");
@@ -662,12 +665,12 @@ fn the_unsaved_question_can_ask_as_a_document_app_does() {
     let host = Rc::new(RefCell::new(DialogHost::new()));
     let mut fixture = running(&host);
     fixture.os(Os::Linux);
-    host.borrow_mut().open(
+    host.borrow_mut().open(HostedUnsavedChangesDialog::new(
         UnsavedChangesDialog::new(CloseScope::Close, "poster.pdf")
             .document_wording(true)
             .title("Save changes to “poster.pdf” before closing?")
             .message("Your changes will be lost if you don't save them."),
-    );
+    ));
     fixture.idle(6);
     let at = |name: &str| fixture.by_label(name).unwrap_or_else(|| panic!("{name:?} is a button")).rect.min.x;
     assert!(at("Don't Save") < at("Cancel") && at("Cancel") < at("Save"), "Don't Save, Cancel, Save");
@@ -1189,4 +1192,66 @@ fn a_dialog_takes_its_padding_and_footer_button_height_from_the_dialog_sizes() {
         (follows.0 - dialog.0).abs() < 0.5 && (follows.1 - dialog.1).abs() < 0.5,
         "both follow the panel padding and the push button: {follows:?} and {dialog:?}"
     );
+}
+
+/// A dialog dragged by its title stays where it was dropped when it closes and opens again and when the window
+/// shrinks: it does not snap back to the middle of the window.
+#[trial]
+fn a_dragged_dialog_keeps_its_place_when_reopened_and_resized() {
+    let open = Rc::new(Cell::new(true));
+    let mut fixture = Fixture::new({
+        let open = open.clone();
+        move |ui| {
+            let mut now = open.get();
+            Dialog::new("Export").opened(Bind::bound(&mut now)).buttons([FooterButton::new("OK", DialogRole::Accept)]).show(ui, |ui, _| {
+                Text::new("Export body").show(ui);
+            });
+            open.set(now);
+        }
+    });
+    fixture.room(vec2(1600.0, 960.0)).settle();
+    let dialog = |fixture: &Fixture| fixture.by_role(Role::DIALOG).first().expect("the dialog shows").rect;
+    let before = dialog(&fixture);
+    let title = fixture.texts().iter().find(|run| run.text == "Export").expect("the title is painted").rect;
+    let by = vec2(80.0, 60.0);
+    fixture.drag_at(title.center(), by).settle();
+    let moved = dialog(&fixture);
+    let shift = moved.min - before.min;
+    assert!(shift.x > by.x / 2.0 && shift.y > by.y / 2.0, "the dialog follows the drag: {before:?} then {moved:?}");
+    open.set(false);
+    fixture.settle();
+    assert!(fixture.by_role(Role::DIALOG).is_empty(), "the dialog closes");
+    open.set(true);
+    fixture.settle();
+    let reopened = dialog(&fixture);
+    assert!(reopened.min.distance(moved.min) < 1.0, "reopening keeps the dragged place: {moved:?} then {reopened:?}");
+    fixture.room(vec2(1500.0, 900.0)).settle();
+    let resized = dialog(&fixture);
+    assert!(resized.min.distance(moved.min) < 1.0, "a smaller window keeps the dragged place: {moved:?} then {resized:?}");
+}
+
+/// The unsaved question answered once asks again when the app opens it again (the next package's question): its
+/// open state is the app's, not a slot that outlives the answer.
+#[trial]
+fn an_answered_unsaved_question_shows_again_when_opened_again() {
+    let open = Rc::new(Cell::new(true));
+    let answers = Rc::new(Cell::new(0));
+    let mut fixture = Fixture::new({
+        let (open, answers) = (open.clone(), answers.clone());
+        move |ui| {
+            let mut now = open.get();
+            if UnsavedChangesDialog::new(CloseScope::Close, "package.pkg").opened(Bind::bound(&mut now)).show(ui).answer.is_some() {
+                answers.set(answers.get() + 1);
+            }
+            open.set(now);
+        }
+    });
+    for round in 0..2 {
+        open.set(true);
+        fixture.idle(6);
+        let cancel = fixture.by_label("Cancel").unwrap_or_else(|| panic!("open {round}: the question shows"));
+        fixture.click(&cancel).idle(4);
+        assert_eq!(answers.get(), round + 1, "open {round}: Cancel answers");
+        assert!(!open.get() && fixture.by_label("Cancel").is_none(), "open {round}: the answer closes the question");
+    }
 }

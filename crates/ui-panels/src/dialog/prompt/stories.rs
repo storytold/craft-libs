@@ -127,14 +127,14 @@ fn standard_prompt_changed_on_disk(ui: &mut Ui, _: &mut StoryData) -> StoryOutpu
     StandardPrompt::changed_on_disk("poster.pdf").show(ui).into()
 }
 
-#[story(UnsavedChangesDialog, covers = [], drive = Drive::Never)]
+#[story(UnsavedChangesDialog<'static>, covers = [], drive = Drive::Never)]
 fn unsaved_changes_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let remaining = if *data.value("several_documents", true) { 3 } else { 1 };
     let mut dialog = UnsavedChangesDialog::new(CloseScope::Close, "poster.psd").remaining(remaining);
     if *data.value("save_failed", false) {
         dialog = dialog.reason("Couldn't save “poster.psd”: the disk is full.");
     }
-    dialog.show(ui).into()
+    dialog.opened(data.bind("open", true)).show(ui).into()
 }
 
 #[story(RecoveryDialog, covers = [], drive = Drive::Never)]

@@ -56,16 +56,42 @@ impl Outcome for UnsavedChangesOutput {
 /// The node has the alert-dialog role (`Role::ALERT_DIALOG`), described by the consequence message and any save
 /// failure reason.
 ///
-/// The result is `Ok(UnsavedAnswer)` for every answer, Cancel included (the guard needs it), and
-/// `DialogResult::Cancel` only when the host closed the dialog from outside.
-#[derive(crate::contract::Pattern)]
-pub struct UnsavedChangesDialog {
+/// The open state is the `opened` binding, else the question's own, which starts open; `answer` is `Some` the pass
+/// the question is answered, Cancel included (the guard needs it). On the dialog host it is a
+/// [`HostedUnsavedChangesDialog`].
+#[derive(crate::contract::Pattern, crate::contract::Props)]
+pub struct UnsavedChangesDialog<'a> {
+    question: Question,
+    /// Binds the open state to `open`.
+    #[prop(name = "opened")]
+    open: Option<Bind<'a, bool>>,
+}
+
+/// An [`UnsavedChangesDialog`] on the [`DialogHost`](super::DialogHost). The result is `Ok(UnsavedAnswer)` for every
+/// answer, Cancel included, and `DialogResult::Cancel` only when the host closed the dialog from outside.
+///
+/// ```ignore
+/// host.open(HostedUnsavedChangesDialog::new(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd")));
+/// ```
+pub struct HostedUnsavedChangesDialog {
+    question: Question,
+    open: bool,
+}
+
+impl HostedUnsavedChangesDialog {
+    /// `dialog` on the host; its own `opened` binding is not used.
+    pub fn new(dialog: UnsavedChangesDialog<'_>) -> Self {
+        HostedUnsavedChangesDialog { question: dialog.question, open: true }
+    }
+}
+
+/// What an unsaved-changes question asks, without its open state.
+struct Question {
     id: DialogId,
     scope: CloseScope,
     name: String,
     remaining: usize,
     apply_to_all: bool,
-    open: bool,
     /// What a programmatic OK answers; the accepting answer's when `None`.
     chosen: Option<CloseAnswer>,
     /// Why the last save failed, shown under the message.
@@ -80,16 +106,15 @@ pub struct UnsavedChangesDialog {
     dont_save: Option<Label>,
 }
 
-impl UnsavedChangesDialog {
+impl UnsavedChangesDialog<'_> {
     /// The question for the document `document_name`, closing under `scope`; the guard asks about one document.
     pub fn new(scope: CloseScope, document_name: impl Into<String>) -> Self {
-        Self {
+        let question = Question {
             id: dialog_id("unsaved-changes"),
             scope,
             name: document_name.into(),
             remaining: 1,
             apply_to_all: false,
-            open: true,
             chosen: None,
             reason: None,
             document_wording: false,
@@ -98,65 +123,83 @@ impl UnsavedChangesDialog {
             note: None,
             icon: None,
             dont_save: None,
-        }
+        };
+        Self { question, open: None }
     }
 
     /// Shows why the last save failed, in the bad tone under the message.
     #[must_use]
     pub fn reason(mut self, reason: impl Into<String>) -> Self {
-        self.reason = Some(reason.into());
+        self.question.reason = Some(reason.into());
         self
-    }
-
-    /// The answer a host-side `confirm` gives, as pressing that button would; the accepting answer's until set. An
-    /// answer the question has no button for (Save while reverting) gives none.
-    pub fn set_answer(&mut self, answer: CloseAnswer) {
-        self.chosen = Some(answer);
     }
 
     /// Words and orders the buttons as a document app's save question on every platform: Don't save, Cancel and Save
     /// last, the accepting answer at the end.
     #[must_use]
     pub fn document_wording(mut self, on: bool) -> Self {
-        self.document_wording = on;
+        self.question.document_wording = on;
         self
     }
 
     /// Replaces the title ("Unsaved changes").
     #[must_use]
     pub fn title(mut self, title: impl Into<Label>) -> Self {
-        self.title = Some(title.into());
+        self.question.title = Some(title.into());
         self
     }
 
     /// Replaces the question, in the app's words (the document's name is the app's to put in).
     #[must_use]
     pub fn message(mut self, message: impl Into<Label>) -> Self {
-        self.message = Some(message.into());
+        self.question.message = Some(message.into());
         self
     }
 
     /// A muted note under the question.
     #[must_use]
     pub fn note(mut self, note: impl Into<Label>) -> Self {
-        self.note = Some(note.into());
+        self.question.note = Some(note.into());
         self
     }
 
     /// An icon of the catalog beside the question.
     #[must_use]
     pub fn icon(mut self, icon: IconId) -> Self {
-        self.icon = Some(icon);
+        self.question.icon = Some(icon);
         self
     }
 
     /// Replaces the Don't Save button's word, in the app's words.
     #[must_use]
     pub fn dont_save_label(mut self, label: impl Into<Label>) -> Self {
-        self.dont_save = Some(label.into());
+        self.question.dont_save = Some(label.into());
         self
     }
 
+    /// How many documents the guard still asks about, this one included; above one the "Apply to All" box shows.
+    #[must_use]
+    pub fn remaining(mut self, remaining: usize) -> Self {
+        self.question.remaining = remaining;
+        self
+    }
+
+    /// Shows the question; `answer` is `Some` the pass a button, Enter, Escape or the close action answers.
+    pub fn show(mut self, ui: &mut Ui) -> UnsavedChangesOutput {
+        let open = self.open.take();
+        self.question.present(ui, false, open)
+    }
+}
+
+impl HostedUnsavedChangesDialog {
+    /// The answer a host-side `confirm` gives, as pressing that button would; the accepting answer's until set. An
+    /// answer the question has no button for (Save while reverting) gives none.
+    pub fn set_answer(&mut self, answer: CloseAnswer) {
+        self.question.chosen = Some(answer);
+    }
+}
+
+impl Question {
     /// What a programmatic OK answers.
     fn chosen(&self) -> CloseAnswer {
         let accepting = if self.scope == CloseScope::Revert { CloseAnswer::DontSave } else { CloseAnswer::Save };
@@ -166,13 +209,6 @@ impl UnsavedChangesDialog {
     /// Whether the "Apply to All" box shows: the guard has more documents, and the question is not a revert.
     fn offers_apply_to_all(&self) -> bool {
         self.remaining > 1 && self.scope != CloseScope::Revert
-    }
-
-    /// How many documents the guard still asks about, this one included; above one the "Apply to All" box shows.
-    #[must_use]
-    pub fn remaining(mut self, remaining: usize) -> Self {
-        self.remaining = remaining;
-        self
     }
 
     /// The answers in the order the buttons are given: what each means and how it is asked. Cmd+D (Ctrl+D off macOS)
@@ -212,9 +248,9 @@ impl UnsavedChangesDialog {
         UnsavedAnswer { answer, apply_to_all: self.apply_to_all && self.remaining > 1 }
     }
 
-    /// Shows the question; `hosted` holds the open state and the "Apply to All" box in the dialog's own fields, else
-    /// in memory.
-    fn present(&mut self, ui: &mut Ui, hosted: bool) -> UnsavedChangesOutput {
+    /// Shows the question with the open state `open`, else the prompt's own; `hosted` holds the "Apply to All" box in
+    /// the question's own field, else in memory.
+    fn present<'p>(&'p mut self, ui: &mut Ui, hosted: bool, open: Option<Bind<'p, bool>>) -> UnsavedChangesOutput {
         let env = Env::of(ui);
         let (words, common) = (env.words::<DialogWords>(), env.words::<CommonWords>());
         let template = match self.scope {
@@ -242,46 +278,43 @@ impl UnsavedChangesDialog {
         if self.offers_apply_to_all() {
             prompt = apply_to_all(prompt, words.unsaved_apply_to_all.clone(), self.remaining, hosted.then_some(&mut self.apply_to_all), &mut ticked);
         }
-        if hosted {
-            prompt = prompt.opened(Bind::bound(&mut self.open));
+        if let Some(open) = open {
+            prompt = prompt.opened(open);
         }
         let shown = prompt.show(ui);
         let answer = shown.picked.map(|at| UnsavedAnswer { answer: answers[at], apply_to_all: ticked && self.remaining > 1 });
         UnsavedChangesOutput { response: shown.response, closed: shown.closed, answer }
     }
-
-    /// Shows the question; `answer` is `Some` the pass a button, Enter, Escape or the close action answers.
-    pub fn show(mut self, ui: &mut Ui) -> UnsavedChangesOutput {
-        self.present(ui, false)
-    }
 }
 
-impl StackDialog for UnsavedChangesDialog {
+impl StackDialog for HostedUnsavedChangesDialog {
     type Result = UnsavedAnswer;
 
     fn id(&self) -> DialogId {
-        self.id
+        self.question.id
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<UnsavedAnswer>> {
-        self.present(ui, true).answer.map(DialogResult::Ok)
+        self.question.present(ui, true, Some(Bind::bound(&mut self.open))).answer.map(DialogResult::Ok)
     }
 
     /// The answer set with `set_answer`; the accepting answer's (Save, or Don't Save when reverting) unless set.
     /// None for an answer the question has no button for.
     fn confirm(&mut self, _: &Context) -> Option<UnsavedAnswer> {
-        let chosen = self.chosen();
-        self.offered().contains(&chosen).then(|| self.answer(chosen))
+        let question = &self.question;
+        let chosen = question.chosen();
+        question.offered().contains(&chosen).then(|| question.answer(chosen))
     }
 
     /// `choice` (`save`, `dontSave` or `cancel`), the answer a programmatic OK gives, and `applyToAll` while the
     /// guard has more documents.
     fn json_fields(&self) -> Option<Value> {
-        let mut fields = json!({ "choice": answer_name(self.chosen()) });
-        if self.offers_apply_to_all() {
-            fields["applyToAll"] = Value::Bool(self.apply_to_all);
+        let question = &self.question;
+        let mut fields = json!({ "choice": answer_name(question.chosen()) });
+        if question.offers_apply_to_all() {
+            fields["applyToAll"] = Value::Bool(question.apply_to_all);
         }
-        if let Some(reason) = &self.reason {
+        if let Some(reason) = &question.reason {
             fields["reason"] = Value::String(reason.clone());
         }
         Some(fields)
@@ -290,12 +323,12 @@ impl StackDialog for UnsavedChangesDialog {
     fn set_json_field(&mut self, _: &Context, field: &str, value: Value) -> Result<(), String> {
         match field {
             "choice" => {
-                let answer = self.offered().iter().copied().find(|answer| value.as_str() == Some(answer_name(*answer)));
+                let answer = self.question.offered().iter().copied().find(|answer| value.as_str() == Some(answer_name(*answer)));
                 let Some(answer) = answer else { return Err(FieldRefusal::Rejects(&value).message(field)) };
                 self.set_answer(answer);
             }
-            "applyToAll" if self.offers_apply_to_all() => match value.as_bool() {
-                Some(on) => self.apply_to_all = on,
+            "applyToAll" if self.question.offers_apply_to_all() => match value.as_bool() {
+                Some(on) => self.question.apply_to_all = on,
                 None => return Err(FieldRefusal::Rejects(&value).message(field)),
             },
             _ => return Err(FieldRefusal::Unknown.message(field)),
