@@ -470,6 +470,69 @@ fn pixel_aspect_lists_the_custom_entries_and_shows_an_unknown_id_as_square() {
     assert!(shows(&fixture, "DVCPRO HD 1080 (1.5)") && shows(&fixture, "Mine"), "the built-in ratios, then the app's");
 }
 
+/// A recent document of `width` x `height` pixels at 72 ppi.
+fn recent(width: u32, height: u32) -> DocumentOptions {
+    let mut options = DocumentOptions::default();
+    options.size = craft_behavior::PixelSize::new(width, height);
+    options.pixels_per_inch = 72.0;
+    options.unit = craft_ui::runtime::env::UnitKind::Pixels;
+    options
+}
+
+/// The painted size lines of `sizes` (w, h at 72 ppi), in that order.
+fn size_lines(fixture: &Fixture, sizes: &[(u32, u32)]) -> Vec<egui::Rect> {
+    sizes
+        .iter()
+        .map(|(w, h)| {
+            let line = format!("{w} × {h} px @ 72 ppi");
+            fixture.texts().iter().find(|painted| painted.text == line).unwrap_or_else(|| panic!("a card reads {line}")).rect
+        })
+        .collect()
+}
+
+#[trial]
+fn recent_items_heads_recent_and_lays_four_cards_to_a_row() {
+    let sizes = [(301, 201), (302, 202), (303, 203), (304, 204), (305, 205), (306, 206)];
+    let mut spans = Vec::new();
+    for items in [false, true] {
+        let mut options = DocumentOptions::default();
+        let mut listed: Vec<DocumentOptions> = sizes.iter().map(|(w, h)| recent(*w, *h)).collect();
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = NewDocumentDialog::new(Bind::bound(&mut options)).recent(Bind::bound(&mut listed)).recent_items(items).show(ui);
+        });
+        fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+        let rects = size_lines(&fixture, &sizes);
+        let first_row = rects.iter().take_while(|rect| (rect.top() - rects[0].top()).abs() < 1.0).count();
+        spans.push(rects[first_row - 1].right() - rects[0].left());
+        if items {
+            assert!(shows(&fixture, "YOUR RECENT ITEMS (6)"), "the heading counts the six recent documents");
+            assert_eq!(first_row, 4, "four cards to a row: {rects:?}");
+            assert!(!shows(&fixture, "HDTV 1080p"), "no default card next to recent documents");
+        } else {
+            assert!(shows(&fixture, "BLANK DOCUMENT PRESETS (8)"), "six recent documents and the two defaults");
+            assert_eq!(first_row, 3, "three cards to a row without the option");
+        }
+    }
+    // The four cards take about the room of three, so the dialog keeps its width from tab to tab.
+    assert!((spans[1] - spans[0]).abs() <= spans[0] * 0.15, "row spans {spans:?}");
+}
+
+#[trial]
+fn recent_items_lists_the_defaults_until_there_is_a_recent_document() {
+    let mut options = DocumentOptions::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut none: Vec<DocumentOptions> = Vec::new();
+        let _ = NewDocumentDialog::new(Bind::bound(&mut options))
+            .recent(Bind::bound(&mut none))
+            .recent_defaults(vec![craft_ui::patterns::form_dialogs::DocumentPreset::new("default", "Default Size", 2100, 1500, 300.0)])
+            .recent_items(true)
+            .show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    assert!(shows(&fixture, "YOUR RECENT ITEMS (1)"), "the default card alone");
+    assert!(shows(&fixture, "Default Size"));
+}
+
 #[trial]
 fn the_new_document_layout_places_presets_and_details_below_the_tabs() {
     let mut options = DocumentOptions::default();
