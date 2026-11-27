@@ -4,7 +4,7 @@
 //!
 //! * **RC4** (header version 1.1, §2.3.6): the password hash and each block's key come from
 //!   MD5, and the key is 128 bits.
-//! * **RC4 CryptoAPI** (header version 2, 3 or 4 . 2, §2.3.5): the same with SHA-1, a key of
+//! * **RC4 CryptoAPI** (header version 2.2, 3.2 or 4.2, §2.3.5): the same with SHA-1, a key of
 //!   40 to 128 bits and a variable-size header naming the provider.
 //!
 //! [`Key::open`] reads the encryption header at the start of a stream, checks the password
