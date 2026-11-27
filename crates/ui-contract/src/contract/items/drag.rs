@@ -793,6 +793,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     && let Some(at) = hit
                 {
                     if free {
+                        // A move carries the selection: a plain press outside it that the click would have picked
+                        // picks now, so the drag moves the item it started on.
+                        if let Some(key) = self.drags.pick.take()
+                            && let Some(at) = self.index_of(&key)
+                        {
+                            self.click_pick(comp, at, false, false, crate::runtime::pointer::frame_raw(&cx.core.ctx).mods);
+                        }
                         self.free_move(cx, origin, layer(pos));
                     } else if (props.reorder.is_some() || !props.drag_payloads.is_empty()) && self.drags.grabbed.is_none() {
                         self.begin_row_drag(cx, props, at);

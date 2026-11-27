@@ -112,8 +112,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     // A plain press on a selected row of a multiple selection leaves the selection whole, so a drag
                     // carries all of it; the release as a click narrows it to the row. In a single selection that
                     // allows an empty one, the release as a click empties it. A plain press on a row outside the
-                    // selection picks it when it ends as a click, so a drag carries the row and leaves the selection
-                    // as it was. A later click of a multi-click on a held row keeps the selection the earlier click
+                    // selection picks it when it ends as a click, so a row drag carries the row and leaves the selection
+                    // as it was; a free layout's move picks it when the drag starts (`drag_step`). A later click of a multi-click on a held row keeps the selection the earlier click
                     // left (`keeps_pick`).
                     let holds = match Self::select_mode(comp) {
                         SelectMode::Multi => true,

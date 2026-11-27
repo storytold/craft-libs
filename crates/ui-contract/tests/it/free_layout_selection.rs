@@ -446,6 +446,49 @@ fn a_press_on_a_declared_part_moves_the_selection_when_the_collection_says_so() 
     assert_eq!(sorted(&selection), [0], "the selection is as it was");
 }
 
+/// q151: a press-drag on an item outside the selection selects it alone, before the move begins, and moves it in the
+/// same gesture; a press-drag on an item of a multiple selection moves all of it and keeps it whole.
+#[trial]
+fn a_drag_on_an_unselected_item_selects_and_moves_it() {
+    let selection = Rc::new(RefCell::new(Selection::<usize>::default()));
+    let (shown, events) = (Rc::new(Shown::default()), Rc::new(RefCell::new(Events::new())));
+    let mut fixture = Fixture::new({
+        let (selection, shown, events) = (selection.clone(), shown.clone(), events.clone());
+        move |ui: &mut Ui| {
+            let mut held = selection.borrow().clone();
+            let out = Board::new(three_items()).selection(Bind::bound(&mut held)).id_salt("board").show_items(ui, &Count(3), &mut |key, cx| {
+                shown.note(*key, cx.rect);
+                Row::new()
+            });
+            *selection.borrow_mut() = held;
+            events.borrow_mut().extend(out.events);
+        }
+    });
+    fixture.idle(3);
+    let item = |key: usize| shown.rect(key).center();
+    fixture.click_at(item(0)).advance(1.0).idle(1);
+    events.borrow_mut().clear();
+
+    let by = Vec2::new(30.0, 20.0);
+    fixture.drag_at(item(2), by).advance(1.0).idle(1);
+    assert_eq!(sorted(&selection), [2], "the drag selects the item it started on, in place of the selection");
+    let picked = events.borrow().iter().position(|event| matches!(event, CollectionEvent::Selection { .. }));
+    let began = events.borrow().iter().position(|event| matches!(event, CollectionEvent::Move(EditEvent::Begin { .. })));
+    assert!(
+        matches!((picked, began), (Some(picked), Some(began)) if picked < began),
+        "the selection changes before the move begins, so the move carries the item"
+    );
+    let dragged = moves(&events);
+    assert!(matches!(dragged.commits.as_slice(), [after] if (*after - by).length() < SAME), "one move of the pointer's travel: {dragged:?}");
+
+    fixture.hold(Modifiers::SHIFT).click_at(item(0)).hold(Modifiers::NONE).advance(1.0).idle(1);
+    assert_eq!(sorted(&selection), [0, 2]);
+    events.borrow_mut().clear();
+    fixture.drag_at(item(0), by).advance(1.0).idle(1);
+    assert_eq!(sorted(&selection), [0, 2], "a drag on a selected item keeps the selection whole");
+    assert_eq!(moves(&events).commits.len(), 1, "and moves it");
+}
+
 /// q131: a collection's body part (`PartsCx::in_body`) lies in its rows' space. A press finds it where the body's
 /// transform shows it, after a pan and after a zoom, and not where it would sit untransformed, and the press reads in
 /// the rows' space.
