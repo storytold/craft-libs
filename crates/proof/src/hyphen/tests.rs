@@ -185,3 +185,87 @@ fn polish_heuristic_for_foreign_letters() {
     let c: Vec<char> = "szczérze".chars().collect();
     assert_eq!(heuristic_points_pl(&c), vec![5], "szczé-rze: `rz` stays whole");
 }
+
+/// The CPU time `f` takes on this thread, in seconds. On Linux it is the scheduler's count of the
+/// time the thread actually ran, so the time it waits while other work on a busy machine has the
+/// CPU is left out; elsewhere, wall-clock time.
+fn cpu_cost(f: &mut impl FnMut()) -> f64 {
+    let ran = || {
+        let s = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+        s.split_whitespace().next()?.parse::<u64>().ok()
+    };
+    let (t, before) = (std::time::Instant::now(), ran());
+    f();
+    match (before, ran()) {
+        (Some(a), Some(b)) => b.saturating_sub(a) as f64 * 1e-9,
+        _ => t.elapsed().as_secs_f64(),
+    }
+}
+
+/// How much more `big` costs than `small`, for `big` an input `scale` times the size of `small`'s:
+/// (small, big, big / small), ~`scale` when linear and ~`scale`² when quadratic. Each is the
+/// cheapest of several runs after a warm-up, the runs alternating so a busy spell slows both sizes
+/// alike; `small` is timed `scale` times over per run, so both timings are long against the clock's
+/// resolution.
+fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (f64, f64, f64) {
+    small();
+    big();
+    let mut small_scaled = || (0..scale).for_each(|_| small());
+    let (mut t1, mut tk) = (f64::INFINITY, f64::INFINITY);
+    for _ in 0..5 {
+        t1 = t1.min(cpu_cost(&mut small_scaled) / scale as f64);
+        tk = tk.min(cpu_cost(&mut big));
+    }
+    (t1, tk, tk / t1.max(1e-9))
+}
+
+/// Regression: hyphenating a long word is linear.
+#[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+#[test]
+fn hyphenating_a_long_word_is_linear() {
+    // A word of n letters against one of 8n: linear ~8x the cost, the old rescans ~64x. One in
+    // the pattern alphabet, one outside it (the syllable heuristic).
+    let pattern = |k: usize| "hyphenation".repeat(k);
+    let heuristic = |k: usize| "smørrebrød".repeat(k);
+    assert_eq!(word_breaks(&heuristic(2)).1, Source::Heuristic);
+    // Each timing repeats the call so the shorter one is milliseconds, well above timer noise.
+    let ratios: Vec<(String, f64)> = [(pattern as fn(usize) -> String, 20), (heuristic, 40)]
+        .into_iter()
+        .map(|(word, repeat)| {
+            let (small, big) = (word(400), word(8 * 400));
+            let time = |w: &str| (0..repeat).for_each(|_| drop(points_for_run(w, &Limits::default(), ProofLang::En, false)));
+            let (t1, t8, ratio) = cost_ratio(8, || time(&small), || time(&big));
+            let what = format!("{}…: t(n) {t1:.4} s, t(8n) {t8:.4} s, ratio {ratio:.1}", word(1).chars().take(10).collect::<String>());
+            eprintln!("{what}");
+            (what, ratio)
+        })
+        .collect();
+    for (what, ratio) in ratios {
+        assert!(ratio < 24.0, "8x the letters, not linear: {what}");
+    }
+}
+
+/// Regression: russian hyphenation and hyphenated output are linear.
+#[test]
+fn russian_hyphenation_and_hyphenated_output_are_linear() {
+    // A Russian word breaks at every syllable: each break used to be checked against all the
+    // earlier ones (#3657), and the hyphenated output searched every break for each char.
+    let word = |k: usize| "мама".repeat(k);
+    assert_eq!(word_breaks_in(&word(2), ProofLang::Ru).0, [2, 4, 6]);
+    assert_eq!(hyphenate_word_in(&word(2), &Limits::default(), ProofLang::Ru), "ма-ма-ма-ма");
+    // The breaks' rescan is a cheap one per break: it takes longer words to stand out.
+    for (what, k, repeat, f) in [
+        ("points", 1000, 3, (|w: &str| drop(points_for_run(w, &Limits::default(), ProofLang::Ru, false))) as fn(&str)),
+        ("hyphenated", 400, 20, |w: &str| {
+            let points = points_for_run(w, &Limits::default(), ProofLang::Ru, false);
+            assert!(!points.is_empty(), "the timing case must exercise actual breaks");
+            drop(hyphenated_output(w, points.into_iter().map(|at| Opportunity { at, suffix: Default::default() }).collect()));
+        }),
+    ] {
+        let (small, big) = (word(k), word(8 * k));
+        let time = |w: &str| (0..repeat).for_each(|_| f(w));
+        let (t1, t8, ratio) = cost_ratio(8, || time(&small), || time(&big));
+        eprintln!("{what}: t(n) {t1:.4} s, t(8n) {t8:.4} s, ratio {ratio:.1}");
+        assert!(ratio < 24.0, "8x the letters, not linear: {what} {ratio:.1}");
+    }
+}

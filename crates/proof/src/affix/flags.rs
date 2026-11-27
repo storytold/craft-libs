@@ -149,7 +149,7 @@ impl FlagMode {
 /// search gets a small budget ([`compound::MAX_SUGGEST_WORK`]); the fourth: `KEEPCASE`, kept
 /// apart since it holds for a compound's first part only (and may share its id with another).
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct Excluded([Option<u16>; 5], bool, pub(super) bool, Option<u16>);
+pub(super) struct Excluded([Option<u16>; 5], bool, pub(super) bool, Option<u16>, bool);
 
 impl Excluded {
     /// Does the flag set `set` carry an excluded flag?
@@ -169,6 +169,24 @@ impl Excluded {
 
     pub(super) fn suggesting(self) -> bool {
         self.2
+    }
+
+    /// Allow forbidden stems while analysing a COMPOUNDRULE terminal suffix.
+    pub(super) fn allowing_forbidden(mut self, forbidden: Option<u16>, no_suggest: Option<u16>, substandard: Option<u16>) -> Self {
+        let suggesting = self.suggesting();
+        for slot in &mut self.0 {
+            let excluded_from_suggestions = suggesting && (*slot == no_suggest || *slot == substandard);
+            if *slot == forbidden && !excluded_from_suggestions {
+                *slot = None;
+            }
+        }
+        self.4 = true;
+        self
+    }
+
+    /// Whether a terminal-suffix analysis may inspect a forbidden stem.
+    pub(super) fn forbidden_allowed(self) -> bool {
+        self.4
     }
 
     /// These exclusions and `KEEPCASE` (`flag`): a case variant of the word is being checked.

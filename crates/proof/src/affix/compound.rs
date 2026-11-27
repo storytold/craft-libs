@@ -54,6 +54,7 @@ mod parse;
 mod tests;
 
 pub(crate) use analysis::Pieces;
+pub(in crate::affix) use analysis::TerminalFlags;
 pub(in crate::affix) use parse::{Compounding, Raw, is_directive};
 
 /// Most parts a compound may have, whatever `COMPOUNDWORDMAX` says.

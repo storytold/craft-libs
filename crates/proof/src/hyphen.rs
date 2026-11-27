@@ -33,7 +33,9 @@ use std::sync::OnceLock;
 
 pub use crate::lang::ProofLang;
 pub use dict::Dictionary;
-pub use patterns::Patterns;
+pub use patterns::{Opportunity, Patterns};
+mod nonstandard;
+pub use nonstandard::{hyphen_opportunities_in, hyphen_opportunities_including_all_caps};
 
 // The embedded Language data (`language-data/` of craft-i18n, see `build.rs`); each is empty when
 // it isn't embedded. The TeX files are hyph-utf8's `hyph-pl.tex`, `hyph-pt.tex`, `hyph-it.tex` and
@@ -120,6 +122,27 @@ pub enum Source {
     Rules,
     /// No break points: the word is too short or no source applies.
     None,
+}
+
+/// Per-run UTF-8 limit for automatic hyphenation. Longer runs stay unbroken;
+/// neighbouring words, source offsets and explicit soft hyphens are unaffected.
+pub const MAX_HYPHENATION_RUN_BYTES: usize = patterns::MAX_WORD_CHARS;
+
+/// Stream letter runs with source-character offsets without retaining the whole input.
+fn word_runs(word: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut chars = word.char_indices().enumerate().peekable();
+    std::iter::from_fn(move || {
+        while chars.peek().is_some_and(|(_, (_, c))| !is_word_char(*c)) {
+            chars.next();
+        }
+        let (offset, (start, _)) = *chars.peek()?;
+        let mut end = start;
+        while let Some(&(_, (byte, c))) = chars.peek().filter(|(_, (_, c))| is_word_char(*c)) {
+            end = byte + c.len_utf8();
+            chars.next();
+        }
+        word.get(start..end).map(|run| (offset, run))
+    })
 }
 
 fn is_apostrophe(c: char) -> bool {
@@ -344,6 +367,22 @@ pub fn hyphen_points(word: &str, lim: &Limits) -> Vec<usize> {
 /// Allowed hyphenation points in `word`, a word in `lang`, as char indices (a hyphen goes before
 /// that char), with the paragraph limits applied to each letter run.
 pub fn hyphen_points_in(word: &str, lim: &Limits, lang: ProofLang) -> Vec<usize> {
+    points_with_caps(word, lim, lang, false)
+}
+
+/// Collect bounded per-run points, with the requested all-caps policy.
+fn points_with_caps(word: &str, lim: &Limits, lang: ProofLang, all_caps: bool) -> Vec<usize> {
+    let mut out = Vec::new();
+    for (offset, run) in word_runs(word) {
+        if run.len() <= MAX_HYPHENATION_RUN_BYTES {
+            out.extend(points_for_run(run, lim, lang, all_caps).into_iter().map(|at| offset + at));
+        }
+    }
+    out
+}
+
+/// Map a bounded run through normalization and pattern matching to source offsets.
+fn points_for_run(word: &str, lim: &Limits, lang: ProofLang, all_caps: bool) -> Vec<usize> {
     let chars: Vec<char> = word.chars().collect();
     let (pts, _) = word_breaks_in(word, lang);
     if pts.is_empty() {
@@ -393,7 +432,7 @@ pub fn hyphen_points_in(word: &str, lim: &Limits, lang: ProofLang) -> Vec<usize>
             if n < lim.min_word.max(2) {
                 return false;
             }
-            if n > 1 && count(&upper, a, b) == n {
+            if !all_caps && n > 1 && count(&upper, a, b) == n {
                 return false;
             }
             if !lim.capitalized && chars.get(a).is_some_and(|c| c.is_uppercase()) {
@@ -411,14 +450,23 @@ pub fn hyphenate_word(word: &str, lim: &Limits) -> String {
 
 /// `word`, a word in `lang`, with `-` at every hyphenation point (tests and diagnostics).
 pub fn hyphenate_word_in(word: &str, lim: &Limits, lang: ProofLang) -> String {
-    let mut pts = hyphen_points_in(word, lim, lang);
-    pts.sort_unstable();
+    hyphenated_output(word, hyphen_opportunities_in(word, lim, lang))
+}
+
+/// Render ordered break opportunities without repeatedly searching earlier points.
+fn hyphenated_output(word: &str, mut pts: Vec<Opportunity>) -> String {
+    pts.sort_unstable_by_key(|p| p.at);
     // Walk the points alongside the chars rather than searching them for each char.
     let mut next = pts.into_iter().peekable();
     let mut s = String::with_capacity(word.len() + 8);
     for (i, ch) in word.chars().enumerate() {
-        if next.next_if_eq(&i).is_some() {
-            while next.next_if_eq(&i).is_some() {}
+        if next.peek().is_some_and(|p| p.at == i) {
+            if let Some(p) = next.next() {
+                s.push_str(&p.suffix);
+            }
+            while next.peek().is_some_and(|p| p.at == i) {
+                next.next();
+            }
             s.push('-');
         }
         s.push(ch);
