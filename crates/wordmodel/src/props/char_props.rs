@@ -432,6 +432,9 @@ pub struct CharProps {
     /// Hyperlink target: a URL, or `#bookmark` for an internal link.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+    /// Destination location in the hyperlink's target document (`w:docLocation`), kept for round trip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_location: Option<String>,
     /// Optional ScreenTip for the hyperlink. Runs from one link can share its text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_tooltip: Option<Arc<str>>,
@@ -572,6 +575,7 @@ impl CharProps {
             c.style = None;
         }
         c.link_tooltip = None;
+        c.link_location = None;
         c
     }
 
@@ -632,9 +636,10 @@ impl CharProps {
     }
 
     fn minus_document_marks(&mut self, base: &CharProps) {
-        if self.link == base.link && self.link_tooltip == base.link_tooltip {
+        if self.link == base.link && self.link_tooltip == base.link_tooltip && self.link_location == base.link_location {
             self.link = None;
             self.link_tooltip = None;
+            self.link_location = None;
         }
         drop_same_fields!(self, base; ins, del, ligatures);
     }
@@ -689,6 +694,7 @@ impl CharProps {
         if let Some(link) = &patch.link {
             self.link = Some(link.clone());
             self.link_tooltip = patch.link_tooltip.clone();
+            self.link_location = patch.link_location.clone();
         }
         overlay_fields!(self, patch; ins, del, fmt_change, ligatures);
     }
@@ -715,6 +721,7 @@ impl CharProps {
     pub fn cleared(&self) -> CharProps {
         CharProps {
             link: self.link.clone(),
+            link_location: self.link_location.clone(),
             link_tooltip: self.link_tooltip.clone(),
             ins: self.ins,
             del: self.del,
@@ -726,6 +733,6 @@ impl CharProps {
     }
     /// Just the formatting: without the link, revision marks and tracked formatting change.
     pub fn formatting(&self) -> CharProps {
-        CharProps { link: None, link_tooltip: None, ins: None, del: None, fmt_change: None, ..self.clone() }
+        CharProps { link: None, link_location: None, link_tooltip: None, ins: None, del: None, fmt_change: None, ..self.clone() }
     }
 }

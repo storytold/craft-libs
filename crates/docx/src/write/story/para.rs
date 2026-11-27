@@ -210,17 +210,20 @@ impl Writer<'_> {
                 i += 1;
                 continue;
             }
-            // Hyperlinks with different ScreenTips stay separate even if their target is shared.
-            let link = props
-                .link
-                .as_deref()
-                .filter(|target| !target.is_empty())
-                .map(|target| (target, props.link_tooltip.as_deref().and_then(crate::bounded_link_tooltip)));
+            // Hyperlinks with different ScreenTips or destination locations stay separate even if
+            // their target is shared.
+            let link = props.link.as_deref().filter(|target| !target.is_empty()).map(|target| {
+                (
+                    target,
+                    props.link_tooltip.as_deref().and_then(crate::bounded_link_tooltip),
+                    props.link_location.as_deref().and_then(crate::bounded_doc_location),
+                )
+            });
             if link != open_link {
                 if open_link.is_some() {
                     w.close("w:hyperlink");
                 }
-                if let Some((link, tip)) = link {
+                if let Some((link, tip, location)) = link {
                     let id;
                     let target = if let Some(anchor) = link.strip_prefix('#') {
                         ("w:anchor", anchor)
@@ -228,11 +231,14 @@ impl Writer<'_> {
                         id = rels.add(rt::HYPERLINK, link, true);
                         ("r:id", id.as_str())
                     };
+                    let mut attrs = vec![target, ("w:history", "1")];
                     if let Some(tip) = tip {
-                        w.open("w:hyperlink", &[target, ("w:history", "1"), ("w:tooltip", tip)]);
-                    } else {
-                        w.open("w:hyperlink", &[target, ("w:history", "1")]);
+                        attrs.push(("w:tooltip", tip));
                     }
+                    if let Some(location) = location {
+                        attrs.push(("w:docLocation", location));
+                    }
+                    w.open("w:hyperlink", &attrs);
                 }
                 open_link = link;
             }
