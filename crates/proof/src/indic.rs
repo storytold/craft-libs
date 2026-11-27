@@ -14,7 +14,8 @@
 //! The rules come from the scripts' Unicode encoding alone; no pattern file or word list is
 //! read (and none is borrowed). The Brahmic blocks share one layout (the ISCII order), so a
 //! script is its block's start and a few script-specific code points (`Script::kind`).
-//! Gujarati ([`ProofLang::Gu`]) and Hindi ([`ProofLang::Hi`], [`Script::Devanagari`]) use them;
+//! Gujarati ([`ProofLang::Gu`]), Hindi ([`ProofLang::Hi`]) and Marathi (the pack language `mr`)
+//! use them, Hindi and Marathi with [`Script::Devanagari`];
 //! another language written in one of these scripts is one more line in [`Script::of`].
 //!
 //! A single akshara left at the end or start of a line is ruled out by the paragraph's
@@ -61,6 +62,9 @@ impl Script {
         match lang {
             ProofLang::Gu => Some(Script::Gujarati),
             ProofLang::Hi => Some(Script::Devanagari),
+            // Marathi has no proofing language of its own: `mr`, `mr-IN` and `mar` are pack
+            // languages, spelled from their pack or Hunspell dictionary.
+            ProofLang::Pack(l) if matches!(l.primary(), "mr" | "mar") => Some(Script::Devanagari),
             _ => None,
         }
     }
@@ -243,11 +247,16 @@ mod tests {
         assert_eq!(hi("क्\u{200D}षमा"), "क्\u{200D}ष-मा");
     }
 
-    /// Gujarati and Hindi are mapped to their scripts, other languages to none.
+    /// Gujarati, Hindi and Marathi (a pack language, by any of its tags) are mapped to their
+    /// scripts, other languages (another pack language among them) to none.
     #[test]
     fn languages_map_to_their_script() {
         assert_eq!(Script::of(ProofLang::Gu), Some(Script::Gujarati));
         assert_eq!(Script::of(ProofLang::Hi), Some(Script::Devanagari));
+        for tag in ["mr", "mr-IN", "mar"] {
+            assert_eq!(Script::of(ProofLang::from_tag(Some(tag))), Some(Script::Devanagari), "{tag}");
+        }
+        assert_eq!(Script::of(ProofLang::from_tag(Some("ne"))), None);
         assert_eq!(Script::of(ProofLang::En), None);
         assert_eq!(Script::of(ProofLang::Bg), None);
     }

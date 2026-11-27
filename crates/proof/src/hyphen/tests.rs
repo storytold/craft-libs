@@ -235,3 +235,12 @@ fn hindi_breaks_between_aksharas_within_the_limits() {
     assert_eq!(hi("«विद्यार्थी»"), "«वि-द्या-र्थी»", "punctuation around the word");
     assert_eq!(hi("Typography"), hyphenate_word_in("Typography", &lim, ProofLang::En));
 }
+
+/// storytold/vectorcraft#4947: Marathi, a pack language (`mr`), breaks between aksharas as Hindi
+/// does, within the paragraph's limits.
+#[test]
+fn marathi_breaks_between_aksharas() {
+    let mr = ProofLang::from_tag(Some("mr-IN"));
+    assert_eq!(hyphenate_word_in("महाराष्ट्र", &Limits::default(), mr), "महा-रा-ष्ट्र");
+    assert_eq!(word_breaks_in("महाराष्ट्र", mr).1, Source::Rules);
+}
