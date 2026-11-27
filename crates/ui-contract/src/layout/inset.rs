@@ -22,6 +22,7 @@ impl ContentInset {
         Self { left: amount(left), right: 0.0 }
     }
 
+    /// Set the physical right inset in logical points.
     pub fn right(mut self, right: f32) -> Self {
         self.right = amount(right);
         self
