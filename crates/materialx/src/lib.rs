@@ -96,7 +96,7 @@ pub struct Material {
     pub shader: Shader,
     /// Resolved inputs in the supported shader table's deterministic order.
     pub inputs: Vec<(String, Value)>,
-    /// Resolved displacement input, if present.
+    /// Resolved scalar displacement input, if present. Vector displacement is reported as unsupported.
     pub displacement: Option<Value>,
     /// First valid image tiling value, or `[1, 1]`.
     pub uv_tiling: [f32; 2],
@@ -132,6 +132,7 @@ struct Found {
 struct Located<'a> {
     mat: &'a El,
     shader: &'a El,
+    scope: Option<String>,
     kind: Shader,
     nodes: HashMap<String, &'a El>,
     graphs: HashMap<&'a str, &'a El>,
@@ -373,7 +374,7 @@ impl Document {
 
     /// Resolves a surface material into shader inputs, image paths and warnings.
     pub fn read_material(&self, material: Option<&str>) -> Result<Material, Error> {
-        let Located { mat, shader, kind, nodes, outputs, .. } = self.locate(material)?;
+        let Located { mat, shader, kind, nodes, outputs, .. } = self.locate(material, false)?;
         let inputs = match kind {
             Shader::OpenPbr => OPEN_PBR_INPUTS,
             Shader::StandardSurface => STANDARD_INPUTS,
@@ -441,14 +442,19 @@ impl Document {
     /// not in the table gives the warning `input <name> is not read`; the base weight warning of
     /// [`Document::read_material`] is not given, since the weight is read. A `normalmap` node's
     /// `scale` other than 1 is not read and gives a warning.
+    /// Surface shaders may connect through graph outputs. A graph with several outputs needs a
+    /// named selection; a graph with one output uses it regardless of the selection attribute.
+    /// Missing node and graph-output references are errors. Supported numeric `constant` nodes
+    /// use their typed zero values when `value` is omitted. Emission colors remain resolved when
+    /// their strength is zero. Nonzero image `uvoffset`, nonidentity displacement `scale`, and
+    /// vector displacement are reported as unsupported.
     pub fn read_material_strict(&self, material: Option<&str>) -> Result<StrictMaterial, Error> {
-        let Located { mat, shader, kind, nodes, graphs, outputs } = self.locate(material)?;
+        let Located { mat, shader, scope, kind, nodes, graphs, outputs } = self.locate(material, true)?;
         let inputs = match kind {
             Shader::OpenPbr => OPEN_PBR_STRICT_INPUTS,
             Shader::StandardSurface => STANDARD_STRICT_INPUTS,
             Shader::GltfPbr => GLTF_STRICT_INPUTS,
         };
-        let emission_enabled = emission_enabled(kind, shader, parse_values);
         let mut warnings = Vec::new();
         let mut seen = HashSet::new();
         for name in shader.children("input").filter_map(|i| i.attr("name")) {
@@ -460,37 +466,47 @@ impl Document {
             }
         }
         let resolver = Resolver { root: &self.root, nodes: &nodes, graphs: &graphs, outputs: &outputs };
-        let shader_space = resolver.space_of(shader, None);
+        let shader_space = resolver.space_of(shader, scope.as_deref());
         let mut resolved = Vec::new();
         let mut tiling = None;
         for name in inputs {
             let Some(input) = shader.children("input").find(|i| i.attr("name") == Some(*name)) else { continue };
-            let is_emission = matches!((kind, *name), (Shader::OpenPbr, "emission_color") | (Shader::StandardSurface, "emission_color"));
-            if is_emission && !emission_enabled {
-                // The color is still read, so a malformed value is an error with any strength.
-                resolver.value(input, None, shader_space, 0, &mut Vec::new())?;
-                warnings.push(format!("{name} was skipped: the shader's emission is 0"));
-                continue;
-            }
-            if let Some(value) = resolver.value(input, None, shader_space, 0, &mut warnings)? {
+            if let Some(value) = resolver.value(input, scope.as_deref(), shader_space, 0, &mut warnings)? {
                 if tiling.is_none() {
                     tiling = image_tiling(&value);
                 }
                 resolved.push(((*name).to_owned(), value));
             }
         }
-        let displacement_node = mat
-            .children("input")
-            .find(|i| i.attr("name") == Some("displacementshader"))
-            .and_then(|i| i.attr("nodename"))
-            .and_then(|n| nodes.get(n).copied());
         let mut displacement = None;
-        if let Some(node) = displacement_node
-            && let Some(input) = node.children("input").find(|i| i.attr("name") == Some("displacement"))
-        {
-            displacement = resolver.value(input, None, resolver.space_of(node, None), 0, &mut warnings)?;
-            if tiling.is_none() {
-                tiling = displacement.as_ref().and_then(image_tiling);
+        if let Some(connection) = mat.children("input").find(|i| i.attr("name") == Some("displacementshader")) {
+            let target = resolver.target(connection, None)?;
+            if let Some(node) = target.as_ref().and_then(|name| nodes.get(name).copied()) {
+                let node_scope = target.as_deref().and_then(|name| name.split_once('/')).map(|(graph, _)| graph);
+                let space = resolver.space_of(node, node_scope);
+                if let Some(input) = node.children("input").find(|i| i.attr("name") == Some("displacement")) {
+                    let value = resolver.value(input, node_scope, space, 0, &mut warnings)?;
+                    if resolver.value_type(input, node_scope)? == Some("vector3")
+                        || matches!(&value, Some(Resolved::Constant { values, .. }) if values.len() == 3)
+                    {
+                        warnings.push("vector displacement is not supported; its input was skipped".into());
+                    } else {
+                        displacement = value;
+                    }
+                }
+                if let Some(scale) = node.children("input").find(|i| i.attr("name") == Some("scale")).filter(|i| has_authored_value(i)) {
+                    let value = resolver.value(scale, node_scope, space, 0, &mut warnings)?;
+                    match value {
+                        Some(Resolved::Constant { values, .. }) if values.len() != 1 => {
+                            return Err(Error::Malformed("displacement scale is not one finite number".into()));
+                        }
+                        Some(Resolved::Constant { values, .. }) if values == [1.0] => {}
+                        _ => warnings.push("the scale of the displacement node is not read".into()),
+                    }
+                }
+                if tiling.is_none() {
+                    tiling = displacement.as_ref().and_then(image_tiling);
+                }
             }
         }
         Ok(StrictMaterial {
@@ -505,7 +521,7 @@ impl Document {
 
     /// The surface material named `material` (or the first one), its surface shader, and the
     /// document's nodes, nodegraphs and graph outputs.
-    fn locate(&self, material: Option<&str>) -> Result<Located<'_>, Error> {
+    fn locate(&self, material: Option<&str>, strict: bool) -> Result<Located<'_>, Error> {
         let materials: Vec<&El> = self.root.children("surfacematerial").collect();
         let mat = match material {
             Some(name) => materials.iter().copied().find(|m| m.attr("name") == Some(name)).ok_or_else(|| Error::MissingMaterial(name.to_owned()))?,
@@ -532,15 +548,23 @@ impl Document {
                 nodes.insert(name.to_owned(), child);
             }
         }
-        let shader_name = mat.children("input").find(|i| i.attr("name") == Some("surfaceshader")).and_then(|i| i.attr("nodename"));
-        let shader = shader_name.and_then(|n| nodes.get(n).copied()).ok_or_else(|| Error::Malformed("material has no surface shader".into()))?;
+        let connection = mat.children("input").find(|i| i.attr("name") == Some("surfaceshader"));
+        let shader_name = if strict {
+            let resolver = Resolver { root: &self.root, nodes: &nodes, graphs: &graphs, outputs: &outputs };
+            connection.map(|input| resolver.target(input, None)).transpose()?.flatten()
+        } else {
+            connection.and_then(|input| input.attr("nodename")).map(str::to_owned)
+        };
+        let shader =
+            shader_name.as_ref().and_then(|n| nodes.get(n).copied()).ok_or_else(|| Error::Malformed("material has no surface shader".into()))?;
+        let scope = shader_name.as_deref().and_then(|name| name.split_once('/')).map(|(graph, _)| graph.to_owned());
         let kind = match shader.name.as_str() {
             "open_pbr_surface" => Shader::OpenPbr,
             "standard_surface" => Shader::StandardSurface,
             "gltf_pbr" => Shader::GltfPbr,
             other => return Err(Error::Unsupported(format!("surface shader is {other}"))),
         };
-        Ok(Located { mat, shader, kind, nodes, graphs, outputs })
+        Ok(Located { mat, shader, scope, kind, nodes, graphs, outputs })
     }
 }
 
@@ -647,6 +671,10 @@ fn image_tiling(value: &Resolved) -> Option<[f32; 2]> {
         }
         Resolved::Constant { .. } => None,
     }
+}
+
+fn has_authored_value(input: &El) -> bool {
+    ["value", "nodename", "nodegraph", "interfacename"].iter().any(|name| input.attr(name).is_some())
 }
 
 /// One to four finite numbers separated by commas, spaces or both, as MaterialX's own value
@@ -770,7 +798,7 @@ impl<'a> Resolver<'a> {
             let colorspace = if is_numeric_non_color(input.attr("type")) { self.working() } else { input.attr("colorspace").or(space) };
             return Ok(Some(Resolved::Constant { values, colorspace: colorspace.map(str::to_owned) }));
         }
-        let target = self.target(input, scope);
+        let target = self.target(input, scope)?;
         let Some(node) = target.as_ref().and_then(|t| self.nodes.get(t).copied()) else { return Ok(None) };
         let node_scope = target.as_deref().and_then(|t| t.split_once('/')).map(|(g, _)| g);
         let node_space = self.space_of(node, node_scope);
@@ -793,6 +821,15 @@ impl<'a> Resolver<'a> {
                         _ => return Err(Error::Malformed(format!("the uvtiling of image {node_name:?} is not two finite numbers"))),
                     },
                 };
+                if let Some(offset) = child("uvoffset").filter(|input| has_authored_value(input)) {
+                    match self.value(offset, node_scope, node_space, hops + 1, warnings)? {
+                        Some(Resolved::Constant { values, .. }) if values.len() != 2 => {
+                            return Err(Error::Malformed(format!("the uvoffset of image {node_name:?} is not two finite numbers")));
+                        }
+                        Some(Resolved::Constant { values, .. }) if values == [0.0, 0.0] => {}
+                        _ => warnings.push(format!("the uvoffset of image {node_name:?} is not read")),
+                    }
+                }
                 let colorspace = if is_numeric_non_color(node.attr("type")) { self.working() } else { file_input.attr("colorspace").or(node_space) }
                     .map(str::to_owned);
                 Ok(Some(Resolved::Image { file: format!("{prefix}{file}"), colorspace, uv_tiling }))
@@ -800,7 +837,7 @@ impl<'a> Resolver<'a> {
             "normalmap" => {
                 // The normal is passed on without the node's scale, so a scale other than 1 is
                 // reported.
-                if let Some(scale) = child("scale") {
+                if let Some(scale) = child("scale").filter(|input| has_authored_value(input)) {
                     let resolved = self.value(scale, node_scope, node_space, hops + 1, &mut Vec::new())?;
                     if !matches!(resolved, Some(Resolved::Constant { ref values, .. }) if values.iter().all(|s| *s == 1.0)) {
                         warnings.push(format!("the scale of normalmap node {node_name:?} is not read"));
@@ -815,8 +852,7 @@ impl<'a> Resolver<'a> {
                 let Some(i) = child("in") else { return Ok(None) };
                 let Some(value) = self.value(i, node_scope, node_space, hops + 1, warnings)? else { return Ok(None) };
                 let to = node.attr("type").unwrap_or("");
-                let from =
-                    i.attr("type").or_else(|| self.target(i, node_scope).and_then(|t| self.nodes.get(&t).copied()).and_then(|n| n.attr("type")));
+                let from = self.value_type(i, node_scope)?;
                 match value {
                     Resolved::Constant { values, colorspace } => {
                         // A value with no type is a float or a vector, so it is in the working
@@ -848,17 +884,29 @@ impl<'a> Resolver<'a> {
                     }
                 }
             }
-            "constant" => match child("value") {
-                // A connected value keeps the color space it resolved; only a written value takes
-                // the working color space.
-                Some(i) => match self.value(i, node_scope, node_space, hops + 1, warnings)? {
-                    Some(Resolved::Constant { values, .. }) if is_numeric_non_color(node.attr("type")) && i.attr("value").is_some() => {
-                        Ok(Some(Resolved::Constant { values, colorspace: self.working().map(str::to_owned) }))
-                    }
-                    value => Ok(value),
-                },
-                None => Ok(None),
-            },
+            "constant" => {
+                let value = child("value").filter(|input| has_authored_value(input));
+                match value {
+                    // A connected value keeps the color space it resolved; only a written value takes
+                    // the working color space.
+                    Some(i) => match self.value(i, node_scope, node_space, hops + 1, warnings)? {
+                        Some(Resolved::Constant { values, .. }) if is_numeric_non_color(node.attr("type")) && i.attr("value").is_some() => {
+                            Ok(Some(Resolved::Constant { values, colorspace: self.working().map(str::to_owned) }))
+                        }
+                        value => Ok(value),
+                    },
+                    None => match node.attr("type").and_then(channels) {
+                        Some(count) => {
+                            let space = if is_numeric_non_color(node.attr("type")) { self.working() } else { node_space };
+                            Ok(Some(Resolved::Constant { values: vec![0.0; count], colorspace: space.map(str::to_owned) }))
+                        }
+                        None => {
+                            warnings.push(format!("the default of constant node {node_name:?} has an unsupported type"));
+                            Ok(None)
+                        }
+                    },
+                }
+            }
             other => {
                 warnings.push(format!("a {other} node ({node_name:?}) is not supported; its input was skipped"));
                 Ok(None)
@@ -868,19 +916,42 @@ impl<'a> Resolver<'a> {
 
     /// The key in `nodes` of the node that `input`, an input of an element in nodegraph `scope`
     /// (or at the top level), connects to.
-    fn target(&self, input: &El, scope: Option<&str>) -> Option<String> {
-        if let Some(graph) = input.attr("nodegraph") {
-            let selected = match input.attr("output") {
-                Some(output) => self.outputs.iter().rev().find(|(k, _)| k == &format!("{graph}/{output}")),
-                None => self.outputs.iter().find(|(k, _)| k.starts_with(&format!("{graph}/"))),
+    fn target(&self, input: &El, scope: Option<&str>) -> Result<Option<String>, Error> {
+        let target = if let Some(graph) = input.attr("nodegraph") {
+            let prefix = format!("{graph}/");
+            let outputs: Vec<_> = self.outputs.iter().filter(|(name, _)| name.starts_with(&prefix)).collect();
+            let selected = if outputs.len() == 1 {
+                outputs.first().copied()
+            } else {
+                input.attr("output").and_then(|output| outputs.iter().rev().copied().find(|(name, _)| name == &format!("{graph}/{output}")))
             };
-            selected.map(|(_, node)| node.clone())
+            Some(
+                selected
+                    .ok_or_else(|| {
+                        Error::Malformed(format!("input {:?} has no selected output in nodegraph {graph:?}", input.attr("name").unwrap_or("")))
+                    })?
+                    .1
+                    .clone(),
+            )
         } else if let Some(name) = input.attr("nodename") {
             let qualified = scope.map(|g| format!("{g}/{name}"));
             qualified.filter(|q| self.nodes.contains_key(q)).or_else(|| Some(name.to_owned()))
         } else {
             None
+        };
+        if let Some(name) = target.as_ref()
+            && !self.nodes.contains_key(name)
+        {
+            return Err(Error::Malformed(format!("input {:?} references missing node {name:?}", input.attr("name").unwrap_or(""))));
         }
+        Ok(target)
+    }
+
+    fn value_type(&self, input: &'a El, scope: Option<&str>) -> Result<Option<&'a str>, Error> {
+        if input.attr("type").is_some() || input.attr("value").is_some() {
+            return Ok(input.attr("type"));
+        }
+        Ok(self.target(input, scope)?.as_ref().and_then(|name| self.nodes.get(name).copied()).and_then(|node| node.attr("type")))
     }
 }
 
@@ -1058,7 +1129,11 @@ mod tests {
         assert_eq!(material.inputs[2].1, Value::Constant { values: vec![1.0, 0.5, 0.25], colorspace: None });
         assert_eq!(material.displacement, Some(Value::Constant { values: vec![0.25], colorspace: None }));
         assert_eq!(material.uv_tiling, [2.0, 4.0]);
-        let strict = doc.read_material_strict(None).unwrap();
+        assert!(matches!(doc.read_material_strict(None), Err(Error::Malformed(_))));
+        let mut explicit = doc.clone();
+        let normalmap = explicit.root.elements_mut().find(|node| node.attr("name") == Some("N")).unwrap();
+        normalmap.child_mut("input").unwrap().set_attr("output", "first");
+        let strict = explicit.read_material_strict(None).unwrap();
         assert_eq!(
             strict.inputs[0],
             ("base_color".into(), Resolved::Image { file: "tex/albedo.png".into(), colorspace: None, uv_tiling: Some([2.0, 4.0]) })
@@ -1501,7 +1576,7 @@ mod tests {
         let r = standard("0.5,x,1");
         assert!(matches!(r, Err(Error::Malformed(ref m)) if m.contains("emission_color")), "{r:?}");
         let m = standard("0.5,0.5,1").unwrap();
-        assert_eq!(input(&m, "emission_color"), None);
-        assert_eq!(m.warnings, vec!["emission_color was skipped: the shader's emission is 0".to_owned()]);
+        assert_eq!(input(&m, "emission_color"), Some(&constant(&[0.5, 0.5, 1.0], None)));
+        assert!(m.warnings.is_empty());
     }
 }

@@ -211,6 +211,7 @@ impl Inputs {
 /// - Emission is the emission color times its strength: `emission_luminance` (reported as
 ///   approximated, since it is in nits), `emission`, or `emissive_strength`. A color whose
 ///   strength is 0 gives no emission.
+///   An authored color at strength 0 is validated and reported as dropped.
 /// - Alpha is the opacity. Standard Surface's opacity is a color: equal channels give that value,
 ///   and different channels give their luminance by the Rec.709 luma coefficients, reported as
 ///   approximated, as the shader's own node graph reduces it with a `luminance` node. OpenPBR's
@@ -288,6 +289,7 @@ pub fn try_from_materialx(m: &StrictMaterial) -> Result<Conversion, ConvertError
     let off = |role: Role| match role {
         Role::CoatWeight | Role::CoatRoughness | Role::CoatKept if clearcoat.is_none() => Some(COAT_OFF),
         Role::SheenWeight | Role::SheenColor | Role::SheenRoughness if sheen.is_none() => Some(SHEEN_OFF),
+        Role::EmissionColor if inputs.scalar(Role::EmissionStrength, 1.0) == 0.0 => Some("the emission strength is 0"),
         _ => None,
     };
     // Authored constants of a layer that is off, except the weight or color that turns it off.
@@ -542,6 +544,12 @@ fn alpha(inputs: &Inputs, shader: Shader, report: &mut ConversionReport) -> Resu
     } else {
         AlphaMode::Opaque
     };
+    if shader == Shader::GltfPbr
+        && !matches!(mode, AlphaMode::Mask(_))
+        && inputs.find(Role::AlphaCutoff).is_some_and(|(_, value)| matches!(value, Got::Constant(_)))
+    {
+        report.items.push(ReportItem::Dropped { input: inputs.name(Role::AlphaCutoff).into(), why: "the alpha mode does not use a cutoff" });
+    }
     Ok((alpha, mode))
 }
 

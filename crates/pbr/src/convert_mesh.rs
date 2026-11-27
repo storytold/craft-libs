@@ -109,6 +109,13 @@ pub fn try_from_mesh(m: &MeshMaterial) -> Result<Conversion, ConvertError> {
     if sheen.is_some() {
         report.items.push(ReportItem::Unshaded { input: "sheen".into() });
     }
+    for (inactive, roughness, input) in
+        [(clearcoat.is_none(), clearcoat_roughness, "clearcoat_roughness"), (sheen.is_none(), sheen_roughness, "sheen_roughness")]
+    {
+        if inactive && roughness != 0.0 {
+            report.items.push(ReportItem::Dropped { input: input.into(), why: "the layer is off" });
+        }
+    }
     if m.unlit {
         report.items.push(ReportItem::Unshaded { input: "unlit".into() });
     }

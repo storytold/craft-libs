@@ -517,7 +517,7 @@ fn materialx_constants_of_a_layer_that_is_off_are_dropped() {
 fn materialx_emission_is_the_color_times_its_strength() {
     let dark = try_from_materialx(&mx(Shader::OpenPbr, &[("emission_color", k(&[1.0, 0.5, 0.0]))])).unwrap();
     assert_eq!(dark.surface.emissive, [0.0; 3]);
-    assert!(dark.report.is_empty(), "{:?}", dark.report);
+    assert!(dropped(&dark, "emission_color"), "{:?}", dark.report);
     let lit = try_from_materialx(&mx(Shader::OpenPbr, &[("emission_color", k(&[1.0, 0.5, 0.0])), ("emission_luminance", k(&[10.0]))])).unwrap();
     assert_eq!(lit.surface.emissive, [10.0, 5.0, 0.0]);
     assert!(approximated(&lit, "emission_luminance"));
