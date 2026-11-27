@@ -231,10 +231,11 @@ fn a_storys_dialog_closed_by_its_own_button_opens_again_by_the_opener() {
     assert!(painted_times(&fixture, "Save PDF") > closed, "the opener opens the dialog again");
 }
 
-/// A story whose dialog is open runs in every frame: the dialog paints on a layer of its own, which a replay can't add,
-/// so the shell counts the dialog in every pass and the card keeps the story in place of its opener.
+/// A story whose dialog is open replays in a settled frame: the dialog's layer is part of the story's run, which a
+/// replay shows again where it ran. The dialog stays painted, the card keeps the story in place of its opener, and the
+/// story does not run.
 #[trial]
-fn a_story_with_its_dialog_open_runs_every_frame_and_keeps_the_dialog_counted() {
+fn a_story_with_its_dialog_open_replays_in_settled_frames_and_keeps_the_dialog_open() {
     let mut gallery = gallery_filtered(level_of("FindReplaceDialog"), "FindReplaceDialog");
     let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
     fixture.room(Vec2::new(1400.0, 900.0)).settle();
@@ -247,12 +248,13 @@ fn a_story_with_its_dialog_open_runs_every_frame_and_keeps_the_dialog_counted() 
         .expect("an opener");
     fixture.click(&opener).settle();
     let open = painted_times(&fixture, "Find what:");
+    assert!(open > 0, "the opener opens the dialog");
     for frame in 0..3 {
         fixture.idle(1);
         let stories =
             last_frame_memo_runs(fixture.ctx()).into_iter().filter(|(ty, _, run)| ty.contains("::StoryProps") && *run == MemoRun::Ran).count();
-        assert!(stories >= 1, "idle frame {frame}: the story with its dialog open ran");
-        assert_eq!(openers(&fixture), closed - 1, "idle frame {frame}: the card keeps the story, its dialog counted");
+        assert_eq!(stories, 0, "idle frame {frame}: the story with its dialog open replays");
+        assert_eq!(openers(&fixture), closed - 1, "idle frame {frame}: the card keeps the story in place of its opener");
         assert_eq!(painted_times(&fixture, "Find what:"), open, "idle frame {frame}: the dialog stays open");
     }
 }
