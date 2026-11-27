@@ -708,9 +708,11 @@ When a component's remembered state is due for eviction.
 The fit rules: which tabs, bar items or titles stay in a strip and which go to an overflow menu. [`fit`] and
 
 - `craft_behavior::fit::Fit`: `pub struct Fit { pub shown: Vec<usize>, pub overflow: Vec<usize>, pub short: Vec<usize> }`. Which items the strip shows and which go to the overflow menu, as indexes into the input, in input order.
-- `craft_behavior::fit::FitItem`: `pub struct FitItem { pub extent: f32, pub section: u16, pub keep: FitKeep, pub short: Option<f32> }`. One item as the fit rule sees it: its extent along the strip, its section and whether it may overflow.
+- `craft_behavior::fit::FitItem`: `pub struct FitItem { pub extent: f32, pub section: u16, pub keep: FitKeep, pub short: Option<f32>, pub short_order: u16, pub short_late: bool }`. One item as the fit rule sees it: its extent along the strip, its section and whether it may overflow.
   - `pub const fn new(extent: f32, section: u16, keep: FitKeep) -> Self`. An item `extent` long in `section`.
-  - `pub const fn short(mut self, extent: f32) -> Self`. The item with a shorter form `extent` long, which it takes before any free item leaves.
+  - `pub const fn short(mut self, extent: f32) -> Self`. The item with a shorter form `extent` long, which it takes before any free item leaves unless it is late.
+  - `pub const fn short_order(mut self, order: u16) -> Self`. The item with its short form ranked `order`: lower ranks shorten first, and the last item of a rank first.
+  - `pub const fn short_late(mut self) -> Self`. The item takes its short form only after every free item that can leave has left.
 - `craft_behavior::fit::FitKeep`: `pub enum FitKeep { Free, Pinned, Menu }`. Whether an item may move into the overflow menu, or lives there.
 - `craft_behavior::fit::TabFit`: `pub struct TabFit { pub shown: Vec<(usize, f32)>, pub overflow: Vec<usize>, pub overflow_width: f32 }`. Tabs visible on a strip and tabs that need an overflow menu, all in original order.
 - `craft_behavior::fit::fit`: `pub fn fit(natural: &[f32], selected: usize, available: f32, minimum_width: f32, overflow_width: f32, keep_selected: bool) -> TabFit`. Fit tab widths into `available` points, shrinking the widest tabs first to a common cap.
@@ -2364,10 +2366,11 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::GroupState`: `pub struct GroupState<M> { pub selected: Option<M>, pub members: Vec<(M, Id, bool)> }`. A group's registrations: the members shown in the last pass and the member the group picked.
 - `craft_ui::contract::HeaderEdge`: `pub enum HeaderEdge { Start, End }`. An edge of a header's line, where a container's own header parts sit.
 - `craft_ui::contract::HeaderMenuRequest`: `pub struct HeaderMenuRequest { pub column: Option<ColumnKey>, pub at: Pos2 }`. A request for the header menu: a secondary click on a header cell or on the empty header after the last one, or the
-- `craft_ui::contract::HeaderParts`: `pub struct HeaderParts { pub start: f32, pub end: f32 }`. The room a container's own parts take on its header's line (`Container::header_parts`): a width at the start edge
+- `craft_ui::contract::HeaderParts`: `pub struct HeaderParts { pub start: f32, pub end: f32, pub end_least: Option<f32>, pub keep: f32 }`. The room a container's own parts take on its header's line (`Container::header_parts`): a width at the start edge
   - `pub const NONE: HeaderParts`. No room for parts.
   - `pub const fn start(mut self, width: f32) -> Self`. `width` at the start edge.
   - `pub const fn end(mut self, width: f32) -> Self`. `width` at the end edge.
+  - `pub const fn end_narrows(mut self, least: f32, keep: f32) -> Self`. The end edge narrows, down to `least`, so the header's children keep `keep` of the line: on a line too narrow
 - `craft_ui::contract::HeaderRegion`: `pub struct HeaderRegion { pub band: DragBand, pub rule: bool, pub heads: bool, pub rule_above: bool, pub inline: bool, pub trailing: bool, pub fill: Option<BandFill>, pub inset: Pad, pub gap: Option<Gap> }`. A header region, filled by `Container::header`.
   - `pub const fn new() -> Self`. A header with no drag band, no rule, on its own line, with no trailing region, no fill and no inset.
   - `pub const fn fill(mut self, kind: SurfaceKind) -> Self`. The surface of a band behind the header.
@@ -3293,7 +3296,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn row_lines(&self) -> Vec<(String, egui::Rect, Vec<LayoutRun>)>`. Every row as its text, its rect from the galley's origin and its bidi runs: the one per-row geometry, read by
   - `pub fn size(&self) -> egui::Vec2`. The galley size.
   - `pub fn char_x(&self, chars: usize) -> f32`. Where a caret before character `chars` (counted from the start of the text) stands, from the layout's left edge:
-- `craft_ui::primitives::TextOptions`: `pub struct TextOptions { pub placeholder: Option<Label>, pub lines: Option<usize>, pub limit: Option<usize>, pub mask: bool, pub live: bool, pub clear_on_escape: bool, pub keep_on_escape: bool, pub mono: bool, pub role: TypeRole, pub ink: Option<Ink>, pub tab: TabKey, pub caret: Option<usize>, pub complete: Option<Arc<dyn Completer>>, pub complete_on_enter: bool, pub replace_selection: Option<String>, pub commit_on: &'static [char], pub enabled: bool, pub steps_value: bool, pub select_on_focus: bool, pub keep_caret_on_open: bool, pub select_all: bool, pub submits: bool, pub mixed: bool, pub centred: bool, pub end_aligned: bool, pub arrows_from_end: bool, pub unparsed: Option<Message>, pub own_menu: bool, pub holds_drafts: bool, pub whole_paste: Option<Arc<WholePaste>>, pub submit_key: SubmitKey, pub resting: Option<String> }`. How a text part behaves beyond its codec.
+- `craft_ui::primitives::TextOptions`: `pub struct TextOptions { pub placeholder: Option<Label>, pub look: crate::style::FieldLook, pub lines: Option<usize>, pub limit: Option<usize>, pub mask: bool, pub live: bool, pub clear_on_escape: bool, pub keep_on_escape: bool, pub mono: bool, pub role: TypeRole, pub ink: Option<Ink>, pub tab: TabKey, pub caret: Option<usize>, pub complete: Option<Arc<dyn Completer>>, pub complete_on_enter: bool, pub replace_selection: Option<String>, pub commit_on: &'static [char], pub enabled: bool, pub steps_value: bool, pub select_on_focus: bool, pub keep_caret_on_open: bool, pub select_all: bool, pub submits: bool, pub mixed: bool, pub centred: bool, pub end_aligned: bool, pub arrows_from_end: bool, pub unparsed: Option<Message>, pub own_menu: bool, pub holds_drafts: bool, pub whole_paste: Option<Arc<WholePaste>>, pub submit_key: SubmitKey, pub resting: Option<String> }`. How a text part behaves beyond its codec.
   - `pub fn new() -> Self`. Options with every default.
 - `craft_ui::primitives::TextOutcome`: `pub struct TextOutcome<V> { pub rect: Rect, pub draft: Option<String>, pub value: Option<V>, pub layout: Option<super::TextLayout>, pub caret_visible: bool, pub invalid: bool, pub committed: Option<craft_behavior::ParseNote>, pub composing: bool, pub completions: Vec<super::Completion>, pub clicked: bool }`. A text part's result this pass.
   - `pub const fn new(rect: Rect) -> Self`. An outcome over `rect` with no draft or value.
@@ -4120,6 +4123,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
 - `craft_ui::runtime::env::WordTemplate`: re-export of `craft_i18n::WordTemplate` (outside these crates).
 - `craft_ui::runtime::env::Words`: re-export of `craft_i18n::Words` (outside these crates).
 - `craft_ui::runtime::env::WordsOverride`: `pub enum WordsOverride { Replace(Arc<Words>), Overlay(WordRows) }`. How a scope changes the built-in text: the only override path for words.
+- `craft_ui::runtime::env::ZoomPrecision`: `pub enum ZoomPrecision { Fractional, Whole }`. How many decimals a zoom shows. An app sets it once on its root env with `RootEnv::values`; [`Units::zoom_codec`]
 - `craft_ui::runtime::env::in_room`: `pub fn in_room<R>(ui: &mut Ui, rect: Rect, body: impl FnOnce(&mut Ui) -> R) -> R`. Runs `body` in a child `Ui` held to `rect` and clipped to it, as a layout room of its own: the flow grid, content
 - `craft_ui::runtime::env::system_appearance`: `pub fn system_appearance(ctx: &Context) -> SystemState`. What the OS reports on `ctx` now: the host's reader (`InstallSpec::system`), with the colour scheme egui's
 - `craft_ui::runtime::env::system_text_scale`: `pub fn system_text_scale(ctx: &Context) -> Option<f32>`. The desktop text scale from the installed [`SystemReader`], `None` where the OS gives none.
@@ -4423,7 +4427,7 @@ The layer stack (15.2): the record of the egui layers shown, their order and the
 - `craft_ui::runtime::overlay::Backdrop`: `pub enum Backdrop { None, Scrim }`. A modal's backdrop.
 - `craft_ui::runtime::overlay::CloseReason`: `pub enum CloseReason { Requested, Escape, Outside, FocusLeft(crate::runtime::focus::FocusMove), Activated, Enter, Timeout, AnchorGone }`. Why a layer closes.
 - `craft_ui::runtime::overlay::LayerRole`: `pub enum LayerRole { Plain, Progress, InPlaceEditor }`. What a layer is for, beyond its rank.
-- `craft_ui::runtime::overlay::OpenFilter`: `pub enum OpenFilter { Any, Modal, Keys }`. What `any_open` counts.
+- `craft_ui::runtime::overlay::OpenFilter`: `pub enum OpenFilter { Any, Modal, Keys, Asks }`. What `any_open` counts.
 - `craft_ui::runtime::overlay::Rank`: `pub enum Rank { Window, Toast, Popup, Modal { backdrop: Backdrop }, ModalChrome, Tooltip }`. An overlay's place in the order. `Rank` is the only place a layer's egui order is chosen.
   - `pub const fn modal(backdrop: Backdrop) -> Rank`. A modal rank with `backdrop`.
 - `craft_ui::runtime::overlay::any_open`: `pub fn any_open(ctx: &Context, filter: OpenFilter) -> bool`. Whether any layer of the running viewport that `filter` counts was shown last frame.
@@ -4650,6 +4654,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
 - `craft_ui::style::DuplicateStyle`: `pub struct DuplicateStyle(pub &'static str)`. Two replacements named one style key.
 - `craft_ui::style::EnvKey`: `pub struct EnvKey`. The key of everything a style depends on besides its own key: tokens, direction, scale, the OS, the window's
   - `pub fn new(tokens: u64, direction: Direction, scale: Scale, os: Os, active: bool, values: u64) -> Self`. The key of these inputs. `tokens` is `UiTokens::key` and `values` the hash of the style-affecting app values.
+- `craft_ui::style::FieldLook`: `pub enum FieldLook { Normal, Quiet }`. How a text field looks where it sits: one value picks its fill, its edge and its placeholder together, so they
 - `craft_ui::style::FlagMask`: re-export of `craft_theme::FlagMask` (outside these crates).
 - `craft_ui::style::Flags`: re-export of `craft_theme::Flags` (outside these crates).
 - `craft_ui::style::FocusLook`: `pub struct FocusLook { pub stroke: Stroke, pub offset: f32 }`. A component's focus ring.
@@ -4705,7 +4710,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn of_env(ctx: &'a Context, env: &'a crate::runtime::env::Env) -> Self`. The style context of the scope `env` describes, in the secondary variant: for code outside a style function
   - `pub fn with_root<R>(ctx: &Context, f: impl FnOnce(&StyleCx<'_>) -> R) -> R`. Runs `f` with the style context of the root scope (`Env::of_root(ctx)`), for code with no `Ui` that reads a
   - `pub fn with_root_scoped<R>(ctx: &Context, scope: &crate::runtime::env::ThemeScope, f: impl FnOnce(&StyleCx<'_>) -> R) -> R`. Runs `f` with the root style at the tokens `scope` resolves, for code that has a context and no `Ui`.
-  - `pub fn link_look(&self, enabled: bool) -> super::look::TextLook`. The one link look: body role, underlined, `accent.solid` (`accent.text` at high contrast), `text.disabled` when
+  - `pub fn link_look(&self, enabled: bool) -> super::look::TextLook`. The one link look: body role, underlined, `accent.text`, `text.disabled` when not `enabled`.
   - `pub fn exiting<P: Clone + Send + Sync + 'static>(&self, name: &'static str, spec: MotionSpec, listed: &[impl Hash]) -> Vec<(Presence, P)>`. The keyed presences of `name` in the motion memory of the component this context is scoped to, for the keys
   - `pub fn env<T: StyleValue>(&self) -> T`. An app value set by a scope. Its hash is part of the style cache key.
   - `pub fn color(&self, color: Rgba) -> StyleColor`. The constructor of `StyleColor` for styles: a semantic token read or a token-group field becomes a style colour
@@ -4733,6 +4738,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn surface(&self, kind: SurfaceKind) -> SurfaceStyle`. What a surface of `kind` draws.
   - `pub fn text_well(&self) -> SurfaceLook`. The look of a text well: the well surface with an edge that takes the focus colour while the well holds
   - `pub fn field(&self) -> SurfaceLook`. The look of a text or value field: the text well with the failure colour on its edge while its value is
+  - `pub fn quiet_field(&self) -> SurfaceLook`. The look of a field that sits in a bar (a title bar's search box,
   - `pub fn dropdown(&self) -> SurfaceLook`. The look of the closed box of a dropdown picker: the field, filled with the hover fill under the pointer and
   - `pub fn rule(&self, kind: RuleKind) -> RuleLook`. The line a rule of `kind` draws.
   - `pub fn handle(&self) -> HandleLook`. The look of a canvas handle.

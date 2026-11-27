@@ -3,7 +3,7 @@ name: AI model
 on:
   workflow_dispatch:
   push:
-    branches: [main, next]
+    branches: [main]
     paths: ['crates/ai-core/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/ai-core.yml']
   pull_request:
     paths: ['crates/ai-core/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/ai-core.yml']

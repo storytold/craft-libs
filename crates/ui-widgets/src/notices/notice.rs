@@ -11,7 +11,7 @@ use crate::contract::{
 use crate::primitives::{HAlign, IconSpec, TextRun, Wrap};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::{EnvView, Label};
-use crate::style::{ComponentStyle, IconLook, Insets, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens};
+use crate::style::{ComponentStyle, FocusLook, IconLook, Insets, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens};
 use craft_behavior::{Flow, IconId, Metrics, NavShape, PartKey, Proposal, Roving, Sense};
 use craft_i18n::Format;
 use craft_theme::{Rgba, Stateful, States, Variant, variant::Tone};
@@ -135,6 +135,8 @@ pub struct NoticeStyle {
     surface: SurfaceLook,
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
     /// The title's role and colour.
     #[style(text)]
     title: TextLook,
@@ -384,16 +386,17 @@ impl<'a> Notice<'a> {
         Button::new(label).variant(if at == 0 { Variant::PRIMARY } else { Variant::SECONDARY })
     }
 
-    /// The face of an inline or card notice's action.
-    fn link(role: TypeRole, label: Label) -> Link {
-        Link::new(label).role(role)
+    /// The face of an inline or card notice's action; a toast's reads in the card's text color.
+    fn link(&self, role: TypeRole, label: Label) -> Link {
+        let link = Link::new(label).role(role);
+        if self.layout == NoticeLayout::Toast { link.on_inverse() } else { link }
     }
 
     /// The sizes of the actions' faces; a centred notice's buttons all take the widest one's width.
     fn action_sizes(&self, cx: &MeasureCx<'_, Self>) -> Vec<Vec2> {
         let labels = self.action_labels(cx);
         if self.row() && self.layout != NoticeLayout::Bar {
-            return labels.into_iter().map(|label| cx.face(Self::link(cx.style.message.role, label))).collect();
+            return labels.into_iter().map(|label| cx.face(self.link(cx.style.message.role, label))).collect();
         }
         let sizes: Vec<Vec2> = labels.into_iter().enumerate().map(|(at, label)| cx.face(Self::button(at, label))).collect();
         if self.layout == NoticeLayout::Bar {
@@ -581,6 +584,7 @@ impl Component for Notice<'_> {
         NoticeStyle {
             surface,
             metrics: Metrics::new().padding(padding).gap(control.gap),
+            focus: cx.focus_look(),
             title,
             brand,
             byline,
@@ -829,7 +833,7 @@ impl Component for Notice<'_> {
         for (at, label) in placed.labels.iter().cloned().enumerate() {
             let part = ACTION.at(at as u64);
             if self.row() && self.layout != NoticeLayout::Bar {
-                ui.face(part, Self::link(cx.style.message.role, label));
+                ui.face(part, self.link(cx.style.message.role, label));
             } else {
                 ui.face(part, Self::button(at, label));
             }
