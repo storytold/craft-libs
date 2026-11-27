@@ -98,10 +98,10 @@ pub fn to_png(dib: &[u8], limit: usize, work: &mut Decode) -> Option<Dib> {
     if w > u64::from(MAX_SIDE) || h > u64::from(MAX_SIDE) || !work.charge(cost, "bitmap") {
         return Some(Dib::Bmp(bmp));
     }
-    // The PNG may be at most what is left of `work` (and `limit`); what it takes is charged.
+    // The PNG may be at most what is left of `work` (and `limit`); what it writes is charged.
     match encode_png(&bmp, image::ImageFormat::Bmp, limit, work, cost) {
-        Some(png) if work.charge(png.len(), "bitmap") => Some(Dib::Png(png)),
-        _ => Some(Dib::Bmp(bmp)),
+        Some(png) => Some(Dib::Png(png)),
+        None => Some(Dib::Bmp(bmp)),
     }
 }
 
@@ -110,7 +110,9 @@ pub fn to_png(dib: &[u8], limit: usize, work: &mut Decode) -> Option<Dib> {
 /// The picture is turned as the file says (a TIFF's or JPEG's orientation), and floating-point
 /// pixels, which PNG can't hold, become 16-bit ones. Each of those buffers is charged to `work`
 /// before it is made: the decoded pixels, less the `prepaid` bytes the caller charged for them
-/// already, a turned copy, and the 16-bit copy. `None` when it can't be.
+/// already, a TIFF decoder's own buffer, a turned copy, the 16-bit copy, the big-endian copy the
+/// PNG encoder makes of 16-bit pixels, and the PNG as it is written (what it wrote before
+/// failing too). `None` when it can't be.
 pub(crate) fn encode_png(file: &[u8], format: image::ImageFormat, limit: usize, work: &mut Decode, prepaid: usize) -> Option<Vec<u8>> {
     use image::ImageDecoder;
     use image::metadata::Orientation;
@@ -131,6 +133,16 @@ pub(crate) fn encode_png(file: &[u8], format: image::ImageFormat, limit: usize, 
     if more > 0 && !work.charge(more, "picture") {
         return None;
     }
+    // A TIFF is decoded into the decoder's own buffer, in its stored colour type (CMYK's is
+    // larger than the RGB it becomes), and then copied into the picture's.
+    if format == image::ImageFormat::Tiff {
+        let (w, h) = decoder.dimensions();
+        let bits = u64::from(decoder.original_color_type().bits_per_pixel());
+        let source = usize::try_from(u64::from(w).saturating_mul(bits).div_ceil(8).saturating_mul(u64::from(h))).ok()?;
+        if !work.charge(source, "picture") {
+            return None;
+        }
+    }
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
     // A quarter-turn makes a new buffer; a flip turns the pixels where they are.
     let turned = matches!(orientation, Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH);
@@ -148,24 +160,32 @@ pub(crate) fn encode_png(file: &[u8], format: image::ImageFormat, limit: usize, 
         image::DynamicImage::ImageRgba32F(_) => image::DynamicImage::ImageRgba16(img.to_rgba16()),
         other => other,
     };
-    let mut png = PictureWriter { bytes: Vec::new(), limit: limit.min(work.left) };
+    // PNG is big-endian: on a little-endian machine the encoder copies 16-bit pixels to swap them.
+    let sixteen = matches!(img.color(), image::ColorType::L16 | image::ColorType::La16 | image::ColorType::Rgb16 | image::ColorType::Rgba16);
+    if sixteen && cfg!(target_endian = "little") && !work.charge(img.as_bytes().len(), "picture") {
+        return None;
+    }
+    let mut png = PictureWriter { bytes: Vec::new(), limit, work };
     image::codecs::png::PngEncoder::new(&mut png).write_image(img.as_bytes(), img.width(), img.height(), img.color().into()).ok()?;
     Some(png.bytes)
 }
 
-/// Cap encoded bytes while the PNG encoder writes, before the buffer can grow.
-struct PictureWriter {
+/// Cap encoded bytes while the PNG encoder writes, before the buffer can grow: at most `limit`,
+/// each write charged to `work` as it is accepted.
+struct PictureWriter<'w> {
     bytes: Vec<u8>,
     limit: usize,
+    work: &'w mut Decode,
 }
 
-impl Write for PictureWriter {
+impl Write for PictureWriter<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let Some(end) = self.bytes.len().checked_add(buf.len()).filter(|&end| end <= self.limit) else {
+        let end = self.bytes.len().checked_add(buf.len()).filter(|&end| end <= self.limit);
+        let Some(end) = end.filter(|_| self.work.charge(buf.len(), "picture")) else {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "picture exceeds remaining media budget"));
         };
         if end > self.bytes.capacity() {
-            let new_capacity = self.bytes.capacity().saturating_mul(2).max(end).min(self.limit);
+            let new_capacity = self.bytes.capacity().saturating_mul(2).max(end).min(self.limit).min(end.saturating_add(self.work.left));
             self.bytes.try_reserve_exact(new_capacity - self.bytes.len()).map_err(std::io::Error::other)?;
         }
         self.bytes.extend_from_slice(buf);

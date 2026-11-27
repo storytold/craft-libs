@@ -165,6 +165,25 @@ fn a_dibs_png_needs_only_its_own_room() {
     assert!(matches!(crate::dib::to_png(&dib, usize::MAX, &mut work), Some(crate::dib::Dib::Png(_))));
 }
 
+/// A PNG that runs out of budget part way is still charged what it wrote before failing, so the
+/// work isn't free for the pictures after it.
+#[test]
+fn a_png_cut_short_is_charged_what_it_wrote() {
+    // 1×1, 24-bit.
+    let mut dib = vec![0u8; 40];
+    dib[0] = 40;
+    dib[4] = 1;
+    dib[8] = 1;
+    dib[12] = 1;
+    dib[14] = 24;
+    dib.extend_from_slice(&[0, 0, 255, 0]);
+    // The BMP and the pixels fit, and some of the PNG, but not all of it.
+    let room = 40;
+    let mut work = Decode::new(14 + dib.len() + 4 + room);
+    assert!(matches!(crate::dib::to_png(&dib, usize::MAX, &mut work), Some(crate::dib::Dib::Bmp(_))));
+    assert!(work.left < room, "{} left", work.left);
+}
+
 /// A DIB too wide to be decoded is kept as a BMP, charged only its copy, not pixels it never
 /// decodes, so the budget is left for later pictures.
 #[test]
