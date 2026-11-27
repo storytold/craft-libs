@@ -136,8 +136,9 @@ impl<A: Artwork> PositionedGlyph<A> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
     #[derive(Clone, Debug)]
     struct TestArt;
@@ -184,8 +185,8 @@ mod tests {
             off_path: false,
         }
     }
-    #[test]
-    fn caret_mapping_tracks_ligatures_rtl_and_kerning() {
+    #[trial]
+    fn feature_config_caret_mapping_tracks_ligatures_rtl_and_kerning() {
         let mut g = glyph();
         assert_eq!((g.caret_offset(3, 12.0), g.caret_offset(5, 12.0), g.caret_offset(7, 12.0)), (0.0, 6.0, 12.0));
         assert_eq!(g.caret_offset(4, 12.0), 3.0);
@@ -195,8 +196,8 @@ mod tests {
         g.width = f64::NAN;
         assert_eq!(g.caret_offset(5, 8.0), 4.0);
     }
-    #[test]
-    fn artwork_uses_the_same_composition_order() {
+    #[trial]
+    fn feature_config_artwork_uses_the_same_composition_order() {
         let g = glyph();
         let doc = Affine::translate((10.0, 20.0));
         let (_, image) = g.placed_image().unwrap();

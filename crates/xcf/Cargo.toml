@@ -13,3 +13,6 @@ workspace = true
 [dependencies]
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+craft-testkit = { workspace = true }

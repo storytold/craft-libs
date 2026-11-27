@@ -27,7 +27,9 @@ unicode-bidi = "0.3"
 zeroize = "1"
 
 [dev-dependencies]
+craft-flow = { workspace = true }
 craft-cfb = { workspace = true }
+craft-testkit = { workspace = true }
 craft-opc = { workspace = true, features = ["test-support"] }
 craft-wordmodel = { workspace = true, features = ["test-support"] }
 image = { version = "0.25", default-features = false, features = ["png"] }

@@ -143,6 +143,7 @@ fn every_char_prop_round_trips() {
         }),
         link: None,
         link_tooltip: None,
+        link_history: None,
         ins: None,
         del: None,
         fmt_change: None,
@@ -229,6 +230,8 @@ fn every_para_prop_round_trips() {
         fmt_change: None,
         snap_to_grid: Some(false),
         text_alignment: Some(TextAlignment::Top),
+        // A list item's further paragraph: WordprocessingML has no such paragraph.
+        list_item: None,
     };
     let variants = [
         ParaProps { line_spacing: Some(LineSpacing::AtLeast(14.0)), indent_first: Some(24.0), align: Some(Align::Center), ..Default::default() },
@@ -976,8 +979,20 @@ fn toc_field_skips_nested_stories() {
 #[test]
 fn tracked_changes_round_trip() {
     let mut d = Document::new();
-    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into(), move_name: None });
-    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into(), move_name: None });
+    d.revisions.push(Revision {
+        kind: RevisionKind::Insert,
+        author: "Alice".into(),
+        date: "2026-05-01T10:00:00Z".into(),
+        move_name: None,
+        date_utc: None,
+    });
+    d.revisions.push(Revision {
+        kind: RevisionKind::Delete,
+        author: "Bob".into(),
+        date: "2026-05-02T10:00:00Z".into(),
+        move_name: None,
+        date_utc: None,
+    });
     d.settings.track_changes = true;
     let ins = CharProps { ins: Some(0), ..Default::default() };
     let del = CharProps { del: Some(1), bold: Some(true), ..Default::default() };
@@ -1001,12 +1016,51 @@ fn tracked_changes_round_trip() {
     assert!(r.settings.track_changes);
 }
 
+/// Two changes by one author with one local `w:date` (the hour the clocks go back over) stay two
+/// changes across a save, told apart by their UTC time (`w16du:dateUtc`).
+#[test]
+fn tracked_changes_with_one_local_date_stay_apart_by_their_utc_time() {
+    let mut d = Document::new();
+    for utc in ["2026-11-01T05:30:00Z", "2026-11-01T06:30:00Z"] {
+        let mut r = Revision::new(RevisionKind::Insert, "Ada", "2026-11-01T01:30:00Z");
+        r.date_utc = Some(utc.into());
+        d.revisions.push(r);
+    }
+    d.settings.track_changes = true;
+    let p = para_runs(&[
+        ("Draft.", CharProps::default()),
+        (" One", CharProps { ins: Some(0), ..Default::default() }),
+        (" Two", CharProps { ins: Some(1), ..Default::default() }),
+    ]);
+    d.body = vec![para_block(p.clone())];
+    let r = rt(&d);
+    assert_eq!(r.revisions, d.revisions);
+    assert_eq!(paras(&r)[0].runs, p.runs);
+    // Without their UTC times, the file can't tell them apart.
+    for r in &mut d.revisions {
+        r.date_utc = None;
+    }
+    assert_eq!(rt(&d).revisions.len(), 1, "one author, kind and date is one change");
+}
+
 #[test]
 fn tracked_equations_round_trip() {
     // Issue #6011: equations saved with tracked revision marks (w:ins / w:del) around math.
     let mut d = Document::new();
-    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into(), move_name: None });
-    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into(), move_name: None });
+    d.revisions.push(Revision {
+        kind: RevisionKind::Insert,
+        author: "Alice".into(),
+        date: "2026-05-01T10:00:00Z".into(),
+        move_name: None,
+        date_utc: None,
+    });
+    d.revisions.push(Revision {
+        kind: RevisionKind::Delete,
+        author: "Bob".into(),
+        date: "2026-05-02T10:00:00Z".into(),
+        move_name: None,
+        date_utc: None,
+    });
     d.settings.track_changes = true;
     let ins = CharProps { ins: Some(0), ..Default::default() };
     let del = CharProps { del: Some(1), ..Default::default() };
@@ -1061,8 +1115,20 @@ fn tracked_equations_round_trip() {
 fn nested_omath_para_revisions_read() {
     // Defensive reader check: w:ins and w:del nested inside m:oMathPara.
     let mut d = Document::new();
-    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: "2026-05-01T10:00:00Z".into(), move_name: None });
-    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Charles".into(), date: "2026-05-02T10:00:00Z".into(), move_name: None });
+    d.revisions.push(Revision {
+        kind: RevisionKind::Insert,
+        author: "Ada".into(),
+        date: "2026-05-01T10:00:00Z".into(),
+        move_name: None,
+        date_utc: None,
+    });
+    d.revisions.push(Revision {
+        kind: RevisionKind::Delete,
+        author: "Charles".into(),
+        date: "2026-05-02T10:00:00Z".into(),
+        move_name: None,
+        date_utc: None,
+    });
     let doc_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body><w:p><m:oMathPara><w:ins w:id="1" w:author="Ada" w:date="2026-05-01T10:00:00Z"><m:oMath><m:r><m:t>x+1</m:t></m:r></m:oMath></w:ins><w:del w:id="2" w:author="Charles" w:date="2026-05-02T10:00:00Z"><m:oMath><m:r><m:t>y-1</m:t></m:r></m:oMath></w:del></m:oMathPara></w:p></w:body></w:document>"#;
     let base = craft_docx::write(&d).unwrap();
     let bytes = replace_part(&base, "word/document.xml", doc_xml.as_bytes());
@@ -1080,8 +1146,20 @@ fn tracked_paragraph_marks_round_trip() {
     // Issue #229: an inserted / deleted paragraph mark is `w:ins` / `w:del` in the mark's
     // `w:rPr` (ECMA-376 §17.13.5.16, §17.13.5.15), alone or with mark formatting.
     let mut d = Document::new();
-    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into(), move_name: None });
-    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into(), move_name: None });
+    d.revisions.push(Revision {
+        kind: RevisionKind::Insert,
+        author: "Alice".into(),
+        date: "2026-05-01T10:00:00Z".into(),
+        move_name: None,
+        date_utc: None,
+    });
+    d.revisions.push(Revision {
+        kind: RevisionKind::Delete,
+        author: "Bob".into(),
+        date: "2026-05-02T10:00:00Z".into(),
+        move_name: None,
+        date_utc: None,
+    });
     let mut split = Paragraph::with_text("Owned ALPHA ", CharProps::default());
     split.mark.ins = Some(0);
     let mut joined = Paragraph::with_text("Owned BETA", CharProps::default());
@@ -1334,9 +1412,9 @@ fn groups_round_trip() {
         ch_w: 200.0,
         ch_h: 100.0,
         children: vec![
-            GroupChild { x: 0.0, y: 0.0, obj: pic },
-            GroupChild { x: 150.0, y: 10.0, obj: oval.clone() },
-            GroupChild { x: 50.0, y: 60.0, obj: tb },
+            GroupChild { link: None, x: 0.0, y: 0.0, obj: pic },
+            GroupChild { link: None, x: 150.0, y: 10.0, obj: oval.clone() },
+            GroupChild { link: None, x: 50.0, y: 60.0, obj: tb },
         ],
         canvas: None,
     };
@@ -1408,7 +1486,7 @@ fn drawing_canvas_round_trips() {
         float: Float::default(),
         ch_w: 432.0,
         ch_h: 216.0,
-        children: vec![GroupChild { x: 12.0, y: 18.0, obj: pic }, GroupChild { x: 300.0, y: 100.0, obj: star.clone() }],
+        children: vec![GroupChild { link: None, x: 12.0, y: 18.0, obj: pic }, GroupChild { link: None, x: 300.0, y: 100.0, obj: star.clone() }],
         canvas: Some(style.clone()),
     };
     let mut p = Paragraph::with_text("drawn ", CharProps::default());
@@ -1455,7 +1533,7 @@ fn rotated_drawing_canvas_round_trips() {
         float,
         ch_w: 200.0,
         ch_h: 100.0,
-        children: vec![GroupChild { x: 10.0, y: 20.0, obj: member.clone() }],
+        children: vec![GroupChild { link: None, x: 10.0, y: 20.0, obj: member.clone() }],
         canvas: Some(CanvasStyle { fill: Some(Fill::solid(Rgb(0xF0, 0xF4, 0xFF))), stroke: None, stroke_width: 0.0 }),
     };
     let square = Float { wrap: Wrap::Square, ..Default::default() };
@@ -1487,11 +1565,11 @@ fn table_contextual_spacing_compatibility_flag_round_trips() {
     for mode in [11, 12, 14, 15] {
         for allow in [false, true] {
             let mut d = Document::new();
-            d.settings.compat_mode = mode;
+            d.settings.compat_mode = Some(mode);
             d.settings.allow_space_of_same_style_in_table = allow;
             let r = rt(&d);
             assert_eq!(r.settings.allow_space_of_same_style_in_table, allow);
-            assert_eq!(r.settings.compat_mode, mode);
+            assert_eq!(r.settings.compat_mode, Some(mode));
             if allow {
                 let bytes = craft_docx::write(&d).unwrap();
                 let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
@@ -1508,12 +1586,163 @@ fn table_contextual_spacing_compatibility_flag_round_trips() {
 fn compatibility_mode_round_trips() {
     // New documents are Word 2013+ documents; an older file keeps its mode, so saving it doesn't
     // change how Word lays it out.
-    assert_eq!(rt(&Document::new()).settings.compat_mode, craft_wordmodel::COMPAT_MODE_CURRENT);
+    assert_eq!(rt(&Document::new()).settings.compat_mode, Some(craft_wordmodel::COMPAT_MODE_CURRENT));
     for mode in [11, 12, 14, 15] {
         let mut d = Document::new();
-        d.settings.compat_mode = mode;
-        assert_eq!(rt(&d).settings.compat_mode, mode);
+        d.settings.compat_mode = Some(mode);
+        assert_eq!(rt(&d).settings.compat_mode, Some(mode));
     }
+}
+
+/// #3308: A document without `<w:compat>` or without `<w:compatSetting w:name="compatibilityMode">`
+/// round-trips without synthesizing the tag on save.
+#[test]
+fn compatibility_mode_omitted_round_trips_without_synthesizing() {
+    let settings_xml_of = |bytes: &[u8]| {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        match zip.by_name("word/settings.xml") {
+            Ok(mut file) => {
+                std::io::Read::read_to_string(&mut file, &mut xml).unwrap();
+                Some(xml)
+            }
+            Err(zip::result::ZipError::FileNotFound) => None,
+            Err(e) => panic!("zip error: {e:?}"),
+        }
+    };
+
+    // Case 1: settings.xml without `<w:compat>` at all.
+    let base_docx = craft_docx::write(&Document::new()).unwrap();
+    let original_settings = settings_xml_of(&base_docx).unwrap();
+    let without_compat = original_settings.replace(
+        "<w:compat><w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" w:val=\"15\"/></w:compat>",
+        "",
+    );
+    assert_ne!(original_settings, without_compat);
+    let docx_without_compat = replace_part(&base_docx, "word/settings.xml", without_compat.as_bytes());
+
+    let doc = craft_docx::read(&docx_without_compat).unwrap();
+    assert_eq!(doc.settings.compat_mode, None);
+    assert_eq!(doc.settings.effective_compat_mode(), craft_wordmodel::LEGACY_COMPAT_MODE);
+
+    let saved_bytes = craft_docx::write(&doc).unwrap();
+    let saved_settings = settings_xml_of(&saved_bytes).unwrap();
+    assert!(!saved_settings.contains("<w:compat"), "expected no <w:compat>, got: {saved_settings}");
+    assert!(!saved_settings.contains("compatibilityMode"), "expected no compatibilityMode, got: {saved_settings}");
+
+    let read_back = craft_docx::read(&saved_bytes).unwrap();
+    assert_eq!(read_back.settings.compat_mode, None);
+
+    // Case 2: settings.xml with `<w:compat>` but without `<w:compatSetting w:name="compatibilityMode">`
+    // (e.g. only legacy compatibility flags like `<w:doNotExpandShiftReturn/>`).
+    let with_other_compat = original_settings.replace(
+        "<w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" w:val=\"15\"/>",
+        "<w:doNotExpandShiftReturn/>",
+    );
+    assert_ne!(original_settings, with_other_compat);
+    let docx_with_other = replace_part(&base_docx, "word/settings.xml", with_other_compat.as_bytes());
+
+    let doc2 = craft_docx::read(&docx_with_other).unwrap();
+    assert_eq!(doc2.settings.compat_mode, None);
+    assert!(doc2.settings.do_not_expand_shift_return);
+
+    let saved_bytes2 = craft_docx::write(&doc2).unwrap();
+    let saved_settings2 = settings_xml_of(&saved_bytes2).unwrap();
+    assert!(saved_settings2.contains("<w:compat>"), "expected <w:compat>, got: {saved_settings2}");
+    assert!(saved_settings2.contains("<w:doNotExpandShiftReturn/>"), "expected doNotExpandShiftReturn, got: {saved_settings2}");
+    assert!(!saved_settings2.contains("compatibilityMode"), "expected no compatibilityMode, got: {saved_settings2}");
+
+    let read_back2 = craft_docx::read(&saved_bytes2).unwrap();
+    assert_eq!(read_back2.settings.compat_mode, None);
+    assert!(read_back2.settings.do_not_expand_shift_return);
+}
+
+/// #3305: a hyperlink keeps the `w:history` a .docx file gave it (on, off or none), and a link
+/// with no value, as one made in the app has, is written with history on and reads back the same.
+#[test]
+fn hyperlink_history_attribute_preservation_round_trips() {
+    use craft_wordmodel::props::LinkHistory;
+    let doc_xml_of = |bytes: &[u8]| {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+        xml
+    };
+
+    // 1. Each model value is written as the matching attribute and read back as it.
+    for (history, written) in [(None, Some("1")), (Some(LinkHistory::Off), Some("0")), (Some(LinkHistory::Omitted), None)] {
+        let mut p = Paragraph::new();
+        p.insert_text(0, "link", &CharProps { link: Some("https://example.com/".into()), link_history: history, ..Default::default() }).unwrap();
+        let bytes = craft_docx::write(&doc_with(vec![p])).unwrap();
+        let xml = doc_xml_of(&bytes);
+        assert!(xml.contains("<w:hyperlink "), "{xml}");
+        match written {
+            Some(v) => assert!(xml.contains(&format!(r#"w:history="{v}""#)), "{history:?}: {xml}"),
+            None => assert!(!xml.contains("w:history"), "{history:?}: {xml}"),
+        }
+        let read = craft_docx::read(&bytes).unwrap();
+        assert_eq!(paras(&read)[0].props_of_char(0).link_history, history);
+    }
+    let mut p_one = Paragraph::new();
+    p_one
+        .insert_text(
+            0,
+            "link with history 1",
+            &CharProps { link: Some("https://example.com/hist-one".into()), link_history: None, ..Default::default() },
+        )
+        .unwrap();
+    let d_one = doc_with(vec![p_one]);
+
+    // 2. Original XML fixture round-trip:
+    // Verify that reading raw XML with omitted w:history and w:history="0" saves back identically.
+    let base = craft_docx::write(&d_one).unwrap();
+    // Replace the hyperlink in document.xml to have NO w:history attribute
+    let orig_doc_xml = doc_xml_of(&base);
+    let xml_omitted_hist = orig_doc_xml.replace(r#" w:history="1""#, "");
+    assert_ne!(orig_doc_xml, xml_omitted_hist);
+    let file_omitted = replace_part(&base, "word/document.xml", xml_omitted_hist.as_bytes());
+
+    let read_omitted = craft_docx::read(&file_omitted).unwrap();
+    assert_eq!(paras(&read_omitted)[0].props_of_char(0).link_history, Some(LinkHistory::Omitted));
+    let saved_omitted = craft_docx::write(&read_omitted).unwrap();
+    let resaved_xml = doc_xml_of(&saved_omitted);
+    assert!(!resaved_xml.contains("w:history"), "expected no w:history on save, got: {resaved_xml}");
+
+    // Replace the hyperlink in document.xml to have w:history="0"
+    let xml_zero_hist = orig_doc_xml.replace(r#"w:history="1""#, r#"w:history="0""#);
+    assert_ne!(orig_doc_xml, xml_zero_hist);
+    let file_zero = replace_part(&base, "word/document.xml", xml_zero_hist.as_bytes());
+
+    let read_zero = craft_docx::read(&file_zero).unwrap();
+    assert_eq!(paras(&read_zero)[0].props_of_char(0).link_history, Some(LinkHistory::Off));
+    let saved_zero = craft_docx::write(&read_zero).unwrap();
+    let resaved_zero_xml = doc_xml_of(&saved_zero);
+    assert!(resaved_zero_xml.contains(r#"w:history="0""#), "expected w:history=\"0\" on save, got: {resaved_zero_xml}");
+
+    // Replace the hyperlink in document.xml to have w:history=" 0 " (whitespace-padded false)
+    let xml_padded_zero = orig_doc_xml.replace(r#"w:history="1""#, r#"w:history=" 0 ""#);
+    assert_ne!(orig_doc_xml, xml_padded_zero);
+    let file_padded = replace_part(&base, "word/document.xml", xml_padded_zero.as_bytes());
+
+    let read_padded = craft_docx::read(&file_padded).unwrap();
+    assert_eq!(paras(&read_padded)[0].props_of_char(0).link_history, Some(LinkHistory::Off));
+    let saved_padded = craft_docx::write(&read_padded).unwrap();
+    let resaved_padded_xml = doc_xml_of(&saved_padded);
+    assert!(resaved_padded_xml.contains(r#"w:history="0""#), "expected w:history=\"0\" on save, got: {resaved_padded_xml}");
+}
+
+/// #3305: a link the app makes, by laying a `CharProps` patch with a target over text, saves with
+/// history on, as it did before `w:history` was kept from .docx files.
+#[test]
+fn a_link_made_with_a_char_props_patch_saves_with_history_on() {
+    let mut p = Paragraph::with_text("see the site", CharProps::default());
+    let patch = CharProps { link: Some("https://example.com/".into()), ..Default::default() };
+    p.format(4, 12, &|c| c.overlay(&patch)).unwrap();
+    let bytes = craft_docx::write(&doc_with(vec![p])).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains("<w:hyperlink ") && xml.contains(r#"w:history="1""#), "{xml}");
 }
 
 /// Tools › Templates and Add-ins: the attached template (an external relationship of the settings
@@ -1821,7 +2050,7 @@ fn kitchen_sink() -> Document {
     let f = d.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("Note", CharProps::default()))]);
     let c = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("Comment", CharProps::default()))]);
     d.comments.insert(3, Comment { author: "X".into(), part: c, ..Default::default() });
-    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "A".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "A".into(), date: String::new(), move_name: None, date_utc: None });
     d.last_section.headers.default = Some(h);
     let mut blocks: Blocks = Vec::new();
     let mut p = para_runs(&[
@@ -2255,6 +2484,7 @@ fn rotation_and_flips_round_trip() {
         ch_w: 120.0,
         ch_h: 60.0,
         children: vec![craft_wordmodel::para::GroupChild {
+            link: None,
             x: 0.0,
             y: 0.0,
             obj: shape(ShapeKind::Ellipse, Float { rot: 10.0, ..Default::default() }),
@@ -2313,8 +2543,8 @@ fn rotated_group_and_shadow_rotation_round_trip() {
         ch_w: 120.0,
         ch_h: 40.0,
         children: vec![
-            craft_wordmodel::para::GroupChild { x: 0.0, y: 0.0, obj: member(true) },
-            craft_wordmodel::para::GroupChild { x: 60.0, y: 0.0, obj: member(false) },
+            craft_wordmodel::para::GroupChild { link: None, x: 0.0, y: 0.0, obj: member(true) },
+            craft_wordmodel::para::GroupChild { link: None, x: 60.0, y: 0.0, obj: member(false) },
         ],
         canvas: None,
     };
@@ -2767,6 +2997,7 @@ fn alt_text_title_and_decorative_round_trip_for_every_object() {
         ch_w: 120.0,
         ch_h: 60.0,
         children: vec![craft_wordmodel::para::GroupChild {
+            link: None,
             x: 0.0,
             y: 0.0,
             obj: shape(AltText { text: "Left circle".into(), ..Default::default() }),

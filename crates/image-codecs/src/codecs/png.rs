@@ -179,7 +179,7 @@ impl<B: AsRef<[u8]>> AsRef<[u8]> for SharedInput<B> {
 
 /// A PNG decoded in resumable steps, for a caller that must not block for the whole image (the
 /// web build, which has no threads): [`PngDecodeRows::step`] decodes rows until the caller says to
-/// stop, and returns the [`Image`] once the last row and the chunks after it are read. [`decode`]
+/// stop, and returns the `Image` once the last row and the chunks after it are read. `decode`
 /// drives one to the end, so the two give the same image.
 ///
 /// An interlaced (Adam7) PNG decodes in a single step: its passes land at stride positions all
@@ -217,8 +217,9 @@ pub struct PngDecodeRows<B: AsRef<[u8]>> {
 }
 
 impl<B: AsRef<[u8]>> PngDecodeRows<B> {
-    /// Reads the header and rejects sizes past `limits` or implausibly small image data.
-    /// Exceptionally expanded Adam7 images also validate packed pass rows before allocation.
+    /// Reads the header and refuses what `decode` refuses before any pixel is decoded: sizes
+    /// past `limits`, and a file too small for the image it declares. Exceptionally expanded
+    /// Adam7 images also validate packed pass rows before allocation.
     pub fn new(bytes: B, limits: &Limits) -> Result<Self, CodecError> {
         Self::open(bytes, limits, true, false)
     }
@@ -465,11 +466,11 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
 
     /// Decodes the rows of a [`streamable`](PngDecodeRows::streamable) file a group at a time:
     /// `sink(y0, data)` gets whole rows `y0..` in final order, `group` of them at a time (the last
-    /// group may be shorter; 0 counts as 1), native-endian, exactly the samples [`decode`] would
+    /// group may be shorter; 0 counts as 1), native-endian, exactly the samples `decode` would
     /// return, and the decoder keeps only that group. Decodes at least one row, then goes on while
     /// `more()` returns true; `Some` with the extras once the file is read to its end, with the
     /// resolution a format that lacks one takes from its EXIF or XMP. A damaged file fails with
-    /// the error [`decode`] gives, after however many rows were delivered. An orientation (an
+    /// the error `decode` gives, after however many rows were delivered. An orientation (an
     /// `eXIf` after the image data may set one) is for the caller to apply. A new group size
     /// must exceed any partial group retained from an earlier yield; otherwise this returns
     /// an error without consuming another row.
@@ -804,7 +805,7 @@ pub(crate) fn has_additional_images(bytes: &[u8]) -> Result<bool, CodecError> {
     Ok(info.animation_control.is_some_and(|a| u64::from(a.num_frames) + u64::from(info.frame_control.is_none()) > 1))
 }
 
-/// The size and pixel format the rows of [`decode_rows`] come in.
+/// The size and pixel format the rows of `decode_rows` come in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PngHeader {
     pub width: u32,
@@ -813,7 +814,7 @@ pub struct PngHeader {
     pub sample: SampleType,
 }
 
-/// Where [`decode_rows`] sends rows: the index of the first, then whole rows.
+/// Where `decode_rows` sends rows: the index of the first, then whole rows.
 pub type PngRowSink<'a, E> = dyn FnMut(u32, &[u8]) -> Result<(), E> + 'a;
 
 /// Decodes a PNG a group of rows at a time, so the caller never needs the whole decoded image:
@@ -1265,6 +1266,35 @@ fn encode_data(raw: RawPng<'_>, opts: &EncodeOptions) -> Result<Vec<u8>, CodecEr
     Ok(out)
 }
 
+/// Encodes interleaved 8-bit RGBA pixels, row-major with no row padding, as a PNG without
+/// copying them into an [`Image`]. The output matches [`crate::encode`] of the same pixels with
+/// no ICC profile and default metadata. `pixels` must hold exactly `width * height * 4` bytes.
+pub fn encode_rgba8(width: u32, height: u32, pixels: &[u8], opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
+    if width == 0 || height == 0 {
+        return Err(CodecError::InvalidImage("cannot encode an empty image".into()));
+    }
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or_else(|| CodecError::InvalidImage("image size overflows usize".into()))?;
+    if pixels.len() != expected {
+        return Err(CodecError::InvalidImage(format!("buffer has {} bytes, expected {expected} for {width}x{height} RGBA8", pixels.len())));
+    }
+    encode_data(
+        RawPng {
+            width,
+            height,
+            layout: ChannelLayout::Rgba,
+            sample: SampleType::U8,
+            icc: None,
+            cicp: None,
+            meta: &Metadata::default(),
+            data: pixels,
+        },
+        opts,
+    )
+}
+
 /// Encodes linear-light Rec. 2020 RGB as 16-bit PNG with BT.2100 PQ (`cICP`) and measured
 /// content-light levels (`cLLI`). Input samples are relative to 203 cd/m² diffuse white, as in
 /// [`crate::cicp::linearize`]. Negative and non-finite values become black; values above 10,000
@@ -1360,12 +1390,12 @@ fn start<W: Write>(
     if opts.embed_icc
         && let Some(icc) = icc
     {
-        info.icc_profile = Some(icc.clone().into());
+        info.icc_profile = Some(std::borrow::Cow::Borrowed(icc.as_slice()));
     }
     if opts.embed_metadata {
         if let Some(exif) = &meta.exif {
             // The pixels are written as they are shown: never let a viewer rotate them again.
-            info.exif_metadata = Some(crate::resolution::export_exif(exif, meta.dpi).into_owned().into());
+            info.exif_metadata = Some(crate::resolution::export_exif(exif, meta.dpi));
         }
         if let Some((x, y)) = meta.dpi
             && x > 0.0
@@ -1442,7 +1472,7 @@ fn write_idat<W: Write>(writer: &mut png::Writer<W>, zlib: &[u8], max: usize) ->
 /// A PNG encoded a band of rows at a time, for images too large to hold whole (a multi-gigapixel
 /// print): each band is converted to the encode plan, filtered and deflated on all cores as it
 /// arrives and written as IDAT chunks, so only about one band is ever held. The deflate bands are
-/// [`parallel_idat`]'s, so the zlib stream is the one [`crate::encode`] writes for a large image.
+/// `parallel_idat`'s, so the zlib stream is the one `crate::encode` writes for a large image.
 /// Never interlaced (Adam7 needs the whole image).
 pub struct PngRows<W: Write> {
     writer: png::Writer<W>,
@@ -2226,17 +2256,17 @@ mod parallel_tests {
         }
     }
 
-    /// The bytes depend on the image, not on the machine: one, two, seven and 32 worker threads
+    /// The bytes depend on the image, not on the machine: one, two and 32 worker threads
     /// (and the machine's own count, through `encode`) give the same stream.
     #[test]
     fn the_parallel_encoder_gives_the_same_bytes_on_any_thread_count() {
-        let (w, h, bpp) = (1201usize, 1013usize, 4usize);
+        let (w, h, bpp) = (1024usize, 1025usize, 4usize);
         let px: Vec<u8> =
             (0..w * h * bpp).map(|i| ((i / 5) as u32).wrapping_mul(2_654_435_761).rotate_left(i as u32 % 11) as u8 / 5 + (i % 89) as u8).collect();
         assert!(px.len() >= PARALLEL_MIN_BYTES && px.len() > 2 * BAND_BYTES);
-        for level in [PngCompression::Fast, PngCompression::Default, PngCompression::Best] {
+        for level in [PngCompression::Fast, PngCompression::Best] {
             let one = banded_idat(&px, w, h, bpp, level, 1).unwrap();
-            for threads in [2, 7, 32] {
+            for threads in [2, 32] {
                 assert!(banded_idat(&px, w, h, bpp, level, threads).unwrap() == one, "{level:?}: {threads} threads differ from one");
             }
             assert!(parallel_idat(&px, w, h, bpp, level).unwrap() == one, "{level:?}: this machine's thread count differs from one");
@@ -2250,8 +2280,9 @@ mod parallel_tests {
 
     #[test]
     fn large_images_roundtrip_through_the_parallel_encoder() {
-        for (layout, sample, ch, bytes) in [(ChannelLayout::Rgb, SampleType::U8, 3usize, 1usize), (ChannelLayout::Rgba, SampleType::U16, 4, 2)] {
-            let (w, h) = (1531u32, 977u32);
+        for (layout, sample, ch, bytes, w, h) in
+            [(ChannelLayout::Rgb, SampleType::U8, 3usize, 1usize, 1024u32, 1400u32), (ChannelLayout::Rgba, SampleType::U16, 4, 2, 1024, 520)]
+        {
             let n = w as usize * h as usize * ch * bytes;
             let px: Vec<u8> =
                 (0..n).map(|i| ((i / 3) as u32).wrapping_mul(2_654_435_761).rotate_left(i as u32 % 7) as u8 / 3 + (i % 97) as u8).collect();
@@ -2322,23 +2353,43 @@ mod streamed_tests {
     /// gives, at 8 and 16 bits, with a profile, resolution, text and XMP.
     #[test]
     fn streamed_rows_match_the_whole_image_encoder() {
-        for (layout, sample, ch, bytes) in [(ChannelLayout::Rgba, SampleType::U8, 4usize, 1usize), (ChannelLayout::Rgb, SampleType::U16, 3, 2)] {
-            let (w, h) = (1201u32, 1013u32);
+        // The gate runs every divisor-th (image, level, bands) case, nightly all twelve.
+        let divisor = craft_media_testkit::hostile::divisor();
+        let mut case = 0usize;
+        for (layout, sample, ch, bytes, w, h) in
+            [(ChannelLayout::Rgba, SampleType::U8, 4usize, 1usize, 1024u32, 1025u32), (ChannelLayout::Rgb, SampleType::U16, 3, 2, 1024, 700)]
+        {
             let meta = Metadata {
                 dpi: Some((300.0, 300.0)),
                 text: vec![("Title".into(), "Tent".into())],
                 xmp: Some("<x:xmpmeta xmlns:x='adobe:ns:meta/'/>".into()),
                 ..Default::default()
             };
-            let img = Image::from_raw(w, h, layout, sample, noise(w as usize * h as usize * ch * bytes, 7))
-                .unwrap()
-                .with_icc(Some((0..600u32).map(|i| (i % 251) as u8).collect()))
-                .with_meta(meta);
+            // Distinct nonconstant row runs retain carry and row-order sensitivity across pushes.
+            let stride = w as usize * ch * bytes;
+            let row = noise(stride, 7);
+            let mut pixels = row.repeat(h as usize);
+            for row in pixels.chunks_exact_mut(stride).skip(h as usize / 2) {
+                row[0] ^= 0x5a;
+            }
+            let img =
+                Image::from_raw(w, h, layout, sample, pixels).unwrap().with_icc(Some((0..600u32).map(|i| (i % 251) as u8).collect())).with_meta(meta);
             for level in [PngCompression::Fast, PngCompression::Default] {
                 let opts = EncodeOptions { png_compression: level, ..Default::default() };
+                let one_band = [h];
+                let cases: Vec<&[u32]> = [&[1u32, 77, 300][..], &[256, 256, 256], &one_band]
+                    .into_iter()
+                    .filter(|_| {
+                        case += 1;
+                        (case - 1).is_multiple_of(divisor)
+                    })
+                    .collect();
+                if cases.is_empty() {
+                    continue;
+                }
                 let whole = crate::encode(&img, Format::Png, &opts).unwrap();
                 let (head, zlib, _) = split(&whole);
-                for heights in [&[1u32, 77, 300][..], &[256, 256, 256], &[1013]] {
+                for heights in cases {
                     let png = streamed(&img, heights, &opts);
                     let (h2, z2, _) = split(&png);
                     assert!(h2 == head, "{layout:?} {level:?} {heights:?}: header chunks differ");

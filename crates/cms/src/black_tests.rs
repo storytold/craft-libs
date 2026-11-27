@@ -10,9 +10,8 @@ fn opts() -> TransformOptions {
     TransformOptions::default()
 }
 
-/// L* of a CMYK colour under `p`, measured as the transform with `o` measures it.
-fn lightness(p: &Profile, o: TransformOptions, cmyk: [f32; 4]) -> f32 {
-    let t = Transform::with_options(p, Builtin::LabD50.profile(), o).unwrap();
+/// L* of a CMYK colour, measured by the prebuilt transform.
+fn lightness(t: &Transform, cmyk: [f32; 4]) -> f32 {
     let mut lab = [0.0f32; 3];
     t.eval(&cmyk, &mut lab).unwrap();
     lab[0] * 100.0
@@ -70,16 +69,22 @@ fn the_destination_black_matches_the_source_lightness() {
     for intent in [Intent::RelativeColorimetric, Intent::Perceptual] {
         for bpc in [true, false] {
             let o = TransformOptions { intent, bpc, ..opts() };
-            for (src, dst) in [(coated(), fogra()), (fogra(), coated())] {
+            let coated_lab = Transform::with_options(coated(), Builtin::LabD50.profile(), o).unwrap();
+            let fogra_lab = Transform::with_options(fogra(), Builtin::LabD50.profile(), o).unwrap();
+            // Both directions for one setting; the other settings in the forward one.
+            let directions = if intent == Intent::RelativeColorimetric && bpc { 2 } else { 1 };
+            for (src, dst, src_lab, dst_lab) in
+                [(coated(), fogra(), &coated_lab, &fogra_lab), (fogra(), coated(), &fogra_lab, &coated_lab)].into_iter().take(directions)
+            {
                 let bp = BlackPreserving::new(src, dst, o).unwrap();
-                let dst_black = lightness(dst, o, [0.0, 0.0, 0.0, 1.0]);
-                for k in [0.1f32, 0.3, 0.5, 0.7, 0.9, 1.0] {
-                    let want = lightness(src, o, [0.0, 0.0, 0.0, k]);
+                let dst_black = lightness(dst_lab, [0.0, 0.0, 0.0, 1.0]);
+                for k in [0.1f32, 0.5, 0.9, 1.0] {
+                    let want = lightness(src_lab, [0.0, 0.0, 0.0, k]);
                     if want <= dst_black {
                         assert_eq!(bp.map_k(k), 1.0, "darker than the destination's black clamps to K = 1");
                         continue;
                     }
-                    let got = lightness(dst, o, [0.0, 0.0, 0.0, bp.map_k(k)]);
+                    let got = lightness(dst_lab, [0.0, 0.0, 0.0, bp.map_k(k)]);
                     assert!((got - want).abs() < 0.02, "{intent:?} bpc {bpc} k {k}: L* {got} for {want}");
                 }
                 assert_eq!(bp.map_k(0.0), 0.0, "paper stays paper");

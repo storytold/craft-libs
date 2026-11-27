@@ -5,6 +5,12 @@ use super::units::{length_pt, parse_color, size_of};
 use super::{Align, Document, FBlock, Flow, Fmt, Inline, Kind, ListInfo, Para, model};
 use craft_math::latex_text::latex_to_linear;
 
+// Each visit in the two backward bookmark scans, not the number of source bytes.
+#[cfg(test)]
+std::thread_local! {
+    static LABEL_SCAN_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 // =============================================================================================
 // Import
 
@@ -184,7 +190,18 @@ impl<'a> Parser<'a> {
     /// [`MAX_ANCHOR_RUN`] in a row further ones are left out (thousands of labels with no text
     /// between them made reading a file take time quadratic in its size).
     fn anchor(&mut self, name: String) {
-        let run = self.para.inlines.iter().rev().take(MAX_ANCHOR_RUN).take_while(|i| matches!(i, Inline::Anchor(_))).count();
+        let run = self
+            .para
+            .inlines
+            .iter()
+            .rev()
+            .take(MAX_ANCHOR_RUN)
+            .take_while(|i| {
+                #[cfg(test)]
+                LABEL_SCAN_STEPS.with(|steps| steps.set(steps.get().saturating_add(1)));
+                matches!(i, Inline::Anchor(_))
+            })
+            .count();
         if run < MAX_ANCHOR_RUN {
             self.para.inlines.push(Inline::Anchor(name));
         }
@@ -192,7 +209,11 @@ impl<'a> Parser<'a> {
 
     fn text(&mut self, s: &str) {
         // Spaces collapse, and none start a paragraph (as in TeX).
-        let after_space = match self.para.inlines.iter().rev().find(|i| !matches!(i, Inline::Anchor(_))) {
+        let after_space = match self.para.inlines.iter().rev().find(|i| {
+            #[cfg(test)]
+            LABEL_SCAN_STEPS.with(|steps| steps.set(steps.get().saturating_add(1)));
+            !matches!(i, Inline::Anchor(_))
+        }) {
             Some(Inline::Text(t, _)) => t.is_empty() || t.ends_with([' ', '\n']),
             Some(_) => false,
             None => true,
@@ -987,4 +1008,44 @@ pub fn parse(src: &str) -> Flow {
 
 fn squash(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The backward bookmark scans grow linearly with a run of labels.
+    /// Count the actual scan visits so machine speed cannot decide whether this test passes.
+    #[test]
+    fn latex_labels_in_a_row_are_read_in_linear_time() -> Result<(), &'static str> {
+        let counted = |src: &str| {
+            LABEL_SCAN_STEPS.with(|steps| steps.set(0));
+            assert!(import(src.as_bytes()).body.len() <= 2);
+            LABEL_SCAN_STEPS.with(std::cell::Cell::get)
+        };
+        let cases: [fn(usize) -> String; 3] =
+            [|n| "\\label{a} ".repeat(n) + "x", |n| "\\label{a}".repeat(n) + "x", |n| "\\hypertarget{a}{} ".repeat(n)];
+        let counts: Vec<_> = cases
+            .into_iter()
+            .map(|make| {
+                let n = 128;
+                (counted(&make(n)), counted(&make(n * 8)))
+            })
+            .collect();
+        let d = import("\\label{one}First \\label{two}second \\label{three}third.".as_bytes());
+        let p = d.para_at(&craft_wordmodel::Pos::body(0, 0)).ok_or("the imported paragraph is missing")?;
+        let names: Vec<&str> = p
+            .objects
+            .iter()
+            .filter_map(|o| if let craft_wordmodel::InlineObject::BookmarkStart { name } = o { Some(name.as_str()) } else { None })
+            .collect();
+        assert_eq!(names, ["one", "two", "three"]);
+        assert_eq!(d.plain_text(craft_wordmodel::StoryRef::Body).replace('\u{FFFC}', ""), "First second third.");
+        for (shape, (small, large)) in counts.into_iter().enumerate() {
+            // Eight times the labels may double the linear ratio while the bounded scans
+            // reach their steady state; a quadratic rescan instead approaches 64 times.
+            assert!(small > 0 && large > small && large <= small * 16, "label shape {shape}: {small} scan visits at n, {large} at 8n");
+        }
+        Ok(())
+    }
 }
