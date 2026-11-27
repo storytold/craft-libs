@@ -22,7 +22,8 @@ mod tests {
     fn hindi_suggestions_use_runtime_tables() {
         crate::hi::test_dict::install();
         // MAP (ि/ी, ं/ँ), REP (कश → क्ष) and a doubled letter.
-        for (word, want) in [("पानि", "पानी"), ("गांव", "गाँव"), ("परीकशण", "परीक्षण"), ("प्रेमम", "प्रेम"), ("किताबो", "किताबों")] {
+        for (word, want) in [("पानि", "पानी"), ("गांव", "गाँव"), ("परीकशण", "परीक्षण"), ("प्रेमम", "प्रेम"), ("किताबो", "किताबों")]
+        {
             let s = suggest(word, 8);
             assert!(s.contains(&want.into()), "{word}: {s:?}");
         }
@@ -56,7 +57,8 @@ mod tests {
             assert!(d.check(word), "NOSUGGEST is still correct: {word}");
             assert!(!d.can_suggest(word), "NOSUGGEST form: {word}");
         }
-        for input in ["गुपत", "अगुपत", "गुपतता", "अगुपतताएँ", "गुप्तत", "अगुप्तताए"] {
+        for input in ["गुपत", "अगुपत", "गुपतता", "अगुपतताएँ", "गुप्तत", "अगुप्तताए"]
+        {
             let got = suggest_in(&d, input, 32);
             assert!(got.iter().all(|w| w.split(' ').all(|part| d.can_suggest(part))), "{input}: {got:?}");
             assert!(got.iter().all(|w| !w.contains("गुप्त")), "{input}: {got:?}");

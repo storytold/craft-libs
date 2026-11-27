@@ -22,8 +22,32 @@ const RULES: Rules = Rules {
 /// and conjunctions, which are never doubled on purpose (`के के`, `है है`). A doubled word in
 /// another script is flagged as in the other languages.
 const NEVER_DOUBLED: &[&str] = &[
-    "का", "की", "के", "को", "में", "से", "ने", "पर", "तक", "है", "हैं", "था", "थी", "थे", "हूँ", "हूं", "और", "या", "कि", "एवं", "तथा", "लेकिन",
-    "परंतु", "किंतु", "क्योंकि", "भी",
+    "का",
+    "की",
+    "के",
+    "को",
+    "में",
+    "से",
+    "ने",
+    "पर",
+    "तक",
+    "है",
+    "हैं",
+    "था",
+    "थी",
+    "थे",
+    "हूँ",
+    "हूं",
+    "और",
+    "या",
+    "कि",
+    "एवं",
+    "तथा",
+    "लेकिन",
+    "परंतु",
+    "किंतु",
+    "क्योंकि",
+    "भी",
 ];
 
 fn flag_repeat(w: &str) -> bool {
@@ -37,7 +61,8 @@ mod tests {
 
     #[test]
     fn intentional_repeats_are_fine() {
-        for text in ["धीरे धीरे चलो।", "बार बार कहा।", "घर घर में दीये जले।", "कभी कभी", "अपने अपने घर जाओ।", "छोटे छोटे बच्चे"] {
+        for text in ["धीरे धीरे चलो।", "बार बार कहा।", "घर घर में दीये जले।", "कभी कभी", "अपने अपने घर जाओ।", "छोटे छोटे बच्चे"]
+        {
             assert!(check(text).is_empty(), "{text}: {:?}", check(text));
         }
         assert_eq!(check("मैं घर के के पास हूँ।").len(), 1);
@@ -70,7 +95,8 @@ mod tests {
 
     #[test]
     fn ratios_and_scores_keep_their_spaces() {
-        for text in ["3 : 1", "स्कोर 12 : 10।", "३ : १", "१ : २", "स्कोर १२ : १०।", "मूल्य .५ है"] {
+        for text in ["3 : 1", "स्कोर 12 : 10।", "३ : १", "१ : २", "स्कोर १२ : १०।", "मूल्य .५ है"]
+        {
             assert!(check(text).is_empty(), "{text}: {:?}", check(text));
         }
         for text in ["शब्द : दूसरा", "3 : शब्द", "3 :", "३ : शब्द", "३ :"] {
