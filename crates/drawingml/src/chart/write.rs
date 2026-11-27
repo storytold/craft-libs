@@ -780,6 +780,24 @@ fn kept_chartex(c: &Chart) -> Option<Vec<u8>> {
     Some(w.into_bytes())
 }
 
+fn merge_axis_kinds(axis_kinds: &mut [Option<ChartType>; 2], emitted: [Option<ChartType>; 2]) {
+    for (axis, kind) in axis_kinds.iter_mut().zip(emitted) {
+        if let Some(kind) = kind {
+            // A Line encountered first must not override a horizontal Bar on that pair.
+            // Shared pairs keep the existing limitation for incompatible orientations;
+            // use horizontal Bar placement and percentage defaults when plots need them.
+            let horizontal = kind.horizontal() || axis.is_some_and(ChartType::horizontal);
+            let percent = kind.percent() || axis.is_some_and(ChartType::percent);
+            *axis = Some(match (horizontal, percent) {
+                (true, true) => ChartType::PercentBar,
+                (true, false) => ChartType::Bar,
+                (false, true) => ChartType::PercentColumn,
+                _ => axis.unwrap_or(kind),
+            });
+        }
+    }
+}
+
 /// The chart part XML, and whether it is the original part (so its relationships still apply).
 pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
     // A chart too large to model is written back as it was read.
@@ -879,21 +897,7 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
     for kind in &kinds {
         let list = effective.iter().filter(|(_, _, k)| normalize(*k) == *kind).map(|(i, s, _)| (*i, *s)).collect::<Vec<_>>();
         let emitted = plot_kind(&mut w, c, *kind, &list, override_markers);
-        for (axis, kind) in axis_kinds.iter_mut().zip(emitted) {
-            if let Some(kind) = kind {
-                // A Line encountered first must not override a horizontal Bar on that pair.
-                // Shared pairs keep the existing limitation for incompatible orientations;
-                // use horizontal Bar placement and percentage defaults when plots need them.
-                let horizontal = kind.horizontal() || axis.is_some_and(ChartType::horizontal);
-                let percent = kind.percent() || axis.is_some_and(ChartType::percent);
-                *axis = Some(match (horizontal, percent) {
-                    (true, true) => ChartType::PercentBar,
-                    (true, false) => ChartType::Bar,
-                    (false, true) => ChartType::PercentColumn,
-                    _ => axis.unwrap_or(kind),
-                });
-            }
-        }
+        merge_axis_kinds(&mut axis_kinds, emitted);
     }
     if !combo
         && !matches!(
