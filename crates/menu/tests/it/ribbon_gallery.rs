@@ -263,3 +263,25 @@ fn the_current_tile_paints_an_accent_fill_and_edge_even_when_focused() {
         assert!(shapes.iter().any(|p| p.fill == fill && near(p, current)), "{who}: the focused current tile keeps its fill");
     }
 }
+
+/// The rect of the last tile inside the More popup for a gallery at `size`.
+fn more_popup_tile(size: ThumbSize) -> Rect {
+    let mut fixture = Fixture::new(move |ui| {
+        let paint = |_: &ContentPainterCx, _: Rect| {};
+        let items: Vec<GalleryItem<'_, usize>> =
+            (0..10).map(|at| GalleryItem { key: at, label: Label::from(format!("Tile {at}")), face: GalleryFace::Paint(&paint) }).collect();
+        let _ = Gallery::new("Shapes", &items, None).tiles(3, 3).thumb(size).show(ui);
+    });
+    fixture.room(egui::Vec2::new(800.0, 600.0)).settle();
+    let more = fixture.by_label("More").expect("More button");
+    fixture.click(&more).settle();
+    fixture.by_label("Tile 9").map_or(Rect::NOTHING, |tile| tile.rect)
+}
+
+#[trial]
+fn the_more_popup_passes_the_gallery_thumb_size() {
+    let (small, medium, large) = (more_popup_tile(ThumbSize::Small), more_popup_tile(ThumbSize::Medium), more_popup_tile(ThumbSize::Large));
+    assert!(small.is_positive(), "small More tile shows: {small:?}");
+    assert!(medium.width() > small.width(), "medium More tile is wider than small: {medium:?} vs {small:?}");
+    assert!(large.width() > medium.width(), "large More tile is wider than medium: {large:?} vs {medium:?}");
+}
