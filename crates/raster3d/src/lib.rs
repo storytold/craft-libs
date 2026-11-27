@@ -22,15 +22,19 @@
 //! - **Textures.** [`Scene::texels`] holds linear straight RGBA, row-major from the top row;
 //!   [`TexInfo`] gives each texture's span and wrap modes.
 //!
-//! Every `try_` function checks the scene against [`Limits`] and returns a [`RenderError`]
-//! before it allocates the target: malformed indices, references and spans, values that are not
-//! finite, sizes, triangle counts, light counts and coverage work over the limits. Buffers whose
+//! [`try_render`], [`try_render_cpu`], and [`try_shadow_maps`] check the scene against [`Limits`]
+//! and return a [`RenderError`] for malformed indices, references and spans, values that are not
+//! finite, sizes, triangle counts, light counts and coverage work over the limits. [`try_resolve`]
+//! checks the downsampling factor and buffer lengths. [`try_encode`] checks the image buffer and
+//! pixel values. [`try_env_shadow_map`] checks its size, radius, center, direction, diffusion and
+//! resulting map values. These three functions do not apply scene limits. Buffers whose
 //! size grows with the raster, the vertex or triangle count or a shadow map's texels are
 //! reserved fallibly and give [`RenderError::OutOfMemory`] when the reservation fails. A
-//! triangle's clipped polygon (at most nine corners) and the shadow pass's lists of lights and
-//! maps (a few entries per light of the scene) are allocated as usual. Rows and shadow maps are
+//! triangle's clipped polygon holds at most 28 corners inline. The shadow pass's small lists of
+//! lights and maps are allocated as usual. Rows and shadow maps are
 //! computed on several threads only with the `parallel` feature. The results are the same either
-//! way, except the `needed` count of [`RenderError::TooMuchWork`] for shadow maps past the limit,
+//! way, except the `needed` count of [`RenderError::TooMuchWork`] for shadow maps and raster
+//! fallback coverage past the limit,
 //! which depends on where each thread stops counting.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]

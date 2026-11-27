@@ -222,7 +222,13 @@ pub fn sample(t: &TexInfo, texels: &[[f32; 4]], u: f32, v: f32) -> [f32; 4] {
 /// rotated about the vertical axis by `rot` radians.
 #[inline]
 fn equirect_uv(d: [f32; 3], rot: f32) -> (f32, f32) {
-    let u = 0.5 + (d[0].atan2(d[2]) + rot) / (2.0 * PI);
+    let longitude = d[0].atan2(d[2]);
+    let u = if rot.abs() > 2.0 * PI {
+        let angle = f64::from(rot).rem_euclid(std::f64::consts::TAU);
+        (0.5 + (f64::from(longitude) + angle) / std::f64::consts::TAU) as f32
+    } else {
+        0.5 + (longitude + rot) / (2.0 * PI)
+    };
     let v = (-d[1]).clamp(-1.0, 1.0).acos() / PI;
     (u - u.floor(), v)
 }
@@ -634,7 +640,7 @@ pub(crate) fn shade(s: &Scene, f: &Frag) -> Option<[f32; 4]> {
     }
     let (mut metallic, mut rough) = (m.metallic, m.roughness);
     if let Some(t) = tex(m.tex_mr) {
-        rough *= t[1];
+        rough = (rough * t[1]).clamp(0.0, 1.0);
         metallic *= t[2];
     }
     let mut n = norm(f.normal);
@@ -732,6 +738,48 @@ fn shadow_only(s: &Scene, m: &Material, f: &Frag, alpha: f32) -> [f32; 4] {
 mod tests {
     use super::{BrdfSurface, attenuation, brdf, light_shadow, mip_levels, shadow_coord, shadow_factor, to_light};
     use crate::scene::{Light, ShadowMap};
+
+    #[test]
+    fn large_environment_rotations_keep_quarter_turn_directions_distinct() {
+        for rotation in [268_435_456.0, -268_435_456.0, f32::MAX, f32::MIN] {
+            let (a, _) = super::equirect_uv([0.0, 0.0, 1.0], rotation);
+            let (b, _) = super::equirect_uv([1.0, 0.0, 0.0], rotation);
+            assert!(((b - a).rem_euclid(1.0) - 0.25).abs() < 1e-5, "{rotation}: {a}, {b}");
+        }
+    }
+
+    #[test]
+    fn a_roughness_texel_above_one_uses_the_rough_endpoint_for_environment_light() {
+        use crate::scene::{EnvInfo, Material, Scene, TexInfo};
+        let mut scene = Scene {
+            ortho: true,
+            cam_fwd: [0.0, 0.0, -1.0],
+            materials: vec![Material { base: [1.0; 4], metallic: 1.0, roughness: 1.0, tex_mr: 0, ..Material::default() }],
+            textures: vec![TexInfo { width: 1, height: 1, ..TexInfo::default() }; 2],
+            texels: vec![[1.0; 4], [1.0; 4]],
+            env: Some(EnvInfo {
+                radiance: 1,
+                mips: 1,
+                irradiance: 1,
+                intensity: 1.0,
+                rotation: 0.0,
+                sun: [0.0; 3],
+                key: 0.0,
+                shadow: -1,
+                shadow_darkness: 0.0,
+                shadow_diffusion: 0.0,
+            }),
+            ..Scene::default()
+        };
+        scene.textures[1].offset = 1;
+        let fragment = super::Frag { pos: [0.0; 3], normal: [0.0, 0.0, 1.0], uv: [0.0; 2], tangent: [1.0, 0.0, 0.0, 1.0], material: 0, front: true };
+        let endpoint = super::shade(&scene, &fragment).unwrap();
+        assert!(endpoint[0] > 0.0);
+        for green in [2.0, 100.0] {
+            scene.texels[0][1] = green;
+            assert_eq!(super::shade(&scene, &fragment).unwrap(), endpoint);
+        }
+    }
 
     #[test]
     fn a_light_straight_opposite_the_view_reflects_nothing() {

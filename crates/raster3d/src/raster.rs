@@ -36,7 +36,8 @@ pub struct Target {
 struct STri {
     p: [[f64; 2]; 3],
     z: [f32; 3],
-    inv_w: [f32; 3],
+    inv_w: [f64; 3],
+    wide: bool,
     w: [[f32; 3]; 3],
     tri: u32,
     front: bool,
@@ -47,7 +48,7 @@ struct STri {
 type Corner = ([f32; 4], [f32; 3]);
 
 /// A screen-space corner: position, ndc z, 1/w and weights.
-type ScreenCorner = ([f64; 2], f32, f32, [f32; 3]);
+type ScreenCorner = ([f64; 2], f32, f64, [f32; 3]);
 
 /// The most corners a clipped triangle can have. Clipping `n` corners against one plane keeps
 /// its `k` inside corners and adds one per change between inside and outside, at most
@@ -197,23 +198,21 @@ fn project(s: &Scene, clip: &[[f32; 4]], t: usize) -> Option<Clipped<ScreenCorne
             // A subnormal 1/w can carry z × 1/w past the depth range; z / w is then taken directly.
             let z = c[2] * iw;
             let z = if (0.0..=1.0).contains(&z) { z } else { c[2] / c[3] };
-            ([(nx as f64 + 1.0) * 0.5 * w, (1.0 - ny as f64) * 0.5 * h], z, iw, *wt)
+            ([(nx as f64 + 1.0) * 0.5 * w, (1.0 - ny as f64) * 0.5 * h], z, f64::from(iw), *wt)
         })
         .collect();
     let ok = |s: &ScreenCorner| s.0.iter().all(|v| v.is_finite()) && s.1.is_finite() && s.2.is_finite();
     if scr.iter().all(ok) {
         return Some(scr);
     }
-    // A tiny w overflows 1/w in f32: project in f64, with 1/w scaled by a common factor so the
-    // largest is 1 (the interpolation weights use only their ratios).
+    // A tiny w overflows 1/w in f32: project and retain reciprocals in f64.
     let iw: Clipped<f64> = poly.iter().map(|(c, _)| 1.0 / f64::from(c[3])).collect();
-    let top = iw.iter().fold(0.0f64, |a, &b| a.max(b));
     let scr: Clipped<ScreenCorner> = poly
         .iter()
         .zip(iw.iter())
         .map(|((c, wt), &iw)| {
             let (nx, ny) = (f64::from(c[0]) * iw, f64::from(c[1]) * iw);
-            ([(nx + 1.0) * 0.5 * w, (1.0 - ny) * 0.5 * h], (f64::from(c[2]) * iw) as f32, (iw / top) as f32, *wt)
+            ([(nx + 1.0) * 0.5 * w, (1.0 - ny) * 0.5 * h], (f64::from(c[2]) * iw) as f32, iw, *wt)
         })
         .collect();
     scr.iter().all(ok).then_some(scr)
@@ -259,6 +258,7 @@ fn fan(s: &Scene, scr: &[ScreenCorner], tri: u32, out: &mut Vec<STri>) {
             p: [c[0].0, c[1].0, c[2].0],
             z: [c[0].1, c[1].1, c[2].1],
             inv_w: [c[0].2, c[1].2, c[2].2],
+            wide: scr.iter().any(|corner| corner.2 > f64::from(f32::MAX)),
             w: [c[0].3, c[1].3, c[2].3],
             tri,
             front,
@@ -320,7 +320,13 @@ fn cover(t: &STri, px: f64, py: f64) -> Option<(f32, [f32; 3])> {
     // The weights sum to 1 only up to rounding, so keep the depth between the corners' depths.
     let (lo, hi) = (t.z[0].min(t.z[1]).min(t.z[2]), t.z[0].max(t.z[1]).max(t.z[2]));
     let z = (l[0] * t.z[0] + l[1] * t.z[1] + l[2] * t.z[2]).clamp(lo, hi);
-    let q = [l[0] * t.inv_w[0], l[1] * t.inv_w[1], l[2] * t.inv_w[2]];
+    if t.wide {
+        let l = if swap { [e0 / area, e2 / area, e1 / area] } else { [e0 / area, e1 / area, e2 / area] };
+        let q = [l[0] * t.inv_w[0], l[1] * t.inv_w[1], l[2] * t.inv_w[2]];
+        let sum = q[0] + q[1] + q[2];
+        return (sum > 0.0).then(|| (z, q.map(|weight| (weight / sum) as f32)));
+    }
+    let q = [l[0] * t.inv_w[0] as f32, l[1] * t.inv_w[1] as f32, l[2] * t.inv_w[2] as f32];
     let sum = q[0] + q[1] + q[2];
     if sum <= 0.0 {
         return None;
@@ -495,6 +501,10 @@ impl Band<'_> {
         let (s, w, y0, rows) = (self.s, self.w, self.y0, self.rows);
         let mut best: Vec<Option<(f32, [f32; 4], f32)>> = filled(rows * w, None)?;
         for &tj in opaque.bins {
+            let needed = self.spent.load(Ordering::Relaxed);
+            if needed > self.limit {
+                return Err(RenderError::TooMuchWork { needed, limit: self.limit });
+            }
             let t2 = &opaque.tris[tj as usize];
             let mut tests = 0u64;
             for y in t2.bbox[1].max(y0)..t2.bbox[3].min(y0 + rows as i32) {
@@ -588,7 +598,7 @@ pub fn try_render(s: &Scene, limits: &Limits) -> Result<Target, RenderError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Band, Pass, STri, f32_crossing};
+    use super::{Band, Pass, STri, cover, f32_crossing, fan, project};
     use crate::scene::{Material, Scene, Vertex};
     use std::sync::atomic::AtomicU64;
 
@@ -597,6 +607,45 @@ mod tests {
         // −3e38 − 1e38 overflows f32; the plane lies three quarters of the way along the edge.
         assert_eq!(f32_crossing(-3e38, 1e38), (false, 0.75));
         assert_eq!(f32_crossing(1e38, -3e38), (false, 0.25));
+    }
+
+    #[test]
+    fn wide_projection_keeps_the_edge_opposite_a_tiny_w() {
+        let tiny = f32::from_bits(1);
+        let scene = Scene { width: 2, height: 2, indices: vec![0, 1, 2], ..Scene::default() };
+        let clip = [[tiny, -tiny, 0.0, tiny], [-16.0, -16.0, 8.0, 16.0], [16.0, 16.0, 8.0, 16.0]];
+        let projected = project(&scene, &clip, 0).unwrap();
+        let mut triangles = Vec::new();
+        fan(&scene, &projected, 0, &mut triangles);
+        let (_, weights) = cover(&triangles[0], 1.0, 1.0).unwrap();
+        assert_eq!(weights, [0.0, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn fallback_does_not_test_candidates_after_another_band_exceeds_the_limit() {
+        let scene = Scene {
+            vertices: vec![Vertex::default(); 3],
+            indices: vec![0, 1, 2],
+            materials: vec![Material { unlit: true, ..Material::default() }],
+            ..Scene::default()
+        };
+        let triangle = STri {
+            p: [[-1.0, -1.0], [3.0, -1.0], [-1.0, 3.0]],
+            z: [0.5; 3],
+            inv_w: [1.0; 3],
+            w: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            tri: 0,
+            front: true,
+            bbox: [0, 0, 1, 1],
+            wide: false,
+        };
+        let spent = AtomicU64::new(1);
+        let band = Band { s: &scene, y0: 0, rows: 1, w: 1, spent: &spent, limit: 0 };
+        let pass = Pass { tris: &[triangle], bins: &[0] };
+        let visible = vec![(u32::MAX, 0.9, [1.0, 0.0, 0.0])];
+        let result = band.fallback(pass, &visible, &[true]);
+        assert!(matches!(result, Err(crate::RenderError::TooMuchWork { needed: 1, limit: 0 })));
+        assert_eq!(spent.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     #[test]
@@ -619,6 +668,7 @@ mod tests {
             p: [[-1.0, -1.0], [3.0, -1.0], [-1.0, 3.0]],
             z: [depths[tri]; 3],
             inv_w: [1.0; 3],
+            wide: false,
             w: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
             tri: tri as u32,
             front: true,
