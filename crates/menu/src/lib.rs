@@ -126,7 +126,7 @@ pub use craft_keymap::{Chord, CommandRef};
 pub use craft_ui::menu::Alternate;
 pub use customize::Customization;
 pub use documents::DOCUMENT_COMMAND_PREFIX;
-pub use driver::{Backend, ClipboardKeys, CommandHook, Dispatch, Event, Gate, NativeMenu};
+pub use driver::{Attempt, Backend, ClipboardKeys, CommandHook, Dispatch, Event, Gate, NativeMenu, REBUILD_RETRY, RebuildRetry};
 pub use help::{HelpCommand, HelpLabels, HelpLink, HelpMenu};
 pub use keymap::{ItemState, apply_keymap, apply_state};
 pub use keytips::{KeytipControl, Keytips, KeytipsOutput};

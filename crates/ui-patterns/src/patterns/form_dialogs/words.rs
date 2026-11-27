@@ -12,6 +12,7 @@ craft_ui::words! {
         point_x: template "param.pointX" = "{name} X";
         point_y: template "param.pointY" = "{name} Y";
         grid_cell: template "param.gridCell" = "{name} {row}, {column}";
+        opacity: template "param.opacity" = "{name} opacity";
         choose_color: "param.chooseColor" = "Choose…";
         help: "param.help" = "Help";
     }
