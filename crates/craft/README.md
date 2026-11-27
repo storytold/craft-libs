@@ -34,4 +34,4 @@ Not in the facade, because they are tools or test harnesses: `craft-ui-gallery`,
 
 ## egui fork
 
-`craft::egui_fork::{GIT, REV}` name the egui fork the library is built with, and `check_lockfile(lock)` checks that an app's `Cargo.lock` takes every egui package from it. An app's xtask calls it in its `ci` and `check` commands. The app's workspace must also patch egui to this fork, since `[patch]` applies only at the workspace root.
+`craft::egui_fork::{GIT, REV}` name the egui fork the library is built with, and `check_lockfile(lock)` checks that an app's `Cargo.lock` takes every egui package from it. An app's xtask calls it in its `ci` and `check` commands. The app's workspace must also patch egui to this fork, since `[patch]` applies only at the workspace root, and winit to `craft::egui_fork::{WINIT_GIT, WINIT_REV}`: the fork's egui-winit calls winit's `with_panel` on macOS, which crates.io winit lacks. `check_lockfile` checks winit too.
