@@ -254,10 +254,10 @@ fn the_default_button_follows_the_field_that_holds_enter() {
     assert_eq!(default(&dialog), (false, false), "a click into a stop's position: Enter takes the position");
 }
 
-/// The Tab stop position box shows the next free step while no stop is selected (as when the dialog opens: the default
-/// interval with no stops), and the selected stop's position, as in Word.
+/// The Tab stop position box shows the next free step until a position is typed (the default interval with no stops),
+/// and moves on after Set; selecting a stop does not change it.
 #[trial]
-fn the_tab_stop_position_box_shows_the_selected_stop() {
+fn the_tab_stop_position_box_shows_the_next_free_step() {
     let stops = vec![stop(72.0, TabAlign::Left, TabLeader::None), stop(144.0, TabAlign::Left, TabLeader::None)];
     let (mut fixture, dialog, _) = shown(TabStopsDialog::new(stops, 36.0).bare(true));
     let shown_in_box = |fixture: &Fixture| {
@@ -272,10 +272,10 @@ fn the_tab_stop_position_box_shows_the_selected_stop() {
     assert!(shown_in_box(&fixture).contains("216"), "after Set, the next free step: {:?}", shown_in_box(&fixture));
     dialog.borrow_mut().select(Some(1));
     fixture.idle(4);
-    assert!(shown_in_box(&fixture).contains("144"), "the box follows the selection: {:?}", shown_in_box(&fixture));
+    assert!(shown_in_box(&fixture).contains("216"), "selecting a stop leaves the box alone: {:?}", shown_in_box(&fixture));
     press(&mut fixture, "Clear");
     // Stops at 72 and 180, 144 cleared: the next free step is 216.
-    assert!(shown_in_box(&fixture).contains("216"), "with nothing selected, the box shows the next free step: {:?}", shown_in_box(&fixture));
+    assert!(shown_in_box(&fixture).contains("216"), "after Clear, the next free step: {:?}", shown_in_box(&fixture));
     // Leaving the box does not take the step it shows as typed: Set adds that step.
     press(&mut fixture, "Tab stop position:");
     press(&mut fixture, "Set");

@@ -99,8 +99,8 @@ const FALLBACK_INTERVAL: f32 = 36.0;
 ///   leader `Select` whose options read as Word's list does ("1 ……"). Editing the position keeps the rows in order
 ///   until the edit ends, then [`TabStopsDialog::normalize`] restores position order and merges stops moved onto one
 ///   another (the edited row wins).
-/// - The Tab stop position box shows the selected stop's position, as in Word; with none selected (as when the dialog
-///   opens), the next free step, where Set puts a stop: the default interval when there are no stops. Set puts a stop at the box's position, or, when a stop already holds it (or the box is
+/// - The Tab stop position box shows the position typed there, or else the next free step, where Set puts a stop: the
+///   default interval when there are no stops. After Set it moves on to the next free step. Set puts a stop at the box's position, or, when a stop already holds it (or the box is
 ///   empty), at the next free multiple of the default interval after the last stop; the new stop is left aligned, no
 ///   leader, selected. Clear moves the selected stop to "to be cleared"; Clear All clears every stop.
 /// - Positions are clamped to ±[`MAX_POSITION`]; at most [`MAX_STOPS`] stops are read from a paragraph.
@@ -251,12 +251,9 @@ impl TabStopsDialog {
         self.edited = Some(at);
     }
 
-    /// Selects the stop at index `at`, or none. As in Word, the Tab stop position box shows a selected stop's position.
+    /// Selects the stop at index `at`, or none.
     pub fn select(&mut self, at: Option<usize>) {
         self.selected = at.filter(|at| *at < self.stops.len());
-        if let Some(stop) = self.selected.map(|at| self.stops[at]) {
-            self.typed_position = Some(stop.position);
-        }
     }
 
     /// Clear: the selected stop moves to "to be cleared".
@@ -265,7 +262,6 @@ impl TabStopsDialog {
         let stop = self.stops.remove(at);
         self.cleared.push(stop.position);
         self.selected = None;
-        self.typed_position = None;
         self.edited = None;
     }
 
@@ -273,7 +269,6 @@ impl TabStopsDialog {
     pub fn clear_all(&mut self) {
         self.cleared.extend(self.stops.drain(..).map(|stop| stop.position));
         self.selected = None;
-        self.typed_position = None;
         self.edited = None;
     }
 
