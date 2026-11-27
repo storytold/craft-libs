@@ -80,6 +80,11 @@ impl App {
 
 /// An open dialog with two check boxes over the document, whose events go to the app's gesture host.
 fn dialog() -> (Fixture, Rc<RefCell<App>>) {
+    shown_dialog(false)
+}
+
+/// The same dialog, drawn `bare` (inline, as in a window of its own) when asked.
+fn shown_dialog(bare: bool) -> (Fixture, Rc<RefCell<App>>) {
     let app = Rc::new(RefCell::new(App { open: true, ..App::default() }));
     let state = app.clone();
     let mut fixture = Fixture::new(move |ui| {
@@ -87,23 +92,24 @@ fn dialog() -> (Fixture, Rc<RefCell<App>>) {
         app.drain(ui.ctx());
         let App { doc, host, open, shown, .. } = &mut *app;
         let values = doc.values;
-        Dialog::new(TITLE)
+        let dialog = Dialog::new(TITLE)
             .opened(Bind::bound(open))
             .outer_gesture(true)
-            .buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)])
-            .show(ui, |ui, _| {
-                shown.clear();
-                let snap = Checkbox::new(Bind::given(values.snap)).label("Snap").show(ui);
-                shown.push(snap.shown.clone());
-                for event in snap.events {
-                    host.handle(doc, event, |doc, snap| doc.set(Values { snap, ..doc.values }));
-                }
-                let grid = Checkbox::new(Bind::given(values.grid)).label("Show Grid").show(ui);
-                shown.push(grid.shown.clone());
-                for event in grid.events {
-                    host.handle(doc, event, |doc, grid| doc.set(Values { grid, ..doc.values }));
-                }
-            });
+            .buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)]);
+        let dialog = if bare { dialog.bare() } else { dialog };
+        dialog.show(ui, |ui, _| {
+            shown.clear();
+            let snap = Checkbox::new(Bind::given(values.snap)).label("Snap").show(ui);
+            shown.push(snap.shown.clone());
+            for event in snap.events {
+                host.handle(doc, event, |doc, snap| doc.set(Values { snap, ..doc.values }));
+            }
+            let grid = Checkbox::new(Bind::given(values.grid)).label("Show Grid").show(ui);
+            shown.push(grid.shown.clone());
+            for event in grid.events {
+                host.handle(doc, event, |doc, grid| doc.set(Values { grid, ..doc.values }));
+            }
+        });
     });
     fixture.settle();
     (fixture, app)
@@ -202,4 +208,42 @@ fn a_close_through_the_open_binding_takes_the_dialogs_field_edits_back() {
     assert!(!app.host.is_active(), "the close ends the dialog's gesture");
     assert!(app.doc.steps.is_empty(), "the close leaves no undo step: {:?}", app.doc.steps);
     assert_eq!(app.doc.values, Values::default(), "the close restores both values");
+}
+
+/// A bare dialog (inline, for a window of its own) runs the same outer gesture: OK keeps the edits as one step, Cancel
+/// and Escape take them back.
+#[trial]
+fn a_bare_dialog_keeps_or_takes_back_its_field_edits_as_one_step() {
+    let closes: [Close<'_>; 3] = [
+        ("OK", |fixture| {
+            let ok = fixture.by_label("OK").expect("the OK button is shown");
+            fixture.click(&ok);
+        }),
+        ("Cancel", |fixture| {
+            let cancel = fixture.by_label("Cancel").expect("the Cancel button is shown");
+            fixture.click(&cancel);
+        }),
+        ("Escape", |fixture| {
+            fixture.key(Key::Escape, Modifiers::NONE);
+        }),
+    ];
+    for (name, close) in closes {
+        let (mut fixture, app) = shown_dialog(true);
+        edit_both(&mut fixture, &app);
+        close(&mut fixture);
+        fixture.settle();
+        let mut app = app.borrow_mut();
+        app.drain(fixture.ctx());
+        assert!(!app.open, "{name} closes the dialog");
+        let ok = name == "OK";
+        let end = if ok { "Commit" } else { "Cancel" };
+        assert_eq!(outer_steps(&app), (vec!["Begin", end], true), "{name}: one outer gesture: {:?}", app.outer);
+        if ok {
+            assert_eq!(app.doc.steps, vec![(Values::default(), Some(TITLE.to_owned()))], "OK leaves one step");
+            assert_eq!(app.doc.values, Values { snap: true, grid: true }, "OK keeps both edits");
+        } else {
+            assert!(app.doc.steps.is_empty(), "{name} leaves no undo step: {:?}", app.doc.steps);
+            assert_eq!(app.doc.values, Values::default(), "{name} restores both values");
+        }
+    }
 }
