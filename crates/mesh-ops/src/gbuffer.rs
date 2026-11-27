@@ -133,38 +133,35 @@ fn nearest_boundary_weights(corners: [DVec2; 3], p: DVec2) -> Option<([Expansion
         }
         result
     };
-    let mut best: Option<(f64, [Expansion<16>; 3], f64)> = None;
+    let orientation = edge(corners[0], corners[1], corners[2]);
+    if orientation == 0.0 || !orientation.is_finite() {
+        return None;
+    }
+    let mut nearest_vertex = [true; 3];
     for (first, second) in [(0, 1), (1, 2), (2, 0)] {
         let (a, b) = (corners[first], corners[second]);
-        let delta = b - a;
-        let length2 = delta.length_squared();
-        if length2 == 0.0 || !length2.is_finite() {
+        let (from_a, from_b) = (dot(a, b), dot(b, a));
+        let (past_a, past_b) = (from_a.value() > 0.0, from_b.value() > 0.0);
+        nearest_vertex[first] &= !past_a;
+        nearest_vertex[second] &= !past_b;
+        if !past_a || !past_b || edge(a, b, p) * orientation.signum() > 0.0 {
             continue;
         }
-        let (from_a, from_b) = (dot(a, b), dot(b, a));
         let mut weights = [Expansion::new(); 3];
-        let (distance2, denominator) = if from_a.value() <= 0.0 {
-            weights[first].add(1.0);
-            ((a - p).length_squared(), 1.0)
-        } else if from_b.value() <= 0.0 {
-            weights[second].add(1.0);
-            ((b - p).length_squared(), 1.0)
-        } else {
-            weights[first] = from_b;
-            weights[second] = from_a;
-            let mut sum = Expansion::<32>::new();
-            for weight in [from_a, from_b] {
-                for &part in &weight.parts[..weight.len] {
-                    sum.add(part);
-                }
+        weights[first] = from_b;
+        weights[second] = from_a;
+        let mut sum = Expansion::<32>::new();
+        for weight in [from_a, from_b] {
+            for &part in &weight.parts[..weight.len] {
+                sum.add(part);
             }
-            ((DVec2::new(-delta.y, delta.x) * (edge(a, b, p) / length2)).length_squared(), sum.value())
-        };
-        if distance2.is_finite() && denominator.is_finite() && denominator > 0.0 && best.as_ref().is_none_or(|(old, _, _)| distance2 < *old) {
-            best = Some((distance2, weights, denominator));
         }
+        return Some((weights, sum.value()));
     }
-    best.map(|(_, weights, denominator)| (weights, denominator))
+    let nearest = nearest_vertex.into_iter().position(|candidate| candidate)?;
+    let mut weights = [Expansion::new(); 3];
+    weights[nearest].add(1.0);
+    Some((weights, 1.0))
 }
 
 fn interpolate<const N: usize>(weights: &[Expansion<16>; 3], values: [[f64; N]; 3], denominator: f64) -> [f64; N] {
@@ -858,6 +855,29 @@ mod tests {
         assert!(surface.pos.is_finite());
         assert_eq!(surface.pos.x, f32::MAX);
         assert!((surface.pos.y - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn diagonal_boundary_texels_remain_covered_across_raster_bands() {
+        let offset = 2.0_f32.powi(-50);
+        let mesh = mesh_with_uvs([[offset, offset], [1.0, 1.0], [0.0, 1.0]]);
+        let buffer = UvGBuffer::new(&mesh, 0, 64, 64);
+        for coordinate in 0..64 {
+            let texel = coordinate * 65;
+            assert!(buffer.covered(texel), "diagonal texel {coordinate}");
+            assert_eq!(buffer.barycentrics(texel).unwrap()[2], 0.0);
+        }
+    }
+
+    #[test]
+    fn closest_boundary_projection_preserves_a_small_weight_at_an_endpoint() {
+        let mut mesh = mesh_with_uvs([[0.5, 0.5 + 2.0_f32.powi(-24)], [1.0, 1.0], [-15.5, 0.5]]);
+        mesh.positions = vec![Vec3::ZERO, Vec3::X, Vec3::Y];
+        let first = UvGBuffer::new(&mesh, 0, 1, 1).surface(&mesh, 0).unwrap();
+        assert!(first.pos.y > 0.0);
+        mesh.indices.rotate_left(1);
+        let rotated = UvGBuffer::new(&mesh, 0, 1, 1).surface(&mesh, 0).unwrap();
+        assert_eq!(first.pos, rotated.pos);
     }
 
     #[test]

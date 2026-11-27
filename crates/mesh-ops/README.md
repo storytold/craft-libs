@@ -26,7 +26,10 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   first and returns an error without changing the mesh when a check fails. Charts are projected
   and packed in `f64`. Overlapping projected interiors get separate charts. Padding uses the
   requested resolution, with a minimum resolution of 16. A layout that cannot fit returns an
-  error without changing the mesh. Missing normals use area-weighted `f64` accumulation and normalization.
+  error without changing the mesh. `auto_unwrap` also returns an error without changing the mesh
+  if stored UVs collapse a nondegenerate face or lose requested border padding.
+  Padding must be finite and nonnegative. Integer resolutions remain exact during packing.
+  Missing normals use area-weighted `f64` accumulation and normalization.
 - **UV G-buffer.** `UvGBuffer` records, for each texel of one material's UV space, the triangle
   and barycentrics under the texel center. `surface` reads its position, normal and tangent frame.
   `surface_at` interpolates a triangle at supplied barycentric weights.
@@ -51,6 +54,7 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   smallest half extent; an invalid bevel returns `GeomError::Invalid`.
   Sphere and torus seam endpoints have identical positions and retain distinct UV endpoints.
   Cylinder caps share exact rim positions with the side, and rounded-box faces share exact boundary positions.
+  Lathe profile lengths and direction normalization use `f64` before the UVs and normals are stored as `f32`.
 - **BVH.** `Bvh` is a binned SAH tree on all three axes with a median split when no split beats a
   leaf. It answers closest-hit, any-hit and filtered ray casts, nearest-point queries and box
   queries. Ray tests use double precision and exact signs near triangle edges. Slab intervals

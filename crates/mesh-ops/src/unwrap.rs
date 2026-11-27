@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use glam::{DVec2, DVec3, Vec2, Vec3};
+use glam::{DVec2, DVec3, Vec3};
 
 use crate::{GeomError, Mesh, Result};
 
@@ -26,7 +26,8 @@ const CHART_COS: f32 = 0.5;
 pub fn weld_ids(positions: &[Vec3]) -> Vec<u32> {
     let (lo, hi) =
         positions.iter().map(|p| p.as_dvec3()).fold((DVec3::splat(f64::MAX), DVec3::splat(f64::MIN)), |(lo, hi), p| (lo.min(p), hi.max(p)));
-    let cell = ((hi - lo).length() * 1e-6).max(1e-12);
+    let diagonal = (hi - lo).length();
+    let cell = if diagonal > 0.0 && diagonal.is_finite() { diagonal * 1e-6 } else { 1.0 };
     let mut map: HashMap<[i64; 3], u32> = HashMap::with_capacity(positions.len());
     positions
         .iter()
@@ -47,6 +48,33 @@ pub fn all_triangles_degenerate(mesh: &Mesh) -> bool {
             [a, b, c] => p(a) == p(b) || p(a) == p(c) || p(b) == p(c),
             _ => true,
         })
+}
+
+fn face_has_area(positions: [Vec3; 3]) -> bool {
+    (0..3).any(|axis| {
+        let next = (axis + 1) % 3;
+        let [a, b, c] = positions.map(|position| [f64::from(position[axis]), f64::from(position[next])]);
+        let products = [a[0] * b[1], b[0] * c[1], c[0] * a[1], -a[1] * b[0], -b[1] * c[0], -c[1] * a[0]];
+        let (mut expansion, mut len) = ([0.0; 6], 0);
+        for mut value in products {
+            let mut kept = 0;
+            for index in 0..len {
+                let part = expansion[index];
+                let sum = value + part;
+                let part_virtual = sum - value;
+                let value_virtual = sum - part_virtual;
+                let error = (value - value_virtual) + (part - part_virtual);
+                if error != 0.0 {
+                    expansion[kept] = error;
+                    kept += 1;
+                }
+                value = sum;
+            }
+            expansion[kept] = value;
+            len = kept + 1;
+        }
+        expansion[..len].iter().any(|part| *part != 0.0)
+    })
 }
 
 #[derive(Clone)]
@@ -131,6 +159,11 @@ fn check_input(mesh: &Mesh) -> Result<()> {
     if all_triangles_degenerate(mesh) {
         return Err(GeomError::Invalid("every triangle of the mesh is degenerate".into()));
     }
+    if !mesh.indices.is_empty()
+        && mesh.indices.as_chunks::<3>().0.iter().all(|vertices| !face_has_area(vertices.map(|vertex| mesh.positions[vertex as usize])))
+    {
+        return Err(GeomError::Invalid("every triangle of the mesh is degenerate".into()));
+    }
     Ok(())
 }
 
@@ -158,11 +191,13 @@ fn face_materials(mesh: &Mesh) -> Result<Vec<usize>> {
 }
 
 /// Replace the UVs of `mesh` with an automatic non-overlapping layout: each material gets its
-/// own 0..1 space with charts at least `padding_texels` (minimum 1, which a NaN counts as) away
+/// own 0..1 space with charts at least `padding_texels` (effective minimum 1) away
 /// from each other and the borders at `resolution`. Vertices are split at chart borders;
 /// tangents are recomputed. Returns the number of charts.
 /// The effective resolution is at least 16. A layout that cannot fit with the requested
 /// padding returns an error without changing the mesh.
+/// Padding must be finite and nonnegative. Stored UVs that collapse a nondegenerate face
+/// or lose requested border padding return an error without changing the mesh.
 ///
 /// A mesh that fails a check is returned unchanged: indices, triangle-aligned submesh ranges
 /// that cover every triangle, materials, no
@@ -173,6 +208,9 @@ fn face_materials(mesh: &Mesh) -> Result<Vec<usize>> {
 /// error as well.
 pub fn auto_unwrap(mesh: &mut Mesh, padding_texels: f32, resolution: u32) -> Result<usize> {
     check_input(mesh)?;
+    if !padding_texels.is_finite() || padding_texels < 0.0 {
+        return Err(GeomError::Invalid("UV padding must be finite and nonnegative".into()));
+    }
     // Kept apart from the mesh until the layout is packed, so an error leaves the mesh as it was.
     let computed_normals = if mesh.normals.len() != mesh.positions.len() { Some(smooth_normals(mesh)) } else { None };
     let old_normals = computed_normals.as_deref().unwrap_or(&mesh.normals);
@@ -322,7 +360,7 @@ pub fn auto_unwrap(mesh: &mut Mesh, padding_texels: f32, resolution: u32) -> Res
     }
     for (m, ids) in by_material {
         let sizes: Vec<DVec2> = ids.iter().map(|i| charts[*i].size()).collect();
-        let (s, res, offsets) = pack(&sizes, resolution.max(16) as f32, pad)?;
+        let (s, res, offsets) = pack(&sizes, f64::from(resolution.max(16)), pad)?;
         for (i, o) in ids.iter().zip(offsets) {
             charts[*i].offset = o;
         }
@@ -330,12 +368,12 @@ pub fn auto_unwrap(mesh: &mut Mesh, padding_texels: f32, resolution: u32) -> Res
     }
 
     // Rebuild vertices: one per (vertex, chart).
-    let mut remap: HashMap<(u32, u32), u32> = HashMap::with_capacity(mesh.positions.len() * 2);
+    let mut remap: HashMap<(u32, u32), u32> = HashMap::with_capacity(mesh.positions.len().saturating_mul(2).min(mesh.indices.len()));
     let (mut positions, mut normals, mut uvs, mut colors) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut indices = Vec::with_capacity(mesh.indices.len());
     for (t, &c) in chart_of.iter().enumerate() {
         let Some(ch) = charts.get(c as usize) else { continue };
-        let (s, res) = scale.get(&ch.material).copied().unwrap_or((0.0, 1.0f32));
+        let (s, res) = scale.get(&ch.material).copied().unwrap_or((0.0, 1.0));
         for v in mesh.tri(t).unwrap_or([0; 3]) {
             let idx = *remap.entry((v as u32, c)).or_insert_with(|| {
                 let q = ch.local(pos(v));
@@ -346,10 +384,22 @@ pub fn auto_unwrap(mesh: &mut Mesh, padding_texels: f32, resolution: u32) -> Res
                 if let Some(c) = mesh.colors.get(v) {
                     colors.push(*c);
                 }
-                uvs.push((texel / f64::from(res)).as_vec2().clamp(Vec2::ZERO, Vec2::ONE));
+                uvs.push((texel / res).as_vec2());
                 (positions.len() - 1) as u32
             });
             indices.push(idx);
+        }
+        let stored = [indices[indices.len() - 3], indices[indices.len() - 2], indices[indices.len() - 1]].map(|index| uvs[index as usize]);
+        let margin = f64::from(pad) / res;
+        if stored.iter().any(|uv| {
+            let uv = uv.as_dvec2();
+            !uv.is_finite() || uv.min_element() < margin || uv.max_element() > 1.0 - margin
+        }) {
+            return Err(GeomError::Invalid("UV chart padding cannot be represented in stored coordinates".into()));
+        }
+        let original = mesh.tri(t).unwrap_or([0; 3]).map(pos);
+        if face_has_area(original) && !face_has_area(stored.map(|uv| uv.extend(0.0))) {
+            return Err(GeomError::Invalid("UV triangle area cannot be represented in stored coordinates".into()));
         }
         if positions.len() > MAX_UNWRAP_VERTICES {
             return Err(GeomError::Invalid(format!("unwrapping would produce more than {MAX_UNWRAP_VERTICES} vertices")));
@@ -378,14 +428,13 @@ pub fn auto_unwrap(mesh: &mut Mesh, padding_texels: f32, resolution: u32) -> Res
 /// resolution used, texel offset per rectangle). A layout without room for a positive scale
 /// returns an error. The sizes and the scale are in
 /// `f64`, where the scale of any chart of finite `f32` positions is finite and above zero.
-fn pack(sizes: &[DVec2], res: f32, pad: f32) -> Result<(f64, f32, Vec<DVec2>)> {
+fn pack(sizes: &[DVec2], res: f64, pad: f32) -> Result<(f64, f64, Vec<DVec2>)> {
     let mut order: Vec<usize> = (0..sizes.len()).collect();
     order.sort_by(|a, b| sizes[*b].y.total_cmp(&sizes[*a].y));
     let mut out = vec![DVec2::ZERO; sizes.len()];
     let pad = f64::from(pad);
     // Shelf-place every rectangle at scale `s` into `out`; false when they do not fit.
-    let place = |s: f64, res: f32, out: &mut [DVec2]| -> bool {
-        let res = f64::from(res);
+    let place = |s: f64, res: f64, out: &mut [DVec2]| -> bool {
         let (mut x, mut y, mut shelf) = (0.0f64, 0.0f64, 0.0f64);
         for &i in &order {
             let r = sizes[i] * s + DVec2::splat(2.0 * pad);
@@ -413,9 +462,19 @@ fn pack(sizes: &[DVec2], res: f32, pad: f32) -> Result<(f64, f32, Vec<DVec2>)> {
         if largest <= 0.0 {
             return Ok((0.0, res, out));
         }
-        let (mut lo, mut hi) = (0.0f64, (f64::from(res) - 2.0 * pad).max(0.0) / largest);
+        let (mut lo, mut hi) = (0.0f64, (res - 2.0 * pad).max(0.0) / largest);
         if hi > 0.0 && place(hi, res, &mut out) {
             lo = hi;
+        }
+        while lo == 0.0 && hi > 0.0 {
+            let mid = hi * 0.5;
+            if mid == 0.0 || !sizes.iter().any(|size| (*size * mid + DVec2::splat(2.0 * pad)).max_element() > 2.0 * pad) {
+                break;
+            }
+            if place(mid, res, &mut out) { lo = mid } else { hi = mid }
+        }
+        if lo == 0.0 {
+            return Err(GeomError::Invalid("UV charts cannot fit with the requested padding and resolution".into()));
         }
         for _ in 0..40 {
             if hi - lo <= lo * 1e-4 {
@@ -448,10 +507,89 @@ impl Mesh {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn padding_rejects_invalid_values_without_changing_the_mesh() {
+        for padding in [f32::NAN, f32::NEG_INFINITY, f32::INFINITY, -1.0] {
+            let mut mesh = quad();
+            let before = mesh.clone();
+            assert!(auto_unwrap(&mut mesh, padding, 16).is_err(), "padding={padding}");
+            assert_eq!(mesh, before);
+        }
+    }
+
+    #[test]
+    fn packing_keeps_integer_resolution_above_float_precision() {
+        let (scale, resolution, _) = pack(&[DVec2::ONE], 16_777_217u32 as _, 8_388_608.0).unwrap();
+        assert!(scale > 0.0);
+        assert_eq!(resolution, 16_777_217.0);
+    }
+
+    #[test]
+    fn padding_only_placements_do_not_count_as_positive_scale() {
+        assert!(pack(&[DVec2::ONE; 2], 16.0, 4.0).is_err());
+    }
+
+    #[test]
+    fn unrepresentable_stored_chart_areas_preserve_the_input_mesh() {
+        let mut mesh = Mesh::from_parts(
+            vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::X * 3.0, Vec3::new(3.0, 1e-20, 0.0), Vec3::new(3.0, 0.0, 1e-20)],
+            Some(vec![Vec3::Z, Vec3::Z, Vec3::Z, Vec3::X, Vec3::X, Vec3::X]),
+            Vec::new(),
+            vec![0, 1, 2, 3, 4, 5],
+            "m",
+        )
+        .unwrap();
+        let before = mesh.clone();
+        assert!(auto_unwrap(&mut mesh, 4.0, 1024).is_err());
+        assert_eq!(mesh, before);
+    }
+
+    #[test]
+    fn unrepresentable_border_padding_preserves_the_input_mesh() {
+        let mut mesh = quad();
+        let before = mesh.clone();
+        assert!(auto_unwrap(&mut mesh, 1.0, 1 << 26).is_err());
+        assert_eq!(mesh, before);
+    }
+
+    #[test]
+    fn packing_finds_a_positive_lower_bound_before_refinement() {
+        let sizes = vec![DVec2::ONE; 511 * 511];
+        let pad = 1.0 + 262657.0 / 8388608.0;
+        let (scale, resolution, offsets) = pack(&sizes, 1054.0, pad).unwrap();
+        assert!(scale > 0.0);
+        for offset in offsets {
+            assert!((offset + DVec2::splat(scale + 2.0 * f64::from(pad))).max_element() <= resolution);
+        }
+    }
+
+    #[test]
     fn input_validation_rejects_repeated_triangle_ranges() {
         let mut mesh = crate::primitives::cube(1.0).unwrap();
         mesh.submeshes.push(mesh.submeshes[0].clone());
         assert!(check_input(&mesh).is_err());
+    }
+
+    #[test]
+    fn tiny_quads_keep_their_shared_chart_edge() {
+        let mut mesh = quad();
+        for position in &mut mesh.positions {
+            *position *= 2.0_f32.powi(-42);
+        }
+        assert_eq!(auto_unwrap(&mut mesh, 4.0, 16).unwrap(), 1);
+        assert_eq!(weld_ids(&[Vec3::ONE; 4]), vec![0; 4]);
+    }
+
+    #[test]
+    fn nonempty_all_collinear_meshes_are_rejected_unchanged() {
+        for positions in [vec![Vec3::ZERO, Vec3::X, Vec3::X * 2.0], {
+            let d = Vec3::new(1.0, 17.0, 0.0);
+            vec![Vec3::ZERO, d * (3.0 * 2.0_f32.powi(-49)), d]
+        }] {
+            let mut mesh = Mesh::from_parts(positions, Some(vec![Vec3::Z; 3]), Vec::new(), vec![0, 1, 2], "m").unwrap();
+            let before = mesh.clone();
+            assert!(auto_unwrap(&mut mesh, 4.0, 256).is_err());
+            assert_eq!(mesh, before);
+        }
     }
 
     #[test]
@@ -509,7 +647,7 @@ mod tests {
         assert!(pack(&[DVec2::ONE], 16.0, 8.0).is_err());
         let (_, resolution, offsets) = pack(&[DVec2::ONE; 2], 128.0, 4.0).unwrap();
         assert_eq!(resolution, 128.0);
-        assert_eq!((offsets[0].x + 4.0) / f64::from(resolution) * 128.0, 4.0);
+        assert_eq!((offsets[0].x + 4.0) / resolution * 128.0, 4.0);
     }
 
     #[test]

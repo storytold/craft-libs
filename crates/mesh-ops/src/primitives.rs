@@ -3,7 +3,7 @@
 
 use std::f32::consts::{PI, TAU};
 
-use glam::{Vec2, Vec3};
+use glam::{DVec2, Vec2, Vec3};
 
 use crate::mesh::{Mesh, SubMesh};
 use crate::{GeomError, Result};
@@ -191,25 +191,28 @@ fn lathe_into(b: &mut Builder, center: Vec3, profile: &[(f32, f32)], segs: usize
     if profile.len() < 2 {
         return;
     }
-    let mut len = vec![0.0f32];
+    let mut len = vec![0.0f64];
     for w in profile.windows(2) {
-        let d = Vec2::new(w[1].0 - w[0].0, w[1].1 - w[0].1).length();
+        let d = DVec2::new(f64::from(w[1].0) - f64::from(w[0].0), f64::from(w[1].1) - f64::from(w[0].1)).length();
         len.push(len.last().copied().unwrap_or(0.0) + d);
     }
-    let total = len.last().copied().unwrap_or(1.0).max(1e-6);
+    let total = len.last().copied().filter(|total| *total > 0.0).unwrap_or(1.0);
     let rows = profile.len() - 1;
     b.grid(rows, segs, |i, j| {
         let (rad, y) = profile[i];
         // Profile tangent (downwards) → outward normal in the (r, y) plane.
         let prev = profile[i.saturating_sub(1)];
         let next = profile[(i + 1).min(rows)];
-        let t = Vec2::new(next.0 - prev.0, next.1 - prev.1).try_normalize().unwrap_or(Vec2::NEG_Y);
+        let t = DVec2::new(f64::from(next.0) - f64::from(prev.0), f64::from(next.1) - f64::from(prev.1))
+            .try_normalize()
+            .map(|t| t.as_vec2())
+            .unwrap_or(Vec2::NEG_Y);
         let n2 = Vec2::new(-t.y, t.x);
         let u = j as f32 / segs as f32;
         let dir = circle_sample(j, segs);
         let p = center + dir * rad + Vec3::Y * y;
         let n = dir * n2.x + Vec3::Y * n2.y;
-        (p, n, r.map(u, len[i] / total))
+        (p, n, r.map(u, (len[i] / total) as f32))
     });
 }
 
@@ -517,6 +520,30 @@ pub const BUILTINS: [(&str, &str); 9] = [
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lathe_profile_uvs_are_independent_of_height() {
+        let side_range = |mesh: &Mesh| {
+            mesh.uvs
+                .iter()
+                .zip(&mesh.normals)
+                .filter(|(_, normal)| normal.y.abs() < 0.5)
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), (uv, _)| (lo.min(uv.y), hi.max(uv.y)))
+        };
+        let expected = side_range(&cylinder(1.0, 1.0, 16));
+        let actual = side_range(&cylinder(1.0, 1e-20, 16));
+        assert!((actual.0 - expected.0).abs() < 1e-6 && (actual.1 - expected.1).abs() < 1e-6, "{actual:?} {expected:?}");
+    }
+
+    #[test]
+    fn tall_cylinders_keep_finite_profile_uvs_and_unit_normals() {
+        for segments in [3, 16] {
+            let mesh = cylinder(1.0, 1e20, segments);
+            mesh.validate().unwrap();
+            assert!(mesh.uvs.iter().all(|uv| uv.is_finite() && uv.min_element() >= 0.0 && uv.max_element() <= 1.0));
+            assert!(mesh.normals.iter().all(|normal| normal.is_finite() && (normal.length_squared() - 1.0).abs() < 1e-5));
+        }
+    }
+
     #[test]
     fn accepted_small_box_dimensions_are_preserved() {
         let cube = cube(1e-7).unwrap();
