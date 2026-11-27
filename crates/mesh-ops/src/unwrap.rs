@@ -83,18 +83,18 @@ impl Chart {
 /// Area-weighted smooth normals over the index buffer, as [`Mesh::compute_normals`] computes
 /// them, returned instead of stored.
 fn smooth_normals(mesh: &Mesh) -> Vec<Vec3> {
-    let mut normals = vec![Vec3::ZERO; mesh.positions.len()];
+    let mut normals = vec![DVec3::ZERO; mesh.positions.len()];
     for &[a, b, c] in mesh.indices.as_chunks::<3>().0 {
         let (a, b, c) = (a as usize, b as usize, c as usize);
         let (Some(pa), Some(pb), Some(pc)) = (mesh.positions.get(a), mesh.positions.get(b), mesh.positions.get(c)) else { continue };
-        let face = (*pb - *pa).cross(*pc - *pa);
+        let face = (pb.as_dvec3() - pa.as_dvec3()).cross(pc.as_dvec3() - pa.as_dvec3());
         for v in [a, b, c] {
             if let Some(x) = normals.get_mut(v) {
                 *x += face;
             }
         }
     }
-    normals.into_iter().map(|v| v.try_normalize().unwrap_or(Vec3::Y)).collect()
+    normals.into_iter().map(|v| v.try_normalize().map(|normal| normal.as_vec3()).unwrap_or(Vec3::Y)).collect()
 }
 
 /// The checks [`auto_unwrap`] makes before it changes anything. The size limits come first.
@@ -446,6 +446,14 @@ impl Mesh {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn missing_normals_keep_tiny_and_large_face_directions() {
+        for scale in [1e-25, 1e25] {
+            let mesh = Mesh { positions: vec![Vec3::ZERO, Vec3::Y * scale, Vec3::Z * scale], indices: vec![0, 1, 2], ..Mesh::default() };
+            assert_eq!(smooth_normals(&mesh), vec![Vec3::X; 3], "scale={scale}");
+        }
+    }
+
     #[test]
     fn tiny_coincident_sheets_keep_separate_charts() {
         let side = 2.0f32.powi(-40);
