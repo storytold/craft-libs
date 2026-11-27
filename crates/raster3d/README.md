@@ -62,6 +62,7 @@ app.
   Each is shaded per fragment, depth-tested against the opaque surfaces and blended over them. A
   triangle whose material is shadows-only belongs in the transparent range; `try_render` returns an
   error for one in the opaque range unless its material's `visible` is false.
+  Valid surfaces with opacity below 1 use the transparent range, including opaque and mask alpha modes.
 - **Facing.** A triangle whose screen-space winding is negative with y down
   (counterclockwise on the screen) faces the camera. A material with `double_sided` false does not
   draw back faces; a double-sided material shades a back face with its normal reversed.

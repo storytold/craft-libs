@@ -31,6 +31,26 @@ fn an_empty_scene_renders_transparent_with_infinite_depth() {
 }
 
 #[test]
+fn almost_opaque_surfaces_still_blend_with_art_behind_them() {
+    for alpha_mode in [0, 1] {
+        for opacity in [0.999, 0.9995, f32::from_bits(1.0f32.to_bits() - 1)] {
+            let mut scene =
+                quad_scene(8, 8, &[([0.0, 0.0, 8.0, 8.0], 100.0, [0.0, 0.0, 1.0, 1.0]), ([0.0, 0.0, 8.0, 8.0], 50.0, [1.0, 0.0, 0.0, 1.0])]);
+            scene.materials[1].alpha_mode = alpha_mode;
+            scene.materials[1].opacity = opacity;
+            scene.opaque_count = if scene.materials[1].transparent() { 6 } else { 12 };
+            let mut control = scene.clone();
+            control.materials[1].alpha_mode = 2;
+            control.opaque_count = 6;
+            let expected = try_render(&control, &Limits::default()).unwrap();
+            assert!(expected.color[27][2] > 0.0 && expected.color[27][3] == 1.0);
+            let actual = try_render(&scene, &Limits::default()).unwrap();
+            assert_eq!(actual.color, expected.color, "alpha mode {alpha_mode}, opacity {opacity} blends the rear blue surface");
+        }
+    }
+}
+
+#[test]
 fn zero_and_oversized_rasters_are_rejected_before_allocating() {
     for (w, h) in [(0, 8), (8, 0), (0, 0)] {
         let s = Scene { width: w, height: h, ..one_quad() };
