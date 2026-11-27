@@ -562,6 +562,11 @@ fn split_at<O: Copy + PartialEq>(
                 .or_else(|| under.iter().find(|t| t.horizontal && free(t) && t.has_room(false, wheel.scroll.x)).map(|t| t.owner))
         })
         .flatten();
+    // A new gesture that starts over a vertical scroll region does not scroll the view under it sideways (a swipe over
+    // a list). A plain wheel over a sideways strip still scrolls the page around it, and Shift's sideways wheel keeps
+    // its taker. This comes before the one-view rule, so the vertical share it keeps can go on to the page.
+    let list_inside = |owner: O| under.iter().take_while(|t| t.owner != owner).any(|t| t.scrolls && t.vertical && !t.horizontal && free(t));
+    let horizontal = horizontal.filter(|owner| held.is_some() || shifted || !list_inside(*owner));
     // One gesture scrolls one view: the running gesture's owner keeps it and an axis it does not take goes nowhere, and
     // a new gesture whose axes would go to two views goes to the inner one alone. A sideways drift of the fingers over
     // a list does not scroll the view under it.
@@ -572,11 +577,6 @@ fn split_at<O: Copy + PartialEq>(
         (None, Some(v), Some(h)) if v != h => (None, Some(h)),
         (None, vertical, horizontal) => (vertical, horizontal),
     };
-    // A new gesture that starts over a vertical scroll region does not scroll the view under it sideways (a swipe over
-    // a list). A plain wheel over a sideways strip still scrolls the page around it, and Shift's sideways wheel keeps
-    // its taker.
-    let list_inside = |owner: O| under.iter().take_while(|t| t.owner != owner).any(|t| t.scrolls && t.vertical && !t.horizontal && free(t));
-    let horizontal = horizontal.filter(|owner| held.is_some() || shifted || !list_inside(*owner));
     let zoom = pinches(&wheel).then(|| under.iter().find(|t| t.zoom && open(t))).flatten().map(|t| t.owner);
     let scroll = scroll_only(wheel);
     let parts = [
@@ -633,6 +633,17 @@ mod tests {
         assert!(fresh.is_empty(), "a new sideways-only gesture over the list scrolls nothing");
         let beside = split(&[canvas, list], pos2(250.0, 250.0), wheel(-5.0, 0.0), WheelFocus::new(None), None, &mut WheelGesture::default(), 0.0);
         assert_eq!(owners(beside), [(1, Vec2::new(-5.0, 0.0))], "a new sideways gesture beside the list scrolls the canvas");
+    }
+
+    #[test]
+    fn a_diagonal_over_a_list_at_its_end_in_a_sideways_strip_scrolls_the_page() {
+        // A page that scrolls vertically, a strip in it that scrolls sideways, and a list in the strip at its end.
+        let page = WheelTaker::new(1u8, rect(300.0)).vertical(true).scrolls(true).room(WheelRoom::new(Vec2::splat(500.0), Vec2::splat(500.0)));
+        let strip = WheelTaker::new(2u8, rect(200.0)).horizontal(true).scrolls(true).room(WheelRoom::new(Vec2::splat(500.0), Vec2::splat(500.0)));
+        let list = WheelTaker::new(3u8, rect(100.0)).vertical(true).scrolls(true).room(WheelRoom::new(Vec2::ZERO, Vec2::ZERO));
+        let shares = split(&[page, strip, list], pos2(10.0, 10.0), wheel(2.0, -6.0), WheelFocus::new(None), None, &mut WheelGesture::default(), 0.0);
+        let owners = shares.iter().map(|(o, w)| (*o, w.scroll)).collect::<Vec<_>>();
+        assert_eq!(owners, [(1, Vec2::new(0.0, -6.0))], "the vertical share goes on to the page and the strip takes nothing");
     }
 
     #[test]
