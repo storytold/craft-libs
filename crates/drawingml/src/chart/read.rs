@@ -1419,7 +1419,7 @@ mod tests {
     fn review_6093532941_title_edit_keeps_same_kind_secondary_axis_and_scale() {
         let xml = same_kind_chart_xml().replace(
             r#"<c:valAx><c:axId val="4"/><c:scaling><c:max val="90"/></c:scaling><c:axPos val="r"/><c:crossAx val="3"/></c:valAx>"#,
-            r#"<c:valAx><c:axId val="4"/><c:scaling><c:min val="2"/><c:max val="90"/></c:scaling><c:delete val="1"/><c:axPos val="r"/><c:numFmt formatCode="0.00%" sourceLinked="0"/><c:crossAx val="3"/><c:majorUnit val="5"/></c:valAx>"#,
+            r#"<c:valAx><c:axId val="4"/><c:scaling><c:max val="90"/><c:min val="2"/></c:scaling><c:delete val="1"/><c:axPos val="r"/><c:numFmt formatCode="0.00%" sourceLinked="0"/><c:crossAx val="3"/><c:majorUnit val="5"/></c:valAx>"#,
         );
         let mut edited = read_chart_xml(xml.as_bytes()).unwrap();
         assert_eq!(edited.kind, ChartType::Column);
