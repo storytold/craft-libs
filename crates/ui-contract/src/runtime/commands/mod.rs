@@ -57,6 +57,7 @@ use craft_keymap::{Chord, Overrides};
 use egui::{Context, Id, ViewportId};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
 /// Commands an app defines at run time (plug-ins, its tool list), all in the app scope ([`Scope::app`]). They join
@@ -448,10 +449,13 @@ impl CommandGate {
 
 /// The app-scope command states an app holds, in a [`Tracked`] it hands to [`CommandInput::states`] every frame. The
 /// runtime reads them again only when the revision moves.
-#[derive(Clone, Debug, Default, PartialEq, PlainData)]
+#[derive(Clone, Default, PlainData)]
 pub struct CommandStates {
     #[plain_data(assume = "command refs and states are plain values; the list is copied on write")]
     states: Arc<Vec<(CommandRef, CommandState)>>,
+    /// The positions in `states` of each command id's entries, so a lookup compares only the entries with its id.
+    #[plain_data(assume = "ids and positions are plain values; the map is copied on write")]
+    by_id: Arc<HashMap<String, Vec<usize>>>,
 }
 
 impl CommandStates {
@@ -463,27 +467,75 @@ impl CommandStates {
     /// Gives `command` `state`, in place of the state it had.
     pub fn set(&mut self, command: impl Into<CommandRef>, state: CommandState) {
         let command = command.into();
-        let states = Arc::make_mut(&mut self.states);
-        match states.iter_mut().find(|(held, _)| *held == command) {
-            Some((_, held)) => *held = state,
-            None => states.push((command, state)),
+        match self.position(&command) {
+            Some(at) => {
+                if let Some((_, held)) = Arc::make_mut(&mut self.states).get_mut(at) {
+                    *held = state;
+                }
+            }
+            None => {
+                let states = Arc::make_mut(&mut self.states);
+                Arc::make_mut(&mut self.by_id).entry(command.id.clone()).or_default().push(states.len());
+                states.push((command, state));
+            }
         }
     }
 
     /// Removes the state of `command`, which then resolves with its own label, enabled.
     pub fn remove(&mut self, command: &CommandRef) -> Option<CommandState> {
-        let at = self.states.iter().position(|(held, _)| held == command)?;
+        let at = self.position(command)?;
+        let by_id = Arc::make_mut(&mut self.by_id);
+        by_id.retain(|_, positions| {
+            positions.retain(|&p| p != at);
+            for p in positions.iter_mut().filter(|p| **p > at) {
+                *p -= 1;
+            }
+            !positions.is_empty()
+        });
         Some(Arc::make_mut(&mut self.states).remove(at).1)
     }
 
     /// The state of `command`.
     pub fn get(&self, command: &CommandRef) -> Option<&CommandState> {
-        self.states.iter().find(|(held, _)| held == command).map(|(_, state)| state)
+        self.states.get(self.position(command)?).map(|(_, state)| state)
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &(CommandRef, CommandState)> {
         self.states.iter()
     }
+
+    /// Where `command`'s entry is in `states`: among the entries with its id, the one equal to it.
+    fn position(&self, command: &CommandRef) -> Option<usize> {
+        self.by_id.get(command.id.as_str())?.iter().copied().find(|&at| {
+            #[cfg(feature = "testing")]
+            STATE_COMPARISONS.with(|n| n.set(n.get() + 1));
+            self.states.get(at).is_some_and(|(held, _)| held == command)
+        })
+    }
+}
+
+impl PartialEq for CommandStates {
+    fn eq(&self, other: &CommandStates) -> bool {
+        self.states == other.states
+    }
+}
+
+impl fmt::Debug for CommandStates {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CommandStates").field("states", &self.states).finish()
+    }
+}
+
+#[cfg(feature = "testing")]
+thread_local! {
+    static STATE_COMPARISONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many held commands this thread's [`CommandStates`] lookups have compared with the command looked up.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn command_state_comparisons() -> u64 {
+    STATE_COMPARISONS.with(std::cell::Cell::get)
 }
 
 /// App-scope command state for this frame, set from app state before the pass.
@@ -714,14 +766,33 @@ pub fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
     board::holder(ctx, chord)
 }
 
-/// A command shown at `rect` in `layer`, as a pass registered it.
+/// The commands shown at `rect` in `layer`, as a pass registered them: one bound component's command, or every command
+/// a container holds. A container's commands share one fact, so a menu title that holds its menu's hundred commands
+/// registers once per pass and a replay of the menu bar makes one registration per title, not one per command
+/// (photocraft#15493).
 #[derive(Clone, Debug, PartialEq)]
 struct ShownFact {
-    command: CommandRef,
+    commands: ShownCommands,
     layer: LayerKey,
     rect: egui::Rect,
     label: Label,
-    holder: bool,
+}
+
+/// What a [`ShownFact`] shows: a bound component's command, or the commands a container holds.
+#[derive(Clone, Debug, PartialEq)]
+enum ShownCommands {
+    Bound(CommandRef),
+    Held(Arc<[CommandRef]>),
+}
+
+impl ShownFact {
+    /// Whether the fact shows `command`.
+    fn shows(&self, command: &CommandRef) -> bool {
+        match &self.commands {
+            ShownCommands::Bound(bound) => bound == command,
+            ShownCommands::Held(held) => held.contains(command),
+        }
+    }
 }
 
 /// A replay moves the rect; the rest stays.
@@ -735,16 +806,16 @@ impl Shift for ShownFact {
     }
 }
 
-/// Registers `command` as shown for the next pass of the running viewport.
-fn register_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label: Label, command: &CommandRef, holder: bool) {
-    Facts::register(ctx, ShownFact { command: command.clone(), layer, rect, label, holder });
+/// Registers `commands` as shown for the next pass of the running viewport.
+fn register_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label: Label, commands: ShownCommands) {
+    Facts::register(ctx, ShownFact { commands, layer, rect, label });
 }
 
 /// Records that a container at `rect` holds `commands`, for this pass and viewport. Not [`CommandInput::holds`], which
 /// turns hold bindings on.
 pub fn holds(ctx: &Context, layer: LayerKey, rect: egui::Rect, commands: &[CommandRef], label: Label) {
-    for command in commands {
-        register_shown(ctx, layer, rect, label.clone(), command, true);
+    if !commands.is_empty() {
+        register_shown(ctx, layer, rect, label, ShownCommands::Held(commands.into()));
     }
 }
 
@@ -752,7 +823,15 @@ pub fn holds(ctx: &Context, layer: LayerKey, rect: egui::Rect, commands: &[Comma
 /// viewport: the report step calls it for a component wholly inside its clip.
 // PLAN: the caller is the report step (menus-w3); until it lands nothing in this crate calls it.
 pub(crate) fn note_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label: Label, command: &CommandRef) {
-    register_shown(ctx, layer, rect, label, command, false);
+    register_shown(ctx, layer, rect, label, ShownCommands::Bound(command.clone()));
+}
+
+/// How many shown-command registrations the running viewport's last pass made: one per bound component and one per
+/// container, whatever it holds.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn shown_registrations(ctx: &Context) -> usize {
+    Facts::<ShownFact>::of_last_pass(ctx).len()
 }
 
 /// Where `command` was shown in the last pass: a bound component's clipped rect or a holder's rect. `None` unless it
@@ -762,9 +841,9 @@ pub fn shown(ctx: &Context, command: &CommandRef) -> Option<Shown> {
     let scrim = overlay::top_modal_in(ctx, viewport).and_then(|top| top.cover);
     Facts::<ShownFact>::of_last_pass(ctx)
         .into_iter()
-        .filter(|fact| fact.command == *command)
+        .filter(|fact| fact.shows(command))
         .find(|fact| !areas::rects_over(ctx, fact.layer, scrim).iter().any(|over| over.intersects(fact.rect)))
-        .map(|fact| Shown { rect: fact.rect, viewport, label: fact.label, holder: fact.holder })
+        .map(|fact| Shown { rect: fact.rect, viewport, label: fact.label, holder: matches!(fact.commands, ShownCommands::Held(_)) })
 }
 
 /// Where a command was shown, from [`shown`].

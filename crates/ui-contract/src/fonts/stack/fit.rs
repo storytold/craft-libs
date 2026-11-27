@@ -1,4 +1,5 @@
-//! Fitting CJK faces into the rows of the face that leads a family.
+//! Fitting CJK faces into the rows of the face that leads a family, and the tab-title face to the semibold face's
+//! x-height.
 //!
 //! A CJK face that follows the app's face sits on that face's baseline and keeps its row height, scaled down only as far
 //! as keeps a few tall and deep characters inside the row.
@@ -34,6 +35,23 @@ pub(super) fn into_row(primary: &FontData, face: &mut FontData) {
     let centred = 0.5 * (height - scale * f.height()) + scale * f.ascent;
     face.tweak.y_offset_factor = (ascent - centred + primary.tweak.scale * primary.tweak.y_offset_factor) / scale;
     face.tweak.y_offset = primary.tweak.y_offset;
+}
+
+/// Scale `face` so that its x-height matches `reference`'s as drawn: the tab-title face draws as tall as the semibold
+/// text beside it. A face without an x-height in its `OS/2` table, or with a reference that has none, keeps its scale.
+pub(super) fn to_x_height(reference: &FontData, face: &mut FontData) {
+    let (Some(wanted), Some(own)) = (x_height(reference), x_height(face)) else { return };
+    face.tweak.scale = reference.tweak.scale * wanted / own;
+}
+
+/// A face's x-height in ems, from its `OS/2` table, at the instance its variation coordinates set; `None` when the
+/// table gives none.
+fn x_height(data: &FontData) -> Option<f32> {
+    let font = FontRef::from_index(data.bytes(), data.index).ok()?;
+    let location = font.axes().location(data.tweak.coords.as_ref());
+    let metrics = font.metrics(Size::unscaled(), &location);
+    let em = f32::from(metrics.units_per_em);
+    metrics.x_height.filter(|&x| x > 0.0 && em > 0.0).map(|x| x / em)
 }
 
 /// A face's ascent, descent and line gap as epaint reads them, in ems.

@@ -368,3 +368,75 @@ fn an_oversized_manifest_and_a_directory_face_are_errors() {
     let r = run(Embed::new(), Some(&dir), None);
     assert!(r.result.is_ok() && warnings(&r).iter().any(|w| w.contains("larger than")), "{:?}", r.cargo);
 }
+
+/// `Embed::tab_face` adds only the Noto Sans Condensed SemiBold row of `fonts/latin-manifest.txt`, with the `tab` role.
+/// A checkout without that manifest or row keeps its other faces, required or not; a broken manifest or row is an
+/// error only when required. The face counts for none of the scripts a required build asks for and covers none of the
+/// characters of a checked text, and a served table leaves it out.
+#[test]
+fn the_tab_face_comes_from_the_latin_manifest_with_the_tab_role() {
+    let scratch = Scratch::new("tab-face");
+    let dir = checkout(&scratch, &[("Noto Sans Arabic", "Arab", "", tiny_font(&[(0x627, 0x627, None)], &[]))]);
+    std::fs::write(dir.join("fonts/OFL.txt"), b"licence").unwrap();
+    std::fs::write(dir.join("fonts/condensed.ttf"), tiny_font(&[(0x41, 0x5A, None)], &[])).unwrap();
+    std::fs::write(dir.join("fonts/inter.ttf"), tiny_font(&[(0x41, 0x5A, None)], &[])).unwrap();
+    let latin = dir.join("fonts/latin-manifest.txt");
+    let row = |family: &str, style: &str, file: &str| format!("{family} | {style} | {file} | Latn | OFL-1.1 | fonts/OFL.txt | 00 | src\n");
+    let both = row("Inter", "SemiBold", "fonts/inter.ttf") + &row("Noto Sans", "Condensed SemiBold", "fonts/condensed.ttf");
+    std::fs::write(&latin, &both).unwrap();
+
+    let r = run(Embed::new().tab_face(), Some(&dir), Some("1"));
+    assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular", "Noto Sans Condensed SemiBold"]);
+    assert!(r.table.contains(r#"family: "Noto Sans", style: "Condensed SemiBold""#) && r.table.contains(r#"role: Some("tab")"#), "{}", r.table);
+    assert!(!r.table.contains("Inter"), "{}", r.table);
+    assert!(r.cargo.iter().any(|l| l == &format!("cargo::rerun-if-changed={}", latin.display())), "{:?}", r.cargo);
+    // Scripts and the filter narrow only the main manifest's faces.
+    let r = run(Embed::new().scripts(&["Arab"]).filter(|f| f.has_script("Arab")).tab_face(), Some(&dir), Some("1"));
+    assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular", "Noto Sans Condensed SemiBold"]);
+    // The tab-title face does not stand in for a required script the main manifest lacks.
+    let r = run(Embed::new().scripts(&["Latn"]).tab_face(), Some(&dir), Some("1"));
+    assert!(matches!(&r.result, Err(Error::NoFaces { .. })), "{:?}", r.result);
+    let r = run(Embed::new().scripts(&["Arab", "Latn"]).tab_face(), Some(&dir), Some("1"));
+    assert!(matches!(&r.result, Err(Error::MissingScripts { scripts, .. }) if scripts == &["Latn"]), "{:?}", r.result);
+    let r = run(Embed::new(), Some(&dir), Some("1"));
+    assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular"]);
+    // A served table carries no roles, so it leaves the face out.
+    let r = run(Embed::new().tab_face().serve(scratch.0.join("served"), "fonts/"), Some(&dir), Some("1"));
+    assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular"]);
+    assert!(warnings(&r).iter().any(|w| w.contains("not serving the tab-title face")), "{:?}", r.cargo);
+    // Only tab titles draw in the face, so it covers none of the characters of a checked text.
+    std::fs::write(dir.join("fonts/condensed.ttf"), tiny_font(&[(0x41, 0x5A, None), (0x4E00, 0x4E00, None)], &[])).unwrap();
+    let text = scratch.0.join("text.ftl");
+    std::fs::write(&text, "x = \u{4E00}\n").unwrap();
+    let r = run(Embed::new().tab_face().check_text([&text]), Some(&dir), Some("1"));
+    assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular", "Noto Sans Condensed SemiBold"]);
+    assert!(warnings(&r).iter().any(|w| w.contains("1 character no embedded face covers (\u{4E00})")), "{:?}", r.cargo);
+
+    // No row for the face, or no latin manifest at all: the other faces and a warning, even when required.
+    std::fs::write(&latin, row("Inter", "SemiBold", "fonts/inter.ttf")).unwrap();
+    for required in [None, Some("1")] {
+        let r = run(Embed::new().tab_face(), Some(&dir), required);
+        assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular"]);
+        assert!(warnings(&r).iter().any(|w| w.contains("has no Noto Sans Condensed SemiBold row")), "{:?}", r.cargo);
+    }
+    std::fs::remove_file(&latin).unwrap();
+    for required in [None, Some("1")] {
+        let r = run(Embed::new().tab_face(), Some(&dir), required);
+        assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular"]);
+        assert!(warnings(&r).iter().any(|w| w.contains("latin-manifest.txt does not exist")), "{:?}", r.cargo);
+        assert!(r.cargo.iter().any(|l| l == &format!("cargo::rerun-if-changed={}", dir.join("fonts").display())), "{:?}", r.cargo);
+    }
+
+    // A manifest line that does not parse, or a row whose file is missing.
+    for broken in ["Noto Sans | Condensed SemiBold | fonts/condensed.ttf\n".to_owned(), row("Noto Sans", "Condensed SemiBold", "fonts/gone.ttf")] {
+        std::fs::write(&latin, &broken).unwrap();
+        let r = run(Embed::new().tab_face(), Some(&dir), None);
+        assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular"], "{broken}");
+        assert!(warnings(&r).iter().any(|w| w.contains("not embedding the tab-title face")), "{broken}: {:?}", r.cargo);
+        let r = run(Embed::new().tab_face(), Some(&dir), Some("1"));
+        assert!(matches!(r.result, Err(Error::Parse { .. } | Error::Read { .. })), "{broken}: {:?}", r.result);
+    }
+    // The build reruns when the missing file is added: it watches the folder the file would be in.
+    let r = run(Embed::new().tab_face(), Some(&dir), None);
+    assert!(r.cargo.iter().any(|l| l == &format!("cargo::rerun-if-changed={}", dir.join("fonts").display())), "{:?}", r.cargo);
+}
