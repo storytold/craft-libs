@@ -14,12 +14,16 @@ use kurbo::{Affine, BezPath, Point, Rect};
 
 use crate::ink::{InkColor, InkId, InkSet, Overprint};
 
-pub use compose::{ComplexGroup, ComplexReason, ComplexRegion, FlattenError, FlattenOptions, FlattenReport, Flattened, flatten};
+pub use compose::{
+    ComplexGroup, ComplexReason, ComplexRegion, FlattenError, FlattenOptions, FlattenReport, FlattenSweepLimits, Flattened, flatten,
+    flatten_with_limits,
+};
 pub use document::{
-    FlattenDocumentError, FlattenDocumentOptions, FlattenDocumentReport, FlattenTotals, Unreadable, flatten_document, flatten_document_with_progress,
+    FlattenDocumentError, FlattenDocumentOptions, FlattenDocumentReport, FlattenTotals, Unreadable, flatten_document, flatten_document_with_limits,
+    flatten_document_with_limits_and_progress, flatten_document_with_progress,
 };
 pub use geom::FillRule;
-pub use raster::{FlattenPageError, FlattenPageOptions, FlattenPageReport, flatten_page};
+pub use raster::{FlattenPageError, FlattenPageOptions, FlattenPageReport, flatten_page, flatten_page_with_limits};
 
 mod compose;
 mod document;

@@ -41,7 +41,7 @@ use craft_pdf::interpret::color::CmykConversion;
 use craft_pdf::write::backend::SerializeSettings;
 use kurbo::{Affine, Rect, Shape as _};
 
-use super::document::{FlattenDocumentError, FlattenDocumentOptions, flatten_document};
+use super::document::{FlattenDocumentError, FlattenDocumentOptions, flatten_document_with_limits};
 use super::pdf::{ReadError, ReadOptions, ReadReport};
 use super::write::{WriteError, page_pdf};
 use super::{
@@ -409,11 +409,21 @@ pub enum FlattenPageError {
 }
 
 /// Page `page` (from 0) of `pdf` with its transparency flattened, as a one-page PDF: the
-/// one-page case of [`flatten_document`].
+/// one-page case of [`super::flatten_document`].
 pub fn flatten_page(pdf: &[u8], page: usize, opts: &FlattenPageOptions) -> Result<(Vec<u8>, FlattenPageReport), FlattenPageError> {
+    flatten_page_with_limits(pdf, page, opts, &super::FlattenSweepLimits::default())
+}
+
+/// [`flatten_page`] with explicit sweep work and output limits.
+pub fn flatten_page_with_limits(
+    pdf: &[u8],
+    page: usize,
+    opts: &FlattenPageOptions,
+    limits: &super::FlattenSweepLimits,
+) -> Result<(Vec<u8>, FlattenPageReport), FlattenPageError> {
     let doc =
         FlattenDocumentOptions { read: opts.read.clone(), flatten: opts.flatten, pages: Some(page..page.saturating_add(1)), ..Default::default() };
-    let (bytes, mut report) = flatten_document(pdf, &doc).map_err(|e| match e {
+    let (bytes, mut report) = flatten_document_with_limits(pdf, &doc, limits).map_err(|e| match e {
         FlattenDocumentError::Open(e) => FlattenPageError::Open(e),
         FlattenDocumentError::PageRange { .. } => FlattenPageError::Read(ReadError::NoPage(page)),
         FlattenDocumentError::Read { source, .. } => FlattenPageError::Read(source),

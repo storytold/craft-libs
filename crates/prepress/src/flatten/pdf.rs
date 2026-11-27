@@ -1320,9 +1320,8 @@ fn dash_pattern(path: &BezPath, dashes: &[f32]) -> Option<Vec<f64>> {
 /// `path` filled by `rule`, as a path and the rule it is filled by. An even-odd path is
 /// rebuilt from its boundary as a path filled nonzero; if that fails, panics, or passes the
 /// flattener's default sweep work or output limit ([`geom::DEFAULT_MAX_SWEEP_WORK`],
-/// [`geom::DEFAULT_MAX_TOPOLOGY_UNITS`]), it is kept closed and filled even-odd. A subpath too
-/// small for the tolerance that the path's largest coordinate needs is rebuilt at that tolerance,
-/// and may be dropped.
+/// [`geom::DEFAULT_MAX_TOPOLOGY_UNITS`]), it is kept closed and filled even-odd. The same fallback
+/// applies when an input subpath fails [`linesweeper::binary_op`]'s automatic-accuracy check.
 fn nonzero(path: &BezPath, rule: FillRule) -> (BezPath, FillRule) {
     nonzero_within(path, rule, geom::DEFAULT_MAX_SWEEP_WORK, geom::DEFAULT_MAX_TOPOLOGY_UNITS)
 }
@@ -1335,7 +1334,8 @@ fn nonzero_within(path: &BezPath, rule: FillRule, work_limit: u64, output_limit:
     }
     let closed = closed(path);
     let op = catch_unwind(AssertUnwindSafe(|| {
-        let top = linesweeper::topology::Topology::<i32>::from_paths_with_limits([(&closed, ())], sweep_eps(&closed), work_limit, output_limit)?;
+        let eps = linesweeper::binary_op_accuracy(&closed, &BezPath::new())?;
+        let top = linesweeper::topology::Topology::<i32>::from_paths_with_limits([(&closed, ())], eps, work_limit, output_limit)?;
         top.try_contours(|winding| winding % 2 != 0)
     }));
     match op {
@@ -1348,15 +1348,6 @@ fn nonzero_within(path: &BezPath, rule: FillRule, work_limit: u64, output_limit:
         }
         Ok(Err(_)) | Err(_) => (closed, FillRule::EvenOdd),
     }
-}
-
-/// The sweep tolerance [`linesweeper::binary_op`] picks for `path`: 64 times `f64::EPSILON`
-/// times its largest coordinate magnitude, and at least [`linesweeper::MIN_AUTO_EPS`].
-fn sweep_eps(path: &BezPath) -> f64 {
-    let largest = kurbo::segments(path.iter().skip_while(|el| matches!(el, PathEl::ClosePath)))
-        .map(|seg| kurbo::ParamCurveExtrema::bounding_box(&seg))
-        .fold(0.0_f64, |m, r| m.max(r.x0.abs()).max(r.y0.abs()).max(r.x1.abs()).max(r.y1.abs()));
-    (largest * f64::EPSILON * 64.0).max(linesweeper::MIN_AUTO_EPS)
 }
 
 /// `path` with every subpath closed, as a fill closes them.
@@ -1405,13 +1396,22 @@ mod tests {
         path.line_to((3.0e13 + 1.0e3, 3.0e13));
         path.line_to((3.0e13, 3.0e13 + 1.0e3));
         path.close_path();
-        // linesweeper reports the sliver, and the rebuild runs again at its tolerance.
+        // The automatic-accuracy check rejects rebuilding the narrow subpath.
         let swept = linesweeper::binary_op(&path, &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union);
         assert!(matches!(swept, Err(linesweeper::Error::FeatureBelowTolerance { .. })));
         let (out, rule) = nonzero(&path, FillRule::EvenOdd);
-        assert_eq!(rule, FillRule::NonZero);
-        assert_ne!(out.winding((10.0, 10.0).into()), 0);
-        assert_eq!(out.winding((50.0, 50.0).into()), 0);
+        let contains = |point| {
+            let winding = out.winding(point);
+            match rule {
+                FillRule::EvenOdd => winding % 2 != 0,
+                FillRule::NonZero => winding != 0,
+            }
+        };
+        assert!(contains((200.15, 5.0).into()), "the narrow subpath remains filled");
+        assert!(contains((10.0, 10.0).into()));
+        assert!(!contains((50.0, 50.0).into()));
+        assert_eq!(rule, FillRule::EvenOdd);
+        assert_eq!(out, path);
     }
 
     #[test]

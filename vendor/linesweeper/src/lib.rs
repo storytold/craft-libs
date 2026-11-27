@@ -183,6 +183,15 @@ pub fn binary_op(
     fill_rule: FillRule,
     op: BinaryOp,
 ) -> Result<topology::Contours, Error> {
+    let eps = binary_op_accuracy(set_a, set_b)?;
+    binary_op_with_eps(set_a, set_b, fill_rule, op, eps)
+}
+
+/// Returns the automatic accuracy for [`binary_op`]. Nonfinite coordinates and
+/// subpaths that fail that function's feature-size check return its errors.
+pub fn binary_op_accuracy(set_a: &kurbo::BezPath, set_b: &kurbo::BezPath) -> Result<f64, Error> {
+    check_coordinates(set_a)?;
+    check_coordinates(set_b)?;
     // Find the extremal values, to figure out how much precision we can support.
     // Craft patch (leading ClosePath): `BezPath::bounding_box` panics on a leading ClosePath.
     let bounding_box = |path: &kurbo::BezPath| {
@@ -226,7 +235,7 @@ pub fn binary_op(
             return Err(Error::FeatureBelowTolerance { eps });
         }
     }
-    binary_op_with_eps(set_a, set_b, fill_rule, op, eps)
+    Ok(eps)
 }
 
 /// The smallest accuracy parameter that [`binary_op`] chooses.
@@ -336,6 +345,24 @@ pub fn binary_op_with_eps(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn automatic_accuracy_checks_move_only_coordinates() {
+        let empty = kurbo::BezPath::new();
+        for (coordinate, error) in [
+            (f64::INFINITY, super::Error::Infinity),
+            (f64::NEG_INFINITY, super::Error::Infinity),
+            (f64::NAN, super::Error::NaN),
+            (super::MAX_COORDINATE * 2.0, super::Error::TooLarge),
+        ] {
+            let mut path = kurbo::BezPath::new();
+            path.move_to((coordinate, 0.0));
+            assert_eq!(super::binary_op_accuracy(&path, &empty), Err(error));
+            assert_eq!(super::binary_op_accuracy(&empty, &path), Err(error));
+        }
+        let mut path = kurbo::BezPath::new();
+        path.move_to((super::MAX_COORDINATE, 0.0));
+        assert_eq!(super::binary_op_accuracy(&path, &empty), Ok(super::MIN_AUTO_EPS));
+    }
     use insta::assert_ron_snapshot;
     use kurbo::BezPath;
 

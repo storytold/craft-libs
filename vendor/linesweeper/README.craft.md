@@ -15,6 +15,8 @@ holds `upstream_revision`. `local_patches` describes each local change.
 
 | File | Change |
 |---|---|
+| `src/lib.rs` | `binary_op_accuracy` returns the automatic accuracy and applies `binary_op`'s coordinate and subpath-size checks before a bounded caller constructs its topology. |
+| `src/curve/line.rs` | Vertical lines keep their exact endpoint x coordinate. `coincident_vertical_lines_keep_their_exact_x` compares coincident lines at x = 0.1 with tolerance 1e-18. |
 | `src/sweep/sweep_line.rs` | Sweep-order checks accept an `Ish` interval at its boundary, including a zero-height touch. The `invalid_order` test checks a reversed crossing before, at and after that boundary. `work_limit_counts_position_searches_by_their_probes` uses 100 and 200 rectangles with `slow-asserts`, and 2,000 and 4,000 otherwise. Both configurations check the same work-count growth and work-limit behavior. |
 | `src/sweep/sweep_line.rs` | `SegmentOrder::position` finds a segment by binary search over a key on each sweep-line entry. Code comments label it `Craft patch (sweep position)`. Tests: `position_after_edits`, `position_after_repeated_insertion`, `position_after_insertion_next_to_the_extreme_keys`, `position_after_moving_a_contour_continuation`, `position_on_a_wide_sweep_line`. |
 | `src/order.rs`, `src/curve/mod.rs` | `ComparisonCache` skips the curve comparison for segments whose horizontal bounds are far apart. Code comments label it `Craft patch (far-apart comparison)`. Tests: `far_apart_order`, `far_apart_curves_compare_like_the_full_comparison`, `far_apart_steep_curves_never_reverse`, `far_apart_steep_curves_skip_the_full_comparison`. |
@@ -102,7 +104,7 @@ holds `upstream_revision`. `local_patches` describes each local change.
 | `src/curve/mod.rs` | The `QuadraticApprox` doc says the quadratic gives `x` as a function of `y`, as `from_cubic`, `dmin` and `dmax` use it; the package's doc says `y` as a function of `x`. The test `curve::test::quad_approximation_gives_x_of_y` checks it on the curve `x = y^2`. |
 | `examples/curve_metrics.rs` | The SVG's `viewBox` starts at x = -1.5 instead of 0, so the left half of each curve, which spans x = -1 to 1, is drawn. A test checks that every curve fits in the `viewBox`. |
 | `examples/bus.rs` | The SVG's `viewBox` is the size of the one composite the example draws, with its padding, instead of 3 composites wide and 2 tall. |
-| `Cargo.toml` | `Cargo.toml` does not register the `boolean_op` and `winding-numbers` examples, the `fonts` and `snapshots` tests or the `linebender_logo` bench, which need dev-dependencies or files the package leaves out. Their source files stay unchanged. |
+| `Cargo.toml` | `Cargo.toml` does not register the `boolean_op` and `winding-numbers` examples, the `fonts` and `snapshots` tests or the `linebender_logo` bench, which need dev-dependencies or files the package leaves out. Their source files are retained; the two examples also have the separately recorded stroke-width changes. |
 
 Every change here updates this table and `SOURCE.json` in the same commit. To take a new linesweeper
 release, unpack the crates.io package, carry these changes over, regenerate `SOURCE.json`, and run the
@@ -157,7 +159,8 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 `Cargo.toml.orig` gives as git or path dependencies. The `fonts` and `snapshots` tests, the
 `winding-numbers` and `boolean_op` examples and the `linebender_logo` bench need them, or the
 omitted `examples/linebender.svg`, and do not compile here. The package's `Cargo.toml` registers
-these five targets; the copy's `Cargo.toml` does not, and their source files are kept unchanged. The
+these five targets; the copy's `Cargo.toml` does not. Their source files are retained, and the two
+examples have the stroke-width changes listed above. The
 package does not include the `boolean-test/data/` files that the `paperjs` test reads, so the full
 `paperjs` target fails here with one failing `load` trial per missing file.
 

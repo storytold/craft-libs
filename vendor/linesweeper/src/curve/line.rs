@@ -21,6 +21,9 @@ fn line_at_ys(line: Line, y0: f64, y1: f64) -> (f64, f64) {
 
 /// Returns `(1 - t) * line.p0.x + t * line.p1.x`.
 fn x_at_t(line: Line, t: f64) -> f64 {
+    if line.p0.x == line.p1.x {
+        return line.p0.x;
+    }
     // Craft patch (subnormal x): a product of t and a subnormal x coordinate
     // loses bits, so x = 5e-324 times 0.5 rounds to 0. When both x coordinates
     // have a magnitude below 2^-500, take the weighted sum of the x coordinates
@@ -192,6 +195,20 @@ mod tests {
         let order = intersect_lines(l0, l1, 1e-6);
         assert_eq!(order.cmps.len(), 1);
         assert_eq!(order.cmps[0].order, Order::Left);
+    }
+
+    #[test]
+    fn coincident_vertical_lines_keep_their_exact_x() {
+        let whole = Line::new((0.1, 0.0), (0.1, 10.0));
+        let part = Line::new((0.1, 3.0), (0.1, 10.0));
+        for (left, right) in [(whole, part), (part, whole)] {
+            let order = intersect_lines(left, right, 1e-18);
+            assert!(
+                order.cmps.iter().all(|entry| entry.order == Order::Ish),
+                "{order:?}"
+            );
+            assert_eq!(line_at_ys(left, 3.0, 10.0), (0.1, 0.1));
+        }
     }
 
     #[test]
