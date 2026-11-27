@@ -167,6 +167,21 @@ fn a_dib_too_large_to_decode_is_not_charged_its_pixels() {
     assert_eq!((1 << 20) - work.left, bmp, "only the BMP copy");
 }
 
+/// A DIB whose layout isn't a bitmap's (here an 8-bit one without room for its colour table) is
+/// refused before its copy is charged, so it costs later pictures nothing.
+#[test]
+fn a_dib_that_isnt_a_bitmap_is_refused_before_it_is_charged() {
+    let mut dib = vec![0u8; 40];
+    dib[0] = 40;
+    dib[4] = 1;
+    dib[8] = 1;
+    dib[12] = 1;
+    dib[14] = 8;
+    let mut work = Decode::new(1 << 20);
+    assert!(crate::dib::to_png(&dib, usize::MAX, &mut work).is_none());
+    assert_eq!(work.left, 1 << 20);
+}
+
 /// A WMF's file with its placeable header is a second copy of its records, charged whole with the
 /// header; when that doesn't fit in the limit or the budget, or its bounds can't make a header,
 /// the records are kept as a WMF without one.
