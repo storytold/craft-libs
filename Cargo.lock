@@ -3793,6 +3793,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-plugin"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-png"
 version = "0.1.0"
 dependencies = [

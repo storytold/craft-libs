@@ -1,0 +1,27 @@
+[package]
+name = "craft-plugin"
+description = "The Craft apps' add-in contract: the plugin.json manifest, versions and requirements between add-ins, and newline-delimited JSON-RPC with an add-in process, within limits"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# The add-in the integration tests start as a real child process.
+[[bin]]
+name = "craft-plugin-test-addin"
+path = "src/bin/test_addin.rs"
+test = false
+doc = false
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
