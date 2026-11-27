@@ -160,6 +160,14 @@ impl PathEdit {
                     reflow_all(path, anchors);
                 }
             }
+            PathEdit::MoveSubpath { subpath, by, .. } => {
+                let Some(sub) = path.subpaths.get(*subpath) else { return false };
+                if !by.x.is_finite() || !by.y.is_finite() {
+                    return false;
+                }
+                let anchors: Vec<_> = (0..sub.knots.len()).map(|knot| KnotRef::new(*subpath, knot)).collect();
+                move_knots(path, &anchors, *by);
+            }
             PathEdit::MoveHandle { knot, side, to, alone, .. } => {
                 if !knot_ok(path, *knot) {
                     return false;
@@ -174,11 +182,41 @@ impl PathEdit {
                 }
                 keep_smooth(k, *side);
             }
-            PathEdit::BendSegment { segment, t, by, .. } => {
+            PathEdit::BendSegment { segment, t, by, constrain, .. } => {
                 let sub = &mut path.subpaths[..];
                 let Some(sp) = sub.get_mut(segment.subpath) else { return false };
                 let Some((a, b)) = sp.segment_ends(segment.knot) else { return false };
-                if sp.is_straight(segment.knot) {
+                let constrained = if *constrain {
+                    if !by.x.is_finite() || !by.y.is_finite() {
+                        return false;
+                    }
+                    let (ka, kb) = (sp.knots[a], sp.knots[b]);
+                    let (la, lb) = (ka.out_ctrl.distance(ka.anchor), kb.in_ctrl.distance(kb.anchor));
+                    (la >= 1e-9 && lb >= 1e-9 && (0.05..=0.95).contains(t)).then_some((ka, kb, la, lb))
+                } else {
+                    None
+                };
+                if let Some((ka, kb, la, lb)) = constrained {
+                    if *by == Vec2::ZERO {
+                        return false;
+                    }
+                    let va = (ka.out_ctrl - ka.anchor) / la;
+                    let vb = (kb.in_ctrl - kb.anchor) / lb;
+                    let det = va.x * vb.y - va.y * vb.x;
+                    let (na, nb) = if det.abs() < 1e-9 {
+                        // Parallel rays cannot put the curve point under every pointer move.
+                        // Keep each ray and take the handle length after that translation.
+                        ((ka.out_ctrl + *by).distance(ka.anchor), (kb.in_ctrl + *by).distance(kb.anchor))
+                    } else {
+                        let t = *t;
+                        let u = 1.0 - t;
+                        let da = (by.x * vb.y - by.y * vb.x) / (det * 3.0 * u * u * t);
+                        let db = (va.x * by.y - va.y * by.x) / (det * 3.0 * u * t * t);
+                        ((la + da).max(0.0), (lb + db).max(0.0))
+                    };
+                    sp.knots[a].out_ctrl = ka.anchor + va * na;
+                    sp.knots[b].in_ctrl = kb.anchor + vb * nb;
+                } else if sp.is_straight(segment.knot) {
                     for i in [a, b] {
                         let k = &mut sp.knots[i];
                         k.anchor += *by;
@@ -256,6 +294,14 @@ impl PathEdit {
                 *k = if k.smooth { Knot::corner(k.anchor) } else { Knot { smooth: true, ..*k } };
                 sp.reflow();
             }
+        }
+        if matches!(self, PathEdit::MoveSubpath { .. } | PathEdit::BendSegment { constrain: true, .. })
+            && path.subpaths.iter().flat_map(|sub| &sub.knots).any(|knot| {
+                [knot.anchor, knot.in_ctrl, knot.out_ctrl].iter().any(|point| !point.x.is_finite() || !point.y.is_finite())
+            })
+        {
+            *path = before;
+            return false;
         }
         *path != before
     }

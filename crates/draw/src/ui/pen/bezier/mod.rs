@@ -210,6 +210,12 @@ enum Target {
         anchors: Vec<KnotRef>,
         from: Point,
     },
+    /// A command-only press moves exactly the subpath it began on.
+    Subpath {
+        path: u64,
+        subpath: usize,
+        from: Point,
+    },
     Handle {
         path: u64,
         knot: KnotRef,
@@ -224,6 +230,8 @@ enum Target {
         segment: KnotRef,
         t: f64,
         from: Point,
+        /// The eligible mode at the press; later option changes cannot retarget this drag.
+        constrain: bool,
     },
     Convert {
         path: u64,
@@ -438,6 +446,11 @@ pub struct BezierOverlay<'a> {
     /// thickness replaces the line width (and the selected segment grows by the same amount).
     #[prop]
     path_options: Option<&'a PathOptionsSettings>,
+    /// Direct Selection's unmodified segment drag keeps the two facing handle directions.
+    /// Off by default and latched at the press. Modifier presses and passes keep the ordinary
+    /// bend; handles, other tools, straight segments and unmeasured fallback cases are unchanged.
+    #[prop]
+    constrain_path_dragging: bool,
     report: Report,
     marquee: Option<DocRect>,
     hover_mark: Option<BezierHit>,
@@ -455,6 +468,7 @@ impl<'a> BezierOverlay<'a> {
             anchors: AnchorsShown::default(),
             segment_mark: SegmentMark::default(),
             path_options: None,
+            constrain_path_dragging: false,
             report: Report::default(),
             marquee: None,
             hover_mark: None,
@@ -642,6 +656,20 @@ impl<'a> BezierOverlay<'a> {
     /// The target a press `start` on `hit` with `mods` drags, and the selection it makes.
     fn target(&mut self, hit: BezierHit, start: PressStart, mods: Mods, paths: &[EditPath]) -> Target {
         let knot_at = |path: u64, knot: KnotRef| Self::path(paths, path).and_then(|p| p.knot(knot));
+        if self.tool == BezierTool::Direct && mods.cmd && !mods.ctrl && !mods.alt && !mods.shift {
+            let target = match hit {
+                BezierHit::Anchor { path, knot } => Some((path, knot.subpath, knot_at(path, knot).map_or(Point::ZERO, |k| k.anchor))),
+                BezierHit::Segment { path, segment, t } => Some((path, segment.subpath, Self::segment_point(paths, path, segment, t))),
+                _ => None,
+            };
+            if let Some((path, subpath, from)) = target
+                && Self::path(paths, path).is_some_and(|p| p.command_selects_subpath)
+            {
+                let anchors = Self::subpath_anchors(paths, path, subpath);
+                self.report.select = Some(self.selecting(path, anchors, None));
+                return Target::Subpath { path, subpath, from };
+            }
+        }
         match (self.tool, hit) {
             (_, BezierHit::Handle { path, knot, side }) if self.tool != BezierTool::Curvature => {
                 let at = knot_at(path, knot);
@@ -671,7 +699,7 @@ impl<'a> BezierOverlay<'a> {
                 let all: Vec<KnotRef> = shown.knot_refs().collect();
                 if chosen.is_empty() {
                     self.report.select = Some(self.selecting(path, Vec::new(), Some(segment)));
-                    Target::Bend { path, segment, t, from }
+                    Target::Bend { path, segment, t, from, constrain: false }
                 } else if all.iter().all(|k| chosen.contains(k)) {
                     Target::Anchors { path, anchors: all, from }
                 } else {
@@ -718,7 +746,10 @@ impl<'a> BezierOverlay<'a> {
                     if copies { Target::Duplicate { path, subpath: segment.subpath, from } } else { Target::Anchors { path, anchors, from } }
                 } else {
                     self.report.select = Some(self.selecting(path, Vec::new(), Some(segment)));
-                    Target::Bend { path, segment, t, from }
+                    Target::Bend {
+                        path, segment, t, from,
+                        constrain: self.constrain_path_dragging && self.tool == BezierTool::Direct && !mods.cmd && !mods.ctrl && !mods.alt && !mods.shift,
+                    }
                 }
             }
             (_, BezierHit::Handle { .. }) => Target::Nothing,
@@ -738,12 +769,19 @@ impl<'a> BezierOverlay<'a> {
             Target::Anchors { path, anchors, from } => {
                 PathEdit::MoveAnchors { path: *path, anchors: anchors.clone(), by: snapped(*from + locked(delta)) - *from }
             }
+            &Target::Subpath { path, subpath, from } => PathEdit::MoveSubpath { path, subpath, by: snapped(from + locked(delta)) - from },
             &Target::Handle { path, knot, side, from, anchor } => {
                 // ⇧ turns the handle to the nearest 45° about its anchor, as the Pen's pull does.
                 let to = if mods.shift { handle_45(anchor, from + delta) } else { snapped(from + delta) };
                 PathEdit::MoveHandle { path, knot, side, to, alone: tool == BezierTool::Convert || mods.alt }
             }
-            &Target::Bend { path, segment, t, from } => PathEdit::BendSegment { path, segment, t, by: snapped(from + delta) - from },
+            &Target::Bend { path, segment, t, from, constrain } => PathEdit::BendSegment {
+                path,
+                segment,
+                t,
+                by: snapped(from + delta) - from,
+                constrain: constrain && !mods.cmd && !mods.ctrl && !mods.alt && !mods.shift,
+            },
             &Target::Convert { path, knot } => PathEdit::Convert { path, knot, out: Some(snapped(view.to_doc(pointer))) },
             &Target::CurvatureMove { path, knot, from } => {
                 PathEdit::MoveCurvature { path, anchors: vec![knot], by: snapped(from + locked(delta)) - from }
