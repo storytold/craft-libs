@@ -207,6 +207,8 @@ fn the_units_menu_of_w_and_h_converts_one_field_and_keeps_the_length() {
 
     type_into(&mut fixture, &h, "2 col");
     assert_eq!(settings.borrow().size.height, Some(CropLength::new(2.0, UnitKind::Columns)), "a typed count of columns");
+    type_into(&mut fixture, &h, "3 in");
+    assert_eq!(settings.borrow().size.height, Some(CropLength::new(3.0, UnitKind::Inches)), "a typed length in a Columns field");
 
     type_into(&mut fixture, &w, "");
     assert_eq!(settings.borrow().size.width, None, "a cleared field is unset");
@@ -231,6 +233,14 @@ fn a_picked_unit_keeps_a_length_below_the_fields_least_value() {
     assert_eq!(size.width.map(|w| w.unit), Some(UnitKind::Inches), "W takes the picked unit");
     let after = size.target(&doc, &postscript);
     assert!(near(after.width, before.width.unwrap_or_default()), "the same width in inches: {before:?} {after:?}");
+
+    // Entering the field and committing it unedited keeps the length too.
+    let [w, ..] = size_fields(&fixture);
+    fixture.click(&w);
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    let kept = settings.borrow().size.target(&doc, &postscript);
+    assert!(near(kept.width, before.width.unwrap_or_default()), "an unedited commit keeps the width: {before:?} {kept:?}");
 }
 
 /// Without a column size the menu offers no Columns and a length in columns names no size; with one, two columns

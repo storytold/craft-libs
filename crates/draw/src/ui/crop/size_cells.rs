@@ -213,6 +213,9 @@ impl LengthCell<'_> {
         out_of_range: &mut Option<RangeAlert>,
     ) -> bool {
         let unit = value.map_or(empty_unit.unwrap_or(UnitKind::Pixels), |length| length.unit);
+        // The unit a typed length is read in: the field's, or inches for a Columns field, whose bare numbers count
+        // columns.
+        let base = if unit == UnitKind::Columns { UnitKind::Inches } else { unit };
         let range = limits.length_range(unit, lengths.pixels_per_inch, lengths.points_per_inch);
         let mut typed = None;
         let mut typed_unit = None;
@@ -222,13 +225,10 @@ impl LengthCell<'_> {
             let shown = LengthUnits::new(unit, unit, lengths.pixels_per_inch);
             let mut field = NumberField::length(self.caption.clone(), Bind::given(value.map(|length| length.value)), shown).range(range.clone());
             if self.menu.is_some() {
-                // Columns are no factor of a length: a Columns field reads counts, the others also read `2 col`.
+                // Columns are no factor of a length: a typed `2 col` is read as a count, beside the lengths in `base`.
                 // The right click is the units menu, so the field opens no edit menu of its own.
-                let reader = match unit {
-                    UnitKind::Columns => units.reader(Some(UnitKind::Columns)),
-                    _ if lengths.columns.is_some() => units.with_columns(units.length_reader(shown)),
-                    _ => units.length_reader(shown),
-                };
+                let reader = units.length_reader(LengthUnits::new(base, base, lengths.pixels_per_inch));
+                let reader = if unit == UnitKind::Columns || lengths.columns.is_some() { units.with_columns(reader) } else { reader };
                 field = field.codec(NumberCodec::new(reader, *unit.decimals().end())).own_context_menu();
             }
             let field = field.show(ui);
@@ -265,7 +265,7 @@ impl LengthCell<'_> {
             // A count of columns as typed.
             Some(UnitKind::Columns) => CropLength::new(length, UnitKind::Columns),
             // The value is in the field's unit; a typed unit becomes the field's.
-            Some(to) if to != unit => lengths.convert(length, unit, to).map_or(CropLength::new(length, unit), |value| CropLength::new(value, to)),
+            Some(to) if to != unit => lengths.convert(length, base, to).map_or(CropLength::new(length, unit), |value| CropLength::new(value, to)),
             _ => CropLength::new(length, unit),
         });
         changed |= next != *value;
