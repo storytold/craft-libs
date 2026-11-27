@@ -531,8 +531,13 @@ pub(crate) fn host_window(ctx: &Context, layer: &Layer<'_>, rect: Rect) -> Layer
     let overlay = layer.overlay;
     let mut memory = recall(layer, ctx);
     let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);
-    let mut entry =
-        OpenEntry::new(layer.id, overlay.rank, overlay.keys, rect, areas::layer_of(overlay::layer_tier(ctx, overlay.rank, overlay.among_windows), area_id(layer.id)));
+    let mut entry = OpenEntry::new(
+        layer.id,
+        overlay.rank,
+        overlay.keys,
+        rect,
+        areas::layer_of(overlay::layer_tier(ctx, overlay.rank, overlay.among_windows), area_id(layer.id)),
+    );
     entry.role = overlay.role;
     entry.scoped = scope.is_some();
     entry.window = true;
