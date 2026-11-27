@@ -479,19 +479,36 @@ fn data_labels(w: &mut Writer, c: &Chart, show: bool) {
 
 const AX_CAT: u32 = 50_001;
 const AX_VAL: u32 = 50_002;
+const AX_CAT_SECONDARY: u32 = 50_003;
+const AX_VAL_SECONDARY: u32 = 50_004;
 
-fn axes(w: &mut Writer, c: &Chart, g: Group) {
-    let horizontal = c.kind.horizontal() && g == Group::Bar;
-    let (cat_pos, val_pos) = if horizontal { ("l", "b") } else { ("b", "l") };
+fn axis_ids(secondary: bool) -> (u32, u32) {
+    if secondary { (AX_CAT_SECONDARY, AX_VAL_SECONDARY) } else { (AX_CAT, AX_VAL) }
+}
+
+fn axes(w: &mut Writer, c: &Chart, g: Group, kind: ChartType, secondary: bool) {
+    let (ax_cat, ax_val) = axis_ids(secondary);
+    let (y_min, y_max, y_format) = if secondary {
+        (c.y2_min, c.y2_max, c.y2_format.as_deref())
+    } else {
+        (c.y_min, c.y_max, c.y_format.as_deref())
+    };
+    let horizontal = kind.horizontal() && g == Group::Bar;
+    let (cat_pos, val_pos) = match (horizontal, secondary) {
+        (true, false) => ("l", "b"),
+        (true, true) => ("r", "t"),
+        (false, false) => ("b", "l"),
+        (false, true) => ("t", "r"),
+    };
     if g == Group::Scatter || g == Group::Bubble {
         w.open("c:valAx", &[]);
-        w.tag("c:axId").attr("val", AX_CAT).empty();
+        w.tag("c:axId").attr("val", ax_cat).empty();
         w.open("c:scaling", &[]);
         w.tag("c:orientation").attr("val", "minMax").empty();
         w.close();
         w.tag("c:delete").attr("val", 0).empty();
-        w.tag("c:axPos").attr("val", "b").empty();
-        if let Some(t) = &c.axis_titles.0 {
+        w.tag("c:axPos").attr("val", if secondary { "t" } else { "b" }).empty();
+        if !secondary && let Some(t) = &c.axis_titles.0 {
             title(w, t, c);
         }
         w.tag("c:numFmt")
@@ -502,19 +519,19 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         w.tag("c:minorTickMark").attr("val", "none").empty();
         w.tag("c:tickLblPos").attr("val", "nextTo").empty();
         tx_pr(w, c);
-        w.tag("c:crossAx").attr("val", AX_VAL).empty();
+        w.tag("c:crossAx").attr("val", ax_val).empty();
         w.tag("c:crosses").attr("val", "autoZero").empty();
         w.tag("c:crossBetween").attr("val", "midCat").empty();
         w.close();
     } else {
         w.open("c:catAx", &[]);
-        w.tag("c:axId").attr("val", AX_CAT).empty();
+        w.tag("c:axId").attr("val", ax_cat).empty();
         w.open("c:scaling", &[]);
         w.tag("c:orientation").attr("val", if c.cat_reversed { "maxMin" } else { "minMax" }).empty();
         w.close();
         w.tag("c:delete").attr("val", 0).empty();
         w.tag("c:axPos").attr("val", cat_pos).empty();
-        if let Some(t) = &c.axis_titles.0 {
+        if !secondary && let Some(t) = &c.axis_titles.0 {
             title(w, t, c);
         }
         w.tag("c:numFmt")
@@ -525,7 +542,7 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         w.tag("c:minorTickMark").attr("val", "none").empty();
         w.tag("c:tickLblPos").attr("val", "nextTo").empty();
         tx_pr(w, c);
-        w.tag("c:crossAx").attr("val", AX_VAL).empty();
+        w.tag("c:crossAx").attr("val", ax_val).empty();
         w.tag("c:crosses").attr("val", "autoZero").empty();
         w.tag("c:auto").attr("val", 1).empty();
         w.tag("c:lblAlgn").attr("val", "ctr").empty();
@@ -534,41 +551,44 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         w.close();
     }
     w.open("c:valAx", &[]);
-    w.tag("c:axId").attr("val", AX_VAL).empty();
+    w.tag("c:axId").attr("val", ax_val).empty();
     w.open("c:scaling", &[]);
-    if let Some(b) = c.y_log_base {
+    if !secondary && let Some(b) = c.y_log_base {
         w.tag("c:logBase").attr("val", fmt_num(b)).empty();
     }
     w.tag("c:orientation").attr("val", "minMax").empty();
-    if let Some(m) = c.y_max.filter(|v| v.is_finite()) {
+    if let Some(m) = y_max.filter(|v| v.is_finite()) {
         w.tag("c:max").attr("val", fmt_num(m)).empty();
     }
-    if let Some(m) = c.y_min.filter(|v| v.is_finite()) {
+    if let Some(m) = y_min.filter(|v| v.is_finite()) {
         w.tag("c:min").attr("val", fmt_num(m)).empty();
     }
     w.close();
-    w.tag("c:delete").attr("val", 0).empty();
+    w.tag("c:delete").attr("val", u8::from(secondary && c.y2_hidden)).empty();
     w.tag("c:axPos").attr("val", val_pos).empty();
-    if c.gridlines {
+    if !secondary && c.gridlines {
         w.empty("c:majorGridlines", &[]);
     }
-    if c.minor_gridlines {
+    if !secondary && c.minor_gridlines {
         w.empty("c:minorGridlines", &[]);
     }
-    if let Some(t) = &c.axis_titles.1 {
+    if !secondary && let Some(t) = &c.axis_titles.1 {
         title(w, t, c);
     }
-    match c.y_format.as_deref().filter(|f| !f.is_empty()) {
+    match y_format.filter(|f| !f.is_empty()) {
         Some(f) => w.tag("c:numFmt").attr("formatCode", f).attr("sourceLinked", 0).empty(),
-        None => w.tag("c:numFmt").attr("formatCode", if c.kind.percent() { "0%" } else { "General" }).attr("sourceLinked", 1).empty(),
+        None => w.tag("c:numFmt").attr("formatCode", if kind.percent() { "0%" } else { "General" }).attr("sourceLinked", 1).empty(),
     }
     w.tag("c:majorTickMark").attr("val", "none").empty();
     w.tag("c:minorTickMark").attr("val", "none").empty();
     w.tag("c:tickLblPos").attr("val", "nextTo").empty();
     tx_pr(w, c);
-    w.tag("c:crossAx").attr("val", AX_CAT).empty();
+    w.tag("c:crossAx").attr("val", ax_cat).empty();
     w.tag("c:crosses").attr("val", "autoZero").empty();
     w.tag("c:crossBetween").attr("val", if g == Group::Area || g == Group::Scatter { "midCat" } else { "between" }).empty();
+    if secondary && let Some(unit) = c.y2_major.filter(|v| v.is_finite() && *v > 0.0) {
+        w.tag("c:majorUnit").attr("val", fmt_num(unit)).empty();
+    }
     w.close();
 }
 
@@ -590,7 +610,7 @@ fn series_points(c: &Chart, s: &Series, g: Group) -> usize {
     }
 }
 
-fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Series)]) {
+fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Series)], secondary: bool) {
     let g = group_of(kind);
     let grouping = if kind.percent() {
         "percentStacked"
@@ -628,17 +648,7 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Serie
     if g != Group::Stock {
         w.tag("c:varyColors").attr("val", vary).empty();
     }
-    // Each series repeats the categories in its own cache, so the output grows with series times
-    // categories: stop adding series once a group's caches pass the budget (the first is always written).
-    // The first series is always written; each of its caches is cut at MAX_CACHE_POINTS.
-    let mut left = MAX_EXPORT_POINTS;
-    for (n, (i, s)) in list.iter().enumerate() {
-        let cost = series_points(c, s, g);
-        if n > 0 && cost > left {
-            log::warn!("pptx: chart export stopped after {n} series; the data caches passed {MAX_EXPORT_POINTS} points");
-            break;
-        }
-        left = left.saturating_sub(cost);
+    for (i, s) in list {
         series(w, c, s, *i, kind, g);
     }
     if c.data_labels {
@@ -679,10 +689,41 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Serie
         _ => {}
     }
     if !matches!(g, Group::Pie | Group::Doughnut) {
-        w.tag("c:axId").attr("val", AX_CAT).empty();
-        w.tag("c:axId").attr("val", AX_VAL).empty();
+        let (cat, val) = axis_ids(secondary);
+        w.tag("c:axId").attr("val", cat).empty();
+        w.tag("c:axId").attr("val", val).empty();
     }
     w.close();
+}
+
+/// Retain the old per-kind cache budget before axis ownership partitions that list.
+fn plot_kind(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Series)]) -> bool {
+    let g = group_of(kind);
+    let mut left = MAX_EXPORT_POINTS;
+    let mut end = list.len();
+    for (n, (_, s)) in list.iter().enumerate() {
+        let cost = series_points(c, s, g);
+        if n > 0 && cost > left {
+            log::warn!("pptx: chart export stopped after {n} series; the data caches passed {MAX_EXPORT_POINTS} points");
+            end = n;
+            break;
+        }
+        left = left.saturating_sub(cost);
+    }
+    let retained = &list[..end];
+    if matches!(g, Group::Pie | Group::Doughnut) {
+        plot_group(w, c, kind, retained, false);
+        return false;
+    }
+    let mut has_secondary = false;
+    for secondary in [false, true] {
+        let part = retained.iter().filter(|(_, s)| s.secondary_axis == secondary).copied().collect::<Vec<_>>();
+        if !part.is_empty() || (!secondary && retained.is_empty()) {
+            plot_group(w, c, kind, &part, secondary);
+            has_secondary |= secondary;
+        }
+    }
+    has_secondary
 }
 
 /// The `chartEx` part of an Office 2016 chart (waterfall, funnel…): the kept part when the chart
@@ -732,6 +773,7 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
         return (w.into_bytes(), true);
     }
     // Reuse the kept part when the chart is unchanged since it was read.
+    let mut raw_kind = None;
     if let Some(raw) = &c.raw
         && !raw.contains(NS_CX)
         && let Ok(doc) = crate::xmlx::parse(raw.as_bytes())
@@ -744,6 +786,7 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
         // current-reader metadata edits as unchanged legacy state.
         let back = if c.raw_metadata_version == 0 { super::read::legacy_chart_from(&root) } else { super::read::chart_from(&root) };
         if let Some(back) = back {
+            raw_kind = Some(back.kind);
             let mut me = c.clone();
             me.raw = None;
             // The sidecar is not modelled chart state. Comparing it would throw away an unchanged chart.
@@ -784,58 +827,47 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
         ChartType::Combo => c.series.first().and_then(|s| s.kind).unwrap_or(ChartType::Column),
         k => k,
     };
-    if c.kind == ChartType::Combo {
-        // One plot group per series type, sharing the axes.
-        let mut kinds: Vec<ChartType> = vec![];
-        for s in &c.series {
-            let k = s.kind.unwrap_or(main);
-            let k = if matches!(group_of(k), Group::Pie | Group::Doughnut | Group::Scatter | Group::Bubble) { ChartType::Column } else { k };
-            if !kinds.contains(&k) {
-                kinds.push(k);
-            }
-        }
-        for k in kinds {
-            let list: Vec<(usize, &Series)> = indexed
-                .iter()
-                .filter(|(_, s)| {
-                    let sk = s.kind.unwrap_or(main);
-                    let sk =
-                        if matches!(group_of(sk), Group::Pie | Group::Doughnut | Group::Scatter | Group::Bubble) { ChartType::Column } else { sk };
-                    sk == k
-                })
-                .copied()
-                .collect();
-            plot_group(&mut w, c, k, &list);
-        }
-        axes(&mut w, c, Group::Bar);
-    } else {
-        if !matches!(
-            c.kind,
+    let override_kind = (c.kind != ChartType::Combo && raw_kind.is_some_and(|kind| kind != c.kind)).then_some(c.kind);
+    let effective = indexed.iter().map(|(i, s)| (*i, *s, override_kind.unwrap_or(s.kind.unwrap_or(main)))).collect::<Vec<_>>();
+    let first = effective.first().map_or(main, |(_, _, kind)| *kind);
+    let combo = c.kind == ChartType::Combo || effective.iter().any(|(_, _, kind)| *kind != first);
+    let normalize = |kind| {
+        if combo && matches!(group_of(kind), Group::Pie | Group::Doughnut | Group::Scatter | Group::Bubble) {
             ChartType::Column
-                | ChartType::StackedColumn
-                | ChartType::PercentColumn
-                | ChartType::Bar
-                | ChartType::StackedBar
-                | ChartType::PercentBar
-                | ChartType::Line
-                | ChartType::LineMarkers
-                | ChartType::StackedLine
-                | ChartType::Area
-                | ChartType::StackedArea
-                | ChartType::Pie
-                | ChartType::Doughnut
-                | ChartType::Scatter
-                | ChartType::Bubble
-                | ChartType::Radar
-                | ChartType::FilledRadar
-                | ChartType::Stock
-        ) {
-            log::warn!("pptx: {} chart written as a column chart", c.kind.label());
+        } else {
+            kind
         }
-        plot_group(&mut w, c, main, &indexed);
-        let g = group_of(main);
-        if !matches!(g, Group::Pie | Group::Doughnut) {
-            axes(&mut w, c, g);
+    };
+    let mut kinds = Vec::new();
+    for (_, _, kind) in &effective {
+        let kind = normalize(*kind);
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+    if kinds.is_empty() && !combo {
+        kinds.push(main);
+    }
+    let mut has_secondary = false;
+    for kind in &kinds {
+        let list = effective.iter().filter(|(_, _, k)| normalize(*k) == *kind).map(|(i, s, _)| (*i, *s)).collect::<Vec<_>>();
+        has_secondary |= plot_kind(&mut w, c, *kind, &list);
+    }
+    if !combo && !matches!(
+        first,
+        ChartType::Column | ChartType::StackedColumn | ChartType::PercentColumn | ChartType::Bar | ChartType::StackedBar
+            | ChartType::PercentBar | ChartType::Line | ChartType::LineMarkers | ChartType::StackedLine | ChartType::Area
+            | ChartType::StackedArea | ChartType::Pie | ChartType::Doughnut | ChartType::Scatter | ChartType::Bubble
+            | ChartType::Radar | ChartType::FilledRadar | ChartType::Stock
+    ) {
+        log::warn!("pptx: {} chart written as a column chart", first.label());
+    }
+    let axis_kind = if combo { ChartType::Combo } else { first };
+    let axis_group = if combo { Group::Bar } else { group_of(first) };
+    if !matches!(axis_group, Group::Pie | Group::Doughnut) {
+        axes(&mut w, c, axis_group, axis_kind, false);
+        if has_secondary {
+            axes(&mut w, c, axis_group, axis_kind, true);
         }
     }
     if let Some(dt) = &c.data_table {
