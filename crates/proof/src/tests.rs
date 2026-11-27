@@ -14,6 +14,7 @@ fn write_test_dictionaries(dir: &std::path::Path) {
         ("cs_CZ", cs::test_dict::AFF, cs::test_dict::DIC),
         ("id_ID", id::test_dict::AFF, id::test_dict::DIC),
         ("gu_IN", gu::test_dict::AFF, gu::test_dict::DIC),
+        ("hi_IN", hi::test_dict::AFF, hi::test_dict::DIC),
         ("es_ES", es::test_dict::AFF, es::test_dict::DIC),
         ("es_MX", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
         ("es_419", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
@@ -633,7 +634,7 @@ fn every_lang() -> Vec<ProofLang> {
     // Stops compiling when a language is added: add it to the list below too.
     let _ = |l: L| match l {
         L::En | L::EnGb | L::EnAu | L::EnCa | L::Pl | L::Bg | L::Pt | L::It | L::Hr | L::Tr | L::Ru | L::Cs | L::Id => (),
-        L::Es | L::EsMx | L::Es419 | L::EsUy | L::Gu | L::De | L::Pack(_) | L::Other => (),
+        L::Es | L::EsMx | L::Es419 | L::EsUy | L::Gu | L::Hi | L::De | L::Pack(_) | L::Other => (),
     };
     let fr = ProofLang::from_tag(Some("fr"));
     assert!(matches!(fr, L::Pack(_)), "{fr:?}");
@@ -656,6 +657,7 @@ fn every_lang() -> Vec<ProofLang> {
         L::Es419,
         L::EsUy,
         L::Gu,
+        L::Hi,
         L::De,
         fr,
         L::Other,

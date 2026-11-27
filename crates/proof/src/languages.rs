@@ -1,7 +1,7 @@
 //! The table of languages proofed against Hunspell dictionaries, and the dictionary-folder and load-error API.
 
 use super::{
-    DICTIONARY_GENERATION, EnglishSource, Issue, Options, Ordering, ProofLang, cs, english, es, gu, hr, hunspell, id, it, pack_lang, pl, pt, ru,
+    DICTIONARY_GENERATION, EnglishSource, Issue, Options, Ordering, ProofLang, cs, english, es, gu, hi, hr, hunspell, id, it, pack_lang, pl, pt, ru,
     slot, tr,
 };
 
@@ -21,7 +21,7 @@ pub(super) struct Language {
 
 /// Every language proofed against a Hunspell dictionary, in the order File › Options › Proofing
 /// lists them. English has a built-in word list and is handled apart.
-pub(super) static LANGUAGES: [Language; 13] = [
+pub(super) static LANGUAGES: [Language; 14] = [
     Language {
         lang: ProofLang::Pl,
         slot: &pl::DICT,
@@ -95,6 +95,14 @@ pub(super) static LANGUAGES: [Language; 13] = [
         is_correct: |w, _, o| gu::is_correct_with_options(w, o),
         suggest: |w, n, _| gu::suggest(w, n),
         grammar: |t, _, _| gu::grammar::check(t),
+    },
+    Language {
+        lang: ProofLang::Hi,
+        slot: &hi::DICT,
+        message: "संभावित वर्तनी त्रुटि",
+        is_correct: |w, _, o| hi::is_correct_with_options(w, o),
+        suggest: |w, n, _| hi::suggest(w, n),
+        grammar: |t, _, _| hi::grammar::check(t),
     },
     Language {
         lang: ProofLang::Es,
