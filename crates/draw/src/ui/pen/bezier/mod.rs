@@ -1371,7 +1371,8 @@ impl Component for BezierOverlay<'_> {
             if hollow {
                 paint_handle(&draw, &control_look, true, end, fill, path.color);
             } else {
-                paint_dot(&draw, &control_look, end, fill, path.color);
+                // A solid dot takes the colour the path's outline is drawn in.
+                paint_dot(&draw, &control_look, end, fill, path.color.or(option_color));
             }
         };
         // The path's thickness is a document width; without one the lines take the theme's widths. A path with a
