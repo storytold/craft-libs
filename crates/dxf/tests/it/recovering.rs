@@ -10,7 +10,7 @@ fn an_intact_file_reads_as_parse_reads_it() {
     assert_eq!(damaged, None);
     assert_eq!(tags, parse(WHOLE.as_bytes()).expect("reads"));
     // Binary files are read as before.
-    let binary = write_binary(&tags, true);
+    let binary = write_binary(&tags, true).unwrap();
     assert_eq!(parse_recovering(&binary).expect("reads"), (tags, None));
 }
 

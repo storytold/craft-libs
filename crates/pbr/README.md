@@ -143,6 +143,7 @@ It has no UI, does no file or network I/O and has no `unsafe` code.
   add the conversions and depend on craft-mesh and craft-materialx. The default build has none of
   them, is serial and builds for `wasm32-unknown-unknown`, as do `mesh` and `materialx`. Results
   are the same either way.
+  The `craft` facade forwards the conversion features as `pbr-mesh` and `pbr-materialx`.
 
 On a 256 × 128 source, the default `try_prefilter` evaluates 1,396,736 samples (10,912 output
 pixels in levels 1 to 5, 128 samples each).
