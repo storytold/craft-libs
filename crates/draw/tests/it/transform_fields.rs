@@ -344,5 +344,5 @@ fn a_skew_that_rounds_to_zero_shows_as_zero_not_minus_zero() {
     assert!(negative(&state), "the box leans the negative way: {:?}", state.parts(START, 0.0));
     let h = harness_of(TransformRow::new(state, 0.0), plain());
     let field = h.target("Horizontal skew");
-    assert_eq!(h.fixture.tree().value_of(field.node), Some("0"));
+    assert_eq!(h.fixture.tree().value_of(field.node), Some("0 °"));
 }

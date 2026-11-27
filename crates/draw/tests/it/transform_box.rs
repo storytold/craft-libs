@@ -698,7 +698,8 @@ fn an_edge_band_grabs_a_side_from_inside_the_box_along_its_whole_length() {
     assert_eq!(h.host.borrow().hovered, None, "the middle of the box is past the band");
     drag(&mut h, inside, Point::new(314.0, 110.0));
     let quad = h.state().quad;
-    assert!((quad[1].x - 314.0).abs() < 1e-6 && (quad[2].x - 314.0).abs() < 1e-6, "the grab dragged the side as its handle: {quad:?}");
+    // As its handle does, the side moves by the drag (20 points) and keeps the press's offset from it.
+    assert!((quad[1].x - 320.0).abs() < 1e-6 && (quad[2].x - 320.0).abs() < 1e-6, "the grab dragged the side as its handle: {quad:?}");
     assert!((quad[0].x - RECT.x0).abs() < 1e-6, "the far side stayed: {quad:?}");
 }
 
@@ -1670,13 +1671,10 @@ fn the_rotate_handle_turns_the_box_about_its_reference_point_and_the_rest_of_the
     let knob = reach[reach.len() / 2];
 
     let centre = RECT.center();
-    // A turn reads the pointer half a document pixel up and left of it (measured on the reference application), so a
-    // drag 20° about the centre turns by the angle between those points.
+    // The rotate handle is a control of its own: it turns with the pointer as it is, not from where the view reads a
+    // turn from outside the box.
     let end = Affine::rotate_about(20f64.to_radians(), centre) * knob;
-    let read = |p: Point| (p.y - 0.5 - centre.y).atan2(p.x - 0.5 - centre.x);
-    let free = (read(end) - read(knob)).to_degrees();
-    assert!((free - 20.0).abs() < 0.2, "{free}");
-    for (mods, angle, within) in [(None, free, 0.01), (Some(Mods::SHIFT), 15.0, 1e-6)] {
+    for (mods, angle, within) in [(None, 20.0, 0.01), (Some(Mods::SHIFT), 15.0, 1e-6)] {
         let mut h = harness(BoxState::from_rect(RECT), |config| {
             handle(config);
             config.mods = mods;
@@ -2265,15 +2263,16 @@ fn a_host_handle_side_sets_the_drawn_handle_square() {
 /// A large host handle takes a press anywhere on its square, also past the theme's reach, and the press drags it.
 #[trial]
 fn a_press_just_inside_a_large_handles_edge_grabs_it() {
-    // 7 points in from the bottom right corner on both axes: inside a 16 point square, about 9.9 from its centre.
-    let near_edge = Point::new(RECT.x1 - 7.0, RECT.y1 - 7.0);
+    // 10 points in from the bottom right corner on both axes: inside a 24 point square, about 14.1 from its centre,
+    // past the theme's 11 point corner reach.
+    let near_edge = Point::new(RECT.x1 - 10.0, RECT.y1 - 10.0);
     let mut theme = harness(BoxState::from_rect(RECT), |config| config.rules = free_rules());
     hover(&mut theme, near_edge);
     assert_ne!(theme.host.borrow().hovered, Some(BoxPart::Corner(2)), "past the theme's handle reach");
 
     let mut h = harness(BoxState::from_rect(RECT), |config| {
         config.rules = free_rules();
-        config.handle_side = Some(16.0);
+        config.handle_side = Some(24.0);
     });
     hover(&mut h, near_edge);
     assert_eq!(h.host.borrow().hovered, Some(BoxPart::Corner(2)), "on the large handle's square");
