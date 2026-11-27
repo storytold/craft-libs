@@ -5,7 +5,7 @@ use craft_ui::runtime::layout_memory;
 use craft_ui::testing::layout::Block;
 use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, trial};
 use craft_ui_test_kit::contract::Panel;
-use egui::{Id, Vec2};
+use egui::{Id, Rect, UiBuilder, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -75,5 +75,43 @@ fn a_view_in_a_drafted_body_replays_in_both_measures_while_the_view_around_it_ch
         assert!(of("u32").contains(&MemoRun::Ran), "step {at}: the new key runs the view around the body: {runs:?}");
         assert!(list.len() >= 3, "step {at}: the body measures the inner view as a draft and at its room, then shows it: {runs:?}");
         assert!(list.iter().all(|run| *run == MemoRun::Replayed), "step {at}: the inner view's inputs are unchanged, so no call runs it: {runs:?}");
+    }
+}
+
+/// A grid sweeps a content column at a trial width and then at the width it settles on, so a memoized view in the
+/// column is measured in two rooms in one pass, and code after each sizing call reads what the view handed forward
+/// there. In the passes where both calls take the view's kept measures, each still hands forward what the run in its
+/// room handed forward.
+#[trial]
+fn a_view_measured_in_two_rooms_hands_forward_each_rooms_width_when_it_takes_its_kept_measures() {
+    const ROOMS: [f32; 2] = [120.0, 180.0];
+    let read: Rc<RefCell<Vec<Option<f32>>>> = Rc::default();
+    let seen = Rc::clone(&read);
+    let mut fixture = Fixture::new(move |ui| {
+        let start = ui.available_rect_before_wrap().min;
+        let view = |ui: &mut egui::Ui| {
+            let _ = MemoView::new("measured", 1_u32, |_: &mut u32, ui: &mut egui::Ui| {
+                layout_memory::emit_width(ui.ctx(), handed(), ui.available_width());
+                ui.label("Handed forward");
+            })
+            .show(ui);
+        };
+        let cell = |room: Vec2| UiBuilder::new().max_rect(Rect::from_min_size(start, room)).scope_id(Id::new("cell"));
+        for width in ROOMS {
+            view(&mut ui.new_child(cell(Vec2::new(width, f32::INFINITY)).sizing_pass().invisible()));
+            seen.borrow_mut().push(layout_memory::width(ui.ctx(), handed()));
+        }
+        view(&mut ui.new_child(cell(Vec2::new(ROOMS[1], 100.0))));
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    let ran: Vec<Option<f32>> = read.borrow()[read.borrow().len() - ROOMS.len()..].to_vec();
+    assert!(ran[0].is_some() && ran[0] != ran[1], "each room's run hands forward its own width: {ran:?}");
+    for at in 0..3 {
+        read.borrow_mut().clear();
+        fixture.frame(Vec::new());
+        let runs = last_frame_memo_runs(fixture.ctx());
+        assert!(!runs.is_empty() && runs.iter().all(|(_, _, run)| *run == MemoRun::Replayed), "frame {at}: every call replays: {runs:?}");
+        assert_eq!(*read.borrow(), ran, "frame {at}: each sizing call hands forward its room's width");
     }
 }
