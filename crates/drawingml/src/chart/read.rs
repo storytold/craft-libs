@@ -1546,4 +1546,194 @@ mod tests {
             assert_eq!(back.series.iter().map(|s| (s.name.clone(), s.values.clone())).collect::<Vec<_>>(), names_and_values);
         }
     }
+
+    #[test]
+    fn review_6094076812_deleting_primary_keeps_the_surviving_secondary_axis() {
+        for name in ["Primary", "Secondary"] {
+            let mut chart = read_chart_xml(same_kind_chart_xml().as_bytes()).unwrap();
+            chart.series.retain(|s| s.name == name);
+            let (written, kept) = crate::chart::write::chart_xml(&chart);
+            assert!(!kept);
+            let back = read_chart_xml(&written).unwrap();
+            assert_eq!(back.series.len(), 1);
+            assert_eq!(back.series[0].name, name);
+            assert_eq!(back.series[0].secondary_axis, name == "Secondary");
+            assert_eq!(back.y_max, Some(10.0), "the primary scale must not adopt the surviving secondary scale");
+            if name == "Secondary" {
+                assert_eq!(back.y2_max, Some(90.0));
+                assert_eq!(back.series[0].values, vec![Some(7.0)]);
+            } else {
+                assert_eq!(back.series[0].values, vec![Some(2.0)]);
+            }
+        }
+        // Published version1 called the only used value axis primary. Keep that exact
+        // native-save projection, even though new imports retain the unused primary pair.
+        let xml = metadata_chart(r#"<c:barChart><c:barDir val="col"/>
+<c:ser><c:tx><c:v>Secondary</c:v></c:tx></c:ser><c:axId val="3"/><c:axId val="4"/></c:barChart>
+<c:catAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx>
+<c:valAx><c:axId val="2"/><c:scaling><c:max val="10"/></c:scaling><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>
+<c:catAx><c:axId val="3"/><c:axPos val="b"/><c:crossAx val="4"/></c:catAx>
+<c:valAx><c:axId val="4"/><c:scaling><c:max val="90"/></c:scaling><c:axPos val="r"/><c:crossAx val="3"/></c:valAx>"#);
+        let mut old = serde_json::to_value(read_chart_xml(xml.as_bytes()).unwrap()).unwrap();
+        old["rawMetadataVersion"] = serde_json::json!(1);
+        old["series"][0]["secondaryAxis"] = serde_json::json!(false);
+        old["yMax"] = serde_json::json!(90.0);
+        old["y2Max"] = serde_json::Value::Null;
+        let saved: Chart = serde_json::from_value(old).unwrap();
+        assert!(crate::chart::write::chart_xml(&saved).1, "unchanged version1 axis metadata keeps raw XML");
+        let mut current = saved;
+        current.raw_metadata_version = 2;
+        assert!(!crate::chart::write::chart_xml(&current).1, "current ownership edits are not legacy state");
+    }
+
+    fn review_line_chart(grouping: &str, visible: bool, series: &[(&str, Option<&str>)]) -> String {
+        let mut plot = format!(r#"<c:lineChart><c:grouping val="{grouping}"/>"#);
+        for (i, (name, marker)) in series.iter().enumerate() {
+            let marker = marker.map(|m| format!(r#"<c:marker><c:symbol val="{m}"/></c:marker>"#)).unwrap_or_default();
+            plot.push_str(&format!(
+                r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:tx><c:v>{name}</c:v></c:tx>{marker}<c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:val></c:ser>"#
+            ));
+        }
+        plot.push_str(&format!(r#"<c:marker val="{}"/></c:lineChart>"#, u8::from(visible)));
+        metadata_chart(&plot)
+    }
+
+    #[test]
+    fn review_6094076812_chart_wide_line_edits_override_only_the_old_visibility() {
+        for (visible, symbol, target) in [(false, "none", ChartType::LineMarkers), (true, "circle", ChartType::Line)] {
+            let xml = review_line_chart("standard", visible, &[("Edited", Some(symbol))]);
+            let mut chart = read_chart_xml(xml.as_bytes()).unwrap();
+            assert_ne!(chart.kind, target);
+            chart.kind = target;
+            let (written, kept) = crate::chart::write::chart_xml(&chart);
+            assert!(!kept);
+            let back = read_chart_xml(&written).unwrap();
+            assert_eq!(back.kind, target, "a real chart-wide edit wins over the imported symbol {symbol}");
+            assert_eq!(back.series[0].values, vec![Some(7.0)]);
+        }
+        // An explicit per-series none is deliberate when there was no chart-wide edit.
+        let mut unchanged_kind = read_chart_xml(line_marker_chart_xml().as_bytes()).unwrap();
+        unchanged_kind.title = Some("Title only".into());
+        let back = read_chart_xml(&crate::chart::write::chart_xml(&unchanged_kind).0).unwrap();
+        assert_eq!(back.series.iter().map(|s| s.marker.as_deref()).collect::<Vec<_>>(), [Some("none"), None, Some("diamond"), None]);
+        assert_eq!(back.series.iter().map(|s| s.kind).collect::<Vec<_>>(), unchanged_kind.series.iter().map(|s| s.kind).collect::<Vec<_>>());
+
+        let chart = Chart {
+            kind: ChartType::LineMarkers,
+            series: vec![
+                Series { name: "Hidden".into(), marker: Some("none".into()), kind: Some(ChartType::LineMarkers), ..Default::default() },
+                Series { name: "Circle".into(), marker: Some("circle".into()), kind: Some(ChartType::LineMarkers), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let back = read_chart_xml(&crate::chart::write::chart_xml(&chart).0).unwrap();
+        assert_eq!(back.series[0].marker.as_deref(), Some("none"), "do not globally discard explicit none");
+        assert_eq!(back.series[1].marker.as_deref(), Some("circle"));
+    }
+
+    #[test]
+    fn review_6094076812_combo_axes_follow_each_emitted_plot_and_explicit_formats() {
+        for explicit in [false, true] {
+            for line_first in [false, true] {
+            let mut chart = Chart {
+                kind: ChartType::Combo,
+                categories: vec!["Category".into()],
+                series: vec![
+                    Series { name: "Primary bar".into(), kind: Some(ChartType::Bar), values: vec![Some(2.0)], ..Default::default() },
+                    Series {
+                        name: "Secondary percent bar".into(), kind: Some(ChartType::PercentBar), secondary_axis: true,
+                        values: vec![Some(7.0)], ..Default::default()
+                    },
+                ],
+                y_format: explicit.then(|| "0.00".into()),
+                y2_format: explicit.then(|| "0.000%".into()),
+                ..Default::default()
+            };
+            if line_first {
+                chart.series.insert(0, Series { name: "Primary line".into(), kind: Some(ChartType::Line), values: vec![Some(3.0)], ..Default::default() });
+                chart.series.insert(1, Series { name: "Secondary line".into(), kind: Some(ChartType::Line), secondary_axis: true, values: vec![Some(4.0)], ..Default::default() });
+            }
+            let (written, _) = crate::chart::write::chart_xml(&chart);
+            let doc = crate::xmlx::parse(&written).unwrap();
+            let plot = doc.path(&[Local("chart"), Local("plotArea")]).unwrap();
+            for (name, cat_pos, val_pos, code) in [
+                ("Primary bar", "l", "b", if explicit { "0.00" } else { "General" }),
+                ("Secondary percent bar", "r", "t", if explicit { "0.000%" } else { "0%" }),
+            ] {
+                let group = plot.children(Local("barChart")).find(|g| g.children(Local("ser")).any(|s| rich_text(s).as_deref() == Some(name))).unwrap();
+                let ids = group.children(Local("axId")).map(|a| a.attr_local("val").unwrap()).collect::<Vec<_>>();
+                assert_eq!(ids.len(), 2);
+                for (tag, id, pos) in [("catAx", ids[0], cat_pos), ("valAx", ids[1], val_pos)] {
+                    let axis = plot.children(Local(tag)).find(|a| a.child(Local("axId")).and_then(|v| v.attr_local("val")) == Some(id)).unwrap();
+                    assert_eq!(axis.child(Local("axPos")).and_then(|a| a.attr_local("val")), Some(pos));
+                    if tag == "valAx" {
+                        let format = axis.child(Local("numFmt")).unwrap();
+                        assert_eq!(format.attr_local("formatCode"), Some(code));
+                        assert_eq!(format.attr_local("sourceLinked"), Some(if explicit { "0" } else { "1" }));
+                    }
+                }
+            }
+            }
+        }
+    }
+
+    #[test]
+    fn review_6094076812_title_only_plain_line_keeps_omitted_and_explicit_none_distinct() {
+        let xml = review_line_chart("standard", false, &[("Omitted", None), ("Explicit none", Some("none"))]);
+        let mut chart = read_chart_xml(xml.as_bytes()).unwrap();
+        assert_eq!(chart.kind, ChartType::Line);
+        chart.title = Some("New title".into());
+        let (written, kept) = crate::chart::write::chart_xml(&chart);
+        assert!(!kept);
+        let back = read_chart_xml(&written).unwrap();
+        assert_eq!(back.kind, ChartType::Line);
+        assert_eq!(back.title, chart.title);
+        assert_eq!(back.series.iter().map(|s| s.marker.as_deref()).collect::<Vec<_>>(), [None, Some("none")]);
+        let doc = crate::xmlx::parse(&written).unwrap();
+        let plot = doc.path(&[Local("chart"), Local("plotArea")]).unwrap();
+        assert!(plot.children(Local("lineChart")).all(|g| g.child(Local("marker")).and_then(|m| m.attr_local("val")) == Some("0")));
+    }
+
+    #[test]
+    fn review_6094076812_stacked_marker_visibility_survives_independently_of_symbol_and_kind() {
+        for grouping in ["stacked", "percentStacked"] {
+            for visible in [false, true] {
+                let xml = review_line_chart(grouping, visible, &[("Inherited", None), ("Hidden", Some("none")), ("Circle", Some("circle"))]);
+                let chart = read_chart_xml(xml.as_bytes()).unwrap();
+                assert!(chart.series.iter().all(|s| s.kind == Some(ChartType::StackedLine)));
+                let model = serde_json::to_value(&chart).unwrap();
+                for (i, expected) in [visible, false, true].into_iter().enumerate() {
+                    assert_eq!(model["series"][i].get("markerVisible"), Some(&serde_json::json!(expected)), "{grouping}, visible={visible}, series={i}");
+                }
+                // Simulate the published version1 native-save shape, which had no markerVisible.
+                let mut old = model.clone();
+                old["rawMetadataVersion"] = serde_json::json!(1);
+                for series in old["series"].as_array_mut().unwrap() {
+                    series.as_object_mut().unwrap().remove("markerVisible");
+                }
+                let old: Chart = serde_json::from_value(old).unwrap();
+                assert!(crate::chart::write::chart_xml(&old).1, "unchanged version1 saves retain their raw part");
+
+                let mut edited = chart.clone();
+                edited.title = Some("Title only".into());
+                let (written, kept) = crate::chart::write::chart_xml(&edited);
+                assert!(!kept);
+                let back = read_chart_xml(&written).unwrap();
+                assert_eq!(back.series.iter().map(|s| s.marker.as_deref()).collect::<Vec<_>>(), [None, Some("none"), Some("circle")]);
+                let back = serde_json::to_value(&back).unwrap();
+                for (i, expected) in [visible, false, true].into_iter().enumerate() {
+                    assert_eq!(back["series"][i]["markerVisible"], serde_json::json!(expected));
+                }
+                // Changing current metadata must rebuild, even though its raw XML is unchanged.
+                let mut changed = model;
+                changed["series"][0]["markerVisible"] = serde_json::json!(!visible);
+                let changed: Chart = serde_json::from_value(changed).unwrap();
+                let (written, kept) = crate::chart::write::chart_xml(&changed);
+                assert!(!kept);
+                let back = serde_json::to_value(read_chart_xml(&written).unwrap()).unwrap();
+                assert_eq!(back["series"][0]["markerVisible"], serde_json::json!(!visible));
+            }
+        }
+    }
+
 }
