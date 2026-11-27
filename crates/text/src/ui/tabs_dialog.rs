@@ -99,8 +99,8 @@ const FALLBACK_INTERVAL: f32 = 36.0;
 ///   leader `Select` whose options read as Word's list does ("1 ……"). Editing the position keeps the rows in order
 ///   until the edit ends, then [`TabStopsDialog::normalize`] restores position order and merges stops moved onto one
 ///   another (the edited row wins).
-/// - The Tab stop position box shows the selected stop's position (the first stop is selected when the dialog
-///   opens), as in Word; with none selected, the next free step, where Set puts a stop. Set puts a stop at the box's position, or, when a stop already holds it (or the box is
+/// - The Tab stop position box shows the selected stop's position, as in Word; with none selected (as when the dialog
+///   opens), the next free step, where Set puts a stop: the default interval when there are no stops. Set puts a stop at the box's position, or, when a stop already holds it (or the box is
 ///   empty), at the next free multiple of the default interval after the last stop; the new stop is left aligned, no
 ///   leader, selected. Clear moves the selected stop to "to be cleared"; Clear All clears every stop.
 /// - Positions are clamped to ±[`MAX_POSITION`]; at most [`MAX_STOPS`] stops are read from a paragraph.
@@ -154,13 +154,6 @@ impl TabStopsDialog {
             bare: false,
             held: HeldAnswer::new(),
         }
-        .first_selected()
-    }
-
-    /// The dialog opens on the first stop selected, its position in the box, as Word's does.
-    fn first_selected(mut self) -> Self {
-        self.select(Some(0));
-        self
     }
 
     /// Sets the unit the position fields show.

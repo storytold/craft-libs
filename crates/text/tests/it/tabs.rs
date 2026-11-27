@@ -254,8 +254,8 @@ fn the_default_button_follows_the_field_that_holds_enter() {
     assert_eq!(default(&dialog), (false, false), "a click into a stop's position: Enter takes the position");
 }
 
-/// As in Word, the Tab stop position box shows the selected stop's position: the first stop's when the dialog opens,
-/// another's when its row is selected; it empties when Clear leaves nothing selected.
+/// The Tab stop position box shows the next free step while no stop is selected (as when the dialog opens: the default
+/// interval with no stops), and the selected stop's position, as in Word.
 #[trial]
 fn the_tab_stop_position_box_shows_the_selected_stop() {
     let stops = vec![stop(72.0, TabAlign::Left, TabLeader::None), stop(144.0, TabAlign::Left, TabLeader::None)];
@@ -264,7 +264,9 @@ fn the_tab_stop_position_box_shows_the_selected_stop() {
         let target = fixture.by_label("Tab stop position:").expect("the box is shown");
         fixture.tree().value_of(target.node).unwrap_or_default().to_owned()
     };
-    assert!(shown_in_box(&fixture).contains("72"), "the box opens on the first stop: {:?}", shown_in_box(&fixture));
+    assert!(shown_in_box(&fixture).contains("180"), "the box opens on the next free step: {:?}", shown_in_box(&fixture));
+    let (empty, _, _) = shown(TabStopsDialog::new(Vec::new(), 36.0).bare(true));
+    assert!(shown_in_box(&empty).starts_with("36"), "with no stops, the default interval: {:?}", shown_in_box(&empty));
     dialog.borrow_mut().select(Some(1));
     fixture.idle(4);
     assert!(shown_in_box(&fixture).contains("144"), "the box follows the selection: {:?}", shown_in_box(&fixture));
