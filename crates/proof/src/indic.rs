@@ -11,8 +11,8 @@
 //!
 //! The rules come from the scripts' Unicode encoding alone; no pattern file or word list is
 //! read (and none is borrowed). The Brahmic blocks share one layout (the ISCII order), so a
-//! script is its block's start and a few script-specific code points ([`Script::kind`]).
-//! Gujarati ([`ProofLang::Gu`](crate::ProofLang::Gu)) uses them; Devanagari is ready for Hindi
+//! script is its block's start and a few script-specific code points (`Script::kind`).
+//! Gujarati ([`ProofLang::Gu`]) uses them; Devanagari is ready for Hindi
 //! and the other Devanagari languages: map the language to [`Script::Devanagari`] in
 //! [`Script::of`].
 //!
