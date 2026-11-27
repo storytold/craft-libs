@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use craft_font_catalog::{Catalog, FaceInfo, LocalizedName, Outlines, is_private_family};
 use craft_host::Wake;
 use craft_host::queue::{JobQueue, Priority, QueueOptions};
+use craft_host::target::Runtime;
 use craft_i18n::matcher::{Matcher, Rank};
 use craft_i18n::{Collator, Folder};
 use craft_ui::contract::Cx;
@@ -257,7 +258,7 @@ impl FamilyInfos {
     }
 
     fn advance_reads(&self, cx: &Cx<'_, FontPicker<'_>>) {
-        if cfg!(target_arch = "wasm32")
+        if Runtime::current() == Runtime::Web
             && let Some(reads) = lock(&self.reads).as_mut()
         {
             let frame = cx.response.ctx.cumulative_frame_nr();
