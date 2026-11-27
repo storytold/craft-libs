@@ -814,6 +814,16 @@ pub trait ItemOutput<E>: Outcome {
     fn label_rect(&self) -> Option<egui::Rect> {
         None
     }
+
+    /// The lead item's resolved fill, which the collection uses as the background of its focus ring.
+    fn lead_fill(&self) -> Option<craft_theme::Rgba> {
+        None
+    }
+
+    /// The lead item's focus ring bounds, in the item's layer. The default uses the item's full bounds.
+    fn lead_focus_bounds(&self) -> Option<egui::Rect> {
+        None
+    }
 }
 
 impl<E> ItemOutput<E> for Response {

@@ -861,7 +861,7 @@ pub(crate) fn begin_pass(ui: &mut Ui) {
     } else if escapes.to_components > 0 {
         raw_input::stop_dragging(&ctx);
     }
-    wheel::begin(&ctx);
+    wheel::begin(&ctx, input.root.pointer_scoped_field_wheel);
     // H7: shortcuts the owner allows, through the gate.
     commands::begin(&ctx);
     access::begin_live_pass(&ctx);

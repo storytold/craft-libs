@@ -75,7 +75,7 @@ use crate::runtime::commands::CommandRef;
 use crate::runtime::derived::derived;
 use crate::runtime::env::{AppValues, EnvValue, Label};
 use crate::runtime::focus::KeyUse;
-use crate::style::{ComponentStyle, StyleCx};
+use crate::style::{ComponentStyle, FocusLook, StyleCx};
 use craft_behavior::dock::{DockEdge, Layout, Node, SplitSize};
 use craft_behavior::{Axis, EditEvents, Flow, Metrics, PartKey, Sense};
 use divider::{Divider, Drag};
@@ -247,6 +247,9 @@ pub struct PanelDrag {
 pub struct SplitAreaStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The ring around the handle that has keyboard focus.
+    #[style(focus)]
+    focus: FocusLook,
     /// The docking sizes: the dividers' gap, reach and key steps, and the groups' least extent and strip.
     sizes: DockSizes,
 }
@@ -490,7 +493,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Component for SplitAr
     type Output = SplitAreaOutput<P>;
 
     fn style(cx: &StyleCx<'_>, _: SplitAreaStyleKey<P>) -> SplitAreaStyle {
-        SplitAreaStyle { metrics: Metrics::new(), sizes: DockSizes::style(cx) }
+        SplitAreaStyle { metrics: Metrics::new(), focus: cx.focus_look(), sizes: DockSizes::style(cx) }
     }
 
     fn sense(&self) -> Sense {

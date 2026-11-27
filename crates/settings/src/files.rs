@@ -51,12 +51,27 @@ pub struct DiskFiles;
 
 #[cfg(not(target_arch = "wasm32"))]
 impl SettingsFiles for DiskFiles {
+    /// A file larger than [`MAX_CONFIG_BYTES`](crate::store::MAX_CONFIG_BYTES) fails with
+    /// `ErrorKind::FileTooLarge` without being read into memory; text that is not UTF-8 fails with
+    /// `ErrorKind::InvalidData`, as `std::fs::read_to_string` does.
     fn read(&self, path: &Path) -> io::Result<Option<String>> {
-        match std::fs::read_to_string(path) {
-            Ok(text) => Ok(Some(text)),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e),
+        use std::io::Read as _;
+        let file = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let limit = crate::store::MAX_CONFIG_BYTES;
+        if file.metadata()?.len() > limit {
+            return Err(crate::store::too_large());
         }
+        // The length can change after the check, or be unknown (a pipe), so the read is capped too.
+        let mut bytes = Vec::new();
+        file.take(limit + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > limit {
+            return Err(crate::store::too_large());
+        }
+        String::from_utf8(bytes).map(Some).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     fn write(&self, path: &Path, text: &str) -> io::Result<()> {

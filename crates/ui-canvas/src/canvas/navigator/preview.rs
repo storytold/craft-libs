@@ -22,7 +22,7 @@ use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{
     AccessAction, AccessData, CancelReason, CanvasView, CursorIcon, CursorPriority, HitLevel, HitPriority, HitShape, Metrics, NavMove, PartKey,
-    PressCancel, PressPhase, Sense, ZoomScheme,
+    PressCancel, PressPhase, Proposal, Sense, ZoomScheme,
 };
 use craft_keymap::{Chord, Key, Mods};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2, pos2};
@@ -129,10 +129,16 @@ pub struct Navigator<'a> {
     /// The colour of the proxy rectangle.
     #[prop]
     proxy: ProxyColor,
+    #[style_key]
+    fit_height: bool,
+    collapsed: bool,
     zoom_rect: Option<Rect>,
 }
 
 impl<'a> Navigator<'a> {
+    // Keep the preview updating long enough to cancel an active gesture when it gives its room to the controls.
+    const MIN_PANEL_HEIGHT: f32 = 1.0;
+
     /// A navigator named `label` that edits `view`, over a document of `document` units.
     pub fn new(label: impl Into<Label>, view: Bind<'a, CanvasView>, document: Size) -> Self {
         Navigator {
@@ -142,9 +148,16 @@ impl<'a> Navigator<'a> {
             preview: NavigatorPreview::None,
             navigation: NavigationOptions::default(),
             proxy: ProxyColor::Default,
+            fit_height: false,
+            collapsed: false,
             zoom_rect: None,
         }
         .label(label)
+    }
+
+    pub(in crate::canvas) fn fit_height(mut self) -> Self {
+        self.fit_height = true;
+        self
     }
 
     fn quad(&self, view: &CanvasView, rect: Rect, inset: f32) -> Vec<Pos2> {
@@ -278,6 +291,7 @@ fn take_navigation(cx: &mut Cx<'_, Navigator<'_>>, next: &mut CanvasView, runnin
 
 impl Component for Navigator<'_> {
     const ROLE: Role = Role::GROUP;
+    const ALT_ROLES: &'static [Role] = &[Role::None];
     const DISABLED: DisabledLook = DisabledLook::Faded;
     const OVERLAYS: bool = false;
     const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_keep(KeepKeys::BlockArrows).with_activate(ActivateKeys::Neither);
@@ -285,10 +299,11 @@ impl Component for Navigator<'_> {
     type Style = NavigatorStyle;
     type Output = NavigatorOutput;
 
-    fn style(cx: &StyleCx<'_>, _: NavigatorStyleKey) -> NavigatorStyle {
+    fn style(cx: &StyleCx<'_>, key: NavigatorStyleKey) -> NavigatorStyle {
+        let height = if key.fit_height { Self::MIN_PANEL_HEIGHT } else { cx.tokens.size.plot.height };
         NavigatorStyle {
             // The width's floor is `measure`'s (`picture_width`), which a narrow room may take below the plot width.
-            metrics: Metrics::new().min_size(Vec2::new(0.0, cx.tokens.size.plot.height)),
+            metrics: Metrics::new().min_size(Vec2::new(0.0, height)),
             focus: cx.focus_look(),
             inset: cx.tokens.space.gap.inline,
             radius: UiTokens::corner(cx.tokens.shape.radius.sm),
@@ -296,11 +311,13 @@ impl Component for Navigator<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::new(cx.picture_width(cx.tokens.size.plot.width, f32::INFINITY), 0.0)
+        // Content-sized hosts use the natural plot height. A filling panel can offer less down to the style's floor.
+        let height = if cx.proposal == Proposal::Min { 0.0 } else { cx.tokens.size.plot.height };
+        Vec2::new(cx.picture_width(cx.tokens.size.plot.width, f32::INFINITY), height)
     }
 
     fn sense(&self) -> Sense {
-        Sense::FOCUS | Sense::WHEEL | Sense::WHEEL_ZOOM
+        if self.collapsed { Sense::empty() } else { Sense::FOCUS | Sense::WHEEL | Sense::WHEEL_ZOOM }
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, CanvasView>> {
@@ -314,6 +331,11 @@ impl Component for Navigator<'_> {
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
+        // An inset that leaves only the fitted picture's one-point floor cannot support a useful drag.
+        self.collapsed = self.fit_height && rect.size().min_elem() <= 2.0 * cx.style.inset + Self::MIN_PANEL_HEIGHT;
+        if self.collapsed {
+            return;
+        }
         cx.part(WELL, rect).sense(Sense::CLICK | Sense::DRAG).pointer_only(POINTER_ONLY);
         let Some(view) = cx.value().copied() else { return };
         let quad = self.quad(&view, rect, cx.style.inset);
@@ -328,6 +350,13 @@ impl Component for Navigator<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if self.collapsed {
+            let held = std::mem::take(cx.memory::<Held>());
+            if held.active && !held.zoom && cx.gesture().is_some() {
+                cx.cancel(CancelReason::Blur);
+            }
+            return;
+        }
         let Some(view) = cx.value().copied() else { return };
         let rect = cx.rect;
         let document = self.document;
@@ -401,6 +430,13 @@ impl Component for Navigator<'_> {
                     }
                     held.active = false;
                 }
+                PressPhase::Idle | PressPhase::Hover => {
+                    // A collapsed preview can miss the release or cancel because it stopped updating.
+                    if !zooming && cx.gesture().is_some() {
+                        cx.cancel(CancelReason::Blur);
+                    }
+                    held = Held::default();
+                }
                 _ => {}
             }
         }
@@ -456,6 +492,9 @@ impl Component for Navigator<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if self.collapsed {
+            return;
+        }
         let rect = cx.rect;
         let style = cx.style;
         let fitted = preview_rect(rect, self.document, style.inset);
@@ -487,6 +526,10 @@ impl Component for Navigator<'_> {
     }
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
+        if self.collapsed {
+            access.role(Role::None);
+            return;
+        }
         let Some(view) = cx.value().copied() else { return };
         access.pans(true, true);
         let words = cx.words::<CanvasWords>();
@@ -505,7 +548,7 @@ impl Component for Navigator<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> NavigatorOutput {
-        NavigatorOutput { view: cx.edit_response() }
+        NavigatorOutput { view: cx.edit_response(), collapsed: self.collapsed }
     }
 }
 
@@ -516,6 +559,7 @@ pub struct NavigatorOutput {
     /// The view: a drag's gesture, a key, an AccessKit request or a zoom, as one change. A zoom with Animated Zoom on
     /// is the change to its target; the canvas eases to it.
     pub view: EditResponse<CanvasView>,
+    pub(in crate::canvas) collapsed: bool,
 }
 
 impl Deref for NavigatorOutput {

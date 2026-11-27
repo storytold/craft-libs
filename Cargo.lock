@@ -4674,11 +4674,13 @@ dependencies = [
 name = "craft-update"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "craft-host",
  "craft-theme",
  "craft-ui",
  "dunce",
+ "ed25519-dalek 2.2.0",
  "egui",
  "flate2",
  "image",
@@ -4691,6 +4693,7 @@ dependencies = [
  "sha2 0.10.9",
  "tar",
  "tempfile",
+ "toml",
  "ureq",
  "verifysign",
  "winreg",

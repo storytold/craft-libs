@@ -91,6 +91,8 @@ craft_ui::words! {
         preview_small: "fontPicker.previewSmall" = "Small";
         preview_medium: "fontPicker.previewMedium" = "Medium";
         preview_large: "fontPicker.previewLarge" = "Large";
+        /// The dropdown of the host's sample texts, beside the preview size.
+        sample_text: "fontPicker.sampleText" = "Sample Text";
         /// The similar-fonts chip, with `{family}` for the reference family.
         similar_to: template "fontPicker.similarTo" = "≈ {family}";
         clear_similar: "fontPicker.clearSimilar" = "Clear Similar Fonts";
@@ -176,6 +178,28 @@ impl FontPreviewSize {
             FontPreviewSize::Large | FontPreviewSize::ExtraLarge | FontPreviewSize::Huge => ThumbSize::Large,
         }
     }
+}
+
+/// A sample text the host offers in the Sample Text dropdown: the key the settings keep, its name in the dropdown and
+/// the text every sample shows while it is chosen.
+#[derive(Clone, Debug)]
+pub struct SampleText<'a> {
+    key: &'a str,
+    label: Label,
+    text: &'a str,
+}
+
+impl<'a> SampleText<'a> {
+    /// The sample text `key` named `label`, showing `text`.
+    pub fn new(key: &'a str, label: impl Into<Label>, text: &'a str) -> Self {
+        SampleText { key, label: label.into(), text }
+    }
+}
+
+/// The sample text the settings keep the key of, else the first of `texts`; `None` when the host offers none.
+fn chosen_sample<'s, 'a>(texts: &'s [SampleText<'a>], settings: Option<&FontPickerSettings>) -> Option<&'s SampleText<'a>> {
+    let key = settings.and_then(|s| s.sample_text.as_deref());
+    texts.iter().find(|text| Some(text.key) == key).or_else(|| texts.first())
 }
 
 /// Coverage from the face: Latin, the basic Latin letters in the cmap; Japanese, the OS/2 kana or CJK unicode-range
@@ -302,6 +326,9 @@ pub struct FontPickerSettings {
     pub names_in_english: bool,
     /// Row samples and the banner paint black type on a white paper fill, in every theme.
     pub samples_on_white: bool,
+    /// The key of the sample text chosen in the Sample Text dropdown; without one, or with a key the host no longer
+    /// offers, the first of the host's sample texts.
+    pub sample_text: Option<String>,
 }
 
 impl Default for FontPickerSettings {
@@ -313,6 +340,7 @@ impl Default for FontPickerSettings {
             preview: FontPreviewSize::default(),
             names_in_english: false,
             samples_on_white: false,
+            sample_text: None,
         }
     }
 }
@@ -700,6 +728,10 @@ pub struct FontPicker<'a> {
     /// The preview banner's text and every row's sample (the sample word when not given).
     #[prop]
     preview_text: Option<&'a str>,
+    /// The sample texts the Sample Text dropdown offers, beside the preview size in the `Chips` layout; the chosen one
+    /// takes the place of `preview_text`. Empty: no dropdown.
+    #[prop]
+    sample_texts: &'a [SampleText<'a>],
     /// Families the host can fetch but that are not installed, listed with the served mark.
     #[prop]
     served: &'a [String],
@@ -770,6 +802,7 @@ impl<'a> FontPicker<'a> {
             rested: None,
             preview: Preview::Unchanged,
             preview_text: None,
+            sample_texts: &[],
             served: &[],
             sets: &[],
             scripts: &[],

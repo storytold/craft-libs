@@ -185,3 +185,12 @@ fn polish_heuristic_for_foreign_letters() {
     let c: Vec<char> = "szczérze".chars().collect();
     assert_eq!(heuristic_points_pl(&c), vec![5], "szczé-rze: `rz` stays whole");
 }
+
+#[test]
+fn gujarati_pack_patterns_fit_checks_script_and_exceptions() {
+    let pats = Patterns::parse("1ક 1ત પુ-સ્ત-ક");
+    let gu_word: Vec<char> = "પુસ્તક".chars().collect();
+    assert!(pack_patterns_fit(ProofLang::Gu, &pats, &gu_word));
+    let en_word: Vec<char> = "hyphenation".chars().collect();
+    assert!(!pack_patterns_fit(ProofLang::Gu, &pats, &en_word));
+}

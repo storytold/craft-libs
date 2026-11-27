@@ -86,6 +86,12 @@ impl<C: Component> MeasureCx<'_, C> {
         }
     }
 
+    /// Whether the component is a direct child of a `Row` body, a bar's included. A component that could wrap into
+    /// lines keeps its one-line least there, and the row's shrink step decides who gives way.
+    pub fn in_row(&self) -> bool {
+        crate::layout::row_alone_room(self.scope).is_some()
+    }
+
     /// The width a band picture sizes at (a plot, a strip), one whose height is its own whatever its width: it takes
     /// the room it is offered, up to `most`. At its least, where the width is unbounded, and in a measuring run of a
     /// column that sizes its width from its content (which offers no room), it is `least`: a picture needs no width of

@@ -614,7 +614,12 @@ pub(crate) fn run<C: Component>(
     // ended its gesture without putting back the value from before it), and the part starts afresh from its value.
     if !crate::runtime::memory::shown_last_pass(&ctx, id) {
         state = TextState::default();
+    } else if state.edit_target != part.options.edit_target {
+        // The old target's draft and gesture must never reach the new target's binding.
+        cx.cancel(CancelReason::HostChanged);
+        state = TextState::default();
     }
+    state.edit_target = part.options.edit_target;
     (decl.values.resync)(&mut state, shown_copy(cx).as_ref());
     let text = prepare(cx.core, ui, part, &mut state, AdapterSettings { keys, rtl, ink, underline }, step.commit_now);
     let PreparedText { widget, out, read_only, list_open, caret_visible, commit_now, was_focused, window_blur, menu_open, left_for_part } = text;
