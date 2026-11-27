@@ -825,11 +825,8 @@ fn a_single_flow_picture_keeps_its_paragraph_mark_link() {
                 craft_flow::Inline::Image(picture)
             })
             .collect();
-        let mut paragraph = craft_flow::Para {
-            inlines,
-            mark: Some(Box::new(CharProps { link: Some(MARK.into()), ..Default::default() })),
-            ..Default::default()
-        };
+        let mut paragraph =
+            craft_flow::Para { inlines, mark: Some(Box::new(CharProps { link: Some(MARK.into()), ..Default::default() })), ..Default::default() };
         if text {
             paragraph.push_text("beside the picture", &Default::default());
         }
