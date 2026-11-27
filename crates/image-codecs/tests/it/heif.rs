@@ -61,7 +61,7 @@ fn keep() -> DecodeOptions {
 }
 
 #[test]
-fn heif_is_read_only_and_listed() {
+fn feature_config_heif_is_read_only_and_listed() {
     let c = caps(Format::Heif);
     assert!(c.read && !c.write);
     assert!(ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Heif));
@@ -74,14 +74,14 @@ fn heif_is_read_only_and_listed() {
 }
 
 #[test]
-fn detect_heif_brands() {
+fn feature_config_detect_heif_brands() {
     for f in [checker_64(), strips_96(), checker_grid(), with_exif()] {
         assert_eq!(detect(f), Some(Format::Heif));
     }
 }
 
 #[test]
-fn single_picture_matches_apple_decode() {
+fn feature_config_single_picture_matches_apple_decode() {
     for (heic, png) in [(checker_64(), "heic-rs/checker-64.ref.png"), (strips_96(), "heic-rs/rgb-strips-96.ref.png")] {
         let img = decode(heic).unwrap();
         let want = reference(&corpus(png));
@@ -93,7 +93,7 @@ fn single_picture_matches_apple_decode() {
 }
 
 #[test]
-fn grid_tiled_photo_matches_apple_decode() {
+fn feature_config_grid_tiled_photo_matches_apple_decode() {
     // iPhone photos are grids of 512x512 HEVC tiles: here 2x2.
     let img = decode(checker_grid()).unwrap();
     let want = reference(&corpus("heic-rs/checker-1024.ref.png"));
@@ -102,7 +102,7 @@ fn grid_tiled_photo_matches_apple_decode() {
 }
 
 #[test]
-fn rgb_strips_keep_their_colours() {
+fn feature_config_rgb_strips_keep_their_colours() {
     // Three vertical strips, pure red, green and blue: catches swapped channels or matrices.
     let img = decode(strips_96()).unwrap();
     for (x, c) in [(16, 0), (48, 1), (80, 2)] {
@@ -114,7 +114,7 @@ fn rgb_strips_keep_their_colours() {
 }
 
 #[test]
-fn container_rotation_is_applied_once() {
+fn feature_config_container_rotation_is_applied_once() {
     // irot 1 = 90° anticlockwise: the red strip (left) ends at the bottom, blue (right) on top.
     let rotated = with_irot(strips_96(), 1);
     let img = decode(&rotated).unwrap();
@@ -126,16 +126,15 @@ fn container_rotation_is_applied_once() {
 }
 
 #[test]
-fn exif_and_xmp_survive_and_exif_orientation_is_not_applied_twice() {
-    let img = decode(with_exif()).unwrap();
+fn feature_config_exif_and_xmp_survive_and_exif_orientation_is_not_applied_twice() {
+    // HEIF's EXIF Orientation repeats what irot says; the container is the authority.
+    let tagged = with_exif_orientation(with_exif(), 6);
+    let img = decode(&tagged).unwrap();
     assert_eq!(img.dimensions(), (2048, 1536));
     let exif = img.meta.exif.as_deref().unwrap();
     assert!(exif.starts_with(b"MM\0*"), "TIFF-structured EXIF, without the HEIF offset header");
     assert!(img.meta.xmp.as_deref().unwrap().contains("x:xmpmeta"));
 
-    // HEIF's EXIF Orientation repeats what irot says; the container is the authority.
-    let tagged = with_exif_orientation(with_exif(), 6);
-    let img = decode(&tagged).unwrap();
     assert_eq!(img.dimensions(), (2048, 1536), "not turned by the EXIF tag");
     assert_eq!(exif_orientation(img.meta.exif.as_deref().unwrap()), 1, "rewritten so exports don't turn it either");
     let raw = decode_with(&tagged, &keep()).unwrap();
@@ -143,7 +142,7 @@ fn exif_and_xmp_survive_and_exif_orientation_is_not_applied_twice() {
 }
 
 #[test]
-fn limits_are_checked_before_decoding() {
+fn feature_config_limits_are_checked_before_decoding() {
     let tight = |limits| DecodeOptions { limits, ..Default::default() };
     let small = Limits { max_width: 512, ..Default::default() };
     assert!(matches!(decode_with(checker_grid(), &tight(small)), Err(CodecError::LimitExceeded(_))));
@@ -154,7 +153,7 @@ fn limits_are_checked_before_decoding() {
 }
 
 #[test]
-fn unsupported_and_broken_files_are_clear_errors() {
+fn feature_config_unsupported_and_broken_files_are_clear_errors() {
     // An ftyp and nothing else: a HEIF image sequence would have a moov here instead of a meta.
     let r = decode(b"\0\0\0\x18ftypmsf1\0\0\0\0msf1hevc");
     assert!(matches!(&r, Err(CodecError::Unsupported { format: Format::Heif, reason }) if reason.contains("sequence")), "{r:?}");
@@ -163,7 +162,7 @@ fn unsupported_and_broken_files_are_clear_errors() {
 }
 
 #[test]
-fn every_truncation_errors_or_decodes_never_panics() {
+fn feature_config_every_truncation_errors_or_decodes_never_panics() {
     for bytes in [checker_64(), strips_96(), checker_grid()] {
         for cut in 0..bytes.len() {
             let _ = decode_as(Format::Heif, &bytes[..cut]);
@@ -172,7 +171,7 @@ fn every_truncation_errors_or_decodes_never_panics() {
 }
 
 #[test]
-fn ten_bit_with_alpha_decodes_to_16_bit_rgba() {
+fn feature_config_ten_bit_with_alpha_decodes_to_16_bit_rgba() {
     // pillow-heif's fixture: a 16-bit RGBA gradient (the .src.png) encoded as 10-bit HEIF by libheif/x265.
     let img = decode(&corpus("pillow-heif/heif/RGBA_10__29x100.heif")).unwrap();
     let src = decode_as(Format::Png, &corpus("pillow-heif/non_heif/RGBA_16__29x100.png")).unwrap();

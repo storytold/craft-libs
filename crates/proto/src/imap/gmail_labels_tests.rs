@@ -165,6 +165,10 @@ fn tiny_labels_count_against_the_budget_too() {
 
 #[test]
 fn a_big_folders_listing_is_not_cut_short_for_its_size() {
+    // Sized to a cap of tens of MiB: the gate runs the cheaper tests of the same caps, nightly runs this one.
+    if craft_testkit::hostile::divisor() > 1 {
+        return;
+    }
     // 300,000 messages with labels: more text than one command may otherwise bring (32 MiB).
     let count: u32 = 300_000;
     let mut server = String::with_capacity(count as usize * 200);
@@ -185,6 +189,10 @@ fn a_big_folders_listing_is_not_cut_short_for_its_size() {
 
 #[test]
 fn a_mailbox_claimed_huge_cant_fill_memory_with_flags() {
+    // Sized to a cap of tens of MiB: the gate runs the cheaper tests of the same caps, nightly runs this one.
+    if craft_testkit::hostile::divisor() > 1 {
+        return;
+    }
     // Any server (no Gmail here): ten million messages claimed, then message after message with
     // every flag it may have. The text it may send is capped, and so are the flags kept: the
     // listing fails, and never hands back messages that seem to have lost their flags.
@@ -227,4 +235,113 @@ fn a_small_folders_listing_still_has_its_cap() {
     imap.selected = Selected { exists: 1, uid_validity: 1, uid_next: 2 };
     assert!(matches!(imap.uid_fetch_flags_labels("1:*"), Err(ProtoError::Protocol(_))));
     assert_eq!(imap.text_cap, MAX_COMMAND_TEXT);
+}
+
+// Small private budgets exercise the real parser alongside the default-cap controls above.
+fn small_limits() -> Limits {
+    Limits {
+        responses: 1_000,
+        command_text: MAX_COMMAND_TEXT / 256,
+        fetch_text: MAX_FETCH_TEXT / 256,
+        flag_bytes: MAX_FLAG_BYTES / 256,
+        label_bytes: MAX_GMAIL_LABEL_BYTES / 256,
+    }
+}
+
+#[test]
+fn small_limits_a_big_folders_listing_is_not_cut_short_for_its_size() {
+    // The listing still exceeds an ordinary command's text cap, with every UID retained.
+    let limits = small_limits();
+    let count: u32 = 1_200;
+    let mut server = String::with_capacity(count as usize * 200);
+    for uid in 1..=count {
+        server += &format!(
+            "* {uid} FETCH (FLAGS (\\Seen) UID {uid} X-GM-LABELS (\\Inbox \\Important \"Work/Clients and partners\" \"Receipts 2026\" \"Travel/Japan\"))\r\n"
+        );
+    }
+    assert!(server.len() > limits.command_text);
+    server += "A0001 OK done\r\n";
+    let mut s = Script::new(server);
+    let mut imap = Imap::resume_with_limits(&mut s, limits);
+    imap.selected = Selected { exists: count, uid_validity: 1, uid_next: count + 1 };
+    let got = imap.uid_fetch_flags_labels("1:*");
+    assert_eq!(got.as_ref().map(|got| got.len()), Ok(count as usize));
+    assert_eq!(got.unwrap().into_iter().map(|f| f.uid).collect::<Vec<_>>(), (1..=count).collect::<Vec<_>>());
+    // The room is the listing's alone: the next command has the usual cap again.
+    assert_eq!(imap.text_cap, limits.command_text);
+}
+
+#[test]
+fn small_limits_a_mailbox_claimed_huge_cant_fill_memory_with_flags() {
+    // Any server (no Gmail here): ten million messages claimed, then message after message with
+    // every flag it may have. The text it may send is capped, and so are the flags kept: the
+    // listing fails, and never hands back messages that seem to have lost their flags.
+    assert_eq!(MAX_RESPONSES, 250_000);
+    assert_eq!(MAX_COMMAND_TEXT, 32 << 20);
+    assert_eq!(MAX_FETCH_TEXT, 256 << 20);
+    assert_eq!(MAX_FLAG_BYTES, 256 << 20);
+    assert_eq!(MAX_GMAIL_LABEL_BYTES, 32 << 20);
+    let limits = small_limits();
+    let flags: Vec<String> = (0..MAX_FLAGS).map(|n| format!("f{n}")).collect();
+    let flags = flags.join(" ");
+    let mut server = String::new();
+    let mut uid = 0u32;
+    while server.len() < limits.fetch_text / 4 {
+        uid += 1;
+        server += &format!("* {uid} FETCH (UID {uid} FLAGS ({flags}))\r\n");
+    }
+    server += "A0001 OK done\r\n";
+    let mut s = Script::new(server);
+    let mut imap = Imap::resume_with_limits(&mut s, limits);
+    imap.selected = Selected { exists: 10_000_000, uid_validity: 1, uid_next: 0 };
+    let got = imap.uid_fetch_flags("1:*");
+    assert!(matches!(&got, Err(ProtoError::Protocol(m)) if format!("{m:?}").contains("more flags")), "{:?}", got.as_ref().map(Vec::len));
+    assert_eq!(imap.text_cap, limits.command_text);
+    // And what it may send at all stays within the ceiling, however many messages are claimed.
+    let mut s = Script::new(format!("* OK {}\r\n", "x".repeat(60_000)).repeat(limits.fetch_text / 60_000 + 8));
+    let mut imap = Imap::resume_with_limits(&mut s, limits);
+    imap.selected = Selected { exists: u32::MAX, uid_validity: 1, uid_next: 0 };
+    assert!(matches!(imap.uid_fetch_flags("1:*"), Err(ProtoError::Protocol(_))));
+}
+
+#[test]
+fn flag_and_label_budgets_count_stored_bytes() {
+    // Flags are all-or-nothing; the entry and each String count, not only its characters.
+    for extra in [0, 1] {
+        let mut limits = small_limits();
+        limits.flag_bytes = ENTRY_OVERHEAD + FLAG_OVERHEAD + 1;
+        let flag = "f".repeat(1 + extra);
+        let mut s = Script::new(format!("* 1 FETCH (UID 1 FLAGS ({flag}))\r\nA0001 OK done\r\n"));
+        {
+            let mut imap = Imap::resume_with_limits(&mut s, limits);
+            imap.selected = Selected { exists: 1, uid_validity: 1, uid_next: 2 };
+            let got = imap.uid_fetch_flags("1:*");
+            if extra == 0 {
+                assert_eq!(got.unwrap().into_iter().map(|f| (f.uid, f.flags)).collect::<Vec<_>>(), [(1, vec!["f".to_string()])]);
+            } else {
+                assert!(matches!(got, Err(ProtoError::Protocol(m)) if m.to_string().contains("more flags")));
+            }
+            assert_eq!(imap.response_cap, limits.responses);
+            assert_eq!(imap.text_cap, limits.command_text);
+        }
+        assert_eq!(s.sent(), "A0001 UID FETCH 1:* (UID FLAGS)\r\n");
+        assert!(s.finished());
+    }
+    // Labels have a soft budget: keep the exact fit, but leave an over-budget label unset.
+    for extra in [0, 1] {
+        let mut limits = small_limits();
+        limits.label_bytes = LABEL_OVERHEAD + 1;
+        let label = "a".repeat(1 + extra);
+        let mut s = Script::new(format!("* 1 FETCH (UID 1 FLAGS () X-GM-LABELS ({label}))\r\nA0001 OK done\r\n"));
+        {
+            let mut imap = Imap::resume_with_limits(&mut s, limits);
+            imap.selected = Selected { exists: 1, uid_validity: 1, uid_next: 2 };
+            let got = imap.uid_fetch_flags_labels("1:*").unwrap();
+            assert_eq!(got.into_iter().map(|f| (f.uid, f.gmail_labels)).collect::<Vec<_>>(), [(1, if extra == 0 { owned(&["a"]) } else { None })]);
+            assert_eq!(imap.response_cap, limits.responses);
+            assert_eq!(imap.text_cap, limits.command_text);
+        }
+        assert_eq!(s.sent(), "A0001 UID FETCH 1:* (UID FLAGS X-GM-LABELS)\r\n");
+        assert!(s.finished());
+    }
 }

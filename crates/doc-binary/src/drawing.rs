@@ -277,7 +277,7 @@ fn members_into(nodes: &[Node], t: (f32, f32, f32, f32), depth: usize, b: &Build
                 let float = Float { rot: sp.props.rot, flip_h: sp.flip_h(), flip_v: sp.flip_v(), ..Float::default() };
                 let (w, h) = (fit(ew * sx).max(0.0), fit(eh * sy).max(0.0));
                 if let Some(obj) = leaf(sp, w, h, float, b, pics) {
-                    out.push(GroupChild { x: fit(x0 + ox * sx), y: fit(y0 + oy * sy), obj });
+                    out.push(GroupChild { link: None, x: fit(x0 + ox * sx), y: fit(y0 + oy * sy), obj });
                 }
             }
         }

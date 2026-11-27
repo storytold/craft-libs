@@ -15,6 +15,10 @@
 //!
 //! **Bulgarian**: the Bulgarian syllable rules ([`crate::bg`]); no pattern file or word list.
 //!
+//! **Gujarati and Hindi**: breaks between aksharas, never inside a conjunct or between a
+//! consonant and its vowel sign ([`crate::indic`], rules from the script's Unicode encoding); no
+//! pattern file.
+//!
 //! **German**: the TeX German patterns for the reformed spelling ([`Patterns::de`]), also for
 //! Swiss text, whose `ss` the patterns split like any double consonant (`Stras-se`).
 //!
@@ -91,9 +95,13 @@ impl Patterns {
 /// Hyphenation limits from the paragraph's Hyphenation settings.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
+    /// Shortest word, in letters, that may be hyphenated.
     pub min_word: usize,
+    /// Fewest letters that must stay before a break.
     pub after_first: usize,
+    /// Fewest letters that must follow a break.
     pub before_last: usize,
+    /// Whether capitalized words may be hyphenated.
     pub capitalized: bool,
 }
 
@@ -106,11 +114,15 @@ impl Default for Limits {
 /// Where a word's break points came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
+    /// The language's hyphenation dictionary.
     Dictionary,
+    /// The language's hyphenation patterns.
     Patterns,
+    /// A heuristic for a language without a dictionary or patterns.
     Heuristic,
-    /// A language's syllable rules (Bulgarian, [`crate::bg`]).
+    /// A language's syllable rules (Bulgarian [`crate::bg`], Turkish, Gujarati and Hindi [`crate::indic`]).
     Rules,
+    /// No break points: the word is too short or no source applies.
     None,
 }
 
@@ -121,6 +133,13 @@ fn is_apostrophe(c: char) -> bool {
 fn is_word_char(c: char) -> bool {
     // A combining mark belongs to its letter (decomposed `a` + U+0301 is one letter, `á`).
     c.is_alphabetic() || is_apostrophe(c) || unicode_normalization::char::is_combining_mark(c)
+}
+
+/// [`is_word_char`] in `lang`. In a language with Indic rules a zero-width joiner or non-joiner
+/// is part of the word too: it shapes a conjunct inside an akshara ([`crate::indic`]). In any
+/// other language it still ends a letter run (Persian's ZWNJ between a word's parts).
+fn is_word_char_in(c: char, lang: ProofLang) -> bool {
+    is_word_char(c) || (crate::indic::is_joiner(c) && crate::indic::Script::of(lang.built_in()).is_some())
 }
 
 /// Unrestricted break points of one lowercase core (letters and `'` only, no leading/trailing `'`).
@@ -147,6 +166,13 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
     // (`WordCraft`, `email`) are hyphenated as English, as in any other language.
     if lang == ProofLang::Bg && core.iter().all(|&c| crate::bg::is_letter(c)) {
         return (crate::bg::points(core), Source::Rules);
+    }
+    // Gujarati and Hindi words break between aksharas ([`crate::indic`]); other words in their runs
+    // (`WordCraft`) are hyphenated as English.
+    if let Some(script) = crate::indic::Script::of(lang)
+        && core.iter().all(|&c| script.is_letter(c))
+    {
+        return (crate::indic::points(script, core), Source::Rules);
     }
     // A suffix written after an apostrophe (`Ankara'dan`, `Türkiye'nin`) is hyphenated part by
     // part; no break goes next to the apostrophe ([`word_breaks_in`] drops those).
@@ -216,9 +242,10 @@ fn composed_chars(core: &[char]) -> (Vec<char>, Vec<Option<usize>>) {
     (nfc, starts)
 }
 
-/// Does a pack's `pats` hyphenate `core` in `lang`? Russian, Bulgarian and Turkish: a word in
-/// their script (the guard their rules use) whose letters the patterns know, so a word with a
-/// letter the pack never mentions (`ё`) goes on to the built-in rules. Polish, Portuguese, Italian
+/// Does a pack's `pats` hyphenate `core` in `lang`? Russian, Bulgarian, Turkish, Gujarati and
+/// Hindi: a word in their script (the guard their rules use; for Gujarati and Hindi, the script's
+/// letters and marks and the joiners inside a conjunct, [`crate::indic`]) whose letters the
+/// patterns know, so a word with a letter the pack never mentions goes on to the fallback rules. Polish, Portuguese, Italian
 /// and German: every word, as their embedded patterns do. Any other language: a word whose letters
 /// the patterns know.
 fn pack_patterns_fit(lang: ProofLang, pats: &Patterns, core: &[char]) -> bool {
@@ -227,6 +254,9 @@ fn pack_patterns_fit(lang: ProofLang, pats: &Patterns, core: &[char]) -> bool {
         ProofLang::Bg => core.iter().all(|&c| crate::bg::is_letter(c)) && pack_knows(pats, core),
         ProofLang::Tr => core.iter().all(|&c| crate::tr::hyphen::is_letter(c)) && pack_knows(pats, core),
         ProofLang::Pl | ProofLang::Pt | ProofLang::It | ProofLang::De => true,
+        ProofLang::Gu | ProofLang::Hi => {
+            crate::indic::Script::of(lang).is_some_and(|s| core.iter().all(|&c| s.is_letter(c))) && pack_knows(pats, core)
+        }
         _ => pats.values(core).is_some(),
     }
 }
@@ -302,12 +332,12 @@ pub fn word_breaks_in(word: &str, lang: ProofLang) -> (Vec<usize>, Source) {
     let mut src = Source::None;
     let mut i = 0;
     while i < chars.len() {
-        if !is_word_char(chars[i]) {
+        if !is_word_char_in(chars[i], lang) {
             i += 1;
             continue;
         }
         let mut j = i;
-        while j < chars.len() && is_word_char(chars[j]) {
+        while j < chars.len() && is_word_char_in(chars[j], lang) {
             j += 1;
         }
         let (mut a, mut b) = (i, j);
@@ -361,7 +391,7 @@ pub fn hyphen_points_in(word: &str, lim: &Limits, lang: ProofLang) -> Vec<usize>
     let mut i = 0;
     while i < chars.len() {
         let mut j = i;
-        while chars.get(j).is_some_and(|c| is_word_char(*c)) {
+        while chars.get(j).is_some_and(|c| is_word_char_in(*c, lang)) {
             j += 1;
         }
         let (mut a, mut b) = (i, j);
@@ -538,517 +568,4 @@ fn heuristic_points_pl(c: &[char]) -> Vec<usize> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// craft-libs#497 review: a Russian, Bulgarian or Turkish pack's patterns only take a word
-    /// whose letters they know; any other goes to the built-in rules, not the English heuristic.
-    #[test]
-    fn pack_patterns_for_ru_bg_tr_need_every_letter_of_the_word() {
-        let chars = |w: &str| w.chars().collect::<Vec<_>>();
-        let cases = [(ProofLang::Ru, "1на 1ка", "нака", "ёка"), (ProofLang::Bg, "1на 1ка", "нака", "жка"), (ProofLang::Tr, "a1b", "abab", "abğ")];
-        for (lang, pat, known, unknown) in cases {
-            let p = Patterns::parse(pat);
-            assert!(pack_patterns_fit(lang, &p, &chars(known)), "{lang:?} {known}");
-            assert!(!pack_patterns_fit(lang, &p, &chars(unknown)), "{lang:?} {unknown}");
-        }
-    }
-
-    /// An exception word of a pack keeps its breaks even with a letter the patterns never mention.
-    #[test]
-    fn pack_exception_words_need_no_pattern_letters() {
-        let chars = |w: &str| w.chars().collect::<Vec<_>>();
-        let p = Patterns::parse("1на 1ка ё-ка");
-        let w = chars("ёка");
-        assert!(pack_patterns_fit(ProofLang::Ru, &p, &w));
-        assert_eq!(core_breaks_patterns(&p, &w), (vec![1], Source::Dictionary));
-        assert!(!pack_patterns_fit(ProofLang::Ru, &p, &chars("ёна")));
-    }
-
-    /// CodeRabbit on craft-libs#484: a Turkish word with a suffix after an apostrophe is
-    /// hyphenated by the Turkish rules, part by part, never next to the apostrophe.
-    #[test]
-    fn turkish_apostrophe_suffixes_follow_turkish_rules() {
-        let tr = |w: &str| hyphenate_word_in(w, &Limits::default(), ProofLang::Tr);
-        assert_eq!(tr("Ankara'dan"), "An-ka-ra'dan");
-        assert_eq!(tr("Türkiye'nin"), "Tür-ki-ye'nin");
-        assert_eq!(tr("İstanbul'daki"), "İs-tan-bul'da-ki");
-        assert_eq!(word_breaks_in("Ankara'dan", ProofLang::Tr).1, Source::Rules);
-        assert_eq!(tr("Ankara"), "An-ka-ra", "no apostrophe: as before");
-    }
-
-    fn h(w: &str) -> String {
-        hyphenate_word(w, &Limits::default())
-    }
-
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
-    #[test]
-    fn bundled_data_loads() {
-        assert!(Dictionary::en_us().len() > 150_000, "{}", Dictionary::en_us().len());
-        assert!(Patterns::en_us().len() > 1000, "{}", Patterns::en_us().len());
-    }
-
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
-    #[test]
-    fn dictionary_words() {
-        assert_eq!(h("happen"), "hap-pen");
-        assert_eq!(h("typography"), "ty-pog-ra-phy");
-        assert_eq!(h("composition"), "com-po-si-tion");
-        assert_eq!(h("hyphenation"), "hy-phen-a-tion");
-        assert_eq!(h("international"), "in-ter-na-tion-al");
-        assert_eq!(h("cat"), "cat");
-        assert!(!h("changed").contains('-'));
-        assert_eq!(h("NASA"), "NASA");
-        assert_eq!(word_breaks("publication").1, Source::Dictionary);
-    }
-
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
-    #[test]
-    fn case_apostrophes_and_punctuation() {
-        assert_eq!(h("Typography"), "Ty-pog-ra-phy");
-        assert_eq!(h("TYPOGRAPHY"), "TYPOGRAPHY");
-        assert_eq!(h("typography,"), "ty-pog-ra-phy,");
-        assert_eq!(h("“typography”"), "“ty-pog-ra-phy”");
-        assert_eq!(h("typography's"), "ty-pog-ra-phy's");
-        assert_eq!(h("typography’s"), "ty-pog-ra-phy’s");
-        assert_eq!(h("'typography'"), "'ty-pog-ra-phy'");
-        // Compounds: each part separately, never next to the hyphen.
-        assert_eq!(h("typography-composition"), "ty-pog-ra-phy-com-po-si-tion");
-    }
-
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
-    #[test]
-    fn inflections_inherit_the_stem() {
-        assert_eq!(h("ripples"), "rip-ples");
-        assert_eq!(h("gradients"), "gra-di-ents");
-        assert_eq!(h("restrained"), "re-strained");
-    }
-
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
-    #[test]
-    fn patterns_cover_unknown_words() {
-        // Not in the word list: the trained patterns decide.
-        let (pts, src) = word_breaks("hyperlocalization");
-        assert_eq!(src, Source::Patterns);
-        assert!(pts.len() >= 4, "{}", h("hyperlocalization"));
-        let (_, src) = word_breaks("zzyzx");
-        assert_ne!(src, Source::Dictionary);
-    }
-
-    #[test]
-    fn limits_are_respected() {
-        let lim = Limits { min_word: 5, after_first: 3, before_last: 3, capitalized: false };
-        for w in ["typography", "hyphenation", "justification", "Paragraph", "beautiful"] {
-            for p in hyphen_points(w, &lim) {
-                assert!(p >= 3 && p <= w.chars().count() - 3, "{w} {p}");
-            }
-        }
-        assert!(hyphen_points("Paragraph", &lim).is_empty());
-        let lim = Limits { min_word: 12, ..Limits::default() };
-        assert!(hyphen_points("typography", &lim).is_empty());
-    }
-
-    /// The CPU time `f` takes on this thread, in seconds. On Linux it is the scheduler's count of the
-    /// time the thread actually ran, so the time it waits while other work on a busy machine has the
-    /// CPU is left out; elsewhere, wall-clock time.
-    fn cpu_cost(f: &mut impl FnMut()) -> f64 {
-        let ran = || {
-            let s = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
-            s.split_whitespace().next()?.parse::<u64>().ok()
-        };
-        let (t, before) = (std::time::Instant::now(), ran());
-        f();
-        match (before, ran()) {
-            (Some(a), Some(b)) => b.saturating_sub(a) as f64 * 1e-9,
-            _ => t.elapsed().as_secs_f64(),
-        }
-    }
-
-    /// How much more `big` costs than `small`, for `big` an input `scale` times the size of `small`'s:
-    /// (small, big, big / small), ~`scale` when linear and ~`scale`² when quadratic. Each is the
-    /// cheapest of several runs after a warm-up, the runs alternating so a busy spell slows both sizes
-    /// alike; `small` is timed `scale` times over per run, so both timings are long against the clock's
-    /// resolution.
-    fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (f64, f64, f64) {
-        small();
-        big();
-        let mut small_scaled = || (0..scale).for_each(|_| small());
-        let (mut t1, mut tk) = (f64::INFINITY, f64::INFINITY);
-        for _ in 0..5 {
-            t1 = t1.min(cpu_cost(&mut small_scaled) / scale as f64);
-            tk = tk.min(cpu_cost(&mut big));
-        }
-        (t1, tk, tk / t1.max(1e-9))
-    }
-
-    /// `hyphen_points`' limit checks as first written (a rescan of the letter run per point): the
-    /// reference for the linear version.
-    fn hyphen_points_ref(word: &str, lim: &Limits) -> Vec<usize> {
-        let chars: Vec<char> = word.chars().collect();
-        let (pts, _) = word_breaks(word);
-        let min_before = lim.after_first.max(1);
-        let min_after = lim.before_last.max(1);
-        let run_of = |p: usize| {
-            let mut a = p;
-            while a > 0 && is_word_char(chars[a - 1]) {
-                a -= 1;
-            }
-            let mut b = p;
-            while b < chars.len() && is_word_char(chars[b]) {
-                b += 1;
-            }
-            while a < b && is_apostrophe(chars[a]) {
-                a += 1;
-            }
-            while b > a && is_apostrophe(chars[b - 1]) {
-                b -= 1;
-            }
-            (a, b)
-        };
-        pts.into_iter()
-            .filter(|&p| {
-                let (a, b) = run_of(p);
-                let run = &chars[a..b];
-                let letters = run.iter().filter(|c| c.is_alphabetic()).count();
-                if letters < lim.min_word.max(2) {
-                    return false;
-                }
-                if letters > 1 && run.iter().filter(|c| c.is_alphabetic()).all(|c| c.is_uppercase()) {
-                    return false;
-                }
-                if !lim.capitalized && run[0].is_uppercase() {
-                    return false;
-                }
-                let before = chars[a..p].iter().filter(|c| c.is_alphabetic()).count();
-                let after = chars[p..b].iter().filter(|c| c.is_alphabetic()).count();
-                before >= min_before && after >= min_after
-            })
-            .collect()
-    }
-
-    /// `heuristic_points` as first written (the right part rebuilt per point): the reference.
-    fn heuristic_ref(c: &[char]) -> Vec<usize> {
-        let n = c.len();
-        if n < 4 || !c.iter().all(|c| c.is_alphabetic()) {
-            return vec![];
-        }
-        let v: Vec<bool> = c.iter().map(|&x| is_vowel(x)).collect();
-        let mut out = vec![];
-        for i in 1..n {
-            let ok = if v[i - 1] && !v[i] {
-                (i + 1 < n && v[i + 1]) || (i + 2 < n && onset_pair(c[i], c[i + 1]) && v[i + 2])
-            } else if !v[i - 1] && !v[i] {
-                i >= 2 && v[i - 2] && i + 1 < n && v[i + 1] && !onset_pair(c[i - 1], c[i]) && c[i - 1] != c[i]
-                    || (c[i - 1] == c[i] && i >= 2 && v[i - 2])
-            } else {
-                false
-            };
-            let right: String = c[i..].iter().collect();
-            let core = right.strip_suffix("ed").or_else(|| right.strip_suffix("es")).or_else(|| right.strip_suffix('e')).unwrap_or(&right);
-            if ok && core.chars().any(is_vowel) && core.len() > 1 && v[..i].iter().any(|x| *x) {
-                out.push(i);
-            }
-        }
-        out
-    }
-
-    #[test]
-    fn linear_limits_and_heuristic_match_the_reference() {
-        let long = "hyphenation".repeat(40);
-        let words = [
-            "",
-            "x",
-            "''",
-            "a'b'c",
-            "cat",
-            "happen",
-            "hyphenation",
-            "Typography's",
-            "TYPOGRAPHY",
-            "Typography",
-            "typography’s",
-            "'typography'",
-            "“typography”,",
-            "typography-composition",
-            "don't",
-            "rock'n'roll",
-            "naïveté",
-            "crème-brûlée",
-            "Ünïcödé",
-            "ÉTUDE",
-            "strengths",
-            "ee",
-            "bed",
-            "hopped",
-            "rhythmed",
-            "aeiouy",
-            "xxyyzz",
-            "bookkeeper",
-            "ʼtwas",
-            "mid-1990s",
-            "twenty-one",
-            "école",
-            "Ålesund",
-            "smørrebrød",
-            "hopes",
-            "hoped",
-            "taed",
-            "teeed",
-            &long,
-        ];
-        for w in words {
-            for min_word in [2, 5, 7] {
-                for (after_first, before_last) in [(1, 1), (2, 2), (3, 2), (2, 4)] {
-                    for capitalized in [true, false] {
-                        let lim = Limits { min_word, after_first, before_last, capitalized };
-                        assert_eq!(hyphen_points(w, &lim), hyphen_points_ref(w, &lim), "{w:?} {lim:?}");
-                    }
-                }
-            }
-            let c: Vec<char> = w.to_lowercase().chars().collect();
-            assert_eq!(heuristic_points(&c), heuristic_ref(&c), "{w:?}");
-        }
-    }
-
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
-    #[test]
-    fn hyphenating_a_long_word_is_linear() {
-        // A word of n letters against one of 8n: linear ~8x the cost, the old rescans ~64x. One in
-        // the pattern alphabet, one outside it (the syllable heuristic).
-        let pattern = |k: usize| "hyphenation".repeat(k);
-        let heuristic = |k: usize| "smørrebrød".repeat(k);
-        assert_eq!(word_breaks(&heuristic(2)).1, Source::Heuristic);
-        // Each timing repeats the call so the shorter one is milliseconds, well above timer noise.
-        let ratios: Vec<(String, f64)> = [(pattern as fn(usize) -> String, 20), (heuristic, 40)]
-            .into_iter()
-            .map(|(word, repeat)| {
-                let (small, big) = (word(400), word(8 * 400));
-                let time = |w: &str| (0..repeat).for_each(|_| drop(hyphen_points(w, &Limits::default())));
-                let (t1, t8, ratio) = cost_ratio(8, || time(&small), || time(&big));
-                let what = format!("{}…: t(n) {t1:.4} s, t(8n) {t8:.4} s, ratio {ratio:.1}", word(1).chars().take(10).collect::<String>());
-                eprintln!("{what}");
-                (what, ratio)
-            })
-            .collect();
-        for (what, ratio) in ratios {
-            assert!(ratio < 24.0, "8x the letters, not linear: {what}");
-        }
-    }
-
-    #[test]
-    fn russian_hyphenation_and_hyphenated_output_are_linear() {
-        // A Russian word breaks at every syllable: each break used to be checked against all the
-        // earlier ones (#3657), and the hyphenated output searched every break for each char.
-        let word = |k: usize| "мама".repeat(k);
-        assert_eq!(word_breaks_in(&word(2), ProofLang::Ru).0, [2, 4, 6]);
-        assert_eq!(hyphenate_word_in(&word(2), &Limits::default(), ProofLang::Ru), "ма-ма-ма-ма");
-        // The breaks' rescan is a cheap one per break: it takes longer words to stand out.
-        for (what, k, repeat, f) in [
-            ("points", 1000, 3, (|w: &str| drop(hyphen_points_in(w, &Limits::default(), ProofLang::Ru))) as fn(&str)),
-            ("hyphenated", 400, 20, |w: &str| drop(hyphenate_word_in(w, &Limits::default(), ProofLang::Ru))),
-        ] {
-            let (small, big) = (word(k), word(8 * k));
-            let time = |w: &str| (0..repeat).for_each(|_| f(w));
-            let (t1, t8, ratio) = cost_ratio(8, || time(&small), || time(&big));
-            eprintln!("{what}: t(n) {t1:.4} s, t(8n) {t8:.4} s, ratio {ratio:.1}");
-            assert!(ratio < 24.0, "8x the letters, not linear: {what} {ratio:.1}");
-        }
-    }
-
-    #[test]
-    fn heuristic_fallback() {
-        let c: Vec<char> = "happen".chars().collect();
-        assert_eq!(heuristic_points(&c), vec![3]);
-    }
-
-    #[test]
-    fn heuristic_knows_consonants_with_diacritics() {
-        // `ł`, `ż`, `ç` are consonants (every non-ASCII letter used to count as a vowel).
-        assert!(!is_vowel('ł') && !is_vowel('Ż') && !is_vowel('ç') && is_vowel('é') && is_vowel('ą') && is_vowel('ø'));
-        let c: Vec<char> = "façade".chars().collect();
-        assert_eq!(heuristic_points(&c), vec![2]);
-    }
-
-    fn pl(w: &str) -> String {
-        hyphenate_word_in(w, &Limits::default(), ProofLang::Pl)
-    }
-
-    #[cfg_attr(not(craft_proof_embed = "pl"), ignore = "needs the pl Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
-    #[test]
-    fn polish_patterns_load() {
-        let p = Patterns::pl();
-        assert!(p.len() > 4000, "{}", p.len());
-        assert_eq!(p.exception_count(), 20);
-        assert_eq!(p.exception("nigdy"), Some(&[2][..]));
-    }
-
-    fn pt(w: &str) -> String {
-        hyphenate_word_in(w, &Limits::default(), ProofLang::Pt)
-    }
-
-    fn it(w: &str) -> String {
-        hyphenate_word_in(w, &Limits::default(), ProofLang::It)
-    }
-
-    #[cfg_attr(not(craft_proof_embed = "it"), ignore = "needs the it Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
-    #[test]
-    fn italian_patterns_load() {
-        let p = Patterns::it();
-        assert!(p.len() > 300, "{}", p.len());
-        // The file has no exception words.
-        assert_eq!(p.exception_count(), 0);
-    }
-
-    #[cfg_attr(not(craft_proof_embed = "it"), ignore = "needs the it Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
-    #[test]
-    fn italian_words_hyphenate_by_italian_rules() {
-        for (w, want) in [
-            ("famiglia", "fa-mi-glia"),
-            ("finestra", "fi-ne-stra"),
-            ("bicicletta", "bi-ci-clet-ta"),
-            ("passeggiata", "pas-seg-gia-ta"),
-            ("caffè", "caf-fè"),
-            ("tavolo", "ta-vo-lo"),
-            ("bambino", "bam-bi-no"),
-            ("scuola", "scuo-la"),
-            ("notte", "not-te"),
-            ("giorno", "gior-no"),
-            ("acqua", "ac-qua"),
-            // Under five letters (`Limits::min_word`): no break.
-            ("casa", "casa"),
-            ("pane", "pane"),
-            ("libro", "li-bro"),
-            ("re", "re"),
-            ("più", "più"),
-        ] {
-            assert_eq!(it(w), want, "{w}");
-        }
-        assert_eq!(word_breaks_in("famiglia", ProofLang::It).1, Source::Patterns);
-    }
-
-    #[cfg_attr(not(craft_proof_embed = "pt"), ignore = "needs the pt Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
-    #[test]
-    fn portuguese_patterns_load() {
-        let p = Patterns::pt();
-        assert!(p.len() > 300, "{}", p.len());
-        // `hard-ware`, `soft-ware` — and the file's last pattern line, a bare `1-`, which the
-        // reader counts as a (never-matching) exception because it contains a hyphen.
-        assert_eq!(p.exception_count(), 3);
-        assert_eq!(p.exception("hardware"), Some(&[4][..]));
-        assert_eq!(p.exception("software"), Some(&[4][..]));
-    }
-
-    #[cfg_attr(not(craft_proof_embed = "pt"), ignore = "needs the pt Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
-    #[test]
-    fn portuguese_words_hyphenate_by_portuguese_rules() {
-        for (w, want) in [
-            ("problema", "pro-ble-ma"),
-            ("coração", "co-ra-ção"),
-            ("paralelepípedo", "pa-ra-le-le-pí-pe-do"),
-            ("computador", "com-pu-ta-dor"),
-            ("escrever", "es-cre-ver"),
-            ("saudade", "sau-da-de"),
-            ("extraordinário", "ex-tra-or-di-ná-rio"),
-            ("automático", "au-to-má-ti-co"),
-            // One syllable: no break.
-            ("flor", "flor"),
-            ("bem", "bem"),
-        ] {
-            assert_eq!(pt(w), want, "{w}");
-        }
-    }
-
-    #[cfg_attr(not(craft_proof_embed = "pl"), ignore = "needs the pl Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
-    #[test]
-    fn polish_words_hyphenate_by_polish_rules() {
-        for (w, want) in [
-            ("konstytucja", "kon-sty-tu-cja"),
-            ("konstytucyjnego", "kon-sty-tu-cyj-ne-go"),
-            ("Rzeczpospolita", "Rzecz-po-spo-li-ta"),
-            ("przedsiębiorstwo", "przed-się-bior-stwo"),
-            ("pięćdziesięciu", "pięć-dzie-się-ciu"),
-            ("dziewczyna", "dziew-czy-na"),
-            ("książka", "książ-ka"),
-            ("Warszawa", "War-sza-wa"),
-            ("szczęście", "szczę-ście"),
-            ("rzeczywistość", "rze-czy-wi-stość"),
-            ("najpiękniejszy", "naj-pięk-niej-szy"),
-            ("wyobraźnia", "wy-obraź-nia"),
-            ("gżegżółka", "gżeg-żół-ka"),
-            // One syllable, or a single letter left over: no break.
-            ("chrząszcz", "chrząszcz"),
-            ("źdźbło", "źdźbło"),
-            ("obiad", "obiad"),
-            // The pattern file's exception words.
-            ("nigdy", "ni-gdy"),
-            ("przynajmniej", "przy-naj-mniej"),
-            ("skądinąd", "skąd-inąd"),
-            // Compounds: each part, never next to the hyphen.
-            ("biało-czerwony", "bia-ło-czer-wo-ny"),
-        ] {
-            assert_eq!(pl(w), want, "{w}");
-        }
-        assert_eq!(word_breaks_in("nigdy", ProofLang::Pl).1, Source::Dictionary);
-        assert_eq!(word_breaks_in("konstytucja", ProofLang::Pl).1, Source::Patterns);
-    }
-
-    #[cfg_attr(not(craft_proof_embed = "pl"), ignore = "needs the pl Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
-    #[test]
-    fn polish_heuristic_for_foreign_letters() {
-        // Letters outside the Polish alphabet: the Polish syllable heuristic, digraphs kept whole.
-        assert_eq!(word_breaks_in("Pöppelmann", ProofLang::Pl).1, Source::Heuristic);
-        assert_eq!(pl("Pöppelmann"), "Pöp-pel-mann");
-        assert_eq!(pl("Müllerowi"), "Mül-le-ro-wi");
-        let c: Vec<char> = "kawiarnié".chars().collect();
-        assert_eq!(heuristic_points_pl(&c), vec![2, 6], "ka-wiar-nié: `wi` and `ni` soften, `rn` splits after the sonorant");
-        let c: Vec<char> = "szczérze".chars().collect();
-        assert_eq!(heuristic_points_pl(&c), vec![5], "szczé-rze: `rz` stays whole");
-    }
-
-    #[test]
-    fn languages_without_patterns_keep_the_english_ones() {
-        for w in ["hyphenation", "typography", "internationalization"] {
-            for lang in [ProofLang::Other, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy] {
-                assert_eq!(hyphen_points_in(w, &Limits::default(), lang), hyphen_points(w, &Limits::default()), "{w}");
-            }
-        }
-    }
-
-    #[cfg_attr(not(craft_proof_embed = "de"), ignore = "needs the de Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
-    #[test]
-    fn german_patterns_load() {
-        let p = Patterns::de();
-        assert_eq!(p.len(), 36_709);
-        // The file has no exception words, and its `\message{…}` line adds none.
-        assert_eq!(p.exception_count(), 0);
-    }
-
-    #[cfg_attr(not(craft_proof_embed = "de"), ignore = "needs the de Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
-    #[test]
-    fn german_words_follow_the_german_patterns() {
-        let de = |w: &str| hyphenate_word_in(w, &Limits::default(), ProofLang::De);
-        assert_eq!(de("Silbentrennung"), "Sil-ben-tren-nung");
-        assert_eq!(de("unterliegende"), "un-ter-lie-gen-de");
-        assert_eq!(de("öffentlich-rechtlicher"), "öf-fent-lich-recht-li-cher");
-        assert_eq!(de("Begründung"), "Be-grün-dung");
-        assert_eq!(de("Zucker"), "Zu-cker");
-        // Swiss spelling: `ss` splits like any double consonant.
-        assert_eq!(de("Strasse"), "Stras-se");
-        assert_eq!(word_breaks_in("Unterlagen", ProofLang::De).1, Source::Patterns);
-    }
-
-    #[test]
-    fn bulgarian_words_follow_the_bulgarian_rules() {
-        let bg = |w: &str| hyphenate_word_in(w, &Limits::default(), ProofLang::Bg);
-        assert_eq!(bg("сричкопренасяне"), "срич-ко-пре-на-ся-не");
-        assert_eq!(bg("Таблица"), "Та-бли-ца");
-        // A single letter is never left on a line (the paragraph limits): България, not Бъл-га-ри-я.
-        assert_eq!(bg("България"), "Бъл-га-рия");
-        assert_eq!(bg("„шофьор“,"), "„шо-фьор“,");
-        assert_eq!(word_breaks_in("таблица", ProofLang::Bg).1, Source::Rules);
-        // Latin words in a Bulgarian run are hyphenated as English.
-        for w in ["publication", "WordCraft"] {
-            assert_eq!(hyphen_points_in(w, &Limits::default(), ProofLang::Bg), hyphen_points(w, &Limits::default()), "{w}");
-        }
-    }
-}
+mod tests;

@@ -14,7 +14,7 @@ use exr::prelude::{
     WritableImage,
 };
 
-use super::decode::{Limits, decode_display_part};
+use super::decode::{Limits, Window, decode_display_part};
 use super::seek::*;
 
 fn value(i: usize, k: usize) -> f32 {
@@ -52,6 +52,29 @@ fn indexed(bytes: &[u8]) -> Index {
     Index::build(&mut Cursor::new(bytes), &Limits::default(), &never).unwrap()
 }
 
+#[test]
+fn index_finds_chromaticities_in_a_later_part_header() {
+    let window = Window { x: 0, y: 0, width: 1, height: 1 };
+    let channels = [crate::write::Channel { name: "Y", sample: crate::decode::SampleType::F32 }];
+    let first = crate::write::Part { name: Some("First"), data_window: window, channels: &channels, compression: crate::decode::Compression::None };
+    let second = crate::write::Part { name: Some("Second"), ..first };
+    let chromaticities = [[0.64, 0.33], [0.3, 0.6], [0.15, 0.06], [0.3127, 0.329]];
+    let metadata = crate::write::Metadata { chromaticities: Some(chromaticities), ..Default::default() };
+    let mut out = Cursor::new(Vec::new());
+    crate::write::write_scanlines_with_metadata(&mut out, window, &[first, second], &metadata, |_, _, _, row| Ok(row.len())).unwrap();
+    let mut bytes = out.into_inner();
+
+    // Rename the first header's attribute without shifting the second header or any offsets.
+    let attr = b"chromaticities\0chromaticities\0";
+    let positions: Vec<_> = bytes.windows(attr.len()).enumerate().filter_map(|(offset, bytes)| (bytes == attr).then_some(offset)).collect();
+    assert_eq!(positions.len(), 2);
+    bytes[positions[0]] = b'x';
+    let headers = exr::meta::MetaData::read_from_buffered(Cursor::new(&bytes), false).unwrap().headers;
+    assert!(headers[0].shared_attributes.chromaticities.is_none());
+    assert!(headers[1].shared_attributes.chromaticities.is_some());
+    assert_eq!(indexed(&bytes).chromaticities(), Some(chromaticities));
+}
+
 /// What the whole-part decoder places in the display window for each channel of part `part`.
 fn oracle(bytes: &[u8], part: usize, fill: f32) -> Vec<Vec<f32>> {
     decode_display_part(bytes, part, &|_| true, &|_| fill, &Limits::default()).unwrap().channels.into_iter().map(|c| c.samples).collect()
@@ -87,6 +110,25 @@ fn only_the_requested_channels_are_returned_in_the_requested_order() {
     // R, then A (stored first), the others not read.
     let read = read_planes(&mut Cursor::new(&bytes[..]), &index, &Request::new(&[(0, 3), (0, 0)], usize::MAX), &never).unwrap();
     assert_eq!(read.planes, [whole[3].clone(), whole[0].clone()]);
+}
+
+#[test]
+fn reading_in_a_parts_data_window_keeps_off_display_tiles() {
+    let bytes = file(
+        vec![
+            layer(Some("beauty"), (0, 0), (8, 6), &["R"], false, Compression::ZIP1),
+            layer(Some("paint"), (-2, -3), (9, 7), &["R"], true, Compression::ZIP1),
+        ],
+        (8, 6),
+    );
+    let index = indexed(&bytes);
+    let request = Request { data_window: Some(1), ..Request::new(&[(1, 0)], usize::MAX) };
+    let output = read_planes(&mut Cursor::new(&bytes), &index, &request, &never).unwrap();
+    assert_eq!((output.width, output.height), (9, 7));
+    assert_eq!(output.stats.chunks[0], 0);
+    assert_eq!(output.planes[0], (0..9 * 7).map(|i| value(i, 0)).collect::<Vec<_>>());
+    let wrong_part = Request { data_window: Some(1), ..Request::new(&[(0, 0)], usize::MAX) };
+    assert!(index.estimate(&wrong_part).is_err());
 }
 
 #[test]
@@ -354,12 +396,13 @@ fn hostile_files_are_refused_and_never_panic() {
         let channels: Vec<(usize, usize)> = (0..index.parts().len()).flat_map(|p| channels_of(&index, p)).collect();
         let _ = read_planes(&mut Cursor::new(data), &index, &Request::new(&channels, 1 << 24), &never);
     };
-    // Every truncation.
-    for n in 0..bytes.len() {
+    // Every truncation (at the gate every divisor-th one, as for the flipped bytes).
+    let step = craft_testkit::hostile::divisor();
+    for n in (0..bytes.len()).step_by(step) {
         try_read(&bytes[..n]);
     }
     // A flipped byte at every position (headers, tables and chunks).
-    for at in 0..bytes.len() {
+    for at in (0..bytes.len()).step_by(step) {
         let mut broken = bytes.clone();
         broken[at] ^= 0xFF;
         try_read(&broken);
@@ -1413,11 +1456,12 @@ fn groups_must_be_slots_of_one_part_each_in_one_group() {
 #[test]
 fn the_estimate_covers_what_the_read_does() {
     // A flat colour in ZIP16 (decodes to far more than it reads), lines of a ramp, and tiles.
-    let (w, h) = (1024usize, 600usize);
+    // 136 rows retain ZIP16's eight-row final block while reducing the 160-row upstream fixture.
+    let (w, h) = (256usize, 136usize);
     let list = vec![AnyChannel::new("R", FlatSamples::F32(vec![0.25; w * h])), AnyChannel::new("G", FlatSamples::F32(vec![0.5; w * h]))];
     let encoding = Encoding { compression: Compression::ZIP16, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
     let flat = file(vec![Layer::new((w, h), LayerAttributes::default(), encoding, AnyChannels::sort(list.into()))], (w, h));
-    let ramp = file(vec![layer(None, (0, 0), (1024, 600), &["R", "G"], false, Compression::Uncompressed)], (1024, 600));
+    let ramp = file(vec![layer(None, (0, 0), (256, 160), &["R", "G"], false, Compression::Uncompressed)], (256, 160));
     let tiled = file(vec![layer(None, (0, 0), (300, 200), &["R", "G", "B"], true, Compression::PIZ)], (300, 200));
     for bytes in [&flat, &ramp, &tiled] {
         let index = indexed(bytes);

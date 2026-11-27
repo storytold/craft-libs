@@ -1,0 +1,288 @@
+//! `PaintUi` (5.3): what `paint` and `paint_over` get instead of a `Ui`. It lives in the contract (layer 4)
+//! because `child` and `face` show components; `Draw` and the painters stay in `primitives`.
+
+use super::label::{self, LeafLabel};
+use super::run::{self, FaceSource, ShowAt};
+use super::{ContentPainter, Cx, Show, TipFn};
+use super::{InsideLabel, SideLabel};
+use crate::primitives::sensing::PartResults;
+use crate::primitives::text_adapter;
+use crate::primitives::{ContentPainterCx, DataMode, Draw, DrawEnv, PaintRecord, PaintSlot, TextRun};
+use crate::runtime::access;
+use crate::runtime::egui::{alloc, child};
+use crate::runtime::env::{Env, Label};
+use crate::runtime::layout_memory;
+use crate::runtime::memory::sub;
+use crate::style::{Flags, Ink, Stateful, StyleColor, StyleCx};
+use craft_behavior::PartRef;
+use craft_theme::{ControlSize, Variant};
+use egui::{Id, Rect, Response, Ui};
+use std::cell::RefCell;
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::sync::Arc;
+
+/// What `paint` and `paint_over` get instead of a `Ui`.
+pub struct PaintUi<'a> {
+    pub(crate) ui: &'a mut Ui,
+    #[doc(hidden)]
+    pub env: &'a Env,
+    /// The ink of the component's own surface, which `draw` paints text and rules in.
+    pub(crate) ink: Ink,
+    /// How `draw` paints data colours: dimmed while the component paints its Disabled state.
+    pub(crate) data: DataMode,
+    pub(crate) id: Id,
+    pub(crate) rect: Rect,
+    pub(crate) record: &'a RefCell<PaintRecord>,
+    /// The part results of this pass; faces read their part's state from here.
+    pub(crate) results: &'a PartResults,
+    pub(crate) response: &'a Response,
+    pub(crate) active: Option<(PartRef, bool)>,
+    /// The composite's text colour, which its faces take as their host ink.
+    pub(crate) text: Option<&'a Stateful<StyleColor>>,
+    /// The composite's muted text colour (its second text look), which its faces take as their host's muted ink.
+    pub(crate) muted: Option<&'a Stateful<StyleColor>>,
+    /// The composite's validity flags, which its faces carry.
+    pub(crate) flags: Flags,
+    /// The composite's resolved enabled state and size, which the children it builds inherit.
+    pub(crate) enabled: bool,
+    pub(crate) size: ControlSize,
+    /// The selection parts step 7 declared.
+    pub(crate) selections: &'a [PartRef],
+    /// The fade `steps::fade` began (`DisabledLook::Faded`): the faces paint their enabled look, and the children
+    /// shown from here lie under the component's veil.
+    pub(crate) fade: Option<super::steps::Fade>,
+    /// The composite has a node (`CxCore::node`): its step 16 fills its parts' sub-nodes from the faces' records.
+    pub(crate) node: bool,
+    /// The children's `Ui`, built on the first child under `sub(id, "children")`.
+    pub(crate) kids: Option<Ui>,
+}
+
+impl PaintUi<'_> {
+    /// The content-paint API: text, rules, surfaces and shapes, recorded for the later steps. While the component
+    /// paints its Disabled state (`DisabledLook::States`), its data colours paint at `Opacity::DISABLED`.
+    pub fn draw(&self) -> Draw<'_> {
+        Draw::new(self.ui.painter(), self.record, DrawEnv { tokens: &self.env.tokens, direction: self.env.direction, ink: self.ink })
+            .text_direction(self.env.text_direction)
+            .data(self.data)
+    }
+
+    /// Shows the selection part `part` (`PartsCx::selectable_text`): `run` in `rect`, painted as `Draw::text`
+    /// paints it, with the selection behind its characters; a line wider than `rect` is cut at its edge. A part step 7 did not declare (a face, an inert
+    /// component) paints as plain text.
+    pub fn selectable_text(&mut self, part: impl Into<PartRef>, rect: Rect, run: &TextRun<'_>) {
+        let part = part.into();
+        if !self.selections.contains(&part) {
+            self.draw().text(rect, run);
+            return;
+        }
+        let (layout, at) = self.draw().place_text(rect, run);
+        self.record.borrow_mut().baseline.get_or_insert(at.y + layout.first_baseline);
+        let widget = super::text::selection_id(self.id, part);
+        let ink = crate::style::ink_color(&self.env.tokens, self.ink);
+        text_adapter::show_selectable(
+            self.ui,
+            text_adapter::Selectable { widget, owner: self.id, rect, layout: &layout, at, run, enabled: self.enabled, ink },
+        );
+    }
+
+    /// The content-paint API for painting `part`: as [`draw`](Self::draw), and when the part was declared
+    /// [`inactive`](super::PartBuilder::inactive) its data colours use the theme's disabled fill.
+    pub fn draw_part(&self, part: impl Into<PartRef>) -> Draw<'_> {
+        let part = part.into();
+        let inactive = self.results.get(&(part.key, part.index)).is_some_and(|result| result.inactive);
+        let draw = self.draw();
+        if inactive { draw.data(DataMode::Inactive) } else { draw }
+    }
+
+    /// Runs `paint` with this `PaintUi` cut to `rect` (inside the clip already in force), as `Draw::clipped` does for a
+    /// `Draw`: content painted whole over one pane of the component, such as a sheet's merged cell under a frozen row.
+    /// The children shown inside take the cut too; the clip is restored afterwards.
+    pub fn clipped<R>(&mut self, rect: Rect, paint: impl FnOnce(&mut Self) -> R) -> R {
+        let kept = self.ui.clip_rect();
+        let kids_kept = self.kids.as_ref().map(Ui::clip_rect);
+        self.ui.set_clip_rect(rect.intersect(kept));
+        if let Some(kids) = &mut self.kids {
+            kids.set_clip_rect(rect.intersect(kids.clip_rect()));
+        }
+        let out = paint(self);
+        self.ui.set_clip_rect(kept);
+        if let Some(kids) = &mut self.kids {
+            // Children first shown inside `paint` built their Ui under the cut; they get the clip it had before.
+            kids.set_clip_rect(kids_kept.unwrap_or(kept));
+        }
+        out
+    }
+
+    /// Runs `f` with the style context of this component's env, so app hooks called from `paint` pick colours and
+    /// sizes through tokens as `style` does.
+    pub fn with_style<R>(&self, variant: Variant, f: impl FnOnce(&StyleCx<'_>) -> R) -> R {
+        let env = self.env;
+        let cx = StyleCx::new(
+            self.ui.ctx(),
+            &env.tokens,
+            &env.values,
+            self.size,
+            variant,
+            env.direction,
+            env.scale,
+            env.os,
+            env.active,
+            env.key,
+            env.line_ratio,
+        );
+        f(&cx)
+    }
+
+    /// Shows a child component at a physical rect, with id `cx.key(key)`. The child `Ui` is pinned left to
+    /// right: this site is unmirrored.
+    pub fn child<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C) -> C::Output {
+        self.child_with(self.id.with(key), rect, child, None, None)
+    }
+
+    /// Shows `child` as the owner's own control, such as a picker the owner draws its field with. The child's node
+    /// folds into the owner's: the owner's node stands for the child's focus stop, carries the child's value text when
+    /// the owner's `access` sets none, and takes the actions and requests aimed at it, which reach the child. The
+    /// owner's name names the control.
+    pub fn inner<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C) -> C::Output {
+        let id = self.id.with(key);
+        access::fold::request(self.ui.ctx(), id, self.id);
+        self.child_with(id, rect, child, None, None)
+    }
+
+    /// Makes the child shown with `key` the one a click on the composite's label focuses, in place of the composite's
+    /// first stop, such as the number field of a row whose slider comes first in Tab order. A child with no stop this
+    /// pass leaves the first stop.
+    pub fn label_target(&mut self, key: impl Hash + Debug) {
+        access::scope::label_target(self.ui.ctx(), self.id, self.id.with(key));
+    }
+
+    /// Shows a child with rich tooltip content.
+    pub fn child_with_tip<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C, tip: impl FnOnce(&mut Ui)) -> C::Output {
+        self.child_with(self.id.with(key), rect, child, Some(Box::new(tip)), None)
+    }
+
+    /// Runs the label step (B2) for one leaf child at `rect`: the label's placement beside or above the child, the
+    /// label scope, scrub and the reset dot. The child gets the width the label leaves and its own height at the top
+    /// of that rect, as in a labelled container's body, so the label lines up with its baseline on either path.
+    pub fn labelled<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, label: Label, side: SideLabel, child: C) -> C::Output {
+        let id = self.id.with(key);
+        let env = Env::of(self.ui);
+        let mut child = child;
+        let under = label::leaf_under(&env, &side, &child, (self.enabled, self.size));
+        // Without a node of its own the composite leaves the label to the node its own `Ui` sits under.
+        let parent = self.node.then_some(self.id);
+        let at = LeafLabel { id, owner: self.id, parent, row: rect, egui_cell: false, text: &label, side: &side, under: &under };
+        let ctx = self.ui.ctx().clone();
+        layout_memory::boundary(&ctx, true, || {
+            let placed = crate::layout::ColumnGroup::field(&mut *self.ui, |ui| label::leaf(ui, &env, &at, &mut child, None));
+            let mut control = placed.control;
+            if child.fills() != Some(craft_behavior::Axis::Y) {
+                let ideal = run::measure_under(&mut child, &*self.ui, Some(id), craft_behavior::Proposal::Ideal, Some(&under));
+                control.max.y = control.max.y.min(control.min.y + ideal.y);
+            }
+            let output = self.child_with(id, control, child, None, under.inside.clone());
+            placed.finish(&ctx);
+            output
+        })
+    }
+
+    /// Shows `child` at `rect` under the composite's `enabled` and `size`, and `inside`, the inside label of the side
+    /// label the child is the control of.
+    fn child_with<C: Show>(&mut self, id: Id, rect: Rect, child: C, tip: Option<TipFn<'_>>, inside: Option<Arc<InsideLabel>>) -> C::Output {
+        let scope = sub(self.id, "children");
+        let parent = &mut *self.ui;
+        // The kids' `Ui` holds no entry of its own: they inherit the env of the composite's `Ui`.
+        let outer = Env::of(parent);
+        let kids = self.kids.get_or_insert_with(|| {
+            let builder = egui::UiBuilder::new().layout(child::pinned_layout()).scope_id(scope).max_rect(self.rect);
+            // Without a node of its own the composite leaves its children to the node its own `Ui` sits under.
+            alloc::child(parent, if self.node { access::with_parent(builder, self.id) } else { builder })
+        });
+        let ctx = kids.ctx().clone();
+        let env = super::cx::child_env(&outer, &super::cx::Under { enabled: self.enabled, size: self.size, inside });
+        // A child shown while the owner's fade runs lies under the owner's veil, so a faded child adds none of its own.
+        let env = match self.fade {
+            Some(_) => {
+                let layer = kids.layer_id();
+                env.derive_local(|scoped| {
+                    scoped.inherited_mut().values.set(super::steps::UnderVeil(Some(layer)));
+                })
+            }
+            None => env,
+        };
+        let installed = Env::install_for(kids, env.clone());
+        // The child sits in a rect its owner chose, and the owner's own measure answers for it: no body's transcript
+        // holds it.
+        let output =
+            layout_memory::boundary(&ctx, true, || run::show_leaf(&mut Some(super::Props::id(child, id)), kids, (ShowAt::Rect(rect), env), tip));
+        Env::restore(&ctx, installed);
+        output
+    }
+
+    /// Paints `face` as the look of `part`: its style, surface and state fill from the part's state merged with the
+    /// instance's `flags()` and the host's validity flags, then its own `paint`. The face reads the host's text
+    /// colour through `StyleCx::host_ink` and its muted colour through `StyleCx::host_muted_ink`. It registers no id, senses nothing, opens no memory stage and
+    /// fires nothing.
+    pub fn face<C: Show>(&mut self, part: impl Into<PartRef>, face: C) {
+        self.face_with(part.into(), face, self.text, true);
+    }
+
+    /// `face`, for a face on a fill the composite draws for that part alone (a plate over a picture): the face reads
+    /// `ink` through `StyleCx::host_ink` instead of the composite's text colour.
+    pub fn face_in<C: Show>(&mut self, part: impl Into<PartRef>, face: C, ink: &Stateful<StyleColor>) {
+        self.face_with(part.into(), face, Some(ink), true);
+    }
+
+    /// [`face`](Self::face) painted `share` as opaque as it would be (1 paints as `face` does, 0 paints nothing): a
+    /// component fading in or out as the one component that draws it. A share outside 0 to 1 is clamped and a
+    /// non-finite one leaves the opacity as it was; fades stack with the opacity already in force. A faded face is a
+    /// look only: it reports no sub-node, so a component fading out has no node while it fades.
+    pub fn face_faded<C: Show>(&mut self, part: impl Into<PartRef>, face: C, share: f32) {
+        let kept = self.ui.opacity();
+        if share.is_finite() {
+            self.ui.set_opacity(kept * share.clamp(0.0, 1.0));
+        }
+        self.face_with(part.into(), face, self.text, false);
+        self.ui.set_opacity(kept);
+    }
+
+    /// Paints `face` for `part`; a `reported` face gives the part's sub-node its facts (`steps::report_parts`).
+    fn face_with<C: Show>(&mut self, part: PartRef, face: C, ink: Option<&Stateful<StyleColor>>, reported: bool) {
+        let Some(result) = self.results.get(&(part.key, part.index)) else {
+            debug_assert!(false, "face for a part `parts` did not declare");
+            return;
+        };
+        let focus = self.active.filter(|(active, _)| *active == part).map(|(_, visible)| visible);
+        let source = FaceSource {
+            id: self.id,
+            result,
+            focus,
+            response: self.response,
+            ink,
+            muted: self.muted,
+            flags: self.flags,
+            enabled: self.enabled,
+            faded: self.fade.is_some(),
+            reported: reported && self.node,
+        };
+        let (baseline, record) = run::paint_face(self.ui, self.env, &source, part, face);
+        let mut own = self.record.borrow_mut();
+        if let Some(baseline) = baseline {
+            own.baseline.get_or_insert(baseline);
+        }
+        own.faces.extend(record);
+    }
+
+    /// Reserves an empty shape at the end of the component's layer, clipped to `clip`, for shapes added later by code
+    /// that holds no painter (`PaintSlot::extend`).
+    pub fn reserve_slot(&self, clip: Rect) -> PaintSlot {
+        PaintSlot::reserve_on(self.ui.ctx(), self.response.layer_id, clip)
+    }
+
+    /// The raw painter for an allowlisted content painter, clipped to the component's own rect. Its data paths paint
+    /// data colours as [`draw`](Self::draw) does.
+    pub fn content_painter<C: ContentPainter>(&self, cx: &Cx<'_, C>) -> ContentPainterCx<'_> {
+        ContentPainterCx::new(self.ui.painter().with_clip_rect(cx.core.rect.intersect(self.ui.clip_rect())), self.env, self.ink).data(self.data)
+    }
+}

@@ -1,0 +1,453 @@
+//! The pass core: `CxCore`, `Cx` over it, their stage access and the inherent methods of `Cx`.
+
+use super::parts::{PartKeys, Toggle};
+use super::pointer::Pointer;
+use super::scroll::ScrollMove;
+use crate::contract::{Component, Resolved, Validity, ValueOf};
+use crate::primitives::sensing::PartResults;
+use crate::primitives::{PaintRecord, TextLayout};
+use crate::runtime::commands::{self, CommandRef, FireSource, ResolvedCommand};
+use crate::runtime::env::{Env, EnvView};
+use crate::runtime::focus::{self};
+use crate::runtime::keys::Intents;
+use crate::runtime::memory::{MemoryStage, StageAccess, sealed};
+use crate::style::{Ink, StateSet};
+use craft_behavior::{Cursor, CursorPriority, EditEvent, Flow, PartKey, PartRef, PressCancel, PressState, Sense};
+use craft_keymap::Chord;
+use egui::{Context, Id, Rect, Response};
+use std::any::Any;
+use std::cell::RefCell;
+use std::fmt::Debug;
+use std::ops::{Deref, Range};
+use std::sync::Arc;
+
+/// How a component was activated this pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Activation {
+    /// By `Intent::Activate` (Enter, Space or an AccessKit click) rather than a primary click.
+    pub by_key: bool,
+    /// The modifiers held at the activation: with the click for a pointer activation, in the pass for a key or AccessKit one.
+    pub mods: craft_keymap::Mods,
+}
+
+/// The text part's result of a pass as the core holds it: `Cx::text` reads the typed outcome, the response reads
+/// the rest without the value type.
+pub(crate) trait TextResult {
+    /// The modifiers of the Enter that submitted the part this pass; none when it did not submit.
+    fn submit_mods(&self) -> craft_keymap::Mods;
+    /// Whether Tab (`Some(true)`) or Shift+Tab (`Some(false)`) moved focus off the part this pass.
+    fn left_by_tab(&self) -> Option<bool>;
+    /// Whether a `TabKey::Reports` part kept focus on Tab (`Some(true)`) or Shift+Tab (`Some(false)`) this pass.
+    fn tab(&self) -> Option<bool>;
+    /// The part's caret as a byte offset into its text after the pass; `None` while its widget has no caret.
+    fn caret(&self) -> Option<usize>;
+    /// Whether the part lost key focus this pass, edited or not.
+    fn text_lost_focus(&self) -> bool;
+    fn as_any(&self) -> &dyn Any;
+}
+
+pub(crate) struct RecordedText<V> {
+    pub(crate) outcome: crate::primitives::TextOutcome<V>,
+    pub(crate) submit_mods: craft_keymap::Mods,
+    pub(crate) left_by_tab: Option<bool>,
+    pub(crate) tab: Option<bool>,
+    pub(crate) caret: Option<usize>,
+    pub(crate) text_lost_focus: bool,
+}
+
+impl<V: 'static> TextResult for RecordedText<V> {
+    fn submit_mods(&self) -> craft_keymap::Mods {
+        self.submit_mods
+    }
+
+    fn left_by_tab(&self) -> Option<bool> {
+        self.left_by_tab
+    }
+
+    fn tab(&self) -> Option<bool> {
+        self.tab
+    }
+
+    fn caret(&self) -> Option<usize> {
+        self.caret
+    }
+
+    fn text_lost_focus(&self) -> bool {
+        self.text_lost_focus
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// The non-generic part of every `Cx`; the step functions take this. It is a read-only output: component code
+/// changes nothing here except through a chapter trait.
+#[non_exhaustive]
+pub struct CxCore<'a> {
+    /// What the inherited context holds that component code may read.
+    pub env: EnvView<'a>,
+    /// `Common` after step 1.
+    pub resolved: &'a Resolved<'a>,
+    /// The component's id.
+    pub id: Id,
+    /// The allocated rect.
+    pub rect: Rect,
+    /// The rect minus padding, mirrored for right-to-left.
+    pub content_rect: Rect,
+    /// The rect intersected with the clip rect.
+    pub visible: Rect,
+    /// Start and end geometry of the rect.
+    pub flow: Flow,
+    /// The root widget's response.
+    pub response: Response,
+    /// The bound command, resolved at step 1.
+    pub command: Option<Arc<ResolvedCommand>>,
+    /// Written by step 12; read with `Styled::state`.
+    pub(crate) state: StateSet,
+    /// True once step 12 wrote `state` in this pass.
+    pub(crate) stated: bool,
+    /// True once the run reached step 7 with something to show. A measuring run, a sizing pass of the parent or host
+    /// `Ui`, and a host that shows nothing (a layer in its parent's sizing pass) stop before it, and an inert run (a
+    /// size the guard refuses) declares no parts: their core is blank and every part reads idle.
+    pub(crate) parted: bool,
+    /// Read with `Styled::ink`, valid from step 12.
+    pub(crate) ink: Ink,
+    /// An owned copy of the intents routed to this id.
+    #[doc(hidden)]
+    pub intents: Intents,
+    #[doc(hidden)]
+    pub memory: &'a mut MemoryStage,
+    #[doc(hidden)]
+    pub ctx: Context,
+    pub(crate) paint: RefCell<PaintRecord>,
+    pub(crate) results: PartResults,
+    /// A face reads idle results for parts it has not registered.
+    pub(crate) face_mode: bool,
+    /// The active part while the component holds focus.
+    pub(crate) active: Option<PartRef>,
+    /// What focus holds of this component, read once at step 8.
+    #[doc(hidden)]
+    pub focus: crate::runtime::focus::Facts,
+    /// The arena root this component is a member of; `None` for a component with its own egui widget.
+    pub(crate) member_of: Option<Id>,
+    /// The keys a session member borrowed from its arena root and the window this pass (`KeyUse::session`).
+    pub(crate) lent: crate::runtime::keys::Lent,
+    pub(crate) activation: Option<Activation>,
+    /// The activation `Cx::activate` injected this pass, which the pipeline runs as it runs a click.
+    pub(crate) injected: Option<FireSource>,
+    /// The activation leaves the layer chain open (`Cx::keep_open`).
+    pub(crate) keep_open: bool,
+    /// An AccessKit click named a part this pass: the response reports it as a click, as a pointer click on the part does.
+    pub(crate) part_clicked: bool,
+    /// For an arena root: the member activated this pass.
+    pub(crate) activated_member: Option<Id>,
+    pub(crate) press: PressState,
+    /// The parent layout of a standalone control, used to keep a sweep within its siblings.
+    pub(crate) pointer_group: Option<Id>,
+    pub(crate) cursor: Option<(Cursor, CursorPriority)>,
+    /// The declared cursors of the parts hovered this pass, recorded at step 8 and written at step 16.
+    pub(crate) part_cursors: Vec<Cursor>,
+    pub(crate) claims: Vec<Chord>,
+    pub(crate) reveal: Option<Rect>,
+    /// The tooltip of the collection member the pointer rests on, which the item step leaves for step 16.
+    pub(crate) member_tip: Option<crate::contract::tooltip::MemberTip>,
+    /// The stops of the container's header parts at the end edge, which the body step registers after the header's
+    /// children.
+    pub(crate) header_stops: Vec<crate::runtime::focus::Stop>,
+    pub(crate) press_cancel: Option<PressCancel>,
+    /// The visible range each scroll part moved to this pass, from step 8's results.
+    pub(crate) scroll_moves: Vec<ScrollMove>,
+    /// The parts that show the value, whose double click resets it like the root's.
+    pub(crate) value_parts: PartKeys,
+    /// The value parts that declared `own_reset`.
+    pub(crate) own_reset_parts: PartKeys,
+    /// The parts that declared `state_layer`, which step 13 fills with the state layer.
+    pub(crate) state_layer_parts: PartKeys,
+    /// The parts that declared `toggles`, with whether their popup is open as of step 9.
+    #[doc(hidden)]
+    pub toggles: Vec<Toggle>,
+    /// The part a reset targeted that declared `own_reset`; step 9 leaves its value to `update`.
+    pub(crate) reset_part: Option<PartRef>,
+    /// The sense the root's egui widget carries, for the forwarding widget of a transformed body.
+    pub(crate) root_sense: Sense,
+    /// The member of the container's roving group that moves start from, set by `Cx::roving_lead`.
+    pub(crate) roving_lead: Option<Id>,
+    /// The component joined the roving group of the body it is shown in this pass (`Cx::join_roving`).
+    pub(crate) roving_member: bool,
+    /// The collection's selection (a `Selection<K>`) and lead as the item step holds them, for `Cx::collection_selection`.
+    pub(crate) collection_selection: Option<Box<dyn std::any::Any>>,
+    /// The events and visible range the item step left for `collection_response`.
+    pub(crate) collection_events: Option<Box<dyn std::any::Any>>,
+    pub(crate) visible_rows: Range<usize>,
+    /// The header row's facts the item step leaves for the collection's `update` and `overlay` (`Cx::header_menu`).
+    pub(crate) header: crate::contract::items::HeaderFacts,
+    /// The header menu's picks, which the item step applies at the end of the pass (`Cx::column_request`).
+    pub(crate) column_requests: Vec<crate::contract::ColumnRequest>,
+    /// What the collection's props allow, for `collection_response`.
+    pub(crate) gestures: crate::contract::collection::Gestures,
+    /// The text part's result of this pass, from step 8b.
+    pub(crate) texts: Option<(PartKey, Box<dyn TextResult>)>,
+    /// The selection parts step 7 declared, which `PaintUi::selectable_text` shows.
+    pub(crate) selections: Vec<craft_behavior::PartRef>,
+    /// Not enabled, with `DisabledLook::Faded`: the component and its faces paint their enabled look, which step 13
+    /// fades.
+    pub(crate) faded: bool,
+    /// The component has an AccessKit node this pass (step 8), or as a collection member a sub-node under its
+    /// collection's: its access data, its members' and its faces' have a reader.
+    pub(crate) node: bool,
+    /// Where the faded component's shapes start and the ground its veil takes (`steps::fade`).
+    pub(crate) fade: Option<crate::contract::steps::Fade>,
+    /// The focus ring shape each part declared (`focus_shape`), in which step 13 draws the active part's ring.
+    pub(crate) focus_shapes: Vec<((PartKey, Option<u64>), focus::FocusShape)>,
+    /// The focus ring shape the component declared for its own ring (`Cx::focus_shape`); its rect when `None`.
+    pub(crate) focus_shape: Option<focus::FocusShape>,
+    /// Where the text part reserved the surface in the painter, so the field's surface paints beneath its text.
+    pub(crate) surface_slot: Option<egui::layers::ShapeIdx>,
+    /// The editor part as step 8b set it up.
+    pub(crate) editor: Option<crate::contract::editor::EditorInfo>,
+    /// The editor part's inputs of this pass, each with its order among the pass's events, until `editor_input` or
+    /// `editor_steps` takes them.
+    pub(crate) editor_inputs: Vec<(crate::contract::editor::Order, craft_behavior::EditorInput)>,
+    /// The text part's draft is not a value of its codec.
+    pub(crate) text_invalid: bool,
+    /// The text part's `TextOptions::unparsed` while its draft does not parse: the refusal the pass reports when the
+    /// binding gives none.
+    pub(crate) text_unparsed: Option<crate::runtime::env::Message>,
+    /// The text part takes the pointer this pass: the field is in edit, or the press under way began in edit. A body
+    /// scrub (`Scrub::on_field`) leaves such a press to the text.
+    pub(crate) text_takes_pointer: bool,
+    /// The row and column counts of the collection, which the item step records for its node.
+    pub(crate) grid: crate::runtime::access::GridPlace,
+    /// The text part's completion list is open: Escape belongs to its popup, not to the component's gesture.
+    pub(crate) escape_to_list: bool,
+    /// The text facts step 16 gives AccessKit, from the text adapter or the editor's `editor_state`.
+    pub(crate) text_access: RefCell<Option<crate::runtime::access::text::TextFacts>>,
+    /// The value as the component words it (`Component::value_text`), noted at step 16 or in a sizing pass for the
+    /// output.
+    pub(crate) value_text: RefCell<Option<String>>,
+    /// Enter was pressed in the text part.
+    pub(crate) submitted: bool,
+    /// Escape abandoned the text part's edit.
+    pub(crate) escaped: bool,
+}
+
+impl<C: Component> Cx<'_, C> {
+    /// The part a reset aimed at, when it declared `own_reset`; `update` proposes the value with that part at its
+    /// default. Reads `None` when the reset was the whole binding's, which step 9 applied.
+    pub fn reset_part(&self) -> Option<PartRef> {
+        self.core.reset_part
+    }
+
+    /// Lays document `text` out `text.wrap` wide: the call `ContentPainterCx::layout` and `MeasureCx::layout_doc`
+    /// make, so `update` finds a character at a point in the galley that `paint` draws.
+    pub fn layout_doc(&self, text: &crate::primitives::DocText<'_>) -> TextLayout {
+        text.layout(&self.core.ctx, &Env::of_root(&self.core.ctx).tokens, craft_i18n::Direction::Ltr)
+    }
+
+    /// Whether the control's link label was clicked in this pass.
+    pub fn link_activated(&self) -> bool {
+        crate::runtime::access::scope::field_label(&self.core.ctx).is_some_and(|label| label.link)
+    }
+
+    /// Asks the platform to open `url`, in a new tab where the platform has tabs and `new_tab` is set.
+    pub fn open_url(&mut self, url: &str, new_tab: bool) {
+        crate::runtime::egui::output::open_url(&self.core.ctx, url, new_tab);
+    }
+
+    /// Makes this component a member of the roving group of the body it is shown in: its stop and its focusable parts
+    /// join the group, and Tab visits the group once. Called from `update`: the stops register after it, in the same
+    /// pass. A component that does not call it in a pass keeps its own Tab stop in that pass.
+    pub fn join_roving(&mut self) {
+        self.core.roving_member = true;
+    }
+
+    /// The shape the component's own focus ring takes this pass, as a part's `focus_shape` shapes the part's: the
+    /// circle inside its rect, or a polygon of points on screen. Called from `update`; a component that does not call
+    /// it gets the ring round its rect.
+    pub fn focus_shape(&mut self, shape: focus::FocusShape) {
+        self.core.focus_shape = Some(shape);
+    }
+
+    /// Runs `command` as this component's own activation would, for a command that is not the component's bound
+    /// one: resolved against the instances above the component, and not fired when disabled. `source` is where the
+    /// activation came from (`part_activated` gives it). Returns whether the command was queued.
+    pub fn fire(&mut self, command: impl Into<CommandRef>, source: FireSource) -> bool {
+        let Some(resolved) = commands::resolve_scoped(&self.core.ctx, self.core.env.command_chain(), &command.into()) else { return false };
+        let mods = self.core.activation.map_or(craft_keymap::Mods::NONE, |activation| activation.mods);
+        commands::fire_resolved(&self.core.ctx, &resolved, source, mods)
+    }
+
+    /// Where an activation of `part` came from this pass: `Key` for a keyboard activation while `part` is the
+    /// active part, `Pointer` for a click on it, `Access` for an AccessKit click on its sub-node; `None` when
+    /// `part` was not activated. A part that is not declared is never activated.
+    pub fn part_activated(&self, part: impl Into<PartRef>) -> Option<FireSource> {
+        let part = part.into();
+        let result = self.core.part_if_declared(part)?;
+        if self.core.activation.is_some_and(|activation| activation.by_key) && self.core.active_now() == Some(part) {
+            Some(FireSource::Key)
+        } else if result.press.phase.is_click() {
+            Some(FireSource::Pointer)
+        } else if self.core.intents.access_click(part) {
+            Some(FireSource::Access)
+        } else {
+            None
+        }
+    }
+
+    /// The part this pass's context request was made at: the part under the pointer for a secondary click, the
+    /// active part for the Menu key or Shift+F10; `None` without a request or when it was made at the component
+    /// itself. The request is recorded after `update`, so `finish` reads it.
+    pub fn context_part(&self) -> Option<PartRef> {
+        crate::runtime::keys::context_part(&self.core.ctx, self.core.id)
+    }
+
+    /// Whether the component was asked for its context menu in this pass: a secondary click on it, the Menu key or
+    /// Shift+F10 it did not take, or AccessKit's `ShowContextMenu`. Recorded after `update`, so `overlay` and
+    /// `finish` read it.
+    pub fn context_requested(&self) -> bool {
+        crate::runtime::keys::context_request(&self.core.ctx, self.core.id).is_some()
+    }
+
+    /// The context requests made in this pass so far, in order: each component asked and the rect its menu opens at
+    /// (its part's, when it was made at one). A container reads in `finish` those its body's components made, which
+    /// ran before it finished: a secondary click or the Menu key on a child reaches the region around it this way,
+    /// whatever the child does with its own request.
+    pub fn context_requests(&self) -> Vec<(Id, Rect)> {
+        crate::runtime::keys::context_requests(&self.core.ctx)
+    }
+
+    /// Names the member of this container's roving group (`ContainerProps.roving`) that Tab arrives at; the
+    /// first member when none is named. Called from `finish`, once the body's members have registered, so the arrival
+    /// is one of this run's members and the run's own record holds it.
+    pub fn roving_arrival(&mut self, member: Id) {
+        focus::name_group_arrival(&self.core.ctx, crate::contract::steps::body_group(self.core.id), (member, None));
+    }
+
+    /// Names the member of this container's roving group that the next move starts from, in place of the focused one:
+    /// a menu's row that the pointer lit. The group registers after `update`, so a member named from the body's state
+    /// as `update` reads it takes effect from the next pass.
+    #[doc(hidden)]
+    pub fn roving_lead(&mut self, member: Id) {
+        self.core.roving_lead = Some(member);
+    }
+
+    /// Moves focus to one of this component's focusable parts, in this pass: the rest of the pass reads the new
+    /// focus. For `update` after a press on the component or while it holds focus; it never takes focus from elsewhere.
+    pub fn focus_part(&mut self, part: impl Into<PartRef>) {
+        let part = part.into();
+        debug_assert!(
+            self.core.focus.focused || self.core.press_held() || self.core.results.values().any(|result| result.press.phase.is_press()),
+            "`focus_part` is for a component that holds focus or was just pressed; `update` never steals focus"
+        );
+        focus::request(&self.core.ctx, focus::FocusTarget::Part(self.core.id, part));
+        self.core.sync_focus();
+    }
+
+    /// Moves focus to the component's own stop (not a part), under the rule of `focus_part`.
+    pub fn focus_own(&mut self) {
+        debug_assert!(
+            self.core.focus.focused || self.core.press_held(),
+            "`focus_own` is for a component that holds focus or was just pressed; `update` never steals focus"
+        );
+        focus::request(&self.core.ctx, focus::FocusTarget::Id(self.core.id));
+        self.core.sync_focus();
+    }
+}
+
+impl sealed::Sealed for CxCore<'_> {}
+
+impl StageAccess for CxCore<'_> {
+    fn stage(&self) -> &MemoryStage {
+        self.memory
+    }
+
+    fn stage_mut(&mut self) -> &mut MemoryStage {
+        self.memory
+    }
+
+    fn base(&self) -> Id {
+        self.id
+    }
+}
+
+/// What component code reads and calls. It derefs to [`CxCore`] for reading only.
+///
+/// ```compile_fail,E0594
+/// # extern crate craft_ui_contract as craft_ui;
+/// use craft_ui::contract::{Component, Cx};
+/// fn update<C: Component>(cx: &mut Cx<'_, C>) {
+///     cx.rect = egui::Rect::NOTHING;
+/// }
+/// ```
+#[non_exhaustive]
+pub struct Cx<'a, C: Component> {
+    /// The pass core, which the pipeline builds once per run and lends to every step.
+    #[doc(hidden)]
+    pub core: &'a mut CxCore<'a>,
+    /// The component's cached style.
+    pub style: &'a C::Style,
+    /// The shown copy of the value, shared with shown memory.
+    pub(crate) shown: Option<Arc<ValueOf<C>>>,
+    /// The binding holds a mixed value; `shown` is empty.
+    #[doc(hidden)]
+    pub mixed: bool,
+    /// The edit events of this pass, in order; `applied` of them have reached the binding.
+    pub(crate) events: Vec<EditEvent<ValueOf<C>>>,
+    pub(crate) applied: usize,
+    /// What the binding's check says about the shown value.
+    pub(crate) validity: Validity<ValueOf<C>>,
+}
+
+impl<'a, C: Component> Deref for Cx<'a, C> {
+    type Target = CxCore<'a>;
+
+    fn deref(&self) -> &CxCore<'a> {
+        self.core
+    }
+}
+
+impl<C: Component> sealed::Sealed for Cx<'_, C> {}
+
+impl<C: Component> StageAccess for Cx<'_, C> {
+    fn stage(&self) -> &MemoryStage {
+        self.core.memory
+    }
+
+    fn stage_mut(&mut self) -> &mut MemoryStage {
+        self.core.memory
+    }
+
+    fn base(&self) -> Id {
+        self.core.id
+    }
+}
+
+/// What a composite hands a child it shows or measures: its resolved `enabled` and `size`, and the inside label of
+/// the side label the child is the control of (`FieldLayout::Inside`).
+#[derive(Clone)]
+pub(crate) struct Under {
+    pub enabled: bool,
+    pub size: craft_theme::ControlSize,
+    pub inside: Option<std::sync::Arc<crate::contract::InsideLabel>>,
+}
+
+impl Under {
+    /// The composite's `enabled` and `size`, with no inside label.
+    pub(crate) fn new(enabled: bool, size: craft_theme::ControlSize) -> Self {
+        Under { enabled, size, inside: None }
+    }
+}
+
+/// An env derived for children `PaintUi` builds: the composite's resolved `enabled` and `size`, and only the inside
+/// label `under` gives. The composite places its children itself, so they are in no egui grid's cell.
+pub(crate) fn child_env(env: &Env, under: &Under) -> Env {
+    env.derive_local(|scoped| {
+        scoped.enabled &= under.enabled;
+        scoped.size = under.size;
+        scoped.inside_label = under.inside.clone().map(|inside| inside as crate::runtime::env::Held);
+        scoped.cell_fills = false;
+        scoped.egui_cell = false;
+    })
+}

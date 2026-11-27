@@ -992,7 +992,7 @@ const REAL_FILES: &[RealFile] = &[
 
 #[cfg(feature = "corpus")]
 #[test]
-fn real_deep_files_decode() {
+fn feature_config_real_deep_files_decode() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/exr");
     let decoded: Vec<&str> = REAL_FILES.iter().map(|f| f.0).collect();
     let pinned: Vec<&str> = REAL_FILE_SHA256.iter().map(|p| p.0).collect();

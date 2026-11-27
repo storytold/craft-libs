@@ -1,78 +1,144 @@
-//! The panel's state, what the host calls, and the frame: the tabs and search across the top,
-//! the filters at the reading start, the family cards, and the details sheet over them.
+//! The panel's model, what the host calls, and the view: the tabs and search across the top, the filters at the
+//! reading start, the family cards, the details sheet and the download consent.
+
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::craft_font_catalog::{FontEnv, Limits, Os};
 use crate::filter::{Query, Search};
 use crate::index::{Category, Family, FontFile, Index, categories, source_label};
 use crate::installed::{InstalledFamily, group};
-use crate::remote::Previews;
-use crate::store::{Installer, RemoveRequest, StoreError};
+use crate::store::{Conflict, Installer, MadeAvailable, RemoveRequest, StoreError};
 use crate::{Catalog, FaceInfo, Source};
+use craft_behavior::ColumnWidth;
+use craft_host::{Host, Section, Wake};
 use craft_i18n::Folder;
-use craft_ui::direction;
-use craft_ui::fonts::{CraftFace, I18nScripts, UiFonts};
-use egui::{CentralPanel, Context, Frame, Margin, Panel, Ui};
+use craft_i18n::matcher::Matcher;
+use craft_ui::contract::{Animate as _, NoValue, Outcome, Props as _, ShowContainer as _};
+use craft_ui::dialog::Prompt;
+use craft_ui::fonts::{EmbeddedFace, I18nScripts, UiFonts};
+use craft_ui::layout_components::{Grid, Stack};
+use craft_ui::runtime::commands::{CommandSet as _, CommandState, Commands as _};
+use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::focus::{self, FocusTarget};
+use craft_ui::runtime::words::CommonWords;
+use craft_ui::sections::{DialogRole, FooterButton};
+use egui::{Context, Response, Ui};
 
-use crate::panel::details::{Legal, LegalKey};
-use crate::panel::faces::FaceFonts;
-use crate::panel::i18n::{self, I18N, LANGUAGES, fmt, tl};
-use crate::panel::jobs::{Finished, Jobs, Kind, Request, Runner};
-use crate::panel::look::{Look, Palette};
+use crate::axes::AxisValues;
+use crate::panel::browse::{FontsBrowseWords, Texts};
+use crate::panel::details::DetailsSheet;
+use crate::panel::i18n::LANGUAGES;
+use crate::panel::jobs::{self, Finished, Jobs, Kind, Request};
+use crate::panel::legal::LegalTexts;
 use crate::panel::samples;
 use crate::panel::subsets::Subsets;
-use crate::panel::widgets::{self, Skin};
 
-/// Installs the standalone app's interface fonts in `ctx` and sets the interface direction: craft-ui's
-/// font stack for the panel's interface language, with `craft_faces` (craft-fonts' faces the app
-/// embeds with craft-fonts-build, or none) and the system's fonts for every other character. A host
-/// with its own fonts doesn't call it.
-pub fn install_interface_fonts(ctx: &Context, craft_faces: &[CraftFace]) {
-    let language = I18N.code(i18n::current()).to_owned();
-    UiFonts::new(&I18nScripts).languages(LANGUAGES).ui_language(&language).craft_faces(craft_faces).install(ctx);
-    direction::apply(ctx, direction::resolve(&language, direction::Setting::Language));
+/// Installs the standalone app's interface fonts in `ctx`: craft-ui's font stack for `language`, with `craft_faces`
+/// (craft-fonts' faces the app embeds with craft-fonts-build, or none) and the system's fonts for every other
+/// character. A host with its own fonts doesn't call it. The interface direction is the app's `RootEnv::direction`.
+pub fn install_interface_fonts(ctx: &Context, language: &str, craft_faces: &[EmbeddedFace]) {
+    UiFonts::new(&I18nScripts).languages(LANGUAGES).ui_language(language).craft_faces(craft_faces).install(ctx);
 }
+
+/// The filters column, whatever the list beside it shows; the list and toolbar take the rest.
+const PANES: [ColumnWidth; 2] = [ColumnWidth::Fixed(248.0), ColumnWidth::fill(1.0)];
+/// The panes of a panel less than [`WIDE_PANEL`] wide.
+const NARROW_PANES: [ColumnWidth; 2] = [ColumnWidth::Fixed(212.0), ColumnWidth::fill(1.0)];
+const WIDE_PANEL: f32 = 860.0;
 
 /// Preview downloads: at most this much per file, and this many faces in a session.
 const PREVIEW_LIMITS: Limits = Limits { max_file_bytes: 64 << 20, max_faces_per_file: 512, max_added_faces: 20_000 };
 
-/// How often the download consent is read again from the store's settings file, which another
-/// Craft app can change.
-const CONSENT_RECHECK_SECS: f64 = 3.0;
+craft_ui::words! {
+    /// The words of the Fonts panel: the names it shows for categories, sources and styles, the download consent and
+    /// the notes that belong to no card.
+    pub struct FontsPanelWords {
+        panel: "fontsPanel.panel" = "Fonts";
+        sans_serif: "fontsPanel.sansSerif" = "Sans serif";
+        serif: "fontsPanel.serif" = "Serif";
+        display: "fontsPanel.display" = "Display";
+        handwriting: "fontsPanel.handwriting" = "Handwriting";
+        monospace: "fontsPanel.monospace" = "Monospace";
+        font_store: "fontsPanel.fontStore" = "Font store";
+        system: "fontsPanel.system" = "System";
+        regular: "fontsPanel.regular" = "Regular";
+        styles: count "fontsPanel.styles" = "{n} style" | "{n} styles";
+        families: count "fontsPanel.families" = "{n} family" | "{n} families";
+        setting_failed: template "fontsPanel.settingFailed" = "The download setting couldn't be saved: {error}";
+        craft_apps_only_failed: template "fontsPanel.craftAppsOnlyFailed" = "The Craft apps only setting couldn't be applied: {error}";
+        system_fonts_failed: template "fontsPanel.systemFontsFailed" = "Your system's fonts folder couldn't be updated: {error}";
+        consent_title: template "fontsPanel.consentTitle" = "Download from {source}?";
+        consent_text: template "fontsPanel.consentText" = "Craft Font Manager downloads {family} ({size}) from {source}, and checks every file before using it.";
+        consent_text_host: template "fontsPanel.consentTextHost" = "Craft Font Manager downloads {family} ({size}) from {host}, the server of {source}, a source you added, and checks every file before using it.";
+        consent_note: "fontsPanel.consentNote" = "Downloads stay allowed until you turn them off.";
+        consent_allow: "fontsPanel.consentAllow" = "Download";
+    }
+}
+
+impl FontsPanelWords {
+    /// The name of a category.
+    pub(crate) fn category(&self, category: Category) -> &Label {
+        match category {
+            Category::SansSerif => &self.sans_serif,
+            Category::Serif => &self.serif,
+            Category::Display => &self.display,
+            Category::Handwriting => &self.handwriting,
+            Category::Monospace => &self.monospace,
+        }
+    }
+}
 
 /// What a sample shows when the user hasn't typed one.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum Preset {
     /// A sentence in the language filtered by, or in the family's own script.
     #[default]
     Sentence,
+    #[allow(missing_docs)]
     Alphabet,
+    #[allow(missing_docs)]
     Numerals,
 }
 
-/// What the app keeps between runs.
+/// What the panel keeps between runs: the `fonts_panel` section of the app's settings, through the
+/// [`Host`](craft_host::Host).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct Settings {
+#[non_exhaustive]
+pub struct FontsPanelSettings {
     /// The sample text; empty for the preset.
     pub sample: String,
+    /// Which sample text shows while `sample` is empty.
     pub preset: Preset,
+    /// Sample size in points, 12 to 120.
     pub size: f32,
     /// The user closed the note that downloads are off.
     pub hide_download_note: bool,
 }
 
-impl Default for Settings {
+impl Section for FontsPanelSettings {
+    const KEY: &'static str = "fonts_panel";
+}
+
+impl Default for FontsPanelSettings {
     fn default() -> Self {
-        Settings { sample: String::new(), preset: Preset::Sentence, size: 36.0, hide_download_note: false }
+        FontsPanelSettings { sample: String::new(), preset: Preset::Sentence, size: 36.0, hide_download_note: false }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A tab of the panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Tab {
+    /// Families installed on this machine.
     Installed,
+    /// Families in the downloadable catalogue.
     Catalogue,
 }
 
@@ -86,7 +152,7 @@ pub(crate) enum Show {
 }
 
 /// Which installed families show by where they come from.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) enum Origin {
     #[default]
     All,
@@ -94,23 +160,32 @@ pub(crate) enum Origin {
     Store,
 }
 
-/// What the Installed tab's list was worked out for: the search, the source and the catalog's
-/// generation.
+/// What the Installed tab's list was worked out for: the search, the source and the catalog's generation.
 type InstalledFilter = (String, Origin, Option<u64>);
 
 /// What the app is built from; tests pass their own catalog, store and index.
+#[non_exhaustive]
 pub struct Options {
+    /// The installed fonts the panel lists.
     pub catalog: Arc<Catalog>,
+    /// Installs and removes fonts and fetches downloads.
     pub installer: Arc<dyn Installer>,
     /// The Google Fonts index, or why it couldn't be read.
     pub index: Result<Index, String>,
-    pub runner: Runner,
+}
+
+impl Options {
+    /// Options over `catalog`, `installer` and `index`.
+    pub fn new(catalog: Arc<Catalog>, installer: Arc<dyn Installer>, index: Result<Index, String>) -> Self {
+        Options { catalog, installer, index }
+    }
 }
 
 /// A download, waiting for the user's consent or to be tried again.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Pending {
-    Install(usize),
+    /// A family, and whether to copy it into the OS user font folder ([`Request::Install`]).
+    Install(usize, Option<bool>),
     /// One file of a family, by its path in the index.
     InstallFile(usize, String),
     Preview(usize),
@@ -119,7 +194,7 @@ pub(crate) enum Pending {
 impl Pending {
     pub(crate) fn family(&self) -> usize {
         match self {
-            Pending::Install(i) | Pending::InstallFile(i, _) | Pending::Preview(i) => *i,
+            Pending::Install(i, _) | Pending::InstallFile(i, _) | Pending::Preview(i) => *i,
         }
     }
 }
@@ -131,6 +206,37 @@ pub(crate) enum Detail {
     Family(usize),
     /// An installed family, by name and source.
     Installed(String, Source),
+}
+
+/// Why a family installed here isn't in the OS user font folder.
+#[derive(Clone, Debug)]
+pub(crate) enum NotCopied {
+    /// Fonts already there have its PostScript names, or sit where its copies would go.
+    Refused(Vec<Conflict>),
+    Failed(String),
+}
+
+/// A problem that belongs to no family, with the error reported.
+#[derive(Clone, Debug)]
+pub(crate) enum Problem {
+    /// The download setting couldn't be saved.
+    DownloadSetting(String),
+    /// "Keep fonts in Craft apps only" couldn't be saved.
+    CraftAppsOnly(String),
+    /// A family couldn't be copied to or withdrawn from the OS user font folder.
+    SystemFonts(String),
+}
+
+impl Problem {
+    /// What the panel says about it.
+    pub(crate) fn text(&self, words: &FontsPanelWords) -> String {
+        let (template, error) = match self {
+            Problem::DownloadSetting(error) => (&words.setting_failed, error),
+            Problem::CraftAppsOnly(error) => (&words.craft_apps_only_failed, error),
+            Problem::SystemFonts(error) => (&words.system_fonts_failed, error),
+        };
+        template.fill(&[("error", error.as_str())])
+    }
 }
 
 /// Why the last job for a family failed, and what Retry runs.
@@ -146,11 +252,15 @@ pub(crate) struct Catalogue {
     pub search: Search,
 }
 
+/// The Fonts panel's state: the installed fonts and the catalogue with the search, the filters, the downloads in
+/// progress and the settings. Build it with `Options`; the host shows it with [`FontsPanelView`] once per frame.
 pub struct FontsPanel {
-    pub(crate) settings: Settings,
+    pub(crate) settings: FontsPanelSettings,
+    /// What the Host's section last held, so a change is written once.
+    saved: FontsPanelSettings,
+    /// The settings were read from the Host, on the first frame.
+    settings_loaded: bool,
     pub(crate) tab: Tab,
-    pub(crate) look: Look,
-    pub(crate) skin: Skin,
     /// The panel shows its own download switch; off when the host has one in its settings.
     pub(crate) downloads_switch: bool,
     pub(crate) catalog: Arc<Catalog>,
@@ -185,31 +295,28 @@ pub struct FontsPanel {
     /// Downloaded preview files, never installed.
     pub(crate) previews: Arc<Catalog>,
     pub(crate) previewed: HashMap<String, Vec<FaceInfo>>,
-    /// The list's previews from the font preview service.
+    /// The previews from the font preview service.
     pub(crate) subsets: Subsets,
-    pub(crate) faces: FaceFonts,
-    /// The values the user set on the detail view's axis sliders, by file sha256 and axis tag.
-    pub(crate) detail_axes: HashMap<(String, [u8; 4]), f32>,
+    /// The values the user set on the details sheet's axis sliders, by file sha256.
+    pub(crate) detail_axes: HashMap<String, AxisValues>,
     /// Licence and NOTICE texts, by family, text and file.
-    pub(crate) legal: HashMap<LegalKey, Legal>,
+    pub(crate) legal: LegalTexts,
     pub(crate) jobs: Jobs,
     pub(crate) asking: Option<Pending>,
     /// By lower-case family name.
     pub(crate) failed: HashMap<String, Failure>,
-    /// A problem that belongs to no family (the download setting couldn't be saved).
-    pub(crate) notice: Option<String>,
-    focused: bool,
-    pub(crate) folder: Folder,
-    /// The download consent as last read, and when.
-    consent: Option<(bool, f64)>,
-    /// The card that has (or is to get) the keyboard focus, by row.
-    pub(crate) focus_row: Option<usize>,
-    /// Bring the focused row into view on the next frame.
-    pub(crate) scroll_to_focus: bool,
-    /// Give the focus row the keyboard focus on the next frame.
-    pub(crate) move_focus: bool,
-    /// Focus the search field on the next frame.
-    pub(crate) focus_search: bool,
+    /// The last problem that belongs to no family.
+    pub(crate) notice: Option<Problem>,
+    /// Families an install couldn't copy into the OS user font folder, by lower-case name.
+    pub(crate) not_copied: HashMap<String, NotCopied>,
+    /// "Keep fonts in Craft apps only" as last read or set.
+    pub(crate) craft_apps_only: bool,
+    /// Whether the start-up copy of families whose choice is the OS user font folder was queued.
+    shared_at_start: bool,
+    /// The window had OS focus on the last pass.
+    window_active: bool,
+    /// The download consent as last read.
+    consent: Option<bool>,
 }
 
 /// A family's key in the panel's state: families of the same name can come from two sources.
@@ -223,25 +330,14 @@ fn url_host(url: &str) -> Option<&str> {
     url.strip_prefix("https://")?.split(['/', '?', '#']).next().filter(|h| !h.is_empty())
 }
 
-pub(crate) fn category_name(c: Category) -> &'static str {
-    match c {
-        Category::SansSerif => tl!("Sans serif"),
-        Category::Serif => tl!("Serif"),
-        Category::Display => tl!("Display"),
-        Category::Handwriting => tl!("Handwriting"),
-        Category::Monospace => tl!("Monospace"),
+pub(crate) fn source_name(words: &FontsPanelWords, source: Source) -> &Label {
+    match source {
+        Source::Store => &words.font_store,
+        _ => &words.system,
     }
 }
 
-pub(crate) fn source_name(s: Source) -> &'static str {
-    match s {
-        Source::Store => tl!("Font store"),
-        _ => tl!("System"),
-    }
-}
-
-/// The file of the face the list shows for a family of the index: the one closest to an upright
-/// regular.
+/// The file of the face the list shows for a family of the index: the one closest to an upright regular.
 pub(crate) fn list_file(family: &Family) -> Option<&FontFile> {
     family.files.iter().min_by_key(|f| (f.is_italic(), !f.has_weight(400, f.is_italic()), f.weight.abs_diff(400), !f.has_normal_width()))
 }
@@ -251,12 +347,12 @@ pub(crate) fn regular(faces: &[FaceInfo]) -> Option<&FaceInfo> {
     faces.iter().min_by_key(|f| (f.italic, ((f.weight - 400.0).abs() * 10.0) as i64, ((f.width - 100.0).abs() * 10.0) as i64))
 }
 
-pub(crate) fn style_name(face: &FaceInfo) -> &str {
-    if face.style.is_empty() { tl!("Regular") } else { &face.style }
+pub(crate) fn style_name<'a>(words: &'a FontsPanelWords, face: &'a FaceInfo) -> &'a str {
+    if face.style.is_empty() { words.regular.as_str() } else { &face.style }
 }
 
-/// How many styles a family of the index has: each static file one, a variable file one per
-/// hundred of weight its `wght` axis covers.
+/// How many styles a family of the index has: each static file one, a variable file one per hundred of weight its
+/// `wght` axis covers.
 pub(crate) fn style_count(family: &Family) -> usize {
     family
         .files
@@ -268,24 +364,27 @@ pub(crate) fn style_count(family: &Family) -> usize {
         .sum()
 }
 
-pub(crate) fn category_label(family: &Family) -> String {
-    categories(family).map(category_name).collect::<Vec<_>>().join(", ")
+pub(crate) fn category_label(words: &FontsPanelWords, family: &Family) -> String {
+    categories(family).map(|c| words.category(c).as_str()).collect::<Vec<_>>().join(", ")
 }
 
 impl FontsPanel {
-    pub fn new(options: Options, settings: Settings) -> FontsPanel {
+    /// A panel whose settings are the Host's `fonts_panel` section, read on its first frame and written when the
+    /// panel changes them; defaults kept in memory without a Host.
+    pub fn new(options: Options) -> FontsPanel {
         let catalogue = options.index.map(|index| Catalogue { search: Search::new(&index), index: Arc::new(index) });
         let previews = Arc::new(Catalog::new(FontEnv { os: Os::None, ..FontEnv::default() }).with_font_service(false));
-        let look = Look::default();
-        let subsets = Subsets::new(Arc::clone(&options.installer), Previews::new(Arc::clone(&options.installer)));
+        let subsets = Subsets::new(Arc::clone(&options.installer));
         FontsPanel {
-            settings,
+            settings: FontsPanelSettings::default(),
+            saved: FontsPanelSettings::default(),
+            settings_loaded: false,
             tab: Tab::Catalogue,
-            skin: Skin { p: Palette::from_visuals(&egui::Visuals::dark()), look: look.clone() },
-            look,
             downloads_switch: true,
             catalog: options.catalog,
+            craft_apps_only: options.installer.craft_apps_only(),
             installer: options.installer,
+            shared_at_start: false,
             catalogue,
             query: Query::default(),
             show: Show::All,
@@ -309,32 +408,28 @@ impl FontsPanel {
             previews,
             previewed: HashMap::new(),
             subsets,
-            faces: FaceFonts::default(),
             detail_axes: HashMap::new(),
-            legal: HashMap::new(),
-            jobs: Jobs::new(options.runner),
+            legal: LegalTexts::new(),
+            jobs: Jobs::new(),
             asking: None,
             failed: HashMap::new(),
             notice: None,
-            focused: true,
-            folder: Folder::new("en"),
+            not_copied: HashMap::new(),
+            window_active: true,
             consent: None,
-            focus_row: None,
-            scroll_to_focus: false,
-            move_focus: false,
-            focus_search: false,
         }
     }
 
-    /// Fetches the list's previews through `previews` instead of craft-font-store's client.
-    pub fn with_previews(mut self, previews: Previews) -> FontsPanel {
+    /// Fetches the previews through `previews` instead of craft-font-store's client.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn with_previews(mut self, previews: craft_font_store::preview::Previews) -> FontsPanel {
         self.subsets.replace(previews);
         self
     }
 
-    /// Reads the preview service and previews settings again on the next frame, after a host's
-    /// settings page changed them. The panel also reads them every few seconds and when its
-    /// window regains focus.
+    /// Reads the preview service and the previews setting again on the next pass, after a host's settings page changed
+    /// them. The panel also reads them when it first shows and when its window regains focus.
     pub fn reload_preview_settings(&mut self) {
         self.subsets.read_settings_soon();
     }
@@ -344,14 +439,13 @@ impl FontsPanel {
         self.subsets.loading()
     }
 
-    /// Shows `index` (after the host fetched the sources, say). The details sheet closes, as
-    /// family positions change.
+    /// Shows `index` (after the host fetched the sources, say). The details sheet closes, as family positions
+    /// change.
     pub fn set_index(&mut self, index: Result<Index, String>) {
         self.catalogue = index.map(|index| Catalogue { search: Search::new(&index), index: Arc::new(index) });
         self.results_for = None;
         self.detail = None;
         self.asking = None;
-        self.focus_row = None;
         if let Ok(c) = &self.catalogue
             && self.source.as_ref().is_some_and(|s| c.index.source(s).is_none())
         {
@@ -366,21 +460,22 @@ impl FontsPanel {
     }
 
     /// Downloads every source's index again on a worker thread, when downloads are allowed.
-    pub(crate) fn fetch_sources(&mut self, ctx: &Context) {
+    pub(crate) fn fetch_sources(&mut self, host: Option<&Arc<Host>>) {
         if self.sources_job.is_some() || !self.downloads_allowed() {
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
         let installer = Arc::clone(&self.installer);
-        let ctx = ctx.clone();
-        let spawned = std::thread::Builder::new().name("font-sources".into()).spawn(move || {
-            let _ = tx.send(installer.fetch_indexes());
-            ctx.request_repaint();
-        });
-        match spawned {
-            Ok(_) => self.sources_job = Some(rx),
-            Err(e) => self.source_message = Some((true, e.to_string())),
-        }
+        self.sources_job = Some(rx);
+        let wake = self.jobs.waker();
+        jobs::spawn(
+            host,
+            "font-sources",
+            Box::new(move || {
+                let _ = tx.send(installer.fetch_indexes());
+                wake.wake();
+            }),
+        );
     }
 
     /// Whether the sources' indexes are being downloaded again.
@@ -405,15 +500,9 @@ impl FontsPanel {
         }
     }
 
-    /// Draws with the host's colours and font families.
-    pub fn set_look(&mut self, look: Look) {
-        self.look = look;
-    }
-
-    /// Starts the catalogue filtered to sans-serif families and to the language of `language` (a
-    /// tag such as `de` or `pt-BR`; the most spoken language of the index with that ISO 639 code),
-    /// or to English when the index has none for it. A host calls it once, after building the
-    /// panel; the user changes both filters from there.
+    /// Starts the catalogue filtered to sans-serif families and to the language of `language` (a tag such as `de` or
+    /// `pt-BR`; the most spoken language of the index with that ISO 639 code), or to English when the index has none for
+    /// it. A host calls it once, after building the panel; the user changes both filters from there.
     pub fn use_default_filters(&mut self, language: &str) {
         let Ok(c) = &self.catalogue else { return };
         let code = language.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase();
@@ -430,28 +519,25 @@ impl FontsPanel {
         self.query.language = best(&code).or_else(|| best("en"));
     }
 
-    /// Whether the panel shows its own "Allow downloads" switch. A host with the switch in its
-    /// own settings turns it off; the panel still offers to allow downloads where one is needed.
+    /// Whether the panel shows its own "Allow downloads" switch. A host with the switch in its own settings turns it
+    /// off; the panel still offers to allow downloads where one is needed.
     pub fn show_downloads_switch(&mut self, show: bool) {
         self.downloads_switch = show;
     }
 
-    /// The panel's own settings, for the host to save.
-    pub fn settings(&self) -> &Settings {
+    /// The panel's own settings: the sample text, preset and size, and whether the downloads note was closed.
+    pub fn settings(&self) -> &FontsPanelSettings {
         &self.settings
     }
 
-    pub fn settings_mut(&mut self) -> &mut Settings {
-        &mut self.settings
-    }
-
+    /// The current tab.
     pub fn tab(&self) -> Tab {
         self.tab
     }
 
+    /// Switch to `tab`.
     pub fn set_tab(&mut self, tab: Tab) {
         self.tab = tab;
-        self.focus_row = None;
     }
 
     /// The installed families, as the Installed tab lists them.
@@ -474,82 +560,63 @@ impl FontsPanel {
         }
     }
 
-    /// Shows the interface in `language` (a tag such as `de` or `pt-BR`), the host's interface
-    /// language, when its catalog is embedded; English otherwise.
-    pub fn set_language(&mut self, language: &str) {
-        i18n::set_current(I18N.match_tag(language).unwrap_or(craft_i18n::Lang::EN));
-    }
-
-    /// Has the user allowed downloads from Google Fonts? A suite-wide setting of the font store,
-    /// off until they turn it on or confirm an install or preview.
+    /// Has the user allowed downloads from Google Fonts? A suite-wide setting of the font store, off until they
+    /// turn it on or confirm an install or preview.
     pub fn downloads_allowed(&self) -> bool {
         self.installer.downloads_allowed()
     }
 
-    /// Turns downloads on or off, as the user's own action (a host's settings page, say). A
-    /// failure also shows in the panel.
+    /// Turns downloads on or off, as the user's own action (a host's settings page, say). A failure also shows in
+    /// the panel.
     pub fn set_downloads_allowed(&mut self, allowed: bool) -> Result<(), StoreError> {
         let result = self.installer.allow_downloads(allowed);
         self.consent = None;
-        self.notice = result.as_ref().err().map(|e| fmt("The download setting couldn't be saved: {error}", &[("error", &e.0)]));
+        self.notice = result.as_ref().err().map(|e| Problem::DownloadSetting(e.0.clone()));
         result
     }
 
-    /// The consent, read from the store at most every few seconds.
-    pub(crate) fn allowed(&mut self, now: f64) -> bool {
-        match self.consent {
-            Some((allowed, at)) if (0.0..CONSENT_RECHECK_SECS).contains(&(now - at)) => allowed,
-            _ => {
-                let allowed = self.installer.downloads_allowed();
-                self.consent = Some((allowed, now));
-                allowed
-            }
-        }
+    /// The consent, read from the store's settings file (which another Craft app can change) when the window regains
+    /// focus and after the panel changes it itself.
+    pub(crate) fn allowed(&mut self) -> bool {
+        *self.consent.get_or_insert_with(|| self.installer.downloads_allowed())
     }
 
-    /// Draws the panel into `ui`, which it fills.
-    pub fn ui(&mut self, ui: &mut Ui) {
-        let ctx = ui.ctx().clone();
-        self.skin = Skin { p: self.look.palette(&ctx), look: self.look.clone() };
-        self.faces.begin_frame(&ctx);
-        self.subsets.begin_frame(&ctx);
+    /// Everything a pass reads before it draws: the settings from the Host (once), finished jobs, the installed fonts
+    /// (read again when the window regains focus) and the results of the search.
+    fn prepare(&mut self, host: Option<&Arc<Host>>, window_active: bool) {
+        self.load_settings(host);
+        self.share_installed_at_start(host);
         self.poll_jobs();
-        let focused = ctx.input(|i| i.focused);
-        if focused && !self.focused {
+        if window_active && !self.window_active {
             if self.catalog.is_ready() {
                 self.catalog.rescan_if_changed();
             }
             self.consent = None;
             self.subsets.read_settings_soon();
         }
-        self.focused = focused;
+        self.window_active = window_active;
         self.refresh_installed();
         self.refresh_results();
-        self.keys(&ctx);
-
-        let area = ui.max_rect();
-        let p = self.skin.p;
-        let rtl = direction::is_rtl(ui);
-        let sides = |start: i8, end: i8| if rtl { (end, start) } else { (start, end) };
-        let top = Frame::new().fill(p.bg).inner_margin(Margin { left: 20, right: 20, top: 16, bottom: 14 });
-        Panel::top("craft-fonts.top").frame(top).resizable(false).show(ui, |ui| self.top_bar(ui));
-        let width = if area.width() < 860.0 { 212.0 } else { 248.0 };
-        let (left, right) = sides(20, 18);
-        let filters = Frame::new().fill(p.bg).inner_margin(Margin { left, right, top: 18, bottom: 12 });
-        direction::start_panel(ui, "craft-fonts.filters").frame(filters).resizable(false).exact_size(width).show(ui, |ui| self.sidebar(ui));
-        let main = Frame::new().fill(p.bg).inner_margin(Margin { left: 20, right: 20, top: 16, bottom: 0 });
-        CentralPanel::default().frame(main).show(ui, |ui| self.main(ui));
-        self.details(&ctx, area);
-        self.consent(&ctx);
     }
 
-    fn keys(&mut self, ctx: &Context) {
-        let (find, escape) = ctx.input_mut(|i| (i.consume_key(egui::Modifiers::COMMAND, egui::Key::F), i.key_pressed(egui::Key::Escape)));
-        if find {
-            self.focus_search = true;
+    /// Reads the settings from the Host's section, once.
+    fn load_settings(&mut self, host: Option<&Arc<Host>>) {
+        if std::mem::replace(&mut self.settings_loaded, true) {
+            return;
         }
-        if escape && self.asking.is_none() && self.detail.is_some() {
-            self.detail = None;
+        if let Some(host) = host {
+            self.settings = host.setting();
+            self.saved = self.settings.clone();
+        }
+    }
+
+    /// Writes the settings to the Host's section when the pass changed them.
+    fn save_settings(&mut self, host: Option<&Arc<Host>>) {
+        if let Some(host) = host
+            && self.settings != self.saved
+        {
+            host.set_setting(&self.settings);
+            self.saved = self.settings.clone();
         }
     }
 
@@ -557,9 +624,19 @@ impl FontsPanel {
         for (job, result) in self.jobs.poll() {
             let key = family_key(&job.source, &job.family);
             match result {
-                Ok(Finished::Installed | Finished::Removed) => {
+                Ok(Finished::Installed(copied)) => {
                     self.failed.remove(&key);
+                    self.record_copy(&job.family, copied);
                 }
+                Ok(Finished::Removed) => {
+                    self.failed.remove(&key);
+                    self.not_copied.remove(&job.family.to_lowercase());
+                }
+                Ok(Finished::Switched(copied)) => self.record_copy(&job.family, copied.map(Ok)),
+                Ok(Finished::SharedAtStart(refused)) => {
+                    self.not_copied.extend(refused.into_iter().map(|(f, c)| (f.to_lowercase(), NotCopied::Refused(c))));
+                }
+                Err(e) if job.kind == Kind::SystemFonts => self.notice = Some(Problem::SystemFonts(e.0)),
                 Ok(Finished::Previewed(files)) => {
                     self.failed.remove(&key);
                     let mut faces = Vec::new();
@@ -577,9 +654,9 @@ impl FontsPanel {
                             c.index.families().iter().position(|f| f.source == job.source && f.family.eq_ignore_ascii_case(&job.family))
                         });
                     let retry = position.and_then(|i| match job.kind {
-                        Kind::Install => Some(job.file.clone().map_or(Pending::Install(i), |path| Pending::InstallFile(i, path))),
+                        Kind::Install => Some(job.file.clone().map_or(Pending::Install(i, job.share), |path| Pending::InstallFile(i, path))),
                         Kind::Preview => Some(Pending::Preview(i)),
-                        Kind::Remove => None,
+                        Kind::Remove | Kind::SystemFonts => None,
                     });
                     log::warn!("{} ({:?}): {e}", job.family, job.kind);
                     self.failed.insert(key, Failure { kind: job.kind, error: e.0, retry });
@@ -587,6 +664,45 @@ impl FontsPanel {
             }
         }
         self.poll_sources();
+        self.poll_legal();
+    }
+
+    fn record_copy(&mut self, family: &str, copied: Option<Result<MadeAvailable, StoreError>>) {
+        let not_copied = match copied {
+            Some(Ok(MadeAvailable::Refused(conflicts))) => NotCopied::Refused(conflicts),
+            Some(Err(e)) => NotCopied::Failed(e.0),
+            Some(Ok(MadeAvailable::Done)) | None => {
+                self.not_copied.remove(&family.to_lowercase());
+                return;
+            }
+        };
+        self.not_copied.insert(family.to_lowercase(), not_copied);
+    }
+
+    /// Sets "Keep fonts in Craft apps only": what a plain Install does from now on. Installed families keep their
+    /// choice.
+    pub(crate) fn set_craft_apps_only(&mut self, on: bool) {
+        self.notice = self.installer.set_craft_apps_only(on).err().map(|e| Problem::CraftAppsOnly(e.0));
+        self.craft_apps_only = self.installer.craft_apps_only();
+    }
+
+    /// Makes a store family available to all apps or keeps it in Craft apps only, as a job, and records that as its
+    /// choice.
+    pub(crate) fn set_available_to_all(&mut self, host: Option<&Arc<Host>>, family: &str, files: Vec<PathBuf>, on: bool) {
+        self.notice = None;
+        let request = Request::AvailableToAll(family.to_owned(), files, on);
+        self.jobs.start(host, Arc::clone(&self.installer), Arc::clone(&self.catalog), request);
+    }
+
+    /// Once per start, copies the store families whose choice is the OS user font folder and that aren't all there
+    /// yet (installed before installs copied, say), as a job.
+    fn share_installed_at_start(&mut self, host: Option<&Arc<Host>>) {
+        if std::mem::replace(&mut self.shared_at_start, true) {
+            return;
+        }
+        if self.installer.available_to_all_supported() {
+            self.jobs.start(host, Arc::clone(&self.installer), Arc::clone(&self.catalog), Request::ShareAtStart);
+        }
     }
 
     fn refresh_installed(&mut self) {
@@ -656,10 +772,10 @@ impl FontsPanel {
     }
 
     /// The installed families the Installed tab shows, by position in [`FontsPanel::installed`].
-    pub(crate) fn installed_shown(&mut self) -> Vec<usize> {
+    pub(crate) fn installed_shown(&mut self, folder: &Folder) -> Vec<usize> {
         let key = (self.installed_text.clone(), self.origin, self.installed_generation);
         if self.installed_shown.1.as_ref() != Some(&key) {
-            let text = self.folder.key(self.installed_text.trim());
+            let matcher = Matcher::new(folder, &self.installed_text);
             let shown = (0..self.installed.len())
                 .filter(|&i| {
                     let Some(f) = self.installed.get(i) else { return false };
@@ -668,7 +784,7 @@ impl FontsPanel {
                         Origin::System => f.source != Source::Store,
                         Origin::Store => f.source == Source::Store,
                     };
-                    origin && (text.is_empty() || self.folder.key(&f.name).contains(&text))
+                    origin && matcher.score(&f.name).is_some()
                 })
                 .collect();
             self.installed_shown = (shown, Some(key));
@@ -676,8 +792,8 @@ impl FontsPanel {
         self.installed_shown.0.clone()
     }
 
-    /// The sample for a family with `scripts` and the index sample `own` ([`samples::of_family`]):
-    /// what the user typed, else the preset.
+    /// The sample for a family with `scripts`, whose own sample in the index is `own`: what the user typed, else the
+    /// preset.
     pub(crate) fn sample_for<'a>(&self, own: Option<&str>, scripts: impl IntoIterator<Item = &'a str>) -> String {
         if !self.settings.sample.trim().is_empty() {
             return self.settings.sample.clone();
@@ -693,16 +809,15 @@ impl FontsPanel {
     }
 
     /// Runs `pending` if downloads are allowed, or asks first.
-    pub(crate) fn ask(&mut self, ctx: &Context, pending: Pending) {
-        let now = ctx.input(|i| i.time);
-        if self.allowed(now) {
-            self.download(ctx, pending);
+    pub(crate) fn ask(&mut self, host: Option<&Arc<Host>>, pending: Pending) {
+        if self.allowed() {
+            self.download(host, pending);
         } else {
             self.asking = Some(pending);
         }
     }
 
-    fn download(&mut self, ctx: &Context, pending: Pending) {
+    fn download(&mut self, host: Option<&Arc<Host>>, pending: Pending) {
         if !self.downloads_allowed() {
             return;
         }
@@ -712,15 +827,15 @@ impl FontsPanel {
             self.failed.remove(&family_key(&f.source, &f.family));
         }
         let request = match pending {
-            Pending::Install(i) => Request::Install(index, i),
+            Pending::Install(i, share) => Request::Install(index, i, share),
             Pending::InstallFile(i, path) => Request::InstallFile(index, i, path),
             Pending::Preview(i) => Request::Preview(index, i),
         };
-        self.jobs.start(ctx, Arc::clone(&self.installer), Arc::clone(&self.catalog), request);
+        self.jobs.start(host, Arc::clone(&self.installer), Arc::clone(&self.catalog), request);
     }
 
     /// Removes store files: a whole family, or the files of some of its styles.
-    pub(crate) fn remove(&mut self, ctx: &Context, family: &str, faces: &[FaceInfo], whole: bool) {
+    pub(crate) fn remove(&mut self, host: Option<&Arc<Host>>, family: &str, faces: &[FaceInfo], whole: bool) {
         let mut files: Vec<_> = faces.iter().filter(|f| f.source == Source::Store).filter_map(|f| f.path.clone()).collect();
         files.sort();
         files.dedup();
@@ -729,63 +844,158 @@ impl FontsPanel {
         }
         self.failed.remove(&family_key("", family));
         let request = RemoveRequest { family: family.to_owned(), files, whole };
-        self.jobs.start(ctx, Arc::clone(&self.installer), Arc::clone(&self.catalog), Request::Remove(request));
-    }
-
-    fn consent(&mut self, ctx: &Context) {
-        let Some(pending) = self.asking.clone() else { return };
-        let Ok(c) = &self.catalogue else { return };
-        let Some(family) = c.index.families().get(pending.family()) else { return };
-        let file = match &pending {
-            Pending::InstallFile(_, path) => family.files.iter().find(|f| &f.path == path),
-            _ => family.files.first(),
-        };
-        let size = match &pending {
-            Pending::InstallFile(..) => file.map_or(0, |f| f.size),
-            _ => family.size(),
-        };
-        let (source, curated) = source_label(&c.index, family);
-        // A curated source's files come through its repository's CDN; a source the user added
-        // can point anywhere, so the dialog names the server.
-        let host = file.filter(|_| !curated).and_then(|f| c.index.file_urls(family, f).first().and_then(|u| url_host(u)).map(str::to_owned));
-        let args = [("family", family.family.as_str()), ("size", &i18n::size(size)), ("source", source), ("host", host.as_deref().unwrap_or(""))];
-        let text = match &host {
-            None => fmt("Craft Font Manager downloads {family} ({size}) from {source}, and checks every file before using it.", &args),
-            Some(_) => fmt(
-                "Craft Font Manager downloads {family} ({size}) from {host}, the server of {source}, a source you added, and checks every file before using it.",
-                &args,
-            ),
-        };
-        let title = fmt("Download from {source}?", &[("source", source)]);
-        let s = self.skin.clone();
-        let mut allow = false;
-        let mut cancel = false;
-        let frame =
-            Frame::new().fill(s.p.bg).stroke(egui::Stroke::new(1.0, s.p.line_strong)).corner_radius(s.look.corner).inner_margin(Margin::same(24));
-        let response = egui::Modal::new(egui::Id::unique("craft-font-manager.consent")).frame(frame).show(ctx, |ui| {
-            ui.set_max_width(440.0);
-            ui.spacing_mut().item_spacing.y = 10.0;
-            let title = egui::RichText::new(&title).size(22.0).family(s.look.display.clone()).color(s.p.ink_strong);
-            ui.add(egui::Label::new(title).wrap());
-            ui.add(egui::Label::new(egui::RichText::new(text).color(s.p.ink)).wrap());
-            ui.add(egui::Label::new(egui::RichText::new(tl!("Downloads stay allowed until you turn them off.")).color(s.p.muted)).wrap());
-            ui.add_space(8.0);
-            direction::horizontal(ui, |ui| {
-                allow = widgets::button(ui, &s, tl!("Download"), widgets::Kind::Primary, s.h(), 0.0).clicked();
-                cancel = widgets::button(ui, &s, tl!("Cancel"), widgets::Kind::Secondary, s.h(), 0.0).clicked();
-            });
-        });
-        if allow {
-            self.asking = None;
-            if self.set_downloads_allowed(true).is_ok() {
-                self.download(ctx, pending);
-            }
-        } else if cancel || response.should_close() {
-            self.asking = None;
-        }
+        self.jobs.start(host, Arc::clone(&self.installer), Arc::clone(&self.catalog), Request::Remove(request));
     }
 
     pub(crate) fn index(&self) -> Option<Arc<Index>> {
         self.catalogue.as_ref().ok().map(|c| Arc::clone(&c.index))
+    }
+
+    /// The consent prompt for `pending`: its title and message, the file's size in the user's units and, for a source
+    /// the user added, the server the file comes from.
+    fn consent_text(&self, pending: &Pending, words: &FontsPanelWords, units: &craft_ui::runtime::env::Units) -> Option<(String, String)> {
+        let Ok(c) = &self.catalogue else { return None };
+        let family = c.index.families().get(pending.family())?;
+        let file = match pending {
+            Pending::InstallFile(_, path) => family.files.iter().find(|f| &f.path == path),
+            _ => family.files.first(),
+        };
+        let size = match pending {
+            Pending::InstallFile(..) => file.map_or(0, |f| f.size),
+            _ => family.size(),
+        };
+        let (source, curated) = source_label(&c.index, family);
+        // A curated source's files come through its repository's CDN; a source the user added can point anywhere, so
+        // the prompt names the server.
+        let host = file.filter(|_| !curated).and_then(|f| c.index.file_urls(family, f).first().and_then(|u| url_host(u)).map(str::to_owned));
+        let size = units.file_size(size);
+        let args = [("family", family.family.as_str()), ("size", size.as_str()), ("source", source), ("host", host.as_deref().unwrap_or(""))];
+        let text = match &host {
+            None => words.consent_text.fill(&args),
+            Some(_) => words.consent_text_host.fill(&args),
+        };
+        Some((words.consent_title.fill(&[("source", source)]), text))
+    }
+}
+
+/// The panel's own commands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::CommandSet)]
+#[command(prefix = "fonts", scope = "fonts")]
+#[non_exhaustive]
+pub enum FontsCommand {
+    /// Move the keyboard focus to the search field.
+    #[command(label = "Find", icon = "search", default = "Cmd+F")]
+    Find,
+}
+
+/// What [`FontsPanelView::show`] reports.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct FontsPanelOutput {
+    /// The panel's response.
+    pub response: Response,
+}
+
+impl Outcome for FontsPanelOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
+/// The Fonts panel over a [`FontsPanel`]: the Installed and Browse tabs with a search field across the top, the
+/// filters at the reading start, the toolbar for the sample and the list of family cards. A press or Enter on a card
+/// opens its details sheet; the download consent is a prompt.
+///
+/// - **Keys.** The Find command (Cmd or Ctrl+F) focuses the search field. The cards are one Tab stop: Up and Down move
+///   between them, Enter opens the focused one. Escape closes the details sheet, and answers the consent prompt with
+///   Cancel; Enter answers it with Download.
+/// - **State.** The model is the host's [`FontsPanel`]; the view keeps nothing of its own between passes.
+#[must_use = "show the panel with `show`"]
+#[derive(craft_ui::contract::Pattern)]
+pub struct FontsPanelView<'a> {
+    panel: &'a mut FontsPanel,
+}
+
+impl<'a> FontsPanelView<'a> {
+    /// The view of `panel`.
+    pub fn new(panel: &'a mut FontsPanel) -> Self {
+        FontsPanelView { panel }
+    }
+
+    /// Shows the panel, filling the room it is given.
+    pub fn show(self, ui: &mut Ui) -> FontsPanelOutput {
+        let panel = self.panel;
+        let ctx = ui.ctx().clone();
+        panel.jobs.wake_with(|| Wake::new(move || ctx.request_repaint()));
+        let env = Env::of(ui);
+        let view = env.view();
+        let words = env.words::<FontsPanelWords>();
+        let browse = env.words::<FontsBrowseWords>();
+        let texts = Texts { panel: &words, browse: &browse, format: view.format() };
+        let host = view.host().cloned();
+        panel.prepare(host.as_ref(), view.shell().window.active);
+        let search = ui.scope_id().with("search");
+        let folder = env.folder();
+        let wake = panel.jobs.waker();
+        let panes = if ui.available_width() < WIDE_PANEL { &NARROW_PANES } else { &PANES };
+        let mut begun = false;
+        let mut shown = Stack::new().fill().label(words.panel.clone()).command_scope(FontsCommand::SCOPE).show(ui, |ui, root| {
+            if !std::mem::replace(&mut begun, true) {
+                panel.subsets.begin(root.now(), &wake);
+            }
+            while root.take_command::<FontsCommand>().is_some() {
+                focus::request(ui.ctx(), FocusTarget::Id(search));
+            }
+            root.publish(FontsCommand::Find, CommandState::new());
+            panel.top_bar(ui, &browse, texts.format, search);
+            let shown = Grid::new(panes).fill().show(ui, |ui, _| {
+                panel.filters(ui, &texts);
+                panel.main(ui, &texts, &folder, host.as_ref())
+            });
+            shown.inner.flatten()
+        });
+        // A measuring run has no rows on screen, and a pass that runs again may have the wrong ones.
+        let rerun = craft_ui::runtime::frame::will_rerun(ui.ctx());
+        let real = shown.settle(|_, visible| (!rerun).then(|| panel.request_subsets(visible.take()))).flatten().is_some();
+        if panel.detail.is_some() {
+            if DetailsSheet::new(panel).show(ui).closed {
+                panel.detail = None;
+            }
+        } else {
+            if real {
+                panel.subsets.request_detail(None, &[]);
+            }
+            panel.detail_axes.clear();
+        }
+        if let Some(seconds) = panel.subsets.next_wake() {
+            craft_ui::runtime::frame::request_repaint_after(ui.ctx(), seconds);
+        }
+        panel.consent_prompt(ui, &env, &words, host.as_ref());
+        panel.save_settings(host.as_ref());
+        FontsPanelOutput { response: shown.output }
+    }
+}
+
+impl FontsPanel {
+    /// The download consent, while a download waits for the user's answer.
+    fn consent_prompt(&mut self, ui: &mut Ui, env: &Env, words: &FontsPanelWords, host: Option<&Arc<Host>>) {
+        let Some(pending) = self.asking.clone() else { return };
+        let Some((title, text)) = self.consent_text(&pending, words, &env.units()) else { return };
+        let common = env.words::<CommonWords>();
+        let answers =
+            [FooterButton::new(words.consent_allow.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)];
+        let out = Prompt::new(Label::from(title), Label::from(text)).paragraph(words.consent_note.clone()).answers(answers).show(ui);
+        match out.picked {
+            Some(0) => {
+                self.asking = None;
+                if self.set_downloads_allowed(true).is_ok() {
+                    self.download(host, pending);
+                }
+            }
+            Some(_) => self.asking = None,
+            None => {}
+        }
     }
 }

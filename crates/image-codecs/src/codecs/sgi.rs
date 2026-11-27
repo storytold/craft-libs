@@ -276,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn rle_round_trips_every_layout_in_8_bits() {
+    fn feature_config_rle_round_trips_every_layout_in_8_bits() {
         for layout in [ChannelLayout::Gray, ChannelLayout::GrayA, ChannelLayout::Rgb, ChannelLayout::Rgba] {
             let img = gradient(37, 11, layout);
             let plan = Plan { layout, sample: SampleType::U8 };
@@ -289,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn rle_round_trips_16_bits_with_long_runs() {
+    fn feature_config_rle_round_trips_16_bits_with_long_runs() {
         let (w, h) = (300u32, 4u32);
         let samples: Vec<u16> = (0..w * h * 3).map(|i| if (i / 3) % 200 < 150 { 4242 } else { (i * 31) as u16 }).collect();
         let img = Image::from_u16(w, h, ChannelLayout::Rgb, &samples).unwrap();
@@ -301,7 +301,7 @@ mod tests {
 
     /// A hand-built verbatim file: two rows, one plane, stored bottom to top.
     #[test]
-    fn verbatim_files_read_bottom_to_top() {
+    fn feature_config_verbatim_files_read_bottom_to_top() {
         let mut f = vec![0u8; HEADER];
         f[0..2].copy_from_slice(&MAGIC.to_be_bytes());
         f[2] = 0; // verbatim
@@ -317,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn hostile_input_is_an_error_not_a_panic() {
+    fn feature_config_hostile_input_is_an_error_not_a_panic() {
         let img = gradient(16, 8, ChannelLayout::Rgb);
         let good = encode(&img, Plan { layout: ChannelLayout::Rgb, sample: SampleType::U8 }).unwrap();
         // Every truncation fails cleanly.
@@ -361,7 +361,7 @@ mod tests {
 
     /// The format lets table entries share one compressed row: eight rows, one payload.
     #[test]
-    fn rows_may_share_compressed_data() {
+    fn feature_config_rows_may_share_compressed_data() {
         let table = HEADER + 8 * 8;
         let f = rle_file(1, &[table as u32; 8], 3, &[0x81, 255, 0]);
         assert_eq!(f.len(), table + 3);
@@ -371,7 +371,7 @@ mod tests {
 
     /// Compressed rows start after both tables: an offset into a table is refused.
     #[test]
-    fn rows_may_not_start_inside_the_offset_tables() {
+    fn feature_config_rows_may_not_start_inside_the_offset_tables() {
         // 3x1: the tables end at 520; 515 reads the table's own bytes as a packet list.
         let f = rle_file(3, &[515], 3, &[0, 0, 0, 0, 0]);
         assert!(decode(&f, &Limits::default()).is_err());
@@ -380,13 +380,13 @@ mod tests {
     /// FFmpeg's decoder, run as an oracle, also reads a row that ends with its last packet and no
     /// zero terminator; so does this one.
     #[test]
-    fn a_row_without_its_terminator_still_reads() {
+    fn feature_config_a_row_without_its_terminator_still_reads() {
         let f = rle_file(1, &[520], 2, &[0x81, 42]);
         assert_eq!(decode(&f, &Limits::default()).unwrap().data(), &[42]);
     }
 
     #[test]
-    fn palette_mapped_files_are_unsupported() {
+    fn feature_config_palette_mapped_files_are_unsupported() {
         let img = gradient(4, 4, ChannelLayout::Gray);
         let mut f = encode(&img, Plan { layout: ChannelLayout::Gray, sample: SampleType::U8 }).unwrap();
         f[104..108].copy_from_slice(&1u32.to_be_bytes());

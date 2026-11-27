@@ -1,0 +1,409 @@
+//! Activation, declared actions, AccessKit focus and cancelled presses.
+
+use super::drive::{Plan, for_input, input_fixture, root_target, run, variant_name, variants};
+use super::{ANY, Case, Subject, nodes};
+use crate::contract::ShapeKind;
+use crate::runtime::access::Role;
+use crate::runtime::egui::access::{AccessTree, Declared, NodeKey};
+use crate::runtime::egui::fixture::AccessActionKind;
+use crate::testing::fixture::Fixture;
+use crate::testing::pointer;
+use crate::testing::story::{EditKind, Required, StoryData, StoryOutput};
+use craft_behavior::{Input, PartRef};
+use egui::{Id, Key, Modifiers};
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::Rc;
+
+pub(super) const CASES: &[Case] = &[
+    Case::new("activate-once", ANY, each_activation_clicks_once),
+    Case::new("part-activate", ANY, each_part_activates_once),
+    Case::new("actions", ANY, declared_actions_are_handled),
+    Case::new("intent-actions", ANY, every_intent_has_a_declared_action),
+    Case::new("access-focus", ANY, access_focus_focuses),
+    Case::new("press-cancel", ANY, escape_and_blur_cancel_a_press),
+    Case::new("press-removal", ANY, removal_cancels_a_press),
+];
+
+/// Whether a click path left the component as it found it: no node state changed and no layer opened. The paths of one
+/// part share a fixture while this holds; a path that moved something starts the next in a fresh fixture, so
+/// a path never sees another's effect.
+fn left_as_found(fixture: &Fixture, before: &HashMap<NodeKey, String>, layers: usize) -> bool {
+    signature(fixture.tree()) == *before && crate::runtime::overlay::open_entries(fixture.ctx()).len() == layers
+}
+
+/// Enter, Space, AccessKit `Click` and a primary click each give exactly one click on a component that reports
+/// clicks and carries no value (value types are checked by the values case).
+fn each_activation_clicks_once(subject: &Subject) -> Result<(), String> {
+    if subject.probe.carries_value() {
+        return Ok(());
+    }
+    for story in &subject.stories {
+        let (fixture, plan) = subject.base(story).parts();
+        let root = root_target(fixture);
+        if !matches!(plan, Plan::Activate) || !fixture.tree().declares_key(root.node, Declared::Click) {
+            continue;
+        }
+        // The variants share one fixture while each leaves the component as it found it ([`left_as_found`]).
+        let mut shared: Option<Fixture> = None;
+        for variant in variants(plan, subject.probe) {
+            let mut fixture = shared.take().unwrap_or_else(|| input_fixture(story));
+            let (before, layers) = (signature(fixture.tree()), crate::runtime::overlay::open_entries(fixture.ctx()).len());
+            fixture.take_outputs();
+            run(&mut fixture, plan, variant);
+            let clicks = fixture.take_outputs().iter().filter(|output| output.activated()).count();
+            if clicks != 1 {
+                return Err(format!("{}: {} gave {clicks} clicks", story.name, variant_name(plan, variant)));
+            }
+            if left_as_found(&fixture, &before, layers) {
+                shared = Some(fixture);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every part that senses `CLICK` of a component that carries no value gives exactly one click on each path it has:
+/// a primary click, AccessKit `Click` when its node declares it, and Enter or Space after AccessKit `Focus` when it
+/// is a focus stop; a collection's parts report events, not clicks, and are read by the collection cases. Two clicks mean the part's press also reached the root's activation.
+/// A repeated part runs on a fixed sample of its repeats under the gate's fraction ([`nodes::sampled_parts`]). The
+/// paths a part has are read from the story's settled base fixture, so a fixture is built only for a path it has.
+fn each_part_activates_once(subject: &Subject) -> Result<(), String> {
+    if subject.probe.carries_value()
+        || matches!(subject.probe.input, Input::Text | Input::Editor | Input::Display)
+        || matches!(subject.probe.shape, ShapeKind::Items)
+    {
+        return Ok(());
+    }
+    let keys = [(Key::Enter, subject.probe.keys.activate.enter()), (Key::Space, subject.probe.keys.activate.space())];
+    for story in &subject.stories {
+        let base = &subject.base(story).fixture;
+        let Some(id) = base.root_id() else { continue };
+        let mut parts = crate::runtime::pointer::sensing_parts(base.ctx(), id, craft_behavior::Sense::CLICK);
+        parts.dedup();
+        // A part with no node or a disabled one has no path, and the sample is taken of the rest. The base's node keys
+        // are the input fixture's.
+        let enabled = |part: PartRef| base.part(id, part).filter(|seen| base.tree().data_of(seen.node).is_none_or(|node| !node.is_disabled()));
+        parts.retain(|part| enabled(*part).is_some());
+        for part in nodes::sampled_parts(parts) {
+            let Some(seen) = enabled(part) else { continue };
+            let declares = |action| base.tree().declares_key(seen.node, action);
+            // Paths: 0 click, 1 AccessKit Click, 2 and 3 the activation keys.
+            let paths = [
+                (0, "a click", true),
+                (1, "AccessKit Click", declares(Declared::Click)),
+                (2, "Enter", keys[0].1 && declares(Declared::Focus)),
+                (3, "Space", keys[1].1 && declares(Declared::Focus)),
+            ];
+            // The paths of a part share one fixture while each leaves the component as it found it ([`left_as_found`]).
+            let mut shared: Option<Fixture> = None;
+            for (path, name, _) in paths.into_iter().filter(|(_, _, has)| *has) {
+                let mut fixture = shared.take().unwrap_or_else(|| input_fixture(story));
+                let Some(target) = fixture.root_id().and_then(|id| fixture.part(id, part)) else { continue };
+                if fixture.tree().data_of(target.node).is_some_and(|node| node.is_disabled()) {
+                    continue;
+                }
+                let (before, layers) = (signature(fixture.tree()), crate::runtime::overlay::open_entries(fixture.ctx()).len());
+                fixture.take_outputs();
+                match path {
+                    0 => {
+                        fixture.click(&target);
+                    }
+                    1 => {
+                        fixture.access(AccessActionKind::Click, &target);
+                    }
+                    _ => {
+                        fixture.access(AccessActionKind::Focus, &target);
+                        fixture.settle();
+                        fixture.key(keys[path - 2].0, Modifiers::NONE);
+                    }
+                }
+                fixture.settle();
+                let clicks = fixture.take_outputs().iter().filter(|output| output.activated()).count();
+                if clicks != 1 {
+                    return Err(format!("{}: {name} on the part {part:?} gave {clicks} clicks", story.name));
+                }
+                if left_as_found(&fixture, &before, layers) {
+                    shared = Some(fixture);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// What a node tree says about values and states, by node: any change of it is an effect, a node that appears or
+/// goes (a closed tab) included. The order the tree reports its nodes in is not part of it.
+fn signature(tree: &AccessTree) -> HashMap<NodeKey, String> {
+    tree.keys()
+        .into_iter()
+        .map(|key| {
+            let state = tree.data_of(key).map_or_else(String::new, |node| {
+                format!("{:?}|{:?}|{:?}|{:?}|{:?}", node.toggled(), node.is_expanded(), node.is_selected(), node.numeric_value(), node.value())
+            });
+            (key, state)
+        })
+        .collect()
+}
+
+/// Every action a node declares changes something: a click, an edit, a node state or the focus. A repeated set of
+/// nodes runs on a fixed sample under the gate's fraction ([`nodes::sampled_actions`]).
+fn declared_actions_are_handled(subject: &Subject) -> Result<(), String> {
+    // The sets of nodes read so far, so that under the sampling gate a set of one role shown by every story is read once.
+    let mut seen = Vec::new();
+    for story in subject.stories.iter().filter(|story| !story.covers.contains(&Required::Invalid)) {
+        let fixture = &subject.base(story).fixture;
+        let actions = [
+            (Declared::Click, AccessActionKind::Click),
+            (Declared::Increment, AccessActionKind::Increment),
+            (Declared::Expand, AccessActionKind::Expand),
+        ];
+        let tree = fixture.tree();
+        let declared: Vec<(NodeKey, Declared)> = tree
+            .keys()
+            .into_iter()
+            .filter(|key| tree.data_of(*key).is_some_and(|node| !node.is_disabled()))
+            .flat_map(|key| actions.iter().filter(move |(declared, _)| tree.declares_key(key, *declared)).map(move |(declared, _)| (key, *declared)))
+            .collect();
+        let nodes = nodes::sampled_actions(tree, declared, &mut seen)
+            .into_iter()
+            .filter_map(|(key, declared)| actions.iter().find(|(known, _)| *known == declared).map(|(_, kind)| (key, *kind)));
+        for (key, kind) in nodes {
+            let mut fixture = input_fixture(story);
+            let Some(target) = fixture.target(key) else { continue };
+            let (before, focus) = (signature(fixture.tree()), fixture.focused());
+            fixture.take_outputs();
+            fixture.access(kind, &target);
+            fixture.settle();
+            let outputs = fixture.take_outputs();
+            let acted = outputs.iter().any(|output| output.activated() || !output.edits.is_empty())
+                || signature(fixture.tree()) != before
+                || fixture.focused() != focus;
+            if !acted {
+                return Err(format!("{}: {kind:?} on {:?} did nothing", story.name, fixture.tree().role_of(key)));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether any node of the tree reports itself expanded.
+fn any_expanded(tree: &AccessTree) -> bool {
+    tree.keys().into_iter().any(|key| tree.data_of(key).is_some_and(|node| node.is_expanded() == Some(true)))
+}
+
+/// Every intent the component takes has its AccessKit action declared on a node (core 12.2). The intents are read
+/// from what the keys the type keeps do on a focused story: an activation key or arrow that gives a click or changes
+/// the value needs `Click`; an arrow that changes the value of a control needs the step it took, `Increment` when the
+/// focused node's number rose and `Decrement` when it fell (Up and Right are `Increment` when the node reports no number
+/// on both sides of the key, as from a mixed value, which offers both), declared before the key, or, on a
+/// node that declares scroll actions on the arrow's axis (a view that pans), the scroll action of the arrow's
+/// direction; an arrow that moves the checked or focused node of a group of `RADIO_BUTTON` nodes is a choice, not
+/// a step, and needs `Click` declared on every enabled radio of the group instead; a key that opens something needs `Expand` and one that closes it needs `Collapse`, declared before the key. Text types take edit intents, which the text cases cover.
+fn every_intent_has_a_declared_action(subject: &Subject) -> Result<(), String> {
+    let probe = subject.probe;
+    if matches!(probe.input, Input::Text | Input::Editor | Input::Display) {
+        return Ok(());
+    }
+    let keys = [
+        (Key::Enter, probe.keys.activate.enter(), None),
+        (Key::Space, probe.keys.activate.space(), None),
+        (Key::ArrowRight, true, Some(Declared::Increment)),
+        (Key::ArrowUp, true, Some(Declared::Increment)),
+        (Key::ArrowLeft, true, Some(Declared::Decrement)),
+        (Key::ArrowDown, true, Some(Declared::Decrement)),
+    ];
+    // The scroll action each arrow is, and the pair of its axis.
+    let scroll_of = |key: Key| match key {
+        Key::ArrowRight => Some((Declared::ScrollRight, [Declared::ScrollLeft, Declared::ScrollRight])),
+        Key::ArrowLeft => Some((Declared::ScrollLeft, [Declared::ScrollLeft, Declared::ScrollRight])),
+        Key::ArrowDown => Some((Declared::ScrollDown, [Declared::ScrollUp, Declared::ScrollDown])),
+        Key::ArrowUp => Some((Declared::ScrollUp, [Declared::ScrollUp, Declared::ScrollDown])),
+        _ => None,
+    };
+    for story in subject.stories.iter().filter(|story| !story.covers.contains(&Required::Invalid)) {
+        // Up and Down take the intents Right and Left do through the same code, so the sampled run leaves them out.
+        let sampled = nodes::samples_repeats();
+        for &(key, _, step) in keys.iter().filter(|(key, kept, _)| *kept && !(sampled && matches!(key, Key::ArrowUp | Key::ArrowDown))) {
+            let mut fixture = input_fixture(story);
+            fixture.key(Key::Tab, Modifiers::NONE);
+            fixture.settle();
+            let (before, was_open) = (fixture.data().snapshot(), any_expanded(fixture.tree()));
+            let declared_before: Vec<Declared> = {
+                let tree = fixture.tree();
+                let mut found = Vec::new();
+                for node in tree.keys() {
+                    for declared in [Declared::Expand, Declared::Collapse, Declared::Click, Declared::Increment, Declared::Decrement] {
+                        if !found.contains(&declared) && tree.declares_key(node, declared) {
+                            found.push(declared);
+                        }
+                    }
+                }
+                found
+            };
+            let declares_before = |declared| declared_before.contains(&declared);
+            let (can_expand, can_collapse) = (declares_before(Declared::Expand), declares_before(Declared::Collapse));
+            let can_click = declares_before(Declared::Click);
+            let steps_before = (declares_before(Declared::Increment), declares_before(Declared::Decrement));
+            fixture.take_outputs();
+            let focus_before = fixture.tree().focused_key();
+            let number = |tree: &AccessTree| tree.numeric_of(focus_before).and_then(|numeric| numeric.value);
+            let number_before = number(fixture.tree());
+            let lent_before = crate::runtime::keys::lent_taken(fixture.ctx());
+            fixture.key(key, Modifiers::NONE);
+            fixture.settle();
+            // A key the canvas lent its session control (a crop frame) is that control's, not the focused stop's.
+            let lent = crate::runtime::keys::lent_taken(fixture.ctx()) != lent_before;
+            // The step the key took, from the focused node's number: an arrow's meaning is the control's own.
+            let step = step.map(|by_key| match (number_before, number(fixture.tree())) {
+                (Some(before), Some(after)) if after > before => Declared::Increment,
+                (Some(before), Some(after)) if after < before => Declared::Decrement,
+                _ => by_key,
+            });
+            let could_step = step.is_some_and(|step| if step == Declared::Increment { steps_before.0 } else { steps_before.1 });
+            let clicked = fixture.take_outputs().iter().any(|output| output.activated());
+            let changed = !lent && !fixture.data().changed_since(&before).is_empty();
+            let radios = fixture.tree().with_role(Role::RADIO_BUTTON);
+            let tree = fixture.tree();
+            let roving =
+                step.is_some() && radios.len() > 1 && radios.contains(&tree.focused_key()) && (changed || tree.focused_key() != focus_before);
+            // A disabled radio takes no click, so it declares none.
+            if roving && radios.iter().any(|&radio| !tree.is_disabled_key(radio) && !tree.declares_key(radio, Declared::Click)) {
+                return Err(format!("{}: {key:?} moved the choice of a radio group and a radio declares no Click", story.name));
+            }
+            let mut needs = Vec::new();
+            if clicked || (changed && step.is_none()) {
+                needs.push(Declared::Click);
+            }
+            // A view that pans declares the scroll actions of its axis on its own node, and the arrow is one of them.
+            let pans = crate::runtime::focus::focused_rec(fixture.ctx())
+                .map(|rec| NodeKey::of(rec.stop.id))
+                .zip(scroll_of(key))
+                .filter(|(node, (_, axis))| axis.iter().any(|d| tree.declares_key(*node, *d)));
+            if let Some(step) = step.filter(|_| changed && !roving && !matches!(probe.shape, ShapeKind::Items)) {
+                needs.push(pans.map_or(step, |(_, (scroll, _))| scroll));
+            }
+            let opens = any_expanded(fixture.tree());
+            for declared in needs {
+                // A step is taken from the state before the key, so it counts only when declared then. A key that
+                // closes the container (Enter on its close action) takes the declaring node with it, so `Click`
+                // counts when a node declared it before the key, as `Expand` and `Collapse` do.
+                let declared_now = || tree.keys().into_iter().any(|node| tree.declares_key(node, declared));
+                let ok = if Some(declared) == step { could_step } else { (declared == Declared::Click && can_click) || declared_now() };
+                if !ok {
+                    return Err(format!("{}: {key:?} took an intent and no node declares {declared:?}", story.name));
+                }
+            }
+            if (!was_open && opens && !can_expand) || (was_open && !opens && !can_collapse) {
+                let declared = if was_open { Declared::Collapse } else { Declared::Expand };
+                return Err(format!("{}: {key:?} took an intent and no node declares {declared:?}", story.name));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// AccessKit `Focus` on a node that declares it gives the component key focus. A story whose settled base fixture has
+/// no enabled node that declares it has nothing to check.
+fn access_focus_focuses(subject: &Subject) -> Result<(), String> {
+    let focusable = |fixture: &Fixture, key: NodeKey| {
+        fixture.tree().declares_key(key, Declared::Focus) && fixture.tree().data_of(key).is_some_and(|node| !node.is_disabled())
+    };
+    for story in &subject.stories {
+        let base = &subject.base(story).fixture;
+        if !base.tree().keys().into_iter().any(|key| focusable(base, key)) {
+            continue;
+        }
+        let mut fixture = input_fixture(story);
+        let node = fixture.tree().keys().into_iter().find(|key| focusable(&fixture, *key));
+        let Some(target) = node.and_then(|key| fixture.target(key)) else { continue };
+        fixture.access(AccessActionKind::Focus, &target);
+        fixture.settle();
+        if fixture.focused().is_none() {
+            return Err(format!("{}: AccessKit Focus focused nothing", story.name));
+        }
+    }
+    Ok(())
+}
+
+/// Escape and the window losing focus during a press end it without a click or a commit.
+fn escape_and_blur_cancel_a_press(subject: &Subject) -> Result<(), String> {
+    for story in &subject.stories {
+        let (fixture, plan) = subject.base(story).parts();
+        if !matches!(plan, Plan::Activate | Plan::Drag(_)) {
+            continue;
+        }
+        let root = root_target(fixture);
+        if !fixture.tree().declares_key(root.node, Declared::Click) && !matches!(plan, Plan::Drag(_)) {
+            continue;
+        }
+        for escape in [true, false] {
+            let mut fixture = input_fixture(story);
+            let target = root_target(&fixture);
+            let before = fixture.data().snapshot();
+            fixture.take_outputs();
+            fixture.press(&target);
+            if escape {
+                fixture.key(Key::Escape, Modifiers::NONE);
+            } else {
+                fixture.frame(vec![pointer::window_blurred()]);
+            }
+            fixture.release(&target);
+            fixture.settle();
+            let outputs = fixture.take_outputs();
+            let ended = outputs.iter().flat_map(|output| output.edits.iter()).any(|kind| matches!(kind, EditKind::Commit | EditKind::Set));
+            if outputs.iter().any(|output| output.activated()) || ended || !fixture.data().changed_since(&before).is_empty() {
+                return Err(format!("{}: a press cancelled by {} still acted", story.name, if escape { "Escape" } else { "blur" }));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A component that is not shown for one pass while a press on it is open loses the press: the pointer service
+/// holds no capture afterwards, and the release that follows gives no click, commit or value change.
+fn removal_cancels_a_press(subject: &Subject) -> Result<(), String> {
+    for story in &subject.stories {
+        let (fixture, plan) = subject.base(story).parts();
+        let root = root_target(fixture);
+        let part = match plan {
+            Plan::Activate if fixture.tree().declares_key(root.node, Declared::Click) => None,
+            Plan::Drag(grip) => Some(grip.part),
+            _ => continue,
+        };
+        let data = Rc::new(RefCell::new(StoryData::default()));
+        let outputs: Rc<RefCell<Vec<StoryOutput>>> = Rc::default();
+        let (hidden, id): (Rc<Cell<bool>>, Rc<Cell<Option<Id>>>) = (Rc::default(), Rc::default());
+        let (shared_data, shared_outputs, shared_hidden, shared_id, show) = (data.clone(), outputs.clone(), hidden.clone(), id.clone(), story.show);
+        let fixture = Fixture::new(move |ui| {
+            if shared_hidden.get() {
+                return;
+            }
+            crate::runtime::commands::observe_fired(ui.ctx());
+            let mut output = show(ui, &mut shared_data.borrow_mut());
+            output.fired = crate::runtime::commands::observe_fired(ui.ctx());
+            shared_id.set(output.id);
+            shared_outputs.borrow_mut().push(output);
+        });
+        let mut fixture = for_input(fixture);
+        let Some(id) = id.get() else { continue };
+        let Some(target) = part.and_then(|part| fixture.part(id, part)).or_else(|| fixture.node_of(id)) else { continue };
+        let before = data.borrow().snapshot();
+        outputs.borrow_mut().clear();
+        fixture.press(&target);
+        hidden.set(true);
+        fixture.frame(Vec::new());
+        hidden.set(false);
+        if crate::testing::pointer::press_captured(fixture.ctx()) {
+            return Err(format!("{}: a press still holds the pointer after its component was not shown for a pass", story.name));
+        }
+        fixture.release(&target);
+        fixture.settle();
+        let outputs = std::mem::take(&mut *outputs.borrow_mut());
+        let ended = outputs.iter().flat_map(|output| output.edits.iter()).any(|kind| matches!(kind, EditKind::Commit | EditKind::Set));
+        if outputs.iter().any(|output| output.activated()) || ended || !data.borrow().changed_since(&before).is_empty() {
+            return Err(format!("{}: a press whose component was not shown for a pass still acted on release", story.name));
+        }
+    }
+    Ok(())
+}

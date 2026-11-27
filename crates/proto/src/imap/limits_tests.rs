@@ -26,13 +26,16 @@ fn padding() -> String {
 #[test]
 fn a_flood_of_long_lines_ends_the_command() {
     let pad = padding();
-    // 600 lines of 60 KB are more than the 32 MB one command may bring.
-    let server = flood(600, |n| format!("* {n} FETCH (UID {} FLAGS ({pad}))\r\n", n + 1)) + "A0001 OK done\r\n";
+    // 600 lines of 60 KB are more than the 32 MB one command may bring. The gate sends lines that
+    // are not parsed (the cap counts the text read); nightly sends the lines of a real listing.
+    let full = craft_testkit::hostile::divisor() == 1;
+    let ok_lines = format!("* OK {pad}\r\n").repeat(600);
+    let server = if full { flood(600, |n| format!("* {n} FETCH (UID {} FLAGS ({pad}))\r\n", n + 1)) } else { ok_lines.clone() } + "A0001 OK done\r\n";
     let mut s = Script::new(server);
     let err = opened(&mut s, 1000, 2000).uid_fetch_flags("1:*").unwrap_err();
     assert!(matches!(err, ProtoError::Protocol(ref m) if m.to_string().contains("too much")), "{err:?}");
     // The same in a list.
-    let server = flood(600, |n| format!("* LIST () \"/\" \"{n}{pad}\"\r\n")) + "A0001 OK done\r\n";
+    let server = if full { flood(600, |n| format!("* LIST () \"/\" \"{n}{pad}\"\r\n")) } else { ok_lines } + "A0001 OK done\r\n";
     let mut s = Script::new(server);
     assert!(matches!(opened(&mut s, 0, 0).list(), Err(ProtoError::Protocol(_))));
 }
@@ -113,6 +116,7 @@ fn only_uids_that_were_asked_for_and_exist_are_kept() {
 
 #[test]
 fn more_distinct_uids_than_the_mailbox_can_hold_fail_the_command() {
+    let full = craft_testkit::hostile::divisor() == 1;
     // 3 messages: room for 2 * 3 + FETCH_SLACK distinct UIDs, and not one more.
     let room = 2 * 3 + FETCH_SLACK;
     let many = |n: usize| flood(n, |i| format!("* {i} FETCH (UID {} FLAGS ())\r\n", i + 1)) + "A0001 OK done\r\n";
@@ -120,6 +124,9 @@ fn more_distinct_uids_than_the_mailbox_can_hold_fail_the_command() {
     assert_eq!(opened(&mut s, 3, u32::MAX).uid_fetch_flags("1:*").unwrap().len(), room);
     let mut s = Script::new(many(room + 1));
     assert!(matches!(opened(&mut s, 3, u32::MAX).uid_fetch_flags("1:*"), Err(ProtoError::Protocol(_))));
+    if !full {
+        return;
+    }
     let sizes = flood(room + 1, |i| format!("* {i} FETCH (UID {} RFC822.SIZE 1)\r\n", i + 1)) + "A0001 OK done\r\n";
     let mut s = Script::new(sizes);
     assert!(matches!(opened(&mut s, 3, u32::MAX).uid_fetch_sizes("1:*"), Err(ProtoError::Protocol(_))));
@@ -177,7 +184,9 @@ proptest! {
 
 #[test]
 fn a_folder_with_more_messages_than_other_commands_may_answer_still_reads() {
-    let exists = 300_000u32;
+    // The gate reads one folder just past the usual cap; nightly adds the sizes and the noise.
+    let full = craft_testkit::hostile::divisor() == 1;
+    let exists = if full { 300_000u32 } else { MAX_RESPONSES as u32 + 1 };
     let lines = |n: u32| flood(n as usize, |i| format!("* {i} FETCH (UID {} FLAGS ())\r\n", i + 1)) + "A0001 OK done\r\n";
     let mut s = Script::new(lines(exists));
     assert_eq!(opened(&mut s, exists, exists + 1).uid_fetch_flags("1:*").unwrap().len(), exists as usize);
@@ -211,5 +220,113 @@ fn brackets_in_flag_keywords_do_not_consume_body_sections() {
     for flag in ["x[", "BODY["] {
         let mut s = Script::new(format!("* 1 FETCH (UID 3 FLAGS ({flag}) BODY[] {{2}}\r\nok)\r\nA0001 OK done\r\n"));
         assert_eq!(opened(&mut s, 1, 4).uid_fetch_message(3).unwrap().unwrap().body, Some(b"ok".to_vec()));
+    }
+}
+
+// Small private budgets exercise the real parser alongside the default-cap controls above.
+fn small_limits() -> Limits {
+    Limits {
+        responses: 1_000,
+        command_text: MAX_COMMAND_TEXT / 256,
+        fetch_text: MAX_FETCH_TEXT / 256,
+        flag_bytes: MAX_FLAG_BYTES / 256,
+        label_bytes: MAX_GMAIL_LABEL_BYTES / 256,
+    }
+}
+
+fn opened_with_limits(s: &mut Script, exists: u32, uid_next: u32, limits: Limits) -> Imap<&mut Script> {
+    let mut imap = Imap::resume_with_limits(s, limits);
+    imap.selected = Selected { exists, uid_validity: 1, uid_next };
+    imap
+}
+
+#[test]
+fn small_limits_a_flood_of_long_lines_ends_the_command() {
+    let limits = small_limits();
+    let pad = padding();
+    // Three lines of 60 KiB exceed the small command floor, below the per-line cap.
+    let server = flood(3, |n| format!("* {n} FETCH (UID {} FLAGS ({pad}))\r\n", n + 1)) + "A0001 OK done\r\n";
+    let mut s = Script::new(server);
+    let err = opened_with_limits(&mut s, 10, 20, limits).uid_fetch_flags("1:*").unwrap_err();
+    assert!(matches!(err, ProtoError::Protocol(ref m) if m.to_string().contains("too much")), "{err:?}");
+    // The same in a list.
+    let server = flood(3, |n| format!("* LIST () \"/\" \"{n}{pad}\"\r\n")) + "A0001 OK done\r\n";
+    let mut s = Script::new(server);
+    assert!(matches!(opened_with_limits(&mut s, 0, 0, limits).list(), Err(ProtoError::Protocol(_))));
+}
+
+#[test]
+fn small_limits_a_folder_with_more_messages_than_other_commands_may_answer_still_reads() {
+    let limits = small_limits();
+    let exists = 1_200u32;
+    let lines = |n: u32| flood(n as usize, |i| format!("* {i} FETCH (UID {} FLAGS ())\r\n", i + 1)) + "A0001 OK done\r\n";
+    let mut s = Script::new(lines(exists));
+    let mut imap = opened_with_limits(&mut s, exists, exists + 1, limits);
+    assert_eq!(imap.uid_fetch_flags("1:*").unwrap().len(), exists as usize);
+    assert_eq!(imap.response_cap, limits.responses);
+    let sizes = flood(exists as usize, |i| format!("* {i} FETCH (UID {} RFC822.SIZE 1)\r\n", i + 1)) + "A0001 OK done\r\n";
+    let mut s = Script::new(sizes);
+    let mut imap = opened_with_limits(&mut s, exists, exists + 1, limits);
+    assert_eq!(imap.uid_fetch_sizes("1:*").unwrap().len(), exists as usize);
+    assert_eq!(imap.response_cap, limits.responses);
+    // Responses that are not messages still end at the cap for that folder, and the next command is back to the usual one.
+    let noise = "* OK still here\r\n".repeat(2 * exists as usize + FETCH_SLACK + 1) + "A0001 OK done\r\n";
+    let mut s = Script::new(noise);
+    let mut imap = opened_with_limits(&mut s, exists, exists + 1, limits);
+    assert!(matches!(imap.uid_fetch_flags("1:*"), Err(ProtoError::Protocol(_))));
+    assert_eq!(imap.response_cap, limits.responses);
+    // The tagged answer itself consumes one response: N-1 noise lines plus that answer fit.
+    let cap = 2 * exists as usize + FETCH_SLACK;
+    for extra in [0, 1] {
+        let noise = "* OK still here\r\n".repeat(cap - 1 + extra) + "A0001 OK done\r\n";
+        let mut s = Script::new(noise);
+        let mut imap = opened_with_limits(&mut s, exists, exists + 1, limits);
+        let got = imap.uid_fetch_sizes("1:*");
+        if extra == 0 {
+            assert_eq!(got, Ok(Vec::new()));
+        } else {
+            assert!(matches!(got, Err(ProtoError::Protocol(m)) if m.to_string().contains("too many responses")));
+        }
+        assert_eq!(imap.response_cap, limits.responses);
+    }
+}
+
+#[test]
+fn command_text_budget_counts_exact_bytes() {
+    // Every byte outside literals counts, including each CRLF and the final tagged answer.
+    let transcript = |bytes: usize| {
+        let done = "A0001 OK done\r\n";
+        let mut left = bytes - done.len();
+        let mut server = String::new();
+        while left > MAX_LINE {
+            let line = format!("* OK {}\r\n", "x".repeat(60 * 1024));
+            left -= line.len();
+            server += &line;
+        }
+        assert!(left >= 7);
+        server += &format!("* OK {}\r\n", "x".repeat(left - 7));
+        server += done;
+        assert_eq!(server.len(), bytes);
+        server
+    };
+    let limits = small_limits();
+    // LIST and a small FETCH use the command floor; a huge claimed mailbox uses the ceiling.
+    for (list, exists, cap) in [(true, 0, limits.command_text), (false, 10, limits.command_text), (false, u32::MAX, limits.fetch_text)] {
+        for extra in [0, 1] {
+            let mut s = Script::new(transcript(cap + extra));
+            {
+                let mut imap = opened_with_limits(&mut s, exists, 0, limits);
+                let got = if list { imap.list().map(|got| got.len()) } else { imap.uid_fetch_flags("1:*").map(|got| got.len()) };
+                if extra == 0 {
+                    assert_eq!(got, Ok(0));
+                } else {
+                    assert!(matches!(got, Err(ProtoError::Protocol(m)) if m.to_string().contains("too much")));
+                }
+                assert_eq!(imap.response_cap, limits.responses);
+                assert_eq!(imap.text_cap, limits.command_text);
+            }
+            assert_eq!(s.sent(), if list { "A0001 LIST \"\" \"*\"\r\n" } else { "A0001 UID FETCH 1:* (UID FLAGS)\r\n" });
+            assert!(s.finished());
+        }
     }
 }

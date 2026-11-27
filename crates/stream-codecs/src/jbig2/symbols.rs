@@ -23,14 +23,14 @@ const MAX_RUNS: usize = 1 << 20;
 
 /// The most distinct marks sorted into symbols, and the most pixels their bitmaps may hold
 /// together: past either the image is left to generic coding. These bound the memory they take.
-const MAX_SYMBOLS: usize = 1 << 16;
-const MAX_SYMBOL_PIXELS: usize = 1 << 24;
+pub(super) const MAX_SYMBOLS: usize = 1 << 16;
+pub(super) const MAX_SYMBOL_PIXELS: usize = 1 << 24;
 
 /// The most symbols one plan codes. `hayro-jbig2`, the decoder the Craft apps render JBIG2 with,
 /// refuses a dictionary whose new and exported symbols pass 65,535 together, and a plan exports
 /// every symbol it codes, so it refuses 32,768 or more; others may too, so a plan with more isn't
 /// made.
-const MAX_CODED_SYMBOLS: usize = (1 << 15) - 1;
+pub(super) const MAX_CODED_SYMBOLS: usize = (1 << 15) - 1;
 
 /// The most symbol instances one text region places. `hayro-jbig2`, the decoder the Craft apps render JBIG2 with,
 /// refuses a text region of more than 10,000 (a page it then draws blank), so a page with more is
@@ -115,9 +115,16 @@ struct Shared {
 /// every mark of at most [`MAX_SYMBOL_SIDE`] a side as a symbol, or only those with a copy.
 /// `None` when neither plan has from two to [`MAX_CODED_SYMBOLS`] symbols, or the image is too
 /// large or too busy to look at.
-pub(super) fn encode(samples: &[u8], columns: u32, rows: u32) -> Option<Vec<u8>> {
-    let page = page(samples, columns)?;
-    [1, 2].into_iter().filter_map(|copies| plan(&page, columns, rows, copies, None, None)).min_by_key(Vec::len)
+pub(super) fn encode(
+    samples: &[u8],
+    columns: u32,
+    rows: u32,
+    max_symbols: usize,
+    max_symbol_pixels: usize,
+    max_coded_symbols: usize,
+) -> Option<Vec<u8>> {
+    let page = page_with_limits(samples, columns, max_symbols, max_symbol_pixels)?;
+    [1, 2].into_iter().filter_map(|copies| plan_within(&page, columns, rows, copies, None, None, max_coded_symbols)).min_by_key(Vec::len)
 }
 
 /// Images, each as [`encode`] takes one, symbol coded sharing one dictionary: the globals' data, a
@@ -206,6 +213,10 @@ fn find(table: &[Symbol], by_hash: &HashMap<u64, Vec<u32>>, s: &Symbol) -> Optio
 
 /// The image's marks and symbols; `None` past the limits above.
 fn page(samples: &[u8], columns: u32) -> Option<Page> {
+    page_with_limits(samples, columns, MAX_SYMBOLS, MAX_SYMBOL_PIXELS)
+}
+
+fn page_with_limits(samples: &[u8], columns: u32, max_symbols: usize, max_symbol_pixels: usize) -> Option<Page> {
     let width = usize::try_from(columns).ok()?;
     let stride = width.div_ceil(8);
     if stride == 0 {
@@ -214,7 +225,7 @@ fn page(samples: &[u8], columns: u32) -> Option<Page> {
     let runs = black_runs(samples, width, stride)?;
     let (marks, order) = marks(&runs);
     let mut page = Page { runs, marks, order, symbols: Vec::new(), copies: Vec::new(), large: Vec::new() };
-    symbols(&mut page)?;
+    symbols(&mut page, max_symbols, max_symbol_pixels)?;
     Some(page)
 }
 
@@ -355,7 +366,7 @@ fn pixels(mark: &Mark, runs: &[Run], order: &[u32]) -> Vec<u8> {
 
 /// Sorts the marks into symbols: exact copies share one. `None` past [`MAX_SYMBOLS`] or
 /// [`MAX_SYMBOL_PIXELS`].
-fn symbols(page: &mut Page) -> Option<()> {
+fn symbols(page: &mut Page, max_symbols: usize, max_symbol_pixels: usize) -> Option<()> {
     let mut by_hash: HashMap<u64, Vec<u32>> = HashMap::new();
     let mut kept = 0usize;
     for (m, mark) in page.marks.iter().enumerate() {
@@ -371,7 +382,7 @@ fn symbols(page: &mut Page) -> Option<()> {
             Some(id) => id,
             None => {
                 kept = kept.checked_add(symbol.pixels.len())?;
-                if kept > MAX_SYMBOL_PIXELS || symbols.len() == MAX_SYMBOLS {
+                if kept > max_symbol_pixels || symbols.len() == max_symbols {
                     return None;
                 }
                 let id = u32::try_from(symbols.len()).ok()?;
@@ -398,6 +409,11 @@ fn symbols(page: &mut Page) -> Option<()> {
 /// here, and the page's own dictionary holds only the others (none, when it has none), as
 /// [`encode_shared`] writes them; `None` too for a page that places none of the shared ones.
 fn plan(page: &Page, columns: u32, rows: u32, copies: u32, log_strips: Option<u32>, shared: Option<&Shared>) -> Option<Vec<u8>> {
+    plan_within(page, columns, rows, copies, log_strips, shared, MAX_CODED_SYMBOLS)
+}
+
+/// [`plan`] coding at most `max` symbols.
+fn plan_within(page: &Page, columns: u32, rows: u32, copies: u32, log_strips: Option<u32>, shared: Option<&Shared>, max: usize) -> Option<Vec<u8>> {
     let symbol = |s: u32| page.symbols.get(s as usize);
     let global = |s: u32| shared.and_then(|g| g.ids.get(s as usize).copied().flatten());
     let globals = shared.map_or(0, |g| g.count);
@@ -405,7 +421,7 @@ fn plan(page: &Page, columns: u32, rows: u32, copies: u32, log_strips: Option<u3
     let mut kept: Vec<u32> =
         (0..page.symbols.len() as u32).filter(|s| global(*s).is_none() && symbol(*s).is_some_and(|s| s.uses >= copies)).collect();
     let count = usize::try_from(globals).ok()?.checked_add(kept.len())?;
-    if !(2..=MAX_CODED_SYMBOLS).contains(&count) {
+    if !(2..=max).contains(&count) {
         return None;
     }
     kept.sort_by_key(|s| symbol(*s).map(|s| (s.height, s.width)));
@@ -934,10 +950,22 @@ mod tests {
             }
             (samples(&picture), columns as u32, rows as u32)
         };
+        // At a cap of 300 symbols, then (nightly: each picture is tens of thousands of marks coded and decoded) at
+        // MAX_CODED_SYMBOLS and past it through `encode_jbig2`.
+        let max = 300;
+        let (data, columns, rows) = codes(max, 0);
+        let at_cap = page(&data, columns).unwrap();
+        assert_eq!(decode(&plan_within(&at_cap, columns, rows, 1, None, None, max).unwrap()), unpack(&data, columns, rows));
+        // One more distinct mark, each once: neither plan is made.
+        let (data, columns, rows) = codes(max + 1, 0);
+        let past = page(&data, columns).unwrap();
+        assert!(plan_within(&past, columns, rows, 1, None, None, max).is_none() && plan_within(&past, columns, rows, 2, None, None, max).is_none());
+        if craft_testkit::hostile::divisor() > 1 {
+            return;
+        }
         let (data, columns, rows) = codes(MAX_CODED_SYMBOLS, 0);
         let at_cap = page(&data, columns).unwrap();
         assert_eq!(decode(&plan(&at_cap, columns, rows, 1, None, None).unwrap()), unpack(&data, columns, rows));
-        // One more distinct mark, each once: neither plan is made.
         let (data, columns, rows) = codes(MAX_CODED_SYMBOLS + 1, 0);
         let past = page(&data, columns).unwrap();
         assert!(plan(&past, columns, rows, 1, None, None).is_none() && plan(&past, columns, rows, 2, None, None).is_none());
@@ -988,6 +1016,86 @@ mod tests {
         assert_eq!(decode(&plan(&at_cap, columns, rows, 1, None, None).unwrap()), unpack(&data, columns, rows));
         let (data, columns, _) = squares(257);
         assert!(page(&data, columns).is_none());
+    }
+
+    /// Small limits cover bitmap memory and the real selector without full-size fixtures.
+    #[test]
+    fn small_symbol_limits_cover_memory_and_generic_fallback() {
+        assert_eq!(MAX_CODED_SYMBOLS, 32_767);
+        assert_eq!(MAX_SYMBOLS, 65_536);
+        assert_eq!(MAX_SYMBOL_PIXELS, 16_777_216);
+        // `n` distinct marks of 17 x 3 (full top and bottom rows joined by a code of 1 to n, in
+        // binary, on the row between), then `again` more with the codes 1 and 2 in turn.
+        let codes = |n: usize, again: usize| {
+            let across = (n + again).min(256);
+            let (columns, rows) = (across * 18, (n + again).div_ceil(across) * 4);
+            let mut picture = vec![vec![0u8; columns]; rows];
+            for k in 0..n + again {
+                let (x, y) = (k % across * 18, k / across * 4);
+                let code = if k < n { k + 1 } else { (k - n) % 2 + 1 };
+                picture[y][x..x + 17].fill(1);
+                picture[y + 2][x..x + 17].fill(1);
+                for b in (0..17).filter(|b| code >> b & 1 == 1) {
+                    picture[y + 1][x + b] = 1;
+                }
+            }
+            (samples(&picture), columns as u32, rows as u32)
+        };
+        let cap = 63;
+        let capped_encode =
+            |data: &[u8], columns, rows| super::super::encode_jbig2_capped(data, columns, rows, MAX_SYMBOLS, MAX_SYMBOL_PIXELS, cap).unwrap();
+        let (data, columns, rows) = codes(cap, 0);
+        let at_cap = page(&data, columns).unwrap();
+        assert_eq!(decode(&plan_within(&at_cap, columns, rows, 1, None, None, cap).unwrap()), unpack(&data, columns, rows));
+        // One more distinct mark, each once: neither plan is made, so the real selector keeps
+        // the generic stream unchanged.
+        let (data, columns, rows) = codes(cap + 1, 0);
+        let past = page(&data, columns).unwrap();
+        assert!(plan_within(&past, columns, rows, 1, None, None, cap).is_none() && plan_within(&past, columns, rows, 2, None, None, cap).is_none());
+        assert_eq!(capped_encode(&data, columns, rows), encode_jbig2_generic(&data, columns, rows).unwrap());
+        // With two of them repeated, the second plan codes those two.
+        let (data, columns, rows) = codes(cap + 1, 200);
+        let past = page(&data, columns).unwrap();
+        assert!(plan_within(&past, columns, rows, 1, None, None, cap).is_none());
+        assert_eq!(decode(&plan_within(&past, columns, rows, 2, None, None, cap).unwrap()), unpack(&data, columns, rows));
+        // Above text whose letters repeat, that second plan is the one the real selector keeps:
+        // the first, of every mark, would code too many symbols.
+        let mut picture: Bitmap = vec![vec![0u8; 64 * 18]; 4];
+        for k in 0..=cap {
+            let x = k * 18;
+            picture[0][x..x + 17].fill(1);
+            picture[2][x..x + 17].fill(1);
+            for b in (0..17).filter(|b| (k + 1) >> b & 1 == 1) {
+                picture[1][x + b] = 1;
+            }
+        }
+        picture.extend(text(64 * 18, 120, &glyphs(40, 7), 11));
+        let data = samples(&picture);
+        let (columns, rows) = (picture[0].len() as u32, picture.len() as u32);
+        let coded = capped_encode(&data, columns, rows);
+        assert_eq!(segment_types(&coded)[1], 0, "symbol coded");
+        assert_eq!(decode(&coded), unpack(&data, columns, rows));
+        let symbol_cap = 8;
+        let (data, columns, _) = codes(symbol_cap, 0);
+        assert_eq!(page_with_limits(&data, columns, symbol_cap, MAX_SYMBOL_PIXELS).map(|p| p.symbols.len()), Some(symbol_cap));
+        let (data, columns, _) = codes(symbol_cap + 1, 0);
+        assert!(page_with_limits(&data, columns, symbol_cap, MAX_SYMBOL_PIXELS).is_none());
+        // Bitmap area, including white pixels in a symbol's box, is the memory guard's unit.
+        // A 3 x 3 square with a white center and a solid 2 x 3 square hold exactly 15 bitmap
+        // pixels (14 black); a separate dot adds one.
+        let mut picture = vec![vec![0u8; 12]; 3];
+        for row in &mut picture {
+            row[0..3].fill(1);
+            row[5..7].fill(1);
+        }
+        picture[1][1] = 0;
+        let data = samples(&picture);
+        let at_cap = page_with_limits(&data, 12, MAX_SYMBOLS, 15).unwrap();
+        assert_eq!(at_cap.symbols.len(), 2);
+        assert_eq!(at_cap.symbols.iter().map(|s| s.pixels.len()).sum::<usize>(), 15);
+        assert_eq!(decode(&plan(&at_cap, 12, 3, 1, None, None).unwrap()), unpack(&data, 12, 3));
+        picture[0][10] = 1;
+        assert!(page_with_limits(&samples(&picture), 12, MAX_SYMBOLS, 15).is_none());
     }
 
     /// More than 10,000 marks are placed by several text regions, each of at most 10,000 (more
@@ -1241,6 +1349,10 @@ mod tests {
     /// in. Ten marks of the first image are in two images after it, with 464 first seen there.
     #[test]
     fn past_the_marks_a_group_holds_later_ones_arent_shared() {
+        // 66,000 marks coded in four images: nightly only.
+        if craft_testkit::hostile::divisor() > 1 {
+            return;
+        }
         let (a, b) = (samples(&combs(0..40_000)), samples(&combs(40_000..65_536)));
         let late = combs((0..10).chain(65_536..66_000).collect::<Vec<_>>().into_iter());
         let (rows, late) = (late.len() as u32, samples(&late));
@@ -1259,6 +1371,10 @@ mod tests {
     /// or a generic region, whichever is smaller).
     #[test]
     fn past_the_shared_limit_the_most_widely_held_marks_are_shared() {
+        // 50,000 marks coded in three images: nightly only.
+        if craft_testkit::hostile::divisor() > 1 {
+            return;
+        }
         let (both, first) = (combs(0..20_000), combs(0..10_000));
         let rows = both.len();
         let first: Bitmap = first.iter().cloned().chain(std::iter::repeat_n(vec![0u8; 120 * 36], rows - first.len())).collect();
@@ -1322,7 +1438,7 @@ mod tests {
         #[test]
         fn any_input_returns(data in proptest::collection::vec(0u8..=255, 0..600), columns in 0u32..5000, rows in 0u32..80) {
             let _ = encode_jbig2(&data, columns, rows);
-            let _ = encode(&data, columns, rows);
+            let _ = encode(&data, columns, rows, MAX_SYMBOLS, MAX_SYMBOL_PIXELS, MAX_CODED_SYMBOLS);
             let _ = encode_shared(&[(&data, columns, rows), (&data, columns, rows.saturating_sub(1))]);
         }
     }

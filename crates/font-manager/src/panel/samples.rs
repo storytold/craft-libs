@@ -1,13 +1,15 @@
-//! Sample text: a family's own sentence from the index (its script's, by `sample_script`), the
-//! one the preview service's sample subsets hold; a sentence in the language the catalogue is
-//! filtered by; and built-in sentences by script for families the index has no sample for.
+//! Sample text: a family's own sentence from the index (its script's, by `sample_script`), the one the preview
+//! service's sample subsets hold; a sentence in the language the catalogue is filtered by; and built-in sentences by
+//! script for families the index has no sample for, so a sample never comes out as boxes.
 
 use crate::index::{Family, Index};
 use crate::panel::app::list_file;
 
 /// The English pangram, the sample for Latin.
 pub const PANGRAM: &str = "The quick brown fox jumps over the lazy dog";
+/// The Latin alphabet, both cases.
 pub const ALPHABET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz";
+/// Digits and common symbols.
 pub const NUMERALS: &str = "0123456789 & ? ! @ # % ( ) [ ] { } $ € £ ¥";
 
 /// Sentences by language code (gflanguages' code before the script).
@@ -83,9 +85,9 @@ pub fn for_script(script: &str) -> Option<&'static str> {
     }
 }
 
-/// The sample of the face the list shows for `family`, from the index: the sentence of the
-/// face's `sample_script` (else the family's), or the face's own text.
-pub fn of_family<'a>(index: &'a Index, family: &'a Family) -> Option<&'a str> {
+/// The sample of the face the list shows for `family`, from the index: the sentence of the face's `sample_script` (else
+/// the family's), or the face's own text.
+pub(crate) fn of_family<'a>(index: &'a Index, family: &'a Family) -> Option<&'a str> {
     list_file(family).and_then(|file| index.sample_text(family, file))
 }
 
@@ -100,19 +102,4 @@ pub fn for_scripts<'a>(scripts: impl IntoIterator<Item = &'a str>) -> &'static s
         first = first.or_else(|| for_script(script));
     }
     first.unwrap_or(PANGRAM)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn samples_follow_language_then_script() {
-        assert_eq!(for_language("ja_Jpan"), language("ja"));
-        assert_eq!(for_language("zh_Hant"), Some(TRADITIONAL));
-        assert_eq!(for_language("xx_Arab"), language("ar"));
-        assert_eq!(for_language("xx_Zzzz"), None);
-        assert_eq!(for_scripts(["Arab", "Latn"]), PANGRAM);
-        assert_eq!(for_scripts(["Zzzz", "Hebr"]), language("he").unwrap_or_default());
-    }
 }

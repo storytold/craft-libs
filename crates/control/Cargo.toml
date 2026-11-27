@@ -24,6 +24,8 @@ serde_json = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The per-launch control token: 32 random bytes from the operating system (MIT OR Apache-2.0).
 getrandom = "0.3"
+# The request-line reader and the reply's result, shared with servers built on it (MIT OR Apache-2.0, ours).
+craft-control-protocol = { workspace = true }
 # The launcher's app list, read in one place for the launcher, the gateway and every app (MIT OR Apache-2.0, ours).
 craft-ai-agents = { workspace = true, optional = true }
 craft-atomic = { workspace = true, optional = true }
@@ -32,9 +34,17 @@ craft-flags = { workspace = true, optional = true }
 dirs = { version = "7", optional = true }
 log = { workspace = true, optional = true }
 
+[target.'cfg(windows)'.dependencies]
+# The token file, created with an access list of its user and SYSTEM only (MIT OR Apache-2.0, ours).
+craft-platform = { workspace = true }
+
 [dev-dependencies]
 proptest = { workspace = true }
 tempfile = "3"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Reserve an unused control port without opening a listener, including between assertions.
+socket2 = "0.6.5"
 
 [[test]]
 name = "agents"
