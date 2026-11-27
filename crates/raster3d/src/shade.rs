@@ -224,7 +224,8 @@ pub fn sample(t: &TexInfo, texels: &[[f32; 4]], u: f32, v: f32) -> [f32; 4] {
 fn equirect_uv(d: [f32; 3], rot: f32) -> (f32, f32) {
     let longitude = d[0].atan2(d[2]);
     let u = if rot.abs() > 2.0 * PI {
-        let angle = f64::from(rot).rem_euclid(std::f64::consts::TAU);
+        let (sin, cos) = f64::from(rot).sin_cos();
+        let angle = sin.atan2(cos);
         (0.5 + (f64::from(longitude) + angle) / std::f64::consts::TAU) as f32
     } else {
         0.5 + (longitude + rot) / (2.0 * PI)
@@ -251,7 +252,10 @@ fn env_light(s: &Scene, e: &EnvInfo, n: [f32; 3], r: [f32; 3], rough: f32) -> ([
     let (l0, l1, f) = mip_levels(rough, e.mips);
     let a = s.textures.get((e.radiance + l0) as usize).map_or([0.0; 4], |t| sample(t, &s.texels, u, v));
     let b = s.textures.get((e.radiance + l1) as usize).map_or([0.0; 4], |t| sample(t, &s.texels, u, v));
-    let spec = [mix(a[0], b[0], f), mix(a[1], b[1], f), mix(a[2], b[2], f)];
+    let spec = std::array::from_fn(|k| {
+        let mixed = mix(a[k], b[k], f);
+        if mixed.is_finite() { mixed } else { (f64::from(a[k]) + (f64::from(b[k]) - f64::from(a[k])) * f64::from(f)) as f32 }
+    });
     (scale([irr[0], irr[1], irr[2]], e.intensity), scale(spec, e.intensity))
 }
 
@@ -641,7 +645,7 @@ pub(crate) fn shade(s: &Scene, f: &Frag) -> Option<[f32; 4]> {
     let (mut metallic, mut rough) = (m.metallic, m.roughness);
     if let Some(t) = tex(m.tex_mr) {
         rough = (rough * t[1]).clamp(0.0, 1.0);
-        metallic *= t[2];
+        metallic = (metallic * t[2]).clamp(0.0, 1.0);
     }
     let mut n = norm(f.normal);
     if !f.front {
@@ -778,6 +782,69 @@ mod tests {
         for green in [2.0, 100.0] {
             scene.texels[0][1] = green;
             assert_eq!(super::shade(&scene, &fragment).unwrap(), endpoint);
+        }
+    }
+
+    #[test]
+    fn huge_environment_rotation_preserves_absolute_longitude() {
+        let (u, v) = super::equirect_uv([0.0, 0.0, 1.0], 2.0f32.powi(60));
+        assert!((u - 0.15601524).abs() < 1e-6, "{u}");
+        assert_eq!(v, 0.5);
+    }
+
+    #[test]
+    fn opposite_finite_radiance_levels_have_a_finite_midpoint() {
+        use crate::scene::{EnvInfo, Scene, TexInfo};
+        let scene = Scene {
+            textures: vec![TexInfo { width: 1, height: 1, ..TexInfo::default() }, TexInfo { width: 1, height: 1, offset: 1, ..TexInfo::default() }],
+            texels: vec![[f32::MAX; 4], [-f32::MAX; 4]],
+            ..Scene::default()
+        };
+        let env = EnvInfo {
+            radiance: 0,
+            mips: 2,
+            irradiance: 0,
+            intensity: 1.0,
+            rotation: 0.0,
+            sun: [0.0; 3],
+            key: 0.0,
+            shadow: -1,
+            shadow_darkness: 0.0,
+            shadow_diffusion: 0.0,
+        };
+        let (_, specular) = super::env_light(&scene, &env, [0.0, 0.0, 1.0], [0.0, 0.0, 1.0], 0.5);
+        assert_eq!(specular, [0.0; 3]);
+    }
+
+    #[test]
+    fn out_of_range_metallic_texels_use_the_nearest_endpoint() {
+        use crate::scene::{EnvInfo, Material, Scene, TexInfo};
+        let mut scene = Scene {
+            ortho: true,
+            cam_fwd: [0.0, 0.0, -1.0],
+            materials: vec![Material { base: [1.0; 4], metallic: 1.0, roughness: 1.0, tex_mr: 0, ..Material::default() }],
+            textures: vec![TexInfo { width: 1, height: 1, ..TexInfo::default() }, TexInfo { width: 1, height: 1, offset: 1, ..TexInfo::default() }],
+            texels: vec![[1.0; 4], [1.0; 4]],
+            env: Some(EnvInfo {
+                radiance: 1,
+                mips: 1,
+                irradiance: 1,
+                intensity: 1.0,
+                rotation: 0.0,
+                sun: [0.0; 3],
+                key: 0.0,
+                shadow: -1,
+                shadow_darkness: 0.0,
+                shadow_diffusion: 0.0,
+            }),
+            ..Scene::default()
+        };
+        let fragment = super::Frag { pos: [0.0; 3], normal: [0.0, 0.0, 1.0], uv: [0.0; 2], tangent: [1.0, 0.0, 0.0, 1.0], material: 0, front: true };
+        for (endpoint, outside) in [(1.0, 2.0), (0.0, -1.0)] {
+            scene.texels[0][2] = endpoint;
+            let expected = super::shade(&scene, &fragment).unwrap();
+            scene.texels[0][2] = outside;
+            assert_eq!(super::shade(&scene, &fragment).unwrap(), expected, "{outside}");
         }
     }
 
@@ -976,7 +1043,7 @@ mod tests {
         let ng = [std::f32::consts::FRAC_1_SQRT_2, 0.0, -std::f32::consts::FRAC_1_SQRT_2];
         let near = shadow_factor(&m, None, &vec![1003.0; 512 * 512], [100.0, 0.0, 1000.0], ng, 1.0);
         let far = shadow_factor(&m, None, &vec![1.003e38; 512 * 512], [1e37, 0.0, 1e38], ng, 1.0);
-        assert!(near < 0.99, "{near}");
+        assert!(0.0 < near && near < 0.99, "{near}");
         assert!((far - near).abs() < 0.05, "{far} vs {near}");
     }
 }

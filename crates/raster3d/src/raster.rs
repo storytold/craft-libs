@@ -428,7 +428,15 @@ impl Band<'_> {
     fn cam_z(&self, p: [f32; 3]) -> f32 {
         let view = self.s.view;
         let z = view[2][0] * p[0] + view[2][1] * p[1] + view[2][2] * p[2] + view[2][3];
-        if z.is_finite() { z } else { f32::NAN }
+        if z.is_finite() {
+            z
+        } else {
+            let z = (f64::from(view[2][0]) * f64::from(p[0])
+                + f64::from(view[2][1]) * f64::from(p[1])
+                + f64::from(view[2][2]) * f64::from(p[2])
+                + f64::from(view[2][3])) as f32;
+            if z.is_finite() { z } else { f32::NAN }
+        }
     }
 
     /// The nearest opaque triangle covering each pixel of the band.
@@ -601,6 +609,18 @@ mod tests {
     use super::{Band, Pass, STri, cover, f32_crossing, fan, project};
     use crate::scene::{Material, Scene, Vertex};
     use std::sync::atomic::AtomicU64;
+
+    #[test]
+    fn camera_depth_recovers_when_only_the_intermediate_sum_overflows() {
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        let mut scene = Scene::default();
+        scene.view[2] = [h, h, 0.0, -3e38];
+        let spent = AtomicU64::new(0);
+        let band = Band { s: &scene, y0: 0, rows: 1, w: 1, spent: &spent, limit: u64::MAX };
+        let z = band.cam_z([3e38, 3e38, 0.0]);
+        assert!(z.is_finite() && (z / 1e38 - 1.2426406).abs() < 1e-5, "{z}");
+        assert!(band.cam_z([f32::MAX, f32::MAX, 0.0]).is_finite());
+    }
 
     #[test]
     fn a_crossing_whose_distance_difference_overflows_is_taken_in_f64() {

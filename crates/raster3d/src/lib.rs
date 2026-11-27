@@ -159,7 +159,7 @@ pub enum RenderError {
     /// A pixel's color is not finite, or its alpha is negative or over 1. [`try_render`] returns
     /// it for a rendered pixel whose color or depth overflowed `f32` (finite inputs near the top
     /// of its range).
-    #[error("pixel {0} has a color that is not finite or an alpha out of range")]
+    #[error("pixel {0} has a color or rendered camera depth that is not finite, or an alpha out of range")]
     BadPixel(usize),
     /// Memory for a target, an image, a shadow map or a working buffer could not be reserved.
     #[error("not enough memory for the render")]
