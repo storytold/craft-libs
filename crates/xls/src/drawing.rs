@@ -5,9 +5,9 @@
 
 use std::sync::Arc;
 
-use craft_officeart::blip::{Decode, Format, fbse_record, parse, picture, store_entries};
+use craft_officeart::blip::{Decode, Format, parse, picture, store_entries};
 use craft_officeart::props::{entries, prop};
-use craft_officeart::record::{MAX_DEPTH, Records};
+use craft_officeart::record::{MAX_DEPTH, Rec, Records};
 use craft_officeart::rt;
 
 use crate::model::ClientAnchor;
@@ -24,12 +24,13 @@ pub(crate) type Blip = Option<(Arc<Vec<u8>>, &'static str)>;
 pub(crate) fn blip_store(dgg: &[u8]) -> Vec<Blip> {
     let mut out = Vec::new();
     let mut work = Decode::new(MAX_PICTURE_BYTES);
-    for dgg in Records::new(dgg).filter(|r| r.kind == rt::DGG_CONTAINER) {
+    'stores: for dgg in Records::new(dgg).filter(|r| r.kind == rt::DGG_CONTAINER) {
         for store in Records::new(dgg.data).filter(|r| r.kind == rt::BSTORE_CONTAINER) {
             for fbse in store_entries(store.data) {
-                if out.len() < craft_officeart::blip::MAX_ENTRIES {
-                    out.push(fbse.and_then(|f| fbse_blip(f, &mut work)).map(|(b, m)| (Arc::new(b), m)));
+                if out.len() == craft_officeart::blip::MAX_ENTRIES {
+                    break 'stores;
                 }
+                out.push(fbse.and_then(|f| fbse_blip(f, &mut work)).map(|(b, m)| (Arc::new(b), m)));
             }
         }
     }
@@ -43,8 +44,11 @@ type Bytes = Option<(Vec<u8>, &'static str)>;
 /// metafile inflated, a WMF with its placeable header put back so the picture keeps its size, a
 /// DIB decoded and made a PNG (or a BMP when it can't be decoded), a TIFF decoded and made a PNG
 /// (the picture model and its apps take PNG, not TIFF). PICT is not read.
+/// The BLIP is the record embedded after the name, whatever the FBSE's `size` says (a workbook
+/// has no delay stream): unlike a `.doc`, a size of 0 doesn't mean there is no picture.
 fn fbse_blip(fbse: &[u8], work: &mut Decode) -> Bytes {
-    let (rec, _) = fbse_record(fbse, &[])?;
+    let name = usize::from(*fbse.get(33)?);
+    let rec = Rec::at(fbse, 36usize.checked_add(name)?)?;
     let blip = parse(&rec)?;
     match blip.format {
         Format::Pict => return None,
