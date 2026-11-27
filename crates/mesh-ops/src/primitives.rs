@@ -268,7 +268,7 @@ pub fn preview_orb() -> Mesh {
         .zip(&m.normals)
         .map(|(p, n)| {
             let around = Vec3::new(p.z, 0.0, -p.x).try_normalize().unwrap_or(Vec3::X);
-            (around - *n * n.dot(around)).try_normalize().unwrap_or_else(|| n.any_orthonormal_vector()).extend(1.0)
+            (around - *n * n.dot(around)).try_normalize().unwrap_or_else(|| n.any_orthonormal_vector()).extend(-1.0)
         })
         .collect();
     m
@@ -703,7 +703,7 @@ mod tests {
     }
 
     /// Every triangle's winding agrees with its vertex normals, UVs stay in 0..1 (u in 0..max_u),
-    /// and the UV mapping is not mirrored (tangent handedness +1).
+    /// and each reconstructed bitangent follows increasing v where the UV gradient is defined.
     fn check(m: &Mesh, max_u: f32) {
         m.validate().unwrap();
         let mut bad = 0;
@@ -722,8 +722,25 @@ mod tests {
         for uv in &m.uvs {
             assert!((0.0..=max_u).contains(&uv.x) && (0.0..=1.0).contains(&uv.y), "{uv:?}");
         }
-        let mirrored = m.tangents.iter().filter(|t| t.w < 0.0).count();
-        assert!(mirrored * 50 < m.tangents.len().max(1), "{mirrored} mirrored tangents");
+        let (mut opposed, mut tested) = (0, 0);
+        for &[a, b, c] in m.indices.as_chunks::<3>().0 {
+            let (a, b, c) = (a as usize, b as usize, c as usize);
+            let (d1, d2) = (m.uvs[b].as_dvec2() - m.uvs[a].as_dvec2(), m.uvs[c].as_dvec2() - m.uvs[a].as_dvec2());
+            let determinant = d1.perp_dot(d2);
+            if determinant == 0.0 {
+                continue;
+            }
+            let (e1, e2) = (m.positions[b].as_dvec3() - m.positions[a].as_dvec3(), m.positions[c].as_dvec3() - m.positions[a].as_dvec3());
+            let Some(bitangent) = ((e2 * d1.x - e1 * d2.x) / determinant).try_normalize() else { continue };
+            for vertex in [a, b, c] {
+                let tangent = m.tangents[vertex];
+                let reconstructed = m.normals[vertex].as_dvec3().cross(tangent.truncate().as_dvec3()) * tangent.w as f64;
+                tested += 1;
+                opposed += usize::from(reconstructed.dot(bitangent) < 0.0);
+            }
+        }
+        assert!(tested > 0);
+        assert!(opposed * 50 < tested, "{opposed} tangent frames oppose increasing v");
     }
 
     #[test]

@@ -61,7 +61,9 @@ fn cone(order: &[usize], triangles: &[[DVec2; 3]]) -> Option<Cone> {
             high = (angle, p);
         }
     }
-    (high.0 - low.0 < std::f64::consts::PI).then_some(Cone { center, low: low.1, high: high.1, low_bound: 0.0, high_bound: 0.0 })
+    let low_bound = order.iter().flat_map(|i| triangles[*i]).map(|p| low.1.perp_dot(p - center)).fold(f64::MAX, f64::min);
+    let high_bound = order.iter().flat_map(|i| triangles[*i]).map(|p| high.1.perp_dot(p - center)).fold(f64::MIN, f64::max);
+    (high.0 - low.0 < std::f64::consts::PI).then_some(Cone { center, low: low.1, high: high.1, low_bound, high_bound })
 }
 
 fn supported_cone(order: &[usize], triangles: &[[DVec2; 3]], center: DVec2) -> Option<Cone> {
@@ -285,6 +287,17 @@ mod tests {
             let expected = (face + 1..triangles.len()).any(|other| intersects(&triangles[face], &triangles[other]));
             assert_eq!(query(root, face, triangles, &order, &nodes), expected, "face {face}: {:?}", triangles[face]);
         }
+    }
+
+    #[test]
+    fn narrow_common_vertex_cones_preserve_overlaps() {
+        let h = 2.0f64.powi(-60);
+        let o = DVec2::ZERO;
+        let a = DVec2::new(1.0, 2.0 * h);
+        let b = DVec2::new(2.0, 2.0 * h);
+        let c = DVec2::new(4.0, 6.0 * h);
+        let d = DVec2::Y;
+        agrees_with_all_pairs(&[[o, a, d], [o, b, a], [o, b, c]]);
     }
 
     #[test]
