@@ -20,6 +20,8 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   return `Result<Mesh>`. They reject non-finite or nonpositive dimensions and dimensions whose
   doubled half extents overflow. A box bevel must be finite and between zero and 95% of its
   smallest half extent; an invalid bevel returns `GeomError::Invalid`.
+  Sphere and torus seam endpoints have identical positions and retain distinct UV endpoints.
+  Cylinder caps share exact rim positions with the side, and rounded-box faces share exact boundary positions.
 - **BVH.** `Bvh` is a binned SAH tree on all three axes with a median split when no split beats a
   leaf. It answers closest-hit, any-hit and filtered ray casts, nearest-point queries and box
   queries.
