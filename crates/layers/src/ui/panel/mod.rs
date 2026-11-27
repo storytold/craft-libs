@@ -26,7 +26,9 @@ pub(crate) use row::FX_BADGE;
 
 use std::cell::RefCell;
 
-use craft_ui::contract::{Bind, CommandSet as _, Commands as _, NoValue, Outcome, Show, ShowContainer as _, Tracked};
+use craft_ui::contract::{
+    Bind, CommandSet as _, Commands as _, Entry, MemoProps, MemoView, NoValue, Outbox, Outcome, Show, ShowContainer as _, Tracked,
+};
 use craft_ui::layout_components::Stack;
 use craft_ui::list::ListWords;
 use craft_ui::menu::MenuRow;
@@ -43,9 +45,9 @@ use std::marker::PhantomData;
 
 use super::filter::{FilterBy, LayerFilter, LayerFilterBar};
 use super::options::LayersSettings;
-use super::rows::BlendRows;
+use super::rows::{BlendRows, LayerPropertyEdit};
 use super::thumbs::LayerThumb;
-use super::tree::{LayerInfo, LayerRowKey, LayerTree};
+use super::tree::{LayerInfo, LayerProperties, LayerRowKey, LayerTree};
 
 craft_ui::words! {
     /// The words of the Layers panel's rows, footer and menus. Patterns with `{row}`, `{layer}` and
@@ -235,6 +237,10 @@ pub struct LayersOutput<Id> {
     pub hovered: Option<Id>,
     /// Key focus is in the rows this pass.
     pub focused: bool,
+    /// The pass's real run applied its one-time requests ([`start_rename`](LayersPanel::start_rename),
+    /// [`reveal`](LayersPanel::reveal), [`focus_filter_name`](LayersPanel::focus_filter_name)). A measuring run or a
+    /// replay applies none, so the host keeps them and passes them again until this is set.
+    pub requests_taken: bool,
     /// The panel.
     pub response: Response,
 }
@@ -455,7 +461,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
         let current = RefCell::new(LayerFilter::default());
         let unlock_label = words.unlock_layer.clone();
 
-        let shown = Stack::new()
+        let mut shown = Stack::new()
             .fill()
             .command_scope(LayersPanelKeys::SCOPE)
             .header(|ui, stack| {
@@ -503,8 +509,10 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                     let properties = tree.properties();
                     let modes =
                         tree.blend_modes(properties.as_ref().is_some_and(|p| p.group), properties.as_ref().map_or("normal", |p| &p.blend_key));
-                    let out = BlendRows::new(properties.as_ref(), &modes).show(ui);
-                    events.borrow_mut().extend(out.events.into_iter().map(LayersEvent::Properties));
+                    let mut edits = Vec::new();
+                    let props = BlendProps { properties: properties.as_ref(), modes: &modes, edits: Outbox::new(&mut edits) };
+                    let _ = MemoView::new("layers-blend-rows", props, show_blend_rows).show(ui);
+                    events.borrow_mut().extend(edits.into_iter().map(LayersEvent::Properties));
                 }
             })
             .footer(|ui, _| match host_footer.as_mut() {
@@ -532,10 +540,28 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                 }
                 (reported, body.drop_preview, body.hovered, focused)
             });
+        let requests_taken = shown.settle(|_, _| ()).is_some();
         // Only the real run's result comes back, so the reveal's opens and the list's events are reported once.
         let mut events = events.into_inner();
         let (body, drop_preview, hovered, focused) = shown.inner.unwrap_or_default();
         events.extend(body);
-        LayersOutput { events, drop_preview, hovered, focused, response: shown.output }
+        LayersOutput { events, drop_preview, hovered, focused, requests_taken, response: shown.output }
+    }
+}
+
+/// The header's blend, Opacity, Fill and lock rows as a memoized view: they show the active layer's properties and
+/// the modes it offers, so a frame whose pointer is over the rows or elsewhere replays them instead of running every
+/// control. They were about half of the panel's time in such a frame (photocraft#17131). Input that reaches them (a
+/// press, a scrub, the open blend list) runs them.
+#[derive(MemoProps)]
+struct BlendProps<'a> {
+    properties: Option<&'a LayerProperties>,
+    modes: &'a [Entry<String>],
+    edits: Outbox<'a, LayerPropertyEdit>,
+}
+
+fn show_blend_rows(props: &mut BlendProps<'_>, ui: &mut Ui) {
+    for edit in BlendRows::new(props.properties, props.modes).show(ui).events {
+        props.edits.send(edit);
     }
 }

@@ -54,8 +54,12 @@ pub(super) fn opened_overlay(ctx: &Context, overlay: &Overlay, stored: Option<Op
 
 /// Whether a layer of `overlay` may cover its anchor when it fits on neither side of it: a menu's layer (its key class
 /// is [`OwnerClass::Menu`]) hung at the pointer, at a point, or at the rect a context request named. No other overlay
-/// covers its anchor: a tooltip or a popover at the pointer stays off it. `stored` is the opening the layer decided.
+/// covers its anchor: a tooltip or a popover at the pointer stays off it, unless its place asks for it
+/// ([`Place::covering_anchor`]). `stored` is the opening the layer decided.
 pub(super) fn layer_covers_anchor(ctx: &Context, overlay: &Overlay, stored: Option<Opening>) -> bool {
+    if matches!(overlay.place, Place::Anchored { covers: true, .. }) {
+        return true;
+    }
     if overlay.keys != OwnerClass::Menu {
         return false;
     }
@@ -270,7 +274,7 @@ pub(super) struct Placed {
 /// Before its size is known (a popup's first, hidden pass) it takes no side and its body is offered `content_room`, so
 /// the size it measures decides the side.
 pub(super) fn placement(ctx: &Context, layer: &Layer<'_>, covers: bool, size: Option<egui::Vec2>, bounds: Rect, anchor: Rect) -> Placed {
-    let rtl = layer.env.direction.is_rtl();
+    let rtl = layer.env.layer_direction().is_rtl();
     let cap = cap(layer.overlay, bounds, anchor);
     match &layer.overlay.place {
         Place::Anchored { side, align, flips_across, offset, clear, .. } => {

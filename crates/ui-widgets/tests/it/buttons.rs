@@ -16,8 +16,8 @@ use craft_ui::list::ThumbAspect;
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::pickers::ComboBox;
 use craft_ui::primitives::IconSpec;
-use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, Scope};
-use craft_ui::runtime::env::with_env;
+use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, Commands as _, Scope};
+use craft_ui::runtime::env::{Env, InBar, in_room, with_env};
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::pictures::sample_picture;
@@ -26,6 +26,126 @@ use craft_ui::testing::{Fixture, Frames, trial};
 use egui::{Event, Id, Key, Modifiers, Pos2, Rect, Response, Ui, pos2, vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+
+pub(crate) mod detail_wrapping {
+    use super::{Button, Cell, Fixture, Frames, IconId, Key, Modifiers, Rc, Rect, vec2};
+    use craft_behavior::Proposal;
+    use craft_ui::contract::{LeastWidth, Props as _, Role, Show as _, ShowContainer as _, Sizing};
+    use craft_ui::layout_components::Stack;
+    use craft_ui::testing::{Target, focus::AccessActionKind, trial};
+
+    const DETAIL: &str = "Learn the essential tools. Choose a skill to see the tutorials for that skill.";
+
+    fn wrapped_detail(fixture: &mut Fixture, title: &str) -> Target {
+        let shapes = fixture.frame_shapes();
+        let detail = shapes
+            .iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Text(text) if text.galley.text() == DETAIL => Some(text),
+                _ => None,
+            })
+            .expect("the whole detail paints");
+        let button = fixture.by_label(title).expect("the button is named");
+        assert!(detail.galley.rows.len() > 1, "the detail wraps across lines");
+        assert!(button.rect.expand(0.5).contains_rect(detail.visual_bounding_rect()), "the detail fits inside the button");
+        button
+    }
+
+    #[trial]
+    fn a_button_detail_stays_on_one_line_without_the_opt_in() {
+        let mut fixture = Fixture::new(|ui| {
+            Button::new("Quick guide").detail(DETAIL).sizing(Sizing::FillWidth).show(ui);
+        });
+        fixture.room(vec2(172.0, 220.0)).settle();
+        let rows = fixture.frame_shapes().iter().find_map(|shape| match shape {
+            egui::Shape::Text(text) if text.galley.text() == DETAIL => Some(text.galley.rows.len()),
+            _ => None,
+        });
+        assert_eq!(rows, Some(1), "ordinary button detail remains a single line");
+    }
+
+    #[trial]
+    fn a_wrapped_button_detail_fits_its_face_and_keeps_one_activation_target() {
+        const TITLE: &str = "Quick guide";
+        let activations = Rc::new(Cell::new(0));
+        let seen = Rc::clone(&activations);
+        let mut fixture = Fixture::new(move |ui| {
+            let button = Button::new(TITLE).icon(IconId::new("copy")).detail(DETAIL).wrap_detail(true).sizing(Sizing::FillWidth);
+            if button.show(ui).clicked() {
+                seen.set(seen.get() + 1);
+            }
+        });
+        fixture.room(vec2(172.0, 220.0)).settle();
+        let button = wrapped_detail(&mut fixture, TITLE);
+        assert_eq!(fixture.tree().description_of(button.node), Some(DETAIL));
+        assert_eq!(fixture.by_role(Role::BUTTON).len(), 1);
+
+        fixture.click(&button).settle();
+        assert_eq!(activations.get(), 1);
+        fixture.access(AccessActionKind::Focus, &button);
+        assert_eq!(fixture.tree().focused_key(), button.node);
+        fixture.key(Key::Enter, Modifiers::NONE).settle();
+        assert_eq!(activations.get(), 2, "clicking and pressing Enter each activate the button once");
+    }
+
+    #[trial]
+    fn a_wrapped_button_detail_measures_at_an_explicit_width() {
+        let width = 134.0;
+        for proposal in [Proposal::Width(width), Proposal::Size(vec2(width, 100.0))] {
+            let mut fixture = Fixture::new(move |ui| {
+                let mut button = Button::new("Quick guide").detail(DETAIL).wrap_detail(true);
+                let height = button.measure_in(ui, proposal).y;
+                let room = Rect::from_min_size(ui.cursor().min, vec2(width, height));
+                button.show_at(ui, room);
+            });
+            fixture.room(vec2(440.0, 220.0)).settle();
+            wrapped_detail(&mut fixture, "Quick guide");
+        }
+    }
+
+    #[trial]
+    fn a_wrapped_button_detail_keeps_explicit_unbounded_queries_unwrapped() {
+        let sizes = |width| {
+            let mut frames = Frames::new();
+            let mut out = [egui::Vec2::ZERO; 4];
+            frames.idle(1, |ui| {
+                let room = Rect::from_min_size(ui.cursor().min, vec2(width, 380.0));
+                Stack::new().fill().show_at(ui, room, |ui, _| {
+                    let mut button = Button::new("Quick guide").detail(DETAIL).wrap_detail(true);
+                    out = [Proposal::Ideal, Proposal::Width(f32::INFINITY), Proposal::Size(vec2(f32::INFINITY, 300.0)), Proposal::Width(width)]
+                        .map(|proposal| button.measure_in(ui, proposal));
+                });
+            });
+            out
+        };
+        let narrow = sizes(134.0);
+        let wide = sizes(580.0);
+        assert_eq!(narrow[..3], wide[..3], "the unbounded queries are independent of their parent");
+        assert!(narrow[3].y > narrow[0].y, "the explicit finite width wraps the caption");
+    }
+
+    #[trial]
+    fn a_wrapped_button_detail_measures_its_minimum_height_at_its_style_width_floor() {
+        let mut frames = Frames::new();
+        frames.idle(1, |ui| {
+            let mut button = Button::new("Quick guide").detail(DETAIL).wrap_detail(true).least_width(LeastWidth::SideMenu);
+            let minimum = button.measure_in(ui, Proposal::Min);
+            let at_width = button.measure_in(ui, Proposal::Width(minimum.x));
+            assert!((minimum.y - at_width.y).abs() < 0.5, "the minimum height follows the returned width: {minimum:?}, {at_width:?}");
+        });
+    }
+
+    #[trial]
+    fn a_wrapped_button_detail_measures_its_minimum_height_at_its_reserved_title_width() {
+        let mut frames = Frames::new();
+        frames.idle(1, |ui| {
+            let mut button = Button::new("I").detail(DETAIL).wrap_detail(true).room_for("WWWWWWWWW");
+            let minimum = button.measure_in(ui, Proposal::Min);
+            let at_width = button.measure_in(ui, Proposal::Width(minimum.x));
+            assert!((minimum.y - at_width.y).abs() < 0.5, "the caption uses the reserved width: {minimum:?}, {at_width:?}");
+        });
+    }
+}
 
 /// The button kinds that take an arrangement.
 #[derive(Clone, Copy, Debug)]
@@ -556,6 +676,110 @@ fn a_ribbons_combo_box_is_as_wide_as_its_options() {
     assert!(ribbon < standard / 2.0, "the ribbon's combo box fits two digits and its chevron: {ribbon} against {standard}");
 }
 
+#[trial]
+fn a_bars_combo_box_is_as_wide_as_its_options() {
+    use craft_ui::bars::{Bar, BarKind};
+    use craft_ui::style::SurfaceKind;
+
+    #[derive(Clone, Copy)]
+    enum Placement {
+        Standard,
+        InBarEnv,
+        CompactOptIn,
+        FloatingBar,
+    }
+
+    let width = |kind: Placement| {
+        let mut fixture = Fixture::new(move |ui| {
+            let options = [Entry::new("8".to_owned(), "8"), Entry::new("72".to_owned(), "72")];
+            let mut size = "11".to_owned();
+            let mut show = |ui: &mut Ui| {
+                let mut cb = ComboBox::new("Font Size", Bind::bound(&mut size), &options);
+                if matches!(kind, Placement::CompactOptIn) {
+                    cb = cb.compact(true);
+                }
+                let _ = cb.show(ui);
+            };
+            match kind {
+                Placement::Standard | Placement::CompactOptIn => show(ui),
+                Placement::InBarEnv => {
+                    with_env(
+                        ui,
+                        |overrides| {
+                            overrides.values.set(craft_ui::contract::InBar(true));
+                        },
+                        show,
+                    );
+                }
+                Placement::FloatingBar => {
+                    let _ = Bar::new("Floating Bar", BarKind::Tool).surface(SurfaceKind::Floating).show(ui, |ui, _| {
+                        show(ui);
+                    });
+                }
+            }
+        });
+        fixture.settle();
+        fixture.by_label("Font Size").expect("the combo box").rect.width()
+    };
+    let standard = width(Placement::Standard);
+    let in_bar = width(Placement::InBarEnv);
+    let opt_in = width(Placement::CompactOptIn);
+    let floating_bar = width(Placement::FloatingBar);
+    assert!(in_bar < standard / 2.0, "the bar's combo box fits two digits and its chevron: {in_bar} against {standard}");
+    assert!((in_bar - opt_in).abs() < 0.5, "opt-in compact combo box matches in_bar: {opt_in} against {in_bar}");
+    assert!((in_bar - floating_bar).abs() < 0.5, "floating bar combo box matches in_bar: {floating_bar} against {in_bar}");
+}
+
+#[trial]
+fn a_nested_in_room_inside_a_bar_does_not_reuse_the_bars_compact_style() {
+    use craft_ui::bars::{Bar, BarKind};
+    use craft_ui::style::SurfaceKind;
+
+    let mut standard_fixture = Fixture::new(|ui| {
+        let options = [Entry::new("8".to_owned(), "8"), Entry::new("72".to_owned(), "72")];
+        let mut size = "11".to_owned();
+        let _ = ComboBox::new("Standard Size", Bind::bound(&mut size), &options).show(ui);
+    });
+    standard_fixture.settle();
+    let standard = standard_fixture.by_label("Standard Size").expect("the standard combo box").rect.width();
+
+    let seen_keys = Rc::new(Cell::new(None));
+    let seen_in_bar = Rc::new(Cell::new(true));
+    let keys_out = Rc::clone(&seen_keys);
+    let in_bar_out = Rc::clone(&seen_in_bar);
+
+    let mut fixture = Fixture::new(move |ui| {
+        let options = [Entry::new("8".to_owned(), "8"), Entry::new("72".to_owned(), "72")];
+        let mut bar_size = "11".to_owned();
+        let mut room_size = "11".to_owned();
+        let _ = Bar::new("Toolbar", BarKind::Tool).surface(SurfaceKind::Floating).show(ui, |ui, _| {
+            let bar_key = Env::of(ui).key;
+            // Warm the style cache with the bar's compact InBar(true) entry first.
+            let _ = ComboBox::new("Bar Size", Bind::bound(&mut bar_size), &options).show(ui);
+            in_room(ui, Rect::from_min_size(pos2(0.0, 60.0), vec2(400.0, 80.0)), |ui| {
+                let room_env = Env::of(ui);
+                in_bar_out.set(room_env.get::<InBar>().0);
+                keys_out.set(Some((bar_key, room_env.key)));
+                let _ = ComboBox::new("Room Size", Bind::bound(&mut room_size), &options).show(ui);
+            });
+        });
+    });
+    fixture.room(vec2(500.0, 200.0));
+    fixture.settle();
+
+    let bar_width = fixture.by_label("Bar Size").expect("the bar combo box").rect.width();
+    let room_width = fixture.by_label("Room Size").expect("the nested room combo box").rect.width();
+    let (bar_key, room_key) = seen_keys.get().expect("keys recorded");
+
+    assert!(!seen_in_bar.get(), "nested in_room resets InBar to false");
+    assert_ne!(bar_key, room_key, "nested in_room derives a new EnvKey when resetting InBar");
+    assert!(bar_width < standard / 2.0, "the bar's combo box is compact: {bar_width} against {standard}");
+    assert!(
+        (room_width - standard).abs() < 0.5,
+        "combo box in a nested in_room uses standard width rather than the bar's warmed compact style: {room_width} against {standard}"
+    );
+}
+
 /// A page's side menu (`ControlPlace::SideMenu`) shows its buttons as rows of places: the label in the large body role
 /// and padded above and below, so a row is taller and wider than the same ghost button elsewhere. A stacked button
 /// there keeps its own look.
@@ -645,6 +869,96 @@ fn a_side_menus_row_shows_the_standard_icon() {
     };
     let (menu, plain) = (icon_side(true), icon_side(false));
     assert!(menu > plain, "a side menu's icon is the standard one: {menu} against {plain}");
+}
+
+/// An icon-only button in a side menu (WordCraft's Back arrow on the File rail) reads in the menu's ink, as a `Button`
+/// row's icon does, not in the dark ghost ink that vanished on the brand surface; elsewhere it keeps its own ink.
+#[trial]
+fn a_side_menus_icon_button_reads_in_the_menus_ink() {
+    let rest = |side: bool, icon_only: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            let show = |ui: &mut Ui| {
+                if icon_only {
+                    let _ = IconButton::new(IconId::new("print")).label("Back").show(ui);
+                } else {
+                    let _ = Button::new("Print").icon(IconId::new("print")).variant(Variant::GHOST).show(ui);
+                }
+            };
+            if side {
+                with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(ControlPlace::SideMenu);
+                    },
+                    show,
+                );
+            } else {
+                show(ui);
+            }
+        });
+        fixture.settle();
+        let kind = if icon_only { std::any::type_name::<IconButton<'static>>() } else { std::any::type_name::<Button<'static>>() };
+        let style = fixture.styles_of(kind).into_iter().next().expect("the button resolved its style");
+        style.looks.icons.first().expect("the button has an icon look").color.off.rest.egui()
+    };
+    assert_eq!(rest(true, true), rest(true, false), "the icon button takes the ink of the menu's rows");
+    assert_ne!(rest(true, true), rest(false, true), "outside a side menu it keeps its own ink");
+}
+
+/// The command the arrow trial's split button is bound to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
+#[command(prefix = "splitTrial", scope = "splitTrial")]
+#[non_exhaustive]
+enum SplitCommand {
+    #[command(label = "Trace")]
+    Trace,
+}
+
+/// A click on a split button's arrow opens its menu and never runs the action, read from the output or bound as a
+/// command; a click on the main part runs it.
+#[trial]
+fn a_split_buttons_arrow_never_runs_its_action() {
+    let ran = Rc::new(Cell::new(0));
+    let count = Rc::clone(&ran);
+    let mut fixture = Fixture::new(move |ui| {
+        let entries = [Entry::new(0u8, "For all apps")];
+        if SplitButton::new("Install", &entries).arrow_label("Install options").show(ui).activated {
+            count.set(count.get() + 1);
+        }
+    });
+    fixture.settle();
+    let arrow = fixture.by_label("Install options").expect("the arrow part");
+    fixture.click(&arrow).settle();
+    assert!(!fixture.by_role(Role::MENU).is_empty(), "the arrow opened the menu");
+    assert_eq!(ran.get(), 0, "the arrow's click is not the action's");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    let main = fixture.by_label("Install").expect("the split button");
+    fixture.click_at(Pos2::new(main.rect.left() + 4.0, main.rect.center().y)).settle();
+    assert_eq!(ran.get(), 1, "the main part runs the action");
+
+    let fired = Rc::new(Cell::new(0));
+    let count = Rc::clone(&fired);
+    let mut fixture = Fixture::new(move |ui| {
+        craft_ui::layout_components::Stack::new().command_scope(SplitCommand::SCOPE).show(ui, |ui, scope| {
+            while scope.take_command::<SplitCommand>().is_some() {
+                count.set(count.get() + 1);
+            }
+            scope.publish(SplitCommand::Trace, CommandState::new());
+            let entries = [Entry::new(0u8, "Colour")];
+            let _ = SplitButton::command(SplitCommand::Trace, SplitMenu::Entries(&entries)).arrow_label("Tracing presets").show(ui);
+        });
+    });
+    fixture.settle();
+    let arrow = fixture.by_label("Tracing presets").expect("the arrow part");
+    fixture.click(&arrow).settle();
+    assert!(!fixture.by_role(Role::MENU).is_empty(), "the arrow opened the menu");
+    assert_eq!(fired.get(), 0, "the arrow's click does not fire the command");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    let main = fixture.by_label("Trace").expect("the split button");
+    fixture.click_at(Pos2::new(main.rect.left() + 4.0, main.rect.center().y)).settle();
+    assert_eq!(fired.get(), 1, "the main part fires it");
 }
 
 /// A split button's body that closes itself (a colour palette's swatch pick) closes the split's menu layer: before,

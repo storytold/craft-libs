@@ -25,6 +25,27 @@ fn a_content_sized_select_fits_its_widest_entry() {
     assert_eq!(shown, Some(false), "the content-sized select shows its widest entry whole inside its box");
 }
 
+#[trial]
+fn a_content_sized_select_ignores_a_placeholder_replaced_by_an_unlisted_label() {
+    let widths = Rc::new(Cell::new([0.0; 2]));
+    let seen = widths.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let entries = [Entry::new(1u8, "Uniform")];
+        let a = Select::new("First", Bind::given(2u8), &entries).unlisted_label("Custom").sizing(Sizing::Content).show(ui).response.rect;
+        let b = Select::new("Second", Bind::given(2u8), &entries)
+            .unlisted_label("Custom")
+            .placeholder("An unusually long placeholder which no current state can display")
+            .sizing(Sizing::Content)
+            .show(ui)
+            .response
+            .rect;
+        seen.set([a.width(), b.width()]);
+    });
+    fixture.settle();
+    let [without, with] = widths.get();
+    assert!((without - with).abs() < 0.5, "the unseen placeholder does not change the field width: {without} vs {with}");
+}
+
 /// The width of a quiet select showing entry `held` of a short and a long entry.
 fn quiet_width(held: u8) -> f32 {
     let width = Rc::new(Cell::new(0.0));
@@ -42,4 +63,31 @@ fn quiet_width(held: u8) -> f32 {
 fn a_quiet_select_fits_the_entry_it_shows() {
     let (short, long) = (quiet_width(0), quiet_width(1));
     assert!(short > 0.0 && short < long, "the quiet select is narrower showing the short entry: {short} against {long}");
+}
+
+/// A filled select (`SelectLook::Filled`, VectorCraft's status bar) paints its closed box in `surface.control`, which
+/// a field does not, and keeps a field's width whichever entry it shows.
+#[trial]
+fn a_filled_select_lies_on_the_control_surface_at_a_fields_width() {
+    let shown = |look: SelectLook, held: u8| {
+        let rect = Rc::new(Cell::new(egui::Rect::NOTHING));
+        let seen = rect.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let entries = [Entry::new(0u8, "Essentials"), Entry::new(1u8, "Print production and prepress")];
+            seen.set(Select::new("Workspace", Bind::given(held), &entries).look(look).show(ui).response.rect);
+        });
+        fixture.settle();
+        let control = craft_ui::style::StyleCx::with_root(fixture.ctx(), |cx| cx.tokens.color.surface.control).0;
+        let control = egui::Color32::from_rgba_unmultiplied(control[0], control[1], control[2], control[3]);
+        let box_rect = rect.get();
+        let filled = fixture.frame_shapes().iter().any(|shape| {
+            matches!(shape, egui::Shape::Rect(fill) if fill.fill == control && fill.rect.expand(0.5).contains_rect(box_rect) && box_rect.expand(0.5).contains_rect(fill.rect))
+        });
+        (box_rect.width(), filled)
+    };
+    let ((short, filled), (long, _)) = (shown(SelectLook::Filled, 0), shown(SelectLook::Filled, 1));
+    assert!(filled, "the filled select's box is surface.control");
+    assert!((short - long).abs() <= 0.5, "the filled select keeps its width: {short} against {long}");
+    let (_, field) = shown(SelectLook::Field, 0);
+    assert!(!field, "a field's box is not surface.control");
 }

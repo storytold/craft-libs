@@ -89,6 +89,8 @@ pub(crate) struct PartExtras {
     pub toggles: Option<crate::contract::overlay::ToggleDecl>,
     /// A header part at the end edge: its stop registers after the header's children.
     pub after_header: bool,
+    /// The part reports an access node of this role and name though no face is painted for it.
+    pub node: Option<(crate::runtime::access::Role, String)>,
 }
 
 impl PartBuilder<'_> {
@@ -245,6 +247,12 @@ impl PartBuilder<'_> {
         self
     }
 
+    /// The part reports an access node of `role`, named `name`, for a part the component paints no face for.
+    pub fn node(self, role: crate::runtime::access::Role, name: impl Into<String>) -> Self {
+        self.declared.node = Some((role, name.into()));
+        self
+    }
+
     /// A part with no focus stop names its keyboard path: the intent or command that does the same.
     pub fn pointer_only(self, reason: &'static str) -> Self {
         self.declared.pointer_only = Some(reason);
@@ -265,7 +273,9 @@ impl PartBuilder<'_> {
     /// the popup, so press, drag and release over a row picks it, and a click leaves it open (`on_click` acts on the
     /// release instead), AccessKit Expand and Collapse on its sub-node open and close it, Alt+Down from the part (or from
     /// the component when no toggling part is focused) opens the first toggled popup that is closed and Alt+Up closes
-    /// the open ones, and the sub-node reports `expanded`. The component declares the sub-node with `Access::node`.
+    /// the open ones, and the sub-node reports `expanded`. The component declares the sub-node with `Access::node`; a
+    /// component's one toggling part with no sub-node (a corner mark) leaves `expanded`, Expand and Collapse to the
+    /// component's own node.
     pub fn toggles(self, popup: &'static str) -> Self {
         self.toggles_at(popup, 0)
     }

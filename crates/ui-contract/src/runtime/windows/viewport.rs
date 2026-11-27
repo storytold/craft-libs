@@ -47,6 +47,11 @@ pub(crate) struct ViewportOpen<'a> {
 /// resizable window's size goes out only to open it (`ViewportOpen::follows_size`).
 pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: impl FnMut(&mut Ui)) {
     let viewport = viewports::viewport_id(open.id);
+    shared(ctx, |shared| {
+        if !shared.shown.contains(&viewport) {
+            shared.shown.push(viewport);
+        }
+    });
     let opened = PerViewport::<Record>::with(ctx, viewport, |record| record.seen.is_some());
     let (size, pos) = saved_geometry(ctx, open, opened).map_or((open.size, None), |(size, pos)| (Some(size), pos));
     let pos = pos.or(open.position);
@@ -54,6 +59,7 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         keep_placed(ctx, viewport, pos, size.filter(|_| open.follows_size));
     }
     let spec = open.spec;
+    let cancel_to = spec.hands_on_cancel.then(|| crate::runtime::egui::pass::current_viewport(ctx));
     let state = shared(ctx, |shared| shared.app);
     let os = os_of(ctx);
     let (chrome, captions) = frame_of_spec(ctx, spec);
@@ -64,6 +70,7 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         record.resizable = Some(open.resizable);
         record.min_size = open.limits.0;
         record.moved_by_app = open.moved_by_app;
+        record.cancel_to = cancel_to;
         record.awaiting_first_paint |= spec.shown_after_first_paint && record.facts.is_none();
         if record.title.as_deref() != Some(open.title) {
             record.title = Some(open.title.to_owned());

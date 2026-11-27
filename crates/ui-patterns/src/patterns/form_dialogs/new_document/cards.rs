@@ -4,15 +4,15 @@ use super::presets::{DEFAULT_ID, DocumentOptions, DocumentPreset, NewDocumentPre
 use super::settings::{CardCx, CardSource, DocumentCard, DocumentSettings, RasterSetup};
 use super::{NewDocumentWords, Read, Session, background_label, depth_label, mode_label};
 use crate::buttons::{Button, ButtonOutput};
-use crate::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, clicked};
+use crate::contract::{Bind, CollectionEvent, MemoProps, Props as _, SelectMode, Show as _, ShowCollection as _, clicked};
 use crate::display::{Shade, Text};
 use crate::list::{List, ListRow, ThumbAspect};
 use crate::patterns::presets::{PresetId, PresetLibrary};
 use crate::primitives::{ContentPainterCx, StrokeWidth};
-use crate::runtime::env::{Label, UnitKind};
+use crate::runtime::env::{Env, EnvValue, Label, UnitKind};
 use crate::style::TypeRole;
 use crate::tabs::{Tab, TabKind, TabStrip};
-use crate::tile_grid::{CardText, Tile, TileGrid};
+use crate::tile_grid::{CardText, GridZoom, Tile, TileGrid};
 use craft_behavior::{DisplayOrder, ItemSource, Selection, SelectionChange, keyed};
 use egui::{CornerRadius, Rect, Stroke, StrokeKind, Ui, vec2};
 use std::borrow::Cow;
@@ -96,6 +96,13 @@ impl<S: DocumentSettings> ItemSource<usize> for CardList<'_, S> {}
 /// The columns of preset cards the grid holds: the dialog's left side is as wide as they are.
 const CARD_COLUMNS: usize = 3;
 
+/// The columns of Recent's cards with `recent_items`.
+const RECENT_COLUMNS: usize = 4;
+
+/// The picture size of Recent's cards with `recent_items`, against a preset card's: four of them take about the room
+/// three preset cards do.
+const RECENT_ZOOM: f64 = 0.75;
+
 /// What the cards of the open tab are built from.
 fn card_cx<'a, S: DocumentSettings>(session: &Session<S>, values: &'a S, read: &Read<'a, S>) -> CardCx<'a, S> {
     CardCx {
@@ -138,7 +145,7 @@ pub(super) fn tabs<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, read:
 pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, values: &S, read: &Read<'_, S>, left: &mut Left<S>) {
     let words = read.words;
     let tab = left.tab.unwrap_or(session.tab);
-    let cards = cards_of(tab, read.library, &card_cx(session, values, read));
+    let cards = cards_of(tab, read.library, read.recent_items, &card_cx(session, values, read));
     let selected = if tab == session.tab { selected_of(tab, session, values, &cards) } else { None };
     let selection = selected.map_or_else(|| Selection::new(Vec::new(), None, None), Selection::single);
     let stamp = stamp_of(tab, cards.len());
@@ -170,19 +177,28 @@ pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, value
         }
     } else {
         let count = read.units.number(cards.len() as f64, 0..=0);
-        let heading = Label::from(words.presets_heading.fill(&[("n", &count)]));
+        let items = tab == TabId::Recent && read.recent_items;
+        let heading = Label::from(if items { &words.recent_heading } else { &words.presets_heading }.fill(&[("n", &count)]));
         Text::new(heading).role(TypeRole::SectionCaption).shade(Shade::Muted).show(ui);
-        let shown = TileGrid::<usize>::new(words.cards.clone())
+        let look = Env::of(ui).get::<PresetCardLook>();
+        let mut grid = TileGrid::<usize>::new(words.cards.clone())
             .card_columns(CARD_COLUMNS)
             .card()
-            .card_text(CardText::Preset)
+            .card_text(match look {
+                PresetCardLook::Outline => CardText::Preset,
+                PresetCardLook::Page => CardText::Page,
+            })
             .fill_row()
-            .aspect(2.0)
-            .select(SelectMode::Single)
-            .detail_line()
-            .rows_stamp(stamp)
-            .selection(Bind::given(selection))
-            .show_items(ui, &list, &mut |index, _| tile_of(&cards[*index]));
+            .aspect(2.0);
+        if items {
+            // Four smaller cards to a row, about the room three preset cards take.
+            grid = grid.card_columns(RECENT_COLUMNS).zoom(GridZoom::Fixed(RECENT_ZOOM));
+        }
+        let shown = grid.select(SelectMode::Single).detail_line().rows_stamp(stamp).selection(Bind::given(selection)).show_items(
+            ui,
+            &list,
+            &mut |index, _| tile_of(&cards[*index], look),
+        );
         route(shown.response.events, &cards, left);
     }
 }
@@ -254,7 +270,7 @@ fn tab_title<P>(tab: TabId, categories: &[PresetCategory<P>], words: &NewDocumen
 }
 
 /// The cards `tab` lists.
-fn cards_of<S: DocumentSettings>(tab: TabId, library: &PresetLibrary<S>, cx: &CardCx<'_, S>) -> Vec<DocumentCard<S>> {
+fn cards_of<S: DocumentSettings>(tab: TabId, library: &PresetLibrary<S>, recent_items: bool, cx: &CardCx<'_, S>) -> Vec<DocumentCard<S>> {
     match tab {
         TabId::Category(at) => {
             cx.presets.get(at).map_or_else(Vec::new, |category| category.presets.iter().map(|preset| S::preset_card(preset, cx)).collect())
@@ -269,7 +285,14 @@ fn cards_of<S: DocumentSettings>(tab: TabId, library: &PresetLibrary<S>, cx: &Ca
                 card
             })
             .collect(),
-        TabId::Recent => S::recent_cards(cx),
+        TabId::Recent => {
+            let mut cards = S::recent_cards(cx);
+            // With `recent_items` the default sizes stand in for recent documents until there are some.
+            if recent_items && !cx.recents.is_empty() {
+                cards.retain(|card| !matches!(card.source, CardSource::Preset { .. }));
+            }
+            cards
+        }
     }
 }
 
@@ -288,7 +311,7 @@ fn preset_title(preset: &DocumentPreset, setup: &RasterSetup, words: &NewDocumen
 pub(super) fn raster_preset_card(preset: &DocumentPreset, cx: &CardCx<'_, DocumentOptions>) -> DocumentCard<DocumentOptions> {
     let preset = cx.orientation.map_or_else(|| preset.clone(), |orientation| preset.turned(orientation));
     let mut settings = preset.options(cx.setup.print_ppi, cx.setup.screen_ppi);
-    if preset.is_print() && !matches!(cx.values.unit, UnitKind::Pixels | UnitKind::Percent) {
+    if preset.in_inches() && !matches!(cx.values.unit, UnitKind::Pixels | UnitKind::Percent) {
         settings.unit = cx.values.unit;
     }
     DocumentCard::new(
@@ -350,13 +373,29 @@ fn recent_title(recent: &DocumentOptions, cx: &CardCx<'_, DocumentOptions>) -> L
     found.map_or_else(|| cx.words.custom.clone(), |preset| preset_title(preset, cx.setup, cx.words, cx.preset_words))
 }
 
-/// The tile of a card: the page outline at the card's aspect, the title and the size line.
-fn tile_of<S: DocumentSettings>(card: &DocumentCard<S>) -> Tile<'static> {
+/// How New Document's preset cards show their page. An app sets it once at its root (`RootEnv::values`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum PresetCardLook {
+    /// A small page outline in content ink on a raised card, the name and size line centred under it.
+    #[default]
+    Outline,
+    /// Blank paper on its shadow (`Tile::page`) on a flat card (`CardText::Page`): the name strong on up to two lines,
+    /// the size line under it. VectorCraft's preset cards, as production drew them.
+    Page,
+}
+
+/// The tile of a card: the page at the card's aspect in `look`, the title and the size line.
+fn tile_of<S: DocumentSettings>(card: &DocumentCard<S>, look: PresetCardLook) -> Tile<'static> {
     let page = card.settings.page();
-    let tile = Tile::new(card.title.clone())
-        .detail(card.line.clone())
-        .flat_thumbnail()
-        .thumb(ThumbAspect::new(2, 1), move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, page));
+    let tile = Tile::new(card.title.clone()).detail(card.line.clone());
+    let tile = match look {
+        PresetCardLook::Outline => {
+            tile.flat_thumbnail().thumb(ThumbAspect::new(2, 1), move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, page))
+        }
+        PresetCardLook::Page => tile.page(page.0, page.1),
+    };
     match &card.tooltip {
         Some(tooltip) => tile.tooltip(tooltip.clone()),
         None => tile,

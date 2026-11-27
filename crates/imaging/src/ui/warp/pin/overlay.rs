@@ -353,7 +353,7 @@ impl PinWarp<'_> {
     fn run_pointer(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, pins: &[Pin]) {
         for i in 0..pins.len() {
             let Some(result) = cx.part_if_declared(PIN.at(i as u64)) else { continue };
-            let (press, hovered, hover_pos) = (result.press, result.hovered, result.hover_pos);
+            let (press, hovered, hover_pos) = (result.press, result.hovered, cx.hover_pos(PIN.at(i as u64)));
             if hovered {
                 self.report.hovered = Some(i);
                 self.report.pointer = hover_pos.map(|at| space.view.to_doc(at));
@@ -370,7 +370,7 @@ impl PinWarp<'_> {
             }
         }
         let Some(result) = cx.part_if_declared(MESH) else { return };
-        let (press, hovered, hover_pos) = (result.press, result.hovered, result.hover_pos);
+        let (press, hovered, hover_pos) = (result.press, result.hovered, cx.hover_pos(MESH));
         if hovered && self.report.pointer.is_none() {
             self.report.pointer = hover_pos.map(|at| space.view.to_doc(at));
         }

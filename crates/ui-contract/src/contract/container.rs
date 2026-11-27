@@ -138,6 +138,8 @@ pub enum Pad {
     Control,
     /// `space.pad.regular`.
     Regular,
+    /// `space.pad.dialog`: a dialog frame.
+    Dialog,
     /// `space.pad.roomy`.
     Roomy,
     /// A full-window page's margin around its content: two and a half roomy pads (40 pt in the compact set), as a
@@ -278,11 +280,16 @@ pub struct HeaderParts {
     pub start: f32,
     /// The width at the end edge.
     pub end: f32,
+    /// The least the end edge narrows to, when the line is too narrow for the header's children to keep `keep`
+    /// beside the end parts' whole width. `None`: the end edge keeps its width.
+    pub end_least: Option<f32>,
+    /// The room the header's children keep before the end edge narrows below `end` (to `end_least`).
+    pub keep: f32,
 }
 
 impl HeaderParts {
     /// No room for parts.
-    pub const NONE: HeaderParts = HeaderParts { start: 0.0, end: 0.0 };
+    pub const NONE: HeaderParts = HeaderParts { start: 0.0, end: 0.0, end_least: None, keep: 0.0 };
 
     /// `width` at the start edge.
     pub const fn start(mut self, width: f32) -> Self {
@@ -293,6 +300,14 @@ impl HeaderParts {
     /// `width` at the end edge.
     pub const fn end(mut self, width: f32) -> Self {
         self.end = width;
+        self
+    }
+
+    /// The end edge narrows, down to `least`, so the header's children keep `keep` of the line: on a line too narrow
+    /// for both, the children's least room comes before the end parts' whole width.
+    pub const fn end_narrows(mut self, least: f32, keep: f32) -> Self {
+        self.end_least = Some(least);
+        self.keep = keep;
         self
     }
 }
@@ -321,6 +336,34 @@ pub enum SectionRhythm {
     Spaced,
 }
 
+/// Whether a titled header that draws no rule under it (a quiet title, [`HeaderRegion::heads`]) still heads its body as
+/// a rule would. An app sets it once at its root (`RootEnv::values`); the default is `Ruled`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum QuietHeader {
+    /// The body's first section draws its own rule above, as under no header.
+    #[default]
+    Ruled,
+    /// The header heads the body: its flow starts as after a rule, so the first section under the title draws no rule
+    /// above it and sections after it keep theirs. Production VectorCraft's kind line over its inspector's sections.
+    Heads,
+}
+
+/// The cursor over a header's move band ([`DragBand::Move`]). An app sets it once at its root (`RootEnv::values`); the
+/// default is `Hand`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum MoveBandCursor {
+    /// The open hand, and the closed hand while the band is dragged.
+    #[default]
+    Hand,
+    /// The arrow, as an OS title bar shows, also over the click-only controls on the band (menu titles, buttons):
+    /// production VectorCraft's title bar and panel headers.
+    Arrow,
+}
+
 /// A header region, filled by `Container::header`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -332,6 +375,9 @@ pub struct HeaderRegion {
     /// Whether a rule separates the header from the body, in a band of its own between them. An inline header has no
     /// rule.
     pub rule: bool,
+    /// Whether the header is a title that heads the body as a rule would where the app asks for it
+    /// ([`QuietHeader::Heads`]), though it draws none.
+    pub heads: bool,
     /// Whether a rule runs across the container's width above the header, in a band of its own at the top edge.
     pub rule_above: bool,
     /// Whether the header shares a line with the body: the header at its measured width, the body in the rest.
@@ -351,7 +397,17 @@ pub struct HeaderRegion {
 impl HeaderRegion {
     /// A header with no drag band, no rule, on its own line, with no trailing region, no fill and no inset.
     pub const fn new() -> Self {
-        HeaderRegion { band: DragBand::None, rule: false, rule_above: false, inline: false, trailing: false, fill: None, inset: Pad::None, gap: None }
+        HeaderRegion {
+            band: DragBand::None,
+            rule: false,
+            heads: false,
+            rule_above: false,
+            inline: false,
+            trailing: false,
+            fill: None,
+            inset: Pad::None,
+            gap: None,
+        }
     }
 
     /// The surface of a band behind the header.
@@ -388,6 +444,13 @@ impl HeaderRegion {
     /// Whether a rule separates the header from the body.
     pub const fn rule(mut self, on: bool) -> Self {
         self.rule = on;
+        self
+    }
+
+    /// Whether the header is a title that heads the body as a rule would where the app asks for it
+    /// ([`QuietHeader::Heads`]), though it draws none.
+    pub const fn heads(mut self, on: bool) -> Self {
+        self.heads = on;
         self
     }
 
@@ -603,7 +666,8 @@ pub enum ScrollIndicator {
     Strips,
     /// A bar that takes no room from the content, as a tool rail or an options bar shows its overflow: it lies in the
     /// container's end padding (its bottom padding for x), over the content where the container has none, and shows
-    /// only while the pointer is over the container or presses the bar.
+    /// only while the pointer is over the container or presses the bar, or while the content overflows when the scroll
+    /// shows it at rest ([`Scroll::at_rest`]).
     Overlay,
 }
 
@@ -619,11 +683,13 @@ pub struct Scroll {
     pub notch: Notch,
     /// How the overflow shows.
     pub indicator: ScrollIndicator,
+    /// Whether an overlay bar also shows while the pointer is away from the container.
+    pub at_rest: bool,
 }
 
 impl Scroll {
     const fn on(axes: ScrollAxes) -> Scroll {
-        Scroll { axes, anchor: ScrollAnchor::Start, notch: Notch::Lines(3.0), indicator: ScrollIndicator::Bar }
+        Scroll { axes, anchor: ScrollAnchor::Start, notch: Notch::Lines(3.0), indicator: ScrollIndicator::Bar, at_rest: false }
     }
 
     /// Shows the overflow along y as scroll strips instead of a bar.
@@ -647,6 +713,18 @@ impl Scroll {
     /// Whether the overflow shows as an overlay bar.
     pub const fn has_overlay(&self) -> bool {
         matches!(self.indicator, ScrollIndicator::Overlay)
+    }
+
+    /// Shows an overlay bar whenever the content overflows, also while the pointer is away from the container. A bar of
+    /// another indicator already shows at rest.
+    pub const fn at_rest(mut self) -> Scroll {
+        self.at_rest = true;
+        self
+    }
+
+    /// Whether the overlay bar shows only while the pointer is over the container or presses the bar.
+    pub const fn overlay_hides_at_rest(&self) -> bool {
+        self.has_overlay() && !self.at_rest
     }
 
     /// Scrolls along y.
@@ -745,6 +823,18 @@ pub enum Gap {
     CardRow,
     /// `space.gap.inline`: between groups of tools in a rail.
     Inline,
+    /// `size.page.gap.title`: between a page's title and its subtitle.
+    PageTitle,
+    /// `size.page.gap.lead`: between a page's title and subtitle and the actions under them.
+    PageLead,
+    /// `size.page.gap.actions`: between a page's New and Open.
+    PageActions,
+    /// `size.page.gap.section`: between the sections of a page's column.
+    PageSection,
+    /// `size.page.gap.heading`: between a page section's heading and its body.
+    PageHeading,
+    /// `size.page.gap.link`: between a page's links.
+    PageLink,
 }
 
 /// Set by a menu for its body: a horizontal divider takes `space.gap.inline` above and below its line, since the rows
@@ -812,6 +902,8 @@ pub struct ContainerProps {
     /// The help line the footer shows under the control column of a label-scoped container; its text joins the
     /// control's description.
     pub help: Option<Label>,
+    /// The accessible name of each resize grip of a window or layer mount; its grips report no node without one.
+    pub resize_name: Option<Label>,
     /// The container's place in its set, reported on its node.
     pub position: Option<SetPosition>,
     /// The focus scope of an `Inline`, `Pane` or `FullWindow` mount.
@@ -937,6 +1029,7 @@ impl ContainerProps {
             footer: None,
             end: None,
             help: None,
+            resize_name: None,
             position: None,
             focus: FocusPolicy::NONE,
             collapse: None,
@@ -1053,6 +1146,12 @@ impl ContainerProps {
     /// label scope names, as a validity message does; the footer draws the visible line.
     pub fn help(mut self, help: impl Into<Label>) -> Self {
         self.help = Some(help.into());
+        self
+    }
+
+    /// The accessible name of every resize grip of the container's window or layer.
+    pub fn resize_name(mut self, name: impl Into<Label>) -> Self {
+        self.resize_name = Some(name.into());
         self
     }
 

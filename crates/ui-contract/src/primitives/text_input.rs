@@ -43,7 +43,7 @@ pub enum TabKey {
     Moves,
     /// Tab inserts a tab.
     Inserts,
-    /// Tab and Shift+Tab rewrite the draft (the text part selects it and refuses).
+    /// Tab and Shift+Tab rewrite the draft (the text part selects it and refuses); with no draft they move focus.
     Rewrites,
     /// Tab keeps focus and is handed back as `EditResponse::tab`: `Some(true)` for Tab, `Some(false)` for Shift+Tab.
     Reports,
@@ -52,11 +52,57 @@ pub enum TabKey {
 /// Whether a pasted text is whole ([`TextOptions::whole_paste`]).
 type WholePaste = dyn Fn(&str) -> bool;
 
+/// The colour ranges of a text ([`TextOptions::color_ranges`]): called with the text each time the part lays it out,
+/// which is every frame the part shows. An app whose ranges are costly to find keeps its own cache.
+pub type ColorRanges = dyn Fn(&str) -> Vec<ColorRange>;
+
+/// The longest text, in bytes, a part colours: a longer one is laid out in its plain ink, and its
+/// [`ColorRanges`] is not called. It bounds the cost of an app's colouring (a highlighter whose time grows with the
+/// square of the length on crafted input) at the size of a long script.
+pub const COLORED_TEXT_LIMIT: usize = 16 * 1024;
+
+/// A theme colour for a stretch of a field's text. Each is the token's colour moved, where it has to be, to the text
+/// contrast minimum on the field's fill, so every ink reads in every theme and contrast.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RangeInk {
+    /// `text.muted`.
+    Muted,
+    /// `accent.text`.
+    Accent,
+    /// `status.good.fg`.
+    Good,
+    /// `status.warn.fg`.
+    Warn,
+    /// `status.bad.fg`.
+    Bad,
+    /// `status.info.fg`.
+    Info,
+}
+
+/// One stretch of a text in an ink of its own: `range` is in bytes of the text the [`ColorRanges`] was given.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ColorRange {
+    /// The bytes the ink covers.
+    pub range: Range<usize>,
+    /// Their ink.
+    pub ink: RangeInk,
+}
+
+impl ColorRange {
+    /// The bytes `range` in `ink`.
+    pub fn new(range: Range<usize>, ink: RangeInk) -> Self {
+        ColorRange { range, ink }
+    }
+}
+
 /// How a text part behaves beyond its codec.
 #[derive(Clone)]
 pub struct TextOptions {
     /// Shown while the text is empty.
     pub placeholder: Option<Label>,
+    /// The field's look: a quiet one's placeholder takes the muted text colour instead of the faint one.
+    pub look: crate::style::FieldLook,
     /// Lines: 1 is a single-line field.
     pub lines: Option<usize>,
     /// The most characters a draft holds.
@@ -65,8 +111,14 @@ pub struct TextOptions {
     pub mask: bool,
     /// A parsable draft applies as typed whatever the codec says.
     pub live: bool,
+    /// The owner of the current draft, when the same field can edit different values.
+    pub edit_target: Option<egui::IdSalt>,
     /// Escape clears the text and commits the empty text while text shows, and goes on to the host once it is empty.
     pub clear_on_escape: bool,
+    /// Escape keeps the text: an open typing run commits once, editing ends by leaving focus, and the same Escape
+    /// goes on to the enclosing scope. A live filter keeps its query this way. Ignored with `clear_on_escape`, and on a
+    /// disabled or read-only part.
+    pub keep_on_escape: bool,
     /// Monospace text.
     pub mono: bool,
     /// The type role the text is set in; a monospace text takes the mono role's face and size instead.
@@ -129,6 +181,15 @@ pub struct TextOptions {
     /// The key that submits a multi-line text: under `Enter`, plain, Cmd and Ctrl+Enter submit and Shift+Enter breaks
     /// the line.
     pub submit_key: SubmitKey,
+    /// The text shown, and exposed as the part's accessible value, instead of the value's own text while the part has
+    /// neither focus nor a draft (a derived number in parentheses). Focus, and any typing, start from the value's own
+    /// text: this changes only what an idle part shows, never what the codec formats or parses.
+    pub resting: Option<String>,
+    /// Colours stretches of the text: the ranges it gives, in order, take their inks and the rest the part's ink. A range
+    /// that is empty, overlaps the one before, ends past the text or splits a character is skipped. Colour is display
+    /// only: editing, the caret, selection, wrapping and what assistive technology reads are as without it. A masked or
+    /// disabled part, and a text past [`COLORED_TEXT_LIMIT`], show no colours.
+    pub color_ranges: Option<Arc<ColorRanges>>,
 }
 
 /// Which Enter chord submits a multi-line text.
@@ -146,11 +207,14 @@ impl Default for TextOptions {
     fn default() -> Self {
         TextOptions {
             placeholder: None,
+            look: crate::style::FieldLook::Normal,
             lines: None,
             limit: None,
             mask: false,
             live: false,
+            edit_target: None,
             clear_on_escape: false,
+            keep_on_escape: false,
             mono: false,
             role: TypeRole::Body,
             ink: None,
@@ -175,6 +239,8 @@ impl Default for TextOptions {
             holds_drafts: false,
             whole_paste: None,
             submit_key: SubmitKey::CommandEnter,
+            resting: None,
+            color_ranges: None,
         }
     }
 }

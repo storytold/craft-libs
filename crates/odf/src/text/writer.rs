@@ -97,20 +97,35 @@ pub(super) const GRAPHICS_PARENT: &str = "\u{0}graphics";
 /// level's kind as its first item there says. An item of another list, or (lists not told apart)
 /// a top-level item of the other kind, starts a new list; with section wrappers (`wraps`), so
 /// does an item opening a section, and one closing a section ends it.
-fn list_run(blocks: &[FBlock], start: usize, wraps: bool) -> (usize, [ListOut; 9]) {
+fn list_run(blocks: &[FBlock], start: usize, wraps: bool) -> (usize, [ListOut; 9], u32) {
     let p = match blocks.get(start) {
         Some(FBlock::Para(p)) => p,
-        _ => return (start.saturating_add(1), [ListOut { ordered: false, label: None, start: 1 }; 9]),
+        _ => return (start.saturating_add(1), [ListOut { ordered: false, label: None, start: 1 }; 9], 0),
     };
-    let id = p.list.map_or(0, |l| l.list);
+    let mut id = p.list.map(|l| l.list);
     let first = ListOut { ordered: p.list.is_some_and(|l| l.ordered), label: None, start: 1 };
     let mut kinds = [first; 9];
     let mut seen = [false; 9];
     let mut i = start;
     while let Some(FBlock::Para(q)) = blocks.get(i) {
-        let Some(li) = q.list else { break };
+        let Some(li) = q.list else {
+            // A section it opens or closes ends the run, as an item's does.
+            let wrap = q.wrap.as_deref().filter(|_| wraps);
+            match model::continues_list(blocks, i) {
+                // (One below the last item is the header of a sublist in it.)
+                Some(_) if i == start || !wrap.is_some_and(|w| !w.0.is_empty()) => {
+                    i += 1;
+                    if wrap.is_some_and(|w| w.1 > 0) {
+                        break;
+                    }
+                    continue;
+                }
+                _ => break,
+            }
+        };
         let l = li.level.min(8) as usize;
-        if li.list != id || (id == 0 && l == 0 && seen[0] && kinds[0].ordered != li.ordered) {
+        let list_id = *id.get_or_insert(li.list);
+        if li.list != list_id || (list_id == 0 && l == 0 && seen[0] && kinds[0].ordered != li.ordered) {
             break;
         }
         let wrap = q.wrap.as_deref().filter(|_| wraps);
@@ -128,7 +143,40 @@ fn list_run(blocks: &[FBlock], start: usize, wraps: bool) -> (usize, [ListOut; 9
             break;
         }
     }
-    (i.max(start + 1), kinds)
+    (i.max(start + 1), kinds, id.unwrap_or(0))
+}
+
+/// What is open in a list being written.
+#[derive(Clone, Copy, PartialEq)]
+enum ListPart {
+    None,
+    Item,
+    Header,
+}
+
+/// Close the open part of the innermost list, then open `part`.
+fn list_part(out: &mut String, stack: &mut [ListPart], part: ListPart) {
+    let Some(top) = stack.last_mut() else { return };
+    out.push_str(match top {
+        ListPart::None => "",
+        ListPart::Item => "</text:list-item>",
+        ListPart::Header => "</text:list-header>",
+    });
+    out.push_str(match part {
+        ListPart::None => "",
+        ListPart::Item => "<text:list-item>",
+        ListPart::Header => "<text:list-header>",
+    });
+    *top = part;
+}
+
+/// Close nested items and lists down to the requested open depth.
+fn close_lists(out: &mut String, stack: &mut Vec<ListPart>, depth: usize) {
+    while stack.len() > depth {
+        list_part(out, stack, ListPart::None);
+        stack.pop();
+        out.push_str("</text:list>");
+    }
 }
 
 /// The `xml:id` of the list markup `xml` (kept as read) begins with, if it does.
@@ -239,6 +287,9 @@ pub(super) struct Writer {
     refs_open: std::collections::BTreeSet<String>,
     /// The file's own package paths, kept as read: names WordCraft's own pictures don't take.
     pub(super) reserved: std::sync::Arc<std::collections::BTreeSet<String>>,
+    /// The file's names for styles WordCraft would otherwise name as one of the file's other
+    /// styles (see `kept::read_names`), by WordCraft's name and family key suffix.
+    pub(super) read_names: std::sync::Arc<HashMap<String, String>>,
     pub(super) kept_used: super::kept::Needed,
     /// The file's own master pages are written (its page setup is as read): kept markup may
     /// start one.
@@ -304,7 +355,8 @@ impl Writer {
         if let Some(id) = f.extra.as_ref().and_then(|x| x.style.as_deref()) {
             self.named_text.insert(id.to_string());
             props.push('\u{1}');
-            props.push_str(&odf_name(id));
+            let name = odf_name(id);
+            props.push_str(&self.read_names.get(&format!("{name}|text")).map_or(name, |n| x(n)));
         }
         if props.is_empty() {
             return None;
@@ -329,7 +381,8 @@ impl Writer {
             // A custom style: written as a common style of the same name (see `custom_styles`).
             (_, _, Some(id)) => {
                 self.named.insert(id.to_string());
-                odf_name(id)
+                let name = odf_name(id);
+                self.read_names.get(&name).map_or(name, |n| x(n))
             }
             (Kind::Normal, Some(n), None) => n.to_string(),
             _ => parent_style(p.kind).to_string(),
@@ -493,7 +546,7 @@ impl Writer {
                     self.image(img, Place::Text(img.float.as_deref()), out);
                     prev_space = false;
                 }
-                Inline::Group { w, h, float, members } => {
+                Inline::Group { w, h, float, members, .. } => {
                     self.group((*w, *h), float.as_deref(), members, out);
                     prev_space = false;
                 }
@@ -518,7 +571,7 @@ impl Writer {
                     self.comment(*id, comment, out);
                     prev_space = false;
                 }
-                Inline::Shape { kind, w, h, float, blocks, look, path } => {
+                Inline::Shape { kind, w, h, float, blocks, look, path, .. } => {
                     self.drawing_shape(*kind, (*w, *h), Place::Text(float.as_deref()), (look, path.as_deref()), blocks, out);
                     prev_space = false;
                 }
@@ -799,7 +852,9 @@ impl Writer {
         }
         // A list without its own `xml:id` (older files' lists) is given one, for a list going on
         // with it to name.
-        if p.list.is_some()
+        // (Its first numbered paragraph's: a list header has no number.)
+        let list = run.iter().find_map(|b| if let FBlock::Para(q) = b { q.list } else { None });
+        if list.is_some()
             && list_xml_id(&ix.0).is_none()
             && let Some(at) = markup.find("<text:list").map(|i| i + "<text:list".len())
         {
@@ -815,7 +870,7 @@ impl Writer {
         self.close_wrap(last.as_ref(), 0, out);
         self.master = None;
         // A list kept so: a list continuing it, written from the model, names it.
-        if let Some(l) = p.list
+        if let Some(l) = list
             && let Some(id) = markup.find("<text:list").and_then(|i| markup.get(i..)).and_then(list_xml_id)
         {
             if l.list != 0 {
@@ -923,10 +978,9 @@ impl Writer {
                     }
                     i += 1;
                 }
-                FBlock::Para(p) if p.list.is_some() => {
+                FBlock::Para(p) if p.list.is_some() || model::continues_list(blocks, i).is_some() => {
                     let start = i;
-                    let id = p.list.map_or(0, |l| l.list);
-                    let (end, kinds) = list_run(blocks, start, self.wraps_at(depth));
+                    let (end, kinds, id) = list_run(blocks, start, self.wraps_at(depth));
                     i = end;
                     // The sections kept as read its first item opens and its last closes, around it.
                     let wrap_of = |k: usize| match blocks.get(k) {
@@ -938,23 +992,15 @@ impl Writer {
                     self.list_styles.push(kinds);
                     let lname = format!("{}L{}", self.prefix, self.list_styles.len());
                     let id_of_list = id;
-                    // Open lists: per level, whether a list-item is open.
-                    let mut stack: Vec<bool> = Vec::new();
+                    // Open lists: per level, what is open in it.
+                    let mut stack: Vec<ListPart> = Vec::new();
                     for (qi, q) in blocks.get(start..i).unwrap_or(&[]).iter().enumerate() {
                         let FBlock::Para(q) = q else { continue };
-                        let lv = q.list.map(|l| l.level.min(8) as usize).unwrap_or(0);
-                        while stack.len() > lv + 1 {
-                            if stack.pop() == Some(true) {
-                                out.push_str("</text:list-item>");
-                            }
-                            out.push_str("</text:list>");
-                        }
+                        let lv = usize::from(q.list.map(|l| l.level).or(q.item).unwrap_or(0).min(8));
+                        close_lists(out, &mut stack, lv + 1);
                         while stack.len() < lv + 1 {
-                            if let Some(top) = stack.last_mut()
-                                && !*top
-                            {
-                                out.push_str("<text:list-item>");
-                                *top = true;
+                            if stack.last() == Some(&ListPart::None) {
+                                list_part(out, &mut stack, ListPart::Item);
                             }
                             if stack.is_empty() {
                                 let id = format!("{}lst{}", self.prefix, self.list_styles.len());
@@ -981,23 +1027,19 @@ impl Writer {
                             } else {
                                 out.push_str("<text:list>");
                             }
-                            stack.push(false);
+                            stack.push(ListPart::None);
                         }
-                        if let Some(top) = stack.last_mut() {
-                            if *top {
-                                out.push_str("</text:list-item>");
-                            }
-                            *top = true;
+                        // An unnumbered paragraph goes in the item or header open at its level (its
+                        // sublists ended first); a list's leading ones are its header's. Keep that
+                        // membership when original markup is gone.
+                        if q.list.is_some() {
+                            list_part(out, &mut stack, ListPart::Item);
+                        } else if stack.last() == Some(&ListPart::None) {
+                            list_part(out, &mut stack, ListPart::Header);
                         }
-                        out.push_str("<text:list-item>");
                         self.para_in(q, chain(start + qi), out);
                     }
-                    while let Some(open) = stack.pop() {
-                        if open {
-                            out.push_str("</text:list-item>");
-                        }
-                        out.push_str("</text:list>");
-                    }
+                    close_lists(out, &mut stack, 0);
                     self.close_wrap(closes.as_ref(), 0, out);
                     out.push('\n');
                 }

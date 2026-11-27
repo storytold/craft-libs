@@ -775,3 +775,64 @@ fn a_percent_field_reads_one_decimal_then_the_sign() {
     let sign = painted("%").unwrap_or_else(|| panic!("the field shows the sign"));
     assert!(sign.min.x - number.max.x <= 5.0, "the sign follows the number closely: {number:?} {sign:?}");
 }
+
+/// A percent field whose committed values carry no decimals (`commit_decimals(0)`, a paint bar's Opacity) shows none,
+/// "10%"; one that sets no decimals of its own keeps the one-decimal look, "10.0%".
+#[trial]
+fn a_percent_field_shows_the_decimals_its_caller_commits() {
+    let shown = |commit: Option<usize>| {
+        let mut value = Some(10.0f64);
+        let mut fixture = craft_ui::testing::Fixture::new(move |ui| {
+            let field = NumberField::new("Opacity", Bind::bound(&mut value)).unit_kind(UnitKind::Percent).range(0.0..=100.0);
+            let _ = match commit {
+                Some(decimals) => field.commit_decimals(decimals).show(ui),
+                None => field.show(ui),
+            };
+        });
+        fixture.settle();
+        fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>()
+    };
+    let whole = shown(Some(0));
+    assert!(whole.iter().any(|text| text == "10") && !whole.iter().any(|text| text == "10.0"), "commit_decimals(0) shows 10%: {whole:?}");
+    let default = shown(None);
+    assert!(default.iter().any(|text| text == "10.0"), "with no decimals set the field shows 10.0%: {default:?}");
+}
+
+#[trial]
+fn changing_a_number_fields_edit_target_clears_the_old_draft_with_equal_values() {
+    use craft_ui::testing::Fixture;
+    use std::rc::Rc;
+
+    for expression in ["10+", "9+9"] {
+        let target = Rc::new(Cell::new(0));
+        let values = Rc::new([Cell::new(Some(START)), Cell::new(Some(START))]);
+        let id = Rc::new(Cell::new(egui::Id::NULL));
+        let (shown_target, shown_values, shown_id) = (target.clone(), values.clone(), id.clone());
+        let mut fixture = Fixture::new(move |ui| {
+            let current = shown_target.get();
+            let model = &shown_values[current];
+            let mut value = model.get();
+            let out = NumberField::new("Size", Bind::bound(&mut value)).id_salt("size").edit_target(current).show(ui);
+            shown_id.set(out.response.id);
+            model.set(value);
+        });
+        fixture.settle();
+        let field = fixture.by_label("Size").expect("the number field");
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(expression).settle();
+        assert!(fixture.texts().iter().any(|text| text.text == expression));
+        assert_eq!(values[0].get(), Some(START));
+
+        let stable = id.get();
+        target.set(1);
+        fixture.settle();
+        assert_eq!(id.get(), stable);
+        assert!(fixture.focused_stop().is_some_and(|(stop, _)| stop == stable));
+        assert!(!fixture.texts().iter().any(|text| text.text == expression));
+        fixture.key(Key::Enter, Modifiers::NONE).settle();
+        assert_eq!((values[0].get(), values[1].get()), (Some(START), Some(START)));
+
+        fixture.key(Key::A, Modifiers::COMMAND).type_text("5+8").key(Key::Enter, Modifiers::NONE).settle();
+        assert_eq!((values[0].get(), values[1].get()), (Some(START), Some(13.0)));
+    }
+}

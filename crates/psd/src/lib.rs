@@ -97,6 +97,7 @@ pub mod slices;
 pub mod smart;
 pub mod source;
 pub mod tagged;
+pub mod tbr;
 #[cfg(any(test, feature = "test-support"))]
 // Test-data generator (tests and fuzz seeds only): failing loudly is the point.
 #[allow(clippy::expect_used)]

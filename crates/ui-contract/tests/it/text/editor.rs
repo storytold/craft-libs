@@ -28,6 +28,13 @@ const NEXT: Rect = Rect { min: Pos2::new(10.0, 110.0), max: Pos2::new(90.0, 130.
 const TEXT: &str = "fn main";
 const EDITOR: PartKey = PartKey::new("editor");
 
+thread_local! {
+    /// Whether the probe's editor part held the key focus in its last pass.
+    static EDITOR_FOCUSED: Cell<Option<bool>> = const { Cell::new(None) };
+    /// The window focus the pass's input reported, so a trial can tell a window in the background from one with focus.
+    static WINDOW_FOCUSED: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
 /// An editor that logs the inputs it receives and, while `report` is set, reports its one line: `TEXT`, or the text
 /// of its `doc` when it keeps one.
 #[derive(craft_ui::contract::Component)]
@@ -80,6 +87,8 @@ impl Component for Probe<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        EDITOR_FOCUSED.set(cx.editor_handle().map(|handle| handle.focused()));
+        WINDOW_FOCUSED.set(Some(cx.core.ctx.input(|input| input.focused)));
         let inputs: Vec<EditorInput> = cx.editor_input().collect();
         if let Some(doc) = self.doc {
             doc.apply(cx, &inputs);
@@ -337,6 +346,28 @@ impl Rig {
     }
 }
 
+/// Switching to another app and back is no focus move for an editor: it keeps the key focus, and its input-method
+/// context runs on through it, with no new generation to reset the input method when the window comes back.
+#[trial]
+fn switching_apps_keeps_the_editor_focused_and_its_input_method_context() {
+    let mut rig = Rig::with(EditorPurpose::Code, Some(Doc::new(TEXT, Some(1))), false);
+    rig.focus();
+    rig.frame(Vec::new());
+    let generation = rig.ime().generation;
+    rig.frame(vec![craft_ui::testing::pointer::window_blurred()]);
+    for _ in 0..3 {
+        rig.frame(Vec::new());
+        assert_eq!(WINDOW_FOCUSED.get(), Some(false), "the window's input reports the background, as a host's does");
+        assert_eq!(EDITOR_FOCUSED.get(), Some(true), "the editor keeps the key focus while the window is in the background");
+    }
+    rig.frame(vec![Event::WindowFocused(true)]);
+    rig.frame(Vec::new());
+    assert_eq!(WINDOW_FOCUSED.get(), Some(true), "the window has the focus again");
+    assert_eq!(rig.ime().generation, generation, "the input method's context ran on through the switch");
+    rig.frame(vec![Event::Text("x".into())]);
+    assert!(rig.take().iter().any(|input| matches!(input, EditorInput::Text(text) if &**text == "x")), "typing goes on in the editor");
+}
+
 /// Shift+Enter reaches an editor as a newline with Shift held, told from a plain Enter in the same frame, in the order
 /// they were pressed: an editor gives Shift+Enter its own meaning (a line break within the paragraph). Guards against
 /// the press's Shift being lost between the press and the editor input.
@@ -540,6 +571,32 @@ fn an_owner_change_mid_composition_interrupts_it_and_drops_its_late_input() {
         matches!(inputs.as_slice(), [EditorInput::Preedit { text, .. }] if &**text == "y"),
         "after the completion the new editor receives its own preedit: {inputs:?}"
     );
+}
+
+/// An editor that stops being shown while it composes is interrupted in the pass it vanished in. egui keeps its focus
+/// until the end of that pass, so waiting for the owner change at the next begin interrupted it a frame late. Guards
+/// against the interrupt depending on a second pass of the frame.
+#[trial]
+fn an_editor_that_vanishes_while_composing_is_interrupted_in_that_pass() {
+    let log = RefCell::new(Vec::new());
+    let shown = Cell::new(true);
+    let mut ui = |ui: &mut egui::Ui| {
+        if shown.get() {
+            Probe::new(&log, true).label("Source").id_salt("code").show_at(ui, AT);
+        }
+    };
+    let mut frames = Frames::new();
+    click(&mut frames, AT.center(), &mut ui);
+    frames.frame(vec![preedit("k")], &mut ui);
+    assert!(matches!(log.take().as_slice(), [EditorInput::Preedit { .. }]), "the editor composes");
+
+    shown.set(false);
+    let passes = frames.frame(Vec::new(), &mut ui);
+    let seen = frames.ime().cloned();
+    assert!(seen.as_ref().is_some_and(|ime| ime.interrupt && ime.reset.is_some()), "the pass the editor vanished in interrupts it: {seen:?}");
+    assert_eq!(passes, 1, "the interrupt needs no second pass");
+    frames.frame(Vec::new(), &mut ui);
+    assert!(frames.ime().is_none(), "with the editor gone, no one owns the IME: {:?}", frames.ime());
 }
 
 /// An editor losing focus while it composes asks the system once to discard the marked text: later frames and a retired
@@ -1002,4 +1059,47 @@ fn an_alt_chord_bound_only_out_of_scope_leaves_its_text_typed() {
     assert_eq!(typed.take(), "\u{2014}", "the field types the chord's text");
     let fired: Vec<String> = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
     assert!(fired.is_empty(), "nothing ran: {fired:?}");
+}
+
+/// A disabled editor registers no stop, and its focus widget is still the component's own and no egui focus candidate:
+/// it never becomes a Tab stop of the app's own widgets, and egui's arrows from the app's own focused widget never
+/// reach it. With every control in Tab order, Tab and Shift+Tab land on the button beside it each time.
+#[trial]
+fn tab_never_focuses_a_disabled_editor_s_widget() {
+    let log = RefCell::new(Vec::new());
+    let seen = RefCell::new(Seen::default());
+    let (editor, button) = (Cell::new(Id::NULL), Cell::new(Id::NULL));
+    // The app's own egui button, level with the editor on its right: the editor lies straight to its left.
+    let app = craft_ui::testing::focus::named_id("app button");
+    let app_at = Rect::from_min_size(Pos2::new(AT.right() + 40.0, AT.center().y - 10.0), egui::vec2(60.0, 20.0));
+    let mut show = |ui: &mut egui::Ui| {
+        editor.set(Probe::new(&log, true).label("Source").enabled(false).id_salt("code").show_at(ui, AT).id);
+        button.set(Button::new(&seen).id_salt("next").show_at(ui, NEXT).id);
+        ui.interact(app_at, app, egui::Sense::click());
+    };
+    let mut frames = Frames::new();
+    frames.root({
+        let mut root = craft_ui::runtime::env::RootEnv::default();
+        root.tab_all_controls = true;
+        root
+    });
+    frames.idle(3, &mut show);
+    for shift in [false, false, true, true] {
+        let mods = if shift { Modifiers::SHIFT } else { Modifiers::NONE };
+        frames.frame(vec![key_press(Key::Tab, mods), key_release(Key::Tab, mods)], &mut show);
+        frames.frame(Vec::new(), &mut show);
+        let focused = craft_ui::testing::focus::egui_focused(&frames.ctx);
+        assert!(
+            focused == Some(button.get()) || focused == Some(app),
+            "Tab (shift {shift}) lands on a control, never on the disabled editor {:?}: {focused:?}",
+            editor.get()
+        );
+    }
+    craft_ui::runtime::focus::request(&frames.ctx, craft_ui::runtime::focus::FocusTarget::Id(app));
+    frames.idle(2, &mut show);
+    assert_eq!(craft_ui::testing::focus::egui_focused(&frames.ctx), Some(app), "the app's button has the focus");
+    frames.frame(vec![key_press(Key::ArrowLeft, Modifiers::NONE), key_release(Key::ArrowLeft, Modifiers::NONE)], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    let focused = craft_ui::testing::focus::egui_focused(&frames.ctx);
+    assert!(focused == Some(app) || focused == Some(button.get()), "the arrow never reaches the disabled editor {:?}: {focused:?}", editor.get());
 }

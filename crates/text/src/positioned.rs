@@ -186,7 +186,7 @@ pub(crate) mod tests {
         }
     }
     #[trial]
-    fn caret_mapping_tracks_ligatures_rtl_and_kerning() {
+    fn feature_config_caret_mapping_tracks_ligatures_rtl_and_kerning() {
         let mut g = glyph();
         assert_eq!((g.caret_offset(3, 12.0), g.caret_offset(5, 12.0), g.caret_offset(7, 12.0)), (0.0, 6.0, 12.0));
         assert_eq!(g.caret_offset(4, 12.0), 3.0);
@@ -197,7 +197,7 @@ pub(crate) mod tests {
         assert_eq!(g.caret_offset(5, 8.0), 4.0);
     }
     #[trial]
-    fn artwork_uses_the_same_composition_order() {
+    fn feature_config_artwork_uses_the_same_composition_order() {
         let g = glyph();
         let doc = Affine::translate((10.0, 20.0));
         let (_, image) = g.placed_image().unwrap();

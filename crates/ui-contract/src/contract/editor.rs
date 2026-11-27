@@ -72,7 +72,10 @@ pub(crate) fn run<C: Component>(cx: &mut Cx<'_, C>, ui: &mut Ui, step: &mut supe
     }
     let (ctx, id) = (cx.core.ctx.clone(), cx.core.id);
     let widget = ImeSurface::of(id, decl.key).widget();
-    let focused = egui_editor::show(ui, widget, decl.rect, egui_focus::event_filter(keys.keep, false));
+    let focusable = super::steps::takes_focus(cx.core.resolved);
+    let focused = egui_editor::show(ui, widget, decl.rect, egui_focus::event_filter(keys.keep, false), focusable);
+    // The focus widget is the component's, enabled or not: it is never one of the app's own widgets (`take_app_widgets`).
+    crate::runtime::pointer::record_text_widget(&ctx, widget, id);
     let read_only = cx.core.resolved.read_only || !cx.core.resolved.enabled;
     let mut inputs: Vec<(Order, EditorInput)> = Vec::new();
     if focused {
@@ -125,6 +128,11 @@ impl EditorHandle {
     /// The handle of the editor part step 8b set up.
     fn of(info: &EditorInfo) -> EditorHandle {
         EditorHandle { widget: info.widget, rect: info.rect, purpose: info.purpose, focused: info.focused, read_only: info.read_only }
+    }
+
+    /// Whether the editor part holds the key focus this pass, whether or not its window has the system's.
+    pub fn focused(&self) -> bool {
+        self.focused
     }
 
     /// Reports the caret and composition to the input-method engine and puts the text facts in the running pass's

@@ -194,7 +194,8 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// A typed value goes to the nearest multiple of the step when it commits.
     #[prop]
     snap_typed: bool,
-    /// The decimals a committed value is rounded to; the display keeps the codec's.
+    /// The decimals a committed value is rounded to; the display keeps the codec's, except that a percent field with no
+    /// decimals of its own shows none when this is 0 ("10%").
     #[prop]
     commit_decimals: Option<usize>,
     /// An empty field means automatic: it shows the "Auto" word as its placeholder.
@@ -204,6 +205,14 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// several sizes).
     #[prop]
     mixed_word: bool,
+    /// The value is derived, not chosen (an automatic leading that follows the font size). While the field is not in
+    /// edit it shows the value in parentheses, with its unit inside them ("(87.6 pt)"), and that text is its
+    /// accessible value; the field draws no separate unit then, as the unit is in the text. Focus starts an edit from
+    /// the plain number, without parentheses or unit. A committed edit reports the value as usual: it is the host's
+    /// job to turn this off, as the value is no longer derived. Steppers, presets and the popup slider work as usual.
+    /// A blank, mixed or named value is shown as it would be without this.
+    #[prop]
+    derived: bool,
     /// The field writes exactly this many decimals, zeros included ("1.00"), when it has no codec of its own.
     #[prop]
     fixed_decimals: Option<usize>,
@@ -296,6 +305,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             snap_typed: false,
             automatic: false,
             mixed_word: false,
+            derived: false,
             commit_decimals: None,
             fixed_decimals: None,
             name_number: None,
@@ -333,7 +343,26 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         self
     }
 
-    /// Zoom typing: a Tab rewrites the draft and a press on the field's other parts keeps it unapplied.
+    /// The whole value is selected when the field takes focus, so typing replaces it, as a value field in a photo
+    /// editor's sliders behaves. Focus by key or request selects it at once; a pointer press keeps the caret or range
+    /// it makes, and a plain click selects the whole value once it is released, as an address bar does.
+    #[must_use]
+    pub fn select_on_focus(mut self) -> Self {
+        self.options.select_on_focus = true;
+        self
+    }
+
+    /// Identifies the target of this field's edit, for a control reused across drawings or selections.
+    /// Changing the key discards the previous draft even when the two bound values are equal.
+    /// The field keeps its identity and focus.
+    #[must_use]
+    pub fn edit_target(mut self, key: impl egui::AsIdSalt) -> Self {
+        self.options.edit_target = Some(egui::IdSalt::new(key));
+        self
+    }
+
+    /// Zoom typing: a Tab rewrites the draft (with no draft it moves focus) and a press on the field's other parts
+    /// keeps it unapplied.
     #[must_use]
     pub(super) fn zoom_typing(mut self) -> Self {
         self.options.tab = crate::primitives::TabKey::Rewrites;
@@ -377,13 +406,34 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         !self.status_zoom && self.unit_placement == UnitPlacement::Inside
     }
 
-    /// The unit drawn apart inside the field after the number: the field's own, else the symbol of its unit kind;
-    /// none when the host draws it after the field or the number's run holds it.
-    fn shown_unit(&self, units: &Units) -> Option<Label> {
-        if !self.unit_inside() || self.look == NumberLook::Inline {
+    /// The unit the field shows with its number: the field's own, else the symbol of its unit kind; none when the host
+    /// draws it after the field.
+    fn unit_label(&self, units: &Units) -> Option<Label> {
+        if !self.unit_inside() {
             return None;
         }
         self.unit.clone().or_else(|| self.unit_kind.map(|kind| units.symbol(kind).into()))
+    }
+
+    /// The unit drawn apart inside the field after the number: [`Self::unit_label`], except where the number's run holds
+    /// it (the inline look) and for a derived value, whose unit is in its parenthesised text.
+    fn shown_unit(&self, units: &Units, value: Option<&V>) -> Option<Label> {
+        if self.look == NumberLook::Inline || self.derives(value) { None } else { self.unit_label(units) }
+    }
+
+    /// Whether `value` is shown as a derived value: the field is `derived` and the value is a number it shows, not a
+    /// blank, a mixed value or a name.
+    fn derives(&self, value: Option<&V>) -> bool {
+        self.derived && !self.shows_blank(value) && value.is_some_and(|value| value.named().is_none() && value.number().is_some())
+    }
+
+    /// `number`, as the field writes it, as a derived value: in parentheses with its unit. The inline look's number
+    /// already carries its unit.
+    fn derived_text(&self, number: &str, units: &Units) -> String {
+        match self.unit_label(units).filter(|_| self.look != NumberLook::Inline) {
+            Some(unit) => format!("({number} {})", unit.as_str()),
+            None => format!("({number})"),
+        }
     }
 
     /// The text the number's run holds around the number: the status zoom's sign; in the inline look the unit kind's
@@ -419,7 +469,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// The unit drawn this pass. A mixed value shows the dash alone: a unit beside it would claim a measure the
     /// selection does not have.
     fn painted_unit(&self, cx: &Cx<'_, Self>) -> Option<Label> {
-        self.shown_unit(&cx.env.units()).filter(|_| cx.value().is_some_and(|value| !non_finite(Some(value))))
+        self.shown_unit(&cx.env.units(), cx.value()).filter(|_| cx.value().is_some_and(|value| !non_finite(Some(value))))
     }
 
     /// `stored` in the shown unit.
@@ -442,9 +492,19 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         value.and_then(NumberValue::number).map(|stored| self.to_shown(stored))
     }
 
-    /// Whether the field counts percent: it writes its precision's decimals in full, its sign right after the number.
+    /// Whether the field counts percent: it shows its sign right after the number.
     fn is_percent(&self) -> bool {
         self.codec.is_none() && self.unit_kind == Some(UnitKind::Percent)
+    }
+
+    /// The decimals a percent field writes in full when the caller sets none of its own: one at the standard precision
+    /// ("100.0%"), none at the measured precision ("100%") or for a field whose committed values carry none
+    /// (`commit_decimals(0)`).
+    fn percent_decimals(&self) -> Option<usize> {
+        (self.is_percent() && self.fixed_decimals.is_none() && self.max_decimals.is_none()).then(|| match self.precision {
+            NumberPrecision::Standard => self.commit_decimals.unwrap_or(1).min(1),
+            NumberPrecision::Measured => 0,
+        })
     }
 
     /// Whether the field uses the dash for a missing or invalid value.
@@ -461,19 +521,18 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
                 None => units.reader(self.unit_kind),
             };
             let codec = NumberCodec::new(reader, self.decimals());
-            if self.fixed_decimals.is_some() || self.is_percent() { codec.fixed() } else { codec }
+            if self.fixed_decimals.is_some() || self.percent_decimals().is_some() { codec.fixed() } else { codec }
         })
     }
 
-    /// The decimals the field shows: its codec's, fixed or maximum precision, else its unit kind's.
+    /// The decimals the field shows: its codec's, fixed or maximum precision, a percent field's own, else its unit
+    /// kind's.
     fn shown_decimals(&self) -> RangeInclusive<usize> {
+        if let Some(percent) = self.percent_decimals() {
+            return percent..=percent;
+        }
         match (&self.codec, self.fixed_decimals, self.max_decimals, self.unit_kind) {
             (Some(codec), _, _, _) => 0..=codec.decimals(),
-            // A percentage reads "100.0%": one decimal, written in full; whole at the measured precision.
-            (None, _, _, Some(UnitKind::Percent)) => match self.precision {
-                NumberPrecision::Standard => 1..=1,
-                NumberPrecision::Measured => 0..=0,
-            },
             (None, Some(fixed), _, _) => fixed..=fixed,
             (None, None, Some(max), _) => 0..=max.min(12),
             (None, None, None, Some(kind)) => match (self.precision, self.lengths) {
@@ -536,7 +595,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         let shared = content_sized(cx);
         // A mixed field that reads "Mixed" has no number for a unit to follow: the word takes the room.
         let worded = self.mixed_word && cx.value().is_none();
-        let unit = self.shown_unit(&cx.env.units()).filter(|_| !worded).map(|unit| {
+        let unit = self.shown_unit(&cx.env.units(), cx.value()).filter(|_| !worded).map(|unit| {
             let unit = Adornment::text(unit, cx.style.unit.role).apart().measured(cx);
             if shared { unit.in_column(cx.ui.ctx(), &UNITS) } else { unit }
         });
@@ -682,6 +741,9 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let (sample, role) = if no_zoom_value {
             // Text editors draw their hint in the proportional face.
             (Cow::Borrowed(BLANK), self.options.role)
+        } else if self.derives(shown) {
+            // A derived value is sized as it shows at rest, in parentheses with its unit.
+            (Cow::Owned(self.derived_text(&codec.sample(shown.unwrap_or(&blank)), &cx.env.units())), self.value_role())
         } else {
             (codec.sample(shown.unwrap_or(&blank)), self.value_role())
         };
@@ -711,8 +773,13 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         self.leading = Self::before_text(cx, self.step_arrows);
         self.trailing = self.after_text(cx, &chevrons);
         let names = self.names(|row| cx.env.resolve(&row.label().clone()));
+        // A derived value is measured as it shows at rest, in parentheses with its unit, so its reading takes the
+        // padding it needs as a longer number does.
         self.value_width = cx.value().map_or(0.0, |value| {
-            let text = self.ruled(&cx.env, false, names).format(value);
+            let mut text = self.ruled(&cx.env, false, names).format(value);
+            if self.derives(Some(value)) {
+                text = self.derived_text(&text, &cx.env.units());
+            }
             cx.field_text(&TextRun::new(&text).role(self.value_role())).x
         });
         let placed = self.laid_out(cx.style, cx.content_rect, rtl);
@@ -747,7 +814,11 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         }
         let names = self.names(|row| cx.env.resolve(&row.label().clone()));
         let blank = V::blank().unwrap_or_else(|| V::of_number(self.rule().blank()));
-        cx.text(text_part::<V>(), text, &self.ruled(&cx.env, shown.is_none(), names), shown.unwrap_or(&blank), &self.options);
+        let ruled = self.ruled(&cx.env, shown.is_none(), names);
+        // A derived value shows in parentheses until the field is edited; the text part keeps the plain number for the
+        // edit to start from.
+        self.options.resting = shown.filter(|value| self.derives(Some(*value))).map(|value| self.derived_text(&ruled.format(value), &cx.env.units()));
+        cx.text(text_part::<V>(), text, &ruled, shown.unwrap_or(&blank), &self.options);
         let slider_reason =
             if self.presets.is_some() { "Alt+Down opens the presets list; the slider opens by pointer" } else { "Alt+Down opens the slider" };
         let chevron_rects = &placed.trailing[placed.trailing.len() - chevrons.len()..];

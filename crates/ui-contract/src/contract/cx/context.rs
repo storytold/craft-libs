@@ -42,6 +42,8 @@ pub(crate) trait TextResult {
     fn tab(&self) -> Option<bool>;
     /// The part's caret as a byte offset into its text after the pass; `None` while its widget has no caret.
     fn caret(&self) -> Option<usize>;
+    /// Whether the part lost key focus this pass, edited or not.
+    fn text_lost_focus(&self) -> bool;
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -51,6 +53,7 @@ pub(crate) struct RecordedText<V> {
     pub(crate) left_by_tab: Option<bool>,
     pub(crate) tab: Option<bool>,
     pub(crate) caret: Option<usize>,
+    pub(crate) text_lost_focus: bool,
 }
 
 impl<V: 'static> TextResult for RecordedText<V> {
@@ -68,6 +71,10 @@ impl<V: 'static> TextResult for RecordedText<V> {
 
     fn caret(&self) -> Option<usize> {
         self.caret
+    }
+
+    fn text_lost_focus(&self) -> bool {
+        self.text_lost_focus
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -165,8 +172,6 @@ pub struct CxCore<'a> {
     pub(crate) reset_part: Option<PartRef>,
     /// The sense the root's egui widget carries, for the forwarding widget of a transformed body.
     pub(crate) root_sense: Sense,
-    /// The member of the container's roving group Tab arrives at, set by the group's pick.
-    pub(crate) roving_arrival: Option<Id>,
     /// The member of the container's roving group that moves start from, set by `Cx::roving_lead`.
     pub(crate) roving_lead: Option<Id>,
     /// The component joined the roving group of the body it is shown in this pass (`Cx::join_roving`).
@@ -314,9 +319,10 @@ impl<C: Component> Cx<'_, C> {
     }
 
     /// Names the member of this container's roving group (`ContainerProps.roving`) that Tab arrives at; the
-    /// first member when none is named.
+    /// first member when none is named. Called from `finish`, once the body's members have registered, so the arrival
+    /// is one of this run's members and the run's own record holds it.
     pub fn roving_arrival(&mut self, member: Id) {
-        self.core.roving_arrival = Some(member);
+        focus::name_group_arrival(&self.core.ctx, crate::contract::steps::body_group(self.core.id), (member, None));
     }
 
     /// Names the member of this container's roving group that the next move starts from, in place of the focused one:

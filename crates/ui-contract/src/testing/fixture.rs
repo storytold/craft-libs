@@ -525,7 +525,9 @@ impl Fixture {
         self.frames.record_paint();
         self.frame(Vec::new());
         let mut out = Vec::new();
-        let Some(paint) = self.frames.take_paint() else { return out };
+        let Some(mut paint) = self.frames.take_paint() else { return out };
+        // Only the shapes are asked for: the texture changes since the first recorded frame go unrendered.
+        paint.textures_delta.clear();
         for clipped in paint.shapes {
             let mut shapes = Vec::new();
             fixture::flatten(clipped.shape, &mut shapes);

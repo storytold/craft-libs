@@ -39,6 +39,18 @@ fn reports(fixture: &mut Fixture) -> u32 {
 }
 
 #[trial]
+fn closed_combo_steps_for_each_arrow_in_one_frame() {
+    use craft_ui::testing::{focus, input};
+
+    let mut fixture = Fixture::story(&Story::new("combo_moves", combo));
+    fixture.settle().key(Key::Tab, Modifiers::NONE).settle();
+    assert!(!list_open(&mut fixture), "the combo's list stays closed");
+    let step = || [input::key_press(Key::ArrowUp, Modifiers::NONE), focus::key_release(Key::ArrowUp, Modifiers::NONE)];
+    fixture.frame([step(), step()].into_iter().flatten().collect()).settle();
+    assert_eq!(font(&mut fixture), "Garamond", "the two ArrowUp presses should advance through Georgia");
+}
+
+#[trial]
 fn the_hovered_option_is_previewed_until_the_pointer_leaves_the_list() {
     let mut fixture = Fixture::story(&Story::new("combo_preview", previewing));
     fixture.settle();

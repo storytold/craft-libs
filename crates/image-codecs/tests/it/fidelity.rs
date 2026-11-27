@@ -184,7 +184,7 @@ fn ico_oversize_is_fatal() {
     assert!(w.contains(&W::DimensionsExceeded { max_width: 256, max_height: 256 }));
 }
 #[test]
-fn avif_default_build_write_unsupported() {
+fn feature_config_avif_default_build_write_unsupported() {
     let w = warns(&test_image(ChannelLayout::Rgb, SampleType::U8), Format::Avif);
     if cfg!(feature = "avif") {
         assert!(w.contains(&W::LossyCompression));
@@ -221,10 +221,17 @@ fn every_warning_has_a_message() {
 
 /// The warnings must agree with what actually comes back from the file.
 #[test]
-fn warnings_match_actual_roundtrip_behaviour() {
+fn feature_config_warnings_match_actual_roundtrip_behaviour() {
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs every N-th format, layout and sample type.
+    let step = craft_media_testkit::hostile::divisor();
+    let mut index = 0usize;
     for f in rw_formats() {
         for l in ChannelLayout::ALL {
             for s in SampleType::ALL {
+                index += 1;
+                if !(index - 1).is_multiple_of(step) {
+                    continue;
+                }
                 let img = test_image(l, s);
                 let w = warns(&img, f);
                 let back = decode(&encode(&img, f, &EncodeOptions::default()).unwrap()).unwrap();

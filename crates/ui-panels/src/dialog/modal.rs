@@ -279,7 +279,7 @@ impl<'a> Dialog<'a> {
     /// The larger frame margin.
     #[must_use]
     pub fn roomy(mut self, on: bool) -> Self {
-        self.props = self.props.pad(if on { crate::contract::Pad::Roomy } else { crate::contract::Pad::Regular });
+        self.props = self.props.pad(if on { crate::contract::Pad::Roomy } else { crate::contract::Pad::Dialog });
         self
     }
 
@@ -427,7 +427,7 @@ pub(crate) struct ModalDragStripStyle {
 
 /// The chrome a modal dialog puts over a drag area of the window it covers, so that the window still moves by it.
 /// It sits at the strip on the modal-chrome layer (`Overlay::modal_chrome`), paints nothing, takes no keys and is no
-/// Tab stop: a drag moves the window, and a double click maximizes or restores it as the title bar does.
+/// Tab stop: a drag moves the window, and a double click acts on it as the title bar does.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container)]
 pub(crate) struct ModalDragStrip {

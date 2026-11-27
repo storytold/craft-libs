@@ -338,9 +338,9 @@ impl<'a> FormatText<'a> {
         let panel = Stack::new().label(self.label).show(ui, |ui, _| {
             // The font, across the panel.
             #[cfg(feature = "font-picker")]
-            let family = family_field(ui, &cw, character, families, reason(FormatControl::Font), picker.as_mut());
+            let family = family_field(ui, &cw, character, families, reason(FormatControl::Font), Some(Sizing::FillWidth), picker.as_mut());
             #[cfg(not(feature = "font-picker"))]
-            let family = family_field(ui, &cw, character, families, reason(FormatControl::Font));
+            let family = family_field(ui, &cw, character, families, reason(FormatControl::Font), Some(Sizing::FillWidth));
             edits.extend(character_edits(family.edits));
             if let Some(key) = family.host_picked {
                 edits.push(picked_event(FormatTextChange::HostFont(key), cw.family.as_str()));

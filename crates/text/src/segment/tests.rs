@@ -29,7 +29,7 @@ fn starts(text: &str, options: &Options) -> Vec<char> {
 /// あカッ breaks before ッ with Soft and None (a small kana may start a line) and not with Hard; a
 /// full stop never starts a line, Soft or not.
 #[trial]
-fn kinsoku_mode_decides_whether_a_small_kana_may_start_a_line() {
+fn feature_config_kinsoku_mode_decides_whether_a_small_kana_may_start_a_line() {
     assert_eq!(starts("あカッ", &opts(Kinsoku::Hard)), ['カ']);
     assert_eq!(starts("あカッ", &opts(Kinsoku::Soft)), ['カ', 'ッ']);
     assert_eq!(starts("あカッ", &opts(Kinsoku::None)), ['カ', 'ッ']);
@@ -40,7 +40,7 @@ fn kinsoku_mode_decides_whether_a_small_kana_may_start_a_line() {
 /// The East Asian breaks that None and Soft add to UAX #14 never split a cluster: not after a
 /// joiner, not before a combining mark or variation selector.
 #[trial]
-fn no_kinsoku_mode_breaks_inside_a_cluster() {
+fn feature_config_no_kinsoku_mode_breaks_inside_a_cluster() {
     for k in [Kinsoku::None, Kinsoku::Soft, Kinsoku::Hard] {
         let o = opts(k);
         assert_eq!(pieces("日本\u{200D}語", &o), ["日", "本\u{200D}語"], "{k:?}");

@@ -55,6 +55,8 @@ pub struct SurfaceColors {
     /// The dots or grid an app may draw on the canvas outside the document. Equal to `canvas` (no
     /// pattern) unless the theme sets it.
     pub canvas_pattern: Rgba,
+    /// A full-window page with no document open (a start page); follows `canvas` unless pinned.
+    pub page: Rgba,
     /// Panels, bars and rails.
     pub panel: Rgba,
     /// Window chrome: title bars, toolbars, option bars, rulers and scrollbar tracks; follows
@@ -210,8 +212,11 @@ pub struct StateColors {
 /// Canvas overlays: selection paths, handles, guides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct OverlayColors {
-    /// Marks drawn over `halo` (the rotate cursor); handle outlines follow it.
+    /// Marks drawn over `halo`; handle outlines follow it.
     pub stroke: Rgba,
+    /// A painted pointer's marks over `halo`, a tool's icon included (the circle and crosshair keep their own ink);
+    /// follows `stroke` unless pinned.
+    pub cursor: Rgba,
     /// Bare lines on the canvas: a transform box, path outlines, a pen draft, warp boundaries.
     /// The accent itself, with no halo and no contrast pair, as guides are.
     pub line: Rgba,
@@ -322,6 +327,7 @@ impl ColorTokens {
                 background: c,
                 canvas: c,
                 canvas_pattern: c,
+                page: c,
                 panel: c,
                 chrome: c,
                 raised: c,
@@ -360,6 +366,7 @@ impl ColorTokens {
             },
             overlay: OverlayColors {
                 stroke: c,
+                cursor: c,
                 line: c,
                 halo: c,
                 handle_fill: c,
@@ -436,6 +443,8 @@ color_tokens! {
     SurfaceCanvas = "surface.canvas" => surface.canvas;
     /// `surface.canvas_pattern`
     SurfaceCanvasPattern = "surface.canvas_pattern" => surface.canvas_pattern;
+    /// `surface.page`
+    SurfacePage = "surface.page" => surface.page;
     /// `surface.panel`
     SurfacePanel = "surface.panel" => surface.panel;
     /// `surface.chrome`
@@ -578,6 +587,8 @@ color_tokens! {
     StateStripe = "state.stripe" => state.stripe;
     /// `overlay.stroke`
     OverlayStroke = "overlay.stroke" => overlay.stroke;
+    /// `overlay.cursor`
+    OverlayCursor = "overlay.cursor" => overlay.cursor;
     /// `overlay.line`
     OverlayLine = "overlay.line" => overlay.line;
     /// `overlay.halo`
@@ -657,14 +668,15 @@ impl ColorToken {
     /// (`surface.*` except `scrim` and `shadow`); those must be opaque.
     pub const fn is_opaque_surface(self) -> bool {
         use ColorToken::{
-            SurfaceBackground, SurfaceCanvas, SurfaceCanvasPattern, SurfaceChrome, SurfaceInverse, SurfaceKnob, SurfacePanel, SurfaceRaised,
-            SurfaceSunken,
+            SurfaceBackground, SurfaceCanvas, SurfaceCanvasPattern, SurfaceChrome, SurfaceInverse, SurfaceKnob, SurfacePage, SurfacePanel,
+            SurfaceRaised, SurfaceSunken,
         };
         matches!(
             self,
             SurfaceBackground
                 | SurfaceCanvas
                 | SurfaceCanvasPattern
+                | SurfacePage
                 | SurfaceChrome
                 | SurfacePanel
                 | SurfaceRaised

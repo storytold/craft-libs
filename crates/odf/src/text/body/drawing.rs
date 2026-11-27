@@ -137,7 +137,7 @@ impl Body<'_> {
                     let path = self.shape_path.take().filter(|_| kind == craft_wordmodel::para::ShapeKind::Freeform);
                     let (w, h) = (w.unwrap_or(72.0), h.unwrap_or(1.0));
                     self.note_place(kind, (w, h), &look, float.as_ref());
-                    Some(Inline::Shape { kind, w, h, float: float.map(Box::new), blocks, look, path })
+                    Some(Inline::Shape { kind, w, h, float: float.map(Box::new), blocks, look, path, link: None })
                 }
                 (None, Some((linear, display))) => Some(Inline::Equation { linear, display }),
                 (None, None) if let Some(spec) = chart => Some(Inline::Chart(model::Chart {
@@ -177,7 +177,7 @@ impl Body<'_> {
                 // A group's member goes into the group, at its place in it.
                 if let Some(((x, y), g)) = self.member_at.take().zip(self.group.as_mut().filter(|_| self.note.is_none())) {
                     if g.members.len() < craft_wordmodel::para::MAX_GROUP_CHILDREN {
-                        g.members.push(model::Member { x, y, inline });
+                        g.members.push(model::Member { x, y, inline, link: None });
                     }
                 } else {
                     self.push_inline(inline);
@@ -358,7 +358,7 @@ impl Body<'_> {
         float.z = g.z;
         let float = (float.wrap != craft_wordmodel::para::Wrap::Inline || float.z != 0).then(|| Box::new(float));
         let fit = |v: f32| if v.is_finite() { v.clamp(1.0, MAX_LEN) } else { 1.0 };
-        self.push_inline(Inline::Group { w: fit(x1 - x0), h: fit(y1 - y0), float, members });
+        self.push_inline(Inline::Group { w: fit(x1 - x0), h: fit(y1 - y0), float, members, link: None });
     }
 
     /// Begin a drawing shape (ODF 1.3 §10.3): its size, placement and look, and its text read

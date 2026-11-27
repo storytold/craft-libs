@@ -2,6 +2,8 @@
 //! the overlays report. The host converts its own path type to these each frame and applies the
 //! edits to its own.
 
+use std::collections::HashSet;
+
 use craft_theme::Srgba;
 use kurbo::{BezPath, CubicBez, Point, Vec2};
 
@@ -235,6 +237,8 @@ impl PathSelection {
 
     /// Whether `knot` of `path` draws selected: a selected anchor of the path being edited, or one listed in `others`.
     pub fn draws_selected(&self, path: u64, knot: KnotRef) -> bool {
+        #[cfg(all(test, feature = "screen-testing"))]
+        reads::add(self.others.iter().map(|(key, anchors)| if *key == path { 1 + anchors.len() } else { 1 }).sum());
         self.has_anchor(path, knot) || self.others.iter().any(|(key, anchors)| *key == path && anchors.contains(&knot))
     }
 
@@ -245,6 +249,8 @@ impl PathSelection {
 
     /// Whether `knot` of `path` is a selected anchor.
     pub fn has_anchor(&self, path: u64, knot: KnotRef) -> bool {
+        #[cfg(all(test, feature = "screen-testing"))]
+        reads::add(if self.path == Some(path) { self.anchors.len() } else { 0 });
         self.path == Some(path) && self.anchors.contains(&knot)
     }
 
@@ -265,6 +271,79 @@ impl PathSelection {
         let next = if deleted.knot < sub.knots.len() { Some(deleted.knot) } else { (sub.closed && !sub.knots.is_empty()).then_some(0) };
         let anchors = next.map(|knot| KnotRef::new(deleted.subpath, knot)).into_iter().collect();
         PathSelection::new(Some(path.key), anchors, None).shown(Some(vec![deleted.subpath]))
+    }
+}
+
+/// The anchors a [`PathSelection`] selects, gathered into sets once so that the overlay asks about each knot it lays
+/// out or draws without searching the selection's lists. A path that `others` lists more than once is treated as one
+/// path holding every anchor listed for it.
+#[derive(Default)]
+pub(super) struct SelectedAnchors {
+    path: Option<u64>,
+    anchors: HashSet<KnotRef>,
+    others: HashSet<(u64, KnotRef)>,
+    listed: HashSet<u64>,
+    others_len: usize,
+}
+
+impl SelectedAnchors {
+    /// The anchors `sel` selects.
+    pub(super) fn of(sel: &PathSelection) -> Self {
+        let others_len = sel.others.iter().map(|(_, anchors)| anchors.len()).sum();
+        #[cfg(all(test, feature = "screen-testing"))]
+        reads::add(sel.anchors.len() + others_len);
+        Self {
+            path: sel.path,
+            anchors: sel.anchors.iter().copied().collect(),
+            others: sel.others.iter().flat_map(|(key, anchors)| anchors.iter().map(|knot| (*key, *knot))).collect(),
+            listed: sel.others.iter().map(|(key, _)| *key).collect(),
+            others_len,
+        }
+    }
+
+    /// Whether `knot` of `path` is a selected anchor of the path being edited ([`PathSelection::has_anchor`]).
+    pub(super) fn has_anchor(&self, path: u64, knot: KnotRef) -> bool {
+        self.path == Some(path) && self.anchors.contains(&knot)
+    }
+
+    /// Whether `knot` of `path` draws selected ([`PathSelection::draws_selected`]).
+    pub(super) fn draws_selected(&self, path: u64, knot: KnotRef) -> bool {
+        self.has_anchor(path, knot) || self.others.contains(&(path, knot))
+    }
+
+    /// Whether `knot` is one of the anchors `others` lists for `path`.
+    pub(super) fn listed_anchor(&self, path: u64, knot: KnotRef) -> bool {
+        self.others.contains(&(path, knot))
+    }
+
+    /// Whether `others` lists `path`, with or without anchors.
+    pub(super) fn lists(&self, path: u64) -> bool {
+        self.listed.contains(&path)
+    }
+
+    /// The number of anchors `others` lists over every path.
+    pub(super) fn others_len(&self) -> usize {
+        self.others_len
+    }
+}
+
+/// The number of entries of selection anchor lists read on this thread, for trials that count the overlay's work.
+#[cfg(all(test, feature = "screen-testing"))]
+pub(crate) mod reads {
+    use std::cell::Cell;
+
+    thread_local! {
+        static READS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// Counts `n` entries read.
+    pub(crate) fn add(n: usize) {
+        READS.with(|reads| reads.set(reads.get() + n));
+    }
+
+    /// The entries read since the last call, and starts the count again.
+    pub(crate) fn take() -> usize {
+        READS.with(|reads| reads.replace(0))
     }
 }
 
@@ -373,7 +452,8 @@ pub enum PathEdit {
     },
     /// Add Anchor's drag from a segment: add an anchor to the segment leaving `segment` at `t` and pull out its
     /// handles, as the Pen does: the out handle at `out` and the in handle opposite it through the anchor, a smooth
-    /// knot; once Alt broke the pair, the in handle at `in_ctrl` and a corner knot.
+    /// knot; once Alt broke the pair, the in handle at `in_ctrl` and a corner knot. `by` moves the new anchor from
+    /// the original segment point; both handles are absolute document positions, including that move.
     #[non_exhaustive]
     PullAnchor {
         /// The path's host key.
@@ -382,7 +462,9 @@ pub enum PathEdit {
         segment: KnotRef,
         /// Position along the segment, 0..=1.
         t: f64,
-        /// The new anchor's out handle.
+        /// The move of the new anchor from the original segment point, in document units.
+        by: Vec2,
+        /// The new anchor's out handle, in document coordinates.
         out: Point,
         /// The new anchor's in handle once Alt broke the pair; `None` mirrors `out`.
         in_ctrl: Option<Point>,
@@ -467,7 +549,14 @@ impl PathEdit {
     /// Add Anchor's insert into the segment leaving `segment` at `t` with the new anchor's handles pulled out to `out`
     /// and mirrored, or with the in handle at `in_ctrl`.
     pub fn pull_anchor(path: u64, segment: KnotRef, t: f64, out: Point, in_ctrl: Option<Point>) -> Self {
-        PathEdit::PullAnchor { path, segment, t, out, in_ctrl }
+        Self::pull_anchor_moved(path, segment, t, Vec2::ZERO, out, in_ctrl)
+    }
+
+    /// Add Anchor's insert with its anchor moved by `by` from the original segment point.
+    /// `out` and `in_ctrl` are absolute document positions; `None` mirrors `out` through the moved anchor.
+    /// Hosts applying edits themselves must apply `by` to the inserted anchor before setting the handles.
+    pub fn pull_anchor_moved(path: u64, segment: KnotRef, t: f64, by: Vec2, out: Point, in_ctrl: Option<Point>) -> Self {
+        PathEdit::PullAnchor { path, segment, t, by, out, in_ctrl }
     }
 
     /// The Curvature tool's toggle of `knot` between smooth and corner.

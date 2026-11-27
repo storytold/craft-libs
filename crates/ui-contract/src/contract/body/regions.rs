@@ -52,6 +52,7 @@ pub fn pad_of(tokens: &UiTokens, pad: Pad) -> f32 {
         Pad::Tight => tokens.tokens().space.gap.tight,
         Pad::Control => pads.control,
         Pad::Regular => pads.regular,
+        Pad::Dialog => pads.dialog,
         Pad::Roomy => pads.roomy,
         Pad::Page => pads.roomy * 2.5,
         _ => 0.0,
@@ -136,7 +137,7 @@ impl Gap {
 }
 
 pub(super) fn gap_of(tokens: &UiTokens, gap: Gap) -> f32 {
-    let gaps = &tokens.tokens().space.gap;
+    let (gaps, page) = (&tokens.tokens().space.gap, &tokens.tokens().size.page.gap);
     match gap {
         Gap::None => 0.0,
         Gap::Tight => gaps.tight,
@@ -146,6 +147,12 @@ pub(super) fn gap_of(tokens: &UiTokens, gap: Gap) -> f32 {
         Gap::CardColumn => gaps.card_column,
         Gap::CardRow => gaps.card_row,
         Gap::Inline => gaps.inline,
+        Gap::PageTitle => page.title,
+        Gap::PageLead => page.lead,
+        Gap::PageActions => page.actions,
+        Gap::PageSection => page.section,
+        Gap::PageHeading => page.heading,
+        Gap::PageLink => page.link,
         _ => gaps.row,
     }
 }
@@ -276,11 +283,12 @@ impl BodyHooks<'_> {
             regions.footer.max.y = bottom + self.measured_footer.y;
         }
         let mut footer_rect = regions.footer;
+        // The footer's start edge moves to the control column's, never past its own end edge.
         if props.label.is_some() {
             if rtl {
-                footer_rect.max.x = body_rect.max.x.clamp(footer_rect.min.x, footer_rect.max.x);
+                footer_rect.max.x = body_rect.max.x.min(footer_rect.max.x).max(footer_rect.min.x);
             } else {
-                footer_rect.min.x = body_rect.min.x.clamp(footer_rect.min.x, footer_rect.max.x);
+                footer_rect.min.x = body_rect.min.x.max(footer_rect.min.x).min(footer_rect.max.x);
             }
         }
         let offset = if rtl { regions.footer.max.x - footer_rect.max.x } else { footer_rect.min.x - regions.footer.min.x };
@@ -355,7 +363,8 @@ impl<'b> BodyHooks<'b> {
     }
 
     /// The header's line inside its inset, less the slots of the container's own header parts at its two edges: the
-    /// rect the header's children get, and the slots.
+    /// rect the header's children get, and the slots. An end edge that narrows (`HeaderParts::end_narrows`) gives up
+    /// room, down to its least, until the children keep their room.
     pub(super) fn header_line(&self, header: Rect, inset: f32, parts: HeaderParts, rtl: bool) -> (Rect, HeaderSlots) {
         let mut flow = craft_behavior::Flow::new(header.shrink2(Vec2::new(inset, 0.0)), rtl);
         let mut slots = HeaderSlots::default();
@@ -364,8 +373,12 @@ impl<'b> BodyHooks<'b> {
             slots.start = Some(slot);
             flow = rest.take_start(self.region_gap).1;
         }
-        if parts.end > 0.0 {
-            let (slot, rest) = flow.take_end(parts.end);
+        let end = match parts.end_least {
+            Some(least) => parts.end.min((flow.rect().width() - self.region_gap - parts.keep).max(least)),
+            None => parts.end,
+        };
+        if end > 0.0 {
+            let (slot, rest) = flow.take_end(end);
             slots.end = Some(slot);
             flow = rest.take_end(self.region_gap).1;
         }
@@ -466,7 +479,9 @@ impl<'b> BodyHooks<'b> {
         } else if !self.given.0 {
             self.shared_width(room.x, props).max(inner.width())
         } else {
-            inner.width()
+            // A container given less width than its padding has an inverted inner rect: its regions take no width,
+            // at their start edge.
+            inner.width().max(0.0)
         };
         // A measure with no room limit along x offers an unbounded width. Left to right the body runs from its start
         // edge to +inf as egui allows; right to left its start edge is the right one, and an unbounded width would put

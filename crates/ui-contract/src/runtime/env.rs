@@ -9,7 +9,7 @@ pub use label::{Label, Message, Word};
 #[doc(hidden)]
 pub use shell::ShellEntry;
 pub use shell::{BodyMode, PageBandRoom, RevealEdge, ShellCx, ShellRegions, SlotKey, WindowKey};
-pub use units::{ColumnSize, LengthUnits, PointSize, UnitKind, UnitWords, Units};
+pub use units::{ColumnSize, LengthUnits, PointSize, UnitKind, UnitWords, Units, ZoomPrecision};
 
 use crate::runtime::commands::CommandChain;
 use crate::runtime::egui::memory::{self, FastMap};
@@ -78,7 +78,8 @@ pub(crate) struct FooterSlotOf {
 }
 
 /// The flow facts of the body around a memoized view that its content is laid out by: whether that body is a
-/// content-sized or a given column, the axes it sizes from its content, whether the view runs in a least measure, the
+/// content-sized or a given column, the axes it sizes from its content, the axis it shares among the children that fill
+/// it, whether the view runs in a least measure, the
 /// axes a scrolling body leaves unbounded, whether it fills a beside label's cell and whether its leaves fit the view's
 /// room (`Scoped::view_fits`). A measuring run of a container or a row lays the view out under other facts than its
 /// real run, so they are a fact of the view's place, which each kind of run compares on its own (`lazy::Place`,
@@ -88,6 +89,7 @@ pub(crate) struct Flow {
     content_column: bool,
     given_column: bool,
     content: (bool, bool),
+    shares: Option<craft_behavior::Axis>,
     least: bool,
     unbounded: (bool, bool),
     cell_fills: bool,
@@ -110,7 +112,11 @@ pub struct Scoped {
     #[doc(hidden)]
     pub key: EnvKey,
     /// The key of what a memoized view shown in the scope inherits beyond `key` (`scope_key`), once a view asked.
-    scope_key: std::sync::OnceLock<u128>,
+    scope_key: std::sync::OnceLock<(u128, bool)>,
+    /// The key of the memoized view whose content the scope runs in, when that key follows every input of the view
+    /// (`MemoKey::follows`): its content version. A body inside measures under it (`EnvFacts`), so a run of the view
+    /// with other inputs measures afresh instead of taking a transcript its last inputs left.
+    pub(crate) view_version: Option<u128>,
     /// Ambient control size; the root default is `Md`.
     pub size: ControlSize,
     /// How the icon-only buttons of the scope show their glyph; the root default and a layer's is `Control`.
@@ -122,7 +128,8 @@ pub struct Scoped {
     /// How wheel takers inside take the wheel (`WheelScope`). A layer opened from inside starts plain.
     pub wheel: WheelScope,
     /// The flow direction: layout order, arrow keys and roving. A container whose axis keeps its order
-    /// (`Props::ltr_axis`) sets it to left to right for what is inside.
+    /// (`Props::ltr_axis`) sets it to left to right for what is inside. A layer opened from inside starts at
+    /// `text_direction`.
     pub direction: Direction,
     /// The paragraph direction of text: the interface's, which a container that keeps its axis order leaves alone.
     /// The bidi order inside a label follows its script.
@@ -187,6 +194,10 @@ pub struct Scoped {
     /// extents of the other children and the gaps, over the number of children that fill. `None` while the body is
     /// measured, and without a measuring run of this pass.
     pub(crate) fill_share: Option<f32>,
+    /// The memoized view whose content the scope's direct children run in, with the axis the body around that view
+    /// shares (its `fill_body`'s): a child given that axis to fill tells the view (`layout::fill_size`), which then is
+    /// a child that fills that body (`contract::lazy`).
+    pub(crate) fill_view: Option<(Id, craft_behavior::Axis)>,
     /// The shrink step of the unwrapped `Row` or `Stack` body that encloses the scope, as its direct children in flow
     /// take part in it.
     pub(crate) shrink: Option<Shrink>,
@@ -371,6 +382,10 @@ pub struct ItemFacts {
     /// The keys of the toggle columns that have one (`ToggleColumn::key`), which their cells show in the tooltip.
     #[doc(hidden)]
     pub toggle_keys: Vec<(craft_behavior::ColumnKey, craft_keymap::Chord)>,
+    /// The toggle columns whose cell in this item does not flip (`ItemSource::toggle_enabled` is false, or the item is
+    /// a section): the row paints such a cell inactive.
+    #[doc(hidden)]
+    pub closed_toggles: Vec<craft_behavior::ColumnKey>,
     /// Each column's alignment and whether its figures are tabular, from its `ColumnSpec`: a row places its cells'
     /// text by them.
     #[doc(hidden)]
@@ -417,10 +432,29 @@ impl Scoped {
         !self.content.0 && !self.content_column
     }
 
+    /// The direction of a layer opened from this scope: the interface's (`text_direction`), which an axis that keeps
+    /// its left-to-right order (`Props::ltr_axis`) leaves alone. The layer flows in it (`start_layer`), and its side
+    /// and alignment to its anchor mirror by it.
+    pub fn layer_direction(&self) -> Direction {
+        self.text_direction
+    }
+
     /// Starts a layer from its opener's scope: the inherited group stays, the layer-local fields start fresh, and the
     /// layer is no line of a bar it was opened from. A layer's content measures and runs in this.
+    ///
+    /// The layer is outside its opener's flow: an inside label and a filling cell belong to the beside label's own
+    /// control, and the opener's least measure is not the layer's. A tooltip of a control in an inspector cell keeps
+    /// its text width, not the layer's cap.
+    ///
+    /// The layer flows in the interface's direction (`text_direction`): an axis that keeps its left-to-right order
+    /// (`Props::ltr_axis`) and a scope that turns only the flow keep that order for their own content, not for a
+    /// popover or bar opened from inside them.
     pub(crate) fn start_layer(&mut self) {
+        self.direction = self.layer_direction();
         self.start_room();
+        self.inside_label = None;
+        self.cell_fills = false;
+        self.least = false;
         self.bracket = None;
         self.measure = None;
         self.arena = None;
@@ -457,6 +491,7 @@ impl Scoped {
         self.column_row = false;
         self.fill_body = None;
         self.fill_share = None;
+        self.fill_view = None;
         self.shrink = None;
         self.column = None;
         self.offered = None;
@@ -476,6 +511,7 @@ impl Scoped {
             || self.column_row
             || self.fill_body.is_some()
             || self.fill_share.is_some()
+            || self.fill_view.is_some()
             || self.shrink.is_some()
             || self.column.is_some()
             || self.offered.is_some()
@@ -486,12 +522,17 @@ impl Scoped {
     /// content axes. The view's content then measures and
     /// fills as it would shown without the view: a child that fills takes its measured size where the body sizes from
     /// content, never the open room. Where a leaf shown here would fit its room (`view_fits`), the leaves of the view's
-    /// content fit the room the view is given (`Shrink::Fit`). A view that is a unit of a shrinking `Row` sizes from its
-    /// content along x, as the row counted it: a child that fills there takes its measured width, not the row's flow
-    /// region a view the row does not narrow is shown in.
-    pub(crate) fn start_view_room(&mut self) {
+    /// content fit the room the view is given (`Shrink::Fit`).
+    ///
+    /// In a body that shares an axis among the children that fill it (`fill_body`), a direct child of the content
+    /// given that axis to fill tells the view `view` (`fill_view`): the view is then one of the children that fill the
+    /// body, given its share as its room, as the child shown without the view would be. A view that is a unit of a
+    /// shrinking `Row` that does not share its width sizes from its content along x, as the row counted it: a child
+    /// that fills there takes its measured width, not the row's flow region a view the row does not narrow is shown in.
+    pub(crate) fn start_view_room(&mut self, view: Id) {
         let fits = self.view_fits();
         let row_unit = matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_)));
+        let shares = self.shares();
         let (content_column, given_column, egui_cell) = (self.content_column, self.given_column, self.egui_cell);
         // The view stands on the line of the row around it only to fill it, as a levelled unit does: a fill-width row in
         // it (a bar in a shell slot) takes the line's height and centres on it, as shown without the view; its children
@@ -500,11 +541,20 @@ impl Scoped {
         self.start_room();
         (self.content_column, self.given_column, self.egui_cell) = (content_column, given_column, egui_cell);
         self.row_line = line;
+        self.fill_view = shares.map(|axis| (view, axis));
         if fits {
             self.shrink = Some(Shrink::Fit);
         }
-        if row_unit {
+        if row_unit && shares != Some(craft_behavior::Axis::X) {
             self.content.0 = true;
+        }
+    }
+
+    /// The axis the enclosing body shares among its direct children that fill it (`fill_body`).
+    pub(crate) const fn shares(&self) -> Option<craft_behavior::Axis> {
+        match self.fill_body {
+            Some((_, axis)) => Some(axis),
+            None => None,
         }
     }
 
@@ -520,8 +570,9 @@ impl Scoped {
     /// the flow facts, which its place compares): the scope's state (enabled, read-only, size, glyphs, ink, surface,
     /// wheel, directions), the containers around it (arena, roving group, transform, collection item and row, inside
     /// label, footer slot, line length, scroll owner), the command chain, motion, the host's formats and date, and every
-    /// app value. Computed once per scope, on the first view that asks; the bytes it fed are counted then.
-    pub(crate) fn scope_key(&self) -> u128 {
+    /// app value. Computed once per scope, on the first view that asks; the bytes it fed are counted then. The flag says
+    /// whether the key follows every input it holds (`MemoKey::follows`).
+    pub(crate) fn scope_key(&self) -> (u128, bool) {
         *self.scope_key.get_or_init(|| {
             use crate::contract::{MemoKey, MemoProps as _};
             let mut key = MemoKey::of_view(&self.ctx);
@@ -551,7 +602,7 @@ impl Scoped {
             crate::runtime::measure::count_memo_key_bytes(&self.ctx, key.bytes() + value_bytes);
             #[cfg(not(feature = "testing"))]
             let _ = value_bytes;
-            key.finish()
+            (key.finish(), key.follows())
         })
     }
 
@@ -561,6 +612,7 @@ impl Scoped {
             content_column: self.content_column,
             given_column: self.given_column,
             content: self.content,
+            shares: self.shares(),
             least: self.least,
             unbounded: self.unbounded,
             cell_fills: self.cell_fills,
@@ -622,6 +674,7 @@ impl Env {
     /// The scope's number format and unit words, to read and write numbers with their unit.
     pub fn units(&self) -> Units {
         Units::new(self.format.clone(), self.words::<UnitWords>(), self.words.clone(), self.values.get::<PointSize>())
+            .with_zoom_precision(self.values.get::<ZoomPrecision>())
     }
 
     /// How long ago `seconds` was, in the scope's language and digits: "Just now", "3 minutes ago", "Yesterday".
@@ -680,6 +733,7 @@ impl Env {
                 }),
                 key,
                 scope_key: std::sync::OnceLock::new(),
+                view_version: None,
                 ink: Ink::default(),
                 surface: SurfaceKind::Background,
                 size: ControlSize::Md,
@@ -710,6 +764,7 @@ impl Env {
                 footer_slot: None,
                 fill_body: None,
                 fill_share: None,
+                fill_view: None,
                 shrink: None,
                 column: None,
                 least: false,
@@ -742,6 +797,8 @@ impl Env {
     ///
     /// While apps still use `add_enabled_ui`, it also ANDs `ui.is_enabled()`, outside sizing passes.
     pub fn of(ui: &Ui) -> Env {
+        #[cfg(feature = "testing")]
+        WALKS.with(|walks| walks.set(walks.get() + 1));
         let ctx = ui.ctx();
         let viewport = pass::current_viewport(ctx);
         // The root env stands for an entry above the whole stack.
@@ -819,21 +876,29 @@ impl Env {
         Env { scoped: Arc::new(scoped) }
     }
 
-    /// A child entry that changes layer-local fields only (arena, item, row, roving, grid, scroll owner,
-    /// transform, ink): the key carries over, because none of its inputs change.
     /// This env for a body that starts a layout room of its own (a layer, a pane): the flow grid and the content
-    /// column of the room around it do not reach in.
+    /// column of the room around it do not reach in. When opened inside a bar, it leaves the bar (`InBar(false)`) and
+    /// recomputes the env key so styles do not reuse the bar's cache entries.
     pub(crate) fn new_room(&self) -> Env {
-        self.derive_local(|scoped| {
+        let reset = |scoped: &mut Scoped| {
             scoped.start_room();
             scoped.bracket = None;
             scoped.lazy = None;
             scoped.measure = None;
-            // A pane opened from a bar is not the bar's line.
-            scoped.inherited_mut().values.set(InBar(false));
-        })
+        };
+        if self.get::<InBar>().0 {
+            self.derive(|scoped| {
+                reset(scoped);
+                // A pane opened from a bar is not the bar's line.
+                scoped.inherited_mut().values.set(InBar(false));
+            })
+        } else {
+            self.derive_local(reset)
+        }
     }
 
+    /// A child entry that changes layer-local fields only (arena, item, row, roving, grid, scroll owner,
+    /// transform, ink): the key carries over, because none of its inputs change.
     pub(crate) fn derive_local(&self, f: impl FnOnce(&mut Scoped)) -> Env {
         let mut scoped = (*self.scoped).clone();
         f(&mut scoped);
@@ -903,6 +968,18 @@ impl Env {
     pub(crate) fn set_root(ctx: &Context, viewport: ViewportId, env: Env) {
         PerViewport::<ViewportEnvs>::with(ctx, viewport, |envs| envs.root = Some(env));
     }
+}
+
+#[cfg(feature = "testing")]
+thread_local! {
+    static WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread walked a `Ui` stack for its env (`Env::of`).
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn env_walks() -> u64 {
+    WALKS.with(std::cell::Cell::get)
 }
 
 /// One viewport's env entries by the `Ui` they are installed for, and its root env. The lock is held only to

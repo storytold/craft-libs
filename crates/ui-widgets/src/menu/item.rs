@@ -37,15 +37,6 @@ const SAMPLES: ColumnKey = ColumnKey::new("menu_samples");
 /// over: opens its own submenu, or closes the open one. A row the pointer does not cross that way takes over at once.
 const AIM_REST: f64 = 0.3;
 
-/// `label` with a `&` marker before the first character that is `letter`, so the level's assignment honours a row's
-/// own mnemonic; a label without that letter is left as it is.
-fn with_marker(label: &str, letter: char) -> String {
-    match label.char_indices().find(|(_, c)| c.eq_ignore_ascii_case(&letter)) {
-        Some((at, _)) => format!("{}&{}", &label[..at], &label[at..]),
-        None => label.to_owned(),
-    }
-}
-
 /// Closes the menus out from the one a picked row runs in. Focus leaves them first, so a command the row fires after
 /// this reaches the stop focus returns to. Every row that runs on a pick (`MenuItem`, `MenuIconRow`) closes through
 /// this one path.
@@ -57,7 +48,7 @@ pub(crate) fn close_on_pick(ctx: &Context) {
 
 /// What the pointer and the keyboard did to a menu row in this pass. Every row that can be the level's active row
 /// (`MenuItem`, `MenuIconRow`) reads it through [`RowInput::of`] and makes itself active by [`RowInput::activate`], so
-/// the rule lives once.
+/// the rules live once: which row is active, and what the first key in a menu the pointer opened does.
 pub(crate) struct RowInput {
     /// The pointer moved in this pass.
     pub moving: bool,
@@ -65,6 +56,10 @@ pub(crate) struct RowInput {
     pub hovered: bool,
     /// The row holds the focus.
     pub focused: bool,
+    /// The row took Enter or Space as the first key in a menu the pointer opened, holding the focus the menu gave it
+    /// as it opened, while the pointer had not lit it: the row does not run on it and is not made active by it.
+    /// [`RowInput::of`] answers the key instead.
+    pub withheld: bool,
     keyboard: bool,
     gained: bool,
     started: bool,
@@ -73,25 +68,49 @@ pub(crate) struct RowInput {
 impl RowInput {
     /// The row's input in this pass; the row's memory keeps the focus and keyboard facts of the pass before, to see
     /// when focus lands on the row or the keyboard starts driving the menu.
+    ///
+    /// Enter or Space as the first key in a menu the pointer opened reaches the focused row, which the pointer may never
+    /// have lit: the row withholds it, and the key runs the row the pointer lit, or with none lit only closes the menu,
+    /// as a native menu does. A submenu row is no exception: the first key opens no submenu the pointer did not light.
+    /// Only the focus the menu gave as it opened is withheld from: a row or part that a request focused (an AccessKit
+    /// `Focus`, the app) was aimed at, and the key runs it.
     pub(crate) fn of<C: Component>(cx: &mut Cx<'_, C>, level: &MenuLevel) -> RowInput {
-        let moving = cx.core.ctx.input(|input| input.pointer.delta() != Vec2::ZERO);
+        // The rest restarts at each move: a tracked read.
+        let moving = crate::runtime::pointer::frame(&cx.core.ctx).delta != Vec2::ZERO;
         let hovered = cx.response.hovered();
         let focused = cx.is_focused();
         let keyboard = level.keyboard();
+        let by_key = cx.activation().is_some_and(|activation| activation.by_key);
+        let id = cx.id;
         let rest = cx.memory::<Rest>();
         let gained = focused && !rest.focused;
         rest.focused = focused;
         let started = keyboard && !rest.keyboard;
         rest.keyboard = keyboard;
-        RowInput { moving, hovered, focused, keyboard, gained, started }
+        let opened = focused && crate::runtime::focus::focus_came_with_open(&cx.core.ctx);
+        let lit = level.active_enabled();
+        let withheld = started && by_key && opened && lit != Some(id);
+        if withheld {
+            match lit {
+                Some(row) => level.run(row),
+                None => {
+                    let ctx = &cx.core.ctx;
+                    if let Some(menu) = crate::runtime::focus::running_menu(ctx) {
+                        crate::runtime::focus::return_from_pick(ctx, crate::runtime::focus::PickedIn::Menus(menu));
+                        crate::runtime::overlay::request_close(ctx, menu, crate::runtime::overlay::CloseReason::Requested);
+                    }
+                }
+            }
+        }
+        RowInput { moving, hovered, focused, withheld, keyboard, gained, started }
     }
 
     /// Makes the row `id` the level's active row when it `runs` and the keyboard landed on it. The pointer's row is
     /// made active by its `Menu` before the rows run (`MenuLevel::follow_pointer`); the focused row of a menu the
-    /// pointer opened is not active until the keyboard lands on it.
+    /// pointer opened is not active until the keyboard lands on it, and a withheld first key does not make it so.
     pub(crate) fn activate(&self, ctx: &Context, id: Id, level: &MenuLevel, runs: bool) {
         let landed = self.focused && self.keyboard && (self.gained || self.started);
-        if runs && landed && level.activate_row(id) {
+        if runs && !self.withheld && landed && level.activate_row(id) {
             frame::request_repaint(ctx);
         }
     }
@@ -253,7 +272,8 @@ pub struct MenuItem<'a> {
     /// A radio mark, shown while the value is true; the row reserves the mark column either way.
     #[prop]
     radio_mark: Option<bool>,
-    /// The letter that runs the row, in place of the level's own pick.
+    /// The letter that runs the row, in place of the level's own pick. A letter the label lacks still runs the row,
+    /// with nothing underlined.
     #[prop]
     mnemonic: Option<char>,
     /// A muted second line under the label, in the caption role: the row is a line taller and as wide as the longer
@@ -278,6 +298,8 @@ pub struct MenuItem<'a> {
     entry: Option<bool>,
     sample: Option<(crate::list::ThumbAspect, crate::primitives::FacePaint)>,
     ran: bool,
+    /// The row took a key activation it does not run: the first key in a menu the pointer opened (`update`).
+    withheld: bool,
     opens: bool,
     open: bool,
     active: bool,
@@ -306,6 +328,7 @@ impl<'a> MenuItem<'a> {
             entry: None,
             sample: None,
             ran: false,
+            withheld: false,
             opens: false,
             open: false,
             active: false,
@@ -431,11 +454,7 @@ impl<'a> MenuItem<'a> {
     }
 
     fn register(&self, ctx: &Context, level: &MenuLevel, id: Id, label: &str, enabled: bool) {
-        let text = match self.mnemonic {
-            Some(letter) => with_marker(label, letter),
-            None => label.to_owned(),
-        };
-        level.register(ctx.cumulative_pass_nr(), Row { id, text, enabled });
+        level.register(ctx.cumulative_pass_nr(), Row { id, text: label.to_owned(), own: self.mnemonic, enabled });
     }
 
     /// The row's mark and icon columns with the gap after each: as wide as the column group of the menu body gives
@@ -499,10 +518,8 @@ impl Component for MenuItem<'_> {
         // A row's content sits `space.pad.regular` in from the popup's own padding, so a label starts clear of the edge.
         let mut metrics = control.metrics();
         metrics.padding = Insets::new(tokens.space.pad.regular, tokens.space.pad.regular, metrics.padding.top, metrics.padding.bottom);
-        if key.compact {
-            // The text line sets the height, as in a classic menu: no control height floor.
-            metrics.min_size.y = 0.0;
-        }
+        // The text line sets a compact row's height, as in a classic menu; any other row stands a menu row high.
+        metrics.min_size.y = if key.compact { 0.0 } else { cx.menu_row_height() };
         MenuItemStyle {
             surface,
             metrics,
@@ -607,6 +624,8 @@ impl Component for MenuItem<'_> {
             }
         };
         let takes_over = hovered && (!heading || rested >= AIM_REST);
+        // The first key in a menu the pointer opened, on a row the pointer did not light, is answered by `RowInput::of`.
+        let first_key = input.withheld;
         // The focused row of a menu that the pointer opened is not active: the keyboard makes it so when focus lands on
         // it or the keyboard starts driving the menu.
         input.activate(&ctx, cx.id, &level, enabled);
@@ -617,7 +636,8 @@ impl Component for MenuItem<'_> {
             frame::request_repaint_after(&ctx, AIM_REST - rested);
         }
         let typed = enabled && level.take_run(cx.id);
-        let asked = enabled && (typed || cx.activation().is_some());
+        self.withheld = first_key;
+        let asked = enabled && (typed || (cx.activation().is_some() && !first_key));
         if self.submenu {
             self.opens = asked || (enabled && forward) || (enabled && takes_over);
             if self.opens {
@@ -655,9 +675,10 @@ impl Component for MenuItem<'_> {
         self.ran = asked;
     }
 
-    /// A submenu row never runs: it opens its submenu, and the menus stay open.
+    /// A submenu row never runs: it opens its submenu, and the menus stay open. Nor does a row whose key activation it
+    /// withheld: the row the pointer lit runs instead, or none.
     fn activated(&self, cx: &Cx<'_, Self>) -> bool {
-        !self.submenu && cx.activation().is_some()
+        !self.submenu && !self.withheld && cx.activation().is_some()
     }
 
     fn flags(&self) -> Flags {
@@ -705,7 +726,7 @@ impl Component for MenuItem<'_> {
             let icon = if icon.color.is_some() { icon } else { icon.color(ink) };
             draw.icon(centred(slot), &icon);
         }
-        let mnemonic = if level.keyboard() || cx.modifiers().alt { level.mnemonic_of(cx.id).map(|(_, at)| at) } else { None };
+        let mnemonic = if level.keyboard() || cx.modifiers().alt { level.mnemonic_of(cx.id).and_then(|(_, at)| at) } else { None };
         let look = self.label_look(cx.style);
         let run = TextRun::mnemonic(text.as_str(), mnemonic).elide().role(look.role).color(cx.resolve(&look.color));
         // A sample-only row draws no label: the label stays its accessible name and its mnemonic source.

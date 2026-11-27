@@ -60,10 +60,10 @@ impl<'a> OverlayUi<'a> {
         self.closed.iter().find(|(id, _)| *id == popup.id).map(|(_, reason)| *reason)
     }
 
-    /// Whether the owner lays out right to left: a layer its caller places by position mirrors its own geometry by it,
-    /// as an anchored placement mirrors the side.
+    /// Whether a layer the owner opens lays out right to left (`Scoped::layer_direction`): a layer its caller places by
+    /// position mirrors its own geometry by it, as an anchored placement mirrors the side.
     pub fn is_rtl(&self) -> bool {
-        self.env.direction.is_rtl()
+        self.env.layer_direction().is_rtl()
     }
 
     /// The anchor at the rect of the toggling part `part` of the owner. The layer's placement mirrors the side and
@@ -159,6 +159,11 @@ impl<'a> OverlayUi<'a> {
         };
         // An in-place editor is part of its owner: the owner's node reports no popup of it.
         let (kind, peers, reported) = (overlay.popup, overlay.opener.is_none(), overlay.role != LayerRole::InPlaceEditor);
+        // A popup with no recorded opener hangs from this component: when the component goes disabled, its anchor is
+        // gone, as for an explicit opener that goes disabled (`dismissal`).
+        if open && peers && overlay.dismiss.anchor_gone && !self.resolved.enabled {
+            crate::runtime::overlay::request_close(self.ctx, popup.id, CloseReason::AnchorGone);
+        }
         let ctx = self.ctx.clone();
         with_popups(&ctx, |popups| {
             if reported {

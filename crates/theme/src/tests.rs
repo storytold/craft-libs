@@ -18,6 +18,12 @@ fn contrast_moves_keep_greys_neutral() {
     }
 }
 
+#[test]
+fn non_text_contrast_min_matches_theme_values() {
+    assert_eq!(non_text_contrast_min(Contrast::Standard), 3.0);
+    assert_eq!(non_text_contrast_min(Contrast::High), 4.5);
+}
+
 /// A user's accent over each built-in theme, in each mode and contrast and for each app the theme overrides, gives
 /// the accent fill its own colour even where the theme fixes the fill, and fails no contrast pair the theme alone
 /// passes.
@@ -46,4 +52,20 @@ fn an_accent_over_a_theme_takes_its_fill_and_fails_no_pair_the_theme_passes() {
             }
         }
     }
+}
+
+/// A user's accent leaves a theme's pinned pointer colour as it is, and an unpinned one follows `overlay.stroke` to the
+/// new accent.
+#[test]
+fn an_accent_over_a_theme_keeps_its_pinned_cursor_colour() {
+    let appearance =
+        Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size: Size::default(), text_size: TextSize::default(), reduced_motion: false };
+    let seed = Rgba::rgb(0x12, 0x80, 0x30);
+    let vectorcraft = builtins().iter().find(|t| t.id.as_str() == "craft.vectorcraft-modern").unwrap();
+    let pinned = resolve(&vectorcraft.with_accent(seed), appearance, None).tokens;
+    assert_eq!(pinned.color(ColorToken::OverlayCursor), Rgba::WHITE, "the theme's pin stays");
+    let pro = builtins().iter().find(|t| t.id.as_str() == "craft.pro").unwrap();
+    let (before, after) = (resolve(pro, appearance, None).tokens, resolve(&pro.with_accent(seed), appearance, None).tokens);
+    assert_eq!(after.color(ColorToken::OverlayCursor), after.color(ColorToken::OverlayStroke), "an unpinned cursor follows the stroke");
+    assert_ne!(after.color(ColorToken::OverlayCursor), before.color(ColorToken::OverlayCursor), "and with it the new accent");
 }

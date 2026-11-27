@@ -96,3 +96,78 @@ fn a_reported_text_scale_reaches_the_systems_text_scale_and_raises_the_generatio
     report_os_text_scale(&frames.ctx, None);
     assert_eq!(system_text_scale(&frames.ctx), None);
 }
+
+/// egui's font coverage transfer function follows the pass's resolved theme mode before `Fonts::begin_pass`, so
+/// dark-on-light text never renders with the dark-mode curve (or vice versa) when the app's mode differs from the
+/// OS's, and single-mode themes keep their own variant's curve.
+#[trial]
+fn egui_font_transfer_function_follows_the_resolved_theme_mode() {
+    use craft_theme::ThemeId;
+    use egui::epaint::FontColorTransferFunction;
+
+    let mut frames = Frames::new();
+    let mut transfer = None;
+
+    // Light app on a dark OS must use the light-mode transfer function on the same pass.
+    frames.root(RootEnv::new().mode(ModeChoice::Light));
+    frames.frame(vec![egui::Event::SystemTheme(egui::Theme::Dark)], |ui| {
+        transfer = Some(ui.visuals().text_options.color_transfer_function);
+    });
+    assert_eq!(transfer, Some(FontColorTransferFunction::LIGHT_MODE_DEFAULT));
+
+    // Dark app on a light OS must use the dark-mode transfer function on the same pass.
+    frames.root(RootEnv::new().mode(ModeChoice::Dark));
+    frames.frame(vec![egui::Event::SystemTheme(egui::Theme::Light)], |ui| {
+        transfer = Some(ui.visuals().text_options.color_transfer_function);
+    });
+    assert_eq!(transfer, Some(FontColorTransferFunction::DARK_MODE_DEFAULT));
+
+    // System mode tracks OS theme changes immediately.
+    frames.root(RootEnv::new().mode(ModeChoice::System));
+    frames.frame(vec![egui::Event::SystemTheme(egui::Theme::Dark)], |ui| {
+        transfer = Some(ui.visuals().text_options.color_transfer_function);
+    });
+    assert_eq!(transfer, Some(FontColorTransferFunction::DARK_MODE_DEFAULT));
+    frames.frame(vec![egui::Event::SystemTheme(egui::Theme::Light)], |ui| {
+        transfer = Some(ui.visuals().text_options.color_transfer_function);
+    });
+    assert_eq!(transfer, Some(FontColorTransferFunction::LIGHT_MODE_DEFAULT));
+
+    // A light-only theme keeps the light-mode transfer function even when dark mode is requested.
+    let classic = ThemeId::parse("craft.classic").expect("classic theme id");
+    frames.root(RootEnv::new().theme(classic).mode(ModeChoice::Dark));
+    frames.frame(vec![egui::Event::SystemTheme(egui::Theme::Dark)], |ui| {
+        transfer = Some(ui.visuals().text_options.color_transfer_function);
+    });
+    assert_eq!(transfer, Some(FontColorTransferFunction::LIGHT_MODE_DEFAULT));
+}
+
+/// An app's own curve for a mode (#3516): the dark curve it sets on egui's dark style is the one dark passes use,
+/// while light passes still get the light curve, and the app's dark curve comes back on the next dark pass.
+#[trial]
+fn an_app_s_own_dark_text_curve_survives_the_mode_sync() {
+    use egui::epaint::FontColorTransferFunction;
+
+    let mut frames = Frames::new();
+    let own = FontColorTransferFunction::Gamma(0.8);
+    frames.ctx.style_mut_of(egui::Theme::Dark, |style| style.visuals.text_options.color_transfer_function = own);
+    let mut transfer = None;
+
+    frames.root(RootEnv::new().mode(ModeChoice::Dark));
+    frames.frame(vec![egui::Event::SystemTheme(egui::Theme::Light)], |ui| {
+        transfer = Some(ui.visuals().text_options.color_transfer_function);
+    });
+    assert_eq!(transfer, Some(own), "a dark pass keeps the app's dark curve");
+
+    frames.root(RootEnv::new().mode(ModeChoice::Light));
+    frames.frame(vec![egui::Event::SystemTheme(egui::Theme::Dark)], |ui| {
+        transfer = Some(ui.visuals().text_options.color_transfer_function);
+    });
+    assert_eq!(transfer, Some(FontColorTransferFunction::LIGHT_MODE_DEFAULT), "a light pass gets the light curve");
+
+    frames.root(RootEnv::new().mode(ModeChoice::Dark));
+    frames.frame(vec![egui::Event::SystemTheme(egui::Theme::Dark)], |ui| {
+        transfer = Some(ui.visuals().text_options.color_transfer_function);
+    });
+    assert_eq!(transfer, Some(own), "the app's dark curve comes back with dark mode");
+}

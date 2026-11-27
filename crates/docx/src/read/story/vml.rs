@@ -10,14 +10,80 @@ struct VmlGroupSpace {
     depth: usize,
 }
 
+/// Borrowed templates for one picture. Build once so repeated missing IDs do not
+/// rescan the picture's groups. Direct definitions keep their existing priority.
+struct VmlLinks<'a> {
+    pict: &'a El,
+    templates: std::collections::HashMap<&'a str, Option<&'a str>>,
+    member_links: bool,
+}
+
+impl<'a> VmlLinks<'a> {
+    fn new(pict: &'a El, member_links: bool) -> Self {
+        let mut links = Self { pict, templates: Default::default(), member_links };
+        links.definitions(pict);
+        for group in pict.els().filter(|e| e.name == "v:group") {
+            links.group(group, 0);
+        }
+        links
+    }
+
+    fn definitions(&mut self, parent: &'a El) {
+        for template in parent.els().filter(|e| e.name == "v:shapetype") {
+            if let Some(id) = template.attr("id") {
+                self.templates.entry(id).or_insert_with(|| template.attr("href"));
+            }
+        }
+    }
+
+    fn group(&mut self, group: &'a El, depth: usize) {
+        self.definitions(group);
+        if depth < MAX_VML_GROUP_DEPTH {
+            for nested in group.els().filter(|e| e.name == "v:group") {
+                self.group(nested, depth + 1);
+            }
+        }
+    }
+
+    fn target(&self, shape: &'a El) -> Option<&'a str> {
+        shape
+            .attr("href")
+            .or_else(|| {
+                let id = shape.attr("type")?.trim().trim_start_matches('#');
+                self.templates.get(id).copied().flatten()
+            })
+            .map(str::trim)
+            .filter(|target| !target.is_empty())
+    }
+
+    fn keep(&self, reader: &mut Reader<'_>, shape: &'a El) -> Option<String> {
+        if !self.member_links {
+            return None;
+        }
+        self.target(shape).and_then(|target| reader.keep_drawing_link(target))
+    }
+}
+
 impl Reader<'_> {
     /// Every legacy VML drawing in one `w:pict`, in document order: a `w:pict` may hold any
     /// number of shapes (ECMA-376 Part 4, VML), and each one is its own object. A `v:group`
     /// becomes an [`InlineObject::Group`].
-    pub(super) fn read_vml_all(&mut self, sc: &mut StoryCtx, pict: &El, rels: &Rels) -> Vec<InlineObject> {
+    pub(super) fn read_vml_all<'a>(&mut self, sc: &mut StoryCtx, pict: &'a El, rels: &Rels) -> Vec<(InlineObject, Option<&'a str>)> {
+        self.vml_objects(sc, pict, rels, craft_wordmodel::para::MAX_GROUP_CHILDREN, true)
+    }
+
+    fn vml_objects<'a>(
+        &mut self,
+        sc: &mut StoryCtx,
+        pict: &'a El,
+        rels: &Rels,
+        limit: usize,
+        member_links: bool,
+    ) -> Vec<(InlineObject, Option<&'a str>)> {
+        let links = VmlLinks::new(pict, member_links);
         let mut out = Vec::new();
         for e in pict.els().filter(|e| e.name.starts_with("v:") && e.local() != "shapetype") {
-            if out.len() >= craft_wordmodel::para::MAX_GROUP_CHILDREN {
+            if out.len() >= limit {
                 break;
             }
             if sc.in_hf
@@ -28,23 +94,29 @@ impl Reader<'_> {
                 self.doc.settings.watermark.get_or_insert(wm);
                 continue;
             }
-            let o = if e.local() == "group" { self.read_vml_group(sc, pict, e, rels) } else { self.read_vml_shape(sc, pict, e, rels, None) };
-            out.extend(o);
+            let o = if e.local() == "group" { self.read_vml_group(sc, &links, e, rels) } else { self.read_vml_shape(sc, pict, e, rels, None) };
+            out.extend(o.map(|o| (o, links.target(e))));
         }
         out
     }
 
-    /// The first VML drawing in `pict`, for the places that show a single one: an OLE object's
-    /// picture and a `mc:Fallback` preview.
-    pub(super) fn read_vml(&mut self, sc: &mut StoryCtx, pict: &El, rels: &Rels) -> Option<InlineObject> {
-        self.read_vml_all(sc, pict, rels).into_iter().next()
+    /// The first VML drawing and its own target in `pict`, for an OLE object's
+    /// picture and a selected `mc:Fallback` preview.
+    pub(super) fn read_vml<'a>(&mut self, sc: &mut StoryCtx, pict: &'a El, rels: &Rels) -> Option<(InlineObject, Option<&'a str>)> {
+        self.vml_objects(sc, pict, rels, 1, true).into_iter().next()
+    }
+
+    /// A native ink preview needs its media and root target, not member targets
+    /// belonging to a group the ink renderer will not retain.
+    pub(super) fn read_vml_preview<'a>(&mut self, sc: &mut StoryCtx, pict: &'a El, rels: &Rels) -> Option<(InlineObject, Option<&'a str>)> {
+        self.vml_objects(sc, pict, rels, 1, false).into_iter().next()
     }
 
     /// A `v:group`: its own box from its `style`, its members in the space `coordsize` and
-    /// `coordorigin` give it, nested groups flattened into it as [`Self::group_members`] does for
-    /// DrawingML. `None` when it has no member we can show. `pict` is the picture the group sits
+    /// `coordorigin` give it. Unlinked nested groups are flattened; a linked group keeps its
+    /// own node and target, as in DrawingML. `None` when it has no member we can show. `pict` is the picture the group sits
     /// in, where a member's `v:shapetype` is written.
-    fn read_vml_group(&mut self, sc: &mut StoryCtx, pict: &El, grp: &El, rels: &Rels) -> Option<InlineObject> {
+    fn read_vml_group<'a>(&mut self, sc: &mut StoryCtx, links: &VmlLinks<'a>, grp: &'a El, rels: &Rels) -> Option<InlineObject> {
         let style = grp.attr("style").unwrap_or("");
         let len = |k: &str| vml_style(style, k).and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, crate::units::MAX_LEN_PT);
         let (w, h) = (len("width"), len("height"));
@@ -53,7 +125,15 @@ impl Reader<'_> {
         let (ch_w, ch_h) = vml_coordpair(grp, "coordsize").filter(|(cw, ch)| *cw > 0.0 && *ch > 0.0).unwrap_or((w.max(1.0), h.max(1.0)));
         let (cx, cy) = vml_coordpair(grp, "coordorigin").unwrap_or((0.0, 0.0));
         let mut children = Vec::new();
-        self.vml_group_members(sc, pict, grp, rels, VmlGroupSpace { origin: (-cx, -cy), scale: (1.0, 1.0), depth: 0 }, &mut children);
+        let mut remaining = craft_wordmodel::para::MAX_GROUP_CHILDREN;
+        self.vml_group_members(
+            sc,
+            links,
+            grp,
+            rels,
+            VmlGroupSpace { origin: (-cx, -cy), scale: (1.0, 1.0), depth: 0 },
+            (&mut children, &mut remaining),
+        );
         if children.is_empty() {
             return None;
         }
@@ -63,42 +143,36 @@ impl Reader<'_> {
     /// The members of VML group `g` into `out`, mapped into the outermost group's space by `t`
     /// (x0, y0, sx, sy: outer = x0 + inner × sx). A member is placed by `left`/`top` in that
     /// space, except a `v:line`, which carries its own offset in `from`.
-    fn vml_group_members(
+    fn vml_group_members<'a>(
         &mut self,
         sc: &mut StoryCtx,
-        pict: &El,
-        g: &El,
+        links: &VmlLinks<'a>,
+        g: &'a El,
         rels: &Rels,
         space: VmlGroupSpace,
-        out: &mut Vec<craft_wordmodel::para::GroupChild>,
+        output: (&mut Vec<craft_wordmodel::para::GroupChild>, &mut usize),
     ) {
+        let (out, remaining) = output;
         let (x0, y0) = space.origin;
         let (sx, sy) = space.scale;
         let max = crate::units::MAX_LEN_PT;
         let fit = |v: f32, lo: f32| craft_wordmodel::geom::finite(v).clamp(lo, max);
         for e in g.els() {
-            if out.len() >= craft_wordmodel::para::MAX_GROUP_CHILDREN {
+            if *remaining == 0 {
                 return;
             }
             if !e.name.starts_with("v:") || e.local() == "shapetype" {
                 continue;
             }
-            let style = e.attr("style").unwrap_or("");
-            let num = |k: &str| vml_style(style, k).and_then(|v| measure(v, 1.0)).map_or(0.0, craft_wordmodel::geom::finite);
-            let ((ox, oy), (ew, eh)) = ((num("left"), num("top")), (num("width"), num("height")));
             if e.local() == "group" {
-                if space.depth >= MAX_VML_GROUP_DEPTH {
-                    continue;
-                }
-                // Its members' space maps onto its own box.
-                let (cw, ch) = vml_coordpair(e, "coordsize").filter(|(cw, ch)| *cw > 0.0 && *ch > 0.0).unwrap_or((ew.max(1.0), eh.max(1.0)));
-                let (cox, coy) = vml_coordpair(e, "coordorigin").unwrap_or((0.0, 0.0));
-                let (kx, ky) = (ew / cw, eh / ch);
-                let nt = (x0 + (ox - cox * kx) * sx, y0 + (oy - coy * ky) * sy, sx * kx, sy * ky);
-                self.vml_group_members(sc, pict, e, rels, VmlGroupSpace { origin: (nt.0, nt.1), scale: (nt.2, nt.3), depth: space.depth + 1 }, out);
+                self.vml_group_member(sc, links, e, rels, space, (&mut *out, &mut *remaining));
                 continue;
             }
-            let Some(mut obj) = self.read_vml_shape(sc, pict, e, rels, Some((sx, sy))) else { continue };
+            let style = e.attr("style").unwrap_or("");
+            let num = |k: &str| vml_style(style, k).and_then(|v| measure(v, 1.0)).map_or(0.0, craft_wordmodel::geom::finite);
+            let (ox, oy) = (num("left"), num("top"));
+            let link = links.keep(self, e);
+            let Some(mut obj) = self.read_vml_shape(sc, links.pict, e, rels, Some((sx, sy))) else { continue };
             // A member is placed by `x`/`y`, so a line's own offset comes off the member itself.
             let (dx, dy) = match obj.float_mut() {
                 Some(f) => {
@@ -108,8 +182,69 @@ impl Reader<'_> {
                 }
                 None => (0.0, 0.0),
             };
-            out.push(craft_wordmodel::para::GroupChild { x: fit(x0 + (ox + dx) * sx, -max), y: fit(y0 + (oy + dy) * sy, -max), obj });
+            *remaining -= 1;
+            out.push(craft_wordmodel::para::GroupChild { x: fit(x0 + (ox + dx) * sx, -max), y: fit(y0 + (oy + dy) * sy, -max), obj, link });
         }
+    }
+
+    /// An inner group shares its root's retained-member budget. Only a group with its
+    /// own target needs a node; unlinked groups keep the established flattening path.
+    fn vml_group_member<'a>(
+        &mut self,
+        sc: &mut StoryCtx,
+        links: &VmlLinks<'a>,
+        e: &'a El,
+        rels: &Rels,
+        space: VmlGroupSpace,
+        output: (&mut Vec<craft_wordmodel::para::GroupChild>, &mut usize),
+    ) {
+        if space.depth >= MAX_VML_GROUP_DEPTH {
+            return;
+        }
+        let (out, remaining) = output;
+        let (x0, y0) = space.origin;
+        let (sx, sy) = space.scale;
+        let style = e.attr("style").unwrap_or("");
+        let num = |k: &str| vml_style(style, k).and_then(|v| measure(v, 1.0)).map_or(0.0, craft_wordmodel::geom::finite);
+        let ((ox, oy), (ew, eh)) = ((num("left"), num("top")), (num("width"), num("height")));
+        let (cw, ch) = vml_coordpair(e, "coordsize").filter(|(cw, ch)| *cw > 0.0 && *ch > 0.0).unwrap_or((ew.max(1.0), eh.max(1.0)));
+        let (cox, coy) = vml_coordpair(e, "coordorigin").unwrap_or((0.0, 0.0));
+        let link = links.keep(self, e);
+        if link.is_none() {
+            let (kx, ky) = (ew / cw, eh / ch);
+            let nt = (x0 + (ox - cox * kx) * sx, y0 + (oy - coy * ky) * sy, sx * kx, sy * ky);
+            self.vml_group_members(
+                sc,
+                links,
+                e,
+                rels,
+                VmlGroupSpace { origin: (nt.0, nt.1), scale: (nt.2, nt.3), depth: space.depth + 1 },
+                (out, remaining),
+            );
+            return;
+        }
+        *remaining -= 1;
+        let mut children = Vec::new();
+        let max = crate::units::MAX_LEN_PT;
+        let fit = |v: f32, lo: f32| craft_wordmodel::geom::finite(v).clamp(lo, max);
+        let (w, h) = (fit(ew * sx, 0.0), fit(eh * sy, 0.0));
+        let (kx, ky) = (w / cw, h / ch);
+        self.vml_group_members(
+            sc,
+            links,
+            e,
+            rels,
+            VmlGroupSpace { origin: (-cox * kx, -coy * ky), scale: (kx, ky), depth: space.depth + 1 },
+            (&mut children, &mut *remaining),
+        );
+        if children.is_empty() {
+            *remaining += 1;
+            return;
+        }
+        let mut float = vml_float(e, style, sc.in_hf);
+        (float.x, float.y) = (0.0, 0.0);
+        let obj = InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children, canvas: None };
+        out.push(craft_wordmodel::para::GroupChild { x: fit(x0 + ox * sx, -max), y: fit(y0 + oy * sy, -max), obj, link });
     }
 
     /// One legacy VML picture, text box, line, rectangle, oval or preset shape (best effort).
@@ -144,7 +279,9 @@ impl Reader<'_> {
             // Brightness and contrast (Word's picture watermark "Washout" sets them, #1711).
             let frac = |k: &str| img.attr(k).and_then(crate::units::vml_number);
             let fx = craft_wordmodel::picfx::PicFx::from_vml(frac("gain").unwrap_or(1.0), frac("blacklevel").unwrap_or(0.0));
-            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4], fx, ole: None });
+            let crop =
+                ["cropleft", "croptop", "cropright", "cropbottom"].map(|key| img.attr(key).and_then(vml_fraction).unwrap_or(0.0).clamp(0.0, 1.0));
+            return Some(InlineObject::Image { media, w, h, alt, float, crop, fx, ole: None });
         }
         // The shapetype the shape is drawn from (its `type`, ECMA-376 Part 4 VML), when written in
         // the same picture: what the shape leaves out, it takes from there.
@@ -393,25 +530,25 @@ impl Reader<'_> {
 
     /// An OLE object (`w:object`, ECMA-376 §17.3.3.19): shown as its picture (VML, or a DrawingML
     /// picture in `w:drawing`), and kept whole so saving writes the object back.
-    pub(super) fn read_object(&mut self, sc: &mut StoryCtx, obj: &El, rels: &Rels) -> Option<InlineObject> {
-        let mut o = match self.read_vml(sc, obj, rels) {
-            Some(o) => o,
+    pub(super) fn read_object(&mut self, sc: &mut StoryCtx, obj: &El, rels: &Rels) -> Option<(InlineObject, Option<String>)> {
+        let (mut o, link) = match self.read_vml(sc, obj, rels) {
+            Some((object, target)) => (object, target.and_then(|target| self.keep_drawing_link(target))),
             None => {
                 let d = obj.child("w:drawing")?;
-                self.read_drawing(sc, d, rels)?
+                (self.read_drawing(sc, d, rels)?, self.drawing_link(d, rels))
             }
         };
         if let InlineObject::Image { ole, .. } = &mut o {
             *ole = self.keep_embedded(obj, rels, &[]);
         }
-        Some(o)
+        Some((o, link))
     }
 
     /// A Word signature line (Insert › Signature Line): a `w:pict` whose one VML picture carries
     /// an `o:signatureline` (the suggested signer, title, e-mail and instructions). Shown as its
     /// picture, and kept whole like an OLE object so saving writes the signature line back,
     /// still signable in Word, not a plain picture. `None` for any other `w:pict`.
-    pub(super) fn read_signature_line(&mut self, sc: &mut StoryCtx, pict: &El, rels: &Rels) -> Option<InlineObject> {
+    pub(super) fn read_signature_line(&mut self, sc: &mut StoryCtx, pict: &El, rels: &Rels) -> Option<(InlineObject, Option<String>)> {
         let mut drawings = pict.els().filter(|e| e.name.starts_with("v:") && e.local() != "shapetype");
         let shape = drawings.next().filter(|s| s.name == "v:shape")?;
         if drawings.next().is_some() || shape.child("o:signatureline").is_none() {
@@ -421,7 +558,7 @@ impl Reader<'_> {
         if let InlineObject::Image { ole, .. } = &mut o {
             *ole = self.keep_embedded(pict, rels, &[]);
         }
-        Some(o)
+        Some((o, VmlLinks::new(pict, true).target(shape).and_then(|target| self.keep_drawing_link(target))))
     }
 }
 

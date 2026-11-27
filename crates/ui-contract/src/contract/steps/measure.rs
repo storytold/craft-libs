@@ -78,6 +78,7 @@ pub(crate) fn measure_cx<'a, C: Component>(
     let padding = padding(ComponentStyle::metrics(style).padding, resolved.pad);
     MeasureCx {
         env: input.env.view(),
+        scope: input.env,
         style,
         resolved,
         proposal: input.proposal,

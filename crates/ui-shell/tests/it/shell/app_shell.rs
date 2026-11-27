@@ -1,5 +1,5 @@
 //! The app shell's named slots: a bar in a top or bottom slot fills it with its members on the slot's middle, and a
-//! slot whose content is a memoized view runs only when its props change. A full-window page hides the slots and the
+//! versioned slot replays while its version holds and no input reaches it. A full-window page hides the slots and the
 //! body, and its band keeps the window's ends and moves the window. What the body opens stops above the bottom slots.
 
 use craft_host::target::{Os, ShellInfo};
@@ -7,7 +7,7 @@ use craft_theme::Size;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, CommandSet, Entry, MemoProps, MemoView, Props as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, Trigger};
+use craft_ui::contract::{Bind, CommandSet, Entry, Props as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, Trigger};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
@@ -16,13 +16,13 @@ use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::commands::{CommandScope, Commands as _};
-use craft_ui::runtime::env::{Env, PageBandRoom, RevealEdge, ShellEntry, WindowKey};
+use craft_ui::runtime::env::{PageBandRoom, RevealEdge, WindowKey};
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
 use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, MacInset, Slot, SlotSize, Title, TitleBar, slots};
 use craft_ui::testing::in_audit_run;
-use craft_ui::testing::pointer::{press, release};
+use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::windows::NoWindows;
-use craft_ui::testing::{Fixture, Frames, MemoRun, last_pass_memo_runs, trial};
+use craft_ui::testing::{Fixture, Frames, last_pass_runs, trial};
 use craft_ui_test_kit::windows::Windows;
 use craft_window::policy::{Decision, Desktop, DesktopKind};
 use egui::{Event, Key, Modifiers, Rect, Ui, Vec2, ViewportId};
@@ -48,22 +48,26 @@ fn a_bar_in_a_top_slot_fills_it_and_centres_its_members_on_one_line() {
     let mut fixture = Fixture::new(move |ui| {
         let (mut bar, mut member, mut nested) = (Rect::NOTHING, Rect::NOTHING, Rect::NOTHING);
         let shown = AppShell::new(WindowKey::main())
-            .options_bar(true, |ui, _, _: &mut ()| {
-                bar = Bar::new("Options", BarKind::Options)
-                    .show(ui, |ui, _| {
-                        member = Button::new("Alpha").show(ui).rect;
-                        Row::new().show(ui, |ui, _| {
-                            nested = Button::new("Beta").show(ui).rect;
-                            Stack::new().show(ui, |ui, _| {
-                                Text::new("Above").show(ui);
-                                Text::new("Below").show(ui);
+            .options_bar(
+                true,
+                |_| None,
+                |ui, _, _: &mut ()| {
+                    bar = Bar::new("Options", BarKind::Options)
+                        .show(ui, |ui, _| {
+                            member = Button::new("Alpha").show(ui).rect;
+                            Row::new().show(ui, |ui, _| {
+                                nested = Button::new("Beta").show(ui).rect;
+                                Stack::new().show(ui, |ui, _| {
+                                    Text::new("Above").show(ui);
+                                    Text::new("Below").show(ui);
+                                });
                             });
-                        });
-                    })
-                    .output
-                    .response
-                    .rect;
-            })
+                        })
+                        .output
+                        .response
+                        .rect;
+                },
+            )
             .body(|_, _, _| {})
             .show(ui, &mut ());
         let slot = shown.regions.slots.iter().find(|(key, _)| *key == "options").map(|(_, rect)| *rect);
@@ -94,35 +98,39 @@ fn a_top_slot_sized_by_its_content_stacks_it_and_takes_its_height() {
     let mut fixture = Fixture::new(move |ui| {
         let (mut strip, mut row) = (Rect::NOTHING, Rect::NOTHING);
         let shown = AppShell::new(WindowKey::main())
-            .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _, _: &mut ()| {
-                let top = ui.cursor().min.y;
-                let strip_x = Row::new()
-                    .show(ui, |ui, _| {
-                        Button::new("Home").show(ui);
-                        Button::new("Insert").show(ui);
-                    })
-                    .output
-                    .rect
-                    .x_range();
-                let strip_bottom = ui.min_rect().max.y;
-                let row_top = ui.cursor().min.y;
-                let row_x = Row::new()
-                    .scroll(Scroll::horizontal())
-                    .fill_width()
-                    .show(ui, |ui, _| {
-                        Stack::new().show(ui, |ui, _| {
-                            for line in ["Paste", "Cut", "Copy", "Format Painter", "Clipboard"] {
-                                Button::new(line).show(ui);
-                            }
-                        });
-                    })
-                    .output
-                    .rect
-                    .x_range();
-                let bottom = ui.min_rect().max.y;
-                strip = Rect::from_x_y_ranges(strip_x, top..=strip_bottom);
-                row = Rect::from_x_y_ranges(row_x, row_top..=bottom);
-            })
+            .top(
+                Slot::new("ribbon").size(SlotSize::Content),
+                |_| None,
+                |ui, _, _: &mut ()| {
+                    let top = ui.cursor().min.y;
+                    let strip_x = Row::new()
+                        .show(ui, |ui, _| {
+                            Button::new("Home").show(ui);
+                            Button::new("Insert").show(ui);
+                        })
+                        .output
+                        .rect
+                        .x_range();
+                    let strip_bottom = ui.min_rect().max.y;
+                    let row_top = ui.cursor().min.y;
+                    let row_x = Row::new()
+                        .scroll(Scroll::horizontal())
+                        .fill_width()
+                        .show(ui, |ui, _| {
+                            Stack::new().show(ui, |ui, _| {
+                                for line in ["Paste", "Cut", "Copy", "Format Painter", "Clipboard"] {
+                                    Button::new(line).show(ui);
+                                }
+                            });
+                        })
+                        .output
+                        .rect
+                        .x_range();
+                    let bottom = ui.min_rect().max.y;
+                    strip = Rect::from_x_y_ranges(strip_x, top..=strip_bottom);
+                    row = Rect::from_x_y_ranges(row_x, row_top..=bottom);
+                },
+            )
             .body(|_, _, _| {})
             .show(ui, &mut ());
         if let Some(slot) = shown.regions.slots.iter().find(|(key, _)| *key == "ribbon").map(|(_, rect)| *rect) {
@@ -177,8 +185,8 @@ fn a_slot_sized_by_its_content_grows_to_a_child_that_fills_its_height() {
     let (top_seen, bottom_seen, out) = (Rc::clone(&top), Rc::clone(&bottom), Rc::clone(&regions));
     let mut fixture = Fixture::new(move |ui| {
         let shown = AppShell::new(WindowKey::main())
-            .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _, _: &mut ()| fill_column(ui, &TALL, &top_seen))
-            .bottom(Slot::new("findBar").size(SlotSize::Content), |ui, _, _: &mut ()| fill_column(ui, &TALL, &bottom_seen))
+            .top(Slot::new("ribbon").size(SlotSize::Content), |_| None, |ui, _, _: &mut ()| fill_column(ui, &TALL, &top_seen))
+            .bottom(Slot::new("findBar").size(SlotSize::Content), |_| None, |ui, _, _: &mut ()| fill_column(ui, &TALL, &bottom_seen))
             .body(|_, _, _| {})
             .show(ui, &mut ());
         *out.borrow_mut() = Some(shown.regions);
@@ -206,7 +214,7 @@ fn a_slot_sized_by_its_content_grows_to_a_child_that_fills_its_height() {
 
 /// A settled frame runs a content slot's content once, in one pass: its measure is reused while its inputs are
 /// unchanged. A frame where the content grows (a roomier density makes every button taller) lays the window out again
-/// at most once, shows the new extent in that frame and leaves the next frame settled.
+/// at most once, shows the new extent with the body under it in that frame and leaves the next frame settled.
 #[trial]
 fn a_content_slot_runs_its_content_once_per_settled_frame_and_grows_in_one_frame() {
     let runs = Rc::new(Cell::new(0_u32));
@@ -215,10 +223,14 @@ fn a_content_slot_runs_its_content_once_per_settled_frame_and_grows_in_one_frame
     let (count, column, out) = (Rc::clone(&runs), Rc::clone(&seen), Rc::clone(&regions));
     let mut fixture = Fixture::new(move |ui| {
         let shown = AppShell::new(WindowKey::main())
-            .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _, _: &mut ()| {
-                count.set(count.get() + 1);
-                fill_column(ui, &TALL, &column);
-            })
+            .top(
+                Slot::new("ribbon").size(SlotSize::Content),
+                |_| None,
+                |ui, _, _: &mut ()| {
+                    count.set(count.get() + 1);
+                    fill_column(ui, &TALL, &column);
+                },
+            )
             .body(|_, _, _| {})
             .show(ui, &mut ());
         *out.borrow_mut() = Some(shown.regions);
@@ -232,9 +244,11 @@ fn a_content_slot_runs_its_content_once_per_settled_frame_and_grows_in_one_frame
     fixture.density(Size::Comfortable).frame(Vec::new());
     assert!(fixture.passes() <= 2, "the frame the content grows in lays the window out again at most once: {} passes", fixture.passes());
     let slot = regions.borrow().as_ref().and_then(|regions| regions.slots.first().map(|(_, rect)| *rect)).expect("the slot shows");
+    let body = regions.borrow().as_ref().map(|regions| regions.body).expect("the body shows");
     let grown = seen.borrow().0;
     assert!(grown.height() > before.height() + 1.0, "the roomier density makes the column taller: {before:?} to {grown:?}");
     assert!(slot.expand(1.0).contains_rect(grown), "in the frame it grows in, the slot {slot:?} holds the grown column {grown:?}");
+    assert!((body.top() - slot.bottom()).abs() <= 1.0, "in the frame it grows in, the body {body:?} starts under the grown slot {slot:?}");
     runs.set(0);
     fixture.frame(Vec::new());
     assert_eq!(fixture.passes(), 1, "the frame after the grow is settled: one pass");
@@ -256,14 +270,22 @@ fn content_rails_sit_at_their_sides_and_settle_in_one_pass() {
             (Rc::clone(&start), Rc::clone(&end), Rc::clone(&start_runs), Rc::clone(&end_runs), Rc::clone(&regions));
         let mut fixture = Fixture::new(move |ui| {
             let shown = AppShell::new(WindowKey::main())
-                .start(Slot::new("tools").size(SlotSize::Content), |ui, _, _: &mut ()| {
-                    start_count.set(start_count.get() + 1);
-                    fill_column(ui, &RAIL, &start_seen);
-                })
-                .end(Slot::new("inspector").size(SlotSize::Content), |ui, _, _: &mut ()| {
-                    end_count.set(end_count.get() + 1);
-                    fill_column(ui, &RAIL, &end_seen);
-                })
+                .start(
+                    Slot::new("tools").size(SlotSize::Content),
+                    |_| None,
+                    |ui, _, _: &mut ()| {
+                        start_count.set(start_count.get() + 1);
+                        fill_column(ui, &RAIL, &start_seen);
+                    },
+                )
+                .end(
+                    Slot::new("inspector").size(SlotSize::Content),
+                    |_| None,
+                    |ui, _, _: &mut ()| {
+                        end_count.set(end_count.get() + 1);
+                        fill_column(ui, &RAIL, &end_seen);
+                    },
+                )
                 .body(|_, _, _| {})
                 .show(ui, &mut ());
             *out.borrow_mut() = Some(shown.regions);
@@ -304,15 +326,19 @@ fn a_content_slot_holding_a_scrolling_list_takes_the_list_height() {
         let (seen, out) = (Rc::clone(&rows), Rc::clone(&regions));
         let mut fixture = Fixture::new(move |ui| {
             let shown = AppShell::new(WindowKey::main())
-                .top(Slot::new("findBar").size(SlotSize::Content), |ui, _, _: &mut ()| {
-                    let mut buttons = Vec::new();
-                    Stack::new().sizing(sizing).scroll(Scroll::vertical()).show(ui, |ui, _| {
-                        for label in ["First", "Second", "Third"] {
-                            buttons.push(Button::new(label).show(ui).rect);
-                        }
-                    });
-                    *seen.borrow_mut() = buttons;
-                })
+                .top(
+                    Slot::new("findBar").size(SlotSize::Content),
+                    |_| None,
+                    |ui, _, _: &mut ()| {
+                        let mut buttons = Vec::new();
+                        Stack::new().sizing(sizing).scroll(Scroll::vertical()).show(ui, |ui, _| {
+                            for label in ["First", "Second", "Third"] {
+                                buttons.push(Button::new(label).show(ui).rect);
+                            }
+                        });
+                        *seen.borrow_mut() = buttons;
+                    },
+                )
                 .body(|_, _, _| {})
                 .show(ui, &mut ());
             *out.borrow_mut() = Some(shown.regions);
@@ -344,12 +370,16 @@ fn a_labelled_check_box_in_the_options_slot_sits_on_its_middle() {
         let (mut check, mut button) = (Rect::NOTHING, Rect::NOTHING);
         let mut on = true;
         let shown = AppShell::new(WindowKey::main())
-            .options_bar(true, |ui, _, _: &mut ()| {
-                let _ = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
-                    check = Checkbox::new(Bind::bound(&mut on)).label("Anti-alias").show(ui).response.rect;
-                    button = Button::new("Select and Mask").show(ui).rect;
-                });
-            })
+            .options_bar(
+                true,
+                |_| None,
+                |ui, _, _: &mut ()| {
+                    let _ = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+                        check = Checkbox::new(Bind::bound(&mut on)).label("Anti-alias").show(ui).response.rect;
+                        button = Button::new("Select and Mask").show(ui).rect;
+                    });
+                },
+            )
             .body(|_, _, _| {})
             .show(ui, &mut ());
         if let Some(slot) = shown.regions.slots.iter().find(|(key, _)| *key == "options").map(|(_, rect)| *rect) {
@@ -371,24 +401,31 @@ fn a_title_bar_in_the_title_slot_shows_its_content_there() {
     let mut fixture = Fixture::new(move |ui| {
         let (mut bar, mut member) = (Rect::NOTHING, Rect::NOTHING);
         let shown = AppShell::new(WindowKey::main())
-            .title_bar(|ui, _, _: &mut ()| {
-                bar = TitleBar::new()
-                    .show_titled(
-                        ui,
-                        Title::new("S"),
-                        |ui, _| {
-                            member = Button::new("File").show(ui).rect;
-                        },
-                        |_, _| {},
-                    )
-                    .response
-                    .rect;
-            })
-            .options_bar(true, |ui, _, _: &mut ()| {
-                let _ = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
-                    Button::new("Alpha").show(ui);
-                });
-            })
+            .title_bar(
+                |_| None,
+                |ui, _, _: &mut ()| {
+                    bar = TitleBar::new()
+                        .show_titled(
+                            ui,
+                            Title::new("S"),
+                            |ui, _| {
+                                member = Button::new("File").show(ui).rect;
+                            },
+                            |_, _| {},
+                        )
+                        .response
+                        .rect;
+                },
+            )
+            .options_bar(
+                true,
+                |_| None,
+                |ui, _, _: &mut ()| {
+                    let _ = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+                        Button::new("Alpha").show(ui);
+                    });
+                },
+            )
             .body(|_, _, _| {})
             .show(ui, &mut ());
         if let Some(slot) = shown.regions.slots.iter().find(|(key, _)| *key == "title").map(|(_, rect)| *rect) {
@@ -402,115 +439,217 @@ fn a_title_bar_in_the_title_slot_shows_its_content_there() {
 }
 
 thread_local! {
-    /// The memoized slots that ran on this trial's thread, in order.
+    /// The versioned slots that ran on this trial's thread, in order.
     static SLOT_RUNS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Takes the memoized slots that ran since the last call.
+/// Counts a run of the slot `name`. An audit run is the replay audit's, not the pass's: the trials count none.
+fn slot_ran(ui: &Ui, name: &'static str) {
+    if !in_audit_run(ui.ctx()) {
+        SLOT_RUNS.with(|runs| runs.borrow_mut().push(name));
+    }
+}
+
+/// Takes the versioned slots that ran since the last call.
 fn slot_runs() -> Vec<&'static str> {
     SLOT_RUNS.with(|runs| std::mem::take(&mut *runs.borrow_mut()))
 }
 
-/// What a memoized slot shows.
-#[derive(MemoProps)]
-struct SlotText {
-    name: &'static str,
-    text: String,
+/// The shell regions that ran in the last pass.
+fn regions_ran(ctx: &egui::Context) -> u32 {
+    last_pass_runs(ctx).iter().filter(|(ty, _)| ty.rsplit("::").next() == Some("ShellRegion")).map(|(_, runs)| runs).sum()
 }
 
-fn slot_text(props: &mut SlotText, ui: &mut Ui) {
-    // An audit run is the replay audit's, not the pass's: the trials count none.
-    if !in_audit_run(ui.ctx()) {
-        SLOT_RUNS.with(|runs| runs.borrow_mut().push(props.name));
-    }
-    Text::new(props.text.clone()).show(ui);
-}
-
-/// Slots whose content is a memoized view run only when their props change: at rest and for a click in the body they
-/// replay, a new status runs the status slot alone (one real run, one measuring run), and a slot the app does not
-/// memoize runs every pass.
+/// Versioned slots replay while their version holds: at rest and with the pointer moving, pressing and releasing in
+/// the body, no versioned slot runs, and of the shell's regions only the window's, the scope's, the body's and the
+/// unversioned rail's run. The pointer over the status bar runs the status slot alone, a new status version runs it
+/// alone, and the unversioned slot runs every pass.
 #[trial]
-fn memoized_slots_run_only_when_their_props_change() {
-    let (version, plain, body) = (Cell::new(1), Cell::new(0), Cell::new(Rect::NOTHING));
+fn versioned_slots_run_only_when_their_version_changes() {
+    let (version, plain) = (Cell::new(1_u64), Cell::new(0));
+    let (body, status) = (Cell::new(Rect::NOTHING), Cell::new(Rect::NOTHING));
     let frame = |frames: &mut Frames, events| {
         plain.set(0);
         frames.frame(events, |ui| {
             let out = AppShell::new(WindowKey::main())
-                .options_bar(true, |ui, _, _: &mut ()| {
-                    let _ = MemoView::new("options", SlotText { name: "options", text: "Options".to_owned() }, slot_text).show(ui);
-                })
-                .status(true, |ui, _, _| {
-                    let _ = MemoView::new("status", SlotText { name: "status", text: format!("Ready {}", version.get()) }, slot_text).show(ui);
-                })
-                .start(Slot::new("tools"), |ui, _, _| {
-                    plain.set(plain.get() + 1);
-                    Text::new("Tools").show(ui);
-                })
+                .title_bar(
+                    |_| Some(0),
+                    |ui, _, _: &mut ()| {
+                        slot_ran(ui, "title");
+                        Text::new("Title").show(ui);
+                    },
+                )
+                .options_bar(
+                    true,
+                    |_| Some(0),
+                    |ui, _, _| {
+                        slot_ran(ui, "options");
+                        Text::new("Options").show(ui);
+                    },
+                )
+                .status(
+                    true,
+                    |_| Some(version.get()),
+                    |ui, _, _| {
+                        slot_ran(ui, "status");
+                        let _ = Bar::new("Status", BarKind::Status).show(ui, |ui, _| {
+                            Text::new(format!("Ready {}", version.get())).show(ui);
+                        });
+                    },
+                )
+                .start(
+                    Slot::new("tools"),
+                    |_| None,
+                    |ui, _, _| {
+                        plain.set(plain.get() + 1);
+                        Text::new("Tools").show(ui);
+                    },
+                )
                 .body(|ui, _, _| {
                     Button::new("Body").show(ui);
                 })
                 .show(ui, &mut ());
             body.set(out.regions.body);
+            status.set(out.regions.slots.iter().find(|(key, _)| *key == "status").map_or(Rect::NOTHING, |(_, rect)| *rect));
         });
-        (slot_runs(), plain.get())
+        (slot_runs(), plain.get(), regions_ran(&frames.ctx))
     };
     let mut frames = Frames::new();
     for _ in 0..30 {
         frame(&mut frames, vec![]);
     }
-    let (ran, plain_runs) = frame(&mut frames, vec![]);
-    assert_eq!(ran, Vec::<&str>::new(), "the memoized slots replay at rest");
-    assert!(plain_runs > 0, "the slot the app does not memoize runs every pass");
+    let (ran, plain_runs, regions) = frame(&mut frames, vec![]);
+    assert_eq!(ran, Vec::<&str>::new(), "the versioned slots replay at rest");
+    assert!(plain_runs > 0, "the unversioned slot runs every pass");
+    assert_eq!(regions, 4, "only the window's, the scope's, the body's and the unversioned rail's regions run");
     let at = body.get().center();
-    for events in [vec![press(at)], vec![release(at)], vec![]] {
-        assert_eq!(frame(&mut frames, events.clone()).0, Vec::<&str>::new(), "a click in the body ({events:?}) leaves the slots replaying");
+    for events in [vec![moved(at)], vec![press(at)], vec![release(at)], vec![]] {
+        assert_eq!(frame(&mut frames, events.clone()).0, Vec::<&str>::new(), "the pointer in the body ({events:?}) leaves the slots replaying");
     }
+    let (ran, ..) = frame(&mut frames, vec![moved(status.get().center())]);
+    assert!(!ran.is_empty() && ran.iter().all(|name| *name == "status"), "the pointer over the status bar runs it alone: {ran:?}");
+    // The status bar's hover fade runs it until it ends.
+    frame(&mut frames, vec![moved(at)]);
+    frames.advance(1.0);
+    frame(&mut frames, vec![]);
     version.set(2);
-    // One real run, then one measuring run in the first sizing pass that measures the new content: the discard pass its
-    // new size asks for, whose real run replays the first. A container that measures before the real run of one pass
-    // makes the same two runs in the other order (ui-widgets body::memo_view, the stack measured first).
-    assert_eq!(
-        frame(&mut frames, vec![]).0,
-        vec!["status", "status"],
-        "a new status runs the status slot alone: one real run and one measuring run in the sizing pass that measures it"
-    );
-    assert!(
-        last_pass_memo_runs(&frames.ctx).iter().all(|(_, _, run)| *run == MemoRun::Replayed),
-        "the discard pass's real run replays every slot: {:?}",
-        last_pass_memo_runs(&frames.ctx)
-    );
+    let (ran, ..) = frame(&mut frames, vec![]);
+    assert!(!ran.is_empty() && ran.iter().all(|name| *name == "status"), "a new status version runs the status slot alone: {ran:?}");
     assert_eq!(frame(&mut frames, vec![]).0, Vec::<&str>::new(), "and it replays at it");
 }
 
-/// What a slot that registers a revealed rect shows: the rect.
-#[derive(MemoProps)]
-struct Revealing {
-    at: Rect,
+/// What the pass-order trial's slots share: a count the title slot's button raises, and the count the status slot
+/// last showed.
+#[derive(Default)]
+struct Count {
+    count: u64,
+    shown: Option<u64>,
 }
 
-fn revealing(props: &mut Revealing, ui: &mut Ui) {
-    // An audit run is the replay audit's, not the pass's: the trials count none.
-    if !in_audit_run(ui.ctx()) {
-        SLOT_RUNS.with(|runs| runs.borrow_mut().push("revealing"));
-    }
-    if let Some(shell) = Env::of(ui).view().get::<ShellEntry>().0 {
-        shell.reveal_rect(ui.ctx(), RevealEdge::Start, props.at);
-    }
-    Text::new("Tools").show(ui);
-}
-
-/// A memoized view in a slot that registers a revealed rect registers it again when it replays: the shell reads the
-/// same rects in a replayed pass as in the run.
+/// A slot's version is read at its turn in the pass: a click on the title slot's button raises the count the status
+/// slot's version holds, and the status bar shows the new count in the frame of the click.
 #[trial]
-fn a_replayed_view_in_a_slot_registers_its_revealed_rects() {
+fn a_slot_shows_what_an_earlier_slot_changed_in_the_pass() {
+    let button = Cell::new(Rect::NOTHING);
+    let frame = |frames: &mut Frames, events, app: &mut Count| {
+        frames.frame(events, |ui| {
+            AppShell::new(WindowKey::main())
+                .title_bar(
+                    |_| Some(0),
+                    |ui, _, app: &mut Count| {
+                        let shown = Button::new("Next").show(ui);
+                        button.set(shown.rect);
+                        if shown.clicks > 0 {
+                            app.count += 1;
+                        }
+                    },
+                )
+                .status(
+                    true,
+                    |app| Some(app.count),
+                    |ui, _, app| {
+                        app.shown = Some(app.count);
+                        Text::new(format!("Count {}", app.count)).show(ui);
+                    },
+                )
+                .body(|_, _, _| {})
+                .show(ui, &mut *app);
+        });
+    };
+    let (mut frames, mut app) = (Frames::new(), Count::default());
+    for _ in 0..3 {
+        frame(&mut frames, vec![], &mut app);
+    }
+    assert_eq!(app.shown, Some(0), "the status bar shows the count");
+    let at = button.get().center();
+    frame(&mut frames, vec![press(at)], &mut app);
+    frame(&mut frames, vec![release(at)], &mut app);
+    assert_eq!(app.count, 1, "the click raised the count");
+    assert_eq!(app.shown, Some(1), "the status bar showed the new count in the frame of the click");
+}
+
+/// A versioned slot sized by its content keeps its extent while it replays, and a version that grows its content lays
+/// the window out again in that frame.
+#[trial]
+fn a_versioned_content_slot_keeps_its_extent_while_it_replays() {
+    let (lines, body) = (Cell::new(1_usize), Cell::new(Rect::NOTHING));
+    let frame = |frames: &mut Frames| {
+        frames.frame(vec![], |ui| {
+            let out = AppShell::new(WindowKey::main())
+                .top(
+                    Slot::new("ribbon").size(SlotSize::Content),
+                    |_| Some(lines.get() as u64),
+                    |ui, _, _: &mut ()| {
+                        slot_ran(ui, "ribbon");
+                        for line in 0..lines.get() {
+                            Text::new(format!("Line {line}")).show(ui);
+                        }
+                    },
+                )
+                .body(|_, _, _| {})
+                .show(ui, &mut ());
+            body.set(out.regions.body);
+        });
+        (slot_runs(), body.get())
+    };
+    let mut frames = Frames::new();
+    for _ in 0..5 {
+        frame(&mut frames);
+    }
+    let (_, settled) = frame(&mut frames);
+    for _ in 0..5 {
+        let (ran, at) = frame(&mut frames);
+        assert_eq!(ran, Vec::<&str>::new(), "the slot replays");
+        assert_eq!(at, settled, "the body keeps its place under the replayed slot");
+    }
+    lines.set(3);
+    let (ran, grown) = frame(&mut frames);
+    assert!(ran.contains(&"ribbon"), "a new version runs the slot");
+    assert!(grown.top() > settled.top(), "the grown slot pushes the body down in the frame it grew: {grown:?} after {settled:?}");
+    let (_, next) = frame(&mut frames);
+    assert_eq!(next, grown, "the frame after the grow keeps the body where the grow frame put it");
+}
+
+/// A versioned slot that registers a revealed rect registers it again when it replays: the shell reads the same rects
+/// in a replayed pass as in the run.
+#[trial]
+fn a_replayed_slot_registers_its_revealed_rects() {
     let at = Rect::from_min_size(egui::pos2(0.0, 40.0), Vec2::new(40.0, 120.0));
     let seen = RefCell::new(Vec::new());
     let frame = |frames: &mut Frames| {
         frames.frame(vec![], |ui| {
             AppShell::new(WindowKey::main())
-                .start(Slot::new("tools"), |ui, _, _: &mut ()| {
-                    let _ = MemoView::new("tools", Revealing { at }, revealing).show(ui);
-                })
+                .start(
+                    Slot::new("tools"),
+                    |_| Some(0),
+                    |ui, bcx, _: &mut ()| {
+                        slot_ran(ui, "revealing");
+                        if let Some(shell) = bcx.shell() {
+                            shell.reveal_rect(ui.ctx(), RevealEdge::Start, at);
+                        }
+                        Text::new("Tools").show(ui);
+                    },
+                )
                 .body(|ui, bcx, _| {
                     *seen.borrow_mut() = bcx.shell().map(|shell| shell.revealed_rects(ui.ctx())).unwrap_or_default();
                 })
@@ -552,28 +691,40 @@ fn page_frame(windows: &Windows, runs: &mut PageRuns, dialog: bool, events: Vec<
     *runs = PageRuns::default();
     let out = windows.frame(events, vec![], |ui| {
         let out = AppShell::new(WindowKey::main())
-            .title_bar(|ui, _, runs: &mut PageRuns| {
-                runs.slots += 1;
-                Text::new("Title").show(ui);
-            })
-            .start(Slot::new("tools"), |ui, _, runs: &mut PageRuns| {
-                runs.slots += 1;
-                Text::new("Tools").show(ui);
-            })
+            .title_bar(
+                |_| None,
+                |ui, _, runs: &mut PageRuns| {
+                    runs.slots += 1;
+                    Text::new("Title").show(ui);
+                },
+            )
+            .start(
+                Slot::new("tools"),
+                |_| None,
+                |ui, _, runs: &mut PageRuns| {
+                    runs.slots += 1;
+                    Text::new("Tools").show(ui);
+                },
+            )
             .body(|ui, _, runs: &mut PageRuns| {
                 runs.body += 1;
                 Text::new("Document").show(ui);
             })
-            .page(true, CommandScope::APP, |ui, cx, runs: &mut PageRuns| {
-                runs.page += 1;
-                runs.band = cx.shell().and_then(|shell| shell.page_band());
-                Text::new("Print").show(ui);
-                if dialog {
-                    Dialog::new("Page setup").opened(Bind::given(true)).show(ui, |ui, _| {
-                        Text::new("Setup").show(ui);
-                    });
-                }
-            })
+            .page(
+                true,
+                CommandScope::APP,
+                |_| None,
+                |ui, cx, runs: &mut PageRuns| {
+                    runs.page += 1;
+                    runs.band = cx.shell().and_then(|shell| shell.page_band());
+                    Text::new("Print").show(ui);
+                    if dialog {
+                        Dialog::new("Page setup").opened(Bind::given(true)).show(ui, |ui, _| {
+                            Text::new("Setup").show(ui);
+                        });
+                    }
+                },
+            )
             .show(ui, &mut *runs);
         runs.shown = out.regions.slots.len();
     });
@@ -587,9 +738,14 @@ fn caption_widths(windows: &Windows, runs: &mut PageRuns, names: &[&str]) -> Vec
             .body(|ui, _, _: &mut PageRuns| {
                 Text::new("Document").show(ui);
             })
-            .page(true, CommandScope::APP, |ui, _, _: &mut PageRuns| {
-                Text::new("Print").show(ui);
-            })
+            .page(
+                true,
+                CommandScope::APP,
+                |_| None,
+                |ui, _, _: &mut PageRuns| {
+                    Text::new("Print").show(ui);
+                },
+            )
             .show(ui, &mut *runs);
     });
     let tree = &out.trees.iter().rev().find(|(viewport, _)| *viewport == ViewportId::ROOT).expect("the root pass ran").1;
@@ -643,7 +799,7 @@ fn a_page_hides_the_slots_and_its_band_keeps_the_window_ends_and_moves_the_windo
     let bands = regions.moves.iter().filter(|area| band.rect.contains_rect(**area)).count();
     let to = free + egui::vec2(40.0, 0.0);
     let mut sent = Vec::new();
-    for events in [vec![craft_ui::testing::pointer::moved(free)], vec![press(free)], vec![craft_ui::testing::pointer::moved(to)], vec![release(to)]] {
+    for events in [vec![moved(free)], vec![press(free)], vec![moved(to)], vec![release(to)]] {
         sent.extend(page_frame(&windows, &mut runs, false, events));
     }
     assert!(sent.contains(&egui::ViewportCommand::StartDrag), "a drag of the free band moves the window: {sent:?}");
@@ -678,12 +834,17 @@ fn a_page_takes_the_windows_keys_with_nothing_focused() {
                 .body(|ui, _, _: &mut ()| {
                     Button::new("Body").show(ui);
                 })
-                .page(true, PAGE, |ui, cx, _: &mut ()| {
-                    while cx.take_command::<PageKeys>().is_some() {
-                        printed.set(printed.get() + 1);
-                    }
-                    Text::new("Print").show(ui);
-                })
+                .page(
+                    true,
+                    PAGE,
+                    |_| None,
+                    |ui, cx, _: &mut ()| {
+                        while cx.take_command::<PageKeys>().is_some() {
+                            printed.set(printed.get() + 1);
+                        }
+                        Text::new("Print").show(ui);
+                    },
+                )
                 .show(ui, &mut ());
         });
     };
@@ -706,9 +867,13 @@ fn shell_with_status(body: fn(&mut Ui)) -> (Fixture, Rc<Cell<Rect>>) {
     let seen = Rc::clone(&slot);
     let mut fixture = Fixture::new(move |ui| {
         let shown = AppShell::new(WindowKey::main())
-            .status(true, |ui, _, _: &mut ()| {
-                Text::new("Ready").show(ui);
-            })
+            .status(
+                true,
+                |_| None,
+                |ui, _, _: &mut ()| {
+                    Text::new("Ready").show(ui);
+                },
+            )
             .body(|ui, _, _| body(ui))
             .show(ui, &mut ());
         if let Some(rect) = shown.regions.slots.iter().find(|(key, _)| *key == slots::STATUS).map(|(_, rect)| *rect) {
@@ -767,26 +932,22 @@ fn popups_stop_above_the_bottom_slots_in_each_window() {
     }
 }
 
-/// What a memoized options bar shows: one text button, as an app's tool options.
-#[derive(MemoProps)]
-struct MemoBar {
-    version: u64,
-}
-
 thread_local! {
-    /// The rect the memoized bar's button took when it last ran.
+    /// The rect the options bar's button took when it last ran.
     static MEMO_BUTTON: Cell<Rect> = const { Cell::new(Rect::NOTHING) };
 }
 
-fn memo_bar(_: &mut MemoBar, ui: &mut Ui) {
+/// An options bar of one text button, as an app's tool options.
+fn memo_bar(ui: &mut Ui) {
     let _ = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
         let rect = Button::new("Straighten").show(ui).rect;
         MEMO_BUTTON.with(|button| button.set(rect));
     });
 }
 
-/// photocraft#16405: an options bar the app shows through a memoized view sits on the slot's line as one shown directly
-/// does: its text button is drawn whole, centred in the slot, not cut off at the bottom.
+/// photocraft#16405: an options bar in the shell's versioned options slot, which replays it as a memoized view, sits
+/// on the slot's line as one shown directly does: its text button is drawn whole, centred in the slot, not cut off at
+/// the bottom.
 #[trial]
 fn a_memoized_options_bar_centres_its_button_in_the_slot() {
     for ppp in [1.0, 1.25, 1.5] {
@@ -794,9 +955,7 @@ fn a_memoized_options_bar_centres_its_button_in_the_slot() {
         let out = Rc::clone(&seen);
         let mut fixture = Fixture::new(move |ui| {
             let shown = AppShell::new(WindowKey::main())
-                .options_bar(true, |ui, _, _: &mut ()| {
-                    let _ = MemoView::new("options", MemoBar { version: 0 }, memo_bar).show(ui);
-                })
+                .options_bar(true, |_| Some(0), |ui, _, _: &mut ()| memo_bar(ui))
                 .body(|_, _, _| {})
                 .show(ui, &mut ());
             if let Some(slot) = shown.regions.slots.iter().find(|(key, _)| *key == "options").map(|(_, rect)| *rect) {

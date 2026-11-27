@@ -1,6 +1,6 @@
 [package]
 name = "craft-palette"
-description = "Bounded, application-independent GIMP palette reading"
+description = "Bounded, application-independent GIMP and RIFF palette reading"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

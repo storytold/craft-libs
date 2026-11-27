@@ -56,9 +56,20 @@ const PAD: usize = 4;
 ///
 /// Errors: as [`encode_jbig2_generic`].
 pub fn encode_jbig2(data: &[u8], columns: u32, rows: u32) -> Result<Vec<u8>, CodecError> {
+    encode_jbig2_capped(data, columns, rows, symbols::MAX_SYMBOLS, symbols::MAX_SYMBOL_PIXELS, symbols::MAX_CODED_SYMBOLS)
+}
+
+fn encode_jbig2_capped(
+    data: &[u8],
+    columns: u32,
+    rows: u32,
+    max_symbols: usize,
+    max_symbol_pixels: usize,
+    max_coded_symbols: usize,
+) -> Result<Vec<u8>, CodecError> {
     let generic = encode_jbig2_generic(data, columns, rows)?;
     let samples = rows_to_encode(data, columns, rows).ok();
-    Ok(match samples.and_then(|s| symbols::encode(s, columns, rows)) {
+    Ok(match samples.and_then(|s| symbols::encode(s, columns, rows, max_symbols, max_symbol_pixels, max_coded_symbols)) {
         Some(coded) if coded.len() < generic.len() => coded,
         _ => generic,
     })
@@ -433,6 +444,10 @@ mod tests {
             fn next_line(&mut self) {
                 self.0 += 1;
             }
+        }
+        // The largest page, 2^28 pixels, takes seconds to encode and decode: nightly only.
+        if craft_testkit::hostile::divisor() > 1 {
+            return;
         }
         // One black pixel, so a page that came back blank wouldn't pass.
         let mut largest = vec![0xFF; 2_048 * 16_384];

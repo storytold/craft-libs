@@ -131,7 +131,8 @@ pub(crate) fn request_repaint_of(ctx: &Context, viewport: ViewportId) {
     ctx.request_repaint_of(viewport);
 }
 
-/// The options the runtime owns at install: interface scale and quit are commands, so egui's own shortcuts go.
+/// The options the runtime owns at install: the interface scale is the app's `RootEnv::scale` and quit is a command
+/// (`QuitCommand`), so egui's own keyboard zoom and quit shortcuts go.
 pub(crate) fn clear_shortcuts(ctx: &Context) {
     ctx.options_mut(|options| {
         options.zoom_with_keyboard = false;
@@ -570,6 +571,51 @@ pub(crate) fn wheel_read(ctx: &Context, line: f32, page: f32) -> Option<(Vec2, W
     })
 }
 
+/// The wheel motion of the pass that zooms instead of scrolling, in wheel lines (`Wheel::zoom_lines`): its wheel events
+/// under egui's zoom modifier, which `pointer_read` turns into the pass's zoom factor and `wheel_read` leaves out of the
+/// scroll, and the Ctrl+wheel steps `fold_legacy_pinch` turned into pinch steps in the same input. A line event counts
+/// its lines, a point event its points over egui's line scroll speed and a page event its page's points over it. Zero
+/// when there were none; a delta that is not finite is left out.
+pub(crate) fn zoom_wheel_lines(ctx: &Context) -> Vec2 {
+    let (zoom_modifier, line) = ctx.options(|options| (options.input_options.zoom_modifier, options.input_options.line_scroll_speed));
+    let page = ctx.content_rect().height();
+    let speed = crate::runtime::frame::root_input(ctx).wheel;
+    let folded = PerViewport::<RawState>::with(ctx, super::pass::current_viewport(ctx), |state| state.folded_lines);
+    ctx.input(|input| {
+        input.raw.events.iter().fold(folded, |sum, event| match event {
+            Event::MouseWheel { unit, delta, modifiers, .. } if modifiers.matches_any(zoom_modifier) => {
+                sum + wheel_lines(*unit, unscaled(*unit, *delta, modifiers, speed), line, page)
+            }
+            _ => sum,
+        })
+    })
+}
+
+/// `delta` of a wheel event in `unit` with `modifiers` as the device sent it, before `scale_wheel` multiplied it by the
+/// user's `speed`.
+fn unscaled(unit: MouseWheelUnit, delta: Vec2, modifiers: &egui::Modifiers, speed: crate::runtime::env::WheelSpeed) -> Vec2 {
+    if modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
+        return delta;
+    }
+    let factor = match unit {
+        MouseWheelUnit::Line => speed.line,
+        MouseWheelUnit::Point => speed.point,
+        MouseWheelUnit::Page => return delta,
+    };
+    if factor.is_finite() && factor > 0.0 { delta / factor } else { delta }
+}
+
+/// `delta` of a wheel event in `unit` as wheel lines of `line` points, pages being `page` points; zero when it is not
+/// finite.
+fn wheel_lines(unit: MouseWheelUnit, delta: Vec2, line: f32, page: f32) -> Vec2 {
+    let lines = match unit {
+        MouseWheelUnit::Line => delta,
+        MouseWheelUnit::Point => delta / line,
+        MouseWheelUnit::Page => delta * page / line,
+    };
+    if lines.is_finite() { lines } else { Vec2::ZERO }
+}
+
 /// Removes the events a modal layer in another viewport blocks: button and key presses, wheel, text, clipboard and
 /// touch. Pointer moves and releases stay, so the pointer position stays right and no press or key sticks down. The
 /// events `keep` admits stay too (the canvas the modal leaves open, `runtime::sampler`); `pointer` is where the pointer
@@ -682,7 +728,7 @@ const PINCH_CONTINUES: f64 = 0.25;
 
 /// Windows and Linux: turns a fractional Ctrl+wheel (or a Wayland point-unit one) into `Event::Zoom` at egui's Ctrl-scroll
 /// speed; a whole notch stays a wheel event unless within 0.25 s of a pinch step. An input that carries `Event::Zoom`
-/// already is left alone and ends the run of pinch steps.
+/// already is left alone and ends the run of pinch steps. Runs while `RootEnv::ctrl_wheel_pinch` is on.
 pub(crate) fn fold_legacy_pinch(ctx: &Context, input: &mut RawInput) {
     let os = crate::runtime::windows::os_of(ctx);
     if os == Os::Mac {
@@ -715,6 +761,7 @@ pub(crate) fn fold_legacy_pinch(ctx: &Context, input: &mut RawInput) {
             }
             let points = if unit == MouseWheelUnit::Line { delta * line } else { delta };
             *event = Event::Zoom((speed * (points.x + points.y)).exp());
+            state.folded_lines += wheel_lines(unit, delta, line, 0.0);
             state.last_pinch = now.or(state.last_pinch);
         }
     });
@@ -725,6 +772,8 @@ pub(crate) fn fold_legacy_pinch(ctx: &Context, input: &mut RawInput) {
 pub(crate) struct RawState {
     /// The input time of the last Ctrl+wheel folded into a pinch step.
     last_pinch: Option<f64>,
+    /// The wheel lines of the Ctrl+wheel events folded into pinch steps in the running pass's input (`zoom_wheel_lines`).
+    folded_lines: Vec2,
     control_click: ControlClick,
     /// The Alt+numpad entry in progress.
     alt_code: super::alt_code::AltCodeEntry,
@@ -741,14 +790,18 @@ pub(crate) struct RawState {
 /// A frame's raw events reach only its first pass; a second pass's input holds none, so each wheel delta is scaled
 /// once and each digit folded once, with nothing to replay or remember between passes.
 pub(crate) fn prepare(ctx: &Context, input: &mut RawInput) {
-    fold_legacy_pinch(ctx, input);
     // This frame's `RootEnv`, which `set_input` stored before egui ran the input hook.
-    // PLAN: assumed `pub(crate) fn root_input(ctx: &Context) -> (WheelSpeed, AltCodePages)` in `runtime/frame.rs` (platform-w3).
-    let (wheel, pages) = crate::runtime::frame::root_input(ctx);
-    scale_wheel(&mut input.events, wheel);
+    let root = crate::runtime::frame::root_input(ctx);
+    // Each pass's input folds its own steps: a later pass of the frame, whose input holds no events, reads none.
+    PerViewport::<RawState>::with(ctx, input.viewport_id, |state| state.folded_lines = Vec2::ZERO);
+    if root.ctrl_wheel_pinch {
+        fold_legacy_pinch(ctx, input);
+    }
+    let pages = root.alt_codes;
+    scale_wheel(&mut input.events, root.wheel);
     let os = crate::runtime::windows::os_of(ctx);
     let macos = os == Os::Mac;
-    // A chord a component claims or a capture holds goes to its owner before Alt-code entry.
+    // A chord the key target claims or a capture holds goes to its owner before Alt-code entry.
     let claimed = crate::runtime::keys::claims_press(ctx, input);
     let events = &mut input.events;
     PerViewport::<RawState>::with(ctx, input.viewport_id, |state| {
@@ -790,6 +843,11 @@ fn scale_wheel(events: &mut [Event], speed: crate::runtime::env::WheelSpeed) {
 /// The widget egui holds a drag on.
 pub(crate) fn dragged(ctx: &Context) -> Option<Id> {
     ctx.dragged_id()
+}
+
+/// Whether a pointer button is down.
+pub(crate) fn button_down(ctx: &Context) -> bool {
+    ctx.input(|input| input.pointer.any_down())
 }
 
 /// Where the press that is held down began, while a button is down.

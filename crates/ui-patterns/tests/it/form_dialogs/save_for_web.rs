@@ -43,7 +43,7 @@ fn open(web: HostedSaveForWeb) -> (Rc<RefCell<DialogHost>>, Fixture) {
     let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
     fixture.room(Vec2::new(1400.0, 1000.0));
     host.borrow_mut().open(web);
-    fixture.idle(10);
+    fixture.settle();
     (host, fixture)
 }
 
@@ -178,7 +178,7 @@ fn show_palette(host: &Rc<RefCell<DialogHost>>, fixture: &mut Fixture) {
     let revision = wanted.first().map_or(1, |want| want.request.revision);
     let variant = WebVariant::new(0, revision, texture(), 1000).colors(4).palette(PALETTE.to_vec());
     host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").set_variant(variant);
-    fixture.idle(4);
+    fixture.settle();
     select_optimized_pane(fixture);
 }
 
@@ -212,7 +212,7 @@ fn slices_and_palette_edits_follow_the_settings() {
     let web = HostedSaveForWeb::new("poster.psd", IMAGE, texture()).options(start).slices(slices()).presets(vec![preset]);
     let (host, mut fixture) = open(web);
     let actual = fixture.by_label("100%").expect("the 100% button");
-    fixture.click(&actual).idle(4);
+    fixture.click(&actual).settle();
 
     // A click selects one slice; Shift adds and removes.
     click_picture(&mut fixture, pos2(50.0, 50.0));
@@ -233,38 +233,38 @@ fn slices_and_palette_edits_follow_the_settings() {
     show_palette(&host, &mut fixture);
     assert_eq!(current(&host).slices, WebSlices::Selected(vec![1, 2]), "a click beside the picture leaves the slices");
     let cell = fixture.by_label("1 #00ff00").expect("the Color Table lists the palette");
-    fixture.click(&cell).key(Key::Enter, Modifiers::NONE).idle(4);
+    fixture.click(&cell).key(Key::Enter, Modifiers::NONE).settle();
     let (id, request) = host.borrow_mut().take_color_request().expect("opening a cell asks for its colour");
     assert_eq!(request.key, PALETTE_COLOR_KEY);
     host.borrow_mut().answer_color(id, PALETTE_COLOR_KEY, Srgba::rgb(1.0, 0.0, 1.0));
-    fixture.idle(4);
+    fixture.settle();
     let shift = (ColorTableEdit::Shift([255, 0, 255]), vec![[0, 255, 0]]);
     assert_eq!(table_events(&host), vec![shift], "the answer shifts the opened entry's colour");
 
     let interlaced = fixture.by_label("Interlaced").expect("the Interlaced check box");
-    fixture.click(&interlaced).idle(4);
+    fixture.click(&interlaced).settle();
     assert!(table_events(&host).is_empty(), "a setting that leaves the palette alone files no table event");
     let colors = fixture.by_label("Colors").expect("the Colors field");
-    fixture.click(&colors).key(Key::ArrowUp, Modifiers::NONE).idle(4);
+    fixture.click(&colors).key(Key::ArrowUp, Modifiers::NONE).settle();
     assert_eq!(current(&host).colors, 9, "the colour count changed");
     let restore = (ColorTableEdit::Restore, Vec::new());
     assert_eq!(table_events(&host), vec![restore], "a colour-count change restores the generated table");
 
     // A preset pick keeps the slices.
     let select = fixture.by_label("Preset").expect("the Preset list");
-    fixture.click(&select).idle(4);
+    fixture.click(&select).settle();
     let entry = fixture.by_label("GIF 16").expect("the preset entry");
-    fixture.click(&entry).idle(4);
+    fixture.click(&entry).settle();
     let after = current(&host);
     assert_eq!(after.colors, 16, "the preset applied");
     assert_eq!(after.slices, WebSlices::Selected(vec![1, 2]), "a preset keeps the slices");
 
     // Save answers the selection in the order it was made.
     let save = fixture.by_label("Save…").expect("the Save button");
-    fixture.click(&save).idle(4);
+    fixture.click(&save).settle();
     let request = host.borrow_mut().get_mut::<HostedSaveForWeb>().and_then(HostedSaveForWeb::pick_path).expect("Save asks for a path");
     host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").answer_path(request.key.clone(), PathBuf::from("/tmp/poster.gif"));
-    fixture.idle(6);
+    fixture.settle();
     let result = host.borrow_mut().take::<HostedSaveForWeb>().and_then(DialogResult::ok).expect("the path finishes the dialog");
     assert_eq!(result.options.slices, WebSlices::Selected(vec![1, 2]), "Save answers the selected slices");
 }
@@ -438,4 +438,31 @@ fn a_palette_answer_in_a_measured_frame_shifts_the_entry_once() {
     fixture.idle(4);
     let shift = (ColorTableEdit::Shift([255, 0, 255]), vec![[0, 255, 0]]);
     assert_eq!(table_events(&host), vec![shift], "the answer shifts the opened entry's colour once");
+}
+
+/// The rects of the preview panes the view shows, found by their accessible names (`{pane}: {first}, {second}`).
+fn pane_rects(fixture: &Fixture) -> Vec<Rect> {
+    let tree = fixture.tree();
+    let is_pane = |name: &str| (name.starts_with("Original") || name.starts_with("Optimized")) && name.contains(": ");
+    tree.keys().into_iter().filter(|key| tree.name_of(*key).is_some_and(is_pane)).filter_map(|key| fixture.target(key)).map(|t| t.rect).collect()
+}
+
+/// The panes take the height of the settings column beside them, so they reach down to its Image Size rows, and 4-Up
+/// splits that height between its two rows of panes.
+#[trial]
+fn the_preview_panes_take_the_height_beside_the_settings() {
+    let (_, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()));
+    for (view, count) in [("2-Up", 2), ("4-Up", 4)] {
+        let tab = fixture.by_label(view).expect("the view tab");
+        fixture.click(&tab).idle(4);
+        let percent = fixture.by_label("Percent").expect("the Image Size rows").rect;
+        let panes = pane_rects(&fixture);
+        assert_eq!(panes.len(), count, "{view} shows {count} panes");
+        let bottom = panes.iter().map(|pane| pane.bottom()).fold(f32::MIN, f32::max);
+        assert!(bottom > percent.top(), "{view}: the panes end at {bottom}, above the Percent row at {}", percent.top());
+        let top = panes.iter().map(|pane| pane.top()).fold(f32::MAX, f32::min);
+        let (upper, lower): (Vec<&Rect>, Vec<&Rect>) = panes.iter().partition(|pane| pane.top() <= top + 0.5);
+        assert_eq!(upper.len(), 2, "{view}: two panes to a row");
+        assert!(lower.iter().all(|pane| upper.iter().all(|up| pane.top() >= up.bottom())), "{view}: the second row is below the first");
+    }
 }

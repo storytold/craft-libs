@@ -260,6 +260,23 @@ fn lookup_by_every_name_kind() {
 }
 
 #[test]
+fn the_stores_face_wins_over_its_copy_in_the_os_folder() {
+    // A Flatpak's store sits under ~/.var/app, which sorts after the host's ~/.local/share/fonts
+    // the store copies its fonts into.
+    let root = temp("store-copy");
+    let bytes = font(&spec("Copied Sans", "Regular", 400));
+    write(&root.join("home/.local/share/fonts/Craft/Copied Sans/CopiedSans-Regular.ttf"), &bytes);
+    let store = root.join("home/.var/app/org.example.Fonts/data/craft-fonts");
+    write(&store.join("Copied Sans/CopiedSans-Regular.ttf"), &bytes);
+    let cat = Catalog::new(FontEnv { font_store: Some(store), ..linux_env(&root) }).with_font_service(false);
+    cat.rescan();
+    let styles = cat.styles("Copied Sans");
+    assert_eq!(styles.len(), 1);
+    assert_eq!(styles[0].source, Source::Store);
+    assert_eq!(cat.scanned_faces().iter().filter(|f| f.family == "Copied Sans").count(), 2);
+}
+
+#[test]
 fn installed_and_removed_fonts_are_seen_without_a_restart() {
     let root = temp("rescan");
     let cat = system(&root);
@@ -371,6 +388,39 @@ fn a_family_loads_once_for_every_thread() {
     cat.rescan();
     assert!(!Arc::ptr_eq(&cat.load_family("Host Serif"), &loads[0]));
     assert!(cat.load_family("Missing").is_empty());
+}
+
+#[test]
+fn generic_families_follow_the_platforms_list_then_the_others() {
+    let root = temp("generic");
+    let dir = root.join("listed");
+    write(&dir.join("Arial.ttf"), font(&spec("Arial", "Regular", 400)));
+    write(&dir.join("NotoSans.ttf"), font(&spec("Noto Sans", "Regular", 400)));
+    write(&dir.join("Mono.ttf"), font(&spec("DEJAVU SANS MONO", "Regular", 400)));
+    write(&dir.join("Times.ttf"), font(&Spec { legacy: Some(("Times New Roman", "Regular")), ..spec("Times New Roman Pro", "Regular", 400) }));
+    write(&dir.join("DejaVuSans.ttf"), font(&Spec { outlines: false, ..spec("DejaVu Sans", "Regular", 400) }));
+    let catalog = |os: Os| {
+        let listed = dir.clone();
+        Catalog::new(FontEnv { os, ..linux_env(&root) }).with_font_service(false).with_lister(Arc::new(move || vec![listed.clone()]))
+    };
+    // Linux: DejaVu Sans has no outlines, so Noto Sans; the family's own spelling comes back.
+    let linux = catalog(Os::Unix);
+    assert_eq!(linux.generic_family(Generic::SansSerif).as_deref(), Some("Noto Sans"));
+    assert_eq!(linux.generic_family(Generic::Monospace).as_deref(), Some("DEJAVU SANS MONO"));
+    // A legacy family name finds its family.
+    assert_eq!(linux.generic_family(Generic::Serif).as_deref(), Some("Times New Roman Pro"));
+    assert_eq!(linux.generic_family(Generic::SystemUi).as_deref(), Some("Noto Sans"));
+    // Windows tries Arial before the Linux names.
+    let windows = catalog(Os::Windows);
+    assert_eq!(windows.generic_family(Generic::SansSerif).as_deref(), Some("Arial"));
+    // Nothing of macOS's system-ui list: sans-serif's answer.
+    assert_eq!(catalog(Os::MacOs).generic_family(Generic::SystemUi).as_deref(), Some("Arial"));
+    // An added face counts; with nothing installed there is no answer.
+    let empty = Catalog::new(linux_env(&root.join("empty"))).with_font_service(false);
+    assert_eq!(empty.generic_family(Generic::Monospace), None);
+    empty.add_bytes(font(&spec("Liberation Mono", "Regular", 400)), Source::Document, &Limits::default()).unwrap();
+    assert_eq!(empty.generic_family(Generic::Monospace).as_deref(), Some("Liberation Mono"));
+    assert_eq!(empty.generic_family(Generic::Serif), None);
 }
 
 #[test]

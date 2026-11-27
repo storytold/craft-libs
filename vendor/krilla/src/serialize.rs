@@ -572,7 +572,7 @@ impl SerializeContext {
         Pdf::with_settings_and_capacity(self.chunk_settings, capacity)
     }
 
-    #[cfg(feature = "pdf")]
+    #[cfg(any(feature = "pdf", feature = "raster-images"))]
     pub(crate) fn chunk_settings(&self) -> Settings {
         self.chunk_settings
     }

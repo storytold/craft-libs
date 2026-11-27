@@ -24,7 +24,7 @@ use crate::primitives::{IconSpec, PaintShape, RectSide, StrokeWidth};
 use crate::runtime::access::Name;
 use crate::runtime::commands::FireSource;
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, RuleKind, StyleColor, StyleCx};
+use crate::style::{ComponentStyle, Flags, FocusLook, RuleKind, StyleColor, StyleCx};
 use craft_behavior::{
     ColumnKey, ColumnWidth, EditEvent, HitLevel, HitPriority, Intent, ItemLayout as _, ItemSource, Metrics, Mixed, NavShape, PartKey, PointerButton,
     PressPhase, Roving, Selection, Sense,
@@ -101,7 +101,7 @@ pub enum GridEvent<K> {
         /// The modifiers held.
         mods: Mods,
     },
-    /// The disclosure of a group header, or AccessKit Expand or Collapse on it, asks for a state.
+    /// The disclosure, Enter on a selectable group, or AccessKit Expand or Collapse asks for a state.
     GroupOpen {
         /// The group's index.
         group: usize,
@@ -154,6 +154,8 @@ impl<K> Outcome for TileGridOutput<K> {
 pub struct TileGridStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
     /// A header pinned over its group's tiles.
     pinned: StyleColor,
     /// The look of a group header: a heading row, which places the disclosure the grid declares.
@@ -271,7 +273,7 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// The thumbnail size the zoom is a factor of; `None` is the card thumbnail.
     #[prop]
     thumb_size: Option<ThumbSize>,
-    /// Cards are as large as the largest tile measures (an icon tile measures its icon), instead of the zoomed
+    /// Cards are as large as the largest tile measures (a non-card icon tile measures its icon), instead of the zoomed
     /// thumbnail side; `zoom` and `thumb_size` do not apply.
     #[prop(flag)]
     content_cells: bool,
@@ -668,6 +670,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
     fn style(cx: &StyleCx<'_>, _: TileGridStyleKey<K>) -> TileGridStyle {
         TileGridStyle {
             metrics: Metrics::new(),
+            focus: cx.focus_look(),
             pinned: cx.color(cx.tokens.color.surface.panel),
             header: ListRow::style(cx, ListRow::new(Label::default()).heading().style_key()),
             insert: cx.color(cx.tokens.color.accent.solid),
@@ -805,13 +808,13 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
             }
         }
         if self.collapses() {
-            while let Some(request) = cx.intents().take_access() {
+            // The collection handles selection of a selectable section. Take only disclosure requests here.
+            while let Some(request) = cx
+                .intents()
+                .take_access_where(|request| matches!(request.action, craft_behavior::AccessAction::Expand | craft_behavior::AccessAction::Collapse))
+            {
                 let Some(target) = request.target else { continue };
-                let wanted = match request.action {
-                    craft_behavior::AccessAction::Expand => true,
-                    craft_behavior::AccessAction::Collapse => false,
-                    _ => continue,
-                };
+                let wanted = request.action == craft_behavior::AccessAction::Expand;
                 let owner = self
                     .placed
                     .iter()
@@ -837,8 +840,15 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
             match slot {
                 Slot::Header(group) => {
                     let Some(group) = self.groups.get(group) else { continue };
-                    let node = access.node(section_part(&group.key), Role::HEADING);
-                    node.level(GROUP_LEVEL);
+                    let selectable = self.group_heads == GroupHeads::Titled && group.selectable;
+                    let role = if selectable { Role::LIST_BOX_OPTION } else { Role::HEADING };
+                    let node = access.node(section_part(&group.key), role);
+                    if selectable {
+                        let selected = cx.collection_selection().is_some_and(|held| held.contains(&group.key));
+                        node.flags.set(Flags::SELECTED, selected);
+                    } else {
+                        node.level(GROUP_LEVEL);
+                    }
                     node.name = Name::Text(if group.detail.is_empty() { group.title.clone() } else { format!("{}, {}", group.title, group.detail) });
                     if self.collapses() {
                         node.expanded = Some(group.open);
@@ -870,8 +880,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
                 draw.fill(&PaintShape::Rect(rect, CornerRadius::ZERO), style.pinned);
                 draw.edge_rule(RuleKind::Divider, rect, RectSide::Bottom);
             }
-            let lead = RowState { emphasized: lead == Some(Slot::Header(placed.group)), ..RowState::default() };
-            ui.face(section_part(&group.key), self.header_row(group, lead));
+            let selected = group.selectable && cx.collection_selection().is_some_and(|held| held.contains(&group.key));
+            let state = RowState { emphasized: lead == Some(Slot::Header(placed.group)), ..RowState::default() };
+            let header = self.header_row(group, state);
+            ui.face(section_part(&group.key), if selected { header.selected(true) } else { header });
             if placed.toggle {
                 let disclosure = Disclosure::new(Bind::given(group.open)).node(false).label(group.title.clone());
                 ui.face(TOGGLE.at(placed.group as u64), disclosure);
@@ -887,7 +899,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
         }
         // The gap under the pointer shows where an insertion lands; the part's state layer shows hover and focus.
         for &(at, rect) in &self.placed_gaps {
-            let hovered = cx.hover_pos(GAP.at(at as u64)).is_some();
+            let hovered = cx.part_if_declared(GAP.at(at as u64)).is_some_and(|result| result.hovered);
             if hovered {
                 let line = PaintShape::Path(vec![rect.center_top(), rect.center_bottom()]);
                 ui.draw().stroke(&line, StrokeWidth::Thick, style.insert);
@@ -923,6 +935,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
         if matches!(self.zoom, GridZoom::Bound(..)) {
             response.events.retain(|event| !matches!(event, CollectionEvent::Zoom { .. }));
         }
+        let collapses = self.collapses();
         let mut events = self.events;
         // Only a pass with events reads the pointer, so a pass without one does not depend on it.
         let mods = if response.events.is_empty() { Mods::NONE } else { crate::runtime::pointer::frame(&cx.core.ctx).pick_mods };
@@ -942,6 +955,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
             };
             if let Some(group) = header {
                 match event {
+                    CollectionEvent::Activate(_) if self.groups[group].selectable && collapses => {
+                        events.push(GridEvent::GroupOpen { group, open: !self.groups[group].open });
+                    }
                     CollectionEvent::Activate(_) => events.push(GridEvent::GroupPicked { group, mods }),
                     CollectionEvent::ContextMenu(request) => events.push(GridEvent::GroupMenu { group, at: request.at }),
                     CollectionEvent::Open(change) => events.push(GridEvent::GroupOpen { group, open: change.open }),

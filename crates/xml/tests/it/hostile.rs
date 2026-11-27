@@ -5,6 +5,27 @@ use craft_xml::{Canonical, Doctype, El, Error, Limits, Options, UnknownEntity, p
 
 const CANON: Canonical<'static> = Canonical::new(&[("w", "urn:w"), ("r", "urn:r")]);
 
+#[test]
+fn drop_blank_text_preserves_non_xml_whitespace() {
+    let options = Options { drop_blank_text: true, ..Options::default() }.strict();
+    for character in ['\u{a0}', '\u{2003}', '\u{85}', '\u{2028}'] {
+        let text = format!(" {character} \n");
+        let document = format!("<p> {character} <c/>\n</p>");
+        assert_eq!(options.parse(document.as_bytes()).unwrap().text(), text);
+    }
+    let root = options.parse(b"<p> \t\r\n<c/>\n</p>").unwrap();
+    assert_eq!(root.children.len(), 1);
+}
+
+#[test]
+fn drop_blank_text_preserves_spaces_beside_meaningful_cdata() {
+    let options = Options { cdata: true, drop_blank_text: true, ..Options::default() }.strict();
+    for content in ["text", "\u{a0}"] {
+        let document = format!("<p> <![CDATA[{content}]]><c/>\n</p>");
+        assert_eq!(options.parse(document.as_bytes()).unwrap().text(), format!(" {content}\n"));
+    }
+}
+
 /// Every way of reading, lenient and strict.
 fn all_options() -> Vec<Options<'static>> {
     let full =
@@ -308,19 +329,27 @@ fn mismatched_tags_are_repaired_or_refused() {
 /// 5 MB of input.
 #[test]
 fn attributes_are_bounded_over_the_whole_tree() {
-    let el = format!("<c{}/>", " a=\"\"".repeat(1024));
-    let doc = format!("<r>{}</r>", el.repeat(1025));
-    let limits = Limits { max_attrs_total: 1024 * 1024, ..Limits::DEFAULT };
+    // `ATTRS` attributes on each of `ATTRS + 1` elements, against a limit of `ATTRS` elements' worth.
+    const ATTRS: usize = 64;
+    let el = format!("<c{}/>", " a=\"\"".repeat(ATTRS));
+    let doc = format!("<r>{}</r>", el.repeat(ATTRS + 1));
+    let limits = Limits { max_attrs_total: ATTRS * ATTRS, ..Limits::DEFAULT };
     let opts = Options::default().with_limits(limits);
     let err = opts.parse(doc.as_bytes()).unwrap_err();
-    assert_eq!(err, Error::TooManyAttrsTotal(1024 * 1024));
+    assert_eq!(err, Error::TooManyAttrsTotal(ATTRS * ATTRS));
     assert!(err.is_limit());
     // exactly at the limit is accepted
-    let fits = format!("<r>{}</r>", el.repeat(1024));
-    assert_eq!(opts.parse(fits.as_bytes()).map(|r| r.children.len()), Ok(1024));
-    // the default stops a document that is nothing but attributes
-    let hostile = format!("<r>{}</r>", el.repeat(4000));
-    assert_eq!(parse(hostile.as_bytes()), Err(Error::TooManyAttrsTotal(4_000_000)));
+    let fits = format!("<r>{}</r>", el.repeat(ATTRS));
+    assert_eq!(opts.parse(fits.as_bytes()).map(|r| r.children.len()), Ok(ATTRS));
+    // The root's attribute crosses the retained-tree allowance by exactly one.
+    let one_over = format!("<r a=\"\">{}</r>", el.repeat(ATTRS));
+    assert_eq!(opts.parse(one_over.as_bytes()), Err(Error::TooManyAttrsTotal(ATTRS * ATTRS)));
+    // the default stops a document that is nothing but attributes (millions of them: nightly only)
+    if craft_testkit::hostile::divisor() == 1 {
+        let el = format!("<c{}/>", " a=\"\"".repeat(1024));
+        let hostile = format!("<r>{}</r>", el.repeat(4000));
+        assert_eq!(parse(hostile.as_bytes()), Err(Error::TooManyAttrsTotal(4_000_000)));
+    }
     // streamed elements take their attributes with them: any number of rows, as long as the
     // ones held at once fit
     let mut rows = 0;
@@ -328,9 +357,9 @@ fn attributes_are_bounded_over_the_whole_tree() {
         rows += c.attrs.len();
         Ok::<(), Error>(())
     });
-    assert_eq!((rows, root.map(|r| r.children.len())), (1025 * 1024, Ok(0)));
-    let tight = Options::default().with_limits(Limits { max_attrs_total: 1023, ..Limits::DEFAULT });
-    assert_eq!(tight.parse_streaming(doc.as_bytes(), &["c"], |_| Ok::<(), Error>(())), Err(Error::TooManyAttrsTotal(1023)));
+    assert_eq!((rows, root.map(|r| r.children.len())), ((ATTRS + 1) * ATTRS, Ok(0)));
+    let tight = Options::default().with_limits(Limits { max_attrs_total: ATTRS - 1, ..Limits::DEFAULT });
+    assert_eq!(tight.parse_streaming(doc.as_bytes(), &["c"], |_| Ok::<(), Error>(())), Err(Error::TooManyAttrsTotal(ATTRS - 1)));
 }
 
 /// An internal subset is found wherever it hides, and looking for it is linear in the input.

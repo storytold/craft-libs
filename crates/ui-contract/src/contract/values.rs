@@ -646,6 +646,10 @@ pub struct EditResponse<T> {
     /// Tab (`Some(true)`) or Shift+Tab (`Some(false)`) moved focus off the text part in this pass, which ended its
     /// edit; a list's rename continues on the next or previous row.
     pub left_by_tab: Option<bool>,
+    /// The text part lost key focus in this pass, with or without an edit: a click elsewhere, Tab, or an Escape that
+    /// keeps the text (`keep_on_escape`). It decides nothing; `submitted`, `escaped` and `left_by_tab` stay their own
+    /// facts. False for a component with no text part.
+    pub text_lost_focus: bool,
     /// The edit was abandoned with Escape.
     pub escaped: bool,
     /// A text part holds text that does not parse: the value is the last one that did, and a form that commits the
@@ -692,6 +696,7 @@ impl<T> EditResponse<T> {
             submit_mods: craft_keymap::Mods::NONE,
             activation_mods: craft_keymap::Mods::NONE,
             left_by_tab: None,
+            text_lost_focus: false,
             escaped: false,
             unparsed: false,
             validity,
@@ -715,6 +720,7 @@ impl<T> EditResponse<T> {
             submit_mods: craft_keymap::Mods::NONE,
             activation_mods: craft_keymap::Mods::NONE,
             left_by_tab: None,
+            text_lost_focus: false,
             escaped: false,
             unparsed: false,
             validity: Validity::Ok,
@@ -756,6 +762,7 @@ impl<T: Clone> EditResponse<T> {
             submit_mods: self.submit_mods,
             activation_mods: self.activation_mods,
             left_by_tab: self.left_by_tab,
+            text_lost_focus: self.text_lost_focus,
             escaped: self.escaped,
             unparsed: self.unparsed,
             validity,
@@ -805,6 +812,16 @@ pub trait ItemOutput<E>: Outcome {
 
     /// The rect of the item's label, where a rename editor goes; `None` puts it over the whole row.
     fn label_rect(&self) -> Option<egui::Rect> {
+        None
+    }
+
+    /// The lead item's resolved fill, which the collection uses as the background of its focus ring.
+    fn lead_fill(&self) -> Option<craft_theme::Rgba> {
+        None
+    }
+
+    /// The lead item's focus ring bounds, in the item's layer. The default uses the item's full bounds.
+    fn lead_focus_bounds(&self) -> Option<egui::Rect> {
         None
     }
 }

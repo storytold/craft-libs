@@ -10,6 +10,7 @@ use egui::{FallbackRequest, FontData, FontFamily, FontInsert, FontPriority, Font
 
 const ARABIC: &[u8] = include_bytes!("../../fonts/NotoSansArabic-test.ttf");
 const CJK: &[u8] = include_bytes!("../../fonts/NotoSansCJKsc-test.otf");
+const NOTO_SANS: &[u8] = include_bytes!("../../fonts/NotoSans-test.ttf");
 
 const OFFERED: &[&str] = &["en", "ar", "ja", "zh-CN", "zh-TW", "zh-HK", "ko", "th", "ka", "ru"];
 
@@ -179,6 +180,82 @@ fn a_craft_face_with_the_signature_role_leads_only_the_signature_family() {
     let without = build(CRAFT);
     assert!(!without.chain(&FontRef::signature()).is_empty(), "the signature family is registered without its face");
     assert_eq!(without.chain(&FontRef::signature()), without.chain(&FontRef::proportional()), "without its face it is the proportional chain");
+}
+
+/// The x-height of `data` as drawn, in ems of the font size: its x-height at the instance its variation coordinates
+/// set, times its scale.
+fn drawn_x_height(data: &FontData) -> f32 {
+    use skrifa::MetadataProvider as _;
+    let font = skrifa::FontRef::from_index(data.bytes(), data.index).expect("a font");
+    let location = font.axes().location(data.tweak.coords.as_ref());
+    let metrics = font.metrics(skrifa::instance::Size::unscaled(), &location);
+    data.tweak.scale * metrics.x_height.expect("an x-height") / f32::from(metrics.units_per_em)
+}
+
+/// craft-fonts' tab-title face leads the tab-title family, scaled to the semibold family's x-height and followed by
+/// that family's chain, and draws in no other family. The app's own semibold faces follow it under names of their own.
+/// Without the face, or with the OS's interface face, the stack has no tab-title family.
+#[trial]
+fn a_craft_face_with_the_tab_role_leads_the_tab_title_family() {
+    const TAB: EmbeddedFace = EmbeddedFace {
+        family: "Noto Sans",
+        style: "Condensed SemiBold",
+        scripts: &["Latn"],
+        bytes: NOTO_SANS,
+        index: 0,
+        role: Some(craft_fonts_build::TAB_ROLE),
+    };
+    let build = |faces: &[EmbeddedFace], interface| {
+        UiFonts::new(&I18nScripts)
+            .craft_faces(faces)
+            .languages(&["en", "vi"])
+            .ui_language("vi")
+            .system_fonts(SystemFonts::Off)
+            .interface_font(interface)
+            .stack()
+    };
+    let name = "Noto Sans Condensed SemiBold";
+    let tab = FontRef::named(craft_ui::fonts::TAB_TITLE);
+    let semibold = FontRef::named(craft_ui::fonts::SEMIBOLD);
+
+    let with: Vec<EmbeddedFace> = CRAFT.iter().copied().chain([TAB]).collect();
+    let stack = build(&with, craft_theme::InterfaceFont::Suite);
+    let chain = stack.chain(&tab);
+    assert_eq!(chain.first().map(String::as_str), Some(name), "the tab-title face leads the tab-title family");
+    assert_eq!(&chain[1..], stack.chain(&semibold), "the semibold chain follows");
+    for family in [FontRef::proportional(), FontRef::monospace(), FontRef::signature(), semibold.clone()] {
+        // A Vietnamese UI asks Latin faces for the letters its base faces lack: the tab-title face isn't one of them.
+        assert!(!stack.chain(&family).iter().any(|face| face == name), "{family:?} has no tab-title face");
+    }
+    let definitions = stack.flat_definitions();
+    let lead = definitions.font_data.get(name).expect("the tab-title face's data");
+    let reference = stack.chain(&semibold).first().and_then(|first| definitions.font_data.get(first)).expect("the semibold family's first face");
+    assert!(lead.tweak.scale != 1.0, "the stand-in face is scaled: {}", lead.tweak.scale);
+    assert!((drawn_x_height(lead) - drawn_x_height(reference)).abs() < 1e-4, "an x is as tall in a tab title as in semibold text");
+    assert!(stack.weights().contains(&(tab.clone(), 600)), "{:?}", stack.weights());
+
+    // The app's semibold face follows under its own name, and the face it names stays in the semibold family.
+    let app = UiFonts::new(&I18nScripts)
+        .app_face("ui-semibold", FontData::from_static(ARABIC), std::slice::from_ref(&semibold))
+        .craft_faces(&[TAB])
+        .languages(&["en"])
+        .ui_language("en")
+        .system_fonts(SystemFonts::Off)
+        .stack();
+    // The variable test face draws at 600 under the name `ui-semibold @600`.
+    let own = app.chain(&semibold).first().cloned().unwrap_or_default();
+    assert!(own.starts_with("ui-semibold"), "{:?}", app.chain(&semibold));
+    assert_eq!(app.chain(&tab).get(1), Some(&format!("{own} (tab title)")), "{:?}", app.chain(&tab));
+    let app_definitions = app.flat_definitions();
+    assert!(app_definitions.font_data.contains_key(&format!("{own} (tab title)")), "the copy has its data");
+    // The variable face's x-height grows with its weight: the tab-title face matches it at 600.
+    let lead = app_definitions.font_data.get(name).expect("the tab-title face's data");
+    let reference = app_definitions.font_data.get(&own).expect("the app's semibold face's data");
+    assert!(!reference.tweak.coords.as_ref().is_empty(), "the app's semibold face is set to a weight");
+    assert!((drawn_x_height(lead) - drawn_x_height(reference)).abs() < 1e-4, "an x is as tall in a tab title as in the app's semibold text");
+
+    assert!(build(CRAFT, craft_theme::InterfaceFont::Suite).chain(&tab).is_empty(), "without the face there is no tab-title family");
+    assert!(build(&with, craft_theme::InterfaceFont::System).chain(&tab).is_empty(), "the OS's interface face keeps tab titles");
 }
 
 #[trial]

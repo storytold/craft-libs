@@ -22,6 +22,8 @@ pub(crate) enum Reply {
     Gzipped,
     /// GitHub's answer when the quota is used up: 403 with no requests remaining.
     RateLimited,
+    /// GitHub's answer for a repository that is missing or private: 404.
+    NotFound,
 }
 
 /// Serves `body` over plain HTTP following `script`, one reply per connection; records the
@@ -61,6 +63,7 @@ pub(crate) fn serve(body: Vec<u8>, script: Vec<Reply>) -> (String, Arc<Mutex<Vec
                     stream,
                     "HTTP/1.1 403 Forbidden\r\nx-ratelimit-remaining: 0\r\nx-ratelimit-reset: 4102444800\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 ),
+                Reply::NotFound => write!(stream, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
                 Reply::Ranged => {
                     let from = range.unwrap_or(0);
                     write!(
@@ -149,6 +152,34 @@ fn gzip(data: &[u8]) -> Vec<u8> {
 }
 
 #[trial]
+fn the_remote_agents_refuse_plain_http_before_connecting() {
+    // ureq checks every hop, redirects included, before it connects; `.invalid` never
+    // resolves, so an agent that tried would fail on DNS instead.
+    let http = Http::build(crate::TEST_AGENT, true).unwrap();
+    let refused = |r: Result<_, String>| r.is_err_and(|e| e.contains("refused plain HTTP to example.invalid") && !e.contains("secret"));
+    assert!(refused(http.get_api("http://example.invalid/repos/x/y/releases?secret", None).map(|_| ())));
+    assert!(refused(http.get_text("http://example.invalid/SHA256SUMS.txt?secret").map(|_| ())));
+    // The scheme is case-insensitive, and an upper-case one isn't a loopback link either.
+    assert!(refused(http.get_text("HTTP://example.invalid/SHA256SUMS.txt").map(|_| ())));
+    assert!(refused(http.get_bytes("http://example.invalid/icon.png", 100).map(|_| ())));
+    assert!(refused(http.redirect_target("http://example.invalid/releases/latest").map(|_| ())));
+    assert!(http.get_feed("http://example.invalid/feed.json").is_err_and(|e| e.why.contains("refused plain HTTP")));
+    // A download fails at once rather than retrying until it pauses.
+    let dir = tempfile::tempdir().unwrap();
+    let (_, sha) = body();
+    let result = http.download("http://example.invalid/file.bin?secret", &dir.path().join("file.bin"), 10, &sha, &Stop::default(), &mut |_| {});
+    assert_eq!(result.unwrap_err(), "the download led to plain HTTP at example.invalid, so it wasn't fetched");
+}
+
+#[trial]
+fn https_only_still_reaches_a_loopback_link() {
+    let (body, _) = body();
+    let (url, _) = serve(body.clone(), vec![Reply::Full]);
+    let http = Http::build(crate::TEST_AGENT, true).unwrap();
+    assert_eq!(http.get_bytes(&url, body.len()).unwrap(), Some(body));
+}
+
+#[trial]
 fn a_rate_limited_release_check_is_typed_not_english_text() {
     let http = Http::new(crate::TEST_AGENT).unwrap();
     let app = crate::suite::PHOTOCRAFT;
@@ -161,4 +192,13 @@ fn a_rate_limited_release_check_is_typed_not_english_text() {
     let closed = format!("http://{}/", TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap());
     let why = crate::check_releases_at(&closed, &app, &http, "0.1.0").unwrap_err();
     assert!(matches!(&why, crate::CheckError::Failed(text) if why.to_string() == *text));
+}
+
+#[trial]
+fn a_repository_github_does_not_find_is_an_error_not_up_to_date() {
+    let http = Http::new(crate::TEST_AGENT).unwrap();
+    let app = crate::suite::PHOTOCRAFT;
+    let (url, _) = serve(Vec::new(), vec![Reply::NotFound]);
+    let why = crate::check_releases_at(&url, &app, &http, "0.1.0").unwrap_err();
+    assert!(matches!(&why, crate::CheckError::Failed(text) if text.contains(app.repo)), "the reason names the repository: {why}");
 }

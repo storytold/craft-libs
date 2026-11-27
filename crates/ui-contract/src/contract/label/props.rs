@@ -128,12 +128,42 @@ impl crate::runtime::env::EnvValue for GlyphColon {
 #[env(style)]
 #[non_exhaustive]
 pub enum LinkLabelInk {
-    /// The link look (`StyleCx::link_look`): `accent.solid`, `accent.text` at high contrast.
+    /// The link look (`StyleCx::link_look`): `accent.text`.
     #[default]
     Accent,
     /// `text.normal`, the ink of a `Link` in `Tone::Neutral`: VectorCraft's "Opacity:" and "Stroke" labels, as
     /// production drew them.
     Neutral,
+}
+
+/// Where a one-line link label ([`SideLabel::link`]) draws its underline. An app sets it once at its root
+/// (`RootEnv::values`); the default is `Edge`. Neither changes the label's rect.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum LinkLabelUnderline {
+    /// On the name's text box's bottom edge, where egui strokes an underlined span. The label's rect, which clips its
+    /// paint, can stand shorter than that box, and then it cuts the underline away.
+    #[default]
+    Edge,
+    /// On the text box's bottom edge or the rect's, whichever is higher, so the rect always holds it: VectorCraft's
+    /// "Stroke" and "Opacity:" links, as production drew them.
+    Inside,
+}
+
+/// The ink of a side label's name, other than a link's ([`LinkLabelInk`]) and the text after a check box or a radio,
+/// which reads at full ink. An app sets it once at its root (`RootEnv::values`); the default is the muted ink of a
+/// caption that reads as secondary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum CaptionInk {
+    /// `text.muted`.
+    #[default]
+    Muted,
+    /// `text.normal`, the ink of the values beside it: VectorCraft's field labels ("X:", "Angle:", "Opacity"), as
+    /// production drew them.
+    Normal,
 }
 
 /// Whether the beside captions of a [`LabelScheme::Inline`] form share one column. Off (the default), each caption is
