@@ -81,12 +81,12 @@ pub(super) fn is_selected(fixture: &Fixture, node: NodeKey) -> bool {
 }
 
 /// Whether the cases that run once per member of a repeated set (each repeat of a part, each row that declares an
-/// action) run on a fixed sample of the set: under the gate's sweep fraction, `craft_testkit::hostile::divisor` above
-/// 1. The nightly run sets no fraction and checks every member.
+/// action) run on a fixed sample of the set: when no sweep fraction is set (a local run) or it is above 1 (the gate).
+/// Only an explicit `CRAFT_HOSTILE_DIVISOR=1`, which the nightly and full-validation runs set, checks every member.
 fn samples_repeats() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        craft_testkit::hostile::divisor() > 1
+        std::env::var_os(craft_testkit::hostile::DIVISOR_VARIABLE).is_none() || craft_testkit::hostile::divisor() > 1
     }
     #[cfg(target_arch = "wasm32")]
     {

@@ -175,7 +175,7 @@ fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
 /// each exemption names a known case. `home`: the stories are the package's that registers the type ([`Subject::home`]).
 fn run_group(probe: Probe, group: &'static Group, check_exemptions: bool, home: bool, stories: Vec<Story>) -> Result<(), Failed> {
     // The cases that read the type as a whole look at one story of each kind at the gate; the others keep every story.
-    let stories = if matches!(group.name, "reads" | "variants" | "containers") { nodes::sampled_stories(stories) } else { stories };
+    let stories = if matches!(group.name, "reads" | "activation" | "variants" | "containers") { nodes::sampled_stories(stories) } else { stories };
     let subject = Subject::new(&probe, stories, home);
     let mut failures = Vec::new();
     if check_exemptions && home {
