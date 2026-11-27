@@ -203,9 +203,13 @@ pub fn picture(blip: &Blip, limit: usize, work: &mut Decode) -> Option<Picture> 
 /// A WMF BLIP as a `.wmf` file: its records, with the placeable header the BLIP leaves out put
 /// back so the picture keeps its size, within `limit` bytes and `work`. Putting the header in
 /// front copies the records again, so that copy is charged whole. When it doesn't fit, or the
-/// bounds can't make a placeable header, the records are kept as they are: a WMF without one.
+/// bounds can't make a placeable header, the records are kept as they are: a WMF without one. A
+/// BLIP whose WMF has its placeable header already is kept as it is, not given a second one.
 pub fn with_placeable_header(blip: &Blip, limit: usize, work: &mut Decode) -> Option<Vec<u8>> {
     let records = blip.bytes(limit, work)?;
+    if crate::wmf::is_placeable(&records) {
+        return Some(records);
+    }
     let Some(header) = blip.header.filter(|h| crate::wmf::gets_header(h)) else { return Some(records) };
     let whole = records.len().checked_add(crate::wmf::PLACEABLE_HEADER)?;
     if whole > limit || !work.charge(whole, "metafile") {

@@ -196,6 +196,23 @@ fn a_wmf_header_is_added_only_when_its_copy_fits() {
     assert_eq!(with_placeable_header(&blip, records.len(), &mut work).map(|b| b.len()), Some(records.len()), "no header to add, none reserved");
 }
 
+/// A WMF BLIP whose records start with a placeable header already is kept as it is: a second
+/// header in front would leave a reader that skips the first one looking at the second.
+#[test]
+fn a_wmf_with_its_placeable_header_gets_no_second_one() {
+    let mut records = vec![0u8; 22];
+    records[..4].copy_from_slice(&0x9AC6_CDD7u32.to_le_bytes());
+    // Then the standard WMF header: type 1, header size 9 words.
+    records.extend_from_slice(&[1, 0, 9, 0, 0, 3]);
+    records.extend_from_slice(&[0; 12]);
+    let mut b = metafile(rt::BLIP_WMF, 0x216, records.len(), &records, false);
+    b[8 + 28..8 + 32].copy_from_slice(&1000i32.to_le_bytes());
+    let blip = parse(&Rec::at(&b, 0).unwrap()).unwrap();
+    assert!(crate::wmf::gets_header(blip.header.unwrap()), "its bounds would make a header");
+    let out = with_placeable_header(&blip, usize::MAX, &mut Decode::new(usize::MAX)).unwrap();
+    assert_eq!(out, records);
+}
+
 /// A WMF whose bounds don't fit the 16-bit coordinates of its records keeps its records without a
 /// placeable header, rather than one whose clamped bounds have no width.
 #[test]
