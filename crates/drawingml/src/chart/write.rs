@@ -488,11 +488,7 @@ fn axis_ids(secondary: bool) -> (u32, u32) {
 
 fn axes(w: &mut Writer, c: &Chart, g: Group, kind: ChartType, secondary: bool) {
     let (ax_cat, ax_val) = axis_ids(secondary);
-    let (y_min, y_max, y_format) = if secondary {
-        (c.y2_min, c.y2_max, c.y2_format.as_deref())
-    } else {
-        (c.y_min, c.y_max, c.y_format.as_deref())
-    };
+    let (y_min, y_max, y_format) = if secondary { (c.y2_min, c.y2_max, c.y2_format.as_deref()) } else { (c.y_min, c.y_max, c.y_format.as_deref()) };
     let horizontal = kind.horizontal() && g == Group::Bar;
     let (cat_pos, val_pos) = match (horizontal, secondary) {
         (true, false) => ("l", "b"),
@@ -832,11 +828,7 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
     let first = effective.first().map_or(main, |(_, _, kind)| *kind);
     let combo = c.kind == ChartType::Combo || effective.iter().any(|(_, _, kind)| *kind != first);
     let normalize = |kind| {
-        if combo && matches!(group_of(kind), Group::Pie | Group::Doughnut | Group::Scatter | Group::Bubble) {
-            ChartType::Column
-        } else {
-            kind
-        }
+        if combo && matches!(group_of(kind), Group::Pie | Group::Doughnut | Group::Scatter | Group::Bubble) { ChartType::Column } else { kind }
     };
     let mut kinds = Vec::new();
     for (_, _, kind) in &effective {
@@ -853,13 +845,29 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
         let list = effective.iter().filter(|(_, _, k)| normalize(*k) == *kind).map(|(i, s, _)| (*i, *s)).collect::<Vec<_>>();
         has_secondary |= plot_kind(&mut w, c, *kind, &list);
     }
-    if !combo && !matches!(
-        first,
-        ChartType::Column | ChartType::StackedColumn | ChartType::PercentColumn | ChartType::Bar | ChartType::StackedBar
-            | ChartType::PercentBar | ChartType::Line | ChartType::LineMarkers | ChartType::StackedLine | ChartType::Area
-            | ChartType::StackedArea | ChartType::Pie | ChartType::Doughnut | ChartType::Scatter | ChartType::Bubble
-            | ChartType::Radar | ChartType::FilledRadar | ChartType::Stock
-    ) {
+    if !combo
+        && !matches!(
+            first,
+            ChartType::Column
+                | ChartType::StackedColumn
+                | ChartType::PercentColumn
+                | ChartType::Bar
+                | ChartType::StackedBar
+                | ChartType::PercentBar
+                | ChartType::Line
+                | ChartType::LineMarkers
+                | ChartType::StackedLine
+                | ChartType::Area
+                | ChartType::StackedArea
+                | ChartType::Pie
+                | ChartType::Doughnut
+                | ChartType::Scatter
+                | ChartType::Bubble
+                | ChartType::Radar
+                | ChartType::FilledRadar
+                | ChartType::Stock
+        )
+    {
         log::warn!("pptx: {} chart written as a column chart", first.label());
     }
     let axis_kind = if combo { ChartType::Combo } else { first };

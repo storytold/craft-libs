@@ -1451,10 +1451,7 @@ mod tests {
             for (i, id) in pair.iter().enumerate() {
                 let axis = plot
                     .elements()
-                    .find(|a| {
-                        matches!(a.local(), "catAx" | "valAx")
-                            && a.child(Local("axId")).and_then(|v| v.attr_local("val")) == Some(id.as_str())
-                    })
+                    .find(|a| matches!(a.local(), "catAx" | "valAx") && a.child(Local("axId")).and_then(|v| v.attr_local("val")) == Some(id.as_str()))
                     .unwrap();
                 assert_eq!(axis.child(Local("crossAx")).and_then(|v| v.attr_local("val")), Some(pair[1 - i].as_str()));
             }
@@ -1463,10 +1460,7 @@ mod tests {
 
     #[test]
     fn review_6093532941_series_kind_edit_rebuilds_without_chart_kind_change() {
-        let xml = same_kind_chart_xml().replace(
-            r#"<c:axId val="3"/><c:axId val="4"/>"#,
-            r#"<c:axId val="1"/><c:axId val="2"/>"#,
-        );
+        let xml = same_kind_chart_xml().replace(r#"<c:axId val="3"/><c:axId val="4"/>"#, r#"<c:axId val="1"/><c:axId val="2"/>"#);
         let mut edited = read_chart_xml(xml.as_bytes()).unwrap();
         assert_eq!(edited.kind, ChartType::Column);
         assert!(edited.series.iter().all(|s| !s.secondary_axis));
@@ -1493,7 +1487,11 @@ mod tests {
         let (written, kept) = crate::chart::write::chart_xml(&legacy);
         assert!(!kept);
         let back = read_chart_xml(&written).unwrap();
-        assert_eq!(back.series.iter().find(|s| s.name == "Edited").unwrap().kind, Some(ChartType::Area), "legacy provenance must not turn an unchanged chart-wide type into an override");
+        assert_eq!(
+            back.series.iter().find(|s| s.name == "Edited").unwrap().kind,
+            Some(ChartType::Area),
+            "legacy provenance must not turn an unchanged chart-wide type into an override"
+        );
         assert_eq!(back.series.iter().find(|s| s.name == "Inherited").unwrap().kind, Some(ChartType::LineMarkers));
     }
 
@@ -1529,11 +1527,7 @@ mod tests {
     #[test]
     fn review_6093532941_chart_kind_edit_overrides_imported_series_kinds() {
         let xml = same_kind_chart_xml()
-            .replacen(
-                r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>"#,
-                r#"<c:areaChart><c:grouping val="standard"/>"#,
-                1,
-            )
+            .replacen(r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>"#, r#"<c:areaChart><c:grouping val="standard"/>"#, 1)
             .replacen("</c:barChart>", "</c:areaChart>", 1);
         let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
         for legacy in [false, true] {
@@ -1552,5 +1546,4 @@ mod tests {
             assert_eq!(back.series.iter().map(|s| (s.name.clone(), s.values.clone())).collect::<Vec<_>>(), names_and_values);
         }
     }
-
 }
