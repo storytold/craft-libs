@@ -889,3 +889,22 @@ fn a_move_that_changes_nothing_under_the_pointer_needs_no_pass() {
     assert!(needs(Some(follow.center()), follow.center() + Vec2::new(5.0, 0.0)), "a move in a rect that follows the pointer runs a pass");
     assert!(needs(None, inside), "the pointer coming in runs a pass");
 }
+
+/// Two overlapping parts of one root that hit both points of a move, where the nearest centre picks another part at
+/// the end: the hover changes, so the move runs a pass.
+#[trial]
+fn a_move_that_changes_the_nearest_part_needs_a_pass() {
+    use craft_ui::runtime::pointer::move_needs_pass;
+    use egui::ViewportId;
+    const LEFT: PartKey = PartKey::new("left");
+    const RIGHT: PartKey = PartKey::new("right");
+    let root = ProbeRoot::new("parts", rect(0.0, 0.0, 140.0, 100.0), Sense::empty())
+        .part(ProbePart::new(LEFT, rect(0.0, 0.0, 100.0, 100.0), Sense::CLICK))
+        .part(ProbePart::new(RIGHT, rect(40.0, 0.0, 100.0, 100.0), Sense::CLICK));
+    let (mut show, _) = scene(vec![root]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let needs = |from: Pos2, to: Pos2| move_needs_pass(&frames.ctx, ViewportId::ROOT, Some(from), to);
+    assert!(!needs(Pos2::new(60.0, 50.0), Pos2::new(65.0, 50.0)), "both points nearer the left part's centre");
+    assert!(needs(Pos2::new(60.0, 50.0), Pos2::new(80.0, 50.0)), "the right part's centre is nearer at the end");
+}

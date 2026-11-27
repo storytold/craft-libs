@@ -695,31 +695,39 @@ pub fn move_needs_pass(ctx: &Context, viewport: ViewportId, from: Option<Pos2>, 
     follows || ctx.widgets_at(viewport, from) != ctx.widgets_at(viewport, to) || shapes_under(ctx, viewport, from) != shapes_under(ctx, viewport, to)
 }
 
-/// The layer under `at` and the component shapes there that hit it, as the last finished pass of `viewport` recorded
-/// them: each as its root and its index in the root's record.
-fn shapes_under(ctx: &Context, viewport: ViewportId, at: Pos2) -> (Option<Layer>, Vec<(Id, usize)>) {
+/// The layer under `at` and, for each root with component shapes there that hit it as the last finished pass of
+/// `viewport` recorded them, the root, the indices of those shapes in the root's record and the ones that win its hover
+/// and its press: overlapping shapes can hit both points while the nearest centre picks another winner.
+fn shapes_under(ctx: &Context, viewport: ViewportId, at: Pos2) -> (Option<Layer>, Vec<UnderRoot>) {
     let Some(layer) = areas::layer_at(ctx, at) else { return (None, Vec::new()) };
     let point = areas::layer_map(ctx, layer).map_or(at, |map| map.to_layer(at));
     let hit = PerViewport::<Shapes>::with(ctx, viewport, |record| {
         record.this.get(&layer).map_or_else(Vec::new, |roots| {
-            let mut hit: Vec<(Id, usize)> = roots
+            let mut hit: Vec<UnderRoot> = roots
                 .iter()
-                .flat_map(|(root, entry)| {
-                    entry
-                        .shapes
-                        .iter()
-                        .zip(&entry.placed)
-                        .enumerate()
-                        .filter(|(_, (shape, placed))| placed.clip.contains(point) && shape.hits(point))
-                        .map(move |(index, _)| (*root, index))
+                .filter_map(|(root, entry)| {
+                    let indices: Vec<usize> = (0..entry.shapes.len().min(entry.placed.len()))
+                        .filter(|&index| entry.placed[index].clip.contains(point) && entry.shapes[index].hits(point))
+                        .collect();
+                    if indices.is_empty() {
+                        return None;
+                    }
+                    let shapes: Vec<Shape<Id>> = indices.iter().map(|&index| entry.shapes[index].clone()).collect();
+                    let winner = |kind| resolve(&shapes, point, kind).and_then(|winner| indices.get(winner.index).copied());
+                    let (hover, press) = (winner(ResolveFor::Hover), winner(ResolveFor::Press));
+                    Some((*root, indices, hover, press))
                 })
                 .collect();
-            hit.sort_unstable_by_key(|(root, index)| (root.value(), *index));
+            hit.sort_unstable_by_key(|(root, ..)| root.value());
             hit
         })
     });
     (Some(layer), hit)
 }
+
+/// A root with shapes under a point ([`shapes_under`]): the root, the indices of its shapes that hit the point, and
+/// the indices of the ones that win its hover and its press there.
+type UnderRoot = (Id, Vec<usize>, Option<usize>, Option<usize>);
 
 /// Records that `layer` shows the transformed body of the root `root`, which is itself shown on `parent`: a press on
 /// the body layer reaches the root's own shapes beneath the body's.
