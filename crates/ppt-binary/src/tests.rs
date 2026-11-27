@@ -1273,3 +1273,19 @@ fn a_broken_chain_reads_the_newest_edits() {
     let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &stream), ("Pictures", &pics)])).unwrap();
     assert_eq!(p.slides[0].shapes[0].text.as_ref().unwrap().text(), "Newest");
 }
+
+/// A presentation whose drawings hold more records than the limit lists that shapes were left
+/// out; one that fits lists nothing of the kind.
+#[test]
+fn shapes_past_the_drawing_record_limit_are_reported() {
+    let has_cut = |slide: Vec<u8>| {
+        let (cu, doc, pics) = streams_of(0xE391_C05F, 1, slide, None);
+        let (_, lost) = import_checked(&build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
+        lost.iter().any(|l| l == crate::DRAWINGS_CUT)
+    };
+    assert!(!has_cut(slide()));
+    // Two records a shape: half the limit of shapes, and a few more, are past it.
+    let shape = container(rt::SP_CONTAINER, 0, &[fsp(1, 2049, 0)]);
+    let many = vec![shape; craft_officeart::record::MAX_RECORDS / 2 + 5];
+    assert!(has_cut(container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &many)])));
+}

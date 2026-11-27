@@ -55,6 +55,9 @@ pub fn sniff(bytes: &[u8]) -> bool {
     craft_cfb::sniff(bytes) && CompoundFile::open(bytes).is_ok_and(|f| f.has_stream(DOCUMENT_STREAM))
 }
 
+/// The entry [`import_checked`] adds when the drawing-record limit left shapes out.
+pub const DRAWINGS_CUT: &str = "shapes past the drawing record limit";
+
 /// Read a `.ppt` / `.pot` / `.pps` file. `defaults` gives the master each of the file's masters
 /// starts from, and the one used when the file has none it can read.
 pub fn import(bytes: &[u8], defaults: &dyn Defaults) -> Result<Presentation, PptError> {
@@ -63,7 +66,9 @@ pub fn import(bytes: &[u8], defaults: &dyn Defaults) -> Result<Presentation, Ppt
 
 /// [`import`], plus the slides the file lists but whose objects couldn't be found, so they are not
 /// in the presentation; for a PowerPoint 95 file, the slides its DocumentAtom counts past those it
-/// holds, by position.
+/// holds, by position. When the drawings hold more records than a presentation reads
+/// ([`craft_officeart::record::MAX_RECORDS`] together), the list also says shapes past that limit
+/// were left out.
 pub fn import_checked(bytes: &[u8], defaults: &dyn Defaults) -> Result<(Presentation, Vec<String>), PptError> {
     let file = CompoundFile::open(bytes).map_err(|e| match e {
         CfbError::NotCfb => PptError::NotPpt,
@@ -87,7 +92,12 @@ pub fn import_checked(bytes: &[u8], defaults: &dyn Defaults) -> Result<(Presenta
     // A damaged or missing picture stream costs the pictures, not the presentation.
     let pictures = file.read_path_capped("Pictures", cap).unwrap_or_default();
     let d = doc::read(&current_user, &stream)?;
-    Ok((convert::convert(&d, &pictures, defaults), d.lost.clone()))
+    let (p, cut) = convert::convert(&d, &pictures, defaults);
+    let mut lost = d.lost.clone();
+    if cut {
+        lost.push(DRAWINGS_CUT.to_owned());
+    }
+    Ok((p, lost))
 }
 
 #[cfg(test)]

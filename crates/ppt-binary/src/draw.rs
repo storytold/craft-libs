@@ -52,13 +52,40 @@ pub struct RawShape<'a> {
 pub struct Drawing<'a> {
     pub shapes: Vec<RawShape<'a>>,
     pub background: Option<RawShape<'a>>,
+    /// Whether the record budget ran out before the drawing was read whole, so shapes (or the
+    /// background) are missing.
+    pub cut: bool,
+}
+
+/// Drawing records a presentation may still read, and whether one it needed was left unread.
+struct Budget {
+    left: usize,
+    cut: bool,
 }
 
 /// Read the drawing of a slide, master or notes container, reading at most `budget` records more
 /// (one budget for the whole presentation, [`craft_officeart::record::MAX_RECORDS`] to start with).
-/// A shape the budget cuts short is left out, and so is a background it leaves unread.
+/// A shape or group the budget cuts short is left out, and so is a background it leaves unread;
+/// [`Drawing::cut`] says so.
 pub fn drawing<'a>(container: &Rec<'a>, budget: &mut usize) -> Drawing<'a> {
-    let mut out = Drawing { shapes: vec![], background: None };
+    read(container, budget, true)
+}
+
+/// [`drawing`] without the background, whose records are then not read: for a caller that uses
+/// only the shapes (a notes page's text).
+pub fn shapes<'a>(container: &Rec<'a>, budget: &mut usize) -> Drawing<'a> {
+    read(container, budget, false)
+}
+
+fn read<'a>(container: &Rec<'a>, records: &mut usize, with_background: bool) -> Drawing<'a> {
+    let mut budget = Budget { left: *records, cut: false };
+    let out = read_within(container, &mut budget, with_background);
+    *records = budget.left;
+    Drawing { cut: budget.cut, ..out }
+}
+
+fn read_within<'a>(container: &Rec<'a>, budget: &mut Budget, with_background: bool) -> Drawing<'a> {
+    let mut out = Drawing { shapes: vec![], background: None, cut: false };
     let Some(dg) = container.child(rt::DRAWING).and_then(|d| d.child(rt::DG_CONTAINER)) else { return out };
     // The background is the container's own shape (`OfficeArtDgContainer.shape`, [MS-ODRAW]
     // 2.2.13), not one found by its fBackground flag. One pass finds it and the top group, each
@@ -74,7 +101,7 @@ pub fn drawing<'a>(container: &Rec<'a>, budget: &mut usize) -> Drawing<'a> {
             _ => {}
         }
     }
-    if let Some(bg) = bg {
+    if let Some(bg) = bg.filter(|_| with_background) {
         out.background = shape(&bg, budget);
     }
     if let Some(top) = top {
@@ -84,21 +111,25 @@ pub fn drawing<'a>(container: &Rec<'a>, budget: &mut usize) -> Drawing<'a> {
     out
 }
 
-/// Take one record off `budget`; `false` when none are left.
-fn take(budget: &mut usize) -> bool {
-    match budget.checked_sub(1) {
+/// Take one record off `budget`; `false`, and the budget marked cut, when none are left.
+fn take(budget: &mut Budget) -> bool {
+    match budget.left.checked_sub(1) {
         Some(left) => {
-            *budget = left;
+            budget.left = left;
             true
         }
-        None => false,
+        None => {
+            budget.cut = true;
+            false
+        }
     }
 }
 
 /// The shapes and groups among a group container's records, nested at most [`MAX_DEPTH`] groups
 /// deep (a deeper group is left out, shapes beside it kept), reading at most `budget` records
-/// more (shared by the whole presentation).
-fn members<'a>(records: crate::record::Records<'a>, depth: usize, budget: &mut usize) -> Vec<RawShape<'a>> {
+/// more (shared by the whole presentation). A group whose members the budget cuts short is left
+/// out, as a shape is, rather than kept without them.
+fn members<'a>(records: crate::record::Records<'a>, depth: usize, budget: &mut Budget) -> Vec<RawShape<'a>> {
     let mut out = vec![];
     for r in records {
         if !take(budget) {
@@ -116,6 +147,10 @@ fn members<'a>(records: crate::record::Records<'a>, depth: usize, budget: &mut u
                 let Some(mut g) = shape(&head, budget) else { break };
                 g.is_group = true;
                 g.children = members(kids, depth + 1, budget);
+                // Once the budget is cut it stays spent, so nothing after this group is read.
+                if budget.cut {
+                    break;
+                }
                 out.push(g);
             }
             _ => {}
@@ -129,7 +164,7 @@ fn rect_i32(r: &Rec) -> Option<Anchor> {
 }
 
 /// One shape container, or `None` when the budget runs out before all its records are read.
-fn shape<'a>(sp: &Rec<'a>, budget: &mut usize) -> Option<RawShape<'a>> {
+fn shape<'a>(sp: &Rec<'a>, budget: &mut Budget) -> Option<RawShape<'a>> {
     let mut s = RawShape {
         shape_type: 0,
         spid: 0,
@@ -259,7 +294,7 @@ mod tests {
         let fsp = atom(rt::FSP, 1, &[1025u32.to_le_bytes(), 0u32.to_le_bytes()].concat());
         let anchor = atom(rt::CHILD_ANCHOR, 0, &[1i32, 2, 3, 4].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
         let sp = container(rt::SP_CONTAINER, 0, &[fsp, fopt(&entries, &name), anchor]);
-        let s = shape(&Rec::at(&sp, 0).unwrap(), &mut MAX_RECORDS.clone()).unwrap();
+        let s = shape(&Rec::at(&sp, 0).unwrap(), &mut Budget { left: MAX_RECORDS, cut: false }).unwrap();
         assert_eq!(s.props.len(), MAX_PROPS);
         assert_eq!(s.props.string(prop::NAME).as_deref(), Some("Kept"));
         assert_eq!(s.props.get(0x1000), Some(0));
@@ -290,7 +325,7 @@ mod tests {
             0,
             &[fsp, secondary, fopt(&[(prop::FILL_COLOR, 1), (prop::LINE_WIDTH, 1)], &[]), fopt(&[(prop::FILL_COLOR, 2)], &[])],
         );
-        let s = shape(&Rec::at(&sp, 0).unwrap(), &mut MAX_RECORDS.clone()).unwrap();
+        let s = shape(&Rec::at(&sp, 0).unwrap(), &mut Budget { left: MAX_RECORDS, cut: false }).unwrap();
         assert_eq!((s.props.get(prop::FILL_COLOR), s.props.get(prop::LINE_WIDTH), s.props.get(prop::LINE_COLOR)), (Some(2), Some(1), Some(3)));
     }
 
@@ -374,9 +409,19 @@ mod tests {
         assert_eq!(d.shapes.len(), 2, "the group and the title");
         assert_eq!(d.shapes[0].children.len(), 1, "the group's one member");
         assert!(d.shapes[1].placeholder.is_some() && d.shapes[1].text.is_some());
+        assert!(!d.cut, "a budget used up by the last record cuts nothing");
         let short = read(all - 1);
         assert_eq!(short.shapes.len(), 1, "the title, cut short, is left out");
+        assert!(short.cut, "and the drawing says so");
         assert!(read(2).background.is_none(), "the background is left out, not made empty");
+        // At no budget is the group kept without its member.
+        for budget in 0..all {
+            assert!(read(budget).shapes.iter().all(|s| !s.is_group || !s.children.is_empty()), "budget {budget}");
+        }
+        // Without the background, its records aren't read.
+        let mut left = all;
+        let d = super::shapes(&Rec::at(&slide, 0).unwrap(), &mut left);
+        assert!(d.background.is_none() && d.shapes.len() == 2 && left > 0);
     }
 
     #[test]
