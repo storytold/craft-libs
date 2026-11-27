@@ -38,6 +38,7 @@ impl Reader<'_> {
                 "w:hideGrammaticalErrors" => s.hide_grammar_errors = on_off(k),
                 "w:compat" => {
                     s.allow_space_of_same_style_in_table = k.child("w:allowSpaceOfSameStyleInTable").is_some_and(on_off);
+                    s.do_not_suppress_indentation = k.child("w:doNotSuppressIndentation").is_some_and(on_off);
                     // Only Word's own setting: another `w:uri` names a different application's.
                     let mode = k
                         .children("w:compatSetting")
