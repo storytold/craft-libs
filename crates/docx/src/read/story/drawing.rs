@@ -105,7 +105,11 @@ impl Reader<'_> {
         // Word's effect extent also covers a rotated object's overhang; the model keeps that
         // apart (it follows from the angle), so take it back out.
         // Shadow or glow room the file didn't record: saving records it (and the turn's room).
-        let fx_room = matches!(&obj, InlineObject::Shape { effects, .. } if effects.extent() != [0.0; 4]);
+        let fx_room = match &obj {
+            InlineObject::Shape { effects, .. } => effects.extent() != [0.0; 4],
+            InlineObject::Image { fx, .. } => fx.shape_effects().extent() != [0.0; 4],
+            _ => false,
+        };
         if let Some(f) = obj.float_mut() {
             // None recorded: Word keeps an inline one's line to the frame (see `Float::bare_turn`).
             f.bare_turn = !anchored && !fx_room && f.rot != 0.0 && f.effect == [0.0; 4];
@@ -333,7 +337,8 @@ impl Reader<'_> {
                 }
             }
         }
-        let effects = props.and_then(|e| e.child("a:effectLst")).map(effect_list).unwrap_or_default();
+        let theme = &self.doc.settings.theme_colors;
+        let effects = props.and_then(|e| e.child("a:effectLst")).map(|l| effect_list(l, theme)).unwrap_or_default();
         let fx = crate::units::blip_fx(blip).with_shape_effects(effects);
         Some(InlineObject::Image { media, w, h, alt, float, crop, fx, ole: None })
     }
@@ -500,7 +505,7 @@ impl Reader<'_> {
         let (stroke, stroke_width) = (paint.stroke, paint.stroke_width);
         let fill = if kind.is_open() { None } else { paint.fill };
         let ln = sppr.and_then(|s| s.child("a:ln"));
-        let effects = sppr.and_then(|s| s.child("a:effectLst")).map(effect_list).unwrap_or_default();
+        let effects = sppr.and_then(|s| s.child("a:effectLst")).map(|l| effect_list(l, &self.doc.settings.theme_colors)).unwrap_or_default();
         let story = match txbx {
             Some(t) if sc.story_depth < MAX_STORY_DEPTH => Some(self.read_textbox(sc, t, rels)),
             _ => None,
@@ -811,10 +816,10 @@ fn preset_adj(geom: &El, name: &str) -> Option<i64> {
     gd.attr("fmla")?.trim().strip_prefix("val")?.trim().parse::<i64>().ok()
 }
 
-fn effect_list(l: &El) -> ShapeEffects {
+fn effect_list(l: &El, theme: &[Rgb]) -> ShapeEffects {
     let pt = |e: &El, n: &str| e.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0);
     let shadow = l.child("a:outerShdw").map(|e| {
-        let (color, transparency) = effect_color(e);
+        let (color, transparency) = effect_color(e, theme);
         // `dir`: 60000ths of a degree, clockwise.
         let angle = e.attr("dir").and_then(int).map(|v| (v.rem_euclid(21_600_000) as f32) / 60_000.0).unwrap_or(0.0);
         // `rotWithShape` is true unless it says otherwise (ECMA-376 §20.1.8.49).
@@ -822,34 +827,21 @@ fn effect_list(l: &El) -> ShapeEffects {
         Shadow { color: color.unwrap_or(Rgb::BLACK), transparency, blur: pt(e, "blurRad"), distance: pt(e, "dist"), angle, rot_with_shape }
     });
     let glow = l.child("a:glow").map(|e| {
-        let (color, transparency) = effect_color(e);
+        let (color, transparency) = effect_color(e, theme);
         Glow { color: color.unwrap_or(Glow::default().color), size: pt(e, "rad"), transparency }
     });
     let soft_edge = l.child("a:softEdge").map(|e| pt(e, "rad"));
     ShapeEffects { shadow, glow, soft_edge }.sanitized()
 }
 
-/// The colour inside an effect (`a:srgbClr`, `a:prstClr`, `a:sysClr`; theme colours aren't
-/// resolved here) and its transparency, percent (from `a:alpha`, opaque when absent).
-fn effect_color(e: &El) -> (Option<Rgb>, f32) {
-    let Some(c) = e.els().find(|c| matches!(c.name.as_str(), "a:srgbClr" | "a:prstClr" | "a:sysClr" | "a:schemeClr" | "a:scrgbClr" | "a:hslClr"))
-    else {
-        return (None, 0.0);
-    };
-    let rgb = match c.name.as_str() {
-        "a:srgbClr" => c.attr("val").and_then(Rgb::parse),
-        "a:sysClr" => c.attr("lastClr").and_then(Rgb::parse),
-        "a:prstClr" => match c.attr("val").unwrap_or("") {
-            "black" => Some(Rgb::BLACK),
-            "white" => Some(Rgb::WHITE),
-            "gray" | "grey" => Some(Rgb(0x80, 0x80, 0x80)),
-            _ => None,
-        },
-        _ => None,
-    };
-    // `a:alpha`: opacity in 1000ths of a percent.
-    let opacity = c.child("a:alpha").and_then(|a| a.attr("val")).and_then(int).map(|v| v.clamp(0, 100_000) as f32 / 1000.0).unwrap_or(100.0);
-    (rgb, 100.0 - opacity)
+/// The colour inside an effect, with theme colours and their modifiers resolved against `theme`,
+/// and its transparency, percent (from `a:alpha`, opaque when absent).
+fn effect_color(e: &El, theme: &[Rgb]) -> (Option<Rgb>, f32) {
+    match crate::read::drawing_color::color_alpha(e, theme, None) {
+        // `a:alpha` is in 1000ths of a percent: keep that precision, not float noise.
+        Some((rgb, transparency)) => (Some(rgb), (transparency * 1000.0).round() / 1000.0),
+        None => (None, 0.0),
+    }
 }
 
 /// A DrawingML `a:xfrm` (ECMA-376 §20.1.7.5/6) in points: offset, extent and, for a group, its

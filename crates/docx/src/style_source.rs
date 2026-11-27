@@ -195,11 +195,24 @@ pub(crate) fn capture_numbering(doc: &mut Document, root: &El, aliases: &HashMap
         let attr = format!("w:{kind}Id");
         for source in root.children(&element).take(10_000) {
             let Some(id) = source.attr(&attr).and_then(|s| s.parse::<u32>().ok()) else { continue };
+            // A list that only links to a numbering style takes that style's levels (see
+            // `read_numbering`), so its own XML is not where their formatting came from.
+            if kind == "abstractNum" && source.child("w:numStyleLink").is_some() {
+                continue;
+            }
             let index = |e: &El| e.attr("w:ilvl").unwrap_or("0").trim().parse::<usize>().ok().filter(|i| *i < 9);
             let levels: Vec<_> = if kind == "abstractNum" {
                 source.children("w:lvl").take(10_000).filter_map(|e| index(e).map(|i| (i, e))).collect()
             } else {
-                source.children("w:lvlOverride").take(9).filter_map(|e| Some((index(e)?, e.child("w:lvl")?))).collect()
+                // The first override of a level is the one read and written; later repeats are ignored.
+                let mut seen = [false; 9];
+                source
+                    .children("w:lvlOverride")
+                    .take(9)
+                    .filter_map(|e| Some((index(e)?, e)))
+                    .filter(|(i, _)| !std::mem::replace(&mut seen[*i], true))
+                    .filter_map(|(i, e)| Some((i, e.child("w:lvl")?)))
+                    .collect()
             };
             for (index, source_level) in levels {
                 let key = numbering_key(kind, id, index);

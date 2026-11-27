@@ -5541,3 +5541,51 @@ fn extreme_chart_with_text_fallback_uses_the_package_order_map() {
         assert_eq!(other.frame().unwrap().2.z, shape_raw);
     }
 }
+
+const ACCENTS_THEME: &str = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:clrScheme name="T"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2><a:accent1><a:srgbClr val="4472C4"/></a:accent1><a:accent2><a:srgbClr val="ED7D31"/></a:accent2><a:accent3><a:srgbClr val="A5A5A5"/></a:accent3><a:accent4><a:srgbClr val="FFC000"/></a:accent4><a:accent5><a:srgbClr val="5B9BD5"/></a:accent5><a:accent6><a:srgbClr val="70AD47"/></a:accent6><a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme><a:fontScheme name="T"><a:majorFont><a:latin typeface="Major Face"/></a:majorFont><a:minorFont><a:latin typeface="Minor Face"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#;
+
+/// A picture's shadow and glow in theme colours keep those colours (not black or the default
+/// glow), and a turned picture with a shadow but no recorded effect extent saves room for both.
+#[test]
+fn picture_effects_resolve_theme_colours_and_keep_their_room() {
+    let body = r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="1270000" cy="1270000"/><wp:docPr id="1" name="Synthetic picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill><pic:spPr><a:xfrm rot="1800000"><a:off x="0" y="0"/><a:ext cx="1270000" cy="1270000"/></a:xfrm><a:effectLst><a:glow rad="63500"><a:schemeClr val="accent1"><a:alpha val="60000"/></a:schemeClr></a:glow><a:outerShdw blurRad="50800" dist="38100" dir="2700000"><a:schemeClr val="accent2"/></a:outerShdw></a:effectLst></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#;
+    let file = docx(
+        body,
+        &[("rId1", "image", "media/marker.png"), ("rId2", "theme", "theme/theme1.xml")],
+        &[("word/media/marker.png", "synthetic"), ("word/theme/theme1.xml", ACCENTS_THEME)],
+    );
+    let d = craft_docx::read(&file).unwrap();
+    let Some(InlineObject::Image { fx, float, .. }) = paras(&d)[0].objects.first() else { panic!("no picture") };
+    let effects = fx.shape_effects();
+    assert_eq!(effects.shadow.map(|s| s.color), Some(Rgb(0xED, 0x7D, 0x31)));
+    assert_eq!(effects.glow.map(|g| g.color), Some(Rgb(0x44, 0x72, 0xC4)));
+    assert!(!float.is_bare_turn(), "the shadow and glow need room past the frame");
+    let xml = text(&unzip(&craft_docx::write(&d).unwrap()), "word/document.xml");
+    assert!(xml.contains(r#"<a:srgbClr val="ED7D31">"#) && xml.contains(r#"<a:srgbClr val="4472C4">"#), "{xml}");
+    assert!(attr_values(&xml, "wp:effectExtent", "l").iter().all(|v| v != "0"), "{xml}");
+}
+
+/// When a list repeats a level override, the first is the one read and saved, so its themed
+/// number formatting must not be swapped for the repeat's.
+#[test]
+fn a_repeated_level_override_keeps_the_first_overrides_theme_colour() {
+    let lvl = |theme: &str| {
+        format!(
+            r#"<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:rPr><w:color w:val="000000" w:themeColor="{theme}"/></w:rPr></w:lvl>"#
+        )
+    };
+    let numbering = format!(
+        r#"<w:numbering {W_NS}><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/><w:lvlOverride w:ilvl="0">{}</w:lvlOverride><w:lvlOverride w:ilvl="0">{}</w:lvlOverride></w:num></w:numbering>"#,
+        lvl("accent1"),
+        lvl("accent2")
+    );
+    let body = r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Item</w:t></w:r></w:p>"#;
+    let file = docx(
+        body,
+        &[("rId1", "numbering", "numbering.xml"), ("rId2", "theme", "theme/theme1.xml")],
+        &[("word/numbering.xml", &numbering), ("word/theme/theme1.xml", ACCENTS_THEME)],
+    );
+    let saved = text(&unzip(&craft_docx::write(&craft_docx::read(&file).unwrap()).unwrap()), "word/numbering.xml");
+    let num = &saved[saved.find(r#"<w:num w:numId="1""#).expect("list")..];
+    assert!(num.contains(r#"w:themeColor="accent1""#) && !num.contains("accent2"), "{num}");
+}
