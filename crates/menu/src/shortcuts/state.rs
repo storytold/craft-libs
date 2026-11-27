@@ -71,6 +71,8 @@ pub(crate) enum Target {
     /// A row's hold cell: the chord recorded becomes a hold that replaces the hold `old`, or adds one when `None`.
     /// Commits at once.
     HoldCell { command: CommandRef, old: Option<Binding> },
+    /// An existing binding in the detail pane. Commits a replacement in the binding's scope.
+    Detail { command: CommandRef, old: Binding },
     /// The detail pane's New Shortcut field: the chord waits for Assign.
     Field { command: CommandRef },
     /// Search by key: the chord's text becomes the query.
@@ -80,10 +82,27 @@ pub(crate) enum Target {
 }
 
 impl Target {
+    pub(crate) fn command(&self) -> Option<&CommandRef> {
+        match self {
+            Target::Cell { command, .. } | Target::HoldCell { command, .. } | Target::Detail { command, .. } | Target::Field { command } => {
+                Some(command)
+            }
+            Target::Search | Target::Code { .. } => None,
+        }
+    }
+
+    pub(crate) fn is_hold(&self) -> bool {
+        match self {
+            Target::HoldCell { .. } => true,
+            Target::Detail { old, .. } => old.trigger.is_hold(),
+            _ => false,
+        }
+    }
+
     /// A single press waits for a second one ([`Options::double_press`]) only where a double press means something:
     /// a hold or a code takes the chord alone.
     fn takes_double(&self) -> bool {
-        !matches!(self, Target::HoldCell { .. } | Target::Code { .. })
+        !self.is_hold() && !matches!(self, Target::Code { .. })
     }
 }
 
@@ -510,7 +529,7 @@ impl DialogState {
         self.conflict = None;
         self.message = None;
         self.recorder.reset();
-        if let Target::Cell { command, .. } | Target::HoldCell { command, .. } | Target::Field { command } = &target {
+        if let Some(command) = target.command() {
             self.select_row(command);
         }
         self.recording = Some(Recording { target, waiting: None, started: false });
@@ -521,8 +540,25 @@ impl DialogState {
         self.recorder.reset();
     }
 
-    /// Commits a single press whose double-press window has ended.
+    /// Clears unavailable editing targets and settles timers outside the detail pane.
     pub(crate) fn tick(&mut self, env: &mut Env, now: f64) {
+        if !env.options.editable {
+            self.conflict = None;
+            if self.recording.as_ref().is_some_and(|r| r.target.command().is_some()) {
+                self.stop_recording();
+            }
+        }
+        if self.recording.as_ref().is_some_and(|r| matches!(r.target, Target::Detail { .. })) {
+            if env.options.layout != Layout::Table {
+                self.stop_recording();
+            }
+        } else {
+            self.settle_recording(env, now);
+        }
+    }
+
+    /// Commits a single press whose double-press window has ended. The detail pane calls this after checking focus.
+    pub(crate) fn settle_recording(&mut self, env: &mut Env, now: f64) {
         let expired = self.recording.as_ref().and_then(|r| r.waiting).filter(|(_, at)| now < *at || now - *at >= DOUBLE_PRESS);
         if let Some((trigger, _)) = expired {
             self.commit_recorded(env, trigger);
@@ -538,7 +574,9 @@ impl DialogState {
                 let target = rec.target.clone();
                 self.stop_recording();
                 match target {
-                    Target::Cell { command, old: Some(old) } | Target::HoldCell { command, old: Some(old) } => self.remove(env, &command, &old),
+                    Target::Cell { command, old: Some(old) } | Target::HoldCell { command, old: Some(old) } | Target::Detail { command, old } => {
+                        self.remove(env, &command, &old);
+                    }
                     Target::Field { .. } => self.field = None,
                     _ => {}
                 }
@@ -567,6 +605,12 @@ impl DialogState {
                     self.answer_code(env, code, Some(trigger.chord.key.name().to_owned()));
                 } else {
                     self.refuse(word!(env, press_a_key_without_modifiers));
+                }
+            }
+            Target::Detail { command, old } => {
+                if self.selected.as_ref() == Some(&command) && env.keymap.bindings(&command).contains(&old) {
+                    let trigger = if old.trigger.is_hold() { Trigger::hold(trigger.chord) } else { trigger };
+                    self.commit_cell(env, &command, Some(old), trigger);
                 }
             }
         }
@@ -659,9 +703,18 @@ impl DialogState {
                 let text = fill!(env, chord_is_used_by_label, ("chord", &chord), ("label", &env.holder_labels(&holders)));
                 self.conflict = Some(ConflictBar { command: command.clone(), old, binding, holders, text });
             }
-            ConflictMode::Steal => self.apply_and_say(env, command, old, binding, Policy::Steal),
-            ConflictMode::Keep => self.apply_and_say(env, command, old, binding, Policy::Keep),
+            ConflictMode::Steal => {
+                self.apply_and_say(env, command, old, binding, Policy::Steal);
+            }
+            ConflictMode::Keep => {
+                self.apply_and_say(env, command, old, binding, Policy::Keep);
+            }
         }
+    }
+
+    /// Reports the same refusal to an automation caller that the dialog shows to the user.
+    pub(crate) fn edit_result(&self) -> Result<(), String> {
+        self.message.as_ref().filter(|message| message.refused).map_or(Ok(()), |message| Err(message.text.clone()))
     }
 
     fn refuse(&mut self, text: String) {
@@ -687,6 +740,10 @@ impl DialogState {
             }
             Err(e) => {
                 let text = assign_error(env, &e);
+                let chord = match &e {
+                    AssignError::Unstorable { trigger, .. } => env.chord_text(trigger),
+                    _ => chord,
+                };
                 self.refuse_chord(text, chord);
                 None
             }
@@ -694,12 +751,12 @@ impl DialogState {
     }
 
     /// Applies with Steal or Keep and says what it did, with Go to Conflict (and Undo for Steal).
-    fn apply_and_say(&mut self, env: &mut Env, command: &CommandRef, old: Option<Binding>, binding: Binding, policy: Policy) {
+    fn apply_and_say(&mut self, env: &mut Env, command: &CommandRef, old: Option<Binding>, binding: Binding, policy: Policy) -> bool {
         let chord = env.chord_text(&binding.trigger);
-        let Some(a) = self.apply(env, command, old, binding, policy) else { return };
+        let Some(a) = self.apply(env, command, old, binding, policy) else { return false };
         let (holders, steal) = if policy == Policy::Steal { (&a.taken_from, true) } else { (&a.clashes, false) };
         if holders.is_empty() {
-            return;
+            return true;
         }
         let label = env.holder_labels(holders);
         let text = if steal {
@@ -709,6 +766,7 @@ impl DialogState {
         };
         let goto = holders.first().map(|h| h.command.clone());
         self.message = Some(Message { text, refused: false, goto, undo: policy == Policy::Steal, chord: Some(chord) });
+        true
     }
 
     /// Take It.
@@ -722,8 +780,9 @@ impl DialogState {
     pub(crate) fn take_it_and_go(&mut self, env: &mut Env) {
         if let Some(c) = self.conflict.take() {
             let first = c.holders.first().map(|h| h.command.clone());
-            self.apply_and_say(env, &c.command, c.old, c.binding, Policy::Steal);
-            if let Some(holder) = first {
+            if self.apply_and_say(env, &c.command, c.old, c.binding, Policy::Steal)
+                && let Some(holder) = first
+            {
                 self.go_to(env, &holder);
             }
         }
@@ -770,7 +829,14 @@ impl DialogState {
 
     /// × on a chip, or Remove.
     pub(crate) fn remove(&mut self, env: &mut Env, command: &CommandRef, binding: &Binding) {
-        self.edit(env, |s, km| s.remove(km, command, binding));
+        self.message = None;
+        let km = &mut *env.keymap;
+        let result = self.session.get_or_insert_with(|| EditSession::begin(km)).edit(km, |km| km.try_remove(command, binding));
+        match result {
+            Ok(true) => self.edited(env),
+            Ok(false) => {}
+            Err(error) => self.refuse(assign_error(env, &error)),
+        }
     }
 
     /// Remove in [`Layout::CommandLists`]: takes away the key picked among the selected command's keys.
@@ -1293,6 +1359,9 @@ fn assign_error(env: &Env, e: &AssignError) -> String {
         AssignError::TooMany => fill!(env, a_command_can_have_at_most, ("n", &MAX_BINDINGS.to_string())),
         AssignError::UnknownScope(s) => fill!(env, the_scope_scope_is_unknown, ("scope", s.as_str())),
         AssignError::Full => word!(env, too_many_shortcuts_are_assigned),
+        AssignError::Unstorable { command, trigger } => {
+            fill!(env, shortcut_cannot_be_saved_in_its_scope, ("chord", &env.chord_text(trigger)), ("command", &env.label(command)))
+        }
         AssignError::UnknownCommand => word!(env, this_command_is_unknown),
         AssignError::Taken(holders) => fill!(env, also_used_by_label, ("label", &env.holder_labels(holders))),
         AssignError::NotHoldable(t) => fill!(env, not_holdable, ("chord", &env.chord_text(t))),

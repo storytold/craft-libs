@@ -5,6 +5,27 @@ use craft_xml::{Canonical, Doctype, El, Error, Limits, Options, UnknownEntity, p
 
 const CANON: Canonical<'static> = Canonical::new(&[("w", "urn:w"), ("r", "urn:r")]);
 
+#[test]
+fn drop_blank_text_preserves_non_xml_whitespace() {
+    let options = Options { drop_blank_text: true, ..Options::default() }.strict();
+    for character in ['\u{a0}', '\u{2003}', '\u{85}', '\u{2028}'] {
+        let text = format!(" {character} \n");
+        let document = format!("<p> {character} <c/>\n</p>");
+        assert_eq!(options.parse(document.as_bytes()).unwrap().text(), text);
+    }
+    let root = options.parse(b"<p> \t\r\n<c/>\n</p>").unwrap();
+    assert_eq!(root.children.len(), 1);
+}
+
+#[test]
+fn drop_blank_text_preserves_spaces_beside_meaningful_cdata() {
+    let options = Options { cdata: true, drop_blank_text: true, ..Options::default() }.strict();
+    for content in ["text", "\u{a0}"] {
+        let document = format!("<p> <![CDATA[{content}]]><c/>\n</p>");
+        assert_eq!(options.parse(document.as_bytes()).unwrap().text(), format!(" {content}\n"));
+    }
+}
+
 /// Every way of reading, lenient and strict.
 fn all_options() -> Vec<Options<'static>> {
     let full =
