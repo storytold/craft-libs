@@ -1,4 +1,5 @@
-//! Generic repeated-word and spacing checks ([`crate::devanagari::check`]) with Hindi messages.
+//! Generic repeated-word and spacing checks (shared by the Devanagari languages,
+//! [`crate::devanagari`]) with Hindi messages.
 //! No Hindi-specific grammar or agreement rules are inferred.
 
 use crate::devanagari::{Rules, is_devanagari_char};
