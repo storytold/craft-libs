@@ -2,12 +2,13 @@
 //! body and the properties dialog's list of tabs.
 
 use crate::contract::{
-    ActivateOn, Bind, CollectionEvent, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
+    ActivateOn, Bind, CollectionEvent, Gap, Pad, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
 };
 use crate::display::Divider;
 use crate::layout_components::{Row, Stack};
 use crate::list::{List, ListRow};
 use crate::runtime::env::Label;
+use crate::style::SurfaceKind;
 use craft_behavior::{ItemSource, Selection, SelectionChange};
 use egui::Ui;
 use std::hash::Hash;
@@ -34,12 +35,13 @@ pub struct SectionList<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     id: Option<egui::Id>,
     body_label: Option<Label>,
     foot: Option<Foot<'a>>,
+    framed: bool,
 }
 
 impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> SectionList<'a, K> {
     /// The list labelled `label` over the sections of `source`, with `shown` picked.
     pub fn new(label: impl Into<Label>, source: &'a dyn ItemSource<K>, shown: K) -> Self {
-        SectionList { label: label.into(), source, shown, id: None, body_label: None, foot: None }
+        SectionList { label: label.into(), source, shown, id: None, body_label: None, foot: None, framed: false }
     }
 
     /// The list's id, for a search field that drives it (`TextField::drives`).
@@ -60,13 +62,25 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> SectionList<'a, K> {
         self
     }
 
+    /// Draws the list's column in a frame as tall as the body, with no divider beside it: a desktop preferences
+    /// window's page list.
+    pub fn framed(mut self) -> Self {
+        self.framed = true;
+        self
+    }
+
     /// Shows the list with a row per section from `row` and `body` beside it; the section picked this pass.
     // PLAN: ty.X70 gives `body: impl FnOnce`; a container runs its body again for a measuring pass, so `body` and
     // `foot` are `FnMut`.
     pub fn show(self, ui: &mut Ui, mut row: impl FnMut(&K) -> ListRow<'static>, mut body: impl FnMut(&mut Ui)) -> Option<K> {
-        let SectionList { label, source, shown, id, body_label, mut foot } = self;
+        let SectionList { label, source, shown, id, body_label, mut foot, framed } = self;
         let mut picked = None;
-        Row::new().fill().show(ui, |ui, _| {
+        // A framed list stands apart from the body; an unframed one has the divider between them.
+        let mut columns = Row::new().fill();
+        if framed {
+            columns = columns.gap(Gap::Section);
+        }
+        columns.show(ui, |ui, _| {
             let mut list = |ui: &mut Ui| {
                 let mut sections = List::<K>::new(label.clone())
                     .select(SelectMode::Single)
@@ -88,16 +102,25 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> SectionList<'a, K> {
                     }
                 }
             };
-            match foot.as_mut() {
-                Some(foot) => {
-                    Stack::new().show(ui, |ui, _| {
-                        list(ui);
+            if framed {
+                Stack::new().surface(SurfaceKind::Frame).pad(Pad::Tight).sizing(Sizing::FillHeight).show(ui, |ui, _| {
+                    list(ui);
+                    if let Some(foot) = foot.as_mut() {
                         foot(ui);
-                    });
+                    }
+                });
+            } else {
+                match foot.as_mut() {
+                    Some(foot) => {
+                        Stack::new().show(ui, |ui, _| {
+                            list(ui);
+                            foot(ui);
+                        });
+                    }
+                    None => list(ui),
                 }
-                None => list(ui),
+                Divider::vertical().show(ui);
             }
-            Divider::vertical().show(ui);
             let mut shown_body = Stack::new().fill().scroll(Scroll::vertical());
             if let Some(label) = &body_label {
                 shown_body = shown_body.label(label.clone());

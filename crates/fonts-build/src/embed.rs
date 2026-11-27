@@ -9,7 +9,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use crate::cmap::Cmap;
-use crate::manifest::{ManifestEntry, ParseError, parse_manifest, script_matches};
+use crate::manifest::{ManifestEntry, ParseError, TAB_FACE, TAB_ROLE, parse_manifest, script_matches};
 
 const DIR_VAR: &str = "CRAFT_FONTS_DIR";
 const REQUIRED_VAR: &str = "CRAFT_FONTS_REQUIRED";
@@ -55,6 +55,35 @@ fn rerun_if_changed(cargo: &mut Vec<String>, path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// `entry` of `manifest` as a face to embed, once its font file resolves to a file inside the checkout `root` and its
+/// licence file, if it exists, does too.
+fn checked_face(manifest: &Path, dir: &Path, root: &Path, entry: ManifestEntry, cut: bool, cargo: &mut Vec<String>) -> Result<Face, Error> {
+    let manifest = manifest.to_path_buf();
+    // A manifest path names a file in the checkout, and is served under the same name.
+    for file in [&entry.file, &entry.licence_file] {
+        if !file.is_empty() && !is_checkout_relative(file) {
+            return Err(Error::OutsideCheckout { manifest, file: file.clone() });
+        }
+    }
+    let file = dir.join(&entry.file);
+    // `include_bytes!` resolves relative paths from the including source file.
+    let path = file.canonicalize().map_err(|source| Error::Read { path: file, source })?;
+    // A symlink in the checkout must not pull a file from elsewhere on the build host. A
+    // missing licence is only warned about when serving; one that exists must be inside.
+    if !path.starts_with(root) {
+        return Err(Error::OutsideCheckout { manifest, file: entry.file });
+    }
+    if !entry.licence_file.is_empty() && dir.join(&entry.licence_file).canonicalize().is_ok_and(|licence| !licence.starts_with(root)) {
+        return Err(Error::OutsideCheckout { manifest, file: entry.licence_file });
+    }
+    if !path.is_file() {
+        return Err(Error::OutsideCheckout { manifest, file: entry.file });
+    }
+    rerun_if_changed(cargo, &path)?;
+    let (index, sha256) = (entry.index, entry.sha256.clone());
+    Ok(Face { entry, path, index, cut, sha256 })
+}
+
 /// Whether the build script is building for wasm32 (web builds usually embed fewer faces).
 pub fn target_is_wasm() -> bool {
     std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|arch| arch == "wasm32")
@@ -75,6 +104,7 @@ pub struct Embed {
     families: Option<Vec<String>>,
     elsewhere: Vec<String>,
     serve: Option<Serve>,
+    tab: bool,
 }
 
 /// Where [`Embed::serve`] copies the faces, and the URL prefix they are served under.
@@ -174,6 +204,18 @@ impl Embed {
         self
     }
 
+    /// Also embed the tab-title face, Noto Sans Condensed SemiBold ([`TAB_FACE`]), from the checkout's
+    /// `fonts/latin-manifest.txt`, with the `tab` role ([`TAB_ROLE`]); craft-ui's font stack leads its tab-title family
+    /// with it. [`Embed::scripts`] and [`Embed::filter`] do not apply to it. A checkout without that manifest, or a
+    /// manifest without the face's row, embeds the other faces and prints a `cargo::warning`, required or not. A
+    /// manifest that does not parse, or a row whose file is missing or outside the checkout, is an [`Error`] when
+    /// required and a `cargo::warning` otherwise; the other faces are embedded either way when not required. A
+    /// [`Embed::serve`] table carries no roles, so it leaves the face out and prints a `cargo::warning`.
+    pub fn tab_face(mut self) -> Self {
+        self.tab = true;
+        self
+    }
+
     /// Read this checkout instead of `CRAFT_FONTS_DIR`.
     pub fn dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.dir = Some(dir.into());
@@ -239,7 +281,7 @@ impl Embed {
 
         let selected = match &dir {
             None => Err(Error::NotSet),
-            Some(dir) => self.select(dir, cargo).and_then(|faces| if required { self.check_required(dir, faces) } else { Ok(faces) }),
+            Some(dir) => self.select(dir, required, cargo).and_then(|faces| if required { self.check_required(dir, faces) } else { Ok(faces) }),
         };
         let mut selected = selected;
         if let Ok(faces) = &mut selected {
@@ -278,8 +320,39 @@ impl Embed {
         Ok(faces)
     }
 
+    /// The tab-title face of `fonts/latin-manifest.txt` ([`TAB_FACE`]), with the [`TAB_ROLE`] role. A checkout without
+    /// that manifest, or a manifest without the face's row, gives `None` and a `cargo::warning`.
+    fn select_tab_face(&self, dir: &Path, root: &Path, cargo: &mut Vec<String>) -> Result<Option<Face>, Error> {
+        let manifest = dir.join("fonts/latin-manifest.txt");
+        let text = match read_text_bounded(&manifest, MAX_MANIFEST_BYTES) {
+            Ok(text) => text,
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                // Cargo treats a missing watched file as changed, so the build watches the folder the manifest would be in.
+                rerun_if_changed(cargo, &dir.join("fonts"))?;
+                cargo.push(format!("cargo::warning=craft-fonts: not embedding the tab-title face: {} does not exist", manifest.display()));
+                return Ok(None);
+            }
+            Err(source) => return Err(Error::Read { path: manifest, source }),
+        };
+        rerun_if_changed(cargo, &manifest)?;
+        let entries = parse_manifest(&text).map_err(|error| Error::Parse { manifest: manifest.clone(), error })?;
+        let (family, style) = TAB_FACE;
+        let Some(mut entry) = entries.into_iter().find(|entry| entry.family == family && entry.style == style) else {
+            cargo.push(format!("cargo::warning=craft-fonts: not embedding the tab-title face: {} has no {family} {style} row", manifest.display()));
+            return Ok(None);
+        };
+        entry.role = Some(TAB_ROLE.to_owned());
+        let file = dir.join(&entry.file);
+        if !file.exists() {
+            // Cargo treats a missing watched file as changed, so the build watches the nearest folder that exists.
+            let folder = file.ancestors().skip(1).find(|folder| folder.is_dir()).unwrap_or(dir);
+            rerun_if_changed(cargo, folder)?;
+        }
+        checked_face(&manifest, dir, root, entry, false, cargo).map(Some)
+    }
+
     /// The wanted manifest entries with their canonical file paths.
-    fn select(&self, dir: &Path, cargo: &mut Vec<String>) -> Result<Vec<Face>, Error> {
+    fn select(&self, dir: &Path, required: bool, cargo: &mut Vec<String>) -> Result<Vec<Face>, Error> {
         let manifest = dir.join("fonts/manifest.txt");
         let text = read_text_bounded(&manifest, MAX_MANIFEST_BYTES).map_err(|source| Error::Read { path: manifest.clone(), source })?;
         // Cargo treats a missing watched file as changed, which would rerun the build every time.
@@ -325,29 +398,17 @@ impl Embed {
                 uncut.push(format!("{} {}", entry.family, entry.style));
                 continue;
             }
-            // A manifest path names a file in the checkout, and is served under the same name.
-            for file in [&entry.file, &entry.licence_file] {
-                if !file.is_empty() && !is_checkout_relative(file) {
-                    return Err(Error::OutsideCheckout { manifest, file: file.clone() });
-                }
+            faces.push(checked_face(&manifest, dir, &root, entry, cut, cargo)?);
+        }
+        if self.tab && self.serve.is_some() {
+            cargo.push("cargo::warning=craft-fonts: not serving the tab-title face: a served table carries no roles".to_owned());
+        } else if self.tab {
+            match self.select_tab_face(dir, &root, cargo) {
+                Ok(Some(face)) => faces.push(face),
+                Ok(None) => {}
+                Err(e) if required => return Err(e),
+                Err(e) => cargo.push(format!("cargo::warning=craft-fonts: not embedding the tab-title face: {e}")),
             }
-            let file = dir.join(&entry.file);
-            // `include_bytes!` resolves relative paths from the including source file.
-            let path = file.canonicalize().map_err(|source| Error::Read { path: file, source })?;
-            // A symlink in the checkout must not pull a file from elsewhere on the build host. A
-            // missing licence is only warned about when serving; one that exists must be inside.
-            if !path.starts_with(&root) {
-                return Err(Error::OutsideCheckout { manifest, file: entry.file });
-            }
-            if !entry.licence_file.is_empty() && dir.join(&entry.licence_file).canonicalize().is_ok_and(|licence| !licence.starts_with(&root)) {
-                return Err(Error::OutsideCheckout { manifest, file: entry.licence_file });
-            }
-            if !path.is_file() {
-                return Err(Error::OutsideCheckout { manifest, file: entry.file });
-            }
-            rerun_if_changed(cargo, &path)?;
-            let (index, sha256) = (entry.index, entry.sha256.clone());
-            faces.push(Face { entry, path, index, cut, sha256 });
         }
         if !uncut.is_empty() {
             let why = if self.catalogs.is_some() { "Embed::subset_to was given no translation catalogs" } else { "no translation catalogs" };
@@ -451,7 +512,8 @@ impl Embed {
     }
 
     /// Warn about each catalog's and [`Embed::check_text`] file's characters that neither an
-    /// embedded face nor an [`Embed::embedded_elsewhere`] face covers.
+    /// embedded face nor an [`Embed::embedded_elsewhere`] face covers. The tab-title face, which draws only tab titles,
+    /// covers none of them.
     fn check_coverage(&self, faces: &[Face], dir: &Path, cargo: &mut Vec<String>) {
         let files = self.checked_files();
         if files.is_empty() {
@@ -460,6 +522,7 @@ impl Embed {
         let elsewhere = self.elsewhere(dir, cargo);
         let fonts: Vec<(&ManifestEntry, u32, Option<Vec<u8>>)> = faces
             .iter()
+            .filter(|face| face.entry.role.as_deref() != Some(TAB_ROLE))
             .map(|face| (&face.entry, face.index, read_bounded(&face.path, MAX_FILE_BYTES).ok()))
             .chain(elsewhere.iter().map(|entry| (entry, entry.index, read_bounded(&dir.join(&entry.file), MAX_FILE_BYTES).ok())))
             .collect();
@@ -496,16 +559,19 @@ impl Embed {
         }
     }
 
+    /// `faces` when `fonts/manifest.txt` gave at least one, covering every script of [`Embed::scripts`]; the tab-title
+    /// face, which neither selection applies to, counts for neither.
     fn check_required(&self, dir: &Path, faces: Vec<Face>) -> Result<Vec<Face>, Error> {
         let manifest = dir.join("fonts/manifest.txt");
-        if faces.is_empty() {
+        let selected = || faces.iter().filter(|face| face.entry.role.as_deref() != Some(TAB_ROLE));
+        if selected().next().is_none() {
             return Err(Error::NoFaces { manifest });
         }
         let missing: Vec<String> = self
             .scripts
             .iter()
             .flatten()
-            .filter(|tag| !faces.iter().any(|face| face.entry.scripts.iter().any(|s| script_matches(s, tag))))
+            .filter(|tag| !selected().any(|face| face.entry.scripts.iter().any(|s| script_matches(s, tag))))
             .cloned()
             .collect();
         if missing.is_empty() { Ok(faces) } else { Err(Error::MissingScripts { manifest, scripts: missing }) }

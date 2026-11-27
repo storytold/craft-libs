@@ -42,7 +42,8 @@ pub struct Workspace<P> {
     #[serde(default)]
     hidden: Vec<(P, Location<P>)>,
     /// Floating panels, and closed panels that were floating, with the docked location each one left, so Dock Panel
-    /// can return it. A closed panel's record lives as long as its `hidden` record. Saved with the workspace.
+    /// can return it; a closed panel that floats records the place it would reopen at. A closed panel's record lives
+    /// as long as its `hidden` record. Saved with the workspace.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     floated: Vec<(P, Location<P>)>,
     /// Counts the replacements of this live workspace. Not saved, and not part of equality.
@@ -264,6 +265,16 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
                 Action::Open { panel, .. } if proposed.hidden.iter().any(|(p, _)| p == panel) => proposed.reopen(panel, &policy)?,
                 _ => false,
             };
+            // Floating a hidden panel records the docked place it would reopen at, without reopening it there. A panel
+            // that would reopen in a floating window has no docked place.
+            let hidden_place = match &action {
+                Action::Float { panel, .. } if !proposed.layout.contains(panel) && proposed.hidden.iter().any(|(p, _)| p == panel) => proposed
+                    .restored(panel, &policy)
+                    .filter(|restored| !floats(&restored.layout, panel))
+                    .and_then(|restored| restored.layout.location(panel).ok())
+                    .map(|location| (panel.clone(), location)),
+                _ => None,
+            };
             if !reopened {
                 // SetNative records where the window system has a floating window, so a lock
                 // does not refuse it.
@@ -278,6 +289,12 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
                 proposed.hidden.push((panel, location));
             }
             proposed.track_floated(&before);
+            if let Some((panel, location)) = hidden_place
+                && floats(&proposed.layout, &panel)
+                && !proposed.floated.iter().any(|(p, _)| p == &panel)
+            {
+                proposed.floated.push((panel, location));
+            }
             all_closed.extend(closed);
         }
         let visible: HashSet<P> = proposed.layout.panels().into_iter().cloned().collect();

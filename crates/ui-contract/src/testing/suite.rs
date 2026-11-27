@@ -49,6 +49,8 @@ struct Subject<'a> {
     home: bool,
     /// Each story's [`Base`], built when a case first asks for it.
     bases: Vec<OnceCell<Base>>,
+    /// What each story's rows allow, read once for the collection cases that run on one capable story ([`collection::probe_rows`]).
+    row_probes: Vec<OnceCell<collection::RowsProbe>>,
     /// The style sources the style cases measure, read once for all of them.
     style_sources: OnceCell<Result<Vec<style::Source>, String>>,
     /// The context the style cases resolve looks in.
@@ -66,7 +68,8 @@ struct Base {
 impl<'a> Subject<'a> {
     fn new(probe: &'a Probe, stories: Vec<Story>, home: bool) -> Self {
         let bases = stories.iter().map(|_| OnceCell::new()).collect();
-        Subject { probe, stories, home, bases, style_sources: OnceCell::new(), style_ctx: OnceCell::new() }
+        let row_probes = stories.iter().map(|_| OnceCell::new()).collect();
+        Subject { probe, stories, home, bases, row_probes, style_sources: OnceCell::new(), style_ctx: OnceCell::new() }
     }
 
     /// The shared [`Base`] of `story`, which is one of `self.stories`.
@@ -78,6 +81,12 @@ impl<'a> Subject<'a> {
     }
 
     /// Whether the case `name` runs for this type: its shapes take the type and the type is not exempt from it.
+    /// What the rows of `story` allow ([`collection::probe_rows`]), read on first use.
+    fn row_probe(&self, story: &Story) -> &collection::RowsProbe {
+        let index = self.stories.iter().position(|known| std::ptr::eq(known, story)).unwrap_or_default();
+        self.row_probes[index].get_or_init(|| collection::probe_rows(story))
+    }
+
     fn runs(&self, name: &str) -> bool {
         cases().any(|case| case.name == name && runs_for(case, self.probe))
     }
@@ -175,7 +184,11 @@ fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
 /// each exemption names a known case. `home`: the stories are the package's that registers the type ([`Subject::home`]).
 fn run_group(probe: Probe, group: &'static Group, check_exemptions: bool, home: bool, stories: Vec<Story>) -> Result<(), Failed> {
     // The cases that read the type as a whole look at one story of each kind at the gate; the others keep every story.
-    let stories = if matches!(group.name, "reads" | "variants" | "containers") { nodes::sampled_stories(stories) } else { stories };
+    let stories = match group.name {
+        "reads" | "containers" => nodes::sampled_stories(stories, false),
+        "activation" | "variants" => nodes::sampled_stories(stories, true),
+        _ => stories,
+    };
     let subject = Subject::new(&probe, stories, home);
     let mut failures = Vec::new();
     if check_exemptions && home {
