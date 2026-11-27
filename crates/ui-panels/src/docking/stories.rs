@@ -10,7 +10,7 @@ use super::{
 };
 use crate::buttons::Button;
 use crate::contract::SizeLimits;
-use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Tracked, Validity};
+use crate::contract::{Bind, MemoKey, Props as _, Show as _, ShowContainer as _, Tracked, Validity};
 use crate::menu::{Menu, PanelRow};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Message;
@@ -43,10 +43,11 @@ fn titles(panels: &[usize]) -> Vec<PanelTitle> {
     panels.iter().map(|panel| title_of(*panel)).collect()
 }
 
-fn dock(ui: &mut Ui, bind: Bind<'_, Layout<usize>>, shown: &Layout<usize>) -> StoryOutput {
+/// The story's split area over `bind`, whose layout and rules the story data's `revision` covers.
+fn dock(ui: &mut Ui, bind: Bind<'_, Layout<usize>>, shown: &Layout<usize>, revision: u128) -> StoryOutput {
     let limits = |_: &usize| SizeLimits::default();
     let rules = FrameRules::new(&limits);
-    let area = SplitArea::new("Panels", bind, rules).show(ui, |ui, body| {
+    let area = SplitArea::new("Panels", bind, rules, revision).show(ui, |ui, body| {
         for (anchor, rect) in body.group_frames::<usize>() {
             let Some(Node::Tabs { panels, .. }) = shown.place(&anchor).and_then(|place| shown.node_of(&place)) else { continue };
             let panels = titles(panels);
@@ -66,25 +67,28 @@ fn drag_handle(fixture: &mut Fixture) {
 
 #[story(SplitArea<'static, usize>, covers = [Default], drive = Drive::Custom(drag_handle))]
 fn columns(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let revision = MemoKey::of(&data.revision());
     let (layout, layout_at) = data.value_at("dock", two_columns());
     let shown = layout.clone();
-    dock(ui, layout_at.bind(layout), &shown)
+    dock(ui, layout_at.bind(layout), &shown, revision)
 }
 
 #[story(SplitArea<'static, usize>, covers = [Mixed], drive = Drive::Custom(drag_handle))]
 fn layouts_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let revision = MemoKey::of(&data.revision());
     let (layout, layout_at) = data.value_at("dock", Mixed::<Layout<usize>>::Mixed);
-    dock(ui, layout_at.bind_mixed(layout), &two_columns())
+    dock(ui, layout_at.bind_mixed(layout), &two_columns(), revision)
 }
 
 #[story(SplitArea<'static, usize>, covers = [Invalid], drive = Drive::Custom(drag_handle))]
 fn a_dock_of_one_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let revision = MemoKey::of(&data.revision());
     let (layout, layout_at) = data.value_at("dock", Layout::new(Some(Node::tabs(vec![LAYERS], 0)), Vec::new()));
     let shown = layout.clone();
     let needs_two = |layout: &Layout<usize>| {
         if layout.panels().len() < 2 { Validity::Refuse(Message::new("A dock needs two panels")) } else { Validity::Ok }
     };
-    dock(ui, layout_at.bind(layout).check(needs_two), &shown)
+    dock(ui, layout_at.bind(layout).check(needs_two), &shown, revision)
 }
 
 #[story(DockGroup<'static, usize>, covers = [Default])]

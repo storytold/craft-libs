@@ -41,7 +41,7 @@ const EDGE: PartKey = PartKey::new("edge");
 
 /// Where a column's bar is. A dock column and a floating window are both one column; the window's title row is the
 /// bar of the column it holds.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ColumnBar {
     /// The column shows its own bar (the double arrow and the band that moves the column and opens its menu), the
