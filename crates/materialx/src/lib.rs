@@ -810,8 +810,11 @@ impl<'a> Resolver<'a> {
         let node_name = node.attr("name").unwrap_or("");
         match node.name.as_str() {
             "image" | "tiledimage" => {
-                let Some(file_input) = child("file") else { return Ok(None) };
-                let Some(file) = file_input.attr("value") else { return Ok(None) };
+                let file = child("file").and_then(|input| input.attr("value").filter(|file| !file.is_empty()).map(|file| (input, file)));
+                let Some((file_input, file)) = file else {
+                    warnings.push(format!("image node {node_name:?} has no nonempty literal file value; its image was skipped"));
+                    return Ok(None);
+                };
                 let prefix = file_input
                     .attr("fileprefix")
                     .or_else(|| node.attr("fileprefix"))

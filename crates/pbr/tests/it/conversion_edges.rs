@@ -234,3 +234,16 @@ fn connected_image_tiling_keeps_the_resolved_scale() {
         assert_eq!(material.uv_tiling, [2.0, 3.0]);
     }
 }
+
+#[test]
+fn images_without_literal_file_values_report_the_skipped_texture() {
+    for kind in ["image", "tiledimage"] {
+        for file in ["", r#"<input name="file"/>"#, r#"<input name="file" value=""/>"#, r#"<input name="file" interfacename="filename"/>"#] {
+            let nodes = format!(r#"<{kind} name="T" type="color3">{file}</{kind}>"#);
+            let doc = document("standard_surface", r#"<input name="base_color" nodename="T"/>"#, &nodes, "");
+            let converted = try_from_materialx(&doc.read_material_strict(None).unwrap()).unwrap();
+            assert!(converted.surface.textures.is_empty());
+            assert!(converted.report.items.iter().any(|item| matches!(item, ReportItem::Warning(message) if message.contains("file"))));
+        }
+    }
+}
