@@ -89,6 +89,23 @@ fn nondefault_factors_without_textures_are_reported() {
 }
 
 #[test]
+fn nested_normalmaps_are_reported_and_skipped() {
+    let nodes = r#"<image name="T" type="vector3"><input name="file" value="normal.png"/></image>
+        <normalmap name="Inner" type="vector3"><input name="in" nodename="T"/></normalmap>
+        <normalmap name="Outer" type="vector3"><input name="in" nodename="Inner"/></normalmap>"#;
+    let doc = document(r#"<input name="geometry_normal" nodename="Outer"/>"#, nodes);
+    let converted = try_from_materialx(&doc.read_material_strict(None).unwrap()).unwrap();
+    assert!(!converted.surface.textures.iter().any(|binding| binding.input == TextureInput::Normal));
+    assert!(
+        converted
+            .report
+            .items
+            .iter()
+            .any(|item| matches!(item, ReportItem::Warning(message) if message.contains("nested") && message.contains("Outer")))
+    );
+}
+
+#[test]
 fn normalmap_literals_do_not_become_untransformed_world_normals() {
     for value in ["1,0.5,1", "0.5,0.5,1"] {
         let doc = document(

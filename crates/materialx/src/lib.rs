@@ -888,6 +888,10 @@ impl<'a> Resolver<'a> {
                             warnings.push(format!("the literal input of normalmap node {node_name:?} is not supported; its value was skipped"));
                             None
                         }
+                        Some(Resolved::NormalMap { .. }) => {
+                            warnings.push(format!("the nested normalmap input of node {node_name:?} is not supported; its value was skipped"));
+                            None
+                        }
                         value => value,
                     }),
                     None => Ok(None),
