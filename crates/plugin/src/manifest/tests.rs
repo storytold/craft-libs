@@ -94,6 +94,11 @@ fn ui_declarations_must_name_the_plugins_commands() {
     ] {
         assert!(Manifest::parse(&with_ui(bad.clone()), &GRID).is_err(), "{bad}");
     }
+    // A command's label is what a button without its own label shows.
+    for label in [String::new(), "  ".to_string(), "x".repeat(65)] {
+        let m = json!({"id": "t.ui", "name": "T", "run": {"command": "true"}, "commands": [{"id": "go", "label": label}]}).to_string();
+        assert!(Manifest::parse(&m, &GRID).is_err(), "{label:?}");
+    }
     // An app with no right-click menus for add-ins takes no menu items.
     let none = Host { id: "x", name: "X", menus: &[] };
     assert!(Manifest::parse(&with_ui(json!({"menus": [{"command": "go"}]})), &none).is_err());

@@ -59,14 +59,27 @@ impl RequestError {
 /// Sends lines to a running plugin without waiting for anything (protocol 2: notifications and
 /// answers to the plugin's own requests, interleaved with the app's requests).
 #[derive(Clone)]
-pub struct Notifier(std::sync::mpsc::Sender<Vec<u8>>);
+pub struct Notifier(std::sync::mpsc::SyncSender<Vec<u8>>);
+
+/// Messages waiting for an add-in to read them. One that stops reading costs the sender an
+/// error once this many wait, never the app's memory.
+pub const MAX_OUTBOX: usize = 1_024;
 
 impl Notifier {
-    /// Sends one JSON-RPC message.
+    /// Sends one JSON-RPC message. Never waits: an error when the add-in has exited, or has
+    /// [`MAX_OUTBOX`] messages it hasn't read.
     pub fn send(&self, msg: &Json) -> Result<(), String> {
         let mut bytes = serde_json::to_vec(msg).map_err(|e| format!("encoding a message: {e}"))?;
         bytes.push(b'\n');
-        self.0.send(bytes).map_err(|_| "the plugin stopped reading".to_string())
+        self.send_line(bytes)
+    }
+
+    fn send_line(&self, bytes: Vec<u8>) -> Result<(), String> {
+        use std::sync::mpsc::TrySendError;
+        self.0.try_send(bytes).map_err(|e| match e {
+            TrySendError::Full(_) => format!("the plugin isn't reading: {MAX_OUTBOX} messages wait for it"),
+            TrySendError::Disconnected(_) => "the plugin stopped reading".to_string(),
+        })
     }
 }
 
@@ -118,15 +131,20 @@ mod native {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::process::{Child, Command, Stdio};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+    use std::sync::mpsc::{Receiver, RecvTimeoutError, TrySendError, sync_channel};
     use std::time::Instant;
 
     use serde_json::json;
 
     use crate::push::{self, FloodMeter, Incoming};
 
-    use super::{Duration, HostError, HostHandler, Json, Launch, Notifier, RequestError};
+    use super::{Duration, HostError, HostHandler, Json, Launch, MAX_OUTBOX, Notifier, RequestError};
 
+    /// Messages of a request in progress that the app hasn't taken yet. An add-in that sends
+    /// more without being asked is cut off.
+    const MAX_INBOX: usize = 1_024;
+    /// How long a failed request waits for the add-in's last words on standard error.
+    const LAST_WORDS: Duration = Duration::from_millis(500);
     /// Longest line read from a plugin (a large array result fits).
     const MAX_LINE: u64 = 64 << 20;
     const MAX_STDERR_LINE: u64 = 64 << 10;
@@ -135,8 +153,10 @@ mod native {
         id: String,
         /// The plugin's last lines of standard error, for the message when it exits.
         stderr_tail: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        /// Disconnects when standard error has been read to its end.
+        stderr_done: Receiver<()>,
         child: Child,
-        to_plugin: Sender<Vec<u8>>,
+        to_plugin: Notifier,
         from_plugin: Receiver<Result<Json, String>>,
         next_id: u64,
         /// A request of the app's is waiting for its answer: the plugin's own requests go to it
@@ -147,6 +167,9 @@ mod native {
     impl Connection {
         pub fn start(launch: &Launch<'_>) -> Result<Connection, String> {
             let Launch { id, run, dir, host_id, env } = *launch;
+            // Absolute, so the program's path means the same before and after the child changes
+            // into the folder.
+            let dir = &std::path::absolute(dir).map_err(|e| format!("can't find the add-in's folder {}: {e}", dir.display()))?;
             let program = if run.command.contains('/') || run.command.contains('\\') { dir.join(&run.command) } else { run.command.clone().into() };
             let mut child = Command::new(&program)
                 .args(&run.args)
@@ -166,7 +189,8 @@ mod native {
             };
             let id = id.to_string();
 
-            let (to_plugin, outbox) = channel::<Vec<u8>>();
+            let (to_plugin, outbox) = sync_channel::<Vec<u8>>(MAX_OUTBOX);
+            let to_plugin = Notifier(to_plugin);
             let writer = std::thread::Builder::new().name(format!("plugin-{id}-in")).spawn(move || {
                 let mut stdin = stdin;
                 while let Ok(bytes) = outbox.recv() {
@@ -176,7 +200,7 @@ mod native {
                 }
             });
 
-            let (inbox, from_plugin) = channel::<Result<Json, String>>();
+            let (inbox, from_plugin) = sync_channel::<Result<Json, String>>(MAX_INBOX);
             let rid = id.clone();
             let in_request: std::sync::Arc<AtomicBool> = Default::default();
             let busy = in_request.clone();
@@ -194,12 +218,12 @@ mod native {
                     match out.by_ref().take(MAX_LINE).read_until(b'\n', &mut line) {
                         Ok(0) => {
                             push::push(&rid, Incoming::Exited("the plugin exited".into()));
-                            let _ = inbox.send(Err("the plugin exited".into()));
+                            let _ = inbox.try_send(Err("the plugin exited".into()));
                             break;
                         }
                         Ok(_) if !line.ends_with(b"\n") && line.len() as u64 >= MAX_LINE => {
                             push::push(&rid, Incoming::Exited("the plugin sent a message larger than 64 MiB".into()));
-                            let _ = inbox.send(Err("the plugin sent a message larger than 64 MiB".into()));
+                            let _ = inbox.try_send(Err("the plugin sent a message larger than 64 MiB".into()));
                             break;
                         }
                         Ok(_) => match serde_json::from_slice::<Json>(&line) {
@@ -224,8 +248,19 @@ mod native {
                                         continue;
                                     }
                                     push::push(&rid, Incoming::Message(msg));
-                                } else if inbox.send(Ok(msg)).is_err() {
-                                    break;
+                                } else if !busy.load(Ordering::SeqCst) {
+                                    // An answer nobody asked for.
+                                    log::debug!("plugin {rid}: ignored an answer to no request");
+                                } else {
+                                    match inbox.try_send(Ok(msg)) {
+                                        Ok(()) => {}
+                                        Err(TrySendError::Full(_)) => {
+                                            log::warn!("plugin {rid}: more than {MAX_INBOX} messages during one request: stopped");
+                                            push::push(&rid, Incoming::Flood);
+                                            break;
+                                        }
+                                        Err(TrySendError::Disconnected(_)) => break,
+                                    }
                                 }
                             }
                             Err(_) => {
@@ -238,7 +273,7 @@ mod native {
                         },
                         Err(e) => {
                             push::push(&rid, Incoming::Exited(format!("reading from the plugin: {e}")));
-                            let _ = inbox.send(Err(format!("reading from the plugin: {e}")));
+                            let _ = inbox.try_send(Err(format!("reading from the plugin: {e}")));
                             break;
                         }
                     }
@@ -246,10 +281,13 @@ mod native {
             });
 
             let stderr_tail: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+            let (stderr_open, stderr_done) = sync_channel::<()>(0);
             if let Some(stderr) = child.stderr.take() {
                 let eid = id.clone();
                 let tail = stderr_tail.clone();
                 let _ = std::thread::Builder::new().name(format!("plugin-{id}-err")).spawn(move || {
+                    // Dropped when this thread ends: that is how the connection knows.
+                    let _open = stderr_open;
                     let mut err = BufReader::new(stderr);
                     let mut line = Vec::new();
                     loop {
@@ -278,7 +316,7 @@ mod native {
                 let _ = child.wait();
                 return Err("can't start the plugin's I/O threads".into());
             }
-            Ok(Connection { id, stderr_tail, child, to_plugin, from_plugin, next_id: 1, in_request })
+            Ok(Connection { id, stderr_tail, stderr_done, child, to_plugin, from_plugin, next_id: 1, in_request })
         }
 
         pub fn request(&mut self, method: &str, params: Json, timeout: Duration) -> Result<Json, RequestError> {
@@ -310,12 +348,12 @@ mod native {
 
         /// Sends a notification (no answer expected), interleaved with requests.
         pub fn notify(&self, method: &str, params: Json) -> Result<(), String> {
-            Notifier(self.to_plugin.clone()).send(&json!({"jsonrpc": "2.0", "method": method, "params": params}))
+            self.to_plugin.send(&json!({"jsonrpc": "2.0", "method": method, "params": params}))
         }
 
         /// A handle that sends to this plugin from anywhere, without the connection.
         pub fn sender(&self) -> Option<Notifier> {
-            Some(Notifier(self.to_plugin.clone()))
+            Some(self.to_plugin.clone())
         }
 
         fn request_inner(
@@ -331,17 +369,21 @@ mod native {
             let mut bytes = serde_json::to_vec(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
                 .map_err(|e| RequestError::fatal(format!("encoding the request: {e}")))?;
             bytes.push(b'\n');
-            self.to_plugin.send(bytes).map_err(|_| RequestError::fatal("the plugin stopped reading"))?;
+            self.to_plugin.send_line(bytes).map_err(RequestError::fatal)?;
+            let late = || RequestError::fatal(format!("{method} took longer than {} ms", timeout.as_millis()));
             let mut deadline = Instant::now() + timeout;
             loop {
+                // Messages already waiting are received even with no time left, so the deadline
+                // is checked here and not left to the receive.
                 let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return Err(late());
+                }
                 let msg = match self.from_plugin.recv_timeout(left) {
                     Ok(Ok(msg)) => msg,
                     Ok(Err(e)) => return Err(RequestError::fatal(self.with_stderr(e))),
-                    Err(RecvTimeoutError::Timeout) => {
-                        return Err(RequestError::fatal(format!("{method} took longer than {} ms", timeout.as_millis())));
-                    }
-                    Err(RecvTimeoutError::Disconnected) => return Err(RequestError::fatal("the plugin exited")),
+                    Err(RecvTimeoutError::Timeout) => return Err(late()),
+                    Err(RecvTimeoutError::Disconnected) => return Err(RequestError::fatal(self.with_stderr("the plugin exited".into()))),
                 };
                 if let Some(call) = msg.get("method").and_then(Json::as_str) {
                     // The plugin asks the host something while it works (or notifies it).
@@ -353,7 +395,7 @@ mod native {
                         };
                         let mut bytes = serde_json::to_vec(&reply).map_err(|e| RequestError::fatal(format!("encoding an answer: {e}")))?;
                         bytes.push(b'\n');
-                        self.to_plugin.send(bytes).map_err(|_| RequestError::fatal("the plugin stopped reading"))?;
+                        self.to_plugin.send_line(bytes).map_err(RequestError::fatal)?;
                     }
                     if !hard {
                         deadline = Instant::now() + timeout;
@@ -374,8 +416,9 @@ mod native {
 
         /// `message`, then what the plugin last wrote to standard error (why it exited, say).
         fn with_stderr(&self, message: String) -> String {
-            // Give the error reader a moment to catch the process's last words.
-            std::thread::sleep(Duration::from_millis(50));
+            // Wait for the error reader to have the process's last words: until standard error
+            // ends, but not for long (a process the add-in started may hold it open).
+            let _ = self.stderr_done.recv_timeout(LAST_WORDS);
             let tail = match self.stderr_tail.lock() {
                 Ok(g) => g.join(" / "),
                 Err(p) => p.into_inner().join(" / "),
@@ -385,7 +428,7 @@ mod native {
 
         /// Asks the plugin to exit, then makes sure it has.
         pub fn shutdown(mut self) {
-            let _ = self.to_plugin.send(b"{\"jsonrpc\":\"2.0\",\"method\":\"shutdown\"}\n".to_vec());
+            let _ = self.to_plugin.send_line(b"{\"jsonrpc\":\"2.0\",\"method\":\"shutdown\"}\n".to_vec());
             let deadline = Instant::now() + Duration::from_millis(500);
             while Instant::now() < deadline {
                 if matches!(self.child.try_wait(), Ok(Some(_))) {

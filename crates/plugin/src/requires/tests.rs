@@ -106,6 +106,10 @@ fn optional_add_ins_never_block() {
     let m = missing(&nodes[0], &nodes);
     assert_eq!(m.len(), 2);
     assert!(m.iter().all(|x| x.optional));
+    // Not even with a range that doesn't parse; the same range on a required add-in blocks.
+    let entry = |optional: bool| json!({"addins": [{"id": "org.mqtt", "version": "whenever", "optional": optional}]});
+    assert!(resolve(&[node("org.reports", "1.0.0", entry(true))], &host()).blocked.is_empty());
+    assert!(resolve(&[node("org.reports", "1.0.0", entry(false))], &host()).is_blocked("org.reports"));
 }
 
 #[test]
@@ -216,6 +220,10 @@ fn office_requirement_sets_and_methods() {
             "Needs Document.goToByIdAsync, which GridCraft doesn't support",
         ]
     );
+    // A set named without a version means 1.1, and the blocker says so.
+    let blank = OfficeNeeds { sets: vec![("WordApi".into(), " ".into())], methods: vec![] };
+    let b = office_blockers(&blank, &host());
+    assert_eq!(b.iter().map(|x| x.message.as_str()).collect::<Vec<_>>(), ["Needs WordApi 1.1, which GridCraft doesn't support"]);
     let mut n = node("office.abc", "1.0.0.0", json!({}));
     n.office = Some(OfficeNeeds { sets: vec![("ExcelApi".into(), "1.4".into())], methods: vec![] });
     assert!(resolve(&[n], &host()).blocked.is_empty());

@@ -184,11 +184,16 @@ enum Op {
 struct Bound {
     op: Op,
     v: Version,
+    /// The bound comes from a comparator that left parts out (`>1.2`, `<2`) or is the ceiling of
+    /// one (`^1.2.3` is below 2): only `MAJOR.MINOR.PATCH` is compared, as Cargo does, so a
+    /// pre-release is neither above `>1.2` for being `1.3.0-alpha` less, nor below `<2` for being
+    /// `2.0.0-alpha`.
+    numeric: bool,
 }
 
 impl Bound {
     fn holds(&self, v: &Version) -> bool {
-        let o = v.cmp(&self.v);
+        let o = if self.numeric { v.triple().cmp(&self.v.triple()) } else { v.cmp(&self.v) };
         match self.op {
             Op::Ge => o != Ordering::Less,
             Op::Gt => o == Ordering::Greater,
@@ -308,6 +313,10 @@ impl Range {
             }
             r.bounds.extend(desugar(op, &p).ok_or_else(bad)?);
         }
+        if r.bounds.is_empty() {
+            // Only wildcards (`*, *`): the same as `*`, pre-releases included.
+            return Ok(Range { text: r.text, ..Range::any() });
+        }
         Ok(r)
     }
 
@@ -373,29 +382,33 @@ fn bump_minor(p: &Partial, minor: u64) -> Option<Version> {
 
 /// Cargo's meaning of one comparator, as primitive bounds.
 fn desugar(op: Option<&str>, p: &Partial) -> Option<Vec<Bound>> {
-    let b = |op, v| Bound { op, v };
+    // What the comparator wrote, compared in full only when it wrote every part.
+    let partial = p.minor.is_none() || p.patch.is_none();
+    let b = |op, v| Bound { op, v, numeric: partial };
+    // A bound this function works out (the next minor or major): numbers only.
+    let n = |op, v| Bound { op, v, numeric: true };
     let low = p.low();
     Some(match (op, p.minor, p.patch) {
         // `=1.2.3`; `=1.2` and `=1` are `1.2.*` and `1.*`.
         (Some("="), Some(_), Some(_)) => vec![b(Op::Eq, low)],
-        (Some("="), Some(mi), None) => vec![b(Op::Ge, low), b(Op::Lt, bump_minor(p, mi)?)],
-        (Some("="), None, _) => vec![b(Op::Ge, low), b(Op::Lt, bump_major(p)?)],
+        (Some("="), Some(mi), None) => vec![b(Op::Ge, low), n(Op::Lt, bump_minor(p, mi)?)],
+        (Some("="), None, _) => vec![b(Op::Ge, low), n(Op::Lt, bump_major(p)?)],
         // `>1.2` is `>=1.3.0`; `>1` is `>=2.0.0`.
         (Some(">"), Some(_), Some(_)) => vec![b(Op::Gt, low)],
-        (Some(">"), Some(mi), None) => vec![b(Op::Ge, bump_minor(p, mi)?)],
-        (Some(">"), None, _) => vec![b(Op::Ge, bump_major(p)?)],
+        (Some(">"), Some(mi), None) => vec![n(Op::Ge, bump_minor(p, mi)?)],
+        (Some(">"), None, _) => vec![n(Op::Ge, bump_major(p)?)],
         (Some(">="), ..) => vec![b(Op::Ge, low)],
         (Some("<"), ..) => vec![b(Op::Lt, low)],
         // `<=1.2` is `<1.3.0`; `<=1` is `<2.0.0`.
         (Some("<="), Some(_), Some(_)) => vec![b(Op::Le, low)],
-        (Some("<="), Some(mi), None) => vec![b(Op::Lt, bump_minor(p, mi)?)],
-        (Some("<="), None, _) => vec![b(Op::Lt, bump_major(p)?)],
+        (Some("<="), Some(mi), None) => vec![n(Op::Lt, bump_minor(p, mi)?)],
+        (Some("<="), None, _) => vec![n(Op::Lt, bump_major(p)?)],
         // `~1.2.3` and `~1.2`: `<1.3.0`; `~1`: `<2.0.0`.
-        (Some("~"), Some(mi), _) => vec![b(Op::Ge, low), b(Op::Lt, bump_minor(p, mi)?)],
-        (Some("~"), None, _) => vec![b(Op::Ge, low), b(Op::Lt, bump_major(p)?)],
+        (Some("~"), Some(mi), _) => vec![b(Op::Ge, low), n(Op::Lt, bump_minor(p, mi)?)],
+        (Some("~"), None, _) => vec![b(Op::Ge, low), n(Op::Lt, bump_major(p)?)],
         // Wildcards without an operator: `1.*`, `1.2.*`.
-        (None, None, _) if p.wild => vec![b(Op::Ge, low), b(Op::Lt, bump_major(p)?)],
-        (None, Some(mi), None) if p.wild => vec![b(Op::Ge, low), b(Op::Lt, bump_minor(p, mi)?)],
+        (None, None, _) if p.wild => vec![b(Op::Ge, low), n(Op::Lt, bump_major(p)?)],
+        (None, Some(mi), None) if p.wild => vec![b(Op::Ge, low), n(Op::Lt, bump_minor(p, mi)?)],
         // Caret (and a bare version): the left-most non-zero part may not change.
         (Some("^") | None, minor, patch) => {
             let upper = match (p.major, minor, patch) {
@@ -403,7 +416,7 @@ fn desugar(op: Option<&str>, p: &Partial) -> Option<Vec<Bound>> {
                 (0, Some(mi), _) => Version::new(0, mi.checked_add(1)?, 0),
                 (_, _, _) => bump_major(p)?,
             };
-            vec![b(Op::Ge, low), b(Op::Lt, upper)]
+            vec![b(Op::Ge, low), n(Op::Lt, upper)]
         }
         _ => return None,
     })

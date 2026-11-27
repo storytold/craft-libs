@@ -17,6 +17,8 @@ the parts that must agree between apps live here:
   own threads: a late answer, an exit, a line over 64 MiB or a stream error ends the request with
   a fatal `RequestError`, never a hung app. `request_with` answers the add-in's own requests
   while it works; `request_bounded` chooses whether those calls extend the deadline.
+  At most 1 024 messages wait for an add-in that isn't reading, and as many from it during one
+  request; answers nobody asked for are dropped.
 - `push` queues what add-ins say on their own (at most 20 000 messages, 64 MiB a line, and an
   add-in that sends over 1 000 messages a second for 5 seconds is cut off) for the app to take in
   its main loop.

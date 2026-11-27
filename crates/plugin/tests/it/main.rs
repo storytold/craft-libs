@@ -131,3 +131,64 @@ fn what_an_add_in_says_on_its_own_is_pushed() {
     let got = pushed("it.push", |g| g.iter().any(|i| matches!(i, Incoming::Exited(_))));
     assert!(got.iter().any(|i| matches!(i, Incoming::Exited(_))), "{got:?}");
 }
+
+#[test]
+fn a_hard_deadline_stops_host_calls_that_already_wait() {
+    // The add-in sends 300 host calls at once; answering takes 10 ms each. All of them wait in
+    // the queue when the time is up: the request ends there, it doesn't work through them.
+    let mut c = start("it.burst");
+    let mut answered = 0;
+    let mut host = |_: &str, _: &Json| {
+        answered += 1;
+        std::thread::sleep(Duration::from_millis(10));
+        Ok(Json::Null)
+    };
+    let e = c.request_bounded("burst", json!({"times": 300}), Duration::from_millis(300), true, &mut host).unwrap_err();
+    assert!(e.fatal && e.message.contains("took longer"), "{e:?}");
+    assert!(answered < 300, "{answered} host calls answered after the deadline");
+}
+
+#[test]
+fn an_add_in_that_stops_reading_costs_an_error_not_memory() {
+    let mut c = start("it.stall");
+    c.request("echo", Json::Null, LONG).unwrap();
+    c.notify("stall", Json::Null).unwrap();
+    // Far more than the pipe and the queue hold together: sending must start to fail.
+    let line = json!({"pad": "x".repeat(1_024)});
+    let sent = (0..200_000).take_while(|_| c.notify("more", line.clone()).is_ok()).count();
+    assert!(sent < 200_000, "every message was queued");
+    let e = c.request("echo", Json::Null, LONG).unwrap_err();
+    assert!(e.fatal, "a request can't be queued either: {e:?}");
+}
+
+#[test]
+fn answers_nobody_asked_for_are_dropped() {
+    let _turn = serial();
+    let mut c = start("it.chatter");
+    c.request("echo", Json::Null, LONG).unwrap();
+    c.notify("chatter", Json::Null).unwrap();
+    let got = pushed("it.chatter", |g| !g.is_empty());
+    assert_eq!(got, [Incoming::Message(json!({"jsonrpc": "2.0", "method": "chattered"}))], "the answers aren't pushed");
+    // And they don't wait for the next request, nor count against it.
+    assert_eq!(c.request("echo", json!("still here"), LONG).unwrap(), json!("still here"));
+}
+
+/// On Unix a relative program path is looked up after the child has changed folder, so a folder
+/// given relative to the app must be made absolute first.
+#[cfg(unix)]
+#[test]
+fn a_relative_folder_starts_the_program_in_it() {
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_craft-plugin-test-addin"));
+    let folder = exe.parent().unwrap().canonicalize().unwrap();
+    // The folder as seen from here: up to the root, then down.
+    let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+    let mut relative: PathBuf = cwd.components().skip(1).map(|_| "..").collect();
+    relative.extend(folder.components().skip(1));
+    assert!(relative.is_relative());
+    let run = RunSpec { command: format!("./{}", exe.file_name().unwrap().to_str().unwrap()), args: vec![] };
+    let mut c = Connection::start(&Launch { id: "it.relative", run: &run, dir: &relative, host_id: "testcraft", env: &[] }).unwrap();
+    let env = c.request("env", Json::Null, LONG).unwrap();
+    let told = PathBuf::from(env["dir"].as_str().unwrap());
+    assert!(told.is_absolute(), "the add-in is told its folder in full: {}", told.display());
+    assert_eq!(told.canonicalize().unwrap(), folder);
+}

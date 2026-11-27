@@ -1,6 +1,7 @@
 //! The add-in the integration tests start as a real child process. It answers `echo` with its
 //! params, and misbehaves on request: `ask` calls the host back before answering, `sleep` answers
-//! late, `exit` dies with a last word on standard error, `say` pushes a notification first.
+//! late, `exit` dies with a last word on standard error, `burst` sends its host calls all at
+//! once. Notified `stall` it stops reading; notified `chatter` it sends answers nobody asked for.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::io::{BufRead, Write};
@@ -40,6 +41,13 @@ fn main() {
         let Some(id) = msg.get("id").cloned() else {
             match method {
                 "shutdown" => break,
+                "stall" => std::thread::sleep(std::time::Duration::from_secs(60)),
+                "chatter" => {
+                    for i in 0..5_000 {
+                        send(&mut out, &json!({"jsonrpc": "2.0", "id": i, "result": "nobody asked"}));
+                    }
+                    send(&mut out, &json!({"jsonrpc": "2.0", "method": "chattered"}));
+                }
                 // A notification from the app comes back as one from the add-in.
                 _ => {
                     send(&mut out, &json!({"jsonrpc": "2.0", "method": "heard", "params": {"method": method, "params": params}}));
@@ -56,6 +64,14 @@ fn main() {
                 "cwd": std::env::current_dir().ok().map(|p| p.display().to_string()),
             })),
             "ask" => Ok(ask(&mut lines, &mut out, &params)),
+            "burst" => {
+                let times = params.get("times").and_then(Json::as_u64).unwrap_or(1).min(10_000);
+                for i in 0..times {
+                    send(&mut out, &json!({"jsonrpc": "2.0", "id": format!("b{i}"), "method": "host/echo", "params": {"n": i}}));
+                }
+                let answered = (0..times).take_while(|_| matches!(lines.next(), Some(Ok(_)))).count();
+                Ok(json!(answered))
+            }
             "sleep" => {
                 std::thread::sleep(std::time::Duration::from_millis(params.get("ms").and_then(Json::as_u64).unwrap_or(0).min(60_000)));
                 Ok(Json::Null)

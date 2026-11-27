@@ -328,6 +328,10 @@ impl Manifest {
             if !seen.insert(c.id.as_str()) {
                 return Err(format!("{MANIFEST}: command `{}` is declared twice", c.id));
             }
+            // A button or menu item without a label of its own shows the command's.
+            if !valid_label(&c.label) {
+                return Err(format!("{MANIFEST}: the label of command `{}` needs 1–{MAX_LABEL} characters", c.id));
+            }
         }
         Ok(seen)
     }

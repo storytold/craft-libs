@@ -284,7 +284,8 @@ fn own_blockers(n: &Node, host: &HostInfo) -> Vec<Blocker> {
             out.push(Blocker::new(Some(f.trim()), Kind::Feature, f.trim(), None, format!("Needs `{}`, which this {app} doesn't have", f.trim())));
         }
     }
-    for r in &n.requires.addins {
+    // An optional add-in never blocks, whatever its range says.
+    for r in n.requires.required() {
         if r.range().is_err() {
             out.push(Blocker::new(
                 Some(&r.id),
@@ -307,7 +308,9 @@ pub fn office_blockers(o: &OfficeNeeds, host: &HostInfo) -> Vec<Blocker> {
     let mut out = Vec::new();
     for (set, min) in &o.sets {
         let have = host.api_sets.iter().find(|(n, _)| n.eq_ignore_ascii_case(set)).map(|(_, v)| v);
-        let want = Version::parse(if min.trim().is_empty() { "1.1" } else { min });
+        // A set named without a version means 1.1; that is what is checked and what is shown.
+        let min = if min.trim().is_empty() { "1.1" } else { min.as_str() };
+        let want = Version::parse(min);
         match (have, want) {
             (_, Err(_)) => out.push(Blocker::new(
                 Some(set),

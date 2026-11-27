@@ -12,6 +12,9 @@ fn github_addresses_are_read() {
     assert_eq!(parse_github_url("https://github.com/acme/fin/releases/tag/v1.2.0"), Ok(repo("acme", "fin", Version::Release("v1.2.0".into()))));
     assert_eq!(parse_github_url("https://github.com/acme/fin/tree/feat/x"), Ok(repo("acme", "fin", Version::Tree("feat/x".into()))));
     assert_eq!(parse_github_url("https://github.com/acme/fin/releases/latest"), Ok(repo("acme", "fin", Version::Latest)));
+    // A query or fragment after a trailing slash doesn't end up in the ref.
+    assert_eq!(parse_github_url("https://github.com/acme/fin/tree/main/?tab=readme"), Ok(repo("acme", "fin", Version::Tree("main".into()))));
+    assert_eq!(parse_github_url("https://github.com/acme/fin/#readme"), Ok(repo("acme", "fin", Version::Latest)));
     for bad in [
         "",
         "https://gitlab.com/acme/fin",
@@ -49,4 +52,12 @@ fn the_release_zip_for_this_platform_is_picked() {
     assert_eq!(pick_asset(&any, "linux", "aarch64"), Some(1), "this platform's build beats the generic zip");
     assert_eq!(pick_asset(&["darwin-tools-windows.zip".to_string()], "macos", "x86_64"), Some(0));
     assert_eq!(pick_asset(&[], "macos", "aarch64"), None);
+    // Names separated by `_` name their platform too.
+    let underscored: Vec<String> = ["fin_linux_x86_64.zip", "fin_macos_arm64.zip"].map(String::from).to_vec();
+    assert_eq!(pick_asset(&underscored, "macos", "aarch64"), Some(1));
+    assert_eq!(pick_asset(&underscored, "linux", "x86_64"), Some(0));
+    assert_eq!(pick_asset(&underscored, "windows", "x86_64"), None);
+    // A zip that names no platform but another architecture isn't for this machine.
+    assert_eq!(pick_asset(&["fin-x86_64.zip".to_string()], "linux", "aarch64"), None);
+    assert_eq!(pick_asset(&["fin-x86_64.zip".to_string()], "linux", "x86_64"), Some(0));
 }

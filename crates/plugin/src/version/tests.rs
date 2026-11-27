@@ -181,3 +181,43 @@ fn ranges_describe_themselves() {
     assert!(!Range::parse("^1").unwrap().allows_prereleases());
     assert!(Range::parse(">=1.0.0-rc.1").unwrap().allows_prereleases());
 }
+
+#[test]
+fn pre_releases_meet_partial_and_worked_out_bounds_by_their_numbers() {
+    // (range, version, matches): each range names a pre-release, so pre-releases of that version
+    // may match; what decides is how they compare with the other comparator.
+    let table: &[(&str, &str, bool)] = &[
+        // `>1.2` is anything from 1.3 on, pre-releases of 1.3.0 included.
+        (">1.2, >=1.3.0-alpha", "1.3.0-alpha", true),
+        (">1.2, >=1.3.0-alpha", "1.2.9", false),
+        (">1.2, >=1.3.0-alpha", "1.3.0", true),
+        // `<2` is below major 2: not a pre-release of 2.0.0.
+        ("<2, >=2.0.0-alpha", "2.0.0-alpha", false),
+        ("<=1, >=2.0.0-alpha", "2.0.0-alpha", false),
+        ("=1, >=2.0.0-alpha", "2.0.0-alpha", false),
+        // A full version is compared in full: 2.0.0-alpha is below 2.0.0.
+        ("<2.0.0, >=2.0.0-alpha", "2.0.0-alpha", true),
+        // The ceiling of a caret, a tilde or a wildcard is the next version's numbers.
+        ("^1.2.3, >=2.0.0-alpha", "2.0.0-alpha", false),
+        ("^0.2.3, >=0.3.0-alpha", "0.3.0-alpha", false),
+        ("~1.2, >=1.3.0-alpha", "1.3.0-alpha", false),
+        ("1.*, >=2.0.0-alpha", "2.0.0-alpha", false),
+        // Its own pre-releases still match a caret, from the one it names.
+        ("^1.2.3-beta", "1.2.3-rc", true),
+        ("^1.2.3-beta", "1.2.3-alpha", false),
+        ("^1.2.3-beta", "1.9.0", true),
+    ];
+    for (range, version, want) in table {
+        assert_eq!(Range::parse(range).unwrap().matches(&v(version)), *want, "{range} / {version}");
+    }
+}
+
+#[test]
+fn a_list_of_wildcards_is_any_version() {
+    for text in ["*, *", "x,*", "*"] {
+        let r = Range::parse(text).unwrap();
+        assert!(r.is_any() && r.allows_prereleases(), "{text}");
+        assert!(r.matches(&v("1.0.0-beta")) && r.matches(&v("3.1.4")), "{text}");
+        assert_eq!(r.as_str(), text);
+    }
+}

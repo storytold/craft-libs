@@ -28,7 +28,9 @@ fn valid_segment(s: &str) -> bool {
 /// with or without the scheme or `www.`, or plain `owner/repo`.
 pub fn parse_github_url(url: &str) -> Result<Repo, String> {
     let bad = || format!("`{url}` isn't a GitHub repository address (https://github.com/owner/repo)");
-    let s = url.trim().trim_end_matches('/');
+    // The query and fragment go first, so `…/tree/main/?tab=readme` names the ref `main`.
+    let whole = url.trim();
+    let s = whole.split(['?', '#']).next().unwrap_or("").trim_end_matches('/');
     let rest = s.strip_prefix("https://").or_else(|| s.strip_prefix("http://")).unwrap_or(s);
     let rest = rest.strip_prefix("www.").unwrap_or(rest);
     let path = match rest.strip_prefix("github.com/") {
@@ -36,7 +38,6 @@ pub fn parse_github_url(url: &str) -> Result<Repo, String> {
         None if !s.contains("://") && rest.split('/').count() == 2 => rest,
         None => return Err(bad()),
     };
-    let path = path.split(['?', '#']).next().unwrap_or("");
     let mut parts = path.splitn(3, '/');
     let owner = parts.next().unwrap_or("");
     let name = parts.next().unwrap_or("");
@@ -94,16 +95,23 @@ pub fn pick_asset(names: &[String], os: &str, arch: &str) -> Option<usize> {
         let lower = name.to_ascii_lowercase();
         let Some(stem) = lower.strip_suffix(".zip") else { continue };
         let tokens: Vec<&str> = stem.split(['-', '.', ' ', '+']).collect();
-        let has = |words: &[&str]| words.iter().any(|w| tokens.contains(w) || (w.contains(['_', '-']) && stem.contains(w)));
+        // `fin_macos_arm64.zip`: names are separated by `_` too. `x86_64` and `x86-64` hold a
+        // separator themselves, so those are looked for in the whole name.
+        let fine: Vec<&str> = stem.split(['-', '.', ' ', '+', '_']).collect();
+        let has = |words: &[&str]| words.iter().any(|w| tokens.contains(w) || fine.contains(w) || (w.contains(['_', '-']) && stem.contains(w)));
         let names_os = ALL_OS.iter().any(|o| has(os_tokens(o)));
         let names_arch = ALL_ARCH.iter().any(|a| has(arch_tokens(a)));
+        let universal = tokens.contains(&"universal") || fine.contains(&"universal");
         let score = if !names_os {
+            if names_arch && !has(arch_tokens(arch)) && !universal {
+                continue; // No platform, another architecture.
+            }
             1
         } else if !has(os_tokens(os)) {
             continue;
         } else if has(arch_tokens(arch)) {
             4
-        } else if tokens.contains(&"universal") || !names_arch {
+        } else if universal || !names_arch {
             3
         } else {
             continue; // This platform, another architecture.
