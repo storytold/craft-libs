@@ -182,7 +182,11 @@ impl Work<'_> {
     fn paste_at(&self, p: [f64; 2]) -> Option<(usize, [f64; 2])> {
         (0..self.session.pastes.len()).rev().find_map(|i| {
             let (h, a, _, _) = self.paste_maps(i)?;
-            let q = a.inverse()?.apply(h.inverse()?.apply(at(p)));
+            let plane = h.inverse()?.apply(at(p));
+            if !(0.0..=1.0).contains(&plane.x) || !(0.0..=1.0).contains(&plane.y) {
+                return None;
+            }
+            let q = a.inverse()?.apply(plane);
             ((0.0..=1.0).contains(&q.x) && (0.0..=1.0).contains(&q.y)).then_some((i, [q.x, q.y]))
         })
     }
@@ -200,6 +204,9 @@ impl Work<'_> {
     /// Transform picked; a `Paste` `Set`.
     pub fn paste_new(&mut self, words: &VanishingPointWords) -> Result<(), Box<StatusMessage>> {
         let refused = |text: &Label| Box::new(StatusMessage::new(text.clone()).tone(Tone::Warn));
+        if self.editor.busy() {
+            return Err(refused(&words.paste_busy));
+        }
         let image = self.image_size().ok_or_else(|| refused(&words.paste_no_image))?;
         let plane = self
             .editor
@@ -277,7 +284,8 @@ impl Work<'_> {
                 let mut paste = *self.session.pastes.get(index)?;
                 let (_, lu, lv) = self.paste_frame(paste.plane)?;
                 let image = self.image_size()?;
-                let width = (width * (m[0] - c[0]).hypot(m[1] - c[1]) / from).clamp(*PASTE_WIDTHS.start(), *PASTE_WIDTHS.end());
+                let minimum = width.min(*PASTE_WIDTHS.start());
+                let width = (width * (m[0] - c[0]).hypot(m[1] - c[1]) / from).clamp(minimum, *PASTE_WIDTHS.end());
                 let ext = paste_extent(image, width, lu, lv);
                 paste.width = width;
                 paste.at = [c[0] / lu - ext[0] / 2.0, c[1] / lv - ext[1] / 2.0];

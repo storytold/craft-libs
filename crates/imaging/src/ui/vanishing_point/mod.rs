@@ -602,6 +602,8 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
                 self.write_session(words.edit_planes_step.as_str(), |work| {
                     work.session.planes = if planes.is_empty() { planes } else { source.scene().resolve(&planes, &torn) };
                     work.session.torn = torn;
+                    work.session.pastes.retain(|paste| paste.plane < work.session.planes.len());
+                    work.editor.after_step(&work.session);
                     work.editor.select(work.session.planes.len().checked_sub(1), &work.session);
                 });
             }

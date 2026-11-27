@@ -38,6 +38,7 @@ craft_ui::words! {
         transform_step: "vanishingPoint.transformStep" = "Transform Paste";
         delete_paste_step: "vanishingPoint.deletePasteStep" = "Delete Paste";
         paste_no_image: "vanishingPoint.pasteNoImage" = "Copy an image before opening Vanishing Point to paste it";
+        paste_busy: "vanishingPoint.pasteBusy" = "Finish the current drag before pasting";
         paste_no_plane: "vanishingPoint.pasteNoPlane" = "Create a plane to paste onto";
         new_plane_corner: template "vanishingPoint.newPlaneCorner" = "Corner {n}";
         new_plane_x: "vanishingPoint.newPlaneX" = "X";

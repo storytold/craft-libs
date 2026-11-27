@@ -10,7 +10,7 @@ use craft_behavior::geometry::quad::Homography;
 use craft_behavior::kurbo::Point;
 use craft_behavior::{EditEvent, PixelSize};
 use craft_imaging::ui::vanishing_point::{
-    PlaneCheck, PlaneEdge, StampLimits, TornPlane, VanishingPlane, VanishingPointCommand, VanishingPointEvent, VanishingPointOpen,
+    PasteImage, PlaneCheck, PlaneEdge, StampLimits, TornPlane, VanishingPlane, VanishingPointCommand, VanishingPointEvent, VanishingPointOpen,
     VanishingPointSession, VanishingPointSource, VanishingPointWorkspace, VanishingPreviewRequest, VanishingScene, VanishingTool, slide_edge,
 };
 use craft_imaging::ui::wide_angle::PreviewDone;
@@ -569,4 +569,97 @@ fn a_paste_lands_over_the_strokes_made_before_it() {
     let command = serde_json::to_value(with_workspace(&app, |workspace| workspace.command(true))).expect("the command serialises");
     assert!(command["paste"][0].get("after").is_none(), "the first paste lands before every stroke: {command}");
     assert_eq!(command["paste"][1]["after"], 1, "the second lands over the stroke made before it: {command}");
+}
+
+fn set_field(fixture: &Fixture, app: &Rc<RefCell<App>>, field: &str, value: serde_json::Value) {
+    let source = Layer { scene: Flat { verdicts: Vec::new() }, clipboard: true };
+    let mut app = app.borrow_mut();
+    let workspace = app.host.get_mut::<Hosted>().expect("the workspace is open").workspace_mut();
+    workspace.set_json_field(fixture.ctx(), &source, field, value).expect("the field is valid");
+}
+
+/// A clipped part of a paste cannot take a click, while its visible interior remains selectable.
+#[trial]
+fn a_clipped_paste_does_not_take_clicks_outside_its_plane() {
+    let layer = Layer { scene: Flat { verdicts: Vec::new() }, clipboard: true };
+    let (mut fixture, app) = open_on(VanishingTool::CreatePlane, VanishingPointSession::default(), layer, LIMITS);
+    draw_plane(&mut fixture);
+    set_field(&fixture, &app, "pastes", serde_json::json!([{"plane": 0, "at": [0.8, 0.25], "width": 0.5}]));
+    set_field(&fixture, &app, "tool", serde_json::json!("transform"));
+    set_field(&fixture, &app, "selectPaste", serde_json::Value::Null);
+    fixture.settle();
+    let outside = at(&fixture, Vec2::new(140.0, 0.0));
+    click(&mut fixture, outside);
+    assert_eq!(with_workspace(&app, |w| w.editor().selected_paste()), None, "the clipped image cannot take the click");
+    let inside = at(&fixture, Vec2::new(80.0, 0.0));
+    click(&mut fixture, inside);
+    assert_eq!(with_workspace(&app, |w| w.editor().selected_paste()), Some(0), "the visible image still takes the click");
+}
+
+/// The keyboard paste command cannot add a history step inside a pointer gesture's older snapshot.
+#[trial]
+fn command_v_during_a_paste_drag_is_refused_without_changing_history() {
+    let layer = Layer { scene: Flat { verdicts: Vec::new() }, clipboard: true };
+    let (mut fixture, app) = open_on(VanishingTool::CreatePlane, VanishingPointSession::default(), layer, LIMITS);
+    draw_plane(&mut fixture);
+    fixture.key(Key::V, Modifiers::COMMAND).settle();
+    let before = session(&app).pastes;
+    let from = at(&fixture, Vec2::ZERO);
+    let to = from + Vec2::new(30.0, 15.0);
+    fixture.frame(vec![pointer::moved(from)]);
+    fixture.frame(vec![pointer::press(from)]);
+    fixture.frame(vec![pointer::moved(to)]);
+    assert!(with_workspace(&app, |w| w.editor().busy()), "the paste is being dragged");
+    let during = session(&app).pastes;
+    app.borrow_mut().events.clear();
+    fixture.key(Key::V, Modifiers::COMMAND).settle();
+    assert_eq!(session(&app).pastes, during, "refusing the paste preserves the active drag");
+    assert!(app.borrow().events.iter().any(|e| matches!(e, VanishingPointEvent::Refused(_))), "a status explains the refusal");
+    fixture.frame(vec![pointer::release(to)]).settle();
+    fixture.key(Key::Z, Modifiers::COMMAND).settle();
+    assert_eq!(session(&app).pastes, before, "one undo takes back only the drag");
+    fixture.key(Key::Z, Modifiers::COMMAND).settle();
+    assert!(session(&app).pastes.is_empty(), "the next undo takes back the original paste");
+}
+
+/// A fitted image can be narrower than the ordinary scale minimum; clicking its corner must preserve it.
+#[trial]
+fn a_stationary_scale_gesture_preserves_a_fitted_paste_width() {
+    let layer = Layer { scene: Flat { verdicts: Vec::new() }, clipboard: true };
+    let mut kept = VanishingPointSession::default();
+    kept.planes.push(VanishingPlane::new([[300.0, 200.0], [500.0, 200.0], [500.0, 400.0], [300.0, 400.0]]));
+    kept.pastes.push(PasteImage::new([0.5, 0.5], 0.004));
+    let (mut fixture, app) = open_on(VanishingTool::Transform, kept, layer, LIMITS);
+    set_field(&fixture, &app, "selectPaste", serde_json::json!(0));
+    fixture.settle();
+    let before = session(&app).pastes[0];
+    let corner = at(&fixture, Vec2::ZERO);
+    click(&mut fixture, corner);
+    let after = session(&app).pastes[0];
+    assert!((after.width - before.width).abs() < 1e-9, "a click alone must not resize the paste: {before:?} → {after:?}");
+    assert!(near(after.at, before.at), "a click alone must not move the paste");
+}
+
+/// Replacing planes removes only orphaned pastes, and undo restores the planes and pastes together.
+#[trial]
+fn replacing_planes_removes_orphaned_pastes_in_the_same_undo_step() {
+    let (mut fixture, app) = open(VanishingTool::EditPlane);
+    let planes = drawn_and_torn();
+    set_field(&fixture, &app, "planes", planes.clone());
+    set_field(&fixture, &app, "pastes", serde_json::json!([{"plane": 0}, {"plane": 1}]));
+    fixture.settle();
+    let before = session(&app);
+    set_field(&fixture, &app, "planes", serde_json::json!([planes[0].clone()]));
+    fixture.settle();
+    assert_eq!(session(&app).pastes, before.pastes[..1], "the surviving plane keeps its paste");
+    fixture.key(Key::Z, Modifiers::COMMAND).settle();
+    let restored = session(&app);
+    assert_eq!(restored.planes, before.planes);
+    assert_eq!(restored.pastes, before.pastes, "one undo restores both planes and their pastes");
+    set_field(&fixture, &app, "planes", serde_json::json!([]));
+    fixture.settle();
+    assert!(session(&app).pastes.is_empty(), "clearing all planes removes every paste");
+    set_field(&fixture, &app, "planes", planes);
+    fixture.settle();
+    assert!(with_workspace(&app, |w| w.command(true).paste.is_empty()), "new planes cannot resurrect old pastes");
 }

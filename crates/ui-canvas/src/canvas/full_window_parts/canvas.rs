@@ -58,6 +58,7 @@ impl<'a> RasterOverlay<'a> {
     pub fn placed(mut self, placed: Rect64) -> Self {
         if let Some((_, _, at)) = self.mapping.as_mut() {
             *at = Some(placed);
+            self.placement = None;
         }
         self
     }
