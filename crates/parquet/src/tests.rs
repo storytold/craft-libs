@@ -272,3 +272,20 @@ fn int96_timestamps_are_rejected_rather_than_truncated() {
     let bytes = writer.into_inner().unwrap();
     assert!(read(&bytes).unwrap_err().to_string().contains("INT96"));
 }
+
+#[test]
+fn unannotated_binary_is_rejected_even_when_every_value_is_null() {
+    let file = |definitions: &[i16], values: &[ByteArray]| {
+        let schema = Arc::new(parse_message_type("message test { OPTIONAL BYTE_ARRAY b; }").unwrap());
+        let mut writer = SerializedFileWriter::new(Vec::new(), schema, Default::default()).unwrap();
+        let mut group = writer.next_row_group().unwrap();
+        let mut col = group.next_column().unwrap().unwrap();
+        col.typed::<ByteArrayType>().write_batch(values, Some(definitions), None).unwrap();
+        col.close().unwrap();
+        group.close().unwrap();
+        writer.into_inner().unwrap()
+    };
+    for bytes in [file(&[1], &[ByteArray::from(vec![0xff, 0])]), file(&[0], &[]), file(&[], &[])] {
+        assert!(read(&bytes).unwrap_err().to_string().contains("Binary"));
+    }
+}

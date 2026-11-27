@@ -201,6 +201,18 @@ fn read_buffer(bytes: Bytes, footer_start: usize, limits: &TableLimits, mut on_r
                 _ => return Err(invalid("This Parquet logical field type is not supported")),
             }
         }
+        // Unannotated binary has no value type, and a column of nulls never reaches `value`.
+        let binary = matches!(field.get_physical_type(), Physical::BYTE_ARRAY | Physical::FIXED_LEN_BYTE_ARRAY);
+        let annotated = matches!(
+            field.get_basic_info().logical_type_ref(),
+            Some(LogicalType::String | LogicalType::Enum | LogicalType::Json | LogicalType::Decimal(_) | LogicalType::Float16)
+        ) || matches!(
+            field.get_basic_info().converted_type(),
+            ConvertedType::UTF8 | ConvertedType::ENUM | ConvertedType::JSON | ConvertedType::DECIMAL
+        );
+        if binary && !annotated {
+            return Err(invalid("Binary and nested Parquet values are not supported"));
+        }
     }
     // Check every advertised page allocation before the decoder sees it.
     limits::pages(&bytes, metadata, footer_start, limits)?;
