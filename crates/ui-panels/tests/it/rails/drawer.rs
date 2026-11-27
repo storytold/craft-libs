@@ -319,12 +319,13 @@ fn revealing_a_filtered_tool_clears_search_once_and_keeps_later_typing() {
     use egui::{Key, Modifiers};
 
     let SearchableDrawer { mut fixture, open, reveal } = searchable_drawer(None);
+    fixture.room(Vec2::new(960.0, 720.0)).settle();
     let search = fixture.by_role(Role::TEXT_INPUT).first().cloned().expect("the drawer's own search");
     fixture.click(&search).type_text("undo").settle();
     assert!(fixture.by_label("Cut").is_none(), "the old query really hides the requested tool");
     reveal.set(Some(CUT));
     // Queue the reveal before the resized frame remeasures the drawer header.
-    fixture.room(Vec2::new(320.0, 240.0));
+    fixture.room(Vec2::new(800.0, 600.0));
     fixture.settle();
     assert!(open.get(), "revealing leaves the drawer open");
     assert_eq!(fixture.tree().value_of(search.node), Some(""), "a valid reveal clears the stale query");
