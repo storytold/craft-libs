@@ -7,11 +7,11 @@ use crate::contract::{
 };
 use crate::display::{ChordWrite, DisplayWords, Kbd, Picture, Spinner};
 use crate::list::ThumbAspect;
-use crate::primitives::{HAlign, IconSpec, PaintShape};
+use crate::primitives::{HAlign, IconSpec, PaintShape, Wrap};
 use crate::runtime::commands::{CommandRef, ResolvedCommand};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, DataColor, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
-use craft_behavior::{Insets, Metrics, PartKey, PointerButton, PressPhase, Sense};
+use craft_behavior::{Insets, Metrics, PartKey, PointerButton, PressPhase, Proposal, Sense};
 use craft_host::target::Os;
 use craft_keymap::{Mods, Trigger};
 use craft_theme::{
@@ -192,10 +192,14 @@ pub struct Button<'a> {
     /// that names an item at the reading start).
     #[prop]
     align: HAlign,
-    /// A muted caption-role second line, wrapped under the icon and label. The face grows to fit it. It is the
-    /// accessible description unless `description` is set.
+    /// A muted caption under the icon and label of an inline button. It is the accessible description unless
+    /// `description` is set.
     #[prop(into)]
     detail: Option<Label>,
+    /// Whether the detail wraps in layouts that measure the button at its assigned width. By default the detail
+    /// uses its natural width.
+    #[prop]
+    wrap_detail: bool,
     /// Whether a command button shows its command's chord after the label.
     #[prop]
     chord: ButtonChord,
@@ -226,6 +230,7 @@ impl<'a> Button<'a> {
             least_width: None,
             align: HAlign::Center,
             detail: None,
+            wrap_detail: false,
             chord: ButtonChord::Hidden,
             popup: None,
             expanded: None,
@@ -264,6 +269,7 @@ impl<'a> Button<'a> {
     /// The face showing `label` as it is, with `chord` after it: in the label role, unless `style` names another (a
     /// side menu's row).
     fn face_of<'s>(&'s self, label: &'s str, style: &ButtonStyle, chord: Option<&'s str>) -> FaceSpec<'s> {
+        let detail_wrap = if self.wrap_detail { Wrap::Wrap } else { Wrap::Line };
         FaceSpec {
             arrangement: self.arrangement,
             label,
@@ -275,7 +281,7 @@ impl<'a> Button<'a> {
             mnemonic: None,
             align: self.align,
             chord,
-            detail: self.detail.as_ref().map(Label::as_str),
+            detail: self.detail.as_ref().map(|detail| (detail.as_str(), detail_wrap)),
         }
     }
 
@@ -287,6 +293,23 @@ impl<'a> Button<'a> {
         let (os, words) = keys();
         Some(Kbd::text(&Trigger::from(chord), os, &words, ChordWrite::default()))
     }
+}
+
+/// A side menu stands on the brand surface: its names and icons read in the ink of strong fills, a disabled page's
+/// dimmed, and its bands are that ink laid thinly over the brand colour (hover lighter than the page shown), not the
+/// panel's state fills, which painted a light band with dark text over the rail. The row of the page shown (`on`)
+/// keeps its band, so the menu marks where the page is. Returns the ink and the band fill, for every control of the
+/// place (`Button`, `IconButton`).
+pub(super) fn side_menu_ink(cx: &StyleCx<'_>) -> (craft_theme::Stateful<StyleColor>, craft_theme::Stateful<StyleColor>) {
+    let ink = cx.tokens.color.text.on_strong;
+    let (rest, dim) = (cx.color(ink), cx.color(ink.with_alpha(SIDE_MENU_DISABLED_ALPHA)));
+    let text = craft_theme::Stateful::new(rest).off(craft_theme::States::new(rest, rest, rest, dim));
+    let (clear, hover, shown) =
+        (cx.color(Rgba::TRANSPARENT), cx.color(ink.with_alpha(SIDE_MENU_HOVER_ALPHA)), cx.color(ink.with_alpha(SIDE_MENU_SHOWN_ALPHA)));
+    let fill = craft_theme::Stateful::new(clear)
+        .off(craft_theme::States::new(clear, hover, shown, clear))
+        .on(craft_theme::States::new(shown, shown, shown, shown));
+    (text, fill)
 }
 
 impl Component for Button<'_> {
@@ -330,13 +353,7 @@ impl Component for Button<'_> {
             let pad = &cx.tokens.space.pad;
             style.text.role = TypeRole::BodyLarge;
             style.metrics.padding = Insets::new(pad.roomy, pad.roomy, pad.segment, pad.segment);
-            // A side menu stands on the brand surface: its names and icons read in the ink of strong fills, a disabled
-            // page's dimmed, and its bands are that ink laid thinly over the brand colour (hover lighter than the page
-            // shown), not the panel's state fills, which painted a light band with dark text over the rail. The row of
-            // the page shown (`selected`) keeps its band, so the menu marks where the page is.
-            let ink = cx.tokens.color.text.on_strong;
-            let (rest, dim) = (cx.color(ink), cx.color(ink.with_alpha(SIDE_MENU_DISABLED_ALPHA)));
-            let text = craft_theme::Stateful::new(rest).off(craft_theme::States::new(rest, rest, rest, dim));
+            let (text, fill) = side_menu_ink(cx);
             style.text.color = text.clone();
             // A place's icon is the large icon, not a control's standard one, set off from its name by a section gap: a
             // list of places reads by its icons (WordCraft's File rail: 18 pt icons, nearest token 20 pt, 12 pt before 14 pt names).
@@ -344,22 +361,30 @@ impl Component for Button<'_> {
             // The face paints by its gap and the measure by the metrics', so the two stay one.
             style.face.gap = style.face.gap.max(cx.tokens.space.gap.section);
             style.metrics.gap = style.face.gap;
-            let (clear, hover, shown) =
-                (cx.color(Rgba::TRANSPARENT), cx.color(ink.with_alpha(SIDE_MENU_HOVER_ALPHA)), cx.color(ink.with_alpha(SIDE_MENU_SHOWN_ALPHA)));
-            style.surface.fill = craft_theme::Stateful::new(clear)
-                .off(craft_theme::States::new(clear, hover, shown, clear))
-                .on(craft_theme::States::new(shown, shown, shown, shown));
+            style.surface.fill = fill;
         }
         style
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let chord = self.chord_text(cx.command(), || (cx.env.shell().os, cx.words::<DisplayWords>()));
-        let shown = face::measure(cx, &self.spec(cx.resolved.label, cx.style, chord.as_deref()));
-        match &self.room_for {
+        let spec = self.spec(cx.resolved.label, cx.style, chord.as_deref());
+        let shown = face::measure(cx, &spec);
+        let mut size = match &self.room_for {
             Some(room) => shown.max(face::measure(cx, &self.face_of(room.as_str(), cx.style, chord.as_deref()))),
             None => shown,
+        };
+        if cx.proposal == Proposal::Min
+            && self.arrangement == Arrangement::Inline
+            && let Some(detail) = spec.detail_run().filter(|run| run.wrap == Wrap::Wrap)
+        {
+            // The title reservation and style floor can widen the face before its caption wraps.
+            let metrics = cx.style.metrics;
+            let floor = metrics.least_width.unwrap_or(metrics.min_size.x) - metrics.padding.start - metrics.padding.end;
+            let width = cx.room.filter(|room| room.is_finite()).unwrap_or_else(|| size.x.max(floor));
+            size.y += cx.layout_at(&detail, width).size().y - cx.least(&detail).size().y;
         }
+        size
     }
 
     fn sense(&self) -> Sense {

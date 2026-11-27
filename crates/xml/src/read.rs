@@ -202,8 +202,9 @@ pub struct Options<'a> {
     pub pis: bool,
     /// Keep comments inside the root element as [`Node::Comment`].
     pub comments: bool,
-    /// Drop the text of an element that has child elements when all of it is whitespace: the
-    /// indentation of an indented document.
+    /// If an element has child elements and all of its character data consists of spaces, tabs,
+    /// carriage returns, or line feeds, the reader drops its ordinary text nodes. CDATA nodes retained
+    /// by [`Self::cdata`] remain.
     pub drop_blank_text: bool,
     /// For [`Options::parse_streaming`]: how far below the root an element may be and still be
     /// handed out. 2 by default: children and grandchildren of the root.
@@ -889,7 +890,10 @@ impl Builder<'_, '_> {
         let (mark, attrs_mark, elements_mark) = self.marks.pop().unwrap_or((0, 0, 0));
         if self.opts.drop_blank_text && el.children.iter().any(|n| matches!(n, Node::El(_))) {
             let is_text = |n: &Node| matches!(n, Node::Text(_));
-            if el.children.iter().all(|n| !is_text(n) || matches!(n, Node::Text(t) if t.trim().is_empty())) {
+            if el.children.iter().all(|node| match node {
+                Node::Text(text) | Node::CData(text) => text.trim_matches([' ', '\t', '\r', '\n']).is_empty(),
+                _ => true,
+            }) {
                 let before = el.children.len();
                 el.children.retain(|n| !is_text(n));
                 self.kept = self.kept.saturating_sub(before - el.children.len());

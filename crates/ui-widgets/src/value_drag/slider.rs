@@ -12,6 +12,9 @@ use crate::contract::{
 use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, SurfaceStyle, TextLook, TrackLook};
+use crate::text::NumberStepper;
+use craft_behavior::intent::{MoveMods, NavMove};
+use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps, step_value};
 use craft_behavior::{Flow, HitLevel, HitPriority, Metrics, PartKey, PressPhase, Proposal, Sense, WheelPhase};
 use craft_theme::Stateful;
 use egui::{Pos2, Rect, Vec2};
@@ -70,6 +73,13 @@ pub struct Slider<'a> {
     /// no stops.
     #[prop(quantity = "step")]
     step: Option<f64>,
+    /// Where keys, accessibility actions and the wheel step from the current value. The direction is 1 or -1;
+    /// the magnitude counts steps. A ladder steps in that direction without wrapping. The callback is also
+    /// queried for the available accessibility actions.
+    /// It takes precedence over the fixed key and wheel steps. Pointer placement, including snapping,
+    /// still uses the track's scale.
+    #[prop(func = "Fn(f64, i32, f64) -> f64")]
+    stepper: Option<NumberStepper<'a>>,
     /// How positions along the track map to values.
     #[prop]
     scale: SliderScale,
@@ -82,7 +92,7 @@ pub struct Slider<'a> {
     marks: Marks,
     /// The change of one wheel notch where it is coarser than the step (an offset of 0.0001 steps that wants 0.01 a
     /// notch); the step by default. Shift and Alt scale it as they scale the step. A logarithmic track with no step
-    /// moves along the track and ignores it.
+    /// moves along the track and ignores it. A custom stepper also overrides it.
     #[prop(quantity = "step")]
     wheel_step: Option<f64>,
     /// When a press on the track sets the value: on its release or drag (the default), or as the primary button goes
@@ -90,8 +100,8 @@ pub struct Slider<'a> {
     #[prop]
     track_press: TrackPress,
     /// The value as the caller words it ("50 %"), in place of the slider's own value text: the number in the step's
-    /// decimals, or in one decimal without a step. Assistive technology reads it, and so does a viewer that
-    /// shows the value beside the slider.
+    /// decimals, in one decimal without a step, or at the local step's precision with a custom stepper. Assistive
+    /// technology reads it, and so does a viewer that shows the value beside the slider.
     #[prop(into)]
     value_text: Option<Label>,
     /// Paints the groove with `face`, a component shown as the look of the track (a colour gradient). The fill is not
@@ -143,6 +153,7 @@ impl<'a> Slider<'a> {
             value,
             range,
             step: None,
+            stepper: None,
             scale: SliderScale::Linear,
             fill: true,
             thumb: SliderThumb::Round,
@@ -170,7 +181,8 @@ impl<'a> Slider<'a> {
     }
 
     /// [`Slider::marks`] at the values, each with a caption centred under its mark and kept inside the slider. The
-    /// slider is taller by one caption line. The captions are drawing only: assistive technology gets the value.
+    /// slider is taller by one caption line, and at least as wide as the captions need to sit apart with a gap between
+    /// them. The captions are drawing only: assistive technology gets the value.
     pub fn marks_labelled<L: Into<Label>>(mut self, marks: impl IntoIterator<Item = (f64, L)>) -> Self {
         self.marks.set_labelled(marks);
         self
@@ -186,6 +198,21 @@ impl<'a> Slider<'a> {
 
     fn track_scale(&self) -> Scale {
         Scale::new(&self.range, self.step, self.scale)
+    }
+
+    fn key_value(&self, from: Option<f64>, scale: &Scale, movement: NavMove, mods: MoveMods) -> Option<f64> {
+        let Some(stepper) = self.stepper.as_ref() else {
+            return scale.stepped(from.unwrap_or_else(|| scale.middle()), (scale.min, scale.max), movement, mods);
+        };
+        let StepResult::Set(steps) = step_value(&ladder_steps(), ValueAxes::Both, movement, mods) else {
+            return None;
+        };
+        let next = match movement {
+            NavMove::Start => Some(scale.min),
+            NavMove::End => Some(scale.max),
+            _ => ladder_value(stepper, scale, from, steps),
+        };
+        next.filter(|next| from != Some(*next))
     }
 
     /// Where the track face paints: the faced groove, or a colour band under a triangle pointer.
@@ -230,7 +257,8 @@ impl Component for Slider<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         self.marks.lay_out(&cx.style.mark_text, cx.style.space, |label| cx.env.resolve(label), |run| cx.layout(run).size());
-        let along = if cx.proposal == Proposal::Min { 0.0 } else { cx.style.length };
+        let labels = self.marks.least_width(&self.track_scale());
+        let along = if cx.proposal == Proposal::Min { labels } else { cx.style.length.max(labels) };
         Vec2::new(along, cx.icon() + self.marks.below(&cx.style.track))
     }
 
@@ -360,7 +388,7 @@ impl Component for Slider<'_> {
             if cx.in_wheel_run() {
                 cx.commit();
             }
-            if let Some(next) = scale.stepped(current(&*cx), bounds, mv, mods) {
+            if let Some(next) = self.key_value(cx.value().copied(), &scale, mv, mods) {
                 cx.set(next);
             }
         }
@@ -372,7 +400,16 @@ impl Component for Slider<'_> {
         }
         if let Some(wheel) = wheel {
             // The end share carries no scroll: it closes the run.
-            let next = if wheel.phase == WheelPhase::End { None } else { scale.wheeled(current(&*cx), bounds, &wheel, rtl, self.wheel_step) };
+            let next = if wheel.phase == WheelPhase::End {
+                None
+            } else if let Some(stepper) = self.stepper.as_ref() {
+                match craft_behavior::wheel_step(&ladder_steps(), ValueAxes::Both, &wheel, rtl) {
+                    StepResult::Set(steps) => ladder_value(stepper, &scale, cx.value().copied(), steps),
+                    _ => None,
+                }
+            } else {
+                scale.wheeled(current(&*cx), bounds, &wheel, rtl, self.wheel_step)
+            };
             cx.wheel_run(wheel.phase, next);
         }
     }
@@ -384,7 +421,12 @@ impl Component for Slider<'_> {
             Some(value) => Numeric::new(*value, range),
             None => Numeric::empty(range),
         };
-        access.numeric(numeric.step(scale.small()));
+        if let Some(stepper) = &self.stepper {
+            let can_step = |steps| ladder_value(stepper, &scale, cx.value().copied(), steps).is_some();
+            access.numeric(numeric).variable_steps(can_step(1.0), can_step(-1.0));
+        } else {
+            access.numeric(numeric.step(scale.small()));
+        }
     }
 
     /// The app's words for the shown value when it gives them, else the value as the slider words it.
@@ -397,7 +439,27 @@ impl Component for Slider<'_> {
     }
 
     fn word_value(&self, value: &f64, cx: &Cx<'_, Self>) -> Option<String> {
-        Some(self.track_scale().text(&cx.env.units(), *value))
+        let scale = self.track_scale();
+        let units = cx.env.units();
+        let Some(stepper) = &self.stepper else { return Some(scale.text(&units, *value)) };
+        let step = [1.0, -1.0]
+            .into_iter()
+            .filter_map(|steps| ladder_value(stepper, &scale, Some(*value), steps))
+            .map(|next| (next - *value).abs())
+            .filter(|step| step.is_finite() && *step > 0.0)
+            .reduce(f64::min);
+        Some(if let Some(step) = step {
+            // Keep simple fractional stops even when the ladder strides by whole units.
+            // A widened f32 echo does not need its tail of rounding digits.
+            let current_places = craft_behavior::decimals_for_step(*value).min(7);
+            let step_places = (1.0 - step.log10().floor()).max(0.0) as usize;
+            let nonzero_places = if *value != 0.0 { (-value.abs().log10().floor()).max(0.0) as usize } else { 0 };
+            units.number(*value, 0..=current_places.max(step_places).max(nonzero_places))
+        } else {
+            let decimal = value.to_string();
+            let places = decimal.split_once('.').map_or(0, |(_, fraction)| fraction.len());
+            cx.env.format().number(*value, places)
+        })
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
@@ -450,4 +512,17 @@ impl Component for Slider<'_> {
     fn finish(self, cx: Cx<'_, Self>) -> EditResponse<f64> {
         cx.edit_response()
     }
+}
+
+/// Read keys and the wheel in steps from zero, independently of the model's scale or snap grid.
+fn ladder_steps() -> ValueSteps {
+    ValueSteps::new(0.0, f64::NEG_INFINITY, f64::INFINITY, 1.0, LARGE_STEPS)
+}
+
+fn ladder_value(stepper: &NumberStepper<'_>, scale: &Scale, from: Option<f64>, steps: f64) -> Option<f64> {
+    let start = scale.place(from.unwrap_or_else(|| scale.middle()));
+    let direction = if steps > 0.0 { 1 } else { -1 };
+    let next = stepper.next(start, direction, steps.abs()).clamp(scale.min, scale.max);
+    let direction_matches = from.filter(|value| value.is_finite()).is_none_or(|value| if direction > 0 { next > value } else { next < value });
+    (!next.is_nan() && direction_matches).then_some(next)
 }

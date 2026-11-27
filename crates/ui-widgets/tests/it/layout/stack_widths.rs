@@ -190,3 +190,26 @@ fn labelled_radios_in_a_wrapping_row_break_onto_a_new_line() {
     let starts = KINDS.iter().filter(|kind| (rect(kind).left() - first.left()).abs() < 0.5).count();
     assert!(starts >= 2, "a radio that wraps starts its line at the row's start edge: {starts} radios do");
 }
+
+/// A body that scrolls keeps the bar's lane clear: a child that fills the width stops where the bar starts, not under it
+/// (a Print page's buttons ran under the settings column's bar).
+#[trial]
+fn a_fill_width_child_of_a_scrolling_stack_leaves_the_bars_lane() {
+    let seen = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING)));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let child = Cell::new(Rect::NOTHING);
+        let shown = Stack::new().sizing(Sizing::FillHeight).least_width(LeastWidth::Dialog).scroll(Scroll::vertical()).show(ui, |ui, _| {
+            for _ in 0..30 {
+                child.set(Button::new("Save these pages as PDF…").sizing(Sizing::FillWidth).show(ui).rect);
+            }
+        });
+        if !ui.is_sizing_pass() {
+            out.set((shown.output.rect, child.get()));
+        }
+    });
+    fixture.room(Vec2::new(1440.0, 300.0)).settle();
+    let (stack, button) = seen.get();
+    assert!(stack != Rect::NOTHING && button != Rect::NOTHING, "the stack showed");
+    assert!(button.max.x <= stack.max.x - 4.0, "the button leaves the bar's lane: {button:?} in {stack:?}");
+}

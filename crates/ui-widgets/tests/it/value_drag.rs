@@ -3,6 +3,8 @@
 
 pub(crate) mod primary_down;
 
+pub(crate) mod mark_labels;
+
 pub(crate) mod dials;
 
 pub(crate) mod thumb_row;
@@ -90,6 +92,59 @@ fn dragged(slide: &Slide, offset: f32, travel: f32) -> f64 {
     frames.idle(3, &mut show);
     drag(&mut frames, FIELD.center() + Vec2::new(offset, 0.0), travel, &mut show, |_, _| {});
     slide.value()
+}
+
+#[trial]
+fn a_log_slider_steps_in_the_callers_values() {
+    use craft_ui::testing::access::Declared;
+    use craft_ui::testing::focus::AccessActionKind;
+
+    let value = Rc::new(RefCell::new(0.01));
+    let shown = value.clone();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let reported = events.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let slider = Slider::new(Bind::bound(&mut *shown.borrow_mut()), 0.01..=20.0)
+            .label("Distance")
+            .scale(SliderScale::Log)
+            .stepper(|from, direction, steps| {
+                let unit = if from < 0.1 || from == 0.1 && direction < 0 { 1.0 } else { 10.0 };
+                let next = (from * 100.0 + f64::from(direction) * steps * unit).round() / 100.0;
+                if direction > 0 { next.min(0.12).max(from) } else { next }
+            })
+            .show_at(ui, FIELD);
+        reported.borrow_mut().extend(slider.events);
+    });
+    fixture.motion(MotionMode::Off).settle();
+    let slider = fixture.by_label("Distance").expect("accessible slider");
+    let original_text = fixture.tree().value_of(slider.node).unwrap().to_owned();
+    assert_eq!(fixture.tree().numeric_of(slider.node).unwrap().step, None);
+    assert!(fixture.tree().declares_key(slider.node, Declared::Increment));
+    assert!(!fixture.tree().declares_key(slider.node, Declared::Decrement));
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(*value.borrow(), 0.02);
+    assert_ne!(fixture.tree().value_of(slider.node), Some(original_text.as_str()), "a fine step changes the reported value");
+    assert!(fixture.tree().declares_key(slider.node, Declared::Decrement));
+    fixture.frame(vec![pointer::moved(FIELD.center())]);
+    fixture.frame(vec![pointer::wheel_lines(-1.0)]);
+    assert_eq!(*value.borrow(), 0.01);
+    fixture.access(AccessActionKind::Increment, &slider).settle();
+    assert_eq!(*value.borrow(), 0.02);
+    fixture.access(AccessActionKind::Decrement, &slider).settle();
+    assert_eq!(*value.borrow(), 0.01);
+    fixture.key(Key::ArrowUp, Modifiers::SHIFT);
+    assert_eq!(*value.borrow(), 0.11);
+    fixture.key(Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(*value.borrow(), 0.12);
+    assert!(!fixture.tree().declares_key(slider.node, Declared::Increment), "the ladder ends before the slider's range");
+    events.borrow_mut().clear();
+    fixture.key(Key::ArrowUp, Modifiers::NONE);
+    fixture.frame(vec![pointer::wheel_lines(1.0)]);
+    fixture.settle();
+    assert!(events.borrow().is_empty(), "a step at the end of the ladder makes no edit");
+    fixture.key(Key::End, Modifiers::NONE);
+    assert_eq!(*value.borrow(), 20.0);
 }
 
 #[trial]

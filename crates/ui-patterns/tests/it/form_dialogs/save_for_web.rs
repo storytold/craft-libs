@@ -5,9 +5,11 @@ use craft_theme::Srgba;
 use craft_ui::contract::Bind;
 use craft_ui::dialog::{DialogHost, DialogResult, StackDialog};
 use craft_ui::patterns::form_dialogs::{
-    Animation, ColorTableEdit, ColorTableEvent, HostedSaveForWeb, PALETTE_COLOR_KEY, SAVE_PATH_KEY, SaveForWebDialog, SaveForWebOptions, WebFormat,
-    WebPictures, WebPreset, WebSlice, WebSlices, WebVariant,
+    Animation, ColorTableEdit, ColorTableEvent, HostedSaveForWeb, PALETTE_COLOR_KEY, SAVE_PATH_KEY, SaveForWebDialog, SaveForWebOptions, TableMarks,
+    WebFormat, WebPictures, WebPreset, WebSlice, WebSlices, WebVariant,
 };
+use craft_ui::testing::access::NodeKey;
+use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
 use egui::{Key, Modifiers, Pos2, Rect, Vec2, pos2, vec2};
@@ -172,20 +174,104 @@ fn gif(colors: u16) -> SaveForWebOptions {
 /// The colours of the palette the shown encode reports.
 const PALETTE: [[u8; 3]; 4] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
 
-/// Answers the encode the dialog asked for with `PALETTE` and selects the Optimized pane, which shows the Color Table.
-fn show_palette(host: &Rc<RefCell<DialogHost>>, fixture: &mut Fixture) {
+/// Answers the encode with the given colours and selects the Optimized pane, which shows the Color Table.
+fn show_palette_with(host: &Rc<RefCell<DialogHost>>, fixture: &mut Fixture, palette: &[[u8; 3]]) {
     let wanted = host.borrow_mut().get_mut::<HostedSaveForWeb>().map(HostedSaveForWeb::wanted_variants).expect("open");
     let revision = wanted.first().map_or(1, |want| want.request.revision);
-    let variant = WebVariant::new(0, revision, texture(), 1000).colors(4).palette(PALETTE.to_vec());
+    let variant = WebVariant::new(0, revision, texture(), 1000).colors(palette.len() as u16).palette(palette.to_vec());
     host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").set_variant(variant);
     fixture.settle();
     select_optimized_pane(fixture);
+}
+
+fn show_palette(host: &Rc<RefCell<DialogHost>>, fixture: &mut Fixture) {
+    show_palette_with(host, fixture, &PALETTE);
 }
 
 /// The colour table events the dialog filed since the last call.
 fn table_events(host: &Rc<RefCell<DialogHost>>) -> Vec<(ColorTableEdit, Vec<[u8; 3]>)> {
     let events = host.borrow_mut().get_mut::<HostedSaveForWeb>().map(HostedSaveForWeb::take_table_events).expect("the dialog is open");
     events.into_iter().map(|event: ColorTableEvent| (event.edit, event.colors)).collect()
+}
+
+#[trial]
+fn the_web_shift_button_follows_the_selected_colors_reported_by_the_host() {
+    let web = HostedSaveForWeb::new("poster.psd", IMAGE, texture()).options(gif(8));
+    let (host, mut fixture) = open(web);
+    let set_web_shifted = |colors| {
+        let mut marks = TableMarks::default();
+        marks.web_shifted = Some(colors);
+        host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").set_marks(marks);
+    };
+    set_web_shifted(Vec::new());
+    let mut palette = PALETTE;
+    let source = [220, 210, 196];
+    palette[1] = source;
+    show_palette_with(&host, &mut fixture, &palette);
+    let cell = fixture.by_label("1 #dcd2c4").expect("the unshifted entry");
+    fixture.click(&cell).settle();
+
+    assert!(fixture.by_label("Unshift Colors").is_none(), "an unshifted selection offers Shift");
+    let shift = fixture.by_label("Shift to Web Palette").expect("the Shift button");
+    fixture.click(&shift).settle();
+    assert_eq!(table_events(&host), [(ColorTableEdit::WebShift, vec![source])]);
+
+    let shifted = [204, 204, 204];
+    palette[1] = shifted;
+    set_web_shifted(vec![shifted]);
+    show_palette_with(&host, &mut fixture, &palette);
+    let cell = fixture.by_label("1 #cccccc").expect("the shifted entry");
+    fixture.click(&cell).settle();
+    assert!(fixture.by_label("Shift to Web Palette").is_none(), "a shifted selection offers Unshift");
+    let unshift = fixture.by_label("Unshift Colors").expect("the Unshift button");
+    fixture.click(&unshift).settle();
+    assert_eq!(table_events(&host), [(ColorTableEdit::Unshift, vec![shifted])]);
+
+    // With a hand-shifted swatch in the selection, both web actions are still available.
+    let hand_shifted = palette[2];
+    let mut marks = TableMarks::default();
+    marks.web_shifted = Some(vec![shifted]);
+    marks.shifted = vec![([0x99, 0x88, 0x77], hand_shifted)];
+    host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").set_marks(marks);
+    fixture.settle();
+    let set_selection = |fixture: &Fixture, colors| {
+        host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").set_json_field(fixture.ctx(), "colorSelection", colors).unwrap();
+    };
+    let unshift = fixture.by_label("Unshift Colors").expect("the shifted selection offers Unshift");
+    fixture.access(AccessActionKind::Focus, &unshift).idle(1);
+    set_selection(&fixture, serde_json::json!(["#cccccc", "#0000ff"]));
+    fixture.settle();
+    assert!(fixture.by_label("Shift to Web Palette").is_some(), "a mixed selection still offers Shift");
+    let unshift = fixture.by_label("Unshift Colors").expect("a mixed selection also offers Unshift");
+    assert_eq!(fixture.focused().map(NodeKey::of), Some(unshift.node), "Unshift keeps focus as Shift appears");
+    fixture.key(Key::Space, Modifiers::NONE).settle();
+    assert_eq!(table_events(&host), [(ColorTableEdit::Unshift, vec![shifted])]);
+    assert_eq!(fixture.focused().map(NodeKey::of), Some(unshift.node), "Unshift keeps focus while the host still shows it");
+
+    set_web_shifted(Vec::new());
+    fixture.settle();
+    assert!(fixture.by_label("Unshift Colors").is_none());
+    let shift = fixture.by_label("Shift to Web Palette").expect("Shift stays in the toolbar");
+    assert_eq!(fixture.focused().map(NodeKey::of), Some(shift.node), "keyboard focus stays in the palette toolbar");
+
+    set_web_shifted(vec![shifted]);
+    fixture.settle();
+    let unshift = fixture.by_label("Unshift Colors").expect("mixed selection restored");
+    fixture.access(AccessActionKind::Focus, &unshift).idle(1);
+    set_selection(&fixture, serde_json::json!([]));
+    fixture.settle();
+    let menu = fixture.by_label("Color Table Menu").expect("the menu remains available");
+    assert_eq!(fixture.focused().map(NodeKey::of), Some(menu.node), "clearing the selection keeps focus in the toolbar");
+
+    set_web_shifted(Vec::new());
+    set_selection(&fixture, serde_json::json!(["#cccccc"]));
+    fixture.settle();
+    let shift = fixture.by_label("Shift to Web Palette").expect("the unshifted selection offers Shift");
+    fixture.access(AccessActionKind::Focus, &shift).idle(1);
+    set_selection(&fixture, serde_json::json!([]));
+    fixture.settle();
+    let menu = fixture.by_label("Color Table Menu").expect("the menu remains available");
+    assert_eq!(fixture.focused().map(NodeKey::of), Some(menu.node), "disabling a focused Shift keeps focus in the toolbar");
 }
 
 #[trial]
@@ -438,4 +524,31 @@ fn a_palette_answer_in_a_measured_frame_shifts_the_entry_once() {
     fixture.idle(4);
     let shift = (ColorTableEdit::Shift([255, 0, 255]), vec![[0, 255, 0]]);
     assert_eq!(table_events(&host), vec![shift], "the answer shifts the opened entry's colour once");
+}
+
+/// The rects of the preview panes the view shows, found by their accessible names (`{pane}: {first}, {second}`).
+fn pane_rects(fixture: &Fixture) -> Vec<Rect> {
+    let tree = fixture.tree();
+    let is_pane = |name: &str| (name.starts_with("Original") || name.starts_with("Optimized")) && name.contains(": ");
+    tree.keys().into_iter().filter(|key| tree.name_of(*key).is_some_and(is_pane)).filter_map(|key| fixture.target(key)).map(|t| t.rect).collect()
+}
+
+/// The panes take the height of the settings column beside them, so they reach down to its Image Size rows, and 4-Up
+/// splits that height between its two rows of panes.
+#[trial]
+fn the_preview_panes_take_the_height_beside_the_settings() {
+    let (_, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()));
+    for (view, count) in [("2-Up", 2), ("4-Up", 4)] {
+        let tab = fixture.by_label(view).expect("the view tab");
+        fixture.click(&tab).idle(4);
+        let percent = fixture.by_label("Percent").expect("the Image Size rows").rect;
+        let panes = pane_rects(&fixture);
+        assert_eq!(panes.len(), count, "{view} shows {count} panes");
+        let bottom = panes.iter().map(|pane| pane.bottom()).fold(f32::MIN, f32::max);
+        assert!(bottom > percent.top(), "{view}: the panes end at {bottom}, above the Percent row at {}", percent.top());
+        let top = panes.iter().map(|pane| pane.top()).fold(f32::MAX, f32::min);
+        let (upper, lower): (Vec<&Rect>, Vec<&Rect>) = panes.iter().partition(|pane| pane.top() <= top + 0.5);
+        assert_eq!(upper.len(), 2, "{view}: two panes to a row");
+        assert!(lower.iter().all(|pane| upper.iter().all(|up| pane.top() >= up.bottom())), "{view}: the second row is below the first");
+    }
 }

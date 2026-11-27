@@ -164,23 +164,7 @@ impl SignedCatalog {
     /// does not match `app.repo`.
     pub fn latest_for(&self, app: &App, prereleases: bool, now: i64) -> Option<Release> {
         let entry = self.fresh_entry(app.id, app.repo, now)?;
-        let stable = entry.stable.as_ref().and_then(|r| r.to_release(app.repo));
-        if !prereleases {
-            return stable;
-        }
-        let pre = entry.prerelease.as_ref().and_then(|r| r.to_release(app.repo));
-        match (stable, pre) {
-            (Some(s), Some(p)) => {
-                let pick_pre = match (&p.version, &s.version) {
-                    (Some(pv), Some(sv)) => version::is_newer(pv, sv),
-                    _ => false,
-                };
-                Some(if pick_pre { p } else { s })
-            }
-            (Some(s), None) => Some(s),
-            (None, Some(p)) => Some(p),
-            (None, None) => None,
-        }
+        entry.latest(app.repo, prereleases)
     }
 
     /// Looks up a release by `repo` (`owner/repo`), for callers that implement [`crate::source::ReleaseSource`].
@@ -190,29 +174,13 @@ impl SignedCatalog {
             return None;
         }
         let entry = self.apps.values().find(|e| e.repo.as_deref().is_some_and(|r| r.eq_ignore_ascii_case(repo)))?;
-        let stable = entry.stable.as_ref().and_then(|r| r.to_release(repo));
-        if !prereleases {
-            return stable;
-        }
-        let pre = entry.prerelease.as_ref().and_then(|r| r.to_release(repo));
-        match (stable, pre) {
-            (Some(s), Some(p)) => {
-                let pick_pre = match (&p.version, &s.version) {
-                    (Some(pv), Some(sv)) => version::is_newer(pv, sv),
-                    _ => false,
-                };
-                Some(if pick_pre { p } else { s })
-            }
-            (Some(s), None) => Some(s),
-            (None, Some(p)) => Some(p),
-            (None, None) => None,
-        }
+        entry.latest(repo, prereleases)
     }
 
     /// The newest nightly release for `app` at `now`, if listed.
     pub fn nightly_for(&self, app: &App, now: i64) -> Option<Release> {
         let entry = self.fresh_entry(app.id, app.repo, now)?;
-        entry.nightly.as_ref().and_then(|r| r.to_release(app.repo))
+        entry.nightly.as_ref().and_then(|r| r.to_release(entry.repo.as_deref().unwrap_or(app.repo)))
     }
 
     fn fresh_entry(&self, id: &str, repo: &str, now: i64) -> Option<&CatalogEntry> {
@@ -230,27 +198,45 @@ impl SignedCatalog {
     }
 }
 
+impl CatalogEntry {
+    /// The stable release, or the higher of stable and prerelease when `prereleases` is true.
+    ///
+    /// Links are checked against the catalog's own spelling of the repository, so a caller that
+    /// asks for `StoryTold/PhotoCraft` still gets the assets of the `storytold/photocraft` entry
+    /// it matched; `fallback_repo` is used only for an entry that names no repository.
+    fn latest(&self, fallback_repo: &str, prereleases: bool) -> Option<Release> {
+        let repo = self.repo.as_deref().unwrap_or(fallback_repo);
+        let stable = self.stable.as_ref().and_then(|r| r.to_release(repo));
+        if !prereleases {
+            return stable;
+        }
+        let pre = self.prerelease.as_ref().and_then(|r| r.to_release(repo));
+        match (stable, pre) {
+            (Some(s), Some(p)) => {
+                let pick_pre = matches!((&p.version, &s.version), (Some(pv), Some(sv)) if version::is_newer(pv, sv));
+                Some(if pick_pre { p } else { s })
+            }
+            (s, p) => s.or(p),
+        }
+    }
+}
+
 impl RawRelease {
     fn to_release(&self, repo: &str) -> Option<Release> {
         let tag = self.tag.as_deref().filter(|t| !t.is_empty() && t.len() <= 64 && release::valid_tag(t))?;
         let version = version::parse(tag)?;
-        let prefix = release::download_prefix(repo);
         let assets = self
             .assets
             .iter()
             .filter_map(|a| {
                 let name = a.name.as_deref().filter(|n| release::valid_file_name(n))?;
-                let url = a.download_url.as_deref()?;
-                let expected = format!("{prefix}{tag}/{name}");
-                if url != expected || !release::download_url_under(url, &prefix) {
+                // Exactly the link GitHub serves for this tag and name; a `+` may be written plainly or as `%2B`.
+                let expected = release::expected_download_url(repo, tag, name)?;
+                if !release::same_download_url(a.download_url.as_deref()?, &expected) {
                     return None;
                 }
-                let sha256 = a
-                    .sha256
-                    .as_deref()
-                    .filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
-                    .map(str::to_ascii_lowercase);
-                Some(Asset { name: name.to_string(), size: a.size_bytes, url: url.to_string(), sha256 })
+                let sha256 = a.sha256.as_deref().filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit())).map(str::to_ascii_lowercase);
+                Some(Asset { name: name.to_string(), size: a.size_bytes, url: expected, sha256 })
             })
             .take(300)
             .collect();
@@ -370,5 +356,61 @@ prerelease = true
         let catalog = SignedCatalog::verify_with_key(toml.as_bytes(), sig.as_bytes(), &key.verifying_key()).unwrap();
         let photo = App::by_id("photocraft").unwrap();
         assert!(catalog.latest_for(photo, false, NOW + MAX_AGE + 3600).is_none());
+    }
+
+    fn signed(toml: &str) -> SignedCatalog {
+        let (key, sig) = sign(toml);
+        SignedCatalog::verify_with_key(toml.as_bytes(), sig.as_bytes(), &key.verifying_key()).unwrap()
+    }
+
+    #[trial]
+    fn a_plus_in_a_catalog_link_may_be_written_plainly_or_as_percent_2b() {
+        let toml = format!(
+            r#"generated_at = "2026-11-26T21:00:00Z"
+
+[[apps]]
+id = "photocraft"
+repo = "storytold/photocraft"
+[apps.releases.stable]
+tag = "v0.23.1+build.7"
+[[apps.releases.stable.assets]]
+name = "plain+name.dmg"
+download_url = "https://github.com/storytold/photocraft/releases/download/v0.23.1+build.7/plain+name.dmg"
+sha256 = "{HASH}"
+[[apps.releases.stable.assets]]
+name = "encoded+name.dmg"
+download_url = "https://github.com/storytold/photocraft/releases/download/v0.23.1%2Bbuild.7/encoded%2Bname.dmg"
+sha256 = "{HASH}"
+[[apps.releases.stable.assets]]
+name = "other.dmg"
+download_url = "https://github.com/storytold/photocraft/releases/download/v0.23.0/other.dmg"
+sha256 = "{HASH}"
+"#
+        );
+        let release = signed(&toml).latest_for(App::by_id("photocraft").unwrap(), false, NOW).unwrap();
+        let names: Vec<_> = release.assets.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["plain+name.dmg", "encoded+name.dmg"], "a link to another tag is dropped");
+        for asset in &release.assets {
+            assert_eq!(Some(asset.url.clone()), release::expected_download_url("storytold/photocraft", "v0.23.1+build.7", &asset.name));
+        }
+    }
+
+    #[trial]
+    fn a_repo_asked_for_in_other_letter_case_keeps_the_catalogs_assets() {
+        let toml = sample_toml();
+        let catalog = signed(&toml);
+        let release = catalog.latest_for_repo("StoryTold/PhotoCraft", false, NOW).unwrap();
+        assert_eq!(release.repo, "storytold/photocraft");
+        assert_eq!(release.assets.len(), 1, "the lowercase catalog link still matches");
+    }
+
+    #[trial]
+    fn the_prerelease_channel_wins_only_when_it_is_newer() {
+        let catalog = signed(&sample_toml());
+        let photo = App::by_id("photocraft").unwrap();
+        assert_eq!(catalog.latest_for(photo, true, NOW).unwrap().tag, "v0.24.0-rc.1");
+        assert_eq!(catalog.latest_for(photo, false, NOW).unwrap().tag, "v0.23.1");
+        let older_pre = sample_toml().replace("v0.24.0-rc.1", "v0.22.0-rc.1").replace("0.24.0-rc.1", "0.22.0-rc.1");
+        assert_eq!(signed(&older_pre).latest_for(photo, true, NOW).unwrap().tag, "v0.23.1");
     }
 }
