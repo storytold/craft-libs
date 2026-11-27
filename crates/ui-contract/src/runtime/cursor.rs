@@ -172,14 +172,16 @@ pub(crate) fn image_target(ctx: &Context) -> Option<ImageTarget> {
     if !shell.cursor_images(native) {
         return None;
     }
-    // A host that keeps its cursors at their size ignores the interface zoom.
-    let follows_zoom = crate::runtime::env::Env::of_root(ctx).cursor_follows_zoom;
-    let scale = match (shell.os == Os::Mac, follows_zoom) {
-        (_, false) => 1.0,
-        (true, true) => zoom,
-        (false, true) => pixels_per_point,
-    };
+    let scale = if shell.os == Os::Mac { zoom } else { pixels_per_point };
     Some(ImageTarget { scale, max_side: if shell.os == Os::Linux { MAX_SIDE_LINUX } else { MAX_SIDE } })
+}
+
+/// The factor a pointer's art is drawn at against its size in points: 1 where painted pointers follow the interface
+/// zoom (`RootEnv::cursor_follows_zoom`), else one over the zoom, so the pointer keeps the size it has at zoom 1 on
+/// the display.
+pub(crate) fn art_scale(ctx: &Context) -> f32 {
+    let zoom = ctx.zoom_factor();
+    if crate::runtime::env::Env::of_root(ctx).cursor_follows_zoom || !zoom.is_finite() || zoom <= 0.0 { 1.0 } else { 1.0 / zoom }
 }
 
 /// A painted pointer the window can take as its cursor image: drawn at a scale, compared with the last one handed over.
