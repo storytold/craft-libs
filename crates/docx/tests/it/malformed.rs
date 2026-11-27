@@ -88,6 +88,31 @@ fn a_malformed_main_part_is_an_error_not_a_truncated_document() {
 }
 
 #[test]
+fn a_part_with_a_bad_checksum_is_left_out_and_reported() {
+    let body = format!("<w:document {W_NS}><w:body><w:p><w:r><w:t>kept</w:t></w:r></w:p></w:body></w:document>");
+    let build = |extra: &[u8]| {
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zw.start_file("_rels/.rels", stored).unwrap();
+        zw.write_all(ROOT_RELS.as_bytes()).unwrap();
+        zw.start_file("word/document.xml", stored).unwrap();
+        zw.write_all(body.as_bytes()).unwrap();
+        zw.start_file("word/media/image1.png", stored).unwrap();
+        zw.write_all(extra).unwrap();
+        zw.finish().unwrap().into_inner()
+    };
+    let sound = read(&build(b"PICTURE-BYTES-0123456789")).unwrap();
+    assert!(sound.skipped_parts.is_empty(), "a sound file reports nothing");
+    // The entry is stored as is, so one changed byte fails its checksum when it is read.
+    let mut z = build(b"PICTURE-BYTES-0123456789");
+    let at = z.windows(7).position(|w| w == b"PICTURE").unwrap();
+    z[at] = b'p';
+    let damaged = read(&z).unwrap();
+    assert_eq!(damaged.plain_text(craft_wordmodel::StoryRef::Body), "kept", "the rest still opens");
+    assert_eq!(damaged.skipped_parts, vec!["word/media/image1.png".to_string()]);
+}
+
+#[test]
 fn deep_nesting_is_rejected() {
     let mut x = format!("<w:document {W_NS}><w:body>");
     for _ in 0..5_000 {
@@ -154,7 +179,8 @@ fn many_fields_and_huge_attribute_values() {
 /// limit error, or the extras are dropped and the text survives (#3702, WC-06).
 #[test]
 fn millions_of_attributes_on_one_paragraph_are_capped() {
-    let attrs: String = (0..2_000_000).map(|i| format!(" a{i}=\"\"")).collect();
+    // The gate reads a fraction of the attributes; nightly all of them.
+    let attrs: String = (0..2_000_000 / craft_testkit::hostile::divisor()).map(|i| format!(" a{i}=\"\"")).collect();
     let x = format!("<w:document {W_NS}><w:body><w:p{attrs}><w:r><w:t>kept</w:t></w:r></w:p></w:body></w:document>");
     // Only the read is timed: deflating the test input in a debug build is not what is bounded.
     let z = doc_zip(x.as_bytes());
@@ -228,7 +254,7 @@ fn malformed_or_hostile_bibliography_never_panics() {
 fn hostile_bibliography_source_count_is_capped() {
     let doc = format!("<w:document {W_NS}><w:body><w:p><w:r><w:t>body</w:t></w:r></w:p></w:body></w:document>");
     let mut sources = String::from(r#"<b:Sources xmlns:b="http://schemas.openxmlformats.org/officeDocument/2006/bibliography" StyleName="MLA">"#);
-    for i in 0..60_000 {
+    for i in 0..(60_000 / craft_testkit::hostile::divisor()).max(10_500) {
         sources.push_str(&format!("<b:Source><b:Tag>T{i}</b:Tag><b:Title>Title {i}</b:Title></b:Source>"));
         // Untagged duplicates all collapse into one source.
         sources.push_str("<b:Source><b:Title>Same</b:Title></b:Source>");
@@ -288,11 +314,13 @@ fn compound(info: &[u8], package: &[u8]) -> Vec<u8> {
 
 proptest! {
     // Each case that parses runs the 50,000-spin key derivation, so fewer cases.
-    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: (48 / craft_testkit::hostile::divisor() as u32).max(6), ..ProptestConfig::default() })]
 
     #[test]
     fn mutated_standard_encryption_never_panics(ops in proptest::collection::vec((0u8..3, any::<prop::sample::Index>(), any::<u8>(), any::<bool>()), 1..8)) {
-        let (mut info, mut package) = standard_streams();
+        // Encrypting runs the key derivation too: once for every case.
+        static STREAMS: std::sync::OnceLock<(Vec<u8>, Vec<u8>)> = std::sync::OnceLock::new();
+        let (mut info, mut package) = STREAMS.get_or_init(standard_streams).clone();
         for (k, idx, byte, in_package) in ops {
             let x = if in_package { &mut package } else { &mut info };
             let at = idx.index(x.len() + 1);

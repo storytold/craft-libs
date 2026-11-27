@@ -11,11 +11,11 @@ fi
 cd "$root"
 case "${1:-}" in
   "")
-    cargo test -p craft-plate-test --test ghostscript -- --ignored --nocapture
+    cargo test -p craft-plate-test -- integration::ghostscript --ignored --nocapture
     echo "report: ${CARGO_TARGET_DIR:-target}/plate-test/report.md"
     ;;
   --flatten)
-    cargo test -p craft-prepress --features flatten --test flatten_plates -- --ignored --nocapture
+    cargo test -p craft-prepress --features flatten -- integration::flatten_plates --ignored --nocapture
     echo "report: ${CARGO_TARGET_DIR:-target}/plate-test/flattened/report.md"
     ;;
   *)

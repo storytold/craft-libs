@@ -159,7 +159,10 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>, on_
         if pp.bidi == Some(true) {
             attrs.push_str(" style:writing-mode=\"rl-tb\"");
         }
-        attrs.push_str(&super::writer::border_attrs(pp.borders));
+        // At the width each side is drawn at, as the paragraph's own borders already are by the
+        // time the flow model holds them: ODF has no border that is drawn and takes no room
+        // (storytold/wordcraft#5065).
+        attrs.push_str(&super::writer::border_attrs(pp.borders.map(|b| b.as_drawn())));
         if let Some(bg) = pp.shading {
             attrs.push_str(&format!(" fo:background-color=\"#{}\"", bg.hex().to_ascii_lowercase()));
         }
@@ -815,32 +818,92 @@ fn conn_kinds(blocks: &[FBlock]) -> super::HashMap<u32, craft_wordmodel::para::S
     out
 }
 
-/// `styles` with the file's own style definitions while `doc`'s are as read (see
+/// What WordCraft would write for each child of `office:styles` in `doc`, as hashes by its key.
+pub(super) fn style_prints(doc: &Document) -> std::collections::BTreeMap<String, u64> {
+    super::kept::prints(&model_styles(doc))
+}
+
+/// What WordCraft would write of `doc`'s style definitions: all of them, used or not.
+fn model_styles(doc: &Document) -> String {
+    let ids = |custom: fn(&Document, &str) -> bool| doc.styles.styles.iter().filter(|s| custom(doc, &s.id)).map(|s| s.id.clone()).collect();
+    // The first section, as a save writes the document-wide line numbering from it.
+    let first = doc.sections().first().map_or_else(|| doc.last_section.clone(), |(_, s)| (*s).clone());
+    let page = [(String::new(), first)];
+    let xml = styles_xml(doc, &page, &[], "", &ids(model::is_custom_style));
+    let text = char_styles(doc, &ids(model::is_custom_char_style));
+    xml.replacen("</office:styles>", &format!("{text}</office:styles>"), 1)
+}
+
+/// `styles` with the file's own style definitions except those `doc` has since changed (see
 /// `super::kept`), and the font faces they name added to those kept paragraphs need (`used`).
+/// Changing one style or list leaves the rest of what the file defines alone: its gradients and
+/// fill pictures, the styles WordCraft doesn't model, its default style's settings.
 fn styles_as_read(doc: &Document, kept: Option<&craft_wordmodel::kept::KeptXml>, styles: String, used: &mut super::kept::Needed) -> String {
-    let Some(k) = kept.filter(|k| k.styles_as_read(doc)) else { return styles };
+    let Some(k) = kept else { return styles };
     // With the font faces they name (any of the file's, by its names).
     for (key, d) in &k.defs {
         if let Some(name) = key.strip_prefix("font:") {
             used.2.entry(name.to_string()).or_insert_with(|| d.clone());
         }
     }
-    super::kept::with_common_as_read(&styles, &k.defs, &k.order)
+    let (changed, rewritten) = common_changes(doc, k);
+    let ours = |id: &str| super::writer::odf_name(id);
+    let read = super::kept::file_names(&k.style_ids, &ours);
+    super::kept::with_common_as_read(&styles, &k.defs, &k.order, &changed, &rewritten, &read)
+}
+
+/// The keys of the file's style definitions `doc` has changed since they were read, and what
+/// becomes of those written from the model under the file's names ([`super::kept::rewritten_defs`]).
+/// The others are written as read.
+fn common_changes(
+    doc: &Document,
+    k: &craft_wordmodel::kept::KeptXml,
+) -> (std::collections::BTreeSet<String>, std::collections::BTreeMap<String, Option<String>>) {
+    let now = model_styles(doc);
+    let changed = super::kept::changed(&k.style_prints, &super::kept::prints(&now));
+    // The name WordCraft writes a style id under (`My_20_Custom` was read as `MyCustom`).
+    let ours = |id: &str| super::writer::odf_name(id);
+    let rewritten = super::kept::rewritten_defs(&now, &k.defs, &changed, &k.style_ids, &ours);
+    (changed, rewritten)
 }
 
 /// The package files the file's own definitions refer to, and those the markup written as read
-/// links to (`used`), written as read with them (added to `files` and `manifest` where no file
-/// `taken` has the path). A picture only an edited paragraph showed isn't written.
+/// links to (`w.kept_files_used`, `w.kept_used`), written as read with them (added to `files` and
+/// `manifest` where no file `taken` has the path). A picture only an edited paragraph showed isn't written.
 fn with_kept_files(
+    doc: &Document,
     kept: Option<&craft_wordmodel::kept::KeptXml>,
-    used: &std::collections::BTreeSet<String>,
+    styles: &str,
+    w: &Writer,
     taken: &dyn Fn(&str) -> bool,
     files: &mut Vec<(String, std::sync::Arc<Vec<u8>>)>,
     manifest: &mut String,
 ) {
     let Some(k) = kept else { return };
-    let mut wanted = used.clone();
-    for d in k.defs.values() {
+    let mut wanted = w.kept_files_used.clone();
+    let pages_kept = k.pages_as_read(doc);
+    let (changed, rewritten) = common_changes(doc, k);
+    for (key, d) in &k.defs {
+        if !pages_kept && (key.starts_with("sauto:") || key.starts_with("master:")) {
+            continue;
+        }
+        if key.starts_with("common:") {
+            // What `styles_as_read` writes in its place, when it rewrites it: what that names (an
+            // unread namesake's own definition, as read) is what is written.
+            if let Some(def) = rewritten.get(key) {
+                if let Some(def) = def {
+                    super::kept::hrefs(def, &mut wanted);
+                }
+                continue;
+            }
+            // The file's definition is written back as read unless the document changed it: then
+            // WordCraft's takes its place, or none does. WordCraft's own definition takes a
+            // drawing definition's place too. Its href is then no longer used.
+            let written = !changed.contains(key) && !(super::kept::drawing_def(d) && super::kept::defined(styles, d));
+            if !written {
+                continue;
+            }
+        }
         super::kept::hrefs(d, &mut wanted);
     }
     // A file linked, or one in a folder linked (an object's).
@@ -1038,12 +1101,15 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     // Paragraphs kept as read name their own automatic styles: WordCraft's take another prefix.
     let kept = doc.kept.of("odt");
     let mut w = if kept.is_some() { Writer::with_prefix(KEPT_PREFIX) } else { Writer::default() };
+    w.stacking = super::frames::stacking(doc)?;
     w.note_numbers = Some([false, true].map(|endnote| {
         let o = doc.note_options(&doc.last_section, endnote);
         (o.num_fmt, o.num_start)
     }));
     w.kept_defs = std::sync::Arc::new(kept.map(|k| k.defs.clone()).unwrap_or_default());
     w.reserved = std::sync::Arc::new(kept.map(|k| k.files.keys().cloned().collect()).unwrap_or_default());
+    let ours = |id: &str| super::writer::odf_name(id);
+    w.read_names = std::sync::Arc::new(kept.map(|k| super::kept::read_names(&k.defs, &k.style_ids, &ours)).unwrap_or_default());
     w.groups_whole = whole_groups(&flow.blocks);
     // The file's master pages are written as read: what was kept may start them.
     w.kept_pages = kept.is_some_and(|k| k.pages_as_read(doc));
@@ -1166,6 +1232,8 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let mut hw = Writer::with_prefix(if kept.is_some() { "wcM" } else { "M" });
     // Headers' and footers' new pictures and objects skip the kept files' names too.
     hw.reserved = std::sync::Arc::clone(&w.reserved);
+    hw.read_names = std::sync::Arc::clone(&w.read_names);
+    hw.stacking = w.stacking;
     hw.accents = accents;
     hw.variables.clone_from(&w.variables);
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
@@ -1234,7 +1302,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         w.objects.iter().map(|(d, _, _)| d).chain(w.object_dirs.iter().map(|(d, _)| d)).map(|d| format!("{}/", d.trim_end_matches('/'))).collect();
     let taken = |p: &str| w.pictures.iter().any(|(n, _, _)| n == p) || dirs.iter().any(|d| p.starts_with(d.as_str()));
     let mut kept_files: Vec<_> = kept_files.into_iter().filter(|(p, _)| !taken(p)).collect();
-    with_kept_files(kept, &w.kept_files_used, &taken, &mut kept_files, &mut manifest);
+    with_kept_files(doc, kept, &styles, &w, &taken, &mut kept_files, &mut manifest);
     for (path, mime) in &kept_entries {
         if (path.ends_with('/') && kept_files.iter().any(|(p, _)| p.starts_with(path.as_str()))) || kept_files.iter().any(|(p, _)| p == path) {
             manifest.push_str(&format!("<manifest:file-entry manifest:full-path=\"{}\" manifest:media-type=\"{}\"/>\n", x(path), x(mime)));
@@ -1255,10 +1323,16 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         None => styles,
     };
     let (content, styles) = with_kept_defs(content, styles, &w.kept_used, &w.kept_defs);
+    // Choose the gap from everything actually written, including unknown retained
+    // drawings and master pages. Remapping modeled frames alone can alias an order
+    // present only in retained XML. Values are spliced without reserializing XML.
+    let orders = super::frames::read_orders(content.as_bytes(), Some(styles.as_bytes()))?;
+    let content = super::xml::remap_orders(content.as_bytes(), |raw| orders.file_order(raw))?;
+    let styles = super::xml::remap_orders(styles.as_bytes(), |raw| orders.file_order(raw))?;
     // The manifest lists every file already: the writer adds the files only.
     for (name, data) in [
-        ("content.xml", content.as_bytes()),
-        ("styles.xml", styles.as_bytes()),
+        ("content.xml", content.as_ref()),
+        ("styles.xml", styles.as_ref()),
         ("meta.xml", meta.as_bytes()),
         ("settings.xml", settings_xml(doc).as_bytes()),
     ] {
@@ -1294,7 +1368,9 @@ fn page_look(doc: &Document, sec: &SectionProps) -> String {
 /// they go round: each border at its distance from the edge (WordCraft's), which becomes the
 /// margin, with the rest of the way to the text as its padding.
 fn page_borders(b: Option<craft_wordmodel::props::Borders>, margins: [f32; 4]) -> (String, [f32; 4]) {
-    let Some(b) = b.filter(|b| b.any_visible()) else { return (String::new(), margins) };
+    // A page border of width 0 (a DOCX one without `w:sz`) is drawn at the thinnest line: ODF has
+    // no border that is drawn and still takes no room (storytold/wordcraft#5065).
+    let Some(b) = b.map(|b| b.as_drawn()).filter(|b| b.any_visible()) else { return (String::new(), margins) };
     let mut out = margins;
     let mut attrs = String::new();
     for (i, (side, edge)) in [("top", b.top), ("bottom", b.bottom), ("left", b.left), ("right", b.right)].into_iter().enumerate() {
@@ -1384,43 +1460,121 @@ fn variables(doc: &Document) -> std::collections::BTreeSet<String> {
     out
 }
 
+/// A `draw:fill-image` definition's name and picture path, when `xml` starts with one.
+fn fill_image_of(xml: &str) -> Option<(String, String)> {
+    let tag = xml.split('>').next()?;
+    if !tag.trim_start_matches('<').starts_with("draw:fill-image") {
+        return None;
+    }
+    let name = super::kept::raw_attr(tag, "draw:name").map(super::kept::attr_text)?;
+    let href = super::kept::raw_attr(tag, "xlink:href").map(super::kept::attr_text)?;
+    Some((name.into_owned(), href.into_owned()))
+}
+
+/// `name` as a `draw:name` (§16.42) may read: an NCName — letters, digits, `-`, `_` and `.`, not
+/// starting with `-`, `.` or a digit. Characters outside those are turned into `_`.
+fn fill_image_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len().min(255));
+    for c in name.chars().take(255) {
+        let ok = c.is_alphanumeric() || c == '-' || c == '_' || c == '.';
+        let start_ok = c.is_alphabetic() || c == '_';
+        if out.is_empty() {
+            out.push(if start_ok { c } else { '_' });
+        } else {
+            out.push(if ok { c } else { '_' });
+        }
+    }
+    if out.is_empty() { "PageBackground".to_string() } else { out }
+}
+
 /// `styles` with the page background picture (Design › Page Color › Fill Effects › Picture) in
-/// each page layout (§17.3 `style:background-image`, first in `style:page-layout-properties`),
-/// the picture written into the package by `w`: tiled, stretched, or centred at its own size
-/// (§20.249 `style:repeat`).
-fn page_background(doc: &Document, w: &mut Writer, styles: String) -> String {
+/// each page layout (§17.3 `style:background-image`, first in `style:page-layout-properties`, and
+/// modern ODF 1.2/1.3 §16.42 `draw:fill="bitmap"` with `draw:fill-image`), the picture written
+/// into the package by `w`: tiled, stretched, or centred at its own size (§20.249 `style:repeat`).
+fn page_background(doc: &Document, w: &mut Writer, mut styles: String) -> String {
     let Some(pic) = doc.settings.page_picture.as_ref() else { return styles };
     let Some(data) = doc.media.get(&pic.media) else { return styles };
     let Some(ext) = model::sniff_image(data) else { return styles };
-    let name = format!("Pictures/page-background.{ext}");
-    if !w.pictures.iter().any(|(n, _, _)| *n == name) {
-        w.pictures.push((name.clone(), data.clone(), model::mime_of(ext).to_string()));
+    let kept = doc.kept.of("odt");
+    // A kept package file holding these bytes is this picture already: its path is reused, so
+    // saving what was opened doesn't add a copy on every save.
+    let same_kept = |path: &str| kept.is_some_and(|k| k.files.get(path).is_some_and(|b| b.as_slice() == data.as_slice()));
+    let mut name = format!("Pictures/page-background.{ext}");
+    let mut pic_n = 1;
+    while (w.reserved.contains(&name) && !same_kept(&name)) || w.pictures.iter().any(|(n, d, _)| n == &name && d.as_slice() != data.as_slice()) {
+        name = format!("Pictures/page-background-{pic_n}.{ext}");
+        pic_n += 1;
     }
     let repeat = match pic.fill_type.to_ascii_lowercase().as_str() {
         "tile" => "repeat",
         "center" => "no-repeat",
         _ => "stretch",
     };
-    let el = format!(
+    // The fill-image definitions already written, by name, once: renaming looks each up rather
+    // than scanning every definition for it (a hostile file names thousands alike).
+    let mut fill_images: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for d in w.kept_defs.values() {
+        if let Some((n, h)) = fill_image_of(d) {
+            fill_images.insert(n, h);
+        }
+    }
+    for (i, _) in styles.match_indices("<draw:fill-image ") {
+        if let Some((n, h)) = styles.get(i..).and_then(fill_image_of) {
+            fill_images.insert(n, h);
+        }
+    }
+    let mut fill_name = if !pic.title.is_empty() { fill_image_name(&pic.title) } else { "PageBackground".to_string() };
+    let base_fill_name = fill_name.clone();
+    // The definition under this name is this picture when its path is ours, or a kept file with
+    // the same bytes: then the file's name is reused instead of a copy being added.
+    let same_picture =
+        |href: &str, w: &Writer| href == name || same_kept(href) || w.pictures.iter().any(|(n, d, _)| n == href && d.as_slice() == data.as_slice());
+    let mut n = 1;
+    while let Some(href) = fill_images.get(&fill_name) {
+        let href = href.clone();
+        if same_picture(&href, w) {
+            name = href;
+            break;
+        }
+        fill_name = format!("{base_fill_name}-{n}");
+        n += 1;
+    }
+    if !w.pictures.iter().any(|(n, _, _)| *n == name) {
+        w.pictures.push((name.clone(), data.clone(), model::mime_of(ext).to_string()));
+    }
+    let fill_image_def =
+        format!("<draw:fill-image draw:name=\"{}\" xlink:href=\"{}\" xlink:type=\"simple\" xlink:actuate=\"onLoad\"/>", x(&fill_name), x(&name));
+    if !super::kept::defined(&styles, &fill_image_def) {
+        styles = styles.replacen("</office:styles>", &format!("{fill_image_def}</office:styles>"), 1);
+    }
+    let bg_el = format!(
         "<style:background-image xlink:href=\"{}\" xlink:type=\"simple\" xlink:actuate=\"onLoad\" style:position=\"center center\" style:repeat=\"{repeat}\"/>",
         x(&name)
     );
+    let fill_attrs = format!(" draw:fill=\"bitmap\" draw:fill-image-name=\"{}\" style:repeat=\"{repeat}\"", x(&fill_name));
+
     // After each layout's properties' opening tag.
-    let mut out = String::with_capacity(styles.len() + el.len() * 4);
+    let mut out = String::with_capacity(styles.len() + bg_el.len() * 4);
     let mut rest = styles.as_str();
     while let Some(at) = rest.find("<style:page-layout-properties") {
+        let tag_start = at + "<style:page-layout-properties".len();
         let Some(end) = rest.get(at..).and_then(|r| r.find('>')).map(|e| at + e) else { break };
         let self_closing = rest.get(end.saturating_sub(1)..end) == Some("/");
         if self_closing {
-            out.push_str(rest.get(..end.saturating_sub(1)).unwrap_or_default());
+            let before_slash = end.saturating_sub(1);
+            out.push_str(rest.get(..tag_start).unwrap_or_default());
+            out.push_str(&fill_attrs);
+            out.push_str(rest.get(tag_start..before_slash).unwrap_or_default());
             out.push('>');
-            out.push_str(&el);
+            out.push_str(&bg_el);
             out.push_str("</style:page-layout-properties>");
         } else {
-            out.push_str(rest.get(..=end).unwrap_or_default());
-            out.push_str(&el);
+            out.push_str(rest.get(..tag_start).unwrap_or_default());
+            out.push_str(&fill_attrs);
+            out.push_str(rest.get(tag_start..=end).unwrap_or_default());
+            out.push_str(&bg_el);
         }
-        rest = rest.get(end + 1..).unwrap_or_default();
+        rest = rest.get(end.saturating_add(1)..).unwrap_or_default();
     }
     out.push_str(rest);
     out
@@ -1485,32 +1639,8 @@ fn with_font_faces(xml: &str) -> String {
 /// A font family's generic family and pitch (§20.270, §20.271), from its name: monospaced
 /// families are `modern` and fixed, serif ones `roman`, the rest `swiss`.
 fn font_kind(family: &str) -> (&'static str, &'static str) {
-    let f = family.to_ascii_lowercase();
-    if model::is_mono(family) {
-        return ("modern", "fixed");
-    }
-    const SERIF: [&str; 16] = [
-        "serif",
-        "times",
-        "georgia",
-        "cambria",
-        "caladea",
-        "garamond",
-        "palatino",
-        "book",
-        "roman",
-        "libertine",
-        "minion",
-        "baskerville",
-        "bodoni",
-        "didot",
-        "charter",
-        "constantia",
-    ];
-    if SERIF.iter().any(|s| f.contains(s)) && !f.contains("sans") {
-        return ("roman", "variable");
-    }
-    ("swiss", "variable")
+    let generic = craft_wordmodel::font_kind::GenericFamily::of(family);
+    (generic.name(), if generic.fixed_pitch() { "fixed" } else { "variable" })
 }
 
 #[cfg(test)]

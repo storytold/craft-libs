@@ -1,7 +1,7 @@
 //! Editable PSD Type Tool Object Setting (`TySh`) envelope, extracted from PhotoCraft.
 //! App-specific text styles, layout, units and editing policy stay with the consumer.
 //! Parsing intentionally retains PhotoCraft's optional-warp and partial-bounds recovery.
-//! Existing read-only [`super::TypeLayer`] behavior is unchanged.
+//! Existing read-only [`crate::text::TypeLayer`] behavior is unchanged.
 
 use crate::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D, VersionedDescriptor};
 use crate::error::{PsdError, Result};
@@ -27,6 +27,33 @@ pub struct TySh {
 /// Whether a type transform can reach rendering. Pixel coordinates use i32 in the originating PhotoCraft consumer, so non-finite and unrepresentable affine terms are rejected (#4758).
 pub fn transform_is_safe(t: &[f64; 6]) -> bool {
     t.iter().all(|v| v.is_finite() && v.abs() <= f64::from(i32::MAX))
+}
+
+/// Recovers the text and raw transform of a `TySh` prefix, even if its descriptor is damaged.
+///
+/// This is PhotoCraft's preservation fallback, not a rendering-ready type layer. It keeps
+/// line endings, the trailing paragraph terminator and non-finite transform values verbatim.
+/// Callers must validate geometry before rendering. A complete 52-byte prefix is required;
+/// a missing, unsupported or malformed text descriptor produces empty text. Warp and bounds
+/// are not interpreted. Above [`MAX_BYTES`], the descriptor is not parsed and text is empty,
+/// retaining the fixed transform so consumers can preserve the original block without decoding
+/// an oversized descriptor. Inputs within that cap retain the shared parser's allocation limits.
+pub fn parse_tysh_text_prefix(data: &[u8]) -> Option<(String, [f64; 6])> {
+    let f = |at: usize| data.get(at..at + 8).map(|b| f64::from_be_bytes(b.try_into().unwrap_or([0; 8])));
+    let mut m = [0.0; 6];
+    for (i, v) in m.iter_mut().enumerate() {
+        *v = f(2 + i * 8)?;
+    }
+    // text version (2) at 50, descriptor version (4) at 52, descriptor at 56.
+    let rest = data.get(52..)?;
+    if data.len() > MAX_BYTES {
+        return Some((String::new(), m));
+    }
+    let text = VersionedDescriptor::parse_prefix(rest).ok().and_then(|(d, _)| match d.descriptor.get("Txt ") {
+        Some(D::Text(t)) => Some(t.to_string_lossy()),
+        _ => None,
+    });
+    Some((text.unwrap_or_default(), m))
 }
 
 /// Parses a `TySh` block.
@@ -246,6 +273,54 @@ mod tests {
             bounds: [-1.0, 2.0, 30.0, 40.0],
         }
     }
+    #[test]
+    fn recovery_prefix_preserves_text_and_ignores_damaged_tail() {
+        let mut t = sample();
+        t.text = t.text.with("Txt ", D::Text(UnicodeString::new_nul("Hello\r\nWorld\r")));
+        let mut bytes = write_tysh(&t).unwrap();
+        let (_, n) = VersionedDescriptor::parse_prefix(&bytes[52..]).unwrap();
+        bytes.truncate(52 + n);
+        bytes.extend_from_slice(b"broken warp");
+        assert_eq!(parse_tysh_text_prefix(&bytes), Some(("Hello\r\nWorld\r".into(), t.transform)));
+    }
+
+    #[test]
+    fn recovery_prefix_needs_only_complete_fixed_header() {
+        let bytes = write_tysh(&sample()).unwrap();
+        for cut in 0..52 {
+            assert!(parse_tysh_text_prefix(&bytes[..cut]).is_none(), "{cut}");
+        }
+        for cut in 52..56 {
+            assert_eq!(parse_tysh_text_prefix(&bytes[..cut]), Some((String::new(), sample().transform)));
+        }
+        let mut unsupported = bytes.clone();
+        unsupported[52..56].copy_from_slice(&99u32.to_be_bytes());
+        assert_eq!(parse_tysh_text_prefix(&unsupported), Some((String::new(), sample().transform)));
+        assert_eq!(parse_tysh_text_prefix(&bytes), Some((String::new(), sample().transform)));
+    }
+
+    #[test]
+    fn recovery_prefix_bounds_descriptor_work_without_losing_preservation_geometry() {
+        let mut t = sample();
+        t.text = t.text.with("Txt ", D::Text(UnicodeString::new_nul("kept")));
+        let mut bytes = write_tysh(&t).unwrap();
+        bytes.resize(MAX_BYTES, 0);
+        assert_eq!(parse_tysh_text_prefix(&bytes), Some(("kept".into(), t.transform)));
+        bytes.push(0);
+        assert_eq!(parse_tysh_text_prefix(&bytes), Some((String::new(), t.transform)));
+        assert!(parse_tysh(&bytes).is_none());
+    }
+
+    #[test]
+    fn recovery_prefix_retains_geometry_but_is_not_render_validation() {
+        let mut bytes = write_tysh(&sample()).unwrap();
+        bytes[2..10].copy_from_slice(&f64::NAN.to_be_bytes());
+        let (_, transform) = parse_tysh_text_prefix(&bytes).unwrap();
+        assert!(transform[0].is_nan());
+        assert!(!transform_is_safe(&transform));
+        assert!(parse_tysh(&bytes).is_none());
+    }
+
     #[test]
     fn roundtrip_preserves_descriptors_transform_and_bounds() {
         let t = sample();

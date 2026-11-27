@@ -211,6 +211,26 @@ fn style_def(w: &mut Writer, id: &str, name: &str) {
 /// opened file defined (`defs`), written back as they were read. A generated style is named
 /// `"{name_prefix} {label}"` (`"Acme Medium 2 Accent 1"`).
 pub fn table_styles_xml(used: &[String], defs: &[crate::table::TableStyleDef], name_prefix: &str) -> Vec<u8> {
+    table_styles_xml_with(used, defs.iter().map(|d| (d.id.as_str(), d.raw.as_str())), name_prefix, |raw| {
+        crate::xmlx::parse(raw.as_bytes()).is_ok_and(|x| x.is(Local("tblStyle")))
+    })
+}
+
+/// Write table style definitions without copying a caller's model or raw XML.
+///
+/// `defs` yields `(id, raw_xml)` in file order and must replay the same sequence when cloned.
+/// `valid` retains the caller's bounded XML-admission policy; accepted fragments are emitted
+/// verbatim. It must reject fragments the caller cannot safely preserve. The ordinary
+/// [`table_styles_xml`] API continues to use this crate's bounded parser.
+///
+/// Input/output budgets remain caller-owned. Duplicate selection, case handling, and validation
+/// order match [`table_styles_xml`]; invalid first definitions do not fall through to later ones.
+pub fn table_styles_xml_with<'a>(
+    used: &[String],
+    defs: impl Iterator<Item = (&'a str, &'a str)> + Clone,
+    name_prefix: &str,
+    mut valid: impl FnMut(&str) -> bool,
+) -> Vec<u8> {
     let mut w = Writer::document();
     w.tag("a:tblStyleLst").attr("xmlns:a", NS_A).attr("def", "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}").open();
     let names = crate::table::table_styles();
@@ -218,19 +238,19 @@ pub fn table_styles_xml(used: &[String], defs: &[crate::table::TableStyleDef], n
     // definitions by lower-case id (the first wins).
     let mut done: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut done_lower: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut def_of: std::collections::HashMap<String, &crate::table::TableStyleDef> = std::collections::HashMap::new();
-    for d in defs {
-        def_of.entry(d.id.to_ascii_lowercase()).or_insert(d);
+    let mut def_of: std::collections::HashMap<String, &'a str> = std::collections::HashMap::new();
+    for (id, raw) in defs.clone() {
+        def_of.entry(id.to_ascii_lowercase()).or_insert(raw);
     }
     for s in used {
         if !done.insert(s.as_str()) {
             continue;
         }
         done_lower.insert(s.to_ascii_lowercase());
-        if let Some(d) = def_of.get(&s.to_ascii_lowercase())
-            && crate::xmlx::parse(d.raw.as_bytes()).is_ok_and(|x| x.is(Local("tblStyle")))
+        if let Some(raw) = def_of.get(&s.to_ascii_lowercase())
+            && valid(raw)
         {
-            w.raw(&d.raw);
+            w.raw(raw);
             continue;
         }
         let (_, define) = guid_for_style(s);
@@ -241,13 +261,13 @@ pub fn table_styles_xml(used: &[String], defs: &[crate::table::TableStyleDef], n
         style_def(&mut w, s, &name);
     }
     // Styles the file defined but no table uses still belong to the deck.
-    for d in defs {
-        if done_lower.contains(&d.id.to_ascii_lowercase()) {
+    for (id, raw) in defs {
+        if done_lower.contains(&id.to_ascii_lowercase()) {
             continue;
         }
-        if crate::xmlx::parse(d.raw.as_bytes()).is_ok_and(|x| x.is(Local("tblStyle"))) {
-            done_lower.insert(d.id.to_ascii_lowercase());
-            w.raw(&d.raw);
+        if valid(raw) {
+            done_lower.insert(id.to_ascii_lowercase());
+            w.raw(raw);
         }
     }
     w.close();
@@ -257,6 +277,27 @@ pub fn table_styles_xml(used: &[String], defs: &[crate::table::TableStyleDef], n
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn borrowed_writer_preserves_model_api_and_validation_order() {
+        let defs = [
+            crate::table::TableStyleDef { id: "custom".into(), raw: "<tblStyle/>".into(), ..Default::default() },
+            crate::table::TableStyleDef { id: "CUSTOM".into(), raw: "<tblStyle duplicate=\"1\"/>".into(), ..Default::default() },
+        ];
+        let used = vec!["custom".into(), "custom".into(), "light1-accent1".into()];
+        let borrowed = || defs.iter().map(|d| (d.id.as_str(), d.raw.as_str()));
+        assert_eq!(
+            table_styles_xml(&used, &defs, "App"),
+            table_styles_xml_with(&used, borrowed(), "App", |raw| { crate::xmlx::parse(raw.as_bytes()).is_ok_and(|x| x.is(Local("tblStyle"))) })
+        );
+        let mut checked = Vec::new();
+        let bytes = table_styles_xml_with(&used, borrowed(), "App", |raw| {
+            checked.push(raw.to_owned());
+            false
+        });
+        assert_eq!(checked, ["<tblStyle/>"]);
+        assert!(!String::from_utf8(bytes).unwrap().contains("duplicate="));
+    }
 
     #[test]
     fn style_parts_follow_schema_order() {

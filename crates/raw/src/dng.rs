@@ -8,6 +8,7 @@ use crate::{
     BlackLevel, Camera, Cfa, CinemaTags, ColorData, LevelSource, LevelSources, Limits, Matrix3, Mode, Orientation, RawData, RawError, RawFormat,
     RawImage, RawNotices, Rect, Result, Timecode, opcodes,
 };
+use craft_tiff::image::{ImageInfo, Layout};
 use craft_tiff::tags::{self as t, photometric};
 use craft_tiff::{ByteOrder, Ifd, Tiff, Value};
 
@@ -91,7 +92,7 @@ fn permute<T: Copy + Default, F: Fn(usize, usize) -> usize>(v: &mut Vec<T>, w: u
 }
 
 /// A 3×3 matrix tag: nine finite values that can be inverted.
-fn mat3(v: Option<Vec<f64>>) -> Option<Matrix3> {
+pub(crate) fn mat3(v: Option<Vec<f64>>) -> Option<Matrix3> {
     let v = v?;
     if v.len() != 9 || v.iter().any(|x| !x.is_finite()) {
         return None;
@@ -273,7 +274,10 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
     {
         return Err(RawError::Unsupported(format!("DNG compression {c} (GoPro VC-5) is not decoded yet")));
     }
-    let info = pixels.image()?;
+    let mut info = pixels.image()?;
+    if std::ptr::eq(pixels, raw) {
+        extend_understated_strip(bytes, &mut info, raw);
+    }
     let (w, h, cpp) = (info.width as usize, info.height as usize, info.samples_per_pixel as usize);
     // one sample (CFA or monochrome), RGB or four colours; two are neither and can't be developed (storytold/lightcraft#1511)
     if !matches!(cpp, 1 | 3 | 4) {
@@ -299,17 +303,11 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
         deinterleave(&mut data, w, h, cpp, factor(t::ROW_INTERLEAVE_FACTOR), factor(t::COLUMN_INTERLEAVE_FACTOR))?;
     }
 
-    // linearization table (integer data only)
-    let mut linearized = false;
+    // linearization table (integer data only) and opcode lists. OpcodeList1 runs on the stored
+    // codes first (DNG 1.7 chapter 7); see [`linearization_and_opcodes`].
+    let (linearized, linearization_table, opcodes) = linearization_and_opcodes(pixels, raw, &mut data);
     // the largest value the table can give a sample: the white level when the file states none
-    let mut table_max = None;
-    if let (RawData::U16(v), Some(table)) = (&mut data, pixels.u64s(t::LINEARIZATION_TABLE).filter(|t| !t.is_empty())) {
-        let table: Vec<u16> = table.iter().map(|&x| x.min(65535) as u16).collect();
-        let last = table.len() - 1;
-        v.iter_mut().for_each(|s| *s = table[(*s as usize).min(last)]);
-        linearized = true;
-        table_max = table.iter().copied().max().filter(|&m| m > 0);
-    }
+    let table_max = linearization_table.as_deref().and_then(|t| t.iter().copied().max().filter(|&m| m > 0));
 
     // a reduced copy's own levels, where it states them
     let levels = |tag| if pixels.contains(tag) { pixels } else { raw };
@@ -373,30 +371,18 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
     let (full_w, full_h) = if std::ptr::eq(pixels, raw) {
         (w, h)
     } else {
-        (raw.u64(t::IMAGE_WIDTH).unwrap_or(0) as usize, raw.u64(t::IMAGE_LENGTH).unwrap_or(0) as usize)
+        (
+            raw.u64(t::IMAGE_WIDTH).and_then(|v| usize::try_from(v).ok()).unwrap_or(0),
+            raw.u64(t::IMAGE_LENGTH).and_then(|v| usize::try_from(v).ok()).unwrap_or(0),
+        )
     };
     if full_w == 0 || full_h == 0 {
         return Err(RawError::Corrupt("raw image IFD without a size".into()));
     }
-    let active_area = match raw.u64s(t::ACTIVE_AREA).as_deref() {
-        Some([top, left, bottom, right]) if bottom > top && right > left && (*bottom as usize) <= full_h && (*right as usize) <= full_w => {
-            Rect::new(*left as usize, *top as usize, (*right - *left) as usize, (*bottom - *top) as usize)
-        }
-        _ => Rect::new(0, 0, full_w, full_h),
-    };
-    let (crop, default_crop_adjusted) = default_crop(raw, active_area, full_w, full_h);
-    let (active_area, crop) = if (full_w, full_h) == (w, h) {
-        (active_area, crop)
-    } else {
-        let (sx, sy) = (w as f64 / full_w as f64, h as f64 / full_h as f64);
-        let scale = |r: Rect| {
-            let (x, y) = ((r.x as f64 * sx).round() as usize, (r.y as f64 * sy).round() as usize);
-            let (x1, y1) = (((r.x + r.width) as f64 * sx).round() as usize, ((r.y + r.height) as f64 * sy).round() as usize);
-            Rect::new(x, y, x1.saturating_sub(x).max(1), y1.saturating_sub(y).max(1))
-        };
-        let area = scale(active_area).clipped(w, h);
-        (area, scale(crop).clipped(area.width, area.height))
-    };
+    if w > u32::MAX as usize || h > u32::MAX as usize || full_w > u32::MAX as usize || full_h > u32::MAX as usize {
+        return Err(RawError::Limit("DNG dimensions exceed u32::MAX"));
+    }
+    let (active_area, crop, default_crop_adjusted) = active_area_and_crop(raw, w, h, full_w, full_h);
 
     let mut assumed_cfa = false;
     let cfa = if info.photometric == photometric::CFA {
@@ -442,10 +428,6 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
         None
     };
 
-    let opcode_list = |tag| raw.bytes(tag).map(opcodes::parse_list).unwrap_or_default();
-    let opcodes =
-        crate::OpcodeLists { list1: opcode_list(t::OPCODE_LIST_1), list2: opcode_list(t::OPCODE_LIST_2), list3: opcode_list(t::OPCODE_LIST_3) };
-
     let color = color_data(ifd0, raw, tiff.order);
     let gain_table_omitted = [raw, ifd0].iter().any(|ifd| ifd.contains(t::PROFILE_GAIN_TABLE_MAP) || ifd.contains(t::PROFILE_GAIN_TABLE_MAP_2))
         && color.profile.gain_table_map.is_none();
@@ -465,6 +447,7 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
         color,
         wb_multipliers: None,
         linearized,
+        linearization_table,
         pixel_aspect: default_scale_aspect(raw.f64s(t::DEFAULT_SCALE).as_deref()),
         opcodes,
         camera: Camera::from_ifd0(ifd0),
@@ -477,12 +460,43 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
     Ok(img)
 }
 
+/// Parse opcode lists and, for integer data, the LinearizationTable.
+///
+/// OpcodeList1 runs on the stored codes, then the table maps them to sensor values (DNG 1.7
+/// chapter 7). Applying opcodes is the develop pipeline's work, so a non-empty list 1 leaves the
+/// table unapplied (`linearized` is false) and available on the image.
+fn linearization_and_opcodes(pixels: &Ifd, raw: &Ifd, data: &mut RawData) -> (bool, Option<Vec<u16>>, crate::OpcodeLists) {
+    let opcode_list = |tag| raw.bytes(tag).map(opcodes::parse_list).unwrap_or_default();
+    let opcodes =
+        crate::OpcodeLists { list1: opcode_list(t::OPCODE_LIST_1), list2: opcode_list(t::OPCODE_LIST_2), list3: opcode_list(t::OPCODE_LIST_3) };
+    let linearization_table = if matches!(data, RawData::U16(_)) {
+        pixels.u64s(t::LINEARIZATION_TABLE).filter(|t| !t.is_empty()).map(|table| table.iter().map(|&x| x.min(65535) as u16).collect::<Vec<u16>>())
+    } else {
+        None
+    };
+    let mut linearized = false;
+    if opcodes.list1.is_empty()
+        && let (RawData::U16(v), Some(table)) = (data, linearization_table.as_deref())
+    {
+        let last = table.len() - 1;
+        v.iter_mut().for_each(|s| *s = table[(*s as usize).min(last)]);
+        linearized = true;
+    }
+    (linearized, linearization_table, opcodes)
+}
+
 /// CinemaDNG `TimeCodes` (CinemaDNG Image Data Format Specification 1.0, tag 51043).
 const TIME_CODES: u16 = 51043;
 /// CinemaDNG `FrameRate` (tag 51044).
 const FRAME_RATE: u16 = 51044;
 /// CinemaDNG `ReelName` (tag 51081).
 const REEL_NAME: u16 = 51081;
+
+/// A CinemaDNG `FrameRate` of `n / d` frames a second between 1/1000 and 1000 (shared with the
+/// bounded `dng_metadata` reader).
+pub(crate) fn plausible_frame_rate(n: i64, d: i64) -> bool {
+    n > 0 && d > 0 && n <= 1000 * d && n * 1000 >= d
+}
 
 /// The CinemaDNG tags of a frame, from IFD 0 (where the specification puts them), else the raw IFD. A frame rate
 /// outside 1/1000 to 1000 frames a second and a time code that is not valid BCD are ignored.
@@ -494,9 +508,83 @@ fn cinema_tags(ifd0: &Ifd, raw: &Ifd) -> CinemaTags {
         _ => None,
     });
     CinemaTags {
-        frame_rate: frame_rate.filter(|&(n, d)| n > 0 && d > 0 && n <= 1000 * d && n * 1000 >= d),
+        frame_rate: frame_rate.filter(|&(n, d)| plausible_frame_rate(n, d)),
         timecode: pick(TIME_CODES).bytes(TIME_CODES).and_then(Timecode::from_bytes),
         reel_name: pick(REEL_NAME).string(REEL_NAME).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()),
+    }
+}
+
+/// Trust the file over `StripByteCounts` for an uncompressed single-strip image whose byte count is exactly
+/// `ActiveArea` columns by `ImageLength` rows while the file holds the whole `ImageWidth` by `ImageLength` raster from
+/// the strip's offset on. DJI Mavic 3 DNGs write the count of the active columns (5280) for a strip of full 5376-wide
+/// rows that ends at the end of the file, so reading only the counted bytes refuses a complete image
+/// (storytold/craft-libs#2040). The strip is lengthened only then, so every other short strip is still refused, and
+/// it never reaches past the end of the file. The active area has to start at column 0, so it is the stored rows'
+/// leading columns.
+fn extend_understated_strip(bytes: &[u8], info: &mut ImageInfo, raw: &Ifd) {
+    let bits = u64::from(info.bits());
+    if !matches!(info.layout, Layout::Strips { .. })
+        || info.compression != t::compression::NONE
+        || info.samples_per_pixel != 1
+        || info.planar == 2
+        || !matches!(info.sample_format, 1 | 2)
+        || !matches!(bits, 8 | 16)
+    {
+        return;
+    }
+    let ([offset], [count]) = (&info.offsets[..], &info.byte_counts[..]) else { return };
+    let Some([top, left, bottom, right]) = raw.u64s(t::ACTIVE_AREA).and_then(|a| <[u64; 4]>::try_from(a).ok()) else { return };
+    if left != 0 || bottom <= top || bottom > u64::from(info.height) || right == 0 || right >= u64::from(info.width) {
+        return;
+    }
+    let row_bytes = |width: u64| width.checked_mul(u64::from(info.height))?.checked_mul(bits / 8);
+    let (Some(counted), Some(needed)) = (row_bytes(right), row_bytes(u64::from(info.width))) else { return };
+    let fits = offset.checked_add(needed).is_some_and(|end| end <= bytes.len() as u64);
+    if *count == counted && fits {
+        info.byte_counts = vec![needed];
+    }
+}
+
+fn active_area_and_crop(raw: &Ifd, w: usize, h: usize, full_w: usize, full_h: usize) -> (Rect, Rect, bool) {
+    let active_area = match raw.u64s(t::ACTIVE_AREA).as_deref() {
+        Some(&[top, left, bottom, right]) => {
+            let coords = [top, left, bottom, right].map(|v| usize::try_from(v).ok());
+            match coords {
+                [Some(top), Some(left), Some(bottom), Some(right)]
+                    if bottom > top && right > left && top <= full_h && left <= full_w && bottom <= full_h && right <= full_w =>
+                {
+                    Rect::new(left, top, right - left, bottom - top)
+                }
+                _ => Rect::new(0, 0, full_w, full_h),
+            }
+        }
+        _ => Rect::new(0, 0, full_w, full_h),
+    };
+    let active_area = if active_area.width == 0 || active_area.height == 0 { Rect::new(0, 0, full_w, full_h) } else { active_area };
+    let (crop, mut default_crop_adjusted) = default_crop(raw, active_area, full_w, full_h);
+    if (full_w, full_h) == (w, h) {
+        (active_area, crop, default_crop_adjusted)
+    } else {
+        let (sx, sy) = (w as f64 / full_w as f64, h as f64 / full_h as f64);
+        let scale = |r: Rect| {
+            let (x, y) = ((r.x as f64 * sx).round() as usize, (r.y as f64 * sy).round() as usize);
+            let (x1, y1) = (((r.x + r.width) as f64 * sx).round() as usize, ((r.y + r.height) as f64 * sy).round() as usize);
+            Rect::new(x, y, x1.saturating_sub(x).max(1), y1.saturating_sub(y).max(1))
+        };
+        let mut area = scale(active_area).clipped(w, h);
+        let area_fell_back = area.width == 0 || area.height == 0;
+        if area_fell_back {
+            area = Rect::new(0, 0, w, h);
+        }
+        let scaled_crop = scale(crop);
+        let mut c = if area_fell_back { Rect::new(0, 0, area.width, area.height) } else { scaled_crop.clipped(area.width, area.height) };
+        if c.width == 0 || c.height == 0 {
+            c = Rect::new(0, 0, area.width, area.height);
+        }
+        if (raw.contains(t::DEFAULT_CROP_ORIGIN) || raw.contains(t::DEFAULT_CROP_SIZE)) && (area_fell_back || c != scaled_crop) {
+            default_crop_adjusted = true;
+        }
+        (area, c, default_crop_adjusted)
     }
 }
 
@@ -662,6 +750,28 @@ mod tests {
         // A hostile factor is an error, not a scrambled image.
         let mut hostile = RawData::U16(image);
         assert!(deinterleave(&mut hostile, 8, 6, 1, 1 << 20, 1).is_err());
+    }
+
+    #[test]
+    fn scaled_active_area_fallback_resets_crop_to_full_replacement_area() {
+        use craft_tiff::Entry;
+        let raw = Ifd { entries: vec![Entry { tag: t::ACTIVE_AREA, offset: 0, value: Value::Long(vec![63, 63, 64, 64]) }], ..Default::default() };
+        let (area, crop, adjusted) = active_area_and_crop(&raw, 8, 8, 64, 64);
+        assert_eq!(area, Rect::new(0, 0, 8, 8));
+        assert_eq!(crop, Rect::new(0, 0, 8, 8));
+        assert!(!adjusted);
+
+        let mut entries = vec![
+            Entry { tag: t::ACTIVE_AREA, offset: 0, value: Value::Long(vec![63, 63, 64, 64]) },
+            Entry { tag: t::DEFAULT_CROP_ORIGIN, offset: 0, value: Value::Rational(vec![(0, 1), (0, 1)]) },
+            Entry { tag: t::DEFAULT_CROP_SIZE, offset: 0, value: Value::Rational(vec![(1, 1), (1, 1)]) },
+        ];
+        entries.sort_by_key(|e| e.tag);
+        let explicit_crop_raw = Ifd { entries, ..Default::default() };
+        let (area, crop, adjusted) = active_area_and_crop(&explicit_crop_raw, 8, 8, 64, 64);
+        assert_eq!(area, Rect::new(0, 0, 8, 8));
+        assert_eq!(crop, Rect::new(0, 0, 8, 8));
+        assert!(adjusted);
     }
 }
 
