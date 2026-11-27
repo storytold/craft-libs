@@ -10,6 +10,8 @@ It uses the workspace's `wgpu`, which turns on no native backend, and the WebGPU
 wgpu's backends, as the features of the same names in `craft-gpu-wgpu` do. Cargo merges the
 features, so an app can turn them on through either crate.
 
+The `gpu-device` feature of `craft` exports this crate as `craft::gpu_device`.
+
 Licensed under MIT OR Apache-2.0.
 
 ## Contents
