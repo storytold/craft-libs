@@ -25,7 +25,8 @@
 //! The exit status is not checked. The run is bounded by [`ProbeLimits`]: each output stream may
 //! hold at most `max_output_bytes`, and the child is killed and reaped when it passes `timeout` or
 //! the byte limit. On Unix the child runs in its own process group, and the whole group is killed,
-//! so a process it started that holds the output pipes ends too. A successful lookup is cached for
+//! so a process it started that holds the output pipes ends too. On Windows the child and its
+//! descendants run in a Job Object and are stopped together. A successful lookup is cached for
 //! the process under every input it read (the program, the version argument, the explicit variable
 //! and its value, `PATH`, `PATHEXT`, the current directory, the install folders and the limits). A
 //! failed lookup is not cached.
@@ -42,10 +43,15 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
+
+#[cfg(not(windows))]
+type ProbeChild = std::process::Child;
+#[cfg(windows)]
+type ProbeChild = Box<dyn process_wrap::std::ChildWrapper>;
 
 const UNIX_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/opt/local/bin", "/snap/bin"];
 const WINDOWS_DIRS: &[&str] = &[r"C:\ffmpeg\bin", r"C:\Program Files\ffmpeg\bin", r"C:\ProgramData\chocolatey\bin"];
@@ -612,9 +618,9 @@ fn spawn_reader(pipe: Option<impl Read + Send + 'static>, is_stdout: bool, cap: 
 
 /// Kill the child and reap it. On Unix the child leads its own process group, and the whole group
 /// is killed first with the `kill` built into `/bin/sh` (the shell runs without `PATH`), so a
-/// process the child started that still holds the output pipes ends too. On Windows only the child
-/// is killed.
-fn kill_and_reap(child: &mut Child) {
+/// process the child started that still holds the output pipes ends too. On Windows the child's
+/// job object is terminated, including descendants.
+fn kill_and_reap(child: &mut ProbeChild) {
     #[cfg(unix)]
     let _ = Command::new("/bin/sh")
         .args(["-c", "kill -s KILL -- \"-$1\"", "sh", &child.id().to_string()])
@@ -640,7 +646,13 @@ struct Observed {
 }
 
 /// Kill and reap the child, then wait up to [`PIPE_GRACE`] for the `pending` pipe readers.
-fn abort(child: &mut Child, rx: &Receiver<StreamResult>, mut pending: usize, seen: &mut Observed, e: OracleError) -> Result<Captured, OracleError> {
+fn abort(
+    child: &mut ProbeChild,
+    rx: &Receiver<StreamResult>,
+    mut pending: usize,
+    seen: &mut Observed,
+    e: OracleError,
+) -> Result<Captured, OracleError> {
     kill_and_reap(child);
     let until = Instant::now().checked_add(PIPE_GRACE).unwrap_or_else(Instant::now);
     while pending > 0 {
@@ -657,7 +669,8 @@ fn abort(child: &mut Child, rx: &Receiver<StreamResult>, mut pending: usize, see
 /// Start `cmd`, trying again up to 8 times while the program file is busy (`ETXTBSY`). A file is
 /// busy for a moment after it was written while another thread starts a process, which happens
 /// when a test writes a stand-in program and runs it.
-fn spawn(cmd: &mut Command) -> io::Result<Child> {
+#[cfg(not(windows))]
+fn spawn(mut cmd: Command) -> io::Result<ProbeChild> {
     let mut pause = Duration::from_millis(1);
     for _ in 0..8 {
         match cmd.spawn() {
@@ -667,6 +680,25 @@ fn spawn(cmd: &mut Command) -> io::Result<Child> {
         pause *= 2;
     }
     cmd.spawn()
+}
+
+#[cfg(windows)]
+fn spawn(cmd: Command) -> io::Result<ProbeChild> {
+    use process_wrap::std::{CommandWrap, JobObject, KillOnDrop};
+    let mut wrapped = CommandWrap::from(cmd);
+    wrapped.wrap(KillOnDrop).wrap(JobObject);
+    wrapped.spawn()
+}
+
+fn take_pipes(child: &mut ProbeChild) -> (Option<ChildStdout>, Option<ChildStderr>) {
+    #[cfg(not(windows))]
+    {
+        (child.stdout.take(), child.stderr.take())
+    }
+    #[cfg(windows)]
+    {
+        (child.stdout().take(), child.stderr().take())
+    }
 }
 
 /// Run `cmd` with standard input closed and both outputs read under `limits`. On a timeout, an
@@ -681,7 +713,7 @@ fn run_bounded(mut cmd: Command, path: &Path, limits: ProbeLimits, seen: &mut Ob
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
-    let mut child = spawn(&mut cmd).map_err(|source| OracleError::Start { path: path.to_path_buf(), source })?;
+    let mut child = spawn(cmd).map_err(|source| OracleError::Start { path: path.to_path_buf(), source })?;
     seen.pid = Some(child.id());
     // The timeout counts from the start of the child, not from the start of `spawn`'s retries.
     let Some(deadline) = Instant::now().checked_add(limits.timeout) else {
@@ -690,10 +722,11 @@ fn run_bounded(mut cmd: Command, path: &Path, limits: ProbeLimits, seen: &mut Ob
     };
     let (tx, rx) = mpsc::channel();
     let read_error = |source| OracleError::Read { path: path.to_path_buf(), source };
-    if let Err(source) = spawn_reader(child.stdout.take(), true, limits.max_output_bytes, tx.clone()) {
+    let (stdout_pipe, stderr_pipe) = take_pipes(&mut child);
+    if let Err(source) = spawn_reader(stdout_pipe, true, limits.max_output_bytes, tx.clone()) {
         return abort(&mut child, &rx, 0, seen, read_error(source));
     }
-    if let Err(source) = spawn_reader(child.stderr.take(), false, limits.max_output_bytes, tx) {
+    if let Err(source) = spawn_reader(stderr_pipe, false, limits.max_output_bytes, tx) {
         return abort(&mut child, &rx, 1, seen, read_error(source));
     }
     let timeout = OracleError::Timeout { path: path.to_path_buf(), timeout: limits.timeout };
@@ -727,7 +760,7 @@ fn run_bounded(mut cmd: Command, path: &Path, limits: ProbeLimits, seen: &mut Ob
 
 /// Wait for a child whose pipes have closed. Past `deadline` it is killed and reaped, and the
 /// error is `None`; a failed wait kills and reaps it too and returns the error.
-fn wait_for_exit(child: &mut Child, deadline: Instant) -> Result<ExitStatus, Option<io::Error>> {
+fn wait_for_exit(child: &mut ProbeChild, deadline: Instant) -> Result<ExitStatus, Option<io::Error>> {
     let mut pause = Duration::from_millis(1);
     loop {
         match child.try_wait() {
@@ -1212,6 +1245,61 @@ mod tests {
         assert!(matches!(got, Err(OracleError::OutputLimit { .. })));
         let pid = seen.pid.unwrap();
         assert!(!process_exists(pid), "child {pid} was left running or unreaped");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_descendants_release_the_output_pipes_after_abort() {
+        use std::io::Write;
+        use std::net::TcpListener;
+
+        let directory = Scratch::new("windows-descendant");
+        let ready = directory.path().join("ready");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut started = [0];
+            stream.read_exact(&mut started).unwrap();
+            tx.send(stream.try_clone().unwrap()).unwrap();
+            stream.write_all(&[1]).unwrap();
+        });
+        let powershell = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let script = r#"
+$child = @'
+$client = [Net.Sockets.TcpClient]::new('127.0.0.1', [int]$env:CRAFT_TEST_ORACLE_PORT)
+$stream = $client.GetStream()
+$stream.WriteByte(1)
+$null = $stream.ReadByte()
+[IO.File]::WriteAllText($env:CRAFT_TEST_ORACLE_READY, 'ready')
+$null = $stream.ReadByte()
+'@
+$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($child))
+$info = [Diagnostics.ProcessStartInfo]::new()
+$info.FileName = $env:CRAFT_TEST_ORACLE_POWERSHELL
+$info.Arguments = '-NoLogo -NoProfile -NonInteractive -EncodedCommand ' + $encoded
+$info.UseShellExecute = $false
+$null = [Diagnostics.Process]::Start($info)
+while (-not [IO.File]::Exists($env:CRAFT_TEST_ORACLE_READY)) { [Threading.Thread]::Yield() | Out-Null }
+$output = [Console]::OpenStandardOutput()
+$bytes = [byte[]]::new(8192)
+$output.Write($bytes, 0, $bytes.Length)
+$output.Flush()
+"#;
+        let mut command = Command::new(&powershell);
+        command.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script]);
+        command.env("CRAFT_TEST_ORACLE_PORT", port.to_string());
+        command.env("CRAFT_TEST_ORACLE_READY", &ready);
+        command.env("CRAFT_TEST_ORACLE_POWERSHELL", &powershell);
+        let mut seen = Observed::default();
+        let limits = ProbeLimits { max_output_bytes: 1024, ..ProbeLimits::default() };
+        let got = run_bounded(command, &powershell, limits, &mut seen);
+        let mut held = rx.try_recv().expect("the descendant connected before the output limit");
+        let _ = held.write_all(&[1]);
+        drop(held);
+        assert!(matches!(got, Err(OracleError::OutputLimit { .. })), "{got:?}");
+        assert!(seen.pipes_closed, "a descendant kept the output pipe readers blocked after abort");
     }
 
     /// A process the child started in the background keeps standard error open. Killing the child's
