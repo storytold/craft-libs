@@ -203,8 +203,8 @@ fn an_open_menu_keeps_the_clicked_cell_when_that_row_changes() {
     assert!(menu.iter().all(|cell| *cell == GlyphCell::Char(FIRST)), "the row's new glyph does not take the menu: {menu:?}");
 }
 
-/// Unencoded glyphs 1 to 300 in every face: the same id names another glyph in another face. Its revision is the
-/// shared counter, so a test can replace the faces under the same names.
+/// Unencoded glyphs 1 to 300 in every face and at every revision: the same id names another glyph in another face,
+/// or in a face the source replaced under the same names.
 struct Unencoded(Arc<AtomicU64>);
 
 impl GlyphSource for Unencoded {
@@ -221,67 +221,73 @@ impl GlyphSource for Unencoded {
     }
 }
 
-/// The host's family and the source's revision, which a test changes between passes, and the cells the panel
-/// reported a menu for.
-struct OpenMenu {
+/// A host menu open on glyph 1 of an [`Unencoded`] source, with the family and the revision the test can change.
+struct GlyphMenu {
     fx: Fixture,
     family: Rc<RefCell<String>>,
     revision: Arc<AtomicU64>,
     seen: Rc<RefCell<Vec<GlyphCell>>>,
 }
 
-/// A panel over [`Unencoded`] whose host hangs a menu from every menu it reports, with that menu opened on glyph 1.
-fn open_menu_on_glyph_1() -> OpenMenu {
-    let family = Rc::new(RefCell::new("Plain".to_owned()));
-    let revision = Arc::new(AtomicU64::new(0));
-    let seen = Rc::new(RefCell::new(Vec::<GlyphCell>::new()));
-    let (host_family, source, shown) = (Rc::clone(&family), Unencoded(Arc::clone(&revision)), Rc::clone(&seen));
-    let (mut style, mut settings) = ("Regular".to_owned(), GlyphsPanelSettings::default());
-    let mut fx = Fixture::new(move |ui| {
-        let out = {
-            let mut family = host_family.borrow_mut();
-            GlyphsPanel::new("Glyphs", &source, Bind::bound(&mut *family), Bind::bound(&mut style), Bind::bound(&mut settings))
-                .can_insert(true)
-                .show(ui)
-        };
-        if let Some(menu) = out.menu {
-            shown.borrow_mut().push(menu.cell);
-            Menu::context("Glyph", &menu.opener).show(ui, |ui, _| {
-                MenuItem::new("Insert Glyph").show(ui);
-            });
-        }
-    });
-    fx.in_room(Room::Window);
-    fx.settle();
-    let cell = fx.by_label("1, glyph 1").expect("the first glyph");
-    let at = cell.center();
-    fx.frame(vec![pointer::moved(at), pointer::secondary(at, true)]);
-    fx.frame(vec![pointer::secondary(at, false)]);
-    fx.settle();
-    assert!(seen.borrow().contains(&GlyphCell::Glyph(1)), "the click names the glyph");
-    seen.borrow_mut().clear();
-    OpenMenu { fx, family, revision, seen }
+impl GlyphMenu {
+    fn open() -> Self {
+        let revision = Arc::new(AtomicU64::new(0));
+        let source = Unencoded(Arc::clone(&revision));
+        let family = Rc::new(RefCell::new("Plain".to_owned()));
+        let host_family = Rc::clone(&family);
+        let seen = Rc::new(RefCell::new(Vec::<GlyphCell>::new()));
+        let shown = Rc::clone(&seen);
+        let (mut style, mut settings) = ("Regular".to_owned(), GlyphsPanelSettings::default());
+        let mut fx = Fixture::new(move |ui| {
+            let out = {
+                let mut family = host_family.borrow_mut();
+                GlyphsPanel::new("Glyphs", &source, Bind::bound(&mut *family), Bind::bound(&mut style), Bind::bound(&mut settings))
+                    .can_insert(true)
+                    .show(ui)
+            };
+            if let Some(menu) = out.menu {
+                shown.borrow_mut().push(menu.cell);
+                Menu::context("Glyph", &menu.opener).show(ui, |ui, _| {
+                    MenuItem::new("Insert Glyph").show(ui);
+                });
+            }
+        });
+        fx.in_room(Room::Window);
+        fx.settle();
+        let cell = fx.by_label("1, glyph 1").expect("the first glyph");
+        let at = cell.center();
+        fx.frame(vec![pointer::moved(at), pointer::secondary(at, true)]);
+        fx.frame(vec![pointer::secondary(at, false)]);
+        fx.settle();
+        assert!(seen.borrow().contains(&GlyphCell::Glyph(1)), "the click names the glyph");
+        seen.borrow_mut().clear();
+        GlyphMenu { fx, family, revision, seen }
+    }
+
+    /// The cells the menu reported over the next passes.
+    fn reported(&mut self) -> Vec<GlyphCell> {
+        self.fx.frame(Vec::new());
+        self.fx.settle();
+        self.seen.borrow().clone()
+    }
 }
 
 #[trial]
 fn an_open_menu_does_not_report_a_glyph_id_from_another_face() {
-    let mut open = open_menu_on_glyph_1();
+    let mut open = GlyphMenu::open();
     *open.family.borrow_mut() = "Other".to_owned();
-    open.fx.frame(Vec::new());
-    open.fx.settle();
-    let menu = open.seen.borrow().clone();
+    let menu = open.reported();
     assert!(menu.is_empty(), "the clicked id names another glyph in the new face, so the menu reports none: {menu:?}");
 }
 
 #[trial]
-fn an_open_menu_does_not_report_a_glyph_id_from_a_replaced_face() {
-    let mut open = open_menu_on_glyph_1();
-    open.revision.fetch_add(1, Ordering::Relaxed);
-    open.fx.frame(Vec::new());
-    open.fx.settle();
-    let menu = open.seen.borrow().clone();
-    assert!(menu.is_empty(), "the same names and ids at a new revision may be another face, so the menu reports none: {menu:?}");
+fn an_open_menu_does_not_report_a_glyph_id_after_the_source_replaces_the_face() {
+    let mut open = GlyphMenu::open();
+    open.revision.store(1, Ordering::Relaxed);
+    let menu = open.reported();
+    assert!(menu.is_empty(), "the face behind the same names changed, so the clicked id names another glyph: {menu:?}");
 }
+
 #[trial]
 fn glyphs_panel_alternates() {
     let (mut fx, _seen) = rig();
