@@ -39,6 +39,86 @@ fn basic_reader() {
 }
 
 #[test]
+fn rtl_paragraphs_read_and_write_their_direction() {
+    // Word writes an RTL paragraph as `\rtlpar` (`\ltrpar` for LTR); reading it keeps the
+    // direction as w:bidi on the document paragraph, and export writes it back.
+    let rtf = br#"{\rtf1\ansi\pard\rtlpar RTL\par\pard\ltrpar LTR\par\pard plain\par}"#;
+    let flow = parse(rtf).unwrap();
+    let paras: Vec<&Para> = flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+    assert!(paras[0].rtl, "rtlpar sets the direction");
+    assert!(!paras[1].rtl && !paras[2].rtl, "ltrpar and no word: not RTL");
+    // \rtldir and \ltrdir, which some writers used for paragraphs, are read too.
+    let old = parse(br#"{\rtf1\ansi\pard\rtldir RTL\par\pard\ltrdir LTR\par}"#).unwrap();
+    let old: Vec<&Para> = old.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+    assert!(old[0].rtl && !old[1].rtl, "rtldir and ltrdir are read");
+    // \pard resets the direction.
+    let reset = parse(br#"{\rtf1\ansi\pard\rtlpar A\par\pard B\par}"#).unwrap();
+    let reset: Vec<&Para> = reset.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+    assert!(reset[0].rtl && !reset[1].rtl, "pard resets the direction");
+    // Import keeps it as bidi on the document paragraph.
+    let bidi = |d: &Document| {
+        d.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.props.bidi.unwrap_or(false)) } else { None }).collect::<Vec<_>>()
+    };
+    let doc = import(rtf).unwrap();
+    assert_eq!(bidi(&doc), [true, false, false]);
+    // Export writes \rtlpar once, and not the \rtldir.
+    let out = export(&doc);
+    assert_eq!(out.matches("\\rtlpar").count(), 1, "{out}");
+    assert!(!out.contains("rtldir"), "{out}");
+    assert_eq!(bidi(&import(out.as_bytes()).unwrap()), [true, false, false]);
+}
+
+#[test]
+fn rtl_paragraph_styles_carry_their_direction() {
+    // Word often writes the direction in the style: `{\s1\rtlpar RTL;}` then `\pard\s1`.
+    let rtf = br#"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s1\rtlpar RTL;}{\s2\sbasedon1 Child;}{\s3\sbasedon1\ltrpar Back;}}
+\pard\s1 A\par\pard\s2 B\par\pard\s3 C\par\pard\s1\ltrpar D\par\pard\s0\rtlpar E\par\pard F\par}"#;
+    let flow = parse(rtf).unwrap();
+    let rtl: Vec<bool> = flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.rtl) } else { None }).collect();
+    // A: style. B: inherited from the base style. C: the style overrides its base. D: direct
+    // \ltrpar beats the style. E: direct \rtlpar on Normal. F: \pard drops direct formatting.
+    assert_eq!(rtl, [true, true, false, false, true, false]);
+}
+
+#[test]
+fn oldpprops_keep_the_old_paragraph_direction() {
+    // A tracked change of direction: now LTR, before RTL (`\rtlpar` in the old properties).
+    let rtf = br"{\rtf1\ansi{\*\revtbl {Unknown;}{Alice;}}
+\pard\ltrpar\prauth1\prdate-2014675576{\*\oldpprops \pard \rtlpar}A\par}";
+    let flow = parse(rtf).unwrap();
+    let Some(FBlock::Para(p)) = flow.blocks.first() else { panic!("no paragraph") };
+    assert!(!p.rtl);
+    assert!(p.fmt_change.as_deref().expect("paragraph change").old.rtl, "old direction is RTL");
+    let doc = import(rtf).unwrap();
+    let c = doc_paras(&doc)[0].props.fmt_change.as_deref().expect("change");
+    assert_eq!(c.old.bidi, Some(true));
+}
+
+#[test]
+fn tracked_rtl_to_ltr_change_from_a_document_keeps_the_old_direction() {
+    use craft_wordmodel::props::{CharProps, ParaProps, PropChange};
+    use craft_wordmodel::{Revision, RevisionKind};
+    // Document origin (not RTF): now LTR, before RTL.
+    let mut p = craft_wordmodel::Paragraph::with_text("A", CharProps::default());
+    p.props.bidi = Some(false);
+    p.props.fmt_change = PropChange::boxed(0, ParaProps { bidi: Some(true), ..Default::default() });
+    let doc = doc_with(vec![p], vec![Revision::new(RevisionKind::Format, "Bob", "2025-01-02T08:05:00Z")]);
+    let flow = model::from_doc_tracked(&doc);
+    let Some(FBlock::Para(fp)) = flow.blocks.first() else { panic!("no paragraph") };
+    assert!(!fp.rtl);
+    assert!(fp.fmt_change.as_deref().expect("change").old.rtl, "snapshot keeps RTL");
+    let rtf = export(&doc);
+    assert!(rtf.contains("{\\*\\oldpprops"), "{rtf}");
+    let back = import(rtf.as_bytes()).unwrap();
+    let p = doc_paras(&back)[0];
+    assert_ne!(p.props.bidi, Some(true), "current direction is LTR");
+    let change = p.props.fmt_change.as_deref().expect("change read back");
+    assert_eq!(change.old.bidi, Some(true));
+    // Reject restores RTL.
+    assert_eq!(change.old.formatting().bidi, Some(true));
+}
+
+#[test]
 fn stylesheet_names_take_unicode_escapes() {
     // \u116?=t \u105?=i \u116?=t \u108?=l \u101?=e — how Word writes a non-Latin style name.
     let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \u116?\u105?\u116?\u108?\u101?;}}\pard\s2 T\par}";
@@ -310,6 +390,26 @@ fn page_size_and_margins() {
 }
 
 #[test]
+fn narrow_grid_columns_keep_their_width() {
+    // Rows' edges a few points apart, as in a form exported from a spreadsheet. The table stays as
+    // wide as its source, through an export and back too.
+    let rtf = br"{\rtf1\ansi
+\trowd\cellx400\cellx800 \pard\intbl a\cell b\cell\row
+\trowd\cellx80\cellx480\cellx800 \pard\intbl c\cell d\cell e\cell\row
+\pard after\par}";
+    let table = |doc: &Document| match doc.body.iter().find_map(|b| if let craft_wordmodel::Block::Table(t) = &**b { Some(t.clone()) } else { None })
+    {
+        Some(t) => t,
+        None => panic!("no table"),
+    };
+    let doc = import(rtf).unwrap();
+    let t = table(&doc);
+    assert_eq!(t.grid, [4.0, 16.0, 4.0, 16.0]);
+    assert_eq!(t.rows[0].cells.iter().map(|c| c.props.width).collect::<Vec<_>>(), [Some(20.0), Some(20.0)]);
+    assert_eq!(table(&import(export(&doc).as_bytes()).unwrap()).grid, t.grid);
+}
+
+#[test]
 fn table_grid_from_cell_edges_and_borders() {
     // Rows whose cells don't line up share one grid: edges 2000, 3000, 9000.
     let rtf = br"{\rtf1\ansi
@@ -378,6 +478,141 @@ fn table_grid_from_cell_edges_and_borders() {
     let d = import(br"{\rtf1\ansi\paperw11906\margl1134\margr1134\trowd\cellx4818\cellx9638\pard\intbl a\cell b\cell\row}").unwrap();
     let t = d.body.iter().find_map(|b| if let craft_wordmodel::Block::Table(t) = &**b { Some(t) } else { None }).unwrap();
     assert_eq!(t.grid, [240.9, 241.0]);
+}
+
+/// The table of `rtf`'s flow and every row's column spans; checks the spans fit the grid.
+fn grid_of(rtf: &[u8]) -> (Vec<f32>, Vec<Vec<u32>>) {
+    let f = parse(rtf).unwrap();
+    let FBlock::Table(t) = &f.blocks[0] else { panic!("no table") };
+    let spans: Vec<Vec<u32>> = t.rows.iter().map(|r| r.iter().map(|c| c.colspan).collect()).collect();
+    assert!(!t.widths.is_empty(), "the table kept no grid");
+    assert_eq!(t.cols(), t.widths.len(), "spans {spans:?} don't fit {} grid columns", t.widths.len());
+    assert!(t.widths.iter().all(|&w| w > 1.0), "a grid column under a point: {:?}", t.widths);
+    (t.widths.clone(), spans)
+}
+
+/// Width in points of the first `n` grid columns.
+fn first_cols(widths: &[f32], n: u32) -> f32 {
+    widths.iter().take(n as usize).sum()
+}
+
+#[test]
+fn table_grid_survives_more_than_63_edges() {
+    // A form exported from a spreadsheet: a wide title over rows whose middle edge moves by
+    // 100 twips, 80 distinct edges in all. The grid used to be dropped, giving equal columns.
+    let mut rtf = String::from(r"{\rtf1\ansi\trowd\cellx6000\cellx8000\pard\intbl Title\cell Codes\cell\row");
+    for k in 1..80 {
+        rtf.push_str(&format!(r"\trowd\cellx{}\cellx8000\pard\intbl a\cell b\cell\row", k * 100));
+    }
+    rtf.push_str(r"\pard\par}");
+    let (widths, spans) = grid_of(rtf.as_bytes());
+    assert!(widths.len() <= 63, "{} grid columns", widths.len());
+    assert!((widths.iter().sum::<f32>() - 400.0).abs() < 0.01, "the table keeps its 400 pt");
+    // The title keeps its 300 pt, within a grid column's merge.
+    let title = first_cols(&widths, spans[0][0]);
+    assert!((title - 300.0).abs() <= 5.0, "title {title} pt");
+    // The staircase still climbs: the 60th row's first cell is about 300 pt wide too.
+    assert!((first_cols(&widths, spans[60][0]) - 300.0).abs() <= 5.0);
+
+    // The same through import: the document table has the grid, not equal columns.
+    let d = import(rtf.as_bytes()).unwrap();
+    let t = d.body.iter().find_map(|b| if let craft_wordmodel::Block::Table(t) = &**b { Some(t) } else { None }).unwrap();
+    assert_eq!(t.grid.len(), widths.len());
+    let w = t.rows[0].cells[0].props.width.unwrap();
+    assert!((w - 300.0).abs() <= 5.0, "title cell {w} pt");
+}
+
+#[test]
+fn table_grid_survives_a_zero_width_cell_and_a_missing_cellx() {
+    // A zero-width cell (two edges at 3000) in one row: the other rows keep their grid.
+    let (widths, spans) = grid_of(
+        br"{\rtf1\ansi
+\trowd\cellx6000\cellx9000 \pard\intbl Title\cell b\cell\row
+\trowd\cellx2000\cellx2000\cellx9000 \pard\intbl a\cell\cell c\cell\row
+\pard\par}",
+    );
+    assert_eq!(first_cols(&widths, spans[0][0]), 300.0);
+    assert_eq!(spans[1].len(), 3, "the zero-width cell is kept: {spans:?}");
+    assert_eq!(first_cols(&widths, spans[1][0]), 100.0, "the cell before it keeps its width");
+
+    // A row with a third cell but only two `\cellx`.
+    let (widths, spans) = grid_of(
+        br"{\rtf1\ansi
+\trowd\cellx6000\cellx9000 \pard\intbl Title\cell b\cell\row
+\trowd\cellx2000\cellx6000 \pard\intbl a\cell b\cell extra\cell\row
+\pard\par}",
+    );
+    assert_eq!(first_cols(&widths, spans[0][0]), 300.0);
+    assert_eq!(spans[1].len(), 3);
+    assert_eq!(first_cols(&widths, spans[1][0]), 100.0);
+}
+
+#[test]
+fn table_grid_merges_edges_a_few_twips_apart() {
+    // Two rows that mean the same 3000-twip edge, 5 twips apart: one grid column, not one of
+    // a quarter point (which the document model refuses, so the table got equal columns).
+    let (widths, spans) = grid_of(
+        br"{\rtf1\ansi
+\trowd\cellx3000\cellx9000 \pard\intbl a\cell b\cell\row
+\trowd\cellx3005\cellx9000 \pard\intbl c\cell d\cell\row
+\pard\par}",
+    );
+    assert_eq!(widths.len(), 2, "{widths:?}");
+    assert_eq!(spans, [[1, 1], [1, 1]]);
+    assert_eq!(widths.iter().sum::<f32>(), 450.0);
+}
+
+/// `edges` as one table row, a cell for each.
+fn rtf_row(edges: &[usize]) -> String {
+    let cells: String = edges.iter().map(|e| format!(r"\cellx{e}")).collect();
+    format!(r"\trowd{cells}\pard\intbl {}\row", r"x\cell ".repeat(edges.len()))
+}
+
+#[test]
+fn table_grid_keeps_a_column_for_each_cell_of_the_widest_row() {
+    // 64 evenly spaced edges: merging by a common gap halves them to 32 columns, too few for a
+    // row of 33 or more cells, and the table lost its grid.
+    let edges: Vec<usize> = (1..=64).map(|k| k * 100).collect();
+    for cells in [33, 40, 50, 62] {
+        let wide: Vec<usize> = edges.iter().copied().take(cells).chain([6400]).collect();
+        let rest: Vec<usize> = edges.iter().copied().skip(cells - 1).collect();
+        let rtf = format!(r"{{\rtf1\ansi {}{}\pard\par}}", rtf_row(&wide), rtf_row(&rest));
+        let (widths, spans) = grid_of(rtf.as_bytes());
+        assert!((cells + 1..=63).contains(&widths.len()), "{cells} cells, {} grid columns", widths.len());
+        assert_eq!(spans[0].len(), cells + 1, "every cell is kept");
+        assert_eq!(widths.iter().sum::<f32>(), 320.0, "the table keeps its 320 pt");
+    }
+}
+
+#[test]
+fn table_grid_keeps_narrow_columns_at_their_width() {
+    // Columns under 6 pt that no row needs keep their 3 pt: import no longer widens them, so the
+    // table keeps its 60 pt.
+    let mut rtf = String::from(r"{\rtf1\ansi ");
+    for k in 1..=20 {
+        rtf.push_str(&rtf_row(&[k * 60, 1200]));
+    }
+    rtf.push_str(r"\pard\par}");
+    let (widths, _) = grid_of(rtf.as_bytes());
+    assert_eq!(widths, [3.0; 20], "{widths:?}");
+    let d = import(rtf.as_bytes()).unwrap();
+    let t = d.body.iter().find_map(|b| if let craft_wordmodel::Block::Table(t) = &**b { Some(t) } else { None }).unwrap();
+    assert_eq!(t.grid.iter().sum::<f32>(), 60.0, "{:?}", t.grid);
+
+    // A row that needs them keeps them, narrow as they are.
+    let (widths, spans) = grid_of(format!(r"{{\rtf1\ansi {}\pard\par}}", rtf_row(&[60, 120, 180])).as_bytes());
+    assert_eq!(widths, [3.0, 3.0, 3.0]);
+    assert_eq!(spans, [[1, 1, 1]]);
+}
+
+#[test]
+fn table_grid_never_keeps_a_column_the_document_model_refuses() {
+    // Three cells within a point of each other: too narrow to keep even for a row that needs
+    // them. The row can't fit, so the table has no grid, and nothing panics.
+    let f = parse(format!(r"{{\rtf1\ansi {}\pard\par}}", rtf_row(&[5, 10, 15])).as_bytes()).unwrap();
+    let FBlock::Table(t) = &f.blocks[0] else { panic!("no table") };
+    assert!(t.widths.is_empty(), "{:?}", t.widths);
+    assert_eq!(t.rows[0].len(), 3);
 }
 
 #[test]
@@ -1862,4 +2097,341 @@ fn compound_borders_round_trip() {
     assert_eq!(tops(&d), want);
     let back = import(export(&d).as_bytes()).unwrap();
     assert_eq!(tops(&back), want);
+}
+
+/// storytold/wordcraft#5764: a DOCX cell border of width 0 (`w:sz="0"`, or no `w:sz`) is a line
+/// Word draws without giving it room. RTF has no such border, so it is written at the thinnest
+/// line rather than dropped.
+#[test]
+fn a_width_0_cell_border_exports_as_the_thinnest_line() {
+    let mut d = import(br"{\rtf1\ansi\trowd\clbrdrb\brdrs\cellx2000\pard\intbl a\cell\row}").unwrap();
+    for b in d.body.iter_mut() {
+        if let craft_wordmodel::Block::Table(t) = std::sync::Arc::make_mut(b)
+            && let Some(bd) = t.rows[0].cells[0].props.borders.as_mut()
+            && let Some(bottom) = bd.bottom.as_mut()
+        {
+            bottom.width = 0.0;
+        }
+    }
+    let exported = export(&d);
+    let twips = (craft_wordmodel::props::Border::THINNEST * 20.0).round() as i64;
+    assert!(exported.contains(&format!(r"\clbrdrb\brdrs\brdrw{twips}")), "{exported}");
+}
+
+fn para_aligns(flow: &Flow) -> Vec<(bool, Option<Align>)> {
+    flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some((p.rtl, p.align)) } else { None }).collect()
+}
+
+#[test]
+fn alignment_words_after_rtlpar_mean_start_and_end() {
+    // Word reads `\ql`/`\qr` that follow `\rtlpar` as start/end (the model's alignment is
+    // logical), so `\rtlpar\qr` sits at the right edge and `\rtlpar\ql` at the left edge.
+    // Words written before `\rtlpar` keep their plain meaning (checked in Word by saving to DOCX:
+    // `\qr\rtlpar` gives jc=right, i.e. end, in the bidi paragraph; `\ql\rtlpar` gives no jc).
+    let rtf = br#"{\rtf1\ansi\deff0{\fonttbl{\f0 Arial;}}\pard LTR one.\par \pard\rtlpar\qr A.\par \pard\rtlpar B.\par \pard\ltrpar Back.\par \pard\rtlpar\ql C.\par \pard\rtlpar\qc D.\par \pard\ql\rtlpar E.\par \pard\qr\rtlpar F.\par \pard\rtlpar\ltrpar\qr G.\par}"#;
+    let got = para_aligns(&parse(rtf).unwrap());
+    assert_eq!(
+        got,
+        [
+            (false, None),
+            (true, Some(Align::Left)),
+            (true, None),
+            (false, None),
+            (true, Some(Align::Right)),
+            (true, Some(Align::Center)),
+            (true, Some(Align::Left)),
+            (true, Some(Align::Right)),
+            (false, Some(Align::Right)),
+        ]
+    );
+}
+
+#[test]
+fn alignment_survives_an_export_import_round_trip() {
+    let rtf = br#"{\rtf1\ansi\pard\ql L.\par \pard\qr R.\par \pard\qc C.\par \pard\rtlpar\qr start.\par \pard\rtlpar\ql end.\par \pard\rtlpar\qc mid.\par \pard\rtlpar plain.\par}"#;
+    let first = para_aligns(&parse(rtf).unwrap());
+    let doc = import(rtf).unwrap();
+    let out = export(&doc);
+    let second = para_aligns(&parse(out.as_bytes()).unwrap());
+    let norm = |v: Vec<(bool, Option<Align>)>| v.into_iter().map(|(r, a)| (r, a.filter(|a| *a != Align::Left))).collect::<Vec<_>>();
+    assert_eq!(norm(first), norm(second.clone()), "{out}");
+    // `\rtlpar\qr` is start (no explicit alignment in the model) and `\rtlpar\ql` is end.
+    assert_eq!(norm(second)[3..5], [(true, None), (true, Some(Align::Right))], "{out}");
+    // The export writes the alignment before the direction, which Word reads as logical start/end.
+    assert!(out.contains("\\qr\\rtlpar"), "{out}");
+}
+
+/// `export` names WordCraft as the writer; an app embedding the writer names itself, escaped as
+/// a font name is (a `;` would end the group's text early), and a blank name leaves the group out.
+#[test]
+fn the_generator_names_the_writing_application() {
+    let doc = craft_wordmodel::Document::from_text("Hello");
+    assert!(export(&doc).contains(r"{\*\generator WordCraft;}"));
+    let pdf = export_with_generator(&doc, "PdfCraft 1.2");
+    assert!(pdf.contains(r"{\*\generator PdfCraft 1.2;}") && !pdf.contains("WordCraft"), "{pdf}");
+    let odd = export_with_generator(&doc, "A;B}\u{1}C\\");
+    assert!(odd.contains(r"{\*\generator A\'3bB\}C\\;}"), "{odd}");
+    for blank in ["", "  ", "\u{1}"] {
+        assert!(!export_with_generator(&doc, blank).contains("generator"), "{blank:?}");
+    }
+    let long = export_with_generator(&doc, &"x".repeat(1000));
+    assert!(long.contains(&format!(r"{{\*\generator {};}}", "x".repeat(255))), "cut at 255 characters");
+    // Whatever the name, the text reads back.
+    let back = parse(odd.as_bytes()).expect("parses");
+    assert_eq!(texts(&back), ["Normal:Hello"]);
+}
+
+/// The list paragraphs of `rtf`: their text and list info.
+fn list_paras(rtf: &[u8]) -> Vec<(String, ListInfo)> {
+    let f = parse(rtf).unwrap();
+    f.blocks
+        .iter()
+        .filter_map(|b| match b {
+            FBlock::Para(p) => p.list.map(|li| (p.text(), li)),
+            FBlock::Table(_) => None,
+        })
+        .collect()
+}
+
+/// #2085: each RTF list level keeps its number format, the number of its first item and its level
+/// text: c), d) from a lower-letter level starting at 3, (i) from a lower-roman level in
+/// parentheses, 7. from a decimal level starting at 7.
+#[test]
+fn list_levels_keep_their_number_format_start_and_level_text() {
+    use craft_wordmodel::section::NumFormat;
+    let rtf = br#"{\rtf1\ansi
+{\*\listtable
+{\list\listtemplateid1{\listlevel\levelnfc4\levelnfcn4\levelstartat3{\leveltext\'02\'00);}{\levelnumbers\'01;}}\listid1}
+{\list\listtemplateid2{\listlevel\levelnfc2\levelnfcn2\levelstartat1{\leveltext\'03(\'00);}{\levelnumbers\'02;}}\listid2}
+{\list\listtemplateid3{\listlevel\levelnfc0\levelnfcn0\levelstartat7{\leveltext\'02\'00.;}{\levelnumbers\'01;}}\listid3}
+}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}{\listoverride\listid2\listoverridecount0\ls2}{\listoverride\listid3\listoverridecount0\ls3}}
+\pard\ls1\ilvl0 letter from c\par
+\pard\ls1\ilvl0 next letter\par
+\pard\plain plain\par
+\pard\ls2\ilvl0 roman in parens\par
+\pard\plain plain\par
+\pard\ls3\ilvl0 decimal from 7\par
+}"#;
+    let got: Vec<(String, u32, Option<model::Label>)> = list_paras(rtf).into_iter().map(|(t, li)| (t, li.start, li.label)).collect();
+    let label = |f, t| Some(model::Label::of_level(f, t));
+    assert_eq!(
+        got,
+        [
+            ("letter from c".to_owned(), 3, label(NumFormat::LowerLetter, "%1)")),
+            ("next letter".to_owned(), 3, label(NumFormat::LowerLetter, "%1)")),
+            ("roman in parens".to_owned(), 1, label(NumFormat::LowerRoman, "(%1)")),
+            ("decimal from 7".to_owned(), 7, label(NumFormat::Decimal, "%1.")),
+        ]
+    );
+    let shown: Vec<String> = got.iter().filter_map(|(_, _, l)| l.map(|l| l.text(0))).collect();
+    assert_eq!(shown, ["%1)", "%1)", "(%1)", "%1."]);
+}
+
+/// A list's deeper levels keep theirs too: a level showing the numbers above it (`%1.%2.`), an
+/// upper-letter level starting at B, and a bullet level whose bullet is a `\u` character.
+#[test]
+fn deeper_list_levels_keep_their_own_format_start_and_text() {
+    use craft_wordmodel::section::NumFormat;
+    let rtf = br#"{\rtf1\ansi
+{\*\listtable
+{\list\listtemplateid9
+{\listlevel\levelnfc0\levelnfcn0\levelstartat1{\leveltext\'02\'00.;}{\levelnumbers\'01;}}
+{\listlevel\levelnfc0\levelnfcn0\levelstartat1{\leveltext\'04\'00.\'01.;}{\levelnumbers\'01\'03;}}
+{\listlevel\levelnfc3\levelnfcn3\levelstartat2{\leveltext\'02\'02);}{\levelnumbers\'01;}}
+{\listlevel\levelnfc23\levelnfcn23\levelstartat1{\leveltext\'01\u8226 ?;}{\levelnumbers;}}
+\listid9}}
+{\*\listoverridetable{\listoverride\listid9\listoverridecount0\ls1}}
+\pard\ls1\ilvl0 one\par
+\pard\ls1\ilvl1 one one\par
+\pard\ls1\ilvl2 letter\par
+\pard\ls1\ilvl3 bullet\par
+}"#;
+    let got: Vec<(String, bool, u8, u32, Option<model::Label>)> =
+        list_paras(rtf).into_iter().map(|(t, li)| (t, li.ordered, li.level, li.start, li.label)).collect();
+    let label = |f, t| Some(model::Label::of_level(f, t));
+    assert_eq!(
+        got,
+        [
+            ("one".to_owned(), true, 0, 1, label(NumFormat::Decimal, "%1.")),
+            ("one one".to_owned(), true, 1, 1, label(NumFormat::Decimal, "%1.%2.")),
+            ("letter".to_owned(), true, 2, 2, label(NumFormat::UpperLetter, "%3)")),
+            ("bullet".to_owned(), false, 3, 1, Some(model::Label::bulleted(Some('•')))),
+        ]
+    );
+}
+
+/// A list table without level text or start numbers reads as it always did: numbered or not,
+/// starting at 1, with no label of its own; a paragraph of an unknown list is unnumbered.
+#[test]
+fn a_list_level_without_level_text_or_start_keeps_its_old_reading() {
+    let rtf = br#"{\rtf1\ansi
+{\*\listtable{\list\listtemplateid1{\listlevel\levelnfc0}{\listlevel\levelnfc23}\listid1}}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}}
+\pard\ls1\ilvl0 numbered\par
+\pard\ls1\ilvl1 bulleted\par
+\pard\ls2\ilvl0 unknown list\par
+}"#;
+    let got = list_paras(rtf);
+    assert_eq!(
+        got,
+        [
+            ("numbered".to_owned(), ListInfo { ordered: true, level: 0, start: 1, ..Default::default() }),
+            ("bulleted".to_owned(), ListInfo { ordered: false, level: 1, start: 1, ..Default::default() }),
+            ("unknown list".to_owned(), ListInfo { ordered: false, level: 0, start: 1, ..Default::default() }),
+        ]
+    );
+}
+
+/// Hostile list tables read without a panic and within bounds: a level text whose length runs
+/// past its characters, a length of 255 with a long text, out-of-range start numbers and number
+/// format codes, and a level text outside any level.
+#[test]
+fn hostile_list_levels_read_within_bounds() {
+    let long = "x".repeat(10_000);
+    let rtf = format!(
+        r#"{{\rtf1\ansi
+{{\*\listtable{{\list{{\leveltext\'05\'00;}}{{\listlevel\levelnfc9999\levelstartat-5{{\leveltext\'09\'00);}}}}{{\listlevel\levelnfc-3\levelstartat2147483647{{\leveltext\'ff{long};}}}}\listid1}}}}
+{{\*\listoverridetable{{\listoverride\listid1\listoverridecount0\ls1}}}}
+\pard\ls1\ilvl0 a\par
+\pard\ls1\ilvl1 b\par
+}}"#
+    );
+    let got = list_paras(rtf.as_bytes());
+    assert_eq!(got.len(), 2);
+    let (a, b) = (&got[0].1, &got[1].1);
+    assert_eq!((a.ordered, a.start), (true, 0), "a start below 0 is held to 0");
+    assert_eq!(a.label.map(|l| l.text(0)), Some("%1)".to_owned()), "a length past the text takes what is there");
+    assert_eq!(b.start, 32_767, "a start past Word's range is held to it");
+    let text = b.label.map(|l| l.text(1)).unwrap_or_default();
+    assert!(text.chars().count() <= 255, "the level text is at most its length: {}", text.chars().count());
+}
+
+/// Original RTF: only the previous paragraph properties carry spacing and borders.
+fn prior_layout_document(words: &str) -> Document {
+    let rtf = format!(
+        r"{{\rtf1\ansi{{\colortbl;\red17\green89\blue203;}}{{\*\revtbl{{Unknown;}}{{Alice;}}}}
+\pard\qc\prauth1\prdate-2014675576{{\*\oldpprops\pard\ql{words}}}Changed\par\pard\ql Neighbor\par}}"
+    );
+    import(rtf.as_bytes()).unwrap()
+}
+
+fn prior_props(doc: &Document) -> &craft_wordmodel::props::ParaProps {
+    &doc.body[0].as_para().unwrap().props.fmt_change.as_deref().unwrap().old
+}
+
+/// Every line-spacing rule, explicit zeros and a hanging indent survive repeated RTF saves.
+#[test]
+fn saving_keeps_prior_paragraph_spacing() {
+    use craft_wordmodel::props::LineSpacing;
+    for (words, line) in [
+        (r"\sb480\sa720\sl360\slmult1\li360\ri180\fi-80", LineSpacing::Multiple(1.5)),
+        (r"\sb0\sa0\sl-360\slmult0\li0\ri0\fi0", LineSpacing::Exactly(18.0)),
+        (r"\sb100\sa0\sl400\slmult0\li360\ri180\fi-80", LineSpacing::AtLeast(20.0)),
+    ] {
+        let mut doc = prior_layout_document(words);
+        let expected = prior_props(&doc).clone();
+        assert_eq!(expected.line_spacing, Some(line));
+        assert!(expected.space_before.is_some() && expected.space_after.is_some());
+        let revisions = doc.revisions.clone();
+        for _ in 0..2 {
+            doc = import(export(&doc).as_bytes()).unwrap();
+            let old = prior_props(&doc);
+            assert_eq!((old.space_before, old.space_after, old.line_spacing), (expected.space_before, expected.space_after, expected.line_spacing));
+            assert_eq!((old.indent_left, old.indent_right, old.indent_first), (expected.indent_left, expected.indent_right, expected.indent_first));
+            assert_eq!(doc.revisions, revisions);
+            let p = doc.body[0].as_para().unwrap();
+            assert_eq!(p.props.align, Some(Align::Center));
+            assert_eq!(p.props.space_before, None, "old properties must not become current properties");
+            assert_eq!(doc.body[1].as_para().unwrap().text, "Neighbor");
+        }
+    }
+}
+
+/// An explicit old minimum of zero survives saves without leaking through resets or groups.
+#[test]
+fn prior_zero_line_spacing_is_explicit_and_scoped() {
+    use craft_wordmodel::props::LineSpacing;
+    for (words, expected) in [
+        ("", None),
+        (r"\sl0", None),
+        (r"\slmult0", None),
+        (r"\sl0\slmult0", Some(LineSpacing::AtLeast(0.0))),
+        (r"\slmult0\sl0", Some(LineSpacing::AtLeast(0.0))),
+        (r"\sl0\slmult1", None),
+        (r"\sl0\slmult0\pard\ql\sl0", None),
+        (r"{\sl0\slmult0}\sl0", None),
+        (r"\sl0\slmult0{\slmult1}", Some(LineSpacing::AtLeast(0.0))),
+        (r"\sl300", Some(LineSpacing::AtLeast(15.0))),
+        (r"\sl360\slmult1", Some(LineSpacing::Multiple(1.5))),
+    ] {
+        let mut doc = prior_layout_document(words);
+        for _ in 0..3 {
+            assert_eq!(prior_props(&doc).line_spacing, expected, "{words}");
+            assert_eq!(doc.body[0].as_para().unwrap().props.line_spacing, None);
+            assert_eq!(doc.body[1].as_para().unwrap().props.line_spacing, None);
+            doc = import(export(&doc).as_bytes()).unwrap();
+        }
+    }
+}
+
+/// Imported old exact spacing below the supported minimum retains the exact rule on save.
+#[test]
+fn prior_exact_spacing_below_the_supported_minimum_keeps_its_rule() {
+    use craft_wordmodel::props::LineSpacing;
+    for value in [0.0, 0.01, 0.05, 0.65, 0.7] {
+        let mut doc = prior_layout_document("");
+        let craft_wordmodel::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) else { panic!("expected paragraph") };
+        p.props.fmt_change.as_deref_mut().unwrap().old.line_spacing = Some(LineSpacing::Exactly(value));
+        for _ in 0..2 {
+            doc = import(export(&doc).as_bytes()).unwrap();
+            assert_eq!(prior_props(&doc).line_spacing, Some(LineSpacing::Exactly(0.7)), "{value}");
+            assert_eq!(doc.body[0].as_para().unwrap().props.line_spacing, None);
+            assert_eq!(doc.body[1].as_para().unwrap().text, "Neighbor");
+        }
+    }
+}
+
+/// Prior visible borders stay inside oldpprops and retain their colour and geometry.
+#[test]
+fn saving_keeps_prior_paragraph_borders() {
+    let mut doc = prior_layout_document(r"\brdrt\brdrs\brdrw20\brdrcf1\brdrr\brdrdb\brdrw30\brdrcf1");
+    let expected = prior_props(&doc).borders;
+    let borders = expected.unwrap();
+    assert_eq!(borders.top.unwrap().color, Some(Rgb(17, 89, 203)));
+    assert_eq!(borders.top.unwrap().width, 1.0);
+    assert_eq!(borders.top.unwrap().space, 0.0);
+    assert!(borders.right.is_some());
+    for _ in 0..2 {
+        doc = import(export(&doc).as_bytes()).unwrap();
+        assert_eq!(prior_props(&doc).borders, expected);
+        assert_eq!(doc.body[0].as_para().unwrap().props.borders, None, "old borders stay out of the current paragraph");
+        assert_eq!(doc.body[1].as_para().unwrap().props.borders, None);
+    }
+}
+
+#[test]
+fn metadata_text_survives_nested_formatting_without_reading_other_destinations() {
+    let flow = parse(br"{\rtf1\ansi{\fonttbl{\f0 Arial;}}{\info{\title Before {\b bold {\i caf\u233?}}{\fonttbl{\f0 Wrong;}}{\*\bkmkstart hidden}{\pict\pngblip 00} After}{\author Author}}\f0 Body}").unwrap();
+    assert_eq!(flow.meta.title, "Before bold café After");
+    assert_eq!(flow.meta.author, "Author");
+    assert_eq!(texts(&flow), ["Normal:Body"]);
+    let FBlock::Para(body) = &flow.blocks[0] else { panic!("expected body text") };
+    assert!(matches!(&body.inlines[0], Inline::Text(_, fmt) if fmt.font.as_deref() == Some("Arial")));
+}
+
+#[test]
+fn metadata_creation_date_ignores_other_date_destinations() {
+    let flow = parse(br"{\rtf1\ansi{\info{\creatim\yr2026{\revtim\yr1999}{\b\mo11}\dy19}}Body}").unwrap();
+    assert_eq!(flow.meta.created, "2026-11-19T00:00:00Z");
+    assert_eq!(texts(&flow), ["Normal:Body"]);
+}
+
+#[test]
+fn metadata_text_controls_keep_punctuation_and_use_the_selected_font_code_page() {
+    let flow =
+        parse(br"{\rtf1\ansi{\fonttbl{\f0\fcharset0 Arial;}{\f1\fcharset204 Cyrillic;}}{\info{\title A\emdash {\f1 \'e0\plain \'e0}}}\f0 Body}")
+            .unwrap();
+    assert_eq!(flow.meta.title, "A—аà");
+    assert_eq!(texts(&flow), ["Normal:Body"]);
 }

@@ -20,6 +20,7 @@
 //! [`Embedded`] and call [`from_embedded`].
 
 pub mod camera_fields;
+pub mod compat_orientation;
 mod container;
 pub mod cr3;
 mod datetime;
@@ -39,7 +40,7 @@ mod xmp_merge;
 
 pub use container::{Embedded, JpegInspection, embedded, inspect_jpeg, jpeg_segments, jpeg_segments_with_all_xmp, png_chunks, webp_chunks};
 pub use datetime::{DatePrecision, DateTime};
-pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
+pub use exif::{from_tiff, ifd0_orientation_compat, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
 pub use focus::FocusPoint;
 pub use fuji::{FujiRecipe, FujiRow, might_hold_fuji_recipe, read_recipe_file, recipe_from_bytes, recipe_from_exif};
 pub use geom::{Orientation, Point, Rect};
@@ -357,7 +358,7 @@ pub fn from_embedded(e: &Embedded) -> Metadata {
 }
 
 /// The XMP of `e` read as one packet: the standard packet, with the Extended XMP it links to
-/// (`xmpNote:HasExtendedXMP`) merged in (see [`xmp::parse_xmp_pair`]). An error when the standard
+/// (`xmpNote:HasExtendedXMP`) merged in (see `xmp::parse_xmp_pair`). An error when the standard
 /// packet is not XMP, when its link is malformed, when the linked extension is missing or
 /// unreadable ([`Embedded::xmp_extended_error`]), or when there is an extension nothing links to:
 /// a caller that must see all of a file's metadata (to prove it carries no location, say) refuses

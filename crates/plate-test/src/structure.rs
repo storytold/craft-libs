@@ -20,6 +20,7 @@ use crate::Error;
 pub struct Summary {
     /// Every transparency group: pages first, then form XObjects and soft-mask groups.
     pub groups: Vec<Group>,
+    #[allow(missing_docs)]
     pub ext_g_states: Vec<ExtGState>,
     /// Color space families used for painting: resources, images, shadings and the device
     /// spaces set directly by content operators (`rg`, `k`, `g`, `cs /DeviceRGB`).
@@ -30,16 +31,22 @@ pub struct Summary {
     pub output_intents: Vec<String>,
 }
 
+/// One transparency group.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Group {
     /// `page 1`, `form` or `soft mask`.
     pub at: String,
+    /// The group's `/S` entry (the group subtype); empty when absent.
     pub s: String,
+    /// The group's `/CS` colour space family, when it has one.
     pub cs: Option<String>,
+    /// The group's `/I` flag: isolated; false when absent.
     pub i: bool,
+    /// The group's `/K` flag: knockout; false when absent.
     pub k: bool,
 }
 
+/// The print-relevant entries of one graphics state parameter dictionary; keys as in the PDF.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ExtGState {
     /// `/OP` (stroke overprint, and fill overprint when `/op` is absent).
@@ -49,8 +56,10 @@ pub struct ExtGState {
     #[serde(rename = "op", skip_serializing_if = "Option::is_none")]
     pub op_fill: Option<bool>,
     #[serde(rename = "OPM", skip_serializing_if = "Option::is_none")]
+    #[allow(missing_docs)]
     pub opm: Option<i32>,
     #[serde(rename = "BM", skip_serializing_if = "Option::is_none")]
+    #[allow(missing_docs)]
     pub bm: Option<String>,
     /// `/ca` (fill and text alpha).
     #[serde(rename = "ca", skip_serializing_if = "Option::is_none")]
@@ -418,8 +427,10 @@ pub struct StructureExpect {
     #[serde(default)]
     pub color_spaces_include: Option<BTreeSet<String>>,
     #[serde(default)]
+    #[allow(missing_docs)]
     pub device_rgb: Option<bool>,
     #[serde(default)]
+    #[allow(missing_docs)]
     pub output_intents: Option<Vec<String>>,
 }
 
@@ -428,17 +439,24 @@ pub struct StructureExpect {
 #[serde(deny_unknown_fields)]
 pub struct ExtGStateMatch {
     #[serde(rename = "OP", default)]
+    #[allow(missing_docs)]
     pub op_stroke: Option<bool>,
     #[serde(rename = "op", default)]
+    #[allow(missing_docs)]
     pub op_fill: Option<bool>,
     #[serde(rename = "OPM", default)]
+    #[allow(missing_docs)]
     pub opm: Option<i32>,
     #[serde(rename = "BM", default)]
+    #[allow(missing_docs)]
     pub bm: Option<String>,
     #[serde(rename = "SMask", default)]
+    #[allow(missing_docs)]
     pub smask: Option<String>,
     #[serde(rename = "BC", default)]
+    #[allow(missing_docs)]
     pub smask_bc: Option<bool>,
+    /// `/TR` is present on the soft mask.
     #[serde(rename = "TR", default)]
     pub smask_tr: Option<bool>,
 }

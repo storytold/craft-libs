@@ -35,3 +35,15 @@ expanded; blank padding past the grid's edge is clipped, data past it is an erro
 `craft-xml`'s depth and attribute limits. At most 1024 tables.
 
 `Options::only_sheet` keeps one sheet's cells and lists the others by name.
+
+`Options::truncate_text` keeps the cells read before the text passes `max_text`, leaves out
+every cell after that point and sets `Workbook::text_truncated`, so the caller can warn instead
+of failing. Rows and cells after the cell that passes it are not read. The one-cell limit still
+applies to every cell read, that cell included; the cell and merged-range limits count the cells
+kept.
+
+## Features
+
+- `test-support` enables `testing`, which builds small `.ods` packages in code (`spreadsheet`,
+  `content`, `package`) for the tests of crates that read spreadsheets. It is not a general
+  spreadsheet writer.

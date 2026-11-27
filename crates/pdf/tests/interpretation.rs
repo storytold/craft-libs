@@ -1,5 +1,12 @@
+//! Integration tests of craft-pdf: interpretation.
+
 #![cfg(feature = "read")]
 #![allow(clippy::unwrap_used, clippy::panic)]
+
+// A CID that is its character's vertical form draws a substitute's vertical glyph.
+#[cfg(feature = "interpret")]
+#[path = "interpretation/vertical_forms.rs"]
+mod vertical_forms;
 
 #[cfg(feature = "interpret")]
 mod device {
@@ -8,63 +15,6 @@ mod device {
         TransformExt, font::Glyph,
     };
     use kurbo::{Affine, BezPath, Rect};
-
-    #[derive(Default)]
-    struct PathDevice {
-        paths: usize,
-        fail: bool,
-    }
-
-    impl Device<'_> for PathDevice {
-        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
-        fn set_blend_mode(&mut self, _: BlendMode) {}
-        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'_>, _: &PathDrawMode) {
-            assert!(!self.fail, "synthetic device failure");
-            self.paths += 1;
-        }
-        fn push_clip_path(&mut self, _: &ClipPath) {}
-        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
-        fn draw_glyph(&mut self, _: &Glyph<'_>, _: Affine, _: Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
-        fn draw_image(&mut self, _: Image<'_, '_>, _: Affine) {}
-        fn pop_clip_path(&mut self) {}
-        fn pop_transparency_group(&mut self) {}
-    }
-
-    fn execute(device: &mut PathDevice) -> Result<(), craft_pdf::ExecutionError> {
-        let content = "1 0 0 rg 0 0 40 20 re f";
-        let bytes = format!(
-            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
-            content.len()
-        );
-        let pdf = craft_pdf::open_slice(bytes.as_bytes(), None).unwrap();
-        let page = &pdf.pages()[0];
-        let cache = InterpreterCache::new();
-        let mut context = Context::new(
-            page.initial_transform(true).to_kurbo(),
-            Rect::new(0.0, 0.0, 40.0, 20.0),
-            &cache,
-            page.xref(),
-            InterpreterSettings::default(),
-        );
-        craft_pdf::interpret_page(page, &mut context, device)
-    }
-
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-    #[cfg_attr(not(target_arch = "wasm32"), test)]
-    fn guarded_interpreter_reaches_the_device_without_raster() {
-        let mut device = PathDevice::default();
-        execute(&mut device).unwrap();
-        assert_eq!(device.paths, 1);
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn device_panic_is_an_execution_error_and_fresh_state_still_works() {
-        assert_eq!(execute(&mut PathDevice { fail: true, ..Default::default() }), Err(craft_pdf::ExecutionError::BackendPanic));
-        let mut fresh = PathDevice::default();
-        execute(&mut fresh).unwrap();
-        assert_eq!(fresh.paths, 1);
-    }
 
     /// Records the clips the interpreter applies, alongside the paths painted under them.
     #[derive(Default)]
@@ -147,58 +97,6 @@ mod device {
         assert!(painting.clips.is_empty(), "a painting text mode never clips");
         assert_eq!(painting.paths, 1);
     }
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-fn invalid_pdf_is_a_typed_error() {
-    assert!(matches!(craft_pdf::open_slice(b"not a pdf", None), Err(craft_pdf::OpenError::Load(_))));
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-fn input_limit_can_be_checked_before_allocating() {
-    assert!(craft_pdf::check_input_size(craft_pdf::MAX_INPUT_BYTES).is_ok());
-    assert!(matches!(
-        craft_pdf::check_input_size(craft_pdf::MAX_INPUT_BYTES + 1),
-        Err(craft_pdf::OpenError::InputLimit { limit: craft_pdf::MAX_INPUT_BYTES })
-    ));
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-fn parsing_without_interpretation_exposes_pages_and_objects() {
-    let bytes = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
-    let pdf = craft_pdf::open_slice(bytes, None).unwrap();
-    assert_eq!(pdf.pages().len(), 1);
-    let catalog = pdf.xref().get::<craft_pdf::syntax::object::Dict<'_>>(pdf.xref().root_id()).unwrap();
-    assert!(catalog.get_ref(b"Pages").is_some());
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-fn caller_input_policy_is_checked_before_parser_and_copy() {
-    let options = craft_pdf::OpenOptions { max_input_bytes: 3, ..Default::default() };
-    assert!(matches!(craft_pdf::open_slice_with_options(b"bad!", None, &options), Err(craft_pdf::OpenError::InputLimit { limit: 3 })));
-    assert!(matches!(
-        craft_pdf::open_with_options(std::sync::Arc::new(b"bad!".to_vec()), None, &options),
-        Err(craft_pdf::OpenError::InputLimit { limit: 3 })
-    ));
-    assert!(craft_pdf::check_input_size_with(3, &options).is_ok());
-    let larger = craft_pdf::OpenOptions { max_input_bytes: usize::MAX, ..Default::default() };
-    assert!(craft_pdf::check_input_size_with(craft_pdf::MAX_INPUT_BYTES + 1, &larger).is_ok());
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-fn caller_decode_policy_survives_open_fallback() {
-    let bytes = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
-    let options =
-        craft_pdf::OpenOptions { decode_limits: craft_pdf::syntax::DecodeLimits::default().with_max_decoded_stream(32), ..Default::default() };
-    let low = craft_pdf::open_slice_with_options(bytes, None, &options).unwrap();
-    let normal = craft_pdf::open_slice(bytes, None).unwrap();
-    assert_eq!(low.decode_limits().max_decoded_stream(), 32);
-    assert_eq!(normal.decode_limits(), craft_pdf::syntax::DecodeLimits::default());
 }
 
 /// What the clip does to the page, rendered: the device test above shows the clip the interpreter
@@ -289,27 +187,6 @@ mod rectangles {
         shapes
     }
 
-    /// The open zigzag of VectorCraft #2920: its ends and the points beside them land on all four
-    /// corners of its bounding box, and the peak at (60.571, 29.875) is on none.
-    const ZIGZAG: &str = "80 38 m 80 21.75 l 60.571 29.875 l 40 21.75 l 40 38 l";
-
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-    #[cfg_attr(not(target_arch = "wasm32"), test)]
-    fn an_open_five_point_polyline_is_stroked_as_drawn() {
-        let shapes = draw(&format!("0 0 0 RG 2 w {ZIGZAG} S"));
-        assert_eq!(shapes.rects, 0, "the zigzag was drawn as its bounding box");
-        assert_eq!(shapes.paths.len(), 1);
-        assert_eq!(shapes.paths[0].elements().len(), 5, "the five points arrive as written");
-    }
-
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-    #[cfg_attr(not(target_arch = "wasm32"), test)]
-    fn an_open_five_point_polyline_is_filled_as_drawn() {
-        let shapes = draw(&format!("0 0 0 rg {ZIGZAG} f"));
-        assert_eq!(shapes.rects, 0);
-        assert_eq!(shapes.paths.len(), 1);
-    }
-
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn a_closed_path_through_the_corners_out_of_order_is_not_a_rectangle() {
@@ -318,27 +195,126 @@ mod rectangles {
         assert_eq!(shapes.rects, 0);
         assert_eq!(shapes.paths.len(), 1);
     }
+}
 
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-    #[cfg_attr(not(target_arch = "wasm32"), test)]
-    fn rectangles_still_take_the_rectangle_route() {
-        for content in [
-            "0 0 0 rg 10 10 40 30 re f",
-            "0 0 0 RG 10 10 40 30 re S",
-            "0 0 0 RG 10 10 m 50 10 l 50 40 l 10 40 l h S",
-            "0 0 0 rg 10 10 m 10 40 l 50 40 l 50 10 l 10 10 l f",
-        ] {
-            let shapes = draw(content);
-            assert_eq!((shapes.rects, shapes.paths.len()), (1, 0), "{content}");
+#[cfg(feature = "interpret")]
+mod image_limits {
+    use craft_pdf::interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, ImageData, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        TransformExt, font::Glyph,
+    };
+    use craft_pdf::syntax::DecodeLimits;
+    use kurbo::{Affine, BezPath, Rect};
+
+    /// The RGB samples and alpha of a raster image.
+    type Pixels = (Vec<u8>, Option<Vec<u8>>);
+
+    /// The pixels of each raster image drawn (`None`: it did not decode).
+    #[derive(Default)]
+    struct Images(Vec<Option<Pixels>>);
+
+    impl Images {
+        /// The RGB samples of each image, without alpha.
+        fn rgb(&self) -> Vec<Option<Vec<u8>>> {
+            self.0.iter().map(|i| i.as_ref().map(|(rgb, _)| rgb.clone())).collect()
         }
+    }
+
+    impl Device<'_> for Images {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: Affine, _: Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, image: Image<'_, '_>, _: Affine) {
+            let mut rgb = None;
+            if let Image::Raster(r) = image {
+                r.with_rgba(
+                    |img, alpha| {
+                        if let ImageData::Rgb(d) = img {
+                            rgb = Some((d.data, alpha.map(|a| a.data)));
+                        }
+                    },
+                    None,
+                );
+            }
+            self.0.push(rgb);
+        }
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    /// A page that draws a 4 × 2 `DeviceRGB` image of 8-bit samples 0, 1, … 23, read with `limits`.
+    /// The samples are one run-length literal run, written in hex.
+    fn draw(limits: DecodeLimits) -> Images {
+        draw_with(limits, RGB)
+    }
+
+    /// The color space and sample size of [`draw`]'s image.
+    const RGB: &str = "/ColorSpace /DeviceRGB /BitsPerComponent 8";
+
+    /// [`draw`], with `extra` in the image's dictionary instead of [`RGB`].
+    fn draw_with(limits: DecodeLimits, extra: &str) -> Images {
+        let run: Vec<u8> = [23].into_iter().chain(0..24).chain([128]).collect();
+        let hex: String = run.iter().map(|b| format!("{b:02X}")).collect();
+        let content = "q 4 0 0 2 0 0 cm /Im0 Do Q";
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 4 2] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n5 0 obj << /Type /XObject /Subtype /Image /Width 4 /Height 2 /Filter [/ASCIIHexDecode /RunLengthDecode] {extra} /Length {} >> stream\n{hex}>\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            content.len(),
+            hex.len() + 1
+        );
+        let options = craft_pdf::OpenOptions { decode_limits: limits, ..Default::default() };
+        let pdf = craft_pdf::open_slice_with_options(bytes.as_bytes(), None, &options).unwrap();
+        let page = &pdf.pages()[0];
+        let cache = InterpreterCache::new();
+        let mut context =
+            Context::new(page.initial_transform(true).to_kurbo(), Rect::new(0.0, 0.0, 4.0, 2.0), &cache, page.xref(), InterpreterSettings::default());
+        let mut images = Images::default();
+        craft_pdf::interpret_page(page, &mut context, &mut images).unwrap();
+        images
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
-    fn a_polyline_clip_is_kept() {
-        // A clip that is a rectangle covering the page is dropped as a no-op; this one is not a
-        // rectangle, so it has to reach the device even though its bounding box covers the page.
-        let shapes = draw("0 0 m 120 0 l 60 30 l 0 60 l 120 60 l W n 0 0 0 rg 0 0 120 60 re f");
-        assert_eq!(shapes.clips, 1);
+    fn device_rgb_samples_arrive_as_written() {
+        assert_eq!(draw(DecodeLimits::default()).0, [Some(((0..24).collect::<Vec<u8>>(), None))]);
+        // An inverted `/Decode` inverts them.
+        let inverted: Vec<u8> = (0..24).map(|s| 255 - s).collect();
+        assert_eq!(draw_with(DecodeLimits::default(), &format!("{RGB} /Decode [1 0 1 0 1 0]")).rgb(), [Some(inverted)]);
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn a_color_key_mask_reads_device_rgb_samples() {
+        // Pixels 0 (0, 1, 2) and 1 (3, 4, 5) have every sample in 0 to 5, so they are masked out.
+        let images = draw_with(DecodeLimits::default(), &format!("{RGB} /Mask [0 5 0 5 0 5]"));
+        assert_eq!(images.0, [Some(((0..24).collect::<Vec<u8>>(), Some(vec![0, 0, 255, 255, 255, 255, 255, 255])))]);
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn a_color_key_mask_of_an_emptied_gray_image_reads_its_padding() {
+        // A 1-bit inverted gray image whose samples the byte limit leaves out: the missing samples
+        // read as 0, white once inverted, and inside the key range, so every pixel is masked out.
+        let images =
+            draw_with(DecodeLimits::default().with_max_decoded_image(0), "/ColorSpace /DeviceGray /BitsPerComponent 1 /Decode [1 0] /Mask [0 0]");
+        assert_eq!(images.0, [Some((vec![255; 24], Some(vec![0; 8])))]);
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn the_pixel_limit_comes_from_the_document() {
+        assert_eq!(draw(DecodeLimits::default().with_max_image_pixels(7)).0, [None], "8 pixels are past a limit of 7");
+        assert_eq!(draw(DecodeLimits::default().with_max_image_pixels(8)).rgb(), [Some((0..24).collect::<Vec<u8>>())]);
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn the_image_byte_limit_comes_from_the_document() {
+        // The run-length filter stops at 10 bytes: one row is left, its last two samples zero.
+        let cut: Vec<u8> = (0..10).chain([0, 0]).collect();
+        assert_eq!(draw(DecodeLimits::default().with_max_decoded_image(10)).rgb(), [Some(cut)]);
+        assert_eq!(draw(DecodeLimits::default().with_max_decoded_image(1 << 40)).rgb(), [Some((0..24).collect::<Vec<u8>>())]);
     }
 }

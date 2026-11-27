@@ -5,6 +5,29 @@ Native file and message dialogs that never block the event loop. A request is qu
 end of the frame on the main thread, and answered on a later frame. No egui dependency: the parent
 is any `raw-window-handle` 0.6 window, and the app passes a closure that wakes its event loop.
 
+## egui parts (feature `ui`)
+
+`craft_dialogs::ui` holds the egui widget over `host.files()`: `PathField` (a path text field with a
+Browse button).
+
+## Save flow
+
+`craft_dialogs::save` is File › Save and Save As with their guards, on the file service's pickers and
+craft-platform's `FileWatch`. It has no egui dependency: `SaveFlow::start` takes a `SaveDocument`
+and a `SaveTarget` (`InPlace`, `As`, `Copy`) and answers a `SaveStep` the app acts on: `Picking`,
+`AskChangedOnDisk`, `Write`, `Cancelled` or `Busy` (one save runs at a time per flow). `Write`
+carries the index of the file type picked in the panel (`file_type`, `None` for the document's own
+file). The app serializes and writes, then reports with `written` (which records the new file
+version unless the target is a copy) or `failed`.
+
+- A document without a file, Save As, and an email attachment's temporary copy (`is_mail_temp_copy`)
+  open the save picker in the document's folder (`save_dialog_folder`, or `SaveDocument::directory`
+  when the app sets one) with the document's name and the extension suggested.
+- A save onto an existing file that changed on disk since it was opened or last saved asks first.
+  The app answers with `replace`, `save_elsewhere` (the picker again, keeping both files) or
+  `cancel`. The check also runs when a picked path is the document's own file, for every target.
+- Messages are `PlatformText` constants (`SAVE_FAILED`, `SAVE_IN_PROGRESS`, `SAVED`).
+
 ## Why blocking dialogs crash
 
 On macOS a blocking `rfd::FileDialog` or `rfd::MessageDialog` runs AppKit's modal loop
@@ -26,7 +49,8 @@ pub struct Filter { pub name: String, pub extensions: Vec<String> }
 pub struct Message { pub level: MessageLevel, pub title: String, pub description: String,
     pub buttons: MessageButtons }
 pub enum Request { File(FileDialog), Message(Message) }
-pub enum Answer { Cancelled, Paths(Vec<PathBuf>), Message(MessageResult), Unavailable(String) }
+pub enum Answer { Cancelled, Paths(Vec<PathBuf>), Saved { path: PathBuf, filter: Option<usize> },
+    Message(MessageResult), Unavailable(String) }
 
 impl<T> Dialogs<T> {
     pub fn new(wake: Wake) -> Self;
@@ -49,7 +73,7 @@ In an eframe app:
 ```rust
 // Once, at startup.
 let ctx = cc.egui_ctx.clone();
-let dialogs = Dialogs::new(Arc::new(move || ctx.request_repaint()));
+let dialogs = Dialogs::new(Wake::new(move || ctx.request_repaint()));
 
 // A command that needs a file.
 self.dialogs.ask(FileDialog::open().filter("PDF", &["pdf"]), Then::Open);
@@ -58,6 +82,7 @@ self.dialogs.ask(FileDialog::open().filter("PDF", &["pdf"]), Then::Open);
 for (then, answer) in self.dialogs.take_answers() {
     match answer {
         Answer::Paths(paths) => self.run(then, paths),
+        Answer::Saved { path, .. } => self.run(then, vec![path]),
         Answer::Unavailable(why) => self.report_error(why),
         Answer::Cancelled | Answer::Message(_) => {}
     }

@@ -290,8 +290,10 @@ impl Writer {
     fn cell_borders(&mut self, borders: Option<&craft_wordmodel::props::Borders>, borderless: bool, out: &mut String) {
         if let Some(b) = borders {
             for (side, opt) in [('t', &b.top), ('l', &b.left), ('b', &b.bottom), ('r', &b.right)] {
-                if let Some(border) = opt.filter(|x| x.is_visible()) {
-                    self.write_border("clbrdr", side, border, out);
+                // A drawn line of width 0 (a DOCX table border without `w:sz`) at the thinnest
+                // line: RTF has no border that is drawn and takes no room.
+                if let Some(border) = opt.filter(|x| x.is_drawn()) {
+                    self.write_border("clbrdr", side, border.as_drawn(), out);
                 }
             }
         } else if !borderless {
@@ -600,7 +602,7 @@ impl Writer {
         out.push_str(&ctl);
         if let Some(c) = &p.fmt_change {
             // RTF 1.9.1: the paragraph formatting before the change, then who changed it and when.
-            let old = self.para_ctl(&c.old, intbl);
+            let old = self.old_para_ctl(&c.old, intbl);
             // The old list is the same list instance (only its level may differ).
             let list = match (c.old.list, &ls) {
                 (Some(li), Some((n, _))) => format!("\\ls{n}\\ilvl{}", li.level.min(8)),
@@ -610,15 +612,7 @@ impl Writer {
             let words = self.rev_words("\\prauth", "\\prdate", &c.mark);
             out.push_str(&words);
         }
-        if p.kind != Kind::Rule
-            && let Some(b) = &p.borders
-        {
-            for (side, opt) in [('t', &b.top), ('l', &b.left), ('b', &b.bottom), ('r', &b.right)] {
-                if let Some(border) = opt.filter(|x| x.is_visible()) {
-                    self.write_border("brdr", side, border, out);
-                }
-            }
-        }
+        self.paragraph_borders(p, out);
         if let (Some(li), Some((n, label))) = (p.list, &ls) {
             let lv = li.level.min(8);
             out.push_str(&format!("\\ls{n}\\ilvl{lv}\\fi-360\\li{}", 720 * (u32::from(lv) + 1)));
@@ -640,6 +634,44 @@ impl Writer {
         out.push('\n');
     }
 
+    /// Previous direct layout values belong inside oldpprops, after the style defaults.
+    fn old_para_ctl(&mut self, p: &Para, intbl: bool) -> String {
+        use craft_wordmodel::props::LineSpacing;
+
+        let mut out = self.para_ctl(p, intbl);
+        for (word, value) in
+            [("sb", p.spacing.before), ("sa", p.spacing.after), ("li", p.spacing.left), ("ri", p.spacing.right), ("fi", p.spacing.first)]
+        {
+            if let Some(value) = value {
+                let twips = (f64::from(value) * 20.0).round() as i32;
+                out.push_str(&format!("\\{word}{twips}"));
+            }
+        }
+        if let Some(line) = p.spacing.line {
+            let (value, multiple) = match line {
+                LineSpacing::Multiple(value) => (f64::from(value) * 240.0, 1),
+                LineSpacing::Exactly(value) => (-f64::from(value).abs().max(0.7) * 20.0, 0),
+                LineSpacing::AtLeast(value) => (f64::from(value).abs() * 20.0, 0),
+            };
+            let value = value.round() as i32;
+            out.push_str(&format!("\\sl{value}\\slmult{multiple}"));
+        }
+        self.paragraph_borders(p, &mut out);
+        out
+    }
+
+    fn paragraph_borders(&mut self, p: &Para, out: &mut String) {
+        if p.kind != Kind::Rule
+            && let Some(b) = &p.borders
+        {
+            for (side, opt) in [('t', &b.top), ('l', &b.left), ('b', &b.bottom), ('r', &b.right)] {
+                if let Some(border) = opt.filter(|x| x.is_visible()) {
+                    self.write_border("brdr", side, border, out);
+                }
+            }
+        }
+    }
+
     /// The paragraph formatting control words of `p`, from `\pard\plain` (its list left out).
     fn para_ctl(&mut self, p: &Para, intbl: bool) -> String {
         let mut out = String::from("\\pard\\plain");
@@ -658,6 +690,10 @@ impl Writer {
             Some(Align::Justify) => out.push_str("\\qj"),
             Some(Align::Distribute) => out.push_str("\\qd"),
             _ => out.push_str("\\ql"),
+        }
+        // The paragraph's text direction, as Word writes it (`\rtlpar`; `\ltrpar` is the default).
+        if p.rtl {
+            out.push_str("\\rtlpar");
         }
         if p.page_break {
             out.push_str("\\pagebb");
@@ -844,8 +880,21 @@ fn level_def(ordered: bool, l: usize) -> String {
     }
 }
 
-/// RTF text of a document.
+/// The application [`export`] names in the `\generator` group.
+pub const GENERATOR: &str = "WordCraft";
+
+/// Longest application name [`export_with_generator`] writes, characters.
+const MAX_GENERATOR: usize = 255;
+
+/// RTF text of a document, naming [`GENERATOR`] as the application that wrote it.
 pub fn export(doc: &Document) -> String {
+    export_with_generator(doc, GENERATOR)
+}
+
+/// [`export`], naming `generator` as the application that wrote it (`{\*\generator …;}`), for an
+/// app that embeds the writer under its own name. Control characters are dropped and the name is
+/// cut at [`MAX_GENERATOR`] characters; a blank name leaves the group out.
+pub fn export_with_generator(doc: &Document, generator: &str) -> String {
     let (marked, marks) = match mark_doc(doc) {
         Some((d, m)) => (Some(d), m),
         None => (None, Vec::new()),
@@ -864,10 +913,10 @@ pub fn export(doc: &Document) -> String {
         w.sections = secs;
     }
     w.blocks(&flow.blocks, false, "\\par", &mut body, 0);
-    export_with(&flow.meta, &w, &body, &doc.last_section)
+    export_with(&flow.meta, &w, &body, &doc.last_section, generator)
 }
 
-fn export_with(m: &Meta, w: &Writer, body: &str, sec: &craft_wordmodel::SectionProps) -> String {
+fn export_with(m: &Meta, w: &Writer, body: &str, sec: &craft_wordmodel::SectionProps, generator: &str) -> String {
     let mut out = String::from("{\\rtf1\\ansi\\ansicpg1252\\deff0\\deflang1033\\uc1\n{\\fonttbl");
     for (i, f) in w.t.fonts.items.iter().enumerate() {
         let fam = if model::is_mono(f) { "\\fmodern" } else { "\\fswiss" };
@@ -877,7 +926,12 @@ fn export_with(m: &Meta, w: &Writer, body: &str, sec: &craft_wordmodel::SectionP
     for c in &w.t.colors.items {
         out.push_str(&format!("\\red{}\\green{}\\blue{};", c.0, c.1, c.2));
     }
-    out.push_str("}\n{\\*\\generator WordCraft;}\n{\\stylesheet{\\s0\\snext0 Normal;}");
+    out.push('}');
+    let name: String = generator.chars().filter(|c| !c.is_control()).take(MAX_GENERATOR).collect();
+    if !name.trim().is_empty() {
+        out.push_str(&format!("\n{{\\*\\generator {};}}", esc_font(name.trim())));
+    }
+    out.push_str("\n{\\stylesheet{\\s0\\snext0 Normal;}");
     for n in 1..=6u32 {
         let sz = HEAD_SIZES.get(n as usize - 1).copied().unwrap_or(12.0);
         out.push_str(&format!("{{\\s{n}\\sbasedon0\\snext0\\outlinelevel{}\\keepn\\b\\fs{} heading {n};}}", n - 1, (sz * 2.0) as i32));
