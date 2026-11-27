@@ -16,7 +16,7 @@ use std::sync::Arc;
 #[trial]
 fn a_container_registers_its_commands_once() {
     let held: Vec<CommandRef> = (0..100).map(|i| CommandRef::new(format!("test.held{i}"))).collect();
-    let shown = held.clone();
+    let shown: Arc<[CommandRef]> = held.clone().into();
     let mut fixture = Fixture::new(move |ui| {
         let rect = egui::Rect::from_min_size(ui.max_rect().min, egui::vec2(40.0, 20.0));
         commands::holds(ui.ctx(), ui.layer_id(), rect, &shown, Label::from("Image"));

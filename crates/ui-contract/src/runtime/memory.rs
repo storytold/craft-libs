@@ -949,10 +949,11 @@ impl<T: Clone + Send + Sync + 'static> Facts<T> {
         Self::with_record(ctx, |record| record.this.push(fact));
     }
 
-    /// The facts the running viewport's previous pass registered, in registration order.
+    /// `f` on the facts the running viewport's previous pass registered, in registration order. `f` reaches no
+    /// service: the record is held while it runs.
     #[doc(hidden)]
-    pub fn of_last_pass(ctx: &Context) -> Vec<T> {
-        Self::with_record(ctx, |record| record.last.clone())
+    pub fn with_last_pass<R>(ctx: &Context, f: impl FnOnce(&[T]) -> R) -> R {
+        Self::with_record(ctx, |record| f(&record.last))
     }
 
     fn with_record<R>(ctx: &Context, f: impl FnOnce(&mut FactRecord<T>) -> R) -> R {

@@ -814,9 +814,9 @@ fn register_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label: Label
 
 /// Records that a container at `rect` holds `commands`, for this pass and viewport. Not [`CommandInput::holds`], which
 /// turns hold bindings on.
-pub fn holds(ctx: &Context, layer: LayerKey, rect: egui::Rect, commands: &[CommandRef], label: Label) {
+pub fn holds(ctx: &Context, layer: LayerKey, rect: egui::Rect, commands: &Arc<[CommandRef]>, label: Label) {
     if !commands.is_empty() {
-        register_shown(ctx, layer, rect, label, ShownCommands::Held(commands.into()));
+        register_shown(ctx, layer, rect, label, ShownCommands::Held(Arc::clone(commands)));
     }
 }
 
@@ -832,7 +832,7 @@ pub(crate) fn note_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label
 #[cfg(feature = "testing")]
 #[doc(hidden)]
 pub fn shown_registrations(ctx: &Context) -> usize {
-    Facts::<ShownFact>::of_last_pass(ctx).len()
+    Facts::<ShownFact>::with_last_pass(ctx, <[ShownFact]>::len)
 }
 
 /// The commands the bound components of the running viewport's last pass showed, in registration order: the values
@@ -840,13 +840,15 @@ pub fn shown_registrations(ctx: &Context) -> usize {
 #[cfg(feature = "testing")]
 #[doc(hidden)]
 pub fn shown_commands(ctx: &Context) -> Vec<Arc<CommandRef>> {
-    Facts::<ShownFact>::of_last_pass(ctx)
-        .into_iter()
-        .filter_map(|fact| match fact.commands {
-            ShownCommands::Bound(command) => Some(command),
-            ShownCommands::Held(_) => None,
-        })
-        .collect()
+    Facts::<ShownFact>::with_last_pass(ctx, |facts| {
+        facts
+            .iter()
+            .filter_map(|fact| match &fact.commands {
+                ShownCommands::Bound(command) => Some(Arc::clone(command)),
+                ShownCommands::Held(_) => None,
+            })
+            .collect()
+    })
 }
 
 /// Where `command` was shown in the last pass: a bound component's clipped rect or a holder's rect. `None` unless it
@@ -854,11 +856,14 @@ pub fn shown_commands(ctx: &Context) -> Vec<Arc<CommandRef>> {
 pub fn shown(ctx: &Context, command: &CommandRef) -> Option<Shown> {
     let viewport = pass::current_viewport(ctx);
     let scrim = overlay::top_modal_in(ctx, viewport).and_then(|top| top.cover);
-    Facts::<ShownFact>::of_last_pass(ctx)
-        .into_iter()
-        .filter(|fact| fact.shows(command))
-        .find(|fact| !areas::rects_over(ctx, fact.layer, scrim).iter().any(|over| over.intersects(fact.rect)))
-        .map(|fact| Shown { rect: fact.rect, viewport, label: fact.label, holder: matches!(fact.commands, ShownCommands::Held(_)) })
+    // The rects over a fact are read outside the facts' record, which `with_last_pass` holds.
+    let showing: Vec<ShownFact> = Facts::<ShownFact>::with_last_pass(ctx, |facts| facts.iter().filter(|fact| fact.shows(command)).cloned().collect());
+    showing.into_iter().find(|fact| !areas::rects_over(ctx, fact.layer, scrim).iter().any(|over| over.intersects(fact.rect))).map(|fact| Shown {
+        rect: fact.rect,
+        viewport,
+        label: fact.label,
+        holder: matches!(fact.commands, ShownCommands::Held(_)),
+    })
 }
 
 /// Where a command was shown, from [`shown`].
