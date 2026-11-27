@@ -12,7 +12,7 @@ use crate::DispatchError;
 use crate::job::CraftJobSpec;
 use crate::job::{JobPriority, JobStatus};
 
-/// Method name for submitting a [`CraftJobSpec`](crate::CraftJobSpec) to the encoderCraft queue.
+/// Method name for submitting a [`crate::CraftJobSpec`] to the encoderCraft queue.
 pub const METHOD_QUEUE_SUBMIT: &str = "queue.submit";
 /// Method name for querying the status of a specific job.
 pub const METHOD_QUEUE_STATUS: &str = "queue.status";
