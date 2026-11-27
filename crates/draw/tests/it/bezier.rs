@@ -1,8 +1,8 @@
 //! `BezierOverlay`: the pure path operations, and the overlay's pointer, keyboard and tools through the public API.
 
+use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{ParamCurve as _, Point, Size, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
-use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_draw::ui::{
     AnchorDelete, AnchorTool, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef,
     PathEdit, PathSelection, PathTool, SegmentMark,
@@ -1572,7 +1572,10 @@ fn space_moves_the_pulled_anchor_then_release_resumes_its_handles() {
     // Modifier-only frames travel through the real input/press route: no synthetic PathEdit calls.
     h.fixture.hold(egui::Modifiers::SHIFT).frame(Vec::new());
     let locked = h.state.borrow().paths[0].subpaths[0].knots[1];
-    assert!(near(locked.anchor, moved.anchor) && locked.out_ctrl.distance(p(140.0, 140.0)) < 1e-3, "stationary Shift still locks the handle: {locked:?}");
+    assert!(
+        near(locked.anchor, moved.anchor) && locked.out_ctrl.distance(p(140.0, 140.0)) < 1e-3,
+        "stationary Shift still locks the handle: {locked:?}"
+    );
     h.fixture.hold(egui::Modifiers::NONE).frame(Vec::new());
     let snapped = h.state.borrow().paths[0].subpaths[0].knots[1];
     assert!(snapped.out_ctrl.distance(p(165.0, 140.0)) < 1e-3, "releasing Shift reevaluates the actual enabled guide snap: {snapped:?}");
