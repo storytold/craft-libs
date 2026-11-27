@@ -130,11 +130,57 @@ fn server_requests_require_string_or_integer_ids() {
 fn pages_are_followed() {
     let mut c = fake(|m, req| match m {
         "tools/list" if req["params"]["cursor"].is_null() => Some(vec![result(req, json!({"tools": [{"name": "a"}], "nextCursor": "p2"}))]),
-        "tools/list" => Some(vec![result(req, json!({"tools": [{"name": "b"}]}))]),
+        "tools/list" if req["params"]["cursor"] == "p2" => Some(vec![result(req, json!({"tools": [{"name": "b"}]}))]),
+        "tools/list" => panic!("unexpected cursor: {}", req["params"]["cursor"]),
         _ => None,
     });
     let names: Vec<String> = c.list_tools().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
     assert_eq!(names, vec!["a", "b"]);
+}
+
+#[test]
+fn tool_result_envelopes_are_required() {
+    for within in [false, true] {
+        for malformed in [
+            json!(null),
+            json!({}),
+            json!({"content": true}),
+            json!({"content": [], "isError": 1}),
+            json!({"content": [], "structuredContent": []}),
+            json!({"content": [], "_meta": null}),
+        ] {
+            let mut client = fake(move |_, req| Some(vec![result(req, malformed.clone())]));
+            let reply = if within { client.call_tool_within("probe", json!({}), LONG) } else { client.call_tool("probe", json!({})) };
+            assert!(matches!(reply, Err(McpError::Protocol(_))), "{reply:?}");
+            assert!(client.closed().is_some());
+        }
+        for valid in [
+            json!({"content": []}),
+            json!({"content": [], "isError": true}),
+            json!({"content": [], "structuredContent": {"value": 1}, "_meta": {}, "extra": "kept"}),
+        ] {
+            let sent = valid.clone();
+            let mut client = fake(move |_, req| Some(vec![result(req, sent.clone())]));
+            let reply = if within { client.call_tool_within("probe", json!({}), LONG) } else { client.call_tool("probe", json!({})) };
+            assert_eq!(reply.unwrap(), valid);
+        }
+    }
+}
+
+#[test]
+fn server_request_params_are_objects() {
+    for params in [json!(true), json!(1), json!("bad"), json!(null), json!([])] {
+        let mut client = fake(move |method, req| {
+            (method == "probe")
+                .then(|| vec![json!({"jsonrpc": "2.0", "id": "server", "method": "ping", "params": params}).to_string(), result(req, json!("done"))])
+        });
+        assert!(matches!(client.request("probe", json!({})), Err(McpError::Protocol(_))));
+    }
+    let mut client = fake(|method, req| {
+        (method == "probe")
+            .then(|| vec![json!({"jsonrpc": "2.0", "id": "server", "method": "ping", "params": {}}).to_string(), result(req, json!("done"))])
+    });
+    assert_eq!(client.request("probe", json!({})).unwrap(), "done");
 }
 
 #[test]

@@ -253,6 +253,12 @@ The `mcp` feature adds `craft_testkit::mcp` and the `serde_json` dependency. The
 | `take_notifications()` | Returns the notifications kept so far without waiting. |
 | `close()` | Closes the child's stdin, waits for it to exit, stops it after the grace period, and returns its exit status, whether it was stopped, and the stderr kept. After the child exits, it waits up to 5 s for the rest of stderr to be read. |
 
+Tool results require a `content` array. Optional `isError` must be a boolean, and optional
+`structuredContent` and `_meta` must be objects. Both tool helpers reject a malformed envelope
+with `Protocol` and close the connection. Requests and notifications from the server require
+object-valued `params` when that field is present. `close()` drains and discards stdout while
+waiting for the child; incoming output does not extend the grace period.
+
 While a call waits, the client answers the child's `ping` with an empty result and its other requests with error -32601. Server requests require string or integer IDs. A line on stdout that is not a JSON-RPC 2.0 message, a reply with neither or both of `result` and `error`, a line over the length limit, a missed deadline and the end of stdout each return an error and close the connection; later calls return `Closed`. A terminal failure discards queued writes and unread messages. A write already in progress may finish. After the end of stdout or an I/O error, `close()` or dropping the connection reaps the child. Other terminal failures stop and reap it immediately. Dropping an `McpChild` stops and reaps a child that is still running. Setup returns a `Result` and nothing in the module panics.
 
 `McpLimits` holds the limits. These defaults are the crate's own values:

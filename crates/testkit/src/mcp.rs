@@ -485,22 +485,6 @@ impl McpChild {
     fn start(reader: impl Read + Send + 'static, writer: impl Write + Send + 'static, limits: McpLimits) -> Result<Self, McpError> {
         let (tx, rx) = sync_channel(READ_QUEUE);
         let write_failed = tx.clone();
-        let cap = limits.max_line_bytes;
-        start_thread("craft-testkit-mcp-read", move || {
-            let mut r = BufReader::new(reader);
-            loop {
-                let incoming = match read_line_capped(&mut r, cap) {
-                    Ok(None) => Incoming::Ended,
-                    Ok(Some(line)) => parse_line(&line),
-                    Err(LineError::TooLong) => Incoming::TooLong,
-                    Err(LineError::Io(e)) => Incoming::ReadFailed(e),
-                };
-                let last = !matches!(incoming, Incoming::Message(_));
-                if tx.send(incoming).is_err() || last {
-                    return;
-                }
-            }
-        })?;
         let (wtx, wrx) = sync_channel::<Vec<u8>>(WRITE_QUEUE);
         let failed = Arc::new(AtomicBool::new(false));
         let write_stopped = Arc::clone(&failed);
@@ -513,6 +497,22 @@ impl McpChild {
                 if let Err(e) = w.write_all(&line).and_then(|()| w.flush()) {
                     // Wakes a request waiting for its reply. Ends when the client is dropped.
                     let _ = write_failed.send(Incoming::WriteFailed(e));
+                    return;
+                }
+            }
+        })?;
+        let cap = limits.max_line_bytes;
+        start_thread("craft-testkit-mcp-read", move || {
+            let mut r = BufReader::new(reader);
+            loop {
+                let incoming = match read_line_capped(&mut r, cap) {
+                    Ok(None) => Incoming::Ended,
+                    Ok(Some(line)) => parse_line(&line),
+                    Err(LineError::TooLong) => Incoming::TooLong,
+                    Err(LineError::Io(e)) => Incoming::ReadFailed(e),
+                };
+                let last = !matches!(incoming, Incoming::Message(_));
+                if tx.send(incoming).is_err() || last {
                     return;
                 }
             }
@@ -622,13 +622,27 @@ impl McpChild {
 
     /// Calls the tool `name` with `arguments` (`tools/call`) and returns its result unchanged,
     /// `content` and `isError` included.
+    /// The result requires a `content` array. Optional `isError` must be a boolean, and optional
+    /// `structuredContent` and `_meta` must be objects.
+    /// A malformed envelope returns [`McpError::Protocol`] and closes the connection.
     pub fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value, McpError> {
-        self.request("tools/call", json!({"name": name, "arguments": arguments}))
+        self.call_tool_within(name, arguments, self.limits.request_timeout)
     }
 
     /// [`McpChild::call_tool`] with its own deadline.
     pub fn call_tool_within(&mut self, name: &str, arguments: Value, timeout: Duration) -> Result<Value, McpError> {
-        self.request_within("tools/call", json!({"name": name, "arguments": arguments}), timeout)
+        let result = self.request_within("tools/call", json!({"name": name, "arguments": arguments}), timeout)?;
+        for (field, valid) in [
+            ("content", result.get("content").is_some_and(Value::is_array)),
+            ("isError", result.get("isError").is_none_or(Value::is_boolean)),
+            ("structuredContent", result.get("structuredContent").is_none_or(Value::is_object)),
+            ("_meta", result.get("_meta").is_none_or(Value::is_object)),
+        ] {
+            if !valid {
+                return Err(self.fail(McpError::Protocol(format!("a `tools/call` result has an invalid `{field}` field"))));
+            }
+        }
+        Ok(result)
     }
 
     /// Every tool the child lists, following `nextCursor` for at most [`McpLimits::max_pages`]
@@ -698,11 +712,13 @@ impl McpChild {
     /// returns no status without waiting for that thread. A writer blocked on a server that has
     /// stopped reading stays with the thread until the server drops its reading end, and the thread
     /// reading `reader` stays blocked until the server drops its writing end or writes a line.
+    /// While waiting for a child, this drains and discards stdout. Incoming output does not
+    /// extend the grace period.
     pub fn close(mut self) -> Result<CloseOutcome, McpError> {
         self.writer = None;
         let grace = self.limits.close_grace;
         let (status, forced) = match self.child.take() {
-            Some(mut child) => match reap(&mut child, grace) {
+            Some(mut child) => match reap(&mut child, grace, Some(&self.rx)) {
                 Ok((status, forced)) => (Some(status), forced),
                 Err(source) => {
                     let _ = child.kill();
@@ -762,6 +778,9 @@ impl McpChild {
     /// Handles one message: answers a request from the child, keeps a notification, skips a
     /// well-formed reply to another id, and returns the reply to `waiting`.
     fn route(&mut self, v: Value, waiting: Option<u64>) -> Result<Option<Value>, McpError> {
+        if v.get("method").is_some() && v.get("params").is_some_and(|params| !params.is_object()) {
+            return Err(self.fail(McpError::Protocol("a message has `params` that is not an object".into())));
+        }
         if v.get("id").is_some_and(|id| !matches!(id, Value::String(_) | Value::Number(_) | Value::Null)) {
             return Err(self.fail(McpError::Protocol("a message has an `id` that is not a string, a number or null".into())));
         }
@@ -838,7 +857,7 @@ impl McpChild {
             return err;
         }
         if let Some(mut child) = self.child.take() {
-            match reap(&mut child, Duration::ZERO) {
+            match reap(&mut child, Duration::ZERO, None) {
                 Ok(exit) => self.exit = Some(exit),
                 Err(_) => {
                     let _ = child.kill();
@@ -887,7 +906,7 @@ fn message(method: &str, params: Value) -> Map<String, Value> {
 
 /// Waits up to `grace` for the child to exit, then stops it. Returns its status and whether it
 /// was stopped.
-fn reap(child: &mut Child, grace: Duration) -> io::Result<(ExitStatus, bool)> {
+fn reap(child: &mut Child, grace: Duration, drain: Option<&Receiver<Incoming>>) -> io::Result<(ExitStatus, bool)> {
     let deadline = Instant::now().checked_add(grace);
     loop {
         if let Some(status) = child.try_wait()? {
@@ -895,7 +914,14 @@ fn reap(child: &mut Child, grace: Duration) -> io::Result<(ExitStatus, bool)> {
         }
         let left = deadline.and_then(|d| d.checked_duration_since(Instant::now())).filter(|left| !left.is_zero());
         let Some(left) = left else { break };
-        std::thread::sleep(left.min(EXIT_POLL));
+        let wait = left.min(EXIT_POLL);
+        match drain {
+            Some(rx) => match rx.recv_timeout(wait) {
+                Ok(_) | Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => std::thread::sleep(wait),
+            },
+            None => std::thread::sleep(wait),
+        }
     }
     match child.kill() {
         Ok(()) => {}

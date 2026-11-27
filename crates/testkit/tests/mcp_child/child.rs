@@ -22,6 +22,8 @@ const TESTS: &[(&str, Test)] = &[
     ("close_forces_and_reaps_unresponsive_child", close_forces_and_reaps_unresponsive_child),
     ("close_keeps_stderr_written_before_exit", close_keeps_stderr_written_before_exit),
     ("skip_filters_exclude_tests_from_the_child_runner", skip_filters_exclude_tests_from_the_child_runner),
+    ("thread_count_options_preserve_child_test_selection", thread_count_options_preserve_child_test_selection),
+    ("close_drains_stdout_before_child_exit", close_drains_stdout_before_child_exit),
 ];
 
 pub fn run() -> ExitCode {
@@ -33,7 +35,17 @@ pub fn run() -> ExitCode {
     let mut skipped = Vec::new();
     let mut options = args.iter();
     while let Some(arg) = options.next() {
-        if arg == "--skip" {
+        if arg == "--test-threads" {
+            if !options.next().is_some_and(|value| value.parse::<usize>().is_ok_and(|count| count > 0)) {
+                eprintln!("--test-threads requires a positive integer");
+                return ExitCode::FAILURE;
+            }
+        } else if let Some(value) = arg.strip_prefix("--test-threads=") {
+            if !value.parse::<usize>().is_ok_and(|count| count > 0) {
+                eprintln!("--test-threads requires a positive integer");
+                return ExitCode::FAILURE;
+            }
+        } else if arg == "--skip" {
             let Some(filter) = options.next().filter(|value| !value.is_empty() && !value.starts_with('-')) else {
                 eprintln!("--skip requires a test name");
                 return ExitCode::FAILURE;
@@ -115,6 +127,14 @@ fn serve(mode: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
+    if mode == "stdout-after-eof" {
+        let line = json!({"jsonrpc": "2.0", "method": "notifications/message", "params": {"data": "x".repeat(FLOOD)}}).to_string();
+        for _ in 0..8 {
+            if writeln!(out, "{line}").is_err() {
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     if mode == "stubborn" {
         // Waits without a stdin to read until the parent stops it; ends on its own after ten
         // minutes so a parent that fails to stop it leaves nothing running.
@@ -146,6 +166,34 @@ fn skip_filters_exclude_tests_from_the_child_runner() -> Result<(), String> {
         check(!output.status.success(), || format!("an invalid skip filter was accepted: {args:?}"))?;
     }
     Ok(())
+}
+
+fn thread_count_options_preserve_child_test_selection() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    for args in [vec!["--list", "--test-threads", "1"], vec!["--list", "--test-threads=2"]] {
+        let output = std::process::Command::new(&exe).args(args).output().map_err(|error| error.to_string())?;
+        check(output.status.success(), || String::from_utf8_lossy(&output.stderr).into_owned())?;
+        let listed = String::from_utf8_lossy(&output.stdout);
+        check(listed.lines().count() == TESTS.len(), || format!("thread count changed test selection: {listed}"))?;
+    }
+    for args in [
+        vec!["--list", "--test-threads"],
+        vec!["--list", "--test-threads", "0"],
+        vec!["--list", "--test-threads="],
+        vec!["--list", "--test-threads=bad"],
+        vec!["--test-threads", "--list"],
+    ] {
+        let output = std::process::Command::new(&exe).args(&args).output().map_err(|error| error.to_string())?;
+        check(!output.status.success(), || format!("an invalid thread count was accepted: {args:?}"))?;
+    }
+    Ok(())
+}
+
+fn close_drains_stdout_before_child_exit() -> Result<(), String> {
+    let mut client = start("stdout-after-eof", McpLimits::default())?;
+    client.initialize(PROTOCOL_VERSION).map_err(|error| error.to_string())?;
+    let outcome = client.close().map_err(|error| error.to_string())?;
+    check(!outcome.forced && outcome.status.is_some_and(|status| status.success()), || format!("close: {outcome:?}"))
 }
 
 fn check(ok: bool, what: impl FnOnce() -> String) -> Result<(), String> {
