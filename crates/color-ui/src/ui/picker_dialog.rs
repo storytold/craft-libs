@@ -538,9 +538,7 @@ impl ColorPickerDialog {
         self.system = None;
         Some(match answer {
             Answer::Ok(color) => {
-                // The panel shows no alpha: the colour keeps the dialog's.
-                let a = self.current.or(self.opening).map_or(1.0, |picked| picked.color.a);
-                self.current = Some(PickedColor { color: Srgba { a, ..color }, model: None });
+                self.take_panel_color(color);
                 self.accept(ui.ctx()).map(DialogResult::Ok)
             }
             Answer::Cancel => {
@@ -548,6 +546,14 @@ impl ColorPickerDialog {
                 Some(DialogResult::Cancel)
             }
         })
+    }
+
+    /// Takes the system panel's colour as the current one. The panel shows no alpha, so the colour keeps the dialog's;
+    /// a colour the panel left as it was keeps its model values.
+    fn take_panel_color(&mut self, color: Srgba) {
+        let held = self.current.or(self.opening);
+        let color = Srgba { a: held.map_or(1.0, |picked| picked.color.a), ..color };
+        self.current = Some(held.filter(|picked| picked.color == color).unwrap_or(PickedColor { color, model: None }));
     }
 
     /// Files or withdraws the canvas eyedropper request as the dialog gains or loses the top.
@@ -579,8 +585,7 @@ impl StackDialog for ColorPickerDialog {
         self.start_headless(ctx);
         // With the system panel up, OK there would answer the colour it shows (the dialog keeps its alpha).
         if let Some(color) = self.system.as_ref().and_then(Shown::color) {
-            let a = self.current.or(self.opening).map_or(1.0, |picked| picked.color.a);
-            self.current = Some(PickedColor { color: Srgba { a, ..color }, model: None });
+            self.take_panel_color(color);
         }
         self.accept(ctx)
     }
@@ -740,5 +745,24 @@ impl StackDialog for ColorPickerDialog {
             }
             (false, None) => None,
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use craft_ui::testing::trial;
+
+    #[trial]
+    fn the_panel_colour_keeps_the_dialog_alpha_and_an_unchanged_colour_keeps_its_model_values() {
+        let black = Srgba { r: 0.0, g: 0.0, b: 0.0, a: 0.5 };
+        let held = PickedColor::cmyk(black, [0.0, 0.0, 0.0, 100.0]);
+        let mut dialog = ColorPickerDialog::new("fill", "Fill", black);
+        dialog.set_color(held);
+        dialog.take_panel_color(Srgba { a: 1.0, ..black });
+        assert_eq!(dialog.current, Some(held), "the panel left the colour as it was");
+        let red = Srgba { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
+        dialog.take_panel_color(red);
+        assert_eq!(dialog.current, Some(PickedColor { color: Srgba { a: 0.5, ..red }, model: None }), "a new colour drops them");
     }
 }
