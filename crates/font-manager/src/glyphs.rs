@@ -327,16 +327,18 @@ struct Marked(Selection<usize>);
 
 /// The glyph a context menu was opened on, and the face it was opened in. Later passes keep this glyph: the grid
 /// remembers the row, and another glyph of a same-length list must not take the menu over. A glyph id names a glyph
-/// only in its own face, so the menu holds the cell only while that face is shown.
+/// only in its own face, so the menu holds the cell only while that face is shown: the same family and style, and for
+/// a glyph id the same source revision, since the source may replace a face under the same names.
 #[derive(Clone, Default)]
 struct HeldMenu(Option<MenuCell>);
 
-/// A held menu's cell and the family and style it was clicked in.
+/// A held menu's cell, the family and style it was clicked in, and the source's revision then.
 #[derive(Clone)]
 struct MenuCell {
     cell: GlyphCell,
     family: String,
     style: String,
+    revision: u64,
 }
 
 /// The alternates popup: whether it is open, the cell it was opened for and that cell's alternates, read once when
@@ -644,13 +646,18 @@ impl<'a> GlyphsPanel<'a> {
                         CollectionEvent::ContextMenu(request) => cells.get(request.key).copied(),
                         _ => None,
                     });
+                    let revision = source.revision();
                     let mut held = std::mem::take(cx.memory::<HeldMenu>());
                     if let Some(cell) = clicked {
-                        held = HeldMenu(Some(MenuCell { cell, family: face.0.to_owned(), style: face.1.to_owned() }));
+                        held = HeldMenu(Some(MenuCell { cell, family: face.0.to_owned(), style: face.1.to_owned(), revision }));
                     }
                     // A closed menu lets go of its cell, and so does another face: the same glyph id there is
-                    // another glyph.
-                    let other_face = held.0.as_ref().is_some_and(|held| (held.family.as_str(), held.style.as_str()) != face);
+                    // another glyph. A new revision may be another face under the same names; a character still
+                    // names the same character there, a glyph id does not.
+                    let other_face = held.0.as_ref().is_some_and(|held| {
+                        (held.family.as_str(), held.style.as_str()) != face
+                            || (matches!(held.cell, GlyphCell::Glyph(_)) && held.revision != revision)
+                    });
                     if shown_grid.response.menu.is_none() || other_face {
                         held = HeldMenu(None);
                     }
