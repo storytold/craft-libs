@@ -20,7 +20,7 @@ use craft_ui::runtime::env::{Label, UnitKind, Units};
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::runtime::memory::Remember as _;
 use craft_ui::style::{ComponentStyle, StyleColor, StyleCx};
-use egui::{Pos2, Rect, Response, Vec2};
+use egui::{Pos2, Rangef, Rect, Response, Vec2};
 
 use crate::setup::Margins;
 use crate::ui::view::PlacedPage;
@@ -308,12 +308,42 @@ pub struct MarginHandlesStyle {
 #[derive(Clone, Copy, Default)]
 struct Anchor(PageEdges);
 
+/// `bar`, the grab area of an edge at `at` along `axis`, kept off the `handles` on its strip: where they cover the
+/// edge's line it moves past them to the edge's outer side (towards lower coordinates when `outer_is_lower`), keeping
+/// its width, as the release's margin zone reached into the margin; either way it stops short of the next handle.
+fn clear_of(bar: Rect, axis: Axis, at: f32, outer_is_lower: bool, handles: &[Rect]) -> Rect {
+    type Range = fn(&Rect) -> Rangef;
+    let (along, across): (Range, Range) = if axis == Axis::X { (Rect::x_range, Rect::y_range) } else { (Rect::y_range, Rect::x_range) };
+    let strip = across(&bar);
+    let mut covered: Vec<Rangef> = handles.iter().filter(|handle| across(handle).intersects(strip)).map(along).collect();
+    covered.sort_by(|a, b| a.min.total_cmp(&b.min));
+    // The handles' stretches along the strip, touching ones merged.
+    let mut merged: Vec<Rangef> = Vec::new();
+    for stretch in covered {
+        match merged.last_mut() {
+            Some(last) if stretch.min <= last.max => last.max = last.max.max(stretch.max),
+            _ => merged.push(stretch),
+        }
+    }
+    let span = along(&bar);
+    let (keep, lo, hi) = match merged.iter().find(|stretch| stretch.contains(at)) {
+        Some(stretch) if outer_is_lower => (stretch.min, stretch.min - span.span(), stretch.min),
+        Some(stretch) => (stretch.max, stretch.max, stretch.max + span.span()),
+        None => (at, span.min, span.max),
+    };
+    let lo = merged.iter().filter(|stretch| stretch.max <= keep).fold(lo, |lo, stretch| lo.max(stretch.max));
+    let hi = merged.iter().filter(|stretch| stretch.min >= keep).fold(hi, |hi, stretch| hi.min(stretch.min));
+    let keep = Rangef::new(lo, hi);
+    if axis == Axis::X { Rect::from_x_y_ranges(keep, strip) } else { Rect::from_x_y_ranges(strip, keep) }
+}
+
 /// The margin edges of one page on the horizontal and vertical ruler strips of the canvas.
 ///
 /// - The edges lie on the rulers' strips (the canvas rect outside `Rulers::content_rect`): show the handles after the
 ///   rulers in the canvas body so a press on an edge reaches them before the strip. The rulers paint the margin shade
 ///   themselves: the app gives them [`spans`](MarginHandles::spans) through `Rulers::margins`.
-/// - Each edge grabs within a slop of it on its strip; the cursor is a resize cursor; the tooltip names it, and while
+/// - Each edge grabs within a slop of it on its strip, short of the rulers' own handles on it
+///   ([`keep_clear_of`](MarginHandles::keep_clear_of)); the cursor is a resize cursor; the tooltip names it, and while
 ///   dragging the value shows beside the pointer in the [`unit`](MarginHandles::unit).
 /// - A drag is one edit gesture: Begin, Update per move, Commit on release with [`dragged_margin`]'s value; Escape
 ///   cancels. Alt drags without snapping.
@@ -345,6 +375,11 @@ pub struct MarginHandles<'a> {
     /// The unit the drag readout and the AccessKit value show (the app's ruler unit).
     #[prop]
     unit: UnitKind,
+    /// Where the rulers' own handles sit, screen rects (`TextRulerOutput::handles`, `VerticalRulerOutput::handles`): an
+    /// edge never takes a press over them, so a marker on an edge keeps it; where they cover the edge, its grab area
+    /// lies past them in the margin.
+    #[prop]
+    keep_clear_of: &'a [Rect],
 }
 
 impl<'a> MarginHandles<'a> {
@@ -360,6 +395,7 @@ impl<'a> MarginHandles<'a> {
             snap: SNAP,
             min_text: MIN_TEXT,
             unit: UnitKind::Inches,
+            keep_clear_of: &[],
         }
         .label(label)
         .ltr_axis()
@@ -458,8 +494,10 @@ impl Component for MarginHandles<'_> {
         let (grab, strip) = (cx.style.grab, cx.style.strip);
         let words = cx.words::<MarginHandlesWords>();
         for &visible in self.edges_shown() {
-            divider::declare_focusing(cx, rect, EDGE, visible.index(), &self.divider(&rules, visible, rect, (grab, strip)))
-                .tooltip(visible.name(&words).clone());
+            let mut divider = self.divider(&rules, visible, rect, (grab, strip));
+            let outer_is_lower = matches!(visible, MarginEdge::Left | MarginEdge::Top | MarginEdge::Header);
+            divider.bar = clear_of(divider.bar, divider.axis, divider.at, outer_is_lower, self.keep_clear_of);
+            divider::declare_focusing(cx, rect, EDGE, visible.index(), &divider).tooltip(visible.name(&words).clone());
         }
     }
 

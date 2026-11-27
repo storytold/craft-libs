@@ -262,6 +262,10 @@ pub struct TextRulerOutput {
     pub gap: Option<GapDrag>,
     /// The kind the tab selector was clicked to: the next kind, the previous one for a secondary click.
     pub kind: Option<TabAlign>,
+    /// Where the parts that take a drag sit, screen rects: the indent markers, the stops, a table's column borders and
+    /// the column gaps' edges. A control shown over the ruler after it keeps clear of them, so a marker keeps the
+    /// press where they overlap (a page's margin edges, in craft-pages' `PageRulers`).
+    pub handles: Vec<Rect>,
 }
 
 impl Outcome for TextRulerOutput {
@@ -480,6 +484,16 @@ impl<'a> TextRuler<'a> {
         self.corner.map(|corner| corner.intersect(rect)).filter(|corner| corner.is_positive())
     }
 
+    /// The rects of the parts that take a drag, as [`parts`](Component::parts) declares them: the markers and stops, a
+    /// table's column borders, and the column gaps' edges when they are draggable.
+    fn handle_rects(&self, layout: &Layout, values: &RulerValues) -> Vec<Rect> {
+        let markers = RulerItem::all(values).into_iter().map(|item| layout.shapes.rect(&layout.g, item, values));
+        let columns = self.columns.iter().map(|position| layout.shapes.column_marker(layout.g.strip, layout.g.x(*position)));
+        let gaps = self.gaps.iter().filter(|_| self.gaps_draggable);
+        let gaps = gaps.flat_map(|gap| [GapEdge::End, GapEdge::Start].map(|edge| layout.shapes.gap_edge(&layout.g, *gap, edge)));
+        markers.chain(columns).chain(gaps).collect()
+    }
+
     /// The host's corner, the strip beside it and the markers' sizes inside `rect`.
     fn layout(&self, rect: Rect, style: &TextRulerStyle, interface_rtl: bool) -> Layout {
         let corner = self.corner_in(rect);
@@ -686,7 +700,9 @@ impl Component for TextRuler<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TextRulerOutput {
+        let values = cx.value().cloned().unwrap_or_default();
+        let handles = self.handle_rects(&self.layout(cx.rect, cx.style, cx.flow.is_rtl()), &values);
         let Report { picked, open_tabs_dialog, column, gap, kind } = self.report;
-        TextRulerOutput { edit: cx.edit_response(), picked, open_tabs_dialog, column, gap, kind }
+        TextRulerOutput { edit: cx.edit_response(), picked, open_tabs_dialog, column, gap, kind, handles }
     }
 }
