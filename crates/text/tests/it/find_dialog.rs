@@ -109,3 +109,56 @@ fn escape_in_find_what_closes_the_dialog_and_returns_the_focus() {
         }
     }
 }
+
+#[trial]
+fn special_menu_follows_focused_box_on_replace_tab() {
+    let dialog = Rc::new(RefCell::new(FindReplaceDialog::new("", FindTab::Replace).word(true)));
+    let shown = Rc::clone(&dialog);
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = shown.borrow_mut().show(ui, &DialogStack::default());
+    });
+    fixture.room(egui::vec2(700.0, 700.0)).settle();
+
+    press(&mut fixture, "Search Options");
+
+    let click_label = |fixture: &mut Fixture, label: &str| {
+        let target = fixture.by_label(label).unwrap_or_else(|| panic!("target named {label}"));
+        fixture.click(&target).settle();
+    };
+    let fields = || dialog.borrow().json_fields().expect("fields");
+
+    // Find what focused on Replace tab: Special lists Find codes and inserts into Find what.
+    click_label(&mut fixture, "Find what:");
+    press(&mut fixture, "Special");
+    assert!(fixture.by_label("Any Character  ^?").is_some(), "Find-only code shown when Find what has focus");
+    assert!(fixture.by_label("Clipboard Contents  ^c").is_none(), "Replace-only code hidden when Find what has focus");
+    click_label(&mut fixture, "Any Character  ^?");
+    assert_eq!(fields()["find"], json!("^?"));
+    assert_eq!(fields()["replace"], json!(""));
+
+    // Replace with focused on Replace tab: Special lists Replace codes and inserts into Replace with.
+    click_label(&mut fixture, "Replace with:");
+    press(&mut fixture, "Special");
+    assert!(fixture.by_label("Clipboard Contents  ^c").is_some(), "Replace-only code shown when Replace with has focus");
+    assert!(fixture.by_label("Any Character  ^?").is_none(), "Find-only code hidden when Replace with has focus");
+    click_label(&mut fixture, "Clipboard Contents  ^c");
+    assert_eq!(fields()["find"], json!("^?"));
+    assert_eq!(fields()["replace"], json!("^c"));
+
+    // Focusing Find what then toggling an option keeps Find what as the Special target (with wildcard items).
+    click_label(&mut fixture, "Find what:");
+    click_label(&mut fixture, "Use wildcards");
+    press(&mut fixture, "Special");
+    assert!(fixture.by_label("Beginning of Word  <").is_some(), "Find wildcard codes shown when Find what was last focused");
+    assert!(fixture.by_label("Find What Expression  \\1").is_none(), "Replace wildcard code hidden when Find what was last focused");
+    click_label(&mut fixture, "Beginning of Word  <");
+    assert!(fields()["find"].as_str().is_some_and(|s| s.ends_with('<')), "wildcard code inserted into Find what: {:?}", fields()["find"]);
+
+    // Focusing Replace with, switching to Find, and returning to Replace resets Special to Find what.
+    click_label(&mut fixture, "Replace with:");
+    click_label(&mut fixture, "Find");
+    click_label(&mut fixture, "Replace");
+    press(&mut fixture, "Special");
+    assert!(fixture.by_label("Beginning of Word  <").is_some(), "tab switch resets Special target to Find what");
+    assert!(fixture.by_label("Find What Expression  \\1").is_none());
+}
