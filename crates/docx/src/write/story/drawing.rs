@@ -23,6 +23,23 @@ impl Writer<'_> {
         Some(rels.add(rt::HYPERLINK, url, true))
     }
 
+    /// An area's fill (a shape's, or a Drawing Canvas's background): a picture fill as
+    /// `a:blipFill` with the relationship to its picture, anything else as [`write_fill`].
+    pub(super) fn area_fill(&mut self, w: &mut W, fill: Option<&Fill>, rels: &mut PartRels) {
+        let picture = match fill.and_then(Fill::sanitized) {
+            Some(Fill::Picture(p)) => self.media_files.get(&p.media).cloned().map(|file| (p, file)),
+            _ => None,
+        };
+        match picture {
+            Some((p, file)) => {
+                let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
+                self.used_media.insert(p.media.clone());
+                blip_fill(w, &p, &rid);
+            }
+            None => write_fill(w, fill),
+        }
+    }
+
     /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
     pub(super) fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
         let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, fx, .. } = o else { return };
@@ -36,21 +53,7 @@ impl Writer<'_> {
         w.close("pic:cNvPicPr");
         w.close("pic:nvPicPr");
         w.open("pic:blipFill", &[]);
-        // Brightness, contrast and transparency (#1711, #1766) as `a:blip` effects (ECMA-376
-        // §20.1.8.13 CT_Blip: an unbounded choice of effects, in any order).
-        let fx = fx.clamped();
-        if !fx.changes_pixels() && fx.transparency == 0 {
-            w.empty("a:blip", &[("r:embed", &rid)]);
-        } else {
-            w.open("a:blip", &[("r:embed", &rid)]);
-            if fx.transparency != 0 {
-                w.empty("a:alphaModFix", &[("amt", &n(i64::from(100_000 - fx.transparency)))]);
-            }
-            if fx.bright != 0 || fx.contrast != 0 {
-                w.empty("a:lum", &[("bright", &n(i64::from(fx.bright))), ("contrast", &n(i64::from(fx.contrast)))]);
-            }
-            w.close("a:blip");
-        }
+        blip(w, fx, &rid);
         if crop.iter().any(|c| *c > 0.0) {
             let c = |v: f32| n((craft_wordmodel::geom::finite(v).clamp(0.0, 1.0) * 100_000.0).round() as i64);
             w.empty("a:srcRect", &[("l", &c(crop[0])), ("t", &c(crop[1])), ("r", &c(crop[2])), ("b", &c(crop[3]))]);
@@ -156,7 +159,8 @@ impl Writer<'_> {
         }
         let alpha = geom.map_or(1.0, |f| f.alpha);
         let ink = geom.is_some_and(|f| f.is_ink());
-        write_fill(w, fill.as_ref().filter(|_| !ink && !kind.is_open()));
+        let fill = fill.as_ref().filter(|_| !ink && !kind.is_open());
+        self.area_fill(w, fill, rels);
         match stroke {
             Some(c) => {
                 let width = emu(stroke_width.clamp(0.0, 100.0));
@@ -641,5 +645,68 @@ pub(super) fn write_fill(w: &mut W, f: Option<&Fill>) {
             }
             w.close("a:gradFill");
         }
+        // A picture needs its relationship: written by `Writer::blip_fill` where there is one.
+        Some(Fill::Picture(_)) => w.empty("a:noFill", &[]),
     }
+}
+
+/// The `a:blip` showing relationship `rid`, with a picture's brightness, contrast and
+/// transparency (#1711, #1766) as its effects (ECMA-376 §20.1.8.13 CT_Blip: an unbounded choice
+/// of effects, in any order).
+fn blip(w: &mut W, fx: &craft_wordmodel::picfx::PicFx, rid: &str) {
+    let fx = fx.clamped();
+    if !fx.changes_pixels() && fx.transparency == 0 {
+        w.empty("a:blip", &[("r:embed", rid)]);
+        return;
+    }
+    w.open("a:blip", &[("r:embed", rid)]);
+    if fx.transparency != 0 {
+        w.empty("a:alphaModFix", &[("amt", &n(i64::from(100_000 - fx.transparency)))]);
+    }
+    if fx.bright != 0 || fx.contrast != 0 {
+        w.empty("a:lum", &[("bright", &n(i64::from(fx.bright))), ("contrast", &n(i64::from(fx.contrast)))]);
+    }
+    w.close("a:blip");
+}
+
+/// A picture fill's `a:blipFill` (ECMA-376 Part 1 §20.1.8.14) showing relationship `rid`: its
+/// brightness, contrast and fade, the part of the picture used, and how it fills the shape
+/// (tiled or stretched). `rotWithShape` is always written: Office takes an omitted one as true.
+fn blip_fill(w: &mut W, p: &craft_wordmodel::fill::PictureFill, rid: &str) {
+    let thousandths = |v: f32| n((v * 1000.0).round() as i64);
+    let rect = |r: [f32; 4]| [("l", thousandths(r[0])), ("t", thousandths(r[1])), ("r", thousandths(r[2])), ("b", thousandths(r[3]))];
+    fn nonzero<'a>(r: &'a [(&'static str, String); 4]) -> Vec<(&'static str, &'a str)> {
+        r.iter().filter(|(_, v)| v != "0").map(|(k, v)| (*k, v.as_str())).collect()
+    }
+    w.open("a:blipFill", &[("rotWithShape", if p.rot_with_shape { "1" } else { "0" })]);
+    blip(w, &p.fx, rid);
+    let crop = rect(p.crop.map(|v| v * 100.0));
+    if crop.iter().any(|(_, v)| v != "0") {
+        w.empty("a:srcRect", &nonzero(&crop));
+    }
+    match &p.tile {
+        Some(t) => {
+            let (tx, ty, sx, sy) = (emu(t.tx), emu(t.ty), thousandths(t.sx), thousandths(t.sy));
+            let mut attrs = vec![("tx", tx.as_str()), ("ty", ty.as_str()), ("sx", sx.as_str()), ("sy", sy.as_str())];
+            attrs.push((
+                "flip",
+                match t.flip {
+                    GradientFlip::None => "none",
+                    GradientFlip::X => "x",
+                    GradientFlip::Y => "y",
+                    GradientFlip::Xy => "xy",
+                },
+            ));
+            if !t.align.is_empty() {
+                attrs.push(("algn", &t.align));
+            }
+            w.empty("a:tile", &attrs);
+        }
+        None => {
+            w.open("a:stretch", &[]);
+            w.empty("a:fillRect", &nonzero(&rect(p.stretch)));
+            w.close("a:stretch");
+        }
+    }
+    w.close("a:blipFill");
 }

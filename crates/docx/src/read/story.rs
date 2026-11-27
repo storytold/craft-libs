@@ -5,6 +5,7 @@ use std::sync::Arc;
 use craft_wordmodel::connector::{ConnEnd, ShapeExtra};
 use craft_wordmodel::control::{ContentControl, ControlWrap};
 use craft_wordmodel::effects::{Glow, Shadow, ShapeEffects};
+use craft_wordmodel::fill::{Fill, GradientFlip, PictureFill, PictureTile};
 use craft_wordmodel::graphic::{Embedded, Graphic, GraphicItem, GraphicKind};
 use craft_wordmodel::para::{AltText, Anchor, Float, FloatAlign, NoteKind, PTabAlign, PTabBase, ShapeKind, Wrap, WrapText, cap_alt};
 use craft_wordmodel::props::{CharProps, NumChange, PropChange, Rgb, TextColor};
@@ -13,7 +14,7 @@ use craft_wordmodel::{Block, Blocks, InlineObject, Paragraph, PartKind, Revision
 
 use super::Reader;
 use super::props::{sectpr, tcpr, trpr};
-use super::shape_style::{own_fill, preset_kind, shape_paint, vml_color, vml_fill, vml_fraction, vml_preset_kind};
+use super::shape_style::{own_fill, own_fill_element, preset_kind, shape_paint, vml_color, vml_fill, vml_fraction, vml_preset_kind};
 use crate::package::{ContentTypes, Rels, rt};
 use crate::units::{int, measure, u32_of};
 use crate::xml::{El, Node};
