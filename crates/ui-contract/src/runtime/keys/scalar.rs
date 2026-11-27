@@ -1,11 +1,12 @@
 //! Optional scalar-row key interest. Geometry and real stops come from the ordinary component pass.
 
 use super::{current, route};
+use crate::runtime::egui::LayerId;
 use crate::runtime::egui::areas;
 use crate::runtime::focus::{self, StopRec};
 use crate::runtime::pointer;
 use craft_behavior::{KeyOwner, MoveMods, NavMove, OwnerClass};
-use egui::{Context, Id, LayerId, Rect};
+use egui::{Context, Id, Rect};
 
 /// Which real scalar row can take a vertical arrow, without moving keyboard focus.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
