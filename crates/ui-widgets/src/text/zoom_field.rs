@@ -25,6 +25,8 @@ const MESSAGE_DECIMALS: usize = 2;
 ///   typed, Tab and Shift+Tab move focus as in any field.
 /// - A press on a part declared `holds_drafts` (the pasteboard, the title bar) keeps the typed zoom unapplied; the
 ///   next Enter applies it.
+/// - With [`ZoomField::clamp_out_of_range`] on, an entry outside the zoom range, zero and negative ones included,
+///   applies the nearest end and reports [`InvalidZoom`] with the "A number between" message.
 #[derive(crate::contract::Pattern)]
 pub struct ZoomField {
     label: Label,
@@ -35,6 +37,7 @@ pub struct ZoomField {
     enabled: bool,
     status_bar: bool,
     scale: ZoomScale,
+    clamp_out_of_range: bool,
 }
 
 /// What a zoom field's 100 % means.
@@ -62,13 +65,32 @@ impl ZoomScale {
 impl ZoomField {
     /// A zoom field named `label` over `view` (`None` when no view is known) of a document of `document` units.
     pub fn new(label: impl Into<Label>, view: Option<CanvasView>, document: Size) -> Self {
-        ZoomField { label: label.into(), view, document, stepper: false, scrub: false, enabled: true, status_bar: false, scale: ZoomScale::Device }
+        ZoomField {
+            label: label.into(),
+            view,
+            document,
+            stepper: false,
+            scrub: false,
+            enabled: true,
+            status_bar: false,
+            scale: ZoomScale::Device,
+            clamp_out_of_range: false,
+        }
     }
 
     /// What 100 % means: device pixels (the default) or document points.
     #[must_use]
     pub fn scale(mut self, scale: ZoomScale) -> Self {
         self.scale = scale;
+        self
+    }
+
+    /// An entry outside the zoom range applies the nearest end and reports [`InvalidZoom`], whose message then says "A
+    /// number between {low} and {high} is required": a typed zoom past the top, below the bottom, zero or negative.
+    /// Off (the default), zero and negative entries are rejected and keep the view, and only a cut entry is reported.
+    #[must_use]
+    pub fn clamp_out_of_range(mut self, on: bool) -> Self {
+        self.clamp_out_of_range = on;
         self
     }
 
@@ -135,11 +157,19 @@ impl ZoomField {
         if self.status_bar {
             field = field.status_zoom();
         }
+        if self.clamp_out_of_range {
+            field = field.zero_and_negative_clamp();
+        }
         let shown = match rect {
             Some(rect) => field.show_at(ui, rect),
             None => field.show(ui),
         };
-        let invalid_zoom = range.filter(|_| shown.cut).map(|range| InvalidZoom { low: *range.start(), high: *range.end() });
+        let clamped = self.clamp_out_of_range && shown.out_of_range.is_some();
+        let invalid_zoom = range.filter(|_| shown.cut || clamped).map(|range| InvalidZoom {
+            low: *range.start(),
+            high: *range.end(),
+            number: self.clamp_out_of_range,
+        });
         let view = match self.view {
             Some(current) => shown.edit.events.clone().map(|percent| {
                 percent.map_or(current, |percent| zoom::with_device(&current, scheme.device(percent), document, pixels_per_point, &scheme))
@@ -158,7 +188,8 @@ pub struct ZoomFieldOutput {
     pub response: Response,
     /// The view changes of this pass.
     pub view: EditEvents<CanvasView>,
-    /// The committed text held a second decimal separator, so the number before it applied, in the pass it
+    /// The committed text held a second decimal separator, so the number before it applied, or (with
+    /// [`ZoomField::clamp_out_of_range`]) the entry lay outside the range and its nearest end applied, in the pass it
     /// committed; the host shows [`InvalidZoom::message`].
     pub invalid_zoom: Option<InvalidZoom>,
 }
@@ -184,15 +215,19 @@ pub struct InvalidZoom {
     pub low: f64,
     /// The greatest zoom the field takes.
     pub high: f64,
+    /// The message says "A number between" rather than "An integer between" ([`ZoomField::clamp_out_of_range`]).
+    pub number: bool,
 }
 
 impl InvalidZoom {
     /// The message that says which zoom range the field takes, in the env's number format ("An integer between
-    /// 0.25% and 12,800.00% is required. Closest value inserted.").
+    /// 0.25% and 12,800.00% is required. Closest value inserted.", or "A number between ..." when [`InvalidZoom::number`]).
     pub fn message(&self, env: &Env) -> String {
         let format = env.format();
         let low = format.percent(self.low / 100.0, MESSAGE_DECIMALS);
         let high = format.percent(self.high / 100.0, MESSAGE_DECIMALS);
-        env.words::<TextWords>().range_integer.fill(&[("low", low.as_str()), ("high", high.as_str())])
+        let words = env.words::<TextWords>();
+        let template = if self.number { &words.range_number } else { &words.range_integer };
+        template.fill(&[("low", low.as_str()), ("high", high.as_str())])
     }
 }

@@ -22,3 +22,4 @@ pub(crate) mod text_field;
 pub(crate) mod widths;
 pub(crate) mod word_run;
 pub(crate) mod zoom_field;
+pub(crate) mod zoom_field_range_alert;

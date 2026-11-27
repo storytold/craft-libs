@@ -188,12 +188,13 @@ pub struct StatusReadout<'a> {
     item: StatusItem,
     values: &'a StatusValues,
     tips: Vec<(StatusItem, Label)>,
+    clamp_out_of_range: bool,
 }
 
 impl<'a> StatusReadout<'a> {
     /// A readout of the zoom of `view` over a document of `document` units that shows `item` from `values`.
     pub fn new(view: Bind<'a, CanvasView>, document: Size, item: StatusItem, values: &'a StatusValues) -> Self {
-        StatusReadout { view, document, item, values, tips: Vec::new() }
+        StatusReadout { view, document, item, values, tips: Vec::new(), clamp_out_of_range: false }
     }
 
     /// A tooltip for the info text while `item` is the one shown.
@@ -204,12 +205,21 @@ impl<'a> StatusReadout<'a> {
         self
     }
 
+    /// The zoom field's [`ZoomField::clamp_out_of_range`]: an entry outside the zoom range applies the nearest end and
+    /// is reported in [`StatusReadoutOutput::invalid_zoom`].
+    #[must_use]
+    pub fn clamp_out_of_range(mut self, on: bool) -> Self {
+        self.clamp_out_of_range = on;
+        self
+    }
+
     /// Shows the readout in a row: the zoom field, which scrubs the zoom, the info text and the menu button.
     pub fn show(mut self, ui: &mut Ui) -> StatusReadoutOutput {
         let env = Env::of(ui);
         let words = env.words::<BarWords>();
         let text = self.item.text(self.values, &words, &env, ui.ctx());
         let document = self.document;
+        let clamp_out_of_range = self.clamp_out_of_range;
         let mut events = EditEvents::new();
         let mut invalid_zoom = None;
         let shown = Row::new().show(ui, |ui, cx| {
@@ -217,9 +227,9 @@ impl<'a> StatusReadout<'a> {
                 Some(Mixed::Same(current)) => Some(current),
                 _ => None,
             };
-            let field = Field::new(words.readout_zoom.clone())
-                .side(SideLabel::new().kind(LabelKind::Hidden))
-                .show(ui, |ui, _| ZoomField::new(words.readout_zoom.clone(), current, document).scrub(true).status_bar().show(ui));
+            let field = Field::new(words.readout_zoom.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).show(ui, |ui, _| {
+                ZoomField::new(words.readout_zoom.clone(), current, document).scrub(true).status_bar().clamp_out_of_range(clamp_out_of_range).show(ui)
+            });
             let field = field.inner.map(|zoom| {
                 invalid_zoom = zoom.invalid_zoom;
                 events = zoom.view;

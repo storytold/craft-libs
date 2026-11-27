@@ -371,6 +371,14 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         self
     }
 
+    /// Zoom typing that holds a zero or negative entry to the range's low end, as any other entry outside it, instead
+    /// of rejecting it.
+    #[must_use]
+    pub(super) fn zero_and_negative_clamp(mut self) -> Self {
+        self.positive_only = false;
+        self
+    }
+
     /// Keeps the entire zoom percentage together in an unframed well in the status bar.
     #[must_use]
     pub(super) fn status_zoom(mut self) -> Self {
