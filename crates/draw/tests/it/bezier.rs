@@ -2,11 +2,12 @@
 
 use craft_behavior::kurbo::{ParamCurve as _, Point, Size, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
+use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_draw::ui::{
     AnchorDelete, AnchorTool, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef,
     PathEdit, PathSelection, PathTool, SegmentMark,
 };
-use craft_ui::canvas::{Canvas, Guide, Momentary, NavigationOptions, ToolHost, tool_pass};
+use craft_ui::canvas::{Canvas, Guide, Momentary, NavigationOptions, Snap, ToolHost, tool_pass};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft_ui::primitives::cancel_press_of;
@@ -176,6 +177,7 @@ struct State {
     paths: Vec<EditPath>,
     selection: PathSelection,
     guides: Vec<Guide>,
+    snap: Option<Snap>,
     tool: BezierTool,
     handles: HandlesShown,
     anchors: AnchorsShown,
@@ -248,6 +250,7 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         paths,
         selection: PathSelection::default(),
         guides: Vec::new(),
+        snap: None,
         tool: BezierTool::Direct,
         handles: HandlesShown::Selected,
         anchors: AnchorsShown::All,
@@ -288,6 +291,10 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         let canvas_id = ui.scope_id().with("document canvas");
         let canvas = Canvas::new("Document").id(canvas_id).view(view).precise_cursors(st.precise);
         let canvas = if st.pans { canvas.document(Size::new(4000.0, 4000.0)) } else { canvas };
+        let canvas = match &st.snap {
+            Some(snap) => canvas.snap(snap.clone()),
+            None => canvas,
+        };
         let mut reply = None;
         let canvas = canvas.show(ui, |ui, body| {
             // The guides lie under the paths: a stack position hides the levels of the ones below it.
@@ -1509,6 +1516,81 @@ fn space_moves_the_pulled_anchor_then_release_resumes_its_handles() {
     assert_eq!((st.seen.first(), st.seen.last()), (Some(&Seen::Begin), Some(&Seen::Commit)));
     assert!(!st.seen.contains(&Seen::Cancel) && !st.seen.contains(&Seen::Set));
     assert!(st.inserts.is_empty(), "this drag is not an Insert-key report");
+    drop(st);
+
+    // Space after the press but before the first movement translates from the press, not from a first pulled handle.
+    let mut h = harness_with(vec![path_a(), path_b()], true);
+    h.update(|st| {
+        st.tool = BezierTool::AddAnchor;
+        st.canvas_tool = Some(PathTool::AddAnchor);
+        st.momentary = Some(Momentary::new(NavigationOptions::default()));
+    });
+    let at = h.screen(p(110.0, 60.0));
+    let to = at + vec2(30.0, 20.0);
+    h.press_at(at);
+    h.fixture.frame(vec![space_key(true)]);
+    h.move_to(to);
+    let translated = h.state.borrow().paths[0].subpaths[0].knots[1];
+    assert!(translated.anchor.distance(p(140.0, 80.0)) < 1e-3, "the first Space move includes all travel from the press: {translated:?}");
+    assert!(near(translated.in_ctrl, translated.anchor) && near(translated.out_ctrl, translated.anchor));
+    h.fixture.frame(vec![space_key(false)]).frame(Vec::new());
+    assert_eq!(h.state.borrow().paths[0].subpaths[0].knots[1], translated);
+    let end = to + vec2(20.0, 10.0);
+    h.move_to(end);
+    let resumed = h.state.borrow().paths[0].subpaths[0].knots[1];
+    assert!(near(resumed.anchor, translated.anchor) && resumed.out_ctrl.distance(h.state.borrow().view.unwrap().to_doc(end)) < 1e-6);
+    h.release_at(end);
+    assert_eq!(h.state.borrow().seen.iter().filter(|s| **s == Seen::Begin).count(), 1);
+    assert_eq!(h.state.borrow().seen.iter().filter(|s| **s == Seen::Commit).count(), 1);
+
+    // A real canvas Snap would pull x=160 to the guide at x=165. Space keeps raw translation; release alone must
+    // not apply that snap, including later stationary passes. Moving or changing Shift/Alt still reads constraints.
+    let mut targets = SnapTargets::new();
+    targets.add(SnapTarget::new(craft_behavior::Axis::Y, 165.0, SnapKind::Guide));
+    let mut h = harness_with(vec![path_a(), path_b()], true);
+    h.update(|st| {
+        st.tool = BezierTool::AddAnchor;
+        st.canvas_tool = Some(PathTool::AddAnchor);
+        st.momentary = Some(Momentary::new(NavigationOptions::default()));
+        st.snap = Some(Snap::new(std::sync::Arc::new(targets), SnapOptions::default()));
+    });
+    let at = h.screen(p(110.0, 60.0));
+    let pulled_at = at + vec2(20.0, 60.0);
+    h.press_at(at);
+    h.move_to(at + vec2(10.0, 30.0));
+    h.move_to(pulled_at);
+    let pulled = h.state.borrow().paths[0].subpaths[0].knots[1];
+    h.fixture.frame(vec![space_key(true)]);
+    let moved_at = pulled_at + vec2(30.0, 20.0);
+    h.move_to(moved_at);
+    let moved = h.state.borrow().paths[0].subpaths[0].knots[1];
+    assert!(near(moved.anchor, pulled.anchor + Vec2::new(30.0, 20.0)));
+    assert!(moved.out_ctrl.distance(p(160.0, 140.0)) < 1e-3 && near(moved.in_ctrl, pulled.in_ctrl + Vec2::new(30.0, 20.0)));
+    h.fixture.frame(vec![space_key(false)]).frame(Vec::new()).frame(Vec::new());
+    h.move_to(moved_at);
+    assert_eq!(h.state.borrow().paths[0].subpaths[0].knots[1], moved, "no delayed stationary snap after Space release");
+    // Modifier-only frames travel through the real input/press route: no synthetic PathEdit calls.
+    h.fixture.hold(egui::Modifiers::SHIFT).frame(Vec::new());
+    let locked = h.state.borrow().paths[0].subpaths[0].knots[1];
+    assert!(near(locked.anchor, moved.anchor) && locked.out_ctrl.distance(p(140.0, 140.0)) < 1e-3, "stationary Shift still locks the handle: {locked:?}");
+    h.fixture.hold(egui::Modifiers::NONE).frame(Vec::new());
+    let snapped = h.state.borrow().paths[0].subpaths[0].knots[1];
+    assert!(snapped.out_ctrl.distance(p(165.0, 140.0)) < 1e-3, "releasing Shift reevaluates the actual enabled guide snap: {snapped:?}");
+    h.fixture.hold(egui::Modifiers::ALT).frame(Vec::new());
+    let alone = h.state.borrow().paths[0].subpaths[0].knots[1];
+    assert!(near(alone.in_ctrl, snapped.in_ctrl) && !alone.smooth, "stationary Alt still breaks the handle pair: {alone:?}");
+    let end = moved_at + vec2(20.0, 10.0);
+    h.move_to(end);
+    let resumed = h.state.borrow().paths[0].subpaths[0].knots[1];
+    assert!(near(resumed.anchor, moved.anchor) && resumed.out_ctrl.distance(p(180.0, 150.0)) < 1e-3 && near(resumed.in_ctrl, alone.in_ctrl));
+    h.fixture.hold(egui::Modifiers::NONE);
+    h.release_at(end);
+    let st = h.state.borrow();
+    assert_eq!(st.paths[0].subpaths[0].knots.len(), 5);
+    assert_eq!(st.selection, sel(1, &[(0, 1)]));
+    assert_eq!(st.seen.iter().filter(|s| **s == Seen::Begin).count(), 1);
+    assert_eq!(st.seen.iter().filter(|s| **s == Seen::Commit).count(), 1);
+    assert!(!st.seen.contains(&Seen::Cancel) && !st.seen.contains(&Seen::Set));
 }
 
 // Without an overlay-owned press, the same held key still gives the canvas its ordinary hand drag.

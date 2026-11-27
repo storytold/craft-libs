@@ -263,6 +263,8 @@ enum Target {
         out: Point,
         in_ctrl: Option<Point>,
         last: Pos2,
+        /// A translated handle stays put until the pointer or its constraints change.
+        translated_mods: Option<Mods>,
     },
     /// Direct Selection's ⌥ drag on a segment: a copy of `subpath` dragged from `from`, the grabbed point.
     Duplicate {
@@ -627,7 +629,7 @@ impl<'a> BezierOverlay<'a> {
             // Anchor's with ⌥, moves it.
             BezierHit::Segment { path, segment, t } if self.tool == BezierTool::AddAnchor && self.tool.adds(mods) => {
                 let from = Self::segment_point(paths, path, segment, t);
-                Target::Pull { path, segment, t, from, by: Vec2::ZERO, out: from, in_ctrl: None, last: start.origin }
+                Target::Pull { path, segment, t, from, by: Vec2::ZERO, out: from, in_ctrl: None, last: start.origin, translated_mods: None }
             }
             BezierHit::Segment { path, segment, t } if self.tool.adds(mods) => {
                 Target::Insert { path, segment, t, from: Self::segment_point(paths, path, segment, t) }
@@ -768,10 +770,10 @@ impl<'a> BezierOverlay<'a> {
 
     /// Keeps Add Anchor's anchor and handles together while Space is held; otherwise pulls the handles.
     /// ⌥ leaves the previous in handle in place until Space moves the whole knot again.
-    fn edit_pulled(tool: BezierTool, target: &mut Target, at: Pointing<'_>, was_dragging: bool) -> Option<PathEdit> {
+    fn edit_pulled(tool: BezierTool, target: &mut Target, at: Pointing<'_>) -> Option<PathEdit> {
         let Pointing { view, snap, start, pos, mods, space } = at;
-        if let Target::Pull { path, segment, t, from, by, out, in_ctrl, last } = target {
-            if space && was_dragging {
+        if let Target::Pull { path, segment, t, from, by, out, in_ctrl, last, translated_mods } = target {
+            if space {
                 let delta = view.to_doc(pos) - view.to_doc(*last);
                 *by += delta;
                 *out += delta;
@@ -779,8 +781,15 @@ impl<'a> BezierOverlay<'a> {
                     *incoming += delta;
                 }
                 *last = pos;
+                *translated_mods = Some(mods);
                 return Some(PathEdit::PullAnchor { path: *path, segment: *segment, t: *t, by: *by, out: *out, in_ctrl: *in_ctrl });
             }
+            // Space moves by raw travel, including off the snap targets. Releasing it is not a pointer move:
+            // keep that geometry on every stationary pass, but still read modifier-only constraint changes.
+            if *last == pos && *translated_mods == Some(mods) {
+                return Some(PathEdit::PullAnchor { path: *path, segment: *segment, t: *t, by: *by, out: *out, in_ctrl: *in_ctrl });
+            }
+            *translated_mods = None;
             if mods.alt && in_ctrl.is_none() {
                 let anchor = *from + *by;
                 *in_ctrl = Some(anchor - (*out - anchor));
@@ -964,7 +973,6 @@ impl<'a> BezierOverlay<'a> {
             }
             (None, None) => Held { origin: start.origin, target: Target::Marquee, start: paths.to_vec(), began: false, tool: self.tool },
         };
-        let was_dragging = held.began;
         let moves = !matches!(held.target, Target::Nothing | Target::Toggle { .. } | Target::Pick { .. });
         if first && moves {
             held.began = true;
@@ -984,7 +992,7 @@ impl<'a> BezierOverlay<'a> {
                     }
                 }
                 _ => {
-                    if let Some(edit) = Self::edit_pulled(self.tool, &mut held.target, at, was_dragging) {
+                    if let Some(edit) = Self::edit_pulled(self.tool, &mut held.target, at) {
                         self.propose(cx, &held.start, edit);
                     }
                 }
@@ -1013,7 +1021,7 @@ impl<'a> BezierOverlay<'a> {
         }
         if held.began {
             let mut target = held.target.clone();
-            if let Some(edit) = Self::edit_pulled(self.tool, &mut target, at, true) {
+            if let Some(edit) = Self::edit_pulled(self.tool, &mut target, at) {
                 self.propose(cx, &held.start, edit);
             }
             // The copy is what was dragged: it ends up selected, not the source.
