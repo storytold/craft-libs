@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use craft_behavior::{EditEvent, Mixed, Selection};
-use craft_color_ui::palette::{SwatchColor, SwatchEntry, SwatchGroup, SwatchNote, count_swatches, read_swatches};
+use craft_color_ui::palette::{SwatchColor, SwatchEntry, SwatchGroup, SwatchNote, read_swatches};
 use craft_color_ui::ui::{
     ColorPanel, ColorPanelLayout, ColorPanelMode, ColorPanelShown, ColorPanelState, HarmonyPanel, HarmonyPanelState, HarmonyPicked, HarmonyWheel,
     PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchLibrary, SwatchPalette, SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesState,
@@ -578,6 +578,10 @@ fn swatches_rig(groups: Vec<SwatchGroup>, state: SwatchesState) -> (Fixture, Rc<
     (fixture, edits)
 }
 
+fn palette_color_count(groups: &[SwatchGroup]) -> usize {
+    groups.iter().flat_map(|group| &group.entries).filter(|entry| entry.color().is_some()).count()
+}
+
 /// Our own swatches cross ACT's 256-colour limit, with groups and a non-RGB colour that ACT cannot retain.
 fn act_export_groups() -> Vec<SwatchGroup> {
     let mut entries = vec![SwatchEntry::new("Gray", SwatchColor::Gray(0.5))];
@@ -606,7 +610,7 @@ fn the_act_menu_export_reports_its_palette_losses_only_after_a_successful_save()
     let PresetFileRequest::Save { file_name, extensions, bytes, .. } = &request else { panic!("a save request") };
     assert_eq!(extensions, &["act".to_owned()]);
     let (back, _) = read_swatches(bytes, file_name).expect("the menu's bytes are a readable ACT palette");
-    assert_eq!(count_swatches(&back), 256, "ACT holds at most 256 colours");
+    assert_eq!(palette_color_count(&back), 256, "ACT holds at most 256 colours");
     assert_eq!(back.len(), 1, "ACT has no groups");
     assert!(back[0].entries.iter().all(|entry| matches!(entry.color(), Some(SwatchColor::Rgb(_)))), "ACT stores RGB colours");
 
@@ -616,7 +620,7 @@ fn the_act_menu_export_reports_its_palette_losses_only_after_a_successful_save()
     let report = done.report.expect("the saved file carries the menu's loss report");
     assert!(report.notes.contains(&SwatchNote::GroupsFlattened));
     assert!(report.notes.contains(&SwatchNote::ConvertedToRgb(1)));
-    assert!(report.notes.contains(&SwatchNote::Truncated(count_swatches(&groups) - count_swatches(&back))));
+    assert!(report.notes.contains(&SwatchNote::Truncated(palette_color_count(&groups) - palette_color_count(&back))));
     let status = done.status.expect("a successful lossy export explains what was lost");
     for line in SwatchesPanel::note_lines(&report, true, &words, &format) {
         assert!(status.text.as_str().contains(&line), "the status includes every export note: {line}");
@@ -649,7 +653,7 @@ fn failed_or_abandoned_act_exports_do_not_leak_loss_notes_into_the_next_export()
         let request = next.file.unwrap();
         let PresetFileRequest::Save { file_name, bytes, .. } = &request else { panic!("a save request") };
         let (back, _) = read_swatches(bytes, file_name).unwrap();
-        assert_eq!(count_swatches(&back), count_swatches(&groups), "{command:?} retains every colour");
+        assert_eq!(palette_color_count(&back), palette_color_count(&groups), "{command:?} retains every colour");
         let done = SwatchesPanel::apply_file(&mut state, &request.saved(file_name).unwrap(), &words, &Default::default(), &format);
         let report = done.report.expect("the current export's report");
         assert!(
