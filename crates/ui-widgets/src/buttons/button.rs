@@ -200,6 +200,11 @@ pub struct Button<'a> {
     /// uses its natural width.
     #[prop]
     wrap_detail: bool,
+    /// The most lines the label of an inline button wraps onto in layouts that measure the button at its assigned
+    /// width: a longer label is cut with an ellipsis at the end of the last line, and shown whole in a tooltip
+    /// (a button that names an item by its text). By default the label stays on one line.
+    #[prop(quantity = "count")]
+    label_lines: Option<u8>,
     /// Whether a command button shows its command's chord after the label.
     #[prop]
     chord: ButtonChord,
@@ -231,6 +236,7 @@ impl<'a> Button<'a> {
             align: HAlign::Center,
             detail: None,
             wrap_detail: false,
+            label_lines: None,
             chord: ButtonChord::Hidden,
             popup: None,
             expanded: None,
@@ -282,6 +288,7 @@ impl<'a> Button<'a> {
             align: self.align,
             chord,
             detail: self.detail.as_ref().map(|detail| (detail.as_str(), detail_wrap)),
+            label_lines: self.label_lines,
         }
     }
 
@@ -374,15 +381,15 @@ impl Component for Button<'_> {
             Some(room) => shown.max(face::measure(cx, &self.face_of(room.as_str(), cx.style, chord.as_deref()))),
             None => shown,
         };
-        if cx.proposal == Proposal::Min
-            && self.arrangement == Arrangement::Inline
-            && let Some(detail) = spec.detail_run().filter(|run| run.wrap == Wrap::Wrap)
-        {
-            // The title reservation and style floor can widen the face before its caption wraps.
+        if cx.proposal == Proposal::Min && self.arrangement == Arrangement::Inline {
+            // The title reservation and style floor can widen the face before its caption or label wraps.
             let metrics = cx.style.metrics;
             let floor = metrics.least_width.unwrap_or(metrics.min_size.x) - metrics.padding.start - metrics.padding.end;
             let width = cx.room.filter(|room| room.is_finite()).unwrap_or_else(|| size.x.max(floor));
-            size.y += cx.layout_at(&detail, width).size().y - cx.least(&detail).size().y;
+            if let Some(detail) = spec.detail_run().filter(|run| run.wrap == Wrap::Wrap) {
+                size.y += cx.layout_at(&detail, width).size().y - cx.least(&detail).size().y;
+            }
+            size.y += face::label_growth(cx, &spec, width);
         }
         size
     }

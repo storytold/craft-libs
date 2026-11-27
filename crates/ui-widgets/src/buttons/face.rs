@@ -110,15 +110,28 @@ pub(crate) struct FaceSpec<'a> {
     pub chord: Option<&'a str>,
     /// A caption under the icon and label of an inline face, with its wrapping policy.
     pub detail: Option<(&'a str, Wrap)>,
+    /// The most lines the label of an inline face wraps onto at the face's width, cut with an ellipsis at the end of
+    /// the last one; `None` keeps the label on one line, cut at its end.
+    pub label_lines: Option<u8>,
 }
 
 impl FaceSpec<'_> {
     fn run(&self) -> TextRun<'_> {
-        let run = TextRun::mnemonic(self.label, self.mnemonic).elide();
+        let run = TextRun::mnemonic(self.label, self.mnemonic);
+        let run = match self.wrapped_lines() {
+            // The lines sit where the face places its parts.
+            Some(lines) => run.wrap(Wrap::Clamp(lines)).align(self.align),
+            None => run.elide(),
+        };
         match self.role {
             Some(role) => run.role(role),
             None => run,
         }
+    }
+
+    /// The lines an inline face's label may wrap onto: `None` for one line, which a stacked face's label lines are too.
+    fn wrapped_lines(&self) -> Option<u8> {
+        self.label_lines.filter(|lines| *lines > 1 && self.arrangement == Arrangement::Inline)
     }
 
     /// Whether the face has a leading part: an icon or a picture.
@@ -479,7 +492,7 @@ pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) 
     let trail = arrow_room(cx.env.get::<ControlPlace>(), cx.env.get::<RibbonLook>()).unwrap_or(icon);
     let fixed = spec.icons_width(icon, trail) + gap * spec.gaps() as f32;
     let detail = spec.detail_run();
-    let wraps = detail.as_ref().is_some_and(|run| run.wrap == Wrap::Wrap);
+    let wraps = spec.wrapped_lines().is_some() || detail.as_ref().is_some_and(|run| run.wrap == Wrap::Wrap);
     let room = cx.room.or_else(|| {
         if !wraps {
             return None;
@@ -512,6 +525,22 @@ pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) 
     let Some(detail) = detail else { return row };
     let detail = if cx.proposal == Proposal::Min { cx.least(&detail).size() } else { cx.layout_at(&detail, room).size() };
     Vec2::new(row.x.max(detail.x), row.y + gap + detail.y)
+}
+
+/// How much taller a wrapping label makes an inline face whose content is `width` wide than the face's least measure
+/// counts, which takes the label on one line at its readable least: 0 for a label that keeps to one line.
+pub(crate) fn label_growth<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>, width: f32) -> f32 {
+    let spec = &spec.at(cx.env.get::<GroupLevel>());
+    if spec.wrapped_lines().is_none() || spec.label.is_empty() {
+        return 0.0;
+    }
+    let icon = measured_icon(cx);
+    let trail = arrow_room(cx.env.get::<ControlPlace>(), cx.env.get::<RibbonLook>()).unwrap_or(icon);
+    let fixed = spec.icons_width(icon, trail) + cx.gap() * spec.gaps() as f32;
+    let run = spec.run();
+    let one = cx.least(&run).size().y.max(icon);
+    let wrapped = cx.layout_at(&run, (width - fixed).max(0.0)).size().y.max(icon);
+    (wrapped - one).max(0.0)
 }
 
 /// `icon` in `color`, unless the spec names a colour of its own.
@@ -623,7 +652,9 @@ pub(crate) fn paint<C: Component>(ui: &PaintUi<'_>, cx: &Cx<'_, C>, ink: (&TextL
     if let (Some(text), Some(slot)) = (&text, slots.text)
         && !(spec.loading && !spec.leads())
     {
-        draw.galley(pos2(slot.min.x, text_top(&draw, row, text)), text);
+        // A label wrapped onto several lines is centred in the row as a block; one line sits on the row's baseline.
+        let top = if text.galley.rows.len() > 1 { row.center().y - text.size().y / 2.0 } else { text_top(&draw, row, text) };
+        draw.galley(pos2(slot.min.x, top), text);
     }
     if let (Some(chord), Some(slot)) = (&chord, slots.chord) {
         draw.galley(pos2(slot.min.x, text_top(&draw, row, chord)), chord);

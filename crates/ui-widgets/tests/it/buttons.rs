@@ -147,6 +147,69 @@ pub(crate) mod detail_wrapping {
     }
 }
 
+pub(crate) mod label_wrapping {
+    use super::{Button, DELAY, Fixture, Frames, Rect, moved, vec2};
+    use craft_behavior::Proposal;
+    use craft_ui::contract::{Props as _, Show as _, Sizing};
+    use craft_ui::testing::trial;
+
+    /// One line in the rooms below.
+    const LINE: &str = "Paste";
+    /// Two or three lines in a 172-point room.
+    const LABEL: &str = "Garden notes: water the tomatoes and prune the roses";
+    /// More than three lines there.
+    const LONG: &str = "Garden notes for the week: water the tomatoes, prune the roses, mulch the beds and sweep the path by the shed.";
+
+    /// The rect of the run painted for `text` (its whole text, cut or not) and whether it is cut.
+    fn run(fixture: &Fixture, text: &str) -> (Rect, bool) {
+        fixture.texts().iter().find(|run| run.text == text).map(|run| (run.rect, run.elided)).unwrap_or_else(|| panic!("{text:?} paints"))
+    }
+
+    /// A label wraps at its button's width onto at most `label_lines` lines inside the face: one that fits them shows
+    /// whole, a longer one is cut at the end of the last line, keeps the whole label as the button's name and shows it
+    /// in its tooltip.
+    #[trial]
+    fn a_button_label_wraps_onto_at_most_its_lines_and_a_longer_one_is_cut_at_the_last() {
+        let mut fixture = Fixture::new(|ui| {
+            Button::new(LINE).sizing(Sizing::FillWidth).show(ui);
+            Button::new(LABEL).label_lines(3).sizing(Sizing::FillWidth).show(ui);
+            Button::new(LONG).label_lines(3).sizing(Sizing::FillWidth).show(ui);
+        });
+        fixture.room(vec2(172.0, 400.0)).settle();
+        let (line, _) = run(&fixture, LINE);
+        let (label, label_cut) = run(&fixture, LABEL);
+        let (long, long_cut) = run(&fixture, LONG);
+        assert!(label.height() > 1.5 * line.height() && !label_cut, "the label wraps and shows whole: {label:?}, a line {line:?}");
+        assert!(long.height() > 2.5 * line.height() && long.height() < 3.5 * line.height(), "the long label takes three lines: {long:?}");
+        assert!(long_cut, "the long label is cut at the end of its last line");
+        let button = fixture.by_label(LONG).expect("the whole label names the button");
+        assert!(button.rect.expand(0.5).contains_rect(long), "the lines fit inside the button: {long:?} in {:?}", button.rect);
+
+        let before = fixture.texts().iter().filter(|run| run.text == LONG).count();
+        fixture.frame(vec![moved(button.rect.center())]);
+        fixture.advance(DELAY);
+        fixture.settle();
+        assert!(fixture.texts().iter().filter(|run| run.text == LONG).count() > before, "the tooltip shows the whole label");
+    }
+
+    /// A wrapping label wraps where the button is measured at a width and keeps to one line when the width is
+    /// unbounded; at its least the button is as tall as its label at the width it returns.
+    #[trial]
+    fn a_wrapping_label_measures_at_a_given_width_and_its_least_height_follows_its_least_width() {
+        let mut frames = Frames::new();
+        frames.idle(1, |ui| {
+            let mut button = Button::new(LABEL).label_lines(3);
+            let [ideal, unbounded, given] =
+                [Proposal::Ideal, Proposal::Width(f32::INFINITY), Proposal::Width(134.0)].map(|p| button.measure_in(ui, p));
+            assert_eq!(ideal, unbounded, "an unbounded width keeps the label on one line");
+            assert!(given.y > ideal.y && given.x <= 134.5, "a given width wraps the label inside it: {given:?}, one line {ideal:?}");
+            let minimum = button.measure_in(ui, Proposal::Min);
+            let at_width = button.measure_in(ui, Proposal::Width(minimum.x));
+            assert!((minimum.y - at_width.y).abs() < 0.5, "the least height follows the least width: {minimum:?}, {at_width:?}");
+        });
+    }
+}
+
 /// The button kinds that take an arrangement.
 #[derive(Clone, Copy, Debug)]
 enum Kind {

@@ -268,6 +268,7 @@ impl Segment {
             align: crate::primitives::HAlign::Center,
             chord: None,
             detail: None,
+            label_lines: None,
         }
     }
 }
