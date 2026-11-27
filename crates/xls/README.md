@@ -1,10 +1,10 @@
 # craft-xls
 
-A clean-room reader for Excel 97-2003 workbooks (`.xls`, BIFF8). It turns the bytes of a file
+A clean-room reader for Excel 5.0/95 and 97-2003 workbooks (`.xls`, BIFF5/BIFF8). It turns the bytes of a file
 into a `Workbook` that keeps the file's own terms: cells, formulas as text, the format table,
 column and row records. Mapping that onto an application's document is the caller's work.
 No `unsafe`. Dependencies: `craft-cfb` (the compound file container), `craft-sheet` (cell positions,
-values and tables shared with the other spreadsheet formats), `md-5` and `sha1` (RC4 keys),
+values and tables shared with the other spreadsheet formats), `craft-codepage` (legacy text), `md-5` and `sha1` (RC4 keys),
 `miniz_oxide` (compressed metafiles) and `thiserror`.
 No third-party implementation was consulted.
 
@@ -51,8 +51,30 @@ conditional formats per sheet. A damaged comment, object or conditional-format r
 skipped with a warning.
 
 Not read: charts, other shapes, newer conditional formats (CF12), hyperlinks,
-PivotTables, macros. Each is named once in `Read::warnings`. BIFF5 and older is refused
-(`Error::Biff5`).
+PivotTables, macros. Each is named once in `Read::warnings`. Versions before BIFF5 are refused.
+
+## BIFF5 import
+
+BIFF5 `Book` streams (and BIFF5 stored as `Workbook`) use the same bounded container and
+record reader. The version is taken from BOF, never guessed from the stream name. Byte strings
+are decoded with the workbook CODEPAGE, found before any text is decoded; absent CODEPAGE
+uses Windows-1252. The existing `craft-codepage` single-byte Windows, DOS and Mac Roman
+pages are supported. Other pages, including East Asian multibyte pages, are refused explicitly.
+
+Supported: worksheet names and visibility, numbers, inline text, booleans and errors, cached
+formula results (including String records), number formats, fonts, XF fills/borders/alignment,
+palette colours, row heights, column widths and calculation settings. Cell positions are bounded
+by the BIFF5 grid (16,384 rows by 256 columns). Arithmetic, functions, strings, local references
+and areas are translated to the common formula decoder, including shared relative references.
+
+Not yet supported: BIFF5 defined names, named styles, drawings and comments, formula tokens
+for array constants, names and external/3-D references, or BIFF5 encryption. Names and objects
+produce warnings; unsupported formulas retain their cached values with `FormulaKept`, rather
+than being decoded as BIFF8. Encrypted files return `UnsupportedEncryption`.
+
+BIFF5 structures follow the published [Excel file format specification, revision 1.42](https://www.openoffice.org/sc/excelfileformat.pdf), sections 2.5.2, 3.3.3, 3.4, 5.45, 5.49,
+5.115. No external implementation source was consulted. Fixtures in `tests/it/biff5.rs` are
+original records generated in Rust, with no user documents or proprietary assets.
 
 ## Encrypted workbooks
 

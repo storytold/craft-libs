@@ -200,7 +200,7 @@ fn text_result_of_a_formula_kept_as_its_value() {
 }
 
 #[test]
-fn refuses_encrypted_old_and_foreign_files() {
+fn refuses_damaged_encrypted_empty_and_foreign_files() {
     // FILEPASS in the globals: an encrypted workbook (encryption.rs reads them); this one is cut
     // short, so it is a damaged file.
     let mut stream = bof(0x0005);
@@ -210,11 +210,11 @@ fn refuses_encrypted_old_and_foreign_files() {
     // A BIFF5 (Excel 5.0/95) workbook keeps its data in a `Book` stream.
     let book = compound("Book", &stream);
     assert!(is_xls(&book));
-    assert_eq!(read_xls(&book).err(), Some(Error::Biff5));
+    assert!(matches!(read_xls(&book), Err(Error::Invalid(_))));
     // So does one whose Workbook stream starts with a BIFF5 BOF.
     let mut old = rec(0x0809, &u16s(&[0x0500, 0x0005, 0, 0]));
     old.extend(eof());
-    assert_eq!(read_xls(&compound("Workbook", &old)).err(), Some(Error::Biff5));
+    assert!(matches!(read_xls(&compound("Workbook", &old)), Err(Error::Invalid(_))));
     // Another compound file (a word processor document): not a workbook.
     let doc = compound("WordDocument", &[0u8; 100]);
     assert!(!is_xls(&doc));

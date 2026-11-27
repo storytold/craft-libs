@@ -1,5 +1,5 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
-//! Clean-room reader for Excel 97-2003 workbooks (`.xls`, BIFF8), written from Microsoft's
+//! Clean-room reader for Excel 5.0/95 and 97-2003 workbooks (`.xls`, BIFF5/BIFF8), written from Microsoft's
 //! public specifications **[MS-XLS]: Excel Binary File Format (.xls) Structure** (the Workbook
 //! stream) and [MS-CFB] (the compound file around it, read by `craft-cfb`).
 //!
@@ -16,7 +16,9 @@
 //! PivotTables, macros) is skipped and named in [`Read::warnings`]. A workbook encrypted with
 //! RC4 or RC4 CryptoAPI is read with its password ([`read_with_password`]; without one, Excel's
 //! default password is tried and [`Error::Encrypted`] says one is needed). Other encryption and
-//! versions before BIFF8 are refused ([`Error::UnsupportedEncryption`], [`Error::Biff5`]). A formula that
+//! versions before BIFF5 are refused. BIFF5 supports single-byte code pages, values, common
+//! formulas, cell formats and layout; names, objects and unsupported formulas are reported
+//! in warnings (see the crate README for the exact subset). A formula that
 //! cannot be put back into text (links to other workbooks, macro commands, unknown tokens)
 //! leaves its cell with the saved result and a [`Warning::FormulaKept`].
 //!
@@ -34,6 +36,7 @@
 //! # }
 //! ```
 
+mod biff5;
 mod cond;
 mod crypt;
 mod drawing;
@@ -79,7 +82,7 @@ pub enum Error {
     /// AES or another cipher or hash, an external provider), named.
     #[error("the workbook uses {0} encryption, which is not read")]
     UnsupportedEncryption(String),
-    /// An Excel 5.0/95 workbook (BIFF5), which is not read.
+    /// Retained for API compatibility. Supported BIFF5 workbooks no longer return this error.
     #[error("Excel 5.0/95 workbooks (BIFF5) are not supported")]
     Biff5,
 }
@@ -88,6 +91,9 @@ pub enum Error {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum Warning {
+    /// BIFF5 objects use older structures than BIFF8 objects.
+    #[error("BIFF5 drawings, comments and named styles were not read")]
+    Biff5Objects,
     #[error("some cell formatting records were shorter than expected; the formatting present was kept")]
     ShortFormatting,
     #[error("some number formats were shorter than their declared length; the characters present were kept")]
