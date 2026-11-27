@@ -283,8 +283,12 @@ struct Settled {
     place: Place,
     /// The rect its content took.
     rect: Rect,
-    /// The pointer was over it, or one of its stops held focus: it runs again to show that they left.
+    /// A press held that started in it, or one of its stops was the target of a focus request: it runs again to show
+    /// that they ended.
     engaged: bool,
+    /// What pointer sensing gave it (`pointer::Sensed`) and the hover point, screen points, when it ran.
+    sensed: crate::runtime::pointer::Sensed,
+    pointer: Option<egui::Pos2>,
     /// What it ran for: its props key after the run.
     key: Key,
     /// The pass it ran in.
@@ -503,8 +507,15 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// It replays when its last run was in an earlier pass, of this frame or an earlier one, and since then:
 /// - nothing in it moves: no animation off its end value, no repaint asked from inside it, no texture it shows still
 ///   loading, no wake time reached;
-/// - the pointer is not over it or an overlay layer it shows, no press started on either and none of its widgets is
-///   dragged, and none of that held in its last run;
+/// - what pointer sensing gives it is what its run saw (`pointer::Sensed`: the hover, part and pointer-over facts of
+///   its roots and egui widgets, and the parts of its roots under the pointer), so a move within one part of it, a
+///   collection's row among them, leaves it alone, and a move onto another part, in or out runs it; while it is under
+///   the pointer, the modifiers are the ones its run saw; the pointer did not move in a rect its run follows the
+///   pointer in (`pointer::follows_pointer`, which a hover position read marks), now or then; no wheel share or owed
+///   ease of this pass goes to a taker it registered; no tap of this pass lies in it; while a drag session runs, the
+///   pointer is not over it or an overlay layer it shows;
+/// - no press that is held started on it or an overlay layer it shows, none of its widgets is dragged, and none of
+///   that held in its last run;
 /// - the focus is where its run left it (`replay::Held`: the same stop and egui widget of it, or none), and while the
 ///   focus is in it no key, text, IME, clipboard or AccessKit event came (`Input::Sent`, which such a run reads);
 /// - none of its stops is the target of a focus request, now or in its last run;
@@ -604,7 +615,9 @@ pub(crate) fn settled(
     // The scroll view a nested child decided by: the run's, moved with the record, while the clip moved with it; a run
     // that lay wholly in its clip ran every nested child, which holds at any view.
     let view = place.and_then(|_| with_clip.then(|| (settled.view.map(|ran| ran.moved(shift.offset)), view)));
-    if engaged(ctx, settled.place.layer, rect.intersect(shift.clip), &settled.record.facts.overlays)
+    let shown = rect.intersect(shift.clip);
+    if pressed(ctx, settled.place.layer, shown, &settled.record.facts.overlays)
+        || pointer_reaches(ctx, &settled, shown, shift.offset)
         || crate::runtime::memory::ended_since(ctx, &settled.record.facts.owners, settled.lives)
         || moved(ctx, &settled, view)
     {
@@ -633,16 +646,40 @@ fn moved(ctx: &Context, settled: &Settled, view: Option<(Option<View>, Option<Vi
         || crate::runtime::overlay::close_queued(ctx, &facts.layers)
 }
 
-/// Whether the pointer is over `rect` (shown) on `layer` or over one of the overlay layers `overlays` shown, or a
-/// press that is held started there. Both halves ask whether the layer is the top layer at the point, so a pointer or
-/// a press on an overlay above the view leaves it alone.
-fn engaged(ctx: &Context, layer: Layer, rect: Rect, overlays: &[replay::ShownLayer]) -> bool {
-    let over = |layer: Layer, rect: Rect| {
+/// Whether a press that is held started in `rect` (shown) on `layer` or in one of the overlay layers `overlays` shown,
+/// with the layer the top layer at its origin, so a press on an overlay above the view leaves it alone.
+fn pressed(ctx: &Context, layer: Layer, rect: Rect, overlays: &[replay::ShownLayer]) -> bool {
+    let Some(origin) = input_state::held_press_origin(ctx) else { return false };
+    let on = |layer: Layer, rect: Rect| {
         let screen = ctx.layer_transform_to_global(layer).map_or(rect, |transform| transform * rect);
-        ctx.rect_contains_pointer(layer, rect)
-            || input_state::held_press_origin(ctx).is_some_and(|origin| screen.contains(origin) && ctx.layer_id_at(origin) == Some(layer))
+        screen.contains(origin) && ctx.layer_id_at(origin) == Some(layer)
     };
-    over(layer, rect) || overlays.iter().any(|shown| over(shown.layer, shown.rect))
+    on(layer, rect) || overlays.iter().any(|shown| on(shown.layer, shown.rect))
+}
+
+/// Whether the pointer input of this pass reaches the kept run `settled`, which replays at `rect` (shown), moved by
+/// `offset`: the pointer rules of `settled`.
+fn pointer_reaches(ctx: &Context, settled: &Settled, rect: Rect, offset: Vec2) -> bool {
+    let facts = &settled.record.facts;
+    let sensed = crate::runtime::pointer::sensed(ctx, &facts.roots, &settled.record.widgets);
+    let changed = |input: Input| inputs::generation(ctx, input) != settled.seen[input as usize];
+    let hover = crate::runtime::pointer::hover_point(ctx);
+    let follows = changed(Input::Pointer)
+        && facts
+            .follows
+            .iter()
+            .any(|ran| hover.is_some_and(|at| ran.translate(offset).contains(at)) || settled.pointer.is_some_and(|at| ran.contains(at)));
+    let layer = settled.place.layer;
+    let over = |layer: Layer, rect: Rect| ctx.rect_contains_pointer(layer, rect);
+    let dragged = crate::runtime::drag::running(ctx) && (over(layer, rect) || facts.overlays.iter().any(|shown| over(shown.layer, shown.rect)));
+    let tapped = crate::runtime::pointer::with_frame(ctx, |frame, _| frame.and_then(|frame| frame.multi_tap))
+        .is_some_and(|tap| ctx.layer_transform_to_global(layer).map_or(rect, |transform| transform * rect).contains(tap.at));
+    sensed != settled.sensed
+        || (!sensed.is_empty() && changed(Input::Modifiers))
+        || follows
+        || crate::runtime::wheel::reaches(ctx, &facts.takers)
+        || dragged
+        || tapped
 }
 
 /// Adds the last real run of the memoized view `id` to the running pass, in place of running it, at the place `shift`
@@ -711,8 +748,11 @@ pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rec
     let revealed = focus::targets(ctx)[1];
     let engaged_now = record.focus.stop_ids().any(|stop| revealed == Some(stop));
     let lives = crate::runtime::memory::ended_generation(ctx);
-    let mut settled = Settled { record, frame: 0, place, rect, engaged: engaged_now, key, pass: 0, edits, output, lives, seen, view };
-    settled.engaged |= engaged(ctx, place.layer, rect.intersect(place.clip), &settled.record.facts.overlays);
+    let sensed = crate::runtime::pointer::sensed(ctx, &record.facts.roots, &record.widgets);
+    let pointer = crate::runtime::pointer::hover_point(ctx);
+    let mut settled =
+        Settled { record, frame: 0, place, rect, engaged: engaged_now, sensed, pointer, key, pass: 0, edits, output, lives, seen, view };
+    settled.engaged |= pressed(ctx, place.layer, rect.intersect(place.clip), &settled.record.facts.overlays);
     with(ctx, |store, pass_nr, frame| {
         settled.frame = frame;
         settled.pass = pass_nr;

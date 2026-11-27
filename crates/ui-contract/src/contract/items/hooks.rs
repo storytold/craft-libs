@@ -211,7 +211,14 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let mut layout = self.layout.take()?;
         Arc::make_mut(&mut layout).set_view(view.size(), offset);
         let (_, order) = self.built(&layout, view, offset);
-        let rects = order.into_iter().map(|at| (self.source.key(at), self.screen(&layout, view, at, offset, rtl))).collect();
+        let rects: Vec<(C::Key, Rect)> = order.iter().map(|&at| (self.source.key(at), self.screen(&layout, view, at, offset, rtl))).collect();
+        self.row_parts.clear();
+        for (&at, (key, rect)) in order.iter().zip(&rects) {
+            let shown = rect.intersect(view);
+            if !self.source.section_stop(at) && shown.is_positive() {
+                self.row_parts.push((key_hash(key), at, shown));
+            }
+        }
         self.layout = Some(layout);
         Some(Rc::new(Rows { rects, offset, view: clear }))
     }
@@ -219,6 +226,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
     fn parts(&mut self, comp: &mut C, _: Rect, pcx: &mut PartsCx<'_, C>) {
         self.header.parts(pcx, self.offset_x as f32);
         self.edge_parts(comp, pcx);
+        self.row_parts(pcx);
         self.notch = comp.items().wheel_notch(pcx.tokens.typography.body.line_height);
         if !self.scrolls {
             return;
@@ -304,7 +312,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             self.marquee_step(comp, cx, &layout, (rect, offset, rtl), &props);
         }
         if props.hover_lead != HoverLead::Off {
-            self.hover_lead(comp, cx, &layout, seen, props.hover_lead);
+            self.hover_lead(comp, cx, &layout, props.hover_lead);
         }
         // The moves a control in the rows left that do not page them (an arrow a region's fallback collection takes)
         // navigate the rows as the collection's own keys do.
@@ -332,7 +340,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.requested_rename(comp, cx, &props, &layout);
         self.requested_reveal(comp, &layout);
         self.type_ahead(comp, cx, &layout, lead_at);
-        self.rest_lead(cx, &layout, seen);
+        self.rest_lead(cx, &layout);
         request::record_lead(&cx.core.ctx, cx.core.id, self.lead.key.as_ref().and_then(|key| self.index_of(key)));
         if let Some(at) = self.page_reveal.take().filter(|&at| layout.shown(at)) {
             cx.core.reveal = Some(self.screen(&layout, rect, at, ScrollPos::default(), rtl));
@@ -434,8 +442,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         // The pointer counts as over a row only while the sensing pass puts it on this collection, so a popup or another
         // widget above it takes the hover as it does for the rows' parts.
         let outcome = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id));
-        let hover_at = ctx.pointer_latest_pos().filter(|_| outcome.hover.any());
-        let over_at = ctx.pointer_latest_pos().filter(|_| outcome.contains);
+        let under = self.row_under_pointer(&ctx, id);
+        let hover_at = under.filter(|_| outcome.hover.any());
+        let over_at = under.filter(|_| outcome.contains);
         self.hovered = None;
         let menu_open = self.drags.menu.is_some() && crate::contract::overlay::container_open::opened_from(&ctx, cx.core.id);
         // A double click on a column's edge fits the column to its widest cell among the rows built here, in view.
@@ -471,8 +480,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 let state = RowState {
                     dragging: self.drags.grabbed.as_ref() == Some(&key),
                     drop_target: matches!(&self.drags.pending, Some(PendingDrop::Drop(DropAt::Onto(over))) if *over == key),
-                    hovered: hover_at.is_some_and(|pos| row.contains(pos)),
-                    pointer_over: over_at.is_some_and(|pos| row.contains(pos)),
+                    hovered: hover_at == Some(at),
+                    pointer_over: over_at == Some(at),
                     pressed: self.pressed.as_ref().filter(|(held, _)| *held == at).map(|(_, pressed)| pressed.clone()),
                     menu_open: self.drags.menu.as_ref().is_some_and(|request| request.key == key) && menu_open,
                     activated_by_key: self.keyed_activation.as_ref() == Some(&key),

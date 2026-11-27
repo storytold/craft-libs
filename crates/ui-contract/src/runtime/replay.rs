@@ -193,6 +193,13 @@ pub(crate) struct Facts {
     pub(crate) overlays: Vec<ShownLayer>,
     /// The layer stack entries the run recorded (`note_layer`): a close queued for one is taken only by a run.
     pub(crate) layers: Vec<egui::Id>,
+    /// The arena roots the run registered shapes or egui widgets for (`note_root`): what pointer sensing gives them is
+    /// what the run saw of the pointer (`pointer::Sensed`).
+    pub(crate) roots: IdSet,
+    /// The screen rects the run's content follows the pointer in (`pointer::follows_pointer`).
+    pub(crate) follows: Vec<Rect>,
+    /// The wheel takers the run registered (`wheel::register`): a share of the wheel for one runs it.
+    pub(crate) takers: Vec<egui::Id>,
 }
 
 /// An overlay layer a run showed: its egui layer and its rect in screen space.
@@ -315,6 +322,9 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
             outer.facts.instances.extend(open.facts.instances.iter().copied());
             outer.facts.overlays.extend(open.facts.overlays.iter().copied());
             outer.facts.layers.extend(open.facts.layers.iter().copied());
+            outer.facts.roots.extend(open.facts.roots.iter().copied());
+            outer.facts.follows.extend(open.facts.follows.iter().copied());
+            outer.facts.takers.extend(open.facts.takers.iter().copied());
         } else {
             recorder.journal.clear();
         }
@@ -560,6 +570,23 @@ pub(crate) fn note_wake(ctx: &Context, at: f64) {
 /// registration of the layer's `Area`, so a record that replays it notes it again in the records open around it.
 pub(crate) fn note_overlay(ctx: &Context, layer: Layer, rect: Rect) {
     with_open(ctx, |facts| facts.overlays.push(ShownLayer { layer, rect }));
+}
+
+/// Notes that the running code registered shapes or egui widgets for the arena root `root`, by a run or a replay.
+pub(crate) fn note_root(ctx: &Context, root: egui::Id) {
+    with_open(ctx, |facts| {
+        facts.roots.insert(root);
+    });
+}
+
+/// Notes that what the running code shows in the screen rect `rect` follows the pointer, by a run or a replay.
+pub(crate) fn note_follows(ctx: &Context, rect: Rect) {
+    with_open(ctx, |facts| facts.follows.push(rect));
+}
+
+/// Notes that the running code registered the wheel taker `owner`, by a run or a replay.
+pub(crate) fn note_taker(ctx: &Context, owner: egui::Id) {
+    with_open(ctx, |facts| facts.takers.push(owner));
 }
 
 /// Notes that the running code recorded the layer stack entry `id`, by a run or a replay.
