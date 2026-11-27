@@ -730,7 +730,6 @@ fn the_art_tab_shows_the_grids_in_pixels_and_the_postcard_in_inches() {
     fixture.click(&art).idle(10);
     assert!(shows(&fixture, "1000 × 1000 px @ 300 ppi"), "the grid's card is in pixels");
     assert!(shows(&fixture, "4 × 6 in @ 300 ppi"), "the postcard's card is in inches");
-
 }
 
 /// The preset cards fill the left column's width, and each card's title and size line are painted whole and centred
