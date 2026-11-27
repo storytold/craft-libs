@@ -15,6 +15,20 @@ const MAX_DIB_SIDE: u32 = 16_384;
 /// header size no Windows version writes (12 to 124 bytes), or pixels that would start past its
 /// end.
 pub fn to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
+    let offset = pixels_at(dib)?;
+    let total = u32::try_from(14usize.checked_add(dib.len())?).ok()?;
+    let mut out = Vec::with_capacity(total as usize);
+    out.extend_from_slice(b"BM");
+    out.extend_from_slice(&total.to_le_bytes());
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&u32::try_from(offset).ok()?.to_le_bytes());
+    out.extend_from_slice(dib);
+    Some(out)
+}
+
+/// Where a DIB's pixels start in its BMP file, or `None` when [`to_bmp`] refuses it: checked
+/// without copying anything.
+fn pixels_at(dib: &[u8]) -> Option<usize> {
     let header = u32_at(dib, 0)? as usize;
     if !(12..=124).contains(&header) {
         return None;
@@ -41,24 +55,15 @@ pub fn to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
     let offset = 14usize.checked_add(header)?.checked_add(colors.checked_mul(entry)?)?.checked_add(masks)?;
     let file_len = 14usize.checked_add(dib.len())?;
     // Pixels starting past the end are no bitmap.
-    if offset > file_len {
-        return None;
-    }
-    let total = u32::try_from(file_len).ok()?;
-    let mut out = Vec::with_capacity(file_len);
-    out.extend_from_slice(b"BM");
-    out.extend_from_slice(&total.to_le_bytes());
-    out.extend_from_slice(&[0; 4]);
-    out.extend_from_slice(&u32::try_from(offset).ok()?.to_le_bytes());
-    out.extend_from_slice(dib);
-    Some(out)
+    (offset <= file_len).then_some(offset)
 }
 
 /// [`to_bmp`] within `limit` bytes and `work`: the whole BMP file (the DIB and its 14-byte header)
-/// is charged before it is made. `None` when it doesn't fit, or isn't a bitmap.
+/// is charged before it is made, once its layout is checked. `None` when it doesn't fit, or isn't
+/// a bitmap (then nothing is charged).
 pub fn to_bmp_within(dib: &[u8], limit: usize, work: &mut Decode) -> Option<Vec<u8>> {
     let len = 14usize.checked_add(dib.len())?;
-    if len > limit || !work.charge(len, "bitmap") {
+    if pixels_at(dib).is_none() || len > limit || !work.charge(len, "bitmap") {
         return None;
     }
     to_bmp(dib)
