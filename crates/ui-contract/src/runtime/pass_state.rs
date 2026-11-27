@@ -91,11 +91,18 @@ pass_state! {
         jumps: crate::contract::body::scroll::Jumps,
         shrink_reports: crate::layout::body::ShrinkReports,
         least_reports: crate::layout::body::LeastReports,
+        fill_leasts: crate::layout::body::FillLeasts,
+        row_shortfalls: crate::layout::body::RowShortfalls,
         bar_rules: crate::contract::BarRules,
+        surface_frames: crate::primitives::SurfaceFrames,
         fill_counts: crate::layout::body::FillCounts,
+        view_fills: crate::layout::body::ViewFills,
         held_widths: crate::layout::body::HeldWidths,
         first_lines: crate::layout::body::FirstLines,
         row_lines: crate::layout::body::RowLines,
+        wrap_rows: crate::layout::body::WrapRows,
+        flow_starts: crate::layout::body::FlowStarts,
+        brackets: crate::layout::body::Brackets,
         cursors: crate::layout::body::Cursors,
         footer_slots: crate::contract::footer_slot::Slots,
         column_groups: crate::layout::column_group::Open,
@@ -148,6 +155,7 @@ pass_state! {
         pass_pointer: Arc<crate::runtime::pointer::PassPointer>,
         overlay_pass: crate::runtime::overlay::Pass,
         shown_ids: IdSet,
+        edge_step_taken: crate::contract::reorder::EdgeStepTaken,
     }
 }
 

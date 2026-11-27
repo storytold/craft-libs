@@ -3,6 +3,7 @@
 //! A family crate hands the filter what it learned outside the window (a key equivalent the platform's menu
 //! took) and the filter puts it into the viewport's input in the hook, ahead of the stages that read keys, so it
 //! reaches the application as the key press the user made. No family crate touches `RawInput` or `egui::Event`.
+//! The host's window-input policy (`FrameInput::window_input`) is applied here too, first.
 
 use std::collections::HashMap;
 
@@ -12,6 +13,7 @@ use egui::{Context, Event, ViewportId};
 use super::injected::{egui_modifiers, key_press, key_release};
 use super::memory::Service;
 use super::repaint;
+use crate::runtime::frame::WindowInput;
 use crate::runtime::windows::KeyEquivalent;
 
 #[derive(Default)]
@@ -35,8 +37,10 @@ fn repeat_running_pass(ctx: &Context, viewport: ViewportId, reason: &'static str
     }
 }
 
-/// The input hook's filter step: adds the queued key equivalents of `input.viewport_id` to `input.events`.
+/// The input hook's filter step: drops a hosted window's input under [`WindowInput::Dropped`], then adds the queued
+/// key equivalents of `input.viewport_id` to `input.events`.
 pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) {
+    drop_window_input(ctx, input);
     dismiss_input(ctx, input);
     let queued = Service::<Pending>::run(ctx, |pending| pending.by_viewport.remove(&input.viewport_id));
     let Some(queued) = queued else { return };
@@ -49,6 +53,18 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) {
             KeyEquivalent::Tap(chord) => insert_press(input, chord, platform, true),
         }
     }
+}
+
+/// The policy step: under [`WindowInput::Dropped`] a hosted window's input keeps none of the window system's events or
+/// files. It runs before the injected step joins the input, so injected input still reaches the window. The root's
+/// input is the host's own, in eframe's `raw_input_hook`, where the host may already have added its own events.
+fn drop_window_input(ctx: &Context, input: &mut egui::RawInput) {
+    if input.viewport_id == ViewportId::ROOT || crate::runtime::frame::window_input(ctx) != WindowInput::Dropped {
+        return;
+    }
+    input.events.clear();
+    input.hovered_files.clear();
+    input.dropped_files.clear();
 }
 
 /// Puts the press of `chord` ahead of its key-up when that is already in the input, else last; `tap` adds the

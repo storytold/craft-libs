@@ -7,7 +7,7 @@ use crate::runtime::memory::{MemoryStage, Savable, SaveKey, StageAccess};
 use crate::runtime::reads::{self, BindKey};
 use craft_behavior::{Applied, CanvasView, EditEvent, EditEvents, EditPolicy, Mixed, Value};
 use egui::Id;
-use egui::Response;
+use egui::{Response, Ui};
 use std::any::TypeId;
 use std::cell::Cell;
 use std::sync::Arc;
@@ -62,6 +62,14 @@ impl Outcome for Response {
 /// Whether `response` reports a click, by pointer or by keyboard activation.
 pub fn clicked(response: &Response) -> bool {
     crate::runtime::egui::response::clicked(response)
+}
+
+/// The `Response` of the component `id` in the running pass: its root's egui widget, or the response its arena gives a
+/// member of one (a component in a collection's rows or in an arena body, which registers no egui widget). A
+/// memoized view's replay shows its components again, so a host reads the response of a component a replayed view
+/// showed. `None` for an id no component showed in this pass or the last.
+pub fn response_of(ui: &Ui, id: Id) -> Option<Response> {
+    ui.ctx().read_response(id).or_else(|| crate::primitives::sensing::member_response(ui, id))
 }
 
 /// Whether a pointer press went down on `response`'s component and is still held.
@@ -632,9 +640,16 @@ pub struct EditResponse<T> {
     /// The modifiers of the Enter that submitted the value (Shift+Enter, Cmd+Enter); none unless `submitted` came
     /// from a key.
     pub submit_mods: craft_keymap::Mods,
+    /// The modifiers held at the activation (click, Enter, Space) that applied this pass's value; a text Enter's stay
+    /// in `submit_mods`.
+    pub activation_mods: craft_keymap::Mods,
     /// Tab (`Some(true)`) or Shift+Tab (`Some(false)`) moved focus off the text part in this pass, which ended its
     /// edit; a list's rename continues on the next or previous row.
     pub left_by_tab: Option<bool>,
+    /// The text part lost key focus in this pass, with or without an edit: a click elsewhere, Tab, or an Escape that
+    /// keeps the text (`keep_on_escape`). It decides nothing; `submitted`, `escaped` and `left_by_tab` stay their own
+    /// facts. False for a component with no text part.
+    pub text_lost_focus: bool,
     /// The edit was abandoned with Escape.
     pub escaped: bool,
     /// A text part holds text that does not parse: the value is the last one that did, and a form that commits the
@@ -679,7 +694,9 @@ impl<T> EditResponse<T> {
             events,
             submitted: false,
             submit_mods: craft_keymap::Mods::NONE,
+            activation_mods: craft_keymap::Mods::NONE,
             left_by_tab: None,
+            text_lost_focus: false,
             escaped: false,
             unparsed: false,
             validity,
@@ -701,7 +718,9 @@ impl<T> EditResponse<T> {
             events,
             submitted: false,
             submit_mods: craft_keymap::Mods::NONE,
+            activation_mods: craft_keymap::Mods::NONE,
             left_by_tab: None,
+            text_lost_focus: false,
             escaped: false,
             unparsed: false,
             validity: Validity::Ok,
@@ -741,7 +760,9 @@ impl<T: Clone> EditResponse<T> {
             events: self.events.map(&f),
             submitted: self.submitted,
             submit_mods: self.submit_mods,
+            activation_mods: self.activation_mods,
             left_by_tab: self.left_by_tab,
+            text_lost_focus: self.text_lost_focus,
             escaped: self.escaped,
             unparsed: self.unparsed,
             validity,

@@ -3,7 +3,6 @@
 
 use super::model::{RulerLine, RulerPart};
 use super::words::RulerWords;
-use craft_behavior::geometry::turn_to_45;
 use craft_behavior::kurbo::{Point, Vec2 as DocVec};
 use craft_behavior::{
     Cursor, CursorIcon, CursorPriority, Granularity, HitLevel, HitPriority, HitShape, IconId, Intent, Metrics, NavShape, PaintedCursor, PartKey,
@@ -133,10 +132,28 @@ pub(super) fn translated(line: RulerLine, by: DocVec) -> RulerLine {
     RulerLine { start: line.start + by, end: line.end + by, protractor: line.protractor.map(|arm| arm + by) }
 }
 
-/// The line with the grabbed `part` moved to `to`, Shift on 45° rays about the fixed point: the end for the start, the
-/// start for the end and the protractor.
+/// `to` snapped to the nearest 45 degree ray about `from`, keeping the pointer's legs instead of its distance: on a
+/// diagonal both legs take the shorter of |dx| and |dy| (signs kept), on a horizontal or vertical ray the dominant leg
+/// stays and the other is 0. The ruler never gets longer than the pointer's distance, which `turn_to_45` (used by the
+/// pen, the connector and the gradient) does not promise.
+fn turn_short(from: Point, to: Point) -> Point {
+    let (dx, dy) = (to.x - from.x, to.y - from.y);
+    let step = (dy.atan2(dx) / std::f64::consts::FRAC_PI_4).round() as i64;
+    let (x, y) = match step.rem_euclid(4) {
+        0 => (dx, 0.0),
+        2 => (0.0, dy),
+        _ => {
+            let leg = dx.abs().min(dy.abs());
+            (leg.copysign(dx), leg.copysign(dy))
+        }
+    };
+    Point::new(from.x + x, from.y + y)
+}
+
+/// The line with the grabbed `part` moved to `to`, Shift on 45° rays about the fixed point (`turn_short`): the end for
+/// the start, the start for the end and the protractor.
 pub(super) fn moved(line: RulerLine, part: RulerPart, to: Point, shift: bool) -> RulerLine {
-    let constrain = |fixed: Point| if shift { turn_to_45(fixed, to) } else { to };
+    let constrain = |fixed: Point| if shift { turn_short(fixed, to) } else { to };
     let mut line = line;
     match part {
         RulerPart::Start => line.start = constrain(line.end),

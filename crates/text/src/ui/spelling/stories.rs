@@ -17,6 +17,12 @@ fn check_spelling_with_suggestions(ui: &mut Ui, data: &mut StoryData) -> StoryOu
 }
 
 #[story(CheckSpellingDialog, covers = [], drive = Drive::Never)]
+fn check_spelling_in_context(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let item = SpellingItem::new(1, 6..9, "teh", vec!["the".to_owned(), "tea".to_owned()]).context("I saw ", " cat on the mat.");
+    data.value("context", CheckSpellingDialog::new(vec![item])).show(ui).into()
+}
+
+#[story(CheckSpellingDialog, covers = [], drive = Drive::Never)]
 fn check_spelling_complete(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     data.value("complete", CheckSpellingDialog::new(Vec::new())).show(ui).into()
 }

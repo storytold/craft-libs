@@ -15,6 +15,7 @@ use craft_imaging::ui::transform_preview::{
 use craft_imaging::ui::warp::WarpMesh;
 use craft_ui::canvas::{Canvas, PixelRect};
 use craft_ui::contract::{MemoProps, MemoView, PlainData, Show as _, ShowContainer as _, Tracked};
+use craft_ui::primitives::Serials;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Color32, ColorImage, Shape};
 
@@ -31,7 +32,7 @@ fn shown(map: fn() -> PreviewMap<'static>, opacity: f32, clip: Option<[u32; 2]>,
     let meshes = Rc::new(RefCell::new(Vec::new()));
     let seen_view = Rc::new(Cell::new(None));
     let (sink, view_sink) = (Rc::clone(&meshes), Rc::clone(&seen_view));
-    let textures = PreviewTextures::new("t", PreviewPixels::new(solid([2, 2], Color32::from_gray(u8::MAX)), [1.0, 1.0]));
+    let textures = PreviewTextures::new(&mut Serials::default(), "t", PreviewPixels::new(solid([2, 2], Color32::from_gray(u8::MAX)), [1.0, 1.0]));
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let view = CanvasView::new(room, pt(100.0, 100.0), 1.0).rotation(rotation);
@@ -64,6 +65,32 @@ fn shown(map: fn() -> PreviewMap<'static>, opacity: f32, clip: Option<[u32; 2]>,
 
 fn unit_quad() -> [Point; 4] {
     [pt(0.0, 0.0), pt(100.0, 0.0), pt(100.0, 100.0), pt(0.0, 100.0)]
+}
+
+#[trial]
+fn source_clip_moves_with_the_preview_and_preserves_texture_coordinates() {
+    let clip = [pt(0.0, 0.0), pt(1.0, 0.0), pt(1.0, 0.5), pt(0.0, 0.5)];
+    let moved = [pt(20.0, 40.0), pt(120.0, 40.0), pt(120.0, 140.0), pt(20.0, 140.0)];
+    let mesh = PreviewMap::quad(moved).build(1.0, [0.8, 0.6]).clipped_to_source(clip, [0.8, 0.6]);
+    assert!(!mesh.indices.is_empty());
+    for &index in &mesh.indices {
+        let p = mesh.points[index as usize];
+        let uv = mesh.uv[index as usize];
+        assert!(p.y <= 90.001, "{p:?}");
+        assert!((f64::from(uv[1]) / 0.6 - (p.y - 40.0) / 100.0).abs() < 1e-5);
+    }
+}
+
+/// A clipped preview retains texture coordinates where its frame cuts the image.
+#[trial]
+fn a_preview_clipped_to_a_frame_keeps_its_texture_coordinates() {
+    let quad = [pt(25.0, 20.0), pt(75.0, 20.0), pt(75.0, 80.0), pt(25.0, 80.0)];
+    let mesh = PreviewMap::quad(unit_quad()).build(1.0, [1.0, 1.0]).clipped_to_quad(quad);
+    assert!(!mesh.indices.is_empty());
+    for (p, uv) in mesh.points.iter().zip(&mesh.uv) {
+        assert!(p.x >= 24.999 && p.x <= 75.001 && p.y >= 19.999 && p.y <= 80.001, "{p:?}");
+        assert!((f64::from(uv[0]) - p.x / 100.0).abs() < 1e-5 && (f64::from(uv[1]) - p.y / 100.0).abs() < 1e-5);
+    }
 }
 
 // A Distort dragged past the horizon leaves the cells with a corner on the far side out of the mesh; the cells in
@@ -224,7 +251,7 @@ fn a_style_plan_stays_within_its_budget_at_screen_size_and_refuses_hostile_boxes
 fn a_monitor_conversion_changes_only_the_shown_upload() {
     let ctx = egui::Context::default();
     let raw = solid([2, 2], Color32::from_rgb(140, 89, 51));
-    let textures = PreviewTextures::new("monitor", PreviewPixels::new(raw.clone(), [1.0, 1.0]));
+    let textures = PreviewTextures::new(&mut Serials::default(), "monitor", PreviewPixels::new(raw.clone(), [1.0, 1.0]));
     // The trial stands in for the renderer: it takes the texture deltas it reads and applies none.
     let uploaded = |id: egui::TextureId| {
         let mut delta = ctx.tex_manager().write().take_delta();
@@ -316,7 +343,7 @@ fn frame(textures: &PreviewTextures, quad: [Point; 4], zoom: f32) -> StyledFrame
 }
 
 fn styled_textures() -> PreviewTextures {
-    PreviewTextures::new("styled", PreviewPixels::new(solid([4, 4], Color32::from_rgb(200, 100, 50)), [1.0, 1.0]))
+    PreviewTextures::new(&mut Serials::default(), "styled", PreviewPixels::new(solid([4, 4], Color32::from_rgb(200, 100, 50)), [1.0, 1.0]))
 }
 
 fn context() -> (Fixture, egui::Context) {
@@ -424,7 +451,7 @@ struct Mips {
 }
 
 fn white(name: &str) -> Rc<PreviewTextures> {
-    Rc::new(PreviewTextures::new(name, PreviewPixels::new(solid([5, 3], Color32::WHITE), [1.0, 1.0])))
+    Rc::new(PreviewTextures::new(&mut Serials::default(), name, PreviewPixels::new(solid([5, 3], Color32::WHITE), [1.0, 1.0])))
 }
 
 impl Mips {
@@ -597,11 +624,12 @@ fn a_new_preview_under_the_same_name_shows_its_own_pixels() {
         delta.clear();
         texel
     };
-    let first = PreviewTextures::new("same", PreviewPixels::new(solid([2, 2], Color32::WHITE), [1.0, 1.0]));
+    let mut serials = Serials::default();
+    let first = PreviewTextures::new(&mut serials, "same", PreviewPixels::new(solid([2, 2], Color32::WHITE), [1.0, 1.0]));
     let (id, _) = first.pick(&ctx, TextureChoice::new(0, false), None).expect("uploaded");
     assert_eq!(uploaded(id), Some(Color32::WHITE));
     drop(first);
-    let second = PreviewTextures::new("same", PreviewPixels::new(solid([2, 2], Color32::BLACK), [1.0, 1.0]));
+    let second = PreviewTextures::new(&mut serials, "same", PreviewPixels::new(solid([2, 2], Color32::BLACK), [1.0, 1.0]));
     let (id, _) = second.pick(&ctx, TextureChoice::new(0, false), None).expect("uploaded");
     assert_eq!(uploaded(id), Some(Color32::BLACK), "the new pixels go up");
 }

@@ -8,7 +8,7 @@ mod words;
 
 pub use limits::{MAX_TEXTURE, fit_image, reduce_image, texture_factor, texture_side};
 pub use loader::{LoadFailure, LoadResult, LoadedPicture, LoaderOptions, Priority, TextureLoader};
-pub use store::{CachedTexture, Revision, TextureBudget, TextureKey, TextureState, TextureStatistics, TextureStore, TextureStoreOptions};
+pub use store::{CachedTexture, Revision, Serials, TextureBudget, TextureKey, TextureState, TextureStatistics, TextureStore, TextureStoreOptions};
 pub use words::TextureWords;
 
 /// The tint that leaves a texture's own colours as they are: every texel is multiplied by white.
@@ -20,7 +20,9 @@ mod thumbnails;
 pub use thumbnails::FakeThumbSource;
 #[cfg(feature = "testing")]
 pub(crate) use thumbnails::fake_thumb_image;
-pub use thumbnails::{ThumbFit, ThumbJob, ThumbPaint, ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails, fit_rect, thumb_image};
+pub use thumbnails::{
+    StateLook, ThumbFit, ThumbJob, ThumbPaint, ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails, fit_rect, thumb_image,
+};
 
 use crate::runtime::egui::{memory, pass, textures};
 use egui::{Color32, ColorImage, Context, TextureHandle, TextureId, TextureOptions};

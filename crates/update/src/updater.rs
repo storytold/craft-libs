@@ -23,11 +23,11 @@ use crate::release::Release;
 use crate::self_update::{Outcome, Restart};
 use crate::stack_dialogs::{UpdateChoice, UpdatePromptDialog};
 use crate::translate::{Note, Translate, english};
-use crate::{App, Http, Paths, Platform, Stop, check_for_update, self_update};
+use crate::{App, CheckError, Http, Paths, Platform, Stop, check_for_update, self_update};
 
 /// Asks for the newest release (blocking; it runs on its own thread). Tests stand in for the network
 /// with one; without it the check asks GitHub.
-pub type CheckSource = Arc<dyn Fn() -> Result<Option<Release>, String> + Send + Sync>;
+pub type CheckSource = Arc<dyn Fn() -> Result<Option<Release>, CheckError> + Send + Sync>;
 
 /// What a requested check came to, for a window that answers Help ▸ Check for Updates, and what
 /// the last update came to, at the first start after it.
@@ -40,8 +40,10 @@ pub enum Status {
     Checking,
     /// A requested check found nothing newer.
     UpToDate,
-    /// A requested check failed.
+    /// A requested check failed, for this English reason (data, not translated).
     Failed(String),
+    /// A requested check hit GitHub's request limit; the app words it ([`crate::stack_dialogs::UpdateWords`]).
+    RateLimited,
     /// A requested check found an update downloading and installing; the startup prompt shows
     /// its progress.
     Installing,
@@ -81,11 +83,11 @@ pub enum Action {
     Close,
 }
 
-type Checked = Result<Option<Release>, String>;
+type Checked = Result<Option<Release>, CheckError>;
 
 /// What the check's thread sends: the release it found, if any, with whether this copy can install
 /// it itself ([`can_install_itself`]).
-type Found = Result<Option<(Release, bool)>, String>;
+type Found = Result<Option<(Release, bool)>, CheckError>;
 
 /// Says whether this copy can install a release itself (tests stand in for the files with one).
 type InstallProbe = Arc<dyn Fn(&'static App, &Release) -> bool + Send + Sync>;
@@ -559,7 +561,9 @@ impl Updater {
             let ask = || -> Found {
                 let checked: Checked = match source {
                     Some(ask) => ask(),
-                    None => Http::new(&format!("{}/Update", app.name)).and_then(|http| check_for_update(app, &http, &version)),
+                    None => {
+                        Http::new(&format!("{}/Update", app.name)).map_err(CheckError::from).and_then(|http| check_for_update(app, &http, &version))
+                    }
                 };
                 // Whether the copy installs the release itself is read from the installed files
                 // here, on the check's thread, and not in a pass.
@@ -577,7 +581,7 @@ impl Updater {
         });
         match spawned {
             Ok(_) => self.check = Some(rx),
-            Err(e) => self.finish_check(Err(format!("couldn't start the update check ({e})"))),
+            Err(e) => self.finish_check(Err(format!("couldn't start the update check ({e})").into())),
         }
     }
 
@@ -661,7 +665,10 @@ impl Updater {
             Err(e) => {
                 log::warn!("{} update check failed: {e}", self.app.name);
                 if requested {
-                    self.status = Status::Failed(e);
+                    self.status = match e {
+                        CheckError::RateLimited => Status::RateLimited,
+                        CheckError::Failed(why) => Status::Failed(why),
+                    };
                 }
             }
         }
@@ -1077,6 +1084,25 @@ fn prompt_id() -> craft_ui::dialog::DialogId {
 
 #[cfg(any(test, feature = "screen-testing"))]
 impl Updater {
+    /// An updater for `app`, running `version`, whose update to `release` has installed and waits for the app to close,
+    /// as a finished installation leaves it, for a screen test of the app's Restart to Update path: a requested check
+    /// reports [`Status::Ready`], [`Self::restart_to_update`] asks the app to close, and the exit runs `restart` in place
+    /// of the install helper. Nothing checks, downloads or installs. The close the installation asked for as it finished
+    /// is taken as answered, so the app is asked to close only after Restart to Update. A `restart` that fails is
+    /// recorded as a failed update: give the updater [`Self::with_paths`] so the record stays out of the app's folders.
+    pub fn ready_for_tests(
+        app: &'static App,
+        version: impl Into<String>,
+        release: Release,
+        restart: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) -> Self {
+        let mut updater = Self::new(app, version);
+        updater.installed = true;
+        updater.known = Some((release.clone(), true));
+        updater.restart = Some((Restart::later(restart), release));
+        updater
+    }
+
     /// Waits for the running check's answer on its channel (its thread always sends one, or ends
     /// and closes the channel), then hands it to `tick` as a pass would; then does the same for
     /// each offer still being inspected, until none is left (tests).

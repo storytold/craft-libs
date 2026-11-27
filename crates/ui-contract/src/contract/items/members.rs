@@ -2,7 +2,7 @@
 //! arena, updated, painted and finished at their rows, reported as sub-nodes of the collection.
 
 use super::{ITEM_NODE, ItemsHooks, key_hash};
-use crate::contract::collection::{CollectionEvent, ContextMenuRequest, OpenChange, ShownRow};
+use crate::contract::collection::ShownRow;
 use crate::contract::run;
 use crate::contract::{Collection, Component as _, Cx, Internal, ItemOpener, ItemOutput as _, Meta as _};
 use crate::primitives::sensing::{self, MemberSpec};
@@ -46,6 +46,7 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
         shown_rows: &mut [ShownRow<C::Key>],
     ) {
         let enabled = cx.core.resolved.enabled;
+        let reported = cx.core.node;
         let parent = access::fold::owner_of(ctx, id).unwrap_or(id);
         let hover = sensing::read_outcome(ctx, ArenaId::new(id)).hover;
         let mut prepared: Vec<Prepared<C::Key, C::Item<'r>>> = members
@@ -75,7 +76,7 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
         let clip = ui.clip_rect();
         for ((member, member_id, on, item_sense, prep), sensed) in prepared.drain(..).zip(sensed) {
             let Member { at, key, row, clip: row_clip, flags, position, renaming, openers, shown, .. } = member;
-            let node = run::MemberNode { owner: id, part: ITEM_NODE.at(key_hash(&key)), parent, position, flags, enabled: on, item_sense };
+            let node = run::MemberNode { owner: id, part: ITEM_NODE.at(key_hash(&key)), parent, position, flags, enabled: on, item_sense, reported };
             ui.set_clip_rect(row_clip);
             let run::MemberShown { output, tip } = run::member_show(ui, env, (member_id, row), prep, sensed, &node);
             ui.set_clip_rect(clip);
@@ -86,16 +87,7 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
                 shown.openers = self.item_openers(ui, ctx, id, enabled, openers);
             }
             let label = output.label_rect().unwrap_or(row);
-            if let Some(ask) = output.open_request() {
-                self.events.push(CollectionEvent::Open(OpenChange { key: key.clone(), open: ask.open, all: ask.all }));
-            }
-            if let Some(rect) = output.menu_request() {
-                crate::runtime::keys::request_context(ctx, id, rect, None);
-                self.ask_menu(ContextMenuRequest { key: key.clone(), at: self.on_screen(rect.left_bottom()), column: None, part: None });
-            }
-            if let Some(event) = output.into_event() {
-                self.events.push(CollectionEvent::Item(key.clone(), event));
-            }
+            self.report_item_output(ctx, id, &key, output);
             if renaming {
                 self.rename_row(comp, ui, (ctx, id, rtl), (at, &key), label);
             }
@@ -104,11 +96,13 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
 }
 
 /// The id of the item `key` of the collection `id`: a member's owner id in the arena, as a run item's id.
-fn item_id<K: std::hash::Hash>(id: Id, key: &K) -> Id {
+pub(super) fn item_id<K: std::hash::Hash>(id: Id, key: &K) -> Id {
     crate::runtime::memory::sub(id, ("key", key_hash(key)))
 }
 
-/// The access node a members collection's lead item stands for: the sub-node of its item part.
-pub(super) fn lead_node<K: std::hash::Hash>(id: Id, key: &K) -> Id {
+/// The access node of the item `key` of the members collection `id` (a tab strip, a swatch table): the sub-node of its
+/// item part, which [`focused_node`](crate::runtime::access::focused_node) reports while the item is the lead of the
+/// focused collection.
+pub fn item_node<K: std::hash::Hash>(id: Id, key: &K) -> Id {
     access::sub_node_id(id, ITEM_NODE.at(key_hash(key)))
 }

@@ -434,6 +434,10 @@ mod tests {
                 self.0 += 1;
             }
         }
+        // The largest page, 2^28 pixels, takes seconds to encode and decode: nightly only.
+        if craft_testkit::hostile::divisor() > 1 {
+            return;
+        }
         // One black pixel, so a page that came back blank wouldn't pass.
         let mut largest = vec![0xFF; 2_048 * 16_384];
         largest[0] = 0x7F;

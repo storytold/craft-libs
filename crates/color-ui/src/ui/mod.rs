@@ -50,33 +50,40 @@ pub use area::{AreaShape, ColorArea, ColorAreaStyle, smooth_mesh};
 pub use channels::finite_values;
 pub use choice::{ChosenColor, ColorChoice, ColorChoiceOutput, ColorChoiceWords, NamedColor};
 pub use compare::{CompareSwatch, CompareSwatchOutput, CompareSwatchStyle};
-pub use disc::{ColorDisc, ColorDiscOutput, ColorDiscStyle, ColorDiscWords, DiscMove};
+pub use disc::{ColorDisc, ColorDiscOutput, ColorDiscStyle, ColorDiscWords, DiscHit, DiscLook, DiscMove, DiscRadius, patch_at};
 pub use droppers::{DropperButton, DropperButtonOutput, DropperKind, DropperTool};
 pub use eyedropper::{
     EyedropperBar, EyedropperBarOutput, EyedropperOptions, EyedropperPick, EyedropperTool, EyedropperWords, SampleSize, SampleSource,
 };
 pub use harmony::{
-    HarmonyCommand, HarmonyMenu, HarmonyMenuAction, HarmonyPanel, HarmonyPanelOutput, HarmonyPanelState, HarmonyPicked, HarmonyWheel,
-    HarmonyWheelOutput, HarmonyWords,
+    GuideCell, GuideCellAt, HarmonyCommand, HarmonyMenu, HarmonyMenuAction, HarmonyPanel, HarmonyPanelOutput, HarmonyPanelState, HarmonyPicked,
+    HarmonyWheel, HarmonyWheelOutput, HarmonyWords,
 };
 pub use hex::{HexPair, HexPairField, PairCodec};
 pub use hud::{ColorHud, ColorHudOutput};
 pub use info::{InfoColor, InfoMeasure, InfoPanel, InfoReadings, InfoWords};
 pub use lut_picker::{LutChoice, LutPicker, LutPickerOutput, LutWords};
 pub use paint_chip::{
-    FillKind, GradientPreview, ImagePreview, Paint, PaintChip, PaintChipOutput, PaintEditor, PaintLink, PaintLinkKind, PaintList, PaintListEvent,
-    PaintListOptions, PaintListOutput, PaintRow, PaintWords,
+    FillKind, GradientPreview, ImagePreview, Paint, PaintChip, PaintChipOutput, PaintChipSize, PaintEditor, PaintLink, PaintLinkKind, PaintList,
+    PaintListEvent, PaintListOptions, PaintListOutput, PaintRow, PaintWords,
 };
-pub use pair::{PairWell, SwatchPair, SwatchPairOutput, Well};
+pub use pair::{DropAccepts, PairWell, SwatchPair, SwatchPairOutput, Well};
 pub use palette::{SwatchPalette, SwatchPaletteOutput};
 pub use panel::{
-    ColorPanel, ColorPanelCommand, ColorPanelMenu, ColorPanelMode, ColorPanelOutput, ColorPanelRamp, ColorPanelState, ColorPanelWords, PanelTarget,
+    ColorPanel, ColorPanelAction, ColorPanelCommand, ColorPanelLayout, ColorPanelMenu, ColorPanelMode, ColorPanelOutput, ColorPanelRamp,
+    ColorPanelShown, ColorPanelState, ColorPanelWords, PanelTarget, TintRow,
 };
-pub use picker::{ColorConstraint, ColorPicker, ColorPickerLayout, ColorPickerOutput, ColorPickerWords, PickedColor, ScreenPickGesture};
-pub use picker_dialog::{ColorPickerDialog, ColorPickerDialogLayout, ColorPickerDialogWords, ColorPickerMemory, ColorPickerResult, ColorPickerTab};
+pub use picker::{
+    ChannelRow, ChannelRule, ChannelUnit, ColorConstraint, ColorPicker, ColorPickerLayout, ColorPickerOutput, ColorPickerWords, PickedColor,
+    ScreenPickGesture, TrackRamp,
+};
+pub use picker_dialog::{
+    ColorPickerDialog, ColorPickerDialogLayout, ColorPickerDialogWords, ColorPickerMemory, ColorPickerResult, ColorPickerTab, PickerLibrary,
+    PickerSwatches,
+};
 pub use popover::{ColorPopover, ColorPopoverOutput};
 pub use profile_prompts::{ProfileAction, ProfileAnswer, ProfileMismatchDialog, ProfileMode, ProfileQuestion, ProfileStatus, ProfileWords};
-pub use ramp::{ColorRamp, ColorRampOutput, ColorRampStyle, ColorRampWords, Gamut, RampKind, RampPick};
+pub use ramp::{ColorRamp, ColorRampOutput, ColorRampStyle, ColorRampWords, Gamut, RampKind, RampPick, RampRecolor};
 pub use readout::{ChannelEdit, ColorReadout, ColorReadoutOutput, ColorReadoutWords, ReadoutChannel};
 pub use sample_size::SampleSizeSelect;
 pub use samplers::{
@@ -87,9 +94,10 @@ pub use screen_picker::{CaptureResult, CaptureSource, LOUPE_PIXELS, LOUPE_ZOOM, 
 pub use strip::{ColorStrip, ColorStripStyle};
 pub use swatches::{
     MAX_GROUPS, MAX_SWATCHES, SwatchAt, SwatchEdit, SwatchKey, SwatchLibrary, SwatchesCommand, SwatchesFileOutput, SwatchesMenu, SwatchesMenuOutput,
-    SwatchesPanel, SwatchesPanelOutput, SwatchesState, SwatchesWords, swatch_rows,
+    SwatchesPanel, SwatchesPanelOutput, SwatchesState, SwatchesWords, swatch_rows, swatch_source,
 };
 pub use warning::{ColorWarning, ColorWarningArrangement, ColorWarningChip, ColorWarningChipOutput, ColorWarningChipStyle};
 pub use wheel::{
-    ColorWheel, ColorWheelStyle, ColorWheelWords, WheelGeometry, WheelPart, hue_at, hue_direction, triangle_corners, triangle_point, triangle_sv,
+    ColorWheel, ColorWheelOutput, ColorWheelStyle, ColorWheelWords, WheelGeometry, WheelInner, WheelPart, hue_at, hue_direction, triangle_corners,
+    triangle_point, triangle_sv,
 };

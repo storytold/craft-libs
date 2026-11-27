@@ -22,10 +22,17 @@ pub enum SlotSize {
     OptionsBarNarrow,
     /// `size.rail.width`: the default extent of a start or end slot.
     RailWidth,
-    /// As tall (a top or bottom slot) or as wide (a start or end slot) as its content: the extent the content took the
-    /// last time the slot showed, and the edge's default until it first shows. The slot stacks its content from its
-    /// outer edge instead of centring one line in it, so content of more than one line (a ribbon: a tab strip over a
-    /// group row) gets its own height and the slot's full width. Outside a shell it resolves to `size.bar.options`.
+    /// As tall (a top or bottom slot) or as wide (a start or end slot) as its content. The window is laid out at the
+    /// extent the content took the last time the slot showed (the edge's default until it first shows), while the
+    /// content runs in the room the slot can grow into, from its outer edge to the far edge of what the slots before it
+    /// leave: it measures at its own extent, and when that differs the shell lays the window out again in the same
+    /// frame. The slot stacks its content from its outer edge instead of centring one line in it, so content of more
+    /// than one line (a ribbon: a tab strip over a group row) gets its own height and the slot's full width.
+    ///
+    /// The slot never takes more than the room the window leaves it: content larger than that, unless it scrolls,
+    /// is cut at the window's edge. Raw egui content allocates its own extent along the slot's edge; content that takes whatever room it is
+    /// offered (`ui.available_size()`) takes the whole room the slot can grow into. Outside a shell it resolves to
+    /// `size.bar.options`.
     Content,
 }
 

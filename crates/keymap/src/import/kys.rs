@@ -177,7 +177,7 @@ pub fn read(text: &str) -> Result<ForeignSet, KysError> {
             let mut key = ForeignKey::read(None, key, flavor);
             // Photoshop's tool shortcuts are single keys: one with modifiers is reported as
             // unreadable and binds nothing, and the tool keeps the key it has.
-            if row.tool && key.trigger.as_ref().is_ok_and(|t| !t.chord.mods.is_none() || t.double) {
+            if row.tool && key.trigger.as_ref().is_ok_and(|t| !t.chord.mods.is_none() || t.press != crate::chord::PressKind::Single) {
                 key.trigger = Err(ForeignError::UnsupportedModifier(key.text.clone()));
             }
             entry = entry.with_key(key);
@@ -225,8 +225,12 @@ pub fn write(name: &str, keymap: &Keymap) -> String {
     );
     for tools in [false, true] {
         for b in keymap.catalog().iter().filter(|b| matches!(b.kind, CommandKind::Tool { .. }) == tools) {
-            let keys: Vec<String> =
-                keymap.bindings(&b.command).iter().filter(|k| k.scope.is_none() && !k.trigger.double).map(|k| photoshop_key(&k.trigger)).collect();
+            let keys: Vec<String> = keymap
+                .bindings(&b.command)
+                .iter()
+                .filter(|k| k.scope.is_none() && k.trigger.press == crate::chord::PressKind::Single)
+                .map(|k| photoshop_key(&k.trigger))
+                .collect();
             let Some(first) = keys.first() else { continue };
             let label = escape(&b.label.replace('…', "..."));
             let id = escape(&b.command.key());

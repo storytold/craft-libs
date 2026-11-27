@@ -257,6 +257,6 @@ fn holders(ui: &mut Ui, env: &Env<'_>, state: &mut DialogState) {
         }
     }
     if let Some(command) = go {
-        state.go_to(&command);
+        state.go_to(env, &command);
     }
 }

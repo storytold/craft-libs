@@ -93,6 +93,9 @@ pub struct ColumnSpec {
     /// The most of the collection's width a `Content` column takes, as a share: a name column as wide as its widest
     /// name, at most a third of the table.
     pub max_share: Option<f32>,
+    /// The least width of a `Content` column, whatever its cells hold: a list's name column at least as wide as the
+    /// names the field beside it holds.
+    pub min_width: f32,
     /// The header menu has a check for the column, so the user can hide it. A column that can't be hidden always shows.
     pub hideable: bool,
     /// A remove control at the header's end, which reports `ColumnEvent::Removed`.
@@ -134,6 +137,7 @@ impl ColumnSpec {
             icon: None,
             tip: None,
             max_share: None,
+            min_width: 0.0,
             hideable: false,
             remove: None,
         }
@@ -205,6 +209,13 @@ impl ColumnSpec {
     #[must_use]
     pub fn at_most(mut self, share: f32) -> Self {
         self.max_share = Some(share);
+        self
+    }
+
+    /// A `Content` column is at least `width` wide.
+    #[must_use]
+    pub fn at_least(mut self, width: f32) -> Self {
+        self.min_width = width;
         self
     }
 

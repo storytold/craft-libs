@@ -34,8 +34,11 @@ pub struct Stop {
     pub group: Option<Id>,
     /// The roving group of the innermost body the stop sits in, whether or not the stop joined it.
     pub body: Option<Id>,
-    /// The app's own egui widget (`focus::host_canvas`), which reads its keys from egui's input: the key stage leaves
-    /// the presses it routes to the stop there.
+    /// The arena root the stop is shown in (a canvas whose body holds it), whether or not it joined the arena: a text
+    /// stop keeps its own egui widget. A removed stop hands focus back to it.
+    pub arena: Option<Id>,
+    /// The app's own egui widget (`focus::host_canvas`, or any focusable egui widget the app draws), which reads its
+    /// keys from egui's input: the key stage leaves the presses it routes to the stop there.
     pub host: bool,
 }
 
@@ -54,6 +57,7 @@ impl Stop {
             name: None,
             group: None,
             body: None,
+            arena: None,
             host: false,
         }
     }
@@ -112,10 +116,22 @@ impl Stop {
         self
     }
 
+    /// Sits in the arena of the root `arena` (a canvas body), if any, whether or not it joined it.
+    pub fn in_arena(mut self, arena: Option<Id>) -> Self {
+        self.arena = arena;
+        self
+    }
+
     /// Marks the stop as the app's own egui widget.
     pub fn host(mut self) -> Self {
         self.host = true;
         self
+    }
+
+    /// Whether this is the stop every focusable egui widget the app draws gets by itself (`focus::take_app_widgets`):
+    /// the app's own widget, not declared as its canvas (`KeyUse::chrome_key`). No component or app call registered it.
+    pub fn automatic(&self) -> bool {
+        self.host && !self.keys.chrome_key
     }
 
     pub(crate) fn key(&self) -> StopKey {
@@ -142,12 +158,22 @@ pub struct Group {
     pub owner: Option<Id>,
     /// The group lays out right to left: a physical Left or Right arrow moves the opposite way.
     pub rtl: bool,
+    /// The group this one is a member of: a move this group does not take passes to it, entering at its selected or
+    /// first member.
+    pub parent: Option<Id>,
 }
 
 impl Group {
     /// A group of `roving` rules.
     pub fn new(id: Id, roving: Roving) -> Group {
-        Group { id, roving, selected: None, lead: None, row: false, owner: None, rtl: false }
+        Group { id, roving, selected: None, lead: None, row: false, owner: None, rtl: false, parent: None }
+    }
+
+    /// Makes this group a member of the roving group `parent`.
+    #[must_use]
+    pub fn parent(mut self, parent: Id) -> Self {
+        self.parent = Some(parent);
+        self
     }
 
     /// Reads horizontal arrows in the group's direction.
@@ -180,27 +206,22 @@ impl Group {
     }
 }
 
-/// The innermost open `KeepAnchor` layer opened from the stop `opener`, the collection its opener hands list keys
-/// to (the stop with the collection's key role that is registered inside the layer's focus scope) and the layer's
-/// policy. `None` while no such layer is open or it has no collection.
+/// The innermost open `KeepAnchor` layer opened from the stop `opener`, the collection the layer names for its
+/// opener's list keys (`FocusPolicy::list`) and the layer's policy. `None` while no such layer is open, or it names no
+/// collection or one that registered no stop in the last pass (a list not shown leaves the keys with the opener). A
+/// layer playing its exit fade is closed: the opener keeps its keys, so an Enter right after Escape opens the list
+/// again instead of activating the row of the list that is leaving.
 pub(crate) fn dropdown_target(ctx: &Context, opener: StopKey) -> Option<(Id, Id, FocusPolicy)> {
     with(ctx, |state| {
-        let layer =
-            *state.last_scope_order.iter().rev().find(|id| {
-                state.last_scopes.get(*id).is_some_and(|scope| scope.policy.initial == Initial::KeepAnchor && scope.opener == Some(opener))
-            })?;
-        let inside = |rec: &super::StopRec| {
-            let mut at = rec.scope;
-            while let Some(scope) = at {
-                if scope == layer {
-                    return true;
-                }
-                at = state.last_scopes.get(&scope).and_then(|record| record.parent);
-            }
-            false
-        };
+        let layer = *state.last_scope_order.iter().rev().find(|id| {
+            state
+                .last_scopes
+                .get(*id)
+                .is_some_and(|scope| scope.policy.initial == Initial::KeepAnchor && !scope.closing && scope.opener == Some(opener))
+        })?;
         let policy = state.last_scopes.get(&layer)?.policy;
-        state.last_stops.iter().find(|rec| rec.stop.role.type_ahead && inside(rec)).map(|rec| (layer, rec.stop.id, policy))
+        let shown = |list: &Id| state.last_stops.iter().any(|rec| rec.stop.id == *list);
+        policy.list.filter(shown).map(|list| (layer, list, policy))
     })
 }
 
@@ -255,4 +276,30 @@ pub(crate) fn record_tree(ctx: &Context, collection: Id, tree: bool) {
 pub(crate) fn is_tree(ctx: &Context, collection: Id) -> bool {
     store::peek_clone::<TreeFact>(ctx, tree_slot(collection))
         .is_some_and(|fact| fact.tree && fact.pass.saturating_add(1) >= crate::runtime::pointer::pass_of(ctx))
+}
+
+/// Whether a collection has a lead row to activate, and the pass that recorded it.
+#[derive(Clone, Copy)]
+struct LeadFact {
+    lead: bool,
+    pass: u64,
+}
+
+fn lead_slot(collection: Id) -> Id {
+    sub(collection, "nav_lead")
+}
+
+/// Records whether the collection `collection` has a lead row in this pass: the item step writes it, and the key
+/// router reads it for the text field that drives the collection.
+pub(crate) fn record_lead(ctx: &Context, collection: Id, lead: bool) {
+    let slot = lead_slot(collection);
+    store::put(ctx, slot, LeadFact { lead, pass: crate::runtime::pointer::pass_of(ctx) });
+    crate::runtime::memory::adopt::<LeadFact>(ctx, collection, slot);
+}
+
+/// Whether the collection `collection` recorded no lead row in this pass or the one before. A target that records no
+/// lead fact (a menu a search field drives) never lacks one.
+pub(crate) fn lacks_lead(ctx: &Context, collection: Id) -> bool {
+    store::peek_clone::<LeadFact>(ctx, lead_slot(collection))
+        .is_some_and(|fact| !fact.lead && fact.pass.saturating_add(1) >= crate::runtime::pointer::pass_of(ctx))
 }
