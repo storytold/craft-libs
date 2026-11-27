@@ -15,7 +15,7 @@ use crate::contract::{
 use crate::menu::GroupItem;
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
-use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceEdge, SurfaceKind, SurfaceStyle, UiTokens};
+use crate::style::{ComponentStyle, Corners, FocusLook, StyleCx, SurfaceEdge, SurfaceKind, SurfaceStyle, UiTokens};
 use crate::tabs::PanelTabLook;
 use craft_behavior::divider::{self as push, Segment};
 use craft_behavior::dock::{Column, DockEdge, Group};
@@ -160,6 +160,9 @@ impl<P> Outcome for DockColumnOutput<P> {
 pub struct DockColumnStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The ring around the chevron or the divider that has keyboard focus.
+    #[style(focus)]
+    focus: FocusLook,
     sizes: DockSizes,
     /// The card of a column shown as one ([`card`](DockColumn::card)).
     card: SurfaceStyle,
@@ -469,7 +472,7 @@ impl<P: Value + Debug + Hash + 'static> Component for DockColumn<'_, P> {
     }
 
     fn style(cx: &StyleCx<'_>, _: DockColumnStyleKey<P>) -> DockColumnStyle {
-        DockColumnStyle { metrics: Metrics::new(), sizes: DockSizes::style(cx), card: card_style(cx) }
+        DockColumnStyle { metrics: Metrics::new(), focus: cx.focus_look(), sizes: DockSizes::style(cx), card: card_style(cx) }
     }
 
     fn sense(&self) -> Sense {

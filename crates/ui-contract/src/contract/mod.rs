@@ -619,6 +619,12 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
     /// Plain data: selection mode, reorder, rename, columns.
     fn items(&self) -> &CollectionProps;
 
+    /// Whether keyboard focus shows a ring on the lead row, or on a populated rows viewport with no visible lead.
+    /// Lists and tables use this with independent item runs and an untransformed viewport.
+    fn shows_row_focus(&self) -> bool {
+        false
+    }
+
     /// The selection binding; `None` keeps it in session memory.
     fn selection(&mut self) -> Option<BindMut<'_, Self::Selection>> {
         None
@@ -687,6 +693,13 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         _kept: Option<&Self::Key>,
     ) -> Option<Box<dyn ItemSource<Self::Key> + 's>> {
         None
+    }
+
+    /// Whether the focus ring goes around the lead item while the collection has keyboard-visible focus: the item step
+    /// gives the ring the lead's rect (`Cx::focus_shape`), or the collection's own rect while it has no lead or its
+    /// lead is not shown. Off by default.
+    fn rings_lead(&self) -> bool {
+        false
     }
 
     /// Adjusts the item the closure built for a row, from the row's state. An auto row's measure reads the item this

@@ -1,13 +1,14 @@
 //! A Select steps over its stepped entries only. A value on an entry that is not stepped has no place among them: it
 //! offers both steps, and a step forward lands on the first stop and a step back on the last.
 
+use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, Entry, Role, Show as _};
 use craft_ui::list::ThumbAspect;
 use craft_ui::pickers::Select;
-use craft_ui::testing::access::Declared;
+use craft_ui::testing::access::{Declared, focused_key};
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
 use egui::{Key, Modifiers, Rect, Ui};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// Entries 1 to 4; 2 and 4 are reached from the open list only.
@@ -37,6 +38,29 @@ fn a_select_steps_over_its_stepped_entries_and_from_an_unstepped_one_to_an_end()
     assert_eq!(step(1, Key::ArrowDown), (3, (true, false)), "the first stop skips the unstepped Two and offers no step back");
     assert_eq!(step(4, Key::ArrowDown), (1, (true, true)), "from an unstepped entry, forward lands on the first stop");
     assert_eq!(step(4, Key::ArrowUp), (3, (true, true)), "from an unstepped entry, back lands on the last stop");
+}
+
+#[trial]
+fn tab_in_a_select_keeps_the_enabled_match_reached_by_type_ahead() {
+    let story = Story::new("select_skips_disabled_option", |ui, data| {
+        let entries = [Entry::new(1u8, "Current"), Entry::new(2u8, "Blocked").enabled(false), Entry::new(3u8, "Better")];
+        let out = Select::new("Pick", data.bind("value", 1u8), &entries).show(ui);
+        Button::new("Next").show(ui);
+        out.into()
+    });
+    let mut fixture = Fixture::story(&story);
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    fixture.key(Key::ArrowDown, Modifiers::ALT).settle();
+    assert!(!fixture.by_role(Role::LIST_BOX).is_empty(), "Alt+Down opens the list before typing");
+    fixture.type_text("b").settle();
+    let preview = *fixture.data().value("value", 1u8);
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert!(fixture.by_role(Role::LIST_BOX).is_empty(), "Tab closes the list");
+    let next = fixture.by_label("Next").expect("the next control");
+    assert_eq!(focused_key(fixture.tree()), next.node, "Tab moves focus to the next control");
+    assert_eq!(*fixture.data().value("value", 1u8), 3, "Tab keeps the enabled match");
+    assert_eq!(preview, 3, "typing already previewed that enabled match");
 }
 
 #[trial]
@@ -107,4 +131,39 @@ fn a_value_on_no_entry_reads_as_the_placeholder_the_face_shows() {
         let node = fixture.by_role(Role::COMBO_BOX).first().expect("the field").node;
         assert_eq!(fixture.tree().value_of(node), Some(read), "the field reads what its face shows");
     }
+}
+
+#[trial]
+fn an_unlisted_current_value_paints_and_reads_without_becoming_a_choice() {
+    let current = Rc::new(Cell::new(9u8));
+    let painted = Rc::new(RefCell::new(Vec::new()));
+    let held = Rc::clone(&current);
+    let pictures = Rc::clone(&painted);
+    let mut fixture = Fixture::new(move |ui| {
+        let entries = [Entry::new(1u8, "Uniform")];
+        let out = Select::new("Profile", Bind::given(held.get()), &entries)
+            .unlisted_label("Custom")
+            .picture(|value, _, _| pictures.borrow_mut().push(*value))
+            .show(ui);
+        if let Some(value) = out.events.landed().copied() {
+            held.set(value);
+        }
+    });
+    fixture.settle();
+    let node = fixture.by_role(Role::COMBO_BOX).first().expect("the field").node;
+    assert_eq!(fixture.tree().value_of(node), Some("Custom"));
+    let face = painted.take();
+    assert!(!face.is_empty() && face.iter().all(|&value| value == 9), "the face draws only the current value: {face:?}");
+
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    assert_eq!(fixture.by_role(Role::LIST_BOX_OPTION).len(), 1, "the popup offers only Uniform");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    assert_eq!(current.get(), 9);
+    fixture.key(Key::End, Modifiers::NONE);
+    fixture.settle();
+    assert_eq!(current.get(), 1, "End lands on the only choice");
+    assert_eq!(fixture.tree().value_of(node), Some("Uniform"));
 }

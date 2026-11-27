@@ -22,6 +22,8 @@ pub(crate) enum Reply {
     Gzipped,
     /// GitHub's answer when the quota is used up: 403 with no requests remaining.
     RateLimited,
+    /// GitHub's answer for a repository that is missing or private: 404.
+    NotFound,
 }
 
 /// Serves `body` over plain HTTP following `script`, one reply per connection; records the
@@ -61,6 +63,7 @@ pub(crate) fn serve(body: Vec<u8>, script: Vec<Reply>) -> (String, Arc<Mutex<Vec
                     stream,
                     "HTTP/1.1 403 Forbidden\r\nx-ratelimit-remaining: 0\r\nx-ratelimit-reset: 4102444800\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 ),
+                Reply::NotFound => write!(stream, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
                 Reply::Ranged => {
                     let from = range.unwrap_or(0);
                     write!(
@@ -189,4 +192,13 @@ fn a_rate_limited_release_check_is_typed_not_english_text() {
     let closed = format!("http://{}/", TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap());
     let why = crate::check_releases_at(&closed, &app, &http, "0.1.0").unwrap_err();
     assert!(matches!(&why, crate::CheckError::Failed(text) if why.to_string() == *text));
+}
+
+#[trial]
+fn a_repository_github_does_not_find_is_an_error_not_up_to_date() {
+    let http = Http::new(crate::TEST_AGENT).unwrap();
+    let app = crate::suite::PHOTOCRAFT;
+    let (url, _) = serve(Vec::new(), vec![Reply::NotFound]);
+    let why = crate::check_releases_at(&url, &app, &http, "0.1.0").unwrap_err();
+    assert!(matches!(&why, crate::CheckError::Failed(text) if text.contains(app.repo)), "the reason names the repository: {why}");
 }

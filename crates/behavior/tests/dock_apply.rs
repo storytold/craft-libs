@@ -319,6 +319,45 @@ fn a_floating_windows_edge_is_saved_set_by_collapsed_moves_and_floats_and_cleare
     assert_eq!(floated.edge, None, "an expanded column keeps to the edge nearer its rect");
 }
 
+/// A group docked into a collapsed column keeps the width it was shown at as its flyout width: a floating window's
+/// width, or an expanded column's. A width equal to the column's leaves the flyout following the column, and a group
+/// moved between collapsed columns keeps its own flyout width.
+#[test]
+fn a_group_docked_into_a_collapsed_column_keeps_its_width_as_the_flyout_width() {
+    let flyout = |layout: &Layout<u32>, panel: u32| layout.group(&layout.place(&panel).unwrap()).unwrap().flyout_width;
+
+    let mut layout = columns();
+    layout.apply(Action::move_floating(6, rect(100.0, 100.0, 420.0, 400.0))).unwrap();
+    layout.apply(Action::move_group(6, Target::at(3, DockPlacement::group(true, None)))).unwrap();
+    assert!(!floats(&layout, 6) && column_of(&layout, 6).iconic);
+    assert_eq!(flyout(&layout, 6), Some(420.0), "the floating window's width");
+
+    layout.apply(Action::resize_flyout_width(6, Some(380.0))).unwrap();
+    layout.apply(Action::move_group(6, Target::float(rect(100.0, 100.0, 380.0, 400.0)))).unwrap();
+    layout.apply(Action::set_iconic(6, false)).unwrap();
+    layout.apply(Action::move_floating(6, rect(100.0, 100.0, 300.0, 400.0))).unwrap();
+    layout.apply(Action::move_group(6, Target::at(4, DockPlacement::group(false, None)))).unwrap();
+    assert_eq!(flyout(&layout, 6), Some(300.0), "the width the window was resized to, not the flyout width it left with");
+
+    let mut layout = columns();
+    layout.apply(Action::resize_column(2, 260.0)).unwrap();
+    layout.apply(Action::move_group(2, Target::at(3, DockPlacement::group(true, None)))).unwrap();
+    assert_eq!(flyout(&layout, 2), Some(260.0), "the expanded column's width");
+
+    let mut layout = columns();
+    layout.apply(Action::resize_column(3, 300.0)).unwrap();
+    layout.apply(Action::move_group(6, Target::at(3, DockPlacement::group(true, None)))).unwrap();
+    assert_eq!(flyout(&layout, 6), None, "a width equal to the column's follows the column");
+
+    let mut layout = columns();
+    let start = Node::dock(DockEdge::Start, vec![Column::new(vec![g(&[7], 0)]).with_iconic(true)]);
+    let Some(root) = layout.root.take() else { panic!("no root") };
+    layout.root = Some(Node::split(Axis::X, SplitSize::FixedFirst(48.0), start, root));
+    layout.apply(Action::resize_flyout_width(3, Some(350.0))).unwrap();
+    layout.apply(Action::move_group(3, Target::at(7, DockPlacement::group(true, None)))).unwrap();
+    assert_eq!(flyout(&layout, 3), Some(350.0), "a group from another collapsed column keeps its own");
+}
+
 /// Collapse to icons is a state of every column: a floating window collapses and stays floating; groups leaving a
 /// column float in its state; groups joining a column, docked or floating, take that column's state.
 #[test]
