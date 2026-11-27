@@ -11,6 +11,7 @@
 //! pressure is kept per device.
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 /// Valuator numbers beyond this are ignored (the protocol allows 65535; real devices have < 16).
 pub const MAX_AXES: usize = 64;
@@ -106,6 +107,38 @@ impl State {
     }
 }
 
+/// Shortest wait between device queries while a refresh keeps failing.
+pub const RETRY_EVERY: Duration = Duration::from_secs(1);
+
+/// Device rediscovery that keeps the known devices when a query fails, and tries again later.
+#[derive(Debug, Default)]
+pub struct Rediscovery {
+    pending: bool,
+    last_try: Option<Instant>,
+}
+
+impl Rediscovery {
+    /// The device hierarchy or a device changed: query again at the next chance.
+    pub fn request(&mut self) {
+        self.pending = true;
+        self.last_try = None;
+    }
+
+    /// Whether to query the devices now.
+    pub fn due(&self, now: Instant) -> bool {
+        self.pending && self.last_try.is_none_or(|t| now.saturating_duration_since(t) >= RETRY_EVERY)
+    }
+
+    /// Installs a query's devices. A failed query leaves `state` as it was and the refresh pending.
+    pub fn apply<E>(&mut self, state: &mut State, now: Instant, result: Result<Vec<Device>, E>) {
+        self.last_try = Some(now);
+        if let Ok(devices) = result {
+            state.set_devices(devices);
+            self.pending = false;
+        }
+    }
+}
+
 /// A 32.32 fixed-point X value.
 pub fn fp3232(integral: i32, frac: u32) -> f64 {
     f64::from(integral) + f64::from(frac) / 4_294_967_296.0
@@ -184,5 +217,24 @@ mod tests {
     fn fixed_point() {
         assert_eq!(fp3232(3, 1 << 31), 3.5);
         assert_eq!(fp3232(-2, 0), -2.0);
+    }
+
+    #[test]
+    fn a_failed_refresh_keeps_the_known_pens_and_retries() {
+        let mut state = State::default();
+        state.set_devices([wacom(10, 2047.0)]);
+        let (mut rediscovery, start) = (Rediscovery::default(), Instant::now());
+
+        rediscovery.request();
+        assert!(rediscovery.due(start));
+        rediscovery.apply(&mut state, start, Err("BadAlloc"));
+        assert!(pressure(state.handle(10, [(2, 1023.5)])) > 0.4, "the pen still reports pressure");
+        assert!(!rediscovery.due(start + RETRY_EVERY / 2), "no query on every event while it fails");
+        assert!(rediscovery.due(start + RETRY_EVERY), "but another one later");
+
+        // A successful empty reply does remove the pen
+        rediscovery.apply(&mut state, start + RETRY_EVERY, Ok::<_, &str>(Vec::new()));
+        assert!(!rediscovery.due(start + RETRY_EVERY * 2));
+        assert!(matches!(state.handle(10, [(2, 1023.5)]), Update::Keep));
     }
 }

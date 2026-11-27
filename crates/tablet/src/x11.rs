@@ -12,7 +12,7 @@ use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
 use crate::Error;
-use crate::xi::{self, Device, State, Update, fp3232, valuators};
+use crate::xi::{self, Device, Rediscovery, State, Update, fp3232, valuators};
 
 /// `XIAllDevices`: slaves included.
 const ALL_DEVICES: u16 = 0;
@@ -41,7 +41,7 @@ pub(crate) fn spawn(
         .check()
         .map_err(|e| unavailable(format!("XISelectEvents: {e}")))?;
     let mut state = State::default();
-    state.set_devices(query_devices(&conn));
+    state.set_devices(query_devices(&conn).map_err(|e| unavailable(format!("XIQueryDevice: {e}")))?);
     std::thread::Builder::new()
         .name(thread_name.into())
         .spawn(move || {
@@ -54,15 +54,20 @@ pub(crate) fn spawn(
 
 /// Ends when the X connection closes.
 fn run(conn: &RustConnection, state: &mut State, on_update: &mut dyn FnMut(Option<f32>)) {
+    let mut rediscovery = Rediscovery::default();
     while let Ok(event) = conn.wait_for_event() {
+        if matches!(event, Event::XinputHierarchy(_) | Event::XinputDeviceChanged(_)) {
+            rediscovery.request();
+        }
+        // A failed query keeps the devices known so far; the next events retry it
+        let now = std::time::Instant::now();
+        if rediscovery.due(now) {
+            rediscovery.apply(state, now, query_devices(conn));
+        }
         let update = match event {
             Event::XinputRawMotion(e) | Event::XinputRawButtonPress(e) | Event::XinputRawButtonRelease(e) => {
                 let values: Vec<f64> = e.axisvalues.iter().map(|v| fp3232(v.integral, v.frac)).collect();
                 state.handle(e.sourceid, valuators(&e.valuator_mask, &values))
-            }
-            Event::XinputHierarchy(_) | Event::XinputDeviceChanged(_) => {
-                state.set_devices(query_devices(conn));
-                Update::Keep
             }
             _ => Update::Keep,
         };
@@ -72,9 +77,9 @@ fn run(conn: &RustConnection, state: &mut State, on_update: &mut dyn FnMut(Optio
     }
 }
 
-/// The slave pointer devices and their valuators (empty on any error).
-fn query_devices(conn: &RustConnection) -> Vec<Device> {
-    let Ok(reply) = conn.xinput_xi_query_device(ALL_DEVICES).map_err(drop).and_then(|c| c.reply().map_err(drop)) else { return Vec::new() };
+/// The slave pointer devices and their valuators.
+fn query_devices(conn: &RustConnection) -> Result<Vec<Device>, String> {
+    let reply = conn.xinput_xi_query_device(ALL_DEVICES).map_err(|e| e.to_string())?.reply().map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for info in reply.infos.iter().take(xi::MAX_DEVICES) {
         if info.type_ != DeviceType::SLAVE_POINTER && info.type_ != DeviceType::FLOATING_SLAVE {
@@ -88,7 +93,7 @@ fn query_devices(conn: &RustConnection) -> Vec<Device> {
         });
         out.push(Device::new(info.deviceid, valuators.collect::<Vec<_>>()));
     }
-    out
+    Ok(out)
 }
 
 fn atom_name(conn: &RustConnection, atom: u32) -> Option<String> {
