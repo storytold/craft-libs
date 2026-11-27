@@ -5,6 +5,10 @@
 
 use std::sync::Arc;
 
+use craft_officeart::props::{entries, prop};
+use craft_officeart::record::{Rec, Records};
+use craft_officeart::rt;
+
 use crate::model::ClientAnchor;
 
 /// Pictures read from one workbook at most.
@@ -19,45 +23,15 @@ const MAX_DEPTH: usize = 16;
 /// line up.
 pub(crate) type Blip = Option<(Arc<Vec<u8>>, &'static str)>;
 
-/// An Office Drawing record header: version/instance, type, length.
-fn header(b: &[u8], at: usize) -> Option<(u16, u16, usize)> {
-    let h = b.get(at..at.checked_add(8)?)?;
-    let vi = u16::from_le_bytes([*h.first()?, *h.get(1)?]);
-    let ty = u16::from_le_bytes([*h.get(2)?, *h.get(3)?]);
-    let len = u32::from_le_bytes([*h.get(4)?, *h.get(5)?, *h.get(6)?, *h.get(7)?]);
-    Some((vi, ty, usize::try_from(len).ok()?))
-}
-
-/// The records directly inside `b` (a container's body): (version/instance, type, body).
-fn children(b: &[u8]) -> Vec<(u16, u16, &[u8])> {
-    let mut out = Vec::new();
-    let mut at = 0usize;
-    while let Some((vi, ty, len)) = header(b, at) {
-        let start = at + 8;
-        // A record claiming more than is there keeps what is there: the last one in a buffer
-        // is often cut where its sheet's drawing records end.
-        let end = start.saturating_add(len).min(b.len());
-        out.push((vi, ty, b.get(start..end).unwrap_or(&[])));
-        at = end;
-    }
-    out
-}
-
 /// The pictures of the workbook's MsoDrawingGroup, in BStore order (`pib` 1 is the first).
 pub(crate) fn blip_store(dgg: &[u8]) -> Vec<Blip> {
     let mut out = Vec::new();
     let mut inflate_left = MAX_METAFILES;
-    for (_, ty, body) in children(dgg) {
-        if ty != 0xF000 {
-            continue;
-        }
-        for (_, ty, store) in children(body) {
-            if ty != 0xF001 {
-                continue;
-            }
-            for (_, ty, fbse) in children(store) {
-                if ty == 0xF007 && out.len() < MAX_BLIPS {
-                    out.push(fbse_blip(fbse, &mut inflate_left).map(|(b, m)| (Arc::new(b), m)));
+    for dgg in Records::new(dgg).filter(|r| r.kind == rt::DGG_CONTAINER) {
+        for store in Records::new(dgg.data).filter(|r| r.kind == rt::BSTORE_CONTAINER) {
+            for fbse in Records::new(store.data).filter(|r| r.kind == rt::FBSE) {
+                if out.len() < MAX_BLIPS {
+                    out.push(fbse_blip(fbse.data, &mut inflate_left).map(|(b, m)| (Arc::new(b), m)));
                 }
             }
         }
@@ -72,10 +46,8 @@ type Bytes = Option<(Vec<u8>, &'static str)>;
 /// `inflate_left` is what the workbook's metafiles may still inflate to.
 fn fbse_blip(fbse: &[u8], inflate_left: &mut usize) -> Bytes {
     let name_len = usize::from(*fbse.get(33)?);
-    let rest = fbse.get(36usize.checked_add(name_len)?..)?;
-    let (vi, ty, len) = header(rest, 0)?;
-    let data = rest.get(8..8usize.checked_add(len)?.min(rest.len()))?;
-    let instance = vi >> 4;
+    let blip = Rec::at(fbse, 36usize.checked_add(name_len)?)?;
+    let (ty, instance, data) = (blip.kind, blip.instance, blip.data);
     // EMF and WMF: one or two identifiers, a metafile header, then the (usually zlib) bytes.
     match (ty, instance) {
         (0xF01A, 0x3D4) => return metafile(data, 1, false, inflate_left),
@@ -109,7 +81,6 @@ const MAX_METAFILE: usize = 64 << 20;
 fn metafile(data: &[u8], uids: usize, wmf: bool, inflate_left: &mut usize) -> Bytes {
     let h = data.get(16 * uids..16 * uids + 34)?;
     let u32_at = |at: usize| Some(u32::from_le_bytes(h.get(at..at + 4)?.try_into().ok()?));
-    let i32_at = |at: usize| Some(i32::from_le_bytes(h.get(at..at + 4)?.try_into().ok()?));
     let size = usize::try_from(u32_at(0)?).ok()?;
     let saved = usize::try_from(u32_at(28)?).ok()?;
     let body = data.get(16 * uids + 34..)?;
@@ -129,25 +100,7 @@ fn metafile(data: &[u8], uids: usize, wmf: bool, inflate_left: &mut usize) -> By
     if !wmf {
         return Some((bytes, "image/x-emf"));
     }
-    // Bounds in the metafile's units, size in EMUs (914400 an inch): its units per inch.
-    let (l, t, r, b) = (i32_at(4)?, i32_at(8)?, i32_at(12)?, i32_at(16)?);
-    let width_emu = f64::from(i32_at(20)?);
-    let units = f64::from(r.saturating_sub(l));
-    let inch = if width_emu > 0.0 && units > 0.0 { (units * 914_400.0 / width_emu).round().clamp(1.0, 65_535.0) as u16 } else { 1440 };
-    let clamp16 = |v: i32| v.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
-    let mut out = Vec::with_capacity(22 + bytes.len());
-    out.extend_from_slice(&0x9AC6_CDD7u32.to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes());
-    for v in [l, t, r, b] {
-        out.extend_from_slice(&clamp16(v).to_le_bytes());
-    }
-    out.extend_from_slice(&inch.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    // Checksum: the XOR of the ten words before it.
-    let sum = out.chunks(2).fold(0u16, |x, w| x ^ u16::from_le_bytes([w[0], *w.get(1).unwrap_or(&0)]));
-    out.extend_from_slice(&sum.to_le_bytes());
-    out.extend_from_slice(&bytes);
-    Some((out, "image/x-wmf"))
+    Some((craft_officeart::wmf::with_placeable_header(h, bytes)?, "image/x-wmf"))
 }
 
 /// A packed DIB (header, palette, pixels) as a BMP file: the 14-byte file header in front, its
@@ -203,13 +156,13 @@ fn walk(b: &[u8], depth: usize, out: &mut Vec<PictureShape>) {
     if depth > MAX_DEPTH {
         return;
     }
-    for (vi, ty, body) in children(b) {
-        if ty == 0xF004 {
-            if let Some(p) = shape(body) {
+    for r in Records::new(b) {
+        if r.kind == rt::SP_CONTAINER {
+            if let Some(p) = shape(r.data) {
                 out.push(p);
             }
-        } else if vi & 0x0F == 0x0F {
-            walk(body, depth + 1, out);
+        } else if r.is_container() {
+            walk(r.data, depth + 1, out);
         }
     }
 }
@@ -217,20 +170,17 @@ fn walk(b: &[u8], depth: usize, out: &mut Vec<PictureShape>) {
 /// A shape container's BLIP and anchor, when it has both.
 fn shape(sp: &[u8]) -> Option<PictureShape> {
     let (mut pib, mut anchor) = (None, None);
-    for (vi, ty, body) in children(sp) {
-        match ty {
+    for r in Records::new(sp) {
+        let body = r.data;
+        match r.kind {
             // Properties: `instance` of them, six bytes each (id with flags, value).
-            0xF00B => {
-                for p in body.chunks(6).take(usize::from(vi >> 4)) {
-                    if let [a, b, c, d, e, f] = *p
-                        && u16::from_le_bytes([a, b]) & 0x3FFF == 0x0104
-                    {
-                        pib = Some(u32::from_le_bytes([c, d, e, f]));
-                    }
+            rt::FOPT => {
+                if let Some(e) = entries(body, usize::from(r.instance)).filter(|e| e.pid == prop::PIB).last() {
+                    pib = Some(e.op);
                 }
             }
             // Client anchor: flags, then eight 16-bit values.
-            0xF010 => {
+            rt::CLIENT_ANCHOR => {
                 let mut v = [0u16; 8];
                 for (i, slot) in v.iter_mut().enumerate() {
                     let at = 2 + i * 2;
