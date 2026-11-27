@@ -136,6 +136,11 @@ pub struct SerializeSettings {
     /// extension schema for the XMP property, which krilla does not write, so export under
     /// them fails with [`ValidationError::PdfxVersionWithoutExtensionSchema`].
     pub pdfx_version: Option<String>,
+    /// The PDF/X conformance level the caller claims, such as `PDF/X-1a:2003`:
+    /// `/GTS_PDFXConformance` in the document information dictionary. PDF/X-1a and X-3
+    /// require it next to the version (`PDF/X-1:2003` for PDF/X-1a:2003); later parts
+    /// have no conformance key. It has no XMP property, so PDF 2.0 output omits it.
+    pub pdfx_conformance: Option<String>,
 }
 
 /// A CMYK printing condition, written as an `/OutputIntents` entry with `/S /GTS_PDFX`.
@@ -201,7 +206,10 @@ impl SerializeSettings {
     /// Whether the document information dictionary carries print markers. Like the rest of
     /// the dictionary, they are deprecated in PDF 2.0 and only written to XMP there.
     pub(crate) fn has_print_info(&self, version: PdfVersion) -> bool {
-        version < PdfVersion::Pdf20 && (self.trapped.is_some() || self.pdfx_version.is_some())
+        version < PdfVersion::Pdf20
+            && (self.trapped.is_some()
+                || self.pdfx_version.is_some()
+                || self.pdfx_conformance.is_some())
     }
 
     pub(crate) fn write_print_info(&self, info: &mut DocumentInfo<'_>) {
@@ -214,6 +222,9 @@ impl SerializeSettings {
         }
         if let Some(version) = &self.pdfx_version {
             info.pair(Name(b"GTS_PDFXVersion"), TextStr(version));
+        }
+        if let Some(conformance) = &self.pdfx_conformance {
+            info.pair(Name(b"GTS_PDFXConformance"), TextStr(conformance));
         }
     }
 
@@ -260,6 +271,7 @@ impl Default for SerializeSettings {
             output_intent: None,
             trapped: None,
             pdfx_version: None,
+            pdfx_conformance: None,
         }
     }
 }

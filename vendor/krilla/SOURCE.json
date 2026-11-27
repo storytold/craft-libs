@@ -152,12 +152,12 @@
     {
       "path": "src/graphics/color.rs",
       "upstream_sha256": "e5843d33ef184ab5c458025d1b1dc53df6ee6aaf085595ea14604d080b98f8a4",
-      "sha256": "553c2c1ce7a7c26dc11a227d70db0e30933e0b0e69d2d6c550e1384c0a3037ec"
+      "sha256": "e052d835a4f113ec3730f32c1708e80ee4a284978110f58c77d88c48f3cd15ae"
     },
     {
       "path": "src/graphics/device_n.rs",
       "upstream_sha256": null,
-      "sha256": "29b01e54699f47f02c15288a74eeae265f02f01c3d97a2612c23784b87eaa542"
+      "sha256": "02f4d1ad8d5e72ddcf633c8d9255632386bd73f19aacf84941746409e0823bed"
     },
     {
       "path": "src/graphics/graphic.rs",
@@ -207,7 +207,7 @@
     {
       "path": "src/graphics/shading_function.rs",
       "upstream_sha256": "0e0fc8bb1a32272457ef560fa80933972d0f5ef5fb7046424c6de48093cfd978",
-      "sha256": "2831ec0d78a755db9311a16d01afd5c9f714e4d43bdf69b42c0cb291387ca743"
+      "sha256": "502571de1a0d1f1d32310d3801ae70250c7ac129506fdf4dd99e786c24268d12"
     },
     {
       "path": "src/graphics/shading_pattern.rs",
@@ -252,7 +252,7 @@
     {
       "path": "src/interchange/metadata.rs",
       "upstream_sha256": "14fab986f2436a4275e7cca13e065763b14b938ae180632294455ad0199380ec",
-      "sha256": "95d5441904b7aef4b0e8812ea536c56e22744886d1c485d9bcc3b08c7ae2b3a7"
+      "sha256": "7c8a66d89eba13a150295837ef5042d1909cc2901be1433b776597c557345d1f"
     },
     {
       "path": "src/interchange/mod.rs",
@@ -317,7 +317,7 @@
     {
       "path": "src/serialize.rs",
       "upstream_sha256": "4f2c439dbd20006eea112e056b2f1a5ba98a1ede9227a45f66a6df46fb1a07e8",
-      "sha256": "f5ccb6b92f546e1068e51e0791dbac8b802f07f29df0c2a6ccd1dcf8a1bdc938"
+      "sha256": "031eb4ba074367da1da63ec924ae4e5b67fbbbeb66c8ceef7fafb373bc769af3"
     },
     {
       "path": "src/stream.rs",
@@ -332,7 +332,7 @@
     {
       "path": "src/text/cid.rs",
       "upstream_sha256": "5332282160b75e2a24345b546ead219476768829bef881562f5658dd50ce97f2",
-      "sha256": "5332282160b75e2a24345b546ead219476768829bef881562f5658dd50ce97f2"
+      "sha256": "4bb482edddaf1cac916cb110e8139c90c53582f0c1c7afc6fa1cf6b037ccae5e"
     },
     {
       "path": "src/text/font.rs",

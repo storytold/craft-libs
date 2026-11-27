@@ -12,9 +12,34 @@ Prepress for the Craft apps: separations, ink limits and the ink manager.
 - `coverage`: ink coverage at a pixel and over a page, total area coverage (TAC) per pixel,
   and the pixels and regions over a TAC limit.
 - `composite`: an sRGB preview of chosen plates.
+- `output`: the chosen plates as they print, in an output profile (a printer's RGB, gray or CMYK).
 - `cms`: process color conversion into a CMYK printing condition through craft-cms.
+- `marks`: printer's marks for a page with a slug. `Marks::new(trim, bleed, &MarkOptions)` lays
+  out crop marks, bleed marks (when the bleed passes the trim), a registration target on each
+  side and process color bars along the top, and returns the sheet (the media box that holds
+  them) and where a page-information line fits. `Marks::draw` paints them with craft-pdf's
+  writer: lines in the registration color, so they print on every plate, and the bars in
+  DeviceCMYK. It tags nothing; in a tagged document, call it inside a page artifact. The text of
+  the information line is the app's.
 
-A transparency flattener is planned as a module behind a `flatten` feature.
+- `flatten` (feature `flatten`): the display list a transparency flattener reads and writes:
+  fills, text runs, images and transparency groups in page space, with ink colors and overprint
+  per item. Text runs keep their font (bytes, face index, a dedup key), glyph ids and positions,
+  and Unicode text, so text without transparency stays live text; outlines are kept as the
+  fallback for fonts that can't be embedded again. `flatten` turns the transparent parts into
+  opaque region fills, compositing one value per ink (process and spot) with blend modes, group
+  opacity, isolated and knockout groups, and overprint per plate. Items without transparency
+  come back unchanged (JPEG images in DeviceGray or DeviceCMYK keep their DCT data; other images
+  are written as 8-bit Flate samples); regions a gradient, image or soft mask reaches are listed
+  for rasterizing. `flatten::raster` rasterizes them: each region's items are written alone,
+  separated with `plates` and written back as a DeviceN image of the page's inks, clipped to the
+  region, snapped to the device grid and a pixel larger than the clip so no paper shows at its
+  edges. `flatten_document` flattens every page of a PDF, or a range of pages, into one PDF with
+  the source's output intent, page boxes, title, author, creation date and modification date; a
+  font used on several pages is embedded once. The caller sets the PDF version and the PDF/X
+  version and conformance keys (for PDF/X-1a:2003, 1.4, `PDF/X-1:2003` and `PDF/X-1a:2003`);
+  krilla has no PDF/X validator, so the app keeps its own PDF/X checks. `flatten_page` is its
+  one-page case.
 
 ## Plates from an exported PDF
 
@@ -31,6 +56,24 @@ for (id, ink) in p.inks.iter() {
 let black = p.tint(InkId::process(Process::Black), 10, 10);
 let gold = p.inks.lookup("Gold").and_then(|id| p.tint(id, 10, 10));
 ```
+
+At print resolution, separate in bands. Each band holds every ink for a run of rows, at most
+`MAX_PLATE_PIXELS`, so memory stays bounded however high the resolution:
+
+```rust
+use std::ops::ControlFlow;
+use craft_prepress::{plates_in_bands, Options};
+
+plates_in_bands(&pdf, 0, 600.0, &Options::default(), |band| {
+    // band.plates is page-wide and band.plates.height rows tall, from row band.top.
+    ControlFlow::Continue(())
+})?;
+```
+
+Each band renders the page again once per ink, so time grows with the number of bands: a
+Letter page at 900 dpi makes 19 bands. Across the page the renderer's side limit
+(`craft_pdf::raster::MAX_SIDE`, 8192 pixels) still applies, about 960 dpi on Letter or A4; down
+the page it doesn't.
 
 The plates are the PDF as printed, so a preview built on them shows what the writer produced,
 not what the document model intended.
@@ -65,7 +108,8 @@ separate as they are.
 | Constant | Value | Why |
 |---|---|---|
 | `MAX_SPOT_INKS` | 32 spot inks per page | A `DeviceN` space has at most 32 colorants, and each plate costs a render and a byte per pixel. Further spots are listed in `Plates::unseparated`. |
-| `MAX_PLATE_PIXELS` | 4 MP per plate (2000 × 2000) | A page with many inks stays within a few hundred megabytes. The resolution is lowered to fit; `Plates::dpi` reports the one used. |
+| `MAX_PLATE_PIXELS` | 4 MP per plate (2000 × 2000) | A page with many inks stays within a few hundred megabytes. `plates` lowers the resolution to fit, and `plates_in_bands` makes bands this size; `Plates::dpi` reports the one used. |
+| `MAX_BANDED_PIXELS` | 256 MP per plate of a page separated in bands | Bounds the pixels a banded page adds up to; the resolution is lowered to fit. It does not bound the band count: a very thin, tall page makes one band per 8192 rows. |
 
 The renderer's side limit (`craft_pdf::raster::MAX_SIDE`) also lowers the resolution.
 
@@ -113,6 +157,35 @@ let mut rgb = p.composite(&enabled, &cms);
 let over = p.above(300.0, &enabled);
 over.paint(&mut rgb, [255, 0, 255]); // TAC warning
 let worst = over.regions().first().copied();
+```
+
+## Composite in an output profile
+
+`Plates::composite_to(enabled, &output)` returns the enabled inks in an output profile, for a
+print or a proof. `Output::new(press, output, intent, bpc)` takes the press's CMYK profile
+(`CmsConversion::profile`) and a gray, RGB or CMYK output profile. `press_profile(pdf, page,
+&opts)` returns the press a page's plates separate through (its output intent's profile, else
+the fallback's; `None` for the device formulas), so the composite converts from the same one:
+
+- the process plates convert from the press straight to the output (CMYK to PCS to output),
+  not through sRGB, at `intent`, with black point compensation when `bpc`. Relative
+  colorimetric with `bpc` prints the press's paper as the output's paper and its black as the
+  output's black; absolute colorimetric keeps the press paper's tint;
+- each enabled spot plate combines over them, as in the preview, with its appearance converted
+  into the output: a multiply in a gray or RGB output, a multiply of the complements in a CMYK
+  output, so inks add.
+
+A CMYK output re-separates through its own tables, so a black-only press colour comes back as
+the output's black generation, as it would on that printer.
+
+```rust
+use craft_cms::{Intent, Profile};
+use craft_prepress::{CmsConversion, Output};
+
+let press = CmsConversion::fogra39();
+let printer = Profile::parse(&printer_icc)?;
+let output = Output::new(press.profile(), &printer, Intent::RelativeColorimetric, true)?;
+let bytes = p.composite_to(&[], &output); // output.channels() bytes per pixel
 ```
 
 ## Ink manager
@@ -193,5 +266,15 @@ if let Some(color) = to_pdf_color(&printed, &inks, &cms) {
   (guillehr2), with craft-cms in place of moxcms.
 - Knockout groups in the renderer come from
   [storytold/pdfcraft#2974](https://github.com/storytold/pdfcraft/pull/2974) by mtlcl410.
+- The flattener's planar regions (`flatten::geom`) are ported from VectorCraft at commit
+  `c2b15982` by the VectorCraft contributors: `crates/pathops/src/pathfinder.rs`,
+  `crates/pathops/src/boolean.rs` and `crates/engine/src/cmd/flatten.rs`.
+- The flattener's compositor (`flatten::compose`) is ported from VectorCraft at commit
+  `c2b15982` by the VectorCraft contributors: `Composer`, `region_fill` and the raster/vector
+  balance in `crates/engine/src/cmd/flatten.rs`, and the blend formulas in
+  `crates/color/src/blend.rs`.
+- The flattener's raster step (`flatten::raster`) follows VectorCraft's `render_raster` in
+  `crates/engine/src/cmd/flatten.rs` at commit `c2b15982`: the image reaching a pixel past its
+  area, and the coverage of the art drawn opaque as the image's alpha.
 
-Both MIT OR Apache-2.0, as this crate.
+All MIT OR Apache-2.0, as this crate.

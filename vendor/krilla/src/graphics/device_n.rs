@@ -17,9 +17,10 @@ use crate::stream::FilterStreamBuilder;
 /// `[/DeviceN [names] alternate tintTransform attributes?]`.
 ///
 /// The alternate is DeviceCMYK, or the `cmyk_profile` ICC space with `no_device_cs`. The
-/// attributes dictionary (PDF 1.6+) lists each spot's Separation color space under
-/// `/Colorants`; when spots and process colorants mix, it is an `NChannel` space whose
-/// `/Process` names the CMYK space and components.
+/// attributes dictionary lists each spot's Separation color space under `/Colorants`
+/// (PDF 1.3). From PDF 1.6, when spots and process colorants mix, it is an `NChannel` space
+/// whose `/Process` names the CMYK space and components; `/Subtype` and `/Process` don't
+/// exist before 1.6, and PDF/X-1a preflights reject them.
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub(crate) struct DeviceNColorSpace {
     space: DeviceNSpace,
@@ -54,21 +55,20 @@ impl Cacheable for DeviceNColorSpace {
 
         let tint_ref = tint_transform(&space, sc, chunk_container);
 
-        let with_attrs = sc.serialize_settings().pdf_version() >= PdfVersion::Pdf16;
         let mut separations = Vec::new();
-        if with_attrs {
-            for (name, cmyk) in space.spots() {
-                let separation =
-                    SeparationSpace::new(SeparationColorant::Custom(name.to_owned()), cmyk.into());
-                let cs = ColorSpace::Special(SpecialColorSpace::Separation(separation));
-                if let MaybeDeviceColorSpace::ColorSpace(cs) =
-                    sc.register_colorspace(chunk_container, cs)
-                {
-                    separations.push((name.to_owned(), cs.get_ref()));
-                }
+        for (name, cmyk) in space.spots() {
+            let separation =
+                SeparationSpace::new(SeparationColorant::Custom(name.to_owned()), cmyk.into());
+            let cs = ColorSpace::Special(SpecialColorSpace::Separation(separation));
+            if let MaybeDeviceColorSpace::ColorSpace(cs) =
+                sc.register_colorspace(chunk_container, cs)
+            {
+                separations.push((name.to_owned(), cs.get_ref()));
             }
         }
-        let nchannel = with_attrs && space.has_process() && !separations.is_empty();
+        let nchannel = sc.serialize_settings().pdf_version() >= PdfVersion::Pdf16
+            && space.has_process()
+            && !separations.is_empty();
 
         let chunk = &mut chunk_container.non_stream.color_spaces;
         let mut array = chunk.indirect(root_ref).array();

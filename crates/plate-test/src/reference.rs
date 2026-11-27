@@ -26,7 +26,7 @@ use krilla::surface::Surface;
 use krilla::text::{Font, TextDirection};
 
 use crate::Error;
-use crate::scene::{Blend, GroupCs, ImageSource, Kind, MAX_NESTING, MaskKind, Named, Object, Paint, Scene, Stroke};
+use crate::scene::{Blend, GroupCs, ImageSource, Kind, MAX_IMAGE_PX, MAX_NESTING, MaskKind, Named, Object, Paint, Scene, Stroke};
 
 /// The font used for text objects, from `scripts/fetch-pdf-test-fonts.py`.
 pub const FONT_FILE: &str = "Inter-Regular.ttf";
@@ -53,6 +53,7 @@ impl<'a> Context<'a> {
 /// A written scene.
 #[derive(Debug)]
 pub struct Output {
+    /// The PDF file bytes.
     pub pdf: Vec<u8>,
     /// What was left out, e.g. text without a font.
     pub notes: Vec<String>,
@@ -411,8 +412,12 @@ impl Resolver<'_, '_> {
         DeviceNSpace::new(colorants).ok_or_else(|| self.bad("bad DeviceN ink list"))
     }
 
-    fn image(&self, source: &ImageSource, [_, _, w, h]: [f32; 4]) -> Result<Image, Error> {
+    fn image(&self, source: &ImageSource, [x0, y0, w, h]: [f32; 4]) -> Result<Image, Error> {
         let [px, py] = source.px;
+        // The writer takes scenes that skipped `Scene::validate`, so the pixel cap is enforced here too.
+        if !(1..=MAX_IMAGE_PX).contains(&px) || !(1..=MAX_IMAGE_PX).contains(&py) {
+            return Err(self.bad(&format!("image px must be 1–{MAX_IMAGE_PX}")));
+        }
         let (width, height) = (px as usize, py as usize);
         let image = if let Some(radius) = source.feather {
             let mut data = Vec::with_capacity(width * height);
@@ -423,7 +428,7 @@ impl Resolver<'_, '_> {
                     data.push(channel(255.0 * (edge / radius.max(f32::EPSILON)).min(1.0)));
                 }
             }
-            Synthetic { data, size: (px, py), space: ImageColorspace::Luma, device_n: None }
+            Synthetic { data, alpha: None, size: (px, py), space: ImageColorspace::Luma, device_n: None }
         } else {
             let (pair, ramp) = match (&source.ramp, &source.split) {
                 (Some(pair), _) => (pair, true),
@@ -456,7 +461,20 @@ impl Resolver<'_, '_> {
                     data.extend(a.iter().zip(&b).map(|(a, b)| channel(a + (b - a) * t)));
                 }
             }
-            Synthetic { data, size: (px, py), space, device_n }
+            let alpha = source.alpha.as_ref().map(|a| {
+                let [ax, ay, aw, ah] = a.rect;
+                let value = channel(a.opacity * 255.0);
+                let mut alpha = Vec::with_capacity(width * height);
+                for y in 0..height {
+                    for x in 0..width {
+                        let (fx, fy) = (x0 + (x as f32 + 0.5) * w / px as f32, y0 + (y as f32 + 0.5) * h / py as f32);
+                        let inside = (ax..ax + aw).contains(&fx) && (ay..ay + ah).contains(&fy);
+                        alpha.push(if inside { value } else { 0 });
+                    }
+                }
+                alpha
+            });
+            Synthetic { data, alpha, size: (px, py), space, device_n }
         };
         Image::from_custom(image, false).map_err(|e| self.bad(&e))
     }
@@ -574,6 +592,7 @@ fn ellipse_path(x: f32, y: f32, w: f32, h: f32) -> Option<Path> {
 #[derive(Clone, Hash)]
 struct Synthetic {
     data: Vec<u8>,
+    alpha: Option<Vec<u8>>,
     size: (u32, u32),
     space: ImageColorspace,
     device_n: Option<DeviceNSpace>,
@@ -584,7 +603,7 @@ impl CustomImage for Synthetic {
         &self.data
     }
     fn alpha_channel(&self) -> Option<&[u8]> {
-        None
+        self.alpha.as_deref()
     }
     fn bits_per_component(&self) -> BitsPerComponent {
         BitsPerComponent::Eight

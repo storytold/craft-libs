@@ -26,12 +26,7 @@ fn every_scene_separates_as_expected() {
         println!("{} {:?}{pending}", result.id, result.status);
     }
     println!("report: {}", path.display());
-    let wrong: Vec<String> = report
-        .scenes
-        .iter()
-        .filter(|r| !r.status.as_expected())
-        .map(|r| format!("{} {:?}{}", r.id, r.status, r.error.as_deref().map(|e| format!(": {e}")).unwrap_or_default()))
-        .collect();
+    let wrong = report.unexpected();
     assert!(wrong.is_empty(), "see {}:\n{}", path.display(), wrong.join("\n"));
     assert!(report.scenes.iter().any(|r| r.status == Status::Pass));
 }

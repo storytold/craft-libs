@@ -1,0 +1,29 @@
+[package]
+name = "craft-wordmodel"
+description = "A word-processing document model: stories, paragraphs, runs, tables, sections, styles, numbering, fields, notes, comments, revisions, drawings and math. What the DOCX, RTF, ODT and other text format crates read into and write from."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# The step count of `work::count`, for another crate's tests of its own work limits.
+test-support = []
+
+[dependencies]
+# The equation tree and its forms (math, math_latex, math_linear, math_symbols, math_tree), with
+# symbol_fonts and Rgb, re-exported here under the paths they had.
+craft-math = { workspace = true }
+base64 = "0.23"
+log = "0.4"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = { workspace = true }
+unicode-segmentation = "1"
+
+[dev-dependencies]
+proptest = "1"

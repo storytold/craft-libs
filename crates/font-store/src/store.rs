@@ -1,0 +1,796 @@
+//! The font store folder: consent, installs, the manifest, removal and checks.
+//!
+//! Layout of the folder ([`craft_font_catalog::font_store_dir`]):
+//!
+//! ```text
+//! settings.json        the consent setting, the sources the user added and the other settings
+//! manifest.json        what is installed
+//! os-fonts.json        the ledger of copies in the OS user font folder
+//! indexes/             the last indexes fetched: sources.json, one file per source
+//! previews/            preview subsets from the preview service (WOFF2), a cache of at most 50 MB
+//! <family dir>/        google/fonts' folder name, or <source>/<family>: the fonts and the licence
+//! language-packs/      installed Language packs, one folder per locale (`crate::language_packs`)
+//! language-packs.json  which Language packs are installed, from which index entry
+//! .staging/            downloads being installed; nothing a font scan picks up
+//! .lock                held while the store changes
+//! ```
+
+use std::fs::File;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, SystemTime};
+
+use craft_font_catalog::{Catalog, FontEnv, font_store_dir};
+use serde::{Deserialize, Serialize};
+
+use crate::http::{Cancel, Client, FetchError};
+use crate::index::{
+    Face, Family, FontFile, GOOGLE_FONTS, Index, IndexError, LicenseFile, MAX_INDEX_BYTES, MAX_LICENSE_BYTES, SourceProblem, Unavailable,
+};
+use crate::pin::IndexPin;
+use crate::service::{LegalText, PREVIEW_SERVICE_ENV, PreviewServiceSource};
+use crate::source::{is_source_url, safe_dir, safe_file_name, slug};
+use crate::sources::{MAX_SOURCES_BYTES, SourceEntry, SourcesFile};
+use crate::verify::{VerifyError, is_font, sha256_hex, verify_font};
+use crate::{Conflict, UserSource};
+
+mod os_fonts;
+mod sources;
+mod transaction;
+
+pub use os_fonts::{OsFontFolder, OsFontLayout};
+pub(crate) use transaction::Stage;
+use transaction::{Commit, merge_entry};
+
+const SETTINGS: &str = "settings.json";
+const MANIFEST: &str = "manifest.json";
+pub(crate) const INDEX_CACHE: &str = "indexes";
+const PREVIEWS: &str = "previews";
+const SOURCES_CACHE: &str = "sources.json";
+const STAGING: &str = ".staging";
+const LOCK: &str = ".lock";
+const MAX_MANIFEST_BYTES: u64 = 16 << 20;
+const MAX_SETTINGS_BYTES: u64 = 1 << 20;
+const MAX_USER_SOURCES: usize = 64;
+/// Staging folders older than this belong to an install that crashed.
+const STALE: Duration = Duration::from_secs(3600);
+
+/// Whether the store may download.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Network {
+    /// No requests. The default.
+    #[default]
+    Off,
+    /// The user allowed downloads from jsDelivr and GitHub.
+    On,
+}
+
+/// Who drives the store. Only a person in the app can turn the network on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Caller {
+    /// The app's own interface, acting on the user's click.
+    User,
+    /// An agent (MCP, the CLI, scripting): it can install when the user has turned the network
+    /// on, and can never turn it on.
+    Agent,
+}
+
+/// Why a store operation failed.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// Downloading is off; the user turns it on in the app.
+    #[error("downloading fonts is turned off")]
+    NetworkOff,
+    /// An agent tried what only the user may do: turn the network on, change a setting, or add
+    /// or remove a family's copies in the OS user font folder.
+    #[error("only the user can do this, in the app")]
+    NotAllowed,
+    /// Not an https URL a source can be added from.
+    #[error("{0} is not an https URL")]
+    BadUrl(String),
+    /// Not a usable preview service address.
+    #[error("{0} is not an https URL, or an http URL to 127.0.0.1 or [::1]")]
+    BadServiceUrl(String),
+    /// No exact match in the index.
+    #[error(transparent)]
+    Unavailable(#[from] Unavailable),
+    /// The index can't be used.
+    #[error(transparent)]
+    Index(#[from] IndexError),
+    /// Every URL failed.
+    #[error("downloading {what} failed: {}", reasons.join("; "))]
+    Download {
+        /// The file.
+        what: String,
+        /// Each URL's failure.
+        reasons: Vec<String>,
+    },
+    /// The downloaded file isn't the one the index describes.
+    #[error("{file} was rejected: {error}")]
+    Verify {
+        /// The file.
+        file: String,
+        /// What was wrong.
+        error: VerifyError,
+    },
+    /// The family isn't installed.
+    #[error("{0} is not installed")]
+    NotInstalled(String),
+    /// The operation was cancelled.
+    #[error("cancelled")]
+    Cancelled,
+    /// Families can't be copied into the OS user font folder here; the reason says why.
+    #[error("{0}")]
+    Unsupported(String),
+    /// Fonts the store didn't add already have the family's PostScript names, or sit where its
+    /// copies would go.
+    #[error("the family can't be copied into your fonts folder: {}", .0.iter().map(|c| match &c.postscript {
+        Some(ps) => format!("{} already has the name {ps}", c.path.display()),
+        None => format!("{} is in the way", c.path.display()),
+    }).collect::<Vec<_>>().join("; "))]
+    Conflict(Vec<Conflict>),
+    /// The ledger of copies in the OS user font folder (`os-fonts.json`) can't be read or
+    /// understood (damaged, or from a newer version). It is kept as it is, and nothing that would
+    /// change it runs.
+    #[error("the record of fonts copied into your fonts folder (os-fonts.json in the font store) can't be used: {0}")]
+    Ledger(String),
+    /// Reading or writing the store failed.
+    #[error("{what}: {source}")]
+    Io {
+        /// What was being done.
+        what: String,
+        /// The error.
+        source: std::io::Error,
+    },
+}
+
+pub(crate) fn io(what: impl Into<String>) -> impl FnOnce(std::io::Error) -> Error {
+    let what = what.into();
+    move |source| Error::Io { what, source }
+}
+
+/// Download progress of an install.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Progress {
+    /// The file being downloaded, from 0.
+    pub file: usize,
+    /// Files to download.
+    pub files: usize,
+    /// Bytes downloaded, of all files.
+    pub done: u64,
+    /// Bytes of all files.
+    pub total: u64,
+}
+
+/// An installed font file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledFile {
+    /// The file's name in the family folder.
+    pub name: String,
+    /// Its path in its source's repository.
+    pub path: String,
+    /// Bytes.
+    pub size: u64,
+    /// sha256, lowercase hex.
+    pub sha256: String,
+    /// The commit of the index it was installed from.
+    pub commit: String,
+    /// Its PostScript names.
+    #[serde(default)]
+    pub postscript: Vec<String>,
+}
+
+/// An installed family.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledFamily {
+    /// The family name.
+    pub family: String,
+    /// The ID of the source it was installed from.
+    #[serde(default = "google_fonts")]
+    pub source: String,
+    /// The folder in the store holding its files.
+    pub dir: String,
+    /// `OFL`, `APACHE2` or `UFL`.
+    pub license: String,
+    /// The licence file's name in the folder.
+    pub license_file: Option<String>,
+    /// The installed files: all of the family's, or some faces.
+    pub files: Vec<InstalledFile>,
+    /// The user's choice for this family: copied into the OS user font folder for all apps
+    /// (`true`) or kept in Craft apps only (`false`). `None` when none is recorded (installed
+    /// before the choice existed, or by an agent): [`FontStore::craft_apps_only`] decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_to_all: Option<bool>,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct Manifest {
+    version: u32,
+    families: Vec<InstalledFamily>,
+}
+
+fn google_fonts() -> String {
+    GOOGLE_FONTS.into()
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct Settings {
+    /// `None` until the user chooses. Files written before this field could be absent always
+    /// hold a value, so an `off` there counts as the user's choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    network: Option<Network>,
+    #[serde(default)]
+    user_sources: Vec<UserSource>,
+    #[serde(default)]
+    preview_service: Option<String>,
+    #[serde(default = "on")]
+    previews: bool,
+    /// The user keeps store fonts in Craft apps only: the font manager doesn't copy families
+    /// into the OS user font folder.
+    #[serde(default)]
+    craft_apps_only: bool,
+    /// The file exists but couldn't be read or parsed.
+    #[serde(skip)]
+    unreadable: bool,
+}
+
+fn on() -> bool {
+    true
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { network: None, user_sources: Vec::new(), preview_service: None, previews: true, craft_apps_only: false, unreadable: false }
+    }
+}
+
+impl Settings {
+    /// What a `settings.json` that can't be read or parsed stands for: the network off and no
+    /// preview service, not even the host's default. A write starts from these.
+    fn unreadable() -> Self {
+        Self { network: Some(Network::Off), unreadable: true, ..Self::default() }
+    }
+}
+
+/// Something [`FontStore::verify`] found wrong with an installed file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Problem {
+    /// The family.
+    pub family: String,
+    /// The file.
+    pub file: String,
+    /// What is wrong; `None` when the file is missing.
+    pub error: Option<VerifyError>,
+}
+
+/// A licence or NOTICE file's size and sha256, when the index has them. A format 1.0 index has
+/// neither for the licence: the size cap is then the only check.
+fn check_license(file: Option<&LicenseFile>, bytes: &[u8]) -> Result<(), VerifyError> {
+    match file {
+        Some(f) if bytes.len() as u64 != f.size => Err(VerifyError::Size { expected: f.size, actual: bytes.len() as u64 }),
+        Some(f) if sha256_hex(bytes) != f.sha256 => Err(VerifyError::Sha256),
+        _ => Ok(()),
+    }
+}
+
+/// The suite's font store.
+///
+/// Nothing here touches the network on its own: only [`FontStore::fetch_indexes`] and the installs
+/// do, and only while the user has turned the network on.
+pub struct FontStore {
+    dir: PathBuf,
+    caller: Caller,
+    client: Client,
+    catalog: Option<Arc<Catalog>>,
+    pub(crate) pack_removal_cursor: AtomicUsize,
+    pub(crate) pack_removal_round_end: AtomicUsize,
+    /// The host's preview service, used while neither the environment nor the setting names one.
+    /// Never saved.
+    default_preview_service: Option<String>,
+    /// The host's network setting, used while the user hasn't chosen. Never saved.
+    default_network: Option<Network>,
+    /// The OS user font folder, or why there is none.
+    os_fonts: Result<OsFontFolder, String>,
+    ledger_cache: os_fonts::LedgerCache,
+    /// Tests: stands in for the environment variable.
+    #[cfg(test)]
+    preview_env: Option<Option<String>>,
+}
+
+impl std::fmt::Debug for FontStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FontStore").field("dir", &self.dir).field("caller", &self.caller).finish_non_exhaustive()
+    }
+}
+
+impl FontStore {
+    /// The store for the app's own interface, in the folder every app reads.
+    /// `None` where there is no per-user folder.
+    pub fn for_user(env: &FontEnv) -> Option<Self> {
+        let mut store = Self::new(font_store_dir(env)?, Caller::User);
+        store.set_os_fonts(OsFontFolder::for_env(env));
+        Some(store)
+    }
+
+    /// The store for an agent (MCP, CLI): it can never turn the network on.
+    pub fn for_agent(env: &FontEnv) -> Option<Self> {
+        let mut store = Self::new(font_store_dir(env)?, Caller::Agent);
+        store.set_os_fonts(OsFontFolder::for_env(env));
+        Some(store)
+    }
+
+    /// A store in `dir`, with no OS user font folder ([`FontStore::with_os_fonts`] sets one).
+    pub fn new(dir: PathBuf, caller: Caller) -> Self {
+        Self {
+            dir,
+            caller,
+            client: Client::default(),
+            catalog: None,
+            pack_removal_cursor: AtomicUsize::new(0),
+            pack_removal_round_end: AtomicUsize::new(0),
+            default_preview_service: None,
+            default_network: None,
+            os_fonts: Err("no user font folder was given".into()),
+            ledger_cache: os_fonts::LedgerCache::default(),
+            #[cfg(test)]
+            preview_env: None,
+        }
+    }
+
+    /// Tests: reads `env` instead of [`PREVIEW_SERVICE_ENV`].
+    #[cfg(test)]
+    pub(crate) fn with_preview_env(mut self, env: Option<&str>) -> Self {
+        self.preview_env = Some(env.map(str::to_string));
+        self
+    }
+
+    /// The download client. Clones share the preview service's down state, so a pool built on one
+    /// stops asking a service the store found unreachable, and the reverse.
+    pub fn client(&self) -> Client {
+        self.client.clone()
+    }
+
+    /// Uses `url` as the preview service while neither [`PREVIEW_SERVICE_ENV`] nor the user's
+    /// setting names one. The host's default is never written to `settings.json`, so clearing
+    /// the setting brings it back, and other apps sharing the store don't see it. An unusable
+    /// URL counts as none.
+    pub fn with_default_preview_service(mut self, url: &str) -> Self {
+        self.default_preview_service = normalize_service_url(url);
+        debug_assert!(self.default_preview_service.is_some(), "unusable preview service URL {url:?}");
+        self
+    }
+
+    /// Uses `network` while the user hasn't chosen (no saved choice in `settings.json`). The
+    /// host's default is never saved: the user's [`FontStore::enable_network`] or
+    /// [`FontStore::disable_network`] beats it from then on, and other apps sharing the store
+    /// don't see it. An agent's store ignores it, as an agent can never turn the network on.
+    pub fn with_default_network(mut self, network: Network) -> Self {
+        if self.caller == Caller::User {
+            self.default_network = Some(network);
+        }
+        self
+    }
+
+    /// Uses `client` for downloads (other timeouts).
+    pub fn with_client(mut self, client: Client) -> Self {
+        self.client = client;
+        self
+    }
+
+    /// Rescans `catalog` after each install and removal, so the app sees the change at once.
+    /// Apps pass `Catalog::global().clone()`.
+    pub fn with_catalog(mut self, catalog: Arc<Catalog>) -> Self {
+        self.catalog = Some(catalog);
+        self
+    }
+
+    /// The store's folder.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// The folder for the preview service's subsets, which craft-font-manager caches. The store
+    /// itself never reads or writes it.
+    pub fn previews_dir(&self) -> PathBuf {
+        self.dir.join(PREVIEWS)
+    }
+
+    /// Who drives this store.
+    pub fn caller(&self) -> Caller {
+        self.caller
+    }
+
+    // ----- install
+
+    /// Installs every file of `family`. Files already installed with the same sha256 aren't
+    /// downloaded again. When the family has copies in the OS user font folder, the user's install
+    /// also copies the new files there; an agent's leaves them in [`FontStore::pending_files`].
+    pub fn install_family(
+        &self,
+        index: &Index,
+        family: &Family,
+        cancel: &Cancel,
+        progress: &mut dyn FnMut(Progress),
+    ) -> Result<InstalledFamily, Error> {
+        let files: Vec<&FontFile> = family.files.iter().collect();
+        self.install(index, family, &files, cancel, progress)
+    }
+
+    /// Installs the file of one face (from [`Index::find_face`] or [`Index::find_postscript`]),
+    /// with the family's licence.
+    pub fn install_face(&self, index: &Index, face: Face<'_>, cancel: &Cancel, progress: &mut dyn FnMut(Progress)) -> Result<InstalledFamily, Error> {
+        self.install(index, face.family, &[face.file], cancel, progress)
+    }
+
+    fn install(
+        &self,
+        index: &Index,
+        family: &Family,
+        files: &[&FontFile],
+        cancel: &Cancel,
+        progress: &mut dyn FnMut(Progress),
+    ) -> Result<InstalledFamily, Error> {
+        let installed = self.installed_family(&family.source, &family.family);
+        let folder = self.dir.join(family.dir());
+        let have = |f: &FontFile| installed.as_ref().is_some_and(|i| i.files.iter().any(|x| x.name == f.file_name() && x.sha256 == f.sha256));
+        let wanted: Vec<&FontFile> = files.iter().copied().filter(|f| !have(f) || !folder.join(f.file_name()).is_file()).collect();
+        let license_missing = family.license_file_name().is_some_and(|name| !folder.join(name).is_file());
+        if wanted.is_empty() && !license_missing {
+            self.reshare(&family.source, &family.family);
+            return installed.ok_or_else(|| Error::NotInstalled(family.family.clone()));
+        }
+        self.require_network()?;
+        std::fs::create_dir_all(&self.dir).map_err(io("creating the font store folder"))?;
+        self.sweep_staging();
+        let stage = Stage::new(&self.dir)?;
+
+        let total: u64 = wanted.iter().map(|f| f.size).sum();
+        let mut done_before = 0u64;
+        let mut staged: Vec<(String, PathBuf)> = Vec::new();
+        for (i, file) in wanted.iter().enumerate() {
+            let mut on_bytes = |n: u64| progress(Progress { file: i, files: wanted.len(), done: done_before + n, total });
+            let check = |bytes: &[u8]| verify_font(file, bytes);
+            let mut urls = self.mirror_urls(family, "files", &file.sha256);
+            let mirrors = urls.len();
+            urls.extend(index.file_urls(family, file));
+            let bytes = self.fetch(&urls, mirrors, file.size, file.file_name(), cancel, &mut on_bytes, &check)?;
+            done_before += file.size;
+            staged.push((file.file_name().to_string(), stage.write(file.file_name(), &bytes)?));
+        }
+        if license_missing && let Some(name) = family.license_file_name() {
+            // A format 1.0 index has no size or sha256 for the licence: the size cap is the only
+            // check.
+            let max = family.license_file.as_ref().map_or(MAX_LICENSE_BYTES, |f| f.size);
+            let check = |bytes: &[u8]| check_license(family.license_file.as_ref(), bytes);
+            // Without a sha256 there is no mirror address.
+            let mut urls = family.license_file.as_ref().map(|f| self.mirror_urls(family, "licences", &f.sha256)).unwrap_or_default();
+            let mirrors = urls.len();
+            urls.extend(index.license_urls(family));
+            let bytes = self.fetch(&urls, mirrors, max, name, cancel, &mut |_| {}, &check)?;
+            staged.push((name.to_string(), stage.write(name, &bytes)?));
+        }
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+
+        let result = {
+            let _lock = self.lock()?;
+            let mut manifest = self.read_manifest();
+            let commit = Commit::apply(&folder, &stage.dir, &staged)?;
+            let entry = merge_entry(&mut manifest, index, family, &wanted);
+            match self.write_manifest(&manifest) {
+                Ok(()) => {
+                    commit.keep();
+                    Ok(entry)
+                }
+                Err(e) => {
+                    commit.undo();
+                    Err(e)
+                }
+            }
+        };
+        drop(stage);
+        self.rescan();
+        if result.is_ok() {
+            self.reshare(&family.source, &family.family);
+        }
+        result
+    }
+
+    /// The text of `family`'s licence or NOTICE file: the copy installed beside its fonts, else
+    /// downloaded and checked like an install's licence, from the preview service first.
+    /// `Ok(None)` when the family has no such file.
+    pub fn legal_text(&self, index: &Index, family: &Family, which: LegalText, cancel: &Cancel) -> Result<Option<String>, Error> {
+        let (file, name, urls) = match which {
+            LegalText::License => (family.license_file.as_ref(), family.license_file_name(), index.license_urls(family)),
+            LegalText::Notice => (family.notice_file.as_ref(), family.notice_file.as_ref().map(LicenseFile::file_name), index.notice_urls(family)),
+        };
+        let Some(name) = name else { return Ok(None) };
+        let max = file.map_or(MAX_LICENSE_BYTES, |f| f.size);
+        let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+        let installed = self.dir.join(family.dir()).join(name);
+        if std::fs::metadata(&installed).is_ok_and(|m| m.is_file() && m.len() <= max)
+            && let Ok(bytes) = std::fs::read(&installed)
+            && check_license(file, &bytes).is_ok()
+        {
+            return Ok(Some(text(&bytes)));
+        }
+        self.require_network()?;
+        let mut all = file.map(|f| self.mirror_urls(family, "licences", &f.sha256)).unwrap_or_default();
+        let mirrors = all.len();
+        all.extend(urls);
+        let bytes = self.fetch(&all, mirrors, max, name, cancel, &mut |_| {}, &|b| check_license(file, b))?;
+        Ok(Some(text(&bytes)))
+    }
+
+    /// The preview service's address for a file of `family` by its sha256; empty without a
+    /// service, and for a family the user's sources added: the service holds only the built-in
+    /// sources' files, and asking would tell it the file's hash.
+    fn mirror_urls(&self, family: &Family, kind: &str, sha256: &str) -> Vec<String> {
+        if !family.is_curated() {
+            return Vec::new();
+        }
+        self.preview_service().map(|base| format!("{base}/v1/{kind}/{sha256}")).into_iter().collect()
+    }
+
+    /// Downloads from each URL in turn until one gives bytes that pass `check`. The first
+    /// `mirrors` URLs come from the preview-service setting and may use loopback http; the rest
+    /// are https only.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn fetch(
+        &self,
+        urls: &[String],
+        mirrors: usize,
+        max: u64,
+        what: &str,
+        cancel: &Cancel,
+        on_bytes: &mut dyn FnMut(u64),
+        check: &dyn Fn(&[u8]) -> Result<(), VerifyError>,
+    ) -> Result<Vec<u8>, Error> {
+        let mut reasons = Vec::new();
+        // A rejection by an index URL is a corrupt file; a mirror's alone is one more failed source.
+        let mut rejected = None;
+        for (i, url) in urls.iter().enumerate() {
+            let got =
+                if i < mirrors { self.client.get_from_service(url, max, cancel, on_bytes) } else { self.client.get(url, max, cancel, on_bytes) };
+            match got {
+                Ok(bytes) => match check(&bytes) {
+                    Ok(()) => return Ok(bytes),
+                    Err(e) => {
+                        reasons.push(format!("{}: {e}", host(url)));
+                        if i >= mirrors {
+                            rejected.get_or_insert(e);
+                        }
+                    }
+                },
+                Err(FetchError::Cancelled) => return Err(Error::Cancelled),
+                Err(e) => reasons.push(format!("{}: {e}", host(url))),
+            }
+        }
+        match rejected {
+            Some(error) => Err(Error::Verify { file: what.to_string(), error }),
+            None => Err(Error::Download { what: what.to_string(), reasons }),
+        }
+    }
+
+    // ----- installed fonts
+
+    /// The installed families, sorted by name.
+    pub fn installed(&self) -> Vec<InstalledFamily> {
+        self.read_manifest().families
+    }
+
+    /// The family of this name installed from `source`, ignoring case.
+    pub fn installed_family(&self, source: &str, name: &str) -> Option<InstalledFamily> {
+        self.installed().into_iter().find(|f| f.is(source, name))
+    }
+
+    /// Whether `file` is installed, with the index's sha256.
+    pub fn is_installed(&self, family: &Family, file: &FontFile) -> bool {
+        self.installed_family(&family.source, &family.family)
+            .is_some_and(|i| i.files.iter().any(|x| x.name == file.file_name() && x.sha256 == file.sha256))
+    }
+
+    /// Removes the family of this name installed from `source`: its copies in the OS user font
+    /// folder (as [`FontStore::withdraw`]), its files, its licence and its manifest entry. Its
+    /// folder disappears at once and is deleted after. A family with copies in the OS folder is
+    /// the user's to remove: an agent gets [`Error::NotAllowed`] and nothing changes. Copies this
+    /// build can't reach ([`FontStore::copies_out_of_reach`]) stay, listed in the ledger.
+    pub fn remove_family(&self, source: &str, name: &str) -> Result<(), Error> {
+        let result = {
+            let _lock = self.lock()?;
+            let mut manifest = self.read_manifest();
+            let pos = manifest.families.iter().position(|f| f.is(source, name)).ok_or_else(|| Error::NotInstalled(name.to_string()))?;
+            self.withdraw_for_removal(source, name, None)?;
+            let entry = manifest.families.remove(pos);
+            let folder = self.dir.join(&entry.dir);
+            let stage = Stage::new(&self.dir)?;
+            let moved = stage.dir.join("removed");
+            let had_folder = folder.exists();
+            if had_folder {
+                std::fs::rename(&folder, &moved).map_err(io(format!("removing {}", entry.family)))?;
+            }
+            match self.write_manifest(&manifest) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    if had_folder {
+                        let _ = std::fs::rename(&moved, &folder);
+                    }
+                    Err(e)
+                }
+            }
+        };
+        self.rescan();
+        result
+    }
+
+    /// Removes some files of an installed family (one style, say), by their names in its folder,
+    /// with their copies in the OS user font folder. Taking out the last one removes the family.
+    /// Names the family's manifest entry doesn't list are left alone. Files with copies in the OS
+    /// folder are the user's to remove: an agent gets [`Error::NotAllowed`] and nothing changes.
+    /// Copies this build can't reach stay, as for [`FontStore::remove_family`].
+    pub fn remove_files(&self, source: &str, name: &str, files: &[String]) -> Result<(), Error> {
+        let result = {
+            let _lock = self.lock()?;
+            let mut manifest = self.read_manifest();
+            let pos = manifest.families.iter().position(|f| f.is(source, name)).ok_or_else(|| Error::NotInstalled(name.to_string()))?;
+            let Some(entry) = manifest.families.get_mut(pos) else { return Err(Error::NotInstalled(name.to_string())) };
+            // Only listed, safe names become paths, so a request can't reach outside the folder.
+            let removing: Vec<String> = entry.files.iter().map(|f| f.name.clone()).filter(|n| safe_file_name(n) && files.contains(n)).collect();
+            if removing.is_empty() {
+                return Ok(());
+            }
+            self.withdraw_for_removal(source, name, Some(removing.as_slice()))?;
+            entry.files.retain(|f| !removing.contains(&f.name));
+            let folder = self.dir.join(&entry.dir);
+            let stage = Stage::new(&self.dir)?;
+            let mut moving: Vec<(PathBuf, PathBuf)> = removing.iter().map(|f| (folder.join(f), stage.dir.join(f))).collect();
+            let last = entry.files.is_empty();
+            if last {
+                // The licence goes with the last style. Files the store didn't install stay, and
+                // keep the folder.
+                if let Some(licence) = entry.license_file.clone().filter(|n| safe_file_name(n) && !removing.contains(n)) {
+                    moving.push((folder.join(&licence), stage.dir.join(&licence)));
+                }
+                manifest.families.remove(pos);
+            }
+            let mut moved = Vec::new();
+            for (from, to) in &moving {
+                if from.exists() {
+                    std::fs::rename(from, to).map_err(io(format!("removing {}", from.display())))?;
+                    moved.push((from, to));
+                }
+            }
+            match self.write_manifest(&manifest) {
+                Ok(()) => {
+                    if last {
+                        let _ = std::fs::remove_dir(&folder);
+                    }
+                    Ok(())
+                }
+                Err(e) => {
+                    for (from, to) in moved {
+                        let _ = std::fs::rename(to, from);
+                    }
+                    Err(e)
+                }
+            }
+        };
+        self.rescan();
+        result
+    }
+
+    /// Checks every installed file against the manifest: present, the right size and sha256,
+    /// and a font.
+    pub fn verify(&self) -> Vec<Problem> {
+        let mut problems = Vec::new();
+        for fam in self.installed() {
+            for f in &fam.files {
+                let path = self.dir.join(&fam.dir).join(&f.name);
+                let problem = |error| Problem { family: fam.family.clone(), file: f.name.clone(), error };
+                let Ok(bytes) = std::fs::read(&path) else {
+                    problems.push(problem(None));
+                    continue;
+                };
+                let error = if bytes.len() as u64 != f.size {
+                    Some(VerifyError::Size { expected: f.size, actual: bytes.len() as u64 })
+                } else if sha256_hex(&bytes) != f.sha256 {
+                    Some(VerifyError::Sha256)
+                } else if !is_font(&bytes) {
+                    Some(VerifyError::NotAFont)
+                } else {
+                    None
+                };
+                if error.is_some() {
+                    problems.push(problem(error));
+                }
+            }
+        }
+        problems
+    }
+}
+
+impl InstalledFamily {
+    fn empty() -> Self {
+        Self {
+            family: String::new(),
+            source: String::new(),
+            dir: String::new(),
+            license: String::new(),
+            license_file: None,
+            files: Vec::new(),
+            available_to_all: None,
+        }
+    }
+
+    /// Whether this is the family `name` (ignoring case) from `source`.
+    pub fn is(&self, source: &str, name: &str) -> bool {
+        self.source == source && self.family.to_lowercase() == name.to_lowercase()
+    }
+}
+
+pub(crate) fn read_limited(path: &Path, max: u64) -> Option<Vec<u8>> {
+    if std::fs::metadata(path).ok()?.len() > max {
+        return None;
+    }
+    std::fs::read(path).ok()
+}
+
+/// The environment value when set and not empty, else the setting; an unusable value counts as
+/// unset.
+#[cfg(test)]
+pub(crate) fn resolve_preview_service(env: Option<&str>, setting: Option<&str>) -> Option<String> {
+    resolve_preview_source(env, setting, None).0
+}
+
+/// The service in effect and where it came from: the environment value when set and not empty
+/// (alone: an unusable one means no service), else the setting when usable, else the host's
+/// default.
+pub(crate) fn resolve_preview_source(env: Option<&str>, setting: Option<&str>, default: Option<&str>) -> (Option<String>, PreviewServiceSource) {
+    let (url, source) = match env.map(str::trim).filter(|e| !e.is_empty()) {
+        Some(e) => (normalize_service_url(e), PreviewServiceSource::Env),
+        None => match setting.and_then(normalize_service_url) {
+            Some(url) => (Some(url), PreviewServiceSource::Saved),
+            None => (default.and_then(normalize_service_url), PreviewServiceSource::Default),
+        },
+    };
+    if url.is_some() { (url, source) } else { (None, PreviewServiceSource::None) }
+}
+
+/// The preview-service address `url` stands for: without a trailing slash, when it is an https URL,
+/// or an http one for a loopback host, with no credentials, query or fragment. [`Error::BadServiceUrl`]
+/// otherwise.
+pub fn check_preview_service(url: &str) -> Result<String, Error> {
+    normalize_service_url(url).ok_or_else(|| Error::BadServiceUrl(url.trim().chars().take(200).collect()))
+}
+
+/// `url` without a trailing slash, when it is an https URL, or an http one for a loopback host,
+/// with no credentials, query or fragment.
+fn normalize_service_url(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/');
+    if url.len() > 2000 || url.chars().any(|c| c.is_control() || c.is_whitespace() || c == '\\') {
+        return None;
+    }
+    let (https, rest) = match (url.strip_prefix("https://"), url.strip_prefix("http://")) {
+        (Some(r), _) => (true, r),
+        (None, Some(r)) => (false, r),
+        _ => return None,
+    };
+    let authority = rest.split('/').next().unwrap_or_default();
+    if authority.is_empty() || authority.contains('@') || url.contains(['?', '#']) {
+        return None;
+    }
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or_default(),
+        None => authority.split(':').next().unwrap_or_default(),
+    };
+    let loopback = matches!(host.to_ascii_lowercase().as_str(), "127.0.0.1" | "::1");
+    (https || loopback).then(|| url.to_string())
+}
+
+fn host(url: &str) -> &str {
+    url.split("://").nth(1).and_then(|r| r.split('/').next()).unwrap_or(url)
+}

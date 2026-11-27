@@ -9,20 +9,35 @@ use crate::math::{self, Mat3};
 use crate::pipeline::Stage;
 use crate::{CmsError, Intent};
 
+mod parse;
+
+pub(crate) use parse::Reader;
+use parse::parse_profile;
+
 /// Profile/device class (header bytes 12..16).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ProfileClass {
+    #[allow(missing_docs)]
     Input,
+    #[allow(missing_docs)]
     Display,
+    #[allow(missing_docs)]
     Output,
+    #[allow(missing_docs)]
     DeviceLink,
+    #[allow(missing_docs)]
     ColorSpace,
+    #[allow(missing_docs)]
     Abstract,
+    #[allow(missing_docs)]
     NamedColor,
+    /// A class signature this crate does not know, kept as read.
     Unknown(u32),
 }
 
 impl ProfileClass {
+    /// Maps the four-character class signature (big-endian `u32`) to a class; unknown signatures
+    /// give [`ProfileClass::Unknown`].
     pub fn from_sig(s: u32) -> Self {
         match &s.to_be_bytes() {
             b"scnr" => Self::Input,
@@ -35,6 +50,7 @@ impl ProfileClass {
             _ => Self::Unknown(s),
         }
     }
+    /// The four-character class signature as a big-endian `u32`.
     pub fn sig(self) -> u32 {
         u32::from_be_bytes(*match self {
             Self::Input => b"scnr",
@@ -52,23 +68,37 @@ impl ProfileClass {
 /// Data colour space (header bytes 16..20).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ColorSpace {
+    #[allow(missing_docs)]
     Xyz,
+    #[allow(missing_docs)]
     Lab,
+    #[allow(missing_docs)]
     Luv,
+    #[allow(missing_docs)]
     YCbCr,
+    #[allow(missing_docs)]
     Yxy,
+    #[allow(missing_docs)]
     Rgb,
+    #[allow(missing_docs)]
     Gray,
+    #[allow(missing_docs)]
     Hsv,
+    #[allow(missing_docs)]
     Hls,
+    #[allow(missing_docs)]
     Cmyk,
+    #[allow(missing_docs)]
     Cmy,
     /// `nCLR` spaces with n = 2..=15 colorants.
     Color(u8),
+    /// A colour space signature this crate does not know, kept as read.
     Unknown(u32),
 }
 
 impl ColorSpace {
+    /// Maps the four-character colour space signature (big-endian `u32`) to a colour space; unknown
+    /// signatures give [`ColorSpace::Unknown`].
     pub fn from_sig(s: u32) -> Self {
         let b = s.to_be_bytes();
         match &b {
@@ -91,6 +121,7 @@ impl ColorSpace {
             _ => Self::Unknown(s),
         }
     }
+    /// The four-character colour space signature as a big-endian `u32`.
     pub fn sig(self) -> u32 {
         u32::from_be_bytes(match self {
             Self::Xyz => *b"XYZ ",
@@ -123,7 +154,9 @@ impl ColorSpace {
 /// Which PCS a stage list ends in (float values: XYZ with Y = 1 for the white, or Lab L 0–100).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pcs {
+    #[allow(missing_docs)]
     Xyz,
+    #[allow(missing_docs)]
     Lab,
 }
 
@@ -141,9 +174,13 @@ pub enum LutKind {
 /// A parsed `AToB`/`BToA` tag: device-side and PCS-side values are normalised to `[0, 1]`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lut {
+    /// Encoding family of the tag.
     pub kind: LutKind,
+    /// Number of device-side channels.
     pub inputs: usize,
+    /// Number of PCS-side channels.
     pub outputs: usize,
+    /// Stages from device side to PCS side for `AToB` tags, the reverse for `BToA` tags.
     pub stages: Vec<Stage>,
 }
 
@@ -157,11 +194,17 @@ pub const SAME_COLORS_MAX_DELTA_E: f64 = 0.5;
 pub struct Profile {
     /// Major version and minor.bugfix byte (e.g. `(4, 0x30)` for 4.3, `(2, 0x10)` for 2.1).
     pub version: (u8, u8),
+    #[allow(missing_docs)]
     pub class: ProfileClass,
+    #[allow(missing_docs)]
     pub color_space: ColorSpace,
+    #[allow(missing_docs)]
     pub pcs: Pcs,
+    /// Intent stored in the profile header.
     pub rendering_intent: Intent,
+    /// Text of the `desc` tag; empty when absent.
     pub description: String,
+    /// Text of the `cprt` tag; empty when absent.
     pub copyright: String,
     /// `wtpt` as stored (XYZ; D50 when absent).
     pub white_point: [f64; 3],
@@ -171,19 +214,146 @@ pub struct Profile {
     pub chad: Option<Mat3>,
     /// Colorant matrix (columns rXYZ, gXYZ, bXYZ), D50-adapted.
     pub matrix: Option<Mat3>,
+    /// Red, green and blue tone curves (`rTRC`, `gTRC`, `bTRC`) of a matrix/TRC profile.
     pub trc: Option<[Curve; 3]>,
+    /// Gray tone curve (`kTRC`) of a gray profile.
     pub gray_trc: Option<Curve>,
     /// A2B0/A2B1/A2B2 (perceptual, colorimetric, saturation).
     pub a2b: [Option<Lut>; 3],
+    /// B2A0/B2A1/B2A2 (perceptual, colorimetric, saturation).
     pub b2a: [Option<Lut>; 3],
     /// The bytes this profile was parsed from (or encoded to), kept for byte-exact embedding.
     pub(crate) bytes: Option<Arc<Vec<u8>>>,
-    pub(crate) hash: std::sync::OnceLock<u64>,
+    /// Lazily computed content hash: a cache, not part of the profile's identity.
+    pub(crate) hash: HashCache,
 }
 
 impl Profile {
+    /// Builds a matrix/TRC display profile from an already PCS D50-adapted colorant matrix,
+    /// a white point, and per-channel tone reproduction curves.
+    ///
+    /// # Matrix Coordinate Space
+    /// In accordance with ICC.1:2010 §9.2.35–37, the colorant matrix tags (`rXYZ`, `gXYZ`, `bXYZ`)
+    /// stored in an ICC profile must be chromatically adapted to the D50 Profile Connection Space (PCS).
+    /// `pcs_matrix` must therefore be expressed relative to D50 (e.g. as read directly from ICC profile tags).
+    ///
+    /// If `white` is not D50, the profile's `chad` tag is populated with the Bradford chromatic adaptation
+    /// matrix mapping `white` to D50.
+    pub fn matrix_shaper(white: [f64; 3], pcs_matrix: Mat3, trc: [Curve; 3]) -> Result<Profile, CmsError> {
+        for curve in &trc {
+            curve.validate_icc()?;
+        }
+        if !white.iter().all(|&c| math::fits_s15f16(c) && math::s15f16_round(c) > 0.0) {
+            return Err(CmsError::InvalidArgument("white point must remain positive and representable in ICC fixed point".into()));
+        }
+        if !pcs_matrix.iter().flatten().all(|&v| v.is_finite()) {
+            return Err(CmsError::InvalidArgument("matrix elements must be finite".into()));
+        }
+        if math::invert(&pcs_matrix).is_none() {
+            return Err(CmsError::InvalidArgument("colorant matrix must be invertible".into()));
+        }
+
+        let d50 = math::d50_quantized();
+        let is_d50 = (white[0] - math::D50[0]).abs() < 1e-4 && (white[1] - math::D50[1]).abs() < 1e-4 && (white[2] - math::D50[2]).abs() < 1e-4;
+
+        let chad = if is_d50 { None } else { Some(math::bradford(white, math::D50)) };
+
+        // Quantize and normalize to ensure (1, 1, 1) maps exactly to PCS D50
+        let mut q = pcs_matrix.map(|row| row.map(math::s15f16_round));
+        for (i, row) in q.iter_mut().enumerate() {
+            let err = d50[i] - row.iter().sum::<f64>();
+            let k = (0..3).max_by(|a, b| row[*a].abs().total_cmp(&row[*b].abs())).unwrap_or(0);
+            row[k] = math::s15f16_round(row[k] + err);
+        }
+        if !q.iter().flatten().all(|&v| math::fits_s15f16(v)) || math::invert(&q).is_none() {
+            return Err(CmsError::InvalidArgument("colorant matrix is singular or unrepresentable after quantization/normalization".into()));
+        }
+        let chad_quantized = chad.map(|a| a.map(|row| row.map(math::s15f16_round)));
+        // Positive finite XYZ inputs can still overflow Bradford cone ratios or quantization.
+        // Refuse invalid stored adaptation rather than serializing nonfinite coefficients.
+        if chad_quantized.as_ref().is_some_and(|a| !a.iter().flatten().all(|&v| math::fits_s15f16(v)) || math::invert(a).is_none()) {
+            return Err(CmsError::InvalidArgument("chromatic adaptation must remain representable and invertible after quantization".into()));
+        }
+
+        Ok(Profile {
+            version: (4, 0x30),
+            class: ProfileClass::Display,
+            color_space: ColorSpace::Rgb,
+            pcs: Pcs::Xyz,
+            rendering_intent: Intent::RelativeColorimetric,
+            description: "Parametric Matrix/TRC".into(),
+            copyright: "".into(),
+            white_point: if is_d50 { d50 } else { white },
+            black_point: None,
+            chad: chad_quantized,
+            matrix: Some(q),
+            trc: Some(trc),
+            gray_trc: None,
+            a2b: [None, None, None],
+            b2a: [None, None, None],
+            bytes: None,
+            hash: Default::default(),
+        })
+    }
+
+    /// Builds a matrix/TRC display profile from unadapted source primaries relative to `white`.
+    ///
+    /// The unadapted `source_matrix` (whose columns sum to `white`) is chromatically adapted to PCS D50
+    /// using the Bradford transform before storage in the profile's matrix tags.
+    pub fn from_source_matrix(white: [f64; 3], source_matrix: Mat3, trc: [Curve; 3]) -> Result<Profile, CmsError> {
+        if !white.iter().all(|&c| math::fits_s15f16(c) && math::s15f16_round(c) > 0.0) {
+            return Err(CmsError::InvalidArgument("white point must remain positive and representable in ICC fixed point".into()));
+        }
+        if !source_matrix.iter().flatten().all(|&v| v.is_finite()) {
+            return Err(CmsError::InvalidArgument("matrix elements must be finite".into()));
+        }
+        if math::invert(&source_matrix).is_none() {
+            return Err(CmsError::InvalidArgument("colorant matrix must be invertible".into()));
+        }
+
+        let is_d50 = (white[0] - math::D50[0]).abs() < 1e-4 && (white[1] - math::D50[1]).abs() < 1e-4 && (white[2] - math::D50[2]).abs() < 1e-4;
+        let pcs_matrix = if is_d50 {
+            source_matrix
+        } else {
+            let adapt = math::bradford(white, math::D50);
+            math::mul(&adapt, &source_matrix)
+        };
+
+        Self::matrix_shaper(white, pcs_matrix, trc)
+    }
+
+    /// Builds a monochrome profile from a white point and tone reproduction curve.
+    pub fn gray(white: [f64; 3], trc: Curve) -> Result<Profile, CmsError> {
+        trc.validate_icc()?;
+        if !white.iter().all(|&c| math::fits_s15f16(c) && math::s15f16_round(c) > 0.0) {
+            return Err(CmsError::InvalidArgument("white point must remain positive and representable in ICC fixed point".into()));
+        }
+        let is_d50 = (white[0] - math::D50[0]).abs() < 1e-4 && (white[1] - math::D50[1]).abs() < 1e-4 && (white[2] - math::D50[2]).abs() < 1e-4;
+
+        Ok(Profile {
+            version: (4, 0x30),
+            class: ProfileClass::Display,
+            color_space: ColorSpace::Gray,
+            pcs: Pcs::Xyz,
+            rendering_intent: Intent::RelativeColorimetric,
+            description: "Parametric Gray".into(),
+            copyright: "".into(),
+            white_point: if is_d50 { math::d50_quantized() } else { white },
+            black_point: None,
+            chad: None,
+            matrix: None,
+            trc: None,
+            gray_trc: Some(trc),
+            a2b: [None, None, None],
+            b2a: [None, None, None],
+            bytes: None,
+            hash: Default::default(),
+        })
+    }
+
     /// Parses ICC profile bytes.
     pub fn parse(bytes: &[u8]) -> Result<Profile, CmsError> {
+        parse::reset_budgets();
         let mut p = parse_profile(bytes)?;
         p.bytes = Some(Arc::new(bytes.to_vec()));
         Ok(p)
@@ -207,18 +377,31 @@ impl Profile {
         self
     }
 
+    /// Number of device channels of the data colour space.
     pub fn channels(&self) -> usize {
         self.color_space.channels()
     }
 
-    /// Hash of the profile's ICC bytes (stable within a process; used as a cache key).
+    /// Hash of the profile's ICC bytes (stable within a process; used as a cache key). It is a
+    /// fixed-key 64-bit hash, so a crafted profile can share another's: equal hashes only narrow
+    /// the search, [`Profile::same_bytes`] decides.
     pub fn content_hash(&self) -> u64 {
-        *self.hash.get_or_init(|| {
+        *self.hash.0.get_or_init(|| {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
             self.to_bytes().hash(&mut h);
             h.finish()
         })
+    }
+
+    /// Whether `self` and `other` have the same ICC bytes.
+    pub fn same_bytes(&self, other: &Profile) -> bool {
+        if let (Some(a), Some(b)) = (&self.bytes, &other.bytes)
+            && Arc::ptr_eq(a, b)
+        {
+            return true;
+        }
+        self.content_hash() == other.content_hash() && self.to_bytes() == other.to_bytes()
     }
 
     /// Whether `self` and `other` describe the same colours: same colour space, and every sample
@@ -228,7 +411,7 @@ impl Profile {
     /// parametric curves) differ in every byte. Colours are compared rather than round-tripped
     /// because CMYK → PCS → CMYK is not an identity even through a single profile.
     pub fn same_colors(&self, other: &Profile) -> bool {
-        if self.content_hash() == other.content_hash() {
+        if self.same_bytes(other) {
             return true;
         }
         let n = self.channels();
@@ -404,435 +587,62 @@ fn encode_pcs(pcs: Pcs, kind: LutKind) -> Stage {
     }
 }
 
-// ---------------------------------------------------------------- reader
-
-struct Reader<'a> {
-    b: &'a [u8],
-}
-
-impl<'a> Reader<'a> {
-    fn slice(&self, off: usize, len: usize) -> Result<&'a [u8], CmsError> {
-        off.checked_add(len).and_then(|end| self.b.get(off..end)).ok_or(CmsError::Truncated)
-    }
-    fn u8(&self, off: usize) -> Result<u8, CmsError> {
-        self.b.get(off).copied().ok_or(CmsError::Truncated)
-    }
-    fn u16(&self, off: usize) -> Result<u16, CmsError> {
-        let s = self.slice(off, 2)?;
-        Ok(u16::from_be_bytes([s[0], s[1]]))
-    }
-    fn u32(&self, off: usize) -> Result<u32, CmsError> {
-        let s = self.slice(off, 4)?;
-        Ok(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
-    }
-    fn s15f16(&self, off: usize) -> Result<f64, CmsError> {
-        Ok(self.u32(off)? as i32 as f64 / 65536.0)
-    }
-    fn xyz(&self, off: usize) -> Result<[f64; 3], CmsError> {
-        Ok([self.s15f16(off)?, self.s15f16(off + 4)?, self.s15f16(off + 8)?])
-    }
-}
-
-fn sig(s: &[u8; 4]) -> u32 {
-    u32::from_be_bytes(*s)
-}
-
-/// Upper bound on CLUT nodes × outputs we accept, to reject hostile files.
-const MAX_CLUT_VALUES: usize = crate::clut::MAX_VALUES;
-
-fn parse_profile(bytes: &[u8]) -> Result<Profile, CmsError> {
-    let r = Reader { b: bytes };
-    if bytes.len() < 132 {
-        return Err(CmsError::Truncated);
-    }
-    if r.slice(36, 4)? != b"acsp" {
-        return Err(CmsError::BadSignature);
-    }
-    let declared = r.u32(0)? as usize;
-    // Some writers pad or truncate; trust the smaller of the two.
-    let end = if declared >= 132 && declared <= bytes.len() { declared } else { bytes.len() };
-    let r = Reader { b: &bytes[..end] };
-    let version = (r.u8(8)?, r.u8(9)?);
-    let class = ProfileClass::from_sig(r.u32(12)?);
-    let color_space = ColorSpace::from_sig(r.u32(16)?);
-    let pcs_sig = r.u32(20)?;
-    let pcs = match &pcs_sig.to_be_bytes() {
-        b"Lab " => Pcs::Lab,
-        _ => Pcs::Xyz,
-    };
-    let rendering_intent = Intent::from_u32(r.u32(64)? & 0xFFFF).unwrap_or(Intent::Perceptual);
-    let count = r.u32(128)? as usize;
-    if count > 1024 {
-        return Err(CmsError::Invalid(format!("{count} tags")));
-    }
-    let mut tags: Vec<(u32, usize, usize)> = Vec::with_capacity(count);
-    for i in 0..count {
-        let o = 132 + i * 12;
-        let (s, off, len) = (r.u32(o)?, r.u32(o + 4)? as usize, r.u32(o + 8)? as usize);
-        tags.push((s, off, len));
-    }
-    let find = |s: &[u8; 4]| tags.iter().find(|t| t.0 == sig(s)).map(|t| (t.1, t.2));
-    let tag_data = |s: &[u8; 4]| -> Result<Option<&[u8]>, CmsError> {
-        match find(s) {
-            Some((off, len)) => Ok(Some(r.slice(off, len)?)),
-            None => Ok(None),
-        }
-    };
-
-    let xyz_tag = |s: &[u8; 4]| -> Result<Option<[f64; 3]>, CmsError> {
-        match tag_data(s)? {
-            Some(d) if d.len() >= 20 && &d[..4] == b"XYZ " => Ok(Some(Reader { b: d }.xyz(8)?)),
-            Some(_) => Err(CmsError::Invalid(format!("tag {} is not XYZType", String::from_utf8_lossy(s)))),
-            None => Ok(None),
-        }
-    };
-    let curve_tag = |s: &[u8; 4]| -> Result<Option<Curve>, CmsError> {
-        match tag_data(s)? {
-            Some(d) => Ok(Some(parse_curve(d)?.0)),
-            None => Ok(None),
-        }
-    };
-
-    let white_point = xyz_tag(b"wtpt")?.unwrap_or(math::D50);
-    let black_point = xyz_tag(b"bkpt").ok().flatten();
-    let chad = match tag_data(b"chad")? {
-        Some(d) if d.len() >= 44 && &d[..4] == b"sf32" => {
-            let rd = Reader { b: d };
-            let mut m = [[0.0; 3]; 3];
-            for (i, row) in m.iter_mut().enumerate() {
-                for (j, v) in row.iter_mut().enumerate() {
-                    *v = rd.s15f16(8 + (i * 3 + j) * 4)?;
-                }
-            }
-            Some(m)
-        }
-        _ => None,
-    };
-    let matrix = match (xyz_tag(b"rXYZ")?, xyz_tag(b"gXYZ")?, xyz_tag(b"bXYZ")?) {
-        (Some(rr), Some(g), Some(b)) => Some([[rr[0], g[0], b[0]], [rr[1], g[1], b[1]], [rr[2], g[2], b[2]]]),
-        _ => None,
-    };
-    let trc = match (curve_tag(b"rTRC")?, curve_tag(b"gTRC")?, curve_tag(b"bTRC")?) {
-        (Some(a), Some(b), Some(c)) => Some([a, b, c]),
-        _ => None,
-    };
-    let gray_trc = curve_tag(b"kTRC")?;
-    let lut = |s: &[u8; 4], a2b: bool| -> Result<Option<Lut>, CmsError> {
-        match tag_data(s)? {
-            Some(d) => parse_lut(d, a2b).map(Some),
-            None => Ok(None),
-        }
-    };
-    let a2b = [lut(b"A2B0", true)?, lut(b"A2B1", true)?, lut(b"A2B2", true)?];
-    let b2a = [lut(b"B2A0", false)?, lut(b"B2A1", false)?, lut(b"B2A2", false)?];
-    let description = tag_data(b"desc")?.map(parse_text).unwrap_or_default();
-    let copyright = tag_data(b"cprt")?.map(parse_text).unwrap_or_default();
-
-    let p = Profile {
-        version,
-        class,
-        color_space,
-        pcs,
-        rendering_intent,
-        description,
-        copyright,
-        white_point,
-        black_point,
-        chad,
-        matrix,
-        trc,
-        gray_trc,
-        a2b,
-        b2a,
-        bytes: None,
-        hash: Default::default(),
-    };
-    // Validate channel counts of LUTs against the header. A DeviceLink connects two device
-    // spaces: its header PCS field holds the output colour space (ICC.1:2010 §7.2.7), so a
-    // CMYK→CMYK link has a 4→4 AToB0.
-    let dev = p.color_space.channels();
-    let conn = if p.class == ProfileClass::DeviceLink { ColorSpace::from_sig(pcs_sig).channels() } else { 3 };
-    for l in p.a2b.iter().flatten() {
-        if dev != 0 && l.inputs != dev || conn != 0 && l.outputs != conn {
-            return Err(CmsError::Invalid(format!("AToB tag has {}→{} channels for a {:?} profile", l.inputs, l.outputs, p.color_space)));
-        }
-    }
-    for l in p.b2a.iter().flatten() {
-        if conn != 0 && l.inputs != conn || dev != 0 && l.outputs != dev {
-            return Err(CmsError::Invalid(format!("BToA tag has {}→{} channels for a {:?} profile", l.inputs, l.outputs, p.color_space)));
-        }
-    }
-    Ok(p)
-}
-
-/// Parses a `curv` or `para` element; returns the curve and the element's byte length
-/// (unpadded).
-fn parse_curve(d: &[u8]) -> Result<(Curve, usize), CmsError> {
-    let r = Reader { b: d };
-    match r.slice(0, 4)? {
-        b"curv" => {
-            let n = r.u32(8)? as usize;
-            // Bounded before it is used: `n * 2` is computed next, and a count straight from the
-            // file overflows a 32-bit `usize` (wasm32) with overflow checks on, panicking before
-            // this guard could reject it.
-            if n > 1 << 20 {
-                return Err(CmsError::Invalid("curve too long".into()));
-            }
-            let len = 12 + n * 2;
-            match n {
-                0 => Ok((Curve::Identity, len)),
-                1 => Ok((Curve::Gamma(r.u16(12)? as f64 / 256.0), len)),
-                _ => {
-                    let s = r.slice(12, n * 2)?;
-                    let t = s.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect();
-                    Ok((Curve::Table(t), len))
-                }
-            }
-        }
-        b"para" => {
-            let kind = r.u16(8)?;
-            if kind > 4 {
-                return Err(CmsError::Unsupported(format!("parametric curve type {kind}")));
-            }
-            let n = Curve::param_count(kind);
-            let mut p = [0.0f64; 7];
-            for (i, v) in p.iter_mut().enumerate().take(n) {
-                *v = r.s15f16(12 + i * 4)?;
-            }
-            let len = 12 + n * 4;
-            let c = if kind == 0 { Curve::Gamma(p[0]) } else { Curve::Parametric { kind, p } };
-            Ok((c, len))
-        }
-        other => Err(CmsError::Unsupported(format!("curve type {:?}", String::from_utf8_lossy(other)))),
-    }
-}
-
-fn parse_curves_at(d: &[u8], off: usize, n: usize) -> Result<Vec<Curve>, CmsError> {
-    let mut out = Vec::with_capacity(n);
-    let mut o = off;
-    for _ in 0..n {
-        let sub = d.get(o..).ok_or(CmsError::Truncated)?;
-        let (c, len) = parse_curve(sub)?;
-        out.push(c);
-        o += (len + 3) & !3;
-    }
-    Ok(out)
-}
-
-fn parse_lut(d: &[u8], a2b: bool) -> Result<Lut, CmsError> {
-    let r = Reader { b: d };
-    let ty = r.slice(0, 4)?;
-    match ty {
-        b"mft1" | b"mft2" => {
-            let wide = ty == b"mft2";
-            let (i, o, g) = (r.u8(8)? as usize, r.u8(9)? as usize, r.u8(10)? as usize);
-            if !(1..=15).contains(&i) || !(1..=15).contains(&o) || g == 0 {
-                return Err(CmsError::Invalid("bad lut dimensions".into()));
-            }
-            let mut m = [[0.0; 3]; 3];
-            for (a, row) in m.iter_mut().enumerate() {
-                for (b, v) in row.iter_mut().enumerate() {
-                    *v = r.s15f16(12 + (a * 3 + b) * 4)?;
-                }
-            }
-            let (n_in, n_out, mut off) = if wide { (r.u16(48)? as usize, r.u16(50)? as usize, 52) } else { (256, 256, 48) };
-            if wide && (!(2..=4096).contains(&n_in) || !(2..=4096).contains(&n_out)) {
-                return Err(CmsError::Invalid("bad lut16 table size".into()));
-            }
-            let bps = if wide { 2 } else { 1 };
-            let read_tables = |off: &mut usize, count: usize, len: usize| -> Result<Vec<Curve>, CmsError> {
-                let mut v = Vec::with_capacity(count);
-                for _ in 0..count {
-                    let s = r.slice(*off, len * bps)?;
-                    let t: Vec<f32> = if wide {
-                        s.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect()
-                    } else {
-                        s.iter().map(|b| *b as f32 / 255.0).collect()
-                    };
-                    *off += len * bps;
-                    v.push(Curve::Table(t));
-                }
-                Ok(v)
-            };
-            let in_curves = read_tables(&mut off, i, n_in)?;
-            let nodes = (g as u64).checked_pow(i as u32).unwrap_or(u64::MAX);
-            if nodes as u128 * o as u128 > MAX_CLUT_VALUES as u128 {
-                return Err(CmsError::Invalid("CLUT too large".into()));
-            }
-            let total = nodes as usize * o;
-            let s = r.slice(off, total * bps)?;
-            let data: Vec<f32> = if wide {
-                s.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect()
-            } else {
-                s.iter().map(|b| *b as f32 / 255.0).collect()
-            };
-            off += total * bps;
-            let out_curves = read_tables(&mut off, o, n_out)?;
-            let mut stages = Vec::new();
-            // The matrix only applies when the input is XYZ (BToA with an XYZ PCS).
-            let ident = m.iter().enumerate().all(|(a, row)| row.iter().enumerate().all(|(b, v)| (v - if a == b { 1.0 } else { 0.0 }).abs() < 1e-6));
-            if !a2b && i == 3 && !ident {
-                // Only meaningful for an XYZ PCS; the caller decides (we cannot know the PCS here),
-                // so keep it: for Lab PCS writers are required to store the identity.
-                stages.push(Stage::matrix3(&m));
-            }
-            stages.push(Stage::Curves(in_curves));
-            stages.push(Stage::Clut(Clut::new(vec![g; i], o, data)?));
-            stages.push(Stage::Curves(out_curves));
-            Ok(Lut { kind: if wide { LutKind::Lut16 } else { LutKind::Lut8 }, inputs: i, outputs: o, stages })
-        }
-        b"mAB " | b"mBA " => {
-            let (i, o) = (r.u8(8)? as usize, r.u8(9)? as usize);
-            if !(1..=15).contains(&i) || !(1..=15).contains(&o) {
-                return Err(CmsError::Invalid("bad lutAB dimensions".into()));
-            }
-            let (ob, om, omc, oc, oa) = (r.u32(12)? as usize, r.u32(16)? as usize, r.u32(20)? as usize, r.u32(24)? as usize, r.u32(28)? as usize);
-            let matrix = |off: usize| -> Result<Stage, CmsError> {
-                let mut m = vec![0.0; 9];
-                for (k, v) in m.iter_mut().enumerate() {
-                    *v = r.s15f16(off + k * 4)?;
-                }
-                let offset = vec![r.s15f16(off + 36)?, r.s15f16(off + 40)?, r.s15f16(off + 44)?];
-                Ok(Stage::Matrix { rows: 3, cols: 3, m, offset })
-            };
-            let clut = |off: usize, cin: usize, cout: usize| -> Result<Stage, CmsError> {
-                let mut grid = Vec::with_capacity(cin);
-                for k in 0..cin {
-                    let g = r.u8(off + k)? as usize;
-                    if g < 1 {
-                        return Err(CmsError::Invalid("zero grid points".into()));
-                    }
-                    grid.push(g);
-                }
-                let prec = r.u8(off + 16)? as usize;
-                let nodes: u128 = grid.iter().map(|g| *g as u128).product();
-                if nodes * cout as u128 > MAX_CLUT_VALUES as u128 {
-                    return Err(CmsError::Invalid("CLUT too large".into()));
-                }
-                let total = nodes as usize * cout;
-                let data: Vec<f32> = match prec {
-                    1 => r.slice(off + 20, total)?.iter().map(|b| *b as f32 / 255.0).collect(),
-                    2 => r.slice(off + 20, total * 2)?.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect(),
-                    _ => return Err(CmsError::Invalid(format!("CLUT precision {prec}"))),
-                };
-                Ok(Stage::Clut(Clut::new(grid, cout, data)?))
-            };
-            let mut stages = Vec::new();
-            if ty == b"mAB " {
-                // A curves → CLUT → M curves → matrix → B curves.
-                if oc != 0 {
-                    if oa == 0 {
-                        return Err(CmsError::Invalid("lutAtoB with CLUT but no A curves".into()));
-                    }
-                    stages.push(Stage::Curves(parse_curves_at(d, oa, i)?));
-                    stages.push(clut(oc, i, o)?);
-                } else if i != o {
-                    return Err(CmsError::Invalid("lutAtoB without CLUT changes channel count".into()));
-                }
-                if om != 0 {
-                    stages.push(Stage::Curves(parse_curves_at(d, omc, o)?));
-                    stages.push(matrix(om)?);
-                }
-                if ob == 0 {
-                    return Err(CmsError::Invalid("lutAtoB without B curves".into()));
-                }
-                stages.push(Stage::Curves(parse_curves_at(d, ob, o)?));
-            } else {
-                // B curves → matrix → M curves → CLUT → A curves.
-                if ob == 0 {
-                    return Err(CmsError::Invalid("lutBtoA without B curves".into()));
-                }
-                stages.push(Stage::Curves(parse_curves_at(d, ob, i)?));
-                if om != 0 {
-                    stages.push(matrix(om)?);
-                    stages.push(Stage::Curves(parse_curves_at(d, omc, i)?));
-                }
-                if oc != 0 {
-                    if oa == 0 {
-                        return Err(CmsError::Invalid("lutBtoA with CLUT but no A curves".into()));
-                    }
-                    stages.push(clut(oc, i, o)?);
-                    stages.push(Stage::Curves(parse_curves_at(d, oa, o)?));
-                } else if i != o {
-                    return Err(CmsError::Invalid("lutBtoA without CLUT changes channel count".into()));
-                }
-            }
-            Ok(Lut { kind: LutKind::Ab, inputs: i, outputs: o, stages })
-        }
-        other => Err(CmsError::Unsupported(format!("LUT type {:?}", String::from_utf8_lossy(other)))),
-    }
-}
-
-/// Text from `desc` (textDescriptionType), `mluc` (English or first record) or `text`.
-fn parse_text(d: &[u8]) -> String {
-    let r = Reader { b: d };
-    let Ok(ty) = r.slice(0, 4) else { return String::new() };
-    let ascii = |s: &[u8]| String::from_utf8_lossy(s.split(|b| *b == 0).next().unwrap_or(&[])).trim().to_string();
-    match ty {
-        b"desc" => {
-            let n = r.u32(8).unwrap_or(0) as usize;
-            r.slice(12, n).map(ascii).unwrap_or_default()
-        }
-        b"text" => ascii(d.get(8..).unwrap_or(&[])),
-        b"mluc" => {
-            let (Ok(n), Ok(size)) = (r.u32(8), r.u32(12)) else { return String::new() };
-            let mut best: Option<(usize, usize)> = None;
-            for k in 0..(n as usize).min(256) {
-                // Checked: the record size comes from the file, and `16 + k * size` overflows a
-                // 32-bit `usize` at k = 1 for a size near u32::MAX (wrapping would read another
-                // record's bytes as the language, length and offset).
-                let Some(o) = k.checked_mul(size as usize).and_then(|k| 16usize.checked_add(k)) else { break };
-                // Complete record read: `slice` does its own checked math, and the fields come
-                // from local offsets inside the 12-byte record, so no `o + 4` / `o + 8` is ever
-                // computed on a file-derived offset. Reading the fields eagerly at `o`, `o + 4`,
-                // `o + 8` evaluates every addition first: with `o` fitting but `o + 8` overflowing
-                // a 32-bit `usize` (wasm32, overflow checks on), the addition panics before the
-                // failed read could break the loop.
-                let Ok(rec) = r.slice(o, 12) else { break };
-                let rr = Reader { b: rec };
-                let (Ok(lang), Ok(len), Ok(off)) = (rr.u16(0), rr.u32(4), rr.u32(8)) else { break };
-                if best.is_none() || lang == u16::from_be_bytes(*b"en") {
-                    best = Some((off as usize, len as usize));
-                    if lang == u16::from_be_bytes(*b"en") {
-                        break;
-                    }
-                }
-            }
-            let Some((off, len)) = best else { return String::new() };
-            let Ok(s) = r.slice(off, len) else { return String::new() };
-            let units: Vec<u16> = s.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
-            String::from_utf16_lossy(&units).trim_end_matches('\0').trim().to_string()
-        }
-        _ => String::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::builtin::Builtin;
 
-    /// The count from a `curv` tag must be bounded before `12 + n * 2` is computed: on a 32-bit
-    /// target the multiplication panics with overflow checks on, which is what the guard exists
-    /// to prevent. Green on a 64-bit host either way; fails before the fix on a 32-bit build.
-    #[test]
-    fn a_curve_count_is_bounded_before_it_is_multiplied() {
-        let mut d = b"curv\0\0\0\0".to_vec();
-        d.extend_from_slice(&u32::MAX.to_be_bytes());
-        assert!(parse_curve(&d).is_err());
+    /// `p` with the content hash of `other`: the hash is a fixed-key 64-bit SipHash, so a
+    /// crafted profile can have another's (#8613). Setting it stands in for finding one.
+    fn with_hash_of(p: &Profile, other: &Profile) -> Profile {
+        let p = Profile { hash: HashCache(std::sync::OnceLock::from(other.content_hash())), ..p.clone() };
+        assert_eq!(p.content_hash(), other.content_hash());
+        p
     }
 
-    /// The `mluc` record fields must come from one checked 12-byte record read: with
-    /// n = 2 and size = u32::MAX - 20, k = 0 reads the zeroed record while k = 1's offset
-    /// (2^32 - 4) still fits, but the old eager `(r.u16(o), r.u32(o + 4), r.u32(o + 8))`
-    /// computed `o + 8` (2^32 + 4) before the failed read could break the loop, panicking on
-    /// a 32-bit `usize` (wasm32) with overflow checks on. Green on a 64-bit host before and
-    /// after the fix; the fix is what lets a 32-bit build survive it.
+    /// #8613: a profile that shares sRGB's hash is not taken for sRGB.
     #[test]
-    fn an_mluc_record_offset_is_computed_checked() {
-        let mut d = b"mluc\0\0\0\0".to_vec();
-        d.extend_from_slice(&2u32.to_be_bytes());
-        d.extend_from_slice(&(u32::MAX - 20).to_be_bytes());
-        d.extend_from_slice(&[0u8; 12]);
-        assert!(parse_text(&d).is_empty());
+    fn a_hash_collision_is_not_the_same_colours() {
+        let srgb = Builtin::Srgb.profile();
+        let p3 = with_hash_of(Builtin::DisplayP3.profile(), srgb);
+        assert!(!p3.same_bytes(srgb));
+        assert!(!p3.same_colors(srgb));
+        // Controls: equal bytes are the same, whatever object holds them.
+        assert!(srgb.same_bytes(srgb));
+        assert!(srgb.same_bytes(&Profile::parse(&srgb.to_bytes()).unwrap()));
+        assert!(Builtin::DisplayP3.profile().same_colors(Builtin::DisplayP3.profile()));
+    }
+
+    /// #8613: the transform cache does not hand a colliding profile the other's transform.
+    #[test]
+    fn a_hash_collision_does_not_get_the_cached_transform() {
+        use crate::transform::{Transform, TransformOptions, cached};
+        let (srgb, lab) = (Builtin::Srgb.profile(), Builtin::LabD50.profile());
+        let p3 = with_hash_of(Builtin::DisplayP3.profile(), srgb);
+        let opts = TransformOptions::default();
+        let green = [0.0, 1.0, 0.0];
+        let eval = |t: &Transform| {
+            let mut out = [0f32; 3];
+            t.eval(&green, &mut out).unwrap();
+            out
+        };
+        let want = eval(&Transform::with_options(Builtin::DisplayP3.profile(), lab, opts).unwrap());
+        assert_ne!(want, eval(&Transform::with_options(srgb, lab, opts).unwrap()), "P3 green is not sRGB green");
+        let sr = eval(&cached(srgb, lab, opts).unwrap());
+        assert_eq!(eval(&cached(&p3, lab, opts).unwrap()), want);
+        // Control: sRGB still gets its own transform after the colliding lookup.
+        assert_eq!(eval(&cached(srgb, lab, opts).unwrap()), sr);
+    }
+}
+
+/// A profile's lazily computed content hash. Whether it has been computed yet depends on who asked
+/// first (a shared built-in profile is hashed by whichever caller runs first), so it never takes part
+/// in a profile's equality.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct HashCache(std::sync::OnceLock<u64>);
+
+impl PartialEq for HashCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
     }
 }

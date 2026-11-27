@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-plate-test"
 description = "Print-color test scenes for Craft apps: reference PDFs and PDF structure checks"
 version.workspace = true
@@ -17,4 +18,5 @@ craft-pdf = { workspace = true, features = ["write-pdf", "write-simple-text"] }
 hayro-syntax = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = "3"
 thiserror = { workspace = true }

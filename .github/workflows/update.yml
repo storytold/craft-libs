@@ -1,0 +1,42 @@
+name: App updates
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, next]
+    paths: ['crates/update/**', 'Cargo.toml', 'Cargo.lock', 'rustfmt.toml', 'clippy.toml', '.github/workflows/update.yml']
+  pull_request:
+    paths: ['crates/update/**', 'Cargo.toml', 'Cargo.lock', 'rustfmt.toml', 'clippy.toml', '.github/workflows/update.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: update-${{ github.ref }}
+  cancel-in-progress: true
+
+# fmt, clippy and the tests with default and with all features run in the Workspace gate on every
+# OS; this runs the ui feature alone.
+jobs:
+  update:
+    name: Update with ui alone
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
+        with:
+          # The token isn't needed after checkout; cargo runs build scripts and proc macros from
+          # dependencies, so don't leave it in .git/config for that third-party code to read.
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
+        with:
+          toolchain: stable
+          components: clippy
+      - run: cargo clippy -p craft-update --all-targets --locked --features ui -- -D warnings
+      - run: cargo test -p craft-update --locked --features ui -- --nocapture

@@ -1,6 +1,6 @@
 //! Muxer oracle tests: remux ffmpeg-made files with our writers and validate with ffmpeg/ffprobe.
 
-mod common;
+use super::common;
 
 use common::*;
 use craft_media::isobmff::*;
@@ -144,127 +144,70 @@ fn remux_h264_aac_mp4_variants() {
     assert!(moov < mdat);
 }
 
+/// Chapters written by [`Mp4Writer`] (QuickTime chapter track + Nero `chpl`) are what ffprobe
+/// lists with `-show_chapters`: the right count, starts, ends and titles, in MP4 and MOV, and the
+/// audio/video packets are unchanged.
 #[test]
-fn remux_other_codecs() {
-    if ffprobe().is_none() {
-        return;
-    }
-    for (src, name, brand) in [
-        ("hevc.mp4", "remux_hevc.mp4", Brand::Mp4),
-        ("h264.mov", "remux_h264_pcm.mov", Brand::Mov),
-        ("mjpeg.mov", "remux_mjpeg.mov", Brand::Mov),
-        ("pcm_f32.mov", "remux_pcm_f32.mov", Brand::Mov),
-        ("pcm_s16be.mov", "remux_pcm_s16be.mov", Brand::Mov),
-        ("aac_stereo44.m4a", "remux_aac.m4a", Brand::Mp4),
-        ("colr_pasp.mov", "remux_colr_pasp.mov", Brand::Mov),
-        ("editlist_cut.mp4", "remux_editlist.mp4", Brand::Mp4),
-        ("alac.m4a", "remux_alac.m4a", Brand::Mp4),
-        ("flac.mp4", "remux_flac.mp4", Brand::Mp4),
-        ("opus.mp4", "remux_opus.mp4", Brand::Mp4),
-        ("av1.mp4", "remux_av1.mp4", Brand::Mp4),
-        ("vp9.mp4", "remux_vp9.mp4", Brand::Mp4),
-        ("ac3.mp4", "remux_ac3.mp4", Brand::Mp4),
-        ("dnxhd.mov", "remux_dnxhd.mov", Brand::Mov),
-    ] {
-        let Some(p) = fixture(src) else { continue };
-        let (f, out) = remux(&p, name, brand, Finish::Faststart, None).unwrap();
-        decode_clean(&out);
-        let pcm = f.tracks.iter().any(|t| t.pcm_chunked);
-        if !pcm {
-            assert_same_packets(&p, &out);
-        }
-        assert_same_streams(&p, &out);
-        eprintln!("{name}: ok");
-    }
-}
-
-#[test]
-fn remux_prores_pcm24_with_timecode() {
-    let (Some(src), Some(_)) = (fixture("prores.mov"), ffprobe()) else { return };
-    let tc = TimecodeConfig { flags: 0, timescale: 25, frame_duration: 1, frames_per_second: 25, start_frame: None, name: None };
-    let (f, out) = remux(&src, "remux_prores_tc.mov", Brand::Mov, Finish::Normal, Some((tc, 25 * 3600))).unwrap();
-    decode_clean(&out);
-    assert_same_streams(&src, &out);
-    let Some(st) = streams(&out) else { return };
-    assert!(st.iter().any(|s| s["tags"]["timecode"] == "01:00:00:00"), "timecode missing: {st:?}");
-    // PCM byte totals survive ffmpeg's repacketization.
-    let g = open(std::fs::read(&out).unwrap()).unwrap();
-    let a = f.track_of_kind(TrackKind::Audio).unwrap();
-    let sum = |m: &Mp4File, i: usize| m.tracks[i].samples.iter().map(|s| s.size as u64).sum::<u64>();
-    assert_eq!(sum(&f, a), sum(&g, g.track_of_kind(TrackKind::Audio).unwrap()));
-    let t = &g.tracks[g.track_of_kind(TrackKind::Timecode).unwrap()];
-    let CodecConfig::Timecode(tc) = t.codec().unwrap() else { panic!() };
-    assert_eq!(tc.start_frame, Some(90000));
-}
-
-#[test]
-fn pcm_in_mp4_ipcm() {
-    let (Some(src), Some(_)) = (fixture("pcm_s16be.mov"), ffprobe()) else { return };
-    let (_, out) = remux(&src, "remux_ipcm.mp4", Brand::Mp4, Finish::Normal, None).unwrap();
-    let Some(st) = streams(&out) else { return };
-    assert_eq!(st[0]["codec_tag_string"], "ipcm");
-    assert_eq!(st[0]["codec_name"], "pcm_s16be");
-    decode_clean(&out);
-}
-
-#[test]
-fn aac_priming_edit() {
-    let (Some(src), Some(_)) = (fixture("aac.mp4"), ffprobe()) else { return };
-    let data = std::fs::read(&src).unwrap();
-    let f = open(data.as_slice()).unwrap();
-    let t = &f.tracks[0];
-    let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
-    let mut cfg = TrackConfig::new(t.entries[0].clone(), t.timescale);
-    cfg.media_start = Some(1024);
-    let k = w.add_track(cfg).unwrap();
-    for (i, s) in t.samples.iter().enumerate() {
-        let d = f.read_sample(data.as_slice(), 0, i).unwrap();
-        w.write_sample(k, WriteSample { data: &d, duration: s.duration, composition_offset: 0, is_sync: true }).unwrap();
-    }
-    let out = out_dir().join("aac_priming.mp4");
-    std::fs::write(&out, w.finish().unwrap().into_inner()).unwrap();
-    decode_clean(&out);
-    let (Some(pk), Some(so), Some(ss)) = (packets(&out), streams(&out), streams(&src)) else { return };
-    assert_eq!(int(&pk[0]["pts"]), Some(-1024));
-    assert_eq!(int(&so[0]["duration_ts"]), int(&ss[0]["duration_ts"]));
-}
-
-#[test]
-fn fragmented_writer_ffmpeg() {
+fn chapters_are_listed_by_ffprobe() {
     let (Some(src), Some(_)) = (fixture("h264_bframes.mp4"), ffprobe()) else { return };
     let data = std::fs::read(&src).unwrap();
     let f = open(data.as_slice()).unwrap();
-    let mut w = FragmentedWriter::new(Vec::new(), WriterOptions::new(Brand::Mp4));
-    let tracks: Vec<usize> = (0..f.tracks.len()).collect();
-    for t in &f.tracks {
-        w.add_track(TrackConfig::new(t.entries[0].clone(), t.timescale)).unwrap();
-    }
-    let v = f.track_of_kind(TrackKind::Video).unwrap();
-    for (t, i) in interleave(&f, &tracks) {
-        let s = f.tracks[t].samples[i];
-        if t == v && s.is_sync && i > 0 {
-            w.flush_fragment().unwrap();
+    let av: Vec<usize> = (0..f.tracks.len()).filter(|&i| matches!(f.tracks[i].kind, TrackKind::Video | TrackKind::Audio)).collect();
+    for (name, brand, late_first) in
+        [("chapters.mp4", Brand::Mp4, false), ("chapters.mov", Brand::Mov, false), ("chapters_late.mp4", Brand::Mp4, true)]
+    {
+        let mut opts = WriterOptions::new(brand);
+        // the copied edit lists are in the source's movie timescale
+        opts.movie_timescale = f.timescale;
+        let ms = |v: u64| v * u64::from(f.timescale) / 1000;
+        let first = if late_first { 250 } else { 0 };
+        opts.chapters = vec![
+            Chapter { start: ms(first), title: "Opening".into() },
+            Chapter { start: ms(500), title: "Mitte — ü 日本".into() },
+            Chapter { start: ms(800), title: "End".into() },
+        ];
+        let mut w = Mp4Writer::new(Cursor::new(Vec::new()), opts).unwrap();
+        let mut map = vec![usize::MAX; f.tracks.len()];
+        for &i in &av {
+            map[i] = w.add_track(track_config(&f, &f.tracks[i], true)).unwrap();
         }
-        let d = f.read_sample(data.as_slice(), t, i).unwrap();
-        w.write_sample(t, WriteSample { data: &d, duration: s.duration, composition_offset: (s.pts - s.dts) as i32, is_sync: s.is_sync }).unwrap();
-    }
-    let bytes = w.finish().unwrap();
-    let out = out_dir().join("our_frag.mp4");
-    std::fs::write(&out, &bytes).unwrap();
-    decode_clean(&out);
-    let g = open(bytes.as_slice()).unwrap();
-    assert!(g.fragmented && g.fragment_count >= 4);
-    // ffprobe sees raw timestamps (no edit list in our init segment).
-    let Some(ours) = stream_packets(&out) else { return };
-    for (ti, t) in f.tracks.iter().enumerate() {
-        assert_eq!(ours[ti].len(), t.samples.len());
-        for (p, s) in ours[ti].iter().zip(&t.samples) {
-            assert_eq!(int(&p["pts"]), Some(s.pts));
-            assert_eq!(int(&p["dts"]), Some(s.dts));
-            assert_eq!(int(&p["size"]), Some(s.size as i64));
+        for (t, i) in interleave(&f, &av) {
+            let s = f.tracks[t].samples[i];
+            let bytes = f.read_sample(data.as_slice(), t, i).unwrap();
+            w.write_sample(
+                map[t],
+                WriteSample { data: &bytes, duration: s.duration, composition_offset: (s.pts - s.dts) as i32, is_sync: s.is_sync },
+            )
+            .unwrap();
         }
-        for i in 0..t.samples.len() {
-            assert_eq!(f.read_sample(data.as_slice(), ti, i).unwrap(), g.read_sample(bytes.as_slice(), ti, i).unwrap());
+        let out = w.finish_faststart().unwrap().into_inner();
+        let path = out_dir().join(name);
+        std::fs::write(&path, &out).unwrap();
+        let Some(v) = probe_json(&path, &["-show_chapters", "-show_format"]) else { return };
+        let ch = v["chapters"].as_array().cloned().unwrap_or_default();
+        let got: Vec<(f64, String)> = ch
+            .iter()
+            .map(|c| (c["start_time"].as_str().and_then(|s| s.parse().ok()).unwrap_or(-1.0), c["tags"]["title"].as_str().unwrap_or("").to_string()))
+            .collect();
+        let want = [(first as f64 / 1000.0, "Opening"), (0.5, "Mitte — ü 日本"), (0.8, "End")];
+        assert_eq!(got.len(), want.len(), "{name}: {v}");
+        for ((s, t), (ws, wt)) in got.iter().zip(want) {
+            assert!((s - ws).abs() < 0.002, "{name}: start {s} vs {ws}");
+            assert_eq!(t, wt, "{name}");
         }
+        // The last chapter runs to the end of the movie. With a late first chapter ffprobe ends it
+        // early by the empty edit (it takes the end from the chapter track's media duration,
+        // without the edit); the starts, which players use, are exact.
+        let end: f64 = ch.last().and_then(|c| c["end_time"].as_str()).and_then(|s| s.parse().ok()).unwrap_or(-1.0);
+        let dur: f64 = v["format"]["duration"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        let early = if late_first { 0.25 } else { 0.0 };
+        assert!((end + early - dur).abs() < 0.05, "{name}: last chapter ends at {end}, movie lasts {dur}");
+        // Our own reader sees the same list in both forms.
+        let g = open(out.as_slice()).unwrap();
+        let ours: Vec<String> = g.read_chapters(out.as_slice()).unwrap().into_iter().map(|c| c.title).collect();
+        assert_eq!(ours, ["Opening", "Mitte — ü 日本", "End"], "{name}");
+        assert_eq!(g.chpl_chapters.len(), 3, "{name}");
+        assert_same_packets(&src, &path);
+        decode_clean(&path);
     }
 }

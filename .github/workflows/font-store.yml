@@ -1,0 +1,37 @@
+name: Font store
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, next]
+    paths: ['crates/font-store/**', 'crates/font-catalog/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/font-store.yml']
+  pull_request:
+    paths: ['crates/font-store/**', 'crates/font-catalog/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/font-store.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: font-store-${{ github.ref }}
+  cancel-in-progress: true
+
+# fmt, clippy and the tests run in the Workspace gate on every OS; this checks what it does not.
+jobs:
+  font-store:
+    name: Font store WASM
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - name: Check the web build
+        run: cargo check -p craft-font-store --target wasm32-unknown-unknown --locked
