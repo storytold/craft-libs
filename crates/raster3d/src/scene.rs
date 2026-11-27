@@ -88,9 +88,10 @@ impl Default for Material {
 }
 
 impl Material {
-    /// Drawn in the transparent (sorted, blended) pass.
+    /// Returns whether the material uses the sorted, blended pass. Any surface opacity below 1
+    /// uses this pass, including opaque and mask alpha modes.
     pub fn transparent(&self) -> bool {
-        self.alpha_mode == 2 || self.opacity < 0.999 || self.shadows_only
+        self.alpha_mode == 2 || self.opacity < 1.0 || self.shadows_only
     }
 }
 
