@@ -85,6 +85,18 @@ fixture `Tiny-glyf.ttf` as the substitute instead of PdfCraft's bundled Inter. T
 are not in #7665: the UCS-2 CMaps alone decide when a resolver lacks the UTF-16 ones, and a script
 that lists no vertical feature leaves the lookups to `DFLT`, then to every script of the face.
 
+A craft-libs patch, labeled `Craft patch (named fallback)` in code comments, asks the font
+resolver for a simple font by name. A TrueType or Type 1 font that the PDF doesn't embed, and
+whose name is none of the standard 14's, was drawn with a stand-in picked from its descriptor's
+flags, and the resolver was asked only for that stand-in (`FontQuery::Standard`). It is now
+asked first with `FontQuery::Fallback`, carrying the font's PostScript name and no character
+collection, as CID fonts already are (`StandardKind::new_with_query` in `font/standard_font.rs`,
+called from `font/true_type.rs` and `font/type1.rs`). A resolver that knows the fonts installed
+on the machine can answer with the font the document names. The default resolver answers with
+the same stand-in as before, and an answer that is no font program is passed over for the
+stand-in, so nothing changes without such a resolver. Fonts that are a standard font by name
+are not asked for by name. Tests: `crates/pdf/tests/interpretation/named_fallback.rs`.
+
 A craft-libs patch, labeled `Craft patch (CMYK masks)` in code comments,
 takes a luminosity soft mask whose group is DeviceCMYK from the group's inks: ISO 32000-2
 §11.6.5.2 and §10.4.2.2 give `1 - min(1, 0.3c + 0.59m + 0.11y + k)`, where the colors as
