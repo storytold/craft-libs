@@ -22,10 +22,11 @@
 //! - **Textures.** [`Scene::texels`] holds linear straight RGBA, row-major from the top row;
 //!   [`TexInfo`] gives each texture's span and wrap modes.
 //!
-//! Every `try_` function checks the scene against [`Limits`] and returns a [`RenderError`]
-//! before it allocates the target: malformed indices, references and spans, values that are not
-//! finite, sizes, triangle counts, light counts and coverage work over the limits. Rows run on
-//! several threads with rayon.
+//! [`try_render`] checks the scene, size, references, spans, finite values, geometry counts,
+//! lights, and coverage work before allocating the raster target. Shading can still return
+//! [`RenderError::BadPixel`] after rasterization. [`try_resolve`] checks its supplied target and
+//! factor; [`try_encode`] checks an image's pixels and does not take a scene or [`Limits`]. Rows
+//! run on several threads with rayon.
 //!
 //! [`Camera::fit`] and [`Camera::fit_scene`] frame a box or a scene's drawn vertices from a view
 //! direction, and [`Camera::apply`] writes a camera's clip and view transforms into a scene.
@@ -159,6 +160,9 @@ pub enum RenderError {
     /// A camera could not be fitted or could not form a scene's transforms.
     #[error("invalid camera: {0}")]
     BadCamera(CameraError),
+    /// The renderer could not reserve memory for screen triangles.
+    #[error("not enough memory for the render")]
+    OutOfMemory,
 }
 
 /// The default [`Limits::max_pixels`]: 2^24 raster pixels.

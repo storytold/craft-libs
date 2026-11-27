@@ -258,6 +258,21 @@ fn fan(s: &Scene, scr: &[ScreenCorner], tri: u32, out: &mut Vec<STri>) {
 /// bounding-box pixels, plus one) to `work`. Stops with [`RenderError::TooMuchWork`] as soon as
 /// `work` passes `limit`, before more triangles are kept.
 fn setup(s: &Scene, clip: &[[f32; 4]], range: std::ops::Range<usize>, work: &mut u64, limit: u64) -> Result<Vec<STri>, RenderError> {
+    setup_with_reserve(s, clip, range, work, limit, reserve_screen_triangles)
+}
+
+fn reserve_screen_triangles(out: &mut Vec<STri>, additional: usize) -> Result<(), RenderError> {
+    out.try_reserve(additional).map_err(|_| RenderError::OutOfMemory)
+}
+
+fn setup_with_reserve(
+    s: &Scene,
+    clip: &[[f32; 4]],
+    range: std::ops::Range<usize>,
+    work: &mut u64,
+    limit: u64,
+    mut reserve: impl FnMut(&mut Vec<STri>, usize) -> Result<(), RenderError>,
+) -> Result<Vec<STri>, RenderError> {
     let mut out = vec![];
     for t in range.step_by(3) {
         let mat = s.vertices[s.indices[t] as usize].material as usize;
@@ -266,6 +281,7 @@ fn setup(s: &Scene, clip: &[[f32; 4]], range: std::ops::Range<usize>, work: &mut
         }
         if let Some(scr) = project(s, clip, t) {
             let first = out.len();
+            reserve(&mut out, scr.len())?;
             fan(s, &scr, (t / 3) as u32, &mut out);
             for st in &out[first..] {
                 let area = (st.bbox[2] - st.bbox[0]) as u64 * (st.bbox[3] - st.bbox[1]) as u64;
@@ -558,6 +574,7 @@ fn charge_fallback(s: &Scene, opaque: &[STri], work: &mut u64, limit: u64) -> Re
 ///
 /// The scene is checked first (see [`Limits`]); an empty scene gives a transparent target with
 /// infinite depth. A triangle whose clipped polygon has zero area draws nothing.
+/// Screen-triangle reservation failures return [`RenderError::OutOfMemory`].
 pub fn try_render(s: &Scene, limits: &Limits) -> Result<Target, RenderError> {
     let pixels = validate(s, limits)?;
     validate_passes(s)?;
@@ -577,7 +594,29 @@ pub fn try_render(s: &Scene, limits: &Limits) -> Result<Target, RenderError> {
 
 #[cfg(test)]
 mod tests {
-    use super::f32_crossing;
+    use super::{f32_crossing, reserve_screen_triangles, setup, setup_with_reserve};
+    use crate::{Material, RenderError, Scene, Vertex};
+
+    #[test]
+    fn screen_triangle_reservation_failure_is_returned() {
+        let scene = Scene {
+            width: 1,
+            height: 1,
+            vertices: vec![Vertex::default(); 3],
+            materials: vec![Material { double_sided: true, ..Material::default() }],
+            indices: vec![0, 1, 2],
+            opaque_count: 3,
+            ..Scene::default()
+        };
+        let clip = [[-1.0, -1.0, 0.5, 1.0], [1.0, -1.0, 0.5, 1.0], [0.0, 1.0, 0.5, 1.0]];
+        let mut work = 0;
+        let failed = setup_with_reserve(&scene, &clip, 0..3, &mut work, u64::MAX, |out, _| reserve_screen_triangles(out, usize::MAX));
+        assert_eq!(failed.err(), Some(RenderError::OutOfMemory));
+        assert_eq!(work, 0);
+        let normal = setup(&scene, &clip, 0..3, &mut work, u64::MAX);
+        assert!(normal.is_ok_and(|triangles| !triangles.is_empty()));
+        assert!(work > 0);
+    }
 
     #[test]
     fn a_crossing_whose_distance_difference_overflows_is_taken_in_f64() {

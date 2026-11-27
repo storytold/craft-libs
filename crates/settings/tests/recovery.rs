@@ -24,6 +24,19 @@ fn syntax_error_moves_the_file_aside_and_uses_defaults() {
 }
 
 #[test]
+fn section_error_displays_its_section_and_message() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_config(tmp.path(), "schema_version = 2\n[appearance]\ntheme = \"sepia\"\n");
+    let (_, report) = open_in(tmp.path());
+    let error = &report.section_errors[0];
+    let text = error.to_string();
+    assert!(text.starts_with("settings section [appearance.theme] was reset to defaults: "), "{text}");
+    assert!(text.ends_with(&error.message), "{text}");
+    let source: &dyn std::error::Error = error;
+    assert!(source.source().is_none());
+}
+
+#[test]
 fn newer_schema_opens_read_only_and_never_overwrites() {
     let tmp = tempfile::tempdir().unwrap();
     let original = "schema_version = 9\n[general]\nlanguage = \"de\"\n";

@@ -352,6 +352,15 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         self
     }
 
+    /// Identifies the target of this field's edit, for a control reused across drawings or selections.
+    /// Changing the key discards the previous draft even when the two bound values are equal.
+    /// The field keeps its identity and focus.
+    #[must_use]
+    pub fn edit_target(mut self, key: impl egui::AsIdSalt) -> Self {
+        self.options.edit_target = Some(egui::IdSalt::new(key));
+        self
+    }
+
     /// Zoom typing: a Tab rewrites the draft (with no draft it moves focus) and a press on the field's other parts
     /// keeps it unapplied.
     #[must_use]

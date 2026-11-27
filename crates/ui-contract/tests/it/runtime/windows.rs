@@ -1596,6 +1596,25 @@ fn a_title_with_nul_reaches_the_window_without_it() {
     assert_eq!(send("\0Report\0\0 draft.docx\0"), ["Report draft.docx"], "a title changed back is sent again, every NUL dropped");
 }
 
+/// A double click on the move band of an app-drawn frame follows the desktop's setting (GNOME's
+/// `action-double-click-titlebar` gives an integrated frame minimize or nothing), as a macOS inset frame follows
+/// its own; a native frame leaves it to the OS.
+#[trial]
+fn a_double_click_on_an_app_drawn_frame_follows_the_setting() {
+    use craft_host::target::DoubleClick;
+    use craft_ui::runtime::windows::{WindowAction, double_click_action};
+    use craft_window::policy::{CaptionFamily, Captions};
+    let integrated = Frame::Integrated(Captions { family: CaptionFamily::Adwaita, layout: craft_window::Layout::default() });
+    let inset = Frame::Inset(MacInset::default());
+    for frame in [&integrated, &inset] {
+        assert_eq!(double_click_action(frame, DoubleClick::Zoom, false), Some(WindowAction::SetMaximized(true)), "{frame:?}");
+        assert_eq!(double_click_action(frame, DoubleClick::Zoom, true), Some(WindowAction::SetMaximized(false)), "{frame:?}");
+        assert_eq!(double_click_action(frame, DoubleClick::Minimize, false), Some(WindowAction::Minimize), "{frame:?}");
+        assert_eq!(double_click_action(frame, DoubleClick::Nothing, false), None, "{frame:?}");
+    }
+    assert_eq!(double_click_action(&Frame::Native, DoubleClick::Zoom, false), None, "the OS acts on its own frame");
+}
+
 /// What the hosted child window's passes saw: its last pass's pointer, events and OS files, and the clicks since the
 /// last reset.
 #[derive(Clone, Copy, Debug, Default)]

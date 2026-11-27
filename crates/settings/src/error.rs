@@ -39,6 +39,14 @@ pub struct SectionError {
     pub message: String,
 }
 
+impl fmt::Display for SectionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "settings section [{}] was reset to defaults: {}", self.section, self.message)
+    }
+}
+
+impl std::error::Error for SectionError {}
+
 /// Why the store will not write `config.toml`.
 #[derive(Debug)]
 pub enum ReadOnlyReason {

@@ -74,6 +74,7 @@ state.match = #f0dc005a
 state.match_current = #e8b0466e
 state.stripe = #42424240
 overlay.stroke = #d1e6ffff
+overlay.cursor = #d1e6ffff
 overlay.line = #60a9ffff
 overlay.halo = #00000099
 overlay.handle_fill = #ffffffff

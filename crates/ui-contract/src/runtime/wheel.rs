@@ -28,6 +28,8 @@ pub(crate) struct State {
     gesture: WheelGesture<Id>,
     /// The running gesture's gathered scroll in its owner's points, reset when the gesture closes.
     gathered: Vec2,
+    /// The running gesture's gathered zoom-modifier wheel motion in the device's unit, reset when the gesture closes.
+    zoom_gathered: Vec2,
     /// Whether the owner marked the running gesture moved, reset when the gesture closes.
     moved: bool,
     /// The last gesture the device ended, which a momentum run of the same owner within `GESTURE_GAP` resumes.
@@ -42,6 +44,7 @@ struct Ended {
     owner: Id,
     at: f64,
     gathered: Vec2,
+    zoom_gathered: Vec2,
     moved: bool,
 }
 
@@ -100,6 +103,7 @@ impl State {
         let ended = self.gesture.end(if pressed { f64::INFINITY } else { now });
         if open && !self.gesture.last.is_finite() {
             self.gathered = Vec2::ZERO;
+            self.zoom_gathered = Vec2::ZERO;
             self.moved = false;
         }
         ended
@@ -113,7 +117,8 @@ impl State {
             return None;
         }
         let swipe = self.device_ended.filter(|ended| source == WheelSource::Momentum && now - ended.at < GESTURE_GAP);
-        (self.gathered, self.moved) = swipe.map_or((Vec2::ZERO, false), |ended| (ended.gathered, ended.moved));
+        (self.gathered, self.zoom_gathered, self.moved) =
+            swipe.map_or((Vec2::ZERO, Vec2::ZERO, false), |ended| (ended.gathered, ended.zoom_gathered, ended.moved));
         swipe.map(|ended| ended.owner)
     }
 
@@ -128,10 +133,13 @@ impl State {
         }
         if self.gesture.owner == Some(owner) {
             self.gathered += share.scroll;
+            self.zoom_gathered += share.zoom_lines;
             share.gathered = self.gathered;
+            share.zoom_gathered = self.zoom_gathered;
             share.moved = self.moved;
         } else {
             share.gathered = share.scroll;
+            share.zoom_gathered = share.zoom_lines;
         }
     }
 
@@ -190,6 +198,7 @@ pub(crate) fn begin(ctx: &Context) {
     let pass_pointer = pointer::pass_pointer(ctx);
     let frame = pass_pointer.frame.clone();
     let wheel_in = input::wheel_read(ctx, 1.0, 1.0);
+    let zoom_lines = input::zoom_wheel_lines(ctx);
     let now = crate::runtime::frame::clock(ctx);
     let focused = focus::focused_stop(ctx).map(|(owner, _)| owner);
     // A text field the app drew itself holds key focus: it reads its own wheel.
@@ -250,12 +259,18 @@ pub(crate) fn begin(ctx: &Context) {
             let zoom = frame.zoom;
             // A device's end reaches the gesture's owner even when it moves nothing.
             let device_end = wheel_in.is_some() && matches!(phase, WheelPhase::End | WheelPhase::Cancel);
-            let moves =
-                scroll != Vec2::ZERO || zoom != 1.0 || touch_zoom != 1.0 || frame.rotation != 0.0 || touch_rotation != 0.0 || touch_pan != Vec2::ZERO;
+            let moves = scroll != Vec2::ZERO
+                || zoom != 1.0
+                || zoom_lines != Vec2::ZERO
+                || touch_zoom != 1.0
+                || frame.rotation != 0.0
+                || touch_rotation != 0.0
+                || touch_pan != Vec2::ZERO;
             if moves || device_end {
                 let share = Wheel::new(scroll, mods, unit, phase)
                     .source(source)
                     .zoom(zoom)
+                    .zoom_lines(zoom_lines)
                     .touch_zoom(touch_zoom)
                     .rotation(frame.rotation)
                     .touch_rotation(touch_rotation)
@@ -277,7 +292,7 @@ pub(crate) fn begin(ctx: &Context) {
                 let shares = split(&eligible, at, share, focus, state.armed, &mut state.gesture, now);
                 // A momentum run resumes its swipe only on the swipe's owner; any split drops the ended swipe.
                 if swipe.is_some() && state.gesture.owner != swipe {
-                    (state.gathered, state.moved) = (Vec2::ZERO, false);
+                    (state.gathered, state.zoom_gathered, state.moved) = (Vec2::ZERO, Vec2::ZERO, false);
                 }
                 state.device_ended = None;
                 // The device's lines and pages become points of each taker: the notch is the scroll owner's to choose.
@@ -293,8 +308,8 @@ pub(crate) fn begin(ctx: &Context) {
                     state.shares.push((owner, share));
                 }
                 if device_end {
-                    let (gathered, moved) = (state.gathered, state.moved);
-                    state.device_ended = state.gesture.owner.map(|owner| Ended { owner, at: now, gathered, moved });
+                    let (gathered, zoom_gathered, moved) = (state.gathered, state.zoom_gathered, state.moved);
+                    state.device_ended = state.gesture.owner.map(|owner| Ended { owner, at: now, gathered, zoom_gathered, moved });
                 }
             }
         }

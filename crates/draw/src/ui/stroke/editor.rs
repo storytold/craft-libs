@@ -345,12 +345,12 @@ impl Body<'_> {
             ];
             let cap = [
                 (LineCap::Butt, "stroke_cap_butt", &words.butt),
-                (LineCap::Round, "stroke_cap_round", &words.round_cap),
+                (LineCap::Round, "stroke_cap_round", if icons { &words.round_cap_icon } else { &words.round_cap }),
                 (LineCap::Square, "stroke_cap_square", &words.square),
             ];
             let join = [
                 (LineJoin::Miter, "stroke_join_miter", &words.miter),
-                (LineJoin::Round, "stroke_join_round", &words.round_join),
+                (LineJoin::Round, "stroke_join_round", if icons { &words.round_join_icon } else { &words.round_join }),
                 (LineJoin::Bevel, "stroke_join_bevel", &words.bevel),
             ];
             let event = choice(ui, &words.alignment, "align", held(mixed.align, style.align), &align, self.closed, icons);

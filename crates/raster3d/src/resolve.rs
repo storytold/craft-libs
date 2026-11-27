@@ -25,8 +25,8 @@ fn area(w: u32, h: u32) -> Option<usize> {
 
 /// Box-filter a supersampled target down by `k` per side: each output pixel is the mean of its
 /// `k × k` premultiplied colors, and its depth is the mean of the covered subsamples' depths
-/// (infinity where none is covered). A pixel whose `f32` sums overflow, and every pixel when a
-/// block holds more than 2^24 subsamples, is averaged in `f64`.
+/// (infinity where none is covered). Factors 1 and 2 accumulate in `f32` and retry overflowing
+/// sums in `f64`. Higher factors accumulate color and depth in `f64`.
 ///
 /// Returns [`RenderError::BadFactor`] when `k` is zero or does not divide both sides, and
 /// [`RenderError::BadDataLength`] when the color or depth buffer does not hold width × height
@@ -50,8 +50,8 @@ pub fn try_resolve(t: &Target, k: u32) -> Result<(Image, Vec<f32>), RenderError>
         return Ok((img, depth));
     }
     let n = (u64::from(k) * u64::from(k)) as f32;
-    // An f32 count stops at 2^24, so a larger block is averaged in f64.
-    let wide = u64::from(k) * u64::from(k) > 1 << 24;
+    // Factors above 2 accumulate color and depth in f64.
+    let wide = k > 2;
     img.data.par_chunks_mut(w as usize).zip(depth.par_chunks_mut(w as usize)).enumerate().for_each(|(y, (row, drow))| {
         for x in 0..w as usize {
             if wide {

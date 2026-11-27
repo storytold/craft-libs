@@ -71,7 +71,8 @@ impl ThemeDef {
     /// colours (the tokens the accent ramp gives, and the ones derived from them) and the text of every contrast pair
     /// drawn on an accent colour drop their pins and references in every layer, the high-contrast and per-app ones
     /// included, so they derive from the seed and the contrast pass fits them as it fits an unpinned theme. A token
-    /// the theme refers to an accent colour keeps its reference, and so follows the seed.
+    /// the theme refers to an accent colour keeps its reference, and so follows the seed. A pinned `overlay.cursor`
+    /// keeps its pin, although its default follows the accent through `overlay.stroke`.
     #[must_use]
     pub fn with_accent(&self, seed: Rgba) -> ThemeDef {
         let mut theme = self.clone();
@@ -97,7 +98,8 @@ impl ThemeDef {
     /// and the text of each contrast pair drawn on an accent colour, counting the tokens a layer refers to one.
     fn accent_derived(&self, mode: Mode) -> BTreeSet<ColorToken> {
         use crate::values::{Bg, RULES, follows_accent};
-        let own: BTreeSet<ColorToken> = ColorToken::ALL.iter().copied().filter(|&token| follows_accent(token, mode)).collect();
+        let own: BTreeSet<ColorToken> =
+            ColorToken::ALL.iter().copied().filter(|&token| token != ColorToken::OverlayCursor && follows_accent(token, mode)).collect();
         let layers = [&self.pins, &self.high_contrast].into_iter().chain(self.apps.values().flat_map(|app| [&app.pins, &app.high_contrast]));
         let refs: Vec<(ColorToken, ColorToken)> = layers.flat_map(|layer| layer.get(mode).refs.iter().map(|(&token, &to)| (token, to))).collect();
         let mut shown = own.clone();

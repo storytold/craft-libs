@@ -1363,6 +1363,17 @@ fn a_block_of_more_than_two_to_the_twenty_fourth_subsamples_counts_each_one() {
 }
 
 #[test]
+fn large_constant_resolve_blocks_keep_the_constant_color_and_depth() {
+    for k in [1, 2, 4096] {
+        let count = (k * k) as usize;
+        let input = Target { width: k, height: k, color: vec![[0.75; 4]; count], depth: vec![0.75; count] };
+        let (image, depth) = try_resolve(&input, k).unwrap();
+        assert_eq!(image.data, vec![[0.75; 4]], "factor {k} preserves constant color");
+        assert_eq!(depth, vec![0.75], "factor {k} preserves constant depth");
+    }
+}
+
+#[test]
 fn encoding_names_the_first_pixel_that_fails() {
     // Pixel 0 is finite but its color divided by its alpha overflows; pixel 1 has a negative alpha.
     let mut img = Image { width: 2, height: 1, data: vec![[3e38, 0.0, 0.0, 1e-5], [0.0, 0.0, 0.0, -1.0]] };

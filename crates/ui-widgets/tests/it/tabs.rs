@@ -19,6 +19,7 @@ const REST_FRAMES: usize = (craft_ui::contract::tooltip::DELAY * 60.0) as usize 
 
 #[trial]
 fn overflowing_document_tabs_remain_readable_and_list_every_document() {
+    use craft_ui::contract::PopupKind;
     use craft_ui::tabs::{DocumentTab, DocumentTabs};
     let mut reference = Fixture::new(|ui| {
         let tabs = [DocumentTab::new(0, "Document num")];
@@ -39,8 +40,11 @@ fn overflowing_document_tabs_remain_readable_and_list_every_document() {
         shown.iter().all(|tab| tab.width() + 0.5 >= minimum),
         "tabs fit their first 12 characters and close button: {shown:?}, minimum {minimum}"
     );
-    let more = fixture.by_label("More tabs").expect("overflow button").center();
-    fixture.click_at(more).settle();
+    let more = fixture.by_label("More tabs").expect("overflow button");
+    assert_eq!(fixture.tree().has_popup_of(more.node), Some(PopupKind::Menu), "More tabs announces that it opens a menu");
+    assert_eq!(fixture.tree().expanded_of(more.node), Some(false), "More tabs starts collapsed");
+    fixture.click(&more).settle();
+    assert_eq!(fixture.tree().expanded_of(more.node), Some(true), "More tabs is expanded while the menu is open");
     for i in 0..12 {
         let name = format!("Document number {i}, scanned.pdf");
         let tree = fixture.tree();
@@ -1166,6 +1170,52 @@ fn a_menu_end_item_shows_the_menu_chevron() {
     let (menu, command) = (comments_width(true), comments_width(false));
     assert!(command > 0.0, "the command item shows");
     assert!(menu > command + 4.0, "the menu item is wider by its chevron: {menu} against {command}");
+}
+
+#[trial]
+fn alt_down_on_an_overflowing_tab_opens_more_tabs_beside_an_end_menu() {
+    use craft_behavior::IconId;
+    use craft_ui::contract::Entry;
+    use craft_ui::runtime::commands::{CommandRef, EditCommands};
+    use craft_ui::tabs::StripEnd;
+    use craft_ui::testing::access::focused_key;
+
+    let mut fixture = Fixture::new(|ui| {
+        let rows: [Entry<CommandRef>; 1] = [Entry::new(EditCommands::Paste.into(), "Show comments")];
+        let items = [StripEnd::menu("Comments", IconId::new("list").into(), &rows)];
+        let keys: Vec<_> = (0..RIBBON.len()).collect();
+        let source = keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Borrowed(RIBBON[*key]));
+        let strip = TabStrip::new("Ribbon").kind(TabKind::Ribbon).shown(1).trailing(&items);
+        let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]));
+    });
+    fixture.room(egui::vec2(240.0, 120.0)).settle();
+    let hidden = RIBBON.iter().copied().find(|name| fixture.by_label(name).is_none()).expect("a tab needs the overflow menu");
+    let comments = fixture.by_label("Comments").expect("the trailing menu button");
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    let tab_focus = fixture.focused_stop().expect("the tab strip has keyboard focus");
+    let menu_has_focus = |fixture: &Fixture| {
+        matches!(
+            fixture.tree().role_of(focused_key(fixture.tree())),
+            Some(Role::MENU | Role::MENU_ITEM | Role::MENU_ITEM_CHECK_BOX | Role::MENU_ITEM_RADIO)
+        )
+    };
+
+    fixture.key(Key::ArrowDown, Modifiers::ALT).settle();
+    assert!(fixture.by_label(hidden).is_some(), "Alt+Down on the tabs opens the overflow menu");
+    assert!(fixture.by_label("Show comments").is_none(), "the trailing menu stays closed");
+    assert!(menu_has_focus(&fixture), "focus enters the overflow menu");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(fixture.by_label(hidden).is_none(), "Escape closes the overflow menu");
+    assert_eq!(fixture.focused_stop(), Some(tab_focus), "Escape restores focus to the tabs");
+
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(focused_key(fixture.tree()), comments.node, "Tab reaches the trailing menu button");
+    fixture.key(Key::ArrowDown, Modifiers::ALT).settle();
+    assert!(fixture.by_label("Show comments").is_some(), "Alt+Down opens the trailing menu when its button has focus");
+    assert!(menu_has_focus(&fixture), "focus enters the trailing menu");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(fixture.by_label("Show comments").is_none(), "Escape closes the trailing menu");
+    assert_eq!(focused_key(fixture.tree()), comments.node, "Escape restores focus to the trailing menu button");
 }
 
 /// A contextual tab the source drops fades out at its slot: while it fades it has no node, a click on its slot
