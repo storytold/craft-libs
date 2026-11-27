@@ -1,19 +1,19 @@
 //! New Document: saved presets, the Save Document Preset pane, Bitmap's depth, the Web and Mobile cards' Artboards and
 //! the pixel aspect ratio.
 
-use craft_behavior::MotionMode;
+use craft_behavior::{MotionMode, PixelSize};
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, SaveKey, Show as _, clicked};
 use craft_ui::dialog::DialogHost;
 use craft_ui::display::Text;
 use craft_ui::patterns::form_dialogs::{
     BackgroundContents, BitDepth, CardCx, CardSource, ColorMode, DetailsCx, DocumentCard, DocumentOptions, DocumentSettings, HostedNewDocument,
-    NewDocumentDialog,
+    NewDocumentDialog, RecentDocumentAction,
 };
 use craft_ui::patterns::presets::{GroupPath, NamedPresetEvent, PresetLibrary};
 use craft_ui::runtime::memory::MemoryStage;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Key, Modifiers, Ui, Vec2};
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, Ui, Vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::cell::RefCell;
@@ -40,6 +40,117 @@ fn pick(fixture: &mut Fixture, tab: &str, card: &str) {
     // A card's node is named by its title and size line together; its title is clicked where it is painted.
     let title = fixture.texts().iter().find(|painted| painted.text == card).map(|painted| painted.rect.center());
     fixture.click_at(title.unwrap_or_else(|| panic!("the {card} card in {tab}"))).settle();
+}
+
+fn recent_card_position(fixture: &Fixture, title: &str) -> Pos2 {
+    fixture.texts().iter().find(|painted| painted.text == title).unwrap_or_else(|| panic!("the {title} card is visible")).rect.center()
+}
+
+fn right_click(fixture: &mut Fixture, at: Pos2) {
+    fixture.frame(vec![Event::PointerMoved(at)]);
+    for pressed in [true, false] {
+        fixture.frame(vec![Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE }]);
+    }
+    fixture.settle();
+}
+
+fn recent_at_size(width: u32, height: u32) -> DocumentOptions {
+    let mut options = DocumentOptions::default();
+    options.size = PixelSize::new(width, height);
+    options.pixels_per_inch = 72.0;
+    options
+}
+
+#[trial]
+fn new_document_recent_menu_reports_the_original_index_of_a_duplicate() {
+    let web = recent_at_size(1024, 768);
+    let mut bad = web.clone();
+    bad.pixels_per_inch = f64::NAN;
+    let film = recent_at_size(1280, 720);
+    let recent = Rc::new(RefCell::new(vec![web.clone(), bad, film, web]));
+    let listed = recent.clone();
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let reported = actions.clone();
+    let mut options = DocumentOptions::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = NewDocumentDialog::new(Bind::bound(&mut options))
+            .recent(Bind::given(listed.borrow().clone()))
+            .recent_menu(true)
+            .clipboard(PixelSize::new(640, 480))
+            .show(ui);
+        assert!(shown.result.is_none(), "using the menu keeps the dialog open");
+        reported.borrow_mut().extend(shown.recent_action);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).settle();
+
+    for label in ["Clipboard", "Default Size"] {
+        let at = recent_card_position(&fixture, label);
+        right_click(&mut fixture, at);
+        assert!(fixture.by_label("Clear All").is_none(), "{label} has no Recent menu");
+    }
+
+    let duplicates: Vec<_> = fixture.texts().iter().filter(|painted| painted.text == "Web Minimum").map(|painted| painted.rect.center()).collect();
+    assert_eq!(duplicates.len(), 2);
+    let older = duplicates.into_iter().max_by(|a, b| a.y.total_cmp(&b.y).then(a.x.total_cmp(&b.x))).unwrap();
+    right_click(&mut fixture, older);
+    let delete = fixture.by_label("Delete").expect("the older record has a Delete action");
+    fixture.click(&delete).settle();
+    assert_eq!(actions.borrow().as_slice(), &[RecentDocumentAction::Remove(3)]);
+
+    let other = recent_card_position(&fixture, "HDTV 720p");
+    right_click(&mut fixture, other);
+    let clear = fixture.by_label("Clear All").expect("the menu has a Clear All action");
+    fixture.click(&clear).settle();
+    assert_eq!(actions.borrow().as_slice(), &[RecentDocumentAction::Remove(3), RecentDocumentAction::Clear]);
+
+    let other = recent_card_position(&fixture, "HDTV 720p");
+    right_click(&mut fixture, other);
+    assert!(fixture.by_label("Delete").is_some());
+    recent.borrow_mut().rotate_left(1);
+    fixture.settle();
+    assert!(fixture.by_label("Delete").is_none(), "a menu for the previous order closes");
+
+    let moved = recent_card_position(&fixture, "HDTV 720p");
+    right_click(&mut fixture, moved);
+    let delete = fixture.by_label("Delete").expect("the moved entry has a fresh menu");
+    fixture.click(&delete).settle();
+    assert_eq!(actions.borrow().as_slice(), &[RecentDocumentAction::Remove(3), RecentDocumentAction::Clear, RecentDocumentAction::Remove(1)]);
+}
+
+#[trial]
+fn hosted_new_document_discards_pending_recent_actions_after_the_list_changes() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = super::hosted::measured_fixture(&host);
+    let a = recent_at_size(1024, 768);
+    let b = recent_at_size(1280, 720);
+    let initial = vec![a, b.clone()];
+    host.borrow_mut().open(
+        HostedNewDocument::new(fixture.ctx(), DocumentOptions::default(), |options| NewDocumentDialog::new(Bind::bound(options)).recent_menu(true))
+            .recent(initial.clone()),
+    );
+    fixture.settle();
+
+    let first = recent_card_position(&fixture, "Web Minimum");
+    fixture.click_at(first).settle();
+    fixture.key(Key::F10, Modifiers::SHIFT).settle();
+    let delete = fixture.by_label("Delete").expect("Shift+F10 opens the focused Recent card's menu");
+    fixture.click(&delete).settle();
+    {
+        let mut host = host.borrow_mut();
+        let dialog = host.get_mut::<HostedNewDocument>().unwrap();
+        dialog.replace_recent(initial);
+        assert_eq!(dialog.take_recent_action(), Some(RecentDocumentAction::Remove(0)));
+        assert_eq!(dialog.take_recent_action(), None);
+    }
+
+    let first = recent_card_position(&fixture, "Web Minimum");
+    right_click(&mut fixture, first);
+    let delete = fixture.by_label("Delete").expect("the Recent menu opened");
+    fixture.click(&delete).settle();
+    let mut host = host.borrow_mut();
+    let dialog = host.get_mut::<HostedNewDocument>().unwrap();
+    dialog.replace_recent(vec![b]);
+    assert_eq!(dialog.take_recent_action(), None, "that action referred to the replaced list");
 }
 
 /// The most a host's count may be: its `fitted` caps it.

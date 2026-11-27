@@ -2,11 +2,12 @@
 
 use super::presets::{DEFAULT_ID, DocumentOptions, DocumentPreset, NewDocumentPresetWords, PresetCategory, size_line};
 use super::settings::{CardCx, CardSource, DocumentCard, DocumentSettings, RasterSetup};
-use super::{NewDocumentWords, Read, Session, background_label, depth_label, mode_label};
+use super::{NewDocumentWords, Read, RecentDocumentAction, Session, background_label, depth_label, mode_label};
 use crate::buttons::{Button, ButtonOutput};
-use crate::contract::{Bind, CollectionEvent, MemoProps, Props as _, SelectMode, Show as _, ShowCollection as _, clicked};
+use crate::contract::{Bind, CollectionEvent, MemoProps, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use crate::display::{Shade, Text};
 use crate::list::{List, ListRow, ThumbAspect};
+use crate::menu::{Menu, MenuItem};
 use crate::patterns::presets::{PresetId, PresetLibrary};
 use crate::primitives::{ContentPainterCx, StrokeWidth};
 use crate::runtime::env::{Env, EnvValue, Label, UnitKind};
@@ -14,9 +15,10 @@ use crate::style::TypeRole;
 use crate::tabs::{Tab, TabKind, TabStrip};
 use crate::tile_grid::{CardText, Tile, TileGrid};
 use craft_behavior::{DisplayOrder, ItemSource, Selection, SelectionChange, keyed};
-use egui::{CornerRadius, Rect, Stroke, StrokeKind, Ui, vec2};
+use egui::{CornerRadius, Rect, Response, Stroke, StrokeKind, Ui, vec2};
 use std::borrow::Cow;
 use std::cell::Cell;
+use std::sync::Arc;
 
 /// A tab of the preset browser.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -53,6 +55,13 @@ impl TabId {
 const RECENT_KEY: &str = "recent";
 const SAVED_KEY: &str = "saved";
 
+/// The open menu's target and the entries that make its position valid.
+#[derive(Clone)]
+pub(super) struct RecentMenu<S> {
+    index: usize,
+    entries: Arc<[(usize, S)]>,
+}
+
 /// The card the user picked in this pass.
 pub(super) struct Picked<S> {
     pub(super) card: DocumentCard<S>,
@@ -68,6 +77,7 @@ pub(super) struct Left<S> {
     pub(super) picked: Option<Picked<S>>,
     /// The saved presets the Delete intent removed.
     pub(super) delete: Vec<PresetId>,
+    pub(super) recent_action: Option<RecentDocumentAction>,
 }
 
 /// The cards as a display order keyed by position.
@@ -135,9 +145,13 @@ pub(super) fn tabs<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, read:
 }
 
 /// Shows the cards or saved presets in the category picked in this pass.
-pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, values: &S, read: &Read<'_, S>, left: &mut Left<S>) {
+pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &mut Session<S>, values: &S, read: &Read<'_, S>, left: &mut Left<S>) {
     let words = read.words;
     let tab = left.tab.unwrap_or(session.tab);
+    let recent_menu = tab == TabId::Recent && read.recent_menu;
+    if !recent_menu {
+        session.recent_menu = None;
+    }
     let cards = cards_of(tab, read.library, &card_cx(session, values, read));
     let selected = if tab == session.tab { selected_of(tab, session, values, &cards) } else { None };
     let selection = selected.map_or_else(|| Selection::new(Vec::new(), None, None), Selection::single);
@@ -187,8 +201,49 @@ pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, value
             .rows_stamp(stamp)
             .selection(Bind::given(selection))
             .show_items(ui, &list, &mut |index, _| tile_of(&cards[*index], look));
+        if recent_menu {
+            if let Some(request) = shown.response.events.iter().rev().find_map(|event| match event {
+                CollectionEvent::ContextMenu(request) => Some(request),
+                _ => None,
+            }) {
+                session.recent_menu = cards.get(request.key).and_then(|card| {
+                    let position = card.recent_position?;
+                    let entries: Arc<[_]> = recent_items(read.recent_source).map(|(index, entry)| (index, entry.clone())).collect();
+                    let index = entries.get(position)?.0;
+                    Some(RecentMenu { index, entries })
+                });
+            }
+            left.recent_action = show_recent_menu(ui, &shown.response.response, read, &mut session.recent_menu);
+        }
         route(shown.response.events, &cards, left);
     }
+}
+
+/// The valid entries and their positions before filtering.
+pub(super) fn recent_items<S: DocumentSettings>(source: &[S]) -> impl Iterator<Item = (usize, &S)> {
+    source.iter().enumerate().filter(|(_, entry)| entry.fits())
+}
+
+fn show_recent_menu<S: DocumentSettings>(
+    ui: &mut Ui,
+    response: &Response,
+    read: &Read<'_, S>,
+    menu: &mut Option<RecentMenu<S>>,
+) -> Option<RecentDocumentAction> {
+    let target = menu.take().filter(|target| recent_items(read.recent_source).eq(target.entries.iter().map(|(index, entry)| (*index, entry))))?;
+    let mut action = None;
+    let shown = Menu::context(read.words.recent.clone(), response).show(ui, |ui, _| {
+        if MenuItem::new(read.words.delete.clone()).show(ui).ran {
+            action = Some(RecentDocumentAction::Remove(target.index));
+        }
+        if MenuItem::new(read.words.clear_recent.clone()).show(ui).ran {
+            action = Some(RecentDocumentAction::Clear);
+        }
+    });
+    if action.is_none() && shown.output.closed.is_none() {
+        *menu = Some(target);
+    }
+    action
 }
 
 /// The library preset a Saved row stands for.
@@ -323,7 +378,7 @@ pub(super) fn raster_recent_cards(cx: &CardCx<'_, DocumentOptions>) -> Vec<Docum
         let settings = DocumentOptions { size, pixels_per_inch: setup.screen_ppi, unit: UnitKind::Pixels, ..DocumentOptions::default() };
         cards.push(DocumentCard::new(words.clipboard.clone(), size_line(&settings, words, units), settings, CardSource::Clipboard));
     }
-    for recent in cx.recents {
+    for (position, recent) in cx.recents.iter().enumerate() {
         let title = recent_title(recent, cx);
         let line = size_line(recent, words, units);
         let detail = words.recent_detail.fill(&[
@@ -332,7 +387,7 @@ pub(super) fn raster_recent_cards(cx: &CardCx<'_, DocumentOptions>) -> Vec<Docum
             ("mode", mode_label(words, recent.color_mode).as_str()),
             ("background", background_label(words, recent.background).as_str()),
         ]);
-        cards.push(DocumentCard::new(title, line, recent.clone(), CardSource::Recent).tooltip(detail));
+        cards.push(DocumentCard::recent(title, line, recent.clone(), position).tooltip(detail));
     }
     for preset in &setup.recent_defaults {
         let mut card = raster_preset_card(preset, cx);

@@ -75,12 +75,18 @@ pub struct DocumentCard<S> {
     pub settings: S,
     /// Where the card comes from.
     pub source: CardSource,
+    pub(super) recent_position: Option<usize>,
 }
 
 impl<S> DocumentCard<S> {
     /// A card titled `title` with the second `line`, applying `settings`.
     pub fn new(title: impl Into<Label>, line: impl Into<String>, settings: S, source: CardSource) -> Self {
-        DocumentCard { title: title.into(), line: line.into(), tooltip: None, settings, source }
+        DocumentCard { title: title.into(), line: line.into(), tooltip: None, settings, source, recent_position: None }
+    }
+
+    /// A Recent card for a position in [`CardCx::recents`], which contains only valid entries.
+    pub fn recent(title: impl Into<Label>, line: impl Into<String>, settings: S, position: usize) -> Self {
+        DocumentCard { recent_position: Some(position), ..Self::new(title, line, settings, CardSource::Recent) }
     }
 
     /// The card's hover text.
@@ -125,7 +131,7 @@ pub struct CardCx<'a, S: DocumentSettings> {
     pub setup: &'a S::Setup,
     /// The orientation the control picked.
     pub orientation: Option<Orientation>,
-    /// The recent documents.
+    /// The valid recent documents in the order the dialog received them.
     pub recents: &'a [S],
     /// The categories of built-in presets.
     pub presets: &'a [PresetCategory<S::Preset>],
