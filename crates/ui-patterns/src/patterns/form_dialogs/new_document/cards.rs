@@ -292,7 +292,7 @@ fn preset_title(preset: &DocumentPreset, setup: &RasterSetup, words: &NewDocumen
 pub(super) fn raster_preset_card(preset: &DocumentPreset, cx: &CardCx<'_, DocumentOptions>) -> DocumentCard<DocumentOptions> {
     let preset = cx.orientation.map_or_else(|| preset.clone(), |orientation| preset.turned(orientation));
     let mut settings = preset.options(cx.setup.print_ppi, cx.setup.screen_ppi);
-    if preset.is_print() && !matches!(cx.values.unit, UnitKind::Pixels | UnitKind::Percent) {
+    if preset.in_inches() && !matches!(cx.values.unit, UnitKind::Pixels | UnitKind::Percent) {
         settings.unit = cx.values.unit;
     }
     DocumentCard::new(
