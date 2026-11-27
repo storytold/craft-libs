@@ -12,6 +12,7 @@ pub fn check(text: &str) -> Vec<Issue> {
     check_with(text, true)
 }
 
+/// Checks `text` for repeated words and spacing errors with Hebrew diagnostic messages.
 pub fn check_with(text: &str, _capital_first: bool) -> Vec<Issue> {
     let mut issues = Vec::new();
     repeated_words(text, &words(text), &mut issues);

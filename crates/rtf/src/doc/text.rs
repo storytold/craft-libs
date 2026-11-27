@@ -1,4 +1,4 @@
-use super::state::{Dest, MARK_CLOSE, MARK_OPEN, MAX_PICT, St};
+use super::state::{Dest, MARK_CLOSE, MARK_OPEN, MAX_LEVEL_TEXT, MAX_PICT, St};
 use super::{Fmt, Inline, Reader, Rgb, make_img, model};
 use std::sync::Arc;
 
@@ -155,6 +155,11 @@ impl Reader {
             // Odd hex digit count: drop the dangling nibble.
         }
         let data = std::mem::take(&mut self.pict_hex);
+        // The picture Word writes of a shape just read (`\defshp`), for readers without shapes.
+        let after_shape = std::mem::take(&mut self.pict_after_shape);
+        if std::mem::take(&mut self.pict_defshp) && after_shape {
+            return;
+        }
         if self.pict_kind == 0 || data.is_empty() {
             return;
         }
@@ -304,7 +309,18 @@ impl Reader {
                     }
                 }
             }
-            Dest::Skip | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) => {}
+            Dest::LevelText => {
+                if let Some(level) = self.list_cur.last_mut() {
+                    for c in s.chars() {
+                        if level.text.chars().count() >= MAX_LEVEL_TEXT {
+                            break;
+                        }
+                        level.text.push(c);
+                    }
+                }
+            }
+            Dest::ShpSn | Dest::ShpSv => self.shape_text(s),
+            Dest::Skip | Dest::InfoRoot | Dest::Created | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) | Dest::ShpInst => {}
         }
     }
 

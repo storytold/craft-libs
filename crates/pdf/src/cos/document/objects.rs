@@ -104,6 +104,15 @@ impl Document {
         self.unlinked_update
     }
 
+    /// Whether the index was rebuilt from object headers and the document reaches more than one
+    /// generation of some object number (or the check of that gave up). One slot per number
+    /// holds one of them, so a reference to another reads as null here while the renderer,
+    /// which keeps every generation, draws it: what a save or signature writes can differ from
+    /// what the page showed (pdfcraft#6759). The repair log names the objects left out.
+    pub fn rebuilt_with_unsettled_generations(&self) -> bool {
+        self.unsettled_generations
+    }
+
     /// Objects of the file that could not be read, lowest number first, as lines such as
     /// "object 11 0 could not be read: syntax error at byte 512: ...". [`Self::get`] reads each
     /// as null (ISO 32000-2 §7.3.10), so a document with one opens, but what it held is lost:
@@ -353,7 +362,7 @@ impl Document {
     }
 
     /// Follow a reference if `o` is one; otherwise return `o` itself. An object can be nothing but
-    /// a reference to another, which is followed too, up to [`MAX_REFERENCE_HOPS`] of them.
+    /// a reference to another, which is followed too, up to 32 of them.
     pub fn resolve(&self, o: &Object) -> Arc<Object> {
         let Object::Ref(r) = o else { return Arc::new(o.clone()) };
         let mut held = self.get(*r);
