@@ -276,8 +276,9 @@ impl RawRelease {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use craft_ui::testing::trial;
     use ed25519_dalek::{Signer as _, SigningKey};
 
     const NOW: i64 = 1_795_728_600; // 2026-11-26T21:30:00Z
@@ -336,7 +337,7 @@ prerelease = true
         (key, sig)
     }
 
-    #[test]
+    #[trial]
     fn verifies_signed_catalog_and_extracts_stable_prerelease_and_nightly() {
         let toml = sample_toml();
         let (key, sig) = sign(&toml);
@@ -358,7 +359,7 @@ prerelease = true
         assert_eq!(by_repo.tag, "v0.20.4");
     }
 
-    #[test]
+    #[trial]
     fn rejects_tampering_wrong_key_and_stale_catalog() {
         let toml = sample_toml();
         let (key, sig) = sign(&toml);
