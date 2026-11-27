@@ -143,6 +143,7 @@ craft-font-subset = { path = "crates/font-subset" }
 harfbuzz-subset-sys = { git = "https://github.com/storytold/harfbuzz.git", rev = "f32ed1e548eaa8852bff47e49a90629a013a2faa" }
 craft-host = { path = "crates/host" }
 craft-gpu = { path = "crates/gpu" }
+craft-gpu-filters = { path = "crates/gpu-filters" }
 craft-gpu-null = { path = "crates/gpu-null" }
 craft-gpu-providers = { path = "crates/gpu-providers" }
 craft-gpu-wgpu = { path = "crates/gpu-wgpu" }

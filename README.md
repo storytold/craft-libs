@@ -211,6 +211,11 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   every frame's position, delay, disposal and transparent colour, the loop count and the first
   frame's colour table, without decompressing pixels. Tells an animation from a still and whether
   a file can hold the picture it declares before a decoder runs.
+- [`craft-gpu-filters`](crates/gpu-filters/README.md): the `craft.filters` GPU provider. It runs a
+  Gaussian blur, per-channel lookup tables on straight colour and premultiplied source-over with an
+  opacity on premultiplied RGBA8 images, through the `craft-gpu` job registry on the null context
+  or as wgpu compute passes on a device, with the same filters on the CPU as the reference and
+  stated tolerances between the two. Layer stacks and effect settings stay in each app.
 - [`craft-gridcraft-format`](crates/gridcraft-format/README.md): GridCraft's native JSON workbook
   (`.json`, `.scjson`): the extensions, the reader, the pretty writer, and newer entries kept
   unread and written back into a list. The workbook model and what follows a read stay in GridCraft.

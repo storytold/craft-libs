@@ -7,6 +7,7 @@ Provider ids:
   - `craft.mask`: CPU stand-in for FilmCraft mask composite until WGSL lands on wgpu
   - `craft.composite.premul`: CPU premultiplied "over" (Normal path from `composite.wgsl`) until WGSL lands on wgpu
   - `craft.readback`: CPU decode of staging buffers (`f16` RGBA → `f32`, or `fmt:u8` passthrough); uses [`chunk_buffer`](../crates/gpu/src/chunk.rs) against device caps and [`f16_to_f32*`](../crates/gpu/src/readback.rs) from **craft-gpu**
+- `craft.filters`: Gaussian blur, lookup tables and premultiplied source-over on RGBA8 images, registered from **craft-gpu-filters** (`FilterProvider`, see [its README](../crates/gpu-filters/README.md)). It is not in `register_all()`, since it depends on wgpu. `FilterProvider::new()` filters on the CPU on any context; `FilterProvider::with_device` runs its WGSL compute passes on a device the host passes in.
 - `{app}.*`: registered by application wasm at init
 
 Generic worker code must only call `ProviderRegistry::dispatch`: never import app gpu crates.

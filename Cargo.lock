@@ -2921,6 +2921,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gpu-filters"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "craft-gpu-null",
+ "pollster 0.4.0",
+ "thiserror 2.0.21",
+ "wgpu",
+]
+
+[[package]]
 name = "craft-gpu-null"
 version = "0.1.0"
 dependencies = [
