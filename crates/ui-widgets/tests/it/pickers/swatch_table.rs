@@ -8,7 +8,8 @@ use craft_behavior::Preview;
 use craft_theme::Srgba;
 use craft_ui::choice::{SwatchArrangement, SwatchTable};
 use craft_ui::runtime::env::Label;
-use craft_ui::testing::pointer::moved;
+use craft_ui::testing::focus::AccessActionKind;
+use craft_ui::testing::pointer::{self, moved};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Pos2, Rect, vec2};
 
@@ -122,4 +123,67 @@ fn the_cell_under_the_pointer_is_previewed_once_until_the_pointer_leaves() {
     fixture.frame(vec![moved(Pos2::new(cell.center().x, last.max.y + 40.0))]);
     fixture.settle();
     assert_eq!(reported(&log), vec![Preview::Ended], "leaving the cells ends the preview, once");
+}
+
+#[trial]
+fn a_primary_click_space_or_access_click_on_the_selected_swatch_reports_it_on_release_and_secondary_clicks_do_not() {
+    let entries: Vec<(Label, Srgba)> = (0..8).map(|i| (Label::from(format!("Cell {i}")), Srgba::rgb(i as f32 / 8.0, 0.4, 0.6))).collect();
+    let picks = Rc::new(RefCell::new(Vec::new()));
+    let chosen = Rc::new(RefCell::new(Vec::new()));
+    let mut fixture = Fixture::new({
+        let picks = Rc::clone(&picks);
+        let chosen = Rc::clone(&chosen);
+        move |ui| {
+            let out = SwatchTable::new("Colors", &entries).per_row(4).show_all(ui);
+            picks.borrow_mut().extend(out.selected);
+            *chosen.borrow_mut() = out.chosen;
+        }
+    });
+    fixture.room(vec2(400.0, 300.0));
+    fixture.settle();
+    picks.borrow_mut().clear();
+
+    let cell2 = fixture.by_label("Cell 2").expect("cell 2");
+    fixture.click(&cell2).settle();
+    assert_eq!(std::mem::take(&mut *picks.borrow_mut()), vec![2], "primary click selects cell 2");
+    assert_eq!(*chosen.borrow(), vec![2]);
+
+    // Dragging off the already-selected cell cancels without re-picking.
+    fixture.advance(1.0);
+    let c2 = fixture.by_label("Cell 2").expect("cell 2").rect.center();
+    let c5 = fixture.by_label("Cell 5").expect("cell 5").rect.center();
+    fixture.frame(vec![moved(c2), pointer::press(c2)]);
+    assert!(picks.borrow().is_empty(), "press on an already-selected cell waits for release");
+    fixture.frame(vec![moved(c5), pointer::release(c5)]).settle();
+    assert!(picks.borrow().is_empty(), "dragging off the already-selected cell cancels without picking");
+
+    // Clicking the already-selected cell reports it once on release.
+    fixture.advance(1.0);
+    fixture.frame(vec![moved(c2), pointer::press(c2)]);
+    assert!(picks.borrow().is_empty(), "still silent on press");
+    fixture.frame(vec![pointer::release(c2)]).settle();
+    assert_eq!(std::mem::take(&mut *picks.borrow_mut()), vec![2], "re-clicking the selected cell reports it on release");
+
+    // Space and AccessKit click on the already-selected cell report it too.
+    fixture.key(Key::Space, Modifiers::NONE).settle();
+    assert_eq!(std::mem::take(&mut *picks.borrow_mut()), vec![2], "Space on the already-selected cell reports it");
+    let cell2 = fixture.by_label("Cell 2").expect("cell 2");
+    fixture.access(AccessActionKind::Click, &cell2).settle();
+    assert_eq!(std::mem::take(&mut *picks.borrow_mut()), vec![2], "AccessKit click on the already-selected cell reports it");
+    let cell5 = fixture.by_label("Cell 5").expect("cell 5");
+    fixture.access(AccessActionKind::Click, &cell5).settle();
+    assert_eq!(std::mem::take(&mut *picks.borrow_mut()), vec![5], "AccessKit click on a non-selected cell reports it");
+    assert_eq!(*chosen.borrow(), vec![5], "AccessKit click selects the addressed cell");
+
+    // Secondary and middle clicks leave selection unchanged and report nothing.
+    fixture.frame(vec![moved(c2), pointer::secondary(c2, true)]);
+    fixture.frame(vec![pointer::secondary(c2, false)]).settle();
+    assert!(picks.borrow().is_empty(), "secondary click must not pick a swatch");
+    assert_eq!(*chosen.borrow(), vec![5], "secondary click leaves selection intact");
+
+    let c4 = fixture.by_label("Cell 4").expect("cell 4").rect.center();
+    fixture.frame(vec![moved(c4), pointer::middle(c4, true)]);
+    fixture.frame(vec![pointer::middle(c4, false)]).settle();
+    assert!(picks.borrow().is_empty(), "middle click must not pick a swatch");
+    assert_eq!(*chosen.borrow(), vec![5], "middle click leaves selection intact");
 }
