@@ -148,11 +148,10 @@ impl Awareness {
                 let same = self.peers.get(&id).is_some_and(|p| p.state == state);
                 self.peers.insert(id, Peer { clock, state, seen: now });
                 changed |= !same;
-            } else if let Some(p) = self.peers.get_mut(&id)
-                && clock == p.clock
-            {
-                p.seen = now;
             }
+            // An update that isn't newer changes nothing, not even when the peer was last seen:
+            // a replay must not keep a silent client present. A live client renews its state
+            // under a new clock ([`Awareness::renew`]).
         }
         Ok(changed)
     }
@@ -271,6 +270,22 @@ mod tests {
         d.prune(TIMEOUT_MS * 2 + 2);
         d.prune(TIMEOUT_MS * 2 + 2 + FORGET_MS);
         assert!(d.peers.is_empty());
+    }
+
+    #[test]
+    fn a_replay_does_not_keep_a_silent_peer_present() {
+        let mut a = Awareness::new(1);
+        let mut b = Awareness::new(2);
+        let here = a.set_local(Some(json!({"x": 1})));
+        b.apply(&here, 0).expect("apply");
+        b.apply(&here, TIMEOUT_MS - 1).expect("apply");
+        assert!(b.prune(TIMEOUT_MS), "the replay didn't count as news of the peer");
+        // A renewal does.
+        let mut c = Awareness::new(3);
+        c.apply(&here, 0).expect("apply");
+        c.apply(&a.renew(), TIMEOUT_MS - 1).expect("apply");
+        assert!(!c.prune(TIMEOUT_MS));
+        assert_eq!(c.present().count(), 1);
     }
 
     #[test]
