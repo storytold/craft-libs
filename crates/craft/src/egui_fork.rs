@@ -1,9 +1,9 @@
 //! The egui fork the library is built with, and the check that an app's lockfile uses it.
 
 /// The egui fork the library is built and tested with. Apps patch egui to exactly this.
-pub const GIT: &str = "https://github.com/storytold/egui.git";
-/// The commit of [`GIT`].
-pub const REV: &str = "f5025284445ea19c35f746d96fc0b75468b3f560";
+pub const GIT: &str = "https://github.com/mocenigo/egui-mine.git";
+/// The commit of [`GIT`]: storytold/egui#55's head (`with_panel`), until it merges.
+pub const REV: &str = "b7e1a3309499a90b6ccbb47382c6c7947baef4d1";
 
 /// The packages the workspace patches to the fork (the `[patch.crates-io]` entries that name [`GIT`]).
 pub const PACKAGES: &[&str] = &[
