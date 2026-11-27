@@ -177,7 +177,7 @@ type Resolve<V> = Box<dyn FnOnce(&mut TextState, Option<&V>, bool, bool) -> Reso
 /// this pass: the option alone is not enough, since a part that went read-only or disabled mid-run takes Escape as a
 /// plain field does.
 fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: Rect, fallback: K::Value) -> Resolve<K::Value> {
-    let (live, limit, clear_on_escape) = (options.live, options.limit, options.clear_on_escape);
+    let (live, limit, clear_on_escape, restore_on_escape) = (options.live, options.limit, options.clear_on_escape, options.restore_on_escape);
     Box::new(move |state, value, commit_now, keep_on_escape| {
         let value = value.unwrap_or(&fallback);
         let mut typing = TypingRun::new(codec).live(live);
@@ -209,6 +209,7 @@ fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: R
         let (mut submitted, mut escaped) = (false, false);
         let mut committed_note = None;
         let submit_mods = std::mem::take(&mut state.submit_mods);
+        let at_focus = state.at_focus.as_ref().and_then(|at| at.downcast_ref::<K::Value>()).cloned();
         let end = match state.end.take() {
             None if commit_now && run.is_open() => Some(End::Blur),
             end => end,
@@ -226,6 +227,20 @@ fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: R
                     committed_note = Some(note);
                     state.normalised = Some(typing.codec().normalise(&draft_text, &committed));
                     events.push(TextEvent::Commit(committed));
+                }
+            }
+            // A part that restores on Escape goes back to the value it had when it took the focus, past any value
+            // typed or stepped since: an open run ends and commits that value, so a host that takes each reported
+            // value (and not the cancel's) has it back too.
+            Some(End::Escape) if let Some(at_focus) = at_focus.filter(|_| restore_on_escape && !clear_on_escape) => {
+                escaped = true;
+                let open = run.is_open();
+                if open {
+                    typing.cancel(&mut run);
+                }
+                if open || at_focus != *value {
+                    state.normalised = Some(typing.codec().format(&at_focus));
+                    events.push(TextEvent::Commit(at_focus));
                 }
             }
             Some(End::Escape) => {
@@ -623,7 +638,19 @@ pub(crate) fn run<C: Component>(
         }
     }
     let keeps_escape = part.options.keep_on_escape && !part.options.clear_on_escape && !read_only && cx.core.resolved.enabled && part.options.enabled;
+    // The value the part took the focus with, which Escape puts back (`restore_on_escape`); forgotten once it has none.
+    if part.options.restore_on_escape && (out.focused || was_focused) {
+        if state.at_focus.is_none() {
+            state.at_focus = shown_copy(cx);
+        }
+    } else {
+        state.at_focus = None;
+    }
     let resolved = resolve(&mut state, cx.value(), commit_now, keeps_escape);
+    if resolved.submitted && part.options.leave_on_submit && out.focused {
+        // Enter ended the edit: the field lets the focus go once the scopes have run, so the next keys are the app's.
+        crate::runtime::focus::surrender_after_scopes(&ctx, widget);
+    }
     if resolved.escaped && keeps_escape && !state.invalid {
         // The same Escape goes on to the enclosing scope in this pass, which still finds this focused stop; the field
         // lets focus go once the scopes have run.
