@@ -26,7 +26,7 @@ use craft_ui::runtime::env::Label;
 use craft_ui::runtime::memory::StageAccess;
 
 use super::banner::FontPreviewBanner;
-use super::rank::{FamilyInfos, Language, Listing, host_rows, list, shown_name};
+use super::rank::{FamilyInfos, Language, Listing, host_rows, shown_name, ui_list};
 use super::{
     FamilyRow, FamilySet, FilterLayout, FontCase, FontClass, FontFigures, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings,
     FontPickerWords, FontPreviewSize, FontProperties, FontScript, Grade, HostFontGroup, HostFontKind, HostFontRow, POPUP, SAMPLE_EM, SIMILAR, Sample,
@@ -646,7 +646,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let language_code = ui_language(&cx.env);
     let (folder, collator) = (cx.env.folder(), cx.env.collator());
     let listing = Listing { query: &query, settings: settings.as_ref(), filters: &narrowing, language: &language_code, served: picker.served, sets };
-    let (found, comparable) = list(catalog, &infos, &listing, &Language { folder: &folder, collator: &collator }, true);
+    let (found, comparable, information_loading) = ui_list(catalog, &infos, &listing, &Language { folder: &folder, collator: &collator }, cx);
     let layout = Layout { sections: plain && query.trim().is_empty(), actions: actions.len() };
     let shown_host = host_rows(picker.host, &query, &folder);
     let slots = slots(catalog, picker.host, &shown_host, found, &expanded, &layout);
@@ -669,6 +669,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let mut stamp = DefaultHasher::new();
     let narrowed_by = (narrowing.class, narrowing.favorites, narrowing.variable, &narrowing.similar, narrowing.script, &narrowing.sets);
     (&query, narrowed_by, &narrowing.properties, on_white, chips).hash(&mut stamp);
+    infos.read_revision().hash(&mut stamp);
     let banner_family = lead.unwrap_or_else(|| family.clone());
     let texts = picker.sample_texts;
     let chosen = chosen_sample(texts, settings.as_ref());
@@ -719,10 +720,16 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                     class_column(ui, filters, &words);
                 }
                 Stack::new().show(ui, |ui, _| {
+                    if information_loading {
+                        Text::new(words.information_loading.clone()).show(ui);
+                    }
                     if narrowing.similar.is_some() && !comparable {
                         Text::new(words.no_similar.clone()).show(ui);
                     }
                     if slots.is_empty() {
+                        if information_loading {
+                            return;
+                        }
                         let message = if narrowing.favorites && favorites_empty {
                             &words.no_favorites
                         } else if narrowing.any() {

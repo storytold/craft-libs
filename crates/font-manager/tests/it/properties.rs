@@ -292,6 +292,10 @@ fn chosen_properties_combine() {
 
 /// An open library list over two families, in `layout`, with the Font Properties rows when `properties` is set.
 fn properties_rig(filters: Rc<RefCell<FontFilters>>, layout: FilterLayout, properties: bool) -> Fixture {
+    properties_rig_on(filters, layout, properties, None)
+}
+
+fn properties_rig_on(filters: Rc<RefCell<FontFilters>>, layout: FilterLayout, properties: bool, jobs: Option<Arc<dyn craft_host::Jobs>>) -> Fixture {
     let catalog = catalog_of(&[face("Book"), Face { style: "Black", weight: 900, ..face("Poster") }]);
     let mut family = "Poster".to_owned();
     let mut settings = FontPickerSettings::default();
@@ -304,6 +308,10 @@ fn properties_rig(filters: Rc<RefCell<FontFilters>>, layout: FilterLayout, prope
             .properties(properties)
             .show(ui);
     });
+    if let Some(jobs) = jobs {
+        let host = craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs).build();
+        fx.host(Arc::new(host));
+    }
     fx.in_room(Room::Window);
     fx.settle();
     fx.key(Key::Tab, Modifiers::NONE);
@@ -315,6 +323,161 @@ fn properties_rig(filters: Rc<RefCell<FontFilters>>, layout: FilterLayout, prope
 /// Whether `family` is named or painted in the open list.
 fn listed(fx: &Fixture, family: &str) -> bool {
     fx.by_label(family).is_some() || fx.texts().iter().any(|painted| painted.text == family)
+}
+
+#[trial]
+fn outline_properties_load_through_the_hosts_jobs() {
+    let jobs = Arc::new(craft_host::ManualJobs::new());
+    let filters = Rc::new(RefCell::new(FontFilters::default()));
+    filters.borrow_mut().properties.height = Some(Grade::Medium);
+    let mut fx = properties_rig_on(filters, FilterLayout::Toolbar, true, Some(jobs.clone()));
+    assert!(!listed(&fx, "Book"), "an unread outline does not count as a matching family");
+    assert!(fx.texts().iter().any(|text| text.text == "Font information is loading."));
+    assert!(jobs.waiting() > 0, "the host has not run the outline reads yet");
+    jobs.run_all();
+    fx.settle();
+    jobs.run_all();
+    fx.settle();
+    assert!(listed(&fx, "Book"), "the matching family appears after its outline is read");
+    assert!(!fx.texts().iter().any(|text| text.text == "Font information is loading."));
+}
+
+#[trial]
+fn outline_properties_resume_after_the_host_drops_a_lane() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Refusing {
+        ready: AtomicBool,
+        jobs: craft_host::ManualJobs,
+    }
+    impl craft_host::Jobs for Refusing {
+        fn spawn(&self, name: &str, job: Box<dyn FnOnce() + Send>) {
+            if self.ready.load(Ordering::Relaxed) {
+                craft_host::Jobs::spawn(&self.jobs, name, job);
+            }
+        }
+    }
+    let jobs = Arc::new(Refusing { ready: AtomicBool::new(false), jobs: craft_host::ManualJobs::new() });
+    let filters = Rc::new(RefCell::new(FontFilters::default()));
+    filters.borrow_mut().properties.height = Some(Grade::Medium);
+    let mut fx = properties_rig_on(filters, FilterLayout::Toolbar, true, Some(jobs.clone()));
+    assert!(!listed(&fx, "Book"));
+    jobs.ready.store(true, Ordering::Relaxed);
+    fx.settle();
+    assert!(jobs.jobs.waiting() > 0, "a later frame retries the dropped lane");
+    jobs.jobs.run_all();
+    fx.settle();
+    assert!(listed(&fx, "Book"));
+}
+
+#[trial]
+fn outline_properties_follow_replacement_host_jobs() {
+    let first = Arc::new(craft_host::ManualJobs::new());
+    let second = Arc::new(craft_host::ManualJobs::new());
+    let filters = Rc::new(RefCell::new(FontFilters::default()));
+    filters.borrow_mut().properties.height = Some(Grade::Medium);
+    let mut fx = properties_rig_on(filters, FilterLayout::Toolbar, true, Some(first.clone()));
+    assert!(first.waiting() > 0);
+    let host = craft_host::Host::builder(craft_host::AppInfo { id: "replacement", name: "Replacement", version: "0" }).jobs(second.clone()).build();
+    fx.host(Arc::new(host));
+    fx.settle();
+    assert!(second.waiting() > 0, "pending reads use the replacement host");
+    second.run_all();
+    fx.settle();
+    assert!(listed(&fx, "Book"));
+    first.run_all();
+    fx.settle();
+    assert!(listed(&fx, "Book"));
+}
+
+fn closed_property_field() -> (Fixture, Rc<RefCell<String>>, Arc<craft_host::ManualJobs>) {
+    closed_property_field_from(&["Book", "Poster"])
+}
+
+fn closed_property_field_from(names: &[&'static str]) -> (Fixture, Rc<RefCell<String>>, Arc<craft_host::ManualJobs>) {
+    let jobs = Arc::new(craft_host::ManualJobs::new());
+    let family = Rc::new(RefCell::new("Book".to_owned()));
+    let shown = Rc::clone(&family);
+    let catalog = catalog_of(&names.iter().map(|name| face(name)).collect::<Vec<_>>());
+    let mut filters = FontFilters::default();
+    filters.properties.height = Some(Grade::Medium);
+    let mut fx = Fixture::new(move |ui| {
+        FontPicker::new("Font family", Bind::bound(&mut *shown.borrow_mut()), &catalog).filters(Bind::bound(&mut filters)).show(ui);
+    });
+    let host = craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs.clone()).build();
+    fx.host(Arc::new(host));
+    fx.in_room(Room::Window);
+    fx.settle();
+    fx.key(Key::Tab, Modifiers::NONE);
+    (fx, family, jobs)
+}
+
+#[trial]
+fn closed_field_steps_wait_for_outline_properties() {
+    let (mut fx, family, jobs) = closed_property_field();
+    fx.key(Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(family.borrow().as_str(), "Book");
+    assert!(jobs.waiting() > 0);
+    jobs.run_all();
+    fx.settle();
+    assert_eq!(family.borrow().as_str(), "Poster", "the deferred arrow uses the complete filtered order");
+}
+
+#[trial]
+fn closed_field_wheel_waits_for_outline_properties() {
+    use craft_ui::testing::pointer::{moved, wheel_lines};
+    let (mut fx, family, jobs) = closed_property_field();
+    let field = fx.by_label("Font family").expect("the family field");
+    fx.frame(vec![moved(field.center()), wheel_lines(-1.0)]);
+    assert_eq!(family.borrow().as_str(), "Book");
+    assert!(jobs.waiting() > 0);
+    jobs.run_all();
+    fx.settle();
+    assert_eq!(family.borrow().as_str(), "Poster", "the deferred wheel uses the complete filtered order");
+}
+
+#[trial]
+fn closed_field_preserves_multiple_steps_while_properties_load() {
+    let (mut fx, family, jobs) = closed_property_field_from(&["Book", "Middle", "Poster"]);
+    fx.key(Key::ArrowDown, Modifiers::NONE);
+    fx.key(Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(family.borrow().as_str(), "Book");
+    jobs.run_all();
+    fx.settle();
+    assert_eq!(family.borrow().as_str(), "Poster", "both queued arrows advance the filtered order");
+}
+
+#[trial]
+fn closed_field_preserves_multiple_host_steps_while_properties_load() {
+    use craft_font_manager::picker::{HostFontGroup, HostFontRow};
+    let jobs = Arc::new(craft_host::ManualJobs::new());
+    let current = Rc::new(RefCell::new("a".to_owned()));
+    let shown = Rc::clone(&current);
+    let catalog = catalog_of(&[face("Book")]);
+    let rows = [HostFontRow::face("a", "A", None), HostFontRow::face("b", "B", None), HostFontRow::face("c", "C", None)];
+    let mut family = String::new();
+    let mut filters = FontFilters::default();
+    filters.properties.height = Some(Grade::Medium);
+    let mut fx = Fixture::new(move |ui| {
+        let out = FontPicker::new("Font family", Bind::bound(&mut family), &catalog)
+            .filters(Bind::bound(&mut filters))
+            .host(&[HostFontGroup::new(None, &rows)])
+            .current_host(shown.borrow().clone())
+            .show(ui);
+        if let Some(key) = out.host_picked {
+            *shown.borrow_mut() = key;
+        }
+    });
+    let host = craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs.clone()).build();
+    fx.host(Arc::new(host));
+    fx.in_room(Room::Window);
+    fx.settle();
+    fx.key(Key::Tab, Modifiers::NONE);
+    fx.key(Key::ArrowDown, Modifiers::NONE);
+    fx.key(Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(current.borrow().as_str(), "a");
+    jobs.run_all();
+    fx.settle();
+    assert_eq!(current.borrow().as_str(), "c", "both queued arrows advance through host rows");
 }
 
 /// Picks Heavy in the open list's Weight dropdown.

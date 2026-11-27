@@ -1,12 +1,17 @@
 //! What the picker knows about the installed families: names in the interface language, classes and
 //! traits read from the faces' tables, the filtered list and its order, and the sample text of a row.
 
-use std::collections::HashMap;
+use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use craft_font_catalog::{Catalog, FaceInfo, LocalizedName, Outlines, is_private_family};
+use craft_host::Wake;
+use craft_host::queue::{JobQueue, Priority, QueueOptions};
 use craft_i18n::matcher::{Matcher, Rank};
 use craft_i18n::{Collator, Folder};
+use craft_ui::contract::Cx;
 use craft_ui::fonts::FaceBytes;
 use skrifa::MetadataProvider as _;
 use skrifa::instance::Size;
@@ -15,8 +20,8 @@ use skrifa::raw::{FontRef, TableProvider};
 use skrifa::{GlyphId, Tag};
 
 use super::{
-    FamilyRow, FamilySet, FontCase, FontClass, FontFigures, FontFilters, FontFormat, FontPickerSettings, FontProperties, FontScript, Grade,
-    HostFontGroup, HostFontKind, SIMILAR_COUNT,
+    FamilyRow, FamilySet, FontCase, FontClass, FontFigures, FontFilters, FontFormat, FontPicker, FontPickerSettings, FontProperties, FontScript,
+    Grade, HostFontGroup, HostFontKind, SIMILAR_COUNT,
 };
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -83,6 +88,40 @@ pub(super) struct Shape {
     pub(super) figures: Option<FontFigures>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum ReadKind {
+    Shape,
+    Scripts,
+}
+
+enum FontRead {
+    Shape(Shape),
+    Scripts(Vec<FontScript>),
+}
+
+impl ReadKind {
+    fn empty(self) -> FontRead {
+        match self {
+            Self::Shape => FontRead::Shape(Shape::default()),
+            Self::Scripts => FontRead::Scripts(Vec::new()),
+        }
+    }
+
+    fn read(self, catalog: &Catalog, face: &FaceInfo) -> FontRead {
+        match self {
+            Self::Shape => FontRead::Shape(read_shape(catalog, face).unwrap_or_default()),
+            Self::Scripts => FontRead::Scripts(read_scripts(catalog, face).unwrap_or_default()),
+        }
+    }
+}
+
+struct Reads {
+    jobs: Arc<dyn craft_host::Jobs>,
+    queue: JobQueue<(String, ReadKind), FontRead>,
+    waiting: HashSet<(String, ReadKind)>,
+    inline_frame: Option<u64>,
+}
+
 /// What a face's tables say about its family, as the class filter and similar fonts read them.
 #[derive(Clone, Debug)]
 pub(super) struct Traits {
@@ -117,6 +156,9 @@ pub struct FamilyInfos {
     scripts: Mutex<HashMap<String, Vec<FontScript>>>,
     shapes: Mutex<HashMap<String, Shape>>,
     samples: Mutex<HashMap<(String, String), String>>,
+    fallback_jobs: Arc<dyn craft_host::Jobs>,
+    reads: Mutex<Option<Reads>>,
+    read_revision: AtomicU64,
 }
 
 impl FamilyInfos {
@@ -143,7 +185,91 @@ impl FamilyInfos {
                 Some((family, Info { localized, format, styles: faces.len(), regular, weights, widths }))
             })
             .collect();
-        FamilyInfos { families, scripts: Mutex::new(HashMap::new()), shapes: Mutex::new(HashMap::new()), samples: Mutex::new(HashMap::new()) }
+        FamilyInfos {
+            families,
+            scripts: Mutex::new(HashMap::new()),
+            shapes: Mutex::new(HashMap::new()),
+            samples: Mutex::new(HashMap::new()),
+            fallback_jobs: craft_host::default_jobs(),
+            reads: Mutex::new(None),
+            read_revision: AtomicU64::new(0),
+        }
+    }
+
+    fn collect_reads(&self, cx: &Cx<'_, FontPicker<'_>>) {
+        let mut reads = lock(&self.reads);
+        let jobs = cx.env.host().map_or_else(|| Arc::clone(&self.fallback_jobs), |host| host.jobs_shared().clone());
+        if reads.as_ref().is_none_or(|reads| !Arc::ptr_eq(&reads.jobs, &jobs)) {
+            let ctx = cx.response.ctx.clone();
+            let wake = Wake::new(move || ctx.request_repaint());
+            *reads = Some(Reads {
+                jobs: Arc::clone(&jobs),
+                queue: JobQueue::new(jobs, wake, QueueOptions { name: "font-properties", ..QueueOptions::default() }),
+                waiting: HashSet::new(),
+                inline_frame: None,
+            });
+        }
+        let Some(reads) = reads.as_mut() else { return };
+        reads.queue.resume();
+        while let Some(finished) = reads.queue.try_recv() {
+            reads.waiting.remove(&finished.key);
+            let (family, _) = finished.key;
+            match finished.result {
+                FontRead::Shape(shape) => {
+                    lock(&self.shapes).insert(family, shape);
+                }
+                FontRead::Scripts(scripts) => {
+                    lock(&self.scripts).insert(family, scripts);
+                }
+            }
+            self.read_revision.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn queued_read(&self, catalog: &Arc<Catalog>, family: &str, kind: ReadKind) -> Option<FontRead> {
+        match kind {
+            ReadKind::Shape => {
+                if let Some(shape) = lock(&self.shapes).get(family).copied() {
+                    return Some(FontRead::Shape(shape));
+                }
+            }
+            ReadKind::Scripts => {
+                if let Some(scripts) = lock(&self.scripts).get(family).cloned() {
+                    return Some(FontRead::Scripts(scripts));
+                }
+            }
+        }
+        let Some(info) = self.families.get(family) else { return Some(kind.empty()) };
+        let mut reads = lock(&self.reads);
+        let reads = reads.as_mut()?;
+        let key = (family.to_owned(), kind);
+        if reads.waiting.insert(key.clone()) {
+            let (catalog, face) = (Arc::clone(catalog), info.regular.clone());
+            reads.queue.submit(
+                key,
+                Priority::BACKGROUND,
+                move |cancel| {
+                    if cancel.is_cancelled() { kind.empty() } else { kind.read(&catalog, &face) }
+                },
+            );
+        }
+        None
+    }
+
+    fn advance_reads(&self, cx: &Cx<'_, FontPicker<'_>>) {
+        if cfg!(target_arch = "wasm32")
+            && let Some(reads) = lock(&self.reads).as_mut()
+        {
+            let frame = cx.response.ctx.cumulative_frame_nr();
+            if reads.inline_frame != Some(frame) {
+                reads.inline_frame = Some(frame);
+                reads.queue.run_inline(1);
+            }
+        }
+    }
+
+    pub(super) fn read_revision(&self) -> u64 {
+        self.read_revision.load(Ordering::Relaxed)
     }
 
     /// What the family's regular face's outlines show, read on first use; nothing when the face can't be read.
@@ -157,7 +283,7 @@ impl FamilyInfos {
     }
 
     /// Whether the family has every property `properties` chooses.
-    pub(super) fn has(&self, catalog: &Catalog, family: &str, properties: &FontProperties) -> bool {
+    fn has(&self, family: &str, properties: &FontProperties, read: &impl Fn(&str, ReadKind) -> Option<FontRead>) -> bool {
         let Some(info) = self.families.get(family) else { return false };
         let held = |grades: &[bool; 3], chosen: Option<Grade>| chosen.is_none_or(|grade| grades[grade as usize]);
         if !held(&info.weights, properties.weight) || !held(&info.widths, properties.width) {
@@ -167,7 +293,7 @@ impl FamilyInfos {
         if height.is_none() && contrast.is_none() && case.is_none() && figures.is_none() {
             return true;
         }
-        let shape = self.shape(catalog, family);
+        let Some(FontRead::Shape(shape)) = read(family, ReadKind::Shape) else { return false };
         let fits = |chosen: Option<Grade>, read: Option<Grade>| chosen.is_none_or(|grade| read == Some(grade));
         fits(height, shape.height)
             && fits(contrast, shape.contrast)
@@ -570,6 +696,40 @@ pub(super) fn list(
     language: &Language<'_>,
     narrowed: bool,
 ) -> (Vec<FamilyRow>, bool) {
+    list_with_read(catalog, infos, listing, language, narrowed, &|family, kind| {
+        Some(match kind {
+            ReadKind::Shape => FontRead::Shape(infos.shape(catalog, family)),
+            ReadKind::Scripts => FontRead::Scripts(infos.scripts(catalog, family)),
+        })
+    })
+}
+
+pub(super) fn ui_list(
+    catalog: &Arc<Catalog>,
+    infos: &FamilyInfos,
+    listing: &Listing<'_>,
+    language: &Language<'_>,
+    cx: &Cx<'_, FontPicker<'_>>,
+) -> (Vec<FamilyRow>, bool, bool) {
+    infos.collect_reads(cx);
+    let pending = Cell::new(false);
+    let (rows, comparable) = list_with_read(catalog, infos, listing, language, true, &|family, kind| {
+        let read = infos.queued_read(catalog, family, kind);
+        pending.set(pending.get() || read.is_none());
+        read
+    });
+    infos.advance_reads(cx);
+    (rows, comparable, pending.get())
+}
+
+fn list_with_read(
+    catalog: &Arc<Catalog>,
+    infos: &FamilyInfos,
+    listing: &Listing<'_>,
+    language: &Language<'_>,
+    narrowed: bool,
+    read: &impl Fn(&str, ReadKind) -> Option<FontRead>,
+) -> (Vec<FamilyRow>, bool) {
     let default_filters = FontFilters::default();
     let filters = if narrowed { listing.filters } else { &default_filters };
     let settings = listing.settings;
@@ -618,10 +778,10 @@ pub(super) fn list(
         rows.retain(|r| r.class == Some(class));
     }
     if let Some(script) = filters.script {
-        rows.retain(|r| infos.scripts(catalog, &r.family).contains(&script));
+        rows.retain(|r| matches!(read(&r.family, ReadKind::Scripts), Some(FontRead::Scripts(scripts)) if scripts.contains(&script)));
     }
     if filters.properties.any() {
-        rows.retain(|r| infos.has(catalog, &r.family, &filters.properties));
+        rows.retain(|r| infos.has(&r.family, &filters.properties, read));
     }
     let on = active(listing.sets, filters);
     for set in &on {
