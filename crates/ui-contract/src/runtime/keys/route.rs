@@ -108,7 +108,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
                 let route = press_route(ctx, os, rec, press, driven.or(field_list));
                 apply_press(ctx, rec, press, route, &mut routed, &mut activated)
             };
-            stamp(&mut routed, Source { place: press.place, shift: press.mods.shift });
+            stamp(&mut routed, Source { place: press.place, shift: press.mods.shift, keypad_enter: press.keypad_enter });
         }
         // The focused stop reads its typing from egui's input when it is a text field (its egui text widget) or an app's
         // own widget; any other taker reads the text as an intent only, and the text leaves egui's input.
@@ -133,7 +133,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             for (to, intent) in route {
                 push(&mut routed, Some(to), intent, false);
             }
-            stamp(&mut routed, Source { place: typed.place, shift: false });
+            stamp(&mut routed, Source { place: typed.place, shift: false, keypad_enter: false });
         }
     } else {
         // With nothing focused, a plain Enter submits to the window, as an unfocused Escape cancels: a tool's pending
@@ -179,7 +179,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let mut clips = batch.clips.clone();
     clips.dedup_by_key(|(command, _)| *command);
     for (command, place) in clips {
-        let source = Some(Source { place, shift: false });
+        let source = Some(Source { place, shift: false, keypad_enter: false });
         routed.entry(focused).or_default().items.push(Item { intent: Intent::Edit(command), horizontal: false, source });
     }
     let queued = current(ctx, |stage| std::mem::take(&mut stage.queued_edits));
@@ -490,6 +490,7 @@ pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
         return true;
     }
     let press = Press {
+        keypad_enter: false,
         key: chord.key,
         mods: chord.mods,
         repeat: false,

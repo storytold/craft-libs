@@ -218,10 +218,10 @@ impl Intents {
             Intent::Move(NavMove::Start | NavMove::End | NavMove::PageUp | NavMove::PageDown, _) => keep != focus::KeepKeys::None,
             _ => true,
         };
-        let at = self.items.iter().position(|(item, taken)| !taken && kept(item) && editor_input_of(item, false).is_some())?;
+        let at = self.items.iter().position(|(item, taken)| !taken && kept(item) && editor_input_of(item, None).is_some())?;
         self.items[at].1 = true;
         let source = self.sources.get(at).copied().flatten();
-        editor_input_of(&self.items[at].0, source.is_some_and(|source| source.shift)).map(|input| (input, source.map(|source| source.place)))
+        editor_input_of(&self.items[at].0, source).map(|input| (input, source.map(|source| source.place)))
     }
 
     /// Takes the next `Intent::Access` request that `wanted` accepts.
@@ -246,14 +246,14 @@ impl Intents {
     }
 }
 
-/// The editor input of `intent`, from a press with Shift held when `shift`.
-fn editor_input_of(intent: &Intent, shift: bool) -> Option<EditorInput> {
+/// The editor input of an intent, retaining the position and modifiers of its source press.
+fn editor_input_of(intent: &Intent, source: Option<Source>) -> Option<EditorInput> {
     match intent {
         Intent::Text(text) => Some(EditorInput::Text(Arc::clone(text))),
         Intent::Move(mv, mods) => Some(EditorInput::Move(*mv, *mods)),
         Intent::Delete { forward, by, shift, .. } => Some(EditorInput::delete_with_shift(*forward, *by, *shift)),
         Intent::Edit(command) => Some(EditorInput::Edit(*command)),
-        Intent::Submit => Some(EditorInput::newline(shift)),
+        Intent::Submit => Some(EditorInput::newline_from_key(source.is_some_and(|s| s.shift), source.is_some_and(|s| s.keypad_enter))),
         Intent::Tab => Some(EditorInput::Tab),
         Intent::BackTab => Some(EditorInput::BackTab),
         Intent::Cancel => Some(EditorInput::Cancel),

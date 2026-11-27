@@ -136,7 +136,7 @@ impl Strip<'_> {
             batch.last_press = None;
         }
         match event {
-            KeyEvent::Press { key, input, repeat } => {
+            KeyEvent::Press { key, input, repeat, keypad_enter } => {
                 alt.other_key = true;
                 let repeat = repeat || input.physical.or(input.typed).is_some_and(|held| down.contains(&held));
                 let pushed = batch.presses.len();
@@ -157,6 +157,7 @@ impl Strip<'_> {
                 if let Some(press) = batch.presses.get_mut(pushed) {
                     press.release = input.physical.or(input.typed);
                     press.ime = arrival.ime_next;
+                    press.keypad_enter = keypad_enter;
                     press.held = down.iter().copied().filter(|key| Some(*key) != press.release).collect();
                     if kept {
                         press.in_egui = Some(batch.egui_presses);
@@ -412,6 +413,7 @@ impl Strip<'_> {
                 // it, so the dialog's focused control does not activate, and a focused field neither types its space nor
                 // keeps its momentary command from firing (production pans under a dialog whatever has focus).
                 batch.presses.push(Press {
+                    keypad_enter: false,
                     key,
                     mods,
                     repeat,
@@ -445,6 +447,7 @@ impl Strip<'_> {
             }
             PressUse::CtrlTab => {
                 batch.presses.push(Press {
+                    keypad_enter: false,
                     key,
                     mods,
                     repeat,
@@ -476,6 +479,7 @@ impl Strip<'_> {
             }
             PressUse::Press => {
                 batch.presses.push(Press {
+                    keypad_enter: false,
                     key,
                     mods,
                     repeat,

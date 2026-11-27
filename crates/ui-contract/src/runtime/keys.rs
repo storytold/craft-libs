@@ -69,6 +69,8 @@ pub(crate) struct NavKeys {
 }
 
 struct Press {
+    /// A logical Enter from the physical keypad position.
+    keypad_enter: bool,
     key: Key,
     mods: Mods,
     /// An auto-repeat of a key that is still held.
@@ -246,6 +248,8 @@ struct Source {
     place: usize,
     /// Shift was held at the press; never for a text.
     shift: bool,
+    /// The physical keypad Enter produced this submit.
+    keypad_enter: bool,
 }
 
 #[derive(Clone, Default)]
