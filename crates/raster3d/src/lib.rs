@@ -141,9 +141,8 @@ pub enum RenderError {
     #[error("the shadow texels do not fit 32-bit offsets")]
     TooManyShadowTexels,
     /// Rasterizing or rendering shadow maps would take more coverage or depth tests than
-    /// [`Limits::max_work`]. The count stops at the first triangle past the limit (for shadow
-    /// maps counted on several threads with the `parallel` feature, within one triangle per
-    /// thread), so `needed` is at least
+    /// [`Limits::max_work`]. Preparation stops at the first triangle past the limit. Fallback
+    /// and shadow-map work may be counted on several threads, within one triangle per thread, so `needed` is at least
     /// `limit + 1` and may be below the scene's total.
     #[error("the render needs at least {needed} tests, over the limit of {limit}")]
     TooMuchWork { needed: u64, limit: u64 },
@@ -163,7 +162,8 @@ pub enum RenderError {
     OutOfMemory,
 }
 
-/// Caps on sizes and work, checked before the target is allocated.
+/// Caps on sizes and work. Scene and size checks precede target allocation; fallback coverage
+/// work is counted while rendering.
 /// `#[non_exhaustive]`: start from [`Limits::default`] and set the fields you change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -176,8 +176,9 @@ pub struct Limits {
     pub max_vertices: u64,
     /// Most lights in a scene. Default 1024.
     pub max_lights: usize,
-    /// Most coverage tests of the visibility and transparent passes: the pixels of every clipped
-    /// triangle's bounding box, plus one per clipped triangle. Default 2^31.
+    /// Most coverage tests of the visibility and transparent passes, plus tests under discarded
+    /// opaque pixels. Preparation counts every clipped triangle's bounding-box pixels plus one
+    /// per clipped triangle. Default 2^31.
     pub max_work: u64,
 }
 

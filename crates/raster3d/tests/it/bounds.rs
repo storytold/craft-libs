@@ -1083,6 +1083,42 @@ fn receivers_far_off_a_shadow_map_with_a_huge_focal_are_unshadowed() {
     }
 }
 
+#[test]
+fn overflowing_footprints_leave_empty_shadow_maps_unshadowed() {
+    let mut s = quad_scene(16, 16, &[([4.0, 4.0, 12.0, 12.0], 100.0, WHITE), ([0.0, 0.0, 16.0, 16.0], 500.0, WHITE)]);
+    s.materials[0] = Material { casts_shadows: true, visible: false, ..Material::default() };
+    s.materials[1] = Material { double_sided: true, ..Material::default() };
+    s.opaque_count = 0;
+    s.lights = vec![shadow_light(0)];
+    try_shadow_maps(&mut s, false, &Limits::default()).unwrap();
+    let mut unshadowed = s.clone();
+    unshadowed.materials[1].receives_shadows = false;
+    let unshadowed = bits4(&try_render(&unshadowed, &Limits::default()).unwrap().color);
+    s.shadow_texels.fill(f32::INFINITY);
+    s.shadows[0].focal = f32::from_bits(1 << 19);
+    assert!(s.shadows[0].focal > 0.0 && s.shadows[0].focal.recip().is_infinite());
+    assert!(s.shadows[0].ortho);
+    assert_eq!(bits4(&try_render(&s, &Limits::default()).unwrap().color), unshadowed);
+}
+
+#[test]
+fn overflowing_coverage_work_in_the_fallback_is_refused() {
+    eprintln!("Rayon workers: {}", rayon::current_num_threads());
+    for height in [32, 4] {
+        let rect = [0.0, 0.0, 4.0, height as f32];
+        let mut s = quad_scene(4, height, &[(rect, 100.0, WHITE), (rect, 50.0, WHITE)]);
+        s.materials[1].alpha_mode = 1;
+        s.materials[1].base[3] = 0.0;
+        let setup = 4 * (4 * u64::from(height) + 1);
+        assert_eq!(try_render(&s, &limits(|l| l.max_work = u64::MAX)).unwrap().color[0], WHITE);
+        assert!(
+            matches!(try_render(&s, &limits(|l| l.max_work = setup)), Err(RenderError::TooMuchWork { limit, needed }) if limit == setup && needed > setup)
+        );
+        s.materials[1].base[3] = 1.0;
+        assert!(try_render(&s, &limits(|l| l.max_work = setup)).is_ok());
+    }
+}
+
 /// A light of `kind` at the origin along +z that asks for a shadow map.
 fn shadow_light(kind: u32) -> Light {
     Light {

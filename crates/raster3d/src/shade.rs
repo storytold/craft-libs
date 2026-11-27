@@ -385,29 +385,38 @@ fn shadow_factor(m: &ShadowMap, cube: Option<&[ShadowMap]>, texels: &[f32], p: [
     let (iz, iq) = (1.0 / z, 1.0 / (m.focal * z));
     let wide = z.is_finite() && !(m.focal * z).is_finite();
     let open = |xi: i64, yi: i64| -> f32 {
-        let g = tx * (xi as f32 + 0.5 - u) + ty * (yi as f32 + 0.5 - v);
         let outside = xi < 0 || yi < 0 || xi >= size || yi >= size;
-        let lit = if m.ortho {
-            z - g * texel <= at(xi, yi) + bias
-        } else {
-            // Past a cube face's edge, the adjacent face's depth along the texel's ray is converted
-            // to this face's depth, where the receiver plane and the bias are.
-            let d = match cube {
-                Some(faces) if outside => {
-                    let (d, k) = cube_texel(m, faces, texels, xi, yi);
-                    d / k
-                }
-                _ => at(xi, yi),
-            };
-            if wide {
-                let z = f64::from(z);
-                let inv = 1.0 / z + f64::from(g) / (f64::from(m.focal) * z);
-                inv <= 0.0 || inv * (f64::from(d) + f64::from(bias)) >= 1.0
-            } else {
-                let inv = iz + g * iq;
-                inv <= 0.0 || inv * (d + bias) >= 1.0
+        let t = match cube {
+            Some(faces) if !m.ortho && outside => {
+                let (d, k) = cube_texel(m, faces, texels, xi, yi);
+                d / k
             }
+            _ => at(xi, yi),
         };
+        if t == f32::INFINITY {
+            return 1.0;
+        }
+        let s = t + bias;
+        let g = tx * (xi as f32 + 0.5 - u) + ty * (yi as f32 + 0.5 - v);
+        let fast = if m.ortho {
+            (s.is_finite() && g.is_finite() && texel.is_finite()).then_some(z - g * texel <= s)
+        } else {
+            let inv = iz + g * iq;
+            (!wide && s.is_finite() && inv.is_finite()).then_some(inv <= 0.0 || inv * s >= 1.0)
+        };
+        let lit = fast.unwrap_or_else(|| {
+            let (z, focal) = (f64::from(z), f64::from(m.focal));
+            let texel = if m.ortho { 1.0 / focal } else { z.abs() / focal };
+            let bias = f64::from(m.bias) * texel * (1.0 + 3.0 * (1.0 - f64::from(n_l.clamp(0.0, 1.0))));
+            let s = f64::from(t) + bias;
+            let g = f64::from(tx) * (xi as f64 + 0.5 - f64::from(u)) + f64::from(ty) * (yi as f64 + 0.5 - f64::from(v));
+            if m.ortho {
+                z - g * texel <= s
+            } else {
+                let inv = 1.0 / z + g / (focal * z);
+                inv <= 0.0 || inv * s >= 1.0
+            }
+        });
         if lit { 1.0 } else { 0.0 }
     };
     // The penumbra in output pixels, converted through the receiver's texel footprint, and at
@@ -883,6 +892,20 @@ mod tests {
         // A receiver inside the +x face is shadowed as before.
         let inside = light_shadow(&s, &s.lights[0], [100.0, 0.0, 60.0], [-1.0, 0.0, 0.0], 1.0);
         assert!(inside < 0.01, "{inside}");
+    }
+
+    #[test]
+    fn overflowing_footprints_preserve_populated_shadow_comparisons() {
+        let view = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        for ortho in [true, false] {
+            for depth in [0.5, 2.0] {
+                let m = ShadowMap { view, focal: 1.0, ortho, size: 8, offset: 0, bias: 0.0, radius: 0.0 };
+                let texels = vec![depth; 64];
+                let expected = shadow_factor(&m, None, &texels, [0.0, 0.0, 1.0], [0.0, 0.0, -1.0], 1.0);
+                let wide = ShadowMap { focal: f32::from_bits(1 << 19), ..m };
+                assert_eq!(shadow_factor(&wide, None, &texels, [0.0, 0.0, 1.0], [0.0, 0.0, -1.0], 1.0), expected, "ortho {ortho}, depth {depth}");
+            }
+        }
     }
 
     #[test]
