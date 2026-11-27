@@ -2,9 +2,8 @@
 //! bar gives way from its end, a status bar's trailing group keeps its width, and a row of labelled controls in it
 //! lays out under right-to-left.
 
-use craft_behavior::CanvasView;
 use craft_behavior::IconId;
-use craft_behavior::kurbo::{Point, Size};
+use craft_behavior::kurbo::Size;
 use craft_theme::variant::Tone;
 use craft_ui::bars::{Bar, BarKind, BreadcrumbBar, StatusItem, StatusMessage, StatusProgress, StatusReadout, StatusValues, path_crumbs};
 use craft_ui::buttons::{Button, IconButton, Link};
@@ -382,14 +381,12 @@ fn readout_texts(width: f32) -> Vec<(String, bool)> {
     let mut fixture = Fixture::new(|ui| {
         let mut values = StatusValues::default();
         values.document_sizes = Some((26_100_000, 31_400_000));
-        let canvas = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(800.0, 600.0));
-        let view = CanvasView::new(canvas, Point::new(1000.0, 750.0), 0.6667);
         Bar::new("Status", BarKind::Status)
             .trailing(|ui, _| {
                 Link::new("CPU Rendering").tone(Tone::Warn).show(ui);
             })
             .show(ui, |ui, _| {
-                StatusReadout::new(Bind::given(view), Size::new(2000.0, 1500.0), StatusItem::DocumentSizes, &values).show(ui);
+                StatusReadout::new(Bind::given(0.6667), Size::new(2000.0, 1500.0), StatusItem::DocumentSizes, &values).show(ui);
                 StatusMessage::new("Exported 14 layers to the folder Documents/Exports/2026").show(ui);
             });
     });
@@ -410,11 +407,10 @@ fn a_narrow_bar_gives_way_from_its_end_so_the_message_elides_before_the_readout(
 fn status_zoom(zoom: f64, comma: bool) -> Fixture {
     let mut fixture = Fixture::new(move |ui| {
         let size = Size::new(2000.0, 1500.0);
-        let canvas = Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(800.0, 600.0));
         let scale = craft_ui::runtime::env::Env::of(ui).scale.0;
-        let view = CanvasView::new(canvas, Point::new(1000.0, 750.0), zoom / f64::from(scale));
+        let zoom = zoom / f64::from(scale);
         Bar::new("Status", BarKind::Status).show(ui, |ui, _| {
-            StatusReadout::new(Bind::given(view), size, StatusItem::DocumentSizes, &StatusValues::default()).show(ui);
+            StatusReadout::new(Bind::given(zoom), size, StatusItem::DocumentSizes, &StatusValues::default()).show(ui);
         });
     });
     if comma {
@@ -452,7 +448,7 @@ fn the_status_zoom_shows_the_complete_dash_without_a_view() {
         let mut values = StatusValues::default();
         values.document_sizes = Some((1024, 4096));
         Bar::new("Status", BarKind::Status).show(ui, |ui, _| {
-            StatusReadout::new(Bind::given(Mixed::<CanvasView>::Mixed), Size::new(2000.0, 1500.0), StatusItem::DocumentSizes, &values).show(ui);
+            StatusReadout::new(Bind::given(Mixed::<f64>::Mixed), Size::new(2000.0, 1500.0), StatusItem::DocumentSizes, &values).show(ui);
         });
     });
     fixture.scale(Scale::new(1.25)).room(Vec2::new(600.0, 80.0)).settle();
@@ -472,34 +468,34 @@ fn the_status_zoom_shows_the_complete_dash_without_a_view() {
 fn the_status_zoom_still_scrubs_and_applies_edited_text() {
     use egui::{Event, Key, Modifiers};
 
-    let view = Rc::new(Cell::new(CanvasView::new(Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(800.0, 600.0)), Point::ZERO, 1.0)));
-    let shown = view.clone();
+    let held = Rc::new(Cell::new(1.0_f64));
+    let shown = held.clone();
     let committed = Rc::new(Cell::new(None));
     let seen = committed.clone();
     let mut fixture = Fixture::new(move |ui| {
-        let mut view = shown.get();
+        let mut value = shown.get();
         Bar::new("Status", BarKind::Status).show(ui, |ui, _| {
             let output =
-                StatusReadout::new(Bind::bound(&mut view), Size::new(2000.0, 1500.0), StatusItem::DocumentSizes, &StatusValues::default()).show(ui);
-            if let Some(view) = output.view.committed() {
-                seen.set(Some(view.zoom));
+                StatusReadout::new(Bind::bound(&mut value), Size::new(2000.0, 1500.0), StatusItem::DocumentSizes, &StatusValues::default()).show(ui);
+            if let Some(zoom) = output.zoom_edits.committed() {
+                seen.set(Some(*zoom));
             }
         });
-        shown.set(view);
+        shown.set(value);
     });
     fixture.room(Vec2::new(600.0, 80.0)).settle();
     let zoom = fixture.by_label("Zoom").expect("the status zoom field");
     fixture.drag(&zoom, Vec2::new(12.0, 0.0)).settle();
-    let scrubbed = view.get().zoom;
+    let scrubbed = held.get();
     assert!(scrubbed > 1.0, "the status bar still scrubs the zoom to the right");
 
     fixture.click(&zoom).settle();
     fixture.key(Key::A, Modifiers::COMMAND);
     fixture.frame(vec![Event::Paste("079.69%".to_owned())]).settle();
-    let before_tab = view.get().zoom;
+    let before_tab = held.get();
     committed.set(None);
     fixture.key(Key::Tab, Modifiers::NONE).settle();
-    assert_eq!(view.get().zoom, before_tab, "Tab does not change the current zoom");
+    assert_eq!(held.get(), before_tab, "Tab does not change the current zoom");
     assert_eq!(committed.get(), None, "Tab does not commit the draft");
     let zoom = fixture.by_label("Zoom").expect("the status zoom field");
     assert_eq!(fixture.tree().value_of(zoom.node), Some("79.69%"), "Tab rewrites the draft with its suffix");

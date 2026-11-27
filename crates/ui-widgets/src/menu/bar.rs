@@ -45,6 +45,7 @@ use craft_host::target::MenuPlacement;
 use craft_keymap::mnemonic;
 use craft_theme::Flags;
 use egui::{Context, Pos2, Rect, Response, Ui, Vec2};
+use std::sync::Arc;
 
 const TITLE: PartKey = PartKey::new("title");
 const MORE: PartKey = PartKey::new("more");
@@ -210,7 +211,7 @@ type TitleText = (String, Option<(char, Option<usize>)>);
 pub struct MenuTitle<'a> {
     label: Label,
     body: Box<dyn FnMut(&mut Ui) + 'a>,
-    holds: Vec<CommandRef>,
+    holds: Arc<[CommandRef]>,
     /// The letter that opens the menu in place of the bar's own pick.
     mnemonic: Option<char>,
 }
@@ -218,7 +219,7 @@ pub struct MenuTitle<'a> {
 impl<'a> MenuTitle<'a> {
     /// A menu titled `label` (a `&` marks the mnemonic) whose rows `body` shows.
     pub fn new(label: impl Into<Label>, body: impl FnMut(&mut Ui) + 'a) -> Self {
-        MenuTitle { label: label.into(), body: Box::new(body), holds: Vec::new(), mnemonic: None }
+        MenuTitle { label: label.into(), body: Box::new(body), holds: Arc::default(), mnemonic: None }
     }
 
     /// The letter that opens the menu, in place of the bar's own pick. A letter the title lacks still opens it, with
@@ -231,8 +232,8 @@ impl<'a> MenuTitle<'a> {
 
     /// Records the title's rect for `commands` with `commands::holds` in every pass it is shown.
     #[must_use]
-    pub fn holds(mut self, commands: Vec<CommandRef>) -> Self {
-        self.holds = commands;
+    pub fn holds(mut self, commands: impl Into<Arc<[CommandRef]>>) -> Self {
+        self.holds = commands.into();
         self
     }
 }
@@ -317,12 +318,12 @@ struct BarFact {
 /// Whether a menu of a bar is open. The app leaves the keys to it meanwhile: its shortcuts wait until the menu
 /// closes.
 pub fn is_open(ctx: &Context) -> bool {
-    Facts::<BarFact>::of_last_pass(ctx).iter().any(|fact| fact.open)
+    Facts::<BarFact>::with_last_pass(ctx, |facts| facts.iter().any(|fact| fact.open))
 }
 
 /// Whether the keyboard is on a menu bar's titles.
 pub fn is_focused(ctx: &Context) -> bool {
-    Facts::<BarFact>::of_last_pass(ctx).iter().any(|fact| fact.focused)
+    Facts::<BarFact>::with_last_pass(ctx, |facts| facts.iter().any(|fact| fact.focused))
 }
 
 /// The titles a bar shows in a given room.
@@ -751,7 +752,8 @@ impl Component for MenuBar<'_> {
             };
             let open = cx.core.toggles.iter().any(|toggle| toggle.part == part && toggle.open);
             // Under the pointer a title is the active row, as it is while its menu is open or the keyboard is on it.
-            let lit = open || cx.hover_pos(part).is_some() || cx.part_state(part).flags.contains(Flags::FOCUS_VISIBLE);
+            let lit =
+                open || cx.part_if_declared(part).is_some_and(|result| result.hovered) || cx.part_state(part).flags.contains(Flags::FOCUS_VISIBLE);
             let mnemonic = match slot {
                 Open::Title(at) if underlined => texts[at].1.and_then(|(_, index)| index),
                 _ => None,

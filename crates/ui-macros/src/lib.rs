@@ -105,9 +105,10 @@ pub fn derive_plain_data(input: TokenStream) -> TokenStream {
 /// `#[memo_props(address = "why")]` and feeds where it points. A field another field of the same variant stands for (a
 /// closure a generation counter covers) carries `#[memo_props(covered_by = "<field>", reason = "why")]` and feeds
 /// nothing; the named field must exist and feed the key itself. A type parameter is bound by `MemoProps`, except one
-/// marked `#[memo_props(stateless)]`: the type of a callback held as `Stateless<E>`, which no fn item or closure
-/// implements `MemoProps` for, is bound by `'static` only (`struct Bar<#[memo_props(stateless)] E> { english:
-/// Stateless<E> }`). A type that is a handle to state written during the pass, or a context rebuilt each pass, carries
+/// that only `covered_by` fields name, which feeds nothing and takes no bound (the app state `&mut S` a shell slot's view
+/// holds), one that only `hash` fields name, bound by `Hash + Sync`, and one marked `#[memo_props(stateless)]`: the type
+/// of a callback held as `Stateless<E>`, which no fn item or closure implements `MemoProps` for, is bound by `'static`
+/// only (`struct Bar<#[memo_props(stateless)] E> { english: Stateless<E> }`). A type that is a handle to state written during the pass, or a context rebuilt each pass, carries
 /// `#[memo_props(every_pass = "why")]`: it feeds no field, and a view whose key holds it runs in every pass.
 #[proc_macro_derive(MemoProps, attributes(memo_props))]
 pub fn derive_memo_props(input: TokenStream) -> TokenStream {

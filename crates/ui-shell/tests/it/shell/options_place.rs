@@ -34,10 +34,14 @@ impl Window {
             let mut grip = Rect::NOTHING;
             let out = AppShell::new(WindowKey::main())
                 .options_place(Bind::bound(&mut *place))
-                .options_bar(true, |ui, _, _: &mut ()| {
-                    grip = BarGrip::new().show(ui).rect;
-                    Text::new("Options").show(ui);
-                })
+                .options_bar(
+                    true,
+                    |_| None,
+                    |ui, _, _: &mut ()| {
+                        grip = BarGrip::new().show(ui).rect;
+                        Text::new("Options").show(ui);
+                    },
+                )
                 .body(|_, _, _| {})
                 .show(ui, &mut ());
             let options = out.regions.slots.iter().find(|(key, _)| *key == "options").map(|(_, rect)| *rect);
