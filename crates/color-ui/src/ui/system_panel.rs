@@ -71,6 +71,11 @@ impl Shown {
         imp::poll(self.0)
     }
 
+    /// The colour the panel shows now (opaque), before any button is pressed.
+    pub(crate) fn color(&self) -> Option<Srgba> {
+        imp::color(self.0)
+    }
+
     /// Shows `color` in the panel: an edit made while it is up (automation, a screen pick).
     pub(crate) fn set(&self, color: Srgba) {
         imp::set(self.0, color);
@@ -136,11 +141,12 @@ mod imp {
         // The platform's order: Cancel, then OK at the end edge.
         let cancel = button(cancel, "\u{1b}", MARGIN);
         let ok = button(ok, "\r", MARGIN + BUTTON + GAP);
+        // The session is recorded first, so the colour-change notification of `setColor` finds the panel shown.
+        PANEL.with_borrow_mut(|shown| *shown = Some(Panel { token, panel: panel.clone(), ok, cancel }));
         panel.setShowsAlpha(false);
         panel.setColor(&ns_color(color));
         panel.setAccessoryView(Some(&accessory));
         panel.makeKeyAndOrderFront(None);
-        PANEL.with_borrow_mut(|shown| *shown = Some(Panel { token, panel, ok, cancel }));
         true
     }
 
@@ -160,6 +166,10 @@ mod imp {
             }
             (cancel.state() == NSControlStateValueOn || !panel.isVisible()).then_some(Answer::Cancel)
         })
+    }
+
+    pub(super) fn color(token: u64) -> Option<Srgba> {
+        PANEL.with_borrow(|shown| shown.as_ref().filter(|p| p.token == token).map(|p| srgb(&p.panel.color())))
     }
 
     pub(super) fn set(token: u64, color: Srgba) {
@@ -204,6 +214,10 @@ mod imp {
     }
 
     pub(super) fn poll(_: u64) -> Option<Answer> {
+        None
+    }
+
+    pub(super) fn color(_: u64) -> Option<Srgba> {
         None
     }
 

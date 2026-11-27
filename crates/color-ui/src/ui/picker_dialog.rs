@@ -577,6 +577,11 @@ impl StackDialog for ColorPickerDialog {
     /// snap) has run, the memory is stored, and the colour is the current one.
     fn confirm(&mut self, ctx: &Context) -> Option<ColorPickerResult> {
         self.start_headless(ctx);
+        // With the system panel up, OK there would answer the colour it shows (the dialog keeps its alpha).
+        if let Some(color) = self.system.as_ref().and_then(Shown::color) {
+            let a = self.current.or(self.opening).map_or(1.0, |picked| picked.color.a);
+            self.current = Some(PickedColor { color: Srgba { a, ..color }, model: None });
+        }
         self.accept(ctx)
     }
 
