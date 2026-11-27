@@ -76,7 +76,9 @@ static ROUTE: Mutex<Option<Handler>> = Mutex::new(None);
 static HANDLER: OnceLock<()> = OnceLock::new();
 
 /// The items whose shortcut is a text field's own (⌘Z, ⌘C, …), by id: chosen while a native panel
-/// has the keys, they act on its field ([`panel_takes_edit`]). Filled as the items are built.
+/// has the keys, they act on its field ([`panel_takes_edit`]). Published from the installed
+/// entries ([`publish_field_edits`]) only once a build has succeeded, so a failed rebuild, which
+/// keeps the old menu, keeps its routing too.
 static FIELD_EDITS: Mutex<Option<HashMap<String, FieldEdit>>> = Mutex::new(None);
 
 thread_local! {
@@ -216,6 +218,8 @@ struct Entry {
     handle: Handle,
     label: String,
     enabled: bool,
+    /// The text-field command the item's shortcut stands for in a native panel, if any.
+    edit: Option<FieldEdit>,
 }
 
 /// The native items by muda id.
@@ -255,7 +259,6 @@ impl Installed {
     /// the menus stay as they were (never crash for a menu) and this returns false.
     fn build(&mut self, bar: &Bar) -> bool {
         let built = catch_unwind(AssertUnwindSafe(|| -> muda::Result<(muda::Menu, Entries, Option<WindowMenu>)> {
-            *lock(&FIELD_EDITS) = Some(HashMap::new());
             let mut entries = Entries::new();
             let mut window = None;
             let menu = muda::Menu::new();
@@ -288,6 +291,7 @@ impl Installed {
             Ok(Ok((menu, entries, window))) => {
                 self.menu = Some(menu);
                 self.entries = entries;
+                publish_field_edits(&self.entries);
                 self.window = window;
                 self.structure = bar.structure;
                 true
@@ -337,6 +341,7 @@ impl Installed {
         match replaced {
             Ok(Ok(window)) => {
                 self.entries = entries;
+                publish_field_edits(&self.entries);
                 self.window = Some(window);
                 true
             }
@@ -440,14 +445,18 @@ fn append(entries: &mut Entries, sub: &Submenu, nodes: &[Node]) -> muda::Result<
                         Handle::Plain(h)
                     }
                 };
-                if let Some(edit) = it.shortcut.as_ref().and_then(field_edit) {
-                    lock(&FIELD_EDITS).get_or_insert_with(HashMap::new).insert(it.id.clone(), edit);
-                }
-                entries.insert(it.id.clone(), Entry { handle, label: it.label.clone(), enabled: it.enabled });
+                let edit = it.shortcut.as_ref().and_then(field_edit);
+                entries.insert(it.id.clone(), Entry { handle, label: it.label.clone(), enabled: it.enabled, edit });
             }
         }
     }
     Ok(())
+}
+
+/// Make the installed entries' text-field shortcuts the ones [`handle_event`] routes to a panel.
+fn publish_field_edits(entries: &Entries) {
+    let edits = entries.iter().filter_map(|(id, e)| Some((id.clone(), e.edit?))).collect();
+    *lock(&FIELD_EDITS) = Some(edits);
 }
 
 /// The text-editing commands a native panel's text field takes from the menu bar.
