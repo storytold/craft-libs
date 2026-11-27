@@ -373,10 +373,12 @@ fn recent_cells(recent: &[String]) -> Vec<GlyphCell> {
     seen.into_iter().map(GlyphCell::Char).collect()
 }
 
-/// The cells of the shown set: the recents, or the source's cells of the category.
+/// The cells of the shown set: the recents, or the source's cells of the category, read again when the source's
+/// `revision` (read once for the pass) is not the one they were read at.
 fn category_cells(
     cache: &mut CellsCache,
     source: &dyn GlyphSource,
+    revision: u64,
     family: &str,
     style: &str,
     category: &str,
@@ -386,7 +388,6 @@ fn category_cells(
         return Arc::new(recent_cells(recent));
     }
     let key = (family.to_owned(), style.to_owned(), category.to_owned());
-    let revision = source.revision();
     if cache.key != key || cache.revision != revision {
         *cache = CellsCache { key, revision, cells: Arc::new(source.cells(family, style, category)) };
     }
@@ -610,8 +611,10 @@ impl<'a> GlyphsPanel<'a> {
                 }
             }
 
-            // The grid.
-            let cells = category_cells(cx.memory::<CellsCache>(), source, face.0, face.1, &state.category, &state.recent);
+            // The grid. One revision read serves the pass: a menu cell is stamped with the revision its list was read
+            // at, so a source that moves on mid-pass cannot give an old glyph id the new revision.
+            let revision = source.revision();
+            let cells = category_cells(cx.memory::<CellsCache>(), source, revision, face.0, face.1, &state.category, &state.recent);
             let index_of = |cell: GlyphCell| cells.iter().position(|c| *c == cell);
             let mut marked = cx.memory::<Marked>().clone();
             if let Some(at) = marked_cell.and_then(index_of)
@@ -654,7 +657,6 @@ impl<'a> GlyphsPanel<'a> {
                         CollectionEvent::ContextMenu(request) => cells.get(request.key).copied(),
                         _ => None,
                     });
-                    let revision = source.revision();
                     let mut held = std::mem::take(cx.memory::<HeldMenu>());
                     if let Some(cell) = clicked {
                         held = HeldMenu(Some(MenuCell { cell, family: face.0.to_owned(), style: face.1.to_owned(), revision }));
