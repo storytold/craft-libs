@@ -15,7 +15,7 @@ use craft_host::Host;
 use craft_host::target::Caps;
 use craft_settings::Remembered;
 use craft_theme::variant::Tone;
-use craft_theme::{ColorModel, DefaultOn, RgbModel, Srgba, builtin_models};
+use craft_theme::{ChannelPrecision, ColorModel, DefaultOn, RgbModel, Srgba, builtin_models};
 use craft_ui::choice::{SwatchArrangement, SwatchSpacing, SwatchTable};
 use craft_ui::contract::{
     Bind, CanvasGesture, CollectionEvent, Entry, FooterSlot, Gap, Sampler as _, Show as _, ShowCollection as _, ShowContainer as _,
@@ -510,6 +510,21 @@ impl ColorPickerDialog {
     /// working space shows its own numbers, and [`kept`](Self::kept) values in it stay as given.
     #[must_use]
     pub fn working_rgb(mut self, model: impl ColorModel + Send + Sync + 'static) -> ColorPickerDialog {
+        if model.channel_precision() == ChannelPrecision::Float32 {
+            for held in [&mut self.opening, &mut self.current] {
+                *held = held.filter(|picked| [picked.color.r, picked.color.g, picked.color.b, picked.color.a].iter().all(|v| v.is_finite())).map(
+                    |mut picked| {
+                        let color = picked.color;
+                        let constrained = model.to_srgb(&model.from_srgb(color).values).with_alpha(color.a);
+                        if color != constrained {
+                            picked.model = None;
+                        }
+                        picked.color = constrained;
+                        picked
+                    },
+                );
+            }
+        }
         self.working_rgb = Some(Box::new(model));
         self
     }
@@ -569,8 +584,23 @@ impl ColorPickerDialog {
 
     /// Sets the colour as an edit would, for automation, scripts and the host's screen pick: the fields show `picked`'s
     /// model values when it has them, and the colour is what OK answers. The compare swatch keeps the opening colour.
-    pub fn set_color(&mut self, picked: PickedColor) {
+    pub fn set_color(&mut self, mut picked: PickedColor) {
+        if let Some(model) = self.exact_rgb() {
+            let color = picked.color;
+            if ![color.r, color.g, color.b, color.a].iter().all(|v| v.is_finite()) {
+                return;
+            }
+            let constrained = model.to_srgb(&model.from_srgb(color).values).with_alpha(color.a);
+            if constrained != color {
+                picked.model = None;
+            }
+            picked.color = constrained;
+        }
         self.current = Some(picked);
+    }
+
+    fn exact_rgb(&self) -> Option<&dyn ColorModel> {
+        self.working_rgb.as_deref().filter(|model| model.channel_precision() == ChannelPrecision::Float32).map(|model| model as &dyn ColorModel)
     }
 
     /// The colour Add to Swatches was pressed for, once; `None` otherwise.
@@ -667,11 +697,13 @@ impl StackDialog for ColorPickerDialog {
         self.instance
     }
 
-    /// `color` (`#rrggbb`, null when there is none yet), and the memory's own `mode`, `webColors`, `swatches`, `library`, `tab`
+    /// `color` (`#rrggbb`, or an RGB array with an exact-float working model; null when empty), and the memory's `mode`, `webColors`, `swatches`, `library`, `tab`
     /// and `model`.
     fn json_fields(&self) -> Option<serde_json::Value> {
         let mut fields = serde_fields(&self.memory)?;
-        let color = self.current.map_or(serde_json::Value::Null, |picked| picked.color.to_hex().into());
+        let color = self.current.map_or(serde_json::Value::Null, |picked| {
+            if self.exact_rgb().is_some() { serde_json::json!(picked.color.to_rgb_array()) } else { picked.color.to_hex().into() }
+        });
         fields.as_object_mut()?.insert("color".to_owned(), color);
         Some(fields)
     }
@@ -682,8 +714,16 @@ impl StackDialog for ColorPickerDialog {
         if field != "color" {
             return set_serde_field(&mut self.memory, field, value);
         }
-        let parsed = value.as_str().and_then(Srgba::from_hex);
-        let color = parsed.ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+        let exact = self.exact_rgb().is_some();
+        let parsed = value.as_str().and_then(Srgba::from_hex).or_else(|| {
+            let values = value.as_array().filter(|v| exact && v.len() == 3)?;
+            let channel = |i: usize| values[i].as_f64().map(|v| v as f32).filter(|v| v.is_finite());
+            Some(Srgba::rgb(channel(0)?, channel(1)?, channel(2)?))
+        });
+        let mut color = parsed.ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+        if exact {
+            color.a = self.current.map_or(1.0, |current| current.color.a);
+        }
         self.set_color(PickedColor { color, model: None });
         Ok(())
     }
@@ -819,7 +859,11 @@ impl StackDialog for ColorPickerDialog {
                     *pending_screen = Some(gesture);
                 }
             });
-        self.current = held.same().copied();
+        if let Some(picked) = held.same().copied() {
+            self.set_color(picked);
+        } else {
+            self.current = None;
+        }
 
         let (picked, closed) = (shown.output.picked, shown.output.closed);
         if picked.is_some() && picked == toggle_at {

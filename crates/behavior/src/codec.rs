@@ -170,6 +170,7 @@ pub struct NumberCodec {
     /// A lone percentage is that share of the start value ([`NumberCodec::share_of_start`]).
     share: bool,
     signed_zoom: bool,
+    round_trip_f32: bool,
 }
 
 impl fmt::Debug for NumberCodec {
@@ -181,6 +182,7 @@ impl fmt::Debug for NumberCodec {
             .field("zoom", &self.zoom)
             .field("share", &self.share)
             .field("signed_zoom", &self.signed_zoom)
+            .field("round_trip_f32", &self.round_trip_f32)
             .field("custom", &self.custom.is_some())
             .finish()
     }
@@ -199,6 +201,7 @@ impl PartialEq for NumberCodec {
             && self.zoom == other.zoom
             && self.share == other.share
             && self.signed_zoom == other.signed_zoom
+            && self.round_trip_f32 == other.round_trip_f32
             && same_custom
     }
 }
@@ -233,7 +236,14 @@ const NUMBER_SAMPLE: &str = "0000.00";
 impl NumberCodec {
     /// A codec reading with `reader` and writing at most `decimals` decimal places.
     pub fn new(reader: Reader, decimals: usize) -> Self {
-        NumberCodec { reader, decimals, fixed: false, custom: None, zoom: false, share: false, signed_zoom: false }
+        NumberCodec { reader, decimals, fixed: false, custom: None, zoom: false, share: false, signed_zoom: false, round_trip_f32: false }
+    }
+
+    /// Writes the shortest plain decimal that round trips a finite f32. Parsing rejects values
+    /// outside finite f32 and returns their f32 value, without decimal-place rounding.
+    pub fn round_trip_f32(mut self, on: bool) -> Self {
+        self.round_trip_f32 = on;
+        self
     }
 
     /// The same codec writing every decimal place, trailing zeros included ("1.00"), as a field of a quantity shown
@@ -340,6 +350,10 @@ impl Codec for NumberCodec {
 
     fn format(&self, v: &Option<f64>) -> String {
         let Some(number) = v else { return String::new() };
+        if self.round_trip_f32 {
+            let number = *number as f32;
+            return if number.is_finite() { number.to_string().replace('.', &self.reader.decimal_separator().to_string()) } else { String::new() };
+        }
         let written = format!("{number:.*}", self.decimals);
         // A value that rounds to zero at these decimals carries no sign.
         let fixed = match written.strip_prefix('-') {
@@ -363,24 +377,38 @@ impl Codec for NumberCodec {
     /// The note's unit is the tag of the unit the text named; `None` when it named no tagged unit or a custom parser
     /// read it. With zoom typing the note's `cut` says a second decimal separator cut the text.
     fn parse_tagged(&self, text: &str, start: &Option<f64>) -> Result<(Option<f64>, ParseNote), NotAValue> {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Ok((None, ParseNote::default()));
-        }
-        if self.zoom {
-            return self.read_zoom(trimmed).map(|(number, note)| (Some(number), note));
-        }
-        if self.share
-            && let Some(share) = self.reader.share(trimmed)
-        {
-            return start.map(|start| (Some(start * share), ParseNote::default())).ok_or(NotAValue);
-        }
-        match self.reader.read_tagged(text, *start) {
-            Ok((number, tag)) => Ok((Some(number), ParseNote { unit: tag, ..ParseNote::default() })),
-            Err(rejected) => {
-                self.custom.as_ref().and_then(|parse| parse(text.trim())).map(|number| (Some(number), ParseNote::default())).ok_or(rejected)
+        let read = || {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return Ok((None, ParseNote::default()));
             }
-        }
+            if self.zoom {
+                return self.read_zoom(trimmed).map(|(number, note)| (Some(number), note));
+            }
+            if self.share
+                && let Some(share) = self.reader.share(trimmed)
+            {
+                return start.map(|start| (Some(start * share), ParseNote::default())).ok_or(NotAValue);
+            }
+            match self.reader.read_tagged(text, *start) {
+                Ok((number, tag)) => Ok((Some(number), ParseNote { unit: tag, ..ParseNote::default() })),
+                Err(rejected) => {
+                    self.custom.as_ref().and_then(|parse| parse(text.trim())).map(|number| (Some(number), ParseNote::default())).ok_or(rejected)
+                }
+            }
+        };
+        let (value, note) = read()?;
+        let value = value
+            .map(|number| {
+                if self.round_trip_f32 {
+                    let number = number as f32;
+                    number.is_finite().then_some(f64::from(number)).ok_or(NotAValue)
+                } else {
+                    Ok(number)
+                }
+            })
+            .transpose()?;
+        Ok((value, note))
     }
 
     /// Zoom typing takes ASCII digits, `/` and the decimal separator, with an optional minus; other fields take every character.
@@ -404,5 +432,28 @@ mod tests {
         assert_eq!(one.format(&Some(-0.04)), "0");
         assert_eq!(one.format(&Some(-0.06)), "-0.1");
         assert_eq!(NumberCodec::new(Reader::new(), 1).fixed().format(&Some(-0.04)), "0.0");
+    }
+}
+
+#[cfg(test)]
+mod float_number_tests {
+    use super::*;
+
+    #[test]
+    fn exact_float_text_round_trips_finite_components_in_each_decimal_locale() {
+        for decimal in ['.', ','] {
+            let codec = NumberCodec::new(Reader::new().decimal(decimal), 0).fixed().round_trip_f32(true);
+            for value in [1e-8_f32, 0.1234567, 2.5, -0.25, f32::MIN, f32::MAX, f32::from_bits(1)] {
+                let text = codec.format(&Some(f64::from(value)));
+                assert!(!text.contains(['e', 'E']));
+                let parsed = codec.parse(&text, &None).expect("the field reads its own text").expect("a number");
+                assert_eq!((parsed as f32).to_bits(), value.to_bits(), "{decimal}: {text}");
+            }
+            assert!(codec.parse(&"9".repeat(100), &None).is_err(), "finite f64 overflow into f32 is rejected");
+            assert!(codec.parse("1/0", &None).is_err());
+            assert!(codec.parse("NaN", &None).is_err());
+            assert_eq!(codec.parse("", &Some(1.0)), Ok(None));
+        }
+        assert_eq!(NumberCodec::new(Reader::new(), 0).format(&Some(0.1234567)), "0", "the default remains decimal");
     }
 }

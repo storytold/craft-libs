@@ -1140,7 +1140,7 @@ impl Body<'_> {
             let scale = if percent { 100.0 / *rule.range.end() } else { 1.0 };
             let unit = if percent { ChannelUnit::Percent } else { ChannelUnit::of(ch.unit) };
             if percent {
-                rule = ChannelRule { range: 0.0..=100.0, step: (rule.step * scale).max(1.0), decimals: 0 };
+                rule = ChannelRule { range: 0.0..=100.0, step: (rule.step * scale).max(1.0), decimals: 0, round_trip_f32: false };
             }
             let mut track_values = basis;
             // The hue track is the whole spectrum, whatever the saturation and brightness.

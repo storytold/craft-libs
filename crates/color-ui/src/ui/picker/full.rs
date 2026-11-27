@@ -149,7 +149,7 @@ impl<'a> Body<'a> {
             }
             let letter = words.grid_label.fill(&[("label", channel.label)]);
             let letter: &str = &letter;
-            let rule = ChannelRule::of(channel);
+            let rule = ChannelRule::in_model(model, channel);
             let value = f64::from(values.values[i]);
             // The unit is the field's kind (typed units, decimals) and its text stands after the field.
             let (kind, unit) = match ChannelUnit::of(channel.unit) {
@@ -166,6 +166,7 @@ impl<'a> Body<'a> {
                 let edit = Field::new(name.clone()).side(side).sizing(Sizing::Content).show(ui, |ui, _| {
                     let field = NumberField::new(name.clone(), Bind::given(pass.shows(Some(value))))
                         .range(rule.range.clone())
+                        .round_trip_f32(rule.round_trip_f32)
                         .step(rule.step)
                         .snap_typed(true)
                         .commit_decimals(usize::from(rule.decimals))

@@ -4,7 +4,7 @@
 use std::ops::RangeInclusive;
 
 use craft_behavior::{Axis, Sense};
-use craft_theme::{Channel, ColorModel, Srgba};
+use craft_theme::{Channel, ChannelPrecision, ColorModel, Srgba};
 use craft_ui::contract::{
     Bind, Common, Component, Cx, DisabledLook, EditResponse, GlyphLabel, LabelKind, MeasureCx, Role, Show as _, ShowContainer as _, SideLabel, Sizing,
 };
@@ -25,15 +25,27 @@ pub struct ChannelRule {
     pub step: f64,
     /// The decimals the number field shows.
     pub decimals: u8,
+    /// Whether number edits keep exact finite f32 values; false for the built-in rules.
+    pub round_trip_f32: bool,
 }
 
 impl ChannelRule {
     /// The alpha row's rule: 0 to 100 %, whole percents.
-    pub const ALPHA: ChannelRule = ChannelRule { range: RangeInclusive::new(0.0, 100.0), step: 1.0, decimals: 0 };
+    pub const ALPHA: ChannelRule = ChannelRule { range: RangeInclusive::new(0.0, 100.0), step: 1.0, decimals: 0, round_trip_f32: false };
+
+    /// The rule of `model`'s channel, including its opt-in numeric precision.
+    pub fn in_model(model: &dyn ColorModel, channel: &Channel) -> Self {
+        Self { round_trip_f32: model.channel_precision() == ChannelPrecision::Float32, ..Self::of(channel) }
+    }
 
     /// The rule of `channel`.
     pub fn of(channel: &Channel) -> ChannelRule {
-        ChannelRule { range: f64::from(channel.min)..=f64::from(channel.max), step: f64::from(channel.step), decimals: channel.decimals }
+        ChannelRule {
+            range: f64::from(channel.min)..=f64::from(channel.max),
+            step: f64::from(channel.step),
+            decimals: channel.decimals,
+            round_trip_f32: false,
+        }
     }
 }
 
@@ -153,7 +165,11 @@ pub(crate) fn channel_slider<'a>(
     unit: ChannelUnit,
     track: Option<(Vec<Srgba>, bool)>,
 ) -> SliderField<'a> {
-    let field = SliderField::new(name, value, rule.range.clone()).step(rule.step);
+    let field = if rule.round_trip_f32 {
+        SliderField::new(name, value, 0.0..=1.0).numeric_range(rule.range.clone()).step(rule.step).round_trip_f32(true)
+    } else {
+        SliderField::new(name, value, rule.range.clone()).step(rule.step)
+    };
     let field = match unit {
         ChannelUnit::None => field,
         ChannelUnit::Percent => field.unit_kind(UnitKind::Percent),

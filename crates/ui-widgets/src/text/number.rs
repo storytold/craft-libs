@@ -194,6 +194,9 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// A typed value goes to the nearest multiple of the step when it commits.
     #[prop]
     snap_typed: bool,
+    /// Retain finite f32 values through typed edits, steps and scrubs, independent of display decimals.
+    #[prop]
+    round_trip_f32: bool,
     /// The decimals a committed value is rounded to; the display keeps the codec's, except that a percent field with no
     /// decimals of its own shows none when this is 0 ("10%").
     #[prop]
@@ -303,6 +306,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             popup_slider: None,
             snap_popup_slider: true,
             snap_typed: false,
+            round_trip_f32: false,
             automatic: false,
             mixed_word: false,
             derived: false,
@@ -388,7 +392,12 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// The range and step in the shown unit.
     fn rule(&self) -> Rule {
         let range = self.range.as_ref().map(|range| range.start() * self.scale..=range.end() * self.scale);
-        Rule::new(range.as_ref(), self.step)
+        let mut rule = Rule::new(range.as_ref(), self.step);
+        if self.round_trip_f32 {
+            rule.low = rule.low.clamp(f64::from(f32::MIN), f64::from(f32::MAX));
+            rule.high = rule.high.clamp(f64::from(f32::MIN), f64::from(f32::MAX));
+        }
+        rule
     }
 
     /// Reads the scope's look and precision and a length field's scale from stored to shown from the env. The status bar's zoom
@@ -515,14 +524,17 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// The field's codec: the one set, else the env's locale and the spellings of the unit kind (a length field
     /// reads every length spelling).
     fn number_codec(&self, units: &Units) -> NumberCodec {
-        self.codec.clone().unwrap_or_else(|| {
-            let reader = match self.lengths {
-                Some(lengths) => units.length_reader(lengths),
-                None => units.reader(self.unit_kind),
-            };
-            let codec = NumberCodec::new(reader, self.decimals());
-            if self.fixed_decimals.is_some() || self.percent_decimals().is_some() { codec.fixed() } else { codec }
-        })
+        self.codec
+            .clone()
+            .unwrap_or_else(|| {
+                let reader = match self.lengths {
+                    Some(lengths) => units.length_reader(lengths),
+                    None => units.reader(self.unit_kind),
+                };
+                let codec = NumberCodec::new(reader, self.decimals());
+                if self.fixed_decimals.is_some() || self.percent_decimals().is_some() { codec.fixed() } else { codec }
+            })
+            .round_trip_f32(self.round_trip_f32)
     }
 
     /// The decimals the field shows: its codec's, fixed or maximum precision, a percent field's own, else its unit
@@ -565,8 +577,8 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         Ruled {
             inner: self.number_codec(&env.units()),
             rule: self.rule(),
-            snap: self.snap_typed,
-            decimals: self.commit_decimals,
+            snap: self.snap_typed && !self.round_trip_f32,
+            decimals: self.commit_decimals.filter(|_| !self.round_trip_f32),
             mixed,
             positive_only: self.positive_only,
             names,
@@ -637,9 +649,10 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         let from = self.shown_number(cx.value()).unwrap_or_else(|| rule.blank());
         let next = match &self.stepper {
             Some(stepper) => rule.settle(stepper.next(from, notches, scale)),
+            None if self.round_trip_f32 => rule.settle(from + f64::from(notches) * rule.step * scale),
             None => rule.stepped(from, notches, scale),
         };
-        cx.set(V::of_number(self.to_stored(next)));
+        cx.set(V::of_number(self.to_stored(if self.round_trip_f32 { f64::from(next as f32) } else { next })));
     }
 
     /// The rect of the inside label's glyph, the text, the unit and the chevrons inside `rect`.
@@ -839,6 +852,9 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
 
     /// A write-back equal to the proposal at the field's decimals is the gesture's own write.
     fn same_value(&self, proposed: &V, host: &V) -> bool {
+        if self.round_trip_f32 {
+            return proposed.named() == host.named() && proposed.number().map(|v| v as f32) == host.number().map(|v| v as f32);
+        }
         let decimals = self.decimals();
         let at_precision = |value: &V| value.number().map(|number| round_to(number * self.scale, decimals));
         proposed == host || (proposed.named() == host.named() && at_precision(proposed) == at_precision(host))
@@ -854,9 +870,13 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         // here: an Alt drag moves by a share of it.
         let decimals = self.decimals();
         let scale = self.scale;
-        let mut scrub =
-            Scrub::new(drag, move |value: &V| value.number().unwrap_or(0.0) * scale, move |number| V::of_number(round_to(number, decimals) / scale))
-                .on_field();
+        let exact = self.round_trip_f32;
+        let mut scrub = Scrub::new(
+            drag,
+            move |value: &V| value.number().unwrap_or(0.0) * scale,
+            move |number| V::of_number(if exact { f64::from((number / scale) as f32) } else { round_to(number, decimals) / scale }),
+        )
+        .on_field();
         if self.scrub {
             scrub = scrub.by_label();
         }
@@ -881,7 +901,8 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             cx.popup("slider").close(cx);
         }
         let rule = self.rule();
-        let fine_shows = self.decimals() >= decimals_for_step(rule.step / LARGE_STEPS);
+        let fine_shows =
+            if self.round_trip_f32 { rule.high - rule.low <= 10.0 } else { self.decimals() >= decimals_for_step(rule.step / LARGE_STEPS) };
         // A press on a half steps in the pass it goes down; while it is held the steps due since the last pass
         // repeat, from the press's own start time and the pass's time, so a rerun pass (no time elapsed) steps none.
         for (key, notches) in [(NumberField::STEP_UP, 1), (NumberField::STEP_DOWN, -1)] {
@@ -918,27 +939,33 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         }
         if let Some(wheel) = cx.take_wheel() {
             let from = self.shown_number(cx.value()).unwrap_or_else(|| rule.blank());
-            let steps = ValueSteps::new(from, rule.low, rule.high, rule.step, rule.step * LARGE_STEPS).fine(rule.step / LARGE_STEPS);
+            let origin = if self.round_trip_f32 { from } else { 0.0 };
+            let steps = ValueSteps::new(from - origin, rule.low - origin, rule.high - origin, rule.step, rule.step * LARGE_STEPS)
+                .fine(rule.step / LARGE_STEPS);
             // A notch that changes the value proposes it; the runtime's zero-scroll end share changes none and ends
             // the run.
             let next = match wheel_step(&steps, ValueAxes::Both, &wheel, cx.env.direction().is_rtl()) {
                 StepResult::Set(next) => {
+                    let next = next + origin;
                     let next = match &self.stepper {
                         Some(stepper) if next != from => stepper.next(from, if next > from { 1 } else { -1 }, 1.0),
+                        _ if self.round_trip_f32 => next,
                         _ => round_to(next, decimals_for_step(rule.step / LARGE_STEPS)),
                     };
                     let next = rule.settle(next);
+                    let next = if self.round_trip_f32 { f64::from(next as f32) } else { next };
                     (next != from).then(|| V::of_number(self.to_stored(next)))
                 }
                 _ => None,
             };
             cx.wheel_run(wheel.phase, next);
         }
-        if let Some(next) = cx.intents().take_set_value() {
+        if let Some(next) = cx.intents().take_set_value().filter(|v| !self.round_trip_f32 || (v.is_finite() && (*v as f32).is_finite())) {
             if cx.in_wheel_run() {
                 cx.commit();
             }
-            cx.set(V::of_number(self.to_stored(rule.settle(next))));
+            let next = self.to_stored(rule.settle(next));
+            cx.set(V::of_number(if self.round_trip_f32 { f64::from(next as f32) } else { next }));
         }
     }
 
