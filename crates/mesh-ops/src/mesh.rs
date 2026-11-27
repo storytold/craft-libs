@@ -51,15 +51,13 @@ pub struct Mesh {
 /// Hard cap on mesh size accepted from files (triangles).
 pub const MAX_TRIANGLES: usize = 20_000_000;
 
-/// Positions and UVs go to MikkTSpace only when their largest magnitude lies between the
-/// reciprocal of this and this, so edge lengths, cross products and their products with UVs
-/// neither overflow nor underflow in `f32`. Other meshes get the `f64` per-vertex tangents.
+/// The largest absolute position component and largest absolute UV component must each be
+/// zero or between the reciprocal of this value and this value for MikkTSpace.
+/// Other meshes get `f64` per-corner tangents.
 const SAFE_MAGNITUDE: f32 = 1e6;
 
-/// Most triangles around one vertex (as MikkTSpace welds vertices) for which tangents come from
-/// MikkTSpace. It visits the triangles around a vertex recursively, one call per triangle, so a
-/// larger fan could exhaust the stack; such meshes get the per-vertex fallback. This crate's own
-/// value.
+/// MikkTSpace accepts at most this many triangles around one welded vertex.
+/// Meshes above this crate's limit use the per-corner fallback.
 pub const MAX_MIKKTSPACE_VALENCE: usize = 2_048;
 
 /// Most comparisons MikkTSpace may make welding corners, for which tangents come from it. It
@@ -235,7 +233,7 @@ impl Mesh {
     }
 
     /// MikkTSpace tangents with per-corner f64 UV-gradient fallback. A mesh with
-    /// an index out of range, a non-finite position or UV, a position or UV with a magnitude
+    /// an index out of range, a non-finite position or UV, a largest absolute position or UV component
     /// outside 1e-6 to 1e6 (zero is fine), only degenerate triangles, more than
     /// [`MAX_MIKKTSPACE_VALENCE`] noncollapsed triangles around one vertex or noncollapsed corners
     /// whose welding would take more than [`MAX_MIKKTSPACE_WELD_WORK`] comparisons does not go to MikkTSpace. Missing
