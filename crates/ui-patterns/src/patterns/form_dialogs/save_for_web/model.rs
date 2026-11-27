@@ -238,9 +238,6 @@ pub struct TableMarks {
     pub transparent: Vec<[u8; 3]>,
     /// The shifted colours, from and to.
     pub shifted: Vec<([u8; 3], [u8; 3])>,
-    /// Web-shifted colours, identified by the same RGB entries the host supplies in the palette.
-    /// `None` keeps separate Shift and Unshift controls for a host that does not report this state.
-    pub web_shifted: Option<Vec<[u8; 3]>>,
 }
 
 /// What the dialog is for: a raster document or a vector one.
