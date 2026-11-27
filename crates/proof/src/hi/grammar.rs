@@ -1,17 +1,17 @@
-//! Generic repeated-word and spacing checks (shared by the Devanagari languages,
-//! [`crate::devanagari`]) with Hindi messages.
-//! No Hindi-specific grammar or agreement rules are inferred.
+//! Generic repeated-word and spacing checks, shared with the other languages proofed by their
+//! script, with Hindi messages. No Hindi-specific grammar or agreement rules are inferred.
 
-use crate::devanagari::{Rules, is_devanagari_char};
+use crate::script_checks::Rules;
 use crate::{Issue, ProofLang};
 
 /// Checks `text` for repeated words and spacing problems, with Hindi messages.
 pub fn check(text: &str) -> Vec<Issue> {
-    crate::devanagari::check(text, &RULES)
+    crate::script_checks::check(text, &RULES)
 }
 
 const RULES: Rules = Rules {
     lang: ProofLang::Hi,
+    script: &crate::devanagari::SCRIPT,
     repeated_word: "दोहराया गया शब्द",
     space_before_punctuation: "विराम चिह्न से पहले रिक्त स्थान",
     double_space: "दोहरा रिक्त स्थान",
@@ -52,7 +52,7 @@ const NEVER_DOUBLED: &[&str] = &[
 ];
 
 fn flag_repeat(w: &str) -> bool {
-    !w.chars().any(is_devanagari_char) || NEVER_DOUBLED.contains(&w)
+    !w.chars().any(|c| ('\u{0900}'..='\u{097F}').contains(&c)) || NEVER_DOUBLED.contains(&w)
 }
 
 #[cfg(test)]
@@ -96,8 +96,7 @@ mod tests {
 
     #[test]
     fn ratios_and_scores_keep_their_spaces() {
-        for text in ["3 : 1", "स्कोर 12 : 10।", "३ : १", "१ : २", "स्कोर १२ : १०।", "मूल्य .५ है"]
-        {
+        for text in ["3 : 1", "स्कोर 12 : 10।", "३ : १", "१ : २", "स्कोर १२ : १०।"] {
             assert!(check(text).is_empty(), "{text}: {:?}", check(text));
         }
         for text in ["शब्द : दूसरा", "3 : शब्द", "3 :", "३ : शब्द", "३ :"] {

@@ -76,7 +76,8 @@ pub enum ProofLang {
     Gu,
     /// Hindi (`hi`, `hi-IN`, `hin`): the installed Hunspell dictionary (`hi_IN`, when there is
     /// one), dictionary-driven suggestions and generic checks with Hindi messages
-    /// ([`crate::hi`]). Hyphenation keeps an installed pack's patterns, else the fallback.
+    /// ([`crate::hi`]). Hyphenation breaks between aksharas ([`crate::indic`]), or follows a `hi`
+    /// pack's patterns.
     Hi,
     /// German (`de`, `de-DE`, `de-AT`…; `de-CH` and `de-LI` are [`ProofLang::Pack`] `de-ch`, with
     /// their own dictionary and these patterns): hyphenation by the German patterns (reformed

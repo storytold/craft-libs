@@ -1,6 +1,7 @@
 //! Hindi proofing using the installed Hunspell `hi_IN` dictionary (never bundled).
-//! Suggestions use its runtime MAP/REP/TRY/KEY tables. Generic checks have Hindi messages; the
-//! Devanagari pieces live in [`crate::devanagari`]. Hyphenation keeps the existing fallback.
+//! Suggestions use its runtime MAP/REP/TRY/KEY tables. Spelling and the generic checks are the
+//! ones Gujarati shares, with Devanagari's letters and digits and Hindi messages. Hyphenation is
+//! by akshara ([`crate::indic`]).
 
 pub mod grammar;
 pub(crate) mod suggest;
@@ -49,12 +50,17 @@ pub fn is_correct(word: &str) -> bool {
 /// [`is_correct`] with the File › Options › Proofing choices: with Ignore words that contain
 /// numbers off, words with digits are checked.
 pub fn is_correct_with_options(word: &str, opts: &crate::Options) -> bool {
-    crate::devanagari::is_correct(&dictionary(), word, opts)
+    check(&dictionary(), word, opts)
 }
 
 /// [`is_correct`] against a given dictionary (an empty one accepts everything).
 pub fn is_correct_with(d: &AffixDict, word: &str) -> bool {
-    crate::devanagari::is_correct(d, word, &crate::Options::default())
+    check(d, word, &crate::Options::default())
+}
+
+/// [`is_correct_with_options`] against a given dictionary.
+fn check(d: &AffixDict, word: &str, opts: &crate::Options) -> bool {
+    crate::script_checks::is_correct(&crate::devanagari::SCRIPT, d, word, opts)
 }
 
 #[cfg(test)]
@@ -117,10 +123,10 @@ mod tests {
             assert!(is_correct_with(&d, w), "{w}");
         }
         let no_ignore = crate::Options { ignore_numbers: false, ..Default::default() };
-        assert!(crate::devanagari::is_correct(&d, "१२", &no_ignore));
-        assert!(crate::devanagari::is_correct(&d, "2026", &no_ignore));
-        assert!(!crate::devanagari::is_correct(&d, "घरर१२", &no_ignore));
-        assert!(crate::devanagari::is_correct(&d, "घरर१२", &crate::Options::default()));
+        assert!(check(&d, "१२", &no_ignore));
+        assert!(check(&d, "2026", &no_ignore));
+        assert!(!check(&d, "घरर१२", &no_ignore));
+        assert!(check(&d, "घरर१२", &crate::Options::default()));
     }
 
     /// Composing a word (as every check does) splits a precomposed nukta letter into consonant
