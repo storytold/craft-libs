@@ -45,7 +45,11 @@ const MAX_PICT_PT: f64 = 31_680.0;
 
 /// Write `doc` as a Word 2003 XML Document.
 pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
+    // 2003 has no theme colours: the package gets the colours shown, not the stored ones beside
+    // the references this conversion drops.
+    let shown = crate::write::ShownColorsGuard::set();
     let parts: BTreeMap<String, Vec<u8>> = crate::write::write_parts(doc, Flavor::Document, crate::WriteOptions::default())?.into_iter().collect();
+    drop(shown);
     let pkg = Package::from_parts(parts);
     let doc_part = pkg
         .rels("_rels/.rels")

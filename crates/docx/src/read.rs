@@ -247,6 +247,12 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     if let Some(p) = part(rt::SETTINGS) {
         r.read_color_mapping(&p);
     }
+    // Keep no record of theme colours that would name other colours once saved: without a theme
+    // colour scheme they show their fixed colours, and the save writes a theme of its own; a
+    // nested document's would name its container's colours, unless the two resolve alike.
+    // Their colours are saved as shown, as before.
+    let other = r.chunks.nesting > 0 && r.chunks.theme != r.pc.theme_key();
+    r.pc.drop_color_sources = r.pc.theme_colors.is_empty() || other;
     if let Some(p) = part(rt::STYLES) {
         lenient("styles", r.read_styles(&p));
     }
@@ -303,8 +309,11 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         lenient("customXml bibliography", r.read_bibliography(path, &mut seen_sources));
     }
 
-    if let Some(bg) = root.child("w:background").and_then(|b| b.attr("w:color")).and_then(Rgb::parse) {
-        r.doc.settings.page_color = Some(bg);
+    // The page colour (`CT_Background`, §17.2.1), its theme colour first as for text.
+    if let Some(b) = root.child("w:background") {
+        let (color, source) = r.pc.background(b);
+        r.doc.settings.page_color = color;
+        r.doc.settings.page_color_source = source;
     }
     // A picture or texture fill: `w:background/v:background/v:fill` with a relationship id.
     if let Some(fill) = root.child("w:background").and_then(|b| b.child("v:background")).and_then(|b| b.child("v:fill")) {

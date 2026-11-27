@@ -52,6 +52,7 @@ mod strict_drawings;
 mod table_style_indent;
 mod text_alignment;
 mod text_boxes;
+mod theme_colours;
 mod theme_font_slots;
 mod toc_ranges;
 mod twips_wrap;

@@ -299,12 +299,14 @@ impl Reader<'_> {
             "w:hyperlink",
             "w:followedHyperlink",
         ];
-        let mut map = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        let mut map: [u8; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
         for (slot, a) in map.iter_mut().zip(attrs) {
             if let Some(i) = m.attr(a).and_then(|v| names.iter().position(|n| *n == v)) {
-                *slot = i;
+                *slot = i as u8;
             }
         }
         self.pc.color_map = Some(map);
+        // Kept with the document, for the theme colours its colours keep (`ThemeRef::resolve`).
+        self.doc.settings.theme_color_map = Some(map);
     }
 }

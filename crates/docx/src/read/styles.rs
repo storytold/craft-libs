@@ -3,7 +3,7 @@ use super::{
     TableStyleParts, VAlign, flag, int, props, tw, u32_of,
 };
 use crate::units::tw_i16;
-use craft_wordmodel::props::PropChange;
+use craft_wordmodel::props::{BlockColorSources, PropChange};
 use std::sync::Arc;
 
 fn numbering_level_index(value: Option<&str>) -> Option<usize> {
@@ -277,11 +277,15 @@ impl Reader<'_> {
     /// applies to every cell, so its paragraph and run properties go to the style's own (`st`).
     fn table_style_parts(&self, s: &El, st: &mut Style) -> TableStyleParts {
         let mut t = TableStyleParts::default();
+        // The theme colours of the whole table's fill and borders, wherever those come from.
+        let mut whole = BlockColorSources::default();
         if let Some(tp) = s.child("w:tblPr") {
             if let Some(b) = tp.child("w:tblBorders") {
-                t.borders = Some(self.pc.table_borders(b));
+                let (borders, sources) = self.pc.table_borders(b);
+                t.borders = Some(borders);
+                whole.borders = sources;
             }
-            t.fill = tp.child("w:shd").and_then(|e| self.pc.shd_fill(e));
+            (t.fill, whole.shading) = tp.child("w:shd").map(|e| self.pc.shading(e)).unwrap_or_default();
             t.cell_margins = tp.child("w:tblCellMar").map(props::margins);
             // Only a twips indent (`dxa`, the default) is a length: `nil` is no indent, and `pct`
             // or `auto` have no meaning for an indent (ECMA-376 §17.4.50), so the style sets none.
@@ -299,16 +303,20 @@ impl Reader<'_> {
             let Some(part) = c.attr("w:type").and_then(TablePart::from_ooxml) else { continue };
             let tc = c.child("w:tcPr");
             let ppr = c.child("w:pPr").map(|p| self.pc.ppr(p).0);
+            let (fill, shading) = tc.and_then(|p| p.child("w:shd")).map(|e| self.pc.shading(e)).unwrap_or_default();
+            let (borders, border_sources) = tc.and_then(|p| p.child("w:tcBorders")).map(|b| self.pc.table_borders(b)).unzip();
+            let sources = BlockColorSources { shading, borders: border_sources.unwrap_or_default() };
             let f = PartFormat {
                 chr: c.child("w:rPr").map(|r| self.pc.rpr(r)).unwrap_or_default(),
-                fill: tc.and_then(|p| p.child("w:shd")).and_then(|e| self.pc.shd_fill(e)),
-                borders: tc.and_then(|p| p.child("w:tcBorders")).map(|b| self.pc.table_borders(b)),
+                fill,
+                borders,
                 align: ppr.as_ref().and_then(|p| p.align),
                 v_align: tc.and_then(|p| p.child_val("w:vAlign")).map(|v| match v {
                     "center" => VAlign::Center,
                     "bottom" => VAlign::Bottom,
                     _ => VAlign::Top,
                 }),
+                color_sources: (!sources.is_empty()).then(|| Box::new(sources)),
             };
             if part == TablePart::WholeTable {
                 // The whole table's paragraph and run properties are the style's own; its
@@ -319,9 +327,12 @@ impl Reader<'_> {
                 st.chr.overlay(&f.chr);
                 if f.fill.is_some() {
                     t.fill = f.fill;
+                    whole.shading = f.color_sources.as_ref().and_then(|s| s.shading.clone());
                 }
                 if let Some(b) = c.child("w:tblPr").and_then(|p| p.child("w:tblBorders")) {
-                    t.borders = Some(self.pc.table_borders(b));
+                    let (borders, sources) = self.pc.table_borders(b);
+                    t.borders = Some(borders);
+                    whole.borders = sources;
                 }
                 if f.v_align.is_some() {
                     t.regions.insert(part, PartFormat { v_align: f.v_align, ..PartFormat::default() });
@@ -329,6 +340,9 @@ impl Reader<'_> {
             } else {
                 t.set_part(part, f);
             }
+        }
+        if !whole.is_empty() {
+            t.regions.entry(TablePart::WholeTable).or_default().color_sources = Some(Box::new(whole));
         }
         t
     }

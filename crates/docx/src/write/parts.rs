@@ -312,9 +312,12 @@ fn write_document_body(doc: &Document, wr: &mut Writer<'_>, rels: &mut PartRels,
     let mut w = W::new();
     w.open("w:document", ns_refs);
     let pic = doc.settings.page_picture.as_ref().filter(|p| wr.media_files.contains_key(&p.media) && doc.media.contains_key(&p.media));
-    if pic.is_some() || doc.settings.page_color.is_some() {
-        let color = doc.settings.page_color.map(|c| c.hex());
-        let attrs: Vec<(&str, &str)> = color.iter().map(|c| ("w:color", c.as_str())).collect();
+    let page_color = doc.settings.page_color;
+    let source = super::props::held(doc.settings.page_color_source.as_ref(), page_color.map(craft_wordmodel::TextColor::Rgb));
+    if pic.is_some() || page_color.is_some() || source.is_some() {
+        // The colour in its theme colour while it is the one read, as for text.
+        let attrs = super::props::background_attrs(page_color, source);
+        let attrs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
         w.open("w:background", &attrs);
         if let Some(p) = pic
             && let Some(file) = wr.media_files.get(&p.media)

@@ -4,9 +4,10 @@ use std::collections::HashMap;
 
 use craft_wordmodel::para::cap_alt;
 use craft_wordmodel::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, Kashida, LineSpacing, NumRef,
-    ParaProps, ParagraphTextDirection, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor,
-    TextDirection, ThemeFont, Underline, VAlign, VMerge, VertAlign,
+    Align, Border, BorderColorSources, BorderStyle, Borders, CellProps, CharProps, ColorSource, CombineBrackets, EastAsianLayout, HeightRule,
+    Highlight, Kashida, LineSpacing, NumRef, ParaProps, ParagraphTextDirection, Rgb, RowProps, SHADING_PATTERNS, ShadingSource, TabAlign, TabLeader,
+    TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor, TextDirection, ThemeColor, ThemeFont, ThemeRef, Underline, VAlign, VMerge,
+    VertAlign,
 };
 use craft_wordmodel::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
@@ -14,7 +15,6 @@ use craft_wordmodel::section::{
 };
 
 use super::MAX_FONT_NAME;
-use super::drawing_color::adjust_lum;
 use crate::units::{int, line_multiple, measure, on_off, tw, tw_i16, tw_u16, u32_of};
 
 /// A text frame (`w:framePr` without a drop cap, ECMA-376 §17.3.1.11), sizes and offsets in
@@ -60,12 +60,20 @@ pub struct PropCtx {
     pub theme_colors: Vec<Rgb>,
     /// `w:clrSchemeMapping`: the scheme slot each of text1, background1, text2, background2,
     /// accent1..6, hyperlink and followedHyperlink uses. `None` = the default (same order).
-    pub color_map: Option<[usize; 12]>,
+    pub color_map: Option<[u8; 12]>,
+    /// Keep no record of the theme colours colours come from ([`CharProps::color_sources`]): set
+    /// where the save would give the references other colours (no theme colour scheme, or a
+    /// nested `altChunk` document whose theme isn't its container's). The colours stay as shown.
+    pub drop_color_sources: bool,
     /// Style id renames (e.g. a localized default paragraph style id → `Normal`).
     pub alias: HashMap<String, String>,
     /// The theme's colours (for WordArt effects in theme colours).
     pub theme: Vec<Rgb>,
 }
+
+/// The colours a document resolves theme colours through: its theme's twelve and its colour
+/// scheme mapping ([`PropCtx::theme_key`]).
+pub(crate) type ThemeKey = ([Rgb; 12], [u8; 12]);
 
 /// A `w:numPr` that gives a level (`w:ilvl`) and no list (`w:numId`): the list is the one the
 /// paragraph's style chain uses (ECMA-376 §17.3.1.19). A placeholder while reading, never left in
@@ -199,36 +207,54 @@ impl PropCtx {
     /// The theme colour `e` names in `attr` (`w:themeColor`, `w:themeFill`), through the colour
     /// scheme mapping, with its `tint` or else its `shade` (hex bytes) applied to the HSL
     /// luminance as Word does: given both, Word applies the tint alone (MS-OI29500 17.3.2.6 b,
-    /// 17.4.32 a). When given it supersedes the fixed colour; `None` leaves the fixed one.
+    /// 17.4.32 a; [`ThemeRef::resolve`]). When given it supersedes the fixed colour; `None` leaves
+    /// the fixed one.
     fn theme_color(&self, e: &El, attr: &str, tint: &str, shade: &str) -> Option<Rgb> {
-        let logical = |i: usize| self.color_map.and_then(|m| m.get(i).copied()).unwrap_or(i);
-        let slot = match e.attr(attr)? {
-            "dark1" => 0,
-            "light1" => 1,
-            "dark2" => 2,
-            "light2" => 3,
-            "text1" => logical(0),
-            "background1" => logical(1),
-            "text2" => logical(2),
-            "background2" => logical(3),
-            "accent1" => logical(4),
-            "accent2" => logical(5),
-            "accent3" => logical(6),
-            "accent4" => logical(7),
-            "accent5" => logical(8),
-            "accent6" => logical(9),
-            "hyperlink" => logical(10),
-            "followedHyperlink" => logical(11),
-            _ => return None,
-        };
-        let mut c = *self.theme_colors.get(slot)?;
-        let byte = |a: &str| e.attr(a).and_then(|v| u8::from_str_radix(v.trim(), 16).ok()).map(|v| f64::from(v) / 255.0);
-        if let Some(t) = byte(tint) {
-            c = adjust_lum(c, |l| l * t + (1.0 - t));
-        } else if let Some(s) = byte(shade) {
-            c = adjust_lum(c, |l| l * s);
+        theme_ref(e, attr, tint, shade)?.resolve(&self.theme_colors, self.color_map.as_ref())
+    }
+
+    /// The theme colour `e` gives its colour (`w:themeColor` and its tint and shade), with the
+    /// fixed colour it stores in `value` and the colour the property is `shown` in: kept so saving
+    /// writes them back (`ECMA-376` §17.3.2.6, §17.3.2.40, §17.3.4). `None` when it gives none.
+    fn color_source(&self, e: &El, value: &str, shown: Option<TextColor>) -> Option<ColorSource> {
+        if self.drop_color_sources {
+            return None;
         }
-        Some(c)
+        let theme = theme_ref(e, "w:themeColor", "w:themeTint", "w:themeShade")?;
+        Some(ColorSource { theme, value: e.attr(value).and_then(TextColor::parse), shown })
+    }
+
+    /// What theme colours resolve through ([`ThemeKey`]); `None` without a theme.
+    pub(crate) fn theme_key(&self) -> Option<ThemeKey> {
+        let colors: [Rgb; 12] = self.theme_colors.as_slice().try_into().ok()?;
+        Some((colors, self.color_map.unwrap_or([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])))
+    }
+
+    /// `w:background`: its colour, a theme colour first as for text (`w:color` is the fixed one;
+    /// `auto` is none), and the record of that theme colour.
+    pub fn background(&self, e: &El) -> (Option<Rgb>, Option<ColorSource>) {
+        let color = self.theme_color(e, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| e.attr("w:color").and_then(Rgb::parse));
+        (color, self.color_source(e, "w:color", color.map(TextColor::Rgb)))
+    }
+
+    /// `w:shd`: the shading shown ([`Self::shd_fill`]) and, when the element gives either of its
+    /// colours as a theme colour, all of it as the file gives it (§17.3.5), kept for saving.
+    pub fn shading(&self, e: &El) -> (Option<Rgb>, Option<ShadingSource>) {
+        let shown = self.shd_fill(e);
+        let color_theme = theme_ref(e, "w:themeColor", "w:themeTint", "w:themeShade");
+        let fill_theme = theme_ref(e, "w:themeFill", "w:themeFillTint", "w:themeFillShade");
+        if self.drop_color_sources || (color_theme.is_none() && fill_theme.is_none()) {
+            return (shown, None);
+        }
+        let source = ShadingSource {
+            pattern: e.attr("w:val").filter(|v| SHADING_PATTERNS.contains(v)).map(str::to_string),
+            color: e.attr("w:color").and_then(TextColor::parse),
+            color_theme,
+            fill: e.attr("w:fill").and_then(TextColor::parse),
+            fill_theme,
+            shown,
+        };
+        (shown, Some(source))
     }
 
     /// `w:shd`: its fill colour (a theme fill first), or a solid pattern's colour.
@@ -315,7 +341,9 @@ impl PropCtx {
                         (None, Some(v)) if v.eq_ignore_ascii_case("auto") => Some(TextColor::Auto),
                         (None, Some(v)) => Rgb::parse(v).map(TextColor::Rgb),
                         (None, None) => None,
-                    }
+                    };
+                    let source = self.color_source(k, "w:val", c.color);
+                    c.edit_color_sources(|s| s.color = source);
                 }
                 "w:spacing" => c.spacing = tw(k, "w:val").map(|v| v.clamp(-1584.0, 1584.0)),
                 "w:w" => c.scale = k.attr("w:val").and_then(|v| measure(v.trim_end_matches('%'), 1.0)).map(|v| v.clamp(1.0, 600.0)),
@@ -329,9 +357,19 @@ impl PropCtx {
                     c.underline = k.attr("w:val").map(Underline::from_ooxml);
                     c.underline_color =
                         self.theme_color(k, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| k.attr("w:color").and_then(Rgb::parse));
+                    let source = self.color_source(k, "w:color", c.underline_color.map(TextColor::Rgb));
+                    c.edit_color_sources(|s| s.underline = source);
                 }
-                "w:bdr" => c.border = Some(self.border(k)),
-                "w:shd" => c.shading = self.shd_fill(k),
+                "w:bdr" => {
+                    let (border, source) = self.border(k);
+                    c.border = Some(border);
+                    c.edit_color_sources(|s| s.border = source);
+                }
+                "w:shd" => {
+                    let (shading, source) = self.shading(k);
+                    c.shading = shading;
+                    c.edit_color_sources(|s| s.shading = source);
+                }
                 "w:vertAlign" => {
                     c.vert_align = k.attr("w:val").map(|v| match v {
                         "superscript" => VertAlign::Superscript,
@@ -419,8 +457,16 @@ impl PropCtx {
                         }
                     }
                 }
-                "w:pBdr" => p.borders = Some(self.borders(k)),
-                "w:shd" => p.shading = self.shd_fill(k),
+                "w:pBdr" => {
+                    let (borders, sources) = self.borders(k);
+                    p.borders = Some(borders);
+                    p.edit_color_sources(|s| s.borders = sources);
+                }
+                "w:shd" => {
+                    let (shading, source) = self.shading(k);
+                    p.shading = shading;
+                    p.edit_color_sources(|s| s.shading = source);
+                }
                 "w:tabs" => {
                     let tabs: Vec<TabStop> = k.children("w:tab").take(64).filter_map(tab_stop).collect();
                     p.tabs = Some(tabs);
@@ -528,6 +574,15 @@ pub(crate) fn tab_leader(v: &str) -> TabLeader {
     }
 }
 
+/// The theme colour `e` names in `attr` (`w:themeColor`, `w:themeFill`) with its `tint` and
+/// `shade` (hex bytes, `ST_UcharHexNumber`): `None` when it names none, or one `ST_ThemeColor`
+/// doesn't have (ECMA-376 §17.18.97; `none` is no theme colour).
+fn theme_ref(e: &El, attr: &str, tint: &str, shade: &str) -> Option<ThemeRef> {
+    let color = ThemeColor::from_ooxml(e.attr(attr)?)?;
+    let byte = |a: &str| e.attr(a).and_then(|v| u8::from_str_radix(v.trim(), 16).ok());
+    Some(ThemeRef { color, tint: byte(tint), shade: byte(shade) })
+}
+
 /// `w:shd/@w:fill` (a solid fill colour; `auto` = none), ignoring theme fills ([`PropCtx::shd_fill`]).
 fn shd_fill(e: &El) -> Option<Rgb> {
     let fill = e.attr("w:fill").and_then(Rgb::parse);
@@ -544,22 +599,23 @@ fn shd_fill(e: &El) -> Option<Rgb> {
 impl PropCtx {
     /// One border (`CT_Border`); its theme colour supersedes `w:color`, as for text. One without
     /// `w:sz` is width 0, as `w:sz="0"`: Word draws both at its thinnest line and gives them no
-    /// room, for paragraph, character and page borders (storytold/wordcraft#5065).
-    pub fn border(&self, e: &El) -> Border {
+    /// room, for paragraph, character and page borders (storytold/wordcraft#5065). With the theme
+    /// colour it has, kept for saving ([`Self::color_source`]).
+    pub fn border(&self, e: &El) -> (Border, Option<ColorSource>) {
         self.border_or(e, 0.0)
     }
 
     /// One border, `missing` points wide when it gives no `w:sz`.
-    fn border_or(&self, e: &El, missing: f32) -> Border {
+    fn border_or(&self, e: &El, missing: f32) -> (Border, Option<ColorSource>) {
         let style = BorderStyle::from_ooxml(e.attr("w:val").unwrap_or("single"));
         let width = e.attr("w:sz").and_then(|v| measure(v, 8.0)).unwrap_or(missing).clamp(0.0, 12.0);
         let color = self.theme_color(e, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| e.attr("w:color").and_then(Rgb::parse));
         let space = e.attr("w:space").and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, 31.0);
-        Border { style, width, color, space }
+        (Border { style, width, color, space }, self.color_source(e, "w:color", color.map(TextColor::Rgb)))
     }
 
     /// `w:pBdr`, `w:pgBorders`.
-    pub fn borders(&self, e: &El) -> Borders {
+    pub fn borders(&self, e: &El) -> (Borders, BorderColorSources) {
         self.borders_or(e, 0.0)
     }
 
@@ -567,24 +623,27 @@ impl PropCtx {
     /// too, as `w:sz="0"`: Word gives neither any room, where `w:sz="1"` takes an eighth of a
     /// point (storytold/wordcraft#5764). Read as half a point, every row below a pandoc table's
     /// header rule moved down half a point.
-    pub fn table_borders(&self, e: &El) -> Borders {
+    pub fn table_borders(&self, e: &El) -> (Borders, BorderColorSources) {
         self.borders_or(e, 0.0)
     }
 
-    fn borders_or(&self, e: &El, missing: f32) -> Borders {
+    fn borders_or(&self, e: &El, missing: f32) -> (Borders, BorderColorSources) {
         let mut b = Borders::default();
+        let mut s = BorderColorSources::default();
         for k in e.els() {
-            match k.local() {
-                "top" => b.top = Some(self.border_or(k, missing)),
-                "left" | "start" => b.left = Some(self.border_or(k, missing)),
-                "bottom" => b.bottom = Some(self.border_or(k, missing)),
-                "right" | "end" => b.right = Some(self.border_or(k, missing)),
-                "between" | "insideH" => b.between = Some(self.border_or(k, missing)),
-                "insideV" => b.inside_v = Some(self.border_or(k, missing)),
-                _ => {}
-            }
+            let (side, source) = match k.local() {
+                "top" => (&mut b.top, &mut s.top),
+                "left" | "start" => (&mut b.left, &mut s.left),
+                "bottom" => (&mut b.bottom, &mut s.bottom),
+                "right" | "end" => (&mut b.right, &mut s.right),
+                "between" | "insideH" => (&mut b.between, &mut s.between),
+                "insideV" => (&mut b.inside_v, &mut s.inside_v),
+                _ => continue,
+            };
+            let (border, theme) = self.border_or(k, missing);
+            (*side, *source) = (Some(border), theme);
         }
-        b
+        (b, s)
     }
 }
 
@@ -630,8 +689,16 @@ impl PropCtx {
                 }
                 "w:jc" => t.align = k.attr("w:val").map(align),
                 "w:tblInd" => t.indent = tw(k, "w:w"),
-                "w:tblBorders" => t.borders = Some(self.table_borders(k)),
-                "w:shd" => t.shading = self.shd_fill(k),
+                "w:tblBorders" => {
+                    let (borders, sources) = self.table_borders(k);
+                    t.borders = Some(borders);
+                    t.edit_color_sources(|s| s.borders = sources);
+                }
+                "w:shd" => {
+                    let (shading, source) = self.shading(k);
+                    t.shading = shading;
+                    t.edit_color_sources(|s| s.shading = source);
+                }
                 "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
                 "w:bidiVisual" => t.bidi_visual = on_off(k),
                 "w:tblCellMar" => t.cell_margins = Some(margins(k)),
@@ -736,8 +803,16 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
             "w:gridSpan" => c.span = k.attr("w:val").and_then(u32_of).unwrap_or(1).clamp(1, 63),
             "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
             "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
-            "w:tcBorders" => c.borders = Some(pc.table_borders(k)),
-            "w:shd" => c.shading = pc.shd_fill(k),
+            "w:tcBorders" => {
+                let (borders, sources) = pc.table_borders(k);
+                c.borders = Some(borders);
+                c.edit_color_sources(|s| s.borders = sources);
+            }
+            "w:shd" => {
+                let (shading, source) = pc.shading(k);
+                c.shading = shading;
+                c.edit_color_sources(|s| s.shading = source);
+            }
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:hideMark" => c.hide_mark = on_off(k),
             "w:tcMar" => {
@@ -897,7 +972,11 @@ pub fn sectpr(pc: &PropCtx, e: &El) -> (SectionProps, Vec<HfRef>) {
                     _ => PageVAlign::Top,
                 }
             }
-            "w:pgBorders" => s.page_borders = Some(pc.borders(k)),
+            "w:pgBorders" => {
+                let (borders, sources) = pc.borders(k);
+                s.page_borders = Some(borders);
+                s.edit_page_border_sources(|s| *s = sources);
+            }
             "w:docGrid" => {
                 let mut g = DocGrid::default();
                 if let Some(t) = k.attr("w:type").and_then(DocGridType::from_ooxml) {
