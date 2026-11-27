@@ -96,7 +96,9 @@ fn repeated_words(text: &str, ws: &[(usize, usize)], rules: &Rules, v: &mut Vec<
             && gap.chars().all(char::is_whitespace)
             && w0.chars().all(|c| c.is_alphabetic() || (rules.script.is_letter)(c) || crate::indic::is_joiner(c))
             && w0 == w1
-            && (rules.flag_repeat)(w0)
+            // The words a language repeats on purpose are listed without joiners (`જલ્દી`), so
+            // `જલ્` U+200D `દી` twice is the same intentional repeat.
+            && (rules.flag_repeat)(&w0.replace(crate::indic::is_joiner, ""))
         {
             v.push(issue(rules, *a0, *b1, format!("{}: “{w1}”", rules.repeated_word), vec![w0.to_string()]));
         }

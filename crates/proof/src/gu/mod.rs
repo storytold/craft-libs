@@ -151,6 +151,11 @@ mod tests {
         let text = "પુસ્\u{200D}તક પુસ્\u{200D}તક";
         let issues = crate::check_grammar_in(text, crate::ProofLang::Gu);
         assert!(issues.iter().any(|i| i.start == 0 && i.end == text.len()), "{issues:?}");
+        // A word Gujarati repeats on purpose (`જલ્દી જલ્દી`) still is one when typed with a joiner.
+        for text in ["જલ્\u{200D}દી જલ્\u{200D}દી", "જલ્\u{200C}દી જલ્\u{200C}દી"] {
+            let issues = crate::check_grammar_in(text, crate::ProofLang::Gu);
+            assert!(issues.is_empty(), "{text:?}: {issues:?}");
+        }
     }
 
     #[test]
