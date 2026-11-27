@@ -2039,7 +2039,7 @@ fn run_spread_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, mut body: impl FnMut(&m
         let installed = Env::install_for(ui, row.clone());
         let inner = run_spread(ui, &row, id, gap.x, rtl, &mut body);
         Env::restore(&ctx, installed);
-        record_line(ui, sizing, id, shared, None);
+        record_line(ui, sizing, id, shared, env.first_line);
         inner
     });
     inner
@@ -2061,7 +2061,7 @@ fn run_start_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, mut body: impl FnMut(&mu
         let installed = Env::install_for(ui, row.clone());
         let inner = run_shrinking(ui, &row, id, &mut body);
         Env::restore(&ctx, installed);
-        record_line(ui, sizing, id, shared, sweep.first_line);
+        record_line(ui, sizing, id, shared, env.first_line);
         inner
     })
 }
@@ -2124,7 +2124,7 @@ fn run_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, (wrap, align): (bool, RowAlign
         }
         Env::restore(&ctx, installed);
         if !wrap {
-            record_line(ui, sizing, id, shared, None);
+            record_line(ui, sizing, id, shared, env.first_line);
         }
         inner
     });

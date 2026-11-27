@@ -567,6 +567,29 @@ fn a_memoized_view_sits_on_the_rows_line() {
     }
 }
 
+/// An unwrapped row in a row sits on the outer row's line by its own line, whatever its alignment: a row that places
+/// its block from its start, at its end, centred or spread reports its line as its first line alike.
+#[trial]
+fn an_unwrapped_row_sits_on_the_outer_line_by_its_line_in_every_alignment() {
+    for align in [RowAlign::Start, RowAlign::SpaceBetween, RowAlign::Center, RowAlign::End] {
+        let seen = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING)));
+        let shown = Rc::clone(&seen);
+        let mut fixture = Fixture::new(move |ui| {
+            Panel::new().layout(BodyLayout::row()).id_salt("outer").show(ui, |ui, _| {
+                let tall = Block::new(Vec2::new(20.0, 30.0)).show(ui).rect;
+                let short = Panel::new().layout(BodyLayout::row().align(align)).id_salt("inner").show(ui, |ui, _| Block::new(ITEM).show(ui).rect);
+                if !is_measuring(ui.ctx()) {
+                    shown.set((tall, short.inner.unwrap_or(Rect::NOTHING)));
+                }
+            });
+        });
+        fixture.room(Vec2::splat(400.0)).settle();
+        let (tall, short) = seen.get();
+        assert!(short.height() > 0.0, "{align:?}: the inner row showed its block: {short:?}");
+        assert!((short.center().y - tall.center().y).abs() < SLACK, "{align:?}: the inner row's block {short:?} is off the line of {tall:?}");
+    }
+}
+
 /// A Row in right-to-left holding a vertically scrolling container (content-sized, then filling its height) beside a
 /// probe: the container, the probe inside it and the probe beside it are finite, and the container lies in the row.
 #[trial]
