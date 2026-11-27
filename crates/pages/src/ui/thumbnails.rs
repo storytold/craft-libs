@@ -26,7 +26,7 @@ pub(crate) mod stories;
 use super::view::PageSource;
 use craft_behavior::{CopyKeys, EditEvent, IconId, MiddleButton, Selection, SelectionChange, SelectionModel as _, keyed};
 use craft_ui::contract::{
-    Bind, CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, IdSource, NoValue, OsFiles, Outcome, PendingDrop, Props as _,
+    Bind, CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, IdSource, ListDrag, NoValue, OsFiles, Outcome, PendingDrop, Props as _,
     ReorderMove, ReorderRule, Show as _, ShowCollection as _, Sizing,
 };
 use craft_ui::list::{ThumbAspect, ToggleState};
@@ -154,6 +154,20 @@ pub enum ThumbnailEvent {
         insert: usize,
         /// The files dropped.
         files: Vec<OsFile>,
+    },
+    /// Pages dragged in from another page grid dropped before page `insert`. `from` is the id of the grid the drag
+    /// started in (the [`id`](PageThumbnails::id) its host gave it) and `pages` are the pages dragged, in page order.
+    /// The grid itself changes nothing: the host looks up the pages behind `from` and decides whether they copy or
+    /// move. A drag that started in this grid is its own reorder and never arrives here. Only when
+    /// [`editable`](PageThumbnails::editable).
+    #[non_exhaustive]
+    PagesDropped {
+        /// The position the pages drop at.
+        insert: usize,
+        /// The grid the drag started in.
+        from: Id,
+        /// The pages dragged, as that grid numbers them.
+        pages: Vec<usize>,
     },
     /// A click on action `action` of [`PageThumbnails::actions`] in page `page`'s band.
     #[non_exhaustive]
@@ -547,6 +561,13 @@ impl<'a> PageThumbnails<'a> {
                 CollectionEvent::Dropped { at: DropAt::Gap { insert, .. }, payload, .. } if editable => {
                     if let Some(files) = payload.get::<OsFiles>() {
                         events.push(ThumbnailEvent::FilesDropped { insert, files: files.files.clone() });
+                    } else if let Some(drag) = payload.get::<ListDrag<usize>>() {
+                        let mut pages = drag.keys.clone();
+                        pages.sort_unstable();
+                        pages.dedup();
+                        if !pages.is_empty() {
+                            events.push(ThumbnailEvent::PagesDropped { insert, from: drag.list, pages });
+                        }
                     }
                 }
                 // A check toggles its page in the picked set whatever modifiers are held, and goes to it.
@@ -595,6 +616,7 @@ fn editing<'g>(
         .accepts(move |_, _, insert| insert <= new_page)
         .drag_count(words.count.counted())
         .takes_drop(DropKind::new(DropPlace::Between, |_: &OsFiles, _| true))
+        .takes_drop(DropKind::new(DropPlace::Between, |_: &ListDrag<usize>, _| true))
         .deletable(true)
         .delete_target(craft_ui::contract::DeleteTarget::FocusOrHover);
     match insert_label {

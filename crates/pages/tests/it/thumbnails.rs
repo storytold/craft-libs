@@ -428,3 +428,51 @@ fn strip_picks_stay_beside_the_current_page() {
     assert_eq!(got(&picked), [1, 2, 3], "a Shift-click ranges from the page the plain click went to");
     assert_eq!(current.get(), 1, "a Shift-click does not go to the page");
 }
+
+/// Pages dragged from one grid and released over another arrive there as one `PagesDropped`, with the grid they came
+/// from and the pages dragged; the grid they left reorders nothing.
+#[trial]
+fn pages_dropped_on_another_grid_are_reported_with_their_source() {
+    let (from_id, to_id) = (egui::Id::unique("source-grid"), egui::Id::unique("target-grid"));
+    let (source_events, target_events): (Shared<Vec<ThumbnailEvent>>, Shared<Vec<ThumbnailEvent>>) = (Rc::default(), Rc::default());
+    let (seen_source, seen_target) = (Rc::clone(&source_events), Rc::clone(&target_events));
+    let (source_pages, target_pages) = (DemoPages::new(2), DemoPages::new(4));
+    let (mut source_picked, mut target_picked) = (Selection::default(), Selection::default());
+    let mut fixture = Fixture::new(move |ui| {
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui(vec2(300.0, 600.0), |ui| {
+                let out = PageThumbnails::new("Source", &source_pages, &mut source_picked, 0, PAPER)
+                    .arrangement(ThumbnailArrangement::Organize)
+                    .id(from_id)
+                    .show(ui);
+                seen_source.borrow_mut().extend(out.events);
+            });
+            ui.allocate_ui(vec2(300.0, 600.0), |ui| {
+                let out = PageThumbnails::new("Target", &target_pages, &mut target_picked, 0, PAPER)
+                    .arrangement(ThumbnailArrangement::Organize)
+                    .id(to_id)
+                    .show(ui);
+                seen_target.borrow_mut().extend(out.events);
+            });
+        });
+    });
+    fixture.room(vec2(640.0, 640.0));
+    fixture.settle();
+    let from = tile(&fixture, 1);
+    let to = egui::pos2(from.x + 330.0, from.y);
+    fixture.drag_at(from, to - from).settle();
+    let dropped: Vec<_> = target_events
+        .borrow()
+        .iter()
+        .filter_map(|event| match event {
+            ThumbnailEvent::PagesDropped { insert, from, pages } => Some((*insert, *from, pages.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(dropped.len(), 1, "one drop is reported: {:?}", target_events.borrow());
+    let (insert, grid, pages) = &dropped[0];
+    assert_eq!(*grid, from_id, "the drop names the grid the drag started in");
+    assert_eq!(pages, &[0], "the grabbed page is dragged");
+    assert!(*insert <= 4, "the drop lands among the target's four pages: {insert}");
+    assert!(!source_events.borrow().iter().any(|event| matches!(event, ThumbnailEvent::Reorder(_))), "{:?}", source_events.borrow());
+}
