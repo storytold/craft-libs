@@ -524,7 +524,12 @@ impl Container for Dialog<'_> {
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         self.body_shown = true;
         if self.holds_outer_gesture() {
-            outer::keep(ui.ctx(), cx);
+            // A bare dialog is inline: no layer opens to begin the gesture, and its body may run after it closed.
+            if !self.bare {
+                outer::keep(ui.ctx(), cx);
+            } else if self.open.as_ref().and_then(Bind::value) != Some(&false) {
+                outer::keep_inline(ui.ctx(), cx);
+            }
         }
         if self.bare {
             return;
