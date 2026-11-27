@@ -706,7 +706,6 @@ fn compound_border_lines_round_trip() {
     assert_eq!(got, styles);
 }
 
-
 /// Original [MS-DOC] section-property records: the compatibility start precedes the
 /// full-width version (2.2.5), with the recommended legacy limit and required u32 limit (2.6.4).
 #[test]

@@ -64,16 +64,8 @@ fn only_valid_properties_in_encounter_order_choose_the_restart() {
             grpprl(&[(0x3011, &[1]), (0x7044, &70_007u32.to_le_bytes()), (0x501C, &17u16.to_le_bytes()), (0x7044, &0x7FFF_FFFFu32.to_le_bytes())]),
             Some(17),
         ),
-        (
-            "invalid Bool8 does not cancel a valid restart",
-            grpprl(&[(0x3011, &[1]), (0x501C, &23u16.to_le_bytes()), (0x3011, &[2])]),
-            Some(23),
-        ),
-        (
-            "invalid Bool8 does not turn continuation into a restart",
-            grpprl(&[(0x3011, &[0]), (0x501C, &23u16.to_le_bytes()), (0x3011, &[2])]),
-            None,
-        ),
+        ("invalid Bool8 does not cancel a valid restart", grpprl(&[(0x3011, &[1]), (0x501C, &23u16.to_le_bytes()), (0x3011, &[2])]), Some(23)),
+        ("invalid Bool8 does not turn continuation into a restart", grpprl(&[(0x3011, &[0]), (0x501C, &23u16.to_le_bytes()), (0x3011, &[2])]), None),
     ] {
         let doc = two_sections(Vec::new(), properties);
         assert_eq!(doc.last_section.page_num_start, expected, "{label}");
