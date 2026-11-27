@@ -88,6 +88,8 @@ struct Ctx<'a> {
     /// (`hspMaster`). Keyed by master too, so a shape id repeated in another master can't replace
     /// this master's shape.
     master_props: HashMap<(u32, u32), Props<'a>>,
+    /// Drawing records the presentation may still read, all its drawings together.
+    drawing_records: usize,
     /// The caller's defaults: the master each of the file's masters starts from.
     app: &'a dyn Defaults,
     /// Notes pages converted already. Distinct slides can share a slide id, and so a notes page:
@@ -111,12 +113,13 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
     let mut cx = Ctx {
         p,
         fonts: doc::fonts(d),
-        blips: crate::blip::Store::new(dgg, pictures),
+        blips: crate::blip::Store::new(dgg, pictures, crate::blip::MAX_TOTAL),
         media: HashMap::new(),
         inline_media: HashMap::new(),
         numbering: doc::outline_numbering(&d.document),
         defaults: draw::default_props(dgg),
         master_props: HashMap::new(),
+        drawing_records: craft_officeart::record::MAX_RECORDS,
         app,
         used_notes: HashSet::new(),
     };
@@ -293,7 +296,7 @@ impl<'a> Ctx<'a> {
         let styles = Arc::new(StyleSheet::new(environment, Some(&m.rec)));
         let theme = self.theme(&scheme, &styles);
         let mut master = self.default_master(size, Some(theme));
-        let drawing = draw::drawing(&m.rec);
+        let drawing = draw::drawing(&m.rec, &mut self.drawing_records);
         self.remember_master_props(m.slide_id, &drawing.shapes, 0);
         let ids = [Some(m.slide_id), None];
         let scope =
@@ -333,7 +336,7 @@ impl<'a> Ctx<'a> {
         let Some(parent) = masters.get(&atom.master_id).cloned() else { return };
         let scheme = if atom.follow_master_scheme { parent.scheme } else { scheme_of(&m.rec).unwrap_or(parent.scheme) };
         let Some(id) = self.alloc() else { return };
-        let drawing = draw::drawing(&m.rec);
+        let drawing = draw::drawing(&m.rec, &mut self.drawing_records);
         self.remember_master_props(m.slide_id, &drawing.shapes, 0);
         let ids = [Some(m.slide_id), parent.ids[0]];
         let scope = Scope {
@@ -436,7 +439,7 @@ impl<'a> Ctx<'a> {
             kinds.iter().find(|(k, _)| *k == kind).map(|(_, id)| *id).or(*first)
         })?;
         let id = SlideId(self.alloc()?);
-        let drawing = draw::drawing(&s.rec);
+        let drawing = draw::drawing(&s.rec, &mut self.drawing_records);
         // The n-th outline block of a text type takes the n-th numbering entry for that type.
         let mut seen: HashMap<u32, usize> = HashMap::new();
         let numbering: Vec<Option<Vec<text::Pf9>>> = s
@@ -515,7 +518,7 @@ impl<'a> Ctx<'a> {
 
     /// The text of a notes page's notes placeholder.
     fn notes(&mut self, n: &Listed<'a>, styles: &StyleSheet, scheme: Scheme) -> TextBody {
-        let drawing = draw::drawing(&n.rec);
+        let drawing = draw::drawing(&n.rec, &mut self.drawing_records);
         // Notes masters aren't imported, so there are no master shapes to inherit from.
         let scope =
             Scope { scheme, styles, outline: &n.outline, numbering: &[], used_outline: Default::default(), master: false, masters: [None; 2] };
@@ -625,7 +628,7 @@ impl<'a> Ctx<'a> {
     /// held in the property's own complex bytes.
     fn picture(&mut self, props: &Props<'a>, id: u16) -> Option<MediaId> {
         let Some(bytes) = props.complex(id) else {
-            return props.get(id).filter(|&i| i > 0).and_then(|i| self.media(i as usize));
+            return props.simple(id).filter(|&i| i > 0).and_then(|i| self.media(i as usize));
         };
         let key = bytes.as_ptr() as usize;
         if let Some(m) = self.inline_media.get(&key) {

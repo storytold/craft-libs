@@ -100,11 +100,13 @@ struct Budget {
     records: usize,
     /// A shared formula's text was refused: no later shared formula, in any sheet, is expanded.
     shared_text_spent: bool,
+    /// Drawing records the workbook's sheets may still read, all of them together.
+    drawing_records: usize,
 }
 
 impl Budget {
     fn new(limits: Limits) -> Self {
-        Budget { limits, cells: 0, text: 0, records: 0, shared_text_spent: false }
+        Budget { limits, cells: 0, text: 0, records: 0, shared_text_spent: false, drawing_records: craft_officeart::record::MAX_RECORDS }
     }
     fn record(&mut self) -> Result<(), Error> {
         self.records = self.records.saturating_add(1);
@@ -504,6 +506,8 @@ struct SheetState<'g> {
     drawing: Vec<u8>,
     /// The sheet has an AutoFilterInfo record: its filter is on.
     filtered: bool,
+    /// DefaultRowHeight's `fDyZero`: rows without a Row record are hidden (zero high).
+    rows_hidden_by_default: bool,
 }
 
 impl SheetState<'_> {
@@ -664,6 +668,7 @@ fn worksheet<'g>(
         palette: g.styles.color_table(),
         drawing: vec![],
         filtered: false,
+        rows_hidden_by_default: false,
     };
     let mut depth = 1usize;
     while let Some(rec) = recs.next_record()? {
@@ -693,16 +698,36 @@ fn worksheet<'g>(
 /// Attaches a sheet's shared and array formulas (their definitions follow the first cell that
 /// uses them). Run for every sheet only after all sheets' mandatory text is charged, so the
 /// optional shared-formula text can't use up the allowance a later sheet's strings need.
+/// The width taken for a column the sheet gives none, in 1/256 of a character: 9 characters, near
+/// Excel's standard width. Only where pictures in a group fall depends on it.
+const DEFAULT_COLUMN_WIDTH: f64 = 9.0 * 256.0;
+/// The height taken for a row when the sheet gives no default, in twips: 12.75 pt.
+const DEFAULT_ROW_HEIGHT: u16 = 255;
+
 fn finish_sheet(mut st: SheetState<'_>, budget: &mut Budget, report: &mut Report) -> Sheet {
     let (arrays, shared) = (std::mem::take(&mut st.arrays), std::mem::take(&mut st.shared));
     let pending = std::mem::take(&mut st.pending);
     resolve_pending(&mut st, budget, &arrays, &shared, &pending);
     blank_array_followers(&mut st, &pending);
-    let mut skipped_pictures = false;
-    for shape in drawing::picture_shapes(&std::mem::take(&mut st.drawing)) {
+    // A drawing the workbook's record allowance cut short may have lost pictures.
+    let (shapes, mut skipped_pictures) = drawing::picture_shapes(&std::mem::take(&mut st.drawing), &mut budget.drawing_records);
+    // The sheet's grid, built only when a picture sits inside a group and must be made cells.
+    let grid = shapes.iter().any(|s| matches!(s.place, drawing::Place::InGroup { .. })).then(|| {
+        let default_row = if st.rows_hidden_by_default { 0.0 } else { f64::from(st.sheet.default_row_height.unwrap_or(DEFAULT_ROW_HEIGHT)) };
+        drawing::Grid::new(
+            |c| st.sheet.columns.get(&c).map_or(DEFAULT_COLUMN_WIDTH, |c| if c.hidden { 0.0 } else { f64::from(c.width) }),
+            |r| st.sheet.rows.get(&u32::from(r)).map_or(default_row, |r| if r.hidden { 0.0 } else { f64::from(r.height) }),
+        )
+    });
+    for shape in shapes {
         let blip = usize::try_from(shape.pib).ok().and_then(|i| i.checked_sub(1)).and_then(|i| st.g.blips.get(i)).cloned().flatten();
+        let anchor = match (&shape.place, &grid) {
+            (drawing::Place::Cells(a), _) => *a,
+            (place, Some(grid)) => grid.anchor(place),
+            (drawing::Place::InGroup { group, .. }, None) => *group,
+        };
         match blip {
-            Some((data, mime)) if st.sheet.pictures.len() < MAX_PICTURES => st.sheet.pictures.push(Picture { anchor: shape.anchor, data, mime }),
+            Some((data, mime)) if st.sheet.pictures.len() < MAX_PICTURES => st.sheet.pictures.push(Picture { anchor, data, mime }),
             _ => skipped_pictures = true,
         }
     }
@@ -869,6 +894,8 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
         0x0225 => {
             let flags = c.u16()?;
             let height = c.u16()?;
+            // With fDyZero the height is the one rows get when shown, not the one they have.
+            st.rows_hidden_by_default = flags & 0x0002 != 0;
             if flags & 0x0002 == 0 && height > 0 {
                 st.sheet.default_row_height = Some(height);
             }

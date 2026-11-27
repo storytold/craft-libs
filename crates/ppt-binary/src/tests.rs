@@ -324,7 +324,7 @@ fn streams_with_notes(
     fbse[0] = 6;
     fbse[1] = 6;
     fbse[20..24].copy_from_slice(&(pictures.len() as u32).to_le_bytes());
-    let bstore = container(rt::BSTORE, 1, &[atom(rt::FBSE, 6, &fbse)]);
+    let bstore = container(craft_officeart::rt::BSTORE_CONTAINER, 1, &[atom(craft_officeart::rt::FBSE, 6, &fbse)]);
     let mut font = utf16("Arial");
     font.resize(68, 0);
     let mut wing = utf16("Wingdings");
