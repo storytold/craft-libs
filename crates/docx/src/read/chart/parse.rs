@@ -155,7 +155,7 @@ impl Chart {
         if let Some(c) = s.and_then(|s| s.marker_color) {
             return c;
         }
-        if self.vary && s.is_some_and(|s| s.color.is_none()) {
+        if self.vary && s.is_some_and(|s| !self.keeps_colour(s)) {
             self.auto_colour(i, self.n)
         } else {
             self.auto_colour(s.and_then(|s| s.idx).unwrap_or(j), self.series_n)
@@ -168,7 +168,7 @@ impl Chart {
     /// colours Word ignores.
     pub(super) fn segmented(&self, j: usize) -> bool {
         let Some(s) = self.series.get(j) else { return false };
-        !self.radar_fill && ((self.vary && s.color.is_none()) || s.points.iter().any(|p| p.line.is_some()))
+        !self.radar_fill && ((self.vary && !self.keeps_colour(s)) || s.points.iter().any(|p| p.line.is_some()))
     }
 
     /// Colour of point `i`'s legend key: the colour of what the point is drawn with, else the
@@ -178,7 +178,13 @@ impl Chart {
     /// and ignores a fill).
     fn key_colour(&self, j: usize, i: usize) -> Rgb {
         let own = self.point(j, i).and_then(|p| match self.kind {
-            Kind::Line | Kind::Scatter | Kind::Radar => p.marker.or(p.line),
+            Kind::Line | Kind::Scatter | Kind::Radar => {
+                if self.draws_markers(j) {
+                    p.marker.or(p.line)
+                } else {
+                    p.line
+                }
+            }
             Kind::Bar | Kind::Area | Kind::Pie | Kind::Doughnut | Kind::Bubble => p.fill,
         });
         own.unwrap_or_else(|| self.auto_point_colour(j, i))
@@ -192,7 +198,30 @@ impl Chart {
 
     /// A point's colour when it has none of its own: the varied accent, or the series colour.
     pub(super) fn auto_point_colour(&self, j: usize, i: usize) -> Rgb {
-        if self.vary && self.series.get(j).is_some_and(|s| s.color.is_none()) { self.auto_colour(i, self.n) } else { self.series_colour(j) }
+        if self.vary && self.series.get(j).is_some_and(|s| !self.keeps_colour(s)) { self.auto_colour(i, self.n) } else { self.series_colour(j) }
+    }
+
+    /// Whether series `s` has a colour of its own that keeps its points one colour when the chart
+    /// varies (Word lets it win over `c:varyColors`): its fill for bars, areas, slices and
+    /// bubbles, where an outline alone leaves the points varied; any colour it sets for lines,
+    /// scatters and radars.
+    fn keeps_colour(&self, s: &Series) -> bool {
+        match self.kind {
+            Kind::Bar | Kind::Area | Kind::Pie | Kind::Doughnut | Kind::Bubble => s.fill.is_some(),
+            Kind::Line | Kind::Scatter | Kind::Radar => s.color.is_some(),
+        }
+    }
+
+    /// Whether series `j` draws markers: a line series only with a marker symbol, a scatter
+    /// series unless its symbol is `none`, a radar chart only in its marker style.
+    pub(super) fn draws_markers(&self, j: usize) -> bool {
+        let Some(s) = self.series.get(j) else { return false };
+        match self.kind {
+            Kind::Line => s.markers == Some(true),
+            Kind::Scatter => s.markers != Some(false),
+            Kind::Radar => self.radar_marks,
+            Kind::Bar | Kind::Area | Kind::Pie | Kind::Doughnut | Kind::Bubble => false,
+        }
     }
 
     /// The legend: one entry per category, in its point's colour, for pie and doughnut charts,
@@ -331,7 +360,8 @@ impl Series {
         let ln = sp.and_then(|p| p.child("a:ln"));
         let marker = ser.child("c:marker").and_then(|m| m.child("c:spPr")).and_then(|p| fill_colour(p, theme));
         let marker_color = marker;
-        let color = sp.and_then(|p| fill_colour(p, theme)).or_else(|| ln.and_then(|l| fill_colour(l, theme))).or(marker);
+        let fill = sp.and_then(|p| fill_colour(p, theme));
+        let color = fill.or_else(|| ln.and_then(|l| fill_colour(l, theme))).or(marker);
         let no_fill = sp.and_then(|p| p.child("a:noFill")).is_some();
         let line_w = ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).map(|w| w.clamp(0.0, 20.0));
         let line = ln.is_none_or(|l| l.child("a:noFill").is_none());
@@ -383,6 +413,7 @@ impl Series {
             name,
             idx,
             color,
+            fill,
             line_w,
             line,
             no_fill,

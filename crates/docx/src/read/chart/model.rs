@@ -176,6 +176,9 @@ pub(super) struct Series {
     /// when missing or not a valid number.
     pub(super) idx: Option<usize>,
     pub(super) color: Option<Rgb>,
+    /// The series' own fill (`c:spPr` fill, not its outline or marker): what keeps a bar, slice
+    /// or bubble from varying by point.
+    pub(super) fill: Option<Rgb>,
     /// Fixed line width in points, `None`: the chart's default.
     pub(super) line_w: Option<f32>,
     /// Whether the series is drawn as a line (scatter series without one get markers).

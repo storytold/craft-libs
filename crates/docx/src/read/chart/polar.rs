@@ -100,7 +100,7 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
             stroke(out, segs, col, w);
         }
         for (i, p) in ring.iter().enumerate() {
-            if c.radar_marks && s.values.get(i).copied().flatten().is_some() {
+            if c.draws_markers(j) && s.values.get(i).copied().flatten().is_some() {
                 let rect = [p.0 as f32 - MARKER / 2.0, p.1 as f32 - MARKER / 2.0, MARKER, MARKER];
                 out.push(GraphicItem::Shape {
                     rect,

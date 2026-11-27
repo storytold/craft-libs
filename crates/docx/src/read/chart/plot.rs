@@ -386,7 +386,8 @@ fn draw_grid(out: &mut Vec<GraphicItem>, g: &Frame, ticks: &[(f64, String)]) {
 /// scatter chart.
 fn draw_cat_grid(out: &mut Vec<GraphicItem>, g: &Frame, xticks: &[(f64, String)], kind: Kind) {
     let plot = g.plot;
-    if kind == Kind::Scatter {
+    // Scatter and bubble charts put their x gridlines on the numeric x axis' ticks.
+    if kind.xy() {
         for (t, _) in xticks {
             let p = g.scat_x(*t);
             stroke(out, seg(p, plot.y, p, plot.bottom()), GRID, 0.75);
@@ -591,14 +592,14 @@ fn lines(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<Data
                     text,
                     inside: false,
                     pos: s.label_pos.unwrap_or(LabelPos::Right),
-                    off: marker_half(s, s.markers == Some(true)) + 2.0,
+                    off: marker_half(s, c.draws_markers(j)) + 2.0,
                 });
             }
         }
         if s.line {
             series_line(out, c, j, &pts);
         }
-        if s.markers == Some(true) {
+        if c.draws_markers(j) {
             markers(out, &pts, |i| c.marker_colour(j, i), s);
         }
     }
@@ -791,14 +792,14 @@ fn draw_scatter(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut V
                     text,
                     inside: false,
                     pos: s.label_pos.unwrap_or(LabelPos::Right),
-                    off: marker_half(s, s.markers != Some(false)) + 2.0,
+                    off: marker_half(s, c.draws_markers(j)) + 2.0,
                 });
             }
         }
         if s.line {
             series_line(out, c, j, &pts);
         }
-        if s.markers != Some(false) {
+        if c.draws_markers(j) {
             markers(out, &pts, |i| c.marker_colour(j, i), s);
         }
     }
@@ -923,7 +924,17 @@ fn draw_bubbles(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, bubbles: &[Bub
             }
         }
         if let Some(text) = label_of(s, b.i) {
-            labels.push(DataLabel { x: cx, y: (cy - r).max(plot.y), text, inside: false, pos: LabelPos::Above, off: 0.0 });
+            // At the bubble's edge on the side `c:dLblPos` names (above when it names none), or
+            // its centre; kept inside the plot for a bubble the plot cuts.
+            let pos = s.label_pos.unwrap_or(LabelPos::Above);
+            let (x, y) = match pos {
+                LabelPos::Above => (cx, (cy - r).max(plot.y)),
+                LabelPos::Below => (cx, (cy + r).min(plot.bottom())),
+                LabelPos::Left => ((cx - r).max(plot.x), cy),
+                LabelPos::Right => ((cx + r).min(plot.right()), cy),
+                LabelPos::Center => (cx, cy),
+            };
+            labels.push(DataLabel { x, y, text, inside: false, pos, off: 0.0 });
         }
     }
 }

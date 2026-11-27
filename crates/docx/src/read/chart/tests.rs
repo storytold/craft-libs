@@ -1848,3 +1848,116 @@ fn automatic_series_colours_are_grouped_by_the_highest_c_idx() {
     let own = [ser(0, "A", Some("FF0000"), &["Q1"], &["1"]), renumbered(&b, r#"<c:idx val="7"/><c:order val="1"/>"#)];
     assert_eq!(column_colours(&own).0, [Rgb(0xFF, 0, 0), hex(0xEEA28B)]);
 }
+
+// From review of #2736.
+
+/// The x of each vertical gridline (a path in the gridline colour that starts and ends at one x).
+fn vertical_grid(items: &[GraphicItem]) -> Vec<f32> {
+    items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Path { segs, stroke: Some(c), .. } if *c == GRID => match segs.as_slice() {
+                [PathSeg::Move(x0, _), PathSeg::Line(x1, _)] if (x0 - x1).abs() < 1e-3 => Some(*x0),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn bubble_x_gridlines_sit_on_the_x_axis_ticks() {
+    let ax = |id: u32, pos: &str, grid: &str| {
+        format!(
+            r#"<c:valAx><c:axId val="{id}"/><c:scaling><c:orientation val="minMax"/><c:max val="4"/><c:min val="0"/></c:scaling><c:delete val="0"/><c:axPos val="{pos}"/>{grid}</c:valAx>"#
+        )
+    };
+    let plot = format!(
+        r#"<c:bubbleChart><c:varyColors val="0"/>{}<c:axId val="1"/><c:axId val="2"/></c:bubbleChart>{}{}"#,
+        three().concat(),
+        ax(1, "b", "<c:majorGridlines/>"),
+        ax(2, "l", "")
+    );
+    let items = chart_items(&space(&plot), &theme(), 432.0, 252.0);
+    let grid = vertical_grid(&items);
+    // The bubbles sit at x = 1, 2 and 3, which are ticks of the 0..4 axis.
+    let centres: Vec<f32> = bubbles(&items, RED).iter().map(|b| b.0).collect();
+    assert_eq!(centres.len(), 3);
+    for x in centres {
+        assert!(grid.iter().any(|g| (g - x).abs() < 0.01), "a gridline at the bubble at {x}: {grid:?}");
+    }
+}
+
+/// `ser` with a series `c:spPr` holding only an outline in `rgb`.
+fn outlined(ser: &str, rgb: &str) -> String {
+    ser.replacen("</c:tx>", &format!(r#"</c:tx><c:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="{rgb}"/></a:solidFill></a:ln></c:spPr>"#), 1)
+}
+
+#[test]
+fn a_series_outline_alone_leaves_a_varied_slice_or_bar_varied() {
+    let vary = r#"<c:varyColors val="1"/>"#;
+    let s = outlined(&ser(0, "S", None, &CATS, &["1", "2", "3"]), "FFFFFF");
+    let varied = vec![accent(0), accent(1), accent(2)];
+    let pie = format!(r#"<c:pieChart>{vary}{s}</c:pieChart>"#);
+    let slices: Vec<Rgb> = filled(&chart_items(&space(&pie), &theme(), 200.0, 150.0)).iter().map(|f| f.0).collect();
+    assert_eq!(slices, varied, "pie");
+    let bars: Vec<Rgb> = filled(&chart_items(&space(&column_chart(vary, &[s])), &theme(), 300.0, 200.0)).iter().map(|f| f.0).collect();
+    assert_eq!(bars, varied, "column");
+}
+
+/// The centre of the text item that reads `text`.
+fn text_centre(items: &[GraphicItem], text: &str) -> Option<(f32, f32)> {
+    items.iter().find_map(|it| match it {
+        GraphicItem::Text { rect: [x, y, w, h], text: t, .. } if t == text => Some((x + w / 2.0, y + h / 2.0)),
+        _ => None,
+    })
+}
+
+#[test]
+fn bubble_data_labels_take_their_c_dlblpos() {
+    // One bubble at (2, 2), big enough that a label inside it is clearly inside.
+    let s = bser(0, "FF0000", &["2"], &["2"], Some(&["1"]));
+    let at = |pos: &str| {
+        // The series' own `c:dLbls`, where `c:dLblPos` is read.
+        let lbls = format!(r#"<c:dLbls>{pos}<c:showVal val="1"/></c:dLbls><c:xVal>"#);
+        let items = bubble_chart(&[s.replacen("<c:xVal>", &lbls, 1)], "", 432.0, 252.0);
+        let (cx, cy, d) = bubbles(&items, RED)[0];
+        let (lx, ly) = text_centre(&items, "2").expect("a label");
+        (lx - cx, ly - cy, d / 2.0)
+    };
+    let (dx, dy, r) = at(r#"<c:dLblPos val="ctr"/>"#);
+    assert!(dx.abs() < r / 2.0 && dy.abs() < r / 2.0, "centred: ({dx}, {dy}), r {r}");
+    let (_, dy, r) = at("");
+    assert!(dy < -r, "above by default: {dy}, r {r}");
+    let (dx, _, r) = at(r#"<c:dLblPos val="r"/>"#);
+    assert!(dx > r, "right: {dx}, r {r}");
+}
+
+#[test]
+fn a_category_legend_keeps_the_categories_in_order() {
+    // A one-series stacked column chart that varies lists its categories, left to right as drawn.
+    let s = ser(0, "S", None, &CATS, &["1", "2", "3"]);
+    let plot = format!(
+        r#"<c:barChart><c:barDir val="col"/><c:grouping val="stacked"/><c:overlap val="100"/>{s}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#
+    );
+    assert_eq!(swatch_colours(&with_legend(&plot, "r", 300.0, 200.0)), [accent(0), accent(1), accent(2)]);
+    // Two series in that chart are still listed as stacked, top series first.
+    let two = plot.replacen("<c:axId", &format!("{}<c:axId", ser(1, "T", None, &CATS, &["1", "1", "1"])), 1);
+    assert_eq!(swatch_colours(&with_legend(&two, "r", 300.0, 200.0)), [accent(1), accent(0)]);
+}
+
+#[test]
+fn a_line_point_key_takes_its_marker_colour_only_when_markers_are_drawn() {
+    // Point 1: a red marker and a blue line.
+    let solid = |rgb: &str| format!(r#"<a:solidFill><a:srgbClr val="{rgb}"/></a:solidFill>"#);
+    let dpt = format!(
+        r#"<c:dPt><c:idx val="1"/><c:marker><c:spPr>{}</c:spPr></c:marker><c:spPr><a:ln w="28575">{}</a:ln></c:spPr></c:dPt>"#,
+        solid("FF0000"),
+        solid("0000FF")
+    );
+    let vary = r#"<c:varyColors val="1"/>"#;
+    let plain = with_dpts(&ser(0, "S", None, &CATS, &["1", "3", "2"]), &dpt);
+    assert_eq!(swatch_colours(&with_legend(&line_chart(vary, &plain), "r", 300.0, 200.0))[1], BLUE, "no markers: the line's colour");
+    let marked = plain.replacen("</c:tx>", r#"</c:tx><c:marker><c:symbol val="circle"/></c:marker>"#, 1);
+    assert_eq!(swatch_colours(&with_legend(&line_chart(vary, &marked), "r", 300.0, 200.0))[1], RED, "markers: the marker's colour");
+}

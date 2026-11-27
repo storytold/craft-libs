@@ -93,9 +93,9 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
     }
     if let Some(pos) = chart.legend {
         // Word lists bar series in the order they are drawn: reversed for clustered horizontal bars
-        // and for stacked columns with a vertical legend.
+        // and for stacked columns with a vertical legend. A legend of categories keeps their order.
         let vertical = matches!(pos, Pos::Left | Pos::Right);
-        let reverse = chart.kind == Kind::Bar && if chart.horizontal { !chart.stacked() } else { chart.stacked() && vertical };
+        let reverse = chart.kind == Kind::Bar && !chart.point_legend && if chart.horizontal { !chart.stacked() } else { chart.stacked() && vertical };
         let mut entries = chart.legend_entries();
         if reverse {
             entries.reverse();
