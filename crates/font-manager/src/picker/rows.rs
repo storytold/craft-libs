@@ -347,6 +347,7 @@ const PREVIEW_SIZES: [FontPreviewSize; 3] = [FontPreviewSize::Small, FontPreview
 fn script_label(script: FontScript, words: &FontPickerWords) -> Label {
     match script {
         FontScript::Latin => words.script_latin.clone(),
+        FontScript::EastAsian => words.script_east_asian.clone(),
         FontScript::Japanese => words.script_japanese.clone(),
         FontScript::Thai => words.script_thai.clone(),
     }
@@ -581,15 +582,16 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let family = cx.value().cloned().unwrap_or_default();
     let settings = read(&mut picker.settings, cx);
     let plain = picker.kind == FontPickerKind::Plain;
-    // The plain list has no filters: neither the bar nor the column shows, and nothing narrows the list.
-    let mut filters = read(&mut picker.filters, cx).filter(|_| !plain);
+    let bound_filters = read(&mut picker.filters, cx);
+    // The plain list hides the filter bar and class column while still applying filters bound by the host.
+    let mut filters = bound_filters.clone().filter(|_| !plain);
     let actions = picker.actions;
     let has_filters = filters.is_some();
     let chips = picker.filter_layout == FilterLayout::Chips;
     let on_white = settings.as_ref().is_some_and(|s| s.samples_on_white);
     let mut preview_size = settings.as_ref().map(|s| s.preview);
     let (sets, scripts) = (picker.sets, picker.scripts);
-    let narrowing = filters.clone().unwrap_or_default();
+    let narrowing = bound_filters.unwrap_or_default();
     let catalog = picker.catalog;
     let infos = infos_of(&cx.response.ctx, cx.id, catalog);
     let language_code = ui_language(&cx.env);

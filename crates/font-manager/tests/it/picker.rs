@@ -1319,3 +1319,33 @@ fn the_closed_field_skips_building_stops_while_idle_and_steps_on_input() {
     assert_eq!(seen.borrow().picks.last().map(|(f, _)| f.as_str()), Some(all[2].as_str()), "wheel end commits the stepped family");
     assert_eq!(craft_font_manager::picker::stop_builds(fx.ctx()), after_wheel, "wheel end and idle frames do not rebuild stops");
 }
+
+#[trial]
+fn east_asian_script_filter_keeps_cjk_faces_and_narrows_a_plain_picker() {
+    const THAI: &[u8] = include_bytes!("../../../font-subset/tests/data/sarabun/Sarabun-Regular.ttf");
+    const CJK: &[u8] = include_bytes!("../../../ui-contract/tests/fonts/NotoSansCJKsc-test.otf");
+    let catalog = catalog_of(&[INTER_REGULAR, THAI, CJK]);
+    let mut filters = FontFilters::default();
+    filters.script = Some(FontScript::EastAsian);
+
+    let filtered = listed(&catalog, &filters, &[]);
+    assert!(filtered.iter().any(|family| family.contains("CJK")), "expected East Asian family in {filtered:?}");
+    assert!(!filtered.iter().any(|family| family.contains("Inter") || family.contains("Sarabun")), "unexpected non-CJK family in {filtered:?}");
+
+    let mut family = String::new();
+    let mut fx = Fixture::new(move |ui| {
+        let _ = FontPicker::new("Asian text font", Bind::bound(&mut family), &catalog)
+            .kind(FontPickerKind::Plain)
+            .filters(Bind::given(filters.clone()))
+            .show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    open(&mut fx);
+
+    let words = FontPickerWords::default();
+    assert!(!present(&fx, words.clear_all.as_str()), "plain picker keeps the filter bar hidden");
+    assert!(present(&fx, "Noto Sans CJK SC"), "plain picker with East Asian filter lists CJK font");
+    assert!(!present(&fx, "Inter"), "plain picker with East Asian filter excludes Latin font");
+    assert!(!present(&fx, "Sarabun"), "plain picker with East Asian filter excludes Thai font");
+}
