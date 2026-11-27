@@ -167,7 +167,8 @@ const SEGMENT: PartKey = PartKey::new("segment");
 /// The part under the whole canvas that a Direct Selection marquee drags from.
 const MARQUEE: PartKey = PartKey::new("marquee");
 /// The part under the whole canvas that takes the presses off the paths under Add and Delete Anchor, whose canvas tool
-/// takes no press: the overlay reports them ([`BezierOutput::pressed_empty`]).
+/// takes no press: the overlay reports them ([`BezierOutput::pressed_empty`], and a secondary click
+/// [`BezierOutput::context_empty`]).
 const EMPTY: PartKey = PartKey::new("empty");
 
 /// Bits of a part index that hold the knot, then the subpath; the path's index takes the rest.
@@ -195,6 +196,7 @@ struct Report {
     delete: Option<AnchorDelete>,
     pressed_empty: bool,
     context: Option<(BezierHit, Pos2)>,
+    context_empty: Option<Pos2>,
     hover: Option<BezierHit>,
 }
 
@@ -400,7 +402,8 @@ struct Scene {
 /// - Pointer: shown handles first, then anchors, then segments; the nearest of each kind, of equal distances the path
 ///   drawn last. A press on a part stays with the overlay; one elsewhere reaches the host's tool, except under Direct
 ///   Selection, which takes it for a marquee. [`BezierTool`] says what a press does. Past the click slop a press
-///   drags; Escape cancels the drag.
+///   drags; Escape cancels the drag. A secondary click on a part reports [`context`](BezierOutput::context), and one on
+///   empty canvas under Direct Selection, Add Anchor or Delete Anchor [`context_empty`](BezierOutput::context_empty).
 /// - Keyboard: one Tab stop. Page Down and Page Up pick the next and previous part (anchors in path order, each
 ///   followed by its shown handles, in then out), Home and End the first and last; picking an anchor selects it alone.
 ///   ⇧ Page Down and ⇧ Page Up add the next and previous anchor; ⌘A selects every anchor of the path. The arrows move
@@ -896,6 +899,10 @@ impl<'a> BezierOverlay<'a> {
         {
             let press = result.press;
             pressed |= press.phase.is_press();
+            // The marquee part senses a drag, so it captures a secondary press too: its release is the host's menu.
+            if let Some(at) = context_click(&press) {
+                self.report.context_empty = Some(at);
+            }
             match press.phase {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     self.report.pressed_empty = true;
@@ -913,22 +920,8 @@ impl<'a> BezierOverlay<'a> {
                 _ => {}
             }
         }
-        if matches!(self.tool, BezierTool::AddAnchor | BezierTool::DeleteAnchor)
-            && let Some(result) = cx.part_if_declared(EMPTY)
-        {
-            let (press, hover) = (result.press, result.hover_pos);
-            // The part covers the canvas background, so it owns the cursor the host tool shows off the paths too.
-            if hover.is_some() {
-                let tool = if self.tool == BezierTool::AddAnchor { PathTool::AddAnchor } else { PathTool::DeleteAnchor };
-                cx.cursor(Cursor::Painted(cursor_of(tool, press.mods, space.precise())), CursorPriority::Part);
-            }
-            if matches!(press.phase, PressPhase::Down { start, .. } if start.button == PointerButton::Primary) {
-                self.report.pressed_empty = true;
-                // Add Anchor's click off the paths deselects the anchors; the path stays the one being edited.
-                if self.tool == BezierTool::AddAnchor && (!self.selection.anchors.is_empty() || self.selection.segment.is_some()) {
-                    self.report.select = Some(self.deselected());
-                }
-            }
+        if matches!(self.tool, BezierTool::AddAnchor | BezierTool::DeleteAnchor) {
+            self.run_empty(cx, space);
         }
         // A press none of the parts carries any more (its part went with the paths) is over for the overlay.
         if !pressed && cx.press_slot::<Held>().is_some() {
@@ -939,6 +932,28 @@ impl<'a> BezierOverlay<'a> {
             self.hover_mark = tools::hover_mark(self.tool, hit, mods, self.selection);
             if let Some(cursor) = tools::hover_cursor(self.tool, hit, mods, space.precise()) {
                 cx.cursor(cursor, CursorPriority::Part);
+            }
+        }
+    }
+
+    /// Add and Delete Anchor's part under the whole canvas: the cursor off the paths, a press there and a secondary
+    /// click there.
+    fn run_empty(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace) {
+        let Some(result) = cx.part_if_declared(EMPTY) else { return };
+        let (press, hover) = (result.press, result.hover_pos);
+        // The part covers the canvas background, so it owns the cursor the host tool shows off the paths too.
+        if hover.is_some() {
+            let tool = if self.tool == BezierTool::AddAnchor { PathTool::AddAnchor } else { PathTool::DeleteAnchor };
+            cx.cursor(Cursor::Painted(cursor_of(tool, press.mods, space.precise())), CursorPriority::Part);
+        }
+        if let Some(at) = context_click(&press) {
+            self.report.context_empty = Some(at);
+        }
+        if matches!(press.phase, PressPhase::Down { start, .. } if start.button == PointerButton::Primary) {
+            self.report.pressed_empty = true;
+            // Add Anchor's click off the paths deselects the anchors; the path stays the one being edited.
+            if self.tool == BezierTool::AddAnchor && (!self.selection.anchors.is_empty() || self.selection.segment.is_some()) {
+                self.report.select = Some(self.deselected());
             }
         }
     }
@@ -1240,6 +1255,11 @@ pub struct BezierOutput {
     pub pressed_empty: bool,
     /// A secondary click on a part of a path, with its screen position, for the host's path menu.
     pub context: Option<(BezierHit, Pos2)>,
+    /// A secondary click on empty canvas, outside every path, with its screen position, under Direct Selection, Add
+    /// Anchor or Delete Anchor, whose parts cover the canvas: the host's path menu without a point entry. Under the
+    /// other tools, and when the overlay draws outlines only ([`MAX_ANCHORS`], [`AnchorsShown::Hidden`]), the canvas's
+    /// tool takes such a click.
+    pub context_empty: Option<Pos2>,
     /// The part under the pointer.
     pub hover: Option<BezierHit>,
 }
@@ -1306,8 +1326,9 @@ impl Component for BezierOverlay<'_> {
                 .pointer_only("⌘A selects every anchor and the arrows move the selected anchors");
         }
         if matches!(self.tool, BezierTool::AddAnchor | BezierTool::DeleteAnchor) && !scene.limited {
+            // `CONTEXT_CLICK`: the part covers the canvas, so a secondary press it did not capture would reach no one.
             cx.part(EMPTY, HitShape::Rect(rect))
-                .sense(Sense::CLICK)
+                .sense(Sense::CLICK.union(Sense::CONTEXT_CLICK))
                 .priority(HitPriority::new(HitLevel::Background, 0))
                 .pointer_only("Escape leaves the paths, as a press off them does");
         }
@@ -1486,7 +1507,7 @@ impl Component for BezierOverlay<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> BezierOutput {
-        let Report { change, select, insert, delete, pressed_empty, context, hover } = self.report;
-        BezierOutput { edit: cx.edit_response(), change, select, insert, delete, pressed_empty, context, hover }
+        let Report { change, select, insert, delete, pressed_empty, context, context_empty, hover } = self.report;
+        BezierOutput { edit: cx.edit_response(), change, select, insert, delete, pressed_empty, context, context_empty, hover }
     }
 }

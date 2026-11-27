@@ -201,6 +201,12 @@ struct State {
     canvas_tool: Option<PathTool>,
     /// Passes in which that tool ran a gesture.
     tool_gestures: usize,
+    /// The overlay's secondary clicks on a part of a path.
+    contexts: Vec<(BezierHit, Pos2)>,
+    /// The overlay's secondary clicks on empty canvas.
+    empty_contexts: Vec<Pos2>,
+    /// The canvas menu requests of the tool under the overlay.
+    host_contexts: Vec<Pos2>,
 }
 
 struct Harness {
@@ -265,6 +271,9 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         tool_clicks: 0,
         canvas_tool: None,
         tool_gestures: 0,
+        contexts: Vec::new(),
+        empty_contexts: Vec::new(),
+        host_contexts: Vec::new(),
     }));
     let shown = Rc::clone(&state);
     let mut fixture = Fixture::new(move |ui| {
@@ -307,6 +316,7 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         }
         if let Some(reply) = reply {
             st.tool_gestures += usize::from(reply.gesture.is_some());
+            st.host_contexts.extend(reply.context.map(|request| request.at));
         }
         if st.pans {
             st.view = canvas.output.view.or(st.view);
@@ -316,6 +326,8 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         st.seen.extend(output.edit.events.iter().map(kind));
         st.hover = output.hover;
         st.changes.extend(output.change);
+        st.contexts.extend(output.context);
+        st.empty_contexts.extend(output.context_empty);
         if let Some(select) = output.select {
             st.lone_selects += usize::from(output.edit.events.is_empty());
             st.selection = select;
@@ -1250,6 +1262,61 @@ fn the_anchor_tools_take_no_press_off_the_paths_and_show_their_own_cursor() {
         st.precise = true;
     });
     assert_eq!(cursor_at(&mut h, egui::Modifiers::NONE), Some(Cursor::Painted(PaintedCursor::Crosshair)));
+}
+
+// A secondary click on empty canvas under the tools whose parts cover the canvas (Direct Selection's marquee, Add and
+// Delete Anchor's background) is the overlay's to report, for the host's path menu without a point entry, and goes to no
+// one else; one on a path part is still reported with its hit. Convert Point covers nothing and leaves it to the
+// canvas's tool.
+#[trial]
+fn a_secondary_click_on_empty_canvas_is_reported_for_the_host_menu() {
+    let right_click = |h: &mut Harness, at: Pos2| {
+        h.fixture.frame(vec![pointer::moved(at)]);
+        h.fixture.frame(vec![pointer::secondary(at, true)]);
+        h.fixture.frame(vec![pointer::secondary(at, false)]);
+        h.fixture.settle();
+    };
+    let tools = [
+        (BezierTool::Direct, Some(PathTool::DirectSelection)),
+        (BezierTool::AddAnchor, Some(PathTool::AddAnchor)),
+        (BezierTool::DeleteAnchor, Some(PathTool::DeleteAnchor)),
+    ];
+    for (tool, canvas_tool) in tools {
+        let mut h = two_paths();
+        h.update(|st| {
+            st.tool = tool;
+            st.canvas_tool = canvas_tool;
+            st.selection = sel(1, &[]);
+        });
+        let empty = h.screen(p(320.0, 250.0));
+        right_click(&mut h, empty);
+        {
+            let st = h.state.borrow();
+            assert_eq!(st.empty_contexts, vec![empty], "{tool:?}");
+            assert!(st.contexts.is_empty() && st.host_contexts.is_empty(), "{tool:?}: {:?} {:?}", st.contexts, st.host_contexts);
+        }
+        let anchor = h.screen(p(160.0, 60.0));
+        right_click(&mut h, anchor);
+        let st = h.state.borrow();
+        assert_eq!(st.empty_contexts.len(), 1, "{tool:?}: a click on a part is not empty canvas's");
+        assert!(
+            matches!(st.contexts.as_slice(), [(BezierHit::Anchor { path: 1, knot, .. }, at)] if *knot == kr(1) && *at == anchor),
+            "{tool:?}: {:?}",
+            st.contexts
+        );
+    }
+
+    let mut h = two_paths();
+    h.update(|st| {
+        st.tool = BezierTool::Convert;
+        st.canvas_tool = Some(PathTool::ConvertPoint);
+        st.selection = sel(1, &[]);
+    });
+    let empty = h.screen(p(320.0, 250.0));
+    right_click(&mut h, empty);
+    let st = h.state.borrow();
+    assert!(st.empty_contexts.is_empty() && st.contexts.is_empty(), "{:?} {:?}", st.empty_contexts, st.contexts);
+    assert_eq!(st.host_contexts, vec![empty], "Convert Point leaves the click to the canvas's tool");
 }
 
 // A Direct Selection marquee is a gesture like the other drags: it begins with its drag, a release commits it with the
