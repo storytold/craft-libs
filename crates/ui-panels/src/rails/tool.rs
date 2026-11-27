@@ -427,7 +427,9 @@ fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut
                                         if trace_grid_output {
                                             eprintln!(
                                                 "CRAFT_TRACE_GRID_OUTPUT push measuring={} index={} rect={:?}",
-                                                crate::runtime::measure::active(ui.ctx()), index, out.response.rect
+                                                crate::runtime::measure::active(ui.ctx()),
+                                                index,
+                                                out.response.rect
                                             );
                                         }
                                         shown_at.push((*index, out.response.rect));
@@ -469,7 +471,9 @@ fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut
     if trace_grid_output {
         eprintln!(
             "CRAFT_TRACE_GRID_OUTPUT return measuring={} edit_toolbar={:?} shown_at={:?}",
-            crate::runtime::measure::active(ui.ctx()), edit_toolbar, shown_at
+            crate::runtime::measure::active(ui.ctx()),
+            edit_toolbar,
+            shown_at
         );
     }
     (edit_toolbar, shown_at)

@@ -520,7 +520,10 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
         if closed && std::env::var("CRAFT_TRACE_DRAWER_CLOSE").is_ok_and(|value| value == "1") {
             eprintln!(
                 "CRAFT_TRACE_DRAWER_CLOSE leave={} open={} reason={:?} measuring={} opener={:?}",
-                leave, open, shown.output.closed, crate::runtime::measure::active(&ctx),
+                leave,
+                open,
+                shown.output.closed,
+                crate::runtime::measure::active(&ctx),
                 opener.as_ref().map(|response| (response.enabled(), response.rect))
             );
         }
