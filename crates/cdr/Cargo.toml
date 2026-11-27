@@ -1,6 +1,6 @@
 [package]
 name = "craft-cdr"
-description = "Bounded reader for .cdr drawings of versions 1 to 27 and .cmx files: WL records, RIFF index, compressed lists, ZIP packages, shapes, fills, outlines, pages and layers, and the picture a file keeps of its drawing"
+description = "Bounded reader for .cdr drawings of versions 1 to 27 and .cmx files: WL records, RIFF index, compressed lists, ZIP packages, shapes, fills, outlines, pages and layers, and the picture a file keeps of its drawing; writer for version 15 .cdr drawings"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,7 @@ repository.workspace = true
 workspace = true
 
 [features]
-# Synthetic-file builders for tests and fuzz seeds; not a .cdr writer.
+# Synthetic-file builders for tests and fuzz seeds, of every version; `write` is the crate's writer.
 synth = []
 
 [dependencies]
