@@ -345,9 +345,7 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
 
     /// [`show`](ToolbarDrawer::show) with `below` drawn in the footer above Restore Defaults.
     pub fn show_with(self, ui: &mut Ui, mut below: impl FnMut(&mut Ui)) -> ToolbarDrawerOutput<T> {
-        let ToolbarDrawer {
-            rail, groups, toolbar, opens, mark, reveal, menu, dropped, opener, kind, no_matches, grouped_tools_drag,
-        } = self;
+        let ToolbarDrawer { rail, groups, toolbar, opens, mark, reveal, menu, dropped, opener, kind, no_matches, grouped_tools_drag } = self;
         let searchable = kind == DrawerKind::Searchable;
         let env = Env::of(ui);
         let words = env.words::<RailWords>();
@@ -472,7 +470,9 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                                 }
                             }
                         });
-                        if searchable && !query.trim().is_empty() && count.get() == 0
+                        if searchable
+                            && !query.trim().is_empty()
+                            && count.get() == 0
                             && let Some(label) = &no_matches
                         {
                             Text::new(label.clone()).shade(Shade::Muted).show(ui);
