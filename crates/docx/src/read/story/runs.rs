@@ -32,7 +32,12 @@ impl Reader<'_> {
                 if let Some(link) = link {
                     c.link = Some(link);
                     c.link_tooltip = k.attr("w:tooltip").and_then(crate::bounded_link_tooltip).map(std::sync::Arc::from);
-                    c.link_history = k.attr("w:history").map(|v| !crate::units::is_off_val(v));
+                    // History on stays `None`: it is what the writer writes for a link with none.
+                    c.link_history = match k.attr("w:history") {
+                        Some(v) if crate::units::is_off_val(v) => Some(craft_wordmodel::props::LinkHistory::Off),
+                        Some(_) => None,
+                        None => Some(craft_wordmodel::props::LinkHistory::Omitted),
+                    };
                 }
                 self.read_inline_children(sc, pb, k, rels, &c, depth + 1);
             }

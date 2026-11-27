@@ -165,6 +165,18 @@ impl ThemeFont {
     }
 }
 
+/// A hyperlink's `w:history` when a .docx file didn't have it on. Only the .docx reader sets one.
+/// A link with none, whether made in the app, read from another format or read with history on,
+/// is written with history on, so it reads back the same.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LinkHistory {
+    /// `w:history` was off.
+    Off,
+    /// The hyperlink had no `w:history`, so none is written back.
+    Omitted,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum VertAlign {
@@ -435,10 +447,10 @@ pub struct CharProps {
     /// Optional ScreenTip for the hyperlink. Runs from one link can share its text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_tooltip: Option<Arc<str>>,
-    /// Whether to add the hyperlink to the browser's/Word's history (`w:history`).
-    /// `None` indicates the attribute was omitted from the source document.
+    /// The hyperlink's `w:history` when a .docx file had it off or left it out. `None` writes it
+    /// on, as Word does for a new link.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub link_history: Option<bool>,
+    pub link_history: Option<LinkHistory>,
     /// Tracked insertion: index into `Document::revisions`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ins: Option<u32>,

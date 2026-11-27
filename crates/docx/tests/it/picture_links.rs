@@ -107,7 +107,7 @@ fn a_linked_picture_is_saved_with_its_link_on_the_drawing_too() {
     let back = craft_docx::read(&bytes).unwrap();
     assert_eq!(picture_links(&back), [Some("https://example.com/saved".to_string()), Some("#Spot".to_string())]);
     // The drawing's link alone (as Word writes it) reads back the same.
-    let without_run_link = xml.replace(&format!(r#"<w:hyperlink r:id="{rid}">"#), "").replacen("</w:hyperlink>", "", 1);
+    let without_run_link = xml.replace(&format!(r#"<w:hyperlink r:id="{rid}" w:history="1">"#), "").replacen("</w:hyperlink>", "", 1);
     assert_ne!(without_run_link, xml);
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));

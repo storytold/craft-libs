@@ -23,8 +23,8 @@ mod para_props;
 mod table_props;
 
 pub use char_props::{
-    CharProps, CombineBrackets, DEFAULT_FONT_SIZE, EastAsianLayout, EmphasisMark, Highlight, Ligatures, NumChange, PropChange, ThemeFont, Underline,
-    VertAlign,
+    CharProps, CombineBrackets, DEFAULT_FONT_SIZE, EastAsianLayout, EmphasisMark, Highlight, Ligatures, LinkHistory, NumChange, PropChange,
+    ThemeFont, Underline, VertAlign,
 };
 pub use color::{Rgb, TextColor};
 pub use para_props::{

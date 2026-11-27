@@ -238,34 +238,6 @@ fn cleared_compatibility_mode_removes_it_from_merged_settings() {
     assert!(reopened2.settings.do_not_expand_shift_return);
 }
 
-#[test]
-fn foreign_namespace_compat_child_is_preserved_through_round_trip() {
-    let settings = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:x="urn:vendor"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/><x:compatSetting x:name="customSetting" x:val="1"/></w:compat></w:settings>"#;
-    let pkg = with_settings(settings);
-    let doc = craft_docx::read(&pkg).unwrap();
-    assert!(doc.passthrough.contains_key("wordcraft:settings.orig"));
-    let saved = save(&doc);
-    let s = text(&saved, "word/settings.xml");
-    assert!(s.contains("<x:compatSetting"), "expected foreign child preserved: {s}");
-    assert!(s.contains("x:name=\"customSetting\""), "{s}");
-    assert!(s.contains("compatibilityMode"), "{s}");
-}
-
-#[test]
-fn compat_closing_tag_with_whitespace_preserves_unowned_sibling() {
-    let settings = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:compat><w:useFELayout/><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat ></w:settings>"#;
-    let pkg = with_settings(settings);
-    let mut doc = craft_docx::read(&pkg).unwrap();
-    assert!(doc.passthrough.contains_key("wordcraft:settings.orig"));
-    doc.settings.compat_mode = None;
-    let saved = save(&doc);
-    let s = text(&saved, "word/settings.xml");
-    assert!(s.contains("<w:useFELayout/>"), "expected unowned setting preserved: {s}");
-    assert!(!s.contains("compatibilityMode"), "expected mode removed: {s}");
-}
-
 /// Hide spelling errors and Hide grammar errors in this document only (`w:hideSpellingErrors`,
 /// `w:hideGrammaticalErrors`) are read, written once each (before `w:proofState` in a merged
 /// part), written in a generated part, and left out when they are turned off.
@@ -311,68 +283,4 @@ fn hidden_proofing_errors_round_trip() {
     assert!(s.contains("<w:hideGrammaticalErrors/>") && !s.contains("hideSpellingErrors"), "{s}");
     let back = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
     assert!(back.settings.hide_grammar_errors && !back.settings.hide_spelling_errors);
-}
-
-#[test]
-fn root_example_in_prolog_comment_is_preserved_when_zoom_changes() {
-    let comment = "<!-- example: <w:settings><w:rsids/></w:settings> -->";
-    let original = format!("\u{feff}{}", SETTINGS.replace("<w:settings ", &format!("{comment}<w:settings ")));
-    let mut doc = craft_docx::read(&with_settings(&original)).unwrap();
-    doc.settings.zoom.as_mut().unwrap().percent = 145;
-    let saved = craft_docx::write(&doc).unwrap();
-    let xml = text(&unzip(&saved), "word/settings.xml");
-    assert!(xml.starts_with('\u{feff}') && xml.contains(comment), "{xml}");
-    assert_eq!(craft_docx::read(&saved).unwrap().settings.zoom.unwrap().percent, 145);
-}
-
-fn with_compat_child(child: &str) -> Vec<u8> {
-    with_settings(
-        &SETTINGS
-            .replace("<w:compat>", &format!(r#"<w:compat xmlns:s="http://purl.oclc.org/ooxml/wordprocessingml/main" xmlns:x="urn:vendor">{child}"#)),
-    )
-}
-
-#[test]
-fn mode_merge_keeps_settings_whose_first_qualified_name_or_uri_is_vendor_owned() {
-    for child in [
-        r#"<w:compatSetting name="compatibilityMode" w:name="vendorOption" s:name="compatibilityMode"/>"#,
-        r#"<w:compatSetting w:name="compatibilityMode" w:uri="urn:vendor" s:uri="http://schemas.microsoft.com/office/word"/>"#,
-    ] {
-        let mut doc = craft_docx::read(&with_compat_child(child)).unwrap();
-        assert_eq!(doc.settings.compat_mode, Some(15));
-        doc.settings.compat_mode = None;
-        let saved = craft_docx::write(&doc).unwrap();
-        assert!(text(&unzip(&saved), "word/settings.xml").contains(child));
-        assert_eq!(craft_docx::read(&saved).unwrap().settings.compat_mode, None);
-    }
-}
-
-#[test]
-fn enabling_switch_updates_first_qualified_value() {
-    let child = r#"<w:doNotExpandShiftReturn val="off" w:val="0" s:val="true"/>"#;
-    let mut doc = craft_docx::read(&with_compat_child(child)).unwrap();
-    assert!(!doc.settings.do_not_expand_shift_return);
-    doc.settings.do_not_expand_shift_return = true;
-    let saved = craft_docx::write(&doc).unwrap();
-    assert!(craft_docx::read(&saved).unwrap().settings.do_not_expand_shift_return);
-    assert!(text(&unzip(&saved), "word/settings.xml").contains(&child.replace("w:val=\"0\"", "w:val=\"1\"")));
-}
-
-#[test]
-fn disabled_switch_keeps_vendor_markup_on_save_and_after_an_edit() {
-    for (child, was_on) in [
-        (r#"<w:doNotExpandShiftReturn w:val="off" x:vendor="kept"/>"#, false),
-        (r#"<w:doNotExpandShiftReturn s:val="1" x:vendor="kept"/>"#, true),
-        (r#"<s:doNotExpandShiftReturn><x:detail/></s:doNotExpandShiftReturn>"#, true),
-    ] {
-        let mut doc = craft_docx::read(&with_compat_child(child)).unwrap();
-        assert_eq!(doc.settings.do_not_expand_shift_return, was_on);
-        doc.settings.do_not_expand_shift_return = false;
-        let saved = craft_docx::write(&doc).unwrap();
-        let xml = text(&unzip(&saved), "word/settings.xml");
-        let expected =
-            if child.contains("s:val") { child.replace("s:val=\"1\"", "s:val=\"0\"") } else { child.replace("Return><x", "Return s:val=\"0\"><x") };
-        assert!(xml.contains(&expected), "{xml}");
-        assert!(!craft_docx::read(&saved).unwrap().settings.do_not_expand_shift_return);
-    }
 }

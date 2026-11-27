@@ -211,11 +211,18 @@ impl Writer<'_> {
                 continue;
             }
             // Hyperlinks with different ScreenTips or history settings stay separate even if their target is shared.
-            let link = props
-                .link
-                .as_deref()
-                .filter(|target| !target.is_empty())
-                .map(|target| (target, props.link_tooltip.as_deref().and_then(crate::bounded_link_tooltip), props.link_history));
+            let base = link_target_and_tip;
+            // Text with no history of its own (typed into a link) takes the history of the link it
+            // is in: the open one, or else the first of the following text in the same link that has one.
+            let link = base(props).map(|(target, tip)| {
+                let history = match open_link {
+                    Some((open_target, open_tip, open_history)) if (open_target, open_tip) == (target, tip) => props.link_history.or(open_history),
+                    _ => props.link_history.or_else(|| {
+                        pieces.iter().skip(i + 1).map(|(_, p)| *p).take_while(|p| base(p) == Some((target, tip))).find_map(|p| p.link_history)
+                    }),
+                };
+                (target, tip, history)
+            });
             if link != open_link {
                 if open_link.is_some() {
                     w.close("w:hyperlink");
@@ -232,8 +239,8 @@ impl Writer<'_> {
                     let mut n = 0;
                     attrs[n] = target;
                     n += 1;
-                    if let Some(h) = hist {
-                        attrs[n] = ("w:history", if h { "1" } else { "0" });
+                    if let Some(h) = link_history_val(hist) {
+                        attrs[n] = ("w:history", h);
                         n += 1;
                     }
                     if let Some(tip) = tip {
@@ -361,5 +368,21 @@ impl Writer<'_> {
                 w.close(self.rev_tag(i, tag));
             }
         }
+    }
+}
+
+/// A run's hyperlink target and the ScreenTip it is written with, or `None` outside a link.
+fn link_target_and_tip(p: &CharProps) -> Option<(&str, Option<&str>)> {
+    p.link.as_deref().filter(|target| !target.is_empty()).map(|target| (target, p.link_tooltip.as_deref().and_then(crate::bounded_link_tooltip)))
+}
+
+/// The `w:history` value a hyperlink is written with: off or none when a .docx file gave that,
+/// otherwise on, as Word writes it for a new link.
+fn link_history_val(history: Option<craft_wordmodel::props::LinkHistory>) -> Option<&'static str> {
+    use craft_wordmodel::props::LinkHistory;
+    match history {
+        None => Some("1"),
+        Some(LinkHistory::Off) => Some("0"),
+        Some(LinkHistory::Omitted) => None,
     }
 }
