@@ -79,6 +79,8 @@ app.
   (<https://www.unrealengine.com/en-US/blog/physically-based-shading-on-mobile>). Materials take a
   base color, metallic-roughness, normal, occlusion and emissive texture, an alpha mode (opaque,
   mask or blend), and weights for the diffuse lobe, the dielectric reflectance and the ambient light.
+  Point and spot lights retain finite directions from finite surface positions even when the
+  position difference exceeds the `f32` range.
   In mask mode a fragment whose material alpha (the base alpha times the base texture's) is below
   the cutoff is discarded, and a fragment that passes is drawn with the layer's opacity alone, so
   at an opacity of 1 it is fully opaque

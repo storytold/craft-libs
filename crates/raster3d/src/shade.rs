@@ -424,6 +424,8 @@ fn env_shadow(s: &Scene, e: &EnvInfo, p: [f32; 3], ng: [f32; 3], n: [f32; 3]) ->
 }
 
 /// Unit direction from `p` to light `l`, and the distance (infinite for a parallel light).
+/// For a point or spot light, two finite positions retain a finite direction when their difference
+/// exceeds the `f32` range.
 fn to_light(l: &Light, p: [f32; 3]) -> ([f32; 3], f32) {
     if l.kind == 0 {
         return (scale(l.dir, -1.0), f32::INFINITY);
@@ -431,8 +433,8 @@ fn to_light(l: &Light, p: [f32; 3]) -> ([f32; 3], f32) {
     let d = sub(l.pos, p);
     let len = dot(d, d).sqrt();
     // The squared distance to a far light overflows f32; such a direction is taken in f64.
-    if len.is_infinite() && d.iter().all(|c| c.is_finite()) {
-        let d = d.map(f64::from);
+    if len.is_infinite() {
+        let d = if d.iter().all(|c| c.is_finite()) { d.map(f64::from) } else { [0, 1, 2].map(|i| f64::from(l.pos[i]) - f64::from(p[i])) };
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
         return (d.map(|c| (c / len) as f32), len as f32);
     }
@@ -616,8 +618,32 @@ fn shadow_only(s: &Scene, m: &Material, f: &Frag, alpha: f32) -> [f32; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::shadow_coord;
-    use crate::scene::ShadowMap;
+    use super::{shadow_coord, to_light};
+    use crate::scene::{Light, ShadowMap};
+
+    #[test]
+    fn finite_opposite_light_positions_keep_a_finite_direction() {
+        for kind in [1, 2] {
+            let light = Light {
+                kind,
+                pos: [3e38, 0.0, 0.0],
+                dir: [0.0, 0.0, 1.0],
+                color: [1.0; 3],
+                cos_inner: 0.9999,
+                cos_outer: 0.9999,
+                falloff: 0,
+                radius: 0.0,
+                falloff_distance: 0.0,
+                shadow: -1,
+                shadow_darkness: 0.0,
+                shadow_diffusion: 0.0,
+            };
+            let (expected, _) = to_light(&light, [0.0; 3]);
+            assert!(expected.iter().all(|value| value.is_finite()));
+            let (direction, _) = to_light(&light, [-3e38, 0.0, 0.0]);
+            assert_eq!(direction, expected, "light kind {kind} keeps the direction between collinear finite positions");
+        }
+    }
 
     #[test]
     fn a_receiver_whose_projection_overflows_f32_is_projected_in_f64() {

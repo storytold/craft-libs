@@ -110,6 +110,7 @@ pub struct TexInfo {
 pub struct Light {
     /// 0 parallel, 1 spot, 2 point.
     pub kind: u32,
+    /// This field stores the finite position of a point or spot light.
     pub pos: [f32; 3],
     /// Unit direction the light travels, for a parallel or spot light; a length that differs from
     /// 1 by more than 0.001 is an error. A point light does not read it.
