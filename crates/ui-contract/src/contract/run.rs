@@ -13,6 +13,7 @@ use crate::runtime::access::{self, Politeness, Role, SetPosition, scope};
 use crate::runtime::commands::ResolvedCommand;
 use crate::runtime::env::{AppValues, ColumnSweep, Env, EnvView, ThemeScope};
 use crate::runtime::layout_memory::{Call, Inputs};
+use crate::runtime::lazy::LineItem;
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::reads::{self, BindKey, Sample};
@@ -20,7 +21,7 @@ use crate::runtime::{commands, focus, inspect, keys, memory};
 use crate::style::{Ink, StateSet, StyleCx, StyleView, UiTokens};
 use craft_behavior::{Flow, Input, KeyRole, NavMove, PartRef, PressState, Proposal, Roving, Sense};
 use craft_theme::Variant;
-use egui::{Context, Id, IdMap, Pos2, Rect, Response, Ui, Vec2};
+use egui::{Context, Id, Pos2, Rect, Response, Ui, Vec2};
 use std::any::TypeId;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -564,6 +565,8 @@ pub(crate) trait ErasedPass<'a> {
     /// Whether the component is bound, and whether its binding has a reset value.
     fn bound(&mut self) -> (bool, bool);
     fn paint_outset(&self, tokens: &crate::style::UiTokens) -> f32;
+    /// The axis the component fills (`Component::fills`).
+    fn fills(&self) -> Option<craft_behavior::Axis>;
     /// `Component::padding` at `rect`.
     fn padding(&self, rect: Rect) -> craft_behavior::Insets;
     /// Step 7: the component's parts, then the shape's.
@@ -947,7 +950,7 @@ struct HostStep {
     /// still offers the redirected action.
     report_sense: Sense,
     member: Option<crate::runtime::env::ArenaId>,
-    /// The bar line whose rules wait for this member.
+    /// The bar line the member sits in, in the run that paints: a rule notes itself to it instead of painting.
     line: Option<Id>,
     /// A bar's view cut the member: it shows nothing until the clip is restored.
     cut: bool,
@@ -1056,7 +1059,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, (host_at, place): (Option<
     let shown_clip = ui.clip_rect();
     let judged = e.member() && matches!(at, ShowAt::Flow) && !scope::in_label(&ctx);
     let cut = judged && bar_member(&ctx, env, hit, facts.rule);
-    // Rules wait for their member only in the run that paints.
+    // A bar's line takes its rules only in the run that paints.
     let line = bar_line(env).filter(|_| judged && !crate::runtime::measure::active(&ctx));
     if cut {
         ui.set_clip_rect(Rect::NOTHING);
@@ -1268,22 +1271,32 @@ fn paint_step(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &mut HostStep
     p.trace.mark(Step::Paint);
     let e = &mut *p.p;
     let fade = steps::fade(ui, env, e.core());
-    let rule_from = h.line.filter(|_| p.facts.rule && !h.cut).map(|line| (line, steps::next_shape(ui)));
-    steps::paint_surface(ui, env, e.core_ref(), p.style);
-    steps::paint_part_layers(ui, env, e.core_ref());
+    // A rule in a bar's line is the bar's to draw, with the member after it (`draw_bar_rules`).
+    let bar_rule = h.line.filter(|_| p.facts.rule && !h.cut);
+    if bar_rule.is_none() {
+        steps::paint_surface(ui, env, e.core_ref(), p.style);
+        steps::paint_part_layers(ui, env, e.core_ref());
+    }
     // Paint and content stay inside the rect (grown by the type's declared outset), however small the room is.
     h.outer_clip = ui.clip_rect();
     h.inside = e.core_ref().rect.expand(e.paint_outset(&env.tokens)).intersect(h.outer_clip);
     ui.set_clip_rect(h.inside);
-    e.paint(ui, env);
+    match bar_rule {
+        Some(line) => {
+            let rect = e.core_ref().rect;
+            let axis = e.fills().unwrap_or(craft_behavior::Axis::Y);
+            let look = crate::style::rule_look(&env.tokens, crate::primitives::RuleKind::Divider);
+            let item = LineItem::Rule { rect, clip: crate::runtime::Clip::new(h.inside), axis, look };
+            crate::runtime::lazy::note_line(&h.ctx, line, item);
+        }
+        None => e.paint(ui, env),
+    }
     // The content's values may read what `paint` found this pass.
     e.content_env(&mut h.values);
     steps::unfade(ui, e.core(), fade);
     ui.set_clip_rect(h.outer_clip);
-    steps::paint_focus(ui, e.core_ref(), p.style, e.shape() != ShapeKind::Item);
-    // A rule a bar's view shows waits for the member after it.
-    if let Some((line, from)) = rule_from {
-        hold_rule(ui, line, from);
+    if bar_rule.is_none() {
+        steps::paint_focus(ui, e.core_ref(), p.style, e.shape() != ShapeKind::Item);
     }
     ui.set_clip_rect(h.inside);
 }
@@ -1407,61 +1420,44 @@ fn bar_line(env: &Env) -> Option<Id> {
 
 /// Judges a member of a bar's line whose hit target is `hit` (a control with the label it claims): whether its view
 /// shows it only in part. Such a member is not shown until a scroll brings it in whole; it keeps its stop, so Tab
-/// reaches it and the reveal scrolls it in. In the run that paints, the rules before a member that is not itself a
-/// `rule` show with it, or are taken back with it. Outside a bar's line nothing is cut.
+/// reaches it and the reveal scrolls it in. In the run that paints, a member that is not itself a `rule` is noted to
+/// the line, so the rules before it show with it or not (`draw_bar_rules`). Outside a bar's line nothing is cut.
 pub(crate) fn bar_member(ctx: &Context, env: &Env, hit: Rect, rule: bool) -> bool {
     let Some(line) = bar_line(env) else { return false };
     let cut = cut_by_bar_view(env, hit);
     if !rule && !crate::runtime::measure::active(ctx) {
-        settle_rules(ctx, line, cut);
+        crate::runtime::lazy::note_line(ctx, line, LineItem::Member { cut });
     }
     cut
 }
 
-/// The rules a bar line shows this pass that wait for the member after them: the shapes each painted, by line.
-#[derive(Default)]
-pub(crate) struct BarRules(IdMap<Vec<HeldRule>>);
-
-/// A rule's paint: `shapes` of the paint list of `layer`, in the pass `pass`.
-struct HeldRule {
-    layer: crate::runtime::egui::areas::Layer,
-    shapes: std::ops::Range<usize>,
-    pass: u64,
-}
-
-/// Holds the shapes a rule of `line` painted since `from` until the member after it settles them.
-fn hold_rule(ui: &Ui, line: Id, from: usize) {
-    let rule = HeldRule { layer: ui.layer_id(), shapes: from..steps::next_shape(ui), pass: ui.ctx().cumulative_pass_nr() };
-    crate::runtime::pass_state::with::<BarRules, _>(ui.ctx(), |rules| rules.0.entry(line).or_default().push(rule));
-}
-
-/// Settles the rules of `line` that wait for a member: a member shown keeps them, a member `cut` takes them back.
-fn settle_rules(ctx: &Context, line: Id, cut: bool) {
-    let Some(held) = crate::runtime::pass_state::with::<BarRules, _>(ctx, |rules| rules.0.remove(&line)) else { return };
-    if cut {
-        take_back(ctx, &held);
-    }
-}
-
-/// Closes the line of the bar body `line`: a rule no member came after is taken back.
-pub(crate) fn close_bar_line(ctx: &Context, line: Id) {
-    if let Some(held) = crate::runtime::pass_state::with::<BarRules, _>(ctx, |rules| rules.0.remove(&line)) {
-        take_back(ctx, &held);
-    }
-}
-
-/// Empties the shapes of `held` painted this pass. The run record of a memoized view is taken when it closes, after
-/// this, so a replay repeats the line as it shows.
-fn take_back(ctx: &Context, held: &[HeldRule]) {
-    let pass = ctx.cumulative_pass_nr();
-    ctx.graphics_mut(|layers| {
-        for rule in held.iter().filter(|rule| rule.pass == pass) {
-            let list = layers.entry(rule.layer);
-            for at in rule.shapes.clone() {
-                list.reset_shape(egui::layers::ShapeIdx(at));
+/// Closes a bar's line in `ui`, the line's own: draws each rule of `line` (what its run and the replays in it noted, in
+/// run order) that a member the view shows comes after, in the look, clip and place the rule had. A rule before a
+/// member the view cut, or with no member after it, is not drawn.
+pub(crate) fn draw_bar_rules(ui: &Ui, line: &[LineItem]) {
+    let mut waiting = Vec::new();
+    for item in line {
+        match item {
+            LineItem::Rule { .. } => waiting.push(item),
+            LineItem::Member { cut } => {
+                if !cut {
+                    waiting.iter().for_each(|rule| draw_bar_rule(ui, rule));
+                }
+                waiting.clear();
             }
         }
-    });
+    }
+}
+
+/// Draws the rule `rule` of a bar's line in `ui`.
+fn draw_bar_rule(ui: &Ui, rule: &LineItem) {
+    let LineItem::Rule { rect, clip, axis, look } = rule else { return };
+    let (from, to) = match axis {
+        craft_behavior::Axis::X => (rect.left_center(), rect.right_center()),
+        _ => (rect.center_top(), rect.center_bottom()),
+    };
+    let painter = ui.painter().with_clip_rect(clip.rect());
+    painter.extend(crate::primitives::Rule::shapes(look, from, to, painter.pixels_per_point()));
 }
 
 /// Whether `rect`, in the scrolling body of a bar, lies partly outside the body's view along x. A member wider than the

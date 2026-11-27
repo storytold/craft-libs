@@ -309,6 +309,10 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
         C::paint_outset(tokens)
     }
 
+    fn fills(&self) -> Option<craft_behavior::Axis> {
+        self.comp.fills()
+    }
+
     fn padding(&self, rect: Rect) -> craft_behavior::Insets {
         self.comp.padding(rect, self.cx.style)
     }

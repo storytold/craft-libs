@@ -1637,12 +1637,10 @@ impl BodyHooks<'_> {
         let (ctx, id) = (run.ctx, run.id);
         let ScrollRegion { ui: region_ui, installed, seen, max, shown, bar, lays_out, laid_for, .. } = region;
         Env::restore(ctx, installed);
-        if lays_out {
-            crate::contract::run::close_bar_line(ctx, id);
-        }
         let extent = region_ui.min_rect().size();
         if lays_out {
             let placed = crate::runtime::lazy::placed(ctx, id);
+            crate::contract::run::draw_bar_rules(&region_ui, &placed.line);
             let keeps = !self.scroll_bound && !self.follows_end;
             follow_anchor(ctx, (&placed, scroll, keeps), (extent, seen.size()), (&mut self.offset, self.offset_at_read), &mut self.anchor);
             aim_glide(&mut self.glide, placed.reveal, shown, (extent, seen.size()), scroll);

@@ -23,6 +23,7 @@ use crate::runtime::inputs::{self, Input};
 use crate::runtime::layout_memory;
 use crate::runtime::reads::BindKey;
 use crate::runtime::replay::{self, Record};
+use crate::runtime::{Clip, Shift};
 use crate::style::EnvKey;
 use egui::emath::GuiRounding as _;
 use egui::{Context, Id, IdMap, IdSet, Layout, RecordShift, Rect, Vec2};
@@ -85,7 +86,7 @@ pub(crate) struct Anchor {
 }
 
 /// Where the children of a scroll area started in the real run that laid its content out, from the view's start.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Placed {
     /// The child the area's scroll position names, the child it glides to (`Lazy::reveal`) and the axes it scrolls
     /// along, as the area had them when the run began. They are the area's own state, not inputs of its children, so
@@ -99,6 +100,36 @@ pub(crate) struct Placed {
     pub(crate) first: Option<(Id, Vec2)>,
     /// The place of the child the area glides to, when the run reached it.
     pub(crate) reveal: Option<Vec2>,
+    /// When the area is a bar's line, its rules and members in run order (`note_line`).
+    pub(crate) line: Vec<LineItem>,
+}
+
+/// What a bar's line holds, in run order: a rule (`Component::RULE`) is the bar's to draw, and shows only when the member
+/// after it shows.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum LineItem {
+    /// A rule: a line in `look` along `axis` through the middle of `rect`, in `clip`, as the rule had them.
+    Rule { rect: Rect, clip: Clip, axis: craft_behavior::Axis, look: crate::style::RuleLook },
+    /// A member that is not a rule; `cut` when the bar's view shows it only in part, so it does not show.
+    Member { cut: bool },
+}
+
+impl Shift for LineItem {
+    fn shifted(&self, by: &RecordShift) -> Self {
+        match self {
+            LineItem::Rule { rect, clip, axis, look } => LineItem::Rule { rect: rect.shifted(by), clip: clip.shifted(by), axis: *axis, look: *look },
+            LineItem::Member { cut } => LineItem::Member { cut: *cut },
+        }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        match (self, to) {
+            (LineItem::Rule { rect, clip, axis, look }, LineItem::Rule { rect: to_rect, clip: to_clip, .. }) => {
+                LineItem::Rule { rect: rect.snapped(to_rect, within), clip: clip.snapped(to_clip, within), axis: *axis, look: *look }
+            }
+            _ => self.clone(),
+        }
+    }
 }
 
 impl Placed {
@@ -848,6 +879,20 @@ fn note_place(ctx: &Context, owner: Id, id: Id, rect: Rect) {
             && let Some(view) = placed.view
         {
             placed.note(id, view.start_of(rect) - view.start_of(view.rect), rect.size());
+        }
+    });
+}
+
+/// Notes, in the real run that lays out the bar line `owner`, its next rule or member `item`. A settled run around it
+/// that is replayed later notes it again, moved with the run, so the bar draws the rules its replayed members hold; a
+/// line inside the replayed run does not lay out in that pass, and its record holds the rules it drew.
+pub(crate) fn note_line(ctx: &Context, owner: Id, item: LineItem) {
+    replay::journal(ctx, || (owner, item.clone()), |ctx, (owner, item)| note_line(ctx, *owner, item.clone()));
+    with(ctx, |store, _, _| {
+        if let Some(placed) = store.placed.get_mut(&owner)
+            && placed.view.is_some()
+        {
+            placed.line.push(item);
         }
     });
 }
