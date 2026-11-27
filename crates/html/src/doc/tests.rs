@@ -985,6 +985,18 @@ fn hostile_style_sheets_never_panic() {
     }
 }
 
+/// A list item's further paragraph keeps its alignment (and page break) in its item.
+#[test]
+fn an_items_further_paragraph_keeps_its_alignment() {
+    let mut one = Para { list: Some(model::ListInfo { ordered: true, ..Default::default() }), ..Default::default() };
+    one.push_text("One", &Fmt::default());
+    let mut cont = Para { item: Some(0), align: Some(Align::Center), ..Default::default() };
+    cont.spacing.left = Some(36.0);
+    cont.push_text("Cont", &Fmt::default());
+    let html = export(&model::to_doc(&Flow { blocks: vec![FBlock::Para(one), FBlock::Para(cont)], meta: Meta::default() }));
+    assert!(html.contains("<li>One<p style=\"text-align:center\">Cont</p></li>"), "{html}");
+}
+
 #[test]
 fn conflicting_mso_vmerge_declarations_last_wins() {
     let html_restart_wins = "<table><tr><td style='mso-yfti-vmerge: continue; mso-yfti-vmerge: restart'>A</td></tr></table>";
@@ -2093,4 +2105,96 @@ fn zero_rowspan_covers_an_empty_trailing_row() {
     assert!(table.rows[2][0].covered);
     assert!(!table.rows[3][0].covered);
     assert_eq!(table.rows[3][0].text(), "D");
+}
+
+/// A copy's HTML has no style sheet, so its top-level paragraphs and headings carry their own
+/// spacing and indents (as margins and `text-indent`, in points), and a mail client lays the text
+/// out as the app does. A page saved as HTML doesn't write them.
+#[test]
+fn the_fragment_writes_a_paragraphs_spacing_and_indents() {
+    let chr = craft_wordmodel::CharProps::default();
+    let mut spaced = craft_wordmodel::Paragraph::with_text("Spaced", chr.clone());
+    spaced.props.space_before = Some(6.0);
+    spaced.props.space_after = Some(12.0);
+    spaced.props.indent_left = Some(36.0);
+    spaced.props.indent_first = Some(-18.0);
+    let mut plain = craft_wordmodel::Paragraph::with_text("Plain", chr.clone());
+    plain.props.indent_right = Some(-0.0);
+    plain.props.indent_first = Some(0.0);
+    plain.props.space_after = Some(f32::NAN);
+    // Values that round to zero print as 0 (never "-0"), and a first-line indent that does is left out.
+    let mut tiny = craft_wordmodel::Paragraph::with_text("Tiny", chr.clone());
+    tiny.props.indent_left = Some(-0.004);
+    tiny.props.indent_first = Some(0.001);
+    let mut heading = craft_wordmodel::Paragraph::with_text("Heading", chr).styled("Heading1");
+    heading.props.space_before = Some(24.0);
+    let mut d = Document::new();
+    d.body = vec![
+        craft_wordmodel::para_block(spaced),
+        craft_wordmodel::para_block(plain),
+        craft_wordmodel::para_block(tiny),
+        craft_wordmodel::para_block(heading),
+    ];
+    let fragment = export_fragment(&d);
+    assert!(fragment.contains("<p style=\"margin-top:6pt;margin-bottom:12pt;margin-left:36pt;text-indent:-18pt\">Spaced</p>"), "{fragment}");
+    assert!(fragment.contains("<p style=\"margin-right:0pt\">Plain</p>"), "{fragment}");
+    assert!(fragment.contains("<p style=\"margin-left:0pt\">Tiny</p>"), "{fragment}");
+    assert!(fragment.contains("<h1 style=\"margin-top:24pt\">Heading</h1>"), "{fragment}");
+    let page = export(&d);
+    assert!(!page.contains("margin-") && !page.contains("text-indent"), "{page}");
+}
+
+/// Quotes, list items and code keep the fragment's plain markup, while a paragraph between them
+/// still writes its spacing.
+#[test]
+fn the_fragment_spaces_only_top_level_paragraphs_and_headings() {
+    let chr = craft_wordmodel::CharProps::default();
+    let mut quote = craft_wordmodel::Paragraph::with_text("Quoted", chr.clone()).styled("Quote");
+    quote.props.space_after = Some(10.0);
+    let mut body = craft_wordmodel::Paragraph::with_text("Body", chr.clone());
+    body.props.space_after = Some(8.0);
+    let mut d = Document::new();
+    let num = std::sync::Arc::make_mut(&mut d.numbering).add_list(craft_wordmodel::ListKind::Bullet);
+    let mut item = craft_wordmodel::Paragraph::with_text("Item", chr).styled("ListParagraph");
+    item.props.numbering = Some(craft_wordmodel::props::NumRef { num, level: 0 });
+    item.props.space_after = Some(6.0);
+    d.body = vec![craft_wordmodel::para_block(quote), craft_wordmodel::para_block(body), craft_wordmodel::para_block(item)];
+    let fragment = export_fragment(&d);
+    assert!(fragment.contains("<blockquote>\n<p>Quoted</p>\n</blockquote>"), "{fragment}");
+    assert!(fragment.contains("<p style=\"margin-bottom:8pt\">Body</p>"), "{fragment}");
+    assert!(fragment.contains("<ul><li>Item</li></ul>"), "{fragment}");
+}
+
+/// A list item's further paragraph keeps its alignment and page break in the fragment, without
+/// spacing or indents, as the item itself.
+#[test]
+fn the_fragment_leaves_a_list_items_further_paragraph_unspaced() {
+    let chr = craft_wordmodel::CharProps::default();
+    let mut d = Document::new();
+    let num = std::sync::Arc::make_mut(&mut d.numbering).add_list(craft_wordmodel::ListKind::Bullet);
+    let mut item = craft_wordmodel::Paragraph::with_text("Item", chr.clone()).styled("ListParagraph");
+    item.props.numbering = Some(craft_wordmodel::props::NumRef { num, level: 0 });
+    let mut more = craft_wordmodel::Paragraph::with_text("More", chr);
+    more.props.list_item = Some(0);
+    more.props.align = Some(craft_wordmodel::Align::Center);
+    more.props.page_break_before = Some(true);
+    more.props.indent_left = Some(72.0);
+    more.props.space_after = Some(6.0);
+    d.body = vec![craft_wordmodel::para_block(item), craft_wordmodel::para_block(more)];
+    let fragment = export_fragment(&d);
+    let more = fragment.split("<li>Item").nth(1).and_then(|s| s.split("</li>").next()).unwrap();
+    assert!(more.contains("More") && more.contains("text-align:center") && more.contains("break-before:page"), "{fragment}");
+    assert!(!fragment.contains("margin-"), "{fragment}");
+}
+
+/// Code blocks and the paragraphs of a table cell keep the fragment's plain markup, whatever their
+/// spacing.
+#[test]
+fn the_fragment_leaves_code_and_table_cells_unspaced() {
+    let d = import(
+        "<table><tr><td><p style='margin-left:20pt'>One</p><p style='margin-left:20pt'>Two</p></td></tr></table>         <pre style='margin-left:30pt'>code</pre>",
+    );
+    let fragment = export_fragment(&d);
+    assert!(fragment.contains("One") && fragment.contains("code"), "{fragment}");
+    assert!(!fragment.contains("margin-"), "{fragment}");
 }

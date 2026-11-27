@@ -14,6 +14,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Rem, Sub, SubAssign};
+use std::time::Duration;
 
 /// SoundCraft's sample-index, tempo-map, grid, and display-time API, retained verbatim for
 /// session-format compatibility while sharing the broader Craft time primitives above.
@@ -21,6 +22,8 @@ pub mod soundcraft;
 
 /// Clock ticks per second: 254 016 000 000.
 pub const TICKS_PER_SECOND: i64 = 254_016_000_000;
+
+const NANOS_PER_SECOND: u64 = 1_000_000_000;
 
 /// A point or duration in time, in ticks.
 /// Arithmetic saturates at storage limits; representable results remain exact.
@@ -75,6 +78,23 @@ impl Tick {
         let (n, unit) = if unit < 0 { (-n, -unit) } else { (n, unit) };
         let (Some(q), Some(r)) = (n.checked_div_euclid(unit), n.checked_rem_euclid(unit)) else { return 0 };
         clamp_i64(if r * 2 >= unit { q + 1 } else { q })
+    }
+
+    /// A [`Duration`] as ticks, floored to the tick and saturating at `i64::MAX` ticks.
+    pub fn from_duration(d: Duration) -> Tick {
+        let secs = i128::from(d.as_secs()) * i128::from(TICKS_PER_SECOND);
+        let subsec = i128::from(d.subsec_nanos()) * i128::from(TICKS_PER_SECOND) / i128::from(NANOS_PER_SECOND);
+        Tick(clamp_i64(secs + subsec))
+    }
+
+    /// Ticks as a [`Duration`], rounded to the nearest nanosecond (halves up), or `None` for a
+    /// negative tick. `Tick::from_duration(d).to_duration()` returns `d` for every `d` up to
+    /// `i64::MAX` ticks (about 420 days).
+    pub fn to_duration(self) -> Option<Duration> {
+        let ticks = u128::try_from(self.0).ok()?;
+        let tps = u128::from(TICKS_PER_SECOND.unsigned_abs());
+        let nanos = (ticks * u128::from(NANOS_PER_SECOND) + tps / 2) / tps;
+        Some(Duration::from_nanos(u64::try_from(nanos).ok()?))
     }
 
     pub fn abs(self) -> Tick {
@@ -550,6 +570,9 @@ pub fn format_timecode_ae(frame: i64, rate: FrameRate, drop_frame: bool) -> Stri
 }
 
 /// Format a tick according to a display mode.
+///
+/// [`TimeDisplay::AudioSamples`] pads the sample field to the digit count of `sample_rate - 1`, with at least five
+/// digits, so every position at one sample rate has the same width (`00:00:01:000000` at 192 kHz).
 pub fn format_time(t: Tick, rate: FrameRate, drop_frame: bool, display: TimeDisplay, sample_rate: i64) -> String {
     let frame = rate.frame_at(t);
     match display {
@@ -565,13 +588,19 @@ pub fn format_time(t: Tick, rate: FrameRate, drop_frame: bool, display: TimeDisp
             let h = total_secs / 3600;
             let m = (total_secs / 60) % 60;
             let s = total_secs % 60;
-            format!("{}{:02}:{:02}:{:02}:{:05}", if neg { "-" } else { "" }, h, m, s, rem_samples)
+            let width = sample_field_width(sample_rate);
+            format!("{}{:02}:{:02}:{:02}:{:0width$}", if neg { "-" } else { "" }, h, m, s, rem_samples)
         }
         TimeDisplay::Seconds => {
             let seconds = format!("{:.3}", t.seconds());
             if seconds == "-0.000" { "0.000".into() } else { seconds }
         }
     }
+}
+
+/// Digits in the sample field of [`TimeDisplay::AudioSamples`]: the digit count of `sample_rate - 1`, at least five.
+fn sample_field_width(sample_rate: i64) -> usize {
+    sample_rate.saturating_sub(1).checked_ilog10().map_or(1, |d| d as usize + 1).max(5)
 }
 
 /// Format a frame count as Feet + Frames (film footage counting).
@@ -582,6 +611,64 @@ pub fn format_feet_frames(frame: i64, per_foot: i64) -> String {
     let per_foot = per_foot as u64;
     let width = if per_foot > 100 { 3 } else { 2 };
     format!("{sign}{:04}+{:0width$}", frames / per_foot, frames % per_foot)
+}
+
+/// Part of a second that [`format_clock`] prints after the seconds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ClockFraction {
+    /// No fraction (`0:01:05`).
+    #[default]
+    None,
+    /// One digit (`0:01:05.2`).
+    Tenths,
+    /// Two digits (`0:01:05.25`).
+    Hundredths,
+    /// Three digits (`0:01:05.250`).
+    Milliseconds,
+}
+
+impl ClockFraction {
+    /// Number of digits printed after the seconds.
+    pub fn digits(self) -> u32 {
+        match self {
+            ClockFraction::None => 0,
+            ClockFraction::Tenths => 1,
+            ClockFraction::Hundredths => 2,
+            ClockFraction::Milliseconds => 3,
+        }
+    }
+}
+
+/// Layout of an elapsed-time clock from [`format_clock`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ClockStyle {
+    /// Pad the hours to two digits (`00:01:05`) instead of printing them unpadded (`0:01:05`).
+    pub pad_hours: bool,
+    /// Part of a second printed after the seconds.
+    pub fraction: ClockFraction,
+}
+
+/// Format a tick as an elapsed-time clock, `H:MM:SS` with an optional fraction of a second, for
+/// recording timers and other readouts that count time rather than frames or samples.
+///
+/// The value is truncated toward zero at the last printed digit, so a second shows only once it
+/// has fully passed. Hours do not wrap. A negative value starts with `-`, except a value that
+/// truncates to zero, which prints without a sign.
+pub fn format_clock(t: Tick, style: ClockStyle) -> String {
+    let digits = style.fraction.digits();
+    let per_second = TICKS_PER_SECOND as u64;
+    let abs_ticks = t.0.unsigned_abs();
+    let total_secs = abs_ticks / per_second;
+    let fraction = (abs_ticks % per_second) * 10u64.pow(digits) / per_second;
+    let sign = if t.0 < 0 && (total_secs > 0 || fraction > 0) { "-" } else { "" };
+    let (h, m, s) = (total_secs / 3600, (total_secs / 60) % 60, total_secs % 60);
+    let hw = if style.pad_hours { 2 } else { 1 };
+    if digits == 0 {
+        format!("{sign}{h:0hw$}:{m:02}:{s:02}")
+    } else {
+        let fw = digits as usize;
+        format!("{sign}{h:0hw$}:{m:02}:{s:02}.{fraction:0fw$}")
+    }
 }
 
 /// Error from timecode parsing.
@@ -823,6 +910,29 @@ mod tests {
     }
 
     #[test]
+    fn durations_round_trip_through_ticks() {
+        for nanos in [0, 1, 2, 3, 499, 500_000_001, 33_366_667, 1_000_000_000, 86_399_999_999_999] {
+            let d = Duration::from_nanos(nanos);
+            assert_eq!(Tick::from_duration(d).to_duration(), Some(d), "{nanos} ns");
+        }
+        let near_limit = Duration::from_secs(400 * 86_400) + Duration::from_nanos(999_999_999);
+        assert_eq!(Tick::from_duration(near_limit).to_duration(), Some(near_limit));
+    }
+
+    #[test]
+    fn durations_floor_and_saturate() {
+        assert!(Tick::from_duration(Duration::from_nanos(1)) < Tick(TICKS_PER_SECOND / 1_000_000_000 + 1));
+        assert!(Tick::from_duration(Duration::from_nanos(1)) > Tick::ZERO);
+        assert_eq!(Tick::from_duration(Duration::MAX), Tick(i64::MAX));
+        assert!(Tick(i64::MAX).to_duration().is_some_and(|d| d > Duration::from_secs(400 * 86_400)));
+        assert_eq!(Tick(-1).to_duration(), None);
+        assert_eq!(Tick(i64::MIN).to_duration(), None);
+        // Half a nanosecond is 127.008 ticks.
+        assert_eq!(Tick(128).to_duration(), Some(Duration::from_nanos(1)));
+        assert_eq!(Tick(127).to_duration(), Some(Duration::ZERO));
+    }
+
+    #[test]
     fn test_hostile_rates_never_panic() {
         let zero = FrameRate { num: 0, den: 0 };
         for r in [zero, FrameRate { num: 0, den: 1 }, FrameRate { num: 25, den: 0 }, FrameRate { num: -30, den: 1 }] {
@@ -883,6 +993,26 @@ mod tests {
     }
 
     #[test]
+    fn test_audio_samples_width_follows_sample_rate() {
+        let r = FrameRate::FPS_24;
+        let last_sample = |rate: i64| Tick::from_units(rate - 1, rate);
+        for rate in SAMPLE_RATES {
+            let first = format_time(Tick::ZERO, r, false, TimeDisplay::AudioSamples, rate);
+            let last = format_time(last_sample(rate), r, false, TimeDisplay::AudioSamples, rate);
+            assert_eq!(first.len(), last.len(), "rate {rate}: `{first}` and `{last}` differ in width");
+        }
+        assert_eq!(format_time(Tick::ZERO, r, false, TimeDisplay::AudioSamples, 192_000), "00:00:00:000000");
+        assert_eq!(format_time(last_sample(192_000), r, false, TimeDisplay::AudioSamples, 192_000), "00:00:00:191999");
+        assert_eq!(format_time(last_sample(96_000), r, false, TimeDisplay::AudioSamples, 96_000), "00:00:00:95999");
+        assert_eq!(format_time(Tick(-TICKS_PER_SECOND), r, false, TimeDisplay::AudioSamples, 96_000), "-00:00:01:00000");
+        assert_eq!(format_time(Tick(TICKS_PER_SECOND), r, false, TimeDisplay::AudioSamples, 192_000), "00:00:01:000000");
+        assert_eq!(format_time(Tick::ZERO, r, false, TimeDisplay::AudioSamples, 0), "00:00:00:00000");
+        assert_eq!(format_time(Tick::ZERO, r, false, TimeDisplay::AudioSamples, i64::MIN), "00:00:00:00000");
+        assert_eq!(format_time(Tick::ZERO, r, false, TimeDisplay::AudioSamples, 1_000_000), "00:00:00:000000");
+        assert_eq!(format_time(Tick::ZERO, r, false, TimeDisplay::AudioSamples, 1_000_001), "00:00:00:0000000");
+    }
+
+    #[test]
     fn test_parse_timecode_negative_absolute_independent_of_current() {
         let r = FrameRate::FPS_29_97;
         // Negative full 4-field timecode must parse as absolute negative frames, not offset from current
@@ -903,6 +1033,47 @@ mod tests {
         assert!(parse_timecode("00:-30:00:00", r, false, 0).is_err());
         assert!(parse_timecode("01:+5:00:00", r, false, 0).is_err());
         assert!(parse_timecode("00:00:-01:00", r, false, 0).is_err());
+    }
+
+    #[test]
+    fn clock_counts_whole_seconds_and_keeps_its_width() {
+        let style = ClockStyle { pad_hours: true, fraction: ClockFraction::None };
+        let just_short = Tick(TICKS_PER_SECOND - 1);
+        assert_eq!(format_clock(just_short, style), format_clock(Tick::ZERO, style));
+        assert_ne!(format_clock(Tick(TICKS_PER_SECOND), style), format_clock(just_short, style));
+        let width = format_clock(Tick::ZERO, style).len();
+        for secs in [1, 59, 60, 3599, 3600, 86_399, 99 * 3600] {
+            assert_eq!(format_clock(Tick(secs * TICKS_PER_SECOND), style).len(), width, "{secs} s");
+        }
+        assert_eq!(format_clock(Tick(3661 * TICKS_PER_SECOND), style), "01:01:01");
+        assert_eq!(format_clock(Tick(3661 * TICKS_PER_SECOND), ClockStyle::default()), "1:01:01");
+        // Hours keep counting past a day and past two digits.
+        assert!(format_clock(Tick(100 * 3600 * TICKS_PER_SECOND), style).starts_with("100:"));
+    }
+
+    #[test]
+    fn clock_fraction_truncates_at_its_last_digit() {
+        let ms = |n: i64| Tick(n * (TICKS_PER_SECOND / 1000));
+        let three = ClockStyle { pad_hours: false, fraction: ClockFraction::Milliseconds };
+        assert_eq!(format_clock(ms(65_250), three), "0:01:05.250");
+        assert_eq!(format_clock(Tick(ms(65_250).0 - 1), three), "0:01:05.249");
+        let one = ClockStyle { pad_hours: false, fraction: ClockFraction::Tenths };
+        assert_eq!(format_clock(ms(65_999), one), "0:01:05.9");
+        let two = ClockStyle { pad_hours: false, fraction: ClockFraction::Hundredths };
+        assert_eq!(format_clock(ms(65_999), two), "0:01:05.99");
+    }
+
+    #[test]
+    fn clock_signs_only_values_it_shows_as_nonzero() {
+        let style = ClockStyle { pad_hours: true, fraction: ClockFraction::None };
+        assert_eq!(format_clock(Tick(-1), style), format_clock(Tick::ZERO, style));
+        let one_second = format_clock(Tick(TICKS_PER_SECOND), style);
+        assert_eq!(format_clock(Tick(-TICKS_PER_SECOND), style), format!("-{one_second}"));
+        let ms = ClockStyle { pad_hours: true, fraction: ClockFraction::Milliseconds };
+        assert!(format_clock(Tick(-TICKS_PER_SECOND / 1000), ms).starts_with('-'));
+        for t in [Tick(i64::MIN), Tick(i64::MAX), Tick::MIN, Tick::MAX] {
+            assert!(format_clock(t, ms).contains(':'));
+        }
     }
 
     #[test]

@@ -3,7 +3,7 @@ name: App updates
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, next]
     paths: ['crates/update/**', 'Cargo.toml', 'Cargo.lock', 'rustfmt.toml', 'clippy.toml', '.github/workflows/update.yml']
   pull_request:
     paths: ['crates/update/**', 'Cargo.toml', 'Cargo.lock', 'rustfmt.toml', 'clippy.toml', '.github/workflows/update.yml']
@@ -18,10 +18,10 @@ concurrency:
   cancel-in-progress: true
 
 # fmt, clippy and the tests with default and with all features run in the Workspace gate on every
-# OS; this runs the egui feature alone.
+# OS; this runs the ui feature alone.
 jobs:
   update:
-    name: Update with egui alone
+    name: Update with ui alone
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
@@ -38,5 +38,5 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      - run: cargo clippy -p craft-update --all-targets --locked --features egui -- -D warnings
-      - run: cargo test -p craft-update --locked --features egui -- --nocapture
+      - run: cargo clippy -p craft-update --all-targets --locked --features ui -- -D warnings
+      - run: cargo test -p craft-update --locked --features ui -- --nocapture

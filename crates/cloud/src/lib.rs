@@ -56,7 +56,7 @@ pub trait Files {
 
     /// A byte range of one document.
     ///
-    /// Defaulted to a full [`read`] and a slice, so providers that have no
+    /// Defaulted to a full [`read`](Self::read) and a slice, so providers that have no
     /// ranged GET still satisfy the trait. A provider with real range support
     /// overrides this.
     fn read_range(&self, id: &str, offset: u64, length: u64) -> Result<Vec<u8>> {

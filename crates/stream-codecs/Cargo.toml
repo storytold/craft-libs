@@ -21,5 +21,6 @@ hayro-jbig2 = { path = "../../vendor/hayro-jbig2", version = "=0.3.0", default-f
 thiserror = { workspace = true }
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 proptest = { workspace = true }
 weezl = "0.2"

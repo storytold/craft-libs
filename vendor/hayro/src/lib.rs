@@ -265,10 +265,9 @@ pub fn render_into<'a>(
         interpreter_settings.preview,
     );
 
-    // NOTE: vello_cpu in craft-libs is unvendored (0.0.8) and does not yet expose
-    // `set_max_coverage` / `coverage_full`; `render_settings.max_coverage` is preserved
-    // on `RenderSettings` for API parity with pdfcraft.
-    let _ = render_settings.max_coverage;
+    if let Some(max) = render_settings.max_coverage {
+        device.ctx.set_max_coverage(max);
+    }
 
     // PdfCraft patch (18): the page renders as one transparency group (the page group). Its
     // objects composite with an initially transparent backdrop, and the group is then put on
@@ -302,6 +301,11 @@ pub fn render_into<'a>(
     }
 
     interpret_page(page, &mut state, &mut device);
+    // PdfCraft patch (31): what the rasterizer left out once its coverage was full (a page that
+    // paints the same content millions of times over) is content left out, said as such.
+    if device.ctx.coverage_full() {
+        (interpreter_settings.warning_sink)(hayro_interpret::InterpreterWarning::ContentTruncated);
+    }
 
     if !backdrop_inside {
         device.pop_transparency_group();

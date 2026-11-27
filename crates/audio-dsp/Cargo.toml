@@ -12,3 +12,6 @@ workspace = true
 
 # No dependencies: planar `&mut [f32]` slices in, planar slices out.
 [dependencies]
+
+[dev-dependencies]
+craft-testkit = { workspace = true }
