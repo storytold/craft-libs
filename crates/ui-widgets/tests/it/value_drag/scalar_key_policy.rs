@@ -105,8 +105,9 @@ impl Rig {
             }
             let selected = scene.selected;
             ui.push_id(("selected-model", selected), |ui| {
-                for row in 0..2 {
-                    if !scene.shown[row] {
+                let shows = scene.shown;
+                for (row, shown) in shows.iter().copied().enumerate() {
+                    if !shown {
                         continue;
                     }
                     let name = if row == 0 { "Exposure" } else { "Contrast" };

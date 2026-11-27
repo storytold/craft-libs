@@ -46,8 +46,9 @@ impl Rig {
             }
             let owner = state.owner;
             ui.push_id(("scalar-model", owner), |ui| {
-                for row in 0..2 {
-                    let mut value = state.values[owner][row];
+                let starts = state.values[owner];
+                for (row, start) in starts.iter().copied().enumerate() {
+                    let mut value = start;
                     let edit = if fields {
                         let field = SliderField::new(if row == 0 { "Amount" } else { "Balance" }, Bind::bound(&mut value), 0.0..=100.0)
                             .step(0.01)
