@@ -10,6 +10,7 @@ use crate::runtime::frame::PerViewport;
 use crate::runtime::ime;
 use crate::runtime::overlay;
 use crate::runtime::pass_state;
+use craft_behavior::placement::Placement;
 use craft_behavior::{Cursor, CursorIcon, CursorPriority};
 use craft_host::target::{Backend, Caps, EdgeInsets, Os, ShellInfo, WindowChrome, WindowKind, WindowState};
 use craft_window::desktop::Desktop;
@@ -40,7 +41,7 @@ pub(crate) use host::{clear_source_pointer, note_moved_pointer, note_source_poin
 #[doc(hidden)]
 pub use native::route_root;
 pub use native::{WindowAction, act, double_click_action};
-use placement::record_placement;
+use placement::{Restore, follow_restore, record_placement};
 pub(crate) use shell::base_shell;
 #[doc(hidden)]
 pub use shell::os_of;
@@ -108,6 +109,9 @@ pub(crate) struct Shared {
     stacking: Vec<ViewportId>,
     /// The windows that got a primary press, each with the root frame of the press, in this root frame and the last.
     presses: Vec<(ViewportId, u64)>,
+    /// What the runtime still does for the root window opened at a saved placement (`InstallSpec::restored`) once it
+    /// shows ([`follow_restore`]); the root window's placement is not recorded meanwhile.
+    restore: Option<Restore>,
     /// The interface zoom the coming frame's window facts were measured at, read in `set_input`: egui-winit measures
     /// them before the frame, and a zoom the frame sets applies from its first pass.
     facts_zoom: Option<f32>,
@@ -242,7 +246,8 @@ pub(crate) fn app_moves(ctx: &Context, viewport: ViewportId) -> bool {
     PerViewport::<Record>::with(ctx, viewport, |record| record.moved_by_app)
 }
 
-/// Called by `install`: keeps the shell, the app id, the OS services and the placement store.
+/// Called by `install`: keeps the shell, the app id, the OS services, the placement store and what the runtime still
+/// does for the root window opened at the saved placement `restored` once it shows.
 pub(crate) fn install(
     ctx: &Context,
     shell: ShellInfo,
@@ -250,14 +255,17 @@ pub(crate) fn install(
     store: Option<Arc<Mutex<Store>>>,
     frame: Option<Decision>,
     app_id: String,
+    restored: Option<Placement>,
 ) {
     // The watch may read the desktop's settings, so it is built outside the lock.
     let layouts = frame.as_ref().map(LayoutWatch::new);
+    let restore = restored.and_then(|placed| Restore::of(&shell, placed));
     shared(ctx, |shared| {
         shared.shell = Some(shell);
         shared.app_id = app_id;
         shared.system = Some(system);
         shared.store = store;
+        shared.restore = restore;
         shared.facts_zoom = None;
         match frame.zip(layouts) {
             Some((decision, layouts)) => keep_root_frame(shared, decision, layouts),
@@ -597,8 +605,9 @@ fn reshow_cursor(ctx: &Context, viewport: ViewportId) {
     }
 }
 
-/// The end hook: sets the window's `movable` flag, keeps the root window's placement, writes a changed placement store
-/// once a second, and drops the close requests the viewport mounts did not take in this frame.
+/// The end hook: sets the window's `movable` flag, finishes the restore of a root window opened at a saved placement
+/// once it shows, keeps the root window's placement, writes a changed placement store once a second, and drops the
+/// close requests the viewport mounts did not take in this frame.
 pub(crate) fn end(ctx: &Context) {
     publish_regions(ctx, pass::current_viewport(ctx));
     sync_movable(ctx);
@@ -609,8 +618,9 @@ pub(crate) fn end(ctx: &Context) {
     follow_activity(ctx);
     follow_overlays(ctx);
     follow_layout(ctx, viewports::current(ctx).focused);
-    // The root window's placement is the app's `main` entry.
-    if shared(ctx, |shared| shared.store.is_some()) {
+    let restoring = follow_restore(ctx);
+    // The root window's placement is the app's `main` entry; it waits while the window's restore runs.
+    if !restoring && shared(ctx, |shared| shared.store.is_some()) {
         record_placement(ctx, ViewportId::ROOT, craft_window::restore::MAIN, &viewports::current(ctx));
     }
     flush_store(ctx);

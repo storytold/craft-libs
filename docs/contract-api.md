@@ -4291,7 +4291,7 @@ Decision records and findings. Inspected regions ([`record`]) collect pipeline s
 `runtime::install`: adds the runtime plugin once and sets the egui options the runtime owns.
 
 - `craft_ui::runtime::install::InstallError`: `pub enum InstallError { AlreadyInstalled, DuplicateStyle(DuplicateStyle), Commands(commands::CommandDefError), DuringPass }`. Why `install` refused a spec.
-- `craft_ui::runtime::install::InstallSpec`: `pub struct InstallSpec { pub shell_info: ShellInfo, pub window_system: Arc<dyn WindowSystem>, pub placement: Option<Arc<Mutex<Store>>>, pub frame_layers: Option<fn(&Context)>, pub looks: StyleReplacements, pub frame: Option<Decision>, pub system: SystemReader, pub wheel: WheelModifiers, pub app_id: String, pub pen: Option<PenSource>, pub stories: bool, pub clipboard: Option<craft_platform::clipboard::Clipboard>, pub jobs: Option<Arc<dyn Jobs>> }`. What `install` takes.
+- `craft_ui::runtime::install::InstallSpec`: `pub struct InstallSpec { pub shell_info: ShellInfo, pub window_system: Arc<dyn WindowSystem>, pub placement: Option<Arc<Mutex<Store>>>, pub frame_layers: Option<fn(&Context)>, pub looks: StyleReplacements, pub frame: Option<Decision>, pub restored: Option<Placement>, pub system: SystemReader, pub wheel: WheelModifiers, pub app_id: String, pub pen: Option<PenSource>, pub stories: bool, pub clipboard: Option<craft_platform::clipboard::Clipboard>, pub jobs: Option<Arc<dyn Jobs>> }`. What `install` takes.
   - `pub fn new(shell_info: ShellInfo, window_system: Arc<dyn WindowSystem>) -> Self`. A spec for `shell_info` and `window_system`, with no ghost-layer painter.
   - `pub fn jobs(mut self, jobs: Arc<dyn Jobs>) -> Self`. Runs the context's background work on `jobs` while no host is installed.
   - `pub fn clipboard(mut self, clipboard: craft_platform::clipboard::Clipboard) -> Self`. Installs the host's clipboard (system, browser event, memory) in place of the runtime's own.
@@ -4301,6 +4301,7 @@ Decision records and findings. Inspected regions ([`record`]) collect pipeline s
   - `pub fn system(mut self, reader: SystemReader) -> Self`. Sets the reader of the OS's appearance; the host starts it (`SystemReader::start`) with a wake that repaints.
   - `pub fn wheel(mut self, modifiers: WheelModifiers) -> Self`. Sets the modifiers the wheel zooms and scrolls sideways with.
   - `pub fn frame(mut self, decision: Decision) -> Self`. Sets the root window's decided frame (`craft_window::policy::decide_for`).
+  - `pub fn restored(mut self, placement: Placement) -> Self`. Sets the saved placement the root window was opened at.
   - `pub fn app_id(mut self, id: impl Into<String>) -> Self`. Sets the app id every OS window carries (dock icon, Wayland compositor rules).
   - `pub fn pen(mut self, source: PenSource) -> Self`. Sets the tablet source the pointer feed reads.
   - `pub fn frame_layers(mut self, painter: Option<fn(&Context)>) -> Self`. Sets the end hook's ghost-layer painter.

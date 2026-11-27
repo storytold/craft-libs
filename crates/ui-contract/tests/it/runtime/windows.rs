@@ -5,8 +5,8 @@
 //! window is minimized, injected keys across a focus loss, non-finite injected points, a repeated injected press, the
 //! window that has the keys, a wheel with no known pointer, what a layer in a popup window keeps while it is open, the
 //! placement of a minimized window, the placement in zoom-1 points through changes of zoom and starts and without a
-//! position, the root frame decided again, a held close, `act`, and a hosted window's Control-click and window-input
-//! policy.
+//! position, the maximize again for a window restored maximized on X11, the root frame decided again, a held close,
+//! `act`, and a hosted window's Control-click and window-input policy.
 
 use craft_behavior::placement::Placement;
 use craft_behavior::{Cursor, CursorIcon, PointerButton, Sense};
@@ -282,6 +282,87 @@ fn a_window_without_a_position_records_its_size_and_state() {
         }
         assert_eq!(recorded(), Some(expected), "maximized: {maximized}");
     }
+}
+
+/// A root window saved maximized over a normal 1440 × 920 at (132, 78), restored on X11 (`InstallSpec::restored`) from
+/// a store holding that placement.
+fn restored_x11_window() -> (Windows, Arc<Mutex<Store>>, Placement) {
+    let mut saved = Placement::new([1440.0, 920.0], 1.0);
+    saved.position_px = Some([132, 78]);
+    saved.maximized = true;
+    let store = Arc::new(Mutex::new(Store::in_memory()));
+    store.lock().unwrap().set(craft_window::restore::MAIN, &saved);
+    let x11 = ShellInfo::default().os(Os::Linux).backend(Backend::X11);
+    let windows = Windows::with(InstallSpec::new(x11, Arc::new(FakeSystem::new())).placement(store.clone()).restored(saved.clone()));
+    (windows, store, saved)
+}
+
+/// One frame in which the root window reports itself at `at` on a 1× display, `maximized` or not; the maximizes the
+/// frame asked of it.
+fn x11_frame(windows: &Windows, at: Rect, maximized: bool) -> usize {
+    let info = ViewportInfo {
+        inner_rect: Some(at),
+        outer_rect: Some(at),
+        maximized: Some(maximized),
+        native_pixels_per_point: Some(1.0),
+        ..ViewportInfo::default()
+    };
+    windows.root_info(info);
+    let out = windows.frame(vec![], vec![], |_| {});
+    out.commands.iter().filter(|(id, command)| *id == ViewportId::ROOT && *command == ViewportCommand::Maximized(true)).count()
+}
+
+/// eframe shows the root window after its first frame, and an X11 window manager ignores a maximize asked of a hidden
+/// window. A root window restored maximized on X11 is maximized again, once, in the frame after the hidden first one,
+/// and the store keeps the normal place the window opened with, though the shown window reported itself where its
+/// contents were before the window manager's frame went round them. On Wayland, where the builder's maximize works,
+/// nothing is asked.
+#[trial]
+fn a_root_window_restored_maximized_on_x11_is_maximized_again_once_shown() {
+    let (windows, store, saved) = restored_x11_window();
+    let window = Rect::from_min_size(Pos2::new(132.0, 78.0), Vec2::new(1440.0, 920.0));
+    let contents = window.translate(Vec2::new(0.0, 20.0));
+    let screen = Rect::from_min_size(Pos2::new(0.0, 32.0), Vec2::new(1704.0, 1033.0));
+    let asked = [(window, false), (contents, false), (screen, true), (screen, true)].map(|(at, maximized)| x11_frame(&windows, at, maximized));
+    assert_eq!((asked[0], asked.iter().sum::<usize>()), (0, 1), "asked once, not in the hidden first frame: {asked:?}");
+    let kept = main_entry(&store).expect("the window's placement");
+    assert_eq!((kept.position_px, kept.normal.size, kept.maximized), (saved.position_px, saved.normal.size, true));
+    let wayland = ShellInfo::default().os(Os::Linux).backend(Backend::Wayland);
+    let windows = Windows::with(InstallSpec::new(wayland, Arc::new(FakeSystem::new())).restored(saved));
+    assert_eq!((0..3).map(|_| x11_frame(&windows, window, false)).sum::<usize>(), 0, "nothing on Wayland");
+}
+
+/// A maximize the window manager refuses ends the X11 restore once the user resizes the window: the user's place is
+/// recorded, and a later maximize by the user keeps it as the normal place, not the one the window opened with.
+#[trial]
+fn a_refused_restore_maximize_on_x11_leaves_the_users_later_place_alone() {
+    let (windows, store, _) = restored_x11_window();
+    let opened = Rect::from_min_size(Pos2::new(132.0, 78.0), Vec2::new(1440.0, 920.0));
+    x11_frame(&windows, opened, false);
+    x11_frame(&windows, opened, false);
+    let chosen = Rect::from_min_size(Pos2::new(300.0, 200.0), Vec2::new(900.0, 700.0));
+    for _ in 0..8 {
+        x11_frame(&windows, chosen, false);
+    }
+    x11_frame(&windows, Rect::from_min_size(Pos2::new(0.0, 32.0), Vec2::new(1704.0, 1033.0)), true);
+    let kept = main_entry(&store).expect("the placement after the user's maximize");
+    assert_eq!((kept.position_px, kept.normal.size, kept.maximized), (Some([300, 200]), [900.0, 700.0], true));
+}
+
+/// A maximize the window manager leaves unanswered ends the X11 restore after two seconds: until then the store keeps
+/// the placement the window opened with, and from then on records where the window is, here moved by the user.
+#[trial]
+fn an_unanswered_restore_maximize_on_x11_ends_after_two_seconds() {
+    let (windows, store, saved) = restored_x11_window();
+    let moved = Rect::from_min_size(Pos2::new(400.0, 250.0), Vec2::new(1440.0, 920.0));
+    // The kit runs 60 frames a second.
+    let asked: usize = (0..60).map(|_| x11_frame(&windows, moved, false)).sum();
+    assert_eq!((asked, main_entry(&store)), (1, Some(saved)), "asked once; a second on, the store keeps the opened placement");
+    for _ in 0..80 {
+        x11_frame(&windows, moved, false);
+    }
+    let kept = main_entry(&store).expect("the placement after the wait");
+    assert_eq!((kept.position_px, kept.maximized), (Some([400, 250]), false), "recorded where the window is");
 }
 
 /// The user's "Use system title bar" setting changes the open main window at once: `set_root_frame` sends the window
