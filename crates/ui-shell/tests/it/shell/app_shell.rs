@@ -526,7 +526,9 @@ fn versioned_slots_run_only_when_their_version_changes() {
     }
     let (ran, ..) = frame(&mut frames, vec![moved(status.get().center())]);
     assert!(!ran.is_empty() && ran.iter().all(|name| *name == "status"), "the pointer over the status bar runs it alone: {ran:?}");
+    // The status bar's hover fade runs it until it ends.
     frame(&mut frames, vec![moved(at)]);
+    frames.advance(1.0);
     frame(&mut frames, vec![]);
     version.set(2);
     let (ran, ..) = frame(&mut frames, vec![]);
