@@ -2332,21 +2332,33 @@ fn a_selected_zoom_click_at_either_limit_reports_one_step_for_independent_peers(
             for (out, alt) in [(false, false), (false, true), (true, false), (true, true)] {
                 let resolved_out = out != alt;
                 let bound = if resolved_out { scheme.min(DOCUMENT) } else { scheme.max_device() };
-                let options = zoom_receipt_options(|options| options.animated_zoom = animated);
-                let mut rig = ZoomReceiptRig::new(out, options, 1.0, false);
-                rig.fixture.root_value(scheme);
-                let mut view = rig.view.get().expect("the canvas ran");
-                view.zoom = CanvasView::points_per_unit(bound, rig.fixture.ctx().pixels_per_point());
-                rig.view.set(Some(view));
-                rig.fixture.hold(Modifiers { alt, ..Modifiers::NONE }).settle();
-                let before = rig.view.get();
-                let at = rig.press();
-                rig.fixture.frame(vec![pointer::release(at)]).idle(3);
-                assert_eq!(rig.view.get(), before, "the bounded clicked view stays exactly where it was");
-                assert_eq!(&*rig.steps.borrow(), &[resolved_out], "the selected click still supplies exactly one resolved peer-step intent");
-                let peer_zoom = scheme.device(50.0);
-                let peer_step = scheme.step(peer_zoom, if rig.steps.borrow()[0] { -1 } else { 1 }, DOCUMENT);
-                assert_ne!(peer_step, peer_zoom, "an unbounded peer can take its own rung independently of the source bound");
+                // A retained view may outlive a scheme's range. The blocked direction stays put;
+                // a click back toward the range must still zoom in its actual direction.
+                let beyond = if resolved_out { bound * 0.5 } else { bound * 2.0 };
+                let recovering = if resolved_out { scheme.max_device() * 2.0 } else { scheme.min(DOCUMENT) * 0.5 };
+                for (device_zoom, stays) in [(bound, true), (beyond, true), (recovering, false)] {
+                    let options = zoom_receipt_options(|options| options.animated_zoom = animated);
+                    let mut rig = ZoomReceiptRig::new(out, options, 1.0, false);
+                    rig.fixture.root_value(scheme);
+                    let mut view = rig.view.get().expect("the canvas ran");
+                    view.zoom = CanvasView::points_per_unit(device_zoom, rig.fixture.ctx().pixels_per_point());
+                    rig.view.set(Some(view));
+                    rig.fixture.hold(Modifiers { alt, ..Modifiers::NONE }).settle();
+                    let before = rig.view.get();
+                    let before_zoom = rig.zoom();
+                    let at = rig.press();
+                    rig.fixture.frame(vec![pointer::release(at)]).idle(if stays { 3 } else { 30 });
+                    if stays {
+                        assert_eq!(rig.view.get(), before, "the bounded clicked view stays exactly where it was");
+                    } else {
+                        assert_ne!(rig.view.get(), before, "the opposite direction can return a retained view toward its range");
+                        assert_eq!(rig.zoom() < before_zoom, resolved_out, "recovery never reverses the resolved click direction");
+                    }
+                    assert_eq!(&*rig.steps.borrow(), &[resolved_out], "the selected click still supplies exactly one resolved peer-step intent");
+                    let peer_zoom = scheme.device(50.0);
+                    let peer_step = scheme.step(peer_zoom, if rig.steps.borrow()[0] { -1 } else { 1 }, DOCUMENT);
+                    assert_ne!(peer_step, peer_zoom, "an unbounded peer can take its own rung independently of the source bound");
+                }
             }
         }
     }

@@ -540,14 +540,17 @@ fn click_step(
     {
         return None;
     }
+    let limit = if out { minimum } else { maximum };
+    let at_limit = (if out { current <= limit } else { current >= limit }) || (current / limit - 1.0).abs() <= 1e-9;
+    if at_limit {
+        return Some(ZoomClick::AtLimit);
+    }
     let next = scheme.step(current, if out { -1 } else { 1 }, size);
     if !next.is_finite() || next <= 0.0 {
         return None;
     }
     if (next / current - 1.0).abs() <= 1e-9 {
-        let limit = if out { minimum } else { maximum };
-        let at_limit = (if out { current <= limit } else { current >= limit }) || (current / limit - 1.0).abs() <= 1e-9;
-        return at_limit.then_some(ZoomClick::AtLimit);
+        return None;
     }
     let mut stepped = *view;
     zoom::about(&mut stepped, screen, next, options.zoom_clicked_point_to_center, pixels_per_point);
