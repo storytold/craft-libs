@@ -176,11 +176,20 @@ fn tag_end(s: &str) -> Option<usize> {
 /// The root start tag's span start, span end, close tag start, and the root's direct children,
 /// or `None` for anything the scanner doesn't expect (CDATA, DOCTYPE, a different root).
 fn children(xml: &str, root: &str) -> Option<(usize, usize, usize, Vec<Child>)> {
-    let open = xml.find(&format!("<{root}"))?;
-    let open_end = open + tag_end(xml.get(open..)?)? + 1;
-    if xml.get(open_end - 2..open_end)? == "/>" {
-        return None;
-    }
+    use quick_xml::events::Event;
+    let body = xml.strip_prefix('\u{feff}').unwrap_or(xml);
+    let mut reader = quick_xml::Reader::from_str(body);
+    let (open, open_end) = loop {
+        match reader.read_event().ok()? {
+            Event::Start(e) if e.name().as_ref() == root.as_bytes() => {
+                let end = xml.len() - body.len() + usize::try_from(reader.buffer_position()).ok()?;
+                break (end.checked_sub(e.len() + 2)?, end);
+            }
+            Event::Decl(_) | Event::PI(_) | Event::Comment(_) => {}
+            Event::Text(t) if t.iter().all(u8::is_ascii_whitespace) => {}
+            _ => return None,
+        }
+    };
     let mut out = Vec::new();
     let mut depth = 0usize;
     let mut i = open_end;
@@ -338,15 +347,15 @@ fn is_compat_mode_child(root_tag: &str, compat_s: &str, k: &Child) -> bool {
             let is_unbound = matches!(ares, quick_xml::name::ResolveResult::Unbound);
 
             if local.as_ref() == b"name" {
-                if is_wml {
+                if is_wml && w_name.is_none() {
                     w_name = val;
-                } else if is_unbound {
+                } else if is_unbound && un_name.is_none() {
                     un_name = val;
                 }
             } else if local.as_ref() == b"uri" {
-                if is_wml {
+                if is_wml && w_uri.is_none() {
                     w_uri = val;
-                } else if is_unbound {
+                } else if is_unbound && un_uri.is_none() {
                     un_uri = val;
                 }
             }
@@ -546,7 +555,7 @@ fn qualify_wml_child(g_text: &str, root_tag: &str, compat_s: &str) -> String {
     }
 }
 
-fn enable_switch_element(elem_str: &str, root_tag: &str, compat_s: &str) -> String {
+fn updated_switch(elem_str: &str, root_tag: &str, compat_s: &str, enabled: bool) -> String {
     let root = if root_tag.trim_start().starts_with('<') {
         root_tag
     } else {
@@ -569,7 +578,9 @@ fn enable_switch_element(elem_str: &str, root_tag: &str, compat_s: &str) -> Stri
     let mut reader = quick_xml::NsReader::from_str(&xml);
     let mut depth = 0;
     let mut root_w_ns = None;
-    let mut disabled_val_range: Option<(usize, usize)> = None;
+    let mut value_edit = None;
+    let mut has_extra =
+        tag_end(elem_str).and_then(|end| elem_str[end + 1..].rsplit_once("</")).is_some_and(|(content, _)| !content.trim().is_empty());
 
     while let Ok((_, ev)) = reader.read_resolved_event() {
         match ev {
@@ -589,30 +600,35 @@ fn enable_switch_element(elem_str: &str, root_tag: &str, compat_s: &str) -> Stri
                 let root_w = root_w_ns.as_deref().unwrap_or(b"");
                 for attr in e.attributes().with_checks(false).flatten() {
                     let (ares, local) = reader.resolver().resolve_attribute(attr.key);
-                    if local.as_ref() == b"val" {
-                        let is_wml = match ares {
-                            quick_xml::name::ResolveResult::Bound(ref ns) => is_wml_ns(ns.as_ref(), root_w),
-                            _ => false,
-                        };
-                        let is_unbound = matches!(ares, quick_xml::name::ResolveResult::Unbound);
+                    let is_wml = matches!(&ares, quick_xml::name::ResolveResult::Bound(ns) if is_wml_ns(ns.as_ref(), root_w));
+                    let is_unbound = matches!(ares, quick_xml::name::ResolveResult::Unbound);
+                    if local.as_ref() == b"val" && (is_wml || is_unbound) {
                         let val_str = attr.normalized_value(quick_xml::XmlVersion::Explicit1_0).ok();
                         let start_in_xml = attr.value.as_ptr() as usize - xml.as_ptr() as usize;
                         if start_in_xml >= elem_offset_in_xml {
                             let start = start_in_xml - elem_offset_in_xml;
                             let end = start + attr.value.len();
-                            if is_wml {
+                            if is_wml && w_val.is_none() {
                                 w_val = Some((val_str, (start, end)));
-                            } else if is_unbound {
+                            } else if is_unbound && un_val.is_none() {
                                 un_val = Some((val_str, (start, end)));
                             }
                         }
+                    } else if attr.key.as_ref() != b"xmlns" && !attr.key.as_ref().starts_with(b"xmlns:") {
+                        has_extra = true;
                     }
                 }
                 let chosen = w_val.or(un_val);
-                if let Some((Some(v), span)) = chosen
-                    && crate::units::is_off_val(&v)
-                {
-                    disabled_val_range = Some(span);
+                if let Some((Some(v), span)) = chosen {
+                    if crate::units::is_off_val(&v) == enabled {
+                        value_edit = Some((span, if enabled { "1".to_owned() } else { "0".to_owned() }));
+                    }
+                } else if !enabled {
+                    let name = e.name();
+                    let name = std::str::from_utf8(name.as_ref()).unwrap_or_default();
+                    let prefix = name.rfind(':').map_or("", |i| &name[..=i]);
+                    let pos = 1 + name.len();
+                    value_edit = Some(((pos, pos), format!(" {prefix}val=\"0\"")));
                 }
                 break;
             }
@@ -621,12 +637,12 @@ fn enable_switch_element(elem_str: &str, root_tag: &str, compat_s: &str) -> Stri
         }
     }
 
-    if let Some((start, end)) = disabled_val_range
-        && start < end
-        && end <= elem_str.len()
-    {
+    if !enabled && !has_extra {
+        return String::new();
+    }
+    if let Some(((start, end), value)) = value_edit {
         let mut s = elem_str.to_string();
-        s.replace_range(start..end, "1");
+        s.replace_range(start..end, &value);
         return s;
     }
     elem_str.to_string()
@@ -645,7 +661,8 @@ fn sync_compat_switch(root_tag: &str, orig: &mut String, orig_tag: &str, generat
         ([], None) => {}
         (matches, None) => {
             for &(a, b) in matches.iter().rev() {
-                orig.replace_range(a..b, "");
+                let updated = updated_switch(&orig[a..b], root_tag, orig, false);
+                orig.replace_range(a..b, &updated);
             }
         }
         ([], Some(g_text)) => {
@@ -664,7 +681,7 @@ fn sync_compat_switch(root_tag: &str, orig: &mut String, orig_tag: &str, generat
             }
             let (first_a, first_b) = matches[0];
             let orig_elem = &orig[first_a..first_b];
-            let updated = enable_switch_element(orig_elem, root_tag, orig);
+            let updated = updated_switch(orig_elem, root_tag, orig, true);
             orig.replace_range(first_a..first_b, &updated);
         }
     }
