@@ -85,6 +85,8 @@ craft_ui::words! {
         /// `{name}` is the working profile's name.
         working_profile: template "newDocument.workingProfile" = "Working: {name}";
         working: "newDocument.working" = "Working";
+        /// The Color Profile entry of [`NewDocumentDialog::unmanaged_profile`]: no profile is embedded.
+        dont_color_manage: "newDocument.dontColorManage" = "Don't Color Manage";
         background: "newDocument.background" = "Background Contents";
         white: "newDocument.white" = "White";
         black: "newDocument.black" = "Black";
@@ -595,6 +597,13 @@ impl<'a> NewDocumentDialog<'a, DocumentOptions> {
     /// The colour profiles each mode offers.
     pub fn profiles(mut self, profiles: Vec<ColorProfiles>) -> Self {
         self.setup.profiles = profiles;
+        self
+    }
+
+    /// Lists "Don't Color Manage" second under Color Profile, right after the working space, in every mode: picking it
+    /// sets the profile to this id (the app's name for an untagged document). A mode change keeps it.
+    pub fn unmanaged_profile(mut self, id: impl Into<String>) -> Self {
+        self.setup.unmanaged_profile = Some(id.into());
         self
     }
 
