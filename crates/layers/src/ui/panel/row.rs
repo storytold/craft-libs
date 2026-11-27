@@ -57,7 +57,7 @@ pub(super) fn paint_color(color: Rgba) -> Color32 {
 /// The cursor over a thumbnail a Cmd/Ctrl click with `mods` loads as a selection: the pointing hand, with the mark of
 /// the operation Shift and Alt pick (add, subtract, intersect).
 fn load_cursor(mods: Mods) -> Cursor {
-    let badge = match (mods.shift, mods.alt) {\
+    let badge = match (mods.shift, mods.alt) {
         (true, true) => CursorBadge::Intersect,
         (true, false) => CursorBadge::Add,
         (false, true) => CursorBadge::Subtract,
@@ -270,7 +270,7 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
 
     if size != ThumbSize::None && !compact {
         let host = cx.thumbs;
-        let (layer, kind, badge, custom_icon) = (id.clone(), info.kind, info.thumb_badge, info.kind_icon);
+        let (layer, kind, badge, custom_icon) = (id.clone(), info.kind, info.thumb_badge, info.kind_icon.clone());
         row = row.thumb(size, move |painter, rect| {
             if !paint_picture(host, &LayerThumb::pixels(layer, contents), painter, rect, &PicturePaint::default()) {
                 paint_kind_tile(painter, rect, kind, custom_icon);
@@ -314,7 +314,7 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
                 part => row = row.thumb_target(info.thumb(part).unwrap_or(ThumbTarget::First)),
             }
         }
-    } else if let Some(icon) = info.kind_icon.or_else(|| kind_icon(info.kind)) {
+    } else if let Some(icon) = info.kind_icon.clone().or_else(|| kind_icon(info.kind)) {
         row = row.icon(IconSpec::svg(icon));
     }
 
