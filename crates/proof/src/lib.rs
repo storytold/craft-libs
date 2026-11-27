@@ -38,6 +38,10 @@
 //! - **Gujarati** ([`ProofLang::Gu`], module [`gu`]): the installed Hunspell `gu_IN`
 //!   dictionary (not bundled), dictionary-driven suggestions and generic checks with Gujarati
 //!   messages. Hyphenation uses the existing English fallback.
+//! - **Hindi** ([`ProofLang::Hi`], module [`hi`]): the installed Hunspell `hi_IN` dictionary
+//!   (not bundled), dictionary-driven suggestions and generic checks with Hindi messages, on the
+//!   Devanagari pieces of [`devanagari`] (letters, digits, both spellings of nukta letters).
+//!   Hyphenation uses an installed pack's patterns, else the existing English fallback.
 //! - **Spanish** ([`ProofLang::Es`], [`ProofLang::EsMx`], [`ProofLang::Es419`], [`ProofLang::EsUy`],
 //!   module [`es`]): each variety's installed Hunspell dictionary (`es_ES`, `es_MX`, `es_419`,
 //!   `es_UY`, with fallbacks; not bundled), dictionary-driven suggestions, Uruguayan `vos` forms,
@@ -76,6 +80,7 @@ mod data {
 }
 pub mod bg;
 pub mod cs;
+pub mod devanagari;
 pub mod dict;
 pub mod en_variants;
 mod english;
@@ -83,6 +88,7 @@ pub mod es;
 pub mod fr;
 mod grammar_en;
 pub mod gu;
+pub mod hi;
 pub mod hr;
 pub mod hunspell;
 pub mod hyphen;
