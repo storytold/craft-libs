@@ -43,7 +43,7 @@ pub type Wake = Arc<dyn Fn() + Send + Sync>;
 pub type Override = Box<dyn FnMut(&Request) -> Answer>;
 
 pub enum Kind { Open { multiple: bool }, Folder, Save }
-pub struct FileDialog { pub kind: Kind, pub title: Option<String>, pub filters: Vec<Filter>,
+pub struct FileDialog { pub kind: Kind, pub title: Option<String>, pub accept_label: Option<String>, pub filters: Vec<Filter>,
     pub directory: Option<PathBuf>, pub file_name: Option<String>, pub format_label: Option<String> }
 pub struct Filter { pub name: String, pub extensions: Vec<String> }
 pub struct Message { pub level: MessageLevel, pub title: String, pub description: String,
