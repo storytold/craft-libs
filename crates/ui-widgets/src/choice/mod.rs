@@ -18,7 +18,7 @@ pub use switch::{Switch, SwitchStyle};
 pub use words::ChoiceWords;
 
 pub use swatch::{
-    CellMarks, RING_SHARE, Swatch, SwatchFace, SwatchFill, SwatchImage, SwatchMetrics, SwatchOutput, SwatchShape, SwatchStyle, paint_ring,
+    CellMarks, RING_SHARE, Swatch, SwatchFace, SwatchFill, SwatchImage, SwatchMetrics, SwatchOutput, SwatchShape, SwatchStyle, paint_ring, ring_band,
 };
 pub use swatch_table::{RowMarks, SwatchArrangement, SwatchRows, SwatchSpacing, SwatchTable, SwatchTableOutput, SwatchTableStyle};
 

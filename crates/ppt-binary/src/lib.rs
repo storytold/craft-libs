@@ -10,9 +10,9 @@
 //! PowerPoint 95 files (a different record framing, learned from files PowerPoint 95 wrote) read
 //! as far as their slide size, masters with their colour schemes, backgrounds, placeholder boxes
 //! and text styles, and slides with their order, master, layout type, background, placeholders
-//! and text boxes with formatted, anchored text, and shapes and lines with their fill, line and
-//! shadow; their pictures and notes are not read yet. Older formats aren't read: a compound file
-//! in neither framing is refused as too old when its current user record has neither of
+//! and text boxes with formatted, anchored text, shapes and lines with their fill, line and
+//! shadow, freeforms, groups and pictures, and their notes. Older formats aren't read: a compound
+//! file in neither framing is refused as too old when its current user record has neither of
 //! [MS-PPT]'s tokens and it has no edit record, and a file that isn't a compound file is not a
 //! presentation.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
