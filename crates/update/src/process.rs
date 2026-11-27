@@ -799,11 +799,11 @@ pub(crate) mod inherited_pipe_tests {
         });
         // The output is more than 8 MB, so a failure shows only its length.
         assert_eq!(result.map(|output| output.len()), Err(HelperFailure::Unfinished("the fixture didn't finish within 5 seconds".into())));
-        // Lets the descendant go and waits until it has closed its end. The read time limit only
-        // stops a broken test.
+        // Lets the descendant go and waits until it has closed its end. The read time limit set when
+        // it connected only stops a broken test. macOS refuses socket options once both directions
+        // are shut, which happens as soon as the descendant closes its end after this shutdown.
         let mut holder = holder.expect("the direct child didn't exit while the descendant held its output");
         holder.shutdown(std::net::Shutdown::Write).unwrap();
-        holder.set_read_timeout(Some(HOLD)).unwrap();
         assert_eq!(holder.read_to_end(&mut Vec::new()).unwrap(), 0);
     }
 }

@@ -1,8 +1,1 @@
 config_version = 1
-
-[[exception]]
-name = "mac-menu-rebuild-retry-clock"
-kind = "marker"
-rule = "contract/motion"
-path = "crates/menu/src/mac.rs"
-reason = "The AppKit menu rebuild retry is a native timer that runs outside any pass, not a motion clock; RebuildRetry takes a std Instant, which the runtime clock (a web_time Instant on wasm) is not."

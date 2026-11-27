@@ -932,6 +932,42 @@ fn kill_on_cancel(stop: &Stop) -> impl Fn() -> Result<(), String> + '_ {
 #[cfg(target_os = "linux")]
 pub mod linux;
 
+/// Retries only the disk-image helper's known busy replies. The injected wait keeps the policy's
+/// tests independent of macOS and wall-clock delays; the real caller uses `thread::sleep`.
+#[cfg(any(target_os = "macos", test))]
+fn retry_busy_detach(detach: impl FnMut() -> Result<(), String>, wait: impl FnMut(std::time::Duration)) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    retry_busy_detach_with_elapsed(detach, wait, || started.elapsed())
+}
+
+/// Counts time spent in the helper as well as backoff, so a slow failure cannot multiply the
+/// ordinary/force helper timeouts. An already started detach keeps its original limits.
+#[cfg(any(target_os = "macos", test))]
+fn retry_busy_detach_with_elapsed(
+    mut detach: impl FnMut() -> Result<(), String>,
+    mut wait: impl FnMut(std::time::Duration),
+    mut elapsed: impl FnMut() -> std::time::Duration,
+) -> Result<(), String> {
+    let window = std::time::Duration::from_secs(8);
+    let mut result = detach();
+    for millis in [500, 1000, 2000, 4000] {
+        let Err(reason) = &result else { return result };
+        if !reason.contains("Resource busy") && !reason.contains("Resource temporarily unavailable") {
+            return result;
+        }
+        let delay = std::time::Duration::from_millis(millis);
+        if elapsed().saturating_add(delay) > window {
+            break;
+        }
+        wait(delay);
+        if elapsed() >= window {
+            break;
+        }
+        result = detach();
+    }
+    result
+}
+
 #[cfg(target_os = "macos")]
 pub mod macos;
 

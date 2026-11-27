@@ -224,9 +224,10 @@ fn tabs_closed_together_reopen_together_and_a_tab_closed_alone_stays_closed() {
     assert_eq!(group_members(workspace.layout(), 2), [2, 3], "it reopens beside 2");
 }
 
-/// A panel that floats keeps its docked place until it docks or closes; floating again from the float keeps the first.
+/// A panel that floats keeps its docked place until it docks; floating again from the float keeps the first, and a
+/// float that closes keeps it while it is closed and after it reopens floating.
 #[test]
-fn a_floated_panel_keeps_where_it_was_docked_until_it_docks_or_closes() {
+fn a_floated_panel_keeps_where_it_was_docked_until_it_docks() {
     let mut workspace = Workspace::new(docked());
     let docked_at = workspace.layout().location(&2).unwrap();
     workspace.apply(Action::float(2, rect(10.0, 10.0, 200.0, 200.0)), false, allow).unwrap();
@@ -235,10 +236,15 @@ fn a_floated_panel_keeps_where_it_was_docked_until_it_docks_or_closes() {
     assert_eq!(workspace.floated(), [(2, docked_at)], "floating again from the float keeps the first record");
     workspace.apply(Action::move_beside(2, 11, DockPlacement::tab(None)), false, allow).unwrap();
     assert!(workspace.floated().is_empty(), "docking drops the record");
+    let docked_at = workspace.layout().location(&3).unwrap();
     workspace.apply(Action::float(3, rect(10.0, 10.0, 200.0, 200.0)), false, allow).unwrap();
-    assert_eq!(workspace.floated().len(), 1);
     workspace.apply(Action::close(3), false, allow).unwrap();
-    assert!(workspace.floated().is_empty(), "closing drops the record");
+    assert_eq!(workspace.floated(), [(3, docked_at.clone())], "closing keeps the record");
+    workspace.apply(Action::open(3, None), false, allow).unwrap();
+    assert!(floats(workspace.layout(), 3), "it reopens floating");
+    assert_eq!(workspace.floated(), [(3, docked_at.clone())], "reopening keeps the record");
+    workspace.apply(Action::restore(3, docked_at), false, allow).unwrap();
+    assert!(!floats(workspace.layout(), 3) && workspace.floated().is_empty(), "docking back drops the record");
 }
 
 /// A closed panel that floats by itself records the place it would reopen at, as opening it first records, and its old
