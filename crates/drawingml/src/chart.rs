@@ -234,7 +234,10 @@ pub struct Series {
     /// The marker symbol, including explicit `"none"`; `None` means no symbol was specified.
     pub marker: Option<String>,
     /// The series' plot type, including its line-marker override. DrawingML reads retain this
-    /// even when all plot groups have the same type.
+    /// even when all plot groups have the same type. On rebuild, supported series types
+    /// take precedence unless a non-Combo `Chart::kind` differs from its raw chart's
+    /// provenance-matched original type. That chart-wide edit overrides retained kinds;
+    /// without a raw baseline, an explicit series type remains authoritative.
     pub kind: Option<ChartType>,
     /// Whether the series uses a value axis other than the chart's primary value axis.
     pub secondary_axis: bool,
