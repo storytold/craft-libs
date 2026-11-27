@@ -44,7 +44,7 @@ pub trait EdgeTracer {
 /// The Magnetic Lasso's options bar, persisted by the app (decisions §2.4). The options bar edits
 /// [`MagneticLassoTool::settings_mut`]; `[` and `]` change `width` ([`step_width`](Self::step_width)): the tool while an
 /// outline is open, the app's shortcuts otherwise.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, craft_ui::contract::PlainData)]
 #[serde(rename_all = "camelCase", default)]
 #[non_exhaustive]
 pub struct MagneticSettings {

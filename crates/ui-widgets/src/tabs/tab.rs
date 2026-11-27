@@ -646,7 +646,7 @@ impl Component for Tab<'_> {
         }
         if let (Some(at), Some((side, rest, hover))) = (placed.close, style.close_glyph) {
             let mut glyph = IconSpec::from(IconId::new("close"));
-            glyph.color = Some(if cx.hover_pos(CLOSE).is_some() { hover } else { rest });
+            glyph.color = Some(if cx.part_if_declared(CLOSE).is_some_and(|result| result.hovered) { hover } else { rest });
             ui.draw().icon(Rect::from_center_size(at.center(), Vec2::splat(side)), &glyph);
         } else if placed.close.is_some() {
             let words = cx.words::<TabWords>();

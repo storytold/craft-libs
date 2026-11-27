@@ -13,10 +13,10 @@ use crate::pickers::Select;
 use crate::runtime::commands::EditCommands;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use crate::text::NumberField;
-use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{CanvasView, IconId};
+use craft_behavior::IconId;
+use craft_behavior::kurbo::Size;
 use craft_theme::variant::Tone;
-use egui::{Key, Modifiers, Pos2, Rect, Ui};
+use egui::{Key, Modifiers, Ui};
 
 /// A width that holds the first items of `items` and not the rest.
 const NARROW: f32 = 80.0;
@@ -131,9 +131,8 @@ fn bar_captioned(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 /// PhotoCraft's status bar: the zoom and the chosen readout, the message, and the render path in the trailing group.
 fn status_bar(ui: &mut Ui, data: &mut StoryData, message: StatusMessage, width: f32) -> StoryOutput {
     let values = StatusValues { document_sizes: Some((26_100_000, 31_400_000)), ..StatusValues::default() };
-    let canvas = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
     let mut item = *data.value("item", StatusItem::DocumentSizes);
-    let (view, view_at) = data.value_at("view", CanvasView::new(canvas, Point::new(1000.0, 750.0), 0.6667));
+    let (zoom, zoom_at) = data.value_at("zoom", 0.6667);
     let shown = crate::testing::memory::scoped(ui, |ui| {
         ui.set_max_width(width.min(ui.available_width()));
         Bar::new("Status", BarKind::Status)
@@ -141,7 +140,7 @@ fn status_bar(ui: &mut Ui, data: &mut StoryData, message: StatusMessage, width: 
                 Link::new("CPU Rendering").tone(Tone::Warn).show(ui);
             })
             .show(ui, |ui, _| {
-                if let Some(picked) = StatusReadout::new(view_at.bind(view), DOCUMENT, item, &values).show(ui).item {
+                if let Some(picked) = StatusReadout::new(zoom_at.bind(zoom), DOCUMENT, item, &values).show(ui).item {
                     item = picked;
                 }
                 message.show(ui);

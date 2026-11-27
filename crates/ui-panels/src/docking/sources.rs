@@ -20,6 +20,18 @@ pub struct DockSource<P> {
     pub id: Id,
 }
 
+/// A replay of the view that drew a source at another place moves its rect; what it acts on, its OS window and its node
+/// stay.
+impl<P: Clone> crate::runtime::Shift for DockSource<P> {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        DockSource { rect: self.rect.shifted(by), ..self.clone() }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        DockSource { rect: self.rect.snapped(&to.rect, within), ..self.clone() }
+    }
+}
+
 impl<P> DockSource<P> {
     /// `kind` drawn at `rect` in the app window, with the node `id`.
     pub fn new(kind: SourceKind<P>, rect: Rect, id: Id) -> Self {
