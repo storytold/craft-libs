@@ -513,3 +513,31 @@ fn hostile_run_values_write_an_outline_without_a_panic() {
     let paths = p.items.iter().filter(|i| matches!(i, Item::Path { .. })).count();
     assert_eq!(paths, n, "each one is its outline instead");
 }
+
+/// A two-character run from (20, 50) with these offsets and end, at `angle`.
+fn run_at(offsets: [f64; 2], end: f64, angle: f64) -> Op {
+    let mut op = hello("Arial", angle, "Hi");
+    if let Op::Text { run, .. } = &mut op {
+        run.chars[0].1 = offsets[0];
+        run.chars[1].1 = offsets[1];
+        run.end = end;
+    }
+    op
+}
+
+#[test]
+fn the_header_bounds_reach_a_character_past_the_runs_end() {
+    // The second character starts at 100 pt though the run ends at 10.
+    let back = write_emf(&[run_at([0.0, 100.0], 10.0, 0.0)], 200.0, 100.0);
+    let ahead = write_emf(&[run_at([0.0, 50.0], 100.0, 0.0)], 200.0, 100.0);
+    assert_eq!(i32_at(&back, 16), i32_at(&ahead, 16), "both runs reach 100 pt along the baseline");
+}
+
+#[test]
+fn a_huge_angle_is_the_direction_it_names() {
+    // 1e18 degrees is 280 degrees on from a whole number of turns.
+    let huge = parse(&write_emf(&[hello("Arial", 1.0e18, "Hi")], 200.0, 100.0)).unwrap();
+    let plain = parse(&write_emf(&[hello("Arial", 280.0, "Hi")], 200.0, 100.0)).unwrap();
+    let (h, p) = (texts(&huge)[0], texts(&plain)[0]);
+    assert_eq!(h.transform, p.transform);
+}

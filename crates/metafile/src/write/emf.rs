@@ -468,7 +468,7 @@ impl Writer {
     /// rounded absolute positions, so rounding never accumulates along the line.
     fn text(&mut self, run: &TextRun) {
         let k = UNITS_PER_PT;
-        let (sin, cos) = run.angle.to_radians().sin_cos();
+        let (sin, cos) = run.angle.rem_euclid(360.0).to_radians().sin_cos();
         // Along the baseline and down from it, in picture space (y down).
         let along = |d: f64| run.origin + kurbo::Vec2::new(cos, -sin) * d;
         let below = kurbo::Vec2::new(sin, cos);
@@ -478,13 +478,12 @@ impl Writer {
         let ends: Vec<i64> = run.chars.iter().skip(1).map(|c| c.1).chain([run.end]).map(units).collect();
         let starts = run.chars.iter().map(|c| units(c.1));
         let dx: Vec<i32> = starts.zip(&ends).map(|(a, b)| i32::try_from(b.saturating_sub(a)).unwrap_or(0)).collect();
-        // The cells from the em above the baseline to a quarter em below it.
-        let corners = [
-            along(first) - below * run.size,
-            along(first) + below * (run.size / 4.0),
-            along(run.end) - below * run.size,
-            along(run.end) + below * (run.size / 4.0),
-        ];
+        // The cells from the em above the baseline to a quarter em below it, from the nearest
+        // character origin or end to the farthest: offsets need not grow along the run.
+        let offsets = run.chars.iter().map(|c| c.1).chain([run.end]);
+        let (lo, hi) = offsets.fold((first, first), |(lo, hi), d| (lo.min(d), hi.max(d)));
+        let corners =
+            [along(lo) - below * run.size, along(lo) + below * (run.size / 4.0), along(hi) - below * run.size, along(hi) + below * (run.size / 4.0)];
         let b = corners.iter().map(|p| self.dev(*p)).fold(None, |acc, p| Some(union(acc, [p[0], p[1], p[0], p[1]]))).unwrap_or([0, 0, -1, -1]);
         self.grow(b);
         self.font(run);
@@ -525,7 +524,7 @@ impl Writer {
     /// EMR_EXTCREATEFONTINDIRECTW for `run` (a LogFontExDv with no design axes), selected.
     fn font(&mut self, run: &TextRun) {
         let height = -((run.size * UNITS_PER_PT).round().clamp(1.0, MAX_COORD) as i32);
-        let tenths = ((run.angle * 10.0).round() as i64).rem_euclid(3600) as i32;
+        let tenths = ((run.angle.rem_euclid(360.0) * 10.0).round() as i64).rem_euclid(3600) as i32;
         let face: Vec<u16> = run.face.encode_utf16().collect();
         self.record(EXTCREATEFONTINDIRECTW, |o| {
             o.u32(FONT);
