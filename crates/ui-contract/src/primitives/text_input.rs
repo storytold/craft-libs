@@ -43,7 +43,7 @@ pub enum TabKey {
     Moves,
     /// Tab inserts a tab.
     Inserts,
-    /// Tab and Shift+Tab rewrite the draft (the text part selects it and refuses).
+    /// Tab and Shift+Tab rewrite the draft (the text part selects it and refuses); with no draft they move focus.
     Rewrites,
     /// Tab keeps focus and is handed back as `EditResponse::tab`: `Some(true)` for Tab, `Some(false)` for Shift+Tab.
     Reports,
@@ -57,6 +57,8 @@ type WholePaste = dyn Fn(&str) -> bool;
 pub struct TextOptions {
     /// Shown while the text is empty.
     pub placeholder: Option<Label>,
+    /// The field's look: a quiet one's placeholder takes the muted text colour instead of the faint one.
+    pub look: crate::style::FieldLook,
     /// Lines: 1 is a single-line field.
     pub lines: Option<usize>,
     /// The most characters a draft holds.
@@ -65,6 +67,8 @@ pub struct TextOptions {
     pub mask: bool,
     /// A parsable draft applies as typed whatever the codec says.
     pub live: bool,
+    /// The owner of the current draft, when the same field can edit different values.
+    pub edit_target: Option<egui::IdSalt>,
     /// Escape clears the text and commits the empty text while text shows, and goes on to the host once it is empty.
     pub clear_on_escape: bool,
     /// Escape keeps the text: an open typing run commits once, editing ends by leaving focus, and the same Escape
@@ -154,10 +158,12 @@ impl Default for TextOptions {
     fn default() -> Self {
         TextOptions {
             placeholder: None,
+            look: crate::style::FieldLook::Normal,
             lines: None,
             limit: None,
             mask: false,
             live: false,
+            edit_target: None,
             clear_on_escape: false,
             keep_on_escape: false,
             mono: false,

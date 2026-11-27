@@ -293,6 +293,7 @@ pub struct Access {
     pub(crate) unit: Option<String>,
     pub(crate) color: Option<Srgba>,
     pub(crate) numeric: Option<Numeric>,
+    pub(crate) variable_steps: Option<(bool, bool)>,
     pub(crate) expanded: Option<bool>,
     pub(crate) has_popup: Option<PopupKind>,
     pub(crate) level: Option<usize>,
@@ -360,6 +361,12 @@ impl Access {
     /// The numeric value of a value component; a step also declares increment and decrement.
     pub fn numeric(&mut self, numeric: Numeric) -> &mut Self {
         self.numeric = Some(numeric);
+        self
+    }
+
+    /// Offers the available Increment and Decrement actions for a numeric value with no fixed step size.
+    pub fn variable_steps(&mut self, increment: bool, decrement: bool) -> &mut Self {
+        self.variable_steps = Some((increment, decrement));
         self
     }
 

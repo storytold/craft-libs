@@ -236,6 +236,9 @@ pub(crate) struct Shapes {
     /// running pass and the last: such a widget lies under every widget and shape on its layer and stands for none.
     this_grounds: IdSet,
     last_grounds: IdSet,
+    /// The screen rects the running pass's components follow the pointer in ([`follows_pointer`]): a move there runs a
+    /// pass whatever lies under it.
+    this_follows: Vec<Rect>,
     /// The paint order the running pass's next registration takes.
     next: u32,
     /// What lies under the pass's hover point, found over `last` at the begin hook with the pass's egui targets:
@@ -254,7 +257,7 @@ pub(crate) struct Shapes {
     #[cfg(feature = "testing")]
     resolutions: u32,
     /// The `made_by_component` lookups the running pass made, for the count trials.
-    #[cfg(feature = "testing")]
+    #[cfg(feature = "suite")]
     made_lookups: u32,
 }
 
@@ -381,6 +384,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         shapes.last_texts = std::mem::take(&mut shapes.this_texts);
         shapes.this_made.clear();
         shapes.last_grounds = std::mem::take(&mut shapes.this_grounds);
+        shapes.this_follows.clear();
         shapes.next = 0;
         shapes.hover = None;
         shapes.winner = None;
@@ -388,6 +392,9 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         #[cfg(feature = "testing")]
         {
             shapes.resolutions = 0;
+        }
+        #[cfg(feature = "suite")]
+        {
             shapes.made_lookups = 0;
         }
     });
@@ -657,6 +664,71 @@ pub(crate) fn record_layer_widget(ctx: &Context, widget: Id) {
     });
 }
 
+/// Records that what the running pass shows in `rect` (screen points) follows the pointer: a cursor drawn at the
+/// pointer, a readout of the point under it. A pointer move into, out of or within `rect` runs a pass even when
+/// nothing under the pointer changes ([`gate_pointer_moves`]).
+pub fn follows_pointer(ctx: &Context, rect: Rect) {
+    crate::runtime::replay::journal(ctx, || rect, |ctx, &rect| follows_pointer(ctx, rect));
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| record.this_follows.push(rect));
+}
+
+/// Lets a pointer move run no pass when nothing it would change differs: egui's gate
+/// ([`egui::Context::set_pointer_move_gate`]) answers [`move_needs_pass`]. An app opts in once; without it every move
+/// runs a pass.
+pub fn gate_pointer_moves(ctx: &Context) {
+    ctx.set_pointer_move_gate(Some(Arc::new(|ctx: &Context, viewport: ViewportId, from: Option<Pos2>, to: Pos2| {
+        move_needs_pass(ctx, viewport, from, to)
+    })));
+}
+
+/// Whether a pointer move from `from` to `to` in `viewport`, with no button held, needs a pass, judged on the last
+/// finished pass: when the pointer comes in, a drag runs, either point lies in a rect that follows the pointer, or the
+/// layer, egui's widgets or the component shapes under the two points differ. Equal answers mean no hover, cursor or
+/// part under the pointer changes, so the frame would look the same; the move stays in egui's input for the next pass.
+pub fn move_needs_pass(ctx: &Context, viewport: ViewportId, from: Option<Pos2>, to: Pos2) -> bool {
+    let Some(from) = from else { return true };
+    if drag::runs_elsewhere(ctx, viewport) || drag::running(ctx) {
+        return true;
+    }
+    let follows =
+        PerViewport::<Shapes>::with(ctx, viewport, |record| record.this_follows.iter().any(|rect| rect.contains(from) || rect.contains(to)));
+    follows || ctx.widgets_at(viewport, from) != ctx.widgets_at(viewport, to) || shapes_under(ctx, viewport, from) != shapes_under(ctx, viewport, to)
+}
+
+/// The layer under `at` and, for each root with component shapes there that hit it as the last finished pass of
+/// `viewport` recorded them, the root, the indices of those shapes in the root's record and the ones that win its hover
+/// and its press: overlapping shapes can hit both points while the nearest centre picks another winner.
+fn shapes_under(ctx: &Context, viewport: ViewportId, at: Pos2) -> (Option<Layer>, Vec<UnderRoot>) {
+    let Some(layer) = areas::layer_at(ctx, at) else { return (None, Vec::new()) };
+    let point = areas::layer_map(ctx, layer).map_or(at, |map| map.to_layer(at));
+    let hit = PerViewport::<Shapes>::with(ctx, viewport, |record| {
+        record.this.get(&layer).map_or_else(Vec::new, |roots| {
+            let mut hit: Vec<UnderRoot> = roots
+                .iter()
+                .filter_map(|(root, entry)| {
+                    let indices: Vec<usize> = (0..entry.shapes.len().min(entry.placed.len()))
+                        .filter(|&index| entry.placed[index].clip.contains(point) && entry.shapes[index].hits(point))
+                        .collect();
+                    if indices.is_empty() {
+                        return None;
+                    }
+                    let shapes: Vec<Shape<Id>> = indices.iter().map(|&index| entry.shapes[index].clone()).collect();
+                    let winner = |kind| resolve(&shapes, point, kind).and_then(|winner| indices.get(winner.index).copied());
+                    let (hover, press) = (winner(ResolveFor::Hover), winner(ResolveFor::Press));
+                    Some((*root, indices, hover, press))
+                })
+                .collect();
+            hit.sort_unstable_by_key(|(root, ..)| root.value());
+            hit
+        })
+    });
+    (Some(layer), hit)
+}
+
+/// A root with shapes under a point ([`shapes_under`]): the root, the indices of its shapes that hit the point, and
+/// the indices of the ones that win its hover and its press there.
+type UnderRoot = (Id, Vec<usize>, Option<usize>, Option<usize>);
+
 /// Records that `layer` shows the transformed body of the root `root`, which is itself shown on `parent`: a press on
 /// the body layer reaches the root's own shapes beneath the body's.
 pub(crate) fn record_body_layer(ctx: &Context, layer: Layer, parent: Layer, root: Id) {
@@ -858,7 +930,7 @@ pub(crate) fn registered_widgets(ctx: &Context) -> std::collections::HashSet<Id>
 /// editor part, in the running pass of `viewport`.
 pub(crate) fn made_by_component(ctx: &Context, viewport: ViewportId, id: Id) -> bool {
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
-        #[cfg(feature = "testing")]
+        #[cfg(feature = "suite")]
         {
             record.made_lookups += 1;
         }
@@ -867,7 +939,7 @@ pub(crate) fn made_by_component(ctx: &Context, viewport: ViewportId, id: Id) -> 
 }
 
 /// How many `made_by_component` lookups the running pass of `viewport` made so far, for the count trials.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn made_lookups(ctx: &Context, viewport: ViewportId) -> u32 {
     PerViewport::<Shapes>::with(ctx, viewport, |record| record.made_lookups)
 }

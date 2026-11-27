@@ -12,7 +12,7 @@ build. The build reads a local checkout named by `CRAFT_FONTS_DIR` instead.
 |---|---|
 | `CRAFT_FONTS_DIR` unset or empty | Empty table. |
 | `CRAFT_FONTS_DIR` = a craft-fonts checkout | Every selected face of `fonts/manifest.txt`, embedded with `include_bytes!`. |
-| `CRAFT_FONTS_DIR` set, but no manifest or a missing font file | `cargo::warning`, empty table. |
+| `CRAFT_FONTS_DIR` is set, but the main manifest or a main font file is missing, or a main font's SHA-256 differs from its manifest. | `Embed` prints `cargo::warning` and writes an empty table. |
 | `CRAFT_FONTS_REQUIRED=1` (exactly `1`; other values are ignored) | Error instead when the directory is unset, unreadable, has no selected face, or has no face for a script passed to `scripts`. |
 
 Give `CRAFT_FONTS_DIR` as an absolute path: Cargo runs build scripts in the package's directory.
@@ -95,13 +95,17 @@ below), and `Embed::documents(&["Noto Sans", …])` only the families it names (
 - `embedded_elsewhere(&["Noto Sans Math", …])` names families another table of the app embeds,
   so `check_text` and the catalog check count their characters as covered.
 - `dir(path)` and `required(bool)` override the two environment variables.
+- `tab_face()` also embeds Noto Sans Condensed SemiBold from `fonts/latin-manifest.txt`, with the
+  role `tab`. `scripts` and `filter` do not apply to it. A checkout without that manifest or its
+  row embeds the other faces and prints a warning, even with `CRAFT_FONTS_REQUIRED=1`.
 
 `write` returns the embedded `ManifestEntry`s, for build-time checks such as "the interface face
 is present". The generated file is a slice expression of `EmbeddedFace { family, style, scripts,
 index, bytes, role }` literals; any struct with those fields and that name in scope works too.
 `role` is the manifest line's ninth field: `Some("ui")`, `Some("mono")`, `Some("signature")` or
-`None`; craft-ui's font stack leads the Monospace family with the `mono` face and the signature
-family (`FontRef::signature()`) with the `signature` face. `EmbeddedFace` itself has `name()`,
+`None`, or `Some("tab")` on the face `tab_face()` adds; craft-ui's font stack leads the Monospace
+family with the `mono` face, the signature family (`FontRef::signature()`) with the `signature`
+face and the tab-title family with the `tab` face. `EmbeddedFace` itself has `name()`,
 `has_script(tag)`, `is_cjk()` and `weight()`.
 
 ## Document fonts
@@ -205,3 +209,14 @@ a font collection (`fonts/noto-sans-cjk/NotoSansCJK.ttc#2`); without it the inde
 field, `role`, is `ui` on interface faces, `mono` on the monospace face, `signature` on the signature
 face and absent elsewhere. Fields
 after the ninth are ignored.
+
+Each selected font file is hashed and compared with the line's `sha256` field, in either letter
+case; a field that is not 64 hex digits is not checked. A mismatch in a main font is `Error::HashMismatch`, treated
+like a missing font file: a build error with `CRAFT_FONTS_REQUIRED=1`, and a `cargo::warning` with an
+empty table otherwise. A hash mismatch in the optional `tab_face()` font returns the same error
+with `CRAFT_FONTS_REQUIRED=1`. Otherwise, `Embed` warns and omits only that font, retaining the other
+faces. The error names the manifest that supplied the expected hash.
+
+Without `CRAFT_FONTS_REQUIRED=1`, `Embed` caches hashes at the generated
+table's path with `.sha256.txt` appended. Each entry records the font file's size and modification
+time, and a file is hashed again only when one of those changes. A required build hashes every file.

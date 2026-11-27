@@ -3,12 +3,13 @@
 use craft_behavior::{Metrics, MotionMode, PartKey, Sense};
 use craft_host::target::{Os, WindowChrome};
 use craft_quit::{CloseAnswer, CloseScope};
-use craft_ui::contract::overlay::{Dismiss, Outside};
+use craft_ui::contract::overlay::{Dismiss, OpenFilter, Outside, any_open};
 use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{
-    Alert, ChildDialog, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, JobAnswer, JobProgress, PromptChoice, PromptKind,
-    RecoveredDocument, RecoveryAnswer, RecoveryChoice, RecoveryDialog, StackDialog, StandardPrompt, StartupStage, UnsavedChangesDialog, dialog_id,
+    Alert, ChildDialog, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, JobAnswer, JobProgress, Prompt, PromptChoice,
+    PromptKind, RecoveredDocument, RecoveryAnswer, RecoveryChoice, RecoveryDialog, StackDialog, StandardPrompt, StartupStage, UnsavedChangesDialog,
+    dialog_id,
 };
 use craft_ui::display::Text;
 use craft_ui::popover::Popover;
@@ -31,6 +32,7 @@ use std::time::Duration;
 /// `finish` once set.
 struct Probe<const N: usize> {
     key: &'static str,
+    instance: Option<DialogId>,
     top: bool,
     finish: Option<DialogResult<u32>>,
     shows: usize,
@@ -38,7 +40,7 @@ struct Probe<const N: usize> {
 
 impl<const N: usize> Probe<N> {
     fn new(key: &'static str) -> Self {
-        Self { key, top: false, finish: None, shows: 0 }
+        Self { key, instance: None, top: false, finish: None, shows: 0 }
     }
 }
 
@@ -47,6 +49,10 @@ impl<const N: usize> StackDialog for Probe<N> {
 
     fn id(&self) -> DialogId {
         dialog_id(self.key)
+    }
+
+    fn instance(&self) -> Option<DialogId> {
+        self.instance
     }
 
     fn show(&mut self, _: &mut Ui, stack: &DialogStack) -> Option<DialogResult<u32>> {
@@ -300,6 +306,32 @@ fn a_prompt_without_a_default_answer_opens_with_no_button_focused() {
     assert_eq!(answered.get(), None, "Enter answers nothing");
     fixture.key(egui::Key::Escape, Modifiers::NONE).idle(2);
     assert_eq!(answered.get(), Some(JobAnswer::Cancel));
+}
+
+/// A job window is not a dialog that asks: an app that draws it only while no such dialog is open draws it in every
+/// pass, and the window still counts as a modal layer. A prompt with an answer counts as asking.
+#[trial]
+fn a_job_window_is_a_modal_layer_that_asks_nothing() {
+    let (passes, drawn) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (all, shown) = (Rc::clone(&passes), Rc::clone(&drawn));
+    let mut fixture = Fixture::new(move |ui| {
+        all.set(all.get() + 1);
+        if !any_open(ui.ctx(), OpenFilter::Asks) {
+            JobProgress::new("Exporting", "Page 1 of 3").show(ui);
+            shown.set(shown.get() + 1);
+        }
+    });
+    fixture.idle(6);
+    assert_eq!(drawn.get(), passes.get(), "the window is drawn in every pass");
+    assert!(fixture.by_label("Exporting").is_some(), "the window shows");
+    assert!(any_open(fixture.ctx(), OpenFilter::Modal), "the window is a modal layer");
+    assert!(!any_open(fixture.ctx(), OpenFilter::Asks), "the window asks nothing");
+
+    let mut fixture = Fixture::new(|ui| {
+        Prompt::new("Replace the file?", "A file with this name exists.").answers([FooterButton::new("Replace", DialogRole::Accept)]).show(ui);
+    });
+    fixture.idle(6);
+    assert!(any_open(fixture.ctx(), OpenFilter::Asks), "a prompt with an answer asks");
 }
 
 const BAND: PartKey = PartKey::new("band");
@@ -602,6 +634,94 @@ fn each_open_of_a_dialog_has_its_own_serial() {
     let again = host.open(Probe::<1>::new("picker"));
     assert_eq!(again, id, "the reopened dialog has the same id");
     assert_ne!(host.open_serial(id), Some(first), "the reopened dialog has a serial of its own");
+}
+
+#[trial]
+fn results_belong_to_the_opening_that_reported_them() {
+    let frames = Frames::new();
+    let mut host = DialogHost::new();
+    let id = host.open(Probe::<1>::new("picker"));
+    let first = host.open_serial(id).unwrap();
+    assert_eq!(host.open(Probe::<1>::new("picker")), id);
+    let second = host.open_serial(id).unwrap();
+    assert_ne!(first, second);
+    assert_eq!(host.take_by_open_serial::<Probe<1>>(second), None);
+    assert_eq!(host.take_by_open_serial::<Probe<1>>(first), Some(DialogResult::Cancel));
+
+    assert!(host.confirm_by_id(&frames.ctx, id));
+    assert_eq!(host.take_by_open_serial::<Probe<1>>(first), None);
+    assert_eq!(host.take_by_open_serial::<Probe<2>>(second), None);
+    assert_eq!(host.take_by_open_serial::<Probe<1>>(second), Some(DialogResult::Ok(1)));
+    assert_eq!(host.take::<Probe<1>>(), None);
+}
+
+#[trial]
+fn a_new_opening_supersedes_an_unclaimed_result_at_the_same_id() {
+    let frames = Frames::new();
+    let mut host = DialogHost::new();
+    let id = host.open(Probe::<1>::new("picker"));
+    let first = host.open_serial(id).unwrap();
+    assert!(host.confirm_by_id(&frames.ctx, id));
+    assert_eq!(host.open(Probe::<1>::new("picker")), id);
+    let second = host.open_serial(id).unwrap();
+    assert_eq!(host.take_by_open_serial::<Probe<1>>(first), None);
+
+    assert!(host.cancel_by_id(&frames.ctx, id));
+    assert_eq!(host.take_by_id::<Probe<1>>(id), Some(DialogResult::Cancel));
+    assert_eq!(host.take_by_open_serial::<Probe<1>>(second), None);
+}
+
+#[trial]
+fn a_result_keeps_its_opening_serial_if_the_instance_changes() {
+    let frames = Frames::new();
+    let mut host = DialogHost::new();
+    let id = host.open(Probe::<1>::new("picker"));
+    let serial = host.open_serial(id).unwrap();
+    host.get_mut_by_id::<Probe<1>>(id).unwrap().instance = Some(dialog_id("instance"));
+    assert_eq!(host.open_serial(id), Some(serial));
+
+    assert!(host.confirm_by_id(&frames.ctx, id));
+    assert_eq!(host.take_by_open_serial::<Probe<1>>(serial), Some(DialogResult::Ok(1)));
+}
+
+#[trial]
+fn open_serial_reports_the_latest_opening_when_dialog_types_share_an_id() {
+    let frames = Frames::new();
+    let mut host = DialogHost::new();
+    let id = host.open(Probe::<1>::new("picker"));
+    let first = host.open_serial(id).unwrap();
+    assert_eq!(host.open(Probe::<2>::new("picker")), id);
+    let second = host.open_serial(id).unwrap();
+    assert_ne!(first, second);
+    assert_eq!(host.open_serial_by_id::<Probe<1>>(id), Some(first));
+    assert_eq!(host.open_serial_by_id::<Probe<2>>(id), Some(second));
+    assert_eq!(host.open_serial_by_id::<Probe<3>>(id), None);
+    assert!(host.get_by_id::<Probe<1>>(id).is_some());
+    host.get_mut_by_id::<Probe<2>>(id).unwrap().shows = 5;
+    assert_eq!(host.get_by_id::<Probe<2>>(id).unwrap().shows, 5);
+
+    assert!(host.confirm::<Probe<2>>(&frames.ctx));
+    assert_eq!(host.take_by_open_serial::<Probe<2>>(second), Some(DialogResult::Ok(2)));
+}
+
+#[trial]
+fn a_live_opening_can_be_mutated_independently_of_the_first_dialog_with_its_id() {
+    let mut host = DialogHost::new();
+    let mut first = Probe::<1>::new("picker");
+    first.instance = Some(dialog_id("first instance"));
+    let id = host.open(first);
+    let first = host.open_serial_by_id::<Probe<1>>(id).unwrap();
+    let mut second = Probe::<1>::new("picker");
+    second.instance = Some(dialog_id("second instance"));
+    assert_eq!(host.open(second), id);
+    let second = host.open_serial_by_id::<Probe<1>>(id).unwrap();
+    assert_ne!(first, second);
+
+    host.get_mut_by_open_serial::<Probe<1>>(second).unwrap().shows = 5;
+    assert_eq!(host.get_by_id::<Probe<1>>(id).unwrap().shows, 0);
+    assert_eq!(host.get_by_open_serial::<Probe<1>>(first).unwrap().shows, 0);
+    assert_eq!(host.get_by_open_serial::<Probe<1>>(second).unwrap().shows, 5);
+    assert!(host.get_mut_by_open_serial::<Probe<2>>(second).is_none());
 }
 
 /// The commands an Undo fired that a focused, unedited name field had nothing to do for, the field in a modal dialog

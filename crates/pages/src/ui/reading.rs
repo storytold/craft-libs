@@ -290,7 +290,8 @@ impl Component for ReadingView<'_> {
 
     fn style(cx: &StyleCx<'_>, _: ReadingViewStyleKey) -> ReadingViewStyle {
         ReadingViewStyle {
-            metrics: Metrics::new().min_size(Vec2::new(cx.tokens.size.plot.width, cx.tokens.size.plot.height)),
+            // The width's floor is `measure`'s (`picture_width`), which a narrow room may take below the plot width.
+            metrics: Metrics::new().min_size(Vec2::new(0.0, cx.tokens.size.plot.height)),
             focus: cx.focus_look(),
             gap: cx.tokens.space.gap.section,
             reach: cx.tokens.size.hit.target,

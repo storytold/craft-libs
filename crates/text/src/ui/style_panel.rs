@@ -59,7 +59,8 @@ pub enum TextStyleKind {
 }
 
 /// A style in the list. Id 0 is the base style: "None" for character styles (shown dimmed, never deleted,
-/// redefined or edited) and "Basic Paragraph" for paragraph styles (editable, never deleted).
+/// redefined or edited) and "Basic Paragraph" for paragraph styles (editable, never deleted). With
+/// [`TextStylesPanel::base_character_style`], character style 0 is editable and never deleted as well.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TextStyleRow {
@@ -121,7 +122,8 @@ pub enum TextStyleAction {
     /// Clear Override, with a target whose style is overridden.
     ClearOverride,
     /// Redefine: the style of this id takes the target's attributes: the current style from the footer and the panel
-    /// menu, the row's from its menu. Not for character style 0.
+    /// menu, the row's from its menu. Not for character style 0 unless it is a base style
+    /// ([`TextStylesPanel::base_character_style`]).
     Redefine(u64),
     /// New: a style from the selected type when there is a target (`from_selection`), else a default one. The app
     /// opens its Style Options for the new id.
@@ -136,7 +138,8 @@ pub enum TextStyleAction {
     Duplicate(u64),
     /// Delete the selected row's style (never id 0).
     Delete(u64),
-    /// Style Options for a style: a double click or Enter on a row, or the footer button (not for character style 0).
+    /// Style Options for a style: a double click or Enter on a row, or the footer button (not for character style 0
+    /// unless it is a base style, [`TextStylesPanel::base_character_style`]).
     Options(u64),
     /// Duplicate with several rows highlighted: every highlighted style, in list order.
     DuplicateHighlighted,
@@ -182,7 +185,9 @@ impl Outcome for TextStylesPanelOutput {
 /// What the panel knows of the last pass: the rules the footer, the panel menu and the keys share.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Facts {
-    paragraph: bool,
+    /// Whether style 0 is a base style the user edits: paragraph style 0, or character style 0 with
+    /// [`TextStylesPanel::base_character_style`].
+    base: bool,
     target: bool,
     overridden: bool,
     current: Option<u64>,
@@ -195,11 +200,11 @@ struct Facts {
 impl Facts {
     /// The action of a footer button or menu command, `None` when its condition doesn't hold.
     fn action(&self, command: TextStyleCommand) -> Option<TextStyleAction> {
-        let editable = self.picked.filter(|id| *id != 0 || self.paragraph);
+        let editable = self.picked.filter(|id| *id != 0 || self.base);
         let several = self.selected.len() > 1;
         match command {
             TextStyleCommand::ClearOverride => (self.target && self.overridden).then_some(TextStyleAction::ClearOverride),
-            TextStyleCommand::Redefine => self.current.filter(|id| self.target && (*id != 0 || self.paragraph)).map(TextStyleAction::Redefine),
+            TextStyleCommand::Redefine => self.current.filter(|id| self.target && (*id != 0 || self.base)).map(TextStyleAction::Redefine),
             TextStyleCommand::New => Some(TextStyleAction::new_style(self.target, false)),
             TextStyleCommand::Duplicate if several => Some(TextStyleAction::DuplicateHighlighted),
             TextStyleCommand::Delete if several => Some(TextStyleAction::DeleteHighlighted),
@@ -289,6 +294,10 @@ pub struct TextStylesPanel<'a> {
     /// Several rows select together: the footer's Duplicate and Delete act on all of them.
     #[prop]
     highlighting: bool,
+    /// Character style 0 is a base style the user edits instead of "No character style": it takes Style Options,
+    /// Duplicate and Redefine as paragraph style 0 does, is drawn like the other rows, and is still never deleted.
+    #[prop]
+    base_character_style: bool,
     /// The list's text with no rows, passed to the collection's `empty` prop.
     #[prop(into)]
     empty: Option<Label>,
@@ -330,6 +339,7 @@ impl<'a> TextStylesPanel<'a> {
             target: false,
             text_selected: true,
             highlighting: false,
+            base_character_style: false,
             empty: None,
             reveal: None,
         }
@@ -344,10 +354,24 @@ impl<'a> TextStylesPanel<'a> {
 
     /// Shows the panel and returns what the user asked for.
     pub fn show(self, ui: &mut Ui) -> TextStylesPanelOutput {
-        let TextStylesPanel { label, kind, rows, mut selection, current, overridden, target, text_selected, highlighting, empty, reveal } = self;
+        let TextStylesPanel {
+            label,
+            kind,
+            rows,
+            mut selection,
+            current,
+            overridden,
+            target,
+            text_selected,
+            highlighting,
+            base_character_style,
+            empty,
+            reveal,
+        } = self;
 
         let words = Env::of(ui).words::<TextStylesWords>();
         let paragraph = kind == TextStyleKind::Paragraph;
+        let base = paragraph || base_character_style;
         let action = Cell::new(None::<TextStyleAction>);
         let hint = Cell::new(false);
         let tip = words.row_tip.fill(&[("key", words.alt_key.as_str())]);
@@ -372,7 +396,7 @@ impl<'a> TextStylesPanel<'a> {
                 match command {
                     TextStyleCommand::New => button
                         .takes_drops_disabled(true)
-                        .accepts_drops::<ListDrag<u64>>(move |drag| drag.list == list_id && drag.keys.iter().any(|id| *id != 0 || paragraph)),
+                        .accepts_drops::<ListDrag<u64>>(move |drag| drag.list == list_id && drag.keys.iter().any(|id| *id != 0 || base)),
                     TextStyleCommand::Delete => button
                         .takes_drops_disabled(true)
                         .accepts_drops::<ListDrag<u64>>(move |drag| drag.list == list_id && drag.keys.iter().any(|id| *id != 0)),
@@ -388,7 +412,7 @@ impl<'a> TextStylesPanel<'a> {
                     Some(TextStyleCommand::Delete) if many => Some(TextStyleAction::DeleteHighlighted),
                     Some(TextStyleCommand::Delete) => (drag.grabbed != 0).then_some(TextStyleAction::Delete(drag.grabbed)),
                     Some(TextStyleCommand::New) if many => Some(TextStyleAction::DuplicateHighlighted),
-                    Some(TextStyleCommand::New) => (drag.grabbed != 0 || paragraph).then_some(TextStyleAction::Duplicate(drag.grabbed)),
+                    Some(TextStyleCommand::New) => (drag.grabbed != 0 || base).then_some(TextStyleAction::Duplicate(drag.grabbed)),
                     _ => None,
                 };
                 if dropped.is_some() {
@@ -413,7 +437,7 @@ impl<'a> TextStylesPanel<'a> {
                     }
                 }
                 let held = selection.reborrow().read(cx).and_then(|held| held.same().cloned()).unwrap_or_default();
-                let facts = Facts { paragraph, target, overridden, current, picked: held.lead.or(current), selected: held.items.clone() };
+                let facts = Facts { base, target, overridden, current, picked: held.lead.or(current), selected: held.items.clone() };
                 for command in [
                     TextStyleCommand::ClearOverride,
                     TextStyleCommand::Redefine,
@@ -452,7 +476,7 @@ impl<'a> TextStylesPanel<'a> {
                     let Some(row) = rows.iter().find(|row| row.id == *id) else { return ListRow::new(Label::Empty) };
                     let is_current = target && current == Some(*id);
                     let marked = is_current && overridden;
-                    let none = *id == 0 && !paragraph;
+                    let none = *id == 0 && !base;
                     let name = if marked { words.overridden_name.fill(&[("name", row.name.as_str())]) } else { row.name.clone() };
                     let spoken = if marked { words.overridden_spoken.fill(&[("name", row.name.as_str())]) } else { row.name.clone() };
                     let description = if none { words.no_character_style.as_str().to_owned() } else { tip.clone() };
@@ -472,7 +496,7 @@ impl<'a> TextStylesPanel<'a> {
                 let plain = !mods.shift && !mods.cmd;
                 for event in events {
                     match event {
-                        CollectionEvent::Activate(id) if second && (id != 0 || paragraph) => action.set(Some(TextStyleAction::Options(id))),
+                        CollectionEvent::Activate(id) if second && (id != 0 || base) => action.set(Some(TextStyleAction::Options(id))),
                         CollectionEvent::Activate(id) if target && (paragraph || text_selected) && plain => {
                             action.set(Some(TextStyleAction::apply(id, alt)));
                         }

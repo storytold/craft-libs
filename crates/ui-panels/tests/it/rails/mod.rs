@@ -4,7 +4,7 @@
 pub(crate) mod drawer;
 pub(crate) mod locate;
 
-use craft_behavior::{GesturePhase, Mixed};
+use craft_behavior::{GesturePhase, Mixed, PartKey};
 use craft_ui::contract::overlay::{PlacementChange, PlacementKind};
 use craft_ui::contract::{Props as _, Role, Show as _};
 use craft_ui::docking::{FloatingGroup, GroupDrag};
@@ -12,6 +12,7 @@ use craft_ui::rails::{FlyoutButton, RailTool};
 use craft_ui::runtime::commands::EditCommands;
 use craft_ui::runtime::drag;
 use craft_ui::runtime::frame::take_output;
+use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::pointer::{moved, press, secondary};
 use craft_ui::testing::{Fixture, Target, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Vec2};
@@ -110,6 +111,33 @@ fn dragging_a_press_away_opens_the_flyout_and_releasing_over_a_row_picks_it() {
     assert_eq!(*dragged.selected.borrow(), [REDO], "releasing over Redo picks it and nothing else");
 }
 
+/// The flyout marks only the shown tool, with a check, as the reference application's tool flyouts do: the other
+/// rows draw no mark, not the empty ring of an unchosen radio row (photocraft#17102).
+#[trial]
+fn the_flyout_checks_the_shown_tool_and_marks_no_other_row() {
+    let mut held = rig(true);
+    let target = button(&held);
+    held.fixture.press(&target);
+    held.fixture.advance(HELD);
+    held.fixture.idle(3);
+    assert!(!held.fixture.by_role(Role::MENU).is_empty(), "a held press opens the flyout");
+    // The rows, not the rail button that also bears the shown tool's name.
+    let checked = |fixture: &Fixture, label: &str| {
+        let rows = fixture.by_role(Role::MENU_ITEM_CHECK_BOX);
+        let row = rows.iter().find(|row| fixture.tree().name_of(row.node) == Some(label));
+        fixture.tree().toggled_of(row.unwrap_or_else(|| panic!("the flyout lists {label}")).node)
+    };
+    assert_eq!(checked(&held.fixture, "Undo"), Some(Mixed::Same(true)), "the shown tool's row is checked");
+    assert_eq!(checked(&held.fixture, "Redo"), Some(Mixed::Same(false)), "another tool's row is not");
+    let rings = held
+        .fixture
+        .frame_shapes()
+        .iter()
+        .filter(|shape| matches!(shape, egui::Shape::Circle(circle) if circle.stroke.width > 0.0 && circle.fill == egui::Color32::TRANSPARENT))
+        .count();
+    assert_eq!(rings, 0, "no row of the flyout draws an empty ring");
+}
+
 /// A flyout of a tool low on the rail, too tall for the room under the tool's top, slides up to stay in the window
 /// as PhotoCraft's tool flyouts do, rather than opening upward from the tool as a submenu does.
 #[trial]
@@ -131,6 +159,48 @@ fn the_flyout_of_a_low_tool_slides_up_to_stay_in_the_window() {
     assert!(flyout.bottom() > target.rect.bottom() + 1.0, "it slides: its bottom {} is below the tool's {}", flyout.bottom(), target.rect.bottom());
 }
 
+/// A tool group's button is one access node: the corner mark is the pointer's and adds no node, so a screen reader
+/// reads the tool once. The button reports that it opens a menu and whether the flyout is open, Expand and Collapse
+/// on it open and close the flyout, and a press on the mark still opens it at once.
+#[trial]
+fn a_tool_groups_button_is_one_node_that_reports_and_opens_the_flyout() {
+    let owner = Rc::new(Cell::new(None));
+    let seen = owner.clone();
+    let all = tools(&[UNDO, REDO, CUT]);
+    let mut fixture = Fixture::new(move |ui| {
+        let out = FlyoutButton::new(&all, &UNDO).show(ui);
+        seen.set(Some(out.response.id));
+    });
+    fixture.settle();
+    let named = |fixture: &Fixture| -> Vec<Target> {
+        fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Undo")).collect()
+    };
+    let buttons = named(&fixture);
+    let rects: Vec<Rect> = buttons.iter().map(|button| button.rect).collect();
+    assert_eq!(buttons.len(), 1, "one Button node is named after the tool: {rects:?}");
+    let button = buttons[0];
+    let menu = Some(craft_ui::contract::PopupKind::Menu);
+    assert_eq!(fixture.tree().has_popup_of(button.node), menu, "the button says it opens a menu");
+    assert_eq!(fixture.tree().expanded_of(button.node), Some(false), "the button reports the flyout closed");
+
+    take_output(fixture.ctx());
+    fixture.access(AccessActionKind::Expand, &button).idle(2);
+    assert!(!fixture.by_role(Role::MENU).is_empty(), "Expand on the button opens the flyout");
+    assert!(take_output(fixture.ctx()).fired.is_empty(), "Expand selects no tool");
+    assert_eq!(fixture.tree().expanded_of(button.node), Some(true), "the button reports the flyout open");
+    fixture.access(AccessActionKind::Collapse, &button).idle(2);
+    assert!(fixture.by_role(Role::MENU).is_empty(), "Collapse on the button closes the flyout");
+    assert_eq!(fixture.tree().expanded_of(button.node), Some(false), "the button reports the flyout closed again");
+
+    let owner = owner.get().expect("the flyout button shows");
+    let mark = fixture.part_rect(owner, PartKey::new("mark")).expect("the button has a corner mark");
+    assert!(button.rect.contains_rect(mark), "the mark {mark:?} lies on the button {:?}", button.rect);
+    fixture.frame(vec![moved(mark.center())]);
+    fixture.frame(vec![press(mark.center())]).idle(2);
+    assert!(!fixture.by_role(Role::MENU).is_empty(), "a press on the mark opens the flyout without a hold");
+    assert_eq!(named(&fixture).len(), 1, "the open flyout leaves one node named after the tool");
+}
+
 /// A rail button tells assistive technology which tool is the current one: the current tool's button is pressed and
 /// every other tool's button is not, as it paints.
 #[trial]
@@ -147,6 +217,29 @@ fn the_current_tools_button_reports_pressed_and_the_others_not() {
     };
     assert_eq!(pressed("Undo"), Some(Mixed::Same(true)), "the current tool's button is pressed");
     assert_eq!(pressed("Cut"), Some(Mixed::Same(false)), "another tool's button reports that it is not");
+}
+
+/// A rail button with keyboard focus is ringed as a button is: a focus stroke of two points around its own rect.
+#[trial]
+fn a_focused_rail_button_shows_the_focus_ring_around_it() {
+    let all = tools(&[UNDO, REDO]);
+    let mut fixture = Fixture::new(move |ui| {
+        FlyoutButton::new(&all, &UNDO).show(ui);
+    });
+    fixture.settle();
+    let ring = |fixture: &mut Fixture| {
+        fixture.frame_shapes().iter().find_map(|shape| match shape {
+            egui::Shape::Rect(rect) if rect.stroke.width >= 2.0 => Some(rect.rect),
+            _ => None,
+        })
+    };
+    assert!(ring(&mut fixture).is_none(), "an unfocused rail button has no ring");
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.settle();
+    assert!(fixture.focused().is_some(), "Tab focused the rail button");
+    let target = fixture.by_role(Role::BUTTON).into_iter().next().expect("the rail button shows");
+    let ring = ring(&mut fixture).expect("the focused rail button paints a focus ring");
+    assert!(ring.expand(1.0).contains_rect(target.rect), "the ring {ring:?} goes around the button {:?}", target.rect);
 }
 
 /// With a click command a click, Enter or Space fires it and selects nothing; a hold, a drag away and a right click

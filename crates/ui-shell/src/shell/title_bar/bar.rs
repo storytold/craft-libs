@@ -61,7 +61,8 @@ impl Outcome for TitleBarOutput {
 ///   [`title_when_native`](TitleBar::title_when_native), the title.
 /// - **Inset (macOS).** The content starts after the traffic lights. A double click follows the system setting.
 /// - **Integrated.** The caption buttons of the window's layout sit at the two ends, flush with the window's edges.
-///   A double click maximizes or restores.
+///   A double click follows the desktop's setting (GNOME's `action-double-click-titlebar`), and elsewhere
+///   maximizes or restores.
 ///
 /// An end with no caption buttons or lights keeps the content `space.pad.regular` off the window's edge.
 ///
