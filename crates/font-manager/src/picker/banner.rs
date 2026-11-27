@@ -9,7 +9,7 @@ use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, Corners, DataColor, Metrics, StyleColor, StyleCx, SurfaceKind};
 use egui::{Color32, Pos2, Rect, Vec2};
 
-use crate::panel::faces;
+use crate::panel::faces::{self, Sample};
 use crate::panel::specimen::SampleFace;
 
 use super::SAMPLE_EM;
@@ -40,7 +40,7 @@ pub(crate) struct FontPreviewBannerStyle {
 /// The preview at the top of the font list: a well (`SurfaceKind::Sunken`) as wide as the list, the family's name in
 /// the caption role and under it `text` in the family's face, one line cut at the end. Until the face is ready the band
 /// stays empty. The label names it for a screen reader.
-#[derive(craft_ui::contract::Component)]
+#[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(content_painter)]
 pub(crate) struct FontPreviewBanner<'a> {
     #[common]
@@ -48,12 +48,15 @@ pub(crate) struct FontPreviewBanner<'a> {
     name: &'a str,
     text: &'a str,
     face: SampleFace<'a>,
+    /// The sample in black on a white paper over its band, in every theme (`FontPickerSettings::samples_on_white`).
+    #[prop]
+    on_white: bool,
 }
 
 impl<'a> FontPreviewBanner<'a> {
     /// The banner of the family named `name`, setting `text` in `face`, named `label`.
     pub(crate) fn new(label: impl Into<Label>, name: &'a str, text: &'a str, face: SampleFace<'a>) -> Self {
-        FontPreviewBanner { common: Common::new(), name, text, face }.label(label)
+        FontPreviewBanner { common: Common::new(), name, text, face, on_white: false }.label(label)
     }
 }
 
@@ -89,7 +92,8 @@ impl Component for FontPreviewBanner<'_> {
         let inner = cx.room.map(|room| (room - 2.0 * style.pad).max(0.0));
         let sample = self.face.ready(cx).map_or(0.0, |font| {
             let ink = DataColor::new(Color32::PLACEHOLDER);
-            faces::sample_line(|doc| cx.layout_doc(doc), &font, self.text, style.band * SAMPLE_EM, style.band, inner, ink).layout.size().x
+            let sample = Sample::new(self.text, &font, style.band * SAMPLE_EM, ink);
+            faces::sample_line(|doc| cx.layout_doc(doc), sample, style.band, inner).layout.size().x
         });
         let name = TextRun::new(self.name).role(TypeRole::Caption);
         let name = inner.map_or_else(|| cx.layout(&name), |width| cx.layout_at(&name, width)).size().x;
@@ -108,9 +112,10 @@ impl Component for FontPreviewBanner<'_> {
         ui.draw().text(name, &TextRun::new(self.name).role(TypeRole::Caption).color(style.name));
         let band = Rect::from_min_max(Pos2::new(inner.left(), name.bottom() + style.gap), inner.max);
         let points = style.band * SAMPLE_EM;
-        let ink = DataColor::new(style.ink.egui());
+        let painter = ui.content_painter(cx);
+        let ink = faces::sample_ink(&painter, band, self.on_white, style.ink.egui());
         if let Some(font) = self.face.ready(cx) {
-            faces::paint_sample(&ui.content_painter(cx), band, &font, self.text, points, ink);
+            faces::paint_sample(&painter, band, Sample::new(self.text, &font, points, ink));
         }
     }
 

@@ -719,6 +719,48 @@ fn the_wheel_over_an_open_presets_list_scrolls_the_list_while_the_field_keeps_fo
     assert_eq!(value.get(), committed, "the field's value stays");
 }
 
+/// Alt+Down opens a field's presets for the keyboard, Enter picks the one the lead is on and the field keeps focus,
+/// and Escape closes the list again with the draft and the focus left as they were.
+#[trial]
+fn alt_down_opens_the_presets_enter_picks_without_the_dialog_and_escape_returns() {
+    use craft_ui::testing::Fixture;
+    use std::rc::Rc;
+    let value = Rc::new(Cell::new(Some(START)));
+    let picked: Rc<Cell<Option<NumberPick>>> = Rc::default();
+    let id = Rc::new(Cell::new(egui::Id::NULL));
+    let (held, pick, seen) = (value.clone(), picked.clone(), id.clone());
+    let presets = vec![Entry::new(NumberPick::Number(12.0), "12 px"), Entry::new(NumberPick::Number(24.0), "24 px")];
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = held.get();
+        let out = NumberField::new("Size", Bind::bound(&mut now)).id_salt("size").presets(&presets).show(ui);
+        held.set(now);
+        seen.set(out.response.id);
+        if out.preset.is_some() {
+            pick.set(out.preset);
+        }
+    });
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    let focus = fixture.focused_stop();
+    assert!(focus.is_some(), "Tab puts the field in focus");
+
+    fixture.key(Key::ArrowDown, Modifiers::ALT).settle();
+    assert!(fixture.by_label("12 px").is_some(), "Alt+Down opens the presets");
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert!(matches!(picked.take(), Some(NumberPick::Number(n)) if n == 12.0), "Enter picks the first preset, the lead of an unchosen list");
+    assert!(fixture.by_label("12 px").is_none(), "and closes the list");
+    assert_eq!(fixture.focused_stop(), focus, "the field has the focus again");
+
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("5").settle();
+    fixture.key(Key::ArrowDown, Modifiers::ALT).settle();
+    assert!(fixture.by_label("12 px").is_some(), "Alt+Down opens the presets over a draft");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(fixture.by_label("12 px").is_none(), "Escape closes the list");
+    assert!(picked.take().is_none(), "and picks nothing");
+    assert_eq!(fixture.tree().value(id.get()), Some("5"), "the draft stays in the field");
+    assert_eq!(fixture.focused_stop(), focus, "and the field keeps the focus");
+}
+
 /// A percent field shows one decimal and its sign right after the number ("100.0%"), not the sign apart at the end of
 /// the field.
 #[trial]
@@ -732,4 +774,26 @@ fn a_percent_field_reads_one_decimal_then_the_sign() {
         .unwrap_or_else(|| panic!("the value shows one decimal: {:?}", fixture.texts().iter().map(|r| r.text.clone()).collect::<Vec<_>>()));
     let sign = painted("%").unwrap_or_else(|| panic!("the field shows the sign"));
     assert!(sign.min.x - number.max.x <= 5.0, "the sign follows the number closely: {number:?} {sign:?}");
+}
+
+/// A percent field whose committed values carry no decimals (`commit_decimals(0)`, a paint bar's Opacity) shows none,
+/// "10%"; one that sets no decimals of its own keeps the one-decimal look, "10.0%".
+#[trial]
+fn a_percent_field_shows_the_decimals_its_caller_commits() {
+    let shown = |commit: Option<usize>| {
+        let mut value = Some(10.0f64);
+        let mut fixture = craft_ui::testing::Fixture::new(move |ui| {
+            let field = NumberField::new("Opacity", Bind::bound(&mut value)).unit_kind(UnitKind::Percent).range(0.0..=100.0);
+            let _ = match commit {
+                Some(decimals) => field.commit_decimals(decimals).show(ui),
+                None => field.show(ui),
+            };
+        });
+        fixture.settle();
+        fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>()
+    };
+    let whole = shown(Some(0));
+    assert!(whole.iter().any(|text| text == "10") && !whole.iter().any(|text| text == "10.0"), "commit_decimals(0) shows 10%: {whole:?}");
+    let default = shown(None);
+    assert!(default.iter().any(|text| text == "10.0"), "with no decimals set the field shows 10.0%: {default:?}");
 }

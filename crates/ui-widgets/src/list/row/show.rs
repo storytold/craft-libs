@@ -14,13 +14,13 @@ use crate::contract::{
 };
 use crate::controls::disclosure::Disclosure;
 use crate::display::Progress;
-use crate::list::toggle::{ToggleFace, ToggleState};
+use crate::list::toggle::{ToggleCell, ToggleFace, ToggleState};
 use crate::list::words::ListWords;
 use crate::primitives::{DocRun, DocText, RectSide, RuleKind, StrokeWidth, TextRun, Wrap, glyph};
 use crate::runtime::commands::FireSource;
 use crate::runtime::env::{Label, WordTemplate};
 use crate::style::{DataColor, Flags, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook, UiTokens};
-use craft_behavior::{ColumnKey, Metrics, NavShape, PartKey, PartRef, PressPhase, Proposal, Roving, Sense};
+use craft_behavior::{ColumnKey, Metrics, NavShape, PartKey, PartRef, PointerButton, PressPhase, Proposal, Roving, Sense};
 use craft_keymap::Mods;
 use craft_theme::variant::Tone;
 use craft_theme::{Rgba, Stateful, TypeRole, over};
@@ -28,7 +28,7 @@ use egui::{CornerRadius, Pos2, Rect, Vec2};
 
 pub(super) const TOGGLE: PartKey = PartKey::new("toggle");
 pub(super) const TEXT_CELL: PartKey = PartKey::new("text-cell");
-const TOGGLE_CELL: PartKey = PartKey::new("toggle-cell");
+pub(super) const TOGGLE_CELL: PartKey = PartKey::new("toggle-cell");
 const LABEL_CELL: PartKey = PartKey::new("label-cell");
 const DISCLOSURE: PartKey = PartKey::new("disclosure");
 
@@ -90,6 +90,7 @@ impl Component for ListRow<'_> {
             surface,
             // A separator is as high as its rule and the room around it.
             metrics: Metrics::new().min_size(Vec2::new(0.0, if key.separator { 0.0 } else { sizes.row })).gap(sizes.gap),
+            focus: cx.focus_look(),
             text: TextLook::new(role, ink(base)),
             icon: IconLook::new(
                 sizes.icon,
@@ -145,6 +146,10 @@ impl Component for ListRow<'_> {
         let toggles: f32 = columns.filter_map(|key| self.cells.iter().find(|(column, _)| column == key)).map(|(_, cell)| cell.width()).sum();
         self.measure_hosted(cx);
         let widths = self.widths(sizes, &|run| cx.layout_at(run, f32::INFINITY).size().x);
+        if self.thumbnails_only {
+            let extent = self.thumbs_extent(sizes, &widths);
+            return Vec2::new(extent.x + toggles, extent.y + above);
+        }
         let probe = self.place_in(&[], sizes, &widths, Rect::from_min_size(Pos2::ZERO, Vec2::new(room, height)), rtl);
         let probe_min = probe.min_width + toggles;
         let band = offered.map_or(f32::INFINITY, |_| (probe.label.width() - toggles).max(0.0));
@@ -195,18 +200,19 @@ impl Component for ListRow<'_> {
     }
 
     fn sense(&self) -> Sense {
-        if self.spacer { Sense::empty() } else { Sense::CLICK | Sense::FOCUS }
+        if self.spacer || self.rule_head { Sense::empty() } else { Sense::CLICK | Sense::FOCUS }
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         self.record_toggle_names(cx);
-        if self.spacer {
+        if self.spacer || self.rule_head {
             return;
         }
         self.adopt_facts(&cx.env, cx.resolved.id);
         self.measure_hosted(cx);
         let widths = self.widths(&cx.style.sizes, &|run| cx.layout_at(run, f32::INFINITY).size().x);
         let placed = self.place(&cx.style.sizes, &widths, rect, cx.flow.is_rtl());
+        self.record_cell_bounds(&placed);
         self.toggle_parts(&placed, cx);
         for (at, position, _) in &placed.texts {
             if self.cell_selects(*at) {
@@ -360,9 +366,11 @@ impl Component for ListRow<'_> {
             let target = target_at(at);
             let Some(result) = cx.part_if_declared(target.part()) else { continue };
             let phase = result.press.phase;
-            if let (PressPhase::DragStart { .. }, Some(payload)) = (phase, self.drag_at(RowDragSpot::Thumb(target))) {
+            if let (PressPhase::DragStart { start, .. }, Some(payload)) = (phase, self.drag_at(RowDragSpot::Thumb(target)))
+                && start.button == PointerButton::Primary
+            {
                 let preview = DragPreview::frame(self.thumb_size(&cx.style.sizes), None);
-                crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), None, preview);
+                crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), Vec::new(), preview);
                 self.event = Some(RowEvent::PartDrag(RowDragSpot::Thumb(target)));
             } else if let Some(source) = cx.part_activated(target.part()) {
                 let clicks = part_clicks(source, phase);
@@ -386,10 +394,10 @@ impl Component for ListRow<'_> {
             if let Some(payload) = self.drag_at(RowDragSpot::Trailing(*part)) {
                 // A handle's click is the row's: only its drag is its own.
                 if let Some(result) = cx.part_if_declared(key)
-                    && matches!(result.press.phase, PressPhase::DragStart { .. })
+                    && matches!(result.press.phase, PressPhase::DragStart { start, .. } if start.button == PointerButton::Primary)
                 {
                     let preview = DragPreview::frame(result.rect.size(), None);
-                    crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), None, preview);
+                    crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), Vec::new(), preview);
                     self.event = Some(RowEvent::PartDrag(RowDragSpot::Trailing(*part)));
                 }
                 continue;
@@ -455,11 +463,13 @@ impl Component for ListRow<'_> {
         if self.progress.is_some() {
             access.node(PROGRESS, Role::PROGRESS_INDICATOR).name = Name::Text(label.to_owned());
         }
-        if let Some(open) = self.group {
+        // A rule head's group is always open and has no disclosure.
+        if let Some(open) = self.group.filter(|_| !self.rule_head) {
             access.expanded(open);
             if !self.disclosure_by_host {
                 let pattern = if open { &words.collapse } else { &words.expand };
-                access.node(DISCLOSURE, Role::BUTTON).name = Name::Text(named(pattern, label));
+                // the triangle names the row as a screen reader hears it
+                access.node(DISCLOSURE, Role::BUTTON).name = Name::Text(named(pattern, self.accessible_name.as_deref().unwrap_or(label)));
             }
         }
         let selected =
@@ -468,15 +478,27 @@ impl Component for ListRow<'_> {
         let column_of = |key: &ColumnKey| self.cells.iter().position(|(column, _)| column == key);
         if let Some(column) = self.label_column(&self.cells) {
             let node = access.node(LABEL_CELL, Role::CELL);
+            if let Some(rect) = self.cell_rect(LABEL_CELL) {
+                node.bounds(rect);
+            }
             node.name = Name::Text(label.to_owned());
             node.grid.column_index = column_of(column);
             node.flags.set(Flags::SELECTED, selected);
         }
         for (at, toggle) in self.toggles.iter().enumerate() {
             let cell = access.node(TOGGLE_CELL.at(at as u64), Role::CELL);
+            if let Some(rect) = self.cell_rect(TOGGLE_CELL.at(at as u64)) {
+                cell.bounds(rect);
+            }
             cell.name = Name::Text(label.to_owned());
             cell.grid.column_index = column_of(&toggle.column);
             cell.flags.set(Flags::SELECTED, selected);
+            // The collection reports the toggle of its own toggle column under this cell, with its state and click: the
+            // painted toggle adds no node of its own.
+            if self.toggle_columns.contains(&toggle.column) {
+                access.node(TOGGLE.at(at as u64), Role::None);
+                continue;
+            }
             let role = if toggle.check_box { Role::CHECK_BOX } else { Role::BUTTON };
             let node = access.node(TOGGLE.at(at as u64), role);
             node.name = Name::Text(named(toggle.name_pattern(&words), label));
@@ -485,6 +507,9 @@ impl Component for ListRow<'_> {
         for text in &self.texts {
             let Some(position) = self.cells.iter().position(|(column, _)| *column == text.column) else { continue };
             let node = access.node(TEXT_CELL.at(position as u64), Role::CELL);
+            if let Some(rect) = self.cell_rect(TEXT_CELL.at(position as u64)) {
+                node.bounds(rect);
+            }
             node.name = Name::Text(text.text.as_str().to_owned());
             node.description = self.tips.iter().find(|(column, _)| *column == text.column).map(|(_, tip)| tip.as_str().to_owned());
             node.grid.column_index = Some(position);
@@ -493,6 +518,9 @@ impl Component for ListRow<'_> {
         for (at, cell) in self.statuses.iter().enumerate() {
             let Some(position) = self.cells.iter().position(|(column, _)| *column == cell.column) else { continue };
             let node = access.node(STATUS.at(position as u64), Role::CELL);
+            if let Some(rect) = self.cell_rect(STATUS.at(position as u64)) {
+                node.bounds(rect);
+            }
             node.name = Name::Text(cell.status.text.as_str().to_owned());
             node.description = cell.status.tip.as_ref().map(|tip| tip.as_str().to_owned());
             node.grid.column_index = Some(position);
@@ -540,6 +568,11 @@ impl Component for ListRow<'_> {
         let sizes = &style.sizes;
         let rtl = cx.env.direction().is_rtl();
         let rect = cx.rect;
+        if self.rule_head {
+            let y = rect.center().y;
+            ui.draw().rule(RuleKind::Divider, Pos2::new(rect.left(), y), Pos2::new(rect.right(), y));
+            return;
+        }
         let widths = self.widths(sizes, &|run| ui.draw().layout(run, f32::INFINITY).size().x);
         let placed = self.place(sizes, &widths, rect, rtl);
         self.label_rect = placed.label;
@@ -559,6 +592,7 @@ impl Component for ListRow<'_> {
         let lead_painted = self.lead_paint.is_some() || self.lead_text.is_some();
         self.paint_toggles(ui, cx, &placed);
         let ink = cx.resolve(&style.text.color);
+        self.paint_marks(&ui.draw(), cx, &placed, ink);
         let (label_hue, icon_hue) = (self.hued(ui, cx, HueTarget::Label), self.hued(ui, cx, HueTarget::Icon));
         let document = self.document_run(cx.resolved.label, egui::Color32::PLACEHOLDER).map(|run| {
             let runs = [run];
@@ -577,7 +611,10 @@ impl Component for ListRow<'_> {
             && placed.disclosure.is_some()
             && !self.disclosure_by_host
         {
-            ui.face(DISCLOSURE, Disclosure::new(Bind::given(open)).node(false).label(cx.resolved.label.to_owned()));
+            ui.face(
+                DISCLOSURE,
+                Disclosure::new(Bind::given(open)).node(false).label(self.accessible_name.clone().unwrap_or_else(|| cx.resolved.label.to_owned())),
+            );
         }
         {
             let draw = ui.draw();
@@ -596,7 +633,7 @@ impl Component for ListRow<'_> {
             }
         }
         self.paint_thumbs(ui, cx, &placed, ink);
-        let text_end = self.paint_text(&ui.draw(), cx, placed.label, label_hue, document);
+        let text_end = if self.thumbnails_only { placed.label.top() } else { self.paint_text(&ui.draw(), cx, placed.label, label_hue, document) };
         let mut from = 0.0;
         for (at, below) in self.below.iter_mut().enumerate() {
             let (Some(item), Some(size)) = (below.item.take(), below.size) else { continue };
@@ -732,7 +769,28 @@ impl ListRow<'_> {
         if part == TrailingPart::MENU { Label::from(named(&words.more, row)) } else { name.clone() }
     }
 
-    /// The parts of the row's toggle cells: their flags, held state and tooltip with the toggle's key.
+    /// Keeps the placed rect of each cell node for the access step: the label cell's is the label band, which spans
+    /// the label column and the empty toggle columns beside it.
+    fn record_cell_bounds(&mut self, placed: &Placed) {
+        let toggles = placed.toggles.iter().map(|(at, cell)| (TOGGLE_CELL.at(*at as u64), *cell));
+        let texts = placed.texts.iter().map(|(_, position, cell)| (TEXT_CELL.at(*position as u64), *cell));
+        let statuses = placed.statuses.iter().map(|(_, position, cell)| (STATUS.at(*position as u64), *cell));
+        self.cell_bounds = std::iter::once((LABEL_CELL.into(), placed.band)).chain(toggles).chain(texts).chain(statuses).collect();
+    }
+
+    /// The placed rect of the cell node `part`, which `parts` recorded.
+    fn cell_rect(&self, part: impl Into<PartRef>) -> Option<Rect> {
+        let part = part.into();
+        self.cell_bounds.iter().find(|(key, _)| *key == part).map(|(_, rect)| *rect)
+    }
+
+    /// The collection does not flip `toggle` in this row (`ItemSource::toggle_enabled`): its cell paints in the
+    /// Disabled state and shows no hover.
+    pub(super) fn toggle_closed(&self, toggle: &ToggleCell) -> bool {
+        self.closed_toggles.contains(&toggle.column)
+    }
+
+    /// The parts of the row's toggle cells: their flags, held state, inactive state and tooltip with the toggle's key.
     fn toggle_parts(&self, placed: &Placed, cx: &mut PartsCx<'_, Self>) {
         for (at, cell) in &placed.toggles {
             let toggle = &self.toggles[*at];
@@ -761,7 +819,7 @@ impl ListRow<'_> {
                 Some(RowPressed::Row) => toggle.row_press,
                 _ => false,
             };
-            let part = cx.part(TOGGLE.at(*at as u64), shape).flags(flags).held(held);
+            let part = cx.part(TOGGLE.at(*at as u64), shape).flags(flags).held(held).inactive(self.toggle_closed(toggle));
             let _ = match tip {
                 Some(tip) => part.tooltip(tip),
                 None => part,

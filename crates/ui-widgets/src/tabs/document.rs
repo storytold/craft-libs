@@ -28,6 +28,9 @@ pub struct DocumentTab<D> {
     pub label: Label,
     /// Unsaved changes: the tab shows the modified mark.
     pub modified: bool,
+    /// The length in bytes of the label's name part (the document's name before its zoom and colour mode): the
+    /// modified mark follows the name, not the whole label. `None`: the label is all name.
+    pub name_len: Option<usize>,
     /// The tab shows a close button.
     pub closable: bool,
     /// How far the document has opened, between 0 and 1; `None` for a document that is open.
@@ -49,6 +52,7 @@ impl<D> DocumentTab<D> {
             id,
             label: label.into(),
             modified: false,
+            name_len: None,
             closable: true,
             progress: None,
             detail: None,
@@ -62,6 +66,13 @@ impl<D> DocumentTab<D> {
     #[must_use]
     pub fn modified(mut self, on: bool) -> Self {
         self.modified = on;
+        self
+    }
+
+    /// The label's name part: its first `len` bytes, which the modified mark follows.
+    #[must_use]
+    pub fn name_len(mut self, len: usize) -> Self {
+        self.name_len = Some(len);
         self
     }
 
@@ -145,13 +156,13 @@ pub enum DocumentTabsEvent<D> {
         /// The tab they now sit before.
         before: Option<D>,
     },
-    /// Tabs of another group dropped on this strip, on the tab `over`.
+    /// Tabs of another group dropped on this strip, on the tab `over` or on none.
     #[non_exhaustive]
     DroppedInto {
         /// The dropped documents in the order they had.
         documents: Vec<D>,
-        /// The tab the drop landed on.
-        over: D,
+        /// The tab the drop landed on; `None` in the room after the tabs, or on a strip with no tabs.
+        over: Option<D>,
     },
     /// The tab was dragged out and released over no strip: float it at `at`.
     #[non_exhaustive]
@@ -289,7 +300,7 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                 strip = strip
                     .reorder(ReorderRule::new())
                     // The held tab is the preview; production shows no filename badge beside the pointer.
-                    .drag_badge(false)
+                    .drag_preview(crate::contract::RowPreview::None)
                     .can_drag(move |key: &D| tabs.iter().find(|tab| &tab.id == key).is_none_or(|tab| tab.movable))
                     .accepts(move |drag: &ListDrag<D>, _, insert| {
                         // `insert` counts every tab; `keeps_fixed` takes the place among the tabs left without the dragged ones.
@@ -311,6 +322,9 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                 let mut tab = Tab::new(document.label.clone()).closable(document.closable);
                 if document.modified {
                     tab = tab.modified();
+                }
+                if let Some(len) = document.name_len {
+                    tab = tab.name_len(len);
                 }
                 if let Some(fraction) = document.progress {
                     tab = tab.progress(fraction);
@@ -390,7 +404,9 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
         let response = shown.response.response.clone();
         for event in shown.response.events {
             match event {
-                CollectionEvent::Selection(SelectionChange::Set(keys)) => events.extend(keys.last().cloned().map(DocumentTabsEvent::Selected)),
+                CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
+                    events.extend(keys.last().cloned().map(DocumentTabsEvent::Selected))
+                }
                 CollectionEvent::Activate(key) => events.push(DocumentTabsEvent::Activated(key)),
                 CollectionEvent::Reorder(edit) => {
                     if let (Some(moved), true) = (edit.value(), matches!(edit, EditEvent::Set { .. } | EditEvent::Commit { .. })) {
@@ -407,8 +423,8 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                     if let Some(files) = payload.get::<OsFiles>() {
                         events
                             .push(DocumentTabsEvent::FilesDropped { files: files.files.clone(), before: tabs.get(insert).map(|tab| tab.id.clone()) });
-                    } else if let (Some(drag), Some(over)) = (payload.get::<ListDrag<D>>(), key) {
-                        events.push(DocumentTabsEvent::DroppedInto { documents: drag.keys.clone(), over });
+                    } else if let Some(drag) = payload.get::<ListDrag<D>>() {
+                        events.push(DocumentTabsEvent::DroppedInto { documents: drag.keys.clone(), over: key });
                     }
                 }
                 _ => {}

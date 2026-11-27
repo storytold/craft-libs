@@ -82,3 +82,12 @@ fn picture_painter(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 fn picture_fill(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Picture::painter("Preview", ThumbAspect::new(4, 1), |cx, rect| cx.checker(rect)).extent(PictureSize::Fill).show(ui).into()
 }
+
+/// A rendered picture without the transparency grid, for a mask that sits on the surface.
+#[story(Picture<'static>, covers = [], drive = Drive::Never)]
+fn picture_rendered_without_checker(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let options = ThumbnailOptions::new();
+    let thumbnails = Thumbnails::<u64>::in_context(ui.ctx(), "craft_ui::stories::picture_rendered_without_checker", options);
+    let source = FakeThumbSource::<u64>::new().later(true);
+    Picture::rendered("Mask", 1, &thumbnails, &source).extent(PictureSize::Thumb(ThumbSize::Large)).checker(false).show(ui).into()
+}

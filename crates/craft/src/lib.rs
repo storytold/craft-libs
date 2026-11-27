@@ -103,6 +103,8 @@ pub use craft_drawingml as drawingml;
 pub use craft_dwg as dwg;
 #[cfg(feature = "dxf")]
 pub use craft_dxf as dxf;
+#[cfg(feature = "ease")]
+pub use craft_ease as ease;
 #[cfg(feature = "ecproj-format")]
 pub use craft_ecproj_format as ecproj_format;
 #[cfg(feature = "elf")]
@@ -139,6 +141,8 @@ pub use craft_flow as flow;
 pub use craft_font_catalog as font_catalog;
 #[cfg(feature = "font-manager")]
 pub use craft_font_manager as font_manager;
+#[cfg(feature = "font-os-windows")]
+pub use craft_font_os_windows as font_os_windows;
 #[cfg(feature = "font-store")]
 pub use craft_font_store as font_store;
 #[cfg(feature = "font-subset")]
@@ -179,6 +183,8 @@ pub use craft_html as html;
 #[cfg(feature = "http-url")]
 pub use craft_http_url as http_url;
 pub use craft_i18n as i18n;
+#[cfg(feature = "i18n-build")]
+pub use craft_i18n_build as i18n_build;
 #[cfg(feature = "ical")]
 pub use craft_ical as ical;
 #[cfg(feature = "idml")]
@@ -221,6 +227,8 @@ pub use craft_lottie as lottie;
 pub use craft_macho as macho;
 #[cfg(feature = "markdown")]
 pub use craft_markdown as markdown;
+#[cfg(feature = "material-graph")]
+pub use craft_material_graph as material_graph;
 #[cfg(feature = "materialx")]
 pub use craft_materialx as materialx;
 #[cfg(feature = "math")]
@@ -263,6 +271,8 @@ pub use craft_ora as ora;
 pub use craft_pages as pages;
 #[cfg(feature = "palette")]
 pub use craft_palette as palette;
+#[cfg(feature = "pbr")]
+pub use craft_pbr as pbr;
 #[cfg(feature = "pcap")]
 pub use craft_pcap as pcap;
 #[cfg(feature = "pcraft-bundle")]
@@ -329,6 +339,8 @@ pub use craft_scraft_format as scraft_format;
 pub use craft_settings as settings;
 #[cfg(feature = "sf2")]
 pub use craft_sf2 as sf2;
+#[cfg(feature = "shared-vec")]
+pub use craft_shared_vec as shared_vec;
 #[cfg(feature = "sheet")]
 pub use craft_sheet as sheet;
 #[cfg(feature = "shx")]
@@ -398,6 +410,8 @@ pub use craft_vectordrawable as vectordrawable;
 pub use craft_video as video;
 #[cfg(feature = "wasm")]
 pub use craft_wasm as wasm;
+#[cfg(feature = "wayland")]
+pub use craft_wayland as wayland;
 #[cfg(feature = "web-api")]
 pub use craft_web_api as web_api;
 #[cfg(feature = "web-host")]

@@ -713,8 +713,10 @@ impl StackDialog for HostedGuideLayoutDialog {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<GuideLayoutResult>> {
+        let measuring = crate::runtime::measure::active(ui.ctx());
+        let answers = if measuring { Vec::new() } else { self.requests.take_answers() };
         let shown = (self.build)(Bind::bound(&mut self.values))
-            .answers(self.requests.take_answers())
+            .answers(answers)
             .opened(Bind::bound(&mut self.open))
             .preview(Bind::bound(&mut self.preview_on))
             .show(ui);

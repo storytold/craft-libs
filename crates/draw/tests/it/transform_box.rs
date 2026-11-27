@@ -1,23 +1,27 @@
 //! `TransformBox`, `TransformOverlay` and `TransformTool`: the parts the pointer takes, what each drag does, the
 //! keys, the readout and the overlay's edits.
 
+use super::presses::Presses;
 use craft_behavior::geometry::quad::{BoxAllow, BoxHandles, BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
 use craft_behavior::geometry::{SnapKind, SnapOptions, SnapSuspend, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Affine, Point, Rect};
 use craft_behavior::{CanvasView, EditEvent, GesturePhase, RulerUnits, Ticks};
 use craft_draw::ui::transform::{
-    LineEnd, LineEndDrag, LineEnds, LineLook, RotateZone, TransformBox, TransformEdit, TransformOverlay, TransformReach, TransformSession,
-    TransformSettings,
+    LineEnd, LineEndDrag, LineEnds, LineLook, RotateZone, TransformBox, TransformBoxOutput, TransformEdit, TransformOverlay, TransformReach,
+    TransformSession, TransformSettings,
 };
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{Canvas, RulerText, Snap};
 use craft_ui::canvas::{Guide, GuideKey};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft_ui::dialog::Dialog;
 use craft_ui::runtime::env::UnitKind;
-use craft_ui::testing::{Fixture, pointer, trial};
-use egui::{Pos2, Vec2};
-use std::cell::RefCell;
+use craft_ui::runtime::overlay::CloseReason;
+use craft_ui::sections::{DialogRole, FooterButton};
+use craft_ui::testing::{Fixture, ToolFixture, pointer, trial};
+use egui::{Key, Modifiers, Pos2, Shape, Vec2};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -63,6 +67,10 @@ struct Config {
     suspend: SnapSuspend,
     /// egui runs each frame twice and gives the frame's input to its first pass only.
     twice: bool,
+    /// What of the box takes the pointer and the keys.
+    reach: TransformReach,
+    /// Whether Enter and Escape from the canvas session are the box's.
+    session_commit: bool,
 }
 
 /// What the host keeps of the box and what the passes reported.
@@ -115,6 +123,8 @@ fn defaults() -> Config {
         targets: Vec::new(),
         suspend: SnapSuspend::Control,
         twice: false,
+        reach: TransformReach::Box,
+        session_commit: true,
     }
 }
 
@@ -208,6 +218,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
             if let Some(line) = config.line {
                 control = control.line(line);
             }
+            control = control.reach(config.reach).session_commit(config.session_commit);
             if config.hover_frame {
                 control = control.id(frame_id);
             }
@@ -220,44 +231,50 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
             let mut host = shown_host.borrow_mut();
             host.shown = output.edit.shown.as_ref().and_then(|value| value.same()).map(|value| **value);
             host.guide_events += guide_edits;
-            host.snapped = output.snapped.len();
-            if let Some(drag) = output.line_end {
-                host.line_ends.push(drag);
-            }
-            host.id = output.edit.response.id;
-            host.applied += usize::from(output.apply.is_some());
-            host.discarded += usize::from(output.discard);
+            absorb(&mut host, &output, config.f32_host);
             host.clicks.extend(output.clicked);
-            (host.picked, host.hovered) = (output.picked, output.hovered);
-            for event in &output.edit.events {
-                match event {
-                    EditEvent::Begin { .. } => {
-                        host.events.push(Seen::Begin);
-                        host.before = Some(host.state);
-                    }
-                    EditEvent::Update { value, .. } => {
-                        host.events.push(Seen::Update);
-                        host.state = if config.f32_host { kept_in_f32(value) } else { *value };
-                    }
-                    EditEvent::Commit { after, .. } => {
-                        host.events.push(Seen::Commit);
-                        host.state = if config.f32_host { kept_in_f32(after) } else { *after };
-                    }
-                    EditEvent::Set { after, .. } => {
-                        host.events.push(Seen::Set);
-                        host.state = *after;
-                    }
-                    EditEvent::Cancel { .. } => {
-                        host.events.push(Seen::Cancel);
-                        host.state = host.before.take().unwrap_or(host.state);
-                    }
-                    _ => {}
-                }
-            }
         }
     });
     fixture.settle();
     Harness { fixture, host, config: kept_config }
+}
+
+/// Takes what a pass reported into the host: the snap lines, a free line end's drag, the apply and discard counts, the
+/// part the keys act on and the part under the pointer, and each edit event into the box the host keeps.
+fn absorb(host: &mut Host, output: &TransformBoxOutput, f32_host: bool) {
+    host.snapped = output.snapped.len();
+    if let Some(drag) = output.line_end {
+        host.line_ends.push(drag);
+    }
+    host.id = output.edit.response.id;
+    host.applied += usize::from(output.apply.is_some());
+    host.discarded += usize::from(output.discard);
+    (host.picked, host.hovered) = (output.picked, output.hovered);
+    for event in &output.edit.events {
+        match event {
+            EditEvent::Begin { .. } => {
+                host.events.push(Seen::Begin);
+                host.before = Some(host.state);
+            }
+            EditEvent::Update { value, .. } => {
+                host.events.push(Seen::Update);
+                host.state = if f32_host { kept_in_f32(value) } else { *value };
+            }
+            EditEvent::Commit { after, .. } => {
+                host.events.push(Seen::Commit);
+                host.state = if f32_host { kept_in_f32(after) } else { *after };
+            }
+            EditEvent::Set { after, .. } => {
+                host.events.push(Seen::Set);
+                host.state = *after;
+            }
+            EditEvent::Cancel { .. } => {
+                host.events.push(Seen::Cancel);
+                host.state = host.before.take().unwrap_or(host.state);
+            }
+            _ => {}
+        }
+    }
 }
 
 fn upright() -> Harness {
@@ -1053,20 +1070,28 @@ fn a_jittery_double_click_inside_applies_with_no_move_committed() {
     assert_eq!(h.host.borrow().applied, 1, "the double click applies");
 }
 
-/// A secondary click on the session's box opens the mode menu (its rows are on the page); with the menu closed again, a
-/// secondary click away from the box opens none.
+/// A secondary click on the session's box opens the mode menu (its rows are on the page) and is the box's alone: the
+/// tool host under it asks for no menu of its own. With the menu closed again, a secondary click away from the box
+/// opens none.
 #[trial]
 fn a_secondary_click_on_the_box_opens_the_mode_menu() {
+    use craft_draw::ui::transform::TransformTool;
+    use craft_ui::canvas::{ToolHost, tool_pass};
     let session = TransformSession::<()>::new(RECT);
     let settings = TransformSettings::default();
     let view = Rc::new(RefCell::new(CanvasView::new(egui::Rect::NOTHING, Point::ZERO, 1.0)));
-    let shown_view = Rc::clone(&view);
+    let host_asked = Rc::new(Cell::new(false));
+    let (shown_view, asked) = (Rc::clone(&view), Rc::clone(&host_asked));
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let at = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
         *shown_view.borrow_mut() = at;
         Canvas::new("Document").view(at).show(ui, |ui, body| {
-            TransformOverlay::new("Free Transform", &session, &settings).show_at(ui, body.rect);
+            let shown = TransformOverlay::new("Free Transform", &session, &settings).show_at(ui, body.rect);
+            if let Some(pass) = tool_pass(&body.env) {
+                let mut tool = TransformTool::new(&session, shown.snapped.clone());
+                asked.set(asked.get() || ToolHost::new().run(ui, &pass, &mut tool).context.is_some());
+            }
         });
     });
     fixture.settle();
@@ -1081,8 +1106,10 @@ fn a_secondary_click_on_the_box_opens_the_mode_menu() {
     right_click(&mut fixture, screen(Point::new(1000.0, 1000.0)));
     assert!(fixture.by_label("Distort").is_none(), "a secondary click away from the box opens no mode menu");
 
+    host_asked.set(false);
     right_click(&mut fixture, screen(Point::new(200.0, 150.0)));
     assert!(fixture.by_label("Distort").is_some(), "a secondary click on the box opens the mode menu");
+    assert!(!host_asked.get(), "the tool host under the box asks for no menu");
 }
 
 /// A drag from inside snaps the moved box's edges, not the pointer: the right edge lands on the guide at 310 while the
@@ -1355,6 +1382,132 @@ fn the_reference_point_snaps_to_the_turned_boxs_points_only() {
         assert!(pivot.distance(corner) < 1e-6, "snap {snap}: onto the corner: {pivot:?} vs {corner:?}");
         assert_eq!(h.state().quad, turned.quad, "the box never moved");
     }
+}
+
+#[trial]
+fn a_shown_box_takes_no_press_and_no_key_and_leaves_both_to_the_tool() {
+    let reported = Rc::new(Cell::new(0usize));
+    let sink = Rc::clone(&reported);
+    // The view shows the room's centre as the document point of the same numbers, so document and screen points
+    // coincide.
+    let view = |room: egui::Rect| CanvasView::new(room, Point::new(f64::from(room.center().x), f64::from(room.center().y)), 1.0);
+    let mut fixture = ToolFixture::with_view("Document", Presses::default(), view, move |ui, body| {
+        let shown = TransformBox::new("Free Transform", Bind::given(BoxState::from_rect(RECT)), RECT, 0.0)
+            .reach(TransformReach::Shown)
+            .show_at(ui, body.rect);
+        sink.set(sink.get() + usize::from(shown.apply.is_some()) + usize::from(shown.discard) + shown.edit.events.len());
+    });
+    // A handle, the inside and the outside of the box.
+    for at in [Pos2::new(300.0, 220.0), Pos2::new(200.0, 150.0), Pos2::new(350.0, 270.0)] {
+        fixture.press_at(at).release_at(at);
+    }
+    assert_eq!(fixture.tool().count, 3, "every press reaches the tool");
+    for key in [Key::ArrowRight, Key::Enter, Key::Escape] {
+        fixture.fixture().key(key, Modifiers::NONE);
+    }
+    assert_eq!(reported.get(), 0, "the box reported no edit, apply or discard");
+    assert!(fixture.fixture().by_label("Bottom right corner").is_none(), "a shown box has no part in the accessibility tree");
+    let framed = |shape: &Shape| matches!(shape, Shape::Path(path) if path.closed && path.points.len() == 4);
+    assert!(fixture.fixture().frame_shapes().iter().any(framed), "the box still paints its frame");
+}
+
+/// The host of a distort pad in a dialog: the box it keeps, what the box reported and how the dialog closed.
+struct Pad {
+    host: Host,
+    closed: Option<CloseReason>,
+}
+
+/// A Free Distort pad as the effects dialogs show it, with `session_commit` off, in an open dialog whose Enter is OK
+/// and whose Escape cancels. The pad's view is kept in the host.
+fn pad() -> (Fixture, Rc<RefCell<Pad>>) {
+    let state = BoxState::from_rect(RECT);
+    let host = Host {
+        state,
+        shown: None,
+        before: None,
+        events: Vec::new(),
+        applied: 0,
+        discarded: 0,
+        picked: None,
+        hovered: None,
+        clicks: Vec::new(),
+        id: egui::Id::NULL,
+        view: CanvasView::new(egui::Rect::NOTHING, Point::ZERO, 1.0),
+        guide_events: 0,
+        snapped: 0,
+        line_ends: Vec::new(),
+    };
+    let pad = Rc::new(RefCell::new(Pad { host, closed: None }));
+    let shown = Rc::clone(&pad);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut open = true;
+        let dialog = Dialog::new("Free Distort")
+            .opened(Bind::bound(&mut open))
+            .close_on_enter(true)
+            .buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)])
+            .show(ui, |ui, _| {
+                let (room, _) = ui.allocate_exact_size(egui::vec2(400.0, 300.0), egui::Sense::hover());
+                let view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
+                let state = {
+                    let mut pad = shown.borrow_mut();
+                    pad.host.view = view;
+                    pad.host.state
+                };
+                let canvas = Canvas::new("Document").view(view).show_at(ui, room, |ui, body| {
+                    TransformBox::new("Free Transform", Bind::given(state), RECT, 0.0)
+                        .rules(BoxRules::in_mode(TransformMode::Distort))
+                        .reference_point(false)
+                        .inside_moves(false)
+                        .session_commit(false)
+                        .show_at(ui, body.rect)
+                });
+                if let Some(output) = canvas.inner {
+                    absorb(&mut shown.borrow_mut().host, &output, false);
+                }
+            });
+        if dialog.output.closed.is_some() {
+            shown.borrow_mut().closed = dialog.output.closed;
+        }
+    });
+    fixture.settle();
+    (fixture, pad)
+}
+
+#[trial]
+fn a_box_without_session_commit_leaves_enter_and_escape_to_the_dialog() {
+    for (key, closed) in [(Key::Enter, CloseReason::Activated), (Key::Escape, CloseReason::Escape)] {
+        let (mut fixture, pad) = pad();
+        // A click on a handle gives the box the keyboard, where the session's Enter and Escape would be its own.
+        let corner = pad.borrow().host.view.to_screen(Point::new(300.0, 220.0));
+        fixture.frame(vec![pointer::moved(corner)]);
+        fixture.frame(vec![pointer::press(corner)]);
+        fixture.frame(vec![pointer::release(corner)]);
+        fixture.key(Key::ArrowRight, Modifiers::NONE);
+        let moved = pad.borrow().host.state.quad[0].x - RECT.x0;
+        assert!((moved - 1.0).abs() < 1e-6, "an arrow still moves the box by one unit: {moved}");
+        fixture.key(key, Modifiers::NONE);
+        fixture.settle();
+        let pad = pad.borrow();
+        assert_eq!((pad.host.applied, pad.host.discarded), (0, 0), "{key:?}: the box takes neither Enter nor Escape");
+        assert_eq!(pad.closed, Some(closed), "{key:?}: the dialog around the canvas gets it");
+    }
+}
+
+#[trial]
+fn a_drags_escape_still_cancels_it_in_a_box_without_session_commit() {
+    let (mut fixture, pad) = pad();
+    let start = pad.borrow().host.view.to_screen(Point::new(300.0, 220.0));
+    fixture.frame(vec![pointer::moved(start)]);
+    fixture.frame(vec![pointer::press(start)]);
+    fixture.frame(vec![pointer::moved(start + by(8.0, 6.0))]);
+    fixture.frame(vec![pointer::moved(start + by(16.0, 12.0))]);
+    assert!(pad.borrow().host.state != BoxState::from_rect(RECT), "the drag moved the corner");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.frame(vec![pointer::release(start + by(16.0, 12.0))]);
+    fixture.settle();
+    let pad = pad.borrow();
+    assert_eq!(pad.host.state, BoxState::from_rect(RECT), "Escape put the box back");
+    assert!(pad.host.events.contains(&Seen::Cancel), "the drag was cancelled: {:?}", pad.host.events);
 }
 
 /// A box whose handle set shows only some handles takes no press, key or drag on the others: a sides-only box (a

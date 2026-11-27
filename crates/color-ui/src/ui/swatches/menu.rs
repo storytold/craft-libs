@@ -165,13 +165,13 @@ fn new_swatch_edit(groups: &[SwatchGroup], st: &mut SwatchesState, foreground: S
     if swatches_full(groups) {
         return None;
     }
-    let group = st.selected.as_ref().and_then(|key| group_of(groups, key)).and_then(|index| groups.get(index)).map(|g| g.name.clone());
+    let group = st.selection.lead.as_ref().and_then(|key| group_of(groups, key)).and_then(|index| groups.get(index)).map(|g| g.name.clone());
     let color = SwatchColor::Rgb(foreground.to_rgb_array().map(|v| v.clamp(0.0, 1.0)));
     let name = free_name(groups, words.swatch_n.as_str());
     let key = SwatchKey::Swatch(name.clone());
-    st.selected = Some(key.clone());
+    st.selection = craft_behavior::Selection::single(key.clone());
     st.rename = Some(key);
-    Some(SwatchEdit::Add { group, name, color })
+    Some(SwatchEdit::add(group, name, color))
 }
 
 /// An empty group under a unique name, opened for renaming. `None` when the library holds the most groups.
@@ -201,21 +201,18 @@ pub(super) fn event_edits(
     words: &SwatchesWords,
 ) -> Vec<SwatchEdit> {
     match event {
-        PresetEvent::Select { key: SwatchKey::Swatch(name), .. } => {
-            st.selected = Some(SwatchKey::Swatch(name));
-            Vec::new()
-        }
-        PresetEvent::Select { key, .. } | PresetEvent::Activate { key, .. } => {
-            st.selected = Some(key).filter(|k| matches!(k, SwatchKey::Swatch(_)));
-            Vec::new()
-        }
         PresetEvent::Rename { key: SwatchKey::Swatch(old), text, .. } => {
             let Some(name) = find_swatch(groups, &old).and_then(|at| swatch_rename(groups, at, &text)).filter(|name| *name != old) else {
                 return Vec::new();
             };
-            if st.selected == Some(SwatchKey::Swatch(old.clone())) {
-                st.selected = Some(SwatchKey::Swatch(name.clone()));
-            }
+            let (old_key, new_key) = (SwatchKey::Swatch(old.clone()), SwatchKey::Swatch(name.clone()));
+            let swap = |key: &mut SwatchKey| {
+                if *key == old_key {
+                    *key = new_key.clone();
+                }
+            };
+            let selection = &mut st.selection;
+            selection.items.iter_mut().chain(selection.lead.iter_mut()).chain(selection.anchor.iter_mut()).for_each(swap);
             vec![SwatchEdit::Rename { swatch: old, name }]
         }
         PresetEvent::Rename { key: SwatchKey::Group(old), text, .. } => {
@@ -249,7 +246,14 @@ fn footer_edits(
     match event {
         PresetFooterEvent::New => new_swatch_edit(groups, st, foreground, words).into_iter().collect(),
         PresetFooterEvent::NewGroup => new_group_edit(groups, st, words).into_iter().collect(),
-        PresetFooterEvent::Delete => st.selected.clone().and_then(|key| delete_edit(groups, &key)).into_iter().collect(),
+        PresetFooterEvent::Delete => {
+            // A swatch of a selected group goes with the group: deleting it after the group would find nothing.
+            let with_group = |key: &SwatchKey| {
+                matches!(key, SwatchKey::Swatch(_))
+                    && group_of(groups, key).and_then(|i| groups.get(i)).is_some_and(|g| st.selection.contains(&SwatchKey::Group(g.name.clone())))
+            };
+            st.selection.items.iter().filter(|key| !with_group(key)).filter_map(|key| delete_edit(groups, key)).collect()
+        }
         _ => Vec::new(),
     }
 }

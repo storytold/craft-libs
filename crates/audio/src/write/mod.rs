@@ -8,7 +8,7 @@ mod aiff;
 mod coded;
 #[cfg(feature = "flac-encode")]
 pub(crate) mod flac;
-mod pcm;
+pub(crate) mod pcm;
 #[cfg(feature = "vorbis-encode")]
 mod vorbis;
 #[cfg(feature = "vorbis-encode")]

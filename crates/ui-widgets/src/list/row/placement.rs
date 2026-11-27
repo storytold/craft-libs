@@ -1,12 +1,12 @@
 //! Where a row's parts lie: its sizes, bands and the placement of label, cells and trailing items.
 
 use super::ListRow;
-use super::show::named;
-use super::style::ListRowStyle;
+use super::show::{TOGGLE_CELL, named};
+use super::style::{ListRowStyle, ThumbRows};
 use super::thumb::{Thumb, ThumbSize};
 use super::trailing::{TrailingFace, TrailingItem, trailing_run};
 use crate::buttons::Link;
-use crate::contract::{ColumnAlign, PartsCx, RowHeight, WordSetCx as _};
+use crate::contract::{ColumnAlign, PartsCx, RowHeight, RowToggle, WordSetCx as _};
 use crate::layout::{ShrinkOrder, ShrinkUnit, shrink_widths};
 use crate::list::toggle::ToggleState;
 use crate::list::words::ListWords;
@@ -24,8 +24,10 @@ const MIN_LABEL_HEIGHTS: f32 = 3.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Sizes {
     pub(super) row: f32,
-    /// The slot of an icon, a toggle cell's mark or a step of indent.
+    /// The slot of an icon or a toggle cell's mark.
     pub(super) icon: f32,
+    /// A level of indent (`ThumbRows`).
+    indent: f32,
     /// The side the row's icon and its toggle marks draw at in their slots: the control's icon side, the small
     /// control's in a sub-row.
     pub(super) mark: f32,
@@ -46,6 +48,8 @@ pub(super) struct Sizes {
     pub(super) cell_inset: f32,
     /// The vertical room around a wrapped cell's text, in total.
     pub(super) cell_pad: f32,
+    /// The side of a corner mark: `size.handle.sm`.
+    pub(super) handle: f32,
 }
 
 impl Sizes {
@@ -53,18 +57,21 @@ impl Sizes {
         let (control, tokens) = (cx.control(), cx.tokens);
         let thumbs = &tokens.size.thumb;
         let small = cx.control_of(ControlSize::Sm);
+        let row = if sub_row { small.height } else { rows.of(cx) };
+        let tight = cx.env::<ThumbRows>() == ThumbRows::Tight;
         Sizes {
-            row: if sub_row { small.height } else { rows.of(cx) },
+            row,
             icon: control.icon,
+            indent: if tight { small.icon + tokens.space.gap.tight } else { control.icon },
             mark: if sub_row { small.icon } else { control.icon },
             pad: control.pad_x,
             gap: control.gap,
             trailing_pad: tokens.space.pad.regular,
             min_label: MIN_LABEL_HEIGHTS * control.height,
             thumbs: [thumbs.sm, thumbs.md, thumbs.lg],
-            thumb_pad: tokens.space.gap.stack,
+            thumb_pad: if tight { tokens.space.gap.tight } else { tokens.space.gap.stack },
             // A standard control and the panel padding, as the old `thumb_row_min`.
-            thumb_row: tokens.size.control.md + tokens.space.pad.regular,
+            thumb_row: if tight { row } else { tokens.size.control.md + tokens.space.pad.regular },
             tight: tokens.space.gap.tight,
             gap_row: tokens.space.gap.row,
             label_line: tokens.typography.get(role).line_height,
@@ -72,6 +79,7 @@ impl Sizes {
             cell_inset: control.pad_x,
             // A text row's wrapped cell keeps the room a text row has around its line.
             cell_pad: if rows == RowHeight::Text { tokens.space.gap.tight } else { control.gap },
+            handle: tokens.size.handle.sm,
         }
     }
 
@@ -173,6 +181,8 @@ pub(super) struct Placed {
     pub(super) statuses: Vec<(usize, usize, Rect)>,
     pub(super) dividers: Vec<f32>,
     pub(super) disclosure: Option<Rect>,
+    /// The row's content past its leading toggle cells and before its trailing ones.
+    pub(super) band: Rect,
     pub(super) marker: Option<Rect>,
     /// The mark column of an option of a value list.
     pub(super) check: Option<Rect>,
@@ -198,6 +208,11 @@ impl ListRow<'_> {
         self.first.is_some() && sizes.side(self.thumb) > 0.0
     }
 
+    /// The size of a row that is its thumbnails (`thumbnails_only`): the leading part wide, a thumbnail high.
+    pub(super) fn thumbs_extent(&self, sizes: &Sizes, widths: &Widths) -> Vec2 {
+        Vec2::new(self.leading(sizes, widths).unwrap_or(0.0), self.thumb_size(sizes).y)
+    }
+
     /// The width of the leading part: every thumbnail and what is between them, the leading text's slot, or the icon;
     /// `None` for a row with none of them.
     fn leading(&self, sizes: &Sizes, widths: &Widths) -> Option<f32> {
@@ -213,13 +228,14 @@ impl ListRow<'_> {
         }
     }
 
-    /// Takes the toggle columns, their keys, the columns' alignments and the press the collection holds on the row from
+    /// Takes the toggle columns, their keys, the ones that do not flip in this row, the columns' alignments and the press the collection holds on the row from
     /// the facts it recorded for this row: an end-aligned column's text ends at the cell's end (mirrored in a
     /// right-to-left interface) and a numeric column's figures are tabular.
     pub(super) fn adopt_facts(&mut self, env: &EnvView<'_>, id: egui::Id) {
         if let Some(facts) = env.facts_of(id) {
             self.toggle_columns.clone_from(&facts.toggles);
             self.toggle_keys.clone_from(&facts.toggle_keys);
+            self.closed_toggles.clone_from(&facts.closed_toggles);
             self.aligns = facts.aligns.iter().map(|(key, align, tabular)| (key.clone(), halign(*align), *tabular)).collect();
             if self.pressed.is_none() {
                 self.pressed.clone_from(&facts.pressed);
@@ -228,14 +244,25 @@ impl ListRow<'_> {
         }
     }
 
-    /// Hands the collection the names of this row's toggle cells, so its cell nodes read them.
+    /// Hands the collection this row's toggle cells, so its cell nodes read their names and roles and go under the
+    /// row's cell nodes.
     pub(super) fn record_toggle_names(&self, cx: &PartsCx<'_, Self>) {
         let words = cx.words::<ListWords>();
         let label = cx.resolved.label;
+        let id = cx.resolved.id;
+        // A row without a node, or a spacer, reports no cell nodes: the collection's node goes under the row's.
+        let cells = self.node && !self.spacer;
         let names = self
             .toggles
             .iter()
-            .map(|toggle| (toggle.column.clone(), named(toggle.name_pattern(&words), label), toggle.state == ToggleState::Mixed))
+            .enumerate()
+            .map(|(at, toggle)| RowToggle {
+                column: toggle.column.clone(),
+                name: named(toggle.name_pattern(&words), label),
+                mixed: toggle.state == ToggleState::Mixed,
+                check_box: toggle.check_box,
+                cell: if cells { crate::runtime::access::sub_node_id(id, TOGGLE_CELL.at(at as u64)) } else { id },
+            })
             .collect();
         crate::contract::put_toggle_names(cx.ui.ctx(), cx.resolved.id, names);
     }
@@ -323,7 +350,11 @@ impl ListRow<'_> {
 
     /// The indent a row asks for before it gives way to the label's least width.
     pub(super) fn indent_full(&self, sizes: &Sizes) -> f32 {
-        (self.steps() + usize::from(self.clipped)) as f32 * sizes.icon
+        // A leaf's extra step (`tree_steps`) passes its parent's disclosure column, an icon slot wide; the others are
+        // levels.
+        let steps = self.steps();
+        let past_disclosure = usize::from(steps > 0 && self.group.is_none());
+        (steps - past_disclosure + usize::from(self.clipped)) as f32 * sizes.indent + past_disclosure as f32 * sizes.icon
     }
 
     /// The column no text or toggle cell claims, which holds the label.
@@ -434,12 +465,20 @@ impl ListRow<'_> {
     }
 
     pub(super) fn place_in(&self, columns: &[(ColumnKey, Rect)], sizes: &Sizes, widths: &Widths, rect: Rect, rtl: bool) -> Placed {
+        // A row that is its thumbnails has no padding, label room or trailing room.
+        let bare;
+        let sizes = if self.thumbnails_only {
+            bare = Sizes { pad: 0.0, min_label: 0.0, trailing_pad: 0.0, ..*sizes };
+            &bare
+        } else {
+            sizes
+        };
         let items = &widths.items;
         let moved;
         let cells_of = if self.sub_row {
             let toggle = |key: &ColumnKey| self.toggle_columns.contains(key) || self.toggles.iter().any(|toggle| toggle.column == *key);
             let mut cells = columns.to_vec();
-            craft_behavior::sub_row_cells(&mut cells, toggle, self.sub_steps as f32 * sizes.icon, rtl);
+            craft_behavior::sub_row_cells(&mut cells, toggle, self.sub_steps as f32 * sizes.indent, rtl);
             moved = cells;
             &moved[..]
         } else {
@@ -555,6 +594,7 @@ impl ListRow<'_> {
             statuses,
             dividers,
             disclosure: disclosure_rect,
+            band,
             marker: marker_rect,
             check: check_rect,
             icon,
@@ -599,6 +639,7 @@ pub fn placement_under_fixed_sizes(row: &ListRow<'_>, width: f32, rtl: bool) -> 
     let sizes = Sizes {
         row: 20.0,
         icon: 16.0,
+        indent: 16.0,
         mark: 16.0,
         pad: 6.0,
         gap: 4.0,
@@ -613,6 +654,7 @@ pub fn placement_under_fixed_sizes(row: &ListRow<'_>, width: f32, rtl: bool) -> 
         detail_line: 12.0,
         cell_inset: 6.0,
         cell_pad: 4.0,
+        handle: 8.0,
     };
     let widths = row.widths(&sizes, &|run| FIXED_ADVANCE * run.full_text().chars().count() as f32);
     let placed = row.place(&sizes, &widths, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, sizes.row)), rtl);

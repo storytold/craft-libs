@@ -1,5 +1,6 @@
 //! The catalog: every installed face, found by any of its names, loaded once.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -129,22 +130,52 @@ struct Index {
     by_family: HashMap<String, Vec<usize>>,
     aliases: HashMap<String, Vec<Alias>>,
     postscript: HashMap<String, usize>,
+    /// The faces left out of `faces` for having a listed face's family, style, PostScript name
+    /// and variations (another file's version of it), by the listed face.
+    versions: HashMap<usize, Vec<FaceInfo>>,
     /// A hash of each family's faces by lowercase name, for [`Catalog::changes_since`].
     signatures: HashMap<String, u64>,
 }
 
 impl Index {
     /// Added faces first: a document's or the app's own face wins over an installed face of the
-    /// same family and style.
+    /// same family and style. Among scanned duplicates the font store's face wins, so a store
+    /// font copied into the OS font folder stays the store's wherever the folders sort.
     fn build(added: &[Face], scanned: &[Face]) -> Self {
-        let mut faces: Vec<Face> = Vec::new();
-        let mut seen = HashSet::new();
-        for f in added.iter().chain(scanned) {
+        let all: Vec<&Face> = added.iter().chain(scanned).collect();
+        // The positions in `all` of each face's versions, the listed one first.
+        let mut groups: HashMap<_, Vec<usize>> = HashMap::new();
+        for (i, f) in all.iter().enumerate() {
             let variations: Vec<(u32, u32)> = f.info.variations.iter().map(|(t, v)| (u32::from_be_bytes(*t), v.to_bits())).collect();
             let key = (f.info.family.to_ascii_lowercase(), norm(&f.info.style), f.keys.postscript.first().cloned(), variations);
-            if seen.insert(key) {
-                faces.push(f.clone());
+            match groups.entry(key) {
+                Entry::Vacant(e) => {
+                    e.insert(vec![i]);
+                }
+                Entry::Occupied(mut e) => {
+                    let group = e.get_mut();
+                    let store_first =
+                        group.first().is_some_and(|held| *held >= added.len() && all.get(*held).is_some_and(|h| h.info.source != Source::Store));
+                    if store_first && f.info.source == Source::Store {
+                        group.insert(0, i);
+                    } else {
+                        group.push(i);
+                    }
+                }
             }
+        }
+        let mut groups: Vec<Vec<usize>> = groups.into_values().collect();
+        groups.sort_unstable();
+        let mut faces: Vec<Face> = Vec::new();
+        let mut versions: HashMap<usize, Vec<FaceInfo>> = HashMap::new();
+        for group in &groups {
+            let mut group = group.iter().filter_map(|i| all.get(*i));
+            let Some(listed) = group.next() else { continue };
+            let others: Vec<FaceInfo> = group.map(|f| f.info.clone()).collect();
+            if !others.is_empty() {
+                versions.insert(faces.len(), others);
+            }
+            faces.push((*listed).clone());
         }
         let mut by_family: HashMap<String, Vec<usize>> = HashMap::new();
         let mut aliases: HashMap<String, Vec<Alias>> = HashMap::new();
@@ -185,7 +216,7 @@ impl Index {
         }
         families.sort_by_cached_key(|f| (f.to_lowercase(), f.clone()));
         let infos: Arc<[FaceInfo]> = faces.iter().map(|f| f.info.clone()).collect();
-        let mut index = Self { faces, infos, families: families.into(), by_family, aliases, postscript, signatures: HashMap::new() };
+        let mut index = Self { faces, infos, families: families.into(), by_family, aliases, postscript, versions, signatures: HashMap::new() };
         index.signatures = index.family_signatures();
         index
     }
@@ -378,6 +409,8 @@ fn style_key(style: &str) -> String {
 /// What the catalog reads besides the platform's font folders.
 struct Config {
     app_dirs: Vec<PathBuf>,
+    /// Folders a link inside is followed from only when it leads inside one of them ([`Catalog::set_confined_dirs`]).
+    confined_dirs: Vec<PathBuf>,
     listers: Vec<Lister>,
     font_service: bool,
 }
@@ -420,7 +453,7 @@ type FamilyLoad = Arc<OnceLock<Arc<[LoadedFace]>>>;
 /// The installed fonts: the platform's font folders, the files its font service knows, the font
 /// store and the app's own folders, plus faces added from files or bytes.
 ///
-/// The first scan runs on first use or on a background thread ([`Catalog::scan_in_background`]);
+/// The first scan runs on the first lookup or on a background thread ([`Catalog::scan_in_background`]);
 /// lookups wait for it. Lookups read an immutable snapshot, so they never wait for a rescan.
 /// Each family's files load once ([`Catalog::load_family`]): other threads asking for the same
 /// family wait for that load, other families load at the same time.
@@ -433,6 +466,9 @@ pub struct Catalog {
     /// The first scan was started on a background thread.
     scanning: AtomicBool,
     scan: Mutex<ScanState>,
+    /// The faces the last scan found, by path: what an added face is indexed with, read without waiting for a
+    /// running scan.
+    scanned: Mutex<Arc<[Face]>>,
     stamp: Mutex<Stamp>,
     generation: AtomicU64,
     /// Locked while [`Catalog::publish`] moves the generation on, so it and the history agree.
@@ -455,6 +491,12 @@ fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// The faces of the font file at `path` as a scan reads them, named instances included, with
+/// `source` as their source. Empty when it isn't a font.
+pub fn read_faces(path: &Path, source: Source) -> Vec<FaceInfo> {
+    scan::file_faces(path, MAX_SCAN_READ, source).into_iter().map(|f| f.info).collect()
+}
+
 impl Catalog {
     /// A catalog of the fonts installed on the system `env` describes, the font store, and the
     /// files the platform's font service lists (with the `system` feature).
@@ -463,11 +505,17 @@ impl Catalog {
         Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             env,
-            config: RwLock::new(Config { app_dirs: Vec::new(), listers: Vec::new(), font_service: cfg!(feature = "system") }),
+            config: RwLock::new(Config {
+                app_dirs: Vec::new(),
+                confined_dirs: Vec::new(),
+                listers: Vec::new(),
+                font_service: cfg!(feature = "system"),
+            }),
             index: RwLock::new(Arc::new(Index::default())),
             ready: OnceLock::new(),
             scanning: AtomicBool::new(false),
             scan: Mutex::new(ScanState::default()),
+            scanned: Mutex::new(Arc::from([])),
             stamp: Mutex::new(Stamp::default()),
             generation: AtomicU64::new(0),
             history: Mutex::new(History::default()),
@@ -511,12 +559,24 @@ impl Catalog {
         self.write_config().app_dirs = dirs;
     }
 
+    /// Folders in which a link is followed only when it stays inside a confined folder, from the next scan on: a link
+    /// in one of them (or in a folder below) that leads outside all of them is skipped, so a folder the user picked
+    /// reads no fonts from elsewhere.
+    pub fn set_confined_dirs(&self, dirs: Vec<PathBuf>) {
+        self.write_config().confined_dirs = dirs;
+    }
+
     fn write_config(&self) -> std::sync::RwLockWriteGuard<'_, Config> {
         self.config.write().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn read_config(&self) -> std::sync::RwLockReadGuard<'_, Config> {
         self.config.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether scans ask the platform's font service ([`Catalog::with_font_service`]).
+    pub(crate) fn uses_font_service(&self) -> bool {
+        self.read_config().font_service
     }
 
     /// The environment the catalog was made for.
@@ -564,7 +624,8 @@ impl Catalog {
 
     /// Scan again, for fonts installed or removed since; only new and changed files are read.
     /// Families loaded before load again on their next [`Catalog::load_family`]. Returns the
-    /// number of faces cataloged.
+    /// number of faces cataloged: the faces [`Catalog::faces`] lists, added faces included, each
+    /// face once however many files have it ([`Catalog::versions`]).
     pub fn rescan(&self) -> usize {
         let mut first = false;
         self.ready.get_or_init(|| {
@@ -700,6 +761,14 @@ impl Catalog {
         history.record(generation, &old, &new);
     }
 
+    /// Every face the last scan found, in path order, with the faces [`Catalog::faces`] drops as
+    /// duplicates of another of the same family, style and PostScript name. Faces added from
+    /// files or bytes aren't in it. For telling apart copies of one font in different places.
+    pub fn scanned_faces(&self) -> Vec<FaceInfo> {
+        self.ensure();
+        self.scanned().iter().map(|f| f.info.clone()).collect()
+    }
+
     /// The family names, sorted ignoring case. Private system families are among them ([`is_private_family`]): a
     /// document may name one, while font lists leave them out.
     pub fn families(&self) -> Arc<[String]> {
@@ -723,6 +792,25 @@ impl Catalog {
     pub fn styles(&self, family: &str) -> Vec<FaceInfo> {
         let index = self.snapshot();
         index.family_of(family).unwrap_or_default().iter().filter_map(|i| index.face(*i)).map(|f| f.info.clone()).collect()
+    }
+
+    /// Every cataloged version of `face`: the faces with its family, style, PostScript name and
+    /// variations, from every file that has it. The one the catalog lists ([`Catalog::faces`])
+    /// comes first, then the others: added faces, then installed files by path. Empty when `face`
+    /// is no longer cataloged.
+    pub fn versions(&self, face: &FaceInfo) -> Vec<FaceInfo> {
+        let index = self.snapshot();
+        let same = |f: &FaceInfo| {
+            f.path == face.path && f.blob == face.blob && f.index == face.index && f.style == face.style && f.variations == face.variations
+        };
+        for i in index.by_family.get(&face.family.to_ascii_lowercase()).map(Vec::as_slice).unwrap_or_default() {
+            let Some(listed) = index.face(*i) else { continue };
+            let others = index.versions.get(i).map(Vec::as_slice).unwrap_or_default();
+            if same(&listed.info) || others.iter().any(same) {
+                return std::iter::once(&listed.info).chain(others).cloned().collect();
+            }
+        }
+        Vec::new()
     }
 
     /// The face for `name` in `style`, and how it matched. `name` is a family name (any of its
@@ -794,7 +882,8 @@ impl Catalog {
     }
 
     /// Add the faces of a font file's `bytes` (a font or a collection) for this session, as
-    /// `source`. Returns the faces added.
+    /// `source`. Returns the faces added. Doesn't wait for or start the first scan: the installed
+    /// faces join them when a lookup scans.
     pub fn add_bytes(&self, bytes: Vec<u8>, source: Source, limits: &Limits) -> Result<Vec<FaceInfo>, FontFileError> {
         let size = bytes.len() as u64;
         if size > limits.max_file_bytes {
@@ -804,7 +893,6 @@ impl Catalog {
         if faces.is_empty() {
             return Err(FontFileError::NotAFont);
         }
-        self.ensure();
         let mut added = lock(&self.added);
         if added.faces.len() + faces.len() > limits.max_added_faces {
             return Err(FontFileError::TooManyFaces { max: limits.max_added_faces });
@@ -819,7 +907,7 @@ impl Catalog {
     }
 
     /// Add the faces of the font file at `path` for this session, as `source`, read in place.
-    /// Returns the faces added.
+    /// Returns the faces added. Like [`Catalog::add_bytes`], it doesn't scan.
     pub fn add_file(&self, path: &Path, source: Source, limits: &Limits) -> Result<Vec<FaceInfo>, FontFileError> {
         let size = std::fs::metadata(path)?.len();
         if size > limits.max_file_bytes {
@@ -834,7 +922,6 @@ impl Catalog {
         if faces.is_empty() {
             return Err(FontFileError::NotAFont);
         }
-        self.ensure();
         let added = lock(&self.added);
         if added.faces.len() + faces.len() > limits.max_added_faces {
             return Err(FontFileError::TooManyFaces { max: limits.max_added_faces });
@@ -866,18 +953,15 @@ impl Catalog {
     }
 
     /// The faces the last scan found.
-    fn scanned(&self) -> Vec<Face> {
-        let scan = lock(&self.scan);
-        let mut faces: Vec<(&PathBuf, &Cached)> = scan.files.iter().collect();
-        faces.sort_by(|a, b| a.0.cmp(b.0));
-        faces.into_iter().flat_map(|(_, c)| c.faces.iter().cloned()).collect()
+    fn scanned(&self) -> Arc<[Face]> {
+        Arc::clone(&lock(&self.scanned))
     }
 
     fn scan_now(&self, refresh: bool) {
         let mut state = lock(&self.scan);
-        let (app_dirs, listers, service) = {
+        let (app_dirs, confined_dirs, listers, service) = {
             let c = self.read_config();
-            (c.app_dirs.clone(), c.listers.clone(), c.font_service)
+            (c.app_dirs.clone(), c.confined_dirs.clone(), c.listers.clone(), c.font_service)
         };
         let ignore_case = self.env.os == Os::Windows;
         let mut roots: Vec<(PathBuf, Source)> = font_dirs(&self.env).into_iter().map(|d| (d, Source::System)).collect();
@@ -897,7 +981,16 @@ impl Catalog {
             named.extend(lister());
         }
 
-        let mut walk = Walk { ignore_case, seen_dirs: HashSet::new(), seen_files: HashSet::new(), entries: 0, dirs: Vec::new(), files: Vec::new() };
+        let mut walk = Walk {
+            ignore_case,
+            confined: Vec::new(),
+            seen_dirs: HashSet::new(),
+            seen_files: HashSet::new(),
+            entries: 0,
+            dirs: Vec::new(),
+            files: Vec::new(),
+        };
+        walk.confined = confined_dirs.iter().map(|dir| walk.key(dir)).collect();
         let mut store_dirs = Vec::new();
         for (root, source) in &roots {
             let first = walk.dirs.len();
@@ -940,6 +1033,11 @@ impl Catalog {
         // A rescan that read no file and lost none keeps the index and its generation, so the caches keyed on the
         // generation (the picker's family infos and samples) stay.
         let unchanged = !read && state.files.is_empty() && self.generation() > 0;
+        if !unchanged {
+            let mut by_path: Vec<(&PathBuf, &Cached)> = files.iter().collect();
+            by_path.sort_by(|a, b| a.0.cmp(b.0));
+            *lock(&self.scanned) = by_path.into_iter().flat_map(|(_, c)| c.faces.iter().cloned()).collect();
+        }
         state.files = files;
         drop(state);
 
@@ -968,6 +1066,8 @@ impl Drop for Watch {
 /// The files of one scan: each folder and file once, however links lead back to it.
 struct Walk {
     ignore_case: bool,
+    /// The keys of the confined folders ([`Catalog::set_confined_dirs`]).
+    confined: Vec<PathBuf>,
     seen_dirs: HashSet<PathBuf>,
     seen_files: HashSet<PathBuf>,
     entries: usize,
@@ -982,8 +1082,14 @@ impl Walk {
         if self.ignore_case { PathBuf::from(real.to_string_lossy().to_lowercase()) } else { real }
     }
 
+    /// Whether the folder or file with `key` is inside a confined folder.
+    fn confined(&self, key: &Path) -> bool {
+        self.confined.iter().any(|dir| key.starts_with(dir))
+    }
+
     fn dir(&mut self, dir: &Path, source: Source, depth: usize) {
         let key = self.key(dir);
+        let confined = self.confined(&key);
         if !self.seen_dirs.insert(key) {
             return;
         }
@@ -997,6 +1103,10 @@ impl Walk {
                 break;
             }
             let path = e.path();
+            let link = e.file_type().is_ok_and(|t| t.is_symlink());
+            if link && confined && !self.confined(&self.key(&path)) {
+                continue;
+            }
             let is_dir = e.file_type().is_ok_and(|t| t.is_dir() || (t.is_symlink() && path.is_dir()));
             paths.push((path, is_dir));
         }

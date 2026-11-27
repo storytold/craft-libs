@@ -8,7 +8,9 @@ use craft_ui::canvas::{Canvas, tool_pass};
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::{EditorPurpose, EditorState};
 use craft_ui::runtime::access::Role;
-use craft_ui::runtime::commands::{CommandRef, CommandState, EditCommands, resolve};
+use craft_ui::runtime::commands::{
+    AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, EditCommands, Platform, Scope, TypingRule, resolve,
+};
 use craft_ui::runtime::focus::{self, EditSet};
 use craft_ui::runtime::frame;
 use craft_ui::testing::focus::egui_focused;
@@ -89,6 +91,40 @@ fn a_canvas_editor_takes_focus_on_a_background_press_and_hands_its_inputs_to_the
         ),
         "typed text, a move and a composition reach the body's pass in the order typed, once each: {inputs:?}"
     );
+}
+
+/// One pass's editor inputs and pasted text, as the body read them from its `ToolPass`.
+type PassPaste = (Vec<EditorInput>, Option<String>);
+
+/// A paste event's text reaches the body with the editor part's paste in that pass's `ToolPass`, and in no later pass:
+/// the framework takes the event out of egui's input, and the body can't read the installed clipboard where it can't
+/// be opened.
+#[trial]
+fn a_paste_events_text_reaches_the_body_with_the_editors_paste() {
+    let seen: Rc<RefCell<Vec<PassPaste>>> = Rc::default();
+    let shown = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let view = CanvasView::new(room, Point::new(PAGE.width / 2.0, PAGE.height / 2.0), 1.0);
+        let _ = canvas(view).show_at(ui, room, |_, body| {
+            let Some(pass) = tool_pass(&body.env) else { return };
+            shown.borrow_mut().push((pass.editor_input.to_vec(), pass.pasted.as_deref().map(str::to_owned)));
+        });
+    });
+    fixture.room(ROOM);
+    fixture.settle();
+    fixture.click_at((ROOM / 2.0).to_pos2());
+    seen.borrow_mut().clear();
+    fixture.frame(vec![Event::Paste("from the platform".into())]);
+    fixture.frame(vec![]);
+    let passes = seen.take();
+    let pasted: Vec<&PassPaste> = passes.iter().filter(|(_, text)| text.is_some()).collect();
+    assert!(!pasted.is_empty(), "a pass carries the paste's text: {passes:?}");
+    for (inputs, text) in &pasted {
+        assert_eq!(text.as_deref(), Some("from the platform"));
+        assert!(inputs.iter().any(|input| matches!(input, EditorInput::Edit(EditCommand::Paste))), "with the editor's paste: {inputs:?}");
+    }
+    assert!(passes.last().is_some_and(|(_, text)| text.is_none()), "a later pass carries none: {passes:?}");
 }
 
 /// Guards `EditorHandle::report` for an editor whose view describes its text (a page editor): its report has no lines,
@@ -212,4 +248,42 @@ fn inactive_edits_disable_cut_and_let_undo_and_redo_fall_through_to_app_state() 
     fixture.key(Key::A, Modifiers::COMMAND);
     fixture.settle();
     assert!(resolve(fixture.ctx(), EditCommands::Cut).enabled, "selecting text in the TextField enables Cut independently");
+}
+
+/// Under a typing rule that fires nothing while typing (`AllWait`), a canvas editor that lets command keys through
+/// (`Canvas::editor_command_keys`) leaves a Cmd chord and a function key to the app's commands while it has the keys,
+/// and a plain key bound to a command stays its typing; without it none of them fires. Guards a type tool whose app ran
+/// its commands while typing.
+#[trial]
+fn a_canvas_editor_that_lets_command_keys_through_runs_them_while_typing() {
+    const ALIGN: &str = "canvasTrial.alignRight";
+    const ACTION: &str = "canvasTrial.action";
+    const TOOL: &str = "canvasTrial.tool";
+    for through in [false, true] {
+        let mut fixture = Fixture::new(move |ui| {
+            let room = ui.available_rect_before_wrap();
+            let view = CanvasView::new(room, Point::new(PAGE.width / 2.0, PAGE.height / 2.0), 1.0);
+            let _ = canvas(view).editor_command_keys(through).show_at(ui, room, |_, _| {});
+        });
+        fixture.os(Platform::Linux);
+        let def =
+            |id: &str, chord: &str| CommandDef::new(id, id, Scope::app()).with_default(Binding::parse(chord).expect("the trial's chord parses"));
+        let catalog = AppCatalog::new(vec![def(ALIGN, "Cmd+Shift+R"), def(ACTION, "F7"), def(TOOL, "P")], 1)
+            .expect("the trial's catalog is valid")
+            .typing_rule(TypingRule::AllWait);
+        fixture.commands(CommandInput::new().catalog(catalog));
+        fixture.room(ROOM);
+        fixture.settle();
+        fixture.click_at((ROOM / 2.0).to_pos2());
+        fixture.settle();
+        frame::take_output(fixture.ctx());
+        fixture.key(Key::R, Modifiers::COMMAND | Modifiers::SHIFT);
+        fixture.key(Key::F7, Modifiers::NONE);
+        fixture.key(Key::P, Modifiers::NONE);
+        fixture.settle();
+        let fired: Vec<String> =
+            frame::take_output(fixture.ctx()).fired.into_iter().map(|fired| fired.command.id).filter(|id| id.starts_with("canvasTrial.")).collect();
+        let expected: Vec<String> = if through { vec![ALIGN.to_owned(), ACTION.to_owned()] } else { Vec::new() };
+        assert_eq!(fired, expected, "command keys let through: {through}");
+    }
 }

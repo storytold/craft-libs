@@ -3,10 +3,10 @@
 use std::collections::BTreeMap;
 
 use craft_keymap::chord::foreign::{Flavor, ForeignError};
-use craft_keymap::import::{FailedChange, UnmatchedReason, kys};
+use craft_keymap::import::{FailedChange, MAX_IMPORT_ENTRIES, UnmatchedReason, kys};
 use craft_keymap::{
     Binding, CommandDef, CommandKind, CommandRef, ContextRule, ForeignEntry, ForeignKey, ForeignSet, ImportOptions, ImportReport, Keymap,
-    MAX_COMMANDS, Overrides, Platform, Scope, Scopes, plan, reserved,
+    MAX_COMMANDS, NotRead, Overrides, Platform, Scope, Scopes, plan, reserved,
 };
 use serde_json::json;
 
@@ -111,7 +111,7 @@ fn windows_set() -> ForeignSet {
 
 fn windows_options() -> ImportOptions {
     let mut remembered = BTreeMap::new();
-    remembered.insert(ForeignEntry::new(Some("Scripts"), ["Frobnicate"]).remember_key(), CommandRef::new("scripts.run"));
+    remembered.insert(ForeignEntry::new(Some("Scripts"), ["Frobnicate"]).remember_key(), Some(CommandRef::new("scripts.run")));
     ImportOptions {
         contexts: vec![("default".into(), ContextRule::Home), ("TEXT".into(), ContextRule::HomeWithoutHomeEntry)],
         remembered,
@@ -282,6 +282,87 @@ fn tool_keys_match_by_name_or_id_and_take_one_letter() {
     assert_eq!(unreadable, ["Lasso Tool"]);
     let unmatched: Vec<(&str, UnmatchedReason)> = r.unmatched.iter().map(|u| (u.item.as_str(), u.reason)).collect();
     assert_eq!(unmatched, [("Copy", UnmatchedReason::NoMatch), ("Imaginary Tool", UnmatchedReason::NoMatch)]);
+}
+
+/// An entry `File > name` whose one key carries undecided codes.
+fn coded(name: &str, key: u32, mods: Option<u32>) -> ForeignEntry {
+    ForeignEntry::new(Some("File"), [name]).with_key(ForeignKey::code(None, &format!("{key}/{mods:?}"), Some(key), mods))
+}
+
+/// The codes of `r` as (code, text).
+fn code_texts(r: &ImportReport) -> Vec<(String, Option<String>)> {
+    r.codes.iter().map(|c| (c.code.clone(), c.text.clone())).collect()
+}
+
+fn pair(code: &str, text: Option<&str>) -> (String, Option<String>) {
+    (code.to_string(), text.map(str::to_string))
+}
+
+#[test]
+fn undecided_codes_decode_by_votes_or_answers() {
+    let km = mac_keymap(catalog());
+
+    // Four of five votes agree: Save, four times, votes S and Close votes W; every mods code votes Cmd.
+    let mut entries: Vec<ForeignEntry> = (0..4).map(|_| coded("Save", 1, Some(9))).collect();
+    entries.push(coded("Close", 1, Some(9)));
+    let set = ForeignSet::new(entries);
+    let voted = plan(&set, &km, &ImportOptions::default()).report;
+    assert_eq!(code_texts(&voted), [pair("key:1", Some("S")), pair("mods:9", Some("Cmd"))]);
+    assert_eq!(voted.codes[0].entries, ["File > Save"; 3], "the first three entries that use the code");
+    assert!(voted.unreadable.is_empty(), "{:?}", voted.unreadable);
+
+    // Three of four stay undecided and unreadable.
+    let mut entries: Vec<ForeignEntry> = (0..3).map(|_| coded("Save", 2, None)).collect();
+    entries.push(coded("Close", 2, None));
+    let r = plan(&ForeignSet::new(entries), &km, &ImportOptions::default()).report;
+    assert!(r.codes.is_empty());
+    assert_eq!(r.unreadable.len(), 4);
+    assert!(r.unreadable.iter().all(|u| matches!(u.reason, ForeignError::Undecided { key: Some(2), mods: None })));
+
+    // An entry without a matched command votes for nothing.
+    let lone = ForeignSet::new(vec![coded("Nothing Like It", 1, Some(9)), coded("Nothing Else", 1, Some(9))]);
+    assert!(plan(&lone, &km, &ImportOptions::default()).report.codes.is_empty());
+
+    // An answer wins over the votes.
+    let mut answered = ImportOptions::default();
+    answered.codes.insert("key:1".into(), Some("D".into()));
+    let planned = plan(&set, &km, &answered);
+    assert_eq!(code_texts(&planned.report)[0], pair("key:1", Some("D")));
+    let save = planned.commands.iter().find(|p| p.command == CommandRef::new("file.save")).expect("Save is in the plan");
+    assert!(save.bindings.iter().any(|p| p.binding == b("Cmd+D")), "{:?}", save.bindings);
+
+    // Decoded codes carried as answers stay decoded when too few votes remain.
+    let carried = ImportOptions { codes: voted.codes.iter().map(|c| (c.code.clone(), c.text.clone())).collect(), ..ImportOptions::default() };
+    let again = plan(&ForeignSet::new(vec![coded("Save", 1, Some(9))]), &km, &carried).report;
+    assert_eq!(code_texts(&again), code_texts(&voted));
+
+    // A code answered None skips its keys, whatever the modifier answer is.
+    let mut skip = ImportOptions::default();
+    skip.codes.insert("key:1".into(), None);
+    skip.codes.insert("mods:9".into(), Some("Alt".into()));
+    let planned = plan(&set, &km, &skip);
+    assert!(planned.commands.is_empty() && planned.report.unreadable.is_empty());
+    assert!(code_texts(&planned.report).contains(&pair("key:1", None)));
+
+    // An entry the user answered "No equivalent" is left out and listed.
+    let save = || win("File", &["Save"], &[("Default", "Ctrl+Alt+S")]);
+    let mut options = windows_options();
+    options.remembered.insert(save().remember_key(), None);
+    let planned = plan(&ForeignSet::new(vec![save()]), &km, &options);
+    let unmatched: Vec<(&str, UnmatchedReason)> = planned.report.unmatched.iter().map(|u| (u.item.as_str(), u.reason)).collect();
+    assert_eq!(unmatched, [("File > Save", UnmatchedReason::NoEquivalent)]);
+    assert!(planned.commands.is_empty());
+}
+
+#[test]
+fn the_readers_unread_lines_reach_the_report_in_order() {
+    let lines: Vec<NotRead> = (0..=MAX_IMPORT_ENTRIES).map(|n| NotRead::new(Some(n), format!("line {n}"))).collect();
+    let set = ForeignSet::new(Vec::new()).with_not_read(lines);
+    let r = plan(&set, &mac_keymap(catalog()), &ImportOptions::default()).report;
+    assert_eq!(r.not_read.len(), MAX_IMPORT_ENTRIES);
+    assert_eq!(r.not_read.first(), Some(&NotRead::new(Some(0), "line 0")));
+    assert_eq!(r.not_read.last(), Some(&NotRead::new(Some(MAX_IMPORT_ENTRIES - 1), format!("line {}", MAX_IMPORT_ENTRIES - 1))));
+    assert_eq!(r.truncated, 1, "the line past the cap is counted");
 }
 
 /// A command's main default key stays its main key, whichever order the set lists its keys in.

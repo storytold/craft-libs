@@ -10,7 +10,7 @@ use crate::notices::{Notice, NoticeLayout};
 use crate::primitives::IconSpec;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::Initial;
-use crate::runtime::overlay::CloseReason;
+use crate::runtime::overlay::{CloseReason, LayerRole};
 use crate::sections::{DialogRole, FooterButton, Section};
 use craft_behavior::{IconId, Mixed};
 use craft_keymap::{Chord, mnemonic};
@@ -35,6 +35,11 @@ impl Reply {
     /// An answer with a letter.
     pub(super) fn new(label: impl Into<Label>, role: DialogRole) -> Self {
         Reply { label: label.into(), role, lettered: true, chord: None, enabled: true, reason: None }
+    }
+
+    /// The answer's label.
+    pub(super) fn label(&self) -> &Label {
+        &self.label
     }
 
     /// An answer without a letter.
@@ -144,11 +149,6 @@ fn default_answer(answers: &[FooterButton]) -> Option<usize> {
     default_position(answers).filter(|at| answers[*at].is_enabled())
 }
 
-/// Whether the answers include a default one, available or not.
-fn has_default(answers: &[FooterButton]) -> bool {
-    default_position(answers).is_some()
-}
-
 type Below<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
 /// What a prompt shows under its message, in this order: a tone line, paragraphs, a list of lines, a collapsible
@@ -227,6 +227,9 @@ pub struct Prompt<'a> {
     escape: Option<DialogRole>,
     /// Whether the dialog reports the alert-dialog role, described by the message and any tone.
     alert: bool,
+    /// What the dialog's layer is for: `LayerRole::Progress` for a job's progress window.
+    #[prop(vis = "pub(super)")]
+    layer_role: LayerRole,
 }
 
 impl<'a> Prompt<'a> {
@@ -241,6 +244,7 @@ impl<'a> Prompt<'a> {
             open: None,
             escape: None,
             alert: false,
+            layer_role: LayerRole::Plain,
         }
     }
 
@@ -303,12 +307,16 @@ impl<'a> Prompt<'a> {
 
     /// Shows the prompt.
     pub fn show(self, ui: &mut Ui) -> PromptOutput {
-        let Prompt { title, message, answers, extras, icon, open, escape, alert } = self;
+        let Prompt { title, message, answers, extras, icon, open, escape, alert, layer_role } = self;
         let (escape_at, enter_at) = (escape_answer(&answers, escape), default_answer(&answers));
-        // A blocked default answer leaves focus off the buttons: landing on the first other one would let Enter answer
-        // with it (Discard under a blocked Recover).
-        let initial = if enter_at.is_none() && has_default(&answers) { Initial::Keep } else { Initial::Default };
-        let mut dialog = Dialog::prompt(title).buttons(answers).initial_focus(initial).close_on_enter(enter_at.is_some());
+        // With no available default answer (none, or a blocked one) focus stays off the buttons: landing on the first
+        // other one would let Enter answer with it (Discard under a blocked Recover, Cancel in a job window).
+        let initial = if enter_at.is_some() { Initial::Default } else { Initial::Keep };
+        let mut dialog = Dialog::prompt(title)
+            .buttons(answers)
+            .initial_focus(initial)
+            .close_on_enter(enter_at.is_some())
+            .overlay(|overlay| overlay.role(layer_role));
         if alert {
             let env = Env::of(ui);
             let view = env.view();

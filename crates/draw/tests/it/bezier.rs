@@ -415,6 +415,104 @@ fn hit_test_matches_the_overlays_press_priority() {
     }
 }
 
+/// The paint of `selection` over both paths, as text.
+fn painted(selection: PathSelection) -> String {
+    let mut h = two_paths();
+    h.update(|st| st.selection = selection);
+    format!("{:?}", h.fixture.frame_shapes())
+}
+
+// An anchor listed in `others` draws selected but is no part of the edit: no handle of it answers a hit, and a press
+// on it edits only that anchor, never the edited path's selected knots.
+#[trial]
+fn anchors_of_other_paths_draw_selected_and_stay_out_of_the_edit() {
+    let mut other = path_b();
+    other.subpaths[0].knots[0] = Knot::smooth(p(60.0, 200.0), p(90.0, 170.0));
+    let mut h = harness(vec![path_a(), other]);
+    h.update(|st| st.selection = sel(1, &[(0, 1)]).also(2, vec![kr(0)]));
+    let view = h.state.borrow().view.expect("shown");
+    {
+        let st = h.state.borrow();
+        let at = h.screen(p(90.0, 170.0));
+        let hit = BezierOverlay::hit_test(&st.paths, &st.selection, HandlesShown::Selected, &view, at, 6.0);
+        assert!(!matches!(hit, Some(BezierHit::Handle { .. })), "{hit:?}");
+    }
+    let anchor = h.screen(p(60.0, 200.0));
+    h.drag(anchor, vec2(0.0, FAR));
+    let change = h.last_change();
+    assert!(matches!(&change, Some(PathEdit::MoveAnchors { path: 2, anchors, .. }) if *anchors == vec![kr(0)]), "{change:?}");
+
+    let listed = painted(sel(1, &[]).also(2, vec![kr(0)]));
+    assert_eq!(listed, painted(sel(2, &[(0, 0)])), "a listed anchor fills as a selected one");
+    assert_ne!(listed, painted(sel(1, &[])), "and differs from an unselected one");
+}
+
+// One anchor selected over all paths shows its handles; one in each path is two, so none.
+#[trial]
+fn one_anchor_shows_handles_only_while_one_anchor_is_selected_over_all_paths() {
+    let mut h = two_paths();
+    h.update(|st| st.handles = HandlesShown::OneAnchor);
+    let view = h.state.borrow().view.expect("shown");
+    let handle = h.screen(p(290.0, 100.0));
+    let test = |selection: PathSelection| {
+        let st = h.state.borrow();
+        BezierOverlay::hit_test(&st.paths, &selection, HandlesShown::OneAnchor, &view, handle, 6.0)
+    };
+    assert!(matches!(test(sel(1, &[(0, 2)])), Some(BezierHit::Handle { path: 1, .. })));
+    let two = test(sel(1, &[(0, 2)]).also(2, vec![kr(0)]));
+    assert!(!matches!(two, Some(BezierHit::Handle { .. })), "{two:?}");
+    let none = test(PathSelection::default());
+    assert!(!matches!(none, Some(BezierHit::Handle { .. })), "{none:?}");
+}
+
+// Under `OneAnchor` the handles of an anchor listed in `others` draw while it is the only selected anchor over all
+// paths, as `Selected` draws them; with an anchor of a third path listed too, neither path's handles draw.
+#[trial]
+fn one_anchor_draws_other_paths_handles_only_while_one_anchor_is_selected_over_all_paths() {
+    let painted_with = |selection: PathSelection, handles: HandlesShown| {
+        let mut other = path_b();
+        other.subpaths[0].knots[0] = Knot::smooth(p(60.0, 200.0), p(90.0, 170.0));
+        let third =
+            EditPath::new(3, vec![EditSubpath::new(vec![Knot::smooth(p(300.0, 220.0), p(330.0, 190.0)), Knot::corner(p(360.0, 260.0))], false)]);
+        let mut h = harness(vec![path_a(), other, third]);
+        h.update(|st| (st.selection, st.handles) = (selection, handles));
+        format!("{:?}", h.fixture.frame_shapes())
+    };
+    let one = || sel(1, &[]).also(2, vec![kr(0)]);
+    assert_eq!(painted_with(one(), HandlesShown::OneAnchor), painted_with(one(), HandlesShown::Selected));
+    let two = || sel(1, &[]).also(2, vec![kr(0)]).also(3, vec![kr(0)]);
+    assert_ne!(painted_with(two(), HandlesShown::OneAnchor), painted_with(two(), HandlesShown::Selected));
+    assert_eq!(
+        painted_with(two(), HandlesShown::OneAnchor),
+        painted_with(sel(1, &[]).also(2, vec![kr(0)]).also(3, vec![kr(0)]), HandlesShown::OneAnchor),
+        "painting is the same from frame to frame"
+    );
+}
+
+// A frame reads the selection's anchor lists a number of times that grows with the selection, not with its square:
+// doubling the selected anchors of the edited path and the number of other paths listed at most doubles the entries
+// read (a search of the lists for each anchor laid out or drawn quadruples them).
+#[trial]
+fn a_frame_reads_the_selections_anchor_lists_in_proportion_to_the_selection() {
+    let reads_for = |n: usize| {
+        let knot = |i: usize| Knot::smooth(p(20.0 + (i % 40) as f64 * 12.0, 20.0 + (i / 40) as f64 * 12.0), p(26.0 + (i % 40) as f64 * 12.0, 20.0));
+        let edited = EditPath::new(1, vec![EditSubpath::new((0..n).map(knot).collect(), false)]);
+        let others: Vec<EditPath> =
+            (0..n).map(|i| EditPath::new(2 + i as u64, vec![EditSubpath::new((0..4).map(|k| knot(i * 4 + k)).collect(), true)])).collect();
+        let mut selection = PathSelection::new(Some(1), (0..n).map(kr).collect(), None);
+        for other in &others {
+            selection = selection.also(other.key, (0..4).map(kr).collect());
+        }
+        let mut h = harness(std::iter::once(edited).chain(others).collect());
+        craft_draw::ui::pen::bezier::reads::take();
+        h.update(|st| st.selection = selection);
+        craft_draw::ui::pen::bezier::reads::take()
+    };
+    let (small, large) = (reads_for(60), reads_for(120));
+    assert!(small > 0, "the frame reads the selection");
+    assert!(large < small * 3, "{small} entries read for 60 selected paths, {large} for 120");
+}
+
 // Hovering a segment under Add reports the segment with its parameter, which the preview anchor stands at.
 
 // `AnchorsShown::Hidden` draws outlines only: no anchor, no handle, no part, no AccessKit object.
@@ -686,6 +784,33 @@ fn shift_keeps_an_anchor_drag_on_the_axis_or_the_diagonal() {
         assert!(proposed.distance(want) < 1e-3, "({dx}, {dy}) proposes {proposed:?}, wants {want:?}");
         assert!(committed.distance(proposed) < 1e-9, "({dx}, {dy}) commits {committed:?}, proposed {proposed:?}");
         assert_eq!(st.seen.last(), Some(&Seen::Commit));
+    }
+}
+
+// ⇧ during a handle drag turns the handle to the nearest 45° about its anchor, also when pressed mid-drag: about 20°
+// lands on the axis, about 40° on the diagonal, and photocraft#15760's measured (-78, +140) on (-78, +78); without ⇧
+// the handle follows the pointer.
+#[trial]
+fn shift_locks_a_handle_drag_to_the_nearest_45_degrees() {
+    let anchor = p(260.0, 60.0);
+    let cases =
+        [(p(360.0, 96.0), p(360.0, 60.0)), (p(340.0, 127.0), p(327.0, 127.0)), (anchor + Vec2::new(-78.0, 140.0), anchor + Vec2::new(-78.0, 78.0))];
+    for (shift, (target, locked)) in cases.iter().flat_map(|c| [(true, *c), (false, *c)]) {
+        let mut h = two_paths();
+        h.update(|st| st.selection = sel(1, &[(0, 2)]));
+        let handle = h.screen(p(290.0, 100.0));
+        let to = h.screen(target);
+        h.press_at(handle);
+        h.move_to(handle + (to - handle) * 0.5);
+        if shift {
+            h.fixture.hold(egui::Modifiers::SHIFT);
+        }
+        h.move_to(to);
+        let Some(PathEdit::MoveHandle { to: got, .. }) = h.last_change() else { panic!("a handle move: {:?}", h.last_change()) };
+        h.release_at(to);
+        h.fixture.hold(egui::Modifiers::NONE);
+        let want = if shift { locked } else { target };
+        assert!(got.distance(want) < 1e-3, "shift {shift}: {target:?} gives {got:?}, wants {want:?}");
     }
 }
 

@@ -3,7 +3,7 @@
 
 use craft_behavior::geometry::{SnapKind, SnapLine, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GesturePhase, PointerButton, PointerSample};
+use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GesturePhase, PointerButton, PointerKind, PointerSample};
 use craft_keymap::Mods;
 use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasScrollbars, CanvasTool, ContextRequest, CropOverlay, HandTool, Momentary, MomentaryCommands, MomentaryTool,
@@ -11,20 +11,26 @@ use craft_ui::canvas::{
     canvas_space, tool_pass,
 };
 use craft_ui::contract::tooltip::DELAY;
-use craft_ui::contract::{Bind, MemoProps, MemoView, Sampler as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{
+    Bind, Common, Component, Cx, DragPreview, DropMark, DropTarget, MeasureCx, MemoProps, MemoView, Pointer as _, Props as _, Sampler as _,
+    Show as _, ShowContainer as _,
+};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::commands::{CommandGate, CommandSet as _};
+use craft_ui::runtime::drag;
 use craft_ui::runtime::frame;
 use craft_ui::runtime::windows::WindowHost;
-use craft_ui::style::DataColor;
+use craft_ui::style::{DataColor, StyleCx};
+use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Fixture, MemoRun, ToolFixture, last_frame_memo_runs, pointer, trial};
 use craft_ui::text::NumberField;
-use egui::{Color32, Id, Key, Modifiers, Pos2, Rect, Shape, Vec2};
+use craft_ui_test_kit::contract::PlainStyle;
+use egui::{Color32, Event, Id, Key, Modifiers, Pos2, Rect, Response, Shape, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -868,15 +874,17 @@ fn a_queued_space_covers_the_moves_queued_after_it_and_not_those_after_its_relea
     let at = rig.centre();
     let (ctx, canvas) = (rig.fixture.ctx().clone(), rig.canvas.get());
     let space = craft_keymap::Key::Space;
+    // Short steps keep every move clear of the edge band, where a resting pointer gets a drag in each pass.
+    let step = BY / 2.0;
     for input in [
         ToolInput::down(PointerButton::Primary, at),
-        ToolInput::moved(at + BY),
+        ToolInput::moved(at + step),
         ToolInput::hold(space),
-        ToolInput::moved(at + BY * 2.0),
-        ToolInput::moved(at + BY * 3.0),
+        ToolInput::moved(at + step * 2.0),
+        ToolInput::moved(at + step * 3.0),
         ToolInput::let_go(space),
-        ToolInput::moved(at + BY * 4.0),
-        ToolInput::up(at + BY * 4.0),
+        ToolInput::moved(at + step * 4.0),
+        ToolInput::up(at + step * 4.0),
     ] {
         ToolHost::inject(&ctx, canvas, input);
     }
@@ -904,20 +912,25 @@ fn a_held_space_ends_when_the_injected_input_is_cancelled() {
     assert_eq!(rig.main.borrow().space_drags, [true, false], "Space is held for the first drag and not after the cancel");
 }
 
-/// A tool that records the pen pressure of its press and drags.
+/// A tool that records the pen pressure of its press and drags, and the click count of each press.
 #[derive(Default)]
 struct PenProbe {
     pressures: Vec<f32>,
+    kinds: Vec<PointerKind>,
+    clicks: Vec<u32>,
 }
 
 impl CanvasTool for PenProbe {
     fn press(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        self.clicks.push(pointer.clicks);
         self.pressures.push(pointer.sample.pressure);
+        self.kinds.push(pointer.kind);
         ToolAction::Claimed
     }
 
     fn drag(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) {
         self.pressures.push(pointer.sample.pressure);
+        self.kinds.push(pointer.kind);
     }
 
     fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
@@ -931,12 +944,9 @@ impl CanvasTool for PenProbe {
     }
 }
 
-/// An injected pen reading reaches the tool as a tablet's does: the press and the drag carry the pressure their steps
-/// were injected with.
-#[trial]
-fn an_injected_pen_reading_reaches_the_tool() {
-    let probe = Rc::new(RefCell::new(PenProbe::default()));
-    let (shown_probe, canvas) = (Rc::clone(&probe), Rc::new(Cell::new(Id::NULL)));
+/// A canvas showing `probe` as its tool; the canvas's id is in the returned cell after the first pass.
+fn probe_fixture(probe: &Rc<RefCell<PenProbe>>) -> (Fixture, Rc<Cell<Id>>) {
+    let (shown_probe, canvas) = (Rc::clone(probe), Rc::new(Cell::new(Id::NULL)));
     let shown_canvas = Rc::clone(&canvas);
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
@@ -948,6 +958,42 @@ fn an_injected_pen_reading_reaches_the_tool() {
         shown_canvas.set(shown.output.response.id);
     });
     fixture.settle();
+    (fixture, canvas)
+}
+
+/// Injected clicks in a row reach the tool as one press each, counted as a double and then a triple click.
+#[trial]
+fn injected_clicks_reach_the_tool_as_a_multi_click() {
+    let probe = Rc::new(RefCell::new(PenProbe::default()));
+    let (mut fixture, canvas) = probe_fixture(&probe);
+    let at = fixture.by_role(Role::CANVAS)[0].rect.center();
+    ToolHost::inject(&fixture.ctx().clone(), canvas.get(), ToolInput::clicks(PointerButton::Primary, at, 3));
+    fixture.run_injected();
+    let clicks = probe.borrow().clicks.clone();
+    assert!(clicks.len() == 3 && clicks.windows(2).all(|pair| pair[1] > pair[0]), "each press counts one more: {clicks:?}");
+    assert_eq!(clicks.last(), Some(&3), "the third press is a triple click");
+}
+
+/// Two clicks whose presses and releases all came in one frame (a stalled window delivers a double click at once)
+/// reach the tool as two presses in the frames the runtime asks for (one press per pass), the second counted as a
+/// double click.
+#[trial]
+fn two_clicks_in_one_frame_reach_the_tool_as_a_double_click() {
+    let probe = Rc::new(RefCell::new(PenProbe::default()));
+    let (mut fixture, _) = probe_fixture(&probe);
+    let at = fixture.by_role(Role::CANVAS)[0].rect.center();
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![pointer::press(at), pointer::release(at), pointer::press(at), pointer::release(at)]).settle();
+    let clicks = probe.borrow().clicks.clone();
+    assert!(clicks.len() == 2 && clicks[1] > clicks[0], "each click reaches the tool, the second counted on: {clicks:?}");
+}
+
+/// An injected pen reading reaches the tool as a tablet's does: the press and the drag carry the pressure their steps
+/// were injected with, and the pointer kind of a pen.
+#[trial]
+fn an_injected_pen_reading_reaches_the_tool() {
+    let probe = Rc::new(RefCell::new(PenProbe::default()));
+    let (mut fixture, canvas) = probe_fixture(&probe);
     let at = fixture.by_role(Role::CANVAS)[0].rect.center();
     let ctx = fixture.ctx().clone();
     for input in [
@@ -960,6 +1006,171 @@ fn an_injected_pen_reading_reaches_the_tool() {
     fixture.run_injected();
     let pressures = probe.borrow().pressures.clone();
     assert!(pressures.len() == 2 && (pressures[0] - 0.3).abs() < 1e-4 && (pressures[1] - 0.7).abs() < 1e-4, "{pressures:?}");
+    let kinds = probe.borrow().kinds.clone();
+    assert_eq!(kinds, [PointerKind::Pen, PointerKind::Pen], "the press and the drag of a pen reach the tool as a pen's");
+}
+
+/// A pass whose only news is a key or a modifier change hovers a still pointer and drags a still press once, in the
+/// frame's first pass; the rerun pass of the same frame, which has no input, does neither.
+#[trial]
+fn a_pass_with_only_a_key_or_modifier_change_re_hovers_a_still_pointer_and_re_drags_a_still_press_once() {
+    let log = Log::default();
+    let rerun = Rc::new(Cell::new(false));
+    let mut rig = Rig::with(Probe::new("main", &log), &log, None, Setup { rerun: Rc::clone(&rerun), ..Setup::default() });
+    let at = rig.centre();
+    let count = |rig: &Rig, call: &str| rig.calls().iter().filter(|logged| logged.as_str() == call).count();
+
+    rig.fixture.frame(vec![pointer::moved(at)]).idle(2);
+    rig.log.borrow_mut().clear();
+    rig.fixture.idle(1);
+    assert_eq!(count(&rig, "main hover"), 0, "a still pointer is not hovered again by a pass with no news: {:?}", rig.calls());
+
+    rerun.set(true);
+    rig.fixture.frame(vec![key_press(Key::A, Modifiers::NONE)]);
+    assert_eq!(count(&rig, "main hover"), 1, "a key press hovers the still pointer once, the rerun pass not again: {:?}", rig.calls());
+
+    rig.log.borrow_mut().clear();
+    rerun.set(true);
+    rig.fixture.hold(Modifiers::SHIFT).frame(vec![Event::ModifiersChanged(Modifiers::SHIFT)]);
+    assert_eq!(count(&rig, "main hover"), 1, "Shift going down hovers the still pointer once: {:?}", rig.calls());
+    rig.fixture.hold(Modifiers::NONE).frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+
+    rig.fixture.frame(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]).idle(1);
+    rig.log.borrow_mut().clear();
+    rig.fixture.idle(1);
+    assert_eq!(count(&rig, "main drag"), 0, "a still press is not dragged by a pass with no news: {:?}", rig.calls());
+    rerun.set(true);
+    rig.fixture.frame(vec![key_press(Key::B, Modifiers::NONE)]);
+    assert_eq!(count(&rig, "main drag"), 1, "a key press drags the still press once, the rerun pass not again: {:?}", rig.calls());
+    rig.fixture.frame(vec![pointer::release(at + BY)]);
+}
+
+/// What the drag session of `DropperTool` carries.
+#[derive(Clone, Debug, PartialEq)]
+struct Parcel(u32);
+
+/// Takes every `Parcel` dropped on it.
+struct TakesParcel;
+
+impl DropTarget<Parcel> for TakesParcel {
+    type Drop = u32;
+
+    fn accept(&self, payload: &Parcel, _: Pos2, _: craft_behavior::DropOperation) -> Option<u32> {
+        Some(payload.0)
+    }
+
+    fn mark(&self, _: &u32) -> DropMark {
+        DropMark::region(TARGET)
+    }
+}
+
+/// Where the drop target lies in the fixture's room: the room's top left corner.
+const TARGET: Rect = Rect { min: Pos2::new(0.0, 0.0), max: Pos2::new(100.0, 50.0) };
+
+/// A drop target for `Parcel`s that records what it took.
+#[derive(Component)]
+struct DropSlot<'a> {
+    #[common]
+    common: Common,
+    taken: &'a RefCell<Vec<u32>>,
+}
+
+impl Component for DropSlot<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: DropSlotStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        TARGET.size()
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if let Some(parcel) = cx.drop_target(&TakesParcel) {
+            self.taken.borrow_mut().push(parcel);
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// A tool that hands a `Parcel` to a drag session in every drag and notes whether a target would take it.
+struct DropperTool {
+    seen: Rc<RefCell<Vec<(&'static str, bool)>>>,
+}
+
+impl CanvasTool for DropperTool {
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, cx: &mut ToolContext<'_>) {
+        cx.start_drag(Parcel(7), DragPreview::None);
+        self.seen.borrow_mut().push(("drag", cx.over_drop_target()));
+    }
+
+    fn release(&mut self, _: &ToolPointer, cx: &mut ToolContext<'_>) {
+        self.seen.borrow_mut().push(("release", cx.over_drop_target()));
+    }
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Freehand("the probe only records")
+    }
+}
+
+/// A tool's `start_drag` starts one session under the canvas, however many `drag` calls repeat it; a target takes the
+/// drop, `over_drop_target` is true in `release` over the target and false off it, and the session ends with the
+/// gesture.
+#[trial]
+fn a_tools_start_drag_session_reaches_a_target_and_the_tool_reads_over_drop_target_at_its_release() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let taken = Rc::new(RefCell::new(Vec::new()));
+    let tool = Rc::new(RefCell::new(DropperTool { seen: Rc::clone(&seen) }));
+    let (shown_tool, shown_taken) = (Rc::clone(&tool), Rc::clone(&taken));
+    let canvas = Rc::new(Cell::new(Id::NULL));
+    let shown_canvas = Rc::clone(&canvas);
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let shown = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 1.0)).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                let _ = ToolHost::new().run(ui, &pass, &mut *shown_tool.borrow_mut());
+            }
+        });
+        shown_canvas.set(shown.output.response.id);
+        DropSlot { common: Common::new(), taken: &shown_taken }.id_salt("slot").show_at(ui, TARGET.translate(room.min.to_vec2()));
+    });
+    fixture.settle();
+    let room = fixture.by_role(Role::CANVAS)[0].rect;
+    let (at, slot) = (room.center(), TARGET.translate(room.min.to_vec2()).center());
+    let ctx = fixture.ctx().clone();
+    let before = drag::started(&ctx);
+
+    fixture.frame(vec![pointer::moved(at)]).frame(vec![pointer::press(at)]);
+    for step in 1..=4 {
+        fixture.frame(vec![pointer::moved(at.lerp(slot, step as f32 / 4.0))]);
+    }
+    fixture.idle(1);
+    assert_eq!(drag::started(&ctx) - before, 1, "several drag calls start one session");
+    assert_eq!(seen.borrow().first(), Some(&("drag", false)), "no target takes the drag before the session runs: {:?}", seen.borrow());
+    fixture.frame(vec![pointer::release(slot)]).idle(1);
+    assert_eq!(seen.borrow().last(), Some(&("release", true)), "the release over the target reads it: {:?}", seen.borrow());
+    assert_eq!(taken.borrow().clone(), vec![7], "the target took the drop");
+    assert!(!ToolHost::in_gesture(&ctx, canvas.get()) && drag::mark(&ctx).is_none(), "the session ends with the gesture");
+
+    let away = at + BY;
+    fixture.frame(vec![pointer::moved(at)]).frame(vec![pointer::press(at)]).frame(vec![pointer::moved(away)]).idle(1);
+    fixture.frame(vec![pointer::release(away)]).idle(1);
+    assert_eq!(seen.borrow().last(), Some(&("release", false)), "a release off the target reads none: {:?}", seen.borrow());
+    assert_eq!(taken.borrow().clone(), vec![7], "a release off the target drops nothing");
 }
 
 /// A tool that asks for a repaint in every drag, as a brush that previews its stroke does.
@@ -1054,11 +1265,22 @@ fn momentary_canvas(main: Probe) -> CanvasRig<Id> {
 }
 
 /// `momentary_canvas` with `body` as the canvas's body.
-fn momentary_canvas_with(main: Probe, mut body: impl FnMut(&mut egui::Ui, &mut craft_ui::contract::BodyCx<'_>) + 'static) -> CanvasRig<Id> {
+fn momentary_canvas_with(main: Probe, body: impl FnMut(&mut egui::Ui, &mut craft_ui::contract::BodyCx<'_>) + 'static) -> CanvasRig<Id> {
+    momentary_canvas_under(NavigationOptions::default(), Rc::default(), main, body)
+}
+
+/// `momentary_canvas_with` under the navigation choices `options`, its host told in each pass whether the pointer
+/// `navigates`.
+fn momentary_canvas_under(
+    options: NavigationOptions,
+    navigates: Rc<Cell<bool>>,
+    main: Probe,
+    mut body: impl FnMut(&mut egui::Ui, &mut craft_ui::contract::BodyCx<'_>) + 'static,
+) -> CanvasRig<Id> {
     let main = RefCell::new(main);
     let (view, canvas) = (Rc::new(Cell::new(None::<CanvasView>)), Rc::new(Cell::new(Id::NULL)));
     let (shown_view, shown_canvas) = (Rc::clone(&view), Rc::clone(&canvas));
-    let mut set = Momentary::new(NavigationOptions::default());
+    let mut set = Momentary::new(options);
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let current = shown_view.get().unwrap_or_else(|| CanvasView::new(room, Point::new(600.0, 450.0), 4.0));
@@ -1066,7 +1288,7 @@ fn momentary_canvas_with(main: Probe, mut body: impl FnMut(&mut egui::Ui, &mut c
         let shown = Canvas::new("Document").document(DOCUMENT).view(current).show(ui, |ui, cx| {
             body(ui, cx);
             if let Some(pass) = tool_pass(&cx.env) {
-                reply = Some(ToolHost::new().momentary(&mut set).run(ui, &pass, &mut *main.borrow_mut()));
+                reply = Some(ToolHost::new().momentary(&mut set).navigates(navigates.get()).run(ui, &pass, &mut *main.borrow_mut()));
             }
         });
         shown_canvas.set(shown.output.response.id);
@@ -1100,6 +1322,54 @@ fn a_queued_space_held_over_a_press_pans_with_the_hand_and_the_press_after_its_r
     let calls = log.borrow().clone();
     assert_eq!(calls.iter().filter(|call| *call == "main press").count(), 1, "only the press after the release is the selected tool's: {calls:?}");
     assert!(!calls.iter().any(|call| call == "main drag"), "the Hand's drag never reaches the selected tool: {calls:?}");
+}
+
+/// Palm rejection: a press the host says navigates (a finger once a pen has been seen) pans with the Hand to its
+/// release, even once the host stops saying so mid-drag, and never reaches the selected tool; the next press that does
+/// not navigate is the tool's.
+#[trial]
+fn a_press_the_host_says_navigates_pans_with_the_hand_to_its_release() {
+    let log = Log::default();
+    let navigates = Rc::new(Cell::new(true));
+    let (mut fixture, view, _) = momentary_canvas_under(NavigationOptions::default(), Rc::clone(&navigates), Probe::new("main", &log), |_, _| {});
+    let at = fixture.by_role(Role::CANVAS)[0].rect.center();
+    let before = view.get().expect("the canvas ran").center;
+    fixture.frame(vec![pointer::moved(at)]).frame(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY * 0.5)]);
+    navigates.set(false);
+    fixture.frame(vec![pointer::moved(at + BY)]).frame(vec![pointer::release(at + BY)]).settle();
+    assert_ne!(view.get().expect("the canvas ran").center, before, "the navigating press pans the view");
+    let calls = log.borrow().clone();
+    let pressed = |call: &String| ["main press", "main drag", "main release"].contains(&call.as_str());
+    assert!(!calls.iter().any(pressed), "the navigating press never reaches the selected tool: {calls:?}");
+    fixture.frame(vec![pointer::press(at)]).frame(vec![pointer::release(at)]).settle();
+    let calls = log.borrow().clone();
+    assert_eq!(calls.iter().filter(|call| *call == "main press").count(), 1, "the next press is the selected tool's: {calls:?}");
+}
+
+/// The zoom rectangle of a momentary Zoom that Cmd+Space started keeps being sized by the drag once Cmd is let go, and
+/// moves with Space once Space is let go and pressed again, as a marquee does: the release zooms to the moved
+/// rectangle. Space held since the press sizes it until let go.
+#[trial]
+fn space_pressed_again_moves_a_cmd_space_zoom_rectangle() {
+    let log = Log::default();
+    let mut options = NavigationOptions::default();
+    options.scrubby_zoom = false;
+    options.animated_zoom = false;
+    let (mut fixture, view, _) = momentary_canvas_under(options, Rc::default(), Probe::new("main", &log), |_, _| {});
+    let room = fixture.by_role(Role::CANVAS)[0].rect;
+    let at = room.center() - Vec2::new(180.0, 90.0);
+    let before = view.get().expect("the canvas ran").zoom;
+    let (none, by) = (Modifiers::NONE, |x: f32| at + Vec2::new(x, x / 2.0));
+    fixture.hold(Modifiers::COMMAND).frame(vec![pointer::moved(at), key_press(Key::Space, Modifiers::COMMAND)]);
+    fixture.frame(vec![pointer::press(at)]).frame(vec![pointer::moved(by(100.0))]);
+    fixture.hold(none).frame(vec![pointer::moved(by(200.0))]);
+    fixture.frame(vec![key_release(Key::Space, none)]);
+    fixture.frame(vec![key_press(Key::Space, none), pointer::moved(by(240.0))]).frame(vec![pointer::moved(by(280.0))]);
+    fixture.frame(vec![key_release(Key::Space, none), pointer::moved(by(360.0))]).frame(vec![pointer::release(by(360.0))]).settle();
+    let zoomed = view.get().expect("the canvas ran").zoom / before;
+    // Moved by Space, the rectangle spans 280 x 140 points; never moved, it would span 360 x 180.
+    let fit = |w: f32, h: f32| f64::from((room.width() / w).min(room.height() / h));
+    assert!((zoomed - fit(280.0, 140.0)).abs() < (zoomed - fit(360.0, 180.0)).abs(), "zoomed by {zoomed}: to the moved rectangle");
 }
 
 /// The momentary Zoom's direction comes from the keys that chose it: a click with Alt and Space held zooms out, and the
@@ -1513,6 +1783,29 @@ fn a_drag_past_the_canvas_edge_scrolls_the_view_and_a_turned_view_scrolls_on_the
     }
 }
 
+/// A drag held still in the band inside the canvas edge scrolls the view: a canvas that fills the screen leaves the
+/// pointer no room past its edge. A drag held away from the edge leaves the view.
+#[trial]
+fn a_drag_held_in_the_band_inside_the_canvas_edge_scrolls_the_view() {
+    let (mut fixture, view) = scroll_canvas(Rc::new(RefCell::new(Recorder::default())), 0.0);
+    let canvas = fixture.by_role(Role::CANVAS)[0].rect;
+    let centre = || view.get().expect("the canvas ran").center;
+    let start = canvas.center();
+    fixture.frame(vec![pointer::press(start)]);
+    fixture.frame(vec![pointer::moved(start + Vec2::new(30.0, 0.0))]);
+    let held = centre();
+    fixture.idle(3);
+    assert_eq!(centre(), held, "a drag held away from the edge leaves the view");
+
+    let band = Pos2::new(canvas.right() - 4.0, start.y);
+    fixture.frame(vec![pointer::moved(band)]);
+    let entered = centre();
+    fixture.idle(3);
+    let rested = centre();
+    assert!(rested.x > entered.x && rested.y == entered.y, "resting in the band scrolls toward the edge: {entered:?} -> {rested:?}");
+    fixture.frame(vec![pointer::release(band)]);
+}
+
 /// A canvas whose app reads the window's intents after the tool host, last in its UI: returns the fixture and how many
 /// Cancels the window took.
 fn window_reading_canvas(tool: impl CanvasTool + 'static) -> (Fixture, Rc<Cell<u32>>) {
@@ -1687,6 +1980,74 @@ fn a_drags_readout_is_not_reported_in_the_pass_its_release_ends_the_gesture() {
     assert!(reported.get(), "the drag reports its readout");
     fixture.frame(vec![pointer::release(centre + BY)]);
     assert!(!reported.get(), "the release pass reports none");
+}
+
+/// A tool whose drag asks for a readout while `asks` holds and for none once it is cleared.
+struct Pausing {
+    asks: Rc<Cell<bool>>,
+}
+
+impl CanvasTool for Pausing {
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, cx: &mut ToolContext<'_>) {
+        if self.asks.get() {
+            cx.readout(vec![(craft_ui::runtime::env::Label::from("W"), "123 px".to_owned())]);
+        }
+    }
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the Pause command")
+    }
+}
+
+#[trial]
+fn a_drags_readout_stands_in_the_passes_between_its_moves() {
+    let reported = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&reported);
+    let asks = Rc::new(Cell::new(true));
+    let tool = RefCell::new(Pausing { asks: Rc::clone(&asks) });
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let mut reply = None;
+        let _ = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 0.5)).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                reply = Some(ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut()));
+            }
+        });
+        seen.set(reply.unwrap_or_default().readout.is_some());
+    });
+    fixture.settle();
+    let centre = fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas").center();
+    fixture.frame(vec![pointer::moved(centre)]);
+    fixture.frame(vec![pointer::press(centre)]);
+    for step in 1..=4 {
+        fixture.frame(vec![pointer::moved(centre + BY * (step as f32 / 4.0))]);
+    }
+    // A pass with no move (the pointer rests, the ants or anything else repaint) gives the tool no drag call.
+    for _ in 0..3 {
+        fixture.frame(Vec::new());
+        assert!(reported.get(), "the readout stays while the pointer rests mid-drag");
+        assert!(fixture.texts().iter().any(|run| run.text.contains("123 px")), "and it still paints");
+    }
+    asks.set(false);
+    fixture.frame(vec![pointer::moved(centre + BY * 1.25)]);
+    assert!(!reported.get(), "a drag that asks for none drops it");
+    fixture.frame(Vec::new());
+    assert!(!reported.get(), "and it does not come back while the pointer rests");
+    asks.set(true);
+    fixture.frame(vec![pointer::moved(centre + BY * 1.5)]);
+    fixture.frame(vec![pointer::release(centre + BY * 1.5)]);
+    fixture.frame(Vec::new());
+    assert!(!reported.get(), "the readout ends with its gesture");
 }
 
 #[trial]

@@ -12,7 +12,8 @@ pub enum Initial {
     Keep,
     /// The scope's first stop.
     First,
-    /// The scope's first text or number field, else its default stop, else nothing: a dialog's default.
+    /// The scope's first text or number field, else its default stop, else the first stop of its body, else nothing:
+    /// a dialog's default. A footer's or a header's buttons are not taken by the last rule.
     FirstField,
     /// The stop registered as the default.
     Default,
@@ -295,7 +296,9 @@ pub struct KeyUse {
     pub keep: KeepKeys,
     /// The keys that activate.
     pub activate: ActivateKeys,
-    /// Chords kept from the shortcut dispatcher while focused.
+    /// Chords kept from the shortcut dispatcher, and from Alt+numpad code entry, while focused, and for the window's
+    /// document canvas also while nothing has the focus. An app's own egui widget (`focus::host_canvas`) reads their
+    /// presses from egui's input; a framework component reads them as claimed chords.
     pub claims: &'static [Chord],
     /// Edit commands delivered as `Intent::Edit`.
     pub edits: EditSet,
@@ -342,6 +345,10 @@ pub struct KeyUse {
     /// The component is a text field whose draft a press on a part declared `holds_drafts`, or on a popup layer above
     /// it, leaves unapplied; a lone Alt in the field only alerts and a window deactivation does not commit the draft.
     pub holds_drafts: bool,
+    /// While the component types, chords with the platform's command modifier and function keys still run the app's
+    /// commands whatever the app's typing rule, as under `TypingRule::CommandKeysOnly`; the text editing chords stay
+    /// the component's. For a canvas tool's text editor whose app runs its commands while typing.
+    pub command_keys: bool,
 }
 
 /// Which Tab stops a dialog's Tab order visits.
@@ -379,6 +386,7 @@ impl KeyUse {
         session: false,
         type_ahead: false,
         holds_drafts: false,
+        command_keys: false,
     };
     /// A divider between panes: it takes the arrows as moves of its value, but it is no document and no canvas tool, so
     /// it marks no window as showing a document and takes no nudges.
@@ -421,12 +429,19 @@ impl KeyUse {
             session: false,
             type_ahead: false,
             holds_drafts: false,
+            command_keys: false,
         }
     }
 
     /// The same use declaring that a press that would apply the focused draft leaves it unapplied (`holds_drafts`).
     pub const fn with_holds_drafts(mut self) -> Self {
         self.holds_drafts = true;
+        self
+    }
+
+    /// The same use letting command chords and function keys run the app's commands while it types (`command_keys`).
+    pub const fn with_command_keys(mut self) -> Self {
+        self.command_keys = true;
         self
     }
 

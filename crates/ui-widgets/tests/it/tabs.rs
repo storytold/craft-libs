@@ -14,6 +14,9 @@ use std::rc::Rc;
 
 const TITLES: [&str; 3] = ["One", "Two", "Three"];
 
+/// Frames a rest of the tooltip delay takes: every frame adds 1/60 s.
+const REST_FRAMES: usize = (craft_ui::contract::tooltip::DELAY * 60.0) as usize + 2;
+
 #[trial]
 fn overflowing_document_tabs_remain_readable_and_list_every_document() {
     use craft_ui::tabs::{DocumentTab, DocumentTabs};
@@ -184,7 +187,7 @@ fn an_arrow_moves_the_focus_and_enter_shows_the_tab() {
         let source = keyed(&keys, |key: &usize| *key);
         let out = TabStrip::new("Documents").shown(now.get()).show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
         for event in &out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                 && let Some(key) = keys.last()
             {
                 seen.borrow_mut().push(*key);
@@ -238,7 +241,7 @@ fn wheel_rig(wheel_selects: bool) -> (Fixture, Rc<Cell<usize>>) {
         let strip = if wheel_selects { strip.wheel_selects() } else { strip };
         let out = strip.show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
         for event in &out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                 && let Some(key) = keys.last()
             {
                 now.set(*key);
@@ -267,6 +270,22 @@ fn the_wheel_steps_the_shown_tab_only_where_the_strip_asks_for_it() {
     }
 }
 
+/// A notch of wheel scroll that arrives in four quarter-notch passes shows one tab step, as a whole notch in one pass
+/// does: a trackpad's small deltas add up instead of being dropped.
+#[trial]
+fn small_wheel_deltas_add_up_to_one_tab_step() {
+    use craft_ui::testing::pointer;
+    for parts in [4_u32, 1] {
+        let (mut fixture, shown) = wheel_rig(true);
+        let over = fixture.by_label("Two").expect("the tab's node").center();
+        fixture.frame(vec![pointer::moved(over)]).idle(1);
+        for _ in 0..parts {
+            fixture.frame(vec![pointer::wheel_lines(-1.0 / parts as f32)]).idle(2);
+        }
+        assert_eq!(shown.get(), 1, "a notch in {parts} passes shows exactly the next tab");
+    }
+}
+
 /// A double click on the empty room after the last document tab asks for a new document; a double click on a tab
 /// activates it and asks for none.
 #[trial]
@@ -290,6 +309,58 @@ fn a_double_click_on_the_empty_strip_asks_for_a_new_document() {
     let seen = seen.borrow();
     assert!(seen.contains(&DocumentTabsEvent::Activated(1)), "{seen:?}");
     assert!(!seen.contains(&DocumentTabsEvent::EmptyDoubleClick), "{seen:?}");
+}
+
+/// A tab that shows the name alone gives its whole title as its tooltip, also when the strip cuts its name.
+#[trial]
+fn a_document_tab_shows_its_own_tooltip() {
+    use craft_ui::contract::tooltip::DELAY;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    const WHOLE: &str = "Poster.vc @ 50% (CMYK/Preview)";
+    for width in [640.0, 60.0] {
+        let mut fixture = Fixture::new(|ui| {
+            let tabs = [DocumentTab::new(0_usize, "Poster.vc").tooltip(WHOLE)];
+            let _ = DocumentTabs::new("Documents", &tabs).show(ui);
+        });
+        fixture.room(egui::Vec2::new(width, 120.0)).settle();
+        let tab = tab_rect(fixture.tree(), "Poster.vc");
+        let cut = fixture.texts().iter().any(|run| run.elided);
+        assert_eq!(cut, width < 100.0, "the strip cuts the name at {width} pt only");
+        fixture.frame(vec![moved(tab.center())]).advance(DELAY).settle();
+        let texts: Vec<String> = fixture.texts().iter().map(|run| run.text.clone()).collect();
+        assert!(texts.iter().any(|text| text == WHOLE), "the whole title shows over the tab at {width} pt: {texts:?}");
+        assert!(!fixture.texts().iter().any(|run| run.text == "Poster.vc" && !run.elided && cut), "and not the name alone: {texts:?}");
+    }
+}
+
+/// A modified document tab with a name part shows the `*` right after the name, inside its text, and takes the mark's
+/// room once, as the same tab whose `*` follows the whole label does.
+#[trial]
+fn a_modified_tab_shows_its_mark_after_the_name_part() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    const NAME: &str = "Untitled-1";
+    const LABEL: &str = "Untitled-1 @ 93.5 % (RGB/Preview)";
+    let shown = |name_len: Option<usize>| {
+        let mut fixture = Fixture::new(move |ui| {
+            let mut tab = DocumentTab::new(0_usize, LABEL).modified(true);
+            if let Some(len) = name_len {
+                tab = tab.name_len(len);
+            }
+            let _ = DocumentTabs::new("Documents", &[tab]).show(ui);
+        });
+        fixture.room(egui::Vec2::new(640.0, 120.0)).settle();
+        let texts: Vec<(String, Rect)> = fixture.texts().iter().map(|run| (run.text.clone(), run.rect)).collect();
+        (texts, tab_rects(fixture.tree(), &format!("{LABEL}, modified")).first().copied())
+    };
+    let (named, named_tab) = shown(Some(NAME.len()));
+    let (whole, whole_tab) = shown(None);
+    assert!(named.iter().any(|(text, _)| text == "Untitled-1* @ 93.5 % (RGB/Preview)"), "the mark follows the name: {named:?}");
+    assert!(!named.iter().any(|(text, _)| text == "*"), "and is not drawn again after the label: {named:?}");
+    let star = whole.iter().find(|(text, _)| text == "*").map(|(_, rect)| *rect).expect("without a name part the mark follows the label");
+    assert!(whole.iter().any(|(text, _)| text == LABEL), "and the label is drawn whole: {whole:?}");
+    let (named_tab, whole_tab) = (named_tab.expect("the named tab's node"), whole_tab.expect("the whole tab's node"));
+    let apart = (named_tab.width() - whole_tab.width()).abs();
+    assert!(apart < star.width() / 2.0, "the mark takes its room once: {named_tab:?} against {whole_tab:?}, the mark {star:?}");
 }
 
 /// A middle click on a document tab asks to close it, unless the tab cannot close; it does not show the tab.
@@ -329,12 +400,22 @@ fn tab_rect(tree: &AccessTree, name: &str) -> Rect {
     tab_rects(tree, name).first().copied().expect("the tab's node")
 }
 
-/// Files from the operating system, a drag that did not start in the strip, rest over `at` for a few passes and then
-/// leave the window.
+/// The bounds of the close button of the tab named `name`.
+fn close_rect(tree: &AccessTree, name: &str) -> Rect {
+    let label = format!("Close {name}");
+    tree.with_role(Role::BUTTON)
+        .into_iter()
+        .find(|key| tree.name_of(*key) == Some(label.as_str()))
+        .and_then(|key| tree.bounds_of(key))
+        .expect("the close button's node")
+}
+
+/// Files from the operating system, a drag that did not start in the strip, rest over `at` for the tooltip delay and
+/// then leave the window.
 fn rest_files_over(frames: &mut Frames, at: Pos2, show: &mut impl FnMut(&mut Ui)) {
     frames.hover_files(&["a.png"]);
     frames.frame(vec![moved(at)], &mut *show);
-    frames.idle(3, &mut *show);
+    frames.idle(REST_FRAMES, &mut *show);
     frames.leave_files();
     frames.frame(vec![moved(at)], &mut *show);
 }
@@ -358,8 +439,9 @@ fn files_before(events: &[craft_ui::tabs::DocumentTabsEvent<usize>]) -> Option<O
     })
 }
 
-/// A drag that did not start in the strip, resting over an unselected document tab, selects it in that pass; a drag of
-/// the strip's own tab (a reorder) selects nothing it crosses, and a panel strip selects nothing under a drag.
+/// A drag that did not start in the strip, resting over an unselected document tab, selects it after the rest delay and
+/// not before; a drag of the strip's own tab (a reorder) selects nothing it crosses, and a panel strip selects nothing
+/// under a drag.
 /// `Fixture` cannot hover files from the OS, so these trials drive `Frames`.
 #[trial]
 fn a_drag_resting_over_a_tab_selects_it_unless_it_is_the_strips_own() {
@@ -374,8 +456,15 @@ fn a_drag_resting_over_a_tab_selects_it_unless_it_is_the_strips_own() {
     frames.idle(2, &mut show);
     let tree = frames.tree();
     let (one, two, three) = (tab_rect(&tree, "One"), tab_rect(&tree, "Two"), tab_rect(&tree, "Three"));
-    rest_files_over(&mut frames, two.center(), &mut show);
+    frames.hover_files(&["a.png"]);
+    frames.frame(vec![moved(two.center())], &mut show);
+    assert!(!seen.borrow().contains(&DocumentTabsEvent::Selected(1)), "files select no tab in the pass they arrive in: {:?}", seen.borrow());
+    frames.idle(REST_FRAMES / 2, &mut show);
+    assert!(!seen.borrow().contains(&DocumentTabsEvent::Selected(1)), "files select no tab before the rest delay: {:?}", seen.borrow());
+    frames.idle(REST_FRAMES, &mut show);
     assert!(seen.borrow().contains(&DocumentTabsEvent::Selected(1)), "files resting over a tab select it: {:?}", seen.borrow());
+    frames.leave_files();
+    frames.frame(vec![moved(two.center())], &mut show);
 
     seen.borrow_mut().clear();
     frames.frame(vec![moved(one.center())], &mut show);
@@ -383,7 +472,7 @@ fn a_drag_resting_over_a_tab_selects_it_unless_it_is_the_strips_own() {
     for step in 1..=4 {
         frames.frame(vec![moved(one.center().lerp(three.center(), step as f32 / 4.0))], &mut show);
     }
-    frames.idle(3, &mut show);
+    frames.idle(REST_FRAMES, &mut show);
     let crossed = seen.borrow().iter().any(|event| matches!(event, DocumentTabsEvent::Selected(1 | 2)));
     assert!(!crossed, "the strip's own drag selects no tab it rests over: {:?}", seen.borrow());
     frames.frame(vec![moved(one.center())], &mut show);
@@ -397,7 +486,7 @@ fn a_drag_resting_over_a_tab_selects_it_unless_it_is_the_strips_own() {
         let source = keyed(&keys, |key: &usize| *key);
         let out = TabStrip::new("Panels").kind(TabKind::Panel).shown(0).show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
         for event in &out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event {
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event {
                 picked.borrow_mut().extend(keys.iter().copied());
             }
         }
@@ -406,6 +495,42 @@ fn a_drag_resting_over_a_tab_selects_it_unless_it_is_the_strips_own() {
     let two = tab_rect(&frames.tree(), "Two");
     rest_files_over(&mut frames, two.center(), &mut panel);
     assert!(!picked.borrow().contains(&1), "a panel strip selects nothing under a drag: {:?}", picked.borrow());
+}
+
+/// Leaving a tab restarts the rest wait, and a rest over a tab's close button selects nothing. The strip scrolled under
+/// a still pointer is not covered here.
+#[trial]
+fn a_drag_leaving_a_tab_restarts_the_wait_and_a_rest_on_the_close_button_selects_nothing() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
+    let seen = RefCell::new(Vec::new());
+    let tabs = [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two"), DocumentTab::new(2, "Three")];
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let out = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
+        seen.borrow_mut().extend(out.events);
+    };
+    frames.idle(2, &mut show);
+    let tree = frames.tree();
+    let (one, two, three) = (tab_rect(&tree, "One"), tab_rect(&tree, "Two"), tab_rect(&tree, "Three"));
+    let close = close_rect(&tree, "Two");
+    let selected = |key: usize| seen.borrow().contains(&DocumentTabsEvent::Selected(key));
+
+    frames.hover_files(&["a.png"]);
+    frames.frame(vec![moved(two.center())], &mut show);
+    frames.idle(REST_FRAMES / 2, &mut show);
+    frames.frame(vec![moved(three.center())], &mut show);
+    frames.idle(REST_FRAMES / 2, &mut show);
+    assert!(!selected(1) && !selected(2), "half a delay on each of two tabs selects neither: {:?}", seen.borrow());
+    frames.idle(REST_FRAMES, &mut show);
+    assert!(selected(2) && !selected(1), "the tab the pointer rests on selects, the one it left does not: {:?}", seen.borrow());
+
+    frames.leave_files();
+    frames.frame(vec![moved(one.center())], &mut show);
+    seen.borrow_mut().clear();
+    frames.hover_files(&["a.png"]);
+    frames.frame(vec![moved(close.center())], &mut show);
+    frames.idle(REST_FRAMES * 2, &mut show);
+    assert!(!selected(1), "a rest over the close button selects nothing: {:?}", seen.borrow());
 }
 
 /// Files from the operating system dropped in the gap before the second of three document tabs go before it, and past
@@ -545,7 +670,7 @@ fn tabs_with_the_same_label_keep_their_own_selection_and_click() {
         let source = keyed(&keys, |key: &usize| *key);
         let out = TabStrip::new("Settings").kind(TabKind::Text).shown(now.get()).show_items(ui, &source, &mut |_, _| Tab::new("Options"));
         for event in &out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                 && let Some(key) = keys.last()
             {
                 now.set(*key);
@@ -602,7 +727,7 @@ fn a_secondary_click_on_a_document_tab_asks_for_its_menu_without_showing_it() {
         let source = keyed(&keys, |key: &usize| *key);
         let out = TabStrip::new("Documents").shown(now.get()).show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
         for event in &out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                 && let Some(key) = keys.last()
             {
                 now.set(*key);
@@ -661,6 +786,41 @@ fn document_tabs_keep_whole_touching_titles_and_an_asterisk_by_default() {
     assert!((second.left() - first.right()).abs() < 0.5, "neighbouring document tabs touch: {first:?}, {second:?}");
     let stars = fixture.texts().iter().filter(|run| run.text.contains('*')).count();
     assert_eq!(stars, 1, "the modified tab shows its asterisk");
+}
+
+/// A semibold document tab's title draws in the font stack's tab-title family when the app embeds the tab-title face,
+/// so its width follows that face; a tab in the default look keeps its label's face. The stand-in face is Abel, a
+/// condensed face, which the stack scales to the semibold face's x-height.
+#[trial]
+fn a_semibold_document_tab_title_draws_in_the_tab_title_face() {
+    use craft_ui::fonts::{EmbeddedFace, I18nScripts, SystemFonts, UiFonts};
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    const TAB: EmbeddedFace = EmbeddedFace {
+        family: "Abel",
+        style: "Regular",
+        scripts: &["Latn"],
+        bytes: include_bytes!("../../../font-subset/tests/data/abel/Abel-Regular.ttf"),
+        index: 0,
+        // craft-fonts-build's `TAB_ROLE`.
+        role: Some("tab"),
+    };
+    let title = "Poster draft one";
+    let width = |look: DocumentTabLook, faces: &'static [EmbeddedFace]| {
+        let mut fixture = Fixture::new(move |ui| {
+            let tabs = [DocumentTab::new(0, title)];
+            let _ = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
+        });
+        fixture.root_value(look);
+        fixture.room(egui::vec2(600.0, 100.0)).settle();
+        UiFonts::new(&I18nScripts).craft_faces(faces).languages(&["en"]).ui_language("en").system_fonts(SystemFonts::Off).install(fixture.ctx());
+        fixture.settle();
+        fixture.texts().iter().find(|run| run.text == title).map_or(f32::NAN, |run| run.rect.width())
+    };
+    let (plain, condensed) = (width(DocumentTabLook::Semibold, &[]), width(DocumentTabLook::Semibold, &[TAB]));
+    assert!(plain.is_finite() && condensed.is_finite(), "the title is painted: {plain} {condensed}");
+    assert!(condensed < plain - 2.0, "the semibold tab's title draws in the condensed tab-title face: {plain} vs {condensed}");
+    let (whole, whole_with) = (width(DocumentTabLook::Whole, &[]), width(DocumentTabLook::Whole, &[TAB]));
+    assert!((whole - whole_with).abs() < 0.01, "a default tab's title keeps its face: {whole} vs {whole_with}");
 }
 
 /// Production shows the held tab in the strip and no filename badge by the pointer: while a document tab is dragged, its
@@ -833,7 +993,7 @@ fn the_ribbon_underline_retargets_from_its_shown_position_mid_motion() {
         let strip = TabStrip::new("Ribbon").kind(TabKind::Ribbon).wheel_selects().shown(now.get());
         let out = strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]));
         for event in &out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                 && let Some(key) = keys.last()
             {
                 now.set(*key);
@@ -1024,7 +1184,7 @@ fn a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades() {
         let strip = TabStrip::new("Ribbon").kind(TabKind::Ribbon).shown(now.get()).roles(ribbon_role);
         let out = strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]).role(ribbon_role(key)));
         for event in &out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                 && let Some(key) = keys.last()
             {
                 seen.borrow_mut().push(*key);
@@ -1077,4 +1237,40 @@ fn a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades() {
     let back = fixture.by_label(RIBBON[TABLE]).expect("a contextual tab that enters has a node once listed");
     fixture.click(&back);
     assert_eq!(shown.get(), TABLE, "a click on the entering tab shows it");
+}
+
+/// A document tab dragged from one strip onto another strip's tab, or onto a strip with no tabs at all (every document
+/// in windows of its own), is dropped into that strip: the drop says which tab it landed on, none on an empty strip.
+#[trial]
+fn a_tab_dropped_on_another_strip_lands_there_even_with_no_tabs() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
+    for others in [vec![DocumentTab::new(2_usize, "Three")], Vec::new()] {
+        let tabs = [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two")];
+        let (seen, strip) = (RefCell::new(Vec::new()), Cell::new(Rect::NOTHING));
+        let mut frames = Frames::new();
+        let mut show = |ui: &mut Ui| {
+            let _ = DocumentTabs::new("Main", &tabs).selected(0).reorderable(true).show(ui);
+            ui.add_space(40.0);
+            let out = DocumentTabs::new("Window", &others).reorderable(true).show(ui);
+            strip.set(out.response.rect);
+            seen.borrow_mut().extend(out.events);
+        };
+        frames.idle(2, &mut show);
+        let tree = frames.tree();
+        let from = tab_rect(&tree, "One").center();
+        let to = if others.is_empty() { strip.get().center() } else { tab_rect(&tree, "Three").center() };
+        frames.frame(vec![moved(from)], &mut show);
+        frames.frame(vec![press(from)], &mut show);
+        for step in 1..=6 {
+            frames.frame(vec![moved(from.lerp(to, step as f32 / 6.0))], &mut show);
+        }
+        frames.frame(vec![release(to)], &mut show);
+        frames.idle(1, &mut show);
+        let over = seen.borrow().iter().find_map(|event| match event {
+            DocumentTabsEvent::DroppedInto { documents, over, .. } if documents.as_slice() == [0] => Some(*over),
+            _ => None,
+        });
+        let wanted = others.first().map(|tab| tab.id);
+        assert_eq!(over, Some(wanted), "the tab dropped on {wanted:?} lands in the other strip: {:?}", seen.borrow());
+    }
 }

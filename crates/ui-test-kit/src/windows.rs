@@ -1,25 +1,30 @@
 //! A frame driver for trials with child viewports: the context opens OS viewports (not embedded), and a renderer
 //! like eframe's runs each child's pass nested inside its parent's UI closure, with events and window facts the trial
-//! gives it. As an integration does, the window gets what changed in its builder as commands before the pass.
+//! gives it. As an integration does, the window gets what changed in its builder as commands before the pass. The
+//! windows share one texture store, as eframe's renderer: each pass's texture changes reach it when the window paints
+//! (a child as soon as its pass ends, the root after its run), and a change to a texture the store has not allocated
+//! panics, as egui-wgpu's renderer does.
 
 use craft_host::target::ShellInfo;
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::env::RootEnv;
-use craft_ui::runtime::frame::{FrameInput, set_input};
+use craft_ui::runtime::frame::{FrameInput, WindowInput, input_pending, set_input};
 use craft_ui::testing::Frames;
 use craft_ui::testing::access::{AccessTree, tree_of};
 use craft_ui::testing::windows::FakeSystem;
 use craft_ui::testing::windows::{FullOutput, RawInput};
-use egui::{Context, Event, HoveredFile, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportId, ViewportInfo};
+use egui::{Context, Event, HoveredFile, Pos2, Rect, TextureId, TexturesDelta, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportId, ViewportInfo};
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 const ROOT_SIZE: Vec2 = Vec2::new(800.0, 600.0);
 const CHILD_SIZE: Vec2 = Vec2::new(400.0, 300.0);
 
 thread_local! {
-    /// The events the next child pass receives (the renderer runs on the trial's thread).
-    static CHILD_EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
+    /// The events of the running frame's child passes (the renderer runs on the trial's thread), each for the child it
+    /// is addressed to, or else for the first child pass.
+    static CHILD_EVENTS: RefCell<Vec<(Option<ViewportId>, Event)>> = const { RefCell::new(Vec::new()) };
     /// The files hovering over and dropped on the child's window in the next child pass.
     static CHILD_FILES: RefCell<(Vec<HoveredFile>, Vec<String>)> = const { RefCell::new((Vec::new(), Vec::new())) };
     /// The window facts every child opened from the root reports.
@@ -36,11 +41,37 @@ thread_local! {
     static COMMANDS: RefCell<Vec<(ViewportId, ViewportCommand)>> = const { RefCell::new(Vec::new()) };
     /// The AccessKit tree each viewport's last pass produced, in pass order.
     static TREES: RefCell<Vec<(ViewportId, AccessTree)>> = const { RefCell::new(Vec::new()) };
+    /// The shapes each pass of the frame painted, nested shapes flattened.
+    static SHAPES: RefCell<Vec<(ViewportId, Vec<egui::Shape>)>> = const { RefCell::new(Vec::new()) };
     /// The time every pass of the frame runs at.
     static NOW: Cell<f64> = const { Cell::new(0.0) };
     /// Each child's builder as its window has it: a later builder patches it, and what changed goes to the window as
     /// commands, as an integration sends them.
     static BUILDERS: RefCell<Vec<(ViewportId, ViewportBuilder)>> = const { RefCell::new(Vec::new()) };
+    /// The textures the shared renderer has allocated.
+    static TEXTURES: RefCell<HashSet<TextureId>> = RefCell::new(HashSet::new());
+}
+
+/// Paints `viewport`'s texture changes into the shared store, in order.
+fn paint_textures(viewport: ViewportId, delta: &mut TexturesDelta) {
+    TEXTURES.with(|textures| {
+        let mut textures = textures.borrow_mut();
+        for (id, images) in delta.set.drain() {
+            for image in images {
+                if image.is_whole() {
+                    textures.insert(id);
+                } else {
+                    assert!(
+                        textures.contains(&id),
+                        "{viewport:?} updates {id:?}, which the renderer has not allocated yet: an earlier change to it has not reached the renderer"
+                    );
+                }
+            }
+        }
+        for id in delta.free.drain() {
+            textures.remove(&id);
+        }
+    });
 }
 
 /// Seconds between two frames.
@@ -141,6 +172,15 @@ fn patch_window(ids: egui::ViewportIdPair, builder: ViewportBuilder) {
     });
 }
 
+/// The window OS files hover over and drop on in [`Windows::frame_with_files`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FilesOver {
+    /// The root viewport's window.
+    Root,
+    /// The child viewport's window.
+    Child,
+}
+
 /// A dropped file that exists only as a path.
 #[derive(Debug)]
 struct DroppedPath(std::path::PathBuf);
@@ -164,7 +204,13 @@ impl egui::DroppedFile for DroppedPath {
 fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
     patch_window(viewport.ids, viewport.builder);
     let mut callback = viewport.viewport_ui_cb;
-    let events = CHILD_EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()));
+    let this = viewport.ids.this;
+    let events = CHILD_EVENTS.with(|events| {
+        let mut events = events.borrow_mut();
+        let (own, others): (Vec<_>, Vec<_>) = events.drain(..).partition(|(to, _)| to.is_none_or(|to| to == this));
+        *events = others;
+        own.into_iter().map(|(_, event)| event).collect()
+    });
     let (hovered_files, dropped) = CHILD_FILES.with(|files| std::mem::take(&mut *files.borrow_mut()));
     let dropped_files = dropped.into_iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
     let mut info = with_facts(viewport.ids.this, |info| info.clone());
@@ -188,7 +234,7 @@ fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
     input.viewports = all_viewports();
     input.viewports.insert(viewport.ids.this, info);
     let mut output = ctx.run_ui(input, |ui| callback(ui));
-    output.textures_delta.clear();
+    paint_textures(viewport.ids.this, &mut output.textures_delta);
     keep_commands(&output);
     keep_tree(&mut output, viewport.ids.this);
 }
@@ -196,6 +242,18 @@ fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
 fn keep_tree(output: &mut FullOutput, viewport: ViewportId) {
     let tree = tree_of(output);
     TREES.with(|kept| kept.borrow_mut().push((viewport, tree)));
+    let mut shapes = Vec::new();
+    for clipped in &output.shapes {
+        flatten(&clipped.shape, &mut shapes);
+    }
+    SHAPES.with(|kept| kept.borrow_mut().push((viewport, shapes)));
+}
+
+fn flatten(shape: &egui::Shape, into: &mut Vec<egui::Shape>) {
+    match shape {
+        egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| flatten(shape, into)),
+        shape => into.push(shape.clone()),
+    }
 }
 
 /// An OS window as macOS runs egui's window commands on it through winit, in desktop points with y down: a position
@@ -247,6 +305,8 @@ pub struct Out {
     /// The AccessKit tree each viewport's pass produced, in pass order: the children's first, as they run inside the
     /// root's pass.
     pub trees: Vec<(ViewportId, AccessTree)>,
+    /// The shapes each viewport's pass painted, nested shapes flattened, in the order of `trees`.
+    pub shapes: Vec<(ViewportId, Vec<egui::Shape>)>,
 }
 
 /// A context with the runtime installed whose child viewports are OS windows.
@@ -255,6 +315,9 @@ pub struct Windows {
     /// The installed context.
     pub ctx: Context,
     root_info: RefCell<ViewportInfo>,
+    root: RefCell<RootEnv>,
+    app_modal: Cell<Option<ViewportId>>,
+    window_input: Cell<WindowInput>,
 }
 
 impl Default for Windows {
@@ -282,8 +345,15 @@ impl Windows {
         CHILDREN.with(|children| children.borrow_mut().clear());
         COMMANDS.with(|kept| kept.borrow_mut().clear());
         BUILDERS.with(|kept| kept.borrow_mut().clear());
+        TEXTURES.with(|textures| textures.borrow_mut().clear());
         NOW.with(|now| now.set(0.0));
-        Windows { ctx, root_info: RefCell::new(ViewportInfo::default()) }
+        Windows {
+            ctx,
+            root_info: RefCell::new(ViewportInfo::default()),
+            root: RefCell::new(RootEnv::default()),
+            app_modal: Cell::new(None),
+            window_input: Cell::new(WindowInput::Live),
+        }
     }
 
     /// The window facts child passes report from now on.
@@ -297,35 +367,62 @@ impl Windows {
         with_facts(viewport, |info| info.clone())
     }
 
+    /// The window in which the app's own egui code shows a modal (`FrameInput::app_modal`), from the next frame on.
+    pub fn app_modal(&self, viewport: Option<ViewportId>) {
+        self.app_modal.set(viewport);
+    }
+
+    /// The window-input policy every following frame's input gives, as a host's `FrameInput::window_input` does.
+    pub fn window_input(&self, policy: WindowInput) {
+        self.window_input.set(policy);
+    }
+
     /// The window facts the root viewport reports from now on.
     pub fn root_info(&self, info: ViewportInfo) {
         *self.root_info.borrow_mut() = info;
     }
 
-    /// One frame: `root` events go to the root viewport, `child` events to the child's next pass. Returns the
-    /// window commands of the frame.
-    pub fn frame(&self, root: Vec<Event>, child: Vec<Event>, ui: impl FnMut(&mut Ui)) -> Out {
-        self.frame_with_files(root, child, Vec::new(), Vec::new(), ui)
+    /// The app's root values every frame gives from now on, the defaults until then.
+    pub fn root_env(&self, root: RootEnv) {
+        *self.root.borrow_mut() = root;
     }
 
-    /// [`frame`](Self::frame) where the child's next pass also gets the OS files hovering over its window and the
-    /// files dropped on it.
+    /// Gives the next frame's pass of the child `viewport` these `events`, as a popup window's, which runs inside its
+    /// opener's pass.
+    pub fn send(&self, viewport: ViewportId, events: Vec<Event>) {
+        CHILD_EVENTS.with(|kept| kept.borrow_mut().extend(events.into_iter().map(|event| (Some(viewport), event))));
+    }
+
+    /// One frame: `root` events go to the root viewport, `child` events to the first child pass, and each other child
+    /// gets the events [`send`](Self::send) gave it. Returns what the frame sent out.
+    pub fn frame(&self, root: Vec<Event>, child: Vec<Event>, ui: impl FnMut(&mut Ui)) -> Out {
+        self.frame_with_files(root, child, FilesOver::Root, Vec::new(), Vec::new(), ui)
+    }
+
+    /// [`frame`](Self::frame) where the next pass of the window `over` also gets the OS files hovering over it and the
+    /// files dropped on it. The other window gets none, as the OS sends them only to the window under the pointer.
     pub fn frame_with_files(
         &self,
         root: Vec<Event>,
         child: Vec<Event>,
+        over: FilesOver,
         hovered: Vec<HoveredFile>,
         dropped: Vec<String>,
         ui: impl FnMut(&mut Ui),
     ) -> Out {
-        CHILD_EVENTS.with(|events| *events.borrow_mut() = child);
-        // The root pass starts before the child's and ends an OS-file session it sees no files for, so it sees them too.
+        CHILD_EVENTS.with(|events| events.borrow_mut().extend(child.into_iter().map(|event| (None, event))));
+        let ((root_hovered, root_dropped), child_files) = match over {
+            FilesOver::Root => ((hovered, dropped), Default::default()),
+            FilesOver::Child => (Default::default(), (hovered, dropped)),
+        };
         let root_dropped: Vec<egui::DroppedFileHandle> =
-            dropped.iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
-        let root_hovered = hovered.clone();
-        CHILD_FILES.with(|files| *files.borrow_mut() = (hovered, dropped));
+            root_dropped.into_iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
+        CHILD_FILES.with(|files| *files.borrow_mut() = child_files);
         TREES.with(|kept| kept.borrow_mut().clear());
-        set_input(&self.ctx, FrameInput::new(RootEnv::default()));
+        SHAPES.with(|kept| kept.borrow_mut().clear());
+        if !input_pending(&self.ctx) {
+            set_input(&self.ctx, FrameInput::new(self.root.borrow().clone()).app_modal(self.app_modal.get()).window_input(self.window_input.get()));
+        }
         let mut input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, ROOT_SIZE)),
             events: root,
@@ -340,6 +437,7 @@ impl Windows {
         ROOT_INFO.with(|info| *info.borrow_mut() = self.root_info.borrow().clone());
         input.viewports = all_viewports();
         let mut output = self.ctx.run_ui(input, ui);
+        CHILD_EVENTS.with(|events| events.borrow_mut().clear());
         // A child the frame no longer shows has closed: like an integration, the kit drops its window, so later inputs
         // stop listing it (and what its last pass left, such as a modal, stops counting), and a window opened again
         // opens anew.
@@ -347,7 +445,7 @@ impl Windows {
         CHILDREN.with(|children| children.borrow_mut().retain(shown));
         OWN_INFO.with(|own| own.borrow_mut().retain(|(id, _)| shown(id)));
         BUILDERS.with(|kept| kept.borrow_mut().retain(|(id, _)| shown(id)));
-        output.textures_delta.clear();
+        paint_textures(ViewportId::ROOT, &mut output.textures_delta);
         keep_commands(&output);
         keep_tree(&mut output, ViewportId::ROOT);
         let builders = output.viewport_output.iter().map(|(id, viewport)| (*id, viewport.builder.clone())).collect();
@@ -355,6 +453,7 @@ impl Windows {
             commands: COMMANDS.with(|kept| std::mem::take(&mut *kept.borrow_mut())),
             builders,
             trees: TREES.with(|kept| std::mem::take(&mut *kept.borrow_mut())),
+            shapes: SHAPES.with(|kept| std::mem::take(&mut *kept.borrow_mut())),
         }
     }
 }

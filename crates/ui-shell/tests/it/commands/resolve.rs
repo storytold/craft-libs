@@ -218,6 +218,39 @@ fn a_gate_props_change_resolves_only_the_readers_whose_answer_changed() {
     assert_eq!(ASKS.with(Cell::get), 0, "and is not asked");
 }
 
+/// The catalog of the param trial: one app command, which the refs below carry different params for.
+fn param_catalog() -> AppCatalog {
+    let command = CommandDef::new(CommandRef::new("trial.param"), "Param", Scope::app());
+    AppCatalog::new(vec![command], 1).expect("the trial's catalog is valid")
+}
+
+/// Whether each of `refs` resolves enabled after two frames with `states`.
+fn enabled_of(frames: &mut Frames, states: &Tracked<CommandStates>, refs: &[CommandRef; 3]) -> [bool; 3] {
+    frames.commands(CommandInput::new().states(states).catalog(param_catalog()));
+    let seen = Cell::new([true; 3]);
+    for _ in 0..2 {
+        frames.frame(vec![], |ui| seen.set(std::array::from_fn(|at| resolve(ui.ctx(), refs[at].clone()).enabled)));
+    }
+    seen.get()
+}
+
+/// The app's state of a ref with params answers only that ref; a state with none answers every ref of the id.
+#[trial]
+fn app_states_answer_each_ref_by_its_params() {
+    // PLAN: needs `serde_json = { workspace = true }` in this crate's dev-dependencies (crates/ui-shell/Cargo.toml).
+    let refs = [
+        CommandRef::with_params("trial.param", serde_json::json!({"a": 1})),
+        CommandRef::with_params("trial.param", serde_json::json!({"a": 2})),
+        CommandRef::new("trial.param"),
+    ];
+    let mut frames = Frames::new();
+    let mut states = Tracked::new(CommandStates::new());
+    states.set(refs[0].clone(), CommandState::new().enabled(false));
+    assert_eq!(enabled_of(&mut frames, &states, &refs), [false, true, true], "only the ref the state was set for is disabled");
+    states.set(CommandRef::new("trial.param"), CommandState::new().enabled(false));
+    assert_eq!(enabled_of(&mut frames, &states, &refs), [false, false, false], "a state with no params disables every ref of the id");
+}
+
 /// Moving the focus between taps resolves none of them: each finds its command's instance in its own chain, or the
 /// command is the app's, so none reads the focus.
 #[trial]
