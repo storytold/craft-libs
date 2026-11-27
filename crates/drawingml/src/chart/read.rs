@@ -129,10 +129,22 @@ pub fn chart_from(root: &El) -> Option<Chart> {
 }
 
 /// [`chart_from`] decoding at most `budget` data slots in all.
-fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
+fn chart_within(root: &El, budget: usize) -> Option<Chart> {
+    read_chart(root, budget, false)
+}
+
+/// Exact former metadata projection for unchanged legacy native saves, using the same caps.
+pub(super) fn legacy_chart_from(root: &El) -> Option<Chart> {
+    read_chart(root, MAX_CHART_POINTS, true)
+}
+
+fn read_chart(root: &El, mut budget: usize, legacy: bool) -> Option<Chart> {
     let ch = root.child(Local("chart"))?;
     let pa = ch.child(Local("plotArea"))?;
-    let mut c = Chart { categories: vec![], series: vec![], title: None, legend: None, gridlines: false, ..Default::default() };
+    let mut c = Chart {
+        categories: vec![], series: vec![], title: None, legend: None, gridlines: false,
+        raw_metadata_version: if legacy { 0 } else { 1 }, ..Default::default()
+    };
     c.style = root.child(Local("style")).and_then(|c| c.attr_local("val")).and_then(|v| v.parse().ok()).unwrap_or(2);
     if let Some(t) = ch.child(Local("title")) {
         c.title = Some(rich_text(t).unwrap_or_else(|| "Chart Title".into()));
@@ -148,8 +160,9 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
     c.plot_fill = simple_fill(pa.child(Local("spPr")));
 
     let mut kinds: Vec<ChartType> = vec![];
-    // The value axis the first plot group uses is the primary one; a group on another value axis
-    // (a combo chart's line on the right) is on the secondary axis.
+    let mut series = vec![];
+    // Axis placement identifies the primary value axis; a nonempty group on another value
+    // axis is secondary, even when both groups have the same chart type.
     let val_map: std::collections::HashMap<&str, bool> = pa
         .children(Local("valAx"))
         .filter_map(|a| {
@@ -159,13 +172,18 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
             ))
         })
         .collect();
-    let primary_val = primary_value_axis(pa, &val_map);
+    let primary_val = primary_value_axis(pa, &val_map, legacy);
     for g in pa.elements() {
         let name = g.local();
         if !name.ends_with("Chart") {
             continue;
         }
-        let Some(kind) = group_chart_type(name, g) else { continue };
+        let Some(mut kind) = group_chart_type(name, g) else { continue };
+        if legacy && kind == ChartType::LineMarkers
+            && g.children(Local("ser")).any(|s| s.path(&[Local("marker"), Local("symbol")]).and_then(|m| m.attr_local("val")) == Some("none"))
+        {
+            kind = ChartType::Line;
+        }
         if name == "stockChart" {
             c.up_down_bars = g.child(Local("upDownBars")).is_some();
         }
@@ -175,13 +193,27 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
         let secondary = val_axis.is_some() && val_axis != primary_val;
         for s in g.children(Local("ser")).take(1000) {
             let needs_categories = c.categories.is_empty();
-            let ser = read_series(s, g, (kind, secondary, group_labels), &mut c.categories, &mut budget);
+            let mut ser = read_series(s, g, (kind, secondary, group_labels), &mut c.categories, &mut budget);
+            if legacy {
+                ser.kind = Some(kind);
+                if ser.marker.as_deref() == Some("none") {
+                    ser.marker = None;
+                }
+            }
             if needs_categories && !c.categories.is_empty() {
                 c.category_format = category_format(pa, g, s);
             }
-            c.series.push(ser);
+            let order = s.child(Local("order")).and_then(|o| o.attr_local("val")).and_then(|v| v.trim().parse::<u32>().ok());
+            series.push((order.map(|v| v as usize).unwrap_or(series.len()), ser));
         }
     }
+    // Decode and charge the source-order caches before sorting complete records. Equal orders
+    // keep document order; an omitted or invalid order keeps its source position as its key.
+    // ECMA-376-1 §21.2.2.128: c:order is the zero-based order of the series collection.
+    if !legacy {
+        series.sort_by_key(|(order, _)| *order);
+    }
+    c.series = series.into_iter().map(|(_, s)| s).collect();
     // `autoTitleDeleted val="0"` without `c:title`: PowerPoint and LibreOffice draw the series name as the title of a single-series chart.
     if ch.child(Local("title")).is_none()
         && ch.child(Local("autoTitleDeleted")).and_then(|a| a.attr_local("val").and_then(value::to_bool)) == Some(false)
@@ -190,12 +222,18 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
         c.title = c.series.first().map(|s| s.name.clone()).filter(|n| !n.is_empty());
     }
     let first = *kinds.first()?;
-    c.kind = if kinds.iter().any(|k| *k != first) { ChartType::Combo } else { first };
-    if c.kind != ChartType::Combo {
-        for s in &mut c.series {
-            s.kind = None;
-            s.secondary_axis = false;
+    if legacy {
+        c.kind = if kinds.iter().any(|k| *k != first) { ChartType::Combo } else { first };
+        if c.kind != ChartType::Combo {
+            for s in &mut c.series {
+                s.kind = None;
+                s.secondary_axis = false;
+            }
         }
+    } else {
+        let first = c.series.first().and_then(|s| s.kind).unwrap_or(first);
+        let mixed = if c.series.is_empty() { kinds.iter().any(|k| *k != first) } else { c.series.iter().any(|s| s.kind != Some(first)) };
+        c.kind = if mixed { ChartType::Combo } else { first };
     }
     c.lang = root.child(Local("lang")).and_then(|c| c.attr_local("val")).map(str::to_string);
     // A bare `<c:date1904/>` means true, as in the schema's default.
@@ -210,7 +248,7 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
             outline: flag("showOutline"),
         }
     });
-    let (val_ax, cat_ax) = read_axes(&mut c, pa, &primary_val);
+    let (val_ax, cat_ax) = read_axes(&mut c, pa, &primary_val, &val_map, legacy);
     read_text_styles(&mut c, root, ch, val_ax, cat_ax);
     Some(c)
 }
@@ -224,14 +262,18 @@ fn group_value_axis(val_map: &std::collections::HashMap<&str, bool>, g: &El) -> 
 
 /// The primary value axis is the one on the left (bottom for bar charts); the secondary one
 /// sits on the right or top, or crosses the category axis at its maximum.
-fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>) -> Option<String> {
+fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>, legacy: bool) -> Option<String> {
     let secondary_placed = |a: &El| {
         a.child(Local("crosses")).and_then(|c| c.attr_local("val")) == Some("max")
             || matches!(a.child(Local("axPos")).and_then(|c| c.attr_local("val")), Some("r" | "t"))
     };
     let val_axes_by_id: std::collections::HashMap<&str, &El> =
         pa.children(Local("valAx")).filter_map(|a| Some((a.child(Local("axId")).and_then(|c| c.attr_local("val"))?, a))).collect();
-    let used: Vec<String> = pa.elements().filter(|g| g.local().ends_with("Chart")).filter_map(|g| group_value_axis(val_map, g)).collect();
+    let used: Vec<String> = pa
+        .elements()
+        .filter(|g| if legacy { g.local().ends_with("Chart") } else { group_chart_type(g.local(), g).is_some() && g.children(Local("ser")).next().is_some() })
+        .filter_map(|g| group_value_axis(val_map, g))
+        .collect();
     used.iter().find(|id| val_axes_by_id.get(id.as_str()).is_some_and(|a| !secondary_placed(a))).or(used.first()).cloned()
 }
 
@@ -251,8 +293,7 @@ fn group_chart_type(name: &str, g: &El) -> Option<ChartType> {
             }
         }
         "lineChart" | "line3DChart" => {
-            let markers = g.child(Local("marker")).and_then(|c| c.attr_local("val")).is_some_and(|v| v == "1" || v == "true")
-                && g.children(Local("ser")).all(|s| s.path(&[Local("marker"), Local("symbol")]).and_then(|m| m.attr_local("val")) != Some("none"));
+            let markers = g.child(Local("marker")).and_then(|c| c.attr_local("val")).is_some_and(|v| v == "1" || v == "true");
             match grouping {
                 "stacked" | "percentStacked" => ChartType::StackedLine,
                 _ if markers => ChartType::LineMarkers,
@@ -359,12 +400,22 @@ fn read_error_bars(s: &El, kind: ChartType, budget: &mut usize) -> Option<ErrorB
 /// setting); the first series with categories sets `categories`.
 fn read_series(s: &El, g: &El, group: (ChartType, bool, Option<bool>), categories: &mut Vec<String>, budget: &mut usize) -> Series {
     let (kind, secondary, group_labels) = group;
+    let marker = s.path(&[Local("marker"), Local("symbol")]).and_then(|m| m.attr_local("val")).map(String::from);
+    let kind = if matches!(kind, ChartType::Line | ChartType::LineMarkers) {
+        match marker.as_deref() {
+            Some("none") => ChartType::Line,
+            Some(_) => ChartType::LineMarkers,
+            None => kind,
+        }
+    } else {
+        kind
+    };
     let mut ser = Series {
         name: s.child(Local("tx")).map(|t| strings(t, budget)).and_then(|v| v.into_iter().next()).unwrap_or_default(),
         fill: simple_fill(s.child(Local("spPr"))),
         line: simple_line(s.child(Local("spPr"))),
         smooth: s.child(Local("smooth")).and_then(|v| v.attr_local("val").and_then(value::to_bool)).unwrap_or(false),
-        marker: s.path(&[Local("marker"), Local("symbol")]).and_then(|m| m.attr_local("val")).filter(|m| *m != "none").map(String::from),
+        marker,
         kind: Some(kind),
         secondary_axis: secondary,
         ..Default::default()
@@ -428,7 +479,13 @@ fn data_ref(e: &El) -> Option<String> {
 
 /// Axis scaling, titles, number formats and visibility. Returns the primary value axis and the
 /// category axis.
-fn read_axes<'a>(c: &mut Chart, pa: &'a El, primary_val: &Option<String>) -> (Option<&'a El>, Option<&'a El>) {
+fn read_axes<'a>(
+    c: &mut Chart,
+    pa: &'a El,
+    primary_val: &Option<String>,
+    val_map: &std::collections::HashMap<&str, bool>,
+    legacy: bool,
+) -> (Option<&'a El>, Option<&'a El>) {
     let vertical = |a: &&El| matches!(a.child(Local("axPos")).and_then(|c| c.attr_local("val")), Some("l" | "r"));
     let by_id = |id: &Option<String>| {
         pa.children(Local("valAx")).find(|a| id.is_some() && a.child(Local("axId")).and_then(|c| c.attr_local("val")) == id.as_deref())
@@ -465,10 +522,23 @@ fn read_axes<'a>(c: &mut Chart, pa: &'a El, primary_val: &Option<String>) -> (Op
         a.child(Local(k))
             .is_some_and(|g| g.child(Local("spPr")).and_then(|p| p.child(Local("ln"))).is_none_or(|l| l.child(Local("noFill")).is_none()))
     };
-    if c.kind == ChartType::Combo && c.series.iter().any(|s| s.secondary_axis) {
+    if c.series.iter().any(|s| s.secondary_axis) {
         let primary_id = val_ax.and_then(|a| a.child(Local("axId")).and_then(|c| c.attr_local("val")));
-        // The other vertical value axis is the secondary one.
-        if let Some(a) = pa.children(Local("valAx")).find(|a| a.child(Local("axId")).and_then(|c| c.attr_local("val")) != primary_id && vertical(a)) {
+        let secondary_axis = if legacy {
+            pa.children(Local("valAx")).find(|a| a.child(Local("axId")).and_then(|c| c.attr_local("val")) != primary_id && vertical(a))
+        } else {
+            // Resolve the other used value axis through its group, excluding unused axes and
+            // the horizontal x axis of a scatter group.
+            let secondary_id = pa
+                .elements()
+                .filter(|g| group_chart_type(g.local(), g).is_some() && g.children(Local("ser")).next().is_some())
+                .filter_map(|g| group_value_axis(val_map, g))
+                .find(|id| Some(id.as_str()) != primary_id);
+            secondary_id.as_deref().and_then(|id| {
+                pa.children(Local("valAx")).find(|a| a.child(Local("axId")).and_then(|c| c.attr_local("val")) == Some(id))
+            })
+        };
+        if let Some(a) = secondary_axis {
             let sc = a.child(Local("scaling"));
             c.y2_min = sc.and_then(|s| num(s, "min"));
             c.y2_max = sc.and_then(|s| num(s, "max"));
@@ -477,7 +547,38 @@ fn read_axes<'a>(c: &mut Chart, pa: &'a El, primary_val: &Option<String>) -> (Op
             c.y2_hidden = deleted(a);
         }
     }
-    let cat_ax = pa.child(Local("catAx")).or_else(|| pa.child(Local("dateAx"))).or_else(|| pa.children(Local("valAx")).find(|a| !vertical(a)));
+    let cat_ax = if legacy {
+        pa.child(Local("catAx")).or_else(|| pa.child(Local("dateAx"))).or_else(|| pa.children(Local("valAx")).find(|a| !vertical(a)))
+    } else {
+        val_ax
+            .and_then(|a| a.child(Local("crossAx")))
+            .and_then(|a| a.attr_local("val"))
+            .and_then(|id| {
+                pa.elements().find(|a| {
+                    matches!(a.local(), "catAx" | "dateAx" | "valAx")
+                        && (!a.is(Local("valAx")) || !vertical(a))
+                        && a.child(Local("axId")).and_then(|i| i.attr_local("val")) == Some(id)
+                })
+            })
+            .or_else(|| {
+                primary_val.as_deref().and_then(|id| {
+                    pa.elements()
+                        .find(|g| {
+                            group_chart_type(g.local(), g).is_some()
+                                && g.children(Local("ser")).next().is_some()
+                                && g.children(Local("axId")).any(|a| a.attr_local("val") == Some(id))
+                        })
+                        .and_then(|g| category_axis(pa, g))
+                })
+            })
+            .or_else(|| {
+                if primary_val.is_none() {
+                    pa.child(Local("catAx")).or_else(|| pa.child(Local("dateAx"))).or_else(|| pa.children(Local("valAx")).find(|a| !vertical(a)))
+                } else {
+                    None
+                }
+            })
+    };
     if let Some(v) = val_ax {
         c.gridlines = grid(v, "majorGridlines");
         c.minor_gridlines = grid(v, "minorGridlines");
@@ -503,17 +604,10 @@ fn read_axes<'a>(c: &mut Chart, pa: &'a El, primary_val: &Option<String>) -> (Op
     (val_ax, cat_ax)
 }
 
-/// The number format of the category labels, for categories that are numbers or dates: the category
-/// axis' own format, unless it is linked to the source (`sourceLinked`, or no `c:numFmt`), in which
-/// case the format code of the category cells. `None` when the categories are text (their cached
-/// strings show as they are) or the file gives only General.
-fn category_format(pa: &El, group: &El, series: &El) -> Option<String> {
-    // Called only when the budgeted series read first supplies categories. Never rescan caches
-    // or take a format from a skipped series or another plot group's axis.
-    let cat = series.child(Local("cat")).or_else(|| series.child(Local("xVal")))?;
+/// The category axis (or scatter x axis) referenced by a plot group.
+fn category_axis<'a>(pa: &'a El, group: &El) -> Option<&'a El> {
     let ids: Vec<&str> = group.children(Local("axId")).filter_map(|id| id.attr_local("val")).collect();
-    let cat_ax = pa
-        .elements()
+    pa.elements()
         .find(|axis| {
             matches!(axis.local(), "catAx" | "dateAx")
                 && axis.child(Local("axId")).and_then(|id| id.attr_local("val")).is_some_and(|id| ids.contains(&id))
@@ -523,7 +617,18 @@ fn category_format(pa: &El, group: &El, series: &El) -> Option<String> {
                 matches!(axis.child(Local("axPos")).and_then(|pos| pos.attr_local("val")), Some("b" | "t"))
                     && axis.child(Local("axId")).and_then(|id| id.attr_local("val")).is_some_and(|id| ids.contains(&id))
             })
-        });
+        })
+}
+
+/// The number format of the category labels, for categories that are numbers or dates: the category
+/// axis' own format, unless it is linked to the source (`sourceLinked`, or no `c:numFmt`), in which
+/// case the format code of the category cells. `None` when the categories are text (their cached
+/// strings show as they are) or the file gives only General.
+fn category_format(pa: &El, group: &El, series: &El) -> Option<String> {
+    // Called only when the budgeted series read first supplies categories. Never rescan caches
+    // or take a format from a skipped series or another plot group's axis.
+    let cat = series.child(Local("cat")).or_else(|| series.child(Local("xVal")))?;
+    let cat_ax = category_axis(pa, group);
     if cat.find(Local("strCache")).or_else(|| cat.find(Local("strLit"))).is_some() {
         return None;
     }
@@ -1087,5 +1192,215 @@ mod tests {
         pie.raw = None;
         let (pie_written, _) = crate::chart::write::chart_xml(&pie);
         assert_eq!(read_chart_xml(&pie_written).unwrap().first_slice_angle, 90);
+    }
+
+    // Original synthetic XML for ECMA-376-1 §21.2.2 chart metadata regressions.
+    fn metadata_chart(plot_area: &str) -> String {
+        format!(
+            r#"<c:chartSpace xmlns:c="{NS_C}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea>{plot_area}</c:plotArea></c:chart></c:chartSpace>"#
+        )
+    }
+
+    fn same_kind_chart_xml() -> String {
+        metadata_chart(
+            r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
+<c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Secondary</c:v></c:tx><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:val></c:ser><c:axId val="3"/><c:axId val="4"/></c:barChart>
+<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
+<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>Primary</c:v></c:tx><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart>
+<c:catAx><c:axId val="3"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="b"/><c:crossAx val="4"/></c:catAx>
+<c:valAx><c:axId val="4"/><c:scaling><c:max val="90"/></c:scaling><c:axPos val="r"/><c:crossAx val="3"/></c:valAx>
+<c:catAx><c:axId val="1"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="b"/><c:crossAx val="2"/></c:catAx>
+<c:valAx><c:axId val="2"/><c:scaling><c:max val="10"/></c:scaling><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>"#,
+        )
+    }
+
+    #[test]
+    fn same_kind_groups_keep_their_series_types_and_axis_ownership() {
+        let xml = same_kind_chart_xml();
+        let c = read_chart_xml(xml.as_bytes()).unwrap();
+        assert_eq!(c.kind, ChartType::Column);
+        let primary = c.series.iter().find(|s| s.name == "Primary").unwrap();
+        let secondary = c.series.iter().find(|s| s.name == "Secondary").unwrap();
+        assert_eq!(primary.kind, Some(ChartType::Column));
+        assert_eq!(secondary.kind, primary.kind);
+        assert!(!primary.secondary_axis && secondary.secondary_axis);
+        assert_eq!((c.y_max, c.y2_max), (Some(10.0), Some(90.0)));
+    }
+
+    fn line_marker_chart_xml() -> String {
+        metadata_chart(
+            r#"<c:lineChart><c:grouping val="standard"/>
+<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>Hidden</c:v></c:tx><c:marker><c:symbol val="none"/></c:marker></c:ser>
+<c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Inherited</c:v></c:tx></c:ser><c:marker val="1"/></c:lineChart>
+<c:lineChart><c:grouping val="standard"/>
+<c:ser><c:idx val="2"/><c:order val="2"/><c:tx><c:v>Explicit</c:v></c:tx><c:marker><c:symbol val="diamond"/></c:marker></c:ser>
+<c:ser><c:idx val="3"/><c:order val="3"/><c:tx><c:v>Unmarked</c:v></c:tx></c:ser><c:marker val="0"/></c:lineChart>"#,
+        )
+    }
+
+    #[test]
+    fn line_marker_overrides_do_not_change_other_series() {
+        let xml = line_marker_chart_xml();
+        let c = read_chart_xml(xml.as_bytes()).unwrap();
+        assert_eq!(c.series.iter().map(|s| s.marker.as_deref()).collect::<Vec<_>>(), [Some("none"), None, Some("diamond"), None]);
+        assert_eq!(
+            c.series.iter().map(|s| c.series_kind(s)).collect::<Vec<_>>(),
+            [ChartType::Line, ChartType::LineMarkers, ChartType::LineMarkers, ChartType::Line]
+        );
+        // Our writer uses a marker-enabled line group with per-series "none" symbols.
+        // Those overrides must still read back as an ordinary line chart.
+        let plain = Chart::sample(ChartType::Line);
+        let back = read_chart_xml(&crate::chart::write::chart_xml(&plain).0).unwrap();
+        assert_eq!(back.kind, plain.kind);
+    }
+
+    #[test]
+    fn series_order_keeps_retained_metadata_attached() {
+        let scatter = |idx: u32, order: u32, name: &str, value: u32| {
+            format!(
+                r#"<c:ser><c:idx val="{idx}"/><c:order val="{order}"/>
+<c:tx><c:strRef><c:f>{name}!$A$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>{name}</c:v></c:pt></c:strCache></c:strRef></c:tx>
+<c:spPr><a:noFill/><a:ln w="12700"><a:solidFill><a:srgbClr val="123456"/></a:solidFill></a:ln></c:spPr>
+<c:marker><c:symbol val="diamond"/></c:marker><c:dLbls><c:numFmt formatCode="0.0" sourceLinked="0"/><c:showVal val="1"/></c:dLbls>
+<c:trendline><c:name>{name} trend</c:name><c:trendlineType val="linear"/></c:trendline>
+<c:errBars><c:errDir val="y"/><c:errBarType val="both"/><c:errValType val="cust"/><c:plus><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>3</c:v></c:pt></c:numLit></c:plus><c:minus><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>4</c:v></c:pt></c:numLit></c:minus></c:errBars>
+<c:xVal><c:numRef><c:f>{name}!$B$1</c:f><c:numCache><c:formatCode>0.0</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>{value}</c:v></c:pt></c:numCache></c:numRef></c:xVal>
+<c:yVal><c:numRef><c:f>{name}!$C$1</c:f><c:numCache><c:ptCount val="1"/><c:pt idx="0"><c:v>{value}</c:v></c:pt></c:numCache></c:numRef></c:yVal><c:smooth val="1"/></c:ser>"#
+            )
+        };
+        let bubble = |idx: u32, order: &str, name: &str, value: u32| {
+            format!(
+                r#"<c:ser><c:idx val="{idx}"/>{order}
+<c:tx><c:v>{name}</c:v></c:tx><c:spPr><a:solidFill><a:srgbClr val="ABCDEF"/></a:solidFill></c:spPr>
+<c:xVal><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>{value}</c:v></c:pt></c:numLit></c:xVal>
+<c:yVal><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>{value}</c:v></c:pt></c:numLit></c:yVal>
+<c:bubbleSize><c:numRef><c:f>{name}!$D$1</c:f><c:numCache><c:ptCount val="1"/><c:pt idx="0"><c:v>{value}</c:v></c:pt></c:numCache></c:numRef></c:bubbleSize></c:ser>"#
+            )
+        };
+        let a = scatter(0, 2, "Alpha", 11);
+        let b = scatter(1, 0, "Beta", 22);
+        let c = bubble(2, r#"<c:order val="0"/>"#, "Gamma", 33);
+        let d = bubble(3, "", "Delta", 44);
+        let xml = metadata_chart(&format!(
+            r#"<c:scatterChart><c:scatterStyle val="lineMarker"/>{a}{b}</c:scatterChart><c:bubbleChart>{c}{d}</c:bubbleChart>"#
+        ));
+        let source_order = xml.replace(r#"<c:order val="2"/>"#, "").replace(r#"<c:order val="0"/>"#, "");
+        let ordered = crate::xmlx::parse(xml.as_bytes()).unwrap();
+        let source_order = crate::xmlx::parse(source_order.as_bytes()).unwrap();
+        // The small budget is exhausted in source order: sorting must move the retained
+        // records, not give a previously truncated series a new chance to decode its cache.
+        for budget in [MAX_CHART_POINTS, 7] {
+            let before = chart_within(&source_order, budget).unwrap();
+            let after = chart_within(&ordered, budget).unwrap();
+            assert_eq!(
+                after.series,
+                [before.series[1].clone(), before.series[2].clone(), before.series[0].clone(), before.series[3].clone()],
+                "the cross-group tie stays stable, with every series field at budget {budget}"
+            );
+            assert_eq!(after.categories, before.categories);
+            assert_eq!(after.category_format, before.category_format);
+        }
+    }
+
+    #[test]
+    fn primary_axis_titles_follow_the_pair_instead_of_axis_or_empty_group_order() {
+        let axis = |tag: &str, id: u32, cross: u32, pos: &str, title: &str, size: Option<u32>, max: Option<u32>| {
+            let text = size.map(|v| format!(r#"<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="{v}"/></a:pPr></a:p></c:txPr>"#)).unwrap_or_default();
+            let max = max.map(|v| format!(r#"<c:max val="{v}"/>"#)).unwrap_or_default();
+            format!(
+                r#"<c:{tag}><c:axId val="{id}"/><c:scaling><c:orientation val="minMax"/>{max}</c:scaling><c:axPos val="{pos}"/>
+<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{title}</a:t></a:r></a:p></c:rich></c:tx></c:title>{text}<c:crossAx val="{cross}"/></c:{tag}>"#
+            )
+        };
+        for (scatter, empty_group) in [(false, false), (false, true), (true, false)] {
+            let (group, settings, cat, value) = if scatter {
+                ("scatterChart", r#"<c:scatterStyle val="lineMarker"/>"#, "valAx", "yVal")
+            } else {
+                ("barChart", r#"<c:barDir val="col"/><c:grouping val="clustered"/>"#, "dateAx", "val")
+            };
+            let series = |idx: u32, title: &str| {
+                format!(
+                    r#"<c:ser><c:idx val="{idx}"/><c:order val="{idx}"/><c:tx><c:v>{title}</c:v></c:tx><c:{value}><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>8</c:v></c:pt></c:numLit></c:{value}></c:ser>"#
+                )
+            };
+            let mut plot = String::new();
+            if empty_group {
+                plot.push_str(r#"<c:barChart><c:barDir val="col"/><c:axId val="50"/><c:axId val="60"/></c:barChart>"#);
+            }
+            for (idx, title, cat_id, val_id) in [(1, "Secondary", 30, 40), (0, "Primary", 10, 20)] {
+                let ser = series(idx, title);
+                plot.push_str(&format!(r#"<c:{group}>{settings}{ser}<c:axId val="{cat_id}"/><c:axId val="{val_id}"/></c:{group}>"#));
+            }
+            if empty_group {
+                plot.push_str(&axis("catAx", 50, 60, "b", "Empty category", None, None));
+                plot.push_str(&axis("valAx", 60, 50, "l", "Empty value", None, Some(1)));
+            }
+            plot.push_str(&axis(cat, 30, 40, if scatter { "t" } else { "b" }, "Secondary category", Some(2200), None));
+            plot.push_str(&axis("valAx", 40, 30, "r", "Secondary value", None, Some(90)));
+            plot.push_str(&axis(cat, 10, 20, "b", "Primary category", Some(1100), None));
+            plot.push_str(&axis("valAx", 20, 10, "l", "Primary value", None, Some(10)));
+            let c = read_chart_xml(metadata_chart(&plot).as_bytes()).unwrap();
+            assert_eq!(c.axis_titles, (Some("Primary category".into()), Some("Primary value".into())), "scatter={scatter}, empty={empty_group}");
+            assert_eq!(c.text_size, Some(11.0), "the primary pair also supplies axis text styles");
+            assert_eq!(c.y2_max, Some(90.0), "an unused axis must not supply the secondary scale");
+            assert!(c.series.iter().find(|s| s.name == "Primary").is_some_and(|s| !s.secondary_axis));
+        }
+    }
+
+
+    #[test]
+    fn raw_xml_preservation_distinguishes_legacy_models_from_current_metadata_edits() {
+        let xml = same_kind_chart_xml()
+            .replace("<c:plotArea>", r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:axId val="50"/><c:axId val="60"/></c:barChart>"#)
+            .replacen("<c:catAx>", r#"<c:catAx><c:axId val="50"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="b"/><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Empty category</a:t></a:r></a:p></c:rich></c:tx></c:title><c:crossAx val="60"/></c:catAx><c:valAx><c:axId val="60"/><c:scaling><c:max val="1"/></c:scaling><c:axPos val="l"/><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Empty value</a:t></a:r></a:p></c:rich></c:tx></c:title><c:crossAx val="50"/></c:valAx><c:catAx>"#, 1)
+            .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:craft:test:original-chart"><own:preserved xmlns:own="urn:craft:test" value="legacy-kept"/></c:ext></c:extLst></c:chartSpace>"#,
+        );
+        // An original synthetic native-save model matching the former reader: source series
+        // order, no same-kind overrides or secondary scale, and no provenance field.
+        let legacy: Chart = serde_json::from_value(serde_json::json!({
+            "kind": "column", "title": null, "legend": null, "gridlines": false,
+            "gapWidth": 1.5, "overlap": 0.0, "varyColors": true, "yMax": 1.0,
+            "axisTitles": ["Empty category", "Empty value"],
+            "series": [
+                { "name": "Secondary", "values": [7.0], "kind": null, "secondaryAxis": false },
+                { "name": "Primary", "values": [2.0], "kind": null, "secondaryAxis": false }
+            ],
+            "raw": xml
+        })).unwrap();
+        let (written, kept) = crate::chart::write::chart_xml(&legacy);
+        assert!(kept, "an unchanged legacy save retains its unmodelled XML");
+        let doc = crate::xmlx::parse(&written).unwrap();
+        assert_eq!(doc.find(Local("preserved")).and_then(|e| e.attr_local("value")), Some("legacy-kept"));
+
+        // The former line reader made marker visibility a group decision and collapsed
+        // explicit "none" into omission; a legacy save must still match that projection.
+        let legacy_line: Chart = serde_json::from_value(serde_json::json!({
+            "kind": "line", "title": null, "legend": null, "gridlines": false, "varyColors": true,
+            "series": [
+                { "name": "Hidden" }, { "name": "Inherited" },
+                { "name": "Explicit", "marker": "diamond" }, { "name": "Unmarked" }
+            ],
+            "raw": line_marker_chart_xml()
+        })).unwrap();
+        assert!(crate::chart::write::chart_xml(&legacy_line).1, "legacy group marker and symbol semantics remain comparable");
+
+        let mut edited = legacy.clone();
+        edited.axis_titles.0 = Some("Edited category".into());
+        let (written, kept) = crate::chart::write::chart_xml(&edited);
+        assert!(!kept, "legacy provenance does not hide an actual title edit");
+        assert_eq!(read_chart_xml(&written).unwrap().axis_titles.0, edited.axis_titles.0);
+
+        let imported = read_chart_xml(legacy.raw.as_ref().unwrap().as_bytes()).unwrap();
+        let reopened: Chart = serde_json::from_str(&serde_json::to_string(&imported).unwrap()).unwrap();
+        // A current-provenance chart genuinely edited into the old reader's representation
+        // has identical modelled values to `legacy`, but must not take its raw fastpath.
+        let mut edited_into_legacy = legacy.clone();
+        edited_into_legacy.raw_metadata_version = reopened.raw_metadata_version;
+        let (written, kept) = crate::chart::write::chart_xml(&edited_into_legacy);
+        assert!(!kept, "current metadata edits cannot be mistaken for unchanged legacy state");
+        let back = read_chart_xml(&written).unwrap();
+        assert!(back.series.iter().all(|s| !s.secondary_axis), "the edited primary-axis assignment is written");
     }
 }

@@ -739,7 +739,11 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
     {
         let mut root = doc.clone();
         crate::xmlx::resolve_mc(&mut root);
-        if let Some(back) = super::read::chart_from(&root) {
+        // Native saves without provenance used the former metadata projection. Comparing
+        // that exact projection only on the legacy path preserves raw XML without treating
+        // current-reader metadata edits as unchanged legacy state.
+        let back = if c.raw_metadata_version == 0 { super::read::legacy_chart_from(&root) } else { super::read::chart_from(&root) };
+        if let Some(back) = back {
             let mut me = c.clone();
             me.raw = None;
             // The sidecar is not modelled chart state. Comparing it would throw away an unchanged chart.

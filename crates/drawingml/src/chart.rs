@@ -231,9 +231,12 @@ pub struct Series {
     pub point_fills: Vec<(usize, Fill)>,
     pub data_labels: Option<bool>,
     pub smooth: bool,
+    /// The marker symbol, including explicit `"none"`; `None` means no symbol was specified.
     pub marker: Option<String>,
-    /// Combo charts: this series' own type.
+    /// The series' plot type, including its line-marker override. DrawingML reads retain this
+    /// even when all plot groups have the same type.
     pub kind: Option<ChartType>,
+    /// Whether the series uses a value axis other than the chart's primary value axis.
     pub secondary_axis: bool,
     /// The number format of the series' data labels (Excel code): the labels' own, else the
     /// source data's.
@@ -370,6 +373,7 @@ pub struct Chart {
     pub kind: ChartType,
     pub title: Option<String>,
     pub categories: Vec<String>,
+    /// Retained series in display order (`c:order` for DrawingML charts).
     pub series: Vec<Series>,
     pub legend: Option<String>,
     /// `c:legend/c:overlay`: the legend is drawn over the plot instead of shrinking it.
@@ -389,6 +393,7 @@ pub struct Chart {
     pub gridlines: bool,
     /// `c:minorGridlines` on the value axis: five to a major unit, between the major ones.
     pub minor_gridlines: bool,
+    /// Titles of the primary category (or scatter x) and value axes.
     pub axis_titles: (Option<String>, Option<String>),
     /// Chart style number (1–48) and colour palette (`colorful1`, `monochrome3`…).
     pub style: u32,
@@ -465,6 +470,10 @@ pub struct Chart {
     /// Original chart XML part kept for round-trip of unmodelled options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
+    /// Metadata interpretation of retained classic chart XML: 0 is the former reader, 1 is
+    /// the current reader. Missing native-save fields are legacy. Preserve this when editing.
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub raw_metadata_version: u16,
     /// The chart was too large to model: `raw` and `kept` are written back unchanged on save.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub verbatim: bool,
@@ -582,6 +591,7 @@ impl Default for Chart {
             first_slice_angle: 0,
             pivot_source: None,
             raw: None,
+            raw_metadata_version: 0,
             verbatim: false,
             kept: ChartKept::default(),
         }
