@@ -341,6 +341,9 @@ fn attributes_are_bounded_over_the_whole_tree() {
     // exactly at the limit is accepted
     let fits = format!("<r>{}</r>", el.repeat(ATTRS));
     assert_eq!(opts.parse(fits.as_bytes()).map(|r| r.children.len()), Ok(ATTRS));
+    // The root's attribute crosses the retained-tree allowance by exactly one.
+    let one_over = format!("<r a=\"\">{}</r>", el.repeat(ATTRS));
+    assert_eq!(opts.parse(one_over.as_bytes()), Err(Error::TooManyAttrsTotal(ATTRS * ATTRS)));
     // the default stops a document that is nothing but attributes (millions of them: nightly only)
     if craft_testkit::hostile::divisor() == 1 {
         let el = format!("<c{}/>", " a=\"\"".repeat(1024));
