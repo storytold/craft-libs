@@ -1,0 +1,16 @@
+[package]
+name = "craft-officeart"
+description = "Clean-room reader for the Office Drawing records ([MS-ODRAW], OfficeArt) the Office binary formats share: the record framing, shape property tables and BLIP pictures."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
+log = { workspace = true }
+miniz_oxide = { workspace = true }
