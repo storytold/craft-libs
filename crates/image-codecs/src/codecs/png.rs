@@ -2365,10 +2365,15 @@ mod streamed_tests {
                 xmp: Some("<x:xmpmeta xmlns:x='adobe:ns:meta/'/>".into()),
                 ..Default::default()
             };
-            let img = Image::from_raw(w, h, layout, sample, noise(w as usize * h as usize * ch * bytes, 7))
-                .unwrap()
-                .with_icc(Some((0..600u32).map(|i| (i % 251) as u8).collect()))
-                .with_meta(meta);
+            // Distinct nonconstant row runs retain carry and row-order sensitivity across pushes.
+            let stride = w as usize * ch * bytes;
+            let row = noise(stride, 7);
+            let mut pixels = row.repeat(h as usize);
+            for row in pixels.chunks_exact_mut(stride).skip(h as usize / 2) {
+                row[0] ^= 0x5a;
+            }
+            let img =
+                Image::from_raw(w, h, layout, sample, pixels).unwrap().with_icc(Some((0..600u32).map(|i| (i % 251) as u8).collect())).with_meta(meta);
             for level in [PngCompression::Fast, PngCompression::Default] {
                 let opts = EncodeOptions { png_compression: level, ..Default::default() };
                 let one_band = [h];
