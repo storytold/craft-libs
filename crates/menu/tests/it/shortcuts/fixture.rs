@@ -258,6 +258,16 @@ impl Rig {
         self.shared.borrow().sets.as_ref().map(|(p, _)| p.active().to_string())
     }
 
+    /// Sets an automation field in the next dialog pass.
+    pub(crate) fn set_json_field(&mut self, field: &'static str, value: serde_json::Value) -> Result<(), String> {
+        let result = Rc::new(RefCell::new(None));
+        let out = result.clone();
+        let job: Job = Box::new(move |dialog, ui, state| *out.borrow_mut() = Some(dialog.set_json_field(ui, state, field, &value)));
+        self.shared.borrow_mut().jobs.push(job);
+        self.fixture.idle(2);
+        result.take().expect("the automation job ran")
+    }
+
     /// Runs `job` with the dialog in the next pass and returns what it returns.
     pub(crate) fn import_json(&mut self, json: &str) -> Result<String, ProfileError> {
         let result = Rc::new(RefCell::new(None));

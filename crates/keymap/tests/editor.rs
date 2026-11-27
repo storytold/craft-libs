@@ -1,6 +1,7 @@
 //! Integration tests of craft-keymap: editor.
 
-use craft_keymap::{Binding, CommandDef, CommandRef, EditSession, Keymap, Platform, Policy, Scope, Scopes};
+use craft_keymap::editor::check_replace;
+use craft_keymap::{AssignError, Binding, CommandDef, CommandRef, EditSession, Keymap, Platform, Policy, Scope, Scopes};
 
 fn b(text: &str) -> Binding {
     Binding::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"))
@@ -18,6 +19,19 @@ fn keymap(platform: Platform) -> Keymap {
 
 fn keys(km: &Keymap, id: &str) -> Vec<String> {
     km.bindings(&CommandRef::new(id)).iter().map(|b| b.to_string()).collect()
+}
+
+#[test]
+fn checking_a_replacement_does_not_take_the_other_commands_shortcut() {
+    let km = keymap(Platform::Mac);
+    let save = CommandRef::new("file.save");
+    let old = b("Cmd+S");
+    let new = b("Cmd+C");
+    assert!(matches!(check_replace(&km, &save, &old, &new, Policy::Refuse), Err(AssignError::Taken(_))));
+    assert!(check_replace(&km, &save, &old, &new, Policy::Steal).is_ok());
+    assert_eq!(keys(&km, "file.save"), ["Cmd+S"]);
+    assert_eq!(keys(&km, "edit.copy"), ["Cmd+C"]);
+    assert!(km.overrides().is_empty());
 }
 
 #[test]
