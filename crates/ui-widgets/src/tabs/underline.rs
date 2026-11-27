@@ -5,6 +5,7 @@ use egui::{Id, Rect};
 /// Geometry to paint this frame. Request another egui repaint while `moving` is true.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UnderlineFrame {
+    /// The underline rectangle to paint.
     pub rect: Rect,
     pub moving: bool,
 }
