@@ -68,6 +68,7 @@ craft_ui::words! {
         not_assigned: "keyboardShortcuts.notAssigned" = "Not assigned";
         label_scope_both_work: template "keyboardShortcuts.labelScopeBothWork" = "{label} ({scope}, both work)";
         add_a_shortcut_to_label: template "keyboardShortcuts.addAShortcutToLabel" = "Add a shortcut to {label}";
+        replace_chord_for_label: template "keyboardShortcuts.replaceChordForLabel" = "Replace {chord} for {label}";
         remove_chord_from_label: template "keyboardShortcuts.removeChordFromLabel" = "Remove {chord} from {label}";
         restore_the_default_for_label: template "keyboardShortcuts.restoreTheDefaultForLabel" = "Restore the default for {label}";
         label_chord: template "keyboardShortcuts.labelChord" = "{label}: {chord}";

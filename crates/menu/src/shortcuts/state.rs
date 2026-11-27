@@ -71,6 +71,8 @@ pub(crate) enum Target {
     /// A row's hold cell: the chord recorded becomes a hold that replaces the hold `old`, or adds one when `None`.
     /// Commits at once.
     HoldCell { command: CommandRef, old: Option<Binding> },
+    /// An existing binding in the detail pane. Commits a replacement in the binding's scope.
+    Detail { command: CommandRef, old: Binding },
     /// The detail pane's New Shortcut field: the chord waits for Assign.
     Field { command: CommandRef },
     /// Search by key: the chord's text becomes the query.
@@ -80,10 +82,27 @@ pub(crate) enum Target {
 }
 
 impl Target {
+    pub(crate) fn command(&self) -> Option<&CommandRef> {
+        match self {
+            Target::Cell { command, .. } | Target::HoldCell { command, .. } | Target::Detail { command, .. } | Target::Field { command } => {
+                Some(command)
+            }
+            Target::Search | Target::Code { .. } => None,
+        }
+    }
+
+    pub(crate) fn is_hold(&self) -> bool {
+        match self {
+            Target::HoldCell { .. } => true,
+            Target::Detail { old, .. } => old.trigger.is_hold(),
+            _ => false,
+        }
+    }
+
     /// A single press waits for a second one ([`Options::double_press`]) only where a double press means something:
     /// a hold or a code takes the chord alone.
     fn takes_double(&self) -> bool {
-        !matches!(self, Target::HoldCell { .. } | Target::Code { .. })
+        !self.is_hold() && !matches!(self, Target::Code { .. })
     }
 }
 
@@ -510,7 +529,7 @@ impl DialogState {
         self.conflict = None;
         self.message = None;
         self.recorder.reset();
-        if let Target::Cell { command, .. } | Target::HoldCell { command, .. } | Target::Field { command } = &target {
+        if let Some(command) = target.command() {
             self.select_row(command);
         }
         self.recording = Some(Recording { target, waiting: None, started: false });
@@ -521,8 +540,25 @@ impl DialogState {
         self.recorder.reset();
     }
 
-    /// Commits a single press whose double-press window has ended.
+    /// Clears unavailable editing targets and settles timers outside the detail pane.
     pub(crate) fn tick(&mut self, env: &mut Env, now: f64) {
+        if !env.options.editable {
+            self.conflict = None;
+            if self.recording.as_ref().is_some_and(|r| r.target.command().is_some()) {
+                self.stop_recording();
+            }
+        }
+        if self.recording.as_ref().is_some_and(|r| matches!(r.target, Target::Detail { .. })) {
+            if env.options.layout != Layout::Table {
+                self.stop_recording();
+            }
+        } else {
+            self.settle_recording(env, now);
+        }
+    }
+
+    /// Commits a single press whose double-press window has ended. The detail pane calls this after checking focus.
+    pub(crate) fn settle_recording(&mut self, env: &mut Env, now: f64) {
         let expired = self.recording.as_ref().and_then(|r| r.waiting).filter(|(_, at)| now < *at || now - *at >= DOUBLE_PRESS);
         if let Some((trigger, _)) = expired {
             self.commit_recorded(env, trigger);
@@ -538,7 +574,9 @@ impl DialogState {
                 let target = rec.target.clone();
                 self.stop_recording();
                 match target {
-                    Target::Cell { command, old: Some(old) } | Target::HoldCell { command, old: Some(old) } => self.remove(env, &command, &old),
+                    Target::Cell { command, old: Some(old) } | Target::HoldCell { command, old: Some(old) } | Target::Detail { command, old } => {
+                        self.remove(env, &command, &old);
+                    }
                     Target::Field { .. } => self.field = None,
                     _ => {}
                 }
@@ -567,6 +605,12 @@ impl DialogState {
                     self.answer_code(env, code, Some(trigger.chord.key.name().to_owned()));
                 } else {
                     self.refuse(word!(env, press_a_key_without_modifiers));
+                }
+            }
+            Target::Detail { command, old } => {
+                if self.selected.as_ref() == Some(&command) && env.keymap.bindings(&command).contains(&old) {
+                    let trigger = if old.trigger.is_hold() { Trigger::hold(trigger.chord) } else { trigger };
+                    self.commit_cell(env, &command, Some(old), trigger);
                 }
             }
         }
