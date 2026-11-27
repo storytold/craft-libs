@@ -122,26 +122,30 @@ impl<'a> Archive<'a> {
     /// legacy writer's `/docProps/core.xml` is `docProps/core.xml`. Names that still contain
     /// traversal components (`..`, a drive prefix, a NUL) after that, and names that are not
     /// UTF-8, return `None`. A caller that extracts entries to disk uses [`Self::entry_name`].
+    ///
+    /// Only the central directory is read, so an entry whose local header is damaged still has
+    /// a name here; reading it is what fails.
     pub fn virtual_entry_name(&mut self, index: usize) -> Result<Option<String>, Error> {
-        if index >= self.zip.len() {
+        let Ok(file) = self.zip.by_index_data(index) else {
             return Ok(None);
-        }
-        let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        };
         let raw = file.name_raw();
         let start = raw.iter().position(|b| *b != b'/' && *b != b'\\').unwrap_or(raw.len());
         if raw[start..].is_empty() || has_traversal_component_bytes(&raw[start..]) {
             return Ok(None);
         }
-        let Ok(name) = file.name() else { return Ok(None) };
-        Ok(sanitize_path(&name).map(str::to_string))
+        // `zip` decodes a non-UTF-8 name as CP437, which would admit a name no writer spelled.
+        let Ok(name) = std::str::from_utf8(raw) else { return Ok(None) };
+        Ok(sanitize_path(name).map(str::to_string))
     }
 
-    /// The size the entry at `index` declares, when it has a [`Self::virtual_entry_name`].
+    /// The size the entry at `index` declares, when it has a [`Self::virtual_entry_name`]. Like
+    /// the name, it comes from the central directory alone.
     pub fn virtual_entry_size(&mut self, index: usize) -> Result<Option<u64>, Error> {
         if self.virtual_entry_name(index)?.is_none() {
             return Ok(None);
         }
-        let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        let file = self.zip.by_index_data(index).map_err(|error| Error::NotZip(error.to_string()))?;
         Ok(Some(file.size()))
     }
 

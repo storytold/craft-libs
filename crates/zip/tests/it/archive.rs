@@ -368,3 +368,38 @@ fn virtual_names_strip_a_leading_separator_and_still_refuse_traversal() {
         assert_eq!(archive.read_virtual_index(index, 100).unwrap(), None, "entry {index}");
     }
 }
+
+#[test]
+fn virtual_names_come_from_the_central_directory_and_must_be_utf8() {
+    use std::io::Write as _;
+
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [("good.xml", &b"good"[..]), ("Xcp437.xml", b"cp437"), ("bad.xml", b"bad")] {
+        zip.start_file(name, opts).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    let mut bytes = zip.finish().unwrap().into_inner();
+    // A byte that is not UTF-8: `zip` would decode it as CP437 `é`.
+    let mut at = 0;
+    while let Some(found) = bytes[at..].windows(10).position(|w| w == b"Xcp437.xml") {
+        bytes[at + found] = 0x82;
+        at += found + 10;
+    }
+    // Break the local header of `bad.xml`; its central-directory record stays intact.
+    let local = find(&bytes, b"bad.xml", 0) - 30;
+    assert_eq!(&bytes[local..local + 4], b"PK\x03\x04");
+    bytes[local] = b'X';
+    let mut archive = Archive::open(&bytes, ROOMY).unwrap();
+
+    assert_eq!(archive.virtual_entry_name(0).unwrap().as_deref(), Some("good.xml"));
+    assert_eq!(archive.virtual_entry_name(1).unwrap(), None);
+    assert_eq!(archive.virtual_entry_size(1).unwrap(), None);
+    assert_eq!(archive.read_virtual_index(1, 100).unwrap(), None);
+
+    // The damaged entry is still named and sized; only reading it fails.
+    assert_eq!(archive.virtual_entry_name(2).unwrap().as_deref(), Some("bad.xml"));
+    assert_eq!(archive.virtual_entry_size(2).unwrap(), Some(3));
+    assert!(archive.read_virtual_index(2, 100).is_err());
+    assert_eq!(archive.read_virtual_index(0, 100).unwrap().as_deref(), Some(&b"good"[..]));
+}

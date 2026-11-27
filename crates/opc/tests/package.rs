@@ -225,6 +225,20 @@ fn traversal_zip_entry_names_are_not_parts() {
     assert_eq!(lazy.read("evil.xml").unwrap(), None);
 }
 
+/// Indexing part names reads only the central directory: one part whose local header is
+/// damaged leaves the others readable.
+#[test]
+fn a_damaged_local_header_does_not_stop_the_package_opening() {
+    let mut z = zip_of(&[("a.xml", b"<a/>".to_vec()), ("bad.xml", b"<b/>".to_vec())]);
+    let local = z.windows(7).position(|w| w == b"bad.xml").unwrap() - 30;
+    assert_eq!(&z[local..local + 4], b"PK\x03\x04");
+    z[local] = b'X';
+    let p = Package::open(&z, &LIMITS).unwrap();
+    assert_eq!(p.get("a.xml"), Some(&b"<a/>"[..]));
+    let mut lazy = LazyPackage::open(&z, &LIMITS).unwrap();
+    assert_eq!(lazy.read("a.xml").unwrap().as_deref(), Some(&b"<a/>"[..]));
+}
+
 #[test]
 fn xml_parts_are_read_with_the_callers_options() {
     let z = zip_of(&[("a.xml", b"<w:a><w:b/></w:a>".to_vec()), ("bad.xml", b"<a><b></a>".to_vec())]);
