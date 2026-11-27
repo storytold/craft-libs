@@ -172,7 +172,9 @@ fn children_of_choice(ac: &El) -> Option<&El> {
 
 /// Gather `name` children (rows, cells), looking through content controls, custom XML and the
 /// selected alternate-content branch; each with the content controls that open before it and how
-/// many close after it. `pending` holds controls opened but not yet given to an element.
+/// many close after it. `pending` holds controls opened but not yet given to an element. The
+/// comment and permission range markers among them are gathered too, in document order and with
+/// no controls, for the table reader to place.
 fn collect<'a>(e: &'a El, name: &str, out: &mut Vec<(&'a El, ControlWrap)>, pending: &mut Vec<ContentControl>, depth: usize) {
     if depth > 8 {
         return;
@@ -180,6 +182,8 @@ fn collect<'a>(e: &'a El, name: &str, out: &mut Vec<(&'a El, ControlWrap)>, pend
     for k in e.els() {
         if k.name == name {
             out.push((k, ControlWrap { open: std::mem::take(pending), close: 0 }));
+        } else if matches!(k.name.as_str(), "w:commentRangeStart" | "w:commentRangeEnd" | "w:permStart" | "w:permEnd") {
+            out.push((k, ControlWrap::default()));
         } else if k.name == "w:sdt" {
             if let Some(c) = k.child("w:sdtContent") {
                 let mut ctl = super::sdt::sdt_pr(k.child("w:sdtPr"), true);
@@ -188,9 +192,9 @@ fn collect<'a>(e: &'a El, name: &str, out: &mut Vec<(&'a El, ControlWrap)>, pend
                 pending.push(ctl);
                 collect(c, name, out, pending, depth + 1);
                 let grew = out.len() > before;
-                match out.last_mut() {
+                match out.iter_mut().skip(before).rev().find(|(e, _)| e.name == name) {
                     Some((_, w)) if grew => w.close = w.close.saturating_add(1),
-                    // Nothing inside: the control goes (as before).
+                    // No row or cell inside (range markers at most): the control goes (as before).
                     _ => {
                         pending.pop();
                     }

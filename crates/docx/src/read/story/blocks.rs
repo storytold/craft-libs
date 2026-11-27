@@ -342,6 +342,16 @@ impl Reader<'_> {
         })
     }
 
+    /// Markers pending at the end of a cell's content end it, in its last paragraph (see
+    /// [`Self::flush_pending`]). A cell with no paragraph there to take them (none at all, or a
+    /// table last whose last cell has none) gets an empty one at its end, as saving gives it.
+    fn end_cell(&mut self, sc: &mut StoryCtx, blocks: &mut Blocks) {
+        if !sc.pending.is_empty() && last_para_mut(blocks, 0).is_none() {
+            blocks.push(para_block(Paragraph::new()));
+        }
+        self.flush_pending(sc, blocks);
+    }
+
     fn read_table(&mut self, sc: &mut StoryCtx, t: &El, rels: &Rels, depth: usize) -> Option<Table> {
         let mut table = Table::default();
         if let Some(p) = t.child("w:tblPr") {
@@ -379,7 +389,20 @@ impl Reader<'_> {
         }
         let mut rows = Vec::new();
         collect(t, "w:tr", &mut rows, &mut Vec::new(), 0);
-        for (tr, row_controls) in rows.into_iter().take(MAX_ROWS) {
+        // Comment and permission range markers between the rows and between a row's cells, in
+        // document order: those before a cell go to its first paragraph, as a paragraph takes the
+        // markers before it; those after a row's last cell, or after the last row, end that cell.
+        let mut lead = Vec::new();
+        let mut row_count = 0;
+        for (tr, row_controls) in rows {
+            if tr.name != "w:tr" {
+                lead.extend(self.marker(tr));
+                continue;
+            }
+            if row_count >= MAX_ROWS {
+                continue;
+            }
+            row_count += 1;
             let mut row = Row { props: tr.child("w:trPr").map(trpr).unwrap_or_default(), cells: Vec::new(), controls: row_controls };
             row.props.exceptions = tr.child("w:tblPrEx").map(|e| Box::new(self.pc.tblpr(e)));
             if let Some(ch) = tr.child("w:trPr").and_then(|p| p.child("w:trPrChange")) {
@@ -388,7 +411,16 @@ impl Reader<'_> {
             }
             let mut tcs = Vec::new();
             collect(tr, "w:tc", &mut tcs, &mut Vec::new(), 0);
-            for (tc, cell_controls) in tcs.into_iter().take(MAX_COLS) {
+            let mut cell_count = 0;
+            for (tc, cell_controls) in tcs {
+                if tc.name != "w:tc" {
+                    lead.extend(self.marker(tc));
+                    continue;
+                }
+                if cell_count >= MAX_COLS {
+                    continue;
+                }
+                cell_count += 1;
                 let (mut props, hcont) = tc
                     .child("w:tcPr")
                     .map(|p| tcpr(&self.pc, p))
@@ -397,24 +429,30 @@ impl Reader<'_> {
                     let old = ch.child("w:tcPr").map(|o| tcpr(&self.pc, o).0).unwrap_or_default();
                     props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
                 }
+                // Markers before a skipped cell wait for the next one, or end the row.
                 if hcont && let Some(prev) = row.cells.last_mut() {
                     prev.props.span = (prev.props.span + props.span.max(1)).min(63);
                     continue;
                 }
                 let mut blocks = Blocks::new();
                 let outer = std::mem::replace(&mut sc.in_cell, true);
+                sc.pending.append(&mut lead);
                 self.read_blocks(sc, tc, rels, &mut blocks, depth + 4);
-                self.flush_pending(sc, &mut blocks);
+                self.end_cell(sc, &mut blocks);
                 sc.in_cell = outer;
                 row.cells.push(Cell { props, blocks, controls: cell_controls });
             }
-            if !row.cells.is_empty() {
-                table.rows.push(row);
-            }
+            // A row with no cells isn't kept: its markers wait for the next cell.
+            let Some(last) = row.cells.last_mut() else { continue };
+            sc.pending.append(&mut lead);
+            self.end_cell(sc, &mut last.blocks);
+            table.rows.push(row);
         }
-        if table.rows.is_empty() {
-            return None;
-        }
+        // Markers after the last row end the table's last cell; with no row kept, they go on to
+        // what follows the table.
+        sc.pending.append(&mut lead);
+        let last = table.rows.last_mut().and_then(|r| r.cells.last_mut())?;
+        self.end_cell(sc, &mut last.blocks);
         if table.grid.is_empty() {
             // A file with an empty `w:tblGrid` keeps the inch per column it always had.
             table.grid = if t.child("w:tblGrid").is_none() { grid_from_cells(&table) } else { vec![72.0; table.cols().clamp(1, MAX_COLS)] };
