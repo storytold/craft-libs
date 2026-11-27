@@ -100,6 +100,32 @@ fn make(algorithm: Algorithm, user: &str, owner: &str) -> SecurityHandler {
     .unwrap()
 }
 
+/// The handler for `user` / `owner` per algorithm, derived once: AES-256's key derivation is
+/// slow and these properties draw the same file for every case.
+fn standard(algorithm: Algorithm) -> &'static SecurityHandler {
+    use std::sync::OnceLock;
+    static CACHE: [OnceLock<SecurityHandler>; 4] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
+    let slot = match algorithm {
+        Algorithm::Rc4_40 => 0,
+        Algorithm::Rc4_128 => 1,
+        Algorithm::Aes128 => 2,
+        Algorithm::Aes256 => 3,
+    };
+    CACHE[slot].get_or_init(|| make(algorithm, "user", "owner"))
+}
+
+/// A file with no user password and the owner password `owner`, AES-256, derived once.
+fn open_aes256() -> &'static SecurityHandler {
+    static HANDLER: std::sync::OnceLock<SecurityHandler> = std::sync::OnceLock::new();
+    HANDLER.get_or_init(|| make(Algorithm::Aes256, "", "owner"))
+}
+
+/// Cases for the expensive properties (each case creates a file and runs a password hash per
+/// password it tries): `gate` cases at the gate, `full` nightly (hostile-input divisor 1).
+fn cases(full: u32, gate: u32) -> ProptestConfig {
+    ProptestConfig::with_cases(if craft_testkit::hostile::divisor() == 1 { full } else { gate })
+}
+
 proptest! {
     /// Encrypting then decrypting returns the input at every length, as a string and as each kind
     /// of stream — and is byte-for-byte reproducible, because re-running a save must not silently
@@ -107,7 +133,7 @@ proptest! {
     /// need an all-zero keystream to leave them alone, and CBC cannot shrink a padded block.
     #[test]
     fn content_survives_the_trip_at_every_length(alg in algorithms(), data in payloads()) {
-        let h = make(alg, "user", "owner");
+        let h = standard(alg);
 
         // The key width each algorithm promises: 5 bytes for export-grade 40-bit RC4, 16 for
         // AES-128 and RC4-128, 32 for AES-256. `key_len` is the only place that decides this and
@@ -116,7 +142,7 @@ proptest! {
         let want_len = match alg { Algorithm::Rc4_40 => 5, Algorithm::Aes128 | Algorithm::Rc4_128 => 16, Algorithm::Aes256 => 32 };
         prop_assert_eq!(h.file_key().len(), want_len, "{:?} must use a {} byte file key", alg, want_len);
 
-        let h = make(alg, "user", "owner");
+        let h = standard(alg);
         for num in [0u32, 1, 4096, u32::MAX] {
             let generation = (num % 65_535) as u16;
 
@@ -143,7 +169,7 @@ proptest! {
     /// whatever the bytes are. An input shorter than the IV has nothing left to decode.
     #[test]
     fn damaged_ciphertext_never_panics(alg in algorithms(), enc in prop::collection::vec(any::<u8>(), 0..64)) {
-        let h = make(alg, "user", "owner");
+        let h = standard(alg);
         for cut in 0..=enc.len() {
             let broken = &enc[..cut];
             let out = h.decrypt_string(7, 3, broken);
@@ -165,6 +191,96 @@ proptest! {
         }
     }
 
+    /// A crypt filter name decides whether content is encrypted at all: PDF 2.0 permits
+    /// `/StmF /Identity` with attachments still encrypted, and a name that appears in neither `/CF`
+    /// nor as `Identity` resolves to Identity rather than failing. The reported answer and the
+    /// bytes must agree, at every length including empty (where AES still adds a whole block).
+    /// `/EFF` is set here so embedded files and normal streams must take *different* paths: the
+    /// mix-up that leaves an attachment in plain sight, or encrypts a stream its own filter says
+    /// should not be. And sometimes `/CF` carries an entry *named* `Identity` that claims
+    /// `/CFM /AESV2`: a producer writing nonsense. The name wins and the bytes stay plain, since
+    /// encrypting what both sides agreed is plaintext would write a file other readers cannot open.
+    #[test]
+    fn crypt_filters_decide_what_gets_encrypted(
+        data in payloads(),
+        name in prop::sample::select(vec!["Identity", "StdCF", "Nope"]),
+        bogus_identity_in_cf in any::<bool>(),
+    ) {
+        let mut d = open_aes256().dict().clone();
+        d.str_f = name.as_bytes().to_vec();
+        d.stm_f = b"Identity".to_vec();
+        d.ef_f = b"StdCF".to_vec();
+        if bogus_identity_in_cf {
+            d.crypt_filters.push((b"Identity".to_vec(), Method::Aes256));
+        }
+        let h = SecurityHandler::open(d, ID, None).unwrap();
+
+        // Only `StdCF` really encrypts; `Identity` does not even when `/CF` defines it, and a name
+        // in neither place resolves to Identity rather than failing.
+        let strings_encrypted = name == "StdCF";
+        prop_assert_eq!(h.encrypts_strings(), strings_encrypted, "/StrF /{} reported {}", name, strings_encrypted);
+
+        let enc = h.encrypt_string(3, 0, &data);
+        if strings_encrypted {
+            prop_assert_ne!(&enc, &data, "/StrF /{} left strings in plain sight", name);
+            prop_assert!(enc.len() > data.len(), "AES always pads: {} bytes of ciphertext for {} plaintext", enc.len(), data.len());
+            prop_assert_eq!(h.decrypt_string(3, 0, &enc), &data[..], "/StrF /{} round trip", name);
+        } else {
+            prop_assert_eq!(&enc, &data, "/StrF /{} must pass strings through", name);
+        }
+
+        // A normal stream follows `/StmF /Identity` here, whatever the string filter says.
+        prop_assert_eq!(&h.encrypt_stream(3, 0, &data, StreamKind::Normal), &data[..], "normal streams follow /StmF Identity");
+        // An embedded file follows `/EFF /StdCF`, so it is encrypted at every length — empty
+        // included, where AES still emits a padded block — and comes back intact.
+        let ef = h.encrypt_stream(3, 0, &data, StreamKind::EmbeddedFile);
+        prop_assert_ne!(&ef, &data[..], "/EFF /StdCF left an embedded file in plain sight at {} bytes", data.len());
+        prop_assert_eq!(h.decrypt_stream(3, 0, &ef, StreamKind::EmbeddedFile), &data[..], "embedded file round trip");
+        // An unknown named filter is Identity, not an error; a known one uses its real method.
+        prop_assert_eq!(&h.encrypt_stream(3, 0, &data, StreamKind::Named(b"Missing")), &data[..], "an unknown crypt filter must not encrypt");
+        prop_assert_ne!(&h.encrypt_stream(3, 0, &data, StreamKind::Named(b"StdCF")), &data[..], "a filter named /StdCF must encrypt");
+    }
+
+    /// Object keys are scoped to the object (Algorithm 1, §7.6.3.3): RC4 and AES-128 fold the
+    /// object number and generation into the key, so another object must not read these bytes back.
+    /// AES-256 is the documented exception — revisions 5 and 6 use the file key for every object.
+    /// The comparisons that decrypt under a foreign number carry the weight: wrong keystream bytes
+    /// match the plaintext only by a chance of one in 256 per byte. Checking that *encryption*
+    /// differs would prove less, because our initial vector already covers `/Num`.
+    #[test]
+    fn object_keys_are_scoped_to_their_object(alg in prop::sample::select(vec![Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128]), data in prop::collection::vec(any::<u8>(), 8..40)) {
+        let h = standard(alg);
+
+        let enc = h.encrypt_string(100, 0, &data);
+        prop_assert_eq!(h.decrypt_string(100, 0, &enc), &data[..], "{:?} reads its own object back", alg);
+        prop_assert_ne!(h.decrypt_string(101, 0, &enc), &data[..], "{:?}: another object number must not decrypt these bytes", alg);
+        prop_assert_ne!(h.decrypt_string(100, 1, &enc), &data[..], "{:?}: another generation must not decrypt these bytes", alg);
+
+        // Algorithm 1 folds the LOW THREE bytes of `/Num` into the key. Two directions are pinned:
+        // numbers that differ inside those three bytes must separate (a fold to `[..2]` would let
+        // object 0 and object 65_536 share a key, silently handing one object's plaintext to another),
+        // and numbers that differ only ABOVE them must share it — the fold is three bytes by design,
+        // so a widening to four would break this and nothing else in the crate notices.
+        let low = h.encrypt_string(0, 0, &data);
+        prop_assert_ne!(&h.decrypt_string(65_536, 0, &low)[..], &data[..], "{:?}: /Num is folded three bytes wide; 0 and 65_536 must not share a key", alg);
+        prop_assert_ne!(&h.decrypt_string(1 << 23, 0, &low)[..], &data[..], "{:?}: the third byte of /Num must still reach the key", alg);
+        prop_assert_eq!(&h.decrypt_string(1 << 24, 0, &low)[..], &data[..], "{:?}: /Num is folded three bytes wide, so a difference above bit 23 shares the key by design", alg);
+
+        let r6 = standard(Algorithm::Aes256);
+        let enc6 = r6.encrypt_string(100, 0, &data);
+        prop_assert_eq!(&r6.decrypt_string(101, 3, &enc6)[..], &data[..], "AES-256 uses the file key for every object (§7.6.3.3)");
+        // ...which is exactly why the initial vector has to vary: revisions 5 and 6 reuse one key
+        // for the whole file, so two objects holding the same bytes must still produce different
+        // ciphertext. Identical bytes for a different `/Num` would be CBC initial-vector reuse —
+        // the flaw that leaks structure in encrypted data.
+        prop_assert_ne!(&r6.encrypt_string(101, 0, &data)[..], &enc6[..], "AES-256 reused the same initial vector for two objects");
+        prop_assert_ne!(&r6.encrypt_string(100, 1, &data)[..], &enc6[..], "AES-256 reused the same initial vector across generations");
+    }
+
+}
+
+proptest! {
+    #![proptest_config(cases(256, 3))]
     /// A file created for `user` and `owner` opens for exactly the passwords whose effective bytes
     /// equal one of theirs, and reports the role that match earned — owner first, since viewers try
     /// `/O` before `/U`. Everything else is `WrongPassword`: never an opening, and no panic on odd
@@ -188,7 +304,6 @@ proptest! {
 
         let h = make(alg, &user, &owner);
         let d = h.dict().clone();
-        let user_session = SecurityHandler::open(d.clone(), ID, Some(&user));
         let user_bytes = effective_password(alg, &user);
         let owner_bytes = owner_target(alg, &user, &owner);
 
@@ -223,6 +338,7 @@ proptest! {
         suspects.push(collision_partner.clone());
         suspects.dedup();
 
+        let user_session = SecurityHandler::open(d.clone(), ID, Some(&user)).ok();
         for suspect in &suspects {
             let want = expected_auth(alg, &user_bytes, &owner_bytes, suspect);
             match (want, SecurityHandler::open(d.clone(), ID, Some(suspect))) {
@@ -239,7 +355,7 @@ proptest! {
             // The owner password upgrades a user session; nothing else does. When the two share
             // bytes, `create` gave /O the user's own bytes (revisions 2–4) or left it empty
             // (AES-256, pdfcraft #1185's sharp edge), so the open password *is* an owner password here.
-            if let Ok(session) = &user_session {
+            if let Some(session) = &user_session {
                 let is_owner_password = expected_auth(alg, &user_bytes, &owner_bytes, suspect) == Some(Auth::Owner);
                 let upgrade = session.authenticate_owner(ID, suspect).map(|u| u.auth());
                 if is_owner_password {
@@ -262,6 +378,9 @@ proptest! {
         }
     }
 
+}
+
+proptest! {
     /// The AES-CBC and RC4 primitives taken directly: a damaged file's `/Length` and crypt filters
     /// hand them keys and data of shapes `create` would never build, so they must invert each other
     /// for any key length (`Cipher::new` takes AES-256 at 32 bytes and zero-padded AES-128 below
@@ -292,6 +411,10 @@ proptest! {
         prop_assert_eq!(rc4(&[], &data), &data[..], "an empty RC4 key passes bytes through");
     }
 
+}
+
+proptest! {
+    #![proptest_config(cases(256, 5))]
     /// `/Perms` certifies the permission bits and `/EncryptMetadata`: decrypted with the file key it
     /// must hold `/P` little-endian, four set bytes, 'T' or 'F', and the `adb` sentinel (Algorithm 10).
     /// Nothing else in this crate reads it — `cos` writes it out and no code takes it back apart — so
@@ -327,10 +450,13 @@ proptest! {
 
         // Revisions below 5 carry no /Perms; pinned so the boundary of what we emit is explicit.
         for older in [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128] {
-            let legacy = make(older, "user", "owner");
+            let legacy = standard(older);
             prop_assert!(legacy.dict().perms.is_empty(), "{:?} must emit no /Perms", older);
         }
     }
+}
+
+proptest! {
     /// Revisions 4 mix four set bytes into every file key when `/EncryptMetadata` is false (Algorithm
     /// 2, step f), so the same password over the same `/ID` must produce a *different* key than when
     /// metadata is encrypted. Every other test in this crate builds `encrypt_metadata: true` only,
@@ -372,124 +498,27 @@ proptest! {
 
 }
 
-/// A crypt filter name decides whether content is encrypted at all: PDF 2.0 permits
-/// `/StmF /Identity` with attachments still encrypted, and a name that appears in neither `/CF`
-/// nor as `Identity` resolves to Identity rather than failing. The reported answer and the
-/// bytes must agree, at every length including empty (where AES still adds a whole block).
-/// `/EFF` is set here so embedded files and normal streams must take *different* paths: the
-/// mix-up that leaves an attachment in plain sight, or encrypts a stream its own filter says
-/// should not be. And sometimes `/CF` carries an entry *named* `Identity` that claims
-/// `/CFM /AESV2`: a producer writing nonsense. The name wins and the bytes stay plain, since
-/// encrypting what both sides agreed is plaintext would write a file other readers cannot open.
+/// Bytes 13-16 of `/Perms` are the non-repeating filler. Nothing reads them, so pinning that
+/// they move with the seed is the only way to notice a producer that freezes them at zero.
+/// Keep that relation with metadata encryption both on and off.
 #[test]
-fn crypt_filters_decide_what_gets_encrypted() {
-    // Key derivation is invariant; each generated case still gets its own mutable dictionary.
-    let template = make(Algorithm::Aes256, "", "owner").dict().clone();
-    proptest!(|(
-        data in payloads(),
-        name in prop::sample::select(vec!["Identity", "StdCF", "Nope"]),
-        bogus_identity_in_cf in any::<bool>(),
-    )| {
-        let mut d = template.clone();
-        d.str_f = name.as_bytes().to_vec();
-        d.stm_f = b"Identity".to_vec();
-        d.ef_f = b"StdCF".to_vec();
-        if bogus_identity_in_cf {
-            d.crypt_filters.push((b"Identity".to_vec(), Method::Aes256));
-        }
-        let h = SecurityHandler::open(d, ID, None).unwrap();
-
-        // Only `StdCF` really encrypts; `Identity` does not even when `/CF` defines it, and a name
-        // in neither place resolves to Identity rather than failing.
-        let strings_encrypted = name == "StdCF";
-        prop_assert_eq!(h.encrypts_strings(), strings_encrypted, "/StrF /{} reported {}", name, strings_encrypted);
-
-        let enc = h.encrypt_string(3, 0, &data);
-        if strings_encrypted {
-            prop_assert_ne!(&enc, &data, "/StrF /{} left strings in plain sight", name);
-            prop_assert!(enc.len() > data.len(), "AES always pads: {} bytes of ciphertext for {} plaintext", enc.len(), data.len());
-            prop_assert_eq!(h.decrypt_string(3, 0, &enc), &data[..], "/StrF /{} round trip", name);
-        } else {
-            prop_assert_eq!(&enc, &data, "/StrF /{} must pass strings through", name);
-        }
-
-        // A normal stream follows `/StmF /Identity` here, whatever the string filter says.
-        prop_assert_eq!(&h.encrypt_stream(3, 0, &data, StreamKind::Normal), &data[..], "normal streams follow /StmF Identity");
-        // An embedded file follows `/EFF /StdCF`, so it is encrypted at every length — empty
-        // included, where AES still emits a padded block — and comes back intact.
-        let ef = h.encrypt_stream(3, 0, &data, StreamKind::EmbeddedFile);
-        prop_assert_ne!(&ef, &data[..], "/EFF /StdCF left an embedded file in plain sight at {} bytes", data.len());
-        prop_assert_eq!(h.decrypt_stream(3, 0, &ef, StreamKind::EmbeddedFile), &data[..], "embedded file round trip");
-        // An unknown named filter is Identity, not an error; a known one uses its real method.
-        prop_assert_eq!(&h.encrypt_stream(3, 0, &data, StreamKind::Named(b"Missing")), &data[..], "an unknown crypt filter must not encrypt");
-        prop_assert_ne!(&h.encrypt_stream(3, 0, &data, StreamKind::Named(b"StdCF")), &data[..], "a filter named /StdCF must encrypt");
-    });
-}
-
-/// Object keys are scoped to the object (Algorithm 1, §7.6.3.3): RC4 and AES-128 fold the
-/// object number and generation into the key, so another object must not read these bytes back.
-/// AES-256 is the documented exception — revisions 5 and 6 use the file key for every object.
-/// The comparisons that decrypt under a foreign number carry the weight: wrong keystream bytes
-/// match the plaintext only by a chance of one in 256 per byte. Checking that *encryption*
-/// differs would prove less, because our initial vector already covers `/Num`.
-#[test]
-fn object_keys_are_scoped_to_their_object() {
-    // Only R6 is fixed: the legacy algorithm and payload are still generated per case.
-    let r6 = make(Algorithm::Aes256, "user", "owner");
-    proptest!(|(
-        alg in prop::sample::select(vec![Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128]), data in prop::collection::vec(any::<u8>(), 8..40)
-    )| {
-        let h = make(alg, "user", "owner");
-
-        let enc = h.encrypt_string(100, 0, &data);
-        prop_assert_eq!(h.decrypt_string(100, 0, &enc), &data[..], "{:?} reads its own object back", alg);
-        prop_assert_ne!(h.decrypt_string(101, 0, &enc), &data[..], "{:?}: another object number must not decrypt these bytes", alg);
-        prop_assert_ne!(h.decrypt_string(100, 1, &enc), &data[..], "{:?}: another generation must not decrypt these bytes", alg);
-
-        // Algorithm 1 folds the LOW THREE bytes of `/Num` into the key. Two directions are pinned:
-        // numbers that differ inside those three bytes must separate (a fold to `[..2]` would let
-        // object 0 and object 65_536 share a key, silently handing one object's plaintext to another),
-        // and numbers that differ only ABOVE them must share it — the fold is three bytes by design,
-        // so a widening to four would break this and nothing else in the crate notices.
-        let low = h.encrypt_string(0, 0, &data);
-        prop_assert_ne!(&h.decrypt_string(65_536, 0, &low)[..], &data[..], "{:?}: /Num is folded three bytes wide; 0 and 65_536 must not share a key", alg);
-        prop_assert_ne!(&h.decrypt_string(1 << 23, 0, &low)[..], &data[..], "{:?}: the third byte of /Num must still reach the key", alg);
-        prop_assert_eq!(&h.decrypt_string(1 << 24, 0, &low)[..], &data[..], "{:?}: /Num is folded three bytes wide, so a difference above bit 23 shares the key by design", alg);
-
-        let enc6 = r6.encrypt_string(100, 0, &data);
-        prop_assert_eq!(&r6.decrypt_string(101, 3, &enc6)[..], &data[..], "AES-256 uses the file key for every object (§7.6.3.3)");
-        // ...which is exactly why the initial vector has to vary: revisions 5 and 6 reuse one key
-        // for the whole file, so two objects holding the same bytes must still produce different
-        // ciphertext. Identical bytes for a different `/Num` would be CBC initial-vector reuse —
-        // the flaw that leaks structure in encrypted data.
-        prop_assert_ne!(&r6.encrypt_string(101, 0, &data)[..], &enc6[..], "AES-256 reused the same initial vector for two objects");
-        prop_assert_ne!(&r6.encrypt_string(100, 1, &data)[..], &enc6[..], "AES-256 reused the same initial vector across generations");
-    });
-}
-
-/// The four filler bytes depend only on the seed, not permissions. Check both metadata modes
-/// once rather than repeating a second production-strength R6 derivation for every property case.
-#[test]
-fn perms_filler_bytes_follow_the_seed() {
-    for encrypt_metadata in [false, true] {
-        let build = |seed| {
-            create(
+fn perms_filler_follows_the_seed() {
+    for encrypt_metadata in [true, false] {
+        let perms = |seed: u8| {
+            let h = create(
                 &NewEncryption {
                     algorithm: Algorithm::Aes256,
                     user_password: "user",
                     owner_password: "owner",
                     permissions: -1,
                     encrypt_metadata,
-                    seed,
+                    seed: [seed; 32],
                 },
                 ID,
             )
-            .unwrap()
+            .unwrap();
+            aes_cbc_decrypt(h.file_key(), &[0u8; 16], &h.dict().perms, false)
         };
-        let h = build([0x5e; 32]);
-        let open = aes_cbc_decrypt(h.file_key(), &[0u8; 16], &h.dict().perms, false);
-        let other = build([0x11; 32]);
-        let open_other = aes_cbc_decrypt(other.file_key(), &[0u8; 16], &other.dict().perms, false);
-        assert_ne!(&open[12..16], &open_other[12..16], "the four filler bytes of /Perms must follow the seed, not sit constant");
+        assert_ne!(&perms(0x5e)[12..16], &perms(0x11)[12..16], "the four filler bytes of /Perms must follow the seed, not sit constant");
     }
 }

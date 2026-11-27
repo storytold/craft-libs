@@ -82,6 +82,7 @@ fn macros_and_other_parts_survive_a_save() {
 
 #[test]
 fn kept_parts_survive_encryption() {
+    // This checks retained package parts; the adjacent password test keeps the production count.
     let saved = encrypt_with(&export(&import(&odt(&[])).unwrap()).unwrap(), "pw", 1_000).unwrap();
     let fs = files(&decrypt(&saved, "pw").unwrap());
     assert_eq!(file(&fs, "Basic/Standard/Module1.xml"), Some(MODULE.as_bytes()));

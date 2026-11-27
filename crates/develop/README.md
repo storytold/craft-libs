@@ -55,6 +55,6 @@ This crate includes the sensor stage and consumes decoded images from `craft-raw
 and end-to-end render orchestration remain outside it.
 
 For integer DNGs with a `LinearizationTable` and a nonempty `OpcodeList1`, `craft-raw` returns the
-table unapplied on the decoded image. The shared sensor normalisation and binned preview paths
-do not yet apply that deferred table after `OpcodeList1`. Do not treat their output as fully
-linearised for those inputs.
+table unapplied. Shared sensor development and binned previews apply it after `OpcodeList1`,
+before black/white normalisation and `OpcodeList2`. Already-linearised and floating-point
+samples are not remapped.

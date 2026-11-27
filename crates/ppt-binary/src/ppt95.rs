@@ -7,8 +7,9 @@
 //!
 //! Read so far: the slide size, the masters with their colour schemes and backgrounds, and the
 //! slides in order with their master, layout type and background, holding their placeholders, text
-//! boxes, shapes, lines, freeforms and groups, with the text, its character and paragraph
-//! formatting (spacing and justified alignment included) and its anchoring ([`text`]).
+//! boxes, shapes, lines, freeforms, groups and pictures, with the text, its character and
+//! paragraph formatting (spacing and justified alignment included) and its anchoring ([`text`]),
+//! and their notes.
 //!
 //! A page's object list (3000) holds shapes (3008), placeholders (3010, which add a 3011 atom: the
 //! type, the size, then the index), lines (3014), freeforms (3016) and groups (3001). A shape or
@@ -36,20 +37,25 @@
 //! cap.
 //!
 //! PowerPoint 95 numbers placeholders its own way: on the master 1 title, 2 body, 6 date, 7 slide
-//! number and 8 footer; on slides 0x0C title, 0x0D body, 0x0F centred title and 0x10 subtitle. A
-//! placeholder of any other type keeps its text as a text box. The master's placeholders place the
-//! caller's default master's, and the footer row places every layout's, as the PowerPoint 97 path
+//! number and 8 footer; on slides 0x0C title, 0x0D body, 0x0F centred title and 0x10 subtitle. On a
+//! slide, a placeholder of any other type keeps its text as a text box; on the master it is left
+//! out. The master's placeholders place the caller's default master's, and the footer row places
+//! every layout's, as the PowerPoint 97 path
 //! does.
+//!
+//! A picture is a shape naming one of the document's pictures, which are Windows metafiles; its
+//! box is the cropped picture's ([`picture`]). A slide's notes page is a Notes record (1008) inside
+//! the slide, whose notes placeholder (type 0x0E) holds the notes text ([`notes`]).
 //!
 //! The master's text styles (the Environment's 4052 atoms, one per text type) become the master's
 //! title, body and other styles. Slide text carries its own formatting in full, so these matter
 //! for text added later.
-//!
-//! Not read yet: pictures and notes.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use craft_pptx::style::PictureFill;
+use craft_pptx::text::BodyProps;
 use craft_pptx::{
     Background, ColorRef, Defaults, Effects, Fill, Geom, LayoutType, Line, Master, PhType, Placeholder, Presentation, Rgba, Shape, ShapeId,
     ShapeKind, Size, Slide, SlideId, TextBody, Xfrm,
@@ -57,9 +63,11 @@ use craft_pptx::{
 
 use crate::convert::{Scheme, layout_kind, layout_table, page_side, place_placeholder, same_family, scheme_theme};
 use crate::record::u32_at;
+use picture::{PictureRef, Pictures};
 use shape::Look;
 use text::Env;
 
+mod picture;
 mod shape;
 mod text;
 
@@ -71,6 +79,7 @@ mod rt {
     pub const SLIDE_BOX: u32 = 1005;
     pub const SLIDE: u32 = 1006;
     pub const SLIDE_ATOM: u32 = 1007;
+    pub const NOTES: u32 = 1008;
     pub const SCHEME: u32 = 1012;
     pub const LAYOUT: u32 = 1015;
     pub const MAIN_MASTER: u32 = 1016;
@@ -90,7 +99,14 @@ mod rt {
     pub const FREEFORM_ATOM: u32 = 3017;
     pub const POINTS: u32 = 3035;
     pub const TEXT: u32 = 4001;
+    pub const TEXT_BODY: u32 = 4002;
+    pub const TEXT_ATOM: u32 = 4003;
 }
+
+/// A notes page's notes placeholder, in PowerPoint 95's numbering (3011 +0).
+const NOTES_PLACEHOLDER: u8 = 0x0E;
+/// The notes text type ([MS-PPT] `TextTypeEnum`), in a text atom's (4003) +0.
+const NOTES_TEXT: u32 = 2;
 
 /// "No instance".
 const NO_INSTANCE: u32 = 0xFFFF;
@@ -314,6 +330,8 @@ enum Kind {
     Line,
     /// A freeform (3016).
     Freeform,
+    /// A picture: a shape (3008) naming one of the document's pictures.
+    Picture(PictureRef),
     /// A group (3001) and its members.
     Group(Vec<Object>),
 }
@@ -493,15 +511,22 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
         t.body.upright = Some(true);
         t.body.rot = Some(angle).filter(|r| *r != 0.0);
     }
-    Some(Object { placeholder, ph, xfrm, text, ruler, geom, look, kind: Kind::Shape })
+    let kind = match picture::picture_ref(r).filter(|_| !placeholder) {
+        Some(pic) => Kind::Picture(pic),
+        None => Kind::Shape,
+    };
+    Some(Object { placeholder, ph, xfrm, text, ruler, geom, look, kind })
 }
 
-/// An object as a shape: a placeholder of a known type; a text box when it draws nothing but its
-/// text; else a shape or line that draws something. One that draws nothing is left out. A
-/// placeholder of an unknown type keeps its text as a text box.
-fn shape(p: &mut Presentation, o: Object) -> Option<Shape> {
-    if let Kind::Group(members) = o.kind {
-        return group(p, members);
+/// An object as a shape: a placeholder of a known type; a picture; a text box when it draws
+/// nothing but its text; else a shape or line that draws something. One that draws nothing is left
+/// out, and so is a picture whose picture can't be read. A placeholder of an unknown type keeps its
+/// text as a text box.
+fn shape(p: &mut Presentation, pictures: &mut Pictures, o: Object) -> Option<Shape> {
+    match o.kind {
+        Kind::Group(members) => return group(p, pictures, members),
+        Kind::Picture(pic) => return picture(p, pictures, o.xfrm, o.geom, o.look, pic),
+        _ => {}
     }
     let Some(ph) = o.ph else {
         let text = o.text.filter(|t| !t.is_empty());
@@ -551,19 +576,39 @@ fn shape(p: &mut Presentation, o: Object) -> Option<Shape> {
     Some(Shape { id: ShapeId(p.alloc_id()?), name: name.into(), xfrm: Some(o.xfrm), ph: Some(ph), text, ..Default::default() })
 }
 
+/// A picture in its box, drawn with its format as PowerPoint 95 draws it (a picture made by
+/// inserting a file has a line, and a fill behind it, as any new shape does), showing the cropped
+/// picture.
+fn picture(p: &mut Presentation, pictures: &mut Pictures, xfrm: Xfrm, geom: Option<Geom>, look: Look, pic: PictureRef) -> Option<Shape> {
+    let media = pictures.media(p, pic.slot)?;
+    let id = p.alloc_id()?;
+    let Look { fill, line, shadow } = look;
+    Some(Shape {
+        id: ShapeId(id),
+        name: format!("Picture {id}"),
+        xfrm: Some(xfrm),
+        geom: geom.unwrap_or_else(|| Geom::Preset { name: "rect".into(), adj: vec![] }),
+        fill: Some(fill),
+        line: Some(line),
+        effects: shadow.map(|s| Effects { outer_shadow: Some(s), ..Default::default() }),
+        kind: ShapeKind::Picture { fill: PictureFill { media, crop: pic.crop, ..Default::default() } },
+        ..Default::default()
+    })
+}
+
 /// A group of the shapes its members are, in the box they span, which is also its child space, so
 /// the members keep their places on the slide. A group none of whose members draws anything is
 /// left out.
 ///
 /// A nested group recurses here directly, not through [`shape`], whose frame is far larger: the
 /// recursion is bounded by [`MAX_DEPTH`], and each level should cost the stack little.
-fn group(p: &mut Presentation, members: Vec<Object>) -> Option<Shape> {
+fn group(p: &mut Presentation, pictures: &mut Pictures, members: Vec<Object>) -> Option<Shape> {
     let id = p.alloc_id()?;
     let mut children = Vec::with_capacity(members.len());
     for m in members {
         let s = match m.kind {
-            Kind::Group(inner) => group(p, inner),
-            _ => shape(p, m),
+            Kind::Group(inner) => group(p, pictures, inner),
+            _ => shape(p, pictures, m),
         };
         children.extend(s);
     }
@@ -585,6 +630,11 @@ fn group(p: &mut Presentation, members: Vec<Object>) -> Option<Shape> {
 
 /// Build the presentation from a PowerPoint 95 Document container.
 pub fn convert(document: &Rec, app: &dyn Defaults) -> Presentation {
+    convert_within(document, app, crate::blip::MAX_TOTAL)
+}
+
+/// [`convert`], with all of the document's pictures together within `budget` bytes.
+fn convert_within(document: &Rec, app: &dyn Defaults, budget: usize) -> Presentation {
     let atom = document.child(rt::DOCUMENT_ATOM);
     let field = |at: usize| atom.and_then(|a| a.i32(at));
     let size = Size::new(page_side(field(0), 720.0), page_side(field(4), 540.0));
@@ -592,6 +642,7 @@ pub fn convert(document: &Rec, app: &dyn Defaults) -> Presentation {
     p.notes_size = Size::new(page_side(field(8), 540.0), page_side(field(12), 720.0));
 
     let env = Env::new(document);
+    let mut pictures = Pictures::new(document, budget);
 
     // The lists are told apart by what they hold, in whatever order they come.
     let (mut slides, mut masters) = (vec![], vec![]);
@@ -632,7 +683,7 @@ pub fn convert(document: &Rec, app: &dyn Defaults) -> Presentation {
                 }
                 continue;
             }
-            if let Some(s) = shape(&mut p, o) {
+            if let Some(s) = shape(&mut p, &mut pictures, o) {
                 master.shapes.push(s);
             }
         }
@@ -672,11 +723,39 @@ pub fn convert(document: &Rec, app: &dyn Defaults) -> Presentation {
         let Some(id) = p.alloc_id() else { break };
         let mut shapes = vec![];
         for o in Reader::page(&env, &scheme, size, &s.rec) {
-            shapes.extend(shape(&mut p, o));
+            shapes.extend(shape(&mut p, &mut pictures, o));
         }
-        p.slides.push(Arc::new(Slide { id: SlideId(id), layout, background, shapes, show_master_shapes: s.follow_objects, ..Default::default() }));
+        let notes = s.rec.child(rt::NOTES).and_then(|n| notes(&n, &env, &scheme)).unwrap_or_default();
+        p.slides.push(Arc::new(Slide {
+            id: SlideId(id),
+            layout,
+            background,
+            shapes,
+            show_master_shapes: s.follow_objects,
+            notes,
+            ..Default::default()
+        }));
     }
     p
+}
+
+/// The text of a slide's notes page (1008, inside the slide): its notes placeholder's, or else the
+/// first text of the notes text type, in the page's own colours. The notes master, a 1008 in the
+/// Document itself, isn't read: the PowerPoint 97 path doesn't import notes masters either.
+fn notes(page: &Rec, env: &Env, slide_scheme: &Scheme) -> Option<TextBody> {
+    let scheme = page.child(rt::SCHEME).and_then(|s| s.child(rt::COLOR_SCHEME)).map_or(*slide_scheme, |s| scheme_of(&s));
+    let kind = |r: &Rec| r.child(rt::PLACEHOLDER_ATOM).filter(|_| r.kind == rt::PLACEHOLDER).and_then(|a| a.u8(0));
+    let notes_text = |r: &Rec| {
+        let text_type = r.child(rt::TEXT).and_then(|t| t.child(rt::TEXT_BODY)).and_then(|b| b.child(rt::TEXT_ATOM)).and_then(|a| a.u32(0));
+        kind(r).is_none() && text_type == Some(NOTES_TEXT)
+    };
+    let objects = page.child(rt::OBJECTS)?;
+    let candidates = || objects.children().take(MAX_OBJECTS).filter(|r| matches!(r.kind, rt::SHAPE | rt::PLACEHOLDER));
+    // The notes placeholder wherever it is, before any other text of the notes type.
+    let found = candidates().find(|r| kind(r) == Some(NOTES_PLACEHOLDER)).or_else(|| candidates().find(|r| notes_text(r)))?;
+    let mut body = text::text_body(&found.child(rt::TEXT)?, env, &scheme, None, false)?;
+    body.body = BodyProps::default();
+    Some(body)
 }
 
 /// The caller's default master, with ids above those handed out so far, wearing `scheme`.

@@ -11,7 +11,7 @@
 //! Every method reproduces a constant-colour mosaic exactly.
 
 mod ahd;
-mod bilinear;
+pub(super) mod bilinear;
 mod ppg;
 mod xtrans;
 
@@ -24,6 +24,10 @@ pub enum Method {
     Ppg,
     #[default]
     Ahd,
+}
+
+pub(super) fn mosaic_method(cfa: &Cfa, w: usize, h: usize, method: Method) -> Method {
+    if (w < 4 || h < 4) && cfa.is_bayer() { Method::Bilinear } else { method }
 }
 
 /// Mirror-reflected access to a single-plane mosaic (reflection keeps Bayer parity: −k → k, w−1+k → w−1−k).
@@ -96,17 +100,9 @@ pub fn demosaic(n: &Normalized, method: Method) -> Rgb32f {
         (None, _) => Rgb32f { width: w, height: h, data: n.data.iter().map(|&v| [v; 3]).collect() },
         (Some(cfa), _) => {
             let m = Mosaic { w, h, data: &n.data, cfa };
-            if !cfa.is_bayer() {
-                return match method {
-                    Method::Bilinear => bilinear::bilinear(&m),
-                    _ => xtrans::directional(&m),
-                };
-            }
-            if w < 4 || h < 4 {
-                return bilinear::bilinear(&m);
-            }
-            match method {
+            match mosaic_method(cfa, w, h, method) {
                 Method::Bilinear => bilinear::bilinear(&m),
+                _ if !cfa.is_bayer() => xtrans::directional(&m),
                 Method::Ppg => ppg::ppg(&m),
                 Method::Ahd => ahd::ahd(&m),
             }
