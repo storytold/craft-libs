@@ -145,7 +145,7 @@ pub(super) fn effect_list(
         }
     }
     // At its spec's `max_instances` a kind's `+` is greyed and the `+` key adds nothing.
-    let can_add = |kind: EffectKind| specs.iter().find(|spec| spec.kind == kind).is_some_and(|spec| draft.can_add(spec));
+    let can_add = |kind: EffectKind| specs.iter().find(|spec| spec.kind == kind).is_none_or(|spec| draft.can_add(spec));
     let kind_of = |row: &EffectRow| match row {
         EffectRow::Instance(id) => draft.style.effect(*id).map(|instance| instance.kind),
         EffectRow::Absent(kind) => Some(*kind),

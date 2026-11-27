@@ -96,8 +96,8 @@ pub struct EffectSpec {
     /// The values a new instance starts from.
     pub defaults: StyleParams,
     /// The most instances the dialog adds to a layer: at this count every `+` of the kind is
-    /// greyed and [`LayerStyleDraft::add_instance`](super::LayerStyleDraft::add_instance) adds
-    /// none. `None` sets no limit. A style that already holds more keeps them all; only adding
+    /// greyed and [`LayerStyleDraft::try_add_instance`](super::LayerStyleDraft::try_add_instance)
+    /// adds none. `None` sets no limit. A style that already holds more keeps them all; only adding
     /// stops.
     pub max_instances: Option<usize>,
 }
