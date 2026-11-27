@@ -148,6 +148,34 @@ mod native {
     const MAX_LINE: u64 = 64 << 20;
     const MAX_STDERR_LINE: u64 = 64 << 10;
 
+    /// What the reader and a request that ends agree on, under one lock.
+    #[derive(Default)]
+    struct Routing {
+        /// A request of the app's is waiting for its answer: the plugin's own requests go to it
+        /// (protocol 1.1 `host/…`), not to the push queue.
+        in_request: bool,
+        /// Counts everything that goes to the push queue, whichever side puts it there.
+        meter: FloodMeter,
+        flooded: bool,
+    }
+
+    impl Routing {
+        /// Counts one message for the push queue. False once the plugin floods: the app is told
+        /// once, and nothing more of this plugin's is pushed.
+        fn admit(&mut self, id: &str, now_secs: u64) -> bool {
+            if self.flooded {
+                return false;
+            }
+            if self.meter.hit(now_secs) {
+                log::warn!("plugin {id}: more than {} messages a second: stopped", push::FLOOD_RATE);
+                self.flooded = true;
+                push::push(id, Incoming::Flood);
+                return false;
+            }
+            true
+        }
+    }
+
     pub struct Connection {
         id: String,
         /// The plugin's last lines of standard error, for the message when it exits.
@@ -158,11 +186,11 @@ mod native {
         to_plugin: Notifier,
         from_plugin: Receiver<Result<Json, String>>,
         next_id: u64,
-        /// A request of the app's is waiting for its answer: the plugin's own requests go to it
-        /// (protocol 1.1 `host/…`), not to the push queue.
         /// The reader holds this lock while it routes a message and the request while it ends,
         /// so no message is routed to a request that has just finished.
-        in_request: std::sync::Arc<std::sync::Mutex<bool>>,
+        routing: std::sync::Arc<std::sync::Mutex<Routing>>,
+        /// When the plugin started: the clock its messages are counted against.
+        started: Instant,
         /// Why the add-in is gone, when the reader said so between two requests.
         gone: Option<String>,
     }
@@ -205,17 +233,15 @@ mod native {
 
             let (inbox, from_plugin) = sync_channel::<Result<Json, String>>(MAX_INBOX);
             let rid = id.clone();
-            let in_request: std::sync::Arc<std::sync::Mutex<bool>> = Default::default();
-            let busy = in_request.clone();
+            let routing: std::sync::Arc<std::sync::Mutex<Routing>> = Default::default();
+            let busy = routing.clone();
+            let started = Instant::now();
             // Protocol 2: standard output is read all the time. Answers to the app's requests go
             // to the request waiting for them; what the plugin says on its own goes to the push
             // queue the app's main loop takes from.
             let reader = std::thread::Builder::new().name(format!("plugin-{id}-out")).spawn(move || {
                 let mut out = BufReader::new(stdout);
                 let mut line = Vec::new();
-                let mut meter = FloodMeter::default();
-                let start = Instant::now();
-                let mut flooded = false;
                 loop {
                     line.clear();
                     match out.by_ref().take(MAX_LINE).read_until(b'\n', &mut line) {
@@ -236,11 +262,11 @@ mod native {
                                 // answered by that request (protocol 1.1).
                                 // Held until the message is routed: a request that ends meanwhile
                                 // waits, then hands on what it didn't take.
-                                let routing = crate::lock(&busy);
-                                let in_request = *routing;
+                                let mut routing = crate::lock(&busy);
+                                let in_request = routing.in_request;
                                 let pushed = method.is_some_and(|m| m.starts_with("collab/") || !in_request);
                                 if pushed {
-                                    if flooded {
+                                    if routing.flooded {
                                         continue;
                                     }
                                     if line.len() > push::MAX_PUSH_LINE {
@@ -248,10 +274,7 @@ mod native {
                                         push::push(&rid, Incoming::Overlong);
                                         continue;
                                     }
-                                    if meter.hit(start.elapsed().as_secs()) {
-                                        log::warn!("plugin {rid}: more than {} messages a second: stopped", push::FLOOD_RATE);
-                                        flooded = true;
-                                        push::push(&rid, Incoming::Flood);
+                                    if !routing.admit(&rid, started.elapsed().as_secs()) {
                                         continue;
                                     }
                                     push::push(&rid, Incoming::Message(msg));
@@ -323,7 +346,7 @@ mod native {
                 let _ = child.wait();
                 return Err("can't start the plugin's I/O threads".into());
             }
-            Ok(Connection { id, stderr_tail, stderr_done, child, to_plugin, from_plugin, next_id: 1, in_request, gone: None })
+            Ok(Connection { id, stderr_tail, stderr_done, child, to_plugin, from_plugin, next_id: 1, routing, started, gone: None })
         }
 
         pub fn request(&mut self, method: &str, params: Json, timeout: Duration) -> Result<Json, RequestError> {
@@ -350,22 +373,28 @@ mod native {
             if let Some(why) = &self.gone {
                 return Err(RequestError::fatal(why.clone()));
             }
-            *crate::lock(&self.in_request) = true;
+            crate::lock(&self.routing).in_request = true;
             let r = self.request_inner(method, params, timeout, hard, host);
             self.end_request();
             r
         }
 
         /// Ends the request and hands on what the add-in sent for it that it didn't take: its
-        /// own requests and notifications go to the push queue, where the app answers them;
-        /// late answers are dropped.
+        /// own requests and notifications go to the push queue, where the app answers them,
+        /// counted against the flood limit like the ones the reader puts there; late answers are
+        /// dropped.
         fn end_request(&mut self) {
-            let flag = self.in_request.clone();
-            let mut in_request = crate::lock(&flag);
-            *in_request = false;
+            let shared = self.routing.clone();
+            let mut routing = crate::lock(&shared);
+            routing.in_request = false;
+            let now = self.started.elapsed().as_secs();
             while let Ok(left) = self.from_plugin.try_recv() {
                 match left {
-                    Ok(msg) if msg.get("method").is_some() => push::push(&self.id, Incoming::Message(msg)),
+                    Ok(msg) if msg.get("method").is_some() => {
+                        if routing.admit(&self.id, now) {
+                            push::push(&self.id, Incoming::Message(msg));
+                        }
+                    }
                     Ok(_) => log::debug!("plugin {}: ignored a late answer", self.id),
                     Err(why) => self.gone = Some(why),
                 }
@@ -475,6 +504,27 @@ mod native {
                 let _ = self.child.kill();
             }
             let _ = self.child.wait();
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{Incoming, Routing, push};
+
+        #[test]
+        fn a_flood_is_said_once_and_ends_what_is_pushed() {
+            let id = "unit.routing.flood";
+            let mut routing = Routing::default();
+            let mut admitted = 0u32;
+            // Twice the rate each second, for longer than the limit allows.
+            for second in 0..u64::from(push::FLOOD_SECONDS) + 2 {
+                for _ in 0..push::FLOOD_RATE * 2 {
+                    admitted += u32::from(routing.admit(id, second));
+                }
+            }
+            assert!(admitted < push::FLOOD_RATE * 2 * push::FLOOD_SECONDS, "the flood was cut off");
+            assert!(!routing.admit(id, 1_000), "and a quiet spell doesn't bring the plugin back");
+            assert_eq!(push::take_for(id).iter().filter(|p| p.incoming == Incoming::Flood).count(), 1);
         }
     }
 }
