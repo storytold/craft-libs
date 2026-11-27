@@ -208,4 +208,6 @@ fn gujarati_breaks_between_aksharas_within_the_limits() {
     assert_eq!(gu("અમદાવાદ"), "અમ-દા-વાદ");
     assert_eq!(gu("«ગુજરાતી»"), "«ગુ-જ-રા-તી»", "punctuation around the word");
     assert_eq!(gu("Typography"), hyphenate_word_in("Typography", &lim, ProofLang::En));
+    // A joiner in a conjunct doesn't cut the word in two (each part then too short to break).
+    assert_eq!(gu("પુસ્\u{200D}તક"), "પુ-સ્\u{200D}તક");
 }
