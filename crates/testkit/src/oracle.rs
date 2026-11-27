@@ -12,6 +12,7 @@
 //!    Elsewhere it tries the bare name, then `<name>.exe`. A name that already has an extension is
 //!    tried as it is.
 //! 3. The install folders [`known_dirs`] lists.
+//!
 //! Windows drive-relative paths use the captured current directory on the same drive, or that
 //! drive's current directory otherwise. Returned executable paths are absolute.
 //!
