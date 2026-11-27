@@ -206,6 +206,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let ifd0 = tiff.ifds.first().ok_or_else(|| RawError::Corrupt("TIFF without IFDs".into()))?;
     let info = ifd0.image()?;
     let (w, h) = (info.width as usize, info.height as usize);
+    if w > u32::MAX as usize || h > u32::MAX as usize {
+        return Err(RawError::Limit("ORF dimensions exceed u32::MAX"));
+    }
     let n = w.checked_mul(h).filter(|n| *n > 0 && *n <= limits.samples()).ok_or(RawError::Limit("image too large"))?;
     // A partial TIFF directory is damage, not evidence of an unsupported compressed layout.
     // Do not infer packing from an absent strip table or from clipped sensor bytes.
@@ -233,7 +236,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         (d, 16, true)
     } else if is_block16(w, n, total, chunks.len()) {
         let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
-        let stride = w / 10 * 16;
+        let stride = (w / 10).checked_mul(16).filter(|&s| s > 0).ok_or_else(|| RawError::Corrupt("bad ORF row stride".into()))?;
         if src.len() as u64 != total || src.len() / stride != h {
             return Err(RawError::Corrupt("ORF strip shorter than its rows".into()));
         }
@@ -257,7 +260,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         // the depth is fixed here, so a header-only probe needs the samples only when the file doesn't state its
         // colour-filter layout
         let d = if mode == Mode::Full || stated.is_none() {
-            let stride = src.len() / h;
+            let stride = src.len().checked_div(h).filter(|&s| s > 0).ok_or_else(|| RawError::Corrupt("bad ORF row stride".into()))?;
             let mut d = vec![0u16; n];
             d.par_chunks_mut(w).enumerate().for_each(|(y, row)| unpack_row_le32_msb(&src[y * stride..(y + 1) * stride], 12, row));
             d

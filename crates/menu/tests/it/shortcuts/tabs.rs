@@ -75,6 +75,16 @@ fn app_tabs_show_full_labels_at_125_percent_and_switch_pages() {
 }
 
 #[trial]
+fn app_tabs_are_named_after_the_dialog() {
+    let (mut frames, mut show) = dialog_at_125_percent("Toolbar");
+    frames.idle(12, &mut show);
+    let tree = frames.tree();
+    let lists: Vec<&str> =
+        tree.keys().into_iter().filter(|&key| tree.role_of(key) == Some(Role::TAB_LIST)).filter_map(|key| tree.name_of(key)).collect();
+    assert_eq!(lists, ["Keyboard Shortcuts and Menus"]);
+}
+
+#[trial]
 fn app_tabs_keep_overflow_when_the_labels_do_not_fit() {
     let long_label = "Toolbar ".repeat(200);
     let (mut frames, mut show) = dialog_at_125_percent(&long_label);

@@ -36,7 +36,7 @@ pub use scroll::{STRIP_BACK, STRIP_FORWARD};
 pub(crate) use window::MOVE_BAND;
 use window::WindowMode;
 pub use window::grip_band;
-pub(crate) use window::keep_inside;
+pub use window::keep_inside;
 
 /// The scroll region's view in the last pass that showed it.
 #[derive(Clone, Default)]
