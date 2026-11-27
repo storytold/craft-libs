@@ -496,6 +496,7 @@ fn read_axes<'a>(c: &mut Chart, pa: &'a El, primary_val: &Option<String>) -> (Op
         c.y_hidden = deleted(v);
     }
     if let Some(a) = cat_ax {
+        c.cat_hidden = deleted(a);
         c.cat_reversed =
             a.child(Local("scaling")).and_then(|s| s.child(Local("orientation")).and_then(|c| c.attr_local("val"))).is_some_and(|o| o == "maxMin");
         c.axis_titles.0 = a.child(Local("title")).map(|t| rich_text(t).unwrap_or_else(|| "Axis Title".into()));

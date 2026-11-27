@@ -413,6 +413,10 @@ pub struct Chart {
     /// The category axis runs backwards (`c:orientation val="maxMin"`): right to left, or on a
     /// horizontal bar chart top to bottom (the default puts the first category at the bottom).
     pub cat_reversed: bool,
+    /// The category axis is deleted (`c:delete`, or `c:tickLblPos val="none"`): no labels, as
+    /// [`Chart::y_hidden`] for the value axis. For a scatter or bubble chart, the X value axis.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cat_hidden: bool,
     /// A combo chart's secondary value axis: bounds, major unit and number format.
     pub y2_min: Option<f64>,
     pub y2_max: Option<f64>,
@@ -564,6 +568,7 @@ impl Default for Chart {
             y_format: None,
             y_hidden: false,
             cat_reversed: false,
+            cat_hidden: false,
             y2_min: None,
             y2_max: None,
             y2_major: None,
