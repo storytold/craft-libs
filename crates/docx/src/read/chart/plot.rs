@@ -543,9 +543,10 @@ fn bars(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataL
             if !s.no_fill {
                 fill(out, segs.clone(), c.point_colour(j, i));
             }
-            // An explicit outline shows without a fill too (the series' colour is the line's here).
+            // An explicit outline shows without a fill too, in the point's own line colour or the
+            // series' (a varied accent only when neither sets one).
             if let (true, true, Some(w)) = (s.line, s.no_fill, s.line_w) {
-                stroke(out, segs, c.point_colour(j, i), w);
+                stroke(out, segs, s.outlines.get(i).copied().flatten().unwrap_or_else(|| c.point_colour(j, i)), w);
             }
             if let Some(text) = label_of(s, i) {
                 let mid = a + thick / 2.0;

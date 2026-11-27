@@ -1905,6 +1905,19 @@ fn a_series_outline_alone_leaves_a_varied_slice_or_bar_varied() {
     assert_eq!(bars, varied, "column");
 }
 
+#[test]
+fn a_hollow_bar_series_is_outlined_in_its_line_colour_when_the_chart_varies() {
+    // No `c:varyColors`: one series varies by point. Its outline is red and it has no fill.
+    let s = ser(0, "S", None, &CATS, &["1", "2", "3"]).replacen(
+        "</c:tx>",
+        r#"</c:tx><c:spPr><a:noFill/><a:ln w="12700"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></c:spPr>"#,
+        1,
+    );
+    let items = chart_items(&space(&column_chart("", &[s])), &theme(), 300.0, 200.0);
+    let palette = [RED, accent(0), accent(1), accent(2)];
+    assert_eq!(strokes_in(&items, &palette), vec![RED; 3]);
+}
+
 /// The centre of the text item that reads `text`.
 fn text_centre(items: &[GraphicItem], text: &str) -> Option<(f32, f32)> {
     items.iter().find_map(|it| match it {
