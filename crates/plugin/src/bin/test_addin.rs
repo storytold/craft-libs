@@ -72,6 +72,13 @@ fn main() {
                 let answered = (0..times).take_while(|_| matches!(lines.next(), Some(Ok(_)))).count();
                 Ok(json!(answered))
             }
+            "trailing" => {
+                // The answer and a request of its own, written together.
+                let answer = json!({"jsonrpc": "2.0", "id": id, "result": "done"});
+                let request = json!({"jsonrpc": "2.0", "id": "t1", "method": "host/late", "params": {}});
+                let _ = write!(out, "{answer}\n{request}\n").and_then(|_| out.flush());
+                continue;
+            }
             "sleep" => {
                 std::thread::sleep(std::time::Duration::from_millis(params.get("ms").and_then(Json::as_u64).unwrap_or(0).min(60_000)));
                 Ok(Json::Null)

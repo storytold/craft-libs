@@ -192,3 +192,19 @@ fn a_relative_folder_starts_the_program_in_it() {
     assert!(told.is_absolute(), "the add-in is told its folder in full: {}", told.display());
     assert_eq!(told.canonicalize().unwrap(), folder);
 }
+
+#[test]
+fn a_request_of_the_add_ins_right_behind_its_answer_reaches_the_app() {
+    let _turn = serial();
+    // Whether it arrives while the request still waits or just after, it ends in the push queue.
+    for round in 0..20 {
+        let mut c = start("it.trailing");
+        assert_eq!(c.request("trailing", Json::Null, LONG).unwrap(), json!("done"));
+        let got = pushed("it.trailing", |g| !g.is_empty());
+        assert!(matches!(got.first(), Some(Incoming::Message(m)) if m["method"] == "host/late"), "round {round}: {got:?}");
+        // The connection still works, and the exit is not taken for the next round's message.
+        assert_eq!(c.request("echo", json!(1), LONG).unwrap(), json!(1));
+        c.shutdown();
+        pushed("it.trailing", |g| g.iter().any(|i| matches!(i, Incoming::Exited(_))));
+    }
+}

@@ -130,7 +130,6 @@ mod web {
 mod native {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::process::{Child, Command, Stdio};
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{Receiver, RecvTimeoutError, TrySendError, sync_channel};
     use std::time::Instant;
 
@@ -161,7 +160,11 @@ mod native {
         next_id: u64,
         /// A request of the app's is waiting for its answer: the plugin's own requests go to it
         /// (protocol 1.1 `host/…`), not to the push queue.
-        in_request: std::sync::Arc<AtomicBool>,
+        /// The reader holds this lock while it routes a message and the request while it ends,
+        /// so no message is routed to a request that has just finished.
+        in_request: std::sync::Arc<std::sync::Mutex<bool>>,
+        /// Why the add-in is gone, when the reader said so between two requests.
+        gone: Option<String>,
     }
 
     impl Connection {
@@ -202,7 +205,7 @@ mod native {
 
             let (inbox, from_plugin) = sync_channel::<Result<Json, String>>(MAX_INBOX);
             let rid = id.clone();
-            let in_request: std::sync::Arc<AtomicBool> = Default::default();
+            let in_request: std::sync::Arc<std::sync::Mutex<bool>> = Default::default();
             let busy = in_request.clone();
             // Protocol 2: standard output is read all the time. Answers to the app's requests go
             // to the request waiting for them; what the plugin says on its own goes to the push
@@ -231,9 +234,10 @@ mod native {
                                 let method = msg.get("method").and_then(Json::as_str);
                                 // `host/…` requests during one of the app's requests are still
                                 // answered by that request (protocol 1.1).
-                                // Read once: a request that ends between two reads must not turn
-                                // a message with a method into an answer nobody asked for.
-                                let in_request = busy.load(Ordering::SeqCst);
+                                // Held until the message is routed: a request that ends meanwhile
+                                // waits, then hands on what it didn't take.
+                                let routing = crate::lock(&busy);
+                                let in_request = *routing;
                                 let pushed = method.is_some_and(|m| m.starts_with("collab/") || !in_request);
                                 if pushed {
                                     if flooded {
@@ -319,7 +323,7 @@ mod native {
                 let _ = child.wait();
                 return Err("can't start the plugin's I/O threads".into());
             }
-            Ok(Connection { id, stderr_tail, stderr_done, child, to_plugin, from_plugin, next_id: 1, in_request })
+            Ok(Connection { id, stderr_tail, stderr_done, child, to_plugin, from_plugin, next_id: 1, in_request, gone: None })
         }
 
         pub fn request(&mut self, method: &str, params: Json, timeout: Duration) -> Result<Json, RequestError> {
@@ -343,10 +347,29 @@ mod native {
             hard: bool,
             host: &mut HostHandler<'_>,
         ) -> Result<Json, RequestError> {
-            self.in_request.store(true, Ordering::SeqCst);
+            if let Some(why) = &self.gone {
+                return Err(RequestError::fatal(why.clone()));
+            }
+            *crate::lock(&self.in_request) = true;
             let r = self.request_inner(method, params, timeout, hard, host);
-            self.in_request.store(false, Ordering::SeqCst);
+            self.end_request();
             r
+        }
+
+        /// Ends the request and hands on what the add-in sent for it that it didn't take: its
+        /// own requests and notifications go to the push queue, where the app answers them;
+        /// late answers are dropped.
+        fn end_request(&mut self) {
+            let flag = self.in_request.clone();
+            let mut in_request = crate::lock(&flag);
+            *in_request = false;
+            while let Ok(left) = self.from_plugin.try_recv() {
+                match left {
+                    Ok(msg) if msg.get("method").is_some() => push::push(&self.id, Incoming::Message(msg)),
+                    Ok(_) => log::debug!("plugin {}: ignored a late answer", self.id),
+                    Err(why) => self.gone = Some(why),
+                }
+            }
         }
 
         /// Sends a notification (no answer expected), interleaved with requests.
