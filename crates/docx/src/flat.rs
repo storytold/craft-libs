@@ -116,6 +116,10 @@ fn room(total: u64) -> u64 {
 /// Unpack a Flat OPC file into its parts, with a `[Content_Types].xml` made from the parts'
 /// content types (unless the file carries one).
 pub(crate) fn unpack(bytes: &[u8]) -> Result<Package, DocxError> {
+    unpack_within(bytes, MAX_PART_ELEMENTS)
+}
+
+fn unpack_within(bytes: &[u8], part_elements: usize) -> Result<Package, DocxError> {
     let text = utf8_text(bytes);
     let src: &[u8] = text.as_ref();
     let mut r = NsReader::from_reader(src);
@@ -150,7 +154,7 @@ pub(crate) fn unpack(bytes: &[u8]) -> Result<Package, DocxError> {
                     }
                 }
                 elements += 1;
-                if elements > MAX_PART_ELEMENTS {
+                if elements > part_elements {
                     return Err(DocxError::Limit("too many XML elements".into()));
                 }
                 let local = e.local_name().as_ref().to_vec();
@@ -387,7 +391,12 @@ fn root_tag_start(frag: &[u8]) -> Option<usize> {
 
 /// Write `doc` as a Word XML Document (Flat OPC).
 pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
-    let parts = crate::write::write_parts(doc, Flavor::Document)?;
+    write_with_options(doc, crate::WriteOptions::default())
+}
+
+/// Write Flat OPC using explicit save options.
+pub fn write_with_options(doc: &Document, options: crate::WriteOptions) -> Result<Vec<u8>, DocxError> {
+    let parts = crate::write::write_parts(doc, Flavor::Document, options)?;
     let types = parts
         .iter()
         .find(|(n, _)| n == "[Content_Types].xml")
@@ -448,7 +457,13 @@ fn one_element(s: &str) -> bool {
     r.config_mut().check_comments = true;
     let (mut depth, mut roots) = (0usize, 0usize);
     loop {
-        let attrs_ok = |e: &BytesStart| e.attributes().all(|a| a.is_ok());
+        // Each attribute parses and its value unescapes: an undeclared entity (`x="&no;"`) isn't
+        // well-formed, and the reader would keep it raw (#6072).
+        // Names must be XML names too: the reader takes `<a?b>` and `x?="1"` without complaint.
+        let attrs_ok = |e: &BytesStart| {
+            is_qname(e.name().as_ref())
+                && e.attributes().all(|a| a.is_ok_and(|a| is_qname(a.key.as_ref()) && a.normalized_value(quick_xml::XmlVersion::Explicit1_0).is_ok()))
+        };
         match r.read_event() {
             Ok(Event::Start(e)) => {
                 if !attrs_ok(&e) || (depth == 0 && roots > 0) {
@@ -477,6 +492,28 @@ fn one_element(s: &str) -> bool {
             Ok(Event::Eof) => return depth == 0 && roots == 1,
             Ok(_) => {}
         }
+    }
+}
+
+/// Whether `name` is an XML name with at most one colon, neither first nor last: a qualified name
+/// in Namespaces in XML 1.0 (§4), with the name characters of XML 1.0 (Fifth Edition) §2.3.
+fn is_qname(name: &[u8]) -> bool {
+    fn start(c: char) -> bool {
+        matches!(c, 'A'..='Z' | '_' | 'a'..='z' | '\u{C0}'..='\u{D6}' | '\u{D8}'..='\u{F6}' | '\u{F8}'..='\u{2FF}' | '\u{370}'..='\u{37D}'
+            | '\u{37F}'..='\u{1FFF}' | '\u{200C}'..='\u{200D}' | '\u{2070}'..='\u{218F}' | '\u{2C00}'..='\u{2FEF}' | '\u{3001}'..='\u{D7FF}'
+            | '\u{F900}'..='\u{FDCF}' | '\u{FDF0}'..='\u{FFFD}' | '\u{10000}'..='\u{EFFFF}')
+    }
+    fn more(c: char) -> bool {
+        start(c) || matches!(c, '-' | '.' | '0'..='9' | '\u{B7}' | '\u{300}'..='\u{36F}' | '\u{203F}'..='\u{2040}')
+    }
+    let ncname = |p: &str| {
+        let mut cs = p.chars();
+        cs.next().is_some_and(start) && cs.all(more)
+    };
+    let Ok(name) = std::str::from_utf8(name) else { return false };
+    match name.split_once(':') {
+        Some((prefix, local)) => ncname(prefix) && ncname(local),
+        None => ncname(name),
     }
 }
 
@@ -517,6 +554,27 @@ mod tests {
         let out = with_scope(frag.as_bytes(), &scope);
         let out = String::from_utf8(out).unwrap();
         assert_eq!(out.matches("xmlns:p").count(), 256);
+    }
+
+    #[test]
+    fn part_element_budget_counts_parts_that_are_not_read() {
+        assert_eq!(MAX_PART_ELEMENTS, 8_000_002);
+        let cap = 100;
+        let inline = |children| format!("<r>{}</r>", "<y/>".repeat(children));
+        let part = |name: &str, xml: &str| format!("<pkg:part pkg:name=\"{name}\"><pkg:xmlData>{xml}</pkg:xmlData></pkg:part>");
+        let package = |parts: &str| format!("<pkg:package xmlns:pkg=\"{PKG_NS}\">{parts}</pkg:package>");
+        // The part, xmlData and r wrappers count too: 97 children make exactly 100.
+        let xml = inline(97);
+        let first = part("/word/unused.xml", &xml);
+        let at_cap = unpack_within(package(&first).as_bytes(), cap).unwrap();
+        assert_eq!(at_cap.get("word/unused.xml"), Some(xml.as_bytes()));
+        let over = part("/word/unused.xml", &inline(98));
+        assert!(matches!(unpack_within(package(&over).as_bytes(), cap), Err(DocxError::Limit(_))));
+        // Each package child has its own allowance, even though neither part is read.
+        let two = format!("{first}{}", part("/word/also-unused.xml", &xml));
+        let reset = unpack_within(package(&two).as_bytes(), cap).unwrap();
+        assert_eq!(reset.get("word/unused.xml"), Some(xml.as_bytes()));
+        assert_eq!(reset.get("word/also-unused.xml"), Some(xml.as_bytes()));
     }
 
     #[test]
@@ -587,6 +645,12 @@ mod tests {
             "<a></a></pkg:xmlData>",
             "<a><!-- x -- y --></a>",
             "<a/><!-- x--->",
+            "<a x=\"&no;\"/>",
+            "<a><b x=\"&no;\"/></a>",
+            "<a?b/>",
+            "<a x?=\"1\"/>",
+            "<a><b:c:d/></a>",
+            "<a :x=\"1\"/>",
         ] {
             assert!(xml_fragment(ct, bad.as_bytes()).is_none(), "{bad}");
         }

@@ -1,0 +1,15 @@
+config_version = 1
+
+[[exception]]
+name = "face-stories"
+kind = "probe"
+rule = "probe/exempt/stories"
+path = "crates/ui/src/lib.rs"
+reason = "the face is shown by its host"
+
+[[exception]]
+name = "manual-sizes"
+kind = "probe"
+rule = "probe/exempt"
+path = "crates/ui/src/lib.rs"
+reason = "hand-written component"

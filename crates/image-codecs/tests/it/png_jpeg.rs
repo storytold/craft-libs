@@ -66,6 +66,27 @@ fn adam7_compressions() {
 }
 
 #[test]
+fn png_from_borrowed_rgba8_matches_encoding_an_image() {
+    let img = synth(37, 23, ChannelLayout::Rgba, SampleType::U8, 9042, 0.5);
+    for interlace in [false, true] {
+        let opts = EncodeOptions { png_interlaced: interlace, ..Default::default() };
+        let borrowed = encode_png_rgba8(img.width(), img.height(), img.data(), &opts).unwrap();
+        assert_eq!(borrowed, encode(&img, Format::Png, &opts).unwrap(), "interlaced {interlace}");
+        assert_eq!(decode(&borrowed).unwrap().data(), img.data());
+    }
+}
+
+#[test]
+fn png_from_borrowed_rgba8_rejects_a_buffer_of_the_wrong_size() {
+    let pixels = [0u8; 4 * 4 * 4];
+    let opts = EncodeOptions::default();
+    for (w, h, data) in [(4, 4, &pixels[..pixels.len() - 1]), (4, 3, &pixels[..]), (0, 4, &[][..])] {
+        let result = encode_png_rgba8(w, h, data, &opts);
+        assert!(matches!(result, Err(CodecError::InvalidImage(_))), "{w}x{h} with {} bytes: {result:?}", data.len());
+    }
+}
+
+#[test]
 fn png_palette_and_low_bit_depth_expand() {
     // Build a 2-bit gray PNG and a palette PNG with tRNS using the png crate.
     let mut out = Vec::new();
@@ -103,6 +124,18 @@ fn jpeg_grayscale_decodes_as_gray() {
     let back = decode(&encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap()).unwrap();
     assert_eq!(back.layout(), ChannelLayout::Gray);
     assert!(psnr(&img, &back) > 35.0);
+}
+
+#[test]
+fn jpeg_roundtrip_preserves_inch_density_and_single_exif_prefix() {
+    let mut img = synth(40, 30, ChannelLayout::Rgb, SampleType::U8, 2, 0.02);
+    img.meta.dpi = Some((300.0, 240.0));
+    img.meta.exif = Some(b"II*\0\x08\0\0\0\0\0\0\0\0\0\0".to_vec());
+    let bytes = encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+    assert_eq!(bytes.windows(6).filter(|w| *w == b"Exif\0\0").count(), 1);
+    let back = decode(&bytes).unwrap();
+    assert_eq!(back.meta.dpi, Some((300.0, 240.0)));
+    assert_eq!(back.meta.exif.as_deref(), img.meta.exif.as_deref());
 }
 
 #[test]
@@ -497,7 +530,7 @@ fn png_rows_fail_like_decode_on_damaged_files() {
 
 #[cfg(feature = "corpus")]
 #[test]
-fn pngsuite_corpus_matches_oracle() {
+fn feature_config_pngsuite_corpus_matches_oracle() {
     let mut checked = 0;
     for (name, bytes) in common::pngsuite::pngs() {
         let oracle = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png);
@@ -604,7 +637,7 @@ fn png_preflight_uses_the_output_layout() {
 
 #[cfg(feature = "corpus")]
 #[test]
-fn png_rows_equal_decode_on_the_pngsuite_corpus() {
+fn feature_config_png_rows_equal_decode_on_the_pngsuite_corpus() {
     let mut checked = 0;
     for (name, bytes) in common::pngsuite::pngs() {
         assert_steps_equal_decode(&bytes, &name);
@@ -617,7 +650,7 @@ fn png_rows_equal_decode_on_the_pngsuite_corpus() {
 /// but the interlaced ones), and fails where `decode` fails.
 #[cfg(feature = "corpus")]
 #[test]
-fn pngsuite_corpus_rows_match_the_whole_decode() {
+fn feature_config_pngsuite_corpus_rows_match_the_whole_decode() {
     let opts = DecodeOptions { keep_orientation: true, ..Default::default() };
     let (mut streamed, mut refused, mut skipped) = (0, 0, 0);
     for (name, bytes) in common::pngsuite::pngs() {

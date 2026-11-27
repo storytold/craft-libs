@@ -218,10 +218,16 @@ pub struct GroupChild {
     pub x: f32,
     pub y: f32,
     pub obj: InlineObject,
+    /// This member's own hyperlink target, independent of its group's target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
 }
 
 /// Most members a group keeps (hostile files).
 pub const MAX_GROUP_CHILDREN: usize = 1000;
+
+// Imported groups may nest eight levels below their root. Story traversal uses the same bound.
+const MAX_GROUP_TEXT_BOX_DEPTH: usize = 8;
 
 /// The background fill and outline of a Drawing Canvas (an [`InlineObject::Group`] with `canvas`).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -291,27 +297,49 @@ impl InlineObject {
             _ => None,
         }
     }
-    /// The text box stories this object shows: a text box's, or its group members'.
+    /// The text box stories this object shows, including retained nested group members.
     pub fn text_boxes(&self) -> Vec<u32> {
-        match self {
-            InlineObject::Shape { story: Some(id), .. } => vec![*id],
-            InlineObject::Group { children, .. } => children.iter().filter_map(|c| c.obj.text_box()).collect(),
-            _ => Vec::new(),
+        fn visit(object: &InlineObject, depth: usize, remaining: &mut usize, out: &mut Vec<u32>) {
+            match object {
+                InlineObject::Shape { story: Some(id), .. } => out.push(*id),
+                InlineObject::Group { children, .. } if depth <= MAX_GROUP_TEXT_BOX_DEPTH => {
+                    for child in children {
+                        if *remaining == 0 {
+                            break;
+                        }
+                        *remaining -= 1;
+                        visit(&child.obj, depth + 1, remaining, out);
+                    }
+                }
+                _ => {}
+            }
         }
+        let mut out = Vec::new();
+        let mut remaining = MAX_GROUP_CHILDREN;
+        visit(self, 0, &mut remaining, &mut out);
+        out
     }
-    /// The text box story slots of this object and its group members, to repoint.
+    /// The text box story slots of this object and nested group members, to repoint.
     pub fn text_box_slots(&mut self) -> Vec<&mut Option<u32>> {
-        match self {
-            InlineObject::Shape { story, .. } => vec![story],
-            InlineObject::Group { children, .. } => children
-                .iter_mut()
-                .filter_map(|c| match &mut c.obj {
-                    InlineObject::Shape { story, .. } => Some(story),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
+        fn visit<'a>(object: &'a mut InlineObject, depth: usize, remaining: &mut usize, out: &mut Vec<&'a mut Option<u32>>) {
+            match object {
+                InlineObject::Shape { story, .. } => out.push(story),
+                InlineObject::Group { children, .. } if depth <= MAX_GROUP_TEXT_BOX_DEPTH => {
+                    for child in children {
+                        if *remaining == 0 {
+                            break;
+                        }
+                        *remaining -= 1;
+                        visit(&mut child.obj, depth + 1, remaining, out);
+                    }
+                }
+                _ => {}
+            }
         }
+        let mut out = Vec::new();
+        let mut remaining = MAX_GROUP_CHILDREN;
+        visit(self, 0, &mut remaining, &mut out);
+        out
     }
     /// A group's members placed in a `w` × `h` box at (`x`, `y`): each member's rectangle
     /// (x, y, w, h) and the member. Empty for anything else.
@@ -376,7 +404,7 @@ impl InlineObject {
             _ => "",
         }
     }
-    /// Set a drawing's description (capped at [`MAX_ALT_TEXT`] characters); `false` if this is no drawing.
+    /// Set a drawing's description (capped at `MAX_ALT_TEXT` characters); `false` if this is no drawing.
     pub fn set_alt_text(&mut self, text: &str) -> bool {
         let text = cap_alt(text);
         match self {
@@ -434,5 +462,23 @@ impl InlineObject {
             InlineObject::Opaque { text, .. } => text,
             _ => "",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GroupChild;
+
+    #[test]
+    fn vml_hyperlinks_keep_legacy_group_child_json_compatible() {
+        let old = r#"{"x":2.0,"y":3.0,"obj":{"type":"image","media":"picture","w":4.0,"h":5.0}}"#;
+        let child: GroupChild = serde_json::from_str(old).unwrap();
+        assert!(child.link.is_none());
+        let value = serde_json::to_value(&child).unwrap();
+        assert!(value.get("link").is_none(), "unlinked children keep the old JSON shape");
+        let mut linked = child;
+        linked.link = Some("https://example.com/member#place".into());
+        let back: GroupChild = serde_json::from_str(&serde_json::to_string(&linked).unwrap()).unwrap();
+        assert_eq!(back, linked, "both the target and the original object survive");
     }
 }

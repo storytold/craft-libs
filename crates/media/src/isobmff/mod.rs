@@ -19,6 +19,8 @@ mod demux;
 mod dolby_vision;
 mod error;
 mod mux;
+mod parameter_sets;
+mod rtmd;
 
 pub use crate::source::{ByteSource, ReadSeekSource};
 pub use bytes::FourCc;
@@ -32,3 +34,5 @@ pub use demux::{Edit, Metadata, Mp4File, Sample, SampleGroup, Track, TrackKind, 
 pub use dolby_vision::DolbyVisionConfig;
 pub use error::{Error, Result};
 pub use mux::{Brand, FragmentedWriter, Mp4Writer, TrackConfig, WriteSample, WriterOptions};
+pub use parameter_sets::{AvcSps, HevcSps};
+pub use rtmd::{SONY_RTMD_TIMECODE_PREFIX_LEN, SonyRtmdTimecode, parse_sony_rtmd_timecode};

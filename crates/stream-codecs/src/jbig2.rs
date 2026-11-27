@@ -1,9 +1,9 @@
 //! JBIG2 encoding (ITU-T T.88 | ISO/IEC 14492), for `JBIG2Decode` (ISO 32000-2 §7.4.7), lossless:
 //! a generic region, template 0 with its nominal adaptive pixels, typical prediction on, MQ
-//! arithmetic coding ([`crate::mq`]); or the image's marks as symbols ([`symbols`]), which a group
+//! arithmetic coding (`crate::mq`); or the image's marks as symbols (`symbols`), which a group
 //! of images may share through `/JBIG2Globals`. Written from the standard's 6.2.5 (coding a generic
 //! region), 7.2 (segment headers), 7.4.1, 7.4.6 and 7.4.8 (the segments) and D.3 (the embedded
-//! organisation PDF uses). Decoding is in [`decode`].
+//! organisation PDF uses). Decoding is in `decode`.
 
 mod decode;
 mod symbols;
@@ -51,14 +51,25 @@ const PAD: usize = 4;
 
 /// `rows` rows of `columns` 1-bit PDF samples as lossless JBIG2, the smaller of two codings:
 /// [`encode_jbig2_generic`]'s, or one that stores each distinct mark of the image once, as a
-/// symbol, and places its copies (see [`symbols`]). Either way the stream is in the embedded
+/// symbol, and places its copies (see `symbols`). Either way the stream is in the embedded
 /// organisation and decodes to the same bits without `/JBIG2Globals`.
 ///
 /// Errors: as [`encode_jbig2_generic`].
 pub fn encode_jbig2(data: &[u8], columns: u32, rows: u32) -> Result<Vec<u8>, CodecError> {
+    encode_jbig2_capped(data, columns, rows, symbols::MAX_SYMBOLS, symbols::MAX_SYMBOL_PIXELS, symbols::MAX_CODED_SYMBOLS)
+}
+
+fn encode_jbig2_capped(
+    data: &[u8],
+    columns: u32,
+    rows: u32,
+    max_symbols: usize,
+    max_symbol_pixels: usize,
+    max_coded_symbols: usize,
+) -> Result<Vec<u8>, CodecError> {
     let generic = encode_jbig2_generic(data, columns, rows)?;
     let samples = rows_to_encode(data, columns, rows).ok();
-    Ok(match samples.and_then(|s| symbols::encode(s, columns, rows)) {
+    Ok(match samples.and_then(|s| symbols::encode(s, columns, rows, max_symbols, max_symbol_pixels, max_coded_symbols)) {
         Some(coded) if coded.len() < generic.len() => coded,
         _ => generic,
     })
@@ -125,7 +136,7 @@ pub struct SharedJbig2 {
 /// dictionary: the marks found in more than one of them are stored once, in a symbol dictionary
 /// segment not associated with a page, which is the `/JBIG2Globals` stream's data, and each image's
 /// stream, in the embedded organisation, places them from there, with its other marks coded as
-/// [`encode_jbig2`]'s symbol coding codes them (see [`symbols`]). With the globals, each decodes to
+/// [`encode_jbig2`]'s symbol coding codes them (see `symbols`). With the globals, each decodes to
 /// its own bits. An image that holds none of those marks, or that symbol coding doesn't take, has
 /// no stream here; it is stored alone. `None` when the images share fewer than two marks.
 ///
@@ -433,6 +444,10 @@ mod tests {
             fn next_line(&mut self) {
                 self.0 += 1;
             }
+        }
+        // The largest page, 2^28 pixels, takes seconds to encode and decode: nightly only.
+        if craft_testkit::hostile::divisor() > 1 {
+            return;
         }
         // One black pixel, so a page that came back blank wouldn't pass.
         let mut largest = vec![0xFF; 2_048 * 16_384];

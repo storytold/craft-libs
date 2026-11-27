@@ -10,7 +10,7 @@ use craft_image_codecs::*;
 // ---------------------------------------------------------------------------
 
 #[test]
-fn every_enabled_format_is_symmetric_or_whitelisted() {
+fn feature_config_every_enabled_format_is_symmetric_or_whitelisted() {
     for f in Format::ALL {
         let c = caps(f);
         if !(c.read || c.write) {
@@ -34,7 +34,7 @@ fn exceptions_are_documented_and_unique() {
 }
 
 #[test]
-fn never_write_only_without_exception() {
+fn feature_config_never_write_only_without_exception() {
     // Stronger form: no format may be writable-but-unreadable unless listed.
     for f in writable_formats() {
         if !caps(f).read {
@@ -44,7 +44,7 @@ fn never_write_only_without_exception() {
 }
 
 #[test]
-fn default_build_formats_all_symmetric() {
+fn feature_config_default_build_formats_all_symmetric() {
     let expected = [
         Format::Png,
         Format::Jpeg,
@@ -74,7 +74,7 @@ fn default_build_formats_all_symmetric() {
 }
 
 #[test]
-fn avif_is_readable_only_with_the_decode_feature() {
+fn feature_config_avif_is_readable_only_with_the_decode_feature() {
     assert_eq!(caps(Format::Avif).read, cfg!(all(feature = "avif-decode", not(target_arch = "wasm32"))));
     assert_eq!(caps(Format::Avif).write, cfg!(feature = "avif"));
     let header = decode_as(Format::Avif, b"\0\0\0\x1cftypavif");
@@ -86,7 +86,7 @@ fn avif_is_readable_only_with_the_decode_feature() {
 }
 
 #[test]
-fn heif_is_detected_always_and_readable_only_with_the_feature() {
+fn feature_config_heif_is_detected_always_and_readable_only_with_the_feature() {
     let header = b"\0\0\0\x18ftypheic\0\0\0\0mif1heic";
     assert_eq!(detect(header), Some(Format::Heif));
     assert_eq!(from_extension("IMG_0001.HEIC"), Some(Format::Heif));
@@ -109,6 +109,34 @@ fn detect_heif_brands() {
 }
 
 #[test]
+fn ftyp_brands_respect_prefix_and_declared_bounds() {
+    let mut prefix = *b"\0\0\0\x1cftypisomavifavismif1xx";
+    for end in 0..12 {
+        assert!(ftyp_brands(&prefix[..end]).next().is_none(), "prefix length {end}");
+    }
+    assert!(ftyp_brands(b"\0\0\0\x0cmdatheic").next().is_none());
+    assert!(ftyp_brands(&prefix).eq([b"isom", b"avis", b"mif1"]));
+    assert!(ftyp_brands(&prefix[..18]).eq([b"isom"]));
+
+    prefix[..4].copy_from_slice(&20u32.to_be_bytes());
+    assert!(ftyp_brands(&prefix).eq([b"isom", b"avis"]));
+    prefix[..4].copy_from_slice(&8u32.to_be_bytes());
+    assert!(ftyp_brands(&prefix).eq([b"isom"]));
+}
+
+#[test]
+fn detect_ftyp_keeps_its_short_brand_scan() {
+    let mut prefix = [0; 68];
+    prefix[..12].copy_from_slice(b"\0\0\0\x44ftypheic");
+    prefix[64..68].copy_from_slice(b"avif");
+    assert!(ftyp_brands(&prefix).any(|brand| brand == b"avif"));
+    assert_eq!(detect(&prefix), Some(Format::Heif));
+
+    prefix[60..64].copy_from_slice(b"avif");
+    assert_eq!(detect(&prefix), Some(Format::Avif));
+}
+
+#[test]
 fn caps_are_internally_consistent() {
     for f in Format::ALL {
         let c = caps(f);
@@ -121,7 +149,7 @@ fn caps_are_internally_consistent() {
 }
 
 #[test]
-fn caps_function_matches_method() {
+fn feature_config_caps_function_matches_method() {
     for f in Format::ALL {
         assert_eq!(caps(f), f.caps());
     }
@@ -132,7 +160,7 @@ fn caps_function_matches_method() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn detect_encoded_output_of_every_format() {
+fn feature_config_detect_encoded_output_of_every_format() {
     for f in writable_formats() {
         let img = test_image(ChannelLayout::Rgba, SampleType::U8);
         let bytes = encode(&img, f, &EncodeOptions::default()).unwrap();
@@ -230,7 +258,7 @@ fn detect_magic_iff() {
 }
 #[cfg(feature = "sgi")]
 #[test]
-fn detect_magic_sgi() {
+fn feature_config_detect_magic_sgi() {
     use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
     let img = Image::from_u8(5, 3, ChannelLayout::Rgba, (0..60).collect()).unwrap();
     let bytes = encode(&img, Format::Sgi, &EncodeOptions::default()).unwrap();
@@ -260,9 +288,241 @@ fn detect_magic_jpeg_ls() {
     assert!(decode_as(Format::JpegLs, &[0xFF, 0xD8, 0xFF, 0xF7]).is_err());
 }
 
+/// `file` with `count` marker segments of `body` bytes each inserted right after its SOI.
+fn with_segments(file: &[u8], marker: u8, count: usize, body: usize) -> Vec<u8> {
+    let mut out = file[..2].to_vec();
+    for i in 0..count {
+        out.extend_from_slice(&[0xFF, marker]);
+        out.extend_from_slice(&u16::try_from(body + 2).unwrap().to_be_bytes());
+        out.extend((0..body).map(|j| (i + j) as u8));
+    }
+    out.extend_from_slice(&file[2..]);
+    out
+}
+
+fn jpeg_ls_file() -> (Image, Vec<u8>) {
+    let img = Image::from_u8(5, 3, ChannelLayout::Gray, (0..15).collect()).unwrap();
+    let bytes = encode(&img, Format::JpegLs, &EncodeOptions::default()).unwrap();
+    (img, bytes)
+}
+
+/// Grows a prefix of `bytes` as a [`PrefixDetector`] asks, starting from `first` bytes, and checks
+/// each answer against [`detect_prefix`].
+fn detect_by_prefix(bytes: &[u8], first: usize) -> Detection {
+    let mut detector = PrefixDetector::new();
+    let mut len = first.min(bytes.len());
+    loop {
+        let answer = detector.detect(&bytes[..len]);
+        assert_eq!(answer, detect_prefix(&bytes[..len]), "after {len} bytes");
+        match answer {
+            Detection::NeedBytes(more) if len < bytes.len() => {
+                assert!(more > len, "{more} bytes asked for after {len}");
+                len = more.min(bytes.len());
+            }
+            answer => return answer,
+        }
+    }
+}
+
+#[test]
+fn jpeg_ls_after_a_long_comment_needs_the_frame_header() {
+    let (img, plain) = jpeg_ls_file();
+    let bytes = with_segments(&plain, 0xFE, 1, 100);
+    assert_eq!(detect(&bytes), Some(Format::JpegLs));
+    assert_eq!(decode(&bytes).unwrap().data(), img.data());
+    // The first 64 bytes end inside the comment: `detect` says JPEG, `detect_prefix` asks for
+    // the bytes up to the next marker.
+    assert_eq!(detect(&bytes[..64]), Some(Format::Jpeg));
+    assert_eq!(detect_prefix(&bytes[..64]), Detection::NeedBytes(2 + 2 + 102 + 2));
+    assert_eq!(detect_by_prefix(&bytes, 64), Detection::Format(Format::JpegLs));
+    assert_eq!(detect_prefix(&bytes), Detection::Format(Format::JpegLs));
+}
+
+#[test]
+fn jpeg_ls_after_many_segments_is_still_jpeg_ls() {
+    // An ICC profile can span 255 APP2 segments.
+    let (img, plain) = jpeg_ls_file();
+    let bytes = with_segments(&plain, 0xE2, 255, 14);
+    assert_eq!(detect(&bytes), Some(Format::JpegLs));
+    assert_eq!(decode(&bytes).unwrap().data(), img.data());
+    assert_eq!(detect_by_prefix(&bytes, 64), Detection::Format(Format::JpegLs));
+    // A plain JPEG with as many segments before its baseline frame header stays JPEG.
+    let jpeg = with_segments(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0], 0xE2, 255, 14);
+    assert_eq!(detect(&jpeg), Some(Format::Jpeg));
+    assert_eq!(detect_by_prefix(&jpeg, 64), Detection::Format(Format::Jpeg));
+}
+
+#[test]
+fn a_cut_off_jpeg_asks_for_more_bytes() {
+    let (_, plain) = jpeg_ls_file();
+    let bytes = with_segments(&plain, 0xFE, 1, 100);
+    // Cut inside the comment, inside its length field, and right after the SOI.
+    assert_eq!(detect_prefix(&bytes[..50]), Detection::NeedBytes(108));
+    assert_eq!(detect_prefix(&bytes[..5]), Detection::NeedBytes(6));
+    assert_eq!(detect_prefix(&bytes[..3]), Detection::NeedBytes(4));
+    assert_eq!(detect_prefix(&[0xFF, 0xD8]), Detection::NeedBytes(4));
+    assert_eq!(detect(&[0xFF, 0xD8]), None);
+    assert_eq!(detect(&bytes[..50]), Some(Format::Jpeg));
+    assert!(decode_as(Format::JpegLs, &bytes[..50]).is_err());
+    // A byte that is not a marker where one should be ends the walk: no frame header follows.
+    assert_eq!(detect_prefix(&[0xFF, 0xD8, 0xFF, 0xFE, 0, 2, 0x12, 0x34]), Detection::Format(Format::Jpeg));
+    // Formats other than JPEG answer as `detect` does.
+    assert_eq!(detect_prefix(b"\x89PNG\r\n\x1a\n\0\0"), Detection::Format(Format::Png));
+    assert_eq!(detect_prefix(&[0u8; 64]), Detection::Unknown);
+    assert_eq!(detect_prefix(&[]), Detection::Unknown);
+}
+
+#[test]
+fn a_restart_interval_before_the_frame_header_is_jpeg_ls() {
+    // A DRI segment may come before the frame header. An interval of 0 turns restarts off.
+    let (img, plain) = jpeg_ls_file();
+    let mut bytes = plain[..2].to_vec();
+    bytes.extend_from_slice(&[0xFF, 0xDD, 0, 4, 0, 0]);
+    bytes.extend_from_slice(&plain[2..]);
+    assert_eq!(detect(&bytes), Some(Format::JpegLs));
+    assert_eq!(detect_by_prefix(&bytes, 4), Detection::Format(Format::JpegLs));
+    assert_eq!(decode(&bytes).unwrap().data(), img.data());
+    assert_eq!(decode_as(Format::JpegLs, &bytes).unwrap().data(), img.data());
+    // A file that sets a restart interval is JPEG-LS, and its restart markers are not read.
+    bytes[7] = 1;
+    assert_eq!(detect(&bytes), Some(Format::JpegLs));
+    assert!(matches!(decode(&bytes), Err(CodecError::Unsupported { .. })));
+    // A 3- or 4-byte interval of 0 also turns restarts off. A segment with fewer than 2 interval
+    // bytes or more than 4 is malformed.
+    for (size, ok) in [(0, false), (1, false), (2, true), (3, true), (4, true), (5, false)] {
+        let mut bytes = plain[..2].to_vec();
+        bytes.extend_from_slice(&[0xFF, 0xDD, 0, 2 + size as u8]);
+        bytes.extend(std::iter::repeat_n(0, size));
+        bytes.extend_from_slice(&plain[2..]);
+        assert_eq!(detect(&bytes), Some(Format::JpegLs));
+        let decoded = decode(&bytes);
+        if ok {
+            assert_eq!(decoded.unwrap().data(), img.data(), "{size} interval bytes");
+        } else {
+            assert!(matches!(decoded, Err(CodecError::Malformed { .. })), "{size} interval bytes: {decoded:?}");
+        }
+    }
+}
+
+#[test]
+fn the_restart_interval_in_effect_at_the_scan_decides_decoding() {
+    // The 5x3 file's frame header ends at byte 15, where its scan header starts.
+    let (img, plain) = jpeg_ls_file();
+    assert_eq!(plain[2..4], [0xFF, 0xF7]);
+    assert_eq!(plain[15..17], [0xFF, 0xDA]);
+    let with_dri = |intervals: &[u16]| {
+        let mut bytes = plain[..15].to_vec();
+        for interval in intervals {
+            bytes.extend_from_slice(&[0xFF, 0xDD, 0, 4]);
+            bytes.extend_from_slice(&interval.to_be_bytes());
+        }
+        bytes.extend_from_slice(&plain[15..]);
+        bytes
+    };
+    // A later interval of 0 turns restarts off again.
+    assert_eq!(decode(&with_dri(&[1, 0])).unwrap().data(), img.data());
+    // An interval of at least the scan's 3 lines puts the whole scan in one interval, so the scan
+    // has no restart marker.
+    assert_eq!(decode(&with_dri(&[3])).unwrap().data(), img.data());
+    assert_eq!(decode(&with_dri(&[u16::MAX])).unwrap().data(), img.data());
+    // A shorter interval needs restart markers in the scan.
+    assert!(matches!(decode(&with_dri(&[2])), Err(CodecError::Unsupported { .. })));
+    assert!(matches!(decode(&with_dri(&[0, 2])), Err(CodecError::Unsupported { .. })));
+}
+
+#[test]
+fn each_component_scan_uses_the_restart_interval_in_effect_at_it() {
+    // The 5x3 RGB file codes each component in its own scan.
+    let img = Image::from_u8(5, 3, ChannelLayout::Rgb, (0..45).collect()).unwrap();
+    let plain = encode(&img, Format::JpegLs, &EncodeOptions::default()).unwrap();
+    let scans: Vec<usize> = plain.windows(2).enumerate().filter(|(_, w)| *w == [0xFF, 0xDA]).map(|(i, _)| i).collect();
+    assert_eq!(scans.len(), 3);
+    // A DRI segment with `first` before the first scan and one with `second` before the second.
+    let with_dri = |first: u16, second: u16| {
+        let mut bytes = plain[..scans[0]].to_vec();
+        for (interval, part) in [(first, &plain[scans[0]..scans[1]]), (second, &plain[scans[1]..])] {
+            bytes.extend_from_slice(&[0xFF, 0xDD, 0, 4]);
+            bytes.extend_from_slice(&interval.to_be_bytes());
+            bytes.extend_from_slice(part);
+        }
+        bytes
+    };
+    assert_eq!(decode(&with_dri(3, 3)).unwrap().data(), img.data());
+    assert_eq!(decode(&with_dri(3, 0)).unwrap().data(), img.data());
+    assert!(matches!(decode(&with_dri(3, 2)), Err(CodecError::Unsupported { .. })));
+}
+
+#[test]
+fn a_restart_marker_after_a_scan_of_one_interval_is_an_error() {
+    // With an interval of 3 lines the 5x3 scan is one interval, which no restart marker follows.
+    let (img, plain) = jpeg_ls_file();
+    assert_eq!(plain[plain.len() - 2..], [0xFF, 0xD9]);
+    let mut bytes = plain[..15].to_vec();
+    bytes.extend_from_slice(&[0xFF, 0xDD, 0, 4, 0, 3]);
+    bytes.extend_from_slice(&plain[15..]);
+    assert_eq!(decode(&bytes).unwrap().data(), img.data());
+    let eoi = bytes.len() - 2;
+    let mut marked = bytes.clone();
+    marked.splice(eoi..eoi, [0xFF, 0xD0]);
+    assert!(decode(&marked).is_err());
+    // Fill bytes before the restart marker do not hide it.
+    bytes.splice(eoi..eoi, [0xFF, 0xFF, 0xFF, 0xD3]);
+    assert!(decode(&bytes).is_err());
+}
+
+#[test]
+fn a_restart_marker_after_a_comment_is_an_error_while_an_interval_is_set() {
+    let (img, plain) = jpeg_ls_file();
+    let eoi = plain.len() - 2;
+    // `after` goes between the scan data and the EOI of the 5x3 file with an interval of `dri`.
+    let with = |dri: u8, after: &[u8]| {
+        let mut bytes = plain[..15].to_vec();
+        bytes.extend_from_slice(&[0xFF, 0xDD, 0, 4, 0, dri]);
+        bytes.extend_from_slice(&plain[15..eoi]);
+        bytes.extend_from_slice(after);
+        bytes.extend_from_slice(&plain[eoi..]);
+        bytes
+    };
+    const COMMENT: [u8; 4] = [0xFF, 0xFE, 0, 2];
+    assert_eq!(decode(&with(3, &COMMENT)).unwrap().data(), img.data());
+    let decoded = decode(&with(3, &[COMMENT.as_slice(), &[0xFF, 0xD0]].concat()));
+    assert!(matches!(decoded, Err(CodecError::Malformed { .. })), "{decoded:?}");
+    // With restarts off, a stray restart marker is skipped as before.
+    assert_eq!(decode(&with(0, &[COMMENT.as_slice(), &[0xFF, 0xD0]].concat())).unwrap().data(), img.data());
+}
+
+#[test]
+fn a_stuffed_zero_where_a_marker_should_be_is_jpeg() {
+    // `FF 00` is not a marker, so the walk ends there without asking for a length field.
+    assert_eq!(detect_prefix(&[0xFF, 0xD8, 0xFF, 0x00]), Detection::Format(Format::Jpeg));
+    assert_eq!(detect_prefix(&[0xFF, 0xD8, 0xFF, 0xFE, 0, 2, 0xFF, 0x00]), Detection::Format(Format::Jpeg));
+}
+
+#[test]
+fn a_detector_that_found_a_jpeg_frame_keeps_answering_jpeg() {
+    // SOI, a comment with two bytes of text, then a baseline frame header.
+    let file = [0xFF, 0xD8, 0xFF, 0xFE, 0, 4, 1, 2, 0xFF, 0xC0, 0, 11];
+    let mut detector = PrefixDetector::new();
+    assert_eq!(detector.detect(&file[..10]), Detection::Format(Format::Jpeg));
+    assert_eq!(detector.detect(&file), detect_prefix(&file));
+    assert_eq!(detector.detect(&file), Detection::Format(Format::Jpeg));
+}
+
+#[test]
+fn a_detector_keeps_its_place_between_calls() {
+    // SOI, a comment with two bytes of text, then an SOF55 frame header.
+    let file = [0xFF, 0xD8, 0xFF, 0xFE, 0, 4, 1, 2, 0xFF, 0xF7, 0, 11];
+    let mut detector = PrefixDetector::new();
+    assert_eq!(detector.detect(&file[..5]), Detection::NeedBytes(6));
+    assert_eq!(detector.detect(&file[..9]), Detection::NeedBytes(10));
+    // Each call extends the previous prefix, and the answer matches a walk from the SOI.
+    assert_eq!(detector.detect(&file), detect_prefix(&file));
+    assert_eq!(detect_prefix(&file), Detection::Format(Format::JpegLs));
+}
+
 #[cfg(feature = "sunraster")]
 #[test]
-fn detect_magic_sun_raster() {
+fn feature_config_detect_magic_sun_raster() {
     use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
     let img = Image::from_u8(5, 3, ChannelLayout::Rgb, (0..45).collect()).unwrap();
     let bytes = encode(&img, Format::SunRaster, &EncodeOptions::default()).unwrap();
@@ -366,7 +626,7 @@ fn extensions_unique_across_formats() {
 
 #[cfg(not(feature = "sgi"))]
 #[test]
-fn sgi_requires_explicit_feature() {
+fn feature_config_sgi_requires_explicit_feature() {
     use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
     assert!(!caps(Format::Sgi).read && !caps(Format::Sgi).write);
     assert!(decode_as(Format::Sgi, &[]).is_err());
@@ -379,7 +639,7 @@ fn sgi_requires_explicit_feature() {
 
 #[cfg(not(feature = "sunraster"))]
 #[test]
-fn sun_raster_disabled_by_default() {
+fn feature_config_sun_raster_disabled_by_default() {
     use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
     let bytes = [0x59, 0xa6, 0x6a, 0x95, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 8, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 42, 0];
     assert_ne!(detect(&bytes), Some(Format::SunRaster));

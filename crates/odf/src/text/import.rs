@@ -875,6 +875,12 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         None if styles_xml.is_some() => EMPTY_CONTENT.as_bytes().to_vec(),
         None => return Err("ODT: content.xml is missing".into()),
     };
+    let file_orders = super::frames::read_orders(&content, styles_xml.as_deref())?;
+    // Normalize source values before both model parsing and retained-markup capture.
+    // Rewriting values only keeps unknown XML and the model on the same order scale.
+    let content = super::xml::remap_orders(&content, |raw| file_orders.file_order(raw))?;
+    let styles_normalized = styles_xml.as_deref().map(|xml| super::xml::remap_orders(xml, |raw| file_orders.file_order(raw))).transpose()?;
+    let styles_xml = styles_normalized;
     let mut styles = Styles::default();
     let mut pages = Pages::default();
     if let Some(s) = &styles_xml {
@@ -931,6 +937,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch, objects, &mut spaces_left)).unwrap_or_default();
     first_pages(&mut pages);
     let mut body = Body::new(&styles, &pages, &mut fetch);
+
     (body.entries, body.manifest) = (objects.0, Some(objects.1));
     body.raw = &content;
     body.markup = &content;
@@ -1159,11 +1166,16 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
             k.keep_file(path, bytes);
         }
         k.section_masters = section_masters;
+        // Which of the file's styles became which of the document's (by kept key): a save names
+        // an edited style's definition, parent and next style by the file's names for them.
+        let paras = named_odt.iter().map(|n| (format!("common:{n}"), super::styles::style_id(n)));
+        let texts = char_styles.iter().map(|(n, id)| (format!("common:{n}|text"), id.clone()));
+        k.style_ids = paras.chain(texts).collect();
     }
     doc.seal_kept();
-    let (fp, pages) = (craft_wordmodel::kept::styles_fingerprint(&doc), craft_wordmodel::kept::pages_fingerprint(&doc));
+    let (prints, pages) = (super::package::style_prints(&doc), craft_wordmodel::kept::pages_fingerprint(&doc));
     if let Some(k) = doc.kept.get_mut() {
-        (k.styles_fp, k.pages_fp) = (Some(fp), Some(pages));
+        (k.style_prints, k.pages_fp) = (prints, Some(pages));
     }
     Ok(doc)
 }

@@ -17,7 +17,7 @@ pub(super) fn notes_part(doc: &Document, wr: &Writer<'_>, foot: bool) -> bool {
 
 /// `w:settings`, its children in the schema's order (CT_Settings is a sequence). `template_rel`
 /// is the id of the attached template's relationship, when there is one.
-pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: Option<&str>) -> Vec<u8> {
+pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: Option<&str>, mail_merge: Option<&str>) -> Vec<u8> {
     let s = &doc.settings;
     let s_notes = (&doc.footnote_separators, &doc.endnote_separators);
     let mut w = W::new();
@@ -54,11 +54,21 @@ pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, temp
     if s.gutter_at_top {
         w.empty("w:gutterAtTop", &[]);
     }
+    // After `w:gutterAtTop` and before `w:proofState` in CT_Settings.
+    if s.hide_spelling_errors {
+        w.empty("w:hideSpellingErrors", &[]);
+    }
+    if s.hide_grammar_errors {
+        w.empty("w:hideGrammaticalErrors", &[]);
+    }
     if let Some(id) = template_rel {
         w.empty("w:attachedTemplate", &[("r:id", id)]);
     }
     if s.link_styles {
         w.empty("w:linkStyles", &[]);
+    }
+    if let Some(xml) = mail_merge {
+        w.raw(xml);
     }
     if s.track_changes {
         w.empty("w:trackRevisions", &[]);
@@ -141,6 +151,13 @@ fn write_note_settings(
 }
 
 fn write_compatibility_settings(w: &mut W, doc: &Document) {
+    let has_compat = doc.settings.do_not_expand_shift_return
+        || doc.settings.sum_paragraph_spacing
+        || doc.settings.allow_space_of_same_style_in_table
+        || doc.settings.compat_mode.is_some();
+    if !has_compat {
+        return;
+    }
     w.open("w:compat", &[]);
     // CT_Compat: the older switches come before the `w:compatSetting`s.
     if doc.settings.do_not_expand_shift_return {
@@ -152,8 +169,10 @@ fn write_compatibility_settings(w: &mut W, doc: &Document) {
     if doc.settings.allow_space_of_same_style_in_table {
         w.empty("w:allowSpaceOfSameStyleInTable", &[]);
     }
-    let mode = doc.settings.compat_mode.clamp(11, 15).to_string();
-    w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", &mode)]);
+    if let Some(mode) = doc.settings.compat_mode {
+        let mode = mode.clamp(11, 15).to_string();
+        w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", &mode)]);
+    }
     w.close("w:compat");
 }
 
@@ -245,11 +264,25 @@ pub(super) fn theme_xml(doc: &Document) -> Vec<u8> {
     }
     w.close("a:clrScheme");
     w.open("a:fontScheme", &[("name", name)]);
-    for (tag, face) in [("a:majorFont", &s.major_font), ("a:minorFont", &s.minor_font)] {
+    // The file's own East Asian, complex-script and per-script fonts, as read
+    // (`package::THEME_FONTS`): the theme slots a save keeps resolve through them in Word.
+    let kept = doc.passthrough.get(crate::package::THEME_FONTS).map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+    let kept: Vec<[&str; 4]> = kept
+        .lines()
+        .filter_map(|l| {
+            let mut it = l.splitn(4, '\t');
+            Some([it.next()?, it.next()?, it.next()?, it.next()?])
+        })
+        .collect();
+    for (key, tag, face) in [("major", "a:majorFont", &s.major_font), ("minor", "a:minorFont", &s.minor_font)] {
+        let of = |which: &str| kept.iter().find(|[k, kind, w, _]| *k == key && *kind == "face" && *w == which).map_or("", |[.., f]| *f);
         w.open(tag, &[]);
         w.empty("a:latin", &[("typeface", face)]);
-        w.empty("a:ea", &[("typeface", "")]);
-        w.empty("a:cs", &[("typeface", "")]);
+        w.empty("a:ea", &[("typeface", of("ea"))]);
+        w.empty("a:cs", &[("typeface", of("cs"))]);
+        for [_, _, script, f] in kept.iter().filter(|[k, kind, ..]| *k == key && *kind == "script") {
+            w.empty("a:font", &[("script", script), ("typeface", f)]);
+        }
         w.close(tag);
     }
     w.close("a:fontScheme");

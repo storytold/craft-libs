@@ -74,17 +74,22 @@ impl Reader<'_> {
     pub(super) fn revision_named(&mut self, kind: RevisionKind, e: &El, move_name: Option<String>) -> u32 {
         let author = e.attr("w:author").unwrap_or("").chars().take(256).collect::<String>();
         let date = e.attr("w:date").unwrap_or("").chars().take(64).collect::<String>();
+        // Only the Word namespace's `dateUtc`: a bare one would be saved under that namespace
+        // without having come from it.
+        let date_utc = e.attr_exact("w16du:dateUtc").filter(|d| !d.is_empty()).map(|d| d.chars().take(64).collect::<String>());
         let k = match kind {
             RevisionKind::Insert => 0,
             RevisionKind::Delete => 1,
             RevisionKind::Format => 2,
         };
-        let key = (k, author.clone(), date.clone(), move_name.clone());
+        // Two changes with one local `w:date` (the hour the clocks go back over) are told apart
+        // by their UTC time.
+        let key = (k, author.clone(), date.clone(), move_name.clone(), date_utc.clone());
         if let Some(i) = self.revs.get(&key) {
             return *i;
         }
         let i = self.doc.revisions.len() as u32;
-        self.doc.revisions.push(Revision { kind, author, date, move_name });
+        self.doc.revisions.push(Revision { kind, author, date, move_name, date_utc });
         self.revs.insert(key, i);
         i
     }
@@ -227,6 +232,33 @@ impl Reader<'_> {
             };
             self.pc.major_scripts = scripts("a:majorFont");
             self.pc.minor_scripts = scripts("a:minorFont");
+            // Kept for the save, which writes the theme from the model (`package::THEME_FONTS`).
+            let mut kept = String::new();
+            for (key, tag) in [("major", "a:majorFont"), ("minor", "a:minorFont")] {
+                let Some(f) = fs.child(tag) else { continue };
+                let clean = |v: &str| !v.is_empty() && v.len() < 256 && !v.contains(['\t', '\n', '\r']);
+                // The default faces and the per-script ones are told apart by their kind, so an
+                // `a:font script="cs"` is not taken for the `a:cs` face.
+                let faces = ["a:ea", "a:cs"].into_iter().filter_map(|n| Some(("face", &n[2..], f.child(n)?.attr("typeface")?)));
+                for (kind, which, face) in faces.filter(|(_, _, face)| clean(face)) {
+                    kept.push_str(&format!("{key}\t{kind}\t{which}\t{face}\n"));
+                }
+                // At most 256 of the script ids font resolution takes (8 characters or fewer, as
+                // above) and 256 longer ones (a language tag such as `zh-Hant-TW`), counted apart
+                // so the longer ones never push out a mapping resolution uses.
+                let mut counts = (0usize, 0usize);
+                let per_script = f.els().filter(|e| e.name == "a:font").filter_map(|e| Some((e.attr("script")?, e.attr("typeface")?)));
+                for (script, face) in per_script.filter(|(script, face)| clean(script) && clean(face)) {
+                    let n = if script.len() <= 8 { &mut counts.0 } else { &mut counts.1 };
+                    if *n < 256 {
+                        *n += 1;
+                        kept.push_str(&format!("{key}\tscript\t{script}\t{face}\n"));
+                    }
+                }
+            }
+            if !kept.is_empty() {
+                self.doc.passthrough.insert(crate::package::THEME_FONTS.into(), Arc::new(kept.into_bytes()));
+            }
         }
         self.pc.major_font = self.doc.settings.major_font.clone();
         self.pc.minor_font = self.doc.settings.minor_font.clone();

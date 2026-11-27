@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 //! Decide who draws the window frame, so every Craft app shows the same titlebar and borders on a
-//! given desktop, and make an app-drawn strip act as the title bar.
+//! given desktop.
 //!
 //! egui apps either let the desktop draw the window frame (the title bar, borders and window
 //! buttons) or turn it off and draw their own. Across the suite this decision had drifted: some
@@ -10,11 +10,9 @@
 //! compositor — so on KDE, say, one app wore KWin's title bar while another wore its own. This
 //! crate makes the decision one place.
 //!
-//! This page describes the first-generation rule ([`Choice::probe`], [`Frame`], [`decorate`]),
-//! which stays for apps that have not moved. The current rule is in [`policy`]: the app's own bar
-//! is the title bar by default, and the user setting "Use system title bar" turns that off.
-//!
-//! The rule of the first-generation API, by platform:
+//! The current rule is in [`policy`]: the app's own bar is the title bar by default, and the user
+//! setting "Use system title bar" turns that off. The first-generation rule ([`Choice::probe`],
+//! [`Frame`]), by platform:
 //!
 //! - **macOS and Windows:** the OS always draws the frame ([`Frame::Desktop`]). (An app that insets
 //!   its content under the traffic lights, or draws its own caption buttons on Windows, still asks
@@ -35,127 +33,50 @@
 //! close where that desktop puts them. This crate decides *whether* and *where*; drawing the
 //! buttons stays with each app (their title bars differ).
 //!
-//! # With egui
-//!
-//! The `egui` feature adds [`decorate`], which applies the decision to an
-//! [`egui::ViewportBuilder`] before the window is created:
-//!
-//! ```ignore
-//! let viewport = egui::ViewportBuilder::default().with_title("PhotoCraft");
-//! // The app may still prefer its own frame when the user asked for it in preferences:
-//! let choice = craft_window::Choice::probe(craft_window::Prefix::default());
-//! let viewport = craft_window::decorate(viewport, choice.frame());
-//! ```
-//!
 //! The probe opens a short-lived Wayland connection and reads the global registry once; it never
 //! touches the connection winit inherits. Call it once at startup.
 //!
-//! # The app's own title bar
-//!
-//! An app that draws over the title bar (a hidden macOS title bar with a full-size content view,
-//! or [`Frame::App`]) makes its top strip act as one with [`title_bar`]: the strip's empty part
-//! moves the window and follows the system's double-click setting, while the strip's controls and
-//! in-window panels lying over it keep their own clicks and drags. On macOS,
-//! `title_bar::sync_movable` sets AppKit's `movable` flag each frame so a drag that starts on
-//! one of those does not move the window.
-//!
-//! ```ignore
-//! egui::Panel::top("app_bar").show(ui, |ui| {
-//!     craft_window::title_bar::empty_area(ui, ui.max_rect());
-//!     // ... the bar's controls ...
-//! });
-//! // After the UI, once per frame (macOS); `applied` lives in the app state, starting at `None`.
-//! #[cfg(target_os = "macos")]
-//! craft_window::title_bar::sync_movable(ui.ctx(), &mut self.applied);
-//! ```
-//!
 //! # One window per document
 //!
-//! The rest of the crate keeps the bookkeeping for apps that open each document in its own
-//! top-level window. The core has no egui dependency:
+//! [`WindowList`] and [`WindowMenu`] keep the bookkeeping for apps that open each document in its
+//! own top-level window. They have no egui dependency:
 //!
 //! - [`WindowList`]: open windows with the app's per-window data, a [`WindowId`] for each (never
 //!   reused while the process runs), the active window and most-recent order. Menu commands go to
 //!   [`WindowList::active`]; when the active window closes, [`Closed::focus`] names the next one.
-//! - [`cascade`]: where a new window goes, one title bar down and right of the last one, wrapped
-//!   back inside the screen.
 //! - [`WindowMenu`]: the Window menu (macOS) or View › Switch Windows list. Windows on the same
 //!   document are titled "Name:1", "Name:2".
 //!
-//! The `egui` feature adds `Viewports`, which shows each window as an immediate viewport, applies
-//! `decorate` and the cascade to new windows, and reports `WindowEvent`s. Close and quit policy
-//! stay with the app: the driver reports a close request, and a window closes when the app removes
-//! it from the list.
+//! # The application menu bar
 //!
-//! ```ignore
-//! use craft_window::{Choice, Document, Prefix, Viewports, WindowEvent, WindowList, WindowMenu};
-//!
-//! // At startup: the first document's window is drawn in the root viewport.
-//! let mut windows = WindowList::new();
-//! let mut viewports = Viewports::new(Choice::probe(Prefix::new("GRIDCRAFT")).into_frame());
-//! let first = windows.open(WindowUi::new(doc_id));
-//! viewports.set_root(Some(first));
-//!
-//! // Each frame, in eframe's `App::ui`:
-//! let menu = WindowMenu::new(&windows, |_, w| Document {
-//!     key: w.doc_id,
-//!     name: engine.name(w.doc_id),
-//!     dirty: engine.is_dirty(w.doc_id),
-//! });
-//! let base = egui::ViewportBuilder::default().with_inner_size([1000.0, 700.0]);
-//! let events = viewports.show(
-//!     ui,
-//!     &mut windows,
-//!     |id, _| base.clone().with_title(menu.title(id).unwrap_or_default()),
-//!     |ui, id, window| draw_window(ui, id, window, &mut engine),
-//! );
-//! for event in events {
-//!     match event {
-//!         WindowEvent::Focused(_) => {} // `windows.active()` already follows focus
-//!         WindowEvent::CloseRequested(id) => {
-//!             let in_root = viewports.root() == Some(id);
-//!             if in_root {
-//!                 // Otherwise eframe closes the app with the root window.
-//!                 ui.ctx().send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::CancelClose);
-//!             }
-//!             // Prompt if this is the document's last window and it is dirty; then:
-//!             if let Some(closed) = windows.close(id) {
-//!                 let next = closed.focus.or_else(|| windows.active());
-//!                 match next {
-//!                     Some(next) if in_root => viewports.adopt(ui.ctx(), &windows, next),
-//!                     Some(next) => viewports.focus(ui.ctx(), next),
-//!                     None => { /* last window: the platform default (quit, or stay on macOS) */ }
-//!                 }
-//!             }
-//!         }
-//!     }
-//! }
-//! ```
+//! [`native_menu`] makes the platform's own menu bar (macOS, feature `appkit`) from a plain
+//! description of the menus and reports the chosen items by id. On other platforms it does nothing.
 //!
 //! # Window restore
 //!
-//! The `restore` feature (no egui) adds [`restore`]: where a window opens, from the last session's
-//! geometry and the connected monitors, and the `window.json` store beside `config.toml`.
+//! [`restore`] (no egui) decides where a window opens, from the last session's geometry and the
+//! connected monitors, and keeps the `window.json` store beside `config.toml` on desktop (memory on the web).
+#![warn(missing_docs)]
 
-mod desktop;
+pub mod capture;
+pub mod desktop;
 mod layout;
 mod list;
+mod lock_state;
+pub mod mac;
 mod menu;
-mod place;
+pub mod native;
+pub mod native_menu;
 pub mod policy;
-#[cfg(feature = "egui")]
-pub mod title_bar;
-#[cfg(feature = "egui")]
-mod viewports;
+pub mod system;
+#[cfg(windows)]
+mod win32;
 
-#[cfg(feature = "restore")]
 pub mod restore;
 
 pub use list::{Closed, WindowId, WindowList};
+pub use lock_state::caps_lock;
 pub use menu::{Document, MenuEntry, WindowMenu};
-pub use place::{CASCADE_STEP, Rect, cascade, monitor_of};
-#[cfg(feature = "egui")]
-pub use viewports::{Viewports, WindowEvent, child_viewport_id};
 
 /// The environment-variable prefix an app overrides the frame with: `<PREFIX>_TITLEBAR`.
 ///
@@ -180,6 +101,16 @@ impl Prefix {
     /// The environment variable this prefix reads, e.g. `CRAFT_TITLEBAR`.
     pub fn var_name(self) -> String {
         format!("{}_TITLEBAR", self.0)
+    }
+
+    /// The environment variable that picks the caption style: `<PREFIX>_CAPTION_STYLE`.
+    pub fn caption_style_var(self) -> String {
+        format!("{}_CAPTION_STYLE", self.0)
+    }
+
+    /// The environment variable that picks the caption layout: `<PREFIX>_CAPTION_LAYOUT`.
+    pub fn caption_layout_var(self) -> String {
+        format!("{}_CAPTION_LAYOUT", self.0)
     }
 }
 
@@ -268,17 +199,23 @@ fn parse_override(value: Option<&str>) -> Option<bool> {
 }
 
 /// A window button.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Button {
+    #[allow(missing_docs)]
     Minimize,
+    #[allow(missing_docs)]
     Maximize,
+    #[allow(missing_docs)]
     Close,
 }
 
 /// Which window buttons go on which end of the app-drawn header bar, outermost last.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Layout {
+    /// Buttons on the left end, outermost last.
     pub left: Vec<Button>,
+    /// Buttons on the right end, outermost last.
     pub right: Vec<Button>,
 }
 
@@ -333,7 +270,6 @@ impl Layout {
 
     /// Whether the layout has at least one button, so the window can be closed by mouse. A layout
     /// with none (a desktop that named only buttons this crate skips) falls back to the default.
-    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", test))]
     pub(crate) fn is_usable(&self) -> bool {
         !self.left.is_empty() || !self.right.is_empty()
     }
@@ -363,14 +299,6 @@ fn app_draws_frame() -> bool {
     {
         false
     }
-}
-
-/// Apply a [`Frame`] to an [`egui::ViewportBuilder`] (superseded by [`policy::apply`]): decorations on for the desktop frame, off for
-/// the app frame. Call before the window is created. The app still draws its header bar and, for
-/// [`Frame::App`], lays its window buttons out by [`Frame::layout`].
-#[cfg(feature = "egui")]
-pub fn decorate(builder: egui::ViewportBuilder, frame: &Frame) -> egui::ViewportBuilder {
-    builder.with_decorations(frame.decorations())
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
@@ -438,12 +366,19 @@ mod platform {
     }
 
     /// GNOME's `button-layout`, read with `gsettings`. `None` when `gsettings` is missing, fails,
-    /// times out, or prints nothing usable. The child is spawned with piped output and read on a
-    /// worker thread; if it doesn't finish within 500 ms the child is killed and reaped, so a
-    /// stalled `gsettings` leaves neither a blocked process nor a parked worker.
+    /// times out, or prints nothing usable.
     pub(super) fn gsettings_button_layout() -> Option<String> {
+        gsettings_wm_preference("button-layout")
+    }
+
+    /// The value of `key` in `org.gnome.desktop.wm.preferences`, read with `gsettings` and printed
+    /// as `gsettings` prints it (strings quoted). `None` when `gsettings` is missing, fails, times
+    /// out, or prints nothing. The child is spawned with piped output and read on a worker thread;
+    /// if it doesn't finish within 500 ms the child is killed and reaped, so a stalled `gsettings`
+    /// leaves neither a blocked process nor a parked worker.
+    pub(super) fn gsettings_wm_preference(key: &str) -> Option<String> {
         let mut child = Command::new("gsettings")
-            .args(["get", "org.gnome.desktop.wm.preferences", "button-layout"])
+            .args(["get", "org.gnome.desktop.wm.preferences", key])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -477,91 +412,5 @@ mod platform {
 
     impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Registry {
         fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Button, Frame, Layout, Prefix, parse_override};
-
-    #[test]
-    fn prefix_names_the_override_variable() {
-        assert_eq!(Prefix::default().var_name(), "CRAFT_TITLEBAR");
-        assert_eq!(Prefix::new("PDFCRAFT").var_name(), "PDFCRAFT_TITLEBAR");
-    }
-
-    #[test]
-    fn the_override_reads_app_and_system() {
-        assert_eq!(parse_override(Some("app")), Some(true));
-        assert_eq!(parse_override(Some(" system ")), Some(false));
-        assert_eq!(parse_override(Some("desktop")), Some(false));
-        assert_eq!(parse_override(Some("nonsense")), None);
-        assert_eq!(parse_override(None), None);
-    }
-
-    #[test]
-    fn frame_maps_to_decorations_and_layout() {
-        assert!(Frame::Desktop.decorations());
-        assert!(Frame::Desktop.layout().is_none());
-        let app = Frame::App(Layout::default());
-        assert!(!app.decorations());
-        assert!(app.layout().is_some());
-    }
-
-    #[test]
-    fn the_default_layout_is_three_buttons_on_the_right() {
-        let layout = Layout::default();
-        assert!(layout.left.is_empty());
-        assert_eq!(layout.right, vec![Button::Minimize, Button::Maximize, Button::Close]);
-    }
-
-    #[test]
-    fn parse_reads_gnomes_two_sided_layout() {
-        let layout = Layout::parse("appmenu:minimize,maximize,close");
-        assert!(layout.left.is_empty());
-        assert_eq!(layout.right, vec![Button::Minimize, Button::Maximize, Button::Close]);
-
-        let fedora = Layout::parse("appmenu:close");
-        assert_eq!(fedora.right, vec![Button::Close]);
-
-        let left = Layout::parse("close,minimize,maximize:");
-        assert_eq!(left.left, vec![Button::Close, Button::Minimize, Button::Maximize]);
-        assert!(left.right.is_empty());
-    }
-
-    #[test]
-    fn parse_drops_quotes_unknown_names_and_duplicates() {
-        // gsettings prints the value single-quoted.
-        let layout = Layout::parse("'appmenu:minimize,close,close,spacer'");
-        assert!(layout.left.is_empty());
-        assert_eq!(layout.right, vec![Button::Minimize, Button::Close]);
-    }
-
-    #[test]
-    fn parse_without_a_colon_puts_everything_on_the_left() {
-        let layout = Layout::parse("minimize,maximize,close");
-        assert_eq!(layout.left, vec![Button::Minimize, Button::Maximize, Button::Close]);
-        assert!(layout.right.is_empty());
-    }
-
-    #[test]
-    fn mirrored_swaps_the_sides() {
-        let layout = Layout::parse("close:minimize,maximize").mirrored();
-        assert_eq!((layout.left, layout.right), (vec![Button::Minimize, Button::Maximize], vec![Button::Close]));
-    }
-
-    #[test]
-    fn a_layout_naming_no_known_button_is_not_usable() {
-        assert!(!Layout::parse("appmenu:spacer").is_usable());
-        assert!(Layout::parse("appmenu:close").is_usable());
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    #[test]
-    fn the_os_always_draws_the_frame_on_macos_and_windows() {
-        // A prefix whose variable no test or environment sets, so the platform decides.
-        let choice = super::Choice::probe(Prefix::new("CRAFT_WINDOW_UNSET_FOR_TEST"));
-        assert_eq!(choice.frame(), &Frame::Desktop);
-        assert_eq!(choice.overridden(), None);
     }
 }

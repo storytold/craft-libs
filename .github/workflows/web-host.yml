@@ -12,16 +12,16 @@ permissions:
   contents: read
 
 concurrency:
-  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
-  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
-  # always gets to save the cache.
-  group: shared-web-host-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: shared-web-host-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
     timeout-minutes: 20
-    name: Web host lint, tests, WASM tests
+    # fmt, native clippy and the native tests run in the Workspace gate.
+    name: Web host WASM lint and tests
     runs-on: ubuntu-latest
     env:
       CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
@@ -36,16 +36,9 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-          components: rustfmt, clippy
+          components: clippy
           targets: wasm32-unknown-unknown
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-web-host
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo fmt -p craft-web-host --check
-      - run: cargo clippy -p craft-web-host --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-web-host --all-targets --locked --target wasm32-unknown-unknown -- -D warnings
-      - run: cargo test -p craft-web-host --locked
       - name: Read the wasm-bindgen version from Cargo.lock
         id: wasm-bindgen
         shell: bash

@@ -1,11 +1,14 @@
 //! Keeping damaged and previous files around.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::io;
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Renames a damaged `config.toml` to `config.broken-<unix-ts>.toml` beside it and returns the
 /// new path. Never overwrites: a name that exists gets a `-<n>` suffix.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn move_aside(path: &Path) -> io::Result<PathBuf> {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("config");
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("toml");
@@ -40,6 +43,7 @@ pub fn backup_path(path: &Path) -> PathBuf {
 /// previous backup. On Unix the backup always gets the same mode and group as `path` (`0600`
 /// when there is none), so it is never readable by more people than the settings themselves;
 /// when it cannot be put in the config's group, it keeps the owner bits only.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn write_backup(path: &Path, text: &str) -> io::Result<()> {
     let backup = backup_path(path);
     #[cfg(unix)]
@@ -69,6 +73,7 @@ pub fn write_backup(path: &Path, text: &str) -> io::Result<()> {
 }
 
 /// Checks that `dir` accepts a new file by creating and removing a probe.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn check_writable(dir: &Path) -> io::Result<()> {
     let probe = dir.join(format!(".craft-settings-probe-{}", std::process::id()));
     std::fs::OpenOptions::new().write(true).create_new(true).open(&probe)?;

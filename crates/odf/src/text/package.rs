@@ -159,7 +159,10 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>, on_
         if pp.bidi == Some(true) {
             attrs.push_str(" style:writing-mode=\"rl-tb\"");
         }
-        attrs.push_str(&super::writer::border_attrs(pp.borders));
+        // At the width each side is drawn at, as the paragraph's own borders already are by the
+        // time the flow model holds them: ODF has no border that is drawn and takes no room
+        // (storytold/wordcraft#5065).
+        attrs.push_str(&super::writer::border_attrs(pp.borders.map(|b| b.as_drawn())));
         if let Some(bg) = pp.shading {
             attrs.push_str(&format!(" fo:background-color=\"#{}\"", bg.hex().to_ascii_lowercase()));
         }
@@ -815,17 +818,53 @@ fn conn_kinds(blocks: &[FBlock]) -> super::HashMap<u32, craft_wordmodel::para::S
     out
 }
 
-/// `styles` with the file's own style definitions while `doc`'s are as read (see
+/// What WordCraft would write for each child of `office:styles` in `doc`, as hashes by its key.
+pub(super) fn style_prints(doc: &Document) -> std::collections::BTreeMap<String, u64> {
+    super::kept::prints(&model_styles(doc))
+}
+
+/// What WordCraft would write of `doc`'s style definitions: all of them, used or not.
+fn model_styles(doc: &Document) -> String {
+    let ids = |custom: fn(&Document, &str) -> bool| doc.styles.styles.iter().filter(|s| custom(doc, &s.id)).map(|s| s.id.clone()).collect();
+    // The first section, as a save writes the document-wide line numbering from it.
+    let first = doc.sections().first().map_or_else(|| doc.last_section.clone(), |(_, s)| (*s).clone());
+    let page = [(String::new(), first)];
+    let xml = styles_xml(doc, &page, &[], "", &ids(model::is_custom_style));
+    let text = char_styles(doc, &ids(model::is_custom_char_style));
+    xml.replacen("</office:styles>", &format!("{text}</office:styles>"), 1)
+}
+
+/// `styles` with the file's own style definitions except those `doc` has since changed (see
 /// `super::kept`), and the font faces they name added to those kept paragraphs need (`used`).
+/// Changing one style or list leaves the rest of what the file defines alone: its gradients and
+/// fill pictures, the styles WordCraft doesn't model, its default style's settings.
 fn styles_as_read(doc: &Document, kept: Option<&craft_wordmodel::kept::KeptXml>, styles: String, used: &mut super::kept::Needed) -> String {
-    let Some(k) = kept.filter(|k| k.styles_as_read(doc)) else { return styles };
+    let Some(k) = kept else { return styles };
     // With the font faces they name (any of the file's, by its names).
     for (key, d) in &k.defs {
         if let Some(name) = key.strip_prefix("font:") {
             used.2.entry(name.to_string()).or_insert_with(|| d.clone());
         }
     }
-    super::kept::with_common_as_read(&styles, &k.defs, &k.order)
+    let (changed, rewritten) = common_changes(doc, k);
+    let ours = |id: &str| super::writer::odf_name(id);
+    let read = super::kept::file_names(&k.style_ids, &ours);
+    super::kept::with_common_as_read(&styles, &k.defs, &k.order, &changed, &rewritten, &read)
+}
+
+/// The keys of the file's style definitions `doc` has changed since they were read, and what
+/// becomes of those written from the model under the file's names ([`super::kept::rewritten_defs`]).
+/// The others are written as read.
+fn common_changes(
+    doc: &Document,
+    k: &craft_wordmodel::kept::KeptXml,
+) -> (std::collections::BTreeSet<String>, std::collections::BTreeMap<String, Option<String>>) {
+    let now = model_styles(doc);
+    let changed = super::kept::changed(&k.style_prints, &super::kept::prints(&now));
+    // The name WordCraft writes a style id under (`My_20_Custom` was read as `MyCustom`).
+    let ours = |id: &str| super::writer::odf_name(id);
+    let rewritten = super::kept::rewritten_defs(&now, &k.defs, &changed, &k.style_ids, &ours);
+    (changed, rewritten)
 }
 
 /// The package files the file's own definitions refer to, and those the markup written as read
@@ -843,20 +882,24 @@ fn with_kept_files(
     let Some(k) = kept else { return };
     let mut wanted = w.kept_files_used.clone();
     let pages_kept = k.pages_as_read(doc);
-    let styles_kept = k.styles_as_read(doc);
+    let (changed, rewritten) = common_changes(doc, k);
     for (key, d) in &k.defs {
         if !pages_kept && (key.starts_with("sauto:") || key.starts_with("master:")) {
             continue;
         }
         if key.starts_with("common:") {
-            // The file's definition is written back whole (`styles_as_read`, non-`draw:`
-            // definitions win), or this one is restored for markup naming it. WordCraft's own
-            // definition takes a drawing definition's place: its href is no longer used.
-            let written = if styles_kept {
-                !(super::kept::drawing_def(d) && super::kept::defined(styles, d))
-            } else {
-                key.strip_prefix("common:").is_some_and(|n| w.kept_used.1.contains_key(n)) && !super::kept::defined(styles, d)
-            };
+            // What `styles_as_read` writes in its place, when it rewrites it: what that names (an
+            // unread namesake's own definition, as read) is what is written.
+            if let Some(def) = rewritten.get(key) {
+                if let Some(def) = def {
+                    super::kept::hrefs(def, &mut wanted);
+                }
+                continue;
+            }
+            // The file's definition is written back as read unless the document changed it: then
+            // WordCraft's takes its place, or none does. WordCraft's own definition takes a
+            // drawing definition's place too. Its href is then no longer used.
+            let written = !changed.contains(key) && !(super::kept::drawing_def(d) && super::kept::defined(styles, d));
             if !written {
                 continue;
             }
@@ -1058,12 +1101,15 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     // Paragraphs kept as read name their own automatic styles: WordCraft's take another prefix.
     let kept = doc.kept.of("odt");
     let mut w = if kept.is_some() { Writer::with_prefix(KEPT_PREFIX) } else { Writer::default() };
+    w.stacking = super::frames::stacking(doc)?;
     w.note_numbers = Some([false, true].map(|endnote| {
         let o = doc.note_options(&doc.last_section, endnote);
         (o.num_fmt, o.num_start)
     }));
     w.kept_defs = std::sync::Arc::new(kept.map(|k| k.defs.clone()).unwrap_or_default());
     w.reserved = std::sync::Arc::new(kept.map(|k| k.files.keys().cloned().collect()).unwrap_or_default());
+    let ours = |id: &str| super::writer::odf_name(id);
+    w.read_names = std::sync::Arc::new(kept.map(|k| super::kept::read_names(&k.defs, &k.style_ids, &ours)).unwrap_or_default());
     w.groups_whole = whole_groups(&flow.blocks);
     // The file's master pages are written as read: what was kept may start them.
     w.kept_pages = kept.is_some_and(|k| k.pages_as_read(doc));
@@ -1186,6 +1232,8 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let mut hw = Writer::with_prefix(if kept.is_some() { "wcM" } else { "M" });
     // Headers' and footers' new pictures and objects skip the kept files' names too.
     hw.reserved = std::sync::Arc::clone(&w.reserved);
+    hw.read_names = std::sync::Arc::clone(&w.read_names);
+    hw.stacking = w.stacking;
     hw.accents = accents;
     hw.variables.clone_from(&w.variables);
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
@@ -1275,10 +1323,16 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         None => styles,
     };
     let (content, styles) = with_kept_defs(content, styles, &w.kept_used, &w.kept_defs);
+    // Choose the gap from everything actually written, including unknown retained
+    // drawings and master pages. Remapping modeled frames alone can alias an order
+    // present only in retained XML. Values are spliced without reserializing XML.
+    let orders = super::frames::read_orders(content.as_bytes(), Some(styles.as_bytes()))?;
+    let content = super::xml::remap_orders(content.as_bytes(), |raw| orders.file_order(raw))?;
+    let styles = super::xml::remap_orders(styles.as_bytes(), |raw| orders.file_order(raw))?;
     // The manifest lists every file already: the writer adds the files only.
     for (name, data) in [
-        ("content.xml", content.as_bytes()),
-        ("styles.xml", styles.as_bytes()),
+        ("content.xml", content.as_ref()),
+        ("styles.xml", styles.as_ref()),
         ("meta.xml", meta.as_bytes()),
         ("settings.xml", settings_xml(doc).as_bytes()),
     ] {
@@ -1314,7 +1368,9 @@ fn page_look(doc: &Document, sec: &SectionProps) -> String {
 /// they go round: each border at its distance from the edge (WordCraft's), which becomes the
 /// margin, with the rest of the way to the text as its padding.
 fn page_borders(b: Option<craft_wordmodel::props::Borders>, margins: [f32; 4]) -> (String, [f32; 4]) {
-    let Some(b) = b.filter(|b| b.any_visible()) else { return (String::new(), margins) };
+    // A page border of width 0 (a DOCX one without `w:sz`) is drawn at the thinnest line: ODF has
+    // no border that is drawn and still takes no room (storytold/wordcraft#5065).
+    let Some(b) = b.map(|b| b.as_drawn()).filter(|b| b.any_visible()) else { return (String::new(), margins) };
     let mut out = margins;
     let mut attrs = String::new();
     for (i, (side, edge)) in [("top", b.top), ("bottom", b.bottom), ("left", b.left), ("right", b.right)].into_iter().enumerate() {

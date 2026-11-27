@@ -1,5 +1,6 @@
 //! Commands with parameters and their binding keys.
 
+use std::borrow::Cow;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -8,13 +9,16 @@ use serde_json::Value;
 /// Longest binding key [`CommandRef::parse_key`] accepts, in bytes.
 pub const MAX_KEY: usize = 256;
 
-/// A command id with the parameters a binding runs it with.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// A command id with the parameters a binding runs it with. Two are equal when their binding keys are: `Null` and an
+/// empty object are both no parameters.
+#[derive(Clone, Debug, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandRef {
+    /// The command's id.
     pub id: String,
     /// `Null` for no parameters.
     #[serde(default)]
+    #[plain_data(assume = "a JSON value owns its data and has no interior mutability")]
     pub params: Value,
 }
 
@@ -24,6 +28,7 @@ impl CommandRef {
         CommandRef { id: id.into(), params: Value::Null }
     }
 
+    /// A command with the parameters its binding runs it with.
     pub fn with_params(id: impl Into<String>, params: Value) -> CommandRef {
         CommandRef { id: id.into(), params }
     }
@@ -31,17 +36,25 @@ impl CommandRef {
     /// The binding key: the id, or `id {json}` with object keys sorted and no spaces. `Null` and
     /// an empty object give the bare id.
     pub fn key(&self) -> String {
-        match &self.params {
-            Value::Null => self.id.clone(),
-            Value::Object(m) if m.is_empty() => self.id.clone(),
-            p => {
-                let mut out = String::with_capacity(self.id.len() + 16);
-                out.push_str(&self.id);
-                out.push(' ');
-                write_canonical(p, &mut out);
-                out
-            }
+        self.key_text().into_owned()
+    }
+
+    /// [`key`](Self::key), borrowing the id when it is the whole key: a lookup by key of a command without parameters
+    /// allocates nothing.
+    pub fn key_text(&self) -> Cow<'_, str> {
+        if !self.has_params() {
+            return Cow::Borrowed(&self.id);
         }
+        let mut out = String::with_capacity(self.id.len() + 16);
+        out.push_str(&self.id);
+        out.push(' ');
+        write_canonical(&self.params, &mut out);
+        Cow::Owned(out)
+    }
+
+    /// Whether the command has parameters: `Null` and an empty object are none.
+    fn has_params(&self) -> bool {
+        !matches!(&self.params, Value::Null) && !matches!(&self.params, Value::Object(m) if m.is_empty())
     }
 
     /// Reads a binding key: the id up to the first space, then JSON parameters. `None` for an
@@ -58,6 +71,12 @@ impl CommandRef {
             return None;
         }
         Some(CommandRef { id: id.to_string(), params })
+    }
+}
+
+impl PartialEq for CommandRef {
+    fn eq(&self, other: &CommandRef) -> bool {
+        self.id == other.id && (self.params == other.params || !self.has_params() && !other.has_params())
     }
 }
 

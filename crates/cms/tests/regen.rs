@@ -1,7 +1,7 @@
 //! Regenerates the shipped synthetic CMYK profile when `CRAFT_CMS_REGEN_PROFILES=1`:
 //!
 //! ```sh
-//! CRAFT_CMS_REGEN_PROFILES=1 cargo test -p craft-cms --release --test regen
+//! CRAFT_CMS_REGEN_PROFILES=1 cargo test -p craft-cms --release -- integration::regen
 //! ```
 //!
 //! Without the variable the test only checks that the generator's model still matches the
