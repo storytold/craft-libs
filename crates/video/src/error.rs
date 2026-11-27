@@ -1,11 +1,10 @@
-//! [`VideoError`], the error of the codec-agnostic layer ([`crate::TrackDecoder`] and
-//! [`crate::TrackEncoder`]).
+//! [`VideoError`], the error of the codec-agnostic layer (`TrackDecoder` and `TrackEncoder`).
 
 use crate::frame::FrameError;
 
 /// Errors from the codec-agnostic layer.
 ///
-/// Codec errors convert into it, so code mixing [`crate::TrackDecoder`] or [`crate::TrackEncoder`]
+/// Codec errors convert into it, so code mixing `TrackDecoder` or `TrackEncoder`
 /// with the codec modules can use `?` throughout: a codec's "unsupported" stays
 /// [`VideoError::Unsupported`], anything else in the input is [`VideoError::Malformed`]. The
 /// message starts with the codec's name.
@@ -19,7 +18,7 @@ pub enum VideoError {
     /// The input is corrupt or not what it claims to be.
     #[error("malformed video: {0}")]
     Malformed(String),
-    /// A decoded picture did not convert into a [`crate::frame::VideoFrame`].
+    /// A picture did not convert into or from a [`crate::frame::VideoFrame`].
     #[error(transparent)]
     Frame(#[from] FrameError),
 }

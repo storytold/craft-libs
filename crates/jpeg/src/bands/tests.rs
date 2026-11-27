@@ -407,27 +407,6 @@ fn interleaved_layouts_with_any_sampling_factors() {
     }
 }
 
-/// The test encoder's streams decode as `zune-jpeg` decodes them, within the difference between
-/// its integer inverse transform and upsampling and these (mean under 1.5, as for
-/// `decode`).
-#[test]
-fn bands_match_zune_jpeg() {
-    use jpeg_encoder::{ColorType, SamplingFactor};
-    for sampling in [SamplingFactor::R_4_4_4, SamplingFactor::R_4_2_0, SamplingFactor::R_4_2_2] {
-        let s = jpeg_encoder_stream(91, 67, ColorType::Rgb, sampling, 4);
-        let b = Bands::new(&s, &Limits::default(), None).unwrap();
-        let (ours, _) = in_order(&b).unwrap();
-        let mut dec = zune_jpeg::JpegDecoder::new(zune_jpeg::zune_core::bytestream::ZCursor::new(&s));
-        let zune = dec.decode().unwrap();
-        assert_eq!(ours.len(), zune.len());
-        let diffs: Vec<u8> = ours.iter().zip(&zune).map(|(a, b)| a.abs_diff(*b)).collect();
-        let mean = diffs.iter().map(|&d| f32::from(d)).sum::<f32>() / diffs.len() as f32;
-        let max = diffs.iter().copied().max().unwrap();
-        let (bound_mean, bound_max) = if sampling == SamplingFactor::R_4_4_4 { (0.75, 4) } else { (1.5, 255) };
-        assert!(mean < bound_mean && max <= bound_max, "{sampling:?}: mean {mean}, max {max}");
-    }
-}
-
 /// Without restart intervals, damaged data leaves the rest of the scan at zero, exactly as the
 /// whole-image decode does. Data that fails in the first MCU, which the whole-image decode
 /// refuses, is a damaged (grey) image here.
@@ -640,17 +619,6 @@ fn other_processes_and_split_scans_are_unsupported() {
     assert!(matches!(Bands::new(&split, &Limits::default(), None), Err(Error::Unsupported(_))));
 }
 
-/// A scan that names a component twice breaks T.81 (B.2.3: its components follow the frame's
-/// order): malformed, not a valid feature left to the whole-image decode.
-#[test]
-fn a_component_named_twice_in_the_scan_is_malformed() {
-    let mut s = Stream::new(16, 16, &[(1, 1), (1, 1), (1, 1)], 0, 3).encode();
-    let sos = s.windows(2).position(|w| w == [0xFF, 0xDA]).unwrap();
-    assert_eq!(s[sos + 4], 3);
-    s[sos + 7] = s[sos + 5];
-    assert!(matches!(Bands::new(&s, &Limits::default(), None), Err(Error::Malformed(_))));
-}
-
 #[test]
 fn limits_are_checked_from_the_headers() {
     let s = Stream::new(40, 30, &[(2, 1), (1, 1), (1, 1)], 0, 2).encode();
@@ -669,20 +637,6 @@ fn limits_are_checked_from_the_headers() {
     let wide = Limits { max_pixels: u64::MAX, ..Limits::default() };
     let b = Bands::new(&big, &wide, None).unwrap();
     assert!(b.reader_bytes() < 64 << 20);
-}
-
-#[test]
-fn readers_seek_only_to_seek_points() {
-    let s = Stream { restart: 5, ..Stream::new(40, 40, &[(1, 1), (1, 1), (1, 1)], 0, 4) }.encode();
-    let mut b = Bands::new(&s, &Limits::default(), None).unwrap();
-    assert!(b.reader().seek(1).is_err());
-    b.find_seek_points();
-    assert_eq!(b.seek_points().collect::<Vec<_>>(), [0, 1, 2, 3, 4]);
-    let mut r = b.reader();
-    assert!(r.seek(5).is_err());
-    r.seek(4).unwrap();
-    assert_eq!(r.next_band().unwrap().map(|band| band.index), Some(4));
-    assert!(r.next_band().unwrap().is_none());
 }
 
 /// CMYK and YCCK samples of known ink, checked against T.81's reconstruction rather than

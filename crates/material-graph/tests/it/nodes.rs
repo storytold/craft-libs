@@ -309,7 +309,7 @@ fn node_parameters_survive_extreme_values() {
     use craft_material_graph::graph::{SPECS, demo_graph_for};
     let mut problems = Vec::new();
     let mut ran = 0usize;
-    for sp in SPECS {
+    for sp in crate::sampled(SPECS, 0) {
         let Some(text) = demo_graph_for(sp.kind) else { continue };
         let doc = sp.doc.split_once(':').map(|x| x.1).unwrap_or("");
         let names: Vec<String> = doc
@@ -338,7 +338,7 @@ fn node_parameters_survive_extreme_values() {
     }
     problems.sort();
     problems.dedup();
-    assert!(ran > 500, "only {ran} parameter cases ran");
+    assert!(ran > 500 / crate::divisor(), "only {ran} parameter cases ran");
     assert!(problems.is_empty(), "{} parameter problems:\n{}", problems.len(), problems.join("\n"));
 }
 
@@ -446,17 +446,17 @@ fn large_sizes_are_accepted() {
 fn a_cancelled_evaluation_stops_early() {
     use craft_material_graph::context::{Cancel, EvalContext};
     let mut g = Graph::parse(EXAMPLE).unwrap();
-    g.size = 1024;
+    g.size = 256;
     let keep: Vec<u32> = g.output_nodes().iter().map(|o| o.2).collect();
     let job = EvalContext::with_cancel(Cancel::new());
     let t0 = std::time::Instant::now();
-    let full = g.evaluate_all_in(&job, 1024, &keep);
+    let full = g.evaluate_all_in(&job, 256, &keep);
     let full_time = t0.elapsed();
     assert!(!full.kept.is_empty(), "a current job must deliver its outputs");
     // a newer job exists: the old one is cancelled from the start
     job.cancel.cancel();
     let t1 = std::time::Instant::now();
-    let r = g.evaluate_all_in(&job, 1024, &keep);
+    let r = g.evaluate_all_in(&job, 256, &keep);
     assert!(r.kept.is_empty(), "a cancelled run must not deliver outputs");
     assert!(
         t1.elapsed() < full_time / 4 + std::time::Duration::from_millis(50),

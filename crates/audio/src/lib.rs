@@ -23,6 +23,9 @@
 //!   (`aac-encode`, `alac-encode`) and MP3, AC-3 and E-AC-3 streams (`mp3-encode`, `ac3-encode`,
 //!   `eac3-encode`), whole-buffer or incremental into any `Write + Seek`. Feature
 //!   `lossless-encode` turns on WAV, AIFF and FLAC; feature `encode` turns on every format and encoder.
+//! - [`PacketEncoder`] (any of `aac-encode`, `alac-encode`, `mp3-encode`, `ac3-encode`,
+//!   `eac3-encode`, `opus-encode`): planar `f32` in WAV channel order to packets of AAC-LC, ALAC,
+//!   MP3, AC-3, E-AC-3 or Opus, with their timing and codec configuration, for an app's own muxer.
 //! - [`wav_pcm`], [`aiff_pcm`] (feature `decode-native`) and [`pcm_wav_file`], [`pcm_wav_header`],
 //!   [`pcm_aiff_file`], [`pcm_aiff_header`] (feature `pcm-encode`): the integer PCM of a WAV or AIFF
 //!   file bit for bit, and minimal files around such PCM, for essence embedded in other containers.
@@ -32,7 +35,8 @@
 //!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`; `mpa-encode`: the Layer II encoder), [`mp3`]
 //!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-decode`: the frame and file decoder;
 //!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files), [`adpcm`]
-//!   (`adpcm`: IMA WAV, Microsoft, Yamaha and Flash ADPCM), [`dsd`] (`dsd`: DSF and DSDIFF files to PCM),
+//!   (`adpcm`: IMA WAV, Microsoft, Yamaha and Flash ADPCM), [`s302m`] (`s302m`: SMPTE 302M packets),
+//!   [`dsd`] (`dsd`: DSF and DSDIFF files to PCM),
 //!   [`gsm`] (`gsm-decode`, `gsm-encode`: GSM 06.10 full-rate speech), [`vmd`] (`vmd-decode`:
 //!   Sierra VMD sound).
 //!
@@ -65,6 +69,15 @@ pub mod mpa;
 #[cfg(any(feature = "opus-decode", feature = "opus-encode"))]
 pub mod opus;
 #[cfg(any(
+    feature = "aac-encode",
+    feature = "alac-encode",
+    feature = "mp3-encode",
+    feature = "ac3-encode",
+    feature = "eac3-encode",
+    feature = "opus-encode"
+))]
+mod packet;
+#[cfg(any(
     feature = "aac-decode",
     feature = "alac-decode",
     feature = "opus-decode",
@@ -79,6 +92,8 @@ pub mod peaks;
 pub mod qoa;
 #[cfg(feature = "decode-native")]
 mod read;
+#[cfg(feature = "s302m")]
+pub mod s302m;
 #[cfg(feature = "sbc")]
 pub mod sbc;
 #[cfg(any(
@@ -157,6 +172,15 @@ pub use buffer::AudioBuffer;
 pub use craft_media;
 pub use craft_media::{ByteSource, CodecId, CodecParams, Container, PcmFormat, ReadSeekSource};
 pub use layout::{ChannelLayout, Speaker};
+#[cfg(any(
+    feature = "aac-encode",
+    feature = "alac-encode",
+    feature = "mp3-encode",
+    feature = "ac3-encode",
+    feature = "eac3-encode",
+    feature = "opus-encode"
+))]
+pub use packet::{EncodedPacket, PacketEncoder};
 #[cfg(feature = "decode-native")]
 pub use read::SharedSource;
 #[cfg(feature = "decode-native")]
@@ -808,6 +832,13 @@ impl Default for EncodeOptions {
         Self::new(EncodeFormat::Wav)
     }
 }
+
+#[cfg(test)]
+extern crate self as craft_audio;
+
+#[cfg(test)]
+#[path = "../tests/main.rs"]
+mod integration;
 
 // An encoder refusing its settings is an encode error, not damaged input.
 #[cfg(all(test, feature = "aac-encode"))]

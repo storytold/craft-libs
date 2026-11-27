@@ -72,7 +72,7 @@ const BUILTIN: &[(&str, u16)] = &[
     ("FollowedHyperlink", 86),
     ("Strong", 87),
     ("Emphasis", 88),
-    ("Plain Text", 91),
+    ("Plain Text", 90),
     ("Normal (Web)", 94),
     ("Normal Table", 105),
     ("No List", 107),
@@ -396,5 +396,31 @@ mod tests {
         let names = vec!["Times New Roman".to_string(), "Symbol".to_string(), "Noto Sans Ünï".to_string()];
         let t = font_table(&names);
         assert_eq!(crate::stsh::fonts(&t, 0, t.len() as u32), names);
+    }
+
+    /// #1805: the reader names a built-in style by its `sti`, so each one the writer gives must be
+    /// the one [MS-OE376] lists for the name it writes (Plain Text is 90; 91 is E-mail Signature).
+    #[test]
+    fn every_built_in_sti_names_the_style_written() {
+        for &(name, sti) in BUILTIN {
+            assert_eq!(crate::stsh::built_in_name(sti), Some(name), "sti {sti}");
+        }
+    }
+
+    /// #1805: a built-in style the writer gives an `sti` reads back under its own name.
+    #[test]
+    fn a_plain_text_style_reads_back_as_plain_text() {
+        let mut d = craft_wordmodel::Document::new();
+        std::sync::Arc::make_mut(&mut d.styles).styles.push(Style {
+            id: "PlainText".into(),
+            name: "Plain Text".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some("Normal".into()),
+            ..Default::default()
+        });
+        d.body = vec![craft_wordmodel::para_block(craft_wordmodel::para::Paragraph::with_text("x", CharProps::default()).styled("PlainText"))];
+        let r = crate::read(&crate::write(&d).expect("write")).expect("read back");
+        let style = r.body[0].as_para().and_then(|p| p.props.style.clone()).and_then(|id| r.styles.get(&id).map(|s| s.name.clone()));
+        assert_eq!(style.as_deref(), Some("Plain Text"));
     }
 }
