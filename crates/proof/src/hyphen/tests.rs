@@ -209,3 +209,15 @@ fn gujarati_breaks_between_aksharas_within_the_limits() {
     assert_eq!(gu("«ગુજરાતી»"), "«ગુ-જ-રા-તી»", "punctuation around the word");
     assert_eq!(gu("Typography"), hyphenate_word_in("Typography", &lim, ProofLang::En));
 }
+
+/// Hindi text breaks between Devanagari aksharas by the same rules, where it used to get no
+/// break; a Latin word in a Hindi run is still hyphenated as English.
+#[test]
+fn hindi_breaks_between_aksharas_within_the_limits() {
+    let lim = Limits::default();
+    let hi = |w: &str| hyphenate_word_in(w, &lim, ProofLang::Hi);
+    assert_eq!(hi("विद्यार्थी"), "वि-द्या-र्थी", "a conjunct is never split");
+    assert_eq!(word_breaks_in("विद्यार्थी", ProofLang::Hi).1, Source::Rules);
+    assert_eq!(hi("«विद्यार्थी»"), "«वि-द्या-र्थी»", "punctuation around the word");
+    assert_eq!(hi("Typography"), hyphenate_word_in("Typography", &lim, ProofLang::En));
+}
