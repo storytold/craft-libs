@@ -59,7 +59,9 @@ impl<P, S: PanelSpecs<P>> SpecSource<P> for Tracked<S> {
 /// 2. Otherwise `group_header` once, inside the group's header before its tab strip, then `body` for the panels whose
 ///    bodies are shown, and `footer` under the body of a shown panel whose spec has `PanelSpec::footer`.
 ///
-/// Each of these runs every pass the group shows. A host memoizes inside them: a body or view shown through a
+/// Each of these runs every pass the group runs. Where every shown panel of a column has a version
+/// ([`content`](Self::content)), the column runs only when one of them, the arrangement, the specs or its place
+/// changed, or input reached it. A host memoizes inside them: a body or view shown through a
 /// [`MemoView`](crate::contract::MemoView) runs only when its props changed or input reached it, and otherwise repaints
 /// its last run. The dock's own chrome (each group's tab row, each column's bar) is memoized on what it shows: the
 /// panels' specs ([`PanelSpecs`]), the arrangement and the look.
@@ -83,10 +85,14 @@ pub trait DockPanels<P> {
     /// spec has `PanelSpec::footer` (the default shows nothing).
     fn footer(&mut self, _panel: &P, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
 
-    /// The version of the app data `panel`'s body shows that the framework does not track (a document's revision, a
-    /// job's progress). With one, the body settles (`Lazy::settles` with `Lazy::content`): it runs only when its
-    /// version, its room or something the framework tracks in it changed, the pointer is over it or focus is in it, and
-    /// otherwise repaints its last run. `None` (the default) runs the body every pass.
+    /// The version of the app data the host shows for `panel` that the framework does not track (a document's
+    /// revision, a job's progress): everything its `body` and `footer` show, and the `group_header`, `group_view` and
+    /// `rail_footer` of a group or rail whose shown panel it is.
+    ///
+    /// The dock shows each column, and its docked tree, as a memoized view keyed by the versions of the panels shown
+    /// in it, the arrangement, the specs and the place: while those hold and no input reaches it, the column repaints
+    /// its last run and calls none of these methods. A column or tree that shows a panel without a version (`None`,
+    /// the default) runs every pass. The host memoizes inside its bodies itself, for the passes a column runs.
     fn content(&self, _panel: &P) -> Option<u64> {
         None
     }

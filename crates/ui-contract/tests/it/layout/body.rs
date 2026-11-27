@@ -10,7 +10,7 @@ use craft_ui::layout::{BodyLayout, RowAlign};
 use craft_ui::runtime::env::{Direction, with_env};
 use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::testing::layout::{Block, body};
-use craft_ui::testing::{Fixture, Frames, is_measuring, trial};
+use craft_ui::testing::{Fixture, Frames, audit_replays, is_measuring, trial};
 use craft_ui_test_kit::contract::{Panel, PlainStyle, Probe, Seen};
 use egui::{Rect, Response, Ui, Vec2};
 use std::cell::{Cell, RefCell};
@@ -542,28 +542,81 @@ fn short(_: &mut Short, ui: &mut Ui) -> Rect {
     Block::new(Vec2::new(40.0, 10.0)).show(ui).rect
 }
 
-/// A memoized view in a row sits on the row's line, as the one-line child beside it does, also while it replays. Its
-/// content starts a layout room of its own, which left it at the row's top (a menu bar beside an app icon,
-/// storytold/photocraft#16113).
+/// A row of a tall block and the memoized short view beside it: the block's rect and the view's.
+fn row_of_short(ui: &mut Ui) -> (Rect, Rect) {
+    let rects = Cell::new((Rect::NOTHING, Rect::NOTHING));
+    Panel::new().layout(BodyLayout::row()).id_salt("row").show(ui, |ui, _| {
+        let tall = Block::new(Vec2::new(20.0, 30.0)).show(ui).rect;
+        let view = MemoView::new("short", Short {}, short).show(ui);
+        rects.set((tall, view.unwrap_or(Rect::NOTHING)));
+    });
+    rects.get()
+}
+
+/// A memoized view that holds the row.
+#[derive(MemoProps)]
+struct HeldRow {}
+
+fn held_row(_: &mut HeldRow, ui: &mut Ui) {
+    row_of_short(ui);
+}
+
+/// A memoized view in a row sits on the row's line, as the one-line child beside it does, from the first pass that
+/// shows it and while it replays. Its content starts a layout room of its own, which left it at the row's top (a menu
+/// bar beside an app icon, storytold/photocraft#16113); in its first pass it has no real run yet, so it sits by the
+/// extent the row's measuring run found in that pass. A view around the row keeps that first run, and replays it.
 #[trial]
 fn a_memoized_view_sits_on_the_rows_line() {
-    let seen = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING)));
+    let seen = Rc::new(RefCell::new(Vec::new()));
     let shown = Rc::clone(&seen);
     let mut fixture = Fixture::new(move |ui| {
-        Panel::new().layout(BodyLayout::row()).id_salt("row").show(ui, |ui, _| {
-            let tall = Block::new(Vec2::new(20.0, 30.0)).show(ui).rect;
-            let view = MemoView::new("short", Short {}, short).show(ui);
-            if !is_measuring(ui.ctx()) {
-                shown.set((tall, view.unwrap_or(Rect::NOTHING)));
-            }
-        });
+        let rects = row_of_short(ui);
+        if !is_measuring(ui.ctx()) && !ui.is_sizing_pass() {
+            shown.borrow_mut().push(rects);
+        }
     });
     fixture.room(Vec2::splat(400.0)).settle();
-    for frame in 0..3 {
-        let (tall, view) = seen.get();
-        assert!(view.height() > 0.0, "frame {frame}: the view showed: {view:?}");
-        assert!((view.center().y - tall.center().y).abs() < SLACK, "frame {frame}: the view {view:?} is off the line of {tall:?}");
+    for _ in 0..3 {
         fixture.settle();
+    }
+    let seen = seen.borrow();
+    assert!(seen.len() > 1, "the row showed in several passes: {seen:?}");
+    for (pass, (tall, view)) in seen.iter().enumerate() {
+        assert!(view.height() > 0.0, "pass {pass}: the view showed: {view:?}");
+        assert!((view.center().y - tall.center().y).abs() < SLACK, "pass {pass}: the view {view:?} is off the line of {tall:?}");
+    }
+    // Held in a view of its own, the row's first run is what that view replays: the replay audit finds it the same as a
+    // run.
+    let mut fixture = Fixture::new(|ui| {
+        MemoView::new("held row", HeldRow {}, held_row).show(ui);
+    });
+    audit_replays(fixture.ctx(), true);
+    fixture.room(Vec2::splat(400.0)).settle();
+    for _ in 0..3 {
+        fixture.settle();
+    }
+}
+
+/// An unwrapped row in a row sits on the outer row's line by its own line, whatever its alignment: a row that places
+/// its block from its start, at its end, centred or spread reports its line as its first line alike.
+#[trial]
+fn an_unwrapped_row_sits_on_the_outer_line_by_its_line_in_every_alignment() {
+    for align in [RowAlign::Start, RowAlign::SpaceBetween, RowAlign::Center, RowAlign::End] {
+        let seen = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING)));
+        let shown = Rc::clone(&seen);
+        let mut fixture = Fixture::new(move |ui| {
+            Panel::new().layout(BodyLayout::row()).id_salt("outer").show(ui, |ui, _| {
+                let tall = Block::new(Vec2::new(20.0, 30.0)).show(ui).rect;
+                let short = Panel::new().layout(BodyLayout::row().align(align)).id_salt("inner").show(ui, |ui, _| Block::new(ITEM).show(ui).rect);
+                if !is_measuring(ui.ctx()) {
+                    shown.set((tall, short.inner.unwrap_or(Rect::NOTHING)));
+                }
+            });
+        });
+        fixture.room(Vec2::splat(400.0)).settle();
+        let (tall, short) = seen.get();
+        assert!(short.height() > 0.0, "{align:?}: the inner row showed its block: {short:?}");
+        assert!((short.center().y - tall.center().y).abs() < SLACK, "{align:?}: the inner row's block {short:?} is off the line of {tall:?}");
     }
 }
 

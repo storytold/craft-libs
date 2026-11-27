@@ -163,6 +163,7 @@ pub(crate) fn register(ctx: &Context, taker: WheelTaker<Id>) {
         return;
     }
     crate::runtime::replay::journal(ctx, || taker, |ctx, &taker| register(ctx, taker));
+    crate::runtime::replay::note_taker(ctx, taker.owner);
     let layer = crate::runtime::overlay::drawing_parent(ctx);
     PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| {
         state.this_layers.insert(taker.owner, layer);
@@ -331,6 +332,16 @@ pub(crate) fn begin(ctx: &Context, pointer_scoped_field_wheel: bool) {
     if let Some(seconds) = wake {
         repaint::request_after(ctx, viewport, seconds.max(0.0));
     }
+}
+
+/// Whether this pass's wheel reaches one of `takers`: a share of it goes to one, or one's ease owes motion it pays in
+/// this pass.
+pub(crate) fn reaches(ctx: &Context, takers: &[Id]) -> bool {
+    !takers.is_empty()
+        && PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| {
+            state.shares.iter().any(|(owner, _)| takers.contains(owner))
+                || state.eases.iter().any(|(owner, ease)| ease.owes() && takers.contains(owner))
+        })
 }
 
 /// The component's share of this pass's wheel, left in place.
