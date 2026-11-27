@@ -334,6 +334,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   placed, coloured triangle meshes and a model tree. Bounded on hostile input. From PdfCraft;
   rendering stays in the app.
 - [`craft-offcrypto`](crates/offcrypto/README.md): clean-room Office document cryptography ([MS-OFFCRYPTO]): password-encrypted OOXML packages on `craft-cfb` (agile and standard encryption read, with the integrity check enforced; agile written), unsupported schemes named, and the password hashes of document and sheet protection.
+- [`craft-officeart`](crates/officeart/README.md): clean-room reader for the Office Drawing records ([MS-ODRAW]) that `.doc`, `.ppt` and `.xls` share: the record framing, shape property tables, the BLIP store and its pictures, DIBs as PNG files and WMF placeable headers.
 - [`craft-ods`](crates/ods/README.md): OpenDocument spreadsheets (`.ods`, `.ots`) on `craft-odf`: the tables of `content.xml` with typed values, displayed text, formulas as text, style names, repeats expanded and merged cells, with dates and durations as serial numbers. Bounded cells, merges and text; strict XML.
 - [`craft-opc`](crates/opc/README.md): Open Packaging Conventions, the ZIP container of DOCX, XLSX and PPTX
   files: bounded readers (every part up front, or on demand), part names, relationships, content

@@ -45,10 +45,11 @@ No third-party implementation was consulted.
   header back), and DIB as BMP. Shapes that show one picture share its bytes.
 - The AutoFilter range (AutoFilterInfo with the `_FilterDatabase` name); not its criteria.
 
-Limits for these: 256 MiB of drawing records for the workbook and for each sheet, 4096 stored
-pictures, 256 MiB of inflated metafiles in all (64 MiB each), 65,536 pictures, comments and
-conditional formats per sheet. A damaged comment, object or conditional-format record is
-skipped with a warning.
+Limits for these: 256 MiB of drawing records for the workbook and for each sheet, 200,000 drawing
+records read from all the sheets together, drawing containers nested at most 12 deep, 4096 stored
+pictures, 256 MiB of picture bytes in all, inflated or copied (a metafile at most 64 MiB), 65,536
+pictures, comments and conditional formats per sheet. A damaged comment, object or
+conditional-format record is skipped with a warning.
 
 Not read: charts, other shapes, newer conditional formats (CF12), hyperlinks,
 PivotTables, macros. Each is named once in `Read::warnings`. BIFF5 and older is refused
