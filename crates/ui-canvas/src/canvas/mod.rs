@@ -960,7 +960,7 @@ impl ToolPass {
     /// in each pass the pointer should stay hidden, and stops asking when it moves. A measuring run publishes no pass,
     /// so only the real run asks.
     pub fn hide_pointer(&self, ui: &egui::Ui) {
-        if ui.ctx().pointer_hover_pos().is_some_and(|at| self.rect.contains(at)) {
+        if crate::runtime::pointer::hover_point_in(ui.ctx(), self.rect).is_some() {
             let hidden = craft_behavior::Cursor::Painted(craft_behavior::PaintedCursor::Hidden);
             crate::runtime::cursor::request(ui.ctx(), hidden, CursorPriority::Hidden);
         }

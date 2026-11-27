@@ -102,7 +102,7 @@ impl<T: Value + 'static> Component for RadioGroup<'_, T> {
     }
 
     /// The pick (20.3 item 1): the member activated this pass, found in last pass's registrations, goes to the
-    /// binding. Tab arrives at the selected member.
+    /// binding.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let memory = cx.memory::<GroupMemory<T>>().clone();
         let handle = GroupHandle::<RadioKind<T>>::new(Arc::clone(&memory.live));
@@ -111,11 +111,7 @@ impl<T: Value + 'static> Component for RadioGroup<'_, T> {
             cx.propose(picked);
             cx.commit();
         }
-        let selected = cx.value().cloned();
-        if let Some(id) = selected.as_ref().and_then(|value| handle.member_id(value)) {
-            cx.roving_arrival(id);
-        }
-        handle.select(selected);
+        handle.select(cx.value().cloned());
     }
 
     fn content_env(&self, cx: &Cx<'_, Self>, values: &mut crate::runtime::env::AppValues) {
@@ -129,7 +125,15 @@ impl<T: Value + 'static> Component for RadioGroup<'_, T> {
         values.set(GroupInvalid(matches!(cx.validity(), Validity::Refuse(_) | Validity::Error(_))));
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<T> {
+    /// Tab arrives at the selected member, named from the members this run's body registered, so the run that first
+    /// shows the group already holds its arrival.
+    fn finish(self, mut cx: Cx<'_, Self>) -> EditResponse<T> {
+        if !crate::runtime::measure::active(&cx.core.ctx) {
+            let handle = GroupHandle::<RadioKind<T>>::new(Arc::clone(&cx.recall::<GroupMemory<T>>().live));
+            if let Some(id) = cx.value().and_then(|value| handle.member_id(value)) {
+                cx.roving_arrival(id);
+            }
+        }
         cx.edit_response()
     }
 }

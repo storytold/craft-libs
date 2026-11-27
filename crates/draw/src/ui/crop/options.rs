@@ -24,7 +24,7 @@ pub const FIELD_MAX: f64 = 1e9;
 pub const LENGTH_MIN: f64 = 0.01;
 
 /// What the frame's proportions follow.
-#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum CropRatio {
@@ -55,7 +55,7 @@ impl CropRatio {
 }
 
 /// The resolution field's unit.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ResolutionUnit {
@@ -68,7 +68,7 @@ pub enum ResolutionUnit {
 
 /// A length with the unit it was entered in: the W and H of W × H × Resolution mode keep what the user typed ("2 in"
 /// stays in inches when the document resizes).
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct CropLength {
@@ -97,7 +97,7 @@ impl CropLength {
 
 /// The W, H and Resolution fields of W × H × Resolution mode. Unset W and H are `None`; the resolution is typed text
 /// ("300"), empty when unset. Perspective Crop's options bar uses the same fields.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct CropSizeFields {
@@ -112,7 +112,7 @@ pub struct CropSizeFields {
 }
 
 /// What the area a turned or extending crop uncovers is filled with.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum CropFill {
@@ -229,7 +229,7 @@ pub const CROP_SIZES: [CropSizePreset; 8] = [
 /// options bar edits it in place, the tool reads it each pass and reports key changes (O, ⇧O, H,
 /// P, I, X) as [`CropEvent::Settings`](super::CropEvent::Settings). Every field defaults on its
 /// own, so older settings load.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct CropSettings {
