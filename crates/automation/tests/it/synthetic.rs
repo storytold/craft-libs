@@ -732,7 +732,8 @@ fn a_reply_with_too_many_refusals_is_truncated_and_idle_passes_report_nothing() 
     rig.fx.frame(Vec::new());
     let answer = reply.try_recv().expect("answered");
     assert_eq!(answer["truncated"], true, "{answer}");
-    assert_eq!(answer["errors"].as_array().map(Vec::len), Some(MAX_INPUT_REFUSALS));
+    let first: Vec<Value> = (0..MAX_INPUT_REFUSALS).map(|i| json!(format!("refusal {i}"))).collect();
+    assert_eq!(answer["errors"], Value::Array(first), "the first refusals are kept, in order");
     assert_eq!(answer["error"], "refusal 0");
 }
 
