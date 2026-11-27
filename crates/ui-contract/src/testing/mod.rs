@@ -25,6 +25,7 @@ pub mod input;
 pub(crate) mod key_trials;
 pub mod layout;
 pub mod memory;
+pub mod overlay;
 pub mod pictures;
 pub mod pointer;
 #[cfg(feature = "suite")]

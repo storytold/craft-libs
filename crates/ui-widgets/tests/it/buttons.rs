@@ -4,10 +4,11 @@
 //! icon's place.
 
 use craft_behavior::{IconId, PartKey};
+use craft_host::target::Os;
 use craft_theme::ControlSize;
 use craft_theme::Variant;
 use craft_ui::buttons::{
-    Arrangement, Button, ButtonChord, ControlPlace, GroupLevel, IconButton, PushButtonLook, SplitButton, SplitMenu, ToggleButton,
+    Arrangement, Button, ButtonChord, CommandSearch, ControlPlace, GroupLevel, IconButton, PushButtonLook, SplitButton, SplitMenu, ToggleButton,
 };
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, CommandSet, Entry, Hover, PopupKind, Props as _, Role, Show as _, ShowContainer as _, Trigger};
@@ -1153,6 +1154,26 @@ fn a_command_button_shows_its_chord_until_the_room_is_short() {
     let (plain_chord, _) = command_shown("trial.plain", ButtonChord::Trailing, 400.0);
     let (plain_hidden, _) = command_shown("trial.plain", ButtonChord::Hidden, 400.0);
     assert_eq!(plain_chord, plain_hidden, "a command with no chord shows none");
+}
+
+/// The command-search opener's chord part is named by the chord spoken, the name its `Kbd` face gives itself, not by
+/// the command's label.
+#[trial]
+fn a_command_search_chord_part_is_named_by_its_chord_spoken() {
+    // Not a Ctrl+Alt+F-key: Linux reserves those for its virtual consoles, so the keymap would drop the default and the
+    // opener would show no chord.
+    let find = CommandDef::new(CommandRef::new("demo.find"), "Find", Scope::app())
+        .with_default(Binding::parse("Cmd+Alt+K").expect("the trial's chord parses"));
+    let catalog = AppCatalog::new(vec![find], 1).expect("the trial's catalog is valid");
+    let mut fixture = Fixture::new(|ui| {
+        CommandSearch::new(CommandRef::new("demo.find"), "Search commands").show(ui);
+    });
+    fixture.os(Os::Linux).commands(CommandInput::new().catalog(catalog));
+    fixture.settle();
+    let opener = fixture.by_label("Search commands").expect("the opener is named by its placeholder");
+    let chord = fixture.by_label("Ctrl+Alt+K").expect("a node is named by the opener's chord spoken");
+    assert!(opener.rect.contains(chord.rect.center()), "the chord's node is the opener's chord part: {:?} in {:?}", chord.rect, opener.rect);
+    assert!(fixture.by_label("Find").is_none(), "no node is named by the command's label");
 }
 
 /// A toggle button says whether it is pressed both ways: on is pressed and off is not pressed, bound to a value or

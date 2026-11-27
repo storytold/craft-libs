@@ -369,7 +369,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         if events {
             inputs::bump(ctx, Input::Pointer);
         }
-        // A press or release, or an outside press the layer stack's input hook took before egui saw it.
+        // A press or release, or an outside press the layer stack's input hook recorded (and took, for a primary one).
         if frame.press.is_some() || frame.release.is_some() || crate::runtime::overlay::absorbed_press_raw(ctx).is_some() {
             inputs::bump(ctx, Input::Press);
         }

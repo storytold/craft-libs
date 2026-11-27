@@ -69,6 +69,13 @@ pub(super) fn memory_slot(id: Id) -> Id {
     sub(id, "layer_memory")
 }
 
+/// A test hook (`testing::overlay::layer_pointer_at`): where the pointer was when the layer `id` first appeared, as
+/// the layer remembers it while shown; `None` when it remembers none. Opens no stage.
+#[cfg(feature = "testing")]
+pub(crate) fn remembered_pointer(ctx: &Context, id: Id) -> Option<Pos2> {
+    MemoryStage::peek::<LayerMemory>(ctx, memory_slot(id)).pointer_at
+}
+
 fn recall(layer: &Layer<'_>, ctx: &Context) -> LayerMemory {
     MemoryStage::peek::<LayerMemory>(ctx, memory_slot(layer.id))
 }
