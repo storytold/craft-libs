@@ -96,7 +96,7 @@ fn a_view_measured_in_two_rooms_hands_forward_each_rooms_width_when_it_takes_its
             })
             .show(ui);
         };
-        let cell_id = ui.id().with("cell");
+        let cell_id = ui.scope_id().with("cell");
         let cell = |room: Vec2| UiBuilder::new().max_rect(Rect::from_min_size(start, room)).scope_id(cell_id);
         for width in ROOMS {
             view(&mut ui.new_child(cell(Vec2::new(width, f32::INFINITY)).sizing_pass().invisible()));
