@@ -6,7 +6,8 @@ ProRes and H.264.
 - Input and output are byte slices and planar sample buffers; the crate opens no files itself
   and performs no filesystem I/O.
 - Implemented from published standards and RFCs (SMPTE ST 2019-1, RFC 6386, SMPTE RDD 36 and
-  ITU-T H.264).
+  ITU-T H.264). Bink has no published specification: its decoder was derived by black-box
+  probing, as its README describes.
 - Tested against ffmpeg as an external oracle with roundtrips, hostile fuzzing, and conformance vectors.
   No `unsafe`, no panics on corrupt streams. Builds for `wasm32-unknown-unknown`.
 - Containers (MP4/MOV, Matroska/WebM), bit-level I/O (`craft_media::bitstream`) and shared
@@ -23,6 +24,7 @@ No codec feature is on by default.
 | `vp8` | `vp8` | VP8 (RFC 6386): decoder |
 | `mpeg2` | [`mpeg2`](src/mpeg2/README.md) | MPEG-2 video (ITU-T H.262) and MPEG-1 video (ISO/IEC 11172-2): decoder (`mpeg2-decode` alone); MPEG-2 encoder with I, P and B pictures and constant or variable bitrate within the VBV buffer (`mpeg2-encode`, which also turns on the decoder) |
 | `mpeg4` | [`mpeg4`](src/mpeg4/README.md) | MPEG-4 Part 2 video (ISO/IEC 14496-2, the Xvid/DivX format): Simple profile encoder (`mpeg4-encode`) |
+| `rawvideo` | `rawvideo` | Uncompressed packed pictures: UYVY, YUYV, YVYU (8-bit 4:2:2), v210 (10-bit 4:2:2), r210 and R10k (10-bit RGB); unpacking to and packing from planar samples, byte-exact with ffmpeg |
 | `hap` | `hap` | Vidvox Hap: Hap, Hap Alpha, Hap Q, Hap Q Alpha and Hap Alpha-Only, decoder and encoder, with the Snappy and chunked second stages. DXT1, DXT5, scaled YCoCg-DXT5 and BC4 pictures decode in software; BC7 (Hap R) and BC6 (Hap HDR) frames are read and their blocks returned but not decoded to pictures. |
 | `mjpeg` | `mjpeg` | Motion JPEG: a decoder (baseline, extended and progressive Huffman JPEG; the Annex K tables for AVI `MJPG` packets that have none; `Decoder::decode_into` writes RGBA or BGRA pixels into a caller's buffer at any row stride) and a baseline encoder, both over `craft-jpeg`. No two-field (MJPEG-A/B) packets and no lossless JPEG. |
 | `prores` | `prores` | Apple ProRes (SMPTE RDD 36): decoder and encoder |
@@ -31,6 +33,7 @@ No codec feature is on by default.
 | `vp9` | [`vp9`](src/vp9/decode/README.md) | VP9: decoder (`vp9-decode` alone) and encoder (`vp9-encode` alone) |
 | `av1` | [`av1`](src/av1/decode/README.md) | AV1 (AOMedia Video 1): decoder (`av1-decode` alone) and clean-room encoder (`av1-encode`); tiled rav1e fallback for large frames (`av1-large-encode`) |
 | `vmd` | `vmd` | Sierra VMD video (the 8-bit paletted pictures of Sierra and Coktel Vision game videos): decoder (`vmd-decode`) |
+| `bink` | [`bink`](src/bink/README.md) | Bink video (Bink 1, revisions `f` and `i`): decoder (`bink-decode`) |
 | `threads` | — | Multi-threaded slice/row parallelism via `rayon` |
 
 ## Decoded frames
