@@ -5,13 +5,14 @@
 use craft_behavior::IconId;
 use craft_ui::bars::{Bar, BarHome, BarItem, BarItems, BarKind, StatusMessage, StatusProgress};
 use craft_ui::buttons::IconButton;
-use craft_ui::contract::{Bind, CommandSet, MemoProps, MemoView, Outbox, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CommandSet, Entry, MemoProps, MemoView, Outbox, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
-use craft_ui::layout_components::Stack;
+use craft_ui::layout_components::{Row, Stack};
+use craft_ui::pickers::Select;
 use craft_ui::runtime::commands::CommandScope;
 use craft_ui::runtime::env::Label;
 use craft_ui::testing::layout::in_region;
-use craft_ui::testing::{Fixture, Frames, MemoRun, last_frame_memo_runs, trial};
+use craft_ui::testing::{Fixture, Frames, MemoRun, audit_replays, last_frame_memo_runs, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -251,4 +252,72 @@ fn a_memoized_member_takes_the_height_its_content_used_not_the_bars_room() {
     assert!(plain.height() < TALL_ROOM.y / 2.0, "the plain bar sizes from its members: {plain:?}");
     assert!(member.height() < TALL_ROOM.y / 2.0, "the member takes what its content used, not the bar's room: {member:?}");
     assert!((memo.height() - plain.height()).abs() <= 0.5, "the bar is as high with the member memoized: {memo:?} against {plain:?}");
+}
+
+/// The members of an options bar: a lead button, then a group of a select and `tools` icon buttons, which the bar
+/// narrows (its select) when it is too short for them.
+#[derive(MemoProps)]
+struct GroupProps {
+    tools: usize,
+}
+
+fn group_bar(props: &mut GroupProps, ui: &mut Ui) {
+    Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+        IconButton::new(IconId::new("more")).label("Lead").show(ui);
+        MemoView::new("group", GroupProps { tools: props.tools }, group).show(ui);
+    });
+}
+
+/// The group, memoized as a host memoizes a bar's members: a row of the select and the tools.
+fn group(props: &mut GroupProps, ui: &mut Ui) {
+    let entries = [Entry::new(0u8, "Custom"), Entry::new(1, "Very Wet, Heavy Mix")];
+    Row::new().show(ui, |ui, _| {
+        Select::new("Mode", Bind::given(0u8), &entries).show(ui);
+        for at in 0..props.tools {
+            IconButton::new(IconId::new("more")).label(format!("Tool {at}")).show(ui);
+        }
+    });
+}
+
+const GROUP_TOOLS: usize = 8;
+
+/// In the bar of `GROUP_TOOLS` tools shown plainly `width` wide at x 0: the select's rect, the last tool's right edge
+/// and the bar's padding before its members (where the lead starts).
+fn plain_group(width: f32) -> (Rect, f32, f32) {
+    let mut fixture = Fixture::new(move |ui| {
+        in_region(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 60.0)), |ui| group_bar(&mut GroupProps { tools: GROUP_TOOLS }, ui));
+    });
+    fixture.room(Vec2::new(width.max(400.0), 80.0)).settle();
+    let rect = |name: &str| fixture.by_label(name).unwrap_or_else(|| panic!("no {name}")).rect;
+    (rect("Mode"), rect(&format!("Tool {}", GROUP_TOOLS - 1)).max.x, rect("Lead").min.x)
+}
+
+/// A bar memoized as the fill-width member of a row (a shell slot), whose members change, lays out from what this pass
+/// measured in its own view. The row's first sweep measures the view in no room, where the bar's scroll view shows all
+/// of its members; the group's row, memoized inside the bar, is content-sized in both runs, and its measure from that
+/// view does not serve the real run, whose view is too short for it. The group narrows its select as the same bar shown
+/// plainly does, and the frames after replay that layout under the audit.
+#[trial]
+fn a_bar_whose_members_change_lays_out_in_its_own_view() {
+    let (wide, right, pad) = plain_group(2000.0);
+    // Ten points short of what the members ask for, with the padding at the bar's end as at its start: the select
+    // narrows by that.
+    let width = right + pad - 10.0;
+    let (narrowed, ..) = plain_group(width);
+    assert!(narrowed.width() < wide.width() - 5.0, "the plain bar narrows its select: {narrowed:?} against {wide:?}");
+    let tools = Rc::new(Cell::new(1));
+    let shown = Rc::clone(&tools);
+    let mut fixture = Fixture::new(move |ui| {
+        in_region(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 60.0)), |ui| {
+            Row::new().fill_width().show(ui, |ui, _| MemoView::new("options", GroupProps { tools: shown.get() }, group_bar).show(ui));
+        });
+    });
+    fixture.room(Vec2::new(width, 80.0)).settle();
+    audit_replays(fixture.ctx(), true);
+    tools.set(GROUP_TOOLS);
+    fixture.frame(vec![]).idle(4);
+    let select = fixture.by_label("Mode").expect("the select").rect;
+    let last = fixture.by_label(&format!("Tool {}", GROUP_TOOLS - 1)).expect("the last tool").rect;
+    assert!((select.width() - narrowed.width()).abs() <= 0.5, "the select is {select:?}, the plain bar's {narrowed:?}");
+    assert!(last.max.x <= width - pad + 0.5, "the last tool ends at {}, past the bar's view ({width} less {pad})", last.max.x);
 }

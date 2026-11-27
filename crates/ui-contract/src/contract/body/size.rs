@@ -93,7 +93,7 @@ impl<'b> BodyHooks<'b> {
     pub(super) fn measure_key(&self, env: &Env, width: Option<f32>) -> MeasureKey {
         MeasureKey {
             props: MeasuredProps(Arc::clone(&self.props)),
-            room: self.room,
+            room: self.keyed_room(),
             given: self.given,
             wide: self.wide(),
             width,
@@ -101,6 +101,15 @@ impl<'b> BodyHooks<'b> {
             env: EnvFacts::of(env),
             flow: (self.in_column, self.after_rule),
         }
+    }
+
+    /// The room the body's measure keys on, its records and its kept transcript: the room the mount offers, and along
+    /// x, where that is unbounded in a view that scrolls along x, what the view shows from the container's start, to
+    /// which the rows of the body shrink before the view scrolls (`layout::view_room`). A measure laid out in another
+    /// view (a parent's measuring run in no room, a wider window) then serves only under the reuse rule
+    /// (`Measured::serves`): its content did not reach the view's room then and fits it now.
+    pub(super) fn keyed_room(&self) -> Vec2 {
+        Vec2::new(self.view_room.unwrap_or(self.room.x), self.room.y)
     }
 
     /// How the container's size follows its content here: a pane or a rect the host gives is filled; a layer sizes
@@ -230,8 +239,9 @@ impl<'b> BodyHooks<'b> {
     }
 
     /// What the regions took together, padding included, from the records a measuring run left in this pass, when they
-    /// serve a run offered `self.room`: on each axis the room equals the recorded one, or the container is not given
-    /// that axis, took less than the recorded room (the room did not bound it) and fits in the room now.
+    /// serve a run offered its keyed room (`keyed_room`): on each axis the room equals the recorded one, or the
+    /// container is not given that axis, took less than the recorded room (the room did not bound it) and fits in the
+    /// room now.
     pub(super) fn reusable(&self, props: &ContainerProps, ctx: &Context, id: Id, pad: Vec2, tolerance: f32) -> Option<Vec2> {
         let body = layout_memory::measured(ctx, id)?;
         let region =
@@ -240,7 +250,8 @@ impl<'b> BodyHooks<'b> {
             (region("header", props.header.is_some()), region("footer", props.footer.is_some()), region("end", props.end.is_some()));
         let fits = |now: f32, was: f32, given: bool, took: f32| layout_memory::Measured::serves(now, was, given, took, tolerance);
         let full = self.regions_size(props, body.took, header, footer, end) + pad;
-        if !(fits(self.room.x, body.room.x, self.wide(), full.x) && fits(self.room.y, body.room.y, self.given.1, full.y)) {
+        let room = self.keyed_room();
+        if !(fits(room.x, body.room.x, self.wide(), full.x) && fits(room.y, body.room.y, self.given.1, full.y)) {
             return None;
         }
         let body = if self.open { body.took } else { Vec2::ZERO };

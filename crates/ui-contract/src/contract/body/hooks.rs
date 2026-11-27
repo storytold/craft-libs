@@ -959,7 +959,8 @@ impl BodyHooks<'_> {
         let props = Arc::clone(&self.props);
         let ctx = at.ui.ctx();
         let pad = self.frame_size(&props, at.scx.tokens, top_band(&props, ctx, id, at.scx.tokens));
-        let record = |key: Id, took: Vec2| layout_memory::emit_record(ctx, key, layout_memory::Measured::new(self.room, took));
+        let room = self.keyed_room();
+        let record = |key: Id, took: Vec2| layout_memory::emit_record(ctx, key, layout_memory::Measured::new(room, took));
         record(id, self.body_size.unwrap_or(Vec2::ZERO));
         if let Some(first) = self.first_line {
             record(sub(id, "first"), Vec2::new(0.0, first));
@@ -1926,6 +1927,7 @@ impl BodyHooks<'_> {
             Some(width) => Vec2::new(width, props.room_height.unwrap_or(f32::INFINITY)),
             None => self.mount_room(&props, (at.ui, at.place), id, at.at, at.scx.tokens),
         };
+        self.view_room = crate::layout::view_room(at.ui, at.place, craft_behavior::Axis::X).filter(|_| self.room.x.is_infinite());
         self.given = self.given_axes(&props, at.env, at.at);
         self.given.1 |= self.given_room(&props, at.env, at.at, at.ui.ctx(), id);
         self.fixed_height = self.fixed_height(&props, at.at);
