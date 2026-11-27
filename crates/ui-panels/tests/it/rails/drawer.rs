@@ -309,6 +309,22 @@ fn searchable_drawer_keeps_native_escape_clear_then_close_and_opener_focus() {
     assert!(fixture.by_label("Cut").is_some(), "clearing restores other rows");
     fixture.key(Key::Escape, Modifiers::NONE).settle();
     assert!(!open.get(), "Escape on the empty search closes the drawer");
+    eprintln!(
+        "DIAG searchable drawer before idle: focused {:?}, stop {:?}, AX {:?}, opener {:?}",
+        fixture.focused(),
+        fixture.focused_stop(),
+        craft_ui::testing::access::focused_key(fixture.tree()),
+        fixture.by_label("Customize").map(|button| button.node)
+    );
+    // The end hook restores focus after access emission, as in the plain drawer's focus-return control.
+    fixture.idle(6);
+    eprintln!(
+        "DIAG searchable drawer after idle: focused {:?}, stop {:?}, AX {:?}, opener {:?}",
+        fixture.focused(),
+        fixture.focused_stop(),
+        craft_ui::testing::access::focused_key(fixture.tree()),
+        fixture.by_label("Customize").map(|button| button.node)
+    );
     let focused = craft_ui::testing::access::focused_key(fixture.tree());
     assert!(fixture.by_label("Customize").is_some_and(|button| button.node == focused), "closing returns focus to the opener");
 }
