@@ -22,6 +22,7 @@ mod fixtures;
 mod font_table;
 mod glossary;
 mod heading_levels;
+mod hyperlink_history;
 mod kashida;
 mod kept_omml_check;
 mod latin_theme_slots;

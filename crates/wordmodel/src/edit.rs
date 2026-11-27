@@ -889,6 +889,7 @@ impl Document {
                 let style = para.mark.style.clone();
                 f(&mut para.mark);
                 if para.mark.link.take().is_some() {
+                    para.mark.link_history = None;
                     para.mark.style = style.filter(|s| s != "Hyperlink");
                 }
             }

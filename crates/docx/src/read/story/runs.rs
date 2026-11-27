@@ -2,7 +2,7 @@ use craft_wordmodel::math::MathJc;
 
 use super::{
     CharProps, El, InlineObject, Item, MAX_FORM, MAX_INSTR, NoteKind, PB, PTabAlign, PTabBase, Phase, Reader, Rels, RevisionKind, RunCtx, StoryCtx,
-    TextColor, children_of_choice, clean_text, int, measure, on_off_attr, placeholder_of, sink,
+    TextColor, children_of_choice, clean_text, int, measure, on_off_attr, on_off_attr_opt, placeholder_of, sink,
 };
 
 impl Reader<'_> {
@@ -32,6 +32,7 @@ impl Reader<'_> {
                 if let Some(link) = link {
                     c.link = Some(link);
                     c.link_tooltip = k.attr("w:tooltip").and_then(crate::bounded_link_tooltip).map(std::sync::Arc::from);
+                    c.link_history = on_off_attr_opt(k, "w:history");
                 }
                 self.read_inline_children(sc, pb, k, rels, &c, depth + 1);
             }
@@ -138,6 +139,7 @@ impl Reader<'_> {
         let mut p = self.pc.rpr(rpr);
         p.link = ctx.link.clone();
         p.link_tooltip = ctx.link_tooltip.clone();
+        p.link_history = ctx.link_history;
         p.ins = ctx.ins;
         p.del = ctx.del;
         p.fmt_change = self.rpr_change(rpr);
@@ -145,7 +147,14 @@ impl Reader<'_> {
     }
 
     fn run_props_none(&self, ctx: &RunCtx) -> CharProps {
-        CharProps { link: ctx.link.clone(), link_tooltip: ctx.link_tooltip.clone(), ins: ctx.ins, del: ctx.del, ..Default::default() }
+        CharProps {
+            link: ctx.link.clone(),
+            link_tooltip: ctx.link_tooltip.clone(),
+            link_history: ctx.link_history,
+            ins: ctx.ins,
+            del: ctx.del,
+            ..Default::default()
+        }
     }
 
     fn read_run(&mut self, sc: &mut StoryCtx, pb: &mut PB, r: &El, rels: &Rels, ctx: &RunCtx, depth: usize) {
@@ -354,7 +363,7 @@ impl Reader<'_> {
         let (base, base_props) = part("w:rubyBase");
         let (ruby, ruby_props) = part("w:rt");
         let mut bp = base_props.unwrap_or_default();
-        (bp.link, bp.ins, bp.del) = (props.link.clone(), props.ins, props.del);
+        (bp.link, bp.link_history, bp.ins, bp.del) = (props.link.clone(), props.link_history, props.ins, props.del);
         if base.is_empty() {
             return;
         }
@@ -402,7 +411,7 @@ impl Reader<'_> {
         match link.filter(|_| props.link.is_none()) {
             Some(link) => {
                 let link_tooltip = if props.link.as_deref() == Some(link.as_str()) { props.link_tooltip.clone() } else { None };
-                self.emit_obj(sc, pb, o, &CharProps { link: Some(link), link_tooltip, ..props.clone() });
+                self.emit_obj(sc, pb, o, &CharProps { link: Some(link), link_tooltip, link_history: None, ..props.clone() });
             }
             None => self.emit_obj(sc, pb, o, props),
         }

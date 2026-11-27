@@ -143,6 +143,7 @@ fn every_char_prop_round_trips() {
         }),
         link: None,
         link_tooltip: None,
+        link_history: None,
         ins: None,
         del: None,
         fmt_change: None,

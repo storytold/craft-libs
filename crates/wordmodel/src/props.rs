@@ -273,4 +273,48 @@ mod tests {
         assert_eq!(changed.sym_font.as_deref(), Some("Wingdings"));
         assert_eq!(p.cleared().sym_font.as_deref(), Some("Wingdings"));
     }
+
+    #[test]
+    fn link_history_serde_and_marks() {
+        // Older documents without `linkHistory` still load as `None`.
+        let old: CharProps = serde_json::from_str(r#"{"link":"https://example.org/"}"#).unwrap();
+        assert_eq!(old.link_history, None);
+        assert_eq!(serde_json::to_string(&old).unwrap(), r#"{"link":"https://example.org/"}"#);
+
+        for (value, key) in [(true, r#""linkHistory":true"#), (false, r#""linkHistory":false"#)] {
+            let p = CharProps { link: Some("https://example.org/".into()), link_history: Some(value), ..Default::default() };
+            let s = serde_json::to_string(&p).unwrap();
+            assert!(s.contains(key), "{s}");
+            assert_eq!(serde_json::from_str::<CharProps>(&s).unwrap(), p);
+        }
+
+        let linked = CharProps {
+            style: Some("Hyperlink".into()),
+            bold: Some(true),
+            link: Some("https://example.org/".into()),
+            link_history: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(linked.formatting().link_history, None);
+        let plain = CharProps { link: Some("https://example.org/".into()), link_history: Some(false), ..Default::default() };
+        assert!(plain.formatting().is_empty());
+        assert_eq!(linked.unlinked().link_history, None);
+        assert_eq!(linked.cleared().link_history, Some(false));
+    }
+
+    #[test]
+    fn minus_and_overlay_preserve_link_history_differences() {
+        let mk = |history| CharProps { link: Some("https://example.org/".into()), link_history: history, ..Default::default() };
+        for base_h in [None, Some(false), Some(true)] {
+            for run_h in [None, Some(false), Some(true)] {
+                let base = mk(base_h);
+                let run = mk(run_h);
+                let patch = run.clone().minus(&base);
+                if base_h == run_h {
+                    assert!(patch.is_empty(), "same history ({base_h:?}) drops link fields");
+                }
+                assert_eq!(base.overlaid(&patch), run, "{base_h:?} -> {run_h:?}");
+            }
+        }
+    }
 }
