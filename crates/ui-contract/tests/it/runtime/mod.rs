@@ -26,3 +26,4 @@ pub(crate) mod windows;
 pub(crate) mod words;
 
 pub(crate) mod screenshot;
+pub(crate) mod shown;
