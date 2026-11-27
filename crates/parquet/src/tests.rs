@@ -321,3 +321,30 @@ fn a_row_group_count_mismatch_fails_before_any_row_callback() {
         assert_eq!(calls, 0);
     }
 }
+
+#[test]
+fn the_writing_pass_checks_the_values_it_writes() {
+    use std::cell::Cell as Calls;
+    let long = "x".repeat(MAX_TEXT_BYTES + 1);
+    let calls = Calls::new(0);
+    let error = write("test", &["a"], 1, |_, _| {
+        calls.set(calls.get() + 1);
+        Ok(Cell::Text(if calls.get() == 1 { "short" } else { long.as_str() }))
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("1 MiB"), "{error}");
+    let calls = Calls::new(0);
+    let error = write("test", &["a"], 1, |_, _| {
+        calls.set(calls.get() + 1);
+        Ok(Cell::<&str>::Number(if calls.get() == 1 { 1.0 } else { f64::INFINITY }))
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("Non-finite"), "{error}");
+    let calls = Calls::new(0);
+    let error = write("test", &["a"], 1, |_, _| {
+        calls.set(calls.get() + 1);
+        Ok(if calls.get() == 1 { Cell::Number(1.0) } else { Cell::Text("1") })
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("changed type"), "{error}");
+}

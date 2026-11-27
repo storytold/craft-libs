@@ -328,27 +328,14 @@ pub fn write<S: AsRef<str>>(root: &str, names: &[&str], rows: u32, cell: impl Fn
         }
         let mut kind = None;
         for row in 0..rows {
-            let next = match cell(row, col)? {
-                Cell::Empty => continue,
-                Cell::Text(s) => {
-                    let s = s.as_ref();
-                    if s.len() > MAX_TEXT_BYTES {
-                        return Err(invalid("A text cell exceeds the 1 MiB export budget"));
-                    }
-                    text_bytes = text_bytes.saturating_add(s.len());
-                    Kind::Text
-                }
-                Cell::Bool(_) => Kind::Bool,
-                Cell::Number(v) if v.is_finite() => Kind::Number,
-                Cell::Number(_) => return Err(invalid("Non-finite numbers cannot be written to Parquet")),
+            let next = match checked(cell(row, col)?, &mut text_bytes)? {
+                Some(kind) => kind,
+                None => continue,
             };
             if kind.is_some_and(|k| std::mem::discriminant(&k) != std::mem::discriminant(&next)) {
                 return Err(invalid("Parquet columns must have a consistent type (text, number or Boolean); blanks are allowed"));
             }
             kind = Some(next);
-        }
-        if text_bytes > limits::MAX_DECODED {
-            return Err(invalid("Parquet export exceeds the 512 MiB text budget"));
         }
         let kind = kind.unwrap_or(Kind::Text);
         let physical = match kind {
@@ -366,13 +353,21 @@ pub fn write<S: AsRef<str>>(root: &str, names: &[&str], rows: u32, cell: impl Fn
     let schema = Arc::new(Type::group_type_builder(root).with_fields(fields).build()?);
     let properties = parquet::file::properties::WriterProperties::builder().set_compression(parquet::basic::Compression::SNAPPY).build();
     let mut writer = SerializedFileWriter::new(Vec::new(), schema, Arc::new(properties))?;
+    // The callback runs again for the values written, so they go through the same checks.
+    let mut written_text = 0usize;
     // Bound temporary vectors and dictionary state; never collect an entire column into memory.
     for first in (0..rows).step_by(4096) {
         let last = first.saturating_add(4095).min(rows - 1);
         let mut group = writer.next_row_group()?;
         for (col, kind) in kinds.iter().enumerate() {
             let mut column = group.next_column()?.ok_or_else(|| invalid("Missing Parquet writer column"))?;
-            let values = (first..=last).map(|row| cell(row, col)).collect::<Result<Vec<_>>>()?;
+            let values = (first..=last)
+                .map(|row| {
+                    let value = cell(row, col)?;
+                    checked_as(&value, *kind, &mut written_text)?;
+                    Ok(value)
+                })
+                .collect::<Result<Vec<_>>>()?;
             let definitions: Vec<i16> = values.iter().map(|v| i16::from(!matches!(v, Cell::Empty))).collect();
             match kind {
                 Kind::Text => {
@@ -394,4 +389,42 @@ pub fn write<S: AsRef<str>>(root: &str, names: &[&str], rows: u32, cell: impl Fn
         group.close()?;
     }
     Ok(writer.into_inner()?)
+}
+
+/// Checks one cell to write and returns its kind, or `None` for a blank. Text counts toward the
+/// 1 MiB cell budget and, through `text_bytes`, the 512 MiB export budget.
+fn checked<S: AsRef<str>>(value: Cell<S>, text_bytes: &mut usize) -> Result<Option<Kind>> {
+    Ok(Some(match value {
+        Cell::Empty => return Ok(None),
+        Cell::Text(s) => {
+            let s = s.as_ref();
+            if s.len() > MAX_TEXT_BYTES {
+                return Err(invalid("A text cell exceeds the 1 MiB export budget"));
+            }
+            *text_bytes = text_bytes.saturating_add(s.len());
+            if *text_bytes > limits::MAX_DECODED {
+                return Err(invalid("Parquet export exceeds the 512 MiB text budget"));
+            }
+            Kind::Text
+        }
+        Cell::Bool(_) => Kind::Bool,
+        Cell::Number(v) if v.is_finite() => Kind::Number,
+        Cell::Number(_) => return Err(invalid("Non-finite numbers cannot be written to Parquet")),
+    }))
+}
+
+/// Checks a cell on the writing pass, where it must also keep its column's kind.
+fn checked_as<S: AsRef<str>>(value: &Cell<S>, kind: Kind, text_bytes: &mut usize) -> Result<()> {
+    let borrowed = match value {
+        Cell::Empty => Cell::Empty,
+        Cell::Text(s) => Cell::Text(s.as_ref()),
+        Cell::Number(n) => Cell::Number(*n),
+        Cell::Bool(b) => Cell::Bool(*b),
+    };
+    match checked(borrowed, text_bytes)? {
+        Some(found) if std::mem::discriminant(&found) != std::mem::discriminant(&kind) => {
+            Err(invalid("A Parquet cell changed type between the checking and writing passes"))
+        }
+        _ => Ok(()),
+    }
 }
