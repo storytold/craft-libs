@@ -735,13 +735,15 @@ impl StackDialog for FindReplaceDialog {
 type Code = (fn(&FindLabels) -> &str, &'static str);
 
 /// Find what without wildcards.
-const FIND_CODES: [Code; 19] = [
+const FIND_CODES: [Code; 21] = [
     (|w| w.paragraph_mark.as_str(), "^p"),
     (|w| w.tab_character.as_str(), "^t"),
     (|w| w.any_character.as_str(), "^?"),
     (|w| w.any_digit.as_str(), "^#"),
     (|w| w.any_letter.as_str(), "^$"),
     (|w| w.caret_character.as_str(), "^^"),
+    (|w| w.section_character.as_str(), "^%"),
+    (|w| w.paragraph_character.as_str(), "^v"),
     (|w| w.column_break.as_str(), "^n"),
     (|w| w.em_dash.as_str(), "^+"),
     (|w| w.en_dash.as_str(), "^="),
@@ -758,16 +760,23 @@ const FIND_CODES: [Code; 19] = [
 ];
 
 /// Find what with wildcards: the wildcard expressions and the codes that still apply.
-const FIND_WILDCARD_CODES: [Code; 23] = [
+const FIND_WILDCARD_CODES: [Code; 30] = [
     (|w| w.paragraph_mark.as_str(), "^p"),
     (|w| w.tab_character.as_str(), "^t"),
     (|w| w.any_single_character.as_str(), "?"),
+    (|w| w.character_in_range.as_str(), "[-]"),
     (|w| w.any_run.as_str(), "*"),
     (|w| w.any_digit.as_str(), "[0-9]"),
     (|w| w.any_letter.as_str(), "[a-zA-Z]"),
     (|w| w.word_start.as_str(), "<"),
     (|w| w.word_end.as_str(), ">"),
+    (|w| w.wildcard_expression.as_str(), "()"),
+    (|w| w.wildcard_not.as_str(), "[!]"),
+    (|w| w.num_occurrences.as_str(), "{,}"),
+    (|w| w.previous_one_or_more.as_str(), "@"),
     (|w| w.caret_character.as_str(), "^^"),
+    (|w| w.section_character.as_str(), "^%"),
+    (|w| w.paragraph_character.as_str(), "^v"),
     (|w| w.column_break.as_str(), "^n"),
     (|w| w.em_dash.as_str(), "^+"),
     (|w| w.en_dash.as_str(), "^="),
@@ -785,10 +794,12 @@ const FIND_WILDCARD_CODES: [Code; 23] = [
 ];
 
 /// Replace with.
-const REPLACE_CODES: [Code; 15] = [
+const REPLACE_CODES: [Code; 17] = [
     (|w| w.paragraph_mark.as_str(), "^p"),
     (|w| w.tab_character.as_str(), "^t"),
     (|w| w.caret_character.as_str(), "^^"),
+    (|w| w.section_character.as_str(), "^%"),
+    (|w| w.paragraph_character.as_str(), "^v"),
     (|w| w.column_break.as_str(), "^n"),
     (|w| w.em_dash.as_str(), "^+"),
     (|w| w.en_dash.as_str(), "^="),

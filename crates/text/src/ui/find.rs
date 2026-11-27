@@ -62,6 +62,8 @@ craft_ui::words! {
         any_digit: "find.anyDigit" = "Any Digit";
         any_letter: "find.anyLetter" = "Any Letter";
         caret_character: "find.caretCharacter" = "Caret Character";
+        section_character: "find.sectionCharacter" = "Section Character";
+        paragraph_character: "find.paragraphCharacter" = "Paragraph Character";
         em_dash: "find.emDash" = "Em Dash";
         en_dash: "find.enDash" = "En Dash";
         nonbreaking_hyphen: "find.nonbreakingHyphen" = "Nonbreaking Hyphen";
@@ -80,6 +82,11 @@ craft_ui::words! {
         page_break: "find.pageBreak" = "Manual Page Break";
         word_start: "find.wordStart" = "Beginning of Word";
         word_end: "find.wordEnd" = "End of Word";
+        character_in_range: "find.characterInRange" = "Character in Range";
+        wildcard_expression: "find.wildcardExpression" = "Expression";
+        wildcard_not: "find.wildcardNot" = "Not";
+        num_occurrences: "find.numOccurrences" = "Num Occurrences";
+        previous_one_or_more: "find.previousOneOrMore" = "Previous 1 or More";
         any_single_character: "find.anySingleCharacter" = "Any Single Character";
         any_run: "find.anyRun" = "Any Number of Characters";
         find_expression: "find.findExpression" = "Find What Expression";
