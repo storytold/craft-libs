@@ -64,6 +64,9 @@ enum Named {
     Default,
     /// The fixture stands for the installed font.
     Fixture,
+    /// The fixture stands for the installed font, and the resolver has no data for the standard
+    /// fonts.
+    FixtureOnly,
     /// The resolver has no such font.
     Missing,
     /// The answer is not a font program.
@@ -79,12 +82,14 @@ fn draw(pdf: &[u8], named: Named) -> (Vec<u32>, Vec<String>) {
     let broken: FontData = Arc::new(b"not a font program".to_vec());
     let settings = InterpreterSettings {
         font_resolver: Arc::new(move |query| {
-            let FontQuery::Fallback(fallback) = query else { return standard(query) };
+            let FontQuery::Fallback(fallback) = query else {
+                return if matches!(named, Named::FixtureOnly) { None } else { standard(query) };
+            };
             assert!(fallback.character_collection.is_none(), "a simple font has no character collection");
             names.lock().unwrap().push(fallback.post_script_name.clone().unwrap_or_default());
             match named {
                 Named::Default => standard(query),
-                Named::Fixture => Some((fixture.clone(), 0)),
+                Named::Fixture | Named::FixtureOnly => Some((fixture.clone(), 0)),
                 Named::Missing => None,
                 Named::Broken => Some((broken.clone(), 0)),
             }
@@ -150,5 +155,23 @@ fn a_standard_font_is_not_asked_for_by_name() {
             assert!(asked.is_empty(), "{subtype} {name}: asked for {asked:?}");
             assert_eq!(drawn, stand_in, "{subtype} {name}: the standard font draws A");
         }
+    }
+}
+
+/// A resolver with no data for the standard fonts is still not asked for one of them by name, so
+/// its installed font doesn't draw a font named Helvetica. A font of another name draws with the
+/// font it answers with.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_standard_font_the_resolver_lacks_is_not_asked_for_by_name() {
+    for subtype in ["TrueType", "Type1"] {
+        for name in ["Helvetica", "Times-Roman"] {
+            let (drawn, asked) = draw(&pdf(subtype, name), Named::FixtureOnly);
+            assert!(asked.is_empty(), "{subtype} {name}: asked for {asked:?}");
+            assert_ne!(drawn, [fixture_a()], "{subtype} {name}: the installed font doesn't draw a standard font");
+        }
+        let (drawn, asked) = draw(&pdf(subtype, "CenturyGothic"), Named::FixtureOnly);
+        assert_eq!(asked, ["CenturyGothic"], "{subtype}: the resolver is asked for the font by name");
+        assert_eq!(drawn, [fixture_a()], "{subtype}: the named font draws A");
     }
 }

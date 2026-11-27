@@ -416,7 +416,9 @@ impl StandardKind {
     /// resolver that knows the fonts installed on the machine can answer with the font the
     /// document names. The default resolver answers with `pick_standard_font`'s data, which
     /// the callers pass as `base_font`, so nothing changes for it; an answer that is no font
-    /// program is passed over for the stand-in. CID fonts already ask this way (`cid.rs`).
+    /// program is passed over for the stand-in. A font whose name is a standard font's is not
+    /// asked for by name, also when it comes here because the resolver had no data for that
+    /// standard font. CID fonts already ask this way (`cid.rs`).
     pub(crate) fn new_with_query(
         dict: &Dict<'_>,
         base_font: StandardFont,
@@ -435,6 +437,7 @@ impl StandardKind {
         }
 
         let named = query
+            .filter(|_| select_standard_font(dict, &descriptor).is_none())
             .and_then(|query| resolver(&FontQuery::Fallback(query.clone())))
             .and_then(|(blob, index)| StandardFontBlob::from_data(blob, index));
         let base_font_blob = match named {
