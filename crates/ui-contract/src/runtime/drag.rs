@@ -354,10 +354,32 @@ fn board<R>(ctx: &Context, f: impl FnOnce(&mut Board) -> R) -> R {
     pass_state::with::<Board, _>(ctx, f)
 }
 
-/// Starts a session for `source` with `payload`; `env` is the source's, which the preview paints with. A running
-/// session stays: one per context. A container shown in an OS window of its own runs in its parent's pass, but the
-/// press that starts its drag is its window's: the session follows that window's pointer.
-#[doc(hidden)]
+/// Starts the context's drag session for `source` with `payload`, which also carries the payloads `also`, one per
+/// type; `env` is the source's, which `preview` paints with beside the pointer. This is the one way code outside a
+/// contract component (a plain egui widget) starts a framework drag; a component calls `Cx::start_drag`, which
+/// comes here.
+///
+/// The session follows the pointer until the button that held it goes up. The drop target under the release that
+/// accepts the payload's type (`Cx::drop_target`, a collection's drop kinds, a window-wide target) takes it; with
+/// none, the drag ends with no operation. Escape cancels it. A running session stays: one per context. A container
+/// shown in an OS window of its own runs in its parent's pass, but the press that starts its drag is its window's:
+/// the session follows that window's pointer.
+///
+/// ```no_run
+/// use craft_ui::runtime::drag::{self, DragPreview};
+/// use craft_ui::runtime::env::Env;
+/// use std::sync::Arc;
+///
+/// /// What a library tile drags: the asset it shows.
+/// struct Asset(u32);
+///
+/// fn tile(ui: &mut egui::Ui, rect: egui::Rect, asset: u32) {
+///     let response = ui.interact(rect, ui.id().with(asset), egui::Sense::drag());
+///     if response.drag_started() {
+///         drag::start(ui.ctx(), response.id, &Env::of(ui).view(), Arc::new(Asset(asset)), Vec::new(), DragPreview::None);
+///     }
+/// }
+/// ```
 pub fn start(
     ctx: &Context,
     source: Id,

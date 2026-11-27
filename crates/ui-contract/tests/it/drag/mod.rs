@@ -190,6 +190,27 @@ fn a_drop_lands_where_the_button_went_up_though_the_pointer_moves_on_in_its_fram
     assert_eq!(dropped, [7], "the slot under the release takes the drop");
 }
 
+/// q150: a plain egui widget outside the contract starts a framework drag with `drag::start`, and a contract drop
+/// target under the release takes its payload.
+#[trial]
+fn a_plain_egui_widget_starts_a_drag_that_a_contract_target_takes() {
+    let seen = RefCell::new(Seen::default());
+    let mut show = |ui: &mut Ui| {
+        let tile = ui.interact(CHIP, ui.id().with("tile"), egui::Sense::drag());
+        if tile.drag_started() {
+            let env = craft_ui::runtime::env::Env::of(ui);
+            drag::start(ui.ctx(), tile.id, &env.view(), Arc::new(Payload(7)), Vec::new(), DragPreview::None);
+        }
+        Slot { common: Common::new(), seen: &seen, mark: DropMark::region(SLOT) }.id_salt("slot").show_at(ui, SLOT);
+    };
+    let mut frames = Frames::new();
+    drag_chip_to(&mut frames, SLOT.center(), &mut show);
+    frames.idle(1, &mut show);
+    frames.frame(vec![release(SLOT.center())], &mut show);
+    frames.idle(2, &mut show);
+    assert_eq!(seen.borrow().dropped, [(7, DropOperation::Move)], "the slot takes the widget's payload once");
+}
+
 /// The bounds of the text shapes among `shapes`.
 fn texts(shapes: &[Shape]) -> Vec<Rect> {
     shapes.iter().filter(|shape| matches!(shape, Shape::Text(_))).map(Shape::visual_bounding_rect).collect()
