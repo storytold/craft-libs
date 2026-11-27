@@ -30,8 +30,8 @@ use mc::RefFrame;
 use picture::decode_vop;
 
 /// Maximum pictures held in memory at once for budget checks: two anchors, the frame being
-/// decoded, and up to [`MAX_OUTPUT_PICTURES_PER_PACKET`] output frames.
-const BUDGET_PICTURES: u64 = 3 + MAX_OUTPUT_PICTURES_PER_PACKET as u64;
+/// decoded, up to [`MAX_OUTPUT_PICTURES_PER_PACKET`] retained frames, and one recovery frame.
+const BUDGET_PICTURES: u64 = 4 + MAX_OUTPUT_PICTURES_PER_PACKET as u64;
 
 /// Maximum pictures a single `decode` call may produce before refusing the packet.
 const MAX_OUTPUT_PICTURES_PER_PACKET: usize = 8;
@@ -296,6 +296,10 @@ impl Decoder {
         if units.is_empty() {
             let mut r = BitReader::new(packet);
             if let Some((vol, mut vop)) = try_parse_short_video_header(&mut r)? {
+                let pending = self.future_ref.as_ref().is_some_and(|a| !a.shown);
+                if out.len() + usize::from(pending) + 1 > MAX_OUTPUT_PICTURES_PER_PACKET + 1 {
+                    return Err(DecodeError::Invalid("packet could return too many pictures".into()));
+                }
                 self.activate_vol(vol)?;
                 out.append(&mut self.held);
                 let vol_cfg = self.vol.as_ref().ok_or_else(|| DecodeError::Invalid("missing VOL".into()))?.clone();
@@ -321,12 +325,14 @@ impl Decoder {
         if vop_count > MAX_OUTPUT_PICTURES_PER_PACKET {
             return Err(DecodeError::Invalid("packet contains too many VOPs".into()));
         }
-        // Every picture is returned at most once, so a packet produces at most the delayed anchor
-        // waiting at entry plus one per VOP. Any retained `self.held` pictures beyond the per-call
-        // limit are kept in `self.held` for subsequent calls.
+        // Every picture is returned at most once, so a packet produces at most the pictures already
+        // retained in `out`, the delayed anchor waiting at entry, and one per VOP. Allow up to one
+        // extra picture when draining a full retained batch through a single-VOP recovery packet,
+        // and refuse multi-VOP packets that would grow the retained store beyond the budget.
         let pending = self.future_ref.as_ref().is_some_and(|a| !a.shown);
-        let worst_case = usize::from(pending) + vop_count;
-        if worst_case > MAX_OUTPUT_PICTURES_PER_PACKET {
+        let worst_case = out.len() + usize::from(pending) + vop_count;
+        let max_total = MAX_OUTPUT_PICTURES_PER_PACKET + usize::from(!out.is_empty() && vop_count <= 1);
+        if worst_case > max_total {
             return Err(DecodeError::Invalid("packet could return too many pictures".into()));
         }
         let multi_vop_packet = vop_count > 1;

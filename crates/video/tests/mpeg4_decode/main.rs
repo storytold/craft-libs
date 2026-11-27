@@ -171,6 +171,8 @@ mod roundtrip {
 
         let mut dec = Decoder::new();
         assert!(dec.decode(&big, 0).is_err());
+        // A second multi-VOP packet while 7 pictures are already retained must be refused up front.
+        assert!(dec.decode(&big, 0).is_err());
 
         // Subsequent valid single-VOP packets must progress and deliver all 8 retained pictures + the new ones.
         let batch1 = dec.decode(&pkt.data, 1).expect("recover after error");
