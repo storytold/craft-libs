@@ -106,7 +106,7 @@ enum Inner {
     #[cfg(feature = "mpeg2-encode")]
     Mpeg2 { enc: Box<crate::mpeg2::encode::Encoder>, width: u32, height: u32 },
     #[cfg(feature = "mpeg4-encode")]
-    Mpeg4(Box<crate::mpeg4::Encoder>),
+    Mpeg4 { enc: Box<crate::mpeg4::Encoder>, full_range: bool },
     #[cfg(feature = "prores")]
     ProRes(Box<crate::prores::Encoder>),
     #[cfg(feature = "dnx")]
@@ -325,7 +325,7 @@ impl TrackEncoder {
                         full_range: cfg.color.full_range,
                     });
                 }
-                Inner::Mpeg4(Box::new(crate::mpeg4::Encoder::new(mcfg)?))
+                Inner::Mpeg4 { enc: Box::new(crate::mpeg4::Encoder::new(mcfg)?), full_range: cfg.color.full_range }
             }
             #[cfg(feature = "prores")]
             CodecId::ProRes => {
@@ -480,7 +480,7 @@ impl TrackEncoder {
                 CodecParams::new(CodecId::Mpeg2Video).with_tag(*b"mp2v").with_size(*width, *height).with_extradata(enc.sequence_header().to_vec())
             }
             #[cfg(feature = "mpeg4-encode")]
-            Inner::Mpeg4(enc) => enc.codec_params(),
+            Inner::Mpeg4 { enc, .. } => enc.codec_params(),
             #[cfg(feature = "prores")]
             Inner::ProRes(enc) => enc.codec_params(),
             #[cfg(feature = "dnx")]
@@ -506,6 +506,20 @@ impl TrackEncoder {
     /// Encoders with B-frame reordering may return zero packets until future frames or
     /// [`TrackEncoder::flush`] arrive.
     pub fn encode(&mut self, frame: &VideoFrame, pts: i64) -> Result<Vec<EncodedPacket>, VideoError> {
+        #[cfg(any(
+            feature = "h264-encode",
+            feature = "hevc-encode",
+            feature = "av1-encode",
+            feature = "vp9-encode",
+            feature = "mpeg2-encode",
+            feature = "mpeg4-encode",
+            feature = "prores",
+            feature = "dnx",
+            feature = "apv-encode"
+        ))]
+        use crate::frame::FrameError;
+        #[cfg(feature = "mpeg2-encode")]
+        use crate::frame::Subsampling;
         #[cfg(any(feature = "h264-encode", feature = "vp9-encode", feature = "mpeg2-encode", feature = "mpeg4-encode"))]
         use crate::frame::encode::Planar8;
         #[cfg(any(feature = "h264-encode", feature = "hevc-encode", feature = "av1-encode"))]
@@ -519,6 +533,12 @@ impl TrackEncoder {
         match &mut self.inner {
             #[cfg(feature = "h264-encode")]
             Inner::H264(enc) => {
+                if frame.bit_depth() != enc.config().bit_depth {
+                    return Err(FrameError::Plane("frame bit depth does not match encoder configuration").into());
+                }
+                if frame.color.full_range != enc.config().color.full_range {
+                    return Err(FrameError::Shape("frame colour range does not match encoder configuration").into());
+                }
                 let packets = if enc.config().bit_depth > 8 {
                     let planar = Planar16::try_from(frame)?;
                     let input = planar.h264()?;
@@ -532,6 +552,12 @@ impl TrackEncoder {
             }
             #[cfg(feature = "hevc-encode")]
             Inner::Hevc(enc) => {
+                if frame.bit_depth() != enc.config().profile.bit_depth() {
+                    return Err(FrameError::Plane("frame bit depth does not match encoder configuration").into());
+                }
+                if frame.color.full_range != enc.config().full_range {
+                    return Err(FrameError::Shape("frame colour range does not match encoder configuration").into());
+                }
                 let planar = Planar16::try_from(frame)?;
                 let input = planar.hevc()?;
                 let pkt = enc.encode(&input)?;
@@ -539,6 +565,12 @@ impl TrackEncoder {
             }
             #[cfg(feature = "av1-encode")]
             Inner::Av1(enc) => {
+                if frame.bit_depth() != enc.config().bit_depth {
+                    return Err(FrameError::Plane("frame bit depth does not match encoder configuration").into());
+                }
+                if frame.color.full_range != enc.config().full_range {
+                    return Err(FrameError::Shape("frame colour range does not match encoder configuration").into());
+                }
                 let planar = Planar16::try_from(frame)?;
                 let input = planar.av1()?;
                 let pkt = enc.encode(&input)?;
@@ -546,6 +578,9 @@ impl TrackEncoder {
             }
             #[cfg(feature = "vp9-encode")]
             Inner::Vp9(enc) => {
+                if frame.color.full_range != enc.config().full_range {
+                    return Err(FrameError::Shape("frame colour range does not match encoder configuration").into());
+                }
                 let planar = Planar8::try_from(frame)?;
                 let (y, u, v) = planar.vp9()?;
                 let pkt = enc.encode_frame(y, u, v, false);
@@ -562,13 +597,22 @@ impl TrackEncoder {
             }
             #[cfg(feature = "mpeg2-encode")]
             Inner::Mpeg2 { enc, .. } => {
+                if frame.subsampling() != Subsampling::S420 {
+                    return Err(FrameError::Shape("MPEG-2 track encoder requires 4:2:0 subsampling").into());
+                }
+                if frame.color.full_range {
+                    return Err(FrameError::Shape("MPEG-2 requires limited-range YCbCr").into());
+                }
                 let planar = Planar8::try_from(frame)?;
                 let input = planar.mpeg2()?;
                 let packets = enc.encode(&input, pts)?;
                 Ok(packets.into_iter().map(|p| EncodedPacket { data: p.data, pts: p.pts, dts: p.dts, keyframe: p.keyframe }).collect())
             }
             #[cfg(feature = "mpeg4-encode")]
-            Inner::Mpeg4(enc) => {
+            Inner::Mpeg4 { enc, full_range } => {
+                if frame.color.full_range != *full_range {
+                    return Err(FrameError::Shape("frame colour range does not match encoder configuration").into());
+                }
                 let planar = Planar8::try_from(frame)?;
                 let input = planar.mpeg4()?;
                 let pkt = enc.encode(&input)?;
@@ -576,12 +620,21 @@ impl TrackEncoder {
             }
             #[cfg(feature = "prores")]
             Inner::ProRes(enc) => {
+                if frame.color.full_range {
+                    return Err(FrameError::Shape("ProRes requires limited-range YCbCr").into());
+                }
                 let pframe = crate::prores::Frame::try_from(frame)?;
                 let data = enc.encode(&pframe)?;
                 Ok(vec![EncodedPacket { data, pts, dts: pts, keyframe: true }])
             }
             #[cfg(feature = "dnx")]
             Inner::Dnx(enc) => {
+                if frame.bit_depth() != enc.config().bit_depth {
+                    return Err(FrameError::Plane("frame bit depth does not match encoder configuration").into());
+                }
+                if frame.color.full_range {
+                    return Err(FrameError::Shape("DNxHR requires limited-range YCbCr").into());
+                }
                 let mut dframe = crate::dnx::Frame::try_from(frame)?;
                 dframe.cid = enc.config().profile.cid();
                 dframe.color_volume = enc.config().color_volume;
@@ -590,6 +643,12 @@ impl TrackEncoder {
             }
             #[cfg(feature = "apv-encode")]
             Inner::Apv(enc) => {
+                if frame.bit_depth() != enc.config().bit_depth {
+                    return Err(FrameError::Plane("frame bit depth does not match encoder configuration").into());
+                }
+                if frame.color.full_range != enc.config().color.full_range {
+                    return Err(FrameError::Shape("frame colour range does not match encoder configuration").into());
+                }
                 let mut aframe = crate::apv::Frame::try_from(frame)?;
                 aframe.profile_idc = enc.config().profile.idc();
                 let data = enc.encode(&aframe)?;
@@ -630,7 +689,7 @@ impl TrackEncoder {
             #[cfg(feature = "vp8-encode")]
             Inner::Vp8 { .. } => Ok(Vec::new()),
             #[cfg(feature = "mpeg4-encode")]
-            Inner::Mpeg4(_) => Ok(Vec::new()),
+            Inner::Mpeg4 { .. } => Ok(Vec::new()),
             #[cfg(feature = "prores")]
             Inner::ProRes(_) => Ok(Vec::new()),
             #[cfg(feature = "dnx")]
@@ -814,6 +873,38 @@ mod tests {
         let rgb = test_rgb_frame(32, 32);
         let mut enc = TrackEncoder::new(TrackEncoderConfig::new(CodecId::H264, 32, 32, 30, 1)).unwrap();
         assert!(matches!(enc.encode(&rgb, 0), Err(VideoError::Frame(_))));
+
+        let mut full_ycbcr = test_ycbcr_420_frame(32, 32);
+        full_ycbcr.color.full_range = true;
+        assert!(matches!(enc.encode(&full_ycbcr, 0), Err(VideoError::Frame(_))));
+    }
+
+    #[cfg(feature = "hevc-encode")]
+    #[test]
+    fn hevc_rejects_bit_depth_and_range_mismatch() {
+        let mut cfg = TrackEncoderConfig::new(CodecId::Hevc, 64, 64, 25, 1);
+        cfg.profile = Some("main10".into());
+        let mut enc10 = TrackEncoder::new(cfg).unwrap();
+        assert!(matches!(enc10.encode(&test_ycbcr_420_frame(64, 64), 0), Err(VideoError::Frame(_))));
+
+        let mut enc8 = TrackEncoder::new(TrackEncoderConfig::new(CodecId::Hevc, 64, 64, 25, 1)).unwrap();
+        let mut full = test_ycbcr_420_frame(64, 64);
+        full.color.full_range = true;
+        assert!(matches!(enc8.encode(&full, 0), Err(VideoError::Frame(_))));
+    }
+
+    #[cfg(feature = "mpeg2-encode")]
+    #[test]
+    fn mpeg2_rejects_s422_input() {
+        let (cw, ch) = Subsampling::S422.chroma_size(64, 64);
+        let planes = vec![
+            Plane::packed(64, 64, 8, Samples::U8(vec![128; 64 * 64])).unwrap(),
+            Plane::packed(cw, ch, 8, Samples::U8(vec![128; (cw * ch) as usize])).unwrap(),
+            Plane::packed(cw, ch, 8, Samples::U8(vec![128; (cw * ch) as usize])).unwrap(),
+        ];
+        let s422 = VideoFrame::new(64, 64, ColorFamily::YCbCr, Subsampling::S422, planes, None).unwrap();
+        let mut enc = TrackEncoder::new(TrackEncoderConfig::new(CodecId::Mpeg2Video, 64, 64, 25, 1)).unwrap();
+        assert!(matches!(enc.encode(&s422, 0), Err(VideoError::Frame(_))));
     }
 
     #[cfg(feature = "mpeg4-encode")]
