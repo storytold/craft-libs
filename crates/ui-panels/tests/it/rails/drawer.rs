@@ -342,6 +342,7 @@ fn revealing_a_filtered_tool_clears_search_once_and_keeps_later_typing() {
 fn a_callers_empty_search_label_shows_only_while_no_tools_match() {
     use craft_behavior::PartKey;
     use craft_ui::contract::Role;
+    use craft_ui::runtime::frame::take_output;
 
     const EMPTY: &str = "No tools found here";
     for label in [None, Some(EMPTY)] {
@@ -351,7 +352,13 @@ fn a_callers_empty_search_label_shows_only_while_no_tools_match() {
         fixture.click(&search).type_text("undo").settle();
         assert!(fixture.by_label("Undo").is_some(), "a nonempty matching query keeps its real row");
         assert!(fixture.by_label(EMPTY).is_none(), "the authoritative matching count suppresses empty feedback");
+        let _ = take_output(fixture.ctx());
         fixture.key(egui::Key::A, egui::Modifiers::COMMAND).type_text("qzx-no-such-tool").settle();
+        let expected: Vec<String> = label.into_iter().map(str::to_owned).collect();
+        assert_eq!(take_output(fixture.ctx()).announcements, expected, "entering the opted-in empty result announces its caller's label once");
+        assert_eq!(craft_ui::testing::access::focused_key(fixture.tree()), search.node, "the result announcement leaves focus on Search");
+        fixture.idle(6);
+        assert!(take_output(fixture.ctx()).announcements.is_empty(), "idle frames cannot repeat the result announcement");
         assert_eq!(fixture.tree().value_of(search.node), Some("qzx-no-such-tool"));
         assert!(fixture.by_label("Cut").is_none() && fixture.by_label("Redo").is_none(), "the real search has no matching tool rows");
         assert_eq!(fixture.by_label(EMPTY).is_some(), label.is_some(), "only an opted-in caller adds the feedback");
@@ -359,6 +366,11 @@ fn a_callers_empty_search_label_shows_only_while_no_tools_match() {
             let drawer = fixture.by_role(Role::DIALOG).first().expect("the open drawer").rect;
             assert!(drawer.contains_rect(feedback.rect), "the feedback is part of the drawer");
         }
+        fixture.key(egui::Key::A, egui::Modifiers::COMMAND).type_text("undo").settle();
+        assert!(fixture.by_label("Undo").is_some() && fixture.by_label(EMPTY).is_none(), "a matching query recovers actual results");
+        assert!(take_output(fixture.ctx()).announcements.is_empty(), "returning matches resets the state without an empty-result announcement");
+        fixture.key(egui::Key::A, egui::Modifiers::COMMAND).type_text("qzx-no-such-tool").settle();
+        assert_eq!(take_output(fixture.ctx()).announcements, expected, "empty results after a matching query announce once again");
         let clear = craft_ui::testing::pointer::part_rect_of_node(fixture.ctx(), search.node.into(), PartKey::new("clear"))
             .expect("the search's real clear part");
         fixture.click_at(clear.center()).settle();
@@ -366,5 +378,10 @@ fn a_callers_empty_search_label_shows_only_while_no_tools_match() {
         assert!(fixture.by_label("Cut").is_some(), "clear restores the tool rows");
         assert!(fixture.by_label(EMPTY).is_none(), "the feedback leaves with the rejected query");
         assert!(open.get(), "searching and clearing leave the drawer open");
+        assert!(take_output(fixture.ctx()).announcements.is_empty(), "clearing resets the result state silently");
+        fixture.click(&search).type_text("qzx-no-such-tool").settle();
+        assert_eq!(take_output(fixture.ctx()).announcements, expected, "a later empty-result transition announces once again");
+        fixture.idle(6);
+        assert!(take_output(fixture.ctx()).announcements.is_empty(), "the second result is also quiet while unchanged");
     }
 }

@@ -15,6 +15,7 @@ use crate::list::{List, ListRow, RowInk, RowRun};
 use crate::menu::{Menu, PanelMenu, PanelRow};
 use crate::popover::Popover;
 use crate::primitives::IconSpec;
+use crate::runtime::access::{Politeness, announce};
 use crate::runtime::commands::{self, ResolvedCommand};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::{self, FocusTarget};
@@ -323,6 +324,7 @@ fn run_of(slots: &[usize], tool: usize) -> Option<RowRun> {
 #[derive(Clone, Default)]
 struct DrawerSearch {
     query: String,
+    no_matches_shown: bool,
 }
 
 /// The texts a query finds a tool by: its label as shown, its catalogue (English) label and its command id.
@@ -472,12 +474,17 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                                 }
                             }
                         });
-                        if searchable
-                            && !query.trim().is_empty()
-                            && count.get() == 0
-                            && let Some(label) = &no_matches
-                        {
+                        let empty = searchable && !query.trim().is_empty() && count.get() == 0 && no_matches.is_some();
+                        if empty && let Some(label) = &no_matches {
                             Text::new(label.clone()).shade(Shade::Muted).show(ui);
+                        }
+                        let was_empty = stack.memory::<DrawerSearch>().no_matches_shown;
+                        // Measuring/peek runs must neither consume the transition nor attempt an effect.
+                        if empty != was_empty && !crate::runtime::measure::active(ui.ctx()) && crate::runtime::measure::effect(ui.ctx(), "announce") {
+                            stack.memory::<DrawerSearch>().no_matches_shown = empty;
+                            if empty && let Some(label) = &no_matches {
+                                announce(ui.ctx(), label.resolved(&env.words).as_str().to_owned(), Politeness::Polite);
+                            }
                         }
                         if let Some(key) = mark.and_then(key_of)
                             && let Some(row) = out.shown.iter().find(|row| row.key == key)
