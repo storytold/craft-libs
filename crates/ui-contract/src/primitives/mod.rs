@@ -65,7 +65,8 @@ pub(crate) use svg_set::Layer;
 pub use svg_set::{AppIcons, register_app_icons};
 pub use text::{ChordText, HAlign, LayoutRun, LeastLayout, ReadingMeasure, Span, TextLayout, TextRun, Wrap};
 pub use text_input::{
-    Completer, Completion, EditorLine, EditorPurpose, EditorRun, EditorState, EditorSurrounding, ImeStamp, SubmitKey, TabKey, TextKey, TextOptions,
+    COLORED_TEXT_LIMIT, ColorRange, ColorRanges, Completer, Completion, EditorLine, EditorPurpose, EditorRun, EditorState, EditorSurrounding,
+    ImeStamp, RangeInk, SubmitKey, TabKey, TextKey, TextOptions,
 };
 pub use textures::TextureCache;
 pub use tool::ToolIcon;
