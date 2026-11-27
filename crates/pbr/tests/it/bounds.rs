@@ -29,6 +29,15 @@ fn zero_sizes_are_refused() {
 }
 
 #[test]
+fn hammersley_points_stay_below_one_after_rounding() {
+    for (i, n) in [(0x03ff_ffff, 0x0400_0000), (u32::MAX - 1, u32::MAX)] {
+        let point = hammersley(i, n).unwrap();
+        assert!(point.into_iter().all(|v| (0.0..1.0).contains(&v)), "{i}/{n}: {point:?}");
+    }
+    assert_eq!(hammersley(u32::MAX, u32::MAX), None);
+}
+
+#[test]
 fn huge_sizes_are_refused_before_allocating() {
     let default = Limits::default();
     assert_eq!(Environment::Night.try_render(4096, &default), Err(PbrError::BadSize(4096, 2048)));
