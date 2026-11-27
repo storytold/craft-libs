@@ -246,11 +246,11 @@ impl LengthCell<'_> {
         let mut changed = false;
         if let Some(to) = picked.filter(|to| *to != unit) {
             match *value {
-                // The same length in the picked unit, held to the field's range.
+                // The same length in the picked unit, unrounded and unclamped, so the target size stays; a length the
+                // picked unit cannot hold (past `FIELD_MAX`) keeps its unit.
                 Some(length) => {
-                    if let Some(converted) = lengths.convert(length.value, unit, to) {
-                        let range = limits.length_range(to, lengths.pixels_per_inch, lengths.points_per_inch);
-                        *value = Some(CropLength::new(converted.clamp(*range.start(), *range.end()), to));
+                    if let Some(converted) = lengths.convert(length.value, unit, to).filter(|v| v.is_finite() && *v > 0.0 && *v <= FIELD_MAX) {
+                        *value = Some(CropLength::new(converted, to));
                         changed = true;
                     }
                 }
@@ -264,7 +264,7 @@ impl LengthCell<'_> {
         let next = next.map(|length| match typed_unit {
             // A count of columns as typed.
             Some(UnitKind::Columns) => CropLength::new(length, UnitKind::Columns),
-            // The value is in the field's unit; a typed unit becomes the field's, as in Photoshop.
+            // The value is in the field's unit; a typed unit becomes the field's.
             Some(to) if to != unit => lengths.convert(length, unit, to).map_or(CropLength::new(length, unit), |value| CropLength::new(value, to)),
             _ => CropLength::new(length, unit),
         });

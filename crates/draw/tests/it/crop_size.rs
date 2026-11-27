@@ -215,6 +215,24 @@ fn the_units_menu_of_w_and_h_converts_one_field_and_keeps_the_length() {
     assert_eq!(settings.borrow().size.width, Some(CropLength::new(5.0, UnitKind::Millimetres)), "a bare number in the picked unit");
 }
 
+/// A length smaller than the least value a field takes in the picked unit (1 px at 300 px/in is a third of a
+/// hundredth of an inch) keeps its size when its unit changes.
+#[trial]
+fn a_picked_unit_keeps_a_length_below_the_fields_least_value() {
+    let postscript = units(PointSize::PostScript);
+    let doc = document(800.0, 600.0, 72.0);
+    let pixel = fields(Some((1.0, UnitKind::Pixels)), None, "300", ResolutionUnit::PixelsPerInch);
+    let before = pixel.target(&doc, &postscript);
+    let (mut fixture, settings) = crop_bar(pixel, None);
+    let [w, ..] = size_fields(&fixture);
+
+    pick(&mut fixture, &w, "Inches");
+    let size = settings.borrow().size.clone();
+    assert_eq!(size.width.map(|w| w.unit), Some(UnitKind::Inches), "W takes the picked unit");
+    let after = size.target(&doc, &postscript);
+    assert!(near(after.width, before.width.unwrap_or_default()), "the same width in inches: {before:?} {after:?}");
+}
+
 /// Without a column size the menu offers no Columns and a length in columns names no size; with one, two columns
 /// are wider than one.
 #[trial]
