@@ -4344,9 +4344,11 @@ The key stage (spec 9.1, 9.2, 9.3, 9.7): the input hook strips the keys the runt
 Layout memory: sizes one pass measures and the next pass places by, the one discard pass a change asks for, what
 
 - `craft_ui::runtime::layout_memory::emit_text`: `pub fn emit_text(ctx: &Context, id: Id, text: Option<&str>)`. Hands forward a text a run found under `id` that content outside the body it runs in shows, as `emit_record`
+- `craft_ui::runtime::layout_memory::emit_width`: `pub fn emit_width(ctx: &Context, id: Id, width: f32)`. Hands forward a width a run measured under `id` that a step outside the content that measured it sizes by, as
 - `craft_ui::runtime::layout_memory::forget_kept`: `pub fn forget_kept(ctx: &Context)`. Drops every kept measurement, so the next pass measures each body as a first pass would.
 - `craft_ui::runtime::layout_memory::kept_leaves`: `pub fn kept_leaves(ctx: &Context) -> usize`. How many component entries the valid kept measurements hold, each body counting only the components directly in
 - `craft_ui::runtime::layout_memory::text`: `pub fn text(ctx: &Context, id: Id) -> Option<Arc<str>>`. The text a run of this pass handed forward under `id` ([`emit_text`]), or a kept transcript gave this pass.
+- `craft_ui::runtime::layout_memory::width`: `pub fn width(ctx: &Context, id: Id) -> Option<f32>`. The width a run of this pass handed forward under `id` ([`emit_width`]), or a kept transcript gave this pass.
 
 ## `craft_ui::runtime::memory`
 
