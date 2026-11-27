@@ -232,7 +232,7 @@ pub fn flatten_document_with_limits_and_progress(
                 report.other_intents.push(page);
             }
             let p = doc.pages().get(page).ok_or(FlattenDocumentError::Read { page, source: ReadError::NoPage(page) })?;
-            match read_page_in(&doc, page, &opts.read, color.read.clone()) {
+            match read_page_in(&doc, page, &opts.read, color.read.clone(), limits) {
                 Ok((list, read)) => {
                     let flat = flatten_with_limits(&list, &opts.flatten, limits).map_err(|source| FlattenDocumentError::Flatten { page, source })?;
                     let mut raster = Rasterizer::new(&list, color.settings.clone(), color.condition.clone(), &color.cms, opts.flatten.raster_dpi);

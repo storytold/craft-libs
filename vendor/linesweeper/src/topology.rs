@@ -723,6 +723,49 @@ impl<W: WindingNumber> Topology<W> {
         Self::from_paths_with_optional_limits(paths, eps, work_limit, Some(output_limit))
     }
 
+    /// Builds a bounded topology with [`crate::binary_op`]'s automatic accuracy and
+    /// feature-size check. The accuracy check and sweep use the same prepared segments.
+    pub fn from_paths_with_automatic_limits<'a, Iter>(
+        paths: Iter,
+        work_limit: u64,
+        output_limit: usize,
+    ) -> Result<Self, Error>
+    where
+        Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
+    {
+        Self::from_paths_with_automatic_accuracy(paths, Some((work_limit, Some(output_limit))))
+    }
+
+    pub(crate) fn from_paths_with_automatic_accuracy<'a, Iter>(
+        paths: Iter,
+        limits: Option<(u64, Option<usize>)>,
+    ) -> Result<Self, Error>
+    where
+        Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
+    {
+        let paths: Vec<_> = paths.into_iter().collect();
+        let inputs: Vec<_> = paths.iter().map(|&(path, _)| path).collect();
+        let eps = crate::automatic_accuracy(&inputs)?;
+        let (mut segments, tags) = Self::prepare_paths(paths.iter().copied())?;
+        segments.update_enter_exit(0);
+        segments.check_invariants();
+        Self::from_segments(segments, tags, eps, Correctness::GoodEnough, limits)
+    }
+
+    fn prepare_paths<'a, Iter>(paths: Iter) -> Result<(Segments, SegVec<W::Tag>), Error>
+    where
+        Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
+    {
+        let mut segments = Segments::default();
+        let mut tags = Vec::new();
+        for (path, tag) in paths {
+            crate::check_coordinates(path)?;
+            segments.add_path_without_updating_enter_exit(path, true)?;
+            tags.resize(segments.len(), tag);
+        }
+        Ok((segments, SegVec::from_vec(tags)))
+    }
+
     /// Builds the topology with a work limit and, if given, an output limit in units.
     fn from_paths_with_optional_limits<'a, Iter>(
         paths: Iter,
@@ -733,18 +776,12 @@ impl<W: WindingNumber> Topology<W> {
     where
         Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
     {
-        let mut segments = Segments::default();
-        let mut tag = Vec::new();
-        for (p, t) in paths {
-            crate::check_coordinates(p)?;
-            segments.add_path_without_updating_enter_exit(p, true)?;
-            tag.resize(segments.len(), t);
-        }
+        let (mut segments, tag) = Self::prepare_paths(paths)?;
         segments.update_enter_exit(0);
         segments.check_invariants();
         Self::from_segments(
             segments,
-            SegVec::from_vec(tag),
+            tag,
             eps,
             Correctness::GoodEnough,
             Some((work_limit, output_limit)),

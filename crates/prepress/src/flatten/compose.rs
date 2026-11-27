@@ -55,7 +55,9 @@ impl Default for FlattenOptions {
     }
 }
 
-/// These limits bound the region sweep used by [`flatten_with_limits`].
+/// These limits bound each region sweep used by [`flatten_with_limits`]. The PDF entry points
+/// with explicit limits also apply them to each even-odd path rebuild during page reading.
+/// A stopped rebuild retains the original path and fill rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FlattenSweepLimits {
     /// The region sweep of one group stops after this many work units. The group then goes to

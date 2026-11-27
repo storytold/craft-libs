@@ -170,7 +170,8 @@ pub(crate) fn skip_leading_close_paths(
 // Craft patch (batch paths): counts calls to `enter_order` in tests.
 #[cfg(test)]
 thread_local! {
-    static ENTER_COMPARISONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    pub(crate) static ENTER_COMPARISONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    pub(crate) static PREPARED_SEGMENTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 // Craft patch (batch paths): the order of `Segments::enter`, by entrance
@@ -586,6 +587,8 @@ impl Segments {
     }
 
     fn push_seg(&mut self, seg: Segment) {
+        #[cfg(test)]
+        PREPARED_SEGMENTS.with(|count| count.set(count.get() + 1));
         let decomp = if seg.is_horizontal() {
             AlmostHorizontalDecomposition::default()
         } else {

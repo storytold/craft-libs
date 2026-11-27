@@ -183,15 +183,28 @@ pub fn binary_op(
     fill_rule: FillRule,
     op: BinaryOp,
 ) -> Result<topology::Contours, Error> {
-    let eps = binary_op_accuracy(set_a, set_b)?;
-    binary_op_with_eps(set_a, set_b, fill_rule, op, eps)
+    let top = Topology::from_paths_with_automatic_accuracy(
+        [
+            (set_a, topology::OneOfTwo::A),
+            (set_b, topology::OneOfTwo::B),
+        ],
+        None,
+    )?;
+    binary_contours(top, fill_rule, op)
 }
 
 /// Returns the automatic accuracy for [`binary_op`]. Nonfinite coordinates and
 /// subpaths that fail that function's feature-size check return its errors.
+/// Accuracy queries also accept open paths.
+/// Bounded sweeps use [`Topology::from_paths_with_automatic_limits`].
 pub fn binary_op_accuracy(set_a: &kurbo::BezPath, set_b: &kurbo::BezPath) -> Result<f64, Error> {
-    check_coordinates(set_a)?;
-    check_coordinates(set_b)?;
+    automatic_accuracy(&[set_a, set_b])
+}
+
+fn automatic_accuracy(paths: &[&kurbo::BezPath]) -> Result<f64, Error> {
+    for path in paths {
+        check_coordinates(path)?;
+    }
     // Find the extremal values, to figure out how much precision we can support.
     // Craft patch (leading ClosePath): `BezPath::bounding_box` panics on a leading ClosePath.
     let bounding_box = |path: &kurbo::BezPath| {
@@ -204,7 +217,11 @@ pub fn binary_op_accuracy(set_a: &kurbo::BezPath, set_b: &kurbo::BezPath) -> Res
             path.bounding_box()
         }
     };
-    let bbox = bounding_box(set_a).union(bounding_box(set_b));
+    let bbox = paths
+        .iter()
+        .map(|path| bounding_box(path))
+        .reduce(|a, b| a.union(b))
+        .unwrap_or_default();
     let min = bbox.min_x().min(bbox.min_y());
     let max = bbox.max_x().max(bbox.max_y());
     if min.is_infinite() || max.is_infinite() {
@@ -220,15 +237,29 @@ pub fn binary_op_accuracy(set_a: &kurbo::BezPath, set_b: &kurbo::BezPath) -> Res
     let m_2 = min.abs().max(max.abs());
     let eps = m_2 * (f64::EPSILON * 64.0);
     let eps = eps.max(MIN_AUTO_EPS);
+    let max_coord = paths
+        .iter()
+        .flat_map(|path| kurbo::segments(segments::skip_leading_close_paths(path.iter())))
+        .flat_map(geom::monotonic_pieces)
+        .map(|piece| {
+            let seg = piece.piece;
+            seg.min_x()
+                .abs()
+                .max(seg.max_x().abs())
+                .max(seg.start().y.abs())
+                .max(seg.end().y.abs())
+        })
+        .fold(0.0, f64::max);
+    let eps = eps.max(curve::resolution_floor(max_coord));
 
     debug_assert!(eps.is_finite());
     // Craft patch (far-point eps).
     if eps > MIN_AUTO_EPS {
         let kept = MIN_AUTO_EPS * FEATURE_EPS_RATIO;
         let limit = eps * FEATURE_EPS_RATIO;
-        let too_small = [set_a, set_b]
-            .into_iter()
-            .flat_map(subpath_bounding_boxes)
+        let too_small = paths
+            .iter()
+            .flat_map(|path| subpath_bounding_boxes(path))
             .map(|rect| rect.width().min(rect.height()))
             .any(|size| size >= kept && size < limit);
         if too_small {
@@ -311,6 +342,14 @@ pub fn binary_op_with_eps(
         return Err(Error::InvalidEps);
     }
     let top = Topology::from_paths_binary(set_a, set_b, eps)?;
+    binary_contours(top, fill_rule, op)
+}
+
+fn binary_contours(
+    top: Topology<BinaryWindingNumber>,
+    fill_rule: FillRule,
+    op: BinaryOp,
+) -> Result<topology::Contours, Error> {
     #[cfg(feature = "debug-svg")]
     {
         svg::save(
@@ -346,6 +385,108 @@ pub fn binary_op_with_eps(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn automatic_accuracy_does_not_prepare_sweep_metadata() {
+        let small = kurbo::Rect::new(0.0, 0.0, 1.0, 1.0).to_path(0.1);
+        let far = kurbo::Rect::new(1e14, 1e14, 1e14 + 10.0, 1e14 + 10.0).to_path(0.1);
+        super::segments::PREPARED_SEGMENTS.with(|count| count.set(0));
+        assert_eq!(binary_op_accuracy(&small, &BezPath::new()).unwrap(), MIN_AUTO_EPS);
+        assert_eq!(super::segments::PREPARED_SEGMENTS.with(|count| count.get()), 0);
+        let result = Topology::<i32>::from_paths_with_automatic_limits([(&small, ()), (&far, ())], 1, 1);
+        assert!(matches!(result, Err(Error::FeatureBelowTolerance { .. })));
+        assert_eq!(super::segments::PREPARED_SEGMENTS.with(|count| count.get()), 0);
+    }
+
+    #[test]
+    fn automatic_accuracy_accepts_open_paths() {
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((1.0, 1.0));
+        assert_eq!(binary_op_accuracy(&path, &BezPath::new()).unwrap(), MIN_AUTO_EPS);
+        assert!(matches!(
+            Topology::<i32>::from_paths_with_automatic_limits([(&path, ())], 1, 1),
+            Err(Error::NonClosedPath(_))
+        ));
+    }
+
+    #[test]
+    fn automatic_feature_rejection_does_not_sort_events() {
+        let small = kurbo::Rect::new(0.0, 0.0, 1.0, 1.0).to_path(0.1);
+        let far = kurbo::Rect::new(1e14, 1e14, 1e14 + 10.0, 1e14 + 10.0).to_path(0.1);
+        super::segments::ENTER_COMPARISONS.with(|count| count.set(0));
+        let result = Topology::<i32>::from_paths_with_automatic_limits([(&small, ()), (&far, ())], 1, 1);
+        assert!(matches!(result, Err(Error::FeatureBelowTolerance { .. })));
+        assert_eq!(super::segments::ENTER_COMPARISONS.with(|count| count.get()), 0);
+    }
+
+    #[test]
+    fn automatic_accuracy_does_not_sort_events() {
+        let path = kurbo::Rect::new(0.0, 0.0, 10.0, 10.0).to_path(0.1);
+        super::segments::ENTER_COMPARISONS.with(|count| count.set(0));
+        assert!(binary_op_accuracy(&path, &BezPath::new()).is_ok());
+        assert_eq!(super::segments::ENTER_COMPARISONS.with(|count| count.get()), 0);
+    }
+
+    #[test]
+    fn automatic_boolean_reuses_the_prepared_segment_events() {
+        let mut path = BezPath::new();
+        for i in 0..64 {
+            let x = f64::from(i) * 20.0;
+            path.extend(kurbo::Rect::new(x, 0.0, x + 10.0, 10.0).to_path(0.1).iter());
+        }
+        let empty = BezPath::new();
+        super::segments::ENTER_COMPARISONS.with(|count| count.set(0));
+        let eps = binary_op_accuracy(&path, &empty).unwrap();
+        super::segments::ENTER_COMPARISONS.with(|count| count.set(0));
+        let prepared_topology = Topology::<i32>::from_paths([(&path, ())], eps).unwrap();
+        assert_eq!(prepared_topology.contours(|winding| *winding != 0).len(), 64);
+        let prepared = super::segments::ENTER_COMPARISONS.with(|count| count.replace(0));
+        assert!(prepared > 0);
+        let contours = binary_op(&path, &empty, FillRule::NonZero, BinaryOp::Union).unwrap();
+        assert_eq!(contours.len(), 64);
+        let swept = super::segments::ENTER_COMPARISONS.with(|count| count.get());
+        assert_eq!(swept, prepared, "the input event sort must be reused");
+        super::segments::ENTER_COMPARISONS.with(|count| count.set(0));
+        let bounded = Topology::<i32>::from_paths_with_automatic_limits([(&path, ())], 1, 4);
+        assert!(matches!(bounded, Err(Error::WorkLimitExceeded)));
+        let bounded = super::segments::ENTER_COMPARISONS.with(|count| count.get());
+        assert_eq!(
+            bounded, prepared,
+            "a bounded sweep must reuse the same input sort"
+        );
+    }
+
+    #[test]
+    fn automatic_accuracy_ignores_discarded_horizontal_handles() {
+        let flat = BezPath::from_svg("M0 0 C1e14 0 1e14 0 0 0 Z").unwrap();
+        let square = kurbo::Rect::new(0.0, 0.0, 5.0, 5.0).to_path(0.1);
+        for (a, b) in [(&flat, &square), (&square, &flat)] {
+            assert!(binary_op_accuracy(a, b).is_ok());
+            let contours = binary_op(a, b, FillRule::NonZero, BinaryOp::Union).unwrap();
+            assert_eq!(
+                contours.contours().map(|c| c.path.area()).sum::<f64>(),
+                25.0
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_accuracy_checks_control_point_scale() {
+        let mut path = BezPath::new();
+        path.move_to((-1e14, 0.0));
+        path.curve_to((5e14, 1e14 / 3.0), (-5e14, 2e14 / 3.0), (1e14, 1e14));
+        path.close_path();
+        let narrow = kurbo::Rect::new(0.0, -100.0, 6.0, -90.0).to_path(0.1);
+        for (a, b) in [(&path, &narrow), (&narrow, &path)] {
+            assert!(matches!(
+                binary_op_accuracy(a, b),
+                Err(Error::FeatureBelowTolerance { .. })
+            ));
+        }
+        let wide = kurbo::Rect::new(0.0, -100.0, 64.0, -36.0).to_path(0.1);
+        assert!(binary_op_accuracy(&path, &wide).is_ok());
+    }
+
+    #[test]
     fn automatic_accuracy_checks_move_only_coordinates() {
         let empty = kurbo::BezPath::new();
         for (coordinate, error) in [
@@ -361,7 +502,10 @@ mod tests {
         }
         let mut path = kurbo::BezPath::new();
         path.move_to((super::MAX_COORDINATE, 0.0));
-        assert_eq!(super::binary_op_accuracy(&path, &empty), Ok(super::MIN_AUTO_EPS));
+        assert_eq!(
+            super::binary_op_accuracy(&path, &empty),
+            Ok(super::MIN_AUTO_EPS)
+        );
     }
     use insta::assert_ron_snapshot;
     use kurbo::BezPath;
