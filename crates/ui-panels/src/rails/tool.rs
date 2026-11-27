@@ -509,7 +509,8 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
             edit_toolbar = edit;
             *laid.borrow_mut() = slots;
         });
-        let (mut select, mut double_clicked, mut flyout, mut dropped, mut torn_off, mut ran, mut measured) = (None, None, None, None, None, None, None);
+        let (mut select, mut double_clicked, mut flyout, mut dropped, mut torn_off, mut ran, mut measured) =
+            (None, None, None, None, None, None, None);
         for event in events {
             match event {
                 RailEvent::Select(tool) => select = Some(tool),
