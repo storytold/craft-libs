@@ -1,5 +1,6 @@
 use super::{
-    ChangeAttrs, CharProps, InlineObject, Paragraph, PartRels, Piece, PropChange, RevisionKind, W, Writer, open_change, ppr_inner, rpr, rpr_inner, rt,
+    ChangeAttrs, CharProps, InlineObject, Paragraph, PartRels, Piece, PropChange, RevisionKind, W, Writer, empty_change, open_change, ppr_inner, rpr,
+    rpr_inner, rt,
 };
 
 impl Writer<'_> {
@@ -37,12 +38,8 @@ impl Writer<'_> {
     fn write_mark_rpr(&mut self, w: &mut W, mark: &CharProps, mark_revs: &[(u32, &str)]) {
         w.open("w:rPr", &[]);
         for (idx, tag) in mark_revs {
-            let (id, author, date) = self.rev_attrs(*idx);
-            if date.is_empty() {
-                w.empty(tag, &[("w:id", &id), ("w:author", &author)]);
-            } else {
-                w.empty(tag, &[("w:id", &id), ("w:author", &author), ("w:date", &date)]);
-            }
+            let a = self.change_attrs(*idx);
+            empty_change(w, tag, &a);
         }
         rpr_inner(w, mark);
         if let Some(ch) = mark.fmt_change.as_deref() {
@@ -300,21 +297,20 @@ impl Writer<'_> {
         }
     }
 
-    pub(super) fn rev_attrs(&mut self, idx: u32) -> (String, String, String) {
+    /// `w:id`, `w:author`, `w:date` and `w16du:dateUtc` of a tracked change by revision `idx`.
+    pub(crate) fn change_attrs(&mut self, idx: u32) -> ChangeAttrs {
         self.next_rev_id += 1;
         let r = self.doc.revisions.get(idx as usize);
         let author = crate::write::annotation_author(self.doc, r.map_or("", |r| r.author.as_str())).to_string();
-        // Remove date and time (§17.15.1.69): tracked changes are saved without `w:date`.
-        let date = if self.doc.settings.remove_date_time { String::new() } else { r.map(|r| r.date.clone()).unwrap_or_default() };
-        (self.next_rev_id.to_string(), author, date)
-    }
-
-    /// `w:id`, `w:author` and `w:date` of a tracked change by revision `idx`.
-    pub(crate) fn change_attrs(&mut self, idx: u32) -> ChangeAttrs {
-        let (id, author, date) = self.rev_attrs(idx);
-        let mut a = vec![("w:id", id), ("w:author", author)];
-        if !date.is_empty() {
-            a.push(("w:date", date));
+        let mut a = vec![("w:id", self.next_rev_id.to_string()), ("w:author", author)];
+        // Remove date and time (§17.15.1.69): tracked changes are saved without their dates.
+        if let Some(r) = r.filter(|_| !self.doc.settings.remove_date_time) {
+            if !r.date.is_empty() {
+                a.push(("w:date", r.date.clone()));
+            }
+            if let Some(utc) = r.date_utc.as_ref().filter(|d| !d.is_empty()) {
+                a.push(("w16du:dateUtc", utc.clone()));
+            }
         }
         a
     }
@@ -344,12 +340,8 @@ impl Writer<'_> {
                 continue;
             }
             let tag = self.rev_tag(idx, tag);
-            let (id, author, date) = self.rev_attrs(idx);
-            if date.is_empty() {
-                w.open(tag, &[("w:id", &id), ("w:author", &author)]);
-            } else {
-                w.open(tag, &[("w:id", &id), ("w:author", &author), ("w:date", &date)]);
-            }
+            let a = self.change_attrs(idx);
+            open_change(w, tag, &a);
         }
     }
 
