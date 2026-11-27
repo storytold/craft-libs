@@ -347,6 +347,15 @@ pub enum SliderScale {
     },
 }
 
+impl SliderScale {
+    /// A caller's own projection: `position(value, min, max)` gives the track fraction, `value_at(position, min, max)`
+    /// the model value. The variant is `#[non_exhaustive]`, so this is how a caller outside the crate builds one.
+    #[must_use]
+    pub const fn custom(position: fn(f64, f64, f64) -> f64, value_at: fn(f64, f64, f64) -> f64) -> Self {
+        SliderScale::Custom { position, value_at }
+    }
+}
+
 impl PartialEq for SliderScale {
     fn eq(&self, other: &Self) -> bool {
         match (*self, *other) {

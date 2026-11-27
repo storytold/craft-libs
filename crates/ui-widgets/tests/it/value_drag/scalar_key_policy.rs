@@ -647,7 +647,7 @@ fn scalar_policy_custom_curve_keeps_additive_model_units_and_model_bounds() {
         let held = Rc::clone(&value);
         let mut fixture = Fixture::new(move |ui| {
             let mut value = held.borrow_mut();
-            let scale = craft_ui::value_drag::SliderScale::Custom { position, value_at };
+            let scale = craft_ui::value_drag::SliderScale::custom(position, value_at);
             if fields {
                 SliderField::new("Curve", Bind::bound(&mut *value), -4.0..=4.0).step(0.01).scale(scale).key_policy(policy()).show_at(ui, ROWS[0]);
             } else {

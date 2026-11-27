@@ -28,7 +28,7 @@ fn value_at(t: f64, min: f64, max: f64) -> f64 {
     min + x * (max - min)
 }
 
-const CUSTOM: SliderScale = SliderScale::Custom { position, value_at };
+const CUSTOM: SliderScale = SliderScale::custom(position, value_at);
 
 struct Rig {
     fixture: Fixture,
@@ -161,10 +161,10 @@ fn custom_scale_bounds_and_nonfinite_results_are_contained() {
         1000.0
     }
     for (callback, expected) in [(nan as fn(f64, f64, f64) -> f64, 0.75), (infinity, 0.75), (below, 0.0), (above, 1.0)] {
-        let mut rig = Rig::new(SliderScale::Custom { position: callback, value_at }, MIN..=MAX, None);
+        let mut rig = Rig::new(SliderScale::custom(callback, value_at), MIN..=MAX, None);
         rig.set(MIN + 0.75 * (MAX - MIN));
         assert!((rig.thumb().center().x - rig.at(expected).x).abs() < 0.001);
-        let mut rig = Rig::new(SliderScale::Custom { position: linear, value_at: callback }, MIN..=MAX, None);
+        let mut rig = Rig::new(SliderScale::custom(linear, callback), MIN..=MAX, None);
         rig.click(0.75);
         let expected_value = MIN + expected * (MAX - MIN);
         assert!((*rig.value.borrow() - expected_value).abs() < 0.001);
