@@ -1510,6 +1510,60 @@ fn a_box_moved_from_inside_snaps_its_edges() {
     assert!((moved - 10.0).abs() < 1e-6, "the box moved {moved}, its right edge onto 310");
 }
 
+/// A move snaps in every box mode, Distort too, and from closer than the snapping distance only: the reference
+/// application holds a box 7 px from a line and lets go of one 8 px away (2026-11-27).
+#[trial]
+fn a_box_moved_from_inside_snaps_in_every_mode_from_closer_than_the_snapping_distance() {
+    for mode in [TransformMode::Scale, TransformMode::Rotate, TransformMode::Skew, TransformMode::Distort, TransformMode::Perspective] {
+        // The pointer goes 7 down, the bottom edge to 227: a line 8 below it leaves the box with the pointer, one 7 below
+        // it takes the edge.
+        for (line, moved) in [(235.0, 7.0), (234.0, 14.0)] {
+            let mut h = harness(BoxState::from_rect(RECT), |config| {
+                config.snap = true;
+                config.rules = BoxRules::in_mode(mode);
+                config.targets = vec![SnapTarget::new(craft_behavior::Axis::X, line, SnapKind::Bounds)];
+            });
+            let from = h.screen(Point::new(130.0, 120.0));
+            frame(&mut h, vec![pointer::moved(from)]);
+            frame(&mut h, vec![pointer::press(from)]);
+            frame(&mut h, vec![pointer::moved(from + by(0.0, 4.0))]);
+            frame(&mut h, vec![pointer::moved(from + by(0.0, 7.0))]);
+            frame(&mut h, vec![pointer::release(from + by(0.0, 7.0))]);
+            let y = h.state().quad[0].y - RECT.y0;
+            assert!((y - moved).abs() < 1e-6, "{mode:?}, a line at {line}: the box moved {y}");
+        }
+    }
+}
+
+/// A slanted box moved from inside snaps by its corners and its centre, not by the bounds around it: a corner inside
+/// the bounds lands on a line and so does the centre, the middle of a slanted side does not (the reference
+/// application, 2026-11-27: a box with its right side skewed down 60, each of the three brought 4 px from the
+/// document's centre line).
+#[trial]
+fn a_slanted_box_moved_from_inside_snaps_by_its_corners_and_centre() {
+    // The right side 60 lower: top-right corner y 140 (inside the bounds 80..280), centre y 180, right side's middle 210.
+    let quad = [Point::new(100.0, 80.0), Point::new(300.0, 140.0), Point::new(300.0, 280.0), Point::new(100.0, 220.0)];
+    // (the line's y, the pointer's way down, how far the box moves)
+    for (line, pointer, moved, what) in [
+        (147.0, 4.0, 7.0, "the top-right corner, 3 short of the line, lands on it"),
+        (187.0, 4.0, 7.0, "the centre, 3 short of the line, lands on it"),
+        (203.0, -4.0, -4.0, "the right side's middle 3 from the line: the box follows the pointer"),
+    ] {
+        let mut h = harness(BoxState::new(quad, Point::new(200.0, 180.0)), |config| {
+            config.snap = true;
+            config.targets = vec![SnapTarget::new(craft_behavior::Axis::X, line, SnapKind::Bounds)];
+        });
+        let from = h.screen(Point::new(150.0, 130.0));
+        frame(&mut h, vec![pointer::moved(from)]);
+        frame(&mut h, vec![pointer::press(from)]);
+        frame(&mut h, vec![pointer::moved(from + by(0.0, pointer / 2.0))]);
+        frame(&mut h, vec![pointer::moved(from + by(0.0, pointer))]);
+        frame(&mut h, vec![pointer::release(from + by(0.0, pointer))]);
+        let y = h.state().quad[0].y - quad[0].y;
+        assert!((y - moved).abs() < 1e-6, "{what}: the box moved {y}");
+    }
+}
+
 /// Free Transform's corner snaps to a layer edge and a guide alike; an explicit Distort corner snaps to guides only,
 /// past the opposite diagonal too, where the box turns concave as the reference application's does.
 #[trial]

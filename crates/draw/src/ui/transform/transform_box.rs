@@ -462,10 +462,10 @@ fn past_drag_start(start: Pos2, pos: Pos2) -> bool {
 ///   click applies. An Alt press away from the handles
 ///   moves the reference point there and drags it, whether it shows or not.
 /// - Snapping is the canvas's ([`canvas_snap`]): a dragged handle snaps through [`Snap::point`] and a box moved from
-///   inside snaps its bounds through [`Snap::rect_of`]; the lines the result reaches are
+///   inside snaps its corners and centre through [`Snap::anchors_of`]; the lines the result reaches are
 ///   [`TransformBoxOutput::snapped`] for the host's one drawing site. Without a canvas snap nothing snaps but the
 ///   reference point, which snaps to the box's nine points only. A corner or an edge that keeps the box's proportions
-///   does not snap. In Distort only the corners snap, to guides. A pass
+///   does not snap. In Distort only the corners snap among the handles, to guides. A pass
 ///   reports the lines of its own drag events only.
 /// - The box is one Tab stop with one part group, whose arrival is the picked part. Page Down and Page Up pick the
 ///   next and previous part (the whole box, the corners and edges clockwise from the top left, the reference
@@ -756,10 +756,12 @@ impl<'a> TransformBox<'a> {
     /// - A corner or an edge snaps the grabbed handle through the canvas's `snap`, not the pointer: a press a few
     ///   pixels off the handle still lands the handle on the line. A distorting corner reports only the lines it
     ///   reaches once the box's folding rule has placed it: a corner stopped short of a line claims no alignment.
-    /// - A drag from inside snaps the bounds of the moved box (its edges and centre).
+    /// - A drag from inside snaps the moved box by its four corners and its centre, in every mode and to every kind
+    ///   of target.
     /// - The reference point snaps to the nine points of the box at the press (corners, edge midpoints, centre) and
     ///   to nothing else, with or without the canvas's snap, the Control key held or not.
-    /// - In [`TransformMode::Distort`] only the corners snap, and to guides only. The outside (rotating) never snaps.
+    /// - In [`TransformMode::Distort`] a corner snaps to guides only and a side not at all. The outside (rotating)
+    ///   never snaps.
     /// - In [`TransformMode::Perspective`] a corner snaps to guides only; its sides and its inside snap as elsewhere.
     /// - The canvas's suspend key (Control by default) suspends the snapping unless the drag reads it
     ///   ([`reads_suspend_key`](Self::reads_suspend_key)). The snap reads the keys as held; the drag acts on them as
@@ -801,10 +803,17 @@ impl<'a> TransformBox<'a> {
                 };
                 (to + pull, lines)
             }
-            (BoxPart::Inside, Some(snap), _) if !distort_mode => {
-                let moved = bounds_of(&grip.start.quad) + (to - grip.from);
-                let (by, lines) = snap.rect_of(moved, mods, kinds);
-                (to + by, lines)
+            // A box moved from inside snaps by its four corners and its centre, in every mode (Distort too) and to
+            // every kind of target, from closer than the snapping distance: measured on the reference application
+            // 2026-11-27 (a slanted box's corner inside its bounds lands on the document's centre line and so does its
+            // centre, the middle of a slanted side does not; 7 px away snaps and 8 px does not, at 100 % and at a
+            // third alike; Scale, Rotate, Skew, Distort and Perspective mode move alike).
+            (BoxPart::Inside, Some(snap), _) => {
+                let by = to - grip.from;
+                let q = &grip.start.quad;
+                let anchors = [q[0] + by, q[1] + by, q[2] + by, q[3] + by, centre_of(q) + by];
+                let (pull, lines) = snap.anchors_of(&anchors, mods, SnapKinds::ALL);
+                (to + pull, lines)
             }
             _ => (to, Vec::new()),
         };
@@ -1766,9 +1775,11 @@ fn drag_axis(quad: &[Point; 4], part: BoxPart) -> Option<DocVec> {
     Some(if i % 2 == 1 { uh } else { DocVec::new(-uh.y, uh.x) })
 }
 
-/// The bounds of `quad`.
-fn bounds_of(quad: &[Point; 4]) -> DocRect {
-    quad[1..].iter().fold(DocRect::from_points(quad[0], quad[0]), |r, p| r.union_pt(*p))
+/// The centre a moved box snaps by: the mean of its four corners. The reference application's (2026-11-27, a box with
+/// one corner pulled out, so that the centre of its bounds, the mean of its corners and the crossing of its diagonals
+/// lie 15 and 19 px apart: only the mean of the corners, brought 4 px from the document's centre line, landed on it).
+fn centre_of(quad: &[Point; 4]) -> Point {
+    Point::new(quad.iter().map(|p| p.x).sum::<f64>() / 4.0, quad.iter().map(|p| p.y).sum::<f64>() / 4.0)
 }
 
 /// `p` pulled onto the nearest of the nine points of `state`'s box (its corners, edge midpoints and centre) within

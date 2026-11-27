@@ -461,6 +461,58 @@ impl SnapTargets {
     }
 }
 
+impl SnapTargets {
+    /// The offset that moves `anchors`, the points of one rigid shape, so that on each axis the nearest of them meets a
+    /// target of a kind in `kinds`, with the lines to draw: how a transform box moved from inside snaps, by its four
+    /// corners and its centre and not by the bounds around them (a slanted box's corner inside its bounds lands on a
+    /// line; the middle of a slanted side does not).
+    ///
+    /// An anchor snaps from closer than `reach` only: one exactly `reach` away stays. An earlier anchor wins a tie. A
+    /// drawn line spans the anchors' extent along it.
+    pub fn snap_anchors_of(&self, anchors: &[Point], reach: f64, kinds: SnapKinds) -> (Vec2, Vec<SnapLine>) {
+        let mut delta = Vec2::ZERO;
+        let mut lines = Vec::new();
+        for along in [Axis::Y, Axis::X] {
+            let across = |p: &Point| coordinate_across(along, *p);
+            let run = |p: &Point| coordinate_across(across_axis(along), *p);
+            let (lo, hi) = anchors.iter().map(run).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)));
+            if lo > hi {
+                continue;
+            }
+            let mut best: Option<f64> = None;
+            for anchor in anchors {
+                if let Some(t) = self.nearest_within(along, across(anchor), Some((lo, hi)), reach, kinds) {
+                    let d = t.position - across(anchor);
+                    if d.abs() < reach && best.is_none_or(|b| d.abs() < b.abs() - TIE) {
+                        best = Some(d);
+                    }
+                }
+            }
+            let Some(d) = best else { continue };
+            match along {
+                Axis::Y => delta.x = d,
+                Axis::X => delta.y = d,
+            }
+            for anchor in anchors {
+                let moved = across(anchor) + d;
+                let hit = self
+                    .targets
+                    .iter()
+                    .filter(|t| {
+                        t.along == along && kinds.contains(t.kind) && reaches(t, Some((lo, hi)), self.past_spans) && (t.position - moved).abs() < 1e-6
+                    })
+                    .min_by_key(|t| u8::from(t.kind != SnapKind::Guide));
+                if let Some(t) = hit
+                    && !lines.iter().any(|l: &SnapLine| l.along == along && (l.position - t.position).abs() < 1e-6)
+                {
+                    lines.push(line(t, lo, hi));
+                }
+            }
+        }
+        (delta, lines)
+    }
+}
+
 /// The axis across `along`: a line running along `Axis::Y` (vertical) is placed on `Axis::X`.
 pub const fn across_axis(along: Axis) -> Axis {
     match along {
