@@ -706,6 +706,34 @@ fn a_primary_property_table_wins_over_a_secondary_one() {
     assert_eq!(sp.props.fill_color, Some(Rgb(0xFF, 0, 0)));
 }
 
+/// A secondary property table wins over a tertiary one, even when the tertiary one comes first
+/// (a container may hold `shapeTertiaryOptions1` before `shapeSecondaryOptions2`).
+#[test]
+fn a_secondary_property_table_wins_over_an_earlier_tertiary_one() {
+    let table = |typ: u16, fill: u32| rec(3, 1, typ, &[&0x0181u16.to_le_bytes()[..], &fill.to_le_bytes()].concat());
+    let fsp = rec(2, 1, officeart::rt::FSP, &[0u8; 8]);
+    let body = [fsp, table(officeart::rt::TERTIARY_FOPT, 0x00FF_0000), table(officeart::rt::SECONDARY_FOPT, 0x0000_00FF)].concat();
+    let sp = officeart::shape(&body, &mut usize::MAX.clone());
+    assert_eq!(sp.props.fill_color, Some(Rgb(0xFF, 0, 0)));
+}
+
+/// A complex entry for a property read as a value (here cropFromLeft) is not that value: its
+/// operand is the length of its bytes. It doesn't hide a simple entry in a less specific table
+/// either, and complex alt text is still read.
+#[test]
+fn a_complex_operand_is_not_a_property_value() {
+    let fsp = rec(2, 1, officeart::rt::FSP, &[0u8; 8]);
+    // A complex cropFromLeft of 0x4000 bytes, whose length would read as a quarter crop.
+    let primary = fopt(&[], &[(0x0102, vec![0; 0x4000]), (0x0381, wz("Alt"))]);
+    let crop = |sp: &officeart::Sp| sp.props.crop[0];
+    let sp = officeart::shape(&[fsp.clone(), primary.clone()].concat(), &mut usize::MAX.clone());
+    assert_eq!(crop(&sp), 0.0, "the length is not a crop");
+    assert_eq!(sp.props.alt, "Alt");
+    let tertiary = rec(3, 1, officeart::rt::TERTIARY_FOPT, &[&0x0102u16.to_le_bytes()[..], &0x8000u32.to_le_bytes()].concat());
+    let sp = officeart::shape(&[fsp, primary, tertiary].concat(), &mut usize::MAX.clone());
+    assert!(crop(&sp) > 0.0, "the simple crop in the tertiary table is read");
+}
+
 /// The BLIP store keeps at most the shared limit of entries.
 #[test]
 fn the_blip_store_keeps_at_most_the_shared_limit() {

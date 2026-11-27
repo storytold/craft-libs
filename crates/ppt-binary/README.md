@@ -17,7 +17,8 @@ assert!(craft_ppt_binary::import(b"not a .ppt", &craft_pptx::Plain).is_err());
 ```
 
 - `sniff(bytes)`, `import(bytes, &defaults)` and `import_checked(bytes, &defaults)`, which also
-  names the slides the file lists but whose objects are gone.
+  names the slides the file lists but whose objects are gone, and says when shapes were left
+  out because the drawings hold more records than a presentation reads.
 - Main masters become masters, with their colour scheme, fonts, text styles, background and
   decorative shapes. Title masters become layouts of their main master.
 - Slides keep their shapes (preset and freeform geometry, groups, rotation and flips), fills,

@@ -226,10 +226,11 @@ pub fn fbse_record<'a>(fbse: &'a [u8], delay: &'a [u8]) -> Option<(Rec<'a>, Opti
     Some((rec, Some((fo_delay, rec.span()))))
 }
 
-/// The `OfficeArtFBSE` bodies of a BLIP store container's body, in order (`pib` 1 is the first),
-/// at most [`MAX_ENTRIES`].
-pub fn store_entries(bstore: &[u8]) -> impl Iterator<Item = &[u8]> {
-    crate::record::Records::new(bstore).filter(|r| r.kind == rt::FBSE).map(|r| r.data).take(MAX_ENTRIES)
+/// One slot per child of a BLIP store container's body, in order (`pib` 1 is the first), at most
+/// [`MAX_ENTRIES`]: an `OfficeArtFBSE`'s body, or `None` for a child that isn't one, so the `pib`s
+/// after it don't shift (as [`Store::new`] keeps them).
+pub fn store_entries(bstore: &[u8]) -> impl Iterator<Item = Option<&[u8]>> {
+    crate::record::Records::new(bstore).take(MAX_ENTRIES).map(|r| (r.kind == rt::FBSE).then_some(r.data))
 }
 
 /// The BLIP record of a `.ppt` store entry: embedded when bytes follow the FBSE's name, and in the

@@ -28,7 +28,7 @@ pub(crate) fn blip_store(dgg: &[u8]) -> Vec<Blip> {
         for store in Records::new(dgg.data).filter(|r| r.kind == rt::BSTORE_CONTAINER) {
             for fbse in store_entries(store.data) {
                 if out.len() < craft_officeart::blip::MAX_ENTRIES {
-                    out.push(fbse_blip(fbse, &mut work).map(|(b, m)| (Arc::new(b), m)));
+                    out.push(fbse.and_then(|f| fbse_blip(f, &mut work)).map(|(b, m)| (Arc::new(b), m)));
                 }
             }
         }
@@ -68,7 +68,8 @@ pub(crate) struct PictureShape {
 
 /// The picture shapes in a sheet's drawing (its MsoDrawing records joined), reading at most
 /// `budget` records more (one budget for the whole workbook, [`craft_officeart::record::MAX_RECORDS`] to start with),
-/// and whether the budget ran out before the drawing's last record, so shapes may be missing.
+/// and whether the budget ran out before the drawing's last record or a container nested past
+/// [`MAX_DEPTH`] was left unread, so shapes may be missing.
 pub(crate) fn picture_shapes(dg: &[u8], budget: &mut usize) -> (Vec<PictureShape>, bool) {
     let mut out = Vec::new();
     let mut cut = false;
@@ -77,9 +78,11 @@ pub(crate) fn picture_shapes(dg: &[u8], budget: &mut usize) -> (Vec<PictureShape
 }
 
 /// The picture shapes in containers nested at most [`MAX_DEPTH`] deep, reading at most `budget`
-/// records more (shared by the whole workbook); `cut` is set when a record is left unread.
+/// records more (shared by the whole workbook); `cut` is set when a record is left unread, by the
+/// budget or the depth limit.
 fn walk(b: &[u8], depth: usize, out: &mut Vec<PictureShape>, budget: &mut usize, cut: &mut bool) {
     if depth > MAX_DEPTH {
+        *cut |= !b.is_empty();
         return;
     }
     for r in Records::new(b) {
@@ -184,6 +187,19 @@ mod tests {
         }
     }
 
+    /// A store child that isn't an FBSE (here a BLIP stored in the store itself) keeps its `pib`
+    /// slot, so the FBSE after it is still `pib` 2.
+    #[test]
+    fn a_store_child_that_isnt_an_fbse_keeps_its_slot() {
+        let png = [0x89, b'P', b'N', b'G'];
+        let blip = rec(0x6E00, 0xF01E, &[&[0u8; 17][..], &png].concat());
+        let fbse = rec(0x0062, 0xF007, &fbse_of(&blip));
+        let dgg = rec(0x000F, 0xF000, &rec(0x002F, 0xF001, &[blip, fbse].concat()));
+        let store = blip_store(&dgg);
+        assert_eq!(store.len(), 2);
+        assert_eq!(store[1], Some((Arc::new(png.to_vec()), "image/png")));
+    }
+
     #[test]
     fn metafiles_share_one_budget() {
         // A zlib metafile of 1000 zero bytes, as an EMF BLIP with one identifier.
@@ -249,7 +265,11 @@ mod tests {
         assert!(!picture_shapes(&one, &mut 4).1);
         assert!(picture_shapes(&one, &mut 3).1);
         let nested = |levels: usize| (0..levels).fold(picture.clone(), |inner, _| rec(0x000F, 0xF003, &inner));
-        assert_eq!(picture_shapes(&nested(MAX_DEPTH), &mut MAX_RECORDS.clone()).0.len(), 1);
-        assert!(picture_shapes(&nested(MAX_DEPTH + 2), &mut MAX_RECORDS.clone()).0.is_empty(), "past the depth limit");
+        assert_eq!(
+            picture_shapes(&nested(MAX_DEPTH), &mut MAX_RECORDS.clone()),
+            (vec![PictureShape { pib: 1, anchor: ClientAnchor::default() }], false)
+        );
+        let (deep, deep_cut) = picture_shapes(&nested(MAX_DEPTH + 2), &mut MAX_RECORDS.clone());
+        assert!(deep.is_empty() && deep_cut, "past the depth limit, and told so");
     }
 }
