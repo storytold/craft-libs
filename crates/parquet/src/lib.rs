@@ -310,7 +310,8 @@ enum Kind {
 /// Writes a table of `rows` data rows under the field `names`, Snappy-compressed, in row groups
 /// of 4,096 rows. `cell(row, column)` gives each value and is called twice per cell: once to check
 /// that every column holds one type (text, number or Boolean, with blanks allowed) and once to
-/// write. An error it returns stops the write. A column of blanks is written as text.
+/// write. Both passes check the value, and an error it returns stops the write. A column of
+/// blanks is written as text.
 pub fn write<S: AsRef<str>>(root: &str, names: &[&str], rows: u32, cell: impl Fn(u32, usize) -> Result<Cell<S>>) -> Result<Vec<u8>> {
     if names.is_empty() {
         return Err(invalid("A Parquet table needs at least one column"));

@@ -18,9 +18,9 @@ binary64 precision into text, or a column into a header row is the caller's work
 
 Supported input: flat optional or required numeric, Boolean and UTF-8 fields; decimals (as exact
 digits); dates; millisecond and microsecond times and timestamps, as stored. Formula-looking
-strings stay text. NaN and infinities, nested, repeated, list and map fields, binary values,
-unknown logical types, nanosecond times and timestamps, encrypted files and external column files
-are refused with a message, never truncated.
+strings stay text. NaN and infinities, nested, repeated, list and map fields, duplicate field
+names, binary values, unknown logical types, nanosecond and INT96 times and timestamps, encrypted
+files and external column files are refused with a message, never truncated.
 
 Uncompressed, Snappy, Gzip, Brotli and LZ4_RAW input work on native and web. ZSTD input works on
 native builds; on wasm32 the decoder reports an unsupported codec.
@@ -31,6 +31,7 @@ native builds; on wasm32 the decoder reports an unsupported codec.
 Snappy-compressed, in row groups of 4,096 rows, so it never collects a whole column. `cell(row,
 column)` gives each value as text, a finite number, a Boolean or empty, and an error it returns
 stops the write. Each column holds one type; blanks become nulls and a column of blanks is text.
+The callback runs twice per cell, and both passes check the value it returns.
 
 ## Resource bounds
 
