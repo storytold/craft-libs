@@ -126,9 +126,17 @@ impl<'a> Props<'a> {
     /// already present are kept (the caller adds the most specific table first). Within the table,
     /// a property named twice takes its last entry ([MS-ODRAW], the overview of properties).
     pub fn add_table(&mut self, r: &Rec<'a>) {
+        self.add_table_where(r, |_, _| true);
+    }
+
+    /// [`add_table`](Self::add_table), with only the entries `keep(id, is_complex)` accepts: a
+    /// reader that takes a property's complex bytes only for some ids can leave the other complex
+    /// entries out, so their lengths are never read as values and never hide a simple entry in a
+    /// later table.
+    pub fn add_table_where(&mut self, r: &Rec<'a>, keep: impl Fn(u16, bool) -> bool) {
         let mut table: Vec<(u16, PropVal<'a>)> = Vec::new();
         let mut at: HashMap<u16, usize> = HashMap::new();
-        for e in entries(r.data, usize::from(r.instance)) {
+        for e in entries(r.data, usize::from(r.instance)).filter(|e| keep(e.pid, e.is_complex)) {
             let v = PropVal { op: e.op, is_complex: e.is_complex, complex: e.complex };
             match at.get(&e.pid) {
                 Some(&i) => {

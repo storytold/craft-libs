@@ -148,6 +148,25 @@ fn every_copy_of_a_dib_is_charged() {
     assert!((1 << 20) - work.left >= bmp + 4 + png.len(), "{} charged", (1 << 20) - work.left);
 }
 
+/// A DIB too wide to be decoded is kept as a BMP, charged only its copy, not pixels it never
+/// decodes, so the budget is left for later pictures.
+#[test]
+fn a_dib_too_large_to_decode_is_not_charged_its_pixels() {
+    // 20,000 × 1, 1-bit, with a two-colour table and one row of pixels.
+    let mut dib = vec![0u8; 40];
+    dib[0] = 40;
+    dib[4..8].copy_from_slice(&20_000u32.to_le_bytes());
+    dib[8] = 1;
+    dib[12] = 1;
+    dib[14] = 1;
+    dib.extend_from_slice(&[0; 8]);
+    dib.extend_from_slice(&[0; 2500]);
+    let bmp = 14 + dib.len();
+    let mut work = Decode::new(1 << 20);
+    assert!(matches!(crate::dib::to_png(&dib, usize::MAX, &mut work), Some(crate::dib::Dib::Bmp(_))));
+    assert_eq!((1 << 20) - work.left, bmp, "only the BMP copy");
+}
+
 /// A WMF's file with its placeable header is a second copy of its records, charged whole with the
 /// header; when that doesn't fit in the limit or the budget, or its bounds can't make a header,
 /// the records are kept as a WMF without one.

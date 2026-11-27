@@ -90,6 +90,8 @@ struct Ctx<'a> {
     master_props: HashMap<(u32, u32), Props<'a>>,
     /// Drawing records the presentation may still read, all its drawings together.
     drawing_records: usize,
+    /// Whether a drawing was cut short by `drawing_records`, so shapes are missing.
+    drawings_cut: bool,
     /// The caller's defaults: the master each of the file's masters starts from.
     app: &'a dyn Defaults,
     /// Notes pages converted already. Distinct slides can share a slide id, and so a notes page:
@@ -102,7 +104,8 @@ pub(crate) fn page_side(v: Option<i32>, fallback: f64) -> f64 {
     v.map(|v| f64::from(v) / MU).filter(|v| v.is_finite() && *v >= 1.0 && *v <= 56.0 * 72.0).unwrap_or(fallback)
 }
 
-pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Presentation {
+/// The presentation, and whether the drawing-record limit cut shapes out of it.
+pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> (Presentation, bool) {
     let atom = d.document_atom();
     let size = Size::new(page_side(atom.as_ref().map(|a| a.slide_w), 720.0), page_side(atom.as_ref().map(|a| a.slide_h), 540.0));
     // Ids above 256, as a new presentation's are.
@@ -120,6 +123,7 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
         defaults: draw::default_props(dgg),
         master_props: HashMap::new(),
         drawing_records: craft_officeart::record::MAX_RECORDS,
+        drawings_cut: false,
         app,
         used_notes: HashSet::new(),
     };
@@ -177,7 +181,7 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
             cx.p.slides.push(Arc::new(slide));
         }
     }
-    cx.p
+    (cx.p, cx.drawings_cut)
 }
 
 /// A main master's placeholder of `kind` at `x`: the box of the default master's placeholder of
@@ -297,6 +301,7 @@ impl<'a> Ctx<'a> {
         let theme = self.theme(&scheme, &styles);
         let mut master = self.default_master(size, Some(theme));
         let drawing = draw::drawing(&m.rec, &mut self.drawing_records);
+        self.drawings_cut |= drawing.cut;
         self.remember_master_props(m.slide_id, &drawing.shapes, 0);
         let ids = [Some(m.slide_id), None];
         let scope =
@@ -337,6 +342,7 @@ impl<'a> Ctx<'a> {
         let scheme = if atom.follow_master_scheme { parent.scheme } else { scheme_of(&m.rec).unwrap_or(parent.scheme) };
         let Some(id) = self.alloc() else { return };
         let drawing = draw::drawing(&m.rec, &mut self.drawing_records);
+        self.drawings_cut |= drawing.cut;
         self.remember_master_props(m.slide_id, &drawing.shapes, 0);
         let ids = [Some(m.slide_id), parent.ids[0]];
         let scope = Scope {
@@ -440,6 +446,7 @@ impl<'a> Ctx<'a> {
         })?;
         let id = SlideId(self.alloc()?);
         let drawing = draw::drawing(&s.rec, &mut self.drawing_records);
+        self.drawings_cut |= drawing.cut;
         // The n-th outline block of a text type takes the n-th numbering entry for that type.
         let mut seen: HashMap<u32, usize> = HashMap::new();
         let numbering: Vec<Option<Vec<text::Pf9>>> = s
@@ -518,7 +525,8 @@ impl<'a> Ctx<'a> {
 
     /// The text of a notes page's notes placeholder.
     fn notes(&mut self, n: &Listed<'a>, styles: &StyleSheet, scheme: Scheme) -> TextBody {
-        let drawing = draw::drawing(&n.rec, &mut self.drawing_records);
+        let drawing = draw::shapes(&n.rec, &mut self.drawing_records);
+        self.drawings_cut |= drawing.cut;
         // Notes masters aren't imported, so there are no master shapes to inherit from.
         let scope =
             Scope { scheme, styles, outline: &n.outline, numbering: &[], used_outline: Default::default(), master: false, masters: [None; 2] };

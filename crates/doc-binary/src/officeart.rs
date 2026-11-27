@@ -131,9 +131,9 @@ impl Props {
     /// tertiary ones; boolean words merged flag by flag).
     pub(crate) fn from_set(p: &craft_officeart::props::Props) -> Props {
         let fixed = |v: u32| (v as i32) as f32 / 65_536.0;
-        // A complex `pib` holds its picture in its own bytes, and its operand is their length, not a
-        // store index.
-        let mut out = Props { pib: p.simple(0x0104), ..Props::default() };
+        // Complex entries other than the alt text were left out of the set (`shape`), so every
+        // value here is a simple operand.
+        let mut out = Props { pib: p.get(0x0104), ..Props::default() };
         if let Some(v) = p.get(0x0004) {
             out.rot = fixed(v);
         }
@@ -220,9 +220,9 @@ impl Node {
 /// Parse one `OfficeArtSpContainer`.
 pub(crate) fn shape(body: &[u8], budget: &mut usize) -> Sp {
     let mut sp = Sp::default();
-    // Property tables in specificity order: primary (the last one first), then secondary and
-    // tertiary.
-    let (mut primary, mut others) = (vec![], vec![]);
+    // Property tables in specificity order: primary (the last one first), then the secondary
+    // ones and then the tertiary ones, wherever each sits in the container.
+    let (mut primary, mut secondary, mut tertiary) = (vec![], vec![], vec![]);
     for rec in children(body, budget) {
         match rec.kind {
             rt::FSP => {
@@ -231,7 +231,8 @@ pub(crate) fn shape(body: &[u8], budget: &mut usize) -> Sp {
                 sp.flags = u32_at(rec.data, 4).unwrap_or(0);
             }
             rt::FOPT => primary.push(rec),
-            rt::SECONDARY_FOPT | rt::TERTIARY_FOPT => others.push(rec),
+            rt::SECONDARY_FOPT => secondary.push(rec),
+            rt::TERTIARY_FOPT => tertiary.push(rec),
             rt::FSPGR | rt::CHILD_ANCHOR => {
                 let r = [0, 4, 8, 12].map(|o| i32_at(rec.data, o));
                 if let [Some(l), Some(t), Some(r), Some(b)] = r {
@@ -247,8 +248,10 @@ pub(crate) fn shape(body: &[u8], budget: &mut usize) -> Sp {
         }
     }
     let mut props = craft_officeart::props::Props::default();
-    for t in primary.iter().rev().chain(&others) {
-        props.add_table(t);
+    // The alt text is the one complex property read; any other complex entry's operand is a
+    // length, not a value, so it is left out.
+    for t in primary.iter().rev().chain(&secondary).chain(&tertiary) {
+        props.add_table_where(t, |id, complex| !complex || id == 0x0381);
     }
     sp.props = Props::from_set(&props);
     sp
