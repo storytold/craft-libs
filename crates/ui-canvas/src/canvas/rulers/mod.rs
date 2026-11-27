@@ -497,7 +497,7 @@ impl Component for Rulers<'_> {
         let words = cx.words::<CanvasWords>();
         let shown = self.published().x.kind;
         let mut entries: Vec<Entry<MenuRow>> =
-            units.iter().map(|&kind| Entry::new(MenuRow::Unit(kind), Label::from(numbers.symbol(kind))).checked(kind == shown)).collect();
+            units.iter().map(|&kind| Entry::new(MenuRow::Unit(kind), numbers.name(kind)).checked(kind == shown)).collect();
         entries.push(Entry::separator());
         entries.push(Entry::new(MenuRow::ResetZero, Label::from(words.ruler_reset_zero.as_str().to_owned())).enabled(!self.origin_locked));
         let name = Label::from(words.ruler_menu.as_str().to_owned());
