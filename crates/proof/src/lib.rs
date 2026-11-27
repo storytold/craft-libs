@@ -83,6 +83,7 @@ pub mod es;
 pub mod fr;
 mod grammar_en;
 pub mod gu;
+pub mod he;
 pub mod hr;
 pub mod hunspell;
 pub mod hyphen;
@@ -537,13 +538,92 @@ pub fn check_spelling_in(text: &str, lang: ProofLang) -> Vec<Issue> {
 /// cost quadratic scanning (#1335).
 fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options) -> Vec<Issue> {
     let mut token = (0, 0, false);
-    words(text)
+    words_for_spelling(text, &lang)
         .into_iter()
         .filter_map(|(a, b)| {
             if a < token.0 || a >= token.1 {
                 token = enclosing_token(text, a, b);
             }
             spelling_issue(text, a, b, lang(a), opts, token.2)
+        })
+        .collect()
+}
+
+/// Words extracted for spell checking. For Hebrew text, keeps gershayim (U+05F4 / `"`), geresh
+/// (U+05F3 / `'`), and maqaf (U+05BE / `-`) within same-script tokens so acronyms (`צה״ל`, `ק"ק`),
+/// abbreviations (`וכו'`), and hyphenated compounds stay whole while mixed-script hyphens (`teh-שלום`) split.
+fn words_for_spelling(text: &str, lang: &impl Fn(usize) -> ProofLang) -> Vec<(usize, usize)> {
+    if !text.chars().any(crate::he::is_hebrew_letter) {
+        return words(text);
+    }
+    let prev_base = |idx: usize| -> Option<char> {
+        text.get(..idx).and_then(|s| s.chars().rev().find(|&ch| !unicode_normalization::char::is_combining_mark(ch)))
+    };
+    let next_base = |idx: usize, c: char| -> Option<char> {
+        text.get(idx + c.len_utf8()..).and_then(|s| s.chars().find(|&ch| !unicode_normalization::char::is_combining_mark(ch)))
+    };
+    // Check if character at index i can join adjacent characters into a word (quotes/gershayim/maqaf/hyphen)
+    // Skipping vowel marks / combining marks (e.g. צָהָ"ל, וכוּ')
+    let is_hebrew_joiner = |idx: usize, c: char| -> bool {
+        match c {
+            '״' => true,
+            '-' | '־' => {
+                // Only join across hyphen/maqaf when both sides are alphanumeric of matching Hebrew/non-Hebrew script.
+                match (prev_base(idx), next_base(idx, c)) {
+                    (Some(p), Some(n)) if p.is_alphanumeric() && n.is_alphanumeric() => {
+                        crate::he::is_hebrew_letter(p) == crate::he::is_hebrew_letter(n)
+                    }
+                    _ => false,
+                }
+            }
+            '"' | '”' | '“' => {
+                // Only join ASCII/curly double quotes if bordered by Hebrew letters (skipping niqqud)
+                prev_base(idx).is_some_and(crate::he::is_hebrew_letter) && next_base(idx, c).is_some_and(crate::he::is_hebrew_letter)
+            }
+            '\'' | '’' | '׳' => {
+                // Geresh/apostrophe can follow or join Hebrew letters (skipping niqqud)
+                prev_base(idx).is_some_and(crate::he::is_hebrew_letter)
+            }
+            _ => false,
+        }
+    };
+
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, c) in text.char_indices() {
+        // Keep ''' as a general word character as words() does, so English contractions in mixed paragraphs
+        // (like doesn't) are not split; '-' and '־' are handled by is_hebrew_joiner so same-script compounds
+        // (co-operate, בית-ספר) stay whole while mixed-script compounds (teh-שלום) split.
+        let is_w = c.is_alphanumeric() || c == '\'' || unicode_normalization::char::is_combining_mark(c) || is_hebrew_joiner(i, c);
+        match (start, is_w) {
+            (None, true) => start = Some(i),
+            (Some(s), false) => {
+                out.push((s, i));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        out.push((s, text.len()));
+    }
+    out.into_iter()
+        .filter_map(|(a, b)| {
+            let w = text.get(a..b)?;
+            let is_he = lang(a) == ProofLang::He || w.chars().any(crate::he::is_hebrew_letter);
+            if is_he {
+                // For Hebrew, trim only leading apostrophes/quotes/hyphens, and trailing quotes/hyphens,
+                // including curly quotes (“ ”), but preserve trailing geresh/apostrophe (e.g. וכו', פרופ').
+                let lead = w.len() - w.trim_start_matches(['\'', '’', '-', '"', '״', '׳', '־', '“', '”']).len();
+                let trimmed_lead = &w[lead..];
+                let trail = trimmed_lead.len() - trimmed_lead.trim_end_matches(['-', '"', '״', '־', '“', '”']).len();
+                let final_w = &trimmed_lead[..trimmed_lead.len() - trail];
+                if final_w.is_empty() { None } else { Some((a + lead, a + lead + final_w.len())) }
+            } else {
+                let lead = w.len() - w.trim_start_matches(['\'', '’', '-', '"', '״', '׳', '־', '“', '”']).len();
+                let trail = w.len() - w.trim_end_matches(['\'', '’', '-', '"', '״', '׳', '־', '“', '”']).len();
+                (a + lead < b - trail).then_some((a + lead, b - trail))
+            }
         })
         .collect()
 }

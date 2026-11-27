@@ -5,6 +5,7 @@ use super::*;
 fn write_test_dictionaries(dir: &std::path::Path) {
     std::fs::create_dir_all(dir).unwrap();
     for (name, aff, dic) in [
+        ("he_IL", he::test_dict::AFF, he::test_dict::DIC),
         ("pl_PL", pl::test_dict::AFF, pl::test_dict::DIC),
         ("pt_BR", pt::test_dict::AFF, pt::test_dict::DIC),
         ("it_IT", it::test_dict::AFF, it::test_dict::DIC),
@@ -50,6 +51,58 @@ fn drop_english_files(dir: &std::path::Path, english: &[(&str, &[u8], &[u8])]) {
 /// run without the data only; `english::tests` checks the order with the data.
 fn scowl_embedded() -> bool {
     scowl::dict(ProofLang::En).is_some()
+}
+
+#[test]
+fn hebrew_spelling_tokenizer_mixed_quotes_and_curly_quotes() {
+    crate::he::test_dict::install();
+    // Point 1: Quotes joining across language spans (xx"שלום should not swallow the Hebrew word)
+    let words_mixed = words_for_spelling("xx\"שלום", &|_| ProofLang::He);
+    let texts: Vec<&str> = words_mixed.iter().map(|&(a, b)| &"xx\"שלום"[a..b]).collect();
+    assert!(texts.contains(&"שלום"), "xx\"שלום should tokenize 'שלום' as Hebrew: {texts:?}");
+
+    // Point 2: Curly quotes “שלומ” trimmed properly
+    let words_curly = words_for_spelling("“שלום”", &|_| ProofLang::He);
+    let texts_curly: Vec<&str> = words_curly.iter().map(|&(a, b)| &"“שלום”"[a..b]).collect();
+    assert_eq!(texts_curly, ["שלום"], "Curly quotes should be trimmed: {texts_curly:?}");
+
+    // Internal curly quotes in צה”ל stay intact
+    let words_idf = words_for_spelling("צה”ל", &|_| ProofLang::He);
+    let texts_idf: Vec<&str> = words_idf.iter().map(|&(a, b)| &"צה”ל"[a..b]).collect();
+    assert_eq!(texts_idf, ["צה”ל"], "Internal curly quotes stay intact: {texts_idf:?}");
+
+    // Vowel marks before quotes and apostrophes: צָהָ"ל and וכוּ'
+    let words_niqqud = words_for_spelling("צָהָ\"ל וכוּ'", &|_| ProofLang::He);
+    let texts_niqqud: Vec<&str> = words_niqqud.iter().map(|&(a, b)| &"צָהָ\"ל וכוּ'"[a..b]).collect();
+    assert_eq!(texts_niqqud, ["צָהָ\"ל", "וכוּ'"], "Niqqud before quotes/apostrophes should remain intact: {texts_niqqud:?}");
+
+    // Mixed paragraphs should not break English apostrophes or hyphens: doesn't co-operate שלום
+    let text_mixed = "doesn't co-operate שלום";
+    let words_eng = words_for_spelling(text_mixed, &|idx| if idx >= 19 { ProofLang::He } else { ProofLang::En });
+    let texts_eng: Vec<&str> = words_eng.iter().map(|&(a, b)| &text_mixed[a..b]).collect();
+    assert!(texts_eng.contains(&"doesn't"), "doesn't should be preserved: {texts_eng:?}");
+    assert!(texts_eng.contains(&"co-operate"), "co-operate should be preserved: {texts_eng:?}");
+
+    // Same-script Hebrew hyphen/maqaf compounds stay whole, while mixed-script compounds (teh-שלום) split
+    let text_compounds = "בית-ספר בית־ספר teh-שלום";
+    let he_start = text_compounds.find("שלום").unwrap();
+    let words_cmp = words_for_spelling(text_compounds, &|idx| if idx >= he_start { ProofLang::He } else { ProofLang::En });
+    let texts_cmp: Vec<&str> = words_cmp.iter().map(|&(a, b)| &text_compounds[a..b]).collect();
+    assert!(texts_cmp.contains(&"בית-ספר"), "Hebrew hyphen compound should stay whole: {texts_cmp:?}");
+    assert!(texts_cmp.contains(&"בית־ספר"), "Hebrew maqaf compound should stay whole: {texts_cmp:?}");
+    assert!(texts_cmp.contains(&"teh"), "Mixed-script compound should split Latin part: {texts_cmp:?}");
+    assert!(texts_cmp.contains(&"שלום"), "Mixed-script compound should split Hebrew part: {texts_cmp:?}");
+
+    let mixed_issues = spelling_issues("teh-שלום", |idx| if idx >= 4 { ProofLang::He } else { ProofLang::En }, &Options::default());
+    assert_eq!(mixed_issues.len(), 1, "expected only 'teh' to be flagged: {mixed_issues:?}");
+    assert_eq!((mixed_issues[0].start, mixed_issues[0].end), (0, 3));
+}
+
+#[test]
+fn hebrew_spelling_tokenizer_preserves_acronyms_and_abbreviations() {
+    crate::he::test_dict::install();
+    let issues = check_spelling_in("החייל משרת בצה״ל וכו׳.", ProofLang::He);
+    assert!(issues.is_empty(), "צה״ל and וכו׳ should be accepted as valid tokens without false flags: {issues:?}");
 }
 
 /// R6.4: an English Hunspell dictionary that is there but can't be read (an encoding we don't
