@@ -436,78 +436,6 @@ fn detach_with<E>(mount: &str, run: impl Fn(&str, &[&str], Duration) -> Result<S
         .map(drop)
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
-    use super::*;
-
-    #[craft_ui::testing::trial]
-    fn detach_stderr_reaches_the_busy_retry_policy() {
-        // Model hdiutil's documented -quiet behavior, then use the real process reader and
-        // retry classifier instead of injecting an already classified error string.
-        let script = r#"
-state=$1
-scenario=$2
-shift 2
-count=0
-if [ -f "$state" ]; then read -r count < "$state"; fi
-count=$((count + 1))
-printf '%s\n' "$count" > "$state"
-quiet=false
-for arg do
-if [ "$arg" = -quiet ]; then quiet=true; fi
-done
-case "$scenario:$count" in
-success:*|busy:3) exit 0 ;;
-busy:*) reason='hdiutil: detach failed - Resource busy' ;;
-permanent:*) reason='hdiutil: detach failed - Permission denied' ;;
-*) exit 64 ;;
-esac
-if [ "$quiet" = false ]; then printf '%s\n' "$reason" >&2; fi
-exit 16
-"#;
-        for (scenario, expected_calls, expected_waits) in [("busy", 3, 1), ("success", 1, 0), ("permanent", 2, 0)] {
-            let dir = tempfile::tempdir().unwrap();
-            let state = dir.path().join("attempts");
-            let calls = std::cell::RefCell::new(Vec::new());
-            let waits = std::cell::RefCell::new(Vec::new());
-            let mount = "/Volumes/PhotoCraft test";
-            let result = super::super::retry_busy_detach_with_elapsed(
-                || {
-                    detach_with(mount, |program, args, timeout| {
-                        assert_eq!(program, "/usr/bin/hdiutil");
-                        assert_eq!(timeout, std::time::Duration::from_secs(60));
-                        calls.borrow_mut().push(args.iter().map(|s| (*s).to_string()).collect::<Vec<_>>());
-                        let mut cmd = process::command("/bin/sh");
-                        cmd.args(["-c", script, "hdiutil-fixture"]).arg(&state).arg(scenario).args(args);
-                        process::run_command(cmd, program, timeout)
-                    })
-                },
-                |delay| waits.borrow_mut().push(delay),
-                || std::time::Duration::ZERO,
-            );
-            if scenario == "permanent" {
-                assert_eq!(result, Err("hdiutil: detach failed - Permission denied".into()));
-            } else {
-                assert_eq!(result, Ok(()), "{scenario}");
-            }
-            let calls = calls.into_inner();
-            assert_eq!(calls.len(), expected_calls, "{scenario}");
-            assert_eq!(calls[0], ["detach", mount]);
-            if expected_calls > 1 {
-                assert_eq!(calls[1], ["detach", mount, "-force"]);
-            }
-            if scenario == "busy" {
-                assert_eq!(calls[2], ["detach", mount], "the preserved busy error must reach another ordinary attempt");
-            }
-            let waits = waits.into_inner();
-            assert_eq!(waits.len(), expected_waits, "{scenario}");
-            if scenario == "busy" {
-                assert_eq!(waits, [std::time::Duration::from_millis(500)]);
-            }
-        }
-    }
-}
-
 /// Detaches the image file `dmg` where it is attached with no volume mounted, which a failed
 /// attach can leave. An attachment with a mounted volume is left alone: another install may
 /// be using it. So is every attachment while a program started with `dmg` in its arguments
@@ -734,4 +662,76 @@ pub fn move_to_trash(path: &Path) -> Result<(), String> {
         dest = trash.join(format!("{} {}", name.to_string_lossy(), crate::now()));
     }
     std::fs::rename(path, &dest).map_err(|e| format!("couldn't move {} to Trash ({e}). Remove it in Finder instead.", path.display()))
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    #[craft_ui::testing::trial]
+    fn detach_stderr_reaches_the_busy_retry_policy() {
+        // Model hdiutil's documented -quiet behavior, then use the real process reader and
+        // retry classifier instead of injecting an already classified error string.
+        let script = r#"
+state=$1
+scenario=$2
+shift 2
+count=0
+if [ -f "$state" ]; then read -r count < "$state"; fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$state"
+quiet=false
+for arg do
+if [ "$arg" = -quiet ]; then quiet=true; fi
+done
+case "$scenario:$count" in
+success:*|busy:3) exit 0 ;;
+busy:*) reason='hdiutil: detach failed - Resource busy' ;;
+permanent:*) reason='hdiutil: detach failed - Permission denied' ;;
+*) exit 64 ;;
+esac
+if [ "$quiet" = false ]; then printf '%s\n' "$reason" >&2; fi
+exit 16
+"#;
+        for (scenario, expected_calls, expected_waits) in [("busy", 3, 1), ("success", 1, 0), ("permanent", 2, 0)] {
+            let dir = tempfile::tempdir().unwrap();
+            let state = dir.path().join("attempts");
+            let calls = std::cell::RefCell::new(Vec::new());
+            let waits = std::cell::RefCell::new(Vec::new());
+            let mount = "/Volumes/PhotoCraft test";
+            let result = super::super::retry_busy_detach_with_elapsed(
+                || {
+                    detach_with(mount, |program, args, timeout| {
+                        assert_eq!(program, "/usr/bin/hdiutil");
+                        assert_eq!(timeout, std::time::Duration::from_secs(60));
+                        calls.borrow_mut().push(args.iter().map(|s| (*s).to_string()).collect::<Vec<_>>());
+                        let mut cmd = process::command("/bin/sh");
+                        cmd.args(["-c", script, "hdiutil-fixture"]).arg(&state).arg(scenario).args(args);
+                        process::run_command(cmd, program, timeout)
+                    })
+                },
+                |delay| waits.borrow_mut().push(delay),
+                || std::time::Duration::ZERO,
+            );
+            if scenario == "permanent" {
+                assert_eq!(result, Err("hdiutil: detach failed - Permission denied".into()));
+            } else {
+                assert_eq!(result, Ok(()), "{scenario}");
+            }
+            let calls = calls.into_inner();
+            assert_eq!(calls.len(), expected_calls, "{scenario}");
+            assert_eq!(calls[0], ["detach", mount]);
+            if expected_calls > 1 {
+                assert_eq!(calls[1], ["detach", mount, "-force"]);
+            }
+            if scenario == "busy" {
+                assert_eq!(calls[2], ["detach", mount], "the preserved busy error must reach another ordinary attempt");
+            }
+            let waits = waits.into_inner();
+            assert_eq!(waits.len(), expected_waits, "{scenario}");
+            if scenario == "busy" {
+                assert_eq!(waits, [std::time::Duration::from_millis(500)]);
+            }
+        }
+    }
 }
