@@ -4,6 +4,7 @@ use craft_behavior::{Selection, SelectionChange, SelectionModel};
 use craft_ui::contract::{Bind, DropAt, DropPlace, DropZone, ListDrag, SelectMode};
 use craft_ui::patterns::presets::{PresetBrowser, PresetDrop, PresetEvent, PresetFns, PresetRow, PresetSource, PresetState, PresetView};
 use craft_ui::runtime::drag;
+use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, Sense, UiBuilder, pos2, vec2};
 use std::cell::RefCell;
@@ -62,6 +63,41 @@ fn a_preset_released_over_the_zone_reports_drop_at_and_nothing_else_does() {
             .collect();
         assert_eq!(drops, expected.into_iter().collect::<Vec<_>>(), "{row} released at {at:?}");
         assert_eq!(marked, expected.is_some(), "{row} over {at:?} shows the zone's mark only where it drops");
+    }
+}
+
+/// Find matches a row's `search_name` beside its label: in both views, a preset shown as "Rot" with the search name
+/// "Red" is found by either name, and a preset without a search name is still found by its label.
+#[trial]
+fn find_matches_a_preset_by_its_search_name_or_its_label() {
+    // (query, the presets shown, the presets hidden)
+    type Case = (&'static str, &'static [&'static str], &'static [&'static str]);
+    let cases: [Case; 3] = [("Red", &["Rot"], &["Blau"]), ("Rot", &["Rot"], &["Blau"]), ("Blau", &["Blau"], &["Rot"])];
+    for view in [PresetView::List, PresetView::Grid] {
+        for (query, shown, hidden) in cases {
+            let rows = PresetSource::new(
+                (),
+                PresetFns::new(|_, _| {
+                    let mut red = PresetRow::item(ALPHA, "Rot", 1);
+                    red.search_name = Some(String::from("Red"));
+                    vec![PresetRow::group(GROUP, "Group", 0), red, PresetRow::item(2, "Blau", 1)]
+                }),
+            );
+            let mut state = PresetState::<u32>::new();
+            state.filter = String::from(query);
+            let mut fixture = Fixture::new(move |ui| {
+                ui.scope_builder(UiBuilder::new().max_rect(BROWSER), |ui| {
+                    let _ = PresetBrowser::new("Patterns", Bind::bound(&mut state), &rows).view_lock(view).show(ui);
+                });
+            });
+            fixture.room(vec2(480.0, 320.0)).settle();
+            for name in shown {
+                assert!(fixture.by_label(name).is_some(), "{view:?}: Find \"{query}\" shows {name}");
+            }
+            for name in hidden {
+                assert!(fixture.by_label(name).is_none(), "{view:?}: Find \"{query}\" hides {name}");
+            }
+        }
     }
 }
 
@@ -208,6 +244,56 @@ fn multi_selection_ranges_toggles_and_reports_select_for_each_plain_pick() {
         events.borrow_mut().clear();
         secondary_click_preset(&mut fixture, 3);
         assert_eq!(items(), vec![2, 3], "a secondary press on a selected preset leaves the selection whole in {view:?}");
+    }
+}
+
+#[trial]
+fn titled_groups_join_modifier_selection_only_when_enabled() {
+    for view in [PresetView::List, PresetView::Grid] {
+        for enabled in [false, true] {
+            let rows = PresetSource::new(
+                (),
+                PresetFns::new(|_, _| vec![PresetRow::group(GROUP, "Group", 0), PresetRow::item(ALPHA, "Alpha", 1), PresetRow::item(2, "Beta", 1)]),
+            );
+            let mut state = PresetState::new();
+            let selection = Rc::new(RefCell::new(Selection::default()));
+            let events = Rc::new(RefCell::new(Vec::new()));
+            let (held, seen) = (selection.clone(), events.clone());
+            let mut fixture = Fixture::new(move |ui| {
+                let out = PresetBrowser::new("Patterns", Bind::bound(&mut state), &rows)
+                    .view_lock(view)
+                    .select(SelectMode::Multi)
+                    .select_groups(enabled)
+                    .selection(Bind::bound(&mut *held.borrow_mut()))
+                    .show(ui);
+                seen.borrow_mut().extend(out.events);
+            });
+            fixture.room(vec2(480.0, 320.0)).settle();
+            let alpha = fixture.by_label("Alpha").expect("the first preset is shown");
+            fixture.click(&alpha).settle();
+            assert_eq!(selection.borrow().items, [ALPHA]);
+            events.borrow_mut().clear();
+            let group = fixture.by_label("Group").expect("the group header is shown");
+            fixture.hold(Modifiers::COMMAND).click(&group).hold(Modifiers::NONE).settle();
+            let expected = if enabled { vec![ALPHA, GROUP] } else { vec![ALPHA] };
+            assert_eq!(selection.borrow().items, expected, "{view:?}, group selection enabled: {enabled}");
+            assert!(!events.borrow().iter().any(|event| matches!(event, PresetEvent::Select { .. })));
+            if enabled {
+                assert_eq!(fixture.tree().selected_of(group.node), Some(true));
+                assert!(fixture.by_label("Beta").is_some(), "the group remains open in {view:?}");
+                fixture.advance(1.0);
+                fixture.hold(Modifiers::COMMAND).click(&group).hold(Modifiers::NONE).settle();
+                assert_eq!(selection.borrow().items, [ALPHA], "Cmd/Ctrl toggles the group off in {view:?}");
+                fixture.access(AccessActionKind::Click, &group).settle();
+                assert_eq!(selection.borrow().items, [GROUP], "accessibility Click selects the group in {view:?}");
+                let beta = fixture.by_label("Beta").expect("accessibility Click keeps the group open");
+                fixture.hold(Modifiers::SHIFT).click(&beta).hold(Modifiers::NONE).settle();
+                assert_eq!(selection.borrow().items, [GROUP, ALPHA, 2], "Shift range includes the group in {view:?}");
+                fixture.access(AccessActionKind::Click, &group).settle();
+                fixture.key(Key::Enter, Modifiers::NONE).settle();
+                assert!(fixture.by_label("Beta").is_none(), "Enter closes the selected group in {view:?}");
+            }
+        }
     }
 }
 
@@ -475,4 +561,42 @@ fn host_row_menu_rows_are_menu_items_and_only_a_checked_row_a_check_box() {
     let names = |role| fixture.by_role(role).iter().filter_map(|row| tree.name_of(row.node).map(str::to_owned)).collect::<Vec<_>>();
     assert_eq!(names(Role::MENU_ITEM), ["Options…"], "a plain host row is a menu item");
     assert_eq!(names(Role::MENU_ITEM_CHECK_BOX), ["Locked"], "a checked host row is a check box");
+}
+
+/// Host tools can share the header's reading start without changing the default order or view actions.
+#[trial]
+fn host_toolbar_tools_can_lead_the_view_controls_without_changing_the_default() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+
+    for at_start in [false, true] {
+        let state = Rc::new(RefCell::new(PresetState::<u32>::new()));
+        let shown = Rc::clone(&state);
+        let rows = PresetSource::new((), PresetFns::new(|_, _| vec![PresetRow::item(ALPHA, "Alpha", 0)]));
+        let mut fixture = Fixture::new(move |ui| {
+            ui.scope_builder(UiBuilder::new().max_rect(BROWSER), |ui| {
+                let _ = PresetBrowser::new("Swatches", Bind::bound(&mut *shown.borrow_mut()), &rows)
+                    .toolbar(true)
+                    .search(false)
+                    .tools_at_start(at_start)
+                    .tools(|ui: &mut egui::Ui| {
+                        Button::new("Host Tool").show(ui);
+                    })
+                    .show(ui);
+            });
+        });
+        fixture.room(vec2(480.0, 320.0)).settle();
+        let host = fixture.by_label("Host Tool").expect("host control").center();
+        let grid = fixture.by_label("Grid View").expect("grid action").center();
+        let list = fixture.by_label("List View").expect("list action").center();
+        assert!((host.y - grid.y).abs() < 1.0, "both groups share the toolbar row");
+        assert_eq!(host.x < grid.x, at_start, "the default stays trailing; the opt-in leads");
+        assert!(grid.x < list.x, "the view choices retain their order");
+        let target = fixture.by_label("List View").expect("list action");
+        fixture.click(&target).settle();
+        assert_eq!(state.borrow().view, PresetView::List);
+        let target = fixture.by_label("Grid View").expect("grid action");
+        fixture.click(&target).settle();
+        assert_eq!(state.borrow().view, PresetView::Grid);
+    }
 }

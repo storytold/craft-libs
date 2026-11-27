@@ -12,6 +12,7 @@ pub(crate) mod fingers;
 pub(crate) mod focus;
 pub(crate) mod frame;
 pub(crate) mod latch;
+pub(crate) mod layout_memory;
 pub(crate) mod memory;
 pub(crate) mod part_request;
 pub(crate) mod paste;

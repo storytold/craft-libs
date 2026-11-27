@@ -4,9 +4,8 @@ use super::{StatusItem, StatusReadout, StatusValues};
 use crate::bars::{Bar, BarKind};
 use crate::contract::ShowContainer as _;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
-use craft_behavior::CanvasView;
-use craft_behavior::kurbo::{Point, Size};
-use egui::{Pos2, Rect, Ui};
+use craft_behavior::kurbo::Size;
+use egui::Ui;
 use std::time::Duration;
 
 /// The document the readout zooms, in document units.
@@ -25,11 +24,10 @@ fn values() -> StatusValues {
 #[story(StatusReadout<'static>, covers = [], drive = Drive::Never)]
 fn status_readout(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let values = values();
-    let canvas = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
-    let (view, view_at) = data.value_at("view", CanvasView::new(canvas, Point::new(1000.0, 750.0), 0.6667));
+    let (zoom, zoom_at) = data.value_at("zoom", 0.6667);
     Bar::new("Status", BarKind::Status)
         .show(ui, |ui, _| {
-            StatusReadout::new(view_at.bind(view), DOCUMENT, StatusItem::DocumentSizes, &values).show(ui);
+            StatusReadout::new(zoom_at.bind(zoom), DOCUMENT, StatusItem::DocumentSizes, &values).show(ui);
         })
         .output
         .into()

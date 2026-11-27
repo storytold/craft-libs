@@ -5,17 +5,18 @@
 use super::radio::RadioKind;
 use super::words::ChoiceWords;
 use crate::contract::{
-    Access, Activation, Common, Component, Cx, DisabledLook, GroupHandle, MeasureCx, Meta as _, Outcome, PaintUi, Pointer as _, Props as _, Role,
-    Sizing, Styled as _, WordSetCx as _,
+    Access, Activation, Common, Component, Cx, DisabledLook, DragPreview, GroupHandle, MeasureCx, Meta as _, Outcome, PaintUi, Pointer as _,
+    Props as _, Role, Sizing, Styled as _, WordSetCx as _,
 };
 use crate::primitives::textures::UNTINTED;
 use crate::primitives::{Checker, ContentPainterCx, DataWidth, Draw, FacePaint, IconSpec, PaintShape, StrokeWidth, TextureCache, WellFill};
 use crate::runtime::focus::FocusShape;
 use crate::runtime::requests::ColorRequest;
 use crate::style::{ComponentStyle, DataColor, Flags, FocusLook, State, StateMix, StateSet, StyleColor, StyleCx, UiTokens, resolve_style};
-use craft_behavior::{IconId, Metrics, Mixed, Sense, Value};
+use craft_behavior::{IconId, Metrics, Mixed, PointerButton, PressPhase, Sense, Value};
 use craft_theme::{Hsb, Rgba, Srgba, Stateful, States, over};
 use egui::{Color32, ColorImage, CornerRadius, Mesh, Pos2, Rect, Response, Shape, Vec2, pos2};
+use std::any::Any;
 use std::sync::Arc;
 
 #[cfg(feature = "suite")]
@@ -231,7 +232,8 @@ impl<E> crate::contract::ItemOutput<E> for SwatchOutput {
 /// `activation`. A swatch with a `picker` key also files a `ColorRequest` for that key, opened at the swatch's colour
 /// and titled with its label, as `pick_color`; the host opens its colour picker and answers with the picked colour. A
 /// `Mixed` swatch files a request with no colour: the host's picker opens empty and the first pick sets the colour.
-/// The host writes the pick to every target.
+/// The host writes the pick to every target. A swatch given a payload with [`drag`](Swatch::drag) drags it to the
+/// drop targets that take its type.
 ///
 /// AccessKit reports a colour well named by the label, whose value is the colour as `#rrggbb` (`#rrggbbaa` when
 /// translucent) and whose colour value is the colour; a mixed well has the value "Mixed" and no colour value. A split
@@ -279,6 +281,8 @@ pub struct Swatch<T: Value + 'static = ()> {
     picker: Option<String>,
     /// The glyph an icon cell paints over its empty well, in place of a colour.
     icon: Option<IconId>,
+    /// The payload a drag from the well carries, set by [`drag`](Swatch::drag).
+    drag: Option<Arc<dyn Any + Send + Sync>>,
     checked: bool,
     activation: Option<Activation>,
 }
@@ -303,6 +307,7 @@ impl Swatch<()> {
             shape: SwatchShape::default(),
             picker: None,
             icon: None,
+            drag: None,
             checked: false,
             activation: None,
         }
@@ -335,9 +340,19 @@ impl<T: Value + 'static> Swatch<T> {
             shape: self.shape,
             picker: self.picker,
             icon: self.icon,
+            drag: self.drag,
             checked: false,
             activation: None,
         }
+    }
+
+    /// A primary drag that starts on the well carries `payload` through the drag session, with a ghost as large as the
+    /// well, for the drop targets of type `P` (a gradient thumbnail dropped on art or on a swatch list); `None` drags
+    /// nothing, as a `SwatchPair` well without a payload does. The swatch keeps its click.
+    #[must_use]
+    pub fn drag<P: Clone + Send + Sync + 'static>(mut self, payload: Option<P>) -> Self {
+        self.drag = payload.map(|payload| Arc::new(payload) as Arc<dyn Any + Send + Sync>);
+        self
     }
 }
 
@@ -458,11 +473,17 @@ impl<T: Value + 'static> Component for Swatch<T> {
     }
 
     fn sense(&self) -> Sense {
-        Sense::CLICK | Sense::FOCUS
+        if self.drag.is_some() { Sense::CLICK | Sense::FOCUS | Sense::DRAG } else { Sense::CLICK | Sense::FOCUS }
     }
 
-    /// Registers with the enclosing group when it is a member; reports the click.
+    /// Registers with the enclosing group when it is a member; reports the click; starts the drag of its payload.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if let (PressPhase::DragStart { start, .. }, Some(payload)) = (cx.press().phase, &self.drag)
+            && start.button == PointerButton::Primary
+            && cx.resolved.enabled
+        {
+            crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), Vec::new(), DragPreview::frame(cx.rect.size(), None));
+        }
         if let Some(value) = &self.member {
             let group = cx.env.get::<GroupHandle<RadioKind<T>>>();
             group.register(value.clone(), cx.id, cx.resolved.enabled);

@@ -300,6 +300,7 @@ pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
         T::StateMatchCurrent => Faded(T::StatusWarnSolid, 0x6e),
         T::StateStripe => Faded(T::StateHover, 0x40),
         T::OverlayStroke => Accent(9),
+        T::OverlayCursor => Same(T::OverlayStroke),
         T::OverlayLine => Same(T::AccentSolid),
         T::OverlayHalo => Fixed(Rgba::BLACK.with_alpha(alpha(0.6))),
         T::OverlayHandleFill => Fixed(Rgba::WHITE),
@@ -457,7 +458,7 @@ pub(super) const RULES: &[PairRule] = &[
             TEXT_MIN.1,
         )
     },
-    rule(&[T::OverlayStroke], HALO_BGS, NON_TEXT_MIN.0, NON_TEXT_MIN.1),
+    rule(&[T::OverlayStroke, T::OverlayCursor], HALO_BGS, NON_TEXT_MIN.0, NON_TEXT_MIN.1),
     // A selected anchor is a handle filled with its outline colour: the outline on the fill is the
     // only mark of the selection. Standard keeps the accent PhotoCraft outlines its handles in.
     rule(&[T::OverlayHandleStroke], &[Token(T::OverlayHandleFill)], STATE_CUE_MIN.0, STATE_CUE_MIN.1),

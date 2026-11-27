@@ -202,7 +202,7 @@ impl ShellApp for Gallery {
         let in_theme = self.viewer.workspace == Workspace::Theme;
         let shell = |ui: &mut Ui, viewer: &mut Viewer| {
             AppShell::new(WindowKey::main())
-                .options_bar(true, |ui, _, viewer: &mut Viewer| options_bar(ui, viewer))
+                .options_bar(true, |_| None, |ui, _, viewer: &mut Viewer| options_bar(ui, viewer))
                 .body_label("Gallery")
                 .body(body)
                 .show(ui, viewer);

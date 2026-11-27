@@ -458,8 +458,16 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
     let pointer = !scrubs || in_edit_before || (focused && !core.press.phase.is_drag());
     core.text_takes_pointer = pointer;
     let read_only = core.resolved.read_only || !enabled;
-    let ink = decl.options.ink.map_or(ink, |own| crate::style::ink_color(&crate::runtime::env::Env::of(ui).tokens, own));
-    let ink = if enabled { ink } else { crate::style::rgba_color(crate::runtime::env::Env::of(ui).tokens.color.text.disabled) };
+    // The tokens of the place the field is shown in, read only for an ink of its own or a disabled field.
+    let place = (decl.options.ink.is_some() || !enabled).then(|| crate::runtime::env::Env::of(ui));
+    let ink = match (decl.options.ink, &place) {
+        (Some(own), Some(place)) => crate::style::ink_color(&place.tokens, own),
+        _ => ink,
+    };
+    let ink = match &place {
+        Some(place) if !enabled => crate::style::rgba_color(place.tokens.color.text.disabled),
+        _ => ink,
+    };
     let held = core.popup(EDIT_MENU).is_open_in(core);
     // The text the part shows now: its resting text while it is idle and has one, else the value's own.
     let current = decl.options.resting.as_deref().filter(|_| !focused && !held && state.draft.is_none()).unwrap_or(&decl.shown);
@@ -606,7 +614,12 @@ pub(crate) fn run<C: Component>(
     // ended its gesture without putting back the value from before it), and the part starts afresh from its value.
     if !crate::runtime::memory::shown_last_pass(&ctx, id) {
         state = TextState::default();
+    } else if state.edit_target != part.options.edit_target {
+        // The old target's draft and gesture must never reach the new target's binding.
+        cx.cancel(CancelReason::HostChanged);
+        state = TextState::default();
     }
+    state.edit_target = part.options.edit_target;
     (decl.values.resync)(&mut state, shown_copy(cx).as_ref());
     let text = prepare(cx.core, ui, part, &mut state, AdapterSettings { keys, rtl, ink, underline }, step.commit_now);
     let PreparedText { widget, out, read_only, list_open, caret_visible, commit_now, was_focused, window_blur, menu_open, left_for_part } = text;

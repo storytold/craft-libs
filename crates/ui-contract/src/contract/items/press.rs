@@ -2,7 +2,7 @@
 
 use super::drag::SlowClick;
 use super::lead::PickBy;
-use super::{ItemsHooks, Placement, RowPress, SECTION};
+use super::{ItemsHooks, Placement, RowPress, SECTION, section_part};
 use crate::contract::collection::{ActivateOn, CollectionEvent, CollectionProps, ContextMenuRequest, LeadSource, OpenChange, RowPressed, SelectMode};
 use crate::contract::{Collection, Cx, ItemOpener, ItemOutput};
 use crate::runtime::egui::response;
@@ -195,6 +195,19 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             if props.focus_on_press && !target.sense.intersects(Sense::TAKE_FOCUS | Sense::KEEP_FOCUS) {
                 focus::request_now(&ctx, focus::FocusTarget::Id(cx.core.id));
             }
+        }
+        // A selectable section owns its pointer surface. Pick on its click, without taking clicks on disclosure.
+        if let (Some(PressPhase::Release { start, click: true, .. }), Some(target)) = (outcome.phase, outcome.target)
+            && start.button == PointerButton::Primary
+            && target.owner == cx.core.id
+            && target.part.is_some_and(|part| part.key == SECTION)
+            && let Some((key, _)) = &self.drags.part_press
+            && target.part == Some(section_part(key))
+            && let Some(at) = self.index_of(key)
+            && self.source.selectable_section(at)
+        {
+            let mods = crate::runtime::pointer::frame(&ctx).pick_mods;
+            self.click_pick(comp, at, mods.shift, mods.cmd, mods);
         }
         // While a part of an item holds the press, and in the pass it ends, the row reads it with whether it held the lead
         // when the press began.
@@ -421,7 +434,7 @@ fn item_openers(ui: &Ui, ctx: &Context, id: Id, enabled: bool, openers: Vec<Item
                     clicked: on_part(outcome.activated),
                     ..response::PressView::default()
                 },
-                pointer: ctx.pointer_latest_pos(),
+                pointer: crate::runtime::pointer::frame_raw(ctx).pos,
             };
             let response = response::member(ui, opener_id(opener.item, opener.part), rect, enabled, view);
             Some((opener, response))

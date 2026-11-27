@@ -37,6 +37,7 @@ craft_ui::words! {
         minutes: unit "units.minutes" = "{n} min";
         columns: unit "units.columns" = "{n} col";
         per_inch: unit "units.perInch" = "{n}/in";
+        milliseconds: unit "units.milliseconds" = "{n} ms";
         pixels_name: "units.pixelsName" = "Pixels";
         percent_name: "units.percentName" = "Percent";
         degrees_name: "units.degreesName" = "Degrees";
@@ -60,6 +61,7 @@ craft_ui::words! {
         letters_name: "units.lettersName" = "Letters";
         hyphens_name: "units.hyphensName" = "Hyphens";
         per_inch_name: "units.perInchName" = "Per Inch";
+        milliseconds_name: "units.millisecondsName" = "Milliseconds";
     }
 }
 
@@ -122,7 +124,7 @@ impl EnvValue for craft_behavior::ZoomScheme {
 }
 
 /// What a number counts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum UnitKind {
@@ -173,6 +175,8 @@ pub enum UnitKind {
     /// `{n}/in`: how many of something fall in an inch of length, such as the points a distortion adds along a path.
     /// It is a count, not a length: [`per_inch`](Self::per_inch) answers `None` for it.
     PerInch,
+    /// `{n} ms`: a duration or delay in milliseconds.
+    Milliseconds,
 }
 
 impl UnitKind {
@@ -186,7 +190,7 @@ impl UnitKind {
         Self::ALL.get(tag as usize).copied()
     }
 
-    const ALL: [UnitKind; 23] = [
+    const ALL: [UnitKind; 24] = [
         UnitKind::Pixels,
         UnitKind::Percent,
         UnitKind::Degrees,
@@ -210,12 +214,13 @@ impl UnitKind {
         UnitKind::Letters,
         UnitKind::Hyphens,
         UnitKind::PerInch,
+        UnitKind::Milliseconds,
     ];
 
     /// The digits after the decimal mark a number of this kind shows by default, at most.
     pub const fn decimals(self) -> RangeInclusive<usize> {
         match self {
-            UnitKind::Pixels | UnitKind::Minutes | UnitKind::Letters | UnitKind::Hyphens => 0..=0,
+            UnitKind::Pixels | UnitKind::Minutes | UnitKind::Letters | UnitKind::Hyphens | UnitKind::Milliseconds => 0..=0,
             UnitKind::Percent | UnitKind::Degrees | UnitKind::Points => 0..=1,
             UnitKind::Q | UnitKind::Ha => 0..=2,
             UnitKind::Feet | UnitKind::Yards | UnitKind::Metres => 0..=4,
@@ -476,6 +481,7 @@ impl Units {
             UnitKind::Letters => words.letters.as_str(),
             UnitKind::Hyphens => words.hyphens.as_str(),
             UnitKind::PerInch => words.per_inch.as_str(),
+            UnitKind::Milliseconds => words.milliseconds.as_str(),
         }
     }
 
@@ -506,6 +512,7 @@ impl Units {
             UnitKind::Letters => &words.letters_name,
             UnitKind::Hyphens => &words.hyphens_name,
             UnitKind::PerInch => &words.per_inch_name,
+            UnitKind::Milliseconds => &words.milliseconds_name,
         };
         name.clone()
     }

@@ -302,18 +302,17 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.overflow
     }
 
-    fn extent(&mut self, comp: &C, ui: &Ui, at: ShowAt, id: Id, scx: &StyleCx<'_>) -> Vec2 {
+    fn extent(&mut self, comp: &C, ui: &Ui, env: &Env, at: ShowAt, id: Id, scx: &StyleCx<'_>) -> Vec2 {
         let props = comp.props(Internal::new());
-        self.room = self.mount_room(props, ui, id, at, scx.tokens);
-        let env = Env::of(ui);
-        self.given = self.given_axes(props, &env, at);
+        self.room = self.mount_room(props, (ui, env), id, at, scx.tokens);
+        self.given = self.given_axes(props, env, at);
         self.fixed_height = self.fixed_height(props, at);
-        self.passes = self.passes_width(props, &env, at);
-        self.held = self.held(props, &env);
+        self.passes = self.passes_width(props, env, at);
+        self.held = self.held(props, env);
         self.across = self.held && matches!(env.column, Some(ColumnSweep::Column(..)));
-        self.in_column = label::in_column(ui);
+        self.in_column = label::in_column(ui, env);
         self.egui_cell = env.egui_cell;
-        self.given.1 |= self.given_room(props, &env, at, ui.ctx(), id);
+        self.given.1 |= self.given_room(props, env, at, ui.ctx(), id);
         let measured = self.measured_body.unwrap_or(Vec2::ZERO);
         let body = if self.presence.visible { Vec2::new(measured.x, measured.y * self.presence.t) } else { Vec2::ZERO };
         let room = self.room.x - 2.0 * self.pads(props, scx.tokens).x;
@@ -382,10 +381,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.measured_footer = props.footer.as_ref().and_then(|_| took(sub(id, "footer"))).unwrap_or(Vec2::ZERO);
         self.measured_end = props.end.as_ref().and_then(|_| took(sub(id, "end")));
         self.measured_controls = took(sub(id, "controls"));
-        self.extent(comp, at.ui, at.at, id, at.scx)
+        self.extent(comp, at.ui, at.place, at.at, id, at.scx)
     }
 
-    fn sized(&self, comp: &C, ui: &Ui, id: Id, size: Vec2) -> Vec2 {
+    fn sized(&self, comp: &C, ui: &Ui, place: &Env, id: Id, size: Vec2) -> Vec2 {
         let props = comp.props(Internal::new());
         match self.sizing(props) {
             Sizing::Fill => {
@@ -393,32 +392,32 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 // The available rect, not at least it: a fill child that took the whole room in an earlier pass (a
                 // content-sized layer offers its whole room before the footer is known) must not keep its remembered
                 // size once the room is less.
-                let room = crate::layout::flow_room(ui);
+                let room = crate::layout::flow_room(ui, place);
                 let (x, y) = (
-                    crate::layout::fill_size(ui, id, Axis::X, size.x, room.x, self.given.0),
-                    crate::layout::fill_size(ui, id, Axis::Y, size.y, room.y, self.given.1),
+                    crate::layout::fill_size(ui, place, id, Axis::X, size.x, room.x, self.given.0),
+                    crate::layout::fill_size(ui, place, id, Axis::Y, size.y, room.y, self.given.1),
                 );
                 Vec2::new(x, y)
             }
             Sizing::FillWidth => {
-                let room = crate::layout::flow_fill_room(ui).x;
+                let room = crate::layout::flow_fill_room(ui, place).x;
                 // A fill-width child held in a content column is not given the width (it never sets the column's
                 // width) but shows across the column. It widens to the column it is held in, never past it, and only
                 // where it is shown: its measure never sets the column's width.
-                let held = !self.given.0 && self.held(props, &Env::of(ui));
-                let room = if held { room.min(crate::layout::flow_room(ui).x) } else { room };
+                let held = !self.given.0 && self.held(props, place);
+                let room = if held { room.min(crate::layout::flow_room(ui, place).x) } else { room };
                 // Given the height of the row line it sits on, it fills that line (`given_axes`).
                 let height = if self.given.1 {
-                    crate::layout::fill_size(ui, id, craft_behavior::Axis::Y, size.y, crate::layout::flow_room(ui).y, true)
+                    crate::layout::fill_size(ui, place, id, craft_behavior::Axis::Y, size.y, crate::layout::flow_room(ui, place).y, true)
                 } else {
                     size.y
                 };
-                Vec2::new(crate::layout::fill_size(ui, id, craft_behavior::Axis::X, size.x, room, self.given.0 || held), height)
+                Vec2::new(crate::layout::fill_size(ui, place, id, craft_behavior::Axis::X, size.x, room, self.given.0 || held), height)
             }
             // Its content's width, and the height as `Fill` takes it.
             Sizing::FillHeight => {
-                let room = crate::layout::flow_room(ui);
-                Vec2::new(size.x, crate::layout::fill_size(ui, id, craft_behavior::Axis::Y, size.y, room.y, self.given.1))
+                let room = crate::layout::flow_room(ui, place);
+                Vec2::new(size.x, crate::layout::fill_size(ui, place, id, craft_behavior::Axis::Y, size.y, room.y, self.given.1))
             }
             Sizing::Content => size,
         }
@@ -523,7 +522,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                             .vertical(vertical)
                             .horizontal(horizontal)
                             .scrolls(true)
-                            .gated(crate::runtime::env::Env::of(pcx.ui).wheel == crate::runtime::env::WheelScope::Gated)
+                            .gated(pcx.measure.scope.wheel == crate::runtime::env::WheelScope::Gated)
                             .notch(notch)
                             .room(WheelRoom::new(positive, negative)),
                     );
@@ -960,7 +959,8 @@ impl BodyHooks<'_> {
         let props = Arc::clone(&self.props);
         let ctx = at.ui.ctx();
         let pad = self.frame_size(&props, at.scx.tokens, top_band(&props, ctx, id, at.scx.tokens));
-        let record = |key: Id, took: Vec2| layout_memory::emit_record(ctx, key, layout_memory::Measured::new(self.room, took));
+        let room = self.keyed_room();
+        let record = |key: Id, took: Vec2| layout_memory::emit_record(ctx, key, layout_memory::Measured::new(room, took));
         record(id, self.body_size.unwrap_or(Vec2::ZERO));
         if let Some(first) = self.first_line {
             record(sub(id, "first"), Vec2::new(0.0, first));
@@ -1637,12 +1637,10 @@ impl BodyHooks<'_> {
         let (ctx, id) = (run.ctx, run.id);
         let ScrollRegion { ui: region_ui, installed, seen, max, shown, bar, lays_out, laid_for, .. } = region;
         Env::restore(ctx, installed);
-        if lays_out {
-            crate::contract::run::close_bar_line(ctx, id);
-        }
         let extent = region_ui.min_rect().size();
         if lays_out {
             let placed = crate::runtime::lazy::placed(ctx, id);
+            crate::contract::run::draw_bar_rules(&region_ui, &placed.line);
             let keeps = !self.scroll_bound && !self.follows_end;
             follow_anchor(ctx, (&placed, scroll, keeps), (extent, seen.size()), (&mut self.offset, self.offset_at_read), &mut self.anchor);
             aim_glide(&mut self.glide, placed.reveal, shown, (extent, seen.size()), scroll);
@@ -1697,7 +1695,15 @@ impl BodyHooks<'_> {
                 let left = if plan.rtl { body.max.x - size.x } else { body.min.x };
                 layout::report_bracket_control(ctx, row, Rect::from_min_size(egui::pos2(left, body.min.y), *size), plan.rtl);
             }
-            let label_extra = plan.label_extra;
+            // A label after the control counts the height it reaches below the body the control took, not below the
+            // row: a measuring run's row can be taller than its body, and a label that wraps there is taller than it.
+            let after = plan.label_rect.is_positive() && props.label.as_ref().is_some_and(|side| side.layout == label::FieldLayout::After);
+            let label_extra = if after {
+                let control = Rect::from_min_size(plan.body_rect.min, Vec2::new(plan.body_rect.width(), size.y));
+                label_extra_of(plan.regions.body, control, plan.label_rect, plan.rtl)
+            } else {
+                plan.label_extra
+            };
             // A body beside its label in a content-sized column of rows reports how far it reaches past the label
             // column, so that column's container measures its rows at the widest label.
             let beside = |side: &&label::SideLabel| side.layout != label::FieldLayout::After && label_extra.x > 0.0 && label_extra.y <= 0.0;
@@ -1892,7 +1898,7 @@ impl BodyHooks<'_> {
             _ => false,
         };
         if !flows && at.ui.is_sizing_pass() {
-            return Err(self.extent(comp, at.ui, at.at, cx.core.id, at.scx));
+            return Err(self.extent(comp, at.ui, at.place, at.at, cx.core.id, at.scx));
         }
         let id = cx.core.id;
         let open = if self.open_given { self.open } else { open_now(comp, &mut *cx.core.memory, id, props) };
@@ -1925,8 +1931,9 @@ impl BodyHooks<'_> {
         self.least_width = least_of(&at.env.tokens, props.least_width);
         self.room = match at.width {
             Some(width) => Vec2::new(width, props.room_height.unwrap_or(f32::INFINITY)),
-            None => self.mount_room(&props, at.ui, id, at.at, at.scx.tokens),
+            None => self.mount_room(&props, (at.ui, at.place), id, at.at, at.scx.tokens),
         };
+        self.view_room = crate::layout::view_room(at.ui, at.place, craft_behavior::Axis::X).filter(|_| self.room.x.is_infinite());
         self.given = self.given_axes(&props, at.env, at.at);
         self.given.1 |= self.given_room(&props, at.env, at.at, at.ui.ctx(), id);
         self.fixed_height = self.fixed_height(&props, at.at);
@@ -1937,27 +1944,28 @@ impl BodyHooks<'_> {
         if let Some(ColumnSweep::Column(_, width)) = at.env.column.filter(|_| self.across && at.width.is_none()) {
             self.room.x = width;
         }
-        self.in_column = label::in_column(at.ui);
+        self.in_column = label::in_column(at.ui, at.place);
         self.egui_cell = at.env.egui_cell;
         // A body that fills the main axis of the body it sits in is measured and shown at its share of it. The first
         // sweep of that body's measuring run only counts it: its contents run in the second sweep, at the share.
         let (x, y) = (craft_behavior::Axis::X, craft_behavior::Axis::Y);
         // Along an axis the flow does not bound it fills nothing (`sized`): it measures its content there. In a `Stack`
         // body that scrolls along y it shares what the view shows.
-        let bounded = crate::layout::flow_room(at.ui);
-        let scrolled_y = !bounded.y.is_finite() && crate::layout::shares_y(at.ui) && crate::layout::view_room(at.ui, y).is_some();
+        let bounded = crate::layout::flow_room(at.ui, at.place);
+        let scrolled_y = !bounded.y.is_finite() && crate::layout::shares_y(at.place) && crate::layout::view_room(at.ui, at.place, y).is_some();
         let (fills_x, fills_y) = (self.given.0 && bounded.x.is_finite(), self.given.1 && (bounded.y.is_finite() || scrolled_y));
         if flows
             && at.ui.is_sizing_pass()
-            && ((fills_x && crate::layout::counting_fills(at.ui, x)) || (fills_y && crate::layout::counting_fills(at.ui, y)))
+            && ((fills_x && crate::layout::counting_fills(at.ui.ctx(), at.place, x))
+                || (fills_y && crate::layout::counting_fills(at.ui.ctx(), at.place, y)))
         {
             return Err(Vec2::ZERO);
         }
-        if let Some(share) = crate::layout::fill_share(at.ui, x).filter(|_| flows && self.given.0) {
+        if let Some(share) = crate::layout::fill_share(at.place, x).filter(|_| flows && self.given.0) {
             self.room.x = share;
         }
         let mut scrolled_share = false;
-        if let Some(share) = crate::layout::fill_share(at.ui, y).filter(|_| flows && self.given.1) {
+        if let Some(share) = crate::layout::fill_share(at.place, y).filter(|_| flows && self.given.1) {
             self.room.y = share;
             scrolled_share = scrolled_y;
         }

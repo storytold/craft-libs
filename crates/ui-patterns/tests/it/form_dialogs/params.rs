@@ -77,6 +77,28 @@ fn rows(params: Vec<Param>, values: &Rc<RefCell<DialogFields>>) -> Fixture {
     fixture
 }
 
+#[trial]
+fn a_hidden_caption_keeps_the_controls_name() {
+    let lengths = craft_ui::runtime::env::LengthUnits::new(UnitKind::Points, UnitKind::Points, 72.0);
+    let fixture = rows(
+        vec![
+            Param::number("width", "Width", 100.0, 1.0, 2).length(lengths).hide_caption(),
+            Param::new("range", "Range", ParamKind::text("1-3")).hide_caption(),
+            Param::new("height", "Height", ParamKind::int(None, None, 100)),
+            Param::new("amount", "Amount", ParamKind::range(0.0, 10.0, 5.0, SliderScale::Linear)).hide_caption().resettable(),
+        ],
+        &Rc::new(RefCell::new(DialogFields::new())),
+    );
+    let tree = fixture.tree();
+    assert!(fixture.by_role(Role::SPIN_BUTTON).iter().any(|target| tree.name_of(target.node) == Some("Width")));
+    assert!(fixture.by_role(Role::TEXT_INPUT).iter().any(|target| tree.name_of(target.node) == Some("Range")));
+    let texts = fixture.texts();
+    let paints = |caption: &str| texts.iter().any(|run| run.text.trim_end_matches(':') == caption);
+    assert!(paints("Height"), "ordinary rows still paint their caption");
+    assert!(paints("Amount"), "resettable rows keep the caption with the reset dot");
+    assert!(!paints("Width") && !paints("Range"), "hidden captions use no paint");
+}
+
 /// The opt-in range keeps its numeric value and only opens its slider from the field's arrow.
 #[trial]
 fn a_popup_slider_opens_from_a_typed_range_row() {
@@ -196,6 +218,38 @@ fn rows_follow_their_predicates_and_carry_their_tooltip() {
     fixture.settle();
     let detail = fixture.by_label("Detail").expect("the detail row");
     assert!(fixture.tree().is_disabled_key(detail.node), "disabled for the third value");
+}
+
+#[trial]
+fn a_row_checks_all_its_enable_conditions_on_screen_and_in_automation() {
+    let params = vec![
+        Param::new("hyphenate", "Hyphenation", ParamKind::bool(false)),
+        Param::new("zone", "Hyphenation Zone", ParamKind::int(Some(0), None, 0))
+            .enabled_when("hyphenate", true)
+            .and_enabled_when_in("composer", ["singleLine", "standardSingleLine"]),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(params.clone(), &values);
+    for (hyphenate, composer, enabled) in [
+        (true, None, false),
+        (false, Some("singleLine"), false),
+        (true, Some("everyLine"), false),
+        (true, Some("singleLine"), true),
+        (true, Some("standardSingleLine"), true),
+    ] {
+        {
+            let mut fields = values.borrow_mut();
+            fields.set("hyphenate", hyphenate);
+            if let Some(composer) = composer {
+                fields.set("composer", composer);
+            }
+        }
+        fixture.settle();
+        let zone = fixture.by_label("Hyphenation Zone").expect("the row stays visible");
+        assert_eq!(!fixture.tree().is_disabled_key(zone.node), enabled, "{hyphenate}, {composer:?}");
+        let mut fields = values.borrow().clone();
+        assert_eq!(set_param_field(&params, &mut fields, "zone", json!(8)).is_ok(), enabled, "{hyphenate}, {composer:?}");
+    }
 }
 
 // A row with two `visible_when` conditions is there only while both hold: the second call adds a condition, not
@@ -925,6 +979,66 @@ fn parameter_dialogs_15539_show_declared_units_and_keep_parsing() {
     }
 }
 
+/// Unit text shows after the number of number, int, range and popup range rows, in place of the symbol of a row's unit
+/// kind when it has one, and the kind still reads typed text; a row in milliseconds shows `ms` and reads `250 ms`.
+#[trial]
+fn rows_show_unit_text_and_milliseconds() {
+    let params = vec![
+        Param::number("bitrate", "Bitrate", 6000.0, 50.0, 0).unit_label("kbps"),
+        Param::new("keyframes", "Keyframe interval", ParamKind::int(Some(1), Some(20), 2)).unit_label("s"),
+        Param::new("offset", "Sync offset", ParamKind::number(Some(0.0), Some(20_000.0), 0.0, 1.0, 0)).unit(UnitKind::Milliseconds),
+        Param::new("delay", "Delay", ParamKind::number(Some(0.0), Some(1000.0), 0.0, 1.0, 0)).unit(UnitKind::Milliseconds).unit_label("msec"),
+        Param::new("buffer", "Buffer", ParamKind::range(1.0, 512.0, 64.0, SliderScale::Linear)).unit_label("MiB"),
+        Param::new("size", "Size", ParamKind::range(1.0, 100.0, 10.0, SliderScale::Linear)).popup_slider().unit_label("GiB"),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = ParamRows::new("Form", &params, Bind::bound(&mut *shown.borrow_mut())).show(ui);
+    });
+    fixture.room(Vec2::new(1280.0, 800.0)).settle();
+    for unit in ["kbps", "s", "ms", "msec", "MiB", "GiB"] {
+        let painted = fixture.texts().iter().filter(|text| text.text == unit && !text.elided && text.clip.contains_rect(text.rect)).count();
+        assert_eq!(painted, 1, "one visible {unit}");
+    }
+    for (label, typed) in [("Bitrate", "8000"), ("Sync offset", "250 ms"), ("Delay", "120ms")] {
+        let field = fixture.by_label(label).expect("the number field");
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(typed).key(Key::Tab, Modifiers::NONE).settle();
+    }
+    let held = values.borrow();
+    assert_eq!(held.number("bitrate"), Some(8000.0));
+    assert_eq!(held.number("offset"), Some(250.0), "the milliseconds row reads its spelling");
+    assert_eq!(held.number("delay"), Some(120.0), "a row with unit text still reads its kind's spelling");
+}
+
+#[trial]
+fn length_rows_show_custom_unit_text_without_changing_their_readers() {
+    let lengths = craft_ui::runtime::env::LengthUnits::new(UnitKind::Points, UnitKind::Points, 72.0);
+    let doubled = craft_behavior::NumberCodec::new(craft_behavior::Reader::new().bare(2.0), 2);
+    let params = vec![
+        Param::number("plain", "Plain", 0.0, 1.0, 2).length(lengths).unit_label("length label"),
+        Param::number("coded", "Coded", 0.0, 1.0, 2).length(lengths).codec(doubled).unit_label("codec label"),
+        Param::number("hidden", "Hidden unit", 0.0, 1.0, 2).length(lengths).unit_label(""),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(params, &values);
+    fixture.room(Vec2::new(1280.0, 800.0)).settle();
+    for unit in ["length label", "codec label"] {
+        assert!(fixture.texts().iter().any(|text| text.text == unit && !text.elided && text.clip.contains_rect(text.rect)), "{unit}");
+    }
+    assert!(!fixture.texts().iter().any(|text| text.text == "pt" && !text.elided));
+    for (label, typed) in [("Plain", "3pt"), ("Coded", "3"), ("Hidden unit", "3pt")] {
+        let field = fixture.by_label(label).expect("the length row");
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(typed).key(Key::Enter, Modifiers::NONE).settle();
+    }
+    let (plain, coded) = (values.borrow().number("plain"), values.borrow().number("coded"));
+    assert_eq!(plain, Some(3.0));
+    assert_eq!(values.borrow().number("hidden"), plain);
+    assert!(plain.zip(coded).is_some_and(|(plain, coded)| coded == 2.0 * plain), "{plain:?}, {coded:?}");
+}
+
 /// A count per inch shows `/in` after its number, apart in the field or in the number's own run in the inline look, and
 /// a typed number or an edit of that run is read back as the count.
 #[trial]
@@ -1176,6 +1290,29 @@ fn a_group_row_under_a_heading_of_its_name_shows_the_name_once() {
     let names = texts.iter().filter(|(text, _)| text.trim() == "Pages").count();
     assert_eq!(names, 1, "the heading alone names the group: {texts:?}");
     assert!(text_at(&texts, "The options").is_some(), "the group shows: {texts:?}");
+}
+
+#[trial]
+fn hiding_side_captions_keeps_the_heading_above_a_custom_row() {
+    let params = vec![Param::custom("pages", "Pages", |ui, _, _| ui.label("The options")).hide_caption()];
+    let texts = inline_texts(params);
+    assert!(text_at(&texts, "Pages").unwrap().bottom() <= text_at(&texts, "The options").unwrap().top());
+}
+
+#[trial]
+fn a_hidden_caption_does_not_indent_an_inline_field_without_a_shared_column() {
+    let params = [
+        Param::new("first", "A long visible caption", ParamKind::text("first")),
+        Param::new("second", "Second", ParamKind::text("second")).hide_caption(),
+    ];
+    let mut values = DialogFields::new();
+    let mut fixture = Fixture::new(move |ui| {
+        ParamRows::new("Form", &params, Bind::bound(&mut values)).labels(LabelScheme::Inline).show(ui);
+    });
+    fixture.settle();
+    let name = fixture.texts().iter().find(|text| text.text.contains("A long visible caption")).unwrap();
+    let hidden = fixture.by_role(Role::TEXT_INPUT).into_iter().find(|target| fixture.tree().name_of(target.node) == Some("Second")).unwrap();
+    assert!((name.rect.left() - hidden.rect.left()).abs() <= 1.0, "the hidden row starts at the leading edge: {hidden:?}");
 }
 
 /// A text row with `select_on_focus` selects its whole text when it takes the focus, so typing replaces it (PdfCraft's

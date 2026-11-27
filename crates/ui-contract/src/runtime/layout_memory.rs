@@ -100,6 +100,8 @@ enum Recorded {
     /// The width a row's shrink step gave a unit, as a measure, and whether it narrowed the unit or dropped it.
     Shrink(Measured, ShrinkGiven),
     Text(Option<Arc<str>>),
+    /// A width a run measured that a step outside the run sizes by (`emit_width`).
+    Width(f32),
 }
 
 /// One thing a measuring run handed forward, in the order it did.
@@ -244,6 +246,9 @@ pub(crate) struct Entries {
     replaying: Vec<(Arc<Transcript>, Id, usize)>,
     /// The drafts open, innermost last.
     drafts: Vec<Draft>,
+    /// The texts and widths handed forward in each memoized view's sizing run open (`handing_forward`), innermost
+    /// last.
+    handing: Vec<Vec<(Id, Recorded)>>,
     /// This pass asked for the frame's discard pass; the end hook requests it.
     ask: bool,
     /// How many times a discard pass was asked, so a record open around the asking run notes it (`with`).
@@ -536,6 +541,61 @@ pub fn text(ctx: &Context, id: Id) -> Option<Arc<str>> {
     })
 }
 
+/// Hands forward a width a run measured under `id` that a step outside the content that measured it sizes by, as
+/// [`emit_text`] hands forward a text (the room a container's header parts leave for items its host adds, for
+/// example): it serves the rest of this pass, and a later pass that takes the kept measurement of a body it ran in
+/// gets it with that measurement. A real run emits it too: a width that differs by more than the measuring tolerance
+/// from the one a kept transcript gave the pass shows that transcript changed.
+///
+/// A memoized view that replays emits it again.
+pub fn emit_width(ctx: &Context, id: Id, width: f32) {
+    emit(ctx, id, Recorded::Width(width));
+    super::replay::journal(ctx, || (id, width), |ctx, (id, width)| emit(ctx, *id, Recorded::Width(*width)));
+}
+
+/// The width a run of this pass handed forward under `id` ([`emit_width`]), or a kept transcript gave this pass.
+pub fn width(ctx: &Context, id: Id) -> Option<f32> {
+    let moment = Moment::of(ctx);
+    let pass = ctx.cumulative_pass_nr();
+    with(ctx, &moment, |memory| match memory.measured.get(&id).filter(|found| found.pass == pass) {
+        Some(Found { recorded: Recorded::Width(width), .. }) => Some(*width),
+        _ => None,
+    })
+}
+
+/// The texts and widths a memoized view's sizing run handed forward ([`emit_text`], [`emit_width`]), in the order it
+/// did: content outside the view reads them in the pass, so a sizing run that takes the view's kept measure in place
+/// of running hands them forward again ([`hand_forward_again`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Handed(Arc<[(Id, Recorded)]>);
+
+/// Runs `f`, a memoized view's sizing run, and returns what it handed forward, the hand-forwards of the views it shows
+/// included.
+pub(crate) fn handing_forward<R>(ctx: &Context, f: impl FnOnce() -> R) -> (R, Handed) {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| memory.handing.push(Vec::new()));
+    let out = f();
+    let handed = with(ctx, &moment, |memory| {
+        let handed = memory.handing.pop().unwrap_or_default();
+        if let Some(outer) = memory.handing.last_mut() {
+            outer.extend(handed.iter().cloned());
+        }
+        handed
+    });
+    (out, Handed(handed.into()))
+}
+
+/// Hands forward again what a memoized view's sizing run handed forward (`handing_forward`), as that run did.
+pub(crate) fn hand_forward_again(ctx: &Context, handed: &Handed) {
+    for (id, recorded) in handed.0.iter() {
+        match recorded {
+            Recorded::Text(text) => emit_text(ctx, *id, text.as_deref()),
+            Recorded::Width(width) => emit_width(ctx, *id, *width),
+            Recorded::Measured(_) | Recorded::Shrink(..) => {}
+        }
+    }
+}
+
 fn emit(ctx: &Context, id: Id, mut recorded: Recorded) {
     let moment = Moment::of(ctx);
     let pass = ctx.cumulative_pass_nr();
@@ -552,6 +612,9 @@ fn emit(ctx: &Context, id: Id, mut recorded: Recorded) {
                     Open::Boundary | Open::Probe | Open::Call { .. } => None,
                 })
                 .unwrap_or(0);
+        }
+        if let (Recorded::Text(_) | Recorded::Width(_), Some(handing)) = (&recorded, memory.handing.last_mut()) {
+            handing.push((id, recorded.clone()));
         }
         let last = memory.measured.insert(id, Found { pass, recorded: recorded.clone(), kept: None });
         // A draft finds a change when it is kept, against the record it replaced.
@@ -576,6 +639,7 @@ fn kept_differs(last: &Found, now: &Recorded, pass: u64, tolerance: f32) -> Opti
     let differs = match (was, now) {
         (Recorded::Measured(was), Recorded::Measured(now)) => measures(was, now, false),
         (Recorded::Shrink(was, was_given), Recorded::Shrink(now, now_given)) => measures(was, now, was_given != now_given),
+        (Recorded::Width(was), Recorded::Width(now)) => (was - now).abs() > tolerance,
         (was, now) => was != now,
     };
     if *at != pass || !differs {

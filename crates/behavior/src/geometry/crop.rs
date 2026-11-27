@@ -544,7 +544,7 @@ const INV_PHI: f64 = 0.618_033_988_749_894_9;
 const PHI: f64 = 1.0 + INV_PHI;
 
 /// The composition guide drawn inside a crop frame, in Photoshop's menu order.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum CropGuide {
@@ -727,7 +727,7 @@ fn golden_spiral() -> Vec<[f64; 2]> {
 }
 
 /// When the guide shows.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum GuideShow {

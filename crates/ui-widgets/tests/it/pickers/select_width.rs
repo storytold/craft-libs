@@ -25,6 +25,27 @@ fn a_content_sized_select_fits_its_widest_entry() {
     assert_eq!(shown, Some(false), "the content-sized select shows its widest entry whole inside its box");
 }
 
+#[trial]
+fn a_content_sized_select_ignores_a_placeholder_replaced_by_an_unlisted_label() {
+    let widths = Rc::new(Cell::new([0.0; 2]));
+    let seen = widths.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let entries = [Entry::new(1u8, "Uniform")];
+        let a = Select::new("First", Bind::given(2u8), &entries).unlisted_label("Custom").sizing(Sizing::Content).show(ui).response.rect;
+        let b = Select::new("Second", Bind::given(2u8), &entries)
+            .unlisted_label("Custom")
+            .placeholder("An unusually long placeholder which no current state can display")
+            .sizing(Sizing::Content)
+            .show(ui)
+            .response
+            .rect;
+        seen.set([a.width(), b.width()]);
+    });
+    fixture.settle();
+    let [without, with] = widths.get();
+    assert!((without - with).abs() < 0.5, "the unseen placeholder does not change the field width: {without} vs {with}");
+}
+
 /// The width of a quiet select showing entry `held` of a short and a long entry.
 fn quiet_width(held: u8) -> f32 {
     let width = Rc::new(Cell::new(0.0));

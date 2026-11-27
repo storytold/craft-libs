@@ -112,7 +112,11 @@ pub struct Scoped {
     #[doc(hidden)]
     pub key: EnvKey,
     /// The key of what a memoized view shown in the scope inherits beyond `key` (`scope_key`), once a view asked.
-    scope_key: std::sync::OnceLock<u128>,
+    scope_key: std::sync::OnceLock<(u128, bool)>,
+    /// The key of the memoized view whose content the scope runs in, when that key follows every input of the view
+    /// (`MemoKey::follows`): its content version. A body inside measures under it (`EnvFacts`), so a run of the view
+    /// with other inputs measures afresh instead of taking a transcript its last inputs left.
+    pub(crate) view_version: Option<u128>,
     /// Ambient control size; the root default is `Md`.
     pub size: ControlSize,
     /// How the icon-only buttons of the scope show their glyph; the root default and a layer's is `Control`.
@@ -566,8 +570,9 @@ impl Scoped {
     /// the flow facts, which its place compares): the scope's state (enabled, read-only, size, glyphs, ink, surface,
     /// wheel, directions), the containers around it (arena, roving group, transform, collection item and row, inside
     /// label, footer slot, line length, scroll owner), the command chain, motion, the host's formats and date, and every
-    /// app value. Computed once per scope, on the first view that asks; the bytes it fed are counted then.
-    pub(crate) fn scope_key(&self) -> u128 {
+    /// app value. Computed once per scope, on the first view that asks; the bytes it fed are counted then. The flag says
+    /// whether the key follows every input it holds (`MemoKey::follows`).
+    pub(crate) fn scope_key(&self) -> (u128, bool) {
         *self.scope_key.get_or_init(|| {
             use crate::contract::{MemoKey, MemoProps as _};
             let mut key = MemoKey::of_view(&self.ctx);
@@ -597,7 +602,7 @@ impl Scoped {
             crate::runtime::measure::count_memo_key_bytes(&self.ctx, key.bytes() + value_bytes);
             #[cfg(not(feature = "testing"))]
             let _ = value_bytes;
-            key.finish()
+            (key.finish(), key.follows())
         })
     }
 
@@ -728,6 +733,7 @@ impl Env {
                 }),
                 key,
                 scope_key: std::sync::OnceLock::new(),
+                view_version: None,
                 ink: Ink::default(),
                 surface: SurfaceKind::Background,
                 size: ControlSize::Md,
@@ -791,6 +797,8 @@ impl Env {
     ///
     /// While apps still use `add_enabled_ui`, it also ANDs `ui.is_enabled()`, outside sizing passes.
     pub fn of(ui: &Ui) -> Env {
+        #[cfg(feature = "testing")]
+        WALKS.with(|walks| walks.set(walks.get() + 1));
         let ctx = ui.ctx();
         let viewport = pass::current_viewport(ctx);
         // The root env stands for an entry above the whole stack.
@@ -960,6 +968,18 @@ impl Env {
     pub(crate) fn set_root(ctx: &Context, viewport: ViewportId, env: Env) {
         PerViewport::<ViewportEnvs>::with(ctx, viewport, |envs| envs.root = Some(env));
     }
+}
+
+#[cfg(feature = "testing")]
+thread_local! {
+    static WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread walked a `Ui` stack for its env (`Env::of`).
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn env_walks() -> u64 {
+    WALKS.with(std::cell::Cell::get)
 }
 
 /// One viewport's env entries by the `Ui` they are installed for, and its root env. The lock is held only to
