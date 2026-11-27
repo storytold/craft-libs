@@ -773,8 +773,13 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         self.leading = Self::before_text(cx, self.step_arrows);
         self.trailing = self.after_text(cx, &chevrons);
         let names = self.names(|row| cx.env.resolve(&row.label().clone()));
+        // A derived value is measured as it shows at rest, in parentheses with its unit, so its reading takes the
+        // padding it needs as a longer number does.
         self.value_width = cx.value().map_or(0.0, |value| {
-            let text = self.ruled(&cx.env, false, names).format(value);
+            let mut text = self.ruled(&cx.env, false, names).format(value);
+            if self.derives(Some(value)) {
+                text = self.derived_text(&text, &cx.env.units());
+            }
             cx.field_text(&TextRun::new(&text).role(self.value_role())).x
         });
         let placed = self.laid_out(cx.style, cx.content_rect, rtl);
