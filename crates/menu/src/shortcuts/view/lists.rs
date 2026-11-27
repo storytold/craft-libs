@@ -24,6 +24,8 @@ use crate::shortcuts::state::{DialogState, Env};
 const LISTS_SHARE: f32 = 0.5;
 /// The detail column's share of the width beside the lists.
 const DETAIL_SHARE: f32 = 0.5;
+/// The most Categories rows shown before the list scrolls.
+const CATEGORY_ROWS: u16 = 6;
 const PANES: [ColumnWidth; 2] = [ColumnWidth::fill(LISTS_SHARE), ColumnWidth::fill(DETAIL_SHARE)];
 
 /// One frame of the command-lists body: a search field, the Categories list beside the Commands
@@ -62,6 +64,8 @@ fn categories(ui: &mut Ui, env: &Env<'_>, state: &mut DialogState) {
     let mut selection = Selection::new(at.into_iter().collect(), at, at);
     let out = List::<usize>::new(words.categories.clone())
         .id_salt("categories")
+        // A short list, so the Commands list under it keeps room in a dialog of ordinary height.
+        .max_rows(CATEGORY_ROWS)
         .select(SelectMode::Single)
         .selection(Bind::bound(&mut selection))
         .show_items(ui, &Titles(&labels), &mut |key, _| ListRow::new(labels[*key].clone()));

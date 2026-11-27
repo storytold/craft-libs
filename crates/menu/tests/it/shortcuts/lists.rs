@@ -1,7 +1,7 @@
 //! The Customize Keyboard layout: each change is applied at once and Escape closes without rolling back.
 
 use craft_keymap::{Binding, CommandRef, Platform};
-use craft_menu::shortcuts::{Layout, Outcome};
+use craft_menu::shortcuts::{Area, Layout, Outcome};
 use craft_ui::testing::trial;
 use egui::{Key, Modifiers};
 
@@ -58,4 +58,30 @@ fn command_lists_assign_remove_and_close_apply_each_change_at_once() {
     assert!(!rig.has_outcome(|o| matches!(o, Outcome::Cancel)), "there is no Cancel");
     assert_eq!(keys(&rig), left, "the keymap keeps the edits");
     assert!(rig.bindings("file.export").is_empty(), "the taken chord is not given back");
+}
+
+/// A long Categories list must not take the room the Commands list needs: in a dialog of ordinary height a command row
+/// still shows above the footer.
+#[trial]
+fn commands_keep_room_beside_a_long_categories_list() {
+    let rig = Rig::tuned(Platform::Mac, |options| {
+        options.layout = Layout::CommandLists;
+        options.own_areas = true;
+        options.size = Some(egui::vec2(640.0, 460.0));
+        options.areas = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"].map(|name| Area::new(name, name, |_| true)).to_vec();
+    });
+    let row = rig.find("Bring to Front").center();
+    let footer = rig.find("Reset All…").center();
+    assert!(row.y < footer.y, "the command row ({row:?}) sits above the footer ({footer:?})");
+    // The capped list scrolls: the arrow keys still reach its last entry.
+    let mut rig = rig;
+    rig.click("A");
+    for _ in 0..11 {
+        rig.press(Modifiers::NONE, Key::ArrowDown);
+    }
+    let area = {
+        let shared = rig.shared.borrow();
+        shared.state.snapshot(&shared.km).expect("the dialog has shown").area
+    };
+    assert_eq!(area, "L", "the last Categories entry is reachable");
 }
