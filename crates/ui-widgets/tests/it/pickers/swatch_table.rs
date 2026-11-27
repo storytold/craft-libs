@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use craft_behavior::Preview;
 use craft_theme::Srgba;
-use craft_ui::choice::{SwatchArrangement, SwatchTable};
+use craft_ui::choice::{SwatchArrangement, SwatchSpacing, SwatchTable};
 use craft_ui::runtime::env::Label;
 use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Fixture, trial};
@@ -122,4 +122,25 @@ fn the_cell_under_the_pointer_is_previewed_once_until_the_pointer_leaves() {
     fixture.frame(vec![moved(Pos2::new(cell.center().x, last.max.y + 40.0))]);
     fixture.settle();
     assert_eq!(reported(&log), vec![Preview::Ended], "leaving the cells ends the preview, once");
+}
+
+/// The gaps between the cells of a grid of six cells three to a row, sitting as `spacing` says: across a row, and down
+/// a column.
+fn gaps(spacing: SwatchSpacing) -> (f32, f32) {
+    let entries: Vec<(Label, Srgba)> = (0..6).map(|i| (Label::from(format!("Cell {i}")), Srgba::rgb(i as f32 / 6.0, 0.4, 0.6))).collect();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = SwatchTable::new("Colors", &entries).per_row(3).spacing(spacing).show_all(ui);
+    });
+    fixture.room(vec2(400.0, 300.0));
+    fixture.settle();
+    let cell = |i: usize| fixture.by_label(&format!("Cell {i}")).expect("every entry is a cell").rect;
+    (cell(1).left() - cell(0).right(), cell(3).top() - cell(0).bottom())
+}
+
+/// Cells in rows sit apart across a row, nearer than spaced cells, and their rows lie further apart than that.
+#[trial]
+fn rows_hold_cells_a_little_apart_and_the_rows_further_apart() {
+    let (touching, rows, spaced) = (gaps(SwatchSpacing::Touching), gaps(SwatchSpacing::Rows), gaps(SwatchSpacing::Spaced));
+    assert!(rows.0 > touching.0 && rows.0 < spaced.0, "across a row: {touching:?} < {rows:?} < {spaced:?}");
+    assert!(rows.1 > rows.0, "the rows lie further apart than the cells in a row: {rows:?}");
 }

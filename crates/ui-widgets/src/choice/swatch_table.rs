@@ -67,6 +67,9 @@ pub enum SwatchSpacing {
     /// The cells touch.
     #[default]
     Touching,
+    /// The theme's tight gap (`space.gap.tight`) lies between the cells across a row, and each row takes a menu row's
+    /// height (`size.row.menu`) and a tight gap: a drop-down's grid of colours, row by row like the menu around it.
+    Rows,
     /// The theme's item gap (`space.gap.item`) lies between the cells.
     Spaced,
 }
@@ -430,7 +433,7 @@ pub struct SwatchTable<'a> {
     /// Whether the cells are wells at the control height, as a palette's swatches are, instead of small touching cells.
     #[prop]
     wells: bool,
-    /// How the cells sit: touching, or the theme's item gap apart.
+    /// How the cells sit: touching, in rows or spaced apart.
     #[prop]
     spacing: SwatchSpacing,
     /// The marks of each cell, by index, given to the cell's `Swatch::marks`.
@@ -504,6 +507,7 @@ impl<'a> SwatchTable<'a> {
     /// The gap between two cells.
     fn gap(&self, cx: &StyleCx<'_>) -> f32 {
         match self.spacing {
+            SwatchSpacing::Rows => cx.tokens.space.gap.tight,
             SwatchSpacing::Spaced => cx.tokens.space.gap.item,
             _ => 0.0,
         }
@@ -512,7 +516,7 @@ impl<'a> SwatchTable<'a> {
     /// The layout of the cells of `source` in `width`.
     fn tiles(&self, source: &dyn ItemSource<usize>, width: f32, cx: &StyleCx<'_>) -> TileLayout {
         let (cell, gap) = (self.cell(cx), self.gap(cx));
-        match self.per_row {
+        let tiles = match self.per_row {
             Some(columns) => {
                 let columns = columns.max(1);
                 let spans = self.span && width.is_finite() && width > 0.0;
@@ -520,6 +524,10 @@ impl<'a> SwatchTable<'a> {
                 TileLayout::new(source, width, tile, gap).in_columns(columns)
             }
             None => TileLayout::new(source, width, Vec2::splat(cell), gap),
+        };
+        match self.spacing {
+            SwatchSpacing::Rows => tiles.rows_apart((cx.tokens.size.row.menu - cell).max(0.0) + gap),
+            _ => tiles,
         }
     }
 
