@@ -1,0 +1,23 @@
+[package]
+name = "craft-collab"
+description = "The Craft apps' co-editing wire contract: payload limits and base64, end-to-end encryption bound to a room and a method, and the awareness encoding of who is present"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+base64 = "0.23"
+serde_json = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+getrandom = "0.4"
+
+# The browser's crypto.getRandomValues.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
