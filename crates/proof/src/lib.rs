@@ -494,6 +494,7 @@ fn in_dialect(s: &str, word: &str, lang: ProofLang) -> String {
 /// Unicode's word boundaries (UAX #29): Indic text uses one to choose how a conjunct is drawn
 /// (`क्` U+200D `ष`, `પુસ્` U+200D `તક`). A joiner at a word's edge is not part of it.
 pub fn words(text: &str) -> Vec<(usize, usize)> {
+    use indic::is_joiner;
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
     let is_core = |c: char| c.is_alphanumeric() || unicode_normalization::char::is_combining_mark(c);
@@ -534,12 +535,6 @@ pub fn words(text: &str) -> Vec<(usize, usize)> {
             (a + lead < b - trail).then_some((a + lead, b - trail))
         })
         .collect()
-}
-
-/// Is `c` a zero-width joiner or non-joiner (U+200D, U+200C)? It changes how letters are drawn,
-/// not which letters a word has.
-pub(crate) fn is_joiner(c: char) -> bool {
-    matches!(c, '\u{200C}' | '\u{200D}')
 }
 
 /// Spelling issues in a paragraph of English text (no suggestions; ask [`suggest`] on demand).

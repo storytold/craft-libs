@@ -52,7 +52,7 @@ pub(crate) fn is_correct(script: &Script, d: &AffixDict, word: &str, opts: &crat
 fn known(script: &Script, d: &AffixDict, w: &str) -> bool {
     let listed = |w: &str| d.check(w) || crate::in_user_dictionary(&w.to_lowercase());
     let spelled = |w: &str| listed(w) || script.variant.and_then(|v| v(w)).is_some_and(|v| listed(&v));
-    spelled(w) || (w.contains(crate::is_joiner) && spelled(&w.replace(crate::is_joiner, "")))
+    spelled(w) || (w.contains(crate::indic::is_joiner) && spelled(&w.replace(crate::indic::is_joiner, "")))
 }
 
 /// A language's script, messages and choices for [`check`].
@@ -94,7 +94,7 @@ fn repeated_words(text: &str, ws: &[(usize, usize)], rules: &Rules, v: &mut Vec<
         let (Some(w0), Some(w1), Some(gap)) = (text.get(*a0..*b0), text.get(*a1..*b1), text.get(*b0..*a1)) else { continue };
         if !gap.is_empty()
             && gap.chars().all(char::is_whitespace)
-            && w0.chars().all(|c| c.is_alphabetic() || (rules.script.is_letter)(c) || crate::is_joiner(c))
+            && w0.chars().all(|c| c.is_alphabetic() || (rules.script.is_letter)(c) || crate::indic::is_joiner(c))
             && w0 == w1
             && (rules.flag_repeat)(w0)
         {
