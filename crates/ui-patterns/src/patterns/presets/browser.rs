@@ -324,6 +324,10 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 's
     /// The host's controls at the reading end of the toolbar.
     #[prop(func = "FnMut(&mut Ui)")]
     tools: Option<BrowserTools<'a>>,
+    /// Places the host's tools at the reading start, with the search and view controls at the end.
+    /// Off by default, preserving the existing toolbar order.
+    #[prop]
+    tools_at_start: bool,
     /// What a secondary click or the context-menu key opens: the standard row menu, the host's `row_items` alone, or
     /// nothing.
     #[prop]
@@ -398,6 +402,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser
             toolbar: false,
             search: true,
             tools: None,
+            tools_at_start: false,
             row_menu: PresetRowMenu::Standard,
             row_items: None,
             drags: false,
@@ -725,6 +730,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser<'_,
             toolbar,
             search,
             mut tools,
+            tools_at_start,
             row_menu,
             row_items,
             drags,
@@ -775,11 +781,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser<'_,
                     Entry::new(PresetView::List, words.list_view.clone()).icon(IconId::new("list")),
                 ];
                 let locked = view_lock.is_some();
-                let mut bar = Bar::new(Label::Empty, BarKind::Tool);
-                if let Some(tools) = tools.as_mut() {
-                    bar = bar.trailing(|ui, _| tools.show(ui));
-                }
-                let _ = bar.show(ui, |ui, _| {
+                let bar = Bar::new(Label::Empty, BarKind::Tool);
+                let mut controls = |ui: &mut Ui| {
                     if search {
                         let field = TextField::search(words.search.clone(), Bind::bound(&mut local.filter)).placeholder(words.search.clone());
                         let field = field.drives(list_id);
@@ -789,7 +792,16 @@ impl<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser<'_,
                     if !locked {
                         Segmented::new(words.view.clone(), Bind::bound(&mut local.view), &modes).show(ui);
                     }
-                });
+                };
+                if let Some(tools) = tools.as_mut() {
+                    if tools_at_start {
+                        let _ = bar.trailing(|ui, _| controls(ui)).show(ui, |ui, _| tools.show(ui));
+                    } else {
+                        let _ = bar.trailing(|ui, _| tools.show(ui)).show(ui, |ui, _| controls(ui));
+                    }
+                } else {
+                    let _ = bar.show(ui, |ui, _| controls(ui));
+                }
             }
             // A hidden search field filters nothing: a search typed before hiding it would otherwise keep presets
             // out of the list with no field to show why.

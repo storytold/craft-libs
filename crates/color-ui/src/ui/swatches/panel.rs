@@ -89,6 +89,7 @@ pub struct SwatchesPanel<'a> {
     foreground: Srgba,
     thumb: Option<HostThumb<'a>>,
     tools: Option<ToolsFn<'a>>,
+    tools_at_start: bool,
     drop_zone: Option<DropZone>,
     footer: Option<Option<PresetFooterOptions<'a>>>,
     reveal: Option<SwatchKey>,
@@ -120,6 +121,7 @@ impl<'a> SwatchesPanel<'a> {
             foreground,
             thumb: None,
             tools: None,
+            tools_at_start: false,
             drop_zone: None,
             footer: None,
             reveal: None,
@@ -151,6 +153,12 @@ impl<'a> SwatchesPanel<'a> {
     /// The host's tools, shown beside the browser's toolbar.
     pub fn tools(mut self, tools: impl FnMut(&mut Ui) + 'a) -> Self {
         self.tools = Some(Box::new(tools));
+        self
+    }
+
+    /// Places the host's tools before the browser controls in the toolbar. Off by default.
+    pub fn tools_at_start(mut self, at_start: bool) -> Self {
+        self.tools_at_start = at_start;
         self
     }
 
@@ -237,6 +245,7 @@ impl<'a> SwatchesPanel<'a> {
             foreground,
             thumb,
             mut tools,
+            tools_at_start,
             drop_zone,
             footer,
             reveal,
@@ -278,6 +287,7 @@ impl<'a> SwatchesPanel<'a> {
                 let mut browser = PresetBrowser::new(words.title.clone(), Bind::bound(&mut st.browser), &source)
                     .thumb_range(SWATCH_ZOOM)
                     .toolbar(true)
+                    .tools_at_start(tools_at_start)
                     .search(search)
                     .select(select)
                     .reorder(PresetReorder::items_and_groups())
