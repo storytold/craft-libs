@@ -875,6 +875,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_hop_periodic_startup_vowel_keeps_its_level_at_16_khz() {
+        let sr = 16_000.0;
+        let held = sr as usize * 3;
+        let mut speech = vec![0.0f32; held + sr as usize / 2];
+        for (i, v) in speech[..held].iter_mut().enumerate() {
+            let t = std::f64::consts::TAU * 250.0 * i as f64 / sr as f64;
+            *v = (1..8).map(|h| (0.15 * (h as f64 * t).sin() / h as f64) as f32).sum();
+        }
+        let mut s = NoiseSuppression::new(sr, 1);
+        assert!(s.set_param("reduction", 24.0));
+        s.reset();
+        assert_eq!(s.hop, sr as usize / 250);
+        let lat = s.latency();
+        let mut y = speech.clone();
+        s.process(&mut [&mut y]);
+        for range in [0..sr as usize * 2, sr as usize * 3 / 2..sr as usize * 2] {
+            let kept = db((energy(&y[range.start + lat..range.end + lat]) / energy(&speech[range.clone()])).sqrt());
+            assert!(kept.abs() < 3.0, "the 250 Hz startup vowel at 16 kHz changed by {kept:.2} dB over {range:?}");
+        }
+    }
+
     /// Steady noise whose spectrum falls with frequency (white noise through a one-pole low-pass
     /// at 500 Hz) is suppressed by at least 20 dB from 4 s on.
     #[test]
