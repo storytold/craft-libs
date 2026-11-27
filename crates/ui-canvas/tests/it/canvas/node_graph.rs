@@ -5,8 +5,8 @@ use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{CanvasView, Selection, ZoomFloor, ZoomScheme, keyed};
 use craft_ui::canvas::{Canvas, ViewCommands, ViewRequest, ViewTarget, canvas_space};
-use craft_ui::contract::{Bind, Props as _, ShowCollection as _, ShowContainer as _};
-use craft_ui::graph::{Node, NodeGraph, NodeId, NodeKind, PortDirection};
+use craft_ui::contract::{Bind, CollectionEvent, Props as _, ShowCollection as _, ShowContainer as _};
+use craft_ui::graph::{Node, NodeEvent, NodeGraph, NodeId, NodeKind, PortDirection, PortRef, Wire};
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::commands::{self, FireSource};
 use craft_ui::runtime::env::with_env;
@@ -143,6 +143,66 @@ fn a_node_graph_follows_the_canvas_view() {
         let port = fixture.by_label(&format!("{name} in")).expect("the node is built");
         assert!(CANVAS.contains(port.rect.center()), "{name}'s input port is on the canvas: {:?}", port.rect);
     }
+}
+
+/// What a graph in a canvas reported: the node clicks and the wires selected.
+struct Hosted {
+    fixture: Fixture,
+    clicked: Rc<Cell<usize>>,
+    wired: Rc<RefCell<Selection<u64>>>,
+}
+
+/// Two nodes joined by a wire in a graph in a canvas, as an app hosts one, settled with nothing pressed yet. The
+/// nodes lie far up and left of the document's origin, as a fitted graph of an app often does, so the graph's body
+/// layer shows far from its own origin.
+fn graph_in_canvas() -> Hosted {
+    let nodes = NODES.map(|node| node.translate(Vec2::new(-900.0, -700.0)));
+    let view = CanvasView::new(Rect::ZERO, Point::new(-700.0, -600.0), 1.0);
+    let clicked = Rc::new(Cell::new(0_usize));
+    let wired = Rc::new(RefCell::new(Selection::<u64>::default()));
+    let (seen, wire_selection) = (Rc::clone(&clicked), Rc::clone(&wired));
+    let mut fixture = Fixture::new(move |ui| {
+        in_region(ui, CANVAS, |ui| {
+            let mut given = view;
+            given.rect = ui.available_rect_before_wrap();
+            let kinds: Vec<&dyn NodeKind> = KINDS[..2].iter().map(|kind| kind as &dyn NodeKind).collect();
+            let ids: Vec<NodeId> = (0..2).map(NodeId::new).collect();
+            let source = keyed(&ids, |id| *id);
+            let wires = [Wire::new(1, PortRef::new(NodeId::new(0), 1), PortRef::new(NodeId::new(1), 0))];
+            let mut wire_selection = wire_selection.borrow_mut();
+            let extent = doc_rect(nodes[0]).union(doc_rect(nodes[1]));
+            Canvas::new("Graph").document(ViewTarget::unbounded(extent)).view(given).show(ui, |ui, body| {
+                let Some(space) = canvas_space(&body.env) else { return };
+                let mut graph = NodeGraph::new(&nodes[..2], &kinds, &wires).label("Nodes").wire_selection(Bind::bound(&mut *wire_selection));
+                if let Some(transform) = space.view.layer_transform() {
+                    graph = graph.zoom(transform);
+                }
+                let out = graph.show_items(ui, &source, &mut |id, _| Node::new(*id, kinds[id.0 as usize]));
+                let clicks = out.collection.events.iter().filter(|event| matches!(event, CollectionEvent::Item(_, NodeEvent::Clicked { .. })));
+                seen.set(seen.get() + clicks.count());
+            });
+        });
+    });
+    fixture.room(Vec2::new(640.0, 440.0));
+    fixture.settle();
+    Hosted { fixture, clicked, wired }
+}
+
+/// The very first press over a graph in a canvas reaches what lies under it: a wire is selected, and a node's port
+/// reports its click.
+#[trial]
+fn the_first_press_over_a_graph_in_a_canvas_reaches_it() {
+    let port = |fixture: &Fixture, name: &str| fixture.by_label(name).expect("the node is built").rect.center();
+    let mut hosted = graph_in_canvas();
+    // The wire runs from A's output to B's input.
+    let wire = port(&hosted.fixture, "A out").lerp(port(&hosted.fixture, "B in"), 0.5);
+    hosted.fixture.click_at(wire);
+    assert!(hosted.wired.borrow().contains(&1), "the first press over a wire selects it: {:?}", hosted.wired.borrow());
+
+    let mut hosted = graph_in_canvas();
+    let out = port(&hosted.fixture, "A out");
+    hosted.fixture.click_at(out);
+    assert!(hosted.clicked.get() > 0, "the first press over a port reaches its node");
 }
 
 /// The scheme of the unbounded canvas's env: 50 % to 200 %.

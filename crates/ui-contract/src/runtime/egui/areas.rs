@@ -197,7 +197,8 @@ pub(crate) fn show_body_layer<R>(ctx: &Context, body_layer: BodyLayer, body: imp
     let BodyLayer { parent, layer, transform, at, clip, forward } = body_layer;
     ctx.set_transform_layer(layer, transform);
     ctx.set_sublayer(parent, layer);
-    egui::Area::new(layer.id)
+    let shown = transform.inverse() * clip;
+    let inner = egui::Area::new(layer.id)
         .fade_in(false)
         .order(layer.order)
         .pivot(egui::Align2::LEFT_TOP)
@@ -211,11 +212,18 @@ pub(crate) fn show_body_layer<R>(ctx: &Context, body_layer: BodyLayer, body: imp
                 super::access::hide(ctx, id);
                 crate::runtime::pointer::record_body_layer(ctx, layer, parent, forward.root);
             }
-            ui.set_clip_rect(transform.inverse() * clip);
-            ui.expand_to_include_rect(transform.inverse() * clip);
+            ui.set_clip_rect(shown);
             body(ui)
         })
-        .inner
+        .inner;
+    // egui finds a layer under the pointer by its area's rect, which starts at the area's left-top: here the body's
+    // origin, while the body shows only in its clip, which can lie anywhere in the layer's space (a view far from the
+    // document's origin). The area takes the clip as its rect, so the layer is found exactly where it shows.
+    if let Some(state) = egui::AreaState::load(ctx, layer.id) {
+        let state = egui::AreaState { pivot_pos: Some(shown.min), pivot: egui::Align2::LEFT_TOP, size: Some(shown.size()), ..state };
+        ctx.memory_mut(|memory| memory.areas_mut().set_state(layer, state));
+    }
+    inner
 }
 
 /// The transform of a body zoomed by `scale` about its top left `at` and moved by `offset`.
