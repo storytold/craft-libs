@@ -583,6 +583,7 @@ pub(crate) struct RowOptions {
     eyedropper: bool,
     eyedropper_armed: bool,
     full_width: bool,
+    hide_caption: bool,
     /// The row or section stands beside the one before it ([`Param::beside`]).
     beside: bool,
     /// The field pairs with the next one in its section ([`Param::beside_next`]).
@@ -659,6 +660,11 @@ pub(crate) enum Head {
 }
 
 impl RowOptions {
+    /// Whether the field's label names it without drawing a caption.
+    pub(crate) fn hides_caption(&self) -> bool {
+        self.hide_caption
+    }
+
     /// Whether the row or section stands beside the one before it.
     pub(crate) fn beside(&self) -> bool {
         self.beside
@@ -730,6 +736,8 @@ fn is_path_list(value: &FieldValue) -> bool {
 struct RowTexts {
     hint: Option<Label>,
     tooltip: Option<Tooltip>,
+    /// The text after the number ([`Param::unit_label`]).
+    unit: Option<Label>,
 }
 
 /// When a row takes input.
@@ -1304,6 +1312,15 @@ impl Param {
         self
     }
 
+    /// For a field with a side caption, hides the caption while keeping the row label as its accessible name.
+    /// Resettable fields keep their caption and reset dot. Separate headings, radio groups and stacked sliders
+    /// keep their own captions.
+    #[must_use]
+    pub fn hide_caption(mut self) -> Self {
+        self.options.get_or_insert_default().hide_caption = true;
+        self
+    }
+
     /// For a [`ParamKind::Range`] row: the slider asks for a short field's length and the number field is as wide as
     /// its widest value, so the row takes its content's width rather than the form's (production's Opacity). Other
     /// kinds and a popup slider are unchanged.
@@ -1389,6 +1406,15 @@ impl Param {
         self
     }
 
+    /// Text shown after the number of a number, int, optional-number or range row in place of the symbol of its
+    /// [`unit`](Self::unit), for a quantity no [`UnitKind`] names (`kbps`, `MB`). The host passes it in the user's
+    /// language. Typed text is still read by the row's `unit`, or as a plain number without one.
+    #[must_use]
+    pub fn unit_label(mut self, text: impl Into<Label>) -> Self {
+        self.texts.get_or_insert_default().unit = Some(text.into());
+        self
+    }
+
     /// Parses the registry notation into a list, labels from the keys in Title Case with two fixed names (`cellSize`
     /// is `Cell Size`, `bpc` is `Black Point Compensation`;
     /// `{"radius":0.1..1000=1,"method":"spin|zoom","monochromatic":bool,"seed":u32=0}`). Apps with their own command
@@ -1424,6 +1450,11 @@ impl Param {
     /// The row's tooltip text.
     pub(crate) fn tooltip_text(&self) -> Option<&Tooltip> {
         self.texts.as_deref()?.tooltip.as_ref()
+    }
+
+    /// The text after the row's number ([`Param::unit_label`]).
+    pub(crate) fn unit_label_text(&self) -> Option<&Label> {
+        self.texts.as_deref()?.unit.as_ref()
     }
 
     /// The label a [`Param::in_footer`] row shows while on; `None` for a row in the body.

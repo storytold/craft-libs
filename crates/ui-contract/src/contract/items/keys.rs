@@ -152,24 +152,26 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         self.column_keys(cx, lead_at.filter(|_| !header_held));
         // The pass's `update_inputs` turned an `Activate` intent into the keyed activation.
         let activated = cx.core.intents.take(Intent::Activate) || cx.core.activation.is_some_and(|activation| activation.by_key);
-        // A disabled lead does not run, as a press on it does not.
         if activated
-            && !header_held
-            && let Some(row) = lead_at.filter(|&row| !self.source.enabled(row))
-        {
-            self.events.push(CollectionEvent::Refused(self.source.key(row)));
-        } else if activated
             && !header_held
             && let Some(row) = lead_at
         {
-            // Where the arrows leave the selection, Enter picks the lead it activates.
-            if !props.arrows_select && !self.holds(row) {
-                self.pick_by(comp, row, false, false, PickBy::Keys);
-            }
-            let key = self.source.key(row);
-            self.keyed_activation = Some(key.clone());
-            self.events.push(CollectionEvent::Activate(key));
+            self.activate_lead(comp, props, row);
         }
+    }
+
+    /// Activates the lead after a keyboard press, with the same disabled check as pointer activation.
+    fn activate_lead(&mut self, comp: &C, props: &CollectionProps, row: usize) {
+        let key = self.source.key(row);
+        if !self.source.enabled(row) {
+            self.events.push(CollectionEvent::Refused(key));
+            return;
+        }
+        if !props.arrows_select && !self.holds(row) {
+            self.pick_by(comp, row, false, false, PickBy::Keys);
+        }
+        self.keyed_activation = Some(key.clone());
+        self.events.push(CollectionEvent::Activate(key));
     }
 
     /// The context-menu key at the lead: the event's request is at the row's bottom start corner, and the context
@@ -220,6 +222,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 SelectMode::None => self.events.push(CollectionEvent::Activate(self.source.key(row))),
                 mode => self.pick_by(comp, row, false, mode != SelectMode::Single, PickBy::Keys),
             },
+            SpaceAction::ActivateLead => {
+                if crate::contract::steps::takes_activation(cx.core.resolved) {
+                    self.activate_lead(comp, props, row);
+                }
+            }
             SpaceAction::ToggleCell => self.toggle_by_key(cx, row),
             SpaceAction::Preview => self.events.push(CollectionEvent::Preview(self.source.key(row))),
             SpaceAction::None => {}

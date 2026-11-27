@@ -65,6 +65,41 @@ fn a_preset_released_over_the_zone_reports_drop_at_and_nothing_else_does() {
     }
 }
 
+/// Find matches a row's `search_name` beside its label: in both views, a preset shown as "Rot" with the search name
+/// "Red" is found by either name, and a preset without a search name is still found by its label.
+#[trial]
+fn find_matches_a_preset_by_its_search_name_or_its_label() {
+    // (query, the presets shown, the presets hidden)
+    type Case = (&'static str, &'static [&'static str], &'static [&'static str]);
+    let cases: [Case; 3] = [("Red", &["Rot"], &["Blau"]), ("Rot", &["Rot"], &["Blau"]), ("Blau", &["Blau"], &["Rot"])];
+    for view in [PresetView::List, PresetView::Grid] {
+        for (query, shown, hidden) in cases {
+            let rows = PresetSource::new(
+                (),
+                PresetFns::new(|_, _| {
+                    let mut red = PresetRow::item(ALPHA, "Rot", 1);
+                    red.search_name = Some(String::from("Red"));
+                    vec![PresetRow::group(GROUP, "Group", 0), red, PresetRow::item(2, "Blau", 1)]
+                }),
+            );
+            let mut state = PresetState::<u32>::new();
+            state.filter = String::from(query);
+            let mut fixture = Fixture::new(move |ui| {
+                ui.scope_builder(UiBuilder::new().max_rect(BROWSER), |ui| {
+                    let _ = PresetBrowser::new("Patterns", Bind::bound(&mut state), &rows).view_lock(view).show(ui);
+                });
+            });
+            fixture.room(vec2(480.0, 320.0)).settle();
+            for name in shown {
+                assert!(fixture.by_label(name).is_some(), "{view:?}: Find \"{query}\" shows {name}");
+            }
+            for name in hidden {
+                assert!(fixture.by_label(name).is_none(), "{view:?}: Find \"{query}\" hides {name}");
+            }
+        }
+    }
+}
+
 /// A browser over `presets` presets in a room as narrow as a docked panel and 300 high, with a footer and
 /// `room_height` set when given, and where its New Group button and its last preset are.
 fn footer_rig(presets: u32, room_height: Option<f32>) -> (Rect, Option<Rect>) {
@@ -475,4 +510,42 @@ fn host_row_menu_rows_are_menu_items_and_only_a_checked_row_a_check_box() {
     let names = |role| fixture.by_role(role).iter().filter_map(|row| tree.name_of(row.node).map(str::to_owned)).collect::<Vec<_>>();
     assert_eq!(names(Role::MENU_ITEM), ["Options…"], "a plain host row is a menu item");
     assert_eq!(names(Role::MENU_ITEM_CHECK_BOX), ["Locked"], "a checked host row is a check box");
+}
+
+/// Host tools can share the header's reading start without changing the default order or view actions.
+#[trial]
+fn host_toolbar_tools_can_lead_the_view_controls_without_changing_the_default() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+
+    for at_start in [false, true] {
+        let state = Rc::new(RefCell::new(PresetState::<u32>::new()));
+        let shown = Rc::clone(&state);
+        let rows = PresetSource::new((), PresetFns::new(|_, _| vec![PresetRow::item(ALPHA, "Alpha", 0)]));
+        let mut fixture = Fixture::new(move |ui| {
+            ui.scope_builder(UiBuilder::new().max_rect(BROWSER), |ui| {
+                let _ = PresetBrowser::new("Swatches", Bind::bound(&mut *shown.borrow_mut()), &rows)
+                    .toolbar(true)
+                    .search(false)
+                    .tools_at_start(at_start)
+                    .tools(|ui: &mut egui::Ui| {
+                        Button::new("Host Tool").show(ui);
+                    })
+                    .show(ui);
+            });
+        });
+        fixture.room(vec2(480.0, 320.0)).settle();
+        let host = fixture.by_label("Host Tool").expect("host control").center();
+        let grid = fixture.by_label("Grid View").expect("grid action").center();
+        let list = fixture.by_label("List View").expect("list action").center();
+        assert!((host.y - grid.y).abs() < 1.0, "both groups share the toolbar row");
+        assert_eq!(host.x < grid.x, at_start, "the default stays trailing; the opt-in leads");
+        assert!(grid.x < list.x, "the view choices retain their order");
+        let target = fixture.by_label("List View").expect("list action");
+        fixture.click(&target).settle();
+        assert_eq!(state.borrow().view, PresetView::List);
+        let target = fixture.by_label("Grid View").expect("grid action");
+        fixture.click(&target).settle();
+        assert_eq!(state.borrow().view, PresetView::Grid);
+    }
 }
