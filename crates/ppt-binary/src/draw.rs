@@ -89,10 +89,10 @@ fn read_within<'a>(container: &Rec<'a>, budget: &mut Budget, with_background: bo
     let Some(dg) = container.child(rt::DRAWING).and_then(|d| d.child(rt::DG_CONTAINER)) else { return out };
     // The background is the container's own shape (`OfficeArtDgContainer.shape`, [MS-ODRAW]
     // 2.2.13), not one found by its fBackground flag. One pass finds it and the top group, each
-    // child looked at charged to the budget.
+    // child looked at charged to the budget; without the background, it stops at the top group.
     let (mut bg, mut top) = (None, None);
     for r in dg.children() {
-        if bg.is_some() && top.is_some() || !take(budget) {
+        if top.is_some() && (bg.is_some() || !with_background) || !take(budget) {
             break;
         }
         match r.kind {
@@ -367,12 +367,19 @@ mod tests {
     /// each holds: a slide after the budget is spent reads none.
     #[test]
     fn drawings_read_at_most_max_records_together() {
-        let shapes = vec![container(rt::SP_CONTAINER, 0, &[]); MAX_RECORDS / 2 + 5];
+        let count = MAX_RECORDS / 2 + 5;
+        let shapes = vec![container(rt::SP_CONTAINER, 0, &[]); count];
         let slide = slide_of(shapes);
         let mut budget = MAX_RECORDS;
-        let first = super::drawing(&Rec::at(&slide, 0).unwrap(), &mut budget).shapes.len();
-        let second = super::drawing(&Rec::at(&slide, 0).unwrap(), &mut budget).shapes.len();
-        assert!(first > MAX_RECORDS / 2 && second < MAX_RECORDS / 2, "{first} then {second}");
+        let first = super::drawing(&Rec::at(&slide, 0).unwrap(), &mut budget);
+        assert!(first.shapes.len() == count && !first.cut, "the first drawing is read whole");
+        let left = budget;
+        assert!(left > 0, "and leaves the rest of the budget");
+        // The second reads its top group and the patriarch (three records), then a shape a record
+        // with what is left, and the budget is spent.
+        let second = super::drawing(&Rec::at(&slide, 0).unwrap(), &mut budget);
+        assert_eq!(second.shapes.len(), left - 3);
+        assert!(second.cut && budget == 0);
         assert!(super::drawing(&Rec::at(&slide, 0).unwrap(), &mut budget).shapes.is_empty());
     }
 
@@ -396,7 +403,7 @@ mod tests {
         let background = container(rt::SP_CONTAINER, 0, &[fsp()]);
         let patriarch = container(rt::SP_CONTAINER, 0, &[atom(rt::FSP, 0, &[0, 4, 0, 0, 5, 0, 0, 0])]);
         let top = container(rt::SPGR_CONTAINER, 0, &[patriarch, group, title]);
-        let dg = container(rt::DG_CONTAINER, 0, &[background, top]);
+        let dg = container(rt::DG_CONTAINER, 0, &[background.clone(), top.clone()]);
         let slide = container(rt::SLIDE, 0, &[container(rt::DRAWING, 0, std::slice::from_ref(&dg))]);
         // Every record below the drawing container, nested ones included.
         fn count(b: &[u8]) -> usize {
@@ -422,6 +429,13 @@ mod tests {
         let mut left = all;
         let d = super::shapes(&Rec::at(&slide, 0).unwrap(), &mut left);
         assert!(d.background.is_none() && d.shapes.len() == 2 && left > 0);
+        // Nor, when it follows the top group, its header: a budget of everything else reads every
+        // shape, cutting nothing.
+        let dg = container(rt::DG_CONTAINER, 0, &[top, background]);
+        let slide = container(rt::SLIDE, 0, &[container(rt::DRAWING, 0, std::slice::from_ref(&dg))]);
+        let rest = count(Rec::at(&dg, 0).unwrap().data) - count(&container(rt::SP_CONTAINER, 0, &[fsp()]));
+        let d = super::shapes(&Rec::at(&slide, 0).unwrap(), &mut rest.clone());
+        assert!(d.shapes.len() == 2 && !d.cut);
     }
 
     #[test]
