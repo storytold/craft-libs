@@ -49,6 +49,9 @@ pub enum SwatchesCommand {
     /// Write the swatches to a Photoshop swatch file.
     #[command(label = "Export Swatches…")]
     Export,
+    /// Write the swatches as an ACT colour table.
+    #[command(label = "Export Swatches as ACT…")]
+    ExportAct,
     /// Write the swatches to an exchange file with their groups.
     #[command(label = "Export Swatches for Exchange…")]
     ExportExchange,
@@ -59,12 +62,13 @@ pub enum SwatchesCommand {
 
 impl SwatchesCommand {
     /// Every command, in menu order.
-    pub const ALL: [SwatchesCommand; 7] = [
+    pub const ALL: [SwatchesCommand; 8] = [
         SwatchesCommand::NewSwatch,
         SwatchesCommand::NewGroup,
         SwatchesCommand::Import,
         SwatchesCommand::Replace,
         SwatchesCommand::Export,
+        SwatchesCommand::ExportAct,
         SwatchesCommand::ExportExchange,
         SwatchesCommand::Reset,
     ];
@@ -89,7 +93,7 @@ pub struct SwatchesMenuOutput {
 pub struct SwatchesMenu;
 
 impl SwatchesMenu {
-    /// The rows: New Swatch…, New Swatch Group…, a separator, Import, Replace, Export and Export for Exchange, a
+    /// The rows: New Swatch…, New Swatch Group…, a separator, Import, Replace, Export, Export as ACT and Export for Exchange, a
     /// separator, Reset Swatches.
     pub fn rows() -> Vec<PanelRow> {
         let row = |command: SwatchesCommand| PanelRow::Command(CommandRef::from(command));
@@ -100,19 +104,20 @@ impl SwatchesMenu {
             row(SwatchesCommand::Import),
             row(SwatchesCommand::Replace),
             row(SwatchesCommand::Export),
+            row(SwatchesCommand::ExportAct),
             row(SwatchesCommand::ExportExchange),
             PanelRow::Separator,
             row(SwatchesCommand::Reset),
         ]
     }
 
-    /// The state of each command: both exports are disabled while the groups hold no swatch.
+    /// The state of each command: all exports are disabled while the groups hold no swatch.
     pub fn states(groups: &[SwatchGroup]) -> Vec<(SwatchesCommand, CommandState)> {
         let exports = groups.iter().any(|group| !group.entries.is_empty());
         SwatchesCommand::ALL
             .into_iter()
             .map(|command| {
-                let enabled = !matches!(command, SwatchesCommand::Export | SwatchesCommand::ExportExchange) || exports;
+                let enabled = !matches!(command, SwatchesCommand::Export | SwatchesCommand::ExportAct | SwatchesCommand::ExportExchange) || exports;
                 (command, CommandState::new().enabled(enabled))
             })
             .collect()
@@ -120,7 +125,7 @@ impl SwatchesMenu {
 
     /// Carries out `command`. New Swatch reports the foreground added to the selected swatch's (or group's) group, as
     /// the footer's New does, and the panel selects it and opens its name for editing in its next pass; New Swatch
-    /// Group and Reset Swatches report their edits. Import, Replace and the two exports give the file request for the
+    /// Group and Reset Swatches report their edits. Import, Replace and the three exports give the file request for the
     /// host.
     pub fn run_command(
         groups: &[SwatchGroup],
@@ -139,6 +144,7 @@ impl SwatchesMenu {
             SwatchesCommand::Import => output.file = import().request(PresetCommands::Load, None),
             SwatchesCommand::Replace => output.file = import().request(PresetCommands::Replace, None),
             SwatchesCommand::Export => Self::export(groups, state, SwatchFormat::Aco, words, &mut output),
+            SwatchesCommand::ExportAct => Self::export(groups, state, SwatchFormat::Act, words, &mut output),
             SwatchesCommand::ExportExchange => Self::export(groups, state, SwatchFormat::Ase, words, &mut output),
         }
         output
