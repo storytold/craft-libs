@@ -122,7 +122,7 @@ impl EnvValue for craft_behavior::ZoomScheme {
 }
 
 /// What a number counts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum UnitKind {
