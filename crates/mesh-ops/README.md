@@ -22,6 +22,7 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   smallest half extent; an invalid bevel returns `GeomError::Invalid`.
   Sphere and torus seam endpoints have identical positions and retain distinct UV endpoints.
   Cylinder caps share exact rim positions with the side, and rounded-box faces share exact boundary positions.
+  Lathe profile lengths and direction normalization use `f64` before the UVs and normals are stored as `f32`.
 - **BVH.** `Bvh` is a binned SAH tree on all three axes with a median split when no split beats a
   leaf. It answers closest-hit, any-hit and filtered ray casts, nearest-point queries and box
   queries.
