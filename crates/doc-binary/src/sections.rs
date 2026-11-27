@@ -1,7 +1,6 @@
 //! Sections and headers/footers: `PlcfSed` → `Sed` → `Sepx` (grpprls of section sprms) and
 //! the `Plcfhdd` stories of the header subdocument ([MS-DOC] §2.8.25, §2.9.244).
 
-use craft_wordmodel::section::NumFormat;
 use craft_wordmodel::section::{Columns, SectionProps, SectionStart};
 
 use crate::fib::{Fib, pair};
@@ -14,7 +13,10 @@ const MAX_SECTIONS: usize = 1024;
 const S_BKC: u16 = 0x3009;
 const S_TITLE_PAGE: u16 = 0x300A; // sprmSFTitlePage
 const S_CCOLUMNS: u16 = 0x500B;
-const S_PGN_START: u16 = 0x300C; // sprmSPgnStart
+const S_NFC_PGN: u16 = 0x300E; // sprmSNfcPgn
+const S_PGN_RESTART: u16 = 0x3011; // sprmSFPgnRestart
+const S_PGN_START97: u16 = 0x501C; // sprmSPgnStart97
+const S_PGN_START: u16 = 0x7044; // sprmSPgnStart
 const S_ORIENTATION: u16 = 0x301D; // sprmSBOrientation
 const S_HDR_TOP: u16 = 0xB017;
 const S_HDR_BOTTOM: u16 = 0xB018;
@@ -48,6 +50,10 @@ pub(crate) fn parse(word: &[u8], table: &[u8], fib: &Fib) -> Vec<Section> {
         let sed_at = (n + 1) * 4 + i * 12;
         let fc_sepx = plc.get(sed_at + 2..sed_at + 6).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).unwrap_or(0xFFFF_FFFF);
         let mut props = SectionProps::default();
+        // [MS-DOC] 2.6.4: restart and start are independent, defaulting to false and 0.
+        // Resolve them after the group; a start can precede its restart flag.
+        let mut restart = false;
+        let mut page_num_start = 0;
         // Sepx: cb u16, then a grpprl of section sprms.
         let mut explicit_orient = false;
         if let Some(grpprl) =
@@ -62,9 +68,32 @@ pub(crate) fn parse(word: &[u8], table: &[u8], fib: &Fib) -> Vec<Section> {
                 if prl.op == S_ORIENTATION && matches!(prl.operand.first(), Some(1 | 2)) {
                     explicit_orient = true;
                 }
-                apply_section(&mut props, &prl);
+                // Property storage (2.2.5) applies records in order. Retain the last
+                // valid start, including the full-width form after its legacy form.
+                match prl.op {
+                    S_PGN_RESTART => match prl.operand.first() {
+                        Some(0) => restart = false,
+                        Some(1) => restart = true,
+                        _ => {}
+                    },
+                    S_PGN_START97 => {
+                        if let [b0, b1, ..] = prl.operand {
+                            page_num_start = u16::from_le_bytes([*b0, *b1]) as u32;
+                        }
+                    }
+                    S_PGN_START => {
+                        if let [b0, b1, b2, b3, ..] = prl.operand {
+                            let value = u32::from_le_bytes([*b0, *b1, *b2, *b3]);
+                            if value <= 0x7FFF_FFFE {
+                                page_num_start = value;
+                            }
+                        }
+                    }
+                    _ => apply_section(&mut props, &prl),
+                }
             }
         }
+        props.page_num_start = restart.then_some(page_num_start);
         // Without an explicit orientation sprm, infer it from the page shape.
         if !explicit_orient {
             if props.page_w < props.page_h {
@@ -106,10 +135,9 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
                 s.columns = Columns { count: (c as u32).saturating_add(1).min(44), ..Default::default() };
             }
         }
-        S_PGN_START => {
-            if let Some(v) = s16(prl) {
-                s.page_num_start = Some(v.max(0) as u32);
-                s.page_num_format = NumFormat::Decimal;
+        S_NFC_PGN => {
+            if let Some(&format) = prl.operand.first() {
+                s.page_num_format = crate::list::num_format(format);
             }
         }
         // SBOrientationOperand ([MS-DOC] §2.9.236): 1 portrait, 2 landscape.
