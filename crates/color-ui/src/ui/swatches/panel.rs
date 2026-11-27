@@ -18,7 +18,7 @@ use craft_ui::patterns::presets::{
 };
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Count, Env};
-use egui::{Response, Ui};
+use egui::{AsIdSalt, IdSalt, Response, Ui};
 
 use super::library::{HostThumb, find_swatch, has, panel_source};
 use super::menu::event_edits;
@@ -77,6 +77,8 @@ type PayloadAdder<'a> = Box<dyn for<'b> Fn(PresetBrowser<'b, SwatchKey>) -> Pres
 ///   [`search`](SwatchesPanel::search), [`row_icons`](SwatchesPanel::row_icons), [`takes_drop`](SwatchesPanel::takes_drop)
 ///   and [`row_items`](SwatchesPanel::row_items) pass through; the events they cause come out in
 ///   [`SwatchesPanelOutput::events`].
+/// - [`document`](SwatchesPanel::document) keeps the browser's own state (an open rename field, the scroll position)
+///   per document, so a host that shows one panel for several documents does not carry it from one to another.
 /// - It fills the room it is given, and its browser scrolls the swatches: show it outside a body that scrolls.
 #[must_use = "show the panel with `show`"]
 #[derive(Pattern)]
@@ -96,6 +98,7 @@ pub struct SwatchesPanel<'a> {
     takes_drop: Option<DropMaker<'a>>,
     payloads: Vec<PayloadAdder<'a>>,
     row_items: Option<RowItemsFn<'a>>,
+    document: Option<IdSalt>,
 }
 
 /// What the body decided; `show` stores the state and reports the rest after the real run.
@@ -126,6 +129,7 @@ impl<'a> SwatchesPanel<'a> {
             takes_drop: None,
             payloads: Vec::new(),
             row_items: None,
+            document: None,
         }
     }
 
@@ -216,6 +220,14 @@ impl<'a> SwatchesPanel<'a> {
         self
     }
 
+    /// The document whose swatches the panel shows. The browser keeps its own state (an open rename field, the scroll
+    /// position) for each document, so a rename left open in one document does not open on another document's
+    /// swatch of the same name. Without it the browser keeps that state for the `Ui` it is shown in.
+    pub fn document(mut self, document: impl AsIdSalt) -> Self {
+        self.document = Some(IdSalt::new(document));
+        self
+    }
+
     /// Draws the panel and returns the user's actions this pass.
     pub fn show(self, ui: &mut Ui) -> SwatchesPanelOutput {
         let SwatchesPanel {
@@ -234,12 +246,15 @@ impl<'a> SwatchesPanel<'a> {
             takes_drop,
             payloads,
             row_items,
+            document,
         } = self;
         let cmyk = cmyk.unwrap_or_else(|| CmykConverter::coated());
         let words = Env::of(ui).words::<SwatchesWords>();
         let mut held_state = Held::new(state);
         let ctx = ui.ctx().clone();
-        let browser_id = ui.scope_id();
+        // A document's browser has an id of its own; otherwise the browser takes the scope id of the `Ui` it is shown in.
+        let document_id = document.map(|document| ui.scope_id().with(document));
+        let browser_id = document_id.unwrap_or_else(|| ui.scope_id());
         let icons: BTreeMap<&str, Vec<(IconSpec<'static>, String)>> = match &row_icons {
             Some(icons) => {
                 groups.iter().flat_map(|g| g.entries.iter()).map(|e| (e.name.as_str(), icons(&SwatchKey::Swatch(e.name.clone())))).collect()
@@ -267,6 +282,9 @@ impl<'a> SwatchesPanel<'a> {
                     .select(select)
                     .reorder(PresetReorder::items_and_groups())
                     .selection(Bind::bound(&mut st.selection));
+                if let Some(id) = document_id {
+                    browser = browser.browser_id(id);
+                }
                 if let Some(options) = footer_options {
                     browser = browser.footer(options);
                 }

@@ -504,7 +504,7 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
 - `craft_behavior::dock::DockSide`: `pub enum DockSide { Start, End, Top, Bottom, Center }`. The side of a group a dropped panel docks on, in reading order: `Start` is the left half in a left-to-right
   - `pub const fn axis(self) -> Option<Axis>`. The axis the side splits along; `None` for `Center`.
   - `pub fn area(self, group: Rect) -> Rect`. The part of `group` a panel docked on this side takes: the half on that side, or the whole group.
-- `craft_behavior::dock::Action`: `pub enum Action<P> { Move { panel: P, anchor: P, placement: DockPlacement<P> }, Float { panel: P, rect: Rect }, Close { panel: P }, Activate { panel: P }, Open { panel: P, anchor: Option<P> }, OpenAt { panel: P, anchor: P, placement: DockPlacement<P> }, MoveFloating { panel: P, rect: Rect, edge: Option<DockEdge> }, ResizeSplit { path: Vec<bool>, size: SplitSize }, SetStackOpen { panel: P, open: bool }, ResizeStack { panel: P, height: Option<f32> }, MoveGroup { panel: P, to: Target<P> }, StepGroup { panel: P, up: bool }, MoveColumn { panel: P, to: Target<P> }, MoveWindow { panel: P, to: Target<P> }, CloseGroup { panel: P }, CloseWindow { panel: P }, CloseOthers { panel: P }, SetMinimized { panel: P, minimized: bool }, SetIconic { panel: P, iconic: bool }, ResizeColumn { panel: P, width: f32 }, SetColumnSteps { panel: P, steps: u16 }, ResizeGroup { panel: P, height: Option<f32> }, ResizeFlyoutWidth { panel: P, width: Option<f32> }, MoveFlyoutTop { panel: P, offset: Option<f32> }, ResizeIconic { panel: P, width: Option<f32> }, SetNative { panel: P, placement: Option<Placement> }, MovePanel { panel: P, to: Target<P> } }`. Groups, columns and floating windows are named by a panel they contain.
+- `craft_behavior::dock::Action`: `pub enum Action<P> { Move { panel: P, anchor: P, placement: DockPlacement<P> }, Float { panel: P, rect: Rect }, Close { panel: P }, Activate { panel: P }, Open { panel: P, anchor: Option<P> }, OpenAt { panel: P, anchor: P, placement: DockPlacement<P> }, MoveFloating { panel: P, rect: Rect, edge: Option<DockEdge> }, ResizeSplit { path: Vec<bool>, size: SplitSize }, SetStackOpen { panel: P, open: bool }, ResizeStack { panel: P, height: Option<f32> }, MoveGroup { panel: P, to: Target<P> }, StepGroup { panel: P, up: bool }, MoveColumn { panel: P, to: Target<P> }, MoveWindow { panel: P, to: Target<P> }, CloseGroup { panel: P }, CloseWindow { panel: P }, CloseOthers { panel: P }, SetMinimized { panel: P, minimized: bool }, SetIconic { panel: P, iconic: bool }, ResizeColumn { panel: P, width: f32 }, SetColumnSteps { panel: P, steps: u16 }, ResizeGroup { panel: P, height: Option<f32> }, ResizeFlyoutWidth { panel: P, width: Option<f32> }, MoveFlyoutTop { panel: P, offset: Option<f32> }, ResizeIconic { panel: P, width: Option<f32> }, SetNative { panel: P, placement: Option<Placement> }, MovePanel { panel: P, to: Target<P> }, Restore { panel: P, location: Location<P> } }`. Groups, columns and floating windows are named by a panel they contain.
   - `pub fn move_beside(panel: P, anchor: P, placement: DockPlacement<P>) -> Self`. Builds [`Action::Move`].
   - `pub fn float(panel: P, rect: Rect) -> Self`. Builds [`Action::Float`].
   - `pub fn close(panel: P) -> Self`. Builds [`Action::Close`].
@@ -533,6 +533,7 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
   - `pub fn resize_iconic(panel: P, width: Option<f32>) -> Self`. Builds [`Action::ResizeIconic`].
   - `pub fn set_native(panel: P, placement: Option<Placement>) -> Self`. Builds [`Action::SetNative`].
   - `pub fn move_panel(panel: P, to: Target<P>) -> Self`. Builds [`Action::MovePanel`].
+  - `pub fn restore(panel: P, location: Location<P>) -> Self`. Builds [`Action::Restore`].
 - `craft_behavior::dock::Arrangement`: `pub enum Arrangement { TileAllVertically, TileAllHorizontally, TwoUpVertical, TwoUpHorizontal, ThreeUpVertical, ThreeUpHorizontal, ThreeUpStacked, FourUp, SixUp, ConsolidateAllToTabs, Cascade, Tile, FloatInWindow, FloatAllInWindows, NewWindowForDocument, MatchZoom, MatchLocation, MatchRotation, MatchAll }`. One Window › Arrange entry. The n-up entries split the document area into that many
   - `pub fn group_count(self, documents: usize) -> Option<usize>`. How many document groups an n-up or tile arrangement wants, `None` for the window and
   - `pub fn enabled(self, documents: usize, groups: usize, floating: usize) -> bool`. Whether the entry is enabled with `documents` open and `floating` floating windows:
@@ -633,7 +634,7 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
   - `pub fn version(&self) -> u32`. The format version the workspace was read with.
   - `pub fn layout(&self) -> &Layout<P>`. The current arrangement.
   - `pub fn hidden(&self) -> &[(P, Location<P>)]`. The closed panels, and panels the application does not register now, with where each one goes back.
-  - `pub fn floated(&self) -> &[(P, Location<P>)]`. The floating panels with the docked location each one left.
+  - `pub fn floated(&self) -> &[(P, Location<P>)]`. The floating panels, and the closed panels that were floating, with the docked location each one left.
   - `pub fn revision(&self) -> Revision`. The revision of this workspace value: it moves with every write, and no other value has it.
   - `pub fn generation(&self) -> u64`. The generation of this live workspace: it moves with every [`replace`](Self::replace) and nothing else.
   - `pub fn raise_window_floor(&mut self, floor: u64)`. Keeps the ids of new floating windows at or above `floor`. A dock that showed windows below `floor` raises a
@@ -708,9 +709,11 @@ When a component's remembered state is due for eviction.
 The fit rules: which tabs, bar items or titles stay in a strip and which go to an overflow menu. [`fit`] and
 
 - `craft_behavior::fit::Fit`: `pub struct Fit { pub shown: Vec<usize>, pub overflow: Vec<usize>, pub short: Vec<usize> }`. Which items the strip shows and which go to the overflow menu, as indexes into the input, in input order.
-- `craft_behavior::fit::FitItem`: `pub struct FitItem { pub extent: f32, pub section: u16, pub keep: FitKeep, pub short: Option<f32> }`. One item as the fit rule sees it: its extent along the strip, its section and whether it may overflow.
+- `craft_behavior::fit::FitItem`: `pub struct FitItem { pub extent: f32, pub section: u16, pub keep: FitKeep, pub short: Option<f32>, pub short_order: u16, pub short_late: bool }`. One item as the fit rule sees it: its extent along the strip, its section and whether it may overflow.
   - `pub const fn new(extent: f32, section: u16, keep: FitKeep) -> Self`. An item `extent` long in `section`.
-  - `pub const fn short(mut self, extent: f32) -> Self`. The item with a shorter form `extent` long, which it takes before any free item leaves.
+  - `pub const fn short(mut self, extent: f32) -> Self`. The item with a shorter form `extent` long, which it takes before any free item leaves unless it is late.
+  - `pub const fn short_order(mut self, order: u16) -> Self`. The item with its short form ranked `order`: lower ranks shorten first, and the last item of a rank first.
+  - `pub const fn short_late(mut self) -> Self`. The item takes its short form only after every free item that can leave has left.
 - `craft_behavior::fit::FitKeep`: `pub enum FitKeep { Free, Pinned, Menu }`. Whether an item may move into the overflow menu, or lives there.
 - `craft_behavior::fit::TabFit`: `pub struct TabFit { pub shown: Vec<(usize, f32)>, pub overflow: Vec<usize>, pub overflow_width: f32 }`. Tabs visible on a strip and tabs that need an overflow menu, all in original order.
 - `craft_behavior::fit::fit`: `pub fn fit(natural: &[f32], selected: usize, available: f32, minimum_width: f32, overflow_width: f32, keep_selected: bool) -> TabFit`. Fit tab widths into `available` points, shrinking the widest tabs first to a common cap.
@@ -2364,10 +2367,11 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::GroupState`: `pub struct GroupState<M> { pub selected: Option<M>, pub members: Vec<(M, Id, bool)> }`. A group's registrations: the members shown in the last pass and the member the group picked.
 - `craft_ui::contract::HeaderEdge`: `pub enum HeaderEdge { Start, End }`. An edge of a header's line, where a container's own header parts sit.
 - `craft_ui::contract::HeaderMenuRequest`: `pub struct HeaderMenuRequest { pub column: Option<ColumnKey>, pub at: Pos2 }`. A request for the header menu: a secondary click on a header cell or on the empty header after the last one, or the
-- `craft_ui::contract::HeaderParts`: `pub struct HeaderParts { pub start: f32, pub end: f32 }`. The room a container's own parts take on its header's line (`Container::header_parts`): a width at the start edge
+- `craft_ui::contract::HeaderParts`: `pub struct HeaderParts { pub start: f32, pub end: f32, pub end_least: Option<f32>, pub keep: f32 }`. The room a container's own parts take on its header's line (`Container::header_parts`): a width at the start edge
   - `pub const NONE: HeaderParts`. No room for parts.
   - `pub const fn start(mut self, width: f32) -> Self`. `width` at the start edge.
   - `pub const fn end(mut self, width: f32) -> Self`. `width` at the end edge.
+  - `pub const fn end_narrows(mut self, least: f32, keep: f32) -> Self`. The end edge narrows, down to `least`, so the header's children keep `keep` of the line: on a line too narrow
 - `craft_ui::contract::HeaderRegion`: `pub struct HeaderRegion { pub band: DragBand, pub rule: bool, pub heads: bool, pub rule_above: bool, pub inline: bool, pub trailing: bool, pub fill: Option<BandFill>, pub inset: Pad, pub gap: Option<Gap> }`. A header region, filled by `Container::header`.
   - `pub const fn new() -> Self`. A header with no drag band, no rule, on its own line, with no trailing region, no fill and no inset.
   - `pub const fn fill(mut self, kind: SurfaceKind) -> Self`. The surface of a band behind the header.
@@ -2536,7 +2540,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn opener_anchor(mut self, anchor: Anchor) -> Overlay`. Sets where the layer hangs when the opener named last opened it. A rect or point is in that opener's layer
 - `craft_ui::contract::OverlayUi`: `pub struct OverlayUi<'a> { pub closed: Vec<(Id, CloseReason)> }`. What the `overlay` hook gets: one call per anchored popup of this component, built at step 10 with the open state
   - `pub fn closing(&self, popup: PopupHandle) -> Option<CloseReason>`. Why `popup` closes at the end of this pass, as its `show` decided (its dismissal, or a close its body asked for);
-  - `pub fn is_rtl(&self) -> bool`. Whether the owner lays out right to left: a layer its caller places by position mirrors its own geometry by it,
+  - `pub fn is_rtl(&self) -> bool`. Whether a layer the owner opens lays out right to left (`Scoped::layer_direction`): a layer its caller places by
   - `pub fn anchor_part(&self, part: impl Into<PartRef>) -> Anchor`. The anchor at the rect of the toggling part `part` of the owner. The layer's placement mirrors the side and
   - `pub fn contain_popups_below(&mut self)`. Keeps the popups this component shows from here on, and every popup opened from them, below the component:
   - `pub fn show<R>(&mut self, popup: PopupHandle, overlay: Overlay, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Option<R>`. Shows the popup while its handle is open, on a popup surface, inside `POPUP_PAD`; the content is a body closure.
@@ -2554,6 +2558,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn with_style<R>(&self, variant: Variant, f: impl FnOnce(&StyleCx<'_>) -> R) -> R`. Runs `f` with the style context of this component's env, so app hooks called from `paint` pick colours and
   - `pub fn child<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C) -> C::Output`. Shows a child component at a physical rect, with id `cx.key(key)`. The child `Ui` is pinned left to
   - `pub fn inner<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C) -> C::Output`. Shows `child` as the owner's own control, such as a picker the owner draws its field with. The child's node
+  - `pub fn label_target(&mut self, key: impl Hash + Debug)`. Makes the child shown with `key` the one a click on the composite's label focuses, in place of the composite's
   - `pub fn child_with_tip<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C, tip: impl FnOnce(&mut Ui)) -> C::Output`. Shows a child with rich tooltip content.
   - `pub fn labelled<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, label: Label, side: SideLabel, child: C) -> C::Output`. Runs the label step (B2) for one leaf child at `rect`: the label's placement beside or above the child, the
   - `pub fn face<C: Show>(&mut self, part: impl Into<PartRef>, face: C)`. Paints `face` as the look of `part`: its style, surface and state fill from the part's state merged with the
@@ -2679,11 +2684,13 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn keep_view_open(&mut self, canvas: Id)`. Keeps the view of `canvas` (the canvas component's id) usable under the modal layer: the wheel scrolls and
 - `craft_ui::contract::Savable`: re-export of `craft_ui::runtime::memory::Savable`.
 - `craft_ui::contract::SaveKey`: re-export of `craft_ui::runtime::memory::SaveKey`.
-- `craft_ui::contract::Scroll`: `pub struct Scroll { pub axes: ScrollAxes, pub anchor: ScrollAnchor, pub notch: Notch, pub indicator: ScrollIndicator }`. A scrolling body.
+- `craft_ui::contract::Scroll`: `pub struct Scroll { pub axes: ScrollAxes, pub anchor: ScrollAnchor, pub notch: Notch, pub indicator: ScrollIndicator, pub at_rest: bool }`. A scrolling body.
   - `pub const fn strips(mut self) -> Scroll`. Shows the overflow along y as scroll strips instead of a bar.
   - `pub const fn has_strips(&self) -> bool`. Whether the overflow along y shows as scroll strips.
   - `pub const fn overlay(mut self) -> Scroll`. Shows the overflow as a bar in the container's padding that takes no room from the content and shows only
   - `pub const fn has_overlay(&self) -> bool`. Whether the overflow shows as an overlay bar.
+  - `pub const fn at_rest(mut self) -> Scroll`. Shows an overlay bar whenever the content overflows, also while the pointer is away from the container. A bar of
+  - `pub const fn overlay_hides_at_rest(&self) -> bool`. Whether the overlay bar shows only while the pointer is over the container or presses the bar.
   - `pub const fn vertical() -> Scroll`. Scrolls along y.
   - `pub const fn horizontal() -> Scroll`. Scrolls along x.
   - `pub const fn both() -> Scroll`. Scrolls along both axes.
@@ -2788,6 +2795,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::clicked`: `pub fn clicked(response: &Response) -> bool`. Whether `response` reports a click, by pointer or by keyboard activation.
 - `craft_ui::contract::item_node`: `pub fn item_node<K: std::hash::Hash>(id: Id, key: &K) -> Id`. The access node of the item `key` of the members collection `id` (a tab strip, a swatch table): the sub-node of its
 - `craft_ui::contract::item_part_open`: `pub fn item_part_open(ctx: &Context, item: Id, part: impl Into<craft_behavior::PartRef>) -> bool`. Whether a menu or popover hung from the part `part` of the item `item` (`ItemCx::part_opener`) is open: an item
+- `craft_ui::contract::keep_inside`: `pub fn keep_inside(rect: Rect, bounds: Rect) -> Rect`. `rect` moved, at its size, the least distance that puts it inside `bounds`: the one keep rule for a layer's
 - `craft_ui::contract::measure_item`: `pub fn measure_item<C>(ui: &mut Ui, item: &mut C, at: crate::runtime::access::SetPosition, proposal: craft_behavior::Proposal) -> Vec2 where C: super::Component + super::Props + super::Show,`. Measures `item` as the item at `at` of a set, under the id and the item facts [`show_item`] shows it with.
 - `craft_ui::contract::pressed`: `pub fn pressed(response: &Response) -> bool`. Whether a pointer press went down on `response`'s component and is still held.
 - `craft_ui::contract::register_contract`: re-export of `craft_ui_macros::register_contract` (outside these crates).
@@ -2873,7 +2881,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
 - `craft_ui::contract::overlay::OverlayFit`: `pub enum OverlayFit { Content, Resizable, ContentCapped(ViewportShare) }`. How an egui layer sizes.
 - `craft_ui::contract::overlay::OverlayUi`: `pub struct OverlayUi<'a> { pub closed: Vec<(Id, CloseReason)> }`. What the `overlay` hook gets: one call per anchored popup of this component, built at step 10 with the open state
   - `pub fn closing(&self, popup: PopupHandle) -> Option<CloseReason>`. Why `popup` closes at the end of this pass, as its `show` decided (its dismissal, or a close its body asked for);
-  - `pub fn is_rtl(&self) -> bool`. Whether the owner lays out right to left: a layer its caller places by position mirrors its own geometry by it,
+  - `pub fn is_rtl(&self) -> bool`. Whether a layer the owner opens lays out right to left (`Scoped::layer_direction`): a layer its caller places by
   - `pub fn anchor_part(&self, part: impl Into<PartRef>) -> Anchor`. The anchor at the rect of the toggling part `part` of the owner. The layer's placement mirrors the side and
   - `pub fn contain_popups_below(&mut self)`. Keeps the popups this component shows from here on, and every popup opened from them, below the component:
   - `pub fn show<R>(&mut self, popup: PopupHandle, overlay: Overlay, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Option<R>`. Shows the popup while its handle is open, on a popup surface, inside `POPUP_PAD`; the content is a body closure.
@@ -3149,6 +3157,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
 - `craft_ui::primitives::Glyph`: `pub trait Glyph: Any + MemoProps + Sync`. A value glyph: an icon drawn from a value. It is `Sync` because container props that show one are kept with a
   - `fn directional(&self) -> bool`. Whether the glyph has a reading direction (an arrow) and so flips under right-to-left.
   - `fn paint(&self, painter: &Painter, tokens: &UiTokens, rect: Rect, color: Color32, mirrored: bool)`. Paints the glyph into `rect` in `color`, with the strokes of `tokens`. `mirrored` is set when a directional
+  - `fn paint_draw(&self, draw: &Draw<'_>, rect: Rect, color: Color32, mirrored: bool)`. Paints the glyph into `rect` in `color` with `draw`, the content painter of the component that shows the icon
 - `craft_ui::primitives::GridAxis`: `pub struct GridAxis { pub minor: Vec<f64>, pub major: Vec<f64> }`. The lines of one axis: positions along it, in the grid's space.
 - `craft_ui::primitives::GridCrowding`: `pub enum GridCrowding { Hide, Thin }`. What a grid does when its lines come closer than the minimum step.
 - `craft_ui::primitives::GridInk`: `pub struct GridInk { pub major: Option<DataColor>, pub minor: Option<DataColor>, pub stroke: GridStroke }`. The colours a grid's lines take; an unset one is the theme's.
@@ -3293,7 +3302,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn row_lines(&self) -> Vec<(String, egui::Rect, Vec<LayoutRun>)>`. Every row as its text, its rect from the galley's origin and its bidi runs: the one per-row geometry, read by
   - `pub fn size(&self) -> egui::Vec2`. The galley size.
   - `pub fn char_x(&self, chars: usize) -> f32`. Where a caret before character `chars` (counted from the start of the text) stands, from the layout's left edge:
-- `craft_ui::primitives::TextOptions`: `pub struct TextOptions { pub placeholder: Option<Label>, pub lines: Option<usize>, pub limit: Option<usize>, pub mask: bool, pub live: bool, pub clear_on_escape: bool, pub keep_on_escape: bool, pub mono: bool, pub role: TypeRole, pub size: Option<f32>, pub top: bool, pub ink: Option<Ink>, pub tab: TabKey, pub caret: Option<usize>, pub complete: Option<Arc<dyn Completer>>, pub complete_on_enter: bool, pub replace_selection: Option<String>, pub commit_on: &'static [char], pub enabled: bool, pub steps_value: bool, pub select_on_focus: bool, pub keep_caret_on_open: bool, pub select_all: bool, pub submits: bool, pub mixed: bool, pub centred: bool, pub end_aligned: bool, pub arrows_from_end: bool, pub unparsed: Option<Message>, pub own_menu: bool, pub holds_drafts: bool, pub whole_paste: Option<Arc<WholePaste>>, pub submit_key: SubmitKey, pub resting: Option<String> }`. How a text part behaves beyond its codec.
+- `craft_ui::primitives::TextOptions`: `pub struct TextOptions { pub placeholder: Option<Label>, pub look: crate::style::FieldLook, pub lines: Option<usize>, pub limit: Option<usize>, pub mask: bool, pub live: bool, pub clear_on_escape: bool, pub keep_on_escape: bool, pub mono: bool, pub role: TypeRole, pub size: Option<f32>, pub top: bool, pub ink: Option<Ink>, pub tab: TabKey, pub caret: Option<usize>, pub complete: Option<Arc<dyn Completer>>, pub complete_on_enter: bool, pub replace_selection: Option<String>, pub commit_on: &'static [char], pub enabled: bool, pub steps_value: bool, pub select_on_focus: bool, pub keep_caret_on_open: bool, pub select_all: bool, pub submits: bool, pub mixed: bool, pub centred: bool, pub end_aligned: bool, pub arrows_from_end: bool, pub unparsed: Option<Message>, pub own_menu: bool, pub holds_drafts: bool, pub whole_paste: Option<Arc<WholePaste>>, pub submit_key: SubmitKey, pub resting: Option<String> }`. How a text part behaves beyond its codec.
   - `pub fn new() -> Self`. Options with every default.
 - `craft_ui::primitives::TextOutcome`: `pub struct TextOutcome<V> { pub rect: Rect, pub draft: Option<String>, pub value: Option<V>, pub layout: Option<super::TextLayout>, pub origin: egui::Pos2, pub caret_visible: bool, pub invalid: bool, pub committed: Option<craft_behavior::ParseNote>, pub composing: bool, pub completions: Vec<super::Completion>, pub clicked: bool }`. A text part's result this pass.
   - `pub const fn new(rect: Rect) -> Self`. An outcome over `rect` with no draft or value.
@@ -3954,6 +3963,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
 - `craft_ui::runtime::env::Inherited`: `pub struct Inherited { pub tokens: Arc<UiTokens>, pub os: Os, pub active: bool, pub words: Arc<Words>, pub canvas_pattern: bool, pub line_ratio: f32, pub motion: MotionPolicy, pub scale: Scale, pub values: AppValues }`. The values of an env that a scope rarely changes: the resolved tokens, the platform, the language and the app's
 - `craft_ui::runtime::env::Scoped`: `pub struct Scoped { pub ink: Ink, pub key: EnvKey, pub size: ControlSize, pub glyphs: GlyphRole, pub enabled: bool, pub read_only: bool, pub wheel: WheelScope, pub direction: Direction, pub text_direction: Direction, pub ids_stable: bool, pub arena: Option<ArenaId>, pub transform: Option<CanvasTransform> }`. The values of an env.
   - `pub fn hit_reach(&self) -> f32`. How far from a handle, point or edge a press still takes it, in screen points: the theme's `size.hit.target`.
+  - `pub fn layer_direction(&self) -> Direction`. The direction of a layer opened from this scope: the interface's (`text_direction`), which an axis that keeps
 - `craft_ui::runtime::env::AgeStyle`: re-export of `craft_i18n::AgeStyle` (outside these crates).
 - `craft_ui::runtime::env::AltCodePages`: `pub struct AltCodePages { pub ansi: u16, pub oem: u16 }`. Code pages that decode Alt+numpad codes; the app sets them from the system locale.
   - `pub const fn new(ansi: u16, oem: u16) -> Self`. The ANSI and OEM code pages.
@@ -4026,7 +4036,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub fn resolved_for(&self, system: SystemAppearance) -> ResolvedRoot`. What the choices resolve to when the OS reports `system`.
   - `pub fn appearance(&self, ctx: &Context) -> Appearance`. The appearance the root's tokens resolve under on `ctx`: the mode, contrast, density and text size.
   - `pub fn contrast(mut self, contrast: impl Into<ContrastChoice>) -> Self`. Sets the contrast choice.
-  - `pub fn cursor_follows_zoom(mut self, on: bool) -> Self`. Sets whether painted cursor images scale with the interface zoom (the Scale Cursor Proportional to UI
+  - `pub fn cursor_follows_zoom(mut self, on: bool) -> Self`. Sets whether painted pointers grow with the interface zoom (the Scale Cursor Proportional to UI preference).
   - `pub fn tooltips(mut self, on: bool) -> Self`. Sets whether tooltips show (the Show Tool Tips preference). On by default.
   - `pub fn density(mut self, density: Size) -> Self`. Sets the density preset.
   - `pub fn set(mut self, set: ComponentSet) -> Self`. Sets the component set (`Selection::set`): a root app value, so a container can set another for its subtree.
@@ -4075,7 +4085,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub fn mode(mut self, mode: Mode) -> Self`. Resolves in `mode`: a plot that is dark in every theme, a preview of the other mode.
   - `pub fn contrast(mut self, contrast: Contrast) -> Self`. Resolves under `contrast`.
   - `pub fn density(mut self, density: Size) -> Self`. Resolves at the density preset `density`.
-- `craft_ui::runtime::env::UnitKind`: `pub enum UnitKind { Pixels, Percent, Degrees, Points, Times, Inches, Centimetres, Millimetres, Picas, PixelsPerInch, PixelsPerCentimetre, Minutes, Columns, LinesPerInch, LinesPerCentimetre, Feet, Yards, Metres, Q, Ha, Letters, Hyphens }`. What a number counts.
+- `craft_ui::runtime::env::UnitKind`: `pub enum UnitKind { Pixels, Percent, Degrees, Points, Times, Inches, Centimetres, Millimetres, Picas, PixelsPerInch, PixelsPerCentimetre, Minutes, Columns, LinesPerInch, LinesPerCentimetre, Feet, Yards, Metres, Q, Ha, Letters, Hyphens, PerInch }`. What a number counts.
   - `pub const LENGTHS: [UnitKind; 5]`. The lengths a unit choice offers. [`per_inch`](Self::per_inch) answers for more kinds (feet, yards, metres, Q,
   - `pub const fn decimals(self) -> RangeInclusive<usize>`. The digits after the decimal mark a number of this kind shows by default, at most.
   - `pub const fn step(self) -> f64`. What one arrow press, wheel notch or scrub point changes a number of this kind by, where the control that shows
@@ -4120,6 +4130,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
 - `craft_ui::runtime::env::WordTemplate`: re-export of `craft_i18n::WordTemplate` (outside these crates).
 - `craft_ui::runtime::env::Words`: re-export of `craft_i18n::Words` (outside these crates).
 - `craft_ui::runtime::env::WordsOverride`: `pub enum WordsOverride { Replace(Arc<Words>), Overlay(WordRows) }`. How a scope changes the built-in text: the only override path for words.
+- `craft_ui::runtime::env::ZoomPrecision`: `pub enum ZoomPrecision { Fractional, Whole }`. How many decimals a zoom shows. An app sets it once on its root env with `RootEnv::values`; [`Units::zoom_codec`]
 - `craft_ui::runtime::env::in_room`: `pub fn in_room<R>(ui: &mut Ui, rect: Rect, body: impl FnOnce(&mut Ui) -> R) -> R`. Runs `body` in a child `Ui` held to `rect` and clipped to it, as a layout room of its own: the flow grid, content
 - `craft_ui::runtime::env::system_appearance`: `pub fn system_appearance(ctx: &Context) -> SystemState`. What the OS reports on `ctx` now: the host's reader (`InstallSpec::system`), with the colour scheme egui's
 - `craft_ui::runtime::env::system_text_scale`: `pub fn system_text_scale(ctx: &Context) -> Option<f32>`. The desktop text scale from the installed [`SystemReader`], `None` where the OS gives none.
@@ -4399,7 +4410,8 @@ The motion service (13): tweens over one clock, the motion table, and one repain
   - `pub fn target(&self) -> T`. The value it runs toward.
   - `pub fn is_settled(&self) -> bool`. True once the shown value is the target.
   - `pub fn retarget(&mut self, to: T, now: f64)`. Runs toward `to` from the value shown now.
-- `craft_ui::runtime::motion::now`: `pub fn now() -> web_time::Instant`. The wall clock's reading, for a host that drives a store on real time (`ShellApp::tick`). It is the one place
+- `craft_ui::runtime::motion::now`: `pub fn now() -> Instant`. The wall clock's reading, for a host that drives a store on real time (`ShellApp::tick`). It is the one place
+- `craft_ui::runtime::motion::Instant`: re-export of `web_time::Instant` (outside these crates).
 
 ## `craft_ui::runtime::motion::spec`
 
@@ -4423,7 +4435,7 @@ The layer stack (15.2): the record of the egui layers shown, their order and the
 - `craft_ui::runtime::overlay::Backdrop`: `pub enum Backdrop { None, Scrim }`. A modal's backdrop.
 - `craft_ui::runtime::overlay::CloseReason`: `pub enum CloseReason { Requested, Escape, Outside, FocusLeft(crate::runtime::focus::FocusMove), Activated, Enter, Timeout, AnchorGone }`. Why a layer closes.
 - `craft_ui::runtime::overlay::LayerRole`: `pub enum LayerRole { Plain, Progress, InPlaceEditor }`. What a layer is for, beyond its rank.
-- `craft_ui::runtime::overlay::OpenFilter`: `pub enum OpenFilter { Any, Modal, Keys }`. What `any_open` counts.
+- `craft_ui::runtime::overlay::OpenFilter`: `pub enum OpenFilter { Any, Modal, Keys, Asks }`. What `any_open` counts.
 - `craft_ui::runtime::overlay::Rank`: `pub enum Rank { Window, Toast, Popup, Modal { backdrop: Backdrop }, ModalChrome, Tooltip }`. An overlay's place in the order. `Rank` is the only place a layer's egui order is chosen.
   - `pub const fn modal(backdrop: Backdrop) -> Rank`. A modal rank with `backdrop`.
 - `craft_ui::runtime::overlay::any_open`: `pub fn any_open(ctx: &Context, filter: OpenFilter) -> bool`. Whether any layer of the running viewport that `filter` counts was shown last frame.
@@ -4652,11 +4664,12 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
 - `craft_ui::style::DuplicateStyle`: `pub struct DuplicateStyle(pub &'static str)`. Two replacements named one style key.
 - `craft_ui::style::EnvKey`: `pub struct EnvKey`. The key of everything a style depends on besides its own key: tokens, direction, scale, the OS, the window's
   - `pub fn new(tokens: u64, direction: Direction, scale: Scale, os: Os, active: bool, values: u64) -> Self`. The key of these inputs. `tokens` is `UiTokens::key` and `values` the hash of the style-affecting app values.
+- `craft_ui::style::FieldLook`: `pub enum FieldLook { Normal, Quiet }`. How a text field looks where it sits: one value picks its fill, its edge and its placeholder together, so they
 - `craft_ui::style::FlagMask`: re-export of `craft_theme::FlagMask` (outside these crates).
 - `craft_ui::style::Flags`: re-export of `craft_theme::Flags` (outside these crates).
 - `craft_ui::style::FocusLook`: `pub struct FocusLook { pub stroke: Stroke, pub offset: f32 }`. A component's focus ring.
   - `pub const fn new(stroke: Stroke, offset: f32) -> Self`. A focus look.
-- `craft_ui::style::GlyphRole`: `pub enum GlyphRole { Control, Tool, ToolRail, PanelRail }`. How the icon-only buttons of a scope show their glyph, set by the container that holds them
+- `craft_ui::style::GlyphRole`: `pub enum GlyphRole { Control, Tool, ToolRail, PanelRail, Compact }`. How the icon-only buttons of a scope show their glyph, set by the container that holds them
 - `craft_ui::style::HandleLook`: `pub struct HandleLook { pub side: f32, pub fill: Stateful<StyleColor>, pub stroke: StyleColor, pub stroke_width: f32 }`. A canvas handle's fills and stroke.
 - `craft_ui::style::IconLook`: `pub struct IconLook { pub side: f32, pub color: Stateful<StyleColor>, pub ground: Option<Stateful<StyleColor>> }`. A component's icon.
   - `pub fn new(side: f32, color: Stateful<StyleColor>) -> Self`. An icon look.
@@ -4707,7 +4720,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn of_env(ctx: &'a Context, env: &'a crate::runtime::env::Env) -> Self`. The style context of the scope `env` describes, in the secondary variant: for code outside a style function
   - `pub fn with_root<R>(ctx: &Context, f: impl FnOnce(&StyleCx<'_>) -> R) -> R`. Runs `f` with the style context of the root scope (`Env::of_root(ctx)`), for code with no `Ui` that reads a
   - `pub fn with_root_scoped<R>(ctx: &Context, scope: &crate::runtime::env::ThemeScope, f: impl FnOnce(&StyleCx<'_>) -> R) -> R`. Runs `f` with the root style at the tokens `scope` resolves, for code that has a context and no `Ui`.
-  - `pub fn link_look(&self, enabled: bool) -> super::look::TextLook`. The one link look: body role, underlined, `accent.solid` (`accent.text` at high contrast), `text.disabled` when
+  - `pub fn link_look(&self, enabled: bool) -> super::look::TextLook`. The one link look: body role, underlined, `accent.text`, `text.disabled` when not `enabled`.
   - `pub fn exiting<P: Clone + Send + Sync + 'static>(&self, name: &'static str, spec: MotionSpec, listed: &[impl Hash]) -> Vec<(Presence, P)>`. The keyed presences of `name` in the motion memory of the component this context is scoped to, for the keys
   - `pub fn env<T: StyleValue>(&self) -> T`. An app value set by a scope. Its hash is part of the style cache key.
   - `pub fn color(&self, color: Rgba) -> StyleColor`. The constructor of `StyleColor` for styles: a semantic token read or a token-group field becomes a style colour
@@ -4736,6 +4749,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn surface(&self, kind: SurfaceKind) -> SurfaceStyle`. What a surface of `kind` draws.
   - `pub fn text_well(&self) -> SurfaceLook`. The look of a text well: the well surface with an edge that takes the focus colour while the well holds
   - `pub fn field(&self) -> SurfaceLook`. The look of a text or value field: the text well with the failure colour on its edge while its value is
+  - `pub fn quiet_field(&self) -> SurfaceLook`. The look of a field that sits in a bar (a title bar's search box,
   - `pub fn dropdown(&self) -> SurfaceLook`. The look of the closed box of a dropdown picker: the field, filled with the hover fill under the pointer and
   - `pub fn rule(&self, kind: RuleKind) -> RuleLook`. The line a rule of `kind` draws.
   - `pub fn handle(&self) -> HandleLook`. The look of a canvas handle.
@@ -5084,6 +5098,7 @@ The focus service's fixture: egui widgets for stops, the egui focus, and the eve
 - `craft_ui::testing::focus::commit_now`: `pub fn commit_now(ctx: &Context) -> Option<Id>`. The text part that commits its draft in this pass because a press moved focus away from it.
 - `craft_ui::testing::focus::context_request`: `pub fn context_request(ctx: &Context, id: Id) -> Option<Rect>`. The rect `id`'s context request of this pass opens at, when it made one.
 - `craft_ui::testing::focus::egui_focused`: `pub fn egui_focused(ctx: &Context) -> Option<Id>`. The widget egui holds key focus on.
+- `craft_ui::testing::focus::end_body`: `pub fn end_body(ctx: &Context)`. Ends the body [`begin_body`] marked: the stops registered from here on in the innermost open scope are its end
 - `craft_ui::testing::focus::focus_visible`: `pub fn focus_visible(ctx: &Context, id: Id) -> bool`. `is_focused` with focus visible.
 - `craft_ui::testing::focus::intents_of`: `pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents`. The intents routed to `id` this pass, with horizontal moves read in the component's direction.
 - `craft_ui::testing::focus::is_focused`: `pub fn is_focused(ctx: &Context, id: Id) -> bool`. Whether the focus stop is the component `id`.

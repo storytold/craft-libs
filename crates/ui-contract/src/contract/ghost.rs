@@ -110,6 +110,9 @@ fn paint_pointer(ctx: &Context, env: &Env, painter: &egui::Painter) {
     let closed = pointer::frame_raw(ctx).buttons.contains(craft_behavior::Buttons::PRIMARY);
     let tip = matches!(cursor, PaintedCursor::Circle { .. } | PaintedCursor::Outline { .. });
     let whole = pointer_art(env, &cursor, closed, false);
+    // A brush tip is canvas geometry at the canvas's zoom; any other pointer takes the interface zoom only where it
+    // follows it.
+    let whole = if tip { whole } else { whole.scaled(cursor::art_scale(ctx)) };
     let confined = cursor::current_region(ctx).filter(|region| tip && !shows_whole(ctx, region, &whole, at));
     let ring = |painter: &egui::Painter| {
         let art = pointer_art(env, &cursor.clone().marked(false, None), closed, false);

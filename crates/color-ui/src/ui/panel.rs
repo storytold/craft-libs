@@ -448,7 +448,7 @@ pub struct ColorPanel<'a> {
     wells: Option<([PairWell; 2], Bind<'a, Well>)>,
     edited: Option<Option<PickedColor>>,
     shown: Option<ColorPanelShown>,
-    recent: &'a [Srgba],
+    recent: Option<&'a [Srgba]>,
     recent_setup: Option<RecentSetup>,
     gamut: Option<Gamut<'a>>,
 }
@@ -471,7 +471,7 @@ struct Inputs<'a> {
     wells: Option<&'a [PairWell; 2]>,
     edited: Option<&'a Option<PickedColor>>,
     shown: &'a ColorPanelShown,
-    recent: &'a [Srgba],
+    recent: Option<&'a [Srgba]>,
     recent_setup: Option<&'a RecentSetup>,
 }
 
@@ -488,7 +488,7 @@ impl<'a> ColorPanel<'a> {
             wells: None,
             edited: None,
             shown: None,
-            recent: &[],
+            recent: None,
             recent_setup: None,
             gamut: None,
         }
@@ -541,9 +541,10 @@ impl<'a> ColorPanel<'a> {
         self
     }
 
-    /// The Recent Colors, a spaced `SwatchPalette` that wraps and drags.
+    /// The Recent Colors, a spaced `SwatchPalette` that wraps and drags. The FillStroke layout shows the captioned row
+    /// for a host that gives them, an empty list included; without them it shows no row.
     pub fn recent(mut self, colors: &'a [Srgba]) -> Self {
-        self.recent = colors;
+        self.recent = Some(colors);
         self
     }
 
