@@ -951,6 +951,37 @@ fn the_magnetic_lasso_shows_the_width_circle_under_the_precise_cursor() {
     }
 }
 
+// The Lasso and the Polygonal Lasso follow the canvas's precise cursor too (Other Cursors > Precise, swapped by Caps
+// Lock): the crosshair, its centre the point the outline takes, while it is on; the arrow with the lasso icon otherwise.
+// Before, Caps Lock left the arrow and icon in place.
+#[trial]
+fn the_lassos_show_the_crosshair_under_the_precise_cursor() {
+    use craft_behavior::{Cursor, CursorIcon, PaintedCursor, PointerGlyph};
+    fn check<T: Reports + 'static>(mut rig: Rig<T>, what: &str)
+    where
+        for<'a> SelectToolPass<'a, T>: CanvasTool,
+    {
+        let over = rig.canvas().center();
+        let ctx = rig.fixture().ctx().clone();
+        rig.fixture().frame(vec![pointer::moved(over)]);
+        for caps_lock in [false, true, false] {
+            craft_ui::runtime::windows::WindowHost::of(&ctx).set_caps_lock(Some(caps_lock));
+            rig.fixture().frame(Vec::new());
+            rig.fixture().frame(Vec::new());
+            let cursor = craft_ui::runtime::cursor::current(&ctx);
+            let crosshair = matches!(
+                cursor,
+                Some(Cursor::System(CursorIcon::Crosshair) | Cursor::Painted(PaintedCursor::Badged { base: CursorIcon::Crosshair, .. }))
+            );
+            let arrow = matches!(cursor, Some(Cursor::Painted(PaintedCursor::PointerTool { pointer: PointerGlyph::Arrow, .. })));
+            assert_eq!(crosshair, caps_lock, "{what}, Caps Lock {caps_lock}: {cursor:?}");
+            assert_eq!(arrow, !caps_lock, "{what}, Caps Lock {caps_lock}: {cursor:?}");
+        }
+    }
+    check(rig("Lasso", LassoTool::new(), Fake::empty()), "Lasso");
+    check(rig("Polygonal Lasso", PolygonLassoTool::new(), Fake::empty()), "Polygonal Lasso");
+}
+
 /// The cursor `rig` shows over the middle of its canvas with `mods` held.
 fn lasso_cursor<T: Reports + 'static>(rig: &mut Rig<T>, mods: Modifiers) -> Option<craft_behavior::Cursor>
 where

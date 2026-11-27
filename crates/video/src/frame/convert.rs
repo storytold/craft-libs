@@ -70,6 +70,32 @@ impl TryFrom<crate::h264::decode::Picture> for VideoFrame {
     }
 }
 
+#[cfg(feature = "hap")]
+impl TryFrom<crate::hap::Image> for VideoFrame {
+    type Error = FrameError;
+
+    /// An 8-bit RGB frame with an alpha plane, full range, identity matrix (Hap Q's YCoCg is
+    /// already converted to RGB by the decoder). The picture does not say whether the variant has
+    /// alpha: Hap and Hap Q give an opaque (255) alpha plane. The decoder returns interleaved RGBA,
+    /// so this conversion copies the samples into planes.
+    fn try_from(p: crate::hap::Image) -> Result<Self, FrameError> {
+        let (w, h) = (p.width, p.height);
+        let pixels = usize::try_from(w)
+            .ok()
+            .zip(usize::try_from(h).ok())
+            .and_then(|(w, h)| w.checked_mul(h))
+            .ok_or(FrameError::Plane("plane size overflows"))?;
+        if pixels.checked_mul(4) != Some(p.rgba.len()) {
+            return Err(FrameError::Shape("sample count does not fit the frame"));
+        }
+        let plane = |c: usize| Plane::packed(w, h, 8, Samples::U8(p.rgba.iter().skip(c).step_by(4).copied().collect()));
+        let planes = vec![plane(0)?, plane(1)?, plane(2)?];
+        let mut f = VideoFrame::new(w, h, ColorFamily::Rgb, Subsampling::S444, planes, Some(plane(3)?))?;
+        f.color = ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED };
+        Ok(f)
+    }
+}
+
 #[cfg(feature = "hevc-decode")]
 impl TryFrom<crate::hevc::decode::Picture> for VideoFrame {
     type Error = FrameError;
@@ -276,6 +302,39 @@ impl TryFrom<crate::vp8::Picture> for VideoFrame {
     }
 }
 
+#[cfg(feature = "rawvideo")]
+impl TryFrom<crate::rawvideo::Frame> for VideoFrame {
+    type Error = FrameError;
+
+    /// A 4:2:2 YCbCr or an RGB frame at 8 or 10 bits, in 16-bit storage. Raw video carries no colour
+    /// description, so YCbCr leaves everything unspecified; RGB gets the identity matrix and full
+    /// range, as for every codec.
+    fn try_from(p: crate::rawvideo::Frame) -> Result<Self, FrameError> {
+        use crate::rawvideo::Kind;
+        let (w, h, bits) = (p.width, p.height, p.bit_depth);
+        let [a, b, c] = p.planes;
+        let (family, sub) = match p.kind {
+            Kind::Yuv422 => (ColorFamily::YCbCr, Subsampling::S422),
+            Kind::Rgb => (ColorFamily::Rgb, Subsampling::S444),
+        };
+        let max_val = if bits < 16 { (1u16 << bits) - 1 } else { u16::MAX };
+        if a.iter().any(|&s| s > max_val) || b.iter().any(|&s| s > max_val) || c.iter().any(|&s| s > max_val) {
+            return Err(FrameError::Plane("sample value exceeds bit depth"));
+        }
+        let (cw, ch) = sub.chroma_size(w, h);
+        let planes = vec![
+            Plane::packed(w, h, bits, Samples::U16(a))?,
+            Plane::packed(cw, ch, bits, Samples::U16(b))?,
+            Plane::packed(cw, ch, bits, Samples::U16(c))?,
+        ];
+        let mut f = VideoFrame::new(w, h, family, sub, planes, None)?;
+        if family == ColorFamily::Rgb {
+            f.color = ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED };
+        }
+        Ok(f)
+    }
+}
+
 #[cfg(feature = "prores")]
 impl TryFrom<crate::prores::Frame> for VideoFrame {
     type Error = FrameError;
@@ -313,7 +372,8 @@ impl TryFrom<crate::dnx::Frame> for VideoFrame {
 
     /// A YCbCr frame, or an RGB one whose stored G, B, R planes are reordered to R, G, B; optional
     /// alpha, 16-bit storage. The colour volume (`CLV`) gives only the matrix; primaries, transfer
-    /// and range are not signalled.
+    /// and range are not signalled. An RGB frame is tagged full range, as an RGB frame that does
+    /// not signal a range is.
     fn try_from(p: crate::dnx::Frame) -> Result<Self, FrameError> {
         use crate::dnx::{ChromaFormat, ColorVolume, Interlace};
         let sub = match p.chroma {
@@ -413,6 +473,162 @@ impl TryFrom<crate::ffv1::Frame> for VideoFrame {
     }
 }
 
+#[cfg(feature = "bink-decode")]
+impl TryFrom<crate::bink::Picture> for VideoFrame {
+    type Error = FrameError;
+
+    /// An 8-bit 4:2:0 frame. Bink signals no colour description, and the picture carries no timing.
+    fn try_from(p: crate::bink::Picture) -> Result<Self, FrameError> {
+        let planes = vec![
+            Plane::packed(p.width, p.height, 8, Samples::U8(p.y))?,
+            Plane::packed(p.chroma_width, p.chroma_height, 8, Samples::U8(p.u))?,
+            Plane::packed(p.chroma_width, p.chroma_height, 8, Samples::U8(p.v))?,
+        ];
+        VideoFrame::new(p.width, p.height, ColorFamily::YCbCr, Subsampling::S420, planes, None)
+    }
+}
+
+#[cfg(feature = "theora-decode")]
+impl TryFrom<crate::theora::Picture> for VideoFrame {
+    type Error = FrameError;
+
+    fn try_from(p: crate::theora::Picture) -> Result<Self, FrameError> {
+        if p.pic_width == 0 || p.pic_height == 0 {
+            return Err(FrameError::Shape("picture dimensions must be non-zero"));
+        }
+        let src_uv_w = match p.pixel_format {
+            crate::theora::PixelFormat::Yuv420 | crate::theora::PixelFormat::Yuv422 => (p.width as usize).div_ceil(2),
+            crate::theora::PixelFormat::Yuv444 => p.width as usize,
+        };
+        if p.y_stride == 0 || p.uv_stride == 0 {
+            return Err(FrameError::Plane("stride cannot be zero"));
+        }
+        if p.y_stride < p.width as usize || p.uv_stride < src_uv_w {
+            return Err(FrameError::Plane("stride shorter than plane width"));
+        }
+        let crop_end_x = p.pic_x.checked_add(p.pic_width).ok_or(FrameError::Shape("crop width overflow"))?;
+        let crop_end_y = p.pic_y.checked_add(p.pic_height).ok_or(FrameError::Shape("crop height overflow"))?;
+        if crop_end_x > p.width || crop_end_y > p.height {
+            return Err(FrameError::Shape("crop bounds exceed frame dimensions"));
+        }
+
+        // Determine if crop is aligned with chroma subsampling
+        let is_aligned = match p.pixel_format {
+            crate::theora::PixelFormat::Yuv420 => p.pic_x.is_multiple_of(2) && p.pic_y.is_multiple_of(2) && p.pic_height.is_multiple_of(2),
+            crate::theora::PixelFormat::Yuv422 => p.pic_x.is_multiple_of(2),
+            crate::theora::PixelFormat::Yuv444 => true,
+        };
+
+        let (sub, cw, ch) = if is_aligned {
+            match p.pixel_format {
+                crate::theora::PixelFormat::Yuv420 => (Subsampling::S420, p.pic_width.div_ceil(2), p.pic_height.div_ceil(2)),
+                crate::theora::PixelFormat::Yuv422 => (Subsampling::S422, p.pic_width.div_ceil(2), p.pic_height),
+                crate::theora::PixelFormat::Yuv444 => (Subsampling::S444, p.pic_width, p.pic_height),
+            }
+        } else {
+            // Misaligned crop: retain all chroma samples across odd offsets by converting to S444
+            (Subsampling::S444, p.pic_width, p.pic_height)
+        };
+
+        let w_u64 = p.pic_width as u64;
+        let h_u64 = p.pic_height as u64;
+        let cw_u64 = cw as u64;
+        let ch_u64 = ch as u64;
+        let y_bytes = w_u64.checked_mul(h_u64).ok_or(FrameError::Shape("crop size overflow"))?;
+        let c_bytes = cw_u64.checked_mul(ch_u64).ok_or(FrameError::Shape("crop uv size overflow"))?;
+        let total_bytes = y_bytes.checked_add(c_bytes.checked_mul(2).ok_or(FrameError::Shape("overflow"))?).ok_or(FrameError::Shape("overflow"))?;
+        if total_bytes > crate::budget::DECODE_MEMORY_BUDGET {
+            return Err(FrameError::Shape("frame size exceeds memory budget"));
+        }
+
+        let y_len = usize::try_from(y_bytes).map_err(|_| FrameError::Shape("crop size exceeds usize"))?;
+        let uv_len = usize::try_from(c_bytes).map_err(|_| FrameError::Shape("crop uv size exceeds usize"))?;
+
+        let mut y_cropped = Vec::new();
+        y_cropped.try_reserve_exact(y_len).map_err(|_| FrameError::Shape("out of memory"))?;
+        for row in 0..p.pic_height {
+            let py = p.pic_y.checked_add(p.pic_height - 1 - row).ok_or(FrameError::Shape("crop y overflow"))?;
+            let start = (py as usize)
+                .checked_mul(p.y_stride)
+                .and_then(|s| s.checked_add(p.pic_x as usize))
+                .ok_or(FrameError::Shape("crop offset overflow"))?;
+            let end = start.checked_add(p.pic_width as usize).ok_or(FrameError::Shape("crop slice overflow"))?;
+            let slice = p.y.get(start..end).ok_or(FrameError::Plane("buffer shorter than cropped region"))?;
+            y_cropped.extend_from_slice(slice);
+        }
+
+        let mut u_cropped = Vec::new();
+        u_cropped.try_reserve_exact(uv_len).map_err(|_| FrameError::Shape("out of memory"))?;
+        let mut v_cropped = Vec::new();
+        v_cropped.try_reserve_exact(uv_len).map_err(|_| FrameError::Shape("out of memory"))?;
+
+        if is_aligned {
+            let (cx, cy) = match p.pixel_format {
+                crate::theora::PixelFormat::Yuv420 => (p.pic_x / 2, p.pic_y / 2),
+                crate::theora::PixelFormat::Yuv422 => (p.pic_x / 2, p.pic_y),
+                crate::theora::PixelFormat::Yuv444 => (p.pic_x, p.pic_y),
+            };
+            for row in 0..ch {
+                let py = cy.checked_add(ch - 1 - row).ok_or(FrameError::Shape("crop chroma y overflow"))?;
+                let start = (py as usize)
+                    .checked_mul(p.uv_stride)
+                    .and_then(|s| s.checked_add(cx as usize))
+                    .ok_or(FrameError::Shape("crop chroma offset overflow"))?;
+                let end = start.checked_add(cw as usize).ok_or(FrameError::Shape("crop chroma slice overflow"))?;
+                let u_slice = p.u.get(start..end).ok_or(FrameError::Plane("u buffer shorter than cropped region"))?;
+                let v_slice = p.v.get(start..end).ok_or(FrameError::Plane("v buffer shorter than cropped region"))?;
+                u_cropped.extend_from_slice(u_slice);
+                v_cropped.extend_from_slice(v_slice);
+            }
+        } else {
+            // Misaligned crop: extract full-resolution chroma for each pixel
+            for row in 0..p.pic_height {
+                let py = p.pic_y.checked_add(p.pic_height - 1 - row).ok_or(FrameError::Shape("crop y overflow"))?;
+                let cy = match p.pixel_format {
+                    crate::theora::PixelFormat::Yuv420 => py / 2,
+                    _ => py,
+                };
+                let row_start = (cy as usize).checked_mul(p.uv_stride).ok_or(FrameError::Shape("chroma stride overflow"))?;
+                for col in 0..p.pic_width {
+                    let px = p.pic_x.checked_add(col).ok_or(FrameError::Shape("crop x overflow"))?;
+                    let cx = match p.pixel_format {
+                        crate::theora::PixelFormat::Yuv444 => px,
+                        _ => px / 2,
+                    };
+                    let offset = row_start.checked_add(cx as usize).ok_or(FrameError::Shape("chroma offset overflow"))?;
+                    let &u_val = p.u.get(offset).ok_or(FrameError::Plane("u buffer shorter than cropped region"))?;
+                    let &v_val = p.v.get(offset).ok_or(FrameError::Plane("v buffer shorter than cropped region"))?;
+                    u_cropped.push(u_val);
+                    v_cropped.push(v_val);
+                }
+            }
+        }
+
+        let planes = vec![
+            Plane::packed(p.pic_width, p.pic_height, 8, Samples::U8(y_cropped))?,
+            Plane::packed(cw, ch, 8, Samples::U8(u_cropped))?,
+            Plane::packed(cw, ch, 8, Samples::U8(v_cropped))?,
+        ];
+
+        let mut f = VideoFrame::new(p.pic_width, p.pic_height, ColorFamily::YCbCr, sub, planes, None)?;
+        match p.color_space {
+            crate::theora::ColorSpace::Rec470M => {
+                f.color.matrix = 6;
+                f.color.primaries = 4;
+                f.color.transfer = 6;
+            }
+            crate::theora::ColorSpace::Rec470Bg => {
+                f.color.matrix = 5;
+                f.color.primaries = 5;
+                f.color.transfer = 1;
+            }
+            _ => {}
+        }
+        f.pts = p.pts;
+        Ok(f)
+    }
+}
+
 #[cfg(feature = "vmd-decode")]
 impl TryFrom<&crate::vmd::Decoder> for VideoFrame {
     type Error = FrameError;
@@ -425,8 +641,8 @@ impl TryFrom<&crate::vmd::Decoder> for VideoFrame {
     }
 }
 
-/// A picture of palette indices, `width` a row, as 8-bit R, G, B planes. Matrix 0 (identity), the
-/// other colour tags unspecified.
+/// A picture of palette indices, `width` a row, as 8-bit R, G, B planes. Matrix 0 (identity) and
+/// full range, the other colour tags unspecified.
 #[cfg(feature = "vmd-decode")]
 fn paletted(width: usize, height: usize, indices: &[u8], palette: &[[u8; 3]; 256]) -> Result<VideoFrame, FrameError> {
     let too_large = FrameError::Shape("picture size does not fit in u32");
