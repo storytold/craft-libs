@@ -331,6 +331,8 @@ pub use craft_review as review;
 pub use craft_rtf as rtf;
 #[cfg(feature = "sbs")]
 pub use craft_sbs as sbs;
+#[cfg(feature = "scopes")]
+pub use craft_scopes as scopes;
 #[cfg(feature = "score")]
 pub use craft_score as score;
 #[cfg(feature = "scraft-format")]

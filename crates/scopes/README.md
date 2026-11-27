@@ -4,6 +4,8 @@ Video scope math for a Craft app's scopes panel: the waveform, parade, histogram
 HLS vectorscopes of a frame, as count grids, with numeric summaries and trace images. The crate
 depends only on `craft-color` and `serde`, has no UI, and builds for `wasm32-unknown-unknown`.
 
+The `scopes` feature of `craft` re-exports this crate as `craft::scopes`.
+
 | Item | What |
 |---|---|
 | `Frame` | a borrowed frame: `Rgba8` with a row stride, or `Nv12` (Y' plane and interleaved Cb Cr plane, each with its own stride, plus the matrix and range) |
