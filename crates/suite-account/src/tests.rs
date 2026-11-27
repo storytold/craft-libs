@@ -81,6 +81,20 @@ fn the_handle_is_stable_and_separates_accounts() {
     assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
 }
 
+#[test]
+fn a_service_base_is_https_or_loopback_http() {
+    assert!(accounts::allowed_service_base("https://craft.example.com"));
+    assert!(accounts::allowed_service_base("https://craft.example.com/collab"));
+    assert!(accounts::allowed_service_base("http://127.0.0.1:8080"));
+    assert!(accounts::allowed_service_base("http://localhost:9"));
+    assert!(accounts::allowed_service_base("http://[::1]:80/path"));
+    assert!(!accounts::allowed_service_base(""));
+    assert!(!accounts::allowed_service_base("http://collab.lan:8080"));
+    assert!(!accounts::allowed_service_base("http://127.0.0.1"));
+    assert!(!accounts::allowed_service_base("http://127.0.0.1:99999"));
+    assert!(!accounts::allowed_service_base("http://evil@127.0.0.1:8080"));
+}
+
 // ---- signing in and out ----------------------------------------------------
 
 #[test]
@@ -720,6 +734,63 @@ fn a_machine_with_no_keychain_signs_nobody_in() {
         other => panic!("expected a keychain failure, got {other:?}"),
     }
     assert!(!store.path().unwrap().exists(), "a refused sign-in should write no file");
+}
+
+/// A store whose accounts file holds `account` and whose keychain holds `TOKEN` under that id.
+fn store_holding(account: Account) -> (tempfile::TempDir, Store<Memory>) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let keychain = Memory::new();
+    keychain.put(&account.id, &Secret::new(TOKEN)).unwrap();
+    let list =
+        accounts::Accounts { format: accounts::FORMAT, accounts: vec![account.clone()], active: Some(account.id.clone()), tombstones: Vec::new() };
+    accounts::write(&path.join(paths::FILE), &list).unwrap();
+    (dir, Store::at(Some(path), keychain))
+}
+
+#[test]
+fn shared_does_not_hand_a_token_to_a_plain_http_host() {
+    let service = "http://collab.lan:8080";
+    let account = Account { id: accounts::handle(service, USER), service: service.to_owned(), user: USER.to_owned(), ..account_at("unused", 0) };
+    let (_dir, store) = store_holding(account);
+    match store.shared() {
+        Shared::Unreadable { why, .. } => {
+            assert!(why.contains("service address"), "{why}");
+        }
+        other => panic!("expected unreadable, got {other:?}"),
+    }
+}
+
+#[test]
+fn shared_does_not_hand_a_token_when_the_handle_no_longer_matches() {
+    // `id` was minted for SERVICE; the file now names another host.
+    let account = Account {
+        id: accounts::handle(SERVICE, USER),
+        service: "https://evil.example.com".to_owned(),
+        user: USER.to_owned(),
+        ..account_at("unused", 0)
+    };
+    let (_dir, store) = store_holding(account);
+    match store.shared() {
+        Shared::Unreadable { why, .. } => {
+            assert!(why.contains("handle"), "{why}");
+        }
+        other => panic!("expected unreadable, got {other:?}"),
+    }
+}
+
+#[test]
+fn shared_still_hands_a_token_for_loopback_http() {
+    let service = "http://127.0.0.1:8080";
+    let account = Account { id: accounts::handle(service, USER), service: service.to_owned(), user: USER.to_owned(), ..account_at("unused", 0) };
+    let (_dir, store) = store_holding(account);
+    match store.shared() {
+        Shared::Session { account: found, token } => {
+            assert_eq!(found.service, service);
+            assert_eq!(token, Secret::new(TOKEN));
+        }
+        other => panic!("expected a session, got {other:?}"),
+    }
 }
 
 #[test]

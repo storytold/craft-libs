@@ -675,14 +675,17 @@ impl ShareDialog {
                 }
             }
             Answer::Granted { shared, failed } => {
-                // A link was asked for in order to be handed out, so it goes
-                // to the clipboard without a second click.
-                if let Some(url) = shared.iter().find_map(|s| s.url.clone()) {
-                    ctx.copy_text(url);
-                }
                 if let Some(sheet) = &mut self.open
                     && sheet.granting == Some(seq)
                 {
+                    // A link was asked for in order to be handed out, so it
+                    // goes to the clipboard without a second click. Only for
+                    // the sheet that asked: a grant answered after the sheet
+                    // closed or moved to another document leaves the
+                    // clipboard alone.
+                    if let Some(url) = shared.iter().find_map(|s| s.url.clone()) {
+                        ctx.copy_text(url);
+                    }
                     sheet.granting = None;
                     sheet.error = None;
                     // Recipients that went through leave the picker. The ones
@@ -918,9 +921,11 @@ fn draw(ui: &mut Ui, sheet: &mut Sheet, avatars: &HashMap<String, Avatar>, label
                 ui.add(egui::TextEdit::singleline(&mut sheet.link_key).hint_text(labels.key_hint.as_str()).password(true).desired_width(150.0));
             }
             // A key the server insists on cannot be skipped, so the control
-            // stays disabled until one is typed.
+            // stays disabled until one is typed. It also waits, as Send does,
+            // while a grant is in flight: the answer to that grant is the one
+            // the sheet takes, and an earlier link would be dropped.
             let keyed = !sheet.link_key.trim().is_empty();
-            let ready = keyed || !allowed.key_required;
+            let ready = (keyed || !allowed.key_required) && sheet.granting.is_none();
             if ui.add_enabled(ready, egui::Button::new(labels.create_link.as_str())).clicked() {
                 acts.push(Act::Grant(Grant {
                     id: sheet.id.clone(),

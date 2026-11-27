@@ -230,6 +230,9 @@ craft-sqlite = { workspace = true, optional = true }
 craft-audio-dsp = { workspace = true, optional = true }
 craft-sbs = { workspace = true, optional = true }
 craft-shared-vec = { workspace = true, optional = true }
+craft-ease = { workspace = true, optional = true }
+craft-i18n-build = { workspace = true, optional = true }
+craft-pbr = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -351,6 +354,7 @@ audio-qoa = ["audio", "craft-audio/qoa"]
 audio-qoa-decode = ["audio", "craft-audio/qoa-decode"]
 audio-qoa-encode = ["audio", "craft-audio/qoa-encode"]
 audio-rayon = ["audio", "craft-audio/rayon"]
+audio-s302m = ["audio", "craft-audio/s302m"]
 audio-sbc = ["audio", "craft-audio/sbc"]
 audio-serde = ["audio", "craft-audio/serde"]
 audio-symphonia = ["audio", "craft-audio/symphonia"]
@@ -442,6 +446,9 @@ drawingml = ["dep:craft-drawingml"]
 dwg = ["dep:craft-dwg"]
 
 dxf = ["dep:craft-dxf"]
+
+ease = ["dep:craft-ease"]
+ease-serde = ["ease", "craft-ease/serde"]
 
 ecproj-format = ["dep:craft-ecproj-format"]
 
@@ -558,6 +565,8 @@ http-url = ["dep:craft-http-url"]
 
 i18n-collate = ["craft-i18n/collate"]
 
+i18n-build = ["dep:craft-i18n-build"]
+
 ical = ["dep:craft-ical"]
 
 idml = ["dep:craft-idml"]
@@ -565,6 +574,7 @@ idml = ["dep:craft-idml"]
 image-codecs = ["dep:craft-image-codecs"]
 image-codecs-avif = ["image-codecs", "craft-image-codecs/avif"]
 image-codecs-avif-decode = ["image-codecs", "craft-image-codecs/avif-decode"]
+image-codecs-cms = ["image-codecs", "craft-image-codecs/cms"]
 image-codecs-corpus = ["image-codecs", "craft-image-codecs/corpus"]
 image-codecs-heif = ["image-codecs", "craft-image-codecs/heif"]
 image-codecs-jxl = ["image-codecs", "craft-image-codecs/jxl"]
@@ -628,6 +638,7 @@ mcp-server = ["dep:craft-mcp-server"]
 
 media = ["dep:craft-media"]
 media-avi = ["media", "craft-media/avi"]
+media-bink = ["media", "craft-media/bink"]
 media-bitstream = ["media", "craft-media/bitstream"]
 media-isobmff = ["media", "craft-media/isobmff"]
 media-matroska = ["media", "craft-media/matroska"]
@@ -667,6 +678,7 @@ odf = ["dep:craft-odf"]
 odf-text = ["odf", "craft-odf/text"]
 
 ods = ["dep:craft-ods"]
+ods-test-support = ["ods", "craft-ods/test-support"]
 
 offcrypto = ["dep:craft-offcrypto"]
 
@@ -680,6 +692,9 @@ ora = ["dep:craft-ora"]
 pages = ["dep:craft-pages", "keymap", "text"]
 
 palette = ["dep:craft-palette"]
+
+pbr = ["dep:craft-pbr"]
+pbr-parallel = ["pbr", "craft-pbr/parallel"]
 
 pcap = ["dep:craft-pcap"]
 
@@ -965,6 +980,8 @@ video-av1 = ["video", "craft-video/av1"]
 video-av1-decode = ["video", "craft-video/av1-decode"]
 video-av1-encode = ["video", "craft-video/av1-encode"]
 video-av1-large-encode = ["video", "craft-video/av1-large-encode"]
+video-bink = ["video", "craft-video/bink"]
+video-bink-decode = ["video", "craft-video/bink-decode"]
 video-dnx = ["video", "craft-video/dnx"]
 video-ffv1 = ["video", "craft-video/ffv1"]
 video-h264 = ["video", "craft-video/h264"]
@@ -981,7 +998,11 @@ video-mpeg2-encode = ["video", "craft-video/mpeg2-encode"]
 video-mpeg4 = ["video", "craft-video/mpeg4"]
 video-mpeg4-encode = ["video", "craft-video/mpeg4-encode"]
 video-prores = ["video", "craft-video/prores"]
+video-rawvideo = ["video", "craft-video/rawvideo"]
 video-screen-video = ["video", "craft-video/screen-video"]
+video-theora = ["video", "craft-video/theora"]
+video-theora-decode = ["video", "craft-video/theora-decode"]
+video-theora-encode = ["video", "craft-video/theora-encode"]
 video-threads = ["video", "craft-video/threads"]
 video-vmd = ["video", "craft-video/vmd"]
 video-vmd-decode = ["video", "craft-video/vmd-decode"]
