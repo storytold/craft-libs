@@ -10,14 +10,13 @@ const PC_EXPLICIT: u8 = 0x02;
 
 /// Reads a RIFF palette's colours in file order, flags dropped.
 ///
-/// Chunks before `data` are skipped, and only chunks inside the form's declared size count, so
-/// bytes after the form are ignored. A file that isn't a RIFF palette, a form or chunk that runs
-/// past the end, a `data` chunk with fewer entries than its count, a form without a `data` chunk
-/// and a palette without colours are errors. An entry flagged `PC_EXPLICIT` holds a hardware
-/// palette index, which an RGB colour can't stand for, so it is an error too. Never panics. The
-/// count is a 16-bit word, so at most 65 535 colours are returned.
+/// Chunks other than `data` are skipped, and only chunks inside the form's declared size count,
+/// so bytes after the form are ignored. A file that isn't a RIFF palette, a form or chunk that
+/// runs past the end (before or after `data`), a `data` chunk with fewer entries than its count, a
+/// form without a `data` chunk and a palette without colours are errors. An entry flagged
+/// `PC_EXPLICIT` holds a hardware palette index, which an RGB colour can't stand for, so it is an
+/// error too. Never panics. The count is a 16-bit word, so at most 65 535 colours are returned.
 pub fn parse_riff_pal(bytes: &[u8]) -> Result<Vec<[u8; 3]>, String> {
-    let cut_short = || String::from("the palette is cut short");
     if bytes.get(..4) != Some(b"RIFF".as_slice()) || bytes.get(8..12) != Some(b"PAL ".as_slice()) {
         return Err("this isn't a RIFF palette (.pal) file".into());
     }
@@ -25,32 +24,43 @@ pub fn parse_riff_pal(bytes: &[u8]) -> Result<Vec<[u8; 3]>, String> {
     // The form's size counts its `PAL ` type and its chunks.
     let size = bytes.get(4..8).and_then(le32).ok_or_else(cut_short)?;
     let mut rest = 8usize.checked_add(size).and_then(|end| bytes.get(12..end)).ok_or_else(cut_short)?;
+    let mut colors = None;
     while let (Some(id), Some(len)) = (rest.get(..4), rest.get(4..8).and_then(le32)) {
         let end = 8usize.checked_add(len).ok_or_else(cut_short)?;
         let body = rest.get(8..end).ok_or_else(cut_short)?;
-        if id == b"data" {
-            let [_, _, lo, hi, entries @ ..] = body else { return Err(cut_short()) };
-            let count = usize::from(u16::from_le_bytes([*lo, *hi]));
-            let colors = entries.as_chunks::<4>().0.iter().take(count).enumerate().map(|(i, &[r, g, b, flags])| {
-                if flags & PC_EXPLICIT == 0 {
-                    Ok([r, g, b])
-                } else {
-                    Err(format!("colour {} of the palette is a hardware palette index, not a colour", i + 1))
-                }
-            });
-            let colors = colors.collect::<Result<Vec<[u8; 3]>, String>>()?;
-            if colors.len() < count {
-                return Err(cut_short());
-            }
-            if colors.is_empty() {
-                return Err("the palette has no colours in it".into());
-            }
-            return Ok(colors);
+        // The first `data` chunk gives the colours; the chunks after it are still checked.
+        if id == b"data" && colors.is_none() {
+            colors = Some(data_colors(body)?);
         }
         // Chunks are padded to an even length; a pad byte the form leaves out ends it.
         rest = end.checked_add(len & 1).and_then(|next| rest.get(next..)).unwrap_or_default();
     }
-    Err("the palette has no colour data".into())
+    colors.ok_or_else(|| "the palette has no colour data".into())
+}
+
+fn cut_short() -> String {
+    "the palette is cut short".into()
+}
+
+/// The colours of a `data` chunk's body: a version word, an entry count and the entries.
+fn data_colors(body: &[u8]) -> Result<Vec<[u8; 3]>, String> {
+    let [_, _, lo, hi, entries @ ..] = body else { return Err(cut_short()) };
+    let count = usize::from(u16::from_le_bytes([*lo, *hi]));
+    let colors = entries.as_chunks::<4>().0.iter().take(count).enumerate().map(|(i, &[r, g, b, flags])| {
+        if flags & PC_EXPLICIT == 0 {
+            Ok([r, g, b])
+        } else {
+            Err(format!("colour {} of the palette is a hardware palette index, not a colour", i + 1))
+        }
+    });
+    let colors = colors.collect::<Result<Vec<[u8; 3]>, String>>()?;
+    if colors.len() < count {
+        return Err(cut_short());
+    }
+    if colors.is_empty() {
+        return Err("the palette has no colours in it".into());
+    }
+    Ok(colors)
 }
 
 #[cfg(test)]
@@ -124,6 +134,12 @@ mod tests {
         huge_chunk[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
         let mut not_pal = pal(&three, 3);
         not_pal[8..12].copy_from_slice(b"WAVE");
+        // A chunk after `data`, inside the form, whose body runs past the end.
+        let mut after_data = pal(&three, 3);
+        after_data.extend_from_slice(b"JUNK");
+        after_data.extend_from_slice(&100u32.to_le_bytes());
+        let size = after_data.len() as u32 - 8;
+        after_data[4..8].copy_from_slice(&size.to_le_bytes());
         let cases = [
             ("empty", Vec::new()),
             ("text", b"JASC-PAL\r\n0100\r\n1\r\n255 0 0\r\n".to_vec()),
@@ -134,6 +150,7 @@ mod tests {
             ("empty form", empty_form),
             ("past end", past_end),
             ("huge chunk", huge_chunk),
+            ("chunk past end after data", after_data),
         ];
         for (name, bytes) in cases {
             assert!(parse_riff_pal(&bytes).is_err(), "{name} should be refused");
