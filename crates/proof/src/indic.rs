@@ -14,9 +14,8 @@
 //! The rules come from the scripts' Unicode encoding alone; no pattern file or word list is
 //! read (and none is borrowed). The Brahmic blocks share one layout (the ISCII order), so a
 //! script is its block's start and a few script-specific code points (`Script::kind`).
-//! Gujarati ([`ProofLang::Gu`]) uses them; Devanagari is ready for Hindi
-//! and the other Devanagari languages: map the language to [`Script::Devanagari`] in
-//! [`Script::of`].
+//! Gujarati ([`ProofLang::Gu`]) and Hindi ([`ProofLang::Hi`], [`Script::Devanagari`]) use them;
+//! another language written in one of these scripts is one more line in [`Script::of`].
 //!
 //! A single akshara left at the end or start of a line is ruled out by the paragraph's
 //! [`Limits`](crate::hyphen::Limits), which count letters (vowel signs and anusvara count,
@@ -61,6 +60,7 @@ impl Script {
     pub fn of(lang: ProofLang) -> Option<Script> {
         match lang {
             ProofLang::Gu => Some(Script::Gujarati),
+            ProofLang::Hi => Some(Script::Devanagari),
             _ => None,
         }
     }
@@ -243,10 +243,11 @@ mod tests {
         assert_eq!(hi("क्\u{200D}षमा"), "क्\u{200D}ष-मा");
     }
 
-    /// Only Gujarati is mapped to a script so far.
+    /// Gujarati and Hindi are mapped to their scripts, other languages to none.
     #[test]
     fn languages_map_to_their_script() {
         assert_eq!(Script::of(ProofLang::Gu), Some(Script::Gujarati));
+        assert_eq!(Script::of(ProofLang::Hi), Some(Script::Devanagari));
         assert_eq!(Script::of(ProofLang::En), None);
         assert_eq!(Script::of(ProofLang::Bg), None);
     }

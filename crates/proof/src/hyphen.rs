@@ -15,8 +15,9 @@
 //!
 //! **Bulgarian**: the Bulgarian syllable rules ([`crate::bg`]); no pattern file or word list.
 //!
-//! **Gujarati**: breaks between aksharas, never inside a conjunct or between a consonant and its
-//! vowel sign ([`crate::indic`], rules from the script's Unicode encoding); no pattern file.
+//! **Gujarati and Hindi**: breaks between aksharas, never inside a conjunct or between a
+//! consonant and its vowel sign ([`crate::indic`], rules from the script's Unicode encoding); no
+//! pattern file.
 //!
 //! **German**: the TeX German patterns for the reformed spelling ([`Patterns::de`]), also for
 //! Swiss text, whose `ss` the patterns split like any double consonant (`Stras-se`).
@@ -119,7 +120,7 @@ pub enum Source {
     Patterns,
     /// A heuristic for a language without a dictionary or patterns.
     Heuristic,
-    /// A language's syllable rules (Bulgarian [`crate::bg`], Turkish, Gujarati [`crate::indic`]).
+    /// A language's syllable rules (Bulgarian [`crate::bg`], Turkish, Gujarati and Hindi [`crate::indic`]).
     Rules,
     /// No break points: the word is too short or no source applies.
     None,
@@ -166,7 +167,7 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
     if lang == ProofLang::Bg && core.iter().all(|&c| crate::bg::is_letter(c)) {
         return (crate::bg::points(core), Source::Rules);
     }
-    // Gujarati words break between aksharas ([`crate::indic`]); other words in a Gujarati run
+    // Gujarati and Hindi words break between aksharas ([`crate::indic`]); other words in their runs
     // (`WordCraft`) are hyphenated as English.
     if let Some(script) = crate::indic::Script::of(lang)
         && core.iter().all(|&c| script.is_letter(c))

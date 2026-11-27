@@ -10,6 +10,7 @@ pub(crate) mod test_dict;
 use std::sync::Arc;
 
 use crate::affix::AffixDict;
+use crate::script_checks::Script;
 use crate::slot::DictSlot;
 
 pub use suggest::suggest;
@@ -61,29 +62,20 @@ pub fn is_correct_with(d: &AffixDict, word: &str) -> bool {
 
 /// [`is_correct_with_options`] against a given dictionary.
 fn check(d: &AffixDict, word: &str, opts: &crate::Options) -> bool {
-    if d.is_empty() {
-        return true;
-    }
-    let w = word.trim_matches(|c: char| !c.is_alphanumeric() && !is_gujarati_char(c) && !matches!(c, '\'' | '’' | '-'));
-    let w = w.trim_matches(['\'', '’', '-']);
-    let letter_count = w.chars().filter(|&c| (is_gujarati_char(c) && !c.is_numeric()) || c.is_alphabetic()).count();
-    if letter_count <= 1 || (opts.ignore_numbers && w.chars().any(char::is_numeric)) {
-        return true;
-    }
-    // A word in another script (or with no Gujarati characters) is not marked by this dictionary.
-    if !w.chars().any(is_gujarati_char) {
-        return true;
-    }
-    if w.contains('-') {
-        // The whole word first, as Hunspell does: a hyphenated entry or user word.
-        return known(d, w) || w.split('-').all(|p| p.chars().count() <= 1 || !p.chars().any(is_gujarati_char) || known(d, p));
-    }
-    known(d, w)
+    crate::script_checks::is_correct(&SCRIPT, d, word, opts)
 }
 
-/// Is one word (no hyphens) in the dictionary or the user dictionary?
-fn known(d: &AffixDict, w: &str) -> bool {
-    d.check(w) || crate::in_user_dictionary(&w.to_lowercase())
+/// Gujarati for the shared checks: the whole block is kept in words, its letters are everything
+/// in it but the digits.
+pub(crate) const SCRIPT: Script = Script { in_words: is_gujarati_char, is_letter, is_digit: is_gujarati_digit, variant: None };
+
+fn is_letter(c: char) -> bool {
+    is_gujarati_char(c) && !c.is_numeric()
+}
+
+/// Is `c` a Gujarati digit (U+0AE6..=U+0AEF)?
+fn is_gujarati_digit(c: char) -> bool {
+    ('\u{0AE6}'..='\u{0AEF}').contains(&c)
 }
 
 #[cfg(test)]
