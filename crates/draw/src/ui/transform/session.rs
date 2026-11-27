@@ -513,10 +513,13 @@ impl<W: TransformWarp> TransformSession<W> {
 
     /// Takes the draft as it is now as at rest without recording an undo step: what an app did to keep its mode across
     /// an [`undo`](Self::undo) or [`redo`](Self::redo) (Warp entered again on the box the step restored, or left) is
-    /// part of that step, not a step of its own, and leaves the redo steps as they are.
+    /// part of that step, not a step of its own, and leaves the redo steps as they are. A box the app set on the way
+    /// (the box around a held warp) starts no run of nudges: the next edit would end that run by recording it as a
+    /// step, which drops the redo steps.
     pub fn rest_unrecorded(&mut self) {
         self.rested = self.draft.clone();
         self.changed = false;
+        self.last_nudge = None;
     }
 
     /// Whether [`undo`](Self::undo) has a step to take back.

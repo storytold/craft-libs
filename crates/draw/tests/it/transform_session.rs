@@ -133,6 +133,24 @@ fn undo_or_redo_inside_the_nudge_pause_keeps_the_nudges_as_their_own_step() {
     assert!(near(at(&s), Point::new(30.0, 0.0)), "{:?}", at(&s));
 }
 
+// What the app sets after an Undo to keep its mode (a box, then `rest_unrecorded`) starts no run of nudges: the next
+// edit records no step of it, and the redo steps stay.
+#[trial]
+fn a_rest_taken_unrecorded_keeps_the_redo_steps_through_the_next_edit() {
+    let at = |s: &TransformSession<Warp>| s.quad()[0];
+    let mut s = session();
+    drag(&mut s, moved(doc(30.0, 0.0)), 0.0);
+    assert!(s.undo());
+    s.apply(TransformEdit::Box(set(moved(doc(5.0, 0.0)))), 0.1);
+    s.rest_unrecorded();
+    s.apply(TransformEdit::Warp(Warp(true)), 0.2);
+    s.rest_unrecorded();
+    assert!(s.can_redo(), "the undone drag is still there to redo");
+    assert!(!s.can_undo(), "and nothing was recorded");
+    assert!(s.redo());
+    assert!(near(at(&s), Point::new(30.0, 0.0)), "{:?}", at(&s));
+}
+
 // Between a Box Begin and its Commit, undo and redo return false and change nothing.
 
 // `homography` maps the frame's corners onto the box's corners and its centre into the box; a box
