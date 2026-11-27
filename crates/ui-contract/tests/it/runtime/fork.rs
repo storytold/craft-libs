@@ -6,7 +6,7 @@ use craft_host::{AppInfo, Host, Jobs, ManualJobs};
 use craft_ui::contract::{ContainerProps, Job, Pending, Props as _, Remember as _, Scroll, Show as _, ShowContainer as _};
 use craft_ui::runtime::memory::{ForkError, fork_into};
 use craft_ui::testing::layout::{Block, in_region};
-use craft_ui::testing::memory::{Stage, global};
+use craft_ui::testing::memory::{Stage, global, slot_records};
 use craft_ui::testing::{Frames, pointer, trial};
 use craft_ui_test_kit::body::Slab;
 use egui::{Pos2, Rect, Ui, Vec2};
@@ -139,4 +139,20 @@ fn fork_into_the_same_context_is_refused_and_leaves_its_own_state_alone() {
     assert_eq!(fork_into(&window.ctx, &alias), Err(ForkError::SameContext), "a context is not forked into itself");
     window.frame(vec![], |ui| *seen.borrow_mut() = poll_type(ui, id, 5u32));
     assert_eq!(*seen.borrow(), Pending::Ready(5), "the context still takes its own landed result");
+}
+
+/// A fork copies the destination's slots, so it copies their registry records too: without them the copied slots read as
+/// `recorded` (that flag comes from finding the slot in context data) and write-back never records them, so no owner could
+/// ever evict them and `forget` could not reach them.
+#[trial]
+fn a_fork_takes_the_copied_slots_registry_records_too() {
+    let mut window = Frames::new();
+    let top = Cell::new(0.0);
+    window.idle(3, |ui| list(ui, &top));
+    let shadow = Frames::new();
+    assert_eq!(slot_records(&shadow.ctx), 0, "a fresh context holds no slot records");
+    fork_into(&window.ctx, &shadow.ctx).expect("the fork runs outside a pass");
+    let copied = slot_records(&shadow.ctx);
+    assert!(copied > 0, "the destination holds the copied scroll slot's record");
+    assert_eq!(copied, slot_records(&window.ctx), "every copied slot has a record, none left behind");
 }

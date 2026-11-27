@@ -68,6 +68,12 @@ pub fn records_written(ctx: &Context) -> usize {
     memory::records_written(ctx)
 }
 
+/// How many slot records the registry of `ctx` holds: a fork copies its source's, so the destination can evict and
+/// forget what it was given.
+pub fn slot_records(ctx: &Context) -> usize {
+    memory::slot_records(ctx)
+}
+
 /// Drops the slots the end hook evicted.
 pub fn dispose_evicted(ctx: &Context) {
     memory::dispose_evicted(ctx);

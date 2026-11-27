@@ -208,6 +208,7 @@ struct OwnerRecord {
 }
 
 /// One entry the runtime keeps for a component, and the owner that is tested for its eviction.
+#[derive(Clone, Copy)]
 struct SlotRecord {
     owner: Id,
     remove: Remover,
@@ -452,6 +453,20 @@ fn forget_tier(ctx: &Context, id: Id, tier: u8) {
     drop(moved);
 }
 
+/// Takes the destination's registry records for every slot a fork copied into it: `Registry` is per-context framework
+/// state while `fork_into` copies egui memory, so without this the copied slots read as `recorded` (that flag comes from
+/// finding the slot in context data) and `write_back` never records them — no owner, so `evict` and `forget_tier` could
+/// never reach them. The owner kept is the source's: the slot is that component's state, and the destination's passes
+/// record it under their own owner as soon as they write it again.
+pub(crate) fn adopt_copied_slots(from: &Context, to: &Context) {
+    let copied: Vec<((Id, u8, TypeId), SlotRecord)> = pass_state::with::<Registry, _>(from, |reg| reg.slots.iter().map(|(k, v)| (*k, *v)).collect());
+    pass_state::with::<Registry, _>(to, |reg| {
+        for (key, record) in copied {
+            reg.slots.insert(key, record);
+        }
+    });
+}
+
 /// Registers a slot the motion service wrote straight into context data, so it goes with its owner's shown entries.
 pub(crate) fn adopt<T: Any + Clone + Send + Sync>(ctx: &Context, owner: Id, id: Id) {
     fn remove<T: Any + Send + Sync>(data: &mut Map, id: Id) -> Option<Removed> {
@@ -480,6 +495,13 @@ pub(crate) fn dispose_shown<T: Slot>(ctx: &Context, id: Id) {
         QUEUED.fetch_add(1, Ordering::Release);
         pass_state::with::<Registry, _>(ctx, |reg| reg.graveyard.push(moved));
     }
+}
+
+/// How many slot records the registry of `ctx` holds: a fork copies its source's, so the destination can evict and forget
+/// what it was given instead of keeping it for ever.
+#[cfg(feature = "testing")]
+pub(crate) fn slot_records(ctx: &Context) -> usize {
+    pass_state::with::<Registry, _>(ctx, |reg| reg.slots.len())
 }
 
 /// How many slot records write-back has written in `ctx` so far.
@@ -1045,6 +1067,8 @@ pub fn fork_into(from: &Context, to: &Context) -> Result<(), ForkError> {
         return Err(ForkError::SameContext);
     }
     store::copy_memory(from, to);
+    // the copied slots' registry records follow them, or nothing in the destination could ever evict them
+    adopt_copied_slots(from, to);
     pending::detach_fork(from, to);
     Ok(())
 }
