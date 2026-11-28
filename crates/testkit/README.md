@@ -114,21 +114,25 @@ The tests that call the copies in VectorCraft, DesignCraft and WordCraft need ea
 
 The `deadline` module is not built for `wasm32`.
 
-`with_deadline(limit, label, f)` runs `f` on its own thread and returns its value. When `f` does not
-finish within the limit, the test fails with a message that names `label`, the limit and the variable
-that sets it. A panic in `f` is raised again in the test with its original payload. The limit counts
-from the call, including the time spent starting the thread. When `f` returns or panics after the
-limit has passed, the test fails with the label and the limit, and with the panic's message if it has
-one.
+The limits in this module guard against a hang. Elapsed time does not decide a result: a test fails on
+a limit only when nothing has arrived by then.
 
-`wait_until(limit, what, cond)` calls `cond` on the test's thread until it returns `true`. It calls
-`cond` at once, then after pauses that start at 1 ms and double up to 50 ms, and does not call it
-again once the limit has passed. When the limit passes first, or `cond` returns `true` only after the
-limit has passed, the test fails with a message that names `what`.
+`with_deadline(limit, label, f)` runs `f` on its own thread and returns its value. A panic in `f` is
+raised again in the test with its original payload. A value or panic that arrives after the limit is
+still the result. When `f` has neither returned nor panicked within the limit, the test fails with a
+message that names `label`, the limit and the variable that sets it. The limit counts from the start
+of the thread.
+
+`wait_until(limit, what, &signal, cond)` calls `cond` on the test's thread at once, and again each
+time another thread calls `signal.raise()`, until `cond` returns `true`. The thread that changes the
+state `cond` reads raises the `Signal` after each change. A raise that comes while `cond` runs makes
+`wait_until` call `cond` again straight after. The limit counts from the start of the call. When the
+limit has passed and the latest call of `cond` returned `false`, the test fails with a message that
+names `what`, even if the signal is still being raised.
 
 ```rust
 use std::time::Duration;
-use craft_testkit::deadline::{DeadlineLimit, wait_until, with_deadline};
+use craft_testkit::deadline::{DeadlineLimit, Signal, wait_until, with_deadline};
 
 // The default of 30 s; CRAFT_TEST_TIMEOUT_SECS replaces it.
 let pixels = with_deadline(Duration::from_secs(30), "decode seed 7", move || decode(&bytes));
@@ -137,7 +141,9 @@ let pixels = with_deadline(Duration::from_secs(30), "decode seed 7", move || dec
 let limit = DeadlineLimit::new(Duration::from_secs(30)).with_variable("FILMCRAFT_HOSTILE_TIMEOUT_SECS");
 with_deadline(limit, "hostile input 12", move || parse(&input));
 
-wait_until(Duration::from_secs(10), "the export to finish", || job.is_done());
+// The export job calls `done.raise()` after it changes its state.
+let done = Signal::new();
+wait_until(Duration::from_secs(10), "the export to finish", &done, || job.is_done());
 ```
 
 ### The limit variable
@@ -161,12 +167,14 @@ calls this module's.
 
 ### Limits
 
-- A body that runs past its limit fails the test, but its thread is left running until the test
-  process exits. A body that never returns can keep the test binary alive after its tests finish.
-- `wait_until` checks its limit only between calls of `cond`. A `cond` that blocks is not interrupted,
-  so it must return promptly.
-- Neither function returns elapsed time. Tests of this crate use channel handshakes, and the only time
-  bounds in them are the limits under test.
+- When a body has no result within its limit, the test fails, but the body's thread is left running
+  until the test process exits. A body that never returns can keep the test binary alive after its
+  tests finish.
+- A `cond` that blocks is not interrupted, so it must return promptly.
+- A state change that nobody signals is not seen: when the signal is not raised, `wait_until` fails
+  at the limit even if `cond` would now return `true`.
+- Neither function returns elapsed time. Tests of this crate use channel handshakes and an injected
+  wait in place of the limits.
 
 ## hostile
 
@@ -180,8 +188,10 @@ yields no copies. `mutations` and `Rng` build for `wasm32`.
 
 `hammer(&config, seed, parse)` runs `parse` on the unmodified seed, on every truncation of it
 (lengths 0 to one less than its length), and on `mutations(seed, rounds)`. The cases run one after
-another on one worker thread, and the test's thread fails the test when a case runs past its limit.
-A case that finishes after its limit also fails the test. The test fails on the first case that
+another on one worker thread, and the test's thread fails the test when a case is still running once
+its limit has passed since it started. The limit guards against a hang: a case that finishes passes
+or fails on what `parse` did, however long it took, and the number of cases depends only on the seed,
+the rounds and the divisor. The test fails on the first case that
 panics or does not finish, with a message that names the config's label, the case
 (`the unmodified seed`, `truncation to N` or the edits), the input's length and the panic's message.
 `parse` must be `Fn(&[u8]) + Send + Sync + 'static`, since a case that does not finish keeps running
