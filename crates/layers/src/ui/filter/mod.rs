@@ -901,8 +901,8 @@ impl<'a> LayerFilterBar<'a> {
                         (FilterKind::Pixel, "image", &words.pixel),
                         (FilterKind::Adjustment, "adjustment_layer", &words.adjustment),
                         (FilterKind::Type, "text", &words.type_layers),
-                        (FilterKind::Shape, "square", &words.shape),
-                        (FilterKind::SmartObject, "app_window", &words.smart_object),
+                        (FilterKind::Shape, "shape_layer", &words.shape),
+                        (FilterKind::SmartObject, "smart_object", &words.smart_object),
                     ];
                     toggles(ui, &kinds, FilterKind::name, &mut next.kinds);
                 }

@@ -2011,3 +2011,15 @@ lucide = "keyboard"
 phosphor = "keyboard"
 carbon = "keyboard"
 tabler = "keyboard"
+
+[[icon]]
+name = "shape_layer"
+directional = false
+lucide = "vector-square"  # a square with corner handles: a shape with editable anchor points
+phosphor = "bounding-box"
+
+[[icon]]
+name = "smart_object"
+directional = false
+lucide = "file-box"  # a file in a box: contents kept whole inside the layer
+phosphor = "package"
