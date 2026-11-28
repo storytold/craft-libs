@@ -418,3 +418,126 @@ fn far_out_curves_flatten_into_a_bounded_number_of_points() {
         let _ = parse(&e).unwrap();
     }
 }
+
+/// "Hello" at 12 pt from (20, 50), each character 6.6 pt on, in `face`, at `angle`.
+fn hello(face: &str, angle: f64, chars: &str) -> Op {
+    let chars: Vec<(char, f64)> = chars.chars().enumerate().map(|(i, c)| (c, i as f64 * 6.6)).collect();
+    let end = chars.len() as f64 * 6.6;
+    let run = TextRun { chars, end, origin: Point::new(20.0, 50.0), angle, size: 12.0, face: face.into(), weight: 700, italic: true, rgb: BLUE };
+    Op::Text { run, outline: rect(20.0, 40.0, 20.0 + end, 52.0) }
+}
+
+fn texts(p: &crate::Picture) -> Vec<&crate::Text> {
+    p.items.iter().filter_map(|i| if let Item::Text(t) = i { Some(&**t) } else { None }).collect()
+}
+
+#[test]
+fn a_text_run_reads_back_as_text_where_it_was_written() {
+    let b = write_emf(&[hello("Arial", 0.0, "Hello"), hello("Arial", 0.0, "Again")], 200.0, 100.0);
+    // Two fonts made and deleted in one slot past the brush and pen: the header counts it.
+    assert!(u16_at(&b, 56) > 3);
+    let p = parse(&b).unwrap();
+    assert_eq!(p.skipped_records, 0, "the reader knows every record the writer writes");
+    let t = texts(&p);
+    assert_eq!(t.len(), 2, "both runs are text, not outlines");
+    assert!(!p.items.iter().any(|i| matches!(i, Item::Path { .. })));
+    let t = t[0];
+    assert_eq!(t.text, "Hello");
+    assert_eq!(t.font.family, "Arial");
+    assert!(t.font.italic && t.font.weight == 700);
+    assert_eq!(t.color, [0, 0, 255, 255]);
+    let [a, bb, _, _, e, f] = t.transform;
+    assert!(close(e, 20.0, 0.05) && close(f, 50.0, 0.05), "the first character sits on the origin: {e}, {f}");
+    assert!(a > 0.0 && bb.abs() < 1e-9, "the baseline runs to the right");
+    // The advances add up to the run's length, rounded once: rounding does not build up.
+    let units: f64 = t.dx.iter().map(|d| f64::from(*d)).sum();
+    assert_eq!(units, (33.0 * emf::UNITS_PER_PT).round());
+    // The em is the size: the height is negative (the character height), 12 pt in text units.
+    assert!(t.font.height < 0.0 && close(f64::from(-t.font.height) * a, 12.0, 0.03));
+}
+
+#[test]
+fn a_turned_text_run_keeps_its_direction() {
+    let p = parse(&write_emf(&[hello("Arial", 90.0, "Up")], 200.0, 100.0)).unwrap();
+    let t = texts(&p);
+    let [a, b, ..] = t[0].transform;
+    assert!(a.abs() < 1e-6 && b < 0.0, "reads up the page: {a}, {b}");
+}
+
+#[test]
+fn type_the_records_cannot_place_is_its_outline() {
+    // A character outside the BMP, a control character, no face, a face too long for a LOGFONT.
+    let long = "F".repeat(32);
+    for op in [hello("Arial", 0.0, "a\u{1F600}"), hello("Arial", 0.0, "a\tb"), hello("", 0.0, "ab"), hello(&long, 0.0, "ab")] {
+        let p = parse(&write_emf(&[op], 200.0, 100.0)).unwrap();
+        assert!(texts(&p).is_empty());
+        assert!(matches!(p.items.as_slice(), [Item::Path { fill: Some([0, 0, 255, 255]), .. }]), "{:?}", p.items);
+    }
+    // WMF writes every run as its outline.
+    let w = wmf(&[hello("Arial", 0.0, "Hello")], page(200.0, 100.0)).unwrap();
+    let p = parse(&w.bytes).unwrap();
+    assert!(texts(&p).is_empty());
+    assert!(matches!(p.items.as_slice(), [Item::Path { fill: Some([0, 0, 255, 255]), .. }]));
+}
+
+#[test]
+fn hostile_run_values_write_an_outline_without_a_panic() {
+    let bad = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1.0e300, -1.0e300];
+    let mut runs: Vec<Op> = Vec::new();
+    for v in bad {
+        for field in 0..4 {
+            // A huge but finite angle is still a direction, and is written as text.
+            if field == 2 && v.is_finite() {
+                continue;
+            }
+            let mut op = hello("Arial", 0.0, "Hi");
+            if let Op::Text { run, .. } = &mut op {
+                match field {
+                    0 => run.size = v,
+                    1 => run.origin = Point::new(v, 50.0),
+                    2 => run.angle = v,
+                    _ => run.chars[1].1 = v,
+                }
+            }
+            runs.push(op);
+        }
+    }
+    let mut long = hello("Arial", 0.0, "");
+    if let Op::Text { run, .. } = &mut long {
+        run.chars = vec![('a', 0.0); 32_769];
+    }
+    runs.push(long);
+    let n = runs.len();
+    let p = parse(&write_emf(&runs, 200.0, 100.0)).unwrap();
+    assert!(texts(&p).is_empty(), "no hostile run is written as text");
+    let paths = p.items.iter().filter(|i| matches!(i, Item::Path { .. })).count();
+    assert_eq!(paths, n, "each one is its outline instead");
+}
+
+/// A two-character run from (20, 50) with these offsets and end, at `angle`.
+fn run_at(offsets: [f64; 2], end: f64, angle: f64) -> Op {
+    let mut op = hello("Arial", angle, "Hi");
+    if let Op::Text { run, .. } = &mut op {
+        run.chars[0].1 = offsets[0];
+        run.chars[1].1 = offsets[1];
+        run.end = end;
+    }
+    op
+}
+
+#[test]
+fn the_header_bounds_reach_a_character_past_the_runs_end() {
+    // The second character starts at 100 pt though the run ends at 10.
+    let back = write_emf(&[run_at([0.0, 100.0], 10.0, 0.0)], 200.0, 100.0);
+    let ahead = write_emf(&[run_at([0.0, 50.0], 100.0, 0.0)], 200.0, 100.0);
+    assert_eq!(i32_at(&back, 16), i32_at(&ahead, 16), "both runs reach 100 pt along the baseline");
+}
+
+#[test]
+fn a_huge_angle_is_the_direction_it_names() {
+    // 1e18 degrees is 280 degrees on from a whole number of turns.
+    let huge = parse(&write_emf(&[hello("Arial", 1.0e18, "Hi")], 200.0, 100.0)).unwrap();
+    let plain = parse(&write_emf(&[hello("Arial", 280.0, "Hi")], 200.0, 100.0)).unwrap();
+    let (h, p) = (texts(&huge)[0], texts(&plain)[0]);
+    assert_eq!(h.transform, p.transform);
+}

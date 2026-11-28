@@ -5,11 +5,12 @@
 //! figure) filled with a solid brush or stroked with a geometric pen; brushes and pens are made
 //! when the colour or pen changes and deleted when replaced. Clips are path clips inside a saved
 //! DC; images are StretchDIBits (opaque) or AlphaBlend (with transparency) under a world transform
-//! that places their pixels.
+//! that places their pixels. A text run is a font made for it, EMR_EXTTEXTOUTW with each
+//! character's advance, and the font deleted.
 
 use kurbo::{Affine, BezPath, PathEl, Point, Rect};
 
-use super::{Dash, Image, Op, Out, Pen, dib};
+use super::{Dash, Image, Op, Out, Pen, TextRun, dib};
 use crate::{Cap, Join};
 
 // Record types (MS-EMF 2.1.1).
@@ -18,6 +19,8 @@ pub(crate) const POLYBEZIERTO: u32 = 5;
 pub(crate) const POLYLINETO: u32 = 6;
 pub(crate) const EOF: u32 = 14;
 pub(crate) const SETBKMODE: u32 = 18;
+pub(crate) const SETTEXTALIGN: u32 = 22;
+pub(crate) const SETTEXTCOLOR: u32 = 24;
 pub(crate) const SETPOLYFILLMODE: u32 = 19;
 pub(crate) const MOVETOEX: u32 = 27;
 pub(crate) const SAVEDC: u32 = 33;
@@ -36,6 +39,8 @@ pub(crate) const STROKEPATH: u32 = 64;
 pub(crate) const SELECTCLIPPATH: u32 = 67;
 pub(crate) const STRETCHDIBITS: u32 = 81;
 pub(crate) const EXTCREATEPEN: u32 = 95;
+pub(crate) const EXTCREATEFONTINDIRECTW: u32 = 82;
+pub(crate) const EXTTEXTOUTW: u32 = 84;
 pub(crate) const ALPHABLEND: u32 = 114;
 
 /// The `" EMF"` signature in the header.
@@ -43,9 +48,17 @@ pub(crate) const SIGNATURE: u32 = 0x464D_4520;
 /// Stock objects (selected to release ours before deleting them).
 const WHITE_BRUSH: u32 = 0x8000_0000;
 const NULL_PEN: u32 = 0x8000_0008;
-/// Our two object slots (0 is reserved).
+const DEVICE_DEFAULT_FONT: u32 = 0x8000_000E;
+/// Our object slots (0 is reserved).
 const BRUSH: u32 = 1;
 const PEN: u32 = 2;
+const FONT: u32 = 3;
+/// TA_BASELINE | TA_LEFT | TA_NOUPDATECP: the reference point is the first character's origin.
+const TA_BASELINE: u32 = 24;
+/// LogFontExDv's DesignVector signature.
+const DV_SIGNATURE: u32 = 0x0800_7664;
+/// Where the header keeps its handle count.
+const HEADER_HANDLES: usize = 56;
 
 pub(crate) const PS_GEOMETRIC: u32 = 0x0001_0000;
 pub(crate) const PS_USERSTYLE: u32 = 7;
@@ -114,6 +127,10 @@ struct Writer {
     pen: Option<PenKey>,
     fill_mode: Option<u32>,
     miter: Option<u32>,
+    text_align: bool,
+    text_color: Option<u32>,
+    /// A font slot was used: the header counts one more handle.
+    fonts: bool,
 }
 
 /// Write `ops` as an EMF of `region`; the header's description names `app` and `title`.
@@ -130,6 +147,9 @@ pub(crate) fn write(ops: &[Op], region: Rect, app: &str, title: &str) -> Vec<u8>
         pen: None,
         fill_mode: None,
         miter: None,
+        text_align: false,
+        text_color: None,
+        fonts: false,
     };
     w.header(app, title);
     // Dash gaps and hatches show what is below.
@@ -209,6 +229,9 @@ impl Writer {
         let size = u32::try_from(self.out.len()).unwrap_or(u32::MAX);
         self.out.set_u32(48, size);
         self.out.set_u32(52, self.records);
+        if self.fonts {
+            self.out.set_u16(HEADER_HANDLES, 4);
+        }
         self.out.0
     }
 
@@ -247,6 +270,13 @@ impl Writer {
                     self.record(STROKEPATH, |o| b.iter().for_each(|v| o.i32(*v)));
                 }
             }
+            Op::Text { run, outline } => {
+                if run.emf_writable() {
+                    self.text(run);
+                } else {
+                    self.op(&Op::Fill { path: outline.clone(), even_odd: false, rgb: run.rgb });
+                }
+            }
             Op::Image { image, xf, opacity } => self.image(image, *xf, *opacity),
             Op::Clip { path, even_odd } => {
                 self.release();
@@ -260,9 +290,11 @@ impl Writer {
             Op::Unclip => {
                 self.release();
                 self.record(RESTOREDC, |o| o.i32(-1));
-                // The DC's fill mode and miter limit are back to what they were at the save.
+                // The DC's modes are back to what they were at the save.
                 self.fill_mode = None;
                 self.miter = None;
+                self.text_align = false;
+                self.text_color = None;
             }
         }
     }
@@ -429,6 +461,86 @@ impl Writer {
                 o.i32(p[1]);
             }
         });
+    }
+
+    /// A run [`TextRun::emf_writable`] accepts: its font, the alignment and colour when they
+    /// change, the characters with their advances, then the font deleted. Advances come from
+    /// rounded absolute positions, so rounding never accumulates along the line.
+    fn text(&mut self, run: &TextRun) {
+        let k = UNITS_PER_PT;
+        let (sin, cos) = run.angle.rem_euclid(360.0).to_radians().sin_cos();
+        // Along the baseline and down from it, in picture space (y down).
+        let along = |d: f64| run.origin + kurbo::Vec2::new(cos, -sin) * d;
+        let below = kurbo::Vec2::new(sin, cos);
+        let first = run.chars.first().map_or(0.0, |c| c.1);
+        let reference = self.dev(along(first));
+        let units = |d: f64| (d * k).round().clamp(-MAX_COORD, MAX_COORD) as i64;
+        let ends: Vec<i64> = run.chars.iter().skip(1).map(|c| c.1).chain([run.end]).map(units).collect();
+        let starts = run.chars.iter().map(|c| units(c.1));
+        let dx: Vec<i32> = starts.zip(&ends).map(|(a, b)| i32::try_from(b.saturating_sub(a)).unwrap_or(0)).collect();
+        // The cells from the em above the baseline to a quarter em below it, from the nearest
+        // character origin or end to the farthest: offsets need not grow along the run.
+        let offsets = run.chars.iter().map(|c| c.1).chain([run.end]);
+        let (lo, hi) = offsets.fold((first, first), |(lo, hi), d| (lo.min(d), hi.max(d)));
+        let corners =
+            [along(lo) - below * run.size, along(lo) + below * (run.size / 4.0), along(hi) - below * run.size, along(hi) + below * (run.size / 4.0)];
+        let b = corners.iter().map(|p| self.dev(*p)).fold(None, |acc, p| Some(union(acc, [p[0], p[1], p[0], p[1]]))).unwrap_or([0, 0, -1, -1]);
+        self.grow(b);
+        self.font(run);
+        if !self.text_align {
+            self.record(SETTEXTALIGN, |o| o.u32(TA_BASELINE));
+            self.text_align = true;
+        }
+        let color = colorref(run.rgb);
+        if self.text_color != Some(color) {
+            self.record(SETTEXTCOLOR, |o| o.u32(color));
+            self.text_color = Some(color);
+        }
+        let n = run.chars.len() as u32;
+        // The string starts after the 76-byte record head, padded to 4 bytes; the advances follow.
+        let string_bytes = (2 * n).div_ceil(4) * 4;
+        self.record(EXTTEXTOUTW, |o| {
+            b.iter().for_each(|v| o.i32(*v));
+            // GM_COMPATIBLE, scales 1.
+            o.u32(1);
+            o.f32(1.0);
+            o.f32(1.0);
+            reference.iter().for_each(|v| o.i32(*v));
+            o.u32(n);
+            o.u32(76);
+            // No options, but the rectangle is written: some readers read it whatever the options.
+            o.u32(0);
+            [0, 0, -1, -1].iter().for_each(|v| o.i32(*v));
+            o.u32(76 + string_bytes);
+            let mut buf = [0u16; 2];
+            run.chars.iter().for_each(|(c, _)| o.u16(c.encode_utf16(&mut buf).first().copied().unwrap_or(0)));
+            o.pad(4);
+            dx.iter().for_each(|d| o.i32(*d));
+        });
+        self.record(SELECTOBJECT, |o| o.u32(DEVICE_DEFAULT_FONT));
+        self.record(DELETEOBJECT, |o| o.u32(FONT));
+    }
+
+    /// EMR_EXTCREATEFONTINDIRECTW for `run` (a LogFontExDv with no design axes), selected.
+    fn font(&mut self, run: &TextRun) {
+        let height = -((run.size * UNITS_PER_PT).round().clamp(1.0, MAX_COORD) as i32);
+        let tenths = ((run.angle.rem_euclid(360.0) * 10.0).round() as i64).rem_euclid(3600) as i32;
+        let face: Vec<u16> = run.face.encode_utf16().collect();
+        self.record(EXTCREATEFONTINDIRECTW, |o| {
+            o.u32(FONT);
+            // LogFont: height (negative: the em), width, escapement, orientation, weight.
+            [height, 0, tenths, tenths, i32::from(run.weight.min(1000))].iter().for_each(|v| o.i32(*v));
+            // Italic, underline, strike-out, DEFAULT_CHARSET, OUT_TT_PRECIS, clip precision,
+            // quality, pitch and family.
+            o.bytes(&[u8::from(run.italic), 0, 0, 1, 4, 0, 0, 0]);
+            (0..32).for_each(|i| o.u16(face.get(i).copied().filter(|_| i < 31).unwrap_or(0)));
+            // Full name, style and script left empty; a design vector with no axes.
+            o.bytes(&[0; 128 + 64 + 64]);
+            o.u32(DV_SIGNATURE);
+            o.u32(0);
+        });
+        self.fonts = true;
+        self.record(SELECTOBJECT, |o| o.u32(FONT));
     }
 
     /// An image placed by `xf` (its pixels → picture space): StretchDIBits when opaque, else AlphaBlend,
