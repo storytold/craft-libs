@@ -130,7 +130,7 @@ pub fn chart_from(root: &El) -> Option<Chart> {
 
 /// [`chart_from`] decoding at most `budget` data slots in all.
 fn chart_within(root: &El, budget: usize) -> Option<Chart> {
-    read_chart(root, budget, 9)
+    read_chart(root, budget, 10)
 }
 
 /// Exact former metadata projection for unchanged legacy native saves, using the same caps.
@@ -178,6 +178,11 @@ pub(super) fn metadata_v8_chart_from(root: &El) -> Option<Chart> {
     read_chart(root, MAX_CHART_POINTS, 8)
 }
 
+/// The published orphan-owner projection, before exact secondary and value-format fixes.
+pub(super) fn metadata_v9_chart_from(root: &El) -> Option<Chart> {
+    read_chart(root, MAX_CHART_POINTS, 9)
+}
+
 #[cfg(test)]
 std::thread_local! {
     static RAW_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -196,6 +201,7 @@ pub(super) fn chart_for_version(root: &El, version: u16) -> Option<Chart> {
         6 => metadata_v6_chart_from(root),
         7 => metadata_v7_chart_from(root),
         8 => metadata_v8_chart_from(root),
+        9 => metadata_v9_chart_from(root),
         _ => chart_from(root),
     }
 }
@@ -777,16 +783,26 @@ fn read_axes<'a>(
         };
         let resolved_owner = pa.elements().any(owns_axis);
         pa.elements()
-            .filter(|g| if resolved_owner { owns_axis(g) } else { g.children(Local("axId")).any(|a| a.attr_local("val") == id) })
+            .filter(|g| {
+                if resolved_owner {
+                    owns_axis(g)
+                } else {
+                    // An unresolved group may use numeric IDs, but a resolved group belongs
+                    // to its actual element even when another axis shares that numeric ID.
+                    (version < 10 || relations.and_then(|index| index.value_axis(g, val_map)).is_none())
+                        && g.children(Local("axId")).any(|a| a.attr_local("val") == id)
+                }
+            })
             .flat_map(|g| g.children(Local("ser")))
             .find_map(|s| {
                 s.child(Local("val"))
                     .or_else(|| s.child(Local("yVal")))
-                    .and_then(|v| v.find(Local("numCache")))
+                    .and_then(|v| v.find(Local("numCache")).or_else(|| if version >= 10 { v.child(Local("numLit")) } else { None }))
                     .and_then(|c| c.child(Local("formatCode")))
                     .map(|f| f.deep_text())
+                    .filter(|f| version < 10 || !f.is_empty())
             })
-            .filter(|f| !f.is_empty() && f != "General")
+            .filter(|f| !f.is_empty() && (version >= 10 || f != "General"))
     };
     let format_code = |a: &El| match a.child(Local("numFmt")) {
         Some(n) if if version >= 8 { !source_linked(n) } else { n.attr_local("sourceLinked") != Some("1") } => {
@@ -806,12 +822,21 @@ fn read_axes<'a>(
     };
     if c.series.iter().any(|s| s.secondary_axis) {
         let primary_id = val_ax.and_then(|a| a.child(Local("axId")).and_then(|c| c.attr_local("val")));
-        let resolved_secondary = resolved_primary.and_then(|primary| {
+        let resolved_secondary = if version >= 10 {
+            // An exact secondary owner outranks an earlier unresolved ID-only candidate,
+            // including when the primary is an unused anchor with no resolved group.
             pa.elements()
                 .filter(|g| group_chart_type(g.local(), g).is_some() && g.children(Local("ser")).next().is_some())
-                .filter_map(|g| relations.and_then(|index| index.value_axis(g, val_map)))
-                .find(|axis| !std::ptr::eq(*axis, primary))
-        });
+                .filter(|g| group_secondary(g, resolved_primary, primary_id, val_map, relations, version))
+                .find_map(|g| relations.and_then(|index| index.value_axis(g, val_map)))
+        } else {
+            resolved_primary.and_then(|primary| {
+                pa.elements()
+                    .filter(|g| group_chart_type(g.local(), g).is_some() && g.children(Local("ser")).next().is_some())
+                    .filter_map(|g| relations.and_then(|index| index.value_axis(g, val_map)))
+                    .find(|axis| !std::ptr::eq(*axis, primary))
+            })
+        };
         let secondary_axis = resolved_secondary.or_else(|| {
             if legacy {
                 pa.children(Local("valAx")).find(|a| a.child(Local("axId")).and_then(|c| c.attr_local("val")) != primary_id && vertical(a))
@@ -2635,7 +2660,7 @@ mod tests {
                 assert_eq!(read_chart_xml(&written).unwrap().series[0].secondary_axis, edit.series[0].secondary_axis);
             }
             let current = read_chart_xml(xml.as_bytes()).unwrap();
-            assert_eq!(current.raw_metadata_version, 9);
+            assert_eq!(current.raw_metadata_version, 10);
             if !category {
                 assert_eq!(current.y_max, Some(10.0));
             }
@@ -3315,7 +3340,8 @@ mod tests {
         let unresolved = review_6095656137_group(30, 40, "Unresolved", "0%");
         let scatter = r#"<c:scatterChart><c:ser><c:tx><c:v>Resolved</c:v></c:tx><c:xVal><c:numLit><c:formatCode>General</c:formatCode><c:pt idx="0"><c:v>30</c:v></c:pt></c:numLit></c:xVal><c:yVal><c:numLit><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:yVal></c:ser><c:axId val="10"/><c:axId val="20"/></c:scatterChart>"#;
         let x = review_6095656137_axis("valAx", 10, 20, "b", 12, r#"<c:numFmt formatCode="0.0" sourceLinked="0"/>"#);
-        let y = review_6095656137_axis("valAx", 20, 10, "r", 90, r#"<c:numFmt formatCode="0.000" sourceLinked="0"/>"#).replace("</c:valAx>", r#"<c:majorUnit val="5"/></c:valAx>"#);
+        let y = review_6095656137_axis("valAx", 20, 10, "r", 90, r#"<c:numFmt formatCode="0.000" sourceLinked="0"/>"#)
+            .replace("</c:valAx>", r#"<c:majorUnit val="5"/></c:valAx>"#);
         let stray = review_6095656137_axis("valAx", 40, 888, "r", 70, r#"<c:numFmt formatCode="0%" sourceLinked="0"/>"#);
         let anchor = review_6095656137_axis("valAx", 10, 999, "l", 50, r#"<c:numFmt formatCode="0.00" sourceLinked="0"/>"#);
         let category = review_6095656137_axis("catAx", 999, 10, "b", 1, "");
@@ -3345,11 +3371,12 @@ mod tests {
         // A populated primary owner keeps the already-correct resolved-secondary preference.
         let primary = review_6095656137_group(999, 10, "Primary", "0.00");
         let owned = read_chart_xml(metadata_chart(&format!("{primary}{unresolved}{scatter}{axes}")).as_bytes()).unwrap();
-        assert_eq!(owned.series.iter().map(|s| (s.name.as_str(), s.secondary_axis)).collect::<Vec<_>>(), [("Primary", false), ("Unresolved", true), ("Resolved", true)]);
+        assert_eq!(
+            owned.series.iter().map(|s| (s.name.as_str(), s.secondary_axis)).collect::<Vec<_>>(),
+            [("Primary", false), ("Unresolved", true), ("Resolved", true)]
+        );
         assert_eq!((owned.y_max, owned.y2_max, owned.y2_major), (Some(50.0), Some(90.0), Some(5.0)));
     }
-
-
 
     #[test]
     fn review_6096226526_linked_formats_do_not_borrow_another_resolved_axis() {
@@ -3389,13 +3416,19 @@ mod tests {
         for scatter in [false, true] {
             for literal in [false, true] {
                 let points = r#"<c:formatCode>0%</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>0.5</c:v></c:pt>"#;
-                let data = if literal { format!("<c:numLit>{points}</c:numLit>") } else {
+                let data = if literal {
+                    format!("<c:numLit>{points}</c:numLit>")
+                } else {
                     format!("<c:numRef><c:f>Sheet1!$B$2</c:f><c:numCache>{points}</c:numCache></c:numRef>")
                 };
                 let group = if scatter {
-                    format!(r#"<c:scatterChart><c:ser><c:xVal><c:numLit><c:pt idx="0"><c:v>30</c:v></c:pt></c:numLit></c:xVal><c:yVal>{data}</c:yVal></c:ser><c:axId val="10"/><c:axId val="20"/></c:scatterChart>"#)
+                    format!(
+                        r#"<c:scatterChart><c:ser><c:xVal><c:numLit><c:pt idx="0"><c:v>30</c:v></c:pt></c:numLit></c:xVal><c:yVal>{data}</c:yVal></c:ser><c:axId val="10"/><c:axId val="20"/></c:scatterChart>"#
+                    )
                 } else {
-                    format!(r#"<c:barChart><c:barDir val="col"/><c:ser><c:val>{data}</c:val></c:ser><c:axId val="10"/><c:axId val="20"/></c:barChart>"#)
+                    format!(
+                        r#"<c:barChart><c:barDir val="col"/><c:ser><c:val>{data}</c:val></c:ser><c:axId val="10"/><c:axId val="20"/></c:barChart>"#
+                    )
                 };
                 let category = review_6095656137_axis(if scatter { "valAx" } else { "catAx" }, 10, 20, "b", 30, "");
                 for attr in [r#"sourceLinked="true""#, r#"sourceLinked="1""#, ""] {
@@ -3433,11 +3466,15 @@ mod tests {
                 for source in [Some("General"), Some("0%"), Some(""), None] {
                     let code = source.map(|s| format!("<c:formatCode>{s}</c:formatCode>")).unwrap_or_default();
                     let points = format!(r#"{code}<c:pt idx="0"><c:v>0.5</c:v></c:pt>"#);
-                    let data = if literal { format!("<c:numLit>{points}</c:numLit>") } else {
+                    let data = if literal {
+                        format!("<c:numLit>{points}</c:numLit>")
+                    } else {
                         format!("<c:numRef><c:f>Sheet1!$B$2</c:f><c:numCache>{points}</c:numCache></c:numRef>")
                     };
                     let grouping = if percent { "percentStacked" } else { "clustered" };
-                    let group = format!(r#"<c:barChart><c:barDir val="col"/><c:grouping val="{grouping}"/><c:ser><c:val>{data}</c:val></c:ser><c:axId val="10"/><c:axId val="20"/></c:barChart>"#);
+                    let group = format!(
+                        r#"<c:barChart><c:barDir val="col"/><c:grouping val="{grouping}"/><c:ser><c:val>{data}</c:val></c:ser><c:axId val="10"/><c:axId val="20"/></c:barChart>"#
+                    );
                     let cat = review_6095656137_axis("catAx", 10, 20, "b", 1, "");
                     for attr in [r#"sourceLinked="true""#, r#"sourceLinked="1""#, "", r#"sourceLinked="false""#, r#"sourceLinked="0""#] {
                         let fmt = format!(r#"<c:numFmt formatCode="0.000" {attr}/>"#);
@@ -3447,7 +3484,14 @@ mod tests {
                         let linked = !matches!(attr, r#"sourceLinked="false""# | r#"sourceLinked="0""#);
                         let expected = if linked { source.filter(|s| !s.is_empty()).unwrap_or("0.000") } else { "0.000" };
                         assert_eq!(chart.y_format.as_deref(), Some(expected), "literal={literal}, percent={percent}, {source:?}, {attr}");
-                        assert_eq!(chart.axis_label(false, 0.5), match expected { "General" => "0.5", "0%" => "50%", _ => "0.500" });
+                        assert_eq!(
+                            chart.axis_label(false, 0.5),
+                            match expected {
+                                "General" => "0.5",
+                                "0%" => "50%",
+                                _ => "0.500",
+                            }
+                        );
                         if source == Some("General") && linked {
                             let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
                             let mut old = read_chart(&root, MAX_CHART_POINTS, 9).unwrap();
@@ -3471,12 +3515,13 @@ mod tests {
         }
     }
 
-
     #[test]
     fn review_6096226526_empty_axis_source_format_does_not_hide_a_later_usable_cache() {
         for first_format in [Some(""), None, Some("General")] {
             let first_code = first_format.map(|code| format!("<c:formatCode>{code}</c:formatCode>")).unwrap_or_default();
-            let first = format!(r#"<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>First</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$B$2</c:f><c:numCache>{first_code}<c:pt idx="0"><c:v>0.25</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"#);
+            let first = format!(
+                r#"<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>First</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$B$2</c:f><c:numCache>{first_code}<c:pt idx="0"><c:v>0.25</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"#
+            );
             let second = r#"<c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Second</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$C$2</c:f><c:numCache><c:formatCode>0%</c:formatCode><c:pt idx="0"><c:v>0.5</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"#;
             let group = format!(r#"<c:barChart><c:barDir val="col"/>{first}{second}<c:axId val="10"/><c:axId val="20"/></c:barChart>"#);
             let category = review_6095656137_axis("catAx", 10, 20, "b", 1, "");
