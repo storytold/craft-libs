@@ -2435,3 +2435,24 @@ fn metadata_text_controls_keep_punctuation_and_use_the_selected_font_code_page()
     assert_eq!(flow.meta.title, "A—аà");
     assert_eq!(texts(&flow), ["Normal:Body"]);
 }
+
+/// Exact raises and lowers are positions, not superscript/subscript: `\up10` and `\dn8` carry
+/// `w:position` 5 and -4 points, while `\super`/`\sub` stay vertical alignment (#7132).
+/// A run's props by its text (the run containing the needle), via `run_ranges` — `props_at` on
+/// the needle's first byte can land on the previous run's boundary.
+#[test]
+fn up_and_dn_are_positions_not_superscript() {
+    let d = import(br"{\rtf1\ansi {\up10 Raised} {\dn8 Lowered} {\super Super} {\sub Sub}}").unwrap();
+    let p = d.body[0].as_para().unwrap();
+    let props = |needle: &str| -> craft_wordmodel::props::CharProps {
+        p.run_ranges().find(|(r, _)| p.text[r.clone()].contains(needle)).map(|(_, props)| props.clone()).expect(needle)
+    };
+    let raised = props("Raised");
+    assert_eq!(raised.position, Some(5.0), "{raised:?}");
+    assert_eq!(raised.vert_align, None, "a raise is not superscript");
+    let lowered = props("Lowered");
+    assert_eq!(lowered.position, Some(-4.0), "{lowered:?}");
+    assert_eq!(lowered.vert_align, None, "a lower is not subscript");
+    assert_eq!(props("Super").vert_align, Some(craft_wordmodel::props::VertAlign::Superscript), "super stays superscript");
+    assert_eq!(props("Sub").vert_align, Some(craft_wordmodel::props::VertAlign::Subscript), "sub stays subscript");
+}
