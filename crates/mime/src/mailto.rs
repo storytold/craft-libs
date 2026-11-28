@@ -44,13 +44,13 @@ pub fn parse_mailto(link: &str) -> Option<Mailto> {
     let mut m = Mailto::default();
     // Commas separate the addresses before they are decoded: an encoded comma belongs to its address.
     for address in path.split(',') {
-        add(&mut m.to, &decode(address));
+        add(&mut m.to, &percent_decode(address));
     }
     let (mut subject, mut body) = (None, None);
     for field in query.split('&') {
         let (name, value) = field.split_once('=').unwrap_or((field, ""));
-        let value = decode(value);
-        match decode(name).to_ascii_lowercase().as_str() {
+        let value = percent_decode(value);
+        match percent_decode(name).to_ascii_lowercase().as_str() {
             "to" => add_list(&mut m.to, &value),
             "cc" => add_list(&mut m.cc, &value),
             "bcc" => add_list(&mut m.bcc, &value),
@@ -79,7 +79,7 @@ pub(crate) fn cut(text: &str, max: usize) -> &str {
 
 /// Percent-decoding. An escape that isn't one stays as it is written, a plus sign is a plus sign
 /// (RFC 6068 section 5), and bytes that aren't UTF-8 become the replacement character.
-fn decode(text: &str) -> String {
+pub(super) fn percent_decode(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
