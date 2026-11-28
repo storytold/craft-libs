@@ -12,6 +12,7 @@ mod detect_caps;
 mod dpx;
 mod exr_cryptomatte;
 mod exr_multipart;
+mod exr_probe;
 mod exr_stream;
 mod fidelity;
 mod gif_frames;
