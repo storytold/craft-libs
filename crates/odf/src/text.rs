@@ -60,7 +60,7 @@ mod styles;
 mod writer;
 mod xml;
 
-pub use crate::crypt::{CryptError, decrypt, encrypt, is_encrypted};
+pub use crate::crypt::{CryptError, decrypt, decrypt_with, encrypt, is_encrypted};
 use body::Body;
 pub use flat_doc::{export_flat, import_flat, import_flat_on};
 use import::Pages;
