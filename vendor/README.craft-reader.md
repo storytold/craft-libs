@@ -357,6 +357,15 @@ as that box (VectorCraft #2920: an open zigzag in an `.ai` file opened as a clos
 a clip of that shape was dropped. Tests: `context::path_as_rect_tests` and the `rectangles`
 module of `crates/pdf/tests/interpretation.rs`, which fails without the change.
 
+From [PdfCraft #7027](https://github.com/storytold/pdfcraft/pull/7027) (storytold/pdfcraft#6990),
+hayro-interpret, marked `PdfCraft patch (#7027)` in the source: a `/FontFile3` of a simple font
+whose program is not CFF but Type 1 (PFB segments, or cleartext and an eexec section), as
+Calamus SL writes it under `/Subtype /Type1C`, is read as Type 1. Before, it fell back to the
+standard substitute. CFF is still tried first, and a Type 1 program without glyphs keeps the
+substitute, since it would draw nothing. Test:
+`type1c_font_files::a_type1c_font_file_holding_a_type1_program_draws_with_it` in
+`crates/pdf/tests/upstream_raster.rs`, which fails without the change.
+
 Local fixes on top of these ports, marked `Craft patch` or in the comments of the ported
 code: an inflated patch-mesh triangle is rebuilt with `Triangle::new`, so its stored dot
 products match its vertices (moving the points alone skewed barycentric coordinates by about
