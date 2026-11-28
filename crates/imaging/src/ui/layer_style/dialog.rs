@@ -95,7 +95,9 @@ impl LayerStyleOutput {
 /// preview.
 ///
 /// - The list ([`LayerStyleCommand`] holds its `+` and `−` keys): Styles, Blending Options, the effects, with muted
-///   names for effects that are off and dimmed rows for absent ones.
+///   names for effects that are off and dimmed rows for absent ones. Under it its bar adds an effect through the fx
+///   menu, moves the effect the page shows among those of its kind and deletes it; [`LayerStyleOutput::edit`] carries
+///   what they did to the style, like any other list action.
 /// - A page change is reported in [`LayerStyleOutput::page`] and drawn once the host has applied it. The page drawn in
 ///   the pass of a click is the one the click left, so its fields see their focus loss and commit what was typed
 ///   before the page changes.
@@ -388,6 +390,10 @@ impl Work {
                     self.next.add_instance(kind, &defaults(kind));
                 }
                 ListAction::Remove(id) => self.next.remove_instance(id),
+                ListAction::Move(id, by) => {
+                    self.next.move_instance(id, by);
+                }
+                ListAction::OpenOn(kind) => self.next.open_on(kind),
             }
         }
         if self.next.style != before {

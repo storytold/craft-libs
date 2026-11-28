@@ -266,3 +266,69 @@ fn a_gradient_offset_drag_starts_from_the_shown_offset_and_rebases_on_another_in
 
 // A `StyleValue::Other` key no field shows survives `set_param`, `toggle` and
 // `StyleParams::over` unchanged.
+
+/// Drop Shadows with a `size` of their own, so a move that rewrote an effect's values shows up. An odd id starts turned
+/// off, so a move that also touched a check shows up.
+fn shadows(sizes: &[(u32, f64)]) -> LayerStyle {
+    let effects = sizes
+        .iter()
+        .map(|&(n, size)| {
+            let mut params = StyleParams::default();
+            params.set("size", StyleValue::Number(size));
+            EffectInstance { id: EffectId(n), kind: EffectKind::DropShadow, on: n % 2 == 0, params }
+        })
+        .collect();
+    LayerStyle { effects, ..LayerStyle::default() }
+}
+
+/// The instance ids of `draft` in the style's order.
+fn order(draft: &LayerStyleDraft) -> Vec<u32> {
+    draft.style.effects.iter().map(|effect| effect.id.0).collect()
+}
+
+/// Each instance's own size and check, by id: what a move must leave exactly as it was, whatever order the instances
+/// end up in.
+fn values(draft: &LayerStyleDraft) -> Vec<(u32, Option<f64>, bool)> {
+    let mut values: Vec<(u32, Option<f64>, bool)> =
+        draft.style.effects.iter().map(|effect| (effect.id.0, effect.params.number("size"), effect.on)).collect();
+    values.sort_by_key(|value| value.0);
+    values
+}
+
+#[trial]
+fn moving_an_effect_swaps_it_with_the_sibling_of_its_kind() {
+    let mut draft = LayerStyleDraft::new(shadows(&[(1, 5.0), (2, 15.0), (3, 25.0)]));
+    let (before_values, before_style) = (values(&draft), draft.style.clone());
+    assert!(draft.move_instance(EffectId(2), -1));
+    assert_eq!(order(&draft), [2, 1, 3], "the second Drop Shadow took the first one's place");
+    assert_eq!(values(&draft), before_values, "every instance kept its own size and its own check");
+    assert!(draft.move_instance(EffectId(2), 1));
+    assert_eq!(order(&draft), [1, 2, 3], "and it came back down");
+    assert_eq!(draft.style, before_style, "the style is the one it started from");
+}
+
+#[trial]
+fn moving_an_effect_stays_among_the_effects_of_its_kind() {
+    let mut style = shadows(&[(1, 5.0), (3, 25.0)]);
+    style.effects.insert(1, EffectInstance { id: EffectId(2), kind: EffectKind::Satin, on: true, params: StyleParams::default() });
+    let mut draft = LayerStyleDraft::new(style);
+    let satin_at = draft.style.effects.iter().position(|effect| effect.kind == EffectKind::Satin);
+    assert!(draft.move_instance(EffectId(3), -1));
+    assert_eq!(order(&draft), [3, 2, 1], "the two Drop Shadows swapped across the Satin");
+    assert_eq!(draft.style.effects.iter().position(|effect| effect.kind == EffectKind::Satin), satin_at, "the Satin stayed where it was");
+    assert!(!draft.move_instance(EffectId(2), -1), "Satin takes one effect, so it has no sibling to swap with");
+}
+
+#[trial]
+fn moving_at_the_end_of_a_kind_or_an_unknown_effect_changes_nothing() {
+    let mut draft = LayerStyleDraft::new(shadows(&[(1, 5.0), (2, 15.0)]));
+    let before = draft.style.clone();
+    assert!(!draft.move_instance(EffectId(1), -1), "the first of its kind has nowhere to move up to");
+    assert!(!draft.move_instance(EffectId(2), 1), "the last of its kind has nowhere to move down to");
+    assert!(!draft.move_instance(EffectId(7), -1), "an instance the style does not have moves nothing");
+    assert_eq!(draft.style, before, "and the style is byte for byte what it was");
+    let mut lone = LayerStyleDraft::new(shadows(&[(1, 5.0)]));
+    let before = lone.style.clone();
+    assert!(!lone.move_instance(EffectId(1), -1) && !lone.move_instance(EffectId(1), 1));
+    assert_eq!(lone.style, before, "an only effect of its kind moves nowhere");
+}

@@ -2,12 +2,14 @@
 
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Selection, SelectionChange};
 use craft_ui::contract::{
-    ActivateOn, Bind, BodyCx, CollectionEvent, ColumnSpec, CommandSet, Commands as _, Props as _, Remember as _, SelectMode, ShowCollection as _,
-    Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn,
+    ActivateOn, Bind, BodyCx, CollectionEvent, ColumnSpec, CommandSet, Commands as _, Entry, PopupKind, Props as _, Remember as _, SelectMode,
+    ShowCollection as _, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn, Trigger,
 };
 use craft_ui::list::{List, ListRow, RowEvent, RowInk, ToggleCell, ToggleState, TrailingFace, TrailingPart};
+use craft_ui::menu::Menu;
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Label, Units};
+use craft_ui::sections::{FooterAction, FooterBar};
 use egui::Ui;
 
 use super::labels::LayerStyleWords;
@@ -39,6 +41,11 @@ pub(super) enum ListAction {
     Add(EffectKind),
     /// `−`: [`LayerStyleDraft::remove_instance`].
     Remove(EffectId),
+    /// The bar's up or down arrow: [`LayerStyleDraft::move_instance`] moves the instance among those of its kind.
+    Move(EffectId, isize),
+    /// The bar's fx menu picked a kind that takes one instance and the layer has one:
+    /// [`LayerStyleDraft::open_on`] turns it on and shows its page.
+    OpenOn(EffectKind),
 }
 
 /// A row of the list.
@@ -73,6 +80,13 @@ const CHECK: ColumnKey = ColumnKey::new("check");
 const NAME: ColumnKey = ColumnKey::new("name");
 const ADD: TrailingPart = TrailingPart::new(0);
 const REMOVE: TrailingPart = TrailingPart::new(1);
+
+/// The indexes of the bar under the list, in the order its actions are given: fx at the leading edge, then the trash,
+/// the down arrow and the up arrow, which is why they read right to left on screen.
+const BAR_FX: usize = 0;
+const BAR_DELETE: usize = 1;
+const BAR_DOWN: usize = 2;
+const BAR_UP: usize = 3;
 
 /// The rows in display order, with the checks' states.
 struct Rows<'a> {
@@ -127,6 +141,10 @@ fn instance_name(draft: &LayerStyleDraft, words: &LayerStyleWords, units: &Units
 /// Home and End move the lead and show the page of a page row, Enter shows the page of any row and Space flips the
 /// lead's check box. A kind with several instances numbers them ([`LayerStyleWords::instance_name`]), so no two rows,
 /// check boxes or buttons share a name.
+///
+/// Under the list its bar offers the fx menu, which adds an effect or, for a kind that takes one and has one, turns that
+/// one on and shows it; its arrows move the effect the page shows among the effects of its kind and its trash takes it
+/// out. An arrow with no sibling to swap with, and the trash while the page shows no effect, are greyed and do nothing.
 pub(super) fn effect_list(
     ui: &mut Ui,
     cx: &mut BodyCx<'_>,
@@ -198,7 +216,49 @@ pub(super) fn effect_list(
             cx.keep::<Lead>().0 = Some(key.clone());
         }
     }
-    let lead = cx.keep::<Lead>().0.clone().filter(|row| rows.contains(row)).or(shown);
+    let lead = cx.keep::<Lead>().0.clone().filter(|row| rows.contains(row)).or(shown.clone());
+    // The bar works on the effect the page shows, which is the row the list shows selected: the fx menu and a host's
+    // own choice move the page without moving the list's lead, and the keys stay on that lead.
+    let target = match &shown {
+        Some(EffectRow::Instance(id)) => Some(*id),
+        _ => None,
+    };
+    // Whether the lead instance has another of its kind `by` places away: an arrow without one is greyed and moves
+    // nothing, as [`LayerStyleDraft::move_instance`] checks too.
+    let can_move = |id: EffectId, by: isize| {
+        draft.style.effect(id).is_some_and(|instance| {
+            let slots: Vec<EffectId> = draft.style.instances(instance.kind).collect();
+            slots.iter().position(|other| *other == id).and_then(|place| place.checked_add_signed(by)).is_some_and(|next| next < slots.len())
+        })
+    };
+    let bar = FooterBar::actions([
+        FooterAction::new(IconId::new("fx"), words.add_layer_style.clone()).popup(PopupKind::Menu),
+        FooterAction::new(IconId::new("trash"), words.delete_effect.clone()).enabled(target.is_some()),
+        FooterAction::new(IconId::new("chevron_down"), words.move_down.clone()).enabled(target.is_some_and(|id| can_move(id, 1))),
+        FooterAction::new(IconId::new("chevron_up"), words.move_up.clone()).enabled(target.is_some_and(|id| can_move(id, -1))),
+    ])
+    .at_start(1)
+    .show_footer(ui);
+    let pressed = match bar.picked {
+        Some(BAR_DELETE) => target.map(ListAction::Remove),
+        Some(BAR_DOWN) => target.filter(|id| can_move(*id, 1)).map(|id| ListAction::Move(id, 1)),
+        Some(BAR_UP) => target.filter(|id| can_move(*id, -1)).map(|id| ListAction::Move(id, -1)),
+        _ => None,
+    };
+    let picked = match bar.responses.get(BAR_FX) {
+        Some(response) => {
+            let entries: Vec<Entry<EffectKind>> = specs.iter().map(|spec| Entry::new(spec.kind, words.effect(spec.kind).clone())).collect();
+            Menu::new(words.add_layer_style.clone()).opened_by(response, Trigger::Press).pick(ui, &entries).picked
+        }
+        None => None,
+    };
+    let from_bar = pressed.or(match picked {
+        // A kind the layer already has and that takes one: its own effect is turned on and shown, as it was before the
+        // dialog moved into the framework. Another kind, and a kind that takes several, add an instance.
+        Some(kind) if !kind.allows_several() && draft.style.instances(kind).next().is_some() => Some(ListAction::OpenOn(kind)),
+        Some(kind) => Some(ListAction::Add(kind)),
+        None => None,
+    });
 
     let mut actions = Vec::new();
     for event in &out.events {
@@ -244,6 +304,10 @@ pub(super) fn effect_list(
             _ => None,
         };
         actions.extend(action);
+    }
+    // A bar action joins the pass only when nothing else asked for anything, as the commands do.
+    if let Some(action) = from_bar.filter(|_| actions.is_empty()) {
+        actions.push(action);
     }
     actions
 }

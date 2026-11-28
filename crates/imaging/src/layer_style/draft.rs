@@ -163,6 +163,25 @@ impl LayerStyleDraft {
         self.page = LayerStylePage::Effect(id);
     }
 
+    /// Moves instance `id` `by` places among the instances of its kind (negative: up the list), the
+    /// bar under the effect list's arrows. Every instance keeps its own kind, check and parameters,
+    /// and the page stays where it is; the instances of a kind keep their run
+    /// ([`LayerStyle::effects`]). Nothing changes, and this returns false, when `id` is not in the
+    /// style or when it is already first or last of its kind, so its kind has no instance there.
+    // pc: crates/ui-egui/src/dialogs/layer_style.rs:1492-1500 `ids_of`, :1501-1514 `move_instance`
+    // (the arrows move the selected effect among those of its kind).
+    pub fn move_instance(&mut self, id: EffectId, by: isize) -> bool {
+        let Some(kind) = self.style.effect(id).map(|e| e.kind) else { return false };
+        // The places this kind's instances hold in `effects`, with their ids.
+        let slots: Vec<(usize, EffectId)> = self.style.effects.iter().enumerate().filter(|(_, e)| e.kind == kind).map(|(at, e)| (at, e.id)).collect();
+        let Some(here) = slots.iter().position(|(_, other)| *other == id) else { return false };
+        // The next place of the same kind; nothing when `id` is already first or last of it, where the arrow is greyed.
+        let Some(there) = here.checked_add_signed(by).and_then(|next| slots.get(next)) else { return false };
+        // Both places came out of `effects` itself, so the swap cannot run off the vector.
+        self.style.effects.swap(slots[here].0, there.0);
+        true
+    }
+
     /// Sets parameter `key` of instance `id`. The shared light angle: when `key` is `angle` and
     /// the instance's `useGlobalLight` is on, or `key` is `useGlobalLight` turned on, the angle
     /// (the new one, or the shared one) becomes `style.global_light` and every instance with

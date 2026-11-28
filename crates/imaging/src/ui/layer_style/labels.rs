@@ -31,6 +31,14 @@ craft_ui::words! {
         remove_instance: template "layerStyle.removeInstance" = "Remove this {effect}";
         /// The name of the instance `{number}` of an effect that has several: "Drop Shadow 2".
         instance_name: template "layerStyle.instanceName" = "{effect} {number}";
+        /// The bar under the effect list: its fx button, the menu that adds an effect.
+        add_layer_style: "layerStyle.addLayerStyle" = "Add a layer style";
+        /// The bar's button that moves the selected effect up among the effects of its kind.
+        move_up: "layerStyle.moveEffectUp" = "Move effect up";
+        /// The bar's button that moves the selected effect down among the effects of its kind.
+        move_down: "layerStyle.moveEffectDown" = "Move effect down";
+        /// The bar's button that takes the selected effect out of the list.
+        delete_effect: "layerStyle.deleteEffect" = "Delete effect";
         new_style: "layerStyle.newStyle" = "New Style…";
         make_default: "layerStyle.makeDefault" = "Make Default";
         reset_to_default: "layerStyle.resetToDefault" = "Reset to Default";
