@@ -15,8 +15,10 @@ app.
   `direction` with a 30° vertical field of view (`FIT_FOV_Y`) or an orthographic projection, aim
   at the middle of the points' projection, and keep 5% clear on each side of the tighter image
   axis, where `aspect` is width over height as in `gluPerspective`
-  (<https://registry.khronos.org/OpenGL-Refpages/gl2.1/xhtml/gluPerspective.xml>). A box of zero
-  size is framed as a box of radius 1 around its center. `Camera::apply(&mut scene)` writes
+  (<https://registry.khronos.org/OpenGL-Refpages/gl2.1/xhtml/gluPerspective.xml>). For a box of zero
+  size the fit takes a radius of 1 as the fallback for its calculations: the smallest distance
+  and image height are 0.001 and an orthographic eye stands 2 from the target. The corners still
+  coincide, so an orthographic image of a point is 0.001 high. `Camera::apply(&mut scene)` writes
   `Scene::view` (rows right, up and forward, with right = forward × up), `Scene::clip`,
   `Scene::eye`, `Scene::cam_fwd` and `Scene::ortho` for the scene's raster aspect ratio. A
   perspective camera's near plane is 1/10,000 of the eye-to-target distance and it has no far
@@ -91,8 +93,8 @@ app.
   `TexInfo` gives a texture's offset, size and wrap modes (repeat, clamp or mirror). `sample` is a
   bilinear lookup with texel centers at +0.5.
 - **Shadow maps.** `try_shadow_maps(&mut scene, draft, &limits)` renders the light-space depth of
-  every triangle whose material casts shadows into one map per parallel or spot light, six per
-  point light and one orthographic map for the environment light's dominant direction, for every
+  every triangle whose material casts shadows into one map per parallel light, one per spot light
+  (six for a wide spot light, described below), six per point light and one orthographic map for the environment light's dominant direction, for every
   light whose `shadow` is 0 or more. The shader compares each receiver with the nearest depth in the map
   (<https://developer.nvidia.com/gpugems/gpugems/part-ii-lighting-and-shadows/chapter-11-shadow-map-antialiasing>)
   over a jittered grid of 5 × 5 to 10 × 10 taps, each a bilinear comparison against the receiver's
@@ -258,7 +260,7 @@ Changes from those files:
   the filter runs. EffectCraft's tap jitter scaled the map coordinate by 8, which overflowed past
   `f32::MAX / 8` and made the pixel NaN.
 - A masked fragment that passes its cutoff is drawn with the layer's opacity alone and writes its
-  depth, and the cutoff tests the material's alpha without the opacity. EffectCraft at
+  depth in the opaque pass (the transparent pass does not write `Target::depth`), and the cutoff tests the material's alpha without the opacity. EffectCraft at
   `2f16feb12f` kept the fragment's alpha below 1, so the clear color showed through a masked
   surface in the opaque pass; storytold/effectcraft#4075 makes the same change there, and the copy
   in `tests/it/reference/` carries it.

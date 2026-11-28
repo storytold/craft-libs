@@ -147,8 +147,10 @@ fn drawn(s: &Scene) -> impl Iterator<Item = [f64; 3]> + Clone + '_ {
 impl Camera {
     /// A camera looking along `direction` that frames the eight corners of `bounds` in an image
     /// of the given aspect ratio (width / height), with a [`FIT_FOV_Y`] perspective or an
-    /// orthographic projection, the tighter image axis keeping 5% clear on each side. Bounds of
-    /// zero size are framed as a box of radius 1 around their center.
+    /// orthographic projection, the tighter image axis keeping 5% clear on each side. For bounds of
+    /// zero size the calculations fall back to a radius of 1: the smallest distance and image
+    /// height are 0.001 and an orthographic eye stands 2 from the target, while the framed corners
+    /// still coincide.
     ///
     /// The points are checked against the basis of the returned camera, whose eye is rounded to
     /// `f64`: an orthographic camera that the rounding leaves short of a point is widened around

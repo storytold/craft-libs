@@ -233,7 +233,16 @@ fn env_light(s: &Scene, e: &EnvInfo, n: [f32; 3], r: [f32; 3], rough: f32) -> ([
     let f = lv - l0 as f32;
     let a = s.textures.get((e.radiance + l0) as usize).map_or([0.0; 4], |t| sample(t, &s.texels, u, v));
     let b = s.textures.get((e.radiance + l1) as usize).map_or([0.0; 4], |t| sample(t, &s.texels, u, v));
-    let spec = [mix(a[0], b[0], f), mix(a[1], b[1], f), mix(a[2], b[2], f)];
+    // Finite levels of opposite signs near the top of the f32 range overflow the difference;
+    // such a channel is blended in f64.
+    let spec = [0, 1, 2].map(|k| {
+        let m = mix(a[k], b[k], f);
+        if m.is_finite() || !(a[k].is_finite() && b[k].is_finite()) {
+            return m;
+        }
+        let (p, q) = (f64::from(a[k]), f64::from(b[k]));
+        (p + (q - p) * f64::from(f)).clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32
+    });
     (scale([irr[0], irr[1], irr[2]], e.intensity), scale(spec, e.intensity))
 }
 

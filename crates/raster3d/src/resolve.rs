@@ -59,16 +59,19 @@ pub fn try_resolve(t: &Target, k: u32) -> Result<(Image, Vec<f32>), RenderError>
                 continue;
             }
             let mut acc = [0.0f32; 4];
-            let (mut dz, mut dn) = (0.0f32, 0.0f32);
+            let mut abs = [0.0f32; 4];
+            let (mut dz, mut dabs, mut dn) = (0.0f32, 0.0f32, 0.0f32);
             for j in 0..k as usize {
                 for i in 0..k as usize {
                     let s = (y * k as usize + j) * t.width as usize + x * k as usize + i;
                     let c = t.color[s];
                     for q in 0..4 {
                         acc[q] += c[q];
+                        abs[q] += c[q].abs();
                     }
                     if t.depth[s].is_finite() {
                         dz += t.depth[s];
+                        dabs += t.depth[s].abs();
                         dn += 1.0;
                     }
                 }
@@ -77,8 +80,11 @@ pub fn try_resolve(t: &Target, k: u32) -> Result<(Image, Vec<f32>), RenderError>
             if dn > 0.0 {
                 drow[x] = dz / dn;
             }
-            // Large finite samples can overflow the f32 sums; such a pixel is averaged in f64.
-            if !row[x].iter().all(|v| v.is_finite()) || drow[x].is_nan() || (dn > 0.0 && drow[x].is_infinite()) {
+            // Large finite samples can overflow the f32 sums, and samples of both signs can cancel
+            // after rounding has dropped a small one; such a pixel is averaged in f64. Samples of
+            // one sign sum their magnitudes with the same roundings, so they keep the f32 result.
+            let mixed = acc.iter().zip(&abs).any(|(a, m)| a.abs() != *m) || dz.abs() != dabs;
+            if mixed || !row[x].iter().all(|v| v.is_finite()) || drow[x].is_nan() || (dn > 0.0 && drow[x].is_infinite()) {
                 (row[x], drow[x]) = mean_f64(t, k as usize, x, y);
             }
         }

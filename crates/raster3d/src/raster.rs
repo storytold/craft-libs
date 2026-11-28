@@ -37,6 +37,9 @@ struct STri {
     p: [[f64; 2]; 3],
     z: [f32; 3],
     inv_w: [f32; 3],
+    /// The corners' 1/w in `f64` when one of them does not fit `f32` exactly (the scaled
+    /// reciprocals of the wide projection path), so a ratio below `f32`'s range is not dropped.
+    inv_w_wide: Option<[f64; 3]>,
     w: [[f32; 3]; 3],
     tri: u32,
     front: bool,
@@ -47,7 +50,7 @@ struct STri {
 type Corner = ([f32; 4], [f32; 3]);
 
 /// A screen-space corner: position, ndc z, 1/w and weights.
-type ScreenCorner = ([f64; 2], f32, f32, [f32; 3]);
+type ScreenCorner = ([f64; 2], f32, f64, [f32; 3]);
 
 #[inline]
 fn mat_mul(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 4] {
@@ -184,7 +187,7 @@ fn project(s: &Scene, clip: &[[f32; 4]], t: usize) -> Option<Vec<ScreenCorner>> 
         .map(|(c, wt)| {
             let iw = 1.0 / c[3];
             let (nx, ny) = (c[0] * iw, c[1] * iw);
-            ([(nx as f64 + 1.0) * 0.5 * w, (1.0 - ny as f64) * 0.5 * h], c[2] * iw, iw, *wt)
+            ([(nx as f64 + 1.0) * 0.5 * w, (1.0 - ny as f64) * 0.5 * h], c[2] * iw, f64::from(iw), *wt)
         })
         .collect();
     let ok = |s: &ScreenCorner| s.0.iter().all(|v| v.is_finite()) && s.1.is_finite() && s.2.is_finite();
@@ -192,7 +195,8 @@ fn project(s: &Scene, clip: &[[f32; 4]], t: usize) -> Option<Vec<ScreenCorner>> 
         return Some(scr);
     }
     // A tiny w overflows 1/w in f32: project in f64, with 1/w scaled by a common factor so the
-    // largest is 1 (the interpolation weights use only their ratios).
+    // largest is 1 (the interpolation weights use only their ratios). The ratios stay in f64
+    // until the weights are normalized, since a small one can be below f32's range.
     let iw: Vec<f64> = poly.iter().map(|(c, _)| 1.0 / f64::from(c[3])).collect();
     let top = iw.iter().fold(0.0f64, |a, &b| a.max(b));
     let scr: Vec<ScreenCorner> = poly
@@ -200,7 +204,7 @@ fn project(s: &Scene, clip: &[[f32; 4]], t: usize) -> Option<Vec<ScreenCorner>> 
         .zip(&iw)
         .map(|((c, wt), &iw)| {
             let (nx, ny) = (f64::from(c[0]) * iw, f64::from(c[1]) * iw);
-            ([(nx + 1.0) * 0.5 * w, (1.0 - ny) * 0.5 * h], (f64::from(c[2]) * iw) as f32, (iw / top) as f32, *wt)
+            ([(nx + 1.0) * 0.5 * w, (1.0 - ny) * 0.5 * h], (f64::from(c[2]) * iw) as f32, iw / top, *wt)
         })
         .collect();
     scr.iter().all(ok).then_some(scr)
@@ -245,7 +249,8 @@ fn fan(s: &Scene, scr: &[ScreenCorner], tri: u32, out: &mut Vec<STri>) {
         out.push(STri {
             p: [c[0].0, c[1].0, c[2].0],
             z: [c[0].1, c[1].1, c[2].1],
-            inv_w: [c[0].2, c[1].2, c[2].2],
+            inv_w: [c[0].2 as f32, c[1].2 as f32, c[2].2 as f32],
+            inv_w_wide: c.iter().any(|v| f64::from(v.2 as f32) != v.2).then_some([c[0].2, c[1].2, c[2].2]),
             w: [c[0].3, c[1].3, c[2].3],
             tri,
             front,
@@ -319,6 +324,16 @@ fn cover(t: &STri, px: f64, py: f64) -> Option<(f32, [f32; 3])> {
     // Back to the stored corner order.
     let l = if swap { [l0, l2, l1] } else { [l0, l1, l2] };
     let z = l[0] * t.z[0] + l[1] * t.z[1] + l[2] * t.z[2];
+    if let Some(iw) = t.inv_w_wide {
+        let (m0, m1, m2) = (e0 / area, e1 / area, e2 / area);
+        let m = if swap { [m0, m2, m1] } else { [m0, m1, m2] };
+        let q = [m[0] * iw[0], m[1] * iw[1], m[2] * iw[2]];
+        let sum = q[0] + q[1] + q[2];
+        if sum <= 0.0 {
+            return None;
+        }
+        return Some((z, q.map(|v| (v / sum) as f32)));
+    }
     let q = [l[0] * t.inv_w[0], l[1] * t.inv_w[1], l[2] * t.inv_w[2]];
     let sum = q[0] + q[1] + q[2];
     if sum <= 0.0 {

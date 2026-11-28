@@ -24,7 +24,7 @@ fn an_empty_scene_renders_transparent_with_infinite_depth() {
     let t = try_render(&s, &Limits::default()).unwrap();
     assert_eq!((t.width, t.height, t.color.len(), t.depth.len()), (5, 3, 15, 15));
     assert!(t.color.iter().all(|c| *c == [0.0; 4]));
-    assert!(t.depth.iter().all(|d| d.is_infinite()));
+    assert!(t.depth.iter().all(|&d| d == f32::INFINITY));
     let mut s = s;
     try_shadow_maps(&mut s, false, &Limits::default()).unwrap();
     assert!(s.shadows.is_empty() && s.shadow_texels.is_empty());
@@ -416,6 +416,41 @@ fn a_clip_transform_with_a_tiny_w_draws_the_same_pixels() {
 }
 
 #[test]
+fn reciprocal_w_ratios_below_the_f32_range_still_cover_their_edge() {
+    // NDC corners (1, 0), (0, 1) and (0, −1) with clip w 2^-130, 2^30 and 2^30: the pixel center
+    // is on the left edge, where only the two far corners have weight, and their 1/w ratio to the
+    // near corner's is 2^-160.
+    let mut s = quad_scene(1, 1, &[([0.0, 0.0, 1.0, 1.0], 1.0, WHITE)]);
+    s.clip = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.5, 0.0], [0.0, 0.0, 1.0, 0.0]];
+    // 2^-130 is subnormal, and `powi(-130)` gives 0.
+    let (near, far) = (2f32.powi(-65) * 2f32.powi(-65), 2f32.powi(30));
+    for (v, p) in s.vertices.iter_mut().zip([[near, 0.0, near], [0.0, far, far], [0.0, -far, far]]) {
+        v.pos = p;
+    }
+    s.indices = vec![0, 1, 2];
+    s.opaque_count = 3;
+    let t = try_render(&s, &Limits::default()).unwrap();
+    assert_eq!(t.color, vec![WHITE]);
+}
+
+#[test]
+fn environment_levels_of_opposite_signs_blend_without_overflow() {
+    // Two radiance levels whose red channels are 3e38 and −3e38: a roughness between the levels
+    // blends to a finite red, where the f32 difference of the levels overflows.
+    let mut s = lit_scene((16, 12), 1, false);
+    s.env.as_mut().unwrap().mips = 2;
+    for (level, red) in [(0, 3e38), (1, -3e38)] {
+        let t = s.textures[level];
+        for texel in &mut s.texels[t.offset as usize..(t.offset + t.width * t.height) as usize] {
+            *texel = [red, 0.0, 0.0, 1.0];
+        }
+    }
+    try_shadow_maps(&mut s, true, &Limits::default()).unwrap();
+    let t = try_render(&s, &Limits::default()).unwrap();
+    assert!(t.color.iter().flatten().all(|c| c.is_finite()));
+}
+
+#[test]
 fn triangles_on_the_far_plane_are_drawn() {
     // Camera depth 1024 maps to ndc z exactly 0, the far end of the depth range.
     let mut s = quad_scene(8, 8, &[([1.0, 1.0, 4.0, 7.0], 1024.0, WHITE), ([4.0, 1.0, 7.0, 7.0], 1024.0, [1.0, 1.0, 1.0, 0.5])]);
@@ -656,17 +691,24 @@ fn supplied_shadow_maps_are_checked() {
 
 #[test]
 fn texture_coordinates_past_the_integer_range_are_sampled() {
+    let render = |wrap: u32, uv: [f32; 2]| {
+        let mut s = one_quad();
+        let tex = crate::texture(&mut s, 2, 2, (wrap, wrap), |x, y| [x as f32, y as f32, 1.0, 1.0]);
+        s.materials[0].tex_base = tex;
+        for v in &mut s.vertices {
+            v.uv = uv;
+        }
+        try_render(&s, &Limits::default()).unwrap()
+    };
     for wrap in 0..3 {
         for uv in [[f32::MAX, f32::MAX], [-f32::MAX, f32::MAX], [1e30, -1e30]] {
-            let mut s = one_quad();
-            let tex = crate::texture(&mut s, 2, 2, (wrap, wrap), |x, y| [x as f32, y as f32, 1.0, 1.0]);
-            s.materials[0].tex_base = tex;
-            for v in &mut s.vertices {
-                v.uv = uv;
-            }
-            let t = try_render(&s, &Limits::default()).unwrap();
+            let t = render(wrap, uv);
             assert!(t.color.iter().flatten().all(|c| c.is_finite()), "wrap {wrap}, {uv:?}");
             assert_eq!(t.color.iter().filter(|c| c[3] > 0.0).count(), 36, "wrap {wrap}, {uv:?}");
+            // These coordinates are even integers: a repeated or mirrored axis reduces them to 0,
+            // and a clamped axis takes the last texel past 1 and the first below 0.
+            let near = uv.map(|c| if wrap == 1 && c > 0.0 { 1.0 } else { 0.0 });
+            assert_eq!(t.color, render(wrap, near).color, "wrap {wrap}, {uv:?} against {near:?}");
         }
     }
 }
@@ -683,7 +725,7 @@ fn degenerate_triangles_draw_nothing() {
     let mut s = one_quad();
     s.clip[3] = [0.0, 0.0, 0.0, 0.0];
     let t = try_render(&s, &Limits::default()).unwrap();
-    assert!(t.color.iter().all(|c| c[3] == 0.0) && t.depth.iter().all(|d| d.is_infinite()));
+    assert!(t.color.iter().all(|c| c[3] == 0.0) && t.depth.iter().all(|&d| d == f32::INFINITY));
 }
 
 #[test]
@@ -768,6 +810,12 @@ fn resolve_is_a_box_filter_with_the_mean_covered_depth() {
     let t = target(2, 2, vec![[3e38, -3e38, 0.0, 1.0]; 4], vec![3e38; 4]);
     let (img, depth) = try_resolve(&t, 2).unwrap();
     assert_eq!((img.data[0], depth[0]), ([3e38, -3e38, 0.0, 1.0], 3e38));
+    // Samples of both signs whose f32 sum drops a small one before they cancel.
+    let big = 2f32.powi(25);
+    let samples = [big, 1.0, -big, 1.0];
+    let t = target(2, 2, samples.map(|r| [r, 0.0, 0.0, 1.0]).to_vec(), samples.to_vec());
+    let (img, depth) = try_resolve(&t, 2).unwrap();
+    assert_eq!((img.data[0], depth[0]), ([0.5, 0.0, 0.0, 1.0], 0.5));
 }
 
 #[test]
@@ -1111,7 +1159,7 @@ fn shadow_map_work_stops_counting_once_past_the_limit() {
         r => panic!("limit {limit}: {r:?}"),
     };
     let (low, high) = (needed(500), needed(20_000));
-    assert!(low < 2_000 && (20_000..22_000).contains(&high), "{low} {high}");
+    assert!(500 < low && low < 2_000 && 20_000 < high && high < 22_000, "{low} {high}");
     assert!(try_shadow_maps(&mut s, true, &Limits::default()).is_ok());
 }
 
