@@ -7,7 +7,7 @@ mod registry;
 
 pub use clipboard::{ClipContent, ClipError, ClipItem, ClipboardHandle};
 pub use craft_behavior::EditCommand;
-pub use craft_keymap::{Binding, CommandDef, CommandKind, CommandRef, CommandScope, ModalRule, Platform, Scope, Trigger, TypingRule};
+pub use craft_keymap::{Binding, CommandDef, CommandKind, CommandRef, CommandScope, Dispatch, ModalRule, Platform, Scope, Trigger, TypingRule};
 pub use library::ChromeCommand;
 pub use library::{EditCommands, NavCommand, QuitCommand, WindowCommand};
 pub(crate) use library::{WindowShortcut, yields_default};
@@ -62,7 +62,10 @@ use std::sync::Arc;
 
 /// Commands an app defines at run time (plug-ins, its tool list), all in the app scope ([`Scope::app`]). They join
 /// the linked command sets: their chords fire them into `FrameOutput.fired`, and surfaces resolve their label, icon,
-/// kind and chord. An id a linked set already defines stays that set's.
+/// kind and chord. An id a linked set already defines stays that set's, and its def there adds the app's default
+/// bindings, with [`Dispatch::App`] when the def says the app runs the keys itself: the chord still shows and the key
+/// stage matches nothing, so the app's own key handling runs it. A def that leaves the dispatch at the keymap's adds
+/// its keys and leaves the set's dispatch as the set gave it.
 #[derive(Clone)]
 pub struct AppCatalog {
     defs: Arc<[CommandDef]>,

@@ -1,12 +1,12 @@
 //! Faces take their ink from the composite that paints them: its text colour, or the ink it names for one face.
 
 use craft_behavior::{Metrics, PartKey, Sense};
-use craft_theme::TypeRole;
-use craft_ui::choice::Rating;
-use craft_ui::contract::{Bind, Common, Component, Cx, PaintUi, PartsCx, Props as _, Role, Show as _, Styled as _};
+use craft_theme::{ControlSize, TypeRole};
+use craft_ui::choice::{Rating, Segmented};
+use craft_ui::contract::{Bind, Common, Component, Cx, Entry, PaintUi, PartsCx, Props as _, Role, Show as _, Styled as _};
 use craft_ui::style::{ComponentStyle, Stateful, StyleColor, StyleCx, TextLook};
 use craft_ui::testing::layout::in_region;
-use craft_ui::testing::{Frames, trial};
+use craft_ui::testing::{Fixture, Frames, trial};
 use egui::{Color32, Rect, Response, Shape, pos2, vec2};
 use std::cell::Cell;
 
@@ -97,4 +97,35 @@ fn a_face_shown_with_face_in_reads_the_ink_it_is_given() {
     assert!(!hosted.is_empty() && !given.is_empty(), "both faces paint their stars");
     assert!(given.iter().all(|tint| *tint == named.get()), "the face shown with face_in paints in the ink it is given: {given:?}");
     assert!(!hosted.contains(&named.get()), "the face shown with face paints in the composite's text colour: {hosted:?}");
+}
+
+const SEGMENTS: [&str; 3] = ["Butt", "Round", "Projecting"];
+
+/// Each painted run of a segment label, as (text, elided, height), of a segmented row over `SEGMENTS` at `size` (the
+/// scope's own when `None`), shown at its own measured width in the fixture's medium scope.
+fn segment_labels(size: Option<ControlSize>) -> Vec<(String, bool, f32)> {
+    let mut fixture = Fixture::new(move |ui| {
+        let entries = [Entry::new(0u8, SEGMENTS[0]), Entry::new(1, SEGMENTS[1]), Entry::new(2, SEGMENTS[2])];
+        let row = Segmented::new("Cap", Bind::given(0u8), &entries);
+        let _ = match size {
+            Some(size) => row.size(size).show(ui),
+            None => row.show(ui),
+        };
+    });
+    fixture.settle();
+    fixture.texts().iter().filter(|run| SEGMENTS.contains(&run.text.as_str())).map(|run| (run.text.clone(), run.elided, run.rect.height())).collect()
+}
+
+/// A composite paints each face at the size it measured it at, its own: a small segmented row in a medium scope lays
+/// its segments out at the small padding, and each label still paints whole on one row inside them. At the scope's
+/// own size it does too.
+#[trial]
+fn a_small_segmented_row_paints_its_labels_whole_in_a_medium_scope() {
+    for size in [Some(ControlSize::Sm), None] {
+        let runs = segment_labels(size);
+        assert_eq!(runs.len(), SEGMENTS.len(), "each segment paints its label once at {size:?}: {runs:?}");
+        assert!(runs.iter().all(|(_, elided, _)| !elided), "every label paints whole at {size:?}: {runs:?}");
+        let row = runs.iter().map(|(_, _, height)| *height).fold(f32::INFINITY, f32::min);
+        assert!(runs.iter().all(|(_, _, height)| *height <= row + 0.5), "every label paints on one row at {size:?}: {runs:?}");
+    }
 }

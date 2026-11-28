@@ -28,6 +28,27 @@ pub enum CommandKind {
     Momentary,
 }
 
+/// Who runs a command's keys.
+///
+/// A command the app runs itself keeps its place in the catalog and its bindings: menus, tooltips, rails and buttons
+/// show its chords ([`Keymap::shown_chord`](crate::Keymap::shown_chord)) and the shortcut editor lists them, and the
+/// keymap matches none of them, so the press goes to the app as it would for a command with no binding here.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum Dispatch {
+    /// This keymap runs the command on its chords ([`Keymap::lookup`](crate::Keymap::lookup)).
+    #[default]
+    Keymap,
+    /// The app runs the command from its own key handling (a canvas editor with its own keymap).
+    App,
+}
+
+/// Whether a command's keys are the keymap's, which written catalogs leave out as the default.
+fn is_keymap(dispatch: &Dispatch) -> bool {
+    *dispatch == Dispatch::Keymap
+}
+
 /// Whether a command fires while a dialog is open.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,6 +103,10 @@ pub struct CommandDef {
     /// Whether the command fires while a dialog is open.
     #[serde(default)]
     pub modal: ModalRule,
+    /// Who runs the command's keys: this keymap, or the app, which shows them and matches none of them
+    /// ([`Dispatch`]).
+    #[serde(default, skip_serializing_if = "is_keymap")]
+    pub dispatch: Dispatch,
 }
 
 impl CommandDef {
@@ -99,6 +124,7 @@ impl CommandDef {
             defaults: Vec::new(),
             icon: None,
             modal: ModalRule::default(),
+            dispatch: Dispatch::Keymap,
         }
     }
 
@@ -134,6 +160,12 @@ impl CommandDef {
     /// Sets the [`kind`](CommandDef::kind).
     pub fn with_kind(mut self, kind: CommandKind) -> CommandDef {
         self.kind = kind;
+        self
+    }
+
+    /// Sets the [`dispatch`](CommandDef::dispatch).
+    pub fn with_dispatch(mut self, dispatch: Dispatch) -> CommandDef {
+        self.dispatch = dispatch;
         self
     }
 

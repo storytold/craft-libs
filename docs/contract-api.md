@@ -3751,6 +3751,7 @@ The command board: the registry and typed sets, per-frame state, the queue, firi
 - `craft_ui::runtime::commands::CommandKind`: re-export of `craft_keymap::CommandKind` (outside these crates).
 - `craft_ui::runtime::commands::CommandRef`: re-export of `craft_keymap::CommandRef` (outside these crates).
 - `craft_ui::runtime::commands::CommandScope`: re-export of `craft_keymap::CommandScope` (outside these crates).
+- `craft_ui::runtime::commands::Dispatch`: re-export of `craft_keymap::Dispatch` (outside these crates).
 - `craft_ui::runtime::commands::EditCommand`: re-export of `craft_behavior::intent::EditCommand`.
 - `craft_ui::runtime::commands::EditCommands`: `pub enum EditCommands { Cut, Copy, Paste, SelectAll, Undo, Redo, Delete }`. The edit commands (11.3). A focused component that lists one in `KEYS.edits` takes it as
   - `pub const ALL: [EditCommands; 7]`. Every edit command that a focused component can take as an `Intent::Edit`.
@@ -4474,6 +4475,7 @@ The pointer snapshot, press targets, the shape record and press cancels (8.1, 8.
 - `craft_ui::runtime::pointer::frame`: `pub fn frame(ctx: &Context) -> PointerFrame`. The running pass's pointer input. A tracked input (`runtime::inputs`): a memoized view that reads it runs when the
 - `craft_ui::runtime::pointer::hovers`: `pub fn hovers(ctx: &Context, id: Id) -> bool`. Whether a shape the component `id` registered shows hover in the running pass, by the pass's one resolution of
 - `craft_ui::runtime::pointer::mods`: `pub fn mods(ctx: &Context) -> Mods`. The modifiers held in the running pass, with the latched ones (`PointerFrame::mods`). A tracked input: a memoized
+- `craft_ui::runtime::pointer::pressed_part`: `pub fn pressed_part(ctx: &Context, owner: Id) -> Option<PartRef>`. The part of `owner` holding a press in this viewport that was open when the pass began: in the pass that ends the
 - `craft_ui::runtime::pointer::shapes_at`: `pub fn shapes_at(ctx: &Context, at: Pos2) -> Vec<(Id, Option<PartRef>)>`. Every shape of the last pass on the topmost layer at `at` (screen points) whose area contains it, as
 - `craft_ui::runtime::pointer::withhold_members`: `pub fn withhold_members(ctx: &Context, root: Id, withheld: bool)`. Whether the arena of `root` resolves the presses and hover of the next pass without its members' shapes. A canvas
 
@@ -4619,7 +4621,7 @@ The toast queues: one per window (`WindowKey`), filled from any code with a `Con
   - `pub fn install_hit_sink(&self, viewport: ViewportId) -> HitSink`. The hit-test sink of `viewport`'s window, made on the first call. The platform layer calls it once it has put
   - `pub fn pointer_in(&self, viewport: ViewportId) -> Option<Pos2>`. The desktop pointer in the coordinates of `viewport`, when it lies inside that window.
 - `craft_ui::runtime::windows::WindowLevel`: `pub enum WindowLevel { Normal, Palette, AlwaysOnTop }`. Where a window stands in the stack of windows.
-- `craft_ui::runtime::windows::WindowSpec`: `pub struct WindowSpec { pub kind: WindowKind, pub chrome: Option<WindowChrome>, pub captions: Option<Captions>, pub level: WindowLevel, pub taskbar: bool, pub shown_after_first_paint: bool, pub takes_focus: bool, pub passes_pointer: bool }`. How an OS window opens (21.2): what it is for, who draws its frame, where it stands and whether it has a taskbar
+- `craft_ui::runtime::windows::WindowSpec`: `pub struct WindowSpec { pub kind: WindowKind, pub chrome: Option<WindowChrome>, pub captions: Option<Captions>, pub level: WindowLevel, pub taskbar: bool, pub shown_after_first_paint: bool, pub takes_focus: bool, pub passes_pointer: bool, pub hands_on_cancel: bool }`. How an OS window opens (21.2): what it is for, who draws its frame, where it stands and whether it has a taskbar
   - `pub fn tool() -> Self`. A tool window (a native dock window): its own title row in place of the OS title bar
   - `pub fn popup() -> Self`. A popup window: a layer opened from a palette window (a flyout, menu or tooltip) in an OS window of its own. It
   - `pub fn document() -> Self`. A document window with the installed decision's frame.
@@ -4632,6 +4634,7 @@ The toast queues: one per window (`WindowKey`), filled from any code with a `Con
   - `pub fn taskbar(mut self, taskbar: bool) -> Self`. Sets whether the window has a taskbar or Dock entry.
   - `pub fn takes_focus(mut self, takes_focus: bool) -> Self`. Sets whether the window takes OS focus when it opens.
   - `pub fn passes_pointer(mut self, passes_pointer: bool) -> Self`. Sets whether pointer input passes through the window to the window below it (a tooltip's).
+  - `pub fn hands_on_cancel(mut self, hands_on_cancel: bool) -> Self`. Sets whether an Escape nothing in the window takes is the Cancel of the window it was opened from.
 - `craft_ui::runtime::windows::act`: `pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool`. Sends `action` to `viewport`. It is the only sender of window commands: it checks the capabilities and the
 - `craft_ui::runtime::windows::double_click_action`: `pub fn double_click_action(frame: &Frame, setting: DoubleClick, maximized: bool) -> Option<WindowAction>`. What a double click on a window's free move band (its title bar, or the strip a modal leaves over it) asks of the
 
@@ -4719,6 +4722,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn env<T: StyleValue>(&self) -> T`. An app value set by a scope. Its hash is part of the style cache key.
   - `pub fn color(&self, color: Rgba) -> StyleColor`. The constructor of `StyleColor` for styles: a semantic token read or a token-group field becomes a style colour
   - `pub fn ink_on(&self, fill: DataColor) -> StyleColor`. The ink for text on a user colour: the higher-contrast of `text.normal` and `text.on_strong` on the fill,
+  - `pub fn icon_ink_on(&self, fill: DataColor) -> StyleColor`. The ink for icons and non-text on a user colour: the higher-contrast of `text.normal` and `text.on_strong` on the fill,
   - `pub fn ink_of(&self, color: DataColor, on: Rgba) -> StyleColor`. The ink of a glyph or label in the data colour `color` on the surface `on`, pushed to the contrast the text
   - `pub fn focus_look(&self) -> FocusLook`. The one builder of the focus ring: the line's focus colour at the medium stroke, on the shape's edge.
   - `pub fn tone(&self, tone: Tone) -> StyleColor`. The colour text and icons of `tone` read in.
