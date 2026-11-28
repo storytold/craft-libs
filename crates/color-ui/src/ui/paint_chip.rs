@@ -280,6 +280,7 @@ struct Shown {
     picture: Option<ImagePreview>,
     /// A recent colour or a swatch was picked: its colour, before the paint's alpha is applied.
     picked: Option<Srgba>,
+    swatch_color: Option<SwatchColor>,
     /// The Color Picker… button was pressed.
     full_picker: bool,
 }
@@ -297,6 +298,8 @@ pub struct PaintChipOutput {
     pub pick_color: Option<ColorRequest>,
     /// A click, Enter or Space on a chip without a popover: the modifiers held.
     pub clicked: Option<Mods>,
+    /// Original palette colour when a library swatch was picked.
+    pub swatch_color: Option<SwatchColor>,
 }
 
 impl Outcome for PaintChipOutput {
@@ -440,6 +443,7 @@ pub struct PaintChip<'a> {
     pick_color: Option<ColorRequest>,
     /// The modifiers of this pass's click on a chip without a popover.
     clicked: Option<Mods>,
+    swatch_color: Option<SwatchColor>,
 }
 
 impl<'a> PaintChip<'a> {
@@ -466,6 +470,7 @@ impl<'a> PaintChip<'a> {
             chip_size: PaintChipSize::Regular,
             pick_color: None,
             clicked: None,
+            swatch_color: None,
         }
         .label(label)
     }
@@ -729,6 +734,7 @@ impl Component for PaintChip<'_> {
                                     && let Some(color) = colors.get(name.as_str())
                                 {
                                     shown.picked = Some(color.to_srgb(cmyk));
+                                    shown.swatch_color = Some(**color);
                                 }
                             }
                         }
@@ -753,6 +759,7 @@ impl Component for PaintChip<'_> {
             let next = self.switched(kind, solid);
             cx.set(next);
         } else if let (Some(rgb), Some(current)) = (shown.picked, solid_now) {
+            self.swatch_color = shown.swatch_color;
             // A recent colour or a swatch keeps the paint's alpha.
             cx.set(Paint::Solid(Srgba { a: current.a, ..rgb }));
         } else {
@@ -797,7 +804,13 @@ impl Component for PaintChip<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> PaintChipOutput {
-        PaintChipOutput { edit: cx.edit_response(), screen_pick: self.screen_pick, pick_color: self.pick_color, clicked: self.clicked }
+        PaintChipOutput {
+            edit: cx.edit_response(),
+            screen_pick: self.screen_pick,
+            pick_color: self.pick_color,
+            clicked: self.clicked,
+            swatch_color: self.swatch_color,
+        }
     }
 }
 
