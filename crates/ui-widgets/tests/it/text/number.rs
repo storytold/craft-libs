@@ -552,6 +552,79 @@ fn a_draft_that_is_no_number_owes_no_range_alert() {
     }
 }
 
+/// A commit of text that is no number is reported once, in the pass its commit was refused: Enter keeps the draft and
+/// the value, and Tab and a press on another control end the edit with the value the field held. The passes after the
+/// refused one report nothing; a step over a refused draft reports the one pass that ends the draft and the steps
+/// after it report nothing; Escape, which cancels the edit, and a scrub report nothing. A number typed after the
+/// refused text commits and owes no report.
+#[trial]
+fn text_that_is_no_number_is_reported_in_the_pass_its_commit_was_refused() {
+    use craft_ui::testing::Fixture;
+    use std::rc::Rc;
+    let value = Rc::new(Cell::new(Some(50.0)));
+    let refused: Rc<Cell<usize>> = Rc::default();
+    let (held, seen) = (value.clone(), refused.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = held.get();
+        let out = NumberField::new("Amount", Bind::bound(&mut now)).id_salt("amount").range(0.0..=100.0).commit_decimals(0).show(ui);
+        held.set(now);
+        seen.set(seen.get() + usize::from(out.rejected_text));
+        // Where Tab takes the focus, so the field commits.
+        NumberField::new("Other", Bind::bound(&mut Some(1.0))).id_salt("other").show(ui);
+    });
+    fixture.settle();
+    let amount = fixture.by_label("Amount").expect("the field");
+    let other = fixture.by_label("Other").expect("the other field");
+    let type_over = |fixture: &mut Fixture, typed: &str| {
+        fixture.click(&amount).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(typed);
+    };
+
+    type_over(&mut fixture, "abc");
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(value.get(), Some(50.0), "the refused Enter leaves the value");
+    assert_eq!(refused.get(), 1, "Enter reports the refused text in one pass");
+    fixture.idle(4);
+    assert_eq!(refused.get(), 1, "the draft standing in the field reports it no further");
+
+    type_over(&mut fixture, "abc");
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(value.get(), Some(50.0), "Tab ends the edit with the value the field held");
+    assert_eq!(refused.get(), 2, "Tab reports it");
+
+    type_over(&mut fixture, "abc");
+    fixture.click(&other).settle();
+    assert_eq!(value.get(), Some(50.0), "a press on another control restores the value");
+    assert_eq!(refused.get(), 3, "the focus loss reports it");
+
+    type_over(&mut fixture, "abc");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert_eq!(value.get(), Some(50.0), "Escape restores the value");
+    assert_eq!(refused.get(), 3, "Escape cancels the edit: it is not a refused commit");
+
+    type_over(&mut fixture, "abc");
+    for _ in 0..2 {
+        fixture.key(Key::ArrowDown, Modifiers::NONE);
+    }
+    fixture.settle();
+    assert_eq!(value.get(), Some(48.0), "a step over refused text steps the value: {value:?}");
+    assert_eq!(refused.get(), 4, "and the step that ends the refused draft reports it once");
+    for _ in 0..2 {
+        fixture.key(Key::ArrowDown, Modifiers::NONE);
+    }
+    fixture.settle();
+    assert_eq!(value.get(), Some(46.0), "the next steps go on from it: {value:?}");
+    assert_eq!(refused.get(), 4, "a step with no draft open reports nothing");
+
+    type_over(&mut fixture, "70");
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(value.get(), Some(70.0), "the number typed after the refused text commits");
+    assert_eq!(refused.get(), 4, "and a value the text reads owes no report");
+    fixture.drag_at(amount.rect.center(), Vec2::new(40.0, 0.0));
+    fixture.settle();
+    assert_eq!(refused.get(), 4, "a scrub reports nothing: {value:?}");
+}
+
 /// The name of an edit event's step.
 fn step_name<V>(event: &craft_behavior::EditEvent<V>) -> &'static str {
     use craft_behavior::EditEvent;

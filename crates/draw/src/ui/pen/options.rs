@@ -13,7 +13,7 @@ use craft_ui::form::{Field, FieldGroup};
 use craft_ui::popover::Popover;
 use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::runtime::requests::ColorRequest;
-use craft_ui::text::NumberField;
+use craft_ui::text::{NumberField, RangeAlert};
 use egui::{Response, Ui};
 
 craft_ui::words! {
@@ -29,6 +29,8 @@ craft_ui::words! {
         default_color: "pathOptions.defaultColor" = "Default";
         /// The rubber band checkbox.
         rubber_band: "pathOptions.rubberBand" = "Rubber Band";
+        /// The Curve Fit number field, which only a host that passes `curve_fit` shows.
+        curve_fit: "pathOptions.curveFit" = "Curve Fit:";
     }
 }
 
@@ -90,6 +92,13 @@ pub struct PathOptionsOutput {
     /// The colour swatch was activated: the host opens its colour picker keyed [`PATH_OPTIONS_COLOR_KEY`] and, on OK,
     /// stores the colour in [`PathOptionsSettings::color`] itself.
     pub pick_color: Option<ColorRequest>,
+    /// The Curve Fit row held a typed value to its range: `Some` in the pass a typed value outside
+    /// [`CURVE_FIT_RANGE`](PathOptionsPopover::CURVE_FIT_RANGE) committed the nearest end. `None` when the popover has
+    /// no Curve Fit row ([`PathOptionsPopover::curve_fit`]), and in every other pass.
+    pub curve_fit_out_of_range: Option<RangeAlert>,
+    /// The Curve Fit row refused a commit: the typed text was not a number, and the value it holds stayed as it was.
+    /// `true` in that pass only, and never when the popover has no Curve Fit row.
+    pub curve_fit_rejected_text: bool,
 }
 
 impl Outcome for PathOptionsOutput {
@@ -108,18 +117,35 @@ impl Outcome for PathOptionsOutput {
 ///   Focus moves into the popover; Tab goes Thickness, Color, Default, Rubber Band; Escape closes it and returns
 ///   focus to the gear; a press outside closes it.
 /// - The popover reports every change at once; there is no OK button.
+/// - A host whose tool fits a path to the pointer's trace adds the Curve Fit row after Thickness and Color with
+///   [`curve_fit`](Self::curve_fit); Tab then reaches it between Default and Rubber Band. Without the call the
+///   popover has no such row and reports nothing for one.
 #[must_use = "show the popover with `show`"]
 #[derive(craft_ui::contract::Pattern)]
 pub struct PathOptionsPopover<'a> {
     label: Label,
     settings: Bind<'a, PathOptionsSettings>,
     default_color: Option<Srgba>,
+    curve_fit: Option<Bind<'a, f32>>,
 }
 
 impl<'a> PathOptionsPopover<'a> {
+    /// The curve fits the Curve Fit row holds typed, stepped and scrubbed values to, in pixels.
+    pub const CURVE_FIT_RANGE: RangeInclusive<f32> = 0.5..=10.0;
+
     /// The gear and popover for the host's `settings`, named `label` for assistive technology.
     pub fn new(label: impl Into<Label>, settings: Bind<'a, PathOptionsSettings>) -> Self {
-        Self { label: label.into(), settings, default_color: None }
+        Self { label: label.into(), settings, default_color: None, curve_fit: None }
+    }
+
+    /// Shows the Curve Fit row after Thickness and Color, over the host's `value` (Photoshop's Freeform Pen, which
+    /// fits a path within this many pixels of the trace). The field holds [`CURVE_FIT_RANGE`](Self::CURVE_FIT_RANGE)
+    /// and commits one decimal, so a typed 3.33 becomes 3.3; it writes `value` through the binding the host passed,
+    /// and the row's range alert and its refused commit come back in [`PathOptionsOutput`]. Without this call there is
+    /// no Curve Fit row, and nothing about one is reported.
+    pub fn curve_fit(mut self, value: Bind<'a, f32>) -> Self {
+        self.curve_fit = Some(value);
+        self
     }
 
     /// The colour the swatch shows while the settings hold none (the overlay line colour the pen draws in). Without
@@ -134,7 +160,8 @@ impl<'a> PathOptionsPopover<'a> {
         let words = Env::of(ui).words::<PathOptionsWords>();
         let gear = IconButton::new(IconId::new("settings")).label(words.title.clone()).show(ui).response;
         let (mut edit, mut pick_color) = (None, None);
-        let (settings, default_color) = (&mut self.settings, self.default_color);
+        let (mut curve_fit_out_of_range, mut curve_fit_rejected_text) = (None, false);
+        let (settings, default_color, mut curve_fit) = (&mut self.settings, self.default_color, self.curve_fit.as_mut());
         let _shown = Popover::new(self.label.clone(), Bind::bound(open)).opened_by(&gear).show(ui, |ui, cx| {
             let before = match settings.reborrow().read(cx) {
                 Some(Mixed::Same(held)) => held,
@@ -163,6 +190,19 @@ impl<'a> PathOptionsPopover<'a> {
                         now.color = None;
                     }
                 });
+                if let Some(curve_fit) = &mut curve_fit {
+                    Field::new(words.curve_fit.clone()).show(ui, |ui, _| {
+                        let range = f64::from(*Self::CURVE_FIT_RANGE.start())..=f64::from(*Self::CURVE_FIT_RANGE.end());
+                        let field = NumberField::named(words.curve_fit.clone(), curve_fit.reborrowed())
+                            .range(range)
+                            .commit_decimals(1)
+                            .max_decimals(1)
+                            .unit_kind(UnitKind::Pixels)
+                            .show(ui);
+                        curve_fit_out_of_range = field.out_of_range;
+                        curve_fit_rejected_text = field.rejected_text;
+                    });
+                }
                 let rubber = Checkbox::new(Bind::given(before.rubber_band)).label(words.rubber_band.clone()).show(ui);
                 if let Some(rubber_band) = rubber.value().copied() {
                     now.rubber_band = rubber_band;
@@ -174,6 +214,6 @@ impl<'a> PathOptionsPopover<'a> {
                 edit = Some(event);
             }
         });
-        PathOptionsOutput { response: gear, edit, pick_color }
+        PathOptionsOutput { response: gear, edit, pick_color, curve_fit_out_of_range, curve_fit_rejected_text }
     }
 }

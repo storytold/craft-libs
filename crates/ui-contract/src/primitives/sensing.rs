@@ -87,6 +87,10 @@ pub struct TextOutcome<V> {
     pub invalid: bool,
     /// What the parse learned in the pass the draft committed through Enter, a separator or blur; `None` otherwise.
     pub committed: Option<craft_behavior::ParseNote>,
+    /// A commit was refused in this pass: Enter, a separator, or the run ending on text the codec does not read; the
+    /// value stayed the one it held. `invalid` marks every pass with an unparsable draft; this marks only the pass
+    /// that tried to commit it.
+    pub commit_rejected: bool,
     /// An IME composition is under way.
     pub composing: bool,
     /// The completion candidates the list shows; empty while it is closed.
@@ -106,6 +110,7 @@ impl<V> TextOutcome<V> {
             caret_visible: true,
             invalid: false,
             committed: None,
+            commit_rejected: false,
             composing: false,
             completions: Vec::new(),
             clicked: false,

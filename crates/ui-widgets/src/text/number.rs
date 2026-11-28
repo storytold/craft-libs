@@ -1001,9 +1001,10 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
 
     /// The edit, the preset picked, and what the committed text's parse learned: its unit, whether the range held it
     /// (only a typed commit carries a note, so steps, the wheel and a scrub never report out of range) and whether
-    /// the text was cut.
+    /// the text was cut or was no number at all.
     fn finish(self, cx: Cx<'_, Self>) -> NumberOutput<V> {
-        let committed = cx.text(&text_part::<V>()).and_then(|outcome| outcome.committed);
+        let text = cx.text(&text_part::<V>());
+        let committed = text.and_then(|outcome| outcome.committed);
         let out_of_range = committed.and_then(|note| note.held).map(|typed| self.range_alert(typed, self.shown_number(cx.value())));
         NumberOutput {
             edit: cx.edit_response(),
@@ -1011,6 +1012,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             typed_unit: committed.and_then(|note| note.unit).and_then(UnitKind::from_tag),
             out_of_range,
             cut: committed.is_some_and(|note| note.cut),
+            rejected_text: text.is_some_and(|outcome| outcome.commit_rejected),
             link: cx.link_activated(),
         }
     }

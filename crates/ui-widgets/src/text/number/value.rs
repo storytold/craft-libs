@@ -139,6 +139,11 @@ pub struct NumberOutput<V: NumberValue = Option<f64>> {
     pub out_of_range: Option<RangeAlert>,
     /// The committed text held more than the codec reads, in the pass it committed.
     pub cut: bool,
+    /// The committed text was no number at all: the pass a commit arrived on text the field cannot read - Enter, Tab,
+    /// the focus loss that ends the edit, or the step that ends a draft still open. The value stays the one the field
+    /// held, and the pass after reports false again. Escape, which cancels the edit, and a step or scrub with no
+    /// draft open report nothing.
+    pub rejected_text: bool,
     /// The field's link label was clicked in this pass (`Cx::link_activated`); false unless its side label is a link.
     pub link: bool,
 }

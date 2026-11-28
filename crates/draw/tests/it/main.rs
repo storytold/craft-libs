@@ -23,6 +23,7 @@ pub(crate) mod bezier;
 
 // draw-pen-b
 pub(crate) mod pen;
+pub(crate) mod pen_options;
 
 // draw-crop-b
 pub(crate) mod crop_size;

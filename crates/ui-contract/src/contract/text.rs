@@ -207,7 +207,7 @@ fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: R
         }
         let draft_text = run.draft.clone().unwrap_or_default();
         let (mut submitted, mut escaped) = (false, false);
-        let mut committed_note = None;
+        let (mut committed_note, mut commit_rejected) = (None, false);
         let submit_mods = std::mem::take(&mut state.submit_mods);
         let end = match state.end.take() {
             None if commit_now && run.is_open() => Some(End::Blur),
@@ -254,7 +254,7 @@ fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: R
                     events.push(TextEvent::Commit(committed));
                     submitted = end == End::Submit;
                 }
-                (Ended::Rejected, _) => {}
+                (Ended::Rejected, _) => commit_rejected = true,
                 (Ended::Idle, _) => submitted = end == End::Submit,
                 _ => {}
             },
@@ -265,6 +265,7 @@ fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: R
                     events.push(TextEvent::Commit(committed));
                 }
                 (Ended::Rejected, _) => {
+                    commit_rejected = true;
                     typing.cancel(&mut run);
                     events.push(TextEvent::Cancel(CancelReason::Blur));
                 }
@@ -279,6 +280,7 @@ fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: R
         outcome.draft = run.draft.clone();
         outcome.invalid = state.invalid;
         outcome.committed = committed_note;
+        outcome.commit_rejected = commit_rejected;
         Resolved { events, outcome, submitted, submit_mods: if submitted { submit_mods } else { Mods::NONE }, escaped, rewritten, refused }
     })
 }
