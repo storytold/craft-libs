@@ -4,7 +4,9 @@ use super::{Fmt, Kind, ListInfo, Para, Reader, model};
 
 impl Reader {
     pub(super) fn commit_style(&mut self) {
-        let name = std::mem::take(&mut self.style_name).trim().trim_end_matches(';').trim().to_string();
+        // A literal `;` never reaches the name (it commits), so any `;` in it is an escaped one
+        // and stays: trimming trailing semicolons here would undo that for `Title\u59?;`.
+        let name = std::mem::take(&mut self.style_name).trim().to_string();
         let def = std::mem::take(&mut self.style_def_cur);
         if self.styles.len() < 4096 {
             self.styles.insert(self.style_cur, name);
