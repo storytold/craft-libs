@@ -1819,9 +1819,11 @@ dependencies = [
  "craft-geom",
  "craft-gif",
  "craft-gpu",
+ "craft-gpu-device",
  "craft-gpu-null",
  "craft-gpu-providers",
  "craft-gpu-wgpu",
+ "craft-gpu-yuv",
  "craft-gridcraft-format",
  "craft-gzip",
  "craft-har",
@@ -1905,6 +1907,7 @@ dependencies = [
  "craft-review",
  "craft-rtf",
  "craft-sbs",
+ "craft-scopes",
  "craft-score",
  "craft-scraft-format",
  "craft-settings",
@@ -2284,7 +2287,6 @@ dependencies = [
  "craft-flags",
  "craft-platform",
  "dirs",
- "getrandom 0.3.4",
  "log",
  "proptest",
  "serde",
@@ -2297,6 +2299,7 @@ dependencies = [
 name = "craft-control-protocol"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
  "serde_json",
  "subtle",
 ]
@@ -2502,6 +2505,7 @@ dependencies = [
  "chrono",
  "craft-cfb",
  "craft-drawingml",
+ "craft-flow",
  "craft-math",
  "craft-offcrypto",
  "craft-opc",
@@ -2921,6 +2925,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gpu-device"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "log",
+ "pollster 0.4.0",
+ "serde",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
 name = "craft-gpu-null"
 version = "0.1.0"
 dependencies = [
@@ -2943,6 +2959,17 @@ dependencies = [
  "craft-gpu-providers",
  "pollster 0.4.0",
  "wgpu",
+]
+
+[[package]]
+name = "craft-gpu-yuv"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "craft-gpu-null",
+ "pollster 0.4.0",
+ "wgpu",
+ "yuv",
 ]
 
 [[package]]
@@ -3580,7 +3607,6 @@ version = "0.1.0"
 name = "craft-pbr"
 version = "0.1.0"
 dependencies = [
- "craft-pbr",
  "craft-texture",
  "glam 0.30.10",
  "naga",
@@ -4042,6 +4068,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-scopes"
+version = "0.1.0"
+dependencies = [
+ "craft-color",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-score"
 version = "0.1.0"
 dependencies = [
@@ -4294,7 +4329,11 @@ dependencies = [
 name = "craft-testkit"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rustix 1.1.6",
+ "serde_json",
+ "sha2 0.10.9",
+ "skrifa 0.47.0",
 ]
 
 [[package]]
@@ -4934,6 +4973,7 @@ dependencies = [
  "libc",
  "serde_json",
  "tempfile",
+ "toml_edit",
 ]
 
 [[package]]
@@ -15034,6 +15074,15 @@ dependencies = [
  "quote",
  "syn 3.0.6",
  "synstructure 0.14.0",
+]
+
+[[package]]
+name = "yuv"
+version = "0.8.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d109d1eacc7b034329873d2d848039b365c65ab7d751b19ee84e4921c62c607"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]

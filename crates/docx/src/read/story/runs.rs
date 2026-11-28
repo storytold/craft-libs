@@ -272,21 +272,23 @@ impl Reader<'_> {
             },
             "w:drawing" => {
                 if let Some(o) = self.read_drawing(sc, k, rels) {
-                    self.emit_linked_obj(sc, pb, o, props, Self::drawing_link(k, rels));
+                    let link = self.drawing_link(k, rels);
+                    self.emit_linked_obj(sc, pb, o, props, link);
                 }
             }
             "w:pict" => {
-                if let Some(o) = self.read_signature_line(sc, k, rels) {
-                    self.emit_obj(sc, pb, o, props);
+                if let Some((o, link)) = self.read_signature_line(sc, k, rels) {
+                    self.emit_linked_obj(sc, pb, o, props, link);
                 } else {
-                    for o in self.read_vml_all(sc, k, rels) {
-                        self.emit_obj(sc, pb, o, props);
+                    for (o, target) in self.read_vml_all(sc, k, rels) {
+                        let link = target.and_then(|target| self.keep_drawing_link(target));
+                        self.emit_linked_obj(sc, pb, o, props, link);
                     }
                 }
             }
             "w:object" => {
-                if let Some(o) = self.read_object(sc, k, rels) {
-                    self.emit_obj(sc, pb, o, props);
+                if let Some((o, link)) = self.read_object(sc, k, rels) {
+                    self.emit_linked_obj(sc, pb, o, props, link);
                 }
             }
             "w:contentPart" => {

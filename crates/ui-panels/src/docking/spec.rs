@@ -236,6 +236,9 @@ pub struct PanelSpec {
     /// Whether the panel's floating window may be an OS window of its own. A panel that disallows it keeps its
     /// window in the main window.
     pub allow_native: bool,
+    /// Whether the edge grips can resize a floating window containing this panel. A window is resizable
+    /// only when every panel in it allows resizing.
+    pub allow_float_resize: bool,
     /// What an OS window holding the panel is for. A window holding any `WindowKind::Document` panel is a document
     /// window; the rest are tool windows.
     pub window_kind: WindowKind,
@@ -282,6 +285,7 @@ impl PanelSpec {
             flyout_height: FlyoutHeight::Docked,
             float_size: None,
             allow_native: true,
+            allow_float_resize: true,
             window_kind: WindowKind::Tool,
             canvas: false,
             grid: None,
@@ -341,6 +345,13 @@ impl PanelSpec {
     #[must_use]
     pub fn icon(mut self, icon: IconSpec<'static>) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    /// Allows or disables edge resizing for a floating window containing this panel.
+    #[must_use]
+    pub fn allow_float_resize(mut self, allow: bool) -> Self {
+        self.allow_float_resize = allow;
         self
     }
 

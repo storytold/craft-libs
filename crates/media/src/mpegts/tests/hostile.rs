@@ -57,13 +57,13 @@ fn ps_seed() -> Vec<u8> {
 
 #[test]
 fn hostile_input_never_panics() {
-    let mut seeds = vec![ts_seed(false), ts_seed(true), ps_seed()];
+    let mut seeds = vec![ts_seed(false), ts_seed(true), ps_seed(), super::opus_av1_mpeg4::seed()];
     seeds.push(work_tests::big_program_stream(false, 8).0);
     seeds.push(work_tests::big_program_stream(true, 8).0);
     // fewer rounds than FilmCraft's 40 000: tests here build without optimisation, and the two
     // large program streams cost a megabyte of window refill per unit read
     for (i, s) in seeds.iter().enumerate() {
-        craft_media_testkit::hostile::hammer(&format!("mpegts seed {i}"), s, if i < 3 { 4_000 } else { 150 }, exercise);
+        craft_media_testkit::hostile::hammer(&format!("mpegts seed {i}"), s, if i < 4 { 4_000 } else { 150 }, exercise);
     }
 }
 
@@ -83,6 +83,9 @@ fn elementary_stream_frame_parsers_never_panic() {
         Codec::TrueHd,
         Codec::LpcmBluray,
         Codec::LpcmDvd,
+        Codec::Mpeg4Part2,
+        Codec::Av1,
+        Codec::Opus,
         Codec::Unknown(0x55),
     ];
     let mut ac3 = vec![0x0B, 0x77, 0, 0, 30, 0x40];

@@ -7,7 +7,9 @@
 //! independent vowel that does not follow a virama: `ગુ-જ-રા-તી`, `વિ-દ્યા-ર્થી`, `સં-સ્કૃત`,
 //! `हि-न्दी`. A vowel sign, a mark or the second consonant of a conjunct never starts a line.
 //! Nor does a dead consonant — one ending in a virama with no consonant after it (`વાક્`) — since
-//! it has no vowel of its own and is the end of the syllable before.
+//! it has no vowel of its own and is the end of the syllable before. A zero-width joiner or
+//! non-joiner after a virama (`સ્` U+200D `ત`) only chooses how the conjunct is drawn: it stays
+//! inside the akshara, and no break goes next to a joiner.
 //!
 //! The rules come from the scripts' Unicode encoding alone; no pattern file or word list is
 //! read (and none is borrowed). The Brahmic blocks share one layout (the ISCII order), so a
@@ -43,6 +45,14 @@ enum Kind {
     /// A vowel sign, nukta, anusvara, candrabindu, visarga or other mark (and the avagraha):
     /// belongs to the akshara before it.
     Mark,
+    /// A zero-width joiner or non-joiner: shapes the conjunct around it, in the same akshara.
+    Joiner,
+}
+
+/// Is `c` a zero-width joiner or non-joiner (U+200D, U+200C)? Inside an Indic word it shapes a
+/// conjunct, so it is part of the word (as in Unicode's word boundaries, UAX #29).
+pub fn is_joiner(c: char) -> bool {
+    matches!(c, '\u{200C}' | '\u{200D}')
 }
 
 impl Script {
@@ -66,6 +76,9 @@ impl Script {
     /// What `c` is in this script, or `None` for a character outside the script's letters and
     /// marks (another script, a digit, a danda, `ॐ`, the abbreviation sign…).
     fn kind(self, c: char) -> Option<Kind> {
+        if is_joiner(c) {
+            return Some(Kind::Joiner);
+        }
         let o = u32::from(c).checked_sub(self.base()).filter(|&o| o < 0x80)?;
         let dev = self == Script::Devanagari;
         Some(match o {
@@ -94,7 +107,8 @@ impl Script {
         })
     }
 
-    /// Is `c` one of this script's letters or marks (the characters [`points`] splits)?
+    /// Is `c` one of this script's letters or marks, or a joiner (the characters [`points`]
+    /// splits)?
     pub fn is_letter(self, c: char) -> bool {
         self.kind(c).is_some()
     }
@@ -109,7 +123,7 @@ pub fn points(script: Script, word: &[char]) -> Vec<usize> {
     };
     let at = |i: usize| kinds.get(i).copied();
     // Has the akshara starting at `i` a vowel (independent, a sign, or the inherent one)? Only a
-    // consonant cluster ending in a virama (`ક્`, `ન્ત્`) has none.
+    // consonant cluster ending in a virama (`ક્`, `ન્ત્`, with or without a joiner) has none.
     let live = |i: usize| {
         let mut j = i;
         loop {
@@ -117,19 +131,24 @@ pub fn points(script: Script, word: &[char]) -> Vec<usize> {
                 return true;
             }
             j += 1;
-            while at(j) == Some(Kind::Mark) {
+            while matches!(at(j), Some(Kind::Mark | Kind::Joiner)) {
                 j += 1;
             }
             if at(j) != Some(Kind::Virama) {
                 return true;
             }
             j += 1;
+            while at(j) == Some(Kind::Joiner) {
+                j += 1;
+            }
             if at(j) != Some(Kind::Consonant) {
                 return false;
             }
         }
     };
-    (1..word.len()).filter(|&i| matches!(at(i), Some(Kind::Vowel | Kind::Consonant)) && at(i - 1) != Some(Kind::Virama) && live(i)).collect()
+    (1..word.len())
+        .filter(|&i| matches!(at(i), Some(Kind::Vowel | Kind::Consonant)) && !matches!(at(i - 1), Some(Kind::Virama | Kind::Joiner)) && live(i))
+        .collect()
 }
 
 #[cfg(test)]
@@ -211,6 +230,17 @@ mod tests {
         assert_eq!(hi("ज\u{093C}रूरी"), "ज\u{093C}-रू-री");
         assert_eq!(hi("\u{095B}रूरी"), "\u{095B}-रू-री");
         assert_eq!(hi("ગુજરાતી"), "ગુજરાતી", "Gujarati is not Devanagari");
+    }
+
+    /// CodeRabbit on craft-libs#3901: a joiner after a virama stays inside its conjunct, the break
+    /// before the conjunct remains, and no break goes next to a joiner.
+    #[test]
+    fn joiners_stay_inside_the_akshara() {
+        assert_eq!(gu("પુસ્\u{200D}તક"), "પુ-સ્\u{200D}ત-ક");
+        assert_eq!(gu("પુસ્\u{200C}તક"), "પુ-સ્\u{200C}ત-ક");
+        assert_eq!(gu("વાક્\u{200D}"), "વાક્\u{200D}", "still a dead consonant");
+        assert_eq!(gu("ક\u{200D}ખ"), "ક\u{200D}ખ", "a joiner outside a conjunct");
+        assert_eq!(hi("क्\u{200D}षमा"), "क्\u{200D}ष-मा");
     }
 
     /// Gujarati and Hindi are mapped to their scripts, other languages to none.

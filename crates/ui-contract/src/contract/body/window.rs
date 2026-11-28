@@ -13,7 +13,7 @@ use crate::runtime::env::{EnvView, ShellEntry};
 use crate::runtime::memory::sub;
 use crate::runtime::windows::{self, ResizeEdge, WindowAction, WindowHit};
 use crate::runtime::{keys, pointer};
-use crate::style::{ComponentStyle as _, UiTokens};
+use crate::style::UiTokens;
 use craft_behavior::{CursorIcon, GesturePhase, HitLevel, HitPriority, PartKey, PointerEvent, PressPhase};
 use craft_host::target::{Caps, WindowChrome, WindowState};
 use craft_keymap::{Chord, Key, Mods};
@@ -403,15 +403,15 @@ impl BodyHooks<'_> {
     /// resize by a step (Shift: four steps), Enter, the command again or a primary press keeps the placement, Escape
     /// restores it, and focus leaving the container ends the mode. The mode holds its chords through the key stage, so no
     /// component under focus sees them. Each step is reported as a `PlacementKind::Keyboard` change.
-    pub(super) fn window_keys<C: Container>(&mut self, props: &ContainerProps, cx: &mut Cx<'_, C>) {
-        let (id, ctx) = (cx.core.id, cx.core.ctx.clone());
+    pub(super) fn window_keys(&mut self, props: &ContainerProps, core: &mut CxCore<'_>, style_min: Vec2) {
+        let (id, ctx) = (core.id, core.ctx.clone());
         let (Some(window), Some(overlay)) = (window_instance(props, id), overlay_of(props)) else { return };
         let overlay = overlay.in_screen(crate::runtime::overlay::parent_space(&ctx, id));
         let overlay = &*overlay;
-        let limits = Limits::new(overlay, window_min(props, cx.style.metrics().min_size));
-        let rect = cx.core.rect;
-        let rtl = cx.core.env.direction().is_rtl();
-        let mut slot = PlacementSlot::new(&mut *cx.core.memory, id, self.save.as_ref(), overlay);
+        let limits = Limits::new(overlay, window_min(props, style_min));
+        let rect = core.rect;
+        let rtl = core.env.direction().is_rtl();
+        let mut slot = PlacementSlot::new(&mut *core.memory, id, self.save.as_ref(), overlay);
         let current = slot.read();
         let step = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Keyboard, continued: false };
         let started = commands::take_for_instance(&ctx, Some(window), false, WindowCommand::from_ref).map(|(command, _)| command);
@@ -481,21 +481,21 @@ impl BodyHooks<'_> {
     /// A drag of the move band or a grip of a layer (not an OS window): the layer follows the pointer within the
     /// limits, and each step is reported. The drag runs from the rect the layer had when the press went down. Escape,
     /// which cancels the press, restores the placement from before.
-    pub(super) fn window_drag<C: Container>(&mut self, props: &ContainerProps, cx: &mut Cx<'_, C>) {
+    pub(super) fn window_drag(&mut self, props: &ContainerProps, core: &mut CxCore<'_>, style_min: Vec2) {
         let Some(overlay) = overlay_of(props) else { return };
         // A band that moves the window below starts the OS move of the window the layer is shown in.
         if overlay.moves_window {
-            let viewport = pass::current_viewport(&cx.core.ctx);
-            self.window_os(viewport, props, cx);
+            let viewport = pass::current_viewport(&core.ctx);
+            self.window_os(viewport, props, core, style_min);
             return;
         }
-        let id = cx.core.id;
-        let overlay = overlay.in_screen(crate::runtime::overlay::parent_space(&cx.core.ctx, id));
+        let id = core.id;
+        let overlay = overlay.in_screen(crate::runtime::overlay::parent_space(&core.ctx, id));
         let overlay = &*overlay;
-        let limits = Limits::new(overlay, window_min(props, cx.style.metrics().min_size));
-        let rect = cx.core.rect;
+        let limits = Limits::new(overlay, window_min(props, style_min));
+        let rect = core.rect;
         // A part the container did not declare this pass (no band, no grips) has no result.
-        let phase = |key: (PartKey, Option<u64>)| cx.core.results.get(&key).map(|result| result.press.phase);
+        let phase = |key: (PartKey, Option<u64>)| core.results.get(&key).map(|result| result.press.phase);
         let mut pressed = vec![(None, phase((MOVE_BAND, None)))];
         pressed.extend((0..GRIPS.len()).map(|index| (Some(index), phase((GRIP, Some(index as u64))))));
         let Some((grip, phase)) = pressed.into_iter().find_map(|(grip, phase)| match phase? {
@@ -508,7 +508,7 @@ impl BodyHooks<'_> {
         }) else {
             return;
         };
-        let mut slot = PlacementSlot::new(&mut *cx.core.memory, id, self.save.as_ref(), overlay);
+        let mut slot = PlacementSlot::new(&mut *core.memory, id, self.save.as_ref(), overlay);
         let current = slot.read();
         // Where the layer stands: at the placement's size, where it is shown, which the window's keep rule
         // (`Overlay::drag_bounds`) may have moved from the stored position a drag past the window's edge left.
@@ -567,30 +567,30 @@ impl BodyHooks<'_> {
     /// caller sizes that resize ([`Self::window_resize`]). Where the platform answers the hit test
     /// (`answered_by_platform`), the parts it takes stand for its sink only; the grips of a window its caller sizes
     /// are never its.
-    pub(super) fn window_os<C: Container>(&mut self, viewport: ViewportId, props: &ContainerProps, cx: &mut Cx<'_, C>) {
+    pub(super) fn window_os(&mut self, viewport: ViewportId, props: &ContainerProps, core: &mut CxCore<'_>, style_min: Vec2) {
         let by_caller = overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller);
         if by_caller {
-            let limits = overlay_of(props).map(|overlay| Limits::new(overlay, window_min(props, cx.style.metrics().min_size)));
+            let limits = overlay_of(props).map(|overlay| Limits::new(overlay, window_min(props, style_min)));
             if let Some(limits) = limits {
-                self.window_resize(viewport, &limits, cx.core);
+                self.window_resize(viewport, &limits, core);
             }
         }
-        if answered_by_platform(&cx.core.ctx, viewport) {
+        if answered_by_platform(&core.ctx, viewport) {
             return;
         }
-        let app_moves = windows::app_moves(&cx.core.ctx, viewport);
+        let app_moves = windows::app_moves(&core.ctx, viewport);
         if app_moves {
-            self.window_move(viewport, cx.core);
+            self.window_move(viewport, core);
         }
         // The parts stand only by `WindowParts`, and the results of a part not registered this pass are gone.
         let started =
-            |key: (PartKey, Option<u64>)| cx.core.results.get(&key).is_some_and(|result| matches!(result.press.phase, PressPhase::DragStart { .. }));
+            |key: (PartKey, Option<u64>)| core.results.get(&key).is_some_and(|result| matches!(result.press.phase, PressPhase::DragStart { .. }));
         if !app_moves && started((MOVE_BAND, None)) {
-            windows::act(&cx.core.ctx, viewport, WindowAction::StartMove);
+            windows::act(&core.ctx, viewport, WindowAction::StartMove);
         }
         for (index, (dx, dy, _)) in GRIPS.into_iter().enumerate() {
             if !by_caller && started((GRIP, Some(index as u64))) {
-                windows::act(&cx.core.ctx, viewport, WindowAction::StartResize(edge_of(dx, dy)));
+                windows::act(&core.ctx, viewport, WindowAction::StartResize(edge_of(dx, dy)));
             }
         }
     }
