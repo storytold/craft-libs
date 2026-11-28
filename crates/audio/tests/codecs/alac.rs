@@ -153,3 +153,39 @@ fn ffmpeg_decodes_our_alac_exactly() {
         }
     }
 }
+
+/// Quiet and silent passages at 24 and 32 bits, which our encoder codes with fewer shifted-off
+/// low bytes than Apple's reference (#1368), decode exactly in ffmpeg. The packets alternate
+/// between silence, audio within 12 bits, audio at the narrower widths' edges and full scale, so
+/// one stream changes its shift from packet to packet.
+#[test]
+fn ffmpeg_decodes_our_quiet_alac_exactly() {
+    let Some(ff) = crate::integration::codecs::testkit::ffmpeg_or_skip("alac oracle") else { return };
+    for (channels, bits) in [(1, 24), (2, 24), (6, 24), (1, 32), (2, 32)] {
+        let full = input(channels, bits, 4 * 4096);
+        let wav: Vec<Vec<i32>> = full
+            .iter()
+            .map(|c| {
+                c.iter()
+                    .enumerate()
+                    .map(|(i, &x)| match i / 4096 {
+                        0 => 0,
+                        1 => x >> (bits - 12),
+                        2 => (x >> (bits - 15)) << (bits - 24),
+                        _ => x,
+                    })
+                    .collect()
+            })
+            .collect();
+        // ffmpeg does not decode escaped 32-bit stereo frames: keep the full-scale packet for 24
+        let wav: Vec<Vec<i32>> = if bits == 32 { wav.iter().map(|c| c[..3 * 4096].to_vec()).collect() } else { wav };
+        let m4a = our_m4a(&wav, bits, 4096);
+        let path = dir().join(format!("ours_quiet_{channels}ch_{bits}.m4a"));
+        std::fs::write(&path, &m4a).unwrap();
+        let theirs = ffmpeg_decode(&ff, &path, channels, bits);
+        assert!(theirs == wav, "{channels} ch, {bits} bits: ffmpeg's decode differs from the input");
+        if bits <= 24 {
+            assert!(our_decode(&m4a, bits) == wav, "{channels} ch, {bits} bits: our decode differs");
+        }
+    }
+}

@@ -9,8 +9,9 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use craft_font_manager::craft_font_catalog::Os;
 use craft_font_manager::store::{FakeStore, Installer, SuiteStore};
@@ -118,7 +119,8 @@ enum Reply {
 struct Service {
     base: String,
     routes: Arc<Mutex<HashMap<String, Reply>>>,
-    log: Arc<Mutex<Vec<String>>>,
+    /// The paths asked for, notified as each one arrives.
+    log: Arc<(Mutex<Vec<String>>, Condvar)>,
     gate: Arc<(Mutex<bool>, Condvar)>,
 }
 
@@ -143,7 +145,14 @@ impl Service {
     }
 
     fn requests(&self) -> Vec<String> {
-        self.log.lock().unwrap().clone()
+        self.log.0.lock().unwrap().clone()
+    }
+
+    /// Waits until `n` requests have reached the service.
+    fn wait_for_requests(&self, n: usize) {
+        let log = self.log.0.lock().unwrap();
+        let (log, _) = self.log.1.wait_timeout_while(log, HANG, |log| log.len() < n).unwrap();
+        assert!(log.len() >= n, "{} of {n} requests reached the service", log.len());
     }
 
     fn release(&self) {
@@ -152,7 +161,7 @@ impl Service {
     }
 }
 
-fn answer(mut s: TcpStream, routes: &Mutex<HashMap<String, Reply>>, log: &Mutex<Vec<String>>, gate: &(Mutex<bool>, Condvar)) {
+fn answer(mut s: TcpStream, routes: &Mutex<HashMap<String, Reply>>, log: &(Mutex<Vec<String>>, Condvar), gate: &(Mutex<bool>, Condvar)) {
     let mut head = Vec::new();
     let mut b = [0u8; 1];
     while !head.ends_with(b"\r\n\r\n") {
@@ -162,7 +171,8 @@ fn answer(mut s: TcpStream, routes: &Mutex<HashMap<String, Reply>>, log: &Mutex<
         }
     }
     let path = String::from_utf8_lossy(&head).split_whitespace().nth(1).unwrap_or("/").to_string();
-    log.lock().unwrap().push(path.clone());
+    log.0.lock().unwrap().push(path.clone());
+    log.1.notify_all();
     let reply = routes.lock().unwrap().get(&path).cloned();
     let body = match reply {
         Some(Reply::Ok(body)) => body,
@@ -182,22 +192,28 @@ fn answer(mut s: TcpStream, routes: &Mutex<HashMap<String, Reply>>, log: &Mutex<
     let _ = s.write_all(&body);
 }
 
-/// The results until `n` have come, or two seconds.
-fn wait_for(previews: &Previews, n: usize) -> Vec<Preview> {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut out = Vec::new();
-    while out.len() < n && Instant::now() < deadline {
-        out.extend(previews.poll());
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    out
+/// How long a test waits for a result or a request before it fails as hung. A result that comes does not depend on it.
+const HANG: Duration = Duration::from_secs(10);
+
+/// `previews` and a channel that gets `()` after each result it delivers ([`Previews::on_ready`]).
+fn watched(previews: Previews) -> (Previews, Receiver<()>) {
+    let (ready, results) = channel();
+    let previews = previews.on_ready(move || {
+        let _ = ready.send(());
+    });
+    (previews, results)
 }
 
-fn wait_until(mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while !done() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
+/// The results until `n` have come.
+fn wait_for(previews: &Previews, ready: &Receiver<()>, n: usize) -> Vec<Preview> {
+    let mut out = previews.poll();
+    while out.len() < n {
+        if ready.recv_timeout(HANG).is_err() {
+            panic!("{} of {n} previews came", out.len());
+        }
+        out.extend(previews.poll());
     }
+    out
 }
 
 #[test]
@@ -209,12 +225,12 @@ fn previews_come_from_the_service_then_the_cache_and_only_with_consent() {
     let broken = PreviewKey::new(&sha(2), Instance::List, Subset::Sample(SampleHash::of("Hello"))).unwrap();
     service.serve(&sample, Reply::Ok(WOFF2.to_vec()));
     service.serve(&broken, Reply::Ok(b"wOF2 but not really".to_vec()));
-    let previews = Previews::new(store.clone());
+    let (previews, ready) = watched(Previews::new(store.clone()));
 
     // No service: nothing happens.
     assert!(!previews.available());
     previews.request(sample.clone(), 1);
-    let got = wait_for(&previews, 1);
+    let got = wait_for(&previews, &ready, 1);
     assert_eq!(got.first().map(|p| p.font.clone().unwrap_err()), Some(PreviewError::NoService));
 
     // A service, but previews off: no request.
@@ -222,7 +238,7 @@ fn previews_come_from_the_service_then_the_cache_and_only_with_consent() {
     store.set_previews_enabled(false).unwrap();
     assert!(!previews.available());
     previews.request(sample.clone(), 1);
-    let got = wait_for(&previews, 1);
+    let got = wait_for(&previews, &ready, 1);
     assert_eq!(got.first().map(|p| p.font.clone().unwrap_err()), Some(PreviewError::PreviewsOff));
     assert!(service.requests().is_empty());
 
@@ -231,7 +247,7 @@ fn previews_come_from_the_service_then_the_cache_and_only_with_consent() {
     assert!(previews.available() && !store.downloads_allowed());
     previews.request(sample.clone(), 1);
     previews.request(broken.clone(), 1);
-    let got = wait_for(&previews, 2);
+    let got = wait_for(&previews, &ready, 2);
     let font = |key: &PreviewKey| got.iter().find(|p| &p.key == key).map(|p| p.font.clone());
     assert!(font(&sample).unwrap().is_ok_and(|f| is_font(&f)));
     assert_eq!(font(&broken), Some(Err(PreviewError::NotAFont)));
@@ -241,9 +257,9 @@ fn previews_come_from_the_service_then_the_cache_and_only_with_consent() {
 
     // A new session reads the disk cache, even with previews off.
     store.set_previews_enabled(false).unwrap();
-    let later = Previews::new(store.clone());
+    let (later, later_ready) = watched(Previews::new(store.clone()));
     later.request(sample.clone(), 1);
-    assert!(wait_for(&later, 1).first().is_some_and(|p| p.font.as_ref().is_ok_and(|f| is_font(f))));
+    assert!(wait_for(&later, &later_ready, 1).first().is_some_and(|p| p.font.as_ref().is_ok_and(|f| is_font(f))));
     assert_eq!(service.requests().len(), 2);
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -276,9 +292,9 @@ fn a_service_marked_down_gets_no_requests() {
     // The client is shared with, say, the store's installs, which found the service unreachable.
     let client = Client::default();
     client.mark_service_down(&service.base);
-    let previews = Previews::new(store.clone()).with_fetcher(Arc::new(client));
+    let (previews, ready) = watched(Previews::new(store.clone()).with_fetcher(Arc::new(client)));
     previews.request(key, 1);
-    let got = wait_for(&previews, 1);
+    let got = wait_for(&previews, &ready, 1);
     assert!(matches!(got.first().map(|p| p.font.clone()), Some(Err(PreviewError::Failed(_)))));
     assert!(service.requests().is_empty());
     let _ = std::fs::remove_dir_all(dir);
@@ -297,10 +313,10 @@ fn highest_priority_first_and_cancelled_requests_deliver_nothing() {
     for key in [low, high, dropped] {
         service.serve(key, Reply::Ok(WOFF2.to_vec()));
     }
-    let previews = Previews::new(store.clone()).with_cache(None).with_workers(1);
+    let (previews, ready) = watched(Previews::new(store.clone()).with_cache(None).with_workers(1));
 
     previews.request(held.clone(), 9);
-    wait_until(|| !service.requests().is_empty());
+    service.wait_for_requests(1);
     previews.request(low.clone(), 1);
     previews.request(dropped.clone(), 1);
     previews.request(high.clone(), 5);
@@ -310,11 +326,12 @@ fn highest_priority_first_and_cancelled_requests_deliver_nothing() {
     // The running request stops while the service still sends nothing.
     previews.cancel(held);
 
-    let got = wait_for(&previews, 2);
+    let got = wait_for(&previews, &ready, 2);
     assert_eq!(got.iter().map(|p| &p.key).collect::<Vec<_>>(), [high, low]);
     let path = |k: &PreviewKey| format!("/{}", k.path());
     assert_eq!(service.requests(), [path(held), path(high), path(low)]);
-    std::thread::sleep(Duration::from_millis(100));
+    // The one worker delivers in the order it takes requests, and it had ended the held one before it asked for `high`,
+    // so nothing more can come.
     assert!(previews.poll().is_empty());
     assert_eq!(previews.pending(), 0);
     service.release();
@@ -343,9 +360,9 @@ fn a_404_comes_back_as_not_found() {
     let store = Arc::new(FakeStore::new(&dir, HashMap::new()));
     store.set_preview_service(Some(&service.base)).unwrap();
     let key = PreviewKey::new(&sha(1), Instance::List, Subset::Sample(SampleHash::of("Hello"))).unwrap();
-    let previews = Previews::new(store.clone());
+    let (previews, ready) = watched(Previews::new(store.clone()));
     previews.request(key, 1);
-    let got = wait_for(&previews, 1);
+    let got = wait_for(&previews, &ready, 1);
     assert_eq!(got.first().map(|p| p.font.clone().unwrap_err()), Some(PreviewError::NotFound));
     let _ = std::fs::remove_dir_all(dir);
 }

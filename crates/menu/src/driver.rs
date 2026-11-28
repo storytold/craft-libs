@@ -3,11 +3,12 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use craft_keymap::{Chord, CommandRef, Key, Mods};
 use craft_ui::contract::{MemoKey, MemoProps};
 use craft_ui::menu::Alternate;
+use craft_ui::runtime::motion::Instant;
 use craft_ui::runtime::windows::{KeyEquivalent, WindowAction, WindowHost};
 
 use crate::layout::{Clash, Layout};

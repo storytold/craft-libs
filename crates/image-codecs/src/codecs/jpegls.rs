@@ -673,7 +673,13 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
         if marker == 0xD9 {
             return finish(frame, planes, scans_done);
         }
-        if marker == 0x00 || (0xD0..=0xD7).contains(&marker) || marker == 0x01 {
+        let restart = (0xD0..=0xD7).contains(&marker);
+        // A restart marker comes only between two intervals inside a scan, and every scan the
+        // decoder reads fits in one interval, so none may follow it, before or after other segments.
+        if restart && restart_interval != 0 {
+            return Err(bad("a restart marker outside a scan's restart intervals"));
+        }
+        if marker == 0x00 || restart || marker == 0x01 {
             pos += 2;
             continue;
         }
@@ -758,11 +764,6 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
                 samples.try_reserve_exact(f.width * f.height).map_err(|_| bad("pixel buffer is too large"))?;
                 samples.resize(f.width * f.height, 0u16);
                 decode_scan(&b[start..end], f.width, f.height, &params, &mut samples)?;
-                // A restart marker comes only between two intervals, so none follows a scan that
-                // fits in one. Fill bytes (`0xFF`) may come before the marker.
-                if restart_interval != 0 && b[end..].iter().find(|&&v| v != 0xFF).is_some_and(|m| (0xD0..=0xD7).contains(m)) {
-                    return Err(bad("a restart marker after the last restart interval"));
-                }
                 planes[idx] = samples;
                 scans_done += 1;
                 pos = end;

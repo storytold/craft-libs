@@ -38,6 +38,7 @@ serde_json = { workspace = true }
 craft-ui-panels = { path = ".", features = ["suite"] }
 craft-behavior = { workspace = true }
 craft-keymap = { workspace = true, features = ["egui"] }
+craft-theme = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
 toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }

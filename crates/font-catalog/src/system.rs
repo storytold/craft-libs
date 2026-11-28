@@ -13,7 +13,7 @@ mod imp {
     use std::path::{Path, PathBuf};
     use std::sync::{Mutex, PoisonError};
 
-    use fontique::{Collection, CollectionOptions, SourceKind};
+    use fontique::{Collection, CollectionOptions, GenericFamily, SourceKind};
 
     use crate::{FontEnv, font_store_dir};
 
@@ -160,6 +160,19 @@ mod imp {
         })
     }
 
+    pub fn generic_family_names(generic: crate::Generic) -> Vec<String> {
+        let generic = match generic {
+            crate::Generic::SansSerif => GenericFamily::SansSerif,
+            crate::Generic::Serif => GenericFamily::Serif,
+            crate::Generic::Monospace => GenericFamily::Monospace,
+            crate::Generic::SystemUi => GenericFamily::SystemUi,
+        };
+        with(false, |s| {
+            let ids: Vec<_> = s.collection.generic_families(generic).collect();
+            ids.into_iter().filter_map(|id| s.collection.family_name(id).map(str::to_owned)).collect()
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -241,6 +254,10 @@ mod imp {
     pub fn font_files(_refresh: bool) -> Vec<PathBuf> {
         Vec::new()
     }
+
+    pub fn generic_family_names(_generic: crate::Generic) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 #[cfg(all(feature = "system", not(target_arch = "wasm32")))]
@@ -268,4 +285,10 @@ pub fn refresh() {
 /// The font files the platform's font service lists, enumerating again first with `refresh`.
 pub(crate) fn font_files(refresh: bool) -> Vec<std::path::PathBuf> {
     imp::font_files(refresh)
+}
+
+/// The families the platform's font service lists for `generic`, most preferred first; none
+/// without the `system` feature.
+pub(crate) fn generic_family_names(generic: crate::Generic) -> Vec<String> {
+    imp::generic_family_names(generic)
 }

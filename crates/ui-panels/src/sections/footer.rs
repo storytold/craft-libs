@@ -80,8 +80,15 @@ struct DropShown {
     over: bool,
 }
 
-/// Shows an action's drop slot around its button, under the id given (`member_id`) or an id from the flow.
-type DropShow = dyn Fn(&mut Ui, &FooterAction, Option<Id>) -> DropShown + Send + Sync;
+/// Shows an action's drop slot around its button: the slot under the first id, the button under the second id
+/// (`member_id`) when given or an id from the flow.
+type DropShow = dyn Fn(&mut Ui, &FooterAction, Id, Option<Id>) -> DropShown + Send + Sync;
+
+/// One payload type accepted by an action, and the drop slot that can report it.
+struct ActionDrop {
+    matches: Box<dyn Fn(&Context) -> bool + Send + Sync>,
+    show: Box<DropShow>,
+}
 
 /// An icon action of a panel footer: an `IconButton` named by its label.
 #[derive(Clone)]
@@ -89,13 +96,13 @@ pub struct FooterAction {
     icon: IconSpec<'static>,
     label: Label,
     enabled: bool,
-    pressed: bool,
+    pressed: Option<bool>,
     tone: Option<Tone>,
     popup: Option<PopupKind>,
     expanded: Option<bool>,
     takes_drops_disabled: bool,
     drop_hint: Option<Label>,
-    drops: Option<Arc<DropShow>>,
+    drops: Vec<Arc<ActionDrop>>,
 }
 
 impl fmt::Debug for FooterAction {
@@ -110,7 +117,7 @@ impl fmt::Debug for FooterAction {
             .field("expanded", &self.expanded)
             .field("takes_drops_disabled", &self.takes_drops_disabled)
             .field("drop_hint", &self.drop_hint)
-            .field("accepts_drops", &self.drops.is_some())
+            .field("accepts_drops", &!self.drops.is_empty())
             .finish()
     }
 }
@@ -122,13 +129,13 @@ impl FooterAction {
             icon: icon.into(),
             label: label.into(),
             enabled: true,
-            pressed: false,
+            pressed: None,
             tone: None,
             popup: None,
             expanded: None,
             takes_drops_disabled: false,
             drop_hint: None,
-            drops: None,
+            drops: Vec::new(),
         }
     }
 
@@ -140,11 +147,11 @@ impl FooterAction {
         self
     }
 
-    /// Whether the action shows the host's state, as the on look: Button Mode while the panel is in it, Record
-    /// while recording. A click is reported as usual; the host changes its state or ignores the click.
+    /// The host's on or off state for a stateful action, reported to assistive technology and shown in its face.
+    /// A click is reported as usual; the host changes its state or ignores the click.
     #[must_use]
     pub fn pressed(mut self, on: bool) -> Self {
-        self.pressed = on;
+        self.pressed = Some(on);
         self
     }
 
@@ -186,27 +193,44 @@ impl FooterAction {
 
     /// Lets drags carrying a `P` that `accepts` takes drop on the action. The action shows the drop outline while
     /// such a drag is over it, and the drop comes back in [`FooterOutput::dropped`]. `accepts` may capture: a caller
-    /// checks that the drag comes from its own list.
+    /// checks that the drag comes from its own list. This replaces any predicates already set on the action.
     #[must_use]
     pub fn accepts_drops<P: Clone + Send + Sync + 'static>(mut self, accepts: impl Fn(&P) -> bool + Send + Sync + 'static) -> Self {
+        self.drops.clear();
+        self.also_accepts_drops(accepts)
+    }
+
+    /// Adds a predicate for a dropped payload of type `P`. If a drag carries multiple payloads that the action
+    /// accepts, the first matching predicate determines which payload appears in [`FooterOutput::dropped`].
+    #[must_use]
+    pub fn also_accepts_drops<P: Clone + Send + Sync + 'static>(mut self, accepts: impl Fn(&P) -> bool + Send + Sync + 'static) -> Self {
         let accepts: Arc<dyn Fn(&P) -> bool + Send + Sync> = Arc::new(accepts);
-        self.drops = Some(Arc::new(move |ui, action, id| {
+        let matches = Arc::clone(&accepts);
+        let matches = Box::new(move |ctx: &Context| crate::runtime::drag::active::<P>(ctx).is_some_and(|payload| matches(&payload)));
+        let show = Box::new(move |ui: &mut Ui, action: &FooterAction, id: Id, button_id: Option<Id>| {
             let accepts = Arc::clone(&accepts);
-            let mut slot = DropAction::new(move |payload: &P| accepts(payload)).enabled(action.enabled || action.takes_drops_disabled);
-            if let Some(id) = id {
-                slot = slot.id(id.with("drop"));
-            }
-            let shown = slot.show(ui, |ui, _| action.icon_button(DropAction::<P>::accepting(ui), id).show(ui).response);
+            let slot = DropAction::new(move |payload: &P| accepts(payload)).enabled(action.enabled || action.takes_drops_disabled).id(id);
+            let shown = slot.show(ui, |ui, _| action.icon_button(DropAction::<P>::accepting(ui), button_id).show(ui).response);
             let response = shown.inner.unwrap_or_else(|| shown.output.response.clone());
             DropShown { response, dropped: shown.output.dropped.map(|payload| Arc::new(payload) as Dropped), over: shown.output.over }
-        }));
+        });
+        self.drops.push(Arc::new(ActionDrop { matches, show }));
         self
+    }
+
+    fn drop_slot(&self, ctx: &Context) -> Option<&ActionDrop> {
+        let first = self.drops.first()?;
+        let slot = if self.drops.len() > 1 { self.drops.iter().find(|drop| (drop.matches)(ctx)).unwrap_or(first) } else { first };
+        Some(slot)
     }
 
     /// The button, enabled when the action is or when `accepting` lifts it for an accepted drag over it, with the id
     /// `id` when given.
     fn icon_button(&self, accepting: bool, id: Option<Id>) -> IconButton<'static> {
-        let mut button = IconButton::new(self.icon.clone()).label(self.label.clone()).enabled(self.enabled || accepting).selected(self.pressed);
+        let mut button = IconButton::new(self.icon.clone()).label(self.label.clone()).enabled(self.enabled || accepting);
+        if let Some(on) = self.pressed {
+            button = button.selected(on);
+        }
         if let Some(id) = id {
             button = button.id(id);
         }
@@ -452,6 +476,7 @@ impl DialogRole {
 pub struct FooterButton {
     label: Label,
     role: DialogRole,
+    tag: Option<Id>,
     letter: Option<char>,
     chord: Option<Chord>,
     enabled: bool,
@@ -486,6 +511,7 @@ impl FooterButton {
         FooterButton {
             label: label.into(),
             role,
+            tag: None,
             letter: None,
             chord: None,
             enabled: true,
@@ -494,6 +520,20 @@ impl FooterButton {
             stays_open: false,
             armed_after: None,
         }
+    }
+
+    /// Associates a generated button with the dialog body that handles it.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn tagged(mut self, tag: Id) -> Self {
+        self.tag = Some(tag);
+        self
+    }
+
+    /// The generated button's identity, preserved through footer settlement and picking.
+    #[doc(hidden)]
+    pub const fn tag(&self) -> Option<Id> {
+        self.tag
     }
 
     /// The letter that activates the button while its dialog holds focus and no text part owns the keys. On Windows
@@ -980,9 +1020,11 @@ fn show_actions(ui: &mut Ui, actions: &[FooterAction], order: impl Iterator<Item
     for at in order {
         let action = &actions[at];
         let id = base.map(|base| member_id(base, at));
-        let response = match &action.drops {
+        let response = match action.drop_slot(ui.ctx()) {
             Some(drops) => {
-                let slot = drops(ui, action, id);
+                // All payload types share this slot and its child button. A different type can be over it next pass.
+                let slot_id = id.map_or_else(|| ui.scope_id().with(("footer-action-drop", at)), |id| id.with("drop"));
+                let slot = (drops.show)(ui, action, slot_id, id);
                 if let Some(payload) = slot.dropped {
                     shown.dropped = Some(FooterDrop { index: at, payload });
                 }

@@ -6,6 +6,7 @@ pub(crate) mod stories;
 pub(crate) mod cards;
 
 use std::borrow::Cow;
+use std::ops::Range;
 use std::sync::Arc;
 
 use craft_behavior::{ColumnWidth, DisplayOrder, Flow, ItemSource, Metrics, Proposal, Selection, SelectionChange, SpanLayout};
@@ -17,7 +18,7 @@ use craft_ui::choice::{Checkbox, Radio, RadioGroup};
 use craft_ui::contract::{
     Access, ActivateOn, Bind, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, Entry,
     ItemOutput, MeasureCx, Name, NoValue, Outcome, PartsCx, Props as _, Role, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
-    Sizing, WrapWidth, clicked,
+    Sizing, clicked,
 };
 use craft_ui::display::{Badge, Progress, Shade, Spinner, Text};
 use craft_ui::form::{SliderField, SliderFieldLayout};
@@ -33,14 +34,16 @@ use craft_ui::tabs::{Tab as TabItem, TabKind, TabStrip};
 use craft_ui::text::TextField;
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 
-use crate::index::{Category, Index, source_label};
+use crate::Source;
+use crate::index::{Category, Family, Index, source_label};
 use crate::panel::app::{
     Detail, FontsPanel, FontsPanelWords, Origin, Pending, Preset, Show, Tab, category_label, family_key, regular, source_name, style_count,
 };
 use crate::panel::faces::Owner;
 use crate::panel::jobs::Kind;
-use crate::panel::specimen::{FontSample, SampleFace};
-use crate::{Catalog, FaceInfo, Source};
+use crate::panel::samples;
+use crate::panel::specimen::{FontSample, HeldFace};
+use crate::panel::subsets::{Row as SubsetRow, Subsets};
 
 /// The language filter lists this many matches under its search field.
 const LANGUAGE_MATCHES: usize = 8;
@@ -90,6 +93,9 @@ craft_ui::words! {
         sample_text: "fontsBrowse.sampleText" = "Sample text";
         size: "fontsBrowse.size" = "Size";
         downloads_off: "fontsBrowse.downloadsOff" = "Downloads are off";
+        installs_off_text: "fontsBrowse.installsOffText" = "Nothing is installed until you allow downloads.";
+        previews_unavailable: "fontsBrowse.previewsUnavailable" = "Font previews are unavailable";
+        previews_unreachable: template "fontsBrowse.previewsUnreachable" = "Can't reach the preview server {server}: {error}. Check the address in Settings → Advanced.";
         downloads_off_text: "fontsBrowse.downloadsOffText" = "Fonts that aren't installed show a sample once you preview them. Nothing is downloaded until you allow it.";
         cards: "fontsBrowse.cards" = "Families";
         no_match: "fontsBrowse.noMatch" = "No fonts match";
@@ -197,7 +203,7 @@ impl FontsPanel {
 
     pub(crate) fn filters(&mut self, ui: &mut Ui, texts: &Texts<'_>) {
         let browse = texts.browse;
-        Stack::new().scroll(Scroll::vertical()).wrap_width(WrapWidth::Column).label(browse.filters.clone()).show(ui, |ui, _| {
+        Stack::new().fill().scroll(Scroll::vertical()).label(browse.filters.clone()).show(ui, |ui, _| {
             match self.tab {
                 Tab::Catalogue => self.catalogue_filters(ui, texts),
                 Tab::Installed => self.installed_filters(ui, texts),
@@ -265,7 +271,7 @@ impl FontsPanel {
                 .activate(ActivateOn::Click)
                 .allow_empty(false)
                 .header(false)
-                .sizing(Sizing::Content)
+                .sizing(Sizing::FillWidth)
                 .natural_height(true)
                 .selection(Bind::given(current))
                 .show_items(ui, &CardKeys::new(&rows, |_| None), &mut |key, _| {
@@ -335,20 +341,31 @@ impl FontsPanel {
         });
     }
 
-    pub(crate) fn main(&mut self, ui: &mut Ui, texts: &Texts<'_>, folder: &Folder, host: Option<&Arc<Host>>) {
-        Stack::new().fill().show(ui, |ui, _| {
+    /// The toolbar, the notices and the cards; the positions of the catalogue cards on screen, or `None` while it shows
+    /// none.
+    pub(crate) fn main(&mut self, ui: &mut Ui, texts: &Texts<'_>, folder: &Folder, host: Option<&Arc<Host>>) -> Option<Range<usize>> {
+        let shown = Stack::new().fill().show(ui, |ui, _| {
             self.toolbar(ui, texts.browse);
+            self.subsets.typed(format!("{:?}\n{:?}\n{}", self.settings.preset, self.query.language, self.settings.sample));
             if let Some(problem) = &self.notice {
                 Notice::new(Tone::Bad, Label::from(problem.text(texts.panel))).show(ui);
+            }
+            if let Some((server, error)) = self.subsets.unreachable() {
+                let text = texts.browse.previews_unreachable.fill(&[("server", server), ("error", error)]);
+                Notice::new(Tone::Warn, Label::from(text)).id_salt("previews").title(texts.browse.previews_unavailable.clone()).show(ui);
             }
             match self.tab {
                 Tab::Catalogue => {
                     self.download_note(ui, texts.browse);
-                    self.catalogue_list(ui, texts, host);
+                    self.catalogue_list(ui, texts, host)
                 }
-                Tab::Installed => self.installed_list(ui, texts, folder, host),
+                Tab::Installed => {
+                    self.installed_list(ui, texts, folder, host);
+                    None
+                }
             }
         });
+        shown.inner.flatten()
     }
 
     fn toolbar(&mut self, ui: &mut Ui, browse: &FontsBrowseWords) {
@@ -363,7 +380,9 @@ impl FontsPanel {
             if self.settings.preset != before {
                 self.settings.sample.clear();
             }
-            let hint = self.sample_for(["Latn"]);
+            let index = self.index();
+            let latin = index.as_ref().and_then(|index| index.sample("Latn")).map(|sample| sample.text.as_str());
+            let hint = self.sample_for(latin, ["Latn"]);
             TextField::new(browse.sample_text.clone(), Bind::bound(&mut self.settings.sample)).placeholder(Label::from(hint)).show(ui);
             let mut size = f64::from(self.settings.size);
             SliderField::new(browse.size.clone(), Bind::bound(&mut size), 12.0..=120.0)
@@ -378,7 +397,9 @@ impl FontsPanel {
         if self.allowed() || self.settings.hide_download_note {
             return;
         }
-        let out = Notice::new(Tone::Info, browse.downloads_off_text.clone())
+        // With a preview service, samples show without asking: the note is about installs only.
+        let text = if self.subsets.available() { &browse.installs_off_text } else { &browse.downloads_off_text };
+        let out = Notice::new(Tone::Info, text.clone())
             .title(browse.downloads_off.clone())
             .action(NoticeAction::new(browse.allow_downloads.clone()))
             .dismiss()
@@ -391,28 +412,28 @@ impl FontsPanel {
         }
     }
 
-    fn catalogue_list(&mut self, ui: &mut Ui, texts: &Texts<'_>, host: Option<&Arc<Host>>) {
+    fn catalogue_list(&mut self, ui: &mut Ui, texts: &Texts<'_>, host: Option<&Arc<Host>>) -> Option<Range<usize>> {
         let browse = texts.browse;
         let index = match &self.catalogue {
             Ok(c) => Arc::clone(&c.index),
             Err(error) => {
                 Notice::new(Tone::Bad, Label::from(browse.indexes_unreadable.fill(&[("error", error.as_str())]))).show(ui);
-                return;
+                return None;
             }
         };
         self.source_problems(ui, texts, &index, host);
         Text::new(Label::from(texts.families(self.results.len()))).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
         if self.results.is_empty() {
             self.empty(ui, browse, &browse.no_match, &browse.no_match_hint, true);
-            return;
+            return None;
         }
         let results = self.results.clone();
-        let events = {
+        let shown = {
             let me = &*self;
             let keys = CardKeys::new(&results, |i| index.families().get(i).map(|f| f.family.as_str()));
-            FamilyCards::new(browse.cards.clone()).show_items(ui, &keys, &mut |key, _| FamilyCard::new(me.catalogue_card(&index, *key, texts))).events
+            FamilyCards::new(browse.cards.clone()).show_items(ui, &keys, &mut |key, _| FamilyCard::new(me.catalogue_card(&index, *key, texts)))
         };
-        for event in events {
+        for event in shown.events {
             match event {
                 CollectionEvent::Activate(i) => self.detail = Some(Detail::Family(i)),
                 CollectionEvent::Item(i, CardEvent::Install(share)) => self.ask(host, Pending::Install(i, share)),
@@ -430,6 +451,42 @@ impl FontsPanel {
                 _ => {}
             }
         }
+        Some(shown.visible)
+    }
+
+    /// Asks the preview service for the subsets of the catalogue cards on screen, at the positions `visible` of the
+    /// results, and round them; cancels what the list asked for when it shows no card.
+    pub(crate) fn request_subsets(&mut self, visible: Option<Range<usize>>) {
+        let Some((visible, index)) = visible.zip(self.index()) else {
+            self.subsets.cancel_all();
+            return;
+        };
+        let window = Subsets::window(&visible, self.results.len());
+        let rows: Vec<Option<SubsetRow<'_>>> = window.clone().map(|n| self.subset_row(&index, *self.results.get(n)?)).collect();
+        self.subsets.request(&index, window.start, &rows, visible);
+    }
+
+    /// The family at `i` in the index as a row drawn with a subset: `None` when it is installed or previewed whole.
+    fn subset_row<'a>(&self, index: &'a Index, i: usize) -> Option<SubsetRow<'a>> {
+        let family = index.families().get(i)?;
+        if self.installed_by_name.contains_key(&family.family.to_lowercase())
+            || self.previewed.contains_key(&family_key(&family.source, &family.family))
+        {
+            return None;
+        }
+        Some((family, self.family_sample(index, family)))
+    }
+
+    /// The sample a family of the index shows.
+    pub(crate) fn family_sample(&self, index: &Index, family: &Family) -> String {
+        self.sample_for(samples::of_family(index, family), family.scripts.iter().map(String::as_str))
+    }
+
+    /// The sample the installed family `name` shows: that of the index's family of the name, else the preset's.
+    pub(crate) fn installed_sample(&self, name: &str) -> String {
+        let index = self.index();
+        let family = index.as_deref().and_then(|index| Some((index, index.family(name)?)));
+        family.map_or_else(|| self.sample_for(None, []), |(index, family)| self.family_sample(index, family))
     }
 
     /// Sources that couldn't be loaded, one note each above the list; the others show as usual.
@@ -519,6 +576,8 @@ impl FontsPanel {
         let key = family_key(&family.source, &family.family);
         let installed = self.installed_by_name.get(&family.family.to_lowercase()).and_then(|f| regular(f)).cloned();
         let previewed = self.previewed.get(&key).and_then(|f| regular(f)).cloned();
+        let row = self.subset_row(index, i);
+        let drawn = row.as_ref().is_some_and(|row| self.subsets.draws(index, row));
         let state = if let Some(job) = self.jobs.of(&family.source, &family.family) {
             CardState::Running(job.kind, job.fraction())
         } else if let Some(failure) = self.failed.get(&key) {
@@ -526,24 +585,16 @@ impl FontsPanel {
         } else if installed.is_some() {
             CardState::Installed
         } else {
-            CardState::Offer { preview: !self.previewed.contains_key(&key), destinations: self.installer.available_to_all_supported() }
+            CardState::Offer { preview: !drawn && !self.previewed.contains_key(&key), destinations: self.installer.available_to_all_supported() }
         };
         let (source, curated) = source_label(index, family);
         let meta = [texts.styles(style_count(family)), category_label(texts.panel, family), source.to_owned()].join(" · ");
         let face = match (installed, previewed) {
-            (Some(face), _) => Some((Owner::Installed, face, Arc::clone(&self.catalog))),
-            (None, Some(face)) => Some((Owner::Preview, face, Arc::clone(&self.previews))),
-            (None, None) => None,
+            (Some(face), _) => Some(HeldFace::local(Owner::Installed, face, &self.catalog)),
+            (None, Some(face)) => Some(HeldFace::local(Owner::Preview, face, &self.previews)),
+            (None, None) => row.as_ref().and_then(|row| self.subsets.font(index, row)).map(HeldFace::Subset),
         };
-        CardData {
-            name: family.family.clone(),
-            meta,
-            sample: self.sample_for(family.scripts.iter().map(String::as_str)),
-            points: self.settings.size,
-            curated,
-            state,
-            face,
-        }
+        CardData { name: family.family.clone(), meta, sample: self.family_sample(index, family), points: self.settings.size, curated, state, face }
     }
 
     /// What an installed family's card shows.
@@ -558,15 +609,14 @@ impl FontsPanel {
                 None => CardState::System,
             },
         };
-        let scripts = self.index().and_then(|index| index.family(&family.name).map(|f| f.scripts.clone())).unwrap_or_default();
         CardData {
             name: family.name.clone(),
             meta,
-            sample: self.sample_for(scripts.iter().map(String::as_str)),
+            sample: self.installed_sample(&family.name),
             points: self.settings.size,
             curated: true,
             state,
-            face: regular(&family.faces).cloned().map(|face| (Owner::Installed, face, Arc::clone(&self.catalog))),
+            face: regular(&family.faces).cloned().map(|face| HeldFace::local(Owner::Installed, face, &self.catalog)),
         }
     }
 }

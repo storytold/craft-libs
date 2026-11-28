@@ -12,7 +12,7 @@ use craft_ui::sections::{
 use craft_ui::testing::{Fixture, pointer, trial};
 use craft_ui::tile_grid::{ThumbnailSlider, TileZoom};
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Ui, Vec2};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// The view modes' rect, the slider's rect and the rects of the footer bar's actions, in a footer row `width` wide.
@@ -142,6 +142,64 @@ fn a_drop_on_an_action_reports_the_modifiers_held_at_the_release() {
     let picked = reported(&seen, held, |(_, picked, _)| *picked);
     assert!(!picked.is_empty(), "the release picked the action");
     assert!(picked.iter().all(|(.., shift)| *shift), "the pick reports the Shift of the release: {picked:?}");
+}
+
+#[trial]
+fn one_footer_action_takes_two_payload_types() {
+    use craft_ui::contract::{SelectMode, ShowCollection as _};
+    use craft_ui::list::{List, ListRow};
+    use craft_ui::runtime::drag;
+
+    fn source<P: Clone + Send + Sync + 'static>(ui: &mut Ui, label: &'static str, payload: P) {
+        let keys = [0_u8];
+        List::<u8>::new(label)
+            .id_salt(label)
+            .select(SelectMode::None)
+            .natural_height(true)
+            .drag_payload(move |_: &ListDrag<u8>| Some(payload.clone()))
+            .show_items(ui, &craft_behavior::keyed(&keys, |key: &u8| *key), &mut |_, _| ListRow::new(label));
+    }
+
+    let taken = Rc::new(RefCell::new(Vec::new()));
+    let second_type = Rc::new(Cell::new(true));
+    let seen = Rc::clone(&taken);
+    let with_second = Rc::clone(&second_type);
+    let mut fixture = Fixture::new(move |ui| {
+        source(ui, "Accepted number", 4_u8);
+        source(ui, "Accepted word", "word");
+        source(ui, "Rejected word", "other");
+        let action =
+            FooterAction::new(IconId::new("trash"), "Delete").enabled(false).takes_drops_disabled(true).accepts_drops(|number: &u8| *number == 4);
+        let action = if with_second.get() { action.also_accepts_drops(|word: &&str| *word == "word") } else { action };
+        let out = FooterBar::actions([action]).show_footer(ui);
+        if let Some(drop) = out.dropped {
+            assert_eq!(drop.index, 0, "both payloads belong to the same action");
+            let report = (drop.payload::<u8>().copied(), drop.payload::<&str>().copied());
+            seen.borrow_mut().push(report);
+        }
+    });
+    fixture.room(Vec2::new(400.0, 300.0)).settle();
+    let delete = fixture.by_label("Delete").expect("the one footer action");
+    assert!(fixture.tree().is_disabled_key(delete.node));
+
+    for (label, accepted) in [("Accepted number", true), ("Accepted word", true), ("Rejected word", false)] {
+        let from = fixture.by_label(label).expect("the source").center();
+        fixture.drag_hold_at(from, delete.center() - from);
+        assert_eq!(drag::mark(fixture.ctx()).is_some(), accepted, "{label}: the indicator follows the predicate");
+        let current = fixture.by_label("Delete").expect("the same footer action");
+        assert_eq!(current.node, delete.node, "{label}: handling a different payload keeps the control's identity");
+        assert_eq!(fixture.tree().is_disabled_key(current.node), !accepted, "{label}: an accepted drag enables the action");
+        fixture.release_at(delete.center()).settle();
+    }
+    assert_eq!(&*taken.borrow(), &[(Some(4), None), (None, Some("word"))], "each accepted drop reports its original typed payload once");
+
+    let from = fixture.by_label("Accepted number").unwrap().center();
+    fixture.drag_hold_at(from, delete.center() - from);
+    assert!(drag::mark(fixture.ctx()).is_some());
+    second_type.set(false);
+    fixture.release_at(delete.center()).settle();
+    assert_eq!(fixture.by_label("Delete").unwrap().node, delete.node, "removing the second predicate also keeps the control's identity");
+    assert_eq!(taken.borrow().get(2), Some(&(Some(4), None)), "the same action can still take the drop on the pass the predicate is removed");
 }
 
 #[trial]

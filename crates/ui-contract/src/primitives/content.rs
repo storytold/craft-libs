@@ -8,7 +8,7 @@ use crate::runtime::egui::text_layout;
 use crate::runtime::env::Env;
 use crate::style::{DataColor, Ink, StyleCx, UiTokens, ink_color};
 use craft_i18n::{Direction, Format, WordSet};
-use egui::epaint::text::{FontId, TextDirection};
+use egui::epaint::text::{FontId, TextDirection, VariationCoords};
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, Context, FontFamily, Painter, Stroke};
 use std::borrow::Cow;
@@ -188,6 +188,7 @@ impl<'a> DocText<'a> {
                     italics: run.italic,
                     underline: line(run.underline),
                     strikethrough: line(run.strikethrough),
+                    coords: VariationCoords::new(run.coords.iter().copied()),
                     ..TextFormat::default()
                 },
             );
@@ -222,6 +223,10 @@ pub struct DocRun<'a> {
     /// Space in points before the run. On the first run of a paragraph it is the first-line indent: a wrapped row
     /// starts at the edge.
     pub indent: f32,
+    /// The variation coordinates the run is drawn at (axis tag, value), over those of its face
+    /// ([`FaceBytes::coords`](crate::fonts::FaceBytes::coords)): one variable face registered once draws every style a
+    /// document or an axis slider asks for. Empty draws the face as it is registered.
+    pub coords: Cow<'a, [([u8; 4], f32)]>,
 }
 
 /// A run of text in one face of a document's fonts, which [`Draw::face_run`](super::Draw::face_run) draws on a
@@ -272,7 +277,18 @@ impl<'a> FaceRun<'a> {
 impl<'a> DocRun<'a> {
     /// A regular-weight upright run without lines or indent.
     pub fn new(text: impl Into<Cow<'a, str>>, font: FontRef, size: f32, color: DataColor) -> Self {
-        DocRun { text: text.into(), font, size, weight: REGULAR, italic: false, color, underline: false, strikethrough: false, indent: 0.0 }
+        DocRun {
+            text: text.into(),
+            font,
+            size,
+            weight: REGULAR,
+            italic: false,
+            color,
+            underline: false,
+            strikethrough: false,
+            indent: 0.0,
+            coords: Cow::Borrowed(&[]),
+        }
     }
 
     /// Italic.
@@ -310,7 +326,14 @@ impl<'a> DocRun<'a> {
         self
     }
 
-    /// The run owning its text.
+    /// The run drawn at the variation coordinates `coords` (axis tag, value) of its face.
+    #[must_use]
+    pub fn coords(mut self, coords: impl Into<Cow<'a, [([u8; 4], f32)]>>) -> Self {
+        self.coords = coords.into();
+        self
+    }
+
+    /// The run owning its text and coordinates.
     pub fn into_owned(self) -> DocRun<'static> {
         DocRun {
             text: Cow::Owned(self.text.into_owned()),
@@ -322,6 +345,7 @@ impl<'a> DocRun<'a> {
             underline: self.underline,
             strikethrough: self.strikethrough,
             indent: self.indent,
+            coords: Cow::Owned(self.coords.into_owned()),
         }
     }
 }

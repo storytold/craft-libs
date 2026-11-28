@@ -32,6 +32,12 @@ impl<'a> EnvView<'a> {
         self.scoped.control(size)
     }
 
+    /// Whether an enclosing body is measuring the smallest width its children can use.
+    #[doc(hidden)]
+    pub fn measuring_least_width(&self) -> bool {
+        self.scoped.least
+    }
+
     /// The facts the collection recorded for the item `id`.
     #[doc(hidden)]
     pub fn facts_of(&self, id: Id) -> Option<&ItemFacts> {

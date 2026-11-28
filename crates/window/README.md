@@ -132,6 +132,11 @@ and, on Wayland, the compositor's registry. With the `ui` feature it adds `fits(
 whether a window of outer size `outer` fits `monitor`, keeping `TASKBAR` clear at the monitor's
 bottom. egui does not expose the OS work area, so this is an estimate, not an OS query.
 
+`desktop::double_click()` returns what a double click on an app-drawn title bar does: on GNOME,
+`action-double-click-titlebar` (`toggle-maximize` zooms, `minimize` minimizes, `none`, `lower`,
+`menu` and `toggle-shade` do nothing); elsewhere, and when `gsettings` gives no answer, zoom.
+craft-ui-shell's `AppSpec::new` passes it to `ShellInfo::double_click`.
+
 ## The application menu bar
 
 `native_menu` makes the platform's own menu bar (macOS, feature `appkit`, built on muda) from a plain
@@ -174,6 +179,6 @@ Multi-window apps save the first window under `restore::MAIN`. Share one store b
 - It never touches the connection winit inherits: when `WAYLAND_SOCKET` is set (a compositor handed
   the app an open descriptor), the probe skips connecting and keeps the desktop frame, so it can't
   consume the socket winit needs.
-- The GNOME `button-layout` lookup (`gsettings`) runs behind the same bounded worker, so a stalled
-  `gsettings` can't block startup either.
+- The GNOME `button-layout` and `action-double-click-titlebar` lookups (`gsettings`) run behind the
+  same bounded worker, so a stalled `gsettings` can't block startup either.
 - `#![forbid(unsafe_code)]`, and the never-crash lints the workspace requires.
