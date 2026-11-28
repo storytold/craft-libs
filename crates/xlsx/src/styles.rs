@@ -593,7 +593,8 @@ impl Dxf {
         }
     }
 
-    /// `<dxf>`.
+    /// `<dxf>`, its children in the `CT_Dxf` sequence: `font`, `numFmt`, `fill`, `alignment`,
+    /// `border`, `protection`.
     pub fn to_el(&self) -> El {
         let mut e = El::new("dxf");
         if let Some(f) = &self.font {
@@ -611,11 +612,11 @@ impl Dxf {
         if let Some(a) = &self.alignment {
             e.push(a.to_el());
         }
-        if let Some(p) = self.protection {
-            e.push(p.to_el());
-        }
         if let Some(b) = &self.border {
             e.push(b.to_el());
+        }
+        if let Some(p) = self.protection {
+            e.push(p.to_el());
         }
         e
     }
@@ -796,6 +797,23 @@ mod tests {
         assert_eq!(s.indexed_colors, [0x010203, 0]);
         assert_eq!(s.palette().len(), 2);
         assert_eq!(styles("<styleSheet/>").palette(), DEFAULT_PALETTE);
+    }
+
+    #[test]
+    fn dxf_children_are_written_in_schema_order() {
+        // Every child CT_Dxf allows (but extLst), in its sequence; the issue's case is border then protection.
+        let s = styles(
+            r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dxfs count="1"><dxf><font><b/></font><numFmt numFmtId="164" formatCode="0.0"/><fill><patternFill><bgColor rgb="FFFFFF00"/></patternFill></fill><alignment horizontal="center"/><border><left style="thin"><color rgb="FF000000"/></left></border><protection locked="0"/></dxf></dxfs></styleSheet>"#,
+        );
+        let written = styles(std::str::from_utf8(&s.to_xml()).unwrap());
+        assert_eq!(written.dxfs, s.dxfs);
+        let root = craft_xml::Options::local().parse(&s.to_xml()).unwrap_or_default();
+        let dxf = root.child("dxfs").and_then(|d| d.child("dxf")).expect("dxf written");
+        let names: Vec<&str> = dxf.elements().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["font", "numFmt", "fill", "alignment", "border", "protection"]);
+        // border and protection alone keep that order too.
+        let pair = Dxf { border: s.dxfs[0].border.clone(), protection: s.dxfs[0].protection, ..Dxf::default() }.to_el();
+        assert_eq!(pair.elements().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["border", "protection"]);
     }
 
     #[test]
