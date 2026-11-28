@@ -96,6 +96,21 @@ fn confirming_an_automation_replacement_cannot_change_shortcuts_in_a_new_scope()
 }
 
 #[trial]
+fn a_holder_binding_change_retires_its_pending_replacement_confirmation() {
+    let mut rig = Rig::mac();
+    rig.set_json_field("command", json!("file.save")).unwrap();
+    rig.set_json_field("replace", json!({"old": "Cmd+S", "new": "Cmd+E"})).unwrap();
+    rig.shared.borrow_mut().km.assign(&CommandRef::from("file.export"), Binding::parse("Cmd+K").unwrap(), Policy::Keep).unwrap();
+    rig.pass();
+    rig.answer("Take It");
+
+    assert_eq!(rig.bindings("file.save"), ["Cmd+S"], "a stale confirmation cannot replace the original shortcut");
+    assert_eq!(rig.bindings("file.export"), ["Cmd+E", "Cmd+K"], "the changed holder keeps all its current shortcuts");
+    let shared = rig.shared.borrow();
+    assert!(shared.state.snapshot(&shared.km).unwrap().conflict.is_none());
+}
+
+#[trial]
 fn a_superseding_replacement_has_its_own_confirmation_actions() {
     let mut rig = Rig::mac();
     rig.set_json_field("command", json!("file.save")).unwrap();

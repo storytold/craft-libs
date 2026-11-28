@@ -156,7 +156,7 @@ impl ConflictBar {
 /// The existing bindings and home scopes that an automation conflict was opened against.
 #[derive(Clone, Debug, PartialEq)]
 struct ConflictBasis {
-    bindings: Vec<Binding>,
+    bindings: Vec<Vec<Binding>>,
     scopes: Vec<Option<Scope>>,
     platform: Platform,
 }
@@ -167,7 +167,8 @@ impl ConflictBasis {
             .chain(holders.iter().map(|holder| &holder.command))
             .map(|command| keymap.bindable(command).map(|entry| entry.scope.clone()))
             .collect();
-        Self { bindings: keymap.bindings(command), scopes, platform: keymap.platform() }
+        let bindings = std::iter::once(command).chain(holders.iter().map(|holder| &holder.command)).map(|command| keymap.bindings(command)).collect();
+        Self { bindings, scopes, platform: keymap.platform() }
     }
 }
 
