@@ -188,7 +188,7 @@
       "path": "src/context.rs",
       "source_sha256": "dc2be553958ee3f5e5e644a77a0301723bae9ca027a352c13b9caaf549cc0e56",
       "source_git_blob": "d6772baa15ebb95d3ba2d1f54ce5c250ad1e8137",
-      "sha256": "3beef4bd55188e042c6eea83aa77ebeca259f9c503deab671352a479d575eb61"
+      "sha256": "b8c530ff091a231fba36af17c89e38705b848e5c614a3f3888def871ffb5b597"
     },
     {
       "path": "src/convert.rs",
@@ -416,7 +416,7 @@
       "path": "src/soft_mask.rs",
       "source_sha256": "6cd9c59c0cff580879c1f06ff40f3537c04b719bdb3ea59008fa1ab7559db5dd",
       "source_git_blob": "4d97d565b53c820fa927fbba8c3dda6acead7f34",
-      "sha256": "b019e76429285f0e4b56217374ae15889902fa90fc432a84545efc5d380a4985"
+      "sha256": "7a10045f53382708b64f2e9dc46ee8bab0feaf964e2cbdfed3b39735baf2a701"
     },
     {
       "path": "src/types.rs",
@@ -434,7 +434,7 @@
       "path": "src/x_object.rs",
       "source_sha256": "e1c51e96a335c32c122011b2d05c5020c36a33c2c73342ba173c28a3e2fe0219",
       "source_git_blob": "21b134ce8cd9604399cd0776febf923d69c02673",
-      "sha256": "b430f23bfe5399c43eeb3fffb14b4fb2995c5b1137df61d1c647f7b0209f5eec"
+      "sha256": "b25ef780e886bb883c3c654a846ac373271de6a37abb73686dee5a647ed5769e"
     }
   ],
   "compatibility_reference": {

@@ -6,7 +6,7 @@
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use craft_control::agents::{
@@ -16,18 +16,6 @@ use craft_control::agents::{
 
 fn temp_dir(tag: &str) -> tempfile::TempDir {
     tempfile::Builder::new().prefix(&format!("craft-agents-{tag}-")).tempdir().expect("a temp dir")
-}
-
-/// Waits up to five seconds for `done`.
-fn wait_for(mut done: impl FnMut() -> bool) -> bool {
-    let started = Instant::now();
-    while !done() {
-        if started.elapsed() > Duration::from_secs(5) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    true
 }
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -65,19 +53,53 @@ fn with_the_flag_only_the_launchers_switch_lets_agents_in() {
     assert!(!AgentSwitch::fixed(false, true).allows(false));
 }
 
-/// The switch follows the launcher's list within a poll, wakes the app once per change rather than
-/// once per poll, and its thread ends once the last clone is dropped.
+/// The watch thread's poll clock, driven by the test: [`Self::poll`] lets one poll run and returns
+/// once the thread has finished it and waits for the next.
+struct Ticks {
+    tick: mpsc::SyncSender<()>,
+    waiting: mpsc::Receiver<()>,
+}
+
+impl Ticks {
+    /// The clock and the `tick` to give [`AgentSwitch::watch_with`].
+    fn new() -> (Self, impl FnMut() -> bool + Send + 'static) {
+        let (tick, ticks) = mpsc::sync_channel(0);
+        let (waits, waiting) = mpsc::channel();
+        let wait = move || {
+            let _ = waits.send(());
+            ticks.recv().is_ok()
+        };
+        (Self { tick, waiting }, wait)
+    }
+
+    /// Blocks until the watch thread waits for its next poll; `false` once the thread has ended.
+    fn waiting(&self) -> bool {
+        // A hang guard only: the thread answers at once, so the limit is never reached by a run
+        // that works.
+        match self.waiting.recv_timeout(Duration::from_secs(60)) {
+            Ok(()) => true,
+            Err(mpsc::RecvTimeoutError::Disconnected) => false,
+            Err(mpsc::RecvTimeoutError::Timeout) => panic!("the watch thread hung"),
+        }
+    }
+
+    /// Runs one poll; `false` when the thread ended in it instead of waiting for the next one.
+    fn poll(&self) -> bool {
+        self.tick.send(()).unwrap();
+        self.waiting()
+    }
+}
+
+/// The switch follows the launcher's list at the next poll, wakes the app once per change rather
+/// than once per poll, and its thread ends at the first poll after the last clone is dropped.
 #[test]
 fn the_switch_wakes_once_per_change() {
     let launcher = Arc::new(AtomicBool::new(false));
     let probes = Arc::new(AtomicUsize::new(0));
     let wakes = Arc::new(AtomicUsize::new(0));
-    // Held by the watch thread through its probe: gone once the thread has ended.
-    let alive = Arc::new(());
     let probe = {
-        let (launcher, probes, alive) = (launcher.clone(), probes.clone(), alive.clone());
+        let (launcher, probes) = (launcher.clone(), probes.clone());
         move || {
-            let _ = &alive;
             probes.fetch_add(1, Ordering::Relaxed);
             launcher.load(Ordering::Relaxed)
         }
@@ -88,26 +110,35 @@ fn the_switch_wakes_once_per_change() {
             wakes.fetch_add(1, Ordering::Relaxed);
         }
     };
-    let switch = AgentSwitch::watch_with(true, probe, Duration::from_millis(5), wake);
+    let (ticks, tick) = Ticks::new();
+    let switch = AgentSwitch::watch_with(true, probe, tick, wake);
     let clone = switch.clone();
+    assert!(ticks.waiting());
     assert!(!switch.launcher());
+    assert_eq!(probes.load(Ordering::Relaxed), 1, "asked once at the start");
 
     launcher.store(true, Ordering::Relaxed);
-    assert!(wait_for(|| clone.launcher()), "the switch follows the launcher");
+    assert!(ticks.poll());
+    assert!(clone.launcher(), "the switch follows the launcher");
     assert!(switch.allows(false));
-    let polled = probes.load(Ordering::Relaxed);
-    assert!(wait_for(|| probes.load(Ordering::Relaxed) > polled + 10));
+    // Many polls with nothing changed.
+    for _ in 0..10 {
+        assert!(ticks.poll());
+    }
+    assert_eq!(probes.load(Ordering::Relaxed), 12, "one probe per poll");
+    assert_eq!(wakes.load(Ordering::Relaxed), 1, "one wake per change, not per poll");
     launcher.store(false, Ordering::Relaxed);
-    assert!(wait_for(|| !switch.launcher()));
-    assert!(wait_for(|| wakes.load(Ordering::Relaxed) == 2));
+    assert!(ticks.poll());
+    assert!(!switch.launcher());
     assert_eq!(wakes.load(Ordering::Relaxed), 2, "one wake per change, not per poll");
 
     drop(switch);
+    assert!(ticks.poll(), "a clone keeps the watch");
     drop(clone);
-    assert!(wait_for(|| Arc::strong_count(&alive) == 1), "the watch ended with the last switch");
-    let after_end = probes.load(Ordering::Relaxed);
-    std::thread::sleep(Duration::from_millis(20));
-    assert_eq!(probes.load(Ordering::Relaxed), after_end, "nothing probes after the watch ended");
+    // The thread probes once more, sees the switch gone and ends, so nothing probes after it.
+    assert!(!ticks.poll(), "the watch ended with the last switch");
+    assert_eq!(probes.load(Ordering::Relaxed), 15, "one probe per poll, the last one before the watch ended");
+    assert_eq!(wakes.load(Ordering::Relaxed), 2);
 }
 
 // ---- The connection file ------------------------------------------------------------------------
@@ -236,6 +267,21 @@ fn window(route: Result<Route<Window, HeadlessFolders>, String>) -> Window {
 
 fn paths(p: &[&str]) -> Vec<PathBuf> {
     p.iter().map(PathBuf::from).collect()
+}
+
+/// Gives `cfg`'s launch wait a clock that moves only when the wait sleeps: each sleep calls
+/// `gate`, then adds its length to the time and returns. Returns the lengths slept.
+fn virtual_clock(cfg: &mut LiveConfig<Window, HeadlessFolders>, gate: impl Fn() + Send + Sync + 'static) -> Arc<Mutex<Vec<Duration>>> {
+    let slept = Arc::new(Mutex::new(Vec::new()));
+    let start = Instant::now();
+    let s = slept.clone();
+    cfg.now = Box::new(move || start + s.lock().unwrap().iter().sum::<Duration>());
+    let s = slept.clone();
+    cfg.sleep = Box::new(move |d| {
+        gate();
+        s.lock().unwrap().push(d);
+    });
+    slept
 }
 
 /// An app accepting agents takes the call; the same port, token and process keep the client, a
@@ -444,8 +490,10 @@ fn a_launch_that_cannot_happen_or_never_finishes_says_what_to_do() {
     let mut cfg = config(dir.path(), allowed(WhenAppClosed::Launch), &made);
     cfg.launch = Some(Box::new(|| Ok(())));
     cfg.launch_timeout = Duration::from_millis(40);
+    let slept = virtual_clock(&mut cfg, || {});
     let err = TestLive::new(cfg).resolve().err().unwrap();
     assert!(err.starts_with("Test didn't accept agents within 0 s of starting."), "{err}");
+    assert_eq!(*slept.lock().unwrap(), [Duration::from_millis(5); 8], "the app is looked for every poll until the timeout");
 }
 
 /// "Launch" starts the app once, also for calls that arrive together, and the calls go to its
@@ -455,19 +503,24 @@ fn a_started_app_takes_the_call_and_concurrent_calls_start_it_once() {
     let dir = temp_dir("launch");
     let made = Arc::new(Made::default());
     let launches = Arc::new(AtomicUsize::new(0));
-    let app: Arc<Mutex<Option<TcpListener>>> = Arc::new(Mutex::new(None));
     let mut cfg = config(dir.path(), allowed(WhenAppClosed::Launch), &made);
-    let (d, n, slot) = (dir.path().to_path_buf(), launches.clone(), app.clone());
+    let (queued_tx, queued) = mpsc::channel();
+    cfg.on_queued = Some(Box::new(move || {
+        let _ = queued_tx.send(());
+    }));
+    let (launched_tx, launched) = mpsc::channel();
+    let n = launches.clone();
     cfg.launch = Some(Box::new(move || {
         n.fetch_add(1, Ordering::Relaxed);
-        let (d, slot) = (d.clone(), slot.clone());
-        // The app takes a moment before it accepts agents.
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(60));
-            *slot.lock().unwrap() = Some(publish(&d).0);
-        });
+        let _ = launched_tx.send(());
         Ok(())
     }));
+    // The started app's first poll waits until the test has published the app.
+    let (open, opened) = mpsc::channel::<()>();
+    let opened = Mutex::new(opened);
+    virtual_clock(&mut cfg, move || {
+        let _ = opened.lock().unwrap().recv();
+    });
     let live = Arc::new(TestLive::new(cfg));
     let calls: Vec<_> = (0..4)
         .map(|_| {
@@ -475,6 +528,13 @@ fn a_started_app_takes_the_call_and_concurrent_calls_start_it_once() {
             std::thread::spawn(move || window(live.resolve()))
         })
         .collect();
+    // Every call is under way before the app is started and accepts agents.
+    for _ in 0..4 {
+        queued.recv().unwrap();
+    }
+    launched.recv().unwrap();
+    let _app = publish(dir.path());
+    drop(open);
     let ports: Vec<u16> = calls.into_iter().map(|c| c.join().unwrap().port).collect();
     assert_eq!(launches.load(Ordering::Relaxed), 1, "one start for every call");
     assert!(ports.windows(2).all(|p| p[0] == p[1]), "{ports:?}");
@@ -489,26 +549,30 @@ fn calls_queued_behind_a_failed_start_share_its_error() {
     let made = Arc::new(Made::default());
     let launches = Arc::new(AtomicUsize::new(0));
     let mut cfg = config(dir.path(), allowed(WhenAppClosed::Launch), &made);
-    let entered = Arc::new(AtomicUsize::new(0));
-    let (n, e) = (launches.clone(), entered.clone());
-    // The app is started but never accepts agents within the timeout. The start waits until every
-    // call is under way and then a while longer, so a call that hasn't reached its lookup by the
-    // time the start ends is very unlikely (there is no hook between the two).
+    let (queued_tx, queued) = mpsc::channel();
+    cfg.on_queued = Some(Box::new(move || {
+        let _ = queued_tx.send(());
+    }));
+    let queued = Mutex::new(queued);
+    let n = launches.clone();
+    // The app is started but never accepts agents within the timeout. The first start returns only
+    // once every call has queued behind it.
     cfg.launch = Some(Box::new(move || {
-        n.fetch_add(1, Ordering::Relaxed);
-        assert!(wait_for(|| e.load(Ordering::Relaxed) == 4), "every call starts");
-        std::thread::sleep(Duration::from_millis(250));
+        if n.fetch_add(1, Ordering::Relaxed) == 0 {
+            let queued = queued.lock().unwrap();
+            for _ in 0..4 {
+                queued.recv().unwrap();
+            }
+        }
         Ok(())
     }));
     cfg.launch_timeout = Duration::from_millis(150);
+    virtual_clock(&mut cfg, || {});
     let live = Arc::new(TestLive::new(cfg));
     let calls: Vec<_> = (0..4)
         .map(|_| {
-            let (live, entered) = (live.clone(), entered.clone());
-            std::thread::spawn(move || {
-                entered.fetch_add(1, Ordering::Relaxed);
-                live.resolve()
-            })
+            let live = live.clone();
+            std::thread::spawn(move || live.resolve())
         })
         .collect();
     let answers: Vec<_> = calls.into_iter().map(|c| c.join().unwrap()).collect();
@@ -596,7 +660,19 @@ fn a_huge_launch_timeout_or_poll_neither_panics_nor_hangs() {
     }));
     cfg.launch_timeout = Duration::MAX;
     cfg.poll = Duration::MAX;
-    let started = Instant::now();
+    let slept = virtual_clock(&mut cfg, || {});
     window(TestLive::new(cfg).resolve());
-    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    assert_eq!(*slept.lock().unwrap(), [Duration::from_secs(1)], "the poll is cut to a second");
+
+    // An app that never accepts agents: the wait ends after the longest launch timeout.
+    let dir = temp_dir("huge-never");
+    let mut cfg = config(dir.path(), allowed(WhenAppClosed::Launch), &made);
+    cfg.launch = Some(Box::new(|| Ok(())));
+    cfg.launch_timeout = Duration::MAX;
+    cfg.poll = Duration::MAX;
+    let slept = virtual_clock(&mut cfg, || {});
+    let err = TestLive::new(cfg).resolve().err().unwrap();
+    assert!(err.starts_with("Test didn't accept agents within 600 s of starting."), "{err}");
+    let slept = slept.lock().unwrap();
+    assert_eq!((slept.len(), slept.iter().max()), (600, Some(&Duration::from_secs(1))));
 }

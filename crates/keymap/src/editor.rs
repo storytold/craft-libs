@@ -104,8 +104,8 @@ impl EditSession {
         new: Binding,
         policy: Policy,
     ) -> Result<Assigned, AssignError> {
-        let list: Vec<Binding> = keymap.bindings(command).into_iter().map(|b| if b == *old { new.clone() } else { b }).collect();
-        self.edit(keymap, |km| km.set_bindings(command, list, policy))
+        let bindings = replacing(keymap, command, old, &new);
+        self.edit(keymap, |km| km.set_bindings(command, bindings, policy))
     }
 
     /// Removes one binding of a command as one undo step.
@@ -178,6 +178,16 @@ impl EditSession {
     pub fn is_modified(&self, keymap: &Keymap) -> bool {
         *keymap.overrides() != self.start
     }
+}
+
+/// Checks whether the replacement that [`EditSession::replace`] would make can be saved under `policy`.
+/// This leaves the keymap and its undo history untouched.
+pub fn check_replace(keymap: &Keymap, command: &CommandRef, old: &Binding, new: &Binding, policy: Policy) -> Result<(), AssignError> {
+    keymap.check_set_bindings(command, replacing(keymap, command, old, new), policy)
+}
+
+fn replacing(keymap: &Keymap, command: &CommandRef, old: &Binding, new: &Binding) -> Vec<Binding> {
+    keymap.bindings(command).into_iter().map(|binding| if binding == *old { new.clone() } else { binding }).collect()
 }
 
 /// The other commands whose bindings clash with `binding` given to `command`: what

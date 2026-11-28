@@ -414,11 +414,13 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     n(o, "PerspectiveX", "geometry.offset_x");
     n(o, "PerspectiveY", "geometry.offset_y");
     if let Some(u) = num(props, "crs:PerspectiveUpright") {
+        // 0 Off, 1 Auto, 2 Full, 3 Level, 4 Vertical, 5 Guided: Lightroom saves one Upright matrix per
+        // value, and each has that mode's shape (lightcraft#205)
         let mode = match u as i64 {
             1 => "auto",
-            2 => "level",
-            3 => "vertical",
-            4 => "full",
+            2 => "full",
+            3 => "level",
+            4 => "vertical",
             5 => "guided",
             _ => "off",
         };

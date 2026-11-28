@@ -1,12 +1,12 @@
-//! Synthetic input through the window host: held presses and keys, modifiers, the wheel, Caps Lock, hover rest,
+//! Synthetic input through the window host: held presses and keys, drags, modifiers, the wheel, Caps Lock, hover rest,
 //! document coordinates and input-method compositions, as the passes see them, and the params refused before
 //! anything is queued.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use craft_automation::access::NO_TREE;
-use craft_automation::synthetic::{At, Click, Focus, MAX_CLICKS, MAX_SCREEN_POINT, NO_DOCUMENT, NOT_FINITE, input_method};
+use craft_automation::access::{NO_CONTROL, NO_TREE};
+use craft_automation::synthetic::{At, Click, Focus, MAX_CLICKS, MAX_DRAG_STEPS, MAX_SCREEN_POINT, NO_DOCUMENT, NOT_FINITE, input_method};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::runtime::egui::injected::hook_without_pass;
 use craft_ui::runtime::windows::WindowHost;
@@ -121,6 +121,52 @@ fn a_held_press_stays_down_until_its_release() {
     assert!(!rig.now().primary_down, "the release lets it go");
     rig.send("ui.click", json!({"x": 10, "y": 10}));
     assert!(!rig.now().primary_down, "a click without hold releases");
+}
+
+/// `ui.drag` presses at `from`, moves to `to` in `steps` even steps with the button down, releases at `to` with its
+/// modifiers held throughout, then lets them go. Each point is in its own space: `to` here is a document point.
+#[trial]
+fn a_drag_presses_moves_in_steps_and_releases_at_its_end() {
+    let mut rig = Rig::new();
+    rig.fx.settle();
+    rig.take();
+    let to = map(0, pos2(220.0, 40.0)).expect("the test map places every point");
+    rig.send("ui.drag", json!({"from": {"x": 10, "y": 20}, "to": {"x": 220, "y": 40, "coordinates": "document"}, "steps": 4, "shift": true}));
+    let after = rig.now();
+    let events: Vec<Event> = rig.take().into_iter().flat_map(|pass| pass.events).collect();
+    let buttons: Vec<(Pos2, bool, bool)> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers } => Some((*pos, *pressed, modifiers.shift)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(buttons, vec![(pos2(10.0, 20.0), true, true), (to, false, true)], "one press at `from`, one release at `to`, both with Shift");
+    let held = events.iter().skip_while(|event| !matches!(event, Event::PointerButton { pressed: true, .. }));
+    let moves: Vec<Pos2> = held
+        .take_while(|event| !matches!(event, Event::PointerButton { pressed: false, .. }))
+        .filter_map(|event| match event {
+            Event::PointerMoved(at) => Some(*at),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(moves.len(), 4, "one move per step while the button is down: {moves:?}");
+    assert!(moves.windows(2).all(|pair| pair[1].x > pair[0].x), "each step goes further towards `to`: {moves:?}");
+    assert_eq!(moves.last(), Some(&to), "the last step lands on `to`");
+    assert!(!after.primary_down && !after.shift, "the drag leaves no button or modifier held");
+}
+
+/// A drag keeps its modifiers held after its release while other input stays down, as a click does.
+#[trial]
+fn a_drag_keeps_its_modifiers_while_a_held_key_stays_down() {
+    let mut rig = Rig::new();
+    rig.send("ui.key", json!({"key": "Space", "hold": true}));
+    rig.send("ui.drag", json!({"from": {"x": 10, "y": 10}, "to": {"x": 60, "y": 10}, "steps": 2, "shift": true}));
+    let after = rig.now();
+    assert!(after.space_down && !after.primary_down, "the key stays down and the drag's button is up");
+    assert!(after.shift, "the modifiers stay with the held key");
+    rig.send("ui.release", json!({}));
+    assert!(!rig.now().space_down && !rig.now().shift, "the release lets everything go");
 }
 
 /// A move's modifiers stay held after it (a hover with modifiers); a click that holds nothing lets its own go.
@@ -292,6 +338,25 @@ fn document_points_need_a_canvas() {
     assert_eq!(screen, Some(Ok(())));
 }
 
+/// A drag whose end cannot be placed is refused whole: its press at a screen point is not queued either. That holds
+/// for a document end without a canvas and for a control end that names no control of the window.
+#[trial]
+fn a_drag_with_an_end_it_cannot_place_queues_no_press() {
+    let mut rig = Rig::new();
+    rig.fx.settle();
+    let (host, ctx) = (rig.host(), rig.fx.ctx().clone());
+    let none = |_: usize, _: Pos2| None;
+    let params = json!({"from": {"x": 1, "y": 1}, "to": {"x": 5, "y": 5, "coordinates": "document"}});
+    assert_eq!(input_method("ui.drag", &params, &host, ViewportId::ROOT, &none), Some(Err(NO_DOCUMENT.to_owned())));
+    assert!(host.injected_idle());
+    assert!(hook_without_pass(&ctx, ViewportId::ROOT).is_empty(), "the refused drag queued nothing");
+    let params = json!({"from": {"x": 1, "y": 1}, "to": {"control": {"name": "Save"}, "x": 4}});
+    let answer = input_method("ui.drag", &params, &host, ViewportId::ROOT, &map);
+    assert!(matches!(&answer, Some(Err(error)) if error.starts_with(NO_CONTROL)), "{answer:?}");
+    assert!(host.injected_idle());
+    assert!(hook_without_pass(&ctx, ViewportId::ROOT).is_empty(), "the drag to an unplaced control queued nothing");
+}
+
 /// A step handed to the input whose pass has not run is withdrawn when the focus moved, and when the application
 /// withdraws the input because its document changed: the integration's preserved copy leaves the input, no key
 /// stays down, and the waiters fail with `TARGET_CHANGED`.
@@ -358,6 +423,14 @@ fn bad_input_params_are_refused_before_anything_is_queued() {
         ("ui.move", json!({"x": 10, "y": 10, "rest": "long"})),
         ("ui.move", json!({"x": 10, "y": 10, "coordinates": "page"})),
         ("ui.move", json!({"x": 10, "y": -far})),
+        ("ui.drag", json!({"from": {"x": 10}})),
+        ("ui.drag", json!({"from": {"x": 10}, "to": {"x": 20, "nudge": 1}})),
+        ("ui.drag", json!({"from": {"x": 10}, "to": [20, 20]})),
+        ("ui.drag", json!({"from": {"x": 10}, "to": {"x": far}})),
+        ("ui.drag", json!({"from": {"x": 10}, "to": {"x": 20}, "steps": 0})),
+        ("ui.drag", json!({"from": {"x": 10}, "to": {"x": 20}, "steps": MAX_DRAG_STEPS + 1})),
+        ("ui.drag", json!({"from": {"x": 10}, "to": {"x": 20}, "x": 5})),
+        ("ui.drag", json!({"from": {"x": 10}, "to": {"control": {"name": "Save"}, "coordinates": "document"}})),
         ("ui.key", json!({"key": "A", "hold": true, "nudge": 1})),
         ("ui.key", json!({"key": 5})),
         ("ui.key", json!({"key": "NoSuchKey", "hold": true})),

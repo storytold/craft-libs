@@ -277,3 +277,29 @@ pub(crate) fn is_tree(ctx: &Context, collection: Id) -> bool {
     store::peek_clone::<TreeFact>(ctx, tree_slot(collection))
         .is_some_and(|fact| fact.tree && fact.pass.saturating_add(1) >= crate::runtime::pointer::pass_of(ctx))
 }
+
+/// Whether a collection has a lead row to activate, and the pass that recorded it.
+#[derive(Clone, Copy)]
+struct LeadFact {
+    lead: bool,
+    pass: u64,
+}
+
+fn lead_slot(collection: Id) -> Id {
+    sub(collection, "nav_lead")
+}
+
+/// Records whether the collection `collection` has a lead row in this pass: the item step writes it, and the key
+/// router reads it for the text field that drives the collection.
+pub(crate) fn record_lead(ctx: &Context, collection: Id, lead: bool) {
+    let slot = lead_slot(collection);
+    store::put(ctx, slot, LeadFact { lead, pass: crate::runtime::pointer::pass_of(ctx) });
+    crate::runtime::memory::adopt::<LeadFact>(ctx, collection, slot);
+}
+
+/// Whether the collection `collection` recorded no lead row in this pass or the one before. A target that records no
+/// lead fact (a menu a search field drives) never lacks one.
+pub(crate) fn lacks_lead(ctx: &Context, collection: Id) -> bool {
+    store::peek_clone::<LeadFact>(ctx, lead_slot(collection))
+        .is_some_and(|fact| !fact.lead && fact.pass.saturating_add(1) >= crate::runtime::pointer::pass_of(ctx))
+}

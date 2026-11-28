@@ -367,3 +367,20 @@ fn a_save_holds_the_files_lock_from_the_disk_check_to_the_write() {
     assert!(read_only.flush().is_err());
     assert!(!files.take().contains(&Call::Lock));
 }
+
+#[test]
+fn text_over_the_limit_from_other_files_opens_read_only() {
+    let dir = Path::new("/memory");
+    let files = Arc::new(MemoryFiles::default());
+    let oversized = format!("schema_version = 2\n# {}\n", "x".repeat(craft_settings::store::MAX_CONFIG_BYTES as usize));
+    files.write(&config_path(dir), &oversized).unwrap();
+    let options = OpenOptions::new(Location::Dir(PathBuf::from(dir))).probe(empty_probe()).files(files.clone());
+    let (mut store, report) = SettingsStore::<Prefs>::open_with(options);
+    assert!(
+        matches!(&report.read_only, Some(craft_settings::ReadOnlyReason::Unreadable(e)) if e.kind() == io::ErrorKind::FileTooLarge),
+        "{report:?}"
+    );
+    store.update(|p| p.general.language = "fr".into());
+    assert!(store.flush().is_err());
+    assert_eq!(files.read(&config_path(dir)).unwrap().as_deref(), Some(oversized.as_str()), "the text is untouched");
+}
