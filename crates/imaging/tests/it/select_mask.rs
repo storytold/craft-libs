@@ -161,6 +161,37 @@ fn select_mask_view_keys_pick_the_view_and_x_held_hides_it() {
     assert!(!app.borrow().hosted().workspace().recipe().hidden, "the release shows it again");
 }
 
+#[trial]
+fn a_polygon_keeps_its_mode_when_e_changes_the_next_edit() {
+    let (mut fixture, app, _) = open();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    fixture.key(Key::L, Modifiers::NONE).settle();
+    fixture.key(Key::L, Modifiers::SHIFT).settle();
+
+    let draw_polygon = |fixture: &mut Fixture| {
+        for offset in [Vec2::new(-45.0, -35.0), Vec2::new(50.0, -30.0), Vec2::new(-40.0, 45.0)] {
+            let at = canvas_point(fixture, offset);
+            fixture.frame(vec![pointer::moved(at)]);
+            fixture.frame(vec![pointer::press(at)]);
+            fixture.frame(vec![pointer::release(at)]);
+        }
+        fixture.settle();
+    };
+
+    draw_polygon(&mut fixture);
+    fixture.key(Key::E, Modifiers::NONE).settle();
+    assert!(app.borrow().hosted().workspace().session().edits.is_empty(), "the polygon is still open");
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert!(matches!(app.borrow().hosted().workspace().session().edits.as_slice(), [SelectMaskEdit::Lasso { mode: EditMode::Add, .. }]));
+
+    draw_polygon(&mut fixture);
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert!(matches!(
+        app.borrow().hosted().workspace().session().edits.as_slice(),
+        [SelectMaskEdit::Lasso { mode: EditMode::Add, .. }, SelectMaskEdit::Lasso { mode: EditMode::Subtract, .. }]
+    ));
+}
+
 // The limits count edits and points over the whole session: a total equal to a limit passes, an edit past it is
 // refused with the limit's number and records nothing, and `perform` gives the same refusal.
 #[trial]
