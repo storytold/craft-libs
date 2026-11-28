@@ -83,7 +83,7 @@ fn unreadable_english_dictionary_is_reported_and_skipped() {
 }
 
 /// The test dictionaries' folder the dictionaries-folder tests leave set for the rest of the run.
-fn shared_test_folder() -> std::path::PathBuf {
+pub(crate) fn shared_test_folder() -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("wc-proof-dictionaries-{}", std::process::id()));
     write_test_dictionaries(&dir);
     dir
@@ -585,6 +585,34 @@ fn user_dictionary_and_ignore_all_match_both_normalization_forms() {
     assert!(!std::fs::read_to_string(&path).unwrap().lines().any(|l| l == "zqguardádo"));
     assert!(!is_correct_in("zqguardádo", es));
     let _ = std::fs::remove_file(&path);
+}
+
+/// The host's own folders are searched like the folder set with `set_dictionaries_folder`
+/// (before the packs and the system's), setting them checks text again, and clearing them
+/// forgets what they held. The pair's language is one nothing else in the run has a file for.
+#[test]
+fn a_host_folder_is_searched_and_clearing_it_forgets_its_words() {
+    crate::hold_dictionary_tests();
+    set_dictionaries_folder(Some(shared_test_folder()));
+    let dir = std::env::temp_dir().join(format!("wc-proof-host-folder-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("qh.aff"), "SET UTF-8\n").unwrap();
+    std::fs::write(dir.join("qh.dic"), "1\nhostword\n").unwrap();
+    let qh = ProofLang::from_tag(Some("qh"));
+    assert!(is_correct_in("anything", qh), "no dictionary: nothing is marked");
+    let generation = dictionary_generation();
+    set_host_folders(HostFolders { env_var: None, folders: vec![dir.clone()] });
+    assert!(dictionary_generation() > generation);
+    assert!(is_correct_in("hostword", qh) && !is_correct_in("anything", qh));
+    assert_eq!(pack_dictionary_file(qh), Some(dir.join("qh.dic")));
+    assert!(hunspell::user_dirs().contains(&dir), "the host's folders are the ones the person keeps dictionaries in");
+    set_host_folders(HostFolders::default());
+    assert!(is_correct_in("anything", qh), "the folder is forgotten");
+    assert_eq!(pack_dictionary_file(qh), None);
+    assert!(!hunspell::user_dirs().contains(&dir));
+    set_dictionaries_folder(Some(shared_test_folder()));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn flagged(t: &str, v: &[Issue]) -> Vec<String> {

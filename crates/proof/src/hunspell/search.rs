@@ -6,6 +6,20 @@ use std::sync::RwLock;
 /// An extra directory searched first (a setting), set by the front end.
 static EXTRA_DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
 
+/// What the host application names for its own dictionaries: no application's names are built in.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostFolders {
+    /// An environment variable that holds one folder of dictionaries, searched after the folder
+    /// set with [`set_dictionary_dir`]. Ignored when unset or empty, and on the web.
+    pub env_var: Option<String>,
+    /// The application's own folders, searched after that (see [`app_folders`] for the usual
+    /// per-user ones). Ignored on the web.
+    pub folders: Vec<PathBuf>,
+}
+
+/// The host's own names ([`set_host`]).
+static HOST: RwLock<HostFolders> = RwLock::new(HostFolders { env_var: None, folders: Vec::new() });
+
 /// Why an installed dictionary failed to load, by `.dic` name (`pt_BR`): the file and the reason.
 /// Without it a file that is there but unreadable looks the same as no file (#2830).
 static LOAD_ERRORS: RwLock<Vec<(String, PathBuf, String)>> = RwLock::new(Vec::new());
@@ -38,6 +52,74 @@ pub fn set_dictionary_dir(dir: Option<PathBuf>) {
     LOAD_ERRORS.write().unwrap_or_else(std::sync::PoisonError::into_inner).clear(); // they belong to the old search path
 }
 
+/// Search the host's own environment variable and folders after the one set with
+/// [`set_dictionary_dir`]; an empty [`HostFolders`] searches none. Takes effect for dictionaries
+/// not loaded yet ([`crate::set_host_folders`] also loads them again).
+pub fn set_host(host: HostFolders) {
+    *HOST.write().unwrap_or_else(std::sync::PoisonError::into_inner) = host;
+    LOAD_ERRORS.write().unwrap_or_else(std::sync::PoisonError::into_inner).clear(); // they belong to the old search path
+}
+
+/// The host's own names, as [`set_host`] last set them.
+pub fn host() -> HostFolders {
+    HOST.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+}
+
+/// The systems [`app_folders_for`] knows the per-user layout of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Os {
+    Windows,
+    Mac,
+    Other,
+}
+
+/// The conventional per-user folders an application called `app` keeps its dictionaries in on
+/// this system, for [`HostFolders::folders`]: `%LOCALAPPDATA%\<app>\dictionaries` and
+/// `%APPDATA%\<app>\dictionaries` on Windows, `~/Library/Application Support/<app>/dictionaries`
+/// on macOS, and `$XDG_DATA_HOME/<app in lower case>/dictionaries` (else
+/// `~/.local/share/...`) elsewhere. Empty when the system names no such place, or `app` is empty
+/// or holds a path separator.
+pub fn app_folders(app: &str) -> Vec<PathBuf> {
+    let os = if cfg!(windows) {
+        Os::Windows
+    } else if cfg!(target_os = "macos") {
+        Os::Mac
+    } else {
+        Os::Other
+    };
+    app_folders_for(os, app, &|name| std::env::var_os(name))
+}
+
+/// [`app_folders`] on `os`, reading the environment through `env`.
+pub(crate) fn app_folders_for(os: Os, app: &str, env: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
+    if app.is_empty() || app == "." || app == ".." || app.contains(['/', '\\']) {
+        return Vec::new();
+    }
+    let var = |name: &str| env(name).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let home = var("HOME");
+    match os {
+        Os::Windows => ["LOCALAPPDATA", "APPDATA"].into_iter().filter_map(var).map(|base| base.join(app).join("dictionaries")).collect(),
+        Os::Mac => home.map(|h| h.join("Library/Application Support").join(app).join("dictionaries")).into_iter().collect(),
+        Os::Other => {
+            xdg_data_home(env("XDG_DATA_HOME"), home.as_deref()).map(|d| d.join(app.to_lowercase()).join("dictionaries")).into_iter().collect()
+        }
+    }
+}
+
+/// The first tier of the search: the folder set with [`set_dictionary_dir`], then the folder the
+/// host's environment variable holds, then the host's own folders. Only the first on the web.
+pub(crate) fn first_tier(extra: Option<&Path>, host: &HostFolders, env: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = extra.map(Path::to_path_buf).into_iter().collect();
+    if cfg!(target_arch = "wasm32") {
+        return dirs;
+    }
+    if let Some(d) = host.env_var.as_deref().and_then(env).filter(|v| !v.is_empty()) {
+        dirs.push(PathBuf::from(d));
+    }
+    dirs.extend(host.folders.iter().cloned());
+    dirs
+}
+
 /// The LibreOffice extension directories a Hunspell dictionary name may live in: LibreOffice's
 /// IDs are per dictionary — Polish is `dict-pl`, Brazilian Portuguese `dict-pt-BR` — so both
 /// the primary-language folder and the dashed full name are tried.
@@ -57,21 +139,16 @@ pub fn search_dirs(lo_exts: Option<&[String]>) -> Vec<PathBuf> {
     dirs
 }
 
-/// [`search_dirs`] in two tiers: the dictionaries folders (the one set with
-/// [`set_dictionary_dir`], `WORDCRAFT_DICTIONARIES` and WordCraft's own folder under the user's
-/// application data), then the system's Hunspell and LibreOffice folders. Installed Language
-/// packs ([`crate::packs`]) are searched between the two.
+/// [`search_dirs`] in two tiers: the dictionaries folders ([`first_tier`]: the one set with
+/// [`set_dictionary_dir`], then the host's own, [`set_host`]), then the system's Hunspell and
+/// LibreOffice folders. Installed Language packs ([`crate::packs`]) are searched between the
+/// two.
 fn search_tiers(lo_exts: Option<&[String]>) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let mut dirs: Vec<PathBuf> = Vec::new();
+    let extra = EXTRA_DIR.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    let dirs = first_tier(extra.as_deref(), &host(), &|name| std::env::var_os(name));
     let mut system: Vec<PathBuf> = Vec::new();
-    if let Some(d) = EXTRA_DIR.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
-        dirs.push(d);
-    }
     if cfg!(target_arch = "wasm32") {
         return (dirs, system);
-    }
-    if let Some(d) = std::env::var_os("WORDCRAFT_DICTIONARIES").filter(|v| !v.is_empty()) {
-        dirs.push(PathBuf::from(d));
     }
     // LibreOffice keeps each language under `…/share/extensions/<dict-xx>`.
     let lo_dirs =
@@ -80,7 +157,6 @@ fn search_tiers(lo_exts: Option<&[String]>) -> (Vec<PathBuf>, Vec<PathBuf>) {
     if cfg!(windows) {
         for var in ["LOCALAPPDATA", "APPDATA"] {
             if let Some(base) = std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from) {
-                dirs.push(base.join("WordCraft").join("dictionaries"));
                 system.push(base.join("hunspell"));
             }
         }
@@ -92,9 +168,6 @@ fn search_tiers(lo_exts: Option<&[String]>) -> (Vec<PathBuf>, Vec<PathBuf>) {
         system.extend(lo_drive_dirs(lo_exts, || LO_DRIVE_BASES.get_or_init(|| lo_drive_bases(Path::is_dir))));
     } else if cfg!(target_os = "macos") {
         if let Some(h) = &home {
-            // An app started from Finder or the Dock doesn't see `WORDCRAFT_DICTIONARIES`; this
-            // folder needs no setting (#1063).
-            dirs.push(h.join("Library/Application Support/WordCraft/dictionaries"));
             system.push(h.join("Library/Spelling"));
         }
         system.push(PathBuf::from("/Library/Spelling"));
@@ -102,10 +175,6 @@ fn search_tiers(lo_exts: Option<&[String]>) -> (Vec<PathBuf>, Vec<PathBuf>) {
         system.push(PathBuf::from("/usr/local/share/hunspell"));
         system.extend(lo_dirs("/Applications/LibreOffice.app/Contents/Resources/extensions"));
     } else {
-        // Nor does one started from a desktop launcher (#1063).
-        if let Some(data) = xdg_data_home(std::env::var_os("XDG_DATA_HOME"), home.as_deref()) {
-            dirs.push(data.join("wordcraft").join("dictionaries"));
-        }
         if let Some(h) = &home {
             system.push(h.join(".local/share/hunspell"));
         }
@@ -168,6 +237,26 @@ pub fn candidates(names: &[&str]) -> Vec<(PathBuf, PathBuf)> {
     ordered(names, &dirs, &region_packs, &system, &other_packs)
 }
 
+/// An `.aff` and a `.dic` file.
+type Pair = (PathBuf, PathBuf);
+
+/// Pairs in the dictionaries folders, and the others ([`candidate_tiers`]).
+pub(crate) type Tiers = (Vec<Pair>, Vec<Pair>);
+
+/// [`candidates`] in two parts, order kept: the pairs in the dictionaries folders ([`user_dirs`]),
+/// and the rest (installed packs, the system's folders). A registered pair
+/// ([`crate::register_dictionary`]) ranks between them.
+pub(crate) fn candidate_tiers(names: &[&str]) -> Tiers {
+    split_user_tier(candidates(names))
+}
+
+/// `found` split in the pairs whose `.dic` is in one of the dictionaries folders ([`user_dirs`]),
+/// and the others, each in the order given.
+pub(crate) fn split_user_tier(found: Vec<Pair>) -> Tiers {
+    let user = user_dirs();
+    found.into_iter().partition(|(_, dic)| dic.parent().is_some_and(|dir| user.iter().any(|u| u == dir)))
+}
+
 /// [`candidates`] over the given folders.
 pub(crate) fn ordered(
     names: &[&str],
@@ -212,23 +301,17 @@ pub fn candidates_exact(names: &[&str]) -> Vec<(PathBuf, PathBuf)> {
     ordered(names, &dirs, &crate::packs::exact_spelling_dirs(names), &system, &[])
 }
 
-/// [`candidates`] in the folders the user keeps dictionaries in for WordCraft ([`user_dirs`])
-/// only, not the system locations.
+/// [`candidates`] in the folders the user keeps dictionaries in ([`user_dirs`]) only, not the
+/// system locations.
 pub fn user_candidates(names: &[&str]) -> Vec<(PathBuf, PathBuf)> {
     candidates_in(&user_dirs(), names)
 }
 
-/// The folders of [`search_dirs`] the user keeps dictionaries in for WordCraft: the one set with
-/// [`set_dictionary_dir`], `WORDCRAFT_DICTIONARIES`, and WordCraft's own `dictionaries` folder
-/// under the user's application data. The rest are the system's (and LibreOffice's).
+/// The folders of [`search_dirs`] the user keeps dictionaries in: the one set with
+/// [`set_dictionary_dir`], and the host's own ([`set_host`]). The rest are the system's (and
+/// LibreOffice's).
 pub fn user_dirs() -> Vec<PathBuf> {
-    let extra = EXTRA_DIR.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    let env = std::env::var_os("WORDCRAFT_DICTIONARIES").filter(|v| !v.is_empty()).map(PathBuf::from);
-    let wordcraft_own = |d: &Path| {
-        d.file_name().is_some_and(|n| n == "dictionaries")
-            && d.parent().and_then(Path::file_name).is_some_and(|n| n.eq_ignore_ascii_case("wordcraft"))
-    };
-    search_dirs(None).into_iter().filter(|d| Some(d) == extra.as_ref() || Some(d) == env.as_ref() || wordcraft_own(d)).collect()
+    search_tiers(None).0
 }
 
 /// [`candidates`] in `dirs`.

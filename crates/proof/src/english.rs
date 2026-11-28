@@ -1,9 +1,11 @@
 //! English spelling never goes unchecked. Its words come from the first of these that is there:
 //!
 //! 1. **Dictionaries folder**: a Hunspell `.aff`/`.dic` pair for the run's own English that the
-//!    user keeps for WordCraft ([`crate::hunspell::user_dirs`]: the folder set in the options,
-//!    `WORDCRAFT_DICTIONARIES`, WordCraft's own `dictionaries` folder).
-//! 2. **Installed English pack**: reserved for Language packs (craft-libs#485, CP4.2).
+//!    user keeps for the host ([`crate::hunspell::user_dirs`]: the folder set in the options, and
+//!    the host's own variable and folders, [`crate::hunspell::HostFolders`]).
+//! 2. **Registered dictionary**: a pair handed over as bytes ([`crate::register_dictionary`]) under
+//!    the English's own tag (`en-US`, `en-GB`, `en-CA`, `en-AU`), for hosts with no folder to read.
+//!    Installed English pack: reserved for Language packs (craft-libs#485, CP4.2).
 //! 3. **Embedded SCOWL**: the run's English's SCOWL dictionary (en-US, en-GB, en-AU or en-CA) embedded
 //!    from craft-i18n at build time ([`crate::scowl`]); a word it knows (British English: also
 //!    the `-ize` spelling of one it knows, [`ise_spelling`]), or the supplement ([`EXTRA`]), is
@@ -61,6 +63,8 @@ const MAX_CANDIDATES: usize = 8;
 /// Where English spelling comes from now ([`crate::english_source`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EnglishSource {
+    /// A dictionary handed over as bytes ([`crate::register_dictionary`]): it has no file.
+    Registered,
     /// The English's SCOWL dictionary embedded from craft-i18n at build time.
     Embedded,
     /// An English Hunspell dictionary from the dictionaries folder or the system: its `.dic` file.
@@ -124,6 +128,12 @@ fn own_names(lang: ProofLang) -> &'static [&'static str] {
     }
 }
 
+/// The name a registered pair for `lang` is filed under ([`crate::register_dictionary`]): its own
+/// Hunspell name, `en_US` for American English.
+pub(crate) fn registered_name(lang: ProofLang) -> &'static str {
+    own_names(lang).first().copied().unwrap_or("en_US")
+}
+
 /// How many Englishes have a slot of their own ([`slot`]).
 const ENGLISHES: usize = 4;
 
@@ -137,8 +147,17 @@ fn slot(lang: ProofLang) -> usize {
     }
 }
 
-/// A loaded Hunspell dictionary and its `.dic` file; `None` when none could be loaded.
-type Loaded = Option<(Arc<AffixDict>, PathBuf)>;
+/// Where a loaded English dictionary came from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Origin {
+    /// This `.dic` file.
+    File(PathBuf),
+    /// A registered pair ([`crate::register_dictionary`]).
+    Registered,
+}
+
+/// A loaded Hunspell dictionary and where it came from; `None` when none could be loaded.
+type Loaded = Option<(Arc<AffixDict>, Origin)>;
 
 /// The English Hunspell dictionaries, under one lock.
 struct State {
@@ -189,16 +208,19 @@ fn keep(state: &RwLock<State>, i: usize, reloads: u64, loaded: Loaded, note: imp
         };
     }
     note();
-    let loaded = loaded.map(|(d, dic)| {
+    let loaded = loaded.map(|(d, origin)| {
         // Another English may have read the same file meanwhile: share its copy.
-        let d = match s.files.iter().find(|(p, _)| *p == dic) {
-            Some((_, shared)) => shared.clone(),
-            None => {
-                s.files.push((dic.clone(), d.clone()));
-                d
-            }
+        let d = match &origin {
+            Origin::File(dic) => match s.files.iter().find(|(p, _)| p == dic) {
+                Some((_, shared)) => shared.clone(),
+                None => {
+                    s.files.push((dic.clone(), d.clone()));
+                    d
+                }
+            },
+            Origin::Registered => d,
         };
-        (d, dic)
+        (d, origin)
     });
     // Another thread may have filled it meanwhile: that one wins.
     match s.slots.get_mut(i) {
@@ -225,9 +247,16 @@ fn key(lang: ProofLang) -> &'static str {
     names(lang).first().copied().unwrap_or("en_US")
 }
 
-/// Read the first Hunspell pair of `lang`'s own that loads, trying each name in each folder and
-/// an installed pack named exactly for it ([`crate::hunspell::candidates_exact`]: never another
-/// dialect's file or pack; with SCOWL embedded, the dictionaries folder only:
+/// Where a dictionary of `lang`'s own may be read from.
+enum Source {
+    File(PathBuf, PathBuf),
+    Registered(crate::registered::Pair),
+}
+
+/// Read the first Hunspell pair of `lang`'s own that loads: the dictionaries folders first, then a
+/// registered pair ([`crate::register_dictionary`]), then (without SCOWL embedded) an installed pack
+/// named exactly for it and the system's folders ([`crate::hunspell::candidates_exact`]: never
+/// another dialect's file or pack; with SCOWL embedded, the dictionaries folders only:
 /// [`crate::hunspell::user_candidates`]), with the first failure before it (the file `lang`
 /// would rather use), for [`note_error`].
 fn load(lang: ProofLang) -> (Loaded, Option<(PathBuf, String)>) {
@@ -236,23 +265,41 @@ fn load(lang: ProofLang) -> (Loaded, Option<(PathBuf, String)>) {
     } else {
         exact_candidates(lang, crate::hunspell::candidates_exact)
     };
-    if candidates.is_empty() {
+    let (folder, rest) = crate::hunspell::split_user_tier(candidates);
+    let sources: Vec<Source> = folder
+        .into_iter()
+        .map(|(aff, dic)| Source::File(aff, dic))
+        .chain(crate::registered::find(own_names(lang)).map(Source::Registered))
+        .chain(rest.into_iter().map(|(aff, dic)| Source::File(aff, dic)))
+        .collect();
+    if sources.is_empty() {
         log::info!("English spelling: no Hunspell {} dictionary to read first; using SCOWL or the built-in word list", key(lang));
         return (None, None);
     }
     let mut first_error: Option<(PathBuf, String)> = None;
-    for (aff, dic) in candidates.into_iter().take(MAX_CANDIDATES) {
-        let loaded = match already_read(&HUNSPELL, &dic) {
-            Some(d) => Ok(d),
-            None => crate::hunspell::load_english(&aff, &dic)
-                .and_then(|d| if d.is_empty() { Err(format!("{}: no words", dic.display())) } else { Ok(d) })
-                .map(Arc::new),
+    for source in sources.into_iter().take(MAX_CANDIDATES) {
+        let (loaded, label) = match source {
+            Source::File(aff, dic) => {
+                let loaded = match already_read(&HUNSPELL, &dic) {
+                    Some(d) => Ok(d),
+                    None => crate::hunspell::load_english(&aff, &dic)
+                        .and_then(|d| if d.is_empty() { Err(format!("{}: no words", dic.display())) } else { Ok(d) })
+                        .map(Arc::new),
+                };
+                (loaded.map(|d| (d, Origin::File(dic.clone()))), dic)
+            }
+            Source::Registered(pair) => {
+                let loaded = AffixDict::from_hunspell_english(&pair.aff, &pair.dic, &[])
+                    .and_then(|d| if d.is_empty() { Err(format!("{}: no words", pair.label.display())) } else { Ok(d) })
+                    .map(Arc::new);
+                (loaded.map(|d| (d, Origin::Registered)), pair.label)
+            }
         };
         match loaded {
-            Ok(d) => return (Some((d, dic)), first_error),
+            Ok(found) => return (Some(found), first_error),
             Err(e) => {
                 log::warn!("English spelling: {e}; trying the next dictionary");
-                first_error.get_or_insert((dic, e));
+                first_error.get_or_insert((label, e));
             }
         }
     }
@@ -283,7 +330,8 @@ pub(crate) fn reload() {
 /// Reads the Hunspell dictionary once (it is cached afterwards).
 pub(crate) fn source(lang: ProofLang) -> EnglishSource {
     match speller(lang) {
-        Speller::Hunspell(_, dic) => EnglishSource::Hunspell(dic),
+        Speller::Hunspell(_, Origin::File(dic)) => EnglishSource::Hunspell(dic),
+        Speller::Hunspell(_, Origin::Registered) => EnglishSource::Registered,
         Speller::Scowl(..) => EnglishSource::Embedded,
         Speller::List => EnglishSource::CoreList,
     }
@@ -297,8 +345,8 @@ pub(crate) fn load_error(lang: ProofLang) -> Option<String> {
 
 /// What `lang` is checked against now.
 enum Speller {
-    /// A dictionaries-folder or system Hunspell dictionary, and its `.dic` file.
-    Hunspell(Arc<AffixDict>, PathBuf),
+    /// A dictionaries-folder, registered or system Hunspell dictionary, and where it came from.
+    Hunspell(Arc<AffixDict>, Origin),
     /// `lang`'s own SCOWL dictionary (every English's, for English with no dialect: [`generic`]),
     /// and whether British `-ize` spellings are right too ([`ise_spelling`]).
     Scowl(Vec<&'static AffixDict>, bool),
@@ -314,8 +362,8 @@ fn speller(lang: ProofLang) -> Speller {
 /// the dictionaries folder is looked for), then SCOWL, then the built-in list. (The installed
 /// English pack, craft-libs#485, goes between the first two.)
 fn pick(found: Loaded, lang: ProofLang) -> Speller {
-    if let Some((d, dic)) = found {
-        return Speller::Hunspell(d, dic);
+    if let Some((d, origin)) = found {
+        return Speller::Hunspell(d, origin);
     }
     let Some(d) = crate::scowl::dict(lang) else { return Speller::List };
     let mut ds = vec![d];
@@ -563,7 +611,10 @@ mod tests {
         let tiny = Arc::new(AffixDict::from_hunspell("", "1\nzzyzx\n", &[]).unwrap());
         let file = PathBuf::from("/folder/en_US.dic");
         for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnAu, ProofLang::EnCa] {
-            assert!(matches!(pick(Some((tiny.clone(), file.clone())), lang), Speller::Hunspell(_, p) if p == file), "{lang:?}");
+            assert!(
+                matches!(pick(Some((tiny.clone(), Origin::File(file.clone()))), lang), Speller::Hunspell(_, Origin::File(p)) if p == file),
+                "{lang:?}"
+            );
             let fallback = pick(None, lang);
             if crate::scowl::dict(lang).is_some() {
                 assert!(
@@ -618,15 +669,15 @@ mod tests {
         let file = PathBuf::from("/old/folder/en_US.dic");
         let before = state.read().unwrap().reloads;
         forget(&state); // The folder changes while the load runs.
-        let got = keep(&state, slot(ProofLang::En), before, Some((dict(), file.clone())), || noted.set(true));
-        assert_eq!(got.map(|(_, p)| p), Some(file.clone()), "the stale load still answers its own check");
+        let got = keep(&state, slot(ProofLang::En), before, Some((dict(), Origin::File(file.clone()))), || noted.set(true));
+        assert_eq!(got.map(|(_, p)| p), Some(Origin::File(file.clone())), "the stale load still answers its own check");
         assert!(state.read().unwrap().slots.iter().all(Option::is_none), "but it isn't kept");
         assert!(!noted.get(), "nor is its load error");
         assert!(already_read(&state, &file).is_none());
         let now = state.read().unwrap().reloads;
-        let a = keep(&state, slot(ProofLang::En), now, Some((dict(), file.clone())), || noted.set(true)).unwrap();
+        let a = keep(&state, slot(ProofLang::En), now, Some((dict(), Origin::File(file.clone()))), || noted.set(true)).unwrap();
         assert!(noted.get());
-        let b = keep(&state, slot(ProofLang::EnGb), now, Some((dict(), file.clone())), || {}).unwrap();
+        let b = keep(&state, slot(ProofLang::EnGb), now, Some((dict(), Origin::File(file.clone()))), || {}).unwrap();
         assert!(Arc::ptr_eq(&a.0, &b.0), "one copy of a file for every English that reads it");
         assert!(already_read(&state, &file).is_some());
         forget(&state);

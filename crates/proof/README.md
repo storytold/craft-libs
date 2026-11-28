@@ -38,10 +38,20 @@ let breaks = hyphen_points_in("hyphenation", &Limits::default(), ProofLang::En);
 ```
 
 Hunspell dictionaries are not bundled; they are read from, in order: the folder given to
-`set_dictionaries_folder`, `WORDCRAFT_DICTIONARIES`, WordCraft's own folder under the user's
-application data (`%LOCALAPPDATA%\WordCraft\dictionaries` and `%APPDATA%\WordCraft\dictionaries`,
-`~/Library/Application Support/WordCraft/dictionaries`, `$XDG_DATA_HOME/wordcraft/dictionaries`),
-then the usual Hunspell and LibreOffice locations. None on the web.
+`set_dictionaries_folder`, the host's own environment variable and folders, then the usual Hunspell
+and LibreOffice locations. None on the web.
+
+The host names its own: no application's variable or folder is built in, so an app never reads
+another app's dictionaries.
+
+```rust
+use craft_proof::{HostFolders, app_folders, set_host_folders};
+
+// At start: the app's variable and its usual per-user folders (`%LOCALAPPDATA%\Example\dictionaries`
+// and `%APPDATA%\Example\dictionaries` on Windows, `~/Library/Application Support/Example/dictionaries`
+// on macOS, `$XDG_DATA_HOME/example/dictionaries` elsewhere), or any folders it likes.
+set_host_folders(HostFolders { env_var: Some("EXAMPLE_DICTIONARIES".into()), folders: app_folders("Example") });
+```
 
 French remains a `ProofLang::Pack` locale: use its full `tag()` for settings and issue identity.
 The shared pack loader keeps regional dictionary overrides, fallback to `fr`, reloads and its
@@ -136,8 +146,9 @@ locale (`nl`, `pt-br`, `sr-latn`):
 | `hyphenation.pat` | UTF-8 TeX or plain Liang patterns (optional) |
 | `LICENCES/<file>` | upstream licence texts, shown by `licence_texts()` |
 
-**Lookup order.** Spelling: the dictionaries folder, then an installed pack, then the system's
-Hunspell dictionaries, then (English only) the built-in core list. A slot's Hunspell names map to
+**Lookup order.** Spelling: the dictionaries folder, then a registered dictionary
+([below](#dictionaries-from-bytes)), then an installed pack, then the system's Hunspell
+dictionaries, then (English only) the built-in core list. A slot's Hunspell names map to
 pack locales (`pt_BR` → `pt-br`, then `pt`, then any other `pt-*` pack). Hyphenation, every
 language but English: an installed pack's patterns for a word in the language's script (Russian,
 Bulgarian, Turkish: their script; others: letters the patterns know), then the embedded ones, then the language's rules or the English fallback as before.
@@ -151,14 +162,52 @@ that leaves the pack (`..`, an absolute path, a drive, a backslash). Folders sta
 (the store's temporary folders) are ignored. A dictionary that fails to load is reported by
 `dictionary_load_error` like any other; nothing panics.
 
+### Dictionaries from bytes
+
+A host with no folder to read (the web, where a dictionary is fetched) hands a Hunspell pair over
+as bytes, for any language, the Englishes included:
+
+```rust
+use craft_proof::{RegisterError, register_dictionary, unregister_dictionary};
+
+match register_dictionary("en-US", &aff_bytes, &dic_bytes) {
+    Ok(()) => {}                                      // en-US text is now checked against this pair
+    Err(why) => eprintln!("not registered: {why}"),   // a `RegisterError`: the reason, in words
+}
+unregister_dictionary("en-US");                       // back to the next source
+```
+
+- **Rank:** after the dictionaries folders (`set_dictionaries_folder`, `set_host_folders`) and
+  before the installed packs, the system's dictionaries and the embedded English. The pair acts
+  as `<tag>.aff` and `<tag>.dic` in a folder of its own: `de` serves `de-DE`, `de-AT` and every
+  German region with no pair of its own; `pl-PL` ranks before `pl`. An English is registered under
+  its own tag: `en` and `en-US` are American English's, `en-GB` (and `en-NZ` and the other
+  British-spelling Englishes) British English's, `en-CA` and `en-AU` their own.
+- **Cost:** a registered pair is charged to the memory budget with the loaded pack dictionaries
+  (six times the bytes of its two files) until it is replaced or removed, and the loaded packs
+  give way to it. It is never evicted.
+- **Refused, with the reason (`RegisterError`):** a tag that names no language (`x-none`, `und`,
+  an empty or malformed tag); a file over 64 MiB (`MAX_FILE_BYTES`); bytes that can't be decoded
+  (an encoding the reader doesn't know, a stem that isn't valid) or a `.dic` with no words; an
+  estimate that takes the registered pairs past the budget; more than `MAX_REGISTERED` (64)
+  languages.
+- The pair is parsed when first used, as a file is. One that decodes but doesn't parse is
+  registered and reported by `dictionary_load_error`; the language then reads the next source.
+  `pack_dictionary_file` and `installed_dictionaries` name no file for it, and `english_source`
+  says `EnglishSource::Registered`.
+- Registering or removing a pair loads every dictionary again (`dictionary_generation()` changes),
+  so register at start or when a language is first needed.
+
 ### English is always checked
 
 English spelling uses the first of these that is there; `english_source(lang)` says which.
 
 1. **Dictionaries folder:** the English's own `.aff`/`.dic` pair (`en_US`, `en_GB` or `en_CA`)
-   that the user put in the folder set with `set_dictionaries_folder`, in `WORDCRAFT_DICTIONARIES`
-   or in WordCraft's own `dictionaries` folder. The user's choice comes first.
-2. **Installed English pack:** reserved for Language packs (craft-libs#485, CP4.2).
+   that the user put in the folder set with `set_dictionaries_folder` or in the host's own folders
+   (`set_host_folders`). The user's choice comes first.
+2. **Registered dictionary:** a pair handed over as bytes under the English's own tag
+   ([below](#dictionaries-from-bytes)). Installed English pack: reserved for Language packs
+   (craft-libs#485, CP4.2).
 3. **Embedded SCOWL:** the English's own SCOWL `rel-2026.02.25` Hunspell dictionary from
    `CRAFT_I18N_DIR` (`language-data/en-us`, `en-gb` (British `-ise`), `en-au` or `en-ca`,
    `spelling.aff` + `spelling.dic`), read by the affix engine. Australian English reads en-AU
