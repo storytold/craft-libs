@@ -1372,3 +1372,31 @@ fn escape_in_a_modeless_form_restores_the_field_before_closing() {
         assert!(!open.get(), "leaves {leaves}: the second Escape closes the window");
     }
 }
+
+/// An empty list's message counts in the size a form measures from its content: the footer stays below what follows
+/// the list, for a message on one line and for one long enough to wrap at the form's width.
+#[trial]
+fn an_empty_list_s_message_keeps_the_footer_below_the_body() {
+    use craft_behavior::keyed;
+    use craft_ui::contract::ShowCollection as _;
+    use craft_ui::list::{List, ListRow};
+    for message in [
+        "This document has no custom properties.",
+        "This document has no custom properties yet. Add one with a name and a value below, and it is saved with the document the next time you save it.",
+    ] {
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = FormDialog::own("Custom Properties").show(ui, |ui, _cx, _value: &mut String| {
+                let keys: Vec<usize> = Vec::new();
+                let _ = List::new("Properties").max_rows(6).empty(message).show_items(ui, &keyed(&keys, |at| *at), &mut |_, _| ListRow::new("x"));
+                let _ = Button::new("After the list").show(ui);
+                true
+            });
+        });
+        fixture.idle(10);
+        let text = fixture.by_label(message).expect("the empty list shows its message").rect;
+        let after = fixture.by_label("After the list").expect("the button after the list").rect;
+        let ok = fixture.by_label("OK").expect("the footer's OK").rect;
+        assert!(above(text, after), "{message:?}: the button follows the message");
+        assert!(above(after, ok), "{message:?}: the footer is below the body, not over its last control");
+    }
+}

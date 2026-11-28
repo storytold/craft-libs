@@ -784,6 +784,12 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         self.items().empty.as_ref().map_or(0.0, |text| items::empty_text::height(ui, cx.tokens, text, width))
     }
 
+    /// The width the empty state asks for where the collection takes its width from its content. The default is
+    /// `CollectionProps::empty` on one line.
+    fn empty_width(&self, ui: &Ui, cx: &StyleCx<'_>) -> f32 {
+        self.items().empty.as_ref().map_or(0.0, |text| items::empty_text::width(ui, cx.tokens, text))
+    }
+
     /// The empty state at the rect the item step placed. The default shows `CollectionProps::empty`.
     fn empty(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         if let Some(text) = self.items().empty.clone() {
