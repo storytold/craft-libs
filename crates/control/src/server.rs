@@ -901,11 +901,16 @@ mod tests {
     }
 
     /// Wait until `hub` lists no request in `control.running`. A request that timed out leaves the
-    /// list once its connection's `control.pending` has its reply. The ten seconds only stop a hung
-    /// test.
+    /// list once its connection's `control.pending` has its reply. Each wait ends when the list
+    /// tells the test that a request left it; one that runs out its ten seconds fails the test,
+    /// even if the list has emptied since without telling it.
     fn wait_until_nothing_runs(hub: &Hub) {
-        let list = hub.running.lock();
-        let (list, _) = hub.running.left.wait_timeout_while(list, Duration::from_secs(10), |l| !l.is_empty()).unwrap_or_else(PoisonError::into_inner);
+        let mut list = hub.running.lock();
+        while !list.is_empty() {
+            let (now, waited) = hub.running.left.wait_timeout(list, Duration::from_secs(10)).unwrap_or_else(PoisonError::into_inner);
+            list = now;
+            assert!(!waited.timed_out(), "no request was reported leaving the list");
+        }
         assert!(list.is_empty(), "a request still runs");
     }
 
@@ -1331,6 +1336,38 @@ mod tests {
         drop((out, lines));
         ended.recv_timeout(Duration::from_secs(10)).expect("the closed connection ended");
         assert!(!WATCH.subscribed(), "a closed connection is not counted on the watch");
+    }
+
+    /// #7226: the events thread leaves the watch at the first write its socket refuses, while the
+    /// connection's own thread still holds the seat and has not seen the end of the stream.
+    #[test]
+    fn the_events_thread_leaves_the_watch_when_a_write_fails() {
+        static WATCH: DocumentWatch = DocumentWatch::new();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (socket, _) = listener.accept().unwrap();
+        // The socket takes no more writes, as one to a client that closed: the next line fails.
+        socket.shutdown(std::net::Shutdown::Write).unwrap();
+        let lines = Arc::new(Lines { socket, turn: Mutex::new(()) });
+        let stop = Arc::new(AtomicBool::new(false));
+        WATCH.publish("d-1", 3);
+        let seat = Arc::new(Seat::new(WATCH.join()));
+        // The connection's own thread, which keeps its share of the seat throughout.
+        let held = Arc::clone(&seat);
+        assert!(WATCH.subscribed(), "the connection is subscribed");
+        // `()` once the events thread has ended.
+        let (ended_tx, ended) = channel::<()>();
+        let (l, s) = (Arc::clone(&lines), Arc::clone(&stop));
+        std::thread::spawn(move || {
+            send_events(&WATCH, "design.changed", &l, &s, ("d-1".to_string(), 3), seat);
+            let _ = ended_tx.send(());
+        });
+        WATCH.publish("d-1", 4);
+        // The ten seconds only stop a hung test.
+        ended.recv_timeout(Duration::from_secs(10)).expect("the events thread ended at the failed write");
+        assert!(!stop.load(Ordering::Relaxed), "nothing stopped the events thread but the write");
+        assert!(!WATCH.subscribed(), "the seat left with the events thread");
+        drop((held, client));
     }
 
     /// The token is read from a request object without building the rest of it: other fields,
