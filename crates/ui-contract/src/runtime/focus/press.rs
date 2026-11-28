@@ -59,6 +59,8 @@ struct Plan {
 pub(crate) struct PressState {
     plan: Option<Plan>,
     pub(super) commit_now: Option<Id>,
+    /// A Tab (`true`) or Shift+Tab (`false`) moved focus this pass, from nothing as well as from a stop.
+    pub(super) tabbed: Option<bool>,
     /// The widget a Tab or Shift+Tab moved focus off this pass, and whether the move was forward.
     pub(super) tabbed_from: Option<(Id, bool)>,
     /// Tab, Shift+Tab or F6 moved focus this pass.
@@ -76,6 +78,7 @@ impl PressState {
     pub(super) fn rotate(&mut self, focused: Option<Id>) {
         self.plan = None;
         self.commit_now = None;
+        self.tabbed = None;
         self.tabbed_from = None;
         self.by_keys = false;
         self.focus_at_begin = focused;

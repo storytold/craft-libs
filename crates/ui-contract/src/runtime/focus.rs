@@ -151,6 +151,10 @@ pub(crate) struct RowGroups {
 #[derive(Default)]
 pub(crate) struct State {
     pub(crate) stops: Vec<StopRec>,
+    /// The Tab settings of this pass (`BeginIn::tab_all_controls`, `BeginIn::dialog_tab`), kept for the moves the end
+    /// hook makes: a Tab that lands on a stop this pass does not show goes on through this pass's Tab entries.
+    pub(crate) tab_all_controls: bool,
+    pub(crate) dialog_tab: TabReach,
     stop_ids: IdSet,
     /// The egui roots of `stops`.
     stop_roots: IdSet,
