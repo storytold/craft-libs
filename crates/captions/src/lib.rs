@@ -351,7 +351,9 @@ pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     if ext.as_deref() != Some("srt") && !has_arrow_timing && first_lines.iter().any(|l| subviewer::parse_timing(l).is_some()) {
         return Some(Format::SubViewer);
     }
-    if !first_lines.is_empty() && first_lines.iter().all(|l| vplayer::split_line(l).is_some()) {
+    if !first_lines.is_empty()
+        && head.lines().map(str::trim_start).filter(|line| !line.trim().is_empty()).take(3).all(|line| vplayer::split_line(line).is_some())
+    {
         return Some(Format::VPlayer);
     }
     if first_lines.first().is_some_and(|l| pjs::split_cue(l).is_some()) {
