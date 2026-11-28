@@ -317,6 +317,31 @@ fn raw_develop_switches_raws_and_finishes_with_each_footer_button() {
     assert_eq!(finish(&host), Some(RawFinish::Ok));
 }
 
+/// The footer does not set the side region's width: five buttons are wider than the Settings column, and at the foot of
+/// the side region they left the column in half of that region (a third in Ukrainian), the rest empty. Across the
+/// dialog's foot the footer stands under the canvas too, and the column reaches the dialog's end edge as the footer does
+/// and starts at the top as the canvas does.
+#[trial]
+fn the_footer_runs_across_the_dialog_and_the_settings_column_keeps_its_own_width() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host, &Rc::new(Cell::new(false)));
+    host.borrow_mut().open(HostedWorkspace::new(RawDevelopWorkspace::new(open(RawTarget::OpenRaw)), Source::with_histogram()));
+    fixture.idle(10);
+    let column = fixture.by_label("Settings").expect("the Settings column").rect;
+    let canvas = fixture.by_role(Role::CANVAS).into_iter().next().expect("the workspace shows a canvas").rect;
+    let footer = ["Open", "Done", "Save Settings…", "Load Settings…", "Cancel"]
+        .into_iter()
+        .map(|name| fixture.by_label(name).unwrap_or_else(|| panic!("the footer's {name}")).rect)
+        .fold(Rect::NOTHING, Rect::union);
+    assert!(
+        footer.min.y >= column.max.y.max(canvas.max.y) - 0.5,
+        "the footer {footer:?} stands under the column {column:?} and the canvas {canvas:?}"
+    );
+    assert!(footer.min.x < canvas.max.x, "the footer {footer:?} runs under the canvas {canvas:?}");
+    assert!(column.max.x >= footer.max.x - 0.5, "the Settings column {column:?} reaches the end edge as the footer {footer:?} does");
+    assert!(column.min.y <= canvas.min.y + 0.5, "the Settings column {column:?} starts at the top as the canvas {canvas:?} does");
+}
+
 #[trial]
 fn a_held_ok_files_its_answer_and_keeps_the_workspace_open_until_the_app_answers() {
     let host = Rc::new(RefCell::new(DialogHost::new()));

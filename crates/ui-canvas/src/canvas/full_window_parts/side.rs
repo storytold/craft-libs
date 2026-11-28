@@ -15,24 +15,30 @@ use egui::{Response, Ui};
 type LeadingFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
 /// Where the footer of a [`FullWindowDialog`](crate::dialog::FullWindowDialog) with side columns sits: at the bottom
-/// of the side columns' region (Liquify, Select and Mask, Content-Aware Fill, Wide Angle, Vanishing Point) or at its
-/// top (Filter Gallery), with an optional leading slot (a Reset icon button) at the reading start of the footer row.
-/// The buttons are the dialog's own (`FullWindowDialog::buttons`).
+/// of the side columns' region (Liquify, Select and Mask, Content-Aware Fill, Wide Angle, Vanishing Point), at its
+/// top (Filter Gallery) or across the dialog's foot (RAW Develop), with an optional leading slot (a Reset icon button)
+/// at the reading start of the footer row. The buttons are the dialog's own (`FullWindowDialog::buttons`).
 #[must_use = "pass the footer to `FullWindowDialog::side_footer`"]
 pub struct SideFooter<'a> {
-    top: bool,
+    place: FooterPlace,
     leading: Option<LeadingFn<'a>>,
 }
 
 impl<'a> SideFooter<'a> {
     /// The footer at the bottom of the side columns, under their content.
     pub fn bottom() -> Self {
-        SideFooter { top: false, leading: None }
+        SideFooter { place: FooterPlace::EndBottom, leading: None }
     }
 
     /// The footer at the top of the side columns, above their content (Filter Gallery).
     pub fn top() -> Self {
-        SideFooter { top: true, leading: None }
+        SideFooter { place: FooterPlace::EndTop, leading: None }
+    }
+
+    /// The footer across the dialog's foot, under the canvas and the side columns, which stop above it: a footer
+    /// wider than the columns, which would widen their region past their content (RAW Develop's five buttons).
+    pub fn across() -> Self {
+        SideFooter { place: FooterPlace::Across, leading: None }
     }
 
     /// Shows `add` at the reading start of the footer row, the buttons at its end: Select and Mask's and
@@ -44,7 +50,12 @@ impl<'a> SideFooter<'a> {
 
     /// Where the footer region sits.
     pub(crate) fn place(&self) -> FooterPlace {
-        if self.top { FooterPlace::EndTop } else { FooterPlace::EndBottom }
+        self.place
+    }
+
+    /// Whether the footer sits among the side columns, which then take the dialog's height under the title row.
+    pub(crate) fn among_sides(&self) -> bool {
+        self.place != FooterPlace::Across
     }
 
     /// Shows the footer row across the footer region: the leading slot at the reading start and `rest` (the dialog's

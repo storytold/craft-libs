@@ -50,7 +50,8 @@ type SettleFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>, &mut [FooterButton]) + 'a>;
 ///
 /// - Side columns: [`sides`](FullWindowDialog::sides) fills a region at the end edge, as high as the dialog under the
 ///   title row and as wide as its content; the body (the canvas) takes the rest of the width. With side columns the
-///   footer sits among them, at their bottom unless [`side_footer`](FullWindowDialog::side_footer) says otherwise.
+///   footer sits among them, at their bottom unless [`side_footer`](FullWindowDialog::side_footer) says otherwise: at
+///   their top, or across the dialog's foot with the columns stopping above it.
 /// - Buttons: the dialog's own, wherever the footer sits: Cancel and Escape close it as `CloseReason::Requested`,
 ///   Enter activates the first enabled `Accept` button while the dialog's Enter rule is `EnterRule::Submit`, and
 ///   `close_guard` and `settle_buttons` see every pick.
@@ -209,13 +210,12 @@ impl<'a> FullWindowDialog<'a> {
         self
     }
 
-    /// The side columns: `content` fills the region at the end edge, as high as the dialog under the title row and
-    /// as wide as what it shows, before the body takes the rest of the width. It shows the columns
-    /// ([`FullWindowSide`](crate::dialog::FullWindowSide)) side by side in reading order, and the dialog's footer
-    /// sits among them.
+    /// The side columns: `content` fills the region at the end edge, as high as the dialog under the title row (above
+    /// a footer across, `SideFooter::across`) and as wide as what it shows, before the body takes the rest of the
+    /// width. It shows the columns ([`FullWindowSide`](crate::dialog::FullWindowSide)) side by side in reading order,
+    /// and the dialog's footer sits among them unless it runs across.
     #[must_use]
     pub fn sides(mut self, content: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
-        self.props = self.props.end(EndRegion::new().full_height(true).rule(true));
         self.sides = Some(Box::new(content));
         self.place_footer()
     }
@@ -233,6 +233,10 @@ impl<'a> FullWindowDialog<'a> {
     }
 
     fn place_footer(mut self) -> Self {
+        if self.sides.is_some() {
+            // The side columns take the height under the title row, unless the footer runs across under them.
+            self.props = self.props.end(EndRegion::new().full_height(self.side_footer.among_sides()).rule(true));
+        }
         if self.props.footer.is_some() {
             let region = self.footer_region();
             self.props = self.props.footer(region);
