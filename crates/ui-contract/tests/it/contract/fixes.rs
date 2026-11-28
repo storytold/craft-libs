@@ -6,13 +6,14 @@ use craft_ui::contract::{
     Common, Component, Container, ContainerProps, Cx, MeasureCx, OverlayUi, PaintUi, PartsCx, Props as _, Role, Show as _, ShowContainer as _, Sizing,
 };
 use craft_ui::runtime::env::{AppValues, EnvValue};
+use craft_ui::runtime::focus::{FocusTarget, KeyUse, request};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::contract::{findings, steps};
-use craft_ui::testing::focus::named_id;
+use craft_ui::testing::focus::{Stop, is_focused, named_id, register_stop, widget};
 use craft_ui::testing::memory::scoped;
 use craft_ui::testing::{Frames, is_measuring, trial};
 use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
-use egui::{Rect, Response, UiBuilder, Vec2};
+use egui::{Rect, Response, Ui, UiBuilder, Vec2};
 use std::cell::RefCell;
 
 type Log = RefCell<Vec<&'static str>>;
@@ -359,4 +360,42 @@ fn inspector_places_synthetic_focus_parts_after_each_owner() {
     }
     stops.sort_unstable();
     assert_eq!(stops, [1, 2, 3, 4]);
+}
+
+/// A focus asked for from inside a staging pass does not outlive it: a sizing pass registers no widget, so egui keeps
+/// the focus it was given for one more pass and then drops it, since the pass that ends has no such id in its
+/// `used_ids` (`Focus::end_pass`). Cross-pass state a staged body keeps in the `Context` has the same span. A stop
+/// registered in the real pass does keep its focus: the runtime gives its widget the focus and holds it, pass after
+/// pass, for as long as the pass registers it.
+///
+/// LightCraft's Smart Rules dialog hit this on the port (lightcraft#4750): a moved row's grip asked for the focus from
+/// inside a staged body, and the focus was gone one pass later while the grip was still drawn.
+#[trial]
+fn a_focus_asked_for_inside_a_sizing_pass_does_not_outlive_it() {
+    let raw = named_id("staged raw widget");
+    let mut frames = Frames::new();
+    let mut staged = |ui: &mut Ui| {
+        ui.scope_builder(UiBuilder::new().sizing_pass(), |ui| {
+            let rect = Rect::from_min_size(ui.next_widget_position(), Vec2::splat(10.0));
+            ui.interact(rect, raw, egui::Sense::click());
+            ui.ctx().memory_mut(|memory| memory.request_focus(raw));
+        });
+    };
+    frames.frame(vec![], &mut staged);
+    // egui spares the pass after a request, then drops a focus whose widget the pass did not register.
+    frames.frame(vec![], |_ui| {});
+    frames.frame(vec![], |_ui| {});
+    assert_eq!(craft_ui::testing::focus::egui_focused(&frames.ctx), None, "a sizing pass's raw widget keeps no focus past the pass after it");
+
+    // The real pass: the component's stop is registered each pass, and the focus it asked for holds.
+    let stop = named_id("staged component");
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        widget(ui, stop);
+        register_stop(ui.ctx(), Stop::new(stop, KeyUse::CANVAS));
+    };
+    frames.idle(2, &mut show);
+    request(&frames.ctx, FocusTarget::Id(stop));
+    frames.idle(3, &mut show);
+    assert!(is_focused(&frames.ctx, stop), "a stop of the real pass keeps the focus it asked for");
 }
