@@ -22,5 +22,6 @@ pub(crate) mod spelling;
 pub(crate) mod style_options;
 pub(crate) mod style_panel;
 pub(crate) mod tabs;
+pub(crate) mod type_bar;
 
 pub(crate) mod character;
