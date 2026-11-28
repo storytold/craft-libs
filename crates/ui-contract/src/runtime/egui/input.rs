@@ -860,6 +860,17 @@ pub(crate) fn plain_horizontal_arrow_pressed(ctx: &Context) -> bool {
     ctx.input(|input| input.modifiers.is_none() && (input.key_pressed(Key::ArrowLeft) || input.key_pressed(Key::ArrowRight)))
 }
 
+/// A Page Up or Page Down press whose own event carries no modifier. The frame's modifiers can already read as none
+/// when the modifier's release follows the Page in the same pass, so a modified Page is told by its event.
+pub(crate) fn plain_page_pressed(ctx: &Context) -> Option<Key> {
+    ctx.input(|input| {
+        input.events.iter().find_map(|event| match event {
+            Event::Key { key, pressed: true, modifiers, .. } if modifiers.is_none() && matches!(*key, Key::PageUp | Key::PageDown) => Some(*key),
+            _ => None,
+        })
+    })
+}
+
 /// An Up, Down, Page Up or Page Down press reached egui this pass.
 pub(crate) fn step_key_pressed(ctx: &Context) -> bool {
     ctx.input(|input| [Key::ArrowUp, Key::ArrowDown, Key::PageUp, Key::PageDown].into_iter().any(|key| input.key_pressed(key)))

@@ -6,7 +6,8 @@ use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing
 use craft_ui::layout_components::Stack;
 use craft_ui::testing::{Fixture, pointer, trial};
 use craft_ui::text::TextField;
-use egui::{Id, Key, Modifiers, Rect, Vec2};
+use craft_ui_contract::testing::input;
+use egui::{Event, Id, Key, Modifiers, Rect, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -300,6 +301,12 @@ fn a_bound_caret_moves_the_caret_and_follows_it() {
     fixture.key(Key::PageDown, Modifiers::COMMAND);
     fixture.idle(2);
     assert_eq!(caret.get(), 0, "a modified PageDown leaves the caret alone");
+
+    // The modifier's release can follow the Page in the same pass, so the pass reports no modifier held while the
+    // Page's own event still carries one: that Page was modified, whatever the frame reports.
+    fixture.frame(vec![input::key_press(Key::PageDown, Modifiers::COMMAND), Event::ModifiersChanged(Modifiers::NONE)]);
+    fixture.idle(2);
+    assert_eq!(caret.get(), 0, "a PageDown event carrying Cmd leaves the caret alone when the pass reports no modifier");
 }
 
 /// The clear part empties the field in the pass that takes its click: the field's node reads empty after that one pass,

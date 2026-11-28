@@ -459,16 +459,19 @@ fn arrows_from_end(ctx: &Context, widget: Id, len: usize) {
 
 /// `PageUp`/`PageDown` on a multiline field move its caret to the start or the end, as the framework's own text
 /// editor does. `takes` holds only for a plain Page on a focused multiline field with no list, completion, step
-/// value or live composition; every other part keeps its own Page behavior.
+/// value or live composition; every other part keeps its own Page behavior. The Page's own event must carry no
+/// modifier too: a released modifier can already read as none by the time the pass runs, with the Page still queued.
 fn page_keys(ctx: &Context, widget: Id, base: &str, takes: bool) {
     if !takes {
         return;
     }
-    if ctx.input(|i| i.key_pressed(egui::Key::PageUp)) {
-        select(ctx, widget, 0, 0);
-    } else if ctx.input(|i| i.key_pressed(egui::Key::PageDown)) {
-        let end = base.chars().count();
-        select(ctx, widget, end, end);
+    match egui_input::plain_page_pressed(ctx) {
+        Some(egui::Key::PageUp) => select(ctx, widget, 0, 0),
+        Some(egui::Key::PageDown) => {
+            let end = base.chars().count();
+            select(ctx, widget, end, end);
+        }
+        _ => {}
     }
 }
 
