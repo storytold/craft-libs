@@ -101,9 +101,13 @@ impl CanvasSpace {
         self.easing = false;
     }
 
-    /// Shows `shown`, part way to the target while a zoom eases, by the same rule as [`set_view`](Self::set_view).
+    /// Shows `shown`, part way to the target while a zoom eases: as it is, so the ease's anchor stays under its screen
+    /// point all the way, unless it is at a whole number of device pixels per document unit (shown [`pixel_aligned`]
+    /// then, as before).
     pub(crate) fn ease_through(&mut self, shown: CanvasView) {
-        self.view = self.on_screen(shown);
+        let ppp = f64::from(self.pixels_per_point);
+        let whole = |scale: f64| scale.is_finite() && scale.round() >= 1.0 && (scale - scale.round()).abs() <= 1e-5;
+        self.view = if whole(shown.zoom_x() * ppp) && whole(shown.zoom * ppp) { self.on_screen(shown) } else { shown };
         self.easing = true;
     }
 
@@ -304,9 +308,16 @@ impl CanvasSpace {
     }
 }
 
-/// `view` as the canvas shows it: at a whole number of device pixels per document unit on both axes, with no rotation,
-/// moved by less than half a device pixel so the document's pixel edges land on device pixel edges. Every other view is
-/// shown as it is. A canvas gives its displays, overlays and tools this view as [`CanvasSpace::view`]; the view the app
+/// `view` as the canvas shows it: with no rotation, moved by at most half a device pixel (a half goes up and left) so
+/// the document's origin lands on a device pixel edge, and at a whole number of device pixels per document unit every
+/// document pixel edge with it. The reference application keeps its canvas origin on whole pixels at every zoom
+/// (measured 2026-11-25: 158,188 at 100 % → 258,263 · 308,301 · 358,338 · 383,357 at 66.7, 50, 33.3 and 25 %, which a
+/// view's centre kept through the zoom steps and this rounding give); at 33.3 % a view shown as it is put the origin a
+/// third of a pixel off, so a press landed on another document point than the reference's. An origin half way between
+/// two pixels goes to the lower one: a 600 × 450 document centred in the reference's 833 × 643 view (from 42,92) starts
+/// at 158,188, not 159,189, and its 201 × 151 pixels at 33.3 % in a 1242 × 677 view (from 11,58) at 531,321 and in an
+/// 816 × 626 one (from 59,109) at 366,346. A turned view is shown as
+/// it is. A canvas gives its displays, overlays and tools this view as [`CanvasSpace::view`]; the view the app
 /// keeps stays as it was set, so the alignment never adds up into a pan. An app that maps through a view outside the
 /// canvas's pass maps through this one, to land where the canvas will draw.
 pub fn pixel_aligned(view: CanvasView, pixels_per_point: f32) -> CanvasView {
@@ -314,12 +325,8 @@ pub fn pixel_aligned(view: CanvasView, pixels_per_point: f32) -> CanvasView {
     if !(ppp.is_finite() && ppp > 0.0 && view.zoom.is_finite() && view.zoom > 0.0) || view.rotation.abs().is_nan() || view.rotation.abs() >= 1e-8 {
         return view;
     }
-    let whole = |scale: f64| scale.is_finite() && scale.round() >= 1.0 && (scale - scale.round()).abs() <= 1e-5;
-    if !(whole(view.zoom_x() * ppp) && whole(view.zoom * ppp)) {
-        return view;
-    }
     let origin = view.affine() * Point::ZERO;
-    let aligned = Point::new((origin.x * ppp).round() / ppp, (origin.y * ppp).round() / ppp);
+    let aligned = Point::new((origin.x * ppp - 0.5).ceil() / ppp, (origin.y * ppp - 0.5).ceil() / ppp);
     let shift = aligned - origin;
     let center = view.center - view.unmap_vec(Vec2::new(shift.x as f32, shift.y as f32));
     let mut shown = view;
