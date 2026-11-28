@@ -42,6 +42,7 @@ mod privacy;
 mod roundtrip;
 mod row_property_exceptions;
 mod run_props;
+mod section_exact_margins;
 mod section_form_protection;
 mod section_metadata_preservation;
 mod section_page_number_type;

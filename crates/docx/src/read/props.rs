@@ -810,9 +810,15 @@ pub fn sectpr(pc: &PropCtx, e: &El) -> (SectionProps, Vec<HfRef>) {
                 };
             }
             "w:pgMar" => {
-                let m = |n: &str, d: f32| tw(k, n).map(f32::abs).unwrap_or(d).min(s.page_w.max(s.page_h));
-                s.margin_top = m("w:top", s.margin_top);
-                s.margin_bottom = m("w:bottom", s.margin_bottom);
+                let side = s.page_w.max(s.page_h);
+                let m = |n: &str, d: f32| tw(k, n).map(f32::abs).unwrap_or(d).min(side);
+                // `w:top` and `w:bottom` are signed (ST_SignedTwipsMeasure): a negative one
+                // places the text at that distance from the page edge whatever the header
+                // (footer), which then overlaps it (ECMA-376 §17.6.11). The sign is the meaning,
+                // so it is kept, and the writer puts it back.
+                let signed = |n: &str, d: f32| tw(k, n).map_or(d, |v| v.clamp(-side, side));
+                s.margin_top = signed("w:top", s.margin_top);
+                s.margin_bottom = signed("w:bottom", s.margin_bottom);
                 s.margin_left = m("w:left", s.margin_left);
                 s.margin_right = m("w:right", s.margin_right);
                 s.header = m("w:header", s.header);

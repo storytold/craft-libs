@@ -201,12 +201,15 @@ fn sect_words(s: &craft_wordmodel::SectionProps) -> String {
     if s.landscape {
         o.push_str("\\lndscpsxn");
     }
+    // An exact (negative) top or bottom margin is written at its size: this reader keeps no
+    // exact margin and would drop a negative one, so the text keeps its distance from the edge
+    // and only the overlap with the header (footer) is lost, as in the ODF writer.
     o.push_str(&format!(
         "\\marglsxn{}\\margrsxn{}\\margtsxn{}\\margbsxn{}\\headery{}\\footery{}",
         tw(s.margin_left),
         tw(s.margin_right),
-        tw(s.margin_top),
-        tw(s.margin_bottom),
+        tw(s.margin_top.abs()),
+        tw(s.margin_bottom.abs()),
         tw(s.header),
         tw(s.footer)
     ));
@@ -980,8 +983,9 @@ fn export_with(m: &Meta, w: &Writer, body: &str, sec: &craft_wordmodel::SectionP
         tw(sec.page_h),
         tw(sec.margin_left),
         tw(sec.margin_right),
-        tw(sec.margin_top),
-        tw(sec.margin_bottom)
+        // At its size, as `sect_words` writes it.
+        tw(sec.margin_top.abs()),
+        tw(sec.margin_bottom.abs())
     ));
     out.push_str(body);
     out.push_str("}\n");
