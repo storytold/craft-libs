@@ -33,6 +33,7 @@ mod cid;
 mod generated;
 mod glyph_simulator;
 pub(crate) mod outline;
+pub(crate) mod facts;
 mod standard_font;
 mod true_type;
 mod type1;
@@ -67,6 +68,10 @@ pub(crate) fn strip_subset_prefix(name: &str) -> &str {
 use crate::util::hash128;
 use hayro_cmap::{BfString, CMap, CMapName, CharacterCollection};
 pub use outline::OutlineFontData;
+pub use cid::{CidFontProbe, CidProbeCache};
+#[doc(hidden)]
+pub use cid::built_cid_font_numbers;
+pub use facts::{FontFacts, FontKind, GlyphFacts, font_object_key};
 pub use standard_font::StandardFont;
 
 /// A glyph that can be drawn.
@@ -111,6 +116,47 @@ impl Glyph<'_> {
         match self {
             Glyph::Outline(g) => g.as_unicode(),
             Glyph::Type3(g) => g.as_unicode(),
+        }
+    }
+
+    /// PdfCraft patch (107): the kind of font the glyph comes from ([`FontFacts::kind`]),
+    /// without building its facts.
+    pub fn font_kind(&self) -> FontKind {
+        match self {
+            Glyph::Outline(g) => g.font.font_kind(),
+            Glyph::Type3(_) => FontKind::Type3,
+        }
+    }
+
+    /// PdfCraft patch (107): `f` called with what the glyph's font says about itself and what
+    /// the glyph says ([`FontFacts`], [`GlyphFacts`]), for readers that recover text the strict
+    /// reading ([`Self::as_unicode`]) can't name. The facts are borrowed for the call and cheap
+    /// to build: nothing is parsed or decoded.
+    pub fn with_facts<R>(&self, f: impl FnOnce(&FontFacts<'_>, &GlyphFacts<'_>) -> R) -> R {
+        match self {
+            Glyph::Outline(g) => g.font.with_facts(g.char_code, g.id, f),
+            Glyph::Type3(g) => g.font.with_facts(g.char_code, f),
+        }
+    }
+
+    /// PdfCraft patch (107): a key identifying the glyph's font: the key of the font object it
+    /// was read from when the page was read with
+    /// [`crate::InterpreterSettings::font_per_object`], so that two objects with the same
+    /// dictionary have two keys; otherwise the font's cache key, shared by objects with the
+    /// same dictionary.
+    pub fn font_key(&self) -> u128 {
+        match self {
+            Glyph::Outline(g) => g.font.font_key(),
+            Glyph::Type3(g) => g.font.font_key(),
+        }
+    }
+
+    /// PdfCraft patch (107): the cache key of the glyph's font, as
+    /// [`OutlineGlyph::font_cache_key`] gives it for outline fonts, for Type 3 fonts too.
+    pub fn font_cache_key(&self) -> u128 {
+        match self {
+            Glyph::Outline(g) => g.font_cache_key(),
+            Glyph::Type3(g) => g.font_cache_key(),
         }
     }
 }
@@ -253,6 +299,14 @@ impl<'a> Type3Glyph<'a> {
     }
 }
 
+impl Type3Glyph<'_> {
+    /// PdfCraft patch (107): a key identifying the glyph's font, as `OutlineGlyph::font_cache_key`
+    /// does for outline fonts (the recovered layer's budgets count fonts by it).
+    pub fn font_cache_key(&self) -> u128 {
+        self.font.cache_key()
+    }
+}
+
 impl CacheKey for Type3Glyph<'_> {
     fn cache_key(&self) -> u128 {
         hash128(&(self.font.cache_key(), self.glyph_id))
@@ -299,6 +353,18 @@ impl<'a> Font<'a> {
         let cache_key = dict.cache_key();
 
         Some(Self(cache_key, f_type))
+    }
+
+    /// PdfCraft patch (107): the key of the font object this font was built for
+    /// ([`Glyph::font_key`]), with [`crate::InterpreterSettings::font_per_object`].
+    pub(crate) fn set_object_key(&self, key: u128) {
+        let facts = match &self.1 {
+            FontType::Type1(t) => t.dict_facts(),
+            FontType::TrueType(t) => t.dict_facts(),
+            FontType::Type0(t) => t.dict_facts(),
+            FontType::Type3(t) => t.dict_facts(),
+        };
+        let _ = facts.object_key.set(key);
     }
 
     /// PdfCraft patch (90): whether this is a Type 3 font without `/Widths` (or
@@ -545,17 +611,28 @@ impl FontStretch {
 }
 
 bitflags! {
-    /// Bitflags describing various characteristics of fonts.
-    #[derive(Debug)]
-    pub(crate) struct FontFlags: u32 {
+    /// Bitflags describing various characteristics of fonts: a font descriptor's `/Flags`
+    /// (ISO 32000-2 §9.8.2, Table 121). PdfCraft patch (107): public, as
+    /// [`FontFacts::flags`] gives them.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct FontFlags: u32 {
+        /// All glyphs have the same width.
         const FIXED_PITCH = 1 << 0;
+        /// Glyphs have serifs.
         const SERIF = 1 << 1;
+        /// The font contains glyphs outside the Standard Latin character set.
         const SYMBOLIC = 1 << 2;
+        /// Glyphs resemble cursive handwriting.
         const SCRIPT = 1 << 3;
+        /// The font uses the Standard Latin character set or a subset of it.
         const NON_SYMBOLIC = 1 << 5;
+        /// Glyphs have dominant vertical strokes that are slanted.
         const ITALIC = 1 << 6;
+        /// The font contains no lowercase letters.
         const ALL_CAP = 1 << 16;
+        /// Lowercase letters are drawn as small capitals.
         const SMALL_CAP = 1 << 17;
+        /// Bold glyphs are painted with extra pixels even at very small sizes.
         const FORCE_BOLD = 1 << 18;
     }
 }
@@ -700,7 +777,10 @@ impl Default for FallbackFontQuery {
 /// Convert a glyph name to a Unicode character, if possible.
 /// An incomplete implementation of the Adobe Glyph List Specification
 /// <https://github.com/adobe-type-tools/agl-specification>
-pub(crate) fn glyph_name_to_unicode(name: &str) -> Option<char> {
+///
+/// PdfCraft patch (107): public, for readers that read glyph names in standard glyph orders
+/// as this crate reads names.
+pub fn glyph_name_to_unicode(name: &str) -> Option<char> {
     if let Some(unicode_str) = glyph_names::get(name) {
         return unicode_str.chars().next();
     }
@@ -760,7 +840,7 @@ pub(crate) fn glyph_name_to_text(name: &str) -> Option<BfString> {
 /// every split into letters and digits, read in decimal and in hexadecimal (`GA9` is `G` with
 /// hex `A9`); nothing for any other name. Everything from the first `.` is dropped first, as
 /// `glyph_name_to_text` drops it.
-fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
+pub fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
     let base = name.split('.').next().unwrap_or_default();
     (1..=3).flat_map(move |prefix| {
         // `from_str_radix` would also take a leading `+`: the number is digits only, and at
@@ -782,6 +862,24 @@ fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
     })
 }
 
+/// PdfCraft patch (107): the glyph name the Symbol font's built-in encoding (ISO 32000-2
+/// Annex D.5) gives `code`, as this crate reads it.
+pub fn symbol_encoding_name(code: u8) -> Option<&'static str> {
+    generated::symbol::get(code)
+}
+
+/// PdfCraft patch: whether a glyph name only numbers its glyph (see [`glyph_name_numbers`]): no
+/// reading through the glyph list or its `uni`/`u` forms, and one to three letters followed by
+/// one to six digits. Shared by `numbered_names_name_their_codes` and readers that recover
+/// text from such names (patch 107).
+pub fn is_numbered_glyph_name(name: &str) -> bool {
+    // The shape test first: it allocates nothing, and most names fail it.
+    glyph_name_numbers(name).next().is_some()
+        && glyph_names::get(name).is_none()
+        && unicode_from_name(name).is_none()
+        && glyph_name_to_text(name).is_none()
+}
+
 /// PdfCraft patch: whether every glyph name in a simple font's encoding that only numbers its
 /// glyph (see `glyph_name_numbers`) names the very code it sits at, in decimal or hexadecimal.
 /// Names the glyph list or its `uni`/`u` forms read are not numbered names. A font whose names
@@ -797,14 +895,9 @@ pub(crate) fn numbered_names_name_their_codes<'a>(
 ) -> bool {
     names
         .into_iter()
-        .filter(|(_, name)| {
-            glyph_names::get(name).is_none()
-                && unicode_from_name(name).is_none()
-                && glyph_name_to_text(name).is_none()
-        })
+        .filter(|(_, name)| is_numbered_glyph_name(name))
         .all(|(code, name)| {
-            let mut numbers = glyph_name_numbers(name).peekable();
-            numbers.peek().is_none() || (code >= 0x20 && numbers.any(|n| n == u32::from(code)))
+            code >= 0x20 && glyph_name_numbers(name).any(|n| n == u32::from(code))
         })
 }
 

@@ -61,6 +61,9 @@ pub use device::*;
 pub use function::Function;
 pub use hayro_cmap;
 pub use hayro_syntax;
+/// PdfCraft patch (107): the `skrifa` this crate reads fonts with, whose `FontRef` and `GlyphId`
+/// its font facts ([`font::FontFacts`]) and glyphs give.
+pub use skrifa;
 pub use interpret::*;
 pub use soft_mask::*;
 pub use types::*;

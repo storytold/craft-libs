@@ -154,6 +154,12 @@ pub struct InterpreterSettings {
     /// ([`hayro_syntax::MAX_PAGE_JBIG2_WORK`] by default). Images past it aren't drawn, nor images
     /// whose masks are past it, each with [`InterpreterWarning::ContentTruncated`].
     pub jbig2_work: u64,
+    /// PdfCraft patch (107): whether each font object is a font of its own in the page's font
+    /// cache, even beside another object with the same dictionary, so that
+    /// [`crate::font::Glyph::font_key`] tells them apart. Off (the default), objects with the
+    /// same dictionary share one font, as they draw the same; a reader that keeps decisions per
+    /// font object, from the glyphs each shows, turns it on.
+    pub font_per_object: bool,
 }
 
 impl Default for InterpreterSettings {
@@ -183,6 +189,7 @@ impl Default for InterpreterSettings {
             plate: None,
             ink_sink: None,
             jbig2_work: hayro_syntax::MAX_PAGE_JBIG2_WORK,
+            font_per_object: false,
         }
     }
 }
