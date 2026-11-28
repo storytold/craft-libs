@@ -345,7 +345,7 @@ Content runs in every pass, and its sizes come from this pass. Layouts also read
 
 ### 3.7 One egui revision
 
-`craft-libs` pins one revision of an egui fork for every egui crate (`[patch.crates-io]` in the root `Cargo.toml`). Two revisions in one build would give two incompatible `Tokens` and `Ui` types. `craft::egui_fork::{GIT, REV}` name the fork and revision, and `craft::egui_fork::check_lockfile` checks that an app's `Cargo.lock` takes every egui package from them; an app's `xtask` calls it. An app must also patch egui to the same fork, because `[patch]` applies only at the workspace root.
+`craft-libs` pins one revision of an egui fork for every egui crate (`[patch.crates-io]` in the root `Cargo.toml`). Two revisions in one build would give two incompatible `Tokens` and `Ui` types. `craft::egui_fork::{GIT, REV}` name the fork and revision, and `craft::egui_fork::check_lockfile` checks that an app's `Cargo.lock` takes every egui package from them; an app's `xtask` calls it. The egui revision's egui-winit calls `with_tool_window`, which only the pinned winit fork revision has, so `craft::egui_fork::{WINIT_GIT, WINIT_REV}` name that winit revision and `check_lockfile` checks winit too. An app must also patch egui and winit to the same forks, because `[patch]` applies only at the workspace root. An app that moves its egui pin without moving its winit pin fails to compile on Windows.
 
 **The fork.** The library pins `github.com/storytold/egui` branch `next` at `dcd4de1f`. That revision is the storytold egui fork's revision on craft-libs `main` (`6d518fc7`) plus 28 commits the framework needs:
 

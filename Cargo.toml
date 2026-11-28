@@ -338,6 +338,8 @@ egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev
 eframe = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
 egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
+# egui-winit at the egui rev above calls `with_tool_window`, which this winit rev adds. Move the two
+# pins together; craft::egui_fork::{WINIT_GIT, WINIT_REV} must equal this entry.
 winit = { git = "https://github.com/storytold/winit.git", rev = "2aa8330c41762d5c1249de1930be5a82ab49c0fb" }
 
 # symphonia's FLAC decoder restores LPC samples as `residual + (prediction as i32)`. In a valid
