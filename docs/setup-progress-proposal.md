@@ -87,9 +87,17 @@ network work. Use local diagnostic logs for the benchmark.
    custom bundle ID to catch accidental identity changes. Keep performance work
    separate and attach before/after measurements for each optimization.
 
-Prototype evidence in Windows Sandbox includes a clean per-user install of FigCraft
-0.18.1, repair of a missing executable and uninstall. Synthetic MSI cases covered
-upgrade, cancellation and rollback, removal and busy files. Repair of the official
-machine-wide install returned MSI 1603 at ProcessComponents in the prototype.
-Treat machine-wide repair as unqualified. Linux and macOS runtime and benchmark
-results are pending.
+Windows prototype evidence in Sandbox includes a clean per-user install of FigCraft
+0.18.1, repair of a missing executable and uninstall, plus a clean FilmCraft install
+and uninstall. The first machine-wide FigCraft repair returned MSI 1603 at
+ProcessComponents: Windows Installer looked for the original source filename
+during SecureRepair. After the prototype preserved that filename, a repair of
+FigCraft installed from the unrenamed release MSI kept the same machine scope,
+install path and executable hash. Removal then passed. Renamed source packages
+and elevation from a standard account still need coverage.
+
+Local Windows x64 candidates were built for 18 Craft Apps and the Launcher. All
+19 passed preflight verification of the embedded release package. Runtime
+qualification remains app-specific. Synthetic MSI cases covered upgrade,
+cancellation and rollback, removal and busy files. Linux and macOS runtime and
+benchmark results are pending.
