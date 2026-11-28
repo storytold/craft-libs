@@ -52,8 +52,8 @@
     "surface.panel": "#d3d8e0",
     "surface.sunken": "#e9ecf1",
     "text.disabled": "#7d8594",
-    "text.faint": "#7d8594",
-    "text.muted": "#4a5160",
+    "text.faint": "#474c56",
+    "text.muted": "#383d49",
     "text.normal": "#1b1f27"
   },
   "dark": {
@@ -77,8 +77,8 @@
     "surface.panel": "#272c36",
     "surface.sunken": "#1a1e26",
     "text.disabled": "#626b7a",
-    "text.faint": "#626b7a",
-    "text.muted": "#99a2b2",
+    "text.faint": "#b1b7c0",
+    "text.muted": "#c7ccd4",
     "text.normal": "#e4e9f1"
   }
 }

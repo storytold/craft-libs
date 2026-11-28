@@ -25,7 +25,7 @@
     "surface.background": "#f1f1f3",
     "surface.panel": "#ffffff",
     "surface.raised": "#ffffff",
-    "text.muted": "#5e5e66",
+    "text.muted": "#5d5d64",
     "text.normal": "#222226",
     "text.on_accent": "#ffffff"
   },
@@ -37,7 +37,7 @@
     "surface.background": "#19191c",
     "surface.panel": "#26262a",
     "surface.raised": "#2e2e33",
-    "text.muted": "#aeaeb6",
+    "text.muted": "#b7b7be",
     "text.normal": "#ececef",
     "text.on_accent": "#19191c"
   }
