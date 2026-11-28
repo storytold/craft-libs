@@ -8,8 +8,8 @@
 //! [`generate`] and [`generate_with`] return a complete cached fixture without calling the generator.
 //! Otherwise the generator writes a temporary sibling claimed by [`temp_path`], and [`publish`] moves it
 //! into place under a per-output lock, keeping a complete file that another process published first.
-//! A generator that fails skips with `SKIPPED (oracle): <reason>` on standard error, or fails the test
-//! when the required variable (default [`REQUIRE_VAR`]) is exactly `1`.
+//! A fixture that cannot be made skips or fails the test under the [`skip`](crate::skip) rule, with
+//! the required variable the caller names (default [`skip::REQUIRED_VAR`](crate::skip::REQUIRED_VAR)).
 //!
 //! [`report`] and [`generate_and_report`] print `FIXTURE made <name>`, `FIXTURE cached <name>` and
 //! `FIXTURE skipped <name>` lines, which FilmCraft's `cargo xtask fixtures` counts.
@@ -23,9 +23,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Default variable that overrides the fixtures root.
 pub const ROOT_VAR: &str = "CRAFT_FIXTURES_DIR";
-
-/// Default variable that turns a skipped fixture into a test failure when its value is exactly `1`.
-pub const REQUIRE_VAR: &str = "CRAFT_REQUIRE_ORACLES";
 
 /// Default number of bytes [`run_generator`] keeps from each of the child's output streams.
 pub const DEFAULT_MAX_OUTPUT: usize = 64 * 1024;
@@ -378,19 +375,26 @@ pub fn publish(tmp: &Path, out: &Path) -> io::Result<()> {
     result
 }
 
-/// Whether the variable `var` is set to exactly `1`.
-fn required(var: &str) -> bool {
-    std::env::var_os(var).is_some_and(|v| v == "1")
+/// What a fixture that cannot be made does: follow the [`skip`](crate::skip) rule for a variable, or
+/// skip or fail as the caller chose.
+#[derive(Clone, Copy)]
+enum Rule<'a> {
+    Var(&'a str),
+    Required(bool),
 }
 
-/// Print the skip line and return `None`, or fail the test when `rule` names the setting that
-/// forbids skipping.
+/// Print the skip line and return `None`, or fail the test, as `rule` says.
 #[allow(clippy::panic)]
-fn skip_or_fail<T>(rule: Option<&str>, reason: &str) -> Option<T> {
-    if let Some(rule) = rule {
-        panic!("oracle: {reason}, and {rule} forbids skipping oracle tests");
+fn skip_or_fail<T>(rule: Rule<'_>, reason: &str) -> Option<T> {
+    match rule {
+        Rule::Var(var) => {
+            crate::skip::skip(reason, var);
+        }
+        Rule::Required(true) => panic!("{reason}, and the caller requires this fixture"),
+        Rule::Required(false) => {
+            crate::skip::skip_with(false, reason, "");
+        }
     }
-    eprintln!("SKIPPED (oracle): {reason}");
     None
 }
 
@@ -401,32 +405,32 @@ fn skip_or_fail<T>(rule: Option<&str>, reason: &str) -> Option<T> {
 /// file. A generator that fails, panics, writes nothing or makes `out` name its temporary file leaves
 /// no temporary file behind, and that `out` is not returned. When it
 /// fails and another process has published a complete `out` in the meantime, that file is returned.
-/// Otherwise generation is skipped with `None` unless `required_var` (default [`REQUIRE_VAR`]) is
-/// exactly `1`. An `out` whose file name ends with `.fixture-lock` is skipped the same way without
-/// calling `make`.
+/// Otherwise [`skip::skip`](crate::skip::skip) decides with `required_var` (default
+/// [`skip::REQUIRED_VAR`](crate::skip::REQUIRED_VAR)): unset or empty prints `SKIPPED: <reason>`
+/// and returns `None`, `1` fails the test, and any other value fails the test as a configuration
+/// error. An `out` whose file name ends with `.fixture-lock` is handled the same way without calling
+/// `make`.
 ///
 /// # Panics
 ///
-/// Panics when the fixture cannot be made and the required variable is exactly `1`, and when `make`
-/// panics.
+/// Panics when the fixture cannot be made and the required variable is not unset or empty, and when
+/// `make` panics.
 pub fn generate(out: &Path, required_var: Option<&str>, make: impl FnOnce(&Path) -> bool) -> Option<PathBuf> {
-    let var = required_var.unwrap_or(REQUIRE_VAR);
-    let rule = required(var).then(|| format!("{var}=1"));
-    generate_inner(out, rule.as_deref(), make)
+    generate_inner(out, Rule::Var(required_var.unwrap_or(crate::skip::REQUIRED_VAR)), make)
 }
 
 /// [`generate`] with `required` given by the caller, so a test can choose it without changing the
-/// process environment. The required variable is not read: `true` fails the test even when it is
-/// unset, and `false` skips even when it is `1`.
+/// process environment. No variable is read: `true` fails the test, and `false` prints the skip line
+/// and returns `None`.
 ///
 /// # Panics
 ///
 /// Panics when the fixture cannot be made and `required` is `true`, and when `make` panics.
 pub fn generate_with(out: &Path, required: bool, make: impl FnOnce(&Path) -> bool) -> Option<PathBuf> {
-    generate_inner(out, required.then_some("a required fixture"), make)
+    generate_inner(out, Rule::Required(required), make)
 }
 
-fn generate_inner(out: &Path, rule: Option<&str>, make: impl FnOnce(&Path) -> bool) -> Option<PathBuf> {
+fn generate_inner(out: &Path, rule: Rule<'_>, make: impl FnOnce(&Path) -> bool) -> Option<PathBuf> {
     if let Err(e) = check_output_name(out) {
         return skip_or_fail(rule, &e.to_string());
     }
@@ -886,11 +890,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "forbids skipping oracle tests")]
     fn failed_generator_fails_when_required() {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("fixture");
-        generate_with(&out, true, |_| false);
+        let payload = std::panic::catch_unwind(|| generate_with(&out, true, |_| false)).unwrap_err();
+        let message = payload.downcast_ref::<String>().map(String::as_str).unwrap_or_default();
+        assert!(message.contains("the caller requires this fixture"), "{message:?}");
+        assert!(!out.exists());
     }
 
     #[test]
@@ -1078,10 +1084,17 @@ mod tests {
     }
 
     #[test]
-    fn required_variable_counts_only_when_exactly_one() {
-        for (value, fails) in
-            [(Some("1"), true), (Some("true"), false), (Some("yes"), false), (Some(" 1"), false), (Some("1 "), false), (None, false)]
-        {
+    fn required_variable_follows_the_skip_rule() {
+        for (value, fails) in [
+            (Some("1"), true),
+            (Some("0"), true),
+            (Some("true"), true),
+            (Some("yes"), true),
+            (Some(" 1"), true),
+            (Some("1 "), true),
+            (Some(""), false),
+            (None, false),
+        ] {
             let dir = tempfile::tempdir().unwrap();
             let mut cmd = probe_command("required");
             cmd.env(PROBE_DIR, dir.path());
@@ -1090,9 +1103,14 @@ mod tests {
             }
             let output = cmd.output().unwrap();
             assert_eq!(!output.status.success(), fails, "required value {value:?}: {output:?}");
-            if fails {
-                let text = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            let text = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            if value == Some("1") {
                 assert!(text.contains("CRAFT_TESTKIT_FIXTURES_PROBE_REQUIRED=1 forbids skipping"), "{output:?}");
+            } else if fails {
+                assert!(text.contains("CRAFT_TESTKIT_FIXTURES_PROBE_REQUIRED="), "{output:?}");
+                assert!(!text.contains("SKIPPED: "), "{output:?}");
+            } else {
+                assert!(text.contains("SKIPPED: fixture generator failed for "), "{output:?}");
             }
         }
     }
