@@ -110,6 +110,7 @@ mod spelling;
 pub mod tr;
 mod user_dict;
 pub mod vi;
+mod writing;
 
 use std::collections::HashSet;
 use std::ops::Range;
@@ -671,14 +672,22 @@ pub fn check_grammar_in(text: &str, lang: ProofLang) -> Vec<Issue> {
 /// [`check_grammar_in`] where `capital_first` says whether the first word must be capitalized
 /// (false for a list item).
 fn grammar_in(text: &str, lang: ProofLang, capital_first: bool) -> Vec<Issue> {
-    match lang {
+    let mut issues = match lang {
         ProofLang::En => grammar_en(text, capital_first),
         ProofLang::EnGb | ProofLang::EnAu | ProofLang::EnCa => grammar_en(text, capital_first).into_iter().map(|i| Issue { lang, ..i }).collect(),
         ProofLang::Pack(locale) if locale.primary() == "fr" => fr::grammar::check_in(text, lang),
         // `pt-pt` shares Portuguese's rules, its issues in its own language.
         _ => language(lang.built_in())
             .map_or_else(Vec::new, |l| (l.grammar)(text, lang, capital_first).into_iter().map(|i| Issue { lang, ..i }).collect()),
+    };
+    let extra = writing::check(text, lang);
+    for issue in extra {
+        if !issues.iter().any(|existing| existing.start < issue.end && issue.start < existing.end) {
+            issues.push(issue);
+        }
     }
+    issues.sort_by_key(|i| (i.start, i.end));
+    issues
 }
 
 /// Spelling and grammar issues in a paragraph whose text is in several languages, in order.
