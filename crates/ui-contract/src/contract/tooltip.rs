@@ -186,11 +186,11 @@ pub(crate) fn run(core: &super::CxCore<'_>, input: TipIn<'_>) {
     let (spec, rect, hovered, subject) = match &part {
         Some(part) => (Some(part.spec), part.rect, part.hovered || keyboard, Some(part.part)),
         // (a disabled root reports itself hovered by nothing, as egui's rule says, but it still explains itself: the
-        // pointer over it counts for the tooltip, and containment is what the root's own response carries)
+        // pointer over it counts for the tooltip, by the arena's hover of the root)
         None => (
             core.resolved.tooltip.map(Tooltip::spec),
             core.rect,
-            core.response.hovered() || (!core.response.enabled() && core.response.contains_pointer()) || keyboard,
+            core.response.hovered() || (!core.response.enabled() && crate::runtime::pointer::hovers(&core.ctx, core.id)) || keyboard,
             None,
         ),
     };
