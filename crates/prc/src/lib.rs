@@ -13,8 +13,9 @@
 //! Clause numbers in `[WD x.y]` refer to the PRC working draft, ISO/TC 171/SC 2 N570.
 //!
 //! Every read is bounded: inflation by [`MAX_INFLATED_BYTES`] (or a caller's limit), decoded
-//! array elements by [`MAX_DECODED_ELEMENTS`] and schema-program steps by [`MAX_SCHEMA_STEPS`]
-//! per reading pass, schema programs by a depth ceiling. Damaged data is an error, never a panic.
+//! array elements by [`MAX_DECODED_ELEMENTS`], schema-program steps by [`MAX_SCHEMA_STEPS`] and
+//! compressed-mesh search steps by [`MAX_REBUILD_STEPS`] per reading pass, schema programs by a
+//! depth ceiling. Damaged data is an error, never a panic.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -32,7 +33,7 @@ mod testw;
 mod tree;
 mod write;
 
-pub use bits::{BitReader, MAX_DECODED_ELEMENTS, MAX_SCHEMA_STEPS};
+pub use bits::{BitReader, MAX_DECODED_ELEMENTS, MAX_REBUILD_STEPS, MAX_SCHEMA_STEPS};
 pub use container::{FileStructure, MAX_FILE_STRUCTURES, MAX_INFLATED_BYTES, PRC_READER_VERSION, PrcFile, PrcHeader, SectionKind, UniqueId};
 pub use error::PrcError;
 pub use geometry::Matrix;

@@ -1,6 +1,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::cell::Cell;
+
 use super::*;
+
+/// A step allowance no test runs out of.
+pub(super) fn unlimited() -> &'static Cell<u64> {
+    Box::leak(Box::new(Cell::new(u64::MAX)))
+}
 
 const S: f64 = std::f64::consts::SQRT_2;
 
@@ -13,6 +20,9 @@ fn run(points: &[i64], status: &[i32], t: usize, is_ref: &[bool], refs: &[u32]) 
         triangles: t,
         is_reference: is_ref,
         references: refs,
+        normals: None,
+        ortho_turned: false,
+        steps: unlimited(),
         limit: usize::MAX,
     })
 }
@@ -50,6 +60,9 @@ fn a_walk_past_its_limit_stops() {
             triangles: 2,
             is_reference: &[false; 4],
             references: &[],
+            normals: None,
+            ortho_turned: false,
+            steps: unlimited(),
             limit,
         })
     };
@@ -60,9 +73,9 @@ fn a_walk_past_its_limit_stops() {
 /// The triangles reserved up front fit the limit too.
 #[test]
 fn the_walk_reserves_within_its_limit() {
-    assert!(Walk::new(1 << 20, 10).tris.capacity() < 1 << 20);
-    assert!(Walk::new(1 << 20, 10).tris.capacity() <= 5);
-    assert!(Walk::new(4, usize::MAX).tris.capacity() >= 4);
+    assert!(Walk::new(1 << 20, 10, None).tris.capacity() < 1 << 20);
+    assert!(Walk::new(1 << 20, 10, None).tris.capacity() <= 5);
+    assert!(Walk::new(4, usize::MAX, None).tris.capacity() >= 4);
 }
 
 /// Bit 0 alone continues across `[A C]`, keeping `W = B`.
@@ -171,8 +184,8 @@ fn length_and_unitize_follow_the_wd_pseudocode() {
 #[test]
 fn a_null_z_takes_the_ortho_rep_of_x() {
     let d = [1.0, 2.0, 3.0];
-    assert_eq!(apex([0.0; 3], [-2.0, 0.0, 0.0], [5.0, 0.0, 0.0], d), [0.0, -2.0, -3.0]);
-    assert_eq!(apex([0.0; 3], [0.0, -2.0, 0.0], [0.0, 5.0, 0.0], d), [-2.0, 0.0, 3.0]);
+    assert_eq!(apex([0.0; 3], [-2.0, 0.0, 0.0], [5.0, 0.0, 0.0], d, false, false).0, [0.0, -2.0, -3.0]);
+    assert_eq!(apex([0.0; 3], [0.0, -2.0, 0.0], [0.0, 5.0, 0.0], d, false, false).0, [-2.0, 0.0, 3.0]);
 }
 
 /// A degenerate frame is turned a half-turn about `X` when the sub-epsilon residue of
@@ -180,8 +193,8 @@ fn a_null_z_takes_the_ortho_rep_of_x() {
 #[test]
 fn a_degenerate_frame_follows_its_residue() {
     let (lo, hi, d) = ([0.0; 3], [-2.0, 0.0, 0.0], [1.0, 2.0, 3.0]);
-    assert_eq!(apex(lo, hi, [5.0, 1e-9, 0.0], d), [0.0, 2.0, 3.0]);
-    assert_eq!(apex(lo, hi, [5.0, -1e-9, 0.0], d), [0.0, -2.0, -3.0]);
+    assert_eq!(apex(lo, hi, [5.0, 1e-9, 0.0], d, false, false).0, [0.0, 2.0, 3.0]);
+    assert_eq!(apex(lo, hi, [5.0, -1e-9, 0.0], d, false, false).0, [0.0, -2.0, -3.0]);
 }
 
 /// A degenerate frame's `Y` comes from the frame's own `X`, whose length `unitize` left off by
@@ -195,7 +208,7 @@ fn a_degenerate_frame_takes_y_from_its_own_x() {
     let w = add(o, scale(x, 0.37));
     let d = [1.0, 2.0, 3.0];
     let z = make_ortho_rep_z(x).unwrap();
-    let p = apex(lo, hi, w, d);
+    let p = apex(lo, hi, w, d, false, false).0;
     let own = unitize(cross(z, x)).unwrap();
     let again = unitize(cross(z, unitize(x).unwrap())).unwrap();
     assert_ne!(own, again, "the probe must tell the two Ys apart");
@@ -287,6 +300,9 @@ fn a_strip_decodes_onto_the_encoders_working_mesh() {
         triangles: n - 2,
         is_reference: &vec![false; n],
         references: &[],
+        normals: None,
+        ortho_turned: false,
+        steps: unlimited(),
         limit: usize::MAX,
     })
     .unwrap();
@@ -297,3 +313,5 @@ fn a_strip_decodes_onto_the_encoders_working_mesh() {
         assert!(off < 0.87, "{off} tolerances off");
     }
 }
+
+mod oriented;
