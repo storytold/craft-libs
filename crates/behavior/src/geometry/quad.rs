@@ -76,13 +76,17 @@ pub enum TransformMode {
     /// Free Transform: every gesture by its keys.
     #[default]
     Free,
+    /// Corners and edges scale and the inside moves, as in Free Transform, but the outside does nothing and ⌘ adds
+    /// nothing to a corner or an edge (measured on the reference: no turn from outside, no distort).
+    Scale,
     /// Corners and edges turn the box about the reference point.
     Rotate,
     /// A corner moves alone along one of its edges; an edge slides along itself. No rotating.
     Skew,
     /// A corner moves alone; edges and the outside do nothing.
     Distort,
-    /// A corner moves along one axis and its partner on that side the opposite way.
+    /// A corner moves along one axis and its partner on that side the opposite way; an edge slides along itself, as in
+    /// Skew (measured on the reference). No rotating.
     Perspective,
 }
 
@@ -169,7 +173,7 @@ fn resolve_kind(mode: TransformMode, part: BoxPart, mods: Mods) -> BoxDrag {
     match (mode, part) {
         (TransformMode::Skew, BoxPart::Corner(i)) if i < 4 => BoxDrag::SlideCorner,
         (TransformMode::Rotate, BoxPart::Corner(_) | BoxPart::Edge(_)) => BoxDrag::Rotate,
-        (TransformMode::Skew, BoxPart::Edge(_)) => BoxDrag::Skew,
+        (TransformMode::Skew | TransformMode::Perspective, BoxPart::Edge(_)) => BoxDrag::Skew,
         _ => {
             let mods = mode_mods(mode, part, mods);
             match part {
@@ -211,6 +215,11 @@ pub struct BoxRules {
     /// far past its ends: a paragraph frame whose edges rewrap it. Inside the box the band reaches at most a quarter of
     /// the way across, so a narrow box keeps its middle. 0, the default, leaves each side its band outside the box.
     pub edge_band: f32,
+    /// Where a turn reads the pointer in the document, from the pointer's own document point: half a pixel up and
+    /// left at 100 %, as the reference application does; a host passes its view's reading
+    /// ([`CanvasView::pointer_offset`](crate::CanvasView::pointer_offset): the pointer itself along an axis the canvas
+    /// stretches, as at 33.3 %, measured 2026-11-25 on two turns there to 0.0001°).
+    pub turn_offset: Vec2,
 }
 
 /// Which handles of a box are shown.
@@ -237,6 +246,7 @@ impl Default for BoxRules {
             min_side: 0.0,
             handles: BoxHandles::default(),
             edge_band: 0.0,
+            turn_offset: TURN_POINTER_OFFSET,
         }
     }
 }
@@ -294,10 +304,16 @@ impl BoxRules {
         }
     }
 
+    /// The rules with `offset` as where a turn reads the pointer ([`turn_offset`](Self::turn_offset)).
+    pub fn with_turn_offset(mut self, offset: Vec2) -> BoxRules {
+        self.turn_offset = offset;
+        self
+    }
+
     /// The mode drags follow: a mode the content refuses scales as Free Transform does.
     pub fn effective_mode(&self) -> TransformMode {
         let refused = match self.mode {
-            TransformMode::Free => false,
+            TransformMode::Free | TransformMode::Scale => false,
             TransformMode::Rotate => !self.allow.rotate,
             TransformMode::Skew => !self.allow.skew,
             TransformMode::Distort | TransformMode::Perspective => !self.allow.distort,
@@ -306,13 +322,13 @@ impl BoxRules {
     }
 
     /// Whether a drag of `part` changes the box: in Distort only the corners, the inside and the
-    /// reference point; in Skew everything but the outside; the outside only where rotating is
-    /// allowed; and never a handle the box does not [show](Self::shows). A click outside a refused
+    /// reference point; in Skew, Scale and Perspective everything but the outside; the outside only where
+    /// rotating is allowed; and never a handle the box does not [show](Self::shows). A click outside a refused
     /// zone still applies the box (the overlay's rule).
     pub fn allows(&self, part: BoxPart) -> bool {
         let by_mode = match self.effective_mode() {
             TransformMode::Distort => !matches!(part, BoxPart::Outside | BoxPart::Edge(_)),
-            TransformMode::Skew => part != BoxPart::Outside,
+            TransformMode::Skew | TransformMode::Scale | TransformMode::Perspective => part != BoxPart::Outside,
             _ => true,
         };
         by_mode && (self.allow.rotate || part != BoxPart::Outside) && self.shows(part)
@@ -333,6 +349,11 @@ impl BoxRules {
             BoxPart::Edge(_) if !self.allow.skew => mods.cmd = false,
             _ => {}
         }
+        // In Scale ⌘ has no meaning of its own on a handle: it scales as the plain drag does, with the aspect link off
+        // too, so it is dropped before the scale rule reads the keys.
+        if self.effective_mode() == TransformMode::Scale && matches!(part, BoxPart::Corner(_) | BoxPart::Edge(_)) {
+            mods.cmd = false;
+        }
         match self.scale {
             ScaleRule::Shape => shape_mods(part, mods),
             ScaleRule::Corners => corners_mods(part, mods),
@@ -348,6 +369,14 @@ impl BoxRules {
     /// refuse the part ([`allows`](Self::allows)). [`drag`] acts on this kind.
     pub fn drag_kind(&self, part: BoxPart, mods: Mods) -> Option<BoxDrag> {
         self.allows(part).then(|| resolve_kind(self.effective_mode(), part, self.drag_modifiers(part, mods)))
+    }
+
+    /// Whether a drag of `part` with `mods` held (as the host has them) scales a corner or an edge keeping the box's
+    /// proportions.
+    pub fn keeps_proportions(&self, part: BoxPart, mods: Mods) -> bool {
+        matches!(part, BoxPart::Corner(_) | BoxPart::Edge(_))
+            && self.drag_kind(part, mods) == Some(BoxDrag::Scale)
+            && !self.drag_modifiers(part, mods).shift
     }
 }
 
@@ -412,6 +441,7 @@ fn unlinked_mods(unlinked: bool, legacy: bool, part: BoxPart, mut mods: Mods) ->
 fn mode_mods(mode: TransformMode, part: BoxPart, mut mods: Mods) -> Mods {
     match (mode, part) {
         (TransformMode::Distort, BoxPart::Corner(_)) => mods.cmd = true,
+        (TransformMode::Scale, BoxPart::Corner(_) | BoxPart::Edge(_)) => mods.cmd = false,
         (TransformMode::Perspective, BoxPart::Corner(_)) => {
             mods.cmd = true;
             mods.alt = true;
@@ -471,8 +501,8 @@ fn apply_mode_drag(g: &Gesture, p: Point, rules: &BoxRules, mut mods: Mods) -> B
             let g = Gesture { part: BoxPart::Outside, ..*g };
             apply_drag(&g, p, mods, rules)
         }
-        // An edge slides only along itself.
-        (BoxDrag::Skew, BoxPart::Edge(_)) if mode == TransformMode::Skew => {
+        // An edge slides only along itself, in Perspective as in Skew.
+        (BoxDrag::Skew, BoxPart::Edge(_)) if matches!(mode, TransformMode::Skew | TransformMode::Perspective) => {
             mods.cmd = true;
             mods.shift = true;
             apply_drag(g, p, mods, rules)
@@ -491,8 +521,9 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
         }
         BoxPart::Pivot => BoxState { quad: q0, pivot: p },
         BoxPart::Outside => {
-            let a0 = (g.start - c).atan2();
-            let a1 = (p - c).atan2();
+            // Both angles are read where the pointer acts in the document (the rules' turn offset).
+            let a0 = (g.start + rules.turn_offset - c).atan2();
+            let a1 = (p + rules.turn_offset - c).atan2();
             let mut da = a1 - a0;
             if mods.shift && rules.rotate_step > 0.0 {
                 // Snap the turn of this drag; the angle the box started at is kept.
@@ -503,33 +534,42 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
             BoxState { quad: q0.map(|q| turn * q), pivot: c }
         }
         BoxPart::Corner(i) if mods.cmd && mods.alt && mods.shift => {
-            // Perspective: the corner moves along the dominant axis and the corner sharing that
-            // side moves the opposite way.
+            // Perspective: the corner moves along one of its own two sides, whichever the drag mostly follows, by the
+            // drag's run along it, and the corner at that side's other end moves the opposite way (measured on the
+            // reference: on a turned box the corner keeps to the box's sides, not the document's axes; on a skewed
+            // box, 2026-11-25, the bottom-right corner dragged down went along the slanted right side, (452, 327) to
+            // (380, 489) for a drag of (-15, 189), the top-right corner up the same side; across the top edge it
+            // would have gone straight down). Nothing stops the two where they meet: the reference lets them pass
+            // through each other into an hourglass (2026-11-25: the top-left corner of a 302 × 202 box dragged
+            // 343.5 px right put the top corners at x 493.5 and 108.5, the box crossed).
             let i = usize::from(i) % 4;
-            let horizontal = d.x.abs() >= d.y.abs();
-            let j = match (i, horizontal) {
-                (0, true) => 1,
-                (1, true) => 0,
-                (2, true) => 3,
-                (3, true) => 2,
-                (0, false) => 3,
-                (3, false) => 0,
-                (1, false) => 2,
-                _ => 1,
+            // A side collapsed to a point has no direction: the top edge's (or level) stands in, and the line across it.
+            let top = q0[1] - q0[0];
+            let len = top.hypot();
+            let uh = if len.is_finite() && len > 1e-9 { top / len } else { Vec2::new(1.0, 0.0) };
+            let nh = Vec2::new(-uh.y, uh.x);
+            let run = |j: usize, fallback: Vec2| {
+                let e = q0[i] - q0[j];
+                let l = e.hypot();
+                let u = if l.is_finite() && l > 1e-9 { e / l } else { fallback };
+                u * d.dot(u)
             };
-            let m = if horizontal { Vec2::new(d.x, 0.0) } else { Vec2::new(0.0, d.y) };
+            // The neighbour along the top or bottom edge, and along the left or right one.
+            let (hn, vn) = ([1, 0, 3, 2][i], [3, 2, 1, 0][i]);
+            let (h, v) = (run(hn, uh), run(vn, nh));
+            let (m, j) = if h.hypot() >= v.hypot() { (h, hn) } else { (v, vn) };
             let mut q = q0;
             q[i] = q0[i] + m;
             q[j] = q0[j] - m;
-            let quad = keep_convex(q0, q);
-            BoxState { quad, pivot: carry_pivot(q0, quad, c) }
+            BoxState { quad: q, pivot: carry_pivot(q0, q, c) }
         }
         BoxPart::Corner(i) if mods.cmd => {
-            // Distort: the corner moves freely, up to where the box would fold over.
+            // Distort: the corner moves freely, past the diagonal into a concave box too (the reference application
+            // lets it, 2026-11-24: its wireframe follows the pointer; the picture shows the source until the box is
+            // convex again, and Enter on a concave box commits nothing).
             let mut q = q0;
             q[usize::from(i) % 4] += d;
-            let quad = keep_convex(q0, q);
-            BoxState { quad, pivot: carry_pivot(q0, quad, c) }
+            BoxState { quad: q, pivot: carry_pivot(q0, q, c) }
         }
         BoxPart::Edge(i) if mods.cmd => {
             // Skew: the edge's two corners move together (⇧: only along the edge); ⌥: the
@@ -556,18 +596,76 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
     }
 }
 
+/// Where a turn reads the pointer at 100 %, as the reference application does: half a document pixel up and left of
+/// it (measured on four turns of a 302 × 202 box, within 0.005°); the default [`BoxRules::turn_offset`].
+const TURN_POINTER_OFFSET: Vec2 = Vec2::new(-0.5, -0.5);
+
+/// A corner's handle, or an edge's: the middle between its two corners (on a box in perspective the reference
+/// application keeps that point of a dragged side on the pointer).
+fn handle_at(quad: [Point; 4], part: BoxPart) -> Option<Point> {
+    match part {
+        BoxPart::Corner(i) => quad.get(usize::from(i)).copied(),
+        BoxPart::Edge(i) => {
+            let i = usize::from(i) % 4;
+            Some(quad[i].midpoint(quad[(i + 1) % 4]))
+        }
+        _ => None,
+    }
+}
+
 /// A plain corner or edge drag: scaling in the box's own frame (the unit square through the
-/// homography), so rotated and skewed boxes scale along their axes. A proportional corner follows
-/// the pointer's projection on the diagonal, or the larger relative axis change when selected. Past the anchor
-/// the factor turns negative and the box flips. Each scaled side keeps at least `min_side`
-/// ([`scale_floor`]). `None` for a collapsed box.
+/// homography), so rotated and skewed boxes scale along their axes. The grabbed handle moves by the drag (a press
+/// beside it keeps its offset, as in the reference application). A proportional corner follows
+/// the pointer's projection on the line from the anchor to the corner, so a distorted box scales
+/// along its own diagonal, or the larger relative axis change when selected; past the anchor the factor turns
+/// negative and the box flips. Each scaled side keeps at least `min_side` ([`scale_floor`]). `None` for a collapsed
+/// box.
 fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64, larger_axis: bool) -> Option<BoxState> {
-    let p = match g.part {
-        BoxPart::Corner(i) => g.quad0[usize::from(i) % 4] + (p - g.start),
-        _ => p,
-    };
+    if !mods.shift
+        && !mods.alt
+        && let Some(kept) = side_run_scale(g, p, min_side)
+    {
+        return Some(kept);
+    }
+    if !mods.shift
+        && mods.alt
+        && let Some(centred) = centred_side_scale(g, p, min_side)
+    {
+        return Some(centred);
+    }
+    // An ⌥ corner keeping the proportions scales the box evenly about the reference point in document space, by the
+    // pointer's projection on the line from the reference point to the corner (measured on the reference, also on a box
+    // in perspective; on a parallelogram this is the frame scaling below).
+    if !mods.shift
+        && mods.alt
+        && !larger_axis
+        && let BoxPart::Corner(i) = g.part
+        && let Some(&corner) = g.quad0.get(usize::from(i))
+    {
+        let r = corner - g.pivot0;
+        let len2 = r.hypot2();
+        if len2 > 1e-12 {
+            let k = ((corner + (p - g.start)) - g.pivot0).dot(r) / len2;
+            let k = if k.is_finite() { k } else { 1.0 };
+            let k = k.max(scale_floor(&g.quad0, 0, min_side).max(scale_floor(&g.quad0, 1, min_side)));
+            let quad = g.quad0.map(|q| g.pivot0 + (q - g.pivot0) * k);
+            return quad.iter().all(|q| q.is_finite()).then_some(BoxState { quad, pivot: g.pivot0 });
+        }
+    }
+    if mods.shift
+        && mods.alt
+        && min_side <= 0.0
+        && let Some(stretched) = centred_stretch(g, p)
+    {
+        return Some(stretched);
+    }
     let h = Homography::unit_to_quad(g.quad0)?;
     let inv = h.inverse()?;
+    // The grabbed handle moves by the drag, so a press beside it keeps its offset from it.
+    let p = match handle_at(g.quad0, g.part) {
+        Some(at) => at + (p - g.start),
+        None => p,
+    };
     let Point { x: u, y: v } = inv.apply(p);
     let Point { x: pu, y: pv } = inv.apply(g.pivot0);
     // Which sides of the unit box move: (u = 0, u = 1) and (v = 0, v = 1).
@@ -642,6 +740,627 @@ fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64, larger_axis: boo
     Some(BoxState { quad, pivot })
 }
 
+/// A proportional edge drag on a skewed box or a box in perspective, as the reference application scales them
+/// (measured on its saved results). Along the top edge `u` and its normal `n`: the top edge scales by `k` about its
+/// middle, the left side keeps its run along `u` (a skew's offset, a perspective's inset) while its part along `n`
+/// scales by `k`, and the right side keeps its px offset from the left one; the opposite edge's middle holds, and the
+/// dragged edge's middle follows the pointer along the drag's axis. Where the dragged edge and the opposite one meet
+/// (a box in perspective) the dragged edge turns about its middle onto the line through that point, its corners on the
+/// edges beside it, then slide along it to second order ([`perspective_push`]); a side beside it left within 1 px of
+/// level is levelled ([`level_snap`]). On a plain or turned rectangle the sides have no run along `u` and this is the frame
+/// scaling below. Past the opposite edge the factor turns negative and the box flips along both axes, as on the
+/// reference (its top read backwards, its height upside down). `None` for a factor of zero or a collapsed box.
+fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
+    let BoxPart::Edge(edge) = g.part else { return None };
+    let [tl, tr, br, bl] = g.quad0;
+    let u = tr - tl;
+    let len = u.hypot();
+    if len.is_nan() || len <= 1e-9 {
+        return None;
+    }
+    let uh = u / len;
+    let mut nh = Vec2::new(-uh.y, uh.x);
+    let (left, right) = (bl - tl, br - tr);
+    if left.dot(nh) < 0.0 {
+        nh = -nh;
+    }
+    let (al, height) = (left.dot(uh), left.dot(nh));
+    if height.is_nan() || height <= 1e-9 {
+        return None;
+    }
+    let d = p - g.start;
+    let k = match edge {
+        0 => 1.0 - d.dot(nh) / height,
+        1 => 1.0 + d.dot(uh) / len,
+        2 => 1.0 + d.dot(nh) / height,
+        _ => 1.0 - d.dot(uh) / len,
+    };
+    if !(k.is_finite() && k.abs() > 1e-9) {
+        return None;
+    }
+    let k = k.max(scale_floor(&g.quad0, 0, min_side).max(scale_floor(&g.quad0, 1, min_side)));
+    // The right side keeps its offset from the left one in px (on a parallelogram it has none).
+    let (u2, left2) = (u * k, uh * al + nh * (height * k));
+    let right2 = left2 + (right - left);
+    let shape = [Point::ZERO, Point::ZERO + u2, Point::ZERO + u2 + right2, Point::ZERO + left2];
+    // The edge that holds, by its middle: the opposite one.
+    let middle = |q: &[Point; 4], a: usize, b: usize| q[a].midpoint(q[b]);
+    let (a, b) = match edge {
+        0 => (2, 3),
+        1 => (3, 0),
+        2 => (0, 1),
+        _ => (1, 2),
+    };
+    let shift = middle(&g.quad0, a, b) - middle(&shape, a, b);
+    let mut quad = shape.map(|c| c + shift);
+    // Where the dragged edge and the opposite one meet (a box in perspective), the dragged edge turns about its
+    // middle onto the line through that point; its corners stay on the lines of the edges beside it. Each dragged
+    // corner is paired with its neighbour on the opposite edge.
+    let ([d0, d1], [o0, o1]) = match edge {
+        0 => ([0, 1], [3, 2]),
+        1 => ([1, 2], [0, 3]),
+        2 => ([3, 2], [0, 1]),
+        _ => ([0, 3], [1, 2]),
+    };
+    let [q0, q1] = [g.quad0[d0], g.quad0[d1]];
+    if let Some(v) = crossing(q0, q1 - q0, g.quad0[o0], g.quad0[o1] - g.quad0[o0]) {
+        let offset = quad;
+        let mid = offset[d0].midpoint(offset[d1]);
+        let line = mid - v;
+        let c0 = crossing(offset[o0], offset[d0] - offset[o0], v, line);
+        let c1 = crossing(offset[o1], offset[d1] - offset[o1], v, line);
+        if let (Some(c0), Some(c1)) = (c0, c1) {
+            quad[d0] = c0;
+            quad[d1] = c1;
+            if let Some(pushed) = perspective_push(g.quad0, offset, quad, edge, [d0, d1], v, mid) {
+                quad = pushed;
+            }
+            level_snap(&mut quad, &g.quad0, [(o0, d0), (o1, d1)]);
+        }
+    }
+    quad.iter().all(|c| c.is_finite()).then(|| BoxState { quad, pivot: carry_pivot(g.quad0, quad, g.pivot0) })
+}
+
+/// The opposite side and the dragged corners of an ⌥ side drag on a box in perspective, by `k` about the reference
+/// point (in the top edge's frame, `uh` along it): the opposite side scales evenly and turns about its middle to a run
+/// of `r + (k - 1)(r - r') / 2` along the top edge (`r` its own run, `r'` the dragged side's; on a symmetric box that is
+/// the even scale's `k r`); the dragged corners keep the place along `uh` a plain drag gives them
+/// ([`side_run_scale`]) and move along `nh` to the opposite side's rows.
+fn turned_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec2, k: f64) -> Option<[Point; 4]> {
+    let BoxPart::Edge(edge) = g.part else { return None };
+    let (q, c) = (g.quad0, g.pivot0);
+    let (al, ar) = ((q[3] - q[0]).dot(uh), (q[2] - q[1]).dot(uh));
+    let mut out = q.map(|x| c + (x - c) * k);
+    let ([a0, a1], (run, other)) = if edge == 1 { ([0, 3], (al, ar)) } else { ([1, 2], (ar, al)) };
+    let (middle, across) = (out[a0].midpoint(out[a1]), (out[a1] - out[a0]).dot(nh));
+    let half = (uh * (run + (k - 1.0) * (run - other) / 2.0 + side_turn_lean(q, edge, uh) * (k * k - 1.0)) + nh * across) / 2.0;
+    (out[a0], out[a1]) = (middle - half, middle + half);
+    let plain = side_run_scale(g, p, min_side)?.quad;
+    for i in if edge == 1 { [1, 2] } else { [0, 3] } {
+        out[i] = c + uh * (plain[i] - c).dot(uh) + nh * (out[i] - c).dot(nh);
+    }
+    out.iter().all(|x| x.is_finite()).then_some(out)
+}
+
+/// An ⌥ side drag on a box whose top and bottom converge, fitted to the reference's results within 0.45 px where its
+/// sides are parallel or meet gently (7.5 px on a box narrowing hard both ways; the frame scaling was hundreds off):
+/// [`turned_side_scale`], then the top and bottom turn parallel to the top edge, `k H0` apart about the reference
+/// point's row, `H0` the dragged side's height plus the top and bottom's mean run across the frame. `k = 1 + d / r`,
+/// `r` the dragged side's middle's distance from the reference point along the top edge. `None` for a box this leaves
+/// without height.
+fn converging_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec2, len: f64) -> Option<BoxState> {
+    let BoxPart::Edge(edge) = g.part else { return None };
+    let c = g.pivot0;
+    let v = g.quad0.map(|x| (x - c).dot(nh));
+    if edge % 2 == 0 {
+        return converging_top_scale(g, p, uh, nh, len, min_side);
+    }
+    let [tl, tr, br, bl] = g.quad0;
+    let sign = if edge == 1 { 1.0 } else { -1.0 };
+    let reach = if edge == 1 { reach_to(c, across(tl, tr, bl, br), uh, tr, br) } else { reach_to(c, -across(tl, tr, bl, br), -uh, tl, bl) };
+    let k = 1.0 + sign * (p - g.start).dot(uh) / reach;
+    let k = side_factor_lean(g.quad0, edge, k);
+    // The opposite side and the height follow a factor eased by the box's slant ([`alt_spread`], as for a top or
+    // bottom drag), the more as the sides converge ([`top_weight_ratio`]); the dragged side stays where the plain drag
+    // puts it (measured on the reference, thirteen boxes).
+    let spread = alt_spread(g.quad0);
+    let k = if k.abs() > 1e-9 { k - 0.12 * spread * (k - 1.0) / k - 0.3 * spread * (top_weight_ratio(g.quad0) - 1.0) * (k - 1.0) } else { k };
+    let dragged = if edge == 1 { v[2] - v[1] } else { v[3] - v[0] };
+    let height = k * (dragged + ((v[1] - v[0]) + (v[2] - v[3])) / 2.0);
+    if !(reach.is_finite() && reach > 1e-9 && k.is_finite() && k > 0.0 && height.is_finite() && height > 1e-9) {
+        return None;
+    }
+    let mut quad = turned_side_scale(g, p, min_side, uh, nh, k)?;
+    // The rows centre on where the scale about the reference point takes the box's middle (its corners' mean), not on
+    // the reference point's own row (the two agree for a centred reference point).
+    let centre = k * (mean_of(g.quad0) - c).dot(nh);
+    for (i, row) in [(0, -height / 2.0), (1, -height / 2.0), (2, height / 2.0), (3, height / 2.0)] {
+        quad[i] = c + uh * (quad[i] - c).dot(uh) + nh * (row + centre);
+    }
+    quad.iter().all(|x| x.is_finite()).then_some(BoxState { quad, pivot: c })
+}
+
+/// An ⌥ top or bottom drag on a box whose top and bottom converge, within 0.35 px of the reference on boxes with
+/// parallel sides (1.3 px where they differ by 60 %, 1.4 px where the sides converge hard too; 0.23 px on average over
+/// 88 drags). The perspective side rule turned on its side, in the top edge's frame about the reference point: the box
+/// scales evenly by `k = 1 + d / r` (`r` the dragged edge's middle's distance from the reference point across the
+/// frame, eased by [`alt_spread`] and [`top_weight_ratio`]), the
+/// opposite edge turns about its middle to a run of `r + (k - 1)(r - r') / 2` across the frame, the dragged corners keep the place across the frame a plain drag
+/// gives them ([`side_run_scale`]); then the sides turn across the frame, `k (|top| ± m)` apart (`m` the sides' mean
+/// run along the frame, added for the bottom edge and taken off for the top one).
+fn converging_top_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64, min_side: f64) -> Option<BoxState> {
+    let BoxPart::Edge(edge) = g.part else { return None };
+    let [tl, tr, br, bl] = g.quad0;
+    let c = g.pivot0;
+    let f = g.quad0.map(|x| (x - c).dot(uh));
+    let v = g.quad0.map(|x| (x - c).dot(nh));
+    let sign = if edge == 2 { 1.0 } else { -1.0 };
+    let reach = if edge == 2 { reach_to(c, across(tl, bl, tr, br), nh, bl, br) } else { reach_to(c, -across(tl, bl, tr, br), -nh, tl, tr) };
+    let k = 1.0 + sign * (p - g.start).dot(nh) / reach;
+    // The box grows by a factor eased from the pointer's `k`: a bottom drag by less, a top drag by slightly more as
+    // the drag grows, by the box's slant (`spread`) and, where the sides converge, powers of the top's and the
+    // bottom's weight ratio: 2.2 on a bottom drag's even part and 1 on the part growing with the drag, 3 on a top drag
+    // (measured on the reference, nineteen boxes: within 1.1 px on a bottom drag, 0.25 px on average).
+    let spread = alt_spread(g.quad0);
+    let ratio = top_weight_ratio(g.quad0);
+    let k = if edge == 2 {
+        1.0 + (k - 1.0) * (1.0 - spread * (0.22 * ratio.powf(2.2) + 0.1 * ratio * (k - 1.0)))
+    } else {
+        1.0 + (k - 1.0) * (1.0 + 0.111 * spread * ratio * ratio * ratio * (k - 1.0))
+    };
+    let width = k * (len + sign * ((f[3] - f[0]) + (f[2] - f[1])) / 2.0);
+    if !(reach.is_finite() && reach > 1e-9 && k.is_finite() && k > 0.0 && width.is_finite() && width > 1e-9) {
+        return None;
+    }
+    let mut out = g.quad0.map(|x| c + (x - c) * k);
+    let (top_run, bottom_run) = (v[1] - v[0], v[2] - v[3]);
+    let ([a0, a1], (run, other)) = if edge == 2 { ([0, 1], (top_run, bottom_run)) } else { ([3, 2], (bottom_run, top_run)) };
+    let (middle, along) = (out[a0].midpoint(out[a1]), (out[a1] - out[a0]).dot(uh));
+    let share = 0.5 + if edge == 2 { -1.0 } else { 1.0 } * top_turn_lean(g.quad0) * (k + 1.0);
+    let half = (uh * along + nh * (run + (k - 1.0) * (run - other) * share)) / 2.0;
+    (out[a0], out[a1]) = (middle - half, middle + half);
+    let plain = side_run_scale(g, p, min_side)?.quad;
+    for i in if edge == 2 { [2, 3] } else { [0, 1] } {
+        out[i] = c + uh * (out[i] - c).dot(uh) + nh * (plain[i] - c).dot(nh);
+    }
+    // The columns centre on where the scale takes the box's middle, as the rows do for a side drag.
+    let centre = k * (mean_of(g.quad0) - c).dot(uh);
+    for (i, column) in [(0, -width / 2.0), (1, width / 2.0), (2, width / 2.0), (3, -width / 2.0)] {
+        out[i] = c + uh * (column + centre) + nh * (out[i] - c).dot(nh);
+    }
+    out.iter().all(|x| x.is_finite()).then_some(BoxState { quad: out, pivot: c })
+}
+
+/// The factor of an ⌥ side drag on a box converging both ways, from the pointer's `k`: `k - 1` grows (a left drag) or
+/// shrinks (a right one) by `0.28 ln(w_t / w_b) ln(w_r / w_l) (1 + 1.4 (k - 1))`, `w_*` the projective weights of the
+/// edges' middles. Measured on the reference, ten boxes, side drags from -80 to +80 px: their factor is then within
+/// 1 % under a level top and 2 % under a tilted one. `k` itself where either pair of edges is parallel, and for a degenerate box.
+fn side_factor_lean(q: [Point; 4], edge: u8, k: f64) -> f64 {
+    let (Some(wt), Some(wb), Some(wl), Some(wr)) =
+        (unit_weight(q, 0.5, 0.0), unit_weight(q, 0.5, 1.0), unit_weight(q, 0.0, 0.5), unit_weight(q, 1.0, 0.5))
+    else {
+        return k;
+    };
+    let lean = 0.28 * (wt / wb).ln() * (wr / wl).ln() * if edge == 3 { 1.0 } else { -1.0 };
+    let out = 1.0 + (k - 1.0) * (1.0 + lean * (1.0 + 1.4 * (k - 1.0)));
+    if out.is_finite() { out } else { k }
+}
+
+/// `w_t / w_b`, the projective weights of the top's and the bottom's middles: 1 where the sides are parallel, and for
+/// a degenerate box.
+fn top_weight_ratio(q: [Point; 4]) -> f64 {
+    match (unit_weight(q, 0.5, 0.0), unit_weight(q, 0.5, 1.0)) {
+        (Some(top), Some(bottom)) if (top / bottom).is_finite() && top / bottom > 0.0 => top / bottom,
+        _ => 1.0,
+    }
+}
+
+/// The projective weight of the unit square's point `(u, v)` in `q`, `None` for a degenerate box.
+fn unit_weight(q: [Point; 4], u: f64, v: f64) -> Option<f64> {
+    let [a, b, c] = Homography::unit_to_quad(q)?.row(2);
+    let w = a * u + b * v + c;
+    w.is_finite().then_some(w)
+}
+
+/// How far an ⌥ top or bottom drag on a box converging both ways moves the opposite edge's share of the turn off a
+/// half, per unit of `k + 1`: `(1 - w_b / w_t) / 4`, `w_t` and `w_b` the projective weights of the top's and the
+/// bottom's middles. The share is `1/2 + lean (k + 1)` for a top drag and `1/2 - lean (k + 1)` for a bottom one
+/// (measured on the reference, eight boxes, within 0.5 px). Zero where the sides are parallel, and for a degenerate box.
+fn top_turn_lean(q: [Point; 4]) -> f64 {
+    let lean = match (unit_weight(q, 0.5, 0.0), unit_weight(q, 0.5, 1.0)) {
+        (Some(top), Some(bottom)) => (1.0 - bottom / top) / 4.0,
+        _ => 0.0,
+    };
+    if lean.is_finite() { lean } else { 0.0 }
+}
+
+/// What an ⌥ side drag on a box converging both ways adds to the opposite side's run along `uh`, per unit of `k² - 1`:
+/// `± ln(w_r / w_l) / 4` times the two sides' difference of runs across their mean direction (`w_l`, `w_r` the
+/// projective weights of the left and right sides' middles; `+` for a right drag). Measured on the reference, eight
+/// boxes. Zero where the sides are parallel or the top and bottom are, and for a degenerate box.
+fn side_turn_lean(q: [Point; 4], edge: u8, uh: Vec2) -> f64 {
+    let [tl, tr, br, bl] = q;
+    let (left, right) = (bl - tl, br - tr);
+    let (ll, rl) = (left.hypot(), right.hypot());
+    let (Some(wl), Some(wr)) = (unit_weight(q, 0.0, 0.5), unit_weight(q, 1.0, 0.5)) else { return 0.0 };
+    if !(ll > 1e-9 && rl > 1e-9) {
+        return 0.0;
+    }
+    let d = left / ll + right / rl;
+    let mut n = Vec2::new(d.y, -d.x) / d.hypot();
+    if n.dot(uh) < 0.0 {
+        n = -n;
+    }
+    // The opposite side's run less the dragged one's, across the sides' mean direction.
+    let runs = if edge == 1 { left.dot(n) - right.dot(n) } else { right.dot(n) - left.dot(n) };
+    let lean = if edge == 1 { 1.0 } else { -1.0 } * (wr / wl).ln() / 4.0 * runs;
+    if lean.is_finite() { lean } else { 0.0 }
+}
+
+/// How much an ⌥ top or bottom drag eases its factor: `2 (W / H)² s_t (s_t - s_b)`, `s_t` and `s_b` the top's and the
+/// bottom's slopes against the normal of the sides' mean direction, `W` the top's width along that normal and `H` the
+/// longer side. Zero where the top is square to the sides, whatever the bottom does (as on the reference); for a
+/// symmetric box `(1 - r)²`, `r` the shorter side over the longer. Zero for a degenerate box.
+fn alt_spread(q: [Point; 4]) -> f64 {
+    let [tl, tr, br, bl] = q;
+    let (left, right) = (bl - tl, br - tr);
+    let (ll, rl) = (left.hypot(), right.hypot());
+    if !(ll > 1e-9 && rl > 1e-9) {
+        return 0.0;
+    }
+    let d = left / ll + right / rl;
+    let d = d / d.hypot();
+    let mut n = Vec2::new(d.y, -d.x);
+    let (top, bottom) = (tr - tl, br - bl);
+    if top.dot(n) < 0.0 {
+        n = -n;
+    }
+    let (wt, wb) = (top.dot(n), bottom.dot(n));
+    if !(wt.abs() > 1e-9 && wb.abs() > 1e-9) {
+        return 0.0;
+    }
+    let (st, sb) = (top.dot(d) / wt, bottom.dot(d) / wb);
+    let x = 2.0 * (wt / ll.max(rl)) * (wt / ll.max(rl)) * st * (st - sb);
+    if x.is_finite() { x } else { 0.0 }
+}
+
+/// An ⌥⇧ drag (free stretch about the reference point) as the reference does it, also on a box in perspective:
+/// - a corner scales the box about the reference point along the top edge's direction and across it, each by where
+///   the pointer is against where the corner was;
+/// - an edge goes where a ⇧ drag puts it (onto the box's line through the pointer, its corners on the edges beside
+///   it), and the opposite edge onto the line through the pointer mirrored about the reference point.
+///
+/// `None` for a collapsed box or a reference point on the dragged part's axis. Boxes with a minimum side (a text frame)
+/// keep the frame scaling, which holds that minimum.
+fn centred_stretch(g: &Gesture, p: Point) -> Option<BoxState> {
+    let (q, c) = (g.quad0, g.pivot0);
+    let d = p - g.start;
+    let quad = match g.part {
+        BoxPart::Corner(i) => {
+            let corner = *q.get(usize::from(i))?;
+            let top = q[1] - q[0];
+            let len = top.hypot();
+            if !(len.is_finite() && len > 1e-9) {
+                return None;
+            }
+            let uh = top / len;
+            let nh = Vec2::new(-uh.y, uh.x);
+            let (r, to) = (corner - c, corner + d - c);
+            let (ru, rv) = (r.dot(uh), r.dot(nh));
+            if ru.abs() <= 1e-9 || rv.abs() <= 1e-9 {
+                return None;
+            }
+            let (ku, kv) = (to.dot(uh) / ru, to.dot(nh) / rv);
+            q.map(|x| {
+                let x = x - c;
+                c + uh * (x.dot(uh) * ku) + nh * (x.dot(nh) * kv)
+            })
+        }
+        BoxPart::Edge(i) => {
+            let i = usize::from(i) % 4;
+            let h = Homography::unit_to_quad(q)?;
+            let inv = h.inverse()?;
+            let at = q[i].midpoint(q[(i + 1) % 4]) + d;
+            let (a, b) = (inv.apply(at), inv.apply(c + (c - at)));
+            let ([u0, u1], [v0, v1]) = match i {
+                0 => ([0.0, 1.0], [a.y, b.y]),
+                1 => ([b.x, a.x], [0.0, 1.0]),
+                2 => ([0.0, 1.0], [b.y, a.y]),
+                _ => ([a.x, b.x], [0.0, 1.0]),
+            };
+            let at = |u: f64, v: f64| h.apply(Point::new(u, v));
+            [at(u0, v0), at(u1, v0), at(u1, v1), at(u0, v1)]
+        }
+        _ => return None,
+    };
+    quad.iter().all(|x| x.is_finite()).then_some(BoxState { quad, pivot: c })
+}
+
+/// An ⌥ edge drag (both sides move, about the reference point) as the reference does it. A box whose top and bottom
+/// converge goes to [`converging_side_scale`] and [`converging_top_scale`]; for the others, in the frame of the top edge (`uh`
+/// along it, `nh` across), with `k = 1 + d / r`, `d` the drag along the edge's axis and `r` how far the dragged edge is
+/// from the reference point along it (half the box for a centred reference point):
+/// - a left or right edge, its side and the opposite one parallel: the side-run rule ([`side_run_scale`]) about the
+///   reference point, which keeps its place in the parallelogram;
+/// - a left or right edge, the sides meeting (a box in perspective): the opposite side scales evenly about the
+///   reference point, `r` measured to the dragged side's middle, and on an asymmetric box turns about its middle
+///   (its run along `uh` grows by `(k - 1)` times half the two sides' difference of runs); the dragged corners keep the
+///   place along `uh` a plain drag gives them ([`side_run_scale`]) and move along `nh` to the opposite side's rows;
+/// - a top or bottom edge: a rectangle in that frame, `k h` high (`h` the left side's part along `nh`) and
+///   `k (|top| ± m)` wide, `m` the sides' mean run along `uh`, added for the bottom edge and taken off for the top
+///   one, its centre the corners' mean scaled by `k` about the reference point.
+fn centred_side_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
+    let BoxPart::Edge(edge) = g.part else { return None };
+    let q = g.quad0;
+    let [tl, tr, br, bl] = q;
+    let u = tr - tl;
+    let len = u.hypot();
+    if !(len.is_finite() && len > 1e-9) {
+        return None;
+    }
+    let uh = u / len;
+    let mut nh = Vec2::new(-uh.y, uh.x);
+    let (left, right, bottom) = (bl - tl, br - tr, br - bl);
+    if left.dot(nh) < 0.0 {
+        nh = -nh;
+    }
+    let (al, ar, h) = (left.dot(uh), right.dot(uh), left.dot(nh));
+    if !(h.is_finite() && h > 1e-9) {
+        return None;
+    }
+    if uh.cross(bottom).abs() > 1e-9 * bottom.hypot() {
+        let at = |p: Point| converging_side_scale(g, p, min_side, uh, nh, len);
+        let scaled = at(p)?;
+        if keeps_min_side(&q, &scaled.quad, min_side) {
+            return Some(scaled);
+        }
+        // A host's minimum side: the drag stops where a side would go under it (found along the drag's travel; the
+        // fit turns the box's sides, so no one factor bounds them).
+        let (mut lo, mut hi) = (0.0f64, 1.0f64);
+        for _ in 0..40 {
+            let mid = (lo + hi) / 2.0;
+            if at(g.start + (p - g.start) * mid).is_some_and(|s| keeps_min_side(&q, &s.quad, min_side)) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        return at(g.start + (p - g.start) * lo).filter(|s| keeps_min_side(&q, &s.quad, min_side));
+    }
+    let c = g.pivot0;
+    let mean = Point::new(q.iter().map(|p| p.x).sum::<f64>() / 4.0, q.iter().map(|p| p.y).sum::<f64>() / 4.0);
+    let d = p - g.start;
+    let floor = scale_floor(&q, 0, min_side).max(scale_floor(&q, 1, min_side));
+    // The factor that carries the dragged edge by the drag's part `by` along its axis, from `reach` away from the
+    // reference point (half the box for a centred one).
+    let factor = |by: f64, reach: f64| {
+        let k = 1.0 + by / reach;
+        (reach.is_finite() && reach > 1e-9 && k.is_finite() && k > 0.0).then_some(k.max(floor))
+    };
+    let at = |du: f64, dv: f64, from: Point| from + uh * du + nh * dv;
+    let quad = match edge {
+        1 | 3 => {
+            let sign = if edge == 1 { 1.0 } else { -1.0 };
+            if crossing(tl, left, tr, right).is_none() {
+                // The reference point's place in the parallelogram: `tl + tau left + sigma u`.
+                let (r, den) = (c - tl, left.cross(u));
+                if den.abs() <= 1e-9 * left.hypot() * len {
+                    return None;
+                }
+                let (tau, sigma) = (r.cross(u) / den, left.cross(r) / den);
+                let reach = if edge == 1 { (1.0 - sigma) * len } else { sigma * len };
+                let k = factor(sign * d.dot(uh), reach)?;
+                let (u2, left2) = (u * k, uh * al + nh * (h * k));
+                let right2 = left2 + (right - left);
+                let origin = c - left2 * tau - u2 * sigma;
+                [origin, origin + u2, origin + u2 + right2, origin + left2]
+            } else {
+                let reach =
+                    if edge == 1 { reach_to(c, across(tl, tr, bl, br), uh, tr, br) } else { reach_to(c, -across(tl, tr, bl, br), -uh, tl, bl) };
+                let k = factor(sign * d.dot(uh), reach)?;
+                turned_side_scale(g, p, min_side, uh, nh, k)?
+            }
+        }
+        _ => {
+            let sign = if edge == 2 { 1.0 } else { -1.0 };
+            let reach = if edge == 2 { (bl - c).dot(nh) } else { (c - tl).dot(nh) };
+            let k = factor(sign * d.dot(nh), reach)?;
+            let (w, hh) = (k * (len + sign * (al + ar) / 2.0), k * h);
+            let centre = c + (mean - c) * k;
+            [at(-w / 2.0, -hh / 2.0, centre), at(w / 2.0, -hh / 2.0, centre), at(w / 2.0, hh / 2.0, centre), at(-w / 2.0, hh / 2.0, centre)]
+        }
+    };
+    // ⌥ scales about the reference point, so it stays put.
+    quad.iter().all(|c| c.is_finite()).then_some(BoxState { quad, pivot: g.pivot0 })
+}
+
+/// The second order of an edge drag on a box in perspective (measured on the reference): the dragged corners slide
+/// along the line through the vanishing point, each to where it meets the line from one centre through the
+/// offset box's corner.
+///
+/// In the start box's unit square, `s` runs across the drag from the anchored edge (0) to the dragged one (1) and `t`
+/// along them from the side the drag's factor is measured on (the top for a left or right edge, the left side for a
+/// top or bottom one). `rho` is how much nearer the vanishing point that side is than the other (the ratio of the
+/// map's weights). The centre lies on the row `t = rho² / (1 + rho²)`, where `s_m` is the dragged edge's middle across
+/// the start box: for a left or right edge in the start box's square, at `1 / s = 2 (1 + rho²)² / (1 + rho)³ ·
+/// (1 / s_m - 1)`; for a top or bottom edge in the square of the box from the first step (`first`), at
+/// `1 / s = (1 + rho³) / (1 + rho²) · (1 - s_m)`. For a side, far from the start both drift with `x = 1 / s_m - 1`:
+/// the row by `c (1 - c) ln rho (0.75 - 0.25 rho) x` and the factor before `x` by `2 c (1 - c) (ln rho)² x`
+/// (`c` the row), fitted on six boxes from rho 0.5 to 2.5 to within 4 px for sides shrunk to 30 % or doubled. With no
+/// drag the centre is the far point of that row and leaves the corners where they are. A push that would carry a
+/// corner further than twice the dragged edge (where the reference's own corners cross over) keeps the first step.
+fn perspective_push(
+    start: [Point; 4],
+    offset: [Point; 4],
+    first: [Point; 4],
+    edge: u8,
+    dragged: [usize; 2],
+    v: Point,
+    mid: Point,
+) -> Option<[Point; 4]> {
+    let centre = push_centre(start, first, edge, mid)?;
+    let homog = |p: Point| [p.x, p.y, 1.0];
+    let along = cross3(homog(v), homog(mid));
+    let mut out = first;
+    for i in dragged {
+        let p = cross3(cross3(centre, homog(offset[i])), along);
+        if p[2].abs() <= 1e-12 {
+            return None;
+        }
+        out[i] = Point::new(p[0] / p[2], p[1] / p[2]);
+    }
+    // A push past this is a runaway, so the first step stands; bottom drags on boxes in strong perspective move their
+    // corners several edge lengths on the reference.
+    let reach = first[dragged[0]].distance(first[dragged[1]]) * if edge == 2 { 6.0 } else { 2.0 };
+    (out.iter().all(|c| c.is_finite()) && dragged.iter().all(|&i| out[i].distance(first[i]) <= reach)).then_some(out)
+}
+
+/// The push's centre (homogeneous) for a drag of `edge` on `start` whose first step put the dragged edge's middle at
+/// `mid`; see [`perspective_push`].
+fn push_centre(start: [Point; 4], first: [Point; 4], edge: u8, mid: Point) -> Option<[f64; 3]> {
+    // (s, t, w) of the drag's frame as (u, v, w) of the unit square.
+    let unit = |s: f64, t: f64, w: f64| match edge {
+        1 => [s, t, w],
+        3 => [w - s, t, w],
+        2 => [t, s, w],
+        _ => [t, w - s, w],
+    };
+    let apply = |h: &Homography, p: [f64; 3]| [0, 1, 2].map(|i| h.row(i).iter().zip(p).map(|(a, b)| a * b).sum::<f64>());
+    let h = Homography::unit_to_quad(start)?;
+    let rho = apply(&h, unit(0.5, 0.0, 1.0))[2] / apply(&h, unit(0.5, 1.0, 1.0))[2];
+    if !(rho.is_finite() && rho > 0.0) {
+        return None;
+    }
+    let at = h.inverse()?.apply(mid);
+    let across = match edge {
+        1 => at.x,
+        3 => 1.0 - at.x,
+        2 => at.y,
+        _ => 1.0 - at.y,
+    };
+    if !(across.is_finite() && across.abs() > 1e-9) {
+        return None;
+    }
+    let r2 = rho * rho;
+    let row = r2 / (1.0 + r2);
+    let (x, lean) = (1.0 / across - 1.0, rho.ln());
+    let place = 2.0 * (1.0 + r2) * (1.0 + r2) / ((1.0 + rho) * (1.0 + rho) * (1.0 + rho));
+    let centre = if edge % 2 == 1 {
+        // Far from the start the centre drifts with `x = 1 / s_m - 1`, both ways by how far `rho` is from 1.
+        let spread = row * (1.0 - row);
+        let drift_row = spread * lean * (0.75 - 0.25 * rho);
+        let drift_place = 2.0 * spread * lean * lean;
+        // On a box whose top and bottom converge too (after a distort), `side` = ln of the opposite side's weight over
+        // the dragged side's: the row is that of `rho e^(side + side² - 0.31 side x)` and 1/s grows by
+        // `e^(-0.41 side + 0.87 side² + 1.23 side ln rho + 1.90 side² ln rho)` (fitted on nine such boxes; zero, and
+        // the law unchanged, where top and bottom are parallel).
+        let side = (apply(&h, unit(0.0, 0.5, 1.0))[2] / apply(&h, unit(1.0, 0.5, 1.0))[2]).ln();
+        let side = if side.is_finite() { side } else { 0.0 };
+        let turned = rho * (side + side * side - 0.31 * side * x).exp();
+        let row = turned * turned / (1.0 + turned * turned);
+        let grow = (-0.41 * side + 0.87 * side * side + 1.23 * side * lean + 1.90 * side * side * lean).exp();
+        // Past the opposite edge (x < -1, the middle flipped) the factor levels off at place * e^(-ln² rho / 2) and the
+        // row drifts further with 1 / s_m = x + 1 (measured on five boxes, rho 0.5 to 1.66).
+        // A shrink (x > 0) bends 1/s to `place * x / (1 - kappa x)`, kappa at least the linear law's slope and larger
+        // on boxes in strong perspective (measured on six boxes, rho 0.5 to 2.5). Homogeneous `(w, row * lam, lam)`.
+        let (w, lam, row) = if x < -1.0 {
+            let extra = drift_row * lean * lean * (0.8 - 0.3 * lean);
+            (1.0, place * (-lean * lean / 2.0).exp() * x * grow, row + drift_row * x + extra * (x + 1.0))
+        } else if x > 0.0 {
+            let strong = if lean > 0.0 { 0.3734 - 0.179 * lean } else { 0.4215 - 0.1735 * lean };
+            let kappa = (drift_place / place).max(lean * lean * strong);
+            (1.0 - kappa * x, place * x * grow, row + drift_row * x)
+        } else {
+            (1.0, (place + drift_place * x) * x * grow, row + drift_row * x)
+        };
+        apply(&h, unit(w, row * lam, lam))
+    } else if edge == 2 {
+        // A bottom drag, in the start box's frame: the centre's row sits at `frac` of the middle row in document
+        // units and drifts with `x` by a term odd in ln rho; its 1/s bends away from the side drags' `place * x` as x
+        // grows (fitted on the reference with boxes in perspective from rho 0.26 to 2.5).
+        let (frac, bend) = if rho <= 1.0 {
+            (0.5 - (1.0 - rho) * (1.0 - rho) / 4.0, lean * lean * (0.78 - 0.19 * lean))
+        } else {
+            let k = 1.0 - 1.0 / rho;
+            (0.5 + 0.47 * k * k, lean * lean * (0.80 - 0.12 * lean))
+        };
+        let t = frac * rho / (1.0 - frac + frac * rho) + 0.25 * lean / (1.0 + 0.25 * lean * lean) * x;
+        // On a box whose sides converge too, `sides` = ln of the top's weight over the bottom's: the centre moves
+        // toward where the sides meet, its homogeneous parts shifted by terms in `sides` and ln rho, proportional to
+        // x (fitted on nine such boxes; zero, and the law unchanged, where the sides are parallel).
+        let sides = (apply(&h, unit(0.0, 0.5, 1.0))[2] / apply(&h, unit(1.0, 0.5, 1.0))[2]).ln();
+        let sides = if sides.is_finite() { sides } else { 0.0 };
+        let terms = [sides, sides * sides, sides * lean, sides * sides * lean];
+        let mix = |c: [f64; 4]| c.iter().zip(terms).map(|(a, b)| a * b).sum::<f64>();
+        // Homogeneous, so a centre passing through infinity (1/s = 0) stays defined.
+        let lam = place * x + mix([-0.8687, -0.0958, 1.793, 3.4711]) * x;
+        let along = t * place * x + mix([-0.3803, -0.2691, -1.2324, 0.3666]) * x;
+        apply(&h, unit(1.0 - bend * x, along, lam))
+    } else {
+        let inv_s = (1.0 + r2 * rho) / (1.0 + r2) * (1.0 - across);
+        apply(&Homography::unit_to_quad(first)?, unit(1.0, row * inv_s, inv_s))
+    };
+    Some(centre)
+}
+
+/// The reference levels a side beside the dragged edge that a drag in perspective leaves less than 1 px from level (or
+/// plumb), if it was level (or plumb) at the press: both its corners go to their mean.
+fn level_snap(quad: &mut [Point; 4], start: &[Point; 4], sides: [(usize, usize); 2]) {
+    for (a, b) in sides {
+        if start[a].y == start[b].y && (quad[b].y - quad[a].y).abs() < 1.0 {
+            let y = (quad[a].y + quad[b].y) / 2.0;
+            (quad[a].y, quad[b].y) = (y, y);
+        }
+        if start[a].x == start[b].x && (quad[b].x - quad[a].x).abs() < 1.0 {
+            let x = (quad[a].x + quad[b].x) / 2.0;
+            (quad[a].x, quad[b].x) = (x, x);
+        }
+    }
+}
+
+/// How far an ⌥ drag's dragged edge is from the reference point `c`, measured along `axis`: the reference goes from
+/// `c` along `dir` (the mean direction of the two edges beside the dragged one) to the dragged edge's line through
+/// `a` and `b`. For a centred reference point on a box with straight edges beside it, that is the edge's middle; where
+/// `dir` runs along the edge, the edge's middle.
+fn reach_to(c: Point, dir: Vec2, axis: Vec2, a: Point, b: Point) -> f64 {
+    let along = b - a;
+    let den = dir.cross(along);
+    if den.abs() > 1e-9 * along.hypot() * dir.hypot() { (a - c).cross(along) / den * dir.dot(axis) } else { (a.midpoint(b) - c).dot(axis) }
+}
+
+/// The mean direction, as a unit vector, of the edges from `a0` to `a1` and from `b0` to `b1` (each normalised first);
+/// zero for a degenerate pair.
+fn across(a0: Point, a1: Point, b0: Point, b1: Point) -> Vec2 {
+    let (a, b) = (a1 - a0, b1 - b0);
+    let (la, lb) = (a.hypot(), b.hypot());
+    if !(la > 1e-12 && lb > 1e-12) {
+        return Vec2::ZERO;
+    }
+    let d = a / la + b / lb;
+    let l = d.hypot();
+    if l > 1e-12 { d / l } else { Vec2::ZERO }
+}
+
+/// The mean of a quad's corners.
+fn mean_of(q: [Point; 4]) -> Point {
+    Point::new((q[0].x + q[1].x + q[2].x + q[3].x) / 4.0, (q[0].y + q[1].y + q[2].y + q[3].y) / 4.0)
+}
+
+/// The cross product of two homogeneous points or lines: the line through two points, or where two lines meet.
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+/// Where the line through `p` along `dp` crosses the one through `q` along `dq`; `None` for (nearly) parallel lines.
+fn crossing(p: Point, dp: Vec2, q: Point, dq: Vec2) -> Option<Point> {
+    let den = dp.cross(dq);
+    if den.abs() <= 1e-9 * dp.hypot() * dq.hypot() {
+        return None;
+    }
+    let at = p + dp * ((q - p).cross(dq) / den);
+    at.is_finite().then_some(at)
+}
+
 /// The smallest factor a scale drag may give `quad`'s `axis` (0: u, 1: v) so its sides along that
 /// axis keep `min_side`: `min_side` over the shorter of the two (for u the edges 0–1 and 3–2, for
 /// v 1–2 and 0–3), since the shorter one reaches the minimum first. At most 1, so a side already
@@ -659,6 +1378,16 @@ fn scale_floor(quad: &[Point; 4], axis: usize, min_side: f64) -> f64 {
     f64::NEG_INFINITY
 }
 
+/// Whether every side of `quad` keeps `min_side`, or its length in `quad0` where that was shorter already (the floor
+/// [`scale_floor`] gives a side); always with no minimum.
+fn keeps_min_side(quad0: &[Point; 4], quad: &[Point; 4], min_side: f64) -> bool {
+    min_side <= 0.0
+        || (0..4).all(|k| {
+            let side = |q: &[Point; 4]| (q[(k + 1) % 4] - q[k]).hypot();
+            side(quad) >= min_side.min(side(quad0)) - 1e-9
+        })
+}
+
 /// The turn at each corner of a quad: all of one sign for a convex quad, mixed for a concave or
 /// self-intersecting one.
 fn turns(q: &[Point; 4]) -> [f64; 4] {
@@ -670,7 +1399,7 @@ fn convex(q: &[Point; 4], sign: f64, min_turn: f64) -> bool {
     turns(q).iter().all(|t| t * sign > min_turn)
 }
 
-/// Distort and Perspective stop a corner where the box would turn concave or fold over itself:
+/// A Skew corner slide stops the corner where the box would turn concave or fold over itself:
 /// the result goes from `from` towards `to` as far as the quad stays convex. A box that is not
 /// convex to begin with is left free.
 fn keep_convex(from: [Point; 4], to: [Point; 4]) -> [Point; 4] {
@@ -695,12 +1424,57 @@ fn keep_convex(from: [Point; 4], to: [Point; 4]) -> [Point; 4] {
 }
 
 /// Where the reference point lands when the box goes from `quad0` to `quad`: the same place within
-/// the box. A box that has collapsed leaves it where it was.
+/// the box, read bilinearly between the corners (the reference's: a centred reference point stays
+/// at the corners' mean on a box in perspective; on a parallelogram this is the affine place). A
+/// box that has collapsed leaves it where it was.
 fn carry_pivot(quad0: [Point; 4], quad: [Point; 4], pivot0: Point) -> Point {
     let (Some(h0), Some(h1)) = (Homography::unit_to_quad(quad0), Homography::unit_to_quad(quad)) else { return pivot0 };
     let Some(inv) = h0.inverse() else { return pivot0 };
-    let p = h1.apply(inv.apply(pivot0));
-    if p.is_finite() { p } else { pivot0 }
+    let projective = inv.apply(pivot0);
+    // A reference point with no place read between the corners (far outside a box in perspective) keeps its
+    // projective place, through the projective map: a drag back to the press then puts it back.
+    let p = match bilinear_inverse(quad0, pivot0, projective) {
+        Some(at) => bilinear(quad, at),
+        None => h1.apply(projective),
+    };
+    if p.is_finite() {
+        p
+    } else {
+        let p = h1.apply(projective);
+        if p.is_finite() { p } else { pivot0 }
+    }
+}
+
+/// The point at `(u, v)` of the unit square spread bilinearly over `q`'s corners.
+fn bilinear(q: [Point; 4], at: Point) -> Point {
+    let (u, v) = (at.x, at.y);
+    let top = q[0].lerp(q[1], u);
+    let bottom = q[3].lerp(q[2], u);
+    top.lerp(bottom, v)
+}
+
+/// The `(u, v)` that [`bilinear`] takes to `p` on `q`, by Newton's method from `guess`; `None` where it does not
+/// settle (a folded box).
+fn bilinear_inverse(q: [Point; 4], p: Point, guess: Point) -> Option<Point> {
+    let mut at = if guess.is_finite() { guess } else { Point::new(0.5, 0.5) };
+    for _ in 0..16 {
+        let (u, v) = (at.x, at.y);
+        let r = bilinear(q, at) - p;
+        if r.hypot() < 1e-10 {
+            return Some(at);
+        }
+        let du = (q[1] - q[0]) * (1.0 - v) + (q[2] - q[3]) * v;
+        let dv = (q[3] - q[0]) * (1.0 - u) + (q[2] - q[1]) * u;
+        let det = du.cross(dv);
+        if !(det.is_finite() && det.abs() > 1e-12) {
+            return None;
+        }
+        at = Point::new(u - r.cross(dv) / det, v - du.cross(r) / det);
+        if !at.is_finite() {
+            return None;
+        }
+    }
+    (bilinear(q, at).distance(p) < 1e-6).then_some(at)
 }
 
 /// `v`, kept off zero with its sign: a divisor for a W or H scale that may be negative.

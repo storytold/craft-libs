@@ -1018,11 +1018,11 @@ impl MemoProps for craft_behavior::IconId {
 
 /// Derived `Hash` (`#[non_exhaustive]`).
 /// Every field (`#[non_exhaustive]`, so a field added later is listed here by hand): the screen rect, the document
-/// point at its centre, the zoom, the turn, the mirror and the pixel aspect.
+/// point at its centre, the zoom, the turn, the mirror, the pixel aspect and the stretch.
 impl MemoProps for craft_behavior::canvas::CanvasView {
     fn key(&self, key: &mut MemoKey) {
         self.rect.key(key);
-        for value in [self.center.x, self.center.y, self.zoom, self.rotation, self.aspect] {
+        for value in [self.center.x, self.center.y, self.zoom, self.rotation, self.aspect, self.stretch[0], self.stretch[1]] {
             value.key(key);
         }
         self.flip_x.key(key);

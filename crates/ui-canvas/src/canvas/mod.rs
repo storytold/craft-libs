@@ -29,7 +29,7 @@ pub use crate::canvas_data::{Guide, GuideColor, GuideDrag, GuideKey, GuideLine, 
 pub use craft_behavior::{FRAME_STEP_MAX, frame_step};
 pub use crop::{CropApply, CropOutside, CropOverlay, CropOverlayOutput, CropScope, CropShield, CropStyle, ShieldColor, paint_outside};
 pub(crate) use march::{MARCH_SECONDS, MARCH_TICK, march_shift};
-pub use readout::{ShowReadouts, hud, readout};
+pub use readout::{ReadoutSide, ShowReadouts, hud, readout, readout_on};
 pub use space::{CanvasSpace, RulerText, canvas_space, pixel_aligned, ruler_guide, with_canvas_space};
 pub use words::CanvasWords;
 

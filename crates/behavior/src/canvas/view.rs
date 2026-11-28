@@ -31,12 +31,17 @@ pub struct CanvasView {
     pub flip_x: bool,
     /// Width over height of a document unit on screen (PhotoCraft's pixel aspect); 1 is square.
     pub aspect: f64,
+    /// Screen points per document unit along the document's x and y axes over `zoom` (and `aspect`): [1, 1] unless
+    /// the host draws the document over whole device pixels (PhotoCraft's canvas takes `ceil(size × zoom)` pixels
+    /// per axis and maps the pointer over them, as its reference application does), when each axis shows that share.
+    /// `zoom` stays the nominal zoom the ladder, the zoom field and `fit` work with.
+    pub stretch: [f64; 2],
 }
 
 impl CanvasView {
     /// An upright, unmirrored, square-pixel view of `rect` showing `center` at `zoom`.
     pub fn new(rect: ScreenRect, center: Point, zoom: f64) -> Self {
-        Self { rect, center, zoom, rotation: 0.0, flip_x: false, aspect: 1.0 }
+        Self { rect, center, zoom, rotation: 0.0, flip_x: false, aspect: 1.0, stretch: [1.0, 1.0] }
     }
 
     /// The same view turned `degrees` clockwise.
@@ -60,6 +65,13 @@ impl CanvasView {
         self
     }
 
+    /// The same view with the document drawn `stretch` times its zoom along x and y ([`stretch`](Self::stretch)).
+    #[must_use]
+    pub const fn stretch(mut self, stretch: [f64; 2]) -> Self {
+        self.stretch = stretch;
+        self
+    }
+
     /// `zoom` for a view that shows `device_zoom` device pixels per document unit at
     /// `pixels_per_point`: 1 shows one document pixel per device pixel at any interface scale. A scale that is not a
     /// positive number counts as 1.
@@ -71,6 +83,24 @@ impl CanvasView {
     /// `aspect`, or 1 when it is not a positive number.
     fn sx(&self) -> f64 {
         if self.aspect.is_finite() && self.aspect > 0.0 { self.aspect } else { 1.0 }
+    }
+
+    /// Where the reference application reads the pointer in the document, from the document point under it: half a
+    /// document pixel up and left along an axis the canvas draws at its nominal zoom, and the point itself along an
+    /// axis it stretches over whole device pixels ([`stretch`](Self::stretch) not 1). Measured 2026-11-25 with Warp
+    /// anchor drags on a 600 × 450 document: at 100 % the anchor lands half a pixel up and left of the pointer, at
+    /// 66.7 and 33.3 % (both axes stretched) and on the stretched axis at 25 % on the pointer's own point, to 1e-6.
+    /// Along an unstretched axis at 50 and 25 % the reference read further back (half a screen pixel); kept at half a
+    /// document pixel there until that is probed on its own.
+    pub fn pointer_offset(&self) -> Vec2 {
+        let off = |k: f64| if (k - 1.0).abs() > 1e-9 { 0.0 } else { -0.5 };
+        let [kx, ky] = self.stretched();
+        Vec2::new(off(kx), off(ky))
+    }
+
+    /// `stretch`, each axis 1 when it is not a positive number.
+    fn stretched(&self) -> [f64; 2] {
+        self.stretch.map(|k| if k.is_finite() && k > 0.0 { k } else { 1.0 })
     }
 
     /// Cosine and sine of the rotation, exact at quarter turns so an upright or quarter-turned
@@ -98,10 +128,11 @@ impl CanvasView {
     /// The linear part of [`affine`](Self::affine): stretch, rotate, zoom, flip.
     fn linear(&self) -> [f64; 4] {
         let (c, s) = self.sincos();
-        let (sx, z) = (self.sx(), self.zoom);
+        let [kx, ky] = self.stretched();
+        let (sx, zx, zy) = (self.sx(), self.zoom * kx, self.zoom * ky);
         let f = if self.flip_x { -1.0 } else { 1.0 };
         // Columns of the matrix: the images of the document's x and y unit vectors.
-        [f * c * sx * z, s * sx * z, -f * s * z, c * z]
+        [f * c * sx * zx, s * sx * zx, -f * s * zy, c * zy]
     }
 
     /// Document to screen points.
@@ -132,14 +163,15 @@ impl CanvasView {
     /// The document vector a screen vector shows: the inverse of [`map_vec`](Self::map_vec).
     pub fn unmap_vec(&self, v: ScreenVec) -> Vec2 {
         let (c, s) = self.sincos();
-        let (x, y) = (f64::from(v.x) / self.zoom, f64::from(v.y) / self.zoom);
-        let x = if self.flip_x { -x } else { x };
-        Vec2::new((x * c + y * s) / self.sx(), -x * s + y * c)
+        let [kx, ky] = self.stretched();
+        let x = if self.flip_x { -f64::from(v.x) } else { f64::from(v.x) };
+        let y = f64::from(v.y);
+        Vec2::new((x * c + y * s) / (self.sx() * kx * self.zoom), (-x * s + y * c) / (ky * self.zoom))
     }
 
-    /// Screen points per document unit along the document's x axis: `zoom × aspect`.
+    /// Screen points per document unit along the document's x axis: `zoom × aspect`, stretched.
     pub fn zoom_x(&self) -> f64 {
-        self.zoom * self.sx()
+        self.zoom * self.sx() * self.stretched()[0]
     }
 
     /// The screen size of the box that holds document rect `r` at the view's zoom, rotation,
@@ -169,15 +201,15 @@ impl CanvasView {
     /// A screen distance in document units along the document's y axis (divide by
     /// [`zoom_x`](Self::zoom_x) for its x axis).
     pub fn doc_len(&self, points: f32) -> f64 {
-        f64::from(points) / self.zoom
+        f64::from(points) / (self.zoom * self.stretched()[1])
     }
 
     /// The transform a canvas body is shown through when this view only scales and moves the document: unturned,
-    /// unmirrored and square. `None` for any other view; its controls register parts in screen space through
-    /// [`to_screen`](Self::to_screen) instead.
+    /// unmirrored, square and unstretched. `None` for any other view; its controls register parts in screen space
+    /// through [`to_screen`](Self::to_screen) instead.
     pub fn layer_transform(&self) -> Option<CanvasTransform> {
         let (cos, sin) = self.sincos();
-        let upright = cos == 1.0 && sin == 0.0 && !self.flip_x && self.sx() == 1.0;
+        let upright = cos == 1.0 && sin == 0.0 && !self.flip_x && self.sx() == 1.0 && self.stretched() == [1.0, 1.0];
         if !upright {
             return None;
         }

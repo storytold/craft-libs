@@ -19,6 +19,8 @@ pub struct Snap {
     targets: Arc<SnapTargets>,
     options: SnapOptions,
     tolerance: Option<f64>,
+    /// The snapping distance at the view's zoom alone, without the stretch of a canvas shown over whole pixels.
+    zoom_reach: Option<f64>,
     os: Platform,
     whole_pixels: bool,
 }
@@ -50,7 +52,7 @@ impl GestureSnap {
 impl Snap {
     /// The snapping over `targets` with `options`; the tolerance is set by the canvas each pass.
     pub fn new(targets: Arc<SnapTargets>, options: SnapOptions) -> Self {
-        Snap { targets, options, tolerance: None, os: Platform::current(), whole_pixels: false }
+        Snap { targets, options, tolerance: None, zoom_reach: None, os: Platform::current(), whole_pixels: false }
     }
 
     /// This snap rounding every point it gives to whole document units when `on`: the pixel grid for drawn points and
@@ -103,6 +105,19 @@ impl Snap {
         }
     }
 
+    /// The offset that moves `anchors`, the points of one rigid shape, so the nearest of them meets a target of a kind
+    /// in `kinds` on each axis, with the lines to draw ([`SnapTargets::snap_anchors_of`]); zero when snapping is off.
+    ///
+    /// An anchor snaps from closer than [`SNAP_PX`] screen points at the view's zoom, the stretch of a canvas shown
+    /// over whole pixels left out: the reference application holds a box 23.9 document units from a line at a third
+    /// (8 of its screen pixels there, the canvas 201 px wide for 600) and lets go of one 8 units away at 100 %.
+    pub fn anchors_of(&self, anchors: &[Point], mods: Mods, kinds: craft_behavior::geometry::SnapKinds) -> (Vec2, Vec<SnapLine>) {
+        match self.reach(mods, false).and(self.zoom_reach) {
+            Some(reach) => self.targets.snap_anchors_of(anchors, reach, kinds),
+            None => (Vec2::ZERO, Vec::new()),
+        }
+    }
+
     /// The snapping distance in document units for this pass, or `None` when snapping is off, the canvas has not given
     /// this snap its pass (`at`) or the suspend key suspends it (unless `reads_key`): the one gate of
     /// `apply`, `point` and `rect`, and the reach a gesture's snapped lines were found with.
@@ -118,6 +133,7 @@ impl Snap {
     /// This snap with its tolerance for `view` and the OS set.
     pub(super) fn at(mut self, view: &CanvasView, os: Platform) -> Self {
         self.tolerance = Some(view.doc_len(SNAP_PX as f32));
+        self.zoom_reach = Some(SNAP_PX / view.zoom).filter(|reach| reach.is_finite() && *reach > 0.0);
         self.os = os;
         self
     }
@@ -128,6 +144,7 @@ impl PartialEq for Snap {
         Arc::ptr_eq(&self.targets, &other.targets)
             && self.options == other.options
             && self.tolerance == other.tolerance
+            && self.zoom_reach == other.zoom_reach
             && self.os == other.os
             && self.whole_pixels == other.whole_pixels
     }

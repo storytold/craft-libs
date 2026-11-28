@@ -20,6 +20,33 @@ fn a_moving_rect_snaps_its_nearest_edge_or_centre() {
     assert!(lines.is_empty());
 }
 
+/// A rigid shape snaps by its anchors (a transform box moved from inside: its corners and centre), not by the bounds
+/// around them: a corner inside the bounds lands on a line, a point that is no anchor (the middle of a slanted side)
+/// does not. From closer than the reach only: an anchor exactly the reach away stays.
+#[test]
+fn a_moved_shape_snaps_by_its_anchors_from_closer_than_the_reach() {
+    let mut targets = SnapTargets::new();
+    targets.add(guide(Axis::X, 225.0));
+    // A slanted box and its centre: the top-right corner (y 221) lies inside the bounds (y 161..423).
+    let slanted = [Point::new(190.0, 161.0), Point::new(492.0, 221.0), Point::new(492.0, 423.0), Point::new(190.0, 363.0), Point::new(341.0, 292.0)];
+    let (offset, lines) = targets.snap_anchors_of(&slanted, 8.0, SnapKinds::ALL);
+    assert_eq!(offset, Vec2::new(0.0, 4.0), "the corner inside the bounds lands on the line");
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].position, 225.0);
+    // 101 up, the middle of the slanted right side is at 221 and no anchor is near the line.
+    let up = slanted.map(|p| p + Vec2::new(0.0, -101.0));
+    assert_eq!(targets.snap_anchors_of(&up, 8.0, SnapKinds::ALL), (Vec2::ZERO, Vec::new()));
+    // 64 up, only the centre is near the line, 3 below it.
+    let centred = slanted.map(|p| p + Vec2::new(0.0, -64.0));
+    let (offset, lines) = targets.snap_anchors_of(&centred, 8.0, SnapKinds::ALL);
+    assert_eq!((offset, lines.len()), (Vec2::new(0.0, -3.0), 1), "the centre snaps as a corner does");
+    let pair = |y: f64| [Point::new(0.0, y), Point::new(10.0, y - 100.0)];
+    assert_eq!(targets.snap_anchors_of(&pair(233.0), 8.0, SnapKinds::ALL).0, Vec2::ZERO, "exactly the reach away stays");
+    assert_eq!(targets.snap_anchors_of(&pair(232.0), 8.0, SnapKinds::ALL).0, Vec2::new(0.0, -7.0));
+    assert_eq!(targets.snap_anchors_of(&pair(232.0), 8.0, SnapKinds::only(SnapKind::Grid)).0, Vec2::ZERO, "the kinds left out do not snap");
+    assert_eq!(targets.snap_anchors_of(&[], 8.0, SnapKinds::ALL), (Vec2::ZERO, Vec::new()));
+}
+
 #[test]
 fn a_moving_rect_skips_the_kinds_left_out() {
     let mut targets = SnapTargets::new();

@@ -327,3 +327,22 @@ fn the_position_first_link_stands_between_the_width_and_height_rows() {
         assert!((link.center().y - middle).abs() <= 1.0, "the link is centred across the two rows: {dump}");
     }
 }
+
+/// A box whose corners lean a hair from upright (the arithmetic of a box carried through a move) shows its skew as
+/// "0", not "-0".
+#[trial]
+fn a_skew_that_rounds_to_zero_shows_as_zero_not_minus_zero() {
+    // The bottom corners a trillionth of a unit aside, the way that reads a negative skew.
+    let leaned = |dx: f64| {
+        let mut state = BoxState::from_rect(START);
+        state.quad[2].x += dx;
+        state.quad[3].x += dx;
+        state
+    };
+    let negative = |state: &BoxState| state.parts(START, 0.0).skew_h < 0.0;
+    let state = if negative(&leaned(1e-12)) { leaned(1e-12) } else { leaned(-1e-12) };
+    assert!(negative(&state), "the box leans the negative way: {:?}", state.parts(START, 0.0));
+    let h = harness_of(TransformRow::new(state, 0.0), plain());
+    let field = h.target("Horizontal skew");
+    assert_eq!(h.fixture.tree().value_of(field.node), Some("0 °"));
+}
