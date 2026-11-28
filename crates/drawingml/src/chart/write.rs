@@ -1587,6 +1587,74 @@ mod tests {
         let back = crate::chart::read::read_chart_xml(&super::chart_xml(&chart).0).unwrap();
         assert_eq!(back.axis_label(false, 0.5), "0.5");
     }
+
+    #[test]
+    fn review_6096658774_series_formats_survive_rebuild_without_freezing_label_visibility() {
+        for enabled in [true, false] {
+            let mut groups = String::new();
+            let mut axes = String::new();
+            let expected_options = [None, Some(false), Some(true), None, Some(false), Some(true)];
+            let expected_formats = ["0%", "General", "0.00", "0%", "General", "0.00"];
+            for (category, value, pos) in [(1, 2, "l"), (3, 4, "r")] {
+                let first = if category == 1 { 0 } else { 3 };
+                groups.push_str(r#"<c:barChart><c:barDir val="col"/><c:grouping val="percentStacked"/>"#);
+                for offset in 0..3 {
+                    let i = first + offset;
+                    let show = expected_options[i].map(|v| format!(r#"<c:dLbls><c:showVal val="{}"/></c:dLbls>"#, if v { 1 } else { 0 })).unwrap_or_default();
+                    let format = expected_formats[i];
+                    groups.push_str(&format!(r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:tx><c:v>Series{i}</c:v></c:tx>{show}<c:cat><c:strLit><c:pt idx="0"><c:v>x</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:formatCode>{format}</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>0.5</c:v></c:pt></c:numLit></c:val></c:ser>"#));
+                }
+                // Omit the group setting when off, so None really means inheritance rather
+                // than the reader's established explicit-group-false projection.
+                if enabled { groups.push_str(r#"<c:dLbls><c:showVal val="1"/></c:dLbls>"#); }
+                groups.push_str(&format!(r#"<c:axId val="{category}"/><c:axId val="{value}"/></c:barChart>"#));
+                axes.push_str(&format!(r#"<c:catAx><c:axId val="{category}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="b"/><c:crossAx val="{value}"/></c:catAx><c:valAx><c:axId val="{value}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="{pos}"/><c:crossAx val="{category}"/></c:valAx>"#));
+            }
+            let xml = format!(r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea>{groups}{axes}</c:plotArea></c:chart></c:chartSpace>"#);
+            let mut chart = crate::chart::read::read_chart_xml(xml.as_bytes()).unwrap();
+            assert_eq!(chart.kind, ChartType::PercentColumn);
+            assert_eq!(chart.data_labels, enabled);
+            assert_eq!(chart.series.iter().map(|s| s.data_labels).collect::<Vec<_>>(), expected_options);
+            assert_eq!(chart.series.iter().map(|s| s.number_format.as_deref()).collect::<Vec<_>>(), expected_formats.map(Some));
+            let labels: Vec<_> = chart.series.iter().map(|s| chart.data_label(s, 0.5)).collect();
+            assert_eq!(labels, ["50%", "0.5", "0.50", "50%", "0.5", "0.50"]);
+            let shown: Vec<_> = chart.series.iter().map(|s| chart.series_data_labels(s)).collect();
+            assert!(super::chart_xml(&chart).1);
+            chart.title = Some("Only the title changed".into());
+            let (written, kept) = super::chart_xml(&chart);
+            assert!(!kept, "the title edit must exercise the rebuilding writer");
+            let mut back = crate::chart::read::read_chart_xml(&written).unwrap();
+            assert_eq!(back.series.iter().map(|s| back.data_label(s, 0.5)).collect::<Vec<_>>(), labels);
+            assert_eq!(back.series.iter().map(|s| s.number_format.as_deref()).collect::<Vec<_>>(), expected_formats.map(Some));
+            assert_eq!(back.series.iter().map(|s| s.data_labels).collect::<Vec<_>>(), expected_options, "a format must not freeze inherited visibility into an explicit bool");
+            assert_eq!(back.data_labels, enabled);
+            assert_eq!(back.series.iter().map(|s| back.series_data_labels(s)).collect::<Vec<_>>(), shown);
+            assert_eq!(back.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, false, false, true, true, true]);
+            assert_eq!(back.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(), chart.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>());
+            for secondary in [false, true] { assert_eq!(back.axis_label(secondary, 0.5), chart.axis_label(secondary, 0.5)); }
+            for chart_wide in [false, true] {
+                back.data_labels = chart_wide;
+                for (s, original) in back.series.iter().zip(expected_options) {
+                    assert_eq!(back.series_data_labels(s), original.unwrap_or(chart_wide));
+                }
+            }
+            let root = crate::xmlx::parse(&written).unwrap();
+            let pa = root.path(&[craft_xml::Local("chart"), craft_xml::Local("plotArea")]).unwrap();
+            for (i, ser) in pa.children(craft_xml::Local("barChart")).flat_map(|g| g.children(craft_xml::Local("ser"))).enumerate() {
+                let labels = ser.child(craft_xml::Local("dLbls")).unwrap();
+                let format = labels.child(craft_xml::Local("numFmt")).unwrap();
+                assert_eq!(format.attr_local("formatCode"), Some(expected_formats[i]));
+                assert_eq!(format.attr_local("sourceLinked"), Some("0"));
+                let show = labels.child(craft_xml::Local("showVal")).and_then(|e| e.attr_local("val"));
+                assert_eq!(show, expected_options[i].map(|v| if v { "1" } else { "0" }));
+                let children: Vec<_> = labels.elements().map(|e| e.local()).collect();
+                if let Some(tx) = children.iter().position(|n| *n == "txPr") {
+                    assert!(children.iter().position(|n| *n == "numFmt").unwrap() < tx);
+                }
+            }
+        }
+    }
+
 }
 
 #[cfg(test)]
