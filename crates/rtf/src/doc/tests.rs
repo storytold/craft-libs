@@ -2047,6 +2047,15 @@ fn distributed_alignment_round_trips() {
 }
 
 #[test]
+fn thai_distributed_exports_as_justified() {
+    let mut p = craft_wordmodel::Paragraph::with_text("ภาษาไทย", Default::default());
+    p.props.align = Some(Align::ThaiDistribute);
+    let mut doc = Document::new();
+    doc.body = vec![craft_wordmodel::para_block(p)];
+    assert!(export(&doc).contains("\\qj"));
+}
+
+#[test]
 fn table_cell_vertical_alignment() {
     let rtf = br"{\rtf1\ansi\trowd\clvertalt\cellx1000\clvertalc\cellx2000\clvertalb\cellx3000\intbl top\cell center\cell bottom\cell\row}";
     let doc = import(rtf).unwrap();

@@ -46,6 +46,71 @@ fn doc_with(blocks: Vec<Paragraph>) -> Document {
     d
 }
 
+#[test]
+fn thai_and_regular_distributed_alignments_remain_distinct() {
+    let mut thai = Paragraph::with_text("ภาษาไทย", CharProps::default());
+    thai.props.align = Some(Align::ThaiDistribute);
+    let mut regular = Paragraph::with_text("English", CharProps::default());
+    regular.props.align = Some(Align::Distribute);
+    let mut doc = doc_with(vec![thai, regular]);
+    Arc::make_mut(&mut doc.styles).upsert(Style {
+        id: "ThaiStyle".into(),
+        name: "Thai Style".into(),
+        kind: StyleKind::Paragraph,
+        para: ParaProps { align: Some(Align::ThaiDistribute), ..Default::default() },
+        ..Default::default()
+    });
+    let bytes = craft_docx::write(&doc).expect("write");
+
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains("w:val=\"thaiDistribute\""));
+    assert!(xml.contains("w:val=\"distribute\""));
+
+    let reopened = craft_docx::read(&bytes).expect("read");
+    let paragraphs = paras(&reopened);
+    assert_eq!(paragraphs[0].props.align, Some(Align::ThaiDistribute));
+    assert_eq!(paragraphs[1].props.align, Some(Align::Distribute));
+    assert_eq!(reopened.styles.get("ThaiStyle").unwrap().para.align, Some(Align::ThaiDistribute));
+}
+
+#[test]
+fn numbering_level_alignments_round_trip() {
+    use craft_wordmodel::numbering::{AbstractNum, Level, Num};
+
+    let mut doc = Document::new();
+    let numbering = Arc::make_mut(&mut doc.numbering);
+    numbering.abstracts.push(AbstractNum {
+        id: 1,
+        levels: [Align::Left, Align::Center, Align::Right, Align::Justify, Align::Distribute, Align::ThaiDistribute]
+            .into_iter()
+            .map(|align| Level { align, ..Default::default() })
+            .collect(),
+        ..Default::default()
+    });
+    numbering.nums.push(Num {
+        id: 1,
+        abstract_id: 1,
+        level_overrides: vec![(0, Level { align: Align::ThaiDistribute, ..Default::default() })],
+        ..Default::default()
+    });
+    let bytes = craft_docx::write(&doc).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/numbering.xml").unwrap(), &mut xml).unwrap();
+    let values: Vec<_> = xml.split("<w:lvlJc w:val=\"").skip(1).map(|s| s.split('"').next().unwrap()).collect();
+    assert_eq!(values, ["left", "center", "right", "both", "distribute", "thaiDistribute", "thaiDistribute"]);
+
+    let reopened = craft_docx::read(&bytes).expect("read");
+    let numbering = reopened.numbering.abstracts.iter().find(|abstract_num| abstract_num.id == 1).unwrap();
+    assert_eq!(
+        numbering.levels.iter().take(6).map(|level| level.align).collect::<Vec<_>>(),
+        [Align::Left, Align::Center, Align::Right, Align::Justify, Align::Distribute, Align::ThaiDistribute,]
+    );
+    assert_eq!(reopened.numbering.nums.iter().find(|num| num.id == 1).unwrap().level_overrides[0].1.align, Align::ThaiDistribute);
+}
+
 /// A paragraph built from (text, props) runs.
 fn para_runs(runs: &[(&str, CharProps)]) -> Paragraph {
     let mut p = Paragraph::new();
@@ -237,6 +302,7 @@ fn every_para_prop_round_trips() {
         ParaProps { line_spacing: Some(LineSpacing::AtLeast(14.0)), indent_first: Some(24.0), align: Some(Align::Center), ..Default::default() },
         ParaProps { line_spacing: Some(LineSpacing::Exactly(20.0)), align: Some(Align::Right), ..Default::default() },
         ParaProps { align: Some(Align::Distribute), ..Default::default() },
+        ParaProps { align: Some(Align::ThaiDistribute), ..Default::default() },
         ParaProps { kinsoku: Some(true), word_wrap: Some(true), auto_space_dn: Some(false), ..Default::default() },
         ParaProps::default(),
     ];
