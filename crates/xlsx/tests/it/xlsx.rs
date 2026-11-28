@@ -4,7 +4,7 @@ use super::common;
 
 use common::{read, read_with};
 use craft_xlsx::testing::{workbook, zip};
-use craft_xlsx::{CellRef, CellValue, Error, FormulaKind, Limits, Package, Range, SheetKind, Value, Visibility};
+use craft_xlsx::{CellRef, CellValue, Error, FormulaKind, Limits, Package, Range, Row, SheetKind, Value, Visibility};
 
 /// A workbook in the strict namespaces with the `x:` prefix, as some writers save it.
 fn strict() -> Vec<u8> {
@@ -133,6 +133,105 @@ fn cells_outside_the_grid_are_dropped_and_counted() {
     let wb = read(&bytes).unwrap();
     assert_eq!(wb.sheets[0].cells.keys().copied().collect::<Vec<_>>(), [CellRef::new(1, 16383)]);
     assert!(wb.warnings.iter().any(|w| w.contains("3 cells or rows outside")), "{:?}", wb.warnings);
+}
+
+#[test]
+fn repeated_and_out_of_place_cells_are_kept_and_counted() {
+    // Excel writes each cell once, in order, in its own row. A file that does not keep every cell
+    // where its address says (a repeat keeps the later one), and says what it saw (#2531).
+    let bytes = workbook(
+        &[(
+            "S",
+            r#"<row r="1"><c r="A1"><v>1</v></c><c r="C1"><v>3</v></c><c r="B1"><v>2</v></c><c r="A1"><v>999</v></c><c r="D7"><v>7</v></c><c><v>8</v></c></row>"#,
+        )],
+        &[],
+    )
+    .unwrap();
+    let mut p = Package::open(&bytes, &Limits::default()).unwrap();
+    let wb = p.workbook().unwrap();
+    let mut cells = std::collections::BTreeMap::new();
+    let part = p
+        .sheet(&wb.sheets[0], |row| {
+            for c in row.cells {
+                cells.insert(c.at, c.value.resolve(&[], false));
+            }
+            Ok(())
+        })
+        .unwrap();
+    // A1 was read twice, so the later value is the one kept; B1 sits out of column order; D7
+    // names row 7 from row 1's element; the unaddressed cell takes the column after D7.
+    assert_eq!(part.repeated, 1);
+    assert_eq!(part.elsewhere, 2);
+    assert_eq!(cells.get(&CellRef::new(0, 0)), Some(&Value::Number(999.0)), "the later value at a repeated address wins");
+    assert_eq!(cells.get(&CellRef::new(0, 1)), Some(&Value::Number(2.0)), "a cell out of column order keeps its address");
+    assert_eq!(cells.get(&CellRef::new(0, 2)), Some(&Value::Number(3.0)));
+    assert_eq!(cells.get(&CellRef::new(6, 3)), Some(&Value::Number(7.0)), "a cell naming another row is placed there");
+    assert_eq!(cells.get(&CellRef::new(0, 4)), Some(&Value::Number(8.0)), "an unaddressed cell follows the address before it");
+    assert!(
+        p.warnings().iter().any(|w| w.contains("\"S\": 1 cell(s), or a row's properties, repeated an address or row already read")),
+        "{:?}",
+        p.warnings()
+    );
+    assert!(p.warnings().iter().any(|w| w.contains("\"S\": 2 cell(s) sat out of column order, or in another row's element")), "{:?}", p.warnings());
+}
+
+/// A package whose one worksheet part is `sheet`.
+fn package_with_sheet(sheet: &[u8]) -> Vec<u8> {
+    const MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+    const RT: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    const PKG: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+    zip(&[
+        ("[Content_Types].xml", br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#.as_slice()),
+        (
+            "_rels/.rels",
+            format!(r#"<Relationships xmlns="{PKG}"><Relationship Id="w" Type="{RT}/officeDocument" Target="xl/workbook.xml"/></Relationships>"#)
+                .as_bytes(),
+        ),
+        (
+            "xl/workbook.xml",
+            format!(r#"<workbook xmlns="{MAIN}" xmlns:r="{RT}"><sheets><sheet name="S" sheetId="1" r:id="r1"/></sheets></workbook>"#).as_bytes(),
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            format!(r#"<Relationships xmlns="{PKG}"><Relationship Id="r1" Type="{RT}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#)
+                .as_bytes(),
+        ),
+        ("xl/worksheets/sheet1.xml", sheet),
+    ])
+    .unwrap()
+}
+
+#[test]
+fn rows_with_repeated_or_out_of_place_cells_write_back_as_read() {
+    let bytes = workbook(
+        &[(
+            "S",
+            r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c><c r="A1"><v>9</v></c></row><row r="2"><c r="A2"><v>3</v></c><c r="C9"><v>4</v></c></row>"#,
+        )],
+        &[],
+    )
+    .unwrap();
+    let mut p = Package::open(&bytes, &Limits::default()).unwrap();
+    let wb = p.workbook().unwrap();
+    let mut rows: Vec<Row> = Vec::new();
+    let part = p
+        .sheet(&wb.sheets[0], |row| {
+            rows.push(row);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!((part.repeated, part.elsewhere), (1, 1));
+
+    let again = read(&package_with_sheet(&part.to_xml(&rows))).unwrap();
+    assert_eq!(again.sheets[0].value(CellRef::new(0, 0)), Value::Number(9.0), "the later value at the repeated address is written");
+    assert_eq!(again.sheets[0].value(CellRef::new(0, 1)), Value::Number(2.0));
+    assert_eq!(again.sheets[0].value(CellRef::new(1, 0)), Value::Number(3.0));
+    assert!(again.sheets[0].cells.contains_key(&CellRef::new(8, 2)), "a cell naming another row stays where its address says");
+    assert!(
+        again.warnings.iter().any(|w| w.contains("repeated an address or row already read")),
+        "the shapes are still there to report: {:?}",
+        again.warnings
+    );
 }
 
 #[test]

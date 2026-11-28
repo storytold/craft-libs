@@ -309,6 +309,18 @@ impl<'a> Package<'a> {
         if rows.dropped > 0 {
             self.warn(format!("sheet \"{}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", entry.name, rows.dropped));
         }
+        if rows.repeated > 0 {
+            self.warn(format!(
+                "sheet \"{}\": {} cell(s), or a row's properties, repeated an address or row already read; the later ones were read again",
+                entry.name, rows.repeated
+            ));
+        }
+        if rows.elsewhere > 0 {
+            self.warn(format!(
+                "sheet \"{}\": {} cell(s) sat out of column order, or in another row's element, and were placed where their addresses say",
+                entry.name, rows.elsewhere
+            ));
+        }
         let mut sheet = SheetPart {
             part,
             root: root.unwrap_or_default(),
@@ -316,6 +328,8 @@ impl<'a> Package<'a> {
             rows: rows.rows,
             dropped: rows.dropped,
             dropped_cells: rows.dropped_cells,
+            repeated: rows.repeated,
+            elsewhere: rows.elsewhere,
             damaged,
             ..SheetPart::default()
         };

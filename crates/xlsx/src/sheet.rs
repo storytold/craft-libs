@@ -58,6 +58,9 @@ const WORKSHEET: &[&str] = &[
 /// dropped: it is a hint that goes stale when cells change.
 const ROW_ATTRS: &[&str] = &["r", "spans", "ht", "customHeight", "hidden", "outlineLevel", "collapsed", "s", "customFormat"];
 
+/// The row attributes that carry properties, as opposed to the row's number and its cell spans.
+const ROW_PROP_ATTRS: &[&str] = &["ht", "customHeight", "hidden", "outlineLevel", "collapsed", "s", "customFormat"];
+
 /// What a cell's `<v>` holds, by its type (`t`, 18.18.11).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum CellValue {
@@ -192,6 +195,12 @@ pub struct SheetPart {
     pub dropped: u64,
     /// Cell elements (`<c>`) inside dropped rows or dropped for an invalid/out-of-grid reference.
     pub dropped_cells: u64,
+    /// Cells read again at an address already read, and row properties replacing ones already
+    /// read for the same row number. A later cell or row is kept over the earlier one, as before.
+    pub repeated: u64,
+    /// Cells read out of column order, or in another row's element than their `<row>`: placed
+    /// where their address says, and counted.
+    pub elsewhere: u64,
     /// Why reading stopped early, when the part is damaged; the rows before the damage were
     /// handed out.
     pub damaged: Option<String>,
@@ -361,9 +370,24 @@ fn write_cell(w: &mut Writer, c: &Cell) {
 #[derive(Default)]
 pub(crate) struct RowReader {
     next_row: u32,
+    /// The furthest cell read so far, in row-major order: a cell there, after an element for
+    /// another row, repeats the last address read.
+    furthest: Option<CellRef>,
+    /// One bit per column: the columns of its own row the row elements read since the row number
+    /// last changed have held.
+    seen: Vec<u64>,
+    /// The row number of the row elements whose columns `seen` holds.
+    seen_row: Option<u32>,
+    /// How many of `seen`'s words, from the first, may hold a bit.
+    seen_words: usize,
+    /// One bit per row number: an element read for it has carried row properties already, even
+    /// when elements for other rows came between.
+    props_rows: Vec<u64>,
     pub(crate) rows: u64,
     pub(crate) dropped: u64,
     pub(crate) dropped_cells: u64,
+    pub(crate) repeated: u64,
+    pub(crate) elsewhere: u64,
 }
 
 impl RowReader {
@@ -396,6 +420,28 @@ impl RowReader {
             cells: Vec::new(),
             attrs: e.attrs.iter().filter(|(k, _)| !ROW_ATTRS.contains(&k.as_str())).cloned().collect(),
         };
+        // A worksheet has rows whose cells repeat an address, run backwards or name another row
+        // than their `<row>` gets its cells where their addresses say, as a workbook always was
+        // read: a later cell wins over an earlier one at the same address, and an unaddressed cell
+        // follows the last address read. Excel itself repairs such a file ("Removed Records: Cell
+        // information"), but moving or dropping cells here would lose the values a file holds today,
+        // so the import only says what it saw: the counters below, one warning per sheet (#2531).
+        //
+        // A cell of its element's own row at a column held already, by this element or by an element
+        // for the same row right before it, repeats it; so does a cell at the furthest address read
+        // so far (nothing was read after it). A cell in another row's element, or one not to the
+        // right of the rightmost cell read before it in its element, is placed elsewhere. A cell
+        // counted as a repeat is not counted again as elsewhere, and rows read out of order are not
+        // reported on their own.
+        self.seen.resize(MAX_COLS.div_ceil(64) as usize, 0);
+        if self.seen_row != Some(index) {
+            for w in self.seen.iter_mut().take(self.seen_words) {
+                *w = 0;
+            }
+            self.seen_row = Some(index);
+            self.seen_words = 0;
+        }
+        let mut rightmost: Option<u32> = None;
         let mut next_col = 0u32;
         for c in e.children("c") {
             let at = match c.attr("r") {
@@ -414,8 +460,47 @@ impl RowReader {
                     continue;
                 }
             };
+            let (word, bit) = ((at.col / 64) as usize, 1u64 << (at.col % 64));
+            let mut held = false;
+            if at.row == index
+                && let Some(w) = self.seen.get_mut(word)
+            {
+                held = *w & bit != 0;
+                *w |= bit;
+                self.seen_words = self.seen_words.max(word + 1);
+            }
+            let repeat = held || self.furthest == Some(at);
+            if repeat {
+                self.repeated += 1;
+            } else if at.row != index || rightmost.is_some_and(|right| at.col <= right) {
+                self.elsewhere += 1;
+            }
+            rightmost = Some(rightmost.map_or(at.col, |right| right.max(at.col)));
+            if self.furthest.is_none_or(|far| (at.row, at.col) > (far.row, far.col)) {
+                self.furthest = Some(at);
+            }
             next_col = at.col + 1;
             row.cells.push(cell(c, at));
+        }
+        // A repeated row element whose properties replace ones already read for the same row
+        // number is counted with the cells, even when elements for other rows came between;
+        // properties the first element did not carry replace nothing and stay silent. A property
+        // counts as written, not by its value: `hidden="0"` replaces `hidden="1"`, and one the
+        // reader keeps aside (`thickBot`) is a property too.
+        let props = ROW_PROP_ATTRS.iter().any(|a| e.attr(a).is_some()) || !row.attrs.is_empty();
+        if props {
+            let word = (index / 64) as usize;
+            if self.props_rows.len() <= word {
+                self.props_rows.resize(word + 1, 0);
+            }
+            let bit = 1u64 << (index % 64);
+            if let Some(w) = self.props_rows.get_mut(word) {
+                if *w & bit != 0 {
+                    self.repeated += 1;
+                } else {
+                    *w |= bit;
+                }
+            }
         }
         Some(row)
     }
@@ -590,6 +675,108 @@ mod tests {
         let kept = r.row(&bad_cell).unwrap();
         assert_eq!(kept.cells.len(), 1);
         assert_eq!((r.dropped, r.dropped_cells), (3, 4));
+    }
+
+    #[test]
+    fn a_repeated_or_out_of_place_cell_is_kept_where_its_address_says() {
+        let read = |xml: &str| craft_xml::Options::local().parse(xml.as_bytes()).unwrap_or_default();
+        let cells = |row: &Row| row.cells.iter().map(|c| (c.at.a1(), c.value.clone())).collect::<Vec<_>>();
+
+        // A repeated address keeps the later cell; both are handed out, and the repeat is counted.
+        let mut r = RowReader::default();
+        let row = r.row(&read(r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c><c r="A1"><v>999</v></c></row>"#)).unwrap_or_default();
+        assert_eq!(
+            cells(&row),
+            [("A1".to_string(), CellValue::Number(1.0)), ("B1".to_string(), CellValue::Number(2.0)), ("A1".to_string(), CellValue::Number(999.0)),]
+        );
+        assert_eq!((r.repeated, r.elsewhere, r.dropped), (1, 0, 0), "a repeat is not also counted as elsewhere");
+
+        // A cell out of column order lands where its address says, and is counted.
+        let mut r = RowReader::default();
+        let row = r.row(&read(r#"<row r="1"><c r="A1"><v>1</v></c><c r="C1"><v>3</v></c><c r="B1"><v>2</v></c></row>"#)).unwrap_or_default();
+        assert_eq!(row.cells.iter().map(|c| c.at.a1()).collect::<Vec<_>>(), ["A1", "C1", "B1"]);
+        assert_eq!((r.repeated, r.elsewhere), (0, 1));
+
+        // A cell naming another row than its `<row>` is placed there.
+        let mut r = RowReader::default();
+        let row = r.row(&read(r#"<row r="1"><c r="A1"><v>1</v></c><c r="D7"><v>7</v></c></row>"#)).unwrap_or_default();
+        assert_eq!(row.cells.iter().map(|c| c.at.a1()).collect::<Vec<_>>(), ["A1", "D7"]);
+        assert_eq!((r.repeated, r.elsewhere), (0, 1));
+
+        // An unaddressed cell takes the column after the address read before it, the stray one
+        // included, as before.
+        let mut r = RowReader::default();
+        let row = r.row(&read(r#"<row r="1"><c r="A1"><v>1</v></c><c r="D7"><v>7</v></c><c><v>8</v></c></row>"#)).unwrap_or_default();
+        assert_eq!(row.cells.iter().map(|c| c.at.a1()).collect::<Vec<_>>(), ["A1", "D7", "E1"]);
+        assert_eq!((r.repeated, r.elsewhere), (0, 1));
+
+        // A row that skips columns is ordinary and stays silent.
+        let mut r = RowReader::default();
+        let row = r.row(&read(r#"<row r="1"><c r="A1"><v>1</v></c><c r="C1"><v>3</v></c><c r="E1"><v>5</v></c></row>"#)).unwrap_or_default();
+        assert_eq!(row.cells.iter().map(|c| c.at.a1()).collect::<Vec<_>>(), ["A1", "C1", "E1"]);
+        assert_eq!((r.repeated, r.elsewhere), (0, 0));
+    }
+
+    #[test]
+    fn repeated_rows_keep_the_later_value_and_rows_out_of_order_stay_silent() {
+        let read = |xml: &str| craft_xml::Options::local().parse(xml.as_bytes()).unwrap_or_default();
+
+        // A second element for the row just read hands its cells out too: the later value wins, the
+        // replaced cell is counted, and its new cell is not.
+        let mut r = RowReader::default();
+        let first = r.row(&read(r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c></row>"#)).unwrap_or_default();
+        assert_eq!(first.cells.len(), 2);
+        let repeat = r.row(&read(r#"<row r="1" ht="40" customHeight="1"><c r="A1"><v>999</v></c><c r="C1"><v>77</v></c></row>"#)).unwrap_or_default();
+        assert_eq!(repeat.cells.iter().map(|c| c.at.a1()).collect::<Vec<_>>(), ["A1", "C1"]);
+        assert_eq!((repeat.height, repeat.custom_height), (Some(40.0), true));
+        assert_eq!((r.repeated, r.elsewhere, r.dropped), (1, 0, 0), "the cell, not the new one or the first row's absent properties");
+
+        // Properties a repeated element brings where the first had none replace nothing, silently;
+        // ones that replace properties already read are counted with the cells.
+        let mut r = RowReader::default();
+        r.row(&read(r#"<row r="1"><c r="A1"><v>1</v></c></row>"#));
+        r.row(&read(r#"<row r="1" ht="30" customHeight="1"><c r="B1"><v>2</v></c></row>"#));
+        assert_eq!(r.repeated, 0);
+        let mut r = RowReader::default();
+        r.row(&read(r#"<row r="1" ht="20" customHeight="1"><c r="A1"><v>1</v></c></row>"#));
+        r.row(&read(r#"<row r="1" ht="30" customHeight="1"><c r="B1"><v>2</v></c></row>"#));
+        assert_eq!(r.repeated, 1, "the second height replaces the first");
+
+        // An element for another row between the two copies does not hide the replacement, and a
+        // property counts as written: `hidden="0"` replaces `hidden="1"`, `thickBot` counts too.
+        let mut r = RowReader::default();
+        r.row(&read(r#"<row r="1" ht="20" customHeight="1"><c r="A1"><v>1</v></c></row>"#));
+        r.row(&read(r#"<row r="2"><c r="A2"><v>2</v></c></row>"#));
+        r.row(&read(r#"<row r="1" ht="30" customHeight="1"><c r="B1"><v>3</v></c></row>"#));
+        assert_eq!((r.repeated, r.elsewhere), (1, 0), "row 2 between the copies replaces nothing");
+        let mut r = RowReader::default();
+        r.row(&read(r#"<row r="1" hidden="1"/>"#));
+        r.row(&read(r#"<row r="1" hidden="0"/>"#));
+        assert_eq!(r.repeated, 1, "an explicit default value is a property still");
+        let mut r = RowReader::default();
+        r.row(&read(r#"<row r="1" thickBot="1"/>"#));
+        r.row(&read(r#"<row r="1" thickBot="1"/>"#));
+        assert_eq!(r.repeated, 1, "a property the reader keeps aside counts too");
+
+        // A row element that goes back keeps its cells and its formatting, and is not reported on
+        // its own: only the repeats it brings are.
+        let mut r = RowReader::default();
+        assert!(r.row(&read(r#"<row r="3"><c r="A3"><v>3</v></c></row>"#)).is_some());
+        let back = r.row(&read(r#"<row r="2" ht="9" customHeight="1"><c r="A2"><v>2</v></c></row>"#)).unwrap_or_default();
+        assert_eq!((back.index, back.cells.len(), back.height), (1, 1, Some(9.0)));
+        assert_eq!((r.repeated, r.elsewhere), (0, 0));
+        let again = r.row(&read(r#"<row r="3" ht="9" customHeight="1"><c r="A3"><v>999</v></c></row>"#)).unwrap_or_default();
+        assert_eq!((again.index, again.cells.len(), again.height), (2, 1, Some(9.0)));
+        assert_eq!(
+            (r.repeated, r.elsewhere),
+            (1, 0),
+            "the row out of order is not reported; A3 is, as the furthest address read, since nothing was read after it"
+        );
+
+        // An element without an address follows the last element read, as before: after the
+        // second row 3 it is row 4.
+        let next = r.row(&read(r#"<row><c><v>7</v></c></row>"#)).unwrap_or_default();
+        assert_eq!((next.index, next.cells[0].at.a1()), (3, "A4".to_string()));
     }
 
     #[test]
