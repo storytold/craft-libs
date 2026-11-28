@@ -1133,12 +1133,17 @@ mod native {
     /// The spacing the writer gives the base cell style, and the rows added here, between cells.
     const ROW_SPACING: f64 = 0.18;
 
-    /// The row of the table style a built-in row name stands for: the cell style spelled exactly
-    /// so, else the first one spelled in another case (cell style names ignore case; the DWG
-    /// reader only takes the exact spelling for the row).
-    fn row_index(s: &acadrust::objects::TableStyle, name: &str) -> Option<usize> {
-        let at = |exact: bool| s.modern_overrides.iter().position(|(_, o)| if exact { o.name == name } else { o.name.eq_ignore_ascii_case(name) });
-        at(true).or_else(|| at(false))
+    /// The cell styles of the table style a built-in row name stands for: every one spelled
+    /// exactly so (the DWG reader applies each in turn, so the last decides), else the first one
+    /// spelled in another case (cell style names ignore case; the reader only takes the exact
+    /// spelling for the row).
+    fn row_indices(s: &acadrust::objects::TableStyle, name: &str) -> Vec<usize> {
+        let at = |exact: bool| -> Vec<usize> {
+            let same = |n: &str| if exact { n == name } else { n.eq_ignore_ascii_case(name) };
+            s.modern_overrides.iter().enumerate().filter(|(_, (_, o))| same(&o.name)).map(|(i, _)| i).collect()
+        };
+        let exact = at(true);
+        if exact.is_empty() { at(false).into_iter().take(1).collect() } else { exact }
     }
 
     /// Whether a row cell style needs no margins of its own: it carries margin overrides, judged as
@@ -1154,9 +1159,9 @@ mod native {
     /// not the title row), or it has no margins ([`has_margins`]; the writer then reads the style's
     /// margins as 0.06).
     fn rows_need_work(s: &acadrust::objects::TableStyle) -> bool {
-        ROW_NAMES
-            .iter()
-            .any(|n| row_index(s, n).is_some_and(|i| s.modern_overrides.get(i).is_some_and(|(_, o)| o.name != *n || !has_margins(&o.cell_style))))
+        ROW_NAMES.iter().any(|n| {
+            row_indices(s, n).into_iter().filter_map(|i| s.modern_overrides.get(i)).any(|(_, o)| o.name != *n || !has_margins(&o.cell_style))
+        })
     }
 
     /// The lowest cell style id from 101 up to `max` that nothing in `held` holds; `None` when
@@ -1172,8 +1177,9 @@ mod native {
     /// way that writer builds them, with the margins the writer gives the base `Table` cell
     /// style. Only missing rows are added, so every style ends with all three (when they fit): a
     /// row a style carries already keeps its values, except that one with no margin overrides
-    /// gets the style's margins and spacing and one spelled `_title` takes the reader's spelling
-    /// `_TITLE`; a row whose id another cell style holds gets a free one.
+    /// gets the style's margins and the base cell style's spacing, and one spelled `_title` takes
+    /// the reader's spelling `_TITLE` only when the style has no exact `_TITLE` (with one, `_title`
+    /// is left as it is); a row whose id another cell style holds gets a free one.
     ///
     /// Versions before 2010 return at once, as does a drawing none of whose styles is missing a
     /// row or has a row that needs work (see above): it is left exactly as it is. Otherwise the
@@ -1242,21 +1248,31 @@ mod native {
                 continue;
             }
             let (v, hz) = (s.vertical_margin, s.horizontal_margin);
+            // The spacing the writer gives the base cell style: the style's own base when it has
+            // one with margin overrides (as after reading a DWG), else the default base's.
+            let (hs, vs) = s
+                .modern_style
+                .as_ref()
+                .filter(|m| m.cell_style.margin_override_flags != 0)
+                .map_or((ROW_SPACING, ROW_SPACING), |m| (m.cell_style.horizontal_spacing, m.cell_style.vertical_spacing));
             // The rows the style carries already. A built-in row spelled in another case (and
             // with no exact spelling in the style) takes the DWG reader's spelling, keeping its id
             // and formatting, so the reader takes it for the row. One with no margin overrides gets
-            // the style's margins with the spacing the writer gives its base cell style; an
-            // override it has, in any of its flags, is its own and stays. When the style holds the
-            // exact spelling too, only that row is the row: the other spelling is left as it is.
+            // the style's margins with the base's spacing; an override it has, in any of its
+            // flags, is its own and stays. When the style holds the exact spelling too, only that
+            // row is the row (all of them, if it holds it more than once): the other spelling is
+            // left as it is.
             for name in ROW_NAMES {
-                let Some((_, o)) = row_index(s, name).and_then(|i| s.modern_overrides.get_mut(i)) else { continue };
-                o.name = name.to_string();
-                let c = &mut o.cell_style;
-                if !has_margins(c) {
-                    c.margin_override_flags |= 1;
-                    (c.vertical_margin, c.bottom_margin) = (v, v);
-                    (c.horizontal_margin, c.right_margin) = (hz, hz);
-                    (c.horizontal_spacing, c.vertical_spacing) = (ROW_SPACING, ROW_SPACING);
+                for i in row_indices(s, name) {
+                    let Some((_, o)) = s.modern_overrides.get_mut(i) else { continue };
+                    o.name = name.to_string();
+                    let c = &mut o.cell_style;
+                    if !has_margins(c) {
+                        c.margin_override_flags |= 1;
+                        (c.vertical_margin, c.bottom_margin) = (v, v);
+                        (c.horizontal_margin, c.right_margin) = (hz, hz);
+                        (c.horizontal_spacing, c.vertical_spacing) = (hs, vs);
+                    }
                 }
             }
             if !adds_rows {
@@ -1303,8 +1319,8 @@ mod native {
                         horizontal_margin: hz,
                         bottom_margin: v,
                         right_margin: hz,
-                        horizontal_spacing: ROW_SPACING,
-                        vertical_spacing: ROW_SPACING,
+                        horizontal_spacing: hs,
+                        vertical_spacing: vs,
                         borders,
                         ..TableCellStyleData::default()
                     },
@@ -1960,15 +1976,90 @@ mod native {
                     .into();
             }
             table_style_row_margins(&mut doc).expect("row ids");
+            let mut styles = 0;
             for o in doc.objects.values() {
                 let ObjectType::TableStyle(s) = o else { continue };
-                let rows: Vec<_> = s
-                    .modern_overrides
-                    .iter()
-                    .map(|(_, r)| (r.name.as_str(), r.cell_style.margin_override_flags, r.cell_style.horizontal_margin))
-                    .collect();
-                assert_eq!(rows, [("_title", 0, 0.0), ("_TITLE", 1, 1.0), ("_HEADER", 1, 1.0), ("_DATA", 1, 1.0)]);
+                let rows: Vec<_> = s.modern_overrides.iter().map(|(_, r)| (r.name.as_str(), r.cell_style.margin_override_flags != 0)).collect();
+                assert_eq!(rows, [("_title", false), ("_TITLE", true), ("_HEADER", true), ("_DATA", true)]);
+                let filled: Vec<_> = s.modern_overrides.iter().filter(|(_, r)| r.cell_style.margin_override_flags != 0).collect();
+                assert!(
+                    filled.iter().all(|(_, r)| r.cell_style.horizontal_margin == s.horizontal_margin),
+                    "the filled rows carry the style's margins"
+                );
+                styles += 1;
             }
+            assert!(styles > 0);
+        }
+
+        /// A style read from a DWG has a base cell style of its own, which the writer emits as it is:
+        /// a row filled here takes that base's spacing (the default base's 0.18 only when the style
+        /// has none), so the rows and the base agree.
+        #[test]
+        fn a_filled_row_takes_the_spacing_of_the_styles_own_base() {
+            use acadrust::objects::{NamedTableCellStyle, ObjectType};
+            let mut doc = acadrust::CadDocument::new();
+            doc.version = acadrust::DxfVersion::AC1032;
+            for o in doc.objects.values_mut() {
+                let ObjectType::TableStyle(s) = o else { continue };
+                s.horizontal_margin = 1.0;
+                s.vertical_margin = 0.25;
+                let mut base = NamedTableCellStyle { id: 4, style_type: 5, name: "Table".into(), ..NamedTableCellStyle::default() };
+                base.cell_style.data_flags = 1;
+                base.cell_style.margin_override_flags = 1;
+                (base.cell_style.horizontal_spacing, base.cell_style.vertical_spacing) = (0.7, 0.4);
+                assert!(base.cell_style.horizontal_spacing != ROW_SPACING);
+                s.modern_style = Some(base);
+                let mut title = NamedTableCellStyle { id: 1, style_type: 1, name: "_TITLE".into(), ..NamedTableCellStyle::default() };
+                title.cell_style.data_flags = 1;
+                s.modern_overrides = vec![(1, title)];
+            }
+            table_style_row_margins(&mut doc).expect("row ids");
+            let mut rows = 0;
+            for o in doc.objects.values() {
+                let ObjectType::TableStyle(s) = o else { continue };
+                let Some(base) = s.modern_style.as_ref() else { continue };
+                for (_, r) in &s.modern_overrides {
+                    assert_eq!(
+                        (r.cell_style.horizontal_spacing, r.cell_style.vertical_spacing),
+                        (base.cell_style.horizontal_spacing, base.cell_style.vertical_spacing),
+                        "{} takes the base's spacing",
+                        r.name
+                    );
+                    rows += 1;
+                }
+            }
+            assert_eq!(rows, 3, "the existing row and the two added ones");
+        }
+
+        /// A style holding the exact spelling twice: the reader applies each in turn, so the last one
+        /// decides, and every one of them gets the margins.
+        #[test]
+        fn every_row_of_the_exact_spelling_is_filled() {
+            use acadrust::objects::{NamedTableCellStyle, ObjectType};
+            let mut doc = acadrust::CadDocument::new();
+            doc.version = acadrust::DxfVersion::AC1032;
+            for o in doc.objects.values_mut() {
+                let ObjectType::TableStyle(s) = o else { continue };
+                s.horizontal_margin = 1.0;
+                s.vertical_margin = 0.25;
+                s.modern_overrides = [(1, 1), (7, 7)]
+                    .map(|(k, id)| {
+                        let mut row = NamedTableCellStyle { id, name: "_TITLE".into(), ..NamedTableCellStyle::default() };
+                        row.cell_style.data_flags = 1;
+                        (k, row)
+                    })
+                    .into();
+            }
+            table_style_row_margins(&mut doc).expect("row ids");
+            let mut styles = 0;
+            for o in doc.objects.values() {
+                let ObjectType::TableStyle(s) = o else { continue };
+                let titles: Vec<_> = s.modern_overrides.iter().filter(|(_, r)| r.name == "_TITLE").collect();
+                assert_eq!(titles.len(), 2);
+                assert!(titles.iter().all(|(_, r)| r.cell_style.margin_override_flags != 0 && r.cell_style.horizontal_margin == s.horizontal_margin));
+                styles += 1;
+            }
+            assert!(styles > 0);
         }
 
         /// A built-in row in another case (`_title`) is written under the spelling the DWG reader
