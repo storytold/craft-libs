@@ -66,6 +66,12 @@ python() { test "$*" = "scripts/ci-format-workspace.py" || return 31; cargo fmt 
 
 
 class FullValidation(unittest.TestCase):
+    def test_native_completion_headroom_does_not_expand_pdf_budget(self):
+        workflow = (ROOT / ".github/workflows/full-validation.yml").read_text(encoding="utf-8")
+        native, pdf = workflow.split("  pdf-contracts:", 1)
+        self.assertRegex(native, r"(?m)^      timeout-minutes: 150$")
+        self.assertRegex(pdf, r"(?m)^      timeout-minutes: 120$")
+
     def test_changed_source_is_rejected_without_execution(self):
         for source in [
             SOURCE + "\necho injected",

@@ -26,7 +26,10 @@ jobs:
     with:
       os: '["ubuntu-latest","windows-latest","macos-latest"]'
       select-os: '[]'
-      timeout-minutes: 120
+      # The second full test sweep reached its last doctest at the 120-minute job cap
+      # (run44390529832/job135106633248). Keep bounded completion/cleanup headroom.
+      # This applies to all native OS legs, not their per-test watchdogs or PDF contracts.
+      timeout-minutes: 150
       tools: ""
       packages: mesa-vulkan-drivers libvulkan1
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
