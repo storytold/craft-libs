@@ -359,28 +359,24 @@ fn stand_in_separations_respect_the_ink_limit() {
     const LIMIT: f32 = 3.30 + 0.005;
     let grid: Vec<f32> = (0..N * N * N).flat_map(|i| [i / (N * N), i / N % N, i % N].map(|v| v as f32 / (N - 1) as f32)).collect();
     for name in FOGRA39_STAND_IN_NAMES {
-        let cmyk = Builtin::stand_in_for(name).unwrap().profile();
-        for intent in [Intent::Perceptual, Intent::RelativeColorimetric, Intent::Saturation] {
-            let t = Transform::new(Builtin::Srgb.profile(), cmyk, intent, true).unwrap();
-            let mut out = vec![0.0f32; N * N * N * 4];
-            t.convert_f32(&grid, 3, &mut out, 4, false).unwrap();
-            let (i, max) = out
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|c| c.iter().sum::<f32>())
-                .enumerate()
-                .fold((0, 0.0f32), |m, (i, s)| if s > m.1 { (i, s) } else { m });
-            eprintln!("{name}, {intent:?}: max total ink {:.2} % at sRGB {:?}", max * 100.0, &grid[i * 3..i * 3 + 3]);
-            assert!(max <= LIMIT, "{name}, {intent:?}: total ink {max} at sRGB {:?}", &grid[i * 3..i * 3 + 3]);
+        assert_eq!(Builtin::stand_in_for(name), Some(Builtin::CoatedFogra39), "{name}");
+    }
+    let cmyk = fogra39();
+    for intent in [Intent::Perceptual, Intent::RelativeColorimetric, Intent::Saturation] {
+        let t = Transform::new(Builtin::Srgb.profile(), cmyk, intent, true).unwrap();
+        let mut out = vec![0.0f32; N * N * N * 4];
+        t.convert_f32(&grid, 3, &mut out, 4, false).unwrap();
+        let (i, max) =
+            out.as_chunks::<4>().0.iter().map(|c| c.iter().sum::<f32>()).enumerate().fold((0, 0.0f32), |m, (i, s)| if s > m.1 { (i, s) } else { m });
+        eprintln!("{intent:?}: max total ink {:.2} % at sRGB {:?}", max * 100.0, &grid[i * 3..i * 3 + 3]);
+        assert!(max <= LIMIT, "{intent:?}: total ink {max} at sRGB {:?}", &grid[i * 3..i * 3 + 3]);
 
-            // sRGB black, the darkest separation (reviewed with perceptual: 329.75 %).
-            let mut black = [0.0f32; 4];
-            t.eval(&[0.0, 0.0, 0.0], &mut black).unwrap();
-            let total: f32 = black.iter().sum();
-            eprintln!("{name}, {intent:?}: sRGB black → {black:?}, total {:.2} %", total * 100.0);
-            assert!(total <= LIMIT, "{name}, {intent:?}: sRGB black total ink {total}");
-        }
+        // sRGB black, the darkest separation (reviewed with perceptual: 329.75 %).
+        let mut black = [0.0f32; 4];
+        t.eval(&[0.0, 0.0, 0.0], &mut black).unwrap();
+        let total: f32 = black.iter().sum();
+        eprintln!("{intent:?}: sRGB black → {black:?}, total {:.2} %", total * 100.0);
+        assert!(total <= LIMIT, "{intent:?}: sRGB black total ink {total}");
     }
 }
 
