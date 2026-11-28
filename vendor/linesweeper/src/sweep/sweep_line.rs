@@ -3565,10 +3565,14 @@ mod tests {
             assert!(work <= limit, "a line came back after {work} units of work");
             while line.next_range(&mut range_bufs, &segs).is_some() {}
         }
-        // It stops within the two comparisons or one position check after the limit.
+        // It stops within two comparisons, one position check, or the n log2 n
+        // charged before sorting a sweep line's n horizontal segments, after the
+        // limit. Each of the two sweep lines with horizontals holds `wide` of them.
         assert!(sweep.work_limit_exceeded());
         let work = sweep.work();
-        assert!(work <= limit + 2, "{work} units of work");
+        let wide = wide as u64;
+        let sort_charge = wide * u64::from(wide.ilog2());
+        assert!(work <= limit + sort_charge.max(2), "{work} units of work, limit {limit}");
     }
 
     // A tall closed band whose sides zigzag: each segment shares heights with
