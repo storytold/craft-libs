@@ -294,6 +294,14 @@ manifest names Joe Neeman as author, and its LICENSE-MIT reads "Copyright (c) 20
 vendor/linesweeper/README.craft.md and vendor/linesweeper/SOURCE.json for provenance, the local
 patches and the files left out.
 
+kurbo
+
+kurbo 0.13.1 (https://crates.io/crates/kurbo/0.13.1, https://github.com/linebender/kurbo), MIT OR
+Apache-2.0, is stored in vendor/kurbo with its upstream license files and local patches, to
+src/stroke.rs. Its source files carry "Copyright <year> the Kurbo Authors" lines (2018 to 2026),
+and its LICENSE-MIT reads "Copyright (c) 2018 Raph Levien". See vendor/kurbo/README.craft.md and
+vendor/kurbo/SOURCE.json for provenance and the local patches.
+
 Platform lifecycle source provenance
 
 The optional crates/platform services adapt the preserved local platform candidate
