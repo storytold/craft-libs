@@ -128,7 +128,9 @@ pub fn cube(size: f32) -> Mesh {
 }
 
 fn rounded_box_into(b: &mut Builder, center: Vec3, half: Vec3, bevel: f32, r: UvRect) {
-    let bevel = bevel.clamp(0.0, half.min_element() * 0.95);
+    // `max`/`min` rather than `clamp`, which panics when a negative or NaN half-extent makes
+    // the upper bound fall below the lower one.
+    let bevel = bevel.max(0.0).min(half.min_element().max(0.0) * 0.95);
     // (normal, U = right, V = down) per face, seen from outside.
     let faces = [
         (Vec3::Z, Vec3::X, -Vec3::Y),
@@ -515,6 +517,14 @@ pub const BUILTINS: [(&str, &str); 9] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn negative_or_nan_box_sizes_do_not_panic() {
+        let _ = cube(-1.0);
+        let _ = cube(f32::NAN);
+        let _ = rounded_box(Vec3::new(1.0, f32::NAN, 1.0), 0.2);
+        let _ = rounded_box(Vec3::ONE, f32::NAN);
+    }
 
     /// Every triangle's winding agrees with its vertex normals, UVs stay in 0..1 (u in 0..max_u),
     /// and the UV mapping is not mirrored (tangent handedness +1).

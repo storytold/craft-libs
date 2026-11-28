@@ -247,9 +247,11 @@ impl Bvh {
         (&self.tris, &self.order)
     }
 
-    fn slab(lo: Vec3A, hi: Vec3A, o: Vec3A, inv: Vec3A, tmax: f32) -> Option<f32> {
-        let t0 = (lo - o) * inv;
-        let t1 = (hi - o) * inv;
+    fn slab(lo: Vec3A, hi: Vec3A, o: Vec3A, d: Vec3A, tmax: f32) -> Option<f32> {
+        // Divided rather than multiplied by a reciprocal, which is infinite for a subnormal
+        // direction component that still reaches the box at a finite distance.
+        let t0 = (lo - o) / d;
+        let t1 = (hi - o) / d;
         // A ray lying in a slab plane gives 0·∞ = NaN: it is inside that slab, so the axis does
         // not bound the hit.
         let open = t0.is_nan_mask() | t1.is_nan_mask();
@@ -294,10 +296,10 @@ impl Bvh {
 
     fn traverse(&self, o: Vec3, d: Vec3, mut tmax: f32, any: bool, filter: &dyn Fn(u32) -> bool) -> Option<Hit> {
         let root = self.nodes.first().filter(|_| !self.tris.is_empty())?;
-        let (oa, inv) = (Vec3A::from(o), Vec3A::ONE / Vec3A::from(d));
+        let (oa, da) = (Vec3A::from(o), Vec3A::from(d));
         let mut best = None;
         let mut stack = Stack::default();
-        stack.push((0, Self::slab(root.lo, root.hi, oa, inv, tmax)?));
+        stack.push((0, Self::slab(root.lo, root.hi, oa, da, tmax)?));
         // Entries carry their entry distance: nodes behind a closer hit are skipped unopened.
         while let Some((ni, tn)) = stack.pop() {
             let Some(n) = self.nodes.get(ni as usize).filter(|_| tn <= tmax) else { continue };
@@ -319,8 +321,8 @@ impl Bvh {
             } else {
                 // Visit the nearer child first.
                 let (l, r) = (n.first, n.first + 1);
-                let dl = self.nodes.get(l as usize).and_then(|c| Self::slab(c.lo, c.hi, oa, inv, tmax));
-                let dr = self.nodes.get(r as usize).and_then(|c| Self::slab(c.lo, c.hi, oa, inv, tmax));
+                let dl = self.nodes.get(l as usize).and_then(|c| Self::slab(c.lo, c.hi, oa, da, tmax));
+                let dr = self.nodes.get(r as usize).and_then(|c| Self::slab(c.lo, c.hi, oa, da, tmax));
                 match (dl, dr) {
                     (Some(a), Some(b)) if a <= b => {
                         stack.push((r, b));
@@ -597,6 +599,10 @@ mod tests {
         let hit = bvh.closest(Vec3::new(s * 0.25, s * 0.25, 1.0), Vec3::NEG_Z, 10.0).unwrap();
         assert!((hit.t - 1.0).abs() < 1e-6, "{}", hit.t);
         assert!(bvh.occluded(Vec3::new(s * 0.25, s * 0.25, 1.0), Vec3::NEG_Z, 10.0));
+        // A subnormal direction component whose reciprocal is infinite in f32.
+        let mesh = Mesh { positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y], indices: vec![0, 1, 2], ..Mesh::default() };
+        let hit = Bvh::new(&mesh).closest(Vec3::new(-1e-39, 0.25, 1.0), Vec3::new(1e-39, 0.0, -1.0), 10.0).unwrap();
+        assert!((hit.t - 1.0).abs() < 1e-6, "{}", hit.t);
     }
 
     #[test]
