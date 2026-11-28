@@ -102,6 +102,13 @@ pub enum AssignError {
     UnknownScope(Scope),
     /// The change needs a new [`Overrides`] entry and it already holds [`MAX_COMMANDS`].
     Full,
+    /// A binding cannot be written and read back in the overrides format.
+    Unstorable {
+        /// The command whose bindings cannot be saved.
+        command: CommandRef,
+        /// The shortcut that cannot be saved.
+        trigger: Trigger,
+    },
     /// A hold is a chord that types a character, alone or with Shift: never Space, Backtick, Cmd, Ctrl or Alt.
     NotHoldable(Trigger),
 }
@@ -115,6 +122,7 @@ impl fmt::Display for AssignError {
             AssignError::Taken(h) => write!(f, "in use by {} other command(s)", h.len()),
             AssignError::UnknownScope(s) => write!(f, "unknown scope {s}"),
             AssignError::Full => write!(f, "more than {MAX_COMMANDS} changed commands"),
+            AssignError::Unstorable { command, trigger } => write!(f, "{trigger} for {} cannot be saved in its current scope", command.key()),
             AssignError::NotHoldable(t) => write!(f, "{t} cannot be held"),
         }
     }
@@ -221,6 +229,8 @@ pub struct Conflict {
 
 /// A binding with its scope resolved.
 type Bound = (Trigger, Scope);
+type BindingWrites = Vec<(usize, Vec<Bound>)>;
+type StoredBindingWrites = Vec<(usize, Vec<Bound>, Option<Vec<String>>)>;
 
 /// Whether `trigger` can start a command: any press can; a hold needs a chord that types a character, alone or with
 /// Shift, since the others are taken by the system and by text fields.
@@ -584,11 +594,24 @@ impl Keymap {
         }
         let mut list = self.current[i].clone();
         list.push(new.clone());
-        self.apply(i, list, &[new], policy)
+        let (assigned, writes) = self.plan_writes(i, list, &[new], policy)?;
+        self.commit(writes)?;
+        Ok(assigned)
     }
 
     /// Replaces all bindings of a command.
     pub fn set_bindings(&mut self, command: &CommandRef, bindings: Vec<Binding>, policy: Policy) -> Result<Assigned, AssignError> {
+        let (assigned, writes) = self.plan_set_bindings(command, bindings, policy)?;
+        self.commit(writes)?;
+        Ok(assigned)
+    }
+
+    pub(crate) fn check_set_bindings(&self, command: &CommandRef, bindings: Vec<Binding>, policy: Policy) -> Result<(), AssignError> {
+        let (_, writes) = self.plan_set_bindings(command, bindings, policy)?;
+        self.prepare_writes(writes).map(|_| ())
+    }
+
+    fn plan_set_bindings(&self, command: &CommandRef, bindings: Vec<Binding>, policy: Policy) -> Result<(Assigned, BindingWrites), AssignError> {
         let i = self.find(command).ok_or(AssignError::UnknownCommand)?;
         if bindings.len() > MAX_BINDINGS {
             return Err(AssignError::TooMany);
@@ -598,18 +621,28 @@ impl Keymap {
         let kept: Vec<Bound> = self.hidden(i).into_iter().filter(|h| !list.iter().any(|b| self.same(b, h))).collect();
         list.extend(kept);
         let new: Vec<Bound> = list.iter().filter(|b| !self.current[i].iter().any(|c| self.same(c, b))).cloned().collect();
-        self.apply(i, list, &new, policy)
+        self.plan_writes(i, list, &new, policy)
     }
 
     /// Removes one binding (matched by effective trigger and scope). `false` when the command does
     /// not have it, or when the change needs a new [`Overrides`] entry and the overrides are full
     /// ([`AssignError::Full`]); nothing changes then.
     pub fn remove(&mut self, command: &CommandRef, binding: &Binding) -> bool {
-        let Some(i) = self.find(command) else { return false };
+        self.try_remove(command, binding).unwrap_or(false)
+    }
+
+    /// Removes one binding and reports why an edit could not be saved. `Ok(false)` means the command did not have
+    /// that binding.
+    pub fn try_remove(&mut self, command: &CommandRef, binding: &Binding) -> Result<bool, AssignError> {
+        let i = self.find(command).ok_or(AssignError::UnknownCommand)?;
         let gone = self.bound(i, binding);
         let before = self.current[i].len();
         let list: Vec<Bound> = self.current[i].iter().filter(|b| !self.same(b, &gone)).cloned().collect();
-        list.len() != before && self.commit(vec![(i, list)]).is_ok()
+        if list.len() == before {
+            return Ok(false);
+        }
+        self.commit(vec![(i, list)])?;
+        Ok(true)
     }
 
     /// Leaves a command without shortcuts, in every scope. `false` for an unknown command, or when
@@ -880,7 +913,7 @@ impl Keymap {
         out.len() < MAX_CONFLICTS
     }
 
-    fn apply(&mut self, i: usize, list: Vec<Bound>, new: &[Bound], policy: Policy) -> Result<Assigned, AssignError> {
+    fn plan_writes(&self, i: usize, list: Vec<Bound>, new: &[Bound], policy: Policy) -> Result<(Assigned, BindingWrites), AssignError> {
         if list.len() > MAX_BINDINGS {
             return Err(AssignError::TooMany);
         }
@@ -898,7 +931,7 @@ impl Keymap {
         let holders: Vec<Holder> =
             clashes.iter().map(|(j, b)| Holder { command: self.catalog[*j].command.clone(), binding: self.public(*j, b) }).collect();
         let mut done = Assigned::default();
-        let mut writes: Vec<(usize, Vec<Bound>)> = Vec::new();
+        let mut writes = Vec::new();
         match policy {
             Policy::Refuse if !holders.is_empty() => return Err(AssignError::Taken(holders)),
             Policy::Refuse => {}
@@ -922,42 +955,59 @@ impl Keymap {
             }
         }
         writes.push((i, list));
-        self.commit(writes)?;
-        Ok(done)
+        Ok((done, writes))
     }
 
-    /// Stores several commands' bindings, or none of them when the overrides lack room for the
-    /// new entries.
-    fn commit(&mut self, writes: Vec<(usize, Vec<Bound>)>) -> Result<(), AssignError> {
-        let needed = writes.iter().filter(|(i, list)| self.stored[*i].is_none() && !self.is_default(*i, list)).count();
+    /// Prepares all entries before replacing live or stored bindings, including commands whose bindings were taken.
+    fn prepare_writes(&self, writes: BindingWrites) -> Result<StoredBindingWrites, AssignError> {
+        let mut prepared = Vec::with_capacity(writes.len());
+        for (i, list) in writes {
+            let texts = self.store_texts(i, &list)?;
+            prepared.push((i, list, texts));
+        }
+        let needed = prepared.iter().filter(|(i, _, texts)| self.stored[*i].is_none() && texts.is_some()).count();
         if self.overrides.len() + needed > MAX_COMMANDS {
             return Err(AssignError::Full);
         }
-        for (i, list) in writes {
-            self.store(i, list);
+        Ok(prepared)
+    }
+
+    fn commit(&mut self, writes: BindingWrites) -> Result<(), AssignError> {
+        for (i, list, texts) in self.prepare_writes(writes)? {
+            self.remove_entries(i);
+            if let Some(texts) = texts {
+                self.overrides.insert(self.keys[i].clone(), texts);
+                self.stored[i] = Some(self.keys[i].clone());
+            }
+            self.set_current(i, list);
         }
         Ok(())
     }
 
-    /// Writes a command's bindings to the overrides, dropping the entry when they equal the
+    /// Prepares a command's overrides, dropping the entry when its bindings equal the
     /// defaults. Texts of the old entry this build cannot use stay in it, after the bindings and up
-    /// to [`MAX_BINDINGS`], unless the command is left without bindings: an entry of only such
-    /// texts loads as the defaults. Callers check for room first ([`Keymap::commit`]); texts always
-    /// fit, since a scope name, `": "` and the longest double press stay under
-    /// [`MAX_BINDING_TEXT`].
-    fn store(&mut self, i: usize, list: Vec<Bound>) {
+    /// to [`MAX_BINDINGS`], unless the command is left without bindings. An entry of only such texts loads as the defaults.
+    fn store_texts(&self, i: usize, list: &[Bound]) -> Result<Option<Vec<String>>, AssignError> {
         let mut kept = if list.is_empty() { Vec::new() } else { self.unusable_texts(i) };
         kept.truncate(MAX_BINDINGS.saturating_sub(list.len()));
-        self.remove_entries(i);
-        if !kept.is_empty() || !self.is_default(i, &list) {
-            let home = &self.catalog[i].scope;
-            let mut texts: Vec<String> = list.iter().map(|b| self.public(i, b).text(home)).collect();
-            texts.extend(kept);
-            if self.overrides.insert(self.keys[i].clone(), texts) {
-                self.stored[i] = Some(self.keys[i].clone());
+        if kept.is_empty() && self.is_default(i, list) {
+            return Ok(None);
+        }
+        let saved = self.stored[i].as_deref().and_then(|key| self.overrides.get(key)).unwrap_or_default();
+        let mut texts = Vec::with_capacity(list.len() + kept.len());
+        for bound in list {
+            let binding = self.public(i, bound);
+            let text = binding.to_string();
+            if Binding::parse(&text).as_ref() == Ok(&binding) {
+                texts.push(text);
+            } else if let Some(existing) = saved.iter().find(|text| Binding::parse(text).as_ref() == Ok(&binding)) {
+                texts.push(existing.clone());
+            } else {
+                return Err(AssignError::Unstorable { command: self.catalog[i].command.clone(), trigger: binding.trigger });
             }
         }
-        self.set_current(i, list);
+        texts.extend(kept);
+        Ok(Some(texts))
     }
 
     /// Removes a command's overrides entries: the one it reads and hand-written variants of its

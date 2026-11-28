@@ -16,8 +16,8 @@ use serde_json::{Value, json};
 use crate::control::{ControlRequest, REPLY_DEADLINE};
 use crate::protocol::write_reply;
 use crate::security::{
-    AUTH_DEADLINE, AuthDeadlineStream, AuthStep, ConnectionLimiter, LineRead, MAX_CONNECTIONS, MAX_REQUEST_BYTES, ServerHandshake, configure_stream,
-    read_bounded_line, repeat_auth_reply,
+    AUTH_DEADLINE, AuthDeadlineStream, AuthStep, ConnectionLimiter, DeadlineClock, LineRead, MAX_CONNECTIONS, MAX_REQUEST_BYTES, ServerHandshake,
+    configure_stream, read_bounded_line, real_clock, repeat_auth_reply,
 };
 
 /// A running control server. Dropping it stops accepting connections and returns once the port is
@@ -72,6 +72,36 @@ pub fn serve_with_deadline(
     host: WindowHost,
     auth_deadline: Duration,
 ) -> std::io::Result<(Receiver<ControlRequest>, Listening)> {
+    serve_with(listener, token, host, ServeOptions { auth_deadline, ..ServeOptions::default() })
+}
+
+/// What a test sets on a server [`serve_with`] starts.
+#[doc(hidden)]
+pub struct ServeOptions {
+    /// How long a connection has to authenticate ([`AUTH_DEADLINE`] in [`serve`]).
+    pub auth_deadline: Duration,
+    /// The clock the authentication deadline is read against.
+    pub clock: DeadlineClock,
+    /// Sent `()` each time a connection has ended: its request sender is dropped and its place under
+    /// [`MAX_CONNECTIONS`] is free again.
+    pub ended: Option<Sender<()>>,
+}
+
+impl Default for ServeOptions {
+    fn default() -> Self {
+        Self { auth_deadline: AUTH_DEADLINE, clock: real_clock(), ended: None }
+    }
+}
+
+/// [`serve`] with the authentication deadline, its clock and a signal for each ended connection set by a test.
+#[doc(hidden)]
+pub fn serve_with(
+    listener: TcpListener,
+    token: String,
+    host: WindowHost,
+    options: ServeOptions,
+) -> std::io::Result<(Receiver<ControlRequest>, Listening)> {
+    let ServeOptions { auth_deadline, clock, ended } = options;
     let (tx, rx) = channel::<ControlRequest>();
     let addr = listener.local_addr()?;
     // `ui.inspect`, `ui.click {label}` and `ui.focus` read the kept tree of the last presented frame; it is kept
@@ -95,12 +125,18 @@ pub fn serve_with_deadline(
             let tx = tx.clone();
             let host = host.clone();
             let token = Arc::clone(&token);
+            let clock = Arc::clone(&clock);
+            let ended = ended.clone();
             std::thread::spawn(move || {
-                serve_connection(stream, &token, &tx, &host, auth_deadline);
+                serve_connection(stream, &token, &tx, &host, auth_deadline, clock);
+                drop(tx);
                 // What the last client held down would otherwise stay held with no one left to
                 // release it; while another connection is live, its input is left alone.
                 if permit.release() {
                     host.end_injection();
+                }
+                if let Some(ended) = ended {
+                    let _ = ended.send(());
                 }
             });
         }
@@ -110,12 +146,12 @@ pub fn serve_with_deadline(
 
 /// Serve one connection: it must authenticate ([`ServerHandshake`]) within `auth_deadline` of
 /// connecting, however much it sends meanwhile; after that only the idle timeout applies.
-fn serve_connection(stream: TcpStream, token: &str, tx: &Sender<ControlRequest>, host: &WindowHost, auth_deadline: Duration) {
+fn serve_connection(stream: TcpStream, token: &str, tx: &Sender<ControlRequest>, host: &WindowHost, auth_deadline: Duration, clock: DeadlineClock) {
     if configure_stream(&stream).is_err() {
         return;
     }
     let Ok(read) = stream.try_clone() else { return };
-    let mut reader = BufReader::new(AuthDeadlineStream::new(read, auth_deadline));
+    let mut reader = BufReader::new(AuthDeadlineStream::with_clock(read, auth_deadline, clock));
     let mut out = stream;
     let mut line = String::new();
     let mut handshake = ServerHandshake::new();

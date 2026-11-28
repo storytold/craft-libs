@@ -7,13 +7,13 @@
 //! a failing case can be found again from its label. It builds for every target, `wasm32`
 //! included.
 //!
-//! [`hammer`] runs a parser on the unmodified seed, on every truncation of it and on the
+//! `hammer` runs a parser on the unmodified seed, on every truncation of it and on the
 //! mutations, one case after another on a worker thread, with a time limit for each case. It fails
 //! the test, naming the case and the input length, when the parser panics or does not finish in
 //! time. The number of rounds is a count the caller gives, multiplied by a variable the caller
 //! names. [`DIVISOR_VARIABLE`] (`CRAFT_HOSTILE_DIVISOR`) runs a fraction of every sweep for quick
-//! runs such as pull requests: every N-th truncation and 1/N of the rounds; [`divisor`] reads it
-//! for sweeps written without [`hammer`]. [`hammer`], [`HammerConfig`] and [`divisor`] are not
+//! runs such as pull requests: every N-th truncation and 1/N of the rounds; `divisor` reads it
+//! for sweeps written without `hammer`. `hammer`, `HammerConfig` and `divisor` are not
 //! built for `wasm32`.
 
 use std::fmt::Write as _;
@@ -39,11 +39,11 @@ use std::time::{Duration, Instant};
 #[cfg(not(target_arch = "wasm32"))]
 const WORKER_NAME: &str = "craft-testkit hostile";
 
-/// The variable that multiplies a [`HammerConfig`]'s rounds unless
-/// [`HammerConfig::with_multiplier_variable`] names another.
+/// The variable that multiplies a `HammerConfig`'s rounds unless
+/// `HammerConfig::with_multiplier_variable` names another.
 pub const DEFAULT_MULTIPLIER_VARIABLE: &str = "CRAFT_HOSTILE_MULT";
 
-/// The variable that divides every hostile-input sweep: with `N`, [`hammer`] runs the unmodified
+/// The variable that divides every hostile-input sweep: with `N`, `hammer` runs the unmodified
 /// seed, every N-th truncation (lengths 0, N, 2N, ...) and 1/N of its rounds, rounded up. Unset, or
 /// 1, runs everything. The Workspace gate sets it and the nightly full run leaves it unset; a
 /// failing case is found again with the same value.
@@ -54,7 +54,7 @@ pub const DIVISOR_VARIABLE: &str = "CRAFT_HOSTILE_DIVISOR";
 #[cfg(not(target_arch = "wasm32"))]
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The most cases one [`hammer`] call runs: the unmodified seed, its truncations and the rounds
+/// The most cases one `hammer` call runs: the unmodified seed, its truncations and the rounds
 /// together. A call that would run more fails before it runs any.
 pub const MAX_CASES: usize = 10_000_000;
 
@@ -389,7 +389,9 @@ fn read_variable(name: &str) -> Option<OsString> {
 /// that panics or does not finish within the config's limit.
 ///
 /// The cases run one after another on one worker thread, while the calling thread fails the test
-/// when a case runs past the config's limit. A case that finishes after the limit also fails it. A
+/// when a case is still running once the config's limit has passed since it started. The limit
+/// guards against a hang: a case that has finished, however long it took, passes or fails on what
+/// `parse` did, and the number of cases depends only on the seed, the rounds and the divisor. A
 /// failure starts with the config's label and names the case (`the unmodified seed`,
 /// `truncation to N` or the mutation's edits), the input's length and the panic's message. A case
 /// that does not finish fails the test while the worker thread is left running, so `parse` must be
@@ -436,7 +438,13 @@ where
     let start = Instant::now();
     let limit = resolve(&config.timeout, &lookup, start).map(Limit::from).map_err(|error| format!("{label}: {error}"))?;
     let clock: Clock = Arc::new(move || start.elapsed());
-    run_cases(label.to_owned(), limit, Arc::from(seed), rounds, divisor, parse, clock)
+    run_cases(label.to_owned(), limit, Arc::from(seed), rounds, divisor, parse, clock, wait_for_worker)
+}
+
+/// Waits on `signal` for at most `wait`, or less when the wait wakes early.
+#[cfg(not(target_arch = "wasm32"))]
+fn wait_for_worker<'g>(signal: &Condvar, state: MutexGuard<'g, Progress>, wait: Duration) -> MutexGuard<'g, Progress> {
+    signal.wait_timeout(state, wait).unwrap_or_else(PoisonError::into_inner).0
 }
 
 /// A clock that returns the time since a [`hammer`] call started.
@@ -473,11 +481,11 @@ struct Progress {
     outcome: Option<Result<(), String>>,
 }
 
-/// [`Progress`] under a lock, with a signal for when the worker stops.
+/// [`Progress`] under a lock, with a signal for when a case starts and when the worker stops.
 #[cfg(not(target_arch = "wasm32"))]
 struct Watch {
     state: Mutex<Progress>,
-    stopped: Condvar,
+    changed: Condvar,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -500,27 +508,30 @@ impl Drop for Report {
     fn drop(&mut self) {
         let mut state = self.watch.lock();
         state.outcome = Some(std::mem::replace(&mut self.outcome, Ok(())));
-        self.watch.stopped.notify_all();
+        self.watch.changed.notify_all();
     }
 }
 
-/// Starts the worker that runs every case, then waits for it, failing when a case runs past the
-/// limit.
+/// Starts the worker that runs every case, then waits for it, failing when a case is still running
+/// once the limit has passed since it started. `wait` waits on the watch's signal for at most the
+/// given time.
 #[cfg(not(target_arch = "wasm32"))]
-fn run_cases<F>(label: String, limit: Limit, seed: Arc<[u8]>, rounds: usize, divisor: usize, parse: F, clock: Clock) -> Result<(), String>
+#[allow(clippy::too_many_arguments)]
+fn run_cases<F, W>(label: String, limit: Limit, seed: Arc<[u8]>, rounds: usize, divisor: usize, parse: F, clock: Clock, wait: W) -> Result<(), String>
 where
     F: Fn(&[u8]) + Send + Sync + 'static,
+    W: for<'g> Fn(&Condvar, MutexGuard<'g, Progress>, Duration) -> MutexGuard<'g, Progress>,
 {
     // No case counts as running until the worker starts it, so a worker that starts late is not
     // reported as a case past its limit.
     let first = Progress { case: "the unmodified seed".to_owned(), len: seed.len(), started: clock(), running: false, outcome: None };
-    let watch = Arc::new(Watch { state: Mutex::new(first), stopped: Condvar::new() });
-    let (worker_watch, worker_clock, worker_label, worker_limit) = (Arc::clone(&watch), Arc::clone(&clock), label.clone(), limit.clone());
+    let watch = Arc::new(Watch { state: Mutex::new(first), changed: Condvar::new() });
+    let (worker_watch, worker_clock, worker_label) = (Arc::clone(&watch), Arc::clone(&clock), label.clone());
     thread::Builder::new()
         .name(WORKER_NAME.to_owned())
         .spawn(move || {
             let mut report = Report { watch: worker_watch, outcome: Err(format!("{worker_label}: the worker thread stopped without a result")) };
-            report.outcome = run_all(&report.watch, &worker_clock, &worker_label, &worker_limit, &seed, rounds, divisor, &parse);
+            report.outcome = run_all(&report.watch, &worker_clock, &worker_label, &seed, rounds, divisor, &parse);
         })
         .map_err(|error| format!("{label}: could not start the worker thread: {error}"))?;
     let mut state = watch.lock();
@@ -533,57 +544,43 @@ where
         if state.running && now >= deadline {
             return Err(format!("{label}: {} (len {}) did not finish within {}; its thread is left running", state.case, state.len, limit.text));
         }
-        let wait = if state.running { deadline.saturating_sub(now) } else { limit.limit };
-        state = watch.stopped.wait_timeout(state, wait).unwrap_or_else(PoisonError::into_inner).0;
+        let wait_for = if state.running { deadline.saturating_sub(now) } else { limit.limit };
+        state = wait(&watch.changed, state, wait_for);
     }
 }
 
 /// Runs the unmodified seed, every `divisor`-th truncation and its mutations in order, stopping at
 /// the first failure.
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(clippy::too_many_arguments)]
-fn run_all<F: Fn(&[u8])>(
-    watch: &Watch,
-    clock: &Clock,
-    label: &str,
-    limit: &Limit,
-    seed: &[u8],
-    rounds: usize,
-    divisor: usize,
-    parse: &F,
-) -> Result<(), String> {
+fn run_all<F: Fn(&[u8])>(watch: &Watch, clock: &Clock, label: &str, seed: &[u8], rounds: usize, divisor: usize, parse: &F) -> Result<(), String> {
     for n in std::iter::once(seed.len()).chain((0..seed.len()).step_by(divisor)) {
         let case = if n == seed.len() { "the unmodified seed".to_owned() } else { format!("truncation to {n}") };
-        run_one(watch, clock, label, limit, case, seed.get(..n).unwrap_or_default(), parse)?;
+        run_one(watch, clock, label, case, seed.get(..n).unwrap_or_default(), parse)?;
     }
     for mutation in mutations(seed, rounds) {
-        run_one(watch, clock, label, limit, mutation.label, &mutation.bytes, parse)?;
+        run_one(watch, clock, label, mutation.label, &mutation.bytes, parse)?;
     }
     Ok(())
 }
 
 /// Runs one case, recording it in `watch` while it runs, and returns the failure's message when it
-/// panics or finishes after the limit.
+/// panics. How long the case took does not change its result.
 #[cfg(not(target_arch = "wasm32"))]
-fn run_one<F: Fn(&[u8])>(watch: &Watch, clock: &Clock, label: &str, limit: &Limit, case: String, data: &[u8], parse: &F) -> Result<(), String> {
+fn run_one<F: Fn(&[u8])>(watch: &Watch, clock: &Clock, label: &str, case: String, data: &[u8], parse: &F) -> Result<(), String> {
     let started = clock();
     {
         let mut state = watch.lock();
         (state.case, state.len, state.started, state.running) = (case, data.len(), started, true);
+        // Wakes the calling thread so that it waits on this case's limit.
+        watch.changed.notify_all();
     }
     let outcome = catch_unwind(AssertUnwindSafe(|| parse(data)));
-    let spent = clock().saturating_sub(started);
     // The payload is dropped before the lock is taken and while the case still counts as running, so
     // the watchdog still reports a payload whose drop does not return.
     let panicked = outcome.err().map(|payload| panic_text(payload.as_ref()));
     let mut state = watch.lock();
     state.running = false;
-    let name = || format!("{label}: {} (len {})", state.case, state.len);
-    if spent > limit.limit {
-        let panicked = panicked.map_or_else(String::new, |text| format!(" (it panicked: {text})"));
-        return Err(format!("{} finished only after its limit of {}{panicked}", name(), limit.text));
-    }
-    panicked.map_or(Ok(()), |text| Err(format!("{}: the parser panicked: {text}", name())))
+    panicked.map_or(Ok(()), |text| Err(format!("{label}: {} (len {}): the parser panicked: {text}", state.case, state.len)))
 }
 
 /// The text of a panic payload.
@@ -602,6 +599,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::mpsc;
 
     /// A variable no test sets, so the environment cannot change a test's rounds or limits.
@@ -641,36 +639,44 @@ mod tests {
 
     #[test]
     fn deadline_names_stuck_case() {
-        let (release, wait) = mpsc::channel::<()>();
-        let wait = Mutex::new(wait);
-        let short = config("stuck demo", 0).with_timeout(DeadlineLimit::new(Duration::from_millis(50)).with_variable(UNSET));
-        let result = hammer_with(
-            &short,
-            &[1, 2, 3],
-            move |d| {
-                if d.len() == 3 {
-                    let _ = wait.lock().unwrap().recv();
-                }
-            },
-            unset,
-        );
+        // The clock jumps an hour ahead the first time the calling thread waits while a case runs.
+        let now = Arc::new(AtomicU64::new(0));
+        let clock_now = Arc::clone(&now);
+        let clock: Clock = Arc::new(move || Duration::from_secs(clock_now.load(Ordering::SeqCst)));
+        let (release, blocked) = mpsc::channel::<()>();
+        let blocked = Mutex::new(blocked);
+        let parse = move |d: &[u8]| {
+            if d.len() == 3 {
+                let _ = blocked.lock().unwrap().recv();
+            }
+        };
+        let limit = Limit { limit: Duration::from_millis(50), text: "50ms".to_owned() };
+        let result = run_cases("stuck demo".to_owned(), limit, Arc::from(&[1u8, 2, 3][..]), 0, 1, parse, clock, |signal, state, _| {
+            if state.running {
+                now.store(3600, Ordering::SeqCst);
+                state
+            } else {
+                signal.wait(state).unwrap_or_else(PoisonError::into_inner)
+            }
+        });
         release.send(()).unwrap();
-        let message = result.unwrap_err();
-        assert!(message.contains("stuck demo: the unmodified seed (len 3) did not finish within 50ms"), "{message}");
+        assert_eq!(result, Err("stuck demo: the unmodified seed (len 3) did not finish within 50ms; its thread is left running".to_owned()));
     }
 
     #[test]
-    fn a_case_that_finishes_after_the_limit_fails() {
-        let readings = Arc::new(Mutex::new(vec![Duration::from_secs(6), Duration::ZERO]));
-        let clock: Clock = Arc::new(move || readings.lock().unwrap().pop().unwrap_or(Duration::MAX));
-        let watch = Watch {
-            state: Mutex::new(Progress { case: String::new(), len: 0, started: Duration::ZERO, running: true, outcome: None }),
-            stopped: Condvar::new(),
-        };
+    fn a_case_that_finishes_after_the_limit_passes() {
+        // By the worker's clock the first case takes six seconds against a limit of five; the calling
+        // thread's clock stays at zero, so the watchdog does not fire.
+        let worker_readings = Mutex::new(vec![Duration::from_secs(6), Duration::ZERO]);
+        let clock: Clock = Arc::new(move || {
+            if thread::current().name() == Some(WORKER_NAME) {
+                worker_readings.lock().unwrap().pop().unwrap_or(Duration::from_secs(6))
+            } else {
+                Duration::ZERO
+            }
+        });
         let limit = Limit { limit: Duration::from_secs(5), text: "5s".to_owned() };
-        let message = run_one(&watch, &clock, "late", &limit, "the unmodified seed".to_owned(), &[1], &|_: &[u8]| {}).unwrap_err();
-        assert_eq!(message, "late: the unmodified seed (len 1) finished only after its limit of 5s");
-        assert!(!watch.lock().running);
+        assert_eq!(run_cases("slow".to_owned(), limit, Arc::from(&[1u8][..]), 0, 1, |_: &[u8]| {}, clock, wait_for_worker), Ok(()));
     }
 
     /// A panic payload that records, when it is dropped, whether the progress lock was free and
@@ -691,14 +697,13 @@ mod tests {
     fn a_panic_payload_is_dropped_outside_the_lock_while_the_case_runs() {
         let watch = Arc::new(Watch {
             state: Mutex::new(Progress { case: String::new(), len: 0, started: Duration::ZERO, running: false, outcome: None }),
-            stopped: Condvar::new(),
+            changed: Condvar::new(),
         });
         let seen = Arc::new(Mutex::new(None));
         let clock: Clock = Arc::new(|| Duration::ZERO);
-        let limit = Limit { limit: Duration::from_secs(5), text: "5s".to_owned() };
         let probe = (Arc::clone(&watch), Arc::clone(&seen));
         let parse = move |_: &[u8]| std::panic::panic_any(DropProbe { watch: Arc::clone(&probe.0), seen: Arc::clone(&probe.1) });
-        let message = run_one(&watch, &clock, "probe", &limit, "the unmodified seed".to_owned(), &[1], &parse).unwrap_err();
+        let message = run_one(&watch, &clock, "probe", "the unmodified seed".to_owned(), &[1], &parse).unwrap_err();
         assert_eq!(message, "probe: the unmodified seed (len 1): the parser panicked: a payload that is not a message");
         assert_eq!(*seen.lock().unwrap(), Some(Some(true)), "the payload was dropped with the lock held or the case stopped");
         assert!(!watch.lock().running);
@@ -725,7 +730,7 @@ mod tests {
             Duration::ZERO
         });
         let limit = Limit { limit: Duration::from_secs(5), text: "5s".to_owned() };
-        assert_eq!(run_cases("late start".to_owned(), limit, Arc::from(&[1u8][..]), 0, 1, |_: &[u8]| {}, clock), Ok(()));
+        assert_eq!(run_cases("late start".to_owned(), limit, Arc::from(&[1u8][..]), 0, 1, |_: &[u8]| {}, clock, wait_for_worker), Ok(()));
     }
 
     #[test]

@@ -52,7 +52,7 @@ fn check_ascii(code: i32, bytes: &[u8], utf8: bool) {
 }
 
 fn check_binary(code: i32, bytes: &[u8], utf8: bool) {
-    let wire = write_binary(&input(code, bytes), utf8);
+    let wire = write_binary(&input(code, bytes), utf8).unwrap();
     let mut chunks = wire.strip_prefix(SENTINEL).unwrap().strip_suffix(FOLLOWING_BINARY).unwrap();
     assert!(!chunks.is_empty(), "an empty payload must still have a tag");
     let context = format!("binary code={code} bytes={} utf8={utf8}", bytes.len());

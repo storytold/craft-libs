@@ -35,8 +35,9 @@ pub fn stage(ui: &mut Ui) -> Rect {
 /// The height of the room `ui` offers a story whose root has no content height and fills it (a window, a full-window
 /// canvas): the room its card's view gives, or the stage height where the room is unbounded.
 pub fn room_height(ui: &Ui) -> f32 {
-    let room = flow_room(ui).y;
-    if room.is_finite() { room } else { stage_height(&Env::of(ui).tokens) }
+    let env = Env::of(ui);
+    let room = flow_room(ui, &env).y;
+    if room.is_finite() { room } else { stage_height(&env.tokens) }
 }
 
 /// Allocates a stage as wide as [`stage`]'s and as tall as the story's content at that width, which `height` gives,
@@ -49,8 +50,9 @@ pub fn stage_fitting(ui: &mut Ui, height: impl FnOnce(f32) -> f32) -> Rect {
 /// The width of the stage [`stage_fitting`] allocates: the width left in `ui` between the least and greatest stage
 /// width. A story whose content measures itself at a width (through `ui`) reads it before allocating.
 pub fn stage_width(ui: &Ui) -> f32 {
-    let tokens = &Env::of(ui).tokens;
-    let room = flow_room(ui).x;
+    let env = Env::of(ui);
+    let tokens = &env.tokens;
+    let room = flow_room(ui, &env).x;
     let room = if room.is_finite() { room } else { ui.available_width() };
     room.clamp(least_stage_width(tokens), WIDTH_MAX_IN_CONTROLS * tokens.size.control.md)
 }

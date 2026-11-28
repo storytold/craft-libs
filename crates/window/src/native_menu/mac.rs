@@ -221,6 +221,8 @@ pub(super) struct Installed {
     structure: u64,
     window: Option<WindowMenu>,
     options: Options,
+    /// The last [`Installed::apply`] had to rebuild menus and could not.
+    failed: bool,
 }
 
 impl Installed {
@@ -229,7 +231,7 @@ impl Installed {
         if INSTALLED.swap(true, Ordering::SeqCst) {
             return None;
         }
-        let mut installed = Installed { menu: None, entries: HashMap::new(), structure: 0, window: None, options };
+        let mut installed = Installed { menu: None, entries: HashMap::new(), structure: 0, window: None, options, failed: false };
         if !installed.build(bar) {
             INSTALLED.store(false, Ordering::SeqCst);
             return None;
@@ -243,7 +245,8 @@ impl Installed {
     }
 
     /// Build the menu bar for `bar` and make it NSApp's. On an error or a panic in muda or AppKit
-    /// the menus stay as they were (never crash for a menu) and this returns false.
+    /// the menus stay as they were (never crash for a menu), [`Installed::failed`] reports it and
+    /// this returns false.
     fn build(&mut self, bar: &Bar) -> bool {
         let built = catch_unwind(AssertUnwindSafe(|| -> muda::Result<(muda::Menu, Entries, Option<WindowMenu>)> {
             let mut entries = Entries::new();
@@ -276,9 +279,11 @@ impl Installed {
                 self.entries = entries;
                 self.window = window;
                 self.structure = bar.structure;
+                self.failed = false;
                 true
             }
             _ => {
+                self.failed = true;
                 // The new menu may have been made NSApp's before the failure.
                 if let Some(old) = &self.menu {
                     let _ = catch_unwind(AssertUnwindSafe(|| {
@@ -331,6 +336,8 @@ impl Installed {
     }
 
     pub(super) fn apply(&mut self, bar: &Bar) -> bool {
+        // An update in place has nothing to fail; a rebuild below sets it again.
+        self.failed = false;
         if self.menu.is_none() || bar.structure != self.structure {
             return self.build(bar);
         }
@@ -365,6 +372,10 @@ impl Installed {
             }
         }
         rebuilt
+    }
+
+    pub(super) fn failed(&self) -> bool {
+        self.failed
     }
 
     pub(super) fn tracking(&self) -> bool {
