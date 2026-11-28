@@ -2,9 +2,9 @@
 //! specification, `bext` per EBU Tech 3285, `ds64` per EBU Tech 3306).
 
 use super::pcm::{Quantizer, sample_format, validate_buffer, validate_layout, write_interleaved};
-use crate::wav::{GUID_TAIL, WAVE_FORMAT_EXTENSIBLE, WAVE_FORMAT_IEEE_FLOAT, WAVE_FORMAT_PCM};
+use crate::wav::{AMBISONIC_TAIL, GUID_TAIL, WAVE_FORMAT_EXTENSIBLE, WAVE_FORMAT_IEEE_FLOAT, WAVE_FORMAT_PCM};
 use crate::{AudioBuffer, AudioError, BitDepth, BwfInfo, Result};
-use std::io::{Cursor, Seek, SeekFrom, Write};
+use std::io::{Cursor, ErrorKind, Read, Seek, SeekFrom, Write};
 
 const BEXT_MIN_LEN: usize = 602;
 
@@ -238,4 +238,176 @@ pub(crate) fn header(
     head.extend_from_slice(b"data");
     head.extend_from_slice(&(if rf64 { u32::MAX } else { data_len as u32 }).to_le_bytes());
     Ok(head)
+}
+
+/// Where the size fields of a WAV sit, from a walk of its chunks up to `data`.
+struct Layout {
+    rf64: bool,
+    /// The body of the `ds64` chunk of an RF64 file, or in a RIFF file the body of the 28-byte
+    /// `JUNK` or `ds64` chunk right after `WAVE` that can become one.
+    ds64: Option<u64>,
+    junk: bool,
+    fact: Option<u64>,
+    block_align: u64,
+    data: u64,
+}
+
+fn read_at<F: Read + Seek>(file: &mut F, pos: u64, buf: &mut [u8]) -> Result<bool> {
+    file.seek(SeekFrom::Start(pos))?;
+    match file.read_exact(buf) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == ErrorKind::UnexpectedEof => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn write_at<F: Write + Seek>(file: &mut F, pos: u64, bytes: &[u8]) -> Result<()> {
+    file.seek(SeekFrom::Start(pos))?;
+    file.write_all(bytes)?;
+    Ok(())
+}
+
+/// The block size of a PCM or float `fmt ` chunk body at `pos` of `size` bytes.
+fn pcm_block_align<F: Read + Seek>(file: &mut F, pos: u64, size: u32) -> Result<u64> {
+    let mut fmt = [0u8; 40];
+    let n = if size >= 40 { 40 } else { 16 };
+    if size < 16 || !read_at(file, pos, &mut fmt[..n])? {
+        return Err(AudioError::Malformed("WAV fmt chunk is cut short".into()));
+    }
+    let field = |at: usize| u16::from_le_bytes([fmt[at], fmt[at + 1]]);
+    let mut tag = field(0);
+    if tag == WAVE_FORMAT_EXTENSIBLE && n == 40 {
+        // The extensible fields the reader checks.
+        if field(16) < 22 || field(18) > field(14) {
+            return Err(AudioError::Malformed("WAVE_FORMAT_EXTENSIBLE fmt chunk has a cbSize below 22 or too many valid bits".into()));
+        }
+        if fmt[26..] == GUID_TAIL || fmt[26..] == AMBISONIC_TAIL {
+            tag = field(24);
+        }
+    }
+    if tag != WAVE_FORMAT_PCM && tag != WAVE_FORMAT_IEEE_FLOAT {
+        return Err(AudioError::Unsupported(format!("repairing a WAV of format tag {tag:#06x}")));
+    }
+    let (channels, align, bits) = (field(2), field(12), field(14));
+    if channels == 0 || bits == 0 || u32::from(align) != u32::from(channels) * u32::from(bits.div_ceil(8)) {
+        return Err(AudioError::Malformed(format!("WAV block size {align} does not fit {channels} channels of {bits} bits")));
+    }
+    // The widths the WAV reader decodes.
+    if !matches!((tag, bits), (WAVE_FORMAT_PCM, 1..=32) | (WAVE_FORMAT_IEEE_FLOAT, 32 | 64)) {
+        return Err(AudioError::Unsupported(format!("repairing a WAV of format tag {tag:#06x} with {bits} bits per sample")));
+    }
+    Ok(u64::from(align))
+}
+
+fn layout<F: Read + Seek>(file: &mut F, len: u64) -> Result<Layout> {
+    let mut riff = [0u8; 12];
+    if !read_at(file, 0, &mut riff)? || !(riff.starts_with(b"RIFF") || riff.starts_with(b"RF64")) || &riff[8..] != b"WAVE" {
+        return Err(AudioError::Malformed("not a WAV file".into()));
+    }
+    let rf64 = riff.starts_with(b"RF64");
+    let (mut ds64, mut junk, mut fact, mut block_align) = (None, false, None, None);
+    let mut pos = 12u64;
+    let mut chunk = [0u8; 8];
+    // The same bound as the reader's, so a file of tiny chunks can't spin forever.
+    for _ in 0..100_000 {
+        if pos >= len || !read_at(file, pos, &mut chunk)? {
+            break;
+        }
+        let size = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+        let body = pos + 8;
+        match &chunk[..4] {
+            b"data" => {
+                let block_align = block_align.ok_or_else(|| AudioError::Malformed("WAV data chunk before its fmt chunk".into()))?;
+                return Ok(Layout { rf64, ds64, junk, fact, block_align, data: body });
+            }
+            // The first `ds64` and `fact` chunks take the sizes; later ones are left as they are.
+            // The WAV reader takes the data size from the first `ds64` chunk of 16 bytes or more.
+            b"ds64" if rf64 && size >= 16 && ds64.is_none() => {
+                if size < 28 {
+                    return Err(AudioError::Malformed("RF64 ds64 chunk is shorter than 28 bytes".into()));
+                }
+                ds64 = Some(body);
+            }
+            // A `ds64` id here in a RIFF file is a promotion that stopped before the RF64 id.
+            b"JUNK" | b"ds64" if !rf64 && pos == 12 && size == 28 => (ds64, junk) = (Some(body), true),
+            b"fact" if size >= 4 && fact.is_none() => fact = Some(body),
+            b"fmt " => block_align = Some(pcm_block_align(file, body, size)?),
+            _ => {}
+        }
+        pos = body + u64::from(size) + u64::from(size & 1);
+    }
+    Err(AudioError::Malformed("WAV has no data chunk".into()))
+}
+
+/// The data size the header records: the `ds64` field of an RF64 file, else the data chunk's.
+fn stored_data_len<F: Read + Seek>(file: &mut F, l: &Layout) -> Result<Option<u64>> {
+    let mut size = [0u8; 8];
+    Ok(match (l.rf64, l.ds64) {
+        (true, Some(at)) => read_at(file, at + 8, &mut size)?.then(|| u64::from_le_bytes(size)),
+        (true, None) => None,
+        (false, _) => read_at(file, l.data - 4, &mut size[..4])?
+            .then(|| u32::from_le_bytes([size[0], size[1], size[2], size[3]]))
+            .filter(|&s| s != u32::MAX)
+            .map(u64::from),
+    })
+}
+
+/// Rewrites the size fields of a WAV that ends in its data chunk for the whole frames it holds.
+/// Returns the frame count and the length the file should have; bytes past it are a partial frame.
+pub(crate) fn repair<F: Read + Write + Seek>(file: &mut F) -> Result<(u64, u64)> {
+    let len = file.seek(SeekFrom::End(0))?;
+    let l = layout(file, len)?;
+    let held = len.saturating_sub(l.data);
+    // A finished file's own size, which also tells its pad byte from a frame of one byte.
+    let stored = stored_data_len(file, &l)?.filter(|&s| s % l.block_align == 0 && s.checked_add(s & 1) == Some(held));
+    if stored.is_none() && l.block_align == 1 && held > 0 && held % 2 == 0 {
+        // The last byte may be a sample or the pad byte after an odd count of them.
+        return Err(AudioError::Unsupported("repairing 8-bit mono WAV data of even length: a pad byte reads as a sample".into()));
+    }
+    let frames = stored.unwrap_or(held) / l.block_align;
+    let data_len = frames * l.block_align;
+    let pad = data_len & 1;
+    let new_len = l.data + data_len + pad;
+    let riff_len = new_len - 8;
+    let rf64 = l.rf64 || u32::try_from(riff_len).is_err();
+    let ds64 = match (rf64, l.ds64) {
+        (false, _) => None,
+        (true, Some(at)) if l.rf64 || l.junk => Some(at),
+        (true, _) if l.rf64 => return Err(AudioError::Malformed("RF64 file has no ds64 chunk".into())),
+        (true, _) => return Err(AudioError::TooLarge("WAV past 4 GiB has no room for a ds64 chunk".into())),
+    };
+    if let Some(at) = l.fact {
+        write_at(file, at, &u32::try_from(frames).unwrap_or(u32::MAX).to_le_bytes())?;
+    }
+    match ds64 {
+        Some(at) => {
+            let mut body = Vec::with_capacity(28);
+            body.extend_from_slice(&riff_len.to_le_bytes());
+            body.extend_from_slice(&data_len.to_le_bytes());
+            body.extend_from_slice(&frames.to_le_bytes());
+            if !l.rf64 {
+                // The `JUNK` chunk's last 4 bytes become the table length: no table entries.
+                body.extend_from_slice(&0u32.to_le_bytes());
+            }
+            write_at(file, at, &body)?;
+            if !l.rf64 {
+                write_at(file, at - 8, b"ds64")?;
+                write_at(file, 0, b"RF64")?;
+            }
+            write_at(file, l.data - 4, &u32::MAX.to_le_bytes())?;
+            write_at(file, 4, &u32::MAX.to_le_bytes())?;
+        }
+        None => {
+            write_at(file, l.data - 4, &(data_len as u32).to_le_bytes())?;
+            write_at(file, 4, &(riff_len as u32).to_le_bytes())?;
+        }
+    }
+    // The pad byte goes last: until it is written, 8-bit mono data keeps an odd length that a
+    // repeated repair can count.
+    if pad == 1 {
+        write_at(file, l.data + data_len, &[0])?;
+    }
+    file.seek(SeekFrom::Start(new_len))?;
+    file.flush()?;
+    Ok((frames, new_len))
 }

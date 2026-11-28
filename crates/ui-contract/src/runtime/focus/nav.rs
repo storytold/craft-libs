@@ -249,8 +249,14 @@ impl State {
     /// [`focus_stop`](Self::focus_stop) with what moved focus there. A row that takes the focus back from its removed
     /// child is not revealed: nothing chose to show it.
     fn focus_stop_from(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
+        self.focus_stop_from_source(rec, origin, None)
+    }
+
+    /// [`focus_stop_from`](Self::focus_stop_from) with the stop the focus came from, for a move past a stop that is no
+    /// longer shown: a restoring scope's opener is that stop, which is still there, not the one that went away.
+    fn focus_stop_from_source(&mut self, rec: StopRec, origin: FocusOrigin, source: Option<&StopRec>) -> Vec<Act> {
         let key = rec.stop.key();
-        let acts = self.enter_stop(rec, origin);
+        let acts = self.enter_stop_from(rec, origin, source);
         if origin != FocusOrigin::Removal {
             self.revealed = Some(key);
         }
@@ -264,7 +270,16 @@ impl State {
     }
 
     fn enter_stop(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
-        self.note_entry(&rec);
+        self.enter_stop_from(rec, origin, None)
+    }
+
+    /// [`enter_stop`](Self::enter_stop) with the stop the focus came from, when it is not the stop focus is on: the Tab
+    /// source a recovery moves the focus on from.
+    fn enter_stop_from(&mut self, rec: StopRec, origin: FocusOrigin, source: Option<&StopRec>) -> Vec<Act> {
+        match source {
+            Some(from) => self.note_entry_from(&rec, from),
+            None => self.note_entry(&rec),
+        }
         let stop = &rec.stop;
         let moved = self.focus_now != Some(stop.root) || self.focused.get(&stop.root) != Some(&stop.key());
         if moved {
@@ -280,6 +295,12 @@ impl State {
     /// returns there.
     fn note_entry(&mut self, rec: &StopRec) {
         let Some(from) = self.stop_of_focus() else { return };
+        self.note_entry_from(rec, &from);
+    }
+
+    /// [`note_entry`](Self::note_entry) with the stop the move came from, which is not the stop focus is on when a
+    /// recovery moves it past a stop that is no longer shown.
+    fn note_entry_from(&mut self, rec: &StopRec, from: &StopRec) {
         let mut at = rec.scope;
         while let Some(id) = at {
             let Some(scope) = self.scopes.get(&id).or_else(|| self.last_scopes.get(&id)) else { return };
@@ -393,8 +414,17 @@ impl State {
     /// A Tab move. In a dialog's trap with `dialog_tab` at `Fields`, only text stops are entries, whatever the
     /// window's rule: a roving group whose arrival member holds no text is skipped too.
     pub(super) fn tab(&mut self, forward: bool, all_controls: bool, dialog_tab: TabReach) -> Vec<Act> {
-        // A child of a collection row tabs on from its collection: the row groups are no Tab entries. The content of a
-        // layer that keeps the focus on its anchor (a dropdown) is no Tab entry either: Tab goes on from the anchor.
+        let (current, entries) = self.tab_entries(all_controls, dialog_tab);
+        let top = current.as_ref().and_then(|rec| rec.stop.group).map(|group| self.last().outermost(group));
+        let Some(next) = cycle(&entries, current.as_ref(), top, forward) else { return Vec::new() };
+        let arrival = entries[next].arrival().clone();
+        self.focus_stop(arrival)
+    }
+
+    /// The Tab entries this pass moves over, from the stop the focus is on (a row's child tabs on from its collection,
+    /// a dropdown's content from its anchor). They are last pass's entries: what `tab` cycles, and what a Tab that
+    /// landed on a stop this pass does not show goes on through.
+    fn tab_entries(&self, all_controls: bool, dialog_tab: TabReach) -> (Option<StopRec>, Vec<Entry>) {
         let current = self.stop_of_focus().map(|rec| {
             let owner = rec.stop.group.and_then(|group| self.group(group)).filter(|group| group.row).and_then(|group| self.row_owner(&group));
             let rec = owner.unwrap_or(rec);
@@ -405,10 +435,7 @@ impl State {
         let fields = in_dialog && dialog_tab == TabReach::Fields;
         let mut entries = self.entries(trap, all_controls && !fields);
         entries.retain(|entry| self.anchored_layer(entry.arrival().scope).is_none() && (!fields || entry.arrival().stop.text));
-        let top = current.as_ref().and_then(|rec| rec.stop.group).map(|group| self.last().outermost(group));
-        let Some(next) = cycle(&entries, current.as_ref(), top, forward) else { return Vec::new() };
-        let arrival = entries[next].arrival().clone();
-        self.focus_stop(arrival)
+        (current, entries)
     }
 
     /// F6: the first stop of the next pane, with its label as the announcement. Inside a trapping scope (a modal
@@ -587,10 +614,48 @@ impl State {
         let target = owner.or_else(|| {
             gone.stop.arena.and_then(|arena| self.stops.iter().filter(live).find(|rec| rec.stop.id == arena && rec.stop.part.is_none()).cloned())
         });
-        Some(match target {
-            Some(target) => self.focus_stop_from(target, FocusOrigin::Removal),
-            None => vec![Act::Surrender(root)],
-        })
+        if let Some(target) = target {
+            return Some(self.focus_stop_from(target, FocusOrigin::Removal));
+        }
+        // A stop that Tab or a request moved the focus to in this pass, and that is not shown in it (a list a field shows
+        // only while it is focused), never held the focus: it goes on to the next stop that is, in the direction of the
+        // Tab, else back to the stop the Tab left.
+        if let Some(next) = self.arrived_unshown(key) {
+            // The move comes from the stop the Tab left, which is still shown, not from the stop it landed on.
+            let source = self.press.tabbed_from.and_then(|(from, _)| self.stop_by_root(from));
+            return Some(self.focus_stop_from_source(next, FocusOrigin::Request, source.as_ref()));
+        }
+        Some(vec![Act::Surrender(root)])
+    }
+
+    /// The stop a Tab that landed on a stop this pass does not show goes on to: the next Tab entry, in the direction
+    /// of the Tab, that this pass shows. A stop the focus arrived at by a press, a scope opening or a restoration never
+    /// held the focus, so it leaves the focus nowhere as any other removed stop does: only a Tab takes it here.
+    fn arrived_unshown(&self, key: StopKey) -> Option<StopRec> {
+        // The Tab this pass made and the direction it went; the stop it left may be none at all.
+        let forward = self.press.tabbed?;
+        // `end` has moved the frame on: an arrival of this pass is stamped with the frame before.
+        let arrived = self.arrived.is_some_and(|(frame, at, origin)| at == key && frame + 1 == self.frame && origin == FocusOrigin::Request);
+        if !arrived {
+            return None;
+        }
+        let (current, entries) = self.tab_entries(self.tab_all_controls, self.dialog_tab);
+        let current = current?;
+        let top = current.stop.group.map(|group| self.last().outermost(group));
+        let at = entries.iter().position(|entry| entry.holds(&current, top))?;
+        let shown = |rec: &StopRec| self.stops.iter().any(|now| now.stop.key() == rec.stop.key() && !self.fading(now.scope));
+        let count = entries.len();
+        (1..=count)
+            .map(|step| if forward { (at + step) % count } else { (at + count - step) % count })
+            .find(|index| shown(entries[*index].arrival()))
+            .map(|index| entries[index].arrival().clone())
+    }
+
+    /// The stop focus was on when `root` held egui focus: the stop of that root, or the member recorded for it.
+    fn stop_by_root(&self, root: Id) -> Option<StopRec> {
+        let key = self.focused.get(&root).copied();
+        key.and_then(|key| self.stops.iter().chain(&self.last_stops).find(|rec| rec.stop.key() == key).cloned())
+            .or_else(|| self.stops.iter().chain(&self.last_stops).find(|rec| rec.stop.root == root).cloned())
     }
 
     /// Whether the scope `scope` of this pass, or one around it, is a layer playing its exit: its stops take no focus.
@@ -839,6 +904,8 @@ pub(super) fn begin(state: &mut State, input: BeginIn) -> (Vec<Act>, Vec<String>
     state.rotate();
     state.frame = input.frame;
     state.focus_now = input.focused;
+    state.tab_all_controls = input.tab_all_controls;
+    state.dialog_tab = input.dialog_tab;
     state.press.rotate(input.focused);
     let mut acts = Vec::new();
     let mut announcements = Vec::new();
@@ -846,10 +913,16 @@ pub(super) fn begin(state: &mut State, input: BeginIn) -> (Vec<Act>, Vec<String>
         acts.extend(state.apply_target(target));
     }
     for forward in input.nav.tabs {
+        // The stop the Tab leaves is the one focus is on now: a request this pass applied above may have moved it on
+        // from the widget egui held at the begin hook, and the components read this to tell a Tab from a blur.
+        let from = state.focus_now;
         let moved = state.tab(forward, input.tab_all_controls, input.dialog_tab);
         state.press.by_keys |= !moved.is_empty();
-        if let Some(from) = input.focused.filter(|_| !moved.is_empty()) {
-            state.press.tabbed_from = Some((from, forward));
+        if !moved.is_empty() {
+            // The direction is the Tab's own, whether or not a stop was there to leave: a Tab from no focus can land
+            // on a stop this pass does not show, and the recovery below still needs to know which way it went.
+            state.press.tabbed = Some(forward);
+            state.press.tabbed_from = from.map(|from| (from, forward));
         }
         acts.extend(moved);
     }
