@@ -150,11 +150,11 @@ fn texts(items: &[GraphicItem]) -> Vec<&str> {
 fn unsupported_chart_types_draw_a_placeholder() {
     let ser = r#"<c:ser><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser>"#;
     let title = r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>Skills</a:t></a:r></a:p></c:rich></c:tx></c:title>"#;
-    let x = format!(r#"<c:chartSpace {NS}><c:chart>{title}<c:plotArea><c:bubbleChart>{ser}</c:bubbleChart></c:plotArea></c:chart></c:chartSpace>"#);
-    let bubble = chart_items(&crate::xml::parse(x.as_bytes()).unwrap(), &theme(), 300.0, 200.0);
-    assert_eq!(texts(&bubble), ["Skills", "Bubble chart (not supported yet)"]);
-    let framed = bubble.iter().any(|it| matches!(it, GraphicItem::Shape { rect, stroke: Some(_), .. } if *rect == [0.0, 0.0, 300.0, 200.0]));
-    assert!(framed, "a light border marks the chart's frame: {bubble:?}");
+    let x = format!(r#"<c:chartSpace {NS}><c:chart>{title}<c:plotArea><c:surfaceChart>{ser}</c:surfaceChart></c:plotArea></c:chart></c:chartSpace>"#);
+    let surface = chart_items(&crate::xml::parse(x.as_bytes()).unwrap(), &theme(), 300.0, 200.0);
+    assert_eq!(texts(&surface), ["Skills", "Surface chart (not supported yet)"]);
+    let framed = surface.iter().any(|it| matches!(it, GraphicItem::Shape { rect, stroke: Some(_), .. } if *rect == [0.0, 0.0, 300.0, 200.0]));
+    assert!(framed, "a light border marks the chart's frame: {surface:?}");
 
     let stock = chart_items(&space(&format!("<c:stockChart>{ser}{ser}{ser}</c:stockChart>")), &theme(), 300.0, 200.0);
     assert_eq!(texts(&stock), ["Stock chart (not supported yet)"]);
@@ -204,7 +204,9 @@ fn radar_charts_draw_spokes_grid_and_series_polygons() {
 #[test]
 fn radar_charts_show_a_legend() {
     let cats = ["a", "b", "c"];
-    let plot = format!("<c:radarChart>{}</c:radarChart>", ser(0, "Team", None, &cats, &["1", "2", "3"]));
+    // `c:varyColors val="0"`, as Word writes it, so the legend lists the series, "Team". Without
+    // the element a lone series would vary by point and the legend would list the categories.
+    let plot = format!(r#"<c:radarChart><c:varyColors val="0"/>{}</c:radarChart>"#, ser(0, "Team", None, &cats, &["1", "2", "3"]));
     let items = with_legend(&plot, "r", 300.0, 200.0);
     assert!(texts(&items).contains(&"Team"), "{:?}", texts(&items));
 }
@@ -532,6 +534,862 @@ fn negative_sections_and_scientific_numbers() {
     assert_eq!(format_value(0.00012, "0.0E+0", 0.0001), "1.2E-4");
     assert_eq!(format_value(0.0, "0.00E+00", 1.0), "0.00E+00");
     assert_eq!(format_value(-12345.0, "0.0E-00", 1.0), "-1.2E04");
+}
+
+// `c:varyColors` (#5955), as measured in Word: a one-series chart gives each point its own accent
+// unless the series has its own colour; area and filled radar charts never vary; with several
+// series only pie does. An absent element counts as true.
+
+/// Accent `k` (0-based) of the test theme.
+fn accent(k: usize) -> Rgb {
+    theme()[4 + k]
+}
+
+/// The legend swatches' colours, in order.
+fn swatch_colours(items: &[GraphicItem]) -> Vec<Rgb> {
+    items
+        .iter()
+        .filter_map(|it| if let GraphicItem::Shape { rect, fill, .. } = it { (rect[2] == SWATCH).then_some(*fill).flatten() } else { None })
+        .collect()
+}
+
+/// The fill colours of the round markers, in order.
+fn marker_colours(items: &[GraphicItem]) -> Vec<Rgb> {
+    items.iter().filter_map(|it| if let GraphicItem::Shape { kind: ShapeKind::Ellipse, fill, .. } = it { *fill } else { None }).collect()
+}
+
+/// The colours of the stroked paths drawn in a theme accent (the series' lines), in order.
+fn line_colours(items: &[GraphicItem]) -> Vec<Rgb> {
+    let ours = |c: &Rgb| (0..6).any(|k| accent(k) == *c);
+    items.iter().filter_map(|it| if let GraphicItem::Path { stroke: Some(c), .. } = it { ours(c).then_some(*c) } else { None }).collect()
+}
+
+const CATS: [&str; 3] = ["Q1", "Q2", "Q3"];
+
+fn column_chart(vary: &str, sers: &[String]) -> String {
+    format!(
+        r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{vary}{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#,
+        sers.concat()
+    )
+}
+
+#[test]
+fn one_series_varies_by_point_when_vary_colors_is_on_or_absent() {
+    let one = [ser(0, "S", None, &CATS, &["1", "2", "3"])];
+    let varied = vec![accent(0), accent(1), accent(2)];
+    for vary in [r#"<c:varyColors val="1"/>"#, r#"<c:varyColors val="true"/>"#, "<c:varyColors/>", ""] {
+        let bars: Vec<Rgb> = filled(&chart_items(&space(&column_chart(vary, &one)), &theme(), 300.0, 200.0)).iter().map(|b| b.0).collect();
+        assert_eq!(bars, varied, "{vary:?}");
+    }
+    let off = filled(&chart_items(&space(&column_chart(r#"<c:varyColors val="0"/>"#, &one)), &theme(), 300.0, 200.0));
+    assert!(off.len() == CATS.len() && off.iter().all(|b| b.0 == accent(0)), "{off:?}");
+}
+
+#[test]
+fn an_explicit_series_colour_wins_over_vary_colors() {
+    let red = Rgb(0xFF, 0, 0);
+    let plot = column_chart(r#"<c:varyColors val="1"/>"#, &[ser(0, "S", Some("FF0000"), &CATS, &["1", "2", "3"])]);
+    let items = with_legend(&plot, "r", 300.0, 200.0);
+    let bars = filled(&items);
+    assert!(bars.len() == CATS.len() && bars.iter().all(|b| b.0 == red), "{bars:?}");
+    // The legend still lists the categories, each in the series colour.
+    assert_eq!(swatch_colours(&items), vec![red; 3]);
+    // Pie too.
+    let pie = format!(r#"<c:pieChart><c:varyColors val="1"/>{}</c:pieChart>"#, ser(0, "S", Some("FF0000"), &CATS, &["1", "2", "3"]));
+    let slices = filled(&chart_items(&space(&pie), &theme(), 200.0, 150.0));
+    assert!(slices.len() == 3 && slices.iter().all(|s| s.0 == red), "{slices:?}");
+}
+
+#[test]
+fn several_series_area_and_filled_radar_do_not_vary() {
+    let vary = r#"<c:varyColors val="1"/>"#;
+    let two = [ser(0, "A", None, &CATS, &["1", "2", "3"]), ser(1, "B", None, &CATS, &["3", "2", "1"])];
+    let items = with_legend(&column_chart(vary, &two), "r", 300.0, 200.0);
+    let bars: Vec<Rgb> = filled(&items).iter().map(|b| b.0).collect();
+    assert_eq!(bars, [accent(0), accent(0), accent(0), accent(1), accent(1), accent(1)]);
+    assert_eq!(swatch_colours(&items), [accent(0), accent(1)], "the legend lists the series");
+
+    let one = ser(0, "S", None, &CATS, &["1", "2", "3"]);
+    let area = format!(
+        r#"<c:areaChart><c:grouping val="standard"/>{vary}{one}<c:axId val="1"/><c:axId val="2"/></c:areaChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#
+    );
+    let items = with_legend(&area, "r", 300.0, 200.0);
+    assert_eq!(filled(&items).iter().map(|b| b.0).collect::<Vec<_>>(), [accent(0)]);
+    assert_eq!(swatch_colours(&items), [accent(0)]);
+
+    let radar = format!(r#"<c:radarChart><c:radarStyle val="filled"/>{vary}{one}</c:radarChart><c:valAx/>"#);
+    let items = with_legend(&radar, "r", 300.0, 220.0);
+    assert_eq!(filled(&items).iter().map(|b| b.0).collect::<Vec<_>>(), [accent(0)]);
+    assert!(line_colours(&items).iter().all(|c| *c == accent(0)), "{:?}", line_colours(&items));
+    assert_eq!(swatch_colours(&items), [accent(0)]);
+
+    // A pie draws only its first series, and still varies with two.
+    let pie = format!(r#"<c:pieChart>{vary}{}</c:pieChart>"#, two.concat());
+    let slices: Vec<Rgb> = filled(&chart_items(&space(&pie), &theme(), 200.0, 150.0)).iter().map(|s| s.0).collect();
+    assert_eq!(slices, [accent(0), accent(1), accent(2)]);
+}
+
+#[test]
+fn varied_lines_colour_each_segment_by_the_point_it_ends_at() {
+    let plot = format!(
+        r#"<c:lineChart><c:grouping val="standard"/><c:varyColors val="1"/>{}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#,
+        ser(0, "S", None, &["a", "b", "c", "d"], &["1", "3", "2", "4"])
+    );
+    let items = chart_items(&space(&plot), &theme(), 300.0, 200.0);
+    assert_eq!(line_colours(&items), [accent(1), accent(2), accent(3)]);
+    // Not varied: one line in the series colour.
+    let plain = plot.replace(r#"<c:varyColors val="1"/>"#, r#"<c:varyColors val="0"/>"#);
+    assert_eq!(line_colours(&chart_items(&space(&plain), &theme(), 300.0, 200.0)), [accent(0)]);
+}
+
+#[test]
+fn a_smoothed_varied_line_stays_smooth_in_each_points_colour() {
+    let plot = format!(
+        r#"<c:lineChart><c:grouping val="standard"/><c:varyColors val="1"/>{}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#,
+        ser(0, "S", None, &["a", "b", "c", "d"], &["1", "3", "2", "4"]).replace("</c:ser>", r#"<c:smooth val="1"/></c:ser>"#)
+    );
+    let items = chart_items(&space(&plot), &theme(), 300.0, 200.0);
+    assert_eq!(line_colours(&items), [accent(1), accent(2), accent(3)]);
+    let curved = items
+        .iter()
+        .filter(|it| matches!(it, GraphicItem::Path { stroke: Some(c), segs, .. } if *c != AXIS && *c != GRID && segs.iter().any(|s| matches!(s, PathSeg::Cubic(..)))))
+        .count();
+    assert_eq!(curved, 3, "every piece is a curve, not a straight segment: {items:?}");
+}
+
+/// A one-series scatter chart; `no_line` hides the line so markers are drawn.
+fn scatter(vary: &str, no_line: bool) -> String {
+    let ln = if no_line { "<c:spPr><a:ln><a:noFill/></a:ln></c:spPr>" } else { "" };
+    let s = ser(0, "S", None, &["1", "2", "3"], &["1", "3", "2"]).replace("c:cat>", "c:xVal>").replace("c:val>", "c:yVal>");
+    let s = s.replace("</c:tx>", &format!("</c:tx>{ln}"));
+    format!(
+        r#"<c:scatterChart><c:scatterStyle val="lineMarker"/>{vary}{s}<c:axId val="1"/><c:axId val="2"/></c:scatterChart><c:valAx><c:axId val="1"/></c:valAx><c:valAx><c:axId val="2"/></c:valAx>"#
+    )
+}
+
+#[test]
+fn varied_scatter_charts_colour_markers_and_segments_by_point() {
+    let vary = r#"<c:varyColors val="1"/>"#;
+    let marks = chart_items(&space(&scatter(vary, true)), &theme(), 300.0, 200.0);
+    assert_eq!(marker_colours(&marks), [accent(0), accent(1), accent(2)]);
+    let lined = chart_items(&space(&scatter(vary, false)), &theme(), 300.0, 200.0);
+    assert_eq!(line_colours(&lined), [accent(1), accent(2)]);
+    let plain = chart_items(&space(&scatter(r#"<c:varyColors val="0"/>"#, true)), &theme(), 300.0, 200.0);
+    assert_eq!(marker_colours(&plain), [accent(0); 3]);
+}
+
+#[test]
+fn varied_radar_charts_colour_markers_and_segments_by_point() {
+    let one = ser(0, "S", None, &CATS, &["1", "2", "3"]);
+    let plot = format!(r#"<c:radarChart><c:radarStyle val="marker"/><c:varyColors val="1"/>{one}</c:radarChart><c:valAx/>"#);
+    let items = chart_items(&space(&plot), &theme(), 300.0, 220.0);
+    assert_eq!(marker_colours(&items), [accent(0), accent(1), accent(2)]);
+    // Each segment in the colour of the point it ends at. Word draws the closing c→a first, then
+    // a→b and b→c.
+    assert_eq!(line_colours(&items), [accent(0), accent(1), accent(2)]);
+    // Two points: Word still draws the closing b→a, under a→b, so b's colour shows.
+    let two = ser(0, "S", None, &CATS[..2], &["1", "2"]);
+    let plot = format!(r#"<c:radarChart><c:radarStyle val="marker"/><c:varyColors val="1"/>{two}</c:radarChart><c:valAx/>"#);
+    let items = chart_items(&space(&plot), &theme(), 300.0, 220.0);
+    assert_eq!(line_colours(&items), [accent(0), accent(1)]);
+}
+
+// `c:dPt` line and marker colours (#5960): Word saves a varied line, scatter or radar chart with
+// each point's colour in `dPt/c:spPr/a:ln` (the segment into the point) and
+// `dPt/c:marker/c:spPr` (its marker), not in a fill.
+
+const RED: Rgb = Rgb(0xFF, 0, 0);
+const GREEN: Rgb = Rgb(0, 0x80, 0);
+const BLUE: Rgb = Rgb(0, 0, 0xFF);
+
+/// A `c:dPt` for point `idx` as Word writes it for a line, scatter or radar series: a marker
+/// filled and outlined in `rgb`, and a line in `rgb`.
+fn dpt_point(idx: usize, rgb: &str) -> String {
+    let solid = format!(r#"<a:solidFill><a:srgbClr val="{rgb}"/></a:solidFill>"#);
+    format!(
+        r#"<c:dPt><c:idx val="{idx}"/><c:marker><c:spPr>{solid}<a:ln w="9525">{solid}</a:ln></c:spPr></c:marker><c:bubble3D val="0"/><c:spPr><a:ln w="28575" cap="rnd">{solid}<a:round/></a:ln></c:spPr></c:dPt>"#
+    )
+}
+
+/// `ser` with `dpts` after the series' own properties (before `c:cat` / `c:xVal`).
+fn with_dpts(ser: &str, dpts: &str) -> String {
+    let at = ser.find("<c:cat>").or_else(|| ser.find("<c:xVal>")).unwrap_or(ser.len());
+    format!("{}{dpts}{}", &ser[..at], &ser[at..])
+}
+
+/// The colours of the stroked paths drawn in one of `palette`, in order.
+fn strokes_in(items: &[GraphicItem], palette: &[Rgb]) -> Vec<Rgb> {
+    items.iter().filter_map(|it| if let GraphicItem::Path { stroke: Some(c), .. } = it { palette.contains(c).then_some(*c) } else { None }).collect()
+}
+
+fn line_chart(vary: &str, ser: &str) -> String {
+    format!(
+        r#"<c:lineChart><c:grouping val="standard"/>{vary}{ser}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#
+    )
+}
+
+#[test]
+fn a_line_charts_point_line_colours_colour_the_segments_into_them() {
+    // As Word saves a varied line chart: every point has its colour in a `c:dPt`.
+    let dpts = [dpt_point(0, "FF0000"), dpt_point(1, "008000"), dpt_point(2, "0000FF")].concat();
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "3", "2"]), &dpts);
+    let items = chart_items(&space(&line_chart(r#"<c:varyColors val="1"/>"#, &s)), &theme(), 300.0, 200.0);
+    assert_eq!(strokes_in(&items, &[RED, GREEN, BLUE]), [GREEN, BLUE]);
+    assert!(line_colours(&items).is_empty(), "no accent colours: {:?}", line_colours(&items));
+    // The legend lists the categories in the points' own colours.
+    let legend = with_legend(&line_chart(r#"<c:varyColors val="1"/>"#, &s), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&legend), [RED, GREEN, BLUE]);
+
+    // One point formatted by hand in a chart that doesn't vary: only the segment into it changes.
+    let s = with_dpts(&ser(0, "S", Some("0000FF"), &["a", "b", "c", "d"], &["1", "3", "2", "4"]), &dpt_point(2, "FF0000"));
+    let items = chart_items(&space(&line_chart(r#"<c:varyColors val="0"/>"#, &s)), &theme(), 300.0, 200.0);
+    assert_eq!(strokes_in(&items, &[RED, BLUE]), [BLUE, RED, BLUE]);
+}
+
+#[test]
+fn scatter_points_take_their_marker_and_line_colours() {
+    let dpts = [dpt_point(0, "FF0000"), dpt_point(1, "008000"), dpt_point(2, "0000FF")].concat();
+    // Markers (the series has no line).
+    let marks = scatter(r#"<c:varyColors val="1"/>"#, true);
+    let marks = marks.replacen("<c:xVal>", &format!("{dpts}<c:xVal>"), 1);
+    assert_eq!(marker_colours(&chart_items(&space(&marks), &theme(), 300.0, 200.0)), [RED, GREEN, BLUE]);
+    // A line: the segments into points 1 and 2.
+    let lined = scatter(r#"<c:varyColors val="1"/>"#, false).replacen("<c:xVal>", &format!("{dpts}<c:xVal>"), 1);
+    assert_eq!(strokes_in(&chart_items(&space(&lined), &theme(), 300.0, 200.0), &[RED, GREEN, BLUE]), [GREEN, BLUE]);
+    // Not varied, one point formatted: only its marker changes.
+    let one = scatter(r#"<c:varyColors val="0"/>"#, true).replacen("<c:xVal>", &format!("{}<c:xVal>", dpt_point(1, "FF0000")), 1);
+    assert_eq!(marker_colours(&chart_items(&space(&one), &theme(), 300.0, 200.0)), [accent(0), RED, accent(0)]);
+}
+
+#[test]
+fn radar_points_take_their_marker_and_line_colours() {
+    let dpts = [dpt_point(0, "FF0000"), dpt_point(1, "008000"), dpt_point(2, "0000FF")].concat();
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &dpts);
+    let plot = format!(r#"<c:radarChart><c:radarStyle val="marker"/><c:varyColors val="1"/>{s}</c:radarChart><c:valAx/>"#);
+    let items = chart_items(&space(&plot), &theme(), 300.0, 220.0);
+    assert_eq!(marker_colours(&items), [RED, GREEN, BLUE]);
+    // The closing c→a first, then a→b and b→c.
+    assert_eq!(strokes_in(&items, &[RED, GREEN, BLUE]), [RED, GREEN, BLUE]);
+    // A filled radar ignores its points' colours in Word: one fill and outline.
+    let filled_radar = plot.replace(r#"val="marker""#, r#"val="filled""#);
+    let items = chart_items(&space(&filled_radar), &theme(), 300.0, 220.0);
+    assert!(strokes_in(&items, &[RED, GREEN, BLUE]).is_empty(), "{:?}", strokes_in(&items, &[RED, GREEN, BLUE]));
+    assert_eq!(filled(&items).iter().map(|f| f.0).collect::<Vec<_>>(), [accent(0)]);
+}
+
+/// Two `c:dPt` for the same point, as Word reads them (#5969 review, measured): the later one's
+/// `c:spPr` and `c:marker` each replace the earlier one's as a whole, and what it doesn't have
+/// stays.
+#[test]
+fn a_second_c_dpt_for_a_point_replaces_only_the_parts_it_has() {
+    let solid = |c: &str| format!(r#"<a:solidFill><a:srgbClr val="{c}"/></a:solidFill>"#);
+    let marker = format!(r#"<c:dPt><c:idx val="1"/><c:marker><c:spPr>{}</c:spPr></c:marker></c:dPt>"#, solid("FF0000"));
+    let line = format!(r#"<c:dPt><c:idx val="1"/><c:spPr><a:ln w="28575">{}</a:ln></c:spPr></c:dPt>"#, solid("0000FF"));
+    let fill = format!(r#"<c:dPt><c:idx val="1"/><c:spPr>{}</c:spPr></c:dPt>"#, solid("FF0000"));
+    let off = r#"<c:varyColors val="0"/>"#;
+    // A marker, then a line: both.
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &format!("{marker}{line}"));
+    let plot = format!(r#"<c:radarChart><c:radarStyle val="marker"/>{off}{s}</c:radarChart><c:valAx/>"#);
+    let items = chart_items(&space(&plot), &theme(), 300.0, 220.0);
+    assert_eq!(marker_colours(&items), [accent(0), RED, accent(0)]);
+    assert_eq!(strokes_in(&items, &[RED, BLUE]), [BLUE]);
+    // A fill, then an outline: the outline's c:spPr replaces the fill.
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &format!("{fill}{line}"));
+    let bars: Vec<Rgb> = filled(&chart_items(&space(&column_chart(off, &[s])), &theme(), 300.0, 200.0)).iter().map(|b| b.0).collect();
+    assert_eq!(bars, [accent(0); 3]);
+}
+
+#[test]
+fn the_legend_of_a_varied_chart_lists_the_categories() {
+    let items = with_legend(&column_chart("", &[ser(0, "Sales", None, &CATS, &["1", "2", "3"])]), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items), [accent(0), accent(1), accent(2)]);
+    assert!(!texts(&items).contains(&"Sales"), "{:?}", texts(&items));
+}
+
+// Each part of a `c:dPt` alone (#5980 review; Word's PDFs): a bar's or slice's legend key takes
+// only the point's fill (with only an outline, Word fills the key in the automatic colour and
+// outlines it), and a fill colours neither a line, scatter or radar marker nor its key (Word
+// colours their keys from the point's line and marker).
+
+/// A `c:dPt` for point 1 with only `part` in red: `c:spPr` content.
+fn dpt_part(part: &str) -> String {
+    let solid = r#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#;
+    let part = if part == "ln" { format!(r#"<a:ln w="28575">{solid}</a:ln>"#) } else { solid.to_string() };
+    format!(r#"<c:dPt><c:idx val="1"/><c:spPr>{part}</c:spPr></c:dPt>"#)
+}
+
+#[test]
+fn an_outline_alone_leaves_a_bar_or_slice_key_in_its_automatic_colour() {
+    let vary = r#"<c:varyColors val="1"/>"#;
+    let one = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &dpt_part("ln"));
+    for plot in [column_chart(vary, std::slice::from_ref(&one)), format!(r#"<c:pieChart>{vary}{one}</c:pieChart>"#)] {
+        let items = with_legend(&plot, "r", 300.0, 200.0);
+        assert_eq!(swatch_colours(&items), [accent(0), accent(1), accent(2)], "{plot}");
+        assert!(!filled(&items).iter().any(|f| f.0 == RED), "{plot}");
+    }
+    // A fill colours both.
+    let one = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &dpt_part("fill"));
+    let items = with_legend(&column_chart(vary, &[one]), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items), [accent(0), RED, accent(2)]);
+}
+
+#[test]
+fn a_fill_alone_colours_no_line_scatter_or_radar_marker_or_key() {
+    let vary = r#"<c:varyColors val="1"/>"#;
+    let fill = dpt_part("fill");
+    let marks = scatter(vary, true).replacen("<c:xVal>", &format!("{fill}<c:xVal>"), 1);
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &fill);
+    let radar = format!(r#"<c:radarChart><c:radarStyle val="marker"/>{vary}{s}</c:radarChart><c:valAx/>"#);
+    for plot in [&marks, &radar] {
+        let items = with_legend(plot, "r", 300.0, 220.0);
+        assert_eq!(marker_colours(&items), [accent(0), accent(1), accent(2)], "{plot}");
+        assert_eq!(swatch_colours(&items), [accent(0), accent(1), accent(2)], "{plot}");
+    }
+    let items = with_legend(&line_chart(vary, &s), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items), [accent(0), accent(1), accent(2)]);
+    // A line colour alone colours the key (Word draws the key's line in it).
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &dpt_part("ln"));
+    let items = with_legend(&line_chart(vary, &s), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items), [accent(0), RED, accent(2)]);
+}
+
+// A formatted point and the legend (#5978): in Word, a one-series chart of a kind that can vary
+// by point lists its categories in the legend once a point has a colour of its own, even with
+// `c:varyColors val="0"`. The other keys keep the series colour.
+
+const OFF: &str = r#"<c:varyColors val="0"/>"#;
+
+/// A red fill for point `idx`, as Word writes it for a bar or column.
+fn dpt_fill(idx: usize) -> String {
+    format!(
+        r#"<c:dPt><c:idx val="{idx}"/><c:invertIfNegative val="0"/><c:bubble3D val="0"/><c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr></c:dPt>"#
+    )
+}
+
+#[test]
+fn a_point_with_its_own_colour_makes_the_legend_list_the_categories() {
+    let s = ser(0, "Sales", None, &CATS, &["1", "2", "3"]);
+    let items = with_legend(&column_chart(OFF, &[with_dpts(&s, &dpt_fill(1))]), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items), [accent(0), RED, accent(0)]);
+    assert!(CATS.iter().all(|c| texts(&items).contains(c)) && !texts(&items).contains(&"Sales"), "{:?}", texts(&items));
+    // A line chart's point, coloured in its marker and line.
+    let items = with_legend(&line_chart(OFF, &with_dpts(&s, &dpt_point(1, "FF0000"))), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items), [accent(0), RED, accent(0)]);
+    assert!(!texts(&items).contains(&"Sales"), "{:?}", texts(&items));
+}
+
+#[test]
+fn a_formatted_point_leaves_the_series_legend_where_word_does() {
+    let s = ser(0, "Sales", None, &CATS, &["1", "2", "3"]);
+    let red = with_dpts(&s, &dpt_fill(1));
+    // One key, the series (the categories are also axis labels, so count keys, not texts).
+    let series_legend = |plot: &str| {
+        let items = with_legend(plot, "r", 300.0, 200.0);
+        swatch_colours(&items).len() == 1 && texts(&items).contains(&"Sales")
+    };
+    // Area and filled radar charts never vary by point.
+    let area = format!(
+        r#"<c:areaChart><c:grouping val="standard"/>{OFF}{red}<c:axId val="1"/><c:axId val="2"/></c:areaChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#
+    );
+    assert!(series_legend(&area));
+    assert!(series_legend(&format!(r#"<c:radarChart><c:radarStyle val="filled"/>{OFF}{red}</c:radarChart><c:valAx/>"#)));
+    // A `c:dPt` without a colour.
+    let plain = r#"<c:dPt><c:idx val="1"/><c:invertIfNegative val="0"/><c:bubble3D val="0"/></c:dPt>"#;
+    assert!(series_legend(&column_chart(OFF, &[with_dpts(&s, plain)])));
+    // Two series.
+    let items = with_legend(&column_chart(OFF, &[red, ser(1, "Costs", None, &CATS, &["2", "1", "3"])]), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items).len(), 2);
+    assert!(texts(&items).contains(&"Sales") && texts(&items).contains(&"Costs"), "{:?}", texts(&items));
+}
+
+// Bubble charts (#5941). The sizes are Word's, measured in Word for Microsoft 365 from charts of
+// known data: the largest bubble's diameter is `L * 3s / (3s + 1000)`, with `s` the
+// `c:bubbleScale` and `L` the short side of the chart less 10 pt (no title or legend). Other
+// bubbles scale from the largest size of the chart: by area (`sqrt`) or, with
+// `c:sizeRepresents="w"`, by width.
+
+/// A bubble series: `c:xVal`, `c:yVal` and, when given, `c:bubbleSize`, as literals.
+fn bser(i: usize, color: &str, xs: &[&str], ys: &[&str], sizes: Option<&[&str]>) -> String {
+    let lit = |tag: &str, vals: &[&str]| {
+        let pts: String = vals.iter().enumerate().map(|(k, v)| format!(r#"<c:pt idx="{k}"><c:v>{v}</c:v></c:pt>"#)).collect();
+        format!(r#"<c:{tag}><c:numLit><c:ptCount val="{}"/>{pts}</c:numLit></c:{tag}>"#, vals.len())
+    };
+    let sizes = sizes.map_or(String::new(), |s| lit("bubbleSize", s));
+    format!(
+        r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:spPr><a:solidFill><a:srgbClr val="{color}"/></a:solidFill></c:spPr>{}{}{sizes}</c:ser>"#,
+        lit("xVal", xs),
+        lit("yVal", ys)
+    )
+}
+
+/// A bubble chart of `w` x `h` points, both axes fixed at 0..4, with `extra` after the series.
+fn bubble_chart(sers: &[String], extra: &str, w: f32, h: f32) -> Vec<GraphicItem> {
+    let ax = |id: u32, pos: &str| {
+        format!(
+            r#"<c:valAx><c:axId val="{id}"/><c:scaling><c:orientation val="minMax"/><c:max val="4"/><c:min val="0"/></c:scaling><c:delete val="0"/><c:axPos val="{pos}"/></c:valAx>"#
+        )
+    };
+    let plot = format!(
+        r#"<c:bubbleChart><c:varyColors val="0"/>{}{extra}<c:axId val="1"/><c:axId val="2"/></c:bubbleChart>{}{}"#,
+        sers.concat(),
+        ax(1, "b"),
+        ax(2, "l")
+    );
+    chart_items(&space(&plot), &theme(), w, h)
+}
+
+/// Circles filled with `col`: (centre x, centre y, diameter), in drawing order.
+fn bubbles(items: &[GraphicItem], col: Rgb) -> Vec<(f32, f32, f32)> {
+    items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Shape { rect: [x, y, w, h], kind: ShapeKind::Ellipse, fill: Some(c), .. } if *c == col => {
+                assert!((w - h).abs() < 1e-3, "a bubble is round: {w} x {h}");
+                Some((x + w / 2.0, y + h / 2.0, *w))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Word's largest bubble diameter for a chart of `w` x `h` with no title or legend.
+fn word_d_max(w: f32, h: f32, scale: f32) -> f32 {
+    (w.min(h) - 10.0) * 3.0 * scale / (3.0 * scale + 1000.0)
+}
+
+/// Bubbles in order of their centre's x.
+fn by_x(mut b: Vec<(f32, f32, f32)>) -> Vec<(f32, f32, f32)> {
+    b.sort_by(|p, q| p.0.total_cmp(&q.0));
+    b
+}
+
+/// Three red bubbles at x = 1, 2, 3 (y = 2) with sizes 1, 4 and 16.
+fn three() -> Vec<String> {
+    vec![bser(0, "FF0000", &["1", "2", "3"], &["2", "2", "2"], Some(&["1", "4", "16"]))]
+}
+
+/// The diameter of the largest red bubble, if any.
+fn largest(items: &[GraphicItem]) -> Option<f32> {
+    bubbles(items, RED).iter().map(|b| b.2).reduce(f32::max)
+}
+
+#[test]
+fn bubble_charts_draw_a_circle_per_point_sized_by_area() {
+    let items = bubble_chart(&three(), "", 432.0, 252.0);
+    assert!(!texts(&items).iter().any(|t| t.contains("not supported")), "{:?}", texts(&items));
+    let b = by_x(bubbles(&items, RED));
+    assert_eq!(b.len(), 3, "a bubble per point: {items:?}");
+    // Word, 432 x 252, scale 100: 13.96, 27.92 and 55.84 pt across.
+    let d_max = word_d_max(432.0, 252.0, 100.0);
+    assert!((b[2].2 - d_max).abs() < 0.1, "largest bubble {} vs Word's {d_max}", b[2].2);
+    assert!((b[1].2 - d_max / 2.0).abs() < 0.1 && (b[0].2 - d_max / 4.0).abs() < 0.1, "area grows with size: {b:?}");
+    // Centres on the scatter positions: one height, evenly spaced along x.
+    assert!(b.iter().all(|p| (p.1 - b[0].1).abs() < 1e-3), "{b:?}");
+    assert!(((b[1].0 - b[0].0) - (b[2].0 - b[1].0)).abs() < 1e-3 && b[1].0 > b[0].0, "{b:?}");
+}
+
+#[test]
+fn bubble_size_is_relative_to_the_largest_of_the_chart() {
+    let small = bser(0, "FF0000", &["1", "2"], &["1", "1"], Some(&["1", "4"]));
+    let big = bser(1, "0000FF", &["1", "2"], &["3", "3"], Some(&["16", "64"]));
+    let items = bubble_chart(&[small, big], "", 432.0, 252.0);
+    let d_max = word_d_max(432.0, 252.0, 100.0);
+    let r = by_x(bubbles(&items, RED));
+    let b = by_x(bubbles(&items, BLUE));
+    assert_eq!((r.len(), b.len()), (2, 2), "{items:?}");
+    assert!((b[1].2 - d_max).abs() < 0.1, "{b:?}");
+    assert!((r[0].2 - d_max / 8.0).abs() < 0.1, "size 1 of 64 across both series: {r:?}");
+    // The same bubbles at ten times the sizes.
+    let tens = bser(0, "FF0000", &["1", "2", "3"], &["2", "2", "2"], Some(&["10", "40", "160"]));
+    let t = by_x(bubbles(&bubble_chart(&[tens], "", 432.0, 252.0), RED));
+    assert!((t[0].2 - d_max / 4.0).abs() < 0.1 && (t[2].2 - d_max).abs() < 0.1, "{t:?}");
+}
+
+#[test]
+fn bubble_scale_and_size_represents_follow_word() {
+    let at = |extra: &str| largest(&bubble_chart(&three(), extra, 432.0, 252.0));
+    // Word: 31.56, 90.75 and 114.63 pt. The scale isn't linear.
+    for scale in [50.0, 200.0, 300.0] {
+        let d = at(&format!(r#"<c:bubbleScale val="{scale}"/>"#)).unwrap_or_default();
+        assert!((d - word_d_max(432.0, 252.0, scale)).abs() < 0.1, "scale {scale}: {d}");
+    }
+    // ISO/IEC 29500-4:2016 also allows a percent.
+    let pct = at(r#"<c:bubbleScale val="150%"/>"#).unwrap_or_default();
+    assert!((pct - word_d_max(432.0, 252.0, 150.0)).abs() < 0.1, "150%: {pct}");
+    // Out of range clamps to 0..300, and 0 draws no bubbles.
+    let huge = at(r#"<c:bubbleScale val="99999"/>"#).unwrap_or_default();
+    assert!((huge - word_d_max(432.0, 252.0, 300.0)).abs() < 0.1, "{huge}");
+    assert_eq!(at(r#"<c:bubbleScale val="0"/>"#), None);
+
+    let w = by_x(bubbles(&bubble_chart(&three(), r#"<c:sizeRepresents val="w"/>"#, 432.0, 252.0), RED));
+    let d_max = word_d_max(432.0, 252.0, 100.0);
+    assert_eq!(w.len(), 3, "{w:?}");
+    assert!(
+        (w[2].2 - d_max).abs() < 0.1 && (w[1].2 - d_max / 4.0).abs() < 0.1 && (w[0].2 - d_max / 16.0).abs() < 0.1,
+        "width grows with size: {w:?}"
+    );
+}
+
+#[test]
+fn bubble_size_follows_the_charts_short_side() {
+    // Word: 43.84 pt (600 x 200), 55.38 (250 x 450), 66.92 (300 x 300), 113.08 (700 x 500).
+    for (w, h) in [(600.0, 200.0), (250.0, 450.0), (300.0, 300.0), (700.0, 500.0)] {
+        let d = largest(&bubble_chart(&three(), "", w, h)).unwrap_or_default();
+        assert!((d - word_d_max(w, h, 100.0)).abs() < 0.1, "{w} x {h}: {d}");
+    }
+}
+
+#[test]
+fn zero_and_negative_bubbles() {
+    let s = || vec![bser(0, "FF0000", &["1", "2", "3"], &["2", "2", "2"], Some(&["0", "-4", "16"]))];
+    let ellipses = |items: &[GraphicItem]| -> Vec<f32> {
+        items
+            .iter()
+            .filter_map(|it| match it {
+                GraphicItem::Shape { rect: [_, _, w, _], kind: ShapeKind::Ellipse, .. } => Some(*w),
+                _ => None,
+            })
+            .collect()
+    };
+    let off = ellipses(&bubble_chart(&s(), r#"<c:showNegBubbles val="0"/>"#, 432.0, 252.0));
+    assert_eq!(off.len(), 1, "size 0 and negative sizes aren't drawn: {off:?}");
+    // When shown, a negative bubble is drawn at its size's magnitude. An empty
+    // `c:showNegBubbles` means true (CT_Boolean's default).
+    let d_max = word_d_max(432.0, 252.0, 100.0);
+    for extra in [r#"<c:showNegBubbles val="1"/>"#, "<c:showNegBubbles/>"] {
+        let all = ellipses(&bubble_chart(&s(), extra, 432.0, 252.0));
+        assert_eq!(all.len(), 2, "{extra}: {all:?}");
+        assert!(all.iter().any(|d| (d - d_max / 2.0).abs() < 0.1), "{extra}: {all:?}");
+    }
+}
+
+/// Every bubble in drawing order: (centre x, fill, outline colour, outline width).
+fn bubble_paint(items: &[GraphicItem]) -> Vec<(f32, Option<Rgb>, Option<Rgb>, f32)> {
+    let mut b: Vec<_> = items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Shape { rect: [x, _, w, _], kind: ShapeKind::Ellipse, fill, stroke, stroke_width, .. } => {
+                Some((x + w / 2.0, *fill, *stroke, *stroke_width))
+            }
+            _ => None,
+        })
+        .collect();
+    b.sort_by(|p, q| p.0.total_cmp(&q.0));
+    b
+}
+
+/// The series' `c:spPr` with a 1.5 pt `a:ln` of `rgb` after its fill.
+fn with_series_line(ser: &str, rgb: &str) -> String {
+    ser.replacen(
+        "</a:solidFill></c:spPr>",
+        &format!(r#"</a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="{rgb}"/></a:solidFill></a:ln></c:spPr>"#),
+        1,
+    )
+}
+
+/// A `c:dPt` for point `idx` with a line: of `rgb`, or `a:noFill` when `None`.
+fn dpt_line(idx: usize, rgb: Option<&str>) -> String {
+    let ln = rgb.map_or("<a:noFill/>".to_string(), |c| format!(r#"<a:solidFill><a:srgbClr val="{c}"/></a:solidFill>"#));
+    format!(r#"<c:dPt><c:idx val="{idx}"/><c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:ln w="38100">{ln}</a:ln></c:spPr></c:dPt>"#)
+}
+
+#[test]
+fn negative_bubbles_are_white_with_an_outline() {
+    // Word (measured): a shown negative bubble is filled white, whatever the series' colour, and
+    // outlined in the point's line colour, else the series', else black. Office always inverts
+    // negative bubbles (MS-OI29500 §21.2.2.86), whatever `c:invertIfNegative` says.
+    let ser = bser(0, "FF0000", &["1", "2", "3"], &["2", "2", "2"], Some(&["4", "-4", "16"]));
+    let shown = r#"<c:showNegBubbles val="1"/>"#;
+    let plain = bubble_paint(&bubble_chart(std::slice::from_ref(&ser), shown, 432.0, 252.0));
+    assert_eq!(plain.len(), 3, "{plain:?}");
+    assert_eq!((plain[1].1, plain[1].2), (Some(Rgb::WHITE), Some(Rgb::BLACK)), "the negative bubble: {plain:?}");
+    assert!((plain[1].3 - 0.25).abs() < 1e-3, "{plain:?}");
+    assert!(plain[0].2.is_none() && plain[2].2.is_none(), "positive bubbles with no line have no outline: {plain:?}");
+    assert_eq!((plain[0].1, plain[2].1), (Some(RED), Some(RED)));
+
+    // A series line outlines every bubble, the negative one included.
+    let red_line = bubble_paint(&bubble_chart(&[with_series_line(&ser, "CC2222")], shown, 432.0, 252.0));
+    let line = Some(Rgb(0xCC, 0x22, 0x22));
+    assert!(red_line.iter().all(|b| b.2 == line && (b.3 - 0.25).abs() < 1e-3), "{red_line:?}");
+    assert_eq!(red_line[1].1, Some(Rgb::WHITE));
+
+    // A point's own line wins, drawn 0.25 pt whatever its width (3 pt here); its `a:noFill`
+    // turns the series line off for that point.
+    let points = format!("{}{}<c:xVal>", dpt_line(0, None), dpt_line(1, Some("202060")));
+    let own = with_series_line(&ser, "CC2222").replacen("<c:xVal>", &points, 1);
+    let own = bubble_paint(&bubble_chart(&[own], shown, 432.0, 252.0));
+    assert_eq!(own[0].2, None, "point 0 turns its line off: {own:?}");
+    assert_eq!((own[1].1, own[1].2), (Some(Rgb::WHITE), Some(Rgb(0x20, 0x20, 0x60))), "{own:?}");
+    assert!((own[1].3 - 0.25).abs() < 1e-3, "{own:?}");
+    assert_eq!(own[2].2, line, "point 2 keeps the series line: {own:?}");
+}
+
+#[test]
+fn bubble_points_take_their_own_colour() {
+    let dpt = r#"<c:dPt><c:idx val="1"/><c:spPr><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></c:spPr></c:dPt><c:xVal>"#;
+    let s = three().concat().replacen("<c:xVal>", dpt, 1);
+    let items = bubble_chart(&[s], "", 432.0, 252.0);
+    assert_eq!((bubbles(&items, RED).len(), bubbles(&items, BLUE).len()), (2, 1), "{items:?}");
+}
+
+#[test]
+fn a_bubble_size_reference_without_cached_values_draws_no_bubbles() {
+    // No `c:bubbleSize` at all sizes every point alike; one with a reference but no cache has
+    // no sizes to draw.
+    let bare = bser(0, "FF0000", &["1", "2", "3"], &["2", "2", "2"], None);
+    assert_eq!(bubbles(&bubble_chart(std::slice::from_ref(&bare), "", 432.0, 252.0), RED).len(), 3);
+    let uncached = bare.replacen("</c:ser>", "<c:bubbleSize><c:numRef><c:f>Sheet1!$C$2:$C$4</c:f></c:numRef></c:bubbleSize></c:ser>", 1);
+    let items = bubble_chart(&[uncached], "", 432.0, 252.0);
+    assert!(bubble_paint(&items).is_empty(), "{items:?}");
+}
+
+#[test]
+fn a_later_point_shape_without_a_line_gives_the_bubble_the_series_line_back() {
+    let ser = with_series_line(&three().concat(), "CC2222");
+    let fill_only = r#"<c:dPt><c:idx val="0"/><c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr></c:dPt>"#;
+    let points = format!("{}{fill_only}<c:xVal>", dpt_line(0, Some("202060")));
+    let b = bubble_paint(&bubble_chart(&[ser.replacen("<c:xVal>", &points, 1)], "", 432.0, 252.0));
+    assert_eq!(b.len(), 3, "{b:?}");
+    assert!(b[0].2.is_some() && b[0].2 == b[2].2, "point 0 has the series line again: {b:?}");
+}
+
+#[test]
+fn bubbles_of_a_series_without_a_fill_are_hollow() {
+    let hollow = r#"<c:spPr><a:noFill/><a:ln w="19050"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></a:ln></c:spPr>"#;
+    let ser = three().concat().replacen(r#"<c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr>"#, hollow, 1);
+    // Point 1 has a fill of its own.
+    let ser = ser.replacen(
+        "<c:xVal>",
+        r#"<c:dPt><c:idx val="1"/><c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr></c:dPt><c:xVal>"#,
+        1,
+    );
+    let b = bubble_paint(&bubble_chart(&[ser], "", 432.0, 252.0));
+    assert_eq!(b.len(), 3, "{b:?}");
+    assert!(b[0].1.is_none() && b[2].1.is_none(), "unfilled: {b:?}");
+    assert!(b[0].2 == Some(BLUE) && b[2].2 == Some(BLUE), "outlined in the series line: {b:?}");
+    assert_eq!(b[1].1, Some(RED), "a point's own fill still shows: {b:?}");
+}
+
+#[test]
+fn a_bubble_point_without_a_fill_is_hollow_in_a_filled_series() {
+    let dpt = r#"<c:dPt><c:idx val="1"/><c:spPr><a:noFill/><a:ln w="19050"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></a:ln></c:spPr></c:dPt><c:xVal>"#;
+    let b = bubble_paint(&bubble_chart(&[three().concat().replacen("<c:xVal>", dpt, 1)], "", 432.0, 252.0));
+    assert_eq!(b.len(), 3, "{b:?}");
+    assert_eq!((b[1].1, b[1].2), (None, Some(BLUE)), "point 1 is only outlined: {b:?}");
+    assert_eq!((b[0].1, b[2].1), (Some(RED), Some(RED)), "the others keep the series fill: {b:?}");
+}
+
+#[test]
+fn bubble_data_labels_show_the_values() {
+    let s = bser(0, "FF0000", &["1", "2", "3"], &["1.5", "2.5", "3.5"], Some(&["1", "4", "16"]));
+    let items = bubble_chart(&[s], r#"<c:dLbls><c:showVal val="1"/></c:dLbls>"#, 432.0, 252.0);
+    for v in ["1.5", "2.5", "3.5"] {
+        assert!(texts(&items).contains(&v), "label {v}: {:?}", texts(&items));
+    }
+}
+
+#[test]
+fn hostile_bubble_sizes_never_panic() {
+    let cases: [&[&str]; 4] =
+        [&["NaN", "inf", "-inf", "1"], &["1e308", "1e308", "1", "0"], &["-1e308", "x", "", "5"], &["1e-308", "4.9e-324", "0", "-0"]];
+    let extras = ["", r#"<c:bubbleScale val="300"/><c:showNegBubbles val="1"/>"#, r#"<c:bubbleScale val="-5"/><c:sizeRepresents val="w"/>"#];
+    for sizes in cases {
+        let s = bser(0, "FF0000", &["1", "2", "3", "1e308"], &["2", "2", "NaN", "2"], Some(sizes));
+        for extra in extras {
+            for (w, h) in [(432.0, 252.0), (5.0, 5.0), (1e6, 1e6)] {
+                for it in bubble_chart(std::slice::from_ref(&s), extra, w, h) {
+                    if let GraphicItem::Shape { rect, .. } = it {
+                        assert!(rect.iter().all(|v| v.is_finite()), "{sizes:?} {extra}: {rect:?}");
+                        let inside = rect[0] >= -0.01 && rect[1] >= -0.01 && rect[0] + rect[2] <= w + 0.01 && rect[1] + rect[3] <= h + 0.01;
+                        assert!(inside, "{sizes:?} {extra}: {rect:?} outside the {w} x {h} chart");
+                    }
+                }
+            }
+        }
+    }
+    // No `c:bubbleSize` at all, and a series with no points.
+    let bare = bser(0, "FF0000", &["1", "2"], &["2", "3"], None);
+    let _ = bubble_chart(&[bare, bser(1, "0000FF", &[], &[], Some(&[]))], "", 432.0, 252.0);
+}
+
+// Bubbles stay in the plot area (#5948 review). Measured in Word: automatic axes are widened so
+// every bubble fits (x 1..3 with sizes 1, 4, 16 at 432 x 252 gets x 0..3.5, y 2..4 gets 0..5;
+// the largest bubble at y = 10 gets y -2..12), and a bubble that crosses a fixed axis end is
+// clipped to the plot area. A point outside a fixed axis range isn't drawn.
+
+/// A bubble chart of `w` x `h` points with automatic axes (no `c:min` / `c:max`).
+fn auto_bubble_chart(sers: &[String], extra: &str, w: f32, h: f32) -> Vec<GraphicItem> {
+    let ax = |id: u32, pos: &str| {
+        format!(
+            r#"<c:valAx><c:axId val="{id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="{pos}"/></c:valAx>"#
+        )
+    };
+    let plot = format!(
+        r#"<c:bubbleChart><c:varyColors val="0"/>{}{extra}<c:axId val="1"/><c:axId val="2"/></c:bubbleChart>{}{}"#,
+        sers.concat(),
+        ax(1, "b"),
+        ax(2, "l")
+    );
+    chart_items(&space(&plot), &theme(), w, h)
+}
+
+/// The plot area's box [left, top, right, bottom], from the axis lines (x axis along the bottom,
+/// y axis down the left).
+fn plot_box(items: &[GraphicItem]) -> [f32; 4] {
+    let lines: Vec<(f32, f32, f32, f32)> = items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Path { segs, stroke: Some(c), .. } if *c == AXIS => match segs.as_slice() {
+                [PathSeg::Move(x0, y0), PathSeg::Line(x1, y1)] => Some((*x0, *y0, *x1, *y1)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    let x_axis = lines.iter().find(|l| l.1 == l.3).expect("an x axis line");
+    let y_axis = lines.iter().find(|l| l.0 == l.2).expect("a y axis line");
+    [x_axis.0, y_axis.1.min(y_axis.3), x_axis.2, x_axis.1]
+}
+
+/// The box [left, top, right, bottom] of each thing painted in `col`: whole bubbles (ellipses)
+/// and clipped ones (paths).
+fn painted(items: &[GraphicItem], col: Rgb) -> Vec<[f32; 4]> {
+    items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Shape { rect: [x, y, w, h], kind: ShapeKind::Ellipse, fill: Some(c), .. } if *c == col => Some([*x, *y, x + w, y + h]),
+            GraphicItem::Path { segs, fill: Some(c), .. } if *c == col => {
+                let mut b = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+                for s in segs {
+                    let pts = match *s {
+                        PathSeg::Move(x, y) | PathSeg::Line(x, y) => vec![(x, y)],
+                        PathSeg::Cubic(a, b, c, d, e, f) => vec![(a, b), (c, d), (e, f)],
+                        PathSeg::Close => vec![],
+                    };
+                    for (x, y) in pts {
+                        b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+                    }
+                }
+                Some(b)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Asserts every red and blue bubble lies inside the plot area and the `w` x `h` chart; returns
+/// how many there are.
+fn assert_bubbles_inside(items: &[GraphicItem], w: f32, h: f32, what: &str) -> usize {
+    const EPS: f32 = 0.01;
+    let p = plot_box(items);
+    let all: Vec<[f32; 4]> = painted(items, RED).into_iter().chain(painted(items, BLUE)).collect();
+    for b in &all {
+        assert!(b[0] >= -EPS && b[1] >= -EPS && b[2] <= w + EPS && b[3] <= h + EPS, "{what}: bubble {b:?} outside the {w} x {h} chart");
+        assert!(
+            b[0] >= p[0] - EPS && b[1] >= p[1] - EPS && b[2] <= p[2] + EPS && b[3] <= p[3] + EPS,
+            "{what}: bubble {b:?} outside the plot area {p:?}"
+        );
+    }
+    all.len()
+}
+
+/// `ser` without its `c:xVal`: x is then 1, 2, 3...
+fn without_x(ser: &str) -> String {
+    let start = ser.find("<c:xVal>").expect("bser writes c:xVal");
+    let end = ser.find("</c:xVal>").expect("bser writes c:xVal") + "</c:xVal>".len();
+    format!("{}{}", &ser[..start], &ser[end..])
+}
+
+#[test]
+fn bubbles_stay_inside_the_plot_area_on_automatic_axes() {
+    let red = |xs: &[&str], ys: &[&str], sizes: &[&str]| bser(0, "FF0000", xs, ys, Some(sizes));
+    let cases: [(&str, Vec<String>, usize); 7] = [
+        ("default x", vec![without_x(&red(&[], &["2", "3", "4"], &["1", "4", "16"]))], 3),
+        ("big at min x", vec![red(&["1", "2", "3"], &["2", "3", "4"], &["16", "4", "1"])], 3),
+        ("big at max y", vec![red(&["1", "2", "3"], &["1", "2", "10"], &["1", "4", "16"])], 3),
+        ("flat", vec![red(&["1", "2", "3"], &["2", "2", "2"], &["1", "4", "16"])], 3),
+        ("negative", vec![red(&["-5", "0", "7"], &["-3", "2", "8"], &["2", "9", "4"])], 3),
+        ("single", vec![red(&["3"], &["7"], &["5"])], 1),
+        (
+            "two series",
+            vec![red(&["1", "2", "3"], &["2", "3", "4"], &["1", "4", "16"]), bser(1, "0000FF", &["1.5", "2.5"], &["5", "1"], Some(&["64", "2"]))],
+            5,
+        ),
+    ];
+    for (w, h) in [(432.0, 252.0), (600.0, 200.0), (250.0, 450.0), (150.0, 120.0)] {
+        for extra in ["", r#"<c:bubbleScale val="200"/>"#, r#"<c:bubbleScale val="300"/>"#] {
+            for (name, sers, n) in &cases {
+                let what = format!("{name} {extra} {w} x {h}");
+                let items = auto_bubble_chart(sers, extra, w, h);
+                assert_eq!(assert_bubbles_inside(&items, w, h, &what), *n, "{what}: every bubble drawn");
+                // Automatic axes leave room, so the bubbles are whole, not cut.
+                assert_eq!(bubbles(&items, RED).len() + bubbles(&items, BLUE).len(), *n, "{what}: cut");
+            }
+        }
+    }
+}
+
+#[test]
+fn bubbles_are_clipped_to_the_plot_area_on_fixed_axes() {
+    // Axes fixed at 0..4: bubbles centred on the corners are cut at the plot's edges, as Word cuts
+    // them.
+    for (extra, scale) in [("", 100.0), (r#"<c:bubbleScale val="300"/>"#, 300.0)] {
+        let s = bser(0, "FF0000", &["0", "4", "2"], &["0", "4", "2"], Some(&["16", "16", "1"]));
+        let items = bubble_chart(&[s], extra, 432.0, 252.0);
+        assert_eq!(assert_bubbles_inside(&items, 432.0, 252.0, extra), 3, "{extra}");
+        let p = plot_box(&items);
+        let r = word_d_max(432.0, 252.0, scale) / 2.0;
+        let cut = painted(&items, RED);
+        // The bottom-left bubble keeps its upper-right quarter, the top-right its lower-left.
+        let near = |a: f32, b: f32| (a - b).abs() < 0.1;
+        assert!(
+            cut.iter().any(|b| near(b[0], p[0]) && near(b[3], p[3]) && near(b[2], p[0] + r) && near(b[1], p[3] - r)),
+            "{extra}: {cut:?} in {p:?}"
+        );
+        assert!(
+            cut.iter().any(|b| near(b[2], p[2]) && near(b[1], p[1]) && near(b[0], p[2] - r) && near(b[3], p[1] + r)),
+            "{extra}: {cut:?} in {p:?}"
+        );
+        // The middle one is whole.
+        assert_eq!(bubbles(&items, RED).len(), 1, "{extra}");
+    }
+    // A point outside the fixed range isn't drawn, even when its bubble would reach in.
+    let out = bser(0, "FF0000", &["5", "2"], &["2", "2"], Some(&["16", "1"]));
+    let items = bubble_chart(&[out], "", 432.0, 252.0);
+    assert_eq!(painted(&items, RED).len(), 1, "{items:?}");
+}
+
+#[test]
+fn points_with_no_x_or_y_dont_size_the_others() {
+    // Word: a size-64 point with no y (or no x) isn't drawn, and the other bubbles keep the sizes
+    // they have without it (13.96, 27.92 and 55.84 pt at 432 x 252).
+    let base = bser(0, "FF0000", &["1", "2", "3", "3.5"], &["2", "2", "2", "3"], Some(&["1", "4", "16", "64"]));
+    let no_y = base.replacen(r#"<c:pt idx="3"><c:v>3</c:v></c:pt>"#, "", 1);
+    let no_x = base.replacen(r#"<c:pt idx="3"><c:v>3.5</c:v></c:pt>"#, "", 1);
+    let d_max = word_d_max(432.0, 252.0, 100.0);
+    for (what, s) in [("no y", no_y), ("no x", no_x)] {
+        assert_ne!(s, base, "{what}: the point was removed");
+        let b = by_x(bubbles(&bubble_chart(&[s], "", 432.0, 252.0), RED));
+        assert_eq!(b.len(), 3, "{what}: {b:?}");
+        assert!((b[2].2 - d_max).abs() < 0.1 && (b[0].2 - d_max / 4.0).abs() < 0.1, "{what}: {b:?}");
+    }
+}
+
+#[test]
+fn bubble_overdraw_is_capped() {
+    // 10,000 full-size bubbles at scale 300: what's drawn covers at most BUBBLE_COVER plot areas.
+    let n = 10_000;
+    let xs: Vec<String> = (0..n).map(|i| (i % 100).to_string()).collect();
+    let ys: Vec<String> = (0..n).map(|i| (i / 100).to_string()).collect();
+    let (xs, ys): (Vec<&str>, Vec<&str>) = (xs.iter().map(String::as_str).collect(), ys.iter().map(String::as_str).collect());
+    let s = bser(0, "FF0000", &xs, &ys, Some(&vec!["1"; n]));
+    let items = auto_bubble_chart(&[s], r#"<c:bubbleScale val="300"/>"#, 432.0, 252.0);
+    let p = plot_box(&items);
+    let drawn = assert_bubbles_inside(&items, 432.0, 252.0, "dense");
+    let d = word_d_max(432.0, 252.0, 300.0);
+    let cover = drawn as f32 * std::f32::consts::FRAC_PI_4 * d * d / ((p[2] - p[0]) * (p[3] - p[1]));
+    assert!(drawn > 0 && drawn < n, "{drawn} of {n} drawn");
+    assert!(cover <= BUBBLE_COVER + 1.0, "covers {cover} plot areas");
 }
 
 // An automatic series colour follows the series' `c:idx`, not its place in the file (#5963), as
@@ -928,4 +1786,192 @@ fn office_2016_chart_draws_a_placeholder_of_its_size() {
     let missing = chartex_items(None, 300.0, 200.0);
     assert_eq!(texts(&missing), ["Chart (not supported yet)"]);
     assert!(chartex_items(None, 0.0, 200.0).is_empty() && chartex_items(None, f32::NAN, 200.0).is_empty());
+}
+
+// Automatic colours from six on (#5961): Word splits N automatic colours into G = N / 6 + 1
+// groups of the six accents and shades the early groups and tints the late ones, in linear RGB.
+// The expected colours are Word's own, from its PDF output (Office 2023 theme, as `theme()`),
+// to within 1/255.
+
+/// The slice colours of a pie of `n` equal slices with no `c:dPt`.
+fn pie_colours(n: usize) -> Vec<Rgb> {
+    let cats: Vec<String> = (1..=n).map(|k| format!("C{k}")).collect();
+    let cats: Vec<&str> = cats.iter().map(String::as_str).collect();
+    let plot = format!(r#"<c:pieChart><c:varyColors val="1"/>{}</c:pieChart>"#, ser(0, "S", None, &cats, &vec!["1"; n]));
+    filled(&chart_items(&space(&plot), &theme(), 300.0, 300.0)).iter().map(|f| f.0).collect()
+}
+
+fn hex(c: u32) -> Rgb {
+    Rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
+}
+
+#[test]
+fn automatic_point_colours_from_six_on_are_shaded_and_tinted() {
+    let accent = |k: usize| theme()[4 + k];
+    // Up to five: the plain accents.
+    assert_eq!(pie_colours(5), (0..5).map(accent).collect::<Vec<_>>());
+    // Six already makes two groups: all six shaded 76.7%.
+    let six = pie_colours(6);
+    assert_eq!((six[0], six[5]), (hex(0x115473), hex(0x449428)));
+    // 13: shaded 65%, plain, then tinted 65%.
+    let thirteen = pie_colours(13);
+    assert_eq!(thirteen.len(), 13);
+    assert_eq!(
+        [thirteen[0], thirteen[5], thirteen[6], thirteen[11], thirteen[12]],
+        [hex(0x0F4E6A), hex(0x3F8924), accent(0), accent(5), hex(0xA1AFBB)]
+    );
+    // A point's own colour is never shaded.
+    let cats: Vec<String> = (1..=7).map(|k| format!("C{k}")).collect();
+    let cats: Vec<&str> = cats.iter().map(String::as_str).collect();
+    let s = ser(0, "S", None, &cats, &["1"; 7]);
+    let at = s.find("<c:cat>").unwrap_or(s.len());
+    let red = r#"<c:dPt><c:idx val="0"/><c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr></c:dPt>"#;
+    let plot = format!(r#"<c:pieChart><c:varyColors val="1"/>{}{red}{}</c:pieChart>"#, &s[..at], &s[at..]);
+    assert_eq!(filled(&chart_items(&space(&plot), &theme(), 300.0, 300.0))[0].0, Rgb(0xFF, 0, 0));
+}
+
+#[test]
+fn automatic_series_colours_are_grouped_by_the_highest_c_idx() {
+    let accent = |k: usize| theme()[4 + k];
+    // 13 series, idx 0…12: as 13 points.
+    let sers: Vec<String> = (0..13).map(|k| ser(k, &format!("S{k}"), None, &["Q1"], &["1"])).collect();
+    let bars = column_colours(&sers).0;
+    assert_eq!([bars[0], bars[6], bars[12]], [hex(0x0F4E6A), accent(0), hex(0xA1AFBB)]);
+    // idx 0 and 7: the count is 8, two groups, so idx 0 is shaded and idx 7 is accent2 tinted.
+    let a = ser(0, "A", None, &["Q1"], &["1"]);
+    let b = ser(1, "B", None, &["Q1"], &["2"]);
+    let gap = [a.clone(), renumbered(&b, r#"<c:idx val="7"/><c:order val="1"/>"#)];
+    assert_eq!(column_colours(&gap).0, [hex(0x115473), hex(0xEEA28B)]);
+    // A lone series with idx 7: the same tinted accent2.
+    let lone = [renumbered(&a, r#"<c:idx val="7"/><c:order val="0"/>"#)];
+    assert_eq!(column_colours(&lone).0, [hex(0xEEA28B)]);
+    // A series' own colour is never shaded.
+    let own = [ser(0, "A", Some("FF0000"), &["Q1"], &["1"]), renumbered(&b, r#"<c:idx val="7"/><c:order val="1"/>"#)];
+    assert_eq!(column_colours(&own).0, [Rgb(0xFF, 0, 0), hex(0xEEA28B)]);
+}
+
+// From review of #2736.
+
+/// The x of each vertical gridline (a path in the gridline colour that starts and ends at one x).
+fn vertical_grid(items: &[GraphicItem]) -> Vec<f32> {
+    items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Path { segs, stroke: Some(c), .. } if *c == GRID => match segs.as_slice() {
+                [PathSeg::Move(x0, _), PathSeg::Line(x1, _)] if (x0 - x1).abs() < 1e-3 => Some(*x0),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn bubble_x_gridlines_sit_on_the_x_axis_ticks() {
+    let ax = |id: u32, pos: &str, grid: &str| {
+        format!(
+            r#"<c:valAx><c:axId val="{id}"/><c:scaling><c:orientation val="minMax"/><c:max val="4"/><c:min val="0"/></c:scaling><c:delete val="0"/><c:axPos val="{pos}"/>{grid}</c:valAx>"#
+        )
+    };
+    let plot = format!(
+        r#"<c:bubbleChart><c:varyColors val="0"/>{}<c:axId val="1"/><c:axId val="2"/></c:bubbleChart>{}{}"#,
+        three().concat(),
+        ax(1, "b", "<c:majorGridlines/>"),
+        ax(2, "l", "")
+    );
+    let items = chart_items(&space(&plot), &theme(), 432.0, 252.0);
+    let grid = vertical_grid(&items);
+    // The bubbles sit at x = 1, 2 and 3, which are ticks of the 0..4 axis.
+    let centres: Vec<f32> = bubbles(&items, RED).iter().map(|b| b.0).collect();
+    assert_eq!(centres.len(), 3);
+    for x in centres {
+        assert!(grid.iter().any(|g| (g - x).abs() < 0.01), "a gridline at the bubble at {x}: {grid:?}");
+    }
+}
+
+/// `ser` with a series `c:spPr` holding only an outline in `rgb`.
+fn outlined(ser: &str, rgb: &str) -> String {
+    ser.replacen("</c:tx>", &format!(r#"</c:tx><c:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="{rgb}"/></a:solidFill></a:ln></c:spPr>"#), 1)
+}
+
+#[test]
+fn a_series_outline_alone_leaves_a_varied_slice_or_bar_varied() {
+    let vary = r#"<c:varyColors val="1"/>"#;
+    let s = outlined(&ser(0, "S", None, &CATS, &["1", "2", "3"]), "FFFFFF");
+    let varied = vec![accent(0), accent(1), accent(2)];
+    let pie = format!(r#"<c:pieChart>{vary}{s}</c:pieChart>"#);
+    let slices: Vec<Rgb> = filled(&chart_items(&space(&pie), &theme(), 200.0, 150.0)).iter().map(|f| f.0).collect();
+    assert_eq!(slices, varied, "pie");
+    let bars: Vec<Rgb> = filled(&chart_items(&space(&column_chart(vary, &[s])), &theme(), 300.0, 200.0)).iter().map(|f| f.0).collect();
+    assert_eq!(bars, varied, "column");
+}
+
+#[test]
+fn a_hollow_bar_series_is_outlined_in_its_line_colour_when_the_chart_varies() {
+    // No `c:varyColors`: one series varies by point. Its outline is red and it has no fill.
+    let s = ser(0, "S", None, &CATS, &["1", "2", "3"]).replacen(
+        "</c:tx>",
+        r#"</c:tx><c:spPr><a:noFill/><a:ln w="12700"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></c:spPr>"#,
+        1,
+    );
+    let items = chart_items(&space(&column_chart("", &[s])), &theme(), 300.0, 200.0);
+    let palette = [RED, accent(0), accent(1), accent(2)];
+    assert_eq!(strokes_in(&items, &palette), vec![RED; 3]);
+}
+
+/// The centre of the text item that reads `text`.
+fn text_centre(items: &[GraphicItem], text: &str) -> Option<(f32, f32)> {
+    items.iter().find_map(|it| match it {
+        GraphicItem::Text { rect: [x, y, w, h], text: t, .. } if t == text => Some((x + w / 2.0, y + h / 2.0)),
+        _ => None,
+    })
+}
+
+#[test]
+fn bubble_data_labels_take_their_c_dlblpos() {
+    // One bubble at (2, 2), big enough that a label inside it is clearly inside.
+    let s = bser(0, "FF0000", &["2"], &["2"], Some(&["1"]));
+    let at = |pos: &str| {
+        // The series' own `c:dLbls`, where `c:dLblPos` is read.
+        let lbls = format!(r#"<c:dLbls>{pos}<c:showVal val="1"/></c:dLbls><c:xVal>"#);
+        let items = bubble_chart(&[s.replacen("<c:xVal>", &lbls, 1)], "", 432.0, 252.0);
+        let (cx, cy, d) = bubbles(&items, RED)[0];
+        let (lx, ly) = text_centre(&items, "2").expect("a label");
+        (lx - cx, ly - cy, d / 2.0)
+    };
+    let (dx, dy, r) = at(r#"<c:dLblPos val="ctr"/>"#);
+    assert!(dx.abs() < r / 2.0 && dy.abs() < r / 2.0, "centred: ({dx}, {dy}), r {r}");
+    let (_, dy, r) = at("");
+    assert!(dy < -r, "above by default: {dy}, r {r}");
+    let (dx, _, r) = at(r#"<c:dLblPos val="r"/>"#);
+    assert!(dx > r, "right: {dx}, r {r}");
+}
+
+#[test]
+fn a_category_legend_keeps_the_categories_in_order() {
+    // A one-series stacked column chart that varies lists its categories, left to right as drawn.
+    let s = ser(0, "S", None, &CATS, &["1", "2", "3"]);
+    let plot = format!(
+        r#"<c:barChart><c:barDir val="col"/><c:grouping val="stacked"/><c:overlap val="100"/>{s}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#
+    );
+    assert_eq!(swatch_colours(&with_legend(&plot, "r", 300.0, 200.0)), [accent(0), accent(1), accent(2)]);
+    // Two series in that chart are still listed as stacked, top series first.
+    let two = plot.replacen("<c:axId", &format!("{}<c:axId", ser(1, "T", None, &CATS, &["1", "1", "1"])), 1);
+    assert_eq!(swatch_colours(&with_legend(&two, "r", 300.0, 200.0)), [accent(1), accent(0)]);
+}
+
+#[test]
+fn a_line_point_key_takes_its_marker_colour_only_when_markers_are_drawn() {
+    // Point 1: a red marker and a blue line.
+    let solid = |rgb: &str| format!(r#"<a:solidFill><a:srgbClr val="{rgb}"/></a:solidFill>"#);
+    let dpt = format!(
+        r#"<c:dPt><c:idx val="1"/><c:marker><c:spPr>{}</c:spPr></c:marker><c:spPr><a:ln w="28575">{}</a:ln></c:spPr></c:dPt>"#,
+        solid("FF0000"),
+        solid("0000FF")
+    );
+    let vary = r#"<c:varyColors val="1"/>"#;
+    let plain = with_dpts(&ser(0, "S", None, &CATS, &["1", "3", "2"]), &dpt);
+    assert_eq!(swatch_colours(&with_legend(&line_chart(vary, &plain), "r", 300.0, 200.0))[1], BLUE, "no markers: the line's colour");
+    let marked = plain.replacen("</c:tx>", r#"</c:tx><c:marker><c:symbol val="circle"/></c:marker>"#, 1);
+    assert_eq!(swatch_colours(&with_legend(&line_chart(vary, &marked), "r", 300.0, 200.0))[1], RED, "markers: the marker's colour");
 }
