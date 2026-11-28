@@ -63,30 +63,10 @@ impl Reader<'_> {
             "w:bookmarkStart" | "w:bookmarkEnd" | "w:commentRangeStart" | "w:commentRangeEnd" | "w:permStart" | "w:permEnd" => {
                 if let Some(o) = self.marker(k) {
                     let props = self.run_props_none(ctx);
-                    // Markers go straight into the paragraph (never into a field's cached result).
-                    pb.push_obj(o, &props);
+                    self.emit_marker(sc, pb, o, &props);
                 }
             }
-            "w:sdt" => {
-                let Some(c) = k.child("w:sdtContent") else { return };
-                let mut ctl = crate::read::sdt::sdt_pr(k.child("w:sdtPr"), false);
-                ctl.end_pr_xml = crate::read::sdt::sdt_end_pr(k.child("w:sdtEndPr"));
-                ctl.run_props = k.child("w:sdtPr").and_then(|pr| pr.child("w:rPr")).map(|r| self.pc.rpr(r));
-                // The markers take the formatting of the content's first run (typing at the
-                // start of the content continues it).
-                let props = c.find("w:rPr").map(|p| self.run_props(p, ctx)).unwrap_or_else(|| self.run_props_none(ctx));
-                let (at, k0) = (pb.text.len(), pb.objects.len());
-                pb.push_obj(InlineObject::ControlStart { control: Box::new(ctl) }, &props);
-                self.read_inline_children(sc, pb, c, rels, ctx, depth + 1);
-                if let Some(InlineObject::ControlStart { control }) = pb.objects.get_mut(k0)
-                    && control.showing_placeholder
-                {
-                    let shown: String = pb.text.get(at..).unwrap_or("").chars().filter(|c| *c != craft_wordmodel::para::OBJ).collect();
-                    control.placeholder_text = placeholder_of(&shown);
-                }
-                let end_props = pb.runs.last().map(|r| r.props.clone()).unwrap_or(props);
-                pb.push_obj(InlineObject::ControlEnd, &end_props);
-            }
+            "w:sdt" => self.read_inline_control(sc, pb, k, rels, ctx, depth),
             "w:smartTag" | "w:customXml" | "w:dir" | "w:bdo" => self.read_inline_children(sc, pb, k, rels, ctx, depth + 1),
             "m:oMath" => {
                 let props = self.run_props_none(ctx);
@@ -138,6 +118,55 @@ impl Reader<'_> {
             }
             _ => {}
         }
+    }
+
+    /// An inline content control (`w:sdt`). Its start and end go where its content goes, into
+    /// the paragraph or into the result of the field buffering it, so the control keeps it.
+    fn read_inline_control(&mut self, sc: &mut StoryCtx, pb: &mut PB, k: &El, rels: &Rels, ctx: &RunCtx, depth: usize) {
+        let Some(content) = k.child("w:sdtContent") else { return };
+        let mut control = crate::read::sdt::sdt_pr(k.child("w:sdtPr"), false);
+        control.end_pr_xml = crate::read::sdt::sdt_end_pr(k.child("w:sdtEndPr"));
+        control.run_props = k.child("w:sdtPr").and_then(|pr| pr.child("w:rPr")).map(|r| self.pc.rpr(r));
+        let placeholder = control.showing_placeholder;
+        // The markers take the formatting of the content's first run (typing at the start of the
+        // content continues it).
+        let props = content.find("w:rPr").map(|p| self.run_props(p, ctx)).unwrap_or_else(|| self.run_props_none(ctx));
+        let buffer = Self::marker_field(sc).and_then(|i| sc.fields.get(i).map(|f| (i, f.buf.len())));
+        let (at, index) = (pb.text.len(), pb.objects.len());
+        self.emit_marker(sc, pb, InlineObject::ControlStart { control: Box::new(control) }, &props);
+        self.read_inline_children(sc, pb, content, rels, ctx, depth + 1);
+        let end_props = if let Some((field, start)) = buffer {
+            if let Some(f) = sc.fields.get_mut(field) {
+                if placeholder {
+                    let shown: String = f
+                        .buf
+                        .iter()
+                        .skip(start + 1)
+                        .filter_map(|(item, _)| match item {
+                            Item::Text(text) => Some(text.as_str()),
+                            Item::Obj(_) => None,
+                        })
+                        .collect();
+                    if let Some((Item::Obj(o), _)) = f.buf.get_mut(start)
+                        && let InlineObject::ControlStart { control } = o.as_mut()
+                    {
+                        control.placeholder_text = placeholder_of(&shown);
+                    }
+                }
+                f.buf.last().map(|(_, p)| p.clone()).unwrap_or_else(|| props.clone())
+            } else {
+                props.clone()
+            }
+        } else {
+            if placeholder {
+                let shown: String = pb.text.get(at..).unwrap_or("").chars().filter(|c| *c != craft_wordmodel::para::OBJ).collect();
+                if let Some(InlineObject::ControlStart { control }) = pb.objects.get_mut(index) {
+                    control.placeholder_text = placeholder_of(&shown);
+                }
+            }
+            pb.runs.last().map(|r| r.props.clone()).unwrap_or_else(|| props.clone())
+        };
+        self.emit_marker(sc, pb, InlineObject::ControlEnd, &end_props);
     }
 
     fn run_props(&mut self, rpr: &El, ctx: &RunCtx) -> CharProps {
@@ -324,7 +353,7 @@ impl Reader<'_> {
                     && !self.comments_ended.contains(&cid)
                 {
                     self.comments_ended.insert(cid);
-                    pb.push_obj(InlineObject::CommentEnd { id: cid }, props);
+                    self.emit_marker(sc, pb, InlineObject::CommentEnd { id: cid }, props);
                 }
             }
             "w:pgNum" => self.emit_obj(
@@ -400,6 +429,28 @@ impl Reader<'_> {
             props: Box::new(rp),
         };
         self.emit_obj(sc, pb, obj, &bp);
+    }
+
+    /// The field whose cached result takes a bookmark, comment, editable range or content
+    /// control read now, so it stays among the result's text: the innermost field that buffers
+    /// content, while it is in its result. None while any field is still collecting its code (a
+    /// field nested in a code is folded into that code, which holds no objects) or while a
+    /// legacy form field is open: there markers go straight into the paragraph, as before.
+    fn marker_field(sc: &StoryCtx) -> Option<usize> {
+        if sc.fields.iter().any(|f| !f.form.is_empty() || (!f.spilled && !f.range && f.phase == Phase::Instr)) {
+            return None;
+        }
+        let i = sc.fields.iter().rposition(|f| !f.range)?;
+        let f = sc.fields.get(i)?;
+        (!f.spilled && f.phase == Phase::Result).then_some(i)
+    }
+
+    fn emit_marker(&mut self, sc: &mut StoryCtx, pb: &mut PB, o: InlineObject, props: &CharProps) {
+        if Self::marker_field(sc).is_some() {
+            self.emit_obj(sc, pb, o, props);
+        } else {
+            pb.push_obj(o, props);
+        }
     }
 
     pub(super) fn emit_text(&mut self, sc: &mut StoryCtx, pb: &mut PB, s: &str, props: &CharProps) {

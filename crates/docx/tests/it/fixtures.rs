@@ -4896,6 +4896,234 @@ fn vml_line_caps_import_and_round_trip() {
     }
 }
 
+mod field_markers {
+    //! Bookmarks, comments, editable ranges and content controls inside a field's cached result
+    //! (ECMA-376 Part 1 §17.13 and §17.16).
+    use craft_wordmodel::{InlineObject, Paragraph, Path, StoryRef};
+
+    fn read_body(body: &str) -> craft_wordmodel::Document {
+        let xml = format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}<w:p><w:r><w:t>Outside.</w:t></w:r></w:p></w:body></w:document>"#
+        );
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="comments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>"#;
+        let comments = r#"<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:comment w:id="1" w:author="Reviewer"><w:p><w:r><w:t>Check.</w:t></w:r></w:p></w:comment></w:comments>"#;
+        craft_docx::read(&super::zip(&[
+            ("word/document.xml", xml.as_bytes()),
+            ("word/_rels/document.xml.rels", rels.as_bytes()),
+            ("word/comments.xml", comments.as_bytes()),
+        ]))
+        .unwrap()
+    }
+
+    fn markers(p: &Paragraph) -> Vec<(&'static str, String)> {
+        let mut objects = p.objects.iter();
+        let mut seen = String::new();
+        let mut out = Vec::new();
+        for c in p.text.chars() {
+            if c != craft_wordmodel::para::OBJ {
+                seen.push(c);
+                continue;
+            }
+            let o = objects.next().unwrap();
+            let tag = match o {
+                InlineObject::BookmarkStart { .. } => Some("bookmark+"),
+                InlineObject::BookmarkEnd { .. } => Some("bookmark-"),
+                InlineObject::CommentStart { .. } => Some("comment+"),
+                InlineObject::CommentEnd { .. } => Some("comment-"),
+                InlineObject::PermStart { .. } => Some("permission+"),
+                InlineObject::PermEnd { .. } => Some("permission-"),
+                _ => None,
+            };
+            if let Some(tag) = tag {
+                out.push((tag, seen.clone()));
+            }
+            seen.push_str(o.plain_text());
+        }
+        out
+    }
+
+    #[test]
+    fn markers_in_a_link_result_keep_their_place_and_follow_a_compact_field() {
+        let content = r#"<w:r><w:t>a</w:t></w:r><w:bookmarkStart w:id="2" w:name="part"/><w:commentRangeStart w:id="1"/><w:permStart w:id="3" w:edGrp="everyone"/><w:r><w:t>a</w:t><w:tab/></w:r><w:bookmarkEnd w:id="2"/><w:commentRangeEnd w:id="1"/><w:permEnd w:id="3"/><w:r><w:t>b</w:t></w:r>"#;
+        for instr in [r#"HYPERLINK \l &quot;target&quot;"#, "QUOTE x"] {
+            let mut doc = read_body(&format!(r#"<w:p><w:fldSimple w:instr="{instr}">{content}</w:fldSimple></w:p>"#));
+            for cycle in 0..=2 {
+                let p = doc.body[0].as_para().unwrap();
+                assert_eq!(p.plain_text(), "aa\tb");
+                let expected = if instr.starts_with("HYPERLINK") {
+                    [
+                        ("bookmark+", "a"),
+                        ("comment+", "a"),
+                        ("permission+", "a"),
+                        ("bookmark-", "aa\t"),
+                        ("comment-", "aa\t"),
+                        ("permission-", "aa\t"),
+                    ]
+                } else {
+                    [
+                        ("bookmark+", "aa\tb"),
+                        ("comment+", "aa\tb"),
+                        ("permission+", "aa\tb"),
+                        ("bookmark-", "aa\tb"),
+                        ("comment-", "aa\tb"),
+                        ("permission-", "aa\tb"),
+                    ]
+                };
+                assert_eq!(markers(p), expected.map(|(kind, text)| (kind, text.to_string())), "{instr}, save {cycle}");
+                if instr.starts_with("HYPERLINK") {
+                    assert_eq!(p.props_of_char(p.text.find('b').unwrap()).link.as_deref(), Some("#target"));
+                } else {
+                    assert!(doc.field_ranges(StoryRef::Body).is_empty());
+                    assert!(matches!(p.objects.first(), Some(InlineObject::Field { instr, .. }) if instr == "QUOTE x"));
+                }
+                if cycle < 2 {
+                    doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap().insert_text(0, "Edit. ", &Default::default()).unwrap();
+                    doc = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+                }
+            }
+        }
+    }
+
+    fn nested_in_code(result: &str) -> String {
+        format!(
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/><w:instrText>IF </w:instrText></w:r><w:fldSimple w:instr="QUOTE x">{result}</w:fldSimple><w:r><w:instrText> = "a" "yes" "no"</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>yes</w:t><w:fldChar w:fldCharType="end"/></w:r></w:p>"#
+        )
+    }
+
+    #[test]
+    fn a_bookmark_under_an_outer_field_code_keeps_both_ends() {
+        let mut doc = read_body(&nested_in_code(r#"<w:bookmarkStart w:id="5" w:name="inner"/><w:r><w:t>a</w:t></w:r><w:bookmarkEnd w:id="5"/>"#));
+        for _ in 0..2 {
+            assert_eq!(markers(doc.body[0].as_para().unwrap()).iter().map(|(kind, _)| *kind).collect::<Vec<_>>(), ["bookmark+", "bookmark-"]);
+            doc = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_point_comment_under_an_outer_field_code_keeps_its_anchor() {
+        let mut doc = read_body(&nested_in_code(r#"<w:r><w:t>a</w:t><w:commentReference w:id="1"/></w:r>"#));
+        for _ in 0..2 {
+            let p = doc.body[0].as_para().unwrap();
+            let anchors: Vec<_> = p
+                .objects
+                .iter()
+                .filter_map(|o| match o {
+                    InlineObject::CommentEnd { id } => Some(*id),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(anchors.len(), 1);
+            assert!(doc.comments.contains_key(&anchors[0]));
+            doc = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_page_result_with_an_empty_bookmark_stays_compact() {
+        for (empty, control) in [
+            (r#"<w:bookmarkStart w:id="0" w:name="return_point"/><w:bookmarkEnd w:id="0"/>"#, false),
+            (r#"<w:sdt><w:sdtPr><w:tag w:val="box"/></w:sdtPr><w:sdtContent/></w:sdt>"#, true),
+        ] {
+            let mut doc = read_body(&format!(r#"<w:p><w:fldSimple w:instr="PAGE">{empty}<w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>"#));
+            for _ in 0..2 {
+                let p = doc.body[0].as_para().unwrap();
+                assert!(matches!(p.objects.first(), Some(InlineObject::Field { instr, result, .. }) if instr == "PAGE" && result == "1"));
+                if control {
+                    assert!(matches!(
+                        p.objects.as_slice(),
+                        [InlineObject::Field { .. }, InlineObject::ControlStart { .. }, InlineObject::ControlEnd]
+                    ));
+                } else {
+                    assert_eq!(markers(p), [("bookmark+", "1".into()), ("bookmark-", "1".into())]);
+                }
+                doc = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn an_inline_control_in_a_field_keeps_its_content_and_placeholder() {
+        for instr in ["QUOTE x", r#"HYPERLINK \l &quot;target&quot;"#] {
+            let mut doc = read_body(&format!(
+                r#"<w:p><w:fldSimple w:instr="{instr}"><w:sdt><w:sdtPr><w:alias w:val="Box"/><w:tag w:val="box"/><w:showingPlcHdr/></w:sdtPr><w:sdtContent><w:r><w:t>In</w:t></w:r></w:sdtContent></w:sdt><w:r><w:t>Out</w:t></w:r></w:fldSimple></w:p>"#
+            ));
+            for _ in 0..2 {
+                let p = doc.body[0].as_para().unwrap();
+                let mut inside = String::new();
+                let mut depth = 0;
+                let mut objects = p.objects.iter();
+                for c in p.text.chars() {
+                    if c == craft_wordmodel::para::OBJ {
+                        match objects.next().unwrap() {
+                            InlineObject::ControlStart { control } => {
+                                depth += 1;
+                                assert_eq!(control.placeholder_text, "In");
+                            }
+                            InlineObject::ControlEnd => depth -= 1,
+                            o if depth > 0 => inside.push_str(o.plain_text()),
+                            _ => {}
+                        }
+                    } else if depth > 0 {
+                        inside.push(c);
+                    }
+                }
+                assert_eq!(inside, "In", "{instr}");
+                assert_eq!(p.plain_text(), "InOut");
+                assert_eq!(depth, 0);
+                doc = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+            }
+        }
+    }
+
+    /// A link is written inside a content control, never round its start, so a control in a
+    /// link's result, with text or empty, must read back as it was first read.
+    #[test]
+    fn a_control_in_a_link_result_reads_back_as_it_was_read() {
+        let control = |content: &str| format!(r#"<w:sdt><w:sdtPr><w:tag w:val="box"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"#);
+        let (text, out) = ("<w:r><w:t>In</w:t></w:r>", "<w:r><w:t>Out</w:t></w:r>");
+        let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> HYPERLINK \l "target" </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#;
+        let end = r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+        for body in [
+            format!(r#"<w:p><w:fldSimple w:instr="HYPERLINK \l &quot;target&quot;">{}{out}</w:fldSimple></w:p>"#, control(text)),
+            format!("<w:p>{begin}{}{out}{end}</w:p>", control(text)),
+            format!("<w:p>{begin}{out}{}{end}</w:p>", control("")),
+            format!("<w:p>{begin}{}{out}{end}</w:p>", control("")),
+        ] {
+            let doc = read_body(&body);
+            let p = doc.body[0].as_para().unwrap();
+            let mut text = p.text.char_indices().filter(|(_, c)| *c != craft_wordmodel::para::OBJ);
+            assert!(text.all(|(at, _)| p.props_of_char(at).link.as_deref() == Some("#target")), "{body}");
+            let again = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+            assert_eq!(doc.body, again.body, "{body}");
+        }
+    }
+
+    #[test]
+    fn legacy_form_ancestors_keep_their_definition_and_markers() {
+        let mut doc = read_body(
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Input"/><w:textInput/></w:ffData></w:fldChar><w:instrText>FORMTEXT</w:instrText><w:fldChar w:fldCharType="separate"/></w:r><w:fldSimple w:instr="QUOTE x"><w:bookmarkStart w:id="2" w:name="part"/><w:r><w:t>A</w:t></w:r><w:bookmarkEnd w:id="2"/></w:fldSimple><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+        );
+        for _ in 0..2 {
+            let p = doc.body[0].as_para().unwrap();
+            assert_eq!(p.plain_text(), "A");
+            assert_eq!(markers(p).iter().map(|(kind, _)| *kind).collect::<Vec<_>>(), ["bookmark+", "bookmark-"]);
+            assert!(p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, form, .. } if instr == "FORMTEXT" && form.contains("Input"))));
+            doc = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn point_comment_in_a_complex_field_stays_after_its_result_text() {
+        let mut doc = read_body(
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>HYPERLINK https://example.org</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>abc</w:t><w:commentReference w:id="1"/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+        );
+        for _ in 0..2 {
+            assert_eq!(markers(doc.body[0].as_para().unwrap()), vec![("comment-", "abc".to_string())]);
+            doc = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+        }
+    }
+}
+
 #[test]
 fn bookmark_end_name_and_id_trim() {
     let body = r#"<w:p>

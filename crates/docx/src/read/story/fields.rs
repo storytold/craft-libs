@@ -97,8 +97,19 @@ impl Reader<'_> {
         // carrying the link, so a tab in it reaches its tab stop and the `PAGEREF` in a table of
         // contents entry (Word for the web writes them this way) stays a field of its own (#2174).
         if !nested_in_instr && let Some(target) = hyperlink_target(&f.instr) {
+            let mut before = None;
             for (it, mut p) in f.buf {
-                p.link.get_or_insert_with(|| target.clone());
+                match &it {
+                    // A content control's start keeps its own formatting and its end takes that
+                    // of the piece before it, as they read back: a link is written inside a
+                    // control, never round its start.
+                    Item::Obj(o) if matches!(**o, InlineObject::ControlStart { .. }) => {}
+                    Item::Obj(o) if matches!(**o, InlineObject::ControlEnd) => p.link = before,
+                    _ => {
+                        p.link.get_or_insert_with(|| target.clone());
+                    }
+                }
+                before = p.link.clone();
                 match it {
                     Item::Text(t) => self.emit_text(sc, pb, &t, &p),
                     Item::Obj(o) => self.emit_obj(sc, pb, *o, &p),
@@ -113,7 +124,24 @@ impl Reader<'_> {
         // in) keeps the field a range too: a cached text result has one revision at most, so
         // each piece stays an ordinary run with its own `w:ins` / `w:del` (#1037).
         let tracked_inside = f.buf.iter().any(|(_, p)| (p.ins, p.del) != (f.props.ins, f.props.del));
-        if !nested_in_instr && (tracked_inside || f.buf.iter().any(|(it, _)| matches!(it, Item::Obj(o) if o.frame().is_some()))) {
+        // So does a content control holding text or an object: a text result can't keep the
+        // control round its content. Markers alone (empty controls among them) never do.
+        let mut control_depth = 0_usize;
+        let controlled_result = f.form.is_empty()
+            && f.buf.iter().any(|(item, _)| match item {
+                Item::Obj(o) if matches!(**o, InlineObject::ControlStart { .. }) => {
+                    control_depth += 1;
+                    false
+                }
+                Item::Obj(o) if matches!(**o, InlineObject::ControlEnd) => {
+                    control_depth = control_depth.saturating_sub(1);
+                    false
+                }
+                Item::Text(text) => control_depth > 0 && !text.is_empty(),
+                Item::Obj(o) => control_depth > 0 && !o.is_marker(),
+            });
+        if !nested_in_instr && (tracked_inside || controlled_result || f.buf.iter().any(|(it, _)| matches!(it, Item::Obj(o) if o.frame().is_some())))
+        {
             self.emit_obj(sc, pb, InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked, dirty: f.dirty }, &f.props);
             for (it, p) in f.buf {
                 match it {
@@ -156,6 +184,16 @@ impl Reader<'_> {
             return;
         }
         self.emit_obj(sc, pb, obj, &props);
+        // A text result can't hold markers where they were in it: they follow the field, in
+        // order, so each keeps its partner and its place against the text outside the field.
+        for (item, props) in f.buf {
+            if let Item::Obj(o) = item
+                && o.is_marker()
+                && !matches!(*o, InlineObject::FieldStart { .. } | InlineObject::FieldEnd)
+            {
+                self.emit_obj(sc, pb, *o, &props);
+            }
+        }
     }
 
     /// At a paragraph end, open fields can't keep buffering: emit them (empty result) and
