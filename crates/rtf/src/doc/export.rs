@@ -68,6 +68,9 @@ pub(super) struct Writer {
     pub(super) sections: Vec<craft_wordmodel::SectionProps>,
     /// The section being written.
     pub(super) sect_i: usize,
+    /// Each section's tracked change ([`Writer::section_change`]), by section; empty where it
+    /// has none.
+    pub(super) sect_changes: Vec<String>,
 }
 
 pub(super) fn has_marks(bl: &Blocks, depth: usize) -> bool {
@@ -233,6 +236,34 @@ fn sect_words(s: &craft_wordmodel::SectionProps) -> String {
     o
 }
 
+/// What a table row's definition says beyond its cells: the table's alignment, preferred width
+/// and borders, and the row's height, keeping together and header flag.
+struct RowLook {
+    align: Option<Align>,
+    width: Option<f32>,
+    width_pct: Option<f32>,
+    borders: Option<craft_wordmodel::props::Borders>,
+    height: Option<(f32, bool)>,
+    keep: bool,
+    header: bool,
+}
+
+/// What a cell's definition says: its merging, vertical alignment, borders, shading and
+/// preferred width (points).
+struct CellLook<'a> {
+    covered: bool,
+    first_of_merge: bool,
+    valign: Option<VAlign>,
+    borders: Option<&'a craft_wordmodel::props::Borders>,
+    shading: Option<Rgb>,
+    width: f32,
+}
+
+/// What cell `c`'s definition says, `w` twips wide.
+fn cell_look(c: &model::Cell, w: f32) -> CellLook<'_> {
+    CellLook { covered: c.covered, first_of_merge: c.rowspan > 1, valign: c.valign, borders: c.borders.as_ref(), shading: c.shading, width: w / 20.0 }
+}
+
 pub(super) const HEAD_SIZES: [f32; 6] = [20.0, 16.0, 14.0, 12.0, 12.0, 11.0];
 
 fn style_num(k: Kind) -> Option<u32> {
@@ -299,6 +330,80 @@ impl Writer {
         } else if !borderless {
             out.push_str("\\clbrdrt\\brdrs\\brdrw10\\clbrdrl\\brdrs\\brdrw10\\clbrdrb\\brdrs\\brdrw10\\clbrdrr\\brdrs\\brdrw10");
         }
+    }
+
+    /// A section's tracked change, written after its formatting as RTF 1.9.1 has it: the
+    /// formatting before the change (`{\*\oldsprops …}`, "Old Properties"), then who made it and
+    /// when (`\srauth`, `\srdate`, "Section Formatting Properties", "Revision Tracking"). Empty
+    /// when it has none. `revisions`: the document's, which the change names.
+    pub(super) fn section_change(&mut self, s: &craft_wordmodel::SectionProps, revisions: &[craft_wordmodel::Revision]) -> String {
+        let Some(c) = &s.fmt_change else { return String::new() };
+        let mark = revisions.get(c.rev as usize).map(|r| RevMark { author: r.author.clone(), date: r.date.clone(), id: None }).unwrap_or_default();
+        let mut o = format!("{{\\*\\oldsprops {}}}", sect_words(&c.old).trim_end());
+        o.push_str(&self.rev_words("\\srauth", "\\srdate", &mark));
+        o.push('\n');
+        o
+    }
+
+    /// The table and row words of a row definition (after `\trowd`).
+    fn row_words(&mut self, r: &RowLook) -> String {
+        let tw = |v: f32| if v.is_finite() { (v * 20.0).round().clamp(-31_680.0, 31_680.0) as i64 } else { 0 };
+        let mut o = String::new();
+        match r.align {
+            Some(Align::Left) => o.push_str("\\trql"),
+            Some(Align::Center) => o.push_str("\\trqc"),
+            Some(Align::Right) => o.push_str("\\trqr"),
+            _ => {}
+        }
+        // `\trftsWidth`: 3 twips, 2 fiftieths of a percent.
+        if let Some(w) = r.width.filter(|w| w.is_finite() && *w > 0.0) {
+            o.push_str(&format!("\\trftsWidth3\\trwWidth{}", tw(w)));
+        } else if let Some(p) = r.width_pct.filter(|p| p.is_finite() && *p > 0.0) {
+            o.push_str(&format!("\\trftsWidth2\\trwWidth{}", (p.min(100.0) * 50.0).round() as i64));
+        }
+        if let Some(b) = r.borders {
+            for (side, opt) in [('t', b.top), ('l', b.left), ('b', b.bottom), ('r', b.right), ('h', b.between), ('v', b.inside_v)] {
+                if let Some(border) = opt.filter(|x| x.is_visible()) {
+                    self.write_border("trbrdr", side, border, &mut o);
+                }
+            }
+        }
+        // Negative: exactly this high; positive: at least.
+        if let Some((h, exact)) = r.height.filter(|(h, _)| h.is_finite() && *h > 0.0) {
+            let h = tw(h.min(1584.0)).max(1);
+            o.push_str(&format!("\\trrh{}", if exact { -h } else { h }));
+        }
+        if r.keep {
+            o.push_str("\\trkeep");
+        }
+        if r.header {
+            o.push_str("\\trhdr");
+        }
+        o
+    }
+
+    /// A cell's definition, up to its right edge (`\cellx`, twips).
+    fn cell_def(&mut self, c: &CellLook, borderless: bool, right: f32, out: &mut String) {
+        if c.covered {
+            out.push_str("\\clvmrg");
+        } else if c.first_of_merge {
+            out.push_str("\\clvmgf");
+        }
+        match c.valign {
+            Some(VAlign::Top) => out.push_str("\\clvertalt"),
+            Some(VAlign::Center) => out.push_str("\\clvertalc"),
+            Some(VAlign::Bottom) => out.push_str("\\clvertalb"),
+            None => {}
+        }
+        self.cell_borders(c.borders, borderless, out);
+        if let Some(s) = c.shading {
+            let i = self.t.color(s);
+            out.push_str(&format!("\\clcbpat{i}"));
+        }
+        if c.width.is_finite() && c.width > 0.0 {
+            out.push_str(&format!("\\clftsWidth3\\clwWidth{}", (c.width.min(1584.0) * 20.0).round() as i64));
+        }
+        out.push_str(&format!("\\cellx{}", right.round() as i64));
     }
 
     /// `\revtbl` index of a tracked change's author (0 = "Unknown").
@@ -728,6 +833,7 @@ impl Writer {
                     if p.section.is_some() && !intbl && depth == 0 && self.sect_i + 1 < self.sections.len() {
                         self.sect_i += 1;
                         end = format!("\\sect\n{}", self.sections.get(self.sect_i).map(sect_words).unwrap_or_default());
+                        end.push_str(self.sect_changes.get(self.sect_i).map_or("", String::as_str));
                         // A body that ends on the break keeps its last section: an empty paragraph holds it.
                         if i + 1 == n {
                             end.push_str("\\pard\\plain \\par");
@@ -804,36 +910,100 @@ impl Writer {
         } else {
             vec![total / cols as f32; cols]
         };
-        for row in &t.rows {
-            out.push_str("\\trowd\\trgaph108\\trleft0");
-            if !row.is_empty() && row.iter().all(|c| c.header) {
-                out.push_str("\\trhdr");
+        let x = t.extra.as_deref();
+        // A tracked change of the table's, a row's or a cell's formatting: the whole row
+        // definition before it (RTF 1.9.1 "Old Properties", `\oldtprops`), then who made it and
+        // when ("Table Row Revision Tracking", `\trauth`, `\trdate`). A row has one author and
+        // date: its own change's, else its first changed cell's, else the table's. The table's
+        // old formatting goes in the rows that carry its author (the first row when none does).
+        let table_change = x.and_then(|x| x.fmt_change.as_deref());
+        let marks: Vec<Option<&RevMark>> = t
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(ri, row)| {
+                let row_change = x.and_then(|x| x.row_changes.get(ri)).and_then(Option::as_deref);
+                let cell_mark = row.iter().find_map(|c| c.fmt_change.as_deref().map(|c| &c.mark));
+                row_change.map(|c| &c.mark).or(cell_mark).or(table_change.map(|c| &c.mark))
+            })
+            .collect();
+        let same = |a: &RevMark, b: &RevMark| a.author == b.author && a.date == b.date;
+        let table_rows: Vec<bool> = match table_change {
+            Some(tc) if marks.iter().any(|m| m.is_some_and(|m| same(m, &tc.mark))) => {
+                marks.iter().map(|m| m.is_some_and(|m| same(m, &tc.mark))).collect()
             }
+            Some(_) => (0..t.rows.len()).map(|i| i == 0).collect(),
+            None => Vec::new(),
+        };
+        for (ri, row) in t.rows.iter().enumerate() {
+            out.push_str("\\trowd\\trgaph108\\trleft0");
+            let now = RowLook {
+                align: x.and_then(|x| x.align),
+                width: x.and_then(|x| x.width),
+                width_pct: x.and_then(|x| x.width_pct),
+                borders: x.and_then(|x| x.borders),
+                height: x.and_then(|x| x.heights.get(ri).copied().flatten()),
+                keep: x.is_some_and(|x| x.keep_rows.get(ri) == Some(&true)),
+                header: !row.is_empty() && row.iter().all(|c| c.header),
+            };
+            let words = self.row_words(&now);
+            out.push_str(&words);
+            // Each cell's right edge and width, twips.
             let mut g = 0usize;
-            let mut x = 0.0f32;
-            for c in row {
-                let span = c.colspan.clamp(1, 63) as usize;
-                for k in g..(g + span).min(widths.len()) {
-                    x += widths.get(k).copied().unwrap_or(0.0);
+            let mut right = 0.0f32;
+            let edges: Vec<(f32, f32)> = row
+                .iter()
+                .map(|c| {
+                    let span = c.colspan.clamp(1, 63) as usize;
+                    let left = right;
+                    for k in g..(g + span).min(widths.len()) {
+                        right += widths.get(k).copied().unwrap_or(0.0);
+                    }
+                    g += span;
+                    (right, right - left)
+                })
+                .collect();
+            let row_change = x.and_then(|x| x.row_changes.get(ri)).and_then(Option::as_deref);
+            if let Some(mark) = marks.get(ri).copied().flatten() {
+                let table_change = table_change.filter(|_| table_rows.get(ri) == Some(&true));
+                let height = |r: &craft_wordmodel::props::RowProps| match (r.height, r.height_rule) {
+                    (Some(h), craft_wordmodel::props::HeightRule::Exact) => Some((h, true)),
+                    (Some(h), craft_wordmodel::props::HeightRule::AtLeast) => Some((h, false)),
+                    _ => None,
+                };
+                let old = RowLook {
+                    align: table_change.map_or(now.align, |c| c.old.align),
+                    width: table_change.map_or(now.width, |c| c.old.width),
+                    width_pct: table_change.map_or(now.width_pct, |c| c.old.width_pct),
+                    borders: table_change.map_or(now.borders, |c| c.old.borders),
+                    height: row_change.map_or(now.height, |c| height(&c.old)),
+                    keep: row_change.map_or(now.keep, |c| c.old.cant_split),
+                    // A first row the table's style makes a header row stays one.
+                    header: row_change.map_or(now.header, |c| c.old.header || (now.header && ri >= x.map_or(0, |x| x.header_rows))),
+                };
+                let mut group = String::from("{\\*\\oldtprops \\trowd\\trgaph108\\trleft0");
+                let words = self.row_words(&old);
+                group.push_str(&words);
+                for (c, &(right, w)) in row.iter().zip(&edges) {
+                    let cell = match c.fmt_change.as_deref() {
+                        Some(ch) => CellLook {
+                            valign: ch.old.valign,
+                            borders: ch.old.borders.as_ref(),
+                            shading: ch.old.shading,
+                            width: ch.old.width.unwrap_or(w / 20.0),
+                            ..cell_look(c, w)
+                        },
+                        None => cell_look(c, w),
+                    };
+                    self.cell_def(&cell, t.borderless, right, &mut group);
                 }
-                g += span;
-                if c.covered {
-                    out.push_str("\\clvmrg");
-                } else if c.rowspan > 1 {
-                    out.push_str("\\clvmgf");
-                }
-                match c.valign {
-                    Some(VAlign::Top) => out.push_str("\\clvertalt"),
-                    Some(VAlign::Center) => out.push_str("\\clvertalc"),
-                    Some(VAlign::Bottom) => out.push_str("\\clvertalb"),
-                    None => {}
-                }
-                self.cell_borders(c.borders.as_ref(), t.borderless, out);
-                if let Some(s) = c.shading {
-                    let i = self.t.color(s);
-                    out.push_str(&format!("\\clcbpat{i}"));
-                }
-                out.push_str(&format!("\\cellx{}", x.round() as i64));
+                group.push('}');
+                out.push_str(&group);
+                let words = self.rev_words("\\trauth", "\\trdate", mark);
+                out.push_str(&words);
+            }
+            for (c, &(right, w)) in row.iter().zip(&edges) {
+                self.cell_def(&cell_look(c, w), t.borderless, right, out);
             }
             out.push('\n');
             for c in row {
@@ -902,13 +1072,26 @@ pub fn export_with_generator(doc: &Document, generator: &str) -> String {
     let doc = marked.as_ref().unwrap_or(doc);
     let flow = model::from_doc_tracked(doc);
     let base_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| craft_wordmodel::styles::BODY_FONT.to_string());
-    let mut w = Writer { marks, t: Tables::new(base_font), lists: Vec::new(), authors: None, base: Fmt::default(), sections: Vec::new(), sect_i: 0 };
+    let mut w = Writer {
+        marks,
+        t: Tables::new(base_font),
+        lists: Vec::new(),
+        authors: None,
+        base: Fmt::default(),
+        sections: Vec::new(),
+        sect_i: 0,
+        sect_changes: Vec::new(),
+    };
     let mut body = String::new();
     // Every section starts with its own `\sectd`; `\sect` breaks only where there are several.
     let secs: Vec<craft_wordmodel::SectionProps> = doc.sections().into_iter().map(|(_, s)| s.clone()).collect();
     if let Some(first) = secs.first() {
         body.push_str(&sect_words(first));
     }
+    // Each section's tracked change follows its formatting.
+    let changes: Vec<String> = secs.iter().map(|s| w.section_change(s, &doc.revisions)).collect();
+    body.push_str(changes.first().map_or("", String::as_str));
+    w.sect_changes = changes;
     if secs.len() > 1 {
         w.sections = secs;
     }

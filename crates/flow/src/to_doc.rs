@@ -879,6 +879,90 @@ impl<'a> Builder<'a> {
         out
     }
 
+    /// The table properties a format keeps in `x` (ODT's, RTF's), over `props`.
+    fn table_extra(&mut self, props: &mut craft_wordmodel::props::TableProps, x: &super::types::TableExtra) {
+        props.align = x.align;
+        props.width_pct = x.width_pct.filter(|p| p.is_finite() && *p > 0.0).map(|p| p.min(100.0));
+        props.width = x.width.filter(|w| w.is_finite() && *w > 0.0).map(|w| w.min(1584.0));
+        props.fixed |= x.fixed;
+        let space = |v: Option<f32>| v.filter(|v| v.is_finite() && *v > 0.0).map(|v| v.min(1584.0));
+        (props.space_before, props.space_after) = (space(x.space[0]), space(x.space[1]));
+        if x.borders.is_some() {
+            props.borders = x.borders;
+        }
+        if let Some(c) = &x.fmt_change {
+            props.fmt_change = self.table_change(c, props);
+        }
+    }
+
+    /// Row `ri`'s properties: a header row when all its cells are header cells, and the height,
+    /// keep-together and tracked change the table's format keeps for it.
+    fn row_props(&mut self, t: &FTable, ri: usize, r: &[Cell]) -> RowProps {
+        let mut props = RowProps { header: !r.is_empty() && r.iter().all(|c| c.header), ..RowProps::default() };
+        if let Some(&Some((h, exact))) = t.extra.as_ref().and_then(|x| x.heights.get(ri))
+            && h.is_finite()
+            && h > 0.0
+        {
+            props.height = Some(h.min(1584.0));
+            props.height_rule = if exact { craft_wordmodel::props::HeightRule::Exact } else { craft_wordmodel::props::HeightRule::AtLeast };
+        }
+        props.cant_split = t.extra.as_ref().is_some_and(|x| x.keep_rows.get(ri) == Some(&true));
+        if let Some(c) = t.extra.as_ref().and_then(|x| x.row_changes.get(ri)).and_then(Option::as_deref) {
+            props.fmt_change = self.row_change(c, &props);
+        }
+        props
+    }
+
+    /// A table's tracked formatting change: the alignment, width and borders the flow keeps from
+    /// before it, over the rest of the table's properties `now`.
+    fn table_change(
+        &mut self,
+        c: &super::types::FmtChange<craft_wordmodel::props::TableProps>,
+        now: &craft_wordmodel::props::TableProps,
+    ) -> Option<Box<PropChange<craft_wordmodel::props::TableProps>>> {
+        let o = &c.old;
+        let old = craft_wordmodel::props::TableProps {
+            align: o.align,
+            width: o.width.filter(|w| w.is_finite() && *w > 0.0).map(|w| w.min(1584.0)),
+            width_pct: o.width_pct.filter(|p| p.is_finite() && *p > 0.0).map(|p| p.min(100.0)),
+            borders: o.borders,
+            fmt_change: None,
+            ..now.clone()
+        };
+        PropChange::boxed(self.revision(RevisionKind::Format, &c.mark), old)
+    }
+
+    /// A row's tracked formatting change: the height, keep-together and header row the flow keeps
+    /// from before it, over the rest of the row's properties `now`.
+    fn row_change(&mut self, c: &super::types::FmtChange<RowProps>, now: &RowProps) -> Option<Box<PropChange<RowProps>>> {
+        let o = &c.old;
+        let height = o.height.filter(|h| h.is_finite() && *h > 0.0).map(|h| h.min(1584.0));
+        let old = RowProps {
+            height,
+            height_rule: if height.is_some() { o.height_rule } else { craft_wordmodel::props::HeightRule::Auto },
+            cant_split: o.cant_split,
+            header: o.header,
+            fmt_change: None,
+            ..now.clone()
+        };
+        PropChange::boxed(self.revision(RevisionKind::Format, &c.mark), old)
+    }
+
+    /// A cell's tracked formatting change: the shading, borders, vertical alignment and width the
+    /// flow keeps from before it, over the rest of the cell's properties `now`.
+    fn cell_change(&mut self, c: &super::types::FmtChange<CellProps>, now: &CellProps) -> Option<Box<PropChange<CellProps>>> {
+        let o = &c.old;
+        let old = CellProps {
+            shading: o.shading,
+            borders: o.borders,
+            valign: o.valign,
+            width: o.width.filter(|w| w.is_finite() && *w > 0.0).map(|w| w.min(1584.0)).or(now.width),
+            fmt_change: None,
+            ..now.clone()
+        };
+        PropChange::boxed(self.revision(RevisionKind::Format, &c.mark), old)
+    }
+
     fn table(&mut self, t: &FTable, depth: usize) -> Option<Table> {
         let rows: Vec<(usize, &Vec<Cell>)> =
             t.rows.iter().enumerate().filter(|(_, r)| !r.is_empty()).take(craft_wordmodel::table::MAX_ROWS).collect();
@@ -902,24 +986,11 @@ impl<'a> Builder<'a> {
         }
         tb.rows.clear();
         if let Some(x) = &t.extra {
-            tb.props.align = x.align;
-            tb.props.width_pct = x.width_pct.filter(|p| p.is_finite() && *p > 0.0).map(|p| p.min(100.0));
-            tb.props.width = x.width.filter(|w| w.is_finite() && *w > 0.0).map(|w| w.min(1584.0));
-            tb.props.fixed |= x.fixed;
-            let space = |v: Option<f32>| v.filter(|v| v.is_finite() && *v > 0.0).map(|v| v.min(1584.0));
-            (tb.props.space_before, tb.props.space_after) = (space(x.space[0]), space(x.space[1]));
+            self.table_extra(&mut tb.props, x);
         }
         for (ri, r) in rows {
-            let mut row = craft_wordmodel::Row { props: RowProps::default(), cells: Vec::new(), controls: Default::default() };
-            row.props.header = !r.is_empty() && r.iter().all(|c| c.header);
-            if let Some(&Some((h, exact))) = t.extra.as_ref().and_then(|x| x.heights.get(ri))
-                && h.is_finite()
-                && h > 0.0
-            {
-                row.props.height = Some(h.min(1584.0));
-                row.props.height_rule = if exact { craft_wordmodel::props::HeightRule::Exact } else { craft_wordmodel::props::HeightRule::AtLeast };
-            }
-            row.props.cant_split = t.extra.as_ref().is_some_and(|x| x.keep_rows.get(ri) == Some(&true));
+            let props = self.row_props(t, ri, r);
+            let mut row = craft_wordmodel::Row { props, cells: Vec::new(), controls: Default::default() };
             let mut g = 0usize;
             for c in r.iter().take(craft_wordmodel::table::MAX_COLS) {
                 let span = (c.colspan.clamp(1, 63) as usize).min(cols.saturating_sub(g).max(1));
@@ -941,22 +1012,22 @@ impl<'a> Builder<'a> {
                     let media = self.doc.add_media(p.img.data.as_ref().clone(), &p.img.ext);
                     Box::new(craft_wordmodel::props::CellPicture { media, size: [p.img.w, p.img.h], repeat: p.repeat, align: p.align })
                 });
-                row.cells.push(craft_wordmodel::Cell {
-                    props: CellProps {
-                        width: Some(w),
-                        span: span as u32,
-                        vmerge,
-                        shading: c.shading,
-                        borders: c.borders,
-                        margins: c.margins.filter(|m| m.iter().all(|v| v.is_finite())).map(|m| m.map(|v| v.clamp(0.0, 1584.0))),
-                        valign: c.valign,
-                        text_direction: c.direction,
-                        picture,
-                        ..Default::default()
-                    },
-                    blocks,
-                    controls: Default::default(),
-                });
+                let mut props = CellProps {
+                    width: Some(w),
+                    span: span as u32,
+                    vmerge,
+                    shading: c.shading,
+                    borders: c.borders,
+                    margins: c.margins.filter(|m| m.iter().all(|v| v.is_finite())).map(|m| m.map(|v| v.clamp(0.0, 1584.0))),
+                    valign: c.valign,
+                    text_direction: c.direction,
+                    picture,
+                    ..Default::default()
+                };
+                if let Some(ch) = &c.fmt_change {
+                    props.fmt_change = self.cell_change(ch, &props);
+                }
+                row.cells.push(craft_wordmodel::Cell { props, blocks, controls: Default::default() });
             }
             if row.cells.is_empty() {
                 row.cells.push(craft_wordmodel::Cell::empty());
@@ -1084,6 +1155,19 @@ pub fn to_doc_in(flow: &Flow, section: craft_wordmodel::SectionProps) -> Documen
     doc.core.created = m.created.clone();
     doc.ensure_nonempty();
     doc
+}
+
+/// The revision of `doc` for a tracked formatting change made by `m`'s author at its date: the
+/// one it has, else a new one. For a change an importer adds to the document itself (a
+/// section's), as [`to_doc`] adds the flow's.
+pub fn format_revision(doc: &mut Document, m: &RevMark) -> u32 {
+    let same = |r: &Revision| r.kind == RevisionKind::Format && r.move_name.is_none() && r.author == m.author && r.date == m.date;
+    if let Some(i) = doc.revisions.iter().position(same) {
+        return u32::try_from(i).unwrap_or(u32::MAX);
+    }
+    let i = u32::try_from(doc.revisions.len()).unwrap_or(u32::MAX);
+    doc.revisions.push(Revision::new(RevisionKind::Format, m.author.clone(), m.date.clone()));
+    i
 }
 
 /// `blocks` as document blocks of `doc` (their pictures go into its media), for a header,

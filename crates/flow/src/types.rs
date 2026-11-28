@@ -896,6 +896,10 @@ pub struct Cell {
     pub vmerge_restart: bool,
     /// Whether this covered placeholder was synthesized by [`FTable::insert_covered`].
     pub synthetic_covered: bool,
+    /// Tracked change of the cell's formatting: who made it, and the properties before it
+    /// (formats that keep revisions: RTF). Only its shading, borders, vertical alignment and
+    /// width are kept, the rest is the cell's as it is now; no width is the width it has now.
+    pub fmt_change: Option<Box<FmtChange<craft_wordmodel::props::CellProps>>>,
 }
 
 /// A cell's background picture: the picture at its own size, how it fills the cell, and where an
@@ -924,6 +928,7 @@ impl Default for Cell {
             width: None,
             vmerge_restart: false,
             synthetic_covered: false,
+            fmt_change: None,
         }
     }
 }
@@ -980,6 +985,15 @@ pub struct TableExtra {
     /// ODT's `table:table-header-rows`). Its header cells (`FCell::header`) may be more: a
     /// table style's header row is one too.
     pub header_rows: usize,
+    /// Its own borders (RTF `\trbrdr…`), outside and between its cells.
+    pub borders: Option<craft_wordmodel::props::Borders>,
+    /// Tracked change of its formatting: who made it, and the properties before it (formats
+    /// that keep revisions: RTF). Only its alignment, width and borders are kept, the rest is
+    /// the table's as it is now.
+    pub fmt_change: Option<Box<FmtChange<craft_wordmodel::props::TableProps>>>,
+    /// Tracked change of each row's formatting, by row: only its height, keeping together and
+    /// repeating as a header row are kept.
+    pub row_changes: Vec<Option<Box<FmtChange<craft_wordmodel::props::RowProps>>>>,
 }
 
 impl FTable {
