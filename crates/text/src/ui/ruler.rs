@@ -262,6 +262,10 @@ pub struct TextRulerOutput {
     pub gap: Option<GapDrag>,
     /// The kind the tab selector was clicked to: the next kind, the previous one for a secondary click.
     pub kind: Option<TabAlign>,
+    /// Where the parts that take a drag sit, screen rects: the indent markers, the stops, a table's column borders and
+    /// the column gaps' edges. A control shown over the ruler after it keeps clear of them, so a marker keeps the
+    /// press where they overlap (a page's margin edges, in craft-pages' `PageRulers`).
+    pub handles: Vec<Rect>,
 }
 
 impl Outcome for TextRulerOutput {
@@ -354,7 +358,8 @@ pub struct TextRulerStyle {
 ///   in the strip with the ticks centred on it and the numbers in place of the whole-unit ticks.
 /// - Indent markers (Word's): the first-line triangle down at the top, the hanging triangle up and the left box under
 ///   it at the bottom, the right triangle at the right. Dragging the box moves first-line and left together; Alt drags
-///   freely (no snap).
+///   freely (no snap). They stay in the column, or within the host's [`indent_reach`](Self::indent_reach) round it:
+///   past the column an indent is negative, and the box stops where a hanging first line it carries reaches the reach.
 /// - A click on the empty column sets a stop of the selector's kind at the snapped position (1/16 in, or the unit's
 ///   minor tick); dragging a stop moves it; dragging it off the ruler ([`dropped_off`]) clears it on release, the stop
 ///   drawn faded meanwhile. Each gesture is one edit of the whole values; Escape restores the start.
@@ -396,6 +401,13 @@ pub struct TextRuler<'a> {
     /// The screen x range the ruler covers (the page's); the ruler is cut to it. Unset, the whole strip.
     #[prop]
     extent: Option<egui::Rangef>,
+    /// How far the indent markers reach, points from the column's start edge: the first-line, hanging and left markers
+    /// down to its start, the right marker up to its end. A page's ruler gives the page's span, so the markers drag into
+    /// the margins as negative indents, up to the page's edges. The left box stops where a hanging first line, which it
+    /// carries, reaches the start. The column is always in reach; unset, the markers stay in it. The stops stay in the
+    /// column either way.
+    #[prop]
+    indent_reach: Option<egui::Rangef>,
     /// The unit the markers' values and the ticks show.
     #[prop]
     unit: DocUnit,
@@ -446,6 +458,7 @@ impl<'a> TextRuler<'a> {
             gaps_draggable: true,
             origin: None,
             extent: None,
+            indent_reach: None,
             unit: DocUnit::points(),
             kind: None,
             corner: None,
@@ -458,9 +471,27 @@ impl<'a> TextRuler<'a> {
         .label(label)
     }
 
+    /// The span the indent markers reach, points from the column's start edge, lowest first: the column and the
+    /// [`indent_reach`](Self::indent_reach) round it ([`RulerItem::bounds`] gives each marker its side of it); `None`
+    /// without a reach, when the markers keep to the column.
+    fn indent_span(&self) -> Option<(f32, f32)> {
+        let reach = self.indent_reach.filter(|reach| reach.min.is_finite() && reach.max.is_finite());
+        reach.map(|reach| (reach.min.min(reach.max).min(0.0), reach.max.max(reach.min).max(self.width)))
+    }
+
     /// The part of the host's corner inside `rect`, if any.
     fn corner_in(&self, rect: Rect) -> Option<Rect> {
         self.corner.map(|corner| corner.intersect(rect)).filter(|corner| corner.is_positive())
+    }
+
+    /// The rects of the parts that take a drag, as [`parts`](Component::parts) declares them: the markers and stops, a
+    /// table's column borders, and the column gaps' edges when they are draggable.
+    fn handle_rects(&self, layout: &Layout, values: &RulerValues) -> Vec<Rect> {
+        let markers = RulerItem::all(values).into_iter().map(|item| layout.shapes.rect(&layout.g, item, values));
+        let columns = self.columns.iter().map(|position| layout.shapes.column_marker(layout.g.strip, layout.g.x(*position)));
+        let gaps = self.gaps.iter().filter(|_| self.gaps_draggable);
+        let gaps = gaps.flat_map(|gap| [GapEdge::End, GapEdge::Start].map(|edge| layout.shapes.gap_edge(&layout.g, *gap, edge)));
+        markers.chain(columns).chain(gaps).collect()
     }
 
     /// The host's corner, the strip beside it and the markers' sizes inside `rect`.
@@ -636,6 +667,7 @@ impl Component for TextRuler<'_> {
         let text = run::ruler_text(self.unit, &numbers);
         let step = f64::from(run::snap_step(&text, self.unit));
         let range = 0.0..=f64::from(self.width);
+        let span = self.indent_span();
         for item in RulerItem::all(&values) {
             let at = f64::from(item.position(&values, self.width));
             let shown = text.format_value(&numbers, at, 0.0);
@@ -646,7 +678,8 @@ impl Component for TextRuler<'_> {
             } else {
                 kind.to_owned()
             });
-            node.numeric = Some(Numeric::new(at, range.clone()).step(step).text(shown));
+            let (least, most) = item.bounds(&values, self.width, span);
+            node.numeric = Some(Numeric::new(at, f64::from(least)..=f64::from(most)).step(step).text(shown));
         }
         for (index, position) in self.columns.iter().enumerate() {
             let at = f64::from(*position);
@@ -667,7 +700,9 @@ impl Component for TextRuler<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TextRulerOutput {
+        let values = cx.value().cloned().unwrap_or_default();
+        let handles = self.handle_rects(&self.layout(cx.rect, cx.style, cx.flow.is_rtl()), &values);
         let Report { picked, open_tabs_dialog, column, gap, kind } = self.report;
-        TextRulerOutput { edit: cx.edit_response(), picked, open_tabs_dialog, column, gap, kind }
+        TextRulerOutput { edit: cx.edit_response(), picked, open_tabs_dialog, column, gap, kind, handles }
     }
 }

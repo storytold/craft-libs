@@ -62,6 +62,8 @@ pub struct VerticalRulerOutput {
     pub response: Response,
     /// A table row grip dragged ([`VerticalRuler::rows`]).
     pub row: Option<RowDrag>,
+    /// Where the row grips sit, screen rects: the margin edges keep clear of them ([`MarginHandles::keep_clear_of`]).
+    pub handles: Vec<Rect>,
 }
 
 impl Outcome for VerticalRulerOutput {
@@ -391,7 +393,8 @@ impl Component for VerticalRuler<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> VerticalRulerOutput {
-        VerticalRulerOutput { response: cx.response.clone(), row: self.report }
+        let handles = self.rows.iter().map(|row| self.grip_rect(cx.rect, cx.style, *row)).collect();
+        VerticalRulerOutput { response: cx.response.clone(), row: self.report, handles }
     }
 }
 
@@ -409,9 +412,10 @@ pub struct PageRulersOutput {
 /// The rulers around a page: the text ruler over the top band, the vertical ruler and the margin handles last, so
 /// their edges win. It shows no guides, no zero point and no units menu; `Rulers` is unchanged.
 ///
-/// The text ruler counts from the text column's start edge and is cut to the page's width; the vertical ruler counts
-/// from the page's top and shades the margins. The strips are as thick as the canvas rulers' strips. Both rulers take
-/// the face given here, else the scope's component set's.
+/// The text ruler counts from the text column's start edge and is cut to the page's width; its indent markers drag into
+/// the margins as far as the page's edges (negative indents), and its stops stay in the column. The vertical ruler
+/// counts from the page's top and shades the margins. The strips are as thick as the canvas rulers' strips. Both rulers
+/// take the face given here, else the scope's component set's.
 #[must_use = "show the rulers with `show_at`"]
 #[derive(craft_ui::contract::Pattern)]
 pub struct PageRulers<'a> {
@@ -569,6 +573,9 @@ impl<'a> PageRulers<'a> {
         // tab selector it lies along the top strip and the canvas's corner, which holds the selector.
         let origin = page.rect.min.x + (if rtl { column.1 } else { column.0 }) * scale;
         let extent = Rangef::new(page.rect.min.x, page.rect.max.x);
+        // The indent markers reach over the page, so they drag into the margins as negative indents, up to its edges.
+        let page_width = page_size.0 as f32;
+        let reach = if rtl { Rangef::new(column.1 - page_width, column.1) } else { Rangef::new(-column.0, page_width - column.0) };
         let mut horizontal = TextRuler::new(label.clone(), ruler, (column.1 - column.0).max(0.0))
             .unit(unit)
             .columns(columns)
@@ -576,6 +583,7 @@ impl<'a> PageRulers<'a> {
             .gaps_draggable(gaps_draggable)
             .origin(origin)
             .extent(extent)
+            .indent_reach(reach)
             .scale(scale)
             .right_to_left(rtl)
             .id_source(id);
@@ -596,9 +604,16 @@ impl<'a> PageRulers<'a> {
         }
         let vertical = vertical.show_at(ui, left_strip);
 
+        // The margin edges come after the rulers, so they take a press before the ruler's strip; the rulers' markers,
+        // stops, borders and row grips keep it where they sit on an edge.
+        let handles: Vec<Rect> = ruler_out.handles.iter().chain(&vertical.handles).copied().collect();
         let margins_label = Label::from(words.margins.fill(&[("name", label.as_str())]));
-        let margins =
-            MarginHandles::new(margins_label, page, edges).gutter(gutter).mirrored_even(mirrored_even).unit(unit.kind).show_at(ui, canvas_rect);
+        let margins = MarginHandles::new(margins_label, page, edges)
+            .gutter(gutter)
+            .mirrored_even(mirrored_even)
+            .unit(unit.kind)
+            .keep_clear_of(&handles)
+            .show_at(ui, canvas_rect);
         PageRulersOutput { ruler: ruler_out, margins, row: vertical.row }
     }
 }

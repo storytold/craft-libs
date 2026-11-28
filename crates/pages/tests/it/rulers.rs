@@ -229,6 +229,181 @@ fn a_new_salt_during_a_tab_drag_commits_nothing() {
     assert_eq!(commits.get(), 1, "the drag open when the paragraph changed commits nothing");
 }
 
+/// The indent markers move into the page's margins as negative indents, in either paragraph direction: the left marker's
+/// accessible range reaches the page's edge, the arrows move the first-line marker past the column's start edge, the left
+/// marker drags into the start margin and stops at the page's edge, and so does the right marker at the other edge. A tab
+/// stop dragged into the margin stays in the column.
+#[trial]
+fn indent_markers_move_into_the_margins_up_to_the_page_edges() {
+    const MARGIN: f32 = 72.0;
+    const INDENT: f32 = 36.0;
+    let words = TextRulerWords::default();
+    for rtl in [false, true] {
+        // The left and right markers start inside the column, clear of the margin edges' handles; the first line hangs
+        // back to the column's start edge.
+        let mut start = RulerValues::default();
+        start.stops.push(TabStop::new(STOP_AT, TabAlign::Left, TabLeader::None));
+        (start.left_indent, start.first_line_indent, start.right_indent) = (INDENT, -INDENT, INDENT);
+        let values = Rc::new(RefCell::new(start));
+        let shown = Rc::clone(&values);
+        let mut fixture = Fixture::new(move |ui| {
+            let full = craft_ui::testing::stage(ui);
+            let page = demo_placed(1, pos2(full.min.x + PAGE_AT.0, full.min.y + PAGE_AT.1)).remove(0);
+            let mut edges = PageEdges::new(Margins::uniform(f64::from(MARGIN)));
+            PageRulers::new("Rulers", &page, Bind::bound(&mut edges), Bind::bound(&mut *shown.borrow_mut()))
+                .right_to_left(Some(rtl))
+                .show_at(ui, full);
+        });
+        fixture.room(vec2(900.0, 600.0));
+        fixture.settle();
+        // The start margin is on the left, or on the right of a right-to-left paragraph; the page is at scale 1.
+        let (outward, toward_start) = if rtl { (1.0, Key::ArrowRight) } else { (-1.0, Key::ArrowLeft) };
+        let at = |fixture: &Fixture, name: &str| fixture.by_label(name).expect(name).rect.center();
+        // A screen reader is given the same reach: the hanging marker's range starts at the page's edge, the box's where
+        // the hanging first line it carries would reach that edge.
+        let range = |fixture: &Fixture, name: &str| fixture.tree().numeric_of(fixture.by_label(name).expect(name).node).expect(name).range;
+        let (hanging, left) = (range(&fixture, words.hanging_indent.as_str()), range(&fixture, words.left_indent.as_str()));
+        assert!((hanging.start() + f64::from(MARGIN)).abs() < 0.01, "rtl {rtl}: the hanging marker's range starts at the page's edge: {hanging:?}");
+        let floor = -f64::from(MARGIN - INDENT);
+        assert!((left.start() - floor).abs() < 0.01, "rtl {rtl}: the box's range stops where its first line meets the page's edge: {left:?}");
+
+        fixture.key(Key::Tab, Modifiers::NONE).idle(2);
+        fixture.key(toward_start, Modifiers::NONE).idle(2);
+        let first = values.borrow().left_indent + values.borrow().first_line_indent;
+        assert!(first < 0.0, "rtl {rtl}: the arrow moves the first line into the start margin: {first}");
+
+        let left = at(&fixture, words.left_indent.as_str());
+        fixture.drag_at(left, vec2(2.0 * INDENT * outward, 0.0));
+        let dragged = values.borrow().left_indent;
+        assert!(dragged < 0.0, "rtl {rtl}: the left indent drags into the start margin: {dragged}");
+        // The box carries the hanging first line, so it stops where that line reaches the page's edge.
+        let left = at(&fixture, words.left_indent.as_str());
+        fixture.drag_at(left, vec2(300.0 * outward, 0.0));
+        let first = values.borrow().left_indent + values.borrow().first_line_indent;
+        assert!((first + MARGIN).abs() < 0.01, "rtl {rtl}: the box stops with the first line at the page's edge: {first}");
+        // The hanging marker moves the left indent alone, on to the page's edge, where it stops.
+        let hanging = at(&fixture, words.hanging_indent.as_str());
+        fixture.drag_at(hanging, vec2(300.0 * outward, 0.0));
+        let (farthest, first) = (values.borrow().left_indent, values.borrow().left_indent + values.borrow().first_line_indent);
+        assert!((farthest + MARGIN).abs() < 0.01, "rtl {rtl}: the left indent stops at the page's edge: {farthest}");
+        assert!(first >= -MARGIN - 0.01, "rtl {rtl}: the first line stays on the page: {first}");
+
+        let right = at(&fixture, words.right_indent.as_str());
+        fixture.drag_at(right, vec2(-300.0 * outward, 0.0));
+        let farthest = values.borrow().right_indent;
+        assert!((farthest + MARGIN).abs() < 0.01, "rtl {rtl}: the right indent stops at the page's other edge: {farthest}");
+
+        let stop = fixture
+            .by_role(Role::SLIDER)
+            .into_iter()
+            .find(|target| craft_ui::testing::access::name(fixture.tree(), target.node).is_some_and(|name| name.starts_with(words.left_tab.as_str())))
+            .expect("the ruler shows the stop")
+            .rect
+            .center();
+        fixture.drag_at(stop, vec2(300.0 * outward, 0.0));
+        let stops: Vec<f32> = values.borrow().stops.iter().map(|stop| stop.position).collect();
+        assert!(stops.len() == 1 && stops[0] < STOP_AT && stops[0] >= 0.0, "rtl {rtl}: the stop moved and stays in the column: {stops:?}");
+    }
+}
+
+/// wordcraft#7671: at indent 0 the indent markers sit on the margin edges, which are shown after the ruler. A drag on a
+/// marker moves the indent and not the margin, a click on one picks it for the arrow keys, and the edge still takes a
+/// drag beside the marker, in the margin.
+#[trial]
+fn indent_markers_on_the_margin_edges_keep_the_press() {
+    const MARGIN: f32 = 72.0;
+    const STEP: f32 = 36.0;
+    let (words, margin_words) = (TextRulerWords::default(), MarginHandlesWords::default());
+    for rtl in [false, true] {
+        let start = PageEdges::new(Margins::uniform(f64::from(MARGIN)));
+        let (edges, values) = (Rc::new(RefCell::new(start)), Rc::new(RefCell::new(RulerValues::default())));
+        let (shown_edges, shown_values) = (Rc::clone(&edges), Rc::clone(&values));
+        let mut fixture = Fixture::new(move |ui| {
+            let full = craft_ui::testing::stage(ui);
+            let page = demo_placed(1, pos2(full.min.x + PAGE_AT.0, full.min.y + PAGE_AT.1)).remove(0);
+            PageRulers::new("Rulers", &page, Bind::bound(&mut *shown_edges.borrow_mut()), Bind::bound(&mut *shown_values.borrow_mut()))
+                .right_to_left(Some(rtl))
+                .show_at(ui, full);
+        });
+        fixture.room(vec2(900.0, 600.0));
+        fixture.settle();
+        // The start margin is on the left, or on the right of a right-to-left paragraph; the page is at scale 1.
+        let (outward, toward_start) = if rtl { (1.0, Key::ArrowRight) } else { (-1.0, Key::ArrowLeft) };
+        let start_edge = if rtl { margin_words.right.as_str() } else { margin_words.left.as_str() };
+        let rect = |fixture: &Fixture, name: &str| fixture.by_label(name).expect(name).rect;
+        let margins_kept = |what: &str| assert!(*edges.borrow() == start, "rtl {rtl}: {what} leaves the margins: {:?}", *edges.borrow());
+
+        fixture.click_at(rect(&fixture, words.hanging_indent.as_str()).center()).idle(2);
+        fixture.key(toward_start, Modifiers::NONE).idle(2);
+        let left = values.borrow().left_indent;
+        assert!(left < 0.0, "rtl {rtl}: a click on the hanging marker and the arrow move the left indent: {left}");
+        margins_kept("the click and the arrow");
+
+        *values.borrow_mut() = RulerValues::default();
+        fixture.settle();
+        fixture.drag_at(rect(&fixture, words.left_indent.as_str()).center(), vec2(STEP * outward, 0.0));
+        let left = values.borrow().left_indent;
+        assert!(left < 0.0, "rtl {rtl}: the left indent box on the start margin's edge drags: {left}");
+        margins_kept("the left indent's drag");
+
+        *values.borrow_mut() = RulerValues::default();
+        fixture.settle();
+        fixture.drag_at(rect(&fixture, words.right_indent.as_str()).center(), vec2(-STEP * outward, 0.0));
+        let right = values.borrow().right_indent;
+        assert!(right < 0.0, "rtl {rtl}: the right indent marker on the end margin's edge drags: {right}");
+        margins_kept("the right indent's drag");
+
+        *values.borrow_mut() = RulerValues::default();
+        fixture.settle();
+        let (edge, marker) = (rect(&fixture, start_edge), rect(&fixture, words.left_indent.as_str()));
+        let beside = if rtl { edge.min.x >= marker.max.x } else { edge.max.x <= marker.min.x };
+        assert!(beside, "rtl {rtl}: the start margin's edge grabs beside the marker, in the margin: {edge:?}, {marker:?}");
+        fixture.drag_at(edge.center(), vec2(STEP * outward, 0.0));
+        assert!(*edges.borrow() != start, "rtl {rtl}: a drag beside the marker moves the margin: {:?}", *edges.borrow());
+        assert!(*values.borrow() == RulerValues::default(), "rtl {rtl}: and leaves the indents: {:?}", *values.borrow());
+    }
+}
+
+/// wordcraft#7671: a table row whose bottom border lies on the bottom margin's edge keeps its grip's drag, and the edge
+/// still takes a drag beside the grip, in the margin.
+#[trial]
+fn a_row_grip_on_the_bottom_margin_edge_keeps_the_press() {
+    const MARGIN: f32 = 72.0;
+    const STEP: f32 = 36.0;
+    let start = PageEdges::new(Margins::uniform(f64::from(MARGIN)));
+    let (edges, seen, border) = (Rc::new(RefCell::new(start)), Rc::new(RefCell::new(Vec::<RowDrag>::new())), Rc::new(Cell::new(0.0_f32)));
+    let (shown, log, at) = (Rc::clone(&edges), Rc::clone(&seen), Rc::clone(&border));
+    let mut fixture = Fixture::new(move |ui| {
+        let full = craft_ui::testing::stage(ui);
+        let page = demo_placed(1, pos2(full.min.x + PAGE_AT.0, full.min.y + PAGE_AT.1)).remove(0);
+        // The row ends on the bottom margin's edge, as a row cut at the foot of a page does.
+        let rows = [(f64::from(page.rect.height()) / page.scale) as f32 - MARGIN];
+        at.set(rows[0]);
+        let mut values = RulerValues::default();
+        let out = PageRulers::new("Rulers", &page, Bind::bound(&mut *shown.borrow_mut()), Bind::bound(&mut values)).rows(&rows).show_at(ui, full);
+        log.borrow_mut().extend(out.row);
+    });
+    fixture.room(vec2(900.0, 900.0));
+    fixture.settle();
+    let rect = |fixture: &Fixture, name: &str| fixture.by_label(name).expect(name).rect;
+    let grip = rect(&fixture, PageRulersWords::default().row_border.as_str());
+
+    fixture.drag_at(grip.center(), vec2(0.0, -STEP));
+    let last = seen.borrow().last().copied();
+    assert!(
+        last.is_some_and(|row| row.phase == GesturePhase::Commit && row.position < border.get()),
+        "the row grip on the bottom margin's edge drags the border up: {last:?}"
+    );
+    assert!(*edges.borrow() == start, "the grip's drag leaves the margins: {:?}", *edges.borrow());
+
+    let reports = seen.borrow().len();
+    let edge = rect(&fixture, MarginHandlesWords::default().bottom.as_str());
+    assert!(edge.min.y >= grip.max.y, "the bottom margin's edge grabs below the grip, in the margin: {edge:?}, {grip:?}");
+    fixture.drag_at(edge.center(), vec2(0.0, STEP));
+    assert!(*edges.borrow() != start, "a drag beside the grip moves the margin: {:?}", *edges.borrow());
+    assert_eq!(seen.borrow().len(), reports, "and drags no row border");
+}
+
 /// The tab selector shows in the canvas's corner, where the top and left strips meet, in either interface direction:
 /// the host places it, so it never lies over the horizontal ruler.
 #[trial]
