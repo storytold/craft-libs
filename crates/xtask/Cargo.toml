@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Library for the Craft apps' cargo xtask binaries: the gate's step runner, the crate-layer check, the asset attribution check, an optional slot lock shared across processes, a per-step JSON report and the workspace version command"
+description = "Library for the Craft apps' cargo xtask binaries: the gate's step runner, the crate-layer check, the asset attribution check, an optional slot lock shared across processes, a per-step JSON report, the workspace version command, and .ico and .icns packing"
 
 [lints]
 workspace = true

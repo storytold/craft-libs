@@ -790,6 +790,44 @@ mod tests {
         assert!(fell < -20.0, "after a search window of quiet the estimate fell by only {:.1} dB", -fell);
     }
 
+    /// A mute of one hop, which leaves no frame of digital silence, ends the quiet run where it
+    /// falls in the stream: the quiet frames waiting before it still count, and only the frames
+    /// after the mute that may enter the estimate start the next run.
+    #[test]
+    fn a_short_mute_ends_the_quiet_run_in_queue_order() {
+        let s = suppressor(24.0);
+        let (n, hop, coefs) = (s.n, s.hop, s.coefs);
+        let half = n / 2 + 1;
+        let mut bins = Bins::new(half);
+        let mut gains = vec![1.0f32; half];
+        let im = vec![0.0f32; half];
+        let (loud, quiet) = (vec![1.0f32; half], vec![0.001f32; half]);
+        let mut step = |bins: &mut Bins, sample: f32, spectrum: &[f32]| {
+            for _ in 0..hop {
+                bins.sample(sample, hop);
+            }
+            bins.frame(spectrum, &im, &coefs, &mut gains);
+        };
+        for _ in 0..40 {
+            step(&mut bins, 0.1, &loud);
+        }
+        for _ in 0..OVERLAP + 3 {
+            step(&mut bins, 0.001, &quiet);
+        }
+        assert!(bins.quiet_run > 0, "the quiet frames before the mute did not count");
+        step(&mut bins, 0.0, &quiet);
+        let mut eligible = 0;
+        for _ in 0..2 * n / hop {
+            step(&mut bins, 0.001, &quiet);
+            let newest = (bins.head + bins.queued - 1) % OVERLAP;
+            eligible += usize::from(bins.queue_ok[newest]);
+        }
+        let waiting = (0..bins.queued).filter(|j| bins.queue_ok[(bins.head + j) % OVERLAP]).count();
+        assert_eq!(waiting, bins.queued, "a frame waiting after the mute may not enter the estimate");
+        assert!(eligible + 3 < coefs.window, "the test needs the run below its cap");
+        assert_eq!(bins.quiet_run, eligible - waiting, "frames from before the mute counted in the new run");
+    }
+
     #[test]
     fn a_short_mute_ends_the_queued_quiet_run() {
         for offset in [0, 17] {

@@ -21,6 +21,9 @@
 //!   that gate runs in several checkouts of one machine take turns.
 //! - `report` (feature `report`): the per-step JSON report, replaced atomically.
 //! - `stats` (feature `stats`): files, lines and tests of Rust per workspace crate (`cargo xtask stats`).
+//! - [`icon`]: PNG images packed into a Windows `.ico` ([`icon::ico::pack`]) or a macOS `.icns`
+//!   ([`icon::icns::pack`]), with [`icon::png_size`] and readers for an app's test of its committed
+//!   icons.
 //! - `version` (feature `version`): `cargo xtask version [set X.Y.Z[-pre]]`, which reads and sets the
 //!   `[workspace.package]` version of the root `Cargo.toml` and moves the workspace crates' path
 //!   dependency pins with it.
@@ -48,6 +51,7 @@
 //! ```
 
 pub mod assets;
+pub mod icon;
 #[cfg(feature = "layers")]
 pub mod layers;
 #[cfg(feature = "lock")]
