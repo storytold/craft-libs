@@ -862,9 +862,9 @@ mod native {
         dropped
     }
 
-    /// Header variables the DWG reader fills in but acadrust's DXF writer (0.6.3) leaves out of
+    /// Header variables the DWG reader fills in but acadrust's DXF writer (0.6.6) leaves out of
     /// the HEADER section: (name, group code, value).
-    fn unwritten_header_vars(h: &acadrust::document::HeaderVariables) -> [(&'static str, i32, String); 7] {
+    fn unwritten_header_vars(h: &acadrust::document::HeaderVariables) -> [(&'static str, i32, String); 8] {
         [
             // DWG holds radians; `$ANGBASE` is in degrees.
             ("$ANGBASE", 50, h.angle_base.to_degrees().to_string()),
@@ -874,6 +874,7 @@ mod native {
             ("$CHAMFERB", 40, h.chamfer_distance_b.to_string()),
             ("$ELEVATION", 40, h.elevation.to_string()),
             ("$THICKNESS", 40, h.thickness.to_string()),
+            ("$DIMASSOC", 280, h.dimension_associativity.to_string()),
         ]
     }
 
@@ -1806,6 +1807,31 @@ mod tests {
         // rather than crashing (and rejects oversized input before decoding).
         assert!(dxf_to_dwg(b"not a dxf file").is_err());
         assert!(dxf_to_dwg(b"").is_err());
+    }
+
+    /// Each synthetic DWG's drawing-wide setting survives conversion as one DXF HEADER variable.
+    #[cfg(not(no_dwg_bridge))]
+    #[test]
+    fn dwg_dimension_associativity_is_in_the_dxf_header() {
+        for mode in [0, 1, 2] {
+            let mut drawing = acadrust::CadDocument::new();
+            drawing.header.dimension_associativity = mode;
+            let dwg = acadrust::DwgWriter::write_to_vec(&drawing).unwrap();
+            let dxf = String::from_utf8(dwg_to_dxf(&dwg).unwrap()).unwrap();
+            let lines: Vec<_> = dxf.lines().map(str::trim).collect();
+            let (tags, remainder) = lines.as_chunks::<2>();
+            assert!(remainder.is_empty(), "DXF groups are code-value pairs");
+            assert!(tags.starts_with(&[["0", "SECTION"], ["2", "HEADER"]]));
+            let header_end = tags.iter().position(|tag| *tag == ["0", "ENDSEC"]).expect("end of HEADER");
+            let values: Vec<_> = tags[..header_end]
+                .windows(2)
+                .filter_map(|tags| match tags {
+                    [["9", "$DIMASSOC"], [code, value]] => Some((*code, *value)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(values, [("280", mode.to_string().as_str())], "DIMASSOC mode {mode}");
+        }
     }
 
     /// A DXF with one DIMENSION per (text, group 70, subclass, points) row.
