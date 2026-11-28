@@ -320,6 +320,40 @@ fn enter_in_the_optimize_rows_files_the_search_and_never_saves() {
     assert!(host.borrow_mut().get_mut::<HostedSaveForWeb>().and_then(HostedSaveForWeb::pick_path).is_some(), "with the rows closed Enter saves");
 }
 
+// While the Desired File Size holds text the field refuses (not a number, or empty), the Optimize rows' OK and Enter in
+// the field file no search with the size the rows held before; once the text parses, OK files the typed size.
+#[trial]
+fn the_optimize_rows_file_nothing_while_the_size_text_is_refused() {
+    let (host, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).optimize());
+    let opener = fixture.by_label("Optimize to File Size…").expect("the Optimize button");
+    fixture.click(&opener).idle(4);
+    assert!(host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").take_optimize_open(), "opening the rows asks for the opening size");
+    host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").answer_optimize_start(Some(48 * 1024));
+    fixture.idle(4);
+    let request = |host: &Rc<RefCell<DialogHost>>| host.borrow_mut().get_mut::<HostedSaveForWeb>().and_then(HostedSaveForWeb::take_optimize_request);
+
+    for (text, what) in [("abc", "text that is not a number"), ("", "an empty field")] {
+        let field = fixture.by_label("Desired File Size (K)").expect("the Desired File Size field");
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).key(Key::Backspace, Modifiers::NONE).type_text(text);
+        fixture.idle(2);
+        fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+        assert!(request(&host).is_none(), "Enter in the field files nothing while it holds {what}");
+        let ok = fixture.by_label("OK").expect("the rows' OK");
+        fixture.click(&ok).idle(4);
+        assert!(request(&host).is_none(), "OK files nothing while the field holds {what}");
+    }
+
+    let field = fixture.by_label("Desired File Size (K)").expect("the Desired File Size field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("20");
+    fixture.idle(2);
+    let ok = fixture.by_label("OK").expect("the rows' OK");
+    fixture.click(&ok).idle(4);
+    let filed = request(&host).expect("OK files the search once the text parses");
+    assert_eq!(filed.desired_k, 20.0, "the search asks for the typed size");
+}
+
 /// The frame the animation shows after the host's passes.
 fn frame_of(host: &Rc<RefCell<DialogHost>>) -> u32 {
     host.borrow_mut().get_mut::<HostedSaveForWeb>().map(|web| web.frame()).expect("the dialog is open")
@@ -438,4 +472,31 @@ fn a_palette_answer_in_a_measured_frame_shifts_the_entry_once() {
     fixture.idle(4);
     let shift = (ColorTableEdit::Shift([255, 0, 255]), vec![[0, 255, 0]]);
     assert_eq!(table_events(&host), vec![shift], "the answer shifts the opened entry's colour once");
+}
+
+/// The rects of the preview panes the view shows, found by their accessible names (`{pane}: {first}, {second}`).
+fn pane_rects(fixture: &Fixture) -> Vec<Rect> {
+    let tree = fixture.tree();
+    let is_pane = |name: &str| (name.starts_with("Original") || name.starts_with("Optimized")) && name.contains(": ");
+    tree.keys().into_iter().filter(|key| tree.name_of(*key).is_some_and(is_pane)).filter_map(|key| fixture.target(key)).map(|t| t.rect).collect()
+}
+
+/// The panes take the height of the settings column beside them, so they reach down to its Image Size rows, and 4-Up
+/// splits that height between its two rows of panes.
+#[trial]
+fn the_preview_panes_take_the_height_beside_the_settings() {
+    let (_, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()));
+    for (view, count) in [("2-Up", 2), ("4-Up", 4)] {
+        let tab = fixture.by_label(view).expect("the view tab");
+        fixture.click(&tab).idle(4);
+        let percent = fixture.by_label("Percent").expect("the Image Size rows").rect;
+        let panes = pane_rects(&fixture);
+        assert_eq!(panes.len(), count, "{view} shows {count} panes");
+        let bottom = panes.iter().map(|pane| pane.bottom()).fold(f32::MIN, f32::max);
+        assert!(bottom > percent.top(), "{view}: the panes end at {bottom}, above the Percent row at {}", percent.top());
+        let top = panes.iter().map(|pane| pane.top()).fold(f32::MAX, f32::min);
+        let (upper, lower): (Vec<&Rect>, Vec<&Rect>) = panes.iter().partition(|pane| pane.top() <= top + 0.5);
+        assert_eq!(upper.len(), 2, "{view}: two panes to a row");
+        assert!(lower.iter().all(|pane| upper.iter().all(|up| pane.top() >= up.bottom())), "{view}: the second row is below the first");
+    }
 }

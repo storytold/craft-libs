@@ -15,7 +15,7 @@ const MAX_SKIPPED: usize = 4;
 const MAX_OUTLINE_RECORDS: usize = 16;
 /// The most UTF-16 units of a library color's name kept, and the most bytes or UTF-16 units of
 /// a layer's.
-const MAX_NAME: usize = 256;
+pub(crate) const MAX_NAME: usize = 256;
 
 /// A header field: u16 in short files, u32 otherwise.
 fn word(r: &mut Rd, p: &Profile) -> Option<usize> {
@@ -260,7 +260,7 @@ fn b_tint(b: &[u8]) -> Option<f32> {
 }
 
 /// The full-strength color behind sRGB `rgb` shown at `tint` (a tint mixes toward white).
-fn untinted(rgb: [f32; 3], tint: f32) -> [f32; 3] {
+pub(crate) fn untinted(rgb: [f32; 3], tint: f32) -> [f32; 3] {
     if tint <= 0.0 {
         return rgb;
     }
@@ -486,7 +486,7 @@ fn with_hash(name: String, hash: Option<u64>) -> String {
 
 /// The characters Windows-1252 puts at 0x80 to 0x9F (U+FFFD where it has none); the other bytes
 /// are Latin-1.
-const CP1252_HIGH: [char; 32] = [
+pub(crate) const CP1252_HIGH: [char; 32] = [
     '€', '\u{FFFD}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{FFFD}', 'Ž', '\u{FFFD}', '\u{FFFD}', '‘', '’', '“', '”', '•', '–',
     '—', '˜', '™', 'š', '›', 'œ', '\u{FFFD}', 'ž', 'Ÿ',
 ];

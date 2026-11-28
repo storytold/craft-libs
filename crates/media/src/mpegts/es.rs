@@ -7,7 +7,7 @@
 
 use std::collections::VecDeque;
 
-use super::{Codec, PictureInfo, Unit};
+use super::{Codec, OpusTrim, PictureInfo, Unit};
 
 /// How a stream is cut into units.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,6 +19,16 @@ enum Mode {
     Nal { hevc: bool },
     /// Framed audio with self-describing frame headers.
     Audio(AudioSync),
+    /// Opus: one access unit per unit, cut by its control header's payload size and starting
+    /// after the header; an access unit without a control header runs to the end of its PES
+    /// packet (Opus transport draft §6).
+    Opus,
+    /// MPEG-4 Part 2 video: a PES packet with a timestamp starts a unit; the first VOP's coding
+    /// type gives the flags.
+    Mpeg4,
+    /// AV1: one PES packet per unit (Carriage of AV1 in MPEG-2 TS §3.4), a key unit where the
+    /// packet that starts it sets the random access indicator.
+    Av1,
     /// One PES packet per unit.
     Pes,
 }
@@ -41,6 +51,9 @@ impl Mode {
             Codec::AacAdts => Mode::Audio(AudioSync::Adts),
             Codec::AacLatm => Mode::Audio(AudioSync::Loas),
             Codec::Ac3 | Codec::Eac3 => Mode::Audio(AudioSync::Ac3),
+            Codec::Opus => Mode::Opus,
+            Codec::Mpeg4Part2 => Mode::Mpeg4,
+            Codec::Av1 => Mode::Av1,
             _ => Mode::Pes,
         }
     }
@@ -101,8 +114,16 @@ pub(crate) struct Splitter {
     gop: Option<(bool, bool)>,
     pending: Option<PendingPicture>,
     open_field: Option<u8>,
-    // audio state
+    // audio state; for Opus, where the next access unit's control header starts (None: the
+    // rest of the PES packet belongs to the open unit) or, once one is read, where its payload
+    // ends
     next_frame: Option<u64>,
+    /// Opus: how far the payload size of a control header cut off by the end of a chunk was read.
+    opus_scan: OpusSizeScan,
+    /// Opus: the open unit's start and end trims.
+    open_trim: (u16, u16),
+    /// Opus: the trims of the units so far.
+    pub trims: Vec<OpusTrim>,
 }
 
 /// AC-3 frame sizes in 16-bit words for 48 / 44.1 / 32 kHz (A/52 Table 5.18), by
@@ -331,6 +352,158 @@ pub(crate) const MAX_UNITS: usize = 1 << 23;
 /// Full-bandwidth channels per AC-3 audio coding mode (A/52 Table 5.8).
 const AC3_CHANNELS: [u32; 8] = [2, 1, 2, 3, 3, 4, 4, 5];
 
+/// What starts an Opus access unit.
+#[derive(Debug, PartialEq, Eq)]
+enum OpusHeader {
+    /// More bytes are needed to tell.
+    Incomplete,
+    /// No control header: the access unit is the rest of the PES packet.
+    Absent,
+    /// A control header whose payload size is past [`super::MAX_UNIT_BYTES`].
+    Invalid,
+    /// A control header of `len` bytes, then `size` bytes of payload with these start and end
+    /// trims.
+    Found { len: usize, size: u64, trim: (u16, u16) },
+}
+
+/// How far the payload size of the control header at ES offset `at` was read: `next` is the
+/// header index of the next size byte to read, and `size` is the sum of the bytes before it.
+#[derive(Debug, Default)]
+struct OpusSizeScan {
+    at: u64,
+    next: usize,
+    size: u64,
+    /// Size bytes read, by every header.
+    #[cfg(test)]
+    reads: u64,
+}
+
+/// The opus_control_header at the start of `b`, which is ES offset `at` (Opus transport draft
+/// §6.2): the 11-bit prefix 0x3FF, the start trim, end trim and extension flags, the payload size
+/// as bytes of 0xFF and a last byte, then the 13-bit trims and the extension. When `b` ends
+/// before the header does, `scan` keeps the size read so far, and a call with more bytes of the
+/// same header goes on from there, so each size byte is read once.
+fn opus_control_header(b: &[u8], at: u64, scan: &mut OpusSizeScan) -> OpusHeader {
+    match b {
+        [] => return OpusHeader::Incomplete,
+        [0x7F] => return OpusHeader::Incomplete,
+        [0x7F, b1, ..] if b1 & 0xE0 == 0xE0 => {}
+        _ => return OpusHeader::Absent,
+    }
+    let flags = b[1];
+    if scan.at != at || scan.next < 2 {
+        scan.at = at;
+        scan.next = 2;
+        scan.size = 0;
+    }
+    let mut i = scan.next;
+    let mut size = scan.size;
+    loop {
+        let Some(&x) = b.get(i) else {
+            scan.next = i;
+            scan.size = size;
+            return OpusHeader::Incomplete;
+        };
+        #[cfg(test)]
+        {
+            scan.reads += 1;
+        }
+        if size + u64::from(x) > u64::from(super::MAX_UNIT_BYTES) {
+            return OpusHeader::Invalid;
+        }
+        if x != 0xFF {
+            // the trims or the extension may still be cut off: a later call reads this last
+            // size byte again
+            scan.next = i;
+            scan.size = size;
+            size += u64::from(x);
+            i += 1;
+            break;
+        }
+        size += u64::from(x);
+        i += 1;
+    }
+    let mut trim = [0u16; 2];
+    for (k, bit) in [0x10u8, 0x08].into_iter().enumerate() {
+        if flags & bit != 0 {
+            let Some(v) = b.get(i..i + 2) else { return OpusHeader::Incomplete };
+            trim[k] = u16::from_be_bytes([v[0], v[1]]) & 0x1FFF;
+            i += 2;
+        }
+    }
+    if flags & 0x04 != 0 {
+        let Some(&n) = b.get(i) else { return OpusHeader::Incomplete };
+        i += 1 + usize::from(n);
+        if i > b.len() {
+            return OpusHeader::Incomplete;
+        }
+    }
+    OpusHeader::Found { len: i, size, trim: (trim[0], trim[1]) }
+}
+
+/// Rewrites an AV1 access unit from the start code form of Carriage of AV1 in MPEG-2 TS §3.2 to
+/// the low overhead bitstream format: each OBU follows a start code 0x000001, and the 0x03 of
+/// every 0x000003 in it is an emulation prevention byte. Temporal delimiters and bytes before the
+/// first start code are left out, as Matroska and ISOBMFF store AV1. An OBU that carries
+/// obu_size ends there; one without gets an obu_size for the bytes up to the next start code.
+pub(crate) fn av1_obus(es: &mut Vec<u8>) {
+    let mut out = Vec::with_capacity(es.len() + 16);
+    let mut obu = Vec::new();
+    let start_code = |i: usize| es.get(i..i + 3) == Some(&[0, 0, 1][..]);
+    let mut i = (0..es.len()).find(|&i| start_code(i)).unwrap_or(es.len());
+    while i < es.len() {
+        // `i` is at a start code
+        i += 3;
+        obu.clear();
+        let mut zeros = 0;
+        while i < es.len() && !start_code(i) {
+            let b = es[i];
+            i += 1;
+            if zeros >= 2 && b == 3 {
+                zeros = 0;
+                continue;
+            }
+            zeros = if b == 0 { zeros + 1 } else { 0 };
+            obu.push(b);
+        }
+        let Some(&h) = obu.first() else { continue };
+        let header = 1 + usize::from(h & 0x04 != 0);
+        if obu.len() < header || (h >> 3) & 0x0F == 2 {
+            continue;
+        }
+        if h & 0x02 != 0 {
+            // obu_size, leb128 (AV1 §4.10.5)
+            let mut size = 0u64;
+            let mut at = header;
+            for k in 0..8 {
+                let Some(&b) = obu.get(at) else { break };
+                at += 1;
+                size |= u64::from(b & 0x7F) << (7 * k);
+                if b & 0x80 == 0 {
+                    break;
+                }
+            }
+            let end = usize::try_from(size).ok().and_then(|s| at.checked_add(s)).filter(|&e| e <= obu.len()).unwrap_or(obu.len());
+            out.extend_from_slice(&obu[..end]);
+        } else {
+            out.push(h | 0x02);
+            out.extend_from_slice(&obu[1..header]);
+            let mut size = obu.len() - header;
+            loop {
+                let b = (size & 0x7F) as u8;
+                size >>= 7;
+                if size == 0 {
+                    out.push(b);
+                    break;
+                }
+                out.push(b | 0x80);
+            }
+            out.extend_from_slice(&obu[header..]);
+        }
+    }
+    *es = out;
+}
+
 /// Frame length at the start of `b` for the given sync type (`None`: no valid header; `Some(0)`
 /// is never returned).
 fn frame_len(sync: AudioSync, b: &[u8]) -> Option<usize> {
@@ -388,6 +561,9 @@ impl Splitter {
             pending: None,
             open_field: None,
             next_frame: None,
+            opus_scan: OpusSizeScan::default(),
+            open_trim: (0, 0),
+            trims: Vec::new(),
         }
     }
 
@@ -398,10 +574,46 @@ impl Splitter {
             self.pes.pop_front();
         }
         match self.mode {
-            Mode::Pes => self.begin_pes_unit(true),
-            Mode::Nal { .. } => self.begin_pes_unit(pts.is_some() || dts.is_some()),
+            Mode::Pes | Mode::Av1 => self.begin_pes_unit(true),
+            Mode::Nal { .. } | Mode::Mpeg4 => self.begin_pes_unit(pts.is_some() || dts.is_some()),
+            Mode::Opus => {
+                // a PES packet holds whole access units: the next one starts here
+                self.close_opus(self.es_pos);
+                self.next_frame = Some(self.es_pos);
+            }
             _ => {}
         }
+    }
+
+    /// The packet that started the PES packet set the random access indicator: an AV1 unit
+    /// that the packet starts is a key unit.
+    pub fn random_access(&mut self) {
+        if self.mode == Mode::Av1
+            && let Some(o) = self.open.as_mut()
+            && o.start == self.es_pos
+        {
+            o.key = true;
+        }
+    }
+
+    /// Opus: end the open unit before ES byte `limit` (the end of its PES packet). A unit whose
+    /// payload size runs past `limit` is dropped, and so are the bytes of a control header that
+    /// the PES packet cuts off.
+    fn close_opus(&mut self, limit: u64) {
+        match self.next_frame {
+            Some(end) if end > limit => {
+                if let Some(o) = self.open.take() {
+                    self.skipped += limit.saturating_sub(o.start);
+                }
+                self.open_trim = (0, 0);
+            }
+            Some(end) => {
+                self.close(end);
+                self.skipped += limit - end;
+            }
+            None => self.close(limit),
+        }
+        self.next_frame = None;
     }
 
     /// PES-delimited units: a packet with a timestamp (or any packet in plain PES mode) starts a
@@ -443,12 +655,16 @@ impl Splitter {
     /// End the open unit at `end`.
     fn close(&mut self, end: u64) {
         let Some(o) = self.open.take() else { return };
+        let (start_trim, end_trim) = std::mem::take(&mut self.open_trim);
         if end <= o.start || o.pos == u64::MAX {
             return;
         }
         if self.units.len() >= self.max_units {
             self.truncated = true;
             return;
+        }
+        if (start_trim, end_trim) != (0, 0) {
+            self.trims.push(OpusTrim { unit: self.units.len(), start: start_trim, end: end_trim });
         }
         let size = (end - o.start).min(u32::MAX as u64) as u32;
         self.units.push(Unit {
@@ -469,9 +685,9 @@ impl Splitter {
             return;
         }
         // PES-delimited modes resolve a unit's position from `pos` right here and never look a
-        // chunk up again, so remembering chunks there would only grow without bound (NAL streams
-        // keep theirs: an access unit can start inside a PES; `keep_from` prunes them)
-        if matches!(self.mode, Mode::MpegVideo | Mode::Audio(_) | Mode::Nal { .. }) {
+        // chunk up again, so remembering chunks there would only grow without bound (NAL and Opus
+        // streams keep theirs: an access unit can start inside a PES; `keep_from` prunes them)
+        if matches!(self.mode, Mode::MpegVideo | Mode::Audio(_) | Mode::Nal { .. } | Mode::Opus) {
             self.chunks.push_back((pos, self.es_pos));
         }
         if let Some(o) = self.open.as_mut()
@@ -484,10 +700,12 @@ impl Splitter {
         let start = self.es_pos;
         self.es_pos += data.len() as u64;
         match self.mode {
-            Mode::Pes => {}
+            Mode::Pes | Mode::Av1 => {}
             Mode::Nal { hevc } => self.scan_nal(start, data, hevc),
             Mode::MpegVideo => self.scan_mpeg(start, data),
+            Mode::Mpeg4 => self.scan_mpeg4(start, data),
             Mode::Audio(sync) => self.scan_audio(start, data, sync),
+            Mode::Opus => self.scan_opus(start, data),
         }
         // forget chunks no pending position can refer to
         let keep_from = self.buf_start.min(self.pending.map_or(u64::MAX, |p| p.unit_start.min(p.at))).min(self.header_start.unwrap_or(u64::MAX));
@@ -789,8 +1007,115 @@ impl Splitter {
         frame_len(sync, &self.buf[j..]).is_some()
     }
 
+    /// Opus access units: each control header gives the payload size, so the unit starts after
+    /// the header and ends where the next header starts.
+    fn scan_opus(&mut self, start: u64, data: &[u8]) {
+        let end = start + data.len() as u64;
+        let Some(next) = self.next_frame else {
+            // the rest of the PES packet belongs to the open unit, or is not Opus at all
+            if self.open.is_none() {
+                self.skipped += data.len() as u64;
+            }
+            // no later header can refer back to these bytes: `feed` may forget their chunks
+            self.buf.clear();
+            self.buf_start = end;
+            return;
+        };
+        if next >= end {
+            // inside the open unit's payload
+            self.buf.clear();
+            self.buf_start = end;
+            return;
+        }
+        self.window(start, data);
+        while let Some(at) = self.next_frame {
+            if at < self.buf_start {
+                self.next_frame = None;
+                break;
+            }
+            let i = (at - self.buf_start) as usize;
+            if i >= self.buf.len() {
+                break;
+            }
+            match opus_control_header(&self.buf[i..], at, &mut self.opus_scan) {
+                OpusHeader::Incomplete => {
+                    self.trim(self.buf.len() - i);
+                    return;
+                }
+                OpusHeader::Absent => {
+                    // no control header: the access unit runs to the end of the PES packet
+                    self.close(at);
+                    self.open_opus(at, at, (0, 0));
+                    self.next_frame = None;
+                }
+                OpusHeader::Invalid => {
+                    self.close(at);
+                    self.skipped += end - at;
+                    self.next_frame = None;
+                }
+                OpusHeader::Found { len, size, trim } => {
+                    self.close(at);
+                    let payload = at + len as u64;
+                    self.open_opus(at, payload, trim);
+                    self.next_frame = Some(payload + size);
+                }
+            }
+        }
+        self.buf.clear();
+        self.buf_start = end;
+    }
+
+    /// Open an Opus unit at `start` for the access unit whose header (if any) starts at `at`.
+    fn open_opus(&mut self, at: u64, start: u64, trim: (u16, u16)) {
+        // a payload that starts with the next chunk is placed when that chunk arrives
+        let (pos, offset) = if start < self.es_pos { self.locate(start).unwrap_or((u64::MAX, 0)) } else { (u64::MAX, 0) };
+        let mut o = Open { start, pos, offset, pts: None, dts: None, key: true, disposable: false, vcl: false, picture: None };
+        if let Some((pts, dts)) = self.timestamps_at(at) {
+            o.pts = pts;
+            o.dts = dts;
+        }
+        self.open = Some(o);
+        self.open_trim = trim;
+    }
+
+    /// MPEG-4 Part 2 video: the unit's first VOP header gives its coding type (ISO/IEC 14496-2
+    /// §6.2.5: 0 I, 1 P, 2 B, 3 S).
+    fn scan_mpeg4(&mut self, start: u64, data: &[u8]) {
+        self.window(start, data);
+        if self.open.is_some_and(|o| o.vcl) {
+            // the unit's flags are known: keep only where a start code may begin
+            self.trim(3);
+            return;
+        }
+        let mut i = 0;
+        let mut blocked = None;
+        while let Some(k) = self.next_start_code(i) {
+            if k + 5 > self.buf.len() {
+                blocked = Some(k);
+                break;
+            }
+            let at = self.buf_start + k as u64;
+            if self.buf[k + 3] == 0xB6
+                && let Some(o) = self.open.as_mut()
+                && !o.vcl
+                && at >= o.start
+            {
+                let coding_type = self.buf[k + 4] >> 6;
+                o.key = coding_type == 0;
+                o.disposable = coding_type == 2;
+                o.vcl = true;
+            }
+            i = k + 3;
+        }
+        self.keep_tail(i, blocked);
+    }
+
     /// End of stream: close the open unit.
     pub fn finish(&mut self) {
+        if self.mode == Mode::Opus {
+            self.close_opus(self.es_pos);
+            return;
+        }
         self.settle_pending();
         let end = match (self.mode, self.next_frame) {
             (Mode::Audio(_), Some(n)) => n.min(self.es_pos),
@@ -882,6 +1207,48 @@ mod tests {
             assert_eq!(s.units.len(), 5000, "{codec:?}");
             assert!(s.units.iter().enumerate().all(|(k, u)| u.pos == k as u64 * 188 && u.offset == 0), "{codec:?}");
         }
+    }
+
+    #[test]
+    fn a_long_opus_control_header_is_read_once() {
+        // a payload size of 100,000 bytes of 0xFF, cut into transport stream payloads
+        let mut s = Splitter::new(&Codec::Opus);
+        s.pes_start(Some(0), None);
+        let mut es = vec![0x7F, 0xE0];
+        es.extend(std::iter::repeat_n(0xFF, 100_000));
+        es.push(0);
+        for (k, c) in es.chunks(184).enumerate() {
+            s.feed(k as u64 * 188, c);
+        }
+        assert!(s.opus_scan.reads <= es.len() as u64, "{} size bytes read for a {}-byte header", s.opus_scan.reads, es.len());
+        assert_eq!(s.next_frame, Some(es.len() as u64 + 255 * 100_000));
+    }
+
+    #[test]
+    fn opus_chunks_are_forgotten_inside_a_unit_and_after_a_headerless_one() {
+        // an access unit whose payload spans 500 chunks, then a PES packet without a control
+        // header
+        let mut s = Splitter::new(&Codec::Opus);
+        s.pes_start(Some(0), None);
+        let size = 184 * 500;
+        let mut es = vec![0x7F, 0xE0];
+        es.extend(std::iter::repeat_n(0xFF, size / 255));
+        es.push((size % 255) as u8);
+        es.resize(es.len() + size, 0x11);
+        let mut pos = 0;
+        for (k, c) in es.chunks(184).enumerate() {
+            s.feed(pos, c);
+            pos += 188;
+            assert!(k < 3 || s.chunks.len() <= 2, "chunk {k}: {} chunks retained", s.chunks.len());
+        }
+        s.pes_start(Some(1800), None);
+        for k in 0..500 {
+            s.feed(pos, &[0xFC; 184]);
+            pos += 188;
+            assert!(s.chunks.len() <= 2, "headerless chunk {k}: {} chunks retained", s.chunks.len());
+        }
+        s.finish();
+        assert_eq!(s.units.iter().map(|u| u.size as usize).collect::<Vec<_>>(), [size, 184 * 500]);
     }
 
     #[test]

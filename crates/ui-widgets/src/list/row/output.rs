@@ -83,6 +83,8 @@ pub struct RowOutput {
     pub menu: Option<Rect>,
     /// Where the label and detail are drawn, the full height of the row.
     pub label: Rect,
+    pub(super) lead_fill: Option<craft_theme::Rgba>,
+    pub(super) lead_focus_bounds: Option<Rect>,
 }
 
 impl Outcome for RowOutput {
@@ -108,5 +110,13 @@ impl ItemOutput<RowEvent> for RowOutput {
 
     fn label_rect(&self) -> Option<Rect> {
         Some(self.label)
+    }
+
+    fn lead_fill(&self) -> Option<craft_theme::Rgba> {
+        self.lead_fill
+    }
+
+    fn lead_focus_bounds(&self) -> Option<Rect> {
+        self.lead_focus_bounds
     }
 }

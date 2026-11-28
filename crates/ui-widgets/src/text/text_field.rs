@@ -11,7 +11,7 @@ use crate::contract::{
 };
 use crate::primitives::{Completer, IconSpec, SubmitKey, TabKey, TextOptions, TextRun, Wrap};
 use crate::runtime::env::{Label, Message};
-use crate::style::Span;
+use crate::style::{FieldLook, Span};
 use craft_behavior::{Codec, EditEvent, IconId, Mixed, PartKey, PlainText, Proposal, Sense};
 use egui::{Id, Rect, Vec2};
 use smallvec::SmallVec;
@@ -67,6 +67,11 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     /// (a find bar's): Escape still clears it.
     #[prop]
     clear_button: bool,
+    /// The field's look: [`FieldLook::Quiet`] is a bar's own field, with its fill and quiet edge at rest
+    /// ([`StyleCx::quiet_field`](crate::style::StyleCx::quiet_field)) and the muted placeholder.
+    #[prop]
+    #[style_key]
+    look: FieldLook,
     /// The adornments before the text, in reading order.
     leading: Vec<Adornment>,
     /// The field reserves and paints a chevron at the end, for the host's popup.
@@ -130,6 +135,7 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
             empty: None,
             search: false,
             clear_button: true,
+            look: FieldLook::Normal,
             leading: Vec::new(),
             arrow: false,
             drives: None,
@@ -308,6 +314,18 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
         self
     }
 
+    /// Colours stretches of the text: `ranges` gives them for the text it is called with, as byte ranges in order,
+    /// each in a theme ink ([`RangeInk`](crate::primitives::RangeInk)) that keeps the text contrast minimum on the
+    /// field. The rest of the text keeps the field's ink. It is called each frame the field shows, with the text as
+    /// typed, and not for a text longer than [`COLORED_TEXT_LIMIT`](crate::primitives::COLORED_TEXT_LIMIT), which shows
+    /// uncoloured. Colour is display only: editing, the caret, selection, wrapping and what assistive technology reads are
+    /// as without it. The field knows no language: the app finds the ranges (a script's keywords, strings and comments).
+    #[must_use]
+    pub fn color_ranges(mut self, ranges: impl Fn(&str) -> Vec<crate::primitives::ColorRange> + 'static) -> Self {
+        self.options.color_ranges = Some(Arc::new(ranges));
+        self
+    }
+
     /// `text` replaces the selection in this pass: at the caret it inserts. Set it for one pass only.
     #[must_use]
     pub fn replace_selection(mut self, text: impl Into<String>) -> Self {
@@ -365,6 +383,9 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
             style = style.held_at(FieldStyle::chars_width(cx, chars));
         }
         style.metrics = style.metrics.min_size(Vec2::new(0.0, style.metrics.min_size.y));
+        if key.look == FieldLook::Quiet {
+            style.surface = cx.quiet_field();
+        }
         style
     }
 
@@ -447,7 +468,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
                 Some(Mixed::Same(at)) => Some(at),
                 _ => None,
             });
-            let options = TextOptions { mixed: value.is_none(), limit, caret, ..self.options.clone() };
+            let options = TextOptions { mixed: value.is_none(), limit, caret, look: self.look, ..self.options.clone() };
             cx.text(text_part::<C::Value>(), placed.text, &self.codec, start, &options);
         }
     }

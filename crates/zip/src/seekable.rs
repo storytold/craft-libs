@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, Read, Seek, SeekFrom};
 
+use crate::entry::{has_traversal_component, has_traversal_component_bytes};
 use crate::{Budget, Error, MetadataReader, check_entry_count_seekable};
 
 /// Why an indexed seekable archive exceeded its caller's limits.
@@ -158,14 +159,37 @@ impl<R: Read + Seek> SeekableArchive<R> {
         self.duplicate_names.iter().map(String::as_str)
     }
 
+    /// Whether any entry in the archive contains path-traversal components (`..`, absolute paths,
+    /// Windows drive prefixes, null bytes).
+    pub fn has_traversal_component(&self) -> bool {
+        self.zip.file_names_raw().any(has_traversal_component_bytes)
+    }
+
     /// Locate a surviving entry by the absolute offset of its central directory record,
     /// without decoding its name or reading the local entry header.
     pub fn index_for_central_record(&self, offset: u64) -> Option<usize> {
         (0..self.zip.len()).find(|&i| self.zip.by_index_data(i).is_ok_and(|e| e.central_header_start() == offset))
     }
 
-    /// The name at `index`, copied on demand.
+    /// The name at `index`, copied on demand. Names containing path-traversal components (`..`,
+    /// absolute paths, Windows drive prefixes, null bytes) return `None`.
     pub fn entry_name(&mut self, index: usize) -> Result<Option<String>, Error> {
+        if index >= self.zip.len() {
+            return Ok(None);
+        }
+        let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        if has_traversal_component_bytes(file.name_raw()) {
+            return Ok(None);
+        }
+        let name = file.name().map_err(|error| Error::NotZip(error.to_string()))?;
+        if has_traversal_component(&name) {
+            return Ok(None);
+        }
+        Ok(Some(name.into_owned()))
+    }
+
+    /// The name at `index`, copied on demand without path validation.
+    pub fn raw_entry_name(&mut self, index: usize) -> Result<Option<String>, Error> {
         if index >= self.zip.len() {
             return Ok(None);
         }
@@ -180,6 +204,9 @@ impl<R: Read + Seek> SeekableArchive<R> {
             return Ok(None);
         }
         let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        if has_traversal_component_bytes(file.name_raw()) {
+            return Ok(None);
+        }
         Ok(Some(file.is_dir()))
     }
 
@@ -189,6 +216,9 @@ impl<R: Read + Seek> SeekableArchive<R> {
             return Ok(None);
         }
         let file = self.zip.by_index_raw(index).map_err(|e| Error::NotZip(e.to_string()))?;
+        if has_traversal_component_bytes(file.name_raw()) {
+            return Ok(None);
+        }
         Ok(Some((file.size(), file.compressed_size())))
     }
 
@@ -197,30 +227,44 @@ impl<R: Read + Seek> SeekableArchive<R> {
         self.zip.has_overlapping_files().map_err(|e| Error::NotZip(e.to_string()))
     }
 
-    /// The entry names in the archive's order, folders included. Non-UTF-8 names are omitted.
+    /// The entry names in the archive's order, folders included. Non-UTF-8 names and names
+    /// containing path-traversal components are omitted.
     pub fn names(&self) -> impl Iterator<Item = Cow<'_, str>> {
-        self.zip.file_names().filter_map(Result::ok)
+        self.zip.file_names().filter_map(Result::ok).filter(|name| !has_traversal_component(name))
     }
 
-    /// Is there an entry `name` (exactly as stored)?
+    /// Is there an entry `name` (exactly as stored)? Paths containing traversal components
+    /// return `false`.
     pub fn contains(&self, name: &str) -> bool {
+        if has_traversal_component(name) {
+            return false;
+        }
         self.zip.index_for_name(name).is_some()
     }
 
     /// The size entry `name` declares. It is a claim, not a measurement.
     pub fn declared_size(&mut self, name: &str) -> Option<u64> {
+        if has_traversal_component(name) {
+            return None;
+        }
         let index = self.zip.index_for_name(name)?;
         self.zip.by_index_raw(index).ok().map(|f| f.size())
     }
 
     /// The size entry `name` takes in the archive, compressed.
     pub fn compressed_size(&mut self, name: &str) -> Option<u64> {
+        if has_traversal_component(name) {
+            return None;
+        }
         let index = self.zip.index_for_name(name)?;
         self.zip.by_index_raw(index).ok().map(|f| f.compressed_size())
     }
 
     /// Is `name` stored without compression?
     pub fn is_stored(&mut self, name: &str) -> Option<bool> {
+        if has_traversal_component(name) {
+            return None;
+        }
         let index = self.zip.index_for_name(name)?;
         self.zip.by_index_raw(index).ok().map(|f| f.compression() == zip::CompressionMethod::Stored)
     }
@@ -231,6 +275,9 @@ impl<R: Read + Seek> SeekableArchive<R> {
     /// [`SeekableLimits::max_total_bytes`]. The returned [`EntryReader`] enforces the size cap and
     /// verifies the CRC-32 on EOF, charging [`Self::budget`] only when the full entry is read.
     pub fn open_entry(&mut self, name: &str, max: u64) -> Result<Option<EntryReader<'_, R>>, Error> {
+        if has_traversal_component(name) {
+            return Ok(None);
+        }
         let Some(index) = self.zip.index_for_name(name) else { return Ok(None) };
         self.open_entry_index_named(index, name, max)
     }
@@ -240,11 +287,16 @@ impl<R: Read + Seek> SeekableArchive<R> {
         if index >= self.zip.len() {
             return Ok(None);
         }
-        let name = self.entry_name(index)?.unwrap_or_default();
+        let Some(name) = self.entry_name(index)? else {
+            return Ok(None);
+        };
         self.open_entry_index_named(index, &name, max)
     }
 
     fn open_entry_index_named(&mut self, index: usize, name: &str, max: u64) -> Result<Option<EntryReader<'_, R>>, Error> {
+        if has_traversal_component(name) {
+            return Ok(None);
+        }
         let file = self.zip.by_index(index).map_err(|e| Error::Entry { name: name.to_string(), msg: e.to_string() })?;
         let declared = file.size();
         if declared > max {
@@ -258,6 +310,9 @@ impl<R: Read + Seek> SeekableArchive<R> {
 
     /// Read all bytes of entry `name` into memory, or `None` when there is no such entry.
     pub fn read(&mut self, name: &str, max: u64) -> Result<Option<Vec<u8>>, Error> {
+        if has_traversal_component(name) {
+            return Ok(None);
+        }
         let Some(index) = self.zip.index_for_name(name) else { return Ok(None) };
         self.read_index_named(index, name, max)
     }
@@ -267,7 +322,9 @@ impl<R: Read + Seek> SeekableArchive<R> {
         if index >= self.zip.len() {
             return Ok(None);
         }
-        let name = self.entry_name(index)?.unwrap_or_default();
+        let Some(name) = self.entry_name(index)? else {
+            return Ok(None);
+        };
         self.read_index_named(index, &name, max)
     }
 
@@ -474,5 +531,52 @@ mod tests {
         assert!(!archive.has_duplicate_names_matching(|n| n.ends_with(".lrcat")));
         assert!(archive.has_duplicate_names_matching(|n| n == "notes.txt"));
         assert_eq!(archive.read("Cat.lrcat", 100).unwrap().as_deref(), Some(b"catalog".as_slice()));
+    }
+
+    #[test]
+    fn seekable_archive_rejects_path_traversal_components() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("../../etc/passwd", options).unwrap();
+        writer.write_all(b"hostile").unwrap();
+        writer.start_file(r"..\..\windows\system32", options).unwrap();
+        writer.write_all(b"hostile").unwrap();
+        writer.start_file("C:/test.txt", options).unwrap();
+        writer.write_all(b"hostile").unwrap();
+        writer.start_file("valid.txt", options).unwrap();
+        writer.write_all(b"valid content").unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+
+        let limits = SeekableLimits { max_entries: 10, max_metadata_bytes: 16_384, max_total_bytes: 4096 };
+        let mut archive = SeekableArchive::open(Cursor::new(bytes), limits).unwrap();
+        assert!(archive.has_traversal_component());
+
+        // Entry enumeration and names() iterator omit traversal vectors
+        let names = (0..archive.len()).filter_map(|i| archive.entry_name(i).unwrap()).collect::<Vec<_>>();
+        assert_eq!(names, vec!["valid.txt"]);
+        assert_eq!(archive.names().collect::<Vec<_>>(), vec!["valid.txt"]);
+
+        // Virtual lookups reject traversal
+        assert!(!archive.contains("../../etc/passwd"));
+        assert!(!archive.contains(r"..\..\windows\system32"));
+        assert!(!archive.contains("C:/test.txt"));
+        assert!(archive.contains("valid.txt"));
+        assert_eq!(archive.declared_size("../../etc/passwd"), None);
+        assert_eq!(archive.compressed_size(r"..\..\windows\system32"), None);
+        assert_eq!(archive.is_stored("C:/test.txt"), None);
+
+        // Entry reads reject traversal
+        assert!(archive.open_entry("../../etc/passwd", 100).unwrap().is_none());
+        assert!(archive.open_entry(r"..\..\windows\system32", 100).unwrap().is_none());
+        assert!(archive.open_entry("C:/test.txt", 100).unwrap().is_none());
+        assert_eq!(archive.read("../../etc/passwd", 100).unwrap(), None);
+        assert_eq!(archive.read(r"..\..\windows\system32", 100).unwrap(), None);
+        assert_eq!(archive.read("C:/test.txt", 100).unwrap(), None);
+        assert_eq!(archive.read_index(0, 100).unwrap(), None);
+        assert_eq!(archive.read_index(1, 100).unwrap(), None);
+        assert_eq!(archive.read_index(2, 100).unwrap(), None);
+
+        // Safe entry reads normally
+        assert_eq!(archive.read("valid.txt", 100).unwrap().as_deref(), Some(b"valid content".as_slice()));
     }
 }

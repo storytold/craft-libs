@@ -44,18 +44,34 @@ impl Window {
             let mut mode = self.mode.get();
             let out = AppShell::new(WindowKey::main())
                 .screen_mode(Bind::bound(&mut mode))
-                .title(Slot::new("title").reveal(), |ui, _, _| {
-                    Text::new("Title").show(ui);
-                })
-                .start(Slot::new("tools").reveal(), |ui, _, _| {
-                    Text::new("Tools").show(ui);
-                })
-                .end(Slot::new("inspector").reveal(), |ui, _, _| {
-                    Text::new("Inspector").show(ui);
-                })
-                .bottom(Slot::new("status"), |ui, _, _| {
-                    Text::new("Status").show(ui);
-                })
+                .title(
+                    Slot::new("title").reveal(),
+                    |_| None,
+                    |ui, _, _| {
+                        Text::new("Title").show(ui);
+                    },
+                )
+                .start(
+                    Slot::new("tools").reveal(),
+                    |_| None,
+                    |ui, _, _| {
+                        Text::new("Tools").show(ui);
+                    },
+                )
+                .end(
+                    Slot::new("inspector").reveal(),
+                    |_| None,
+                    |ui, _, _| {
+                        Text::new("Inspector").show(ui);
+                    },
+                )
+                .bottom(
+                    Slot::new("status"),
+                    |_| None,
+                    |ui, _, _| {
+                        Text::new("Status").show(ui);
+                    },
+                )
                 .body(|ui, _, _| {
                     Canvas::new("Document").show(ui, |_, _| ());
                 })

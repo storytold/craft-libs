@@ -165,6 +165,18 @@ impl ThemeFont {
     }
 }
 
+/// A hyperlink's `w:history` when a .docx file didn't have it on. Only the .docx reader sets one.
+/// A link with none, whether made in the app, read from another format or read with history on,
+/// is written with history on, so it reads back the same.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LinkHistory {
+    /// `w:history` was off.
+    Off,
+    /// The hyperlink had no `w:history`, so none is written back.
+    Omitted,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum VertAlign {
@@ -435,6 +447,10 @@ pub struct CharProps {
     /// Optional ScreenTip for the hyperlink. Runs from one link can share its text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_tooltip: Option<Arc<str>>,
+    /// The hyperlink's `w:history` when a .docx file had it off or left it out. `None` writes it
+    /// on, as Word does for a new link.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_history: Option<LinkHistory>,
     /// Tracked insertion: index into `Document::revisions`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ins: Option<u32>,
@@ -572,6 +588,7 @@ impl CharProps {
             c.style = None;
         }
         c.link_tooltip = None;
+        c.link_history = None;
         c
     }
 
@@ -632,9 +649,10 @@ impl CharProps {
     }
 
     fn minus_document_marks(&mut self, base: &CharProps) {
-        if self.link == base.link && self.link_tooltip == base.link_tooltip {
+        if self.link == base.link && self.link_tooltip == base.link_tooltip && self.link_history == base.link_history {
             self.link = None;
             self.link_tooltip = None;
+            self.link_history = None;
         }
         drop_same_fields!(self, base; ins, del, ligatures);
     }
@@ -689,6 +707,7 @@ impl CharProps {
         if let Some(link) = &patch.link {
             self.link = Some(link.clone());
             self.link_tooltip = patch.link_tooltip.clone();
+            self.link_history = patch.link_history;
         }
         overlay_fields!(self, patch; ins, del, fmt_change, ligatures);
     }
@@ -716,6 +735,7 @@ impl CharProps {
         CharProps {
             link: self.link.clone(),
             link_tooltip: self.link_tooltip.clone(),
+            link_history: self.link_history,
             ins: self.ins,
             del: self.del,
             fmt_change: self.fmt_change.clone(),
@@ -726,6 +746,6 @@ impl CharProps {
     }
     /// Just the formatting: without the link, revision marks and tracked formatting change.
     pub fn formatting(&self) -> CharProps {
-        CharProps { link: None, link_tooltip: None, ins: None, del: None, fmt_change: None, ..self.clone() }
+        CharProps { link: None, link_tooltip: None, link_history: None, ins: None, del: None, fmt_change: None, ..self.clone() }
     }
 }
