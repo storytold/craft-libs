@@ -20,7 +20,7 @@ use crate::object::stream::{ImageColorSpace, ImageData, ImageDecodeParams};
 use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
-use jxl_oxide::{ExtraChannelType, JxlImage, PixelFormat};
+use jxl_oxide::{EnumColourEncoding, ExtraChannelType, JxlImage, PixelFormat, RenderingIntent};
 
 /// The signature box every JPEG XL container starts with. A bare codestream does not.
 const SIGNATURE: &[u8] = b"\0\0\0\x0cJXL \r\n\x87\n";
@@ -30,7 +30,7 @@ const SIGNATURE: &[u8] = b"\0\0\0\x0cJXL \r\n\x87\n";
 /// for each pixel, before the alpha channel is split off); `None` when it can't be decoded.
 pub(crate) fn decode(data: &[u8], image_params: &ImageDecodeParams, limit: usize, max_pixels: u64) -> Option<FilterResult<'static>> {
     let data = without_brob_boxes(data)?;
-    let image = JxlImage::builder().read(std::io::Cursor::new(data.as_ref())).ok()?;
+    let mut image = JxlImage::builder().read(std::io::Cursor::new(data.as_ref())).ok()?;
     let (width, height) = (image.width(), image.height());
     if width == 0 || height == 0 || u64::from(width) * u64::from(height) > max_pixels {
         return None;
@@ -55,13 +55,39 @@ pub(crate) fn decode(data: &[u8], image_params: &ImageDecodeParams, limit: usize
     if bytes > limit {
         return None;
     }
+    // The samples go on as `DeviceGray` or `DeviceRGB`, which are sRGB-like, so the codestream's own
+    // encoding (linear, a wide gamut, HDR transfer) is converted to sRGB first; jxl-oxide would
+    // otherwise hand out native samples. An indexed image keeps its raw samples (they are indices).
+    if !image_params.is_indexed {
+        let intent = RenderingIntent::Relative;
+        image.request_color_encoding(if matches!(color_space, ImageColorSpace::Gray) {
+            EnumColourEncoding::gray_srgb(intent)
+        } else {
+            EnumColourEncoding::srgb(intent)
+        });
+    }
+    let associated = image.image_header().metadata.ec_info.iter().any(|info| info.alpha_associated() == Some(true));
     let render = image.render_frame(0).ok()?;
     let mut stream = render.stream();
     if stream.channels() as usize != channels {
         return None;
     }
     let mut buf = vec![0u8; bytes];
-    if stream.write_to_buffer::<u8>(&mut buf) != buf.len() {
+    if associated && has_alpha {
+        // Premultiplied colour is divided by alpha while it is still a float, then quantised: the
+        // interpreter composites straight colour with the alpha it is given, so leaving it
+        // premultiplied would attenuate it twice.
+        let mut floats = vec![0f32; bytes];
+        if stream.write_to_buffer::<f32>(&mut floats) != floats.len() {
+            return None;
+        }
+        for (px, out) in floats.chunks_exact_mut(channels).zip(buf.chunks_exact_mut(channels)) {
+            unpremultiply(px);
+            for (v, o) in px.iter().zip(out.iter_mut()) {
+                *o = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+            }
+        }
+    } else if stream.write_to_buffer::<u8>(&mut buf) != buf.len() {
         return None;
     }
     let colors = channels - usize::from(has_alpha);
@@ -81,6 +107,16 @@ pub(crate) fn decode(data: &[u8], image_params: &ImageDecodeParams, limit: usize
         data: Cow::Owned(data),
         image_data: Some(ImageData { alpha, color_space: Some(color_space), bits_per_component: 8, width, height }),
     })
+}
+
+/// Turns one premultiplied pixel (colour samples, then alpha last) into straight colour. A zero
+/// alpha leaves nothing to recover, so its colour becomes 0.
+fn unpremultiply(px: &mut [f32]) {
+    if let Some((alpha, colors)) = px.split_last_mut() {
+        for c in colors {
+            *c = if *alpha > 0.0 { *c / *alpha } else { 0.0 };
+        }
+    }
 }
 
 /// Whether the extra channels a codestream declares are ones this filter draws: none when the
@@ -185,6 +221,29 @@ mod tests {
         assert_eq!((image.width, image.height, image.bits_per_component), (W as u32, H as u32, 8));
         assert!(image.alpha.is_none());
         assert_eq!(result.data.as_ref(), expected().as_slice());
+    }
+
+    #[test]
+    fn premultiplied_colour_is_divided_by_alpha_and_zero_alpha_gives_black() {
+        let mut half = [0.25, 0.5, 0.1, 0.5];
+        unpremultiply(&mut half);
+        assert_eq!(half, [0.5, 1.0, 0.2, 0.5]);
+        let mut none = [0.3, 0.3, 0.3, 0.0];
+        unpremultiply(&mut none);
+        assert_eq!(none, [0.0, 0.0, 0.0, 0.0]);
+        let mut opaque = [0.2, 0.4, 0.6, 1.0];
+        unpremultiply(&mut opaque);
+        assert_eq!(opaque, [0.2, 0.4, 0.6, 1.0]);
+    }
+
+    #[test]
+    fn an_srgb_codestream_keeps_its_samples_when_the_output_encoding_is_requested() {
+        // The fixture is tagged sRGB, so asking for sRGB output must not change a sample; and an
+        // indexed image skips the request altogether.
+        let result = decode(LOSSLESS, &params(0, 0), usize::MAX, 1 << 28).unwrap();
+        assert_eq!(result.data.as_ref(), expected().as_slice());
+        let indexed = ImageDecodeParams { is_indexed: true, ..params(0, 0) };
+        assert_eq!(decode(LOSSLESS, &indexed, usize::MAX, 1 << 28).unwrap().data.as_ref(), expected().as_slice());
     }
 
     #[test]

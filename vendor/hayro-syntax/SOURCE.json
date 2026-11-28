@@ -362,7 +362,7 @@
       "path": "src/filter/jxl.rs",
       "source_sha256": null,
       "source_git_blob": null,
-      "sha256": "7532f567fecaad10bd31d5e4dc83fd24f910f35e74eab03f308f72b72462e231"
+      "sha256": "032641b82a645360f0f8b4814eda05073537038654e2325b9e6475028b2ac7a8"
     },
     {
       "path": "src/filter/jxl_lossless.jxl",
