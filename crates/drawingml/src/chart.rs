@@ -497,7 +497,8 @@ pub struct Chart {
     /// axis ownership, 3 retains series IDs, 4 selects reciprocal duplicate-axis partners,
     /// 5 retains plot-group membership and selected axes' metadata, and 6 resolves group-owned
     /// duplicate value-axis elements, and 7 preserves resolved element identity through
-    /// ownership, scatter direction and source-linked formats.
+    /// ownership, scatter direction and source-linked formats. Version 8 validates scatter
+    /// roles, shares ownership fallback and applies source-linked boolean defaults.
     /// Missing fields are version 0. Preserve when editing.
     #[serde(default, skip_serializing_if = "is_zero_u16")]
     pub raw_metadata_version: u16,
@@ -806,9 +807,7 @@ impl Chart {
             }
             false
         };
-        if !percent {
-            self.fold_trendlines(&ser, &mut ext, kinds);
-        }
+        self.fold_trendlines(&ser, &mut ext, kinds);
         if percent {
             ext.0 = ext.0.min(0.0);
             ext.1 = ext.1.max(1.0);
@@ -1394,6 +1393,48 @@ mod tests {
         c.series[0].trendlines.push(Trendline { forward: Some(1.0), ..Default::default() });
         let after = c.value_range().1;
         assert!(after > before && after >= 11.0 - 1e-6, "{before} {after}");
+    }
+
+    #[test]
+    fn review_6095873677_line_forecasts_survive_a_same_axis_percent_cache() {
+        let mut chart = Chart {
+            kind: ChartType::Combo,
+            categories: ["a", "b", "c", "d"].into_iter().map(str::to_owned).collect(),
+            series: vec![
+                Series {
+                    kind: Some(ChartType::Line),
+                    values: vec![Some(3.0), Some(5.0), Some(7.0), Some(9.0)],
+                    trendlines: vec![Trendline { forward: Some(1.0), ..Default::default() }],
+                    source_group: Some(0),
+                    ..Default::default()
+                },
+                Series { kind: Some(ChartType::PercentColumn), source_group: Some(1), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let mut line_only = chart.clone();
+        line_only.series.truncate(1);
+        assert!(line_only.axis_range(false).unwrap().1 >= 11.0 - 1e-6, "the ordinary line forecast is visible without its sibling");
+
+        for values in [vec![None], vec![], vec![Some(f64::NAN), Some(f64::INFINITY)], vec![Some(0.25), Some(0.5)]] {
+            chart.series[1].values = values;
+            let (lo, hi) = chart.axis_range(false).unwrap();
+            assert_eq!(lo, 0.0, "the percentage default still supplies zero");
+            assert!(hi >= 11.0 - 1e-6, "a percentage sibling must not hide the ordinary forecast: {hi}");
+            assert!(chart.axis_scale(false, 10).unwrap().1 >= 11.0 - 1e-6);
+        }
+
+        chart.series[1].secondary_axis = true;
+        assert!(chart.axis_range(false).unwrap().1 >= 11.0 - 1e-6, "the other axis cannot suppress the forecast");
+        assert_eq!(chart.axis_range(true), Some((0.0, 1.0)), "the independent percent axis keeps its normalized extent");
+        chart.series[0].secondary_axis = true;
+        assert_eq!(chart.axis_range(false), None);
+        assert!(chart.axis_range(true).unwrap().1 >= 11.0 - 1e-6, "the same-axis forecast also reaches the secondary extent");
+        chart.y2_max = Some(10.0);
+        assert_eq!(chart.axis_scale(true, 10).unwrap().1, 10.0, "an explicit bound still takes precedence over the forecast");
+
+        chart.series.remove(0);
+        assert_eq!(chart.axis_range(true), Some((0.0, 1.0)), "without the ordinary series only normalized percent defaults remain");
     }
 
     #[test]

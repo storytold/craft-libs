@@ -130,7 +130,7 @@ pub fn chart_from(root: &El) -> Option<Chart> {
 
 /// [`chart_from`] decoding at most `budget` data slots in all.
 fn chart_within(root: &El, budget: usize) -> Option<Chart> {
-    read_chart(root, budget, 7)
+    read_chart(root, budget, 8)
 }
 
 /// Exact former metadata projection for unchanged legacy native saves, using the same caps.
@@ -168,6 +168,11 @@ pub(super) fn metadata_v6_chart_from(root: &El) -> Option<Chart> {
     read_chart(root, MAX_CHART_POINTS, 6)
 }
 
+/// The published element-identity projection, before scatter ambiguity and linked defaults.
+pub(super) fn metadata_v7_chart_from(root: &El) -> Option<Chart> {
+    read_chart(root, MAX_CHART_POINTS, 7)
+}
+
 #[cfg(test)]
 std::thread_local! {
     static RAW_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -184,6 +189,7 @@ pub(super) fn chart_for_version(root: &El, version: u16) -> Option<Chart> {
         4 => metadata_v4_chart_from(root),
         5 => metadata_v5_chart_from(root),
         6 => metadata_v6_chart_from(root),
+        7 => metadata_v7_chart_from(root),
         _ => chart_from(root),
     }
 }
@@ -273,13 +279,17 @@ fn read_chart(root: &El, mut budget: usize, version: u16) -> Option<Chart> {
         let group_labels = read_group_settings(g, &mut c);
         kinds.push(kind);
         let val_axis = group_value_axis(&val_map, g);
-        let secondary = match (resolved_primary, relations.as_ref().and_then(|index| index.value_axis(g, &val_map))) {
-            (Some(primary), Some(axis)) => !std::ptr::eq(primary, axis),
-            _ => val_axis.is_some() && val_axis != primary_val,
+        let secondary = if version >= 8 {
+            group_secondary(g, resolved_primary, primary_val.as_deref(), &val_map, relations.as_ref())
+        } else {
+            match (resolved_primary, relations.as_ref().and_then(|index| index.value_axis(g, &val_map))) {
+                (Some(primary), Some(axis)) => !std::ptr::eq(primary, axis),
+                _ => val_axis.is_some() && val_axis != primary_val,
+            }
         };
         for s in g.children(Local("ser")).take(1000) {
             let needs_categories = c.categories.is_empty();
-            let mut ser = read_series(s, g, (kind, secondary, group_labels), &mut c.categories, &mut budget);
+            let mut ser = read_series(s, g, (kind, secondary, group_labels), &mut c.categories, &mut budget, version);
             if version >= 5 {
                 ser.source_group = Some(source_group);
             }
@@ -301,7 +311,7 @@ fn read_chart(root: &El, mut budget: usize, version: u16) -> Option<Chart> {
             }
             if needs_categories && !c.categories.is_empty() {
                 let axis = if version >= 5 { group_category_axis(pa, g, primary_axis, &val_map, relations.as_ref()) } else { category_axis(pa, g) };
-                c.category_format = category_format(axis, s);
+                c.category_format = category_format(axis, s, version);
             }
             let order = s.child(Local("order")).and_then(|o| o.attr_local("val")).and_then(|v| v.trim().parse::<u32>().ok());
             series.push((order.map(|v| v as usize).unwrap_or(series.len()), ser));
@@ -360,6 +370,21 @@ fn group_value_axis(val_map: &std::collections::HashMap<&str, bool>, g: &El) -> 
     ids.iter().find(|(_, vertical)| *vertical).or(ids.first()).map(|(id, _)| id.to_string())
 }
 
+/// One ownership decision for current series flags and secondary-group fallback.
+/// A resolved group cannot become secondary merely because its ID-only role is corrupted.
+fn group_secondary(
+    group: &El,
+    primary: Option<&El>,
+    primary_id: Option<&str>,
+    val_map: &std::collections::HashMap<&str, bool>,
+    relations: Option<&AxisRelations<'_>>,
+) -> bool {
+    match (primary, relations.and_then(|index| index.value_axis(group, val_map))) {
+        (Some(primary), Some(axis)) => !std::ptr::eq(primary, axis),
+        _ => group_value_axis(val_map, group).is_some_and(|id| Some(id.as_str()) != primary_id),
+    }
+}
+
 /// Exact relation slots for one read. Duplicate equally valid elements are ambiguous.
 /// Index once, then resolve only the group's two unique declared roles, never all axis pairs.
 struct AxisRelations<'a> {
@@ -406,7 +431,17 @@ impl<'a> AxisRelations<'a> {
             // A value-axis partner is indexed only when horizontal; cat/date are eligible.
             let candidate = |id, cross| {
                 let axis = self.values.get(&(id, cross)).copied().flatten()?;
-                self.partners.get(&(cross, id)).copied().flatten()?;
+                let partner = self.partners.get(&(cross, id)).copied().flatten()?;
+                if self.version >= 8 && matches!(group.local(), "scatterChart" | "bubbleChart") {
+                    // Scatter/Bubble have a vertical Y and horizontal X, not a reversible
+                    // pair. An ambiguous Y must not manufacture a unique horizontal Y.
+                    if !matches!(axis.child(Local("axPos")).and_then(|p| p.attr_local("val")), Some("l" | "r"))
+                        || !partner.is(Local("valAx"))
+                        || !matches!(partner.child(Local("axPos")).and_then(|p| p.attr_local("val")), Some("b" | "t"))
+                    {
+                        return None;
+                    }
+                }
                 Some(axis)
             };
             return match (candidate(first, second), candidate(second, first)) {
@@ -580,10 +615,10 @@ fn read_group_settings(g: &El, c: &mut Chart) -> Option<bool> {
 }
 
 /// Data labels' number format: the series' labels', the group's, else the source data's.
-fn label_number_format(s: &El, g: &El) -> Option<String> {
+fn label_number_format(s: &El, g: &El, version: u16) -> Option<String> {
     let label_fmt = |d: Option<&El>| {
         d.and_then(|d| d.child(Local("numFmt")))
-            .filter(|n| n.attr_local("sourceLinked") != Some("1"))
+            .filter(|n| if version >= 8 { !source_linked(n) } else { n.attr_local("sourceLinked") != Some("1") })
             .and_then(|n| n.attr_local("formatCode"))
             .map(str::to_string)
     };
@@ -619,7 +654,7 @@ fn read_error_bars(s: &El, kind: ChartType, budget: &mut usize) -> Option<ErrorB
 
 /// One `c:ser` of group `g`. `group` is (chart type, on the secondary axis, the group's data-label
 /// setting); the first series with categories sets `categories`.
-fn read_series(s: &El, g: &El, group: (ChartType, bool, Option<bool>), categories: &mut Vec<String>, budget: &mut usize) -> Series {
+fn read_series(s: &El, g: &El, group: (ChartType, bool, Option<bool>), categories: &mut Vec<String>, budget: &mut usize, version: u16) -> Series {
     let (kind, secondary, group_labels) = group;
     let marker = s.path(&[Local("marker"), Local("symbol")]).and_then(|m| m.attr_local("val")).map(String::from);
     let kind = if matches!(kind, ChartType::Line | ChartType::LineMarkers) {
@@ -655,7 +690,7 @@ fn read_series(s: &El, g: &El, group: (ChartType, bool, Option<bool>), categorie
             ser.trendlines.push(t);
         }
     }
-    ser.number_format = label_number_format(s, g);
+    ser.number_format = label_number_format(s, g, version);
     for dp in s.children(Local("dPt")) {
         if let (Some(i), Some(f)) =
             (dp.child(Local("idx")).and_then(|i| i.attr_local("val").and_then(value::to_u32_lossy)), simple_fill(dp.child(Local("spPr"))))
@@ -744,7 +779,9 @@ fn read_axes<'a>(
             .filter(|f| !f.is_empty() && f != "General")
     };
     let format_code = |a: &El| match a.child(Local("numFmt")) {
-        Some(n) if n.attr_local("sourceLinked") != Some("1") => n.attr_local("formatCode").map(str::to_string),
+        Some(n) if if version >= 8 { !source_linked(n) } else { n.attr_local("sourceLinked") != Some("1") } => {
+            n.attr_local("formatCode").map(str::to_string)
+        }
         n => source_format(a).or_else(|| n.and_then(|n| n.attr_local("formatCode")).map(str::to_string)),
     };
     // `c:tickLblPos val="none"` hides the labels just as `c:delete` does.
@@ -771,10 +808,14 @@ fn read_axes<'a>(
             } else {
                 // Resolve the other used value axis through its group, excluding unused axes and
                 // the horizontal x axis of a scatter group.
-                let secondary_group = pa
-                    .elements()
-                    .filter(|g| group_chart_type(g.local(), g).is_some() && g.children(Local("ser")).next().is_some())
-                    .find(|g| group_value_axis(val_map, g).is_some_and(|id| Some(id.as_str()) != primary_id));
+                let secondary_group =
+                    pa.elements().filter(|g| group_chart_type(g.local(), g).is_some() && g.children(Local("ser")).next().is_some()).find(|g| {
+                        if version >= 8 {
+                            group_secondary(g, resolved_primary, primary_id, val_map, relations)
+                        } else {
+                            group_value_axis(val_map, g).is_some_and(|id| Some(id.as_str()) != primary_id)
+                        }
+                    });
                 secondary_group.and_then(|g| {
                     relations.and_then(|index| index.value_axis(g, val_map)).or_else(|| {
                         let id = group_value_axis(val_map, g)?;
@@ -899,11 +940,16 @@ fn group_category_axis<'a>(
         .or_else(|| category_axis(pa, group))
 }
 
+/// CT_NumFmt sourceLinked defaults true; boolean spellings share one current interpretation.
+fn source_linked(numfmt: &El) -> bool {
+    numfmt.attr_local("sourceLinked").and_then(value::to_bool).unwrap_or(true)
+}
+
 /// The number format of the category labels, for categories that are numbers or dates: the category
 /// axis' own format, unless it is linked to the source (`sourceLinked`, or no `c:numFmt`), in which
 /// case the format code of the category cells. `None` when the categories are text (their cached
 /// strings show as they are) or the file gives only General.
-fn category_format(cat_ax: Option<&El>, series: &El) -> Option<String> {
+fn category_format(cat_ax: Option<&El>, series: &El, version: u16) -> Option<String> {
     // Called only when the budgeted series read first supplies categories. Never rescan caches
     // or take a format from a skipped series or another plot group's axis.
     let cat = series.child(Local("cat")).or_else(|| series.child(Local("xVal")))?;
@@ -916,7 +962,9 @@ fn category_format(cat_ax: Option<&El>, series: &El) -> Option<String> {
     let own = numfmt.and_then(|n| n.attr_local("formatCode")).filter(|f| !f.is_empty()).map(str::to_string);
     match numfmt {
         // An explicit format wins, "General" included (serial numbers, not dates).
-        Some(n) if n.attr_local("sourceLinked").and_then(value::to_bool) != Some(true) => own.or(source),
+        Some(n) if if version >= 8 { !source_linked(n) } else { n.attr_local("sourceLinked").and_then(value::to_bool) != Some(true) } => {
+            own.or(source)
+        }
         _ => source.or(own.filter(|f| f != "General")),
     }
 }
@@ -2577,7 +2625,7 @@ mod tests {
                 assert_eq!(read_chart_xml(&written).unwrap().series[0].secondary_axis, edit.series[0].secondary_axis);
             }
             let current = read_chart_xml(xml.as_bytes()).unwrap();
-            assert_eq!(current.raw_metadata_version, 7);
+            assert_eq!(current.raw_metadata_version, 8);
             if !category {
                 assert_eq!(current.y_max, Some(10.0));
             }
@@ -2941,5 +2989,154 @@ mod tests {
             review_6095656137_axis("valAx", 40, 30, "r", 90, "")
         ));
         assert_eq!(read_chart_xml(xml.as_bytes()).unwrap().y_format.as_deref(), Some("0.00"));
+    }
+
+    #[test]
+    fn review_6095873677_ambiguous_scatter_and_bubble_y_keep_the_id_fallback() {
+        let primary = review_6095656137_group(1, 2, "Primary", "0");
+        let primary_axes = format!("{}{}", review_6095656137_axis("catAx", 1, 2, "b", 1, ""), review_6095656137_axis("valAx", 2, 1, "l", 50, ""));
+        let x = review_6095656137_axis("valAx", 10, 20, "b", 12, r#"<c:numFmt formatCode="0.0" sourceLinked="0"/>"#);
+        let top_y = review_6095656137_axis("valAx", 20, 10, "t", 70, r#"<c:numFmt formatCode="0.00" sourceLinked="0"/>"#);
+        let right_y = review_6095656137_axis("valAx", 20, 10, "r", 90, r#"<c:numFmt formatCode="0.000" sourceLinked="0"/>"#);
+        for kind in ["scatterChart", "bubbleChart"] {
+            let size = if kind == "bubbleChart" {
+                r#"<c:bubbleSize><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:bubbleSize>"#
+            } else {
+                ""
+            };
+            let group = format!(
+                r#"<c:{kind}><c:ser><c:tx><c:v>Overlay</c:v></c:tx><c:xVal><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>30</c:v></c:pt></c:numLit></c:xVal><c:yVal><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:yVal>{size}</c:ser><c:axId val="10"/><c:axId val="20"/></c:{kind}>"#
+            );
+            for (axes, fallback_max) in [(format!("{x}{top_y}{right_y}"), 70.0), (format!("{right_y}{top_y}{x}"), 12.0)] {
+                let xml = metadata_chart(&format!("{primary}{group}{primary_axes}{axes}"));
+                let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+                let current = read_chart_xml(xml.as_bytes()).unwrap();
+                assert_eq!(current.y2_max, Some(fallback_max), "{kind}: an ambiguous Y must not reverse-resolve horizontal X");
+                assert_eq!(current.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, true]);
+                let mut fallback = read_chart(&root, MAX_CHART_POINTS, 6).unwrap();
+                // Version6's direction cannot be invented from the remaining horizontal partner.
+                // Compare every typed field, normalizing only raw/projection provenance.
+                fallback.raw_metadata_version = current.raw_metadata_version;
+                fallback.raw = current.raw.clone();
+                assert_eq!(serde_json::to_value(&current).unwrap(), serde_json::to_value(&fallback).unwrap());
+            }
+        }
+        // Horizontal bar charts legitimately have a bottom value axis and a left category.
+        let bar = review_6095656137_group(10, 20, "Horizontal", "0").replace(r#"barDir val="col""#, r#"barDir val="bar""#);
+        let plot = format!("{bar}{}{}", review_6095656137_axis("catAx", 10, 20, "l", 1, ""), review_6095656137_axis("valAx", 20, 10, "b", 90, ""));
+        let chart = read_chart_xml(metadata_chart(&plot).as_bytes()).unwrap();
+        assert_eq!(chart.kind, ChartType::Bar);
+        assert_eq!(chart.y_max, Some(90.0));
+        assert!(!chart.series[0].secondary_axis);
+        assert_eq!(chart.axis_titles, (Some("Axis10-20".into()), Some("Axis20-10".into())));
+    }
+
+    #[test]
+    fn review_6095873677_secondary_fallback_excludes_the_resolved_primary_scatter() {
+        let primary = r#"<c:scatterChart><c:ser><c:order val="0"/><c:tx><c:v>Primary scatter</c:v></c:tx><c:xVal><c:numLit><c:pt idx="0"><c:v>30</c:v></c:pt></c:numLit></c:xVal><c:yVal><c:numLit><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:yVal></c:ser><c:axId val="10"/><c:axId val="20"/></c:scatterChart>"#;
+        let secondary = review_6095656137_group(30, 40, "Unresolved secondary", "0.000").replace("<c:ser>", r#"<c:ser><c:order val="1"/>"#);
+        let axes = format!(
+            "{}{}{}{}",
+            review_6095656137_axis("valAx", 10, 20, "b", 12, ""),
+            review_6095656137_axis("valAx", 20, 10, "l", 50, r#"<c:numFmt formatCode="0.00" sourceLinked="0"/>"#),
+            review_6095656137_axis("valAx", 10, 999, "l", 999, ""),
+            review_6095656137_axis("valAx", 40, 888, "r", 90, r#"<c:numFmt formatCode="0.000" sourceLinked="0"/>"#)
+        );
+        for groups in [format!("{primary}{secondary}"), format!("{secondary}{primary}")] {
+            let chart = read_chart_xml(metadata_chart(&format!("{groups}{axes}")).as_bytes()).unwrap();
+            assert_eq!((chart.y_max, chart.y2_max), (Some(50.0), Some(90.0)), "the primary group's corrupt ID-only X role must not supply y2");
+            assert_eq!(
+                chart.series.iter().map(|s| (s.name.as_str(), s.secondary_axis)).collect::<Vec<_>>(),
+                [("Primary scatter", false), ("Unresolved secondary", true)]
+            );
+            assert_eq!((chart.y_format.as_deref(), chart.y2_format.as_deref()), (Some("0.00"), Some("0.000")));
+            assert_eq!(chart.axis_titles.1.as_deref(), Some("Axis20-10"));
+        }
+    }
+
+    #[test]
+    fn review_6095873677_axis_formats_use_boolean_source_linking_and_its_default() {
+        let left = review_6095656137_group(10, 40, "Left", "0.00")
+            .replace("<c:val>", r#"<c:cat><c:numLit><c:formatCode>0.0</c:formatCode><c:pt idx="0"><c:v>30</c:v></c:pt></c:numLit></c:cat><c:val>"#);
+        let right = review_6095656137_group(30, 40, "Right", "0.000");
+        let fixture = |attributes: Option<&str>, own: &str| {
+            let fmt = attributes.map(|a| format!(r#"<c:numFmt formatCode="{own}" {a}/>"#)).unwrap_or_default();
+            metadata_chart(&format!(
+                "{left}{right}{}{}{}{}",
+                review_6095656137_axis("catAx", 10, 40, "b", 1, &fmt),
+                review_6095656137_axis("valAx", 40, 10, "l", 50, &fmt),
+                review_6095656137_axis("catAx", 30, 40, "t", 1, &fmt),
+                review_6095656137_axis("valAx", 40, 30, "r", 90, &fmt)
+            ))
+        };
+        for attribute in [Some(r#"sourceLinked="true""#), Some(""), Some(r#"sourceLinked="1""#), None] {
+            let chart = read_chart_xml(fixture(attribute, "General").as_bytes()).unwrap();
+            assert_eq!(
+                (chart.y_format.as_deref(), chart.y2_format.as_deref()),
+                (Some("0.00"), Some("0.000")),
+                "{attribute:?}: use each actual owner's value-cache format"
+            );
+            assert_eq!(chart.category_format.as_deref(), Some("0.0"));
+            assert_eq!(chart.category_label(0), "30.0");
+        }
+        for attribute in [r#"sourceLinked="false""#, r#"sourceLinked="0""#] {
+            for own in ["General", "0.0000"] {
+                let chart = read_chart_xml(fixture(Some(attribute), own).as_bytes()).unwrap();
+                assert_eq!((chart.y_format.as_deref(), chart.y2_format.as_deref()), (Some(own), Some(own)));
+                assert_eq!(chart.category_format.as_deref(), Some(own));
+                assert_eq!(chart.category_label(0), if own == "General" { "30" } else { "30.0000" });
+            }
+        }
+        let xml = fixture(Some(""), "General").replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:craft:linked-original"><own:preserved xmlns:own="urn:craft:original"/></c:ext></c:extLst></c:chartSpace>"#,
+        );
+        let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+        for version in 0..=7 {
+            let mut previous = read_chart(&root, MAX_CHART_POINTS, version).unwrap();
+            assert_eq!(previous.y_format.as_deref(), Some("General"), "old{version} literal value-axis decoding");
+            assert_eq!(previous.category_format.as_deref(), Some("General"), "old{version} explicit General category decoding");
+            previous.raw = Some(xml.clone());
+            let previous: Chart = serde_json::from_str(&serde_json::to_string(&previous).unwrap()).unwrap();
+            let (written, kept) = crate::chart::write::chart_xml(&previous);
+            assert!(kept, "unchanged old{version} native comparison keeps raw XML");
+            assert_eq!(crate::xmlx::parse(&written).unwrap().to_xml(), root.to_xml());
+        }
+    }
+
+    #[test]
+    fn review_6095873677_label_linking_keeps_series_group_source_precedence() {
+        let fixture = |series: Option<&str>, group: Option<&str>| {
+            let labels = |attribute: Option<&str>, format: &str| {
+                attribute.map(|a| format!(r#"<c:dLbls><c:numFmt formatCode="{format}" {a}/></c:dLbls>"#)).unwrap_or_default()
+            };
+            let series_labels = labels(series, "0%");
+            let group_labels = labels(group, "0.0000");
+            let plot = review_6095656137_group(10, 20, "Labels", "0.00")
+                .replace("<c:val>", &format!("{series_labels}<c:val>"))
+                .replace("</c:ser>", &format!("</c:ser>{group_labels}"));
+            metadata_chart(&plot)
+        };
+        for attribute in [r#"sourceLinked="true""#, "", r#"sourceLinked="1""#] {
+            let chart = read_chart_xml(fixture(Some(attribute), Some(attribute)).as_bytes()).unwrap();
+            assert_eq!(chart.series[0].number_format.as_deref(), Some("0.00"), "linked labels use the source when neither label layer is explicit");
+            let group_wins = read_chart_xml(fixture(Some(attribute), Some(r#"sourceLinked="0""#)).as_bytes()).unwrap();
+            assert_eq!(group_wins.series[0].number_format.as_deref(), Some("0.0000"), "an explicit group label still precedes the source");
+        }
+        for attribute in [r#"sourceLinked="false""#, r#"sourceLinked="0""#] {
+            let chart = read_chart_xml(fixture(Some(attribute), Some(r#"sourceLinked="0""#)).as_bytes()).unwrap();
+            assert_eq!(chart.series[0].number_format.as_deref(), Some("0%"), "explicit series labels precede the group");
+        }
+        let absent = read_chart_xml(fixture(None, Some(r#"sourceLinked="0""#)).as_bytes()).unwrap();
+        assert_eq!(absent.series[0].number_format.as_deref(), Some("0.0000"));
+        let xml = fixture(Some(r#"sourceLinked="true""#), Some(r#"sourceLinked="true""#));
+        let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+        for version in 0..=7 {
+            assert_eq!(
+                read_chart(&root, MAX_CHART_POINTS, version).unwrap().series[0].number_format.as_deref(),
+                Some("0%"),
+                "old{version} keeps its literal-one-only label behavior"
+            );
+        }
     }
 }
