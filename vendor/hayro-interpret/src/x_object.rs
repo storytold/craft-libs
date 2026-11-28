@@ -1026,6 +1026,7 @@ struct DecodeContext<'a> {
     scale_factors: (f32, f32),
     color_space: ColorSpace,
     bits_per_component: u8,
+    dict_bpc: Option<u8>,
     decode_arr: SmallVec<[(f32, f32); 4]>,
 }
 
@@ -1154,6 +1155,7 @@ fn decode_context<'a>(
         scale_factors: (scale_x, scale_y),
         color_space,
         bits_per_component,
+        dict_bpc,
         decode_arr,
     })
 }
@@ -1187,6 +1189,11 @@ fn decode_mask(
             width: ctx.width,
             height,
             interpolate: obj.interpolate,
+            // A stencil mask is 1-bit whatever a filter reports (ISO 32000-2 §8.9.6.2, Table 87:
+            // `/BitsPerComponent` shall be 1 when `/ImageMask` is true). A CCITT-encoded stencil
+            // expands to 8-bit grey rows but still carries one sample per bit, so it keeps the
+            // 1-bit path (its averaging when minified) instead of being picked.
+            one_bit: ctx.bits_per_component == 1 || obj.is_stencil_mask || ctx.dict_bpc == Some(1),
             scale_factors: ctx.scale_factors,
         },
     })
@@ -1207,6 +1214,8 @@ fn decode_raster(
         == ctx
             .color_space
             .inverted_default_decode_arr(ctx.bits_per_component as f32);
+
+    let one_bit = ctx.dict_bpc == Some(1) || ctx.bits_per_component == 1;
 
     let mut rgb_moved = false;
     let image_data = if ctx.bits_per_component == 8
@@ -1239,6 +1248,7 @@ fn decode_raster(
                 width: ctx.width,
                 height,
                 interpolate: obj.interpolate,
+                one_bit,
                 scale_factors: ctx.scale_factors,
             }))
         } else if ctx.color_space.is_device_rgb() {
@@ -1250,6 +1260,7 @@ fn decode_raster(
                 width: ctx.width,
                 height,
                 interpolate: obj.interpolate,
+                one_bit,
                 scale_factors: ctx.scale_factors,
             }))
         } else {
@@ -1262,6 +1273,7 @@ fn decode_raster(
                 width: ctx.width,
                 height,
                 interpolate: obj.interpolate,
+                one_bit,
                 scale_factors: ctx.scale_factors,
             }))
         }
@@ -1284,6 +1296,7 @@ fn decode_raster(
             ctx.bits_per_component,
             &ctx.decode_arr,
             obj.interpolate,
+            one_bit,
         ) {
             height = rgb.height;
             Some(rgb)
@@ -1304,6 +1317,8 @@ fn decode_raster(
                 ctx.scale_factors,
                 &ctx.color_space,
                 obj.interpolate,
+                // PdfCraft patch (#1700): 1 bit per component, so a minified draw averages it.
+                one_bit,
             )
         };
 
@@ -1581,6 +1596,7 @@ fn resolve_alpha(
                 width,
                 height: *height,
                 interpolate: obj.interpolate,
+                one_bit: false,
                 scale_factors,
             })
         } else {
@@ -1626,6 +1642,7 @@ fn resolve_alpha(
             width,
             height: *height,
             interpolate: obj.interpolate,
+            one_bit: false,
             scale_factors,
         })
     } else {
@@ -1693,6 +1710,7 @@ fn get_rgb_data(
     scale_factors: (f32, f32),
     cs: &ColorSpace,
     interpolate: bool,
+    one_bit: bool,
 ) -> Option<RgbData> {
     // To prevent a panic when calling the `chunks` method.
     if cs.num_components() == 0 {
@@ -1707,6 +1725,7 @@ fn get_rgb_data(
         width,
         height,
         interpolate,
+        one_bit,
         scale_factors,
     })
 }
@@ -1847,6 +1866,7 @@ fn rgb_via_lookup(
     bits_per_component: u8,
     decode: &[(f32, f32)],
     interpolate: bool,
+    one_bit: bool,
 ) -> Option<RgbData> {
     let n = cs.num_components() as usize;
     let bpc = usize::from(bits_per_component);
@@ -1909,6 +1929,9 @@ fn rgb_via_lookup(
         width,
         height,
         interpolate,
+        // PdfCraft patch (#1700): the lookup yields RGB, but a 1-bit source stays 1 bit, so a
+        // minified draw averages it as line art rather than picking samples.
+        one_bit,
         scale_factors,
     })
 }
