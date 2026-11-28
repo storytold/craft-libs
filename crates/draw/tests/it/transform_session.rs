@@ -1,9 +1,10 @@
 //! `TransformSession`: results, gestures, undo, presets, the warp phase, the mode menu and the settings.
 
-use craft_behavior::geometry::quad::BoxState;
+use craft_behavior::geometry::quad::{BoxAllow, BoxState, TransformMode};
 use craft_behavior::kurbo::{Point, Rect, Vec2};
 use craft_behavior::{EditEvent, GestureId, Mixed};
-use craft_draw::ui::transform::{TransformEdit, TransformSession, TransformWarp};
+use craft_draw::ui::transform::{TransformEdit, TransformMenuWords, TransformPreset, TransformSession, TransformWarp};
+use craft_i18n::WordSet;
 use craft_ui::testing::trial;
 use std::sync::Arc;
 
@@ -211,4 +212,35 @@ fn the_revision_follows_the_undo_steps_and_the_warp_phase() {
     assert_eq!(s.revision(), warped, "a warp edit inside the phase opens no phase");
     s.apply(TransformEdit::LeaveWarp, 0.0);
     assert!(s.revision() != warped && s.warp().is_none());
+}
+
+/// The labelled rows of `s`'s menu with whether each is enabled.
+fn menu_rows(s: &TransformSession<Warp>) -> Vec<(String, bool)> {
+    s.menu(&TransformMenuWords::english()).iter().filter(|e| !e.is_separator()).map(|e| (format!("{:?}", e.label()), e.is_enabled())).collect()
+}
+
+// A box whose content greys the menu (photocraft#16733, Content-Aware Scale) lists the same rows as
+// a plain box, every one disabled, and a mode or preset pick changes nothing and records no step.
+#[trial]
+fn a_greyed_menu_disables_every_row_and_ignores_mode_and_preset_picks() {
+    let plain = session().allow(BoxAllow::new(false, false, false).with_warp(false));
+    let mut greyed = session().allow(BoxAllow::new(false, false, false).with_warp(false).with_menu(false));
+    let (live, grey) = (menu_rows(&plain), menu_rows(&greyed));
+    assert_eq!(grey.len(), 12);
+    assert_eq!(live.iter().map(|(label, _)| label).collect::<Vec<_>>(), grey.iter().map(|(label, _)| label).collect::<Vec<_>>());
+    assert!(live.iter().any(|(_, enabled)| *enabled), "a plain box keeps Free Transform, Scale and the presets: {live:?}");
+    assert!(grey.iter().all(|(_, enabled)| !enabled), "{grey:?}");
+    let quad = greyed.quad();
+    for preset in [TransformPreset::Rotate180, TransformPreset::Rotate90Clockwise, TransformPreset::FlipHorizontal] {
+        assert!(greyed.apply(TransformEdit::Preset(preset), 1.0).is_none());
+    }
+    greyed.apply(TransformEdit::Mode(TransformMode::Rotate), 1.0);
+    greyed.settle(1.0, false);
+    assert_eq!(greyed.quad(), quad);
+    assert_eq!(greyed.current_mode(), TransformMode::Free);
+    assert!(!greyed.can_undo());
+    // The box still scales.
+    drag(&mut greyed, BoxState::from_rect(Rect::new(0.0, 0.0, 100.0, 100.0)), 2.0);
+    assert!(greyed.can_undo());
+    assert!(near(greyed.quad()[1], Point::new(100.0, 0.0)));
 }

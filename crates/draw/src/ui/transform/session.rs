@@ -388,6 +388,7 @@ impl<W: TransformWarp> TransformSession<W> {
     /// - `Preset`: [`TransformPreset::scale_and_turn`] about the reference point
     ///   ([`BoxState::scaled_about_pivot`], [`BoxState::turned_about_pivot`]); refused in the Warp
     ///   phase, as PhotoCraft refuses it ("Commit or cancel the transform first").
+    /// - `Mode` and `Preset` change nothing when the content greys the menu ([`BoxAllow::menu`] off).
     /// - `WarpRequested` in the Box phase answers [`TransformRequest::NeedWarp`] with the current
     ///   box; `Warp(w)` stores the warp (entering the Warp phase); `LeaveWarp` drops it.
     ///
@@ -396,6 +397,11 @@ impl<W: TransformWarp> TransformSession<W> {
     pub fn apply(&mut self, edit: TransformEdit<W>, now: f64) -> Option<TransformRequest<W>> {
         // pc: crates/ui-egui/src/tools/transform_tool/commit.rs:352 (`intercept`: presets, warp
         // refusal), :13 (`commit`); begin.rs:736 (`leave_warp`).
+        // A box whose menu is greyed (`allow.menu` off) takes no mode or preset pick: it stays as it is
+        // and records no step.
+        if !self.allow.menu && matches!(edit, TransformEdit::Mode(_) | TransformEdit::Preset(_)) {
+            return None;
+        }
         let nudge = matches!(&edit, TransformEdit::Box(EditEvent::Set { .. }));
         self.changed |= !matches!(
             edit,
@@ -526,17 +532,18 @@ impl<W: TransformWarp> TransformSession<W> {
     /// Flip Horizontal, Flip Vertical. The current mode is checked (Scale counts as Free
     /// Transform, LC10); modes the content refuses (Distort, Perspective under
     /// `allow.distort == false`), Warp when the content refuses it (`allow.warp == false`) and every
-    /// preset in the Warp phase are disabled. Puppet Warp and Content-Aware Scale rows are the app's to
+    /// preset in the Warp phase are disabled; with `allow.menu == false` every row is. Puppet Warp and Content-Aware Scale rows are the app's to
     /// add, after Warp, with [`TransformOverlay::menu_rows`](super::TransformOverlay::menu_rows).
     pub fn menu(&self, words: &TransformMenuWords) -> Vec<Entry<TransformChoice>> {
         // pc: crates/ui-egui/src/canvas/canvas_tool_menu.rs:75 (`TRANSFORM_MENU`).
         let warping = self.phase() == TransformPhase::Warp;
         let allow = self.allow;
         let mode = |label: &Label, mode: TransformMode, allowed: bool, checked: bool| {
-            Entry::new(TransformChoice::Mode(mode), label.clone()).checked(checked && !warping).enabled(allowed)
+            Entry::new(TransformChoice::Mode(mode), label.clone()).checked(checked && !warping).enabled(allowed && allow.menu)
         };
         let free = self.mode == TransformMode::Free;
-        let preset = |label: &Label, preset: TransformPreset| Entry::new(TransformChoice::Preset(preset), label.clone()).enabled(!warping);
+        let preset =
+            |label: &Label, preset: TransformPreset| Entry::new(TransformChoice::Preset(preset), label.clone()).enabled(!warping && allow.menu);
         vec![
             mode(&words.free_transform, TransformMode::Free, true, free),
             mode(&words.scale, TransformMode::Free, true, false),
@@ -544,7 +551,7 @@ impl<W: TransformWarp> TransformSession<W> {
             mode(&words.skew, TransformMode::Skew, allow.skew, self.mode == TransformMode::Skew),
             mode(&words.distort, TransformMode::Distort, allow.distort, self.mode == TransformMode::Distort),
             mode(&words.perspective, TransformMode::Perspective, allow.distort, self.mode == TransformMode::Perspective),
-            Entry::new(TransformChoice::Warp, words.warp.clone()).checked(warping).enabled(allow.warp),
+            Entry::new(TransformChoice::Warp, words.warp.clone()).checked(warping).enabled(allow.warp && allow.menu),
             Entry::separator(),
             preset(&words.rotate_180, TransformPreset::Rotate180),
             preset(&words.rotate_90_clockwise, TransformPreset::Rotate90Clockwise),
