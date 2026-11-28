@@ -60,7 +60,7 @@ use exr::meta::MetaData;
 use exr::meta::attribute::SampleType as ExrSample;
 use exr::meta::header::Header;
 
-use crate::decode::{Limits, PartInfo, Window, check_previews, part_info};
+use crate::decode::{Limits, MAX_HEADER_ATTRIBUTES, PartInfo, Window, check_previews, part_info};
 
 /// Why a read failed. More kinds may be added: a `match` needs a catch-all arm.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -119,10 +119,10 @@ fn exr_error(e: exr::error::Error) -> Error {
 }
 
 const MAGIC: [u8; 4] = [0x76, 0x2f, 0x31, 0x01];
-/// Headers of all parts together: at most this many bytes, parts, and attributes per part.
+/// Headers of all parts together: at most this many bytes and parts. Attributes per header are
+/// bounded by `MAX_HEADER_ATTRIBUTES`.
 const META_BYTES: usize = 8 << 20;
 const MAX_PARTS: usize = 1024;
-const MAX_ATTRIBUTES: usize = 4096;
 /// The most chunks all parts of a file may have together. The offset tables and the index hold
 /// a few bytes per chunk, so a header declaring billions of tiny tiles (whose tables a short file
 /// can't hold anyway) is refused before anything is sized by it. 16 million chunks is a 64K ×
@@ -293,6 +293,13 @@ impl Index {
         self.display
     }
 
+    /// Stored RGB primaries and white point (red, green, blue, white in CIE xy), from the first
+    /// part that supplies the shared chromaticities attribute.
+    pub fn chromaticities(&self) -> Option<[[f32; 2]; 4]> {
+        let c = self.meta.headers.iter().find_map(|header| header.shared_attributes.chromaticities.as_ref())?;
+        Some([c.red, c.green, c.blue, c.white].map(|v| [v.0, v.1]))
+    }
+
     /// The chunks of part `part`'s full-resolution level, in offset-table order (none for a deep
     /// part or a part that doesn't exist): where each lies in the file and which pixels of the
     /// part's data window it holds. For diagnostics and tests; [`read_bands`] picks the chunks a
@@ -386,8 +393,8 @@ fn read_headers<R: Read + ?Sized>(r: &mut R, cancel: &dyn Fn() -> bool) -> Resul
                 break;
             }
             attributes += 1;
-            if attributes > MAX_ATTRIBUTES {
-                return Err(Error::LimitExceeded("more than 4096 attributes in a header".into()));
+            if attributes > MAX_HEADER_ATTRIBUTES {
+                return Err(Error::LimitExceeded(format!("more than {MAX_HEADER_ATTRIBUTES} attributes in a header")));
             }
             read_name(r, &mut prefix, None)?;
             let mut size = [0u8; 4];
@@ -606,11 +613,14 @@ pub struct Request<'a> {
     /// them. A channel may be named more than once (each slot gets its own bands). A channel of a
     /// deep part is refused.
     pub channels: &'a [(usize, usize)],
+    /// Use this part's data window as the output grid, keeping samples beyond the display
+    /// window. Every requested channel must belong to this part. Default: the display window.
+    pub data_window: Option<usize>,
     /// The value of each requested channel (same order) where the file has no samples; missing
     /// entries count as 0. Only [`read_planes`] uses it ([`read_bands`] delivers samples only).
     pub fill: &'a [f32],
-    /// The rows to read, counted from the display window's top row (0, whatever the display
-    /// window's absolute position), at full resolution; `None`: all.
+    /// The rows to read, counted from the output window's top row, at full resolution.
+    /// `None`: all rows.
     pub rows: Option<Range<i64>>,
     /// Every `2^level`-th row and column of the display window (0: full resolution, at most 16).
     pub level: u32,
@@ -644,7 +654,7 @@ impl<'a> Request<'a> {
     /// Every row of `channels` at full resolution, fill 0, up to `max_bytes` of samples, with as
     /// many decoding threads as the machine runs at once.
     pub fn new(channels: &'a [(usize, usize)], max_bytes: usize) -> Request<'a> {
-        Request { channels, fill: &[], rows: None, level: 0, max_bytes, workers: None, max_block_bytes: None, groups: &[] }
+        Request { channels, data_window: None, fill: &[], rows: None, level: 0, max_bytes, workers: None, max_block_bytes: None, groups: &[] }
     }
 }
 
@@ -657,7 +667,7 @@ pub fn level_size((width, height): (usize, usize), level: u32) -> (usize, usize)
 /// A rectangle of rows of one requested channel, or of a group of them ([`Request::groups`]),
 /// decoded: `samples` holds `height` rows of `width` pixels, row by row, each pixel
 /// `values_per_pixel` values in slot order. `x` and `y` are in the output grid, counted from the
-/// display window's top-left corner (0, 0, not its absolute position): display-window pixels at
+/// selected window's top-left corner (0, 0, whatever its absolute position): window pixels at
 /// level 0, every `2^level`-th pixel above.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Band {
@@ -761,6 +771,7 @@ struct Geometry<'a> {
     size: (usize, usize),
     out: (usize, usize),
     stride: i64,
+    in_data_window: bool,
     /// The display rows read.
     rows: Range<i64>,
     /// Each part's channel → the request slots that name it.
@@ -771,6 +782,10 @@ struct Geometry<'a> {
 }
 
 impl Geometry<'_> {
+    fn offset(&self, part: &PartLayout) -> (i64, i64) {
+        if self.in_data_window { (0, 0) } else { part.offset }
+    }
+
     /// A display row is read: in the rows, on the level's grid.
     fn wanted(&self, row: i64) -> bool {
         row >= self.rows.start && row < self.rows.end && row.rem_euclid(self.stride) == 0
@@ -810,6 +825,7 @@ struct Plan {
     size: (usize, usize),
     out: (usize, usize),
     stride: i64,
+    in_data_window: bool,
     rows: Range<i64>,
     /// The chunks to read, in file order.
     jobs: Vec<Planned>,
@@ -821,7 +837,26 @@ struct Plan {
 
 impl Plan {
     fn geometry(&self) -> Geometry<'_> {
-        Geometry { size: self.size, out: self.out, stride: self.stride, rows: self.rows.clone(), slots: &self.slots, units: &self.units }
+        Geometry {
+            size: self.size,
+            out: self.out,
+            stride: self.stride,
+            in_data_window: self.in_data_window,
+            rows: self.rows.clone(),
+            slots: &self.slots,
+            units: &self.units,
+        }
+    }
+}
+
+fn request_window(index: &Index, request: &Request) -> Result<Window> {
+    if let Some(part) = request.data_window {
+        if request.channels.iter().any(|(p, _)| *p != part) {
+            return Err(malformed("every channel in a data-window request must belong to that part"));
+        }
+        index.parts.get(part).map(|p| p.data_window).ok_or_else(|| malformed("no such data window part"))
+    } else {
+        Ok(index.display)
     }
 }
 
@@ -830,7 +865,9 @@ impl Plan {
 fn plan(index: &Index, request: &Request) -> Result<Plan> {
     let level = request.level.min(16);
     let stride = 1i64 << level;
-    let (w, h) = (index.display.width as usize, index.display.height as usize);
+    let window = request_window(index, request)?;
+    let (w, h) = (window.width as usize, window.height as usize);
+    let in_data_window = request.data_window.is_some();
     let out = level_size((w, h), level);
     // Per part and channel: the request slots that name it.
     let mut slots: Vec<Vec<Vec<usize>>> = index.parts.iter().map(|p| vec![Vec::new(); p.channels.len()]).collect();
@@ -872,7 +909,7 @@ fn plan(index: &Index, request: &Request) -> Result<Plan> {
     // (both ends inside the display window, so an empty or reversed range at either end of i64
     // stays empty instead of overflowing when aligned to the level's grid)
     let rows = rows.start.clamp(0, h as i64)..rows.end.clamp(0, h as i64);
-    let geometry = Geometry { size: (w, h), out, stride, rows: rows.clone(), slots: &slots, units: &units };
+    let geometry = Geometry { size: (w, h), out, stride, in_data_window, rows: rows.clone(), slots: &slots, units: &units };
     // What the request delivers: the rows read, at the level, of every requested channel.
     let need = plane_bytes((out.0, geometry.rows_read()), request.channels.len());
     if need > request.max_bytes {
@@ -888,7 +925,7 @@ fn plan(index: &Index, request: &Request) -> Result<Plan> {
             continue;
         }
         for c in &part.chunks {
-            let top = (c.y as i64).saturating_add(part.offset.1);
+            let top = (c.y as i64).saturating_add(geometry.offset(part).1);
             if !geometry.any_wanted(top, top.saturating_add(c.rows as i64)) {
                 continue;
             }
@@ -914,7 +951,7 @@ fn plan(index: &Index, request: &Request) -> Result<Plan> {
     // (no more threads than chunks can be in flight: two pieces)
     let workers =
         request.workers.unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from)).min(jobs.len()).min(2 * PIECE_CHUNKS);
-    Ok(Plan { slots, size: (w, h), out, stride, rows, jobs, workers, units })
+    Ok(Plan { slots, size: (w, h), out, stride, in_data_window, rows, jobs, workers, units })
 }
 
 impl Index {
@@ -1188,7 +1225,8 @@ fn next_result(results: &Receiver<(usize, Decoded)>, cancel: &dyn Fn() -> bool) 
 /// is [`Error::OutOfMemory`], not an abort), so the cost is known before the first chunk is
 /// read.
 pub fn read_planes<R: Read + Seek + ?Sized>(source: &mut R, index: &Index, request: &Request, cancel: &dyn Fn() -> bool) -> Result<Planes> {
-    let (w, h) = (index.display.width as usize, index.display.height as usize);
+    let window = request_window(index, request)?;
+    let (w, h) = (window.width as usize, window.height as usize);
     let (ow, oh) = level_size((w, h), request.level.min(16));
     let n = ow.checked_mul(oh).ok_or_else(|| Error::LimitExceeded("display window".into()))?;
     let need = plane_bytes((ow, oh), request.channels.len());
@@ -1451,12 +1489,13 @@ fn chunk_bands(index: &Index, pi: usize, expected: &ChunkRef, buf: &[u8], g: &Ge
     let slots = g.slots.get(pi).map_or(&[][..], Vec::as_slice);
     let lines = block.index.pixel_size.1;
     let ((lw, lh), (w, h)) = (part.size, g.size);
+    let (offset_x, offset_y) = g.offset(part);
     let (ow, _) = g.out;
     // The output rows of the block: its data-window rows that land in the display window on a
     // wanted row. They are consecutive in the output grid (wanted rows are every stride-th).
     let (by, bh) = (block.index.pixel_position.1, block.index.pixel_size.1);
     let out_rows: Vec<usize> = (by..by.saturating_add(bh))
-        .filter_map(|y| usize::try_from(y as i64 + part.offset.1).ok())
+        .filter_map(|y| usize::try_from(y as i64 + offset_y).ok())
         .filter(|ty| *ty < h && g.wanted(*ty as i64))
         .map(|ty| ty / g.stride as usize)
         .collect();
@@ -1477,11 +1516,11 @@ fn chunk_bands(index: &Index, pi: usize, expected: &ChunkRef, buf: &[u8], g: &Ge
         if y >= lh || x0.checked_add(count).is_none_or(|end| end > lw) {
             continue;
         }
-        let Some(ty) = usize::try_from(y as i64 + part.offset.1).ok().filter(|ty| *ty < h) else { continue };
+        let Some(ty) = usize::try_from(y as i64 + offset_y).ok().filter(|ty| *ty < h) else { continue };
         if !g.wanted(ty as i64) {
             continue;
         }
-        let tx0 = x0 as i64 + part.offset.0;
+        let tx0 = x0 as i64 + offset_x;
         let skip = usize::try_from(-tx0).unwrap_or(0).min(count);
         let tx = usize::try_from(tx0.max(0)).unwrap_or(usize::MAX);
         let take = (count - skip).min(w.saturating_sub(tx));

@@ -7,6 +7,8 @@ use std::cell::{RefCell, RefMut};
 #[cfg(feature = "slow-asserts")]
 use std::ops::DerefMut;
 
+use rustc_hash::FxHashSet;
+
 use crate::{
     curve::{self, CurveInteraction, CurveOrder, Order},
     geom::Segment,
@@ -350,6 +352,17 @@ pub struct Sweeper<'a> {
 
     comparisons: RefCell<ComparisonCache>,
     conservative_comparisons: RefCell<ComparisonCache>,
+
+    // Craft patch (coincident touch rescan): the (segment, scans right) pairs
+    // whose touch-event scan in `handle_intersection` already ran at the
+    // current `y` with the current sweep-line order. A scan reads only the
+    // order, `y` and the segments, so running it again before the order
+    // changes pushes only events it already pushed. Exact copies of a shape
+    // queue a touch event for every pair of coincident segments, and each one
+    // used to scan the whole bundle in both directions.
+    touch_scans: rustc_hash::FxHashSet<(SegIdx, bool)>,
+    #[cfg(test)]
+    touch_scan_count: usize,
 }
 
 impl<'segs> Sweeper<'segs> {
@@ -377,6 +390,9 @@ impl<'segs> Sweeper<'segs> {
             horizontals: Vec::new(),
             comparisons: RefCell::new(ComparisonCache::new(eps, eps / 2.0)),
             conservative_comparisons: RefCell::new(ComparisonCache::new(4.0 * eps, eps / 2.0)),
+            touch_scans: rustc_hash::FxHashSet::default(),
+            #[cfg(test)]
+            touch_scan_count: 0,
         }
     }
 
@@ -433,8 +449,48 @@ impl<'segs> Sweeper<'segs> {
         }
 
         // Process all the intersection events at this y.
+        //
+        // Craft patch (repeated intersection): when nearly coincident segments
+        // do not compare transitively, handling one pair can queue another
+        // pair at this same y again, and the pairs can cycle forever through
+        // the same positions. A pair is handled at most once per y for each
+        // pair of positions it holds in the sweep line; a repeat is queued
+        // again at the pair's next order change instead, if that comes before
+        // both ends.
+        let mut handled = FxHashSet::default();
+        #[cfg(test)]
+        let mut events_at_y = 0usize;
         while let Some(intersection) = self.events.next_intersection_at_y(y) {
-            self.handle_intersection(intersection.left, intersection.right);
+            #[cfg(test)]
+            {
+                events_at_y += 1;
+                let n = self.segments.len();
+                assert!(
+                    events_at_y <= n.saturating_pow(4),
+                    "{events_at_y} intersection events at y={y:?} for {n} segments"
+                );
+            }
+            let (left, right) = (intersection.left, intersection.right);
+            let positions = (self.line.position(left), self.line.position(right));
+            if !handled.insert((left, right, positions)) {
+                let next_y = self
+                    .compare_segments(left, right)
+                    .iter()
+                    .map(|(_, end, _)| end)
+                    .find(|end| *end > y);
+                if let Some(next_y) = next_y
+                    && next_y < self.segments[left].end().y
+                    && next_y < self.segments[right].end().y
+                {
+                    self.events.push(IntersectionEvent {
+                        y: next_y,
+                        left,
+                        right,
+                    });
+                }
+                continue;
+            }
+            self.handle_intersection(left, right);
             self.check_invariants();
         }
 
@@ -469,6 +525,7 @@ impl<'segs> Sweeper<'segs> {
         self.y = y;
         self.segs_needing_positions.clear();
         self.horizontals.clear();
+        self.touch_scans.clear();
     }
 
     fn intersection_scan_right(&mut self, start_idx: usize, which: WhichTouch) {
@@ -765,11 +822,20 @@ impl<'segs> Sweeper<'segs> {
                     let (_, y2, j_right_order) =
                         self.compare_segments(seg_j_idx, right).entry_at(self.y);
                     if j_right_order == Order::Left {
-                        self.events.push(IntersectionEvent {
-                            y: y1.min(y2),
-                            left,
-                            right,
-                        });
+                        // Craft patch (delayed intersection at an end): the
+                        // delayed event is queued only when it comes before
+                        // both ends, as in the scans that queue intersections.
+                        // An event at an end makes `entry_at` panic.
+                        let delayed_y = y1.min(y2);
+                        if delayed_y < self.segments[left].end().y
+                            && delayed_y < self.segments[right].end().y
+                        {
+                            self.events.push(IntersectionEvent {
+                                y: delayed_y,
+                                left,
+                                right,
+                            });
+                        }
                         return;
                     }
 
@@ -784,6 +850,9 @@ impl<'segs> Sweeper<'segs> {
                     entry.old_idx = Some(left_idx + i);
                 }
             }
+
+            // The order changes below, so earlier touch scans no longer stand.
+            self.touch_scans.clear();
 
             // Remove them in reverse to make indexing easier.
             let mut removed = Vec::with_capacity(to_move.len());
@@ -830,9 +899,21 @@ impl<'segs> Sweeper<'segs> {
 
             // We haven't changed the order of any segments, but the "touch" event
             // we just processed might have been a witness for the crossing invariant.
-            // So we need to scan.
-            self.intersection_scan_right(right_idx, WhichTouch::Mid);
-            self.intersection_scan_left(left_idx, WhichTouch::Mid);
+            // So we need to scan, unless the same scan already ran with this order.
+            if self.touch_scans.insert((right, true)) {
+                #[cfg(test)]
+                {
+                    self.touch_scan_count += 1;
+                }
+                self.intersection_scan_right(right_idx, WhichTouch::Mid);
+            }
+            if self.touch_scans.insert((left, false)) {
+                #[cfg(test)]
+                {
+                    self.touch_scan_count += 1;
+                }
+                self.intersection_scan_left(left_idx, WhichTouch::Mid);
+            }
         }
     }
 
@@ -2060,6 +2141,55 @@ mod tests {
         insta::assert_ron_snapshot!(snapshot_outputs(segs, 0.1));
     }
 
+    // Five circles, each moved by (7e-7, 3.5e-7) from the one before, have
+    // nearly coincident curves whose comparisons are not transitive. Their
+    // sweep used to queue the same intersections at one y forever. The event
+    // count check in `next_line` stops a test build at n^4 events on one
+    // sweep line.
+    #[test]
+    fn repeated_intersections_at_one_y() {
+        use kurbo::{Circle, Shape};
+
+        let mut circles = BezPath::new();
+        for i in 0..5 {
+            let center = (500.0 + i as f64 * 7e-7, 500.0 + i as f64 * 3.5e-7);
+            circles.extend(Circle::new(center, 50.0).path_elements(0.1));
+        }
+        let mut segs = Segments::default();
+        segs.add_bez_path(&circles).unwrap();
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        let mut bufs = SweepLineBuffers::default();
+        let mut lines = 0;
+        while sweep.next_line(&mut bufs).is_some() {
+            lines += 1;
+        }
+        assert!(lines > 0);
+    }
+
+    // Wide, flat shapes (x up to 1e12, y below 1e-3) whose sweep delays an
+    // intersection to exactly the end of one of its segments. Handling the
+    // delayed event there used to panic in `CurveOrder::entry_at`.
+    #[test]
+    fn delayed_intersection_at_a_segment_end() {
+        let path = BezPath::from_svg(
+            "M501064307397.10095,0.0009848607387959033 \
+             L106201373767.89085,0.0006710749289289315 \
+             C417687393573.9515,0.0004160951440753873 304110132978.1276,0.00038371209900965467 283049238030.7473,0.000948649831345387 Z \
+             M198139564203.8839,0.00026113917505891313 \
+             Q925286056821.7639,0.0001263989183887222 706548805870.0378,0.0005146463318510499 \
+             C481577318901.41956,0.000572151300098751 38743762463.54683,0.000935423896736907 333105974166.1391,0.00039093790825889355 \
+             C838434423640.872,0.0005209836434131965 252410595074.9046,0.00021445561842374318 649987299514.814,0.0005284926072103142 Z \
+             M425570790862.5174,0.0002275798137344196 \
+             C643548474934.2626,0.00016915804040910177 896953683318.0679,0.000915403101629657 231887429918.8749,0.0004275752018309249 \
+             Q960890561259.0065,0.0005825265493017958 735584660921.8835,0.000238439768009997 \
+             Q676310419912.8419,0.00003744704696150181 803912734785.0077,0.0008084425285905149 Z",
+        )
+        .unwrap();
+        let top =
+            crate::topology::Topology::<i32>::from_path(&path, 1.3655076163260652e-2).unwrap();
+        assert_eq!(top.contours(|w| *w != 0).contours().count(), 4);
+    }
+
     #[test]
     fn conservative_line_order() {
         // Here's an example where c0 gets "ish" with c1 in the middle, c0 gets "ish" with c2
@@ -2087,6 +2217,135 @@ mod tests {
         )
         .unwrap();
         insta::assert_ron_snapshot!(snapshot_outputs(segs, 0.25));
+    }
+
+    fn closed_polyline(points: &[(f64, f64)]) -> BezPath {
+        let mut path = BezPath::new();
+        path.move_to(points[0]);
+        for &p in &points[1..] {
+            path.line_to(p);
+        }
+        path.close_path();
+        path
+    }
+
+    fn copies(shape: &BezPath, n: usize) -> BezPath {
+        (0..n).flat_map(|_| shape.iter()).collect()
+    }
+
+    // Exact copies of a shape queue a touch event for every pair of coincident
+    // segments. Each touch-event scan runs at most once per segment and
+    // direction for each sweep-line order, so the number of scans stays
+    // linear in the number of segments, and the output is the output for one
+    // copy.
+    #[test]
+    fn coincident_copies_scan_once_per_order() {
+        use crate::topology::Topology;
+
+        let quad = closed_polyline(&[(0.0, 0.0), (100.0, 37.0), (60.0, 90.0), (10.0, 70.0)]);
+        let rect = closed_polyline(&[(0.0, 0.0), (100.0, 0.0), (100.0, 50.0), (0.0, 50.0)]);
+        for shape in [quad, rect] {
+            let path = copies(&shape, 60);
+            let mut segs = Segments::default();
+            segs.add_bez_path(&path).unwrap();
+            let mut sweep = Sweeper::new(&segs, 1e-6);
+            let mut bufs = SweepLineBuffers::default();
+            let mut lines = 0;
+            while sweep.next_line(&mut bufs).is_some() {
+                lines += 1;
+            }
+            assert!(
+                sweep.touch_scan_count <= 2 * segs.len() * lines,
+                "{} touch scans for {} segments on {lines} sweep lines",
+                sweep.touch_scan_count,
+                segs.len()
+            );
+
+            let contour_paths = |path: &BezPath| -> Vec<BezPath> {
+                Topology::from_path(path, 1e-6)
+                    .unwrap()
+                    .contours(|w| *w != 0)
+                    .contours()
+                    .map(|c| c.path.clone())
+                    .collect()
+            };
+            assert_eq!(contour_paths(&path), contour_paths(&shape));
+        }
+    }
+
+    // Small polygons on an integer grid, with exact, reversed and
+    // midpoint-split copies of some of them. The nonzero fill of the output
+    // contours matches the nonzero fill of the input.
+    #[test]
+    fn coincident_copies_keep_the_fill() {
+        use crate::topology::Topology;
+        use kurbo::{ParamCurve, ParamCurveNearest, Shape};
+
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = |n: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % n
+        };
+        for case in 0..200 {
+            let mut polygons: Vec<Vec<(f64, f64)>> = Vec::new();
+            for _ in 0..1 + next(3) {
+                let len = 3 + next(3);
+                let polygon = (0..len).map(|_| (next(9) as f64, next(9) as f64)).collect();
+                polygons.push(polygon);
+            }
+            for _ in 0..1 + next(3) {
+                let source = polygons[next(polygons.len() as u64) as usize].clone();
+                let copy = match next(3) {
+                    0 => source,
+                    1 => source.into_iter().rev().collect(),
+                    _ => {
+                        let mut split = Vec::new();
+                        for (i, &(x0, y0)) in source.iter().enumerate() {
+                            let (x1, y1) = source[(i + 1) % source.len()];
+                            split.push((x0, y0));
+                            split.push(((x0 + x1) / 2.0, (y0 + y1) / 2.0));
+                        }
+                        split
+                    }
+                };
+                polygons.push(copy);
+            }
+            let input: BezPath = polygons
+                .iter()
+                .flat_map(|p| closed_polyline(p).into_iter())
+                .collect();
+
+            let top = Topology::from_path(&input, 1e-6).unwrap();
+            let contours = top.contours(|w| *w != 0);
+            for i in 0..64 {
+                for j in 0..64 {
+                    let p = kurbo::Point::new(i as f64 / 8.0 + 0.0137, j as f64 / 8.0 + 0.0291);
+                    // Skip points too close to an input edge to say which
+                    // side they are on.
+                    let near_edge = input.segments().any(|seg| {
+                        let line = kurbo::Line::new(seg.start(), seg.end());
+                        let t = line.nearest(p, 0.0).t;
+                        line.eval(t).distance(p) < 1e-3
+                    });
+                    if near_edge {
+                        continue;
+                    }
+                    let expected = input.winding(p) != 0;
+                    let output_winding: i32 = contours
+                        .contours()
+                        .map(|c| c.path.winding(p))
+                        .sum();
+                    assert_eq!(
+                        output_winding != 0,
+                        expected,
+                        "case {case} at {p:?}: {}",
+                        input.to_svg()
+                    );
+                }
+            }
+        }
     }
 
     #[test]

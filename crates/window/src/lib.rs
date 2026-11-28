@@ -366,12 +366,19 @@ mod platform {
     }
 
     /// GNOME's `button-layout`, read with `gsettings`. `None` when `gsettings` is missing, fails,
-    /// times out, or prints nothing usable. The child is spawned with piped output and read on a
-    /// worker thread; if it doesn't finish within 500 ms the child is killed and reaped, so a
-    /// stalled `gsettings` leaves neither a blocked process nor a parked worker.
+    /// times out, or prints nothing usable.
     pub(super) fn gsettings_button_layout() -> Option<String> {
+        gsettings_wm_preference("button-layout")
+    }
+
+    /// The value of `key` in `org.gnome.desktop.wm.preferences`, read with `gsettings` and printed
+    /// as `gsettings` prints it (strings quoted). `None` when `gsettings` is missing, fails, times
+    /// out, or prints nothing. The child is spawned with piped output and read on a worker thread;
+    /// if it doesn't finish within 500 ms the child is killed and reaped, so a stalled `gsettings`
+    /// leaves neither a blocked process nor a parked worker.
+    pub(super) fn gsettings_wm_preference(key: &str) -> Option<String> {
         let mut child = Command::new("gsettings")
-            .args(["get", "org.gnome.desktop.wm.preferences", "button-layout"])
+            .args(["get", "org.gnome.desktop.wm.preferences", key])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

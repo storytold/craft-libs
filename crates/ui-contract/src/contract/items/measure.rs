@@ -40,17 +40,17 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     /// sized from its content: the header's least width, else its largest row's, at least the width it asks for
     /// (`Collection::ideal_width`), up to `room`. The column it sits in holds it at that width and shows it across
     /// the width the column settles on.
-    pub(super) fn width_from_content(&mut self, comp: &C, ui: &Ui, id: Id, room: Vec2, item: Option<Vec2>, scx: &StyleCx<'_>) -> f32 {
-        let rows = if self.header.has_columns() { self.header.least_width() } else { self.largest_in(comp, ui, id, room).x };
+    pub(super) fn width_from_content(&mut self, comp: &C, at: (&Ui, &Env), id: Id, room: Vec2, item: Option<Vec2>, scx: &StyleCx<'_>) -> f32 {
+        let rows = if self.header.has_columns() { self.header.least_width() } else { self.largest_in(comp, at, id, room).x };
         rows.max(comp.ideal_width(item, self.source.len(), scx)).min(room.x)
     }
 
     /// The largest ideal size of the rows in this pass, the sum of their ideal widths, and the widest cell each column's
     /// items reported: each row is built as `content` builds it, with its column cells at the widths the header
     /// resolves with no room to share (a fixed or toggle column at its own width), and measured without allocating.
-    fn largest_row(&mut self, comp: &C, ui: &Ui, id: Id) -> (Vec2, f32, Vec<(craft_behavior::ColumnKey, f32)>) {
+    fn largest_row(&mut self, comp: &C, (ui, env): (&Ui, &Env), id: Id) -> (Vec2, f32, Vec<(craft_behavior::ColumnKey, f32)>) {
         let ctx = ui.ctx().clone();
-        crate::contract::steps::measuring(&ctx, || self.largest_row_in(comp, ui, id))
+        crate::contract::steps::measuring(&ctx, || self.largest_row_in(comp, (ui, env), id))
     }
 
     /// Builds the rows once to measure the largest and records it under `sub(id, "largest")` for `extent`, when this
@@ -58,7 +58,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     pub(super) fn record_largest(&mut self, comp: &C, at: &Measuring<'_, '_>, id: Id) {
         let room = match at.at {
             ShowAt::Rect(rect) => rect.size(),
-            ShowAt::Flow => crate::layout::flow_room(at.ui),
+            ShowAt::Flow => crate::layout::flow_room(at.ui, at.place),
         };
         let room = Self::inner_room(comp, &at.env.tokens, room);
         if self.source.is_empty() || (room.x.is_finite() && !self.content_sized(comp) && !comp.measures_items() && !self.header.has_content_columns())
@@ -66,14 +66,15 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             return;
         }
         self.header.measure(at.scx);
-        self.largest_in(comp, at.ui, id, room);
+        self.largest_in(comp, (at.ui, at.place), id, room);
     }
 
     /// The largest row in the room `room`: what a record of this pass under `sub(id, "largest")` found when it serves
     /// the room (`Measured::serves`), else what the measure kept from an earlier pass gives while the items' inputs
     /// hold, else the rows built and measured now, recorded there and kept. The widest cell of each `Content` column,
     /// or its header label when wider, is recorded with it (`header::content_id`). The caller measures the header first.
-    pub(super) fn largest_in(&mut self, comp: &C, ui: &Ui, id: Id, room: Vec2) -> Vec2 {
+    /// `env` is the env `ui`'s children are placed under.
+    pub(super) fn largest_in(&mut self, comp: &C, (ui, env): (&Ui, &Env), id: Id, room: Vec2) -> Vec2 {
         let ctx = ui.ctx().clone();
         let key = sub(id, "largest");
         let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(&ctx));
@@ -85,7 +86,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             return found.took;
         }
         // A kept measure serves only the outermost measuring run, which this opens when none is open.
-        let inputs = self.items_inputs(comp, ui, room);
+        let inputs = self.items_inputs(comp, env, room);
         if let Some(inputs) = &inputs
             && crate::runtime::measure::measuring(&ctx, || layout_memory::kept_serves(&ctx, key, inputs))
             && let Some(found) = found(&ctx)
@@ -98,10 +99,9 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             if inputs.is_some() {
                 layout_memory::begin_measure(&ctx, key);
             }
-            let (largest, run, cells) = self.largest_row(comp, ui, id);
+            let (largest, run, cells) = self.largest_row(comp, (ui, env), id);
             layout_memory::emit_record(&ctx, key, layout_memory::Measured::new(room, largest));
             layout_memory::emit_record(&ctx, run_id(id), layout_memory::Measured::new(room, Vec2::new(run, 0.0)));
-            let env = Env::of(ui);
             let content: Vec<(usize, craft_behavior::ColumnKey)> = self.header.content_columns().map(|(at, key)| (at, key.clone())).collect();
             for (at, column) in content {
                 let widest = cells.iter().find(|(held, _)| *held == column).map_or(0.0, |(_, width)| *width);
@@ -118,14 +118,14 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     /// What the items' measure reads besides the rows' content: the room, the item count, the env and what `dress`
     /// reads of the collection. `None` when the source declares no content version (rows stamp or revision): the rows
     /// may change unseen, so every pass measures them.
-    fn items_inputs(&self, comp: &C, ui: &Ui, room: Vec2) -> Option<ItemsInputs> {
+    fn items_inputs(&self, comp: &C, env: &Env, room: Vec2) -> Option<ItemsInputs> {
         let content = (comp.items().rows_stamp, self.source.revision());
         (content.0.is_some() || content.1.is_some()).then(|| ItemsInputs {
             room,
             count: self.source.len(),
             content,
             dress: comp.dress_inputs(),
-            env: EnvFacts::of(&Env::of(ui)),
+            env: EnvFacts::of(env),
         })
     }
 
@@ -138,9 +138,8 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             .map_or(0.0, |found| found.took.x)
     }
 
-    fn largest_row_in(&mut self, comp: &C, ui: &Ui, id: Id) -> (Vec2, f32, Vec<(craft_behavior::ColumnKey, f32)>) {
+    fn largest_row_in(&mut self, comp: &C, (ui, env): (&Ui, &Env), id: Id) -> (Vec2, f32, Vec<(craft_behavior::ColumnKey, f32)>) {
         let ctx = ui.ctx().clone();
-        let env = Env::of(ui);
         let mut memory = MemoryStage::open_peek(&ctx, id);
         let cells: Vec<(craft_behavior::ColumnKey, Rect)> =
             self.header.columns(0.0).into_iter().map(|(key, width)| (key, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 0.0)))).collect();
@@ -152,7 +151,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                 continue;
             }
             let row = RowMeasure::new(at, Rect::ZERO, cells.clone());
-            let (size, cells) = self.measure_row(comp, ui, (id, env.view(), &env), &mut memory, row, |measure, _, _| measure(Proposal::Ideal));
+            let (size, cells) = self.measure_row(comp, ui, (id, env.view(), env), &mut memory, row, |measure, _, _| measure(Proposal::Ideal));
             largest = largest.max(size);
             run += size.x;
             for (column, width) in cells {

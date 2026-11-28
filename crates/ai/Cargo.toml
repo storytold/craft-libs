@@ -19,10 +19,10 @@ dirs = "7"
 sysinfo = "0.39"
 ureq = { version = "3", features = ["json"] }
 sha2 = "0.11"
-candle-core = { version = "0.9", optional = true }
-candle-nn = { version = "0.9", optional = true }
-candle-transformers = { version = "0.9", optional = true }
-tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }
+candle-core = { version = "0.11.1", optional = true }
+candle-nn = { version = "0.11.1", optional = true }
+candle-transformers = { version = "0.11.1", optional = true }
+tokenizers = { version = "0.23", optional = true, default-features = false, features = ["onig"] }
 
 [features]
 # Local GGUF inference on candle. Heavy dependency tree; apps opt in.

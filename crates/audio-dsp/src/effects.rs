@@ -1,6 +1,7 @@
 //! Audio effects and their registry.
 
 pub(crate) mod channel;
+pub(crate) mod character;
 pub(crate) mod declick;
 pub(crate) mod dither;
 pub(crate) mod dynamics;
@@ -15,10 +16,13 @@ pub(crate) mod restoration;
 pub(crate) mod reverbs;
 pub(crate) mod special;
 mod stft;
+pub(crate) mod suppress;
 pub(crate) mod time;
 pub(crate) mod util;
+pub(crate) mod voice;
 
 pub(crate) use channel::{Amplify, Balance, ChannelVolume, Invert, Route, Routing};
+pub use character::{Bitcrusher, RingMod};
 pub(crate) use declick::ClickRemover;
 pub use dither::Dither;
 pub use dynamics::{Compressor, Gate, Limiter, Maximizer};
@@ -34,7 +38,9 @@ pub(crate) use restoration::{DeHum, DeNoise};
 pub(crate) use reverbs::{ConvolutionReverb, SurroundReverb};
 pub use special::LoudnessMeterFx;
 pub(crate) use special::{AmbisonicsPanner, Binauralizer, ChannelMixer, Distortion, GuitarSuite, Mastering, Mute, StereoExpander, VocalEnhancer};
+pub use suppress::NoiseSuppression;
 pub(crate) use time::{Delay, Reverb};
+pub use voice::{VoiceFormant, VoicePitch};
 
 use crate::{AudioEffect, ParamSpec, sane_channels, sane_sample_rate};
 
@@ -123,7 +129,10 @@ static REGISTRY: &[EffectInfo] = &[
     },
     entry!("dehum", "DeHum", Restoration, DeHum),
     entry!("denoise", "DeNoise", Restoration, DeNoise),
+    entry!("noise_suppression", "Noise Suppression", Restoration, NoiseSuppression),
     entry!("pitch_shifter", "Pitch Shifter", Pitch, PitchShifter),
+    entry!("voice_pitch", "Voice Pitch", Pitch, VoicePitch),
+    entry!("voice_formant", "Voice Formant", Pitch, VoiceFormant),
     entry!("deesser", "DeEsser", Restoration, DeEsser),
     entry!("dereverb", "DeReverb", Restoration, DeReverb),
     entry!("speech_enhance", "Enhance Speech", Filter, SpeechEnhance),
@@ -141,6 +150,7 @@ static REGISTRY: &[EffectInfo] = &[
     entry!("chorus_flanger", "Chorus/Flanger", Modulation, ChorusFlanger),
     entry!("flanger", "Flanger", Modulation, Flanger),
     entry!("phaser", "Phaser", Modulation, Phaser),
+    entry!("ring_mod", "Ring Modulator", Modulation, RingMod),
     entry!("analog_delay", "Analog Delay", Time, AnalogDelay),
     entry!("multitap_delay", "Multitap Delay", Time, MultitapDelay),
     entry!("convolution_reverb", "Convolution Reverb", Reverb, ConvolutionReverb),
@@ -148,6 +158,7 @@ static REGISTRY: &[EffectInfo] = &[
     entry!("click_remover", "Automatic Click Remover", Restoration, ClickRemover),
     entry!("channel_mixer", "Channel Mixer", Channel, ChannelMixer),
     entry!("distortion", "Distortion", Special, Distortion),
+    entry!("bitcrusher", "Bitcrusher", Special, Bitcrusher),
     entry!("guitar_suite", "GuitarSuite", Special, GuitarSuite),
     entry!("mastering", "Mastering", Special, Mastering),
     entry!("vocal_enhancer", "Vocal Enhancer", Special, VocalEnhancer),

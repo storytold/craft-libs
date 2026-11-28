@@ -29,7 +29,10 @@ for p in enc.flush() { /* ... */ }
 - Input: planar 4:2:0 8-bit (`YuvFrame` with strides); any even size, non-multiple-of-16 sizes are
   cropped via the SPS frame cropping. `encode` returns an error (`Error::BadFrame`) instead of panicking on short or
   inconsistent planes, including strides whose size arithmetic would overflow.
-- High 10: `cfg.profile = Profile::High10; cfg.bit_depth = 10;` (8 to 10) and `enc.encode16(&YuvFrame16 { … })`
+- Semi-planar input: `enc.encode_nv12(&Nv12Frame { y, uv, y_stride, uv_stride }, pts)` takes NV12 (one plane of
+  interleaved Cb/Cr pairs) and `enc.encode_p010(&P010Frame { … }, pts)` takes P010 (the same arrangement with the value
+  in the high bits of each `u16`, for a High 10 encoder). Each codes the same stream as the planar picture.
+- High 10: `cfg.profile = Profile::High10; cfg.bit_depth = 10;` (8 to 10) and `enc.encode16(&YuvFrame16 { … }, pts)`
   with samples in the low bits of each `u16` (values above the bit depth are clipped); 8-bit `YuvFrame`s are
   also taken and scaled up exactly. `cfg.intra_only = true` codes every picture as an IDR without reference
   frames (High 10 Intra with constraint_set3 for High 10).

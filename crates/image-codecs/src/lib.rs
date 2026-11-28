@@ -19,6 +19,8 @@ pub mod apng;
 pub mod bmp_probe;
 pub mod cicp;
 mod codecs;
+#[cfg(feature = "cms")]
+mod display;
 mod error;
 pub mod exif_color;
 pub mod exr_stream;
@@ -50,7 +52,7 @@ pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
 pub use crate::codecs::jpeg::validate_jpeg_rgba8;
 pub use crate::codecs::png::{
     PngDecodeRows, PngExtras, PngHeader, PngPalette, PngRowSink, PngRows, SharedBytes, encode_indexed as encode_png_indexed,
-    encode_pq as encode_png_pq, palette as png_palette, stereo as png_stereo,
+    encode_pq as encode_png_pq, encode_rgba8 as encode_png_rgba8, palette as png_palette, stereo as png_stereo,
 };
 pub use crate::codecs::tiff::{
     PhotoshopTags as TiffPhotoshopTags, TiffBands, encode_plain_rgba16 as encode_tiff_plain_rgba16, photoshop_tags as tiff_photoshop_tags,
@@ -93,6 +95,22 @@ pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
 pub fn decode_with(bytes: &[u8], opts: &DecodeOptions) -> Result<Image, CodecError> {
     let format = detect(bytes).ok_or(CodecError::UnknownFormat)?;
     decode_as_with(format, bytes, opts)
+}
+
+/// Read `reader` to its end, at most `max_bytes`, for [`decode_with`]. [`Limits`] bound the
+/// decoded image; this bounds the encoded input, for example an opened file.
+///
+/// The read stops one byte past `max_bytes`, so a file that grows after its size was checked, or
+/// a stream with no end, is not read further. Longer input fails with
+/// [`std::io::ErrorKind::FileTooLarge`].
+pub fn read_bounded(reader: impl std::io::Read, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    reader.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(std::io::Error::new(std::io::ErrorKind::FileTooLarge, format!("the image input is longer than {max_bytes} bytes")));
+    }
+    Ok(bytes)
 }
 
 /// Decode as a specific format with default [`Limits`].

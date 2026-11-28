@@ -12,12 +12,26 @@
 //! in a buffer view or a `data:` URI, or named), skins, animations of translation, rotation
 //! and scale, cameras and `KHR_lights_punctual` lights. A glTF mesh becomes one [`Mesh`] whose
 //! pools hold its primitives' vertices one after another (once for primitives that name the
-//! same accessors), and each primitive a [`Part`].
+//! same accessors and morph targets), and each primitive a [`Part`].
+//!
+//! Morph targets: each target's POSITION, NORMAL and TANGENT offsets (dense or sparse
+//! accessors, any component type) become one [`MorphTarget`] of the mesh, with the mesh's
+//! default `weights`, names from `extras.targetNames`, and a node's own `weights` in
+//! [`Node::morph_weights`]. A mesh with more targets than [`Limits::max_morph_targets`] is read
+//! in its base shape, and its targets are named in a warning. The offsets count against
+//! [`Limits::max_data_bytes`] at 8 bytes per value, the zero offsets of vertices a target does
+//! not move included, and so does each [`MorphTarget`] itself. The buffers count against the
+//! same limit, and the offsets, images, skins and animations get what the buffers leave of it.
+//!
+//! The `extensions` and `extras` of the file, its nodes, meshes and materials are kept as
+//! written ([`Scene::extensions`], [`Node::extensions`], …), for a caller that reads an
+//! extension this module does not. They are kept whole: an extension that is also read into
+//! the model's own fields (lights, the material extensions) stays in them as written.
 //!
 //! Not read: required extensions that change how geometry is stored (Draco, meshopt) are
-//! [`Error::Unsupported`]; points, lines, morph targets, scenes other than the default and
-//! other extensions are passed over (skipped primitives, primitives with morph targets and the
-//! other scenes are named in warnings).
+//! [`Error::Unsupported`]; points, lines, scenes other than the default and animations of
+//! morph target weights are passed over (skipped primitives and the other scenes are named in
+//! warnings).
 //!
 //! Buffers are needed to read anything, so an external buffer is asked of the resolver (by its
 //! percent-decoded URI) and is [`Error::Missing`] when declined. External images are only named
@@ -27,16 +41,31 @@
 //! A triangle that names a vertex that is not there, or one whose position is not finite, is
 //! left out and counted in a warning.
 //!
-//! Written ([`write_glb`]): nodes, meshes (positions, normals, every UV set, colours),
-//! materials and images. Skins, animations, cameras and lights are not written.
+//! Written ([`write_glb`]): nodes, meshes (positions, normals, every UV set, colours, joints
+//! and weights), skins, morph targets (POSITION and NORMAL offsets, the mesh's and each node's
+//! weights, names in `extras.targetNames`), materials and images. A target that moves fewer
+//! than three quarters of the vertices is written as a sparse accessor. The kept `extensions`
+//! and `extras` of the file, nodes, meshes and materials are written as kept, except the
+//! extensions the reader reads into the model's own fields: those are written from the fields
+//! (the material extensions) or not at all (lights). `extensionsUsed` lists every extension the
+//! written file names. The reader does not keep `extensionsRequired`; the writer requires only
+//! `EXT_texture_webp`, which it uses for every texture of a WebP image (core glTF has no WebP). The file's textures ([`Scene::texture_variants`]) are written first and
+//! in their order, so indices into nodes, materials and skins in kept extension data still name
+//! the same things. Indices into textures, meshes and images do too, unless the reader left out
+//! a texture without an image (named in a warning) or the writer leaves out a mesh without
+//! triangles or an image without bytes or a URI: the later ones then move up. Indices into
+//! accessors, buffer views and buffers are not rewritten. Animations, cameras, lights and
+//! tangents (and so the tangent offsets of morph targets) are not written.
 
 use std::cell::Cell;
+use std::collections::BTreeSet;
 
 use serde_json::{Map, Value, json};
 
 use crate::{
     AlphaMode, Animation, Camera, Channel, ChannelPath, Corner, Error, IDENTITY, Image, Interpolation, Light, LightKind, Limits, Material, Mesh,
-    NONE, Node, Part, Projection, Resolver, Result, Scene, Skin, TextureRef, Trs, UvTransform, Wrap, count_warning, malformed, too_large,
+    MorphTarget, NONE, Node, Part, Projection, Resolver, Result, Scene, Skin, TextureRef, Trs, Unified, UvTransform, Wrap, count_warning, malformed,
+    too_large,
 };
 
 const KIND: &str = "glTF";
@@ -258,6 +287,11 @@ impl Doc<'_> {
     /// The accessor's values, `n` per element, at most `max` elements: every length is checked
     /// against the bytes that are there before anything is allocated from a count.
     fn rows(&self, a: usize, max: usize, what: &str) -> Result<(Vec<f64>, usize)> {
+        self.rows_with(a, max, what, &self.zero_left)
+    }
+
+    /// [`Doc::rows`], taking the zeros of an accessor without a buffer view from `zeros`.
+    fn rows_with(&self, a: usize, max: usize, what: &str, zeros: &Cell<usize>) -> Result<(Vec<f64>, usize)> {
         let acc = self.accessor(a)?;
         let n = match acc.get("type").and_then(Value::as_str).unwrap_or("") {
             "SCALAR" => 1,
@@ -287,7 +321,7 @@ impl Doc<'_> {
         let mut out = match idx(acc, "bufferView") {
             // No buffer view: all zeros.
             None => {
-                charge(&self.zero_left, total, "values without a buffer")?;
+                charge(zeros, total, "values without a buffer")?;
                 vec![0.0; total]
             }
             Some(bv) => self.dense(acc, bv, (ct, csize, norm), n, count)?,
@@ -364,7 +398,12 @@ impl Doc<'_> {
 struct Skipped {
     triangles: usize,
     primitives: usize,
+    /// Primitives of meshes with more morph targets than the limit allows.
     morphs: usize,
+    /// Primitives whose number of morph targets differs from their mesh's.
+    uneven: usize,
+    /// Morph target attributes that do not fit their primitive's vertices.
+    unfit: usize,
 }
 
 fn rows_of<const N: usize>(v: &[f64]) -> impl Iterator<Item = [f64; N]> + '_ {
@@ -446,12 +485,95 @@ fn attributes(d: &Doc, attrs: &Value, pos: &[f64], mesh: &mut Mesh) -> Result<[u
     Ok([base, normal_base, uv_base, tangent_base])
 }
 
+/// Append the offsets of the primitive's morph targets (`list`) to the mesh's targets, from
+/// where the primitive's vertices start in each pool. An attribute that does not have one
+/// `VEC3` per vertex, or that moves a pool the primitive does not fill, is left out.
+fn morph_targets(
+    d: &Doc,
+    list: &[Value],
+    mesh: &mut Mesh,
+    [base, normal_base, _, tangent_base]: [u32; 4],
+    nv: usize,
+    skipped: &mut Skipped,
+) -> Result<()> {
+    // Every value is counted against the data limit before it is read, so the zeros of an
+    // accessor without a buffer view are not counted again.
+    let unbounded = Cell::new(usize::MAX);
+    for (target, t) in mesh.morph_targets.iter_mut().zip(list) {
+        for (start, key, offsets) in
+            [(base, "POSITION", &mut target.positions), (normal_base, "NORMAL", &mut target.normals), (tangent_base, "TANGENT", &mut target.tangents)]
+        {
+            let Some(a) = idx(t, key) else { continue };
+            // An offset of a pool the primitive does not fill is left out before its accessor
+            // is looked up.
+            if start == NONE {
+                skipped.unfit += 1;
+                continue;
+            }
+            let vec3 = d.accessor(a)?.get("type").and_then(Value::as_str) == Some("VEC3");
+            if !vec3 || d.count(a) != Some(nv) {
+                skipped.unfit += 1;
+                continue;
+            }
+            charge(&d.data_left, nv.saturating_mul(size_of::<[f64; 3]>()), "morph target bytes")?;
+            let (v, _) = d.rows_with(a, nv, "morph target offsets", &unbounded)?;
+            // Vertices of earlier primitives that this target does not move get no offset.
+            pad(&d.data_left, offsets, start as usize)?;
+            offsets.extend(rows_of::<3>(&v));
+        }
+    }
+    Ok(())
+}
+
+/// Give `offsets` `len` entries, the new ones zero, counting their bytes against the data
+/// limit.
+fn pad(data_left: &Cell<usize>, offsets: &mut Vec<[f64; 3]>, len: usize) -> Result<()> {
+    let added = len.saturating_sub(offsets.len());
+    charge(data_left, added.saturating_mul(size_of::<[f64; 3]>()), "morph target bytes")?;
+    offsets.resize(len.max(offsets.len()), [0.0; 3]);
+    Ok(())
+}
+
+/// Name the mesh's morph targets (`extras.targetNames`), set their default weights, and give
+/// every list of offsets the length of the pool it moves.
+fn finish_morph_targets(d: &Doc, m: &Value, mesh: &mut Mesh) -> Result<()> {
+    if mesh.morph_targets.is_empty() {
+        return Ok(());
+    }
+    let names = m.get("extras").map_or(&[][..], |e| arr(e, "targetNames"));
+    let pools = [mesh.positions.len(), mesh.normals.len(), mesh.tangents.len()];
+    for (k, t) in mesh.morph_targets.iter_mut().enumerate() {
+        t.name = names.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        for (offsets, len) in [&mut t.positions, &mut t.normals, &mut t.tangents].into_iter().zip(pools) {
+            if !offsets.is_empty() {
+                pad(&d.data_left, offsets, len)?;
+            }
+        }
+    }
+    let weights = arr(m, "weights");
+    mesh.morph_weights = (0..mesh.morph_targets.len()).map(|k| weights.get(k).map_or(0.0, finite_f32)).collect();
+    Ok(())
+}
+
+/// A JSON number as `f32`; 0 when it is not a finite number.
+fn finite_f32(v: &Value) -> f32 {
+    v.as_f64().map(|x| x as f32).filter(|x| x.is_finite()).unwrap_or(0.0)
+}
+
+/// The object's `extensions` and `extras`, as written. Each is a part of the JSON chunk that is
+/// kept once, so together they are never larger than it.
+fn extension_data(v: &Value) -> (Map<String, Value>, Option<Value>) {
+    (v.get("extensions").and_then(Value::as_object).cloned().unwrap_or_default(), v.get("extras").cloned())
+}
+
 /// Where the vertices of one set of attribute accessors start in the mesh's pools (positions,
 /// normals, UVs), and how many there are. Primitives of a mesh that name the same accessors
 /// (one vertex buffer, several materials) share the vertices.
 type Shared = std::collections::HashMap<String, ([u32; 4], usize)>;
 
-fn primitive(d: &Doc, p: &Value, mesh: &mut Mesh, shared: &mut Shared, materials: usize, skipped: &mut Skipped) -> Result<()> {
+/// `targets` is the number of morph targets read for the mesh: 0 when it has none, or more
+/// than the limit allows.
+fn primitive(d: &Doc, p: &Value, mesh: &mut Mesh, shared: &mut Shared, materials: usize, targets: usize, skipped: &mut Skipped) -> Result<()> {
     let mode = idx(p, "mode").unwrap_or(4);
     let position = p.get("attributes").and_then(|a| idx(a, "POSITION"));
     let (Some(attrs), Some(pa), 4..=6) = (p.get("attributes"), position, mode) else {
@@ -459,8 +581,15 @@ fn primitive(d: &Doc, p: &Value, mesh: &mut Mesh, shared: &mut Shared, materials
         return Ok(());
     };
     charge(&d.parts_left, 1, "primitives")?;
-    skipped.morphs += usize::from(!arr(p, "targets").is_empty());
-    let key = attrs.to_string();
+    let own = arr(p, "targets");
+    if targets == 0 {
+        skipped.morphs += usize::from(!own.is_empty());
+    } else {
+        skipped.uneven += usize::from(own.len() != targets);
+    }
+    // Primitives that name the same attributes but other morph targets move differently, so
+    // they do not share vertices.
+    let key = if targets == 0 { attrs.to_string() } else { json!([attrs, p.get("targets")]).to_string() };
     let ([base, normal_base, uv_base, tangent_base], nv) = match shared.get(&key) {
         Some(known) => *known,
         None => {
@@ -469,7 +598,11 @@ fn primitive(d: &Doc, p: &Value, mesh: &mut Mesh, shared: &mut Shared, materials
                 return Err(malformed(KIND, "POSITION is not VEC3"));
             }
             charge(&d.vertices_left, pos.len() / 3, "vertices")?;
-            let placed = (attributes(d, attrs, &pos, mesh)?, pos.len() / 3);
+            let bases = attributes(d, attrs, &pos, mesh)?;
+            if targets > 0 {
+                morph_targets(d, own, mesh, bases, pos.len() / 3, skipped)?;
+            }
+            let placed = (bases, pos.len() / 3);
             shared.insert(key, placed);
             placed
         }
@@ -554,6 +687,7 @@ fn images(d: &Doc, limits: &Limits, scene: &mut Scene) -> Result<()> {
                 // An image that cannot be decoded is left without data, not an error.
                 Some(data) => {
                     if let Ok((mime, bytes)) = data {
+                        charge(&d.data_left, bytes.len(), "image bytes")?;
                         image.mime_type = image.mime_type.or(Some(mime).filter(|m| !m.is_empty()));
                         image.data = Some(bytes);
                     }
@@ -597,6 +731,13 @@ fn materials(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
             Some(TextureRef { image, wrap: [wrap(sampler, "wrapS"), wrap(sampler, "wrapT")], ..TextureRef::default() })
         })
         .collect();
+    // The textures after one that is left out move up, so `extensions` data that names them by
+    // index no longer matches `texture_variants`.
+    count_warning(
+        &mut scene.warnings,
+        texture_list.len() - scene.texture_variants.len(),
+        "texture(s) have no image that is read and were left out; the textures after them are numbered from one less",
+    );
     let tref = |v: Option<&Value>| -> Option<TextureRef> {
         let v = v?;
         let texture = arr(j, "textures").get(idx(v, "index")?)?;
@@ -621,6 +762,7 @@ fn materials(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
         let strength = ext.and_then(|e| e.get("KHR_materials_emissive_strength")).map_or(1.0, |e| num(e, "emissiveStrength", 1.0));
         let clearcoat = ext.and_then(|e| e.get("KHR_materials_clearcoat"));
         let sheen = ext.and_then(|e| e.get("KHR_materials_sheen"));
+        let (extensions, extras) = extension_data(m);
         scene.materials.push(Material {
             name: name(m),
             base_color: nums(pbr, "baseColorFactor", [1.0; 4]).map(|v| v as f32),
@@ -649,6 +791,8 @@ fn materials(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
             sheen_roughness: sheen.map_or(0.0, |s| num(s, "sheenRoughnessFactor", 0.0)) as f32,
             sheen_color_texture: sheen.and_then(|s| tref(s.get("sheenColorTexture"))),
             sheen_roughness_texture: sheen.and_then(|s| tref(s.get("sheenRoughnessTexture"))),
+            extensions,
+            extras,
         });
         // The older specular-glossiness model, as the nearest metallic-roughness material: its
         // diffuse colour and texture, no metal, and roughness from the glossiness.
@@ -669,6 +813,8 @@ fn nodes(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
         return Err(too_large(KIND, format!("more than {} nodes", limits.max_nodes)));
     }
     let skins = arr(j, "skins").len().min(limits.max_extras);
+    let targets: Vec<usize> = scene.meshes.iter().map(|m| m.morph_targets.len()).collect();
+    let targets_of = |mesh: Option<usize>| mesh.and_then(|m| targets.get(m)).copied().unwrap_or(0);
     for n in list {
         let matrix = n.get("matrix").and_then(Value::as_array).filter(|a| a.len() == 16).map(|_| nums(n, "matrix", IDENTITY));
         let trs = Trs {
@@ -676,6 +822,7 @@ fn nodes(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
             rotation: nums(n, "rotation", [0.0, 0.0, 0.0, 1.0]),
             scale: nums(n, "scale", [1.0; 3]),
         };
+        let (extensions, extras) = extension_data(n);
         scene.nodes.push(Node {
             name: name(n),
             transform: matrix.unwrap_or_else(|| trs.matrix()),
@@ -685,6 +832,10 @@ fn nodes(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
             camera: idx(n, "camera").filter(|c| *c < scene.cameras.len()),
             light: n.get("extensions").and_then(|e| e.get("KHR_lights_punctual")).and_then(|e| idx(e, "light")).filter(|l| *l < scene.lights.len()),
             children: indices(n, "children", list.len()),
+            // Only as many as the node's mesh has targets read: none when it has none.
+            morph_weights: arr(n, "weights").iter().take(targets_of(idx(n, "mesh"))).map(finite_f32).collect(),
+            extensions,
+            extras,
         });
     }
     let scenes = arr(j, "scenes");
@@ -861,16 +1012,20 @@ pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
     if version.split('.').next() != Some("2") {
         return Err(Error::Unsupported(format!("glTF: version `{}` (2.x is read)", version.chars().take(16).collect::<String>())));
     }
-    let mut scene = Scene::default();
+    let (extensions, extras) = extension_data(&j);
+    let mut scene = Scene { extensions, extras, ..Scene::default() };
     check_extensions(&j, &mut scene)?;
+    let buffers = buffers(&j, bin, limits, &mut scene, resolve)?;
+    // What is read out of the buffers shares one limit with the buffers themselves.
+    let data_left = limits.max_data_bytes.saturating_sub(buffers.iter().map(Vec::len).sum());
     let d = Doc {
         j: &j,
-        buffers: buffers(&j, bin, limits, &mut scene, resolve)?,
+        buffers,
         vertices_left: Cell::new(limits.max_vertices),
         triangles_left: Cell::new(limits.max_triangles),
         parts_left: Cell::new(limits.max_parts),
         zero_left: Cell::new(MAX_ZERO_COMPONENTS),
-        data_left: Cell::new(limits.max_data_bytes),
+        data_left: Cell::new(data_left),
     };
     images(&d, limits, &mut scene)?;
     materials(&j, limits, &mut scene)?;
@@ -879,11 +1034,22 @@ pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
     }
     let mut skipped = Skipped::default();
     for m in arr(&j, "meshes") {
-        let mut mesh = Mesh { name: name(m), ..Mesh::default() };
+        // glTF gives every primitive of a mesh the same number of morph targets; a primitive
+        // with fewer is not moved by the targets it lacks.
+        // Primitives that are left out (points, lines) do not count.
+        let read_primitive =
+            |p: &&Value| matches!(idx(p, "mode").unwrap_or(4), 4..=6) && p.get("attributes").and_then(|a| idx(a, "POSITION")).is_some();
+        let targets = arr(m, "primitives").iter().filter(read_primitive).map(|p| arr(p, "targets").len()).max().unwrap_or(0);
+        let targets = if targets > limits.max_morph_targets { 0 } else { targets };
+        // Targets without offsets still take memory, and across many meshes it adds up.
+        charge(&d.data_left, targets.saturating_mul(size_of::<MorphTarget>()), "morph target bytes")?;
+        let (extensions, extras) = extension_data(m);
+        let mut mesh = Mesh { name: name(m), morph_targets: vec![MorphTarget::default(); targets], extensions, extras, ..Mesh::default() };
         let mut shared = Shared::new();
         for p in arr(m, "primitives") {
-            primitive(&d, p, &mut mesh, &mut shared, scene.materials.len(), &mut skipped)?;
+            primitive(&d, p, &mut mesh, &mut shared, scene.materials.len(), targets, &mut skipped)?;
         }
+        finish_morph_targets(&d, m, &mut mesh)?;
         scene.meshes.push(mesh);
     }
     cameras_and_lights(&j, limits, &mut scene)?;
@@ -892,22 +1058,44 @@ pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
     animations(&d, limits, &mut scene)?;
     count_warning(&mut scene.warnings, skipped.primitives, "primitive(s) are points, lines or have no positions and were left out");
     count_warning(&mut scene.warnings, skipped.triangles, "triangle(s) could not be read and were left out");
-    count_warning(&mut scene.warnings, skipped.morphs, "primitive(s) have morph targets, which were left out (drawn in the base shape)");
+    count_warning(
+        &mut scene.warnings,
+        skipped.morphs,
+        "primitive(s) have more morph targets than the limit allows, which were left out (drawn in the base shape)",
+    );
+    count_warning(&mut scene.warnings, skipped.uneven, "primitive(s) have fewer morph targets than their mesh; the others do not move them");
+    count_warning(&mut scene.warnings, skipped.unfit, "morph target attribute(s) do not fit their primitive's vertices and were left out");
     // A hierarchy with a cycle, or one too deep to walk, is refused here rather than by every caller.
     scene.instances(limits)?;
     Ok(scene)
 }
 
 /// The binary chunk and the buffer views and accessors over it, as they are written.
-#[derive(Default)]
-struct Writer {
-    bin: Vec<u8>,
+pub(crate) struct Writer {
+    pub(crate) bin: Vec<u8>,
     views: Vec<Value>,
-    accessors: Vec<Value>,
+    pub(crate) accessors: Vec<Value>,
+    /// Most bytes the binary chunk may hold ([`Limits::max_data_bytes`]).
+    max_bytes: usize,
+    /// Most morph targets of one mesh ([`Limits::max_morph_targets`]).
+    max_targets: usize,
 }
 
 impl Writer {
-    fn view(&mut self, bytes: &[u8], target: Option<u32>) -> usize {
+    pub(crate) fn new(limits: &Limits) -> Writer {
+        Writer { bin: Vec::new(), views: Vec::new(), accessors: Vec::new(), max_bytes: limits.max_data_bytes, max_targets: limits.max_morph_targets }
+    }
+
+    /// [`Error::TooLarge`] when `bytes` more would take the binary chunk past its limit.
+    fn room(&self, bytes: usize) -> Result<()> {
+        match self.bin.len().next_multiple_of(4).checked_add(bytes) {
+            Some(total) if total <= self.max_bytes => Ok(()),
+            _ => Err(too_large("GLB", format!("more than {} bytes of data", self.max_bytes))),
+        }
+    }
+
+    fn view(&mut self, bytes: &[u8], target: Option<u32>) -> Result<usize> {
+        self.room(bytes.len())?;
         self.bin.resize(self.bin.len().next_multiple_of(4), 0);
         let mut view = json!({ "buffer": 0, "byteOffset": self.bin.len(), "byteLength": bytes.len() });
         if let (Some(t), Some(v)) = (target, view.as_object_mut()) {
@@ -915,15 +1103,23 @@ impl Writer {
         }
         self.bin.extend_from_slice(bytes);
         self.views.push(view);
-        self.views.len() - 1
+        Ok(self.views.len() - 1)
     }
 
-    /// A float accessor of `N` components per row; with the bounds glTF wants for positions.
-    fn floats<const N: usize>(&mut self, rows: impl Iterator<Item = [f32; N]>, kind: &str, bounds: bool) -> usize {
+    /// A float accessor of `N` components per row of vertex data; with the bounds glTF wants
+    /// for positions.
+    fn floats<const N: usize>(&mut self, rows: impl Iterator<Item = [f32; N]>, kind: &str, bounds: bool) -> Result<usize> {
+        self.floats_in(rows, kind, bounds, Some(34962))
+    }
+
+    /// [`Writer::floats`] in a buffer view with the given `target` (`None` for data that is not
+    /// per vertex).
+    fn floats_in<const N: usize>(&mut self, rows: impl Iterator<Item = [f32; N]>, kind: &str, bounds: bool, target: Option<u32>) -> Result<usize> {
         let mut bytes = Vec::new();
         let (mut lo, mut hi, mut count) = ([f32::INFINITY; N], [f32::NEG_INFINITY; N], 0usize);
         for row in rows {
             count += 1;
+            self.room(bytes.len() + 4 * N)?;
             for (k, x) in row.iter().enumerate() {
                 bytes.extend_from_slice(&x.to_le_bytes());
                 if let (Some(l), Some(h)) = (lo.get_mut(k), hi.get_mut(k)) {
@@ -932,86 +1128,344 @@ impl Writer {
                 }
             }
         }
-        let view = self.view(&bytes, Some(34962));
+        let view = self.view(&bytes, target)?;
         let mut acc = json!({ "bufferView": view, "componentType": 5126, "count": count, "type": kind });
         if let (true, Some(a)) = (bounds && count > 0, acc.as_object_mut()) {
             a.insert("min".into(), json!(lo.to_vec()));
             a.insert("max".into(), json!(hi.to_vec()));
         }
         self.accessors.push(acc);
-        self.accessors.len() - 1
+        Ok(self.accessors.len() - 1)
     }
 
-    fn indices(&mut self, triangles: &[[u32; 3]]) -> usize {
+    fn indices(&mut self, triangles: &[[u32; 3]]) -> Result<usize> {
+        self.room(triangles.len().saturating_mul(12))?;
         let bytes: Vec<u8> = triangles.iter().flatten().flat_map(|i| i.to_le_bytes()).collect();
-        let view = self.view(&bytes, Some(34963));
+        let view = self.view(&bytes, Some(34963))?;
         self.accessors.push(json!({ "bufferView": view, "componentType": 5125, "count": triangles.len() * 3, "type": "SCALAR" }));
-        self.accessors.len() - 1
+        Ok(self.accessors.len() - 1)
     }
 
-    /// The glTF mesh of `mesh`, or `None` when it has no triangle.
-    fn mesh(&mut self, mesh: &Mesh) -> Option<Value> {
-        let u = mesh.unified();
-        if u.parts.iter().all(Vec::is_empty) {
-            return None;
+    /// The glTF mesh of `mesh` and the highest joint its written vertices name, or `None` when
+    /// it has no triangle.
+    pub(crate) fn mesh(&mut self, mesh: &Mesh) -> Result<Option<(Value, Option<u16>)>> {
+        // Parts whose corners all have normals (or UVs) and parts whose corners do not are
+        // written over separate vertices, so the first keep their normals, UVs and the morph
+        // targets' normal offsets.
+        let layout = |p: &Part| {
+            let all = |f: &dyn Fn(&Corner) -> bool| p.corners.iter().all(f);
+            (!mesh.normals.is_empty() && all(&|c| c.normal != NONE), !mesh.uv_sets.is_empty() && all(&|c| c.uv != NONE))
+        };
+        let keys: Vec<Option<(bool, bool)>> = mesh.parts.iter().map(|p| (!p.corners.is_empty()).then(|| layout(p))).collect();
+        let mut layouts = Vec::new();
+        for key in keys.iter().flatten() {
+            if !layouts.contains(key) {
+                layouts.push(*key);
+            }
         }
+        let groups: Vec<Unified> = if layouts.len() <= 1 {
+            vec![mesh.unified()]
+        } else {
+            layouts.iter().map(|l| mesh.unified_parts(|k| keys.get(k).copied().flatten() == Some(*l))).collect()
+        };
+        if groups.iter().all(|u| u.parts.iter().all(Vec::is_empty)) {
+            return Ok(None);
+        }
+        let mut top = None;
+        let mut streams = Vec::with_capacity(groups.len());
+        for u in &groups {
+            if u.parts.iter().all(Vec::is_empty) {
+                streams.push(None);
+                continue;
+            }
+            let (attrs, highest) = self.vertices(mesh, u)?;
+            top = top.max(highest);
+            streams.push(Some((attrs, self.targets(mesh, u)?)));
+        }
+        let mut primitives = Vec::new();
+        for (k, part) in mesh.parts.iter().enumerate() {
+            for (u, stream) in groups.iter().zip(&streams) {
+                let (Some(triangles), Some((attrs, targets))) = (u.parts.get(k).filter(|t| !t.is_empty()), stream) else { continue };
+                let mut p =
+                    Map::from_iter([("attributes".to_string(), Value::Object(attrs.clone())), ("indices".into(), json!(self.indices(triangles)?))]);
+                if let Some(m) = part.material {
+                    p.insert("material".into(), json!(m));
+                }
+                // Every primitive of a mesh has the mesh's targets.
+                if !targets.is_empty() {
+                    p.insert("targets".into(), Value::Array(targets.clone()));
+                }
+                primitives.push(Value::Object(p));
+            }
+        }
+        let mut out = Map::from_iter([("primitives".to_string(), Value::Array(primitives))]);
+        if !mesh.name.is_empty() {
+            out.insert("name".into(), json!(mesh.name));
+        }
+        if !mesh.morph_targets.is_empty() && !mesh.morph_weights.is_empty() {
+            out.insert("weights".into(), json!(mesh.morph_weights));
+        }
+        if !mesh.extensions.is_empty() {
+            out.insert("extensions".into(), Value::Object(mesh.extensions.clone()));
+        }
+        if let Some(extras) = mesh_extras(mesh) {
+            out.insert("extras".into(), extras);
+        }
+        Ok(Some((Value::Object(out), top)))
+    }
+
+    /// The vertex attributes of `u`, the mesh's vertices for some of its parts, and the highest
+    /// joint they name.
+    fn vertices(&mut self, mesh: &Mesh, u: &Unified) -> Result<(Map<String, Value>, Option<u16>)> {
         let mut attrs = Map::new();
-        attrs.insert("POSITION".into(), json!(self.floats(u.positions.iter().map(|p| p.map(|x| x as f32)), "VEC3", true)));
+        attrs.insert("POSITION".into(), json!(self.floats(u.positions.iter().map(|p| p.map(|x| x as f32)), "VEC3", true)?));
         if !u.normals.is_empty() {
-            attrs.insert("NORMAL".into(), json!(self.floats(u.normals.iter().map(|n| n.map(|x| x as f32)), "VEC3", false)));
+            attrs.insert("NORMAL".into(), json!(self.floats(u.normals.iter().map(|n| n.map(|x| x as f32)), "VEC3", false)?));
         }
         if !u.uvs.is_empty() {
             for (k, set) in mesh.uv_sets.iter().enumerate() {
                 let rows = u.corners.iter().map(|c| set.get(c.uv as usize).copied().unwrap_or_default());
-                attrs.insert(format!("TEXCOORD_{k}"), json!(self.floats(rows, "VEC2", false)));
+                attrs.insert(format!("TEXCOORD_{k}"), json!(self.floats(rows, "VEC2", false)?));
             }
         }
         if !u.colors.is_empty() {
-            attrs.insert("COLOR_0".into(), json!(self.floats(u.colors.iter().copied(), "VEC4", false)));
+            attrs.insert("COLOR_0".into(), json!(self.floats(u.colors.iter().copied(), "VEC4", false)?));
         }
-        let mut primitives = Vec::new();
-        for (part, triangles) in mesh.parts.iter().zip(&u.parts).filter(|(_, t)| !t.is_empty()) {
-            let mut p = json!({ "attributes": attrs, "indices": self.indices(triangles) });
-            if let (Some(m), Some(o)) = (part.material, p.as_object_mut()) {
-                o.insert("material".into(), json!(m));
+        let mut top = None;
+        if !mesh.joints.is_empty() && !mesh.weights.is_empty() {
+            let joints: Vec<[u16; 4]> = u.corners.iter().map(|c| mesh.joints.get(c.position as usize).copied().unwrap_or_default()).collect();
+            top = joints.iter().flatten().max().copied();
+            attrs.insert("JOINTS_0".into(), json!(self.joints(joints.into_iter())?));
+            let weights = u.corners.iter().map(|c| mesh.weights.get(c.position as usize).copied().unwrap_or_default());
+            attrs.insert("WEIGHTS_0".into(), json!(self.floats(weights, "VEC4", false)?));
+        }
+        Ok((attrs, top))
+    }
+
+    /// `JOINTS_0`: four joint indices per vertex, as unsigned shorts.
+    fn joints(&mut self, rows: impl Iterator<Item = [u16; 4]>) -> Result<usize> {
+        let mut bytes = Vec::new();
+        let mut count = 0usize;
+        for row in rows {
+            count += 1;
+            self.room(bytes.len() + 8)?;
+            bytes.extend(row.iter().flat_map(|j| j.to_le_bytes()));
+        }
+        let view = self.view(&bytes, Some(34962))?;
+        self.accessors.push(json!({ "bufferView": view, "componentType": 5123, "count": count, "type": "VEC4" }));
+        Ok(self.accessors.len() - 1)
+    }
+
+    /// The mesh's morph targets over the vertices of `u`: a POSITION for each, and a NORMAL
+    /// where the target moves normals and the normals are written. glTF wants at least one
+    /// attribute in a target, so a target that moves nothing gets a POSITION of zeros. A mesh
+    /// with more targets than [`Limits::max_morph_targets`] is [`Error::TooLarge`].
+    fn targets(&mut self, mesh: &Mesh, u: &Unified) -> Result<Vec<Value>> {
+        if mesh.morph_targets.len() > self.max_targets {
+            return Err(too_large("GLB", format!("mesh `{}` has more than {} morph targets", mesh.name, self.max_targets)));
+        }
+        let pick = |offsets: &[[f64; 3]], i: u32| offsets.get(i as usize).map_or([0.0; 3], |o| o.map(|x| x as f32));
+        let mut out = Vec::with_capacity(mesh.morph_targets.len());
+        for t in &mesh.morph_targets {
+            let rows: Vec<[f32; 3]> = u.corners.iter().map(|c| pick(&t.positions, c.position)).collect();
+            let mut target = Map::from_iter([("POSITION".to_string(), json!(self.offsets(&rows)?))]);
+            if !t.normals.is_empty() && !u.normals.is_empty() {
+                let rows: Vec<[f32; 3]> = u.corners.iter().map(|c| pick(&t.normals, c.normal)).collect();
+                target.insert("NORMAL".into(), json!(self.offsets(&rows)?));
             }
-            primitives.push(p);
+            out.push(Value::Object(target));
         }
-        let mut out = json!({ "primitives": primitives });
-        if let (false, Some(o)) = (mesh.name.is_empty(), out.as_object_mut()) {
-            o.insert("name".into(), json!(mesh.name));
+        Ok(out)
+    }
+
+    /// The `VEC3` accessor of one attribute of a morph target, with the bounds glTF wants for a
+    /// target's POSITION. When fewer than three quarters of the rows move, only those are
+    /// written, as a sparse accessor over zeros (no buffer view), which takes fewer bytes.
+    fn offsets(&mut self, rows: &[[f32; 3]]) -> Result<usize> {
+        let moved: Vec<u32> = (0u32..).zip(rows).filter(|(_, r)| **r != [0.0; 3]).map(|(i, _)| i).collect();
+        // A sparse row is a 4-byte index and 12 bytes of values; a dense one, 12 bytes.
+        if moved.len().saturating_mul(4) >= rows.len().saturating_mul(3) {
+            return self.floats(rows.iter().copied(), "VEC3", true);
         }
-        Some(out)
+        let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+        for row in rows {
+            for ((l, h), x) in lo.iter_mut().zip(hi.iter_mut()).zip(row) {
+                *l = l.min(*x);
+                *h = h.max(*x);
+            }
+        }
+        let mut acc = Map::from_iter([
+            ("componentType".to_string(), json!(5126)),
+            ("count".into(), json!(rows.len())),
+            ("type".into(), json!("VEC3")),
+            ("min".into(), json!(lo)),
+            ("max".into(), json!(hi)),
+        ]);
+        if !moved.is_empty() {
+            // The index and value views, 16 bytes a row. The index view ends on a 4-byte
+            // boundary, so no padding goes between them.
+            self.room(moved.len().saturating_mul(16))?;
+            let indices: Vec<u8> = moved.iter().flat_map(|i| i.to_le_bytes()).collect();
+            let values: Vec<u8> = moved.iter().filter_map(|i| rows.get(*i as usize)).flatten().flat_map(|x| x.to_le_bytes()).collect();
+            let (indices, values) = (self.view(&indices, None)?, self.view(&values, None)?);
+            let sparse =
+                json!({ "count": moved.len(), "indices": { "bufferView": indices, "componentType": 5125 }, "values": { "bufferView": values } });
+            acc.insert("sparse".into(), sparse);
+        }
+        self.accessors.push(Value::Object(acc));
+        Ok(self.accessors.len() - 1)
+    }
+
+    /// A skin: its joints, and its inverse bind matrices when it has them (none means identity).
+    fn skin(&mut self, s: &Skin) -> Result<Value> {
+        let mut out = Map::from_iter([("joints".to_string(), json!(s.joints))]);
+        if !s.name.is_empty() {
+            out.insert("name".into(), json!(s.name));
+        }
+        if !s.inverse_bind.is_empty() {
+            let rows = s.inverse_bind.iter().map(|m| m.map(|x| x as f32));
+            out.insert("inverseBindMatrices".into(), json!(self.floats_in(rows, "MAT4", false, None)?));
+        }
+        Ok(Value::Object(out))
+    }
+}
+
+/// A node as written. `mesh` is its mesh's written index and the mesh, when the mesh is
+/// written; glTF gives a node a skin and weights only with a mesh.
+fn node_json(n: &Node, mesh: Option<(usize, &Mesh)>) -> Value {
+    let mut out = Map::new();
+    if !n.name.is_empty() {
+        out.insert("name".into(), json!(n.name));
+    }
+    if n.transform != IDENTITY {
+        out.insert("matrix".into(), json!(n.transform));
+    }
+    if let Some((index, m)) = mesh {
+        out.insert("mesh".into(), json!(index));
+        if let Some(skin) = n.skin {
+            out.insert("skin".into(), json!(skin));
+        }
+        // One weight per target of the mesh: the mesh's own weights stand in for any the node
+        // leaves out.
+        if !n.morph_weights.is_empty() && !m.morph_targets.is_empty() {
+            let weight = |k: usize| n.morph_weights.get(k).or_else(|| m.morph_weights.get(k)).copied().unwrap_or(0.0);
+            out.insert("weights".into(), json!((0..m.morph_targets.len()).map(weight).collect::<Vec<_>>()));
+        }
+    }
+    if !n.children.is_empty() {
+        out.insert("children".into(), json!(n.children));
+    }
+    let extensions = kept(&n.extensions, &[LIGHTS]);
+    if !extensions.is_empty() {
+        out.insert("extensions".into(), Value::Object(extensions));
+    }
+    if let Some(extras) = &n.extras {
+        out.insert("extras".into(), extras.clone());
+    }
+    Value::Object(out)
+}
+
+/// The mesh's `extras` as written: as kept, with `targetNames` set to the names of its morph
+/// targets when one has a name. `extras` that are not an object are written as they are, and
+/// the names are then not written.
+fn mesh_extras(mesh: &Mesh) -> Option<Value> {
+    let named = mesh.morph_targets.iter().any(|t| !t.name.is_empty());
+    let names = || json!(mesh.morph_targets.iter().map(|t| t.name.as_str()).collect::<Vec<_>>());
+    match mesh.extras.clone() {
+        Some(Value::Object(mut o)) => {
+            if named {
+                o.insert("targetNames".into(), names());
+            }
+            Some(Value::Object(o))
+        }
+        None if named => Some(json!({ "targetNames": names() })),
+        other => other,
     }
 }
 
 /// The media type of encoded image bytes, for the formats glTF allows.
 fn sniff(bytes: &[u8]) -> &'static str {
-    if bytes.starts_with(&[0xFF, 0xD8]) { "image/jpeg" } else { "image/png" }
+    if bytes.starts_with(&[0xFF, 0xD8]) {
+        "image/jpeg"
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        "image/webp"
+    } else {
+        "image/png"
+    }
 }
 
-/// Images, samplers and textures as written: one texture per image and wrap pair in use.
+/// `EXT_texture_webp`: core glTF has no WebP, so a texture of a WebP image names it only through
+/// the extension, which a file without another source then requires.
+const WEBP: &str = "EXT_texture_webp";
+
+/// Images, samplers and textures as written: the scene's [`Scene::texture_variants`] first, in
+/// their order, then one texture per other image and wrap pair in use.
 #[derive(Default)]
 struct Textures {
     images: Vec<Value>,
     /// The written index of each image of the scene (`None`: no bytes and no name to write).
     image_map: Vec<Option<usize>>,
     samplers: Vec<[Wrap; 2]>,
-    textures: Vec<(usize, usize)>,
+    /// The written image (`None`: a texture of the file whose image is not written) and sampler.
+    textures: Vec<(Option<usize>, usize)>,
+    /// The index of the first of `textures` with each image and sampler.
+    first: std::collections::HashMap<(Option<usize>, usize), usize>,
+    /// Whether each written image is WebP.
+    webp: Vec<bool>,
 }
 
 impl Textures {
+    /// The `textures` list, and whether a texture names its image only through `EXT_texture_webp`.
+    fn json(&self) -> (Vec<Value>, bool) {
+        let mut webp_only = false;
+        let list = self
+            .textures
+            .iter()
+            .map(|(image, sampler)| match image {
+                Some(image) if self.webp.get(*image).copied().unwrap_or(false) => {
+                    webp_only = true;
+                    json!({ "sampler": sampler, "extensions": { WEBP: { "source": image } } })
+                }
+                Some(image) => json!({ "source": image, "sampler": sampler }),
+                // glTF allows a texture without a source; it keeps the index of the next ones.
+                None => json!({ "sampler": sampler }),
+            })
+            .collect();
+        (list, webp_only)
+    }
+
+    fn sampler(&mut self, wrap: [Wrap; 2]) -> usize {
+        self.samplers.iter().position(|s| *s == wrap).unwrap_or_else(|| {
+            self.samplers.push(wrap);
+            self.samplers.len() - 1
+        })
+    }
+
+    /// Keep the textures of the file at their indices, which `extensions` the writer keeps may
+    /// name.
+    fn variants(&mut self, variants: &[TextureRef]) {
+        for t in variants {
+            let image = self.image_map.get(t.image).copied().flatten();
+            let sampler = self.sampler(t.wrap);
+            self.push((image, sampler));
+        }
+    }
+
+    /// Add a texture, and the index of the first texture with its image and sampler.
+    fn push(&mut self, texture: (Option<usize>, usize)) -> usize {
+        self.textures.push(texture);
+        *self.first.entry(texture).or_insert(self.textures.len() - 1)
+    }
+
     fn slot(&mut self, t: Option<TextureRef>) -> Option<Value> {
         let t = t?;
         let image = (*self.image_map.get(t.image)?)?;
-        let sampler = self.samplers.iter().position(|s| *s == t.wrap).unwrap_or_else(|| {
-            self.samplers.push(t.wrap);
-            self.samplers.len() - 1
-        });
-        let index = self.textures.iter().position(|x| *x == (image, sampler)).unwrap_or_else(|| {
-            self.textures.push((image, sampler));
-            self.textures.len() - 1
-        });
+        let sampler = self.sampler(t.wrap);
+        let key = (Some(image), sampler);
+        let index = match self.first.get(&key) {
+            Some(index) => *index,
+            None => self.push(key),
+        };
         let mut out = json!({ "index": index, "texCoord": t.uv_set });
         if let (Some(tt), Some(o)) = (t.transform, out.as_object_mut()) {
             let ext = json!({ "offset": tt.offset, "rotation": tt.rotation, "scale": tt.scale });
@@ -1021,10 +1475,29 @@ impl Textures {
     }
 }
 
-fn material_json(m: &Material, textures: &mut Textures, extensions: &mut Vec<&'static str>) -> Value {
+/// Material extensions the reader reads into [`Material`]'s fields. The writer writes them from
+/// the fields, or not at all, and never as kept.
+const MATERIAL_FIELDS: [&str; 5] = [
+    "KHR_materials_emissive_strength",
+    "KHR_materials_unlit",
+    "KHR_materials_clearcoat",
+    "KHR_materials_sheen",
+    "KHR_materials_pbrSpecularGlossiness",
+];
+
+/// Extensions of the file and its nodes that the reader reads into [`Scene::lights`] and
+/// [`Node::light`], which the writer does not write.
+const LIGHTS: &str = "KHR_lights_punctual";
+
+/// The kept `extensions` of an object, without `skip`.
+fn kept(extensions: &Map<String, Value>, skip: &[&str]) -> Map<String, Value> {
+    extensions.iter().filter(|(k, _)| !skip.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
+fn material_json(m: &Material, textures: &mut Textures) -> Value {
     let mut pbr = json!({ "baseColorFactor": m.base_color, "metallicFactor": m.metallic, "roughnessFactor": m.roughness });
     let mut out = json!({ "name": m.name, "doubleSided": m.double_sided });
-    let mut ext = Map::new();
+    let mut ext = kept(&m.extensions, &MATERIAL_FIELDS);
     // glTF's emissive factor stops at 1; the rest is a strength.
     let peak = m.emissive.iter().copied().fold(1.0f32, f32::max);
     if peak > 1.0 {
@@ -1057,25 +1530,6 @@ fn material_json(m: &Material, textures: &mut Textures, extensions: &mut Vec<&'s
         }
         ext.insert("KHR_materials_sheen".into(), Value::Object(sheen));
     }
-    for name in ["KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_materials_clearcoat", "KHR_materials_sheen"] {
-        if ext.contains_key(name) && !extensions.contains(&name) {
-            extensions.push(name);
-        }
-    }
-    let slots = [
-        m.base_color_texture,
-        m.metallic_roughness_texture,
-        m.normal_texture,
-        m.occlusion_texture,
-        m.emissive_texture,
-        m.clearcoat_texture,
-        m.clearcoat_roughness_texture,
-        m.sheen_color_texture,
-        m.sheen_roughness_texture,
-    ];
-    if slots.iter().flatten().any(|t| t.transform.is_some()) && !extensions.contains(&TEXTURE_TRANSFORM) {
-        extensions.push(TEXTURE_TRANSFORM);
-    }
     let set = |o: &mut Value, key: &str, v: Option<Value>| {
         if let (Some(v), Some(o)) = (v, o.as_object_mut()) {
             o.insert(key.into(), v);
@@ -1105,7 +1559,38 @@ fn material_json(m: &Material, textures: &mut Textures, extensions: &mut Vec<&'s
         }
     }
     set(&mut out, "extensions", (!ext.is_empty()).then_some(Value::Object(ext)));
+    set(&mut out, "extras", m.extras.clone());
     out
+}
+
+/// The names of the extensions the document uses (its `extensionsUsed`): the keys of every
+/// `extensions` object in it, at any depth, sorted. The application's `extras` are not
+/// searched.
+fn extensions_used(root: &Map<String, Value>) -> Vec<Value> {
+    extension_names(root, |name| name).into_iter().map(|name| json!(name)).collect()
+}
+
+/// The keys of every `extensions` object in `root`, at any depth, each made into a `K` by `key`
+/// and kept once. Each name takes a number of comparisons logarithmic in the names found so far.
+pub(crate) fn extension_names<'a, K: Ord>(root: &'a Map<String, Value>, key: impl Fn(&'a str) -> K) -> BTreeSet<K> {
+    let mut used = BTreeSet::new();
+    let mut stack: Vec<(&str, &Value)> = root.iter().map(|(k, v)| (k.as_str(), v)).collect();
+    while let Some((name, v)) = stack.pop() {
+        match (name, v) {
+            ("extras", _) => {}
+            ("extensions", Value::Object(o)) => {
+                for (name, inner) in o {
+                    used.insert(key(name));
+                    stack.push((name, inner));
+                }
+            }
+            (_, Value::Object(o)) => stack.extend(o.iter().map(|(k, v)| (k.as_str(), v))),
+            // An array's items are not under any key.
+            (_, Value::Array(a)) => stack.extend(a.iter().map(|item| ("", item))),
+            _ => {}
+        }
+    }
+    used
 }
 
 /// JSON has no number for these, and a file with them is not glTF.
@@ -1134,6 +1619,86 @@ fn check_finite(scene: &Scene) -> Result<()> {
         m.base_color.iter().chain(&m.emissive).chain(&m.sheen_color).chain(&values).all(|x| x.is_finite()) && cutoff.is_finite() && transforms
     });
     if positions && nodes && materials { Ok(()) } else { Err(malformed(KIND, "a position, transform or material value is not finite")) }
+}
+
+/// Every joint a written vertex names is in the skin of each node that places the mesh, and a
+/// node with a skin places only written meshes with joints and weights. `top` is the highest
+/// joint of each mesh's written vertices, and `written` the written index of each mesh.
+fn check_joints(scene: &Scene, top: &[Option<u16>], written: &[Option<usize>]) -> Result<()> {
+    for n in &scene.nodes {
+        let (Some(m), Some(s)) = (n.mesh, n.skin.and_then(|s| scene.skins.get(s))) else { continue };
+        if written.get(m).copied().flatten().is_none() {
+            continue;
+        }
+        let Some(Some(j)) = top.get(m) else {
+            return Err(malformed(KIND, format!("node `{}` has skin `{}` and a mesh without joints and weights", n.name, s.name)));
+        };
+        if usize::from(*j) >= s.joints.len() {
+            return Err(malformed(KIND, format!("node `{}` names joint {j} of skin `{}`, which has {}", n.name, s.name, s.joints.len())));
+        }
+    }
+    Ok(())
+}
+
+/// Skins as glTF has them: a skin with joints, each node once, and with one inverse bind matrix
+/// per joint when it has any, each with a last row of 0, 0, 0, 1; and a mesh with both joints
+/// and weights or neither, whose vertices name each joint with a weight other than 0 once.
+fn check_skins(scene: &Scene) -> Result<()> {
+    if let Some(m) = scene.meshes.iter().find(|m| m.joints.is_empty() != m.weights.is_empty()) {
+        return Err(malformed(KIND, format!("mesh `{}` has joints without weights or weights without joints", m.name)));
+    }
+    let repeated = |j: &[u16; 4], w: &[f32; 4]| (0..4).any(|a| (a + 1..4).any(|b| w[a] != 0.0 && w[b] != 0.0 && j[a] == j[b]));
+    if let Some(m) = scene.meshes.iter().find(|m| m.joints.iter().zip(&m.weights).any(|(j, w)| repeated(j, w))) {
+        return Err(malformed(KIND, format!("mesh `{}` has a vertex that names a joint with a weight twice", m.name)));
+    }
+    for s in &scene.skins {
+        if s.joints.is_empty() {
+            return Err(malformed(KIND, format!("skin `{}` has no joints", s.name)));
+        }
+        let mut seen = std::collections::HashSet::with_capacity(s.joints.len());
+        if !s.joints.iter().all(|j| seen.insert(*j)) {
+            return Err(malformed(KIND, format!("skin `{}` names a joint node twice", s.name)));
+        }
+        // Column-major: the last row is entries 3, 7, 11 and 15, as written in `f32`.
+        if s.inverse_bind.iter().any(|m| [m[3], m[7], m[11], m[15]].map(|x| x as f32) != [0.0, 0.0, 0.0, 1.0]) {
+            return Err(malformed(KIND, format!("skin `{}` has an inverse bind matrix whose last row is not 0, 0, 0, 1", s.name)));
+        }
+        if !s.inverse_bind.is_empty() && s.inverse_bind.len() != s.joints.len() {
+            return Err(malformed(
+                KIND,
+                format!("skin `{}` has {} inverse bind matrices for {} joints", s.name, s.inverse_bind.len(), s.joints.len()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Skins ([`check_skins`]) and morph targets as glTF has them: every value finite, and no node
+/// with more weights than its mesh has targets.
+fn check_rigging(scene: &Scene) -> Result<()> {
+    check_skins(scene)?;
+    let targets = |n: &Node| n.mesh.and_then(|m| scene.meshes.get(m)).map_or(0, |m| m.morph_targets.len());
+    if let Some(n) = scene.nodes.iter().find(|n| n.morph_weights.len() > targets(n)) {
+        return Err(malformed(KIND, format!("node `{}` has {} morph weights for {} targets", n.name, n.morph_weights.len(), targets(n))));
+    }
+    // Morph target weights may be negative; skinning weights may not.
+    if let Some(m) = scene.meshes.iter().find(|m| m.weights.iter().flatten().any(|w| *w < 0.0)) {
+        return Err(malformed(KIND, format!("mesh `{}` has a negative skinning weight", m.name)));
+    }
+    let binds = scene.skins.iter().flat_map(|s| s.inverse_bind.iter().flatten()).all(|x| (*x as f32).is_finite());
+    let offsets = scene
+        .meshes
+        .iter()
+        .flat_map(|m| &m.morph_targets)
+        .flat_map(|t| t.positions.iter().chain(&t.normals).flatten())
+        .all(|x| (*x as f32).is_finite());
+    let weights = scene.meshes.iter().flat_map(|m| m.morph_weights.iter().chain(m.weights.iter().flatten()));
+    let node_weights = scene.nodes.iter().flat_map(|n| &n.morph_weights);
+    if binds && offsets && weights.chain(node_weights).all(|x| x.is_finite()) {
+        Ok(())
+    } else {
+        Err(malformed(KIND, "a skin or morph target value is not finite"))
+    }
 }
 
 /// Texture magnification filtering for a GLB sampler.
@@ -1166,9 +1731,18 @@ pub struct GlbWriteOptions {
 }
 
 /// The scene as a binary glTF file: its nodes, meshes (each part a primitive over the mesh's
-/// [`Mesh::unified`] vertices: positions, normals, UV sets and colours) and materials, with
-/// images that have bytes embedded and the others named by their URI. The binary chunk is
-/// limited to `limits.max_data_bytes`.
+/// [`Mesh::unified`] vertices: positions, normals, UV sets, colours, joints and weights, with
+/// the mesh's morph targets), skins and materials, with images that have bytes embedded and
+/// the others named by their URI, and the kept `extensions` and `extras` (see the module
+/// documentation). The binary chunk is limited to `limits.max_data_bytes`, and each mesh to
+/// `limits.max_morph_targets` morph targets; past either, the writer stops with
+/// [`Error::TooLarge`] before it writes more. A value that is not
+/// finite, a skin without joints, with a joint node named twice, or whose inverse bind matrices
+/// do not match its joints or have a last row other than 0, 0, 0, 1, a mesh with joints but no
+/// weights (or weights but no joints), a negative skinning weight, a vertex that names a joint
+/// with a weight other than 0 twice, a joint of a written vertex outside the skin of a node that
+/// places the mesh, a node with a skin that places a written mesh without joints and weights,
+/// and a node with more morph weights than its mesh has targets are [`Error::Malformed`].
 pub fn write_glb(scene: &Scene, limits: &Limits) -> Result<Vec<u8>> {
     write_glb_with_options(scene, limits, &GlbWriteOptions::default())
 }
@@ -1178,60 +1752,71 @@ pub fn write_glb_with_options(scene: &Scene, limits: &Limits, options: &GlbWrite
     scene.validate()?;
     scene.instances(limits)?;
     check_finite(scene)?;
-    let mut w = Writer::default();
+    check_rigging(scene)?;
+    let mut w = Writer::new(limits);
     let mut meshes = Vec::new();
+    let mut top = Vec::with_capacity(scene.meshes.len());
     let mesh_map: Vec<Option<usize>> = scene
         .meshes
         .iter()
         .map(|m| {
-            w.mesh(m).map(|v| {
+            let written = w.mesh(m)?;
+            top.push(written.as_ref().and_then(|(_, j)| *j));
+            Ok(written.map(|(v, _)| {
                 meshes.push(v);
                 meshes.len() - 1
-            })
+            }))
         })
-        .collect();
+        .collect::<Result<_>>()?;
+    check_joints(scene, &top, &mesh_map)?;
     let mut textures = Textures::default();
     for image in &scene.images {
         let mut out = Map::new();
         if !image.name.is_empty() {
             out.insert("name".into(), json!(image.name));
         }
-        match (&image.data, &image.uri) {
+        let mime = match (&image.data, &image.uri) {
             (Some(bytes), _) => {
-                out.insert("bufferView".into(), json!(w.view(bytes, None)));
-                out.insert("mimeType".into(), json!(image.mime_type.clone().unwrap_or_else(|| sniff(bytes).into())));
+                let mime = image.mime_type.clone().unwrap_or_else(|| sniff(bytes).into());
+                out.insert("bufferView".into(), json!(w.view(bytes, None)?));
+                out.insert("mimeType".into(), json!(mime));
+                mime
             }
-            (None, Some(uri)) => drop(out.insert("uri".into(), json!(uri))),
+            (None, Some(uri)) => {
+                out.insert("uri".into(), json!(uri));
+                // The path's extension, without a query or fragment.
+                let path = uri.split(['?', '#']).next().unwrap_or("");
+                let webp = path.rsplit_once('.').is_some_and(|(_, e)| e.eq_ignore_ascii_case("webp"));
+                match image.mime_type.clone().filter(|m| !m.is_empty()) {
+                    // A URI without the format's extension keeps its media type for the next reader.
+                    Some(mime) => {
+                        out.insert("mimeType".into(), json!(mime));
+                        mime
+                    }
+                    None if webp => "image/webp".into(),
+                    None => String::new(),
+                }
+            }
             (None, None) => {
                 textures.image_map.push(None);
                 continue;
             }
-        }
+        };
+        textures.webp.push(mime == "image/webp");
         textures.image_map.push(Some(textures.images.len()));
         textures.images.push(Value::Object(out));
     }
-    let mut extensions = Vec::new();
-    let materials: Vec<Value> = scene.materials.iter().map(|m| material_json(m, &mut textures, &mut extensions)).collect();
+    textures.variants(&scene.texture_variants);
+    let materials: Vec<Value> = scene.materials.iter().map(|m| material_json(m, &mut textures)).collect();
     let nodes: Vec<Value> = scene
         .nodes
         .iter()
         .map(|n| {
-            let mut out = Map::new();
-            if !n.name.is_empty() {
-                out.insert("name".into(), json!(n.name));
-            }
-            if n.transform != IDENTITY {
-                out.insert("matrix".into(), json!(n.transform));
-            }
-            if let Some(m) = n.mesh.and_then(|m| mesh_map.get(m).copied().flatten()) {
-                out.insert("mesh".into(), json!(m));
-            }
-            if !n.children.is_empty() {
-                out.insert("children".into(), json!(n.children));
-            }
-            Value::Object(out)
+            let mesh = n.mesh.and_then(|m| Some((mesh_map.get(m).copied().flatten()?, scene.meshes.get(m)?)));
+            node_json(n, mesh)
         })
         .collect();
+    let skins: Vec<Value> = scene.skins.iter().map(|s| w.skin(s)).collect::<Result<_>>()?;
     if w.bin.len() > limits.max_data_bytes {
         return Err(too_large("GLB", format!("more than {} bytes of data", limits.max_data_bytes)));
     }
@@ -1252,8 +1837,10 @@ pub fn write_glb_with_options(scene: &Scene, limits: &Limits, options: &GlbWrite
     };
     list("nodes", nodes);
     list("meshes", meshes);
+    list("skins", skins);
     list("materials", materials);
-    list("textures", textures.textures.iter().map(|(image, sampler)| json!({ "source": image, "sampler": sampler })).collect());
+    let (texture_list, webp_only) = textures.json();
+    list("textures", texture_list);
     list(
         "samplers",
         textures
@@ -1274,7 +1861,20 @@ pub fn write_glb_with_options(scene: &Scene, limits: &Limits, options: &GlbWrite
     list("images", textures.images);
     list("accessors", w.accessors);
     list("bufferViews", w.views);
-    list("extensionsUsed", extensions.iter().map(|e| json!(e)).collect());
+    let extensions = kept(&scene.extensions, &[LIGHTS]);
+    if !extensions.is_empty() {
+        root.insert("extensions".into(), Value::Object(extensions));
+    }
+    if let Some(extras) = &scene.extras {
+        root.insert("extras".into(), extras.clone());
+    }
+    let used = extensions_used(&root);
+    if !used.is_empty() {
+        root.insert("extensionsUsed".into(), Value::Array(used));
+    }
+    if webp_only {
+        root.insert("extensionsRequired".into(), json!([WEBP]));
+    }
     if !w.bin.is_empty() {
         root.insert("buffers".into(), json!([{ "byteLength": w.bin.len() }]));
     }

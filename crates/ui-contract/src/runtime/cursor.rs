@@ -1,6 +1,7 @@
 //! The cursor service (8.5): requests of a pass collect here, the end hook picks the winner and records it, and a
 //! painted winner reaches the window as its cursor image where the window shows one.
 
+use crate::runtime::Shift;
 use crate::runtime::egui::areas::LayerKey;
 use crate::runtime::egui::{output, pass, viewports};
 use crate::runtime::frame::PerViewport;
@@ -50,6 +51,19 @@ pub struct CursorRegion {
     pub clip: Rect,
 }
 
+impl Shift for CursorRegion {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        CursorRegion { layer: self.layer, clip: crate::runtime::Clip::new(self.clip).shifted(by).rect() }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        CursorRegion { layer: self.layer, clip: self.clip.snapped(&to.clip, within) }
+    }
+}
+
+// A cursor is drawn at the pointer, wherever the record that asked for it replays.
+crate::stays!(Cursor, CursorPriority);
+
 impl CursorRegion {
     /// The region of `clip` on `layer`.
     pub fn new(layer: LayerKey, clip: Rect) -> Self {
@@ -83,7 +97,13 @@ pub fn request_within(ctx: &Context, cursor: Cursor, priority: CursorPriority, r
     push(ctx, cursor, priority, Some(region));
 }
 
+/// A request is a registration of the pass: a settled view's replay requests its cursor again.
 fn push(ctx: &Context, cursor: Cursor, priority: CursorPriority, region: Option<CursorRegion>) {
+    crate::runtime::replay::journal(
+        ctx,
+        || (cursor.clone(), priority, region),
+        |ctx, (cursor, priority, region)| push(ctx, cursor.clone(), *priority, *region),
+    );
     PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| {
         state.requests.push((cursor, priority));
         state.regions.push(region);

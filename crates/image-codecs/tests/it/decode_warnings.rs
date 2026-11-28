@@ -291,7 +291,7 @@ fn tiff_thumbnails_and_masks_are_not_pages() {
 }
 
 #[test]
-fn single_images_carry_no_warnings() {
+fn feature_config_single_images_carry_no_warnings() {
     for f in rw_formats() {
         let img = synth(9, 7, ChannelLayout::Rgba, SampleType::U8, 5, 0.2);
         let Ok(bytes) = encode(&img, f, &EncodeOptions::default()) else { continue };
