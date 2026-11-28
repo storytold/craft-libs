@@ -1,0 +1,73 @@
+{
+  "schema": "craft-design-theme",
+  "schema_version": 1,
+  "id": "craft.catppuccin",
+  "name": "Catppuccin",
+  "version": 1,
+  "variants": "both",
+  "contrast_intent": "standard",
+  "seeds": {
+    "accent": "#cba6f7",
+    "neutral": "#313244",
+    "status": {
+      "bad": "#f38ba8",
+      "good": "#a6e3a1",
+      "info": "#89b4fa",
+      "warn": "#f9e2af"
+    }
+  },
+  "shape": null,
+  "light": {
+    "seeds": {
+      "accent": "#8839ef",
+      "neutral": "#e6e9ef",
+      "status": {
+        "bad": "#d20f39",
+        "good": "#40a02b",
+        "info": "#1e66f5",
+        "warn": "#df8e1d"
+      }
+    },
+    "accent.border": "#8839ef78",
+    "accent.soft": "#8839ef2e",
+    "accent.solid": "#8839ef",
+    "caption.close_hover": "#d20f39",
+    "caption.close_text": "#eff1f5",
+    "line.border": "#ccd0da",
+    "line.control_edge": "#bcc0cc",
+    "line.divider": "#ccd0da",
+    "state.hover": "#e6e9ef",
+    "state.pressed": "#dce0e8",
+    "state.selected": "{accent.soft}",
+    "state.selected_hover": "{accent.soft}",
+    "surface.background": "#e6e9ef",
+    "surface.canvas": "#eff1f5",
+    "surface.panel": "#eff1f5",
+    "surface.sunken": "#e6e9ef",
+    "text.faint": "#5c5f77",
+    "text.muted": "#5c5f77",
+    "text.normal": "#4c4f69"
+  },
+  "dark": {
+    "accent.border": "#cba6f778",
+    "accent.soft": "#cba6f72e",
+    "accent.solid": "#cba6f7",
+    "caption.close_hover": "#f38ba8",
+    "caption.close_text": "#11111b",
+    "data.scope": "#11111b",
+    "line.border": "#11111b",
+    "line.control_edge": "#45475a",
+    "line.divider": "#11111b",
+    "state.hover": "#313244",
+    "state.pressed": "#45475a",
+    "state.selected": "{accent.soft}",
+    "state.selected_hover": "{accent.soft}",
+    "surface.background": "#181825",
+    "surface.canvas": "#11111b",
+    "surface.panel": "#1e1e2e",
+    "surface.sunken": "#181825",
+    "text.faint": "#bac2de",
+    "text.muted": "#bac2de",
+    "text.normal": "#cdd6f4"
+  }
+}

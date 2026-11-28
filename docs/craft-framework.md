@@ -935,7 +935,7 @@ UI scaling omits sizes that would shrink the window below the app's minimum on t
 
 ### Built-in themes
 
-Ten themes, 17 mode variants. The suite default is ArtCraft.
+Eleven themes, 19 mode variants. The suite default is ArtCraft.
 
 | Theme | Modes | Look |
 | --- | --- | --- |
@@ -949,6 +949,7 @@ Ten themes, 17 mode variants. The suite default is ArtCraft.
 | Breeze | light, dark | Flat; 5 px corners |
 | Soft | light, dark | Low contrast (declared); corners rounder by +1 / +2 / +2 |
 | Classic | light | Square, bevelled; 1 pt bevel, all radii 0 |
+| Catppuccin | light, dark | Pastel accents on blue-greys, from a published palette |
 
 ### Generic or family placement
 
