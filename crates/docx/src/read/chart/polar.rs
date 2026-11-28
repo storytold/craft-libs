@@ -33,7 +33,10 @@ pub(super) fn pie(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
             arc(&mut segs, (cx, cy, r), a, b);
         }
         segs.push(PathSeg::Close);
-        fill(out, segs, c.point_colour(0, i));
+        // A slice with its own `a:noFill`, or in a series with one, is left empty (Word).
+        if s.fills(i) {
+            fill(out, segs, c.point_colour(0, i));
+        }
         if let Some(text) = label_of(s, i) {
             // Halfway across the ring (pie: two thirds out from the centre).
             let at = if inner > 0.0 { (r + inner) / 2.0 } else { r * 0.65 };

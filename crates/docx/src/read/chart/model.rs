@@ -221,3 +221,15 @@ pub(super) struct Series {
     /// stacked chart); empty when the series shows no labels.
     pub(super) raw: Vec<Option<f64>>,
 }
+
+impl Series {
+    /// Whether point `i` (a bar or bubble) is filled: the point's own fill or `a:noFill` wins,
+    /// else the series' `a:noFill` leaves it empty.
+    pub(super) fn fills(&self, i: usize) -> bool {
+        match self.points.get(i) {
+            Some(p) if p.fill.is_some() => true,
+            Some(p) if p.no_fill => false,
+            _ => !self.no_fill,
+        }
+    }
+}

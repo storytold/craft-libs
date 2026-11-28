@@ -540,13 +540,21 @@ fn bars(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataL
             let (p0, p1) = (g.val(v0), g.val(v1));
             let (p0, p1) = (p0.min(p1), p0.max(p1));
             let segs = if g.horiz { rect_segs(p0, a, p1, a + thick) } else { rect_segs(a, p0, a + thick, p1) };
-            if !s.no_fill {
+            // A point's own `a:noFill` leaves its bar empty in a filled series (a hidden bar).
+            let filled = s.fills(i);
+            if filled {
                 fill(out, segs.clone(), c.point_colour(j, i));
             }
             // An explicit outline shows without a fill too, in the point's own line colour or the
-            // series' (a varied accent only when neither sets one).
-            if let (true, true, Some(w)) = (s.line, s.no_fill, s.line_w) {
-                stroke(out, segs, s.outlines.get(i).copied().flatten().unwrap_or_else(|| c.point_colour(j, i)), w);
+            // series' (a varied accent only when neither sets one). A bar hidden by its own
+            // `a:noFill` doesn't take the series outline, only a line of its own (Word).
+            let own = s.points.get(i).filter(|p| p.no_fill && p.fill.is_none());
+            let outline = match own {
+                Some(p) => p.line,
+                None => Some(s.outlines.get(i).copied().flatten().unwrap_or_else(|| c.point_colour(j, i))),
+            };
+            if let (true, false, Some(w), Some(col)) = (s.line, filled, s.line_w, outline) {
+                stroke(out, segs, col, w);
             }
             if let Some(text) = label_of(s, i) {
                 let mid = a + thick / 2.0;
@@ -895,12 +903,7 @@ fn draw_bubbles(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, bubbles: &[Bub
         let Some(s) = c.series.get(b.j) else { continue };
         let (cx, cy, d) = (g.scat_x(b.x), g.val(b.y), b.d);
         let line = s.outlines.get(b.i).copied().flatten();
-        // A point's own fill or `a:noFill` wins; else a series with `a:noFill` leaves it hollow.
-        let filled = match s.points.get(b.i) {
-            Some(p) if p.fill.is_some() => true,
-            Some(p) if p.no_fill => false,
-            _ => !s.no_fill,
-        };
+        let filled = s.fills(b.i);
         let (fill, stroke) =
             if b.v < 0.0 { (Some(Rgb::WHITE), Some(line.unwrap_or(Rgb::BLACK))) } else { (filled.then(|| c.point_colour(b.j, b.i)), line) };
         let r = d / 2.0;

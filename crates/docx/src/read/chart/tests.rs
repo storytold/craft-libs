@@ -1918,6 +1918,27 @@ fn a_hollow_bar_series_is_outlined_in_its_line_colour_when_the_chart_varies() {
     assert_eq!(strokes_in(&items, &palette), vec![RED; 3]);
 }
 
+#[test]
+fn a_point_with_only_a_no_fill_leaves_its_bar_or_slice_empty() {
+    // Point 1 is hidden by its own `a:noFill`; the series has no fill of its own.
+    let hide = r#"<c:dPt><c:idx val="1"/><c:spPr><a:noFill/></c:spPr></c:dPt>"#;
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), hide);
+    let pie = format!(r#"<c:pieChart><c:varyColors val="1"/>{s}</c:pieChart>"#);
+    let slices: Vec<Rgb> = filled(&chart_items(&space(&pie), &theme(), 200.0, 150.0)).iter().map(|f| f.0).collect();
+    assert_eq!(slices, vec![accent(0), accent(2)], "pie");
+    let blue = r#"<c:spPr><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill><a:ln w="12700"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></c:spPr>"#;
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]).replacen("</c:tx>", &format!("</c:tx>{blue}"), 1), hide);
+    let items = chart_items(&space(&column_chart("", &[s])), &theme(), 300.0, 200.0);
+    let bars: Vec<Rgb> = filled(&items).iter().map(|b| b.0).collect();
+    assert_eq!(bars, vec![Rgb(0, 0, 0xFF); 2], "column");
+    // The hidden bar doesn't take the series' red outline.
+    assert!(strokes_in(&items, &[RED]).is_empty(), "outline");
+    // A pie series' own `a:noFill` leaves every slice empty, though the chart varies.
+    let s = ser(0, "S", None, &CATS, &["1", "2", "3"]).replacen("</c:tx>", "</c:tx><c:spPr><a:noFill/></c:spPr>", 1);
+    let pie = format!(r#"<c:pieChart><c:varyColors val="1"/>{s}</c:pieChart>"#);
+    assert!(filled(&chart_items(&space(&pie), &theme(), 200.0, 150.0)).is_empty(), "pie series");
+}
+
 /// The centre of the text item that reads `text`.
 fn text_centre(items: &[GraphicItem], text: &str) -> Option<(f32, f32)> {
     items.iter().find_map(|it| match it {
