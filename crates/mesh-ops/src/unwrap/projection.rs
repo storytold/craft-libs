@@ -169,7 +169,20 @@ fn intersects(a: &[DVec2; 3], b: &[DVec2; 3]) -> bool {
     true
 }
 
-fn query(node: usize, face: usize, triangles: &[[DVec2; 3]], order: &[usize], nodes: &[Node]) -> bool {
+/// Node visits and triangle pair tests allowed for one chart of `faces` triangles: 64 n (log2 n + 1).
+fn work_budget(faces: usize) -> usize {
+    let log = (usize::BITS - faces.leading_zeros()) as usize;
+    faces.saturating_mul(log + 1).saturating_mul(64)
+}
+
+/// Reports whether `face` overlaps a later face. Each node visit and each pair test spends one unit
+/// of `budget`. Once the budget is spent, every remaining face is reported as overlapping, which gives
+/// it a chart of its own: a valid unwrap whose total work stays within the budget.
+fn query(node: usize, face: usize, triangles: &[[DVec2; 3]], order: &[usize], nodes: &[Node], budget: &mut usize) -> bool {
+    if *budget == 0 {
+        return true;
+    }
+    *budget -= 1;
     #[cfg(test)]
     QUERY_WORK.with(|work| work.set(work.get() + 1));
     let n = &nodes[node];
@@ -190,8 +203,17 @@ fn query(node: usize, face: usize, triangles: &[[DVec2; 3]], order: &[usize], no
         }
     }
     match n.children {
-        Some((left, right)) => query(left, face, triangles, order, nodes) || query(right, face, triangles, order, nodes),
-        None => order[n.range.clone()].iter().any(|i| *i > face && intersects(&triangles[face], &triangles[*i])),
+        Some((left, right)) => query(left, face, triangles, order, nodes, budget) || query(right, face, triangles, order, nodes, budget),
+        None => order[n.range.clone()].iter().any(|i| {
+            if *i <= face {
+                return false;
+            }
+            if *budget == 0 {
+                return true;
+            }
+            *budget -= 1;
+            intersects(&triangles[face], &triangles[*i])
+        }),
     }
 }
 
@@ -213,7 +235,8 @@ pub(super) fn overlapping_faces(mesh: &Mesh, chart: &Chart, faces: &[usize]) -> 
     let mut nodes = Vec::new();
     let center = projection_center(&triangles);
     let root = build(&mut order, 0, &triangles, &mut nodes, center);
-    (0..triangles.len()).filter(|face| query(root, *face, &triangles, &order, &nodes)).map(|face| source_faces[face]).collect()
+    let mut budget = work_budget(triangles.len());
+    (0..triangles.len()).filter(|face| query(root, *face, &triangles, &order, &nodes, &mut budget)).map(|face| source_faces[face]).collect()
 }
 
 #[cfg(test)]
@@ -261,6 +284,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn second_nearly_welded_fan_away_from_the_first_face_has_bounded_work() {
+        for count in [16_000, 32_000] {
+            let mut triangles = nearly_welded_fan(16);
+            triangles.extend(nearly_welded_fan(count).into_iter().map(|triangle| triangle.map(|p| p + DVec2::new(8.0, 0.0))));
+            QUERY_WORK.with(|work| work.set(0));
+            let (flagged, budget_left) = overlapping(&triangles, work_budget(triangles.len()));
+            let work = QUERY_WORK.with(|work| work.get());
+            let total = triangles.len();
+            let n_log_n = total * (total.ilog2() as usize + 2);
+            assert!(work <= 64 * n_log_n, "query work {work} for {total} faces");
+            // A face reported without a real overlap only gets its own chart, which is still valid.
+            if budget_left > 0 {
+                assert!(flagged.is_empty(), "faces {flagged:?} reported without an overlap");
+            }
+        }
+    }
+
+    #[test]
+    fn spent_budget_reports_the_remaining_faces() {
+        let triangles = nearly_welded_fan(64);
+        let (flagged, budget_left) = overlapping(&triangles, 10);
+        assert_eq!(budget_left, 0);
+        assert!(!flagged.is_empty());
+        assert_eq!(flagged.last(), Some(&63));
+    }
+
+    fn overlapping(triangles: &[[DVec2; 3]], mut budget: usize) -> (Vec<usize>, usize) {
+        let mut order: Vec<_> = (0..triangles.len()).collect();
+        let mut nodes = Vec::new();
+        let center = projection_center(triangles);
+        let root = build(&mut order, 0, triangles, &mut nodes, center);
+        let flagged = (0..triangles.len()).filter(|face| query(root, *face, triangles, &order, &nodes, &mut budget)).collect();
+        (flagged, budget)
+    }
+
+    fn unlimited() -> usize {
+        usize::MAX
+    }
+
     fn assert_bounded_query_work(triangles: &[[DVec2; 3]]) {
         let count = triangles.len();
         let mut order: Vec<_> = (0..count).collect();
@@ -269,7 +332,7 @@ mod tests {
         let root = build(&mut order, 0, triangles, &mut nodes, center);
         QUERY_WORK.with(|work| work.set(0));
         for face in 0..count {
-            assert!(!query(root, face, triangles, &order, &nodes), "overlapping face {face}");
+            assert!(!query(root, face, triangles, &order, &nodes, &mut unlimited()), "overlapping face {face}");
             let work = QUERY_WORK.with(|work| work.get());
             assert!(work <= count * 100, "query work {work} for {count} faces");
         }
@@ -283,7 +346,7 @@ mod tests {
         let root = build(&mut order, 0, triangles, &mut nodes, center);
         for face in 0..triangles.len() {
             let expected = (face + 1..triangles.len()).any(|other| intersects(&triangles[face], &triangles[other]));
-            assert_eq!(query(root, face, triangles, &order, &nodes), expected, "face {face}: {:?}", triangles[face]);
+            assert_eq!(query(root, face, triangles, &order, &nodes, &mut unlimited()), expected, "face {face}: {:?}", triangles[face]);
         }
     }
 
