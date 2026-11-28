@@ -776,6 +776,90 @@ fn a_percent_field_reads_one_decimal_then_the_sign() {
     assert!(sign.min.x - number.max.x <= 5.0, "the sign follows the number closely: {number:?} {sign:?}");
 }
 
+/// The number a slider field paints, and the field's and slider's targets.
+fn slider_number(fixture: &craft_ui::testing::Fixture) -> (String, craft_ui::testing::Target, craft_ui::testing::Target) {
+    use craft_ui::runtime::access::Role;
+    let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().unwrap_or_else(|| panic!("the slider field shows its number field"));
+    let slider = fixture.by_role(Role::SLIDER).into_iter().next().unwrap_or_else(|| panic!("the slider field shows its slider"));
+    let texts = fixture.texts();
+    let number = texts.iter().find(|run| field.rect.contains(run.rect.center()) && run.text.starts_with(|c: char| c.is_ascii_digit()));
+    let number = number.unwrap_or_else(|| panic!("the field shows its value: {:?}", texts.iter().map(|r| r.text.to_string()).collect::<Vec<_>>()));
+    (number.text.to_string(), field, slider)
+}
+
+/// A slider field over a percent shows its percent look by default, at most one decimal: with a step of a hundredth
+/// it shows "66.7" over 66.7, and with `field_decimals(FieldDecimals::Step)` the two decimals its step needs, "66.70".
+/// With a step of 1 it shows "67", and a drag and a typed value land on whole steps.
+#[trial]
+fn a_slider_fields_step_decimals_win_over_the_percent_look_and_keep_the_snap() {
+    use craft_ui::form::{FieldDecimals, SliderField};
+    use craft_ui::testing::Fixture;
+    use std::rc::Rc;
+    let shown = |step: f64, decimals: FieldDecimals| {
+        let value = Rc::new(Cell::new(66.7_f64));
+        let held = Rc::clone(&value);
+        let mut fixture = Fixture::new(move |ui| {
+            let mut now = held.get();
+            SliderField::new("Saturation", Bind::bound(&mut now), 0.0..=100.0)
+                .step(step)
+                .unit_kind(UnitKind::Percent)
+                .field_decimals(decimals)
+                .show(ui);
+            held.set(now);
+        });
+        fixture.settle();
+        (fixture, value)
+    };
+    // The percent look shows the decimals the field commits, up to one: a step of 1 commits none, so the look alone
+    // already reads "67" there. A step of a hundredth commits two, past the look's one: that is where the step's
+    // decimals have to win over the look.
+    let (look, _) = shown(0.01, FieldDecimals::Look);
+    assert_eq!(slider_number(&look).0, "66.7", "by default a percent keeps the look's one decimal");
+    let (fine, _) = shown(0.01, FieldDecimals::Step);
+    assert_eq!(slider_number(&fine).0, "66.70", "the step's two decimals win over the percent look");
+
+    let (mut fixture, value) = shown(1.0, FieldDecimals::Step);
+    let (number, field, slider) = slider_number(&fixture);
+    assert_eq!(number, "67", "a step of 1 shows whole numbers");
+
+    fixture.drag_at(slider.rect.left_center() + Vec2::new(slider.rect.width() * 0.3, 0.0), Vec2::new(slider.rect.width() * 0.137, 0.0));
+    fixture.settle();
+    let dragged = value.get();
+    assert!((dragged - 66.7).abs() > 0.5, "the drag moved the value: {dragged}");
+    assert_eq!(dragged, dragged.round(), "a drag lands on a whole step");
+    assert_eq!(slider_number(&fixture).0, format!("{dragged}"), "and the field shows it whole");
+
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("40.4");
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(value.get(), 40.0, "a typed value snaps to the step");
+}
+
+/// A slider field whose number field shows fewer decimals than its step needs still scrubs by the step: over a step of
+/// a hundredth, with `FieldDecimals::Fixed(0)` the field shows "50" and a 40-point drag on it moves the value by 0.4,
+/// not by nothing.
+#[trial]
+fn a_slider_fields_scrub_keeps_the_steps_decimals_where_the_field_shows_fewer() {
+    use craft_ui::form::{FieldDecimals, SliderField};
+    use craft_ui::testing::Fixture;
+    use std::rc::Rc;
+    let value = Rc::new(Cell::new(50.0_f64));
+    let held = Rc::clone(&value);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = held.get();
+        SliderField::new("Saturation", Bind::bound(&mut now), 0.0..=100.0).step(0.01).field_decimals(FieldDecimals::Fixed(0)).show(ui);
+        held.set(now);
+    });
+    fixture.settle();
+    let (number, field, _) = slider_number(&fixture);
+    assert_eq!(number, "50", "the field shows whole numbers over a step of a hundredth");
+    fixture.drag_at(field.center(), Vec2::new(-40.0, 0.0));
+    fixture.settle();
+    let dragged = value.get();
+    assert!((dragged - 49.6).abs() < 1e-9, "a 40-point drag on the field moves the value by 40 hundredths: {dragged}");
+    assert_ne!(dragged, dragged.round(), "the value keeps the step's hundredth, not a whole number");
+}
+
 /// A percent field whose committed values carry no decimals (`commit_decimals(0)`, a paint bar's Opacity) shows none,
 /// "10%"; one that sets no decimals of its own keeps the one-decimal look, "10.0%".
 #[trial]

@@ -3,7 +3,7 @@
 //! remembers what it ran.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, CommandSet, Overlay, Role, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, CommandSet, LeastWidth, Overlay, Role, Show as _, ShowContainer as _, clicked};
 use craft_ui::menu::search::{HelpEntry, SearchIndex, SearchWords, Synonyms};
 use craft_ui::patterns::panels::{CommandPalette, PaletteFace};
 use craft_ui::popover::Popover;
@@ -48,6 +48,17 @@ struct Rig {
 /// A palette open over `entries`, inside a modal dialog when `in_dialog`, with `beneath` shown before it in the same
 /// window. `recents` binds the palette's recent commands to the rig when given; else the palette keeps them.
 fn rig(entries: Vec<HelpEntry>, recents: Option<Vec<CommandRef>>, in_dialog: bool, beneath: impl Fn(&mut Ui) + 'static) -> Rig {
+    rig_least(entries, recents, in_dialog, None, beneath)
+}
+
+/// [`rig`], with the palette's least width `least` when given.
+fn rig_least(
+    entries: Vec<HelpEntry>,
+    recents: Option<Vec<CommandRef>>,
+    in_dialog: bool,
+    least: Option<LeastWidth>,
+    beneath: impl Fn(&mut Ui) + 'static,
+) -> Rig {
     let open = Rc::new(Cell::new(true));
     let picked = Rc::new(RefCell::new(None::<CommandRef>));
     let refused = Rc::new(RefCell::new(None::<CommandRef>));
@@ -62,6 +73,10 @@ fn rig(entries: Vec<HelpEntry>, recents: Option<Vec<CommandRef>>, in_dialog: boo
             let view = env.view();
             let index = SearchIndex::new(&view, &entries, &Synonyms::of(&view.words::<SearchWords>()));
             let palette = CommandPalette::new("Commands", &entries, &index, Bind::bound(&mut is_open));
+            let palette = match least {
+                Some(least) => palette.least_width(least),
+                None => palette,
+            };
             let output = if bound {
                 let mut recents = shown_held.borrow().clone();
                 let output = palette.recents(Bind::bound(&mut recents)).show(ui);
@@ -110,6 +125,19 @@ fn rows(fixture: &Fixture) -> Vec<(String, bool)> {
 
 fn disabled(fixture: &Fixture, label: &str) -> bool {
     rows(fixture).into_iter().find(|(name, _)| name.starts_with(label)).unwrap_or_else(|| panic!("no row {label}")).1
+}
+
+/// What the dialog face laid out, for a failing assertion: the box's width and those of the rows' list, the field and
+/// the rows, so a box wider than everything it holds reads apart from a field left at its measure.
+fn laid_out(fixture: &Fixture) -> String {
+    let wide = |role: Role| fixture.by_role(role).iter().map(|node| format!("{:.1}", node.rect.width())).collect::<Vec<_>>().join(", ");
+    format!(
+        "the box {:.1} wide, its rows' list [{}] wide, the field [{}] wide, the rows [{}] wide",
+        fixture.by_role(Role::DIALOG).first().map_or(0.0, |node| node.rect.width()),
+        wide(Role::LIST_BOX),
+        wide(Role::TEXT_INPUT),
+        wide(Role::LIST_BOX_OPTION)
+    )
 }
 
 #[trial]
@@ -528,4 +556,74 @@ fn enter_on_a_disabled_first_match_runs_nothing() {
     assert_eq!(*refused.borrow(), Some(CommandRef::from(EditCommands::Undo)), "the output names the refused command");
     assert!(open.get(), "the palette stays open");
     assert!(take_output(fixture.ctx()).fired.is_empty(), "nothing ran");
+}
+
+/// The dialog face is a steady, readable width: over short labels it opens at least the palette's least width, typing a
+/// query that drops the widest rows leaves its width as it was, and in a narrow window it keeps to its share of it,
+/// where a least width wider than that share gives way to it. The search field and the rows span the box's inner
+/// width at either width. Guards against a box as wide as its widest row, which opened narrow and jumped as the results
+/// changed, and against a field and rows left at the widest row's width, in the start half of the wider box.
+#[trial]
+fn the_dialog_face_keeps_a_readable_width_while_the_query_changes_its_rows() {
+    let entries = || vec![entry("cut", "Cut"), entry("copy", "Copy"), entry("paste", "Paste"), entry("pasteInside", "Paste Inside")];
+    // A rig whose palette has the least width `role` (the default when `None`), and that width in its tokens.
+    let rigged = |role: Option<LeastWidth>| {
+        let least = Rc::new(Cell::new(0.0_f32));
+        let read = least.clone();
+        let points = move |ui: &mut Ui| {
+            read.set(role.unwrap_or(LeastWidth::Palette).points(craft_ui::runtime::env::Env::of(ui).tokens.tokens()));
+        };
+        (rig_least(entries(), None, false, role, points), least)
+    };
+    let (mut rig, least) = rigged(None);
+    let width = |fixture: &Fixture| fixture.by_role(Role::DIALOG).first().expect("the palette's box shows").rect.width();
+    // The field and every row run from the box's start, less its padding, to its end, less the same padding.
+    let spans = |fixture: &Fixture, when: &str| {
+        let frame = fixture.by_role(Role::DIALOG).first().expect("the palette's box shows").rect;
+        let field = fixture.by_role(Role::TEXT_INPUT).first().expect("the search field shows").rect;
+        let pad = field.left() - frame.left();
+        assert!(pad >= 0.0 && pad < frame.width() / 10.0, "{when}: the field starts inside the box's padding: {field:?} in {frame:?}");
+        assert!(
+            (frame.right() - field.right() - pad).abs() <= 1.0,
+            "{when}: the field spans the box's inner width: {field:?} in {frame:?}; {}",
+            laid_out(fixture)
+        );
+        let listed = fixture.by_role(Role::LIST_BOX_OPTION);
+        assert!(!listed.is_empty(), "{when}: the box lists rows");
+        for row in listed {
+            let row = row.rect;
+            assert!(
+                (row.left() - field.left()).abs() <= 1.0 && (row.right() - field.right()).abs() <= 1.0,
+                "{when}: a row spans the box's inner width, as the field does: {row:?} under {field:?} in {frame:?}; {}",
+                laid_out(fixture)
+            );
+        }
+    };
+    rig.fixture.room(Vec2::new(1400.0, 900.0)).settle();
+    let opened = width(&rig.fixture);
+    assert!(opened >= least.get(), "short labels open the box at its least width: {opened} against {}", least.get());
+    spans(&rig.fixture, "opened");
+
+    rig.fixture.type_text("cut").settle();
+    assert_eq!(names(&rig.fixture).len(), 1, "the query lists one short row: {:?}", names(&rig.fixture));
+    let typed = width(&rig.fixture);
+    assert!((typed - opened).abs() <= 0.5, "the box keeps its width as the rows change: {typed} against {opened}");
+    spans(&rig.fixture, "typed");
+
+    // The box's share is of the window, and a fixture's window is never narrower than 800 points, whatever the room
+    // (`Frames::screen`): the share is read from the window the layer shows in, not from the room.
+    let narrow = Vec2::new(400.0, 900.0);
+    rig.fixture.room(narrow).settle();
+    let window = rig.fixture.ctx().content_rect().width();
+    let kept = width(&rig.fixture);
+    assert!(kept <= window * 0.6 + 0.5, "a narrow window keeps the box to its share: {kept} in {window}");
+
+    // That share is wider than the palette's least width, which the box keeps there; a least width wider than the
+    // share gives way to it.
+    let (mut wide, least) = rigged(Some(LeastWidth::WideDialog));
+    wide.fixture.room(narrow).settle();
+    let window = wide.fixture.ctx().content_rect().width();
+    assert!(least.get() > window * 0.6, "the wide least width {} is wider than the share of {window}", least.get());
+    let kept = width(&wide.fixture);
+    assert!(kept <= window * 0.6 + 0.5, "a least width wider than the share gives way to it: {kept} in {window}");
 }

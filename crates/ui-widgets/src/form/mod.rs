@@ -9,4 +9,4 @@ mod words;
 
 pub use field::{Field, FieldRowStyle, Help};
 pub use group::{FieldGroup, FieldGroupStyle};
-pub use slider_field::{SliderField, SliderFieldLayout, SliderFieldOutput, SliderFieldStyle};
+pub use slider_field::{FieldDecimals, SliderField, SliderFieldLayout, SliderFieldOutput, SliderFieldStyle};

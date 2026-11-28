@@ -81,6 +81,9 @@ pub struct TextOutcome<V> {
     pub value: Option<V>,
     /// The laid-out text, so an editor draws gutters and line numbers beside it.
     pub layout: Option<super::TextLayout>,
+    /// Where the origin of `layout` sits on screen this pass, the text's margin and scroll included: a row of the
+    /// layout is at its galley position moved by this. The rect's corner until the text is laid out.
+    pub origin: egui::Pos2,
     /// Whether the caret stroke shows this pass (the caret blink).
     pub caret_visible: bool,
     /// The draft is not a value of the codec.
@@ -103,6 +106,7 @@ impl<V> TextOutcome<V> {
             draft: None,
             value: None,
             layout: None,
+            origin: rect.min,
             caret_visible: true,
             invalid: false,
             committed: None,

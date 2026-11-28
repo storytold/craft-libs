@@ -8,7 +8,7 @@ use craft_theme::{Channel, ColorModel, Srgba};
 use craft_ui::contract::{
     Bind, Common, Component, Cx, DisabledLook, EditResponse, GlyphLabel, LabelKind, MeasureCx, Role, Show as _, ShowContainer as _, SideLabel, Sizing,
 };
-use craft_ui::form::{Field, SliderField, SliderFieldLayout};
+use craft_ui::form::{Field, FieldDecimals, SliderField, SliderFieldLayout};
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{Label, UnitKind};
 use craft_ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
@@ -145,7 +145,8 @@ impl Component for TrackRamp {
     }
 }
 
-/// The slider and number field of a channel, over `value`, with `track` colours on the groove.
+/// The slider and number field of a channel, over `value`, with `track` colours on the groove. The field shows the
+/// decimals the rule declares, a percent channel too ("67", not the percent look's "66.7").
 pub(crate) fn channel_slider<'a>(
     name: Label,
     value: Bind<'a, f64>,
@@ -153,7 +154,7 @@ pub(crate) fn channel_slider<'a>(
     unit: ChannelUnit,
     track: Option<(Vec<Srgba>, bool)>,
 ) -> SliderField<'a> {
-    let field = SliderField::new(name, value, rule.range.clone()).step(rule.step);
+    let field = SliderField::new(name, value, rule.range.clone()).step(rule.step).field_decimals(FieldDecimals::Fixed(usize::from(rule.decimals)));
     let field = match unit {
         ChannelUnit::None => field,
         ChannelUnit::Percent => field.unit_kind(UnitKind::Percent),
@@ -168,7 +169,8 @@ pub(crate) fn channel_slider<'a>(
 
 /// One channel on one line, as Photoshop's Color panel draws it: the label at the start (the channel's short label
 /// where one is given, "C"), which scrubs the value, the slider over the channel's colours with the pointer under its
-/// track, and the number field with its unit at the end, as wide as its widest value.
+/// track, and the number field with its unit at the end, as wide as its widest value, showing the channel's declared
+/// decimals.
 #[derive(craft_ui::contract::Pattern)]
 pub struct ChannelRow<'a> {
     label: Label,

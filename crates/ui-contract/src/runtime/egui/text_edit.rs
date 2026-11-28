@@ -28,6 +28,10 @@ pub(crate) struct Edit<'a> {
     pub muted_hint: bool,
     pub mono: bool,
     pub role: TypeRole,
+    /// The text size in points in place of the role's (`TextOptions::size`).
+    pub size: Option<f32>,
+    /// A multi-line text starts at the top of the rect (`TextOptions::top`).
+    pub top: bool,
     pub ink: Color32,
     pub filter: EventFilter,
     pub char_limit: Option<usize>,
@@ -46,7 +50,8 @@ pub(crate) struct Edit<'a> {
     /// is not clipped to `rect`.
     pub galley: Option<std::sync::Arc<egui::Galley>>,
     /// The screen y of the baseline a single line without a laid-out galley sits on: its control's line's, which a
-    /// text in another face (mono digits) shares. `None` centres the line's row on the rect's centre line.
+    /// text in another face (mono digits) shares. `None` centres the line's row on the rect's centre line, and a text
+    /// whose size is the caller's own is centred there whatever this says.
     pub baseline: Option<f32>,
     /// How far a multi-line text taller than `rect` is scrolled up inside it, in points; the text part owns the offset
     /// (`text_adapter`), and a single line or a laid-out galley ignores it.
@@ -92,6 +97,8 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
         muted_hint,
         mono,
         role,
+        size,
+        top,
         ink,
         filter,
         char_limit,
@@ -112,8 +119,12 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
     // Behind selected text and the selected text itself: the field's roles.
     let selection = (tokens.color.accent.soft, tokens.color.text.normal);
     let facts = crate::fonts::stack_facts(ui.ctx());
-    let font_id = tokens.font(facts, role, mono);
-    let optical_size = tokens.optical_size(facts, role, mono);
+    let mut font_id = tokens.font(facts, role, mono);
+    // A size of the caller's own keeps the role's face; the optical size follows the size the text is set at.
+    let optical_size = tokens.optical_size(facts, role, mono).map(|role_size| size.unwrap_or(role_size));
+    if let Some(size) = size {
+        font_id.size = size;
+    }
     let had_focus = ui.memory(|memory| memory.has_focus(id));
     let entered = had_focus && ui.input(|input| input.key_pressed(egui::Key::Enter));
     // A masked text shows dots and a disabled one the disabled colour: neither is coloured.
@@ -164,7 +175,8 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
     let hint_text = hint.map(|hint| egui::RichText::new(hint).font(FontId::proportional(font_id.size)));
     // A single-line edit runs in a rect one text row tall, or the part's height when that is taller, placed so the
     // text's baseline is `baseline`, else centred on the part's centre line. egui centres the row in the rect, whatever
-    // row it allocates from the rect's top.
+    // row it allocates from the rect's top. A text whose size is the caller's own is centred on the part too: its row is
+    // taller than the role's, so the role's baseline would lift the row and its clip out of the top of the part.
     let rect = if multiline || galley.is_some() {
         rect
     } else {
@@ -179,7 +191,10 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
         };
         let row = probe.size().y;
         let first_baseline = probe.rows.first().and_then(|placed| placed.row.glyphs.first().map(|glyph| placed.pos.y + glyph.pos.y));
-        let centre = match baseline.zip(first_baseline) {
+        // The row sits on the control's baseline, which every text of the line shares. A size of the caller's own sets
+        // a row taller than the role's that this baseline would carry out of the part's top, so that row is centred on
+        // the part's centre line instead, where the role's own row sits.
+        let centre = match baseline.zip(first_baseline).filter(|_| size.is_none()) {
             Some((baseline, first)) => baseline - first + row / 2.0,
             None => rect.center().y,
         };
@@ -229,7 +244,8 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
                     .event_filter(filter)
                     .return_key(if multiline { Some(egui::KeyboardShortcut::new(line_break, egui::Key::Enter)) } else { None })
                     .layouter(&mut layouter)
-                    // A laid-out galley sits at the rect's corner, as a painted run does.
+                    // A laid-out galley sits at the rect's corner, as a painted run does; the lines of a multi-line text
+                    // start at the top of its part when the part asks (`top`), whatever room is left below them.
                     .align(match (centred, rtl) {
                         _ if galley.is_some() => egui::Align2::LEFT_TOP,
                         (centred, rtl) => {
@@ -238,8 +254,10 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
                                 (false, true) => egui::Align::Min,
                                 (false, false) => egui::Align::Max,
                             };
-                            // A multi-line text starts at the part's top, however many of its lines the text fills.
-                            egui::Align2([across, if multiline { egui::Align::Min } else { egui::Align::Center }])
+                            // A multi-line text starts at the part's top when the part asks (`top`), however many of its
+                            // lines the text fills.
+                            let down = if multiline && top { egui::Align::Min } else { egui::Align::Center };
+                            egui::Align2([across, down])
                         }
                     });
                 if let Some(hint) = hint_text.clone() {

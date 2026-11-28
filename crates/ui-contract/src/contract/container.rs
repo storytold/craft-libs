@@ -218,6 +218,9 @@ pub enum LeastWidth {
     SideMenu,
     /// `size.dock.column`: a fixed side pane is as wide as a dock column.
     DockColumn,
+    /// `size.dialog.wrap`: a command palette's box, as wide as a dialog paragraph's line, so it keeps one width
+    /// while its results change instead of following its widest row.
+    Palette,
 }
 
 impl LeastWidth {
@@ -232,6 +235,7 @@ impl LeastWidth {
             LeastWidth::WideDialog => tokens.size.dialog.least + tokens.size.dialog.wrap,
             LeastWidth::SideMenu => tokens.size.rail.width * 5.0,
             LeastWidth::DockColumn => tokens.size.dock.column,
+            LeastWidth::Palette => tokens.size.dialog.wrap,
         }
     }
 }

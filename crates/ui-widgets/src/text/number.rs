@@ -851,13 +851,17 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let rule = self.rule();
         let step = self.scrub_step.filter(|step| step.is_finite() && *step > 0.0).unwrap_or(rule.step);
         let drag = ValueDrag::relative(step, rule.bounds()).warp(true).hide_cursor(true).coarse(LARGE_STEPS).fine(1.0 / LARGE_STEPS);
-        // Rounded to the field's decimals, so a scrubbed value carries no float noise. The step is not a grid
-        // here: an Alt drag moves by a share of it.
-        let decimals = self.decimals();
+        // Rounded to the field's decimals, and to the step's where the step needs more, so a scrubbed value carries no
+        // float noise and keeps the step's precision even where the field shows fewer decimals: a field of hundredths
+        // that shows no decimals still moves by a hundredth, not by nothing. The step is not a grid here: an Alt drag
+        // moves by a share of it.
+        let decimals = self.decimals().max(decimals_for_step(step));
         let scale = self.scale;
-        let mut scrub =
-            Scrub::new(drag, move |value: &V| value.number().unwrap_or(0.0) * scale, move |number| V::of_number(round_to(number, decimals) / scale))
-                .on_field();
+        // The rounded value is kept in the range after the rounding: a drag that runs into a range end finer than the
+        // decimals it rounds to carries the value past it (0.005 to 0.01), and the range holds the write at its end,
+        // as a typed value does.
+        let kept = move |number: f64| V::of_number(rule.settle(round_to(number, decimals)) / scale);
+        let mut scrub = Scrub::new(drag, move |value: &V| value.number().unwrap_or(0.0) * scale, kept).on_field();
         if self.scrub {
             scrub = scrub.by_label();
         }

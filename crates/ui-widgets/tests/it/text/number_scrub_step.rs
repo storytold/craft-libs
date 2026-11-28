@@ -50,6 +50,34 @@ fn a_separate_scrub_rate_keeps_fine_key_and_wheel_steps() {
     assert_eq!(value.get(), Some(80.02), "one wheel notch still adds one hundredth");
 }
 
+/// A field of `range`, `step` and `decimals` decimals, shown in its own `Field` so its caption scrubs it.
+fn caption_field(start: f64, range: std::ops::RangeInclusive<f64>, step: f64, decimals: usize) -> (Fixture, Rc<Cell<Option<f64>>>) {
+    let value = Rc::new(Cell::new(Some(start)));
+    let shown = Rc::clone(&value);
+    let mut fixture = Fixture::new(move |ui| {
+        Field::new("Opacity").side(SideLabel::new().scrub(true)).show(ui, |ui, _| {
+            let mut current = shown.get();
+            NumberField::new("Opacity", Bind::bound(&mut current)).range(range.clone()).step(step).fixed_decimals(decimals).scrub_by_label().show(ui);
+            shown.set(current);
+        });
+    });
+    fixture.settle();
+    (fixture, value)
+}
+
+/// A scrub that runs into the end of a range finer than the decimals it rounds to keeps its write in the range: the
+/// drag stops at the range's end, 0.005, which the write's decimals (two, from the step) round to 0.01, so the write
+/// keeps the range's end after rounding, as a typed value does, rather than sending the value past its range.
+#[trial]
+fn a_scrub_into_a_range_finer_than_the_precision_keeps_the_range_end() {
+    let (mut fixture, value) = caption_field(0.0, 0.0..=0.005, 0.01, 0);
+    let caption = fixture.texts().iter().find(|text| text.text == "Opacity").expect("the visible scrub caption").rect;
+    fixture.drag_at(caption.center(), vec2(60.0, 0.0)).settle();
+    let scrubbed = value.get().expect("the field holds a value");
+    assert!(scrubbed > 0.0, "the drag moved the value to the end of the range: {scrubbed}");
+    assert!(scrubbed <= 0.005, "a scrub stays in the field's range: {scrubbed}");
+}
+
 #[trial]
 fn an_omitted_or_invalid_scrub_rate_uses_the_field_step() {
     for rate in [None, Some(0.0), Some(-1.0), Some(f64::NAN), Some(f64::INFINITY)] {

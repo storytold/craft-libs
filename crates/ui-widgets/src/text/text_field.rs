@@ -11,7 +11,7 @@ use crate::contract::{
 };
 use crate::primitives::{Completer, IconSpec, SubmitKey, TabKey, TextOptions, TextRun, Wrap};
 use crate::runtime::env::{Label, Message};
-use crate::style::{FieldLook, Span};
+use crate::style::{FieldLook, Span, TypeRole};
 use craft_behavior::{Codec, EditEvent, IconId, Mixed, PartKey, PlainText, Proposal, Sense};
 use egui::{Id, Rect, Vec2};
 use smallvec::SmallVec;
@@ -93,6 +93,10 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     /// length (`size.length.field`).
     #[style_key]
     width_chars: Option<u16>,
+    /// The type role whose face the text is drawn in, which `width_chars` counts characters in: the field's role, or
+    /// `TypeRole::Mono` for a monospace field (`TextField::mono`).
+    #[style_key]
+    face: TypeRole,
 }
 
 impl<'a> TextField<'a, PlainText> {
@@ -126,11 +130,13 @@ impl<'a> TextField<'a, PlainText> {
 impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
     /// A field named `label` that shows `value` through `codec`.
     pub fn with_codec(label: impl Into<Label>, value: Bind<'a, C::Value>, codec: C) -> Self {
+        let options = TextOptions::default();
         TextField {
             common: Common::new(),
             value,
             codec,
-            options: TextOptions::default(),
+            face: options.role,
+            options,
             limit: Limit::Default,
             empty: None,
             search: false,
@@ -202,10 +208,12 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
         self
     }
 
-    /// Monospace text.
+    /// Monospace text. The field measures its text, and counts [`width_chars`](Self::width_chars), in the
+    /// monospace face it draws.
     #[must_use]
     pub fn mono(mut self) -> Self {
         self.options.mono = true;
+        self.face = TypeRole::Mono;
         self
     }
 
@@ -232,7 +240,8 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
     }
 
     /// The field asks for the width of `chars` characters instead of the field length (`size.length.field`): `chars`
-    /// times the width of a `0` in the field's body face, as CSS's `ch` unit, plus the field's padding. The width
+    /// times the width of a `0` in the face the field draws (the body face, or the monospace face of a
+    /// [`mono`](Self::mono) field), as CSS's `ch` unit, plus the field's padding. The width
     /// follows the text size and the face, as the field length does. It is the width the field asks for, not a fixed
     /// one: a row that lacks room still narrows it, and a field sized `Sizing::Content` or `Sizing::FillWidth` takes
     /// its own width as before. `0` keeps the field length.
@@ -359,7 +368,7 @@ impl<C: Codec + Clone + 'static> TextField<'_, C> {
 }
 
 impl<C: Codec + Clone + 'static> TextField<'_, C> {
-    /// `text` as the editor sets it.
+    /// `text` as the field draws it: in its role, in the monospace face for a [`mono`](Self::mono) field.
     fn run<'t>(&self, text: impl Into<Cow<'t, str>>) -> TextRun<'t> {
         if self.options.mono { TextRun::spans(vec![Span::new(text).mono()]) } else { TextRun::new(text).role(self.options.role) }
     }
@@ -380,7 +389,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
     fn style(cx: &crate::style::StyleCx<'_>, key: TextFieldStyleKey<C>) -> FieldStyle {
         let mut style = FieldStyle::at(cx);
         if let Some(chars) = key.width_chars {
-            style = style.held_at(FieldStyle::chars_width(cx, chars));
+            style = style.held_at(FieldStyle::chars_width_in(cx, key.face, chars));
         }
         style.metrics = style.metrics.min_size(Vec2::new(0.0, style.metrics.min_size.y));
         if key.look == FieldLook::Quiet {
@@ -394,14 +403,20 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
     }
 
     /// The text, and the room the adornments take; a search field keeps the room of its clear button while the text is
-    /// empty, so the field does not change width as the button comes and goes.
+    /// empty, so the field does not change width as the button comes and goes. The codec's sample is measured in the
+    /// face the text is drawn in (the monospace face of a [`mono`](Self::mono) field), so a content-sized field shows
+    /// all of it; the placeholder, which the editor draws in the proportional face, is measured in the field's role.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let sample: Cow<'_, str> = match cx.value() {
             Some(value) => self.codec.sample(value),
             None => Cow::Borrowed(""),
         };
-        let text = if sample.is_empty() { self.options.placeholder.as_ref().map_or("", Label::as_str) } else { sample.as_ref() };
-        let mut size = cx.field_text(&TextRun::new(text).role(self.options.role));
+        let run = if sample.is_empty() {
+            TextRun::new(self.options.placeholder.as_ref().map_or("", Label::as_str)).role(self.options.role)
+        } else {
+            self.run(sample.as_ref())
+        };
+        let mut size = cx.field_text(&run);
         // A multi-line field takes the height of its lines, and grows past them with longer text, as the editor does, up
         // to `max_lines`; past that its text scrolls inside it (the text part is its scroll owner). The rows are the
         // field's own text wrapped as the editor wraps it, not the codec's width sample, which a plain field leaves
@@ -468,7 +483,9 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
                 Some(Mixed::Same(at)) => Some(at),
                 _ => None,
             });
-            let options = TextOptions { mixed: value.is_none(), limit, caret, look: self.look, ..self.options.clone() };
+            // A multi-line field's text starts at the top of its box, below the inset its first line keeps.
+            let options =
+                TextOptions { mixed: value.is_none(), limit, caret, top: self.options.multiline(), look: self.look, ..self.options.clone() };
             cx.text(text_part::<C::Value>(), placed.text, &self.codec, start, &options);
         }
     }

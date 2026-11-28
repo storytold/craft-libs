@@ -106,7 +106,13 @@ impl FieldStyle {
     /// The width of a field that holds `chars` characters: `chars` times the width of a `0` in the body face (CSS's
     /// `ch`), plus the field's padding on both sides. [`held_at`](Self::held_at) takes it as the field's length.
     pub fn chars_width(cx: &StyleCx<'_>, chars: u16) -> f32 {
-        let digit = cx.text_width(crate::style::TypeRole::Body, "0");
+        Self::chars_width_in(cx, crate::style::TypeRole::Body, chars)
+    }
+
+    /// [`chars_width`](Self::chars_width) with the `0` set in the face of `role`: `TypeRole::Mono` for a field that
+    /// draws its text in the monospace face.
+    pub(crate) fn chars_width_in(cx: &StyleCx<'_>, role: crate::style::TypeRole, chars: u16) -> f32 {
+        let digit = cx.text_width(role, "0");
         let digit = if digit.is_finite() && digit > 0.0 { digit } else { 0.0 };
         f32::from(chars) * digit + 2.0 * cx.control().pad_x
     }

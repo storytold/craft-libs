@@ -1177,6 +1177,17 @@ impl BodyHooks<'_> {
         // A measuring run lays out and measures: it registers no instance, focus body, scroll region or body layer,
         // and claims no room in a parent flow.
         let real = !ui.is_sizing_pass();
+        // A held container whose width its least width decides, not its content, shows across the width its column
+        // settles on with its fill children at their measures. It asks the column to sweep again with that width: laid
+        // out across it its own fill children take it, and its content-sized record was not made across it.
+        if !self.wide()
+            && self.held
+            && self.least_width > 0.0
+            && matches!(props.layout, layout::BodyLayout::Stack)
+            && let Some(ColumnSweep::Count(column)) = env.column
+        {
+            crate::layout::report_held(&ctx, column, id, crate::layout::HeldKind::Column, self.room.x);
+        }
         let regions = self.regions(props, inner, pad, room, rtl, self.measured_sizes(), real).below(core.content_rect.min.y + band);
         let surface_slot = SurfaceSlot::reserve(ui, matches!(props.mount, Mount::Layer(_)));
         let band_slot = ui.painter().add(Shape::Noop);

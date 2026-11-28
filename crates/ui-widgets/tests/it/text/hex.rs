@@ -3,8 +3,9 @@
 
 use craft_theme::Rgba;
 use craft_ui::contract::tooltip::DELAY;
-use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::form::Field;
+use craft_ui::layout_components::Row;
 use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::text::HexField;
@@ -110,4 +111,37 @@ fn a_pasted_colour_replaces_the_digits_with_or_without_its_hash() {
     paste(&mut fixture, "12");
     assert_eq!(text(&fixture), "FF880012", "a paste that is no colour is inserted at the caret");
     assert_eq!(*value.borrow(), start, "and the colour stays");
+}
+
+/// A content-sized hex field is as wide as its digits in the monospace face it draws them in, not in the body face:
+/// all six digits of #336699 and the caret past the last of them lie inside the field's text rect, and none is cut off.
+#[trial]
+fn a_content_sized_hex_field_shows_all_six_digits() {
+    let mut fixture = Fixture::new(|ui| {
+        Row::new().show(ui, |ui, _| {
+            HexField::hex("Hex", Bind::given(Rgba::rgb(0x33, 0x66, 0x99))).sizing(Sizing::Content).show(ui);
+        });
+    });
+    fixture.settle();
+    let digits = fixture.texts().iter().find(|run| run.text == "336699").cloned().unwrap_or_else(|| panic!("the field shows its digits"));
+    // The run's clip is egui's own: its editor clips the text to the laid-out text one point outset (the room of a
+    // two-point caret centred on the text's end), cut to the field's text part. So the clip shows that no digit is
+    // cut, but its end edge follows the text, not the field, and cannot prove the field's width.
+    let clip = digits.clip;
+    assert!(
+        digits.rect.min.x >= clip.min.x && digits.rect.max.x <= clip.max.x,
+        "the digits {:?} are not cut by the clip they are painted under {clip:?}",
+        digits.rect
+    );
+    // The field's box proves it: its text part is the box less the field's padding, the same on both sides, and the
+    // digits start at the part's start edge. The field measures the whole caret width past the last digit
+    // (`MeasureCx::field_text`), at least the half of it egui paints past the text's end.
+    let field = fixture.by_label("Hex").unwrap_or_else(|| panic!("the hex field")).rect;
+    let text_end = field.max.x - (digits.rect.min.x - field.min.x);
+    let caret = fixture.ctx().global_style().visuals.text_cursor.stroke.width;
+    assert!(
+        digits.rect.max.x + caret <= text_end + 0.01,
+        "the digits {:?} and the caret past them lie inside the field's text part, which ends at {text_end} in the field {field:?}",
+        digits.rect
+    );
 }

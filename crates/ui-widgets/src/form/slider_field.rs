@@ -33,6 +33,22 @@ pub enum SliderFieldLayout {
     Inline,
 }
 
+/// The decimals a slider field's number field shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FieldDecimals {
+    /// The number field's own look: its unit kind's decimals, or `typed_decimals` at most; a percent shows the decimals
+    /// its step needs in full, at most one ("67" with a step of 1, "66.7" with a step of 0.1 or finer).
+    #[default]
+    Look,
+    /// Exactly the decimals the step needs, zeros included, a percent too: "66.70" over 66.7 with a step of 0.01, where
+    /// the percent look shows "66.7"; "0.50" over a plain 0.5 with a step of 0.01.
+    Step,
+    /// Exactly this many decimals (at most 12), zeros included, a percent too: the decimals a value declares, such as
+    /// a colour channel's.
+    Fixed(usize),
+}
+
 /// The style of a slider field: the gap between its parts, the line height and the stacked number field's width.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
@@ -52,11 +68,13 @@ pub struct SliderFieldStyle {
 ///
 /// The step moves the slider's keys and wheel and the field's keys, wheel and scrub; typed values snap to it unless
 /// `typed_decimals` sets their independent precision. Without a step the field steps by a hundredth on a range 10 wide
-/// or less and by 1 on a longer one, and by default rounds typed values to the places that step needs. The field and
-/// the slider are Tab stops in the order they are read: the field and then the slider when stacked, the slider and then
-/// the field when inline. A click on the row's label focuses the number field in either layout. A log or power scale
-/// curves the
-/// slider's track only: the field, typing and steps stay linear.
+/// or less and by 1 on a longer one, and by default rounds typed values to the places that step needs. The field shows
+/// its own look's decimals (for a percent, its step's up to one) unless `field_decimals` asks for the step's or a fixed
+/// count, which leaves typing's snap to the step as it was; a scrub keeps the step's decimals either way, so a field
+/// showing whole numbers over a hundredth step still moves by hundredths. The field and the slider are Tab stops in the
+/// order they are read: the field and then the slider when stacked, the slider and then the field when inline. A click
+/// on the row's label focuses the number field in either layout. A log or power scale curves the slider's track only:
+/// the field, typing and steps stay linear.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct SliderField<'a> {
     #[common]
@@ -76,6 +94,11 @@ pub struct SliderField<'a> {
     /// The decimal places retained and shown for typed values (at most 12), independently of the step; typing no longer snaps to it.
     #[prop]
     typed_decimals: Option<usize>,
+    /// The decimals the number field shows: its own look (the default), exactly the step's, or exactly a fixed count,
+    /// a percent included ("66.70" with a step of 0.01, not the percent look's "66.7"). Typed values snap to the step as
+    /// they do without it.
+    #[prop]
+    field_decimals: FieldDecimals,
     /// The change of one wheel notch over the slider where it is coarser than the step.
     #[prop(quantity = "step")]
     wheel_step: Option<f64>,
@@ -159,6 +182,7 @@ impl<'a> SliderField<'a> {
             scale: SliderScale::Linear,
             step: None,
             typed_decimals: None,
+            field_decimals: FieldDecimals::Look,
             wheel_step: None,
             track_press: TrackPress::OnRelease,
             unit_kind: None,
@@ -198,6 +222,7 @@ impl<'a> SliderField<'a> {
             scale: self.scale,
             step: self.step,
             typed_decimals: self.typed_decimals,
+            field_decimals: self.field_decimals,
             wheel_step: self.wheel_step,
             unit_kind: self.unit_kind,
             unit: self.unit.clone(),
@@ -228,6 +253,7 @@ struct Look {
     scale: SliderScale,
     step: Option<f64>,
     typed_decimals: Option<usize>,
+    field_decimals: FieldDecimals,
     wheel_step: Option<f64>,
     unit_kind: Option<UnitKind>,
     unit: Option<Label>,
@@ -313,6 +339,16 @@ impl Look {
             .scrub_by_label();
         let field = match typed_decimals {
             Some(decimals) => field.max_decimals(decimals),
+            None => field,
+        };
+        // Fixed decimals win over the most decimals and over the percent look.
+        let shown = match self.field_decimals {
+            FieldDecimals::Look => None,
+            FieldDecimals::Step => Some(decimals_for_step(step)),
+            FieldDecimals::Fixed(decimals) => Some(decimals),
+        };
+        let field = match shown {
+            Some(decimals) => field.fixed_decimals(decimals.min(12)),
             None => field,
         };
         let field = if self.select_on_focus { field.select_on_focus() } else { field };

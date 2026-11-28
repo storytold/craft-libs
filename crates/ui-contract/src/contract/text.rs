@@ -676,6 +676,7 @@ pub(crate) fn run<C: Component>(
     let caret = adapter::caret_byte(&ctx, widget, state.draft.as_deref().unwrap_or(out.layout.full()));
     *cx.core.memory.shown::<TextState>(state_id) = state;
     let mut outcome = resolved.outcome;
+    outcome.origin = out.origin;
     outcome.layout = Some(out.layout);
     outcome.caret_visible = caret_visible;
     outcome.composing = crate::runtime::ime::composing(&ctx, widget);

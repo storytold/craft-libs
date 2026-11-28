@@ -15,6 +15,7 @@ pub(crate) mod number_length;
 pub(crate) mod number_look;
 pub(crate) mod number_scrub_step;
 pub(crate) mod number_select;
+pub(crate) mod part_layout;
 pub(crate) mod rtl_paragraph;
 pub(crate) mod selectable;
 pub(crate) mod step_arrows;

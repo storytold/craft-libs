@@ -80,6 +80,13 @@ pub struct TextOptions {
     pub mono: bool,
     /// The type role the text is set in; a monospace text takes the mono role's face and size instead.
     pub role: TypeRole,
+    /// The text size in points in place of the role's, for text whose size is the user's to choose (a document
+    /// editor's text size); the face stays the role's. `None` takes the role's size. The component sizes the part for
+    /// it, since a role's line height no longer measures the text: a single-line part centres that row on the part
+    /// rather than on the role's baseline, which a row taller than the role's would leave.
+    pub size: Option<f32>,
+    /// A multi-line text starts at the top of its part; unset, it is centred on the part's height, as a single line is.
+    pub top: bool,
     /// The text colour; `None` takes the surface's ink. A disabled part shows the disabled text colour whatever this is.
     pub ink: Option<Ink>,
     /// What Tab does in this field.
@@ -174,6 +181,8 @@ impl Default for TextOptions {
             keep_on_escape: false,
             mono: false,
             role: TypeRole::Body,
+            size: None,
+            top: false,
             ink: None,
             tab: TabKey::default(),
             caret: None,
