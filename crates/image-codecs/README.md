@@ -60,6 +60,7 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<
 | Amiga IFF (ILBM/PBM) | yes | yes (24-bit ILBM) | U8 | RGB, RGBA | yes (1-bit mask plane on write) | no | no | no | no | no | no | built in |
 | Sun Raster (`.ras`) | with feature `sunraster` (incl. RLE and colour maps) | with feature `sunraster` (uncompressed) | U8 | Gray, RGB, RGBA | yes | no | no | no | no | no | no | `sunraster` (off by default) |
 | SGI (`.sgi`, `.rgb`, `.bw`) | with feature `sgi` | with feature `sgi` (RLE) | U8, U16 | Gray, Gray+A, RGB, RGBA | yes | no | no | no | no | no | no | `sgi` (off by default) |
+| Pixar (`.pxr`) | yes | **no** | U8 | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | n/a | built in |
 | JPEG-LS (`.jls`) | yes (any NEAR; one scan per component) | yes (lossless) | U8, U16 | Gray, RGB | no | no | no | no | no | no | no | built in |
 | AVIF | with feature `avif-decode` (native only) | only with feature `avif` | U8, U16 (10/12-bit decodes to U16; PQ/HLG to linear F32) | RGB, RGBA | yes (auxiliary alpha) | read (`colr` prof/rICC) | read | read | no | no | yes | `craft-video` AV1 decoder; `image` + `ravif` to write |
 | HEIF/HEIC | with feature `heif` | **no** | U8, U16 (10/12-bit decodes to U16) | RGB, RGBA | yes (auxiliary alpha) | yes (`colr` prof) | yes | yes | no | no | n/a | `heic-rs` |
@@ -173,6 +174,13 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   Compressed transfer syntaxes, sequences over the pixel data and other photometric
   interpretations return `Unsupported`/`Malformed`. There is no DICOM writer
   (`ASYMMETRIC_EXCEPTIONS`).
+
+* **Pixar (read-only).** The 1986 Pixar Image Computer format: a 512-byte little-endian header
+  (magic `80 E8 00 00`), a tile pointer table, and uncompressed 8-bit tiles. One to four channels
+  (a version-1 picture type of grey or RGB, or a version-0 R/G/B bitmask with optional A), in one
+  tile or a grid. A bad magic, a tile past the end of the file or shorter than its pixels, or a
+  partial channel bitmask returns `CodecError::Unsupported` or `Malformed`. There is no Pixar
+  writer (`ASYMMETRIC_EXCEPTIONS`); save as PNG.
 
 * **Amiga IFF.** `FORM ... ILBM` stores interleaved 1–8 bitplanes;
   `FORM ... PBM ` stores 8-bit chunky palette indices with even-padded rows. Both support

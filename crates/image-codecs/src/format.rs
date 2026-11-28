@@ -51,6 +51,8 @@ pub enum Format {
     Sgi,
     /// JPEG-LS (`.jls`): lossless and near-lossless gray and RGB.
     JpegLs,
+    /// Pixar image (`.pxr`): 8-bit tiled grey, grey + alpha, RGB and RGBA, read-only.
+    Pixar,
 }
 
 /// What a format can hold **and** what this crate reads/writes for it.
@@ -115,6 +117,10 @@ pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
          unsupported. Without the feature HEIF is detected but neither read nor written.",
     ),
     (Format::Jp2, "JPEG 2000 decode uses hayro-jpeg2000 (pure Rust); writing JPEG 2000 is not provided."),
+    (
+        Format::Pixar,
+        "Pixar (.pxr) is supported for opening legacy Pixar Image Computer pictures; this crate has no Pixar writer, so save as PNG instead.",
+    ),
 ];
 
 use ChannelLayout as L;
@@ -127,7 +133,7 @@ const TIFF_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 27] = [
+    pub const ALL: [Format; 28] = [
         Format::Png,
         Format::Jpeg,
         Format::Jp2,
@@ -155,6 +161,7 @@ impl Format {
         Format::SunRaster,
         Format::Sgi,
         Format::JpegLs,
+        Format::Pixar,
     ];
 
     pub fn caps(self) -> FormatCaps {
@@ -196,6 +203,7 @@ impl Format {
             Format::SunRaster => "Sun Raster",
             Format::Sgi => "SGI",
             Format::JpegLs => "JPEG-LS",
+            Format::Pixar => "Pixar",
         }
     }
 
@@ -230,6 +238,7 @@ impl Format {
             Format::SunRaster => &["ras", "sun"],
             Format::Sgi => &["sgi", "rgb", "rgba", "bw"],
             Format::JpegLs => &["jls"],
+            Format::Pixar => &["pxr"],
         }
     }
 
@@ -262,13 +271,14 @@ impl Format {
             Format::SunRaster => "image/x-sun-raster",
             Format::Sgi => "image/x-sgi",
             Format::JpegLs => "image/jls",
+            Format::Pixar => "image/x-pixar",
         }
     }
 
     /// Maximum encodable dimensions, if the format has a hard limit.
     pub fn max_dimensions(self) -> Option<(u32, u32)> {
         match self {
-            Format::Jpeg | Format::Gif | Format::Iff | Format::Sgi | Format::JpegLs => Some((65535, 65535)),
+            Format::Jpeg | Format::Gif | Format::Iff | Format::Sgi | Format::JpegLs | Format::Pixar => Some((65535, 65535)),
             Format::WebP => Some((16384, 16384)),
             Format::Ico => Some((256, 256)),
             _ => None,
@@ -350,6 +360,7 @@ pub fn caps(format: Format) -> FormatCaps {
             FormatCaps { read: cfg!(feature = "sgi"), write: cfg!(feature = "sgi"), depths: &[S::U8, S::U16], layouts: RGB_GRAY, alpha: true, ..base }
         }
         Format::JpegLs => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
+        Format::Pixar => FormatCaps { read: true, write: false, depths: &[S::U8], layouts: &[L::Gray, L::GrayA, L::Rgb, L::Rgba], ..base },
         Format::Jp2 => FormatCaps { read: true, write: false, layouts: &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::Cmyk, L::CmykA], icc: true, ..base },
     }
 }
@@ -474,6 +485,9 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     }
     if b.starts_with(b"SDPX") || b.starts_with(b"XPDS") {
         return Some(Format::Dpx);
+    }
+    if crate::codecs::pixar::looks_like_pixar(b) {
+        return Some(Format::Pixar);
     }
     if crate::codecs::dpx::is_cineon(b) {
         return Some(Format::Cineon);

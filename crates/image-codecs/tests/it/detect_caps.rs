@@ -256,6 +256,17 @@ fn detect_magic_iff() {
     assert_eq!(detect(b"FORM\0\0\0\x14AIFF"), None);
     assert!(decode_as(Format::Iff, b"FORM\0\0\0\x14ILBM").is_err());
 }
+
+#[test]
+fn detect_magic_pixar() {
+    assert_eq!(detect(&[0x80, 0xE8, 0x00, 0x00, 0x00, 0x00]), Some(Format::Pixar));
+    assert_eq!(from_extension("scan.PXR"), Some(Format::Pixar));
+    assert!(caps(Format::Pixar).read && !caps(Format::Pixar).write, "Pixar is read-only");
+    assert!(ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Pixar));
+    // A bare magic is an error, never a panic.
+    assert!(decode_as(Format::Pixar, &[0x80, 0xE8, 0x00, 0x00]).is_err());
+}
+
 #[cfg(feature = "sgi")]
 #[test]
 fn feature_config_detect_magic_sgi() {
