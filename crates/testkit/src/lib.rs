@@ -30,6 +30,10 @@
 //! truncation of it and those copies, one after another on a worker thread with a time limit for
 //! each, and fails the test with the case that panicked or did not finish.
 //!
+//! With the `log` feature, on targets other than `wasm32`, `log::warnings` and `log::records`
+//! capture the records the calling thread logs while a closure runs, and `log::capture_global`
+//! captures the records every thread logs. One test binary uses one of the two modes.
+//!
 //! On targets other than `wasm32`, `serial` holds `serial::TestLock`, a lock that a `static`
 //! can hold and that the thread holding it can take again, and `serial::gpu_lock`, the one lock
 //! for GPU tests. Every GPU test in a process must take this lock, because a test that takes a
@@ -72,6 +76,8 @@ pub mod deadline;
 pub mod fonts;
 pub mod guards;
 pub mod hostile;
+#[cfg(all(feature = "log", not(target_arch = "wasm32")))]
+pub mod log;
 #[cfg(all(feature = "mcp", not(target_arch = "wasm32")))]
 pub mod mcp;
 pub mod rng;

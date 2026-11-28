@@ -15,17 +15,33 @@ mcp = ["dep:serde_json"]
 corpus = ["dep:sha2", "dep:libc"]
 # `font-coverage`: `skip::craft_fonts_cover`, which parses font data with skrifa.
 font-coverage = ["dep:skrifa"]
+# `log`: capture of the records a test logs, per thread or process wide.
+log = ["dep:log"]
 
 [dependencies]
 sha2 = { version = "0.10", default-features = false, features = ["std"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+log = { workspace = true, optional = true }
 skrifa = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2", optional = true }
 rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
+
+[[test]]
+name = "log_thread"
+required-features = ["log"]
+
+[[test]]
+name = "log_global"
+harness = false
+required-features = ["log"]
+
+[[test]]
+name = "log_foreign"
+required-features = ["log"]
 
 [[test]]
 name = "mcp"
