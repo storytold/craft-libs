@@ -288,7 +288,11 @@ impl<'a> WarpGrid<'a> {
                 None => cx.part_if_declared(SURFACE),
             };
             let Some(result) = found else { continue };
-            let (hover_at, press) = (result.hover_pos, result.press);
+            let hover_at = match point {
+                Some(index) => cx.hover_pos(POINT.at(index as u64)),
+                None => cx.hover_pos(SURFACE),
+            };
+            let press = result.press;
             if hover.is_none()
                 && let Some(at) = hover_at
             {

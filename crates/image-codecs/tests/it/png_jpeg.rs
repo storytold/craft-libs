@@ -530,7 +530,7 @@ fn png_rows_fail_like_decode_on_damaged_files() {
 
 #[cfg(feature = "corpus")]
 #[test]
-fn pngsuite_corpus_matches_oracle() {
+fn feature_config_pngsuite_corpus_matches_oracle() {
     let mut checked = 0;
     for (name, bytes) in common::pngsuite::pngs() {
         let oracle = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png);
@@ -637,7 +637,7 @@ fn png_preflight_uses_the_output_layout() {
 
 #[cfg(feature = "corpus")]
 #[test]
-fn png_rows_equal_decode_on_the_pngsuite_corpus() {
+fn feature_config_png_rows_equal_decode_on_the_pngsuite_corpus() {
     let mut checked = 0;
     for (name, bytes) in common::pngsuite::pngs() {
         assert_steps_equal_decode(&bytes, &name);
@@ -650,7 +650,7 @@ fn png_rows_equal_decode_on_the_pngsuite_corpus() {
 /// but the interlaced ones), and fails where `decode` fails.
 #[cfg(feature = "corpus")]
 #[test]
-fn pngsuite_corpus_rows_match_the_whole_decode() {
+fn feature_config_pngsuite_corpus_rows_match_the_whole_decode() {
     let opts = DecodeOptions { keep_orientation: true, ..Default::default() };
     let (mut streamed, mut refused, mut skipped) = (0, 0, 0);
     for (name, bytes) in common::pngsuite::pngs() {

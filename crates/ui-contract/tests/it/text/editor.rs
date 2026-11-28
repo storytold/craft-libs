@@ -28,6 +28,13 @@ const NEXT: Rect = Rect { min: Pos2::new(10.0, 110.0), max: Pos2::new(90.0, 130.
 const TEXT: &str = "fn main";
 const EDITOR: PartKey = PartKey::new("editor");
 
+thread_local! {
+    /// Whether the probe's editor part held the key focus in its last pass.
+    static EDITOR_FOCUSED: Cell<Option<bool>> = const { Cell::new(None) };
+    /// The window focus the pass's input reported, so a trial can tell a window in the background from one with focus.
+    static WINDOW_FOCUSED: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
 /// An editor that logs the inputs it receives and, while `report` is set, reports its one line: `TEXT`, or the text
 /// of its `doc` when it keeps one.
 #[derive(craft_ui::contract::Component)]
@@ -80,6 +87,8 @@ impl Component for Probe<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        EDITOR_FOCUSED.set(cx.editor_handle().map(|handle| handle.focused()));
+        WINDOW_FOCUSED.set(Some(cx.core.ctx.input(|input| input.focused)));
         let inputs: Vec<EditorInput> = cx.editor_input().collect();
         if let Some(doc) = self.doc {
             doc.apply(cx, &inputs);
@@ -335,6 +344,28 @@ impl Rig {
     fn click_resets(&mut self, at: Pos2) -> Vec<egui::ImeResetId> {
         [vec![moved(at)], vec![press(at)], vec![release(at)], Vec::new()].into_iter().filter_map(|events| self.frame_reset(events)).collect()
     }
+}
+
+/// Switching to another app and back is no focus move for an editor: it keeps the key focus, and its input-method
+/// context runs on through it, with no new generation to reset the input method when the window comes back.
+#[trial]
+fn switching_apps_keeps_the_editor_focused_and_its_input_method_context() {
+    let mut rig = Rig::with(EditorPurpose::Code, Some(Doc::new(TEXT, Some(1))), false);
+    rig.focus();
+    rig.frame(Vec::new());
+    let generation = rig.ime().generation;
+    rig.frame(vec![craft_ui::testing::pointer::window_blurred()]);
+    for _ in 0..3 {
+        rig.frame(Vec::new());
+        assert_eq!(WINDOW_FOCUSED.get(), Some(false), "the window's input reports the background, as a host's does");
+        assert_eq!(EDITOR_FOCUSED.get(), Some(true), "the editor keeps the key focus while the window is in the background");
+    }
+    rig.frame(vec![Event::WindowFocused(true)]);
+    rig.frame(Vec::new());
+    assert_eq!(WINDOW_FOCUSED.get(), Some(true), "the window has the focus again");
+    assert_eq!(rig.ime().generation, generation, "the input method's context ran on through the switch");
+    rig.frame(vec![Event::Text("x".into())]);
+    assert!(rig.take().iter().any(|input| matches!(input, EditorInput::Text(text) if &**text == "x")), "typing goes on in the editor");
 }
 
 /// Shift+Enter reaches an editor as a newline with Shift held, told from a plain Enter in the same frame, in the order

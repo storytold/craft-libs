@@ -14,7 +14,7 @@ pub const MAX_DEPTH: usize = 8;
 /// header made 2 million cells and took 3 to 5 GB to convert; past this, rows are left out.
 pub const MAX_TABLE_CELLS: usize = 1 << 18;
 
-/// Deepest groups in groups kept (hostile files).
+/// Deepest subgroup level kept, with the outer group at depth 0 (hostile files).
 pub const MAX_GROUP_DEPTH: usize = 8;
 
 /// Longest font name the importers keep, in bytes (as the .docx reader); a longer one (no real
@@ -179,6 +179,8 @@ pub struct Img {
     /// How much is cut off its left, top, right and bottom, fractions of its size (0..1), for
     /// formats that keep it (ODT).
     pub crop: [f32; 4],
+    /// This picture's own hyperlink target, when it is a paragraph drawing.
+    pub link: Option<String>,
 }
 
 /// An embedded object WordCraft shows but doesn't edit, kept whole for saving back (ODF 1.3
@@ -290,6 +292,8 @@ pub enum Inline {
         look: BoxLook,
         /// A freeform's paths ([`craft_wordmodel::para::ShapeKind::Freeform`]).
         path: Option<std::sync::Arc<craft_wordmodel::freeform::Freeform>>,
+        /// This shape's own hyperlink target, when it is a paragraph drawing.
+        link: Option<String>,
     },
     /// The start of a field whose result is the content after it, up to the matching
     /// [`Inline::FieldEnd`] (a table of contents around its entries); its field code. Only flows
@@ -305,6 +309,8 @@ pub enum Inline {
         h: f32,
         float: Option<Box<craft_wordmodel::para::Float>>,
         members: Vec<Member>,
+        /// The group's own target; members retain their separate targets.
+        link: Option<String>,
     },
 }
 
@@ -316,6 +322,8 @@ pub struct Member {
     pub x: f32,
     pub y: f32,
     pub inline: Inline,
+    /// This member's own hyperlink target, independent of the containing group.
+    pub link: Option<String>,
 }
 
 /// How a text box or shape looks: its fill, its outline (colour and width, dash and

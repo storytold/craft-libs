@@ -186,7 +186,7 @@ impl Component for TableSizePicker {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        let pointer = (0..ROWS * COLUMNS).find(|&index| cx.hover_pos(Self::part(index)).is_some());
+        let pointer = (0..ROWS * COLUMNS).find(|&index| cx.part_if_declared(Self::part(index)).is_some_and(|result| result.hovered));
         let focused = cx.active_part().and_then(|part| (0..ROWS * COLUMNS).find(|&index| Self::part(index) == part)).filter(|_| cx.focus_visible());
         self.lead = pointer.or(focused).or_else(|| self.preset_index());
         self.picked = (0..ROWS * COLUMNS).find(|&index| cx.part_activated(Self::part(index)).is_some());

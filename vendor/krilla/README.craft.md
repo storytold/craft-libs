@@ -28,6 +28,7 @@ itself omits those texts. Its examples and four CC0 ICC profiles are retained wi
 | `patches/16-modification-date.patch` | Modification date | `interchange/metadata.rs` |
 | `patches/17-color-precision.patch` | Color precision | `graphics/{color,shading_function}.rs` |
 | `patches/18-subset-os2.patch` | Embedding permissions in TrueType subsets | `text/cid.rs` |
+| `patches/19-image-row-prediction.patch` | Sampled-image row prediction | `graphics/image.rs`, `stream.rs` |
 
 Each patch applies with `patch -p1` from this directory, in numeric order, to the pristine
 crate. `SOURCE.json` records, for every retained file, the upstream hash (`upstream_sha256`)
@@ -451,3 +452,33 @@ font with no `OS/2` is embedded as before. CFF programs are still embedded bare 
 
 craft-pdf's `font_tables` test embeds a TrueType font with `fsType` 4 and checks the program's
 `OS/2` matches the source, its table order and checksums, and that it still parses.
+
+## 19: sampled-image row prediction
+
+Sampled colour and independent grayscale alpha planes retain raw Flate encoding as a fallback.
+The optional encoding uses byte-wise PNG Up with a tag of 2 on every row and a zero previous
+row initially, including the individual bytes of 16-bit samples. A single row has no previous-row
+signal, so it keeps the raw path without allocating predictor scratch or recompressing. Width,
+component count and bit depth are carried for gray, RGB, CMYK and DeviceN images. Existing opaque
+8-bit alpha omission, 16-bit alpha retention, ICC/colorant order, image identity and interpolation
+are unchanged; JPEG remains DCT encoded.
+
+[Adobe PDF Reference 1.7, section 3.3.3, Table 3.8](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf)
+assigns Predictor 12 to PNG Up. The equivalent predictor and filter-parameter rules are in
+[ISO 32000-1:2008, sections 7.3.8 and 7.4.4](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf).
+The [PNG Up definition](https://www.w3.org/TR/png/#9Filter-type-2-Up) operates on bytes modulo 256.
+Flate's DecodeParms dictionary includes Predictor, Columns, Colors and BitsPerComponent. When
+ASCIIHex wraps Flate, DecodeParms is `[null, dictionary]` in the same decoding order as the filters.
+
+The encoder streams one fallibly reserved row through the existing flate2 dependency. Optional
+output is fallible and bounded below the raw compressed length; failed optional allocation or
+compression falls back to raw output. Selection waits for the actual ASCII and pdf-writer settings
+and compares serialized filter/parameter bytes, Length digits and encoded payload length, including
+ASCII newlines. It selects prediction only when the whole stream is smaller. No public API,
+dependency, accepted-input limit or global deflate/hex implementation changes.
+
+Validation uses the public craft-pdf Writer image path, full decoded sample bytes and PDF filter
+metadata for the original synthetic gradient, all sampled layouts/depths and masks, ASCII wrapping,
+raw fallback. JPEG DCT data and inversion remain unchanged by source review. The original #561 investigation is by OPUZZLES; no unpublished
+patch or historical measurement is used as new validation. Execution results are recorded by the
+consumer test run rather than inferred from this ledger.

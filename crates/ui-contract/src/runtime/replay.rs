@@ -24,10 +24,10 @@ use crate::runtime::reads::BindKey;
 use crate::runtime::shift::Shift;
 use egui::{Context, IdSet, RecordShift, Rect};
 use std::any::Any;
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A registration of the recorded run: the call that makes it again and what it is called with. Two entries are equal
 /// when they come from the same call (the same `again` of [`journal`]) with equal arguments.
@@ -108,8 +108,17 @@ impl fmt::Debug for Entry {
     }
 }
 
-/// Records open across all contexts, so a registration made while none is open takes no lock.
-static OPEN: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    /// The records open on this thread, so a registration made while none is open reads no pass state. Records are
+    /// open only around runs of a pass, on the pass's own thread: a job's thread (a finished job's wake, a progress
+    /// report) has none, and never takes the pass state the pass's thread holds.
+    static OPEN: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Whether a record is open on this thread.
+fn any_open() -> bool {
+    OPEN.with(Cell::get) > 0
+}
 
 /// The journal of the running pass while a record is open, and the records open around the running code.
 #[derive(Default)]
@@ -184,6 +193,13 @@ pub(crate) struct Facts {
     pub(crate) overlays: Vec<ShownLayer>,
     /// The layer stack entries the run recorded (`note_layer`): a close queued for one is taken only by a run.
     pub(crate) layers: Vec<egui::Id>,
+    /// The components (arena roots and members) that own shapes the run registered (`note_sensors`): what pointer
+    /// sensing gives them is what the run saw of the pointer (`pointer::Sensed`), with the run's egui widgets.
+    pub(crate) sensors: IdSet,
+    /// The screen rects the run's content follows the pointer in (`pointer::follows_pointer`).
+    pub(crate) follows: Vec<Rect>,
+    /// The wheel takers the run registered (`wheel::register`): a share of the wheel for one runs it.
+    pub(crate) takers: Vec<egui::Id>,
 }
 
 /// An overlay layer a run showed: its egui layer and its rect in screen space.
@@ -246,7 +262,7 @@ impl Record {
 
 /// Whether a record is open around the running code.
 pub(crate) fn recording(ctx: &Context) -> bool {
-    OPEN.load(Ordering::Acquire) > 0 && pass_state::with::<Recorder, _>(ctx, |recorder| !recorder.open.is_empty())
+    any_open() && pass_state::with::<Recorder, _>(ctx, |recorder| !recorder.open.is_empty())
 }
 
 /// Opens a record around the real run of a region, which `close` ends. A run inside an open label scope cannot be
@@ -263,7 +279,7 @@ pub(crate) fn open_in_pass(ctx: &Context) {
 
 fn push(ctx: &Context, open: Open) {
     pass_state::with::<Recorder, _>(ctx, |recorder| recorder.open.push(Open { from: recorder.journal.len(), ..open }));
-    OPEN.fetch_add(1, Ordering::AcqRel);
+    OPEN.with(|open| open.set(open.get() + 1));
 }
 
 /// Opens a record around a run of the replay audit, which `close` ends as any other.
@@ -275,13 +291,13 @@ pub(crate) fn open_audit(ctx: &Context) {
 /// Whether the running code is inside a run of the replay audit.
 #[cfg(feature = "testing")]
 pub(crate) fn in_audit_run(ctx: &Context) -> bool {
-    OPEN.load(Ordering::Acquire) > 0 && pass_state::with::<Recorder, _>(ctx, |recorder| recorder.open.iter().any(|open| open.audit))
+    any_open() && pass_state::with::<Recorder, _>(ctx, |recorder| recorder.open.iter().any(|open| open.audit))
 }
 
 /// Ends the innermost record, the one around a run on `layer`: paint or widgets on a layer that is neither `layer` nor
 /// an overlay the run showed block it.
 pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
-    OPEN.fetch_sub(1, Ordering::AcqRel);
+    OPEN.with(|open| open.set(open.get().saturating_sub(1)));
     let (open, journal) = pass_state::with::<Recorder, _>(ctx, |recorder| {
         // A close with no open record ends one that holds nothing and is never replayed.
         let open = recorder.open.pop().unwrap_or_else(|| {
@@ -306,6 +322,9 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
             outer.facts.instances.extend(open.facts.instances.iter().copied());
             outer.facts.overlays.extend(open.facts.overlays.iter().copied());
             outer.facts.layers.extend(open.facts.layers.iter().copied());
+            outer.facts.sensors.extend(open.facts.sensors.iter().copied());
+            outer.facts.follows.extend(open.facts.follows.iter().copied());
+            outer.facts.takers.extend(open.facts.takers.iter().copied());
         } else {
             recorder.journal.clear();
         }
@@ -458,10 +477,8 @@ pub(crate) fn replay(ctx: &Context, record: &Record, shift: &RecordShift) {
 }
 
 fn with_open(ctx: &Context, f: impl FnOnce(&mut Facts)) {
-    // Records are open only around runs of a pass on its own thread. A job's thread (a finished job's wake, a progress
-    // report) runs no pass of `ctx`: it has no record to note into and must not take the pass state that the pass's
-    // thread holds.
-    if OPEN.load(Ordering::Acquire) > 0 && frame::running(ctx).is_some() {
+    // A record open on this thread is one of a running pass: of `ctx`, or of another context this thread runs.
+    if any_open() && frame::running(ctx).is_some() {
         pass_state::with::<Recorder, _>(ctx, |recorder| {
             if let Some(open) = recorder.open.last_mut() {
                 f(&mut open.facts);
@@ -518,7 +535,7 @@ where
 
 /// Notes that the running code read the value `key`.
 pub(crate) fn note_read(ctx: &Context, key: BindKey) {
-    if OPEN.load(Ordering::Acquire) > 0 && frame::running(ctx).is_some() {
+    if any_open() && frame::running(ctx).is_some() {
         pass_state::with::<Recorder, _>(ctx, |recorder| {
             if let Some(open) = recorder.open.last_mut()
                 && (!open.kept || !matches!(key, BindKey::Place(..)))
@@ -553,6 +570,21 @@ pub(crate) fn note_wake(ctx: &Context, at: f64) {
 /// registration of the layer's `Area`, so a record that replays it notes it again in the records open around it.
 pub(crate) fn note_overlay(ctx: &Context, layer: Layer, rect: Rect) {
     with_open(ctx, |facts| facts.overlays.push(ShownLayer { layer, rect }));
+}
+
+/// Notes that the running code registered shapes owned by the components `owners`, by a run or a replay.
+pub(crate) fn note_sensors(ctx: &Context, owners: impl IntoIterator<Item = egui::Id>) {
+    with_open(ctx, |facts| facts.sensors.extend(owners));
+}
+
+/// Notes that what the running code shows in the screen rect `rect` follows the pointer, by a run or a replay.
+pub(crate) fn note_follows(ctx: &Context, rect: Rect) {
+    with_open(ctx, |facts| facts.follows.push(rect));
+}
+
+/// Notes that the running code registered the wheel taker `owner`, by a run or a replay.
+pub(crate) fn note_taker(ctx: &Context, owner: egui::Id) {
+    with_open(ctx, |facts| facts.takers.push(owner));
 }
 
 /// Notes that the running code recorded the layer stack entry `id`, by a run or a replay.

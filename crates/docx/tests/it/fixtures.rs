@@ -1280,17 +1280,17 @@ fn compatibility_mode_is_read_and_defaults_to_word_2007() {
     let compat = |v: &str| {
         format!(r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="{v}"/></w:compat>"#)
     };
-    assert_eq!(with_settings(Some(&compat("15"))).settings.compat_mode, 15);
-    assert_eq!(with_settings(Some(&compat("14"))).settings.compat_mode, 14);
+    assert_eq!(with_settings(Some(&compat("15"))).settings.compat_mode, Some(15));
+    assert_eq!(with_settings(Some(&compat("14"))).settings.compat_mode, Some(14));
     // Unnamed, out of range or junk values.
-    assert_eq!(with_settings(Some("<w:compat/>")).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
-    assert_eq!(with_settings(None).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
-    assert_eq!(with_settings(Some(&compat("-3"))).settings.compat_mode, 11);
-    assert_eq!(with_settings(Some(&compat("99999"))).settings.compat_mode, 99);
-    assert_eq!(with_settings(Some(&compat("abc"))).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
+    assert_eq!(with_settings(Some("<w:compat/>")).settings.compat_mode, None);
+    assert_eq!(with_settings(None).settings.compat_mode, None);
+    assert_eq!(with_settings(Some(&compat("-3"))).settings.compat_mode, Some(11));
+    assert_eq!(with_settings(Some(&compat("99999"))).settings.compat_mode, Some(99));
+    assert_eq!(with_settings(Some(&compat("abc"))).settings.compat_mode, None);
     // Another vendor's setting of the same name is ignored.
     let other = r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="urn:example" w:val="15"/></w:compat>"#;
-    assert_eq!(with_settings(Some(other)).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
+    assert_eq!(with_settings(Some(other)).settings.compat_mode, None);
 }
 
 #[test]
@@ -1458,7 +1458,9 @@ fn anchor_stacking_order_is_read_and_kept() {
 
 #[test]
 fn documents_without_a_compatibility_mode_are_laid_out_as_word_2007() {
-    assert_eq!(read_body("<w:p/>").settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
+    let d = read_body("<w:p/>");
+    assert_eq!(d.settings.compat_mode, None);
+    assert_eq!(d.settings.effective_compat_mode(), craft_wordmodel::LEGACY_COMPAT_MODE);
 }
 
 #[test]
@@ -3666,7 +3668,7 @@ const INK_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordprocessi
 const INK_XML: &str = r##"<ink xmlns="http://www.w3.org/2003/InkML"><definitions><context xml:id="ctx"><inkSource xml:id="src"><traceFormat><channel name="X" type="integer" units="cm"/><channel name="Y" type="integer" units="cm"/></traceFormat></inkSource></context><brush xml:id="blue"><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="0.08" units="cm"/></brush></definitions><trace contextRef="#ctx" brushRef="#blue">0 0, 1 1, 2 0</trace></ink>"##;
 const INK_TYPES: &str = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/ink/ink1.xml" ContentType="application/inkml+xml"/><Default Extension="png" ContentType="image/png"/></Types>"#;
 
-fn ink_docx(fallback: bool, alias: bool) -> Vec<u8> {
+pub(super) fn ink_docx(fallback: bool, alias: bool) -> Vec<u8> {
     let content = r#"<q:contentPart xmlns:q="http://schemas.microsoft.com/office/word/2010/wordml" r:id="rInk"><q:xfrm><a:off x="0" y="0"/><a:ext cx="1828800" cy="914400"/></q:xfrm></q:contentPart>"#;
     let drawing = format!(
         r#"<w:drawing><wp:inline><wp:extent cx="1828800" cy="914400"/><wp:docPr id="1" name="Study ink"/><a:graphic><a:graphicData uri="{INK_NS}">{content}</a:graphicData></a:graphic></wp:inline></w:drawing>"#

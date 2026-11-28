@@ -21,6 +21,7 @@ use crate::docking::{
 use crate::layout_components::Stack;
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
 use crate::primitives::HostStyle;
+use crate::runtime::Shift;
 use crate::runtime::commands::{CommandRef, CommandSet as _, CommandState, Commands as _, focus_within};
 use crate::runtime::derived::derived;
 use crate::runtime::drag;
@@ -288,6 +289,7 @@ struct Drops<'a, P> {
     permissions: &'a dyn Fn(&P) -> Permissions,
     config: &'a DockConfig,
     specs: &'a HashMap<P, PanelSpec>,
+    unnamed: &'a PanelSpec,
     hide: HidePanels<'a>,
     maximized: Option<&'a P>,
     rtl: bool,
@@ -302,7 +304,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
         let shell = cx.env.get::<ShellEntry>().0;
         let bounds = inset_top(shell.as_ref().map_or(cx.rect, ShellCx::float_bounds), self.top_inset);
         let space = float_space(&ctx, bounds, &sizes, self.config, self.specs);
-        let spec = |panel: &P| spec_in(self.specs, panel);
+        let spec = |panel: &P| spec_in(self.specs, self.unnamed, panel).clone();
         let protected = |panel: &P| (self.permissions)(panel).is_protected();
         let prune = hide::Prune::new(self.layout, self.hide, shell.as_ref());
         let mut target = DockDropTarget::new(&ctx, self.dock, self.layout, self.permissions);
@@ -329,19 +331,88 @@ fn area_sizes(mut sizes: DockSizes, config: &DockConfig) -> DockSizes {
 struct Report<P> {
     actions: Vec<Action<P>>,
     events: Vec<DockEvent<P>>,
-    focused: Option<P>,
     pressed: Option<P>,
     picked: Option<P>,
     flyout: Vec<EditEvent<Option<P>>>,
-    placed: Vec<(P, Rect)>,
+    placed: Vec<Placed<P>>,
     /// The OS windows the floating windows showed in, by their first panel.
     windows: Vec<(P, ViewportId)>,
     /// The files dropped on the floating windows that no target there took.
     files: Vec<WindowFiles<P>>,
     /// The gesture sources the parts drew, in the order they showed.
     sources: Vec<DockSource<P>>,
-    /// The groups shown this pass, by their shown panel, in the order they showed.
-    shown: Vec<(P, Rect)>,
+    /// The groups shown this pass, in the order they showed.
+    shown: Vec<ShownGroup<P>>,
+    /// The tab each `DockGroup` picked this pass (a click, or the host's focus request), by the group's id.
+    picks: Vec<(Id, P)>,
+    /// The divider edits of the docked tree this pass.
+    split: EditEvents<Layout<P>>,
+}
+
+/// A group the area showed: its shown panel, its rect and, where it is a `DockGroup` (not a host's view), its id.
+#[derive(Clone, Debug, PartialEq)]
+struct ShownGroup<P> {
+    panel: P,
+    rect: Rect,
+    id: Option<Id>,
+}
+
+impl<P: Clone> Shift for ShownGroup<P> {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        ShownGroup { rect: self.rect.shifted(by), ..self.clone() }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        ShownGroup { rect: self.rect.snapped(&to.rect, within), ..self.clone() }
+    }
+}
+
+/// Where a dock column was placed, named by a panel of its first group.
+#[derive(Clone, Debug, PartialEq)]
+struct Placed<P> {
+    panel: P,
+    rect: Rect,
+}
+
+impl<P: Clone> Shift for Placed<P> {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        Placed { rect: self.rect.shifted(by), ..self.clone() }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        Placed { rect: self.rect.snapped(&to.rect, within), ..self.clone() }
+    }
+}
+
+/// What a column or the docked tree drew in its run that the area reports in every pass it shows: the gesture
+/// sources, the groups and the placed dock columns. A view's replay returns its run's, moved with the record.
+#[derive(Clone, Debug, PartialEq)]
+struct Drawn<P> {
+    sources: Vec<DockSource<P>>,
+    shown: Vec<ShownGroup<P>>,
+    placed: Vec<Placed<P>>,
+}
+
+impl<P: Clone> Shift for Drawn<P> {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        Drawn { sources: self.sources.shifted(by), shown: self.shown.shifted(by), placed: self.placed.shifted(by) }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        Drawn {
+            sources: self.sources.snapped(&to.sources, within),
+            shown: self.shown.snapped(&to.shown, within),
+            placed: self.placed.snapped(&to.placed, within),
+        }
+    }
+}
+
+/// How far the report had grown when a view's run began ([`Pass::drawn_since`]).
+#[derive(Clone, Copy)]
+struct Mark {
+    sources: usize,
+    shown: usize,
+    placed: usize,
 }
 
 /// The inputs of the workspace's derived values: the workspace, the panels' specs and the lock.
@@ -361,6 +432,8 @@ struct Scene<'s, P> {
     config: &'s DockConfig,
     layout: &'s Layout<P>,
     specs: &'s HashMap<P, PanelSpec>,
+    /// The spec of a panel the specs do not name.
+    unnamed: &'s PanelSpec,
     permissions: &'s HashMap<P, Permissions>,
     keys: &'s HashMap<PanelKey, P>,
     space: &'s FloatSpace<P>,
@@ -380,9 +453,9 @@ struct Scene<'s, P> {
     host_style: &'s HostStyle,
 }
 
-/// The spec of `panel` in `specs`, or an unnamed one.
-fn spec_in<P: Eq + Hash>(specs: &HashMap<P, PanelSpec>, panel: &P) -> PanelSpec {
-    specs.get(panel).cloned().unwrap_or_else(|| PanelSpec::new(Label::default()))
+/// The spec of `panel` in `specs`, or `unnamed`.
+fn spec_in<'s, P: Eq + Hash>(specs: &'s HashMap<P, PanelSpec>, unnamed: &'s PanelSpec, panel: &P) -> &'s PanelSpec {
+    specs.get(panel).unwrap_or(unnamed)
 }
 
 /// What an area derives from its workspace, its panels' specs and its lock, kept while none of them changes: whether
@@ -391,6 +464,8 @@ fn spec_in<P: Eq + Hash>(specs: &HashMap<P, PanelSpec>, panel: &P) -> PanelSpec 
 struct DockModel<P> {
     error: Option<InvalidGeometry>,
     specs: HashMap<P, PanelSpec>,
+    /// The spec of a panel `specs` does not name.
+    unnamed: PanelSpec,
     rights: HashMap<P, Permissions>,
     keys: HashMap<PanelKey, P>,
 }
@@ -409,6 +484,7 @@ impl<P: Clone + Eq + Hash> DockModel<P> {
         DockModel {
             error,
             specs: panels.iter().map(|panel| ((*panel).clone(), specs.spec(panel))).collect(),
+            unnamed: PanelSpec::new(Label::default()),
             rights,
             keys: panels.iter().map(|panel| (PanelKey::of(*panel), (*panel).clone())).collect(),
         }
@@ -425,7 +501,7 @@ enum HostPart {
     View,
 }
 
-impl<P: Clone + Eq + Hash> Scene<'_, P> {
+impl<'s, P: Clone + Eq + Hash> Scene<'s, P> {
     /// Runs `run`, which shows host code of `panel` as its `part`, on `ui`. Where the panel's body is the app's own egui
     /// code (`PanelSpec::host_body`), it runs with the style of the `Ui` the area was shown in, and only in the pass's
     /// real run: a measuring run takes what its last real run took (`HostStyle::show`).
@@ -449,8 +525,8 @@ impl<P: Clone + Eq + Hash> Scene<'_, P> {
         self.specs.get(panel).is_some_and(|spec| spec.host_body)
     }
 
-    fn spec(&self, panel: &P) -> PanelSpec {
-        spec_in(self.specs, panel)
+    fn spec(&self, panel: &P) -> &'s PanelSpec {
+        spec_in(self.specs, self.unnamed, panel)
     }
 
     fn permissions(&self, panel: &P) -> Permissions {
@@ -464,7 +540,7 @@ impl<P: Clone + Eq + Hash> Scene<'_, P> {
     /// Whether the docked `column` shows a rail of its icons beside it ([`IconicMode::Rail`]): an expanded column
     /// that collapses to icons.
     fn rail_beside(&self, column: &Column<P>) -> bool {
-        let spec = |panel: &P| self.spec(panel);
+        let spec = |panel: &P| self.spec(panel).clone();
         let collapses = column.panels().all(|panel| self.permissions(panel).collapses);
         self.config.iconic_mode == IconicMode::Rail
             && !column.iconic
@@ -474,7 +550,7 @@ impl<P: Clone + Eq + Hash> Scene<'_, P> {
     /// The `(width, floor)` of each docked column of a dock, for [`fit_widths`]: a rail beside an expanded column adds
     /// its width to both.
     fn natural(&self, columns: &[Column<P>]) -> Vec<(f32, Option<f32>)> {
-        let spec = |panel: &P| self.spec(panel);
+        let spec = |panel: &P| self.spec(panel).clone();
         let natural = self.sizes.natural(columns, &spec);
         columns
             .iter()
@@ -488,6 +564,108 @@ impl<P: Clone + Eq + Hash> Scene<'_, P> {
             })
             .collect()
     }
+}
+
+/// What the docks' geometry and the docked tree's frames follow besides their room: the pruned layout (with the specs
+/// and the lock), the sizes and the config.
+#[derive(crate::contract::MemoProps)]
+struct GeometryKey<'k> {
+    view: u128,
+    sizes: DockSizes,
+    #[memo_props(hash = "the config derives `Hash` over every field")]
+    config: &'k DockConfig,
+}
+
+/// The docks' columns as they lay out before the room shrinks them, derived per [`GeometryKey`]: for each dock, by its
+/// window edge, each column's `(width, floor)` ([`Scene::natural`]) and its card's inset ([`DockSizes::card_place`]).
+struct DockGeometry {
+    docks: Vec<(DockEdge, Vec<ColumnExtent>, Vec<Option<CardInset>>)>,
+}
+
+/// A dock column's `(width, floor)` before the room shrinks it ([`Scene::natural`]).
+type ColumnExtent = (f32, Option<f32>);
+
+impl DockGeometry {
+    fn of<P: Clone + Eq + Hash>(scene: &Scene<'_, P>) -> Self {
+        let spec = |panel: &P| scene.spec(panel).clone();
+        let docks = [DockEdge::Start, DockEdge::End]
+            .into_iter()
+            .filter_map(|edge| {
+                let path = scene.layout.dock_path(edge)?;
+                let Some(Node::Dock { columns, .. }) = node_at(scene.layout.root.as_ref()?, &path) else { return None };
+                let cards = columns.iter().enumerate().map(|(at, column)| scene.sizes.card_place(at, column, &spec)).collect();
+                Some((edge, scene.natural(columns), cards))
+            })
+            .collect();
+        DockGeometry { docks }
+    }
+
+    /// The `(width, floor)` and card place of each column of the dock at `edge`.
+    fn dock(&self, edge: DockEdge) -> (&[ColumnExtent], &[Option<CardInset>]) {
+        self.docks.iter().find(|(at, _, _)| *at == edge).map_or((&[], &[]), |(_, natural, cards)| (natural.as_slice(), cards.as_slice()))
+    }
+}
+
+/// What a pass shows the docked tree with: the room, the docks' name, the open flyout, the shell and the docks'
+/// geometry.
+struct TreeAt<P> {
+    room: Rect,
+    label: Label,
+    open: Option<P>,
+    shell: Option<ShellCx>,
+    geometry: Arc<DockGeometry>,
+    /// The revision of the tree's frames: the layout, the specs, the sizes and the config ([`GeometryKey`]).
+    frames: u128,
+}
+
+/// The docked tree as a memoized view: it replays while its key holds and no input reaches it.
+#[derive(MemoProps)]
+struct TreeView<'v, 's, P> {
+    /// [`Pass::tree_key`].
+    key: u128,
+    #[memo_props(hash = "a dock's panels are plain values it keys by their hash")]
+    rail_footer: Option<P>,
+    #[memo_props(
+        covered_by = "key",
+        reason = "the key holds the arrangement, the specs, the requests and the versions of every panel the tree shows"
+    )]
+    pass: &'v mut Pass<'s, P>,
+    #[memo_props(covered_by = "key", reason = "the key holds the room, the name, the open flyout, the shell's reveal and the geometry's key")]
+    at: TreeAt<P>,
+}
+
+fn tree_view<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(view: &mut TreeView<'_, '_, P>, ui: &mut Ui) -> Drawn<P> {
+    let mark = view.pass.mark();
+    view.pass.show_tree(ui, &view.at);
+    view.pass.drawn_since(mark)
+}
+
+/// A column as a memoized view: it replays while its key holds and no input reaches it.
+#[derive(MemoProps)]
+struct ColumnView<'v, 's, P> {
+    /// [`Pass::column_key`].
+    key: u128,
+    #[memo_props(hash = "a dock's panels are plain values it keys by their hash")]
+    first: P,
+    #[memo_props(
+        covered_by = "key",
+        reason = "the key holds the arrangement, the specs, the requests and the versions of the panels the column shows"
+    )]
+    pass: &'v mut Pass<'s, P>,
+    #[memo_props(covered_by = "key", reason = "the arrangement in the key holds the column")]
+    column: &'v Column<P>,
+    #[memo_props(covered_by = "key", reason = "the key holds the column's place")]
+    at: ColumnAt<P>,
+    name: Label,
+}
+
+fn column_view<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(view: &mut ColumnView<'_, '_, P>, ui: &mut Ui) -> Drawn<P> {
+    let mark = view.pass.mark();
+    let cell = view.at.cell;
+    view.pass.column(ui, &view.name, view.column, view.at.clone());
+    // The column takes no room in flow; the run covers its cell, so the pointer over it runs it again.
+    ui.expand_to_include_rect(cell);
+    view.pass.drawn_since(mark)
 }
 
 /// What the area reports from one pass.
@@ -532,12 +710,16 @@ struct DockPlan<'p, P> {
     rect: Rect,
     flow: Flow,
     open: Option<P>,
+    /// Each column's `(width, floor)` and card place ([`DockGeometry::dock`]).
+    natural: &'p [(f32, Option<f32>)],
+    cards: &'p [Option<CardInset>],
 }
 
 /// Where and how a column shows: its rect; the edge it keeps to, a dock's window edge or the float area's edge a
 /// floating window keeps to; where its bar is; the rect its inner edge and flyouts stay within; and the open flyout.
 /// Its flyouts open away from its edge: towards the canvas for a dock column, towards the float area's room for a
 /// floating one.
+#[derive(Clone)]
 struct ColumnAt<P> {
     cell: Rect,
     edge: DockEdge,
@@ -612,6 +794,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             permissions: &policy,
             config: &config,
             specs: &model.specs,
+            unnamed: &model.unnamed,
             hide,
             maximized: maximized.as_ref(),
             rtl,
@@ -640,6 +823,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
                 current: &current,
                 config: &config,
                 specs: &model.specs,
+                unnamed: &model.unnamed,
                 keys: &model.keys,
                 hide,
                 model: key,
@@ -753,6 +937,7 @@ struct Input<'i, P> {
     current: &'i Arc<Workspace<P>>,
     config: &'i DockConfig,
     specs: &'i HashMap<P, PanelSpec>,
+    unnamed: &'i PanelSpec,
     keys: &'i HashMap<PanelKey, P>,
     hide: HidePanels<'i>,
     model: ModelKey,
@@ -802,6 +987,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         current,
         config,
         specs,
+        unnamed,
         keys,
         hide,
         model,
@@ -831,6 +1017,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         config,
         layout,
         specs,
+        unnamed,
         permissions: rights,
         keys,
         space: &space,
@@ -851,7 +1038,6 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         report: Report {
             actions: Vec::new(),
             events: Vec::new(),
-            focused: None,
             pressed: None,
             picked: None,
             flyout: Vec::new(),
@@ -860,41 +1046,19 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
             files: Vec::new(),
             sources: Vec::new(),
             shown: Vec::new(),
+            picks: Vec::new(),
+            split: EditEvents::new(),
         },
         dock: id,
     };
 
-    let limits = |panel: &P| scene.spec(panel).limits;
-    let dock_width = |columns: &[Column<P>]| scene.natural(columns).iter().map(|(width, _)| *width).sum::<f32>();
-    let stripless = |panel: &P| scene.spec(panel).canvas;
-    let rules = FrameRules::new(&limits).dock_width(&dock_width).stripless(&stripless).dock_gap(scene.sizes.dock_gap);
+    let key = GeometryKey { view: scene.view, sizes, config };
+    let docks = derived(ctx, id.with("geometry"), &key, || DockGeometry::of(&scene));
     let label = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
-    let mut leaves: Vec<(Vec<bool>, Rect)> = Vec::new();
-    let area = SplitArea::new(label, Bind::given(layout.clone()), rules).show(ui, |ui, split| {
-        DockTargets::<P>::register_room(ctx, id, split.rect);
-        for (anchor, rect) in split.group_frames::<P>() {
-            let Some(place) = scene.layout.place(&anchor) else { continue };
-            let Some(node) = scene.layout.node_of(&place) else { continue };
-            if let PanelPlace::Node(path) = &place {
-                leaves.push((path.clone(), rect));
-            }
-            pass.leaf(ui, split, node, rect);
-        }
-        let flow = Flow::new(split.rect, rtl);
-        for (edge, rect) in split.dock_frames() {
-            let Some(path) = scene.layout.dock_path(edge) else { continue };
-            let Some(Node::Dock { columns, .. }) = scene.layout.root.as_ref().and_then(|root| node_at(root, &path)) else { continue };
-            leaves.push((path.clone(), rect));
-            if let Some(shell) = shell.as_ref().filter(|shell| shell.revealed()) {
-                shell.reveal_rect(ctx, if edge == DockEdge::Start { RevealEdge::Start } else { RevealEdge::End }, rect);
-            }
-            pass.dock(ui, split, DockPlan { edge, columns, rect, flow, open: open.clone() });
-        }
-    });
-    let splits =
-        area.output.dividers.iter().map(|(path, rect, node)| DockSource::new(SourceKind::Divider(DividerKind::Split(path.clone())), *rect, *node));
-    pass.report.sources.extend(splits);
-    let mut edit = area.output.edit.events.map(|edited| {
+    let tree = TreeAt { room: body.rect, label, open: open.clone(), shell: shell.clone(), geometry: docks, frames: MemoKey::of(&key) };
+    pass.tree(ui, tree);
+    let split = std::mem::take(&mut pass.report.split);
+    let mut edit = split.map(|edited| {
         let mut layout = current.layout().clone();
         view.write_back(&edited, &mut layout);
         let resized = match (current.layout().root.as_ref(), layout.root.as_ref()) {
@@ -910,7 +1074,6 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         (Some(from), Some(to)) => split_changes(from, to).into_iter().map(|(path, size)| Action::resize_split(path, size)).collect(),
         _ => Vec::new(),
     };
-    register_bands(&scene, ctx, body.rect, &leaves);
     let started = memory.moving.as_ref().map(|moving| moving.before.layout());
     let moved = if prune.floating { pass.windows(ui, body, &open, started) } else { None };
     let mut report = pass.report;
@@ -953,16 +1116,26 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         }
     }
     *body.memory::<AreaMemory<P>>() = memory;
+    // The group holding key focus, by the panel it shows, or the one it picked in this pass: a replayed group reports
+    // focus as a run does.
+    let focused = report
+        .shown
+        .iter()
+        .filter_map(|group| {
+            let id = group.id.filter(|id| focus_within(ctx, *id))?;
+            Some(report.picks.iter().find(|(picked, _)| *picked == id).map_or(&group.panel, |(_, panel)| panel).clone())
+        })
+        .last();
     Passed {
         geometry,
         actions: report.actions,
         events: report.events,
-        focused: report.focused,
+        focused,
         pressed: report.pressed,
         picked: report.picked,
         edit,
         space: Some(space),
-        columns: report.placed,
+        columns: report.placed.into_iter().map(|placed| (placed.panel, placed.rect)).collect(),
         windows: report.windows,
         files: report.files,
         sources: report.sources,
@@ -970,7 +1143,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
 }
 
 /// Registers the outer-edge bands and the new-dock bands as the dock's drop spots for the next pass, from the leaves
-/// the split area placed this pass (each as its tree path and rect). A new-dock band runs along a start or end edge
+/// the split area placed in this run (each as its tree path and rect). A new-dock band runs along a start or end edge
 /// that holds no dock.
 fn register_bands<P: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
     scene: &Scene<'_, P>,
@@ -1037,7 +1210,7 @@ fn panel_menu_rows<P: Clone + Eq + Hash>(
     }
     let targets = scene.layout.move_targets(panel, |other| scene.permissions(other));
     if scene.permissions(panel).movable && !targets.is_empty() {
-        let rows = targets.iter().enumerate().map(|(at, target)| PanelRow::Item(Entry::new(GroupItem::MoveTo(at), scene.spec(target).label)));
+        let rows = targets.iter().enumerate().map(|(at, target)| PanelRow::Item(Entry::new(GroupItem::MoveTo(at), scene.spec(target).label.clone())));
         let name = Label::from(words.panel_move_to.as_str().to_owned());
         group.push(PanelRow::Submenu(name, rows.collect()));
     }
@@ -1214,13 +1387,13 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                             .iter()
                             .map(|panel| {
                                 let spec = scene.spec(panel);
-                                PanelTitle::new(PanelKey::of(panel), spec.label)
+                                PanelTitle::new(PanelKey::of(panel), spec.label.clone())
                                     .closable(scene.permissions(panel).closable)
-                                    .command(spec.command)
+                                    .command(spec.command.clone())
                                     .count(spec.count)
-                                    .caption(spec.caption)
+                                    .caption(spec.caption.clone())
                                     .swatch(spec.swatch)
-                                    .documents(spec.documents)
+                                    .documents(spec.documents.clone())
                             })
                             .collect(),
                     )
@@ -1253,7 +1426,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let spec = scene.spec(&members[at]);
             if minimized {
                 group = group.minimized();
-            } else if !document(&spec) && !spec.host_body {
+            } else if !document(spec) && !spec.host_body {
                 // The app's own egui body lays out in the whole body, as it did outside the dock.
                 group = group.pad(Pad::Regular);
             }
@@ -1284,7 +1457,13 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
             GroupAt::Show(rect) => rect,
         };
-        self.report.shown.push((shown.clone(), rect));
+        // A measuring run of the container around the group draws it too; the group reports what it drew from the
+        // pass's real run only, once.
+        let reports = crate::runtime::measure::effect(ui.ctx(), "dock::group_report");
+        let at_shown = self.report.shown.len();
+        if reports {
+            self.report.shown.push(ShownGroup { panel: shown.clone(), rect, id: None });
+        }
         // One child `Ui` held to the group's rect. It takes the parent's next id, so a change of the group's first tab
         // keeps every id inside. The host's view runs first, held to the group's rect and clipped to it: it lays out in
         // the group's room, never in the room the area has left. Where the host leaves the group to the dock, the
@@ -1321,6 +1500,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let Some(output) = output else {
             if strip.is_positive()
                 && let Some(node) = self.rail_grip(ui, anchor, shown, strip, rect.size())
+                && reports
             {
                 self.report.sources.push(DockSource::new(SourceKind::GroupBar(anchor.clone()), strip, node));
             }
@@ -1335,12 +1515,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
         };
         let tabs = output.tabs.iter().filter_map(|(key, rect, node)| Some(DockSource::new(kind_of(*key)?, *rect, *node)));
-        self.report.sources.extend(tabs);
-        if let Some((rect, node)) = output.overflow {
-            self.report.sources.push(DockSource::new(SourceKind::Overflow(anchor.clone()), rect, node));
-        }
-        if let Some((rect, node)) = output.grip {
-            self.report.sources.push(DockSource::new(SourceKind::GroupBar(anchor.clone()), rect, node));
+        if reports {
+            self.report.sources.extend(tabs);
+            if let Some((rect, node)) = output.overflow {
+                self.report.sources.push(DockSource::new(SourceKind::Overflow(anchor.clone()), rect, node));
+            }
+            if let Some((rect, node)) = output.grip {
+                self.report.sources.push(DockSource::new(SourceKind::GroupBar(anchor.clone()), rect, node));
+            }
         }
         // The size `panel` floats at out of this group: the group's width, and the height the group measures at with
         // `panel` shown in a floating window's room, so content that fills the body takes that room.
@@ -1392,8 +1574,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             self.report.pressed = Some(shown.clone());
         }
         // A tab picked in this pass is the group's shown panel from now on, though this pass drew the one before.
-        if focus_within(ui.ctx(), output.response.id) {
-            self.report.focused = Some(picked.unwrap_or(shown).clone());
+        if reports {
+            self.report.shown[at_shown].id = Some(output.response.id);
+        }
+        if let Some(panel) = picked {
+            self.report.picks.push((output.response.id, panel.clone()));
         }
         for panel in output.closed.into_iter().filter_map(|key| scene.panel(key)) {
             self.report.actions.push(Action::close(panel.clone()));
@@ -1422,8 +1607,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
 
     /// The columns of a dock, from the window edge inwards.
     fn dock(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, plan: DockPlan<'_, P>) {
-        let scene = self.scene;
-        let widths = fit_widths(&scene.natural(plan.columns), plan.rect.width());
+        let widths = fit_widths(plan.natural, plan.rect.width());
+        let name = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
         let reading = plan.flow.to_physical(plan.rect);
         let start = plan.edge == DockEdge::Start;
         let mut cursor = if start { reading.left() } else { reading.right() };
@@ -1435,12 +1620,190 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             // A docked column takes the dock's height, a stepped one (a tool rail) too: the references' docked
             // toolbar keeps its column's surface down to the dock's foot, with the tools at the top
             // (photocraft#16461). Content taller than the dock scrolls inside. Only a floating stepped window is as
-            // tall as its content.
-            self.report.placed.push((first.clone(), cell));
-            let card = scene.sizes.card_place(at, column, &|panel: &P| scene.spec(panel));
+            // tall as its content. A measuring run of the container around the dock places it too; the dock reports
+            // its columns from the pass's real run only, once.
+            if crate::runtime::measure::effect(ui.ctx(), "dock::placed_report") {
+                self.report.placed.push(Placed { panel: first.clone(), rect: cell });
+            }
+            let card = plan.cards.get(at).copied().flatten();
+            let place = ("docked", plan.edge, at);
             let at = ColumnAt { cell, edge: plan.edge, bar: ColumnBar::Own, within: body.rect, open: plan.open.clone(), card };
-            self.column(ui, body, column, at);
+            self.shown_column(ui, &name, column, at, place);
         }
+    }
+
+    /// Shows `column` at `at`: as a memoized view keyed by [`Pass::column_key`] where every panel it shows has a
+    /// version, else run in this pass. `place` names the column among the area's: its dock edge and index, or its
+    /// window, so the ids inside stay while its tabs move.
+    fn shown_column(&mut self, ui: &mut Ui, name: &Label, column: &Column<P>, at: ColumnAt<P>, place: impl Hash + Debug) {
+        let (Some(key), Some(first)) = (self.column_key(column, &at), column.panels().next().cloned()) else {
+            self.column(ui, name, column, at);
+            return;
+        };
+        let id = self.dock.with(("column", place));
+        let cell = at.cell;
+        let view = ColumnView { key, first, pass: &mut *self, column, at, name: name.clone() };
+        // The view's room is the column's cell, so the pointer over the cell, and nowhere else, runs it.
+        let drawn = ui.scope_builder(UiBuilder::new().max_rect(cell), |ui| MemoView::new(id, view, column_view::<P>).show(ui)).inner;
+        if let Some(drawn) = drawn {
+            self.add_drawn(ui, drawn);
+        }
+    }
+
+    /// The docked tree, with its docks: as a memoized view keyed by [`Pass::tree_key`] where every panel it shows has
+    /// a version, else run in this pass.
+    fn tree(&mut self, ui: &mut Ui, at: TreeAt<P>) {
+        let Some(key) = self.tree_key(&at) else {
+            self.show_tree(ui, &at);
+            return;
+        };
+        let id = self.dock.with("docked tree");
+        let rail_footer = self.scene.rail_footer.cloned();
+        let view = TreeView { key, rail_footer, pass: &mut *self, at };
+        if let Some(drawn) = MemoView::new(id, view, tree_view::<P>).show(ui) {
+            self.add_drawn(ui, drawn);
+        }
+    }
+
+    /// The docked tree in a `SplitArea`: each group at its frame, each dock's columns, and the drop bands along the
+    /// area's edges.
+    fn show_tree(&mut self, ui: &mut Ui, at: &TreeAt<P>) {
+        let scene = self.scene;
+        let ctx = ui.ctx().clone();
+        let limits = |panel: &P| scene.spec(panel).limits;
+        let dock_width = |columns: &[Column<P>]| scene.natural(columns).iter().map(|(width, _)| *width).sum::<f32>();
+        let stripless = |panel: &P| scene.spec(panel).canvas;
+        let rules = FrameRules::new(&limits).dock_width(&dock_width).stripless(&stripless).dock_gap(scene.sizes.dock_gap);
+        let area = SplitArea::new(at.label.clone(), Bind::given(scene.layout.clone()), rules, at.frames).show(ui, |ui, split| {
+            DockTargets::<P>::register_room(&ctx, scene.dock, split.rect);
+            // The leaves of this run only: a measuring run of the area lays them out too, and registers nothing.
+            let mut leaves: Vec<(Vec<bool>, Rect)> = Vec::new();
+            for (anchor, rect) in split.group_frames::<P>() {
+                let Some(place) = scene.layout.place(&anchor) else { continue };
+                let Some(node) = scene.layout.node_of(&place) else { continue };
+                if let PanelPlace::Node(path) = &place {
+                    leaves.push((path.clone(), rect));
+                }
+                self.leaf(ui, split, node, rect);
+            }
+            let flow = Flow::new(split.rect, scene.rtl);
+            for (edge, rect) in split.dock_frames() {
+                let Some(path) = scene.layout.dock_path(edge) else { continue };
+                let Some(Node::Dock { columns, .. }) = scene.layout.root.as_ref().and_then(|root| node_at(root, &path)) else { continue };
+                leaves.push((path.clone(), rect));
+                if let Some(shell) = at.shell.as_ref().filter(|shell| shell.revealed()) {
+                    shell.reveal_rect(&ctx, if edge == DockEdge::Start { RevealEdge::Start } else { RevealEdge::End }, rect);
+                }
+                let (natural, cards) = at.geometry.dock(edge);
+                self.dock(ui, split, DockPlan { edge, columns, rect, flow, open: at.open.clone(), natural, cards });
+            }
+            register_bands(scene, &ctx, at.room, &leaves);
+        });
+        let splits = area
+            .output
+            .dividers
+            .iter()
+            .map(|(path, rect, node)| DockSource::new(SourceKind::Divider(DividerKind::Split(path.clone())), *rect, *node));
+        self.report.sources.extend(splits);
+        self.report.split = area.output.edit.events;
+    }
+
+    /// A key fed with what every column and the docked tree read of the area: the pruned layout, the dock their spots
+    /// register in, the float bounds, the direction, the look and the host's requests.
+    fn area_key(&self, open: Option<&P>) -> MemoKey {
+        let scene = self.scene;
+        let mut key = MemoKey::new();
+        scene.view.key(&mut key);
+        self.dock.key(&mut key);
+        scene.bounds.key(&mut key);
+        scene.rtl.key(&mut key);
+        scene.auto_collapse.key(&mut key);
+        key.feed_hash(scene.config);
+        scene.focus.map(PanelKey::of).key(&mut key);
+        scene.rail_footer.map(PanelKey::of).key(&mut key);
+        open.map(PanelKey::of).key(&mut key);
+        key
+    }
+
+    /// The key of `column` shown at `at` ([`Pass::area_key`], its place and the versions of the panels it shows), or
+    /// `None` where one of those panels has no version ([`DockPanels::content`]).
+    fn column_key(&self, column: &Column<P>, at: &ColumnAt<P>) -> Option<u128> {
+        let mut key = self.area_key(at.open.as_ref());
+        at.cell.key(&mut key);
+        at.within.key(&mut key);
+        key.feed_hash(&(at.edge, at.bar, at.card));
+        self.feed_versions(&mut key, column_shows(column, [at.open.as_ref(), self.scene.rail_footer]))?;
+        Some(key.finish())
+    }
+
+    /// The key of the docked tree shown at `at` ([`Pass::area_key`], its room, name, the shell's reveal, its frames'
+    /// revision and the versions of every panel it shows), or `None` where one of those panels has no version.
+    fn tree_key(&self, at: &TreeAt<P>) -> Option<u128> {
+        let mut key = self.area_key(at.open.as_ref());
+        at.room.key(&mut key);
+        at.label.key(&mut key);
+        at.shell.as_ref().map(ShellCx::revealed).key(&mut key);
+        at.frames.key(&mut key);
+        if let Some(root) = self.scene.layout.root.as_ref() {
+            self.feed_node(&mut key, root, at.open.as_ref())?;
+        }
+        Some(key.finish())
+    }
+
+    /// Feeds the versions of the panels `node` shows: each group's shown panel, each section and each dock column's
+    /// ([`column_shows`]). `None` where one has none.
+    fn feed_node(&self, key: &mut MemoKey, node: &Node<P>, open: Option<&P>) -> Option<()> {
+        match node {
+            Node::Split { first, second, .. } => {
+                self.feed_node(key, first, open)?;
+                self.feed_node(key, second, open)
+            }
+            Node::Tabs { panels, active, .. } => self.feed_versions(key, panels.get((*active).min(panels.len().saturating_sub(1))).into_iter()),
+            Node::Stack { entries, .. } => self.feed_versions(key, entries.iter().map(|entry| &entry.panel)),
+            Node::Dock { columns, .. } => {
+                for column in columns {
+                    self.feed_versions(key, column_shows(column, [open, self.scene.rail_footer]))?;
+                }
+                Some(())
+            }
+            _ => None,
+        }
+    }
+
+    /// Feeds the host's version of each of `panels` ([`DockPanels::content`]); `None` where one has none.
+    fn feed_versions<'p>(&self, key: &mut MemoKey, panels: impl Iterator<Item = &'p P>) -> Option<()>
+    where
+        P: 'p,
+    {
+        for panel in panels {
+            self.panels.content(panel)?.key(key);
+        }
+        Some(())
+    }
+
+    /// How far the report has grown, for [`Pass::drawn_since`].
+    fn mark(&self) -> Mark {
+        Mark { sources: self.report.sources.len(), shown: self.report.shown.len(), placed: self.report.placed.len() }
+    }
+
+    /// What the report gained since `mark`, taken out of it: what a view's run drew.
+    fn drawn_since(&mut self, mark: Mark) -> Drawn<P> {
+        Drawn {
+            sources: self.report.sources.split_off(mark.sources),
+            shown: self.report.shown.split_off(mark.shown),
+            placed: self.report.placed.split_off(mark.placed),
+        }
+    }
+
+    /// Adds what a view drew, by its run or its replay, to the report: in the pass's real run only. A measuring run's
+    /// replay returns the kept real run's report, which the real run adds once.
+    fn add_drawn(&mut self, ui: &Ui, drawn: Drawn<P>) {
+        if !crate::runtime::measure::effect(ui.ctx(), "dock::drawn_report") {
+            return;
+        }
+        self.report.sources.extend(drawn.sources);
+        self.report.shown.extend(drawn.shown);
+        self.report.placed.extend(drawn.placed);
     }
 
     /// The steps a resize `change` of the floating window of the stepped `column`, whose first panel is `first`, sets,
@@ -1461,7 +1824,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         (fitted, chrome): (Vec2, f32),
     ) -> Option<Rect> {
         let scene = self.scene;
-        let spec_of = |panel: &P| scene.spec(panel);
+        let spec_of = |panel: &P| scene.spec(panel).clone();
         let (grid, steps) = scene.sizes.stepped(column, &spec_of)?;
         let by_height = match change.kind {
             PlacementKind::Size(grip) => matches!(grip, ResizeEdge::Top | ResizeEdge::Bottom),
@@ -1492,7 +1855,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// steps: what the column shows under its bar. `None` for any other column.
     fn stepped_height(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, column: &Column<P>, width: f32, in_window: bool) -> Option<f32> {
         let scene = self.scene;
-        let spec = |panel: &P| scene.spec(panel);
+        let spec = |panel: &P| scene.spec(panel).clone();
         if column.iconic || scene.sizes.stepped(column, &spec).is_none() {
             return None;
         }
@@ -1507,7 +1870,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// for.
     fn arrow_of(&self, column: &Column<P>) -> ColumnArrow {
         let scene = self.scene;
-        let spec = |panel: &P| scene.spec(panel);
+        let spec = |panel: &P| scene.spec(panel).clone();
         ColumnArrow::of(column, &scene.sizes, &spec, column.panels().all(|panel| scene.permissions(panel).collapses))
     }
 
@@ -1526,10 +1889,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
 
     /// One column, docked or floating: its icons and their flyouts while it is collapsed, else its stacked groups,
     /// each group shown by `group_of`. What the user did on it becomes actions.
-    fn column(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, column: &Column<P>, at: ColumnAt<P>) {
+    fn column(&mut self, ui: &mut Ui, name: &Label, column: &Column<P>, at: ColumnAt<P>) {
         let scene = self.scene;
-        let spec = |panel: &P| scene.spec(panel);
-        let name = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
+        let spec = |panel: &P| scene.spec(panel).clone();
         let dock = self.dock;
         let ColumnAt { mut cell, edge, bar, within, open, card } = at;
         let in_window = bar == ColumnBar::Window;
@@ -1607,7 +1969,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     self.report.actions.push(Action::resize_iconic(first.clone(), Some(width)));
                 }
             }
-            let shown = DockColumn::new(name, dock, column, &spec)
+            let shown = DockColumn::new(name.clone(), dock, column, &spec)
                 .edge(edge)
                 .bar(bar)
                 .arrow(self.arrow_of(column))
@@ -1621,8 +1983,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let output = shown.show_groups_at(ui, cell, |group, rect, ui, body| {
                 self.group_of(ui, body, group, GroupAt::Show(rect), in_window);
             });
-            let dividers = output.dividers.into_iter().map(|(divider, rect, node)| DockSource::new(SourceKind::Divider(divider), rect, node));
-            self.report.sources.extend(dividers);
+            if crate::runtime::measure::effect(ui.ctx(), "dock::divider_report") {
+                let dividers = output.dividers.into_iter().map(|(divider, rect, node)| DockSource::new(SourceKind::Divider(divider), rect, node));
+                self.report.sources.extend(dividers);
+            }
             let width = output.width.map(|width| width - inset);
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: output.resized, width, flyout: None }
         };
@@ -1648,7 +2012,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             self.report.actions.push(Action::resize_group(anchor, Some(height)));
         }
         let scene = self.scene;
-        let spec = |panel: &P| scene.spec(panel);
+        let spec = |panel: &P| scene.spec(panel).clone();
         if let Some(width) = work.width {
             match scene.sizes.stepped(column, &spec) {
                 // The edge of a stepped column moves in whole steps: the most that fit where it is dragged.
@@ -1716,13 +2080,13 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let ctx = ui.ctx().clone();
         let policy = |panel: &P| scene.permissions(panel);
         let protected = |panel: &P| scene.permissions(panel).is_protected();
-        let spec_of = |panel: &P| scene.spec(panel);
+        let spec_of = |panel: &P| scene.spec(panel).clone();
         let mut moved = None;
         for window in &scene.layout.floating {
             let Some(anchor) = window.panels().next().cloned() else { continue };
             // The window's menu acts on the shown panel of its top group.
             let active = window.groups().first().and_then(Group::active_panel).cloned().unwrap_or_else(|| anchor.clone());
-            let specs: Vec<PanelSpec> = window.panels().map(|panel| scene.spec(panel)).collect();
+            let specs: Vec<PanelSpec> = window.panels().map(|panel| scene.spec(panel).clone()).collect();
             let rights: Vec<Permissions> = window.panels().map(|panel| scene.permissions(panel)).collect();
             let dock = scene.dock.with(("floating", window.id));
             let group_id = dock.with("window");
@@ -1775,10 +2139,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 WindowColumn::expanded(edge)
             }
             .arrow(self.arrow_of(&window.column));
-            let mut group = FloatingGroup::new(spec.label, opening.rect)
+            let mut group = FloatingGroup::new(spec.label.clone(), opening.rect)
                 .limits(scene.spec(&anchor).limits)
                 .sized(Sizing::Fill)
                 .column(shape)
+                .resizable(specs.iter().all(|spec| spec.allow_float_resize))
                 .actions(actions)
                 .grip(scene.config.floating_grip)
                 .rounded_body(scene.config.floating_rounded_body)
@@ -1825,7 +2190,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 // in-app window's stay in the float area.
                 let within = if opening.spec.is_some() { Rect::NOTHING } else { scene.bounds };
                 let at = ColumnAt { cell: body.rect, edge, bar: ColumnBar::Window, within, open: open.clone(), card: None };
-                self.column(ui, body, &window.column, at);
+                let name = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
+                self.shown_column(ui, &name, &window.column, at, window.id);
             });
             self.dock = area_dock;
             let output = shown.output;
@@ -1844,8 +2210,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             if !output.files.is_empty() {
                 // The group under the drop, else the first group: a drop on the title row, or with no pointer known.
                 let groups = &self.report.shown[first_group..];
-                let under = output.files_at.and_then(|at| groups.iter().find(|(_, rect)| rect.contains(at)));
-                let panel = under.or(groups.first()).map_or_else(|| active.clone(), |(panel, _)| panel.clone());
+                let under = output.files_at.and_then(|at| groups.iter().find(|group| group.rect.contains(at)));
+                let panel = under.or(groups.first()).map_or_else(|| active.clone(), |group| group.panel.clone());
                 self.report.files.push(WindowFiles { panel, files: output.files });
             }
             if let Some(dropped) = dropped.into_inner() {
@@ -1987,6 +2353,13 @@ fn window_edit<P: Clone + Eq + Hash>(
         },
         _ => moving.take().map(|held| EditEvent::cancel(held.id, CancelReason::Dismissed, Some(Mixed::Same(held.before)))),
     }
+}
+
+/// The panels whose host views `column` shows: each group's shown panel, and each of `extra` (the open flyout's, the
+/// rail footer's) that the column holds.
+fn column_shows<'c, P: PartialEq>(column: &'c Column<P>, extra: [Option<&'c P>; 2]) -> impl Iterator<Item = &'c P> {
+    let shown = column.groups.iter().filter_map(Group::active_panel);
+    shown.chain(extra.into_iter().flatten().filter(move |panel| column.panels().any(|held| held == *panel)))
 }
 
 /// Shows `panel`'s body in a group's body, in the host's style and once per pass where the body is the app's own egui

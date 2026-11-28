@@ -273,7 +273,12 @@ impl<'a> FullWindowCanvas<'a> {
                 let event = EditEvent::set(Mixed::Same(given), next, name.clone(), None);
                 let _ = bind.write(cx, &event);
             }
-            let hover = output.response.hover_pos().filter(|_| output.response.hovered()).map(|at| next.view().to_doc(at));
+            let hover = output
+                .response
+                .hovered()
+                .then(|| crate::runtime::pointer::hover_point_in(ui.ctx(), output.response.rect))
+                .flatten()
+                .map(|at| next.view().to_doc(at));
             FullWindowCanvasOutput { response: output.response, hover, tool: hosted }
         });
         root.inner.unwrap_or_else(|| FullWindowCanvasOutput { response: root.output, hover: None, tool: ToolHostResponse::default() })

@@ -99,12 +99,16 @@ fn an_embedded_shell_out_of_sight_shows_nothing() {
             let below = Rect::from_min_size(egui::pos2(view.min.x, view.max.y + view.height()), egui::vec2(view.width(), view.height()));
             let mut open = true;
             AppShell::embedded(WindowKey::new("out-of-sight"))
-                .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _, _: &mut ()| {
-                    if !ui.is_sizing_pass() {
-                        count.set(count.get() + 1);
-                    }
-                    let _ = Button::new("Slot").show(ui);
-                })
+                .top(
+                    Slot::new("ribbon").size(SlotSize::Content),
+                    |_| None,
+                    |ui, _, _: &mut ()| {
+                        if !ui.is_sizing_pass() {
+                            count.set(count.get() + 1);
+                        }
+                        let _ = Button::new("Slot").show(ui);
+                    },
+                )
                 .body(|ui, _, _| {
                     let _ = Button::new("Hidden").show(ui);
                     Dialog::new("Out of sight").opened(Bind::bound(&mut open)).show(ui, |_, _| {});

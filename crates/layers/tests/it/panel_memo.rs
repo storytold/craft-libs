@@ -4,7 +4,7 @@ use craft_layers::ui::filter::{FilterBy, LayerFilter};
 use craft_layers::ui::mock::FakeLayers;
 use craft_layers::ui::panel::{LayersEvent, LayersPanel};
 use craft_ui::contract::{Bind, MemoProps, MemoView, Outbox, Tracked};
-use craft_ui::testing::{Fixture, MemoRun, last_frame_derived_builds, last_frame_memo_runs, pointer, trial};
+use craft_ui::testing::{Fixture, MemoRun, last_frame_derived_builds, last_frame_memo_runs, last_pass_memo_runs, pointer, trial};
 use egui::{Ui, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -71,6 +71,11 @@ impl Rig {
         let runs = last_frame_memo_runs(self.fixture.ctx());
         let count = |wanted: MemoRun| runs.iter().filter(|(ty, _, run)| ty.contains(name) && *run == wanted).count() as u32;
         (count(MemoRun::Ran), count(MemoRun::Replayed))
+    }
+
+    /// The real runs in the last pass of the memoized views whose type name holds `name`.
+    fn real_runs(&self, name: &str) -> u32 {
+        last_pass_memo_runs(self.fixture.ctx()).iter().filter(|(ty, _, run)| ty.contains(name) && *run == MemoRun::Ran).count() as u32
     }
 
     /// One frame with no input, after the edit of the trial.
@@ -184,7 +189,9 @@ fn a_pointer_over_the_rows_replays_the_blend_rows() {
     }
 }
 
-/// A new blend mode on the active layer runs the blend rows, so they never show a stale value.
+/// A new blend mode on the active layer runs the blend rows, so they never show a stale value. The edit is a new
+/// version of the panel's view, so the header measures its content afresh in the frame's one pass: the blend rows run
+/// in that measuring run and once more in the real run.
 #[trial]
 fn the_active_layers_blend_mode_runs_the_blend_rows() {
     let mut rig = rig(FakeLayers::fifty());
@@ -195,7 +202,9 @@ fn the_active_layers_blend_mode_runs_the_blend_rows() {
         layer.info.blend_key = String::from("multiply");
     }
     rig.frame();
-    assert_eq!(rig.view_runs("BlendProps").0, 1, "the edit runs the blend rows");
+    assert_eq!(rig.fixture.passes(), 1, "the edit runs one pass");
+    assert_eq!(rig.real_runs("BlendProps"), 1, "the edit runs the blend rows in the real run");
+    assert!(rig.view_runs("BlendProps").0 <= 2, "and at most once more, in the header's measuring run");
     rig.frame();
     assert_eq!(rig.host_runs(), (0, 1), "and the panel replays after it");
 }

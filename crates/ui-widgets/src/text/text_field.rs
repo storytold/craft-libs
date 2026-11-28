@@ -314,6 +314,18 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
         self
     }
 
+    /// Colours stretches of the text: `ranges` gives them for the text it is called with, as byte ranges in order,
+    /// each in a theme ink ([`RangeInk`](crate::primitives::RangeInk)) that keeps the text contrast minimum on the
+    /// field. The rest of the text keeps the field's ink. It is called each frame the field shows, with the text as
+    /// typed, and not for a text longer than [`COLORED_TEXT_LIMIT`](crate::primitives::COLORED_TEXT_LIMIT), which shows
+    /// uncoloured. Colour is display only: editing, the caret, selection, wrapping and what assistive technology reads are
+    /// as without it. The field knows no language: the app finds the ranges (a script's keywords, strings and comments).
+    #[must_use]
+    pub fn color_ranges(mut self, ranges: impl Fn(&str) -> Vec<crate::primitives::ColorRange> + 'static) -> Self {
+        self.options.color_ranges = Some(Arc::new(ranges));
+        self
+    }
+
     /// `text` replaces the selection in this pass: at the caret it inserts. Set it for one pass only.
     #[must_use]
     pub fn replace_selection(mut self, text: impl Into<String>) -> Self {
