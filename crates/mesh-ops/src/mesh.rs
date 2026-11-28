@@ -303,7 +303,7 @@ impl Mesh {
         // input breaks its comparisons; skip it then.
         let finite =
             self.positions.iter().all(|p| p.is_finite()) && self.normals.iter().all(|n| n.is_finite()) && self.uvs.iter().all(|uv| uv.is_finite());
-        if finite && !crate::unwrap::all_triangles_degenerate(self) {
+        if self.validate_indices().is_ok() && finite && !crate::unwrap::all_triangles_degenerate(self) {
             let mut g = Mikk { mesh: self, corners: vec![Vec4::new(1.0, 0.0, 0.0, 1.0); self.indices.len()] };
             if mikktspace::generate_tangents(&mut g) {
                 return g.corners;
@@ -564,6 +564,7 @@ impl Mesh {
             materials: vec![material.into()],
             diagonals: Vec::new(),
         };
+        m.validate_indices()?;
         if m.positions.iter().any(|p| !p.is_finite()) {
             return Err(GeomError::Invalid("mesh has non-finite positions".into()));
         }
@@ -733,6 +734,27 @@ mod tests {
         let mut m = quad();
         m.uvs.pop();
         assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn from_parts_rejects_invalid_indices_before_generating_tangents() {
+        for indices in [vec![0, 1, 99], vec![0, 1]] {
+            let result = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, vec![Vec2::ZERO, Vec2::X, Vec2::Y], indices, "m");
+            assert!(matches!(result, Err(GeomError::Invalid(_))));
+        }
+    }
+
+    #[test]
+    fn compute_tangents_with_out_of_range_indices_uses_fallback() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y],
+            indices: vec![0, 1, 99],
+            ..Mesh::default()
+        };
+        mesh.compute_tangents();
+        assert_eq!(mesh.tangents.len(), mesh.positions.len());
+        assert!(mesh.tangents.iter().all(|tangent| tangent.is_finite()));
     }
 
     #[test]

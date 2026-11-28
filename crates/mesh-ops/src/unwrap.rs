@@ -472,7 +472,7 @@ fn pack(sizes: &[DVec2], res: f32, pad: f32) -> Result<(f64, f32, Vec<DVec2>)> {
 
 impl Mesh {
     /// Index-range checks only (attribute arrays may be incomplete before unwrapping).
-    fn validate_indices(&self) -> Result<()> {
+    pub(crate) fn validate_indices(&self) -> Result<()> {
         let n = self.positions.len();
         if !self.indices.len().is_multiple_of(3) || self.indices.iter().any(|i| *i as usize >= n) {
             return Err(GeomError::Invalid("mesh indices are out of range".into()));
