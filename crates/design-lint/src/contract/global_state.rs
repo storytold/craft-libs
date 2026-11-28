@@ -62,10 +62,18 @@ fn field_path_in(tokens: proc_macro2::TokenStream, out: &mut Vec<proc_macro2::Sp
 }
 
 fn is_cfg_test(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        a.path().is_ident("cfg")
-            && matches!(&a.meta, syn::Meta::List(list) if list.tokens.clone().into_iter().any(|t| matches!(t, proc_macro2::TokenTree::Ident(i) if i == "test")))
-    })
+    attrs.iter().any(|a| a.path().is_ident("cfg") && a.parse_args::<syn::Meta>().is_ok_and(|m| implies_test(&m)))
+}
+
+/// Whether the cfg predicate holds only under `test`: `test` itself, or an `all(..)` with such a predicate in it.
+fn implies_test(meta: &syn::Meta) -> bool {
+    match meta {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::List(list) if list.path.is_ident("all") => list
+            .parse_args_with(syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated)
+            .is_ok_and(|all| all.iter().any(implies_test)),
+        _ => false,
+    }
 }
 
 fn names_fs(segments: &[String]) -> bool {

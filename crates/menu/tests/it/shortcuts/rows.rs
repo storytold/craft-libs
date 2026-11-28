@@ -145,6 +145,13 @@ fn own_areas_show_only_the_apps_entries_and_open_on_the_first() {
     assert_eq!(area(&rig), "all");
 }
 
+/// Show as tabs is a tab list named like the Show select it replaces.
+#[trial]
+fn area_tabs_are_named_show() {
+    let rig = Rig::tuned(Platform::Mac, |options| options.area_tabs = true);
+    assert_eq!(rig.names_with(Role::TAB_LIST, ""), ["Show:"]);
+}
+
 /// A dialog opened with a command selected, with Show listing only the app's entries, opens on the entry that lists it.
 #[trial]
 fn own_areas_open_on_the_selected_commands_entry() {

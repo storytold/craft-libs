@@ -35,8 +35,9 @@ pub struct ShapeBarOutput {
 
 /// The cells a Shape tool adds to the options bar, in PhotoCraft's order: the "Fill" check box and chip, the
 /// "Stroke" chip, the stroke width (0 to 288 px), the Stroke style button; then the kind's cell: Rectangle and
-/// Rounded Rectangle "Radius" (0 to 150,000), Polygon and Star "Sides" (3 to 100), Line "Weight" (1 to 10,000). A
-/// pattern shown as children of a `Bar`.
+/// Rounded Rectangle "Radius" (0 to 150,000), Triangle "Radius" (0 to 150,000, its own
+/// [`triangle_corner_radius`](ShapeToolSettings::triangle_corner_radius)), Polygon and Star "Sides" (3 to 100), Line
+/// "Weight" (1 to 10,000). A pattern shown as children of a `Bar`.
 ///
 /// - The values are the selected shape layer's when one is selected, else the tool settings' (the app passes the
 ///   right [`ShapeAppearance`]).
@@ -141,6 +142,10 @@ impl<'a> ShapeBar<'a> {
             let cell = match kind {
                 ShapeKind::Rectangle | ShapeKind::RoundedRectangle => Some((
                     NumberCell::pixels(&units, pixels_per_inch, "radius", &words.radius, settings.corner_radius, RADIUS_RANGE),
+                    ShapeChange::CornerRadius as fn(f64) -> ShapeChange,
+                )),
+                ShapeKind::Triangle => Some((
+                    NumberCell::pixels(&units, pixels_per_inch, "radius", &words.radius, settings.triangle_corner_radius, RADIUS_RANGE),
                     ShapeChange::CornerRadius as fn(f64) -> ShapeChange,
                 )),
                 ShapeKind::Polygon | ShapeKind::Star => Some((

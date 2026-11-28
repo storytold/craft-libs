@@ -27,9 +27,6 @@ use crate::ui::wide_angle::PreviewDone;
 /// The limits a story runs under: PhotoCraft's.
 const LIMITS: SelectMaskLimits = SelectMaskLimits { edits: 4096, edit_points: 100_000, strokes: 4096, stroke_points: 100_000 };
 
-/// How often a never-finishing preview job looks for its cancellation.
-const POLL: Duration = Duration::from_millis(50);
-
 /// The app's side over `MockImage`: the picture as the view, the house as the selection.
 struct StorySource {
     image: MockImage,
@@ -54,9 +51,7 @@ impl SelectMaskSource for StorySource {
     fn preview_job(&self, _: &SelectMaskPreviewRequest) -> Job<PreviewDone, String> {
         if self.loading {
             Job::new(|_, cancel| {
-                while !cancel.is_cancelled() {
-                    std::thread::sleep(POLL);
-                }
+                cancel.wait();
                 Err("cancelled".to_owned())
             })
         } else {
