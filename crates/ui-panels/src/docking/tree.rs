@@ -312,7 +312,7 @@ impl<P> Sizer<'_, '_, P> {
             }
             // A group is as large as its largest panel allows: a panel without a maximum lifts the maximum of
             // the panels it joins.
-            Node::Tabs { panels, .. } => {
+            Node::Tabs { panels, tabs_hidden, .. } => {
                 let mut min = Vec2::ZERO;
                 let mut max = if panels.is_empty() { OPEN_MAX } else { Vec2::ZERO };
                 for panel in panels {
@@ -321,7 +321,8 @@ impl<P> Sizer<'_, '_, P> {
                     max = max.max(panel.max);
                 }
                 max = max.max(min);
-                if !self.stripless(panels) {
+                // A hidden strip takes no room (`Node::Tabs::tabs_hidden`): the body starts at the group's top.
+                if !*tabs_hidden && !self.stripless(panels) {
                     min.y = (min.y + sizes.strip).min(bound);
                     max.y = (max.y + sizes.strip).min(bound);
                 }
