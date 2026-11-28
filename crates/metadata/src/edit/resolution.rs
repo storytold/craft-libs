@@ -419,6 +419,7 @@ fn xmp_values(xmp: &str, key: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut from = 0;
     while let Some(k) = xmp.get(from..).and_then(|s| s.find(key)).map(|k| k + from) {
+        searched(k + key.len() - from);
         from = k + key.len();
         // An attribute or an opening tag of exactly this name (not `</key>`, not `xkey`).
         if !xmp.get(..k).and_then(|h| h.chars().next_back()).is_some_and(|c| c == '<' || c.is_ascii_whitespace()) {
@@ -443,11 +444,32 @@ fn xmp_values(xmp: &str, key: &str) -> Vec<(usize, usize)> {
         // attribute re-ran this full-suffix `find(close)` for every occurrence, which is
         // quadratic in the packet size. A missing close means the value is unterminated, so
         // no later value can parse either; stop scanning in that case.
-        let Some(len) = value.find(close) else { break };
+        let Some(len) = value.find(close) else {
+            // the search read the rest of the packet, and no key search follows
+            searched(value.len());
+            from = xmp.len();
+            break;
+        };
+        searched(len + close.len_utf8());
         out.push((start, start + len));
         from = start + len + close.len_utf8();
     }
+    searched(xmp.len().saturating_sub(from));
     out
+}
+
+// The bytes of the packet `xmp_values` searches for a key or a closing quote, on this thread.
+#[cfg(test)]
+std::thread_local! {
+    static SEARCHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[inline]
+fn searched(count: usize) {
+    #[cfg(test)]
+    SEARCHED.with(|searched| searched.set(searched.get().saturating_add(count)));
+    #[cfg(not(test))]
+    let _ = count;
 }
 
 /// An XMP rational (`300/1`) or plain number.
@@ -780,3 +802,22 @@ pub fn resolution(exif: Option<&[u8]>, xmp: Option<&str>) -> Option<(f32, f32)> 
 
 #[cfg(test)]
 mod complexity_tests;
+
+#[cfg(test)]
+mod xmp_scan_tests {
+    use super::*;
+
+    /// Property-like text repeated through a packet is searched once: each property's values are
+    /// found in one pass, not a search of the rest of the packet from every occurrence.
+    #[test]
+    fn repeated_property_text_is_searched_once_for_each_property() {
+        let decoys = " tiff:ResolutionUnit>".repeat(50_000);
+        for key in [XMP_X, XMP_Y, XMP_UNIT] {
+            SEARCHED.with(|searched| searched.set(0));
+            let _ = xmp_values(&decoys, key);
+            let read = SEARCHED.with(std::cell::Cell::get);
+            assert!(read <= decoys.len(), "{key}: {read} bytes searched in {}", decoys.len());
+        }
+        assert_eq!(xmp_resolution(&decoys), None);
+    }
+}
