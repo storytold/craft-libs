@@ -5,6 +5,12 @@ Licensed under the MIT License or the Apache License, Version 2.0, at your optio
 
 Third-party material
 
+Windows oracle process cleanup
+
+`craft-testkit` uses the unmodified `process-wrap` 11.0.0 dependency by Félix Saparelli
+for Windows Job Objects. It is licensed under Apache-2.0 OR MIT and is available from
+https://github.com/watchexec/process-wrap and crates.io.
+
 Optional DWG bridge
 
 `craft-dwg` uses `acadrust` 0.6.6 unmodified as a separate dependency for DWG reading and writing.

@@ -8,6 +8,7 @@
 //! fails the test with the variable's name and value. The caller passes the name its repository
 //! uses, such as `CRAFT_MEDIA_REQUIRE_ORACLES` or `CRAFT_PDF_ORACLES_REQUIRED`; [`REQUIRED_VAR`] is
 //! the default name.
+//! Optional skips ignore stderr write failures.
 //!
 //! ```no_run
 //! use craft_testkit::skip::{REQUIRED_VAR, skip};
@@ -100,6 +101,10 @@ fn parse_required(variable: &str, value: Option<&OsStr>) -> Result<bool, Require
 /// `required_var` is `1`. A value of `required_var` that [`required`] rejects fails the test with
 /// the reason and the error. The caller returns from the test itself:
 /// `if !skip(reason, var) { return; }`.
+///
+/// The `SKIPPED:` line is written to the process's standard error, not through `eprint!`, so the
+/// test harness does not capture it: it shows in a default run of a passing test, and
+/// `--show-output` does not list it under the test's name. A failed write of the line is ignored.
 #[allow(clippy::panic)]
 pub fn skip(reason: &str, required_var: &str) -> bool {
     match required(required_var) {
@@ -112,12 +117,13 @@ pub fn skip(reason: &str, required_var: &str) -> bool {
 /// fails the test with a panic.
 #[allow(clippy::panic)]
 fn skip_with(required: bool, reason: &str, required_var: &str) -> bool {
+    use std::io::Write as _;
     if required {
         panic!("{reason}, and {required_var}=1 forbids skipping this test");
     }
     // Written to the process's stderr directly: `eprint!` is captured by the test harness and
     // would hide the line from a default run.
-    let _ = std::io::Write::write_all(&mut std::io::stderr().lock(), skip_line(reason).as_bytes());
+    let _ = std::io::stderr().lock().write_all(skip_line(reason).as_bytes());
     false
 }
 
@@ -224,6 +230,7 @@ mod tests {
             return;
         };
         match case.to_str() {
+            Some("skip-without-tail") => assert!(!skip("probe absent", REQUIRED_VAR)),
             Some("skip") => {
                 assert!(!skip("probe absent", REQUIRED_VAR));
                 eprintln!("returned from skip");
@@ -385,6 +392,20 @@ mod tests {
         assert!(err.contains("CRAFT_TEST_REQUIRED=1"), "{err}");
         assert!(!err.contains("SKIPPED:"), "{err}");
         assert!(!err.contains("ran on"), "{err}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_optional_skip_survives_a_stderr_write_failure() {
+        let full = std::fs::OpenOptions::new().write(true).open("/dev/full").unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["skip::tests::child", "--exact", "--nocapture", "--test-threads=1"])
+            .env(CHILD_CASE, "skip-without-tail")
+            .env_remove(REQUIRED_VAR)
+            .stderr(full)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "optional skip failed: {:?}, stdout={}", output.status, String::from_utf8_lossy(&output.stdout));
     }
 
     #[test]
