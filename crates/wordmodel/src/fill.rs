@@ -87,6 +87,22 @@ fn rect(r: [f32; 4]) -> [f32; 4] {
     r.map(|v| clamp(v, -MAX_INSET, MAX_INSET, 0.0))
 }
 
+impl Gradient {
+    /// Finite and in range: at most [`crate::wordart::MAX_STOPS`] stops in order, positions and
+    /// transparencies 0–100%, the angle 0–360°, insets bounded. `None` when there are no stops.
+    pub fn sanitized(&self) -> Option<Gradient> {
+        let stops = sanitized_stops(&self.stops);
+        if stops.is_empty() {
+            return None;
+        }
+        let kind = match self.kind {
+            GradientKind::Linear { angle, scaled } => GradientKind::Linear { angle: clamp(angle, -1e6, 1e6, 0.0).rem_euclid(360.0) % 360.0, scaled },
+            GradientKind::Path { shape, focus } => GradientKind::Path { shape, focus: rect(focus) },
+        };
+        Some(Gradient { stops, kind, tile: self.tile.map(rect), rot_with_shape: self.rot_with_shape, flip: self.flip })
+    }
+}
+
 impl Fill {
     /// An opaque solid fill.
     pub fn solid(color: Rgb) -> Fill {
@@ -107,19 +123,11 @@ impl Fill {
         Some(match self {
             Fill::Solid { color, transparency } => Fill::Solid { color: *color, transparency: clamp(*transparency, 0.0, 100.0, 0.0) },
             Fill::Gradient(g) => {
-                let stops = sanitized_stops(&g.stops);
-                match stops[..] {
-                    [] => return None,
+                let g = g.sanitized()?;
+                match g.stops[..] {
                     [s] => return Some(Fill::Solid { color: s.color, transparency: s.transparency }),
-                    _ => {}
+                    _ => Fill::Gradient(Arc::new(g)),
                 }
-                let kind = match g.kind {
-                    GradientKind::Linear { angle, scaled } => {
-                        GradientKind::Linear { angle: clamp(angle, -1e6, 1e6, 0.0).rem_euclid(360.0) % 360.0, scaled }
-                    }
-                    GradientKind::Path { shape, focus } => GradientKind::Path { shape, focus: rect(focus) },
-                };
-                Fill::Gradient(Arc::new(Gradient { stops, kind, tile: g.tile.map(rect), rot_with_shape: g.rot_with_shape, flip: g.flip }))
             }
         })
     }

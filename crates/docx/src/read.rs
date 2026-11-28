@@ -18,17 +18,20 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use craft_wordmodel::control::{ControlEvent, ControlKind, control_events, pair_events};
+use craft_wordmodel::fill::{Fill, Gradient, GradientFlip, GradientKind, PathShape};
 use craft_wordmodel::graphic::{Graphic, GraphicKind};
 use craft_wordmodel::numbering::{AbstractNum, Level, LevelSuffix, Num};
 use craft_wordmodel::para::NoteKind;
 use craft_wordmodel::para::OBJ;
+use craft_wordmodel::pattern::PagePattern;
 use craft_wordmodel::props::Rgb;
 use craft_wordmodel::props::VAlign;
 use craft_wordmodel::section::NumFormat;
 use craft_wordmodel::styles::{PartFormat, Style, StyleKind, StyleSheet, TablePart, TableStyleParts};
+use craft_wordmodel::wordart::{GradStop, MAX_STOPS};
 use craft_wordmodel::{
-    Block, Blocks, Comment, Document, InlineObject, MissingPicture, MissingPictureReason, PagePicture, Paragraph, PartKind, Revision, RevisionKind,
-    Zoom, ZoomFit, para_block,
+    Block, Blocks, Comment, Document, InlineObject, MAX_FILL_EXTRA_ATTRS, MissingPicture, MissingPictureReason, PagePicture, Paragraph, PartKind,
+    Revision, RevisionKind, Zoom, ZoomFit, para_block,
 };
 
 use crate::DocxError;
@@ -64,6 +67,15 @@ const MAX_HF_DEPTH: usize = 4;
 const MAX_GRAPHIC_WORK: usize = 2_000_000;
 /// Custom XML parts looked at for bibliography sources.
 const MAX_BIBLIOGRAPHY_PARTS: usize = 64;
+
+/// Longest VML fill type kept for a page picture (`tile`, `frame`…).
+const MAX_FILL_TYPE: usize = 32;
+/// Longest `o:title` kept for a page picture.
+const MAX_FILL_TITLE: usize = 255;
+/// Longest pattern preset name or label kept (a file's own, when it isn't a known preset).
+const MAX_PATTERN_NAME: usize = 64;
+/// Most characters of a VML `colors` gradient list looked at (hostile files).
+const MAX_COLOR_LIST: usize = 4096;
 
 /// Longest attached-template path we keep (bytes); a longer one is not a real path.
 const MAX_TEMPLATE_PATH: usize = 32 * 1024;
@@ -306,20 +318,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         lenient("customXml bibliography", r.read_bibliography(path, &mut seen_sources));
     }
 
-    if let Some(bg) = root.child("w:background").and_then(|b| b.attr("w:color")).and_then(Rgb::parse) {
-        r.doc.settings.page_color = Some(bg);
-    }
-    // A picture or texture fill: `w:background/v:background/v:fill` with a relationship id.
-    if let Some(fill) = root.child("w:background").and_then(|b| b.child("v:background")).and_then(|b| b.child("v:fill")) {
-        let rid = fill.attr("r:id").or_else(|| fill.attr("r:embed")).or_else(|| fill.attr("o:relid"));
-        if let Some(media) = rid.and_then(|id| r.media_for(&rels, id)) {
-            r.doc.settings.page_picture = Some(PagePicture {
-                media,
-                fill_type: fill.attr("type").unwrap_or("").chars().take(32).collect(),
-                title: fill.attr("o:title").unwrap_or("").chars().take(255).collect(),
-            });
-        }
-    }
+    read_page_background(&mut r, &root, &rels);
     if let Some(body) = root.child("w:body") {
         let mut sc = StoryCtx::default();
         let mut blocks = Blocks::new();
@@ -478,6 +477,228 @@ fn link_text_boxes(doc: &mut Document, mut links: Vec<(u32, u32, u32)>) {
             }
         }
     }
+}
+
+/// The page background: `w:background/@w:color`, then its VML fill (`v:background/v:fill`):
+/// a picture or texture, a gradient or a pattern (ECMA-376 Part 4 §2.2.1 and VML §6.1.2.5).
+///
+/// Word inks a pattern's set bits with the `v:background/@fillcolor`, the rest with
+/// `v:fill/@color2`, and names the preset by its label in `v:fill/@o:title`; a pattern whose
+/// label this build doesn't know keeps the file's own tile picture (a `media` key) so a save
+/// writes it back as it was.
+fn read_page_background(r: &mut Reader<'_>, root: &El, rels: &Rels) {
+    let Some(background) = root.child("w:background") else { return };
+    let bg_color = background.attr("w:color").and_then(Rgb::parse);
+    let Some(vbg) = background.child("v:background") else {
+        r.doc.settings.page_color = bg_color;
+        return;
+    };
+    let fill_color = vbg.attr("fillcolor").and_then(shape_style::vml_color);
+    let page_color = || bg_color.or(fill_color);
+    let Some(fill) = vbg.child("v:fill") else {
+        r.doc.settings.page_color = page_color();
+        return;
+    };
+    // What the fill says beyond this model goes back on a save: its other attributes and its
+    // child elements (Office's `o:fill` and a producer's own, [MS-ODRAWXML] §2.2).
+    let extra = &mut r.doc.settings.page_fill_extra;
+    for (name, value) in &fill.attrs {
+        if !crate::page_vml::MODELED_FILL_ATTRS.contains(&name.as_str()) {
+            extra.push_attr(name, value);
+        }
+    }
+    for child in fill.els() {
+        let attrs: Vec<(String, String)> = child.attrs.iter().take(MAX_FILL_EXTRA_ATTRS).cloned().collect();
+        extra.push_child(&child.name, &attrs);
+    }
+    let kind = fill.attr("type").unwrap_or("").trim();
+    let is_gradient = kind.eq_ignore_ascii_case("gradient") || kind.eq_ignore_ascii_case("gradientradial");
+    if is_gradient {
+        match read_page_gradient(fill, kind.eq_ignore_ascii_case("gradientradial"), fill_color.or(bg_color)) {
+            Some(Fill::Gradient(g)) => {
+                r.doc.settings.page_gradient = Some((*g).clone());
+                // A gradient's `w:color` and `fillcolor` are its fallback for older readers, not
+                // the page's own colour: keeping it would show a solid colour when the fill goes.
+                r.doc.settings.page_color = None;
+            }
+            Some(Fill::Solid { color, .. }) => r.doc.settings.page_color = Some(color),
+            _ => r.doc.settings.page_color = page_color(),
+        }
+        return;
+    }
+    if kind.eq_ignore_ascii_case("pattern") {
+        let label = fill.attr("o:title").unwrap_or("").trim();
+        let preset = match PagePattern::preset_named(label) {
+            Some(name) => name.to_string(),
+            None => label.chars().take(MAX_PATTERN_NAME).collect(),
+        };
+        let known = PagePattern::known(&preset);
+        let media = if known {
+            String::new()
+        } else {
+            fill.attr("r:id")
+                .or_else(|| fill.attr("r:embed"))
+                .or_else(|| fill.attr("o:relid"))
+                .and_then(|id| r.media_for(rels, id))
+                .unwrap_or_default()
+        };
+        if known || !media.is_empty() {
+            r.doc.settings.page_pattern = Some(PagePattern {
+                preset,
+                fore: fill_color.or(bg_color).unwrap_or(Rgb::BLACK),
+                back: fill.attr("color2").and_then(shape_style::vml_color).unwrap_or(Rgb::WHITE),
+                transparency: transparency_percent(fill.attr("opacity")),
+                media,
+            });
+            // The pattern's own colours are its fallback for older readers, not the page's.
+            r.doc.settings.page_color = None;
+            return;
+        }
+    }
+    // A picture or texture: `v:fill` with a relationship id.
+    if let Some(media) = fill.attr("r:id").or_else(|| fill.attr("r:embed")).or_else(|| fill.attr("o:relid")).and_then(|id| r.media_for(rels, id)) {
+        r.doc.settings.page_picture = Some(PagePicture {
+            media,
+            fill_type: kind.chars().take(MAX_FILL_TYPE).collect(),
+            title: fill.attr("o:title").unwrap_or("").chars().take(MAX_FILL_TITLE).collect(),
+            transparency: transparency_percent(fill.attr("opacity")),
+        });
+    }
+    r.doc.settings.page_color = page_color();
+}
+
+/// A gradient page fill from its VML `v:fill`, or the solid fill it comes to with one stop.
+///
+/// VML's `angle` runs counter-clockwise from a top-to-bottom blend (0 is vertical, which this
+/// crate's gradients call 90°); `focus` bends a two-colour gradient into one that returns to its
+/// first colour; `colors` adds stops as `position colour` pairs (VML §6.1.2.5). `opacity` and
+/// `o:opacity2` are the ends' transparency ([MS-ODRAWXML] §2.2); interior stops share the first's.
+fn read_page_gradient(fill: &El, radial: bool, first: Option<Rgb>) -> Option<Fill> {
+    let c1 = fill.attr("color").and_then(|v| gradient_color(v, first.unwrap_or(Rgb::WHITE))).or(first).unwrap_or(Rgb::WHITE);
+    let c2 = fill.attr("color2").and_then(|v| gradient_color(v, c1)).unwrap_or(Rgb::WHITE);
+    let t1 = transparency_percent(fill.attr("opacity"));
+    let t2 = transparency_percent(fill.attr("o:opacity2"));
+    let stop = |pos: f32, (color, transparency): (Rgb, f32)| GradStop { pos, color, transparency };
+    let ending = [(c1, t1), (c2, t2)];
+    let middle = fill.attr("focus").and_then(shape_style::vml_fraction).map(|f| f.clamp(-1.0, 1.0) * 100.0).unwrap_or(0.0);
+    let mut stops: Vec<GradStop> = fill
+        .attr("colors")
+        .map(|list| {
+            // A hostile list is cut before it is split.
+            let list: String = list.chars().take(MAX_COLOR_LIST).collect();
+            split_color_list(&list)
+                .into_iter()
+                .take(MAX_STOPS)
+                .filter_map(|s| {
+                    let (pos, c) = s.trim().split_once(char::is_whitespace)?;
+                    Some(stop(shape_style::vml_fraction(pos)? * 100.0, (gradient_color(c, c1)?, t1)))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if stops.len() < 2 {
+        stops = if middle <= -100.0 {
+            vec![stop(0.0, ending[1]), stop(100.0, ending[0])]
+        } else if middle >= 100.0 || middle == 0.0 {
+            vec![stop(0.0, ending[0]), stop(100.0, ending[1])]
+        } else if middle > 0.0 {
+            vec![stop(0.0, ending[0]), stop(middle, ending[1]), stop(100.0, ending[0])]
+        } else {
+            vec![stop(0.0, ending[1]), stop(-middle, ending[0]), stop(100.0, ending[1])]
+        };
+    }
+    // The two ends carry VML's own opacities; an interior stop has none of its own.
+    if let [.., last] = stops.as_mut_slice() {
+        last.transparency = t2;
+    }
+    if let Some(first) = stops.first_mut() {
+        first.transparency = t1;
+    }
+    let kind = if radial {
+        // `focusposition` is the inner rectangle's centre, as fractions of the page; the model's
+        // focus is its insets from the edges (ECMA-376 §20.1.8.33's `a:fillToRect`).
+        let pair = |name: &str| {
+            let v = fill.attr(name)?;
+            let (x, y) = v.split_once(',')?;
+            Some([shape_style::vml_fraction(x)? * 100.0, shape_style::vml_fraction(y)? * 100.0])
+        };
+        let [x, y] = pair("focusposition").unwrap_or([50.0, 50.0]);
+        GradientKind::Path { shape: PathShape::Circle, focus: [x, y, 100.0 - x, 100.0 - y] }
+    } else {
+        let vml = fill.attr("angle").and_then(|a| a.trim().parse::<f32>().ok()).filter(|a| a.is_finite()).unwrap_or(0.0);
+        GradientKind::Linear { angle: (90.0 - vml).rem_euclid(360.0), scaled: false }
+    };
+    let gradient = Gradient {
+        stops,
+        kind,
+        tile: None,
+        rot_with_shape: fill.attr("rotate").is_some_and(|v| v.eq_ignore_ascii_case("t") || v.eq_ignore_ascii_case("true")),
+        flip: GradientFlip::None,
+    };
+    Fill::Gradient(Arc::new(gradient)).sanitized()
+}
+
+/// A VML gradient colour: a hex or named colour, or Office's `fill darken(n)` / `fill lighten(n)`
+/// — the primary colour scaled towards black or white by `n`/255 in linear light — which Word
+/// writes for a one-colour gradient ([MS-ODRAWXML] §2.2).
+fn gradient_color(value: &str, base: Rgb) -> Option<Rgb> {
+    let v = value.trim();
+    let Some(rest) = v.strip_prefix("fill").map(str::trim) else { return shape_style::vml_color(v) };
+    let share = |s: &str| s.trim_end_matches(')').trim().parse::<f32>().ok().map(|n| (n / 255.0).clamp(0.0, 1.0));
+    if let Some(k) = rest.strip_prefix("darken(").and_then(share) {
+        return Some(shade(base, k, false));
+    }
+    if let Some(k) = rest.strip_prefix("lighten(").and_then(share) {
+        return Some(shade(base, k, true));
+    }
+    Some(base)
+}
+
+/// `c` scaled towards black by `k` (towards white for a tint), in linear light.
+fn shade(c: Rgb, k: f32, tint: bool) -> Rgb {
+    let channel = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        let linear = if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        let out = if tint { 1.0 - (1.0 - linear) * k } else { linear * k };
+        let srgb = if out <= 0.003_130_8 { out * 12.92 } else { 1.055 * out.powf(1.0 / 2.4) - 0.055 };
+        (srgb * 255.0).round().clamp(0.0, 255.0) as u8
+    };
+    Rgb(channel(c.0), channel(c.1), channel(c.2))
+}
+
+/// The entries of a VML `colors` gradient list: `position colour`, separated by `;` (as Word
+/// writes them) or by `,` (VML §6.1.2.5), except a comma inside a colour's `rgb(…)`.
+fn split_color_list(list: &str) -> Vec<&str> {
+    let by_semicolon = list.contains(';');
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (i, c) in list.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ';' if depth == 0 => {
+                out.push(&list[start..i]);
+                start = i + c.len_utf8();
+            }
+            ',' if depth == 0 && !by_semicolon => {
+                out.push(&list[start..i]);
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    out.push(&list[start..]);
+    out
+}
+
+/// VML `opacity` as percent transparent: `"0.75"`, `"75%"` and its 1/65536ths form (`"49152f"`)
+/// are three quarters opaque (a quarter transparent), `"1"` (or nothing) fully opaque and `"0"`
+/// fully transparent. A bare number above 1 is a percentage, as some writers give it.
+fn transparency_percent(v: Option<&str>) -> f32 {
+    let Some(n) = v.and_then(shape_style::vml_fraction).filter(|n| n.is_finite()) else { return 0.0 };
+    let transparent = if n > 1.0 { 100.0 - n } else { 100.0 * (1.0 - n) };
+    transparent.clamp(0.0, 100.0)
 }
 
 /// Drop the drawing ids read with shapes, except those connectors are glued to (so a shape

@@ -95,6 +95,16 @@ pub struct Settings {
     pub page_color: Option<Rgb>,
     /// Picture or texture page background (Design › Page Color › Fill Effects), drawn over the colour.
     pub page_picture: Option<PagePicture>,
+    /// Gradient page background (Fill Effects › Gradient), drawn over the colour and under a
+    /// picture: VML `v:fill type="gradient"` (ECMA-376 Part 4 §6.1.2.5) or DrawingML's
+    /// `a:gradFill` (Part 1 §20.1.8.33) as a shape fill holds it.
+    pub page_gradient: Option<crate::fill::Gradient>,
+    /// Pattern page background (Fill Effects › Pattern).
+    pub page_pattern: Option<crate::pattern::PagePattern>,
+    /// What the page background's VML fill says beyond the fields above: attributes and child
+    /// elements (Office's `o:` extensions, a producer's own) kept so a save writes them back.
+    #[serde(skip_serializing_if = "PageFillExtra::is_empty")]
+    pub page_fill_extra: PageFillExtra,
     pub watermark: Option<Watermark>,
     /// Theme fonts (major = headings, minor = body).
     pub major_font: String,
@@ -237,6 +247,89 @@ pub struct PagePicture {
     pub fill_type: String,
     /// `o:title` of the fill (texture name), kept for round trip.
     pub title: String,
+    /// How much of the picture shows through, percent (100 = invisible): VML's `opacity` is its
+    /// complement ([MS-ODRAWXML] §2.2).
+    pub transparency: f32,
+}
+
+/// Attributes and child elements of a page background's VML fill (`v:fill`) that [`Settings`]
+/// doesn't model, kept from the file so they go back on a save (ECMA-376 Part 4 §6.1.2.5; the
+/// `o:` and `v:` extensions are Office's, [MS-ODRAWXML] §2.2). Only names in the `v:`, `o:` and
+/// `w10:` namespaces are kept, since those are the ones a document's root declares.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PageFillExtra {
+    /// `(name, value)` of an attribute of `v:fill`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attrs: Vec<(String, String)>,
+    /// Child elements of `v:fill`, without content (the fills carrying them are empty): their
+    /// name and attributes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<VmlElement>,
+}
+
+/// A VML element kept from a page fill.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VmlElement {
+    pub name: String,
+    pub attrs: Vec<(String, String)>,
+}
+
+/// Most attributes of a page fill kept.
+pub const MAX_FILL_EXTRA_ATTRS: usize = 32;
+/// Most child elements of a page fill kept.
+pub const MAX_FILL_EXTRA_CHILDREN: usize = 16;
+/// Longest attribute or element name kept.
+pub const MAX_FILL_EXTRA_NAME: usize = 64;
+/// Longest attribute value kept.
+pub const MAX_FILL_EXTRA_VALUE: usize = 512;
+
+impl PageFillExtra {
+    pub fn is_empty(&self) -> bool {
+        self.attrs.is_empty() && self.children.is_empty()
+    }
+
+    /// Whether `name` is one a save may write back: a `v:`, `o:` or `w10:` name (or none), within
+    /// [`MAX_FILL_EXTRA_NAME`], of letters, digits, `-` and `_`.
+    pub fn writable_name(name: &str) -> bool {
+        let local = match name.split_once(':') {
+            Some((prefix, local)) => {
+                if !matches!(prefix, "v" | "o" | "w10") {
+                    return false;
+                }
+                local
+            }
+            None => name,
+        };
+        !local.is_empty() && name.len() <= MAX_FILL_EXTRA_NAME && local.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    }
+
+    /// Keep an attribute `v:fill` had, when it can be written back and is within the limits.
+    pub fn push_attr(&mut self, name: &str, value: &str) {
+        if self.attrs.len() >= MAX_FILL_EXTRA_ATTRS || !Self::writable_name(name) || value.len() > MAX_FILL_EXTRA_VALUE {
+            return;
+        }
+        if self.attrs.iter().any(|(n, _)| n == name) {
+            return;
+        }
+        self.attrs.push((name.to_string(), value.to_string()));
+    }
+
+    /// Keep a child element `v:fill` had, when it can be written back and is within the limits.
+    pub fn push_child(&mut self, name: &str, attrs: &[(String, String)]) {
+        if self.children.len() >= MAX_FILL_EXTRA_CHILDREN || !Self::writable_name(name) {
+            return;
+        }
+        let mut kept = Vec::new();
+        for (n, v) in attrs {
+            if kept.len() >= MAX_FILL_EXTRA_ATTRS || !Self::writable_name(n) || v.len() > MAX_FILL_EXTRA_VALUE {
+                continue;
+            }
+            kept.push((n.clone(), v.clone()));
+        }
+        self.children.push(VmlElement { name: name.to_string(), attrs: kept });
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -315,6 +408,9 @@ impl Default for Settings {
             consecutive_hyphen_limit: 0,
             page_color: None,
             page_picture: None,
+            page_gradient: None,
+            page_pattern: None,
+            page_fill_extra: PageFillExtra::default(),
             watermark: None,
             major_font: styles::HEADING_FONT.into(),
             minor_font: styles::BODY_FONT.into(),

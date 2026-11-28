@@ -41,6 +41,7 @@ pub mod locale_number;
 pub use craft_math::{math, math_latex, math_linear, math_symbols, math_tree, symbol_fonts};
 pub mod numbering;
 pub mod para;
+pub mod pattern;
 pub mod picfx;
 pub mod props;
 pub mod resolve;
@@ -87,10 +88,12 @@ use document::MediaIndex;
 pub use error::{DocError, Result};
 pub use missing::{MAX_MISSING_PICTURES, MissingPicture, MissingPictureReason, MissingPictures, picture_hash};
 pub use parts::{MAX_LINKED_BOXES, MAX_TEXT_BOX_INSET, NoteSeparators, Part, PartKind, PermRange, TEXT_BOX_INSET, TextBody, free_id};
+pub use pattern::{PATTERN_PRESETS, PagePattern, PatternPreset};
 pub use position::{Path, Pos, StoryRef};
 pub use settings::{
-    COMPAT_MODE_CURRENT, CoreProps, CustomProp, DEFAULT_GRID, DEFAULT_HYPHENATION_ZONE, LEGACY_COMPAT_MODE, OdfLayout, PagePicture, Settings, Source,
-    THEME_COLORS, Watermark, Zoom, ZoomFit,
+    COMPAT_MODE_CURRENT, CoreProps, CustomProp, DEFAULT_GRID, DEFAULT_HYPHENATION_ZONE, LEGACY_COMPAT_MODE, MAX_FILL_EXTRA_ATTRS,
+    MAX_FILL_EXTRA_CHILDREN, MAX_FILL_EXTRA_NAME, MAX_FILL_EXTRA_VALUE, OdfLayout, PageFillExtra, PagePicture, Settings, Source, THEME_COLORS,
+    VmlElement, Watermark, Zoom, ZoomFit,
 };
 pub use text_walk::{PARA_WALK_DEPTH, walk_between};
 pub use text_walk::{count_chars, count_chars_no_spaces, count_words};
