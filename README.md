@@ -316,6 +316,14 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`), Bink (`bink`) and
   MPEG-TS/PS (`mpegts`) demuxers, from FilmCraft, a Sierra VMD (`vmd`) demuxer, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
   video codecs will go in a separate crate.
+- [`craft-library`](crates/library/README.md): an app's Library: the user's folders of
+  documents listed, searched and drawn as thumbnails behind one `library.*` command contract,
+  with the app's file access (so its confinement applies) and its own kind of item (slides,
+  pages, sheets). Bounded on hostile folders and files. From DeckCraft (storytold/deckcraft#958);
+  inserting stays in each app.
+- [`craft-library-egui`](crates/library-egui/README.md): the Library pane in egui over those
+  commands: tabs, folders, search and a thumbnail grid, with the app's words, colours and tabs of
+  its own. From DeckCraft.
 - [`craft-lottie`](crates/lottie/README.md): Lottie (Bodymovin) JSON: the document model of
   lottie-spec 1.0 (animation, assets, layers by type, shape items, masks, effects, text, markers)
   with a bounded reader and a writer that keep what they do not know, and the encodings of its

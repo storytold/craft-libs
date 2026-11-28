@@ -185,6 +185,8 @@ craft-mime = { path = "crates/mime" }
 craft-odf = { path = "crates/odf" }
 craft-ods = { path = "crates/ods" }
 craft-prc = { path = "crates/prc" }
+craft-library = { path = "crates/library" }
+craft-library-egui = { path = "crates/library-egui" }
 craft-lottie = { path = "crates/lottie" }
 craft-menu = { path = "crates/menu" }
 craft-metafile = { path = "crates/metafile" }

@@ -3298,6 +3298,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-library"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "craft-library-egui"
+version = "0.1.0"
+dependencies = [
+ "craft-library",
+ "craft-ui",
+ "egui",
+ "egui_kittest",
+ "image",
+ "serde_json",
+ "web-time",
+]
+
+[[package]]
 name = "craft-lottie"
 version = "0.1.0"
 dependencies = [
