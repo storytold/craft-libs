@@ -17,8 +17,11 @@
 //!
 //! The bitcrusher (`bitcrusher`) takes one input sample every `rate_divide` samples, holds it until
 //! the next one, and rounds it to a word length of 1 to 16 bits.
+//!
+//! The tremolo (`tremolo`) lowers the gain of every channel by up to `depth` once per cycle of a
+//! sine, triangle or square LFO at `rate`.
 
-use super::util::{DelayLine, Envelope, Lfo, Prng, coef, delay_line_len, echo_tail};
+use super::util::{DelayLine, Envelope, Lfo, Prng, coef, delay_line_len, echo_tail, uni_sine, uni_tri};
 use crate::{AudioEffect, ParamSpec, ParamValues, Smoothed, Unit, block_len, flush32, param_plumbing};
 use std::f64::consts::TAU;
 
@@ -42,6 +45,9 @@ const FM_BASE: f32 = 2.0;
 const SEED: u64 = 0x5EED_1234;
 /// Highest frequency the modulation reaches, as a fraction of the sample rate.
 const MAX_FRACTION: f32 = 0.45;
+const TREMOLO_SHAPES: &[&str] = &["Sine", "Triangle", "Square"];
+/// Length of each edge of the tremolo's square, in ms.
+const EDGE_MS: f64 = 2.0;
 
 /// Ring modulation, frequency modulation and positive or negative comb resonators, with the
 /// frequency moved by an LFO, an envelope follower or a sample-and-hold source.
@@ -317,6 +323,132 @@ impl AudioEffect for Bitcrusher {
                     let crushed = ((f64::from(*held) / step).round() * step).clamp(-limit, limit);
                     channels[ch][i] = blend(dry, crushed, mix) as f32;
                 }
+            }
+        }
+    }
+}
+
+/// Amplitude modulation. The gain is `1 - depth * m`, where the LFO value `m` runs from 0 at the
+/// start of each cycle to 1 at its middle and back, as a sine, a triangle or a square. The square
+/// holds 0 and 1 for half a cycle each and moves between them along a raised-cosine edge 2 ms long,
+/// centered on the quarter and three-quarter points, so it does not click. Rate takes effect from
+/// the next sample with the phase kept. A change of Shape, or of Rate while the shape is the
+/// square, glides from the last LFO value to the new curve over 20 ms, with the value kept within
+/// 0 ..= 1. Depth moves to a new value over 20 ms.
+pub struct Tremolo {
+    pv: ParamValues,
+    sr: f32,
+    channels: usize,
+    lfo: Lfo,
+    /// Shape the LFO value follows.
+    shape: usize,
+    /// Length of the square's edges, in cycles, for the rate of the last block.
+    edge: f64,
+    /// LFO value of the last sample.
+    last: f32,
+    /// Difference between the last LFO value and the new curve at a change of Shape, or of the
+    /// square's edges. It fades to zero over `glide_len` samples.
+    glide: f32,
+    glide_left: usize,
+    glide_len: usize,
+    depth: Smoothed,
+}
+
+impl Tremolo {
+    pub const PARAMS: &'static [ParamSpec] = &[
+        ParamSpec::log("rate", "Rate", 0.1, 20.0, 5.0, Unit::Hertz),
+        ParamSpec::new("depth", "Depth", 0.0, 100.0, 50.0, Unit::Percent),
+        ParamSpec::choice("shape", "Shape", TREMOLO_SHAPES, 0),
+    ];
+
+    pub fn new(sample_rate: f32, channels: usize) -> Self {
+        let sample_rate = crate::sane_sample_rate(sample_rate);
+        let mut s = Tremolo {
+            pv: ParamValues::new(Self::PARAMS),
+            sr: sample_rate,
+            channels: crate::sane_channels(channels),
+            lfo: Lfo::default(),
+            shape: 0,
+            edge: 0.0,
+            last: 0.0,
+            glide: 0.0,
+            glide_left: 0,
+            glide_len: ((SM * 0.001 * sample_rate) as usize).max(1),
+            depth: Smoothed::with_ms(0.5, sample_rate, SM),
+        };
+        s.apply_params(true);
+        s.shape = s.pv.idx("shape");
+        s.edge = s.edge_len();
+        s
+    }
+
+    /// Length of the square's edges at the current rate, in cycles.
+    fn edge_len(&self) -> f64 {
+        (EDGE_MS * 0.001 * f64::from(self.pv.v("rate"))).clamp(1e-9, 0.25)
+    }
+
+    fn apply_params(&mut self, snap: bool) {
+        self.depth.set(self.pv.v("depth") / 100.0);
+        if snap {
+            self.depth.snap();
+        }
+    }
+
+    /// LFO value of `shape` at phase `p` (cycles), with square edges `edge` cycles long.
+    fn shape_value(shape: usize, p: f64, edge: f64) -> f32 {
+        match shape {
+            1 => uni_tri(p),
+            2 => {
+                // The triangle crosses 1/2 at the edges' centers with a slope of 2 per cycle, so an
+                // edge `edge` cycles long spans `2 * edge` of it.
+                let tri = if p < 0.5 { 2.0 * p } else { 2.0 - 2.0 * p };
+                let u = ((tri - 0.5) / (2.0 * edge) + 0.5).clamp(0.0, 1.0);
+                (0.5 - 0.5 * (std::f64::consts::PI * u).cos()) as f32
+            }
+            _ => uni_sine(p),
+        }
+    }
+}
+
+impl AudioEffect for Tremolo {
+    param_plumbing!("tremolo");
+    fn reset(&mut self) {
+        self.lfo.reset();
+        self.shape = self.pv.idx("shape");
+        self.edge = self.edge_len();
+        self.last = 0.0;
+        self.glide = 0.0;
+        self.glide_left = 0;
+        self.depth.snap();
+    }
+    fn process(&mut self, channels: &mut [&mut [f32]]) {
+        let n = block_len(channels);
+        if n == 0 {
+            // No sample used the current settings, so a glide in progress goes on unchanged.
+            return;
+        }
+        let nch = channels.len().min(self.channels);
+        let rate = self.pv.v("rate");
+        let edge = self.edge_len();
+        let shape = self.pv.idx("shape");
+        if shape != self.shape || (shape == 2 && edge != self.edge) {
+            self.glide = self.last - Self::shape_value(shape, self.lfo.phase(0.0), edge);
+            self.glide_left = self.glide_len;
+            self.shape = shape;
+        }
+        self.edge = edge;
+        for i in 0..n {
+            let mut m = Self::shape_value(shape, self.lfo.phase(0.0), edge);
+            if self.glide_left > 0 {
+                m = (m + self.glide * self.glide_left as f32 / self.glide_len as f32).clamp(0.0, 1.0);
+                self.glide_left -= 1;
+            }
+            self.last = m;
+            self.lfo.advance(rate, self.sr);
+            let gain = 1.0 - self.depth.tick() * m;
+            for c in channels[..nch].iter_mut() {
+                // A non-finite sample is taken as silence.
+                c[i] = if c[i].is_finite() { c[i] * gain } else { 0.0 };
             }
         }
     }
@@ -765,6 +897,173 @@ mod tests {
                 let mut y: Vec<f32> = (0..30).map(|i| if i % 2 == 0 { f32::MAX } else { -f32::MAX }).collect();
                 c.process(&mut [&mut y]);
                 assert!(y.iter().all(|v| v.is_finite()), "mix {mix}, bits {bits}: {y:?}");
+            }
+        }
+    }
+
+    fn tremolo(params: &[(&str, f32)], channels: usize) -> Tremolo {
+        let mut t = Tremolo::new(SR, channels);
+        for (id, v) in params {
+            assert!(t.set_param(id, *v), "{id}");
+        }
+        t.reset();
+        t
+    }
+
+    /// The gain of a tremolo over `n` samples, read from a constant input of 1.
+    fn gains(t: &mut Tremolo, n: usize) -> Vec<f32> {
+        let mut x = vec![1.0f32; n];
+        t.process(&mut [&mut x]);
+        x
+    }
+
+    /// At full depth the gain is 1 at the start of each cycle and 0 at its middle. The sine and the
+    /// triangle follow their curves, the square holds each level for most of half a cycle, and
+    /// half depth swings the gain between 1 and 1/2.
+    #[test]
+    fn tremolo_gain_follows_the_shape() {
+        let period = 9600;
+        for shape in 0..3 {
+            let mut t = tremolo(&[("rate", 5.0), ("depth", 100.0), ("shape", shape as f32)], 1);
+            let g = gains(&mut t, 2 * period);
+            for (i, v) in g.iter().enumerate() {
+                let p = (i % period) as f64 / period as f64;
+                let want = match shape {
+                    0 => 0.5 + 0.5 * (TAU * p).cos(),
+                    1 => 1.0 - 2.0 * p.min(1.0 - p),
+                    _ if !(0.24..=0.26).contains(&p) && !(0.74..=0.76).contains(&p) => {
+                        if (0.25..0.75).contains(&p) {
+                            0.0
+                        } else {
+                            1.0
+                        }
+                    }
+                    _ => continue,
+                };
+                assert!((f64::from(*v) - want).abs() < 1e-4, "shape {shape} at {i}: {v}, want {want}");
+            }
+            let mut t = tremolo(&[("rate", 5.0), ("depth", 50.0), ("shape", shape as f32)], 1);
+            let g = gains(&mut t, period);
+            let (lo, hi) = g.iter().fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+            assert!((lo - 0.5).abs() < 1e-4 && (hi - 1.0).abs() < 1e-6, "shape {shape}: {lo} ..= {hi}");
+        }
+    }
+
+    /// The square's edges are 2 ms raised-cosine ramps at every rate, centered on the quarter and
+    /// three-quarter points of the cycle.
+    #[test]
+    fn tremolo_square_edges_do_not_click() {
+        let edge = (0.002 * SR) as usize;
+        for rate in [0.1f32, 1.0, 20.0] {
+            let mut t = tremolo(&[("rate", rate), ("depth", 100.0), ("shape", 2.0)], 1);
+            let g = gains(&mut t, (SR / rate) as usize);
+            let worst = g.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+            // A raised cosine over `edge` samples moves at most pi / 2 / edge per sample.
+            assert!(worst <= std::f32::consts::FRAC_PI_2 / edge as f32 * 1.01, "rate {rate}: step {worst}");
+            let moving = g.windows(2).filter(|w| w[1] != w[0]).count();
+            assert!(moving <= 2 * edge + 2, "rate {rate}: the gain moves on {moving} samples");
+            let quarter = (SR / rate / 4.0) as usize;
+            assert!((g[quarter] - 0.5).abs() < 0.02, "rate {rate}: {} at the quarter point", g[quarter]);
+        }
+    }
+
+    /// A new rate takes effect from the next sample, with the phase kept.
+    #[test]
+    fn tremolo_rate_change_keeps_the_phase() {
+        let mut t = tremolo(&[("rate", 5.0), ("depth", 100.0)], 1);
+        let a = gains(&mut t, 2400);
+        assert!(t.set_param("rate", 10.0));
+        let b = gains(&mut t, 2400);
+        // A quarter of a cycle at 5 Hz, then a quarter at 10 Hz ends at the middle of the cycle.
+        assert!((a[2399] - 0.5).abs() < 1e-3 && (b[0] - a[2399]).abs() < 1e-3, "{} then {}", a[2399], b[0]);
+        assert!(b[1199] < 1e-3 && b[1201] < 1e-3, "{} {}", b[1199], b[1201]);
+    }
+
+    /// A change of shape glides from where the old shape was to the new one over 20 ms, so the
+    /// gain does not jump, and the new shape is followed exactly afterward.
+    #[test]
+    fn tremolo_shape_change_glides() {
+        let glide = (0.02 * SR) as usize;
+        let mut t = tremolo(&[("rate", 5.0), ("depth", 100.0), ("shape", 0.0)], 1);
+        let mut s = tremolo(&[("rate", 5.0), ("depth", 100.0), ("shape", 2.0)], 1);
+        // 2,000 samples in, the sine has the gain at 0.63 and the square at 1.
+        let a = gains(&mut t, 2000);
+        gains(&mut s, 2000);
+        assert!(t.set_param("shape", 2.0));
+        let b = gains(&mut t, 2 * glide);
+        let want = gains(&mut s, 2 * glide);
+        // The square's own edge moves the gain by up to pi / 2 / 96 (0.0164) per sample.
+        let step = (b[0] - a[1999]).abs();
+        assert!(step < 0.02, "the gain jumped by {step}");
+        assert!(b.windows(2).all(|w| (w[1] - w[0]).abs() < 0.02), "the glide jumped");
+        assert_eq!(b[glide..], want[glide..]);
+        assert!((b[0] - want[0]).abs() > 0.2, "{} {}", b[0], want[0]);
+    }
+
+    /// A shape that only an empty block saw does not restart a glide in progress: the glide goes
+    /// on as if the shape had not changed.
+    #[test]
+    fn tremolo_empty_block_keeps_the_glide() {
+        let glide = (0.02 * SR) as usize;
+        let mut t = tremolo(&[("rate", 5.0), ("depth", 100.0), ("shape", 0.0)], 1);
+        let mut s = tremolo(&[("rate", 5.0), ("depth", 100.0), ("shape", 0.0)], 1);
+        for fx in [&mut t, &mut s] {
+            gains(fx, 2000);
+            assert!(fx.set_param("shape", 2.0));
+            gains(fx, 100);
+        }
+        assert!(t.set_param("shape", 1.0));
+        let mut empty: [f32; 0] = [];
+        t.process(&mut [&mut empty[..]]);
+        assert!(t.set_param("shape", 2.0));
+        assert_eq!(gains(&mut t, 2 * glide), gains(&mut s, 2 * glide));
+    }
+
+    /// A new rate moves the square's edges to a new share of the cycle. Changed just before an
+    /// edge, from 0.1 Hz (where the edge is still ahead) to 20 Hz (where the phase is inside it),
+    /// the gain glides instead of jumping.
+    #[test]
+    fn tremolo_square_rate_change_glides() {
+        let mut t = tremolo(&[("rate", 0.1), ("depth", 100.0), ("shape", 2.0)], 1);
+        // Phase 0.249 at 0.1 Hz.
+        let a = gains(&mut t, 119_520);
+        assert_eq!(a[119_519], 1.0);
+        assert!(t.set_param("rate", 20.0));
+        let b = gains(&mut t, 2000);
+        let step = (b[0] - a[119_519]).abs();
+        assert!(step < 0.02, "the gain jumped by {step}");
+        assert!(b.windows(2).all(|w| (w[1] - w[0]).abs() < 0.02), "the glide jumped");
+    }
+
+    /// At zero depth the input passes unchanged, a non-finite sample comes out as silence, and a
+    /// channel past the configured count is left alone.
+    #[test]
+    fn tremolo_depth_zero_non_finite_and_extra_channels() {
+        let x = sine(220.0, 0.5, SR as f64, 4800, 0.0);
+        let mut t = tremolo(&[("depth", 0.0), ("shape", 2.0)], 2);
+        let (mut l, mut r) = (x.clone(), x.clone());
+        t.process(&mut [&mut l, &mut r]);
+        assert!(l == x && r == x);
+        let mut t = tremolo(&[("depth", 100.0)], 1);
+        let (mut l, mut r) = (x.clone(), x.clone());
+        l[99] = f32::NAN;
+        l[200] = f32::INFINITY;
+        t.process(&mut [&mut l, &mut r]);
+        assert!(l[99] == 0.0 && l[200] == 0.0 && l.iter().all(|v| v.is_finite()));
+        assert_eq!(r, x);
+    }
+
+    /// A glide keeps the LFO value within 0 ..= 1, so the gain stays between 1 - depth and 1 and
+    /// never inverts the input, even when the new curve moves away from the glide's offset.
+    #[test]
+    fn tremolo_glide_keeps_the_gain_in_range() {
+        for (from, to) in [(1.0, 2.0), (2.0, 1.0), (0.0, 2.0), (2.0, 0.0)] {
+            for start in [240, 480, 1680, 1900] {
+                let mut t = tremolo(&[("rate", 20.0), ("depth", 100.0), ("shape", from)], 1);
+                gains(&mut t, start);
+                assert!(t.set_param("shape", to));
+                let g = gains(&mut t, 2400);
+                assert!(g.iter().all(|v| (0.0..=1.0).contains(v)), "{from} to {to} at {start}: {g:?}");
             }
         }
     }

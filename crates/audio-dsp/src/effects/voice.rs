@@ -1250,6 +1250,33 @@ mod tests {
         }
     }
 
+    /// A block that leaves a channel out gives the same output, once the channel is back, as a
+    /// block that holds silence for it: with Keep Formants on, an impulse just before the block
+    /// still sounds afterward.
+    #[test]
+    fn a_channel_left_out_of_a_block_runs_as_silence() {
+        let mut out = Vec::new();
+        for omit in [false, true] {
+            let mut p = VoicePitch::new(SR, 2);
+            assert!(p.set_param("formant_follow", 1.0));
+            p.reset();
+            let (mut l, mut r) = (vec![0.0f32; 480], vec![0.0f32; 480]);
+            r[479] = 1.0;
+            p.process(&mut [&mut l, &mut r]);
+            let (mut l, mut r) = (vec![0.0f32; 480], vec![0.0f32; 480]);
+            if omit {
+                p.process(&mut [&mut l]);
+            } else {
+                p.process(&mut [&mut l, &mut r]);
+            }
+            let (mut l, mut r) = (vec![0.0f32; 4_000], vec![0.0f32; 4_000]);
+            p.process(&mut [&mut l, &mut r]);
+            assert!(r.iter().any(|v| *v != 0.0), "omit {omit}: the impulse did not sound");
+            out.push((l, r));
+        }
+        assert!(out[0] == out[1], "leaving the channel out changed the output");
+    }
+
     /// Leaving a silent third channel out of a block does not change the pitch the tracker finds,
     /// so a shifted voice comes out the same on the channels that remain.
     #[test]
