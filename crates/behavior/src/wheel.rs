@@ -610,12 +610,15 @@ const fn scroll_only(wheel: Wheel) -> Wheel {
 /// opened above it, the canvas its modal dialog keeps open: `WheelFocus::by_position`): a vertical or Shift wheel without Alt or Cmd/Ctrl; an app's field reads it itself, so
 /// no taker gets it. A running `gesture` (an event at `now` less than [`GESTURE_GAP`] after
 /// its last one, inside its device phase) keeps the taker it started on: each scroll axis that taker takes goes to it
-/// wherever the pointer is, and the rest by position to a taker that is no value control (`WheelTaker::value`), so a
-/// control the pointer passes over does not take the scroll over. A value control that is not the focused field keeps
+/// wherever the pointer is, and an axis it does not take goes to no one, so the fingers' sideways drift over a list
+/// does not scroll the view under it. A gesture whose owner no longer takes the wheel goes on by position, to a taker
+/// that is no value control (`WheelTaker::value`), so a control the pointer passes over does not take the scroll over.
+/// A value control that is not the focused field keeps
 /// its gesture only while the pointer is over it: when the pointer leaves, it gets a zero-scroll `WheelPhase::End`
 /// share and the gesture goes on by position without it. A new gesture splits by position: each axis of `wheel` goes
 /// to the innermost taker under `at` that takes it; a share no taker takes, or that a scroll region at its end in that
-/// direction cannot move, passes to the next enclosing one. A gated taker takes no axis unless it is `focused` or
+/// direction cannot move, passes to the next enclosing one. When the axes would go to two takers, the inner one takes
+/// its axes alone: one gesture scrolls one view. A gated taker takes no axis unless it is `focused` or
 /// `armed`, and a trackpad (`WheelSource::fingers`) opens a value control only then. Shift turns a
 /// vertical wheel sideways when its vertical owner is a scroll region. When the innermost open taker under `at` for the
 /// vertical share is a zoom zone, the share goes to the innermost open zoom taker enclosing it, with `Wheel::zooms`
@@ -715,11 +718,8 @@ fn split_at<O: Copy + PartialEq>(
     let vertical_taker = held_vertical.or_else(|| under.iter().copied().find(|t| t.vertical && free(t)));
     // Shift turns the vertical wheel sideways over a scroll region (Photoshop); a value control that takes the
     // vertical wheel keeps Shift as its modifier, and a device that already sends a sideways axis keeps it.
-    let wheel = if zone_view.is_none() && wheel.mods.shift && wheel.scroll.x == 0.0 && vertical_taker.is_some_and(|t| t.scrolls) {
-        Wheel { scroll: Vec2::new(wheel.scroll.y, 0.0), ..wheel }
-    } else {
-        wheel
-    };
+    let shifted = zone_view.is_none() && wheel.mods.shift && wheel.scroll.x == 0.0 && vertical_taker.is_some_and(|t| t.scrolls);
+    let wheel = if shifted { Wheel { scroll: Vec2::new(wheel.scroll.y, 0.0), ..wheel } } else { wheel };
     let vertical = (wheel.scroll.y != 0.0)
         .then(|| {
             zone_view
@@ -734,6 +734,21 @@ fn split_at<O: Copy + PartialEq>(
                 .or_else(|| under.iter().find(|t| t.horizontal && free(t) && t.has_room(false, wheel.scroll.x)).map(|t| t.owner))
         })
         .flatten();
+    // A new gesture that starts over a vertical scroll region does not scroll the view under it sideways (a swipe over
+    // a list). A plain wheel over a sideways strip still scrolls the page around it, and Shift's sideways wheel keeps
+    // its taker. This comes before the one-view rule, so the vertical share it keeps can go on to the page.
+    let list_inside = |owner: O| under.iter().take_while(|t| t.owner != owner).any(|t| t.scrolls && t.vertical && !t.horizontal && free(t));
+    let horizontal = horizontal.filter(|owner| held.is_some() || shifted || !list_inside(*owner));
+    // One gesture scrolls one view: the running gesture's owner keeps it and an axis it does not take goes nowhere, and
+    // a new gesture whose axes would go to two views goes to the inner one alone. A sideways drift of the fingers over
+    // a list does not scroll the view under it.
+    let rank = |owner: O| under.iter().position(|t| t.owner == owner).unwrap_or(usize::MAX);
+    let (vertical, horizontal) = match (held, vertical, horizontal) {
+        (Some(held), vertical, horizontal) => (vertical.filter(|o| *o == held.owner), horizontal.filter(|o| *o == held.owner)),
+        (None, Some(v), Some(h)) if v != h && rank(v) <= rank(h) => (Some(v), None),
+        (None, Some(v), Some(h)) if v != h => (None, Some(h)),
+        (None, vertical, horizontal) => (vertical, horizontal),
+    };
     let zoom = pinches(&wheel).then(|| under.iter().find(|t| t.zoom && open(t))).flatten().map(|t| t.owner);
     let scroll = scroll_only(wheel);
     let parts = [
@@ -772,6 +787,37 @@ mod tests {
 
     fn rect(size: f32) -> Rect {
         Rect::from_min_size(pos2(0.0, 0.0), Vec2::splat(size))
+    }
+
+    #[test]
+    fn a_gesture_over_a_list_never_scrolls_the_view_under_it_sideways() {
+        // A canvas that scrolls both ways, and a list over it (a popup) that scrolls only vertically.
+        let canvas = WheelTaker::new(1u8, rect(300.0)).horizontal(true).vertical(true);
+        let list = WheelTaker::new(2u8, rect(100.0)).vertical(true).scrolls(true).room(WheelRoom::new(Vec2::splat(500.0), Vec2::splat(500.0)));
+        let at = pos2(10.0, 10.0);
+        let mut gesture = WheelGesture::default();
+        let owners = |shares: Vec<(u8, Wheel)>| shares.iter().map(|(o, w)| (*o, w.scroll)).collect::<Vec<_>>();
+        let first = split(&[canvas, list], at, wheel(2.0, -6.0), WheelFocus::new(None), None, &mut gesture, 0.0);
+        assert_eq!(owners(first), [(2, Vec2::new(0.0, -6.0))], "a new diagonal gesture goes to the list alone");
+        let drift = split(&[canvas, list], at, wheel(-4.0, -1.0), WheelFocus::new(None), None, &mut gesture, 0.01);
+        assert_eq!(owners(drift), [(2, Vec2::new(0.0, -1.0))], "the running gesture's sideways drift goes to no one");
+        let sideways = split(&[canvas, list], at, wheel(-5.0, 0.0), WheelFocus::new(None), None, &mut gesture, 0.02);
+        assert!(sideways.is_empty(), "a sideways-only event of the list's gesture scrolls nothing");
+        let fresh = split(&[canvas, list], at, wheel(-5.0, 0.0), WheelFocus::new(None), None, &mut WheelGesture::default(), 0.0);
+        assert!(fresh.is_empty(), "a new sideways-only gesture over the list scrolls nothing");
+        let beside = split(&[canvas, list], pos2(250.0, 250.0), wheel(-5.0, 0.0), WheelFocus::new(None), None, &mut WheelGesture::default(), 0.0);
+        assert_eq!(owners(beside), [(1, Vec2::new(-5.0, 0.0))], "a new sideways gesture beside the list scrolls the canvas");
+    }
+
+    #[test]
+    fn a_diagonal_over_a_list_at_its_end_in_a_sideways_strip_scrolls_the_page() {
+        // A page that scrolls vertically, a strip in it that scrolls sideways, and a list in the strip at its end.
+        let page = WheelTaker::new(1u8, rect(300.0)).vertical(true).scrolls(true).room(WheelRoom::new(Vec2::splat(500.0), Vec2::splat(500.0)));
+        let strip = WheelTaker::new(2u8, rect(200.0)).horizontal(true).scrolls(true).room(WheelRoom::new(Vec2::splat(500.0), Vec2::splat(500.0)));
+        let list = WheelTaker::new(3u8, rect(100.0)).vertical(true).scrolls(true).room(WheelRoom::new(Vec2::ZERO, Vec2::ZERO));
+        let shares = split(&[page, strip, list], pos2(10.0, 10.0), wheel(2.0, -6.0), WheelFocus::new(None), None, &mut WheelGesture::default(), 0.0);
+        let owners = shares.iter().map(|(o, w)| (*o, w.scroll)).collect::<Vec<_>>();
+        assert_eq!(owners, [(1, Vec2::new(0.0, -6.0))], "the vertical share goes on to the page and the strip takes nothing");
     }
 
     #[test]
