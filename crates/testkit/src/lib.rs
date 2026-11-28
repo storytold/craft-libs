@@ -32,6 +32,12 @@
 //! for GPU tests. Every GPU test in a process must take this lock, because a test that takes a
 //! different lock can run at the same time as one that takes this one.
 //!
+//! [`skip`] decides what a test does when something it needs is missing (a program, a corpus,
+//! the craft-fonts faces): it prints one `SKIPPED:` line and returns, or fails the test when the
+//! variable the caller names is `1`. A value other than unset, empty or `1` fails the test as a
+//! configuration error. [`skip::required`] reads such a variable under this rule for any caller.
+//! It is not built for `wasm32`. `skip::craft_fonts_cover` needs the `font-coverage` feature.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -50,6 +56,8 @@ pub mod rng;
 pub mod sample_damage;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod serial;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod skip;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use deadline::{DeadlineLimit, wait_until, with_deadline};
