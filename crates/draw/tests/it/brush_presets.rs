@@ -257,3 +257,56 @@ fn a_size_drag_runs_the_head_and_replays_the_preset_list() {
     fixture.frame(vec![release(from + Vec2::new(32.0, 0.0))]);
     assert_ne!(host.borrow().values.diameter, OPENED.diameter, "the drag edited the size");
 }
+
+/// App rows belong to the visible compact header, not only its discarded measurement pass.
+#[trial]
+fn compact_app_rows_replay_measurement_and_commit_visible_values() {
+    use craft_ui::contract::Show as _;
+    use craft_ui::form::SliderField;
+
+    let host = Rc::new(RefCell::new((None::<u32>, BrushPickerState::new(), 25.0_f64)));
+    let calls = Rc::new(RefCell::new(Vec::<Vec<bool>>::new()));
+    let (held, seen) = (Rc::clone(&host), Rc::clone(&calls));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut host = held.borrow_mut();
+        let (current, state, tolerance) = &mut *host;
+        let trace = Rc::new(RefCell::new(Vec::new()));
+        let record = Rc::clone(&trace);
+        // A captured owned label stays usable without consuming the callback's environment.
+        let label = String::from("Tolerance");
+        let rows = PresetSource::new((), PresetFns::new(|_, _| Vec::<PresetRow<u32>>::new()));
+        let _ = BrushPresetPicker::new("Compact brush", Bind::bound(current), &rows, Bind::bound(state), OPENED)
+            .compact(true)
+            .rows(move |ui| {
+                record.borrow_mut().push(ui.is_sizing_pass());
+                let _ = SliderField::new(label.clone(), Bind::bound(tolerance), 0.0..=100.0).step(1.0).show(ui);
+            })
+            .show(ui);
+        seen.borrow_mut().push(trace.borrow().clone());
+    });
+    fixture.room(Vec2::new(640.0, 760.0));
+    fixture.settle();
+    let field = fixture.by_role(Role::COMBO_BOX).first().copied().expect("the compact field shows");
+    fixture.click(&field);
+    fixture.settle();
+    assert!(fixture.by_label("Size").is_some(), "the built-in head is visible");
+    assert!(calls.borrow().iter().any(|trace| trace.contains(&true)), "the actual header was measured: {:?}", calls.borrow());
+    assert!(fixture.by_label("Tolerance").is_some(), "the custom row survives header measurement: {:?}", calls.borrow());
+    assert!(
+        calls.borrow().iter().any(|trace| trace
+            .iter()
+            .position(|&sizing| sizing)
+            .zip(trace.iter().rposition(|&sizing| !sizing))
+            .is_some_and(|(measure, visible)| measure < visible)),
+        "one callback instance runs for measurement and the later visible header: {:?}",
+        calls.borrow()
+    );
+    let slider = fixture
+        .by_role(Role::SLIDER)
+        .into_iter()
+        .find(|target| fixture.tree().name_of(target.node) == Some("Tolerance"))
+        .expect("the actual app-row slider is accessible");
+    fixture.click_at(slider.rect.left_center() + Vec2::new(slider.rect.width() * 0.8, 0.0));
+    fixture.settle();
+    assert!(host.borrow().2 > 50.0, "the visible control commits to the app's borrowed value: {}", host.borrow().2);
+}

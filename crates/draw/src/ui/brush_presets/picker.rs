@@ -271,8 +271,9 @@ pub struct BrushPresetPicker<'a, K: Value + Eq + Hash + MemoProps> {
     /// Whether the picker takes input: off disables its field, its head and its popover. It is enabled by default.
     #[prop]
     enabled: bool,
-    /// App rows drawn under the head.
-    #[prop(name = "rows", boxed = "FnOnce(&mut Ui) + 'a")]
+    /// App rows drawn under the head. The header may call them more than once while measuring and drawing;
+    /// the callback must keep its captured values available for each call.
+    #[prop(name = "rows", boxed = "FnMut(&mut Ui) + 'a")]
     app_rows: Option<AppRows<'a>>,
     /// Paints the brush's current tip on the chip, as the app's engine draws it (its falloff, angle and roundness, a
     /// sampled tip's shape); without it the chip shows the picked preset's tip.
@@ -280,8 +281,8 @@ pub struct BrushPresetPicker<'a, K: Value + Eq + Hash + MemoProps> {
     tip: Option<FacePaint>,
 }
 
-/// The app's own rows of the picker's gear menu.
-type AppRows<'a> = Box<dyn FnOnce(&mut Ui) + 'a>;
+/// The app's extra head rows, callable for both measurement and the visible header.
+type AppRows<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
 impl<'a, K: Value + Eq + Hash + MemoProps> BrushPresetPicker<'a, K> {
     /// A picker named `label` over the presets of `source` (build each row with [`brush_row`](super::brush_row)),
@@ -363,7 +364,7 @@ impl<'a, K: Value + Eq + Hash + MemoProps> BrushPresetPicker<'a, K> {
                 for edits in sent {
                     (diameter, hardness, tip) = (edits.diameter, edits.hardness, edits.tip);
                 }
-                if let Some(rows) = app_rows.take() {
+                if let Some(rows) = app_rows.as_mut() {
                     rows(ui);
                 }
             };
