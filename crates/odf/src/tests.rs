@@ -441,4 +441,39 @@ fn decrypting_keeps_to_the_limits_given() {
     assert!(matches!(decrypt_with(&locked, "pw", &few), Err(CryptError::Unsupported(_))));
     let total = Limits { max_total: big.len() as u64 - 1, ..Limits::DEFAULT };
     assert!(matches!(decrypt_with(&locked, "pw", &total), Err(CryptError::Unsupported(_))));
+
+    // The package `locked` is, its manifest changed by `edit` and a plain file added.
+    let repack = |edit: &dyn Fn(String) -> String, extra: &[u8]| {
+        let mut z = craft_zip::Archive::open(&locked, craft_zip::Limits { max_entries: 100, max_total_bytes: u64::MAX }).unwrap();
+        let mut w = craft_zip::Writer::new();
+        for name in z.names().map(|n| n.into_owned()).collect::<Vec<_>>() {
+            let mut data = z.read(&name, u64::MAX).unwrap().unwrap();
+            if name == "META-INF/manifest.xml" {
+                data = edit(String::from_utf8(data).unwrap()).into_bytes();
+            }
+            w.add(&name, &data, craft_zip::Compression::Stored).unwrap();
+        }
+        w.add("extra.bin", extra, craft_zip::Compression::Stored).unwrap();
+        w.finish().unwrap()
+    };
+    // A plain file counts toward the total with the decrypted ones.
+    let mixed = repack(&|m| m, &vec![b'b'; 1000]);
+    let roomy_for_content = Limits { max_total: big.len() as u64 + 500, ..Limits::DEFAULT };
+    assert!(decrypt_with(&repack(&|m| m, b""), "pw", &roomy_for_content).is_ok());
+    assert!(matches!(decrypt_with(&mixed, "pw", &roomy_for_content), Err(CryptError::Unsupported(_))));
+
+    // A file past the size its manifest declares is damaged, also when that size is the limit.
+    let declared = big.len() / 2;
+    let short = repack(
+        &|m| {
+            let size = format!("manifest:size=\"{}\"", big.len());
+            assert!(m.contains(&size), "{m}");
+            m.replace(&size, &format!("manifest:size=\"{declared}\""))
+        },
+        b"",
+    );
+    let at_limit = Limits { max_entry: declared as u64, ..Limits::DEFAULT };
+    for limits in [Limits::DEFAULT, at_limit] {
+        assert_eq!(decrypt_with(&short, "pw", &limits), Err(CryptError::WrongPassword), "{limits:?}");
+    }
 }

@@ -217,7 +217,7 @@ fn decrypt_file(data: &[u8], p: &Params, size: Option<usize>, password: &str, ma
     }
     // A file that inflates past the size its manifest declares is damaged, or not decrypted
     // right; one past the limit is refused for its size, so the password isn't asked for again.
-    let declared = size.filter(|s| *s < max_entry);
+    let declared = size.filter(|s| *s <= max_entry);
     match inflate(deflated, declared.unwrap_or(max_entry)) {
         Ok(Some(out)) => Ok(out),
         Ok(None) if declared.is_none() => {
@@ -264,7 +264,7 @@ pub fn decrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, CryptError> {
 
 /// A password-protected package decrypted into a plain one, under `limits`: at most
 /// `max_entries` entries, each file read and decrypted to at most `max_entry` bytes, and the
-/// files read and decrypted together at most `max_total`. A package past them is refused as
+/// files read, and the plain package's files, together at most `max_total` bytes each. A package past them is refused as
 /// [`CryptError::Unsupported`], not [`CryptError::WrongPassword`].
 pub fn decrypt_with(bytes: &[u8], password: &str, limits: &Limits) -> Result<Vec<u8>, CryptError> {
     let broken = |e: craft_zip::Error| CryptError::Unsupported(format!("not a valid package ({e})"));
@@ -275,8 +275,9 @@ pub fn decrypt_with(bytes: &[u8], password: &str, limits: &Limits) -> Result<Vec
     let mut w = craft_zip::Writer::new();
     let mut checked = false;
     let mut work = 0u64;
-    // What the encrypted files decrypt to; the archive charges only what it reads.
-    let mut decrypted = 0u64;
+    // What the plain package holds: encrypted files as they decrypt to, the others as read.
+    // The archive charges only what it reads.
+    let mut written = 0u64;
     for name in files_of(&z).into_iter().take(MAX_FILES) {
         // A file past the limit is refused, not cut short.
         let Some(data) = z.read(&name, limits.max_entry).map_err(zip_error)? else { continue };
@@ -284,19 +285,16 @@ pub fn decrypt_with(bytes: &[u8], password: &str, limits: &Limits) -> Result<Vec
             Some((_, p, size)) => {
                 charge(&mut work, p)?;
                 let plain = decrypt_file(&data, p, *size, password, max_entry)?;
-                decrypted = decrypted.saturating_add(plain.len() as u64);
-                if decrypted > limits.max_total {
-                    return Err(CryptError::Unsupported(format!(
-                        "the package's files are larger than the limit of {} bytes together",
-                        limits.max_total
-                    )));
-                }
                 checked = true;
                 plain
             }
             None if name == MANIFEST_PATH => plain_manifest(&String::from_utf8_lossy(&data)).into_bytes(),
             None => data,
         };
+        written = written.saturating_add(data.len() as u64);
+        if written > limits.max_total {
+            return Err(CryptError::Unsupported(format!("the package's files are larger than the limit of {} bytes together", limits.max_total)));
+        }
         let compression = if name == "mimetype" { craft_zip::Compression::Stored } else { craft_zip::Compression::Deflated };
         w.add(&name, &data, compression).map_err(broken)?;
     }
