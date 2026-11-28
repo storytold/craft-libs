@@ -35,14 +35,17 @@ stroke_drawings = [
     "crop-overlay-thirds", "crop-overlay-triangle", "dash-align-corners", "dash-align-exact",
     "direct-select", "distribute-bottom", "distribute-hcenter", "distribute-horizontal", "distribute-left",
     "distribute-right", "distribute-top", "distribute-vcenter", "distribute-vertical", "eraser-background",
-    "eraser-magic", "extract-clip", "eye-outline", "font-similar", "fx", "gradient-angle", "gradient-diamond", "gradient-linear",
+    "eraser-magic", "extract-clip", "eye-outline", "flip-horizontal", "flip-vertical", "font-similar", "fx",
+    "gap-horizontal", "gap-vertical", "gradient-angle", "gradient-diamond", "gradient-linear",
     "gradient-radial", "gradient-reflected", "gradient-swatch", "insert-clip", "key-auto-bezier", "key-bezier", "key-continuous-bezier",
     "key-ease-in", "key-ease-out", "key-hold", "key-linear", "key-linear-filled", "keyframe-auto-bezier",
     "keyframe-bezier", "keyframe-ease-in", "keyframe-ease-out", "keyframe-easy-ease", "keyframe-hold",
     "keyframe-linear", "lasso", "lasso-magnetic", "lasso-select", "layer-mask", "layer-template", "lift-clip", "lollipop", "mark-in",
-    "mark-out", "marquee-column", "marquee-row", "overwrite-clip", "painting-symmetry", "pen-add-anchor",
+    "mark-out", "marquee-column", "marquee-row", "overwrite-clip", "padding-bottom", "padding-left", "padding-right",
+    "padding-top", "painting-symmetry", "pen-add-anchor",
     "pen-curvature", "pen-delete-anchor", "pen-freeform", "protractor", "quick-selection", "route-curved", "route-elbow",
-    "route-straight", "stroke-align-center", "stroke-align-inside", "stroke-align-outside", "stroke-cap-butt",
+    "route-straight", "skew-horizontal", "skew-vertical", "stroke-align-center",
+    "stroke-align-inside", "stroke-align-outside", "stroke-cap-butt",
     "stroke-cap-round", "stroke-cap-square", "stroke-join-bevel", "stroke-join-miter", "stroke-join-round",
     "symmetry-diagonal", "symmetry-dual", "symmetry-horizontal", "symmetry-vertical", "sync-lock",
     "text-align-bottom", "text-align-middle", "text-align-top"
@@ -594,6 +597,55 @@ phosphor = "arrows-down-up"
 carbon = "arrows--vertical"
 tabler = "arrows-down-up"
 
+# The transform panels' flip, scale and skew glyphs. Each name is the axis the change runs along:
+# `flip_horizontal` mirrors left and right, so the axis it mirrors about is the vertical one the drawing shows.
+# The `symmetry_*` names read the other way round: they name the axis line the drawing shows, so `symmetry_vertical`
+# mirrors left and right. `skew_horizontal` and `skew_vertical` are the skew along x and along y. None of these is directional: a side or an axis of the
+# screen stays where it is under right-to-left. Lucide and Tabler draw the flips, Tabler draws the skew pair and
+# the two axes of scale (its `arrow-autofit-width` and `-height`: a box whose width or height is spanned by
+# outward arrows), and Phosphor's `arrows-out-line-horizontal` and `-vertical` are the base set's marks for the
+# axis of scale; Phosphor draws no flip and no skew, so the base set draws those (ATTRIBUTION.md). Tabler's file
+# names read the other way round: its `skew-y` leans the sides and so draws the horizontal skew, and its `skew-x`
+# leans the top and bottom and draws the vertical one.
+
+[[icon]]
+name = "flip_horizontal"
+directional = false
+lucide = "flip-horizontal"
+phosphor = "flip-horizontal"
+tabler = "flip-horizontal"
+
+[[icon]]
+name = "flip_vertical"
+directional = false
+lucide = "flip-vertical"
+phosphor = "flip-vertical"
+tabler = "flip-vertical"
+
+[[icon]]
+name = "scale_horizontal"
+directional = false
+phosphor = "arrows-out-line-horizontal"
+tabler = "arrow-autofit-width"
+
+[[icon]]
+name = "scale_vertical"
+directional = false
+phosphor = "arrows-out-line-vertical"
+tabler = "arrow-autofit-height"
+
+[[icon]]
+name = "skew_horizontal"
+directional = false
+phosphor = "skew-horizontal"
+tabler = "skew-y"
+
+[[icon]]
+name = "skew_vertical"
+directional = false
+phosphor = "skew-vertical"
+tabler = "skew-x"
+
 [[icon]]
 name = "ban"
 directional = false
@@ -767,6 +819,46 @@ phosphor = "distribute-vcenter"
 name = "distribute_vertical"
 directional = false
 phosphor = "distribute-vertical"
+
+# The layout panels' spacing glyphs: a frame with the space on one side, and the gap between two items. Each gap
+# name is the axis the gap runs along, as the flip, scale and skew names are, and none of them mirrors under
+# right-to-left: a side of the screen stays that side. Phosphor 2.0.8 draws neither a padding nor a gap, so the
+# base set draws its own (ATTRIBUTION.md); Lucide's `gap-horizontal` and `gap-vertical` and Tabler's
+# `spacing-horizontal` and `spacing-vertical` are the same meanings.
+
+[[icon]]
+name = "gap_horizontal"
+directional = false
+lucide = "gap-horizontal"
+phosphor = "gap-horizontal"
+tabler = "spacing-horizontal"
+
+[[icon]]
+name = "gap_vertical"
+directional = false
+lucide = "gap-vertical"
+phosphor = "gap-vertical"
+tabler = "spacing-vertical"
+
+[[icon]]
+name = "padding_bottom"
+directional = false
+phosphor = "padding-bottom"
+
+[[icon]]
+name = "padding_left"
+directional = false
+phosphor = "padding-left"
+
+[[icon]]
+name = "padding_right"
+directional = false
+phosphor = "padding-right"
+
+[[icon]]
+name = "padding_top"
+directional = false
+phosphor = "padding-top"
 
 [[icon]]
 name = "droplet"

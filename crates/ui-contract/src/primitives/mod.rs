@@ -26,7 +26,7 @@ pub(crate) mod sensing;
 mod state_layer;
 mod surface;
 mod surround;
-mod svg_set;
+pub(crate) mod svg_set;
 #[doc(hidden)]
 pub mod svg_tree;
 pub(crate) mod text;
