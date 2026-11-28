@@ -48,7 +48,7 @@ impl Outcome for PatternFillOutput {
 /// Bitmap mode ([`PatternFillOptions::colors`] `None`, Photoshop's Pattern Fill):
 /// - The pattern picker: a thumbnail field opening a grid of every swatch, names in tooltips; "No patterns" when the
 ///   list is empty. "Snap to Origin" beside it sets the phase to (0, 0).
-/// - "Angle": an angle dial, -180 to 180. "Scale": a percent number field, [`PatternFillOptions::SCALE`]. "Link
+/// - "Angle": an angle dial and a whole-degree number field, both -180 to 180. "Scale": a percent number field, [`PatternFillOptions::SCALE`]. "Link
 ///   with Layer" check box.
 ///
 /// Preset mode (`colors` set, PowerPoint's Pattern fill): a grid of the swatches, then Foreground and Background
@@ -137,10 +137,34 @@ impl<'a> PatternFillEditor<'a> {
                 let angle = Field::new(words.angle.clone())
                     .id_salt("angle")
                     .side(SideLabel::new().scrub(true))
-                    .show(ui, |ui, _| AngleDial::new(Bind::given(current.angle)).range(ANGLE_RANGE).show(ui).events)
+                    .show(ui, |ui, _| {
+                        Row::new()
+                            .show(ui, |ui, _| {
+                                let dial = AngleDial::new(Bind::given(current.angle))
+                                    .label(words.angle.clone())
+                                    .range(ANGLE_RANGE)
+                                    .id_salt("dial")
+                                    .show(ui)
+                                    .events;
+                                let typed = NumberField::new(words.angle.clone(), Bind::given(Some(current.angle)))
+                                    .codec(NumberCodec::new(units.reader(Some(UnitKind::Degrees)), ANGLE_DECIMALS))
+                                    .unit_kind(UnitKind::Degrees)
+                                    .range(ANGLE_RANGE)
+                                    .id_salt("field")
+                                    .show(ui)
+                                    .edit
+                                    .events;
+                                (dial, typed)
+                            })
+                            .inner
+                    })
                     .inner
-                    .unwrap_or_default();
-                take(angle.map(|v| edited(&current, |o| o.angle = v.clamp(*ANGLE_RANGE.start(), *ANGLE_RANGE.end()))));
+                    .flatten();
+                let clamped = |v: f64| v.clamp(*ANGLE_RANGE.start(), *ANGLE_RANGE.end());
+                if let Some((dial, typed)) = angle {
+                    take(dial.map(|v| edited(&current, |o| o.angle = clamped(v))));
+                    take(typed.map(|v| edited(&current, |o| o.angle = clamped(v.unwrap_or(current.angle)))));
+                }
                 let scale = Field::new(words.scale.clone())
                     .id_salt("scale")
                     .side(SideLabel::new().scrub(true))
@@ -175,6 +199,9 @@ impl<'a> PatternFillEditor<'a> {
         PatternFillOutput { response: shown.output, events }
     }
 }
+
+/// The Angle field shows whole degrees, as the Layer Style angle fields do.
+const ANGLE_DECIMALS: usize = 0;
 
 /// The most decimals the Scale field shows.
 const SCALE_DECIMALS: usize = 2;
