@@ -358,6 +358,16 @@ fn a_first_page_above_the_final_page_is_placed_from_zero() {
 }
 
 #[test]
+fn a_priming_page_does_not_hide_a_first_page_above_the_final_page() {
+    let s = stream(&[(&[SHORT], 0), (&[LONG, LONG], 5000), (&[LONG, SHORT], 2500)]);
+    let mut given = [0, 576, 1024, 1024, 576].into_iter();
+    let t = VorbisTiming::of_with_durations(&s, |_| given.next().unwrap_or(0));
+    assert!(t.first_damaged);
+    assert_eq!(t.starts, [0, 0, 576, 1600, 2624]);
+    assert_eq!((t.skip, t.first, t.total), (0, 0, 2500));
+}
+
+#[test]
 fn given_durations_place_packets_as_the_block_sizes_do() {
     let s = stream(&[(&[SHORT, LONG], 476), (&[LONG, LONG, SHORT], 3100)]);
     let mut given = [0, 576, 1024, 1024, 576].into_iter();

@@ -184,7 +184,8 @@ impl VorbisTiming {
                 start = Some(0);
                 first_damaged = true;
             }
-            if granule_of(j).is_some() {
+            // a page holding only the priming packet places nothing, so it is not counted
+            if granule_of(j).is_some() && !(cursor.is_none() && sum == 0 && !stream.packets[j].eos) {
                 pages += 1;
             }
             let end = match (granule_of(j), cursor) {
