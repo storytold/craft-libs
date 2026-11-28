@@ -202,6 +202,9 @@ pub(crate) fn begin(ctx: &Context, pointer_scoped_field_wheel: bool) {
     let zoom_lines = input::zoom_wheel_lines(ctx);
     let now = crate::runtime::frame::clock(ctx);
     let focused = focus::focused_stop(ctx).map(|(owner, _)| owner);
+    // A field its dialog focused on opening, which no press, key or request has moved since, was not the user's
+    // choice: outside it the wheel goes by position, as with `pointer_scoped_field_wheel`.
+    let field_by_pointer = pointer_scoped_field_wheel || (wheel_in.is_some() && focus::focus_came_with_open(ctx));
     // A text field the app drew itself holds key focus: it reads its own wheel.
     let app_field = wheel_in.is_some() && focus::record(ctx, viewport).host_text;
     let hover = pass_pointer.hover.or(frame.as_ref().and_then(|frame| frame.pos));
@@ -268,7 +271,7 @@ pub(crate) fn begin(ctx: &Context, pointer_scoped_field_wheel: bool) {
                 || touch_rotation != 0.0
                 || touch_pan != Vec2::ZERO;
             if moves || device_end {
-                let outside_field = pointer_scoped_field_wheel
+                let outside_field = field_by_pointer
                     && state.last.iter().find(|taker| taker.field && Some(taker.owner) == focused).is_some_and(|taker| !taker.rect.contains(at));
                 let by_position = by_position || outside_field;
                 let share = Wheel::new(scroll, mods, unit, phase)
