@@ -2,7 +2,7 @@
 //! behaviour, intents, BPC, interpolation accuracy, real-world profiles and an independent
 //! oracle (moxcms, dev-dependency only).
 
-use craft_cms::{Builtin, Intent, Profile, Transform, TransformOptions};
+use craft_cms::{Builtin, Clut, ColorSpace, Intent, Profile, Transform, TransformOptions};
 
 fn lab() -> &'static Profile {
     Builtin::LabD50.profile()
@@ -278,4 +278,135 @@ fn exact_core_u8_matches_exact_eval_with_table_trc() {
     p.trc = Some([table(1.8), table(2.2), table(2.6)]);
     let table_trc = Profile::parse(&p.with_encoded_bytes().to_bytes()).unwrap();
     check_exact_core(&table_trc, true);
+}
+
+#[test]
+fn lab_pcs_btoa_uses_trilinear_interpolation() {
+    use craft_cms::pipeline::{Pipeline, Stage};
+    use craft_cms::profile::{Lut, LutKind};
+    use craft_cms::{Curve, Pcs, ProfileClass};
+
+    // Only the all-one corner contributes to channel zero: trilinear gives x*y*z,
+    // whereas the ordinary tetrahedral interpolation gives min(x, y, z).
+    fn grid(outputs: usize) -> Clut {
+        Clut::sample(vec![2; 3], outputs, |p, out| {
+            out[0] = p[0] * p[1] * p[2];
+            for (channel, value) in out.iter_mut().enumerate().skip(1) {
+                *value = p[channel - 1];
+            }
+        })
+        .unwrap()
+    }
+
+    fn profile(kind: LutKind, outputs: usize) -> Profile {
+        let mut p = if outputs == 3 { lab().clone() } else { cmyk().clone() };
+        p.class = ProfileClass::Output;
+        p.pcs = Pcs::Lab;
+        p.white_point = lab().white_point;
+        p.chad = lab().chad;
+        p.a2b = [None, None, None];
+        let lut = Lut {
+            kind,
+            inputs: 3,
+            outputs,
+            stages: vec![Stage::Curves(vec![Curve::Identity; 3]), Stage::Clut(grid(outputs)), Stage::Curves(vec![Curve::Identity; outputs])],
+        };
+        p.b2a = [Some(lut.clone()), Some(lut.clone()), Some(lut)];
+        p
+    }
+
+    fn near(actual: &[f32], expected: &[f32], context: &str) {
+        for (channel, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
+            // The parsed LUTs include quantised ICC curves and media-white tags.
+            assert!((actual - expected).abs() < 2e-4, "{context} channel {channel}: {actual} != {expected}");
+        }
+    }
+
+    fn recode(stages: Vec<Stage>, input: &[f32]) -> [f32; 3] {
+        let mut output = [0.0; 3];
+        Pipeline::new(3, stages).unwrap().eval(input, &mut output).unwrap();
+        output
+    }
+
+    let point = [0.25, 0.5, 0.75];
+    let tetra = [0.25, 0.25, 0.5, 0.75];
+    let trilinear = [3.0 / 32.0, 0.25, 0.5, 0.75];
+    let raw = grid(4);
+    let mut out = [0.0; 4];
+    for corner in [0.0, 1.0] {
+        raw.eval(&[corner; 3], &mut out).unwrap();
+        near(&out, &[corner; 4], "tetrahedral corner");
+        raw.eval_trilinear(&[corner; 3], &mut out).unwrap();
+        near(&out, &[corner; 4], "trilinear corner");
+    }
+    raw.eval(&point, &mut out).unwrap();
+    near(&out, &tetra, "ordinary 3D CLUT");
+    raw.eval_trilinear(&point, &mut out).unwrap();
+    near(&out, &trilinear, "independent product oracle");
+
+    // These unaffected routes execute before the first Lab BToA regression assertion.
+    let mut device = profile(LutKind::Ab, 3);
+    device.color_space = ColorSpace::Rgb;
+    device.a2b = device.b2a.clone();
+    device.b2a = [None, None, None];
+    let mut xyz = profile(LutKind::Ab, 4);
+    xyz.pcs = Pcs::Xyz;
+    let xyz_input = recode(vec![Stage::DecodeXyz], &point);
+    let mut link = profile(LutKind::Ab, 3);
+    link.class = ProfileClass::DeviceLink;
+    let lab_input = recode(vec![Stage::DecodeLabV4], &point);
+    for intent in Intent::ALL {
+        let (mut stages, pcs) = device.device_to_pcs(intent).unwrap();
+        assert_eq!(pcs, Pcs::Lab);
+        stages.push(Stage::EncodeLabV4);
+        near(&recode(stages, &point), &tetra[..3], "device AToB CLUT");
+        let (stages, pcs) = xyz.pcs_to_device(intent).unwrap();
+        assert_eq!(pcs, Pcs::Xyz);
+        Pipeline::new(3, stages).unwrap().eval(&xyz_input, &mut out).unwrap();
+        near(&out, &tetra, "XYZ BToA CLUT");
+        let (stages, pcs) = link.pcs_to_device(intent).unwrap();
+        assert_eq!(pcs, Pcs::Lab);
+        near(&recode(stages, &lab_input), &tetra[..3], "device-indexed Lab DeviceLink");
+    }
+
+    // All three codes lie in one cell of the current 33-point sampled device grid.
+    // Its tetrahedral result is min=130; trilinear in that sampled cell rounds to 128.
+    // This exercises Core::Grid and its direct 8-bit path, not just exact evaluation.
+    let sampled = Transform::from_pipeline(Pipeline::new(3, vec![Stage::Clut(raw)]).unwrap(), TransformOptions::default()).unwrap();
+    let mut sampled_pixel = [0; 4];
+    sampled.convert_u8(&[130, 131, 132], 3, &mut sampled_pixel, 4, false).unwrap();
+    assert_eq!(sampled_pixel, [130, 130, 131, 132], "sampled device CLUT must remain tetrahedral");
+
+    let parsed = [LutKind::Lut8, LutKind::Lut16, LutKind::Ab].map(|kind| {
+        let original = profile(kind, 4);
+        // Regenerate the mutated profile, rather than reading the builtin's stored bytes.
+        let parsed = Profile::parse(&original.with_encoded_bytes().to_bytes()).unwrap();
+        assert_eq!(parsed.b2a[0].as_ref().unwrap().kind, kind);
+        parsed
+    });
+    for p in std::iter::once(profile(LutKind::Ab, 4)).chain(parsed) {
+        let kind = p.b2a[0].as_ref().unwrap().kind;
+        let decode = if kind == LutKind::Lut16 { Stage::DecodeLabV2 } else { Stage::DecodeLabV4 };
+        // The same CLUT coordinate has different physical Lab values in mft2.
+        let physical_lab = recode(vec![decode], &point);
+        let source_input = recode(vec![Stage::EncodeLabV4], &physical_lab);
+        let pixel = [64u8, 128, 192];
+        let normalized = pixel.map(|v| f32::from(v) / 255.0);
+        let encode = if kind == LutKind::Lut16 { Stage::EncodeLabV2 } else { Stage::EncodeLabV4 };
+        let q = recode(vec![Stage::DecodeLabV4, encode], &normalized);
+        let want_pixel = [q[0] * q[1] * q[2], q[0], q[1], q[2]].map(|v| (v * 255.0).round() as u8);
+        for intent in Intent::ALL {
+            assert!(p.supports_intent(intent, false));
+            let transform = Transform::new(lab(), &p, intent, false).unwrap();
+            transform.eval(&source_input, &mut out).unwrap();
+            near(&out, &trilinear, &format!("Lab BToA {kind:?} {intent:?}"));
+            let mut converted = [0; 4];
+            transform.convert_u8(&pixel, 3, &mut converted, 4, false).unwrap();
+            for channel in 0..4 {
+                // One code for rounding plus the 33-point device sampling/ICC quantisation
+                // margin. The wrong tetrahedral PCS answer differs by about forty codes.
+                assert!(converted[channel].abs_diff(want_pixel[channel]) <= 2, "Lab BToA {kind:?} {intent:?}: {converted:?} != {want_pixel:?}");
+            }
+        }
+    }
 }

@@ -337,7 +337,7 @@ fn regen_coated_fogra39() {
         copyright: craft_cms::builtin::COATED_FOGRA39_COPYRIGHT.into(),
         tac: 3.3,
         gcr_curve: vec![[0.0, 0.0], [0.2, 0.05], [0.5, 0.205], [0.67, 0.5], [1.0, 0.95]],
-        grid_b2a: 33,
+        grid_b2a: 49,
         white_on_node: true,
         mapping: GamutMapping::Oklab { knee: 0.65, saturation: 1.05 },
         ..CmykParams::default()
@@ -420,10 +420,9 @@ fn separation(intent: Intent, bpc: bool, rgb: [u8; 3]) -> [f32; 4] {
     o.map(|v| v * 100.0)
 }
 
-/// sRGB → Coated FOGRA39 matches the reference application's inks on a red, a saturated blue
-/// and a mid grey for every intent. Most land within 2 % per ink; red at the magenta–yellow
-/// edge lands between table nodes that are and are not clipped, which costs up to 2.2 % with
-/// the 33³ BToA tables.
+/// Compare sRGB to Coated FOGRA39 inks with the reference application on a red, a
+/// saturated blue and a mid grey for every intent. The fixed per-ink tolerance
+/// also applies near boundaries between clipped and unclipped table nodes.
 #[test]
 fn separates_like_the_reference_application() {
     let mut worst = 0.0f32;
