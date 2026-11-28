@@ -3,7 +3,8 @@
 use crate::protocol::CANCELLED;
 
 use super::{
-    App, INSTALLER, JobPhase, Path, PathBuf, Stop, cancelled, msi_command, msi_folder_argument, msi_log, process, reinstall_command_ui, turn,
+    App, INSTALLER, JobPhase, Path, PathBuf, Stop, cancelled, installed_package_damaged, msi_command, msi_folder_argument, msi_log, msi_path,
+    process, reinstall_command_ui, turn,
 };
 
 fn msiexec() -> PathBuf {
@@ -30,10 +31,24 @@ pub fn run_msi(msi: &Path, destination: Option<&Path>, stop: &Stop, phase: &mut 
             command.raw_arg(msi_folder_argument(dir)?);
         }
         let status = command.status().map_err(|e| format!("couldn't start the Windows Installer ({e})"))?;
-        explain(status.code()).map_err(|e| match status.code() {
-            Some(1602) | None => e,
-            _ => format!("{e}. Its log is at {}", msi_log(msi).display()),
-        })
+        explain_with_log(status.code(), msi)
+    })
+}
+
+/// [`explain`], naming the installer's log beside `msi` on a failure it can explain. A 1603 caused
+/// by Windows' damaged saved copy of the installed version says so (#3810).
+fn explain_with_log(code: Option<i32>, msi: &Path) -> Result<(), String> {
+    // The log is written beside the resolved package, as `msi_command_ui` passes it.
+    let log = msi_log(&msi_path(msi).unwrap_or_else(|_| msi.to_path_buf()));
+    explain(code).map_err(|e| match code {
+        Some(1602) | None => e,
+        Some(1603) if installed_package_damaged(&log) => format!(
+            "Windows' saved copy of the installed version is damaged, so the Windows Installer can't remove it to install this one. \
+             Trying again won't help: first remove the installed version's Windows Installer registration (Microsoft's \
+             Program Install and Uninstall troubleshooter can do this), then update again. The installer's log is at {}",
+            log.display()
+        ),
+        _ => format!("{e}. Its log is at {}", log.display()),
     })
 }
 
@@ -53,10 +68,7 @@ pub(crate) fn reinstall_with_ui(msi: &Path, context: &[&str], folder: Option<&Pa
         command.raw_arg(msi_folder_argument(dir)?);
     }
     let status = command.status().map_err(|e| format!("couldn't start the Windows Installer ({e})"))?;
-    explain(status.code()).map_err(|e| match status.code() {
-        Some(1602) | None => e,
-        _ => format!("{e}. Its log is at {}", msi_log(msi).display()),
-    })
+    explain_with_log(status.code(), msi)
 }
 
 /// Runs `work` once no other Windows Installer job of ours is running (a second one would

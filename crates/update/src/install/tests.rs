@@ -689,6 +689,39 @@ fn install_refuses_while_the_installed_copy_is_running() {
 }
 
 #[trial]
+fn a_1603_from_a_damaged_saved_copy_of_the_installed_version_is_recognised_in_its_log() {
+    // The two ways #3810's logs show the old version's saved package to be damaged, and a 1603
+    // with another cause.
+    let damaged_pool = "MSI (s) (1C:2C) [19:02:11:410]: Original package ==> C:\\WINDOWS\\Installer\\cf60a6.msi\n\
+        MSI (s) (1C:2C) [19:02:11:412]: Database string pool is corrupted.\n\
+        MSI (s) (1C:2C) [19:02:11:412]: Database string pool is corrupted.\n\
+        Fatal error during installation.\n\
+        Action ended 19:02:11: RemoveExistingProducts. Return value 3.\n\
+        MSI (s) (1C:2C) [19:02:12:002]: Windows Installer installed the product. Installation success or error status: 1603.\n";
+    let unremovable = "MSI (s) (1C:2C) [18:57:03:100]: Product: SolidCraft -- Error 1714. The older version of SolidCraft cannot be \
+        removed.  Contact your technical support group.  System Error 1620.\n\
+        Action ended 18:57:03: RemoveExistingProducts. Return value 3.\n\
+        MSI (s) (1C:2C) [18:57:04:000]: Windows Installer installed the product. Installation success or error status: 1603.\n";
+    let other = "MSI (s) (1C:2C) [10:00:00:000]: Product: PdfCraft -- Error 1722. A program run as part of the setup did not finish.\n\
+        Action ended 10:00:00: RemoveExistingProducts. Return value 1.\n\
+        Action ended 10:00:01: InstallFinalize. Return value 3.\n\
+        MSI (s) (1C:2C) [10:00:02:000]: Windows Installer installed the product. Installation success or error status: 1603.\n";
+    let dir = tempfile::tempdir().unwrap();
+    let write = |name: &str, bytes: Vec<u8>| {
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    };
+    let utf16 = |text: &str| [0xFF, 0xFE].into_iter().chain(text.encode_utf16().flat_map(u16::to_le_bytes)).collect();
+    assert!(installed_package_damaged(&write("pool.log", damaged_pool.into())));
+    assert!(installed_package_damaged(&write("pool-utf16.log", utf16(damaged_pool))), "a UTF-16 log reads the same");
+    assert!(installed_package_damaged(&write("1714.log", unremovable.into())));
+    assert!(!installed_package_damaged(&write("other.log", other.into())), "another 1603 keeps the plain error");
+    assert!(!installed_package_damaged(&write("other-utf16.log", utf16(other))));
+    assert!(!installed_package_damaged(&dir.path().join("missing.log")));
+}
+
+#[trial]
 fn a_busy_detach_retries_and_stops_as_soon_as_it_succeeds() {
     for reason in ["hdiutil: detach failed - Resource busy", "hdiutil: detach failed - Resource temporarily unavailable"] {
         let mut attempts = 0;

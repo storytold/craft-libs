@@ -938,6 +938,45 @@ pub(crate) fn msi_log(msi: &Path) -> PathBuf {
     msi.with_extension("log")
 }
 
+/// How much of the end of an installer log [`installed_package_damaged`] reads. The failed
+/// action is followed only by rollback and the property dump, so the cause is near the end.
+const MSI_LOG_TAIL: u64 = 4 << 20;
+
+/// Whether the installer log at `log` shows the update failing because Windows Installer's own
+/// saved copy of the *installed* version is damaged (#3810). That copy is needed to remove the old
+/// version, so the update can't succeed, however often it is retried, until the old version's
+/// registration is repaired or removed. A missing or unreadable log reads as `false`.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn installed_package_damaged(log: &Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(log) else { return false };
+    let mut bom = [0; 2];
+    let utf16 = file.read_exact(&mut bom).is_ok() && bom == [0xFF, 0xFE];
+    let Ok(len) = file.seek(SeekFrom::End(0)) else { return false };
+    // An even start keeps UTF-16 code units whole.
+    let start = len.saturating_sub(MSI_LOG_TAIL) & !1;
+    let mut tail = Vec::new();
+    if file.seek(SeekFrom::Start(start)).is_err() || file.take(MSI_LOG_TAIL).read_to_end(&mut tail).is_err() {
+        return false;
+    }
+    let text = if utf16 {
+        String::from_utf16_lossy(&tail.as_chunks::<2>().0.iter().map(|u| u16::from_le_bytes(*u)).collect::<Vec<_>>())
+    } else {
+        String::from_utf8_lossy(&tail).into_owned()
+    };
+    installed_package_damaged_in(&text)
+}
+
+/// [`installed_package_damaged`] on the log's text: removing the old version
+/// (`RemoveExistingProducts`) failed, and the log says why: the old version's saved package
+/// couldn't be opened (`Error 1714` with `System Error 1620`) or its database is corrupt.
+fn installed_package_damaged_in(log: &str) -> bool {
+    let removal_failed = log.lines().any(|l| l.contains("Action ended") && l.contains("RemoveExistingProducts. Return value 3"));
+    let damaged =
+        log.contains("Database string pool is corrupted") || log.lines().any(|l| l.contains("Error 1714") && l.contains("System Error 1620"));
+    removal_failed && damaged
+}
+
 /// Windows Installer's storage APIs can fail on paths through junctions or symlinks (#338).
 /// Keep ordinary drive/UNC syntax when possible: Windows canonicalization alone introduces
 /// a `\\?\` prefix that older APIs also cannot handle.
