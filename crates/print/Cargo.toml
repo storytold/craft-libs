@@ -31,10 +31,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 egui = { workspace = true, optional = true }
 # Safe API; Win32 calls are isolated in this maintained MIT OR Apache-2.0 dependency.
-# Keep the public rgb re-export at main's GDI revision: a different Git rev gives
-# downstream GDI values a different Rust type identity even when the code is unchanged.
-# PDF loader updates below are independent of this public transport API.
-craft-winprint-gdi = { git = "https://github.com/storytold/winprint.rs", rev = "64e7afd4d1483512385012c340ecaaaf0f3beb7f" }
+# Keep the public rgb re-export at one GDI revision: a different Git rev gives downstream GDI
+# values a different Rust type identity even when the code is unchanged. This revision adds the
+# multi-page `Document` the drawn route sends through (winprint.rs#30). It is on the author's
+# fork until that merges, then moves to the merge commit on winprint.rs's `main`. PDF loader
+# updates below are independent of this public transport API.
+craft-winprint-gdi = { git = "https://github.com/KenM76/winprint.rs", rev = "41ab251670d32aaaa859228baf4d8c83dbb0b933" }
 # Says why the printer list is empty when lpstat can't run (e.g. a Flatpak without CUPS tools),
 # and why a job went on with the paper the request names while the driver reported only one side
 # of it (storytold/craft-libs#7230).

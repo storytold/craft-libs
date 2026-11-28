@@ -14,7 +14,10 @@ pub mod browser;
 /// Direct local-CUPS transport, independent of command-line spooler selection.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cups;
+/// Sheets drawn by the application, sent through GDI (Windows).
+mod drawn;
 pub mod spool;
+pub use drawn::{DrawnSheet, MAX_DRAWN_PAGES, SheetPainter, submit_drawn};
 
 #[cfg(any(test, windows))]
 pub(crate) mod progress;

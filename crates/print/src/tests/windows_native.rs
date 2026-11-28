@@ -216,3 +216,63 @@ fn shrink_to_fit_holds_the_one_percent_scale_boundary() {
     let refused = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 });
     assert!(matches!(refused, Err(Error::Spool(ref m)) if m.contains("shrink") && m.contains("nothing was sent")), "{refused:?}");
 }
+
+/// Records what a drawn job asked it to draw, and draws a dark band at the page's top.
+#[cfg(windows)]
+#[derive(Default)]
+struct Recorder {
+    opened: Option<usize>,
+    painted: Vec<(usize, (f64, f64))>,
+}
+
+#[cfg(windows)]
+impl crate::SheetPainter for Recorder {
+    fn open(&mut self, pdf: &[u8]) -> Result<(), Error> {
+        self.opened = Some(crate::sheets::read(pdf)?.sheets.len());
+        Ok(())
+    }
+    fn paint(&mut self, sheet: &crate::DrawnSheet, document: &mut crate::rgb::Document) -> Result<(), Error> {
+        self.painted.push((sheet.index, sheet.page.paper));
+        let pixels = vec![40u8; 64 * 8 * 3];
+        let image = crate::rgb::RgbImage { width: 64, height: 8, data: &pixels };
+        document.draw_pixels(&image, (0, 0)).map_err(crate::drawn::gdi_error)
+    }
+}
+
+/// A drawn job on the in-box PDF printer, when `CRAFT_PRINT_DRAWN_OUT` names a folder to write
+/// its output in: every copy's sheets are drawn in collated order, each on paper of the sheet's
+/// size, and the printer gets one page per drawing.
+#[cfg(windows)]
+#[trial]
+fn a_drawn_job_draws_every_copy_of_every_sheet_into_one_document() {
+    let Some(folder) = std::env::var_os("CRAFT_PRINT_DRAWN_OUT") else { return };
+    let out = std::path::Path::new(&folder).join("drawn.pdf");
+    let _ = std::fs::remove_file(&out);
+    let pdf = test_pdf(&[LETTER, LETTER, LETTER], false);
+    let job = crate::Job {
+        printer: Some("Microsoft Print to PDF".into()),
+        copies: 2,
+        collate: true,
+        title: "craft-print drawn".into(),
+        ..Default::default()
+    };
+    let mut recorder = Recorder::default();
+    let mut reports = Vec::new();
+    let receipt =
+        crate::submit_drawn(&pdf, &job, &mut recorder, out.to_str(), &mut |sent, total| reports.push((sent, total)), &crate::Cancel::new()).unwrap();
+    assert_eq!(recorder.opened, Some(3), "{receipt}");
+    let order: Vec<usize> = recorder.painted.iter().map(|p| p.0).collect();
+    assert_eq!(order, [0, 1, 2, 0, 1, 2]);
+    assert!(recorder.painted.iter().all(|p| (p.1.0 - 612.0).abs() < 2.0 && (p.1.1 - 792.0).abs() < 2.0), "{:?}", recorder.painted);
+    assert_eq!(reports.last(), Some(&(6, 6)));
+    // The in-box PDF printer writes the file once its spooled job has printed.
+    let written = (0..120).find_map(|_| {
+        let bytes = std::fs::read(&out).ok().filter(|b| b.len() > 32 && b[b.len() - 32..].windows(5).any(|w| w == b"%%EOF"));
+        if bytes.is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        bytes
+    });
+    let pages = crate::sheets::read(&written.expect("the printer wrote its file")).unwrap().sheets.len();
+    assert_eq!(pages, order.len());
+}
