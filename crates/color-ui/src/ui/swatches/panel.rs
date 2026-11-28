@@ -97,8 +97,8 @@ pub struct SwatchesPanel<'a> {
     search: bool,
     row_icons: Option<RowIconsFn<'a>>,
     select: SelectMode,
+    drops: Vec<DropMaker<'a>>,
     report_invalid_renames: bool,
-    takes_drop: Option<DropMaker<'a>>,
     payloads: Vec<PayloadAdder<'a>>,
     row_items: Option<RowItemsFn<'a>>,
     document: Option<IdSalt>,
@@ -131,8 +131,8 @@ impl<'a> SwatchesPanel<'a> {
             search: true,
             row_icons: None,
             select: SelectMode::Single,
+            drops: Vec::new(),
             report_invalid_renames: false,
-            takes_drop: None,
             payloads: Vec::new(),
             row_items: None,
             document: None,
@@ -211,12 +211,12 @@ impl<'a> SwatchesPanel<'a> {
         self
     }
 
-    /// A host payload of type `P` can be dropped onto a swatch or between swatches at `place` where `accepts` agrees;
-    /// the drop comes back as `PresetEvent::Dropped`.
+    /// Adds a target for host payloads of type `P` at `place` where `accepts` agrees.
+    /// Each drop comes back as `PresetEvent::Dropped`.
     pub fn takes_drop<P: Send + Sync + 'static>(mut self, place: DropPlace, accepts: impl Fn(&P, &DropAt<SwatchKey>) -> bool + 'a) -> Self {
         // The body can run more than once a pass, and a `PresetDrop` is used up by the browser: it is built per run.
         let accepts = Rc::new(accepts);
-        self.takes_drop = Some(Box::new(move || {
+        self.drops.push(Box::new(move || {
             let accepts = Rc::clone(&accepts);
             PresetDrop::new::<P>(place, move |payload: &P, at: &DropAt<SwatchKey>| accepts(payload, at))
         }));
@@ -270,8 +270,8 @@ impl<'a> SwatchesPanel<'a> {
             search,
             row_icons,
             select,
+            drops,
             report_invalid_renames,
-            takes_drop,
             payloads,
             row_items,
             document,
@@ -331,7 +331,7 @@ impl<'a> SwatchesPanel<'a> {
                 if let Some(items) = &row_items {
                     browser = browser.row_menu(PresetRowMenu::Host).row_items(|key: &SwatchKey| items(key));
                 }
-                if let Some(make) = &takes_drop {
+                for make in &drops {
                     browser = browser.takes_drop(make());
                 }
                 for add in &payloads {

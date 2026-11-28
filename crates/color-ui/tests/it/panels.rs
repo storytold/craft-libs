@@ -908,6 +908,56 @@ fn a_dragged_swatch_carries_the_hosts_payload_beside_the_panels_own_move() {
     assert_eq!(edits.borrow().len(), 1, "a drop outside the panel edits nothing: {:?}", edits.borrow());
 }
 
+#[trial]
+fn swatches_keep_both_host_drop_places() {
+    use craft_color_ui::palette::SwatchEntry;
+    use craft_ui::contract::{DropAt, DropPlace, ListDrag, ShowCollection as _};
+    use craft_ui::list::{List, ListRow};
+    use craft_ui::patterns::presets::{PresetEvent, PresetView};
+    use egui::{Pos2, Rect, UiBuilder};
+
+    #[derive(Clone)]
+    struct Art;
+
+    const SWATCHES: Rect = Rect { min: Pos2::ZERO, max: Pos2::new(300.0, 300.0) };
+    const LAYERS: Rect = Rect { min: Pos2::new(320.0, 0.0), max: Pos2::new(460.0, 120.0) };
+    let groups = vec![SwatchGroup {
+        name: String::new(),
+        entries: vec![SwatchEntry::new("Red", SwatchColor::Rgb([1.0, 0.0, 0.0])), SwatchEntry::new("Blue", SwatchColor::Rgb([0.0, 0.0, 1.0]))],
+    }];
+    let received = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&received);
+    let mut state = SwatchesState::default();
+    state.browser.view = PresetView::List;
+    let mut fixture = Fixture::new(move |ui| {
+        ui.scope_builder(UiBuilder::new().max_rect(LAYERS), |ui| {
+            let ids = [7_u32];
+            let source = craft_behavior::keyed(&ids, |id: &u32| *id);
+            List::<u32>::new("Layers").drag_payload(|_: &ListDrag<u32>| Some(Art)).show_items(ui, &source, &mut |_, _| ListRow::new("Art"));
+        });
+        ui.scope_builder(UiBuilder::new().max_rect(SWATCHES), |ui| {
+            let out = SwatchesPanel::new(&groups, Bind::bound(&mut state), RED)
+                .takes_drop::<Art>(DropPlace::Between, |_, _| true)
+                .takes_drop::<Art>(DropPlace::Onto, |_, _| true)
+                .show(ui);
+            seen.borrow_mut().extend(
+                out.events
+                    .into_iter()
+                    .filter_map(|event| if let PresetEvent::Dropped { at, payload, .. } = event { payload.get::<Art>().map(|_| at) } else { None }),
+            );
+        });
+    });
+    fixture.room(Vec2::new(480.0, 320.0)).settle();
+    let blue = fixture.by_label("Blue, #0000ff").expect("the Blue swatch").rect;
+    let gap = Pos2::new(blue.center().x, blue.min.y + 2.0);
+    for to in [gap, blue.center()] {
+        let from = fixture.by_label("Art").expect("the layer row").center();
+        fixture.drag_at(from, to - from).settle();
+    }
+    let blue = SwatchKey::Swatch("Blue".into());
+    assert_eq!(*received.borrow(), [DropAt::gap(Some(blue.clone()), 1), DropAt::Onto(blue)]);
+}
+
 /// A panel shown for one document after another keeps a rename left open with its document: the other document's
 /// swatch of the same name opens no field, and Enter there renames nothing.
 #[trial]
