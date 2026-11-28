@@ -12,7 +12,7 @@ use crate::primitives::{ContentPainterCx, StrokeWidth};
 use crate::runtime::env::{Env, EnvValue, Label, UnitKind};
 use crate::style::TypeRole;
 use crate::tabs::{Tab, TabKind, TabStrip};
-use crate::tile_grid::{CardText, Tile, TileGrid};
+use crate::tile_grid::{CardText, GridZoom, Tile, TileGrid};
 use craft_behavior::{DisplayOrder, ItemSource, Selection, SelectionChange, keyed};
 use egui::{CornerRadius, Rect, Stroke, StrokeKind, Ui, vec2};
 use std::borrow::Cow;
@@ -96,6 +96,13 @@ impl<S: DocumentSettings> ItemSource<usize> for CardList<'_, S> {}
 /// The columns of preset cards the grid holds: the dialog's left side is as wide as they are.
 const CARD_COLUMNS: usize = 3;
 
+/// The columns of Recent's cards with `recent_items`.
+const RECENT_COLUMNS: usize = 4;
+
+/// The picture size of Recent's cards with `recent_items`, against a preset card's: four of them take about the room
+/// three preset cards do.
+const RECENT_ZOOM: f64 = 0.75;
+
 /// What the cards of the open tab are built from.
 fn card_cx<'a, S: DocumentSettings>(session: &Session<S>, values: &'a S, read: &Read<'a, S>) -> CardCx<'a, S> {
     CardCx {
@@ -138,7 +145,7 @@ pub(super) fn tabs<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, read:
 pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, values: &S, read: &Read<'_, S>, left: &mut Left<S>) {
     let words = read.words;
     let tab = left.tab.unwrap_or(session.tab);
-    let cards = cards_of(tab, read.library, &card_cx(session, values, read));
+    let cards = cards_of(tab, read.library, read.recent_items, &card_cx(session, values, read));
     let selected = if tab == session.tab { selected_of(tab, session, values, &cards) } else { None };
     let selection = selected.map_or_else(|| Selection::new(Vec::new(), None, None), Selection::single);
     let stamp = stamp_of(tab, cards.len());
@@ -170,10 +177,11 @@ pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, value
         }
     } else {
         let count = read.units.number(cards.len() as f64, 0..=0);
-        let heading = Label::from(words.presets_heading.fill(&[("n", &count)]));
+        let items = tab == TabId::Recent && read.recent_items;
+        let heading = Label::from(if items { &words.recent_heading } else { &words.presets_heading }.fill(&[("n", &count)]));
         Text::new(heading).role(TypeRole::SectionCaption).shade(Shade::Muted).show(ui);
         let look = Env::of(ui).get::<PresetCardLook>();
-        let shown = TileGrid::<usize>::new(words.cards.clone())
+        let mut grid = TileGrid::<usize>::new(words.cards.clone())
             .card_columns(CARD_COLUMNS)
             .card()
             .card_text(match look {
@@ -181,12 +189,16 @@ pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, value
                 PresetCardLook::Page => CardText::Page,
             })
             .fill_row()
-            .aspect(2.0)
-            .select(SelectMode::Single)
-            .detail_line()
-            .rows_stamp(stamp)
-            .selection(Bind::given(selection))
-            .show_items(ui, &list, &mut |index, _| tile_of(&cards[*index], look));
+            .aspect(2.0);
+        if items {
+            // Four smaller cards to a row, about the room three preset cards take.
+            grid = grid.card_columns(RECENT_COLUMNS).zoom(GridZoom::Fixed(RECENT_ZOOM));
+        }
+        let shown = grid.select(SelectMode::Single).detail_line().rows_stamp(stamp).selection(Bind::given(selection)).show_items(
+            ui,
+            &list,
+            &mut |index, _| tile_of(&cards[*index], look),
+        );
         route(shown.response.events, &cards, left);
     }
 }
@@ -258,7 +270,7 @@ fn tab_title<P>(tab: TabId, categories: &[PresetCategory<P>], words: &NewDocumen
 }
 
 /// The cards `tab` lists.
-fn cards_of<S: DocumentSettings>(tab: TabId, library: &PresetLibrary<S>, cx: &CardCx<'_, S>) -> Vec<DocumentCard<S>> {
+fn cards_of<S: DocumentSettings>(tab: TabId, library: &PresetLibrary<S>, recent_items: bool, cx: &CardCx<'_, S>) -> Vec<DocumentCard<S>> {
     match tab {
         TabId::Category(at) => {
             cx.presets.get(at).map_or_else(Vec::new, |category| category.presets.iter().map(|preset| S::preset_card(preset, cx)).collect())
@@ -273,7 +285,14 @@ fn cards_of<S: DocumentSettings>(tab: TabId, library: &PresetLibrary<S>, cx: &Ca
                 card
             })
             .collect(),
-        TabId::Recent => S::recent_cards(cx),
+        TabId::Recent => {
+            let mut cards = S::recent_cards(cx);
+            // With `recent_items` the default sizes stand in for recent documents until there are some.
+            if recent_items && !cx.recents.is_empty() {
+                cards.retain(|card| !matches!(card.source, CardSource::Preset { .. }));
+            }
+            cards
+        }
     }
 }
 
@@ -292,7 +311,7 @@ fn preset_title(preset: &DocumentPreset, setup: &RasterSetup, words: &NewDocumen
 pub(super) fn raster_preset_card(preset: &DocumentPreset, cx: &CardCx<'_, DocumentOptions>) -> DocumentCard<DocumentOptions> {
     let preset = cx.orientation.map_or_else(|| preset.clone(), |orientation| preset.turned(orientation));
     let mut settings = preset.options(cx.setup.print_ppi, cx.setup.screen_ppi);
-    if preset.is_print() && !matches!(cx.values.unit, UnitKind::Pixels | UnitKind::Percent) {
+    if preset.in_inches() && !matches!(cx.values.unit, UnitKind::Pixels | UnitKind::Percent) {
         settings.unit = cx.values.unit;
     }
     DocumentCard::new(

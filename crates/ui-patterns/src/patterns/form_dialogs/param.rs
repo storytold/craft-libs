@@ -583,6 +583,7 @@ pub(crate) struct RowOptions {
     eyedropper: bool,
     eyedropper_armed: bool,
     full_width: bool,
+    hide_caption: bool,
     /// The row or section stands beside the one before it ([`Param::beside`]).
     beside: bool,
     /// The field pairs with the next one in its section ([`Param::beside_next`]).
@@ -621,6 +622,8 @@ pub(crate) struct RowOptions {
     resets: Vec<String>,
     /// The row takes input only while the number under the key is above the bound ([`Param::enabled_above`]).
     enabled_above: Option<(String, f64)>,
+    /// Additional field conditions that must all hold ([`Param::and_enabled_when_in`]).
+    enabled_when_also: Vec<(String, Vec<FieldValue>)>,
     /// The row takes input only while the values under the two keys differ ([`Param::enabled_when_differs`]).
     enabled_when_differs: Option<(String, String)>,
     /// The value the row shows while it is disabled ([`Param::disabled_value`]).
@@ -659,6 +662,11 @@ pub(crate) enum Head {
 }
 
 impl RowOptions {
+    /// Whether the field's label names it without drawing a caption.
+    pub(crate) fn hides_caption(&self) -> bool {
+        self.hide_caption
+    }
+
     /// Whether the row or section stands beside the one before it.
     pub(crate) fn beside(&self) -> bool {
         self.beside
@@ -730,6 +738,8 @@ fn is_path_list(value: &FieldValue) -> bool {
 struct RowTexts {
     hint: Option<Label>,
     tooltip: Option<Tooltip>,
+    /// The text after the number ([`Param::unit_label`]).
+    unit: Option<Label>,
 }
 
 /// When a row takes input.
@@ -911,6 +921,14 @@ impl Param {
     #[must_use]
     pub fn enabled_when_in(mut self, key: impl Into<String>, values: impl IntoIterator<Item = impl Into<FieldValue>>) -> Self {
         self.enable = Enable::When(key.into(), values.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Adds a condition: the row takes input only while `fields[key]` equals one of `values` and every other
+    /// enable condition holds. A missing field does not satisfy it.
+    #[must_use]
+    pub fn and_enabled_when_in(mut self, key: impl Into<String>, values: impl IntoIterator<Item = impl Into<FieldValue>>) -> Self {
+        self.options.get_or_insert_default().enabled_when_also.push((key.into(), values.into_iter().map(Into::into).collect()));
         self
     }
 
@@ -1304,6 +1322,15 @@ impl Param {
         self
     }
 
+    /// For a field with a side caption, hides the caption while keeping the row label as its accessible name.
+    /// Resettable fields keep their caption and reset dot. Separate headings, radio groups and stacked sliders
+    /// keep their own captions.
+    #[must_use]
+    pub fn hide_caption(mut self) -> Self {
+        self.options.get_or_insert_default().hide_caption = true;
+        self
+    }
+
     /// For a [`ParamKind::Range`] row: the slider asks for a short field's length and the number field is as wide as
     /// its widest value, so the row takes its content's width rather than the form's (production's Opacity). Other
     /// kinds and a popup slider are unchanged.
@@ -1389,6 +1416,15 @@ impl Param {
         self
     }
 
+    /// Text shown after the number of a number, int, optional-number or range row in place of the symbol of its
+    /// [`unit`](Self::unit), for a quantity no [`UnitKind`] names (`kbps`, `MB`). The host passes it in the user's
+    /// language. Typed text is still read by the row's `unit`, or as a plain number without one.
+    #[must_use]
+    pub fn unit_label(mut self, text: impl Into<Label>) -> Self {
+        self.texts.get_or_insert_default().unit = Some(text.into());
+        self
+    }
+
     /// Parses the registry notation into a list, labels from the keys in Title Case with two fixed names (`cellSize`
     /// is `Cell Size`, `bpc` is `Black Point Compensation`;
     /// `{"radius":0.1..1000=1,"method":"spin|zoom","monochromatic":bool,"seed":u32=0}`). Apps with their own command
@@ -1424,6 +1460,11 @@ impl Param {
     /// The row's tooltip text.
     pub(crate) fn tooltip_text(&self) -> Option<&Tooltip> {
         self.texts.as_deref()?.tooltip.as_ref()
+    }
+
+    /// The text after the row's number ([`Param::unit_label`]).
+    pub(crate) fn unit_label_text(&self) -> Option<&Label> {
+        self.texts.as_deref()?.unit.as_ref()
     }
 
     /// The label a [`Param::in_footer`] row shows while on; `None` for a row in the body.
@@ -1500,8 +1541,7 @@ impl Param {
         self.shown && self.visible_when.iter().all(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held)))
     }
 
-    /// Whether the row takes input with `fields`: every condition its `enabled_when`,
-    /// [`enabled_above`](Param::enabled_above) and [`enabled_when_differs`](Param::enabled_when_differs) set holds.
+    /// Whether the row takes input with `fields`: every enable condition must hold.
     pub fn enabled(&self, fields: &DialogFields) -> bool {
         let options = self.options.as_deref();
         let enabled = match &self.enable {
@@ -1510,6 +1550,8 @@ impl Param {
             Enable::Off => false,
         };
         enabled
+            && options
+                .is_none_or(|options| options.enabled_when_also.iter().all(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held))))
             && options.and_then(|options| options.enabled_above.as_ref()).is_none_or(|(key, bound)| fields.number(key).is_some_and(|n| n > *bound))
             && options.and_then(|options| options.enabled_when_differs.as_ref()).is_none_or(|(a, b)| fields.get(a) != fields.get(b))
     }
@@ -1668,7 +1710,7 @@ pub(crate) fn edited_rows(params: &[Param], before: &DialogFields, after: &Dialo
         .iter()
         .filter(|param| {
             differs(&param.key)
-                || param.unit_key().is_some_and(&differs)
+                || param.unit_key().is_some_and(differs)
                 || matches!(&param.kind, ParamKind::Custom(row) if row.companions.iter().any(|key| differs(key)))
                 || (matches!(param.kind, ParamKind::Files { .. }) && (differs(&param.folder_key()) || differs(&param.use_folder_key())))
         })

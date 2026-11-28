@@ -38,7 +38,7 @@ pub const PATH_OPTIONS_COLOR_KEY: &str = "pathOptions.color";
 
 /// The pen's Path Options, persisted by the app with its preferences (Photoshop's Pen gear popover). Serialised in
 /// camelCase; unknown fields are ignored and missing ones take their defaults.
-#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct PathOptionsSettings {
@@ -58,7 +58,7 @@ pub struct PathOptionsSettings {
 }
 
 /// How the direction handles' ends are drawn.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum HandleStyle {

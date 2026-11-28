@@ -4,6 +4,8 @@ use craft_theme::variant::Tone;
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Politeness, Props as _, Show as _};
 use craft_ui::notices::{Notice, NoticeAction, NoticeLayout};
+use craft_ui::testing::access::Declared;
+use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Id, Rect, Vec2};
 use std::cell::Cell;
@@ -65,6 +67,46 @@ fn a_notice_reports_its_action_and_dismissal_in_a_frame_that_runs_twice() {
     let dismiss = fixture.by_label("Dismiss").expect("the dismiss button");
     fixture.click(&dismiss).settle();
     assert_eq!(taken.get().1, 1, "the dismissal is reported once");
+}
+
+#[trial]
+fn disabled_notice_actions_stay_visible_and_cannot_be_taken() {
+    for layout in [NoticeLayout::Inline, NoticeLayout::Centred] {
+        let taken = Rc::new(Cell::new(None));
+        let can_locate = Rc::new(Cell::new(false));
+        let (seen, available) = (taken.clone(), can_locate.clone());
+        let mut fixture = Fixture::new(move |ui| {
+            let out = Notice::new(Tone::Info, "A library file is missing.")
+                .layout(layout)
+                .action(NoticeAction::new("Locate library").enabled(available.get()))
+                .action(NoticeAction::new("Show details"))
+                .show(ui);
+            if let Some(action) = out.action {
+                seen.set(Some(action));
+            }
+        });
+        fixture.room(Vec2::new(600.0, 250.0)).settle();
+        let locate = fixture.by_label("Locate library").expect("the disabled action is still visible");
+        let tree = fixture.tree();
+        assert!(tree.is_disabled_key(locate.node));
+        assert!(!tree.declares_key(locate.node, Declared::Click));
+        assert!(!tree.declares_key(locate.node, Declared::Focus));
+
+        fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+        assert_eq!(fixture.focused_stop().and_then(|(_, part)| part?.index), Some(1), "Tab skips the disabled action");
+        fixture.key(egui::Key::Enter, egui::Modifiers::NONE).settle();
+        assert_eq!(taken.replace(None), Some(1), "Enter activates the enabled action at its original index");
+
+        fixture.click(&locate).settle();
+        fixture.access(AccessActionKind::Click, &locate).settle();
+        assert_eq!(taken.get(), None, "pointer and accessibility clicks leave the disabled action inert");
+
+        can_locate.set(true);
+        fixture.settle();
+        assert!(!fixture.tree().is_disabled_key(locate.node));
+        fixture.click(&locate).settle();
+        assert_eq!(taken.get(), Some(0), "enabling the action restores activation");
+    }
 }
 
 #[trial]

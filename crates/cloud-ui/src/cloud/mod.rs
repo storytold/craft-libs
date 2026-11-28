@@ -191,6 +191,11 @@ pub struct CloudFiles {
     pub account_fault: Option<Fault>,
     /// The account is asked for once per run. A frame never asks again.
     asked_account: bool,
+    /// Set by [`sign_out`] and cleared by [`sign_in`]. While it is set, the
+    /// pages ask the service nothing. [`Job::SignOut`] has no answer and no
+    /// order against a later job, so a provider that still holds the session
+    /// could answer an account or listing request with the departed account.
+    signed_out: bool,
     /// The folder being browsed. Shared by the Open and Save As pages, which
     /// are never on screen together.
     pub mine: Folder,
@@ -249,6 +254,7 @@ impl CloudFiles {
             account: None,
             account_fault: None,
             asked_account: false,
+            signed_out: false,
             mine: Folder::default(),
             shared: Folder::default(),
             source: Source::default(),
@@ -344,8 +350,10 @@ pub fn submit<A: CloudApp>(app: &A, job: Job) {
 }
 
 /// Asks who is signed in, once per run, and lists the root folder.
+///
+/// After [`sign_out`] it asks nothing until the next [`sign_in`].
 pub fn start<A: CloudApp>(app: &mut A) {
-    if !available(app) {
+    if !available(app) || app.cloud().signed_out {
         return;
     }
     if !app.cloud().asked_account {
@@ -375,6 +383,7 @@ pub fn sign_in<A: CloudApp>(app: &mut A) {
     // would then be swallowed by the guard that stops a frame asking twice. A
     // button that does nothing the second time reads as a broken button.
     cloud.asked_account = true;
+    cloud.signed_out = false;
     cloud.link = None;
     cloud.status = Some(working);
     // A new session. A job the previous one left outstanding may never
@@ -402,6 +411,10 @@ pub fn sign_out<A: CloudApp>(app: &mut A) {
     cloud.account = None;
     cloud.account_fault = None;
     cloud.asked_account = false;
+    // File › Open and Save As call `start` on every frame. Without this, the
+    // next frame would ask who is signed in and list the root folder while
+    // the sign-out may still be on its way.
+    cloud.signed_out = true;
     cloud.link = None;
     cloud.mine = Folder::default();
     cloud.shared = Folder::default();
@@ -413,8 +426,13 @@ pub fn sign_out<A: CloudApp>(app: &mut A) {
     // that never heard back does not refuse every one after it forever.
     cloud.account_generation.fetch_add(1, Ordering::Relaxed);
     cloud.busy = None;
+    cloud.sharing_save = false;
     cloud.relist_after_sign_in = false;
     cloud.save_as_target = None;
+    // Sharing went with the account: Share is not offered on the old
+    // account's answer, and a sheet open on one of its documents closes. The
+    // next sign-in asks the provider again.
+    app.sharing().signed_out();
     submit(app, Job::SignOut);
 }
 
@@ -629,6 +647,9 @@ pub fn save_as<A: CloudApp>(app: &mut A, folder: &str, name: &str) -> Result<Jso
     }
     if app.cloud().relist_after_sign_in {
         return Err("wait for the sign-in to finish".to_owned());
+    }
+    if app.cloud().signed_out {
+        return Err(app.tr("Sign in to save to the cloud"));
     }
     // A document that does not exist yet has no content type to read. The
     // name a person just typed is the whole of what was asked for.

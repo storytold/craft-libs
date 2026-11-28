@@ -78,3 +78,22 @@ fn dash_fields_add_after_the_pattern_and_a_cleared_field_ends_it() {
     type_into(&mut fixture, "Dash 1", "");
     assert_eq!(style.borrow().dashes, [4.0], "the first field never clears");
 }
+
+#[trial]
+fn round_cap_and_round_join_names_lead_to_their_own_actions() {
+    use craft_draw::ui::stroke::{LineCap, LineJoin};
+    use craft_ui::testing::{access::focused_key, focus::AccessActionKind};
+
+    let (mut fixture, style) = editor(vec![4.0, 2.0]);
+    let cap = fixture.by_label("Round Cap").expect("the cap has its own accessible name");
+    let join = fixture.by_label("Round Join").expect("the join has its own accessible name");
+    assert_ne!(cap.node, join.node, "the names find independent choices");
+    fixture.click(&cap).settle();
+    assert_eq!(style.borrow().cap, LineCap::Round);
+    assert_eq!(style.borrow().join, LineJoin::Miter);
+    fixture.access(AccessActionKind::Focus, &join).settle();
+    assert_eq!(focused_key(fixture.tree()), join.node);
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(style.borrow().join, LineJoin::Round);
+    assert_eq!(style.borrow().cap, LineCap::Round);
+}
