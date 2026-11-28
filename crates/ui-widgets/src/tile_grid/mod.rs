@@ -44,8 +44,11 @@ pub enum CardText {
     /// reading start.
     #[default]
     File,
-    /// For cards of presets (New Document): a regular name and the detail under it, both centred.
+    /// For cards of presets (New Document): the body type's name and the detail under it, both centred.
     Preset,
+    /// For cards of presets whose name stands out (`PresetCardLook::OutlineStrong`): a strong name and the detail under
+    /// it, both centred.
+    PresetStrong,
     /// For cards of page presets (`Tile::page`: VectorCraft's New Document and start page): a strong name on up to two
     /// lines and the detail right under it, all centred, on a flat card: no fill of its own at rest, the hover fill
     /// under the pointer, and the hover fill with an accent edge while selected.
@@ -56,15 +59,14 @@ impl CardText {
     /// The type role of the name.
     pub(super) fn name_role(self) -> craft_theme::TypeRole {
         match self {
-            CardText::File => craft_theme::TypeRole::BodyStrong,
+            CardText::File | CardText::PresetStrong | CardText::Page => craft_theme::TypeRole::BodyStrong,
             CardText::Preset => craft_theme::TypeRole::Body,
-            CardText::Page => craft_theme::TypeRole::BodyStrong,
         }
     }
 
     /// Whether the name and detail are centred in the card.
     pub(super) fn centred(self) -> bool {
-        matches!(self, CardText::Preset | CardText::Page)
+        matches!(self, CardText::Preset | CardText::PresetStrong | CardText::Page)
     }
 
     /// The lines the card keeps for the name.

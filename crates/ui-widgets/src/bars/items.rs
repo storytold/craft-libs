@@ -31,6 +31,9 @@ pub enum ItemDisplay {
     Text,
     /// The command's icon before its label. A command with no icon shows `Text`.
     IconText,
+    /// The command's label on a framed button, for a strip of actions that read as buttons (a dialog's set row);
+    /// `Text` is the label alone.
+    Button,
 }
 
 /// What the "More" menu of a `BarItems` strip lists.
@@ -169,7 +172,10 @@ fn icon_of(resolved: &ResolvedCommand) -> Option<IconSpec<'static>> {
 
 /// What the item shows: its display, or its label when the command has no icon for it.
 fn display_of(present: &Present) -> ItemDisplay {
-    if present.item.display != ItemDisplay::Text && icon_of(&present.resolved).is_none() { ItemDisplay::Text } else { present.item.display }
+    match present.item.display {
+        ItemDisplay::Icon | ItemDisplay::IconText if icon_of(&present.resolved).is_none() => ItemDisplay::Text,
+        display => display,
+    }
 }
 
 /// The face of an item: an icon button, a toggle for a command with a checked state, or a text button. Icon-only faces
@@ -186,6 +192,7 @@ fn face_of(present: &Present, glyphs: GlyphRole) -> Face {
         (ItemDisplay::IconText, Some(icon)) if toggle => Face::Toggle(Box::new(ToggleButton::command(item.command.clone()).icon(icon))),
         (ItemDisplay::IconText, Some(icon)) => Face::Text(Box::new(Button::command(item.command.clone()).variant(Variant::GHOST).icon(icon))),
         (_, _) if toggle => Face::Toggle(Box::new(ToggleButton::command(item.command.clone()))),
+        (ItemDisplay::Button, _) => Face::Text(Box::new(Button::command(item.command.clone()))),
         (_, _) => Face::Text(Box::new(Button::command(item.command.clone()).variant(Variant::GHOST))),
     }
 }

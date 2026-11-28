@@ -1396,3 +1396,33 @@ fn a_tab_dropped_on_another_strip_lands_there_even_with_no_tabs() {
         assert_eq!(over, Some(wanted), "the tab dropped on {wanted:?} lands in the other strip: {:?}", seen.borrow());
     }
 }
+
+/// Large text tabs (a dialog's categories) set their labels in the strong body type and stand further apart than text tabs
+/// of the strip's usual size.
+#[trial]
+fn large_text_tabs_have_bigger_labels_and_a_wider_gap() {
+    let strip = |large: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            let keys = [0_usize, 1];
+            let source = keyed(&keys, |key: &usize| *key);
+            let strip = TabStrip::new("Categories").kind(TabKind::Text).shown(0);
+            let strip = if large { strip.large() } else { strip };
+            let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
+        });
+        // A fixture's context is given its fonts without the facts text layout reads of them, so a semibold role
+        // draws in the regular face there and the strong body type paints as wide as the body type. Loading the
+        // suite's fonts as an app does (`fonts::load`) records that the semibold family exists, so the strong
+        // labels paint in Inter SemiBold and the trial can see the stronger type.
+        craft_ui::fonts::load(fixture.ctx(), craft_ui::fonts::deflated_default_definitions());
+        fixture.settle();
+        // Text tabs touch (the strip puts no gap between their rects); the room between them is each tab's tail
+        // after its label, so the gap is measured between the painted labels, from the end of one to the start of
+        // the next.
+        let label = |name: &str| fixture.texts().iter().find(|line| line.text == name).expect("the label is painted").rect;
+        let (first, second) = (label("One"), label("Two"));
+        (second.left() - first.right(), first.width())
+    };
+    let ((gap, width), (large_gap, large_width)) = (strip(false), strip(true));
+    assert!(large_gap > gap, "the large tabs stand further apart: {large_gap} against {gap}");
+    assert!(large_width > width, "the large labels are set larger or stronger: {large_width} against {width}");
+}

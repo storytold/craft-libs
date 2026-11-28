@@ -148,8 +148,9 @@ impl CropBox {
         (w.is_finite() && h.is_finite()).then(|| (w.round().max(1.0), h.round().max(1.0)))
     }
 
-    /// Whether both sides are at least `min`, and never under one document unit whatever `min` says (a `min` that is
-    /// not a number counts as one unit).
+    /// Whether both sides are at least `min`, and never under one document unit whatever `min` says.
+    ///
+    /// A `min` that is not a number counts as one unit.
     pub fn size_ok(&self, min: f64) -> bool {
         let min = min.max(MIN_FRAME);
         self.rect.width() >= min && self.rect.height() >= min

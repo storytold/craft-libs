@@ -172,6 +172,29 @@ fn card_text_places_the_name_centred_for_presets_and_at_the_start_for_files() {
     assert!(name.left() - tile.left() < tile.width() / 4.0, "a file's name starts at the tile's start edge: {name:?} in {tile:?}");
 }
 
+/// A preset card's name is set in the body type, and a card that asks for the strong preset name sets it as strongly as a
+/// file card's.
+#[trial]
+fn a_preset_cards_name_is_strong_only_when_the_card_asks_for_it() {
+    let width = |text: CardText| {
+        let mut frames = Frames::new();
+        // A fixture's context has the suite's fonts without the facts text layout reads of them, so a semibold role
+        // paints in the regular face there and both roles measure alike. Loading them as an app does (`fonts::load`)
+        // records that the semibold family exists, so the strong name paints in Inter SemiBold and is wider.
+        craft_ui::fonts::load(&frames.ctx, craft_ui::fonts::deflated_default_definitions());
+        for _ in 0..3 {
+            frames.frame(Vec::new(), |ui| {
+                let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 300.0));
+                in_region(ui, region, |ui| Tile::new("Letter Poster").card().card_text(text).detail("Just now").show(ui).response.rect);
+            });
+        }
+        frames.texts().iter().find(|line| line.text == "Letter Poster").expect("the name is painted").rect.width()
+    };
+    let (body, strong, file) = (width(CardText::Preset), width(CardText::PresetStrong), width(CardText::File));
+    assert!(strong > body, "a preset's name is set in the body type until the card asks for the strong one: {body} against {strong}");
+    assert!((strong - file).abs() < 0.5, "the strong preset name is set as strongly as a file's: {strong} against {file}");
+}
+
 /// An icon-only card tile with paper paints the paper fill, draws a crisp frame border, and scales the centered icon.
 #[trial]
 fn card_tile_with_paper_paints_paper_surface_frame_and_large_icon() {

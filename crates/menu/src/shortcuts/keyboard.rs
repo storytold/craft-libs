@@ -4,19 +4,21 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use craft_behavior::ColumnWidth;
 use craft_behavior::nav::NavShape;
 use craft_behavior::{Metrics, PartKey, Roving, Sense};
 use craft_keymap::{Binding, Chord, CommandRef, Holder, Key, Keymap, Mods, Overrides, Platform, Scope, Trigger};
-use craft_theme::variant::Tone;
+use craft_theme::Variant;
+use craft_theme::variant::{Emphasis, Tone};
 use craft_ui::buttons::{Button, ToggleButton};
 use craft_ui::contract::{
     Access, Bind, BodyCx, Component, Cx, Input, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, Show as _,
-    ShowContainer as _, clicked,
+    ShowContainer as _, Sizing, clicked,
 };
-use craft_ui::display::Text;
-use craft_ui::layout_components::{Row, Stack};
+use craft_ui::display::{Badge, Text};
+use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::primitives::{PaintShape, StrokeWidth, TextRun, Wrap};
-use craft_ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, TextLook, TypeRole};
+use craft_ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, SurfaceKind, TextLook, TypeRole};
 use egui::{CornerRadius, Rect, Response, Ui, Vec2, vec2};
 
 use super::state::{DialogState, Env};
@@ -30,6 +32,11 @@ const UNITS_H: f32 = 6.25;
 const ROW_GAP: f32 = 0.25;
 /// Where the navigation cluster starts, in key units.
 const NAV_AT: f32 = 15.5;
+
+/// The share of the pane's width the keys take beside the clicked key's shortcuts, and the share those take.
+const CAPS_SHARE: f32 = 0.7;
+const LIST_SHARE: f32 = 0.3;
+const COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(CAPS_SHARE), ColumnWidth::fill(LIST_SHARE)];
 
 const KEY: PartKey = PartKey::new("key");
 const MODIFIER: PartKey = PartKey::new("modifier");
@@ -328,6 +335,8 @@ pub(crate) struct PaneStyle {
     /// Cap fills by class, and the ink that reads on each: free, application, panel or context, both.
     fills: [StyleColor; 4],
     inks: [StyleColor; 4],
+    /// The thin edge of every cap, so a cap whose fill is the dialog's own still reads as a key.
+    edge: StyleColor,
     /// A modifier cap that is on.
     on_fill: StyleColor,
     on_ink: StyleColor,
@@ -379,22 +388,36 @@ impl Component for KeyCaps {
 
     fn style(cx: &StyleCx<'_>, _: Self::StyleKey) -> PaneStyle {
         let classes = [Class::Free, Class::App, Class::Scoped, Class::Both];
+        // The solid look of a tone: its fill and the ink that reads on it.
+        let solid = |tone: Tone| {
+            let look = cx.with_variant(Variant::look(Emphasis::Solid, tone)).variant_look();
+            (look.fill.off.rest, look.text.off.rest)
+        };
         PaneStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
             text: TextLook::new(TypeRole::Caption, craft_theme::Stateful::new(cx.ink(craft_ui::style::Ink::OnPanel))),
             step: cx.control().height,
             radius: cx.surface(craft_ui::style::SurfaceKind::Raised).radius,
-            fills: classes.map(|c| cx.tone_fill(c.tone())),
-            inks: classes.map(|c| if c == Class::Free { cx.ink(craft_ui::style::Ink::OnPanel) } else { cx.tone(c.tone()) }),
-            on_fill: cx.tone_fill(Tone::Info),
-            on_ink: cx.tone(Tone::Info),
+            // A free key is a raised cap (the neutral tone's soft fill is the sunken surface, which a dialog may share); a
+            // held key is the solid fill of its tone, so the classes read at a glance.
+            fills: classes.map(|c| if c == Class::Free { StyleColor(cx.surface(SurfaceKind::Raised).fill) } else { solid(c.tone()).0 }),
+            inks: classes.map(|c| if c == Class::Free { cx.ink(craft_ui::style::Ink::OnPanel) } else { solid(c.tone()).1 }),
+            edge: cx.color(cx.tokens.color.line.border),
+            on_fill: solid(Tone::Info).0,
+            on_ink: solid(Tone::Info).1,
         }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        // The caps keep their proportions: 18.5 units go across the pane and 6.25 down it, so the pane is as tall as
+        // the width it is given makes the keys, and a wider pane draws bigger keys rather than the same keys one
+        // control high. Measured at its least, the pane is 18.5 controls wide, so a key is one control; a pane given
+        // less room than that takes the room it is given (down to the plot's least height), so its keys can come out
+        // smaller than a control. A pane measured in a column that offers it no room still learns the height it shows
+        // at, as `picture_size` has the column sweep again with the width the pane settles on.
         let step = cx.style.step;
-        vec2(UNITS_W * step, UNITS_H * step)
+        cx.picture_size(UNITS_W * step, f32::INFINITY, |width| width / UNITS_W * UNITS_H)
     }
 
     fn sense(&self) -> Sense {
@@ -448,13 +471,16 @@ impl Component for KeyCaps {
             };
             let shape = PaintShape::Rect(cell, style.radius);
             draw.fill(&shape, fill);
+            draw.stroke(&shape, StrokeWidth::Thin, style.edge);
             if Self::interactive(view) && cx.part(Self::part(at, view)).hovered {
                 draw.stroke(&shape, StrokeWidth::Medium, ink);
             }
             if view.marked && matches!(view.cap, Cap::Key(_)) {
                 draw.stroke(&shape, StrokeWidth::Thick, ink);
             }
-            let (top, bottom) = cell.split_top_bottom_at_fraction(0.5);
+            // The names stand off the cap's edges, so a long one is cut before it touches the next key.
+            let pad = (unit * 0.1).clamp(2.0, 4.0);
+            let (top, bottom) = cell.shrink2(vec2(pad, pad * 0.5)).split_top_bottom_at_fraction(0.5);
             if let Some(title) = &view.title {
                 draw.text(top, &TextRun::new(title.as_str()).role(style.text.role).color(ink).wrap(Wrap::Elide));
             }
@@ -621,7 +647,7 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, env: &mut Env<'_>, state: 
     let mut assign = false;
     let mods = state.keyboard.mods;
     let index = state.keyboard.index(env.keymap);
-    Stack::new().show(ui, |ui, _| {
+    Stack::new().fill_width().show(ui, |ui, _| {
         Row::new().show(ui, |ui, _| {
             let layout = if mac { &words.keyboard_us_macos } else { &words.keyboard_us };
             Text::new(layout.clone()).show(ui);
@@ -632,26 +658,30 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, env: &mut Env<'_>, state: 
                     toggled = Some(m);
                 }
             }
+            // The legend: each word on the solid fill its keys take.
             for (tone, word) in [
                 (Tone::Accent, &words.application),
                 (Tone::Warn, &words.panel_or_context),
                 (Tone::Bad, &words.both),
                 (Tone::Info, &words.modifier_on),
             ] {
-                Text::new(word.clone()).tone(tone).show(ui);
+                Badge::new(word.clone()).variant(Variant::look(Emphasis::Solid, tone)).id_salt(("shortcuts.legend", word.as_str())).show(ui);
             }
         });
-        Row::new().show(ui, |ui, _| {
-            let caps = KeyCaps {
-                common: craft_ui::contract::Common::new(),
-                caps: cap_views(env, &state.keyboard, &index.1, mods),
-                key: None,
-                toggled: None,
-            };
-            let pane = caps.id_salt("shortcuts.keyboardCaps").show(ui);
-            picked_key = pane.key;
-            toggled = toggled.or(pane.toggled);
-            Stack::new().show(ui, |ui, _| key_list(ui, env, state, &index.1, mods, &mut go, &mut assign));
+        // The keys take most of the width; the clicked key's shortcuts the rest, under the keys' own height.
+        Grid::new(&COLUMNS).fill_width().show(ui, |ui, _| {
+            Stack::new().fill_width().show(ui, |ui, _| {
+                let caps = KeyCaps {
+                    common: craft_ui::contract::Common::new(),
+                    caps: cap_views(env, &state.keyboard, &index.1, mods),
+                    key: None,
+                    toggled: None,
+                };
+                let pane = caps.id_salt("shortcuts.keyboardCaps").sizing(Sizing::FillWidth).show(ui);
+                picked_key = pane.key;
+                toggled = toggled.or(pane.toggled);
+            });
+            Stack::new().fill_width().show(ui, |ui, _| key_list(ui, env, state, &index.1, mods, &mut go, &mut assign));
         });
     });
     if let Some(m) = toggled {
@@ -680,7 +710,7 @@ fn key_list(ui: &mut Ui, env: &Env<'_>, state: &DialogState, index: &Index, mods
     let words = say.words();
     let platform = env.keymap.platform();
     let Some(key) = state.keyboard.key else {
-        Text::new(words.click_a_key_to_see_its.clone()).shade(craft_ui::display::Shade::Muted).show(ui);
+        Text::new(words.click_a_key_to_see_its.clone()).shade(craft_ui::display::Shade::Muted).sizing(Sizing::FillWidth).show(ui);
         return;
     };
     Text::new(words.key_key.fill(&[("key", say.key_word(key, platform).as_str())])).show(ui);

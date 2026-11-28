@@ -428,7 +428,10 @@ impl Component for CommandRow<'_> {
             Line::Row(line) => {
                 let mut cell = self.measure_chips(cx, line, false);
                 if line.chips.is_empty() {
-                    cell += cx.child(("chip", "none"), &mut ChordChip::new(self.env.words.none.as_str().to_owned()), Proposal::Ideal).x + gap;
+                    let none = self.env.words.none.as_str().to_owned();
+                    let width = cx.child(("chip", "none"), &mut ChordChip::new(none.clone()), Proposal::Ideal).x;
+                    self.widths.insert((Shown::Chip, none), width);
+                    cell += width + gap;
                 }
                 for text in &line.unparsed {
                     let width = cx.child(("unparsed", text), &mut unparsed_note(text, String::new()), Proposal::Ideal).x;
@@ -578,14 +581,15 @@ impl CommandRow<'_> {
             }
         }
         if cells.is_empty() && !hold {
-            let rect = band(&flow, cell, 0.0, chips_end.max(height));
             let none = words.none.as_str();
+            let width = width_of(Shown::Chip, none).min(chips_end.max(0.0));
+            let rect = band(&flow, cell, 0.0, width);
             let name = words.label_chord.fill(&[("label", &line.label), ("chord", none)]);
             let chip = ChordChip::new(none.to_owned()).label(name).id_salt(("chip", line.key.as_str(), 0)).enabled(editable);
             if ui.child(("chip", line.key.as_str(), 0), rect, chip).pressed {
                 act = Some(RowAct::Record(None));
             }
-            at = chips_end.max(height) + gap;
+            at = width + gap;
         }
         let unparsed: &[String] = if hold { &[] } else { &line.unparsed };
         for (n, text) in unparsed.iter().enumerate() {

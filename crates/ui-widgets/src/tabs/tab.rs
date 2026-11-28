@@ -199,7 +199,7 @@ pub struct Tab<'a> {
     #[style_key]
     #[prop]
     role: TabRole,
-    /// Large Tabs: the strip's taller form with the body type.
+    /// Large Tabs: the strip's taller form with the body type; text tabs take the strong body type and stand further apart.
     #[style_key]
     #[prop(flag)]
     large: bool,
@@ -394,6 +394,9 @@ impl Component for Tab<'_> {
         // semibold document tab's title is in the tab-title role: the condensed face where the app embeds it.
         let role = if ribbon {
             TypeRole::BodyStrong
+        } else if text_only && key.large {
+            // Large text tabs (a dialog's categories): the strong body type, about 13 points.
+            TypeRole::BodyStrong
         } else if text_only || key.large {
             TypeRole::Body
         } else if strong {
@@ -463,7 +466,8 @@ impl Component for Tab<'_> {
             gap: space.gap.inline,
             icon: size.icon.sm,
             close_box: size.icon.md,
-            tail: if text_only && !ribbon { space.gap.section } else { 0.0 },
+            // Large text tabs stand further apart.
+            tail: if text_only && !ribbon { space.gap.section + if key.large { space.gap.item } else { 0.0 } } else { 0.0 },
             label_line: line(role),
             detail_line: line(TypeRole::Caption),
             underline_gap: space.gap.tight,
