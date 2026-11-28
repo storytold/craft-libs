@@ -197,13 +197,16 @@ zlib-rs backend), the chain and its accounting.
 - `decode_within`, `decode_tolerant_within` and `decode_image_tolerant_within` spend from a
   caller-owned `work` allowance shared by a run of images, as `decode_ccitt_within` does; what
   `work` cannot pay for gives `Spent`. Flate pays `FLATE_READ_WORK` steps a byte it reads.
+- `flate_input_for(data, output, max)`: the least of zlib `data` a reader takes in to inflate
+  `output` bytes (storytold/pdfcraft#6930).
 - `encode(filter, params, data)` writes Flate (zlib level 6), LZW, ASCIIHex, ASCII85 and
   RunLength, with a predictor first for Flate and LZW. `encode_g4`, `encode_jbig2`,
   `encode_jbig2_generic` and `encode_jbig2_shared` code 1-bit images.
 
 The code comes from PdfCraft's `pdfcraft-filters` crate (revision
-`80e26e674d1aa33078e83c8139875047f3289eb6`): its `lib.rs` and `flate.rs` here, its codecs in
-`craft-stream-codecs`. Tests: `cargo test -p craft-pdf --no-default-features --features filters`.
+`80e26e674d1aa33078e83c8139875047f3289eb6`): its `lib.rs` and `flate.rs` here, with
+`flate_input_for` added since, its codecs in `craft-stream-codecs`. Tests:
+`cargo test -p craft-pdf --no-default-features --features filters`.
 A fuzz target is in `crates/pdf/fuzz` (`cargo +nightly fuzz run filters`, from `crates/pdf`).
 
 ## Encryption
