@@ -36,19 +36,21 @@ impl AffixDict {
             // it is past MAX_WORK, so a suggestion never offers one the check would refuse.
             work > MAX_WORK || self.simple_word_budgeted(&cand, excluded, self.stem_set(&cand).is_none()).unwrap_or(true)
         };
-        let near = self.near_miss(&s.chars, s.c.two_words, &mut is_word);
+        let near = self.near_miss(&s.chars, s.c.two_words, s.skip_case_near, &mut is_word);
         s.work = work;
         s.near = Some(near);
         near
     }
 
-    fn near_miss(&self, w: &[char], two_words: bool, is_word: &mut impl FnMut(&[char]) -> bool) -> bool {
+    fn near_miss(&self, w: &[char], two_words: bool, skip_case_near: bool, is_word: &mut impl FnMut(&[char]) -> bool) -> bool {
         let n = w.len();
         let mut cand: Vec<char> = Vec::with_capacity(n + 8);
-        let mut first = w.iter().take(1).flat_map(|c| c.to_uppercase()).collect::<Vec<char>>();
-        first.extend(w.iter().skip(1));
-        if is_word(&first) || is_word(&w.iter().flat_map(|c| c.to_uppercase()).collect::<Vec<char>>()) {
-            return true;
+        if !skip_case_near {
+            let mut first = w.iter().take(1).flat_map(|c| c.to_uppercase()).collect::<Vec<char>>();
+            first.extend(w.iter().skip(1));
+            if is_word(&first) || is_word(&w.iter().flat_map(|c| c.to_uppercase()).collect::<Vec<char>>()) {
+                return true;
+            }
         }
         for i in 0..n {
             // A letter too many, and a pair typed twice (`abab` for `ab`).

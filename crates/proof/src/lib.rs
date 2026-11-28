@@ -80,6 +80,7 @@ mod data {
 }
 pub mod bg;
 pub mod cs;
+mod de;
 mod devanagari;
 pub mod dict;
 pub mod en_variants;
@@ -545,7 +546,7 @@ pub fn check_spelling_in(text: &str, lang: ProofLang) -> Vec<Issue> {
 /// cost quadratic scanning (#1335).
 fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options) -> Vec<Issue> {
     let mut token = (0, 0, false);
-    words(text)
+    let mut issues: Vec<Issue> = words(text)
         .into_iter()
         .filter_map(|(a, b)| {
             if a < token.0 || a >= token.1 {
@@ -553,7 +554,9 @@ fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options
             }
             spelling_issue(text, a, b, lang(a), opts, token.2)
         })
-        .collect()
+        .collect();
+    de::filter_coordinated_compounds(text, &mut issues);
+    issues
 }
 
 /// The whitespace-delimited token enclosing the word at `a..b` of `text`: its byte range, and
