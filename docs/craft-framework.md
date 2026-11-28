@@ -993,7 +993,7 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | --- | --- |
 | `size.control.sm`, `size.control.md` | Controls, fields, buttons |
 | `size.button` | A standard push button's height (`Button`, `SplitButton`, `ToggleButton` faces); follows an app's `size.control.md` unless the app sets it |
-| `size.icon.sm`, `size.icon.md`, `size.icon.lg` | Icons; `md` is the glyph of a tool strip and of a panel footer's actions (`GlyphRole::Tool`), `lg` of a tool rail (`GlyphRole::ToolRail`). A stroke-set icon draws its line `stroke.icon` of its side |
+| `size.icon.sm`, `size.icon.md`, `size.icon.lg` | Icons; `md` is the glyph of a tool strip and of a panel footer's actions (`GlyphRole::Tool`), `lg` of a tool rail (`GlyphRole::ToolRail`). A stroke-set icon draws its line `stroke.icon_base` plus `stroke.icon` of its side, at least one physical pixel, so a large icon's line grows more slowly than the icon |
 | `size.icon.glyph_sm`, `size.icon.glyph_md` | The glyph in an icon-only button (`GlyphRole::Control`, the default; a container sets another with `ContainerProps::child_glyphs`) |
 | `size.bar.title`, `size.bar.tab`, `size.bar.tab_large`, `size.bar.status`, `size.bar.options`, `size.bar.options_narrow`, `size.bar.column` | Title bar, document tab bar, document tab bar with large tabs, status bar, options bar, a dock column's bar (`size.control.sm` in the built-in sets) |
 | `size.panel_header` | Panel headers |

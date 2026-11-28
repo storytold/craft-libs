@@ -349,7 +349,9 @@ impl SvgIcon {
     /// stroke, so all its requests share one.
     fn pixels(&self, side: f32, ppp: f32) -> (u32, u32) {
         let px = (side * ppp).round().max(1.0) as u32;
-        let stroke_px = if svg_set::entry_stroke_width(self.entry, self.set).is_some() { (self.stroke * ppp * 64.0).round() as u32 } else { 0 };
+        // Never thinner than one physical pixel, so a line stays crisp on a standard display.
+        let stroke_px =
+            if svg_set::entry_stroke_width(self.entry, self.set).is_some() { ((self.stroke * ppp).max(1.0) * 64.0).round() as u32 } else { 0 };
         (px, stroke_px)
     }
 
@@ -442,7 +444,8 @@ impl LayerInks {
     }
 }
 
-/// The stroke of a stroke-set icon `side` wide: `stroke.icon` of its side, so every glyph has the same weight.
+/// The stroke of a stroke-set icon `side` wide, in points: `stroke.icon_base` plus `stroke.icon` of its side, so a
+/// large icon's line grows more slowly than the icon (about 1.1 points at 16, 1.75 at 32).
 fn stroke(tokens: &UiTokens, side: f32) -> f32 {
-    tokens.stroke.icon * side
+    tokens.stroke.icon_base + tokens.stroke.icon * side
 }
