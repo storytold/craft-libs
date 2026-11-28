@@ -202,6 +202,20 @@ fn radar_charts_draw_spokes_grid_and_series_polygons() {
 }
 
 #[test]
+fn radar_markers_take_the_series_marker_fill() {
+    let cats = ["Speed", "Power", "Range"];
+    // A blue series line; with a red marker fill of its own, then without.
+    let blue = ser(0, "A", Some("0000FF"), &cats, &["3", "4", "5"]);
+    let red_marks =
+        blue.replacen("</c:spPr>", r#"</c:spPr><c:marker><c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr></c:marker>"#, 1);
+    let dots = |items: &[GraphicItem]| -> Vec<Rgb> {
+        items.iter().filter_map(|it| if let GraphicItem::Shape { kind: ShapeKind::Ellipse, fill, .. } = it { *fill } else { None }).collect()
+    };
+    assert_eq!(dots(&radar_chart("marker", &[red_marks])), [Rgb(0xFF, 0, 0); 3], "the series' marker fill");
+    assert_eq!(dots(&radar_chart("marker", &[blue])), [Rgb(0, 0, 0xFF); 3], "else the series colour");
+}
+
+#[test]
 fn radar_charts_show_a_legend() {
     let cats = ["a", "b", "c"];
     let plot = format!("<c:radarChart>{}</c:radarChart>", ser(0, "Team", None, &cats, &["1", "2", "3"]));

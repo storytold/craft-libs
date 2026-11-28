@@ -96,7 +96,10 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         for (i, p) in ring.iter().enumerate() {
             if c.radar_marks && s.values.get(i).copied().flatten().is_some() {
                 let rect = [p.0 as f32 - MARKER / 2.0, p.1 as f32 - MARKER / 2.0, MARKER, MARKER];
-                out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(col), stroke: None, stroke_width: 0.0, alpha: 1.0 });
+                // The series' own marker fill (`c:ser/c:marker/c:spPr`), as lines and scatters
+                // take it, else the series colour.
+                let fill = Some(s.marker_color.unwrap_or(col));
+                out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill, stroke: None, stroke_width: 0.0, alpha: 1.0 });
             }
             if let Some(text) = label_of(s, i) {
                 labels.push(DataLabel { x: p.0 as f32, y: p.1 as f32, text, inside: false, pos: LabelPos::Above, off: 0.0 });
