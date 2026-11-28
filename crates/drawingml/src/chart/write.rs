@@ -1606,17 +1606,23 @@ mod tests {
                 groups.push_str(r#"<c:barChart><c:barDir val="col"/><c:grouping val="percentStacked"/>"#);
                 for offset in 0..3 {
                     let i = first + offset;
-                    let show = expected_options[i].map(|v| format!(r#"<c:dLbls><c:showVal val="{}"/></c:dLbls>"#, if v { 1 } else { 0 })).unwrap_or_default();
+                    let show = expected_options[i]
+                        .map(|v| format!(r#"<c:dLbls><c:showVal val="{}"/></c:dLbls>"#, if v { 1 } else { 0 }))
+                        .unwrap_or_default();
                     let format = expected_formats[i];
                     groups.push_str(&format!(r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:tx><c:v>Series{i}</c:v></c:tx>{show}<c:cat><c:strLit><c:pt idx="0"><c:v>x</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:formatCode>{format}</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>0.5</c:v></c:pt></c:numLit></c:val></c:ser>"#));
                 }
                 // Omit the group setting when off, so None really means inheritance rather
                 // than the reader's established explicit-group-false projection.
-                if enabled { groups.push_str(r#"<c:dLbls><c:showVal val="1"/></c:dLbls>"#); }
+                if enabled {
+                    groups.push_str(r#"<c:dLbls><c:showVal val="1"/></c:dLbls>"#);
+                }
                 groups.push_str(&format!(r#"<c:axId val="{category}"/><c:axId val="{value}"/></c:barChart>"#));
                 axes.push_str(&format!(r#"<c:catAx><c:axId val="{category}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="b"/><c:crossAx val="{value}"/></c:catAx><c:valAx><c:axId val="{value}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="{pos}"/><c:crossAx val="{category}"/></c:valAx>"#));
             }
-            let xml = format!(r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea>{groups}{axes}</c:plotArea></c:chart></c:chartSpace>"#);
+            let xml = format!(
+                r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea>{groups}{axes}</c:plotArea></c:chart></c:chartSpace>"#
+            );
             let mut chart = crate::chart::read::read_chart_xml(xml.as_bytes()).unwrap();
             assert_eq!(chart.kind, ChartType::PercentColumn);
             assert_eq!(chart.data_labels, enabled);
@@ -1632,12 +1638,21 @@ mod tests {
             let mut back = crate::chart::read::read_chart_xml(&written).unwrap();
             assert_eq!(back.series.iter().map(|s| back.data_label(s, 0.5)).collect::<Vec<_>>(), labels);
             assert_eq!(back.series.iter().map(|s| s.number_format.as_deref()).collect::<Vec<_>>(), expected_formats.map(Some));
-            assert_eq!(back.series.iter().map(|s| s.data_labels).collect::<Vec<_>>(), expected_options, "a format must not freeze inherited visibility into an explicit bool");
+            assert_eq!(
+                back.series.iter().map(|s| s.data_labels).collect::<Vec<_>>(),
+                expected_options,
+                "a format must not freeze inherited visibility into an explicit bool"
+            );
             assert_eq!(back.data_labels, enabled);
             assert_eq!(back.series.iter().map(|s| back.series_data_labels(s)).collect::<Vec<_>>(), shown);
             assert_eq!(back.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, false, false, true, true, true]);
-            assert_eq!(back.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(), chart.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>());
-            for secondary in [false, true] { assert_eq!(back.axis_label(secondary, 0.5), chart.axis_label(secondary, 0.5)); }
+            assert_eq!(
+                back.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(),
+                chart.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>()
+            );
+            for secondary in [false, true] {
+                assert_eq!(back.axis_label(secondary, 0.5), chart.axis_label(secondary, 0.5));
+            }
             for chart_wide in [false, true] {
                 back.data_labels = chart_wide;
                 for (s, original) in back.series.iter().zip(expected_options) {
@@ -1660,7 +1675,6 @@ mod tests {
             }
         }
     }
-
 }
 
 #[cfg(test)]
