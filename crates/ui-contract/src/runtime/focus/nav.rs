@@ -403,8 +403,15 @@ impl State {
         let trap = self.trap_of(current.as_ref());
         let in_dialog = trap.and_then(|id| self.last_scopes.get(&id)).is_some_and(|scope| scope.policy.kind == ScopeKind::Dialog);
         let fields = in_dialog && dialog_tab == TabReach::Fields;
+        // An app's own modal area (`egui::Modal`) opens no runtime trap, but egui takes no input behind its layer: with
+        // no runtime trap open and the focus not behind that layer, Tab goes round the stops in it and above it.
+        let behind = |rec: &StopRec| self.behind_modal.contains(&rec.stop.root);
+        let modal = trap.is_none() && !self.behind_modal.is_empty() && !current.as_ref().is_some_and(behind);
         let mut entries = self.entries(trap, all_controls && !fields);
-        entries.retain(|entry| self.anchored_layer(entry.arrival().scope).is_none() && (!fields || entry.arrival().stop.text));
+        entries.retain(|entry| {
+            let arrival = entry.arrival();
+            self.anchored_layer(arrival.scope).is_none() && (!fields || arrival.stop.text) && !(modal && behind(arrival))
+        });
         let top = current.as_ref().and_then(|rec| rec.stop.group).map(|group| self.last().outermost(group));
         let Some(next) = cycle(&entries, current.as_ref(), top, forward) else { return Vec::new() };
         let arrival = entries[next].arrival().clone();
@@ -839,6 +846,7 @@ pub(super) fn begin(state: &mut State, input: BeginIn) -> (Vec<Act>, Vec<String>
     state.rotate();
     state.frame = input.frame;
     state.focus_now = input.focused;
+    state.behind_modal = input.behind_modal;
     state.press.rotate(input.focused);
     let mut acts = Vec::new();
     let mut announcements = Vec::new();

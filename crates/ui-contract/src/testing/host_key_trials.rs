@@ -706,6 +706,39 @@ fn tab_reaches_the_app_s_egui_widgets_beside_the_framework_stops_in_registration
     assert_eq!(back, reversed, "Shift+Tab walks back from the first, wrapping to the last");
 }
 
+/// An app's own modal area (`egui::Modal`) over its document canvas opens no runtime trap, but egui takes no input
+/// behind it: Tab goes round the area's two buttons, from nothing focused, from its last button and both ways, and never
+/// reaches the canvas, the app's button or the framework stop behind the area.
+#[trial]
+fn tab_goes_round_an_app_s_own_modal_area_over_its_canvas() {
+    let (canvas, behind, framework) = (named_id("host canvas"), named_id("host behind"), named_id("framework behind"));
+    let (first, last) = (named_id("modal first"), named_id("modal last"));
+    let mut show = move |ui: &mut Ui| {
+        fixture::host_button(ui, canvas, Rect::from_min_size(Pos2::new(20.0, 20.0), egui::vec2(400.0, 300.0)));
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
+        fixture::host_button(ui, behind, Rect::from_min_size(Pos2::new(20.0, 340.0), egui::vec2(80.0, 30.0)));
+        push_scope(ui.ctx(), named_id("document"), FocusPolicy::NONE, None);
+        widget(ui, framework);
+        register_stop(ui.ctx(), Stop::new(framework, KeyUse::of(Input::Pointer)));
+        pop_scope(ui.ctx());
+        egui::Modal::new(named_id("app modal")).show(ui.ctx(), |ui| {
+            let at = ui.max_rect().min;
+            fixture::host_button(ui, first, Rect::from_min_size(at, egui::vec2(80.0, 30.0)));
+            fixture::host_button(ui, last, Rect::from_min_size(at + egui::vec2(100.0, 0.0), egui::vec2(80.0, 30.0)));
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let forward: Vec<Option<Id>> = (0..3).map(|_| tab_with(&mut frames, &mut show, Modifiers::NONE)).collect();
+    assert_eq!(forward, [Some(first), Some(last), Some(first)], "Tab enters the modal area and goes round it");
+    let back: Vec<Option<Id>> = (0..2).map(|_| tab_with(&mut frames, &mut show, Modifiers::SHIFT)).collect();
+    assert_eq!(back, [Some(last), Some(first)], "Shift+Tab goes round it the other way");
+    request(&frames.ctx, FocusTarget::Id(last));
+    frames.idle(2, &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(last));
+    assert_eq!(tab_with(&mut frames, &mut show, Modifiers::NONE), Some(first), "Tab from the area's last button goes round to its first");
+}
+
 /// F6 lands on the app's own widget in a pane whose only content it is.
 #[trial]
 fn f6_lands_on_an_app_widget_in_a_pane() {

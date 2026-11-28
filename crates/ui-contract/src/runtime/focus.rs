@@ -136,6 +136,9 @@ pub(crate) struct BeginIn {
     /// Which stops Tab visits inside a dialog's trap (`RootEnv::dialog_tab`).
     pub(crate) dialog_tab: TabReach,
     pub(crate) frame: u64,
+    /// The egui roots of the last pass's stops whose layer lies behind egui's modal layer: an app's own modal area
+    /// (`egui::Modal`) set it, or a runtime modal did. Empty while no modal layer is set, and in a pass with no Tab move.
+    pub(crate) behind_modal: IdSet,
 }
 
 /// The row groups of one collection's visible rows in a pass: every one is a flat roving group of the same owner
@@ -176,6 +179,9 @@ pub(crate) struct State {
     /// Last pass's `docs`: a focus request made between passes resolves against the components that last showed.
     pub(super) last_docs: FastMap<DocKey, Id>,
     pub(super) revealed: Option<StopKey>,
+    /// The egui roots of the last pass's stops that lie behind egui's modal layer (`BeginIn::behind_modal`), as the
+    /// running pass's begin hook found them.
+    pub(super) behind_modal: IdSet,
     /// The stop a request of the running pass named before any pass registered it: it takes the focus when it
     /// registers later in the pass. A component asks for its own focus from `update`, and its stops register after.
     pub(super) awaited: Option<StopKey>,
@@ -1131,13 +1137,17 @@ pub(crate) fn take_reveal(ctx: &Context) -> Option<StopKey> {
 
 /// The begin hook: applies a pending request and this pass's Tab and F6 moves, then classifies the press.
 pub(crate) fn begin(ctx: &Context, tab_all_controls: bool, dialog_tab: TabReach) {
+    let nav = crate::runtime::keys::take_nav(ctx);
+    // Only a Tab move reads which stops lie behind egui's modal layer.
+    let behind_modal = if nav.tabs.is_empty() { IdSet::default() } else { stops_behind_modal(ctx) };
     let input = BeginIn {
         focused: egui_focus::focused(ctx),
         press: press::press_at(ctx),
-        nav: crate::runtime::keys::take_nav(ctx),
+        nav,
         tab_all_controls,
         dialog_tab,
         frame: crate::runtime::egui::pass::frame_nr(ctx, viewport(ctx)),
+        behind_modal,
     };
     let focused = input.focused;
     let (acts, announcements, host_focus) = with(ctx, |state| {
@@ -1156,6 +1166,19 @@ pub(crate) fn begin(ctx: &Context, tab_all_controls: bool, dialog_tab: TabReach)
     for text in announcements {
         crate::runtime::frame::announce(ctx, text);
     }
+}
+
+/// The egui roots of the last pass's stops (still the running ones: the begin hook rotates them) whose layer lies
+/// behind egui's modal layer, which egui keeps from the last pass until the running one sets it again.
+fn stops_behind_modal(ctx: &Context) -> IdSet {
+    if ctx.memory(|memory| memory.top_modal_layer()).is_none() {
+        return IdSet::default();
+    }
+    let roots: Vec<Id> = with(ctx, |state| state.stops.iter().map(|rec| rec.stop.root).collect());
+    roots
+        .into_iter()
+        .filter(|root| ctx.read_response(*root).is_some_and(|response| !ctx.memory(|memory| memory.is_above_modal_layer(response.layer_id))))
+        .collect()
 }
 
 /// Takes the focus `focused` off egui's press rule while it is on the app's document canvas, as the last pass declared
