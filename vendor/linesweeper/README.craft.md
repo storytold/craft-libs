@@ -7,7 +7,7 @@ names, which is archived; its README says development moved off GitHub.
 
 The patched files are `src/sweep/sweep_line.rs`, `src/topology.rs`, `src/segments.rs`,
 `src/curve/transverse.rs`,
-`src/curve/mod.rs`, `src/curve/line.rs` and `docs/sweep.typ`.
+`src/curve/mod.rs`, `src/curve/line.rs`, `docs/sweep.typ` and `examples/bus.rs`.
 
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
@@ -33,6 +33,7 @@ holds `upstream_revision`. `local_patches` describes each local change.
 | `docs/sweep.typ` | The crossing-height lemma (`lem-intersection-height-error`) and its proof divide the starting gap `beta(y_0) - alpha(y_0)` by the sum of both gaps. With the ending gap `alpha(y_1) - beta(y_1)` as the numerator, gaps of 1 and 3 gave `t = 0.75`, while the segments cross at `t = 0.25`. The proof's inverse-slope difference is `d/(y_1 - y_0)`; the package has `d/(y_1 - y_1)`, whose denominator is zero. The lemma's bound and the later bound on the crossing height use the absolute values of `1/m_alpha` and `1/m_beta`, because the slopes can be negative. |
 | `docs/sweep.typ` | Two typos are corrected. "condi0.2tions" reads "conditions", and `q(i+i)` reads `q(i+1)`, the first index for which `q` is false. |
 | `docs/sweep.typ` | The lemma for the intersection scan to the left asks for the ordering invariant on `(alpha^1, ..., alpha^(i+1))` and the crossing invariant on `(alpha^1, ..., alpha^i)`, which is how the bidirectional lemma uses it. The argument for the order invariant cites the crossing invariant instead of a "third invariant"; the document defines two. |
+| `examples/bus.rs` | The SVG's `viewBox` is the size of the one composite the example draws, with its padding, instead of 3 composites wide and 2 tall. |
 | `src/sweep/sweep_line.rs`, `src/topology.rs` | Clippy 1.100.0 with `-D warnings` and every feature passes on the library, its unit tests and the `regression` test: the `slow-asserts` invariant check in `sweep_line.rs` passes `self.line` to `assert!` without a `&` (`useless_borrows_in_formatting`), and `Contours::grouped` iterates over the contours with `enumerate` instead of indexing them (`needless_range_loop`). The behavior does not change. Code comments label the change `Craft patch (clippy lints)`. |
 
 Every change here updates this table and `SOURCE.json` in the same commit.

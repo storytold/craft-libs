@@ -100,10 +100,8 @@ pub fn main() -> anyhow::Result<()> {
     let pad = 1.0 + eps;
     let one_width = max_x - min_x + 2.0 * pad;
     let one_height = max_y - min_y + 2.0 * pad;
-    let mut doc = svg::Document::new().set(
-        "viewBox",
-        (min_x - pad, min_y - pad, one_width * 3.0, one_height * 2.0),
-    );
+    let mut doc =
+        svg::Document::new().set("viewBox", (min_x - pad, min_y - pad, one_width, one_height));
 
     let contours = top.contours(|w| {
         let inside = |winding| winding != 0;
