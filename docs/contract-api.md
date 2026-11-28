@@ -989,9 +989,10 @@ The canvas outside a convex hole, as convex pieces.
 
 Box geometry of transform boxes: where the box goes when a part of it is dragged, and the
 
-- `craft_behavior::geometry::quad::BoxAllow`: `pub struct BoxAllow { pub rotate: bool, pub skew: bool, pub distort: bool, pub warp: bool }`. What the box's content allows. PhotoCraft: editable type refuses distort and perspective
+- `craft_behavior::geometry::quad::BoxAllow`: `pub struct BoxAllow { pub rotate: bool, pub skew: bool, pub distort: bool, pub warp: bool, pub menu: bool }`. What the box's content allows. PhotoCraft: editable type refuses distort and perspective
   - `pub const fn new(rotate: bool, skew: bool, distort: bool) -> Self`. What the content allows: turning, skewing and distorting.
   - `pub const fn with_warp(mut self, warp: bool) -> Self`. Whether the content allows warping.
+  - `pub const fn with_menu(mut self, menu: bool) -> Self`. Whether the box's right-click menu is live (see [`BoxAllow::menu`]).
 - `craft_behavior::geometry::quad::BoxDrag`: `pub enum BoxDrag { Move, Pivot, Rotate, Scale, Distort, Perspective, Skew, SlideCorner }`. What a drag of a box part does ([`BoxRules::drag_kind`]).
 - `craft_behavior::geometry::quad::BoxHandles`: `pub enum BoxHandles { All, Corners, Sides }`. Which handles of a box are shown.
 - `craft_behavior::geometry::quad::BoxPart`: `pub enum BoxPart { Corner(u8), Edge(u8), Pivot, Inside, Outside }`. A part of a box under the pointer or picked from the keyboard. Edge `k` joins corners `k` and
