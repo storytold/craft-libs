@@ -93,5 +93,31 @@ PJL validator; the remaining permissive language-value handling is unchanged.
 
 This module comes from dotCooCoo's VectorCraft `crates/cad/src/hpgl/lex.rs`,
 commit `74ea25cd6c4dffa4cd41f6ee9a76f7afd4225622` (MIT OR Apache-2.0),
-with public visibility for reuse. The drawing interpreter and export policies remain
-in VectorCraft. Existing plotter encoders and their device limits are unchanged.
+with public visibility for reuse. Existing plotter encoders and their device limits are unchanged.
+
+## HP-GL import
+
+`hpgl::read::read` plays an HP-GL or HP-GL/2 file into the shapes it paints, and `hpgl::is_hpgl`
+tells a plot file by its content:
+
+```rust
+let drawing = craft_plotter::hpgl::read::read(bytes)?;
+for shape in &drawing.shapes {
+    // shape.path (kurbo), shape.fill, shape.stroke, shape.pen, shape.ro
+}
+```
+
+Shapes come in paint order, in plotter units (40 to the millimetre, y up), already turned by RO.
+Each keeps the pen that drew it and the RO angle in force, so an importer can put pens on layers
+and turn a plot a driver rotated for its media back upright. Units, layers and clipping are the
+caller's. What the reader leaves out or approximates (labels, symbol marks, raster images, `IW`
+clipping, hatched fills, which come back solid, and anything past its budgets) is listed in
+`Drawing::warnings`. Later pages (after `PG`) are not left out: their shapes are drawn over the
+first page's, in `Drawing::shapes`, with a warning.
+
+The reader (`hpgl/read.rs`, `hpgl/plot.rs`) and its tests are VectorCraft's
+`crates/cad/src/hpgl.rs`, `crates/cad/src/hpgl/plot.rs` and `crates/cad/src/hpgl/tests.rs` by
+dotCooCoo, as of commit `cd1388444831995b6438e98a5699c6b54752e2d8` (MIT OR Apache-2.0), with
+VectorCraft's document types taken out. The state types at the top of `hpgl/plot.rs` (`Stroke`,
+`LinePattern`, `FillRule`, `LineCap`, `LineJoin`) are the ones already here (#2295);
+`LinePattern` gains VectorCraft's `adaptive`.
