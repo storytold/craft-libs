@@ -35,8 +35,9 @@
 //! for GPU tests. Every GPU test in a process must take this lock, because a test that takes a
 //! different lock can run at the same time as one that takes this one.
 //!
-//! On targets other than `wasm32`, [`temp::TempDir`] is a new, private test folder that is removed
-//! with its contents when dropped, also when the test panics.
+//! On targets other than `wasm32`, `temp::TempDir` is a new test folder, private to the user on
+//! Unix, that is removed with its contents when dropped, also when the test panics. Removal on drop
+//! is best effort; `temp::TempDir::close` returns the error.
 //!
 //! `skip` decides what a test does when something it needs is missing (a program, a corpus,
 //! the craft-fonts faces): it prints one `SKIPPED:` line and returns, or fails the test when the
