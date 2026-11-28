@@ -17,6 +17,9 @@ const C_CAPS: u16 = 0x083B;
 const C_HIDDEN: u16 = 0x083C; // sprmCFVanish
 const C_KUL: u16 = 0x2A3E; // underline style (Kul)
 const C_ICO: u16 = 0x2A42; // palette colour
+// One border around the run ([MS-DOC] §2.6.1): the Word 97 Brc80 and the newer BrcOperand.
+const C_BRC80: u16 = 0x6865; // sprmCBrc80
+const C_BRC: u16 = 0xCA72; // sprmCBrc
 const C_CR: u16 = 0x6870; // explicit COLORREF
 const C_HPS: u16 = 0x4A43; // half-points
 const C_HPS_POS: u16 = 0x4845; // super/subscript by half-points
@@ -246,6 +249,17 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
             {
                 p.color = Some(TextColor::Rgb(Rgb(r, g, b)));
             }
+        }
+        C_BRC80 | C_BRC => {
+            // One border around the run, as DOCX `w:bdr` is (storytold/wordcraft#7131). Word
+            // ignores the space of a character border ([MS-DOC] §2.6.1).
+            let b = if op == C_BRC80 { brc80(prl.operand) } else { brc(prl.operand) };
+            p.border = b
+                .map(|mut b| {
+                    b.space = 0.0;
+                    b
+                })
+                .filter(|b| b.is_visible());
         }
         C_HPS => {
             if let Some(hps) = u16_of(prl) {

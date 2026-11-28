@@ -240,6 +240,9 @@ pub(super) struct St {
     /// described.
     pub(super) borders: craft_wordmodel::props::Borders,
     pub(super) border_side: Option<char>,
+    /// `\chbrdr`: the border words that follow describe a border around the run, not the
+    /// paragraph's. It is character formatting, so `\plain` clears it and `\pard` keeps it.
+    pub(super) ch_brdr: bool,
     pub(super) sb: Option<i32>,
     pub(super) sa: Option<i32>,
     pub(super) sl: Option<i32>,
@@ -274,6 +277,7 @@ impl Default for St {
             cp: None,
             borders: Default::default(),
             border_side: None,
+            ch_brdr: false,
             sb: None,
             sa: None,
             sl: None,

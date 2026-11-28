@@ -2435,3 +2435,21 @@ fn metadata_text_controls_keep_punctuation_and_use_the_selected_font_code_page()
     assert_eq!(flow.meta.title, "A—аà");
     assert_eq!(texts(&flow), ["Normal:Body"]);
 }
+
+/// storytold/wordcraft#7131: `\chbrdr` is a character property — a single border around a run.
+/// Word writes `{\chbrdr\brdrs\brdrw20 Boxed}` for a run that carries a direct `w:bdr` in DOCX.
+#[test]
+fn rtf_character_border_is_read() {
+    use craft_wordmodel::props::BorderStyle;
+    let rtf = br"{\rtf1\ansi {\chbrdr\brdrs\brdrw20 Boxed} {\b Bold}}";
+    let doc = import(rtf).unwrap();
+    let paras = doc_paras(&doc);
+    let p = paras[0];
+    assert_eq!(p.text, "Boxed Bold");
+    let boxed = p.props_at(0).border.expect("the boxed run keeps its character border");
+    assert_eq!(boxed.style, BorderStyle::Single);
+    assert_eq!(boxed.width, 1.0, "brdrw20 is one point");
+    // The border belongs to the character group only: the following bold run has none.
+    let bold = p.props_at("Boxed ".len()).border;
+    assert!(bold.is_none(), "the bold run is not bordered: {bold:?}");
+}
