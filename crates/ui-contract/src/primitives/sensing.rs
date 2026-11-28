@@ -36,8 +36,9 @@ pub struct PartResult {
     pub press: PressState,
     /// The pointer is over it and nothing above takes the hover.
     pub hovered: bool,
-    /// The pointer's position while `hovered`, in the owner's layer space.
-    pub hover_pos: Option<Pos2>,
+    /// The pointer's position while `hovered`, in the owner's layer space: read through `Cx::hover_pos`, which marks the
+    /// part as following the pointer.
+    pub(crate) hover_pos: Option<Pos2>,
     /// The value flags the component set on the part.
     pub flags: Flags,
     /// What the part senses, as declared.

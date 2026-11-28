@@ -136,8 +136,19 @@ pub(crate) fn wgpu_choice(candidates: &[Candidate], power: PowerPreference) -> O
 /// Windows. On Windows, OpenGL starts a WGL context thread inside the vendor driver (NVIDIA's
 /// `nvoglv64` is both its OpenGL driver and its Vulkan driver), and instances created and devices
 /// dropped at the same time can then deadlock in that driver.
+///
+/// On native targets, the first call creates one shared instance and reads wgpu's environment
+/// settings for flags and backend options. Later calls return clones of that instance.
 pub fn native_instance() -> wgpu::Instance {
-    wgpu::Instance::new(native_descriptor())
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static SHARED: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
+        SHARED.get_or_init(|| wgpu::Instance::new(native_descriptor())).clone()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        wgpu::Instance::new(native_descriptor())
+    }
 }
 
 /// [`native_instance`]'s descriptor. wgpu's environment variables apply to its flags and backend
@@ -158,12 +169,12 @@ pub fn native_descriptor() -> wgpu::InstanceDescriptor {
     desc
 }
 
-/// The index of the adapter to draw with for `power`: the preferred adapter, or the entry exposing the
+/// The index of the adapter to draw with for `power`: `wgpu_choice`, or the entry exposing the
 /// most features among those that are the same GPU listed by the same driver (the first of them
 /// when several expose as many), repeated until the entry is its own newest version. For an Intel
 /// Gen 9 to Gen 11 GPU on Intel's Windows Vulkan driver it is the same GPU's DirectX 12 entry, or
 /// without one the best other usable adapter. `None` without a usable adapter, and when that
-/// Intel Vulkan entry is the only one. The result excludes adapters with known driver problems.
+/// Intel Vulkan entry is the only one. The result is never an entry `avoided` excludes.
 pub fn choose(candidates: &[Candidate], power: PowerPreference) -> Option<usize> {
     let first = wgpu_choice(candidates, power)?;
     let index = settled(candidates, first);
@@ -567,6 +578,26 @@ pub(crate) mod tests {
         );
         assert!(adapters.get(5).is_some_and(Candidate::is_software));
         assert!(!adapters.first().is_some_and(Candidate::is_software));
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn native_instance_is_shared_across_callers() {
+        let gate = std::sync::Barrier::new(3);
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| {
+                gate.wait();
+                native_instance()
+            });
+            let second = scope.spawn(|| {
+                gate.wait();
+                native_instance()
+            });
+            gate.wait();
+            let first = first.join().unwrap();
+            assert_eq!(first, second.join().unwrap());
+            assert_eq!(first, native_instance());
+        });
     }
 
     /// The instance reads wgpu's flag variables and keeps its own backends whatever `WGPU_BACKEND`

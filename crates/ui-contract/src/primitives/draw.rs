@@ -287,6 +287,11 @@ impl<'a> Draw<'a> {
         self
     }
 
+    /// The egui painter and the tokens this `Draw` paints with: what [`Glyph::paint`](super::Glyph::paint) takes.
+    pub(crate) fn painter_and_tokens(&self) -> (&'a Painter, &'a UiTokens) {
+        (self.painter, self.env.tokens)
+    }
+
     fn text_env(&self) -> TextEnv<'a> {
         TextEnv {
             tokens: self.env.tokens,
@@ -455,6 +460,7 @@ impl<'a> Draw<'a> {
                 self.initial(rect, letter, StyleColor(color));
                 return;
             }
+            super::IconSource::Glyph(glyph) => glyph.paint_draw(self, square, color, super::icon::glyph_mirrored(glyph, icon, self.env.direction)),
             _ => super::icon::paint(
                 self.painter,
                 self.env.tokens,

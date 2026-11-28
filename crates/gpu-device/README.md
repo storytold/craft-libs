@@ -5,6 +5,17 @@ drivers that crash, a software fallback, a capability report, and device health 
 after a device loss. The crate depends on `craft-gpu`, `wgpu` 30, `pollster` and `log`, with
 `serde` as an optional feature (on by default). It depends on no app crate.
 
+It uses the workspace's `wgpu`, which turns on no native backend, and the WebGPU backend on
+`wasm32`. The `native-vulkan`, `native-dx12`, `native-metal` and `native-gles` features turn on
+wgpu's backends, as the features of the same names in `craft-gpu-wgpu` do. Cargo merges the
+features, so an app can turn them on through either crate.
+
+The `gpu-device` feature of `craft` exports this crate as `craft::gpu_device`.
+
+`native_instance` shares one instance across calls on native targets. It reads wgpu's environment
+settings for flags and backend options when that instance is first created. `native_descriptor`
+reads those settings on every call.
+
 Licensed under MIT OR Apache-2.0.
 
 ## Contents

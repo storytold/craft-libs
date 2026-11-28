@@ -144,7 +144,7 @@ pub struct TabStyle {
     /// `MAX_NAME_DIGITS` digits' width, a readable prefix at their least, and the marker dot for a modified tab.
     shrinking: bool,
     /// Document tabs in [`DocumentTabLook::Semibold`](super::DocumentTabLook::Semibold): the label and its `*` in the
-    /// role's semibold face.
+    /// role's semibold face, the [`TypeRole::TabTitle`] role for a tab that is not large.
     strong: bool,
     /// The marker dot's diameter.
     marker: f32,
@@ -389,11 +389,15 @@ impl Component for Tab<'_> {
         let ribbon = key.kind == TabKind::Ribbon;
         let c = |rgba: Rgba| cx.color(rgba);
         let clear = Rgba::TRANSPARENT;
-        // A ribbon tab measures at the shown tab's semibold type, so showing a tab does not move its neighbours.
+        let strong = key.kind == TabKind::Document && cx.env::<super::DocumentTabLook>() == super::DocumentTabLook::Semibold;
+        // A ribbon tab measures at the shown tab's semibold type, so showing a tab does not move its neighbours. A
+        // semibold document tab's title is in the tab-title role: the condensed face where the app embeds it.
         let role = if ribbon {
             TypeRole::BodyStrong
         } else if text_only || key.large {
             TypeRole::Body
+        } else if strong {
+            TypeRole::TabTitle
         } else {
             TypeRole::Label
         };
@@ -483,7 +487,7 @@ impl Component for Tab<'_> {
             close_glyph: (cx.env::<TabCloseLook>() == TabCloseLook::Glyph).then(|| (size.icon.sm, c(colors.text.muted), c(colors.text.normal))),
             sizes,
             shrinking: key.kind.shrinks_in(cx.env::<super::DocumentTabLook>()),
-            strong: key.kind == TabKind::Document && cx.env::<super::DocumentTabLook>() == super::DocumentTabLook::Semibold,
+            strong,
             marker: marker.side,
             marker_color: marker.color,
             marker_edge: marker.edge,
@@ -642,7 +646,7 @@ impl Component for Tab<'_> {
         }
         if let (Some(at), Some((side, rest, hover))) = (placed.close, style.close_glyph) {
             let mut glyph = IconSpec::from(IconId::new("close"));
-            glyph.color = Some(if cx.hover_pos(CLOSE).is_some() { hover } else { rest });
+            glyph.color = Some(if cx.part_if_declared(CLOSE).is_some_and(|result| result.hovered) { hover } else { rest });
             ui.draw().icon(Rect::from_center_size(at.center(), Vec2::splat(side)), &glyph);
         } else if placed.close.is_some() {
             let words = cx.words::<TabWords>();

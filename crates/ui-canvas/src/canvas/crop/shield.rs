@@ -13,7 +13,7 @@ const SHIELD_OPACITY: f32 = 75.0;
 const SHIELD_EDITING: f32 = 0.5;
 
 /// The shield's colour.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ShieldColor {
@@ -25,7 +25,7 @@ pub enum ShieldColor {
 }
 
 /// The crop gear menu's shield options. Photoshop's defaults: shown, enabled, Match Canvas, 75 %, Auto Adjust on.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 #[non_exhaustive]
 pub struct CropShield {
