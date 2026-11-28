@@ -29,6 +29,11 @@ Stories and tests step it with `ManualJobs`, which keeps each job until `run_nex
 `Host::install_scoped` installs a host until the returned `HostScope` drops, then puts back the
 one installed before. A story swaps in a fake service this way for the time it draws.
 
+`caption_layout` is what a Linux desktop says about the window buttons, with no I/O: whose setting places them
+(`LayoutDesktop::detect`, from the session's variables and the running window manager), a value in its source's own
+grammar (`RawLayout`), where it came from (`LayoutSource`, best first) and KWin's configuration cascade, with its
+locks and deletions as KDE's own reader applies them. craft-window turns a reading into the buttons at each end.
+
 ## Boundaries
 
 - Depends on `craft-i18n`, `serde` and `toml` only. Implementations depend on this crate:

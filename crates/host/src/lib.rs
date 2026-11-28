@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 #![warn(missing_docs)]
 
+pub mod caption_layout;
 mod files;
 pub mod queue;
 #[cfg(test)]
