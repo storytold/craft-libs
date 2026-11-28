@@ -35,3 +35,5 @@ pub(crate) mod tool_keys;
 pub(crate) mod tool_story;
 
 pub(crate) mod tools;
+
+pub(crate) mod wheel_shift_page;

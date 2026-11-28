@@ -22,6 +22,10 @@ pub enum WheelAction {
     SnapZoom(i32),
     /// Move the image by this many screen points: the content follows the delta.
     Pan(Vec2),
+    /// Page the view up or down by this many notches, whose wheel line in points is the second value: one page
+    /// is the canvas's height less that line, so a page leaves one line of the page before it in sight. A page is a
+    /// screen distance, like a pan, so it holds at every zoom.
+    Page(f32, f32),
 }
 
 /// One pass of wheel input over the canvas: the wheel share without the service's bookkeeping.
@@ -38,6 +42,9 @@ pub struct WheelInput {
     pub notch: f32,
     /// The OS, which decides where the Control key is among the modifiers.
     pub os: Platform,
+    /// The unit the device reported: `Line` for a wheel with notches, `Point` for a trackpad or a smooth scroll,
+    /// `Page` for a device that counts whole pages.
+    pub unit: WheelUnit,
     /// The pinch factor of a two-finger touch; 1 for none.
     pub touch_zoom: f32,
     /// The trackpad's rotation, in radians.
@@ -60,6 +67,7 @@ impl WheelInput {
             mods: wheel.mods,
             notch,
             os,
+            unit: wheel.unit,
             touch_zoom: wheel.touch_zoom,
             rotation: wheel.rotation,
             touch_rotation: wheel.touch_rotation,
@@ -76,7 +84,9 @@ impl WheelInput {
 
 /// Mouse wheel and trackpad navigation, as in Photoshop:
 ///
-/// - The wheel scrolls up and down; Shift or Cmd/Ctrl + wheel scrolls sideways.
+/// - The wheel scrolls up and down; Cmd/Ctrl + wheel scrolls sideways; Shift + wheel pages the view up or down by its
+///   height less one line (production's #12029). macOS keeps Shift + wheel sideways, where the system reports it that
+///   way itself, and so does a device that reports its scroll as points rather than notches.
 /// - Alt + wheel zooms about the pointer, 1.1 a notch; Shift + Alt + wheel steps the ladder. Alt with the Control
 ///   key is the same zoom: on macOS Control may join it, elsewhere Ctrl (cmd) without Shift (production's #10488).
 /// - A wheel line pans the canvas [`NavigationOptions::wheel_line`] points; a zoom is one notch a line whatever the
@@ -170,6 +180,21 @@ impl WheelNavigation {
         if !scroll_finite || input.scroll == Vec2::ZERO {
             return None;
         }
+        // Shift alone on a wheel that reports notches pages the view in the Photoshop (Scroll) scheme (production's
+        // #12029): the Zoom scheme took its ladder step above, and the Acrobat scheme keeps Shift sideways below, as
+        // next pinned it. Cmd/Ctrl keeps the sideways scroll below; so does macOS, where the system already sends
+        // Shift + wheel sideways, and so does any scroll the device reports across (a trackpad's points, a
+        // pre-folded wheel), which the reference application was not measured with.
+        if matches!(options.wheel, WheelScheme::Scroll)
+            && input.mods.shift
+            && !(input.mods.cmd || input.mods.ctrl || input.mods.alt)
+            && input.unit == WheelUnit::Line
+            && !input.os.is_mac()
+            && input.scroll.x == 0.0
+        {
+            // The count comes from scroll over the line the taker reads with, so a taker of another line pages by its own notch.
+            return Some(WheelAction::Page(input.scroll.y / notch, notch));
+        }
         let sideways = (input.mods.shift || input.mods.cmd || input.mods.ctrl) && input.scroll.x == 0.0;
         let scroll = if sideways { Vec2::new(input.scroll.y, 0.0) } else { input.scroll };
         Some(WheelAction::Pan(scroll))
@@ -206,9 +231,9 @@ impl WheelNavigation {
     }
 
     /// Applies `action` to `view` with the pointer at `pointer`, for a document of `size`: a factor zoom anchors at
-    /// [`zoom::wheel_anchor`], a ladder step at the pointer, both clamped to the ladder; a pan moves the view. At a
-    /// zoom limit the view stays put. With Overscroll off the canvas clamps the result to the document. Returns
-    /// whether the view changed.
+    /// [`zoom::wheel_anchor`], a ladder step at the pointer, both clamped to the ladder; a pan moves the view; a page
+    /// moves it up or down by the view's height less the action's wheel line ([`WheelAction::Page`]). At a zoom
+    /// limit the view stays put; Overscroll off clamps the result to the document. Returns if the view changed.
     pub fn apply(view: &mut CanvasView, action: WheelAction, pointer: Pos2, size: Size, pixels_per_point: f32, scheme: &ZoomScheme) -> bool {
         let before = *view;
         match action {
@@ -229,6 +254,13 @@ impl WheelNavigation {
                 }
             }
             WheelAction::Pan(delta) => super::pan(view, delta),
+            WheelAction::Page(notches, line) => {
+                let page = (view.rect.height() - line).max(0.0);
+                let step = page * notches;
+                if step.is_finite() && step != 0.0 {
+                    super::pan(view, Vec2::new(0.0, step));
+                }
+            }
         }
         *view != before
     }
@@ -239,7 +271,7 @@ impl WheelNavigation {
         match action {
             WheelAction::Zoom(_) => Some(zoom::wheel_anchor(view, pointer, size)),
             WheelAction::SnapZoom(_) => Some(pointer),
-            WheelAction::Pan(_) => None,
+            WheelAction::Pan(_) | WheelAction::Page(_, _) => None,
         }
     }
 }
