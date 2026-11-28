@@ -411,12 +411,22 @@ impl State {
         self.last_scope_order.iter().rev().find(|id| self.last_scopes.get(id).is_some_and(|scope| scope.policy.trap)).copied()
     }
 
+    /// A stop's place in last pass's Tab order: its index among the stops Tab and the arrows move over, the order the
+    /// entries keep.
+    fn place(&self, rec: &StopRec) -> usize {
+        self.last_stops.iter().position(|stop| stop.stop.key() == rec.stop.key()).unwrap_or(usize::MAX)
+    }
+
     /// A Tab move. In a dialog's trap with `dialog_tab` at `Fields`, only text stops are entries, whatever the
     /// window's rule: a roving group whose arrival member holds no text is skipped too.
     pub(super) fn tab(&mut self, forward: bool, all_controls: bool, dialog_tab: TabReach) -> Vec<Act> {
-        let (current, entries) = self.tab_entries(all_controls, dialog_tab);
+        let (current, entries, after) = self.tab_entries(all_controls, dialog_tab);
         let top = current.as_ref().and_then(|rec| rec.stop.group).map(|group| self.last().outermost(group));
-        let Some(next) = cycle(&entries, current.as_ref(), top, forward) else { return Vec::new() };
+        let Some(mut next) = cycle(&entries, current.as_ref(), top, forward) else { return Vec::new() };
+        if let Some(after) = after {
+            let count = entries.len();
+            next = if forward { after % count } else { (after + count - 1) % count };
+        }
         let arrival = entries[next].arrival().clone();
         self.focus_stop(arrival)
     }
@@ -424,18 +434,75 @@ impl State {
     /// The Tab entries this pass moves over, from the stop the focus is on (a row's child tabs on from its collection,
     /// a dropdown's content from its anchor). They are last pass's entries: what `tab` cycles, and what a Tab that
     /// landed on a stop this pass does not show goes on through.
-    fn tab_entries(&self, all_controls: bool, dialog_tab: TabReach) -> (Option<StopRec>, Vec<Entry>) {
+    fn tab_entries(&self, all_controls: bool, dialog_tab: TabReach) -> (Option<StopRec>, Vec<Entry>, Option<usize>) {
         let current = self.stop_of_focus().map(|rec| {
             let owner = rec.stop.group.and_then(|group| self.group(group)).filter(|group| group.row).and_then(|group| self.row_owner(&group));
             let rec = owner.unwrap_or(rec);
             self.anchored_layer(rec.scope).and_then(|opener| self.find_stop(opener)).unwrap_or(rec)
         });
-        let trap = self.trap_of(current.as_ref());
+        // Tab out of a menu that lets it leave (`Menu::tab_exits`) goes on from the menu's opener, either way, as if the
+        // menu were part of it: the menu's own rows are no entries, so Shift+Tab reaches the stop before the opener.
+        let exits = current.as_ref().and_then(|rec| self.tab_exit_menu(rec.scope));
+        // the trap is read before the exit swaps the focus for the menu's opener: a trapping submenu's trap must still
+        // hold, and its opener sits outside it
+        let trap_of_focus = self.trap_of(current.as_ref());
+        let current = exits.and_then(|menu| self.return_stop(menu)).or(current);
+        let trap = trap_of_focus.or_else(|| self.trap_of(current.as_ref()));
         let in_dialog = trap.and_then(|id| self.last_scopes.get(&id)).is_some_and(|scope| scope.policy.kind == ScopeKind::Dialog);
         let fields = in_dialog && dialog_tab == TabReach::Fields;
         let mut entries = self.entries(trap, all_controls && !fields);
-        entries.retain(|entry| self.anchored_layer(entry.arrival().scope).is_none() && (!fields || entry.arrival().stop.text));
-        (current, entries)
+        // A layer playing its exit takes no focus (`exiting`): an Escape that closed a menu leaves it no Tab entry for the
+        // fade's frames, so the next Tab does not land in it and have the closed menu hand the focus back to its opener.
+        entries.retain(|entry| {
+            let scope = entry.arrival().scope;
+            self.anchored_layer(scope).is_none()
+                && !self.exiting(scope)
+                && exits.is_none_or(|menu| !self.within(scope, menu))
+                && (!fields || entry.arrival().stop.text)
+        });
+        // The opener a `tab_exits` menu hands Tab to is no entry itself where only some stops are (a non-text opener in a
+        // dialog that tabs through fields): it keeps its place in the order, so Tab takes the entry after that place and
+        // Shift+Tab the one before, and the neighbour stays the one beside the opener.
+        let missing_opener = current.as_ref().filter(|opener| {
+            exits.is_some() && !entries.iter().any(|entry| entry.holds(opener, opener.stop.group.map(|group| self.last().outermost(group))))
+        });
+        let after = missing_opener.map(|opener| {
+            let place = self.place(opener);
+            entries.iter().filter(|entry| self.place(entry.arrival()) < place).count()
+        });
+        (current, entries, after)
+    }
+
+    /// The menu around `scope` that Tab leaves (`Menu::tab_exits`): a menu scope that traps nothing. The walk stops at a
+    /// dialog: a dialog shown from inside such a menu records it as the scope around it, and its trap keeps Tab inside
+    /// it until it closes.
+    fn tab_exit_menu(&self, scope: Option<Id>) -> Option<Id> {
+        let mut at = scope;
+        while let Some(id) = at {
+            let rec = self.last_scopes.get(&id)?;
+            // The first scope that traps ends the walk, whatever it is: a dialog shown from inside such a menu, or a
+            // submenu that traps its own keys. Its trap keeps Tab inside it until it closes.
+            if rec.policy.trap {
+                return None;
+            }
+            if rec.policy.kind == ScopeKind::Menu {
+                return Some(id);
+            }
+            at = rec.parent;
+        }
+        None
+    }
+
+    /// Whether the scope `scope`, or one around it, is a layer playing its exit, by this pass's record or else the last.
+    fn exiting(&self, scope: Option<Id>) -> bool {
+        let mut at = scope;
+        while let Some(rec) = at.and_then(|id| self.scopes.get(&id).or_else(|| self.last_scopes.get(&id))) {
+            if rec.closing {
+                return true;
+            }
+            at = rec.parent;
+        }
+        false
     }
 
     /// F6: the first stop of the next pane, with its label as the announcement. Inside a trapping scope (a modal
@@ -639,7 +706,7 @@ impl State {
         if !arrived {
             return None;
         }
-        let (current, entries) = self.tab_entries(self.tab_all_controls, self.dialog_tab);
+        let (current, entries, _) = self.tab_entries(self.tab_all_controls, self.dialog_tab);
         let current = current?;
         let top = current.stop.group.map(|group| self.last().outermost(group));
         let at = entries.iter().position(|entry| entry.holds(&current, top))?;

@@ -1,7 +1,7 @@
 //! When a layer closes by itself (15.4): presses outside, Escape, and activations that keep it open.
 
 use super::host::{Layer, LayerMemory};
-use super::props::Outside;
+use super::props::{OpenerEscape, Outside};
 use crate::contract::{Component, Cx};
 use crate::runtime::commands::FireSource;
 use crate::runtime::egui::pass;
@@ -22,7 +22,7 @@ pub(super) fn dismissal(
     memory: &mut LayerMemory,
 ) -> Option<CloseReason> {
     let dismiss = layer.overlay.dismiss;
-    // Both the Escape rule and the focus rule read the same fact: whether the focus is in the layer.
+    // Both start from actual layer membership; any opt-in opener Escape eligibility is handled separately.
     let inside = focus::focus_in_layer(ctx, layer.id);
     let was_inside = memory.focus_inside;
     if let Some(now) = inside {
@@ -118,7 +118,17 @@ fn escape(ctx: &Context, layer: &Layer<'_>, scope: Option<FocusPolicy>, inside: 
     // below): its card may have nothing to focus. So does a popup, whose body may have nothing to focus, and a
     // keep-anchor popup, which leaves the focus where it was.
     let owns_loose = layer.overlay.rank.is_modal() || layer.overlay.rank == Rank::Popup || policy.initial == Initial::KeepAnchor;
-    if inside != Some(true) && !(owns_loose && focus_in_no_layer(ctx)) {
+    // An opt-in opener rule is an Escape eligibility decision, not focus-scope membership. Match only the
+    // actual registered root of the explicit active opener, not a mutable scope-restoration opener or parent.
+    let opener = if layer.overlay.rank == Rank::Popup && layer.overlay.dismiss.opener_escape != OpenerEscape::Default {
+        layer.overlay.opener.as_ref().and_then(|first| {
+            let (opener, _) = first.active(ctx, None);
+            opener.enabled.then(|| focus::stop_rec(ctx, (opener.id, None))).flatten().filter(|rec| focus::focused_stop(ctx) == Some(rec.stop.key()))
+        })
+    } else {
+        None
+    };
+    if inside != Some(true) && !(owns_loose && focus_in_no_layer(ctx)) && opener.is_none() {
         return None;
     }
     // The focus may be in no record of the layer's host: the Escape is read from the events of the frame.
@@ -137,7 +147,15 @@ fn escape(ctx: &Context, layer: &Layer<'_>, scope: Option<FocusPolicy>, inside: 
     } else {
         keys::scope_escape(ctx, policy.cancel, pointer::press_captured(ctx), false)?
     };
-    matches!(step, craft_behavior::focus::EscapeStep::CloseScope).then_some(CloseReason::Escape)
+    if !matches!(step, craft_behavior::focus::EscapeStep::CloseScope) {
+        return None;
+    }
+    if layer.overlay.dismiss.opener_escape == OpenerEscape::CloseAndBlur
+        && let Some(opener) = opener
+    {
+        focus::surrender_stop(ctx, opener.stop.key());
+    }
+    Some(CloseReason::Escape)
 }
 
 impl<C: Component> Cx<'_, C> {

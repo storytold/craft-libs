@@ -262,6 +262,17 @@ impl<'a> Menu<'a> {
         .label(label)
     }
 
+    /// Tab leaves this anchored menu in the opener's tab order instead of wrapping in the menu.
+    /// Arrow keys still navigate rows. A focus move out closes it without running a row.
+    #[must_use]
+    pub fn tab_exits(self) -> Self {
+        self.with_layer(|mut layer| {
+            layer.focus = layer.focus.trap(false);
+            layer.dismiss = layer.dismiss.focus_left(true);
+            layer
+        })
+    }
+
     /// Marks the menu as a value menu: every row is a radio item, whether or not an entry is checked, and the checked
     /// entry holds the lead when the menu opens.
     #[must_use]

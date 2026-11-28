@@ -968,6 +968,14 @@ pub fn focused_rec(ctx: &Context) -> Option<StopRec> {
     })
 }
 
+/// Gives up the focus of this exact registered stop only if it still holds it. The overlay's explicit
+/// opener-Escape blur uses the focus service's usual action path; it cannot clear another member of an arena.
+pub(crate) fn surrender_stop(ctx: &Context, key: StopKey) {
+    if let Some(rec) = focused_rec(ctx).filter(|rec| rec.stop.key() == key) {
+        apply(ctx, vec![Act::Surrender(rec.stop.root)]);
+    }
+}
+
 /// Whether the focus stop is a child of a collection row's roving group.
 pub(crate) fn in_row_child(ctx: &Context) -> bool {
     with(ctx, |state| {
