@@ -123,6 +123,8 @@ pub struct Picture {
     pub pixel_format: PixelFormat,
     /// Color space.
     pub color_space: ColorSpace,
+    /// Pixel aspect ratio. A zero numerator or denominator means unspecified.
+    pub par: (u32, u32),
     /// Whether this was an intra keyframe.
     pub keyframe: bool,
     /// Presentation timestamp (packet pts if passed).

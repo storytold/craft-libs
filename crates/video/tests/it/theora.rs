@@ -33,6 +33,7 @@ fn test_picture(w: usize, h: usize) -> Picture {
         pic_y: 0,
         pixel_format: PixelFormat::Yuv420,
         color_space: ColorSpace::Undefined,
+        par: (0, 0),
         keyframe: true,
         pts: Some(0),
         y,
@@ -47,6 +48,25 @@ fn psnr(a: &[u8], b: &[u8]) -> f64 {
     assert_eq!(a.len(), b.len());
     let mse = a.iter().zip(b).map(|(x, y)| (f64::from(*x) - f64::from(*y)).powi(2)).sum::<f64>() / a.len().max(1) as f64;
     if mse == 0.0 { 99.0 } else { 10.0 * (255.0f64 * 255.0 / mse).log10() }
+}
+
+#[test]
+fn test_theora_decoded_frames_keep_the_pixel_aspect_ratio() {
+    let config = EncoderConfig { width: 16, height: 16, pic_width: 16, pic_height: 16, ..EncoderConfig::default() };
+    let mut encoder = Encoder::new(config).unwrap();
+    let packet = encoder.encode_frame(&test_picture(16, 16), true).unwrap();
+    let (identification, comments, setup) = encoder.headers();
+    for (num, den, expected) in [(4, 3, Some((4, 3))), (1, 1, Some((1, 1))), (0, 0, None), (0, 3, None), (4, 0, None)] {
+        let mut header = IdentificationHeader::parse(&identification).unwrap();
+        header.info.par_num = num;
+        header.info.par_den = den;
+        let mut decoder = Decoder::from_headers(&header.serialize(), &comments, &setup).unwrap();
+        for bytes in [&packet[..], &[]] {
+            let picture = decoder.decode_packet(bytes).unwrap();
+            let frame = VideoFrame::try_from(picture).unwrap();
+            assert_eq!(frame.sar, expected);
+        }
+    }
 }
 
 #[test]
@@ -551,6 +571,7 @@ fn test_theora_encoder_picture_strides() {
         pic_y: 0,
         pixel_format: PixelFormat::Yuv420,
         color_space: ColorSpace::Undefined,
+        par: (0, 0),
         keyframe: true,
         pts: None,
         y,

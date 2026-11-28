@@ -12,7 +12,7 @@ fn depth(bits: u32) -> Result<u8, FrameError> {
 }
 
 /// A sample aspect ratio with 0 meaning not signalled.
-#[cfg(any(feature = "h264-decode", feature = "hevc-decode", feature = "mpeg2-decode", feature = "dnx"))]
+#[cfg(any(feature = "h264-decode", feature = "hevc-decode", feature = "mpeg2-decode", feature = "dnx", feature = "theora-decode"))]
 fn sar(num: u32, den: u32) -> Option<(u32, u32)> {
     (num != 0 && den != 0).then_some((num, den))
 }
@@ -611,6 +611,7 @@ impl TryFrom<crate::theora::Picture> for VideoFrame {
         ];
 
         let mut f = VideoFrame::new(p.pic_width, p.pic_height, ColorFamily::YCbCr, sub, planes, None)?;
+        f.sar = sar(p.par.0, p.par.1);
         match p.color_space {
             crate::theora::ColorSpace::Rec470M => {
                 f.color.matrix = 6;
