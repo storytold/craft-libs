@@ -1,7 +1,8 @@
 //! Bounded conversion of common planar DXF entities into neutral Bézier paths.
 //!
-//! This is geometry extraction, not a full CAD scene renderer: unsupported entities such as
-//! text, dimensions, meshes, and block inserts are reported as warnings and omitted.
+//! This is geometry extraction, not a full CAD scene renderer: block inserts are expanded
+//! (scaled, rotated, arrayed and nested up to [`MAX_INSERT_DEPTH`] levels), while unsupported
+//! entities such as text, dimensions and meshes are reported as warnings and omitted.
 
 use kurbo::{BezPath, Point, Rect, Shape as _};
 
@@ -39,51 +40,16 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
     let unit_to_mm = units_to_mm(drawing.header.insunits(), drawing.header.measurement());
     let layer_visibility: std::collections::HashMap<_, _> =
         drawing.layers().into_iter().map(|layer| (layer.name, layer.on && !layer.frozen)).collect();
-    let mut paths = Vec::new();
+    let blocks: std::collections::HashMap<&str, &crate::model::Block<'_>> = drawing.blocks.iter().map(|b| (b.name, b)).collect();
+    let mut state = State { paths: Vec::new(), unsupported: 0, elements: 0, layers: &layer_visibility, blocks: &blocks };
     let mut warnings = Vec::new();
-    let mut unsupported = 0usize;
-    let mut elements = 0usize;
     for record in &drawing.entities {
-        let entity = crate::model::Entity::read(record);
-        if !entity.common.visible || record.paper_space() || layer_visibility.get(&entity.common.layer) == Some(&false) {
+        if record.paper_space() {
             continue;
         }
-        if excessive_sweep(&entity.kind) {
-            return Err(Error::TooManySegments);
-        }
-        let remaining = MAX_PATH_ELEMENTS.saturating_sub(elements);
-        if estimated_elements(&entity.kind) > remaining {
-            return Err(Error::TooManySegments);
-        }
-        let converted = if let crate::model::EntityKind::Spline(spline) = &entity.kind {
-            spline_path(spline)?.into_iter().collect()
-        } else {
-            entity_paths(&entity.kind, entity.common.extrusion)
-        };
-        if converted.iter().flat_map(|path| path.elements()).any(|element| {
-            let finite = |p: Point| p.x.is_finite() && p.y.is_finite();
-            match *element {
-                kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => !finite(p),
-                kurbo::PathEl::QuadTo(a, b) => !finite(a) || !finite(b),
-                kurbo::PathEl::CurveTo(a, b, c) => !finite(a) || !finite(b) || !finite(c),
-                kurbo::PathEl::ClosePath => false,
-            }
-        }) {
-            return Err(Error::NonFinite);
-        }
-        if converted.is_empty() {
-            unsupported = unsupported.saturating_add(1);
-            continue;
-        }
-        elements = elements.saturating_add(converted.iter().map(|path| path.elements().len()).sum::<usize>());
-        if elements > MAX_PATH_ELEMENTS {
-            return Err(Error::TooManySegments);
-        }
-        if paths.len().saturating_add(converted.len()) > MAX_PATHS {
-            return Err(Error::TooManyPaths);
-        }
-        paths.extend(converted);
+        convert(&mut state, record, kurbo::Affine::IDENTITY, 0)?;
     }
+    let State { paths, unsupported, .. } = state;
     if unsupported > 0 {
         warnings.push(format!("{unsupported} visible DXF entities are unsupported and were omitted"));
     }
@@ -92,6 +58,100 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
     }
     let bounds = paths.iter().map(|path| path.bounding_box()).reduce(|a, b| a.union(b));
     Ok(Imported { paths, bounds, unit_to_mm, warnings })
+}
+
+/// The deepest chain of block inserts expanded (deeper ones are omitted with a warning).
+pub const MAX_INSERT_DEPTH: usize = 16;
+/// The most copies one arrayed insert makes.
+const MAX_INSERT_COPIES: i64 = 10_000;
+
+struct State<'s, 'a> {
+    paths: Vec<BezPath>,
+    unsupported: usize,
+    elements: usize,
+    layers: &'s std::collections::HashMap<String, bool>,
+    blocks: &'s std::collections::HashMap<&'a str, &'s crate::model::Block<'a>>,
+}
+
+/// Convert one entity record through `transform`, expanding block inserts.
+fn convert(state: &mut State<'_, '_>, record: &crate::model::EntityRecord<'_>, transform: kurbo::Affine, depth: usize) -> Result<(), Error> {
+    let entity = crate::model::Entity::read(record);
+    if !entity.common.visible || state.layers.get(&entity.common.layer) == Some(&false) {
+        return Ok(());
+    }
+    if let crate::model::EntityKind::Insert(insert) = &entity.kind {
+        let Some(block) = state.blocks.get(insert.block.trim()).copied() else {
+            state.unsupported = state.unsupported.saturating_add(1);
+            return Ok(());
+        };
+        if depth >= MAX_INSERT_DEPTH {
+            state.unsupported = state.unsupported.saturating_add(1);
+            return Ok(());
+        }
+        let [bx, by, _] = block.groups().point(10);
+        let [ix, iy, _] = insert.insert;
+        let [sx, sy, _] = insert.scale;
+        let (columns, rows) = (insert.columns.max(1), insert.rows.max(1));
+        if columns.saturating_mul(rows) > MAX_INSERT_COPIES {
+            return Err(Error::TooManyPaths);
+        }
+        let all_finite = [bx, by, ix, iy, sx, sy, insert.rotation, insert.column_spacing, insert.row_spacing].iter().all(|v| v.is_finite());
+        if !all_finite {
+            return Err(Error::NonFinite);
+        }
+        for row in 0..rows {
+            for column in 0..columns {
+                // Array offsets are along the insert's rotated axes, before scaling.
+                let offset = kurbo::Vec2::new(column as f64 * insert.column_spacing, row as f64 * insert.row_spacing);
+                let local = kurbo::Affine::translate((ix, iy))
+                    * kurbo::Affine::rotate(insert.rotation.to_radians())
+                    * kurbo::Affine::translate(offset)
+                    * kurbo::Affine::scale_non_uniform(sx, sy)
+                    * kurbo::Affine::translate((-bx, -by));
+                for child in &block.entities {
+                    convert(state, child, transform * local, depth + 1)?;
+                }
+            }
+        }
+        return Ok(());
+    }
+    if excessive_sweep(&entity.kind) {
+        return Err(Error::TooManySegments);
+    }
+    let remaining = MAX_PATH_ELEMENTS.saturating_sub(state.elements);
+    if estimated_elements(&entity.kind) > remaining {
+        return Err(Error::TooManySegments);
+    }
+    let converted: Vec<BezPath> = if let crate::model::EntityKind::Spline(spline) = &entity.kind {
+        spline_path(spline)?.into_iter().collect()
+    } else {
+        entity_paths(&entity.kind, entity.common.extrusion)
+    };
+    let converted: Vec<BezPath> = converted.into_iter().map(|path| transform * path).collect();
+    if converted.iter().flat_map(|path| path.elements()).any(|element| {
+        let finite = |p: Point| p.x.is_finite() && p.y.is_finite();
+        match *element {
+            kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => !finite(p),
+            kurbo::PathEl::QuadTo(a, b) => !finite(a) || !finite(b),
+            kurbo::PathEl::CurveTo(a, b, c) => !finite(a) || !finite(b) || !finite(c),
+            kurbo::PathEl::ClosePath => false,
+        }
+    }) {
+        return Err(Error::NonFinite);
+    }
+    if converted.is_empty() {
+        state.unsupported = state.unsupported.saturating_add(1);
+        return Ok(());
+    }
+    state.elements = state.elements.saturating_add(converted.iter().map(|path| path.elements().len()).sum::<usize>());
+    if state.elements > MAX_PATH_ELEMENTS {
+        return Err(Error::TooManySegments);
+    }
+    if state.paths.len().saturating_add(converted.len()) > MAX_PATHS {
+        return Err(Error::TooManyPaths);
+    }
+    state.paths.extend(converted);
+    Ok(())
 }
 
 fn estimated_elements(kind: &crate::model::EntityKind) -> usize {
@@ -855,5 +915,126 @@ mod spline_tests {
             let difference = sampled_path_distance(&prior, &current, tolerance).max(sampled_path_distance(&current, &prior, tolerance));
             assert!(difference <= 2.1 * tolerance, "legacy/new Hausdorff sample distance {difference} exceeds 2.1 × tolerance {tolerance}");
         }
+    }
+}
+
+#[cfg(test)]
+mod insert_tests {
+    use super::*;
+
+    /// A DXF with the given BLOCKS and ENTITIES section bodies (group-code / value pairs).
+    fn dxf(blocks: &[(&str, &str)], entities: &[(&str, &str)]) -> Vec<u8> {
+        let mut out = String::from("0\nSECTION\n2\nBLOCKS\n");
+        for (code, value) in blocks {
+            out.push_str(&format!("{code}\n{value}\n"));
+        }
+        out.push_str("0\nENDSEC\n0\nSECTION\n2\nENTITIES\n");
+        for (code, value) in entities {
+            out.push_str(&format!("{code}\n{value}\n"));
+        }
+        out.push_str("0\nENDSEC\n0\nEOF\n");
+        out.into_bytes()
+    }
+
+    /// Block `name` with base point (`bx`, `by`) holding one line from (bx, by) to (bx + 10, by).
+    fn block(name: &'static str, bx: &'static str, by: &'static str, x1: &'static str) -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("0", "BLOCK"),
+            ("8", "0"),
+            ("2", name),
+            ("70", "0"),
+            ("10", bx),
+            ("20", by),
+            ("30", "0"),
+            ("0", "LINE"),
+            ("8", "0"),
+            ("10", bx),
+            ("20", by),
+            ("30", "0"),
+            ("11", x1),
+            ("21", by),
+            ("31", "0"),
+            ("0", "ENDBLK"),
+        ]
+    }
+
+    fn ends(imported: &Imported) -> Vec<(f64, f64, f64, f64)> {
+        imported
+            .paths
+            .iter()
+            .map(|p| {
+                let b = p.bounding_box();
+                let r = |v: f64| (v * 1000.0).round() / 1000.0;
+                (r(b.x0), r(b.y0), r(b.x1), r(b.y1))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn inserts_place_their_blocks_scaled_rotated_and_arrayed() {
+        let b = block("SEG", "5", "5", "15");
+        // Insert at (100, 0), scale 2 in x, rotated 90°: the 10-long line from the base point
+        // becomes 20 long, pointing up from (100, 0).
+        let one =
+            dxf(&b, &[("0", "INSERT"), ("8", "0"), ("2", "SEG"), ("10", "100"), ("20", "0"), ("30", "0"), ("41", "2"), ("42", "1"), ("50", "90")]);
+        let got = import(&one).unwrap();
+        assert_eq!(ends(&got), vec![(100.0, 0.0, 100.0, 20.0)]);
+        assert!(got.warnings.is_empty(), "{:?}", got.warnings);
+        // A 3 × 2 array, 30 apart in columns and 7 in rows.
+        let array = dxf(
+            &b,
+            &[("0", "INSERT"), ("8", "0"), ("2", "SEG"), ("10", "0"), ("20", "0"), ("30", "0"), ("70", "3"), ("71", "2"), ("44", "30"), ("45", "7")],
+        );
+        let got = import(&array).unwrap();
+        assert_eq!(got.paths.len(), 6);
+        assert!(ends(&got).contains(&(60.0, 7.0, 70.0, 7.0)), "{:?}", ends(&got));
+    }
+
+    #[test]
+    fn nested_blocks_expand_and_self_reference_stops() {
+        let mut blocks = block("INNER", "0", "0", "10");
+        blocks.extend([
+            ("0", "BLOCK"),
+            ("8", "0"),
+            ("2", "OUTER"),
+            ("70", "0"),
+            ("10", "0"),
+            ("20", "0"),
+            ("30", "0"),
+            ("0", "INSERT"),
+            ("8", "0"),
+            ("2", "INNER"),
+            ("10", "50"),
+            ("20", "50"),
+            ("30", "0"),
+            ("0", "ENDBLK"),
+            ("0", "BLOCK"),
+            ("8", "0"),
+            ("2", "LOOP"),
+            ("70", "0"),
+            ("10", "0"),
+            ("20", "0"),
+            ("30", "0"),
+            ("0", "INSERT"),
+            ("8", "0"),
+            ("2", "LOOP"),
+            ("10", "1"),
+            ("20", "0"),
+            ("30", "0"),
+            ("0", "ENDBLK"),
+        ]);
+        let got = import(&dxf(&blocks, &[("0", "INSERT"), ("8", "0"), ("2", "OUTER"), ("10", "10"), ("20", "0"), ("30", "0")])).unwrap();
+        assert_eq!(ends(&got), vec![(60.0, 50.0, 70.0, 50.0)]);
+        let looped = import(&dxf(&blocks, &[("0", "INSERT"), ("8", "0"), ("2", "LOOP"), ("10", "0"), ("20", "0"), ("30", "0")])).unwrap();
+        assert!(looped.paths.is_empty());
+        assert!(!looped.warnings.is_empty(), "the cut-off chain is reported");
+        // A missing block and an absurd array are reported, not crashes.
+        let missing = import(&dxf(&[], &[("0", "INSERT"), ("8", "0"), ("2", "NOPE"), ("10", "0"), ("20", "0"), ("30", "0")])).unwrap();
+        assert!(!missing.warnings.is_empty());
+        let huge = dxf(
+            &block("SEG", "0", "0", "1"),
+            &[("0", "INSERT"), ("8", "0"), ("2", "SEG"), ("10", "0"), ("20", "0"), ("30", "0"), ("70", "100000"), ("71", "100000")],
+        );
+        assert!(import(&huge).is_err());
     }
 }
