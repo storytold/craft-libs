@@ -1669,9 +1669,8 @@ mod tests {
                 let show = labels.child(craft_xml::Local("showVal")).and_then(|e| e.attr_local("val"));
                 assert_eq!(show, expected_options[i].map(|v| if v { "1" } else { "0" }));
                 let children: Vec<_> = labels.elements().map(|e| e.local()).collect();
-                if let Some(tx) = children.iter().position(|n| *n == "txPr") {
-                    assert!(children.iter().position(|n| *n == "numFmt").unwrap() < tx);
-                }
+                let format_position = children.iter().position(|n| *n == "numFmt").unwrap();
+                assert!(children.iter().position(|n| *n == "txPr").is_none_or(|tx| format_position < tx));
             }
         }
     }
