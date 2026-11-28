@@ -27,6 +27,7 @@ LINT_SOURCE = """
 if [ "$RUNNER_OS" = Linux ]; then
   python3 scripts/test-workspace-concurrency.py
   python3 scripts/test-workspace-tests.py
+  cargo test -p craft-design-lint --locked --test workspace -- mapped_crates_have_no_findings
 fi
 if [ "$RUNNER_OS" != Windows ]; then
   cargo fmt --check
@@ -106,6 +107,8 @@ COMMON = [
     "clippy --workspace --all-targets --locked -- -D warnings",
     "clippy --workspace --all-targets --all-features --locked -- -D warnings",
 ]
+# Linux also runs the design rules over every mapped crate, whichever crates the run selects.
+LINUX_LINT = ["test -p craft-design-lint --locked --test workspace -- mapped_crates_have_no_findings"] + COMMON
 CONFIG = "--config .config/cargo-dev.toml --config .config/cargo-ci.toml"
 ALL = f"--workspace --all-features --locked --profile ci {CONFIG}"
 DEFAULT = f"-p craft-image-codecs --locked --profile ci {CONFIG}"
@@ -148,7 +151,7 @@ class WorkspaceTests(unittest.TestCase):
         # Windows skips only rustfmt: one call with every source root of the workspace is longer
         # than a Windows command line may be (os error 206), and Linux and macOS check the same
         # formatting.
-        for os_name, expected in (("Linux", COMMON), ("macOS", COMMON), ("Windows", COMMON[1:])):
+        for os_name, expected in (("Linux", LINUX_LINT), ("macOS", COMMON), ("Windows", COMMON[1:])):
             with self.subTest(os=os_name):
                 result = lint(os_name)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -218,11 +221,11 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertEqual(result.stdout.strip(), expected)
 
     def test_each_stage_failure_remains_fatal(self):
-        for index, command in enumerate(COMMON):
+        for index, command in enumerate(LINUX_LINT):
             with self.subTest(block="lint-command", command=command):
                 result = lint("Linux", command)
                 self.assertEqual(result.returncode, 17, result.stderr)
-                self.assertEqual(result.stdout.splitlines(), COMMON[:index + 1])
+                self.assertEqual(result.stdout.splitlines(), LINUX_LINT[:index + 1])
         for index, command in enumerate(run_commands()):
             with self.subTest(step="run", command=command):
                 result, _ = step("run", fail=command)
