@@ -236,6 +236,7 @@ craft-shared-vec = { workspace = true, optional = true }
 craft-ease = { workspace = true, optional = true }
 craft-i18n-build = { workspace = true, optional = true }
 craft-pbr = { workspace = true, optional = true }
+craft-mesh-ops = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -674,6 +675,8 @@ mesh-obj = ["mesh", "craft-mesh/obj"]
 mesh-ply = ["mesh", "craft-mesh/ply"]
 mesh-stl = ["mesh", "craft-mesh/stl"]
 mesh-threemf = ["mesh", "craft-mesh/threemf"]
+
+mesh-ops = ["dep:craft-mesh-ops"]
 
 metadata = ["dep:craft-metadata"]
 
