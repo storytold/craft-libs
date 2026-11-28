@@ -267,6 +267,8 @@ impl Outcome for PreviewOutput {
 ///   steps the same view with buttons. Panes that show the same picture area (a 2-up or 4-up dialog) take one view
 ///   and the dialog applies the first view any of them reports to all.
 /// - A pane whose state is not `Ready` draws no picture and reports no view.
+/// - An `opaque` pane draws no checkerboard, under the picture or in the well while it renders: the picture has no
+///   transparency, so a checkerboard would only read as transparent parts it does not have.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(content_painter)]
 pub struct PreviewPane<'a> {
@@ -277,6 +279,9 @@ pub struct PreviewPane<'a> {
     /// Whether a click centres the view on the point clicked.
     #[prop]
     click_centres: bool,
+    /// Whether the picture has no transparency, so no checkerboard is drawn.
+    #[prop]
+    opaque: bool,
     /// The well's width over its height: the pane is as tall as its width over this. Without one, the height is the
     /// one its container gives, at least the plot height.
     #[prop(quantity = "aspect ratio")]
@@ -321,6 +326,7 @@ impl PreviewPane<'_> {
             state,
             view: view.clone(),
             click_centres: true,
+            opaque: false,
             aspect: None,
             thumbnail: false,
             moved: None,
@@ -597,7 +603,9 @@ impl Component for PreviewPane<'_> {
                     let picture = Rect::from_center_size(cx.rect.center() + view.offset, size);
                     let visible = picture.intersect(inside);
                     if size.x > 0.0 && size.y > 0.0 && visible.width() > 0.0 && visible.height() > 0.0 {
-                        painter.checker(visible);
+                        if !self.opaque {
+                            painter.checker(visible);
+                        }
                         let uv = Rect::from_min_max(
                             pos2((visible.min.x - picture.min.x) / size.x, (visible.min.y - picture.min.y) / size.y),
                             pos2((visible.max.x - picture.min.x) / size.x, (visible.max.y - picture.min.y) / size.y),
@@ -616,7 +624,8 @@ impl Component for PreviewPane<'_> {
                         overlay(&painter, view, picture);
                     }
                 }
-                PreviewState::Pending(_) => painter.checker(inside),
+                PreviewState::Pending(_) if !self.opaque => painter.checker(inside),
+                PreviewState::Pending(_) => {}
                 PreviewState::Failed(_) => {}
             }
             inside

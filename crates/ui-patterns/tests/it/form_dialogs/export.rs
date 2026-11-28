@@ -4,8 +4,8 @@ use craft_behavior::PixelSize;
 use craft_ui::contract::{Bind, Role, SaveKey};
 use craft_ui::dialog::{DialogHost, DialogResult, StackDialog};
 use craft_ui::patterns::form_dialogs::{
-    ExportAsDialog, ExportAsResult, ExportOptions, ExportOptionsKind, ExportSize, FormatOptions, FormatOptionsDialog, HostedExportAs,
-    HostedFormatOptions, JpegOptions, OutputPathRow, Resample, ScaleRow, ScaleSize, SizeEstimate,
+    ExportAsDialog, ExportAsResult, ExportOptions, ExportOptionsKind, ExportPreview, ExportSize, FormatOptions, FormatOptionsDialog,
+    HostedExportAs, HostedFormatOptions, JpegOptions, OutputPathRow, PreviewState, Resample, ScaleRow, ScaleSize, SizeEstimate,
 };
 use craft_ui::runtime::requests::PathRequest;
 use craft_ui::testing::focus::AccessActionKind;
@@ -333,4 +333,49 @@ fn export_as_offers_only_the_apps_resample_methods() {
     assert!(dialog.set_json_field(fixture.ctx(), "resample", "lanczos".into()).is_err(), "an unlisted method is refused");
     dialog.set_json_field(fixture.ctx(), "resample", "bicubic".into()).expect("a listed method is taken");
     assert_eq!(dialog.options().resample, Resample::Bicubic);
+}
+
+/// Whether `shapes` paint the transparency checkerboard: a rect filled with a texture that repeats across it.
+fn checkered(shapes: &[egui::Shape]) -> bool {
+    shapes.iter().any(|shape| match shape {
+        egui::Shape::Rect(rect) => rect.brush.as_ref().is_some_and(|brush| brush.uv.width() > 1.0 || brush.uv.height() > 1.0),
+        egui::Shape::Vec(inner) => checkered(inner),
+        _ => false,
+    })
+}
+
+/// Whether Export As over `start` paints a checkerboard in its preview, while the preview renders and, with `ready`,
+/// once a wide opaque picture is shown.
+fn previews_over_a_checkerboard(start: ExportOptions, ready: bool) -> bool {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    host.borrow_mut().open(HostedExportAs::new("Poster", document(), start));
+    fixture.idle(10);
+    let size = [300, 100];
+    let image = egui::ColorImage::new(size, vec![egui::Color32::WHITE; size[0] * size[1]]);
+    let texture = fixture.ctx().load_texture("wide-opaque", image, egui::TextureOptions::default());
+    if ready {
+        let picture = egui::load::SizedTexture::new(texture.id(), Vec2::new(size[0] as f32, size[1] as f32));
+        if let Some(dialog) = host.borrow_mut().get_mut::<HostedExportAs>() {
+            let wanted = dialog.wanted_preview().expect("the dialog asks for a preview of its opening values");
+            dialog.set_preview(ExportPreview::new(wanted.revision, PreviewState::Ready(picture)));
+        }
+        fixture.idle(4);
+    }
+    checkered(&fixture.frame_shapes())
+}
+
+/// A file that keeps transparency previews over a checkerboard; one without it (JPG, or transparency unchecked) shows
+/// none, under the picture or in the empty well while it renders, as it has no transparent parts to show.
+#[trial]
+fn only_a_file_that_keeps_transparency_previews_over_a_checkerboard() {
+    let mut flat = ExportOptions::default();
+    flat.transparency = false;
+    for ready in [false, true] {
+        assert!(previews_over_a_checkerboard(ExportOptions::default(), ready), "PNG keeps transparency (ready: {ready})");
+        assert!(!previews_over_a_checkerboard(options("jpg", 85), ready), "JPG has none (ready: {ready})");
+        assert!(!previews_over_a_checkerboard(flat.clone(), ready), "PNG with transparency off has none (ready: {ready})");
+    }
 }
