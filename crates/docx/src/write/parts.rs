@@ -55,6 +55,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor, options: WriteOptions)
         boxes: craft_wordmodel::BoxBudget::default(),
         written_boxes: std::collections::HashSet::new(),
         embeds: embed::EmbedWriter::new(doc),
+        unanchored_replies: unanchored_replies(doc),
         txbx_links: doc
             .text_box_chains()
             .iter()
@@ -534,4 +535,58 @@ pub(super) fn sniff(bytes: &[u8]) -> &'static str {
     } else {
         "bin"
     }
+}
+
+/// Replies made in an app have no anchors of their own, and Word for Mac shows a reply only when
+/// it has them (observed in Word for Mac 16.114: such a reply is dropped). Each is written with the
+/// anchors of its parent, or of the nearest comment up its thread that has them, as Word saves a
+/// reply: both starts, then each end with its reference. Anchored comment id → its replies
+/// without anchors, in id order.
+pub(super) fn unanchored_replies(doc: &Document) -> HashMap<u32, Vec<u32>> {
+    let mut anchored = std::collections::HashSet::new();
+    let stories = std::iter::once(craft_wordmodel::StoryRef::Body).chain(doc.parts.keys().map(|k| craft_wordmodel::StoryRef::Part(*k)));
+    for story in stories {
+        for path in doc.para_paths(story) {
+            for o in doc.para(story, &path).map(|p| p.objects.as_slice()).unwrap_or_default() {
+                if let craft_wordmodel::InlineObject::CommentStart { id } = o {
+                    anchored.insert(*id);
+                }
+            }
+        }
+    }
+    // A reply to a reply made in an app has no anchored parent either: it takes the anchors of
+    // the nearest comment up its thread that has them. Each comment's answer is kept, so a long
+    // thread is walked once, not once per reply.
+    let mut nearest: HashMap<u32, Option<u32>> = HashMap::new();
+    let mut anchored_ancestor = |id: u32| {
+        let mut path = Vec::new();
+        let mut cur = id;
+        let found = loop {
+            if let Some(known) = nearest.get(&cur) {
+                break *known;
+            }
+            path.push(cur);
+            match doc.comments.get(&cur).and_then(|c| c.parent) {
+                None => break None,
+                Some(parent) if anchored.contains(&parent) => break Some(parent),
+                // A thread that loops back on itself has no anchored comment above it.
+                Some(_) if path.len() > doc.comments.len() => break None,
+                Some(parent) => cur = parent,
+            }
+        };
+        for walked in path {
+            nearest.insert(walked, found);
+        }
+        found
+    };
+    let mut out: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (id, c) in &doc.comments {
+        if c.parent.is_some()
+            && !anchored.contains(id)
+            && let Some(root) = anchored_ancestor(*id)
+        {
+            out.entry(root).or_default().push(*id);
+        }
+    }
+    out
 }

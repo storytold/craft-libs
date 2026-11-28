@@ -156,6 +156,8 @@ pub(crate) struct Writer<'d> {
     inline_controls: Vec<usize>,
     /// Media keys actually referenced by a written drawing.
     used_media: std::collections::BTreeSet<String>,
+    /// Replies without anchors of their own, by the comment they answer ([`unanchored_replies`]).
+    unanchored_replies: HashMap<u32, Vec<u32>>,
     /// Bounds writing text boxes inside text boxes (as layout shows them).
     boxes: craft_wordmodel::BoxBudget,
     /// Text box stories already written: a story shown by many shapes is written once, the other
