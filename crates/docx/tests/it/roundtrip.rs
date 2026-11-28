@@ -68,9 +68,11 @@ fn every_char_prop_round_trips() {
     let all = CharProps {
         style: Some("Strong".into()),
         font: Some("Georgia".into()),
-        // Theme slots naming Georgia in the document's theme (set below).
+        // The font of the non-ASCII Latin text (`w:hAnsi`).
+        font_hansi: Some("Verdana".into()),
+        // Theme slots naming Georgia and Verdana in the document's theme (set below).
         font_ascii_theme: Some(craft_wordmodel::props::ThemeFont::MajorHAnsi),
-        font_hansi_theme: Some(craft_wordmodel::props::ThemeFont::MajorAscii),
+        font_hansi_theme: Some(craft_wordmodel::props::ThemeFont::MinorHAnsi),
         // The symbol's own font: the run is written as `w:sym` characters (#2036).
         sym_font: Some("Wingdings".into()),
         size: Some(10.5),
@@ -152,6 +154,7 @@ fn every_char_prop_round_trips() {
         CharProps { color: Some(TextColor::Auto), highlight: Some(Highlight::None), vert_align: Some(VertAlign::Subscript), ..Default::default() };
     let mut d = doc_with(vec![para_runs(&[("plain ", CharProps::default()), ("everything", all.clone()), (" auto", auto.clone())])]);
     d.settings.major_font = "Georgia".into();
+    d.settings.minor_font = "Verdana".into();
     let r = rt(&d);
     let p = paras(&r)[0];
     assert_eq!(p.text, "plain everything auto");

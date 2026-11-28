@@ -309,12 +309,20 @@ pub struct CharProps {
     /// Character style id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
+    /// The font of the run's text; with [`Self::font_hansi`] set, of its ASCII characters only
+    /// (`w:rFonts/@w:ascii`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    /// The font of the run's non-ASCII Latin text (curly quotes, accented letters…), when it
+    /// differs from `font` (`w:rFonts/@w:hAnsi`, ISO/IEC 29500-1 §17.3.2.26). `None` = the same
+    /// font as `font`; a `font` set without it sets both, as choosing a font does in Word.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_hansi: Option<String>,
     /// The theme font slots `font` came from (`w:rFonts/@w:asciiTheme`, `@w:hAnsiTheme`:
     /// `minorHAnsi`, `majorAscii`…), kept so saving writes them back and the text keeps following
     /// the theme's fonts in Word. Layout reads `font` only. Saving writes a slot only while it
     /// still names `font` in the document's theme, so a font chosen later is never hidden by it.
+    /// `font_hansi_theme` is the slot of the high-ANSI font: `font_hansi`, or `font` without it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_ascii_theme: Option<ThemeFont>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -596,12 +604,28 @@ impl CharProps {
     /// overlaid on `base`.
     pub fn minus(mut self, base: &CharProps) -> CharProps {
         let font = self.font.clone();
+        let want = self.high_ansi();
+        let hansi = (self.font_hansi.take().or_else(|| font.clone()), self.font_hansi_theme);
         self.minus_text_style(base);
         self.minus_latin_theme(base, font);
         self.minus_run_visibility(base);
         self.minus_script_style(base);
         self.minus_document_marks(base);
+        // The high-ANSI font goes in only where overlaying the rest on `base` would show another.
+        if base.clone().overlaid(&self).high_ansi() != want {
+            (self.font_hansi, self.font_hansi_theme) = hansi;
+        }
         self
+    }
+
+    /// The font of the run's non-ASCII Latin text: `font_hansi`, else `font`.
+    pub fn high_ansi_font(&self) -> Option<&str> {
+        self.font_hansi.as_deref().or(self.font.as_deref())
+    }
+
+    /// The high-ANSI font and its theme slot, as `minus` compares them.
+    fn high_ansi(&self) -> (Option<String>, Option<ThemeFont>) {
+        (self.high_ansi_font().map(str::to_string), self.font_hansi_theme)
     }
 
     fn minus_latin_theme(&mut self, base: &CharProps, font: Option<String>) {
@@ -674,11 +698,21 @@ impl CharProps {
 
     fn overlay_latin_theme(&mut self, patch: &CharProps) {
         // A font set replaces both slots with its own, `None` included (as for `font_ea_theme`):
-        // a slot left from the base would name another font, and Word reads it over `font`.
+        // a slot left from the base would name another font, and Word reads it over `font`. It
+        // is the high-ANSI font too unless the patch names one of its own.
         if patch.font.is_some() {
             (self.font_ascii_theme, self.font_hansi_theme) = (patch.font_ascii_theme, patch.font_hansi_theme);
+            self.font_hansi = patch.font_hansi.clone();
+        } else if patch.font_hansi.is_some() {
+            // A high-ANSI font alone replaces only its own slot.
+            overlay_fields!(self, patch; font_ascii_theme);
+            (self.font_hansi, self.font_hansi_theme) = (patch.font_hansi.clone(), patch.font_hansi_theme);
         } else {
             overlay_fields!(self, patch; font_ascii_theme, font_hansi_theme);
+        }
+        // One font for both is `font` alone.
+        if self.font_hansi.is_some() && self.font_hansi == self.font {
+            self.font_hansi = None;
         }
     }
 
