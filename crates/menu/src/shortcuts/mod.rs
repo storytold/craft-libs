@@ -322,6 +322,10 @@ pub struct Options {
     pub visible: Option<fn(&CommandDef) -> bool>,
     /// false: the on-screen keyboard pane.
     pub keyboard: bool,
+    /// false: a Match Case checkbox beside Search, off when the dialog opens. Ticked, a row matches only when
+    /// its command's name, as written or translated, contains the query with the exact case; ids, aliases,
+    /// menu paths and typed shortcuts no longer match; a chord recorded by Search by key still finds its bindings.
+    pub match_case: bool,
     /// Read-only rows for keys outside the catalog.
     pub fixed: Vec<FixedRow>,
     /// Formats the app can read, besides the built-in ones.
@@ -355,6 +359,7 @@ impl Default for Options {
             own_areas: false,
             visible: None,
             keyboard: false,
+            match_case: false,
             fixed: Vec::new(),
             import_formats: Vec::new(),
             export_formats: Vec::new(),

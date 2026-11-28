@@ -19,6 +19,7 @@ craft_ui::words! {
         filter: "keyboardShortcuts.filter" = "Filter:";
         search: "keyboardShortcuts.search" = "Search:";
         search_by_key: "keyboardShortcuts.searchByKey" = "Search by key";
+        match_case: "keyboardShortcuts.matchCase" = "Match Case";
         all_commands: "keyboardShortcuts.allCommands" = "All Commands";
         menu_menu: template "keyboardShortcuts.menuMenu" = "{menu} Menu";
         tools: "keyboardShortcuts.tools" = "Tools";

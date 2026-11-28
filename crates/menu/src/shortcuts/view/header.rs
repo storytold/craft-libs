@@ -2,7 +2,7 @@
 //! keyboard pane's toggle, and Hold Shortcuts when the app gives its hold setting.
 
 use craft_ui::buttons::{IconButton, ToggleButton};
-use craft_ui::choice::Switch;
+use craft_ui::choice::{Checkbox, Switch};
 use craft_ui::contract::{Bind, BodyCx, Entry, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::Field;
@@ -107,10 +107,12 @@ fn search(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState) {
     let words = env.text.words();
     let label = words.search.clone();
     let mut query = state.query.clone();
+    let mut edited = false;
     Field::new(label.clone()).id_salt("shortcuts.search").sizing(Sizing::Content).show(ui, |ui, _| {
-        TextField::search(label.clone(), Bind::bound(&mut query)).id_salt("search").show(ui);
+        edited = !TextField::search(label.clone(), Bind::bound(&mut query)).id_salt("search").show(ui).events.is_empty();
     });
-    if query != state.query {
+    // Typing over a recorded chord makes the query typed, even when the text comes out the same.
+    if edited || query != state.query {
         state.set_query(query);
     }
     let searching = matches!(state.recording.as_ref().map(|recording| &recording.target), Some(Target::Search));
@@ -138,6 +140,13 @@ fn search(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState) {
             state.feed(env, &out.chords, now);
         } else if out.response.lost_focus() {
             state.stop_recording();
+        }
+    }
+    if env.options.match_case {
+        let mut on = state.match_case;
+        Checkbox::new(Bind::bound(&mut on)).label(words.match_case.clone()).id_salt("matchCase").show(ui);
+        if on != state.match_case {
+            state.set_match_case(on);
         }
     }
 }

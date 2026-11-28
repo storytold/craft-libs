@@ -298,6 +298,10 @@ pub struct DialogState {
     pub(crate) area: AreaId,
     pub(crate) filter: Filter,
     pub(crate) query: String,
+    /// Match Case is ticked ([`Options::match_case`]).
+    pub(crate) match_case: bool,
+    /// The query is a chord recorded by Search by key, so it finds bindings even with Match Case ticked.
+    pub(crate) query_by_key: bool,
     pub(crate) collapsed: BTreeSet<String>,
     /// The detail pane's Context: `None` is the command's home scope.
     pub(crate) context: Option<Scope>,
@@ -351,6 +355,8 @@ impl DialogState {
             area: AreaId::All,
             filter: Filter::All,
             query: String::new(),
+            match_case: false,
+            query_by_key: false,
             collapsed: BTreeSet::new(),
             context: None,
             recording: None,
@@ -485,7 +491,13 @@ impl DialogState {
 
     /// The table's lines for the current view.
     pub(crate) fn lines(&mut self, env: &Env) -> &Built {
-        let view = View { query: &self.query, area: &self.area, filter: self.filter, collapsed: &self.collapsed };
+        let view = View {
+            query: &self.query,
+            match_case: self.match_case && env.options.match_case && !self.query_by_key,
+            area: &self.area,
+            filter: self.filter,
+            collapsed: &self.collapsed,
+        };
         self.rows.get(env.keymap, env.options, env.text, &view)
     }
 
@@ -514,6 +526,11 @@ impl DialogState {
 
     pub(crate) fn set_query(&mut self, query: String) {
         self.query = query;
+        self.query_by_key = false;
+    }
+
+    pub(crate) fn set_match_case(&mut self, on: bool) {
+        self.match_case = on;
     }
 
     pub(crate) fn toggle_group(&mut self, name: &str) {
@@ -529,6 +546,7 @@ impl DialogState {
         self.keys_pick = None;
         self.area = env.keymap.bindable(command).map_or(AreaId::All, |b| rows::area_of(&self.areas, b, env.options));
         self.query.clear();
+        self.query_by_key = false;
         self.filter = Filter::All;
         self.collapsed.clear();
         self.reveal = true;
@@ -632,7 +650,10 @@ impl DialogState {
         let Some(rec) = self.recording.take() else { return };
         self.recorder.reset();
         match rec.target {
-            Target::Search => self.query = env.chord_text(&trigger),
+            Target::Search => {
+                self.query = env.chord_text(&trigger);
+                self.query_by_key = true;
+            }
             Target::Cell { command, old } => self.commit_cell(env, &command, old, trigger),
             // A double press held is the same hold: the cell takes the chord alone.
             Target::HoldCell { command, old } => self.commit_cell(env, &command, old, Trigger::hold(trigger.chord)),
