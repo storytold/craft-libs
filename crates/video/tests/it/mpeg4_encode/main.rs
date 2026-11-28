@@ -106,17 +106,31 @@ struct Encoded {
     src: Vec<Vec<u8>>,
 }
 
-/// Encode `n` frames, keeping the encoder's reconstruction of each.
+/// Encode `n` frames, keeping the encoder's reconstruction of each in display order.
 fn encode(cfg: EncoderConfig, n: usize) -> Encoded {
     let (w, h) = (cfg.width as usize, cfg.height as usize);
+    let b_frames = cfg.b_frames;
     let mut enc = Encoder::new(cfg).expect("encoder");
     let (mut packets, mut recon, mut src) = (Vec::new(), Vec::new(), Vec::new());
     for t in 0..n {
         let pic = synth(w, h, t);
-        packets.push(enc.encode(&pic.frame()).expect("encode"));
-        let r = enc.reconstruction().expect("reconstruction");
-        recon.push([r.y, r.u, r.v].concat());
+        if b_frames == 0 {
+            packets.push(enc.encode(&pic.frame()).expect("encode"));
+            let r = enc.reconstruction().expect("reconstruction");
+            recon.push([r.y, r.u, r.v].concat());
+        } else {
+            packets.extend(enc.encode_packets(&pic.frame()).expect("encode_packets"));
+            for r in enc.reconstructions() {
+                recon.push([r.y.clone(), r.u.clone(), r.v.clone()].concat());
+            }
+        }
         src.push(planes(&pic));
+    }
+    if b_frames > 0 {
+        packets.extend(enc.flush());
+        for r in enc.reconstructions() {
+            recon.push([r.y.clone(), r.u.clone(), r.v.clone()].concat());
+        }
     }
     Encoded { enc, packets, recon, src }
 }
@@ -355,4 +369,94 @@ fn packets_play_from_an_avi_file() {
     assert!(out.status.success() && diag.trim().is_empty(), "{diag}");
     assert_eq!(out.stdout.len(), 160 * 96 * 3 / 2 * 30);
     assert!(out.stdout == want, "the AVI decodes differently from the raw stream");
+}
+
+#[test]
+fn ffmpeg_decodes_ac_prediction_and_four_mv() {
+    let mut cfg = EncoderConfig::new(176, 144, 25, 1);
+    cfg.rate = RateControl::Quant(3);
+    cfg.keyint = 10;
+    cfg.ac_prediction = true;
+    cfg.four_mv = true;
+    check_against_ffmpeg("ac_pred_4mv", cfg, 24, 34.0);
+}
+
+#[test]
+fn ffmpeg_decodes_mpeg_quant_default_and_custom_matrices() {
+    let mut cfg = EncoderConfig::new(160, 120, 25, 1);
+    cfg.rate = RateControl::Quant(3);
+    cfg.keyint = 8;
+    cfg.mpeg_quant = true;
+    check_against_ffmpeg("mpeg_quant_default", cfg.clone(), 20, 33.0);
+
+    let mut intra = [16u8; 64];
+    intra[0] = 8;
+    for (i, slot) in intra.iter_mut().enumerate().skip(1) {
+        *slot = (12 + (i as u8 % 20)).max(1);
+    }
+    let non_intra: [u8; 64] = std::array::from_fn(|i| 16 + (i as u8 % 16));
+    cfg.intra_matrix = Some(intra);
+    cfg.non_intra_matrix = Some(non_intra);
+    check_against_ffmpeg("mpeg_quant_custom", cfg, 20, 33.0);
+}
+
+#[test]
+fn ffmpeg_decodes_quarter_sample_and_video_packets() {
+    let mut cfg = EncoderConfig::new(176, 144, 25, 1);
+    cfg.rate = RateControl::Quant(3);
+    cfg.keyint = 10;
+    cfg.quarter_sample = true;
+    cfg.four_mv = true;
+    cfg.ac_prediction = true;
+    cfg.slice_mbs = Some(15);
+    check_against_ffmpeg("qpel_slices", cfg, 20, 34.0);
+}
+
+#[test]
+fn ffmpeg_decodes_b_frames_and_packed_b_frames() {
+    let mut cfg = EncoderConfig::new(160, 112, 25, 1);
+    cfg.rate = RateControl::Quant(3);
+    cfg.keyint = 12;
+    cfg.b_frames = 2;
+    cfg.ac_prediction = true;
+    cfg.four_mv = true;
+    cfg.mpeg_quant = true;
+    cfg.quarter_sample = true;
+    cfg.slice_mbs = Some(14);
+    check_against_ffmpeg("asp_b_frames", cfg.clone(), 19, 32.0);
+
+    cfg.b_frames = 1;
+    let Encoded { packets: unpacked_pkts, recon: unpacked_recon, .. } = encode(cfg.clone(), 19);
+    cfg.packed_b_frames = true;
+    let Encoded { packets: packed_pkts, recon: packed_recon, .. } = encode(cfg, 19);
+    assert_eq!(packed_pkts.len(), 19, "packed B-frames with b_frames=1 produce one packet per input frame");
+    assert_eq!(unpacked_pkts.len(), 19);
+    assert_eq!(packed_recon.len(), unpacked_recon.len());
+    for (a, b) in packed_recon.iter().zip(&unpacked_recon) {
+        assert_eq!(a, b, "packed and unpacked reconstructions are identical");
+    }
+    // In a packed group (e.g. frames 1 and 2), packet[1] carries the P-VOP and B-VOP back to back,
+    // and packet[2] is the non-coded N-VOP placeholder (`00 00 01 B6`).
+    let vop_starts = packed_pkts[1].data.windows(4).filter(|w| *w == [0, 0, 1, 0xB6]).count();
+    assert_eq!(vop_starts, 2, "packed packet carries P-VOP + B-VOP");
+    assert!(packed_pkts[2].data.starts_with(&[0, 0, 1, 0xB6]));
+    assert!(packed_pkts[2].data.len() <= 8, "N-VOP placeholder is compact");
+}
+
+#[test]
+fn asp_config_validation() {
+    let mut cfg = EncoderConfig::new(32, 32, 25, 1);
+    cfg.b_frames = 9;
+    assert!(matches!(Encoder::new(cfg.clone()), Err(Error::InvalidConfig(_))));
+    cfg.b_frames = 0;
+    cfg.slice_mbs = Some(0);
+    assert!(matches!(Encoder::new(cfg.clone()), Err(Error::InvalidConfig(_))));
+    cfg.slice_mbs = None;
+    cfg.intra_matrix = Some([16u8; 64]); // DC entry != 8
+    assert!(matches!(Encoder::new(cfg.clone()), Err(Error::InvalidConfig(_))));
+    let mut bad_mat = [16u8; 64];
+    bad_mat[0] = 8;
+    bad_mat[10] = 0;
+    cfg.intra_matrix = Some(bad_mat);
+    assert!(matches!(Encoder::new(cfg), Err(Error::InvalidConfig(_))));
 }

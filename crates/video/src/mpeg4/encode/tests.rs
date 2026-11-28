@@ -6,7 +6,7 @@ use std::process::Command;
 
 use craft_media::bitstream::BitWriter;
 
-use super::headers::{self, Sequence, Timing, VopHeader};
+use super::headers::{self, Sequence, Timing, VopCodingType, VopHeader};
 use super::picture::{Mb, Mode, write_mb};
 use super::tables::{self, Tcoef, ZIGZAG};
 
@@ -71,10 +71,33 @@ fn macroblocks(events: &[(bool, usize, i32)], intra: bool, n: usize) -> Vec<Mb> 
 fn stream(width: u32, height: u32, intra: &[Mb], inter: &[Mb], escape_only: bool) -> Vec<u8> {
     let timing = Timing { resolution: 25, increment: 1 };
     let mut w = BitWriter::new();
-    w.write_bytes(&headers::sequence_headers(&Sequence { width, height, timing, profile_level: 3, sar: (1, 1), color: None }));
+    w.write_bytes(&headers::sequence_headers(&Sequence {
+        width,
+        height,
+        timing,
+        profile_level: 3,
+        asp: false,
+        sar: (1, 1),
+        color: None,
+        low_delay: true,
+        mpeg_quant: false,
+        intra_matrix: None,
+        non_intra_matrix: None,
+        quarter_sample: false,
+        resync_markers: false,
+        packed_userdata: false,
+    }));
     for (k, mbs) in [intra, inter].into_iter().enumerate() {
         let i = k == 0;
-        let h = VopHeader { intra: i, seconds: 0, time_increment: k as u32, rounding: false, quant: 1, fcode: 1 };
+        let h = VopHeader {
+            coding_type: if i { VopCodingType::I } else { VopCodingType::P },
+            seconds: 0,
+            time_increment: k as u32,
+            rounding: false,
+            quant: 1,
+            fcode_forward: 1,
+            fcode_backward: 1,
+        };
         headers::vop_header(&mut w, &h, timing);
         for mb in mbs {
             let mut mb = mb.clone();

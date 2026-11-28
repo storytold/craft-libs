@@ -390,6 +390,33 @@ pub(super) const ZIGZAG: [usize; 64] = [
     36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
+/// Table 7-2: Alternate-Horizontal scan (`ALT_HORIZONTAL_SCAN[i]` is the raster position of the `i`-th coefficient).
+pub(super) const ALT_HORIZONTAL_SCAN: [usize; 64] = [
+    0, 1, 2, 3, 8, 9, 16, 17, 10, 11, 4, 5, 6, 7, 15, 14, 13, 12, 19, 18, 24, 25, 32, 33, 26, 27, 20, 21, 22, 23, 28, 29, 30, 31, 34, 35, 40, 41, 48,
+    49, 42, 43, 36, 37, 38, 39, 44, 45, 46, 47, 50, 51, 56, 57, 58, 59, 52, 53, 54, 55, 60, 61, 62, 63,
+];
+
+/// Table 7-3: Alternate-Vertical scan (`ALT_VERTICAL_SCAN[i]` is the raster position of the `i`-th coefficient).
+pub(super) const ALT_VERTICAL_SCAN: [usize; 64] = [
+    0, 8, 16, 24, 1, 9, 2, 10, 17, 25, 32, 40, 48, 56, 57, 49, 41, 33, 26, 18, 3, 11, 4, 12, 19, 27, 34, 42, 50, 58, 35, 43, 51, 59, 20, 28, 5, 13,
+    6, 14, 21, 29, 36, 44, 52, 60, 37, 45, 53, 61, 22, 30, 7, 15, 23, 31, 38, 46, 54, 62, 39, 47, 55, 63,
+];
+
+/// Table 7-4: Default intra quantisation matrix (in raster order).
+pub(super) const DEFAULT_INTRA_MATRIX: [u8; 64] = [
+    8, 17, 18, 19, 21, 23, 25, 27, 17, 18, 19, 21, 23, 25, 27, 28, 20, 21, 22, 23, 24, 26, 28, 30, 21, 22, 23, 24, 26, 28, 30, 32, 22, 23, 24, 26,
+    28, 30, 32, 35, 23, 24, 26, 28, 30, 32, 35, 38, 25, 26, 28, 30, 32, 35, 38, 41, 27, 28, 30, 32, 35, 38, 41, 45,
+];
+
+/// Table 7-5: Default non-intra quantisation matrix (in raster order).
+pub(super) const DEFAULT_NON_INTRA_MATRIX: [u8; 64] = [
+    16, 17, 18, 19, 20, 21, 22, 23, 17, 18, 19, 20, 21, 22, 23, 24, 18, 19, 20, 21, 22, 23, 24, 25, 19, 20, 21, 22, 23, 24, 26, 27, 20, 21, 22, 23,
+    25, 26, 27, 28, 21, 22, 23, 24, 26, 27, 28, 30, 22, 23, 24, 26, 27, 28, 30, 31, 23, 24, 25, 27, 28, 30, 31, 33,
+];
+
+/// Table B-9, `mb_type` of a B-VOP macroblock: Direct (`1`), Interpolate (`01`), Backward (`001`), Forward (`0001`).
+pub(super) const B_MB_TYPE: [(u16, u8); 4] = [(1, 1), (1, 2), (1, 3), (1, 4)];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,10 +478,13 @@ mod tests {
         assert!(prefix_free("dc luma", &DC_SIZE_LUMA) <= 1.0);
         assert!(prefix_free("dc chroma", &DC_SIZE_CHROMA) <= 1.0);
         assert!(prefix_free("mvd", &MVD) <= 1.0);
-        let mut seen = [false; 64];
-        for &z in &ZIGZAG {
-            seen[z] = true;
+        for scan in [&ZIGZAG, &ALT_HORIZONTAL_SCAN, &ALT_VERTICAL_SCAN] {
+            let mut seen = [false; 64];
+            for &z in scan {
+                seen[z] = true;
+            }
+            assert!(seen.iter().all(|&s| s));
         }
-        assert!(seen.iter().all(|&s| s));
+        assert!(prefix_free("b_mb_type", &B_MB_TYPE) <= 1.0);
     }
 }
