@@ -917,6 +917,24 @@ pub(crate) fn node_part_bounds(ctx: &Context, node: crate::runtime::egui::access
     owned_part_bounds(ctx, |shape_owner| crate::runtime::egui::access::node_id(shape_owner) == node, part)
 }
 
+/// The bounds of each of the stops `keys` (an owner and its part, `None` for the owner itself) in last pass's shape
+/// record: the union of the shapes that owner recorded for that part. A stop with no shapes is missing.
+pub(crate) fn stop_bounds(ctx: &Context, keys: &[(Id, Option<craft_behavior::PartRef>)]) -> crate::runtime::focus::StopBounds {
+    let wanted: std::collections::HashSet<_> = keys.iter().copied().collect();
+    let viewport = pass::current_viewport(ctx);
+    PerViewport::<Shapes>::with(ctx, viewport, |record| {
+        let mut bounds = crate::runtime::focus::StopBounds::new();
+        for shape in record.last.values().flat_map(|roots| roots.values()).flat_map(|root| root.shapes.iter()) {
+            let key = (shape.owner, shape.part);
+            if wanted.contains(&key) {
+                let rect = shape.shape.bounds();
+                bounds.entry(key).and_modify(|all| *all = all.union(rect)).or_insert(rect);
+            }
+        }
+        bounds
+    })
+}
+
 fn owned_part_bounds(ctx: &Context, owner: impl Fn(Id) -> bool, part: craft_behavior::PartRef) -> Option<egui::Rect> {
     let viewport = pass::current_viewport(ctx);
     PerViewport::<Shapes>::with(ctx, viewport, |record| {

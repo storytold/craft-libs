@@ -5,9 +5,12 @@ use super::{Act, BeginIn, FocusOrigin, FocusTarget, Initial, PickedIn, State, St
 use crate::runtime::egui::focus as egui_focus;
 use crate::runtime::egui::memory::FastMap;
 use craft_behavior::nav::step;
-use craft_behavior::{Arrows, MoveMods, NavMove, NavOutline, NavStep, ScopeKind};
+use craft_behavior::{Arrows, MoveMods, NavMove, NavOutline, NavShape, NavStep, ScopeKind};
 use egui::{Context, Id};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+/// Where each stop sat in last pass's shapes: what a `Spatial` roving group steps by.
+pub(crate) type StopBounds = HashMap<StopKey, egui::Rect>;
 
 /// One Tab stop: a component or part, or a roving group entered at its arrival member.
 enum Entry {
@@ -42,10 +45,12 @@ enum Slot {
     Group(Id),
 }
 
-/// A roving group's members as a flat outline of enabled positions.
+/// A roving group's members as a flat outline of enabled positions, with where each sits for a `Spatial` group.
 struct Members {
     len: usize,
     first_column: Option<usize>,
+    /// The screen rect of each member from last pass's shapes, for a `Spatial` group; empty for any other.
+    rects: Vec<Option<egui::Rect>>,
 }
 
 impl NavOutline for Members {
@@ -69,6 +74,9 @@ impl NavOutline for Members {
     }
     fn enabled(&self, _: usize) -> bool {
         true
+    }
+    fn rect(&self, at: usize) -> Option<egui::Rect> {
+        self.rects.get(at).copied().flatten()
     }
 }
 
@@ -482,7 +490,7 @@ impl State {
     /// stop in the body of a group that moves with Up and Down only, which it did not join, hands the group those
     /// keys: they enter the group at its first or last member. A move a nested group does not take passes to its
     /// parent, which steps from the nested group as one member and enters a nested group at its arrival member.
-    fn roving_move(&mut self, from: StopKey, mv: NavMove, mods: MoveMods, horizontal: bool) -> Option<Vec<Act>> {
+    fn roving_move(&mut self, from: StopKey, mv: NavMove, mods: MoveMods, horizontal: bool, bounds: &StopBounds) -> Option<Vec<Act>> {
         let current = self.find_stop(from)?;
         let (mut group, member) = match current.stop.group {
             Some(group) => (self.group(group)?, true),
@@ -497,7 +505,10 @@ impl State {
         if !member && !hands_on() {
             return None;
         }
-        let along = |group: &super::Group| match (horizontal && group.rtl, mv) {
+        // A group whose members are laid out in reading order swaps Back and Forward when its rows run right to left,
+        // so Back still means toward the start of the row. A `Spatial` group steps by where its members sit on screen,
+        // where Left is Left whichever way the text reads.
+        let along = |group: &super::Group| match (horizontal && group.rtl && group.roving.shape != NavShape::Spatial, mv) {
             (true, NavMove::Back) => NavMove::Forward,
             (true, NavMove::Forward) => NavMove::Back,
             (_, mv) => mv,
@@ -532,7 +543,25 @@ impl State {
             return Some(self.row_owner(&group).map(|rec| self.focus_stop(rec)).unwrap_or_default());
         }
         let mut state = group.roving.state(at);
-        match step(group.roving.shape, &Members { len: members.len(), first_column: group.roving.first_column }, &mut state, mv, mods) {
+        let rects = if group.roving.shape == NavShape::Spatial {
+            members
+                .iter()
+                .map(|slot| match slot {
+                    Slot::Stop(rec) => bounds.get(&rec.stop.key()).copied(),
+                    // A nested group sits where its members do.
+                    Slot::Group(id) => self
+                        .last_stops
+                        .iter()
+                        .filter(|rec| rec.stop.group == Some(*id))
+                        .filter_map(|rec| bounds.get(&rec.stop.key()).copied())
+                        .reduce(|all, next| all.union(next)),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let outline = Members { len: members.len(), first_column: group.roving.first_column, rects };
+        match step(group.roving.shape, &outline, &mut state, mv, mods) {
             NavStep::Moved(to) => {
                 let arrival = match &members[to] {
                     Slot::Stop(rec) => Some(rec.clone()),
@@ -543,6 +572,20 @@ impl State {
             NavStep::Stay if group.roving.hands_back => None,
             _ => Some(Vec::new()),
         }
+    }
+
+    /// Every stop of last pass when `from` is in a `Spatial` roving group, or one nested in such a group: the stops whose
+    /// rects the move reads. `None` otherwise.
+    fn spatial_stops(&self, from: StopKey) -> Option<Vec<StopKey>> {
+        let mut at = self.find_stop(from)?.stop.group;
+        for _ in 0..MAX_NESTING {
+            let group = self.group(at?)?;
+            if group.roving.shape == NavShape::Spatial {
+                return Some(self.last_stops.iter().map(|rec| rec.stop.key()).collect());
+            }
+            at = group.parent;
+        }
+        None
     }
 
     /// The stop of the collection a row group belongs to.
@@ -913,7 +956,10 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
 /// Applies a roving move of the group that `from` belongs to. `None` when `from` is no group member or the
 /// group does not take the move; the caller then routes the move to the component.
 pub(crate) fn roving_move(ctx: &Context, from: StopKey, mv: NavMove, mods: MoveMods, horizontal: bool) -> Option<()> {
-    let acts = super::with(ctx, |state| state.roving_move(from, mv, mods, horizontal))?;
+    // A `Spatial` group steps by where its members sit, which last pass's shape record knows.
+    let keys = super::with(ctx, |state| state.spatial_stops(from));
+    let bounds = keys.map(|keys| crate::runtime::pointer::stop_bounds(ctx, &keys)).unwrap_or_default();
+    let acts = super::with(ctx, |state| state.roving_move(from, mv, mods, horizontal, &bounds))?;
     super::apply(ctx, acts);
     Some(())
 }

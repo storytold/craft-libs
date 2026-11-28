@@ -102,6 +102,44 @@ fn spatial_moves_go_to_the_nearest_item_in_that_direction() {
     assert_eq!(go(&mut state, NavMove::Up), NavStep::Stay);
 }
 
+/// Two rows of two items of uneven width, the second row's first item a little wider: a radio group laid out in rows.
+struct UnevenRows;
+
+impl NavOutline for UnevenRows {
+    fn len(&self) -> usize {
+        4
+    }
+    fn depth(&self, _: usize) -> usize {
+        0
+    }
+    fn has_children(&self, _: usize) -> bool {
+        false
+    }
+    fn open(&self, _: usize) -> bool {
+        false
+    }
+    fn is_section(&self, _: usize) -> bool {
+        false
+    }
+    fn enabled(&self, _: usize) -> bool {
+        true
+    }
+    fn rect(&self, at: usize) -> Option<Rect> {
+        let spots = [(0.0, 0.0, 67.5), (71.5, 0.0, 70.0), (0.0, 28.0, 70.1), (74.1, 28.0, 70.4)];
+        spots.get(at).map(|&(x, y, width)| Rect::from_min_size(emath::Pos2::new(x, y), emath::Vec2::new(width, 24.0)))
+    }
+}
+
+#[test]
+fn spatial_moves_keep_to_the_row_or_column_they_start_in() {
+    let mut state = NavState::at(0);
+    let go = |state: &mut NavState, mv| step(NavShape::Spatial, &UnevenRows, state, mv, MoveMods::PLAIN);
+    assert_eq!(go(&mut state, NavMove::Forward), NavStep::Moved(1), "Right goes along the row, not to the wider item below");
+    assert_eq!(go(&mut state, NavMove::Down), NavStep::Moved(3));
+    assert_eq!(go(&mut state, NavMove::Back), NavStep::Moved(2));
+    assert_eq!(go(&mut state, NavMove::Up), NavStep::Moved(0));
+}
+
 #[test]
 fn snap_to_step_keeps_stops_and_range_ends() {
     assert_eq!(snap_to_step(9.5, 4.0, 0.0, 0.0..=10.0), 10.0, "the end of the range is a stop");

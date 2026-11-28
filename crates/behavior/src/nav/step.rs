@@ -368,10 +368,12 @@ fn cell(outline: &dyn NavOutline, state: &mut NavState, lead: usize, mv: NavMove
 
 type Axis = fn(emath::Vec2) -> f32;
 
-/// Items at free positions: the nearest item whose centre lies beyond the lead's in the move's direction, with
-/// the off-axis distance counting double. Back and Forward are toward lower and higher x.
+/// Items at free positions: the nearest item whose centre lies beyond the lead's in the move's direction. Items in the
+/// lead's beam (overlapping it across the move) come first, the nearest along the move; with none there, the nearest
+/// with the off-axis distance counting double. Back and Forward are toward lower and higher x.
 fn spatial(outline: &dyn NavOutline, lead: usize, mv: NavMove) -> NavStep {
-    let Some(from) = outline.rect(lead).map(|rect| rect.center()) else { return NavStep::Unhandled };
+    let Some(lead_rect) = outline.rect(lead) else { return NavStep::Unhandled };
+    let from = lead_rect.center();
     let (along, across): (Axis, Axis) = match mv {
         NavMove::Back => (|d| -d.x, |d| d.y),
         NavMove::Forward => (|d| d.x, |d| d.y),
@@ -380,12 +382,28 @@ fn spatial(outline: &dyn NavOutline, lead: usize, mv: NavMove) -> NavStep {
         NavMove::Start => return moved(first_enabled(outline)),
         NavMove::End => return moved(last_enabled(outline)),
     };
-    let nearest = (0..outline.len())
+    let horizontal = matches!(mv, NavMove::Back | NavMove::Forward);
+    // Whether `rect` overlaps the lead across the move: a row's neighbour for Left and Right, a column's for Up and Down.
+    let in_beam = |rect: Rect| {
+        if horizontal {
+            rect.min.y < lead_rect.max.y && rect.max.y > lead_rect.min.y
+        } else {
+            rect.min.x < lead_rect.max.x && rect.max.x > lead_rect.min.x
+        }
+    };
+    let beyond: Vec<(usize, emath::Vec2, bool)> = (0..outline.len())
         .filter(|&at| at != lead && selectable(outline, at))
-        .filter_map(|at| outline.rect(at).map(|rect| (at, rect.center() - from)))
-        .filter(|(_, delta)| along(*delta) > 0.0)
-        .min_by(|(_, a), (_, b)| (along(*a) + 2.0 * across(*a).abs()).total_cmp(&(along(*b) + 2.0 * across(*b).abs())));
-    moved(nearest.map(|(at, _)| at))
+        .filter_map(|at| outline.rect(at).map(|rect| (at, rect.center() - from, in_beam(rect))))
+        .filter(|(_, delta, _)| along(*delta) > 0.0)
+        .collect();
+    let beam = beyond
+        .iter()
+        .filter(|(.., beam)| *beam)
+        .min_by(|(_, a, _), (_, b, _)| along(*a).total_cmp(&along(*b)).then_with(|| across(*a).abs().total_cmp(&across(*b).abs())));
+    let nearest = beam.or_else(|| {
+        beyond.iter().min_by(|(_, a, _), (_, b, _)| (along(*a) + 2.0 * across(*a).abs()).total_cmp(&(along(*b) + 2.0 * across(*b).abs())))
+    });
+    moved(nearest.map(|(at, ..)| *at))
 }
 
 fn grid(outline: &dyn NavOutline, state: &NavState, lead: usize, mv: NavMove, mods: MoveMods, columns: usize, wraps: bool) -> NavStep {
