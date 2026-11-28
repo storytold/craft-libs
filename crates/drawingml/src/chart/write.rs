@@ -431,8 +431,9 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, index: SeriesIndex, kind: Chart
         }
     }
     point_fills(w, s, g);
-    if let Some(d) = s.data_labels {
-        data_labels(w, c, d);
+    let label_format = s.number_format.as_deref().filter(|f| !f.is_empty());
+    if s.data_labels.is_some() || label_format.is_some() {
+        data_labels(w, c, s.data_labels, label_format);
     }
     // After labels, before the category and value caches (ECMA-376 series content order).
     if matches!(g, Group::Bar | Group::Line | Group::Area | Group::Scatter) {
@@ -536,18 +537,23 @@ fn trendline(w: &mut Writer, t: &Trendline) {
     w.close();
 }
 
-fn data_labels(w: &mut Writer, c: &Chart, show: bool) {
+fn data_labels(w: &mut Writer, c: &Chart, show: Option<bool>, format: Option<&str>) {
     w.open("c:dLbls", &[]);
+    if let Some(format) = format.filter(|f| !f.is_empty()) {
+        w.tag("c:numFmt").attr("formatCode", format).attr("sourceLinked", 0).empty();
+    }
     tx_pr(w, c);
     for (n, v) in [
-        ("c:showLegendKey", false),
+        ("c:showLegendKey", Some(false)),
         ("c:showVal", show),
-        ("c:showCatName", false),
-        ("c:showSerName", false),
-        ("c:showPercent", false),
-        ("c:showBubbleSize", false),
+        ("c:showCatName", Some(false)),
+        ("c:showSerName", Some(false)),
+        ("c:showPercent", Some(false)),
+        ("c:showBubbleSize", Some(false)),
     ] {
-        w.tag(n).attr("val", if v { 1 } else { 0 }).empty();
+        if let Some(v) = v {
+            w.tag(n).attr("val", if v { 1 } else { 0 }).empty();
+        }
     }
     w.close();
 }
@@ -738,7 +744,7 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(SeriesIndex, 
         series(w, c, s, *i, kind, g, (override_markers, markers));
     }
     if c.data_labels {
-        data_labels(w, c, true);
+        data_labels(w, c, Some(true), None);
     }
     match g {
         Group::Bar => {
