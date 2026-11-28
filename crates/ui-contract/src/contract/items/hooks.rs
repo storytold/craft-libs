@@ -1250,15 +1250,21 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         // Under a body that does not give the width, the measuring run lays the rows out at the width the collection
         // asks for, so the height it reports is the one it has at that width (a grid's rows at its columns).
         let from_content = self.from_content.0 && !self.content_sized(comp);
-        let asked = (from_content && !self.source.is_empty()).then(|| self.width_from_content(comp, (ui, env), id, room, item, scx));
+        // No rows: the empty state asks for its message on one line, up to the room. A body measured from its content
+        // leaves a collection of no width out of its size, which would leave no room for the message.
+        let asked = if self.source.is_empty() {
+            from_content.then(|| comp.empty_width(ui, scx).min(room.x))
+        } else {
+            from_content.then(|| self.width_from_content(comp, (ui, env), id, room, item, scx))
+        };
         let width = match (bounded, self.content_sized(comp)) {
             (true, false) => asked.unwrap_or(room.x),
-            // No rows: the empty state has no ideal width, so it takes the room, or none where the room is unbounded.
+            // No rows: the empty state takes the room, or its message's width where the room is unbounded.
             (_, _) if self.source.is_empty() => {
                 if bounded {
                     room.x
                 } else {
-                    0.0
+                    comp.empty_width(ui, scx)
                 }
             }
             // An unbounded room (a horizontally scrolling body) takes the widest row, as a content-sized collection does.

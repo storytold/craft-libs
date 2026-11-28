@@ -50,11 +50,25 @@ const ROLE: TypeRole = TypeRole::Body;
 /// The height the empty text of `props.empty` takes at `width`, padding included, in `tokens`: the collection's, which
 /// its own token scope sets.
 pub(in crate::contract) fn height(ui: &Ui, tokens: &UiTokens, text: &Label, width: f32) -> f32 {
+    let (size, pad) = laid_out(ui, tokens, text, |pad| (width - pad.start - pad.end).max(0.0));
+    size.y + pad.top + pad.bottom
+}
+
+/// The width the empty text of `props.empty` asks for, padding included, in `tokens`: its text on one line, as a body
+/// sized from its content gives it.
+pub(in crate::contract) fn width(ui: &Ui, tokens: &UiTokens, text: &Label) -> f32 {
+    let (size, pad) = laid_out(ui, tokens, text, |_| f32::INFINITY);
+    size.x + pad.start + pad.end
+}
+
+/// The empty text laid out at the width `wrap` gives for its padding, and that padding.
+fn laid_out(ui: &Ui, tokens: &UiTokens, text: &Label, wrap: impl FnOnce(&Insets) -> f32) -> (Vec2, Insets) {
     let env = Env::of(ui);
     let text = env.view().resolve(text);
     let layout_env = TextEnv { tokens, direction: env.text_direction, ink: ink_color(tokens, env.ink), fonts: stack_facts(ui.ctx()) };
     let pad = EmptyText::padding(tokens, control_metrics(tokens, env.size, env.line_ratio).pad_x);
-    EmptyText::run(text.as_str()).layout(ui.ctx(), &layout_env, (width - pad.start - pad.end).max(0.0)).size().y + pad.top + pad.bottom
+    let size = EmptyText::run(text.as_str()).layout(ui.ctx(), &layout_env, wrap(&pad)).size();
+    (size, pad)
 }
 
 /// Shows the empty text of `props.empty` in `rect`.
