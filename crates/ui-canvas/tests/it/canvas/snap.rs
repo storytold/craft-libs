@@ -69,8 +69,8 @@ fn snapped_with(fixture: &mut ToolFixture<Recorder>, mods: Modifiers) -> Point {
     *fixture.tool().snapped.last().expect("the tool ran")
 }
 
-// The body's snap and the tool's both snap within 8 screen points, 4 document units at zoom 2: a coordinate 3 units off
-// a guide moves onto it and one 5 units off stays. A point snaps on both axes and a box by its edge, each with the
+// The body's snap and the tool's both snap within 7 screen points, 3.5 document units at zoom 2: a coordinate 3 or 3.5
+// units off a guide moves onto it and one 4 units (8 screen points) or 5 units off stays. A point snaps on both axes and a box by its edge, each with the
 // lines to draw. View > Snap off returns the input. Control suspends snapping on macOS and Ctrl elsewhere, unless the
 // gesture reads that key itself. With Alt as the options' suspend key, Alt suspends instead and Control does not.
 #[trial]
@@ -82,6 +82,9 @@ fn snap_targets_snap_points_and_boxes_unless_control_suspends() {
     assert_eq!(snap.options(), options);
 
     assert_eq!(snap.apply(Axis::Y, 103.0, Mods::NONE), 100.0, "3 units off at zoom 2 snaps");
+    assert_eq!(snap.apply(Axis::Y, 96.5, Mods::NONE), 100.0, "7 screen points off snaps");
+    assert_eq!(snap.apply(Axis::Y, 104.0, Mods::NONE), 104.0, "8 screen points off does not");
+    assert_eq!(snap.apply(Axis::Y, 96.0, Mods::NONE), 96.0, "nor from the other side");
     assert_eq!(snap.apply(Axis::Y, 105.0, Mods::NONE), 105.0, "5 units off at zoom 2 does not");
     let (point, lines) = snap.point(NEAR, Mods::NONE, GestureSnap::default());
     assert_eq!(point, Point::new(100.0, 200.0));

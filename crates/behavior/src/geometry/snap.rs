@@ -16,8 +16,8 @@ use crate::flow::Axis;
 use craft_keymap::{Mods, Platform};
 use kurbo::{Point, Rect, Vec2};
 
-/// Screen points within which a position snaps (Photoshop).
-pub const SNAP_PX: f64 = 8.0;
+/// Screen points within which a position snaps (Photoshop): 7 still snaps, 8 does not, at any zoom.
+pub const SNAP_PX: f64 = 7.0;
 
 /// What a target is, so an app can filter (Snap To › Guides only) and the lines can be drawn in
 /// the smart-guide colour or the plain one.
