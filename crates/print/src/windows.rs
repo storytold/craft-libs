@@ -33,7 +33,8 @@ pub(crate) fn default_printer() -> Option<String> {
 /// Keeps two threads of this process out of the Windows PrintTicket provider (`PTOpenProvider`
 /// and the calls on its handle) at the same time. When two threads make the process's first calls
 /// together, winspool can keep a pointer to a device capabilities cache it has freed, and a later
-/// call crashes the process.
+/// call crashes the process. Each call takes it for itself and none is made while it is held, so
+/// it is never taken twice by one thread.
 static PRINT_TICKET_PROVIDER: Mutex<()> = Mutex::new(());
 
 /// Holds [`PRINT_TICKET_PROVIDER`] until the guard is dropped. A lock that a panicking thread
@@ -87,22 +88,102 @@ thread_local! {
 fn two_sided(device: &PrinterDevice) -> Option<bool> {
     #[cfg(test)]
     CAPABILITY_QUERIES.with(|n| n.set(n.get().saturating_add(1)));
-    let xml = {
-        let _provider = print_ticket_provider();
-        PrintCapabilities::fetch_xml_for_ticket(device, None)
-    }
-    .ok()?;
+    let xml = capabilities_xml_for(device, user_ticket(device).as_ref()).ok()?;
     ticket::two_sided(std::str::from_utf8(&xml).ok()?)
 }
 
 /// What the driver's PrintCapabilities offer for the job options [`ticket::verify_job_options`]
-/// checks; all unknown when they can't be read.
+/// checks, for the user's own settings (else the printer's defaults); all unknown when they
+/// can't be read.
 fn driver_offers(device: &PrinterDevice) -> ticket::Offered {
-    let xml = {
+    capabilities_xml_for(device, user_ticket(device).as_ref())
+        .ok()
+        .and_then(|xml| String::from_utf8(xml).ok())
+        .map_or_else(ticket::Offered::default, |xml| ticket::offered(&xml))
+}
+
+/// The signed-in user's own settings for the printer as a job ticket: what they set in its
+/// Printing Preferences (`PrintTicket::user_default`). Windows' Print Ticket calls otherwise work
+/// from the printer's Printing Defaults, which can hold another label stock, another darkness and
+/// no cut (a Zebra ZD500 whose defaults said 4.09 × 3.00 in, darkness 10, while the user had set
+/// 2.25 × 1.25 in, darkness 22); every ticket and capabilities request here starts from this one.
+/// `None` when the driver won't say, and then the printer's defaults apply as before.
+fn user_ticket(device: &PrinterDevice) -> Option<PrintTicket> {
+    let _provider = print_ticket_provider();
+    PrintTicket::user_default(device).ok()
+}
+
+/// The driver's capabilities for the user's settings, else for the printer's defaults.
+fn capabilities_for(device: &PrinterDevice, base: Option<&PrintTicket>) -> Result<PrintCapabilities, Error> {
+    let xml = capabilities_xml_for(device, base)?;
+    Ok(PrintCapabilities { document: PrintCapabilitiesDocument::parse_from_bytes(&xml).map_err(spool_error)? })
+}
+
+/// The driver's capabilities document for the user's settings, else for the printer's defaults.
+fn capabilities_xml_for(device: &PrinterDevice, base: Option<&PrintTicket>) -> Result<Vec<u8>, Error> {
+    let _provider = print_ticket_provider();
+    fetch_capabilities_xml(device, base)
+}
+
+/// [`capabilities_xml_for`] by a caller that holds the provider.
+fn fetch_capabilities_xml(device: &PrinterDevice, base: Option<&PrintTicket>) -> Result<Vec<u8>, Error> {
+    base.and_then(|base| PrintCapabilities::fetch_xml_for_ticket(device, Some(base)).ok())
+        .map_or_else(|| PrintCapabilities::fetch_xml_for_ticket(device, None), Ok)
+        .map_err(spool_error)
+}
+
+/// [`crate::is_label_printer`]: the driver's PageOutputColor options, its fixed papers, and the
+/// paper of the user's settings ([`ticket::label_shaped`]).
+pub(crate) fn is_label_printer(printer: &str) -> bool {
+    let Ok(devices) = PrinterDevice::all() else { return false };
+    let Some(device) = devices.iter().find(|d| d.name() == printer) else { return false };
+    let base = user_ticket(device);
+    let Ok(capabilities) = capabilities_for(device, base.as_ref()) else { return false };
+    let colour = OwnedName::qualified("PageOutputColor", NS_PSK, Some("psk"));
+    let colours: Vec<String> = capabilities.options_for_feature(colour).filter_map(|o| o.name.as_ref().map(|n| n.local_name.clone())).collect();
+    let colours: Vec<&str> = colours.iter().map(String::as_str).collect();
+    let paper = base.as_ref().and_then(|t| std::str::from_utf8(t.get_xml()).ok()).and_then(ticket::media_size);
+    // A paper sized by parameters lists its parameters' defaults, not a paper the printer holds.
+    let offered: Vec<(u32, u32)> = capabilities
+        .page_media_sizes()
+        .filter(|m| m.parameters().is_empty())
+        .map(|m| (m.size().width_in_micron(), m.size().height_in_micron()))
+        .collect();
+    ticket::label_shaped(&colours, paper, &offered)
+}
+
+/// The keyword of the driver's current default paper among `capabilities`' papers: the user's
+/// settings' paper when the capabilities have it, else an empty ticket merged and validated, which
+/// comes back complete at the printer's defaults (the stock a label printer is set up for, an
+/// office printer's tray paper); the capabilities fall back to the printer's defaults when the
+/// user's can't be read, and then so does the default. `None` when the driver won't say.
+fn default_media_keyword(device: &PrinterDevice, base: Option<&PrintTicket>, capabilities: &PrintCapabilities) -> Option<String> {
+    let offered = |key: &str| capabilities.page_media_sizes().any(|m| m.option().name.as_ref().is_some_and(|n| n.local_name == key));
+    if let Some(key) = base.and_then(|t| std::str::from_utf8(t.get_xml()).ok()).and_then(ticket::media_keyword)
+        && offered(&key)
+    {
+        return Some(key);
+    }
+    let validated = {
         let _provider = print_ticket_provider();
-        PrintCapabilities::fetch_xml_for_ticket(device, None)
+        // The builder closes its provider when it is dropped, before the guard.
+        let mut builder = PrintTicketBuilder::new(device).ok()?;
+        builder.merge(PrintTicket::from_xml(winprint::ticket::DEFAULT_PRINT_TICKET_XML)).ok()?;
+        builder.build().ok()?
     };
-    xml.ok().and_then(|xml| String::from_utf8(xml).ok()).map_or_else(ticket::Offered::default, |xml| ticket::offered(&xml))
+    std::str::from_utf8(validated.get_xml()).ok().and_then(ticket::media_keyword)
+}
+
+/// What [`driver_ticket`] settled on.
+struct DriverTicket {
+    /// The ticket the job is printed with.
+    ticket: PrintTicket,
+    /// The driver's merged and validated ticket: what the driver kept of the job's options
+    /// (copies, collation, two-sided, colour), held to them by `ticket::verify_job_options`
+    /// whichever ticket is printed with.
+    validated: PrintTicket,
+    /// The paper, in micrometres.
+    paper: (u32, u32),
 }
 
 /// The queue the job goes to: the one asked for, else the default. Never another one: a job
@@ -164,9 +245,9 @@ fn chosen_settings(device: &PrinterDevice, job: &Job) -> Result<Option<PrintTick
 
 /// The settings [`crate::driver_settings_dialog`] opens the driver's dialog on, for the queue
 /// named `printer`: the job's earlier choices in that dialog, without what the job decides,
-/// when they are for this printer and the driver still reads and merges them, else the settings the driver
-/// gives a new job, with the job's copies and collation merged in, validated by the driver and
-/// converted to its DEVMODE.
+/// when they are for this printer and the driver still reads and merges them, laid over the user's
+/// own settings ([`user_ticket`]; the printer's defaults when they can't be read), with the job's
+/// copies and collation merged in, validated by the driver and converted to its DEVMODE.
 pub(crate) fn settings_seed(job: &Job, printer: &str) -> Result<crate::Seed, Error> {
     let device = select_device(PrinterDevice::all().map_err(spool_error)?, Some(printer), None)?;
     // Earlier settings the driver no longer reads (after a driver update, or restored from an
@@ -175,11 +256,17 @@ pub(crate) fn settings_seed(job: &Job, printer: &str) -> Result<crate::Seed, Err
     let replaces_unreadable = earlier.is_err();
     let chosen = earlier.ok().flatten();
     let options = ticket::dialog_xml(job)?;
+    // Read before the provider is held below: the dialog opens on the user's own settings, as
+    // their jobs start from them.
+    let user = user_ticket(&device);
     let unreadable = |e: &dyn std::fmt::Display| spool_error(format!("the printer driver's settings could not be read: {e}"));
     let seed = |chosen: Option<PrintTicket>| -> Result<rgb::DevMode, Error> {
         let _provider = print_ticket_provider();
         let seed = {
             let mut builder = PrintTicketBuilder::new(&device).map_err(|e| unreadable(&e))?;
+            if let Some(user) = &user {
+                builder.merge(user.clone()).map_err(|e| unreadable(&e))?;
+            }
             if let Some(chosen) = chosen {
                 builder.merge(chosen).map_err(|e| unreadable(&e))?;
             }
@@ -200,16 +287,21 @@ pub(crate) fn settings_seed(job: &Job, printer: &str) -> Result<crate::Seed, Err
     }
 }
 
-fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape: bool) -> Result<(PrintTicket, (u32, u32)), Error> {
+fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape: bool) -> Result<DriverTicket, Error> {
     let chosen = chosen_settings(device, job)?;
     let chosen_xml = chosen.as_ref().map(|chosen| chosen.get_xml().to_vec());
+    // The job starts from the user's own settings, with any chosen for this job in the driver's
+    // dialog laid over them; the job's own options are merged over both below.
+    let base = match (user_ticket(device), chosen) {
+        (Some(user), Some(chosen)) => Some(overlay(&user, &chosen)?),
+        (user, chosen) => chosen.or(user),
+    };
     let capabilities_xml = {
         let _provider = print_ticket_provider();
         #[cfg(test)]
         hold(job, HELD_TITLE);
-        PrintCapabilities::fetch_xml_for_ticket(device, None)
-    }
-    .map_err(spool_error)?;
+        fetch_capabilities_xml(device, base.as_ref())
+    }?;
     let capabilities = PrintCapabilities { document: PrintCapabilitiesDocument::parse_from_bytes(&capabilities_xml).map_err(spool_error)? };
     let capabilities_xml = std::str::from_utf8(&capabilities_xml).map_err(spool_error)?;
     let medias: Vec<PageMediaSize> = capabilities.page_media_sizes().collect();
@@ -256,8 +348,20 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
             )));
         }
     };
+    // Which way the sheet lies on the paper: turned when its shape differs from the paper's as the
+    // driver feeds it. Office papers are upright, so a sheet wider than tall is turned; a label
+    // stock defined across the feed (a Zebra's 2.75 × 1.25 in) is wider than tall itself, so a
+    // sheet of that shape lies on it as it is and must not be turned, and an upright sheet must.
+    // A sheet that matches none of the driver's papers (shrink to fit) is printed on the driver's
+    // default paper, so the turn is judged against that one.
+    let fed = wanted.or_else(|| {
+        let key = default_media_keyword(device, base.as_ref(), &capabilities)?;
+        let m = medias.iter().find(|m| m.option().name.as_ref().is_some_and(|n| n.local_name == key))?;
+        Some((m.size().width_in_micron(), m.size().height_in_micron()))
+    });
+    let turned = ticket::turned(landscape, fed);
     let document_only = ticket::document_duplex_only(capabilities_xml, job.duplex);
-    let requested = PrintTicket::from_xml(ticket::ticket_xml_with(job, landscape, document_only, ticket::grey_option(capabilities_xml)));
+    let requested = PrintTicket::from_xml(ticket::ticket_xml_with(job, turned, document_only, ticket::grey_option(capabilities_xml)));
     let mut document = PrintTicketDocument::parse_from_bytes(requested.get_xml()).map_err(spool_error)?;
     if let Some(media) = media {
         let media_ticket: PrintTicket = media.clone().into();
@@ -266,30 +370,96 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         document.parameter_inits.extend(media_document.parameter_inits);
     }
     let scaling_name = OwnedName::qualified("PageScaling", NS_PSK, Some("psk"));
-    if let Some(no_scaling) = capabilities.options_for_feature(scaling_name.clone()).find(|o| o.name.as_ref().is_some_and(|n| n.local_name == "None"))
-    {
-        document.features.retain(|f| !(f.name.local_name == "PageScaling" && f.name.namespace_ref() == Some(NS_PSK)));
-        document.features.push(PrintFeature { name: scaling_name, properties: Vec::new(), options: vec![no_scaling.clone()], features: Vec::new() });
+    let scaling_offered: Vec<_> = capabilities.options_for_feature(scaling_name.clone()).collect();
+    let is_page_scaling = |f: &PrintFeature| f.name.local_name == "PageScaling" && f.name.namespace_ref() == Some(NS_PSK);
+    if scaling_offered.is_empty() {
+        // A driver without a PageScaling feature (Zebra's ZDesigner label drivers) is not asked
+        // for one: asked for None, it answers CustomSquare, which the check below would refuse,
+        // though it cannot scale by a feature it doesn't have.
+        document.features.retain(|f| !is_page_scaling(f));
+    } else if let Some(no_scaling) = scaling_offered.iter().find(|o| o.name.as_ref().is_some_and(|n| n.local_name == "None")) {
+        document.features.retain(|f| !is_page_scaling(f));
+        document.features.push(PrintFeature {
+            name: scaling_name,
+            properties: Vec::new(),
+            options: vec![(*no_scaling).clone()],
+            features: Vec::new(),
+        });
     }
+    let requested_xml = PrintTicket::from(document).into_xml();
+    // The job starts from the user's own settings (stock, darkness, cutter: the driver's private
+    // features ride along) and the job's options are merged over them.
     let built = {
         let _provider = print_ticket_provider();
         // The builder closes its provider when it is dropped, before the guard.
         let mut builder = PrintTicketBuilder::new(device).map_err(spool_error)?;
-        // The driver dialog's settings first, so the job's own options are merged over them.
-        if let Some(chosen) = chosen {
-            builder.merge(chosen).map_err(|e| spool_error(format!("the printer's driver refused the settings chosen in its dialog: {e}")))?;
+        if let Some(base) = &base {
+            builder.merge(base.clone()).map_err(|e| match chosen_xml {
+                Some(_) => spool_error(format!("the printer's driver refused the settings chosen in its dialog: {e}")),
+                None => spool_error(e),
+            })?;
         }
-        builder.merge(PrintTicket::from(document)).map_err(spool_error)?;
+        builder.merge(PrintTicket::from_xml(requested_xml.clone())).map_err(spool_error)?;
         builder.build().map_err(spool_error)?
     };
     let validated = in_drivers_spelling(device, built);
     let xml = std::str::from_utf8(validated.get_xml()).map_err(spool_error)?;
-    let paper = ticket::verify_ticket(xml, wanted, landscape)?;
-    // A media type, resolution or quality the driver replaced to resolve a conflict with the job's paper.
-    if let Some(chosen_xml) = &chosen_xml {
-        ticket::verify_chosen_options(std::str::from_utf8(chosen_xml).map_err(spool_error)?, xml)?;
+    // The paper the job comes out on is the one in the DEVMODE winprint prints with: the ticket
+    // converted on the user's own settings and settled by the driver. The merged ticket is built
+    // on the printer's defaults instead, and a driver whose one "User defined" stock is set in
+    // the user's Printing Preferences but not in the printer's Printing Defaults (Zebra's) names
+    // the defaults' size there while printing on the preferences'. So when the driver settles on
+    // the paper asked for, the ticket asked for is the one printed with, and the merged ticket is
+    // only held to the rest; otherwise the merged ticket is held to the paper as well. The ticket
+    // asked for is laid over the user's settings, so their private features (a cutter, a
+    // darkness, a finisher) are printed with too: the spooler merges a job's ticket onto the
+    // printer's defaults, not the user's.
+    let requested = PrintTicket::from_xml(requested_xml);
+    let requested = match &base {
+        Some(base) => overlay(base, &requested)?,
+        None => requested,
+    };
+    let dev_mode = {
+        let _provider = print_ticket_provider();
+        requested.to_dev_mode(device)
+    };
+    let settled = dev_mode.ok().and_then(|dev_mode| ticket::devmode_paper(&dev_mode));
+    let same = |a: (u32, u32), b: (u32, u32)| a.0.abs_diff(b.0) <= ticket::PAPER_TOLERANCE && a.1.abs_diff(b.1) <= ticket::PAPER_TOLERANCE;
+    if let (Some((size, settled_landscape)), Some(want)) = (settled, wanted)
+        && (same(size, want) || same(size, (want.1, want.0)))
+        && settled_landscape == turned
+    {
+        ticket::verify_ticket(xml, None, turned, !scaling_offered.is_empty())?;
+        verify_chosen(chosen_xml.as_deref(), xml)?;
+        return Ok(DriverTicket { ticket: in_drivers_spelling(device, requested), validated, paper: size });
     }
-    Ok((validated, paper))
+    let paper = ticket::verify_ticket(xml, wanted, turned, !scaling_offered.is_empty())?;
+    verify_chosen(chosen_xml.as_deref(), xml)?;
+    Ok(DriverTicket { ticket: validated.clone(), validated, paper })
+}
+
+/// `over` laid over `base`: each of `over`'s features, parameters and properties replaces
+/// `base`'s of the same name, and the rest of `base` is kept.
+fn overlay(base: &PrintTicket, over: &PrintTicket) -> Result<PrintTicket, Error> {
+    let same = |a: &OwnedName, b: &OwnedName| a.local_name == b.local_name && a.namespace == b.namespace;
+    let mut document = PrintTicketDocument::parse_from_bytes(base.get_xml()).map_err(spool_error)?;
+    let top = PrintTicketDocument::parse_from_bytes(over.get_xml()).map_err(spool_error)?;
+    document.features.retain(|f| !top.features.iter().any(|t| same(&t.name, &f.name)));
+    document.features.extend(top.features);
+    document.parameter_inits.retain(|p| !top.parameter_inits.iter().any(|t| same(&t.name, &p.name)));
+    document.parameter_inits.extend(top.parameter_inits);
+    document.properties.retain(|p| !top.properties.iter().any(|t| same(&t.name, &p.name)));
+    document.properties.extend(top.properties);
+    Ok(PrintTicket::from(document))
+}
+
+/// A media type, resolution or quality chosen in the driver's dialog that the driver replaced to
+/// resolve a conflict with the job's paper ([`ticket::verify_chosen_options`]).
+fn verify_chosen(chosen_xml: Option<&[u8]>, validated: &str) -> Result<(), Error> {
+    match chosen_xml {
+        Some(chosen) => ticket::verify_chosen_options(std::str::from_utf8(chosen).map_err(spool_error)?, validated),
+        None => Ok(()),
+    }
 }
 
 /// The ticket with the driver's vendor namespaces under the prefixes the driver declares them with
@@ -341,8 +511,9 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
     let read = &read;
     // The worker is joined before `dir` is dropped: the spooler reads the file.
     let result = crate::progress::run(progress, move |sender| {
-        let (mut ticket, mut paper) = driver_ticket(&device, job, first, landscape)?;
-        let xml = std::str::from_utf8(ticket.get_xml()).map_err(spool_error)?;
+        // The job's options are judged on the driver's validated ticket, whichever ticket is printed.
+        let mut settled = driver_ticket(&device, job, first, landscape)?;
+        let xml = std::str::from_utf8(settled.validated.get_xml()).map_err(spool_error)?;
         let mut repeat = None;
         // Jobs of one copy each, for collated copies that can't be one job.
         let mut jobs = 1;
@@ -354,8 +525,8 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
             let offered = driver_offers(&device);
             if ticket::repeats_collated(job, count, offered) {
                 let single = Job { copies: 1, ..job.clone() };
-                (ticket, paper) = driver_ticket(&device, &single, first, landscape)?;
-                let xml = std::str::from_utf8(ticket.get_xml()).map_err(spool_error)?;
+                settled = driver_ticket(&device, &single, first, landscape)?;
+                let xml = std::str::from_utf8(settled.validated.get_xml()).map_err(spool_error)?;
                 ticket::verify_job_options(xml, &single, count, offered)?;
                 // Two-sided as the driver will print it, the queue's default included.
                 let copies = job.copies.clamp(1, 999);
@@ -367,6 +538,7 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
                 ticket::verify_job_options(xml, job, count, offered)?;
             }
         }
+        let DriverTicket { ticket, paper, .. } = settled;
         let (fit, paper) = match job.scaling {
             Scaling::Exact => (Fit::Exact, first),
             Scaling::ShrinkToFit => {

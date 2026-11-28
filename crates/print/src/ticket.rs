@@ -373,7 +373,9 @@ fn integer(document: &roxmltree::Document<'_>, node: roxmltree::Node<'_, '_>, ta
 /// fail-closed: every refusal here is before anything reaches the spooler). A side the driver
 /// did report must agree with the sheet asked for, either way round (INV-3); both sides gone is
 /// refused whatever the request names (INV-5). The fallback is logged (INV-7).
-pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: bool) -> Result<(u32, u32), Error> {
+/// `scaling_offered`: whether the driver's capabilities have a PageScaling feature; only then is its
+/// answer about scaling checked.
+pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: bool, scaling_offered: bool) -> Result<(u32, u32), Error> {
     let document = crate::xml::parse(xml).map_err(spool_error)?;
     let feature = |name: &str| document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, name));
     let media = feature("PageMediaSize").ok_or_else(|| spool_error("the printer's driver did not confirm the paper size; nothing was sent"))?;
@@ -404,7 +406,9 @@ pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: boo
     if !orientation.is_some_and(|n| named(n, if landscape { "Landscape" } else { "Portrait" })) {
         return Err(spool_error("the printer's driver changed the orientation; nothing was sent"));
     }
-    if let Some(scaling) = feature("PageScaling") {
+    // Only a driver that offers PageScaling can scale by it; one that doesn't (Zebra's ZDesigner)
+    // was not asked, and whatever the merge put there is not a choice of its own.
+    if let Some(scaling) = feature("PageScaling").filter(|_| scaling_offered) {
         // Microsoft's IPP class driver names its "None" in a namespace of its own.
         if !scaling.children().any(|n| n.has_tag_name((NS_PSF, "Option")) && n.attribute("name").and_then(|v| v.rsplit(':').next()) == Some("None")) {
             return Err(spool_error("the printer's driver would scale the sheets; nothing was sent"));
@@ -829,6 +833,81 @@ fn value_start(xml: &str, attribute: std::ops::Range<usize>) -> Option<usize> {
     let quote = text.get(equals..)?.find(['"', '\''])?;
     Some(attribute.start + equals + quote + 1)
 }
+/// Whether a sheet is turned on the paper: `sheet_landscape` says the sheet is wider than tall,
+/// `paper` is the driver's paper in micrometres as the driver feeds it. An upright paper (office
+/// sizes) turns a wide sheet; a paper that is itself wider than tall (a label stock defined across
+/// the feed) takes a wide sheet as it is and turns an upright one. Without a known paper the
+/// sheet's own shape decides, as for upright paper.
+pub(crate) fn turned(sheet_landscape: bool, paper: Option<(u32, u32)>) -> bool {
+    match paper {
+        Some((w, h)) if w > h => !sheet_landscape,
+        _ => sheet_landscape,
+    }
+}
+
+/// The paper a DEVMODE prints on, in micrometres, and whether it is landscape: what the driver
+/// settled on when the ticket was converted for printing (winprint's `PrintTicket::to_dev_mode`:
+/// the user's own settings as the base, then the driver's validation). `None` when the DEVMODE
+/// names no paper size (a roll, a driver that leaves the fields unset).
+pub(crate) fn devmode_paper(dev_mode: &[u8]) -> Option<((u32, u32), bool)> {
+    const DM_ORIENTATION: u32 = 0x1;
+    const DM_PAPERLENGTH: u32 = 0x4;
+    const DM_PAPERWIDTH: u32 = 0x8;
+    const DMORIENT_LANDSCAPE: i16 = 2;
+    let i16_at = |at: usize| dev_mode.get(at..at + 2).and_then(|b| <[u8; 2]>::try_from(b).ok()).map(i16::from_le_bytes);
+    let fields = dev_mode.get(72..76).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_le_bytes)?;
+    if fields & (DM_PAPERWIDTH | DM_PAPERLENGTH) != DM_PAPERWIDTH | DM_PAPERLENGTH {
+        return None;
+    }
+    let (width, length) = (i16_at(82)?, i16_at(80)?);
+    if width <= 0 || length <= 0 {
+        return None;
+    }
+    let landscape = fields & DM_ORIENTATION != 0 && i16_at(76)? == DMORIENT_LANDSCAPE;
+    // Tenths of a millimetre, as DEVMODE has them, to micrometres.
+    Some(((u32::from(width.unsigned_abs()) * 100, u32::from(length.unsigned_abs()) * 100), landscape))
+}
+
+/// The longest short side of a label printer's paper, in micrometres (4.5 in).
+pub(crate) const LABEL_MAX_SHORT_SIDE: u32 = 114_300;
+
+/// Whether a paper of `width` × `height` micrometres is label-sized: at most 4.5 in on its short side.
+fn label_sized((width, height): (u32, u32)) -> bool {
+    width > 0 && height > 0 && width.min(height) <= LABEL_MAX_SHORT_SIDE
+}
+
+/// Whether a driver offering `colours` (PageOutputColor option keywords) and the fixed papers
+/// `offered` (micrometres), set to `paper`, is a thermal label printer: monochrome only, set to a
+/// label-sized paper, and offering no larger paper. A monochrome office printer or a fax set to
+/// an envelope, an index card or A6 still offers Letter or A4; Zebra's ZDesigner GC420T driver
+/// offers only its one 4 × 6 in "User defined" stock. A label printer that also offers colour is
+/// left to its driver. Papers sized by parameters and papers with a zero side say nothing about
+/// what the printer holds and are not counted.
+pub(crate) fn label_shaped(colours: &[&str], paper: Option<(u32, u32)>, offered: &[(u32, u32)]) -> bool {
+    !colours.is_empty()
+        && colours.iter().all(|c| *c == "Monochrome")
+        && paper.is_some_and(label_sized)
+        && offered.iter().filter(|(w, h)| *w > 0 && *h > 0).all(|&size| label_sized(size))
+}
+
+/// A ticket's PageMediaSize, in micrometres; `None` without one or for a roll.
+pub(crate) fn media_size(xml: &str) -> Option<(u32, u32)> {
+    let document = crate::xml::parse(xml).ok()?;
+    let media = document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, "PageMediaSize"))?;
+    integer(&document, media, "ScoredProperty", "MediaSizeWidth")
+        .zip(integer(&document, media, "ScoredProperty", "MediaSizeHeight"))
+        .filter(|(w, h)| *w > 0 && *h > 0)
+}
+
+/// The keyword of a ticket's PageMediaSize option, without its namespace prefix
+/// (`NorthAmericaLetter`, a vendor's `User0000000256`), as the driver's page media sizes are keyed.
+pub(crate) fn media_keyword(xml: &str) -> Option<String> {
+    let document = roxmltree::Document::parse(xml).ok()?;
+    let media = document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, "PageMediaSize"))?;
+    let option = media.children().find(|n| n.has_tag_name((NS_PSF, "Option")))?;
+    option.attribute("name").and_then(|v| v.rsplit(':').next()).filter(|k| !k.is_empty()).map(str::to_string)
+}
+
 /// The widest unprintable margin of the paper, in micrometres, from PrintCapabilities computed
 /// for the job's ticket (`PageImageableSize`). The largest of the four, so content centred inside
 /// it is clear of every edge whichever way the driver measures. `None` when the driver doesn't say.

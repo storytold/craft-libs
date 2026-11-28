@@ -31,10 +31,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 egui = { workspace = true, optional = true }
 # Safe API; Win32 calls are isolated in this maintained MIT OR Apache-2.0 dependency.
-# Keep the public rgb re-export at main's GDI revision: a different Git rev gives
-# downstream GDI values a different Rust type identity even when the code is unchanged.
-# PDF loader updates below are independent of this public transport API.
-craft-winprint-gdi = { git = "https://github.com/storytold/winprint.rs", rev = "64e7afd4d1483512385012c340ecaaaf0f3beb7f" }
+# Apps reach it only through the public rgb re-export, so keep one revision of it across the
+# dependency graph: a different Git rev gives downstream GDI values a different Rust type
+# identity even when the code is unchanged. This rev is bumped on purpose, to the same
+# revision as winprint below, for the DEVMODE-carrying multi-page GDI jobs `print_pages` uses
+# for label printers (storytold/winprint.rs#13).
+craft-winprint-gdi = { git = "https://github.com/storytold/winprint.rs", rev = "8b734a8fdee78d35b796c981a8fcf34d88131c13" }
 # Says why the printer list is empty when lpstat can't run (e.g. a Flatpak without CUPS tools),
 # and why a job went on with the paper the request names while the driver reported only one side
 # of it (storytold/craft-libs#7230).
@@ -57,9 +59,10 @@ workspace = true
 # ticket (winprint.rs#12, storytold/pdfcraft#3823), and reads whitespace-padded integers in
 # PrintCapabilities (winprint.rs#3, storytold/pdfcraft#2430). Pinned to an immutable revision;
 # review before bumping. The settings chosen in a driver's own dialog become a ticket through
-# `PrintTicket::from_dev_mode` (winprint.rs#24, pinned at its merge commit on winprint.rs's
-# `main`).
-winprint = { git = "https://github.com/storytold/winprint.rs", rev = "8ae097ef941b432b0e7671b1ec3a506800e65e57", default-features = false }
+# `PrintTicket::from_dev_mode` (winprint.rs#24), and `PrintTicket::user_default` reads the
+# user's own Printing Preferences (winprint.rs#13). Pinned at #13's merge commit on
+# winprint.rs's `main`.
+winprint = { git = "https://github.com/storytold/winprint.rs", rev = "8b734a8fdee78d35b796c981a8fcf34d88131c13", default-features = false }
 # GetDefaultPrinter (MIT).
 winsafe = { version = "0.0.29", default-features = false, features = ["winspool"] }
 # The job file's private folder.
