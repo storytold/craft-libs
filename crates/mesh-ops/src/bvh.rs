@@ -4,7 +4,7 @@
 //! Triangles with a non-finite corner are left out, and a query with a non-finite origin,
 //! direction or point, a zero direction, a NaN distance or a NaN box finds nothing.
 
-use glam::{Vec3, Vec3A};
+use glam::{DVec3, Vec3, Vec3A};
 
 use crate::Mesh;
 
@@ -269,15 +269,26 @@ impl Bvh {
     }
 
     fn slab(lo: Vec3A, hi: Vec3A, o: Vec3A, inv: Vec3A, tmax: f32) -> Option<f32> {
-        let t0 = (lo - o) * inv;
-        let t1 = (hi - o) * inv;
+        // The differences are taken in f64: `lo - o` of two finite f32 values can exceed f32::MAX.
+        let (o, inv) = (o.as_dvec3(), inv.as_dvec3());
+        let t0 = (lo.as_dvec3() - o) * inv;
+        let t1 = (hi.as_dvec3() - o) * inv;
         // A ray lying in a slab plane gives 0·∞ = NaN: it is inside that slab, so the axis does
         // not bound the hit.
         let open = t0.is_nan_mask() | t1.is_nan_mask();
-        let tn = Vec3A::select(open, Vec3A::NEG_INFINITY, t0.min(t1)).max_element().max(0.0);
-        let tf = Vec3A::select(open, Vec3A::INFINITY, t0.max(t1)).min_element().min(tmax);
-        let margin = 4.0 * f32::EPSILON * tn.abs().max(tf.abs()).min(f32::MAX);
-        (tn - margin <= tf + margin).then_some((tn - margin).max(0.0))
+        let tn = DVec3::select(open, DVec3::NEG_INFINITY, t0.min(t1)).max_element().max(0.0);
+        let tf = DVec3::select(open, DVec3::INFINITY, t0.max(t1)).min_element().min(f64::from(tmax));
+        let margin = 4.0 * f64::from(f32::EPSILON) * tn.abs().max(tf.abs()).min(f64::MAX);
+        if tn - margin > tf + margin {
+            return None;
+        }
+        // The entry distance is rounded down to f32 so a node is never entered late.
+        let entry = (tn - margin).max(0.0);
+        let mut t = entry as f32;
+        if f64::from(t) > entry {
+            t = t.next_down();
+        }
+        Some(t)
     }
 
     /// Möller–Trumbore, double sided.
@@ -528,6 +539,15 @@ mod tests {
         let hit = bvh.closest(Vec3::new(-1.0, 0.0, 41.0), Vec3::new(1.0, 0.0, -41.0), 2.0).unwrap();
         assert!((hit.t - 1.0).abs() < 1e-6);
         assert!(bvh.closest(Vec3::new(-1.0, -0.1, 41.0), Vec3::new(1.0, 0.0, -41.0), 2.0).is_none());
+    }
+
+    #[test]
+    fn slab_distances_that_overflow_f32_still_enter_the_box() {
+        // lo.z - o.z is -4e38, past f32::MAX, while the hit distance 1e38 fits.
+        let z = 2.0e38_f32;
+        let bvh = review_triangle([Vec3::new(0.0, 0.0, z), Vec3::new(1.0, 0.0, z), Vec3::new(0.0, 1.0, z)]);
+        let hit = bvh.closest(Vec3::new(0.25, 0.25, -z), Vec3::new(0.0, 0.0, 4.0), f32::MAX).unwrap();
+        assert!((hit.t / 1.0e38 - 1.0).abs() < 1e-5, "t = {}", hit.t);
     }
 
     #[test]
