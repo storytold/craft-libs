@@ -181,3 +181,29 @@ fn a_window_floated_after_an_undo_takes_a_new_id() {
     assert_eq!(ids.len(), 1, "Float made a window again");
     assert_ne!(ids, undone, "the window after the undo does not take the undone window's id");
 }
+
+/// A group whose tabs are hidden shows them again from the keyboard: Tab reaches the corner mark that shows them, and
+/// Space there shows the tabs.
+#[trial]
+fn the_mark_of_a_group_with_hidden_tabs_takes_key_focus_and_shows_them() {
+    let mut layout = Layout::new(Some(Node::tabs(vec![0, 1], 0)), Vec::new());
+    layout.apply(Action::set_tabs_hidden(0, true)).unwrap();
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(layout))));
+    let (held, specs) = (Rc::clone(&workspace), Tracked::new(Specs));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut shown = held.borrow().clone();
+        DockArea::new("Dock", Bind::bound(&mut shown), &specs, &mut Panels, DockConfig::default()).show(ui);
+        *held.borrow_mut() = shown;
+    });
+    fixture.room(Vec2::new(800.0, 600.0)).settle();
+    let hidden = |workspace: &Rc<RefCell<Arc<Workspace<usize>>>>| match workspace.borrow().layout().root.as_ref() {
+        Some(Node::Tabs { tabs_hidden, .. }) => *tabs_hidden,
+        root => panic!("{root:?}"),
+    };
+    assert!(hidden(&workspace), "the tabs start hidden");
+    fixture.key(Key::Tab, Modifiers::NONE).idle(1);
+    let part = fixture.focused_stop().and_then(|(_, part)| part).map(|part| part.key);
+    assert_eq!(part, Some(PartKey::new("show_tabs")), "Tab reaches the mark");
+    fixture.key(Key::Space, Modifiers::NONE).idle(2);
+    assert!(!hidden(&workspace), "Space on the mark shows the tabs");
+}

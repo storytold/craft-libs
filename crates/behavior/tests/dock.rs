@@ -141,6 +141,35 @@ fn flyout_offset_rejects_invalid_geometry_without_mutating_the_layout() {
     assert_eq!(layout, original);
 }
 
+/// A docked group whose tabs are hidden keeps them hidden through a close and restore, and a location saved before
+/// the flag existed restores with the tabs shown.
+#[test]
+fn a_restore_gives_a_group_its_hidden_tabs_back() {
+    let mut hidden = g(&[1], 0);
+    hidden.tabs_hidden = true;
+    let mut layout = with_column(Column::new(vec![hidden, g(&[2], 0)]));
+    let original = layout.clone();
+    let location = layout.location(&1).unwrap();
+    assert!(location.group.as_ref().unwrap().tabs_hidden, "the location records the hidden tabs");
+    let location: Location<u32> = serde_json::from_str(&serde_json::to_string(&location).unwrap()).unwrap();
+    layout.apply(Action::close(1)).unwrap();
+    layout.restore(1, &location).unwrap();
+    assert_eq!(layout, original, "a restore gives the group its hidden tabs back");
+
+    let mut shown = location.clone();
+    shown.group = shown.group.map(|group| group.with_tabs_hidden(false));
+    let old = serde_json::to_string(&shown).unwrap();
+    assert!(!old.contains("tabs_hidden"), "shown tabs are not saved: {old}");
+    let old: Location<u32> = serde_json::from_str(&old).unwrap();
+    layout.apply(Action::close(1)).unwrap();
+    layout.restore(1, &old).unwrap();
+    let first = match layout.root.as_ref() {
+        Some(Node::Dock { columns, .. }) => columns[0].groups[0].tabs_hidden,
+        root => panic!("{root:?}"),
+    };
+    assert!(!first, "a location without the flag restores the tabs shown");
+}
+
 /// The layout of `restore_returns_each_panel_to_the_place_it_was_in` with `skip` absent.
 fn without(skip: Option<u32>) -> Layout<u32> {
     let group = |panels: &[u32], active: usize| {
@@ -279,4 +308,16 @@ fn a_v3_floating_tree_loads_as_one_column_window_per_side_by_side_part() {
     let back: Layout<u32> = serde_json::from_str(&written.to_string()).unwrap();
     assert_eq!(back, layout);
     assert_eq!(back.floating.iter().map(|w| w.id).collect::<Vec<_>>(), layout.floating.iter().map(|w| w.id).collect::<Vec<_>>());
+}
+
+/// A floating window of one group whose tabs are hidden is saved in a shape that keeps them hidden, not the plain
+/// first shape, which has no room for it.
+#[test]
+fn a_floating_group_with_hidden_tabs_keeps_them_hidden_through_a_save() {
+    let mut group = g(&[1, 2], 0);
+    group.tabs_hidden = true;
+    let layout = Layout::new(None, vec![Floating::new(7, Column::new(vec![group]), WINDOW)]);
+    let saved: Layout<u32> = serde_json::from_str(&serde_json::to_string(&layout).unwrap()).unwrap();
+    assert_eq!(saved, layout);
+    assert!(saved.floating[0].column.groups[0].tabs_hidden, "the tabs stay hidden");
 }

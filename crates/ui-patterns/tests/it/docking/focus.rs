@@ -149,3 +149,28 @@ fn the_hosts_focus_request_brings_the_panels_floating_window_to_the_front() {
     fixture.idle(2);
     assert_eq!(top_at(&fixture, overlap), Some(a), "a docked panel's request leaves the windows' order alone");
 }
+
+/// The host's focus request for a panel whose group hides its tabs moves key focus to the mark that shows them, the
+/// group's only stop.
+#[trial]
+fn the_hosts_focus_request_reaches_a_group_with_hidden_tabs() {
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![0], 0), Node::tabs(vec![1, 2], 0));
+    let mut layout = Layout::new(Some(root), Vec::new());
+    layout.apply(Action::set_tabs_hidden(1, true)).unwrap();
+    let mut workspace = Arc::new(Workspace::new(layout));
+    let request = Rc::new(Cell::new(None));
+    let (asked, specs) = (Rc::clone(&request), Tracked::new(Numbered));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut panels = Panels;
+        let mut area = DockArea::new("Dock", Bind::bound(&mut workspace), &specs, &mut panels, DockConfig::default());
+        if let Some(panel) = asked.take() {
+            area = area.focus(panel);
+        }
+        area.show(ui);
+    });
+    fixture.room(Vec2::new(1200.0, 600.0)).settle();
+    request.set(Some(1));
+    fixture.idle(2);
+    let part = fixture.focused_stop().and_then(|(_, part)| part).map(|part| part.key);
+    assert_eq!(part, Some(PartKey::new("show_tabs")), "the request focuses the mark");
+}

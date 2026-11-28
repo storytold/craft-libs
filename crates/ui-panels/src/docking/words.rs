@@ -22,6 +22,8 @@ craft_ui::words! {
         close_window: "floatingGroup.close" = "Close panel window";
         /// The tooltip and accessible name of the panel-menu button.
         panel_menu: "dockGroup.panelMenu" = "Panel Menu";
+        /// The tooltip and accessible name of the corner mark of a group whose tab strip is hidden.
+        show_tabs: "dockGroup.showTabs" = "Show Tabs";
         /// The name of the close button in a titled group's header.
         close_panel: template "dockGroup.closePanel" = "Close {name}";
 

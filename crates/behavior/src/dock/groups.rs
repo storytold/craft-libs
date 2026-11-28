@@ -30,6 +30,10 @@ pub struct Group<P> {
     /// Only the tab strip shows. `height` is kept for when the group expands again.
     #[serde(default)]
     pub minimized: bool,
+    /// The tab strip is hidden: the shown panel's body takes the whole group, and a mark in its corner shows the strip
+    /// again ([`Action::SetTabsHidden`](super::Action::SetTabsHidden)).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tabs_hidden: bool,
     /// Preferred height in points, set when the user resizes the group; `None` shares the free
     /// height of the column or stack, or in a dock column takes the renderer's default height.
     #[serde(default)]
@@ -46,7 +50,7 @@ pub struct Group<P> {
 impl<P> Group<P> {
     /// A group of `panels` with tab `active` selected, expanded and with no preferred height or flyout geometry.
     pub fn new(panels: Vec<P>, active: usize) -> Self {
-        Self { panels, active, minimized: false, height: None, flyout_width: None, flyout_offset: None }
+        Self { panels, active, minimized: false, tabs_hidden: false, height: None, flyout_width: None, flyout_offset: None }
     }
 
     /// The selected panel, or `None` when `active` is out of range.
@@ -82,7 +86,14 @@ pub struct Column<P> {
 impl GroupLocation {
     /// A group location with the given state and column.
     pub const fn new(minimized: bool, height: Option<f32>, column: Option<ColumnLocation>) -> Self {
-        Self { minimized, height, flyout_width: None, flyout_offset: None, column }
+        Self { minimized, tabs_hidden: false, height, flyout_width: None, flyout_offset: None, column }
+    }
+
+    /// The location with the group's tab strip hidden or shown.
+    #[must_use]
+    pub const fn with_tabs_hidden(mut self, hidden: bool) -> Self {
+        self.tabs_hidden = hidden;
+        self
     }
 
     /// The location with the group's flyout `width` points wide.
@@ -245,6 +256,9 @@ pub enum PanelState {
 pub struct GroupLocation {
     /// Whether the group was minimized.
     pub minimized: bool,
+    /// Whether the group's tab strip was hidden ([`Group::tabs_hidden`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tabs_hidden: bool,
     /// The group's preferred height in points.
     pub height: Option<f32>,
     /// The width in points of the group's flyout, if the user had resized it.

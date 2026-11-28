@@ -105,6 +105,9 @@ pub struct DockConfig {
     pub titled_headers: bool,
     /// The wheel over a tab strip shows the next or previous panel, one per wheel notch.
     pub wheel_selects_tabs: bool,
+    /// The group menu offers Hide Tabs, which hides a tab group's strip until the mark in its corner is clicked, as
+    /// in Unreal. Off by default.
+    pub hide_tabs_item: bool,
     /// The look of the groups' panel tabs: the shown tab on the panel surface ([`PanelTabLook::Plain`]), on a
     /// filled rounded pill ([`PanelTabLook::Pill`]), or a square filled block on a canvas strip
     /// ([`PanelTabLook::Block`]).
@@ -145,6 +148,7 @@ impl Default for DockConfig {
             tab_close_buttons: false,
             titled_headers: false,
             wheel_selects_tabs: false,
+            hide_tabs_item: false,
             tab_look: PanelTabLook::Plain,
             native_windows: true,
             group_order_items: false,
@@ -300,6 +304,13 @@ impl DockConfig {
     #[must_use]
     pub fn wheel_selects_tabs(mut self, on: bool) -> Self {
         self.wheel_selects_tabs = on;
+        self
+    }
+
+    /// See [`DockConfig::hide_tabs_item`].
+    #[must_use]
+    pub fn hide_tabs_item(mut self, on: bool) -> Self {
+        self.hide_tabs_item = on;
         self
     }
 

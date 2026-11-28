@@ -705,3 +705,31 @@ fn window_ids_stay_unique_within_each_layout_and_are_never_reused() {
     let fresh = layout.fresh_window_id();
     assert!(!window_ids(&loaded).contains(&fresh), "a draw past the top of the range takes a free id: {fresh}");
 }
+
+/// Whether the tree group showing `panel` has its tabs hidden.
+fn tabs_hidden(layout: &Layout<u32>, panel: u32) -> bool {
+    let place = layout.place(&panel).expect("the panel is placed");
+    let path = place.tree_path().expect("the panel is in the tree");
+    match node_at(layout.root.as_ref().expect("a root"), path) {
+        Some(Node::Tabs { tabs_hidden, .. }) => *tabs_hidden,
+        node => panic!("{node:?}"),
+    }
+}
+
+/// A group whose tabs are hidden keeps them hidden when it moves to a split or to an edge of the tree.
+#[test]
+fn a_group_with_hidden_tabs_keeps_them_hidden_when_it_moves_to_a_split_or_an_edge() {
+    let start = || {
+        let column = Node::split(Axis::Y, SplitSize::Ratio(0.5), tabs(&[2], 0), tabs(&[3], 0));
+        let root = Node::split(Axis::X, SplitSize::Ratio(0.5), tabs(&[1], 0), column);
+        let mut layout = Layout::new(Some(root), Vec::new());
+        layout.apply(Action::set_tabs_hidden(3, true)).unwrap();
+        layout
+    };
+    for placement in [DockPlacement::Split(DockSide::End), DockPlacement::Edge(DockSide::Bottom)] {
+        let mut layout = start();
+        layout.apply(Action::move_group(3, Target::at(1, placement.clone()))).unwrap();
+        assert!(tabs_hidden(&layout, 3), "{placement:?}: the moved group keeps its tabs hidden");
+        assert!(!tabs_hidden(&layout, 1), "{placement:?}: the anchor's tabs stay shown");
+    }
+}
