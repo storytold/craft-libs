@@ -167,10 +167,21 @@ pub(super) fn shown_name(info: &Info, family: &str, language: &str, english: boo
 }
 
 /// Whether a family name of the face is in Japanese.
+/// Whether a family name of the face is in any of `languages` (primary subtags, case-insensitive).
+fn has_localized_language(face: &FaceInfo, languages: &[&str]) -> bool {
+    face.localized_families.iter().any(|n| {
+        n.language.as_deref().and_then(|l| l.split(['-', '_']).next()).is_some_and(|l| languages.iter().any(|wanted| l.eq_ignore_ascii_case(wanted)))
+    })
+}
+
+/// Whether a family name of the face is in Japanese.
 fn japanese_name(face: &FaceInfo) -> bool {
-    face.localized_families
-        .iter()
-        .any(|n| n.language.as_deref().and_then(|l| l.split(['-', '_']).next()).is_some_and(|l| l.eq_ignore_ascii_case("ja")))
+    has_localized_language(face, &["ja"])
+}
+
+/// Whether a family name of the face is in an East Asian language (`ja`, `zh`, or `ko`).
+fn east_asian_name(face: &FaceInfo) -> bool {
+    has_localized_language(face, &["ja", "zh", "ko"])
 }
 
 /// A face's class, PANOSE and weight from its `OS/2` and `post` tables, as the catalog's scan recorded them.
@@ -181,21 +192,31 @@ fn read_traits(face: &FaceInfo) -> Traits {
 
 /// The JIS/Japan bit of `ulCodePageRange1`.
 const JIS_CODE_PAGE: u32 = 1 << 17;
+/// The five East Asian Windows code pages of `ulCodePageRange1`: JIS/Japan (17),
+/// Simplified Chinese (18), Korean Wansung (19), Traditional Chinese (20), Korean Johab (21).
+const EAST_ASIAN_CODE_PAGES: u32 = 0b1_1111 << 17;
 /// The Hiragana (49), Katakana (50) and CJK Unified Ideographs (59) bits of `ulUnicodeRange2`, which holds bits 32 to 63.
 const JAPANESE_RANGES: u32 = (1 << (49 - 32)) | (1 << (50 - 32)) | (1 << (59 - 32));
+/// Hangul Syllables (56) plus [`JAPANESE_RANGES`].
+const EAST_ASIAN_RANGES: u32 = JAPANESE_RANGES | (1 << (56 - 32));
 
-/// The scripts a face covers: Latin, the basic Latin letters in its `cmap`; Japanese, the JIS code page, the kana or
-/// CJK Unicode ranges of its `OS/2` table, or a Japanese family name; Thai, ก and า in its `cmap`.
+/// The scripts a face covers: Latin, the basic Latin letters in its `cmap`; East Asian, its East Asian Windows code
+/// pages, CJK/kana/Hangul Unicode ranges, CJK ideographs in `cmap`, or a CJK localized name; Japanese, the JIS code
+/// page, the kana or CJK Unicode ranges of its `OS/2` table, or a Japanese family name; Thai, ก and า in its `cmap`.
 fn read_scripts(catalog: &Catalog, face: &FaceInfo) -> Option<Vec<FontScript>> {
     let data = catalog.load(face).ok()?;
     let font = FontRef::from_index(&data.bytes, face.index).ok()?;
     let map = font.charmap();
     let mapped = |c: char| map.map(c).is_some();
     let latin = ('A'..='Z').chain('a'..='z').all(&mapped);
-    let ranges = font.os2().ok().map_or(0, |os2| os2.ul_unicode_range_2());
+    let os2 = font.os2().ok();
+    let ranges = os2.as_ref().map_or(0, |t| t.ul_unicode_range_2());
+    let code_page_1 = os2.as_ref().and_then(|t| t.ul_code_page_range_1()).filter(|&p| p != 0).unwrap_or(face.code_pages[0]);
+    let cjk_glyphs = ['中', '国', '日'].into_iter().all(&mapped);
+    let east_asian = code_page_1 & EAST_ASIAN_CODE_PAGES != 0 || ranges & EAST_ASIAN_RANGES != 0 || cjk_glyphs || east_asian_name(face);
     let japanese = face.code_pages[0] & JIS_CODE_PAGE != 0 || ranges & JAPANESE_RANGES != 0 || japanese_name(face);
     let thai = ['\u{0E01}', '\u{0E32}'].into_iter().all(&mapped);
-    let scripts = [(FontScript::Latin, latin), (FontScript::Japanese, japanese), (FontScript::Thai, thai)];
+    let scripts = [(FontScript::Latin, latin), (FontScript::EastAsian, east_asian), (FontScript::Japanese, japanese), (FontScript::Thai, thai)];
     Some(scripts.into_iter().filter_map(|(script, covered)| covered.then_some(script)).collect())
 }
 

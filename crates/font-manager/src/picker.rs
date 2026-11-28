@@ -83,6 +83,7 @@ craft_ui::words! {
         served: "fontPicker.served" = "Not installed";
         all_scripts: "fontPicker.allScripts" = "All Scripts";
         script_latin: "fontPicker.scriptLatin" = "Latin";
+        script_east_asian: "fontPicker.scriptEastAsian" = "East Asian";
         script_japanese: "fontPicker.scriptJapanese" = "Japanese";
         script_thai: "fontPicker.scriptThai" = "Thai";
         any_kind: "fontPicker.anyKind" = "Any Kind";
@@ -202,14 +203,17 @@ fn chosen_sample<'s, 'a>(texts: &'s [SampleText<'a>], settings: Option<&FontPick
     texts.iter().find(|text| Some(text.key) == key).or_else(|| texts.first())
 }
 
-/// Coverage from the face: Latin, the basic Latin letters in the cmap; Japanese, the OS/2 kana or CJK unicode-range
-/// bits or the JIS code page bit, or a Japanese family name; Thai, U+0E01 and U+0E32 in the cmap. Read lazily like the
-/// class.
+/// Coverage from the face: Latin, the basic Latin letters in the cmap; East Asian, the CJK Windows code pages
+/// (JIS, Simplified/Traditional Chinese, Wansung, Johab) or CJK ideographs/kana/Hangul when no code pages are declared;
+/// Japanese, the OS/2 kana or CJK unicode-range bits or the JIS code page bit, or a Japanese family name; Thai, U+0E01
+/// and U+0E32 in the cmap. Read lazily like the class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum FontScript {
     /// The basic Latin letters.
     Latin,
+    /// Chinese, Japanese or Korean fonts.
+    EastAsian,
     /// Japanese kana and CJK.
     Japanese,
     /// Thai.
@@ -218,7 +222,7 @@ pub enum FontScript {
 
 impl FontScript {
     /// Every script the script row can offer, in order.
-    pub const ALL: [FontScript; 3] = [FontScript::Latin, FontScript::Japanese, FontScript::Thai];
+    pub const ALL: [FontScript; 4] = [FontScript::Latin, FontScript::EastAsian, FontScript::Japanese, FontScript::Thai];
 }
 
 /// A family set the host gives (VectorCraft: Document, Recently Added), one filter toggle each. An `ordered` set that
