@@ -73,6 +73,40 @@ pub struct FreePath {
     pub closed: bool,
 }
 
+/// Where text belongs in a freeform. The default preserves the full-frame behavior of older
+/// documents and shapes created by the editor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FreeformTextRegion {
+    #[default]
+    Frame,
+    /// DrawingML custom geometry without a usable text rectangle. The story stays in the document.
+    Hidden,
+    /// Left, top, right and bottom in the freeform's coordinate space. Edges can extend past the frame.
+    Rect([f32; 4]),
+}
+
+impl FreeformTextRegion {
+    fn is_frame(&self) -> bool {
+        matches!(self, Self::Frame)
+    }
+
+    pub fn sanitized(self, w: f32, h: f32) -> Self {
+        let Self::Rect(edges) = self else { return self };
+        if !edges.iter().all(|edge| edge.is_finite()) {
+            return Self::Hidden;
+        }
+        let [l, t, r, b] = edges.map(|edge| edge.clamp(-MAX_COORD, MAX_COORD));
+        if r <= l || b <= t {
+            Self::Hidden
+        } else if [l, t, r, b] == [0.0, 0.0, w, h] {
+            Self::Frame
+        } else {
+            Self::Rect([l, t, r, b])
+        }
+    }
+}
+
 /// A freeform shape's geometry: paths in a `w` × `h` coordinate space that is stretched over the
 /// shape's frame (DrawingML's `a:path` `w` and `h`). Drawn with the shape's outline colour and
 /// width (and its fill, for closed paths that aren't ink).
@@ -92,18 +126,20 @@ pub struct Freeform {
     /// `None` for ink from files that don't record it (replayed first, in document order).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub order: Option<u32>,
+    #[serde(skip_serializing_if = "FreeformTextRegion::is_frame")]
+    pub text_region: FreeformTextRegion,
 }
 
 impl Default for Freeform {
     fn default() -> Self {
-        Freeform { w: 0.0, h: 0.0, paths: Vec::new(), alpha: 1.0, ink: None, order: None }
+        Freeform { w: 0.0, h: 0.0, paths: Vec::new(), alpha: 1.0, ink: None, order: None, text_region: FreeformTextRegion::Frame }
     }
 }
 
 impl Freeform {
     /// An ink stroke through `pts` (shape-local points, already in the `w` × `h` frame).
     pub fn ink(tool: InkTool, w: f32, h: f32, pts: Vec<[f32; 2]>) -> Freeform {
-        Freeform { w, h, paths: vec![FreePath { pts, closed: false }], alpha: tool.alpha(), ink: Some(tool), order: None }.sanitized()
+        Freeform { w, h, paths: vec![FreePath { pts, closed: false }], alpha: tool.alpha(), ink: Some(tool), ..Freeform::default() }.sanitized()
     }
 
     /// The same geometry with non-finite points dropped, coordinates clamped, the counts capped
@@ -112,6 +148,7 @@ impl Freeform {
         let fin = |v: f32| if v.is_finite() { v.clamp(-MAX_COORD, MAX_COORD) } else { 0.0 };
         self.w = fin(self.w).max(0.0);
         self.h = fin(self.h).max(0.0);
+        self.text_region = self.text_region.sanitized(self.w, self.h);
         self.alpha = if self.alpha.is_finite() { self.alpha.clamp(0.0, 1.0) } else { 1.0 };
         self.paths.truncate(MAX_PATHS);
         for p in &mut self.paths {
@@ -187,7 +224,7 @@ mod tests {
     fn hostile_geometry_is_sanitized() {
         let mut pts = vec![[f32::NAN, 1.0], [2.0, f32::INFINITY], [1.0, 2.0], [1e30, -1e30]];
         pts.extend(std::iter::repeat_n([3.0, 3.0], MAX_POINTS * 2));
-        let f = Freeform { w: f32::NAN, h: -4.0, paths: vec![FreePath { pts, closed: false }], alpha: 7.0, ink: None, order: None }.sanitized();
+        let f = Freeform { w: f32::NAN, h: -4.0, paths: vec![FreePath { pts, closed: false }], alpha: 7.0, ..Freeform::default() }.sanitized();
         assert_eq!((f.w, f.h, f.alpha), (0.0, 0.0, 1.0));
         let p = &f.paths[0].pts;
         assert_eq!(p.len(), MAX_POINTS);

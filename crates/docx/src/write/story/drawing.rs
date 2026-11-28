@@ -388,13 +388,22 @@ pub(super) fn shape_name(kind: ShapeKind, freeform: Option<&craft_wordmodel::fre
 /// A freeform's geometry as DrawingML custom geometry (`a:custGeom`): each path in EMUs of its
 /// own coordinate space (the shape's size when it has none), from `a:moveTo` along `a:lnTo`.
 fn cust_geom(w: &mut W, f: &craft_wordmodel::freeform::Freeform, sw: f32, sh: f32) {
+    use craft_wordmodel::freeform::FreeformTextRegion;
+
     let (pw, ph) = (if f.w > 0.0 { f.w } else { sw.max(0.0) }, if f.h > 0.0 { f.h } else { sh.max(0.0) });
     w.open("a:custGeom", &[]);
     w.empty("a:avLst", &[]);
     w.empty("a:gdLst", &[]);
     w.empty("a:ahLst", &[]);
     w.empty("a:cxnLst", &[]);
-    w.empty("a:rect", &[("l", "0"), ("t", "0"), ("r", "r"), ("b", "b")]);
+    match f.text_region.sanitized(pw, ph) {
+        FreeformTextRegion::Frame => w.empty("a:rect", &[("l", "0"), ("t", "0"), ("r", "r"), ("b", "b")]),
+        FreeformTextRegion::Hidden => {}
+        FreeformTextRegion::Rect([l, t, r, b]) => {
+            let (sx, sy) = (if pw > 0.0 { sw / pw } else { 1.0 }, if ph > 0.0 { sh / ph } else { 1.0 });
+            w.empty("a:rect", &[("l", &emu(l * sx)), ("t", &emu(t * sy)), ("r", &emu(r * sx)), ("b", &emu(b * sy))]);
+        }
+    }
     w.open("a:pathLst", &[]);
     let pt = |w: &mut W, tag: &str, [x, y]: [f32; 2]| {
         w.open(tag, &[]);

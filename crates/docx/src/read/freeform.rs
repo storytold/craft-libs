@@ -1,7 +1,7 @@
 //! Freeform shapes (DrawingML custom geometry, `a:custGeom`; legacy VML paths) and ink strokes
 //! drawn with them.
 
-use craft_wordmodel::freeform::{FreePath, Freeform, InkTool, MAX_PATHS, MAX_POINTS};
+use craft_wordmodel::freeform::{FreePath, Freeform, FreeformTextRegion, InkTool, MAX_PATHS, MAX_POINTS};
 
 use crate::units::int;
 use crate::xml::El;
@@ -16,10 +16,12 @@ const MAX_EMU: f64 = 1.0e12;
 /// coordinate space (EMUs of the shape's size when it gives none). Curves are flattened. `None`
 /// when there is no `a:custGeom` or it has no points.
 pub fn cust_geom(sppr: &El, w: f32, h: f32) -> Option<Freeform> {
-    let cg = sppr.child("a:custGeom")?;
+    let cg = crate::xml::to_craft(sppr.child("a:custGeom")?);
     let (w_emu, h_emu) = (w as f64 * 12_700.0, h as f64 * 12_700.0);
+    let text_region = craft_drawingml::custgeom::read_cust_text_rect(&cg, w_emu, h_emu)
+        .map_or(FreeformTextRegion::Hidden, |edges| FreeformTextRegion::Rect(edges.map(|edge| (edge / 12_700.0) as f32)));
     let mut paths = Vec::new();
-    for p in craft_drawingml::custgeom::read_cust_geom(&crate::xml::to_craft(cg), w_emu, h_emu).into_iter().take(MAX_PATHS) {
+    for p in craft_drawingml::custgeom::read_cust_geom(&cg, w_emu, h_emu).into_iter().take(MAX_PATHS) {
         // Subpaths count too: stop once the shape has as many paths as it may keep.
         if paths.len() >= MAX_PATHS {
             break;
@@ -72,7 +74,7 @@ pub fn cust_geom(sppr: &El, w: f32, h: f32) -> Option<Freeform> {
             paths.push(FreePath { pts: pts.into_iter().take(MAX_POINTS).map(scale).collect(), closed: closed && !fill_none });
         }
     }
-    let f = Freeform { w, h, paths, alpha: 1.0, ink: None, order: None }.sanitized();
+    let f = Freeform { w, h, paths, text_region, ..Freeform::default() }.sanitized();
     (!f.paths.is_empty()).then_some(f)
 }
 
@@ -176,7 +178,7 @@ pub fn vml_path(path: &str, coordsize: Option<&str>, coordorigin: Option<&str>, 
     }
     d.end(false);
     let paths = d.done.into_iter().map(|(pts, closed)| FreePath { pts: pts.into_iter().map(scale).collect(), closed }).collect();
-    let freeform = Freeform { w, h, paths, alpha: 1.0, ink: None, order: None }.sanitized();
+    let freeform = Freeform { w, h, paths, ..Freeform::default() }.sanitized();
     (!freeform.paths.is_empty()).then_some(VmlPath { freeform, no_fill, no_stroke })
 }
 

@@ -2936,6 +2936,45 @@ fn anchored_wsp(name: &str, cx: u32, cy: u32, sppr: &str, style: &str, extra: &s
     )
 }
 
+/// Synthetic geometry authored here for WordCraft #6819.
+#[test]
+fn custom_shape_text_region_stays_hidden_or_guided_after_saving() {
+    use craft_wordmodel::freeform::FreeformTextRegion::{Frame, Hidden, Rect};
+
+    let region = |doc: &Document| {
+        let InlineObject::Shape { freeform: Some(geometry), story: Some(story), .. } = &paras(doc)[0].objects[0] else {
+            panic!("expected a custom shape with its text story");
+        };
+        let Block::Para(p) = &*doc.parts[story].blocks[0] else { panic!("expected text inside the shape") };
+        assert_eq!(p.text, "Shape text");
+        geometry.text_region
+    };
+    for (rectangle, expected, written_left) in [
+        ("", Hidden, None),
+        (r#"<a:rect l="0" t="0" r="r" b="b"/>"#, Frame, Some("0")),
+        (r#"<a:rect l="inset" t="hd4" r="rightEdge" b="b"/>"#, Rect([25.0, 12.5, 75.0, 50.0]), Some("317500")),
+        (r#"<a:rect l="-127000" t="0" r="r" b="b"/>"#, Rect([-10.0, 0.0, 100.0, 50.0]), Some("-127000")),
+        (r#"<a:rect l="unknown" t="0" r="r" b="b"/>"#, Hidden, None),
+    ] {
+        let shape = anchored_wsp(
+            "Shape",
+            1_270_000,
+            635_000,
+            &format!(
+                r#"<a:custGeom><a:avLst><a:gd name="inset" fmla="val wd4"/></a:avLst><a:gdLst><a:gd name="rightEdge" fmla="+- r 0 inset"/></a:gdLst>{rectangle}<a:pathLst><a:path w="100" h="100"><a:moveTo><a:pt x="0" y="100"/></a:moveTo><a:lnTo><a:pt x="50" y="0"/></a:lnTo><a:lnTo><a:pt x="100" y="100"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom>"#,
+            ),
+            "",
+            r#"<wps:cNvSpPr/><wps:txbx><w:txbxContent><w:p><w:r><w:t>Shape text</w:t></w:r></w:p></w:txbxContent></wps:txbx>"#,
+        );
+        let doc = read_body(&format!("<w:p>{shape}</w:p>"));
+        assert_eq!(region(&doc), expected, "{rectangle}");
+        let saved = craft_docx::write(&doc).unwrap();
+        let xml = text(&unzip(&saved), "word/document.xml");
+        assert_eq!(attr_values(&xml, "a:rect", "l").first().map(String::as_str), written_left, "{rectangle}");
+        assert_eq!(region(&craft_docx::read(&saved).unwrap()), expected, "{rectangle}");
+    }
+}
+
 /// wordcraft#2638: Word stacks floating objects by `relativeHeight`, not by their order in the text (a
 /// shape sent to back, then copied with the shape over it, comes first in the text but stays
 /// behind). The order is read and kept on save, and an object made here is saved above them.
