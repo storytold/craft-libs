@@ -146,7 +146,8 @@ application's menu bar, `NativeBar::apply` keeps it in step (a changed `structur
 `windows` key rebuilds only the Windows menu, anything else updates in place; `NativeBar::failed` reports a
 rebuild that failed and left the menus as they were), and the `Handler` set with
 `NativeBar::set_handler` receives each chosen item's `id`, the modifiers held and whether a key press chose it.
-`install_app_menu` installs a minimal app menu whose Quit reports to a handler. Off macOS (and without the
+`install_app_menu` installs a minimal app menu whose Quit reports to a handler, with English titles;
+`install_app_menu_with` takes the titles as an `AppMenu`. Off macOS (and without the
 feature) every call does nothing, so callers need no platform check. craft-menu lowers its menu model to
 this description.
 

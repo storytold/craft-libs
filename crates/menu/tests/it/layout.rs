@@ -1,6 +1,6 @@
 //! The Mac layout, its shortcut clashes, and the keys that decide rebuild against update in place.
 
-use craft_menu::{Builtin, Document, Item, ItemKind, LayoutOptions, MenuBar, MenuRole, Node, mac_layout, structure_key, window_key};
+use craft_menu::{Builtin, Document, Item, ItemKind, LayoutOptions, MenuBar, MenuRole, Node, mac, mac_layout, structure_key, window_key};
 use craft_ui::testing::trial;
 
 use crate::sample::{chord, cmd, ids, sample, titled};
@@ -39,6 +39,30 @@ fn the_app_menu_is_laid_out_the_mac_way() {
         ["<Minimize>", "<Zoom>", "---", "panel.layers", "---", "<BringAllToFront>", "---", "doc.0"],
         "the open documents follow Bring All to Front"
     );
+}
+
+/// The minimal app menu names the app by default and takes the app's translations through the keys
+/// the Mac layout uses for the same items.
+#[trial]
+fn the_minimal_app_menu_takes_the_apps_translations() {
+    let english = mac::app_menu(&LayoutOptions::new("Sample"));
+    assert_eq!(english.title, "Sample");
+    for label in [&english.about, &english.hide, &english.quit] {
+        assert!(label.contains("Sample"), "{label:?} names the app");
+    }
+
+    let german = |s: &'static str| match s {
+        "About {app}" => "Über {app}".to_string(),
+        "Services" => "Dienste".into(),
+        "Hide {app}" => "{app} ausblenden".into(),
+        "Hide Others" => "Andere ausblenden".into(),
+        "Show All" => "Alle einblenden".into(),
+        "Quit {app}" => "{app} beenden".into(),
+        other => panic!("no app menu label {other:?}"),
+    };
+    let m = mac::app_menu(&LayoutOptions::new("Sample").label(&german));
+    let got: [&str; 7] = [&m.title, &m.about, &m.services, &m.hide, &m.hide_others, &m.show_all, &m.quit];
+    assert_eq!(got, ["Sample", "Über Sample", "Dienste", "Sample ausblenden", "Andere ausblenden", "Alle einblenden", "Sample beenden"]);
 }
 
 /// App commands keep ⌘H, ⌘M, ⌘W and ⌘,: the system items give way, and each clash is reported.

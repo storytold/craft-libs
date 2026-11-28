@@ -99,7 +99,7 @@ impl<'a> LayoutOptions<'a> {
         self
     }
 
-    fn text(&self, english: &'static str) -> String {
+    pub(crate) fn text(&self, english: &'static str) -> String {
         (self.label)(english).replace("{app}", self.app_name)
     }
 

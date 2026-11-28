@@ -39,6 +39,7 @@ use craft_ui::menu::Alternate;
 use craft_ui::runtime::{frame, motion};
 use craft_window::native_menu as native;
 
+use crate::LayoutOptions;
 use crate::driver::{Attempt, Backend, Dispatch, Event, NativeMenu, RebuildRetry, native_ok};
 use crate::model::{Builtin, Item, ItemKind, Menu, MenuBar, MenuRole, Node, Standard, label_or_system, native_id, structure_key, window_key};
 
@@ -95,7 +96,8 @@ pub fn install_with(ctx: &egui::Context, bar: &MenuBar, options: MacOptions) -> 
 
 /// Replace winit's default macOS app menu with a minimal one whose Quit (⌘Q) asks the app first,
 /// for an app without a [`MenuBar`] of its own: About, Services, Hide, Hide Others, Show All and
-/// Quit, labelled in English with `app_name` ("Quit WordCraft").
+/// Quit, labeled in English with `app_name` ("Quit WordCraft"). [`install_app_menu_with`] takes
+/// the app's translations.
 ///
 /// winit's Quit ends the process without asking, so unsaved work is lost. This Quit has the id
 /// [`craft_quit::QUIT_MENU_ID`] and runs [`craft_quit::on_menu_event`]: it asks the root window to
@@ -106,13 +108,36 @@ pub fn install_with(ctx: &egui::Context, bar: &MenuBar, options: MacOptions) -> 
 /// platforms without an application menu bar. On error winit's menu stays: the app still runs, but
 /// ⌘Q quits without asking.
 pub fn install_app_menu(ctx: &egui::Context, app_name: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    install_app_menu_with(ctx, &LayoutOptions::new(app_name))
+}
+
+/// [`install_app_menu`] with the app's translations: the titles [`app_menu`] gives.
+pub fn install_app_menu_with(ctx: &egui::Context, options: &LayoutOptions) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ctx = ctx.clone();
     let handler = Arc::new(move |id: &str, _: native::Chosen| {
         craft_quit::on_menu_event(&ctx, id);
         // Choosing an item is not window input, so nothing else wakes egui.
         ctx.request_repaint();
     });
-    native::install_app_menu(app_name, craft_quit::QUIT_MENU_ID, handler)
+    native::install_app_menu_with(&app_menu(options), craft_quit::QUIT_MENU_ID, handler)
+}
+
+/// The titles of the minimal app menu ([`install_app_menu_with`]). [`LayoutOptions::label`] names
+/// the items through the keys [`crate::mac_layout`] uses for its app menu: `About {app}`,
+/// `Services`, `Hide {app}`, `Hide Others`, `Show All` and `Quit {app}`, with `{app}` replaced by
+/// [`LayoutOptions::app_name`], which also titles the menu. Services, Hide Others and Show All take
+/// the system's localized titles when the app supplies no translation, as in [`crate::mac_layout`].
+/// [`LayoutOptions::keys`] is not used.
+pub fn app_menu(options: &LayoutOptions) -> native::AppMenu {
+    let mut menu = native::AppMenu::english(options.app_name);
+    let system = |english: &'static str| label_or_system(&options.text(english), english, native::system_title);
+    menu.about = options.text("About {app}");
+    menu.services = system(Standard::Services.english());
+    menu.hide = options.text("Hide {app}");
+    menu.hide_others = system("Hide Others");
+    menu.show_all = system(Standard::ShowAll.english());
+    menu.quit = options.text("Quit {app}");
+    menu
 }
 
 /// What each native item runs, by native id, for the handler.

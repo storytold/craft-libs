@@ -30,7 +30,7 @@ use objc2::{MainThreadMarker, sel};
 use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSEventType};
 use objc2_foundation::{NSBundle, NSLocale, NSObjectProtocol, NSString};
 
-use super::{Bar, Chosen, Handler, Held, Item, Menu, MenuKind, Node, Options, Platform, Shortcut, Wake};
+use super::{AppMenu, Bar, Chosen, Handler, Held, Item, Menu, MenuKind, Node, Options, Platform, Shortcut, Wake};
 
 /// Set by [`Installed::install`]: there is one full menu bar per process.
 static INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -118,22 +118,27 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 ///
 /// Does nothing when this menu or a full menu bar ([`Installed::install`]) is already installed.
 pub fn install_app_menu(app_name: &str, quit_id: &str, handler: Handler) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    install_app_menu_with(&AppMenu::english(app_name), quit_id, handler)
+}
+
+/// [`install_app_menu`] with the titles `menu`, for an app that translates them.
+pub fn install_app_menu_with(menu: &AppMenu, quit_id: &str, handler: Handler) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if MainThreadMarker::new().is_none() {
         return Err("the application menu is installed on the main thread".into());
     }
     if INSTALLED.load(Ordering::SeqCst) || APP_MENU.with_borrow(Option::is_some) {
         return Ok(());
     }
-    let quit = MenuItem::with_id(quit_id, format!("Quit {app_name}"), true, Some(Accelerator::new(Modifiers::META, Code::KeyQ)));
-    let app_menu = Submenu::new(app_name, true);
+    let quit = MenuItem::with_id(quit_id, escape(&menu.quit), true, Some(Accelerator::new(Modifiers::META, Code::KeyQ)));
+    let app_menu = Submenu::new(escape(&menu.title), true);
     app_menu.append_items(&[
-        &PredefinedMenuItem::about(Some(&format!("About {app_name}")), None),
+        &PredefinedMenuItem::about(Some(&escape(&menu.about)), None),
         &PredefinedMenuItem::separator(),
-        &PredefinedMenuItem::services(None),
+        &PredefinedMenuItem::services(Some(&escape(&menu.services))),
         &PredefinedMenuItem::separator(),
-        &PredefinedMenuItem::hide(Some(&format!("Hide {app_name}"))),
-        &PredefinedMenuItem::hide_others(None),
-        &PredefinedMenuItem::show_all(None),
+        &PredefinedMenuItem::hide(Some(&escape(&menu.hide))),
+        &PredefinedMenuItem::hide_others(Some(&escape(&menu.hide_others))),
+        &PredefinedMenuItem::show_all(Some(&escape(&menu.show_all))),
         &PredefinedMenuItem::separator(),
         &quit,
     ])?;
@@ -407,6 +412,7 @@ fn append(entries: &mut Entries, sub: &Submenu, nodes: &[Node]) -> muda::Result<
                 sub.append(&s)?;
             }
             Node::Platform { kind, title } => {
+                let title = escape(title);
                 let text = Some(title.as_str());
                 let p = match kind {
                     Platform::Services => PredefinedMenuItem::services(text),

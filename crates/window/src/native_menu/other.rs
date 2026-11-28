@@ -2,7 +2,7 @@
 
 use std::convert::Infallible;
 
-use super::{Bar, Handler, Options, Wake};
+use super::{AppMenu, Bar, Handler, Options, Wake};
 
 /// No menu bar here, so no menu is ever open.
 pub(super) fn menu_tracking() -> bool {
@@ -49,6 +49,11 @@ impl Installed {
 
 /// A minimal application menu whose Quit asks the app first. Does nothing here.
 pub fn install_app_menu(_app_name: &str, _quit_id: &str, _handler: Handler) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    Ok(())
+}
+
+/// [`install_app_menu`] with the titles `menu`. Does nothing here.
+pub fn install_app_menu_with(_menu: &AppMenu, _quit_id: &str, _handler: Handler) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 

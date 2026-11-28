@@ -208,6 +208,15 @@ Hide Others, Show All and Quit, where Quit asks the app first.
 craft_menu::mac::install_app_menu(&cc.egui_ctx, "WordCraft")?;
 ```
 
+Its labels are English. `mac::install_app_menu_with` takes a `LayoutOptions` instead, and its
+`label` translates `About {app}`, `Services`, `Hide {app}`, `Hide Others`, `Show All` and
+`Quit {app}`, the keys `mac_layout` uses for the same items.
+
+```rust
+#[cfg(target_os = "macos")]
+craft_menu::mac::install_app_menu_with(&cc.egui_ctx, &LayoutOptions::new("WordCraft").label(&translate))?;
+```
+
 craft-menu owns the process's menu event handler (muda keeps the first one set, in craft-window), so the
 crate sets it once and both `mac::install` and `mac::install_app_menu` use it; a later
 `mac::install` replaces the minimal app menu, and a second `mac::install` returns `None`.

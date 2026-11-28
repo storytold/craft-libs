@@ -33,7 +33,7 @@ mod other;
 #[cfg(not(all(target_os = "macos", feature = "appkit")))]
 use other as imp;
 
-pub use imp::{hide_app, hide_other_apps, install_app_menu, system_title};
+pub use imp::{hide_app, hide_other_apps, install_app_menu, install_app_menu_with, system_title};
 
 /// Called when an item is chosen: the item's `id` and how it was chosen ([`Chosen`]: key press or
 /// click, and the modifiers held either way). The platform calls it between frames from the event
@@ -166,7 +166,7 @@ pub enum Node {
     Platform {
         /// Which one.
         kind: Platform,
-        /// The title.
+        /// The title. `&` is literal.
         title: String,
     },
     /// An item the app handles.
@@ -251,6 +251,42 @@ impl Options {
     pub fn window_list(mut self, on: bool) -> Options {
         self.window_list = on;
         self
+    }
+}
+
+/// The titles of the minimal application menu ([`install_app_menu_with`]). `&` is literal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AppMenu {
+    /// The menu's title.
+    pub title: String,
+    /// About.
+    pub about: String,
+    /// The Services submenu.
+    pub services: String,
+    /// Hide.
+    pub hide: String,
+    /// Hide Others.
+    pub hide_others: String,
+    /// Show All.
+    pub show_all: String,
+    /// Quit.
+    pub quit: String,
+}
+
+impl AppMenu {
+    /// English titles with `app_name`: the menu is titled `app_name`, and About, Hide and Quit
+    /// name it ("Quit WordCraft").
+    pub fn english(app_name: &str) -> AppMenu {
+        AppMenu {
+            title: app_name.to_owned(),
+            about: format!("About {app_name}"),
+            services: "Services".to_owned(),
+            hide: format!("Hide {app_name}"),
+            hide_others: "Hide Others".to_owned(),
+            show_all: "Show All".to_owned(),
+            quit: format!("Quit {app_name}"),
+        }
     }
 }
 
