@@ -332,7 +332,7 @@ struct GridResult {
 /// grid sizes its columns from the room it is given.
 fn grid<K>(ui: &mut Ui, label: &Label, items: &[GalleryItem<'_, K>], current: Option<usize>, aspect: ThumbAspect, size: ThumbSize) -> GridResult {
     let selection = Selection::new(current.into_iter().collect(), current, current);
-    let grid = TileGrid::<usize>::new(label.clone()).select(SelectMode::Single).selection(Bind::given(selection));
+    let grid = TileGrid::<usize>::new(label.clone()).thumb_size(size).select(SelectMode::Single).selection(Bind::given(selection));
     let out = grid.show_items(ui, &Indexes(items.len()), &mut |key, _| match items.get(*key) {
         Some(item) => Tile::new(item.label.clone()).picture(aspect, item.face.picture(aspect, size)),
         None => Tile::new(Label::default()),
