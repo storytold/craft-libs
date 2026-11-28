@@ -493,8 +493,9 @@ pub struct TransformBox<'a> {
     #[prop]
     round_handles: bool,
     /// The side of the corner and side handles in points, for a host with a handle size preference; `None` uses the
-    /// theme's (`size.handle.md`). A handle's reach grows with a larger side and stays at least the theme's.
-    #[prop]
+    /// theme's (`size.handle.md`), as does a side that is zero, negative or not finite. A handle's reach grows with a
+    /// larger side and stays at least the theme's.
+    #[prop(quantity = "points, from the host's handle size preference")]
     handle_side: Option<f32>,
     /// Draws the box as a live line's controls (the Line tool's live line as the whole selection). Only the two ends
     /// take a press and the keys, each as the box handle it points to ([`LineLook`]), so an end drag scales the box as
@@ -585,14 +586,19 @@ impl<'a> TransformBox<'a> {
         self.color.map_or(StrokeColor::from(theme), StrokeColor::from)
     }
 
+    /// The host's handle side when it is a finite side above zero; `None` for none or any other value.
+    fn host_handle_side(&self) -> Option<f32> {
+        self.handle_side.filter(|side| side.is_finite() && *side > 0.0)
+    }
+
     /// The side of a corner or side handle: the host's, else the theme's.
     fn side_of_handles(&self, style: &TransformBoxStyle) -> f32 {
-        self.handle_side.unwrap_or(style.handle.side)
+        self.host_handle_side().unwrap_or(style.handle.side)
     }
 
     /// The hit radius of a corner or side handle: the theme's, or more for a host's larger handle.
     fn reach_of_handles(&self, style: &TransformBoxStyle) -> f32 {
-        self.handle_side.map_or(style.handle_reach, |side| style.handle_reach.max(side * HANDLE_REACH_IN_HANDLES))
+        self.host_handle_side().map_or(style.handle_reach, |side| style.handle_reach.max(side * HANDLE_REACH_IN_HANDLES))
     }
 
     /// Whether the middle of the box is a move part: the reference point is hidden, so it does not take that place.
@@ -842,7 +848,7 @@ impl<'a> TransformBox<'a> {
         let suspend = suspend_key(snap.as_ref());
         for (reference, part) in self.pointer_parts() {
             let Some(result) = cx.part_if_declared(reference) else { continue };
-            let (press, hover) = (result.press, result.hover_pos.filter(|_| result.hovered));
+            let (press, hover) = (result.press, cx.hover_pos(reference));
             let mods = self.mods.unwrap_or(press.mods);
             let acting = drag_mods(mods, suspend);
             if let Some(pos) = hover

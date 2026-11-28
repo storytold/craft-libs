@@ -467,6 +467,10 @@ not apply to it; damage is skipped with the same budget and warnings as `open`. 
 in `streams()`, where a later link of a chained file appears as a new stream when its pages are
 reached. `OggFile::read_packet_into` reads a packet into a reused buffer.
 `OpusTiming` gives each Opus packet's start, the pre-skip and the end trimming of the final page.
+`VorbisTiming` gives each Vorbis packet's start and duration (from the block sizes of the modes that
+`VorbisModes` reads from the setup header), the samples to discard before a negative starting
+position, the offset of a stream that starts after 0, and the end trimming of the final page
+(Vorbis I §4.3.8 and §A.2).
 
 The muxer side is `PageWriter`, from FilmCraft's `filmcraft-oggmux` by @JordyUSA
 (storytold/filmcraft#4481): it laces the packets of one logical stream into pages (continued
@@ -625,9 +629,10 @@ let au: Vec<u8> = file.read_unit(&bytes, v, 0)?; // the first access unit
 - **Program streams**: MPEG-2 and MPEG-1 packs, system headers, the program stream map (stream
   types for elementary stream ids), padding, private stream 2 (DVD navigation) skipped, private
   stream 1 split by sub-stream id. Garbage resynchronises on the next pack or PES start code.
-- **Streams**: MPEG-1/2 video, H.264, HEVC, MPEG audio, AAC (ADTS, LATM/LOAS), AC-3, E-AC-3,
-  DTS, TrueHD, Blu-ray LPCM, DVD LPCM (format from the sub-stream header), PGS / DVB / teletext
-  subtitles; ISO 639 language from the PMT.
+- **Streams**: MPEG-1/2 video, H.264, HEVC, MPEG-4 Part 2 (stream type 0x10), AV1 and Opus
+  (stream type 0x06 with the `AV01` or `Opus` registration descriptor), MPEG audio, AAC (ADTS,
+  LATM/LOAS), AC-3, E-AC-3, DTS, TrueHD, Blu-ray LPCM, DVD LPCM (format from the sub-stream
+  header), PGS / DVB / teletext subtitles; ISO 639 language from the PMT.
 - **Access units**, found while the file is scanned (one pass, streaming; only a few bytes of
   each stream are buffered):
   - MPEG-1/2 video: a coded frame — a frame picture, or two field pictures (paired by
@@ -639,6 +644,17 @@ let au: Vec<u8> = file.read_unit(&bytes, v, 0)?; // the first access unit
   - Audio: one frame per unit from the frame headers (sync re-hunted after garbage; a header
     found while hunting is confirmed by the next one); a PTS belongs to the first frame starting
     in the PES.
+  - MPEG-4 Part 2: PES packets with a timestamp, as for H.264; the first VOP's coding type
+    gives the key (I-VOP) and disposable (B-VOP) flags.
+  - Opus: one access unit per unit, cut by its control header's payload size; `read_unit`
+    returns the Opus packet without the header, and the start and end trims are in
+    `Stream::opus` (`OpusConfig::trims`). An access unit without a control header runs to the
+    end of its PES packet; one whose size runs past its PES packet is dropped and counted in
+    `skipped_bytes`.
+  - AV1: one PES packet per unit, a key unit when the TS packet that starts it sets the random
+    access indicator. `read_unit` returns the OBUs in the low overhead bitstream format (start
+    codes, emulation prevention bytes and temporal delimiters removed, `obu_size` added where it
+    is missing), as Matroska and ISOBMFF store them.
   - LPCM and everything else: one PES packet per unit.
 - **Timestamps**: 33-bit PTS/DTS unwrapped across the wrap (and back, for B pictures shown
   before a wrap that came earlier); PCR / SCR range.
@@ -652,8 +668,12 @@ MPEG audio or AC-3 frames in chunks that do not follow them (AVI) find the frame
 `Codec::codec_id()` and `Stream::codec_params()` give the crate-wide `CodecId` / `CodecParams`.
 MPEG-1 video reports `Mpeg2Video`; MPEG audio reports `Mp2` whatever its layer (the layer is in
 each frame header: `frame_info(..).variant`); ADTS and LATM AAC both report `Aac`; DTS, TrueHD and
-subtitles have no identifier (`Unknown`). The streams carry their configuration in band, so
-`extradata` is empty; DVD LPCM fills `sample_rate`, `channels` and `pcm`.
+subtitles have no identifier (`Unknown`). Opus fills `sample_rate` (48 kHz), `channels` and an
+`OpusHead` header in `extradata`, built from the PMT's Opus audio descriptor (`Stream::opus`) with
+the start trims of the units that open the stream as its pre-skip. AV1 puts the first four bytes of an `av1C` record,
+from the PMT's AV1 video descriptor (`Stream::av1c`), in `extradata`. The other streams carry
+their configuration in band, so `extradata` is empty; DVD LPCM fills `sample_rate`, `channels`
+and `pcm`.
 
 Limits, each with a test: 2²³ access units per stream (the rest are not indexed, with a warning),
 128 MiB per unit read (`MAX_UNIT_BYTES`), a PES header given up after 1024 bytes, 16 stuffing bytes
@@ -670,6 +690,9 @@ at least 8 bytes.
 | DVD-Video private stream 1 sub-stream layout (AC-3 / DTS 0x80-0x8F with a 3-byte header, LPCM 0xA0-0xAF with a 6-byte header, sub-pictures 0x20-0x3F) | public descriptions | `.vob` |
 | ETSI EN 300 468 (descriptors 0x56, 0x59, 0x6A, 0x7A, 0x7B), ATSC A/52 Annex A (AC-3 in TS) | — | identifying private PES streams |
 | ISO/IEC 11172-3, 13818-3 (frame headers), ISO/IEC 13818-7 (ADTS), 14496-3 (LOAS), ATSC A/52 (syncinfo, E-AC-3 frmsiz) | — | audio frame lengths for splitting |
+| ISO/IEC 14496-2 | any edition | MPEG-4 Part 2 VOP coding types |
+| Opus Interactive Audio Codec Transport Multiplexing Standard | draft TS V0.1.3 (2015-10) | Opus control headers, the Opus audio descriptor and its channel configurations; RFC 7845 for the `OpusHead` header and the channel mapping families |
+| Carriage of AV1 in MPEG-2 TS (Alliance for Open Media) | working draft | the AV1 video descriptor, start codes and emulation prevention; the AV1 Bitstream & Decoding Process Specification for OBU headers and `obu_size` |
 
 ### Gaps
 
@@ -688,9 +711,10 @@ Differences from `filmcraft-mpegts`: `ByteSource` is `craft_media::ByteSource`;
 Tests: a small TS muxer and PS writer (every access unit reads back byte-identical with its PTS,
 key and disposable flags), 33-bit unwrap, truncation and mutation, streams of every codec filled
 with random start codes and sync words, damaged PSI sections with valid CRCs, and the frame-header
-helpers on arbitrary bytes. `tests/oracle_mpegts.rs` compares ten ffmpeg-made files (MPEG-2, H.264
-and HEVC video; MP2, ADTS and LATM AAC, AC-3, E-AC-3, Blu-ray and DVD LPCM; TS, M2TS, VOB and
-MPEG-1 system streams) with ffprobe's packets: unit counts, sizes, timestamps and key flags.
+helpers on arbitrary bytes. `tests/oracle_mpegts.rs` compares eleven ffmpeg-made files (MPEG-2,
+H.264, HEVC and MPEG-4 Part 2 video; MP2, ADTS and LATM AAC, AC-3, E-AC-3, Opus, Blu-ray and DVD
+LPCM; TS, M2TS, VOB and MPEG-1 system streams) with ffprobe's packets: unit counts, sizes,
+timestamps and key flags.
 
 ### Transport stream writer
 
@@ -783,9 +807,7 @@ the first stream) every 40 ms and 700 ms behind the DTS, the PAT and PMT every 1
 keyframes, and writes of 7 packets.
 
 Gaps: one program per stream; no null packets (no constant bit rate); not written: LPCM (H.222.0
-defines no LPCM stream type for transport streams), AAC in LATM, DTS, subtitles and teletext. The
-demuxer reads Opus and AV1 streams as `Unknown(6)` and MPEG-4 Part 2 as `Unknown(0x10)`, one unit
-per PES packet.
+defines no LPCM stream type for transport streams), AAC in LATM, DTS, subtitles and teletext.
 
 Specifications: the ones above, and Opus Interactive Audio Codec Transport Multiplexing Standard,
 draft TS V0.1.3 (2015-10), for the Opus control header and descriptors; RFC 6716 for Opus packet
@@ -796,7 +818,8 @@ descriptors.
 
 Tests: `tests/mpegts_mux_readback.rs` reads the output back with the demuxer: streams, codecs,
 languages, every frame's bytes, PTS and DTS, keyframes and the PCR range, with no continuity or
-CRC warnings, including AV1 units, Opus with an explicit mapping and a start trim, both sides of a
+CRC warnings, including AV1 units as OBUs with their `av1C` fields, Opus packets with fixed
+and explicit channel configurations and their start and end trims, MPEG-4 Part 2, both sides of a
 discontinuity, and the output that follows an I/O error. `tests/mpegts_mux_fuzz.rs` muxes random
 programs and timelines with idle gaps and output swaps and reads them back, and feeds random bytes
 to every codec. Unit tests check every PES header's fixed bits, the sections' CRC, and that every

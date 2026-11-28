@@ -122,7 +122,8 @@ fn strip_lead(kind: TabKind, tokens: &crate::style::UiTokens) -> f32 {
     if kind == TabKind::Ribbon { tokens.space.pad.regular } else { 0.0 }
 }
 
-/// The look of a strip: the focus ring of its end items; its row is as high as its tabs.
+/// The look of a strip: the focus ring of its end items and of the tab the keyboard is on; its row is as high as its
+/// tabs.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct TabStripStyle {
@@ -1071,6 +1072,11 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         // Shrinking document tabs stand apart by the inline gap; the other kinds and looks touch.
         let tab_gap = if self.kind.shrinks_in(look) { cx.tokens.space.gap.inline } else { 0.0 };
         StripLayout::new(count, Vec2::new(width, cx.tokens.size.bar.tab), tab_gap, fitting, self.report.clone(), cx.frame_ctx().clone())
+    }
+
+    /// The tab the keyboard is on shows the focus ring, not the whole strip.
+    fn rings_lead(&self) -> bool {
+        true
     }
 
     /// Every tab takes the strip's kind, panel look and size.

@@ -68,6 +68,7 @@ craft_ui::words! {
         not_assigned: "keyboardShortcuts.notAssigned" = "Not assigned";
         label_scope_both_work: template "keyboardShortcuts.labelScopeBothWork" = "{label} ({scope}, both work)";
         add_a_shortcut_to_label: template "keyboardShortcuts.addAShortcutToLabel" = "Add a shortcut to {label}";
+        replace_chord_for_label: template "keyboardShortcuts.replaceChordForLabel" = "Replace {chord} for {label}";
         remove_chord_from_label: template "keyboardShortcuts.removeChordFromLabel" = "Remove {chord} from {label}";
         restore_the_default_for_label: template "keyboardShortcuts.restoreTheDefaultForLabel" = "Restore the default for {label}";
         label_chord: template "keyboardShortcuts.labelChord" = "{label}: {chord}";
@@ -122,6 +123,8 @@ craft_ui::words! {
         keep_both: "keyboardShortcuts.keepBoth" = "Keep Both";
         go_to_conflict: "keyboardShortcuts.goToConflict" = "Go to Conflict";
         undo_changes: "keyboardShortcuts.undoChanges" = "Undo Changes";
+        replace_old_for_command_with_chord_used_by_label: template "keyboardShortcuts.replaceOldForCommandWithChordUsedByLabel" = "Replace {old} for {command} with {chord}, which is used by {label}";
+        the_shortcuts_changed_try_replacing_again: "keyboardShortcuts.theShortcutsChangedTryReplacingAgain" = "The shortcuts changed. Try the replacement again.";
         dismiss: "keyboardShortcuts.dismiss" = "Dismiss";
         // Saved shortcuts that could not be used.
         key_no_command_has_this_name: template "keyboardShortcuts.keyNoCommandHasThisName" = "{key}: no command has this name";

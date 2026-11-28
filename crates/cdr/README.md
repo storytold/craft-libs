@@ -107,12 +107,17 @@ corners, not stretched ones. Hidden layers, groups and shapes, guide and grid la
 and master layers are left out; opacity, blend modes, fill rules and locked states are not
 written, desktop layers are written as drawing layers, and a spot color with no name opens as a
 process color; every use of a named spot color takes the look of its use at the strongest tint
-among the uses whose look is known.
+among the uses whose look is known. Each color entry holds the color twice: as the property list
+`read_cmx` reads, and as the model and value fields that other readers, such as libcdr, read. In
+those fields a spot color is written as its look at its tint, and the registration color as 100
+percent cyan, magenta, yellow and black.
 
 `write_cmx` returns an error, and writes nothing, for a coordinate, page side or outline width
 past the 32-bit range, a negative or NaN outline width, a page side that rounds to 0, more than
 65,535 pages, layers on a page or different colors, pens, line types, dash patterns or outlines, a
-dash pattern of more than 32,765 lengths, groups nested deeper than the limits allow, more chunks,
+dash pattern of more than 32,765 lengths, groups nested deeper than the limits allow, a depth limit
+of 0 (at which `read_cmx` leaves out the index list), more than 65,535 groups directly inside one
+group, more chunks,
 objects, coordinates or dashes than a read within the limits takes, a file longer than their input
 size, and a chunk past its 32-bit size. Otherwise the returned `Written` reports paths split or cut into several curves, dashes
 rounded to whole outline widths, nonzero fills that may fill differently, names that open
@@ -120,12 +125,14 @@ shortened, spot colors at a tint too low to keep their look, with no name or wit
 (written black), uses of one ink with different looks, and what was left out or written opaque,
 unclipped or unlocked.
 
-The header's index offsets, the index chunks (`LIST indx`), the instruction counts and offsets
-inside page, layer and group records, and the bounds inside layer and group records are not
-written, so a reader must find the chunks by their ids and walk the instructions in order, as
-`read_cmx` does. The record of a page with a size holds the edges of its curves, or of the page
-when it has none. `PROVENANCE.md`'s "Written
-fields" table lists every field the `.cmx` writer sets.
+The file holds an index, so that a reader that finds the tables and pages through it, rather than
+by their chunk ids, opens it: the header gives where the master index starts, the index list
+(`LIST indx`) gives where each table, page, page reference list and layer starts, and the page,
+layer and group records give their instruction counts. A page's record also gives where its
+end-page instruction starts, and a group's record gives where the instruction after its end-group
+instruction starts and the edges of its curves. The record of a page with a size holds the edges of its curves, or
+of the page when it has none. The header's bounds and instruction count are not written.
+`PROVENANCE.md`'s "Written fields" table lists every field the `.cmx` writer sets.
 
 ## Writing
 

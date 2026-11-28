@@ -197,6 +197,98 @@ fn a_channel_step_keeps_the_other_channels_unrounded() {
     }
 }
 
+/// A Color panel whose host supplies authoritative native CMYK components.
+fn native_cmyk_panel(picked: PickedColor) -> (Fixture, Rc<RefCell<PickedColor>>, Edits) {
+    let host = Rc::new(RefCell::new(picked));
+    let edits: Edits = Default::default();
+    let (color, output) = (host.clone(), edits.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let picked = *color.borrow();
+        let mut state = ColorPanelState { mode: ColorPanelMode::CmykSliders, ..Default::default() };
+        let shown = ColorPanel::new(Bind::bound(&mut state), [picked.color; 2])
+            .layout(ColorPanelLayout::FillStroke)
+            .edited(Some(picked))
+            .shown(ColorPanelShown::Mode(ColorPanelMode::CmykSliders))
+            .show(ui);
+        for (_, event) in &shown.edits {
+            if let Some(picked) = event.landed() {
+                *color.borrow_mut() = *picked;
+            }
+        }
+        output.borrow_mut().extend(shown.edits);
+    });
+    fixture.room(COLOR_ROOM).settle();
+    (fixture, host, edits)
+}
+
+fn step_cyan(fixture: &mut Fixture) {
+    let cyan = fixture.by_role(Role::SLIDER).into_iter().next().expect("the Cyan slider");
+    fixture.access(AccessActionKind::Focus, &cyan).settle();
+    fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+}
+
+fn last_native_pick(edits: &Edits) -> PickedColor {
+    edits.borrow().iter().rev().find_map(|(_, event)| event.value().copied()).expect("the channel edit")
+}
+
+/// A host may render its native CMYK through a different working-space transform. Editing one ink still keeps
+/// the other explicit components, rather than deriving them from the rendered RGB.
+#[trial]
+fn a_channel_edit_keeps_native_host_components_with_a_different_transform() {
+    let native = craft_theme::ModelValues::new("cmyk", &[12.345, 45.678, 78.912, 23.456]);
+    let picked = PickedColor::in_model(Srgba::rgb(0.2, 0.4, 0.6), native);
+    let (mut fixture, _, edits) = native_cmyk_panel(picked);
+    step_cyan(&mut fixture);
+    let after = last_native_pick(&edits).model.expect("native component values");
+    assert!(after.values[0] > native.values[0], "Cyan changed");
+    assert_eq!(&after.values[1..4], &native.values[1..4], "the other native inks stay exact");
+}
+
+/// Fresh host components win over remembered components even when both still give the same display pixel.
+#[trial]
+fn fresh_host_components_replace_the_panels_remembered_components() {
+    let model = craft_color_ui::CmykModel::new(craft_cms::convert::CmykConverter::coated().clone());
+    let native = craft_theme::ModelValues::new("cmyk", &[12.345, 45.678, 78.912, 23.456]);
+    let picked = PickedColor::in_model(model.to_srgb(&native.values), native);
+    let (mut fixture, host, edits) = native_cmyk_panel(picked);
+    step_cyan(&mut fixture);
+    let kept = last_native_pick(&edits);
+    let mut fresh = kept.model.expect("remembered native values");
+    fresh.values[1] += 0.001;
+    assert!(model.to_srgb(&fresh.values).same_rgb8(kept.color), "the host update keeps the display pixel");
+    *host.borrow_mut() = PickedColor::in_model(kept.color, fresh);
+    fixture.settle();
+    step_cyan(&mut fixture);
+    let after = last_native_pick(&edits).model.expect("the next channel edit");
+    assert!(after.values[0] > fresh.values[0], "Cyan changed again");
+    assert_eq!(&after.values[1..4], &fresh.values[1..4], "fresh host inks replace the older cache");
+}
+
+/// Cancel restores both the native inks and the host's display colour, even after the host applies live updates.
+#[trial]
+fn a_canceled_native_channel_drag_restores_the_hosts_original_color() {
+    let native = craft_theme::ModelValues::new("cmyk", &[12.345, 45.678, 78.912, 23.456]);
+    let picked = PickedColor::in_model(Srgba::new(0.2, 0.4, 0.6, 0.7), native);
+    let (mut fixture, host, edits) = native_cmyk_panel(picked);
+    let cyan = fixture.by_role(Role::SLIDER).into_iter().next().expect("the Cyan slider");
+    fixture.drag_hold_at(cyan.center(), Vec2::new(25.0, 0.0)).settle();
+    assert_ne!(*host.borrow(), picked, "the host applies the live channel preview");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    let canceled = edits
+        .borrow()
+        .iter()
+        .rev()
+        .find_map(|(_, event)| match event {
+            EditEvent::Cancel { before: Some(Mixed::Same(before)), .. } => Some(*before),
+            _ => None,
+        })
+        .expect("the channel drag cancels");
+    assert_eq!(canceled, picked, "Cancel carries the host's exact opening colour and model");
+    assert_eq!(*host.borrow(), picked, "the host restores the complete opening colour");
+    fixture.release_at(cyan.center() + Vec2::new(25.0, 0.0)).settle();
+    assert_eq!(*host.borrow(), picked, "release after Cancel cannot reapply the preview");
+}
+
 /// The rect of the FillStroke spectrum in Web Color for a foreground of `color`.
 fn spectrum_rect(color: Srgba) -> egui::Rect {
     let mut fixture = Fixture::new(move |ui| {
@@ -216,6 +308,24 @@ fn spectrum_rect(color: Srgba) -> egui::Rect {
 fn a_fill_stroke_panels_warnings_keep_their_room_so_the_spectrum_holds_still() {
     let (clean, warned) = (spectrum_rect(Srgba::rgb(0.0, 0.0, 0.0)), spectrum_rect(Srgba::rgb(0.07, 0.85, 0.58)));
     assert_eq!(clean, warned, "the spectrum with no warning and with both");
+}
+
+/// A host's names for the FillStroke layout's swap and default buttons replace the panel's words, so a host can name
+/// its keys there; without them the buttons keep the words.
+#[trial]
+fn a_fill_stroke_panel_names_its_buttons_as_the_host_asks() {
+    let names = |given: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            let mut state = ColorPanelState::default();
+            let panel = ColorPanel::new(Bind::bound(&mut state), [RED, BLUE]).layout(ColorPanelLayout::FillStroke);
+            let panel = if given { panel.buttons("Swap (Shift+X)", "Default (D)") } else { panel };
+            let _ = panel.show(ui);
+        });
+        fixture.room(COLOR_ROOM).settle();
+        ["Swap (Shift+X)", "Default (D)", "Swap fill and stroke", "Default fill and stroke"].map(|name| fixture.by_label(name).is_some())
+    };
+    assert_eq!(names(true), [true, true, false, false], "the host's names");
+    assert_eq!(names(false), [false, false, true, true], "the panel's words");
 }
 
 /// The spectrum's tooltip is the shown mode's name, and a Shift click on it moves the state to the next mode without
@@ -639,6 +749,54 @@ fn swatches_panel_reports_each_edit_and_leaves_the_library() {
     assert_eq!(state.rename, Some(SwatchKey::Swatch("Color Swatch 2".to_owned())), "the new swatch opens for renaming");
 }
 
+#[trial]
+fn a_mixed_swatches_selection_rejects_reorder_and_deletes_each_entry_once() {
+    use craft_ui::contract::SelectMode;
+
+    let entry = |name: &str, color| craft_color_ui::palette::SwatchEntry::new(name.to_owned(), SwatchColor::Rgb(color));
+    let groups = vec![
+        SwatchGroup { name: "Basics".to_owned(), entries: vec![entry("Red", [1.0, 0.0, 0.0])] },
+        SwatchGroup { name: "Other".to_owned(), entries: vec![entry("Blue", [0.0, 0.0, 1.0])] },
+    ];
+    let state = Rc::new(RefCell::new(SwatchesState::default()));
+    let edits = Rc::new(RefCell::new(Vec::new()));
+    let reorders = Rc::new(Cell::new(0));
+    let (seen, moves, held) = (edits.clone(), reorders.clone(), state.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let out = SwatchesPanel::new(&groups, Bind::bound(&mut *held.borrow_mut()), RED).select(SelectMode::Multi).select_groups(true).show(ui);
+        seen.borrow_mut().extend(out.edits);
+        for event in out.events {
+            if matches!(event, craft_ui::patterns::presets::PresetEvent::Reorder(_)) {
+                moves.set(moves.get() + 1);
+            }
+        }
+    });
+    fixture.room(Vec2::new(320.0, 400.0)).settle();
+    let group = |name: &str| {
+        let tree = fixture.tree();
+        tree.with_role(Role::LIST_BOX_OPTION)
+            .into_iter()
+            .find(|&key| tree.name_of(key).is_some_and(|label| label == name || label.starts_with(&format!("{name},"))))
+            .and_then(|key| fixture.target(key))
+            .unwrap_or_else(|| panic!("the {name} group"))
+    };
+    let basics = group("Basics");
+    let red = fixture.by_label("Red, #ff0000").expect("the Red swatch");
+    let blue = fixture.by_label("Blue, #0000ff").expect("the Blue swatch");
+    let other = group("Other");
+    fixture.click(&basics).hold(Modifiers::COMMAND).click(&red).click(&blue).hold(Modifiers::NONE).settle();
+    let keys = [SwatchKey::Group("Basics".to_owned()), SwatchKey::Swatch("Red".to_owned()), SwatchKey::Swatch("Blue".to_owned())];
+    assert_eq!(state.borrow().selection.items, keys, "the group and swatch keys are selected together");
+    fixture.drag(&red, other.center() - red.center()).settle();
+    assert!(edits.borrow().is_empty());
+    assert_eq!(reorders.get(), 0, "the swatch source refuses a mixed reorder");
+    fixture.key(Key::Delete, Modifiers::NONE).settle();
+    let reported = edits.borrow();
+    assert_eq!(reported.len(), 2, "the group delete already includes Red: {reported:?}");
+    assert!(reported.contains(&SwatchEdit::DeleteGroup { group: "Basics".to_owned() }));
+    assert!(reported.contains(&SwatchEdit::delete("Blue".to_owned())));
+}
+
 /// A group with an empty name holds the swatches outside every group: they show at the top with no header, so no
 /// heading or disclosure button of the panel is left without a name, and a named group keeps its header.
 #[trial]
@@ -776,6 +934,85 @@ fn a_rename_left_open_stays_with_its_document() {
     fixture.settle();
     fixture.type_text("Y").key(Key::Enter, Modifiers::NONE).settle();
     assert!(!edits.borrow().iter().any(|edit| matches!(edit, SwatchEdit::Rename { .. })), "nothing is renamed: {:?}", edits.borrow());
+}
+
+#[trial]
+fn opt_in_reports_only_rejected_swatch_and_group_renames() {
+    use craft_ui::patterns::presets::{PresetEvent, PresetView};
+
+    let entry = |name: &str| craft_color_ui::palette::SwatchEntry::new(name.to_owned(), SwatchColor::Rgb([1.0, 0.0, 0.0]));
+    let groups = vec![
+        SwatchGroup { name: "Basics".to_owned(), entries: vec![entry("Red"), entry("Rose")] },
+        SwatchGroup { name: "Other".to_owned(), entries: Vec::new() },
+    ];
+    let red = SwatchKey::Swatch("Red".to_owned());
+    let basics = SwatchKey::Group("Basics".to_owned());
+    for (opt_in, key, name, accepted) in [
+        (false, &red, "Rose", false),
+        (false, &basics, "Other", false),
+        (true, &red, "Rose", false),
+        (true, &basics, "Other", false),
+        (true, &red, " Red ", false),
+        (true, &red, "Coral", true),
+        (true, &basics, "Favorites", true),
+    ] {
+        let mut start = SwatchesState::default();
+        start.browser.view = PresetView::List;
+        let state = Rc::new(RefCell::new(start));
+        let edits = Rc::new(RefCell::new(Vec::new()));
+        let renames = Rc::new(RefCell::new(Vec::new()));
+        let (held, seen_edits, seen_renames) = (Rc::clone(&state), Rc::clone(&edits), Rc::clone(&renames));
+        let groups = groups.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let mut current = held.borrow_mut();
+            let mut panel = SwatchesPanel::new(&groups, Bind::bound(&mut *current), RED);
+            if opt_in {
+                panel = panel.report_invalid_renames(true);
+            }
+            let out = panel.show(ui);
+            seen_edits.borrow_mut().extend(out.edits);
+            seen_renames.borrow_mut().extend(out.events.into_iter().filter_map(|event| match event {
+                PresetEvent::Rename { key, text, .. } => Some((key, text)),
+                _ => None,
+            }));
+        });
+        fixture.room(Vec2::new(320.0, 400.0)).settle();
+        let label = if key == &red { "Red" } else { "Basics" };
+        let tree = fixture.tree();
+        let row = tree
+            .with_role(Role::TREE_ITEM)
+            .into_iter()
+            .find(|&node| tree.name_of(node).is_some_and(|actual| actual == label || actual.starts_with(&format!("{label},"))))
+            .and_then(|node| fixture.target(node))
+            .unwrap_or_else(|| {
+                panic!("the {label} row is shown, names: {:?}", tree.keys().into_iter().filter_map(|key| tree.name_of(key)).collect::<Vec<_>>())
+            });
+        fixture.click(&row).key(Key::F2, Modifiers::NONE).type_text(name).settle();
+        let tree = fixture.tree();
+        assert!(tree.keys().into_iter().any(|key| tree.value_of(key) == Some(name)), "the rename field shows {name}");
+        let selection = state.borrow().selection.clone();
+        fixture.key(Key::Enter, Modifiers::NONE).settle();
+        let rejected = opt_in && matches!(name, "Rose" | "Other");
+        if rejected {
+            assert_eq!(*renames.borrow(), [(key.clone(), name.to_owned())]);
+        } else {
+            assert!(renames.borrow().is_empty(), "{name}");
+        }
+        if accepted {
+            let reported = edits.borrow();
+            assert!(
+                match &reported[..] {
+                    [SwatchEdit::Rename { swatch, name: new }] => key == &SwatchKey::Swatch(swatch.clone()) && new == name,
+                    [SwatchEdit::RenameGroup { group, name: new }] => key == &SwatchKey::Group(group.clone()) && new == name,
+                    _ => false,
+                },
+                "{name}: {reported:?}",
+            );
+        } else {
+            assert!(edits.borrow().is_empty(), "{name}");
+            assert_eq!(state.borrow().selection, selection, "{name}");
+        }
+    }
 }
 
 fn table_entries(count: usize) -> Vec<(Label, Srgba)> {
