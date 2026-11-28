@@ -548,17 +548,38 @@ fn linear_of(math: &El) -> String {
 
 /// A MathML element's children as an equation tree.
 pub fn to_tree(math: &El) -> Arg {
-    let mut budget = MAX_NODES;
-    crate::math::merge_runs(children(math, 0, &mut budget))
+    to_tree_with_limits(math).0
 }
 
-fn children(e: &El, depth: usize, budget: &mut usize) -> Arg {
+/// Convert as [`to_tree`] and report whether a depth, element or matrix-size limit omitted input.
+///
+/// The flag covers the limits reached by this conversion, not earlier parsing truncation or
+/// other unsupported MathML features and approximations. The tree is identical to [`to_tree`].
+pub fn to_tree_with_limits(math: &El) -> (Arg, bool) {
+    let mut budget = ConversionBudget { remaining: MAX_NODES, limited: false };
+    let tree = crate::math::merge_runs(children(math, 0, &mut budget));
+    (tree, budget.limited)
+}
+
+struct ConversionBudget {
+    remaining: usize,
+    limited: bool,
+}
+
+fn text_exceeds_depth(e: &El, depth: usize) -> bool {
+    if depth > MAX_DEPTH {
+        return !e.children.is_empty();
+    }
+    e.els().any(|child| text_exceeds_depth(child, depth + 1))
+}
+
+fn children(e: &El, depth: usize, budget: &mut ConversionBudget) -> Arg {
     let els: Vec<&El> = e.els().collect();
     seq(&els, depth, budget)
 }
 
 /// A sequence of elements; an n-ary operator without an operand takes the next element.
-fn seq(els: &[&El], depth: usize, budget: &mut usize) -> Arg {
+fn seq(els: &[&El], depth: usize, budget: &mut ConversionBudget) -> Arg {
     let mut out: Arg = Vec::new();
     let mut i = 0;
     while let Some(el) = els.get(i) {
@@ -569,10 +590,11 @@ fn seq(els: &[&El], depth: usize, budget: &mut usize) -> Arg {
         if local(&el.name) == "mi"
             && let Some(next) = els.get(i).filter(|n| local(&n.name) != "mo")
         {
+            budget.limited |= text_exceeds_depth(el, 0);
             let t = el.text();
             let t = t.trim();
-            if FUNCTION_NAMES.contains(&t) && *budget > 0 {
-                *budget -= 1;
+            if FUNCTION_NAMES.contains(&t) && budget.remaining > 0 {
+                budget.remaining -= 1;
                 i += 1;
                 out.push(MNode::Func { name: vec![MNode::Run(MRun::plain(t))], e: elem(next, depth + 1, budget) });
                 continue;
@@ -592,7 +614,7 @@ fn seq(els: &[&El], depth: usize, budget: &mut usize) -> Arg {
 }
 
 /// The `k`th child element as an argument.
-fn nth(e: &El, k: usize, depth: usize, budget: &mut usize) -> Arg {
+fn nth(e: &El, k: usize, depth: usize, budget: &mut ConversionBudget) -> Arg {
     e.els().nth(k).map(|c| elem(c, depth, budget)).unwrap_or_default()
 }
 
@@ -613,14 +635,16 @@ fn word(a: &[MNode]) -> bool {
     matches!(a, [MNode::Run(r)] if r.text.chars().count() > 1 && r.text.chars().all(char::is_alphabetic))
 }
 
-fn elem(e: &El, depth: usize, budget: &mut usize) -> Arg {
-    if depth > MAX_DEPTH || *budget == 0 {
+fn elem(e: &El, depth: usize, budget: &mut ConversionBudget) -> Arg {
+    if depth > MAX_DEPTH || budget.remaining == 0 {
+        budget.limited = true;
         return Vec::new();
     }
-    *budget -= 1;
+    budget.remaining -= 1;
     let d = depth + 1;
     match local(&e.name) {
         "mi" | "mn" | "mo" | "ms" => {
+            budget.limited |= text_exceeds_depth(e, 0);
             let t = e.text();
             let t = t.trim();
             if t.is_empty() {
@@ -633,6 +657,7 @@ fn elem(e: &El, depth: usize, budget: &mut usize) -> Arg {
             vec![MNode::Run(r)]
         }
         "mtext" => {
+            budget.limited |= text_exceeds_depth(e, 0);
             let t = e.text();
             if t.trim().is_empty() {
                 return Vec::new();
@@ -704,8 +729,9 @@ fn elem(e: &El, depth: usize, budget: &mut usize) -> Arg {
             let els: Vec<&El> = e.els().collect();
             let base = els.first().map(|b| elem(b, d, budget)).unwrap_or_default();
             let pre_at = els.iter().position(|c| local(&c.name) == "mprescripts");
-            let script =
-                |k: usize, budget: &mut usize| els.get(k).filter(|c| local(&c.name) != "none").map(|c| elem(c, d, budget)).unwrap_or_default();
+            let script = |k: usize, budget: &mut ConversionBudget| {
+                els.get(k).filter(|c| local(&c.name) != "none").map(|c| elem(c, d, budget)).unwrap_or_default()
+            };
             match pre_at {
                 Some(p) => {
                     let sub = script(p + 1, budget);
@@ -747,7 +773,11 @@ fn elem(e: &El, depth: usize, budget: &mut usize) -> Arg {
             vec![MNode::Delim { beg, end, sep, grow: true, shp_match: false, elems }]
         }
         "mtable" => {
-            let mtr_list: Vec<&El> = e.els().filter(|r| matches!(local(&r.name), "mtr" | "mlabeledtr")).take(256).collect();
+            let rows = || e.els().filter(|r| matches!(local(&r.name), "mtr" | "mlabeledtr"));
+            if rows().nth(256).is_some() || rows().take(256).any(|r| r.els().filter(|c| local(&c.name) == "mtd").nth(256).is_some()) {
+                budget.limited = true;
+            }
+            let mtr_list: Vec<&El> = rows().take(256).collect();
             let rows: Vec<Vec<Arg>> =
                 mtr_list.iter().map(|r| r.els().filter(|c| local(&c.name) == "mtd").take(256).map(|c| children(c, d, budget)).collect()).collect();
             if rows.is_empty() {
@@ -1046,7 +1076,7 @@ mod tests {
                 Item::El(El { name: "mi".into(), attrs: vec![], children: vec![Item::Text("k".into())] }),
             ],
         };
-        let mut budget = MAX_NODES;
+        let mut budget = ConversionBudget { remaining: MAX_NODES, limited: false };
         let tree_frac = elem(&el_frac, 0, &mut budget);
         assert!(matches!(tree_frac.as_slice(), [MNode::Frac { kind: FracKind::NoBar, .. }]), "{tree_frac:?}");
 
@@ -1055,7 +1085,7 @@ mod tests {
             attrs: vec![("notation".into(), "horizontalstrike".into())],
             children: vec![Item::El(El { name: "mi".into(), attrs: vec![], children: vec![Item::Text("x".into())] })],
         };
-        let mut budget = MAX_NODES;
+        let mut budget = ConversionBudget { remaining: MAX_NODES, limited: false };
         let tree_strike = elem(&el_strike, 0, &mut budget);
         assert!(matches!(tree_strike.as_slice(), [MNode::BorderBox { strike: [true, false, false, false], .. }]), "{tree_strike:?}");
 
@@ -1064,7 +1094,7 @@ mod tests {
             attrs: vec![("notation".into(), "cross".into())],
             children: vec![Item::El(El { name: "mi".into(), attrs: vec![], children: vec![Item::Text("x".into())] })],
         };
-        let mut budget = MAX_NODES;
+        let mut budget = ConversionBudget { remaining: MAX_NODES, limited: false };
         let tree_cross = elem(&el_cross, 0, &mut budget);
         assert!(matches!(tree_cross.as_slice(), [MNode::BorderBox { strike: [false, false, true, true], .. }]), "{tree_cross:?}");
 
@@ -1073,8 +1103,39 @@ mod tests {
             attrs: vec![("notation".into(), "radical".into())],
             children: vec![Item::El(El { name: "mi".into(), attrs: vec![], children: vec![Item::Text("x".into())] })],
         };
-        let mut budget = MAX_NODES;
+        let mut budget = ConversionBudget { remaining: MAX_NODES, limited: false };
         let tree_rad = elem(&el_rad, 0, &mut budget);
         assert!(matches!(tree_rad.as_slice(), [MNode::Rad { deg_hide: true, .. }]), "{tree_rad:?}");
+    }
+    #[test]
+    fn conversion_reports_matrix_and_tree_limits() {
+        let matrix = |rows: usize, columns: usize| {
+            let cells = "<mtd><mi>x</mi></mtd>".repeat(columns);
+            parse(&format!("<math><mtable>{}</mtable></math>", format!("<mtr>{cells}</mtr>").repeat(rows))).unwrap()
+        };
+        for (rows, cols) in [(1, 1), (256, 1), (1, 256)] {
+            let input = matrix(rows, cols);
+            let (tree, limited) = to_tree_with_limits(&input);
+            assert_eq!(tree, to_tree(&input));
+            assert!(!limited, "{rows}x{cols}");
+        }
+        assert!(to_tree_with_limits(&matrix(257, 1)).1);
+        assert!(to_tree_with_limits(&matrix(1, 257)).1);
+        let leaf = El { name: "mi".into(), children: vec![Item::Text("x".into())], ..El::default() };
+        let exact = El { name: "math".into(), children: vec![Item::El(leaf.clone()); MAX_NODES], ..El::default() };
+        assert!(!to_tree_with_limits(&exact).1);
+        let wide = El { name: "math".into(), children: vec![Item::El(leaf.clone()); MAX_NODES + 1], ..El::default() };
+        assert!(to_tree_with_limits(&wide).1);
+        let mut deep = leaf;
+        for _ in 0..=MAX_DEPTH {
+            deep = El { name: "mrow".into(), children: vec![Item::El(deep)], ..El::default() };
+        }
+        assert!(to_tree_with_limits(&El { name: "math".into(), children: vec![Item::El(deep)], ..El::default() }).1);
+        let mut text = El { children: vec![Item::Text("hidden".into())], ..El::default() };
+        for _ in 0..=MAX_DEPTH {
+            text = El { children: vec![Item::El(text)], ..El::default() };
+        }
+        text.name = "mi".into();
+        assert!(to_tree_with_limits(&El { name: "math".into(), children: vec![Item::El(text)], ..El::default() }).1);
     }
 }
