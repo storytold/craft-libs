@@ -90,6 +90,7 @@ fn check_recipient_limits(text: &str, bytes: &[u8]) -> Result<(), DocxError> {
         let event = reader.read_event().map_err(|e| DocxError::MailMerge(format!("invalid recipient data: {e}")))?;
         match event {
             Event::Start(ref element) | Event::Empty(ref element) => {
+                check_qualified_name(element.name().as_ref())?;
                 if depth >= xml::MAX_DEPTH {
                     return Err(DocxError::MailMerge("recipient XML exceeds nesting limit".into()));
                 }
@@ -97,6 +98,12 @@ fn check_recipient_limits(text: &str, bytes: &[u8]) -> Result<(), DocxError> {
                 for attribute in element.attributes().with_checks(false) {
                     let attribute = attribute.map_err(|e| DocxError::MailMerge(format!("invalid recipient attribute: {e}")))?;
                     let name = attribute.key.into_inner();
+                    check_qualified_name(name)?;
+                    for reference in attribute.value.split(|byte| *byte == b'&').skip(1) {
+                        if let Some(end) = reference.iter().position(|byte| *byte == b';') {
+                            check_character_reference(&reference[..end])?;
+                        }
+                    }
                     if names.len() >= xml::MAX_ATTRS || !names.insert(name) {
                         return Err(DocxError::MailMerge("too many or duplicate recipient XML attributes".into()));
                     }
@@ -113,6 +120,7 @@ fn check_recipient_limits(text: &str, bytes: &[u8]) -> Result<(), DocxError> {
                     depth += 1;
                 }
             }
+            Event::GeneralRef(reference) => check_character_reference(reference.as_ref())?,
             Event::Decl(declaration) => {
                 if !first_event {
                     return Err(DocxError::MailMerge("unexpected recipient XML declaration".into()));
@@ -128,6 +136,26 @@ fn check_recipient_limits(text: &str, bytes: &[u8]) -> Result<(), DocxError> {
         }
         first_event = false;
     }
+}
+
+fn check_qualified_name(name: &[u8]) -> Result<(), DocxError> {
+    if name.first() == Some(&b':') || name.last() == Some(&b':') || name.iter().filter(|byte| **byte == b':').count() > 1 {
+        return Err(DocxError::MailMerge("invalid recipient XML qualified name".into()));
+    }
+    Ok(())
+}
+
+fn check_character_reference(reference: &[u8]) -> Result<(), DocxError> {
+    let Some(number) = reference.strip_prefix(b"#") else { return Ok(()) };
+    let (digits, radix) = match number.strip_prefix(b"x") {
+        Some(hex) => (hex, 16),
+        None => (number, 10),
+    };
+    let point = std::str::from_utf8(digits).ok().filter(|s| !s.starts_with('+')).and_then(|s| u32::from_str_radix(s, radix).ok());
+    if !matches!(point, Some(0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x10FFFF)) {
+        return Err(DocxError::MailMerge("invalid recipient XML character reference".into()));
+    }
+    Ok(())
 }
 
 fn check_declaration(declaration: &quick_xml::events::BytesDecl<'_>, bytes: &[u8]) -> Result<(), DocxError> {

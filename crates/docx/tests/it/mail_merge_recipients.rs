@@ -143,6 +143,21 @@ fn recipient_relationships_follow_emitted_settings_through_aliases_and_native_re
                     *bytes = text.replace("urn:original:recipient", kind).into_bytes();
                 }
                 let mut doc = craft_docx::read(&zip(&input)).unwrap();
+                if strict {
+                    assert_eq!(doc.passthrough["word/recipientData.xml"].as_slice(), input["word/recipientData.xml"]);
+                    let error = craft_docx::write(&doc).unwrap_err();
+                    assert!(matches!(error, craft_docx::DocxError::MailMerge(_)));
+                    let output = unzip(
+                        &craft_docx::write_as_with_options(
+                            &doc,
+                            craft_docx::Flavor::Document,
+                            craft_docx::WriteOptions { discard_unusable_mail_merge: true },
+                        )
+                        .unwrap(),
+                    );
+                    assert!(!output.contains_key("word/recipientData.xml"));
+                    continue;
+                }
                 doc.body.push(craft_wordmodel::Block::Para(craft_wordmodel::Paragraph::with_text("Edited letter.", Default::default())).into());
                 for _ in 0..2 {
                     doc = serde_json::from_slice(&serde_json::to_vec(&doc).unwrap()).unwrap();
@@ -150,7 +165,7 @@ fn recipient_relationships_follow_emitted_settings_through_aliases_and_native_re
                     assert_eq!(output["word/recipientData.xml"], input["word/recipientData.xml"]);
                     let settings = std::str::from_utf8(&output["word/settings.xml"]).unwrap();
                     let settings = roxmltree::Document::parse(settings).unwrap();
-                    let (wn, rn) = if strict { (SW, SR) } else { (W, R) };
+                    let (wn, rn) = (W, R);
                     assert!(settings.root_element().has_tag_name((wn, "settings")));
                     let reference = settings.descendants().find(|n| n.has_tag_name((wn, "recipientData"))).unwrap();
                     let id = reference.attribute((rn, "id")).unwrap();
@@ -587,6 +602,9 @@ fn invalid_recipient_declaration_or_namespace_refuses_save() {
     let cases = [
         format!(r#"<?xml encoding="UTF-8"?>{root}"#),
         format!(r#"{root}<?xml?>"#),
+        format!(r#"<w:recipients xmlns:w="{W}"><:recipientData/></w:recipients>"#),
+        format!(r#"<w:recipients xmlns:w="{W}">&#xD800;</w:recipients>"#),
+        format!(r#"<w:recipients xmlns:w="{W}" r="&#0;"/>"#),
         format!("<w:recipients xmlns:w=\"{W}\" xmlns:other=\"urn:original:{}\"/>", "x".repeat(260)),
     ];
     for payload in cases {
