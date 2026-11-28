@@ -111,7 +111,7 @@ fn embedded_recipient_choices_survive_edit_two_saves_and_native_json() {
             let id = &refs[0]["r:id"];
             let rels = elements(&output["word/_rels/settings.xml.rels"], b"Relationship");
             let recipient = rels.iter().find(|r| &r["Id"] == id).unwrap();
-            assert_eq!(recipient["Type"], kind);
+            assert_eq!(recipient["Type"], WORD);
             assert_eq!(recipient["Target"], "recipientData.xml");
             assert_ne!(recipient.get("TargetMode").map(String::as_str), Some("External"));
             assert_eq!(rels.len(), 3);
@@ -171,8 +171,7 @@ fn recipient_relationships_follow_emitted_settings_through_aliases_and_native_re
                     let id = reference.attribute((rn, "id")).unwrap();
                     let rels = elements(&output["word/_rels/settings.xml.rels"], b"Relationship");
                     let recipient = rels.iter().find(|r| r["Id"] == id).unwrap();
-                    let expected = if [CANONICAL, STRICT].contains(&kind) { format!("{rn}/mailMergeRecipientData") } else { kind.into() };
-                    assert_eq!(recipient["Type"], expected, "input={kind}, strict={strict}, alias={alias}");
+                    assert_eq!(recipient["Type"], WORD, "input={kind}, alias={alias}");
                     assert_ne!(recipient.get("TargetMode").map(String::as_str), Some("External"));
                     assert_eq!(recipient["Target"], "recipientData.xml");
                     assert!(
@@ -602,6 +601,7 @@ fn invalid_recipient_declaration_or_namespace_refuses_save() {
     let cases = [
         format!(r#"<?xml encoding="UTF-8"?>{root}"#),
         format!(r#"{root}<?xml?>"#),
+        format!(r#"<w:recipients xmlns:w="{W}" xmlns:other=""/>"#),
         format!(r#"<w:recipients xmlns:w="{W}"><:recipientData/></w:recipients>"#),
         format!(r#"<w:recipients xmlns:w="{W}">&#xD800;</w:recipients>"#),
         format!(r#"<w:recipients xmlns:w="{W}" r="&#0;"/>"#),

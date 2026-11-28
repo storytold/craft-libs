@@ -6,11 +6,14 @@ use crate::DocxError;
 use crate::package::MAX_EMBEDDED_XML;
 use crate::xml;
 
+/// Word uses this Transitional relationship for the inclusion/exclusion leaf (MS-OI29500 §2.1.378).
+pub(crate) const WORD_RECIPIENT_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/recipientData";
+
 pub(crate) fn recipient_kind(kind: &str) -> bool {
     // ECMA-376 §17.14.28 and its Transitional form, plus both legacy spellings.
     matches!(
         kind,
-        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/recipientData"
+        WORD_RECIPIENT_REL
             | "http://schemas.openxmlformats.org/officeDocument/2006/mailMergeRecipientData"
             | "http://schemas.openxmlformats.org/officeDocument/2006/relationships/mailMergeRecipientData"
             | "http://purl.oclc.org/ooxml/officeDocument/relationships/mailMergeRecipientData"
@@ -107,7 +110,11 @@ fn check_recipient_limits(text: &str, bytes: &[u8]) -> Result<(), DocxError> {
                     if names.len() >= xml::MAX_ATTRS || !names.insert(name) {
                         return Err(DocxError::MailMerge("too many or duplicate recipient XML attributes".into()));
                     }
-                    if name == b"xmlns" || name.starts_with(b"xmlns:") {
+                    let prefixed_namespace = name.starts_with(b"xmlns:");
+                    if name == b"xmlns" || prefixed_namespace {
+                        if prefixed_namespace && attribute.value.is_empty() {
+                            return Err(DocxError::MailMerge("prefixed recipient XML namespace is empty".into()));
+                        }
                         if attribute.value.len() > 256 {
                             return Err(DocxError::MailMerge("recipient XML namespace URI is too long".into()));
                         }

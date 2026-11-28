@@ -145,7 +145,7 @@ pub(super) fn write(doc: &Document, out: &mut PartRels, embeds: &mut super::embe
                 continue;
             }
             let new = if is_recipient {
-                let new = out.add(kind, "", false);
+                let new = out.add(crate::mail_merge::WORD_RECIPIENT_REL, "", false);
                 recipient = Some((new.clone(), target));
                 new
             } else {
@@ -206,10 +206,7 @@ pub(super) fn source_relationships(settings: &[u8], rels: PartRels) -> Result<Pa
     let mut out = PartRels::default();
     for (id, kind, target, external) in rels.list {
         let kind = match kind.rsplit_once('/') {
-            Some((prefix, suffix))
-                if [TRANSITIONAL, STRICT].contains(&prefix)
-                    && matches!(suffix, "mailMergeSource" | "mailMergeHeaderSource" | "mailMergeRecipientData") =>
-            {
+            Some((prefix, suffix)) if [TRANSITIONAL, STRICT].contains(&prefix) && matches!(suffix, "mailMergeSource" | "mailMergeHeaderSource") => {
                 format!("{namespace}/{suffix}")
             }
             _ => kind,
