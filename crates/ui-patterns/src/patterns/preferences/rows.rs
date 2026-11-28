@@ -169,10 +169,15 @@ fn hinted<C: Props>(control: C, row: &ShownRow) -> C {
     }
 }
 
-/// The sentence to write under a row the host draws: its help line, or its hover text where the pattern has no hover
-/// target of its own to carry it.
-fn host_text(row: &ShownRow) -> Option<&Label> {
-    row.help.as_ref().or(row.tooltip.as_ref())
+/// The sentence to write under a row the host draws: its help line, plus its hover text where the pattern has no
+/// hover target of its own to carry it. When a row is given both, the line carries both, so such a row loses
+/// nothing that a pattern-drawn row shows.
+fn host_text(row: &ShownRow) -> Option<Label> {
+    match (&row.help, &row.tooltip) {
+        (Some(help), Some(tooltip)) => Some(Label::from(format!("{}\n{}", help.as_str(), tooltip.as_str()))),
+        (Some(text), None) | (None, Some(text)) => Some(text.clone()),
+        (None, None) => None,
+    }
 }
 
 /// Shows `row` as `layout` lays rows out and records what it edited in `out`.
@@ -284,16 +289,18 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(
             Stack::new().id_salt(key).enabled(row.enabled).show(ui, |ui, _| {
                 out.custom_changed |= host.custom_row(ui, key);
                 if let Some(text) = host_text(row) {
-                    Help::Text(text.clone()).text().show(ui);
+                    Help::Text(text).text().show(ui);
                 }
             });
         }
         Kind::Custom => {
-            // The same for a row whose control the host draws inside our field: its sentence stays the line under it.
+            // The same for a row whose control the host draws inside our field: its sentence stays the line under
+            // it, and a row given both a help line and hover text writes both, since the field is no hover target
+            // of ours either.
             let field = field_of(row);
-            let field = match (row.help.is_none(), &row.tooltip) {
-                (true, Some(tooltip)) => field.help(Help::Text(tooltip.clone())),
-                _ => field,
+            let field = match host_text(row) {
+                Some(text) => field.help(Help::Text(text)),
+                None => field,
             };
             field.show(ui, |ui, _| {
                 Stack::new().show(ui, |ui, _| out.custom_changed |= host.custom_row(ui, key));

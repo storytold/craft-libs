@@ -28,6 +28,14 @@ const TIP: &str = "Always show crosshair in center of brush cursor";
 const HELP: &str = "Drawn with its own note.";
 /// The sentence of the row the host draws itself.
 const HOST_TIP: &str = "Only reads with a pen on the tablet.";
+/// A host-drawn row given both a help line and hover text: both sentences belong on its line.
+const BOTH_HELP: &str = "Reads once, when the page opens.";
+const BOTH_TIP: &str = "Changing it takes effect once the app starts again.";
+/// The same pair on a control the host draws inside the pattern's field.
+const FIELD_HELP: &str = "The line this row always had.";
+const FIELD_TIP: &str = "The sentence that would be hover text.";
+/// The note the window adds for a setting read at launch.
+const RESTART: &str = "Applies at next launch.";
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -103,6 +111,8 @@ struct Model {
     crosshair: bool,
     outline: bool,
     tablet: bool,
+    both_rows: bool,
+    both_field: bool,
 }
 
 impl PreferencesModel for Model {
@@ -115,6 +125,8 @@ impl PreferencesModel for Model {
                 RowSpec::new("cursors.brushTipOutline", "Brush tip outline", RowKind::Bool(self.outline)).help(HELP),
                 RowSpec::new("cursors.other", "Other cursors", RowKind::Bool(false)),
                 RowSpec::new("cursors.tabletInput", "Tablet input", RowKind::CustomRows).tooltip(HOST_TIP),
+                RowSpec::new("cursors.bothRows", "Both sentences rows", RowKind::CustomRows).help(BOTH_HELP).tooltip(BOTH_TIP),
+                RowSpec::new("cursors.bothField", "Both sentences field", RowKind::Custom).help(FIELD_HELP).tooltip(FIELD_TIP),
             ],
         )]
     }
@@ -129,13 +141,21 @@ impl PreferencesModel for Model {
     }
 
     fn custom_row(&mut self, ui: &mut Ui, key: &str) -> bool {
-        if key != "cursors.tabletInput" {
-            return false;
+        match key {
+            "cursors.tabletInput" => {
+                // The host draws its own labelled field for this row.
+                let _ = Field::new("Tablet input").show(ui, |ui, _| {
+                    Checkbox::new(Bind::bound(&mut self.tablet)).show(ui);
+                });
+            }
+            "cursors.bothRows" => {
+                let _ = Checkbox::new(Bind::bound(&mut self.both_rows)).show(ui);
+            }
+            "cursors.bothField" => {
+                let _ = Checkbox::new(Bind::bound(&mut self.both_field)).show(ui);
+            }
+            _ => {}
         }
-        // The host draws its own labelled field for this row.
-        let _ = Field::new("Tablet input").show(ui, |ui, _| {
-            Checkbox::new(Bind::bound(&mut self.tablet)).show(ui);
-        });
         false
     }
 
@@ -276,4 +296,26 @@ fn a_host_drawn_row_keeps_its_sentence_on_the_page() {
     fixture.settle();
     fixture.idle(2);
     assert_eq!(shown_tips(&fixture), Vec::<String>::new(), "hovering the host's control gains no tooltip");
+}
+
+/// A host-drawn row given both a help line and hover text keeps both sentences: the pattern has no
+/// hover target of its own there, so the line under the row carries them - for the rows the host
+/// draws and for a control it draws inside our field alike.
+#[trial]
+fn a_host_drawn_row_keeps_both_its_line_and_its_hover_sentence() {
+    let fixture = window();
+    let page: String = fixture.texts().iter().map(|run| run.text.as_str()).collect::<Vec<_>>().join("\n");
+    for sentence in [BOTH_HELP, BOTH_TIP, FIELD_HELP, FIELD_TIP] {
+        assert!(page.contains(sentence), "the host-drawn row writes {sentence:?} on the page");
+    }
+}
+
+/// The same through a settings document: a `custom_rows()` rule with help and `restart()` gives the
+/// row two sentences, and a row the host draws writes both - its line is not just the window's note.
+#[trial]
+fn a_document_host_row_that_asks_for_a_restart_keeps_both_sentences() {
+    let fixture = document_window(vec![SettingRule::new("cursors.tabletInput").custom_rows().help(TIP).restart()]);
+    let page: String = fixture.texts().iter().map(|run| run.text.as_str()).collect::<Vec<_>>().join("\n");
+    assert!(page.contains(TIP), "the rule's sentence stays on the page for the host-drawn row");
+    assert!(page.contains(RESTART), "and so does the window's note");
 }
