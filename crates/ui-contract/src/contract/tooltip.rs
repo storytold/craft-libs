@@ -185,7 +185,14 @@ pub(crate) fn run(core: &super::CxCore<'_>, input: TipIn<'_>) {
     let keyboard = core.state.flags.contains(Flags::FOCUS_VISIBLE);
     let (spec, rect, hovered, subject) = match &part {
         Some(part) => (Some(part.spec), part.rect, part.hovered || keyboard, Some(part.part)),
-        None => (core.resolved.tooltip.map(Tooltip::spec), core.rect, core.response.hovered() || keyboard, None),
+        // (a disabled root reports itself hovered by nothing, as egui's rule says, but it still explains itself: the
+        // pointer over it counts for the tooltip, by the arena's hover of the root)
+        None => (
+            core.resolved.tooltip.map(Tooltip::spec),
+            core.rect,
+            core.response.hovered() || (!core.response.enabled() && crate::runtime::pointer::hovers(&core.ctx, core.id)) || keyboard,
+            None,
+        ),
     };
     let (shows_label, canvas_control, message) = (input.shows_label, input.canvas_control, input.message.as_deref());
     let text = || match &part {

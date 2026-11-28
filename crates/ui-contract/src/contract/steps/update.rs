@@ -116,6 +116,7 @@ fn double_click(core: &CxCore<'_>) -> Option<Option<PartRef>> {
 pub(crate) fn secondary_click(core: &CxCore<'_>) -> bool {
     crate::runtime::pointer::frame_raw(&core.ctx).release == Some(craft_behavior::PointerButton::Secondary)
         && (core.response.hovered()
+            || (!core.response.enabled() && crate::runtime::pointer::hovers(&core.ctx, core.id))
             || core.texts.as_ref().is_some_and(|(key, _)| {
                 core.ctx.read_response(crate::primitives::text_adapter::text_id(core.id, *key)).is_some_and(|text| text.hovered())
             }))

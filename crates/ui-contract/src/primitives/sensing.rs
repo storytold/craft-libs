@@ -792,6 +792,7 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
         std::iter::once(background).chain(own_shapes(spec.own, spec.id, read.target())),
     );
     let mut response = response;
+    response::restrict_enabled(&mut response, spec.enabled);
     let outcome = outcome_in(ctx, &read, arena, layer, spec.enabled);
     // The root is hovered while a shape of its arena shows hover (`pointer::Under`): its background, a part or a member;
     // it contains the pointer while any shape of the arena lies under it.

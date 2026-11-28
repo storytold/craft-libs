@@ -11,6 +11,7 @@ pub(crate) mod checkbox_sweep;
 pub(crate) mod commands;
 pub(crate) mod contract;
 pub(crate) mod disabled_fade;
+pub(crate) mod disabled_response;
 pub(crate) mod field_text_centred;
 pub(crate) mod focus_ring;
 pub(crate) mod form;
