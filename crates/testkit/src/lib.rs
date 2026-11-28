@@ -59,6 +59,8 @@ pub mod guards;
 pub mod hostile;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod oracle;
+#[cfg(not(target_arch = "wasm32"))]
+mod process;
 pub mod rng;
 pub mod sample_damage;
 #[cfg(not(target_arch = "wasm32"))]
