@@ -3,6 +3,10 @@
 //! Shared text processing for the Craft apps. It sits below the composer: layout code calls it on
 //! plain text and a language before it shapes and places glyphs.
 //!
+//! [`embed`] is always available and classifies supplied OS/2 `fsType` flags using VectorCraft's
+//! outline-embedding compatibility policy. See its documentation for the caller's table-data
+//! responsibilities.
+//!
 //! Modules, each behind the cargo feature of the same name where they need a dependency of their
 //! own (`quotes`, `styles` and `lists` are always built):
 //! - [`hyphen`] (default): hyphenation points, with bundled US English data and optional
@@ -28,6 +32,8 @@
 //! Language features (`spanish`, `german`, …, `all-languages`) add data for that language and
 //! turn on the modules that use it.
 #![warn(missing_docs)]
+
+pub mod embed;
 
 #[cfg(feature = "positioned")]
 pub mod positioned;

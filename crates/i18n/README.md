@@ -67,6 +67,11 @@ The app keeps its `tl!` macro, its language setting (`"auto"` → `I18N.system_l
   returns the bad locales, and each locale's rows are parsed (and its bad rows logged with
   `log::warn!`) on the first lookup that reaches it, including as a fallback. `I18n::check_all()`
   parses every locale and returns all problems (`<locale>/<common|app>: line N: …`), for a test.
+- **Reading rows:** `catalog::parse(text, forms)` returns a catalog's rows (`catalog::Entry`, with
+  the columns unescaped) and its problems as `line N: …`, and `catalog::parse_row` checks one row;
+  both apply the checks the lookups apply. `plural_forms(locale)` gives `forms`.
+  `catalog::escape` writes a column's `\`, line breaks and tabs as `\\`, `\n` and `\t`, and
+  `catalog::unescape` reads them back.
 - **Plurals:** forms are listed in CLDR order (zero, one, two, few, many, other) for the categories
   whole numbers 0 to 1000 reach, from ICU4X's CLDR rules; `plural_form_counts` holds the counts
   craft-i18n's checker expects. `trn_decimal` picks the form from the digits shown (ICU4X plural

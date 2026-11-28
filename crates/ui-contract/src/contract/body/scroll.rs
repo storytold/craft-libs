@@ -199,10 +199,11 @@ impl BodyHooks<'_> {
         }
         if let Some(view) = self.view {
             use crate::contract::Pointer as _;
-            let overlay = scroll_of(props).is_some_and(|scroll| scroll.has_overlay());
+            let overlay = scroll_of(props).is_some_and(|scroll| scroll.overlay_hides_at_rest());
             for (bar, span) in self.scroll_geometry(props, view, rtl, tokens) {
                 let overflow = span.content.end - span.content.start > span.visible.end - span.visible.start;
-                // An overlay bar shows while the pointer is over the container, or keeps the press that drags it.
+                // An overlay bar shows while the pointer is over the container, or keeps the press that drags it, unless
+                // it shows at rest.
                 let hidden = overlay && !cx.response.contains_pointer() && !cx.part_if_declared(bar.key).is_some_and(|track| track.pressed());
                 if !overflow || hidden {
                     continue;

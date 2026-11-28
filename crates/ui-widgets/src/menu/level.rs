@@ -391,7 +391,8 @@ impl MenuLevel {
 /// The level a menu container puts into its body's env: the rows of the body register with it.
 pub(crate) fn level_env<C: Component>(cx: &Cx<'_, C>, values: &mut AppValues, submenu: bool, valued: bool, pad: f32) {
     let level = MenuLevel::of(&cx.recall::<LevelMemory>());
-    let pointer = cx.core.ctx.input(|input| input.pointer.latest_pos());
+    // The aim follows every move of the pointer while the menu shows: a tracked read.
+    let pointer = crate::runtime::pointer::frame(&cx.core.ctx).pos;
     let keyboard = crate::runtime::focus::keyboard_in_menu(&cx.core.ctx);
     level.begin(submenu, valued, keyboard, (!cx.env.shell().os.is_mac()).then(|| cx.env.folder()), pointer, pad);
     values.set(level);

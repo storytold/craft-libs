@@ -1,5 +1,6 @@
 //! The in-memory store: load once, read every frame, save while the application runs.
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,6 +26,9 @@ pub use sections::SharedSettings;
 
 /// The settings file name.
 pub const CONFIG_FILE: &str = "config.toml";
+
+/// Largest `config.toml` the store reads. A larger file is left untouched and the store is read-only.
+pub const MAX_CONFIG_BYTES: u64 = 16 << 20;
 
 /// How long after the last change a save is attempted.
 pub const DEFAULT_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -372,7 +376,7 @@ impl<T: Settings> SettingsStore<T> {
     /// user's values instead of defaults.
     fn load_best_effort(&mut self, report: &mut LoadReport) {
         if let Some(path) = &self.path
-            && let Ok(Some(text)) = self.files.read(path)
+            && let Ok(Some(text)) = self.read_file(path)
             && let Ok(mut doc) = document::parse(&text)
         {
             let base = doc.clone();
@@ -396,7 +400,7 @@ impl<T: Settings> SettingsStore<T> {
     /// Loads `config.toml` at `path`, or with none the first of the `legacy` files that imports. An imported or
     /// upgraded value marks the store dirty, so an opened store saves it.
     fn load(&mut self, path: &Path, legacy: &[LegacyFile<T>], damaged: Damaged, report: &mut LoadReport) {
-        match self.files.read(path) {
+        match self.read_file(path) {
             Ok(Some(text)) => self.load_text(path, &text, damaged, report),
             Ok(None) => {
                 if let Some((value, errors, from)) = migrate::import_legacy(&*self.files, legacy) {
@@ -461,15 +465,31 @@ impl<T: Settings> SettingsStore<T> {
         // Held from the disk check to the write, so another process saving at the same moment waits instead of
         // writing over the changes this save merges in. An early return releases it.
         let lock = self.files.lock(&path);
-        let (backup, theirs) = self.check_disk(&path)?;
-        if let Some(on_disk) = backup {
-            self.files.write_backup(&path, &on_disk)?;
+        let (on_disk, theirs) = self.check_disk(&path)?;
+        // The merge is staged on a copy and only kept once the file is written, so a save that fails leaves the
+        // document, the value and the baseline as they were, and the next save merges the disk again.
+        let mut doc = self.doc.clone();
+        merge_into(&mut doc, &self.value).map_err(|e| SettingsError::Serialize(e.to_string()))?;
+        set_schema_version(&mut doc, T::SCHEMA_VERSION);
+        let theirs = theirs.map(|mut theirs| {
+            merge_changes::<T>(&self.base, &doc, &mut theirs);
+            theirs
+        });
+        let text = document::render(theirs.as_ref().unwrap_or(&doc));
+        // A file over the limit would not be read back at the next start; keep the old file.
+        if text.len() as u64 > MAX_CONFIG_BYTES {
+            return Err(SettingsError::Io(too_large()));
         }
-        merge_into(&mut self.doc, &self.value).map_err(|e| SettingsError::Serialize(e.to_string()))?;
-        set_schema_version(&mut self.doc, T::SCHEMA_VERSION);
-        if let Some(mut theirs) = theirs {
+        match on_disk {
+            OnDisk::Keep => {}
+            OnDisk::Backup(old) => self.files.write_backup(&path, &old)?,
+            OnDisk::MoveAside => self.moved_aside.push(self.files.move_aside(&path)?),
+        }
+        self.files.write(&path, &text)?;
+        drop(lock);
+        self.doc = doc;
+        if let Some(theirs) = theirs {
             let (ours, _) = document::deserialize_sections::<T>(&self.doc);
-            merge_changes::<T>(&self.base, &self.doc, &mut theirs);
             self.doc = theirs;
             // The merged document is what is on disk now. Taking the value from it keeps the next
             // save from writing this store's old values over the other instance's keys.
@@ -479,9 +499,6 @@ impl<T: Settings> SettingsStore<T> {
             }
             self.value = merged;
         }
-        let text = document::render(&self.doc);
-        self.files.write(&path, &text)?;
-        drop(lock);
         self.base = self.doc.clone();
         self.seen_text = Some(text);
         self.dirty = false;
@@ -491,30 +508,39 @@ impl<T: Settings> SettingsStore<T> {
         Ok(())
     }
 
-    /// Looks at the file on disk just before a save. Returns its text when it is a good backup
-    /// (it parses and is not blank), and its document, upgraded to this build's schema, when
-    /// another instance or a hand edit changed it since this store last read or wrote it.
+    /// Looks at the file on disk just before a save. Returns what the save does with it once the
+    /// new text is ready (back it up when it parses and is not blank, move it aside, or keep it),
+    /// and its document, upgraded to this build's schema, when another instance or a hand edit
+    /// changed it since this store last read or wrote it.
     ///
     /// `save` holds the files' lock ([`SettingsFiles::lock`]) around this check and its write, so two
     /// processes saving at once take turns, and merges this store's changes since its base into that
     /// document ([`merge_changes`]), so the other writer's comments, unknown keys and settings survive.
     /// The lock is advisory and waits a bounded time; past that the save goes ahead. A file that no longer parses is moved aside (the edit
-    /// is kept, the previous backup stays), and a file from a newer build, or one whose migration
-    /// fails, makes the store read-only instead of overwriting it, the same as at startup.
-    fn check_disk(&mut self, path: &Path) -> Result<(Option<String>, Option<DocumentMut>), SettingsError> {
-        let Some(text) = self.files.read(path)? else {
-            return Ok((None, None));
+    /// is kept, the previous backup stays), and a file from a newer build, one whose migration
+    /// fails, or one larger than [`MAX_CONFIG_BYTES`] makes the store read-only instead of
+    /// overwriting it, the same as at startup.
+    fn check_disk(&mut self, path: &Path) -> Result<(OnDisk, Option<DocumentMut>), SettingsError> {
+        let text = match self.read_file(path) {
+            Ok(Some(text)) => text,
+            Ok(None) => return Ok((OnDisk::Keep, None)),
+            // Same as at startup: leave the oversized file untouched and stop saving.
+            Err(e) if e.kind() == io::ErrorKind::FileTooLarge => {
+                let why = ReadOnlyReason::Unreadable(e).to_string();
+                self.read_only = Some(why.clone());
+                return Err(SettingsError::ReadOnly(why));
+            }
+            Err(e) => return Err(e.into()),
         };
         // A blank file still parses, so adopting it below would replace this store's document --
         // and with it every comment and unknown key the app does not manage -- with an empty one;
         // blank text is never written as a backup either, so the content would be lost. A blank
         // file is not an edit to adopt: keep what this store loaded and leave the file alone.
         if text.trim().is_empty() {
-            return Ok((None, None));
+            return Ok((OnDisk::Keep, None));
         }
         let Ok(mut doc) = document::parse(&text) else {
-            self.moved_aside.push(self.files.move_aside(path)?);
-            return Ok((None, None));
+            return Ok((OnDisk::MoveAside, None));
         };
         let changed = self.seen_text.as_deref() != Some(text.as_str());
         if changed {
@@ -533,8 +559,34 @@ impl<T: Settings> SettingsStore<T> {
                 }
             }
         }
-        Ok(((!text.trim().is_empty()).then_some(text), changed.then_some(doc)))
+        Ok((OnDisk::Backup(text), changed.then_some(doc)))
     }
+
+    /// Reads the file at `path` through the store's files. Text larger than [`MAX_CONFIG_BYTES`]
+    /// fails with `ErrorKind::FileTooLarge`, from any [`SettingsFiles`]; `DiskFiles` stops
+    /// reading at the limit, so an oversized file is not read into memory.
+    fn read_file(&self, path: &Path) -> io::Result<Option<String>> {
+        let text = self.files.read(path)?;
+        if text.as_ref().is_some_and(|text| text.len() as u64 > MAX_CONFIG_BYTES) {
+            return Err(too_large());
+        }
+        Ok(text)
+    }
+}
+
+/// What a save does with the file on disk before writing; see [`SettingsStore::check_disk`].
+enum OnDisk {
+    /// Missing or blank: leave it, and leave the previous backup alone.
+    Keep,
+    /// Parses: copy it to the backup.
+    Backup(String),
+    /// Does not parse: move it aside so the edit is kept.
+    MoveAside,
+}
+
+/// The `ErrorKind::FileTooLarge` error for a file larger than [`MAX_CONFIG_BYTES`].
+pub(crate) fn too_large() -> io::Error {
+    io::Error::new(io::ErrorKind::FileTooLarge, format!("file is larger than {MAX_CONFIG_BYTES} bytes"))
 }
 
 /// What a store with no file holds as its base: the defaults, so only a change from them counts

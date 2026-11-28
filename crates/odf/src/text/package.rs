@@ -818,17 +818,53 @@ fn conn_kinds(blocks: &[FBlock]) -> super::HashMap<u32, craft_wordmodel::para::S
     out
 }
 
-/// `styles` with the file's own style definitions while `doc`'s are as read (see
+/// What WordCraft would write for each child of `office:styles` in `doc`, as hashes by its key.
+pub(super) fn style_prints(doc: &Document) -> std::collections::BTreeMap<String, u64> {
+    super::kept::prints(&model_styles(doc))
+}
+
+/// What WordCraft would write of `doc`'s style definitions: all of them, used or not.
+fn model_styles(doc: &Document) -> String {
+    let ids = |custom: fn(&Document, &str) -> bool| doc.styles.styles.iter().filter(|s| custom(doc, &s.id)).map(|s| s.id.clone()).collect();
+    // The first section, as a save writes the document-wide line numbering from it.
+    let first = doc.sections().first().map_or_else(|| doc.last_section.clone(), |(_, s)| (*s).clone());
+    let page = [(String::new(), first)];
+    let xml = styles_xml(doc, &page, &[], "", &ids(model::is_custom_style));
+    let text = char_styles(doc, &ids(model::is_custom_char_style));
+    xml.replacen("</office:styles>", &format!("{text}</office:styles>"), 1)
+}
+
+/// `styles` with the file's own style definitions except those `doc` has since changed (see
 /// `super::kept`), and the font faces they name added to those kept paragraphs need (`used`).
+/// Changing one style or list leaves the rest of what the file defines alone: its gradients and
+/// fill pictures, the styles WordCraft doesn't model, its default style's settings.
 fn styles_as_read(doc: &Document, kept: Option<&craft_wordmodel::kept::KeptXml>, styles: String, used: &mut super::kept::Needed) -> String {
-    let Some(k) = kept.filter(|k| k.styles_as_read(doc)) else { return styles };
+    let Some(k) = kept else { return styles };
     // With the font faces they name (any of the file's, by its names).
     for (key, d) in &k.defs {
         if let Some(name) = key.strip_prefix("font:") {
             used.2.entry(name.to_string()).or_insert_with(|| d.clone());
         }
     }
-    super::kept::with_common_as_read(&styles, &k.defs, &k.order)
+    let (changed, rewritten) = common_changes(doc, k);
+    let ours = |id: &str| super::writer::odf_name(id);
+    let read = super::kept::file_names(&k.style_ids, &ours);
+    super::kept::with_common_as_read(&styles, &k.defs, &k.order, &changed, &rewritten, &read)
+}
+
+/// The keys of the file's style definitions `doc` has changed since they were read, and what
+/// becomes of those written from the model under the file's names ([`super::kept::rewritten_defs`]).
+/// The others are written as read.
+fn common_changes(
+    doc: &Document,
+    k: &craft_wordmodel::kept::KeptXml,
+) -> (std::collections::BTreeSet<String>, std::collections::BTreeMap<String, Option<String>>) {
+    let now = model_styles(doc);
+    let changed = super::kept::changed(&k.style_prints, &super::kept::prints(&now));
+    // The name WordCraft writes a style id under (`My_20_Custom` was read as `MyCustom`).
+    let ours = |id: &str| super::writer::odf_name(id);
+    let rewritten = super::kept::rewritten_defs(&now, &k.defs, &changed, &k.style_ids, &ours);
+    (changed, rewritten)
 }
 
 /// The package files the file's own definitions refer to, and those the markup written as read
@@ -846,20 +882,24 @@ fn with_kept_files(
     let Some(k) = kept else { return };
     let mut wanted = w.kept_files_used.clone();
     let pages_kept = k.pages_as_read(doc);
-    let styles_kept = k.styles_as_read(doc);
+    let (changed, rewritten) = common_changes(doc, k);
     for (key, d) in &k.defs {
         if !pages_kept && (key.starts_with("sauto:") || key.starts_with("master:")) {
             continue;
         }
         if key.starts_with("common:") {
-            // The file's definition is written back whole (`styles_as_read`, non-`draw:`
-            // definitions win), or this one is restored for markup naming it. WordCraft's own
-            // definition takes a drawing definition's place: its href is no longer used.
-            let written = if styles_kept {
-                !(super::kept::drawing_def(d) && super::kept::defined(styles, d))
-            } else {
-                key.strip_prefix("common:").is_some_and(|n| w.kept_used.1.contains_key(n)) && !super::kept::defined(styles, d)
-            };
+            // What `styles_as_read` writes in its place, when it rewrites it: what that names (an
+            // unread namesake's own definition, as read) is what is written.
+            if let Some(def) = rewritten.get(key) {
+                if let Some(def) = def {
+                    super::kept::hrefs(def, &mut wanted);
+                }
+                continue;
+            }
+            // The file's definition is written back as read unless the document changed it: then
+            // WordCraft's takes its place, or none does. WordCraft's own definition takes a
+            // drawing definition's place too. Its href is then no longer used.
+            let written = !changed.contains(key) && !(super::kept::drawing_def(d) && super::kept::defined(styles, d));
             if !written {
                 continue;
             }
@@ -1068,6 +1108,8 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     }));
     w.kept_defs = std::sync::Arc::new(kept.map(|k| k.defs.clone()).unwrap_or_default());
     w.reserved = std::sync::Arc::new(kept.map(|k| k.files.keys().cloned().collect()).unwrap_or_default());
+    let ours = |id: &str| super::writer::odf_name(id);
+    w.read_names = std::sync::Arc::new(kept.map(|k| super::kept::read_names(&k.defs, &k.style_ids, &ours)).unwrap_or_default());
     w.groups_whole = whole_groups(&flow.blocks);
     // The file's master pages are written as read: what was kept may start them.
     w.kept_pages = kept.is_some_and(|k| k.pages_as_read(doc));
@@ -1190,6 +1232,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let mut hw = Writer::with_prefix(if kept.is_some() { "wcM" } else { "M" });
     // Headers' and footers' new pictures and objects skip the kept files' names too.
     hw.reserved = std::sync::Arc::clone(&w.reserved);
+    hw.read_names = std::sync::Arc::clone(&w.read_names);
     hw.stacking = w.stacking;
     hw.accents = accents;
     hw.variables.clone_from(&w.variables);

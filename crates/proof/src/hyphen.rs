@@ -15,6 +15,10 @@
 //!
 //! **Bulgarian**: the Bulgarian syllable rules ([`crate::bg`]); no pattern file or word list.
 //!
+//! **Gujarati and Hindi**: breaks between aksharas, never inside a conjunct or between a
+//! consonant and its vowel sign ([`crate::indic`], rules from the script's Unicode encoding); no
+//! pattern file.
+//!
 //! **German**: the TeX German patterns for the reformed spelling ([`Patterns::de`]), also for
 //! Swiss text, whose `ss` the patterns split like any double consonant (`Stras-se`).
 //!
@@ -116,7 +120,7 @@ pub enum Source {
     Patterns,
     /// A heuristic for a language without a dictionary or patterns.
     Heuristic,
-    /// A language's syllable rules (Bulgarian, [`crate::bg`]).
+    /// A language's syllable rules (Bulgarian [`crate::bg`], Turkish, Gujarati and Hindi [`crate::indic`]).
     Rules,
     /// No break points: the word is too short or no source applies.
     None,
@@ -129,6 +133,13 @@ fn is_apostrophe(c: char) -> bool {
 fn is_word_char(c: char) -> bool {
     // A combining mark belongs to its letter (decomposed `a` + U+0301 is one letter, `á`).
     c.is_alphabetic() || is_apostrophe(c) || unicode_normalization::char::is_combining_mark(c)
+}
+
+/// [`is_word_char`] in `lang`. In a language with Indic rules a zero-width joiner or non-joiner
+/// is part of the word too: it shapes a conjunct inside an akshara ([`crate::indic`]). In any
+/// other language it still ends a letter run (Persian's ZWNJ between a word's parts).
+fn is_word_char_in(c: char, lang: ProofLang) -> bool {
+    is_word_char(c) || (crate::indic::is_joiner(c) && crate::indic::Script::of(lang.built_in()).is_some())
 }
 
 /// Unrestricted break points of one lowercase core (letters and `'` only, no leading/trailing `'`).
@@ -155,6 +166,13 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
     // (`WordCraft`, `email`) are hyphenated as English, as in any other language.
     if lang == ProofLang::Bg && core.iter().all(|&c| crate::bg::is_letter(c)) {
         return (crate::bg::points(core), Source::Rules);
+    }
+    // Gujarati and Hindi words break between aksharas ([`crate::indic`]); other words in their runs
+    // (`WordCraft`) are hyphenated as English.
+    if let Some(script) = crate::indic::Script::of(lang)
+        && core.iter().all(|&c| script.is_letter(c))
+    {
+        return (crate::indic::points(script, core), Source::Rules);
     }
     // A suffix written after an apostrophe (`Ankara'dan`, `Türkiye'nin`) is hyphenated part by
     // part; no break goes next to the apostrophe ([`word_breaks_in`] drops those).
@@ -224,9 +242,10 @@ fn composed_chars(core: &[char]) -> (Vec<char>, Vec<Option<usize>>) {
     (nfc, starts)
 }
 
-/// Does a pack's `pats` hyphenate `core` in `lang`? Russian, Bulgarian and Turkish: a word in
-/// their script (the guard their rules use) whose letters the patterns know, so a word with a
-/// letter the pack never mentions (`ё`) goes on to the built-in rules. Polish, Portuguese, Italian
+/// Does a pack's `pats` hyphenate `core` in `lang`? Russian, Bulgarian, Turkish, Gujarati and
+/// Hindi: a word in their script (the guard their rules use; for Gujarati and Hindi, the script's
+/// letters and marks and the joiners inside a conjunct, [`crate::indic`]) whose letters the
+/// patterns know, so a word with a letter the pack never mentions goes on to the fallback rules. Polish, Portuguese, Italian
 /// and German: every word, as their embedded patterns do. Any other language: a word whose letters
 /// the patterns know.
 fn pack_patterns_fit(lang: ProofLang, pats: &Patterns, core: &[char]) -> bool {
@@ -235,6 +254,9 @@ fn pack_patterns_fit(lang: ProofLang, pats: &Patterns, core: &[char]) -> bool {
         ProofLang::Bg => core.iter().all(|&c| crate::bg::is_letter(c)) && pack_knows(pats, core),
         ProofLang::Tr => core.iter().all(|&c| crate::tr::hyphen::is_letter(c)) && pack_knows(pats, core),
         ProofLang::Pl | ProofLang::Pt | ProofLang::It | ProofLang::De => true,
+        ProofLang::Gu | ProofLang::Hi => {
+            crate::indic::Script::of(lang).is_some_and(|s| core.iter().all(|&c| s.is_letter(c))) && pack_knows(pats, core)
+        }
         _ => pats.values(core).is_some(),
     }
 }
@@ -310,12 +332,12 @@ pub fn word_breaks_in(word: &str, lang: ProofLang) -> (Vec<usize>, Source) {
     let mut src = Source::None;
     let mut i = 0;
     while i < chars.len() {
-        if !is_word_char(chars[i]) {
+        if !is_word_char_in(chars[i], lang) {
             i += 1;
             continue;
         }
         let mut j = i;
-        while j < chars.len() && is_word_char(chars[j]) {
+        while j < chars.len() && is_word_char_in(chars[j], lang) {
             j += 1;
         }
         let (mut a, mut b) = (i, j);
@@ -369,7 +391,7 @@ pub fn hyphen_points_in(word: &str, lim: &Limits, lang: ProofLang) -> Vec<usize>
     let mut i = 0;
     while i < chars.len() {
         let mut j = i;
-        while chars.get(j).is_some_and(|c| is_word_char(*c)) {
+        while chars.get(j).is_some_and(|c| is_word_char_in(*c, lang)) {
             j += 1;
         }
         let (mut a, mut b) = (i, j);

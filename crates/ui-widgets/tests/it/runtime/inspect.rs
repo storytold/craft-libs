@@ -88,6 +88,71 @@ fn a_region_records_its_own_elements_and_numbers_every_stop() {
     }
 }
 
+/// The inspected region's rect and its record, as the latest real pass showed them.
+type Drawn = (Rect, Arc<Recorded>);
+
+/// Each Tab-order badge shows whole inside the drawing, in both directions: a badge on a stop at the region's edge
+/// moves in until it fits, and on an axis where it already fits it stays on its stop's leading top corner.
+#[trial]
+fn every_badge_shows_whole_inside_the_region() {
+    use craft_ui::runtime::env::Direction;
+    use egui::{Shape, vec2};
+
+    for direction in [Direction::Ltr, Direction::Rtl] {
+        let key = Id::NULL.with("trial.inspect.badges");
+        let seen: Rc<RefCell<Option<Drawn>>> = Rc::new(RefCell::new(None));
+        let out = Rc::clone(&seen);
+        let mut snap = true;
+        let mut fixture = Fixture::new(move |ui| {
+            let (shown, recorded) = inspect::record(ui, key, |ui| {
+                Stack::new().show(ui, |ui, _| {
+                    Button::new("Apply").show(ui);
+                    Checkbox::new(Bind::bound(&mut snap)).label("Snap to grid").show(ui);
+                })
+            });
+            if let Some(recorded) = recorded {
+                InspectOverlay::new(Arc::clone(&recorded)).show_at(ui, shown.output.rect);
+                *out.borrow_mut() = Some((shown.output.rect, recorded));
+            }
+        });
+        fixture.room(vec2(400.0, 300.0)).direction(direction);
+        fixture.ctx().disable_accesskit();
+        fixture.settle();
+        let shapes = fixture.frame_shapes();
+        let seen = seen.borrow();
+        let (region, recorded) = seen.as_ref().expect("the region ran");
+        let mut stops: Vec<(usize, usize)> =
+            recorded.elements.iter().enumerate().filter_map(|(index, element)| Some((element.stop?, index))).collect();
+        stops.sort_unstable();
+        assert!(stops.len() >= 2, "{direction:?}: the region has stops: {stops:?}");
+        for (number, index) in stops {
+            let text = fixture.texts().iter().find(|text| text.text == number.to_string()).cloned().expect("the badge's number is painted");
+            // The badge's disc and ring, centred on its number; a circle's stroke lies outside its radius.
+            let reach = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Circle(circle) if circle.center.distance(text.rect.center()) < 1.0 => Some(circle.radius + circle.stroke.width),
+                    _ => None,
+                })
+                .fold(0.0_f32, f32::max);
+            assert!(reach > 0.0, "{direction:?}: badge {number} has a disc round its number");
+            let badge = Rect::from_center_size(text.rect.center(), vec2(2.0 * reach, 2.0 * reach));
+            assert!(region.expand(0.05).contains_rect(badge), "{direction:?}: badge {number} at {badge:?} shows whole in the region {region:?}");
+            assert!(region.expand(0.5).contains_rect(text.rect), "{direction:?}: badge {number}'s number at {:?} shows whole", text.rect);
+            // Where the stop's corner leaves room for the whole badge, the badge stays on it.
+            let stop = recorded.stop_rect(index).expect("the stop is recorded");
+            let corner = if direction == Direction::Rtl { stop.right_top() } else { stop.left_top() };
+            let room = region.shrink(reach);
+            if (room.min.x..=room.max.x).contains(&corner.x) {
+                assert!((badge.center().x - corner.x).abs() < 1.0, "{direction:?}: badge {number} stays on its stop across");
+            }
+            if (room.min.y..=room.max.y).contains(&corner.y) {
+                assert!((badge.center().y - corner.y).abs() < 1.0, "{direction:?}: badge {number} stays on its stop down");
+            }
+        }
+    }
+}
+
 /// The commands the command trial's buttons are bound to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
 #[command(prefix = "inspectTrial")]
