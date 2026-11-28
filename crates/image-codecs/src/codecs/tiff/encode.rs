@@ -6,6 +6,9 @@ use super::{
     TiffKindBig, TiffKindStandard, TiffValue, Type, colortype, io, tiff_exif,
 };
 use std::io::Cursor;
+use tiff::encoder::DirectoryEncoder;
+
+mod jpeg;
 
 // ---------------------------------------------------------------------------
 // Encoding
@@ -276,7 +279,18 @@ where
     [C::Inner]: TiffValue,
     K: TiffKind,
 {
-    // The Exif and GPS directories go before the image, outside its chain; IFD0 points to them.
+    let subs = write_sub_directories(enc, tags)?;
+    let mut im = enc.new_image::<C>(w, h)?;
+    write_tags(im.encoder(), tags, subs)?;
+    im.write_data(data)
+}
+
+/// The Exif and GPS directories' offsets, once written ([`write_sub_directories`]).
+type SubDirectories<K> = (Option<<K as TiffKind>::OffsetType>, Option<<K as TiffKind>::OffsetType>);
+
+/// Writes the Exif and GPS directories, which go before the image, outside its chain; IFD0
+/// points to them ([`write_tags`]).
+fn write_sub_directories<K: TiffKind>(enc: &mut TiffEncoder<&mut Cursor<Vec<u8>>, K>, tags: &TagSet<'_>) -> tiff::TiffResult<SubDirectories<K>> {
     let mut sub = |e: &ExifDirs, fields: &[tiff_exif::Field]| (!fields.is_empty()).then(|| tiff_exif::write_directory(enc, fields, e.le)).transpose();
     let exif_at = match &tags.exif {
         Some(e) => sub(e, &e.exif)?,
@@ -286,13 +300,21 @@ where
         Some(e) => sub(e, &e.gps)?,
         None => None,
     };
-    let mut im = enc.new_image::<C>(w, h)?;
+    Ok((exif_at, gps_at))
+}
+
+/// Writes the image directory's metadata tags: resolution, the extra-sample kinds, ICC, XMP,
+/// text, the EXIF block's IFD0 tags and directory pointers, and Photoshop's private tags.
+fn write_tags<K: TiffKind>(
+    d: &mut DirectoryEncoder<'_, &mut Cursor<Vec<u8>>, K>,
+    tags: &TagSet<'_>,
+    (exif_at, gps_at): SubDirectories<K>,
+) -> tiff::TiffResult<()> {
     if let Some((x, y)) = tags.dpi {
-        im.resolution_unit(ResolutionUnit::Inch);
-        im.x_resolution(Rational { n: (x * 1000.0).round() as u32, d: 1000 });
-        im.y_resolution(Rational { n: (y * 1000.0).round() as u32, d: 1000 });
+        d.write_tag(Tag::ResolutionUnit, ResolutionUnit::Inch.to_u16())?;
+        d.write_tag(Tag::XResolution, Rational { n: (x * 1000.0).round() as u32, d: 1000 })?;
+        d.write_tag(Tag::YResolution, Rational { n: (y * 1000.0).round() as u32, d: 1000 })?;
     }
-    let d = im.encoder();
     if tags.reduced {
         d.write_tag(Tag::Unknown(TAG_NEW_SUBFILE_TYPE), 1u32)?;
     }
@@ -325,7 +347,7 @@ where
     if let Some(l) = tags.photoshop_layers {
         d.write_tag(Tag::Unknown(TAG_IMAGE_SOURCE_DATA), Undefined(l))?;
     }
-    im.write_data(data)
+    Ok(())
 }
 
 /// A Lab image as CIELab stores it: a* and b* signed, 8 or 16 bits (CIELab has no float form:
@@ -339,10 +361,19 @@ fn lab_file(img: &Image) -> Image {
     file
 }
 
-/// Writes the image with the colour type matching its layout and sample type.
-fn write_image<K: TiffKind>(enc: &mut TiffEncoder<&mut Cursor<Vec<u8>>, K>, img: &Image, tags: &TagSet<'_>) -> tiff::TiffResult<()> {
+/// Writes the image with the colour type matching its layout and sample type, or as JPEG strips
+/// when `jpeg` is set.
+fn write_image<K: TiffKind>(
+    enc: &mut TiffEncoder<&mut Cursor<Vec<u8>>, K>,
+    img: &Image,
+    tags: &TagSet<'_>,
+    jpeg: Option<jpeg::Strips>,
+) -> tiff::TiffResult<()> {
     use ChannelLayout as L;
     use SampleType as S;
+    if let Some(strips) = jpeg {
+        return jpeg::write(enc, img, tags, strips);
+    }
     if !img.meta.extra_samples.is_empty() {
         return write_with_extras::<K>(enc, img, tags);
     }
@@ -386,7 +417,12 @@ fn write_image<K: TiffKind>(enc: &mut TiffEncoder<&mut Cursor<Vec<u8>>, K>, img:
 /// Writes the image pyramid after the full image: each level half the size of the one before
 /// (rounded up), colour and alpha only, until the longer side is at most
 /// [`crate::TIFF_PYRAMID_MIN`]. An image already that small gets no levels.
-fn write_pyramid<K: TiffKind>(enc: &mut TiffEncoder<&mut Cursor<Vec<u8>>, K>, img: &Image, tags: &TagSet<'_>) -> tiff::TiffResult<()> {
+fn write_pyramid<K: TiffKind>(
+    enc: &mut TiffEncoder<&mut Cursor<Vec<u8>>, K>,
+    img: &Image,
+    tags: &TagSet<'_>,
+    jpeg: Option<jpeg::Strips>,
+) -> tiff::TiffResult<()> {
     let mut level: Option<Image> = None;
     loop {
         let prev = level.as_ref().unwrap_or(img);
@@ -395,7 +431,7 @@ fn write_pyramid<K: TiffKind>(enc: &mut TiffEncoder<&mut Cursor<Vec<u8>>, K>, im
             return Ok(());
         }
         let next = half_size(prev).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
-        write_image::<K>(enc, &next, tags)?;
+        write_image::<K>(enc, &next, tags, jpeg)?;
         level = Some(next);
     }
 }
@@ -543,6 +579,9 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     // with the image but deliberately leaves a wrong-sized plane alone: past that point a bad
     // plane would be reinterpreted in the new width rather than rejected.
     check_extra_planes(src)?;
+    if opts.tiff_compression == TiffCompression::Jpeg {
+        jpeg::check(src, plan)?;
+    }
     // `converted` brings the extra samples to the plan's sample type with the image.
     encode_ready(&src.converted(plan.layout, plan.sample), opts)
 }
@@ -553,7 +592,10 @@ fn encode_ready(img: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError
         TiffCompression::Lzw => tiff::encoder::Compression::Lzw,
         TiffCompression::Deflate => tiff::encoder::Compression::Deflate(tiff::encoder::DeflateLevel::Balanced),
         TiffCompression::PackBits => tiff::encoder::Compression::Packbits,
+        // Written strip by strip by `jpeg::write`, which compresses them itself.
+        TiffCompression::Jpeg => tiff::encoder::Compression::Uncompressed,
     };
+    let jpeg = (opts.tiff_compression == TiffCompression::Jpeg).then(|| jpeg::Strips::of(opts));
     let predictor = if !img.sample_type().is_float() && matches!(opts.tiff_compression, TiffCompression::Lzw | TiffCompression::Deflate) {
         tiff::encoder::Predictor::Horizontal
     } else {
@@ -633,15 +675,15 @@ fn encode_ready(img: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError
         let mut cursor = Cursor::new(out);
         if big {
             let mut enc = TiffEncoder::new_big(&mut cursor)?.with_compression(compression).with_predictor(predictor);
-            write_image::<TiffKindBig>(&mut enc, img, &tags)?;
+            write_image::<TiffKindBig>(&mut enc, img, &tags, jpeg)?;
             if opts.tiff_pyramid {
-                write_pyramid::<TiffKindBig>(&mut enc, img, &level_tags)?;
+                write_pyramid::<TiffKindBig>(&mut enc, img, &level_tags, jpeg)?;
             }
         } else {
             let mut enc = TiffEncoder::new(&mut cursor)?.with_compression(compression).with_predictor(predictor);
-            write_image::<TiffKindStandard>(&mut enc, img, &tags)?;
+            write_image::<TiffKindStandard>(&mut enc, img, &tags, jpeg)?;
             if opts.tiff_pyramid {
-                write_pyramid::<TiffKindStandard>(&mut enc, img, &level_tags)?;
+                write_pyramid::<TiffKindStandard>(&mut enc, img, &level_tags, jpeg)?;
             }
         }
         // Growth (or an estimate that was too high) can leave spare capacity: give it back
