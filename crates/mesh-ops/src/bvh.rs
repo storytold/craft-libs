@@ -37,20 +37,20 @@ const LEAF: usize = 4;
 
 /// Traversal stack of (node, entry distance): inline for typical depths (no allocation per
 /// ray), spilling to the heap for degenerate trees.
-struct Stack {
-    inline: [(u32, f32); 64],
+struct Stack<D = f32> {
+    inline: [(u32, D); 64],
     len: usize,
-    spill: Vec<(u32, f32)>,
+    spill: Vec<(u32, D)>,
 }
 
-impl Default for Stack {
+impl<D: Copy + Default> Default for Stack<D> {
     fn default() -> Self {
-        Stack { inline: [(0, 0.0); 64], len: 0, spill: Vec::new() }
+        Stack { inline: [(0, D::default()); 64], len: 0, spill: Vec::new() }
     }
 }
 
-impl Stack {
-    fn push(&mut self, v: (u32, f32)) {
+impl<D: Copy> Stack<D> {
+    fn push(&mut self, v: (u32, D)) {
         match self.inline.get_mut(self.len) {
             Some(slot) if self.spill.is_empty() => {
                 *slot = v;
@@ -60,7 +60,7 @@ impl Stack {
         }
     }
 
-    fn pop(&mut self) -> Option<(u32, f32)> {
+    fn pop(&mut self) -> Option<(u32, D)> {
         self.spill.pop().or_else(|| {
             self.len = self.len.checked_sub(1)?;
             self.inline.get(self.len).copied()
@@ -260,23 +260,25 @@ impl Bvh {
 
     /// Möller–Trumbore, double sided.
     fn hit_tri(t: &[Vec3; 3], o: Vec3, d: Vec3) -> Option<(f32, f32, f32)> {
-        let e1 = t[1] - t[0];
-        let e2 = t[2] - t[0];
+        // Every intermediate is computed in f64, where the products, the determinant and its
+        // reciprocal neither overflow nor underflow for finite f32 input.
+        let (a, d) = (t[0].as_dvec3(), d.as_dvec3());
+        let e1 = t[1].as_dvec3() - a;
+        let e2 = t[2].as_dvec3() - a;
         let p = d.cross(e2);
         let det = e1.dot(p);
         // det = d · (e2 × e1): parallel when it is small next to |d| times twice the area, so
-        // the test follows the triangle's scale. Zero-area triangles are never hit. The squares
-        // are taken in f64, where they neither overflow nor underflow for finite f32 input.
-        let n2 = e1.as_dvec3().cross(e2.as_dvec3()).length_squared();
+        // the test follows the triangle's scale. Zero-area triangles are never hit.
+        let n2 = e1.cross(e2).length_squared();
         // |det| below 1e-12 of |d| times twice the area (squared on both sides).
-        if n2 == 0.0 || f64::from(det) * f64::from(det) <= 1e-24 * n2 * d.as_dvec3().length_squared() {
+        if n2 == 0.0 || det * det <= 1e-24 * n2 * d.length_squared() {
             return None;
         }
         let inv = 1.0 / det;
-        let s = o - t[0];
+        let s = o.as_dvec3() - a;
         // A little slack on the edges: rays through a shared edge must not slip between its
         // two triangles to a surface behind.
-        const EDGE: f32 = 1e-5;
+        const EDGE: f64 = 1e-5;
         let u = s.dot(p) * inv;
         if !(-EDGE..=1.0 + EDGE).contains(&u) {
             return None;
@@ -286,8 +288,8 @@ impl Bvh {
         if v < -EDGE || u + v > 1.0 + EDGE {
             return None;
         }
-        let tt = e2.dot(q) * inv;
-        (tt > 0.0).then_some((tt, u, v))
+        let tt = (e2.dot(q) * inv) as f32;
+        (tt > 0.0).then_some((tt, u as f32, v as f32))
     }
 
     fn traverse(&self, o: Vec3, d: Vec3, mut tmax: f32, any: bool, filter: &dyn Fn(u32) -> bool) -> Option<Hit> {
@@ -356,8 +358,10 @@ impl Bvh {
     /// index): a [`Hit`] with the distance in `t` and the barycentrics of vertices 1 and 2.
     pub fn nearest(&self, p: Vec3, max_dist: f32, filter: &dyn Fn(u32) -> bool) -> Option<Hit> {
         let root = self.nodes.first().filter(|_| !self.tris.is_empty() && p.is_finite())?;
-        let pa = Vec3A::from(p);
-        let box_d2 = |n: &Node| (n.lo - pa).max(pa - n.hi).max(Vec3A::ZERO).length_squared();
+        // Squared distances in f64, where they neither overflow nor underflow for finite input.
+        let pd = p.as_dvec3();
+        let box_d2 = |n: &Node| (Vec3::from(n.lo).as_dvec3() - pd).max(pd - Vec3::from(n.hi).as_dvec3()).max(glam::DVec3::ZERO).length_squared();
+        let max_dist = f64::from(max_dist);
         let (mut best_d2, mut best) = (max_dist * max_dist, None);
         let mut stack = Stack::default();
         stack.push((0, box_d2(root)));
@@ -369,11 +373,11 @@ impl Bvh {
                     if !filter(orig) {
                         continue;
                     }
-                    let (q, u, v) = closest_on_triangle(p, tri);
-                    let dd = (q - p).length_squared();
+                    let (q, u, v) = closest_on_triangle_f64(pd, [tri[0].as_dvec3(), tri[1].as_dvec3(), tri[2].as_dvec3()]);
+                    let dd = (q - pd).length_squared();
                     if dd < best_d2 {
                         best_d2 = dd;
-                        best = Some(Hit { t: dd.sqrt(), tri: orig, u, v });
+                        best = Some(Hit { t: dd.sqrt() as f32, tri: orig, u: u as f32, v: v as f32 });
                     }
                 }
             } else {
@@ -413,16 +417,23 @@ impl Bvh {
     }
 }
 
-/// The point of triangle `t` nearest to `p` and its barycentrics (weights of vertices 1 and 2),
-/// by Voronoi region (Ericson, Real-Time Collision Detection, 5.1.5). Degenerate triangles give
-/// a non-finite distance and are never nearest.
+/// [`closest_on_triangle_f64`] for f32 input.
+#[cfg(test)]
 fn closest_on_triangle(p: Vec3, t: &[Vec3; 3]) -> (Vec3, f32, f32) {
-    let [a, b, c] = *t;
+    let (q, v, w) = closest_on_triangle_f64(p.as_dvec3(), [t[0].as_dvec3(), t[1].as_dvec3(), t[2].as_dvec3()]);
+    (q.as_vec3(), v as f32, w as f32)
+}
+
+/// The point of triangle `t` nearest to `p` and its barycentrics (weights of vertices 1 and 2),
+/// by Voronoi region (Ericson, Real-Time Collision Detection, 5.1.5), in f64, where the region
+/// products of tiny edges do not underflow. Degenerate triangles give a non-finite distance and
+/// are never nearest.
+fn closest_on_triangle_f64(p: glam::DVec3, t: [glam::DVec3; 3]) -> (glam::DVec3, f64, f64) {
+    let [a, b, c] = t;
     let (ab, ac, ap) = (b - a, c - a, p - a);
-    // Checked before the Voronoi regions, whose early returns would give a finite point; in f64,
-    // where the cross product of tiny edges does not underflow.
-    if ab.as_dvec3().cross(ac.as_dvec3()) == glam::DVec3::ZERO {
-        return (Vec3::NAN, 0.0, 0.0);
+    // Checked before the Voronoi regions, whose early returns would give a finite point.
+    if ab.cross(ac) == glam::DVec3::ZERO {
+        return (glam::DVec3::NAN, 0.0, 0.0);
     }
     let (d1, d2) = (ab.dot(ap), ac.dot(ap));
     if d1 <= 0.0 && d2 <= 0.0 {
@@ -579,6 +590,31 @@ mod tests {
         let mesh = Mesh { positions: vec![Vec3::ZERO, Vec3::new(s, 0.0, 0.0), Vec3::new(0.0, s, 0.0)], indices: vec![0, 1, 2], ..Mesh::default() };
         let hit = Bvh::new(&mesh).closest(Vec3::new(s * 0.25, s * 0.25, 1.0), Vec3::NEG_Z, 10.0).unwrap();
         assert!((hit.t - 1.0).abs() < 1e-6, "{}", hit.t);
+        // 1/det overflows f32 at this scale.
+        let s = 1e-20;
+        let mesh = Mesh { positions: vec![Vec3::ZERO, Vec3::new(s, 0.0, 0.0), Vec3::new(0.0, s, 0.0)], indices: vec![0, 1, 2], ..Mesh::default() };
+        let bvh = Bvh::new(&mesh);
+        let hit = bvh.closest(Vec3::new(s * 0.25, s * 0.25, 1.0), Vec3::NEG_Z, 10.0).unwrap();
+        assert!((hit.t - 1.0).abs() < 1e-6, "{}", hit.t);
+        assert!(bvh.occluded(Vec3::new(s * 0.25, s * 0.25, 1.0), Vec3::NEG_Z, 10.0));
+    }
+
+    #[test]
+    fn nearest_point_inside_a_tiny_triangle() {
+        // The region products underflow f32 at this scale.
+        let s = 1e-12;
+        let tri = [Vec3::ZERO, Vec3::new(s, 0.0, 0.0), Vec3::new(0.0, s, 0.0)];
+        let p = Vec3::new(s * 0.25, s * 0.25, 0.0);
+        let (q, u, v) = closest_on_triangle(p, &tri);
+        assert!((q - p).length() <= s * 1e-3, "{q}");
+        assert!((u - 0.25).abs() < 1e-4 && (v - 0.25).abs() < 1e-4, "{u} {v}");
+        let mesh = Mesh { positions: tri.to_vec(), indices: vec![0, 1, 2], ..Mesh::default() };
+        let hit = Bvh::new(&mesh).nearest(p, s / 8.0, &|_| true).unwrap();
+        assert!(hit.t <= s * 1e-3, "{}", hit.t);
+        // Squared distances past 1.8e19 overflow f32.
+        let mesh = Mesh { positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y], indices: vec![0, 1, 2], ..Mesh::default() };
+        let hit = Bvh::new(&mesh).nearest(Vec3::new(0.0, 0.0, 1e20), 2e20, &|_| true).unwrap();
+        assert!((hit.t / 1e20 - 1.0).abs() < 1e-6, "{}", hit.t);
     }
 
     #[test]

@@ -403,15 +403,17 @@ impl Mesh {
 
         // A vertex whose corners map to different UVs (a tile border under a piecewise map) gets
         // one copy per distinct result.
-        let mut results: std::collections::HashMap<usize, Vec<(Vec2, u32)>> = std::collections::HashMap::new();
+        // Keyed by vertex and the result's bit pattern, so each corner is one lookup.
+        let mut results: std::collections::HashMap<(usize, [u32; 2]), u32> = std::collections::HashMap::new();
+        let mut used = std::collections::HashSet::new();
         let mut new_uvs = Vec::with_capacity(corners.len());
         for (k, v, uv) in corners {
-            let list = results.entry(v).or_default();
-            let target = if let Some(&(_, i)) = list.iter().find(|(r, _)| r.to_array().map(f32::to_bits) == uv.to_array().map(f32::to_bits)) {
+            let key = (v, uv.to_array().map(f32::to_bits));
+            let target = if let Some(&i) = results.get(&key) {
                 i
             } else {
-                let i = if list.is_empty() { v as u32 } else { self.duplicate_vertex(v) };
-                list.push((uv, i));
+                let i = if used.insert(v) { v as u32 } else { self.duplicate_vertex(v) };
+                results.insert(key, i);
                 new_uvs.push((i, uv));
                 i
             };

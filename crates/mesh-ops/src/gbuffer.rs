@@ -48,32 +48,39 @@ enum Contact {
     Counted,
 }
 
-/// The angular wedge (start angle, counterclockwise sweep, radians) a triangle covers around a
-/// texel center on its boundary: a half-plane on an edge, the corner's angle on a corner.
-type Wedge = (f64, f64);
+/// The angular wedge a triangle covers around a texel center on its boundary, as its start and
+/// end directions counterclockwise (at most a half turn): a half-plane on an edge, the corner's
+/// angle on a corner. The directions are the triangle's edge vectors, so two triangles that
+/// share an edge or a corner give exactly opposite or equal vectors there.
+type Wedge = (DVec2, DVec2);
 
-fn angle(v: DVec2) -> f64 {
-    v.y.atan2(v.x)
+fn cross(a: DVec2, b: DVec2) -> f64 {
+    a.x * b.y - a.y * b.x
 }
 
 /// The wedge around a texel center on edge `e0`–`e1` on the side of corner `c`.
 fn edge_wedge(e0: DVec2, e1: DVec2, c: DVec2) -> Wedge {
-    let start = if edge(e0, e1, c) > 0.0 { angle(e1 - e0) } else { angle(e0 - e1) };
-    (start, std::f64::consts::PI)
+    let start = if edge(e0, e1, c) > 0.0 { e1 - e0 } else { e0 - e1 };
+    (start, -start)
 }
 
 /// The wedge of the triangle's corner at `v` between its edges toward `q` and `r`.
 fn corner_wedge(v: DVec2, q: DVec2, r: DVec2) -> Wedge {
-    let (a, b) = (angle(q - v), angle(r - v));
-    let sweep = (b - a).rem_euclid(std::f64::consts::TAU);
-    if sweep <= std::f64::consts::PI { (a, sweep) } else { (b, std::f64::consts::TAU - sweep) }
+    let (a, b) = (q - v, r - v);
+    if cross(a, b) >= 0.0 { (a, b) } else { (b, a) }
 }
 
-/// Whether the open wedges share more than a rounding error of angle.
-fn wedges_overlap((a1, s1): Wedge, (a2, s2): Wedge) -> bool {
-    const TOLERANCE: f64 = 1e-7;
-    let d = (a2 - a1).rem_euclid(std::f64::consts::TAU);
-    d < s1 - TOLERANCE || d > std::f64::consts::TAU - s2 + TOLERANCE
+/// Whether direction `x` lies strictly inside the open wedge.
+fn strictly_inside((s, e): Wedge, x: DVec2) -> bool {
+    cross(s, x) > 0.0 && cross(x, e) > 0.0
+}
+
+/// Whether the open wedges share any direction. Exact contact (opposite sides of a shared edge,
+/// neighbors in a fan around a shared corner) gives equal or opposite edge vectors, whose cross
+/// products are exactly zero, so it never counts; any positive crossing angle does.
+fn wedges_overlap(w1: Wedge, w2: Wedge) -> bool {
+    let same_start = cross(w1.0, w2.0) == 0.0 && w1.0.dot(w2.0) > 0.0;
+    same_start || strictly_inside(w1, w2.0) || strictly_inside(w2, w1.0)
 }
 
 fn edge(a: DVec2, b: DVec2, p: DVec2) -> f64 {
@@ -290,6 +297,18 @@ mod tests {
         assert_eq!(g.overlaps, 1);
         // Edges that cross at a shallow angle through the only center are not a shared edge.
         let uv = vec![Vec2::new(0.0, 0.5), Vec2::new(1.0, 0.5), Vec2::new(0.5, 1.0), Vec2::new(0.0, 0.49), Vec2::new(1.0, 0.51), Vec2::new(0.5, 0.0)];
+        let m = Mesh::from_parts(vec![Vec3::ZERO; 6], None, uv, vec![0, 1, 2, 3, 4, 5], "m").unwrap();
+        assert_eq!(UvGBuffer::new(&m, 0, 1, 1).overlaps, 1);
+        // The same at a crossing angle of about 4e-8 radians.
+        let d = 2.0f32.powi(-24);
+        let uv = vec![
+            Vec2::new(-1.0, 0.5),
+            Vec2::new(2.0, 0.5),
+            Vec2::new(0.5, 1.0),
+            Vec2::new(-1.0, 0.5 - d),
+            Vec2::new(2.0, 0.5 + d),
+            Vec2::new(0.5, 0.0),
+        ];
         let m = Mesh::from_parts(vec![Vec3::ZERO; 6], None, uv, vec![0, 1, 2, 3, 4, 5], "m").unwrap();
         assert_eq!(UvGBuffer::new(&m, 0, 1, 1).overlaps, 1);
     }
