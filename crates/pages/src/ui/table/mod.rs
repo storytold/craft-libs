@@ -9,7 +9,7 @@ pub mod size_picker;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
-pub use edges::{BorderEdges, BorderPreset, EdgeKey, EdgeLook, EdgePicker, EdgePickerStyle, EdgePickerWords, SampleArea};
+pub use edges::{BorderEdges, BorderPreset, EdgeKey, EdgeLook, EdgePicker, EdgePickerStyle, EdgePickerWords, EdgeSize, SampleArea};
 pub use properties::{CellAlign, RowHeight, TableChange, TableProperties, TablePropertiesOutput, TablePropertiesWords, TableValues, TextDirection};
 pub use selection::{CellSelectionOverlay, CellSelectionStyle, TableGeometry};
 pub use size_picker::{TableSizePicker, TableSizePickerOutput, TableSizePickerStyle, TableSizePickerWords};
