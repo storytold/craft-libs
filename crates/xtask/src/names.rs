@@ -2857,7 +2857,9 @@ fn seven() { let _ = "seven"; }
             let policy = Policy { skip: change_directory, ..POLICY };
             let found = scan(Path::new("."), &[Input::rust(Path::new("src"))], &policy).unwrap();
             assert_eq!(hits(&found), [("src/a.rs".to_owned(), 1, "AzureKit")]);
-            assert_eq!(std::env::current_dir().unwrap(), PathBuf::from(root).join("switched"));
+            // Canonical on both sides: macOS temp paths run through the /var -> /private/var link.
+            let canonical = |p: PathBuf| p.canonicalize().unwrap();
+            assert_eq!(canonical(std::env::current_dir().unwrap()), canonical(PathBuf::from(root).join("switched")));
             return;
         }
         let dir = tempfile::tempdir().unwrap();
