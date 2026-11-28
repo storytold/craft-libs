@@ -264,6 +264,10 @@ fn monotone_at(points: &[[f64; 2]], x: f64) -> f64 {
 /// Within this many input levels of an existing point, a new point is that point.
 pub(crate) const SAME_POINT: f32 = 2.0;
 
+/// A moved point keeps at least this many input levels between it and a neighbour that is already
+/// at least this far; see [`CurveRules::move_to`].
+pub(crate) const MIN_GAP: f32 = 4.0;
+
 /// The point rules of a curve with `levels` levels and at most `max_points` points: what
 /// [`CurveEditor`](super::CurveEditor) applies to its points, for hosts that add points
 /// themselves (a Curves eyedropper).
@@ -314,16 +318,28 @@ impl CurveRules {
         true
     }
 
-    /// Moves point `i` to `v` in whole levels, strictly between its neighbours' inputs; false
-    /// when nothing changed.
+    /// The inputs `move_to` allows point `i`: `MIN_GAP` levels inside each neighbour that is at
+    /// least that far off already, one level inside a closer one (a curve a script or a file
+    /// loaded keeps its pair), and `0..=levels` at the ends. A pair sharing an input is held one
+    /// level apart.
+    pub(crate) fn input_bounds(&self, points: &[[f32; 2]], i: usize) -> (f32, f32) {
+        let Some(old) = points.get(i).copied() else { return (0.0, self.levels) };
+        let keep = |gap: f32| if gap >= MIN_GAP { MIN_GAP } else { 1.0 };
+        let lo = i.checked_sub(1).and_then(|j| points.get(j)).map_or(0.0, |p| p[0] + keep(old[0] - p[0]));
+        let hi = points.get(i + 1).map_or(self.levels, |p| p[0] - keep(p[0] - old[0]));
+        (lo, hi.max(lo))
+    }
+
+    /// Moves point `i` to `v` in whole levels, keeping `MIN_GAP` input levels between it and the
+    /// neighbours that are that far off already (the ends of the input range at the ends of the
+    /// curve); false when nothing changed.
     pub fn move_to(&self, points: &mut [[f32; 2]], i: usize, v: [f32; 2]) -> bool {
         let Some(old) = points.get(i).copied() else { return false };
         if !v.iter().chain(old.iter()).all(|x| x.is_finite()) {
             return false;
         }
-        let lo = i.checked_sub(1).and_then(|j| points.get(j)).map_or(0.0, |p| p[0] + 1.0);
-        let hi = points.get(i + 1).map_or(self.levels, |p| p[0] - 1.0);
-        let new = [v[0].round().clamp(lo, hi.max(lo)), v[1].round().clamp(0.0, self.levels)];
+        let (lo, hi) = self.input_bounds(points, i);
+        let new = [v[0].round().clamp(lo, hi), v[1].round().clamp(0.0, self.levels)];
         points[i] = new;
         new != old
     }
@@ -360,7 +376,8 @@ impl CurveRules {
         Some(Curve::from_parts(points, curve.corner_flags()))
     }
 
-    /// `curve` with point `i` at `to`, strictly between its neighbours' inputs.
+    /// `curve` with point `i` at `to`, keeping `MIN_GAP` input levels from the neighbours that are
+    /// that far off already.
     pub(crate) fn moved(&self, curve: &Curve, i: usize, to: [f32; 2]) -> Option<Curve> {
         let mut points = curve.points()?.to_vec();
         if !self.move_to(&mut points, i, to) {
