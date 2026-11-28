@@ -1,0 +1,19 @@
+[package]
+name = "craft-parquet"
+description = "Flat Parquet tables: a bounded reader that hands typed values to a row callback, and a writer that takes cells from a callback in 4,096-row groups."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+bytes = { workspace = true }
+parquet = { workspace = true, features = ["snap", "brotli", "flate2-rust_backend", "lz4"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+parquet = { workspace = true, features = ["zstd"] }

@@ -236,6 +236,7 @@ craft-shared-vec = { workspace = true, optional = true }
 craft-ease = { workspace = true, optional = true }
 craft-i18n-build = { workspace = true, optional = true }
 craft-pbr = { workspace = true, optional = true }
+craft-parquet = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -704,6 +705,8 @@ ora = ["dep:craft-ora"]
 pages = ["dep:craft-pages", "keymap", "text"]
 
 palette = ["dep:craft-palette"]
+
+parquet = ["dep:craft-parquet"]
 
 pbr = ["dep:craft-pbr"]
 pbr-parallel = ["pbr", "craft-pbr/parallel"]

@@ -275,6 +275,8 @@ pub use craft_ora as ora;
 pub use craft_pages as pages;
 #[cfg(feature = "palette")]
 pub use craft_palette as palette;
+#[cfg(feature = "parquet")]
+pub use craft_parquet as parquet;
 #[cfg(feature = "pbr")]
 pub use craft_pbr as pbr;
 #[cfg(feature = "pcap")]

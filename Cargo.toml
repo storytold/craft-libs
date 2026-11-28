@@ -67,6 +67,8 @@ hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"
 bytemuck = "1"
 kurbo = "0.13"
 thiserror = "2"
+bytes = "1"
+parquet = { version = "60", default-features = false }
 craft-gzip = { path = "crates/gzip" }
 craft-gridcraft-format = { path = "crates/gridcraft-format" }
 craft-aaf = { path = "crates/aaf" }
@@ -91,6 +93,7 @@ craft-frame = { path = "crates/frame" }
 craft-crs = { path = "crates/crs" }
 craft-crw = { path = "crates/crw" }
 craft-csv = { path = "crates/csv" }
+craft-parquet = { path = "crates/parquet" }
 craft-dav = { path = "crates/dav" }
 craft-automation = { path = "crates/automation" }
 craft-browse = { path = "crates/browse" }
