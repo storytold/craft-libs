@@ -1903,6 +1903,7 @@ dependencies = [
  "craft-pst",
  "craft-quit",
  "craft-raster-codecs",
+ "craft-raster3d",
  "craft-raw",
  "craft-review",
  "craft-rtf",
@@ -3990,6 +3991,14 @@ dependencies = [
  "craft-dds",
  "craft-image-codecs",
  "image",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-raster3d"
+version = "0.1.0"
+dependencies = [
+ "rayon",
  "thiserror 2.0.21",
 ]
 

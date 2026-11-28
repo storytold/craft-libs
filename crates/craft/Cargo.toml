@@ -236,6 +236,7 @@ craft-shared-vec = { workspace = true, optional = true }
 craft-ease = { workspace = true, optional = true }
 craft-i18n-build = { workspace = true, optional = true }
 craft-pbr = { workspace = true, optional = true }
+craft-raster3d = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -792,6 +793,8 @@ pst-test-writer = ["pst", "craft-pst/test-writer"]
 quit = ["dep:craft-quit"]
 
 raster-codecs = ["dep:craft-raster-codecs"]
+
+raster3d = ["dep:craft-raster3d"]
 
 raw = ["dep:craft-raw"]
 raw-arw = ["raw", "craft-raw/arw"]

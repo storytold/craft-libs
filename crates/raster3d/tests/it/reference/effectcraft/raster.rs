@@ -1,0 +1,583 @@
+//! EffectCraft's `crates/render/src/three_d/adv/raster.rs`. Changes: the imports (the scene
+//! types come from this crate, `basis_view` and `vec3` from `super::geom`), `pub` in place of
+//! `pub(crate)`, comments removed, and two expressions broken over lines as rustfmt asks.
+
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+
+use rayon::prelude::*;
+
+use super::shade::{Frag, sample, shade};
+use craft_raster3d::{EnvInfo, Scene, ShadowMap, Vertex};
+
+pub struct Target {
+    pub width: u32,
+    pub height: u32,
+    pub color: Vec<[f32; 4]>,
+    pub depth: Vec<f32>,
+}
+
+#[derive(Clone, Copy)]
+struct STri {
+    p: [[f64; 2]; 3],
+    z: [f32; 3],
+    inv_w: [f32; 3],
+    w: [[f32; 3]; 3],
+    tri: u32,
+    front: bool,
+    bbox: [i32; 4],
+}
+
+#[inline]
+fn mat_mul(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 4] {
+    let mut o = [0.0; 4];
+    for r in 0..4 {
+        o[r] = m[r][0] * p[0] + m[r][1] * p[1] + m[r][2] * p[2] + m[r][3];
+    }
+    o
+}
+
+fn clip_poly(poly: Vec<([f32; 4], [f32; 3])>) -> Vec<([f32; 4], [f32; 3])> {
+    let mut p = poly;
+    for plane in 0..2 {
+        if p.is_empty() {
+            break;
+        }
+        let d = |c: &[f32; 4]| if plane == 0 { c[2] } else { c[3] - c[2] };
+        let mut out = Vec::with_capacity(p.len() + 2);
+        for i in 0..p.len() {
+            let (a, b) = (p[i], p[(i + 1) % p.len()]);
+            let (da, db) = (d(&a.0), d(&b.0));
+            if da >= 0.0 {
+                out.push(a);
+            }
+            if (da >= 0.0) != (db >= 0.0) {
+                let t = da / (da - db);
+                let mut c = [0.0; 4];
+                let mut w = [0.0; 3];
+                for k in 0..4 {
+                    c[k] = a.0[k] + (b.0[k] - a.0[k]) * t;
+                }
+                for k in 0..3 {
+                    w[k] = a.1[k] + (b.1[k] - a.1[k]) * t;
+                }
+                out.push((c, w));
+            }
+        }
+        p = out;
+    }
+    p
+}
+
+fn setup(s: &Scene, clip: &[[f32; 4]], range: std::ops::Range<usize>) -> Vec<STri> {
+    let (w, h) = (s.width as f64, s.height as f64);
+    let mut out = vec![];
+    for t in range.step_by(3) {
+        let ids = [s.indices[t] as usize, s.indices[t + 1] as usize, s.indices[t + 2] as usize];
+        let mat = s.vertices[ids[0]].material as usize;
+        if !s.materials.get(mat).is_some_and(|m| m.visible) {
+            continue;
+        }
+        let poly = vec![(clip[ids[0]], [1.0, 0.0, 0.0]), (clip[ids[1]], [0.0, 1.0, 0.0]), (clip[ids[2]], [0.0, 0.0, 1.0])];
+        let poly = clip_poly(poly);
+        if poly.len() < 3 {
+            continue;
+        }
+        let scr: Vec<([f64; 2], f32, f32, [f32; 3])> = poly
+            .iter()
+            .map(|(c, wt)| {
+                let iw = 1.0 / c[3];
+                let (nx, ny) = (c[0] * iw, c[1] * iw);
+                ([(nx as f64 + 1.0) * 0.5 * w, (1.0 - ny as f64) * 0.5 * h], c[2] * iw, iw, *wt)
+            })
+            .collect();
+        let mut area = 0.0;
+        for i in 0..scr.len() {
+            let (a, b) = (scr[i].0, scr[(i + 1) % scr.len()].0);
+            area += a[0] * b[1] - b[0] * a[1];
+        }
+        if area == 0.0 || !area.is_finite() {
+            continue;
+        }
+        let front = area < 0.0;
+        for k in 1..scr.len() - 1 {
+            let c = [scr[0], scr[k], scr[k + 1]];
+            let mut x0 = f64::INFINITY;
+            let mut y0 = f64::INFINITY;
+            let mut x1 = f64::NEG_INFINITY;
+            let mut y1 = f64::NEG_INFINITY;
+            for v in &c {
+                x0 = x0.min(v.0[0]);
+                y0 = y0.min(v.0[1]);
+                x1 = x1.max(v.0[0]);
+                y1 = y1.max(v.0[1]);
+            }
+            let (w, h) = (i64::from(s.width.min(i32::MAX as u32)), i64::from(s.height.min(i32::MAX as u32)));
+            let bbox = [
+                (x0.floor() as i64).clamp(0, w) as i32,
+                (y0.floor() as i64).clamp(0, h) as i32,
+                (x1.ceil() as i64).clamp(0, w) as i32,
+                (y1.ceil() as i64).clamp(0, h) as i32,
+            ];
+            if bbox[0] >= bbox[2] || bbox[1] >= bbox[3] {
+                continue;
+            }
+            out.push(STri {
+                p: [c[0].0, c[1].0, c[2].0],
+                z: [c[0].1, c[1].1, c[2].1],
+                inv_w: [c[0].2, c[1].2, c[2].2],
+                w: [c[0].3, c[1].3, c[2].3],
+                tri: (t / 3) as u32,
+                front,
+                bbox,
+            });
+        }
+    }
+    out
+}
+
+#[inline]
+fn cover(t: &STri, px: f64, py: f64) -> Option<(f32, [f32; 3])> {
+    let [a, b, c] = t.p;
+    let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    let (b, c, swap) = if area < 0.0 { (c, b, true) } else { (b, c, false) };
+    let area = area.abs();
+    let edge = |p: [f64; 2], q: [f64; 2]| -> f64 { (q[0] - p[0]) * (py - p[1]) - (q[1] - p[1]) * (px - p[0]) };
+    let top_left = |p: [f64; 2], q: [f64; 2]| -> bool {
+        let (dx, dy) = (q[0] - p[0], q[1] - p[1]);
+        dy < 0.0 || (dy == 0.0 && dx > 0.0)
+    };
+    let e0 = edge(b, c);
+    let e1 = edge(c, a);
+    let e2 = edge(a, b);
+    let inside = |e: f64, p: [f64; 2], q: [f64; 2]| e > 0.0 || (e == 0.0 && top_left(p, q));
+    if !(inside(e0, b, c) && inside(e1, c, a) && inside(e2, a, b)) {
+        return None;
+    }
+    let (l0, l1, l2) = ((e0 / area) as f32, (e1 / area) as f32, (e2 / area) as f32);
+    let l = if swap { [l0, l2, l1] } else { [l0, l1, l2] };
+    let z = l[0] * t.z[0] + l[1] * t.z[1] + l[2] * t.z[2];
+    let q = [l[0] * t.inv_w[0], l[1] * t.inv_w[1], l[2] * t.inv_w[2]];
+    let sum = q[0] + q[1] + q[2];
+    if sum <= 0.0 {
+        return None;
+    }
+    Some((z, [q[0] / sum, q[1] / sum, q[2] / sum]))
+}
+
+fn frag(s: &Scene, t: &STri, l: [f32; 3]) -> Frag {
+    let base = t.tri as usize * 3;
+    let v: [&Vertex; 3] = [0, 1, 2].map(|k| &s.vertices[s.indices[base + k] as usize]);
+    let mut wv = [0.0f32; 3];
+    for c in 0..3 {
+        for k in 0..3 {
+            wv[k] += l[c] * t.w[c][k];
+        }
+    }
+    let mut f = Frag { pos: [0.0; 3], normal: [0.0; 3], uv: [0.0; 2], tangent: [0.0; 4], material: v[0].material, front: t.front };
+    for k in 0..3 {
+        let x = wv[k];
+        for i in 0..3 {
+            f.pos[i] += v[k].pos[i] * x;
+            f.normal[i] += v[k].normal[i] * x;
+        }
+        for i in 0..2 {
+            f.uv[i] += v[k].uv[i] * x;
+        }
+        for i in 0..4 {
+            f.tangent[i] += v[k].tangent[i] * x;
+        }
+    }
+    f.tangent[3] = v[0].tangent[3];
+    f
+}
+
+const BAND: i32 = 16;
+
+pub fn render(s: &Scene) -> Target {
+    let (w, h) = (s.width as usize, s.height as usize);
+    let clip: Vec<[f32; 4]> = s.vertices.iter().map(|v| mat_mul(&s.clip, v.pos)).collect();
+    let opaque = setup(s, &clip, 0..s.opaque_count as usize);
+    let trans = setup(s, &clip, s.opaque_count as usize..s.indices.len());
+    let bands = (h as i32 + BAND - 1) / BAND;
+    let bin = |ts: &[STri]| -> Vec<Vec<u32>> {
+        let mut b = vec![vec![]; bands.max(0) as usize];
+        for (i, t) in ts.iter().enumerate() {
+            for band in (t.bbox[1] / BAND)..((t.bbox[3] + BAND - 1) / BAND).min(bands) {
+                b[band as usize].push(i as u32);
+            }
+        }
+        b
+    };
+    let ob = bin(&opaque);
+    let tb = bin(&trans);
+    let view = s.view;
+    let cam_z = |p: [f32; 3]| view[2][0] * p[0] + view[2][1] * p[1] + view[2][2] * p[2] + view[2][3];
+    let mut color = vec![[0.0f32; 4]; w * h];
+    let mut depth = vec![f32::INFINITY; w * h];
+    color.par_chunks_mut(w * BAND as usize).zip(depth.par_chunks_mut(w * BAND as usize)).enumerate().for_each(|(band, (crow, drow))| {
+        let y0 = band as i32 * BAND;
+        let rows = crow.len() / w;
+        let mut vis: Vec<(u32, f32, [f32; 3])> = vec![(u32::MAX, 0.0, [0.0; 3]); rows * w];
+        for &ti in &ob[band] {
+            let t = &opaque[ti as usize];
+            for y in t.bbox[1].max(y0)..t.bbox[3].min(y0 + rows as i32) {
+                let r = (y - y0) as usize * w;
+                for x in t.bbox[0]..t.bbox[2] {
+                    if let Some((z, l)) = cover(t, x as f64 + 0.5, y as f64 + 0.5) {
+                        let v = &mut vis[r + x as usize];
+                        if z > v.1 && z <= 1.0 {
+                            *v = (ti, z, l);
+                        }
+                    }
+                }
+            }
+        }
+        for i in 0..rows * w {
+            let (ti, _, l) = vis[i];
+            if ti == u32::MAX {
+                continue;
+            }
+            let t = &opaque[ti as usize];
+            let f = frag(s, t, l);
+            match shade(s, &f) {
+                Some(c) => {
+                    crow[i] = c;
+                    drow[i] = cam_z(f.pos);
+                }
+                None => {
+                    let (x, y) = ((i % w) as f64 + 0.5, (y0 as usize + i / w) as f64 + 0.5);
+                    let mut best: Option<(f32, [f32; 4], f32)> = None;
+                    for &tj in &ob[band] {
+                        if tj == ti {
+                            continue;
+                        }
+                        let t2 = &opaque[tj as usize];
+                        if (x as i32) < t2.bbox[0] || (x as i32) >= t2.bbox[2] || (y as i32) < t2.bbox[1] || (y as i32) >= t2.bbox[3] {
+                            continue;
+                        }
+                        if let Some((z, l2)) = cover(t2, x, y)
+                            && best.is_none_or(|b| z > b.0)
+                        {
+                            let f2 = frag(s, t2, l2);
+                            if let Some(c) = shade(s, &f2) {
+                                best = Some((z, c, cam_z(f2.pos)));
+                            }
+                        }
+                    }
+                    if let Some((z, c, d)) = best {
+                        crow[i] = c;
+                        drow[i] = d;
+                        vis[i].1 = z;
+                    } else {
+                        vis[i].1 = 0.0;
+                    }
+                }
+            }
+        }
+        for &ti in &tb[band] {
+            let t = &trans[ti as usize];
+            for y in t.bbox[1].max(y0)..t.bbox[3].min(y0 + rows as i32) {
+                let r = (y - y0) as usize * w;
+                for x in t.bbox[0]..t.bbox[2] {
+                    let i = r + x as usize;
+                    if let Some((z, l)) = cover(t, x as f64 + 0.5, y as f64 + 0.5)
+                        && z > vis[i].1
+                        && z <= 1.0
+                        && let Some(c) = shade(s, &frag(s, t, l))
+                    {
+                        let d = crow[i];
+                        let k = 1.0 - c[3];
+                        crow[i] = [c[0] + d[0] * k, c[1] + d[1] * k, c[2] + d[2] * k, c[3] + d[3] * k];
+                    }
+                }
+            }
+        }
+    });
+    Target { width: s.width, height: s.height, color, depth }
+}
+
+fn basis(eye: [f64; 3], fwd: [f64; 3], down: [f64; 3]) -> [[f32; 4]; 3] {
+    use super::geom::vec3;
+    let m = super::geom::basis_view(vec3(eye[0], eye[1], eye[2]), vec3(fwd[0], fwd[1], fwd[2]), vec3(down[0], down[1], down[2]));
+    [0, 1, 2].map(|r| m.0[r].map(|v| v as f32))
+}
+
+fn shadow_raster(s: &Scene, m: &ShadowMap, casters: &[usize]) -> Vec<f32> {
+    let n = m.size as usize;
+    let mut d = vec![f32::INFINITY; n * n];
+    let c = n as f32 * 0.5;
+    const NEAR: f32 = 1.0;
+    for &t in casters {
+        let ids = [s.indices[3 * t] as usize, s.indices[3 * t + 1] as usize, s.indices[3 * t + 2] as usize];
+        let mat = &s.materials[s.vertices[ids[0]].material as usize];
+        // Mask mode casts where the material's alpha passes its cutoff (as `shade` draws it);
+        // blend mode casts where its alpha times the layer's opacity reaches one half.
+        let (alpha_k, cutoff) = if mat.alpha_mode == 1 { (mat.base[3], mat.alpha_cutoff) } else { (mat.base[3] * mat.opacity, 0.5) };
+        let alpha_tex = if mat.alpha_mode != 0 && mat.tex_base >= 0 { s.textures.get(mat.tex_base as usize) } else { None };
+        if mat.alpha_mode == 1 && alpha_tex.is_none() && alpha_k < cutoff {
+            continue;
+        }
+        let q: Vec<([f32; 3], [f32; 2])> = ids
+            .iter()
+            .map(|&i| {
+                let p = s.vertices[i].pos;
+                let v = &m.view;
+                ([0, 1, 2].map(|r| v[r][0] * p[0] + v[r][1] * p[1] + v[r][2] * p[2] + v[r][3]), s.vertices[i].uv)
+            })
+            .collect();
+        let mut poly = q;
+        if !m.ortho {
+            let mut out = vec![];
+            for i in 0..poly.len() {
+                let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+                let (da, db) = (a.0[2] - NEAR, b.0[2] - NEAR);
+                if da >= 0.0 {
+                    out.push(a);
+                }
+                if (da >= 0.0) != (db >= 0.0) {
+                    let k = da / (da - db);
+                    let lerp = |x: f32, y: f32| x + (y - x) * k;
+                    out.push(([lerp(a.0[0], b.0[0]), lerp(a.0[1], b.0[1]), lerp(a.0[2], b.0[2])], [lerp(a.1[0], b.1[0]), lerp(a.1[1], b.1[1])]));
+                }
+            }
+            poly = out;
+        }
+        if poly.len() < 3 {
+            continue;
+        }
+        let scr: Vec<([f64; 2], f32, f32, [f32; 2])> = poly
+            .iter()
+            .map(|(p, uv)| {
+                if m.ortho {
+                    ([(p[0] * m.focal + c) as f64, (p[1] * m.focal + c) as f64], 1.0, p[2], *uv)
+                } else {
+                    let iz = 1.0 / p[2];
+                    ([(p[0] * m.focal * iz + c) as f64, (p[1] * m.focal * iz + c) as f64], iz, p[2], *uv)
+                }
+            })
+            .collect();
+        for k in 1..scr.len() - 1 {
+            let tri = [scr[0], scr[k], scr[k + 1]];
+            let (a, b, cc) = (tri[0].0, tri[1].0, tri[2].0);
+            let area = (b[0] - a[0]) * (cc[1] - a[1]) - (b[1] - a[1]) * (cc[0] - a[0]);
+            if area.abs() < 1e-12 {
+                continue;
+            }
+            let x0 = a[0].min(b[0]).min(cc[0]).floor().max(0.0) as usize;
+            let x1 = (a[0].max(b[0]).max(cc[0]).ceil().max(0.0) as usize).min(n);
+            let y0 = a[1].min(b[1]).min(cc[1]).floor().max(0.0) as usize;
+            let y1 = (a[1].max(b[1]).max(cc[1]).ceil().max(0.0) as usize).min(n);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+                    let e0 = ((cc[0] - b[0]) * (py - b[1]) - (cc[1] - b[1]) * (px - b[0])) / area;
+                    let e1 = ((a[0] - cc[0]) * (py - cc[1]) - (a[1] - cc[1]) * (px - cc[0])) / area;
+                    let e2 = 1.0 - e0 - e1;
+                    if e0 < 0.0 || e1 < 0.0 || e2 < 0.0 {
+                        continue;
+                    }
+                    let l = [e0 as f32, e1 as f32, e2 as f32];
+                    let (z, uv) = if m.ortho {
+                        (
+                            l[0] * tri[0].2 + l[1] * tri[1].2 + l[2] * tri[2].2,
+                            [0, 1].map(|i| l[0] * tri[0].3[i] + l[1] * tri[1].3[i] + l[2] * tri[2].3[i]),
+                        )
+                    } else {
+                        let iz = l[0] * tri[0].1 + l[1] * tri[1].1 + l[2] * tri[2].1;
+                        let z = 1.0 / iz;
+                        (z, [0, 1].map(|i| (l[0] * tri[0].3[i] * tri[0].1 + l[1] * tri[1].3[i] * tri[1].1 + l[2] * tri[2].3[i] * tri[2].1) * z))
+                    };
+                    let px = &mut d[y * n + x];
+                    if z >= *px {
+                        continue;
+                    }
+                    if let Some(t) = alpha_tex
+                        && sample(t, &s.texels, uv[0], uv[1])[3] * alpha_k < cutoff
+                    {
+                        continue;
+                    }
+                    *px = z;
+                }
+            }
+        }
+    }
+    d
+}
+
+pub const MAX_SHADOW_TEXELS: u64 = 26_000_000;
+
+pub fn shadow_map_size(width: u32, height: u32, draft: bool) -> u32 {
+    if draft {
+        return 512;
+    }
+    let side = width.max(height).clamp(512, 4096);
+    let mut size = 512u32;
+    while size < side {
+        size *= 2;
+    }
+    size
+}
+
+pub fn shadow_point_face_size(size: u32, draft: bool) -> u32 {
+    if draft { (size / 2).max(1) } else { size.min(2048) }
+}
+
+pub fn shadow_sizes(width: u32, height: u32, draft: bool, kinds: &[u32]) -> Vec<Option<u32>> {
+    let base = shadow_map_size(width, height, draft);
+    let faces = |k: u32| -> u64 { if k == 2 { 6 } else { 1 } };
+    let floor = |k: u32| -> u32 { if k == 2 { 128 } else { 512 } };
+    let mut sizes: Vec<u32> = kinds
+        .iter()
+        .map(|&k| match k {
+            0 => 0,
+            2 => shadow_point_face_size(base, draft),
+            _ => base,
+        })
+        .collect();
+    let cost = |z: u32, k: u32| -> u64 { (z as u64) * (z as u64) * faces(k) };
+    let mut total: u64 = sizes.iter().zip(kinds).map(|(&z, &k)| cost(z, k)).sum();
+    let mut heap: BinaryHeap<(u32, Reverse<usize>)> =
+        sizes.iter().zip(kinds).enumerate().filter(|(_, (z, k))| **z > floor(**k)).map(|(i, (&z, _))| (z, Reverse(i))).collect();
+    while total > MAX_SHADOW_TEXELS {
+        let Some((z, Reverse(i))) = heap.pop() else { break };
+        let k = kinds[i];
+        total -= cost(z, k) - cost(z / 2, k);
+        sizes[i] = z / 2;
+        if z / 2 > floor(k) {
+            heap.push((z / 2, Reverse(i)));
+        }
+    }
+    for i in (0..sizes.len()).rev() {
+        if total <= MAX_SHADOW_TEXELS {
+            break;
+        }
+        total -= cost(sizes[i], kinds[i]);
+        sizes[i] = 0;
+    }
+    sizes.into_iter().map(|z| (z > 0).then_some(z)).collect()
+}
+
+pub fn env_shadow_map(e: EnvInfo, centre: [f64; 3], radius: f64, size: u32) -> ShadowMap {
+    let texel = 2.0 * radius / size as f64;
+    let soft = (4.0 * texel).max(8.0) + (e.shadow_diffusion as f64 * 0.5).min(24.0);
+    let sun = e.sun.map(|v| v as f64);
+    let dir = [-sun[0], -sun[1], -sun[2]];
+    let eye = [centre[0] + sun[0] * radius * 2.0, centre[1] + sun[1] * radius * 2.0, centre[2] + sun[2] * radius * 2.0];
+    let hint = if dir[1].abs() < 0.9 { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] };
+    let focal = (size as f64 * 0.5 / radius) as f32;
+    ShadowMap { view: basis(eye, dir, hint), focal, ortho: true, size, offset: 0, bias: 1.5, radius: soft as f32 }
+}
+
+pub fn shadow_maps(s: &mut Scene, draft: bool) {
+    let casters: Vec<usize> = (0..s.indices.len() / 3)
+        .filter(|&t| s.materials.get(s.vertices[s.indices[3 * t] as usize].material as usize).is_some_and(|m| m.casts_shadows))
+        .collect();
+    let env_shadow = !casters.is_empty() && s.env.is_some_and(|e| e.shadow == 0 && e.sun != [0.0; 3]);
+    if !env_shadow && let Some(e) = &mut s.env {
+        e.shadow = -1;
+    }
+    if casters.is_empty() {
+        for l in &mut s.lights {
+            l.shadow = -1;
+        }
+        return;
+    }
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for v in &s.vertices {
+        for k in 0..3 {
+            lo[k] = lo[k].min(v.pos[k] as f64);
+            hi[k] = hi[k].max(v.pos[k] as f64);
+        }
+    }
+    let centre = [0, 1, 2].map(|k| (lo[k] + hi[k]) * 0.5);
+    let radius = ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt() * 0.5 + 1.0;
+    let kinds: Vec<u32> = s
+        .lights
+        .iter()
+        .map(|l| {
+            if l.shadow != 0 {
+                0
+            } else if l.kind > 1 {
+                2
+            } else {
+                1
+            }
+        })
+        .chain(std::iter::once(if env_shadow { 1 } else { 0 }))
+        .collect();
+    let sizes = shadow_sizes(s.width, s.height, draft, &kinds);
+    let mut maps: Vec<ShadowMap> = vec![];
+    for li in 0..s.lights.len() {
+        let Some(size) = sizes.get(li).copied().flatten() else {
+            s.lights[li].shadow = -1;
+            continue;
+        };
+        if s.lights[li].shadow != 0 {
+            s.lights[li].shadow = -1;
+            continue;
+        }
+        let l = s.lights[li];
+        let first = maps.len() as i32;
+        let soft = 1.0 + (l.shadow_diffusion * 0.5).min(24.0);
+        let pos = l.pos.map(|v| v as f64);
+        let dir = l.dir.map(|v| v as f64);
+        let hint = if dir[1].abs() < 0.9 { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] };
+        match l.kind {
+            0 => {
+                let eye = [centre[0] - dir[0] * radius * 2.0, centre[1] - dir[1] * radius * 2.0, centre[2] - dir[2] * radius * 2.0];
+                let focal = (size as f64 * 0.5 / radius) as f32;
+                maps.push(ShadowMap { view: basis(eye, dir, hint), focal, ortho: true, size, offset: 0, bias: 1.5, radius: soft });
+            }
+            1 => {
+                let half = (l.cos_outer.clamp(-1.0, 1.0).acos() as f64 + 0.05).min(1.45);
+                let focal = (size as f64 * 0.5 / half.tan()) as f32;
+                maps.push(ShadowMap { view: basis(pos, dir, hint), focal, ortho: false, size, offset: 0, bias: 1.5, radius: soft });
+            }
+            _ => {
+                let fs = size;
+                for (f, d) in [
+                    ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+                    ([-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+                    ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+                    ([0.0, -1.0, 0.0], [0.0, 0.0, 1.0]),
+                    ([0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
+                    ([0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
+                ] {
+                    maps.push(ShadowMap {
+                        view: basis(pos, f, d),
+                        focal: fs as f32 * 0.5,
+                        ortho: false,
+                        size: fs,
+                        offset: 0,
+                        bias: 1.5,
+                        radius: soft,
+                    });
+                }
+            }
+        }
+        s.lights[li].shadow = first;
+    }
+    if env_shadow && let Some(e) = s.env {
+        match sizes.get(s.lights.len()).copied().flatten() {
+            Some(size) => {
+                let first = maps.len() as i32;
+                maps.push(env_shadow_map(e, centre, radius, size));
+                if let Some(e) = &mut s.env {
+                    e.shadow = first;
+                }
+            }
+            None => {
+                if let Some(e) = &mut s.env {
+                    e.shadow = -1;
+                }
+            }
+        }
+    }
+    let texels: Vec<Vec<f32>> = maps.par_iter().map(|m| shadow_raster(s, m, &casters)).collect();
+    for (m, t) in maps.iter_mut().zip(texels) {
+        m.offset = s.shadow_texels.len() as u32;
+        s.shadow_texels.extend(t);
+    }
+    s.shadows = maps;
+}
