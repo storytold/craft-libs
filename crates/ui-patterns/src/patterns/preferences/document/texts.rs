@@ -35,6 +35,8 @@ pub(super) struct RowText {
     /// The English label, for the search.
     keywords: String,
     help: Option<String>,
+    /// The row's hover text, translated under `setting.<path>.help`; it paints no line.
+    tooltip: Option<String>,
     /// The index in [`PageText::groups`].
     pub(super) group: Option<usize>,
     shape: Shape,
@@ -186,10 +188,10 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
                 }
             }
             let english = rule.and_then(|rule| rule.label.clone()).unwrap_or_else(|| setting_label(&path));
+            // The rule's help text is the row's hover text, under the key it always had; the line under the row carries
+            // only what the window adds itself.
+            let tooltip = rule.and_then(|rule| rule.help.as_deref()).map(|text| self.translate(&format!("setting.{path}.help"), text));
             let mut help = Vec::new();
-            if let Some(text) = rule.and_then(|rule| rule.help.as_deref()) {
-                help.push(self.translate(&format!("setting.{path}.help"), text));
-            }
             if rule.is_some_and(|rule| rule.restart) {
                 help.push(self.own.restart.as_str().to_owned());
             }
@@ -204,6 +206,7 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
                 label: self.translate(&format!("setting.{path}"), &english),
                 keywords: english,
                 help: (!help.is_empty()).then(|| help.join("\n")),
+                tooltip,
                 key: path,
                 group,
                 shape,
@@ -242,8 +245,12 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
             _ => return None,
         };
         let spec = RowSpec::new(&row.key, &row.label, kind).keywords(&row.keywords).visible(self.row_visible(&row.key));
-        Some(match &row.help {
+        let spec = match &row.help {
             Some(help) => spec.help(help),
+            None => spec,
+        };
+        Some(match &row.tooltip {
+            Some(tooltip) => spec.tooltip(tooltip),
             None => spec,
         })
     }
