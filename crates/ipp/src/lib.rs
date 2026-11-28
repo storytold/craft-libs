@@ -50,6 +50,23 @@ impl std::error::Error for Error {}
 
 type Result<T> = std::result::Result<T, Error>;
 
+/// Optional discovery probes may fail, but a malformed reply must never be accepted as complete.
+#[derive(Debug)]
+enum ReplyError {
+    Malformed(Error),
+    Other(Error),
+}
+
+impl From<ReplyError> for Error {
+    fn from(error: ReplyError) -> Self {
+        match error {
+            ReplyError::Malformed(error) | ReplyError::Other(error) => error,
+        }
+    }
+}
+
+type ReplyResult<T> = std::result::Result<T, ReplyError>;
+
 /// A printer the server knows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Printer {
@@ -166,9 +183,8 @@ impl Endpoint {
             #[cfg(not(unix))]
             Endpoint::Unix(path) => Err(Error::Unreachable(format!("{}: Unix sockets are not available here", path.display()))),
             Endpoint::Tcp(host, port) => {
-                let addr = (host.as_str(), *port).to_socket_addrs().map_err(|e| Error::Unreachable(format!("{host}:{port}: {e}")))?.next();
-                let addr = addr.ok_or_else(|| Error::Unreachable(format!("{host}:{port}: no address")))?;
-                open_tcp(host, *port, addr, |addr| TcpStream::connect_timeout(&addr, CONNECT))
+                let addrs = (host.as_str(), *port).to_socket_addrs().map_err(|e| Error::Unreachable(format!("{host}:{port}: {e}")))?;
+                open_tcp(host, *port, addrs, |addr, timeout| TcpStream::connect_timeout(&addr, timeout))
             }
         }
     }
@@ -200,14 +216,134 @@ impl std::fmt::Display for Endpoint {
     }
 }
 
-/// Open one address and put the request timeouts on it. The connect call is a parameter so the
-/// refusal path can be tested at all: no port is guaranteed to stay free between picking one and
-/// using it, and what a refused connect reported is what the caller is supposed to hear.
-fn open_tcp(host: &str, port: u16, addr: SocketAddr, open: impl FnOnce(SocketAddr) -> std::io::Result<TcpStream>) -> Result<Stream> {
-    let s = open(addr).map_err(|e| Error::Unreachable(format!("{host}:{port}: {e}")))?;
-    let _ = s.set_read_timeout(Some(REQUEST));
-    let _ = s.set_write_timeout(Some(REQUEST));
-    Ok(Stream::Tcp(s))
+/// Try resolved addresses within one native connection budget, with staggered overlapping attempts
+/// so earlier addresses keep their full remaining window. At most twelve attempts run together;
+/// the shared deadline can expire before every address in an arbitrary resolver list is tried.
+fn open_tcp(
+    host: &str,
+    port: u16,
+    addrs: impl IntoIterator<Item = SocketAddr>,
+    open: impl Fn(SocketAddr, Duration) -> std::io::Result<TcpStream> + Send + Sync + 'static,
+) -> Result<Stream> {
+    let addrs: Vec<_> = addrs.into_iter().collect();
+    if addrs.is_empty() {
+        return Err(Error::Unreachable(format!("{host}:{port}: no address")));
+    }
+    if let [addr] = addrs.as_slice() {
+        return open(*addr, CONNECT).map(tcp_stream).map_err(|error| Error::Unreachable(format!("{host}:{port}: {error}")));
+    }
+    // Browser Wasm must not enter unsupported clock/thread APIs before sockets report an error.
+    #[cfg(target_family = "wasm")]
+    {
+        #[cfg(not(target_os = "unknown"))]
+        let started = std::time::Instant::now();
+        let mut cause = "connection timed out".to_string();
+        for addr in addrs {
+            #[cfg(target_os = "unknown")]
+            let timeout = CONNECT;
+            #[cfg(not(target_os = "unknown"))]
+            let timeout = CONNECT.saturating_sub(started.elapsed());
+            if timeout.is_zero() {
+                break;
+            }
+            match open(addr, timeout) {
+                Ok(stream) => return Ok(tcp_stream(stream)),
+                Err(error) => cause = error.to_string(),
+            }
+        }
+        Err(Error::Unreachable(format!("{host}:{port}: {cause}")))
+    }
+    #[cfg(not(target_family = "wasm"))]
+    open_tcp_overlapping(host, port, addrs, open)
+}
+
+fn tcp_stream(stream: TcpStream) -> Stream {
+    let _ = stream.set_read_timeout(Some(REQUEST));
+    let _ = stream.set_write_timeout(Some(REQUEST));
+    Stream::Tcp(stream)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn open_tcp_overlapping(
+    host: &str,
+    port: u16,
+    addrs: Vec<SocketAddr>,
+    open: impl Fn(SocketAddr, Duration) -> std::io::Result<TcpStream> + Send + Sync + 'static,
+) -> Result<Stream> {
+    const MAX_CONNECTS: usize = 12;
+    const STAGGER: Duration = Duration::from_millis(250);
+    let started = std::time::Instant::now();
+    let mut last_launch = started;
+    let open = std::sync::Arc::new(open);
+    let (send, receive) = std::sync::mpsc::channel::<(usize, std::io::Result<TcpStream>)>();
+    let mut addrs = addrs.into_iter().enumerate();
+    let mut pending = addrs.next();
+    let mut active = 0usize;
+    let mut immediate = true;
+    let mut last_attempted = None;
+    let mut last_error: Option<(usize, std::io::Error)> = None;
+    let mut remember_error = |index, error| {
+        if last_error.as_ref().is_none_or(|(last_index, _)| index >= *last_index) {
+            last_error = Some((index, error));
+        }
+    };
+    loop {
+        let remaining = CONNECT.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        if active < MAX_CONNECTS
+            && (immediate || last_launch.elapsed() >= STAGGER)
+            && let Some((index, addr)) = pending.take()
+        {
+            last_attempted = Some(index);
+            pending = addrs.next();
+            let open = std::sync::Arc::clone(&open);
+            let send = send.clone();
+            match std::thread::Builder::new().spawn(move || {
+                let timeout = CONNECT.saturating_sub(started.elapsed());
+                let result = if timeout.is_zero() {
+                    Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "connection timed out"))
+                } else {
+                    open(addr, timeout)
+                };
+                // A socket arriving after another attempt won is dropped with the failed send.
+                let _ = send.send((index, result));
+            }) {
+                Ok(_) => {
+                    active += 1;
+                    immediate = false;
+                    last_launch = std::time::Instant::now();
+                }
+                Err(error) => {
+                    remember_error(index, error);
+                    immediate = true;
+                }
+            }
+            continue;
+        }
+        if active == 0 {
+            break;
+        }
+        let wait = if pending.is_some() && active < MAX_CONNECTS { remaining.min(STAGGER.saturating_sub(last_launch.elapsed())) } else { remaining };
+        match receive.recv_timeout(wait) {
+            Ok((index, result)) => {
+                active = active.saturating_sub(1);
+                match result {
+                    Ok(stream) => return Ok(tcp_stream(stream)),
+                    Err(error) => remember_error(index, error),
+                }
+                immediate = true;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let cause = last_error
+        .filter(|(index, _)| Some(*index) == last_attempted)
+        .map(|(_, error)| error.to_string())
+        .unwrap_or_else(|| "connection timed out".into());
+    Err(Error::Unreachable(format!("{host}:{port}: {cause}")))
 }
 
 enum Stream {
@@ -455,7 +591,11 @@ fn parse_message(b: &[u8]) -> Result<ParsedMessage> {
 /// POSTs `body` (IPP, with any document data after it) to `path` and returns the parsed reply with
 /// its private group boundaries.
 fn post(endpoint: &Endpoint, path: &str, body: &[u8]) -> Result<ParsedMessage> {
-    let mut stream = endpoint.connect()?;
+    post_classified(endpoint, path, body).map_err(Error::from)
+}
+
+fn post_classified(endpoint: &Endpoint, path: &str, body: &[u8]) -> ReplyResult<ParsedMessage> {
+    let mut stream = endpoint.connect().map_err(ReplyError::Other)?;
     let head = format!(
         "POST {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         endpoint.host(),
@@ -465,20 +605,25 @@ fn post(endpoint: &Endpoint, path: &str, body: &[u8]) -> Result<ParsedMessage> {
         .write_all(head.as_bytes())
         .and_then(|()| stream.write_all(body))
         .and_then(|()| stream.flush())
-        .map_err(|e| Error::Protocol(format!("sending: {e}")))?;
-    let raw = read_response(&mut stream)?;
-    let (status, headers, body) = http_response(&raw)?;
+        .map_err(|e| ReplyError::Other(Error::Protocol(format!("sending: {e}"))))?;
+    let raw = read_response_classified(&mut stream)?;
+    let (status, headers, body) =
+        http_response(&raw).map_err(|error| if raw.is_empty() { ReplyError::Other(error) } else { ReplyError::Malformed(error) })?;
     if status != 200 {
-        return Err(Error::Protocol(match status {
+        return Err(ReplyError::Other(Error::Protocol(match status {
             401 => "the print server asks for authentication (HTTP 401)".to_string(),
             403 => "the print server forbids this request (HTTP 403)".to_string(),
             s => format!("HTTP {s}"),
-        }));
+        })));
     }
-    let body = if headers.iter().any(|(k, v)| k == "transfer-encoding" && v.contains("chunked")) { dechunk(body)? } else { body.to_vec() };
-    let reply = parse_message(&body)?;
+    let body = if headers.iter().any(|(k, v)| k == "transfer-encoding" && v.contains("chunked")) {
+        dechunk(body).map_err(ReplyError::Malformed)?
+    } else {
+        body.to_vec()
+    };
+    let reply = parse_message(&body).map_err(ReplyError::Malformed)?;
     if reply.reply.status >= 0x0400 {
-        return Err(Error::Status(reply.reply.status, reply.reply.status_message()));
+        return Err(ReplyError::Other(Error::Status(reply.reply.status, reply.reply.status_message())));
     }
     Ok(reply)
 }
@@ -489,7 +634,12 @@ type Headers = Vec<(String, String)>;
 /// Reads one HTTP response: the headers, then as much body as `Content-Length` says, or up to
 /// the last chunk, or to the end of the stream when the server says neither. A server that keeps
 /// the connection open would otherwise hold the reply until the read times out.
+#[cfg(test)]
 fn read_response(stream: &mut Stream) -> Result<Vec<u8>> {
+    read_response_classified(stream).map_err(Error::from)
+}
+
+fn read_response_classified(stream: &mut Stream) -> ReplyResult<Vec<u8>> {
     let mut raw = Vec::new();
     let mut buf = [0u8; 16 * 1024];
     let mut body_at = None;
@@ -502,23 +652,41 @@ fn read_response(stream: &mut Stream) -> Result<Vec<u8>> {
     let started = std::time::Instant::now();
     loop {
         if started.elapsed() > REPLY_DEADLINE {
-            return Err(Error::Protocol("the print server took too long to reply".into()));
+            return Err(ReplyError::Other(Error::Protocol("the print server took too long to reply".into())));
         }
-        let n = stream.read(&mut buf).map_err(|e| Error::Protocol(format!("reading: {e}")))?;
+        let n = stream.read(&mut buf).map_err(|e| ReplyError::Other(Error::Protocol(format!("reading: {e}"))))?;
         if n == 0 {
+            // A Content-Length body is complete only after every promised byte (RFC 9112).
+            if expected.is_some() && !chunked {
+                return Err(ReplyError::Malformed(Error::Protocol("incomplete HTTP body".into())));
+            }
             return Ok(raw);
         }
         raw.extend_from_slice(buf.get(..n).unwrap_or_default());
         if raw.len() > MAX_REPLY {
-            return Err(Error::Protocol("the reply is larger than 16 MiB".into()));
+            return Err(ReplyError::Malformed(Error::Protocol("the reply is larger than 16 MiB".into())));
         }
         if body_at.is_none()
             && let Some(end) = raw.get(head_at..).and_then(|r| r.windows(4).position(|w| w == b"\r\n\r\n")).map(|p| head_at + p)
         {
             body_at = Some(end + 4);
-            let (_, headers, _) = http_response(&raw)?;
-            expected = headers.iter().find(|(k, _)| k == "content-length").and_then(|(_, v)| v.parse().ok());
+            let (_, headers, _) = http_response(&raw).map_err(ReplyError::Malformed)?;
             chunked = headers.iter().any(|(k, v)| k == "transfer-encoding" && v.contains("chunked"));
+            if !chunked {
+                // An intermediary can combine identical Content-Length fields into one list
+                // (RFC 9110, 8.6). Normalize every member; ambiguity is still an error.
+                for value in headers.iter().filter(|(key, _)| key == "content-length").flat_map(|(_, value)| value.split(',')) {
+                    let value = value.trim_matches([' ', '\t']);
+                    let length = (!value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+                        .then(|| value.parse::<usize>().ok())
+                        .flatten()
+                        .ok_or_else(|| ReplyError::Malformed(Error::Protocol("invalid Content-Length".into())))?;
+                    if expected.is_some_and(|previous| previous != length) {
+                        return Err(ReplyError::Malformed(Error::Protocol("conflicting Content-Length".into())));
+                    }
+                    expected = Some(length);
+                }
+            }
         }
         let Some(at) = body_at else {
             head_at = raw.len().saturating_sub(3);
@@ -545,9 +713,15 @@ fn http_response(raw: &[u8]) -> Result<(u16, Headers, &[u8])> {
     let head = String::from_utf8_lossy(raw.get(..end).unwrap_or(&[]));
     let mut lines = head.split("\r\n");
     let status_line = lines.next().unwrap_or_default();
-    let status: u16 = status_line
-        .split_whitespace()
-        .nth(1)
+    // Keep HTTP's optional ASCII separator lenience, not Unicode whitespace (RFC 9112, 4).
+    let mut words = status_line.split([' ', '\t', '\u{0b}', '\u{0c}', '\r']).filter(|word| !word.is_empty());
+    let version = words.next().unwrap_or_default().as_bytes();
+    let code = words.next().unwrap_or_default();
+    // RFC 9112 requires an HTTP version and three status digits, not merely a parseable number.
+    let valid_version = matches!(version, [b'H', b'T', b'T', b'P', b'/', major, b'.', minor] if major.is_ascii_digit() && minor.is_ascii_digit());
+    let status: u16 = valid_version
+        .then_some(code)
+        .filter(|s| s.len() == 3 && s.bytes().all(|b| b.is_ascii_digit()))
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| Error::Protocol(format!("bad status line `{status_line}`")))?;
     let headers = lines.filter_map(|l| l.split_once(':')).map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_ascii_lowercase())).collect();
@@ -573,7 +747,15 @@ fn chunked_complete(body: &[u8], resume: &mut usize) -> bool {
         // A size past the reply cap can never be satisfied: complete, so `dechunk` rejects it
         // (checked, so `ffffffffffffffff` cannot overflow the slice arithmetic).
         let Some(end) = size.checked_add(2).filter(|_| size <= MAX_REPLY) else { return true };
+        // A wrong first separator byte is already invalid; no second byte can repair it.
+        if b.get(size).is_some_and(|byte| *byte != b'\r') {
+            return true;
+        }
         let Some(rest) = b.get(end..) else { return false };
+        // A full malformed separator must reach dechunk now, even if the server stays open.
+        if b.get(size..end) != Some(b"\r\n") {
+            return true;
+        }
         b = rest;
     }
 }
@@ -595,7 +777,8 @@ fn dechunk(mut b: &[u8]) -> Result<Vec<u8>> {
         if out.len() > MAX_REPLY {
             return Err(Error::Protocol("the reply is larger than 16 MiB".into()));
         }
-        b = b.get(size + 2..).ok_or_else(|| Error::Protocol("cut chunk end".into()))?;
+        // RFC 9112 requires a CRLF separator after each nonempty chunk.
+        b = b.get(size..).and_then(|rest| rest.strip_prefix(b"\r\n")).ok_or_else(|| Error::Protocol("invalid chunk end".into()))?;
     }
 }
 
@@ -620,8 +803,16 @@ fn queue_path(name: &str, is_class: bool) -> Result<String> {
 pub fn printers(endpoint: &Endpoint) -> Result<Vec<Printer>> {
     let mut out = queues(endpoint, OP_CUPS_GET_PRINTERS, false)?;
     // A server without classes answers "not found"; an older server may not know the operation.
-    out.extend(queues(endpoint, OP_CUPS_GET_CLASSES, true).unwrap_or_default());
-    let default = default_printer(endpoint).unwrap_or(None);
+    match queues_classified(endpoint, OP_CUPS_GET_CLASSES, true) {
+        Ok(classes) => out.extend(classes),
+        Err(ReplyError::Malformed(error)) => return Err(error),
+        Err(_) => {}
+    }
+    let default = match default_printer_classified(endpoint) {
+        Ok(default) => default,
+        Err(ReplyError::Malformed(error)) => return Err(error),
+        Err(_) => None,
+    };
     for p in &mut out {
         p.is_default = default.as_deref() == Some(p.name.as_str());
     }
@@ -629,19 +820,23 @@ pub fn printers(endpoint: &Endpoint) -> Result<Vec<Printer>> {
 }
 
 fn queues(endpoint: &Endpoint, op: u16, is_class: bool) -> Result<Vec<Printer>> {
+    queues_classified(endpoint, op, is_class).map_err(Error::from)
+}
+
+fn queues_classified(endpoint: &Endpoint, op: u16, is_class: bool) -> ReplyResult<Vec<Printer>> {
     let mut r = Request::new(op, 1);
     r.attr_many(TAG_KEYWORD, "requested-attributes", &["printer-name", "printer-info", "printer-state", "printer-is-accepting-jobs"]);
-    let parsed = match post(endpoint, "/", &r.end()) {
+    let parsed = match post_classified(endpoint, "/", &r.end()) {
         Ok(reply) => reply,
         // CUPS answers "not found" ("No destinations added.") when no printer is set up.
-        Err(Error::Status(0x0406, _)) => return Ok(Vec::new()),
+        Err(ReplyError::Other(Error::Status(0x0406, _))) => return Ok(Vec::new()),
         Err(e) => return Err(e),
     };
     let mut out = Vec::new();
     let attributes = &parsed.reply.attributes;
     for group in parsed.groups.iter().filter(|group| group.tag == TAG_PRINTER_GROUP) {
         let Some(group_attributes) = attributes.get(group.start..group.end) else {
-            return Err(Error::Protocol("invalid printer attribute group range".into()));
+            return Err(ReplyError::Malformed(Error::Protocol("invalid printer attribute group range".into())));
         };
         let mut name = None;
         let mut info = String::new();
@@ -665,12 +860,16 @@ fn queues(endpoint: &Endpoint, op: u16, is_class: bool) -> Result<Vec<Printer>> 
 
 /// The server's default printer (CUPS-Get-Default), `None` when there is none.
 pub fn default_printer(endpoint: &Endpoint) -> Result<Option<String>> {
+    default_printer_classified(endpoint).map_err(Error::from)
+}
+
+fn default_printer_classified(endpoint: &Endpoint) -> ReplyResult<Option<String>> {
     let mut r = Request::new(OP_CUPS_GET_DEFAULT, 2);
     r.attr_many(TAG_KEYWORD, "requested-attributes", &["printer-name"]);
-    match post(endpoint, "/", &r.end()) {
+    match post_classified(endpoint, "/", &r.end()) {
         Ok(reply) => Ok(reply.reply.attributes.iter().find(|a| a.name == "printer-name").map(Attribute::text).filter(|n| !n.is_empty())),
         // CUPS answers "not found" when no default is set.
-        Err(Error::Status(0x0406, _)) => Ok(None),
+        Err(ReplyError::Other(Error::Status(0x0406, _))) => Ok(None),
         Err(e) => Err(e),
     }
 }
@@ -709,9 +908,12 @@ pub fn print_job(endpoint: &Endpoint, job: &Job<'_>) -> Result<u32> {
         .attributes
         .iter()
         .find(|a| a.name == "job-id")
+        .filter(|a| a.tag == TAG_INTEGER)
         .and_then(Attribute::int)
-        .map(|id| id.max(0) as u32)
-        .ok_or_else(|| Error::Protocol("no job id in the reply".into()))
+        // RFC 8011 requires job-id to be an integer in 1..=i32::MAX.
+        .filter(|id| *id > 0)
+        .map(|id| id as u32)
+        .ok_or_else(|| Error::Protocol("no valid job id in the reply".into()))
 }
 
 /// A request as a server sees it: the operation (the request's status field), its attributes
