@@ -599,6 +599,36 @@ fn a_revealed_child_glides_to_the_view_start() {
     assert!(between > 1, "the glide showed offsets between the start and the child: {between} frames");
 }
 
+/// A wheel turned while a reveal glide still runs ends the glide: once the input stops, the content stays where the
+/// wheel left it and the glide does not resume toward its child. Guards that the cleared glide is stored, not only
+/// dropped for the frame of the move.
+#[trial]
+fn a_wheel_during_a_reveal_glide_ends_it() {
+    const CHILDREN: usize = 40;
+    // Frames the glide would take to finish: two seconds at 60 Hz.
+    const GLIDE_FRAMES: usize = 120;
+    let column = LazyColumn::new(CHILDREN);
+    let mut show = |ui: &mut Ui| column.show(ui, varied, |_| HUNDRED / 2.0);
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    let target = CHILDREN - 6;
+    column.reveal.set(Some(target));
+    frames.frame(vec![], &mut show);
+    column.reveal.set(None);
+    frames.idle(4, &mut show);
+    let (gliding, _) = column.top().expect("a child in view");
+    assert!(gliding > 0 && gliding < target, "the glide is under way: child {gliding} at the top");
+    let view = column.view.get();
+    for _ in 0..3 {
+        wheel_at(&mut frames, view.center(), BIG_STEP, &mut show);
+    }
+    let (left, rect) = column.top().expect("a child in view");
+    frames.idle(GLIDE_FRAMES, &mut show);
+    let (top, at) = column.top().expect("a child in view");
+    assert_eq!(top, left, "the child the wheel left at the top is still there, not the glide's child {target}");
+    assert!((at.min.y - rect.min.y).abs() <= SAME, "and at the same place: {at:?}, then {rect:?}");
+}
+
 /// A press on a field the view shows only in part focuses it where it lies: the body moves no content under the held
 /// press. Tab to the same field from one in view scrolls it wholly into view. Guards that a reveal follows a focus
 /// request or a key move, never a press (a crop frame overhanging its canvas panned the view under the press).

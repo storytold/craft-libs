@@ -267,12 +267,13 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             }
         }
         // A move of the area's own ends a glide; a child reveal starts one. A running glide moves the offset toward
-        // its aim.
-        self.glide = if self.moved { None } else { stage.session::<ScrollState>(sub(id, "scroll")).glide };
+        // its aim. What was stored is what the write-back compares with, so a glide a move ended is cleared there.
+        let stored = stage.session::<ScrollState>(sub(id, "scroll")).glide;
+        self.glide = if self.moved { None } else { stored };
         if let Some(child) = crate::contract::child_reveal(&ctx, id, quiet) {
             self.glide = Some(Glide { child, to: None, running: false });
         }
-        self.glide_at_read = self.glide;
+        self.glide_at_read = stored;
         if let Some(glide) = self.glide.as_mut()
             && let Some(to) = glide.to
             && (glide.running || !quiet)
