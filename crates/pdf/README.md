@@ -9,6 +9,7 @@ No feature is enabled by default.
 | `read` | Bounded opening and the patched Hayro syntax types |
 | `interpret` | `read` plus an app-owned Device interpreter, fonts and CMaps |
 | `raster` | `interpret` plus premultiplied RGBA8 rendering |
+| `emf` | `interpret` plus `emf::Pictures`: one page as an EMF of vector calls for printing through GDI, or `NeedsRaster` for a page GDI cannot draw (transparency, blends, soft masks, patterns, overprint) |
 | `write` | Guarded Krilla authoring; no shared reader dependency |
 | `write-svg` | `write` plus bounded SVG-to-PDF vector drawing |
 | `write-pdf` | `write` plus Krilla's embedded-PDF support |
