@@ -172,11 +172,13 @@ impl LayerStyleDraft {
     // (the arrows move the selected effect among those of its kind).
     pub fn move_instance(&mut self, id: EffectId, by: isize) -> bool {
         let Some(kind) = self.style.effect(id).map(|e| e.kind) else { return false };
-        let slots: Vec<usize> = self.style.effects.iter().enumerate().filter(|(_, e)| e.kind == kind).map(|(at, _)| at).collect();
-        let Some(place) = slots.iter().position(|at| self.style.effects[*at].id == id) else { return false };
-        // A place outside the kind's instances: the first or the last of its kind, so the arrow is greyed.
-        let Some(next) = place.checked_add_signed(by).filter(|next| *next < slots.len()) else { return false };
-        self.style.effects.swap(slots[place], slots[next]);
+        // The places this kind's instances hold in `effects`, with their ids.
+        let slots: Vec<(usize, EffectId)> = self.style.effects.iter().enumerate().filter(|(_, e)| e.kind == kind).map(|(at, e)| (at, e.id)).collect();
+        let Some(here) = slots.iter().position(|(_, other)| *other == id) else { return false };
+        // The next place of the same kind; nothing when `id` is already first or last of it, where the arrow is greyed.
+        let Some(there) = here.checked_add_signed(by).and_then(|next| slots.get(next)) else { return false };
+        // Both places came out of `effects` itself, so the swap cannot run off the vector.
+        self.style.effects.swap(slots[here].0, there.0);
         true
     }
 
