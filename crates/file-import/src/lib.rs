@@ -311,6 +311,40 @@ fn import_dxf(bytes: &[u8], format: ImportFormat, limits: Limits) -> Result<Impo
     Ok(Imported::Vector(VectorScene { format, width_mm, height_mm, shapes, warnings: imported.warnings, dropped_warnings: 0 }))
 }
 
+/// A PDF page drawn as a picture at `dpi`, over white: everything on it (images, text, fills),
+/// for an app that places the page as an image instead of reading its vector paths. Bounded by
+/// `limits` (input size and raster size); `dpi` is 1–1200.
+pub fn render_pdf_page(bytes: &[u8], page: usize, dpi: f64, limits: Limits) -> Result<RasterImage, Error> {
+    if bytes.len() > limits.max_input_bytes {
+        return Err(Error::InputLimit { size: bytes.len(), limit: limits.max_input_bytes });
+    }
+    if !(dpi.is_finite() && (1.0..=1200.0).contains(&dpi)) {
+        return Err(Error::Decode(format!("dpi {dpi} is outside 1–1200")));
+    }
+    let doc = craft_pdf::open_slice(bytes, None).map_err(|error| Error::Decode(error.to_string()))?;
+    let pages = doc.pages();
+    let page = pages.get(page).ok_or_else(|| Error::Decode(format!("the PDF has no page {}", page + 1)))?;
+    // In 1/72..=1200/72, so the cast keeps its value.
+    let scale = (dpi / 72.0) as f32;
+    let options = craft_pdf::raster::Options { scale: [scale, scale], background: [255; 4], ..Default::default() };
+    let [width, height] = craft_pdf::raster::dimensions(page, &options).map_err(|error| Error::Decode(error.to_string()))?;
+    let pixels = u64::from(width) * u64::from(height);
+    if width == 0
+        || height == 0
+        || width > limits.max_raster_width
+        || height > limits.max_raster_height
+        || pixels > limits.max_raster_pixels
+        || pixels.saturating_mul(4) > limits.max_raster_alloc_bytes
+    {
+        return Err(Error::Decode(format!("a {width} × {height} pixel page is outside the raster limits")));
+    }
+    let raster =
+        craft_pdf::raster::render(page, &craft_pdf::raster::RenderCache::new(), &craft_pdf::interpret::InterpreterSettings::default(), &options)
+            .map_err(|error| Error::Decode(error.to_string()))?;
+    // Opaque over the white background, so premultiplied and straight alpha agree.
+    Ok(RasterImage { format: ImportFormat::Pdf, width: raster.width, height: raster.height, rgba: raster.bytes().to_vec() })
+}
+
 fn import_pdf(bytes: &[u8], format: ImportFormat, limits: Limits) -> Result<Imported, Error> {
     let imported = craft_pdf::paths::import_page(
         bytes,
@@ -396,6 +430,40 @@ fn path_is_finite(path: &BezPath) -> bool {
 
 #[cfg(test)]
 mod format_tests {
+
+    #[test]
+    fn a_pdf_page_renders_as_a_picture_of_everything_on_it() {
+        // A 50 × 50 mm page with a filled red square from 10 to 30 mm.
+        let mut square = kurbo::BezPath::new();
+        square.move_to((10.0, 10.0));
+        square.line_to((30.0, 10.0));
+        square.line_to((30.0, 30.0));
+        square.line_to((10.0, 30.0));
+        square.close_path();
+        let pdf = crate::write::write_pdf_pages(&[crate::write::PdfPage {
+            width_mm: 50.0,
+            height_mm: 50.0,
+            view_box: [0.0, 0.0, 50.0, 50.0],
+            paths: vec![crate::write::PdfPath { path: square, color_rgb: [255, 0, 0], stroke_width_mm: None }],
+        }])
+        .unwrap();
+        let image = render_pdf_page(&pdf, 0, 72.0, Limits::default()).unwrap();
+        // 50 mm at 72 dpi is about 142 px.
+        assert!((140..=143).contains(&image.width), "{}", image.width);
+        assert_eq!(image.rgba.len(), (image.width * image.height * 4) as usize);
+        let at = |x_mm: f64, y_mm: f64| {
+            let (x, y) = ((x_mm / 25.4 * 72.0) as u32, (y_mm / 25.4 * 72.0) as u32);
+            let i = ((y * image.width + x) * 4) as usize;
+            [image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]]
+        };
+        assert_eq!(at(20.0, 20.0), [255, 0, 0], "the square");
+        assert_eq!(at(40.0, 40.0), [255, 255, 255], "the white page");
+        assert!(render_pdf_page(&pdf, 3, 72.0, Limits::default()).is_err(), "no such page");
+        assert!(render_pdf_page(&pdf, 0, f64::NAN, Limits::default()).is_err());
+        let tight = Limits { max_raster_pixels: 100, ..Limits::default() };
+        assert!(render_pdf_page(&pdf, 0, 72.0, tight).is_err(), "over the raster limit");
+    }
+
     use super::*;
 
     #[test]
