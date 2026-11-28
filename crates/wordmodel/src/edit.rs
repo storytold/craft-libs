@@ -1004,6 +1004,8 @@ impl Document {
     /// [`Self::adopt`]; with `keep_styles` its content keeps its own formatting (Word's
     /// `w:matchSrc`): a style whose id we already have comes along under a new id, and its
     /// document defaults go into its base styles, which its unstyled paragraphs then use.
+    /// Bookmark names are not renamed; an existing target's bookmark metadata takes priority
+    /// over source metadata with the same name.
     pub fn adopt_with(&mut self, src: Document, keep_styles: bool) -> Fragment {
         self.adopt_in(src, keep_styles, &mut 0)
     }
@@ -1038,6 +1040,14 @@ impl Document {
                 *id = Some(new.clone());
             }
         };
+        // Adoption keeps bookmark names unchanged. Existing target metadata wins on a
+        // name collision; source-only attributes follow their adopted inline markers.
+        if !src.bookmark_attrs.is_empty() {
+            let target = Arc::make_mut(&mut self.bookmark_attrs);
+            for (name, attrs) in src.bookmark_attrs.iter() {
+                target.entry(name.clone()).or_insert_with(|| attrs.clone());
+            }
+        }
         let mut media = BTreeMap::new();
         for (key, data) in &src.media {
             let ext = key.rsplit_once('.').map(|(_, e)| e).unwrap_or("png");
