@@ -18,10 +18,12 @@
 //! [`rng::XorShift64Star`], each with `next`, `below`, `byte` and `fill`.
 //!
 //! On targets other than `wasm32`, `deadline::with_deadline` runs a test body on its own thread
-//! and fails the test when the body has produced no result within its limit, and
-//! `deadline::wait_until` calls a condition again each time a `deadline::Signal` is raised until
-//! it holds, and fails the test when it still does not hold at the limit. Both read an
-//! optional limit variable that the caller names, `CRAFT_TEST_TIMEOUT_SECS` by default.
+//! and fails the test when the body still has no result once the limit has passed; a result that
+//! arrives before that check is returned. `deadline::wait_until` calls a condition, and when a
+//! `deadline::Signal` raise wakes it, checks the condition again until it holds; raises that come
+//! during one call of the condition share one recheck. It fails the test when the condition still
+//! does not hold at the limit. Both read an optional limit variable that the caller names,
+//! `CRAFT_TEST_TIMEOUT_SECS` by default.
 //!
 //! [`hostile::mutations`] yields a fixed sequence of damaged copies of a valid seed, on every
 //! target. On targets other than `wasm32`, `hostile::hammer` runs a parser on the seed, every
