@@ -71,6 +71,10 @@ impl UvGBuffer {
             .enumerate()
             .map(|(bi, (tri, bary))| {
                 let mut overlaps = 0u32;
+                // When the only triangle that wrote a texel holds its center on exactly one of its
+                // edges, within the inside test's tolerance, that edge's UV endpoints and the
+                // corner opposite it. None after an interior or corner hit, or after a second write.
+                let mut contact: Vec<Option<[Vec2; 3]>> = vec![None; tri.len()];
                 let row0 = bi as u32 * BAND;
                 let rows = (tri.len() as u32) / w;
                 for &t in bins.get(bi).map(Vec::as_slice).unwrap_or(&[]) {
@@ -82,6 +86,7 @@ impl UvGBuffer {
                         continue;
                     }
                     let eps = -1e-6 * area.abs();
+                    let edges = [[pb, pc, pa], [pc, pa, pb], [pa, pb, pc]];
                     let x0 = pa.x.min(pb.x).min(pc.x).floor().max(0.0) as u32;
                     let x1 = (pa.x.max(pb.x).max(pc.x).ceil().min(w as f32) as u32).min(w);
                     let y0 = (pa.y.min(pb.y).min(pc.y).floor().max(row0 as f32) as u32).max(row0);
@@ -94,9 +99,29 @@ impl UvGBuffer {
                                 continue;
                             }
                             let i = ((y - row0) * w + x) as usize;
-                            if let (Some(slot), Some(bw)) = (tri.get_mut(i), bary.get_mut(i)) {
-                                if *slot != NO_TRI {
-                                    overlaps += 1;
+                            // Two triangles that share an edge (the same two UV endpoints) from
+                            // opposite sides both write the centers on it, and that pair is not an
+                            // overlap. Every other second write is one, including stacked copies
+                            // that touch only boundary centers and edges that merely cross.
+                            let on_edge = [w0, w1, w2].map(|v| v <= -eps);
+                            let hit = match on_edge {
+                                [true, false, false] => Some(edges[0]),
+                                [false, true, false] => Some(edges[1]),
+                                [false, false, true] => Some(edges[2]),
+                                _ => None,
+                            };
+                            if let (Some(slot), Some(bw), Some(seen)) = (tri.get_mut(i), bary.get_mut(i), contact.get_mut(i)) {
+                                if *slot == NO_TRI {
+                                    *seen = hit;
+                                } else {
+                                    let shared_edge = matches!((*seen, hit), (Some([a0, a1, ac]), Some([b0, b1, bc]))
+                                        if ((a0 == b0 && a1 == b1) || (a0 == b1 && a1 == b0))
+                                            && edge(a0, a1, ac).signum() != edge(a0, a1, bc).signum()
+                                            && edge(a0, a1, bc) != 0.0);
+                                    if !shared_edge {
+                                        overlaps += 1;
+                                    }
+                                    *seen = None;
                                 }
                                 *slot = t;
                                 let inv = 1.0 / area.abs();
@@ -183,6 +208,30 @@ mod tests {
         let g = UvGBuffer::new(&m, 0, 16, 16);
         assert!(g.overlaps > 0);
         assert!(g.covered_count() > 0);
+    }
+
+    #[test]
+    fn shared_diagonal_is_not_an_overlap() {
+        // Two triangles that split the unit square share its diagonal. Both write the eight
+        // texel centers on it, and neither interior overlaps the other.
+        let uv = vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0), Vec2::new(0.0, 1.0), Vec2::new(1.0, 0.0)];
+        let m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z], None, uv.clone(), vec![0, 1, 2, 0, 3, 1], "m").unwrap();
+        let g = UvGBuffer::new(&m, 0, 8, 8);
+        assert_eq!(g.covered_count(), 64);
+        assert_eq!(g.overlaps, 0);
+        // A third triangle whose interior holds part of the diagonal overlaps both.
+        let m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z], None, uv, vec![0, 1, 2, 0, 3, 1, 2, 3, 0], "m").unwrap();
+        assert!(UvGBuffer::new(&m, 0, 8, 8).overlaps > 0);
+        // Two stacked copies whose only covered center lies on their shared hypotenuse still overlap.
+        let uv = vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)];
+        let m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, uv, vec![0, 1, 2, 0, 1, 2], "m").unwrap();
+        let g = UvGBuffer::new(&m, 0, 1, 1);
+        assert_eq!(g.covered_count(), 1);
+        assert_eq!(g.overlaps, 1);
+        // Edges that cross at a shallow angle through the only center are not a shared edge.
+        let uv = vec![Vec2::new(0.0, 0.5), Vec2::new(1.0, 0.5), Vec2::new(0.5, 1.0), Vec2::new(0.0, 0.49), Vec2::new(1.0, 0.51), Vec2::new(0.5, 0.0)];
+        let m = Mesh::from_parts(vec![Vec3::ZERO; 6], None, uv, vec![0, 1, 2, 3, 4, 5], "m").unwrap();
+        assert_eq!(UvGBuffer::new(&m, 0, 1, 1).overlaps, 1);
     }
 
     #[test]
