@@ -61,26 +61,36 @@ pub fn point_count(c: &Chart) -> usize {
 }
 
 /// Most slots one cache may hold.
-const MAX_CACHE_POINTS: usize = 100_000;
+pub(crate) const MAX_CACHE_POINTS: usize = 100_000;
+
+struct Budget {
+    left: usize,
+    cut: bool,
+}
 
 /// String values from `c:cat`/`c:tx` (str or num refs, caches or literals). Every slot returned
 /// is taken from `budget`; once it runs out the values are cut short.
-fn strings(e: &El, budget: &mut usize) -> Vec<String> {
-    let cap = MAX_CACHE_POINTS.min(*budget);
-    let out = strings_capped(e, cap);
-    *budget = budget.saturating_sub(out.len());
+fn strings(e: &El, budget: &mut Budget) -> Vec<String> {
+    let cap = MAX_CACHE_POINTS.min(budget.left);
+    let (out, cut) = strings_capped(e, cap);
+    budget.cut |= cut;
+    budget.left = budget.left.saturating_sub(out.len());
     out
 }
 
-fn strings_capped(e: &El, cap: usize) -> Vec<String> {
+fn strings_capped(e: &El, cap: usize) -> (Vec<String>, bool) {
     let cache =
         e.find(Local("strCache")).or_else(|| e.find(Local("numCache"))).or_else(|| e.find(Local("strLit"))).or_else(|| e.find(Local("numLit")));
     if let Some(c) = cache {
-        let n = (c.child(Local("ptCount")).and_then(|p| p.attr_local("val").and_then(value::to_u32_lossy)).unwrap_or(0) as usize).min(cap);
+        let declared = c.child(Local("ptCount")).and_then(|p| p.attr_local("val").and_then(value::to_u32_lossy)).unwrap_or(0) as usize;
+        let n = declared.min(cap);
+        let mut cut = declared > cap;
         let mut out = vec![String::new(); n];
-        for pt in c.children(Local("pt")).take(MAX_CACHE_POINTS) {
+        let mut points = c.children(Local("pt"));
+        for pt in points.by_ref().take(MAX_CACHE_POINTS) {
             let i = pt.attr_local("idx").and_then(value::to_u32_lossy).unwrap_or(0) as usize;
             if i >= cap {
+                cut = true;
                 continue;
             }
             let v = pt.child(Local("v")).map(|v| v.deep_text()).unwrap_or_default();
@@ -91,23 +101,27 @@ fn strings_capped(e: &El, cap: usize) -> Vec<String> {
                 *s = v;
             }
         }
-        return out;
+        cut |= points.next().is_some();
+        return (out, cut);
     }
     if let Some(ml) = e.find(Local("multiLvlStrCache")) {
         // Use the innermost level.
         if let Some(l) = ml.child(Local("lvl")) {
-            return l.children(Local("pt")).take(cap).map(|p| p.child(Local("v")).map(|v| v.deep_text()).unwrap_or_default()).collect();
+            let mut points = l.children(Local("pt"));
+            let out = points.by_ref().take(cap).map(|p| p.child(Local("v")).map(|v| v.deep_text()).unwrap_or_default()).collect();
+            return (out, points.next().is_some());
         }
     }
     if cap > 0
         && let Some(v) = e.child(Local("v"))
     {
-        return vec![v.deep_text()];
+        return (vec![v.deep_text()], false);
     }
-    vec![]
+    // Only a value dropped because the cap is 0 reaches here with a `c:v`.
+    (vec![], e.child(Local("v")).is_some())
 }
 
-fn numbers(e: &El, budget: &mut usize) -> Vec<Option<f64>> {
+fn numbers(e: &El, budget: &mut Budget) -> Vec<Option<f64>> {
     strings(e, budget).into_iter().map(|s| s.trim().parse::<f64>().ok().filter(|v| v.is_finite())).collect()
 }
 
@@ -129,7 +143,7 @@ pub fn chart_from(root: &El) -> Option<Chart> {
 }
 
 /// [`chart_from`] decoding at most `budget` data slots in all.
-fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
+fn chart_within(root: &El, budget: usize) -> Option<Chart> {
     let ch = root.child(Local("chart"))?;
     let pa = ch.child(Local("plotArea"))?;
     let mut c = Chart { categories: vec![], series: vec![], title: None, legend: None, gridlines: false, ..Default::default() };
@@ -148,6 +162,7 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
     c.plot_fill = simple_fill(pa.child(Local("spPr")));
 
     let mut kinds: Vec<ChartType> = vec![];
+    let mut budget = Budget { left: budget, cut: false };
     // The value axis the first plot group uses is the primary one; a group on another value axis
     // (a combo chart's line on the right) is on the secondary axis.
     let val_map: std::collections::HashMap<&str, bool> = pa
@@ -191,6 +206,10 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
     }
     let first = *kinds.first()?;
     c.kind = if kinds.iter().any(|k| *k != first) { ChartType::Combo } else { first };
+    if budget.cut {
+        c.verbatim = true;
+        log::warn!("chart data is past the point limits ({MAX_CACHE_POINTS} per cache, {MAX_CHART_POINTS} per chart); the chart is kept as read");
+    }
     if c.kind != ChartType::Combo {
         for s in &mut c.series {
             s.kind = None;
@@ -335,7 +354,7 @@ fn label_number_format(s: &El, g: &El) -> Option<String> {
 }
 
 /// Error bars on the values: a scatter chart's y bars, any other chart's only ones.
-fn read_error_bars(s: &El, kind: ChartType, budget: &mut usize) -> Option<ErrorBars> {
+fn read_error_bars(s: &El, kind: ChartType, budget: &mut Budget) -> Option<ErrorBars> {
     let e = s.children(Local("errBars")).find(|e| {
         e.child(Local("errDir")).and_then(|c| c.attr_local("val")).is_none_or(|d| d == "y" || !matches!(kind, ChartType::Scatter | ChartType::Bubble))
     })?;
@@ -357,7 +376,7 @@ fn read_error_bars(s: &El, kind: ChartType, budget: &mut usize) -> Option<ErrorB
 
 /// One `c:ser` of group `g`. `group` is (chart type, on the secondary axis, the group's data-label
 /// setting); the first series with categories sets `categories`.
-fn read_series(s: &El, g: &El, group: (ChartType, bool, Option<bool>), categories: &mut Vec<String>, budget: &mut usize) -> Series {
+fn read_series(s: &El, g: &El, group: (ChartType, bool, Option<bool>), categories: &mut Vec<String>, budget: &mut Budget) -> Series {
     let (kind, secondary, group_labels) = group;
     let mut ser = Series {
         name: s.child(Local("tx")).map(|t| strings(t, budget)).and_then(|v| v.into_iter().next()).unwrap_or_default(),
@@ -677,6 +696,39 @@ fn text_size(e: Option<&El>) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_cut_keeps_original_data_when_edited() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart><c:ser><c:val><c:numRef><c:numCache><c:ptCount val="{}"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="{}"><c:v>4242.5</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
+            MAX_CACHE_POINTS + 1,
+            MAX_CACHE_POINTS
+        );
+        let mut chart = read_chart_xml(xml.as_bytes()).unwrap();
+        chart.title = Some("Edited".into());
+        let saved = crate::chart::write::chart_xml(&chart).0;
+        assert!(String::from_utf8_lossy(&saved).contains("4242.5"));
+    }
+
+    #[test]
+    fn a_written_chart_past_the_cap_keeps_every_written_point_when_edited() {
+        let mut chart = Chart { kind: ChartType::Bar, ..Default::default() };
+        chart.series.push(crate::chart::Series { values: vec![Some(1.0); MAX_CACHE_POINTS + 1], ..Default::default() });
+        let written = crate::chart::write::chart_xml(&chart).0;
+        let mut back = read_chart_xml(&written).unwrap();
+        assert!(!back.verbatim, "a chart we wrote is modelled whole, so edits apply");
+        back.title = Some("Edited".into());
+        let edited = crate::chart::write::chart_xml(&back).0;
+        let points = |xml: &[u8]| String::from_utf8_lossy(xml).matches("<c:pt ").count();
+        assert_eq!(points(&edited), points(&written), "the edited save writes every point the first save wrote");
+    }
+
+    #[test]
+    fn small_chart_round_trip_is_not_verbatim() {
+        let chart = Chart::sample(ChartType::Bar);
+        let back = read_chart_xml(&crate::chart::write::chart_xml(&chart).0).unwrap();
+        assert!(!back.verbatim);
+    }
 
     #[test]
     fn point_count_charges_every_retained_vector() {

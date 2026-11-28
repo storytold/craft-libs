@@ -168,8 +168,9 @@ fn title(w: &mut Writer, text: &str, c: &Chart) {
 }
 
 /// Points one cache writes. Excel and PowerPoint hold 32,000 points per series, so this is far
-/// above any chart they make; a longer vector is cut here with a warning, not refused.
-const MAX_CACHE_POINTS: usize = 1_000_000;
+/// above any chart they make; a longer vector is cut here with a warning, not refused. It is the
+/// reader's cap, so every cache written reads back whole.
+const MAX_CACHE_POINTS: usize = super::read::MAX_CACHE_POINTS;
 
 /// `vals` cut to [`MAX_CACHE_POINTS`].
 fn capped<T>(vals: &[T]) -> &[T] {
