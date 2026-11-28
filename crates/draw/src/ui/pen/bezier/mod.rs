@@ -77,7 +77,8 @@ pub enum BezierTool {
     /// Add Anchor Point: a click on a segment, within 5 screen points of it, inserts an anchor at the hit's `t`
     /// ([`PathEdit::InsertAnchor`]); a drag inserts it and pulls out its handles as the Pen does
     /// ([`PathEdit::PullAnchor`]: ⇧ turns them to the nearest 45°, ⌥ during the drag breaks the pair); the new anchor is
-    /// selected. A press on an anchor or a shown handle selects and drags it as [`BezierTool::Direct`] does (⇧ adds to
+    /// selected. Holding Space during that drag moves the anchor and both handles; releasing it resumes pulling.
+    /// A press on an anchor or a shown handle selects and drags it as [`BezierTool::Direct`] does (⇧ adds to
     /// the selection, ⌥ on a handle moves it alone), and a click on empty canvas deselects the anchors and keeps the
     /// path. With ⌥ held at the press a click on a segment selects its whole subpath and a drag moves a copy of it
     /// ([`PathEdit::DuplicateSubpath`]; the subpath itself on a path that takes no copies), and a press on an anchor does
@@ -250,16 +251,20 @@ enum Target {
         t: f64,
         from: Point,
     },
-    /// Add Anchor's drag from a segment: an insert into `segment` at `t`, whose anchor stays at `from`, the point of
-    /// the curve at `t`, and whose handles follow the pointer. `out` is the out handle of the last pass, and
-    /// `in_ctrl` the in handle ⌥ left once it broke the pair.
+    /// Add Anchor's drag from a segment: `from` stays the original curve point, while Space moves the anchor by
+    /// `by` with both handles. `last` tracks pointer travel; `out` is the last out handle, and `in_ctrl` the in
+    /// handle ⌥ left once it broke the pair.
     Pull {
         path: u64,
         segment: KnotRef,
         t: f64,
         from: Point,
+        by: Vec2,
         out: Point,
         in_ctrl: Option<Point>,
+        last: Pos2,
+        /// A translated handle stays put until the pointer or its constraints change.
+        translated_mods: Option<Mods>,
     },
     /// Direct Selection's ⌥ drag on a segment: a copy of `subpath` dragged from `from`, the grabbed point.
     Duplicate {
@@ -305,6 +310,7 @@ struct Pointing<'a> {
     start: PressStart,
     pos: Pos2,
     mods: Mods,
+    space: bool,
 }
 
 /// The kind of a part of the overlay.
@@ -623,7 +629,7 @@ impl<'a> BezierOverlay<'a> {
             // Anchor's with ⌥, moves it.
             BezierHit::Segment { path, segment, t } if self.tool == BezierTool::AddAnchor && self.tool.adds(mods) => {
                 let from = Self::segment_point(paths, path, segment, t);
-                Target::Pull { path, segment, t, from, out: from, in_ctrl: None }
+                Target::Pull { path, segment, t, from, by: Vec2::ZERO, out: from, in_ctrl: None, last: start.origin, translated_mods: None }
             }
             BezierHit::Segment { path, segment, t } if self.tool.adds(mods) => {
                 Target::Insert { path, segment, t, from: Self::segment_point(paths, path, segment, t) }
@@ -752,34 +758,46 @@ impl<'a> BezierOverlay<'a> {
                 PathEdit::InsertCurvature { path, segment, t, by: snapped(from + locked(delta)) - from }
             }
             &Target::Insert { path, segment, t, from } => PathEdit::InsertAnchor { path, segment, t, by: snapped(from + locked(delta)) - from },
-            &Target::Pull { path, segment, t, from, in_ctrl, .. } => {
+            &Target::Pull { path, segment, t, from, by, in_ctrl, .. } => {
                 let to = from + delta;
-                let out = if mods.shift { handle_45(from, to) } else { snapped(to) };
-                PathEdit::PullAnchor { path, segment, t, out, in_ctrl }
+                let out = if mods.shift { handle_45(from + by, to) } else { snapped(to) };
+                PathEdit::PullAnchor { path, segment, t, by, out, in_ctrl }
             }
             &Target::Duplicate { path, subpath, from } => PathEdit::DuplicateSubpath { path, subpath, by: snapped(from + locked(delta)) - from },
             Target::Nothing | Target::Toggle { .. } | Target::Pick { .. } | Target::Marquee => return None,
         })
     }
 
-    /// [`edit`](Self::edit), keeping what a [`Target::Pull`] carries from pass to pass: ⌥ pressed during the drag
-    /// leaves the in handle where the last pass had it, and the out handle is remembered for the next pass.
-    fn edit_pulled(
-        view: &CanvasView,
-        snap: Option<&Snap>,
-        tool: BezierTool,
-        target: &mut Target,
-        origin: Pos2,
-        pointer: Pos2,
-        mods: Mods,
-    ) -> Option<PathEdit> {
-        if let Target::Pull { from, out, in_ctrl, .. } = target
-            && mods.alt
-            && in_ctrl.is_none()
-        {
-            *in_ctrl = Some(*from - (*out - *from));
+    /// Keeps Add Anchor's anchor and handles together while Space is held; otherwise pulls the handles.
+    /// ⌥ leaves the previous in handle in place until Space moves the whole knot again.
+    fn edit_pulled(tool: BezierTool, target: &mut Target, at: Pointing<'_>) -> Option<PathEdit> {
+        let Pointing { view, snap, start, pos, mods, space } = at;
+        if let Target::Pull { path, segment, t, from, by, out, in_ctrl, last, translated_mods } = target {
+            if space {
+                let delta = view.to_doc(pos) - view.to_doc(*last);
+                *by += delta;
+                *out += delta;
+                if let Some(incoming) = in_ctrl {
+                    *incoming += delta;
+                }
+                *last = pos;
+                *translated_mods = Some(mods);
+                return Some(PathEdit::PullAnchor { path: *path, segment: *segment, t: *t, by: *by, out: *out, in_ctrl: *in_ctrl });
+            }
+            // Space keeps translation priority; on release, Alt can break the pair without moving its geometry.
+            if mods.alt && in_ctrl.is_none() {
+                let anchor = *from + *by;
+                *in_ctrl = Some(anchor - (*out - anchor));
+            }
+            // Space moves by raw travel, including off the snap targets. Releasing it is not a pointer move:
+            // keep that geometry on every stationary pass, but still read modifier-only constraint changes.
+            if *last == pos && *translated_mods == Some(mods) {
+                return Some(PathEdit::PullAnchor { path: *path, segment: *segment, t: *t, by: *by, out: *out, in_ctrl: *in_ctrl });
+            }
+            *translated_mods = None;
+            *last = pos;
         }
-        let edit = Self::edit(view, snap, tool, target, origin, pointer, mods);
+        let edit = Self::edit(view, snap, tool, target, start.origin, pos, mods);
         if let (Target::Pull { out, .. }, Some(PathEdit::PullAnchor { out: pulled, .. })) = (target, &edit) {
             *out = *pulled;
         }
@@ -846,6 +864,7 @@ impl<'a> BezierOverlay<'a> {
     fn run_pointer(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, scene: &Scene, paths: &[EditPath]) {
         let snap = canvas_snap(&cx.env);
         let view = &space.view;
+        let space_held = space.space_held();
         let mut hovered: Option<(u8, BezierHit, Mods)> = None;
         let mut pressed = false;
         for item in &scene.items {
@@ -882,10 +901,10 @@ impl<'a> BezierOverlay<'a> {
                 }
                 PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary => {
                     let first = matches!(press.phase, PressPhase::DragStart { .. });
-                    self.drag(cx, Pointing { view, snap: snap.as_ref(), start, pos, mods: press.mods }, Some(item), paths, first);
+                    self.drag(cx, Pointing { view, snap: snap.as_ref(), start, pos, mods: press.mods, space: space_held }, Some(item), paths, first);
                 }
                 PressPhase::Release { start, pos, click, .. } if start.button == PointerButton::Primary => {
-                    self.release(cx, Pointing { view, snap: snap.as_ref(), start, pos, mods: press.mods }, click, paths);
+                    self.release(cx, Pointing { view, snap: snap.as_ref(), start, pos, mods: press.mods, space: space_held }, click, paths);
                 }
                 PressPhase::Cancel { .. } => *cx.press_slot::<Held>() = None,
                 _ => {}
@@ -904,10 +923,10 @@ impl<'a> BezierOverlay<'a> {
                 }
                 PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary => {
                     let first = matches!(press.phase, PressPhase::DragStart { .. });
-                    self.drag(cx, Pointing { view, snap: snap.as_ref(), start, pos, mods: press.mods }, None, paths, first);
+                    self.drag(cx, Pointing { view, snap: snap.as_ref(), start, pos, mods: press.mods, space: space_held }, None, paths, first);
                 }
                 PressPhase::Release { start, pos, click, .. } if start.button == PointerButton::Primary => {
-                    self.release(cx, Pointing { view, snap: snap.as_ref(), start, pos, mods: press.mods }, click, paths);
+                    self.release(cx, Pointing { view, snap: snap.as_ref(), start, pos, mods: press.mods, space: space_held }, click, paths);
                 }
                 PressPhase::Cancel { .. } => *cx.press_slot::<Held>() = None,
                 _ => {}
@@ -945,7 +964,7 @@ impl<'a> BezierOverlay<'a> {
 
     /// One pass of a press dragged to `pos`; `first` on the pass the drag begins.
     fn drag(&mut self, cx: &mut Cx<'_, Self>, at: Pointing<'_>, item: Option<&Item>, paths: &[EditPath], first: bool) {
-        let Pointing { view, snap, start, pos, mods } = at;
+        let Pointing { view, start, pos, mods, .. } = at;
         let kept = cx.press_slot::<Held>().take().filter(|held| held.origin == start.origin);
         let mut held = match (kept, item) {
             (Some(held), _) => held,
@@ -974,7 +993,7 @@ impl<'a> BezierOverlay<'a> {
                     }
                 }
                 _ => {
-                    if let Some(edit) = Self::edit_pulled(view, snap, self.tool, &mut held.target, start.origin, pos, mods) {
+                    if let Some(edit) = Self::edit_pulled(self.tool, &mut held.target, at) {
                         self.propose(cx, &held.start, edit);
                     }
                 }
@@ -985,7 +1004,7 @@ impl<'a> BezierOverlay<'a> {
 
     /// The release of a press at `pos`: a drag commits, a click does what its tool's click does.
     fn release(&mut self, cx: &mut Cx<'_, Self>, at: Pointing<'_>, click: bool, paths: &[EditPath]) {
-        let Pointing { view, snap, start, pos, mods } = at;
+        let Pointing { view, start, pos, mods, .. } = at;
         // A press reports its Down, and its drag start, before its release, and the overlay holds the press from
         // either: a release with nothing held is of a press the overlay let go (a cancelled one), and does nothing.
         let Some(held) = cx.press_slot::<Held>().take().filter(|held| held.origin == start.origin) else { return };
@@ -1003,7 +1022,7 @@ impl<'a> BezierOverlay<'a> {
         }
         if held.began {
             let mut target = held.target.clone();
-            if let Some(edit) = Self::edit_pulled(view, snap, self.tool, &mut target, start.origin, pos, mods) {
+            if let Some(edit) = Self::edit_pulled(self.tool, &mut target, at) {
                 self.propose(cx, &held.start, edit);
             }
             // The copy is what was dragged: it ends up selected, not the source.

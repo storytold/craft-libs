@@ -452,7 +452,8 @@ pub enum PathEdit {
     },
     /// Add Anchor's drag from a segment: add an anchor to the segment leaving `segment` at `t` and pull out its
     /// handles, as the Pen does: the out handle at `out` and the in handle opposite it through the anchor, a smooth
-    /// knot; once Alt broke the pair, the in handle at `in_ctrl` and a corner knot.
+    /// knot; once Alt broke the pair, the in handle at `in_ctrl` and a corner knot. `by` moves the new anchor from
+    /// the original segment point; both handles are absolute document positions, including that move.
     #[non_exhaustive]
     PullAnchor {
         /// The path's host key.
@@ -461,7 +462,9 @@ pub enum PathEdit {
         segment: KnotRef,
         /// Position along the segment, 0..=1.
         t: f64,
-        /// The new anchor's out handle.
+        /// The move of the new anchor from the original segment point, in document units.
+        by: Vec2,
+        /// The new anchor's out handle, in document coordinates.
         out: Point,
         /// The new anchor's in handle once Alt broke the pair; `None` mirrors `out`.
         in_ctrl: Option<Point>,
@@ -546,7 +549,14 @@ impl PathEdit {
     /// Add Anchor's insert into the segment leaving `segment` at `t` with the new anchor's handles pulled out to `out`
     /// and mirrored, or with the in handle at `in_ctrl`.
     pub fn pull_anchor(path: u64, segment: KnotRef, t: f64, out: Point, in_ctrl: Option<Point>) -> Self {
-        PathEdit::PullAnchor { path, segment, t, out, in_ctrl }
+        Self::pull_anchor_moved(path, segment, t, Vec2::ZERO, out, in_ctrl)
+    }
+
+    /// Add Anchor's insert with its anchor moved by `by` from the original segment point.
+    /// `out` and `in_ctrl` are absolute document positions; `None` mirrors `out` through the moved anchor.
+    /// Hosts applying edits themselves must apply `by` to the inserted anchor before setting the handles.
+    pub fn pull_anchor_moved(path: u64, segment: KnotRef, t: f64, by: Vec2, out: Point, in_ctrl: Option<Point>) -> Self {
+        PathEdit::PullAnchor { path, segment, t, by, out, in_ctrl }
     }
 
     /// The Curvature tool's toggle of `knot` between smooth and corner.

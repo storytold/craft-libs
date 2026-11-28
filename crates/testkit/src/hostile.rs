@@ -7,13 +7,13 @@
 //! a failing case can be found again from its label. It builds for every target, `wasm32`
 //! included.
 //!
-//! [`hammer`] runs a parser on the unmodified seed, on every truncation of it and on the
+//! `hammer` runs a parser on the unmodified seed, on every truncation of it and on the
 //! mutations, one case after another on a worker thread, with a time limit for each case. It fails
 //! the test, naming the case and the input length, when the parser panics or does not finish in
 //! time. The number of rounds is a count the caller gives, multiplied by a variable the caller
 //! names. [`DIVISOR_VARIABLE`] (`CRAFT_HOSTILE_DIVISOR`) runs a fraction of every sweep for quick
-//! runs such as pull requests: every N-th truncation and 1/N of the rounds; [`divisor`] reads it
-//! for sweeps written without [`hammer`]. [`hammer`], [`HammerConfig`] and [`divisor`] are not
+//! runs such as pull requests: every N-th truncation and 1/N of the rounds; `divisor` reads it
+//! for sweeps written without `hammer`. `hammer`, `HammerConfig` and `divisor` are not
 //! built for `wasm32`.
 
 use std::fmt::Write as _;
@@ -39,11 +39,11 @@ use std::time::{Duration, Instant};
 #[cfg(not(target_arch = "wasm32"))]
 const WORKER_NAME: &str = "craft-testkit hostile";
 
-/// The variable that multiplies a [`HammerConfig`]'s rounds unless
-/// [`HammerConfig::with_multiplier_variable`] names another.
+/// The variable that multiplies a `HammerConfig`'s rounds unless
+/// `HammerConfig::with_multiplier_variable` names another.
 pub const DEFAULT_MULTIPLIER_VARIABLE: &str = "CRAFT_HOSTILE_MULT";
 
-/// The variable that divides every hostile-input sweep: with `N`, [`hammer`] runs the unmodified
+/// The variable that divides every hostile-input sweep: with `N`, `hammer` runs the unmodified
 /// seed, every N-th truncation (lengths 0, N, 2N, ...) and 1/N of its rounds, rounded up. Unset, or
 /// 1, runs everything. The Workspace gate sets it and the nightly full run leaves it unset; a
 /// failing case is found again with the same value.
@@ -54,7 +54,7 @@ pub const DIVISOR_VARIABLE: &str = "CRAFT_HOSTILE_DIVISOR";
 #[cfg(not(target_arch = "wasm32"))]
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The most cases one [`hammer`] call runs: the unmodified seed, its truncations and the rounds
+/// The most cases one `hammer` call runs: the unmodified seed, its truncations and the rounds
 /// together. A call that would run more fails before it runs any.
 pub const MAX_CASES: usize = 10_000_000;
 
