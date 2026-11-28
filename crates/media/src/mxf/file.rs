@@ -152,6 +152,16 @@ pub enum TrackKind {
     Data,
 }
 
+impl TrackKind {
+    fn matches_element(self, number: [u8; 4]) -> bool {
+        match self {
+            Self::Picture => matches!(number[0], 0x05 | 0x15),
+            Self::Sound => matches!(number[0], 0x06 | 0x16),
+            Self::Data => matches!(number[0], 0x07 | 0x17),
+        }
+    }
+}
+
 /// Frame wrapping (one element per edit unit) or clip wrapping (one element for the whole clip).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Wrapping {
@@ -187,12 +197,20 @@ pub struct Chunk {
 /// package.
 #[derive(Clone, Debug)]
 pub struct EssenceTrack {
+    /// MXF File Package PackageID (ST 377-1, tag 0x4401), in stored byte order.
+    /// Available across MXF dialects. Missing, wrong-length and all-zero values
+    /// yield `None`; a readable track alone establishes no package identity.
+    pub file_package_uid: Option<[u8; 32]>,
     pub track_id: u32,
     pub track_number: u32,
     pub kind: TrackKind,
     pub name: Option<String>,
     /// Edit rate of the file package track.
     pub edit_rate: Rational,
+    /// Original material track clock, before conversion into file-package edit units.
+    pub material_edit_rate: Option<Rational>,
+    /// Original material source-clip duration, in `material_edit_rate` units.
+    pub material_duration: Option<i64>,
     /// File package track origin (edit units of pre-charge before the zero point).
     pub origin: i64,
     /// Material package source clip start position (edit units after the origin).
@@ -370,6 +388,15 @@ impl<S: ByteSource + ?Sized> Window<'_, S> {
     }
 }
 
+/// A private header packet may be skipped only within the declared metadata region,
+/// with room for the standard key that the caller verifies at the returned offset.
+fn opaque_header_end(pos: u64, header: &[u8], limit: Option<u64>, file_len: u64) -> Option<u64> {
+    let limit = limit?.min(file_len);
+    let (size, width) = ber_length(header.get(16..)?)?;
+    let end = pos.checked_add(16 + width as u64)?.checked_add(size)?;
+    (size <= MAX_META_VALUE && end.checked_add(16)? <= limit).then_some(end)
+}
+
 fn walk(src: &(impl ByteSource + ?Sized)) -> Result<WalkResult> {
     walk_within(src, MAX_META_TOTAL)
 }
@@ -383,6 +410,8 @@ pub(super) fn walk_within(src: &(impl ByteSource + ?Sized), mut meta_budget: u64
     let mut win = Window { src, off: 0, buf: Vec::new(), refill: WINDOW_LARGE, small_left: 0 };
     let mut pos = run_in;
     let mut cur_meta: Option<usize> = None;
+    let mut metadata_end = None;
+    let mut reported_opaque = false;
     let mut resync_budget = 64 << 20;
     while pos + 17 <= len {
         let mut hdr_buf = [0u8; 25];
@@ -392,6 +421,16 @@ pub(super) fn walk_within(src: &(impl ByteSource + ?Sized), mut meta_budget: u64
         let hdr = &hdr_buf[..hdr_len];
         let key = Ul(hdr[..16].try_into().unwrap_or([0; 16]));
         if !key.is_smpte() {
+            if let Some(end) = opaque_header_end(pos, hdr, metadata_end.filter(|_| cur_meta.is_some()), len)
+                && win.get(end, 16)?.starts_with(&[0x06, 0x0e, 0x2b, 0x34])
+            {
+                if !reported_opaque {
+                    w.warnings.push(format!("skipped opaque non-SMPTE header packet at byte {pos}"));
+                    reported_opaque = true;
+                }
+                pos = end;
+                continue;
+            }
             // Lost sync (corrupt data): look for the next partition pack.
             match resync(src, pos + 1, len, &mut resync_budget)? {
                 Some(p) => {
@@ -437,10 +476,14 @@ pub(super) fn walk_within(src: &(impl ByteSource + ?Sized), mut meta_budget: u64
                     None => w.warnings.push(format!("short partition pack at byte {pos}")),
                 }
                 cur_meta = None;
+                metadata_end = None;
             }
             KeyClass::Primer => {
                 let v = read_value()?;
                 if let Some(pi) = w.partitions.len().checked_sub(1) {
+                    if cur_meta.is_none() && metadata_end.is_none() {
+                        metadata_end = pos.checked_add(w.partitions[pi].header_byte_count);
+                    }
                     w.metadata.push((pi, Primer::parse(&v), Vec::new()));
                     cur_meta = Some(w.metadata.len() - 1);
                 }
@@ -507,6 +550,14 @@ fn resync(src: &(impl ByteSource + ?Sized), from: u64, len: u64, budget: &mut us
 /// Data definition labels (ST 377-1 Annex / RP 224): 06 0E 2B 34 04 01 01 01 01 03 02 kk tt 00 00 00.
 fn track_kind_of(def: Option<Ul>) -> Option<(bool, TrackKind)> {
     let d = def?;
+    // Legacy AAF DataDefinition AUIDs, encoded in MXF's half-swapped UUID form.
+    // Picture, sound and timecode respectively.
+    match d.0 {
+        [0x80, 0x7d, 0, 0x60, 8, 0x14, 0x3e, 0x6f, 0x6f, 0x3c, 0x8c, 0xe1, 0x6c, 0xef, 0x11, 0xd2] => return Some((false, TrackKind::Picture)),
+        [0x80, 0x7d, 0, 0x60, 8, 0x14, 0x3e, 0x6f, 0x78, 0xe1, 0xeb, 0xe1, 0x6c, 0xef, 0x11, 0xd2] => return Some((false, TrackKind::Sound)),
+        [0x80, 0x7f, 0, 0x60, 8, 0x14, 0x3e, 0x6f, 0x7f, 0x27, 0x5e, 0x81, 0x77, 0xe5, 0x11, 0xd2] => return Some((true, TrackKind::Data)),
+        _ => {}
+    }
     if !d.item_starts_with(&[0x01, 0x03, 0x02]) {
         return None;
     }
@@ -632,11 +683,15 @@ fn sound_info(d: &Set) -> SoundInfo {
 
 /// Resolved track before the sample tables are built.
 struct TrackRef {
+    require_unclaimed_element: bool,
+    file_package_uid: Option<[u8; 32]>,
     track_id: u32,
     track_number: u32,
     kind: TrackKind,
     name: Option<String>,
     edit_rate: Rational,
+    material_edit_rate: Option<Rational>,
+    material_duration: Option<i64>,
     origin: i64,
     start_position: i64,
     duration: Option<i64>,
@@ -647,7 +702,8 @@ struct TrackRef {
 }
 
 fn umid_of(s: &Set, t: u16) -> Option<[u8; 32]> {
-    s.get(t).and_then(|v| v.get(..32)).map(|b| b.try_into().unwrap_or([0; 32]))
+    let uid = <[u8; 32]>::try_from(s.get(t)?).ok()?;
+    (uid != [0; 32]).then_some(uid)
 }
 
 /// Material package tracks → file package tracks with descriptors.
@@ -675,7 +731,7 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
     let name = material.and_then(|m| m.string(tag::PACKAGE_NAME));
     let mut file_track =
         |pkg: &Set, kind: Option<TrackKind>, id: Option<u32>, start: i64, duration: Option<i64>, name: Option<String>| -> Option<TrackRef> {
-            let umid = umid_of(pkg, tag::PACKAGE_UID).unwrap_or([0; 32]);
+            let umid = umid_of(pkg, tag::PACKAGE_UID);
             for r in pkg.references(tag::PACKAGE_TRACKS) {
                 let Some(t) = md.get(&r) else { continue };
                 let tid = t.u(tag::TRACK_ID).unwrap_or(0) as u32;
@@ -705,8 +761,12 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
                             .collect()
                     })
                     .unwrap_or_default();
-                let (body_sid, index_sid) = sids.get(&umid).copied().unwrap_or((0, 0));
+                let (body_sid, index_sid) = umid.and_then(|id| sids.get(&id)).copied().unwrap_or((0, 0));
                 return Some(TrackRef {
+                    require_unclaimed_element: false,
+                    file_package_uid: umid,
+                    material_edit_rate: None,
+                    material_duration: None,
                     track_id: tid,
                     track_number: t.u(tag::TRACK_NUMBER).unwrap_or(0) as u32,
                     kind: tk,
@@ -723,6 +783,7 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
             }
             None
         };
+    let mut unresolved_package = false;
     if let Some(m) = material {
         for r in m.references(tag::PACKAGE_TRACKS) {
             let Some(t) = md.get(&r) else { continue };
@@ -732,8 +793,12 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
                 continue;
             }
             let Some(clip) = comps.iter().find(|c| c.kind() == Some(st::SOURCE_CLIP)) else { continue };
-            let Some(umid) = umid_of(clip, tag::SOURCE_PACKAGE_ID) else { continue };
+            let Some(umid) = umid_of(clip, tag::SOURCE_PACKAGE_ID) else {
+                unresolved_package = true;
+                continue;
+            };
             let Some(pkg) = file_pkg(&umid) else {
+                unresolved_package = true;
                 warnings.push(format!("material track {} refers to a package not in this file", t.u(tag::TRACK_ID).unwrap_or(0)));
                 continue;
             };
@@ -744,6 +809,8 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
             if let Some(mut tr) =
                 file_track(pkg, Some(kind), src_track, clip.i(tag::START_POSITION).unwrap_or(0), duration, t.string(tag::TRACK_NAME))
             {
+                tr.material_edit_rate = mrate.is_valid().then_some(mrate);
+                tr.material_duration = duration;
                 if mrate.is_valid() && tr.edit_rate.is_valid() && mrate != tr.edit_rate {
                     let conv =
                         |v: i64| (v as i128 * tr.edit_rate.num as i128 * mrate.den as i128 / (tr.edit_rate.den as i128 * mrate.num as i128)) as i64;
@@ -759,8 +826,11 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
             }
         }
     }
-    if out.is_empty() {
-        // No usable material package: present the file packages' essence tracks directly.
+    let partial = !out.is_empty();
+    if !partial || unresolved_package {
+        // After partial resolution, recover only directly identifiable, unclaimed local
+        // essence. An unmatched material reference cannot supply its timing or identity.
+        let mut candidate_numbers = HashMap::<u32, usize>::new();
         for pkg in &sources {
             if pkg.reference(tag::SOURCE_PACKAGE_DESCRIPTOR).is_none() {
                 continue;
@@ -773,13 +843,43 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
                 if !seen.insert(id) {
                     continue;
                 }
-                if let Some(tr) = file_track(pkg, None, Some(id), 0, None, None) {
+                if let Some(mut tr) = file_track(pkg, None, Some(id), 0, None, None) {
+                    if partial {
+                        if !tr.kind.matches_element(tr.track_number.to_be_bytes()) {
+                            continue;
+                        }
+                        // Only a local EssenceContainerData link can establish a package ID
+                        // independently of the broken material reference.
+                        if let Some(uid) = tr.file_package_uid {
+                            match sids.get(&uid) {
+                                Some((0, _)) => continue, // External essence.
+                                None => tr.file_package_uid = None,
+                                Some(_) => {}
+                            }
+                        }
+                        if tr.kind == TrackKind::Picture {
+                            // This duration belongs to the file track, independently of material timing.
+                            tr.duration = components(md, t).0.and_then(|seq| seq.i(tag::DURATION)).filter(|d| *d >= 0);
+                        }
+                        tr.require_unclaimed_element = true;
+                        *candidate_numbers.entry(tr.track_number).or_default() += 1;
+                    }
                     out.push(tr);
                 }
             }
-            if timecode.is_none() {
+            if !partial && timecode.is_none() {
                 timecode = package_timecode(md, pkg);
             }
+        }
+        if partial {
+            out.retain(|tr| !tr.require_unclaimed_element || candidate_numbers.get(&tr.track_number) == Some(&1));
+        }
+    }
+    // BodySID zero in an explicit link describes external essence. Absent linkage
+    // is distinct from an explicit contradiction.
+    for tr in &mut out {
+        if tr.file_package_uid.and_then(|id| sids.get(&id)).is_some_and(|&(body, _)| body == 0) {
+            tr.file_package_uid = None;
         }
     }
     (out, timecode, name)
@@ -825,18 +925,16 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<MxfFile> {
         v.dedup();
         v
     };
-    for r in &refs {
+    for mut r in refs {
         let number = r.track_number.to_be_bytes();
         let mut key4 = all_numbers.iter().find(|n| **n == number).copied();
+        if r.require_unclaimed_element && (key4.is_none() || claimed.contains(&number)) {
+            continue;
+        }
         if key4.is_none() {
             // Track number missing or not matching (some OP-Atom writers): the only unclaimed
             // element stream of the right kind.
-            let kind_items: &[u8] = match r.kind {
-                TrackKind::Picture => &[0x05, 0x15],
-                TrackKind::Sound => &[0x06, 0x16],
-                TrackKind::Data => &[0x07, 0x17],
-            };
-            let cands: Vec<[u8; 4]> = all_numbers.iter().filter(|n| kind_items.contains(&n[0]) && !claimed.contains(n)).copied().collect();
+            let cands: Vec<[u8; 4]> = all_numbers.iter().filter(|n| r.kind.matches_element(**n) && !claimed.contains(n)).copied().collect();
             if cands.len() == 1 {
                 key4 = Some(cands[0]);
             }
@@ -845,9 +943,28 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<MxfFile> {
             warnings.push(format!("no essence in this file for track {} (number {:08x})", r.track_id, r.track_number));
             continue;
         };
+        let mut elements: Vec<Element> = w.elements.iter().filter(|e| e.key.0[12..16] == key4).copied().collect();
+        if r.body_sid != 0 {
+            let belongs_to_package = |e: &Element| {
+                let end = w.partitions.partition_point(|p| p.offset < e.value_offset);
+                w.partitions[..end].last().is_some_and(|p| p.body_sid == r.body_sid)
+            };
+            if r.require_unclaimed_element {
+                elements.retain(belongs_to_package);
+            } else if !elements.iter().all(belongs_to_package) {
+                // A playable stream number alone cannot authenticate the package.
+                r.file_package_uid = None;
+            }
+        }
+        if elements.is_empty() {
+            continue;
+        }
+        let track = build_track(src, &r, &elements, key4, &w.index, &mut warnings)?;
+        if r.require_unclaimed_element && track.kind == TrackKind::Picture && track.samples.is_empty() {
+            continue;
+        }
         claimed.push(key4);
-        let elements: Vec<Element> = w.elements.iter().filter(|e| e.key.0[12..16] == key4).copied().collect();
-        tracks.push(build_track(src, r, &elements, key4, &w.index, &mut warnings)?);
+        tracks.push(track);
     }
     if tracks.is_empty() {
         return Err(Error::Unsupported("no essence of the material package is stored in this file".into()));
@@ -869,10 +986,13 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<MxfFile> {
     })
 }
 
-/// Index entries per stored edit unit for an index SID (all segments when `sid` is 0 or unmatched).
-fn index_entries(index: &[IndexSegment], sid: u32) -> (std::collections::BTreeMap<usize, IndexEntry>, u32) {
+/// Index entries per stored edit unit. Restricted recovery requires both stream IDs.
+fn index_entries(index: &[IndexSegment], sid: u32, required_body: Option<u32>) -> (std::collections::BTreeMap<usize, IndexEntry>, u32) {
     let any = index.iter().any(|s| s.index_sid == sid);
-    let segs: Vec<&IndexSegment> = index.iter().filter(|s| !any || s.index_sid == sid).collect();
+    let segs = index.iter().filter(|s| match required_body {
+        Some(body) => body != 0 && sid != 0 && s.body_sid == body && s.index_sid == sid,
+        None => !any || s.index_sid == sid,
+    });
     // ST 377-1 segments use absolute edit-unit positions, which need not start at zero.
     // Keep positions sparse so even hostile gaps allocate only for real (already parsed) entries.
     let mut out = std::collections::BTreeMap::new();
@@ -901,11 +1021,14 @@ fn build_track(
     let desc = r.descriptor.as_ref();
     let container = desc.and_then(|d| d.ul(tag::ESSENCE_CONTAINER));
     let mut t = EssenceTrack {
+        file_package_uid: r.file_package_uid,
         track_id: r.track_id,
         track_number: u32::from_be_bytes(key4),
         kind: r.kind,
         name: r.name.clone(),
         edit_rate: r.edit_rate,
+        material_edit_rate: r.material_edit_rate,
+        material_duration: r.material_duration,
         origin: r.origin,
         start_position: r.start_position,
         duration: r.duration,
@@ -950,7 +1073,7 @@ fn build_track(
             }
             t.codec = codec;
             t.picture = Some(pi);
-            build_pictures(src, &mut t, elements, index, warnings)?;
+            build_pictures(src, &mut t, elements, index, r.require_unclaimed_element.then_some(r.body_sid), warnings)?;
         }
         TrackKind::Sound => {
             let si = desc.map(|d| sound_info(d)).unwrap_or(SoundInfo { channels: 1, bits: 16, ..Default::default() });
@@ -988,15 +1111,56 @@ fn build_track(
     Ok(t)
 }
 
+/// A single KLV can hold a whole clip. Only recover it when every edit unit
+/// can be delimited, or file-track metadata identifies exactly one picture.
+fn has_recovered_boundaries(
+    element: &Element,
+    expected: Option<usize>,
+    entries: &std::collections::BTreeMap<usize, IndexEntry>,
+    unit_bytes: u32,
+) -> bool {
+    if element.truncated || element.size == 0 {
+        return false;
+    }
+    if expected == Some(1) {
+        return u32::try_from(element.size).is_ok();
+    }
+    if unit_bytes > 0 {
+        let width = u64::from(unit_bytes);
+        return element.size.is_multiple_of(width) && expected.is_none_or(|n| n as u64 == element.size / width);
+    }
+    let Some(first) = entries.get(&0) else { return false };
+    if entries.len() < 2 || expected.is_some_and(|n| n != entries.len()) {
+        return false;
+    }
+    let mut previous = 0;
+    for (position, (&edit_unit, entry)) in entries.iter().enumerate().skip(1) {
+        let Some(offset) = entry.stream_offset.checked_sub(first.stream_offset) else { return false };
+        if edit_unit != position || offset <= previous || offset >= element.size || offset - previous > u64::from(u32::MAX) {
+            return false;
+        }
+        previous = offset;
+    }
+    element.size - previous <= u64::from(u32::MAX)
+}
+
 fn build_pictures(
     src: &(impl ByteSource + ?Sized),
     t: &mut EssenceTrack,
     elements: &[Element],
     index: &[IndexSegment],
+    required_body: Option<u32>,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
-    let (entries, eubc) = index_entries(index, t.index_sid);
+    let (entries, eubc) = index_entries(index, t.index_sid, required_body);
     let expected = t.duration.map(|d| d.saturating_add(t.first_edit_unit()).max(0) as usize);
+    if required_body.is_some()
+        && let [element] = elements
+        && !has_recovered_boundaries(element, expected, &entries, eubc)
+    {
+        warnings.push("recovered picture element has no verified edit-unit boundaries".into());
+        return Ok(());
+    }
     let clip = elements.len() == 1 && expected.is_none_or(|n| n > 1) && (eubc > 0 || entries.len() > 1);
     let mut samples: Vec<Sample> = Vec::new();
     if clip {
@@ -1221,7 +1385,7 @@ mod index_bounds_tests {
         let entry = IndexEntry { flags: 0x80, stream_offset: 1234, ..Default::default() };
         for start_position in [5, 49_999_999, i64::MAX] {
             let segment = IndexSegment { start_position, entries: vec![entry, entry], ..Default::default() };
-            let (entries, _) = index_entries(&[segment], 0);
+            let (entries, _) = index_entries(&[segment], 0, None);
             let start = usize::try_from(start_position).unwrap();
             assert_eq!(entries.get(&start), Some(&entry));
             assert_eq!(entries.len(), if start_position == i64::MAX { 1 } else { 2 });
@@ -1231,7 +1395,7 @@ mod index_bounds_tests {
     #[test]
     fn negative_preroll_positions_do_not_drop_later_valid_entries() {
         let segment = IndexSegment { start_position: -1, entries: vec![IndexEntry::default(); 3], ..Default::default() };
-        let (entries, _) = index_entries(&[segment], 0);
+        let (entries, _) = index_entries(&[segment], 0, None);
         assert_eq!(entries.keys().copied().collect::<Vec<_>>(), vec![0, 1]);
     }
 }
@@ -1268,11 +1432,14 @@ mod aes3_read_tests {
         }
         let samples = (data.len() as u64 - 4) / 32;
         let track = EssenceTrack {
+            file_package_uid: None,
             track_id: 1,
             track_number: 0,
             kind: TrackKind::Sound,
             name: None,
             edit_rate: Rational::default(),
+            material_edit_rate: None,
+            material_duration: None,
             origin: 0,
             start_position: 0,
             duration: None,
