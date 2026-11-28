@@ -357,6 +357,27 @@ as that box (VectorCraft #2920: an open zigzag in an `.ai` file opened as a clos
 a clip of that shape was dropped. Tests: `context::path_as_rect_tests` and the `rectangles`
 module of `crates/pdf/tests/interpretation.rs`, which fails without the change.
 
+From [PdfCraft #5643](https://github.com/storytold/pdfcraft/pull/5643) (storytold/pdfcraft#5532),
+hayro, marked `PdfCraft patch (#5643)` in the source: `thin_stroke_pen`. A stroke under a matrix
+that shrinks one direction more than another is drawn with a pen at least one device pixel
+across in every direction (a quarter of one for stroked text), outside patterns and Type 3
+glyphs as before. The path, dashed in user space first, is drawn through a matrix that stretches
+each principal direction of the CTM by what it needs, so a direction already wide enough keeps
+its width. Each join keeps the miter or bevel its user-space angle gives it under the miter
+limit (`pen_miter_limit`). Where no limit in the pen's space keeps them all, mitered joins are
+bevelled rather than bevelled ones mitered. Only the joins a dashed stroke's dashes draw count,
+and a stroke off the canvas is skipped before it is dashed (under `pen_miter_bound`, which
+bounds the dashes' limit). A matrix that shrinks one direction over 10^9 times more than the
+other gets no pen and is drawn as before, since the pen's matrix would be off by that many
+rounding errors. The pen is sized for the width drawn after the cap on strokes far wider than
+the canvas, and its space is turned or mirrored (`settle`) so that the matrix vello strokes
+under is symmetric: vello takes kurbo's tolerance from the matrix's diagonal alone, which a
+quarter turn makes 0, and kurbo then left out joins. A join's pen-space tangents are those
+kurbo takes from `to_pen × path`. Before, the width floor went by the larger axis scale alone,
+so a horizontal hairline under `1 0 0 0.25 cm` drew a quarter of a pixel thick. Tests:
+`thin_stroke_pen_tests` in hayro, and the `thin_strokes` module of
+`crates/pdf/tests/upstream_raster.rs`, which fails without the change.
+
 Local fixes on top of these ports, marked `Craft patch` or in the comments of the ported
 code: an inflated patch-mesh triangle is rebuilt with `Triangle::new`, so its stored dot
 products match its vertices (moving the points alone skewed barycentric coordinates by about

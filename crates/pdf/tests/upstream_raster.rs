@@ -390,3 +390,123 @@ mod icc_profile_cache {
         }
     }
 }
+
+/// PdfCraft #5643 (storytold/pdfcraft#5532), the thin-stroke pen in `hayro`'s renderer. Adapted
+/// from `raster::tests::{a_thin_stroke_is_one_pixel_wide_under_a_squeezed_matrix,
+/// a_dashed_thin_stroke_keeps_the_miters_its_dashes_draw}` in pdfcraft-render at
+/// a8d2d7967 (MIT OR Apache-2.0).
+mod thin_strokes {
+    use super::{one_page, render};
+
+    /// The ink of each pixel of `content` drawn on a 40 × 40 pt page at 72 dpi, row by row
+    /// (0 white, 1 black), and the page's width in pixels.
+    fn ink_page(content: &str) -> (usize, Vec<f32>) {
+        ink_on("/MediaBox [0 0 40 40]", content)
+    }
+
+    /// The ink of each pixel of `content` drawn on a page with the entries `page` at 72 dpi.
+    fn ink_on(page: &str, content: &str) -> (usize, Vec<f32>) {
+        let page = render(&one_page(page, content.as_bytes(), b""));
+        let ink = page.rgba.as_chunks::<4>().0.iter().map(|px| f32::from(255 - px[0]) / 255.0).collect();
+        (page.width as usize, ink)
+    }
+
+    /// A stroke thinner than a device pixel is drawn at least one pixel wide whichever way it
+    /// runs, also under a matrix that shrinks one axis more than the other. The widening went by
+    /// the larger axis scale alone, so under `1 0 0 0.25 cm` a horizontal line came out a
+    /// quarter of a pixel thick and a quarter as dark; going by the smaller scale instead would
+    /// have drawn a vertical line four pixels wide. Dashes keep the lengths the pattern gives
+    /// them.
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    fn a_thin_stroke_is_one_pixel_wide_under_a_squeezed_matrix() {
+        let column = |content: &str, x: usize| {
+            let (width, ink) = ink_page(content);
+            ink.iter().skip(x).step_by(width).sum::<f32>()
+        };
+        let row = |content: &str, y: usize| {
+            let (width, ink) = ink_page(content);
+            ink.iter().skip(y * width).take(width).copied().collect::<Vec<f32>>()
+        };
+        let one_pixel = 0.85..=1.3;
+
+        // Device y = 40 - 0.25 × 82 = 19.5, the middle of row 19.
+        let across = column("q 1 0 0 0.25 0 0 cm 0.3 w 4 82 m 36 82 l S Q", 20);
+        assert!(one_pixel.contains(&across), "a horizontal line is {across} px of ink thick");
+        // Device x = 20.5, the middle of column 20, from row 10 to row 30.
+        let along: f32 = row("q 1 0 0 0.25 0 0 cm 0.3 w 20.5 40 m 20.5 120 l S Q", 20).iter().sum();
+        assert!(one_pixel.contains(&along), "a vertical line is {along} px of ink wide");
+        // Shrunk on both axes, by different scales.
+        let both = column("q 0.5 0 0 0.25 0 0 cm 0.1 w 8 82 m 72 82 l S Q", 20);
+        assert!(one_pixel.contains(&both), "a line shrunk on both axes is {both} px thick");
+        // As before: an unscaled hairline is one pixel thick.
+        let plain = column("0.1 w 4 20.5 m 36 20.5 l S", 20);
+        assert!(one_pixel.contains(&plain), "a plain hairline is {plain} px thick");
+        // A line width of zero, the thinnest line the device can draw (ISO 32000-2 §8.4.3.2), is
+        // the same: one pixel with the matrix or without it, whichever way the line runs.
+        let zero = column("0 w 4 20.5 m 36 20.5 l S", 20);
+        assert!(one_pixel.contains(&zero), "a zero-width line is {zero} px thick");
+        let across = column("q 1 0 0 0.25 0 0 cm 0 w 4 82 m 36 82 l S Q", 20);
+        assert!(one_pixel.contains(&across), "a zero-width horizontal line is {across} px thick");
+        let along: f32 = row("q 1 0 0 0.25 0 0 cm 0 w 20.5 40 m 20.5 120 l S Q", 20).iter().sum();
+        assert!(one_pixel.contains(&along), "a zero-width vertical line is {along} px wide");
+
+        // Dashes of 4 pt, gaps of 4 pt from x = 4: columns 4–7 and 12–15 are inked, 8–11 are not.
+        let dashes = row("q 1 0 0 0.25 0 0 cm 0.3 w [4 4] 0 d 4 82 m 36 82 l S Q", 19);
+        let (on, off) = (dashes.get(5..7).unwrap_or_default(), dashes.get(9..11).unwrap_or_default());
+        assert!(on.len() == 2 && on.iter().all(|i| *i > 0.85), "a dash is inked: {dashes:?}");
+        assert!(off.len() == 2 && off.iter().all(|i| *i < 0.05), "a gap is not: {dashes:?}");
+    }
+
+    /// A dashed thin stroke takes its miters from the joins its dashes draw. Under
+    /// `0.1 0 0 1 cm` a 2-unit line is widened across x, which sharpens a right angle pointing up
+    /// (a miter in user space, under a limit of 4) and blunts a spike lying along x (a bevel in
+    /// user space). No one limit keeps both, so with the spike drawn the right angle is
+    /// bevelled; with the spike in a dash's gap it keeps its miter, whose tip reaches about 5
+    /// pixels above the corner.
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    fn a_dashed_thin_stroke_keeps_the_miters_its_dashes_draw() {
+        // The right angle's corner is at device (10.8, 22); the spike's, in the gap, at (21.6, 20).
+        let path = "100 10 m 108 18 l 116 10 l 216 20 l 116 30 l S Q";
+        let tip = |content: &str| {
+            let (width, ink) = ink_page(content);
+            (17..=20).flat_map(|y| (8..=12).map(move |x| (x, y))).filter_map(|(x, y)| ink.get(y * width + x)).sum::<f32>()
+        };
+        let dashed = tip(&format!("q 0.1 0 0 1 0 0 cm 2 w 4 M [120 6 500 1] 0 d {path}"));
+        assert!(dashed > 1.0, "the dashed right angle's miter tip has {dashed} px of ink");
+        let solid = tip(&format!("q 0.1 0 0 1 0 0 cm 2 w 4 M {path}"));
+        assert!(solid < 0.3, "with the spike drawn the right angle is bevelled: {solid} px of ink");
+    }
+
+    /// A stroke far wider than the canvas one way is drawn a few canvases wide, and its pen is
+    /// sized for the width drawn. Under `100 0 0 0.01 cm` a 10-unit line is 1000 pixels wide
+    /// across x, which is capped at 320 on a 40 × 40 canvas, and 0.1 across y. The pen was sized
+    /// for the uncapped width, so the cap took a horizontal line down to 0.32 pixels thick.
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    fn a_thin_stroke_capped_for_its_other_width_is_still_one_pixel_thick() {
+        // Device y = 40 - 0.01 × 1950 = 20.5, the middle of row 20.
+        let (width, ink) = ink_page("q 100 0 0 0.01 0 0 cm 10 w 0.04 1950 m 0.36 1950 l S Q");
+        let across = ink.iter().skip(20).step_by(width).sum::<f32>();
+        assert!((0.85..=1.3).contains(&across), "a capped horizontal line is {across} px of ink thick");
+    }
+
+    /// A thin stroke keeps its joins when its matrix turns a quarter. vello sets how closely
+    /// kurbo strokes from the matrix's diagonal alone, which a quarter turn makes 0, and kurbo
+    /// leaves out a join that turns by less than that tolerance allows for. Under
+    /// `300 0 0 1 cm` a 0.1-unit line is 30 pixels wide across x and widened to 1 across y; the
+    /// corner below turns by 85° in the pen's space. Turned, the join was left out, which cut
+    /// about 14 pixels of ink off the corner.
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    fn a_thin_stroke_keeps_its_joins_under_a_quarter_turn() {
+        let corner = "300 0 0 1 60 20 cm 0.1 w 0 0 m 0 20 l 0.1 20.087 l S";
+        let total = |content: String| ink_on("/MediaBox [0 0 100 100]", &content).1.iter().sum::<f32>();
+        let plain = total(format!("q {corner} Q"));
+        // Turned a quarter about the page's centre.
+        let turned = total(format!("q 0 1 -1 0 100 0 cm {corner} Q"));
+        assert!(plain > 100.0, "the corner has {plain} px of ink");
+        assert!((plain - turned).abs() < 0.5, "the corner has {plain} px of ink, turned {turned}");
+    }
+}
