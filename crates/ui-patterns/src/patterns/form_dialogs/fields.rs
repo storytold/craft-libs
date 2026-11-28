@@ -27,10 +27,14 @@ pub enum FieldValue {
     Point([f64; 2]),
     /// A row-major grid of integers (Custom filter's 5×5 kernel).
     Grid(Vec<i64>),
+    /// sRGB components and opacity in 0..=1, as a color parameter with opacity is kept (`#rrggbbaa` is these times
+    /// 255). After `Grid` so an untagged read keeps four integers a grid; a remembering dialog reads four integers
+    /// under a color row with opacity back as this.
+    Rgba([f32; 4]),
     /// A list of values of any kind: Color Table's colours, Replace Color's sampled points. Last
-    /// so an untagged read keeps the fixed-shape variants above; a list of integers or of two or
-    /// three numbers reads back as `Grid`, `Point` or `Color`, which [`DialogFields::list`] turns
-    /// back into the list.
+    /// so an untagged read keeps the fixed-shape variants above; a list of integers or of two,
+    /// three or four numbers reads back as `Grid`, `Point`, `Color` or `Rgba`, which
+    /// [`DialogFields::list`] turns back into the list.
     List(Vec<FieldValue>),
     /// Any JSON value: what a [`ParamKind::Custom`](super::ParamKind::Custom) row keeps under its key when its value is
     /// structured (Blur Gallery's pins, `[{x, y, blur, …}]`). Last so an untagged read keeps the fixed-shape variants
@@ -210,6 +214,20 @@ impl DialogFields {
         }
     }
 
+    /// `Rgba` as RGB and opacity in 0–1, a `Color` as opaque, or a `Grid` of four cells (the shape an untagged read
+    /// gives a color stored as four integers, `[1, 0, 0, 1]`), else `None`.
+    pub fn rgba(&self, key: &str) -> Option<[f32; 4]> {
+        match self.values.get(key)? {
+            FieldValue::Rgba(c) => Some(*c),
+            FieldValue::Color([r, g, b]) => Some([*r, *g, *b, 1.0]),
+            FieldValue::Grid(cells) => match cells[..] {
+                [r, g, b, a] => Some([r as f32, g as f32, b as f32, a as f32]),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// `Point` as `[x, y]`, else `None`.
     pub fn point(&self, key: &str) -> Option<[f64; 2]> {
         match self.values.get(key)? {
@@ -226,7 +244,7 @@ impl DialogFields {
         }
     }
 
-    /// A `List`, or a `Grid`, `Point` or `Color` as the list of its numbers (the shapes an
+    /// A `List`, or a `Grid`, `Point`, `Color` or `Rgba` as the list of its numbers (the shapes an
     /// untagged read gives a stored list of numbers, and an empty list), or a `Json` array read as
     /// those values. The key may have no parameter row: a host keeps its own data under it (a key
     /// without a row is not remembered).
@@ -236,6 +254,7 @@ impl DialogFields {
             FieldValue::Grid(cells) => Cow::Owned(cells.iter().map(|c| FieldValue::Int(*c)).collect()),
             FieldValue::Point(p) => Cow::Owned(p.iter().map(|n| FieldValue::Number(*n)).collect()),
             FieldValue::Color(c) => Cow::Owned(c.iter().map(|n| FieldValue::Number(f64::from(*n))).collect()),
+            FieldValue::Rgba(c) => Cow::Owned(c.iter().map(|n| FieldValue::Number(f64::from(*n))).collect()),
             FieldValue::Json(serde_json::Value::Array(items)) => {
                 Cow::Owned(items.iter().map(|item| serde_json::from_value(item.clone())).collect::<Result<_, _>>().ok()?)
             }

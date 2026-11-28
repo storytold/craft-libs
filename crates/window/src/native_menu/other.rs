@@ -30,6 +30,10 @@ impl Installed {
         match self.0 {}
     }
 
+    pub(super) fn failed(&self) -> bool {
+        match self.0 {}
+    }
+
     pub(super) fn tracking(&self) -> bool {
         match self.0 {}
     }

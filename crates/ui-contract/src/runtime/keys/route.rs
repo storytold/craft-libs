@@ -610,7 +610,8 @@ struct Driven {
     ends: bool,
     /// Left and Right go to the list too (a tree): a text stop keeps them for its caret while it holds text.
     tree: bool,
-    /// Enter goes to the list; off, a text opener keeps it (its layer's `FocusPolicy::list_enter`).
+    /// Enter goes to the list; off, a text opener keeps it (its layer's `FocusPolicy::list_enter`), and so does a field
+    /// that drives a collection with no lead row.
     enter: bool,
 }
 
@@ -635,7 +636,8 @@ fn list_of_field(ctx: &Context, rec: &StopRec) -> Option<Driven> {
             text: false,
             ends: drive.empty,
             tree: drive.empty && focus::registration::is_tree(ctx, drive.list),
-            enter: true,
+            // With no lead row to activate, Enter stays the field's submit, so the dialog's default button takes it.
+            enter: !focus::registration::lacks_lead(ctx, drive.list),
         }),
         (None, Some((_, opener))) => {
             let (layer, list, _) = focus::registration::dropdown_target(ctx, opener)?;
@@ -851,6 +853,11 @@ fn route_access(ctx: &Context, request: &Action, nodes: &HashMap<u64, Node>, rou
                 // A sub-node with no stop of its own (a chevron) names its part: the component decides what it opens.
                 if node.part.is_some() && !node.focusable {
                     push(routed, owner, Intent::Access(request.request(node.part)), false);
+                    return;
+                }
+                // A popup that a part with no node opens (a corner mark) is opened and closed by that part.
+                if let Some(part) = node.toggle {
+                    push(routed, owner, Intent::Access(request.request(Some(part))), false);
                     return;
                 }
                 match focus::stop_rec(ctx, (node.owner, node.part)).filter(|rec| rec.stop.group.is_some()) {

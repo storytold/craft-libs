@@ -49,30 +49,40 @@ fn prompt(ui: &mut Ui, env: &mut Env<'_>, state: &mut DialogState) {
 }
 
 fn conflict_bar(ui: &mut Ui, env: &mut Env<'_>, state: &mut DialogState) {
-    let Some(conflict) = state.conflict.clone() else { return };
-    let words = env.text.words();
-    let chord = env.text.trigger(&conflict.binding.trigger, env.keymap.platform());
-    let text = around_chord(env.text.rtl(), &conflict.text, &chord);
-    let mut notice = Notice::new(Tone::Warn, text)
-        .id_salt("shortcuts.conflict")
-        .layout(NoticeLayout::Inline)
-        .announce(Politeness::Polite)
-        .action(NoticeAction::new(words.take_it.clone()))
-        .action(NoticeAction::new(words.accept_and_go_to_conflict.clone()));
-    let keep = env.options.allow_keep;
-    if keep {
-        notice = notice.action(NoticeAction::new(words.keep_both.clone()));
+    enum Action {
+        Take,
+        TakeAndGo,
+        Keep,
+        Dismiss,
     }
-    // Photoshop's wording for turning the new shortcut down is "Undo Changes", the notice's last action.
-    let undo_at = if keep { 3 } else { 2 };
-    notice = notice.action(NoticeAction::new(words.undo_changes.clone()));
+
+    let Some(conflict) = state.visible_conflict(env).cloned() else { return };
+    let words = env.text.words();
+    let text = conflict.notice_text(env);
+    let keep = conflict.can_keep && env.options.allow_keep;
+    let mut notice = Notice::new(Tone::Warn, text)
+        .id_salt(("shortcuts.conflict", conflict.revision, keep))
+        .layout(NoticeLayout::Inline)
+        .announce(Politeness::Polite);
+    let mut actions = Vec::new();
+    for (available, label, action) in [
+        (conflict.can_steal, &words.take_it, Action::Take),
+        (conflict.can_steal, &words.accept_and_go_to_conflict, Action::TakeAndGo),
+        (keep, &words.keep_both, Action::Keep),
+        (true, &words.undo_changes, Action::Dismiss),
+    ] {
+        if available {
+            notice = notice.action(NoticeAction::new(label.clone()));
+            actions.push(action);
+        }
+    }
     let out = notice.show(ui);
-    match out.action {
-        Some(0) => state.take_it(env),
-        Some(1) => state.take_it_and_go(env),
-        Some(2) if keep => state.keep_both(env),
-        Some(at) if at == undo_at => state.dismiss_conflict(),
-        _ => {}
+    match out.action.and_then(|at| actions.get(at)) {
+        Some(Action::Take) => state.take_it(env),
+        Some(Action::TakeAndGo) => state.take_it_and_go(env),
+        Some(Action::Keep) => state.keep_both(env),
+        Some(Action::Dismiss) => state.dismiss_conflict(),
+        None => {}
     }
 }
 

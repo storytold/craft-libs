@@ -35,6 +35,13 @@
 //! - **Indonesian** ([`ProofLang::Id`], module [`id`]): the installed Hunspell `id_ID`
 //!   dictionary (not bundled), dictionary-driven suggestions and generic checks with Indonesian
 //!   messages. Hyphenation uses the existing English fallback.
+//! - **Gujarati** ([`ProofLang::Gu`], module [`gu`]): the installed Hunspell `gu_IN`
+//!   dictionary (not bundled), dictionary-driven suggestions and generic checks with Gujarati
+//!   messages. Hyphenation uses the existing English fallback.
+//! - **Hindi** ([`ProofLang::Hi`], module [`hi`]): the installed Hunspell `hi_IN` dictionary
+//!   (not bundled, matching nukta letters however either side spells them), dictionary-driven
+//!   suggestions and the generic checks Gujarati shares, with Hindi messages. Hyphenation breaks
+//!   between aksharas ([`indic`]).
 //! - **Spanish** ([`ProofLang::Es`], [`ProofLang::EsMx`], [`ProofLang::Es419`], [`ProofLang::EsUy`],
 //!   module [`es`]): each variety's installed Hunspell dictionary (`es_ES`, `es_MX`, `es_419`,
 //!   `es_UY`, with fallbacks; not bundled), dictionary-driven suggestions, Uruguayan `vos` forms,
@@ -73,16 +80,20 @@ mod data {
 }
 pub mod bg;
 pub mod cs;
+mod devanagari;
 pub mod dict;
 pub mod en_variants;
 mod english;
 pub mod es;
 pub mod fr;
 mod grammar_en;
+pub mod gu;
+pub mod hi;
 pub mod hr;
 pub mod hunspell;
 pub mod hyphen;
 pub mod id;
+pub mod indic;
 pub mod it;
 pub mod lang;
 mod languages;
@@ -93,6 +104,7 @@ pub mod pl;
 pub mod pt;
 pub mod ru;
 pub mod scowl;
+mod script_checks;
 mod slot;
 mod spelling;
 pub mod tr;
