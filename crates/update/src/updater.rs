@@ -12,6 +12,7 @@
 //! reports what came of it: [`Status::Updated`] or [`Status::InstallFailed`].
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, SendError, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -81,6 +82,9 @@ pub enum Status {
     /// A requested check found that the launcher keeps this app on a version of its choosing
     /// ([`Updater::managed`]), so it does not update itself.
     Managed,
+    /// A check was requested while the app has turned update checks off
+    /// ([`Updater::set_checks_enabled`]), so it did not run.
+    Off,
     /// This start follows an update that installed this version.
     Updated(String),
     /// The last update could not be installed, for this reason.
@@ -119,6 +123,16 @@ type Found = Result<Option<(Release, bool)>, CheckError>;
 
 /// Says whether this copy can install a release itself (tests stand in for the files with one).
 type InstallProbe = Arc<dyn Fn(&'static App, &Release) -> bool + Send + Sync>;
+
+/// Runs on the check's thread just before it starts its request (tests).
+type BeforeAsk = Arc<dyn Fn() + Send + Sync>;
+
+/// The check's thread has not started its request.
+const CHECK_WAITING: u8 = 0;
+/// The check's thread has started its request.
+const CHECK_ASKING: u8 = 1;
+/// Checks were turned off before the check's thread started its request: it asks nothing.
+const CHECK_DROPPED: u8 = 2;
 
 /// Whether this copy can install `release` itself. It reads the installed files, which can take
 /// long on slow storage, so the check's thread and the offer's thread call it, never a pass.
@@ -241,7 +255,16 @@ pub struct Updater {
     started: bool,
     /// The last update's outcome record was read ([`Updater::read_last_update`]).
     outcome_read: bool,
+    /// Checks may ask the network ([`Self::set_checks_enabled`]).
+    checks_enabled: bool,
     check: Option<Receiver<Found>>,
+    /// Whether `check`'s thread has started its request ([`CHECK_ASKING`]), or checks were turned
+    /// off before it did ([`CHECK_DROPPED`]). The thread moves it from [`CHECK_WAITING`] to
+    /// [`CHECK_ASKING`] in one step as it begins its request, so it either begins the request
+    /// before checks are turned off or asks nothing.
+    check_state: Arc<AtomicU8>,
+    /// Runs on the check's thread just before it starts its request (tests).
+    before_ask: Option<BeforeAsk>,
     /// A release the app offered ([`Self::offer`]) while its thread reads whether this copy can
     /// install it itself; `tick` opens the prompt with the answer.
     offered: Option<Receiver<(Release, bool)>>,
@@ -304,7 +327,10 @@ impl Updater {
             requested: false,
             started: false,
             outcome_read: false,
+            checks_enabled: true,
             check: None,
+            check_state: Arc::new(AtomicU8::new(CHECK_WAITING)),
+            before_ask: None,
             offered: None,
             next_offer: None,
             offer_outdated: false,
@@ -358,6 +384,44 @@ impl Updater {
         }
     }
 
+    /// Turns update checks on or off, as [`Self::set_checks_enabled`] does.
+    #[must_use]
+    pub fn with_checks_enabled(mut self, enabled: bool) -> Self {
+        self.set_checks_enabled(enabled);
+        self
+    }
+
+    /// Turns update checks on or off, for a session that must not reach the network (a test, a
+    /// scripted run, a user who turned checks off). While they are off, [`Self::check_at_start`]
+    /// reads only what the last update came to, and [`Self::check_now`] reports [`Status::Off`]
+    /// without asking the network or the launcher's file. Turning checks off drops the answer of
+    /// a check that is running; its thread skips the request when it has not begun it yet, and a
+    /// request already under way finishes unread. A requested check then reports [`Status::Off`].
+    /// A check at start that was skipped does not run when checks are turned on again;
+    /// [`Self::check_now`] does. Turning checks on again sets a [`Status::Off`] back to
+    /// [`Status::Idle`]. An update that is installing or ready carries on, and
+    /// [`Self::offer`] still opens the prompt for a release the app found itself. Checks are on
+    /// by default.
+    pub fn set_checks_enabled(&mut self, enabled: bool) {
+        self.checks_enabled = enabled;
+        // A result that says checks are off is no longer true; the check dialog offers Check Now.
+        if enabled && self.status == Status::Off {
+            self.status = Status::Idle;
+        }
+        if !enabled && self.check.take().is_some() {
+            self.check_state.store(CHECK_DROPPED, Ordering::SeqCst);
+            // A requested check answers as `finish_check` would while an update installs or is ready.
+            if std::mem::take(&mut self.requested) {
+                self.status = if self.install.is_some() || self.installed { self.pending_status() } else { Status::Off };
+            }
+        }
+    }
+
+    /// Whether update checks are on ([`Self::set_checks_enabled`]).
+    pub fn checks_enabled(&self) -> bool {
+        self.checks_enabled
+    }
+
     /// Replaces the built-in check with `source`, which takes no arguments. [`Self::with_check`]
     /// sets one that is passed the app and version.
     pub fn with_source(self, source: CheckSource) -> Self {
@@ -377,6 +441,13 @@ impl Updater {
     #[cfg(test)]
     fn with_probe(mut self, probe: InstallProbe) -> Self {
         self.probe = Some(probe);
+        self
+    }
+
+    /// Runs `hook` on the check's thread just before it starts its request (tests).
+    #[cfg(test)]
+    fn with_before_ask(mut self, hook: BeforeAsk) -> Self {
+        self.before_ask = Some(hook);
         self
     }
 
@@ -457,7 +528,9 @@ impl Updater {
 
     /// Help ▸ Check for Updates: a check whose outcome [`Self::status`] reports. A check already
     /// running becomes a requested one. While an update installs or waits for the app to close,
-    /// nothing starts and the status says so ([`Status::Installing`], [`Status::Ready`]).
+    /// nothing starts and the status says so ([`Status::Installing`], [`Status::Ready`]). While
+    /// checks are off ([`Self::set_checks_enabled`]), nothing starts and the status is
+    /// [`Status::Off`].
     pub fn check_now(&mut self) {
         self.started = true;
         self.begin(true);
@@ -579,6 +652,14 @@ impl Updater {
             }
             return;
         }
+        if !self.checks_enabled {
+            if requested {
+                self.status = Status::Off;
+            } else {
+                log::info!("{} skips the update check: checks are off", self.app.name);
+            }
+            return;
+        }
         if requested {
             self.requested = true;
             self.status = Status::Checking;
@@ -592,9 +673,21 @@ impl Updater {
             return;
         }
         let (tx, rx) = channel();
-        let (source, probe, app, version) = (self.source.clone(), self.probe.clone(), self.app, self.version.clone());
+        self.check_state = Arc::new(AtomicU8::new(CHECK_WAITING));
+        let state = self.check_state.clone();
+        let (source, probe, before_ask, app, version) =
+            (self.source.clone(), self.probe.clone(), self.before_ask.clone(), self.app, self.version.clone());
         let spawned = std::thread::Builder::new().name("update-check".into()).spawn(move || {
             let ask = || -> Found {
+                if let Some(hook) = &before_ask {
+                    hook();
+                }
+                // This exchange is where the request begins. Once `set_checks_enabled(false)` has
+                // stored `CHECK_DROPPED`, it fails and the thread asks nothing; a thread that
+                // passed it first has begun its request, which finishes unread.
+                if state.compare_exchange(CHECK_WAITING, CHECK_ASKING, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+                    return Ok(None);
+                }
                 let check = CheckContext { app, version };
                 let checked: Checked = match source {
                     Some(ask) => ask(&check),

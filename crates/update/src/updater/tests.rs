@@ -354,6 +354,133 @@ fn a_check_answering_during_an_update_reports_the_update() {
     }
 }
 
+#[trial]
+fn checks_turned_off_never_ask_the_network() {
+    let ctx = egui::Context::default();
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = asked.clone();
+    let mut u = Updater::new(&PHOTOCRAFT, "0.1.0")
+        .with_source(Arc::new(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(newer()))
+        }))
+        .with_pins_path(no_pins())
+        .with_checks_enabled(false);
+    assert!(!u.checks_enabled());
+    u.check_at_start();
+    assert!(u.check.is_none());
+    assert_eq!(u.status(), &Status::Idle);
+    u.check_now();
+    assert!(u.check.is_none());
+    assert_eq!(u.status(), &Status::Off);
+    u.tick(&ctx);
+    assert!(!u.prompt_open());
+    assert_eq!(asked.load(Ordering::SeqCst), 0);
+
+    // Turned on again, the status no longer says checks are off, and a requested check asks.
+    u.set_checks_enabled(true);
+    assert_eq!(u.status(), &Status::Idle);
+    u.check_now();
+    u.settle_for_tests(&ctx);
+    assert!(u.prompt_open());
+    assert_eq!(asked.load(Ordering::SeqCst), 1);
+}
+
+/// The first check's request is under way when checks are turned off: the test waits until its
+/// thread is inside the source, turns checks off, lets the source answer with a release and waits
+/// for the thread to finish before checking that the release was not offered.
+#[trial]
+fn turning_checks_off_drops_a_running_check() {
+    let ctx = egui::Context::default();
+    let (entered_tx, entered) = channel();
+    let (release, release_rx) = channel::<()>();
+    let (entered_tx, release_rx) = (Mutex::new(entered_tx), Mutex::new(release_rx));
+    let mut u = Updater::new(&PHOTOCRAFT, "0.1.0")
+        .with_source(Arc::new(move || {
+            let _ = entered_tx.lock().unwrap_or_else(PoisonError::into_inner).send(());
+            let _ = release_rx.lock().unwrap_or_else(PoisonError::into_inner).recv();
+            Ok(Some(newer()))
+        }))
+        .with_pins_path(no_pins());
+    u.check_now();
+    assert_eq!(u.status(), &Status::Checking);
+    entered.recv().expect("the check's thread enters the source");
+    // The test keeps the thread's channel to learn when it has finished; the updater drops a stand-in.
+    let answer = u.check.take().expect("the check is running");
+    let (_stand_in_tx, stand_in) = channel();
+    u.check = Some(stand_in);
+    u.set_checks_enabled(false);
+    assert!(u.check.is_none());
+    assert_eq!(u.status(), &Status::Off);
+    release.send(()).expect("the source waits");
+    assert!(matches!(answer.recv(), Ok(Ok(Some(_)))), "the request finishes with a release");
+    u.tick(&ctx);
+    assert!(!u.prompt_open());
+    assert_eq!(u.status(), &Status::Off);
+
+    // The dropped check's thread is told to ask nothing more; the next check gets its own flag.
+    let mut u = updater(Ok(None));
+    u.check_now();
+    let state = u.check_state.clone();
+    assert_ne!(state.load(Ordering::SeqCst), CHECK_DROPPED);
+    u.set_checks_enabled(false);
+    assert_eq!(state.load(Ordering::SeqCst), CHECK_DROPPED);
+    u.set_checks_enabled(true);
+    u.check_now();
+    assert_ne!(u.check_state.load(Ordering::SeqCst), CHECK_DROPPED);
+    u.settle_for_tests(&ctx);
+    assert_eq!(u.status(), &Status::UpToDate);
+
+    // A check at start that is running stops quietly.
+    let mut u = updater(Ok(Some(newer())));
+    u.check_at_start();
+    u.set_checks_enabled(false);
+    assert!(u.check.is_none());
+    u.tick(&ctx);
+    assert!(!u.prompt_open());
+    assert_eq!(u.status(), &Status::Idle);
+
+    // A requested check dropped while an update installs reports the installation.
+    let mut u = updater(Ok(None));
+    u.check_now();
+    let (_tx, rx) = channel();
+    u.install = Some((rx, newer()));
+    u.set_checks_enabled(false);
+    assert_eq!(u.status(), &Status::Installing);
+}
+
+/// The check's thread stops just before its request while the test turns checks off; once it
+/// goes on, it does not start the request.
+#[trial]
+fn checks_turned_off_before_the_request_starts_skip_it() {
+    let (reached_tx, reached) = channel();
+    let (go, go_rx) = channel::<()>();
+    let (reached_tx, go_rx) = (Mutex::new(reached_tx), Mutex::new(go_rx));
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = asked.clone();
+    let mut u = Updater::new(&PHOTOCRAFT, "0.1.0")
+        .with_source(Arc::new(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(newer()))
+        }))
+        .with_pins_path(no_pins())
+        .with_before_ask(Arc::new(move || {
+            let _ = reached_tx.lock().unwrap_or_else(PoisonError::into_inner).send(());
+            let _ = go_rx.lock().unwrap_or_else(PoisonError::into_inner).recv();
+        }));
+    u.check_now();
+    reached.recv().expect("the check's thread reaches its request");
+    // The test keeps the thread's channel to learn when it has finished; the updater drops a stand-in.
+    let answer = u.check.take().expect("the check is running");
+    let (_stand_in_tx, stand_in) = channel();
+    u.check = Some(stand_in);
+    u.set_checks_enabled(false);
+    go.send(()).expect("the check's thread waits");
+    assert!(matches!(answer.recv(), Ok(Ok(None))), "the thread answers without a release");
+    assert_eq!(asked.load(Ordering::SeqCst), 0);
+    assert_eq!(u.status(), &Status::Off);
+}
+
 /// A failed installation closes a result window showing it; the prompt says why.
 #[trial]
 fn a_failed_install_ends_the_installing_status() {

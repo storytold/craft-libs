@@ -25,6 +25,8 @@ use crate::updater::Status;
 
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
+#[cfg(test)]
+pub(crate) mod tests;
 
 const PROMPT_KEY: &str = "updateDialog.prompt";
 const CHECK_KEY: &str = "updateDialog.check";
@@ -69,6 +71,8 @@ craft_ui::words! {
         /// A ready update on macOS and Linux, already in place ([`crate::updater::READY_TEXT`]).
         ready_installed: template "updateDialog.readyInstalled" = "The update is installed. Close {app} to finish; it restarts by itself.";
         managed: template "updateDialog.managed" = "{app} {running} follows the version chosen in the launcher, so it does not update itself.";
+        /// A requested check while the app has turned update checks off ([`crate::updater::Status::Off`]).
+        off: template "updateDialog.off" = "Update checks are turned off in {app}.";
         updated: template "updateDialog.updated" = "{app} updated to {version}.";
         install_failed: template "updateDialog.installFailed" = "The update could not be installed: {reason}";
     }
@@ -456,20 +460,26 @@ impl UpdateCheckDialog {
         self.chosen = Some(choice);
     }
 
+    /// The release the available state shows. While checks are off ([`Status::Off`]) the dialog
+    /// shows that message with OK instead, even when the updater still holds a release.
+    fn shown_release(&self) -> Option<&Release> {
+        self.available.as_ref().filter(|_| self.status != Status::Off)
+    }
+
     /// The release page the available state links to, when it is a safe web link.
     fn notes_url(&self) -> Option<&str> {
-        self.available.as_ref().map(|release| release.html_url.as_str()).filter(|url| safe_web_link(url))
+        self.shown_release().map(|release| release.html_url.as_str()).filter(|url| safe_web_link(url))
     }
 
     /// The choices the current state offers with their roles, the default first.
     fn offered(&self, self_updating: bool) -> Vec<(CheckChoice, DialogRole)> {
-        if self.available.is_some() {
+        if self.shown_release().is_some() {
             let install = if self_updating { CheckChoice::Update } else { CheckChoice::Download };
             return vec![(install, DialogRole::Accept), (CheckChoice::CheckAgain, DialogRole::Other)];
         }
         match self.status {
             Status::Idle => vec![(CheckChoice::CheckNow, DialogRole::Accept)],
-            Status::Checking | Status::Installing | Status::Updated(_) => vec![(CheckChoice::Close, DialogRole::Accept)],
+            Status::Checking | Status::Installing | Status::Updated(_) | Status::Off => vec![(CheckChoice::Close, DialogRole::Accept)],
             Status::Ready => vec![(CheckChoice::Close, DialogRole::Accept), (CheckChoice::RestartToUpdate, DialogRole::Other)],
             Status::UpToDate | Status::Managed | Status::Failed(_) | Status::RateLimited | Status::InstallFailed(_) => {
                 vec![(CheckChoice::Close, DialogRole::Accept), (CheckChoice::CheckAgain, DialogRole::Other)]
@@ -479,7 +489,9 @@ impl UpdateCheckDialog {
 
     /// Whether `choice` can be answered now: the available state's buttons wait for a running install.
     fn answerable(&self, choice: CheckChoice) -> bool {
-        !(self.installing && self.available.is_some() && matches!(choice, CheckChoice::Update | CheckChoice::Download | CheckChoice::CheckAgain))
+        !(self.installing
+            && self.shown_release().is_some()
+            && matches!(choice, CheckChoice::Update | CheckChoice::Download | CheckChoice::CheckAgain))
     }
 
     /// Shows one pass. The choices are the footer buttons' meanings, in the order of the dialog's `picked`.
@@ -489,7 +501,7 @@ impl UpdateCheckDialog {
         let ok = env.words::<CommonWords>().ok.clone();
         let subject = Subject::of(&env);
         let self_updating = *self.self_updating.get_or_insert_with(|| subject.app.is_some_and(self_update::is_self_updating));
-        self.release_installs = match (subject.app, &self.available) {
+        self.release_installs = match (subject.app, self.shown_release()) {
             (Some(app), Some(release)) => self_update::release_installs(app, release),
             _ => true,
         };
@@ -513,7 +525,7 @@ impl UpdateCheckDialog {
         let enter = offered.first().is_some_and(|(choice, _)| self.answerable(*choice));
         let initial = if enter { Initial::Default } else { Initial::Keep };
         let notes = self.notes_url().map(str::to_owned);
-        let version = self.available.as_ref().map(Release::version_label);
+        let version = self.shown_release().map(Release::version_label);
         let (status, running, message, installing, icon) = (&self.status, &self.running_version, &self.message, self.installing, &self.icon);
         let installing_label = words.installing.clone();
         // What the last update came to is a notice that leaves the app usable behind it.
@@ -571,6 +583,9 @@ impl UpdateCheckDialog {
                     }
                     Status::Managed => {
                         Text::new(words.managed.fill(&[("app", subject.name), ("running", running)])).shade(Shade::Muted).show(ui);
+                    }
+                    Status::Off => {
+                        Text::new(words.off.fill(&[("app", subject.name)])).shade(Shade::Muted).show(ui);
                     }
                     Status::Updated(version) => {
                         Text::new(words.updated.fill(&[("app", subject.name), ("version", version)])).show(ui);

@@ -172,6 +172,14 @@ fn the_check_dialog_words_a_rate_limit_itself_and_passes_other_reasons_through()
     assert!(check_dialog_shows(Status::Failed("offline".into()), "offline"));
 }
 
+/// A requested check while checks are off says so, and offers no second check.
+#[trial]
+fn the_check_dialog_says_checks_are_off() {
+    assert!(check_dialog_shows(Status::Off, "Update checks are turned off in PhotoCraft."));
+    let words = UpdateWords::default();
+    assert!(!check_dialog_shows(Status::Off, words.check_again.as_str()));
+}
+
 #[trial]
 fn a_panicking_check_is_an_error_not_a_hang() {
     let ctx = ctx();
