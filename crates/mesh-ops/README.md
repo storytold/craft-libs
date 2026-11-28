@@ -7,7 +7,12 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
 - **`Mesh`.** Positions, normals, tangents, UVs, vertex colors, indices, per-material submeshes
   and polygon-diagonal flags, with `validate`, `append`, `subdivided`, `normalize_to`, wireframe
   and UV-seam edges, and UV-tile helpers.
-- **Normals and tangents.** Smooth normals are area weighted. Tangents come from MikkTSpace, which
+- **Normals and tangents.** Smooth normals are area weighted. `flat_normals` and
+  `Mesh::try_flat_normals` give every triangle corner its own vertex with the triangle's unit
+  normal, taken from the edge cross product in `f64`; glTF 2.0 asks clients to calculate flat
+  normals when a mesh has none. A triangle without area gets +Z, which is this crate's own rule.
+  `Mesh::try_flat_normals` carries UVs, colors, submeshes, materials and polygon diagonals over,
+  and computes the tangents again when the mesh had them. Tangents come from MikkTSpace, which
   glTF 2.0 recommends for meshes without tangents
   (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html>): `w` holds the bitangent sign.
 - **UV unwrapping.** `unwrap::auto_unwrap` makes a non-overlapping layout per material, splitting
