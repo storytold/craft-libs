@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used)]
 
 use craft_pptx::text::{Align, Anchor, Bullet, ListStyle, Spacing};
-use craft_pptx::{Background, ColorRef, Fill, Geom, LayoutType, Paragraph, PhType, Presentation, Rgba, SchemeSlot, Shape, TextBody};
+use craft_pptx::{Background, ColorRef, Fill, Geom, LayoutType, Paragraph, PhType, Presentation, Rgba, SchemeSlot, Shape, ShapeKind, TextBody};
 
 use super::rt;
 use crate::tests::{AppDefaults, build};
@@ -69,6 +69,8 @@ struct SlideSpec {
     scheme: [u32; 8],
     /// The slide's object list.
     objects: Vec<Vec<u8>>,
+    /// Its notes page (1008).
+    notes: Option<Vec<u8>>,
 }
 
 impl SlideSpec {
@@ -84,23 +86,22 @@ impl SlideSpec {
             filled: true,
             scheme: DEFAULT,
             objects: vec![],
+            notes: None,
         }
     }
 }
 
 fn slide(s: &SlideSpec) -> Vec<u8> {
-    container(
-        rt::SLIDE,
-        0x10,
-        &[
-            rec(rt::SLIDE_ATOM, 0, 0, &le32(&[s.id, s.master])),
-            slide_box(s.follow_objects, s.follow_scheme, s.follow_background),
-            rec(rt::LAYOUT, 1, 0, &le32(&[s.layout, 0, 0])),
-            container(rt::SCHEME, 0x78, &[scheme_atom(0, s.scheme)]),
-            background_shape(s.fill, s.filled),
-            container(rt::OBJECTS, 0x14, &s.objects),
-        ],
-    )
+    let mut kids = vec![rec(rt::SLIDE_ATOM, 0, 0, &le32(&[s.id, s.master])), slide_box(s.follow_objects, s.follow_scheme, s.follow_background)];
+    // A notes page comes after the slide box, as PowerPoint 95 writes it.
+    kids.extend(s.notes.clone());
+    kids.extend([
+        rec(rt::LAYOUT, 1, 0, &le32(&[s.layout, 0, 0])),
+        container(rt::SCHEME, 0x78, &[scheme_atom(0, s.scheme)]),
+        background_shape(s.fill, s.filled),
+        container(rt::OBJECTS, 0x14, &s.objects),
+    ]);
+    container(rt::SLIDE, 0x10, &kids)
 }
 
 fn master(id: u32, scheme: [u32; 8], fill: [u8; 4]) -> Vec<u8> {
@@ -151,11 +152,12 @@ const WIDE_RULER: [(i32, i32); 5] = [(576, 288), (828, 648), (1044, 900), (1260,
 /// The Environment: fonts Times New Roman, Arial, Courier New and "Café" by slot, and the rulers:
 /// the body's, a plain one, an empty slot and a wide one.
 fn environment() -> Vec<u8> {
-    environment_with(&[])
+    environment_with(&[], &[])
 }
 
-/// The Environment, with `styles` (the master's text styles' container) when given.
-fn environment_with(styles: &[Vec<u8>]) -> Vec<u8> {
+/// The Environment, starting with `pictures` (the 2006 list) and ending with `styles` (the
+/// master's text styles' container) when given.
+fn environment_with(pictures: &[Vec<u8>], styles: &[Vec<u8>]) -> Vec<u8> {
     let fonts = container(
         2005,
         0x19,
@@ -167,7 +169,8 @@ fn environment_with(styles: &[Vec<u8>]) -> Vec<u8> {
         0x18,
         &[ruler(BODY_RULER), slot_end(0), ruler(plain), slot_end(1), rec(2018, 0, 0, &[]), slot_end(2), ruler(WIDE_RULER), slot_end(3)],
     );
-    let mut kids = vec![rulers, fonts, container(2005, 0x1A, &[])];
+    let mut kids = pictures.to_vec();
+    kids.extend([rulers, fonts, container(2005, 0x1A, &[])]);
     kids.extend_from_slice(styles);
     container(1010, 0x15, &kids)
 }
@@ -359,20 +362,20 @@ fn document_atom(w: u32, h: u32, slides: u32) -> Vec<u8> {
 
 /// A `PowerPoint Document` stream: root 3 holding the Document and a type-10 atom.
 fn stream_of(atom: Vec<u8>, slides: &[Vec<u8>], masters: &[Vec<u8>]) -> Vec<u8> {
-    stream_with(atom, slides, masters, environment())
+    stream_with(atom, slides, masters, environment(), &[])
 }
 
-fn stream_with(atom: Vec<u8>, slides: &[Vec<u8>], masters: &[Vec<u8>], environment: Vec<u8>) -> Vec<u8> {
+/// A stream with `environment`, whose Document ends with `extra` records (a notes master, say).
+fn stream_with(atom: Vec<u8>, slides: &[Vec<u8>], masters: &[Vec<u8>], environment: Vec<u8>, extra: &[Vec<u8>]) -> Vec<u8> {
     let list = |tag: u32, items: &[Vec<u8>]| {
         let mut kids = vec![rec(2001, 0, 0, &le32(&[items.len() as u32]))];
         kids.extend_from_slice(items);
         container(rt::LIST, tag, &kids)
     };
-    let document = container(
-        rt::DOCUMENT,
-        0,
-        &[atom, environment, list(0xA, slides), list(0xB, masters), list(0xC, &[]), container(1026, 0x64, &[]), rec(1002, 0, 0, &[])],
-    );
+    let mut kids = vec![atom, environment, list(0xA, slides), list(0xB, masters)];
+    kids.extend_from_slice(extra);
+    kids.extend([list(0xC, &[]), container(1026, 0x64, &[]), rec(1002, 0, 0, &[])]);
+    let document = container(rt::DOCUMENT, 0, &kids);
     container(rt::ROOT, 0, &[document, rec(10, 0, 0, &le32(&[1, 0x100]))])
 }
 
@@ -680,7 +683,7 @@ fn the_font_table_is_the_first_list_with_a_face() {
     let lists = [container(2005, 0x19, &[cut, slot_end(0)]), container(2005, 0x19, &[font(b"Arial"), slot_end(0)])];
     let mut s = SlideSpec::new(0x100, 16);
     s.objects = vec![shape_95([-2362, -1613, -518, -1325], Some(simple_text(b"Hi", [-2362, -1613, -518, -1325], BODY)))];
-    let stream = stream_with(document_atom(5760, 4320, 1), &[slide(&s)], &[master(MASTER, DEFAULT, [0; 4])], container(1010, 0x15, &lists));
+    let stream = stream_with(document_atom(5760, 4320, 1), &[slide(&s)], &[master(MASTER, DEFAULT, [0; 4])], container(1010, 0x15, &lists), &[]);
     let p = import(&stream).unwrap();
     assert_eq!(body_of(&p.slides[0].shapes[0]).paragraphs[0].runs[0].props.font.as_deref(), Some("Arial"));
 }
@@ -813,8 +816,8 @@ fn the_masters_text_styles_are_read() {
     ];
     let mut scheme = DEFAULT;
     scheme[3] = 0x112233;
-    let stream = |env: Vec<u8>| stream_with(document_atom(5760, 4320, 0), &[], &[master_with(MASTER, scheme, [0; 4], &master_objects)], env);
-    let p = import(&stream(environment_with(&[styles(&atoms)]))).unwrap();
+    let stream = |env: Vec<u8>| stream_with(document_atom(5760, 4320, 0), &[], &[master_with(MASTER, scheme, [0; 4], &master_objects)], env, &[]);
+    let p = import(&stream(environment_with(&[], &[styles(&atoms)]))).unwrap();
     let m = &p.masters[0];
 
     let t = m.title_style.level(0).unwrap();
@@ -846,7 +849,7 @@ fn the_masters_text_styles_are_read() {
     assert_ne!(defaults(&p), defaults(&plain_master));
     let mut cut = style_atom([title; 5], 0x13);
     cut.truncate(16 + 400);
-    let cut = import(&stream(environment_with(&[styles(&[cut])]))).unwrap();
+    let cut = import(&stream(environment_with(&[], &[styles(&[cut])]))).unwrap();
     assert_eq!(defaults(&cut), defaults(&plain_master));
 }
 
@@ -862,8 +865,13 @@ fn a_masters_centred_title_gives_the_title_style_its_ruler() {
         Some(text(b"T", &[plain(2)], &[para_run(2, false, 0, 1, 0)], 3, [0; 4], MASTER_BODY)),
     );
     let atoms = [style_atom([LEVEL; 5], 0x13)];
-    let stream =
-        stream_with(document_atom(5760, 4320, 0), &[], &[master_with(MASTER, DEFAULT, [0; 4], &[title])], environment_with(&[styles(&atoms)]));
+    let stream = stream_with(
+        document_atom(5760, 4320, 0),
+        &[],
+        &[master_with(MASTER, DEFAULT, [0; 4], &[title])],
+        environment_with(&[], &[styles(&atoms)]),
+        &[],
+    );
     let t = import(&stream).unwrap().masters[0].title_style.level(0).cloned().unwrap();
     // The wide ruler (slot 3): level 1 at 576 units, its first line at 288.
     assert_eq!((t.para.margin_left, t.para.indent), (Some(72.0), Some(-36.0)));
@@ -1029,8 +1037,13 @@ fn hostile_text_never_panics() {
         placeholder_95(2, 0, 1, bx, Some(text(b"B", &[plain(2)], &[spaced_run(2, true, 0x95, 3, 0, [150, -12, 20])], 0, [0; 4], MASTER_BODY))),
     ];
     let level = Level { spacing: [150, -36, 20], align: 3, ..LEVEL };
-    let env = environment_with(&[styles(&[style_atom([level; 5], 0x13), style_atom([level; 5], 0x21)])]);
-    let stream = stream_with(document_atom(5760, 4320, 1), &[slide(&s)], &[master_with(MASTER, DEFAULT, [0; 4], &objects)], env);
+    let env = environment_with(&[], &[styles(&[style_atom([level; 5], 0x13), style_atom([level; 5], 0x21)])]);
+    let stream = stream_with(document_atom(5760, 4320, 1), &[slide(&s)], &[master_with(MASTER, DEFAULT, [0; 4], &objects)], env, &[]);
+    // Whole, it reaches the text reader: else every hostile copy below could fail early and pass.
+    let p = import(&stream).unwrap();
+    assert_eq!(texts(&p), ["One\nTwo", "T"]);
+    let t = p.masters[0].title_style.level(0).unwrap();
+    assert_eq!((t.para.line_spacing, t.para.space_before), (Some(Spacing::Pct(1.5)), Some(Spacing::Pts(36.0))));
     for at in (0..stream.len() - 4).step_by(4) {
         for v in [0u32, 1, 0x7FFF_FFFF, 0xFFFF_FFFF] {
             let mut d = stream.clone();
@@ -1927,6 +1940,277 @@ fn hostile_freeforms_and_groups_never_panic() {
     }
 }
 
+/// A Windows metafile without a placeable header: the standard header (type 1, 9 words, version
+/// 0x300, its size in words), `records`, then the end record.
+fn wmf(records: &[u8]) -> Vec<u8> {
+    let words = (18 + records.len() + 6) / 2;
+    let mut b = vec![1, 0, 9, 0, 0, 3];
+    b.extend_from_slice(&(words as u32).to_le_bytes());
+    b.extend_from_slice(&[0; 8]);
+    b.extend_from_slice(records);
+    b.extend_from_slice(&[3, 0, 0, 0, 0, 0]);
+    b
+}
+
+/// A metafile that is told apart from others by `n`: a SETWINDOWEXT of n × n.
+fn wmf_n(n: u8) -> Vec<u8> {
+    wmf(&[5, 0, 0, 0, 0x0C, 0x02, n, 0, n, 0])
+}
+
+/// The document's picture list (2006): each slot's metafile record body, or an empty slot.
+fn picture_list(slots: &[Option<Vec<u8>>]) -> Vec<u8> {
+    let mut kids = vec![];
+    for (i, s) in slots.iter().enumerate() {
+        match s {
+            Some(body) => {
+                let header = rec(4038, 0, 0, &le32(&[0xF00, 0, 0, 12, 12]));
+                kids.push(container(4028, 9, &[container(4037, 0, &[header, rec(4033, 0, 0, body)])]));
+                kids.push(rec(4043, 0, 0, &[]));
+            }
+            None => kids.push(rec(2018, 0, 0, &[])),
+        }
+        kids.push(slot_end(i as u32));
+    }
+    container(2006, 0x17, &kids)
+}
+
+/// A picture on a slide: a rectangle at `bx` drawn with `f`, naming `slot`, cropped by `crop`
+/// (left, top, right, bottom in ten-thousandths).
+fn picture_95(bx: [i32; 4], slot: u32, crop: [i32; 4], f: Format) -> Vec<u8> {
+    let link = container(4014, 0x1F, &[rec(4015, 0, 0, &le32(&crop.map(|v| v as u32))), container(4053, 0, &[rec(4036, 0, 0, &le32(&[slot]))])]);
+    container(rt::SHAPE, 0x13, &[coded_geometry((-3i32) as u32, 0, bx, 0), format(f), link])
+}
+
+/// 1 in square at 1 in, 1 in: AddPicture(file, 1440, 1440, 1440, 1440).
+const PICTURE_BOX: [i32; 4] = [-2304, -1584, -1728, -1008];
+
+/// A deck of `slides` slide object lists over the picture list `slots`, its pictures within
+/// `budget` bytes.
+fn picture_deck(slides: Vec<Vec<Vec<u8>>>, slots: &[Option<Vec<u8>>], budget: usize) -> Presentation {
+    let s: Vec<Vec<u8>> =
+        slides.into_iter().enumerate().map(|(i, objects)| slide(&SlideSpec { objects, ..SlideSpec::new(0x100 + i as u32, 16) })).collect();
+    let stream = stream_with(
+        document_atom(5760, 4320, s.len() as u32),
+        &s,
+        &[master(MASTER, DEFAULT, [0; 4])],
+        environment_with(&[picture_list(slots)], &[]),
+        &[],
+    );
+    let document = super::document(&stream).unwrap();
+    super::convert_within(&document, &AppDefaults, budget)
+}
+
+/// A picture shape as its box, media, crop and the media's bytes.
+type Pictured = ((f64, f64, f64, f64), craft_pptx::MediaId, [f64; 4], Vec<u8>);
+
+/// Each picture on slide `i`: its box, media, crop and the media's bytes.
+fn pictures_on(p: &Presentation, i: usize) -> Vec<Pictured> {
+    p.slides[i]
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.kind {
+            ShapeKind::Picture { fill } => {
+                let media = p.media.iter().find(|m| m.id == fill.media).unwrap();
+                assert_eq!(media.content_type, "image/x-wmf");
+                Some((boxed(s), fill.media, fill.crop, media.data.to_vec()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A picture is a picture shape in its box, showing its slot's metafile as it is, cropped as it
+/// says, drawn with its format's line and fill.
+#[test]
+fn pictures_show_their_metafile() {
+    let p = picture_deck(
+        vec![vec![picture_95(PICTURE_BOX, 0, [0; 4], PLAIN), picture_95([-2160, -1512, -1728, -1008], 0, [2500, 1250, 0, -500], PLAIN)]],
+        &[Some(wmf_n(12))],
+        usize::MAX,
+    );
+    let pics = pictures_on(&p, 0);
+    assert_eq!(pics.len(), 2);
+    assert_eq!((pics[0].0, pics[0].2, &pics[0].3), ((72.0, 72.0, 72.0, 72.0), [0.0; 4], &wmf_n(12)));
+    assert_eq!((pics[1].0, pics[1].2), ((90.0, 81.0, 54.0, 63.0), [0.25, 0.125, 0.0, -0.05]));
+    let s = &p.slides[0].shapes[0];
+    assert_eq!((s.fill.clone(), s.line.clone()), (Some(Fill::solid(rgb(0, 0xCC, 0x99))), Some(craft_pptx::Line::solid(rgb(0, 0, 0), 1.0))));
+    assert_eq!(preset_of(s).0, "rect");
+    // Through the whole import too, with the full budget.
+    let stream = stream_with(
+        document_atom(5760, 4320, 1),
+        &[slide(&SlideSpec { objects: vec![picture_95(PICTURE_BOX, 0, [0; 4], PLAIN)], ..SlideSpec::new(0x100, 16) })],
+        &[master(MASTER, DEFAULT, [0; 4])],
+        environment_with(&[picture_list(&[Some(wmf_n(2))])], &[]),
+        &[],
+    );
+    let p = import(&stream).unwrap();
+    assert_eq!(pictures_on(&p, 0).iter().map(|x| x.3.clone()).collect::<Vec<_>>(), [wmf_n(2)]);
+}
+
+/// Pictures naming one slot share one media item, on one slide or many; each slot is its own.
+#[test]
+fn pictures_sharing_a_slot_share_media() {
+    let pic = |slot| picture_95(PICTURE_BOX, slot, [0; 4], PLAIN);
+    let p = picture_deck(vec![vec![pic(0), pic(1), pic(0)], vec![pic(0)]], &[Some(wmf_n(2)), Some(wmf_n(3))], usize::MAX);
+    let (first, second) = (pictures_on(&p, 0), pictures_on(&p, 1));
+    assert_eq!((first.len(), second.len(), p.media.len()), (3, 1, 2));
+    assert_eq!((first[0].1, second[0].1), (first[2].1, first[2].1));
+    assert_ne!(first[0].1, first[1].1);
+    assert_eq!((first[0].3.clone(), first[1].3.clone()), (wmf_n(2), wmf_n(3)));
+}
+
+/// A picture naming a slot that is missing, empty or holds no metafile is left out; the shapes
+/// beside it are kept.
+#[test]
+fn a_dangling_picture_is_left_out() {
+    let pic = |slot| picture_95(PICTURE_BOX, slot, [0; 4], PLAIN);
+    let slots = [Some(wmf_n(2)), None, Some(b"GIF89a, not a metafile".to_vec()), Some(vec![1, 0, 9, 0, 0, 3])];
+    let p = picture_deck(
+        vec![vec![pic(1), pic(2), pic(3), pic(7), pic(u32::MAX), autoshape(-1, 0, [0, 0, 576, 576], 0, PLAIN), pic(0)]],
+        &slots,
+        usize::MAX,
+    );
+    let shapes = &p.slides[0].shapes;
+    assert_eq!(shapes.iter().map(|s| preset_of(s).0).collect::<Vec<_>>(), ["ellipse", "rect"]);
+    assert_eq!(pictures_on(&p, 0).len(), 1);
+}
+
+/// A metafile record holding more than its header's size is cut to it; one holding less is kept
+/// as it is; one whose header gives a size smaller than the header isn't a metafile.
+#[test]
+fn a_metafile_is_cut_to_its_size() {
+    let mut long = wmf_n(2);
+    long.extend_from_slice(b"trailing bytes");
+    let mut short = wmf_n(3);
+    short.truncate(short.len() - 6);
+    let pic = |slot| picture_95(PICTURE_BOX, slot, [0; 4], PLAIN);
+    // A header giving a size smaller than itself: not a metafile, so its picture is left out.
+    let mut tiny = wmf_n(4);
+    tiny[6..10].copy_from_slice(&4u32.to_le_bytes());
+    let p = picture_deck(vec![vec![pic(0), pic(1), pic(2)]], &[Some(long), Some(short.clone()), Some(tiny)], usize::MAX);
+    assert_eq!(pictures_on(&p, 0).into_iter().map(|x| x.3).collect::<Vec<_>>(), [wmf_n(2), short]);
+}
+
+/// All the pictures together keep to the budget: a picture that would pass it is left out, and a
+/// slot read already costs nothing more when it is shown again.
+#[test]
+fn pictures_keep_to_the_budget() {
+    let pic = |slot| picture_95(PICTURE_BOX, slot, [0; 4], PLAIN);
+    let (a, b) = (wmf_n(2), wmf_n(3));
+    let p = picture_deck(vec![vec![pic(0), pic(1), pic(0)]], &[Some(a.clone()), Some(b)], a.len() + 4);
+    assert_eq!(pictures_on(&p, 0).into_iter().map(|x| x.3).collect::<Vec<_>>(), [a.clone(), a.clone()]);
+    // The full import's budget is the PowerPoint 97 path's.
+    assert_eq!(crate::blip::MAX_TOTAL, 2 << 30);
+    let p = picture_deck(vec![vec![pic(0)]], &[Some(a.clone())], a.len() - 1);
+    assert!(p.slides[0].shapes.is_empty() && p.media.is_empty());
+}
+
+/// A notes page (1008) inside a slide, its slide id in its 1009 atom, holding a slide image
+/// placeholder (type 0x13, linked to the slide) and the notes placeholder (0x0E) with `text`.
+fn notes_page(slide_id: u32, text: &[u8]) -> Vec<u8> {
+    let bx = [-1440, -2448, 1440, -288];
+    let image = container(4014, 0x1F, &[rec(4015, 0, 0, &[0; 16]), container(4054, 0, &[rec(4032, 0, 0, &le32(&[slide_id]))])]);
+    let image = container(3010, 0x13, &[rec(3011, 0, 0, &[0x13, 0, 0, 0, 0, 0, 0, 0]), geometry(bx, 0), format(PLAIN), image]);
+    let body_box = [-1584, -144, 1584, 2448];
+    let body = placeholder_95(0x0E, 0, 1, body_box, Some(simple_text(text, body_box, BODY)));
+    notes_with(slide_id, vec![image, body])
+}
+
+/// A notes page holding `objects`.
+fn notes_with(slide_id: u32, objects: Vec<Vec<u8>>) -> Vec<u8> {
+    container(rt::NOTES, 0x25, &[rec(1009, 0, 0, &le32(&[slide_id])), slide_box(true, true, true), container(rt::OBJECTS, 0x14, &objects)])
+}
+
+/// A text container's text type (its 4003 atom's +0) set to `kind`.
+fn text_typed(mut text: Vec<u8>, kind: u32) -> Vec<u8> {
+    let at = text.windows(4).position(|w| w == 4003u32.to_le_bytes()).unwrap();
+    text[at + 16..at + 20].copy_from_slice(&kind.to_le_bytes());
+    text
+}
+
+/// Each slide's notes are its own notes page's notes placeholder's text (or, without one, the text
+/// of the notes text type); the notes master's text and the slide image aren't notes, and nothing
+/// on a notes page becomes a slide shape.
+#[test]
+fn notes_land_on_their_slide() {
+    let mut slides = [SlideSpec::new(0x100, 16), SlideSpec::new(0x101, 16), SlideSpec::new(0x102, 16), SlideSpec::new(0x103, 16)];
+    slides[0].notes = Some(notes_page(0x100, b"First note\rsecond line"));
+    slides[2].notes = Some(notes_page(0x102, b"Third"));
+    // A notes page whose text is a plain shape of the notes text type.
+    let bx = [-1584, -144, 1584, 2448];
+    slides[3].notes = Some(notes_with(
+        0x103,
+        vec![shape_95(bx, Some(text_typed(simple_text(b"Typed", bx, BODY), 4))), shape_95(bx, Some(text_typed(simple_text(b"Fourth", bx, BODY), 2)))],
+    ));
+    slides[0].objects = vec![shape_95([0, 0, 576, 576], Some(simple_text(b"On the slide", [0, 0, 576, 576], BODY)))];
+    let s: Vec<Vec<u8>> = slides.iter().map(slide).collect();
+    let notes_master = notes_with(MASTER, vec![placeholder_95(0x05, 0, 1, bx, Some(simple_text(b"Master notes", bx, MASTER_BODY)))]);
+    let p = import(&stream_with(document_atom(5760, 4320, 4), &s, &[master(MASTER, DEFAULT, [0; 4])], environment(), &[notes_master])).unwrap();
+    assert_eq!(p.slides.iter().map(|s| s.notes.text()).collect::<Vec<_>>(), ["First note\nsecond line", "", "Third", "Fourth"]);
+    assert_eq!(p.slides[0].notes.paragraphs[0].runs[0].props.size, Some(24.0));
+    assert_eq!(texts(&p), ["On the slide"]);
+    assert!(p.slides[1..].iter().all(|s| s.shapes.is_empty()));
+
+    // Text of the notes type before the notes placeholder: the placeholder's text is the notes.
+    let mut spec = SlideSpec::new(0x100, 16);
+    spec.notes = Some(notes_with(
+        0x100,
+        vec![
+            shape_95(bx, Some(text_typed(simple_text(b"Typed first", bx, BODY), 2))),
+            placeholder_95(0x0E, 0, 1, bx, Some(simple_text(b"From the placeholder", bx, BODY))),
+        ],
+    ));
+    let p = import(&stream_of(document_atom(5760, 4320, 1), &[slide(&spec)], &[master(MASTER, DEFAULT, [0; 4])])).unwrap();
+    assert_eq!(p.slides[0].notes.text(), "From the placeholder");
+}
+
+/// Notes paragraphs keep their spacing and justified alignment, as a slide's do.
+#[test]
+fn notes_keep_their_spacing_and_alignment() {
+    let bx = [-1584, -144, 1584, 2448];
+    let t = text_flagged(b"Note", &[plain(5)], &[spaced_run(5, false, 0, 3, 0, [150, -12, 50])], 1, bx, BODY, 5, 0x13);
+    let mut s = SlideSpec::new(0x100, 16);
+    s.notes = Some(notes_with(0x100, vec![placeholder_95(0x0E, 0, 1, bx, Some(t))]));
+    let p = import(&stream_of(document_atom(5760, 4320, 1), &[slide(&s)], &[master(MASTER, DEFAULT, [0; 4])])).unwrap();
+    let para = &p.slides[0].notes.paragraphs[0].props;
+    assert_eq!(
+        (para.align, para.line_spacing, para.space_before, para.space_after),
+        (Some(Align::Justify), Some(Spacing::Pct(1.5)), Some(Spacing::Pts(12.0)), Some(Spacing::Pct(0.5)))
+    );
+}
+
+/// Damaged pictures and notes never panic: every word of a deck of them set to hostile values (huge
+/// sizes, bad slot numbers, odd types), or the deck cut anywhere.
+#[test]
+fn hostile_pictures_and_notes_never_panic() {
+    let mut s = SlideSpec::new(0x100, 16);
+    s.objects = vec![picture_95(PICTURE_BOX, 0, [2500, 0, -20000, i32::MAX], PLAIN), group_95(&[picture_95(PICTURE_BOX, 1, [0; 4], PLAIN)])];
+    s.notes = Some(notes_page(0x100, b"Note"));
+    let stream = stream_with(
+        document_atom(5760, 4320, 1),
+        &[slide(&s)],
+        &[master(MASTER, DEFAULT, [0; 4])],
+        environment_with(&[picture_list(&[Some(wmf_n(2)), None, Some(wmf_n(3))])], &[]),
+        &[],
+    );
+    for at in (0..stream.len() - 4).step_by(2) {
+        for v in [0u32, 1, 2, 9, 0xFAB, 0xFB5, 0xFC4, 0x3F0, 0x7FFF_FFFF, 0xFFFF_FFFF] {
+            let mut d = stream.clone();
+            d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+            if let Ok(p) = import(&d) {
+                for s in &p.slides {
+                    for x in s.shapes.iter().filter_map(|x| x.xfrm) {
+                        assert!(x.w.is_finite() && x.h.is_finite());
+                    }
+                }
+            }
+        }
+    }
+    for cut in 0..stream.len() {
+        let _ = import(&stream[..cut]);
+    }
+}
+
 /// The presets of the object model's shape types 1 to 12, as PowerPoint 95 rendered them ("custom" for
 /// the trapezoid, which has its own outline).
 const SHAPE_PRESETS: [&str; 12] =
@@ -2056,7 +2340,65 @@ fn check_text_extras(name: &str, p: &Presentation) {
             // The automation reported 1295, 1367.5, 4610 × 720 twips.
             assert_eq!(boxed(s), (64.75, 68.375, 230.5, 36.0));
         }
+        "picture" | "jpeg" | "png" | "picwmf" | "piccrop" | "piccrop2" | "twopics" | "picshare" | "notes" | "notes2" => check_media_sample(name, p),
         _ => check_shape_sample(name, p),
+    }
+}
+
+/// What one PowerPoint 95 picture or notes sample shows, by its case name.
+fn check_media_sample(name: &str, p: &Presentation) {
+    let notes: Vec<String> = p.slides.iter().map(|s| s.notes.text()).collect();
+    // Each picture on a slide: its box, media, crop, and whether it has the default black line.
+    let pictures = |i: usize| -> Vec<_> {
+        p.slides[i]
+            .shapes
+            .iter()
+            .map(|s| {
+                let ShapeKind::Picture { fill } = &s.kind else { panic!("{name}: {:?} is not a picture", s.name) };
+                let media = p.media.iter().find(|m| m.id == fill.media).unwrap();
+                assert_eq!((media.content_type.as_str(), &media.data[..4]), ("image/x-wmf", &[1, 0, 9, 0][..]), "{name}");
+                assert_eq!(s.line, Some(craft_pptx::Line::solid(rgb(0, 0, 0), 1.0)), "{name}");
+                (boxed(s), fill.media, fill.crop, media.data.len())
+            })
+            .collect()
+    };
+    // AddPicture(file, 1440, 1440, 1440, 1440) in twips: 1 in square at 1 in, 1 in.
+    let inch = (72.0, 72.0, 72.0, 72.0);
+    match name {
+        "picture" | "picwmf" | "jpeg" | "png" => {
+            let pics = pictures(0);
+            // The BMP's metafile is 128 bytes, the JPEG's and PNG's 220.
+            let len = if name == "jpeg" || name == "png" { 220 } else { 128 };
+            assert_eq!((pics.len(), pics[0].0, pics[0].2, pics[0].3, p.media.len()), (1, inch, [0.0; 4], len, 1), "{name}");
+        }
+        "piccrop" => {
+            // CropLeft 0.25 and CropTop 0.125 of the inch square: what is left of it, where it was.
+            let pics = pictures(0);
+            assert_eq!((pics.len(), pics[0].0, pics[0].2), (1, (90.0, 81.0, 54.0, 63.0), [0.25, 0.125, 0.0, 0.0]));
+        }
+        "piccrop2" => {
+            // CropRight 0.3 and CropBottom 0.05: the crop's last two values, in that order.
+            let pics = pictures(0);
+            assert_eq!((pics.len(), pics[0].0, pics[0].2), (1, (72.0, 72.0, 50.375, 68.375), [0.0, 0.0, 0.3, 0.05]));
+        }
+        "twopics" => {
+            let pics = pictures(0);
+            assert_eq!(pics.iter().map(|x| (x.0, x.3)).collect::<Vec<_>>(), [(inch, 128), ((216.0, 72.0, 144.0, 72.0), 220)]);
+            assert_ne!(pics[0].1, pics[1].1);
+        }
+        "picshare" => {
+            // One file inserted three times, on two slides: one picture.
+            let (first, second) = (pictures(0), pictures(1));
+            assert_eq!((first.len(), second.len(), p.media.len()), (2, 1, 1));
+            assert_eq!((first[0].0, first[1].0, second[0].0), (inch, (216.0, 72.0, 36.0, 36.0), inch));
+            assert!(first[1].1 == first[0].1 && second[0].1 == first[0].1);
+        }
+        "notes" => assert_eq!(notes, ["Speaker note"]),
+        "notes2" => assert_eq!(notes, ["Note one", "Note two", ""]),
+        _ => {}
+    }
+    if name.starts_with("notes") {
+        assert!(p.slides.iter().all(|s| s.shapes.is_empty()), "{name}: the notes page's placeholders aren't slide shapes");
     }
 }
 
@@ -2471,11 +2813,13 @@ fn the_wmf_reader_stays_in_each_record() {
 }
 
 /// For a sample with a rendering beside it (`<case>.wmf`), each shape on its first slide with a
-/// straight outline matches a polygon PowerPoint 95 drew. The number of shapes checked.
+/// straight outline matches a polygon PowerPoint 95 drew, each a polygon of its own
+/// ([`match_outlines`]): two shapes moved onto one place don't both match it. The number of shapes
+/// checked.
 fn check_outlines(name: &str, p: &Presentation, wmf: &[u8]) -> usize {
     let polygons = wmf_polygons(wmf, p.slide_size);
     let Some(slide) = p.slides.first() else { return 0 };
-    let mut checked = 0;
+    let mut outlines = vec![];
     for s in &slide.shapes {
         let Some(corners) = outline_corners(s) else { continue };
         // A dashed line is drawn dash by dash.
@@ -2485,9 +2829,50 @@ fn check_outlines(name: &str, p: &Presentation, wmf: &[u8]) -> usize {
         let width = s.line.as_ref().and_then(|l| l.width).unwrap_or(1.0);
         let near = polygons.iter().min_by_key(|poly| poly.len().abs_diff(corners.len()));
         assert!(polygons.iter().any(|poly| outline_matches(&corners, poly, width)), "{name}: {corners:?} is not drawn; nearest {near:?}");
-        checked += 1;
+        outlines.push((corners, width));
     }
-    checked
+    if let Err(i) = match_outlines(&outlines, &polygons) {
+        panic!("{name}: {:?} is drawn only where another shape is", outlines[i].0);
+    }
+    outlines.len()
+}
+
+/// Gives each outline (its corners and line width) a polygon of its own that it matches, trying
+/// every assignment rather than the first that fits, or else the first outline left without one.
+fn match_outlines(outlines: &[(Vec<(f64, f64)>, f64)], polygons: &[Vec<(f64, f64)>]) -> Result<(), usize> {
+    let fits: Vec<Vec<usize>> =
+        outlines.iter().map(|(corners, width)| (0..polygons.len()).filter(|&q| outline_matches(corners, &polygons[q], *width)).collect()).collect();
+    // Kuhn's algorithm: a polygon already taken is freed when its owner can move to another.
+    fn assign(fits: &[Vec<usize>], s: usize, seen: &mut [bool], owner: &mut [Option<usize>]) -> bool {
+        for &q in &fits[s] {
+            if std::mem::replace(&mut seen[q], true) {
+                continue;
+            }
+            if owner[q].is_none_or(|t| assign(fits, t, seen, owner)) {
+                owner[q] = Some(s);
+                return true;
+            }
+        }
+        false
+    }
+    let mut owner = vec![None; polygons.len()];
+    for s in 0..outlines.len() {
+        if !assign(&fits, s, &mut vec![false; polygons.len()], &mut owner) {
+            return Err(s);
+        }
+    }
+    Ok(())
+}
+
+/// Two shapes can't both match one drawn polygon, and a polygon that fits two shapes goes to the
+/// one that needs it, whatever order the polygons were drawn in.
+#[test]
+fn each_outline_matches_a_polygon_of_its_own() {
+    let rect = |x: f64| vec![(x, 0.0), (x + 10.0, 0.0), (x + 10.0, 10.0), (x, 10.0)];
+    // Shapes at 100 and 102 drawn at 101 and 99: the first fits both, the second only 101.
+    assert_eq!(match_outlines(&[(rect(100.0), 1.0), (rect(102.0), 1.0)], &[rect(101.0), rect(99.0)]), Ok(()));
+    // Two shapes moved onto one place, drawn at two.
+    assert_eq!(match_outlines(&[(rect(0.0), 1.0), (rect(0.0), 1.0)], &[rect(0.0), rect(50.0)]), Err(1));
 }
 
 /// A file holding fewer slides than its DocumentAtom counts names the missing ones by position,

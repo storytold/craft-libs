@@ -1,0 +1,10 @@
+craft-gpu-device
+Licensed under the MIT license or the Apache License, Version 2.0, at your option.
+
+The adapter rule and its driver corrections (src/adapter.rs) come from FilmCraft's
+`crates/gpu/src/adapter.rs` (https://github.com/storytold/filmcraft, commit
+93a88a839aae370740b09434fdec410abb8c24ca), MIT OR Apache-2.0, Copyright (c) 2026 ArtCraft Team and
+the FilmCraft contributors.
+Device health (src/health.rs) comes from PhotoCraft's `crates/gpu/src/health.rs`
+(https://github.com/storytold/photocraft, commit 01a5b5a389acc93f081e5ce6a8d0580d6438774a),
+MIT OR Apache-2.0, Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors.

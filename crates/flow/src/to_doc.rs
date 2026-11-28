@@ -217,6 +217,14 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
     out
 }
 
+fn drawing_link(inline: &Inline) -> Option<&str> {
+    match inline {
+        Inline::Image(img) => img.link.as_deref(),
+        Inline::Shape { link, .. } | Inline::Group { link, .. } => link.as_deref(),
+        _ => None,
+    }
+}
+
 struct Builder<'a> {
     doc: &'a mut Document,
     /// Revisions already in `doc` by (kind, author, date), so each change is added once.
@@ -433,7 +441,7 @@ impl<'a> Builder<'a> {
                     graphic: Arc::new(graphic),
                 })
             }
-            Inline::Shape { kind, w, h, float, blocks, look, path } => {
+            Inline::Shape { kind, w, h, float, blocks, look, path, .. } => {
                 // A text box always has its story; a shape only when it holds text.
                 let story = if *kind == craft_wordmodel::para::ShapeKind::TextBox || !blocks.is_empty() {
                     let story = self.blocks(blocks, 1);
@@ -494,14 +502,20 @@ impl<'a> Builder<'a> {
                 };
                 Some(obj)
             }
-            Inline::Group { w, h, float, members } if depth < MAX_GROUP_DEPTH => {
+            Inline::Group { w, h, float, members, .. } if depth <= MAX_GROUP_DEPTH => {
                 let fit = |v: f32| if v.is_finite() { v.clamp(1.0, 1584.0) } else { 72.0 };
                 let (w, h) = (fit(*w), fit(*h));
                 let off = |v: f32| if v.is_finite() { v.clamp(-1584.0, 1584.0) } else { 0.0 };
                 let children: Vec<GroupChild> = members
                     .iter()
                     .take(MAX_GROUP_CHILDREN)
-                    .filter_map(|m| self.drawing(&m.inline, depth + 1).map(|obj| GroupChild { x: off(m.x), y: off(m.y), obj }))
+                    .filter_map(|m| {
+                        let obj = self.drawing(&m.inline, depth + 1)?;
+                        let target = m.link.as_deref().or_else(|| drawing_link(&m.inline));
+                        let link = target.map(str::trim).filter(|s| !s.is_empty()).and_then(super::kept_link).map(|s| s.to_string());
+                        let link = self.budget(CharProps { link, ..Default::default() }).link;
+                        Some(GroupChild { x: off(m.x), y: off(m.y), obj, link })
+                    })
                     .collect();
                 (!children.is_empty()).then(|| InlineObject::Group {
                     w,
@@ -562,6 +576,14 @@ impl<'a> Builder<'a> {
             out.props.keep_next = Some(true);
         }
         out.section.clone_from(&p.section);
+        // A legacy paragraph-mark target belongs to its sole drawing, not to an unlinked neighbor.
+        let single_drawing = p.textless()
+            && p.inlines
+                .iter()
+                .filter(|i| matches!(i, Inline::Image(_) | Inline::Chart(_) | Inline::Shape { .. } | Inline::Group { .. } | Inline::Figure(_)))
+                .take(2)
+                .count()
+                == 1;
         // Inlines are appended in order, so build the runs directly: inserting each one through
         // `Paragraph::insert_text` rescans every earlier run and is quadratic in their number.
         for i in &p.inlines {
@@ -595,8 +617,17 @@ impl<'a> Builder<'a> {
                             .mark
                             .as_deref()
                             .filter(|_| p.textless())
-                            .map(|m| self.budget(CharProps { ins: None, del: None, fmt_change: None, ..m.clone() }))
+                            .map(|m| CharProps { ins: None, del: None, fmt_change: None, ..m.clone() })
                             .unwrap_or_default();
+                        if !matches!(i, Inline::Chart(_)) {
+                            let link = drawing_link(i);
+                            if link.is_some() || !single_drawing {
+                                cp.link = link.map(str::trim).filter(|s| !s.is_empty()).and_then(super::kept_link).map(|s| s.to_string());
+                            } else {
+                                cp.link = cp.link.take().filter(|link| super::kept_link(link).is_some());
+                            }
+                        }
+                        cp = self.budget(cp);
                         if let Some(f) = obj.float_mut()
                             && f.wrap == craft_wordmodel::para::Wrap::Inline
                             && f.y != 0.0

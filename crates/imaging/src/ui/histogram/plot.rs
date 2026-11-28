@@ -310,7 +310,8 @@ impl Component for Histogram<'_> {
         let accent = super::data::color32(colors.data.selection);
         let warn = cx.tone(craft_theme::variant::Tone::Warn);
         HistogramStyle {
-            metrics: Metrics::new().min_size(Vec2::new(cx.tokens.size.plot.width, tall)),
+            // The width's floor is `measure`'s (`picture_width`), which a narrow room may take below the plot width.
+            metrics: Metrics::new().min_size(Vec2::new(0.0, tall)),
             focus: cx.focus_look(),
             caption: TextLook::new(TypeRole::Caption, Stateful::new(cx.color(colors.text.normal))),
             stale: IconLook::new(cx.tokens.size.icon.sm, Stateful::new(warn)),

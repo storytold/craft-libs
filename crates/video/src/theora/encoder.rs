@@ -103,7 +103,11 @@ fn alloc_vec_exact<T: Clone>(val: T, n: usize) -> Result<Vec<T>> {
 
 impl Encoder {
     /// Create a new encoder with the given configuration.
+    /// The frame-rate numerator and denominator must both be nonzero.
     pub fn new(config: EncoderConfig) -> Result<Self> {
+        if config.fps_num == 0 || config.fps_den == 0 {
+            return Err(Error::InvalidHeader("framerate cannot be zero"));
+        }
         if config.width == 0 || config.height == 0 || config.pic_width == 0 || config.pic_height == 0 {
             return Err(Error::DimensionMismatch("dimensions cannot be zero"));
         }
@@ -158,8 +162,8 @@ impl Encoder {
             pic_height: config.pic_height.min(frame_height),
             pic_x: config.pic_x.min(frame_width - config.pic_width.min(frame_width)),
             pic_y: config.pic_y.min(frame_height - config.pic_height.min(frame_height)),
-            fps_num: config.fps_num.max(1),
-            fps_den: config.fps_den.max(1),
+            fps_num: config.fps_num,
+            fps_den: config.fps_den,
             par_num: 1,
             par_den: 1,
             color_space: config.color_space,

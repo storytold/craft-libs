@@ -1,7 +1,7 @@
 //! The collection's keys: Space actions, ragged-grid moves, hidden items, digits against type-ahead, the header
 //! flag, the lead's source and the first sort order.
 
-use super::kit::{Count, Dismissed, ROW_H, Row};
+use super::kit::{Count, Dismissed, ROW_H, Row, Words};
 use craft_behavior::{ItemLayout, ItemSource, NavShape, ScrollPos, Selection};
 use craft_ui::contract::{
     Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, Focus as _, LeadSource, Props as _,
@@ -206,6 +206,20 @@ fn end_skips_the_items_of_a_closed_group() {
     assert_eq!(seen.lead_keys(), vec![4], "End takes the last shown item, and Down past it stays");
     let rows = seen.rows.borrow();
     assert!(rows.iter().all(|(key, rect)| *key < 5 && rect.is_finite()), "only shown items are built: {rows:?}");
+}
+
+#[trial]
+fn type_ahead_wraps_past_a_hidden_item_and_a_matching_section_heading() {
+    let (seen, layout) = (Seen::default(), Ragged { rows: vec![3, 1], hidden_from: 3 });
+    let mut source = Words::flat(&["Banner", "Beta", "Current", "Blocked"]);
+    source.sections.push(0);
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| show_probe(ui, CollectionProps::new().select(SelectMode::Single).type_ahead(true), &layout, &source, &seen);
+    frames.idle(3, &mut show);
+    focus(&mut frames, &seen, &mut show);
+    press(&mut frames, Key::End, &mut show);
+    frames.frame(vec![input::text("b")], &mut show);
+    assert_eq!(seen.lead_keys(), vec![2, 1], "type-ahead wraps past the hidden row and the heading to the shown match");
 }
 
 #[trial]

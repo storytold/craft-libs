@@ -132,6 +132,10 @@ pub struct VorbisInfo {
     pub sample_rate: u32,
     /// Nominal bit rate in bits per second (0 or negative when not set).
     pub bitrate_nominal: i32,
+    /// The short block size in samples, as the header states it (Vorbis I allows 64 to 8192).
+    pub blocksize_0: u32,
+    /// The long block size in samples, as the header states it.
+    pub blocksize_1: u32,
 }
 
 impl VorbisInfo {
@@ -144,6 +148,9 @@ impl VorbisInfo {
             channels: h[11],
             sample_rate: u32::from_le_bytes([h[12], h[13], h[14], h[15]]),
             bitrate_nominal: i32::from_le_bytes([h[20], h[21], h[22], h[23]]),
+            // two 4-bit exponents, the short block's in the low bits
+            blocksize_0: 1 << (h[28] & 0x0F),
+            blocksize_1: 1 << (h[28] >> 4),
         })
     }
 }

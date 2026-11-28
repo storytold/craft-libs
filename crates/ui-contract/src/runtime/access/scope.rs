@@ -181,6 +181,8 @@ struct Open {
     stops: usize,
     /// The nodes that registered inside it and in no node component inside it.
     held: Vec<ScopeNode>,
+    /// The child whose stop a click on the label focuses, in place of the first stop inside it (`label_target`).
+    label_target: Option<Id>,
 }
 
 /// A control that reported its node in a scope: the name and description its node got at its own report.
@@ -193,7 +195,8 @@ pub(crate) struct ScopeNode {
     pub description: Option<String>,
     /// The missing-name finding of a node that may still be named by the scope: reported when it is not.
     pub unnamed: Option<Finding>,
-    /// The first focus stop inside a control that has none of its own: where a click on its label moves focus.
+    /// The first focus stop inside a control that has none of its own, or the stop of the child it named
+    /// (`label_target`): where a click on its label moves focus.
     pub inner_stop: Option<crate::runtime::focus::FocusTarget>,
     /// The control takes key focus, at its own stop or at a part's (a segmented control's segments).
     pub focusable: bool,
@@ -271,7 +274,17 @@ pub(crate) fn field_label(ctx: &Context) -> Option<FieldLabel> {
 pub(crate) fn enter(ctx: &Context, id: Id) {
     pass_state::with::<Stack, _>(ctx, |stack| {
         if let Some(scope) = stack.0.last_mut() {
-            scope.open.push(Open { id, stops: crate::runtime::focus::stop_count(ctx), held: Vec::new() });
+            scope.open.push(Open { id, stops: crate::runtime::focus::stop_count(ctx), held: Vec::new(), label_target: None });
+        }
+    });
+}
+
+/// Names `child` as the component whose stop a click on the label of the node component `id` focuses, in place of
+/// the first stop inside `id`. Read at `id`'s step 16; a child with no stop this pass leaves the first stop.
+pub(crate) fn label_target(ctx: &Context, id: Id, child: Id) {
+    pass_state::with::<Stack, _>(ctx, |stack| {
+        if let Some(open) = stack.0.iter_mut().rev().find_map(|scope| scope.open.iter_mut().rfind(|open| open.id == id)) {
+            open.label_target = Some(child);
         }
     });
 }
@@ -284,7 +297,7 @@ pub(crate) fn register(ctx: &Context, mut node: ScopeNode) {
         let Some(scope) = stack.0.last_mut() else { return node.unnamed.take().into_iter().collect() };
         let mut unnamed = Vec::new();
         if let Some(at) = scope.open.iter().rposition(|open| open.id == node.id) {
-            node.inner_stop = crate::runtime::focus::first_stop_inside(ctx, node.id, scope.open[at].stops);
+            node.inner_stop = crate::runtime::focus::first_stop_inside(ctx, node.id, scope.open[at].stops, scope.open[at].label_target);
             // What the node held sits inside it: none of it is a control of the scope.
             unnamed.extend(scope.open.drain(at..).flat_map(|open| open.held).filter_map(|held| held.unnamed));
         }
@@ -366,27 +379,54 @@ pub(crate) fn record_control_min(ctx: &Context, width: f32) {
         stack.0.iter().rev().find(|scope| matches!(scope.kind, Kind::Label(_))).map(|scope| scope.container)
     });
     if let Some(container) = container {
-        layout_memory::contribute(ctx, std::sync::Arc::new(ControlMin { container, width }));
+        layout_memory::contribute(ctx, std::sync::Arc::new(ControlMin { container, width, whole: false }));
     }
+}
+
+/// The innermost open label scope, when no control inside it has reported its narrowest width yet.
+pub(crate) fn label_awaiting_min(ctx: &Context) -> Option<Id> {
+    pass_state::with::<Stack, _>(ctx, |stack| {
+        stack
+            .0
+            .iter()
+            .rev()
+            .find(|scope| matches!(scope.kind, Kind::Label(_)))
+            .filter(|scope| scope.control_min.is_none())
+            .map(|scope| scope.container)
+    })
+}
+
+/// Records `width` as the narrowest width of the controls of `container`'s label scope, in place of what the first of
+/// them reported: the least of a row that holds them side by side, the first control of the scope
+/// (`label_awaiting_min`). Only a measuring run records it.
+pub(crate) fn record_row_min(ctx: &Context, container: Id, width: f32) {
+    layout_memory::contribute(ctx, std::sync::Arc::new(ControlMin { container, width, whole: true }));
 }
 
 /// A control's narrowest width reported to the label scope of `container`, as a measuring run hands it forward.
 struct ControlMin {
     container: Id,
     width: f32,
+    /// The width is the least of a row of controls (`record_row_min`): it replaces the first control's.
+    whole: bool,
 }
 
 impl layout_memory::Contribution for ControlMin {
     fn apply(&self, ctx: &Context) {
         pass_state::with::<Stack, _>(ctx, |stack| {
             if let Some(scope) = stack.0.iter_mut().rev().find(|scope| scope.container == self.container && matches!(scope.kind, Kind::Label(_))) {
-                scope.control_min.get_or_insert(self.width);
+                if self.whole {
+                    scope.control_min = Some(self.width);
+                } else {
+                    scope.control_min.get_or_insert(self.width);
+                }
             }
         });
     }
 
     fn report(&self) -> Option<(Id, f32)> {
-        Some((sub(self.container, "control_min"), self.width))
+        // A row's shrink step sweeps only in a measuring run, so a real run has no row least to compare.
+        (!self.whole).then(|| (sub(self.container, "control_min"), self.width))
     }
 
     fn undo(&self, ctx: &Context) -> layout_memory::TakeBack {

@@ -310,6 +310,27 @@ fn json_round_trip() {
 }
 
 #[test]
+fn settings_compat_mode_serde_round_trip() {
+    let mut s = Settings::default();
+    assert_eq!(s.compat_mode, Some(COMPAT_MODE_CURRENT));
+    s.compat_mode = None;
+    let json = serde_json::to_string(&s).unwrap();
+    assert!(!json.contains("compatMode"), "expected compatMode omitted: {json}");
+    let back: Settings = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.compat_mode, None);
+    assert_eq!(back.effective_compat_mode(), LEGACY_COMPAT_MODE);
+
+    let from_empty: Settings = serde_json::from_str("{}").unwrap();
+    assert_eq!(from_empty.compat_mode, None);
+
+    s.compat_mode = Some(14);
+    let json14 = serde_json::to_string(&s).unwrap();
+    assert!(json14.contains(r#""compatMode":14"#), "{json14}");
+    let back14: Settings = serde_json::from_str(&json14).unwrap();
+    assert_eq!(back14.compat_mode, Some(14));
+}
+
+#[test]
 fn ensure_nonempty_repairs() {
     let mut d = Document::new();
     d.body.clear();
