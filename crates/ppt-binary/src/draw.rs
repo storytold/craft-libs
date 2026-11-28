@@ -37,6 +37,7 @@ pub mod prop {
     pub const FILL_BLIP: u16 = 0x0186;
     pub const FILL_ANGLE: u16 = 0x018B;
     pub const FILL_FOCUS: u16 = 0x018C;
+    pub const FILL_SHADE_COLORS: u16 = 0x0197;
     pub const FILL_BOOLS: u16 = 0x01BF;
     pub const LINE_COLOR: u16 = 0x01C0;
     pub const LINE_OPACITY: u16 = 0x01C1;
