@@ -31,7 +31,9 @@ pub const EXTENSION: &str = "stencilcraft";
 /// The format name stored in the header.
 pub const FORMAT_NAME: &str = "stencilcraft";
 /// The newest document format version this crate reads and writes.
-pub const FORMAT_VERSION: u64 = 1;
+pub const FORMAT_VERSION: u64 = 2;
+/// Every document format version this crate can read; [`FORMAT_VERSION`] is written.
+pub const SUPPORTED_VERSIONS: &[u64] = &[1, 2];
 /// The top-level member containing the format header.
 pub const HEADER_KEY: &str = "stencilcraft";
 
@@ -41,13 +43,14 @@ pub const HEADER_KEY: &str = "stencilcraft";
 /// version-1 defaults, and omission of default canvas values remain owned by this crate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(bound(
-    serialize = "Board: Serialize, Kerf: Serialize, Layers: Serialize, Image: Serialize, BoardSetup: Serialize + Default + PartialEq, Pages: Serialize + Default + PartialEq, Guides: Serialize + Default + PartialEq, Grid: Serialize + Default + PartialEq, Snap: Serialize + Default + PartialEq, Groups: Serialize + Default + PartialEq, Meta: Serialize + Default + PartialEq",
-    deserialize = "Board: Deserialize<'de>, Kerf: Deserialize<'de>, Layers: Deserialize<'de>, Image: Deserialize<'de>, BoardSetup: Deserialize<'de> + Default, Pages: Deserialize<'de> + Default, Guides: Deserialize<'de> + Default, Grid: Deserialize<'de> + Default, Snap: Deserialize<'de> + Default, Groups: Deserialize<'de> + Default, Meta: Deserialize<'de> + Default"
+    serialize = "Board: Serialize, Kerf: Serialize, Layers: Serialize, Operations: Serialize + Default + PartialEq, Image: Serialize, BoardSetup: Serialize + Default + PartialEq, Pages: Serialize + Default + PartialEq, Guides: Serialize + Default + PartialEq, Grid: Serialize + Default + PartialEq, Snap: Serialize + Default + PartialEq, Groups: Serialize + Default + PartialEq, Meta: Serialize + Default + PartialEq, Shapes: Serialize + Default + PartialEq",
+    deserialize = "Board: Deserialize<'de>, Kerf: Deserialize<'de>, Layers: Deserialize<'de>, Operations: Deserialize<'de> + Default, Image: Deserialize<'de>, BoardSetup: Deserialize<'de> + Default, Pages: Deserialize<'de> + Default, Guides: Deserialize<'de> + Default, Grid: Deserialize<'de> + Default, Snap: Deserialize<'de> + Default, Groups: Deserialize<'de> + Default, Meta: Deserialize<'de> + Default, Shapes: Deserialize<'de> + Default"
 ))]
 pub struct DocumentFields<
     Board = Value,
     Kerf = Value,
     Layers = Value,
+    Operations = Option<Value>,
     Image = Value,
     BoardSetup = Option<Value>,
     Pages = Option<Value>,
@@ -56,13 +59,17 @@ pub struct DocumentFields<
     Snap = Option<Value>,
     Groups = Option<Value>,
     Meta = Option<Value>,
+    Shapes = Option<Value>,
 > {
     /// Required millimetre artboard dimensions.
     pub board: Board,
     /// Required kerf settings.
     pub kerf: Kerf,
-    /// Required drawing layers.
+    /// Required drawing layers (geometry-only containers in version 2).
     pub layers: Layers,
+    /// Optional production operations, omitted when absent (version 2; absent in version 1).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub operations: Operations,
     /// Next document object id; absent in early version 1 files, where it defaults to 1.
     #[serde(rename = "next-shape-id", default = "default_next_shape_id")]
     pub next_shape_id: u64,
@@ -90,6 +97,9 @@ pub struct DocumentFields<
     /// Optional user metadata, omitted when absent.
     #[serde(default, skip_serializing_if = "is_default")]
     pub meta: Meta,
+    /// Document-level shape store (version 2); absent in version 1 files.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub shapes: Shapes,
 }
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
@@ -140,19 +150,34 @@ impl File<DocumentFields> {
         Self::from_wire(wire)
     }
 
+    /// Like [`File::read`], but accepts any version in [`SUPPORTED_VERSIONS`] and returns it.
+    pub fn read_versioned(text: &str) -> Result<(u64, Self), Error> {
+        let wire: RawWire = serde_json::from_str(text).map_err(Error::Json)?;
+        Self::from_wire_versioned(wire)
+    }
+
+    /// Like [`File::read_from`], but accepts any version in [`SUPPORTED_VERSIONS`] and returns it.
+    pub fn read_versioned_from(reader: impl Read) -> Result<(u64, Self), Error> {
+        let wire: RawWire = serde_json::from_reader(reader).map_err(Error::Json)?;
+        Self::from_wire_versioned(wire)
+    }
+
     fn from_wire(wire: RawWire) -> Result<Self, Error> {
-        let header = wire.fields.get(HEADER_KEY).and_then(Value::as_object).ok_or(Error::NotStencilCraft)?;
-        if header.get("name").and_then(Value::as_str) != Some(FORMAT_NAME) {
-            return Err(Error::NotStencilCraft);
-        }
-        let Some(version) = header.get("version").and_then(Value::as_u64) else {
-            return Err(Error::NotStencilCraft);
-        };
+        let version = header_version(&wire.fields)?;
         if version != FORMAT_VERSION {
             return Err(Error::Version { found: version, supported: FORMAT_VERSION });
         }
         let raw: RawFile<DocumentFields> = serde_json::from_value(Value::Object(wire.fields)).map_err(|source| Error::Document { source })?;
         Ok(Self { document: raw.document })
+    }
+
+    fn from_wire_versioned(wire: RawWire) -> Result<(u64, Self), Error> {
+        let version = header_version(&wire.fields)?;
+        if !SUPPORTED_VERSIONS.contains(&version) {
+            return Err(Error::Version { found: version, supported: FORMAT_VERSION });
+        }
+        let raw: RawFile<DocumentFields> = serde_json::from_value(Value::Object(wire.fields)).map_err(|source| Error::Document { source })?;
+        Ok((version, Self { document: raw.document }))
     }
 }
 
@@ -172,20 +197,47 @@ where
         Self::from_typed_wire(wire)
     }
 
+    /// Like [`File::read_typed`], but accepts any version in [`SUPPORTED_VERSIONS`] and returns it.
+    pub fn read_typed_versioned(text: &str) -> Result<(u64, Self), Error> {
+        let wire: RawWire = serde_json::from_str(text).map_err(Error::Json)?;
+        Self::from_typed_wire_versioned(wire)
+    }
+
+    /// Like [`File::read_typed_from`], but accepts any version in [`SUPPORTED_VERSIONS`] and returns it.
+    pub fn read_typed_versioned_from(reader: impl Read) -> Result<(u64, Self), Error> {
+        let wire: RawWire = serde_json::from_reader(reader).map_err(Error::Json)?;
+        Self::from_typed_wire_versioned(wire)
+    }
+
     fn from_typed_wire(wire: RawWire) -> Result<Self, Error> {
-        let header = wire.fields.get(HEADER_KEY).and_then(Value::as_object).ok_or(Error::NotStencilCraft)?;
-        if header.get("name").and_then(Value::as_str) != Some(FORMAT_NAME) {
-            return Err(Error::NotStencilCraft);
-        }
-        let Some(version) = header.get("version").and_then(Value::as_u64) else {
-            return Err(Error::NotStencilCraft);
-        };
+        let version = header_version(&wire.fields)?;
         if version != FORMAT_VERSION {
             return Err(Error::Version { found: version, supported: FORMAT_VERSION });
         }
         let raw: RawFile<T> = serde_json::from_value(Value::Object(wire.fields)).map_err(|source| Error::Document { source })?;
         Ok(Self { document: raw.document })
     }
+
+    fn from_typed_wire_versioned(wire: RawWire) -> Result<(u64, Self), Error> {
+        let version = header_version(&wire.fields)?;
+        if !SUPPORTED_VERSIONS.contains(&version) {
+            return Err(Error::Version { found: version, supported: FORMAT_VERSION });
+        }
+        let raw: RawFile<T> = serde_json::from_value(Value::Object(wire.fields)).map_err(|source| Error::Document { source })?;
+        Ok((version, Self { document: raw.document }))
+    }
+}
+
+/// Validates the format header and returns its version.
+fn header_version(fields: &Map<String, Value>) -> Result<u64, Error> {
+    let header = fields.get(HEADER_KEY).and_then(Value::as_object).ok_or(Error::NotStencilCraft)?;
+    if header.get("name").and_then(Value::as_str) != Some(FORMAT_NAME) {
+        return Err(Error::NotStencilCraft);
+    }
+    let Some(version) = header.get("version").and_then(Value::as_u64) else {
+        return Err(Error::NotStencilCraft);
+    };
+    Ok(version)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -316,6 +368,7 @@ fn is_wire_field(name: &str) -> bool {
             | "board"
             | "kerf"
             | "layers"
+            | "operations"
             | "next-shape-id"
             | "images"
             | "board-setup"
@@ -325,6 +378,7 @@ fn is_wire_field(name: &str) -> bool {
             | "snap"
             | "groups"
             | "meta"
+            | "shapes"
     )
 }
 
@@ -352,7 +406,7 @@ pub enum Error {
     /// The input has no valid StencilCraft format header.
     #[error("not a stencilcraft file")]
     NotStencilCraft,
-    /// The input names a version other than [`FORMAT_VERSION`].
+    /// The input names a version this build does not read.
     #[error("format version {found}, this build reads {supported}")]
     Version { found: u64, supported: u64 },
     /// The JSON envelope is valid, but a required or typed wire field is malformed.
@@ -367,13 +421,14 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
 
-    use super::{DocumentFields, Error, FORMAT_VERSION, File};
+    use super::{DocumentFields, Error, FORMAT_VERSION, File, SUPPORTED_VERSIONS};
 
     fn fields() -> DocumentFields {
         DocumentFields {
             board: json!({"width_mm": 100.0, "height_mm": 150.0}),
             kerf: json!({"width_mm": 0.0, "apply_to_exports": false}),
             layers: json!([]),
+            operations: None,
             next_shape_id: 1,
             images: Vec::new(),
             board_setup: None,
@@ -383,6 +438,7 @@ mod tests {
             snap: None,
             groups: None,
             meta: None,
+            shapes: None,
         }
     }
 
@@ -402,12 +458,38 @@ mod tests {
     }
 
     #[test]
-    fn reads_version_one_defaults_and_ignores_unknown_fields() -> Result<(), Error> {
-        let text = r#"{"stencilcraft":{"name":"stencilcraft","version":1},"board":{},"kerf":{},"layers":[],"future-field":true}"#;
-        let file = File::read(text)?;
-        assert_eq!(file.document.next_shape_id, 1);
-        assert!(file.document.images.is_empty());
+    fn shapes_field_round_trips_and_stays_omitted_when_default() -> Result<(), Error> {
+        let mut with_shapes = fields();
+        with_shapes.shapes = Some(json!([{"id": 1}]));
+        let text = File::new(with_shapes.clone()).to_json_pretty()?;
+        assert!(text.contains("\"shapes\""));
+        assert_eq!(File::read(&text)?.document.shapes, with_shapes.shapes);
+        assert!(!File::new(fields()).to_json_pretty()?.contains("\"shapes\""));
         Ok(())
+    }
+
+    #[test]
+    fn versioned_readers_accept_every_supported_version() -> Result<(), Error> {
+        for version in SUPPORTED_VERSIONS {
+            let text = format!(
+                r#"{{"stencilcraft":{{"name":"stencilcraft","version":{version}}},"board":{{}},"kerf":{{}},"layers":[],"future-field":true}}"#
+            );
+            let (found, file) = File::read_versioned(&text)?;
+            assert_eq!(found, *version);
+            assert_eq!(file.document.next_shape_id, 1);
+            assert!(file.document.images.is_empty());
+            assert!(file.document.shapes.is_none());
+            let (found_from, _) = File::read_versioned_from(Cursor::new(text.as_bytes()))?;
+            assert_eq!(found_from, *version);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn versioned_readers_reject_versions_past_the_newest() {
+        let text = r#"{"stencilcraft":{"name":"stencilcraft","version":3},"board":{},"kerf":{},"layers":[]}"#;
+        assert!(matches!(File::read_versioned(text), Err(Error::Version { found: 3, supported: FORMAT_VERSION })));
+        assert!(matches!(File::read_versioned_from(Cursor::new(text.as_bytes())), Err(Error::Version { found: 3, supported: FORMAT_VERSION })));
     }
 
     #[test]
@@ -430,17 +512,21 @@ mod tests {
     }
 
     #[test]
-    fn refuses_versions_other_than_the_current_version() {
-        assert!(matches!(File::read(r#"{"stencilcraft":{"name":"stencilcraft","version":2}}"#), Err(Error::Version { found: 2, supported: 1 })));
+    fn strict_readers_accept_only_the_current_version() {
+        for version in [1, 3] {
+            let text = format!(r#"{{"stencilcraft":{{"name":"stencilcraft","version":{version}}}}}"#);
+            assert!(matches!(File::read(&text), Err(Error::Version { found, supported: FORMAT_VERSION }) if found == version));
+        }
+        assert!(File::read(r#"{"stencilcraft":{"name":"stencilcraft","version":2},"board":{},"kerf":{},"layers":[]}"#).is_ok());
     }
 
     #[test]
     fn reader_preserves_duplicate_key_and_error_precedence_behavior() -> Result<(), Error> {
-        let duplicate = r#"{"stencilcraft":{"name":"wrong","version":1},"stencilcraft":{"name":"stencilcraft","version":1},"board":{"first":true},"board":{"width_mm":100,"height_mm":150},"kerf":{},"layers":[]}"#;
+        let duplicate = r#"{"stencilcraft":{"name":"wrong","version":2},"stencilcraft":{"name":"stencilcraft","version":2},"board":{"first":true},"board":{"width_mm":100,"height_mm":150},"kerf":{},"layers":[]}"#;
         let file = File::read_from(Cursor::new(duplicate))?;
         assert_eq!(file.document.board, json!({"width_mm":100,"height_mm":150}));
 
-        let malformed_after_bad_header = Cursor::new(br#"{"stencilcraft":{"name":"other","version":1},"board": "#);
+        let malformed_after_bad_header = Cursor::new(br#"{"stencilcraft":{"name":"other","version":2},"board": "#);
         assert!(matches!(File::read_from(malformed_after_bad_header), Err(Error::Json(_))));
         assert!(matches!(File::read_from(Cursor::new(b"[]")), Err(Error::NotStencilCraft)));
         Ok(())
@@ -457,7 +543,7 @@ mod tests {
         }
 
         let text = format!(
-            r#"{{"stencilcraft":{{"name":"stencilcraft","version":1}},"board":{{}},"kerf":{{}},"layers":[],"future-field":"{}"}}"#,
+            r#"{{"stencilcraft":{{"name":"stencilcraft","version":2}},"board":{{}},"kerf":{{}},"layers":[],"future-field":"{}"}}"#,
             "x".repeat(8 * 1024 * 1024)
         );
         let file = File::read_from(ShortReads(Cursor::new(text.as_bytes())))?;
@@ -468,7 +554,7 @@ mod tests {
     #[test]
     fn separates_json_errors_from_wire_schema_errors() {
         assert!(matches!(File::read("{"), Err(Error::Json(_))));
-        assert!(matches!(File::read(r#"{"stencilcraft":{"name":"stencilcraft","version":1}}"#), Err(Error::Document { .. })));
+        assert!(matches!(File::read(r#"{"stencilcraft":{"name":"stencilcraft","version":2}}"#), Err(Error::Document { .. })));
     }
 
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -496,17 +582,24 @@ mod tests {
         assert_eq!(File::read_typed(&text)?, file);
         assert_eq!(File::read_typed_from(Cursor::new(text.as_bytes()))?, file);
 
-        let malformed = r#"{"stencilcraft":{"name":"stencilcraft","version":1},"board":"wrong"}"#;
+        let malformed = r#"{"stencilcraft":{"name":"stencilcraft","version":2},"board":"wrong"}"#;
         assert!(matches!(File::<TypedFields>::read_typed(malformed), Err(Error::Document { .. })));
         assert!(matches!(File::<TypedFields>::read_typed_from(Cursor::new(malformed)), Err(Error::Document { .. })));
 
-        let wrong_header = r#"{"stencilcraft":{"name":"other","version":1},"board":{}}"#;
+        let wrong_header = r#"{"stencilcraft":{"name":"other","version":2},"board":{}}"#;
         assert!(matches!(File::<TypedFields>::read_typed(wrong_header), Err(Error::NotStencilCraft)));
         assert!(matches!(File::<TypedFields>::read_typed_from(Cursor::new(wrong_header)), Err(Error::NotStencilCraft)));
 
-        let future_version = r#"{"stencilcraft":{"name":"stencilcraft","version":2},"board":{}}"#;
-        assert!(matches!(File::<TypedFields>::read_typed(future_version), Err(Error::Version { found: 2, supported: 1 })));
-        assert!(matches!(File::<TypedFields>::read_typed_from(Cursor::new(future_version)), Err(Error::Version { found: 2, supported: 1 })));
+        let future_version = r#"{"stencilcraft":{"name":"stencilcraft","version":3},"board":{}}"#;
+        assert!(matches!(File::<TypedFields>::read_typed(future_version), Err(Error::Version { found: 3, supported: FORMAT_VERSION })));
+        assert!(matches!(
+            File::<TypedFields>::read_typed_from(Cursor::new(future_version)),
+            Err(Error::Version { found: 3, supported: FORMAT_VERSION })
+        ));
+
+        let (found, typed) = File::<TypedFields>::read_typed_versioned(&text)?;
+        assert_eq!(found, FORMAT_VERSION);
+        assert_eq!(typed, file);
         Ok(())
     }
 }
