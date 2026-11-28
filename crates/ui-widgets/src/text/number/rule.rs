@@ -137,6 +137,25 @@ impl<V> Clone for Ruled<V> {
 }
 
 impl<V: NumberValue> Ruled<V> {
+    /// The texts the field is sized for: both ends of the range and the number one place of the last decimal just
+    /// inside each, at most four, each written with its unit; for a name or an open range, the value alone. These are
+    /// the candidates [`NumberCodec::widest`] weighs by character count, kept apart so a field can weigh them by the
+    /// width they take in the face it paints.
+    pub(super) fn samples(&self, current: &V) -> impl Iterator<Item = String> {
+        let samples: Vec<String> = if current.named().is_none() && self.rule.low.is_finite() && self.rule.high.is_finite() {
+            // A field that rounds what it commits shows no more places than that.
+            let codec = self.decimals.map_or_else(|| self.inner.clone(), |places| self.inner.clone().at_most(places));
+            let (low, high) = (self.rule.low, self.rule.high);
+            let place = 10f64.powi(-i32::try_from(codec.decimals()).unwrap_or(i32::MAX));
+            let inside = |end: f64, other: f64| (codec.decimals() > 0 && (other - end).abs() >= place).then(|| end + place.copysign(other - end));
+            let written = |number: f64| self.written(codec.format(&Some(number)));
+            [Some(low), Some(high), inside(low, high), inside(high, low)].into_iter().flatten().map(written).collect()
+        } else {
+            vec![self.format(current)]
+        };
+        samples.into_iter()
+    }
+
     fn held(&self, number: f64) -> f64 {
         let snapped = if self.snap { self.rule.snap(number) } else { number };
         self.rule.settle(self.decimals.map_or(snapped, |decimals| round_to(snapped, decimals)))
@@ -230,14 +249,6 @@ impl<V: NumberValue> Codec for Ruled<V> {
     }
 
     fn sample(&self, current: &V) -> Cow<'_, str> {
-        match current.named() {
-            Some(_) => Cow::Owned(self.format(current)),
-            // A field that rounds what it commits shows no more places than that.
-            None if self.rule.low.is_finite() && self.rule.high.is_finite() => {
-                let codec = self.decimals.map_or_else(|| self.inner.clone(), |places| self.inner.clone().at_most(places));
-                Cow::Owned(self.written(codec.widest(&(self.rule.low..=self.rule.high))))
-            }
-            None => Cow::Owned(self.format(current)),
-        }
+        Cow::Owned(self.samples(current).max_by_key(|text| text.chars().count()).unwrap_or_default())
     }
 }

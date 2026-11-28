@@ -26,7 +26,6 @@ use craft_behavior::{
 };
 use craft_theme::{Rgba, Stateful, States};
 use egui::{CornerRadius, Rect, Vec2};
-use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::ops::RangeInclusive;
 
@@ -729,26 +728,33 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         self.settle(&cx.env);
         let codec = self.ruled(&cx.env, false, self.names(|row| cx.env.resolve(&row.label().clone())));
-        // The value area holds the widest value the field shows (the range's ends at the codec's precision, or at the
-        // places it commits when it rounds what it commits, or the value when the range is open) with the caret and the unit, at most one number cell; a longer value scrolls
-        // inside it. The inside label and the chevrons take their own room beside it, each as `place` gives it. The
-        // field is never narrower than a cell, so a column of short fields ends at one edge. A content-sized field
-        // takes its whole value and has no floor; in a column group its value area is the group's widest.
+        // The value area holds the widest value the field shows, shaped in the face it paints (the range's ends at the
+        // codec's precision, or at the places it commits when it rounds what it commits, or the value when the range is
+        // open) with the caret and the unit, at most one number cell; a longer value scrolls inside it. The inside
+        // label and the chevrons take their own room beside it, each as `place` gives it. The field is never narrower
+        // than a cell, so a column of short fields ends at one edge. A content-sized field takes its whole value and
+        // has no floor; in a column group its value area is the group's widest.
         let content = content_sized(cx);
         // A mixed field is sized as it is with a value, so it keeps its width when the selection changes.
         let blank = V::blank().unwrap_or_else(|| V::of_number(self.rule().blank()));
         let shown = cx.value();
         let no_zoom_value = self.status_zoom && self.shows_blank(shown);
-        let (sample, role) = if no_zoom_value {
+        let mut text = if no_zoom_value {
             // Text editors draw their hint in the proportional face.
-            (Cow::Borrowed(BLANK), self.options.role)
-        } else if self.derives(shown) {
-            // A derived value is sized as it shows at rest, in parentheses with its unit.
-            (Cow::Owned(self.derived_text(&codec.sample(shown.unwrap_or(&blank)), &cx.env.units())), self.value_role())
+            cx.field_text(&TextRun::new(BLANK).role(self.options.role))
         } else {
-            (codec.sample(shown.unwrap_or(&blank)), self.value_role())
+            // Every value the field is sized for, shaped in the face it paints: a proportional face sets a shorter
+            // value wider than a longer one ("100" beside "111"), so the widest of them takes the value area. A derived
+            // value is sized as it shows at rest, in parentheses with its unit.
+            let derived = self.derives(shown);
+            let role = self.value_role();
+            let units = cx.env.units();
+            codec
+                .samples(shown.unwrap_or(&blank))
+                .map(|sample| if derived { self.derived_text(sample.as_str(), &units) } else { sample })
+                .map(|sample| cx.field_text(&TextRun::new(sample.as_str()).role(role)))
+                .fold(Vec2::ZERO, Vec2::max)
         };
-        let mut text = cx.field_text(&TextRun::new(sample.as_ref()).role(role));
         if content {
             text.x = crate::layout::ambient_width(cx.ui.ctx(), &VALUES, text.x).map_or(text.x, |width| width.max(text.x));
         }
