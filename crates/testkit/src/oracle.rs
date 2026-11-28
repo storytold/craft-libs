@@ -5,10 +5,7 @@
 //! 1. The file that an explicit-path variable names: `CRAFT_<PROGRAM>` for [`find`] (for example
 //!    `CRAFT_FFMPEG`), or the variable the caller passes to [`find_with`]. An empty value counts as
 //!    unset. When the value is not a file the OS can start, the lookup returns
-//!    [`OracleError::InvalidExplicitPath`]. When the OS refuses to start the file, for example a Unix
-//!    file with an execute bit set only for other users, the lookup returns [`OracleError::Start`].
-//!    Neither error leads to a search of `PATH` or the install folders. A drive-relative value on
-//!    Windows, such as `C:bin\tool.exe`, is resolved to a full path first.
+//!    [`OracleError::InvalidExplicitPath`] and does not search further.
 //! 2. Each directory on `PATH`, in order. Empty entries are skipped, and a relative entry is
 //!    resolved against the current directory at the time of the lookup. On Windows the search tries
 //!    `<name>.exe`, then each `.com`, `.bat` or `.cmd` suffix that `PATHEXT` lists, in its order.
@@ -16,53 +13,46 @@
 //!    tried as it is.
 //! 3. The install folders [`known_dirs`] lists.
 //!
+//! Windows drive-relative paths use the captured current directory on the same drive, or that
+//! drive's current directory otherwise. Returned executable paths are absolute.
+//!
 //! A file the OS can start is, on Windows, one whose extension is `.com`, `.exe`, `.bat` or `.cmd`
-//! in any case, and on Unix one with an execute bit set. The search skips any other file and goes on.
-//! When the OS refuses to start a file found on `PATH` or in an install folder because permission is
-//! denied (on Unix, for example, a file with an execute bit set only for users other than the current
-//! one), the search goes on to the next file it finds. When every file found is refused, the lookup
-//! returns the first refusal as [`OracleError::Start`].
+//! in any case, and on Unix one the current process has permission to execute. The search skips
+//! any other file and goes on.
+//! If a Unix permission query is unavailable, the lookup attempts to start the candidate. An
+//! execution permission denial continues the search, or rejects an explicit path. Other failures
+//! to start return [`OracleError::Start`].
 //!
 //! The program found is run once with its version argument. [`Oracle::version`] is the first
-//! non-blank line of its standard output, or of its standard error when standard output has none.
-//! A probe timeout too long to set a deadline returns [`OracleError::InvalidTimeout`] before any
-//! file is looked for.
+//! non-blank line of its standard output, or of its standard error when standard output is blank.
 //! The exit status is not checked. The run is bounded by [`ProbeLimits`]: each output stream may
 //! hold at most `max_output_bytes`, and the child is killed and reaped when it passes `timeout` or
 //! the byte limit. On Unix the child runs in its own process group, and the whole group is killed,
-//! so a process it started that holds the output pipes ends too. On Windows the child's process
-//! tree is ended with `taskkill /T /F`, then the child is killed; when the child has already exited,
-//! the processes it started are not guaranteed to end. Ending the tree is best effort: when
-//! `SystemRoot` is unset or not absolute, or `taskkill.exe` does not start, only the child is killed.
-//! A process the child started that outlives it and holds an output pipe keeps that pipe's reader
-//! thread blocked until the process exits. The failed probe waits up to 2 seconds for the readers
-//! and then returns without them. At most 64 pipe readers are alive at once in a process; a probe
-//! that would start more returns [`OracleError::Read`] without reading. A successful lookup is cached for the process under
-//! every input it read (the program, the version argument, the explicit variable and its value,
-//! `PATH`, `PATHEXT`, the current directory, the install folders, the full path of each
-//! drive-relative input and the limits). A failed lookup is
-//! not cached.
+//! so a process it started that holds the output pipes ends too. On Windows the child and its
+//! descendants run in a Job Object and are stopped together. Each run goes through the crate's
+//! process runner. A successful lookup is cached for the process under every input it read (the
+//! program, the version argument, the explicit variable and its value, `PATH`, `PATHEXT`, the
+//! current directory, the install folders and the limits). A failed lookup is not cached.
+//! After one probe succeeds, concurrent and later lookups with the same cache key reuse its
+//! result. A failed probe can be retried by a waiting or later lookup.
 //!
 //! No function here panics. [`require_oracle!`](crate::require_oracle), [`require_ffmpeg!`](crate::require_ffmpeg)
-//! and [`require_ffprobe!`](crate::require_ffprobe) expand in the calling test: a missing program
-//! prints a `SKIPPED (oracle)` line and returns from the test, unless the required variable
-//! ([`REQUIRED_VAR`] by default) is exactly `1`, in which case the test fails. Every other error,
-//! such as a wrong explicit path or a timeout, fails the test.
+//! and [`require_ffprobe!`](crate::require_ffprobe) expand in the calling test. A missing program
+//! goes to [`skip::skip`](crate::skip::skip) with the required variable the caller names
+//! ([`skip::REQUIRED_VAR`](crate::skip::REQUIRED_VAR) by default): the test prints a `SKIPPED:` line
+//! and returns, or fails under that module's rule for the variable's value. Every other error, such
+//! as a wrong explicit path or a timeout, fails the test.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::io::{self, Read};
-use std::path::{Component, Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Mutex, OnceLock, PoisonError};
-use std::time::{Duration, Instant};
+use std::io;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitStatus, Output};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::Duration;
 
-/// The default variable that turns a missing oracle from a skip into a test failure. It counts as
-/// set only when its value is exactly `1`.
-pub const REQUIRED_VAR: &str = "CRAFT_REQUIRE_ORACLES";
+use crate::process::{self, Observed, RunError, RunLimits};
 
 const UNIX_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/opt/local/bin", "/snap/bin"];
 const WINDOWS_DIRS: &[&str] = &[r"C:\ffmpeg\bin", r"C:\Program Files\ffmpeg\bin", r"C:\ProgramData\chocolatey\bin"];
@@ -195,11 +185,6 @@ fn install_hint(program: &str) -> &'static str {
     }
 }
 
-/// Whether a required variable's value turns skips into failures: only exactly `1` does.
-pub fn required(value: Option<&OsStr>) -> bool {
-    value.is_some_and(|v| v == OsStr::new("1"))
-}
-
 /// The default explicit-path variable for `program`: `CRAFT_` and the program name in upper case,
 /// with each character other than a letter or digit written as `_` (`CRAFT_FFMPEG`).
 pub fn explicit_var(program: &str) -> String {
@@ -283,7 +268,7 @@ pub fn ffprobe() -> Result<Oracle, OracleError> {
 pub fn ffmpeg_supports_format(ff: &Oracle, format_name: &str, limits: ProbeLimits) -> Result<bool, OracleError> {
     let mut cmd = ff.command();
     cmd.args(["-hide_banner", "-formats"]);
-    let out = run_bounded(cmd, ff.path(), limits, &mut Observed::default())?;
+    let out = probe(cmd, ff.path(), limits)?;
     if !out.status.success() {
         return Err(OracleError::Failed { path: ff.path().to_path_buf(), status: out.status });
     }
@@ -327,51 +312,53 @@ fn format_names(line: &str) -> Vec<&str> {
 /// What a `require_*` macro does with a lookup result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// Print this line and return from the test.
-    Skip(String),
+    /// The program is missing. [`skip::skip`](crate::skip::skip) takes this reason and decides
+    /// whether the test skips or fails.
+    Missing(String),
     /// Fail the test with this message.
     Fail(String),
 }
 
-/// Decide a lookup result under `required_var` as the process environment sets it. An invalid
-/// `required_var` fails.
+/// Sort a lookup result: a missing program becomes [`Outcome::Missing`] with the error as its
+/// reason, and every other error becomes [`Outcome::Fail`]. A `required_var` that cannot name a
+/// variable (empty, or holding `=` or a NUL character) becomes [`Outcome::Fail`] whatever the
+/// result, as [`skip::required`](crate::skip::required) rejects it. The variable's value is not
+/// read here.
 pub fn outcome(result: Result<Oracle, OracleError>, required_var: &str) -> Result<Oracle, Outcome> {
     if !valid_var(required_var) {
-        return Err(Outcome::Fail(format!("oracle setup failed: {}", OracleError::InvalidVariable { variable: required_var.to_owned() })));
+        return Err(Outcome::Fail(format!("oracle setup failed: {}", crate::skip::RequiredError::BadName { variable: required_var.to_owned() })));
     }
-    outcome_with(result, required_var, required(std::env::var_os(required_var).as_deref()))
-}
-
-/// Decide a lookup result: a missing program skips unless `required`; every other error fails.
-pub fn outcome_with(result: Result<Oracle, OracleError>, required_var: &str, required: bool) -> Result<Oracle, Outcome> {
     match result {
         Ok(oracle) => Ok(oracle),
-        Err(e) if e.is_missing() && !required => Err(Outcome::Skip(format!("SKIPPED (oracle): {e}; set {required_var}=1 to make this a failure"))),
-        Err(e) if e.is_missing() => Err(Outcome::Fail(format!("oracle required: {e}, and {required_var}=1 forbids skipping"))),
+        Err(e) if e.is_missing() => Err(Outcome::Missing(e.to_string())),
         Err(e) => Err(Outcome::Fail(format!("oracle setup failed: {e}"))),
     }
 }
 
-/// `let qpdf = require_oracle!(oracle::find("qpdf", "--version"));` binds the oracle, or prints a
-/// `SKIPPED (oracle)` line and returns from the calling test when the program is missing.
-/// `require_oracle!(probe, "PDFCRAFT_ORACLES_REQUIRED")` reads that required variable instead of
-/// [`REQUIRED_VAR`](crate::oracle::REQUIRED_VAR), and a third argument is the value to return.
+/// `let qpdf = require_oracle!(oracle::find("qpdf", "--version"));` binds the oracle, or skips the
+/// calling test through [`skip::skip`](crate::skip::skip) and returns from it when the program is
+/// missing. `require_oracle!(probe, "PDFCRAFT_ORACLES_REQUIRED")` passes that required variable
+/// instead of [`skip::REQUIRED_VAR`](crate::skip::REQUIRED_VAR), and a third argument is the value
+/// to return.
 ///
-/// The test fails when the required variable is exactly `1` and the program is missing, and on
-/// any other error. The macro fails the test with `panic!`, which expands in the calling test.
+/// A missing program fails the test when [`skip::required`](crate::skip::required) returns `true`
+/// or an error for the required variable. Any other error fails the test as well. The macro fails
+/// the test with `panic!`, which expands in the calling test.
 #[macro_export]
 macro_rules! require_oracle {
     ($probe:expr) => {
-        $crate::require_oracle!($probe, $crate::oracle::REQUIRED_VAR, ())
+        $crate::require_oracle!($probe, $crate::skip::REQUIRED_VAR, ())
     };
     ($probe:expr, $required_var:expr) => {
         $crate::require_oracle!($probe, $required_var, ())
     };
-    ($probe:expr, $required_var:expr, $ret:expr) => {
-        match $crate::oracle::outcome($probe, $required_var) {
+    ($probe:expr, $required_var:expr, $ret:expr) => {{
+        // The variable expression is evaluated once, so the name checked is the name read.
+        let required_var: &str = &$required_var;
+        match $crate::oracle::outcome($probe, required_var) {
             ::core::result::Result::Ok(oracle) => oracle,
-            ::core::result::Result::Err($crate::oracle::Outcome::Skip(line)) => {
-                ::std::eprintln!("{line}");
+            ::core::result::Result::Err($crate::oracle::Outcome::Missing(reason)) => {
+                let _ = $crate::skip::skip(&reason, required_var);
                 return $ret;
             }
             ::core::result::Result::Err($crate::oracle::Outcome::Fail(message)) => {
@@ -380,7 +367,7 @@ macro_rules! require_oracle {
                 ::core::panic!("{message}");
             }
         }
-    };
+    }};
 }
 
 /// `let ff = require_ffmpeg!();` is [`require_oracle!`](crate::require_oracle) for ffmpeg.
@@ -433,9 +420,6 @@ struct Key {
     windows: bool,
     cwd: Option<PathBuf>,
     known_dirs: Vec<PathBuf>,
-    /// The full paths of the drive-relative inputs, which on Windows can depend on another drive's
-    /// current directory.
-    drive_relative: Vec<Option<PathBuf>>,
     limits: ProbeLimits,
 }
 
@@ -451,57 +435,90 @@ impl Key {
             windows: s.windows,
             cwd: s.cwd.map(Path::to_path_buf),
             known_dirs: s.known_dirs.to_vec(),
-            drive_relative: drive_relative_anchors(s),
             limits,
         }
     }
 }
 
-/// [`anchored`] for each drive-relative input of `s`, such as `C:bin`: the explicit path, the `PATH`
-/// entries and the install folders, in that order. Other inputs are left out.
-fn drive_relative_anchors(s: &Search<'_>) -> Vec<Option<PathBuf>> {
-    let explicit = s.explicit.map(PathBuf::from);
-    let on_path = s.path_list.map(|list| std::env::split_paths(list).collect::<Vec<_>>()).unwrap_or_default();
-    let drive_relative = |p: &PathBuf| !p.is_absolute() && matches!(p.components().next(), Some(Component::Prefix(_)));
-    explicit.into_iter().chain(on_path).chain(s.known_dirs.iter().cloned()).filter(drive_relative).map(|p| anchored(&p, s.cwd)).collect()
+type CacheKey = (Key, PathBuf);
+type ProbeSlot = Arc<Mutex<Option<Oracle>>>;
+type OracleCache = Mutex<HashMap<CacheKey, CacheEntry>>;
+
+#[derive(Default)]
+struct CacheEntry {
+    value: ProbeSlot,
+    users: usize,
 }
 
-fn cache() -> &'static Mutex<HashMap<Key, Oracle>> {
-    static CACHE: OnceLock<Mutex<HashMap<Key, Oracle>>> = OnceLock::new();
+struct CacheLease {
+    key: CacheKey,
+    value: ProbeSlot,
+}
+
+impl Drop for CacheLease {
+    fn drop(&mut self) {
+        let mut cache = cache().lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(entry) = cache.get_mut(&self.key).filter(|entry| Arc::ptr_eq(&entry.value, &self.value)) else { return };
+        entry.users = entry.users.saturating_sub(1);
+        if entry.users == 0 && entry.value.lock().unwrap_or_else(PoisonError::into_inner).is_none() {
+            cache.remove(&self.key);
+        }
+    }
+}
+
+fn cache() -> &'static OracleCache {
+    static CACHE: OnceLock<OracleCache> = OnceLock::new();
     CACHE.get_or_init(Mutex::default)
 }
 
 /// Find, probe and cache one program. The cache lock is not held while the program runs.
 fn lookup(s: &Search<'_>, version_arg: &str, limits: ProbeLimits) -> Result<Oracle, OracleError> {
-    let key = Key::new(s, version_arg, limits);
-    if let Some(hit) = cache().lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
-        return Ok(hit.clone());
-    }
-    if Instant::now().checked_add(limits.timeout).is_none() {
-        return Err(OracleError::InvalidTimeout { timeout: limits.timeout });
-    }
-    let mut refused = None;
-    for path in locate(s)? {
-        let mut cmd = Command::new(&path);
+    lookup_with_probe(s, version_arg, limits, |path| {
+        let mut cmd = Command::new(path);
         cmd.arg(version_arg);
-        let out = match run_bounded(cmd, &path, limits, &mut Observed::default()) {
-            Ok(out) => out,
-            Err(e) if denied(&e) => {
-                refused.get_or_insert(e);
-                continue;
-            }
-            Err(e) => return Err(e),
-        };
-        let oracle = Oracle { program: s.program.to_owned(), path, version: version_line(&out.stdout, &out.stderr) };
-        cache().lock().unwrap_or_else(PoisonError::into_inner).insert(key, oracle.clone());
-        return Ok(oracle);
-    }
-    Err(refused.unwrap_or_else(|| OracleError::Missing { program: s.program.to_owned() }))
+        let out = probe(cmd, path, limits)?;
+        Ok(Oracle { program: s.program.to_owned(), path: path.to_owned(), version: version_line(&out.stdout, &out.stderr) })
+    })
 }
 
-/// Whether `e` is a start that the OS refused because permission was denied.
-fn denied(e: &OracleError) -> bool {
-    matches!(e, OracleError::Start { source, .. } if source.kind() == io::ErrorKind::PermissionDenied)
+fn lookup_with_probe(
+    s: &Search<'_>,
+    version_arg: &str,
+    limits: ProbeLimits,
+    mut probe: impl FnMut(&Path) -> Result<Oracle, OracleError>,
+) -> Result<Oracle, OracleError> {
+    let mut denied = HashSet::new();
+    loop {
+        let path = if denied.is_empty() { locate(s)? } else { locate_if(s, |path| !denied.contains(path))? };
+        let key = (Key::new(s, version_arg, limits), path.clone());
+        match cached_probe(key, || {}, || probe(&path)) {
+            Err(OracleError::Start { source, .. }) if retry_denied_probe(&source) => {
+                if let Some(explicit) = s.explicit.filter(|value| !value.is_empty()) {
+                    return Err(OracleError::InvalidExplicitPath { variable: s.explicit_label.to_owned(), path: PathBuf::from(explicit) });
+                }
+                denied.insert(path);
+            }
+            result => return result,
+        }
+    }
+}
+
+fn cached_probe(key: CacheKey, ready: impl FnOnce(), probe: impl FnOnce() -> Result<Oracle, OracleError>) -> Result<Oracle, OracleError> {
+    let value = {
+        let mut cache = cache().lock().unwrap_or_else(PoisonError::into_inner);
+        let entry = cache.entry(key.clone()).or_default();
+        entry.users = entry.users.saturating_add(1);
+        Arc::clone(&entry.value)
+    };
+    let lease = CacheLease { key, value };
+    ready();
+    let mut slot = lease.value.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(hit) = slot.as_ref() {
+        return Ok(hit.clone());
+    }
+    let oracle = probe()?;
+    *slot = Some(oracle.clone());
+    Ok(oracle)
 }
 
 /// Whether `name` can name an environment variable. `std::env::var_os` reads an empty name, or one
@@ -516,22 +533,30 @@ fn valid_name(program: &str) -> bool {
     !program.is_empty() && program != "." && program != ".." && !program.contains(['/', '\\', ':', '\0'])
 }
 
-/// `dir` as an absolute path: a relative one is joined to `cwd`, or dropped without a `cwd`. On
-/// Windows a drive-relative path such as `C:bin` is joined to `cwd` when `cwd` is on that drive, and
-/// is otherwise resolved against that drive's current directory.
+/// Returns an absolute path for `dir`. A relative path requires `cwd`.
+/// Windows drive-relative paths use `cwd` on the same drive, or that drive's current directory.
 fn anchored(dir: &Path, cwd: Option<&Path>) -> Option<PathBuf> {
     if dir.is_absolute() {
         return Some(dir.to_path_buf());
     }
-    let mut parts = dir.components();
-    let Some(Component::Prefix(drive)) = parts.next() else {
-        return cwd.map(|c| c.join(dir));
-    };
-    let on_drive = |c: &Path| matches!(c.components().next(), Some(Component::Prefix(p)) if p.as_os_str().eq_ignore_ascii_case(drive.as_os_str()));
-    match cwd {
-        Some(c) if on_drive(c) => Some(c.join(parts.as_path())),
-        _ => std::path::absolute(dir).ok().filter(|p| p.is_absolute()),
+    let cwd = cwd?;
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let mut parts = dir.components();
+        if let Some(Component::Prefix(prefix)) = parts.next() {
+            let same_drive = cwd.components().next().is_some_and(|part| match part {
+                Component::Prefix(base) => match (prefix.kind(), base.kind()) {
+                    (Prefix::Disk(a), Prefix::Disk(b)) => a.eq_ignore_ascii_case(&b),
+                    (a, b) => a == b,
+                },
+                _ => false,
+            });
+            let base = if same_drive { cwd.to_path_buf() } else { std::path::absolute(prefix.as_os_str()).ok()? };
+            return Some(base.join(parts.as_path()));
+        }
     }
+    Some(cwd.join(dir))
 }
 
 /// The file names tried in each folder, in order.
@@ -553,9 +578,7 @@ fn candidate_names(program: &str, windows: bool, pathext: Option<&OsStr>) -> Vec
 }
 
 /// Whether the OS can start the file at `p`: on Windows a file whose extension, in any case, is one of
-/// [`WINDOWS_SUFFIXES`], and on Unix a file with an execute bit set. A file this check accepts may
-/// still be refused when it is started, such as a Unix file whose execute bit is set only for other
-/// users; [`lookup`] then goes on to the next candidate.
+/// [`WINDOWS_SUFFIXES`], and on Unix a file the current process has permission to execute.
 fn startable(p: &Path, windows: bool) -> bool {
     if !p.is_file() {
         return false;
@@ -569,8 +592,22 @@ fn startable(p: &Path, windows: bool) -> bool {
 
 #[cfg(unix)]
 fn executable(p: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+    execute_permission(rustix::fs::accessat(rustix::fs::CWD, p, rustix::fs::Access::EXEC_OK, rustix::fs::AtFlags::EACCESS))
+}
+
+#[cfg(unix)]
+fn execute_permission(result: rustix::io::Result<()>) -> bool {
+    !matches!(result, Err(rustix::io::Errno::ACCESS | rustix::io::Errno::NOENT | rustix::io::Errno::NOTDIR))
+}
+
+#[cfg(unix)]
+fn retry_denied_probe(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::PermissionDenied
+}
+
+#[cfg(not(unix))]
+fn retry_denied_probe(_: &io::Error) -> bool {
+    false
 }
 
 #[cfg(not(unix))]
@@ -578,326 +615,57 @@ fn executable(_: &Path) -> bool {
     true
 }
 
-/// The absolute paths of the startable files named `s.program`, in the search order the module
-/// documentation gives. An explicit path gives exactly one. The folders are visited only as the
-/// iterator is advanced, so a later folder is not read when an earlier file is used.
-fn locate<'s>(s: &'s Search<'_>) -> Result<Box<dyn Iterator<Item = PathBuf> + 's>, OracleError> {
+/// The absolute path of `s.program`, in the search order the module documentation gives.
+fn locate(s: &Search<'_>) -> Result<PathBuf, OracleError> {
+    locate_if(s, |_| true)
+}
+
+fn locate_if(s: &Search<'_>, mut accept: impl FnMut(&Path) -> bool) -> Result<PathBuf, OracleError> {
     if !valid_name(s.program) {
         return Err(OracleError::InvalidName { program: s.program.to_owned() });
     }
     if let Some(explicit) = s.explicit.filter(|e| !e.is_empty()) {
         let given = PathBuf::from(explicit);
         return match anchored(&given, s.cwd) {
-            Some(p) if startable(&p, s.windows) => Ok(Box::new(std::iter::once(p))),
+            Some(p) if startable(&p, s.windows) && accept(&p) => Ok(p),
             _ => Err(OracleError::InvalidExplicitPath { variable: s.explicit_label.to_owned(), path: given }),
         };
     }
     let names = candidate_names(s.program, s.windows, s.pathext);
     let on_path = s.path_list.map(|list| std::env::split_paths(list).collect::<Vec<_>>()).unwrap_or_default();
-    let dirs = on_path.into_iter().chain(s.known_dirs.iter().cloned()).filter(|d| !d.as_os_str().is_empty());
-    let files = dirs.filter_map(move |d| anchored(&d, s.cwd)).flat_map(move |dir| names.iter().map(|name| dir.join(name)).collect::<Vec<_>>());
-    Ok(Box::new(files.filter(move |p| startable(p, s.windows))))
+    let dirs = on_path.iter().chain(s.known_dirs).filter(|d| !d.as_os_str().is_empty()).filter_map(|d| anchored(d, s.cwd));
+    for dir in dirs {
+        for name in &names {
+            let p = dir.join(name);
+            if startable(&p, s.windows) && accept(&p) {
+                return Ok(p);
+            }
+        }
+    }
+    Err(OracleError::Missing { program: s.program.to_owned() })
 }
 
-/// The first non-blank line of `stdout`, or of `stderr` when `stdout` has none, trimmed.
+/// The first non-blank line of `stdout`, or of `stderr` when `stdout` is blank, trimmed.
 fn version_line(stdout: &[u8], stderr: &[u8]) -> String {
-    let first = |text: &[u8]| String::from_utf8_lossy(text).lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_owned);
-    first(stdout).or_else(|| first(stderr)).unwrap_or_default()
+    let stdout = String::from_utf8_lossy(stdout);
+    let stderr = String::from_utf8_lossy(stderr);
+    stdout.lines().chain(stderr.lines()).map(str::trim).find(|line| !line.is_empty()).unwrap_or_default().to_owned()
 }
 
-/// A finished child's status and output.
-#[derive(Debug)]
-struct Captured {
-    status: ExitStatus,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
+/// Run `cmd` through the crate's process runner under `limits`, with errors that name `path`.
+fn probe(cmd: Command, path: &Path, limits: ProbeLimits) -> Result<Output, OracleError> {
+    let run_limits = RunLimits { max_output_bytes: limits.max_output_bytes, timeout: Some(limits.timeout) };
+    process::run(cmd, run_limits, &mut Observed::default()).map_err(|e| probe_error(path, e))
 }
 
-enum ReadFail {
-    /// The output passed the limit. It holds the reader, so the pipe stays open until the caller
-    /// drops it after the child is killed: a child that ends when a write fails is then still
-    /// running when its process tree is ended.
-    Limit(Box<dyn Send>),
-    Io(io::Error),
-}
-
-/// Read `r` to its end, or stop with [`ReadFail::Limit`] once it holds more than `cap` bytes.
-fn read_capped(mut r: impl Read + Send + 'static, cap: usize) -> Result<Vec<u8>, ReadFail> {
-    let mut buf = Vec::new();
-    let mut chunk = [0u8; 8192];
-    loop {
-        let n = match r.read(&mut chunk) {
-            Ok(0) => return Ok(buf),
-            Ok(n) => n,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(ReadFail::Io(e)),
-        };
-        if buf.len().saturating_add(n) > cap {
-            return Err(ReadFail::Limit(Box::new(r)));
-        }
-        buf.extend_from_slice(&chunk[..n]);
-    }
-}
-
-type StreamResult = (bool, Result<Vec<u8>, ReadFail>);
-
-/// How many pipe readers may be alive in one process.
-const MAX_LIVE_READERS: usize = 64;
-
-/// The pipe readers alive in this process.
-static LIVE_READERS: AtomicUsize = AtomicUsize::new(0);
-
-/// One live pipe reader, counted in `live` until it is dropped.
-struct ReaderSlot(&'static AtomicUsize);
-
-impl ReaderSlot {
-    /// Count one more reader in `live`, or return `None` when `max` are already alive.
-    fn take(live: &'static AtomicUsize, max: usize) -> Option<Self> {
-        live.try_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < max).then_some(n + 1)).ok()?;
-        Some(Self(live))
-    }
-}
-
-impl Drop for ReaderSlot {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-/// Read one pipe on its own thread and send the result as `(is_stdout, bytes)`. It fails without
-/// reading when [`MAX_LIVE_READERS`] readers are alive, which happens when earlier failed runs left
-/// readers blocked on pipes that a surviving process holds open.
-/// A refused reader returns the pipe with the error, so the caller keeps it open until the process
-/// tree has ended.
-fn spawn_reader(
-    pipe: Option<impl Read + Send + 'static>,
-    is_stdout: bool,
-    cap: usize,
-    tx: Sender<StreamResult>,
-) -> Result<(), (io::Error, Option<Box<dyn Send>>)> {
-    spawn_reader_in(&LIVE_READERS, MAX_LIVE_READERS, pipe, is_stdout, cap, tx)
-}
-
-/// [`spawn_reader`] with the reader count and its limit given.
-fn spawn_reader_in(
-    live: &'static AtomicUsize,
-    max: usize,
-    pipe: Option<impl Read + Send + 'static>,
-    is_stdout: bool,
-    cap: usize,
-    tx: Sender<StreamResult>,
-) -> Result<(), (io::Error, Option<Box<dyn Send>>)> {
-    let Some(pipe) = pipe else {
-        let _ = tx.send((is_stdout, Ok(Vec::new())));
-        return Ok(());
-    };
-    let Some(slot) = ReaderSlot::take(live, max) else {
-        let e = io::Error::other("too many pipe readers are still blocked on earlier probes");
-        return Err((e, Some(Box::new(pipe))));
-    };
-    std::thread::Builder::new()
-        .name("craft-testkit-oracle-pipe".into())
-        .spawn(move || {
-            let _slot = slot;
-            let _ = tx.send((is_stdout, read_capped(pipe, cap)));
-        })
-        .map_err(|e| (e, None))?;
-    Ok(())
-}
-
-/// Kill the child and reap it. On Unix the child leads its own process group, and the whole group
-/// is killed first with the `kill` built into `/bin/sh` (the shell runs without `PATH`), so a
-/// process the child started that still holds the output pipes ends too. On Windows the child's
-/// process tree is ended first with [`end_tree`]. The child itself is then killed either way, so
-/// it ends even when the group or tree kill could not run.
-fn kill_and_reap(child: &mut Child) {
-    #[cfg(unix)]
-    let _ = Command::new("/bin/sh")
-        .args(["-c", "kill -s KILL -- \"-$1\"", "sh", &child.id().to_string()])
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    #[cfg(windows)]
-    end_tree(child);
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-/// How long [`end_tree`] lets `taskkill` run before it kills `taskkill` and gives up.
-#[cfg(windows)]
-const TREE_KILL_LIMIT: Duration = Duration::from_secs(5);
-
-/// End the live child and the processes it started with `%SystemRoot%\System32\taskkill.exe /T /F`.
-/// The tool is run by that absolute path, with only `SystemRoot` in its environment, so neither
-/// `PATH` nor the current directory chooses the program. It does nothing when `SystemRoot` is unset
-/// or not absolute, or when the tool does not start. A run longer than [`TREE_KILL_LIMIT`] is killed
-/// and reaped. When the child has already exited, `taskkill` is not guaranteed to end the processes
-/// it started.
-#[cfg(windows)]
-fn end_tree(child: &Child) {
-    let Some(root) = std::env::var_os("SystemRoot").filter(|r| Path::new(r).is_absolute()) else {
-        return;
-    };
-    let tool = Path::new(&root).join("System32").join("taskkill.exe");
-    let started = Command::new(&tool)
-        .args(["/T", "/F", "/PID", &child.id().to_string()])
-        .env_clear()
-        .env("SystemRoot", &root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    let Ok(mut taskkill) = started else {
-        return;
-    };
-    let until = Instant::now().checked_add(TREE_KILL_LIMIT).unwrap_or_else(Instant::now);
-    let mut pause = Duration::from_millis(1);
-    loop {
-        match taskkill.try_wait() {
-            Ok(Some(_)) => return,
-            Ok(None) if Instant::now() < until => {
-                std::thread::sleep(until.saturating_duration_since(Instant::now()).min(pause));
-                pause = (pause * 2).min(Duration::from_millis(50));
-            }
-            _ => {
-                let _ = taskkill.kill();
-                let _ = taskkill.wait();
-                return;
-            }
-        }
-    }
-}
-
-/// How long a failed run waits for its pipe readers to finish after the child is killed.
-const PIPE_GRACE: Duration = Duration::from_secs(2);
-
-/// What a test can observe about one bounded run.
-#[derive(Debug, Default)]
-struct Observed {
-    /// The child's process id.
-    pid: Option<u32>,
-    /// Whether both pipe readers finished before a failed run returned.
-    pipes_closed: bool,
-}
-
-/// Kill and reap the child, then wait up to [`PIPE_GRACE`] for the `pending` pipe readers.
-fn abort(child: &mut Child, rx: &Receiver<StreamResult>, mut pending: usize, seen: &mut Observed, e: OracleError) -> Result<Captured, OracleError> {
-    kill_and_reap(child);
-    let until = Instant::now().checked_add(PIPE_GRACE).unwrap_or_else(Instant::now);
-    while pending > 0 {
-        match rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
-            Ok(_) => pending -= 1,
-            Err(RecvTimeoutError::Disconnected) => pending = 0,
-            Err(RecvTimeoutError::Timeout) => break,
-        }
-    }
-    seen.pipes_closed = pending == 0;
-    Err(e)
-}
-
-/// Start `cmd`, trying again up to 8 times while the program file is busy (`ETXTBSY`). A file is
-/// busy for a moment after it was written while another thread starts a process, which happens
-/// when a test writes a stand-in program and runs it.
-fn spawn(cmd: &mut Command) -> io::Result<Child> {
-    let mut pause = Duration::from_millis(1);
-    for _ in 0..8 {
-        match cmd.spawn() {
-            Err(e) if e.kind() == io::ErrorKind::ExecutableFileBusy => std::thread::sleep(pause),
-            started => return started,
-        }
-        pause *= 2;
-    }
-    cmd.spawn()
-}
-
-/// Run `cmd` with standard input closed and both outputs read under `limits`. On a timeout, an
-/// output over the limit or a read error, the child is killed and reaped before the error returns.
-/// A timeout too long to set a deadline returns [`OracleError::InvalidTimeout`] without starting
-/// the program. A failed run can take longer than the timeout: on Windows ending the process tree
-/// can take up to 5 seconds, and on every platform the pipe readers then get up to [`PIPE_GRACE`]
-/// to finish.
-fn run_bounded(mut cmd: Command, path: &Path, limits: ProbeLimits, seen: &mut Observed) -> Result<Captured, OracleError> {
-    let invalid_timeout = || OracleError::InvalidTimeout { timeout: limits.timeout };
-    if Instant::now().checked_add(limits.timeout).is_none() {
-        return Err(invalid_timeout());
-    }
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
-    let mut child = spawn(&mut cmd).map_err(|source| OracleError::Start { path: path.to_path_buf(), source })?;
-    seen.pid = Some(child.id());
-    // The timeout counts from the start of the child, not from the start of `spawn`'s retries.
-    let Some(deadline) = Instant::now().checked_add(limits.timeout) else {
-        kill_and_reap(&mut child);
-        return Err(invalid_timeout());
-    };
-    let (tx, rx) = mpsc::channel();
-    let read_error = |source| OracleError::Read { path: path.to_path_buf(), source };
-    if let Err((source, pipe)) = spawn_reader(child.stdout.take(), true, limits.max_output_bytes, tx.clone()) {
-        // A refused pipe closes only after `abort` has ended the process tree and killed the child.
-        let failed = abort(&mut child, &rx, 0, seen, read_error(source));
-        drop(pipe);
-        return failed;
-    }
-    if let Err((source, pipe)) = spawn_reader(child.stderr.take(), false, limits.max_output_bytes, tx) {
-        let failed = abort(&mut child, &rx, 1, seen, read_error(source));
-        drop(pipe);
-        return failed;
-    }
-    let timeout = OracleError::Timeout { path: path.to_path_buf(), timeout: limits.timeout };
-    let (mut stdout, mut stderr) = (None, None);
-    let mut pending = 2;
-    while pending > 0 {
-        let received = rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
-        if received.is_ok() {
-            pending -= 1;
-        }
-        match received {
-            Ok((is_stdout, Ok(bytes))) => *(if is_stdout { &mut stdout } else { &mut stderr }) = Some(bytes),
-            Ok((_, Err(ReadFail::Limit(pipe)))) => {
-                let limit = OracleError::OutputLimit { path: path.to_path_buf(), limit: limits.max_output_bytes };
-                // The pipe closes only after `abort` has ended the process tree and killed the child.
-                let failed = abort(&mut child, &rx, pending, seen, limit);
-                drop(pipe);
-                return failed;
-            }
-            Ok((_, Err(ReadFail::Io(source)))) => return abort(&mut child, &rx, pending, seen, read_error(source)),
-            Err(RecvTimeoutError::Timeout) => return abort(&mut child, &rx, pending, seen, timeout),
-            Err(RecvTimeoutError::Disconnected) => {
-                let source = io::Error::other("a pipe reader stopped without a result");
-                return abort(&mut child, &rx, 0, seen, read_error(source));
-            }
-        }
-    }
-    let status = wait_for_exit(&mut child, deadline).map_err(|e| match e {
-        Some(source) => read_error(source),
-        None => timeout,
-    })?;
-    Ok(Captured { status, stdout: stdout.unwrap_or_default(), stderr: stderr.unwrap_or_default() })
-}
-
-/// Wait for a child whose pipes have closed. Past `deadline` it is killed and reaped, and the
-/// error is `None`; a failed wait kills and reaps it too and returns the error.
-fn wait_for_exit(child: &mut Child, deadline: Instant) -> Result<ExitStatus, Option<io::Error>> {
-    let mut pause = Duration::from_millis(1);
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Ok(status),
-            Ok(None) => {}
-            Err(e) => {
-                kill_and_reap(child);
-                return Err(Some(e));
-            }
-        }
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left == Duration::ZERO {
-            kill_and_reap(child);
-            return Err(None);
-        }
-        std::thread::sleep(left.min(pause));
-        pause = (pause * 2).min(Duration::from_millis(50));
+fn probe_error(path: &Path, e: RunError) -> OracleError {
+    let path = path.to_path_buf();
+    match e {
+        RunError::InvalidTimeout(timeout) => OracleError::InvalidTimeout { timeout },
+        RunError::Start(source) => OracleError::Start { path, source },
+        RunError::Timeout(timeout) => OracleError::Timeout { path, timeout },
+        RunError::OutputLimit { limit, .. } => OracleError::OutputLimit { path, limit },
+        RunError::Read(source) => OracleError::Read { path, source },
     }
 }
 
@@ -907,41 +675,98 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
-    fn reader_slots_stop_at_the_limit_and_come_back_when_dropped() {
-        static LIVE: AtomicUsize = AtomicUsize::new(0);
-        let first = ReaderSlot::take(&LIVE, 2).expect("first slot");
-        let _second = ReaderSlot::take(&LIVE, 2).expect("second slot");
-        assert!(ReaderSlot::take(&LIVE, 2).is_none(), "a third slot must be refused");
-        assert_eq!(LIVE.load(Ordering::Acquire), 2);
-        drop(first);
-        assert_eq!(LIVE.load(Ordering::Acquire), 1);
-        assert!(ReaderSlot::take(&LIVE, 2).is_some(), "a dropped slot must be reusable");
+    fn concurrent_cache_misses_share_one_successful_probe() {
+        let folder = Scratch::new("concurrent-cache");
+        let input = search("tool", None, None, &[]);
+        let key = (Key::new(&input, "--version", ProbeLimits::VERSION), folder.path().join("tool"));
+        let calls = AtomicUsize::new(0);
+        let ready = std::sync::Barrier::new(3);
+        let run = || {
+            cached_probe(
+                key.clone(),
+                || {
+                    ready.wait();
+                },
+                || {
+                    let call = calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(Oracle { program: "tool".into(), path: key.1.clone(), version: format!("banner {call}") })
+                },
+            )
+        };
+        std::thread::scope(|scope| {
+            let first = scope.spawn(run);
+            let second = scope.spawn(run);
+            ready.wait();
+            let first = first.join().unwrap().unwrap();
+            let second = second.join().unwrap().unwrap();
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(first, second);
+        });
     }
 
     #[test]
-    fn a_refused_reader_returns_its_pipe_still_open() {
-        use std::sync::Arc;
-        struct Pipe(Arc<AtomicUsize>);
-        impl Read for Pipe {
-            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
-                Ok(0)
-            }
-        }
-        impl Drop for Pipe {
-            fn drop(&mut self) {
-                self.0.fetch_add(1, Ordering::AcqRel);
-            }
-        }
-        static FULL: AtomicUsize = AtomicUsize::new(1);
-        let closed = Arc::new(AtomicUsize::new(0));
-        let (tx, _rx) = mpsc::channel();
-        let Err((_, pipe)) = spawn_reader_in(&FULL, 1, Some(Pipe(closed.clone())), true, 10, tx) else {
-            panic!("a full reader count must refuse the pipe");
+    fn failed_concurrent_probes_leave_no_idle_cache_entry() {
+        let folder = Scratch::new("failed-concurrent-cache");
+        let input = search("tool", None, None, &[]);
+        let key = (Key::new(&input, "--version", ProbeLimits::VERSION), folder.path().join("tool"));
+        let ready = std::sync::Barrier::new(3);
+        let run = || {
+            cached_probe(
+                key.clone(),
+                || {
+                    ready.wait();
+                },
+                || Err(OracleError::Missing { program: "tool".into() }),
+            )
         };
-        assert_eq!(closed.load(Ordering::Acquire), 0, "the refused pipe must stay open");
-        assert!(pipe.is_some(), "the refused pipe must come back with the error");
-        drop(pipe);
-        assert_eq!(closed.load(Ordering::Acquire), 1);
+        std::thread::scope(|scope| {
+            let first = scope.spawn(run);
+            let second = scope.spawn(run);
+            ready.wait();
+            assert!(first.join().unwrap().is_err());
+            assert!(second.join().unwrap().is_err());
+        });
+        assert!(!cache().lock().unwrap_or_else(PoisonError::into_inner).contains_key(&key));
+        let expected = Oracle { program: "tool".into(), path: key.1.clone(), version: "retry succeeded".into() };
+        assert_eq!(cached_probe(key.clone(), || {}, || Ok(expected.clone())).unwrap(), expected);
+        assert_eq!(cached_probe(key, || {}, || Err(OracleError::Missing { program: "tool".into() })).unwrap(), expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unavailable_permission_query_does_not_report_a_missing_program() {
+        use rustix::io::Errno;
+        assert!(execute_permission(Err(Errno::PERM)));
+        assert!(execute_permission(Err(Errno::NOSYS)));
+        assert!(execute_permission(Ok(())));
+        assert!(!execute_permission(Err(Errno::ACCESS)));
+        assert!(!execute_permission(Err(Errno::NOENT)));
+        assert!(!execute_permission(Err(Errno::NOTDIR)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_permission_denial_continues_the_path_search() {
+        let first = Scratch::new("denied-probe");
+        let second = Scratch::new("usable-probe");
+        let denied = first.file("tool");
+        let usable = second.file("tool");
+        let path = std::env::join_paths([first.path(), second.path()]).unwrap();
+        let input = search("tool", None, Some(&path), &[]);
+        let probe = |path: &Path| {
+            if path == denied {
+                Err(OracleError::Start { path: path.to_owned(), source: io::Error::from(io::ErrorKind::PermissionDenied) })
+            } else {
+                Ok(Oracle { program: "tool".into(), path: path.to_owned(), version: "second".into() })
+            }
+        };
+        assert_eq!(lookup_with_probe(&input, "--version", ProbeLimits::VERSION, probe).unwrap().path(), usable);
+        let explicit = search("tool", Some(denied.as_os_str()), None, &[]);
+        assert!(matches!(lookup_with_probe(&explicit, "--version", ProbeLimits::VERSION, probe), Err(OracleError::InvalidExplicitPath { .. })));
+        let other = lookup_with_probe(&input, "--other", ProbeLimits::VERSION, |path| {
+            Err(OracleError::Start { path: path.to_owned(), source: io::Error::other("not a permission denial") })
+        });
+        assert!(matches!(other, Err(OracleError::Start { path, .. }) if path == denied));
     }
 
     /// A new folder under the system temporary folder, removed with its contents on drop.
@@ -982,12 +807,6 @@ mod tests {
 
     fn search<'a>(program: &'a str, explicit: Option<&'a OsStr>, path_list: Option<&'a OsStr>, known_dirs: &'a [PathBuf]) -> Search<'a> {
         Search { program, explicit_label: "CRAFT_TEST_EXPLICIT", explicit, path_list, pathext: None, windows: false, cwd: None, known_dirs }
-    }
-
-    /// The first candidate [`super::locate`] gives, the file a lookup probes first, or
-    /// [`OracleError::Missing`] when it gives none.
-    fn locate(s: &Search<'_>) -> Result<PathBuf, OracleError> {
-        super::locate(s)?.next().ok_or_else(|| OracleError::Missing { program: s.program.to_owned() })
     }
 
     /// A shell script named `name` in `dir` that runs `body`.
@@ -1076,19 +895,28 @@ mod tests {
     // Moved from PdfCraft `crates/oracle/src/lib.rs` and craft-libs `crates/pdf/tests/cos/oracle.rs`.
 
     #[test]
-    fn a_missing_oracle_is_fatal_exactly_when_it_is_required() {
-        let missing = || Err(OracleError::Missing { program: "qpdf".into() });
-        let Err(Outcome::Skip(opt)) = outcome_with(missing(), "PDFCRAFT_ORACLES_REQUIRED", false) else { panic!("optional absence must skip") };
-        let Err(Outcome::Fail(req)) = outcome_with(missing(), "PDFCRAFT_ORACLES_REQUIRED", true) else { panic!("required absence must fail") };
-        assert!(opt.contains("SKIPPED"), "{opt}");
-        assert!(opt.contains("apt install qpdf"), "{opt}");
-        assert!(opt.contains("PDFCRAFT_ORACLES_REQUIRED"), "{opt}");
-        assert!(req.contains("required"), "{req}");
-        assert!(req.contains("forbids skipping"), "{req}");
-        assert!(!req.contains("SKIPPED"), "{req}");
-        // An error other than absence fails even when nothing is required.
+    fn only_a_missing_oracle_goes_to_the_skip_rule() {
+        let Err(Outcome::Missing(reason)) = outcome(Err(OracleError::Missing { program: "qpdf".into() }), "PDFCRAFT_ORACLES_REQUIRED") else {
+            panic!("an absent program must go to the skip rule")
+        };
+        assert!(reason.contains("qpdf"), "{reason}");
+        assert!(reason.contains("apt install qpdf"), "{reason}");
+        // An error other than absence fails without reading any required variable.
         let bad = Err(OracleError::InvalidExplicitPath { variable: "CRAFT_QPDF".into(), path: "/nope".into() });
-        assert!(matches!(outcome_with(bad, REQUIRED_VAR, false), Err(Outcome::Fail(_))));
+        let Err(Outcome::Fail(message)) = outcome(bad, "PDFCRAFT_ORACLES_REQUIRED") else { panic!("a wrong explicit path must fail") };
+        assert!(message.starts_with("oracle setup failed"), "{message}");
+    }
+
+    /// A found program does not hide a required variable name that `skip::required` rejects.
+    #[cfg(unix)]
+    #[test]
+    fn a_found_oracle_still_fails_on_an_invalid_required_variable_name() {
+        let d = Scratch::new("found-name");
+        script(d.path(), "qpdf", "echo 'qpdf version 11.9.0'");
+        let found = || find_on(d.path(), "qpdf", "--version", ProbeLimits::VERSION);
+        assert!(outcome(found(), "PDFCRAFT_ORACLES_REQUIRED").is_ok());
+        let decided = outcome(found(), "CRAFT=REQUIRED");
+        assert!(matches!(decided, Err(Outcome::Fail(ref m)) if m.contains("cannot name a variable")), "{decided:?}");
     }
 
     #[test]
@@ -1134,15 +962,6 @@ mod tests {
     // Behavior of the shared module.
 
     #[test]
-    fn required_value_is_exactly_one() {
-        assert!(required(Some(OsStr::new("1"))));
-        for v in ["", "0", " 1", "1 ", "01", "true", "TRUE", "yes", "on"] {
-            assert!(!required(Some(OsStr::new(v))), "{v:?}");
-        }
-        assert!(!required(None));
-    }
-
-    #[test]
     fn invalid_variable_names_are_errors() {
         for name in ["", "CRAFT=FFMPEG", "CRAFT_\0FFMPEG"] {
             let found = find_with("craft-testkit-no-such-oracle-binary", "--version", name, ProbeLimits::VERSION);
@@ -1185,6 +1004,21 @@ mod tests {
         assert_ne!(key_a, key_b);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn drive_relative_paths_use_the_captured_directory() {
+        let directory = Scratch::new("drive-relative");
+        let expected = directory.file("qpdf.exe");
+        let drive = directory.path().components().next().unwrap();
+        let relative = PathBuf::from(drive.as_os_str()).join("qpdf.exe");
+        let mut inputs = search("qpdf", Some(relative.as_os_str()), None, &[]);
+        inputs.windows = true;
+        inputs.cwd = Some(directory.path());
+        let found = locate(&inputs).unwrap();
+        assert!(found.is_absolute(), "{}", found.display());
+        assert_eq!(found, expected);
+    }
+
     #[test]
     fn windows_exe_and_pathext_order_is_honored() {
         let pathext = OsStr::new(".COM;.EXE;.BAT;.CMD;.VBS;.cmd;;");
@@ -1218,35 +1052,27 @@ mod tests {
         assert!(matches!(found, Err(OracleError::InvalidExplicitPath { .. })), "{found:?}");
     }
 
-    /// A file the current user may not run that comes earlier on `PATH` than a usable copy is passed
-    /// over for the usable copy. As an explicit path, or as the only file found, it is a start error.
-    /// The test skips when the user can open a mode-000 file, as root can, since such a user may also
-    /// run a mode-001 file.
     #[cfg(unix)]
     #[test]
-    fn a_file_the_user_may_not_run_is_passed_over() {
+    fn path_lookup_uses_the_current_process_execute_permission() {
         use std::os::unix::fs::PermissionsExt;
-        let a = Scratch::new("denied-a");
-        let b = Scratch::new("denied-b");
-        let unreadable = a.file("unreadable");
-        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
-        if std::fs::File::open(&unreadable).is_ok() {
-            eprintln!("SKIPPED: file permissions do not apply to this user");
-            return;
+        let first = Scratch::new("owner-noexec");
+        let second = Scratch::new("owner-exec");
+        let candidate = script(first.path(), "qpdf", "printf 'first\\n'");
+        let usable = script(second.path(), "qpdf", "printf 'second\\n'");
+        let path = std::env::join_paths([first.path(), second.path()]).unwrap();
+        for mode in [0o601, 0o610] {
+            std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(mode)).unwrap();
+            let can_start = Command::new(&candidate).output().is_ok();
+            let found = find_in("qpdf", "--version", None, Some(&path), &[], ProbeLimits::default()).unwrap();
+            assert_eq!(found.path(), if can_start { candidate.as_path() } else { usable.as_path() });
+            let explicit = locate(&search("qpdf", Some(candidate.as_os_str()), None, &[]));
+            if can_start {
+                assert_eq!(explicit.unwrap(), candidate);
+            } else {
+                assert!(matches!(explicit, Err(OracleError::InvalidExplicitPath { .. })), "{explicit:?}");
+            }
         }
-        let refused = script(a.path(), "tool", "echo refused 1.0");
-        std::fs::set_permissions(&refused, std::fs::Permissions::from_mode(0o001)).unwrap();
-        let usable = script(b.path(), "tool", "echo usable 1.0");
-        let is_denied = |r: &Result<Oracle, OracleError>| matches!(r, Err(e) if denied(e));
-
-        let path = std::env::join_paths([a.path(), b.path()]).unwrap();
-        let found = find_in("tool", "-v", None, Some(&path), &[], ProbeLimits::VERSION).unwrap();
-        assert_eq!((found.path(), found.version()), (usable.as_path(), "usable 1.0"));
-
-        let explicit = find_in("tool", "-v", Some(refused.as_os_str()), None, &[], ProbeLimits::VERSION);
-        assert!(is_denied(&explicit), "{explicit:?}");
-        let only = find_on(a.path(), "tool", "-v", ProbeLimits::VERSION);
-        assert!(is_denied(&only), "{only:?}");
     }
 
     /// On Windows only a `.com`, `.exe`, `.bat` or `.cmd` file, in any case, is found or accepted.
@@ -1288,74 +1114,8 @@ mod tests {
     fn version_line_prefers_stdout_then_stderr() {
         assert_eq!(version_line(b"qpdf version 11.9.0\nRun qpdf --copyright\n", b"ignored"), "qpdf version 11.9.0");
         assert_eq!(version_line(b"\n", b"pdftoppm version 24.02.0\n"), "pdftoppm version 24.02.0");
+        assert_eq!(version_line("\u{a0}\n\u{2003}\n".as_bytes(), b"qpdf version 11.9.0\n"), "qpdf version 11.9.0");
         assert_eq!(version_line(b"", b""), "");
-        // Standard output that holds only a no-break space has no non-blank line either.
-        assert_eq!(version_line("\u{a0}\n".as_bytes(), b"tool 1.0\n"), "tool 1.0");
-    }
-
-    #[test]
-    fn an_invalid_timeout_is_an_error_when_nothing_is_found() {
-        let limits = ProbeLimits { max_output_bytes: 1024, timeout: Duration::MAX };
-        let got = find_in("craft-testkit-no-such-oracle-binary", "-v", None, None, &[], limits);
-        assert!(matches!(got, Err(OracleError::InvalidTimeout { .. })), "{got:?}");
-    }
-
-    /// A drive-relative explicit path or `PATH` entry, such as `C:bin\tool.exe`, is joined to the
-    /// current directory when that directory is on the same drive.
-    #[cfg(windows)]
-    #[test]
-    fn a_drive_relative_path_is_anchored_to_the_current_directory() {
-        let d = Scratch::new("drive-relative");
-        std::fs::create_dir(d.path().join("bin")).unwrap();
-        let exe = d.file(r"bin\tool.exe");
-        let Some(Component::Prefix(drive)) = d.path().components().next() else {
-            panic!("{} has no drive", d.path().display());
-        };
-        let mut given = drive.as_os_str().to_os_string();
-        given.push(r"bin\tool.exe");
-        let mut s = search("tool", Some(given.as_os_str()), None, &[]);
-        s.windows = true;
-        s.cwd = Some(d.path());
-        assert_eq!(locate(&s).unwrap(), exe);
-        let mut dir = drive.as_os_str().to_os_string();
-        dir.push("bin");
-        s.explicit = None;
-        s.path_list = Some(dir.as_os_str());
-        assert_eq!(locate(&s).unwrap(), exe);
-    }
-
-    #[test]
-    fn output_is_read_up_to_the_limit() {
-        assert_eq!(read_capped(&[7u8; 100][..], 100).ok(), Some(vec![7u8; 100]));
-        assert!(matches!(read_capped(&[7u8; 101][..], 100), Err(ReadFail::Limit(_))));
-        assert_eq!(read_capped(&[][..], 0).ok(), Some(Vec::new()));
-    }
-
-    /// A reader that sets its flag when it is dropped, standing in for a pipe that closes.
-    struct Closes(&'static [u8], std::sync::Arc<std::sync::atomic::AtomicBool>);
-
-    impl Read for Closes {
-        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            self.0.read(buf)
-        }
-    }
-
-    impl Drop for Closes {
-        fn drop(&mut self) {
-            self.1.store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-
-    /// The pipe stays open past the output limit until the caller drops the failure, so the child
-    /// is still running when the probe ends its process tree.
-    #[test]
-    fn output_over_the_limit_keeps_the_pipe_open() {
-        let closed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let failed = read_capped(Closes(&[7u8; 101], closed.clone()), 100);
-        assert!(matches!(failed, Err(ReadFail::Limit(_))));
-        assert!(!closed.load(std::sync::atomic::Ordering::SeqCst), "the pipe closed when the limit was passed");
-        drop(failed);
-        assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[cfg(unix)]
@@ -1418,179 +1178,25 @@ mod tests {
         assert!(matches!(ffmpeg_supports_format(&ff, "mov", ProbeLimits::LISTING), Err(OracleError::Failed { .. })));
     }
 
-    /// Whether a process with this id still exists, reaped or not. An unreaped child stays visible.
-    #[cfg(unix)]
-    fn process_exists(pid: u32) -> bool {
-        Command::new("sh").arg("-c").arg(format!("kill -0 {pid} 2>/dev/null")).status().unwrap().success()
-    }
-
+    /// A probe that runs past its timeout maps to `OracleError::Timeout` with the program's path.
     #[cfg(unix)]
     #[test]
-    fn version_child_is_reaped_after_timeout() {
+    fn version_probe_past_its_timeout_is_a_timeout() {
         let d = Scratch::new("hang");
         let tool = script(d.path(), "tool", "exec sleep 1000");
-        let mut seen = Observed::default();
-        // The child writes nothing and a zero timeout has passed when the wait starts, so the result
-        // does not depend on timing.
         let limits = ProbeLimits { max_output_bytes: 1024, timeout: Duration::ZERO };
-        let got = run_bounded(Command::new(&tool), &tool, limits, &mut seen);
-        assert!(matches!(got, Err(OracleError::Timeout { .. })), "the child must time out");
-        let pid = seen.pid.unwrap();
-        assert!(!process_exists(pid), "child {pid} was left running or unreaped");
+        let got = find_on(d.path(), "tool", "-v", limits);
+        assert!(matches!(got, Err(OracleError::Timeout { ref path, timeout: Duration::ZERO }) if *path == tool), "{got:?}");
     }
 
+    /// A timeout too long to set a deadline maps to `OracleError::InvalidTimeout`.
+    #[cfg(unix)]
     #[test]
-    fn timeout_without_a_deadline_is_an_error() {
+    fn version_probe_with_an_unbounded_timeout_is_an_error() {
         let d = Scratch::new("no-deadline");
-        let tool = d.path().join("craft-testkit-no-such-oracle-binary");
-        let mut seen = Observed::default();
+        script(d.path(), "tool", "echo tool 1.0");
         let limits = ProbeLimits { max_output_bytes: 1024, timeout: Duration::MAX };
-        let got = run_bounded(Command::new(&tool), &tool, limits, &mut seen);
-        assert!(matches!(got, Err(OracleError::InvalidTimeout { .. })), "{got:?}");
-        assert_eq!(seen.pid, None, "the program must not start");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn version_child_is_reaped_after_output_limit() {
-        let d = Scratch::new("flood-reap");
-        let tool = script(d.path(), "tool", "exec yes");
-        let mut seen = Observed::default();
-        let limits = ProbeLimits { max_output_bytes: 1024, timeout: Duration::from_secs(60) };
-        let got = run_bounded(Command::new(&tool), &tool, limits, &mut seen);
-        assert!(matches!(got, Err(OracleError::OutputLimit { .. })));
-        let pid = seen.pid.unwrap();
-        assert!(!process_exists(pid), "child {pid} was left running or unreaped");
-    }
-
-    /// A process the child started in the background keeps standard error open. Killing the child's
-    /// process group ends it, so both pipe readers finish.
-    #[cfg(unix)]
-    #[test]
-    fn descendants_holding_the_pipes_are_killed_with_the_child() {
-        let d = Scratch::new("descendant");
-        let tool = script(d.path(), "tool", "sleep 1000 &\nexec yes");
-        let mut seen = Observed::default();
-        let limits = ProbeLimits { max_output_bytes: 1024, timeout: Duration::from_secs(60) };
-        let got = run_bounded(Command::new(&tool), &tool, limits, &mut seen);
-        assert!(matches!(got, Err(OracleError::OutputLimit { .. })), "{got:?}");
-        assert!(seen.pipes_closed, "a pipe reader was left blocked on a pipe a descendant holds");
-    }
-
-    /// The role `tree_member` plays: unset for a normal test run, `parent` or `grandchild` otherwise.
-    const TREE_ROLE: &str = "CRAFT_TESTKIT_ORACLE_TREE_ROLE";
-    /// The file the parent writes the grandchild's process id to.
-    const TREE_MARKER: &str = "CRAFT_TESTKIT_ORACLE_TREE_MARKER";
-    /// The file the test holds locked while the grandchild may run.
-    const TREE_LOCK: &str = "CRAFT_TESTKIT_ORACLE_TREE_LOCK";
-    /// The loopback port the grandchild connects to once its test body runs.
-    const TREE_READY: &str = "CRAFT_TESTKIT_ORACLE_TREE_READY";
-
-    /// This test binary run on `oracle::tests::tree_member` alone, with its output inherited.
-    fn tree_member_command(role: &str, marker: &Path, lock: &Path) -> Command {
-        let mut cmd = Command::new(std::env::current_exe().unwrap());
-        cmd.args(["--exact", "oracle::tests::tree_member", "--nocapture", "--test-threads=1"])
-            .env(TREE_ROLE, role)
-            .env(TREE_MARKER, marker)
-            .env(TREE_LOCK, lock);
-        cmd
-    }
-
-    /// Passes at once in a normal run. As `parent` it starts a `grandchild`, which inherits the
-    /// parent's standard output and error, waits until the grandchild connects to its loopback
-    /// listener, writes the grandchild's process id to the marker and then writes to standard output
-    /// until a write fails. As `grandchild` it connects, so the test harness has written its own
-    /// lines by then, and waits to take the lock on the lock file, which the test holds until it
-    /// ends, so a grandchild that outlives a killed test ends when the OS releases the test's lock.
-    #[test]
-    fn tree_member() {
-        let (Some(role), Some(marker), Some(lock)) = (std::env::var_os(TREE_ROLE), std::env::var_os(TREE_MARKER), std::env::var_os(TREE_LOCK)) else {
-            return;
-        };
-        let (marker, lock) = (PathBuf::from(marker), PathBuf::from(lock));
-        if role == "grandchild" {
-            let port: u16 = std::env::var(TREE_READY).unwrap().parse().unwrap();
-            drop(std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).unwrap());
-            std::fs::OpenOptions::new().read(true).write(true).open(&lock).unwrap().lock().unwrap();
-            return;
-        }
-        let ready = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let port = ready.local_addr().unwrap().port();
-        let mut grandchild = tree_member_command("grandchild", &marker, &lock).env(TREE_READY, port.to_string()).spawn().unwrap();
-        // A grandchild that never connects leaves the parent here until the probe's timeout kills it.
-        drop(ready.accept().unwrap());
-        let partial = marker.with_extension("partial");
-        std::fs::write(&partial, grandchild.id().to_string()).unwrap();
-        std::fs::rename(&partial, &marker).unwrap();
-        let mut out = io::stdout().lock();
-        while io::Write::write_all(&mut out, &[b'x'; 8192]).is_ok() {}
-        let _ = grandchild.wait();
-    }
-
-    /// Whether a process with this id is running. A process that has exited but was not yet reaped
-    /// does not count.
-    #[cfg(unix)]
-    fn process_running(pid: u32) -> bool {
-        let out = Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().unwrap();
-        let stat = String::from_utf8_lossy(&out.stdout);
-        let stat = stat.trim();
-        !stat.is_empty() && !stat.starts_with('Z')
-    }
-
-    /// Whether a process with this id is running.
-    #[cfg(windows)]
-    fn process_running(pid: u32) -> bool {
-        let filter = format!("PID eq {pid}");
-        let out = Command::new("tasklist").args(["/FI", &filter, "/FO", "CSV", "/NH"]).output().unwrap();
-        String::from_utf8_lossy(&out.stdout).contains(&format!(",\"{pid}\","))
-    }
-
-    /// Kills the process with this id when it is dropped while the test is failing, so a grandchild
-    /// that survived ends. A passing test has shown the process is gone and kills nothing.
-    struct EndOnDrop(u32);
-
-    impl Drop for EndOnDrop {
-        fn drop(&mut self) {
-            if !std::thread::panicking() {
-                return;
-            }
-            let pid = self.0.to_string();
-            #[cfg(unix)]
-            let _ = Command::new("kill").args(["-s", "KILL", &pid]).stderr(Stdio::null()).status();
-            #[cfg(windows)]
-            let _ = Command::new("taskkill").args(["/F", "/PID", &pid]).stdout(Stdio::null()).stderr(Stdio::null()).status();
-        }
-    }
-
-    /// A process the child started holds both pipes when the probe fails. Ending the child's process
-    /// group (Unix) or process tree (Windows) ends it too, so both pipe readers finish and the
-    /// process is gone. The child passes the output limit only after the grandchild has connected
-    /// back to it and the marker is written, so the result does not depend on how fast the processes
-    /// start, and the grandchild writes nothing more to the pipes before it ends. The grandchild
-    /// waits on a lock the test holds, so it needs no timer. A grandchild that survived is killed
-    /// when the test fails, and it also ends when the test's lock is released.
-    #[cfg(any(unix, windows))]
-    #[test]
-    fn descendant_holding_the_pipes_ends_when_the_probe_fails() {
-        let d = Scratch::new("tree");
-        let marker = d.path().join("grandchild-pid");
-        let lock_path = d.path().join("grandchild-lock");
-        let lock = std::fs::File::create(&lock_path).unwrap();
-        lock.lock().unwrap();
-        // The grandchild's wait proves nothing on a file system that does not enforce the lock.
-        // Both lock handles are writable: an exclusive lock on an NFS mount needs write access.
-        let other = std::fs::OpenOptions::new().read(true).write(true).open(&lock_path).unwrap();
-        assert!(matches!(other.try_lock(), Err(std::fs::TryLockError::WouldBlock)), "a second handle took the held lock");
-        drop(other);
-        let exe = std::env::current_exe().unwrap();
-        let mut seen = Observed::default();
-        // The timeout only bounds a broken run; the output limit ends a working one.
-        let limits = ProbeLimits { max_output_bytes: 64 * 1024, timeout: Duration::from_secs(60) };
-        let got = run_bounded(tree_member_command("parent", &marker, &lock_path), &exe, limits, &mut seen);
-        assert!(matches!(got, Err(OracleError::OutputLimit { .. })), "{got:?}");
-        let pid: u32 = std::fs::read_to_string(&marker).expect("the parent wrote no marker").trim().parse().unwrap();
-        let _end = EndOnDrop(pid);
-        assert!(seen.pipes_closed, "a pipe reader was left blocked on a pipe the grandchild holds");
-        assert!(!process_running(pid), "grandchild {pid} is still running");
+        let got = find_on(d.path(), "tool", "-v", limits);
+        assert!(matches!(got, Err(OracleError::InvalidTimeout { timeout: Duration::MAX })), "{got:?}");
     }
 }

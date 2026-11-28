@@ -14,6 +14,7 @@ use craft_ui::testing::{Fixture, Registry, trial};
 use egui::{Key, Modifiers, Pos2, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// App commands with the default modal rule: blocked while a dialog is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
@@ -488,7 +489,7 @@ fn the_active_row_marks_its_shown_control_and_a_hidden_home_goes_to_the_footer()
     // Flip is held by a rect in the corner, the way a menu title holds its commands; Rotate has a bound button.
     let mut rig = rig(entries, Some(vec![TrialCommand::Flip.into()]), false, |ui| {
         let corner = egui::Rect::from_min_size(ui.max_rect().min, Vec2::new(60.0, 20.0));
-        commands::holds(ui.ctx(), ui.layer_id(), corner, &[TrialCommand::Flip.into()], Label::from("Rail slot"));
+        commands::holds(ui.ctx(), ui.layer_id(), corner, &Arc::from([CommandRef::from(TrialCommand::Flip)]), Label::from("Rail slot"));
         ui.add_space(24.0);
         Button::command(TrialCommand::Rotate).show(ui);
     });

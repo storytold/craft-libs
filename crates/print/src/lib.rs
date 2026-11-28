@@ -625,7 +625,7 @@ const DISCOVERY_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
 pub fn printers() -> Vec<Printer> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        printers_via(&mut lpstat_command(), QUEUES_LIMIT, &mut lpstat_e_command(), DISCOVERY_LIMIT)
+        printers_via(&mut lpstat_command(), QUEUES_LIMIT, &mut lpstat_e_command(), DISCOVERY_LIMIT, &Clock::REAL)
     }
     #[cfg(windows)]
     {
@@ -637,18 +637,19 @@ pub fn printers() -> Vec<Printer> {
     }
 }
 
-/// [`printers`] with the two `lpstat` commands and their limits supplied, so tests can stand in a
-/// command that hangs.
+/// [`printers`] with the two `lpstat` commands, their limits and the clock the limits are kept
+/// against supplied, so tests can stand in a command that hangs.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 fn printers_via(
     queues: &mut std::process::Command,
     queues_limit: std::time::Duration,
     available: &mut std::process::Command,
     available_limit: std::time::Duration,
+    clock: &Clock<'_>,
 ) -> Vec<Printer> {
     // Exits 1 with only driverless printers ("No destinations added"); `-e` still finds them, so
     // the exit status isn't checked.
-    let queues = match output_within(queues, queues_limit) {
+    let queues = match output_within(queues, queues_limit, clock) {
         Ok(out) => String::from_utf8_lossy(&out).into_owned(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // A Flatpak needs lpstat/lp bundled plus the CUPS socket and Avahi (see README).
@@ -662,7 +663,7 @@ fn printers_via(
     };
     // A spooler without `-e`, or one whose discovery doesn't answer in time, only loses the
     // driverless names.
-    let available = match output_within(available, available_limit) {
+    let available = match output_within(available, available_limit, clock) {
         Ok(out) => Some(String::from_utf8_lossy(&out).into_owned()),
         Err(e) => {
             log::info!("lpstat -e gave no driverless printers ({e})");
@@ -676,18 +677,32 @@ fn printers_via(
 /// output capped, and given `limit` to answer (none when it doesn't).
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 fn queue_defaults(command: &mut std::process::Command, limit: std::time::Duration) -> Vec<(String, String)> {
-    output_within(command, limit).map(|out| parse_lpoptions(&String::from_utf8_lossy(&out))).unwrap_or_default()
+    output_within(command, limit, &Clock::REAL).map(|out| parse_lpoptions(&String::from_utf8_lossy(&out))).unwrap_or_default()
 }
 
 /// The most of a command's output that is read: far more than any `lpstat` listing.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 const OUTPUT_CAP: u64 = 4 << 20;
 
-/// Run `command` and collect its standard output, giving it `limit`: a command still running
-/// then is killed and reaped, and the error is `TimedOut`. Standard input and error are not
-/// connected. The exit status is not checked, as `Command::output` leaves it to the caller.
+/// The time [`output_within`] keeps a command's limit against (`now`), and how it waits before
+/// it checks on the command again (`pause`).
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn output_within(command: &mut std::process::Command, limit: std::time::Duration) -> std::io::Result<Vec<u8>> {
+struct Clock<'a> {
+    now: &'a dyn Fn() -> std::time::Instant,
+    pause: &'a dyn Fn(),
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+impl Clock<'static> {
+    /// The real clock, checking on the command every 10 ms.
+    const REAL: Clock<'static> = Clock { now: &std::time::Instant::now, pause: &|| std::thread::sleep(std::time::Duration::from_millis(10)) };
+}
+
+/// Run `command` and collect its standard output, giving it `limit` on `clock`: a command still
+/// running then is killed and reaped, and the error is `TimedOut`. Standard input and error are
+/// not connected. The exit status is not checked, as `Command::output` leaves it to the caller.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn output_within(command: &mut std::process::Command, limit: std::time::Duration, clock: &Clock<'_>) -> std::io::Result<Vec<u8>> {
     use std::io::Read as _;
     use std::process::Stdio;
     let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
@@ -717,23 +732,23 @@ fn output_within(command: &mut std::process::Command, limit: std::time::Duration
         return Err(e);
     }
     let timed_out = || std::io::Error::new(std::io::ErrorKind::TimedOut, format!("the command did not answer within {limit:?}"));
-    let deadline = std::time::Instant::now() + limit;
+    let deadline = (clock.now)() + limit;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => {
                 // A moment's grace, so output written just before an exit at the deadline counts.
-                let left = deadline.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_millis(100));
+                let left = deadline.saturating_duration_since((clock.now)()).max(std::time::Duration::from_millis(100));
                 return match rx.recv_timeout(left) {
                     Ok(read) => read,
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(timed_out()),
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::other("the command's output was lost")),
                 };
             }
-            Ok(None) if std::time::Instant::now() >= deadline => {
+            Ok(None) if (clock.now)() >= deadline => {
                 stop(&mut child);
                 return Err(timed_out());
             }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Ok(None) => (clock.pause)(),
             Err(e) => {
                 stop(&mut child);
                 return Err(e);

@@ -413,7 +413,7 @@ impl Reader {
         }
         let blocks = std::mem::take(&mut s.blocks);
         s.read = true;
-        self.para.inlines.push(Inline::Shape { kind, w, h, float: Some(Box::new(f)), blocks, look, path: None });
+        self.para.inlines.push(Inline::Shape { kind, w, h, float: Some(Box::new(f)), blocks, look, path: None, link: None });
         self.para_has = true;
     }
 }

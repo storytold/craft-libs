@@ -12,6 +12,7 @@
 //! a boolean per clipped shape, and a clip edge is then the same edge in every region it bounds.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use kurbo::{BezPath, CubicBez, ParamCurve, ParamCurveNearest, PathEl, PathSeg, Point, Rect, Shape as _, Vec2};
 use linesweeper::topology::{ContourIdx, Contours, Topology, WindingNumber};
@@ -212,8 +213,12 @@ pub fn transparent_groups(bounds: &[Rect], transparent: &[bool]) -> Vec<Vec<usiz
 /// Winding numbers for any number of inputs: the non-zero ones as (tag, winding), sorted by tag.
 /// A face is covered by a few inputs, so this stays short where a vector of every input's winding
 /// would cost one step per input.
+///
+/// The list is behind an `Arc`. The sweep stores both sides of every segment, and a segment's
+/// clockwise side is a clone of the previous segment's counter-clockwise side, so a clone shares
+/// the list and `+=` copies it only when it is shared.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-struct Multi(Vec<(usize, i32)>);
+struct Multi(Arc<Vec<(usize, i32)>>);
 
 impl Multi {
     fn get(&self, tag: usize) -> i32 {
@@ -233,17 +238,21 @@ impl std::ops::AddAssign for Multi {
     fn add_assign(&mut self, rhs: Self) {
         // The sweep mostly adds one input's ±1 to a short list: add in place, insert in tag order,
         // drop a winding that reaches zero.
-        for (t, k) in rhs.0 {
-            match self.0.binary_search_by_key(&t, |e| e.0) {
+        if rhs.0.iter().all(|e| e.1 == 0) {
+            return;
+        }
+        let list = Arc::make_mut(&mut self.0);
+        for &(t, k) in rhs.0.iter() {
+            match list.binary_search_by_key(&t, |e| e.0) {
                 Ok(i) => {
-                    if let Some(e) = self.0.get_mut(i) {
+                    if let Some(e) = list.get_mut(i) {
                         e.1 += k;
                         if e.1 == 0 {
-                            self.0.remove(i);
+                            list.remove(i);
                         }
                     }
                 }
-                Err(i) if k != 0 => self.0.insert(i, (t, k)),
+                Err(i) if k != 0 => list.insert(i, (t, k)),
                 Err(_) => {}
             }
         }
@@ -253,11 +262,11 @@ impl std::ops::AddAssign for Multi {
 impl WindingNumber for Multi {
     type Tag = usize;
     fn single(tag: usize, positive: bool) -> Self {
-        Multi(vec![(tag, if positive { 1 } else { -1 })])
+        Multi(Arc::new(vec![(tag, if positive { 1 } else { -1 })]))
     }
     fn of_tag(&self, tag: usize) -> Self {
         let w = self.get(tag);
-        Multi(if w == 0 { vec![] } else { vec![(tag, w)] })
+        Multi(Arc::new(if w == 0 { vec![] } else { vec![(tag, w)] }))
     }
 }
 
@@ -1032,6 +1041,33 @@ mod tests {
         let stack = |n: usize| -> Vec<Rect> { (0..n).map(|i| Rect::new(0.0, 2.0 * i as f64, 10.0, 2.0 * i as f64 + 1.0)).collect() };
         assert_eq!(overlap_groups(&stack(2_000)).len(), 2_000, "2 million comparisons: compared one by one");
         assert_eq!(overlap_groups(&stack(4_000)).len(), 1, "8 million comparisons: folded");
+    }
+
+    /// A segment's clockwise side holds the same winding as the previous segment's
+    /// counter-clockwise side, and the two sides share one stored list instead of two copies.
+    #[test]
+    fn neighboring_sides_share_one_winding_list() {
+        // Eight squares that all cross each other.
+        let shapes: Vec<Shape> = (0..8)
+            .map(|i| {
+                let i = i as f64;
+                fill(rect(i, i + 0.25, i + 8.0, i + 8.25))
+            })
+            .collect();
+        let a = Arrangement::new(&shapes, &[], DEFAULT_SLIVER).unwrap();
+        let mut sides = 0;
+        let mut lists = std::collections::HashSet::new();
+        for s in a.top.segment_indices() {
+            let h = s.first_half();
+            for w in [a.top.winding_clockwise(h), a.top.winding_counter_clockwise(h)] {
+                if !w.0.is_empty() {
+                    sides += 1;
+                    lists.insert(w.0.as_ptr().addr());
+                }
+            }
+        }
+        assert!(sides > 100, "{sides} sides");
+        assert!(lists.len() * 3 <= sides * 2, "{} lists for {sides} sides", lists.len());
     }
 
     /// One open cubic per path, from `p0` to `p3` through the two handles.

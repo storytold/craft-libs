@@ -458,8 +458,16 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
     let pointer = !scrubs || in_edit_before || (focused && !core.press.phase.is_drag());
     core.text_takes_pointer = pointer;
     let read_only = core.resolved.read_only || !enabled;
-    let ink = decl.options.ink.map_or(ink, |own| crate::style::ink_color(&crate::runtime::env::Env::of(ui).tokens, own));
-    let ink = if enabled { ink } else { crate::style::rgba_color(crate::runtime::env::Env::of(ui).tokens.color.text.disabled) };
+    // The tokens of the place the field is shown in, read only for an ink of its own or a disabled field.
+    let place = (decl.options.ink.is_some() || !enabled).then(|| crate::runtime::env::Env::of(ui));
+    let ink = match (decl.options.ink, &place) {
+        (Some(own), Some(place)) => crate::style::ink_color(&place.tokens, own),
+        _ => ink,
+    };
+    let ink = match &place {
+        Some(place) if !enabled => crate::style::rgba_color(place.tokens.color.text.disabled),
+        _ => ink,
+    };
     let held = core.popup(EDIT_MENU).is_open_in(core);
     // The text the part shows now: its resting text while it is idle and has one, else the value's own.
     let current = decl.options.resting.as_deref().filter(|_| !focused && !held && state.draft.is_none()).unwrap_or(&decl.shown);
@@ -604,9 +612,23 @@ pub(crate) fn run<C: Component>(
     let mut state = std::mem::take(cx.core.memory.shown::<TextState>(state_id));
     // A part that was not shown last pass lost its focus, and its typing run with it: the run is forgotten (step 4
     // ended its gesture without putting back the value from before it), and the part starts afresh from its value.
-    if !crate::runtime::memory::shown_last_pass(&ctx, id) {
+    let shown_last_pass = crate::runtime::memory::shown_last_pass(&ctx, id);
+    if !shown_last_pass || state.edit_target != part.options.edit_target {
+        // The old target's draft and gesture must never reach the new target's binding. A hidden part's gesture
+        // already ended, but its widget may still retain history and composition.
+        if shown_last_pass {
+            cx.cancel(CancelReason::HostChanged);
+        }
+        let widget = adapter::text_id(id, part.key);
+        crate::runtime::egui::text_edit::clear_history(&ctx, widget);
+        crate::runtime::ime::request_interrupt(&ctx, widget);
+        // Input was folded before this part ran; discard events already queued for the old target too.
+        let _ = crate::runtime::ime::take(&ctx, widget, false);
+        // A focus change may already have handed the old composition to this adapter.
+        let _ = crate::runtime::ime::take_leaving(&ctx, widget);
         state = TextState::default();
     }
+    state.edit_target = part.options.edit_target;
     (decl.values.resync)(&mut state, shown_copy(cx).as_ref());
     let text = prepare(cx.core, ui, part, &mut state, AdapterSettings { keys, rtl, ink, underline }, step.commit_now);
     let PreparedText { widget, out, read_only, list_open, caret_visible, commit_now, was_focused, window_blur, menu_open, left_for_part } = text;

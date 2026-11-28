@@ -360,7 +360,7 @@ pub struct MaskInfo {
 }
 
 /// A layer's locks. Start from `LayerLocks::default()` (nothing locked) and set the fields that are on.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PlainData)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PlainData, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct LayerLocks {
     /// Lock transparent pixels.
@@ -536,7 +536,7 @@ impl SubRow {
 }
 
 /// The active layer's properties, for [`BlendRows`](super::rows::BlendRows).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct LayerProperties {
     /// The blend mode's key.
