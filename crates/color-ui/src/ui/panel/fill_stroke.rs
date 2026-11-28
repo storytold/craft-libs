@@ -196,6 +196,8 @@ impl Body<'_> {
         if before.model == after.model && before.color.to_rgba() == after.color.to_rgba() {
             return;
         }
+        // The rows' kept values in the chip's model would win over a host that keeps only sRGB (a grey's HSB hue).
+        self.kept.values[self.target.index()].retain(|v| v.model != values.model);
         let name = self.words.title.as_str();
         self.push(self.target, EditEvent::set(Mixed::Same(before), after, name.into(), None));
     }

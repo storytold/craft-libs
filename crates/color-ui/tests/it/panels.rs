@@ -405,6 +405,50 @@ fn a_fill_stroke_recent_pick_keeps_the_chips_model() {
     assert!(edits.is_empty(), "the chip's own values set nothing: {edits:?}");
 }
 
+/// A Recent Colors pick drops the HSB values the rows kept for a grey: after a host that keeps only sRGB applies a grey
+/// chip with HSB values, the Hue row reads the grey afresh instead of the hue of the earlier row edits.
+#[trial]
+fn a_fill_stroke_recent_pick_drops_the_rows_kept_hue() {
+    let grey = Srgba::rgb(0.5, 0.5, 0.5);
+    let chip = [grey];
+    let chip_hsb = ModelValues::new("hsb", &[0.0, 0.0, 50.0]);
+    let host = Rc::new(RefCell::new(grey));
+    let color = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| {
+        let current = *color.borrow();
+        let mut state = ColorPanelState { mode: ColorPanelMode::HsbSliders, ..Default::default() };
+        let shown = ColorPanel::new(Bind::bound(&mut state), [current, BLUE])
+            .layout(ColorPanelLayout::FillStroke)
+            .edited(Some(PickedColor::rgb(current)))
+            .shown(ColorPanelShown::Mode(ColorPanelMode::HsbSliders))
+            .recent(&chip)
+            .recent_models(&[Some(chip_hsb)])
+            .show(ui);
+        for (_, event) in &shown.edits {
+            if let Some(picked) = event.landed() {
+                *color.borrow_mut() = picked.color;
+            }
+        }
+    });
+    fixture.room(COLOR_ROOM).settle();
+    let hue = fixture.by_role(Role::SLIDER).into_iter().next().expect("the hue slider");
+    fixture.access(AccessActionKind::Focus, &hue).settle();
+    for _ in 0..20 {
+        fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+    }
+    let hue_value = |fixture: &mut Fixture| {
+        let hue = fixture.by_role(Role::SLIDER).into_iter().next().expect("the hue slider");
+        fixture.access(AccessActionKind::Focus, &hue).settle();
+        let id = fixture.focused().expect("the hue slider takes the focus");
+        fixture.tree().value(id).expect("the hue slider reports its value").to_owned()
+    };
+    let stepped = hue_value(&mut fixture);
+    assert_ne!(stepped, "0", "the steps moved the kept hue of the grey");
+    let recent = fixture.by_label(&grey.to_hex()).expect("the recent chip is named by its hex");
+    fixture.click(&recent).settle();
+    assert_eq!(hue_value(&mut fixture), "0", "the pick drops the kept hue {stepped}");
+}
+
 /// In a host sized by its content (a floating Color panel) the FillStroke spectrum is as tall as its end boxes stacked,
 /// each at least as tall as it is wide, not a thin band; in a short group it keeps that height and the body scrolls.
 #[trial]
