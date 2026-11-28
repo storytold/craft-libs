@@ -248,10 +248,21 @@ impl PaintUi<'_> {
     }
 
     /// Paints `face` for `part`; a `reported` face gives the part's sub-node its facts (`steps::report_parts`).
+    /// The face paints under the composite's resolved size, the size `MeasureCx::face` measured it at: a composite
+    /// sized apart from its scope (`ControlSize::Sm` in an `Md` scope) lays its parts out at its own size, and a face
+    /// painted at the scope's size would not fit them.
     fn face_with<C: Show>(&mut self, part: PartRef, face: C, ink: Option<&Stateful<StyleColor>>, reported: bool) {
         let Some(result) = self.results.get(&(part.key, part.index)) else {
             debug_assert!(false, "face for a part `parts` did not declare");
             return;
+        };
+        let size = self.size;
+        let sized;
+        let env = if self.env.size == size {
+            self.env
+        } else {
+            sized = self.env.derive_local(|scoped| scoped.size = size);
+            &sized
         };
         let focus = self.active.filter(|(active, _)| *active == part).map(|(_, visible)| visible);
         let source = FaceSource {
@@ -266,7 +277,7 @@ impl PaintUi<'_> {
             faded: self.fade.is_some(),
             reported: reported && self.node,
         };
-        let (baseline, record) = run::paint_face(self.ui, self.env, &source, part, face);
+        let (baseline, record) = run::paint_face(self.ui, env, &source, part, face);
         let mut own = self.record.borrow_mut();
         if let Some(baseline) = baseline {
             own.baseline.get_or_insert(baseline);
