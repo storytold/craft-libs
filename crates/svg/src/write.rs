@@ -40,13 +40,16 @@ pub struct Scene {
     pub elements: Vec<Element>,
 }
 
-/// Structured SVG elements supported by the path-document writer.
+/// Structured SVG elements supported by the path-document writer. An `Image`'s `href` is its
+/// URL, usually a `data:` URL that embeds the picture (SVG 2's `href`, so the document needs no
+/// xlink namespace); it is escaped like every attribute value.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Element {
     Group { attributes: Vec<Attribute>, children: Vec<Element> },
     Path { attributes: Vec<Attribute>, path: BezPath },
     Rect { attributes: Vec<Attribute>, x: f64, y: f64, width: f64, height: f64 },
     Text { attributes: Vec<Attribute>, x: f64, y: f64, text: String },
+    Image { attributes: Vec<Attribute>, x: f64, y: f64, width: f64, height: f64, href: String },
     Title(String),
     Style(String),
     NestedSvg { attributes: Vec<Attribute>, children: Vec<Element> },
@@ -171,6 +174,17 @@ fn write_elements(writer: &mut SvgWriter, elements: &[Element], depth: usize) {
                 ];
                 attrs.extend(attributes.iter().cloned());
                 write_attributes(writer.tag("rect"), &attrs).empty();
+            }
+            Element::Image { attributes, x, y, width, height, href } => {
+                let mut attrs = vec![
+                    Attribute::number("x", *x),
+                    Attribute::number("y", *y),
+                    Attribute::number("width", *width),
+                    Attribute::number("height", *height),
+                    Attribute::text("href", href.as_str()),
+                ];
+                attrs.extend(attributes.iter().cloned());
+                write_attributes(writer.tag("image"), &attrs).empty();
             }
             Element::Text { attributes, x, y, text } => {
                 let mut attrs = vec![Attribute::number("x", *x), Attribute::number("y", *y)];
@@ -435,6 +449,33 @@ mod tests {
         assert!(scene.write().contains("viewBox=\"0 0 100 150\""));
         assert!(scene.write_fixed_view_box().contains("viewBox=\"0.000 0.000 100.000 150.000\""));
         assert_eq!(Attribute::translate_scale_fixed(6.0, 46.0, 0.5, -0.5).value, Value::Text("translate(6.000 46.000) scale(0.5000 -0.5000)".into()));
+    }
+
+    #[test]
+    fn scene_images_are_placed_and_their_url_cannot_add_markup() {
+        let image = |href: &str| Element::Image {
+            attributes: vec![Attribute::text("preserveAspectRatio", "none")],
+            x: 1.0,
+            y: 2.0,
+            width: 30.0,
+            height: 20.0,
+            href: href.into(),
+        };
+        let scene = Scene {
+            width_mm: 100.0,
+            height_mm: 150.0,
+            view_box: [0.0, 0.0, 100.0, 150.0],
+            elements: vec![image("data:image/png;base64,iVBORw0KGgo="), image("x\"/><script>alert(1)</script><image href=\"")],
+        };
+        let svg = scene.write();
+        assert!(
+            svg.contains(
+                r#"<image x="1.000" y="2.000" width="30.000" height="20.000" href="data:image/png;base64,iVBORw0KGgo=" preserveAspectRatio="none"/>"#
+            ),
+            "{svg}"
+        );
+        assert!(!svg.contains("<script"), "a URL stays inside its attribute: {svg}");
+        assert_eq!(svg.matches("<image").count(), 2, "{svg}");
     }
 
     #[test]
