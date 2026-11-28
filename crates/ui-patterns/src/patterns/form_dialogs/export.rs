@@ -15,6 +15,7 @@ use super::PreviewRequest;
 use crate::contract::SaveKey;
 use crate::runtime::env::Label;
 use craft_behavior::PixelSize;
+use egui::load::SizedTexture;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -53,6 +54,12 @@ craft_ui::words! {
         bits: "export.bits" = "Bits/Pixel";
         auto: "export.auto" = "Auto";
         preview: "export.preview" = "Preview";
+        /// The name of the asset list the dialog draws when the export takes several assets.
+        assets: "export.assets" = "Assets";
+        /// Shown in the preview's place for an asset that has no pixels.
+        image_empty: "export.imageEmpty" = "Image is empty.";
+        /// What a row that is not ticked says.
+        row_not_exported: "export.rowNotExported" = "Image will not be exported. Select item to get more details.";
         ico_limit: "export.icoLimit" = "ICO is limited to 256 × 256 pixels";
         scale_range: "export.scaleRange" = "Scale must be within 1–1000 percent";
         pixel_range: "export.pixelRange" = "Export size must be within 1–300,000 pixels";
@@ -505,19 +512,126 @@ impl ExportPreview {
     }
 }
 
+/// One asset an Export As of several assets offers, as the app describes it: the dialog reads nothing of the app's
+/// document, the way it reads no pixels for the preview.
+#[derive(Clone, Debug, PartialEq, crate::contract::Props)]
+#[non_exhaustive]
+pub struct ExportAsAsset {
+    /// The app's id for the asset; the row, its estimate answers and the result carry it. Ids must be unique: a row is
+    /// selected by its id, an estimate answer reaches the row of that id, and the answer names each row by its id, so
+    /// two rows carrying one id cannot be told apart. The name an app passes may repeat — a layers panel holds layers
+    /// of the same name — so the host makes the ids differ where its names do not.
+    pub id: String,
+    /// The name as the app passes it: the row's text, and the accessible name of the row and of its tick box.
+    pub name: String,
+    /// The asset's own size in pixels: the size the row shows and the size its settings scale.
+    pub source: PixelSize,
+    /// The asset has no pixels to export. Its row has no thumbnail, format, size or estimate, and selecting it says so.
+    #[prop]
+    pub empty: bool,
+    /// The row's picture, at the size it is drawn in; `None` shows no thumbnail.
+    #[prop]
+    pub thumbnail: Option<SizedTexture>,
+    /// The settings this row opens with.
+    #[prop]
+    pub options: ExportOptions,
+}
+
+impl ExportAsAsset {
+    /// The asset with the app's `id` and `name`, of `source` pixels, opening with [`ExportOptions::default`], not
+    /// empty and without a thumbnail.
+    pub fn new(id: impl Into<String>, name: impl Into<String>, source: PixelSize) -> Self {
+        ExportAsAsset { id: id.into(), name: name.into(), source, empty: false, thumbnail: None, options: ExportOptions::default() }
+    }
+}
+
+/// One row of an asset list, as the dialog keeps it while it is open.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ExportAsRow {
+    /// The asset the row stands for.
+    pub asset: ExportAsAsset,
+    /// The settings the row exports with: the dialog's settings edit the selected row's, and its row column shows them.
+    pub options: ExportOptions,
+    /// Whether the row takes part in the export. Space and a press on the tick box change it.
+    pub ticked: bool,
+}
+
+/// One estimate of a row: the settings the app was asked to measure, and its answer.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ExportAsRowEstimate {
+    /// The asset's id.
+    pub id: String,
+    /// The settings the dialog asked the app to measure, as it asked for no more of them.
+    pub asked: ExportOptions,
+    /// The app's answer for `asked`; `None` while it has given none.
+    pub estimate: Option<SizeEstimate>,
+}
+
+/// The asset list as the dialog keeps it while it is open: one row per asset, which row the settings edit, and the
+/// estimates the app has been asked for.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct ExportAsRows {
+    /// The rows, in the order the app gave them: the order the list draws them and the order Export answers them.
+    pub rows: Vec<ExportAsRow>,
+    /// The selected row, counted from 0; the row whose settings the dialog's right-hand rows edit.
+    pub selected: usize,
+    /// The estimates asked for, oldest first. A row shows the entry asked for the settings it holds, and waits while
+    /// that entry has no answer.
+    pub estimates: Vec<ExportAsRowEstimate>,
+}
+
+impl ExportAsRows {
+    /// One row per asset: each opens with the settings the asset carries and ticked unless the asset is empty, and the
+    /// first row is selected.
+    pub fn new(assets: impl IntoIterator<Item = ExportAsAsset>) -> Self {
+        ExportAsRows {
+            rows: assets.into_iter().map(|asset| ExportAsRow { ticked: !asset.empty, options: asset.options.clone(), asset }).collect(),
+            selected: 0,
+            estimates: Vec::new(),
+        }
+    }
+
+    /// The rows Export writes, in the list's order.
+    pub fn ticked(&self) -> impl Iterator<Item = &ExportAsRow> {
+        self.rows.iter().filter(|row| row.ticked)
+    }
+}
+
+/// One row an asset-list Export As answers with: the asset, the settings confirmed for it, and what it writes.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ExportAsRowResult {
+    /// The asset's id, as the app gave it.
+    pub id: String,
+    /// The settings the user confirmed for this row.
+    pub options: ExportOptions,
+    /// The row's output size in pixels, from the asset's own size.
+    pub size: PixelSize,
+    /// The files this row writes ([`ExportOptions::outputs`]): one per Scale All row.
+    pub outputs: Vec<ExportOutput>,
+}
+
 /// What Export As answers with at Export: the options, the chosen path and the output size.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ExportAsResult {
-    /// The settings the user confirmed.
+    /// The settings the user confirmed. With an asset list these are the selected row's; the rows carry each row's.
     pub options: ExportOptions,
     /// The file the user chose to write; the folder when the export writes more than one file.
     pub path: PathBuf,
-    /// The output size in pixels.
+    /// The output size in pixels. With an asset list this is the selected row's, measured from that row's own asset;
+    /// the document's size only when the dialog was opened over one file, or over a list with no rows in it.
     pub size: PixelSize,
-    /// The files to write ([`ExportOptions::outputs`]). With more than one, `path` is the folder the user chose and
-    /// the app names each file `<name><suffix>.<extension>`.
+    /// The files to write ([`ExportOptions::outputs`]), measured the way [`size`](Self::size) is. With more than one,
+    /// `path` is the folder the user chose and the app names each file `<name><suffix>.<extension>`.
     pub outputs: Vec<ExportOutput>,
+    /// The rows to write when the dialog was opened with an asset list ([`ExportAsRows`]): the ticked rows, in the
+    /// list's order, each with its own settings. Empty when the dialog was opened over one file, as
+    /// [`files`](as_dialog::ExportAsDialog::files) counts it.
+    pub rows: Vec<ExportAsRowResult>,
     remember: Option<(SaveKey, ExportOptions)>,
 }
 

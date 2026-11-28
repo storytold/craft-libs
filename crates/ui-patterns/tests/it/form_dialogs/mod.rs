@@ -5,6 +5,7 @@ pub(crate) mod about;
 pub(crate) mod dialog;
 pub(crate) mod document_layout;
 pub(crate) mod export;
+pub(crate) mod export_rows;
 pub(crate) mod files;
 pub(crate) mod hosted;
 pub(crate) mod image_unit_order;
