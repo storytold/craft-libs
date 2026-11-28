@@ -4678,6 +4678,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "craft-host",
+ "craft-testkit",
  "craft-theme",
  "craft-ui",
  "dunce",

@@ -727,19 +727,36 @@ pub(crate) mod inherited_pipe_tests {
 
 /// Runs a helper while polling cancellation and draining its bounded output.
 #[cfg(target_os = "linux")]
-pub(crate) fn cancellable_output(mut cmd: Command, check: impl Fn() -> Result<(), String>) -> Result<std::process::Output, String> {
+pub(crate) fn cancellable_output(cmd: Command, check: impl Fn() -> Result<(), String>) -> Result<std::process::Output, String> {
+    let (mut helper_start, mut output_start) = (None, None);
+    cancellable_output_until(cmd, check, move |pending| {
+        let (start, limit) = match pending {
+            Pending::Helper => (*helper_start.get_or_insert_with(Instant::now), Duration::from_secs(60 * 60)),
+            Pending::Output => (*output_start.get_or_insert_with(Instant::now), Duration::from_secs(5)),
+        };
+        let more = within(start, Instant::now(), limit);
+        if more {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        more
+    })
+}
+
+/// [`cancellable_output`], asking `keep_waiting` each time the run finds the helper or its output
+/// unfinished. `keep_waiting` returns `false` when the time limit for the helper (one hour) or for
+/// its output to close after it exits (five seconds) has passed.
+#[cfg(target_os = "linux")]
+fn cancellable_output_until(
+    mut cmd: Command,
+    check: impl Fn() -> Result<(), String>,
+    mut keep_waiting: impl FnMut(Pending) -> bool,
+) -> Result<std::process::Output, String> {
     check()?;
     let mut child =
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("couldn't run flatpak ({e})"))?;
     let stdout = read_all(child.stdout.take()).map_err(|e| format!("couldn't read flatpak output ({e})"))?;
     let stderr = read_all(child.stderr.take()).map_err(|e| format!("couldn't read flatpak output ({e})"))?;
-    let started = Instant::now();
     let status = loop {
-        if started.elapsed() >= Duration::from_secs(60 * 60) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("Flatpak did not finish within one hour".into());
-        }
         if let Err(e) = check() {
             let _ = child.kill();
             let _ = child.wait();
@@ -747,7 +764,12 @@ pub(crate) fn cancellable_output(mut cmd: Command, check: impl Fn() -> Result<()
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Ok(None) if keep_waiting(Pending::Helper) => {}
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Flatpak did not finish within one hour".into());
+            }
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -755,13 +777,11 @@ pub(crate) fn cancellable_output(mut cmd: Command, check: impl Fn() -> Result<()
             }
         }
     };
-    let deadline = Instant::now();
     while !stdout.is_finished() || !stderr.is_finished() {
         check()?;
-        if deadline.elapsed() > Duration::from_secs(5) {
+        if !keep_waiting(Pending::Output) {
             return Err("Flatpak output did not close after completion".into());
         }
-        std::thread::sleep(Duration::from_millis(25));
     }
     Ok(std::process::Output { status, stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() })
 }
@@ -770,28 +790,71 @@ pub(crate) fn cancellable_output(mut cmd: Command, check: impl Fn() -> Result<()
 #[cfg(target_os = "linux")]
 pub(crate) mod update_cancel_tests {
     use super::*;
+    use craft_testkit::deadline::with_deadline;
     use craft_ui::testing::trial;
 
+    /// Stops a broken test: a run that waits for a helper that never exits on its own, or for
+    /// output that a descendant never closes.
+    const HANG_GUARD: Duration = Duration::from_secs(60);
+
+    /// The first check runs before the helper starts, and the second finds it running. The helper
+    /// never exits on its own, so the run returns only by stopping it.
     #[trial]
     fn cancels_a_running_helper_promptly() {
-        let mut cmd = command("sleep");
-        cmd.arg("30");
-        let start = Instant::now();
-        let result = cancellable_output(cmd, || if start.elapsed() >= Duration::from_millis(100) { Err("cancelled".into()) } else { Ok(()) });
-        assert_eq!(result.unwrap_err(), "cancelled");
-        assert!(start.elapsed() < Duration::from_secs(5));
+        with_deadline(HANG_GUARD, "a canceled helper run", || {
+            let mut cmd = command("sleep");
+            cmd.arg("86400");
+            let checks = std::cell::Cell::new(0);
+            let result = cancellable_output(cmd, || {
+                checks.set(checks.get() + 1);
+                if checks.get() >= 2 { Err("cancelled".into()) } else { Ok(()) }
+            });
+            assert_eq!(result.unwrap_err(), "cancelled");
+            assert_eq!(checks.get(), 2, "the run kept checking after it was canceled");
+        });
     }
 
-    /// A descendant that outlives the helper keeps the pipes open; the caller gets an error at
-    /// the deadline instead of waiting for it.
+    /// Stops the process whose id the file at this path holds, when dropped.
+    struct Descendant(std::path::PathBuf);
+
+    impl Drop for Descendant {
+        fn drop(&mut self) {
+            if let Ok(pid) = std::fs::read_to_string(&self.0) {
+                let _ = command("kill").arg(pid.trim()).status();
+            }
+        }
+    }
+
+    /// A descendant that outlives the helper keeps the pipes open; the caller gets an error when
+    /// the time limit for the output passes instead of waiting for the descendant.
     #[trial]
     fn output_held_open_by_a_descendant_fails_at_the_deadline() {
-        let mut cmd = command("sh");
-        cmd.args(["-c", "sleep 8 &"]);
-        let start = Instant::now();
-        let err = cancellable_output(cmd, || Ok(())).expect_err("a descendant holding the pipes should time out");
-        assert!(err.contains("did not close after completion"), "{err}");
-        assert!(start.elapsed() < Duration::from_secs(8), "{:?}", start.elapsed());
+        with_deadline(HANG_GUARD, "a run whose output a descendant holds open", || {
+            let dir = tempfile::tempdir().unwrap();
+            let descendant = Descendant(dir.path().join("descendant"));
+            let mut cmd = command("sh");
+            cmd.args(["-c", "sleep 86400 & echo $! > \"$1\"", "sh"]).arg(&descendant.0);
+            let mut output_asked = false;
+            let result = cancellable_output_until(
+                cmd,
+                || Ok(()),
+                |pending| match pending {
+                    Pending::Helper => {
+                        std::thread::yield_now();
+                        true
+                    }
+                    // The helper has exited and the descendant holds its pipes: the time limit passes.
+                    Pending::Output => {
+                        assert!(!output_asked, "the run kept waiting after its time limit passed");
+                        output_asked = true;
+                        false
+                    }
+                },
+            );
+            let err = result.expect_err("a descendant holding the pipes should time out");
+            assert!(err.contains("did not close after completion"), "{err}");
+            assert!(output_asked, "the run didn't wait for the output");
+        });
     }
 
     #[trial]
