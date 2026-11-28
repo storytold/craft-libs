@@ -161,6 +161,20 @@ fn edge_dragged(quad: [Point; 4], edge: u8, from: Point, to: Point) -> BoxState 
     drag(&start, &start, BoxPart::Edge(edge), from, to, Mods::NONE, &BoxRules::default())
 }
 
+/// The furthest any corner of `got` lies from its place in `want`; infinite when a corner is not a number, so a
+/// comparison against a tolerance fails (`f64::max` alone would skip a NaN).
+fn worst_distance(got: &BoxState, want: [(f64, f64); 4]) -> f64 {
+    got.quad.iter().zip(want).map(|(a, (x, y))| a.distance(p(x, y))).fold(0.0, |worst, d| if d.is_finite() { worst.max(d) } else { f64::INFINITY })
+}
+
+#[test]
+fn the_worst_distance_of_a_corner_that_is_not_a_number_is_infinite() {
+    let mut state = session();
+    assert_eq!(worst_distance(&state, [(0.0, 0.0), (100.0, 0.0), (100.0, 50.0), (0.0, 50.0)]), 0.0);
+    state.quad[2] = p(f64::NAN, 50.0);
+    assert_eq!(worst_distance(&state, [(0.0, 0.0), (100.0, 0.0), (100.0, 50.0), (0.0, 50.0)]), f64::INFINITY);
+}
+
 fn within(got: &BoxState, want: [(f64, f64); 4], tol: f64) -> bool {
     got.quad.iter().zip(want).all(|(a, (x, y))| (a.x - x).abs() <= tol && (a.y - y).abs() <= tol)
 }
@@ -415,7 +429,7 @@ fn far_edge_drags_in_perspective_stay_near_the_reference() {
     // Shrunk to under a third, and to a third of a narrower box in the other direction: within 2.5 px.
     let sliver = edge_dragged(narrow_top, 3, p(180.0, 226.0), p(310.0, 226.0));
     let reference = [(310.6, 238.38), (392.0, 197.14), (452.0, 254.86), (310.6, 267.83)];
-    let worst = sliver.quad.iter().zip(reference).map(|(a, (x, y))| a.distance(p(x, y))).fold(0.0, f64::max);
+    let worst = worst_distance(&sliver, reference);
     assert!(worst < 2.5, "{worst} px off: {:?}", sliver.quad);
     let narrow_bottom = [p(150.0, 125.0), p(452.0, 125.0), p(412.0, 327.0), p(190.0, 327.0)];
     let shrunk = edge_dragged(narrow_bottom, 1, p(432.0, 226.0), p(282.0, 226.0));
@@ -554,7 +568,7 @@ fn an_alt_top_drag_on_converging_top_and_bottom_turns_the_sides_across() {
         let quad = parallel_sides.map(|(x, y)| p(x, y));
         let start = BoxState::new(quad, p(301.0, 226.0));
         let got = drag(&start, &start, BoxPart::Edge(edge), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
-        let worst = got.quad.iter().zip(want).map(|(a, (x, y))| a.distance(p(x, y))).fold(0.0, f64::max);
+        let worst = worst_distance(&got, want);
         assert!(worst < tol, "edge {edge}: {worst} px off: {:?}", got.quad);
     }
 }
@@ -1275,4 +1289,77 @@ fn a_turn_reads_the_pointer_at_the_rules_turn_offset() {
     let on_pointer = BoxRules::default().with_turn_offset(Vec2::ZERO);
     assert!((angle(&on_pointer) - read(Vec2::ZERO)).abs() < 1e-9);
     assert!((angle(&on_pointer) - angle(&default)).abs() > 0.01, "the offset matters");
+}
+
+/// Edit › Transform › Scale with the aspect link off: ⌘ on a corner or an edge scales as the plain drag does (⌘ has no
+/// meaning of its own in Scale), so it stretches as the plain drag does instead of keeping the proportions. Measured on
+/// the reference's results: the right edge dragged 30 px ends at 482 with the height as it was, with ⌘ and without,
+/// and the top right corner dragged to (482, 105) ends there both ways.
+#[test]
+fn scale_mode_with_the_link_off_scales_a_command_drag_as_a_plain_one() {
+    let start = BoxState::from_rect(Rect::new(150.0, 125.0, 452.0, 327.0));
+    let rules = BoxRules::in_mode(TransformMode::Scale).with_aspect_linked(false);
+    let cmd = Mods { cmd: true, ..Mods::NONE };
+    for (part, from, to) in [(BoxPart::Edge(1), p(452.0, 226.0), p(482.0, 226.0)), (BoxPart::Corner(1), p(452.0, 125.0), p(482.0, 95.0))] {
+        let plain = drag(&start, &start, part, from, to, Mods::NONE, &rules);
+        let held = drag(&start, &start, part, from, to, cmd, &rules);
+        assert_eq!(held.quad, plain.quad, "{part:?}");
+        assert_eq!(rules.keeps_proportions(part, cmd), rules.keeps_proportions(part, Mods::NONE), "{part:?}");
+    }
+    let edge = drag(&start, &start, BoxPart::Edge(1), p(452.0, 226.0), p(482.0, 226.0), cmd, &rules);
+    assert!(corners_are(&edge, 150.0, 125.0, 482.0, 327.0), "{:?}", edge.quad);
+    let corner = drag(&start, &start, BoxPart::Corner(1), p(452.0, 125.0), p(482.0, 105.0), cmd, &rules);
+    assert!(corners_are(&corner, 150.0, 105.0, 482.0, 327.0), "{:?}", corner.quad);
+    // With the link on, ⌘ keeps the proportions as the plain drag does (the reference: 114.97 to 337.03).
+    let linked = drag(&start, &start, BoxPart::Edge(1), p(452.0, 226.0), p(482.0, 226.0), cmd, &BoxRules::in_mode(TransformMode::Scale));
+    assert!(within(&linked, [(150.0, 114.97), (482.0, 114.97), (482.0, 337.03), (150.0, 337.03)], 0.01), "{:?}", linked.quad);
+}
+
+/// A Distort drag that comes back to its press restores the reference point too, also one so far outside a box in
+/// perspective that it has no place read between the corners.
+#[test]
+fn a_distort_drag_back_to_its_press_restores_a_far_reference_point() {
+    let quad = [p(0.0, 0.0), p(100.0, 0.0), p(150.0, 150.0), p(0.0, 100.0)];
+    let start = BoxState::new(quad, p(-60.0, -60.0));
+    let cmd = Mods { cmd: true, ..Mods::NONE };
+    let back = drag(&start, &start, BoxPart::Corner(2), p(150.0, 150.0), p(150.0, 150.0), cmd, &BoxRules::default());
+    assert_eq!(back.quad, start.quad);
+    assert!(back.pivot.distance(start.pivot) < 1e-6, "{:?}", back.pivot);
+}
+
+/// A box narrowing toward its bottom, its bottom or top edge dragged most of the way to the opposite one (measured on
+/// the reference's results): the sides keep their insets all the way, so once the scaled top is narrower than the two
+/// insets together the bottom corners change sides and the box crosses over itself. It is not held back from that.
+#[test]
+fn a_far_bottom_or_top_shrink_of_a_narrowing_box_crosses_it_as_the_reference_does() {
+    let narrow_bottom = [p(150.0, 125.0), p(452.0, 125.0), p(412.0, 327.0), p(190.0, 327.0)];
+    let cases = [
+        (2, (301.0, 327.0), (301.0, 227.0), [(224.75, 125.0), (377.25, 125.0), (337.25, 227.0), (264.75, 227.0)]),
+        (2, (301.0, 327.0), (301.0, 167.0), [(269.6, 125.0), (332.4, 125.0), (292.4, 167.0), (309.6, 167.0)]),
+        (2, (301.0, 327.0), (301.0, 147.0), [(284.55, 125.0), (317.45, 125.0), (277.45, 147.0), (324.55, 147.0)]),
+        (0, (301.0, 125.0), (301.0, 285.0), [(269.6, 285.0), (332.4, 285.0), (292.4, 327.0), (309.6, 327.0)]),
+    ];
+    for (edge, from, to, want) in cases {
+        let got = edge_dragged(narrow_bottom, edge, p(from.0, from.1), p(to.0, to.1));
+        assert!(within(&got, want, 0.01), "edge {edge} to {to:?}: {:?}", got.quad);
+    }
+}
+
+/// A host's minimum side holds on an ⌥ side drag of a box whose top and bottom converge too: the drag stops where a
+/// side would go under it, and a drag that keeps every side above it is as without a minimum.
+#[test]
+fn an_alt_side_drag_on_a_converging_box_keeps_the_minimum_side() {
+    let quad = [p(150.0, 125.0), p(452.0, 165.0), p(452.0, 287.0), p(150.0, 327.0)];
+    let start = BoxState::new(quad, p(301.0, 226.0));
+    let alt = Mods { alt: true, ..Mods::NONE };
+    let sides = |s: &BoxState| -> [f64; 4] { std::array::from_fn(|k| s.quad[k].distance(s.quad[(k + 1) % 4])) };
+    let run = |min: f64, dx: f64| {
+        drag(&start, &start, BoxPart::Edge(1), p(452.0, 226.0), p(452.0 + dx, 226.0), alt, &BoxRules::default().with_min_side(min))
+    };
+    let free = run(0.0, -120.0);
+    assert!(sides(&free).iter().any(|s| *s < 100.0), "without a minimum a side goes under 100: {:?}", sides(&free));
+    let held = run(100.0, -120.0);
+    assert!(sides(&held).iter().all(|s| *s >= 100.0 - 1e-6), "{:?}", sides(&held));
+    assert!(sides(&held)[0] < sides(&start)[0] - 1.0, "the box still shrank up to the minimum: {:?}", sides(&held));
+    assert_eq!(run(100.0, 40.0), run(0.0, 40.0), "a growing drag is as without a minimum");
 }

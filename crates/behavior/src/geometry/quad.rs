@@ -349,6 +349,11 @@ impl BoxRules {
             BoxPart::Edge(_) if !self.allow.skew => mods.cmd = false,
             _ => {}
         }
+        // In Scale ⌘ has no meaning of its own on a handle: it scales as the plain drag does, with the aspect link off
+        // too, so it is dropped before the scale rule reads the keys.
+        if self.effective_mode() == TransformMode::Scale && matches!(part, BoxPart::Corner(_) | BoxPart::Edge(_)) {
+            mods.cmd = false;
+        }
         match self.scale {
             ScaleRule::Shape => shape_mods(part, mods),
             ScaleRule::Corners => corners_mods(part, mods),
@@ -1104,7 +1109,23 @@ fn centred_side_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> 
         return None;
     }
     if uh.cross(bottom).abs() > 1e-9 * bottom.hypot() {
-        return converging_side_scale(g, p, min_side, uh, nh, len);
+        let at = |p: Point| converging_side_scale(g, p, min_side, uh, nh, len);
+        let scaled = at(p)?;
+        if keeps_min_side(&q, &scaled.quad, min_side) {
+            return Some(scaled);
+        }
+        // A host's minimum side: the drag stops where a side would go under it (found along the drag's travel; the
+        // fit turns the box's sides, so no one factor bounds them).
+        let (mut lo, mut hi) = (0.0f64, 1.0f64);
+        for _ in 0..40 {
+            let mid = (lo + hi) / 2.0;
+            if at(g.start + (p - g.start) * mid).is_some_and(|s| keeps_min_side(&q, &s.quad, min_side)) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        return at(g.start + (p - g.start) * lo).filter(|s| keeps_min_side(&q, &s.quad, min_side));
     }
     let c = g.pivot0;
     let mean = Point::new(q.iter().map(|p| p.x).sum::<f64>() / 4.0, q.iter().map(|p| p.y).sum::<f64>() / 4.0);
@@ -1357,6 +1378,16 @@ fn scale_floor(quad: &[Point; 4], axis: usize, min_side: f64) -> f64 {
     f64::NEG_INFINITY
 }
 
+/// Whether every side of `quad` keeps `min_side`, or its length in `quad0` where that was shorter already (the floor
+/// [`scale_floor`] gives a side); always with no minimum.
+fn keeps_min_side(quad0: &[Point; 4], quad: &[Point; 4], min_side: f64) -> bool {
+    min_side <= 0.0
+        || (0..4).all(|k| {
+            let side = |q: &[Point; 4]| (q[(k + 1) % 4] - q[k]).hypot();
+            side(quad) >= min_side.min(side(quad0)) - 1e-9
+        })
+}
+
 /// The turn at each corner of a quad: all of one sign for a convex quad, mixed for a concave or
 /// self-intersecting one.
 fn turns(q: &[Point; 4]) -> [f64; 4] {
@@ -1400,8 +1431,12 @@ fn carry_pivot(quad0: [Point; 4], quad: [Point; 4], pivot0: Point) -> Point {
     let (Some(h0), Some(h1)) = (Homography::unit_to_quad(quad0), Homography::unit_to_quad(quad)) else { return pivot0 };
     let Some(inv) = h0.inverse() else { return pivot0 };
     let projective = inv.apply(pivot0);
-    let at = bilinear_inverse(quad0, pivot0, projective).unwrap_or(projective);
-    let p = bilinear(quad, at);
+    // A reference point with no place read between the corners (far outside a box in perspective) keeps its
+    // projective place, through the projective map: a drag back to the press then puts it back.
+    let p = match bilinear_inverse(quad0, pivot0, projective) {
+        Some(at) => bilinear(quad, at),
+        None => h1.apply(projective),
+    };
     if p.is_finite() {
         p
     } else {
