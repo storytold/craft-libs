@@ -1,19 +1,19 @@
 //! `CurveEditor`: a tone curve's graph with its points, the host's rows, the Input and Output fields of the selected
 //! point, the Corner check box and a hint line.
 
-use super::graph::{CurveChannel, CurveGraph, CurveGraphOutput, CurveSampler};
+use super::graph::{CurveChannel, CurveGraph, CurveGraphOutput, CurveSampler, outputs};
 use super::model::{Curve, CurveRules};
 use super::words::CurveWords;
 use crate::ui::histogram::HistogramData;
 use craft_behavior::{EditEvent, EditEvents, Mixed};
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, BodyCx, EditResponse, Outcome, Pattern, Props, Remember as _, Show as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{Bind, BodyCx, EditResponse, Outcome, Pattern, Props, Remember as _, Show as _, ShowContainer as _, Sizing, WordSetCx as _};
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::Field;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::Label;
 use craft_ui::style::TypeRole;
-use craft_ui::text::NumberField;
+use craft_ui::text::{NumberField, SelectableText};
 use egui::Ui;
 
 type CurveRowsFn<'a> = Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>;
@@ -97,6 +97,10 @@ struct Memory {
 ///
 /// The selection is view state: the editor keeps it, or the host sets it with [`selection`](CurveEditor::selection) and
 /// stores the output's. It clears when the [`channel`](CurveEditor::channel) changes.
+///
+/// Readout: with [`hover_readout`](CurveEditor::hover_readout) on, while no point is selected (and in pencil mode) and
+/// the pointer is over the graph, the Input and Output show as read-only text: the input under the pointer and the
+/// curve's output there.
 #[must_use = "show the editor with `show`"]
 #[derive(Pattern, Props)]
 pub struct CurveEditor<'a> {
@@ -151,6 +155,9 @@ pub struct CurveEditor<'a> {
     /// The host's rows between the graph and the fields.
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>)")]
     between: Option<CurveRows<'a>>,
+    /// With no point selected, and in pencil mode, the Input and Output read out the curve under the pointer.
+    #[prop(flag)]
+    hover_readout: bool,
 }
 
 impl<'a> CurveEditor<'a> {
@@ -176,6 +183,7 @@ impl<'a> CurveEditor<'a> {
             tab_steps: false,
             end_delete_deselects: false,
             between: None,
+            hover_readout: false,
         }
     }
 
@@ -207,9 +215,12 @@ impl<'a> CurveEditor<'a> {
             tab_steps,
             end_delete_deselects,
             mut between,
+            hover_readout,
         } = self;
         let words = craft_ui::runtime::env::Env::of(ui).words::<CurveWords>();
         let rules = CurveRules { levels: levels as f32, max_points: max_points.max(2) };
+        // The readout samples the curve as the graph draws it.
+        let reading_sampler = sampler.clone().filter(|_| hover_readout);
         let mut out: Option<(EditResponse<Curve>, Option<usize>)> = None;
         let name = label.clone();
         let shown = Stack::new().label(label).show(ui, |ui, root| {
@@ -255,7 +266,7 @@ impl<'a> CurveEditor<'a> {
             if end_delete_deselects {
                 graph = graph.end_delete_deselects();
             }
-            let CurveGraphOutput { mut edit, selected } = graph.show(ui);
+            let CurveGraphOutput { mut edit, selected, hover } = graph.show(ui);
             if let Some(rows) = between.as_mut() {
                 (rows.0)(ui, root);
             }
@@ -263,12 +274,20 @@ impl<'a> CurveEditor<'a> {
                 Some(Mixed::Same(shown)) => Some((**shown).clone()),
                 _ => None,
             };
-            if let Some(now) = now.filter(|now| fields && !pencil && now.points().is_some()) {
-                let at = selected.filter(|&i| now.points().is_some_and(|points| i < points.len()));
-                let row = FieldsRow { words: &words, rules, now: &now, at, percent, corners };
-                let lifted = row.show(ui, root, &mut curve);
-                if edit.events.is_empty() {
-                    edit.events = lifted;
+            if let Some(now) = now.filter(|now| fields && (pencil || now.points().is_some())) {
+                let at = selected.filter(|&i| !pencil && now.points().is_some_and(|points| i < points.len()));
+                let reading = hover.filter(|_| hover_readout && at.is_none()).and_then(|input| {
+                    let output = *outputs(&now, reading_sampler.as_ref(), rules.levels).get(input as usize)?;
+                    Some([input, output.round().clamp(0.0, rules.levels)])
+                });
+                // Pencil mode has no point fields: its row is the readout alone, there only while the pointer is over
+                // the graph.
+                if !pencil || reading.is_some() {
+                    let row = FieldsRow { words: &words, rules, now: &now, at, reading, percent, corners };
+                    let lifted = row.show(ui, root, &mut curve);
+                    if edit.events.is_empty() {
+                        edit.events = lifted;
+                    }
                 }
             }
             root.memory::<Memory>().selected = selected;
@@ -283,12 +302,15 @@ impl<'a> CurveEditor<'a> {
     }
 }
 
-/// The Input and Output fields of the selected point `at` of `now`, and the Corner check box.
+/// The Input and Output fields of the selected point `at` of `now`, or the `reading` under the pointer as text, and the
+/// Corner check box.
 struct FieldsRow<'p> {
     words: &'p CurveWords,
     rules: CurveRules,
     now: &'p Curve,
     at: Option<usize>,
+    /// The input under the pointer and the curve's output there, shown instead of fields.
+    reading: Option<[f32; 2]>,
     percent: bool,
     corners: bool,
 }
@@ -328,8 +350,19 @@ impl FieldsRow<'_> {
     fn show(&self, ui: &mut Ui, root: &mut BodyCx<'_>, curve: &mut Bind<'_, Curve>) -> EditEvents<Curve> {
         let points = self.now.points().unwrap_or_default();
         let mut reports: Vec<(usize, EditResponse<Option<f64>>)> = Vec::new();
-        Row::new().show(ui, |ui, _| {
+        Row::new().show(ui, |ui, row| {
             for (axis, name) in [(0, self.words.input.clone()), (1, self.words.output.clone())] {
+                if let Some(reading) = self.reading {
+                    let number = row.format().number(self.to_field(reading[axis]), 0);
+                    let text = match self.percent {
+                        true => self.words.percent.fill(&[("n", number.as_str())]),
+                        false => number,
+                    };
+                    Field::new(name.clone()).sizing(Sizing::Content).show(ui, |ui, _| {
+                        SelectableText::new(name.clone(), &text).field_inset().show(ui);
+                    });
+                    continue;
+                }
                 let value = Some(self.to_field(self.at.map_or(0.0, |i| points[i][axis])));
                 let mut field = NumberField::new(name.clone(), Bind::given(Mixed::Same(value)))
                     .range(self.range(axis))
