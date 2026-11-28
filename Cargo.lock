@@ -2445,6 +2445,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-dispatch"
+version = "0.1.0"
+dependencies = [
+ "craft-ipc",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-doc"
 version = "0.1.0"
 dependencies = [

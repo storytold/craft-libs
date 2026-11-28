@@ -1,0 +1,23 @@
+[package]
+name = "craft-dispatch"
+description = "Shared job schema and queue payloads for handing export work to encoderCraft over craft-ipc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-ipc = { workspace = true, optional = true }
+
+[features]
+default = ["ipc"]
+ipc = ["dep:craft-ipc"]
+
+[lints]
+workspace = true
