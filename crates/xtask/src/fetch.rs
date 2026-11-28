@@ -42,6 +42,9 @@ pub const DEFAULT_MAX_EXPANDED_BYTES: u64 = 16 << 20;
 
 /// Longest name accepted, in bytes.
 const MAX_NAME_BYTES: usize = 4096;
+/// Longest part of a name accepted, in bytes: the limit of ext4 and APFS, and no more than the 255
+/// UTF-16 units of NTFS.
+const MAX_PART_BYTES: usize = 255;
 /// Tar data allowed per entry beyond the file bytes: its header (512) and padding (511), and a GNU
 /// long-name record and a pax record, each a 512-byte header with up to 4,608 bytes of padded data
 /// for a name of [`MAX_NAME_BYTES`].
@@ -126,12 +129,15 @@ pub enum FetchError {
 impl fmt::Display for FetchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FetchError::Invalid { name, reason } => write!(f, "{name}: {reason}"),
+            // A name may hold control characters (a refused pin, an archive entry), so it is escaped.
+            FetchError::Invalid { name, reason } => write!(f, "{}: {reason}", name.escape_debug()),
             FetchError::NotRegular(path) => write!(f, "{} is a link or another kind of file than expected", path.display()),
-            FetchError::TooLarge { name, limit } => write!(f, "{name} is over its limit of {limit}"),
-            FetchError::HashMismatch { name, expected, actual } => write!(f, "{name}: SHA-256 is {actual}, but the pin is {expected}"),
-            FetchError::Download { name, source } => write!(f, "downloading {name} failed: {source}"),
-            FetchError::Archive { name, reason } => write!(f, "{name}: {reason}"),
+            FetchError::TooLarge { name, limit } => write!(f, "{} is over its limit of {limit}", name.escape_debug()),
+            FetchError::HashMismatch { name, expected, actual } => {
+                write!(f, "{}: SHA-256 is {actual}, but the pin is {expected}", name.escape_debug())
+            }
+            FetchError::Download { name, source } => write!(f, "downloading {} failed: {source}", name.escape_debug()),
+            FetchError::Archive { name, reason } => write!(f, "{}: {reason}", name.escape_debug()),
             FetchError::Io { path, source } => write!(f, "{}: {source}", path.display()),
         }
     }
@@ -415,6 +421,9 @@ fn check_part(part: &str) -> Result<(), String> {
     if part == "." || part == ".." {
         return Err(format!("the name has a `{part}` part"));
     }
+    if part.len() > MAX_PART_BYTES {
+        return Err(format!("a part of the name is longer than {MAX_PART_BYTES} bytes"));
+    }
     if let Some(c) = part.chars().find(|&c| c.is_control() || matches!(c, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*')) {
         return Err(format!("the name holds {c:?}, which is not portable"));
     }
@@ -522,16 +531,17 @@ fn join<S: AsRef<str>>(parts: &[S]) -> String {
     parts.iter().map(AsRef::as_ref).collect::<Vec<_>>().join("/")
 }
 
-/// The key under which [`Names`] compares a part: the lowercase of its uppercase. The forms of one
-/// letter then get one key even when one is not the lowercase of another (`Σ`, `σ` and `ς`). A
-/// letter whose uppercase is longer gets the key of that spelling (`ß` and `ss`), so such pairs are
-/// refused even on a file system that keeps them apart. The part is put in Unicode Normalization
-/// Form C before the case mapping and the key again after it, so a composed `é` and an `e`
-/// followed by a combining acute accent, which are one name on macOS, get one key, and so do
-/// `α` followed by U+0345 and U+0301 in either order.
+/// The key under which [`Names`] compares a part: the lowercase of the uppercase of its lowercase.
+/// The forms of one letter then get one key even when one is not the lowercase of another (`Σ`,
+/// `σ` and `ς`). A letter whose uppercase is longer gets the key of that spelling (`ß` and `ss`),
+/// and the first lowercase gives a capital the key of its small letter (`ẞ`, whose lowercase is
+/// `ß`), so such names are refused even on a file system that keeps them apart. The part is put
+/// in Unicode Normalization Form C before the case mapping and the key again after it, so a
+/// composed `é` and an `e` followed by a combining acute accent, which are one name on macOS, get
+/// one key, and so do `α` followed by U+0345 and U+0301 in either order.
 fn fold(part: &str) -> String {
     let composed: String = part.nfc().collect();
-    composed.to_uppercase().to_lowercase().nfc().collect()
+    composed.to_lowercase().to_uppercase().to_lowercase().nfc().collect()
 }
 
 /// Creates `dest` when it is missing and checks that it is a folder and not a link.
@@ -807,7 +817,8 @@ fn entry_parts(raw: &[u8], strip: usize, folder: bool) -> Result<Option<Vec<Stri
     let trimmed = if folder { text.strip_suffix('/').unwrap_or(text) } else { text };
     let parts = || trimmed.split('/').skip_while(|p| *p == ".");
     if parts().all(str::is_empty) {
-        return Ok(None);
+        // Only a folder entry may name the root (`.` or `./`); a file there would be dropped.
+        return if folder { Ok(None) } else { Err("the path names no file".into()) };
     }
     // The parts are checked and the kept length measured before anything is collected, so a long
     // path allocates nothing before it is refused.
@@ -953,6 +964,42 @@ mod tests {
         }
         assert_eq!(fold("\u{3a3}"), fold("\u{3c2}"));
         assert_ne!(fold("a.txt"), fold("b.txt"));
+    }
+
+    #[test]
+    fn the_capital_and_small_sharp_s_are_one_name() {
+        assert_eq!(fold("\u{1e9e}"), fold("\u{df}"));
+        assert_eq!(fold("\u{df}"), fold("ss"));
+        let mut names = Names::default();
+        names.add_file(&["stra\u{df}e.png"]).unwrap();
+        assert!(names.add_file(&["STRA\u{1e9e}E.png"]).is_err());
+        let mut folders = Names::default();
+        folders.add_folder(&["\u{1e9e}"]).unwrap();
+        assert!(folders.add_folder(&["\u{df}"]).is_err());
+    }
+
+    #[test]
+    fn a_part_is_at_most_255_bytes() {
+        assert!(check_part(&"a".repeat(MAX_PART_BYTES)).is_ok());
+        assert!(check_part(&"a".repeat(MAX_PART_BYTES + 1)).is_err());
+        assert!(split_name(&format!("top/{}", "\u{e9}".repeat(128))).is_err());
+        assert!(entry_parts(format!("top/{}", "b".repeat(MAX_PART_BYTES + 1)).as_bytes(), 0, false).is_err());
+    }
+
+    #[test]
+    fn only_a_folder_entry_may_name_the_root() {
+        assert_eq!(entry_parts(b".", 0, true), Ok(None));
+        assert_eq!(entry_parts(b"./", 0, true), Ok(None));
+        assert!(entry_parts(b".", 0, false).is_err());
+        assert!(entry_parts(b"./.", 0, false).is_err());
+    }
+
+    #[test]
+    fn messages_escape_control_characters_in_names() {
+        assert_eq!(invalid("a\nb\u{1b}", "refused".into()).to_string(), "a\\nb\\u{1b}: refused");
+        assert_eq!(too_large("a\rb", "1 bytes".into()).to_string(), "a\\rb is over its limit of 1 bytes");
+        let archive = FetchError::Archive { name: "t\u{7}.tar".into(), reason: "bad".into() };
+        assert_eq!(archive.to_string(), "t\\u{7}.tar: bad");
     }
 
     #[test]

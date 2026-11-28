@@ -293,14 +293,16 @@ Machine, GPU, corpus and skip details stay in the app's own report.
 | `fetch_pinned_with`, `fetch_archive_with` | the same, through a caller's `Transport` instead of `curl` |
 | `sha256_hex(bytes)` | the lowercase hexadecimal SHA-256 |
 
-Every pin is checked before anything is downloaded. A name is a relative path with `/` between
-folders; it may not be empty or absolute, hold an empty, `.` or `..` part, a backslash, a control
-character or a character Windows does not allow in names (`:`, `<`, `>`, `"`, `|`, `?`, `*`), end a
-part with a dot or a space, or use a Windows device name (`CON`, `NUL`, `COM1` and the rest). Two
-pins may not name the same file ignoring case and Unicode normalization (a composed `é` and `e`
-followed by a combining accent are one name), and a file name may not also be used as a folder. The
-address starts with `https://`, the SHA-256 has 64 hexadecimal digits, and `max_bytes` is at
-least 1.
+`fetch_pinned` checks every pin before anything is downloaded. The name of a pin given to
+`fetch_pinned`, and the path of every archive entry, follow these name rules: the name is a relative
+path with `/` between folders; it may not be empty or absolute, hold an empty, `.` or `..` part, a
+part longer than 255 bytes, a backslash, a control character or a character Windows does not allow
+in names (`:`, `<`, `>`, `"`, `|`, `?`, `*`), end a part with a dot or a space, or use a Windows
+device name (`CON`, `NUL`, `COM1` and the rest). Two pins may not name the same file ignoring case
+and Unicode normalization (a composed `é` and `e` followed by a combining accent are one name, and
+so are `ß`, `ẞ` and `ss`), and a file name may not also be used as a folder. The address starts with
+`https://`, the SHA-256 has 64 hexadecimal digits, and `max_bytes` is at least 1. The name of the
+pin given to `fetch_archive` only labels the archive and follows the rules below.
 
 `curl` runs with `-q` (no `.curlrc`), `--globoff` (brackets and braces in the address are sent as
 they are), `--path-as-is` (`.` and `..` parts of the address are sent as they are),
@@ -321,7 +323,8 @@ it and the folders under it) must be writable only by the user running the fetch
 The archive is held in memory. The pin's `max_bytes` limits the archive's downloaded size only;
 peak memory is higher, because the entries' file data is held as well, up to `max_expanded_bytes`.
 The pin's name labels the archive in messages and must not be empty, longer than 4096 bytes or hold
-a control character. A trailing `/` is accepted on a folder entry only. Before anything is
+a control character. A trailing `/` is accepted on a folder entry only, and only a folder entry may
+name the archive's root (`.` or `./`). Before anything is
 written, every entry is checked: a symbolic or hard link, a device, a FIFO or any other special
 entry, a path that is absolute, holds `..`, is not UTF-8 or fails the name rules above, and a file
 name repeated ignoring case and Unicode normalization each stop the extraction. `ExtractOptions` holds the limits:

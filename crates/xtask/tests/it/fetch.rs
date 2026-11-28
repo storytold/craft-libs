@@ -542,8 +542,17 @@ fn reads_an_archive_made_by_the_system_tar() {
     fs::write(source.0.join("suite/png/basn0g01.png"), b"first").unwrap();
     fs::write(source.0.join("suite/README"), vec![b'r'; 3000]).unwrap();
     let archive = source.0.join("suite.tgz");
-    // COPYFILE_DISABLE keeps macOS tar from adding `._` metadata entries.
-    let made = Command::new("tar").env("COPYFILE_DISABLE", "1").arg("-czf").arg(&archive).arg("-C").arg(&source.0).arg("suite").status();
+    // COPYFILE_DISABLE keeps macOS tar from adding `._` metadata entries; GNU tar reads extra
+    // options from TAR_OPTIONS, so it is removed.
+    let made = Command::new("tar")
+        .env("COPYFILE_DISABLE", "1")
+        .env_remove("TAR_OPTIONS")
+        .arg("-czf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(&source.0)
+        .arg("suite")
+        .status();
     match made {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             eprintln!("SKIPPED: no system tar");
