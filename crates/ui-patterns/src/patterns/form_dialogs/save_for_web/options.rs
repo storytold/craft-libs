@@ -203,7 +203,8 @@ fn preset_row(ui: &mut Ui, kit: &Kit<'_>, options: &mut SaveForWebOptions, live:
 }
 
 /// "Optimize to File Size…" and, once opened, its rows; OK, or Enter in the Desired File Size field, files the search.
-/// While the rows are closed, the host's last answer shows as a line while the settings are the ones it found.
+/// OK waits while the Desired File Size holds text that does not parse. While the rows are closed, the host's last
+/// answer shows as a line while the settings are the ones it found.
 fn optimize_rows(ui: &mut Ui, kit: &Kit<'_>, options: &SaveForWebOptions, live: &mut Live, asked: &mut Asked) {
     let Kit { words, units, .. } = *kit;
     if !live.optimize.open {
@@ -218,10 +219,19 @@ fn optimize_rows(ui: &mut Ui, kit: &Kit<'_>, options: &SaveForWebOptions, live: 
         }
         return;
     }
+    let mut unparsed = false;
     row(ui, &words.optimize_size, "optimize-size", |ui| {
-        let edit = whole(units, words.optimize_size.clone(), live.optimize.desired_k(), DESIRED_K).submits().show(ui).edit;
-        if let Some(k) = edit.value().cloned().flatten() {
-            live.optimize.k = Some(k);
+        // An `f32` field takes no blank value, so empty text does not parse, as text that is not a number does not.
+        let edit = NumberField::named(words.optimize_size.clone(), Bind::given(live.optimize.desired_k() as f32))
+            .codec(NumberCodec::new(units.reader(None), 0))
+            .step(1.0)
+            .range(DESIRED_K)
+            .submits()
+            .show(ui)
+            .edit;
+        unparsed = edit.unparsed;
+        if let Some(k) = edit.value().copied() {
+            live.optimize.k = Some(f64::from(k));
         }
         if edit.submitted && edit.submit_mods == craft_keymap::Mods::NONE {
             asked.optimize_request = Some(live.optimize.request(options));
@@ -247,7 +257,7 @@ fn optimize_rows(ui: &mut Ui, kit: &Kit<'_>, options: &SaveForWebOptions, live: 
         Text::new(reason.clone()).role(TypeRole::Caption).shade(Shade::Faint).id_salt("optimize-refused").show(ui);
     }
     Row::new().id_salt("optimize-buttons").show(ui, |ui, _| {
-        if clicked(&Button::new(words.optimize_ok.clone()).id_salt("optimize-ok").default_stop().show(ui)) {
+        if clicked(&Button::new(words.optimize_ok.clone()).id_salt("optimize-ok").enabled(!unparsed).default_stop().show(ui)) {
             asked.optimize_request = Some(live.optimize.request(options));
         }
         if clicked(&Button::new(words.optimize_cancel.clone()).id_salt("optimize-cancel").show(ui)) {

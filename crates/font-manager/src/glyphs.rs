@@ -1,6 +1,8 @@
 //! [`GlyphsPanel`]: Photoshop's Glyphs panel. A family and style picker, a category list (Entire Font, Punctuation,
 //! Currency, ...), a grid of glyph cells drawn by the app's text engine, a zoom slider, and the recently used
 //! glyphs in a row at the top. Double-click or Enter inserts the glyph where the app can insert.
+//! A secondary click on a grid cell reports that cell ([`GlyphsPanelOutput::menu`]); the app opens
+//! the menu from the grid response.
 
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
@@ -11,7 +13,7 @@ use craft_behavior::{IconId, Selection};
 use craft_host::Section;
 use craft_ui::contract::{
     ActivateOn, Bind, CollectionEvent, CommandSet, Entry, NoValue, Outcome, Pad, Pattern, Props, Remember as _, SelectMode, Show as _,
-    ShowCollection as _, ShowContainer as _,
+    ShowCollection as _, ShowContainer as _, Sizing,
 };
 use craft_ui::display::{Shade, Spinner, Text};
 use craft_ui::layout_components::{Row, Stack};
@@ -209,6 +211,19 @@ pub struct GlyphsPanelOutput {
     pub alternate: Option<AlternatePick>,
     /// The family or style changed in the panel's own pickers.
     pub font_changed: bool,
+    /// The grid cell a context menu was asked for, with the grid response the menu hangs from.
+    /// Reported on the secondary click and on every later pass while that menu stays open.
+    pub menu: Option<GlyphCellMenu>,
+}
+
+/// A grid cell's context menu: the cell, and the grid response the app hangs the menu from.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct GlyphCellMenu {
+    /// The cell.
+    pub cell: GlyphCell,
+    /// The grid the menu hangs from.
+    pub opener: Response,
 }
 
 /// The cell whose popup was used and the picked glyph.
@@ -306,9 +321,36 @@ struct CellsCache {
     cells: Arc<Vec<GlyphCell>>,
 }
 
-/// The tile selection of the main grid.
+/// The tile selection of the main grid and the host's last mark in the shown cells.
 #[derive(Clone, Default)]
-struct Marked(Selection<usize>);
+struct Marked {
+    selection: Selection<usize>,
+    host: Option<(GlyphCell, usize)>,
+}
+
+/// The glyph a context menu was opened on, and the face it was opened in. Later passes keep this glyph: the grid
+/// remembers the row, and another glyph of a same-length list must not take the menu over. A glyph id names a glyph
+/// only in its own face, so the menu holds the cell only while that face is shown: the same family and style, and
+/// for a glyph id the same source revision, since the source can replace a face under the same names.
+#[derive(Clone, Default)]
+struct HeldMenu(Option<MenuCell>);
+
+/// A held menu's cell, the family and style it was clicked in, and the source revision then.
+#[derive(Clone)]
+struct MenuCell {
+    cell: GlyphCell,
+    family: String,
+    style: String,
+    revision: u64,
+}
+
+impl MenuCell {
+    /// Whether the cell still names the glyph it was clicked on in `face` at `revision`. A character names the same
+    /// glyph after the source reads its faces again; a glyph id may not.
+    fn holds_in(&self, face: (&str, &str), revision: u64) -> bool {
+        (self.family.as_str(), self.style.as_str()) == face && (matches!(self.cell, GlyphCell::Char(_)) || self.revision == revision)
+    }
+}
 
 /// The alternates popup: whether it is open, the cell it was opened for and that cell's alternates, read once when
 /// it opened.
@@ -334,10 +376,12 @@ fn recent_cells(recent: &[String]) -> Vec<GlyphCell> {
     seen.into_iter().map(GlyphCell::Char).collect()
 }
 
-/// The cells of the shown set: the recents, or the source's cells of the category.
+/// The cells of the shown set: the recents, or the source's cells of the category, read again when the source's
+/// `revision` (read once for the pass) is not the one they were read at.
 fn category_cells(
     cache: &mut CellsCache,
     source: &dyn GlyphSource,
+    revision: u64,
     family: &str,
     style: &str,
     category: &str,
@@ -347,7 +391,6 @@ fn category_cells(
         return Arc::new(recent_cells(recent));
     }
     let key = (family.to_owned(), style.to_owned(), category.to_owned());
-    let revision = source.revision();
     if cache.key != key || cache.revision != revision {
         *cache = CellsCache { key, revision, cells: Arc::new(source.cells(family, style, category)) };
     }
@@ -422,7 +465,7 @@ pub struct GlyphsPanel<'a> {
     /// Whether the app has a place to insert a glyph: a double click or Enter inserts.
     #[prop]
     can_insert: bool,
-    /// The host's cell (the selected character); the grid selects it.
+    /// The host's cell (the selected character); a change selects it without overriding grid navigation.
     #[prop]
     marked: Option<GlyphCell>,
     /// In this pass only, the grid moves its lead to that cell and scrolls it into view. The host passes it in the
@@ -483,12 +526,13 @@ impl<'a> GlyphsPanel<'a> {
                 });
             });
             craft_ui::runtime::frame::request_repaint_after(ui.ctx(), SCAN_POLL_SECONDS);
-            return GlyphsPanelOutput { response: shown.output, activated: None, alternate: None, font_changed: false };
+            return GlyphsPanelOutput { response: shown.output, activated: None, alternate: None, font_changed: false, menu: None };
         }
         let ctx = ui.ctx().clone();
         let mut activated_out: Option<GlyphCell> = None;
         let mut picked: Option<AlternatePick> = None;
         let mut font_changed = false;
+        let mut menu: Option<GlyphCellMenu> = None;
         let shown = Stack::new().label(label).command_scope(GlyphsCommand::SCOPE).show(ui, |ui, cx| {
             cx.publish(GlyphsCommand::Alternates, CommandState::new());
             let mut state = read_bind(&mut settings, cx).unwrap_or_default();
@@ -505,20 +549,31 @@ impl<'a> GlyphsPanel<'a> {
             let (held_family, held_style) = (read_bind(&mut family, cx).unwrap_or_default(), read_bind(&mut style, cx).unwrap_or_default());
             let (mut face_family, mut face_style) = (held_family.clone(), held_style.clone());
 
-            Row::new().show(ui, |ui, _| {
+            let compact = ui.available_width() < env.tokens.size.length.field.md;
+            let picker_ids = ui.scope_id().with("glyph-pickers");
+            let mut font_controls = |ui: &mut Ui| {
                 if families.is_empty() {
                     Text::new(face_family.clone()).show(ui);
                 } else {
                     let entries: Vec<Entry<String>> = families.iter().map(|name| Entry::new(name.clone(), name.clone())).collect();
-                    Select::new(words.font.clone(), Bind::bound(&mut face_family), &entries).searchable().show(ui);
+                    let picker = Select::new(words.font.clone(), Bind::bound(&mut face_family), &entries).id(picker_ids.with("font")).searchable();
+                    let picker = if compact { picker.sizing(Sizing::FillWidth) } else { picker };
+                    picker.show(ui);
                 }
                 if styles.is_empty() {
                     Text::new(face_style.clone()).show(ui);
                 } else {
                     let entries: Vec<Entry<String>> = styles.iter().map(|name| Entry::new(name.clone(), name.clone())).collect();
-                    Select::new(words.style.clone(), Bind::bound(&mut face_style), &entries).show(ui);
+                    let picker = Select::new(words.style.clone(), Bind::bound(&mut face_style), &entries).id(picker_ids.with("style"));
+                    let picker = if compact { picker.sizing(Sizing::FillWidth) } else { picker };
+                    picker.show(ui);
                 }
-            });
+            };
+            if compact {
+                Stack::new().id(picker_ids.with("font-controls")).fill_width().show(ui, |ui, _| font_controls(ui));
+            } else {
+                Row::new().id(picker_ids.with("font-controls")).fill_width().wrap(true).show(ui, |ui, _| font_controls(ui));
+            }
             if face_family != held_family {
                 write_bind(&mut family, cx, face_family.clone(), "Glyphs font");
             }
@@ -534,15 +589,23 @@ impl<'a> GlyphsPanel<'a> {
                 state.category = CATEGORIES[0].to_owned();
             }
             let mut category = state.category.clone();
-            Row::new().show(ui, |ui, _| {
+            let mut category_controls = |ui: &mut Ui| {
                 Text::new(words.show.clone()).show(ui);
                 let entries: Vec<Entry<String>> = CATEGORIES
                     .iter()
                     .map(|name| Entry::new((*name).to_owned(), words.category_name(name).to_owned()))
                     .chain(extra.iter().map(|(id, name)| Entry::new(id.clone(), name.clone())))
                     .collect();
-                Select::new(words.category.clone(), Bind::bound(&mut category), &entries).show(ui);
-            });
+                Select::new(words.category.clone(), Bind::bound(&mut category), &entries)
+                    .id(picker_ids.with("category"))
+                    .sizing(Sizing::FillWidth)
+                    .show(ui);
+            };
+            if compact {
+                Stack::new().id(picker_ids.with("category-controls")).fill_width().show(ui, |ui, _| category_controls(ui));
+            } else {
+                Row::new().id(picker_ids.with("category-controls")).fill_width().show(ui, |ui, _| category_controls(ui));
+            }
             state.category = category;
 
             // Recently used.
@@ -570,15 +633,20 @@ impl<'a> GlyphsPanel<'a> {
                 }
             }
 
-            // The grid.
-            let cells = category_cells(cx.memory::<CellsCache>(), source, face.0, face.1, &state.category, &state.recent);
+            // The grid. One revision read serves the pass: a menu cell is stamped with the revision its list was read
+            // at, so a source that moves on mid-pass cannot give an old glyph id the new revision.
+            let revision = source.revision();
+            let cells = category_cells(cx.memory::<CellsCache>(), source, revision, face.0, face.1, &state.category, &state.recent);
             let index_of = |cell: GlyphCell| cells.iter().position(|c| *c == cell);
             let mut marked = cx.memory::<Marked>().clone();
-            if let Some(at) = marked_cell.and_then(index_of)
-                && marked.0.lead != Some(at)
+            let host = marked_cell.and_then(|cell| index_of(cell).map(|at| (cell, at)));
+            if let Some((_, at)) = host
+                && (marked.host != host || reveal_cell == marked_cell)
+                && marked.selection.lead != Some(at)
             {
-                marked.0 = Selection::single(at);
+                marked.selection = Selection::single(at);
             }
+            marked.host = host;
             match &empty {
                 Some(text) if cells.is_empty() => {
                     Text::new(text.clone()).shade(Shade::Muted).show(ui);
@@ -589,7 +657,7 @@ impl<'a> GlyphsPanel<'a> {
                         .zoom(GridZoom::Fixed(size))
                         .caption(CaptionPlace::None)
                         .select(SelectMode::Single)
-                        .selection(Bind::bound(&mut marked.0));
+                        .selection(Bind::bound(&mut marked.selection));
                     if let Some(at) = reveal_cell.and_then(index_of) {
                         grid = grid.reveal(at);
                     }
@@ -608,6 +676,25 @@ impl<'a> GlyphsPanel<'a> {
                             None => tile,
                         }
                     });
+                    // The click names the glyph. Later passes keep that glyph: the grid remembers the row, so a
+                    // same-length list must not move the open menu onto whatever glyph is there now.
+                    let clicked = shown_grid.response.events.iter().find_map(|event| match event {
+                        CollectionEvent::ContextMenu(request) => cells.get(request.key).copied(),
+                        _ => None,
+                    });
+                    let mut held = std::mem::take(cx.memory::<HeldMenu>());
+                    if let Some(cell) = clicked {
+                        held = HeldMenu(Some(MenuCell { cell, family: face.0.to_owned(), style: face.1.to_owned(), revision }));
+                    }
+                    // A closed menu lets go of its cell, and so does another face, or a glyph id after the source
+                    // replaced its faces: the same id there is another glyph.
+                    let other_face = held.0.as_ref().is_some_and(|held| !held.holds_in(face, revision));
+                    if shown_grid.response.menu.is_none() || other_face {
+                        held = HeldMenu(None);
+                    }
+                    let opener = shown_grid.response.response.clone();
+                    menu = held.0.as_ref().map(|held| GlyphCellMenu { cell: held.cell, opener });
+                    *cx.memory::<HeldMenu>() = held;
                     for event in shown_grid.response.events {
                         match event {
                             CollectionEvent::Activate(key) => activated = cells.get(key).copied().or(activated),
@@ -660,7 +747,7 @@ impl<'a> GlyphsPanel<'a> {
             // Footer: the selection, the count and the zoom.
             let n = cells.len() as u64;
             let count = words.count.text(n, &env.format().integer(n));
-            let info = match marked.0.lead.and_then(|lead| cells.get(lead)).copied() {
+            let info = match marked.selection.lead.and_then(|lead| cells.get(lead)).copied() {
                 Some(GlyphCell::Char(c)) => match source.describe(face.0, face.1, GlyphCell::Char(c)).gid {
                     Some(gid) => words.selected_glyph.fill(&[("code", &code(c)), ("gid", &gid.to_string()), ("count", &count)]),
                     None => words.selected.fill(&[("code", &code(c)), ("count", &count)]),
@@ -693,6 +780,6 @@ impl<'a> GlyphsPanel<'a> {
                 write_bind(&mut settings, cx, state, "Glyphs panel");
             }
         });
-        GlyphsPanelOutput { response: shown.output, activated: activated_out, alternate: picked, font_changed }
+        GlyphsPanelOutput { response: shown.output, activated: activated_out, alternate: picked, font_changed, menu }
     }
 }

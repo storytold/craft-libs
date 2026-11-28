@@ -3,15 +3,15 @@
 
 use craft_behavior::{EditEvent, IconId, Mixed, Selection};
 use craft_theme::Srgba;
-use craft_ui::choice::{SwatchSpacing, SwatchTable};
-use craft_ui::contract::{ActivateOn, Bind, Held, ListDrag, NoValue, Outcome, Pattern, Show as _, ShowContainer as _};
+use craft_ui::choice::{SwatchSpacing, SwatchTable, SwatchTableOutput};
+use craft_ui::contract::{ActivateOn, Bind, Held, LeadOnOpen, ListDrag, NoValue, Outcome, Pattern, Show as _, ShowContainer as _, SpaceAction};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::memory::StageAccess;
 use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::style::TypeRole;
-use egui::{Response, Ui};
+use egui::{PointerButton, Response, Ui};
 use std::sync::Arc;
 
 #[cfg(feature = "suite")]
@@ -35,6 +35,9 @@ pub struct SwatchPaletteOutput {
     pub pick_color: Option<ColorRequest>,
     /// Every swatch click of this pass, also a click on the colour already bound, which files no `edit`.
     pub picked: Option<Srgba>,
+    /// The picked entry's index in the palette, including a swatch with the bound colour or a duplicate colour.
+    /// The recent row and the Other… cell do not report a swatch index.
+    pub picked_swatch: Option<usize>,
     /// The cell `picked` came from, so a host can tell apart cells that show the same color.
     pub cell: Option<PaletteCell>,
 }
@@ -77,6 +80,7 @@ pub struct SwatchPalette<'a> {
     label: Label,
     color: PaletteColor<'a>,
     swatches: &'a [(Label, Srgba)],
+    selected_swatch: Option<usize>,
     spacing: SwatchSpacing,
     drag: Option<TableMap>,
     /// The Other… cell: the key of its colour request and its name.
@@ -131,6 +135,15 @@ fn cell_of(swatches: &[(Label, Srgba)], color: Option<Srgba>) -> Selection<usize
     color.and_then(|color| swatches.iter().position(|(_, c)| c.to_rgba() == color.to_rgba())).map_or_else(Selection::default, Selection::single)
 }
 
+/// A completed activation, or the table's existing secondary-button pick.
+fn picked_cell(table: &SwatchTableOutput, ui: &Ui) -> Option<usize> {
+    table.open.or_else(|| {
+        table.selected.filter(|_| {
+            ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary) || input.pointer.button_released(PointerButton::Secondary))
+        })
+    })
+}
+
 impl<'a> SwatchPalette<'a> {
     /// A palette named `label` of `swatches`, each a name and a colour, choosing the colour bound to `color`.
     pub fn new(label: impl Into<Label>, color: Bind<'a, Srgba>, swatches: &'a [(Label, Srgba)]) -> Self {
@@ -138,6 +151,7 @@ impl<'a> SwatchPalette<'a> {
             label: label.into(),
             color: PaletteColor::Color(Held::new(color)),
             swatches,
+            selected_swatch: None,
             spacing: SwatchSpacing::Touching,
             drag: None,
             other: None,
@@ -153,11 +167,19 @@ impl<'a> SwatchPalette<'a> {
             label: label.into(),
             color: PaletteColor::Optional(color),
             swatches,
+            selected_swatch: None,
             spacing: SwatchSpacing::Touching,
             drag: None,
             other: None,
             recent: None,
         }
+    }
+
+    /// Selects the entry at `index` when the host knows the swatch's identity. The palette uses the
+    /// bound colour to find a selection when the index is absent or out of range.
+    pub fn selected_swatch(mut self, index: Option<usize>) -> Self {
+        self.selected_swatch = index;
+        self
     }
 
     /// The gap between the cells, passed on to its `SwatchTable`.
@@ -191,7 +213,7 @@ impl<'a> SwatchPalette<'a> {
 
     /// Shows the palette.
     pub fn show(self, ui: &mut Ui) -> SwatchPaletteOutput {
-        let SwatchPalette { label, mut color, swatches, spacing, drag, other, recent } = self;
+        let SwatchPalette { label, mut color, swatches, selected_swatch, spacing, drag, other, recent } = self;
         let recent = recent.filter(|(_, colors)| !colors.is_empty());
         let recent_cells: Vec<(Label, Srgba)> =
             recent.iter().flat_map(|(_, colors)| colors.iter()).map(|color| (Label::from(color.to_hex()), *color)).collect();
@@ -199,7 +221,8 @@ impl<'a> SwatchPalette<'a> {
         let mut shown = Stack::new().show(ui, |ui, cx| {
             let before = color.read(cx)?;
             let bound = before.same().copied().flatten();
-            let mut current = cell_of(swatches, bound);
+            let preferred = selected_swatch.filter(|&index| index < swatches.len());
+            let mut current = preferred.map_or_else(|| cell_of(swatches, bound), Selection::single);
             // A palette of recent colours alone has no grid: an empty table would be an empty list box in the tree.
             let mut pick = None;
             if !swatches.is_empty() || other.is_some() {
@@ -209,7 +232,11 @@ impl<'a> SwatchPalette<'a> {
                     .wells(true)
                     .spacing(spacing)
                     .activate(ActivateOn::Click)
+                    .space(SpaceAction::ActivateLead)
                     .selection(Bind::bound(&mut current));
+                if let Some(index) = preferred {
+                    table = table.rows_stamp(index as u64).lead_on_open(LeadOnOpen::Selected);
+                }
                 if let Some(map) = &drag {
                     table = map(table);
                 }
@@ -219,7 +246,7 @@ impl<'a> SwatchPalette<'a> {
                 let table = table.show_all(ui);
                 // The Other… cell is keyed `swatches.len()`, past the swatches. A click selects on its press and activates
                 // on its release, so only the activation files the request: one request for one click.
-                pick = table.selected.or(table.open).and_then(|at| match swatches.get(at) {
+                pick = picked_cell(&table, ui).and_then(|at| match swatches.get(at) {
                     Some((_, picked)) => Some(Pick::Color(*picked, PaletteCell::Swatch(at))),
                     None => (other.is_some() && table.open == Some(at) && at == swatches.len()).then_some(Pick::Other),
                 });
@@ -231,9 +258,10 @@ impl<'a> SwatchPalette<'a> {
                     .tips(true)
                     .wells(true)
                     .activate(ActivateOn::Click)
+                    .space(SpaceAction::ActivateLead)
                     .selection(Bind::bound(&mut current))
                     .show_all(ui);
-                if let Some((at, (_, picked))) = row.selected.or(row.open).and_then(|at| recent_cells.get(at).map(|cell| (at, cell))) {
+                if let Some((at, (_, picked))) = picked_cell(&row, ui).and_then(|at| recent_cells.get(at).map(|cell| (at, cell))) {
                     pick = Some(Pick::Color(*picked, PaletteCell::Recent(at)));
                 }
             }
@@ -262,6 +290,10 @@ impl<'a> SwatchPalette<'a> {
             })
             .flatten();
         let (picked, edit, pick_color, cell) = settled.unwrap_or((None, None, None, None));
-        SwatchPaletteOutput { response: shown.output, edit, pick_color, picked, cell }
+        let picked_swatch = match cell {
+            Some(PaletteCell::Swatch(at)) => Some(at),
+            _ => None,
+        };
+        SwatchPaletteOutput { response: shown.output, edit, pick_color, picked, picked_swatch, cell }
     }
 }

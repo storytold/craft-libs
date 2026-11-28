@@ -3,7 +3,7 @@
 use crate::clip::{bound, bound_sequence};
 use crate::soundcraft_time::{FrameRate, GridScale, GridValue, Range, SampleRate, Samples, TempoMap, TimeFormat};
 use crate::{
-    Bus, BusId, ChannelFormat, Clip, ClipId, Group, GroupId, MarkerId, MarkerKind, MemoryLocation, OutputPath, Source, SourceId, SourcePool,
+    Bus, BusId, ChannelFormat, Clip, ClipId, Group, GroupId, MarkerId, MarkerKind, MemoryLocation, OutputPath, Route, Source, SourceId, SourcePool,
     TRACK_COLORS, Track, TrackId, TrackKind, VideoSource,
 };
 
@@ -406,11 +406,17 @@ impl Default for Session {
 }
 
 impl Session {
-    pub const FORMAT_VERSION: u32 = 1;
+    /// Highest session version this build reads. Newer files get `SessionError::Version`,
+    /// not a parse error.
+    pub const FORMAT_VERSION: u32 = 2;
+
+    /// The version a session declares when nothing in it needs a newer reader. Today only
+    /// `Route::Instrument` (an instrument's auxiliary output bus) is unreadable to v1.
+    const BASE_FORMAT_VERSION: u32 = 1;
 
     pub fn new(name: impl Into<String>, sample_rate: SampleRate) -> Self {
         let mut s = Session {
-            format_version: Self::FORMAT_VERSION,
+            format_version: Self::BASE_FORMAT_VERSION,
             name: name.into(),
             sample_rate,
             bit_depth: BitDepthSetting::Int24,
@@ -752,7 +758,30 @@ impl Session {
     // ---- persistence ---------------------------------------------------------------------
 
     pub fn to_json(&self) -> Result<String, SessionError> {
-        serde_json::to_string_pretty(self).map_err(|e| SessionError::Format(e.to_string()))
+        let version = self.saved_format_version();
+        if version == self.format_version {
+            serde_json::to_string_pretty(self).map_err(|e| SessionError::Format(e.to_string()))
+        } else {
+            let mut session = self.clone();
+            session.format_version = version;
+            serde_json::to_string_pretty(&session).map_err(|e| SessionError::Format(e.to_string()))
+        }
+    }
+
+    /// The lowest format version that can read this document back. `Route::Instrument` writes
+    /// an enum tag a v1 reader does not know, so a file holding one must declare v2: a v1
+    /// reader then refuses it with `SessionError::Version` rather than a generic parse error.
+    fn saved_format_version(&self) -> u32 {
+        if self.uses_instrument_routes() { Self::FORMAT_VERSION } else { Self::BASE_FORMAT_VERSION }
+    }
+
+    /// Any `Route::Instrument` on a track's input, output or send.
+    fn uses_instrument_routes(&self) -> bool {
+        self.tracks.iter().any(|t| {
+            matches!(t.mixer.input, Route::Instrument { .. })
+                || matches!(t.mixer.output, Route::Instrument { .. })
+                || t.mixer.sends.iter().flatten().any(|s| matches!(s.target, Route::Instrument { .. }))
+        })
     }
 
     /// Parse a session; decoded audio must be attached separately (`pool`).
@@ -1222,6 +1251,32 @@ mod tests {
         assert!(matches!(Session::from_json(&v.to_string()), Err(SessionError::Version(999))));
     }
 
+    /// `Route::Instrument` writes an enum tag a v1 reader cannot parse, so a file holding one
+    /// declares v2: an older reader then refuses with `SessionError::Version`, not a generic
+    /// parse error. Sessions without one stay v1 and open in older builds.
+    #[test]
+    fn a_session_with_an_instrument_route_saves_as_v2_and_round_trips() {
+        let mut s = Session::default();
+        let instrument_track = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let aux_track = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, Some("Keys Out"));
+        s.track_mut(aux_track).unwrap().mixer.input = Route::Instrument { track: instrument_track, bus: 1 };
+
+        let text = s.to_json().unwrap();
+        let head: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(head["format_version"], serde_json::json!(Session::FORMAT_VERSION), "v2 so a v1 reader refuses by version");
+        let back = Session::from_json(&text).unwrap();
+        assert_eq!(
+            back.track(aux_track).map(|t| &t.mixer.input),
+            Some(&Route::Instrument { track: instrument_track, bus: 1 }),
+            "the route survives a full save/load"
+        );
+
+        let mut plain = Session::default();
+        plain.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
+        let head: serde_json::Value = serde_json::from_str(&plain.to_json().unwrap()).unwrap();
+        assert_eq!(head["format_version"], serde_json::json!(Session::BASE_FORMAT_VERSION), "nothing v2-only stays v1");
+    }
+
     #[test]
     fn the_version_is_checked_as_before() {
         // #892: the version is read without building the whole document as a tree; the errors
@@ -1252,7 +1307,7 @@ mod tests {
             assert_eq!(format(t), want, "{t}");
         }
         let mut v = serde_json::to_value(Session::default()).unwrap();
-        for (ver, want) in [(serde_json::json!(2), 2), (serde_json::json!(1u64 << 40), u32::MAX)] {
+        for (ver, want) in [(serde_json::json!(3), 3), (serde_json::json!(1u64 << 40), u32::MAX)] {
             v["format_version"] = ver;
             assert_eq!(Session::from_json(&v.to_string()), Err(SessionError::Version(want)));
         }
@@ -1263,7 +1318,7 @@ mod tests {
         // A newer version is refused even when the rest would not parse.
         assert_eq!(Session::from_json(r#"{"format_version":7,"tracks":5}"#), Err(SessionError::Version(7)));
         // An older or the current version loads as it did.
-        for ver in [0, 1] {
+        for ver in [0, 1, 2] {
             v["format_version"] = serde_json::json!(ver);
             assert_eq!(Session::from_json(&v.to_string()).map(|s| s.format_version), Ok(ver));
         }

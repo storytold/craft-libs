@@ -6,7 +6,7 @@ Extracted from the storage engine in **PhotoCraft** (refs #2, #14), it guarantee
 
 ## Core Guarantees: Atomicity vs. Durability
  
-1. **Atomicity (All-or-Nothing Replacement)**: `atomic_write` never truncates or overwrites the destination in place. It stages content in a hidden temporary file beside the destination (`.{stem}.{pid}-{n}.craft_tmp`), guaranteeing same-volume rename semantics (`EXDEV`-free). An external reader never sees a partial write. If an error occurs during staging or rename, the destination retains its prior bytes and the staging file is unlinked in user space. An abnormal process exit (e.g. `SIGKILL`, crash, or power loss) bypasses user-space cleanup and leaves the staging file on disk; sweeping orphaned staging files is delegated to consuming application recovery routines. The destination file itself is never corrupted.
+1. **Atomicity (All-or-Nothing Replacement)**: `atomic_write` never truncates or overwrites the destination in place. It stages content in a hidden temporary file beside the destination (`.{stem}.{pid}-{n}.craft_tmp`), guaranteeing same-volume rename semantics (`EXDEV`-free). An external reader never sees a partial write. If an error occurs during staging or rename, the destination retains its prior bytes and the staging file is unlinked in user space. An abnormal process exit (e.g. `SIGKILL`, crash, or power loss) bypasses user-space cleanup and leaves the staging file on disk; the application removes orphaned staging files by calling `sweep_temp_files` for the folder (see "Removing Orphaned Staging Files" below). The destination file itself is never corrupted.
 2. **Durability & Ordering Boundaries**:
    - **Content Flush**: Before rename, staging file bytes are flushed to physical storage media (`sync_file`, issuing `F_FULLFSYNC` on macOS/APFS with SMB `fsync` fallback).
    - **Directory Flush (Unix)**: After rename, syncing the parent directory table (`sync_dir`) is attempted on a best-effort basis. If directory sync fails, the error is ignored because the rename has already committed and the destination has already been replaced.
@@ -62,6 +62,27 @@ let path = Path::new("export.png");
 // without modifying existing content.
 write_new(path, b"png bytes...").expect("exclusive write");
 ```
+
+### Removing Orphaned Staging Files
+
+```rust
+use std::path::Path;
+use std::time::Duration;
+use craft_atomic::sweep_temp_files;
+
+// Removes staging files in scenes/ that were last modified an hour or more ago.
+// Returns how many were removed.
+let removed = sweep_temp_files(Path::new("scenes"), Duration::from_secs(3600)).unwrap_or(0);
+```
+
+`sweep_temp_files` removes only regular files whose names have the staging form, never follows
+a symbolic link, and does not search subfolders. A save updates its staging file's modification
+time only while it writes bytes, not while it flushes or renames, and removing the staging file
+makes that save fail. Choose a minimum age longer than the longest time any save into the folder,
+by any process including the calling one, may go without writing, counting the final flush and
+rename. On Windows, a write may not update the modification time until the staging file's handle
+closes, so choose a minimum age longer than the longest whole save, from the staging file's
+creation through the rename. Entries that cannot be removed are left in place.
 
 ### Document Permissions and Private Data
 

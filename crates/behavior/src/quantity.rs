@@ -82,7 +82,8 @@ impl Reader {
         self
     }
 
-    /// The digit-group separator, which the reader skips between digits.
+    /// The digit-group separator, which the reader skips between digits. A comma or point after zero reads as a
+    /// decimal when it is the number's only separator and digits follow it.
     #[must_use]
     pub fn group(mut self, group: char) -> Self {
         self.group = Some(group);
@@ -250,11 +251,6 @@ impl Parse<'_> {
         }
     }
 
-    /// Whether the group separator at `at` is followed by exactly three digits.
-    fn three_digits_after(&self, at: usize) -> bool {
-        self.chars[at + 1..].iter().take_while(|c| digit(**c).is_some()).count() == 3
-    }
-
     fn number(&mut self) -> Result<f64, NotAValue> {
         let mut text = String::new();
         let mut seen_decimal = false;
@@ -264,7 +260,16 @@ impl Parse<'_> {
             } else if c == self.reader.decimal && !seen_decimal {
                 seen_decimal = true;
                 text.push('.');
-            } else if Some(c) == self.reader.group && !seen_decimal && !text.is_empty() && self.three_digits_after(self.at) {
+            } else if Some(c) == self.reader.group && !seen_decimal && !text.is_empty() {
+                let after = &self.chars[self.at + 1..];
+                let digits = after.iter().take_while(|c| digit(**c).is_some()).count();
+                let only_mark = after.get(digits).is_none_or(|&next| next != c && next != self.reader.decimal);
+                if text == "0" && matches!(c, '.' | ',') && digits > 0 && only_mark {
+                    seen_decimal = true;
+                    text.push('.');
+                } else if digits != 3 {
+                    break;
+                }
             } else {
                 break;
             }
@@ -280,6 +285,28 @@ impl Parse<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_single_group_mark_after_zero_reads_as_a_decimal() {
+        for (decimal, group) in [('.', ','), (',', '.')] {
+            let reader = Reader::new().decimal(decimal).group(group).unit("cm", 2.0);
+            for (text, want) in [
+                (format!("0{group}125+2"), 2.125),
+                (format!("2x0{group}125"), 0.25),
+                (format!("-0{group}25 cm"), -0.5),
+                (format!("٠{group}١٢٥"), 0.125),
+                (format!("1{group}125"), 1125.0),
+                (format!("1{group}234{decimal}5"), 1234.5),
+                (format!("0{group}123{group}456"), 123456.0),
+                (format!("0{group}125{decimal}5"), 125.5),
+            ] {
+                assert_eq!(reader.read(&text, None), Ok(want), "{text}");
+            }
+            assert_eq!(reader.read(&format!("0{group}"), None), Err(NotAValue));
+        }
+        let swiss = Reader::new().group('\'');
+        assert_eq!(swiss.read("0'125", None), Ok(125.0));
+    }
 
     #[test]
     fn expressions_units_and_relative_input_read_through_one_grammar() {

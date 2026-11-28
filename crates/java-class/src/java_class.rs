@@ -11,6 +11,7 @@ use crate::bytes::Reader;
 use crate::java_ops::{self, Insn};
 use crate::{FormatError, descriptor as dex};
 use serde::Serialize;
+use std::collections::HashMap;
 
 /// Most constant-pool entries, fields, methods, attributes or interfaces we read from one file.
 const MAX_ITEMS: usize = 1 << 20;
@@ -18,6 +19,9 @@ const MAX_ITEMS: usize = 1 << 20;
 const MAX_ATTRS: usize = 64 * 1024;
 /// Deepest annotation/element-value nesting we walk.
 const MAX_ANNO_DEPTH: usize = 32;
+/// Most bytes of constant-pool text copied into one parsed class. Many entries can name the same
+/// long `Utf8`; once the limit is reached, further names are kept as pool-index placeholders.
+pub(crate) const MAX_COPIED_TEXT: usize = 64 << 20;
 
 /// One constant-pool entry. Index 0 and the slot after a `Long`/`Double` are `Unusable`.
 #[derive(Debug, Clone, PartialEq)]
@@ -347,6 +351,76 @@ fn utf8_of(pool: &[Const], idx: u16) -> &str {
     }
 }
 
+/// Copies constant-pool text into the parse result within `MAX_COPIED_TEXT` bytes in total.
+pub(crate) struct Names<'p> {
+    pool: &'p [Const],
+    left: usize,
+    exhausted: bool,
+    /// The length of each text `keep` has built, by kind and pool index.
+    built: HashMap<(&'static str, u16), usize>,
+}
+
+impl<'p> Names<'p> {
+    pub(crate) fn new(pool: &'p [Const]) -> Self {
+        Names { pool, left: MAX_COPIED_TEXT, exhausted: false, built: HashMap::new() }
+    }
+
+    /// Charge `len` bytes; false once the budget cannot cover them.
+    fn admit(&mut self, len: usize) -> bool {
+        match self.left.checked_sub(len) {
+            Some(left) => {
+                self.left = left;
+                true
+            }
+            None => {
+                self.exhausted = true;
+                false
+            }
+        }
+    }
+
+    /// `render(pool, idx)` when the budget covers it, otherwise the placeholder `<kind#idx>`.
+    /// The length of each rendered text is kept by kind and index, so a text over the budget is
+    /// built at most once however many entries name it.
+    pub(crate) fn keep(&mut self, kind: &'static str, idx: u16, render: fn(&[Const], u16) -> String) -> String {
+        self.keep_as((kind, idx), kind, idx, render)
+    }
+
+    /// Like `keep` for a loadable constant. Constants that copy the same Utf8 the same way share
+    /// one kept length, so many `String` entries over one long Utf8 build its text at most once
+    /// past the budget.
+    pub(crate) fn constant(&mut self, idx: u16, render: fn(&[Const], u16) -> String) -> String {
+        let key = const_text_key(self.pool, idx);
+        self.keep_as(key, "const", idx, render)
+    }
+
+    fn keep_as(&mut self, key: (&'static str, u16), kind: &'static str, idx: u16, render: fn(&[Const], u16) -> String) -> String {
+        if let Some(&len) = self.built.get(&key) {
+            return if self.admit(len) { render(self.pool, idx) } else { format!("<{kind}#{idx}>") };
+        }
+        let text = render(self.pool, idx);
+        self.built.insert(key, text.len());
+        if self.admit(text.len()) { text } else { format!("<{kind}#{idx}>") }
+    }
+
+    /// The Utf8 at `idx` (empty when it is not a Utf8), or `<utf8#idx>` once the budget is spent.
+    fn utf8(&mut self, idx: u16) -> String {
+        let text = utf8_of(self.pool, idx);
+        if self.admit(text.len()) { text.to_string() } else { format!("<utf8#{idx}>") }
+    }
+
+    /// Like `class_name_at`, or `<class#idx>` once the budget is spent.
+    fn class(&mut self, idx: u16) -> String {
+        match self.pool.get(idx as usize) {
+            Some(Const::Class(name_idx)) => {
+                let text = utf8_of(self.pool, *name_idx);
+                if self.admit(text.len()) { text.to_string() } else { format!("<class#{idx}>") }
+            }
+            _ => format!("<class#{idx}>"),
+        }
+    }
+}
+
 /// Parse a class file.
 pub fn parse(data: &[u8]) -> Result<ClassFile, FormatError> {
     if !data.starts_with(&[0xca, 0xfe, 0xba, 0xbe]) {
@@ -369,8 +443,9 @@ pub fn parse(data: &[u8]) -> Result<ClassFile, FormatError> {
     let access = c.u16().ok_or_else(|| FormatError::Truncated("access flags".into()))?;
     let this_idx = c.u16().ok_or_else(|| FormatError::Truncated("this_class".into()))?;
     let super_idx = c.u16().ok_or_else(|| FormatError::Truncated("super_class".into()))?;
-    let this_class = class_name_at(&pool, this_idx);
-    let super_class = if super_idx == 0 { None } else { Some(class_name_at(&pool, super_idx)) };
+    let mut names = Names::new(&pool);
+    let this_class = names.class(this_idx);
+    let super_class = if super_idx == 0 { None } else { Some(names.class(super_idx)) };
     // Interfaces
     let n_iface = c.u16().ok_or_else(|| FormatError::Truncated("interfaces count".into()))? as usize;
     let mut interfaces = Vec::new();
@@ -379,12 +454,12 @@ pub fn parse(data: &[u8]) -> Result<ClassFile, FormatError> {
             warnings.push("interface list ended early".into());
             break;
         };
-        interfaces.push(class_name_at(&pool, i));
+        interfaces.push(names.class(i));
     }
     // Fields
-    let fields = parse_members(&mut c, &pool, &mut warnings, "field")?;
+    let fields = parse_members(&mut c, &mut names, &mut warnings, "field")?;
     // Methods
-    let methods = parse_members(&mut c, &pool, &mut warnings, "method")?;
+    let methods = parse_members(&mut c, &mut names, &mut warnings, "method")?;
     // Class attributes
     let (attrs, complete) = read_attrs(&mut c, &pool);
     if !complete {
@@ -399,23 +474,26 @@ pub fn parse(data: &[u8]) -> Result<ClassFile, FormatError> {
         match a.name {
             "SourceFile" => {
                 if let Some(i) = Reader::new(a.info).u16_be(0) {
-                    source_file = Some(utf8_of(&pool, i).to_string());
+                    source_file = Some(names.utf8(i));
                 }
             }
             "Signature" => {
                 if let Some(i) = Reader::new(a.info).u16_be(0) {
-                    signature = Some(utf8_of(&pool, i).to_string());
+                    signature = Some(names.utf8(i));
                 }
             }
             "BootstrapMethods" => match bootstrap_table(a.info) {
                 Some(table) => bootstrap_methods = table,
                 None => warnings.push("invalid BootstrapMethods table".into()),
             },
-            "InnerClasses" => inner_classes = parse_inner_classes(a.info, &pool),
-            "RuntimeVisibleAnnotations" => annotations.extend(parse_annotation_types(a.info, &pool, "runtime")),
-            "RuntimeInvisibleAnnotations" => annotations.extend(parse_annotation_types(a.info, &pool, "class")),
+            "InnerClasses" => inner_classes = parse_inner_classes(a.info, &mut names),
+            "RuntimeVisibleAnnotations" => annotations.extend(parse_annotation_types(a.info, &mut names, "runtime")),
+            "RuntimeInvisibleAnnotations" => annotations.extend(parse_annotation_types(a.info, &mut names, "class")),
             _ => {}
         }
+    }
+    if names.exhausted {
+        warnings.push(format!("names exceed {} MiB of copied text; later ones are shown as pool indices", MAX_COPIED_TEXT >> 20));
     }
     Ok(ClassFile {
         version,
@@ -518,7 +596,8 @@ fn bootstrap_table(data: &[u8]) -> Option<Vec<(u16, Vec<u16>)>> {
     (cursor.pos == data.len()).then_some(table)
 }
 
-fn parse_members(c: &mut Cursor<'_>, pool: &[Const], warnings: &mut Vec<String>, what: &str) -> Result<Vec<Member>, FormatError> {
+fn parse_members(c: &mut Cursor<'_>, names: &mut Names<'_>, warnings: &mut Vec<String>, what: &str) -> Result<Vec<Member>, FormatError> {
+    let pool = names.pool;
     let n = c.u16().ok_or_else(|| FormatError::Truncated(format!("{what} count")))? as usize;
     let mut out = Vec::new();
     for _ in 0..n.min(MAX_ITEMS) {
@@ -526,21 +605,20 @@ fn parse_members(c: &mut Cursor<'_>, pool: &[Const], warnings: &mut Vec<String>,
             warnings.push(format!("{what} table ended early"));
             break;
         };
-        let mut m =
-            Member { access, name: utf8_of(pool, name_idx).to_string(), descriptor: utf8_of(pool, desc_idx).to_string(), ..Default::default() };
+        let mut m = Member { access, name: names.utf8(name_idx), descriptor: names.utf8(desc_idx), ..Default::default() };
         let (attrs, _) = read_attrs(c, pool);
         for a in attrs {
             match a.name {
-                "Code" => m.code = parse_code(a.info, pool),
+                "Code" => m.code = parse_code(a.info, names),
                 "ConstantValue" => {
                     if let Some(i) = Reader::new(a.info).u16_be(0) {
-                        m.constant_value = Some(const_display(pool, i));
+                        m.constant_value = Some(names.constant(i, const_display));
                     }
                 }
-                "Exceptions" => m.exceptions = parse_exceptions_attr(a.info, pool),
+                "Exceptions" => m.exceptions = parse_exceptions_attr(a.info, names),
                 "Signature" => {
                     if let Some(i) = Reader::new(a.info).u16_be(0) {
-                        m.signature = Some(utf8_of(pool, i).to_string());
+                        m.signature = Some(names.utf8(i));
                     }
                 }
                 "Deprecated" => m.deprecated = true,
@@ -553,7 +631,8 @@ fn parse_members(c: &mut Cursor<'_>, pool: &[Const], warnings: &mut Vec<String>,
     Ok(out)
 }
 
-fn parse_code(info: &[u8], pool: &[Const]) -> Option<Code> {
+fn parse_code(info: &[u8], names: &mut Names<'_>) -> Option<Code> {
+    let pool = names.pool;
     let mut c = Cursor::new(info);
     let max_stack = c.u16()?;
     let max_locals = c.u16()?;
@@ -563,7 +642,7 @@ fn parse_code(info: &[u8], pool: &[Const]) -> Option<Code> {
     let mut exceptions = Vec::new();
     for _ in 0..n_exc.min(MAX_ITEMS) {
         let (Some(start_pc), Some(end_pc), Some(handler_pc), Some(catch)) = (c.u16(), c.u16(), c.u16(), c.u16()) else { break };
-        exceptions.push(ExceptionEntry { start_pc, end_pc, handler_pc, catch_type: (catch != 0).then(|| class_name_at(pool, catch)) });
+        exceptions.push(ExceptionEntry { start_pc, end_pc, handler_pc, catch_type: (catch != 0).then(|| names.class(catch)) });
     }
     let mut line_numbers = Vec::new();
     let (attrs, _) = read_attrs(&mut c, pool);
@@ -580,27 +659,27 @@ fn parse_code(info: &[u8], pool: &[Const]) -> Option<Code> {
     Some(Code { max_stack, max_locals, bytecode, exceptions, line_numbers })
 }
 
-fn parse_exceptions_attr(info: &[u8], pool: &[Const]) -> Vec<String> {
+fn parse_exceptions_attr(info: &[u8], names: &mut Names<'_>) -> Vec<String> {
     let mut c = Cursor::new(info);
     let n = c.u16().unwrap_or(0) as usize;
     let mut out = Vec::new();
     for _ in 0..n.min(MAX_ITEMS) {
         let Some(i) = c.u16() else { break };
-        out.push(class_name_at(pool, i));
+        out.push(names.class(i));
     }
     out
 }
 
-fn parse_inner_classes(info: &[u8], pool: &[Const]) -> Vec<InnerClass> {
+fn parse_inner_classes(info: &[u8], names: &mut Names<'_>) -> Vec<InnerClass> {
     let mut c = Cursor::new(info);
     let n = c.u16().unwrap_or(0) as usize;
     let mut out = Vec::new();
     for _ in 0..n.min(MAX_ITEMS) {
         let (Some(inner), Some(outer), Some(name), Some(access)) = (c.u16(), c.u16(), c.u16(), c.u16()) else { break };
         out.push(InnerClass {
-            inner: (inner != 0).then(|| class_name_at(pool, inner)),
-            outer: (outer != 0).then(|| class_name_at(pool, outer)),
-            name: (name != 0).then(|| utf8_of(pool, name).to_string()),
+            inner: (inner != 0).then(|| names.class(inner)),
+            outer: (outer != 0).then(|| names.class(outer)),
+            name: (name != 0).then(|| names.utf8(name)),
             access,
         });
     }
@@ -608,32 +687,35 @@ fn parse_inner_classes(info: &[u8], pool: &[Const]) -> Vec<InnerClass> {
 }
 
 /// Extract annotation type names (dotted) from a `Runtime*Annotations` attribute, best-effort.
-fn parse_annotation_types(info: &[u8], pool: &[Const], visibility: &str) -> Vec<String> {
+fn parse_annotation_types(info: &[u8], names: &mut Names<'_>, visibility: &str) -> Vec<String> {
     let mut c = Cursor::new(info);
     let n = c.u16().unwrap_or(0) as usize;
     let mut out = Vec::new();
     for _ in 0..n.min(MAX_ITEMS) {
-        match read_annotation(&mut c, pool, 0) {
-            Some(t) => out.push(format!("{t} ({visibility})")),
+        match read_annotation(&mut c, names.pool, 0) {
+            Some(idx) => {
+                let t = names.keep("utf8", idx, |pool, idx| field_type(utf8_of(pool, idx)));
+                out.push(format!("{t} ({visibility})"));
+            }
             None => break,
         }
     }
     out
 }
 
-/// Read one `annotation` structure, returning its (dotted) type name; advances past its values.
-fn read_annotation(c: &mut Cursor<'_>, pool: &[Const], depth: usize) -> Option<String> {
+/// Read one `annotation` structure, returning the pool index of its type descriptor; advances past
+/// its values.
+fn read_annotation(c: &mut Cursor<'_>, pool: &[Const], depth: usize) -> Option<u16> {
     if depth > MAX_ANNO_DEPTH {
         return None;
     }
     let type_idx = c.u16()?;
     let n_pairs = c.u16()? as usize;
-    let type_name = field_type(utf8_of(pool, type_idx));
     for _ in 0..n_pairs.min(MAX_ITEMS) {
         let _name_idx = c.u16()?;
         skip_element_value(c, pool, depth + 1)?;
     }
-    Some(type_name)
+    Some(type_idx)
 }
 
 fn skip_element_value(c: &mut Cursor<'_>, pool: &[Const], depth: usize) -> Option<()> {
@@ -683,6 +765,17 @@ fn const_display(pool: &[Const], idx: u16) -> String {
         Some(Const::MethodHandle(k, _)) => format!("MethodHandle(kind {k})"),
         Some(Const::MethodType(d)) => format!("MethodType({})", utf8_of(pool, *d)),
         _ => format!("#{idx}"),
+    }
+}
+
+/// The key under which `Names` keeps the length of `const_display(pool, idx)`: the Utf8 a
+/// `String`, `Class` or `MethodType` constant copies, otherwise the constant itself.
+fn const_text_key(pool: &[Const], idx: u16) -> (&'static str, u16) {
+    match pool.get(idx as usize) {
+        Some(Const::String(s)) => ("const-string", *s),
+        Some(Const::Class(n)) => ("const-class", *n),
+        Some(Const::MethodType(d)) => ("const-method-type", *d),
+        _ => ("const", idx),
     }
 }
 

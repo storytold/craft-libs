@@ -283,11 +283,12 @@ impl BodyHooks<'_> {
             regions.footer.max.y = bottom + self.measured_footer.y;
         }
         let mut footer_rect = regions.footer;
+        // The footer's start edge moves to the control column's, never past its own end edge.
         if props.label.is_some() {
             if rtl {
-                footer_rect.max.x = body_rect.max.x.clamp(footer_rect.min.x, footer_rect.max.x);
+                footer_rect.max.x = body_rect.max.x.min(footer_rect.max.x).max(footer_rect.min.x);
             } else {
-                footer_rect.min.x = body_rect.min.x.clamp(footer_rect.min.x, footer_rect.max.x);
+                footer_rect.min.x = body_rect.min.x.max(footer_rect.min.x).min(footer_rect.max.x);
             }
         }
         let offset = if rtl { regions.footer.max.x - footer_rect.max.x } else { footer_rect.min.x - regions.footer.min.x };
@@ -478,7 +479,9 @@ impl<'b> BodyHooks<'b> {
         } else if !self.given.0 {
             self.shared_width(room.x, props).max(inner.width())
         } else {
-            inner.width()
+            // A container given less width than its padding has an inverted inner rect: its regions take no width,
+            // at their start edge.
+            inner.width().max(0.0)
         };
         // A measure with no room limit along x offers an unbounded width. Left to right the body runs from its start
         // edge to +inf as egui allows; right to left its start edge is the right one, and an unbounded width would put

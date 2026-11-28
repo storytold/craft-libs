@@ -47,6 +47,10 @@ pub(crate) fn story_catalog() -> Arc<Catalog> {
     catalog
 }
 
+/// A variable font (`wght`), for the samples drawn at variation coordinates.
+#[cfg(feature = "suite")]
+pub(crate) const VARIABLE: &[u8] = include_bytes!("../../../font-subset/tests/data/orbitron/Orbitron[wght].ttf");
+
 /// The panel over the story catalog and index; its store is a fake that refuses downloads.
 pub(crate) fn story_panel() -> FontsPanel {
     let store = FakeStore::new(std::env::temp_dir().join("craft-fonts-panel-story"), HashMap::new());

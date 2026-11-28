@@ -18,7 +18,28 @@ fn encoded(f: Format) -> Vec<u8> {
 }
 
 #[test]
-fn max_pixels_enforced_for_every_format() {
+fn read_bounded_takes_input_up_to_its_cap() {
+    let png = encoded(Format::Png);
+    let len = png.len() as u64;
+    let bytes = read_bounded(png.as_slice(), len).unwrap();
+    assert!(decode_with(&bytes, &DecodeOptions::default()).is_ok());
+    assert_eq!(read_bounded(png.as_slice(), len - 1).err().map(|e| e.kind()), Some(std::io::ErrorKind::FileTooLarge));
+}
+
+#[test]
+fn read_bounded_stops_a_stream_with_no_end() {
+    assert_eq!(read_bounded(std::io::repeat(0), 1 << 16).err().map(|e| e.kind()), Some(std::io::ErrorKind::FileTooLarge));
+}
+
+#[test]
+fn read_bounded_reads_one_byte_past_its_cap() {
+    let mut input = std::io::Cursor::new(vec![0u8; 1 << 16]);
+    assert_eq!(read_bounded(&mut input, 100).err().map(|e| e.kind()), Some(std::io::ErrorKind::FileTooLarge));
+    assert_eq!(input.position(), 101);
+}
+
+#[test]
+fn feature_config_max_pixels_enforced_for_every_format() {
     for f in rw_formats() {
         let b = encoded(f);
         let l = Limits { max_pixels: 1000, ..Limits::default() };
@@ -29,7 +50,7 @@ fn max_pixels_enforced_for_every_format() {
 }
 
 #[test]
-fn max_width_enforced_for_every_format() {
+fn feature_config_max_width_enforced_for_every_format() {
     for f in rw_formats() {
         let l = Limits { max_width: 63, ..Limits::default() };
         assert!(is_limit(decode_with(&encoded(f), &opts(l))), "{f:?}");
@@ -37,7 +58,7 @@ fn max_width_enforced_for_every_format() {
 }
 
 #[test]
-fn max_height_enforced_for_every_format() {
+fn feature_config_max_height_enforced_for_every_format() {
     for f in rw_formats() {
         let l = Limits { max_height: 47, ..Limits::default() };
         assert!(is_limit(decode_with(&encoded(f), &opts(l))), "{f:?}");
@@ -45,7 +66,7 @@ fn max_height_enforced_for_every_format() {
 }
 
 #[test]
-fn max_alloc_enforced_for_every_format() {
+fn feature_config_max_alloc_enforced_for_every_format() {
     for f in rw_formats() {
         let l = Limits { max_alloc: 64 * 48, ..Limits::default() };
         assert!(decode_with(&encoded(f), &opts(l)).is_err(), "{f:?}");
@@ -53,7 +74,7 @@ fn max_alloc_enforced_for_every_format() {
 }
 
 #[test]
-fn limits_none_accepts() {
+fn feature_config_limits_none_accepts() {
     for f in rw_formats() {
         assert!(decode_with(&encoded(f), &opts(Limits::none())).is_ok(), "{f:?}");
     }

@@ -92,8 +92,11 @@ pub(crate) struct Shared {
     desktop: Option<Desktop>,
     /// Whether the root window had focus in the last root pass.
     root_focused: bool,
-    /// The app's state when the last frame's windows had all reported, which its palettes follow.
+    /// The app's state as the last root frame's windows reported it, which its palettes follow.
     app: AppState,
+    /// The windows [`show_viewport`] showed in this root frame: with the root's, the app's windows. [`follow_activity`]
+    /// takes them at the end of the root pass, inside which every child window's pass ran.
+    shown: Vec<ViewportId>,
     /// Whether a palette window stood lowered under an app-modal layer in this frame.
     lowered: bool,
     /// Where the raise of the modal's window above the palettes it lowered stands.
@@ -557,7 +560,7 @@ fn in_family(ctx: &Context, viewport: ViewportId, window: ViewportId) -> bool {
     false
 }
 
-/// Whether no window of the app has focus, as the last frame's windows reported.
+/// Whether no window of the app has focus, as the last root frame's windows reported ([`follow_activity`]).
 pub(crate) fn app_away(ctx: &Context) -> bool {
     shared(ctx, |shared| shared.app.away)
 }
@@ -681,27 +684,28 @@ fn flush_store(ctx: &Context) {
 /// Keeps the app's state and the stacking order of its windows current from the windows' facts. A palette's window
 /// level and visibility follow the state: the mounts build their viewports with the state of the moment, and a change
 /// asks for the next frame. Runs at the end of the root pass, inside which every child window's pass of the frame
-/// has run, so each window's focus is the one its own pass reported after its input batch. The root input's list of
-/// windows holds each child as of its previous pass, so it is not read for focus. The app is inactive when no
-/// window reports focus: the batch that took focus from one window gave it to no other.
+/// has run, so each window's focus is the one its own pass reported after its input batch. The app's windows are the
+/// root's and those the mounts showed in this frame, a window opened in it included. The app is away when every one
+/// of them reports that it has no focus: the batch that took focus from one window gave it to no other. A window
+/// with no facts yet is unknown, and the app is not away while one is.
 ///
 /// Once a palette has stood lowered under an app-modal layer, the modal's window is raised above it, once per modal.
 /// A window that has the keyboard when a modal comes to block it drops the keys the modal needs, so the modal's window
 /// takes the keyboard from it ([`focus_modal`]).
 fn follow_activity(ctx: &Context) {
-    let windows = viewports::reported(ctx);
-    let focused: Vec<ViewportId> = windows
-        .iter()
-        .map(|(viewport, _)| *viewport)
-        .filter(|viewport| PerViewport::<Record>::with(ctx, *viewport, |record| record.facts.is_some_and(|facts| facts.focused)))
-        .collect();
+    let shown = shared(ctx, |shared| std::mem::take(&mut shared.shown));
+    let windows: Vec<ViewportId> = std::iter::once(ViewportId::ROOT).chain(shown).collect();
+    let focus: Vec<Option<bool>> =
+        windows.iter().map(|viewport| PerViewport::<Record>::with(ctx, *viewport, |record| record.facts.map(|facts| facts.focused))).collect();
+    let away = focus.iter().all(|focus| *focus == Some(false));
+    let focused: Vec<ViewportId> = windows.iter().zip(&focus).filter(|(_, focus)| **focus == Some(true)).map(|(viewport, _)| *viewport).collect();
     let modal = overlay::app_modal_viewport(ctx);
     let minimized = viewports::current(ctx).minimized;
     let now = pass::now(ctx);
     let (repaint, raise) = shared(ctx, |shared| {
-        shared.stacking.retain(|viewport| windows.iter().any(|(open, _)| open == viewport) && !focused.contains(viewport));
+        shared.stacking.retain(|viewport| windows.contains(viewport) && !focused.contains(viewport));
         shared.stacking.extend(&focused);
-        let app = AppState { away: focused.is_empty(), modal, minimized };
+        let app = AppState { away, modal, minimized };
         let lowered = std::mem::take(&mut shared.lowered);
         let modal_changed = app.modal != shared.app.modal;
         if modal_changed {
@@ -731,12 +735,12 @@ fn follow_activity(ctx: &Context) {
 /// Gives the window of `modal`, the app's top modal, the OS focus when one of `windows` that it blocks still has it
 /// [`MODAL_FOCUS_WAIT`] after the modal opened; once per modal. With the focus elsewhere by then (in the modal's own
 /// window, in an OS dialog, in another app) nothing is sent.
-fn focus_modal(ctx: &Context, modal: ViewportId, windows: &[(ViewportId, viewports::Facts)]) {
+fn focus_modal(ctx: &Context, modal: ViewportId, windows: &[ViewportId]) {
     let Some(due) = shared(ctx, |shared| shared.modal_focus) else { return };
     let blocked = |viewport: ViewportId| overlay::modal_viewport(ctx, viewport) == Some(modal) && !in_family(ctx, viewport, modal);
     let wait = due - pass::now(ctx);
     if wait > 0.0 {
-        if windows.iter().any(|(viewport, _)| blocked(*viewport)) {
+        if windows.iter().any(|viewport| blocked(*viewport)) {
             repaint::request_after(ctx, ViewportId::ROOT, wait);
         }
         return;
@@ -745,7 +749,7 @@ fn focus_modal(ctx: &Context, modal: ViewportId, windows: &[(ViewportId, viewpor
     let focused = |viewport: ViewportId| {
         PerViewport::<Record>::with_existing(ctx, viewport, |record| record.facts.is_some_and(|facts| facts.focus_reported)).unwrap_or(false)
     };
-    if !focused(modal) && windows.iter().any(|(viewport, _)| focused(*viewport) && blocked(*viewport)) {
+    if !focused(modal) && windows.iter().any(|viewport| focused(*viewport) && blocked(*viewport)) {
         act(ctx, modal, WindowAction::Focus);
     }
 }

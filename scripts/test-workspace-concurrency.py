@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Check the Workspace workflow's cancellation policy: pull requests and pushes to main or next
-cancel the run they supersede; release tags, manual runs and scheduled runs are never cancelled.
+"""Check the Workspace workflow's cancellation policy: pull requests and pushes to main cancel
+the run they supersede; release tags, manual runs and scheduled runs are never cancelled.
 
 The policy is the top-level `concurrency` block of .github/workflows/workspace.yml. This script
 reads those fields, requires the documented expression shapes, and checks which group each event
@@ -32,7 +32,6 @@ PULL_REQUEST, PUSH, DISPATCH, SCHEDULE = "pull_request", "push", "workflow_dispa
 SUPERSEDED = (
     "github.event_name == 'pull_request'"
     " || github.event_name == 'push' && github.ref == 'refs/heads/main'"
-    " || github.event_name == 'push' && github.ref == 'refs/heads/next'"
 )
 GROUP_SHAPE = re.compile(
     r"(?P<prefix>[A-Za-z0-9._-]+)-\$\{\{\s*\(\s*(?P<condition>[^()]+?)\s*\)\s*"
@@ -47,7 +46,7 @@ def normal(expression):
 
 def superseded(event_name, ref):
     """SUPERSEDED, evaluated."""
-    return event_name == PULL_REQUEST or (event_name == PUSH and ref in ("refs/heads/main", "refs/heads/next"))
+    return event_name == PULL_REQUEST or (event_name == PUSH and ref == "refs/heads/main")
 
 
 def read_concurrency(text):
@@ -86,11 +85,10 @@ def other_run(event_name, ref, run_id):
     return (event_name, ref, run_id)
 
 
-MAIN, NEXT, TAG = ("refs/heads/main", "refs/heads/next", "refs/tags/v1.2.3")
+MAIN, TAG = ("refs/heads/main", "refs/tags/v1.2.3")
 SAME_GROUP = [
     ("a newer commit on the same pull request", pull_request(1316, 43599251877), pull_request(1316, 43600899878)),
     ("two pushes to main", other_run(PUSH, MAIN, 3), other_run(PUSH, MAIN, 4)),
-    ("two pushes to next", other_run(PUSH, NEXT, 20), other_run(PUSH, NEXT, 21)),
 ]
 DIFFERENT_GROUPS = [
     ("two pull requests", pull_request(1316, 1), pull_request(1317, 1)),
@@ -101,15 +99,11 @@ DIFFERENT_GROUPS = [
     ("a main push and a scheduled run", other_run(PUSH, MAIN, 17), other_run(SCHEDULE, MAIN, 17)),
     ("a main push and a manual run of main", other_run(PUSH, MAIN, 18), other_run(DISPATCH, MAIN, 18)),
     ("a main push and a pull request", other_run(PUSH, MAIN, 9), pull_request(1316, 9)),
-    ("a main push and a next push", other_run(PUSH, MAIN, 22), other_run(PUSH, NEXT, 22)),
-    ("a next push and the nightly manual run of next", other_run(PUSH, NEXT, 23), other_run(DISPATCH, NEXT, 23)),
     ("a release tag and a pull request", other_run(PUSH, TAG, 10), pull_request(1316, 10)),
 ]
 CANCELLATION = [
     ("a push supersedes the previous run of its pull request", pull_request(1316, 11), True),
     ("a push to main supersedes the previous main run", other_run(PUSH, MAIN, 12), True),
-    ("a push to next supersedes the previous next run", other_run(PUSH, NEXT, 24), True),
-    ("the nightly manual run of next is never cancelled", other_run(DISPATCH, NEXT, 25), False),
     ("a release tag run is never cancelled", other_run(PUSH, TAG, 13), False),
     ("a manual run is never cancelled", other_run(DISPATCH, MAIN, 14), False),
     ("the scheduled run that saves the caches is never cancelled", other_run(SCHEDULE, MAIN, 19), False),
@@ -158,7 +152,7 @@ class ConcurrencyTests(unittest.TestCase):
             with self.subTest(description):
                 self.assertNotEqual(self.group(*first), self.group(*second), description)
 
-    def test_only_pull_requests_and_main_and_next_pushes_cancel(self):
+    def test_only_pull_requests_and_main_pushes_cancel(self):
         for description, context, expected in CANCELLATION:
             with self.subTest(description):
                 self.assertEqual(self.cancels(context[0], context[1]), expected, description)

@@ -9,10 +9,13 @@ use super::model::PreferencesModel;
 use super::model::{Closed, PreferencesDraft, PreferencesOutput};
 use super::page::{PreferencesLayout, PreferencesPage};
 use super::words::PreferencesWords;
-use crate::contract::{Bind, Props as _, SaveKey, Show as _, ShowContainer as _};
+use crate::buttons::Button;
+use crate::contract::{Bind, Props as _, SaveKey, Show as _, ShowContainer as _, clicked};
 use crate::dialog::{ButtonPlace, Dialog, DialogOutput};
+use crate::layout_components::Row;
 use crate::notices::{Notice, NoticeLayout};
 use crate::runtime::env::{Env, Label};
+use crate::runtime::frame::request_repaint;
 use crate::runtime::memory::StageAccess;
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
@@ -80,14 +83,17 @@ pub struct PreferencesState {
 ///   opens narrower, as it needs no room for a page list.
 /// - **Live mode.** [`PreferencesMode::Live`] applies changes as they occur and shows only OK, which closes without
 ///   applying again. Closing the window does not cancel changes. A failed apply shows its message until another edit.
+/// - **Page steps.** [`page_steps`](PreferencesWindow::page_steps) adds Previous and Next to the footer. They pick the
+///   page before and after the shown one among the pages the search lists, and each is disabled at its end of the
+///   list. A window of cards, which scrolls from page to page, does not show them.
 /// - **Nested dialogs.** While [`PreferencesModel::nested_open`] is true the window takes no input and refuses to
 ///   close; [`PreferencesModel::nested`] draws the nested dialogs with the body's `Ui`, inside the window's own
 ///   viewport.
 /// - **App-modal.** While the window is open the app's other windows take no input, show the blocked cursor and
 ///   refuse to close, and a press on one raises the window.
 /// - **Placement.** The window opens in its own OS window where there are any, else as a modal dialog layer
-///   ([`embedded`](PreferencesWindow::embedded) forces the layer). [`remember`](PreferencesWindow::remember) keeps
-///   its place and size across runs.
+///   ([`embedded`](PreferencesWindow::embedded) forces the layer). [`size`](PreferencesWindow::size) sets the size it
+///   opens at. [`remember`](PreferencesWindow::remember) keeps its place and size across runs.
 #[must_use = "show the window with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 pub struct PreferencesWindow<'a> {
@@ -107,10 +113,19 @@ pub struct PreferencesWindow<'a> {
     /// Lays the page out as `layout` says ([`PreferencesPage::layout`]); the default is [`PreferencesLayout::Paged`].
     #[prop]
     layout: PreferencesLayout,
+    /// The size the window opens at until the user resizes it, in place of the layout's own ([`DEFAULT_SIZE`] for
+    /// pages, a narrower one for cards). A size under the layout's least ([`MIN_SIZE`] for pages) opens at the least;
+    /// a size that is not finite is ignored.
+    #[prop(quantity = "points, the window's opening size")]
+    size: Option<Vec2>,
     /// Escape keeps the typing in the focused field ([`Dialog::escape_keeps_typing`]): in [`PreferencesMode::Live`]
     /// the typed value stays applied when Escape closes the window. Off by default: Escape cancels the typing.
     #[prop(flag)]
     escape_keeps_typing: bool,
+    /// Adds Previous and Next to the footer, which pick the listed page before and after the shown one. Only
+    /// [`PreferencesLayout::Paged`] shows them.
+    #[prop(flag)]
+    page_steps: bool,
 }
 
 /// What the body, the footer and the buttons' guard share during one pass: the host, the window's state as the pass
@@ -123,6 +138,8 @@ struct Session<'h, 'b, H: ?Sized> {
     before: PreferencesState,
     work: PreferencesState,
     page: Option<String>,
+    /// The listed pages before and after the shown one, which Previous and Next pick.
+    steps: (Option<String>, Option<String>),
     /// The pages the body listed this pass, in order, for Prev and Next.
     pages: Vec<String>,
     applied: bool,
@@ -181,6 +198,21 @@ impl<H: PreferencesDraft + ?Sized> Session<'_, '_, H> {
         self.commit(cx);
         ok
     }
+
+    /// Picks the page `page` (Previous or Next) and writes the state, so the next pass shows it.
+    fn step(&mut self, cx: &mut impl StageAccess, page: Option<String>) {
+        if let Some(page) = page {
+            self.work.selected = page;
+            self.commit(cx);
+        }
+    }
+}
+
+/// The pages of `listed` before and after `shown`.
+fn neighbors(listed: &[String], shown: Option<&str>) -> (Option<String>, Option<String>) {
+    let Some(at) = listed.iter().position(|id| Some(id.as_str()) == shown) else { return (None, None) };
+    let before = at.checked_sub(1).and_then(|at| listed.get(at));
+    (before.cloned(), listed.get(at + 1).cloned())
 }
 
 impl<'a> PreferencesWindow<'a> {
@@ -193,13 +225,16 @@ impl<'a> PreferencesWindow<'a> {
             remember: None,
             mode: PreferencesMode::Staged,
             layout: PreferencesLayout::Paged,
+            size: None,
             escape_keeps_typing: false,
+            page_steps: false,
         }
     }
 
     /// Shows the window for this pass over `host`. The output's `closed` tells the host to stop showing it.
     pub fn show<H: PreferencesDraft + ?Sized>(self, ui: &mut Ui, host: &mut H) -> PreferencesOutput {
-        let PreferencesWindow { state, title, embedded, remember, mode, layout, escape_keeps_typing } = self;
+        let PreferencesWindow { state, title, embedded, remember, mode, layout, size: asked, escape_keeps_typing, page_steps } = self;
+        let page_steps = page_steps && layout == PreferencesLayout::Paged;
         let env = Env::of(ui);
         let words = env.words::<PreferencesWords>();
         let common = env.words::<CommonWords>();
@@ -234,6 +269,7 @@ impl<'a> PreferencesWindow<'a> {
             PreferencesLayout::Cards => (CARDS_SIZE, CARDS_MIN_SIZE),
             PreferencesLayout::Classic => (CLASSIC_SIZE, MIN_SIZE),
         };
+        let size = asked.filter(|asked| asked.is_finite()).unwrap_or(size);
         let mut open = true;
         // Filed by a swatch press in this pass.
         let mut pick_color = None;
@@ -244,6 +280,7 @@ impl<'a> PreferencesWindow<'a> {
             before: PreferencesState::default(),
             work: PreferencesState::default(),
             page: None,
+            steps: (None, None),
             pages: Vec::new(),
             applied: false,
         });
@@ -277,7 +314,24 @@ impl<'a> PreferencesWindow<'a> {
             dialog = dialog.remember(key);
         }
         let shown = dialog
-            .footer(|ui, _| {
+            .footer(|ui, cx| {
+                if page_steps {
+                    let (before, after) = session.borrow().steps.clone();
+                    let mut picked = None;
+                    Row::new().show(ui, |ui, _| {
+                        for (label, key, page) in [(&words.previous, "previous", &before), (&words.next, "next", &after)] {
+                            let button = Button::new(label.clone()).enabled(page.is_some() && !nested).id_salt(key).show(ui);
+                            if clicked(&button) {
+                                picked.clone_from(page);
+                            }
+                        }
+                    });
+                    // The footer is measured in a sizing pass before it is shown; only the shown pass steps.
+                    if !ui.is_sizing_pass() && picked.is_some() {
+                        session.borrow_mut().step(cx.dialog(), picked);
+                        request_repaint(ui.ctx());
+                    }
+                }
                 let message = session.borrow().work.error.clone();
                 if let Some(message) = message {
                     Notice::new(Tone::Bad, Label::from(message)).layout(NoticeLayout::Inline).show(ui);
@@ -297,6 +351,9 @@ impl<'a> PreferencesWindow<'a> {
                 session.host.nested(ui);
                 if mode == PreferencesMode::Live && session.work.error.is_none() && session.host.differs() {
                     session.apply(cx);
+                }
+                if page_steps {
+                    session.steps = neighbors(&shown.pages, shown.page.as_deref());
                 }
                 session.page = shown.page;
                 session.pages = shown.pages;

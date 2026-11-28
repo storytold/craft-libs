@@ -210,7 +210,7 @@ fn arena_tab_walk(inner: WheelInner, keys: &[Modifiers]) -> Vec<Option<String>> 
         let limits = |_: &usize| craft_ui::contract::SizeLimits::default();
         let rules = craft_ui::docking::tree::FrameRules::new(&limits);
         let area = Rect::from_min_size(ui.max_rect().min + vec2(0.0, 40.0), vec2(400.0, 340.0));
-        let _ = craft_ui::docking::SplitArea::pair("Panels", craft_behavior::Axis::X, (0usize, 1usize), 0.99, rules).show_at(ui, area, |ui, _| {
+        let _ = craft_ui::docking::SplitArea::pair("Panels", craft_behavior::Axis::X, (0usize, 1usize), 0.99, rules, 0).show_at(ui, area, |ui, _| {
             let _ = ColorWheel::new("Color wheel", Bind::given(ModelValues::new("hsb", &[200.0, 50.0, 50.0]))).inner(inner).show(ui);
         });
         let _ = craft_ui::buttons::Button::new("After").show(ui);

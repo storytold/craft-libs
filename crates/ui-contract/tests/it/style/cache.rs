@@ -141,3 +141,33 @@ fn egui_font_transfer_function_follows_the_resolved_theme_mode() {
     });
     assert_eq!(transfer, Some(FontColorTransferFunction::LIGHT_MODE_DEFAULT));
 }
+
+/// An app's own curve for a mode (#3516): the dark curve it sets on egui's dark style is the one dark passes use,
+/// while light passes still get the light curve, and the app's dark curve comes back on the next dark pass.
+#[trial]
+fn an_app_s_own_dark_text_curve_survives_the_mode_sync() {
+    use egui::epaint::FontColorTransferFunction;
+
+    let mut frames = Frames::new();
+    let own = FontColorTransferFunction::Gamma(0.8);
+    frames.ctx.style_mut_of(egui::Theme::Dark, |style| style.visuals.text_options.color_transfer_function = own);
+    let mut transfer = None;
+
+    frames.root(RootEnv::new().mode(ModeChoice::Dark));
+    frames.frame(vec![egui::Event::SystemTheme(egui::Theme::Light)], |ui| {
+        transfer = Some(ui.visuals().text_options.color_transfer_function);
+    });
+    assert_eq!(transfer, Some(own), "a dark pass keeps the app's dark curve");
+
+    frames.root(RootEnv::new().mode(ModeChoice::Light));
+    frames.frame(vec![egui::Event::SystemTheme(egui::Theme::Dark)], |ui| {
+        transfer = Some(ui.visuals().text_options.color_transfer_function);
+    });
+    assert_eq!(transfer, Some(FontColorTransferFunction::LIGHT_MODE_DEFAULT), "a light pass gets the light curve");
+
+    frames.root(RootEnv::new().mode(ModeChoice::Dark));
+    frames.frame(vec![egui::Event::SystemTheme(egui::Theme::Dark)], |ui| {
+        transfer = Some(ui.visuals().text_options.color_transfer_function);
+    });
+    assert_eq!(transfer, Some(own), "the app's dark curve comes back with dark mode");
+}
