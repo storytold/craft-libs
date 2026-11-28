@@ -360,16 +360,25 @@ fn linear_to_latex_at(linear: &str, depth: usize) -> String {
         if let Some((from, to, mut end)) = accent_base(&chars, &parens, &brackets, i)
             && chars.get(end).copied().and_then(accent_command).is_some()
         {
-            let mut tex = sub(&chars.get(from..to).unwrap_or_default().iter().collect::<String>());
-            while let Some(cmd) = chars.get(end).copied().and_then(accent_command) {
-                tex = format!("\\{cmd}{{{tex}}}");
+            let base = sub(&chars.get(from..to).unwrap_or_default().iter().collect::<String>());
+            let start = end;
+            while chars.get(end).copied().and_then(accent_command).is_some() {
                 end += 1;
             }
             // A script takes one token: the accent and its argument are a group.
-            if o.ends_with(['^', '_']) {
-                tex = format!("{{{tex}}}");
+            let grouped = o.ends_with(['^', '_']);
+            if grouped {
+                o.push('{');
             }
-            o.push_str(&tex);
+            // Stacked marks nest, the last outermost: `x̂̃` is `\tilde{\hat{x}}`.
+            for &mark in chars[start..end].iter().rev() {
+                o.push_str(&format!("\\{}{{", accent_command(mark).unwrap_or_default()));
+            }
+            o.push_str(&base);
+            o.push_str(&"}".repeat(end - start));
+            if grouped {
+                o.push('}');
+            }
             i = end;
             continue;
         }
@@ -693,7 +702,15 @@ fn math_seq(t: &[MTok], pos: &mut usize, depth: usize, in_opt: bool) -> String {
                             "breve" => '\u{306}',
                             _ => '\u{30C}',
                         };
-                        o.push_str(&wrap_part(&math_arg(t, pos, depth)));
+                        // Not `wrap_part`, which leaves a number bare: the mark would then
+                        // follow only its last digit.
+                        let arg = math_arg(t, pos, depth);
+                        let arg = arg.trim();
+                        if arg.chars().count() == 1 {
+                            o.push_str(arg);
+                        } else {
+                            o.push_str(&format!("({arg})"));
+                        }
                         o.push(mark);
                     }
                     "pmod" => {

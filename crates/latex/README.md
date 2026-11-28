@@ -31,7 +31,8 @@ and the work is linear.
 A document's math is converted to and from the linear format equations are kept in by
 `craft_math::latex_text` (re-exported here as `latex_to_linear` and `linear_to_latex`), which works
 on the text and keeps the source's spacing. Symbols are the characters of craft-math's symbol
-names that amsmath and amssymb define (`\star` ⋆, `\|` ‖), written back as those commands. Accents
+names that amsmath and amssymb define (`\star` ⋆, `\Vert` ‖), written back as those commands
+(`\|` is read as ‖ too, and written back as `\Vert`). Accents
 are combining marks after their argument in the linear format and their commands in the export.
 
 Moved from WordCraft (`crates/formats/src/latex`, `07f97737`) with its tests and the LaTeX parts

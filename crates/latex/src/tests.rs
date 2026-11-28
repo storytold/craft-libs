@@ -770,6 +770,8 @@ fn math_accents_export_as_commands_over_their_whole_argument() {
         r"\hat{x_i}",
         r"\hat{AB}",
         r"\tilde{\hat{x}}",
+        r"\hat{12}",
+        r"\vec{10}+\bar{3}",
     ] {
         let linear = craft_math::latex_text::latex_to_linear(src);
         let (first, second) = equation_saves(&linear);
@@ -789,6 +791,8 @@ fn math_accents_export_as_commands_over_their_whole_argument() {
         ("x^2\u{20D7}", r"x^{\vec{2}}"),
         ("z\u{302}+1", r"\hat{z}+1"),
         ("\u{302}x", r"\hat{}x"),
+        ("x\u{302}\u{303}\u{307}", r"\dot{\tilde{\hat{x}}}"),
+        ("a^b\u{302}\u{303}", r"a^{\tilde{\hat{b}}}"),
     ] {
         let out = craft_math::latex_text::linear_to_latex(linear);
         assert_eq!(out, tex, "{linear}");
