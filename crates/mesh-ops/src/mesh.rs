@@ -230,19 +230,7 @@ impl Mesh {
 
     /// Area-weighted smooth normals over the index buffer.
     pub fn compute_normals(&mut self) {
-        let mut normals = vec![Vec3::ZERO; self.positions.len()];
-        for &[a, b, c] in self.indices.as_chunks::<3>().0 {
-            let (a, b, c) = (a as usize, b as usize, c as usize);
-            let (Some(pa), Some(pb), Some(pc)) = (self.positions.get(a), self.positions.get(b), self.positions.get(c)) else { continue };
-            let face = (*pb - *pa).cross(*pc - *pa);
-            for v in [a, b, c] {
-                if let Some(x) = normals.get_mut(v) {
-                    *x += face;
-                }
-            }
-        }
-
-        self.normals = normals.into_iter().map(|v| v.try_normalize().unwrap_or(Vec3::Y)).collect();
+        self.normals = crate::unwrap::smooth_normals(self);
     }
 
     /// MikkTSpace tangents (falls back to per-triangle tangents if generation fails or a position,
@@ -628,6 +616,23 @@ mod tests {
             "Default",
         )
         .unwrap()
+    }
+
+    #[test]
+    fn normals_of_tiny_and_huge_triangles() {
+        for scale in [1e-12, 1e19] {
+            let m = Mesh::from_parts(
+                vec![Vec3::ZERO, Vec3::new(scale, 0.0, 0.0), Vec3::new(0.0, scale, 0.0)],
+                None,
+                vec![Vec2::ZERO, Vec2::X, Vec2::Y],
+                vec![0, 1, 2],
+                "Default",
+            )
+            .unwrap();
+            for n in &m.normals {
+                assert!((*n - Vec3::Z).length() < 1e-5, "scale={scale}: {n:?}");
+            }
+        }
     }
 
     #[test]

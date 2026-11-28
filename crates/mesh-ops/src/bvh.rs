@@ -1,7 +1,7 @@
 //! Bounding volume hierarchy over a mesh's triangles: closest-hit and any-hit ray casts, and
 //! box queries (used by picking, baking and brush stamps).
 
-use glam::{Vec3, Vec3A};
+use glam::{DVec3, Vec3, Vec3A};
 
 use crate::Mesh;
 
@@ -248,16 +248,22 @@ impl Bvh {
     }
 
     fn slab(lo: Vec3A, hi: Vec3A, o: Vec3A, d: Vec3A, tmax: f32) -> Option<f32> {
-        // Divided rather than multiplied by a reciprocal, which is infinite for a subnormal
-        // direction component that still reaches the box at a finite distance.
+        // In f64, where the differences and quotients of finite f32 input neither overflow nor
+        // become infinite for a subnormal direction component.
+        let (lo, hi, o, d) = (Vec3::from(lo).as_dvec3(), Vec3::from(hi).as_dvec3(), Vec3::from(o).as_dvec3(), Vec3::from(d).as_dvec3());
         let t0 = (lo - o) / d;
         let t1 = (hi - o) / d;
-        // A ray lying in a slab plane gives 0·∞ = NaN: it is inside that slab, so the axis does
+        // A ray lying in a slab plane gives 0/0 = NaN: it is inside that slab, so the axis does
         // not bound the hit.
         let open = t0.is_nan_mask() | t1.is_nan_mask();
-        let tn = Vec3A::select(open, Vec3A::NEG_INFINITY, t0.min(t1)).max_element().max(0.0);
-        let tf = Vec3A::select(open, Vec3A::INFINITY, t0.max(t1)).min_element().min(tmax);
-        (tn <= tf).then_some(tn)
+        let tn = DVec3::select(open, DVec3::NEG_INFINITY, t0.min(t1)).max_element().max(0.0);
+        let tf = DVec3::select(open, DVec3::INFINITY, t0.max(t1)).min_element().min(f64::from(tmax));
+        if tn > tf {
+            return None;
+        }
+        // Rounded down, so a node is never skipped for entering just past a closer hit.
+        let entry = tn as f32;
+        Some(if f64::from(entry) > tn { entry.next_down() } else { entry })
     }
 
     /// Möller–Trumbore, double sided.
@@ -603,6 +609,33 @@ mod tests {
         let mesh = Mesh { positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y], indices: vec![0, 1, 2], ..Mesh::default() };
         let hit = Bvh::new(&mesh).closest(Vec3::new(-1e-39, 0.25, 1.0), Vec3::new(1e-39, 0.0, -1.0), 10.0).unwrap();
         assert!((hit.t - 1.0).abs() < 1e-6, "{}", hit.t);
+    }
+
+    #[test]
+    fn rays_hit_across_extreme_coordinates() {
+        let mesh = Mesh {
+            positions: vec![Vec3::new(2e38, 0.0, 0.0), Vec3::new(2e38, 1.0, 0.0), Vec3::new(2e38, 0.0, 1.0)],
+            indices: vec![0, 1, 2],
+            ..Mesh::default()
+        };
+        let bvh = Bvh::new(&mesh);
+        let o = Vec3::new(-2e38, 0.25, 0.25);
+        let d = Vec3::new(2e38, 0.0, 0.0);
+        let hit = bvh.closest(o, d, 3.0).unwrap();
+        assert!((hit.t - 2.0).abs() < 1e-6, "{}", hit.t);
+        assert!(bvh.occluded(o, d, 3.0));
+    }
+
+    #[test]
+    fn slab_entry_rounds_down() {
+        let lo = Vec3A::new(1.0, 0.0, 0.0);
+        let hi = Vec3A::new(1.0, 1.0, 1.0);
+        let o = Vec3A::new(0.0, 0.25, 0.25);
+        let d = Vec3A::new(3.0, 0.0, 0.0);
+        let entry = Bvh::slab(lo, hi, o, d, 1.0).unwrap();
+        assert!(f64::from(entry) <= 1.0 / 3.0);
+        assert!(f64::from(entry.next_up()) > 1.0 / 3.0);
+        assert!(Bvh::slab(lo, hi, o, d, entry).is_none());
     }
 
     #[test]

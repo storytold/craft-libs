@@ -110,7 +110,7 @@ impl Chart {
 
 /// Area-weighted smooth normals over the index buffer, as [`Mesh::compute_normals`] computes
 /// them, returned instead of stored.
-fn smooth_normals(mesh: &Mesh) -> Vec<Vec3> {
+pub(crate) fn smooth_normals(mesh: &Mesh) -> Vec<Vec3> {
     let mut normals = vec![DVec3::ZERO; mesh.positions.len()];
     for &[a, b, c] in mesh.indices.as_chunks::<3>().0 {
         let (a, b, c) = (a as usize, b as usize, c as usize);
