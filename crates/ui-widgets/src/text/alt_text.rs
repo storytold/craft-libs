@@ -175,7 +175,8 @@ impl Component for AltTextField<'_> {
         let check_at = Rect::from_min_size(pos2(content.min.x, area.max.y + inset + cx.gap()), vec2(content.width(), check.y));
         let value = shown_of(cx.value());
         let placeholder = if value.text.same().is_some() { words.alt_text.clone() } else { words.mixed.clone() };
-        let options = TextOptions { lines: Some(LINES), placeholder: Some(placeholder), enabled: !value.all_decorative(), ..TextOptions::default() };
+        let options =
+            TextOptions { lines: Some(LINES), placeholder: Some(placeholder), enabled: !value.all_decorative(), top: true, ..TextOptions::default() };
         cx.text(text_part::<AltText>(), area, &AltCodec, &value, &options);
         let mut flags = Flags::empty();
         flags.set(Flags::CHECKED, value.all_decorative());
