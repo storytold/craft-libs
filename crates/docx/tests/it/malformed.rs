@@ -307,10 +307,16 @@ proptest! {
 }
 
 /// The streams of a Standard-encrypted package (gap 9), and a compound file holding them.
+/// Encrypting runs the 50,000-spin key derivation, so it is done once and copied per case.
 fn standard_streams() -> (Vec<u8>, Vec<u8>) {
-    let file = craft_docx::encrypt_standard_for_tests(&sample(), "pw", 128).unwrap();
-    let comp = craft_cfb::CompoundFile::open(&file).unwrap();
-    (comp.read_path("EncryptionInfo").unwrap(), comp.read_path("EncryptedPackage").unwrap())
+    static STREAMS: std::sync::OnceLock<(Vec<u8>, Vec<u8>)> = std::sync::OnceLock::new();
+    STREAMS
+        .get_or_init(|| {
+            let file = craft_docx::encrypt_standard_for_tests(&sample(), "pw", 128).unwrap();
+            let comp = craft_cfb::CompoundFile::open(&file).unwrap();
+            (comp.read_path("EncryptionInfo").unwrap(), comp.read_path("EncryptedPackage").unwrap())
+        })
+        .clone()
 }
 
 fn compound(info: &[u8], package: &[u8]) -> Vec<u8> {
