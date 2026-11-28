@@ -200,6 +200,24 @@ impl Reader {
             "s" => self.st.style = pv,
             "outlinelevel" => self.st.outline = Some(pv.clamp(0, 9) as u8),
             "pagebb" => self.st.pagebb = on,
+            // Tab stops: a `\tq*`/`\tl*` word sets the alignment or leader of the next `\tx`.
+            "tx" => {
+                let stop = craft_wordmodel::props::TabStop {
+                    pos: (pv.max(0) as f32) / 20.0,
+                    align: self.st.tab_align.take().unwrap_or_default(),
+                    leader: self.st.tab_leader.take().unwrap_or_default(),
+                };
+                self.st.tabs.push(stop);
+            }
+            "tql" => self.st.tab_align = Some(craft_wordmodel::props::TabAlign::Left),
+            "tqr" => self.st.tab_align = Some(craft_wordmodel::props::TabAlign::Right),
+            "tqc" => self.st.tab_align = Some(craft_wordmodel::props::TabAlign::Center),
+            "tqdec" => self.st.tab_align = Some(craft_wordmodel::props::TabAlign::Decimal),
+            "tbar" => self.st.tab_align = Some(craft_wordmodel::props::TabAlign::Bar),
+            "tldot" => self.st.tab_leader = Some(craft_wordmodel::props::TabLeader::Dot),
+            "tlhyph" => self.st.tab_leader = Some(craft_wordmodel::props::TabLeader::Hyphen),
+            "tlul" => self.st.tab_leader = Some(craft_wordmodel::props::TabLeader::Underscore),
+            "tlmdot" => self.st.tab_leader = Some(craft_wordmodel::props::TabLeader::MiddleDot),
             "intbl" => self.st.intbl = true,
             "ls" => self.st.ls = Some(pv),
             "ilvl" => self.st.ilvl = pv.clamp(0, 8) as u8,

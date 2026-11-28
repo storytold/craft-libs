@@ -2435,3 +2435,26 @@ fn metadata_text_controls_keep_punctuation_and_use_the_selected_font_code_page()
     assert_eq!(flow.meta.title, "A—аà");
     assert_eq!(texts(&flow), ["Normal:Body"]);
 }
+
+/// Tab stops come in with the paragraph: a `\tq*`/`\tl*` word before `\tx` gives the stop its
+/// alignment and leader (twips become points); a paragraph without `\tx` keeps none (#7117).
+#[test]
+fn tab_stops_with_alignment_and_leader_are_read() {
+    let d = import(br"{\rtf1\ansi\pard\tqr\tldot\tx3500 Right\par\pard\qc\tql\tx960\tqr\tx2400 Both\par\pard Plain\par}").unwrap();
+    let paras: Vec<_> = d.body.iter().filter_map(|b| b.as_para()).collect();
+    assert_eq!(paras.len(), 3, "{:?}", d.body.len());
+    let x = |p: &craft_wordmodel::Paragraph| p.props.tabs.clone().unwrap_or_default();
+    assert_eq!(
+        x(paras[0]),
+        vec![craft_wordmodel::props::TabStop {
+            pos: 175.0,
+            align: craft_wordmodel::props::TabAlign::Right,
+            leader: craft_wordmodel::props::TabLeader::Dot
+        }],
+        "one right stop at 175 pt with a dot leader"
+    );
+    assert_eq!(x(paras[1]).len(), 2, "both stops read");
+    assert_eq!(x(paras[1])[0].align, craft_wordmodel::props::TabAlign::Left, "the last tq word before a tx decides");
+    assert_eq!(x(paras[1])[1].align, craft_wordmodel::props::TabAlign::Right);
+    assert!(x(paras[2]).is_empty(), "a paragraph without tx keeps none");
+}

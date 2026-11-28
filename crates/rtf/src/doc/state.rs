@@ -229,6 +229,11 @@ pub(super) struct St {
     pub(super) ilvl: u8,
     pub(super) outline: Option<u8>,
     pub(super) pagebb: bool,
+    /// Tab stops collected so far (`\tx` with a pending `\tq*`/`\tl*` word).
+    pub(super) tabs: Vec<craft_wordmodel::props::TabStop>,
+    /// The `\tq*`/`\tl*` words before the next `\tx`: the stop's alignment and leader.
+    pub(super) tab_align: Option<craft_wordmodel::props::TabAlign>,
+    pub(super) tab_leader: Option<craft_wordmodel::props::TabLeader>,
     pub(super) field: Option<usize>,
     /// Inside a group of shapes (`\shpgrp`), whose members are not read as shapes of their own.
     pub(super) in_shpgrp: bool,
@@ -269,6 +274,9 @@ impl Default for St {
             ilvl: 0,
             outline: None,
             pagebb: false,
+            tabs: Vec::new(),
+            tab_align: None,
+            tab_leader: None,
             field: None,
             in_shpgrp: false,
             cp: None,
