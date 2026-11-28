@@ -650,7 +650,7 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         }
         if self.bar == ColumnBar::Own {
             let edge = self.edge_divider(rect, &sizes.column);
-            if let Some(Drag::To(coord)) = divider::pointer(cx, EDGE, 0, &edge) {
+            if let Some(coord) = divider::pointer(cx, EDGE, 0, &edge).and_then(Drag::coord) {
                 self.move_edge(rect, &edge, coord);
             }
             if let Some((_, coord)) = divider::keys(cx, EDGE, &[(0, edge)], sizes.column.step, sizes.column.jump) {

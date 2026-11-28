@@ -247,9 +247,12 @@ impl Component for ColumnBar<'_> {
             if cx.part(part).press.double_pressed() {
                 self.double_clicked = Some(*at as usize);
             }
-            match divider::pointer(cx, DIVIDER, *at, divider) {
-                Some(Drag::Start) => cx.begin(),
-                Some(Drag::To(x)) => cx.propose(resized(&widths, *at as usize, x - rect.left(), width)),
+            let dragged = divider::pointer(cx, DIVIDER, *at, divider);
+            if let Some(Drag::Start(_)) = dragged {
+                cx.begin();
+            }
+            match dragged {
+                Some(Drag::Start(x) | Drag::To(x)) => cx.propose(resized(&widths, *at as usize, x - rect.left(), width)),
                 Some(Drag::Release) => cx.commit(),
                 _ => {}
             }

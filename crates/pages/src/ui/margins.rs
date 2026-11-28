@@ -479,16 +479,17 @@ impl Component for MarginHandles<'_> {
             let snap = if press.mods.alt { 0.0 } else { self.snap };
             let origin = if visible.horizontal() { self.page.rect.min.x } else { self.page.rect.min.y };
             let dragged = divider::pointer(cx, EDGE, visible.index(), &divider);
+            if let Some(Drag::Start(_)) = dragged {
+                *cx.press_slot::<Anchor>() = Some(Anchor(edges));
+                cx.begin();
+            }
+            // The drag's start moves the edge as each later move does, in the same pass.
             match dragged {
-                Some(Drag::Start) => {
-                    *cx.press_slot::<Anchor>() = Some(Anchor(edges));
-                    cx.begin();
-                }
-                Some(Drag::To(coord)) => {
+                Some(Drag::Start(coord) | Drag::To(coord)) => {
                     let anchor = cx.press_slot::<Anchor>().map_or(edges, |anchor| anchor.0);
                     let change = dragged_margin(visible, f64::from(coord - origin) / scale, &self.rules(anchor, snap));
                     cx.propose(anchor.with(change));
-                    if let PressPhase::Drag { pos, .. } = press.phase {
+                    if let PressPhase::DragStart { pos, .. } | PressPhase::Drag { pos, .. } = press.phase {
                         let name = visible.name(&words).clone();
                         readout(cx, pos, &[(name, self.shown(&units, change.points))]);
                     }

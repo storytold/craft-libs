@@ -210,7 +210,7 @@ impl Component for StackSections {
         let sizes = cx.style.sizes;
         let Plan { open, row, dividers } = self.plan(cx.rect, &sizes);
         for (key, index, divider) in &dividers {
-            if let Some(Drag::To(coord)) = divider::pointer(cx, DIVIDER, *key, divider) {
+            if let Some(coord) = divider::pointer(cx, DIVIDER, *key, divider).and_then(Drag::coord) {
                 self.move_divider(&open, &row, *index, coord - divider.at, sizes.strip);
             }
         }

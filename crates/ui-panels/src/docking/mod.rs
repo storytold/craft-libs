@@ -524,9 +524,13 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Component for SplitAr
         let mut edited = false;
         for (at, (handle, _)) in frames.handles.iter().enumerate() {
             let divider = divider_of(handle, (0.0, 0.0), rect, &sizes, rtl);
-            match divider::pointer(cx, HANDLE, at as u64, &divider) {
-                Some(Drag::Start) => cx.begin(),
-                Some(Drag::To(coord)) => {
+            let dragged = divider::pointer(cx, HANDLE, at as u64, &divider);
+            if let Some(Drag::Start(_)) = dragged {
+                cx.begin();
+            }
+            // The drag's start moves the handle as each later move does, in the same pass.
+            match dragged {
+                Some(Drag::Start(coord) | Drag::To(coord)) => {
                     if let Some(next) = moved(&layout, rect, &sizes, &rules, handle, coord - divider.at) {
                         cx.propose(next);
                         edited = true;
