@@ -77,13 +77,34 @@ fn any_port() -> TcpListener {
 }
 
 /// `port` bound as [`TcpListener::bind`] binds it, but not listening yet: the port stays held, and
-/// a connection to it is refused until [`listen`].
+/// a connection to it is refused until [`listen`]. A listener just stopped may still hold the port
+/// on a loaded machine ([`Stop::stop`] waits at most a couple of seconds), so the bind is retried
+/// for up to two seconds.
 fn hold(port: u16) -> Socket {
-    let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(socket2::Protocol::TCP)).unwrap();
-    #[cfg(not(windows))]
-    socket.set_reuse_address(true).unwrap();
-    socket.bind(&std::net::SocketAddr::from(([127, 0, 0, 1], port)).into()).unwrap();
-    socket
+    let started = Instant::now();
+    hold_after(port, || {
+        if started.elapsed() >= Duration::from_secs(2) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        true
+    })
+}
+
+/// [`hold`], calling `busy` each time the port is still taken; the bind is tried again while
+/// `busy` returns true.
+fn hold_after(port: u16, mut busy: impl FnMut() -> bool) -> Socket {
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], port)).into();
+    loop {
+        let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(socket2::Protocol::TCP)).unwrap();
+        #[cfg(not(windows))]
+        socket.set_reuse_address(true).unwrap();
+        match socket.bind(&address) {
+            Ok(()) => return socket,
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && busy() => {}
+            Err(e) => panic!("binding 127.0.0.1:{port}: {e}"),
+        }
+    }
 }
 
 fn listen(socket: Socket) -> TcpListener {
@@ -166,6 +187,20 @@ fn the_not_running_fixture_keeps_its_port_from_another_listener() {
     let rival = TcpListener::bind(("127.0.0.1", port));
     assert!(rival.is_err(), "another listener acquired the reserved port");
     drop(reserved);
+}
+
+/// A port a listener still holds is bound once that listener closes, not refused at the first try.
+#[test]
+fn holding_a_port_waits_for_the_listener_on_it_to_close() {
+    let mut listener = Some(any_port());
+    let port = listener.as_ref().unwrap().local_addr().unwrap().port();
+    let mut tries = 0;
+    let held = hold_after(port, || {
+        tries += 1;
+        listener.take().is_some()
+    });
+    assert_eq!(tries, 1, "the port was free while its listener was open");
+    assert_eq!(held.local_addr().unwrap().as_socket().unwrap().port(), port);
 }
 
 /// An app that goes away during a call is lost, not "not running"; the next call says it is not
