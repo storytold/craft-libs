@@ -435,17 +435,24 @@ impl CommentRow<'_> {
             y = bottom + gap;
         }
         if self.lead && self.editable {
-            let field = sink.field(Slot::ReplyField, strip(Pos2::new(name_at, y), under.room), &words.reply, self.reply, REPLY_LINES);
-            y += field + gap;
-            let button = sink.push_size(Slot::ReplyPost, &words.post);
-            let post = Rect::from_min_size(Pos2::new(width - pad - button.x, y), button);
-            sink.push(Slot::ReplyPost, post, &words.post, !self.reply.trim().is_empty());
-            y += button.y + gap;
+            // While a message of the card is in its editor (a new comment not yet saved among them) the card offers no
+            // reply: the reply box, its Post and the Reply button that focuses it come back once the edit ends. An edit
+            // of a message the thread no longer has (a reply deleted while edited) shows no editor, so it hides nothing.
+            let replying = !self.editing.is_some_and(|(index, _)| index < thread.messages.len());
+            if replying {
+                let field = sink.field(Slot::ReplyField, strip(Pos2::new(name_at, y), under.room), &words.reply, self.reply, REPLY_LINES);
+                y += field + gap;
+                let button = sink.push_size(Slot::ReplyPost, &words.post);
+                let post = Rect::from_min_size(Pos2::new(width - pad - button.x, y), button);
+                sink.push(Slot::ReplyPost, post, &words.post, !self.reply.trim().is_empty());
+                y += button.y + gap;
+            }
             if !menu {
                 let resolve = if thread.resolved { &words.reopen } else { &words.resolve };
                 let mut x = pad;
                 let mut tallest = 0.0_f32;
-                for (slot, label) in [(Slot::Reply, &words.reply_button), (Slot::Resolve, resolve), (Slot::Delete, &words.delete)] {
+                let buttons = [(Slot::Reply, &words.reply_button), (Slot::Resolve, resolve), (Slot::Delete, &words.delete)];
+                for (slot, label) in buttons.into_iter().filter(|&(slot, _)| replying || slot != Slot::Reply) {
                     let size = sink.push_size(slot, label);
                     sink.push(slot, Rect::from_min_size(Pos2::new(x, y), size), label, true);
                     x += size.x + gap;
