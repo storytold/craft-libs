@@ -11,7 +11,7 @@ use crate::pickers::Select;
 use crate::runtime::env::{Env, Label, UnitKind};
 use crate::text::NumberField;
 use craft_behavior::geometry::Constraint;
-use craft_behavior::{EditEvent, IconId, Mixed, NumberCodec, PixelSize};
+use craft_behavior::{EditEvent, IconId, Mixed, NumberCodec, PixelSize, Proposal};
 use egui::{Response, Ui};
 use std::ops::RangeInclusive;
 use std::sync::Arc;
@@ -91,8 +91,9 @@ impl Outcome for ConstraintFieldsOutput {
 ///   and Height.
 /// - `enabled(false)` greys every cell (Photoshop greys them for the Single Row and Single Column
 ///   Marquee).
-/// - Keyboard: each cell is its own Tab stop in the bar's order; right to left the cells follow the bar's reading
-///   order and Width stays before Height.
+/// - Keyboard: each cell is its own Tab stop in the bar's order, except that the swap button comes after Height, so
+///   Tab goes from Width straight to Height; right to left the cells follow the bar's reading order and Width stays
+///   before Height.
 #[must_use = "show the cells with `show`"]
 #[derive(crate::contract::Pattern)]
 pub struct ConstraintFields<'a> {
@@ -168,17 +169,20 @@ impl<'a> ConstraintFields<'a> {
             if let Some(edit) = cells.number(ui, &width_cell, before, width, &mut unit_picked) {
                 now = with_side(before, edit, true);
             }
-            let swap = IconButton::new(IconId::new("swap_horizontal")).label(words.constraint_swap.clone()).enabled(enabled && !free).show(ui);
-            if clicked(&swap) {
+            // The swap sits between the fields but is shown after Height, so it is the Tab stop after Height: Tab goes
+            // from Width straight to Height, and both sides are typed in one pass.
+            let mut swap = IconButton::new(IconId::new("swap_horizontal")).label(words.constraint_swap.clone()).enabled(enabled && !free);
+            let (slot, _) = ui.allocate_exact_size(swap.measure_in(ui, Proposal::Ideal), egui::Sense::hover());
+            let height_cell = Cell { key: "height", caption: &words.constraint_height, first: false, enabled: enabled && !free };
+            if let Some(edit) = cells.number(ui, &height_cell, before, height, &mut unit_picked) {
+                now = with_side(before, edit, false);
+            }
+            if clicked(&swap.show_at(ui, slot)) {
                 now = match before {
                     Constraint::Ratio(w, h) => Constraint::Ratio(h, w),
                     Constraint::Size(w, h) => Constraint::Size(h, w),
                     other => other,
                 };
-            }
-            let height_cell = Cell { key: "height", caption: &words.constraint_height, first: false, enabled: enabled && !free };
-            if let Some(edit) = cells.number(ui, &height_cell, before, height, &mut unit_picked) {
-                now = with_side(before, edit, false);
             }
             if now != before {
                 let _ = constraint.reborrow().write(cx, &EditEvent::set(Mixed::Same(before), now, name.clone(), None));
