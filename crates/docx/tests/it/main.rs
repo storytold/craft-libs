@@ -44,6 +44,7 @@ mod row_property_exceptions;
 mod run_props;
 mod section_form_protection;
 mod section_metadata_preservation;
+mod section_page_borders;
 mod section_page_number_type;
 mod section_text_direction;
 mod section_valign;

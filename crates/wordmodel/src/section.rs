@@ -802,6 +802,12 @@ pub struct SectionProps {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub form_prot: Option<bool>,
     pub page_borders: Option<Borders>,
+    /// `w:display` of the page borders (`w:pgBorders/@w:display`, ECMA-376 §17.6.10): which pages
+    /// of the section they are drawn on, read and written back. `None` is every page, as is
+    /// `allPages`; `firstPage` is the section's first page only and `notFirstPage` every page but
+    /// that one. Only those three values are kept, so this never holds anything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_borders_display: Option<String>,
     /// Text direction / bidi section.
     pub rtl: bool,
     /// Which way the section's text runs (`w:textDirection`, ECMA-376 §17.6.20): vertical
@@ -865,6 +871,7 @@ impl Default for SectionProps {
             valign: PageVAlign::Top,
             form_prot: None,
             page_borders: None,
+            page_borders_display: None,
             rtl: false,
             text_direction: crate::props::TextDirection::Horizontal,
             text_direction_set: false,

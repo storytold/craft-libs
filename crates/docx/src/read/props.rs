@@ -897,7 +897,13 @@ pub fn sectpr(pc: &PropCtx, e: &El) -> (SectionProps, Vec<HfRef>) {
                     _ => PageVAlign::Top,
                 }
             }
-            "w:pgBorders" => s.page_borders = Some(pc.borders(k)),
+            "w:pgBorders" => {
+                s.page_borders = Some(pc.borders(k));
+                // `w:display` (ECMA-376 §17.6.10) says which pages of the section the borders are
+                // drawn on. Only ST_PageBorderDisplay's own values are kept, so a malformed one
+                // is dropped and the borders go on every page.
+                s.page_borders_display = k.attr("w:display").filter(|v| matches!(*v, "allPages" | "firstPage" | "notFirstPage")).map(str::to_string);
+            }
             "w:docGrid" => {
                 let mut g = DocGrid::default();
                 if let Some(t) = k.attr("w:type").and_then(DocGridType::from_ooxml) {
