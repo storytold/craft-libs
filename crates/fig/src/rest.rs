@@ -179,6 +179,8 @@ fn clip_str(s: &str) -> &str {
 #[cfg(test)]
 mod image_filter_tests;
 #[cfg(test)]
+mod pattern_tests;
+#[cfg(test)]
 mod swap_tests;
 #[cfg(test)]
 mod tests;
@@ -430,6 +432,9 @@ struct Mapper<'a> {
     library_contexts: Vec<Value>,
     /// Layers visited while scanning internal canvases, across all of them.
     library_scan_count: usize,
+    /// The layers the visible pages' pattern paints tile: Figma keeps them on the internal canvas,
+    /// where they are kept like the library copies the pages use.
+    pattern_tiles: BTreeSet<String>,
     warnings: craft_figma_rest::Warnings,
     geometry: &'a dyn Geometry,
     outlined_stroke: Option<(&'a str, &'a str)>,
@@ -526,6 +531,7 @@ impl<'a> Mapper<'a> {
             override_scope_entries: 0,
             library_contexts: Vec::new(),
             library_scan_count: 0,
+            pattern_tiles: BTreeSet::new(),
             warnings: craft_figma_rest::Warnings::default(),
             geometry: options.geometry,
             outlined_stroke: options.outlined_stroke,
