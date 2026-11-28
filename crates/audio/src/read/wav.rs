@@ -3,11 +3,8 @@
 
 use super::source::Src;
 use crate::pcm::{PcmKind, le_u16, le_u32, le_u64, tag};
-use crate::wav::{GUID_TAIL, WAVE_FORMAT_EXTENSIBLE, WAVE_FORMAT_IEEE_FLOAT, WAVE_FORMAT_PCM};
+use crate::wav::{AMBISONIC_TAIL, GUID_TAIL, WAVE_FORMAT_EXTENSIBLE, WAVE_FORMAT_IEEE_FLOAT, WAVE_FORMAT_PCM};
 use crate::{AudioError, AudioInfo, BwfInfo, ChannelLayout, CodecId, Container, Result, SampleFormat};
-
-/// Tail of the Ambisonic subtype GUIDs {0000000x-0721-11D3-8644-C8C1CA000000}: PCM (x = 1) and float (x = 3) as well.
-const AMBISONIC_TAIL: [u8; 14] = [0x00, 0x00, 0x21, 0x07, 0xD3, 0x11, 0x86, 0x44, 0xC8, 0xC1, 0xCA, 0x00, 0x00, 0x00];
 
 /// Parsed WAV layout (no sample data decoded yet).
 pub(crate) struct WavLayout {
@@ -359,7 +356,8 @@ pub(crate) fn parse(src: &Src<'_>) -> Result<WavParse> {
                         ixml_time = ixml_time_reference(&small(IXML_MAX as u64));
                     }
                 }
-                b"ds64" => ds64_data = le_u64(&small(64), 8),
+                // The sizes come from the first `ds64` chunk that holds them.
+                b"ds64" if ds64_data.is_none() => ds64_data = le_u64(&small(64), 8),
                 _ => {}
             }
         }
