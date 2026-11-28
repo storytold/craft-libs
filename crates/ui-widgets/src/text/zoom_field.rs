@@ -18,7 +18,7 @@ const MESSAGE_DECIMALS: usize = 2;
 /// with the zoom codec and the zoom scheme's range. With no view it shows a disabled empty field. An edit writes the zoom about the view's centre; an empty
 /// commit keeps the view.
 ///
-/// - Typing takes digits, `-`, `/` and the decimal separator: `a/b` is the zoom `a ÷ b × 100` %. Non-positive
+/// - Typing takes digits, `-`, `/`, `:` and the decimal separator: `a/b` and the ratio `a:b` are the zoom `a ÷ b × 100` %. Non-positive
 ///   entries are rejected; a second separator applies the number before it and reports [`InvalidZoom`].
 /// - Tab writes the typed number in the field's own form and selects it; focus stays and nothing applies. With nothing
 ///   typed, Tab and Shift+Tab move focus as in any field.
