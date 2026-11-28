@@ -14,7 +14,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 pub const MIME: &str = "application/vnd.designcraft+zip";
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 pub const EXTENSION: &str = "designcraft";
 pub const PREVIEW: &str = "preview.png";
 pub const PROXIES_DIRECTORY: &str = "proxies";
@@ -65,8 +65,12 @@ pub struct Loaded<T> {
 
 /// The reader capability required by `document`, inferred from its neutral JSON schema and
 /// embedded assets. Traversal beyond 64 levels conservatively requires version 4. A linked
-/// asset (`/assets/<id>/storage == "linked"`) requires version 5.
+/// asset (`/assets/<id>/storage == "linked"`) requires version 5. A legacy first-baseline
+/// flag requires version 6, so old readers cannot silently change text positioning.
 pub fn required_version(document: &Value, assets: &[Asset<'_>]) -> u32 {
+    if has_legacy_baseline(document) {
+        return 6;
+    }
     if has_linked_asset(document) {
         return 5;
     }
@@ -218,7 +222,9 @@ fn pin_paragraph_defaults(document: &mut Value) {
     let styles = document.pointer("/styles/paragraph").and_then(Value::as_array).cloned().unwrap_or_default();
     let mut by_name: HashMap<String, (Option<String>, bool, bool)> = HashMap::new();
     for style in &styles {
-        let Some(name) = style.get("name").and_then(Value::as_str) else { continue };
+        let Some(name) = style.get("name").and_then(Value::as_str) else {
+            continue;
+        };
         let based_on = style.get("basedOn").and_then(Value::as_str).map(str::to_string);
         let attrs = style.get("para");
         let missing_keep = attrs.and_then(|attrs| attrs.get("keepAllLines")).is_none();
@@ -232,7 +238,9 @@ fn pin_paragraph_defaults(document: &mut Value) {
         let mut seen = HashSet::new();
         let mut current = Some(name.as_str());
         while let Some(style_name) = current {
-            let Some((based_on, missing_keep, missing_drop_cap)) = by_name.get(style_name) else { break };
+            let Some((based_on, missing_keep, missing_drop_cap)) = by_name.get(style_name) else {
+                break;
+            };
             if chain.len() >= MAX_STYLE_DEPTH || !seen.insert(style_name.to_string()) {
                 break;
             }
@@ -293,3 +301,32 @@ fn pin_unstyled_paragraphs(value: &mut Value, known_styles: &HashSet<String>, de
 
 #[cfg(test)]
 mod tests;
+
+fn has_legacy_baseline(document: &Value) -> bool {
+    // Retain only the active ancestor iterators, not every sibling in a wide document.
+    // Width does not imply a new format feature. Uninspected excessive depth still
+    // requires the newest reader, so a hidden flag cannot silently change text layout.
+    let mut stack: Vec<(Box<dyn Iterator<Item = &Value>>, usize)> = vec![(Box::new(std::iter::once(document)), 0)];
+    while let Some((values, depth)) = stack.last_mut() {
+        let Some(value) = values.next() else {
+            stack.pop();
+            continue;
+        };
+        let depth = *depth;
+        if depth > 256 {
+            return true;
+        }
+        let children: Box<dyn Iterator<Item = &Value>> = match value {
+            Value::Object(object) => {
+                if object.get("legacyFirstBaseline").and_then(Value::as_bool) == Some(true) {
+                    return true;
+                }
+                Box::new(object.values())
+            }
+            Value::Array(children) => Box::new(children.iter()),
+            _ => continue,
+        };
+        stack.push((children, depth + 1));
+    }
+    false
+}
