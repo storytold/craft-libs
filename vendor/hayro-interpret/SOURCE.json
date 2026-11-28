@@ -26,7 +26,7 @@
       "path": "Cargo.toml",
       "source_sha256": "cdb6fc309585747b98c029d2e2d48f31bc06595871aa3cce041786e5f78f61bf",
       "source_git_blob": "8141e63df329caeebd66392643848cdbdae5fb4e",
-      "sha256": "fada6f6980bb507802ebb15a743e233af5ace27ec04cd1fa2226d62df219676b"
+      "sha256": "de7e0274a32b900c25d1732a1ac8199940f420e21cc094f03e96e7480f6664fc"
     },
     {
       "path": "Cargo.toml.orig",

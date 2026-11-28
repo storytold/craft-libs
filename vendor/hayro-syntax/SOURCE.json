@@ -14,7 +14,7 @@
       "path": "Cargo.toml",
       "source_sha256": "2520802133a82f9bfca9be7fe4a384af1bce05ada198fd9d637d99d877625333",
       "source_git_blob": "cc34e45f8745780a781c2bb2328fa79669998abf",
-      "sha256": "86349f42b6632812f9ea23eddf56075698dfabbee6c31a04bf1d96431a5cb810"
+      "sha256": "7afcfdfe86eae6f72bcd638317a12fc83d6bae7809804934207628aa523e4f5f"
     },
     {
       "path": "Cargo.toml.orig",
@@ -158,7 +158,7 @@
       "path": "src/filter/jbig2.rs",
       "source_sha256": "0ac3c16e02cb13f2d5fe401edd35949320662906c3906cb39fe743acd5e32b09",
       "source_git_blob": "d87253f536e6b8ac18323f1f06164b516ad775df",
-      "sha256": "7746b6b8982619ce14e4b1ee01ba32cd61ff1f4c6a2dffec4bfb0b543ff4afa9"
+      "sha256": "f89603a8e14d538b9c24ed5645de305a8a954de45c655cb35b4a2ed0e61f4ec7"
     },
     {
       "path": "src/filter/jpx.rs",
@@ -176,7 +176,7 @@
       "path": "src/filter/mod.rs",
       "source_sha256": "0af7145ab16b15b7a60c4b57efecb9bd5fd0cfdc9bb5f9388abb695386e63e49",
       "source_git_blob": "06bda29487d62c25dc39c1ee109091cb17e3867f",
-      "sha256": "5fa2b9e1895ccc16656dd42364ad3aa9982b838090f7acb281df8216a9c95e10"
+      "sha256": "f5063217d4ae3bca8d92f1c741b72127d5c846a6021b8c7d76eb295115c2e03e"
     },
     {
       "path": "src/filter/run_length.rs",
@@ -230,7 +230,7 @@
       "path": "src/object/dict.rs",
       "source_sha256": "bcfefabe931614b79ea54940d02fce534eb2363f1b75a03d6428fd7a04c57981",
       "source_git_blob": "1e016b567e8ec17801fa8282c47f653092839cb5",
-      "sha256": "e81e4e394253e248cf9a6a75908c2950d325f79a36d1b7a7c98bd31c22936ed8"
+      "sha256": "0bc281b5dac2dfd70473facc56ed26572d6396941981d5ad34ef77e33fa1467c"
     },
     {
       "path": "src/object/indirect.rs",
@@ -357,6 +357,18 @@
       "source_sha256": null,
       "source_git_blob": null,
       "sha256": "a18f19629780545a2812fcd8866db9875f3cd048ed67a0d307c0192e16b1b4e9"
+    },
+    {
+      "path": "src/filter/jxl.rs",
+      "source_sha256": null,
+      "source_git_blob": null,
+      "sha256": "032641b82a645360f0f8b4814eda05073537038654e2325b9e6475028b2ac7a8"
+    },
+    {
+      "path": "src/filter/jxl_lossless.jxl",
+      "source_sha256": null,
+      "source_git_blob": null,
+      "sha256": "5d327dfa3518d6f4dc2ec7f5d51af1d6bfa18b13e8881db8b29fc3270cc3eb43"
     }
   ],
   "compatibility_reference": {

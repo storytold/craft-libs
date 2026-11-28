@@ -163,7 +163,7 @@ pub(crate) fn decode(
             !g.filters().iter().any(|f| {
                 matches!(
                     f,
-                    Filter::Jbig2Decode | Filter::DctDecode | Filter::JpxDecode | Filter::CcittFaxDecode
+                    Filter::Jbig2Decode | Filter::DctDecode | Filter::JpxDecode | Filter::JxlDecode | Filter::CcittFaxDecode
                 )
             })
         })

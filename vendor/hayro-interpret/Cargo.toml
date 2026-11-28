@@ -63,6 +63,7 @@ version = "0.7.2"
 features = [
     "std",
     "images",
+    "jxl",
     "unsafe",
 ]
 default-features = false

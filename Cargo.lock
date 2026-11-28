@@ -7194,6 +7194,7 @@ dependencies = [
  "hayro-ccitt",
  "hayro-jbig2",
  "hayro-jpeg2000",
+ "jxl-oxide",
  "memchr",
  "rustc-hash 2.1.3",
  "smallvec",
