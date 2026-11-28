@@ -55,7 +55,7 @@ pub(crate) struct EmbedWriter<'d> {
 
 impl<'d> EmbedWriter<'d> {
     /// Allocate a name and copy the validated leaf without traversing a part graph.
-    pub(super) fn recipient_data(&mut self, target: &str) -> Result<String, crate::DocxError> {
+    pub(super) fn recipient_data(&mut self, target: &str) -> Result<(String, bool), crate::DocxError> {
         let invalid = || crate::DocxError::MailMerge(format!("missing or unsupported recipient data part {target}"));
         if crate::mail_merge::recipient_target("", target).as_deref() != Some(target) {
             return Err(invalid());
@@ -65,11 +65,11 @@ impl<'d> EmbedWriter<'d> {
         if !info.rels.is_empty() {
             return Err(invalid());
         }
-        crate::mail_merge::validate_recipient(bytes, &info.content_type)?;
+        let strict = crate::mail_merge::validate_recipient(bytes, &info.content_type)?;
         let mut memo = std::mem::take(&mut self.first);
         let result = self.copy_tree(target, &mut memo, &mut Vec::new());
         self.first = memo;
-        result.ok_or_else(invalid)
+        result.map(|name| (name, strict)).ok_or_else(invalid)
     }
 
     pub fn new(doc: &'d craft_wordmodel::Document) -> EmbedWriter<'d> {

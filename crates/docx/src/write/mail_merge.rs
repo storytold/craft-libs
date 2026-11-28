@@ -52,8 +52,18 @@ pub(crate) fn keep_rels(rels: &Rels) -> Result<Vec<u8>, DocxError> {
     Ok(bytes)
 }
 
+pub(super) struct WrittenMerge {
+    pub xml: String,
+    pub recipient_strict: Option<bool>,
+}
+
+const TRANSITIONAL_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const STRICT_REL: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships";
+const TRANSITIONAL_WORD: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const STRICT_WORD: &str = "http://purl.oclc.org/ooxml/wordprocessingml/main";
+
 /// Rebind external sources and the single embedded recipient leaf to newly allocated IDs.
-pub(super) fn write(doc: &Document, out: &mut PartRels, embeds: &mut super::embed::EmbedWriter<'_>) -> Result<Option<String>, DocxError> {
+pub(super) fn write(doc: &Document, out: &mut PartRels, embeds: &mut super::embed::EmbedWriter<'_>) -> Result<Option<WrittenMerge>, DocxError> {
     let missing_settings = || {
         if doc.passthrough.contains_key(MAIL_MERGE_RELS) {
             Err(DocxError::MailMerge("retained mail merge settings are missing".into()))
@@ -161,45 +171,58 @@ pub(super) fn write(doc: &Document, out: &mut PartRels, embeds: &mut super::embe
     }
     // Only write the part after validating all of the relationship references. A caller
     // that explicitly discards an unsupported mail merge must leave no orphaned recipient data.
-    if let Some((id, target)) = recipient {
+    let recipient_strict = if let Some((id, target)) = recipient {
         let Some((_, _, path, _)) = out.list.iter_mut().find(|(rid, ..)| rid == &id) else {
             return Err(DocxError::MailMerge("missing allocated recipient data ID".into()));
         };
-        let written = embeds.recipient_data(target)?;
+        let (written, strict) = embeds.recipient_data(target)?;
         *path = craft_opc::relative("word/settings.xml", &written);
-    }
+        Some(strict)
+    } else {
+        None
+    };
     // Original producers may use other prefixes. The canonical subtree declares its own aliases.
     merge.attrs.push(("xmlns:w".into(), "http://schemas.openxmlformats.org/wordprocessingml/2006/main".into()));
     merge.attrs.push(("xmlns:r".into(), "http://schemas.openxmlformats.org/officeDocument/2006/relationships".into()));
-    Ok(Some(merge.to_xml()))
+    Ok(Some(WrittenMerge { xml: merge.to_xml(), recipient_strict }))
 }
 
-/// Match source relationship types to the settings vocabulary actually emitted after merging.
-pub(super) fn source_relationships(settings: &[u8], rels: PartRels) -> Result<PartRels, DocxError> {
-    const TRANSITIONAL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-    const STRICT: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships";
+/// A generated settings part is Transitional by default. Match its namespace to the
+/// opaque recipient part when that part uses the Strict WordprocessingML vocabulary.
+pub(super) fn strict_settings(settings: &[u8]) -> Result<Vec<u8>, DocxError> {
+    let xml = std::str::from_utf8(settings).map_err(|e| DocxError::Xml(e.to_string()))?;
+    Ok(xml
+        .replace(&format!(r#"xmlns:w="{TRANSITIONAL_WORD}""#), &format!(r#"xmlns:w="{STRICT_WORD}""#))
+        .replace(&format!(r#"xmlns:r="{TRANSITIONAL_REL}""#), &format!(r#"xmlns:r="{STRICT_REL}""#))
+        .into_bytes())
+}
+
+pub(super) fn settings_is_strict(settings: &[u8]) -> Result<bool, DocxError> {
     let mut reader = quick_xml::NsReader::from_reader(settings);
-    let namespace = loop {
+    loop {
         let (namespace, event) = reader.read_resolved_event().map_err(|e| DocxError::Xml(e.to_string()))?;
         match event {
-            quick_xml::events::Event::Start(_) => {
-                break match namespace {
-                    quick_xml::name::ResolveResult::Bound(ns) if ns.as_ref() == b"http://purl.oclc.org/ooxml/wordprocessingml/main" => STRICT,
-                    quick_xml::name::ResolveResult::Bound(ns) if ns.as_ref() == b"http://schemas.openxmlformats.org/wordprocessingml/2006/main" => {
-                        TRANSITIONAL
-                    }
-                    _ => return Err(DocxError::MailMerge("unsupported settings namespace".into())),
+            quick_xml::events::Event::Start(_) | quick_xml::events::Event::Empty(_) => {
+                return match namespace {
+                    quick_xml::name::ResolveResult::Bound(ns) if ns.as_ref() == STRICT_WORD.as_bytes() => Ok(true),
+                    quick_xml::name::ResolveResult::Bound(ns) if ns.as_ref() == TRANSITIONAL_WORD.as_bytes() => Ok(false),
+                    _ => Err(DocxError::MailMerge("unsupported settings namespace".into())),
                 };
             }
             quick_xml::events::Event::Eof => return Err(DocxError::MailMerge("missing settings root".into())),
             _ => {}
         }
-    };
+    }
+}
+
+/// Match source relationship types to the settings vocabulary actually emitted after merging.
+pub(super) fn source_relationships(settings: &[u8], rels: PartRels) -> Result<PartRels, DocxError> {
+    let namespace = if settings_is_strict(settings)? { STRICT_REL } else { TRANSITIONAL_REL };
     let mut out = PartRels::default();
     for (id, kind, target, external) in rels.list {
         let kind = match kind.rsplit_once('/') {
             Some((prefix, suffix))
-                if [TRANSITIONAL, STRICT].contains(&prefix)
+                if [TRANSITIONAL_REL, STRICT_REL].contains(&prefix)
                     && matches!(suffix, "mailMergeSource" | "mailMergeHeaderSource" | "mailMergeRecipientData") =>
             {
                 format!("{namespace}/{suffix}")

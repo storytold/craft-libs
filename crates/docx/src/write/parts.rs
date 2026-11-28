@@ -297,11 +297,21 @@ fn write_settings(doc: &Document, wr: &mut Writer<'_>, options: WriteOptions) ->
         }
         Err(error) => return Err(error),
     };
-    let generated = settings_xml(doc, notes_part(doc, wr, true), notes_part(doc, wr, false), template_rel.as_deref(), mail_merge.as_deref());
-    let settings = match doc.passthrough.get(crate::package::SETTINGS_ORIG) {
-        Some(orig) => settings_merge::merge(orig, &generated).unwrap_or(generated),
-        None => generated,
-    };
+    let generated = settings_xml(
+        doc,
+        notes_part(doc, wr, true),
+        notes_part(doc, wr, false),
+        template_rel.as_deref(),
+        mail_merge.as_ref().map(|merge| merge.xml.as_str()),
+    );
+    let recipient_strict = mail_merge.as_ref().and_then(|merge| merge.recipient_strict);
+    let generated = if recipient_strict == Some(true) { mail_merge::strict_settings(&generated)? } else { generated };
+    let settings = doc
+        .passthrough
+        .get(crate::package::SETTINGS_ORIG)
+        .and_then(|orig| settings_merge::merge(orig, &generated))
+        .filter(|settings| recipient_strict.is_none_or(|strict| mail_merge::settings_is_strict(settings).is_ok_and(|actual| actual == strict)))
+        .unwrap_or(generated);
     if mail_merge.is_some() {
         settings_rels = mail_merge::source_relationships(&settings, settings_rels)?;
     }

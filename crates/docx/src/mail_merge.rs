@@ -44,8 +44,8 @@ pub(crate) fn recipient_target(source: &str, target: &str) -> Option<String> {
 }
 
 /// Check the bounded root vocabulary, but never interpret, regenerate or evaluate record keys.
-/// The original bytes (including namespace aliases and exclusion choices) are copied unchanged.
-pub(crate) fn validate_recipient(bytes: &[u8], content_type: &str) -> Result<(), DocxError> {
+/// The original bytes are copied unchanged. Returns whether the root uses the Strict dialect.
+pub(crate) fn validate_recipient(bytes: &[u8], content_type: &str) -> Result<bool, DocxError> {
     if bytes.len() > MAX_EMBEDDED_XML {
         return Err(DocxError::MailMerge("recipient data exceeds 1 MiB".into()));
     }
@@ -70,7 +70,7 @@ pub(crate) fn validate_recipient(bytes: &[u8], content_type: &str) -> Result<(),
     if !valid {
         return Err(DocxError::MailMerge("unsupported recipient data content type or root".into()));
     }
-    Ok(())
+    Ok(root.namespace() == Some("http://purl.oclc.org/ooxml/wordprocessingml/main"))
 }
 
 /// Bound work before the validating parser compares attributes or builds a tree.
@@ -85,6 +85,7 @@ fn check_recipient_limits(text: &str, bytes: &[u8]) -> Result<(), DocxError> {
     // in-scope namespace bindings when an element introduces new bindings.
     const MAX_NAMESPACE_DECLARATIONS: usize = 128;
     let mut declarations_left = MAX_NAMESPACE_DECLARATIONS;
+    let mut first_event = true;
     loop {
         let event = reader.read_event().map_err(|e| DocxError::MailMerge(format!("invalid recipient data: {e}")))?;
         match event {
@@ -94,11 +95,15 @@ fn check_recipient_limits(text: &str, bytes: &[u8]) -> Result<(), DocxError> {
                 }
                 let mut names = HashSet::new();
                 for attribute in element.attributes().with_checks(false) {
-                    let name = attribute.map_err(|e| DocxError::MailMerge(format!("invalid recipient attribute: {e}")))?.key.into_inner();
+                    let attribute = attribute.map_err(|e| DocxError::MailMerge(format!("invalid recipient attribute: {e}")))?;
+                    let name = attribute.key.into_inner();
                     if names.len() >= xml::MAX_ATTRS || !names.insert(name) {
                         return Err(DocxError::MailMerge("too many or duplicate recipient XML attributes".into()));
                     }
                     if name == b"xmlns" || name.starts_with(b"xmlns:") {
+                        if attribute.value.len() > 256 {
+                            return Err(DocxError::MailMerge("recipient XML namespace URI is too long".into()));
+                        }
                         declarations_left = declarations_left
                             .checked_sub(1)
                             .ok_or_else(|| DocxError::MailMerge("too many recipient XML namespace declarations".into()))?;
@@ -109,31 +114,48 @@ fn check_recipient_limits(text: &str, bytes: &[u8]) -> Result<(), DocxError> {
                 }
             }
             Event::Decl(declaration) => {
-                if let Some(standalone) =
-                    declaration.standalone().transpose().map_err(|e| DocxError::MailMerge(format!("invalid recipient declaration: {e}")))?
-                    && !matches!(standalone.as_ref(), b"yes" | b"no")
-                {
-                    return Err(DocxError::MailMerge("invalid recipient XML standalone declaration".into()));
+                if !first_event {
+                    return Err(DocxError::MailMerge("unexpected recipient XML declaration".into()));
                 }
-                if let Some(encoding) =
-                    declaration.encoding().transpose().map_err(|e| DocxError::MailMerge(format!("invalid recipient data: {e}")))?
-                {
-                    // The string parser ignores declarations. Check the original byte encoding
-                    // as required by XML 1.0 section 4.3.3 before copying those bytes unchanged.
-                    let matches = match bytes.get(..2) {
-                        Some([0xFF, 0xFE] | [0xFE, 0xFF]) => encoding.eq_ignore_ascii_case(b"UTF-16"),
-                        _ => encoding.eq_ignore_ascii_case(b"UTF-8"),
-                    };
-                    if !matches {
-                        return Err(DocxError::MailMerge("unsupported or mismatched recipient XML encoding".into()));
-                    }
-                }
+                check_declaration(&declaration, bytes)?;
+            }
+            Event::PI(pi) if pi.target().eq_ignore_ascii_case(b"xml") => {
+                return Err(DocxError::MailMerge("reserved processing instruction in recipient XML".into()));
             }
             Event::End(_) => depth = depth.saturating_sub(1),
             Event::Eof => return Ok(()),
             _ => {}
         }
+        first_event = false;
     }
+}
+
+fn check_declaration(declaration: &quick_xml::events::BytesDecl<'_>, bytes: &[u8]) -> Result<(), DocxError> {
+    let invalid = || DocxError::MailMerge("invalid recipient XML declaration".into());
+    let raw = std::str::from_utf8(declaration).map_err(|_| invalid())?;
+    let start = quick_xml::events::BytesStart::from_content(raw, 3);
+    let mut attrs = start.attributes();
+    let version = attrs.next().transpose().map_err(|_| invalid())?.ok_or_else(invalid)?;
+    if version.key.as_ref() != b"version" || version.value.as_ref() != b"1.0" {
+        return Err(invalid());
+    }
+    let mut next = attrs.next().transpose().map_err(|_| invalid())?;
+    if let Some(encoding) = next.as_ref().filter(|a| a.key.as_ref() == b"encoding") {
+        let expected = match bytes.get(..2) {
+            Some([0xFF, 0xFE] | [0xFE, 0xFF]) => b"UTF-16".as_slice(),
+            _ => b"UTF-8".as_slice(),
+        };
+        if !encoding.value.eq_ignore_ascii_case(expected) {
+            return Err(DocxError::MailMerge("unsupported or mismatched recipient XML encoding".into()));
+        }
+        next = attrs.next().transpose().map_err(|_| invalid())?;
+    }
+    if let Some(standalone) = next
+        && (standalone.key.as_ref() != b"standalone" || !matches!(standalone.value.as_ref(), b"yes" | b"no") || attrs.next().is_some())
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 /// Decode only supported Unicode input, without repairing bytes that will later be copied.

@@ -150,7 +150,7 @@ fn recipient_relationships_follow_emitted_settings_through_aliases_and_native_re
                     assert_eq!(output["word/recipientData.xml"], input["word/recipientData.xml"]);
                     let settings = std::str::from_utf8(&output["word/settings.xml"]).unwrap();
                     let settings = roxmltree::Document::parse(settings).unwrap();
-                    let (wn, rn) = if strict && !alias { (SW, SR) } else { (W, R) };
+                    let (wn, rn) = if strict { (SW, SR) } else { (W, R) };
                     assert!(settings.root_element().has_tag_name((wn, "settings")));
                     let reference = settings.descendants().find(|n| n.has_tag_name((wn, "recipientData"))).unwrap();
                     let id = reference.attribute((rn, "id")).unwrap();
@@ -579,4 +579,20 @@ fn package_directory_targets_are_not_recipient_parts() {
     let doc = craft_docx::read(&zip(&input)).unwrap();
     assert!(!doc.passthrough.contains_key("word/recipientData.xml"));
     assert!(matches!(craft_docx::write(&doc), Err(craft_docx::DocxError::MailMerge(_))));
+}
+
+#[test]
+fn invalid_recipient_declaration_or_namespace_refuses_save() {
+    let root = format!(r#"<w:recipients xmlns:w="{W}"/>"#);
+    let cases = [
+        format!(r#"<?xml encoding="UTF-8"?>{root}"#),
+        format!(r#"{root}<?xml?>"#),
+        format!("<w:recipients xmlns:w=\"{W}\" xmlns:other=\"urn:original:{}\"/>", "x".repeat(260)),
+    ];
+    for payload in cases {
+        let mut input = fixture(CANONICAL, CT, W);
+        input.insert("word/recipientData.xml".into(), payload.into_bytes());
+        let doc = craft_docx::read(&zip(&input)).unwrap();
+        assert!(matches!(craft_docx::write(&doc), Err(craft_docx::DocxError::MailMerge(_))));
+    }
 }
