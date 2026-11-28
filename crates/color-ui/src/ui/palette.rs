@@ -38,6 +38,18 @@ pub struct SwatchPaletteOutput {
     /// The picked entry's index in the palette, including a swatch with the bound colour or a duplicate colour.
     /// The recent row and the Other… cell do not report a swatch index.
     pub picked_swatch: Option<usize>,
+    /// The cell `picked` came from, so a host can tell apart cells that show the same color.
+    pub cell: Option<PaletteCell>,
+}
+
+/// A cell of a [`SwatchPalette`] by its place in the host's lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PaletteCell {
+    /// The swatch at this index of the palette's swatches.
+    Swatch(usize),
+    /// The color at this index of the recent row's colors.
+    Recent(usize),
 }
 
 impl Outcome for SwatchPaletteOutput {
@@ -112,8 +124,8 @@ impl PaletteColor<'_> {
 /// What the body picked in its pass.
 #[derive(Clone, Copy)]
 enum Pick {
-    /// A swatch or a recent colour.
-    Color { color: Srgba, swatch: Option<usize> },
+    /// A swatch or a recent color, and its cell.
+    Color(Srgba, PaletteCell),
     /// The Other… cell.
     Other,
 }
@@ -235,7 +247,7 @@ impl<'a> SwatchPalette<'a> {
                 // The Other… cell is keyed `swatches.len()`, past the swatches. A click selects on its press and activates
                 // on its release, so only the activation files the request: one request for one click.
                 pick = picked_cell(&table, ui).and_then(|at| match swatches.get(at) {
-                    Some((_, picked)) => Some(Pick::Color { color: *picked, swatch: Some(at) }),
+                    Some((_, picked)) => Some(Pick::Color(*picked, PaletteCell::Swatch(at))),
                     None => (other.is_some() && table.open == Some(at) && at == swatches.len()).then_some(Pick::Other),
                 });
             }
@@ -249,8 +261,8 @@ impl<'a> SwatchPalette<'a> {
                     .space(SpaceAction::ActivateLead)
                     .selection(Bind::bound(&mut current))
                     .show_all(ui);
-                if let Some((_, picked)) = picked_cell(&row, ui).and_then(|at| recent_cells.get(at)) {
-                    pick = Some(Pick::Color { color: *picked, swatch: None });
+                if let Some((at, (_, picked))) = picked_cell(&row, ui).and_then(|at| recent_cells.get(at).map(|cell| (at, cell))) {
+                    pick = Some(Pick::Color(*picked, PaletteCell::Recent(at)));
                 }
             }
             Some((before, pick))
@@ -265,19 +277,23 @@ impl<'a> SwatchPalette<'a> {
                         let key = other.as_ref().map(|(key, _)| key.clone())?;
                         Some((None, None, Some(ColorRequest::new(key, bound).title(name.clone())), None))
                     }
-                    Pick::Color { color: after, swatch } => {
+                    Pick::Color(after, cell) => {
                         let unchanged = bound.is_some_and(|bound| bound.to_rgba() == after.to_rgba());
                         let edit = (!unchanged).then(|| {
                             color.write(cx, before, after, name.as_str());
                             let reported = bound.map_or(Mixed::Mixed, Mixed::Same);
                             EditEvent::set(reported, after, Arc::from(name.as_str()), None)
                         });
-                        Some((Some(after), edit, None, swatch))
+                        Some((Some(after), edit, None, Some(cell)))
                     }
                 }
             })
             .flatten();
-        let (picked, edit, pick_color, picked_swatch) = settled.unwrap_or((None, None, None, None));
-        SwatchPaletteOutput { response: shown.output, edit, pick_color, picked, picked_swatch }
+        let (picked, edit, pick_color, cell) = settled.unwrap_or((None, None, None, None));
+        let picked_swatch = match cell {
+            Some(PaletteCell::Swatch(at)) => Some(at),
+            _ => None,
+        };
+        SwatchPaletteOutput { response: shown.output, edit, pick_color, picked, picked_swatch, cell }
     }
 }

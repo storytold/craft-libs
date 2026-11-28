@@ -8,11 +8,11 @@ use craft_behavior::{EditEvent, Mixed, Selection};
 use craft_color_ui::palette::{SwatchColor, SwatchGroup};
 use craft_color_ui::ui::{
     ColorPanel, ColorPanelLayout, ColorPanelMode, ColorPanelShown, ColorPanelState, HarmonyPanel, HarmonyPanelState, HarmonyPicked, HarmonyWheel,
-    PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchLibrary, SwatchPalette, SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesState,
-    SwatchesWords, swatch_rows,
+    PaletteCell, PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchLibrary, SwatchPalette, SwatchesCommand, SwatchesMenu, SwatchesPanel,
+    SwatchesState, SwatchesWords, swatch_rows,
 };
 use craft_host::target::Os;
-use craft_theme::{ColorModel as _, HsbModel, Srgba};
+use craft_theme::{ColorModel as _, HsbModel, ModelValues, Srgba};
 use craft_ui::buttons::Button;
 use craft_ui::choice::SwatchTable;
 use craft_ui::contract::Role;
@@ -367,6 +367,88 @@ fn the_fill_stroke_spectrums_tooltip_names_the_shown_mode_and_shift_click_cycles
     assert!(edits.borrow().is_empty(), "a Shift click picks nothing: {:?}", edits.borrow());
 }
 
+/// A Recent Colors pick in the FillStroke layout reports the chip's model values with its color, also when the chip
+/// shows the edited color's sRGB in another model or without one; a chip whose values the edited color already has
+/// sets nothing.
+#[trial]
+fn a_fill_stroke_recent_pick_keeps_the_chips_model() {
+    let chip = RECENT[0];
+    let cmyk = ModelValues::new("cmyk", &[60.0, 90.0, 0.0, 0.0]);
+    let pick = |edited: PickedColor| {
+        let edits: Edits = Default::default();
+        let seen = Rc::clone(&edits);
+        let mut fixture = Fixture::new(move |ui| {
+            let mut state = ColorPanelState::default();
+            let out = ColorPanel::new(Bind::bound(&mut state), [edited.color, BLUE])
+                .layout(ColorPanelLayout::FillStroke)
+                .edited(Some(edited))
+                .recent(&RECENT)
+                .recent_models(&[Some(cmyk)])
+                .show(ui);
+            seen.borrow_mut().extend(out.edits);
+        });
+        fixture.room(COLOR_ROOM).settle();
+        let recent = fixture.by_label(&chip.to_hex()).expect("the recent chip is named by its hex");
+        fixture.click(&recent).settle();
+        edits.take()
+    };
+    let rgb_of = |color: Srgba| ModelValues::new("rgb", &[color.r * 255.0, color.g * 255.0, color.b * 255.0]);
+    for edited in [PickedColor::in_model(RED, rgb_of(RED)), PickedColor::in_model(chip, rgb_of(chip)), PickedColor::rgb(chip)] {
+        let edits = pick(edited);
+        assert!(
+            matches!(edits.as_slice(), [(PanelTarget::Foreground, EditEvent::Set { after, .. })]
+                if after.model == Some(cmyk) && after.color.to_rgba() == chip.to_rgba()),
+            "one Set to the chip in CMYK from {edited:?}: {edits:?}"
+        );
+    }
+    let edits = pick(PickedColor::in_model(chip, cmyk));
+    assert!(edits.is_empty(), "the chip's own values set nothing: {edits:?}");
+}
+
+/// A Recent Colors pick drops the HSB values the rows kept for a grey: after a host that keeps only sRGB applies a grey
+/// chip with HSB values, the Hue row reads the grey afresh instead of the hue of the earlier row edits.
+#[trial]
+fn a_fill_stroke_recent_pick_drops_the_rows_kept_hue() {
+    let grey = Srgba::rgb(0.5, 0.5, 0.5);
+    let chip = [grey];
+    let chip_hsb = ModelValues::new("hsb", &[0.0, 0.0, 50.0]);
+    let host = Rc::new(RefCell::new(grey));
+    let color = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| {
+        let current = *color.borrow();
+        let mut state = ColorPanelState { mode: ColorPanelMode::HsbSliders, ..Default::default() };
+        let shown = ColorPanel::new(Bind::bound(&mut state), [current, BLUE])
+            .layout(ColorPanelLayout::FillStroke)
+            .edited(Some(PickedColor::rgb(current)))
+            .shown(ColorPanelShown::Mode(ColorPanelMode::HsbSliders))
+            .recent(&chip)
+            .recent_models(&[Some(chip_hsb)])
+            .show(ui);
+        for (_, event) in &shown.edits {
+            if let Some(picked) = event.landed() {
+                *color.borrow_mut() = picked.color;
+            }
+        }
+    });
+    fixture.room(COLOR_ROOM).settle();
+    let hue = fixture.by_role(Role::SLIDER).into_iter().next().expect("the hue slider");
+    fixture.access(AccessActionKind::Focus, &hue).settle();
+    for _ in 0..20 {
+        fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+    }
+    let hue_value = |fixture: &mut Fixture| {
+        let hue = fixture.by_role(Role::SLIDER).into_iter().next().expect("the hue slider");
+        fixture.access(AccessActionKind::Focus, &hue).settle();
+        let id = fixture.focused().expect("the hue slider takes the focus");
+        fixture.tree().value(id).expect("the hue slider reports its value").to_owned()
+    };
+    let stepped = hue_value(&mut fixture);
+    assert_ne!(stepped, "0", "the steps moved the kept hue of the grey");
+    let recent = fixture.by_label(&grey.to_hex()).expect("the recent chip is named by its hex");
+    fixture.click(&recent).settle();
+    assert_eq!(hue_value(&mut fixture), "0", "the pick drops the kept hue {stepped}");
+}
+
 /// In a host sized by its content (a floating Color panel) the FillStroke spectrum is as tall as its end boxes stacked,
 /// each at least as tall as it is wide, not a thin band; in a short group it keeps that height and the body scrolls.
 #[trial]
@@ -471,6 +553,7 @@ struct PaletteReports {
     edits: Vec<EditEvent<Srgba>>,
     requests: Vec<ColorRequest>,
     picked: Vec<Srgba>,
+    cells: Vec<PaletteCell>,
     swatches: Vec<usize>,
 }
 
@@ -482,6 +565,7 @@ fn collect(reports: &Reports, shown: craft_color_ui::ui::SwatchPaletteOutput) {
     reports.edits.extend(shown.edit);
     reports.requests.extend(shown.pick_color);
     reports.picked.extend(shown.picked);
+    reports.cells.extend(shown.cell);
     reports.swatches.extend(shown.picked_swatch);
 }
 
@@ -539,11 +623,13 @@ fn the_other_cell_files_a_request_at_the_colour_and_a_recent_pick_sets_it() {
         taken.edits[0]
     );
     assert_eq!(bound.get().to_rgba(), RECENT[0].to_rgba(), "the recent pick is written");
+    assert_eq!(taken.cells, [PaletteCell::Recent(0)], "the pick names its cell in the recent row");
 
     let violet = fixture.by_label("Violet").expect("violet");
     fixture.click(&violet).settle();
-    let _ = std::mem::take(&mut *reports.borrow_mut());
+    let taken = std::mem::take(&mut *reports.borrow_mut());
     assert_eq!(bound.get().to_rgba(), swatch("Violet").to_rgba());
+    assert_eq!(taken.cells, [PaletteCell::Swatch(5)], "the pick names its swatch");
     // Past the double-click time, so the repeat is a single click of its own.
     fixture.advance(1.0);
     let violet = fixture.by_label("Violet").expect("violet");
