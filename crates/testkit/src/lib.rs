@@ -18,9 +18,12 @@
 //! [`rng::XorShift64Star`], each with `next`, `below`, `byte` and `fill`.
 //!
 //! On targets other than `wasm32`, `deadline::with_deadline` runs a test body on its own thread
-//! and fails the test when the body does not finish within its limit, and `deadline::wait_until`
-//! polls a condition until it holds and fails the test when the limit passes first. Both read an
-//! optional limit variable that the caller names, `CRAFT_TEST_TIMEOUT_SECS` by default.
+//! and fails the test when the body still has no result once the limit has passed; a result that
+//! arrives before that check is returned. `deadline::wait_until` calls a condition, and when a
+//! `deadline::Signal` raise wakes it, checks the condition again until it holds; raises that come
+//! during one call of the condition share one recheck. It fails the test when the condition still
+//! does not hold at the limit. Both read an optional limit variable that the caller names,
+//! `CRAFT_TEST_TIMEOUT_SECS` by default.
 //!
 //! [`hostile::mutations`] yields a fixed sequence of damaged copies of a valid seed, on every
 //! target. On targets other than `wasm32`, `hostile::hammer` runs a parser on the seed, every
@@ -43,6 +46,14 @@
 //! `require_ffmpeg!` and `require_ffprobe!` macros skip or fail the calling test through `skip`
 //! when a program is missing. It is not built for `wasm32`.
 //!
+//! With the `corpus` feature, `corpus` (native only) parses pinned-corpus manifests and checks a
+//! corpus folder against them: `corpus::Manifest`, `corpus::verify` and the test gate
+//! `corpus::pinned`, which skips or fails under the rule of `skip`.
+//!
+//! With the `mcp` feature, on targets other than `wasm32`, `mcp::McpChild` runs an MCP server as a
+//! child process and talks to it over stdin and stdout, with a deadline on every wait and a length
+//! limit on every line it reads.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -52,11 +63,22 @@
 //! They do **not** establish runtime correctness, protocol concurrency safety, or platform behavior
 //! under foreign host environments. They are lightweight syntactic regression gates designed to complement,
 //! rather than replace, platform integration tests and CI execution.
+//!
+//! ### Test fonts
+//!
+//! The [`fonts`] module makes test fonts from font bytes the caller supplies:
+//! [`fonts::rename_family`] gives a face a family name of the same length, and
+//! [`fonts::collection`] builds a TrueType collection from standalone faces.
 
+#[cfg(all(feature = "corpus", not(target_arch = "wasm32")))]
+pub mod corpus;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod deadline;
+pub mod fonts;
 pub mod guards;
 pub mod hostile;
+#[cfg(all(feature = "mcp", not(target_arch = "wasm32")))]
+pub mod mcp;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod oracle;
 #[cfg(not(target_arch = "wasm32"))]
@@ -69,7 +91,7 @@ pub mod serial;
 pub mod skip;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use deadline::{DeadlineLimit, wait_until, with_deadline};
+pub use deadline::{DeadlineLimit, Signal, wait_until, with_deadline};
 pub use guards::{AsFileSource, Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};
 
 #[cfg(not(target_arch = "wasm32"))]

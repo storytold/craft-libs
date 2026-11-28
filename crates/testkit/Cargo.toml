@@ -9,19 +9,35 @@ description = "Source-level platform regression guards, test deadlines, hostile-
 publish = false
 
 [features]
+# `mcp::McpChild`: an MCP stdio test client.
+mcp = ["dep:serde_json"]
+# Pinned-corpus manifests and the `corpus::pinned` test gate (native only).
+corpus = ["dep:sha2", "dep:libc"]
 # `font-coverage`: `skip::craft_fonts_cover`, which parses font data with skrifa.
 font-coverage = ["dep:skrifa"]
 
 [dependencies]
+sha2 = { version = "0.10", default-features = false, features = ["std"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 skrifa = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", optional = true }
 rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
 
 [target.'cfg(windows)'.dependencies]
 process-wrap = { version = "11.0.0", default-features = false, features = ["std", "job-object", "kill-on-drop"] }
+
+[[test]]
+name = "mcp"
+required-features = ["mcp"]
+
+[[test]]
+name = "mcp_child"
+harness = false
+required-features = ["mcp"]
 
 [lints]
 workspace = true

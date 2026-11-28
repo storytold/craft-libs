@@ -155,6 +155,7 @@ fn latency_is_where_the_impulse_lands() {
         ("voice_pitch", vec![]),
         ("voice_pitch", vec![("formant_follow", 1.0)]),
         ("voice_formant", vec![]),
+        ("noise_suppression", vec![("reduction", 0.0)]),
     ] {
         let mut e = fx(id, &p);
         let lat = e.latency();
@@ -914,6 +915,8 @@ fn delays_and_reverbs_report_their_tails() {
         ("chorus_flanger", &[("mode", 1.0), ("width", 100.0), ("intensity", 100.0), ("mix", 100.0)][..]),
         ("chorus_flanger", &[("width", 100.0), ("intensity", 100.0), ("mix", 100.0)][..]),
         ("flanger", &[("final_delay", 20.0), ("feedback", 100.0), ("mix", 100.0)][..]),
+        ("ring_mod", &[("effect", 2.0), ("frequency", 100.0), ("resonance", 90.0)][..]),
+        ("ring_mod", &[("effect", 3.0), ("frequency", 60.0), ("resonance", 95.0), ("mod_source", 1.0), ("mod_depth", 100.0)][..]),
     ] {
         let mut e = fx(id, params);
         let tail = e.tail_samples();
@@ -986,6 +989,11 @@ fn direct_constructors_cap_the_channel_count() {
         pitch::PitchShifter,
         voice::VoicePitch,
         voice::VoiceFormant,
+        suppress::NoiseSuppression,
+        character::RingMod,
+        character::Bitcrusher,
+        character::Tremolo,
+        character::Vibrato,
     );
 }
 
