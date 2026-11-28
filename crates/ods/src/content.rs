@@ -287,14 +287,17 @@ fn attrs_cost(attrs: &[(String, String)]) -> u64 {
     attrs.iter().map(|(k, v)| NODE_COST + (k.len() + v.len()) as u64).fold(0, u64::saturating_add)
 }
 
-/// What a non-blank cell's copy keeps besides its text and trees: its styled stretches and link.
+/// What a non-blank cell's copy keeps besides its text and trees: its style, validation,
+/// formula and currency, its styled stretches and its link.
 fn cell_extras_cost(cell: &Cell) -> u64 {
+    let strings =
+        [&cell.style, &cell.validation, &cell.formula, &cell.currency].iter().map(|s| s.as_ref().map_or(0, String::len) as u64).sum::<u64>();
     let runs = cell.runs.iter().map(|r| NODE_COST + r.style.len() as u64).fold(0, u64::saturating_add);
     let link = cell
         .link
         .as_ref()
         .map_or(0, |l| NODE_COST + (l.href.len() + l.title.as_ref().map_or(0, String::len) + l.target_frame.as_ref().map_or(0, String::len)) as u64);
-    runs.saturating_add(link)
+    runs.saturating_add(link).saturating_add(strings)
 }
 
 fn line_cost(a: Option<&String>, b: Option<&String>) -> u64 {
@@ -412,6 +415,7 @@ impl Import<'_> {
                 self.charge_kept(attrs_cost(&attrs))?;
                 let keep = self.options.only_sheet.is_none_or(|i| i == self.wb.sheets.len());
                 let name = self.attr(&attrs, "table:name")?.unwrap_or_default();
+                self.charge_kept(NODE_COST + name.len() as u64)?;
                 self.sheet = Some(SheetDraft {
                     sheet: Sheet { name, attrs, ..Sheet::default() },
                     depth,
