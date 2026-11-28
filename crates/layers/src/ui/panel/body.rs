@@ -12,10 +12,13 @@ use rows::{RevealPlan, list_selection};
 use craft_behavior::{ColumnWidth, CopyKeys, IconId};
 use craft_keymap::Mods;
 use craft_ui::contract::{
-    Bind, CollectionEvent, ColumnSpec, DropAt, DropKind, DropPlace, ListDrag, PendingDrop, Props as _, ReorderRule, ShowCollection as _, ToggleColumn,
+    Bind, CollectionEvent, ColumnSpec, DropAt, DropKind, DropPlace, ListDrag, PendingDrop, Politeness, Props as _, ReorderRule, RowAlign, Show as _,
+    ShowCollection as _, ShowContainer as _, ToggleColumn, announce,
 };
+use craft_ui::display::Text;
+use craft_ui::layout_components::Row;
 use craft_ui::list::List;
-use craft_ui::runtime::env::Label;
+use craft_ui::runtime::env::{Env, Label};
 use egui::Ui;
 
 use super::Session;
@@ -42,10 +45,11 @@ pub(super) fn show_body<T: LayerTree>(
     rows: &LayerRows<'_, T>,
     session: &mut Session<T::Id>,
     reveal: &RevealPlan<T::Id>,
-    filtered: bool,
+    no_matches_message: Option<(&Label, bool)>,
     lock_name: &Label,
 ) -> BodyOutput<T::Id> {
     let tree = cx.tree;
+    let filtered = rows.filtered();
     let order = rows.keys();
     let mut selection = list_selection(cx, session);
     // The reveal moves the lead, so a layer revealed with a sub-row of its own selected reveals that row.
@@ -107,6 +111,27 @@ pub(super) fn show_body<T: LayerTree>(
             None => row,
         }
     });
+
+    // The memoized order is the only filtering truth. Keep the list present even with no
+    // rows: it owns selection, keys, drops, focus and the empty-area menu. This nonallocating,
+    // display-only layer uses its exact body rect, never the panel/header/footer bounds.
+    let no_matches = filtered && order.is_empty();
+    let became_empty = no_matches && !session.no_matches;
+    session.no_matches = no_matches;
+    if no_matches && let Some((message, filter_focused)) = no_matches_message {
+        if became_empty && filter_focused {
+            announce(ui.ctx(), message.resolved(&Env::of(ui).words).as_str().to_owned(), Politeness::Polite);
+        }
+        let clip = ui.clip_rect();
+        let room = out.response.rect.intersect(clip);
+        if room.is_positive() {
+            ui.set_clip_rect(room);
+            let _ = Row::new().id_salt(("no-matches-message", cx.list)).fill().align(RowAlign::Center).show_at(ui, room, |ui, _| {
+                let _ = Text::new(message.clone()).show(ui);
+            });
+            ui.set_clip_rect(clip);
+        }
+    }
 
     let mut events: Vec<LayersEvent<T::Id>> = reveal.opens.iter().cloned().map(LayersEvent::Open).collect();
     let drop_preview = match &out.pending_drop {

@@ -358,3 +358,223 @@ fn a_filling_objects_search_puts_the_filter_button_at_the_end() {
     let (natural, fill) = (filter_button_end(ObjectsSearch::Natural), filter_button_end(ObjectsSearch::Fill));
     assert!(fill > natural, "the Filter button ends at {fill} under Fill, {natural} under Natural");
 }
+
+const NO_MATCHES: &str = "No layers match the filter.";
+type MessageEvents = Shared<Vec<LayersEvent<u32>>>;
+type MessageMenus = Shared<Vec<Option<craft_layers::ui::tree::LayerRowKey<u32>>>>;
+
+/// The same real panel/tree as the existing filter rig, with optional host wording and its
+/// ordinary empty-area menu. The filter starts with one match so transitions reuse the model.
+fn message_rig(message: Option<&'static str>, room: Vec2) -> (Rig, MessageEvents, MessageMenus) {
+    let tree = Rc::new(RefCell::new(Tracked::new(FakeLayers::boards())));
+    let mut filter = LayerFilter::default();
+    filter.by = FilterBy::Name;
+    filter.name = String::from("Oak");
+    let filter = Rc::new(RefCell::new(filter));
+    let (seen, asked): (MessageEvents, MessageMenus) = (Rc::default(), Rc::default());
+    let (shown, by, sink, menus) = (Rc::clone(&tree), Rc::clone(&filter), Rc::clone(&seen), Rc::clone(&asked));
+    let mut fixture = Fixture::new(move |ui| {
+        let tree = shown.borrow();
+        let mut filter = by.borrow_mut();
+        let mut panel = LayersPanel::new(&*tree).filter(Bind::bound(&mut *filter)).row_menu(|target| {
+            menus.borrow_mut().push(target.row.clone());
+            vec![craft_ui::contract::Entry::new(String::from("empty-options"), "Empty-area options").into()]
+        });
+        if let Some(message) = message {
+            panel = panel.no_matches_message(message);
+        }
+        sink.borrow_mut().extend(panel.show(ui).events);
+    });
+    fixture.room(room).settle();
+    (Rig { fixture, tree, filter, find: Rc::new(Cell::new(false)) }, seen, asked)
+}
+
+/// No message is the existing default. A host's label follows the actual filtered display
+/// order, including clearing the criterion and an actually empty source tree.
+#[trial]
+fn a_no_matches_message_is_optional_and_follows_the_filtered_rows() {
+    let mut absent = rig(|filter| {
+        filter.by = FilterBy::Name;
+        filter.name = String::from("no match");
+    });
+    assert!(absent.rows().is_empty());
+    assert!(absent.fixture.by_label(NO_MATCHES).is_none(), "the default adds no wording");
+    absent.fixture.idle(2);
+
+    let (mut rig, _, _) = message_rig(Some(NO_MATCHES), ONE_PANEL);
+    assert_eq!(rig.rows(), ["Oak"]);
+    assert!(rig.fixture.by_label(NO_MATCHES).is_none(), "a matching filter has no message");
+    rig.filter_by(|filter| filter.name = String::from("no match"));
+    assert!(rig.rows().is_empty());
+    let message = rig.fixture.by_label(NO_MATCHES).expect("the translated host message is a real accessible node");
+    assert!(rig.fixture.by_role(craft_ui::runtime::access::Role::LABEL).iter().any(|target| target.node == message.node));
+    rig.filter_by(|filter| filter.name.clear());
+    assert_eq!(rig.rows(), BOARDS);
+    assert!(rig.fixture.by_label(NO_MATCHES).is_none(), "clearing the filter removes its message");
+    rig.filter_by(|filter| filter.name = String::from("no match"));
+    assert!(rig.fixture.by_label(NO_MATCHES).is_some());
+    {
+        let mut tree = rig.tree.borrow_mut();
+        tree.layers.clear();
+        tree.selection = LayerSelection::default();
+    }
+    rig.fixture.idle(3);
+    assert!(rig.rows().is_empty());
+    assert!(rig.fixture.by_label(NO_MATCHES).is_none(), "an empty source has no rows that filtering left out");
+}
+
+/// The label belongs to the rows body, centred even when the header/footer leave little room.
+/// It takes no layout space from either region and remains clipped to that body.
+#[trial]
+fn the_no_matches_message_is_centred_in_the_short_body_above_the_footer() {
+    for room in [Vec2::new(400.0, 260.0), Vec2::new(360.0, 220.0)] {
+        let (mut rig, _, _) = message_rig(Some(NO_MATCHES), room);
+        rig.filter_by(|filter| filter.name = String::from("no match"));
+        let body = rig.fixture.by_label("Layers").expect("the existing rows list").rect;
+        let label = rig.fixture.by_label(NO_MATCHES).expect("the no-matches text");
+        let footer = rig.fixture.by_label("Create a new layer").expect("the existing footer is still shown").rect;
+        assert!(body.contains_rect(label.rect), "the label is inside the body: {body:?} / {:?}", label.rect);
+        let offset = (label.center() - body.center()).abs();
+        assert!(offset.x <= 1.0 && offset.y <= 1.0, "centred within pixel rounding: {body:?} / {:?}", label.rect);
+        assert!(body.bottom() <= footer.top(), "the footer keeps its own room");
+        let visible = rig.fixture.visible(&label).expect("the message is visible");
+        assert!(body.contains_rect(visible.rect), "the visible text does not reach the header/footer");
+    }
+}
+
+fn message_right_click(fixture: &mut Fixture, at: egui::Pos2) {
+    use craft_ui::testing::pointer;
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![pointer::secondary(at, true)]);
+    fixture.frame(vec![pointer::secondary(at, false)]);
+    fixture.idle(3);
+}
+
+/// The text is display-only: right-clicking directly on it, or elsewhere in the empty body,
+/// still reaches the same list response and the host's ordinary empty-area menu.
+#[trial]
+fn the_no_matches_text_keeps_the_empty_area_menu_at_and_away_from_the_label() {
+    let (mut rig, seen, asked) = message_rig(Some(NO_MATCHES), Vec2::new(400.0, 260.0));
+    rig.filter_by(|filter| filter.name = String::from("no match"));
+    let body = rig.fixture.by_label("Layers").unwrap().rect;
+    let label = rig.fixture.by_label(NO_MATCHES).unwrap();
+    let away = egui::pos2(body.left() + body.width() * 0.1, body.top() + body.height() * 0.1);
+    assert!(body.contains(away) && !label.rect.contains(away));
+    for at in [label.center(), away] {
+        seen.borrow_mut().clear();
+        asked.borrow_mut().clear();
+        message_right_click(&mut rig.fixture, at);
+        assert_eq!(asked.borrow().last(), Some(&None), "the host is asked for no row");
+        assert!(rig.fixture.by_label("Empty-area options").is_some());
+        assert!(!seen.borrow().iter().any(|event| matches!(event, LayersEvent::Select(_))), "a right-click leaves the selection alone");
+        rig.fixture.key(egui::Key::Escape, egui::Modifiers::NONE).idle(2);
+    }
+}
+
+/// Compare with the unchanged default list: the label adds no pointer target, Tab stop or key
+/// handling. This checks the host-visible selection and focus rather than a decorative response.
+#[trial]
+fn the_no_matches_text_preserves_list_pointer_focus_and_tab_order() {
+    let mut observations = Vec::new();
+    for message in [None, Some(NO_MATCHES)] {
+        let (mut rig, seen, _) = message_rig(message, Vec2::new(400.0, 260.0));
+        rig.filter_by(|filter| filter.name = String::from("no match"));
+        let body = rig.fixture.by_label("Layers").unwrap().rect;
+        if let Some(label) = rig.fixture.by_label(NO_MATCHES) {
+            assert!(label.rect.contains(body.center()));
+        }
+        seen.borrow_mut().clear();
+        rig.fixture.click_at(body.center()).idle(2);
+        let selected: Vec<_> = seen
+            .borrow()
+            .iter()
+            .filter_map(|event| match event {
+                LayersEvent::Select(select) => Some(select.change.clone()),
+                _ => None,
+            })
+            .collect();
+        let focused = |fixture: &Fixture| fixture.focused().and_then(|id| fixture.tree().name(id).map(str::to_string));
+        let before_tab = focused(&rig.fixture);
+        assert_ne!(before_tab.as_deref(), Some(NO_MATCHES));
+        rig.fixture.key(egui::Key::Tab, egui::Modifiers::NONE).idle(2);
+        let after_tab = focused(&rig.fixture);
+        assert!(after_tab.is_some(), "the existing keyboard path remains reachable");
+        assert_ne!(after_tab.as_deref(), Some(NO_MATCHES));
+        observations.push((selected, before_tab, after_tab));
+    }
+    assert_eq!(observations[0], observations[1], "the optional text leaves list input and focus unchanged");
+}
+
+fn take_message_announcements(fixture: &Fixture) -> Vec<String> {
+    craft_ui::runtime::frame::take_output(fixture.ctx()).announcements
+}
+
+/// Real typing keeps the search focus and announces its empty transition politely once;
+/// idle passes and another no-match query stay quiet, and a positive result resets it.
+#[trial]
+fn a_focused_empty_filter_announces_politely_once_and_resets_after_matches() {
+    use craft_ui::runtime::access::Role;
+    use egui::accesskit::Live;
+
+    let (mut rig, _, _) = message_rig(Some(NO_MATCHES), ONE_PANEL);
+    let search = rig.fixture.by_label("Search layers").expect("the existing Name search");
+    rig.fixture.click(&search);
+    let focus = rig.fixture.focused_stop();
+    assert!(focus.is_some());
+    assert!(take_message_announcements(&rig.fixture).is_empty());
+    rig.fixture.frame(vec![egui::Event::Text(String::from("zz"))]);
+    assert!(rig.rows().is_empty());
+    assert_eq!(take_message_announcements(&rig.fixture), [NO_MATCHES]);
+    assert_eq!(rig.fixture.focused_stop(), focus, "the message does not move search focus");
+    let status = rig
+        .fixture
+        .tree()
+        .with_role(Role::STATUS)
+        .into_iter()
+        .find(|node| rig.fixture.tree().name_of(*node).is_some_and(|text| text.starts_with(NO_MATCHES)))
+        .expect("the existing announcement service exposes a live status node");
+    let live = rig.fixture.tree().update().nodes.iter().find(|(id, _)| *id == status.into()).and_then(|(_, node)| node.live());
+    assert_eq!(live, Some(Live::Polite));
+    for _ in 0..3 {
+        rig.fixture.frame(Vec::new());
+        assert!(take_message_announcements(&rig.fixture).is_empty(), "idle/repaint does not repeat the announcement");
+    }
+    rig.fixture.frame(vec![egui::Event::Text(String::from("z"))]);
+    assert!(rig.rows().is_empty());
+    assert!(take_message_announcements(&rig.fixture).is_empty(), "empty to empty is not another transition");
+    // The existing search-field contract clears its criterion on Escape.
+    rig.fixture.key(egui::Key::Escape, egui::Modifiers::NONE);
+    assert_eq!(rig.rows(), BOARDS);
+    assert!(take_message_announcements(&rig.fixture).is_empty(), "positive results reset without an empty report");
+    let search = rig.fixture.by_label("Search layers").unwrap();
+    rig.fixture.click(&search);
+    let _ = take_message_announcements(&rig.fixture);
+    rig.fixture.frame(vec![egui::Event::Text(String::from("zz"))]);
+    assert!(rig.rows().is_empty());
+    assert_eq!(take_message_announcements(&rig.fixture), [NO_MATCHES], "a new positive-to-empty transition reports again");
+}
+
+/// The state follows results even without search focus: entering an already-empty search does
+/// not create a transition. An absent host message never adds an announcement.
+#[trial]
+fn an_unfocused_or_default_absent_empty_filter_does_not_announce_on_refocus() {
+    for message in [None, Some(NO_MATCHES)] {
+        let (mut rig, _, _) = message_rig(message, ONE_PANEL);
+        let footer = rig.fixture.by_label("Create a new layer").unwrap();
+        rig.fixture.click(&footer);
+        let _ = take_message_announcements(&rig.fixture);
+        rig.filter.borrow_mut().name = String::from("no match");
+        rig.fixture.frame(Vec::new());
+        assert!(rig.rows().is_empty());
+        assert!(!take_message_announcements(&rig.fixture).iter().any(|text| text == NO_MATCHES));
+        let search = rig.fixture.by_label("Search layers").unwrap();
+        rig.fixture.click(&search);
+        assert!(!take_message_announcements(&rig.fixture).iter().any(|text| text == NO_MATCHES), "focus alone is not a result transition");
+        if message.is_none() {
+            rig.fixture.key(egui::Key::Escape, egui::Modifiers::NONE);
+            rig.fixture.frame(vec![egui::Event::Text(String::from("zz"))]);
+            assert!(rig.rows().is_empty());
+            assert!(!take_message_announcements(&rig.fixture).iter().any(|text| text == NO_MATCHES), "default absence also stays quiet while typing");
+        }
+    }
+}
