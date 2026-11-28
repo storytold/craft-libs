@@ -26,9 +26,9 @@ wasmtime = ["dep:wasmtime"]
 [dependencies]
 craft-plugin-abi.workspace = true
 bitflags = "2"
-wasmi = { version = "=2.0.2", default-features = false, features = ["std", "validate", "portable-dispatch"], optional = true }
-# wasmi does not re-export LimiterError, which ResourceLimiter needs. Same version as wasmi. 2.0.0 and 2.0.1 were yanked, so 2.0.2 is the lowest usable.
-wasmi_core = { version = "=2.0.2", default-features = false, optional = true }
+wasmi = { version = "=2.0.3", default-features = false, features = ["std", "validate", "portable-dispatch"], optional = true }
+# wasmi does not re-export LimiterError, which ResourceLimiter needs. Same version as wasmi. 2.0.0 to 2.0.2 were yanked, so 2.0.3 is the lowest usable.
+wasmi_core = { version = "=2.0.3", default-features = false, optional = true }
 # wasmtime 48.x is the LTS line with MSRV 1.95, the workspace rust-version. 49 needs 1.96.
 # No default features: no WASI, no component model, no profiler.
 wasmtime = { version = "=48.0.7", default-features = false, features = ["runtime", "cranelift", "std", "pooling-allocator"], optional = true }
