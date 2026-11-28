@@ -49,9 +49,12 @@ impl PrefilterOptions {
 }
 
 /// Point `i` of `n` of the Hammersley set: `(i / n, radical inverse of i in base 2)`. Returns
-/// `None` when `i` is not below `n`.
+/// coordinates in `0..1`, or `None` when `i` is not below `n`.
 pub fn hammersley(i: u32, n: u32) -> Option<[f32; 2]> {
-    (i < n).then(|| [i as f32 / n as f32, i.reverse_bits() as f32 * 2.328_306_4e-10])
+    (i < n).then(|| {
+        let upper = f32::from_bits(1.0_f32.to_bits() - 1);
+        [i as f32 / n as f32, i.reverse_bits() as f32 * 2.328_306_4e-10].map(|v| v.min(upper))
+    })
 }
 
 /// The GGX normal distribution `D` at `n_dot_h` for perceptual `roughness`, with
@@ -180,7 +183,8 @@ fn check_budget(env: &EnvImage, options: &PrefilterOptions, pyramid: &[(u32, u32
     let lists = u64::from(options.levels) * (size_of::<(u32, u32)>() + size_of::<EnvImage>()) as u64 + pyramid_lists;
     let bytes = pixels.and_then(|p| p.checked_mul(PIXEL_BYTES)?.checked_add(table)?.checked_add(lists));
     limits.check_total_bytes(bytes, w, h)?;
-    let needed = levels.and_then(|l| l.checked_mul(u64::from(options.samples))).unwrap_or(u64::MAX);
+    let needed =
+        levels.and_then(|l| l.checked_mul(u64::from(options.samples))).ok_or(PbrError::BadOption("the filtering work count exceeds u64::MAX"))?;
     if needed > limits.max_work {
         return Err(PbrError::TooMuchWork { needed, limit: limits.max_work });
     }
@@ -258,7 +262,8 @@ fn filter_level(w: u32, h: u32, table: &[Sample<'_>]) -> Result<EnvImage, PbrErr
 /// keeps at least 4 × 2 pixels and is never larger than the level before. Returns an error, before
 /// allocating, for an option out of range, for a source over the size limits, or when the source
 /// copies, the pyramid, the levels and the sample table together are over [`Limits::max_bytes`]
-/// or the sample work is over [`Limits::max_work`].
+/// or the sample work is over [`Limits::max_work`]. After the byte checks pass, a work count
+/// above `u64::MAX` returns [`PbrError::BadOption`].
 pub fn try_prefilter(env: &EnvImage, options: &PrefilterOptions, limits: &Limits) -> Result<Vec<EnvImage>, PbrError> {
     options.validate(limits)?;
     let (w, h) = (env.width(), env.height());
@@ -299,4 +304,19 @@ pub fn try_prefilter(env: &EnvImage, options: &PrefilterOptions, limits: &Limits
         out.push(filter_level(lw, lh, &table)?);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn overflowing_sample_work_is_refused_with_unlimited_work() {
+        let limits = Limits { max_levels: u32::MAX, max_samples: u32::MAX, max_bytes: u64::MAX, max_work: u64::MAX, ..Limits::default() };
+        let env = EnvImage::try_from_linear(4, 2, vec![[1.0; 3]; 8], &limits).unwrap();
+        let options = PrefilterOptions { levels: 536_870_914, samples: u32::MAX, ..PrefilterOptions::default() };
+        assert!(check_budget(&env, &options, &[], &limits).is_err());
+    }
 }
