@@ -268,9 +268,10 @@ impl Bvh {
         (&self.tris, &self.order)
     }
 
-    fn slab(lo: Vec3A, hi: Vec3A, o: Vec3A, inv: Vec3A, tmax: f32) -> Option<f32> {
+    fn slab(lo: Vec3A, hi: Vec3A, o: Vec3A, inv: DVec3, tmax: f32) -> Option<f32> {
         // The differences are taken in f64: `lo - o` of two finite f32 values can exceed f32::MAX.
-        let (o, inv) = (o.as_dvec3(), inv.as_dvec3());
+        // `inv` is the f64 reciprocal of the direction, since 1 / d overflows f32 for |d| < 2.9e-39.
+        let o = o.as_dvec3();
         let t0 = (lo.as_dvec3() - o) * inv;
         let t1 = (hi.as_dvec3() - o) * inv;
         // A ray lying in a slab plane gives 0·∞ = NaN: it is inside that slab, so the axis does
@@ -359,7 +360,7 @@ impl Bvh {
             return None;
         }
         let root = self.nodes.first().filter(|_| !self.tris.is_empty())?;
-        let (oa, inv) = (Vec3A::from(o), Vec3A::ONE / Vec3A::from(d));
+        let (oa, inv) = (Vec3A::from(o), DVec3::ONE / d.as_dvec3());
         let mut best = None;
         let mut stack = Stack::default();
         stack.push((0, Self::slab(root.lo, root.hi, oa, inv, tmax)?));
@@ -565,6 +566,13 @@ mod tests {
         let hit = bvh.nearest(Vec3::new(2.5e9, 2.5e9, 1.0), 10.0, &|_| true).unwrap();
         assert!((hit.t - 1.0).abs() < 1e-3, "t = {}", hit.t);
         assert!((hit.u - 0.25).abs() < 1e-6 && (hit.v - 0.25).abs() < 1e-6, "u = {}, v = {}", hit.u, hit.v);
+    }
+
+    #[test]
+    fn slab_accepts_a_direction_whose_f32_reciprocal_overflows() {
+        let bvh = review_triangle([Vec3::ZERO, Vec3::X, Vec3::Y]);
+        let hit = bvh.closest(Vec3::new(0.25, 0.25, -1e-39), Vec3::new(0.0, 0.0, 1e-39), 2.0).unwrap();
+        assert!((hit.t - 1.0).abs() < 1e-5, "t = {}", hit.t);
     }
 
     #[test]
