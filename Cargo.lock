@@ -1819,6 +1819,7 @@ dependencies = [
  "craft-geom",
  "craft-gif",
  "craft-gpu",
+ "craft-gpu-device",
  "craft-gpu-null",
  "craft-gpu-providers",
  "craft-gpu-wgpu",
@@ -2920,6 +2921,18 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-gpu-device"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "log",
+ "pollster 0.4.0",
+ "serde",
+ "serde_json",
+ "wgpu",
 ]
 
 [[package]]

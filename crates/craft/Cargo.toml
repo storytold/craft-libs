@@ -222,6 +222,7 @@ craft-geom = { workspace = true, optional = true }
 craft-suite-account = { workspace = true, optional = true }
 craft-xfa = { workspace = true, optional = true }
 craft-gpu = { workspace = true, optional = true }
+craft-gpu-device = { workspace = true, optional = true }
 craft-gpu-null = { workspace = true, optional = true }
 craft-gpu-providers = { workspace = true, optional = true }
 craft-gpu-wgpu = { workspace = true, optional = true }
@@ -532,6 +533,13 @@ gif-frames = ["gif", "craft-gif/frames"]
 
 gpu = ["dep:craft-gpu"]
 gpu-startup = ["gpu", "craft-gpu/startup"]
+
+gpu-device = ["dep:craft-gpu-device"]
+gpu-device-native-dx12 = ["gpu-device", "craft-gpu-device/native-dx12"]
+gpu-device-native-gles = ["gpu-device", "craft-gpu-device/native-gles"]
+gpu-device-native-metal = ["gpu-device", "craft-gpu-device/native-metal"]
+gpu-device-native-vulkan = ["gpu-device", "craft-gpu-device/native-vulkan"]
+gpu-device-serde = ["gpu-device", "craft-gpu-device/serde"]
 
 gpu-null = ["dep:craft-gpu-null"]
 
