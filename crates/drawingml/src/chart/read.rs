@@ -610,19 +610,27 @@ fn text_color(e: Option<&El>) -> Option<crate::style::ColorRef> {
 /// Legend entries read from one chart; a legend lists at most one per series or category.
 const MAX_LEGEND_ENTRIES: usize = 1024;
 
-/// The legend's entries with text of their own (`c:legendEntry/c:txPr`), over the legend's.
+/// The legend's entries it leaves out (`c:legendEntry/c:delete`) or that have text of their own
+/// (`c:legendEntry/c:txPr`), over the legend's.
 fn legend_entries(legend: Option<&El>) -> Vec<crate::chart::LegendEntry> {
     legend
         .into_iter()
         .flat_map(|l| l.children(Local("legendEntry")))
         .take(MAX_LEGEND_ENTRIES)
         .filter_map(|e| {
+            let idx = e.child(Local("idx")).and_then(|i| i.attr_local("val")).and_then(|v| v.parse().ok())?;
+            // `c:delete` and `c:txPr` are a choice: a deleted entry has no text to set. A bare
+            // `c:delete` deletes (CT_Boolean's `val` defaults to true).
+            if e.child(Local("delete")).is_some_and(|d| d.attr_local("val").and_then(value::to_bool).unwrap_or(true)) {
+                return Some(crate::chart::LegendEntry { idx, deleted: true, ..Default::default() });
+            }
             // The paragraph's own run properties first, then the list style's defaults
             // (`a:lstStyle` comes before `a:p`, and is the less specific of the two).
             let tx = e.child(Local("txPr"));
             let para = tx.and_then(|t| t.child(Local("p")));
             let entry = crate::chart::LegendEntry {
-                idx: e.child(Local("idx")).and_then(|i| i.attr_local("val")).and_then(|v| v.parse().ok())?,
+                idx,
+                deleted: false,
                 size: text_size(para).or_else(|| text_size(tx)),
                 bold: text_bold(para).or_else(|| text_bold(tx)),
                 color: text_color(para).or_else(|| text_color(tx)),

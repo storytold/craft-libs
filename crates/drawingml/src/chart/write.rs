@@ -101,10 +101,17 @@ fn tx_pr(w: &mut Writer, c: &Chart) {
     w.close();
 }
 
-/// `c:legendEntry` with the entry's own text size, weight and colour.
+/// `c:legendEntry`: left out of the legend (`c:delete`), or with the entry's own text size,
+/// weight and colour.
 fn legend_entry(w: &mut Writer, e: &crate::chart::LegendEntry) {
     w.open("c:legendEntry", &[]);
     w.tag("c:idx").attr("val", e.idx).empty();
+    if e.deleted {
+        // `c:delete` and `c:txPr` are a choice (CT_LegendEntry).
+        w.tag("c:delete").attr("val", 1).empty();
+        w.close();
+        return;
+    }
     w.open("c:txPr", &[]);
     w.empty("a:bodyPr", &[]);
     w.empty("a:lstStyle", &[]);
@@ -1159,6 +1166,7 @@ mod tests {
         let c = read(xml.as_bytes());
         let want = |idx: u32, rgb: (u8, u8, u8)| crate::chart::LegendEntry {
             idx,
+            deleted: false,
             size: Some(20.0),
             bold: Some(true),
             color: Some(ColorRef::rgb(Rgba::rgb(rgb.0, rgb.1, rgb.2))),
@@ -1198,13 +1206,51 @@ mod tests {
         for (size, back) in [(20.5, 20.5), (400.0, 400.0), (500.0, 400.0)] {
             let mut e = c.clone();
             e.raw = None;
-            e.legend_entries = vec![crate::chart::LegendEntry { idx: 0, size: Some(size), bold: Some(false), color: None }];
+            e.legend_entries = vec![crate::chart::LegendEntry { idx: 0, size: Some(size), bold: Some(false), ..Default::default() }];
             let written = super::chart_xml(&e).0;
             let sz = format!(r#"sz="{}""#, (back * 100.0) as u32);
             assert!(String::from_utf8_lossy(&written).contains(&sz), "{size} pt is written as {sz}");
             let back_entry = &read(&written).legend_entries[0];
             assert_eq!((back_entry.size, back_entry.bold), (Some(back), Some(false)), "{size} pt");
         }
+    }
+
+    /// An entry the legend leaves out (`c:legendEntry/c:delete`) is read, though it sets no
+    /// text of its own, and a rebuilt part leaves it out again (DeckCraft #2359).
+    #[test]
+    fn a_deleted_legend_entry_is_read_and_survives_an_edit() {
+        let read = |xml: &[u8]| crate::chart::read::read_chart_xml(xml).unwrap();
+        let ser = |idx: u32, name: &str| {
+            format!(
+                r#"<c:ser><c:idx val="{idx}"/><c:order val="{idx}"/><c:tx><c:v>{name}</c:v></c:tx><c:val><c:numRef><c:numCache><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"#
+            )
+        };
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:lineChart><c:grouping val="standard"/>{}{}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/><c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/><c:crossAx val="1"/></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/><c:legendEntry><c:idx val="1"/><c:delete val="1"/></c:legendEntry><c:overlay val="0"/></c:legend></c:chart></c:chartSpace>"#,
+            ser(0, "Alpha"),
+            ser(1, "Beta")
+        );
+        let c = read(xml.as_bytes());
+        let deleted: Vec<u32> = c.legend_entries.iter().filter(|e| e.deleted).map(|e| e.idx).collect();
+        assert_eq!(deleted, vec![1], "Beta's entry is left out, Alpha's isn't");
+        // A bare `c:delete` deletes too: CT_Boolean's `val` defaults to true.
+        let bare = read(xml.replace(r#"<c:delete val="1"/>"#, "<c:delete/>").as_bytes());
+        assert_eq!(bare.legend_entries, c.legend_entries, "a bare c:delete reads as val=\"1\"");
+        // `c:delete val="0"` keeps the entry, as no `c:legendEntry` would.
+        let kept = read(xml.replace(r#"<c:delete val="1"/>"#, r#"<c:delete val="0"/>"#).as_bytes());
+        assert!(kept.legend_entries.iter().all(|e| !e.deleted), "{:?}", kept.legend_entries);
+        // A rebuilt part writes the entry back without text of its own, before `c:overlay`.
+        let mut e = c.clone();
+        e.title = Some("Units".into());
+        e.raw = None;
+        let (out, kept) = super::chart_xml(&e);
+        assert!(!kept);
+        let s = String::from_utf8(out.clone()).unwrap();
+        let legend = &s[s.find("<c:legend>").unwrap()..];
+        let entry = &legend[legend.find("<c:legendEntry>").unwrap()..legend.find("</c:legendEntry>").unwrap()];
+        assert!(entry.contains("<c:delete") && !entry.contains("txPr"), "{entry}");
+        assert!(legend.find("</c:legendEntry>").unwrap() < legend.find("<c:overlay").unwrap(), "{legend}");
+        assert_eq!(read(&out).legend_entries, c.legend_entries);
     }
 
     #[test]
