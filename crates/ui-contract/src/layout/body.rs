@@ -1790,8 +1790,17 @@ fn run_grid<R>(
         found(&ctx, true, sub(id, "rows"), room, Vec2::new(measured.rows.len() as f32, 0.0));
         found(&ctx, true, sub(id, "stacked"), room, Vec2::new(f32::from(u8::from(stacked)), 0.0));
     };
-    if !short {
+    // A column a later row widened placed the rows before it narrower: the grid is as wide as its columns.
+    let reserve = |ui: &mut Ui, rect: Rect, measured: &GridMeasure| {
+        let wide = measured.columns.iter().sum::<f32>() + gap.x * measured.columns.len().saturating_sub(1) as f32;
+        let rect = match rtl {
+            true => Rect::from_min_max(egui::pos2(rect.min.x.min(rect.max.x - wide), rect.min.y), rect.max),
+            false => Rect::from_min_max(rect.min, egui::pos2(rect.max.x.max(rect.min.x + wide), rect.max.y)),
+        };
         ui.advance_cursor_after_rect(rect);
+    };
+    if !short {
+        reserve(ui, rect, &measured);
         record(&measured, &[], false, ui.available_rect_before_wrap().size());
         return inner;
     }
@@ -1821,7 +1830,9 @@ fn run_grid<R>(
         true => (STACKED, GridMeasure::default()),
         false => (columns, GridMeasure::default().with_least(least.clone())),
     };
-    let (inner, measured, ..) = child::block(ui, None, layout, |ui| sweep(ui, env, None, columns, &|flow| cursor(columns, &last, flow))).0;
+    let ((inner, measured, ..), placed) = child::block(ui, None, layout, |ui| sweep(ui, env, None, columns, &|flow| cursor(columns, &last, flow)));
+    // `block` allocated what it placed; the widened rect covers it, so the cursor ends at the same row.
+    reserve(ui, placed, &measured);
     record(&measured, &last.least, stacked, ui.available_rect_before_wrap().size());
     inner
 }
