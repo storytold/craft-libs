@@ -346,6 +346,16 @@ and the digest that tells its profile from a document profile is still a hash of
 decoded profile bytes. PdfCraft's two raster tests are adapted in `tests/upstream_raster.rs`
 (`icc_profile_cache`).
 
+The same kind of collision for inline images, local to this repository and marked
+`PdfCraft patch` at `impl CacheKey for ImageXObject`: an image's key was its stream
+dictionary's bytes, which tell image XObjects apart by `/Length` and object, but an inline
+image has neither of its own, so inline images of the same size and encoding (the bitmap
+glyphs of a Type 3 font, as PScript5 with Ghostscript writes them) shared one key, and a device
+that reuses images by key drew them all with the first one's samples. An inline image's key
+now also hashes its raw samples; an image XObject's key is unchanged. Tests:
+`inline_images::{inline_images_with_equal_dictionaries_are_told_apart_by_their_samples,
+an_image_xobject_drawn_twice_keeps_one_key}` in `crates/pdf/tests/interpretation.rs`.
+
 From [PdfCraft #3327](https://github.com/storytold/pdfcraft/pull/3327) (merged as
 b84121e978e13168caeaf86a63824111f16cdb99), hayro-interpret (35), marked `PdfCraft patch (35)` in
 the source: `path_as_rect` takes a five-element path as a rectangle only when its four points are

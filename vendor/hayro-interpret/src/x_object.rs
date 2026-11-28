@@ -1713,7 +1713,17 @@ fn get_rgb_data(
 
 impl CacheKey for ImageXObject<'_> {
     fn cache_key(&self) -> u128 {
-        self.stream.cache_key()
+        let dict = self.stream.cache_key();
+        // PdfCraft patch: a stream's key is its dictionary's, which tells image XObjects apart by
+        // their `/Length` and object. An inline image has neither of its own, so inline images of
+        // the same size and encoding, such as the bitmap glyphs of a Type 3 font, had one key and
+        // a device reusing images by key drew them all with the first one's samples. Its samples
+        // go into its key.
+        if self.stream.dict().obj_id().is_some() {
+            dict
+        } else {
+            crate::util::hash128(&(dict, self.stream.raw_data().as_ref()))
+        }
     }
 }
 

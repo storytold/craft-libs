@@ -318,3 +318,86 @@ mod image_limits {
         assert_eq!(draw(DecodeLimits::default().with_max_decoded_image(1 << 40)).rgb(), [Some((0..24).collect::<Vec<u8>>())]);
     }
 }
+
+#[cfg(feature = "interpret")]
+mod inline_images {
+    use craft_pdf::interpret::{
+        BlendMode, CacheKey, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        TransformExt, font::Glyph,
+    };
+    use kurbo::{Affine, BezPath, Rect};
+
+    /// The cache key of every image drawn, in order.
+    #[derive(Default)]
+    struct Keys(Vec<u128>);
+
+    impl Device<'_> for Keys {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: Affine, _: Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, image: Image<'_, '_>, _: Affine) {
+            self.0.push(image.cache_key());
+        }
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    /// The image keys of a page drawing `content`, with image XObject `/Im0` (object 5) available.
+    fn keys(content: &str) -> Vec<u128> {
+        let im0 = "/Type /XObject /Subtype /Image /Width 8 /Height 8 /BitsPerComponent 1 /ImageMask true /Filter /ASCIIHexDecode";
+        let im0_data = "1818181818181818>";
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n5 0 obj << {im0} /Length {} >> stream\n{im0_data}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            content.len(),
+            im0_data.len()
+        );
+        let pdf = craft_pdf::open_slice(bytes.as_bytes(), None).unwrap();
+        let page = &pdf.pages()[0];
+        let cache = InterpreterCache::new();
+        let mut context = Context::new(
+            page.initial_transform(true).to_kurbo(),
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            &cache,
+            page.xref(),
+            InterpreterSettings::default(),
+        );
+        let mut device = Keys::default();
+        craft_pdf::interpret_page(page, &mut context, &mut device).unwrap();
+        device.0
+    }
+
+    /// An 8 × 8 one-bit inline image with samples `hex`, drawn at `x`. The dictionary is the same
+    /// for every call, as it is for the same-size bitmap glyphs of a Type 3 font.
+    fn inline(dict: &str, x: u32, hex: &str) -> String {
+        format!("q 10 0 0 10 {x} 10 cm BI {dict} /F /AHx ID {hex}> EI Q ")
+    }
+
+    const VBAR: &str = "1818181818181818";
+    const HBAR: &str = "000000FFFF000000";
+
+    /// Inline images with equal dictionaries and different samples get different keys: keyed by
+    /// the dictionary alone, an importer that reuses an image by its key drew every same-size
+    /// glyph bitmap of a Type 3 font with the first glyph's pixels (VectorCraft).
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn inline_images_with_equal_dictionaries_are_told_apart_by_their_samples() {
+        for dict in ["/IM true /W 8 /H 8 /BPC 1", "/W 8 /H 8 /BPC 1 /CS /G"] {
+            let k = keys(&format!("0 g {}{}{}", inline(dict, 10, VBAR), inline(dict, 30, HBAR), inline(dict, 50, VBAR)));
+            assert_eq!(k.len(), 3, "{dict}");
+            assert_ne!(k[0], k[1], "different samples share a key: {dict}");
+            assert_eq!(k[0], k[2], "the same inline image drawn again keeps its key: {dict}");
+        }
+    }
+
+    /// An image XObject keeps one key however often it is drawn, so it is still read once.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn an_image_xobject_drawn_twice_keeps_one_key() {
+        let k = keys("0 g q 10 0 0 10 10 10 cm /Im0 Do Q q 10 0 0 10 30 10 cm /Im0 Do Q");
+        assert_eq!(k.len(), 2);
+        assert_eq!(k[0], k[1]);
+    }
+}
