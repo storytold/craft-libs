@@ -806,24 +806,25 @@ pub(crate) mod macos_checks {
 
     /// Runs `hdiutil` with `args` (the caller holds its [`macos::disk_image_turn`]). The disk-image
     /// helper can turn a request away with EAGAIN ("Resource temporarily unavailable") while it
-    /// is busy elsewhere, as on shared CI runners; that reply alone is retried, up to five
-    /// attempts over about eight seconds. Any other result returns at once.
+    /// is busy elsewhere, as on shared CI runners; that reply alone is retried, until the helper
+    /// gives another answer. A helper that stays busy for a minute fails the test.
     fn hdiutil(args: &[&std::ffi::OsStr]) -> std::process::Output {
-        let mut output = std::process::Command::new("hdiutil").args(args).output().unwrap();
-        for wait_ms in [500, 1000, 2000, 4000] {
+        // Only stops a test that a busy helper holds up. The retries stop with it, on this thread,
+        // before the caller's turn and folders are released.
+        let hang_guard = std::time::Instant::now();
+        loop {
+            let output = std::process::Command::new("hdiutil").args(args).output().unwrap();
             if output.status.success() || !busy(&output.stderr) {
-                break;
+                return output;
             }
-            std::thread::sleep(std::time::Duration::from_millis(wait_ms));
-            output = std::process::Command::new("hdiutil").args(args).output().unwrap();
+            let reason = String::from_utf8_lossy(&output.stderr);
+            assert!(hang_guard.elapsed() < std::time::Duration::from_secs(60), "the disk-image helper stayed busy for a minute: {}", reason.trim());
         }
-        output
     }
 
     /// A release-style disk image holding a `PhotoCraft.app` that reports `version`. The tests,
-    /// in this process and in others, ask the disk-image helper one at a time; when a program
-    /// that is not one of these tests keeps it busy, the test fails with what `hdiutil create`
-    /// said.
+    /// in this process and in others, ask the disk-image helper one at a time; while a program
+    /// that is not one of these tests keeps it busy, [`hdiutil`] asks again.
     fn dmg(dir: &Path, version: &str) -> PathBuf {
         let src = dir.join(format!("src-{version}"));
         bundle(&src, version);
@@ -1020,8 +1021,7 @@ pub(crate) mod macos_checks {
         let mount = paths.cache.join(format!("mount-photocraft-{pid}-1"));
         std::fs::create_dir_all(&mount).unwrap();
         // One request at a time, as in `dmg`. A detach elsewhere can still keep the disk-image
-        // helper busy, and it turns the attach away; the attach is tried a few times, as
-        // `install_dmg` does.
+        // helper busy, and it turns the attach away; the test's `hdiutil` helper then asks again.
         let output = {
             let _one_at_a_time = macos::disk_image_turn();
             hdiutil(&[
@@ -1036,10 +1036,6 @@ pub(crate) mod macos_checks {
             ])
         };
         let _attached = Attached(mount.clone());
-        if !output.status.success() && busy(&output.stderr) {
-            eprintln!("skipped: the disk-image helper stayed busy: {}", String::from_utf8_lossy(&output.stderr).trim());
-            return;
-        }
         assert!(output.status.success(), "hdiutil attach failed: {}", String::from_utf8_lossy(&output.stderr).trim());
         let staging = apps.join(format!(".artcraft-launcher-staging-{pid}-Ab12Cd"));
         bundle(&staging, "0.6.0");
