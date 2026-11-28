@@ -87,6 +87,12 @@ impl Builder {
     }
 }
 
+/// The angle around Y of grid column `j` of `segs`. The closing column (`j == segs`) takes the
+/// first column's angle, so its vertices sit exactly on the first column's while its U is 1.
+fn around(j: usize, segs: usize) -> f32 {
+    (j % segs.max(1)) as f32 / segs.max(1) as f32 * TAU + PI * 1.5
+}
+
 /// UV sphere of `radius` centred at `center`.
 pub fn sphere(radius: f32, segments: usize, rings: usize) -> Mesh {
     let mut b = Builder::default();
@@ -97,7 +103,7 @@ pub fn sphere(radius: f32, segments: usize, rings: usize) -> Mesh {
 fn sphere_into(b: &mut Builder, center: Vec3, radius: f32, segs: usize, rings: usize, r: UvRect) {
     b.grid(rings, segs, |i, j| {
         let (u, v) = (j as f32 / segs as f32, i as f32 / rings as f32);
-        let (theta, phi) = (v * PI, u * TAU + PI * 1.5);
+        let (theta, phi) = (v * PI, around(j, segs));
         let n = Vec3::new(theta.sin() * phi.cos(), theta.cos(), -theta.sin() * phi.sin());
         (center + n * radius, n, r.map(u, v))
     });
@@ -187,7 +193,7 @@ fn lathe_into(b: &mut Builder, center: Vec3, profile: &[(f32, f32)], segs: usize
         let t = Vec2::new(next.0 - prev.0, next.1 - prev.1).try_normalize().unwrap_or(Vec2::NEG_Y);
         let n2 = Vec2::new(-t.y, t.x);
         let u = j as f32 / segs as f32;
-        let phi = u * TAU + PI * 1.5;
+        let phi = around(j, segs);
         let dir = Vec3::new(phi.cos(), 0.0, -phi.sin());
         let p = center + dir * rad + Vec3::Y * y;
         let n = dir * n2.x + Vec3::Y * n2.y;
@@ -222,7 +228,7 @@ pub fn preview_orb() -> Mesh {
     let mut b = Builder::default();
     b.grid(ROWS, ROWS * 2, |i, j| {
         let (u, v) = (j as f32 / (ROWS * 2) as f32, i as f32 / ROWS as f32);
-        let (theta, phi) = (v * PI, u * TAU + PI * 1.5);
+        let (theta, phi) = (v * PI, around(j, ROWS * 2));
         let dir = Vec3::new(theta.sin() * phi.cos(), theta.cos(), -theta.sin() * phi.sin());
         (dir * preview_orb_radius(dir), dir, Vec2::new(u, v * BODY_UV_HEIGHT))
     });
@@ -237,8 +243,21 @@ pub fn preview_orb() -> Mesh {
     lathe_into(&mut b, Vec3::Y * BASE_Y, &profile, BASE_SEGMENTS, BASE_UV);
 
     let mut m = b.into_mesh("Preview");
-    // Normals from the triangles: the panel walls are too steep for the sphere's directions
-    m.compute_normals();
+    // Normals from the triangles: the panel walls are too steep for the sphere's directions.
+    // Vertices at one position (the U seams' two columns, the poles) sum the faces of all of
+    // them, so the shading has no seam.
+    let key = |p: Vec3| p.to_array().map(|c| if c == 0.0 { 0 } else { c.to_bits() });
+    let mut sums: std::collections::HashMap<[u32; 3], Vec3> = std::collections::HashMap::with_capacity(m.positions.len());
+    for &[a, b, c] in m.indices.as_chunks::<3>().0 {
+        let (Some(&pa), Some(&pb), Some(&pc)) = (m.positions.get(a as usize), m.positions.get(b as usize), m.positions.get(c as usize)) else {
+            continue;
+        };
+        let face = (pb - pa).cross(pc - pa);
+        for p in [pa, pb, pc] {
+            *sums.entry(key(p)).or_default() += face;
+        }
+    }
+    m.normals = m.positions.iter().map(|p| sums.get(&key(*p)).copied().unwrap_or_default().try_normalize().unwrap_or(Vec3::Y)).collect();
     // Body and base both run U around the vertical axis, so the tangent is that direction (a
     // fraction of the cost of the general tangent pass on this many triangles)
     m.tangents = m
@@ -361,8 +380,9 @@ pub fn torus(major: f32, minor: f32, segs: usize, sides: usize) -> Mesh {
     let (segs, sides) = (segs.max(3), sides.max(3));
     b.grid(sides, segs, |i, j| {
         let (u, v) = (j as f32 / segs as f32, i as f32 / sides as f32);
-        let phi = u * TAU + PI * 1.5;
-        let theta = v * TAU;
+        let phi = around(j, segs);
+        // The closing row takes the first row's angle as well.
+        let theta = (i % sides) as f32 / sides as f32 * TAU;
         let dir = Vec3::new(phi.cos(), 0.0, -phi.sin());
         let n = dir * theta.cos() - Vec3::Y * theta.sin();
         (dir * major + n * minor, n, Vec2::new(u, v))
@@ -545,6 +565,30 @@ mod tests {
         let rim = (1.0 - ORB_CUT * ORB_CUT).sqrt() / ORB_CUT;
         let (dome, valley) = (front_depth(0.2), front_depth(rim * ORB_PANEL_VALLEY));
         assert!(dome > ORB_CUT && valley < ORB_CUT - 0.05, "dome {dome}, valley {valley}");
+    }
+
+    /// Vertices of a grid's closing column (and closing row, when `wrap_rows`) sit exactly on the
+    /// first column's (row's) positions and normals.
+    fn closes_exactly(m: &Mesh, rows: usize, cols: usize, wrap_rows: bool) {
+        let at = |i: usize, j: usize| i * (cols + 1) + j;
+        for i in 0..=rows {
+            let (a, b) = (at(i, 0), at(i, cols));
+            assert_eq!((m.positions[a], m.normals[a]), (m.positions[b], m.normals[b]), "row {i}");
+            assert!(m.uvs[a].x < m.uvs[b].x, "row {i}");
+        }
+        if wrap_rows {
+            for j in 0..=cols {
+                assert_eq!(m.positions[at(0, j)], m.positions[at(rows, j)], "column {j}");
+            }
+        }
+    }
+
+    #[test]
+    fn closing_columns_match_the_first_column() {
+        closes_exactly(&sphere(1.0, 7, 5), 5, 7, false);
+        closes_exactly(&torus(1.0, 0.3, 7, 5), 5, 7, true);
+        closes_exactly(&cylinder(1.0, 2.0, 7), 1, 7, false);
+        closes_exactly(&preview_orb(), 300, 600, false);
     }
 
     #[test]
