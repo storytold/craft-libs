@@ -126,6 +126,40 @@ fn symbols_and_deletions_in_math() {
     assert_eq!(font, Some(None), "mapped symbol text takes the text font");
 }
 
+/// wordcraft#6137: a tracked change inside a math run (Word's form) and a math object whose
+/// control character is a tracked change: inserted content shows, deleted content stays out.
+#[test]
+fn tracked_changes_inside_runs_and_objects() {
+    let e = omath(
+        r#"<m:r><m:rPr><m:sty m:val="p"/></m:rPr><w:ins w:id="1" w:author="a"><w:rPr><w:sz w:val="28"/></w:rPr><m:t>sin</m:t></w:ins></m:r><m:r><w:del w:id="2" w:author="a"><w:rPr/><m:t>cos</m:t></w:del></m:r><m:sSup><m:sSupPr><m:ctrlPr><w:del w:id="3" w:author="a"><w:rPr/></w:del></m:ctrlPr></m:sSupPr><m:e><m:r><w:del w:id="4" w:author="a"><m:t>x</m:t></w:del></m:r></m:e><m:sup><m:r><w:del w:id="5" w:author="a"><m:t>2</m:t></w:del></m:r></m:sup></m:sSup><m:rad><m:radPr><m:degHide m:val="1"/><m:ctrlPr><w:ins w:id="6" w:author="a"><w:rPr/></w:ins></m:ctrlPr></m:radPr><m:deg/><m:e><m:r><w:moveTo w:id="7" w:author="a"><m:t>y</m:t></w:moveTo></m:r><m:r><w:moveFrom w:id="8" w:author="a"><m:t>z</m:t></w:moveFrom></m:r></m:e></m:rad>"#,
+    );
+    let m = read_omath(&e, MathJc::CenterGroup);
+    assert_eq!(m.nodes.len(), 2, "{:#?}", m.nodes);
+    let MNode::Run(r) = &m.nodes[0] else { panic!("{:#?}", m.nodes) };
+    assert_eq!((r.text.as_str(), r.sty, r.size), ("sin", Some(MSty::Plain), Some(14.0)));
+    let MNode::Rad { e, .. } = &m.nodes[1] else { panic!("{:#?}", m.nodes) };
+    assert_eq!(e, &vec![MNode::Run(MRun::new("y"))]);
+}
+
+/// wordcraft#6137: a deleted control character takes its whole object away, arguments and all,
+/// even arguments with no deletion of their own. Observed in Word: a fraction and a superscript
+/// marked so, their arguments not, show nothing in No Markup and are gone after Accept All; the
+/// deletion's range is the arguments' text.
+#[test]
+fn a_deleted_control_leaves_out_its_undeleted_arguments_too() {
+    // `w:del` in the control, and a control a file says was inserted and then deleted.
+    let del = r#"<m:ctrlPr><w:del w:id="1" w:author="a"><w:rPr/></w:del></m:ctrlPr>"#;
+    let ins_del = r#"<m:ctrlPr><w:ins w:id="2" w:author="a"><w:del w:id="3" w:author="a"><w:rPr/></w:del></w:ins></m:ctrlPr>"#;
+    for ctrl in [del, ins_del] {
+        let e = omath(&format!(
+            r#"<m:r><m:t>a</m:t></m:r><m:f><m:fPr>{ctrl}</m:fPr><m:num><m:r><m:t>b</m:t></m:r></m:num><m:den><m:r><m:t>c</m:t></m:r></m:den></m:f><m:sSup><m:sSupPr>{ctrl}</m:sSupPr><m:e><m:r><m:t>x</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup><m:r><m:t>d</m:t></m:r>"#
+        ));
+        let m = read_omath(&e, MathJc::CenterGroup);
+        // Word shows `ad`, as the runs either side join here.
+        assert_eq!(m.nodes, vec![MNode::Run(MRun::new("ad"))], "{ctrl}");
+    }
+}
+
 /// Hostile nesting through the wrappers is bounded (no stack overflow, no panic).
 #[test]
 fn deeply_nested_wrappers_are_bounded() {
