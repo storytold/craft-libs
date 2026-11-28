@@ -141,6 +141,12 @@ fn server_token_sources_and_validation() {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
     }
+    #[cfg(windows)]
+    {
+        use craft_platform::owner_only;
+        let sddl = owner_only::sddl_of(&file).unwrap();
+        assert_eq!(owner_only::foreign_access(&sddl, &owner_only::current_user_sid().unwrap()), None, "{sddl}");
+    }
     assert_eq!(server_token(None, Some(&file)).unwrap(), created);
 
     // An existing file's content is trimmed and lower-cased.
@@ -162,4 +168,57 @@ fn server_token_sources_and_validation() {
         client_token(None, None, &flags, &env).unwrap_err().to_string(),
         "bridge mode needs --control-token, --control-token-file, PHOTOCRAFT_CONTROL_TOKEN, or PHOTOCRAFT_CONTROL_TOKEN_FILE"
     );
+}
+
+// An unauthenticated connection's reads succeed while its deadline is ahead, however much it sends, and fail once the
+// deadline has passed even with input waiting; after `authenticated` the deadline no longer applies.
+#[trial]
+fn the_authentication_deadline_holds_whatever_the_client_sends() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (server, _) = listener.accept().unwrap();
+    server.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let start = Instant::now();
+    let at = std::sync::Arc::new(std::sync::Mutex::new(start));
+    let read_at = std::sync::Arc::clone(&at);
+    let clock: DeadlineClock = std::sync::Arc::new(move || *read_at.lock().unwrap());
+    let mut stream = AuthDeadlineStream::with_clock(server.try_clone().unwrap(), Duration::from_secs(10), clock);
+    let mut byte = [0];
+    // Blank lines and partial frames, each read while the deadline is ahead.
+    for (step, sent) in [b"\n", b" ", b"{", b"\n"].into_iter().enumerate() {
+        *at.lock().unwrap() = start + Duration::from_secs(3 * step as u64);
+        client.write_all(sent).unwrap();
+        assert_eq!(stream.read(&mut byte).unwrap(), 1, "read {step} is before the deadline");
+    }
+    *at.lock().unwrap() = start + Duration::from_secs(10);
+    client.write_all(b"\n").unwrap();
+    let late = stream.read(&mut byte).unwrap_err();
+    assert_eq!(late.kind(), std::io::ErrorKind::TimedOut, "the input sent did not move the deadline: {late}");
+
+    stream.authenticated().unwrap();
+    *at.lock().unwrap() = start + Duration::from_secs(60);
+    assert_eq!(stream.read(&mut byte).unwrap(), 1, "an authenticated connection reads past the deadline");
+}
+
+// A token file create that runs out of time fails with its own error, even when it left a file at
+// the path: that file is not read as another process's. A create that another process beat to the
+// path reads that process's token.
+#[trial]
+fn a_token_file_create_that_runs_out_of_time_is_an_error() {
+    let dir = scratch_dir("token-limit");
+    let file = dir.join("token");
+    let late = |p: &Path, _: &str| {
+        std::fs::write(p, "partial").unwrap();
+        Err(std::io::Error::new(std::io::ErrorKind::TimedOut, format!("{}: powershell.exe did not finish within 10 s and was ended", p.display())))
+    };
+    let err = server_token_with(None, Some(&file), late).unwrap_err().to_string();
+    assert!(err.starts_with("I/O: ") && err.ends_with("did not finish within 10 s and was ended"), "{err}");
+    std::fs::remove_file(&file).unwrap();
+    let beaten = |p: &Path, _: &str| {
+        create_token_file(p, TOKEN).unwrap();
+        Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "the file already exists"))
+    };
+    assert_eq!(server_token_with(None, Some(&file), beaten).unwrap(), TOKEN);
+    let _ = std::fs::remove_dir_all(&dir);
 }

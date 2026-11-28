@@ -101,7 +101,7 @@ impl App {
     /// Record `port` as the running app's, readable only by the user like the token files.
     pub fn write_current_port(&self, port: u16) -> Result<PathBuf> {
         let path = self.current_port_path().ok_or_else(|| Error::new(ErrorKind::NotFound, "no data folder"))?;
-        self.write_token_file(&path, &port.to_string())?;
+        self.write_private(&path, &port.to_string(), true)?;
         Ok(path)
     }
 
@@ -141,16 +141,27 @@ impl App {
     }
 
     /// Write `token` to `path`, readable and writable only by the user: the folder is made `0700`
-    /// and the file `0600` on Unix; on Windows the file's inherited permissions are replaced by one
-    /// entry for the user (`icacls`) before the token goes in; when that fails, the still empty file
-    /// is removed and no token is written. A file left by an earlier launch is replaced. The process
-    /// file beside it ([`pid_path`]) records this process, best effort.
+    /// and the file `0600` on Unix; on Windows the file is created with an access list of the user
+    /// and SYSTEM only and the token is written through the handle that created it
+    /// (`create_for_user`), so the file never has its folder's access list. A file left by an
+    /// earlier launch is replaced. The process file beside it ([`pid_path`]) records this process,
+    /// best effort.
     pub fn write_token_file(&self, path: &Path, token: &str) -> Result<()> {
+        self.write_private(path, token, false)
+    }
+
+    /// [`App::write_token_file`]. `replace`: on Windows, a file another launch put at `path` while
+    /// this one was being created is replaced (the discovery file, which names the latest launch);
+    /// otherwise this write fails and that launch's token stays.
+    fn write_private(&self, path: &Path, token: &str, replace: bool) -> Result<()> {
         #[cfg(windows)]
-        let restrict = |p: &Path| restrict_to_user(p, self.custom_control_dir().is_some());
+        let create = |p: &Path, contents: &[u8]| create_for_user(p, contents, self.custom_control_dir().is_some(), replace);
         #[cfg(not(windows))]
-        let restrict = |_: &Path| Ok(());
-        write_token_file_with(path, token, restrict)
+        let create = {
+            let _ = replace;
+            create_new_file
+        };
+        write_token_file_with(path, token, create)
     }
 }
 
@@ -314,31 +325,18 @@ pub fn tokens_match(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// [`App::write_token_file`], with `restrict` limiting the new file to the user (Windows).
-fn write_token_file_with(path: &Path, token: &str, restrict: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+/// [`App::write_token_file`], with `create` making the new file with its contents, readable only
+/// by the user.
+fn write_token_file_with(path: &Path, token: &str, create: impl FnOnce(&Path, &[u8]) -> Result<()>) -> Result<()> {
     let dir = path.parent().ok_or_else(|| Error::new(ErrorKind::InvalidInput, "no folder"))?;
     std::fs::create_dir_all(dir)?;
     let _ = std::fs::remove_file(path);
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-        opts.mode(0o600);
     }
-    let opened = opts.open(path)?;
-    // On a refusal the file goes with the closure, so it is closed before it is removed.
-    let mut f = match restrict(path).map(|()| opened) {
-        Ok(f) => f,
-        Err(e) => {
-            let _ = std::fs::remove_file(path);
-            return Err(e);
-        }
-    };
-    f.write_all(token.as_bytes())?;
-    f.write_all(b"\n")?;
-    f.sync_all()?;
+    create(path, format!("{token}\n").as_bytes())?;
     let pid = std::process::id();
     let line = process_start(pid).map_or_else(|| format!("{pid}\n"), |start| format!("{pid} {start}\n"));
     let _ = std::fs::write(pid_path(path), line);
@@ -369,74 +367,148 @@ fn held_by_another(path: &Path, token: &str) -> bool {
     read_token(path).is_some_and(|held| !tokens_match(&held, token.trim()))
 }
 
-/// How long `icacls` may take (#6145). It finishes at once; on some computers the new process
-/// is left suspended (security software holding it), and waiting on it without a limit froze
-/// the app.
-#[cfg(windows)]
-const ICACLS_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// How a run of `icacls` ended.
-#[cfg(any(windows, test))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum IcaclsEnd {
-    Succeeded,
-    Failed,
-    /// It didn't finish within [`ICACLS_LIMIT`] and was ended.
-    TimedOut,
+/// Create `path`, which must not exist yet, holding `contents`: mode `0600` on Unix. On Windows a
+/// file created this way has its folder's access list; the token file there is made by
+/// `create_for_user`.
+fn create_new_file(path: &Path, contents: &[u8]) -> Result<()> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    f.write_all(contents)?;
+    f.sync_all()
 }
 
-/// Whether a token may go into a file after `icacls` ended this way. `custom_folder`: the file is
-/// in the folder the app's `CONTROL_DIR` names. A timeout is accepted only in the default folder,
-/// the user's own local app data, which other users can't read by default; nothing is known about
-/// the permissions of any other folder.
+/// How long creating the token file may take on Windows (#6145). It runs `whoami` and PowerShell;
+/// on some computers a new process is left suspended (security software holding it), and waiting
+/// on it without a limit froze the app.
+#[cfg(windows)]
+const CREATE_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Windows: create `path` with the current user as owner and an access list of that user and
+/// SYSTEM only, given to Windows in the call that creates the file, with `contents` written
+/// through that handle (`craft_platform::owner_only::create_private_file`), then named `path`.
+/// Another account never gets a moment in which the file has its folder's access list and could be
+/// opened. `custom_folder`: the file is in the folder the app's `CONTROL_DIR` names;
+/// [`create_within`] says what it changes when the create takes longer than [`CREATE_LIMIT`], and
+/// what `replace` changes.
+#[cfg(windows)]
+fn create_for_user(path: &Path, contents: &[u8], custom_folder: bool, replace: bool) -> Result<()> {
+    use craft_platform::owner_only;
+    /// How many creates that were not waited for are still running.
+    static STUCK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let private = |p: &Path, c: &[u8]| owner_only::current_user_sid().and_then(|me| owner_only::create_private_file(p, &me, c));
+    create_within(path, contents, custom_folder, replace, CREATE_LIMIT, &STUCK, private).0
+}
+
+/// What a create that wasn't waited for gives: in a folder the app's `CONTROL_DIR` names
+/// (`custom_folder`) an error of kind [`ErrorKind::TimedOut`], since nothing is known about that
+/// folder's permissions; in the default folder, the user's own local app data, which other users
+/// can't read by default, `path` created with that folder's access list ([`create_new_file`]).
 #[cfg(any(windows, test))]
-fn restriction_result(end: IcaclsEnd, custom_folder: bool, path: &Path) -> Result<()> {
-    match end {
-        IcaclsEnd::Succeeded => Ok(()),
-        IcaclsEnd::TimedOut if !custom_folder => Ok(()),
-        IcaclsEnd::TimedOut => Err(Error::new(ErrorKind::TimedOut, format!("icacls did not finish in time to restrict {}", path.display()))),
-        IcaclsEnd::Failed => Err(Error::other(format!("icacls failed to restrict {}", path.display()))),
+fn not_waited_for(path: &Path, contents: &[u8], custom_folder: bool) -> Result<()> {
+    if custom_folder {
+        Err(Error::new(ErrorKind::TimedOut, format!("creating {} for its user only did not finish in time", path.display())))
+    } else {
+        create_new_file(path, contents)
     }
 }
 
-/// Windows: drop inherited entries and grant only the current user full access. An `icacls`
-/// that doesn't finish in time is ended, and [`restriction_result`] decides what that means.
-#[cfg(windows)]
-fn restrict_to_user(path: &Path, custom_folder: bool) -> Result<()> {
-    use std::os::windows::process::CommandExt;
-    let user = std::env::var("USERNAME").map_err(|_| Error::other("USERNAME is not set"))?;
-    let domain = std::env::var("USERDOMAIN").ok().filter(|d| !d.is_empty());
-    let who = domain.map_or(user.clone(), |d| format!("{d}\\{user}"));
-    let child = std::process::Command::new("icacls")
-        .arg(path)
-        .args(["/inheritance:r", "/grant:r", &format!("{who}:F")])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .creation_flags(0x0800_0000)
-        .spawn()?;
-    let end = match wait_within(child, ICACLS_LIMIT)? {
-        Some(status) if status.success() => IcaclsEnd::Succeeded,
-        Some(_) => IcaclsEnd::Failed,
-        None => IcaclsEnd::TimedOut,
+/// Run `private`, which creates a file holding `contents` for the user alone, on a thread of its
+/// own, and wait for it at most `limit`. The thread creates a file of its own beside `path`
+/// (`.<name>.<process id>.<count>.tmp`), and the file takes the name `path` only once `private`
+/// has finished, so `path` never holds a file that is still being written: with `replace` by a
+/// rename that replaces a file another launch put there meanwhile, otherwise by [`place_new`],
+/// which leaves that file and fails. When `private` fails with [`ErrorKind::TimedOut`] (a tool
+/// `craft_platform::owner_only` ended after its own limit), [`not_waited_for`] gives the result.
+/// When the thread hasn't finished in time, [`not_waited_for`] gives the result, the thread removes its
+/// file whenever it does finish, and `stuck` counts it until then. While `stuck` counts any
+/// thread, no other thread is started and [`not_waited_for`] answers at once, so a computer that
+/// leaves new processes suspended holds at most the threads that were started together. The
+/// thread's handle is returned for tests.
+#[cfg(any(windows, test))]
+fn create_within(
+    path: &Path,
+    contents: &[u8],
+    custom_folder: bool,
+    replace: bool,
+    limit: std::time::Duration,
+    stuck: &'static std::sync::atomic::AtomicUsize,
+    private: impl FnOnce(&Path, &[u8]) -> Result<()> + Send + 'static,
+) -> (Result<()>, Option<std::thread::JoinHandle<()>>) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::mpsc::{RecvTimeoutError, channel};
+    use std::sync::{Arc, Mutex, PoisonError};
+    /// Numbers the thread's files within this process.
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    if stuck.load(Ordering::Acquire) > 0 {
+        return (not_waited_for(path, contents, custom_folder), None);
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let staged = path.with_file_name(format!(".{name}.{}.{}.tmp", std::process::id(), COUNT.fetch_add(1, Ordering::Relaxed)));
+    let (sender, receiver) = channel();
+    // Set under the lock when the caller stops waiting; the thread reads it under the same lock
+    // before it reports, so its result is either received or its file is removed.
+    let abandoned = Arc::new(Mutex::new(false));
+    let (own_file, owned_contents, flag) = (staged.clone(), contents.to_vec(), Arc::clone(&abandoned));
+    let spawned = std::thread::Builder::new().name("craft-control-token-file".into()).spawn(move || {
+        let made = private(&own_file, &owned_contents);
+        let abandoned = flag.lock().unwrap_or_else(PoisonError::into_inner);
+        if *abandoned {
+            let _ = std::fs::remove_file(&own_file);
+            stuck.fetch_sub(1, Ordering::AcqRel);
+        } else {
+            let _ = sender.send(made);
+        }
+    });
+    let handle = match spawned {
+        Ok(handle) => handle,
+        Err(e) => return (Err(e), None),
     };
-    restriction_result(end, custom_folder, path)
+    let made = match receiver.recv_timeout(limit) {
+        Ok(made) => made,
+        Err(RecvTimeoutError::Disconnected) => Err(Error::other(format!("the thread creating {} stopped", path.display()))),
+        Err(RecvTimeoutError::Timeout) => {
+            let mut abandoned = abandoned.lock().unwrap_or_else(PoisonError::into_inner);
+            match receiver.try_recv() {
+                Ok(made) => made,
+                Err(_) => {
+                    *abandoned = true;
+                    stuck.fetch_add(1, Ordering::AcqRel);
+                    drop(abandoned);
+                    return (not_waited_for(path, contents, custom_folder), Some(handle));
+                }
+            }
+        }
+    };
+    let placed = match made {
+        // `owner_only` ended a tool that ran out of its own time: the same as not waiting.
+        Err(e) if e.kind() == ErrorKind::TimedOut => not_waited_for(path, contents, custom_folder),
+        made => made.and_then(|()| if replace { std::fs::rename(&staged, path) } else { place_new(&staged, path) }),
+    };
+    let _ = std::fs::remove_file(&staged);
+    (placed, Some(handle))
 }
 
-/// Wait for `child` at most `limit`: its exit status, or `None` (and the child ended) when it
-/// hasn't finished by then.
+/// Give the finished file `staged` the name `path`, which must not exist yet: a second launch
+/// writing the same token file at the same time gets [`ErrorKind::AlreadyExists`], as a
+/// `create_new` there would, instead of replacing the first one's token. The new name is a hard
+/// link. On a volume without hard links the file is renamed once `path` is found free; there a
+/// launch that puts its file at `path` between that check and the rename has it replaced, as std
+/// offers no rename that refuses an existing file without `unsafe`. `staged` is left for the
+/// caller to remove.
 #[cfg(any(windows, test))]
-fn wait_within(mut child: std::process::Child, limit: std::time::Duration) -> Result<Option<std::process::ExitStatus>> {
-    let start = std::time::Instant::now();
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(Some(status));
+fn place_new(staged: &Path, path: &Path) -> Result<()> {
+    match std::fs::hard_link(staged, path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::AlreadyExists || std::fs::symlink_metadata(path).is_ok() => {
+            Err(Error::new(ErrorKind::AlreadyExists, format!("{}: {e}", path.display())))
         }
-        if start.elapsed() >= limit {
-            // Not waited for afterwards: a suspended process may not end at once.
-            let _ = child.kill();
-            return Ok(None);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        Err(_) => std::fs::rename(staged, path),
     }
 }
 
@@ -456,50 +528,127 @@ mod tests {
     /// An app with no data folder and no environment, whose times read `t<seconds>`.
     const TEST: App = App { name: "TestCraft", data_dir: || None, env: |_| None, utc: |secs| format!("t{secs}"), default_port: 27878 };
 
-    /// #6145: a child that doesn't finish in time is given up on, not waited for forever.
-    #[cfg(unix)]
+    /// #6145: a private create that doesn't finish in time doesn't hold the caller up. In a folder
+    /// the app's `CONTROL_DIR` names, the call fails; in the default folder, the file is created
+    /// anyway and holds the token. Either way the file the late create makes is removed when it
+    /// finishes and never takes the token file's name, even when a later write has put a file
+    /// there. While it runs, the next create starts no thread of its own. A create that finishes in
+    /// time puts its file in place unless a file already has the name, and one that fails leaves
+    /// nothing. A create that fails as timed out by itself is taken as one not waited for.
     #[test]
-    fn a_slow_child_is_waited_for_only_so_long() {
-        use std::time::{Duration, Instant};
-        let start = Instant::now();
-        let slow = std::process::Command::new("sleep").arg("30").spawn().unwrap();
-        assert!(wait_within(slow, Duration::from_millis(200)).unwrap().is_none());
-        assert!(start.elapsed() < Duration::from_secs(5), "{:?}", start.elapsed());
-        let quick = std::process::Command::new("true").spawn().unwrap();
-        assert!(wait_within(quick, Duration::from_secs(5)).unwrap().is_some_and(|s| s.success()));
-        let failing = std::process::Command::new("false").spawn().unwrap();
-        assert!(wait_within(failing, Duration::from_secs(5)).unwrap().is_some_and(|s| !s.success()));
-    }
-
-    /// #6145's freeze fix stays in the default folder, the user's own; a folder picked with
-    /// the app's `CONTROL_DIR` gets no token unless the file was really restricted.
-    #[test]
-    fn only_the_default_folder_accepts_an_icacls_that_timed_out() {
-        let path = Path::new("control/7878.token");
-        for custom in [false, true] {
-            assert!(restriction_result(IcaclsEnd::Succeeded, custom, path).is_ok());
-            assert!(restriction_result(IcaclsEnd::Failed, custom, path).is_err());
+    fn a_private_create_that_does_not_finish_in_time_is_not_waited_for() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+        static STUCK: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!("craft-control-create-limit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let names = || {
+            let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+            names.sort();
+            names
+        };
+        for custom in [true, false] {
+            let path = dir.join("7878.port");
+            let (go, wait) = channel::<()>();
+            let (made, handle) = create_within(&path, b"7878\n", custom, false, Duration::ZERO, &STUCK, move |p, c| {
+                wait.recv().map_err(Error::other)?;
+                create_new_file(p, c)
+            });
+            assert_eq!(STUCK.load(Ordering::Acquire), 1);
+            if custom {
+                assert_eq!(made.unwrap_err().kind(), ErrorKind::TimedOut);
+                assert!(!path.exists());
+                let unused = |_: &Path, _: &[u8]| -> Result<()> { panic!("a second thread was started") };
+                let (again, none) = create_within(&path, b"7878\n", custom, false, Duration::from_secs(600), &STUCK, unused);
+                assert_eq!(again.unwrap_err().kind(), ErrorKind::TimedOut);
+                assert!(none.is_none());
+                // A later write of the same contents, as a retry of the same port would make.
+                create_new_file(&path, b"7878\n").unwrap();
+            } else {
+                made.unwrap();
+            }
+            go.send(()).unwrap();
+            handle.unwrap().join().unwrap();
+            assert_eq!(STUCK.load(Ordering::Acquire), 0);
+            assert_eq!(names(), ["7878.port"]);
+            assert_eq!(read_token(&path).as_deref(), Some("7878"));
+            std::fs::remove_file(&path).unwrap();
         }
-        assert!(restriction_result(IcaclsEnd::TimedOut, false, path).is_ok());
-        let e = restriction_result(IcaclsEnd::TimedOut, true, path).unwrap_err();
-        assert_eq!(e.kind(), ErrorKind::TimedOut);
-        assert!(e.to_string().contains("7878.token"), "{e}");
+        let path = dir.join("quick.token");
+        let (made, handle) = create_within(&path, b"quick\n", true, false, Duration::from_secs(600), &STUCK, create_new_file);
+        made.unwrap();
+        handle.unwrap().join().unwrap();
+        assert_eq!(names(), ["quick.token"]);
+        assert_eq!(read_token(&path).as_deref(), Some("quick"));
+        // Another launch's file at the name is kept, as `create_new` keeps it.
+        let (made, handle) = create_within(&path, b"later\n", true, false, Duration::from_secs(600), &STUCK, create_new_file);
+        assert_eq!(made.unwrap_err().kind(), ErrorKind::AlreadyExists);
+        handle.unwrap().join().unwrap();
+        assert_eq!(names(), ["quick.token"]);
+        assert_eq!(read_token(&path).as_deref(), Some("quick"));
+        // With `replace` (the discovery file) the later launch's file takes the name.
+        let (made, handle) = create_within(&path, b"later\n", true, true, Duration::from_secs(600), &STUCK, create_new_file);
+        made.unwrap();
+        handle.unwrap().join().unwrap();
+        assert_eq!(names(), ["quick.token"]);
+        assert_eq!(read_token(&path).as_deref(), Some("later"));
+        let refused = |_: &Path, _: &[u8]| -> Result<()> { Err(Error::other("refused")) };
+        let (made, handle) = create_within(&dir.join("refused.token"), b"other\n", true, false, Duration::from_secs(600), &STUCK, refused);
+        assert!(made.is_err());
+        handle.unwrap().join().unwrap();
+        assert_eq!(names(), ["quick.token"]);
+        // A create whose tool was ended after its own limit, within this one, is taken as one
+        // that was not waited for.
+        let ended =
+            |_: &Path, _: &[u8]| -> Result<()> { Err(Error::new(ErrorKind::TimedOut, "powershell.exe did not finish within 10 s and was ended")) };
+        let path = dir.join("ended.token");
+        let (made, handle) = create_within(&path, b"ended\n", true, false, Duration::from_secs(600), &STUCK, ended);
+        assert_eq!(made.unwrap_err().kind(), ErrorKind::TimedOut);
+        handle.unwrap().join().unwrap();
+        assert_eq!(names(), ["quick.token"]);
+        let (made, handle) = create_within(&path, b"ended\n", false, false, Duration::from_secs(600), &STUCK, ended);
+        made.unwrap();
+        handle.unwrap().join().unwrap();
+        assert_eq!(names(), ["ended.token", "quick.token"]);
+        assert_eq!(read_token(&path).as_deref(), Some("ended"));
+        assert_eq!(STUCK.load(Ordering::Acquire), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A file that couldn't be restricted is removed, empty and with no process file beside it, and
-    /// the error goes to the caller. A restricted one gets its token.
+    /// A file that couldn't be created leaves no process file beside it, and the error goes to the
+    /// caller. A created one gets the token and a newline.
     #[test]
-    fn a_token_file_that_could_not_be_restricted_is_removed() {
-        let dir = std::env::temp_dir().join(format!("craft-control-restrict-{}", std::process::id()));
+    fn a_token_file_that_could_not_be_created_leaves_nothing() {
+        let dir = std::env::temp_dir().join(format!("craft-control-create-{}", std::process::id()));
         let path = dir.join("7879.token");
-        let e = write_token_file_with(&path, "secret-token", |p| {
-            assert_eq!(std::fs::read(p).unwrap(), b"", "restricted before the token goes in");
-            restriction_result(IcaclsEnd::TimedOut, true, p)
-        })
-        .unwrap_err();
+        let e = write_token_file_with(&path, "secret-token", |_, _| Err(Error::new(ErrorKind::TimedOut, "refused"))).unwrap_err();
         assert_eq!(e.kind(), ErrorKind::TimedOut);
         assert!(!path.exists() && !pid_path(&path).exists());
-        write_token_file_with(&path, "secret-token", |p| restriction_result(IcaclsEnd::TimedOut, false, p)).unwrap();
+        write_token_file_with(&path, "secret-token", create_new_file).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"secret-token\n");
+        assert!(pid_path(&path).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// On Windows the token file is its user's alone from the moment it exists: in a folder that
+    /// lets Users read what is created in it, the file has no entry for Users and no other
+    /// account's access.
+    #[cfg(windows)]
+    #[test]
+    fn the_token_file_is_private_from_the_start_on_windows() {
+        use craft_platform::owner_only;
+        let dir = std::env::temp_dir().join(format!("craft-control-private-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = std::process::Command::new("icacls").arg(&dir).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)R").output().unwrap();
+        assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+        let path = dir.join("7880.token");
+        TEST.write_token_file(&path, "secret-token").unwrap();
+        let sddl = owner_only::sddl_of(&path).unwrap();
+        assert!(!sddl.contains(";BU)") && !sddl.contains(";S-1-5-32-545)"), "Users must not inherit read access: {sddl}");
+        assert_eq!(owner_only::foreign_access(&sddl, &owner_only::current_user_sid().unwrap()), None, "{sddl}");
         assert_eq!(read_token(&path).as_deref(), Some("secret-token"));
         let _ = std::fs::remove_dir_all(&dir);
     }

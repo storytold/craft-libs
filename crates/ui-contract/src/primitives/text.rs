@@ -1088,7 +1088,8 @@ pub(crate) mod memo_tests {
             let semibold = TextEnv { fonts: StackFacts { semibold: true, ..env.fonts }, ..env };
             let system_ui = TextEnv { fonts: StackFacts { system_ui: true, ..env.fonts }, ..env };
             let line_ratio = TextEnv { fonts: StackFacts { line_ratio: 1.25, ..env.fonts }, ..env };
-            for changed in [rtl, ink, semibold, system_ui, line_ratio] {
+            let tab_title = TextEnv { fonts: StackFacts { tab_title: true, ..env.fonts }, ..env };
+            for changed in [rtl, ink, semibold, system_ui, line_ratio, tab_title] {
                 let before = entries(ctx);
                 let _ = run.layout(ctx, &changed, 80.0);
                 assert_eq!(entries(ctx), before + 1);

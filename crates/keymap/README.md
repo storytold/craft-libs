@@ -305,6 +305,9 @@ assert_eq!((report.unmatched[0].item.as_str(), report.unmatched[0].line), ("File
   are applied in file order; the earlier key is listed in `skipped`), and an entry without keys
   can clear its command. It clears it only when no entry matched to the same command has keys,
   whatever the order of the entries.
+- Conflicts removed from one command are saved as one final binding list. An intermediate
+  list that cannot be stored does not block an import whose final list fits. If that final
+  list cannot be saved, the entries taking those keys fail and keep their previous bindings.
 - Keys read approximately (a numeric keypad key bound as the main key) are listed in
   `approximated`.
 - With `ImportOptions.suggest`, unmatched entries get fuzzy candidates (`import::namematch`);

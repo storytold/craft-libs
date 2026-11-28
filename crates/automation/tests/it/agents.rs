@@ -3,8 +3,8 @@
 
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use craft_automation::agents::AgentLinkStatus;
@@ -17,7 +17,6 @@ use craft_automation::ui::agents::AgentsPage;
 use craft_host::{AppInfo, Host, PickId, Picked, ScriptedFiles};
 use craft_ui::contract::Role;
 use craft_ui::patterns::preferences::SettingsDraft;
-use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
 use craft_ui::testing::Fixture;
 use craft_ui::testing::trial;
@@ -29,16 +28,40 @@ fn temp_dir(tag: &str) -> tempfile::TempDir {
     tempfile::Builder::new().prefix(&format!("craft-agents-{tag}-")).tempdir().expect("a temp dir")
 }
 
-/// Waits up to five seconds for `done`.
-fn wait_for(mut done: impl FnMut() -> bool) -> bool {
-    let started = motion::now();
-    while !done() {
-        if started.elapsed() > Duration::from_secs(5) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(5));
+/// The watch thread's poll clock, driven by the test: [`Self::poll`] lets one poll run and returns once the thread has
+/// finished it and waits for the next.
+struct Ticks {
+    tick: mpsc::SyncSender<()>,
+    waiting: mpsc::Receiver<()>,
+}
+
+impl Ticks {
+    /// The clock and the `tick` to give [`AgentSwitch::watch_with`].
+    fn new() -> (Self, impl FnMut() -> bool + Send + 'static) {
+        let (tick, ticks) = mpsc::sync_channel(0);
+        let (waits, waiting) = mpsc::channel();
+        let wait = move || {
+            let _ = waits.send(());
+            ticks.recv().is_ok()
+        };
+        (Self { tick, waiting }, wait)
     }
-    true
+
+    /// Blocks until the watch thread waits for its next poll; `false` once the thread has ended.
+    fn waiting(&self) -> bool {
+        // A hang guard only: the thread answers at once, so the limit is never reached by a run that works.
+        match self.waiting.recv_timeout(Duration::from_secs(60)) {
+            Ok(()) => true,
+            Err(mpsc::RecvTimeoutError::Disconnected) => false,
+            Err(mpsc::RecvTimeoutError::Timeout) => panic!("the watch thread hung"),
+        }
+    }
+
+    /// Runs one poll; `false` when the thread ended in it instead of waiting for the next one.
+    fn poll(&self) -> bool {
+        self.tick.send(()).unwrap();
+        self.waiting()
+    }
 }
 
 /// With the `AI-MCP` flag only the launcher's switch decides; without it the app's earlier consent.
@@ -52,8 +75,8 @@ fn with_the_flag_only_the_launchers_switch_lets_agents_in() {
     assert!(!AgentSwitch::fixed(false, true).allows(false));
 }
 
-/// The switch follows the launcher's list within a poll, wakes the app once per change rather than once per poll, and
-/// its thread ends once the last clone is dropped.
+/// The switch follows the launcher's list at the next poll, wakes the app once per change rather than once per poll,
+/// and its thread ends at the first poll after the last clone is dropped.
 #[trial]
 fn the_switch_wakes_once_per_change() {
     let launcher = Arc::new(AtomicBool::new(false));
@@ -72,28 +95,35 @@ fn the_switch_wakes_once_per_change() {
             wakes.fetch_add(1, Ordering::Relaxed);
         }
     };
-    let switch = AgentSwitch::watch_with(true, probe, Duration::from_millis(5), wake);
+    let (ticks, tick) = Ticks::new();
+    let switch = AgentSwitch::watch_with(true, probe, tick, wake);
     let clone = switch.clone();
+    assert!(ticks.waiting());
     assert!(!switch.launcher());
+    assert_eq!(probes.load(Ordering::Relaxed), 1, "asked once at the start");
 
     launcher.store(true, Ordering::Relaxed);
-    assert!(wait_for(|| clone.launcher()), "the switch follows the launcher");
+    assert!(ticks.poll());
+    assert!(clone.launcher(), "the switch follows the launcher");
     assert!(switch.allows(false));
     // Many polls with nothing changed.
-    let polled = probes.load(Ordering::Relaxed);
-    assert!(wait_for(|| probes.load(Ordering::Relaxed) > polled + 10));
+    for _ in 0..10 {
+        assert!(ticks.poll());
+    }
+    assert_eq!(probes.load(Ordering::Relaxed), 12, "one probe per poll");
+    assert_eq!(wakes.load(Ordering::Relaxed), 1, "one wake per change, not per poll");
     launcher.store(false, Ordering::Relaxed);
-    assert!(wait_for(|| !switch.launcher()));
-    assert!(wait_for(|| wakes.load(Ordering::Relaxed) == 2));
+    assert!(ticks.poll());
+    assert!(!switch.launcher());
     assert_eq!(wakes.load(Ordering::Relaxed), 2, "one wake per change, not per poll");
 
     drop(switch);
+    assert!(ticks.poll(), "a clone keeps the watch");
     drop(clone);
-    // The thread sees the switch gone at its next poll and stops probing.
-    std::thread::sleep(Duration::from_millis(50));
-    let after_drop = probes.load(Ordering::Relaxed);
-    std::thread::sleep(Duration::from_millis(50));
-    assert_eq!(probes.load(Ordering::Relaxed), after_drop, "the watch ended with the last switch");
+    // The thread probes once more, sees the switch gone and ends, so nothing probes after it.
+    assert!(!ticks.poll(), "the watch ended with the last switch");
+    assert_eq!(probes.load(Ordering::Relaxed), 15, "one probe per poll, the last one before the watch ended");
+    assert_eq!(wakes.load(Ordering::Relaxed), 2);
 }
 
 /// A published connection reads back in its documented shape, and only the process that wrote it removes it.
@@ -306,6 +336,96 @@ fn a_token_file_that_cannot_be_written_keeps_agents_out() {
     assert_eq!(link.status().port, None);
     assert!(matches!(link.status().problem, Some(LinkProblem::TokenFile(_))), "{:?}", link.status());
     TcpListener::bind(("127.0.0.1", port)).expect("the port was let go");
+}
+
+/// A refused token file is not tried again with the same settings: a retry can't succeed until someone changes the
+/// file, and on Windows each check starts `whoami` and PowerShell on the UI thread, about 300 ms, which a retry every
+/// few seconds turned into a stall that often (photocraft#17006). Changing the settings tries again.
+#[trial]
+fn a_refused_token_file_is_not_retried_until_the_settings_change() {
+    let dir = temp_dir("link-token-no-retry");
+    std::fs::create_dir(dir.path().join(TOKEN_FILE)).unwrap();
+    let host = host();
+    let mut link = AgentLink::new(Some(dir.path().to_path_buf()), "x").retry_after(Duration::ZERO);
+    let wanted = free_port();
+    assert!(link.sync(Some(&on(u32::from(wanted))), &host).requests.is_none());
+    assert!(matches!(link.status().problem, Some(LinkProblem::TokenFile(_))), "{:?}", link.status());
+
+    // The file is fixed, but the same settings don't look at it again.
+    std::fs::remove_dir(dir.path().join(TOKEN_FILE)).unwrap();
+    let same = link.sync(Some(&on(u32::from(wanted))), &host);
+    assert!(same.requests.is_none() && !same.changed, "no retry with the same settings");
+    assert!(matches!(link.status().problem, Some(LinkProblem::TokenFile(_))), "{:?}", link.status());
+
+    let changed = link.sync(Some(&on(0)), &host);
+    assert!(changed.requests.is_some(), "a settings change tries again");
+    assert_eq!(link.status().problem, None);
+}
+
+/// A token file the check refuses as it is (here a damaged token; on Windows also one an older app wrote with its
+/// folder's access list, open to Administrators) is the link's own: it is replaced with a new token, so agents can
+/// connect instead of staying out until someone deletes the file (photocraft#17006).
+#[trial]
+fn a_refused_token_file_is_replaced_with_a_new_token() {
+    let dir = temp_dir("link-token-refresh");
+    let file = dir.path().join(TOKEN_FILE);
+    std::fs::write(&file, "not a token\n").unwrap();
+    let host = host();
+    let mut link = AgentLink::new(Some(dir.path().to_path_buf()), "x");
+    assert!(link.sync(Some(&on(0)), &host).requests.is_some(), "{:?}", link.status());
+    assert_eq!(link.status().problem, None);
+    let token = std::fs::read_to_string(&file).unwrap();
+    assert_ne!(token.trim(), "not a token");
+    assert_eq!(token.trim().len(), 64, "a new token: {token:?}");
+    assert_eq!(read_connection(dir.path()).unwrap().expect("published").port, link.status().port.expect("listening"));
+}
+
+/// A retry of a taken port reuses the token its first try checked instead of reading the token file again (on Windows
+/// that check is about 300 ms on the UI thread, photocraft#17006); a start that succeeded reads it afresh next time.
+#[trial]
+fn a_taken_port_retry_reuses_the_checked_token() {
+    let dir = temp_dir("link-token-reuse");
+    let host = host();
+    let mut link = AgentLink::new(Some(dir.path().to_path_buf()), "x").retry_after(Duration::ZERO);
+    let taken = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = u32::from(taken.local_addr().unwrap().port());
+    assert!(link.sync(Some(&on(port)), &host).requests.is_none());
+    assert!(matches!(link.status().problem, Some(LinkProblem::Listen { .. })), "{:?}", link.status());
+
+    // Reading the file now fails, so a retry that read it would report a token file problem.
+    std::fs::remove_file(dir.path().join(TOKEN_FILE)).unwrap();
+    std::fs::create_dir(dir.path().join(TOKEN_FILE)).unwrap();
+    drop(taken);
+    let retried = link.sync(Some(&on(port)), &host);
+    assert!(retried.requests.is_some(), "{:?}", link.status());
+    assert_eq!(link.status().problem, None);
+
+    // Once a start succeeded, the next one reads the file again.
+    let moved = link.sync(Some(&on(0)), &host);
+    assert!(moved.requests.is_none());
+    assert!(matches!(link.status().problem, Some(LinkProblem::TokenFile(_))), "{:?}", link.status());
+}
+
+/// The checked token is kept only for retries with the same settings: turning agents off and on again reads the token
+/// file again, so a server never listens with a token the file no longer holds.
+#[trial]
+fn a_settings_change_reads_the_token_file_again() {
+    let dir = temp_dir("link-token-settings");
+    let host = host();
+    let mut link = AgentLink::new(Some(dir.path().to_path_buf()), "x").retry_after(Duration::ZERO);
+    let taken = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = u32::from(taken.local_addr().unwrap().port());
+    assert!(link.sync(Some(&on(port)), &host).requests.is_none());
+    assert!(matches!(link.status().problem, Some(LinkProblem::Listen { .. })), "{:?}", link.status());
+
+    assert!(!link.sync(None, &host).stopped, "nothing was running");
+    // While agents are off the token file changes; here it can't be read at all, which the next start must report.
+    std::fs::remove_file(dir.path().join(TOKEN_FILE)).unwrap();
+    std::fs::create_dir(dir.path().join(TOKEN_FILE)).unwrap();
+    drop(taken);
+    let back = link.sync(Some(&on(port)), &host);
+    assert!(back.requests.is_none(), "started with the token the file no longer holds");
+    assert!(matches!(link.status().problem, Some(LinkProblem::TokenFile(_))), "{:?}", link.status());
 }
 
 /// Dropping the link stops its server and removes its connection file.

@@ -1,15 +1,25 @@
 //! Reading one catalog. The rules are craft-i18n's `docs/catalog-format.md`; craft-i18n's CI
 //! applies them strictly, and here a row that breaks one is skipped and reported, so an app built
 //! against a newer catalog still runs, with that string in English.
+//!
+//! [`I18n`](crate::I18n) reads the embedded catalogs with these functions. An app's build script
+//! or test that reads, merges or writes catalog rows can use them to read rows exactly as the
+//! lookups do: [`parse`] for a catalog, [`parse_row`] for one line, and [`escape`] and [`unescape`]
+//! for the columns. [`plural_forms`](crate::plural_forms) gives the `forms` argument for a locale.
 
 use std::collections::HashSet;
 
 use crate::message::Template;
 
 /// A row that passed, with its columns unescaped.
-pub(crate) struct Entry {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    /// The context column: empty, a context such as `menu`, or `@plural`, `@id`, `@msg` or
+    /// `@msgplural`.
     pub context: String,
+    /// The English source text; for `@plural` and `@msgplural`, its two forms joined by `|`.
     pub source: String,
+    /// The translation; for `@plural` and `@msgplural`, its forms joined by `|`.
     pub translation: String,
 }
 
@@ -17,8 +27,9 @@ pub(crate) struct Entry {
 const RESERVED: &[&str] = &["@plural", "@id", "@msg", "@msgplural"];
 
 /// The rows of a catalog whose locale has `forms` plural forms, and one problem (`line N: …`) per
-/// row skipped. Of a row defined twice, the first is kept, as in craft-i18n's checker.
-pub(crate) fn parse(text: &str, forms: usize) -> (Vec<Entry>, Vec<String>) {
+/// row skipped. Of a row defined twice, the first is kept, as in craft-i18n's checker. A leading
+/// byte order mark, `\r` line ends, empty lines and `#` comment lines are skipped.
+pub fn parse(text: &str, forms: usize) -> (Vec<Entry>, Vec<String>) {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut rows = Vec::new();
     let mut problems = Vec::new();
@@ -39,7 +50,9 @@ pub(crate) fn parse(text: &str, forms: usize) -> (Vec<Entry>, Vec<String>) {
     (rows, problems)
 }
 
-pub(crate) fn parse_row(text: &str, forms: usize) -> Result<Entry, String> {
+/// One row, `context⇥source⇥translation` without its line end, checked as [`parse`] checks it;
+/// the error is the problem `parse` reports after `line N: `.
+pub fn parse_row(text: &str, forms: usize) -> Result<Entry, String> {
     let columns: Vec<&str> = text.split('\t').collect();
     let [context, source, translation] = columns.as_slice() else {
         return Err(format!("{} columns; expected 3", columns.len()));
@@ -100,7 +113,25 @@ fn check_plural(source: &str, translation: &str, forms: usize) -> Result<(), Str
     Ok(())
 }
 
-fn unescape(text: &str) -> Result<String, String> {
+/// A column as a catalog writes it: `\` as `\\`, a line break as `\n` and a tab as `\t`. Other
+/// characters are kept, so a column with another control character still gives a row that
+/// [`parse_row`] rejects.
+pub fn escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// A column as a catalog writes it, read back: `\n`, `\t` and `\\` are the only escapes, and any
+/// other backslash is an error.
+pub fn unescape(text: &str) -> Result<String, String> {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars();
     while let Some(c) = chars.next() {
