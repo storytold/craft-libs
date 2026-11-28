@@ -41,10 +41,10 @@ impl<'a, K: Hash + PartialEq> Pages<'a, K> {
     pub fn show<R>(self, ui: &mut Ui, mut page: impl FnMut(&mut Ui, &K) -> R) -> R {
         let ctx = ui.ctx().clone();
         let base = sub(ui.scope_id(), ("pages", self.salt));
-        let region = flow_region(ui);
-        let layout = *ui.layout();
         // Each page runs in the env of `ui`, as the direct children of the body around it.
         let env = Env::of(ui);
+        let region = flow_region(ui, &env);
+        let layout = *ui.layout();
         let hidden = self.pages.iter().filter(|key| *key != self.current).fold(Vec2::ZERO, |largest, key| {
             let id = sub(base, hash(key));
             let kept = lazy::measured(&ctx, id).map(|(size, reads)| {

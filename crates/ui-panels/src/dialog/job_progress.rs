@@ -6,13 +6,15 @@ use crate::contract::{Bind, Show as _, ShowContainer as _};
 use crate::display::{Progress, Shade, Text};
 use crate::layout_components::Row;
 use crate::runtime::env::{Env, Label};
+use crate::runtime::overlay::LayerRole;
 use crate::runtime::words::CommonWords;
 use crate::sections::DialogRole;
 use crate::style::TypeRole;
 use egui::{Response, Ui};
 
 /// Modal progress window for a running job: a progress bar (or an indeterminate one), counts and the percentage, the
-/// queued line, and Cancel (and Hide, when `can_hide`). Escape and the close action give Cancel.
+/// queued line, and Cancel (and Hide, when `can_hide`). Escape and the close action give Cancel. Its layer has the
+/// progress role, so `any_open` with `OpenFilter::Asks` leaves it out.
 // PLAN: `#[pattern(dialog)]` needs `StackDialog` (`dialog_probe`); the app draws this window directly, so it registers as a plain `Pattern`
 #[derive(crate::contract::Pattern)]
 pub struct JobProgress {
@@ -72,6 +74,7 @@ impl JobProgress {
         // leave a session slot closed for the next job.
         let mut open = true;
         let shown = Prompt::new(title, step)
+            .layer_role(LayerRole::Progress)
             .answers(buttons(&env, replies))
             .extras(|ui| {
                 match fraction {

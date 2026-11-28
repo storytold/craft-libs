@@ -75,7 +75,8 @@ impl RowInput {
     /// Only the focus the menu gave as it opened is withheld from: a row or part that a request focused (an AccessKit
     /// `Focus`, the app) was aimed at, and the key runs it.
     pub(crate) fn of<C: Component>(cx: &mut Cx<'_, C>, level: &MenuLevel) -> RowInput {
-        let moving = cx.core.ctx.input(|input| input.pointer.delta() != Vec2::ZERO);
+        // The rest restarts at each move: a tracked read.
+        let moving = crate::runtime::pointer::frame(&cx.core.ctx).delta != Vec2::ZERO;
         let hovered = cx.response.hovered();
         let focused = cx.is_focused();
         let keyboard = level.keyboard();

@@ -845,7 +845,7 @@ impl<P: Clone + Send + Sync + 'static> Component for GradientBar<'_, P> {
         let edge_of = |m: StopRef| {
             if self.selected_marker == Some(m) {
                 style.selected
-            } else if !dragging && cx.hover_pos(part_of(m)).is_some() {
+            } else if !dragging && cx.part_if_declared(part_of(m)).is_some_and(|result| result.hovered) {
                 style.hovered
             } else {
                 cx.resolve(&style.edge)
