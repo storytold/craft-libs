@@ -3503,6 +3503,7 @@ dependencies = [
  "craft-markdown",
  "craft-math",
  "craft-metafile",
+ "craft-testkit",
  "craft-wordmodel",
  "craft-xml",
  "craft-zip",
