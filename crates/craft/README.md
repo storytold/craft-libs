@@ -35,4 +35,4 @@ Not in the facade, because they are tools or test harnesses: `craft-ui-gallery`,
 
 ## egui fork
 
-`craft::egui_fork::{GIT, REV}` name the egui fork the library is built with, and `check_lockfile(lock)` checks that an app's `Cargo.lock` takes every egui package from it. An app's xtask calls it in its `ci` and `check` commands. The app's workspace must also patch egui to this fork, since `[patch]` applies only at the workspace root.
+`craft::egui_fork::{GIT, REV}` name the egui fork the library is built with, and `check_lockfile(lock)` checks that an app's `Cargo.lock` takes every egui package from it. `WINIT_GIT` and `WINIT_REV` name the winit fork that this egui revision needs (its egui-winit calls `with_tool_window`), and `check_lockfile` also checks that winit comes from it. An app's xtask calls it in its `ci` and `check` commands. The app's workspace must also patch egui and winit to these forks, since `[patch]` applies only at the workspace root. An app that moves its egui pin without moving its winit pin fails to compile on Windows.

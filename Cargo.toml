@@ -324,21 +324,23 @@ hayro-postscript = { path = "vendor/hayro-postscript" }
 linesweeper = { path = "vendor/linesweeper" }
 vello_common = { path = "vendor/vello_common" }
 vello_cpu = { path = "vendor/vello_cpu" }
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "932a73b28560acb1a695533307b2cd0d66a42081" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "932a73b28560acb1a695533307b2cd0d66a42081" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "932a73b28560acb1a695533307b2cd0d66a42081" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "932a73b28560acb1a695533307b2cd0d66a42081" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "932a73b28560acb1a695533307b2cd0d66a42081" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "932a73b28560acb1a695533307b2cd0d66a42081" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "932a73b28560acb1a695533307b2cd0d66a42081" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "932a73b28560acb1a695533307b2cd0d66a42081" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "932a73b28560acb1a695533307b2cd0d66a42081" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "932a73b28560acb1a695533307b2cd0d66a42081" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "932a73b28560acb1a695533307b2cd0d66a42081" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "932a73b28560acb1a695533307b2cd0d66a42081" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "932a73b28560acb1a695533307b2cd0d66a42081" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "932a73b28560acb1a695533307b2cd0d66a42081" }
-winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "3f4c587d1bac56224a9414e964fbb703d8b0131e" }
+# egui-winit at the egui rev above calls `with_tool_window`, which this winit rev adds. Move the two
+# pins together; craft::egui_fork::{WINIT_GIT, WINIT_REV} must equal this entry.
+winit = { git = "https://github.com/storytold/winit.git", rev = "2aa8330c41762d5c1249de1930be5a82ab49c0fb" }
 
 # symphonia's FLAC decoder restores LPC samples as `residual + (prediction as i32)`. In a valid
 # 32-bit stream the prediction can leave the i32 range while the sum does not, so a debug build

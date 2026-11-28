@@ -977,6 +977,28 @@ fn palettes_hide_while_the_main_window_is_minimized() {
     }
 }
 
+/// A tool window asks for the Windows tool-window style, and a document window, a tool window with a taskbar entry
+/// and a tool window whose spec turns into a document window's do not.
+#[trial]
+fn tool_windows_ask_for_the_windows_tool_window_style() {
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default().os(Os::Windows).caps(Caps::native(Os::Windows)), Arc::new(FakeSystem::new())));
+    let frame = |document: bool| {
+        windows.frame(vec![], vec![], |ui| {
+            let spec = if document { WindowSpec::document() } else { WindowSpec::tool() };
+            Palette::new("tool", Some(spec)).show(ui, |_, _| {});
+            Palette::new("listed", Some(WindowSpec::tool().taskbar(true))).show(ui, |_, _| {});
+            Palette::new("doc", Some(WindowSpec::document())).show(ui, |_, _| {});
+        })
+    };
+    let first = frame(false);
+    assert_eq!(builder_titled(&first, "tool").1.tool_window, Some(true), "a tool window has the style");
+    assert_eq!(builder_titled(&first, "listed").1.tool_window, Some(false), "a tool window with a taskbar entry does not");
+    assert_eq!(builder_titled(&first, "doc").1.tool_window, Some(false), "a document window does not");
+    frame(false);
+    let turned = frame(true);
+    assert_eq!(builder_titled(&turned, "tool").1.tool_window, Some(false), "the window turned into a document window drops the style");
+}
+
 /// A full-window container mounted in its own window opens a resizable OS window titled as the container where
 /// viewports are available, and covers the main window's content where they are not.
 #[trial]
