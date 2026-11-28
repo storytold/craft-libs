@@ -38,6 +38,12 @@ own environment is not changed. stdout and stderr are read at the same time, eac
 `io::Error` holding `OutputLimitExceeded`. `DEFAULT_MAX_OUTPUT` is 1 MiB for each stream, a value of
 this crate. A non-zero exit status is returned in the `Output`. `run` has no time limit.
 
+`run` goes through the same process runner as `oracle`. On Unix the child runs in its own process
+group, so it does not receive a terminal's Ctrl-C, and when a stream passes the limit the whole
+group is killed. On Windows the child and its descendants run in a Job Object, which is closed when
+`run` returns, so a process the child started that is still running then ends. After a failure,
+`run` waits up to 2 seconds for the readers of the child's output.
+
 ```rust
 use std::ffi::OsString;
 

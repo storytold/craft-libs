@@ -25,15 +25,23 @@
 //! stopped the program and waited for it. [`DEFAULT_MAX_OUTPUT`] is 1 MiB for each stream, a value
 //! of this crate. `run` has no time limit: a program that never exits and stays under the limit
 //! keeps `run` waiting.
+//!
+//! `run` goes through the crate's process runner, which `oracle` uses too. On Unix the child runs
+//! in its own process group, so it does not receive a terminal's Ctrl-C, and when a stream passes
+//! the limit the whole group is killed. On Windows the child and its descendants run in a Job
+//! Object, which is closed when `run` returns, so a process the child started that is still running
+//! then ends. After a failure, `run` waits up to 2 seconds for the readers of the child's output.
 
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::io::{self, Read};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
-use std::sync::mpsc;
-use std::thread;
+use std::process::{Command, Output};
+
+use crate::process::{self, Observed, RunError, RunLimits};
+
+pub use crate::process::Stream;
 
 /// The default for `max_output` in [`run`]: 1 MiB for each of stdout and stderr.
 pub const DEFAULT_MAX_OUTPUT: usize = 1 << 20;
@@ -228,24 +236,6 @@ fn check(value: Option<&OsStr>) -> Result<(), Rejection> {
     }
 }
 
-/// One of a child's output streams.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Stream {
-    /// The child's standard output.
-    Stdout,
-    /// The child's standard error.
-    Stderr,
-}
-
-impl fmt::Display for Stream {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Stdout => "stdout",
-            Self::Stderr => "stderr",
-        })
-    }
-}
-
 /// The error inside the [`io::Error`] that [`run`] returns when a stream passes its limit. Read it
 /// with [`io::Error::get_ref`] and `downcast_ref`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -285,72 +275,14 @@ impl Error for OutputLimitExceeded {}
 /// `run` has no time limit. A child that never exits, or that leaves a process running with its
 /// output streams open, keeps `run` waiting.
 pub fn run(path: &Path, args: &[OsString], env: &[(OsString, OsString)], max_output: usize) -> io::Result<Output> {
-    let mut child = Command::new(path)
-        .args(args)
-        .envs(env.iter().map(|(name, value)| (name, value)))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| io::Error::new(error.kind(), format!("could not start {}: {error}", path.display())))?;
-    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
-        stop(&mut child);
-        return Err(io::Error::other("the child's output pipes were not opened"));
-    };
-    let (sender, receiver) = mpsc::channel();
-    let readers =
-        spawn_reader(Stream::Stdout, stdout, max_output, sender.clone()).and_then(|()| spawn_reader(Stream::Stderr, stderr, max_output, sender));
-    if let Err(error) = readers {
-        stop(&mut child);
-        return Err(error);
-    }
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    for _ in 0..2 {
-        let Ok((stream, result)) = receiver.recv() else {
-            stop(&mut child);
-            return Err(io::Error::other("a reader of the child's output stopped without a result"));
-        };
-        match result {
-            Ok(Some(bytes)) => match stream {
-                Stream::Stdout => out = bytes,
-                Stream::Stderr => err = bytes,
-            },
-            Ok(None) => {
-                stop(&mut child);
-                return Err(io::Error::other(OutputLimitExceeded { stream, limit: max_output }));
-            }
-            Err(error) => {
-                stop(&mut child);
-                return Err(error);
-            }
-        }
-    }
-    let status = child.wait()?;
-    Ok(Output { status, stdout: out, stderr: err })
-}
-
-type ReadResult = (Stream, io::Result<Option<Vec<u8>>>);
-
-fn spawn_reader(stream: Stream, pipe: impl Read + Send + 'static, max_output: usize, sender: mpsc::Sender<ReadResult>) -> io::Result<()> {
-    thread::Builder::new().name(format!("craft-testkit {stream}")).spawn(move || {
-        // The receiver is gone only when `run` has already returned.
-        let _ = sender.send((stream, read_capped(pipe, max_output)));
-    })?;
-    Ok(())
-}
-
-/// Reads `pipe` to its end. Returns `None` as soon as it holds more than `max_output` bytes.
-fn read_capped(pipe: impl Read, max_output: usize) -> io::Result<Option<Vec<u8>>> {
-    let limit = u64::try_from(max_output).unwrap_or(u64::MAX).saturating_add(1);
-    let mut bytes = Vec::new();
-    pipe.take(limit).read_to_end(&mut bytes)?;
-    Ok((bytes.len() <= max_output).then_some(bytes))
-}
-
-/// Stops the child and waits for it, so that no process is left behind.
-fn stop(child: &mut Child) {
-    // An error here means the child has already exited.
-    let _ = child.kill();
-    let _ = child.wait();
+    let mut cmd = Command::new(path);
+    cmd.args(args).envs(env.iter().map(|(name, value)| (name, value)));
+    let limits = RunLimits { max_output_bytes: max_output, timeout: None };
+    process::run(cmd, limits, &mut Observed::default()).map_err(|error| match error {
+        RunError::Start(error) => io::Error::new(error.kind(), format!("could not start {}: {error}", path.display())),
+        RunError::OutputLimit { stream, limit } => io::Error::other(OutputLimitExceeded { stream, limit }),
+        RunError::Read(error) => error,
+        // Neither can happen without a timeout.
+        error @ (RunError::InvalidTimeout(_) | RunError::Timeout(_)) => io::Error::other(error),
+    })
 }
