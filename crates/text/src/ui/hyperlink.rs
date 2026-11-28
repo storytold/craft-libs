@@ -503,7 +503,7 @@ fn body(ui: &mut Ui, given: &Given, form: &mut Form, words: &HyperlinkWords, par
 fn text_field(ui: &mut Ui, salt: &'static str, label: &Label, value: &mut String, default_stop: bool) {
     Field::new(label.clone()).id_salt(salt).show(ui, |ui, _| {
         let field = TextField::new(label.clone(), Bind::bound(value));
-        if default_stop { field.default_stop() } else { field }.show(ui);
+        if default_stop { field.default_stop().select_on_focus() } else { field }.show(ui);
     });
 }
 
