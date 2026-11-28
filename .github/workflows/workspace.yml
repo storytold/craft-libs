@@ -153,6 +153,10 @@ jobs:
         if [ "$RUNNER_OS" = Linux ]; then
           python3 scripts/test-workspace-concurrency.py
           python3 scripts/test-workspace-tests.py
+          # The raw-tooling suite may land separately.
+          if compgen -G 'crates/raw/docs/test_*.py' > /dev/null; then
+            python3 -m unittest discover -s crates/raw/docs -p 'test_*.py'
+          fi
         fi
         # One rustfmt call gets every source root of the workspace, which is longer than
         # Windows allows for a command line (os error 206). rustfmt's result is the same on

@@ -27,6 +27,9 @@ LINT_SOURCE = """
 if [ "$RUNNER_OS" = Linux ]; then
   python3 scripts/test-workspace-concurrency.py
   python3 scripts/test-workspace-tests.py
+  if compgen -G 'crates/raw/docs/test_*.py' > /dev/null; then
+    python3 -m unittest discover -s crates/raw/docs -p 'test_*.py'
+  fi
 fi
 if [ "$RUNNER_OS" != Windows ]; then
   cargo fmt --check
@@ -57,15 +60,19 @@ cargo() {
   printf '%s\\n' "$*"
   if [ -n "$FAIL" ] && [ "$*" = "$FAIL" ]; then return 17; fi
 }
-python3() { :; }
+python3() {
+  if [ -n "$FAIL" ] && [ "python3 $*" = "$FAIL" ]; then return 17; fi
+}
+compgen() { [ "$RAW_TESTS_PRESENT" = 1 ]; }
 """ + LINT_SOURCE
 
 
-def lint(os_name, fail="", source=None):
+def lint(os_name, fail="", source=None, raw_tests=True):
     validate_source(WORKFLOW.read_text() if source is None else source, "lint-command")
     return subprocess.run(
         ["bash", "-euo", "pipefail", "-c", HARNESS],
-        env={**os.environ, "RUNNER_OS": os_name, "FAIL": fail},
+        env={**os.environ, "RUNNER_OS": os_name, "FAIL": fail,
+             "RAW_TESTS_PRESENT": "1" if raw_tests else "0"},
         text=True, capture_output=True, check=False,
     )
 
@@ -235,6 +242,16 @@ class WorkspaceTests(unittest.TestCase):
                     result, _ = step("archive", fail=command, NEXTEST_ARCHIVE_DIR=tmp + "/archives")
                     self.assertEqual(result.returncode, 17, result.stderr)
                     self.assertEqual(result.stdout.splitlines(), archive_commands(tmp + "/archives")[:index + 1])
+
+    def test_raw_tooling_failure_stops_only_the_linux_lint_leg(self):
+        command = "python3 -m unittest discover -s crates/raw/docs -p test_*.py"
+        cases = [("Linux", True, 17, []), ("Linux", False, 0, COMMON),
+                 ("macOS", True, 0, COMMON), ("Windows", True, 0, COMMON[1:])]
+        for os_name, present, status, expected in cases:
+            with self.subTest(os=os_name, raw_tests=present):
+                result = lint(os_name, command, raw_tests=present)
+                self.assertEqual(result.returncode, status, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), expected)
 
     def test_workflow_source_is_rejected_before_starting_any_process(self):
         source = WORKFLOW.read_text()
