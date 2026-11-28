@@ -46,7 +46,7 @@ a failing pin is kept and reported, with every component pair it makes fail; in 
 | Module | What it is |
 |---|---|
 | `format` | the `craft-design-theme` v1 file: `parse`, `write`, `to_file`; every error with its path |
-| `builtins()` | twelve `craft.*` themes, embedded from `themes/*.json` |
+| `builtins()` | thirteen `craft.*` themes, embedded from `themes/*.json` |
 | `selection` | `Selection`, `SuiteChoice`, `AppChoice` (an app's own theme, mode and size over the suite's), `AppDefaults` (with the app's `AppSizes`), `resolve_selection`: what the user picked, filled in and resolved against what the OS reports |
 | `ThemeId`, `AppId`, `APP_DEFAULT`, `SUITE_DEFAULT` | ids `[a-z0-9][a-z0-9._-]{1,63}`; `craft.` is reserved for built-ins |
 
