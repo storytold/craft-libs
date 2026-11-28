@@ -164,6 +164,25 @@ fn a_grabbed_slider_thumb_moves_by_the_pointer_travel_and_a_click_on_it_changes_
     assert_eq!(slide.value(), START, "a click on the thumb leaves the value");
 }
 
+/// The pass on which a thumb drag starts already moves the value under the pointer (#3608).
+#[trial]
+fn a_thumb_drag_moves_the_value_on_the_pass_it_starts() {
+    let slide = Slide::new(START);
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| slide.show(ui);
+    frames.idle(3, &mut show);
+    let from = FIELD.center();
+    let to = from + Vec2::new(20.0, 0.0);
+    frames.frame(vec![pointer::moved(from)], &mut show);
+    frames.frame(vec![pointer::press(from)], &mut show);
+    frames.frame(vec![pointer::moved(to)], &mut show);
+    let started = slide.value();
+    assert!(started > START, "the pass that starts the drag moved the value: {started}");
+    frames.frame(vec![pointer::release(to)], &mut show);
+    frames.idle(2, &mut show);
+    assert!((slide.value() - started).abs() < 1e-3, "a release where the drag started it adds nothing: {started} then {}", slide.value());
+}
+
 /// A log slider changes its value by equal ratios for equal travels (a linear one by equal differences), and a travel
 /// far past either end lands on the range's end.
 #[trial]

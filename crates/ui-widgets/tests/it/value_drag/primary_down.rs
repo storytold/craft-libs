@@ -272,7 +272,7 @@ fn omitted_and_false_primary_down_policy_keep_legacy_click_timing() {
 }
 
 #[trial]
-fn primary_down_policy_leaves_thumb_press_and_begin_only_first_drag_unchanged() {
+fn primary_down_policy_leaves_thumb_press_and_first_drag_unchanged() {
     for fields in [false, true] {
         let mut rig = Rig::new(fields, Some(true));
         let geometry = rig.geometry(0);
@@ -282,8 +282,9 @@ fn primary_down_policy_leaves_thumb_press_and_begin_only_first_drag_unchanged() 
         assert_eq!(rig.state.borrow().values[0], START);
         assert!(rig.state.borrow().events.iter().all(Vec::is_empty));
         rig.fixture.frame(vec![pointer::moved(at + Vec2::new(50.0, 0.0))]);
-        assert_eq!(rig.state.borrow().values[0], START);
-        assert!(matches!(rig.state.borrow().events[0].as_slice(), [EditEvent::Begin { .. }]));
+        // The pass that starts the thumb drag begins it and already follows the pointer (#3608).
+        assert!(rig.state.borrow().values[0] > START);
+        assert!(matches!(rig.state.borrow().events[0].as_slice(), [EditEvent::Begin { .. }, EditEvent::Update { .. }]));
     }
 }
 

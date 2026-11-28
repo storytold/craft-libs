@@ -345,8 +345,12 @@ impl Component for Slider<'_> {
             match press.phase {
                 PressPhase::DragStart { start, .. } => {
                     let held = Held { from: scale.position(current(&*cx)), press: press_at(&*cx, start.origin.x) };
-                    *cx.memory::<Held>() = held;
+                    *cx.memory::<Held>() = held.clone();
                     cx.begin();
+                    // The pass that starts the drag already follows the pointer, as each `Drag` pass does.
+                    if let Some(next) = held.press.and_then(|press_of| travel.value(press_of, held.from, &press, true)) {
+                        cx.propose(at(next));
+                    }
                 }
                 PressPhase::Drag { .. } => {
                     let held = cx.memory::<Held>().clone();
