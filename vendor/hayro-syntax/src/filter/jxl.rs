@@ -6,19 +6,31 @@
 //! `JXLDecode`, the placeholder other implementations use (for example the PDFium design doc). Only the first frame
 //! is drawn (a PDF image is static), as 8-bit grey or RGB with an optional alpha channel;
 //! CMYK, spot colours and other layouts are refused (the image is then not drawn).
+//!
+//! Two things are settled before jxl-oxide sees the bytes or trusts its answer. A container's
+//! Brotli-compressed metadata boxes (`brob`, Exif and XMP) are dropped unread: jxl-oxide inflates
+//! them into a buffer its allocation tracker does not count, so a few KB could expand into
+//! gigabytes before any size check ran, and a PDF image has no use for them. And the extra
+//! channels the codestream declares must be none, or one alpha channel that the pixel format
+//! reports: a spot colour, a depth map or a second alpha would otherwise be composited or ignored
+//! behind the same channel count.
 
 use crate::filter::FilterResult;
 use crate::object::stream::{ImageColorSpace, ImageData, ImageDecodeParams};
 use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
-use jxl_oxide::{JxlImage, PixelFormat};
+use jxl_oxide::{ExtraChannelType, JxlImage, PixelFormat};
+
+/// The signature box every JPEG XL container starts with. A bare codestream does not.
+const SIGNATURE: &[u8] = b"\0\0\0\x0cJXL \r\n\x87\n";
 
 /// Decode a JPEG XL image for an image XObject described by `image_params`, refusing images over
-/// `max_pixels` pixels or whose decoded raster would take more than `limit` bytes (3 or 4 bytes
+/// `max_pixels` pixels or whose decoded raster would take more than `limit` bytes (1 to 4 bytes
 /// for each pixel, before the alpha channel is split off); `None` when it can't be decoded.
 pub(crate) fn decode(data: &[u8], image_params: &ImageDecodeParams, limit: usize, max_pixels: u64) -> Option<FilterResult<'static>> {
-    let image = JxlImage::builder().read(std::io::Cursor::new(data)).ok()?;
+    let data = without_brob_boxes(data)?;
+    let image = JxlImage::builder().read(std::io::Cursor::new(data.as_ref())).ok()?;
     let (width, height) = (image.width(), image.height());
     if width == 0 || height == 0 || u64::from(width) * u64::from(height) > max_pixels {
         return None;
@@ -34,6 +46,10 @@ pub(crate) fn decode(data: &[u8], image_params: &ImageDecodeParams, limit: usize
         PixelFormat::Rgba => (ImageColorSpace::Rgb, true, 4),
         _ => return None,
     };
+    let extra: Vec<ExtraChannelType> = image.image_header().metadata.ec_info.iter().map(|info| info.ty).collect();
+    if !extra_channels_supported(&extra, has_alpha) {
+        return None;
+    }
     let pixels = (width as usize).checked_mul(height as usize)?;
     let bytes = pixels.checked_mul(channels)?;
     if bytes > limit {
@@ -67,6 +83,52 @@ pub(crate) fn decode(data: &[u8], image_params: &ImageDecodeParams, limit: usize
     })
 }
 
+/// Whether the extra channels a codestream declares are ones this filter draws: none when the
+/// pixel format has no alpha channel, exactly one alpha channel when it has. Anything else (a spot
+/// colour, a black or depth channel, a second alpha) is refused.
+fn extra_channels_supported(declared: &[ExtraChannelType], has_alpha: bool) -> bool {
+    match declared {
+        [] => !has_alpha,
+        [ExtraChannelType::Alpha { .. }] => has_alpha,
+        _ => false,
+    }
+}
+
+/// `data` without the `brob` boxes of a JPEG XL container, in the same order otherwise. A bare
+/// codestream, and a container with no `brob` box, come back as they are, uncopied. `None` when a
+/// box header is cut off or its size cannot be right (below its own header), since the file then
+/// cannot be walked box by box.
+fn without_brob_boxes(data: &[u8]) -> Option<Cow<'_, [u8]>> {
+    if !data.starts_with(SIGNATURE) {
+        return Some(Cow::Borrowed(data));
+    }
+    let mut kept: Option<Vec<u8>> = None;
+    let mut at = 0usize;
+    while at < data.len() {
+        let head = data.get(at..at.checked_add(8)?)?;
+        let size = u64::from(u32::from_be_bytes(head.get(..4)?.try_into().ok()?));
+        let (header, total) = match size {
+            0 => (8u64, (data.len() - at) as u64),
+            1 => (16, u64::from_be_bytes(data.get(at + 8..at.checked_add(16)?)?.try_into().ok()?)),
+            n => (8, n),
+        };
+        if total < header {
+            return None;
+        }
+        let end = at.checked_add(usize::try_from(total).ok()?)?.min(data.len());
+        if head.get(4..8)? == b"brob" {
+            kept.get_or_insert_with(|| data[..at].to_vec());
+        } else if let Some(out) = kept.as_mut() {
+            out.extend_from_slice(&data[at..end]);
+        }
+        at = end;
+    }
+    Some(match kept {
+        Some(out) => Cow::Owned(out),
+        None => Cow::Borrowed(data),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,8 +150,31 @@ mod tests {
         [r, g, b]
     }
 
+    fn expected() -> Vec<u8> {
+        (0..H).flat_map(|y| (0..W).flat_map(move |x| pixel(x, y))).collect()
+    }
+
     fn params(width: u32, height: u32) -> ImageDecodeParams {
         ImageDecodeParams { width, height, ..ImageDecodeParams::default() }
+    }
+
+    /// One ISO BMFF box.
+    fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut out = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(payload);
+        out
+    }
+
+    /// The lossless codestream in a container, with a `brob` box before it when `brob` is given.
+    fn container(brob: Option<&[u8]>) -> Vec<u8> {
+        let mut out = SIGNATURE.to_vec();
+        out.extend(bx(b"ftyp", b"jxl \0\0\0\0jxl "));
+        if let Some(payload) = brob {
+            out.extend(bx(b"brob", payload));
+        }
+        out.extend(bx(b"jxlc", LOSSLESS));
+        out
     }
 
     #[test]
@@ -99,8 +184,7 @@ mod tests {
         assert!(matches!(image.color_space, Some(ImageColorSpace::Rgb)));
         assert_eq!((image.width, image.height, image.bits_per_component), (W as u32, H as u32, 8));
         assert!(image.alpha.is_none());
-        let expected: Vec<u8> = (0..H).flat_map(|y| (0..W).flat_map(move |x| pixel(x, y))).collect();
-        assert_eq!(result.data.as_ref(), expected.as_slice());
+        assert_eq!(result.data.as_ref(), expected().as_slice());
     }
 
     #[test]
@@ -125,5 +209,61 @@ mod tests {
         assert!(decode(LOSSLESS, &p, W * H * 3 - 1, 1 << 28).is_none());
         assert!(decode(LOSSLESS, &p, usize::MAX, (W * H) as u64).is_some());
         assert!(decode(LOSSLESS, &p, usize::MAX, (W * H) as u64 - 1).is_none());
+    }
+
+    #[test]
+    fn a_container_decodes_like_the_bare_codestream() {
+        let result = decode(&container(None), &params(W as u32, H as u32), usize::MAX, 1 << 28).unwrap();
+        assert_eq!(result.data.as_ref(), expected().as_slice());
+    }
+
+    #[test]
+    fn a_brob_box_is_dropped_unread() {
+        // Where a Brotli stream would be there is garbage: left in, jxl-oxide would try to inflate it and the image
+        // would fail; dropped before it sees the file, the pixels decode.
+        let data = container(Some(b"Exif\xff\xff\xff\xff\xff\xff\xff\xff"));
+        let stripped = without_brob_boxes(&data).unwrap();
+        assert!(matches!(stripped, Cow::Owned(_)));
+        assert!(!stripped.windows(4).any(|w| w == b"brob"), "no brob box is left");
+        let result = decode(&data, &params(W as u32, H as u32), usize::MAX, 1 << 28).unwrap();
+        assert_eq!(result.data.as_ref(), expected().as_slice());
+    }
+
+    #[test]
+    fn a_stream_without_brob_boxes_is_not_copied() {
+        for data in [LOSSLESS.to_vec(), container(None)] {
+            assert!(matches!(without_brob_boxes(&data), Some(Cow::Borrowed(_))));
+        }
+    }
+
+    #[test]
+    fn a_container_with_an_unreadable_box_is_refused() {
+        // A box whose size is below its own header, and a header cut off.
+        let mut small = SIGNATURE.to_vec();
+        small.extend_from_slice(&[0, 0, 0, 4, b'f', b't', b'y', b'p']);
+        let mut cut = SIGNATURE.to_vec();
+        cut.extend_from_slice(&[0, 0, 0]);
+        for data in [small, cut] {
+            assert!(without_brob_boxes(&data).is_none());
+            assert!(decode(&data, &params(0, 0), usize::MAX, 1 << 28).is_none());
+        }
+    }
+
+    #[test]
+    fn only_no_extra_channel_or_one_alpha_is_accepted() {
+        const ALPHA: ExtraChannelType = ExtraChannelType::Alpha { alpha_associated: false };
+        const ASSOCIATED: ExtraChannelType = ExtraChannelType::Alpha { alpha_associated: true };
+        const SPOT: ExtraChannelType = ExtraChannelType::SpotColour { red: 1.0, green: 0.0, blue: 0.0, solidity: 1.0 };
+        assert!(extra_channels_supported(&[], false));
+        assert!(extra_channels_supported(&[ALPHA], true));
+        assert!(extra_channels_supported(&[ASSOCIATED], true));
+        assert!(!extra_channels_supported(&[], true), "an alpha format with no alpha channel declared");
+        assert!(!extra_channels_supported(&[ALPHA], false), "an alpha channel the format does not report");
+        for other in [SPOT, ExtraChannelType::Black, ExtraChannelType::Depth] {
+            assert!(!extra_channels_supported(&[other], false), "{other:?} without alpha");
+            assert!(!extra_channels_supported(&[other], true));
+            assert!(!extra_channels_supported(&[ALPHA, other], true), "{other:?} beside an alpha");
+        }
+        assert!(!extra_channels_supported(&[ALPHA, ALPHA], true), "a second alpha");
     }
 }

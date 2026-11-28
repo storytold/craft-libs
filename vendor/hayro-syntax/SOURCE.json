@@ -14,7 +14,7 @@
       "path": "Cargo.toml",
       "source_sha256": "2520802133a82f9bfca9be7fe4a384af1bce05ada198fd9d637d99d877625333",
       "source_git_blob": "cc34e45f8745780a781c2bb2328fa79669998abf",
-      "sha256": "56fe2e3191a6dc6952f6b6d0b6311d3bf413a1cd60963e1c51be95579dd00137"
+      "sha256": "7afcfdfe86eae6f72bcd638317a12fc83d6bae7809804934207628aa523e4f5f"
     },
     {
       "path": "Cargo.toml.orig",
@@ -176,7 +176,7 @@
       "path": "src/filter/mod.rs",
       "source_sha256": "0af7145ab16b15b7a60c4b57efecb9bd5fd0cfdc9bb5f9388abb695386e63e49",
       "source_git_blob": "06bda29487d62c25dc39c1ee109091cb17e3867f",
-      "sha256": "aa9de099a23dd89f93852680a031fc9ddc19843d4bfa15a684a051819843384f"
+      "sha256": "f5063217d4ae3bca8d92f1c741b72127d5c846a6021b8c7d76eb295115c2e03e"
     },
     {
       "path": "src/filter/run_length.rs",
@@ -362,7 +362,7 @@
       "path": "src/filter/jxl.rs",
       "source_sha256": null,
       "source_git_blob": null,
-      "sha256": "7a713bb4cc6bcc65bb9348834b8f13aaf0f1746a73c2f6cc8f2db44cdcfa63a6"
+      "sha256": "7532f567fecaad10bd31d5e4dc83fd24f910f35e74eab03f308f72b72462e231"
     },
     {
       "path": "src/filter/jxl_lossless.jxl",

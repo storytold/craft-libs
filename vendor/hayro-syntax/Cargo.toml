@@ -31,13 +31,18 @@ resolver = "2"
 default = [
     "std",
     "images",
+    "jxl",
 ]
 images = [
-    "dep:jxl-oxide",
     "dep:zune-jpeg",
     "dep:hayro-ccitt",
     "dep:hayro-jbig2",
     "dep:hayro-jpeg2000",
+]
+jxl = [
+    "std",
+    "images",
+    "dep:jxl-oxide",
 ]
 logging = [
     "dep:log",

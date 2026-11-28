@@ -17,7 +17,7 @@ pub use jbig2::{
 pub use jbig2::set_page_jbig2_work;
 #[cfg(feature = "images")]
 mod jpx;
-#[cfg(all(feature = "images", feature = "std"))]
+#[cfg(feature = "jxl")]
 mod jxl;
 mod lzw_flate;
 mod run_length;
@@ -144,11 +144,11 @@ impl Filter {
             Self::Jbig2Decode => jbig2::decode(data, params, image_params, limit).ok_or(DecodeFailure::ImageDecode),
             #[cfg(feature = "images")]
             Self::JpxDecode => jpx::decode(data, image_params, limit, max_pixels).ok_or(DecodeFailure::ImageDecode),
-            #[cfg(all(feature = "images", feature = "std"))]
+            #[cfg(feature = "jxl")]
             Self::JxlDecode => jxl::decode(data, image_params, limit, max_pixels).ok_or(DecodeFailure::ImageDecode),
-            #[cfg(all(feature = "images", not(feature = "std")))]
+            #[cfg(all(feature = "images", not(feature = "jxl")))]
             Self::JxlDecode => {
-                warn!("JPEG XL decoding needs the `std` feature");
+                warn!("JPEG XL decoding needs the `jxl` feature");
                 Err(DecodeFailure::ImageDecode)
             }
             #[cfg(not(feature = "images"))]
