@@ -63,6 +63,10 @@ craft-proof Language data, embedded at build time from craft-i18n's language-dat
   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
   OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
   POSSIBILITY OF SUCH DAMAGE.
+mikktspace 0.3.0 (https://crates.io/crates/mikktspace/0.3.0), a dependency of crates/mesh-ops,
+  is MIT OR Apache-2.0. Its src/generated.rs, a translation of Morten S. Mikkelsen's C
+  MikkTSpace, carries that original's 2011 zlib-style notice, which must not be removed or
+  altered; crates/mesh-ops/ATTRIBUTION.md reproduces it in full.
 crates/text/assets/hyphen/en-us.pat: CC0-1.0, trained from en-us.dic by DesignCraft's trainer.
 crates/text/assets/spell/en-us-scowl-50.txt.deflate: SCOWL (Spell Checker Oriented Word Lists)
   2020.12.07, size 50, American English, Copyright 2000-2018 by Kevin Atkinson, http://wordlist.aspell.net/.
@@ -228,6 +232,17 @@ The colour management module in crates/cms is extracted from:
   Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors.
   Licensed MIT OR Apache-2.0. Its generated ICC profile is dedicated to the public domain
   (CC0-1.0); see ATTRIBUTION.md.
+
+The mesh operations in crates/mesh-ops are moved from:
+- TextureCraft, crates/geom (src/mesh.rs, bvh.rs, primitives.rs, gbuffer.rs, unwrap.rs,
+  camera.rs and their tests), revision 386630ee85cb22679295b24013575d1aecb39ad2.
+  https://github.com/storytold/texturecraft
+  Copyright (c) 2026 ArtCraft Team and the TextureCraft contributors.
+- MaterialCraft, crates/geom/src/mesh.rs (subdivision and its test), revision
+  3133062968b8a1566eda12a357cb06062db16687.
+  https://github.com/storytold/materialcraft
+  Copyright (c) 2026 ArtCraft Team and the MaterialCraft contributors.
+  All licensed MIT OR Apache-2.0.
 
 The image-based lighting in crates/pbr (craft-pbr) is adapted from:
 - TextureCraft, crates/render/src/ibl.rs, revision fe8ee1bdb0243335560d3e726633cc0433ee99fc,
