@@ -204,7 +204,7 @@ pub enum ToolOp {
     Punch { diameter_mm: f64 },
 }
 
-fn is_false(value: &bool) -> bool {
+pub(crate) fn is_false(value: &bool) -> bool {
     !*value
 }
 
@@ -245,6 +245,13 @@ pub struct TextSpec {
     /// the shape since its text was laid out.
     #[serde(default = "identity", skip_serializing_if = "is_identity")]
     pub transform: [f64; 6],
+    /// Area text: lines wrap at this width in millimetres (Silhouette Studio's wrap bar).
+    /// `None` is point text, which breaks only at newlines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrap_width_mm: Option<f64>,
+    /// An underline under every line, part of the cut outline.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub underline: bool,
 }
 
 /// A font by family and style, optionally from a font file.
@@ -361,6 +368,10 @@ pub struct RasterImage {
     pub width_px: u32,
     pub height_px: u32,
     pub png_base64: std::sync::Arc<str>,
+    /// The pixels as placed, before any erase or clean-up, so a restore brush can bring them
+    /// back. Absent when the image was never edited (and in older files).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_png_base64: Option<std::sync::Arc<str>>,
 }
 
 impl RasterImage {
@@ -373,6 +384,9 @@ impl RasterImage {
         }
         if self.png_base64.len() > MAX_IMAGE_DATA {
             return Err(DocError::Model(format!("image {}: pixel data exceeds the 128 MiB limit", self.id)));
+        }
+        if self.original_png_base64.as_ref().is_some_and(|o| o.len() > MAX_IMAGE_DATA) {
+            return Err(DocError::Model(format!("image {}: original pixel data exceeds the 128 MiB limit", self.id)));
         }
         Ok(())
     }
@@ -649,6 +663,8 @@ mod tests {
             flow: TextFlow::Curve { diameter_mm: 50.0 },
             letters: vec![LetterOffset { index: 1, dx_mm: 1.0, ..LetterOffset::default() }],
             transform: IDENTITY_TRANSFORM,
+            wrap_width_mm: Some(80.0),
+            underline: true,
         }));
         let back = Document::load_json(&doc.save_json().unwrap()).unwrap();
         assert_eq!(doc, back);
@@ -695,6 +711,48 @@ mod tests {
     }
 
     #[test]
+    fn parity_fields_round_trip_stay_out_of_plain_files_and_are_checked() {
+        let mut doc = sample();
+        let plain = doc.save_json().unwrap();
+        for key in ["stroke_width_mm", "isometric", "wrap_width_mm", "underline", "original_png_base64"] {
+            assert!(!plain.contains(key), "a plain document saves as before: {key}");
+        }
+        doc.layers[0].shapes[0].production.stroke_width_mm = Some(0.5);
+        doc.grid.isometric = true;
+        doc.push_image(RasterImage {
+            id: 0,
+            name: "photo".to_string(),
+            x_mm: 0.0,
+            y_mm: 0.0,
+            width_mm: 10.0,
+            height_mm: 5.0,
+            width_px: 2,
+            height_px: 1,
+            png_base64: "AAAA".into(),
+            original_png_base64: Some("BBBB".into()),
+        })
+        .unwrap();
+        let back = Document::load_json(&doc.save_json().unwrap()).unwrap();
+        assert_eq!(back, doc);
+        // Out-of-range values are refused, not saved.
+        let mut bad = doc.clone();
+        bad.layers[0].shapes[0].production.stroke_width_mm = Some(f64::NAN);
+        assert!(bad.validate().is_err());
+        bad.layers[0].shapes[0].production.stroke_width_mm = Some(-1.0);
+        assert!(bad.validate().is_err());
+        // A bad width inside a Combine's kept members is caught too.
+        let mut nested = doc.clone();
+        let mut member = nested.layers[0].shapes[0].clone();
+        member.production.stroke_width_mm = Some(-1.0);
+        nested.layers[0].shapes[0].production.group = Some(Box::new(SourceGroup {
+            kind: GroupKind::Combine(CombineOp::Unite),
+            members: vec![member],
+            path: nested.layers[0].shapes[0].path.clone(),
+        }));
+        assert!(nested.validate().is_err());
+    }
+
+    #[test]
     fn images_round_trip_and_share_the_id_counter() {
         let mut doc = canvas_sample();
         let id = doc
@@ -708,6 +766,7 @@ mod tests {
                 width_px: 2,
                 height_px: 1,
                 png_base64: "AAAA".into(),
+                original_png_base64: None,
             })
             .unwrap();
         assert_eq!(id, 3);

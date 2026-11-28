@@ -12,6 +12,10 @@ use crate::{Board, DocError, Document, Shape};
 pub const MAX_PAGES: usize = 100;
 /// Most ruler guides a document may hold.
 pub const MAX_GUIDES: usize = 1000;
+/// Widest line weight a shape may have, millimetres.
+pub const MAX_STROKE_MM: f64 = 100.0;
+/// Widest text wrap width, millimetres (a 10 m roll).
+pub const MAX_WRAP_MM: f64 = 10_000.0;
 /// Most groups a document may hold.
 pub const MAX_GROUPS: usize = 100_000;
 /// Deepest group nesting accepted.
@@ -162,11 +166,14 @@ pub struct Grid {
     pub subdivisions: u32,
     #[serde(default)]
     pub visible: bool,
+    /// Isometric lines (at 30° and 150°, plus verticals) instead of a square grid.
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub isometric: bool,
 }
 
 impl Default for Grid {
     fn default() -> Self {
-        Self { spacing_mm: 10.0, subdivisions: 1, visible: false }
+        Self { spacing_mm: 10.0, subdivisions: 1, visible: false, isometric: false }
     }
 }
 
@@ -291,6 +298,30 @@ fn check_setup(setup: &PageSetup, what: &str) -> Result<(), DocError> {
     check_color(setup.color.as_deref(), what)
 }
 
+/// How deep a Combine's or Flatten's stored members may nest.
+const MAX_MEMBER_DEPTH: usize = 64;
+
+/// A shape's line width and text wrap width are in range, and so are those of the shapes a
+/// Combine or Flatten keeps inside it.
+fn check_widths(shape: &crate::Shape, depth: usize) -> Result<(), DocError> {
+    let bad = |message: String| Err(DocError::Model(message));
+    if depth > MAX_MEMBER_DEPTH {
+        return bad(format!("shape {}: grouped members nest deeper than {MAX_MEMBER_DEPTH}", shape.id));
+    }
+    if shape.production.stroke_width_mm.is_some_and(|w| !(w.is_finite() && (0.0..=MAX_STROKE_MM).contains(&w))) {
+        return bad(format!("shape {}: line width must be 0-{MAX_STROKE_MM} mm", shape.id));
+    }
+    if shape.text.as_ref().and_then(|t| t.wrap_width_mm).is_some_and(|w| !(w.is_finite() && w > 0.0 && w <= MAX_WRAP_MM)) {
+        return bad(format!("shape {}: text wrap width must be above 0 and at most {MAX_WRAP_MM} mm", shape.id));
+    }
+    if let Some(group) = &shape.production.group {
+        for member in &group.members {
+            check_widths(member, depth + 1)?;
+        }
+    }
+    Ok(())
+}
+
 impl Document {
     /// Pages, guides, grid, snapping, colours, metadata and groups: finite, within caps,
     /// and groups form a forest (unknown shape members are allowed: they are pruned).
@@ -322,6 +353,9 @@ impl Document {
         for layer in &self.layers {
             check_name(&layer.name, "layer name")?;
             check_color(layer.color.as_deref(), "layer colour")?;
+            for shape in &layer.shapes {
+                check_widths(shape, 0)?;
+            }
         }
         check_name(&self.meta.title, "title")?;
         if self.meta.notes.len() > MAX_NOTES_BYTES {
