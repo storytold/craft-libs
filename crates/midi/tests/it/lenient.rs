@@ -117,12 +117,20 @@ fn names_instruments_and_lyrics() {
     assert_eq!((read.smf.tracks.len(), read.instruments), (2, vec!["Sax".to_string(), String::new()]));
 }
 
+/// Three bytes a note-on under running status: more events than are read. Built once for the tests that need it.
+fn event_flood_body() -> &'static [u8] {
+    static BODY: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    BODY.get_or_init(|| {
+        let mut body = vec![0x00, 0x90, 60, 100];
+        body.extend((0..MAX_EVENTS + 1).flat_map(|i| [0x00, (i % 128) as u8, 1]));
+        body
+    })
+}
+
 #[test]
 fn a_file_of_any_size_is_read_into_a_bounded_number_of_events_and_warnings() {
-    // Three bytes a note-on under running status: more events than are read.
-    let mut body = vec![0x00, 0x90, 60, 100];
-    body.extend((0..MAX_EVENTS + 1000).flat_map(|i| [0x00, (i % 128) as u8, 1]));
-    let LenientRead { smf, warnings, over_limit, .. } = read_smf_lenient(&file(1, 96, &[&body])).unwrap();
+    let body = event_flood_body();
+    let LenientRead { smf, warnings, over_limit, .. } = read_smf_lenient(&file(1, 96, &[body])).unwrap();
     assert_eq!(smf.tracks[0].sequence.notes.len(), MAX_EVENTS);
     assert!(warnings.iter().any(|w| w.contains("more events")), "{warnings:?}");
     assert!(over_limit, "the event limit left events out");
@@ -140,10 +148,9 @@ fn a_file_of_any_size_is_read_into_a_bounded_number_of_events_and_warnings() {
 fn a_limit_reached_after_the_warnings_are_full_is_still_reported() {
     // MAX_WARNINGS damaged tracks fill the warnings; the track after them holds more events than are
     // read, so its warning is dropped, and over_limit is what says the file was cut.
-    let mut body = vec![0x00, 0x90, 60, 100];
-    body.extend((0..MAX_EVENTS + 1000).flat_map(|i| [0x00, (i % 128) as u8, 1]));
+    let body = event_flood_body();
     let mut tracks = vec![&[0x00, 60][..]; MAX_WARNINGS];
-    tracks.push(&body);
+    tracks.push(body);
     let LenientRead { warnings, over_limit, .. } = read_smf_lenient(&file(1, 96, &tracks)).unwrap();
     assert_eq!(warnings.len(), MAX_WARNINGS);
     assert!(!warnings.iter().any(|w| w.contains("more events")), "the test needs the limit's warning dropped: {warnings:?}");

@@ -507,20 +507,21 @@ name = "RecoveryDialog"
 old = "craft_ui::dialog::recovery::RecoveryDialog"
 new = "craft_ui::dialog::RecoveryDialog"
 status = "replaced"
-note = "The same `StackDialog`, on `Prompt`; `show` takes `&mut Ui`. Escape and the close action are `DialogResult::Cancel`."
+note = "The same `StackDialog`, on `Prompt`; `show` takes `&mut Ui`. Escape and the close action are `DialogResult::Cancel`. `remaining(n)` gives the documents still waiting, this one included; above one an Apply to All box shows. The answer is a `RecoveryChoice`: the `RecoveryAnswer` and `apply_to_all`."
 
 [[type]]
 name = "RecoveredDocument"
 old = "craft_ui::dialog::recovery::RecoveredDocument"
 new = "craft_ui::dialog::RecoveredDocument"
 status = "replaced"
-note = "Built with `RecoveredDocument::new(key, name, age: Duration)` and `.blocked(reason)`; `saved: SystemTime` is `age`, how long before the listing the copy was autosaved. The blocked reason shows as a warning line under the message."
+note = "Built with `RecoveredDocument::new(key, name, age: Duration)` and `.blocked(reason)`; `saved: SystemTime` is `age`, how long before the listing the copy was autosaved. The blocked reason shows as a warning line under the message. `.protected()` marks a password-protected copy: a \"Password-protected\" line shows under the message and Recover stays available."
 
 [[type]]
 name = "RecoveryAnswer"
 old = "craft_ui::dialog::recovery::RecoveryAnswer"
 new = "craft_ui::dialog::RecoveryAnswer"
 status = "moved"
+note = "The dialog answers a `RecoveryChoice`, which holds the `RecoveryAnswer` and whether it applies to every remaining document."
 
 [[type]]
 name = "RecoveryLabels"
@@ -737,6 +738,16 @@ type = "RecoveredDocument"
 old = "saved: SystemTime"
 new = "age: Duration"
 note = "How long before the listing the copy was autosaved."
+
+[[call]]
+old = "is_mail_temp_copy(path)"
+new = "craft_dialogs::save::is_mail_temp_copy(path)"
+note = "`SaveFlow::start` with `SaveTarget::InPlace` asks where to save an email attachment's temporary copy itself, so the app does not check the path before a save. Outlook's cache and Apple Mail's downloads both count."
+
+[[call]]
+old = "save_dialog_folder(path)"
+new = "craft_dialogs::save::save_dialog_folder(path)"
+note = "The folder the Save picker opens in: the document's own folder, or `None` for a mail temporary copy, a bare name or a root."
 
 [[setter]]
 type = "FooterButton"

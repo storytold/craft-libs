@@ -203,6 +203,8 @@ struct OwnerRecord {
     viewport: ViewportId,
     pass: u64,
     at: f64,
+    /// The pass of the owner's registration before `pass`, in the same viewport.
+    before: Option<u64>,
 }
 
 /// One entry the runtime keeps for a component, and the owner that is tested for its eviction.
@@ -270,9 +272,26 @@ pub(crate) fn register_owner(ctx: &Context, owner: Id) {
     crate::runtime::replay::note_owner(ctx, owner);
     let facts = frame::facts(ctx);
     pass_state::with::<Registry, _>(ctx, |reg| {
-        reg.owners.insert(owner, OwnerRecord { viewport: facts.viewport, pass: facts.pass_nr, at: facts.now });
+        let before = match reg.owners.get(&owner) {
+            Some(last) if last.viewport == facts.viewport && last.pass == facts.pass_nr => last.before,
+            Some(last) if last.viewport == facts.viewport => Some(last.pass),
+            _ => None,
+        };
+        reg.owners.insert(owner, OwnerRecord { viewport: facts.viewport, pass: facts.pass_nr, at: facts.now, before });
         reg.ended.remove(&owner);
     });
+}
+
+/// Whether `owner` was registered in the pass before the running one of its viewport, by a run or a replay: its
+/// component was shown there.
+pub(crate) fn shown_last_pass(ctx: &Context, owner: Id) -> bool {
+    let facts = frame::facts(ctx);
+    pass_state::with::<Registry, _>(ctx, |reg| {
+        reg.owners.get(&owner).filter(|last| last.viewport == facts.viewport).is_some_and(|last| {
+            let shown = if last.pass == facts.pass_nr { last.before } else { Some(last.pass) };
+            shown.is_some_and(|shown| shown + 1 >= facts.pass_nr)
+        })
+    })
 }
 
 /// The generation of ended shown lives now: a kept run stores it, and `ended_since` compares with it.
@@ -307,8 +326,9 @@ fn end_lives(reg: &mut Registry, owners: impl IntoIterator<Item = Id>) {
 pub(crate) fn evict(ctx: &Context) {
     let now = frame::clock(ctx);
     let live = pass::live_viewports(ctx);
+    let running = frame::running(ctx);
     pass_state::with::<Registry, _>(ctx, |reg| {
-        let due = |r: &OwnerRecord| owner_due(r.pass, r.at, pass::pass_nr(ctx, r.viewport), now, live.contains(&r.viewport));
+        let due = |r: &OwnerRecord| owner_due(r.pass, r.at, pass::pass_nr_beside(ctx, running, r.viewport), now, live.contains(&r.viewport));
         let dead: IdSet = reg.owners.iter().filter(|(_, r)| due(r)).map(|(id, _)| *id).collect();
         if dead.is_empty() {
             return;
@@ -356,6 +376,33 @@ static QUEUED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) fn forget(ctx: &Context, id: Id) {
     forget_tier(ctx, id, SESSION);
     pass_state::with::<Registry, _>(ctx, |reg| reg.session_writes += 1);
+}
+
+/// How long a remembered value lives.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Lifetime {
+    /// The value goes through the host's saved state (the `SaveKey` tier).
+    #[default]
+    Saved,
+    /// The value lasts until the app quits.
+    Run,
+}
+
+/// The run-only value under `key`, in the session tier. It never reaches the host. It gives the default until a value
+/// is set, and it is readable outside a pass, as [`saved_value`] is.
+pub fn run_value<T: Slot>(ctx: &Context, key: &SaveKey) -> T {
+    MemoryStage::peek_session(ctx, global("craft_ui.run", key))
+}
+
+/// Sets the run-only value under `key`; see [`run_value`].
+pub fn set_run_value<T: Slot>(ctx: &Context, key: &SaveKey, value: T) {
+    let id = global("craft_ui.run", key);
+    let mut stage = MemoryStage::new(ctx, id, id, false);
+    // No component shows under the key's id, so the stage stamps no `Seen` for it.
+    stage.touched.get_mut().clear();
+    *stage.session::<T>(id) = value;
+    stage.write_back();
 }
 
 /// The saved value under `key`, outside a dialog: an app reads one SAVED value through the same store the dialogs'
@@ -903,17 +950,22 @@ impl<T: Clone + Send + Sync + 'static> Facts<T> {
         Self::with_record(ctx, |record| record.this.push(fact));
     }
 
-    /// The facts the running viewport's previous pass registered, in registration order.
+    /// `f` on the facts the running viewport's previous pass registered, in registration order. `f` reaches no
+    /// service: the record is held while it runs.
     #[doc(hidden)]
-    pub fn of_last_pass(ctx: &Context) -> Vec<T> {
-        Self::with_record(ctx, |record| record.last.clone())
+    pub fn with_last_pass<R>(ctx: &Context, f: impl FnOnce(&[T]) -> R) -> R {
+        Self::with_record(ctx, |record| f(&record.last))
     }
 
     fn with_record<R>(ctx: &Context, f: impl FnOnce(&mut FactRecord<T>) -> R) -> R {
         let viewport = pass::current_viewport(ctx);
         let pass_nr = pass::pass_nr(ctx, viewport);
         let advance = |record: &mut FactRecord<T>, step: PassStep| match step {
-            PassStep::Next => record.last = std::mem::take(&mut record.this),
+            // The buffers swap, so a pass reuses the room the pass before it grew.
+            PassStep::Next => {
+                std::mem::swap(&mut record.last, &mut record.this);
+                record.this.clear();
+            }
             PassStep::Skipped => {
                 record.last.clear();
                 record.this.clear();

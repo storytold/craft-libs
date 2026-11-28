@@ -10,9 +10,10 @@
 //! context runs. Another thread can't reach the state while a pass holds it: the runtime touches these services only
 //! from the thread that runs the pass.
 
-use crate::runtime::egui::memory::Service;
-use crate::runtime::frame::{self, PerViewport, Stamped, Stored};
+use crate::runtime::egui::memory::{FastMap, Service};
+use crate::runtime::frame::{PassFacts, PerViewport, Stamped, Stored};
 use egui::{Context, IdSet};
+use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
@@ -33,6 +34,9 @@ macro_rules! pass_state {
             $($(#[$service_attr])* $service: RefCell<$service_ty>,)*
             $($record: RefCell<PerViewport<$record_ty>>,)*
             $($stamped: RefCell<PerViewport<Stamped<$stamped_ty>>>,)*
+            /// The per-viewport records of the types with no field here (generic ones, and those of crates above the
+            /// runtime), by type: each value is a `RefCell<PerViewport<_>>`.
+            others: RefCell<FastMap<TypeId, Box<dyn Any + Send>>>,
         }
 
         $($(#[$service_attr])* impl PassLocal for $service_ty {
@@ -91,11 +95,15 @@ pass_state! {
         jumps: crate::contract::body::scroll::Jumps,
         shrink_reports: crate::layout::body::ShrinkReports,
         least_reports: crate::layout::body::LeastReports,
-        bar_rules: crate::contract::BarRules,
+        fill_leasts: crate::layout::body::FillLeasts,
+        row_shortfalls: crate::layout::body::RowShortfalls,
+        surface_frames: crate::primitives::SurfaceFrames,
         fill_counts: crate::layout::body::FillCounts,
+        view_fills: crate::layout::body::ViewFills,
         held_widths: crate::layout::body::HeldWidths,
         first_lines: crate::layout::body::FirstLines,
         row_lines: crate::layout::body::RowLines,
+        wrap_rows: crate::layout::body::WrapRows,
         flow_starts: crate::layout::body::FlowStarts,
         brackets: crate::layout::body::Brackets,
         cursors: crate::layout::body::Cursors,
@@ -150,6 +158,7 @@ pass_state! {
         pass_pointer: Arc<crate::runtime::pointer::PassPointer>,
         overlay_pass: crate::runtime::overlay::Pass,
         shown_ids: IdSet,
+        edge_step_taken: crate::contract::reorder::EdgeStepTaken,
     }
 }
 
@@ -157,6 +166,15 @@ pass_state! {
 struct Held {
     ctx: Context,
     state: Box<PassState>,
+    /// The context's passes between their begin and end hooks on this thread, innermost last: nested viewport passes
+    /// stack. A pass a panic unwound through stays until a pass of its viewport begins again.
+    passes: RefCell<Vec<PassFacts>>,
+}
+
+impl Held {
+    fn running(&self) -> bool {
+        !self.passes.borrow().is_empty()
+    }
 }
 
 struct HeldStates {
@@ -172,13 +190,13 @@ impl HeldStates {
 
     /// Service reads in the same context reuse its slot. A nested context or a swap on release
     /// can change the slot, so verify its owner before reusing it.
-    fn get(&self, ctx: &Context) -> Option<&PassState> {
+    fn get(&self, ctx: &Context) -> Option<&Held> {
         if let Some(entry) = self.entries.get(self.current.get()).filter(|entry| entry.ctx == *ctx) {
-            return Some(&entry.state);
+            return Some(entry);
         }
         let at = self.entries.iter().position(|entry| entry.ctx == *ctx)?;
         self.current.set(at);
-        Some(&self.entries[at].state)
+        Some(&self.entries[at])
     }
 }
 
@@ -208,7 +226,7 @@ pub(crate) fn with_component_tree(ctx: &Context, run: impl FnOnce()) {
     impl Drop for Restore {
         fn drop(&mut self) {
             if let Some(entry) = self.0.take() {
-                if frame::running(&entry.ctx).is_some() {
+                if entry.running() {
                     keep(entry);
                 } else {
                     park(entry);
@@ -243,34 +261,103 @@ impl Default for Parked {
 pub(crate) fn with<S: PassLocal, R>(ctx: &Context, f: impl FnOnce(&mut S) -> R) -> R {
     #[cfg(feature = "testing")]
     crate::runtime::layout_memory::guard::touch::<S>();
+    with_state(ctx, |state| f(&mut S::cell(state).borrow_mut()))
+}
+
+/// Runs `f` on the context's records of `T`, one per viewport, for a type with no field in [`PassState`]. `f` makes
+/// no call that reaches the context, so no other record of this kind is first used inside it.
+pub(crate) fn with_records<T: Stored, R>(ctx: &Context, f: impl FnOnce(&mut PerViewport<T>) -> R) -> R {
+    with_state(ctx, |state| {
+        let key = TypeId::of::<PerViewport<T>>();
+        if !state.others.borrow().contains_key(&key) {
+            state.others.borrow_mut().insert(key, Box::new(RefCell::new(PerViewport::<T>::default())));
+        }
+        let others = state.others.borrow();
+        #[expect(clippy::expect_used, reason = "the entry under a type's id is created above with that type")]
+        let records = others.get(&key).and_then(|records| records.downcast_ref::<RefCell<PerViewport<T>>>()).expect("the records of the type");
+        f(&mut records.borrow_mut())
+    })
+}
+
+/// The facts of the innermost running pass of `ctx` on this thread, `None` outside every pass of it.
+pub(crate) fn running(ctx: &Context) -> Option<PassFacts> {
+    if RUNNING.is_set()
+        && let Some(facts) = RUNNING.with(|entry| (entry.ctx == *ctx).then(|| entry.passes.borrow().last().copied()))
+    {
+        return facts;
+    }
+    note_unbound();
+    HELD.with(|held| held.borrow().get(ctx).and_then(|entry| entry.passes.borrow().last().copied()))
+}
+
+/// Puts the pass the begin hook starts on the running stack of `ctx`, whose state this thread holds: a pass of the
+/// same viewport still there never ended (a panic unwound through it).
+pub(crate) fn begin_running(ctx: &Context, facts: PassFacts) {
+    let held = with_entry(ctx, |entry| {
+        let mut passes = entry.passes.borrow_mut();
+        passes.retain(|pass| pass.viewport != facts.viewport);
+        passes.push(facts);
+    });
+    debug_assert!(held.is_some(), "the begin hook holds the context's pass state");
+}
+
+/// Takes the innermost pass of `ctx` off its running stack: the end hook.
+pub(crate) fn end_running(ctx: &Context) {
+    with_entry(ctx, |entry| entry.passes.borrow_mut().pop());
+}
+
+/// Runs `f` on the entry of `ctx` this thread holds, bound or not.
+fn with_entry<R>(ctx: &Context, f: impl FnOnce(&Held) -> R) -> Option<R> {
+    if bound(ctx) {
+        return Some(RUNNING.with(f));
+    }
+    HELD.with(|held| held.borrow().get(ctx).map(f))
+}
+
+/// Runs `f` on the context's pass state: inside its component tree, straight from the binding.
+fn with_state<R>(ctx: &Context, f: impl FnOnce(&PassState) -> R) -> R {
     let mut call = Some(f);
+    if RUNNING.is_set()
+        && let Some(out) = RUNNING.with(|entry| if entry.ctx == *ctx { call.take().map(|f| f(&entry.state)) } else { None })
+    {
+        return out;
+    }
+    note_unbound();
     let mut out = None;
     visit(ctx, &mut |state| {
         if let Some(f) = call.take() {
-            out = Some(f(&mut S::cell(state).borrow_mut()));
+            out = Some(f(state));
         }
     });
     #[expect(clippy::expect_used, reason = "visit calls its callback once on both the held and parked paths")]
     out.expect("the pass state was visited")
 }
 
-/// The thread-local lookup and the parked-state slow path are shared by every service and caller.
+#[cfg(feature = "testing")]
+thread_local! {
+    static UNBOUND: Cell<u64> = const { Cell::new(0) };
+}
+
+/// How many reads of a pass state this thread made outside the component tree that binds it.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn unbound_reads() -> u64 {
+    UNBOUND.with(Cell::get)
+}
+
+#[inline]
+fn note_unbound() {
+    #[cfg(feature = "testing")]
+    UNBOUND.with(|reads| reads.set(reads.get() + 1));
+}
+
+/// The state of a context its component tree does not bind: the thread's held entry, else the parked state, held for
+/// this read alone. Shared by every service and caller.
 fn visit(ctx: &Context, f: &mut dyn FnMut(&PassState)) {
-    if RUNNING.is_set()
-        && RUNNING.with(|entry| {
-            if entry.ctx != *ctx {
-                return false;
-            }
-            f(&entry.state);
-            true
-        })
-    {
-        return;
-    }
     let found = HELD.with(|held| {
         let held = held.borrow();
-        let Some(state) = held.get(ctx) else { return false };
-        f(state);
+        let Some(entry) = held.get(ctx) else { return false };
+        f(&entry.state);
         true
     });
     if !found {
@@ -286,8 +373,8 @@ fn visit(ctx: &Context, f: &mut dyn FnMut(&PassState)) {
         HELD.with(|held| {
             let held = held.borrow();
             #[expect(clippy::expect_used, reason = "`hold` has just moved the context's state into this thread")]
-            let state = held.get(ctx).expect("the state was just taken");
-            f(state)
+            let entry = held.get(ctx).expect("the state was just taken");
+            f(&entry.state)
         })
     }
 }
@@ -298,8 +385,7 @@ pub(crate) fn hold(ctx: &Context) {
     if bound(ctx) {
         return;
     }
-    let stale: Vec<Held> =
-        HELD.with(|held| held.borrow_mut().entries.extract_if(.., |entry| entry.ctx != *ctx && frame::running(&entry.ctx).is_none()).collect());
+    let stale: Vec<Held> = HELD.with(|held| held.borrow_mut().entries.extract_if(.., |entry| entry.ctx != *ctx && !entry.running()).collect());
     for held in stale {
         park(held);
     }
@@ -309,15 +395,19 @@ pub(crate) fn hold(ctx: &Context) {
     let state = Service::<Parked>::run(ctx, |parked| parked.0.take());
     debug_assert!(state.is_some(), "another thread holds this context's pass state");
     let state = state.unwrap_or_default();
-    keep(Held { ctx: ctx.clone(), state });
+    keep(Held { ctx: ctx.clone(), state, passes: RefCell::new(Vec::new()) });
 }
 
 /// Moves the context's state back into its context data unless a pass of it still runs on this thread: the end hook.
 pub(crate) fn release(ctx: &Context) {
-    if bound(ctx) || frame::running(ctx).is_some() {
+    if bound(ctx) {
         return;
     }
-    if let Some(held) = HELD.with(|held| held.borrow_mut().take(ctx)) {
+    let idle = HELD.with(|held| {
+        let mut held = held.borrow_mut();
+        if held.get(ctx).is_some_and(Held::running) { None } else { held.take(ctx) }
+    });
+    if let Some(held) = idle {
         park(held);
     }
 }
@@ -328,14 +418,13 @@ fn park(held: Held) {
 
 #[cfg(all(feature = "testing", any(test, feature = "suite")))]
 pub(crate) mod binding_tests {
-    use super::{PassState, bound, hold, in_component_tree, visit, with_component_tree};
+    use super::{PassState, begin_running, bound, end_running, hold, in_component_tree, release, running, with_component_tree, with_state};
+    use crate::runtime::frame::PassFacts;
     use crate::testing::trial;
-    use egui::Context;
+    use egui::{Context, ViewportId};
 
     fn address(ctx: &Context) -> *const PassState {
-        let mut address = std::ptr::null();
-        visit(ctx, &mut |state| address = std::ptr::from_ref(state));
-        address
+        with_state(ctx, std::ptr::from_ref)
     }
 
     #[trial]
@@ -343,11 +432,14 @@ pub(crate) mod binding_tests {
         let outer = Context::default();
         let inner = Context::default();
         hold(&outer);
+        begin_running(&outer, PassFacts { viewport: ViewportId::ROOT, pass_nr: 7, frame_nr: 7, now: 0.0, elapsed: 0.0 });
         let original = address(&outer);
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             with_component_tree(&outer, || {
                 assert!(bound(&outer));
                 assert!(!bound(&inner));
+                assert_eq!(running(&outer).map(|facts| facts.pass_nr), Some(7), "the tree reads its pass from the binding");
+                assert!(running(&inner).is_none(), "a nested context has no pass running");
                 assert_ne!(address(&inner), original);
                 assert_eq!(address(&outer), original);
                 std::panic::resume_unwind(Box::new("component unwound"));
@@ -356,5 +448,9 @@ pub(crate) mod binding_tests {
         assert!(unwound.is_err_and(|reason| reason.downcast_ref::<&str>() == Some(&"component unwound")));
         assert!(!in_component_tree());
         assert_eq!(address(&outer), original);
+        assert_eq!(running(&outer).map(|facts| facts.pass_nr), Some(7), "the running pass outlives the unwound tree");
+        end_running(&outer);
+        release(&outer);
+        assert!(running(&outer).is_none());
     }
 }

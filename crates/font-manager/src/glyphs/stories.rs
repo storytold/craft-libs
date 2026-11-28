@@ -1,14 +1,16 @@
 //! Stories of `GlyphsPanel`: the panel over Ubuntu Light and Hack with three recent glyphs, while text is edited and
 //! while it is not, and while the source is not ready. The glyph source draws the shipped faces' outlines with skrifa.
 
+use std::collections::HashSet;
+
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::{Color32, ColorImage, Ui};
 use skrifa::instance::{LocationRef, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
-use skrifa::{FontRef, MetadataProvider as _};
+use skrifa::{FontRef, GlyphId, MetadataProvider as _};
 
-use super::{GlyphSource, GlyphsPanel, GlyphsPanelSettings};
+use super::{CATEGORIES, CellInfo, GlyphCell, GlyphSource, GlyphsPanel, GlyphsPanelSettings};
 
 const UBUNTU: &[u8] = epaint_default_fonts::UBUNTU_LIGHT;
 const HACK: &[u8] = epaint_default_fonts::HACK_REGULAR;
@@ -21,7 +23,9 @@ struct Demo {
     settings: GlyphsPanelSettings,
 }
 
-fn show_panel(ui: &mut Ui, data: &mut StoryData, editing: bool) -> StoryOutput {
+/// The panel over the shipped faces. A `marked` cell is also revealed, in the first pass only.
+fn show_panel(ui: &mut Ui, data: &mut StoryData, editing: bool, marked: Option<GlyphCell>) -> StoryOutput {
+    let shown_before = std::mem::replace(data.value("shown", false), true);
     let init = Demo {
         family: "Ubuntu".to_owned(),
         style: "Light".to_owned(),
@@ -31,24 +35,53 @@ fn show_panel(ui: &mut Ui, data: &mut StoryData, editing: bool) -> StoryOutput {
     let families = ["Ubuntu".to_owned(), "Hack".to_owned()];
     let styles = [if family == "Hack" { "Regular" } else { "Light" }.to_owned()];
     style.clone_from(&styles[0]);
-    GlyphsPanel::new("Glyphs", &FaceGlyphs, Bind::bound(family), Bind::bound(style), Bind::bound(settings))
+    let mut panel = GlyphsPanel::new("Glyphs", &FaceGlyphs, Bind::bound(family), Bind::bound(style), Bind::bound(settings))
         .can_insert(editing)
         .families(&families)
-        .styles(&styles)
-        .show(ui)
-        .into()
+        .styles(&styles);
+    if let Some(cell) = marked {
+        panel = panel.marked(cell);
+        if !shown_before {
+            panel = panel.reveal(cell);
+        }
+    }
+    panel.show(ui).into()
 }
 
 /// The panel while text is edited, so a double-click inserts a glyph.
 #[story(GlyphsPanel<'static>, covers = [Default, Many], drive = Drive::Never)]
 fn glyphs_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    show_panel(ui, data, true)
+    show_panel(ui, data, true, None)
+}
+
+/// A letter with alternates: hovering its cell shows the corner action that opens the popup of them.
+#[story(GlyphsPanel<'static>, covers = [], drive = Drive::Never)]
+fn glyphs_panel_alternates(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    show_panel(ui, data, true, Some(GlyphCell::Char('a')))
+}
+
+/// A marked cell far down the grid, scrolled into view in the first pass.
+#[story(GlyphsPanel<'static>, covers = [], drive = Drive::Never)]
+fn glyphs_panel_marked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    show_panel(ui, data, true, Some(GlyphCell::Char('€')))
+}
+
+/// A category with no cells: the empty text replaces the grid.
+#[story(GlyphsPanel<'static>, covers = [], drive = Drive::Never)]
+fn glyphs_panel_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let Demo { family, style, settings } =
+        data.value("empty", Demo { family: String::new(), style: String::new(), settings: GlyphsPanelSettings::default() });
+    GlyphsPanel::new("Glyphs", &Empty { ready: true }, Bind::bound(family), Bind::bound(style), Bind::bound(settings))
+        .can_insert(true)
+        .empty("No fonts are available.")
+        .show(ui)
+        .into()
 }
 
 /// The panel with no text being edited: it says how to insert glyphs.
 #[story(GlyphsPanel<'static>, covers = [], drive = Drive::Never)]
 fn glyphs_panel_not_editing(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    show_panel(ui, data, false)
+    show_panel(ui, data, false, None)
 }
 
 /// The panel while the app is still reading its fonts: a spinner and the loading line, no grid.
@@ -56,27 +89,28 @@ fn glyphs_panel_not_editing(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn glyphs_panel_loading(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let Demo { family, style, settings } =
         data.value("loading", Demo { family: String::new(), style: String::new(), settings: GlyphsPanelSettings::default() });
-    GlyphsPanel::new("Glyphs", &NotReady, Bind::bound(family), Bind::bound(style), Bind::bound(settings)).can_insert(true).show(ui).into()
+    GlyphsPanel::new("Glyphs", &Empty { ready: false }, Bind::bound(family), Bind::bound(style), Bind::bound(settings))
+        .can_insert(true)
+        .show(ui)
+        .into()
 }
 
-/// A source whose fonts are not read yet.
-struct NotReady;
+/// A source with no cells, ready or still reading its fonts.
+struct Empty {
+    ready: bool,
+}
 
-impl GlyphSource for NotReady {
-    fn charmap(&self, _: &str, _: &str) -> Vec<char> {
+impl GlyphSource for Empty {
+    fn cells(&self, _: &str, _: &str, _: &str) -> Vec<GlyphCell> {
         Vec::new()
     }
 
-    fn glyph(&self, _: &str, _: &str, _: char, _: u32) -> Option<ColorImage> {
+    fn glyph(&self, _: &str, _: &str, _: GlyphCell, _: u32) -> Option<ColorImage> {
         None
     }
 
-    fn in_category(&self, _: char, _: &str) -> bool {
-        false
-    }
-
     fn ready(&self) -> bool {
-        false
+        self.ready
     }
 }
 
@@ -87,30 +121,22 @@ impl FaceGlyphs {
     fn font(family: &str) -> Option<FontRef<'static>> {
         FontRef::new(if family == "Hack" { HACK } else { UBUNTU }).ok()
     }
-}
 
-impl GlyphSource for FaceGlyphs {
-    fn charmap(&self, family: &str, _style: &str) -> Vec<char> {
-        let Some(font) = Self::font(family) else { return Vec::new() };
+    /// The characters the face maps, in code point order.
+    fn chars(font: &FontRef<'_>) -> Vec<char> {
         let mut chars: Vec<char> = font.charmap().mappings().filter_map(|(code, _)| char::from_u32(code)).filter(|c| !c.is_control()).collect();
         chars.sort_unstable();
         chars.dedup();
         chars
     }
 
-    fn glyph(&self, family: &str, _style: &str, c: char, px: u32) -> Option<ColorImage> {
-        let font = Self::font(family)?;
-        let id = font.charmap().map(c)?;
-        let em = px as f32 * 0.8;
-        let size = Size::new(em);
-        let advance = font.glyph_metrics(size, LocationRef::default()).advance_width(id).unwrap_or(em);
-        let baseline = px as f32 * 0.78;
-        let mut pen = Outline { edges: Vec::new(), start: (0.0, 0.0), at: (0.0, 0.0), dx: (px as f32 - advance) / 2.0, baseline };
-        font.outline_glyphs().get(id)?.draw(DrawSettings::unhinted(size, LocationRef::default()), &mut pen).ok()?;
-        Some(rasterize(&pen.edges, px as usize))
+    /// The glyph ids no character maps.
+    fn unencoded(font: &FontRef<'_>) -> Vec<u32> {
+        let mapped: HashSet<u32> = font.charmap().mappings().map(|(_, id)| id.to_u32()).collect();
+        font.outline_glyphs().iter().map(|(id, _)| id.to_u32()).filter(|id| !mapped.contains(id)).collect()
     }
 
-    fn in_category(&self, c: char, category: &str) -> bool {
+    fn in_category(c: char, category: &str) -> bool {
         let code = c as u32;
         match category {
             "Punctuation" => c.is_ascii_punctuation() && !"$+<=>^`|~".contains(c) || "¡¿«»·".contains(c) || (0x2010..=0x2027).contains(&code),
@@ -127,6 +153,56 @@ impl GlyphSource for FaceGlyphs {
             "Ornaments" => (0x2766..=0x2767).contains(&code) || code == 0x2042,
             _ => false,
         }
+    }
+}
+
+impl GlyphSource for FaceGlyphs {
+    fn cells(&self, family: &str, _style: &str, category: &str) -> Vec<GlyphCell> {
+        let Some(font) = Self::font(family) else { return Vec::new() };
+        let whole = category == CATEGORIES[0];
+        let mut cells: Vec<GlyphCell> =
+            Self::chars(&font).into_iter().filter(|c| whole || Self::in_category(*c, category)).map(GlyphCell::Char).collect();
+        if whole && family == "Hack" {
+            cells.extend(Self::unencoded(&font).into_iter().map(GlyphCell::Glyph));
+        }
+        cells
+    }
+
+    fn describe(&self, family: &str, _style: &str, cell: GlyphCell) -> CellInfo {
+        let mut info = CellInfo::default();
+        let Some(font) = Self::font(family) else { return info };
+        match cell {
+            GlyphCell::Char(c) => {
+                info.gid = font.charmap().map(c).map(GlyphId::to_u32);
+                info.name = Some(format!("uni{:04X}", c as u32));
+                info.dimmed = c == 'Z';
+                info.has_alternates = c == 'a';
+            }
+            GlyphCell::Glyph(id) => {
+                info.gid = Some(id);
+                info.name = Some(format!("glyph{id}"));
+            }
+        }
+        info
+    }
+
+    fn alternates(&self, _family: &str, _style: &str, cell: GlyphCell) -> Vec<GlyphCell> {
+        if cell == GlyphCell::Char('a') { ['a', 'à', 'á', 'â'].map(GlyphCell::Char).to_vec() } else { Vec::new() }
+    }
+
+    fn glyph(&self, family: &str, _style: &str, cell: GlyphCell, px: u32) -> Option<ColorImage> {
+        let font = Self::font(family)?;
+        let id = match cell {
+            GlyphCell::Char(c) => font.charmap().map(c)?,
+            GlyphCell::Glyph(id) => GlyphId::new(id),
+        };
+        let em = px as f32 * 0.8;
+        let size = Size::new(em);
+        let advance = font.glyph_metrics(size, LocationRef::default()).advance_width(id).unwrap_or(em);
+        let baseline = px as f32 * 0.78;
+        let mut pen = Outline { edges: Vec::new(), start: (0.0, 0.0), at: (0.0, 0.0), dx: (px as f32 - advance) / 2.0, baseline };
+        font.outline_glyphs().get(id)?.draw(DrawSettings::unhinted(size, LocationRef::default()), &mut pen).ok()?;
+        Some(rasterize(&pen.edges, px as usize))
     }
 }
 

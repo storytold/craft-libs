@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{CheckMenuItem, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
@@ -30,10 +30,39 @@ use objc2::{MainThreadMarker, sel};
 use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSEventType};
 use objc2_foundation::{NSBundle, NSLocale, NSObjectProtocol, NSString};
 
-use super::{Bar, Chosen, Handler, Held, Item, Menu, MenuKind, Node, Options, Platform, Shortcut};
+use super::{Bar, Chosen, Handler, Held, Item, Menu, MenuKind, Node, Options, Platform, Shortcut, Wake};
 
 /// Set by [`Installed::install`]: there is one full menu bar per process.
 static INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// A menu is tracking: set when AppKit posts `NSMenuDidBeginTracking`, cleared on `NSMenuDidEndTracking`. An atomic,
+/// so it reads right off the main thread too; AppKit can deliver window input while a menu still tracks
+/// (asynchronous menu presentation).
+static TRACKING: AtomicBool = AtomicBool::new(false);
+
+/// A menu began tracking since the last [`take_menu_began`]; set on begin only.
+static BEGAN: AtomicBool = AtomicBool::new(false);
+
+pub(super) fn menu_tracking() -> bool {
+    TRACKING.load(Ordering::Relaxed)
+}
+
+pub(super) fn take_menu_began() -> bool {
+    BEGAN.swap(false, Ordering::Relaxed)
+}
+
+/// Keep [`TRACKING`] and [`BEGAN`] in step with AppKit's notifications, and call `wake` when tracking ends so the
+/// app applies the changes it held back while the menu was open.
+fn observe_tracking(wake: Wake) {
+    craft_appkit::observe_menu_tracking(Arc::new(move |tracking| {
+        TRACKING.store(tracking, Ordering::Relaxed);
+        if tracking {
+            BEGAN.store(true, Ordering::Relaxed);
+        } else {
+            wake();
+        }
+    }));
+}
 
 /// Where the menu event handler sends events: the handler set last.
 static ROUTE: Mutex<Option<Handler>> = Mutex::new(None);
@@ -187,19 +216,22 @@ pub(super) struct Installed {
     structure: u64,
     window: Option<WindowMenu>,
     options: Options,
+    /// The last [`Installed::apply`] had to rebuild menus and could not.
+    failed: bool,
 }
 
 impl Installed {
-    pub(super) fn install(bar: &Bar, options: Options) -> Option<Installed> {
+    pub(super) fn install(bar: &Bar, options: Options, wake: Wake) -> Option<Installed> {
         MainThreadMarker::new()?;
         if INSTALLED.swap(true, Ordering::SeqCst) {
             return None;
         }
-        let mut installed = Installed { menu: None, entries: HashMap::new(), structure: 0, window: None, options };
+        let mut installed = Installed { menu: None, entries: HashMap::new(), structure: 0, window: None, options, failed: false };
         if !installed.build(bar) {
             INSTALLED.store(false, Ordering::SeqCst);
             return None;
         }
+        observe_tracking(wake);
         Some(installed)
     }
 
@@ -208,7 +240,8 @@ impl Installed {
     }
 
     /// Build the menu bar for `bar` and make it NSApp's. On an error or a panic in muda or AppKit
-    /// the menus stay as they were (never crash for a menu) and this returns false.
+    /// the menus stay as they were (never crash for a menu), [`Installed::failed`] reports it and
+    /// this returns false.
     fn build(&mut self, bar: &Bar) -> bool {
         let built = catch_unwind(AssertUnwindSafe(|| -> muda::Result<(muda::Menu, Entries, Option<WindowMenu>)> {
             let mut entries = Entries::new();
@@ -241,9 +274,11 @@ impl Installed {
                 self.entries = entries;
                 self.window = window;
                 self.structure = bar.structure;
+                self.failed = false;
                 true
             }
             _ => {
+                self.failed = true;
                 // The new menu may have been made NSApp's before the failure.
                 if let Some(old) = &self.menu {
                     let _ = catch_unwind(AssertUnwindSafe(|| {
@@ -296,6 +331,8 @@ impl Installed {
     }
 
     pub(super) fn apply(&mut self, bar: &Bar) -> bool {
+        // An update in place has nothing to fail; a rebuild below sets it again.
+        self.failed = false;
         if self.menu.is_none() || bar.structure != self.structure {
             return self.build(bar);
         }
@@ -332,13 +369,16 @@ impl Installed {
         rebuilt
     }
 
-    /// A menu bar menu is open while one of its titles is highlighted.
-    ///
-    /// This assumes AppKit sets the main menu's `highlightedItem` while one of its menus is open
-    /// and clears it when the menu closes; not yet confirmed on every macOS version. If it stayed
-    /// set, a caller that waits for the menu to close would wait for good.
+    pub(super) fn failed(&self) -> bool {
+        self.failed
+    }
+
     pub(super) fn tracking(&self) -> bool {
-        MainThreadMarker::new().and_then(|mtm| NSApplication::sharedApplication(mtm).mainMenu()).is_some_and(|m| m.highlightedItem().is_some())
+        menu_tracking()
+    }
+
+    pub(super) fn take_began(&self) -> bool {
+        take_menu_began()
     }
 
     pub(super) fn cancel_tracking(&self) {

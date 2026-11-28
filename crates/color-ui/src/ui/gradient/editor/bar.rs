@@ -133,7 +133,8 @@ struct Drag {
     /// Where the press was and the marker's location then, so the marker doesn't jump.
     press: Pos2,
     grab: f32,
-    /// Alt was held at the press: the drag moves a copy of the stop.
+    /// Alt was held at the press: the drag moves a copy of the stop, or under `AltDrop::Swap` swaps its colours with
+    /// the colour stop it is held over.
     copy: bool,
 }
 
@@ -145,8 +146,8 @@ pub struct GradientBarOutput<P = ()> {
     pub edit: EditResponse<GradientStops>,
     /// The selection after this pass, when the bar changed it.
     pub select: Option<Option<StopRef>>,
-    /// The colour stop whose colour is asked for: a double click on it, Enter or Space.
-    pub color_requested: Option<usize>,
+    /// The colour stop whose colour is asked for (a double click on it, Enter or Space) and its marker's square.
+    pub color_requested: Option<(usize, Rect)>,
     /// Enter or Space on an opacity stop or a midpoint: its first field takes the focus.
     pub field_requested: bool,
     /// A payload dropped on the bar: where it landed.
@@ -190,7 +191,7 @@ pub struct GradientBar<'a, P: Clone + Send + Sync + 'static = ()> {
     #[prop]
     selected_marker: Option<StopRef>,
     select: Option<Option<StopRef>>,
-    color_requested: Option<usize>,
+    color_requested: Option<(usize, Rect)>,
     field_requested: bool,
     dropped: Option<(StopDrop, P)>,
     payload: PhantomData<fn() -> P>,
@@ -369,6 +370,11 @@ impl Geometry {
         Rect::from_min_size(pos2(self.x(at) - self.marker / 2.0, top), vec2(self.marker, self.marker))
     }
 
+    /// The square of colour stop `i`.
+    fn color_square(&self, stops: &GradientStops, i: usize) -> Rect {
+        self.body(StopRow::Color, location(stops, StopRow::Color, i))
+    }
+
     /// What a press takes for marker `m`: a stop within `hit` across, from a diamond's radius away from the ramp's edge
     /// to the marker's far edge; a midpoint within `hit` of its diamond.
     fn hit_rect(&self, stops: &GradientStops, m: StopRef) -> Rect {
@@ -387,17 +393,23 @@ impl Geometry {
         }
     }
 
-    /// The colour stop or location a payload dropped at `pos` lands on.
-    fn drop_place(&self, stops: &GradientStops, pos: Pos2) -> StopDrop {
-        let near = stops
+    /// The colour stop other than `except` nearest to `x` and within `hit` of it.
+    fn nearest_color(&self, stops: &GradientStops, x: f32, except: Option<usize>) -> Option<usize> {
+        stops
             .color
             .iter()
             .enumerate()
-            .map(|(i, s)| (i, (self.x(s.location) - pos.x).abs()))
+            .filter(|(i, _)| Some(*i) != except)
+            .map(|(i, s)| (i, (self.x(s.location) - x).abs()))
             .filter(|(_, d)| *d <= self.hit)
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-        match near {
-            Some((i, _)) => StopDrop::OnStop(i),
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    }
+
+    /// The colour stop or location a payload dropped at `pos` lands on.
+    fn drop_place(&self, stops: &GradientStops, pos: Pos2) -> StopDrop {
+        match self.nearest_color(stops, pos.x, None) {
+            Some(i) => StopDrop::OnStop(i),
             None => StopDrop::At(stops::round_location(self.location(pos.x))),
         }
     }
@@ -482,7 +494,7 @@ impl<P: Clone + Send + Sync + 'static> GradientBar<'_, P> {
         self.select = Some(marker);
     }
 
-    /// The drag's stops with the marker at the pointer: moved, copied, or torn off.
+    /// The drag's stops with the marker at the pointer: moved, copied, colour-swapped, or torn off.
     fn drag_to(&mut self, cx: &mut Cx<'_, Self>, geo: &Geometry, drag: &Drag, pos: Pos2) {
         let Drag { marker, ref base, press, grab, copy, .. } = *drag;
         let to = grab + geo.location(pos.x) - geo.location(press.x);
@@ -500,9 +512,14 @@ impl<P: Clone + Send + Sync + 'static> GradientBar<'_, P> {
             }
             m => {
                 let (row, i, at) = (m.row(), m.index(), stops::round_location(to));
+                // Chosen from the stops at the press, so a pointer that leaves the other stop returns to the copy.
+                let swap = (moved && copy && row == StopRow::Color && rules.alt_drop == stops::AltDrop::Swap)
+                    .then(|| geo.nearest_color(base, pos.x, Some(i)).and_then(|j| stops::swap_colors(base, i, j)))
+                    .flatten()
+                    .map(|(s, j)| (s, Some(StopRef::stop(row, j))));
                 // At the row's minimum a stop dragged off the bar stays and moves.
                 let torn = (off && !copy).then(|| stops::remove(base, row, i, rules)).flatten().map(|(s, _)| (s, None));
-                let edited = torn.or_else(|| match (moved, copy) {
+                let edited = swap.or(torn).or_else(|| match (moved, copy) {
                     (false, _) => None,
                     (true, true) => stops::copy(base, row, i, at, rules).map(|(s, j)| (s, Some(StopRef::stop(row, j)))),
                     (true, false) => stops::move_to(base, row, i, at, rules).map(|(s, j)| (s, Some(StopRef::stop(row, j)))),
@@ -526,7 +543,7 @@ impl<P: Clone + Send + Sync + 'static> GradientBar<'_, P> {
                 if press.double_pressed()
                     && let StopRef::Color(i) = marker
                 {
-                    self.color_requested = Some(i);
+                    self.color_requested = Some((i, geo.color_square(stops, i)));
                 }
             }
             PressPhase::DragStart { start, pos, .. } if start.button == PointerButton::Primary => {
@@ -635,7 +652,7 @@ impl<P: Clone + Send + Sync + 'static> GradientBar<'_, P> {
         let activated = self.selected_marker.is_some_and(|m| matches!(cx.part_activated(part_of(m)), Some(FireSource::Key | FireSource::Access)));
         if activated {
             match self.selected_marker {
-                Some(StopRef::Color(i)) => self.color_requested = Some(i),
+                Some(StopRef::Color(i)) => self.color_requested = Some((i, geo.color_square(&stops, i))),
                 Some(_) => self.field_requested = true,
                 None => {}
             }
@@ -828,7 +845,7 @@ impl<P: Clone + Send + Sync + 'static> Component for GradientBar<'_, P> {
         let edge_of = |m: StopRef| {
             if self.selected_marker == Some(m) {
                 style.selected
-            } else if !dragging && cx.hover_pos(part_of(m)).is_some() {
+            } else if !dragging && cx.part_if_declared(part_of(m)).is_some_and(|result| result.hovered) {
                 style.hovered
             } else {
                 cx.resolve(&style.edge)

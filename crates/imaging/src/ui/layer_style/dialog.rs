@@ -8,19 +8,18 @@ use craft_theme::{Srgba, TypeRole};
 use craft_ui::contract::{CommandSet as _, Entry, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::{Divider, Text};
 use craft_ui::layout_components::{Row, Stack};
-use craft_ui::patterns::presets::PresetRow;
+use craft_ui::patterns::presets::{PresetFns, PresetSource};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::requests::ColorRequest;
 use egui::{Response, Ui};
 
 use super::blending::{BlendingInput, blending_page};
-use super::contour::SharedSampler;
-use super::contour::{ContourAction, ContourRequest, ContourWords};
+use super::contour::{ContourAction, ContourRequest, ContourSampler};
 use super::labels::LayerStyleWords;
 use super::list::{LayerStyleCommand, ListAction, effect_list};
-use super::page::{PageInput, StyleOp, effect_page, push_edit, set_edit};
-use super::styles::{StylePresets, styles_page};
-use craft_behavior::EditEvents;
+use super::page::{PageInput, effect_page, push_edit};
+use super::styles::styles_page;
+use craft_behavior::{EditEvent, EditEvents, Mixed};
 
 use crate::layer_style::{Contour, EffectId, EffectKind, EffectSpec, LayerStyle, LayerStyleDraft, LayerStylePage, StyleParams, StyleValue};
 
@@ -102,8 +101,8 @@ impl LayerStyleOutput {
 ///   before the page changes.
 /// - The page title is the effect's name, plain. New Style… and the Preview check box are the host's, in the button
 ///   column under OK and Cancel (Photoshop's place), the check over [`LayerStyleDraft::preview`].
-/// - The Styles page ([`StylePresets`]), the Blending Options page, or an effect page drawn from the kind's
-///   [`EffectSpec`].
+/// - The Styles page ([`style_presets`](Self::style_presets)), the Blending Options page, or an effect page drawn from
+///   the kind's [`EffectSpec`].
 /// - Use Global Light: on an effect that uses it, the Angle edits the shared light angle of every such effect
 ///   ([`LayerStyleDraft::set_param`]).
 ///
@@ -123,10 +122,10 @@ pub struct LayerStyleDialog<'a> {
     specs: Option<&'a [EffectSpec]>,
     blend_keys: Option<&'a HashMap<String, String>>,
     blend_modes: &'a [Entry<String>],
-    patterns: &'a [PresetRow<String>],
+    patterns: Option<&'a PresetSource<'a, String>>,
     user_contours: &'a [Contour],
-    sampler: Option<SharedSampler>,
-    style_presets: Option<StylePresets<'a>>,
+    sampler: Option<ContourSampler>,
+    style_presets: Option<&'a PresetSource<'a, String>>,
     gradient_presets: &'a [(String, GradientStops)],
 }
 
@@ -141,7 +140,7 @@ impl<'a> LayerStyleDialog<'a> {
             specs: None,
             blend_keys: None,
             blend_modes: &[],
-            patterns: &[],
+            patterns: None,
             user_contours: &[],
             sampler: None,
             style_presets: None,
@@ -177,8 +176,8 @@ impl<'a> LayerStyleDialog<'a> {
     }
 
     /// The patterns Pattern Overlay offers, keyed by the pattern's key.
-    pub fn patterns(mut self, patterns: &'a [PresetRow<String>]) -> Self {
-        self.patterns = patterns;
+    pub fn patterns(mut self, patterns: &'a PresetSource<'a, String>) -> Self {
+        self.patterns = Some(patterns);
         self
     }
 
@@ -190,19 +189,14 @@ impl<'a> LayerStyleDialog<'a> {
 
     /// The host's interpolation of a contour's points: the output of every input level through the points, so the
     /// contour fields draw the curve the engine renders; a monotone cubic by default.
-    pub fn sampler(mut self, sample: impl Fn(&[[f32; 2]]) -> Vec<f32> + Send + Sync + 'static) -> Self {
-        self.sampler = Some(std::sync::Arc::new(sample));
+    pub fn sampler(mut self, sample: ContourSampler) -> Self {
+        self.sampler = Some(sample);
         self
     }
 
-    /// [`sampler`](Self::sampler) as the host keeps it: `None` for the default.
-    pub(super) fn shared_sampler(mut self, sampler: Option<SharedSampler>) -> Self {
-        self.sampler = sampler;
-        self
-    }
-
-    /// The Styles page's presets; without them the page shows only its title.
-    pub fn style_presets(mut self, presets: StylePresets<'a>) -> Self {
+    /// The Styles page's presets, keyed by the preset's name and painted by the source's thumbnail painter; without
+    /// them the page shows only its title.
+    pub fn style_presets(mut self, presets: &'a PresetSource<'a, String>) -> Self {
         self.style_presets = Some(presets);
         self
     }
@@ -225,7 +219,6 @@ impl<'a> LayerStyleDialog<'a> {
         } = self;
         let env = Env::of(ui);
         let words = env.words::<LayerStyleWords>();
-        let contour_words = env.words::<ContourWords>();
         let units = env.units();
         let base: Cow<'_, [EffectSpec]> = match specs {
             Some(specs) => Cow::Borrowed(specs),
@@ -239,14 +232,13 @@ impl<'a> LayerStyleDialog<'a> {
             }
             None => &base,
         };
+        let none = PresetSource::new((), PresetFns::new(|_, _| Vec::new()));
+        let patterns = patterns.unwrap_or(&none);
         let mut work = Work { next: draft.clone(), edit: EditEvents::new(), extras: Extras::default() };
         let title = page_title(draft.page, draft, &words);
         let name = label.as_str().to_owned();
         let shown = Row::new().label(label.clone()).show(ui, |ui, _| {
             let list = Stack::new().command_scope(LayerStyleCommand::SCOPE).show(ui, |ui, cx| effect_list(ui, cx, draft, specs, &words, &units));
-            if let Some(action) = list.inner.flatten() {
-                work.list_action(action, specs, draft, &name);
-            }
             Divider::vertical().show(ui);
             Stack::new().label(title.clone()).show(ui, |ui, _| {
                 let page = PageEnv {
@@ -255,15 +247,17 @@ impl<'a> LayerStyleDialog<'a> {
                     blend_modes,
                     patterns,
                     user_contours,
-                    sampler: sampler.as_ref(),
+                    sampler,
                     gradient_presets,
                     channel_names,
                     words: &words,
-                    contour_words: &contour_words,
                     units: &units,
                 };
-                work.page(ui, &page, style_presets.as_ref());
+                work.page(ui, &page, style_presets);
             });
+            if let Some(actions) = list.inner {
+                work.list_actions(actions, specs, &name);
+            }
         });
         let Work { next, edit, extras } = work;
         LayerStyleOutput {
@@ -333,13 +327,12 @@ struct PageEnv<'a> {
     draft: &'a LayerStyleDraft,
     specs: &'a [EffectSpec],
     blend_modes: &'a [Entry<String>],
-    patterns: &'a [PresetRow<String>],
+    patterns: &'a PresetSource<'a, String>,
     user_contours: &'a [Contour],
-    sampler: Option<&'a SharedSampler>,
+    sampler: Option<ContourSampler>,
     gradient_presets: &'a [(String, GradientStops)],
     channel_names: &'a [String],
     words: &'a LayerStyleWords,
-    contour_words: &'a ContourWords,
     units: &'a craft_ui::runtime::env::Units,
 }
 
@@ -363,33 +356,47 @@ struct Work {
 }
 
 impl Work {
-    /// Applies a list action to the copy (its view state: the page an added effect opens on) and records its change to
-    /// the style as the pass's edit.
-    fn list_action(&mut self, action: ListAction, specs: &[EffectSpec], draft: &LayerStyleDraft, label: &str) {
-        let op = match action {
-            ListAction::Select(page) => {
-                self.next.page = page;
-                return;
+    /// Apply the list's edits together, on top of any field edit the page reported on losing focus.
+    fn list_actions(&mut self, actions: Vec<ListAction>, specs: &[EffectSpec], label: &str) {
+        if actions.is_empty() {
+            return;
+        }
+        if let Some(style) = self.edit.landed() {
+            self.next.style = style.clone();
+        }
+        let before = self.next.style.clone();
+        let defaults = |kind| specs.iter().find(|spec| spec.kind == kind).map(|spec| spec.defaults.clone()).unwrap_or_default();
+        for action in actions {
+            match action {
+                ListAction::Select(page) => self.next.page = page,
+                ListAction::Check(id, on) => {
+                    if self.next.style.effect(id).is_some_and(|effect| effect.on != on) {
+                        self.next.toggle(id);
+                    }
+                }
+                ListAction::CheckAbsent(kind, on) => {
+                    let present = self.next.style.instances(kind).next();
+                    match (present, on) {
+                        (None, true) => {
+                            self.next.add_instance(kind, &defaults(kind));
+                        }
+                        (Some(id), false) => self.next.remove_instance(id),
+                        _ => {}
+                    }
+                }
+                ListAction::Add(kind) => {
+                    self.next.add_instance(kind, &defaults(kind));
+                }
+                ListAction::Remove(id) => self.next.remove_instance(id),
             }
-            ListAction::Toggle(id) => {
-                self.next.toggle(id);
-                StyleOp::Toggle(id)
-            }
-            ListAction::Add(kind) => {
-                let defaults = specs.iter().find(|spec| spec.kind == kind).map(|spec| spec.defaults.clone()).unwrap_or_default();
-                self.next.add_instance(kind, &defaults);
-                StyleOp::Add { kind, defaults }
-            }
-            ListAction::Remove(id) => {
-                self.next.remove_instance(id);
-                StyleOp::Remove(id)
-            }
-        };
-        push_edit(&mut self.edit, set_edit(&draft.style, &op, label));
+        }
+        if self.next.style != before {
+            self.edit.push(EditEvent::set(Mixed::Same(before), self.next.style.clone(), label.into(), None));
+        }
     }
 
     /// Draws the page of the pass; its controls add their edits to the pass's.
-    fn page(&mut self, ui: &mut Ui, env: &PageEnv<'_>, presets: Option<&StylePresets<'_>>) {
+    fn page(&mut self, ui: &mut Ui, env: &PageEnv<'_>, presets: Option<&PresetSource<'_, String>>) {
         let (words, draft) = (env.words, env.draft);
         let instance = match draft.page {
             LayerStylePage::Effect(id) => draft.style.effect(id).cloned(),
@@ -423,7 +430,6 @@ impl Work {
                     sampler: env.sampler,
                     gradient_presets: env.gradient_presets,
                     words,
-                    contour_words: env.contour_words,
                     units: env.units,
                 };
                 let out = effect_page(ui, &input);

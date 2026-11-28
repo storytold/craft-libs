@@ -13,7 +13,6 @@ use craft_behavior::{PixelSize, Selection, SelectionChange, SelectionModel};
 use egui::Context;
 use egui::load::SizedTexture;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// Loads both sides in pixels without changing the unit shown in the fields.
@@ -30,6 +29,7 @@ pub(super) fn set_pixels(link: &mut LinkedSize, size: PixelSize) {
 
 /// The formats of Save for Web.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum WebFormat {
     /// GIF, indexed colour.
@@ -82,6 +82,7 @@ impl WebFormat {
 
 /// How an indexed format's palette is chosen.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ColorTable {
     /// A palette weighted toward colours the eye notices.
@@ -95,10 +96,15 @@ pub enum ColorTable {
     Restrictive,
     /// The image's own colours, when it has at most 256.
     Exact,
+    /// Black and white.
+    BlackWhite,
+    /// Evenly spaced greys.
+    Grayscale,
 }
 
 /// How an indexed format spreads colour error.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum Dither {
     /// Nearest palette colour, no dither.
@@ -114,6 +120,7 @@ pub enum Dither {
 
 /// What metadata goes into a web file.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum WebMetadata {
     /// No metadata.
@@ -129,6 +136,7 @@ pub enum WebMetadata {
 
 /// The view tabs over the panes. 2-Up is the default; the last tab is remembered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum WebView {
     /// The document alone.
@@ -154,8 +162,189 @@ impl WebView {
     }
 }
 
+/// The anti-aliasing of a vector document's raster output.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum WebAntiAlias {
+    /// No anti-aliasing.
+    None,
+    /// Art optimised (supersampled).
+    #[default]
+    Art,
+    /// Type optimised.
+    Type,
+}
+
+/// The Download select's speeds in Kbps, one list for every app; 56.6 is the opening speed.
+pub const WEB_SPEEDS: [f64; 8] = [28.8, 56.6, 128.0, 256.0, 512.0, 1024.0, 2048.0, 8192.0];
+
+/// One table edit on the selected colours: the host applies it to its table model.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum ColorTableEdit {
+    /// Locks the colours.
+    Lock,
+    /// Makes the colours transparent.
+    Transparent,
+    /// Shifts the colours to their web-safe colours.
+    WebShift,
+    /// Shifts the colours to the colour `to`, the colour the palette answered with.
+    Shift([u8; 3]),
+    /// Unshifts the colours.
+    Unshift,
+    /// Unshifts every colour.
+    UnshiftAll,
+    /// Deletes the colours.
+    Delete,
+    /// Sorts the table.
+    Sort(TableOrder),
+    /// Restores the generated table.
+    Restore,
+}
+
+/// The order a colour table sorts in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TableOrder {
+    /// The order the table was generated in.
+    #[default]
+    Unsorted,
+    /// By hue.
+    Hue,
+    /// By luminance.
+    Luminance,
+    /// By how many pixels use the colour.
+    Popularity,
+}
+
+/// A table edit and the colours it applies to.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ColorTableEvent {
+    /// The edit.
+    pub edit: ColorTableEdit,
+    /// The selected colours, by colour, so the host skips those the shown table no longer has.
+    pub colors: Vec<[u8; 3]>,
+}
+
+/// What the host's table says, for the cell marks (web-safe is computed).
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct TableMarks {
+    /// The locked colours.
+    pub locked: Vec<[u8; 3]>,
+    /// The transparent colours.
+    pub transparent: Vec<[u8; 3]>,
+    /// The shifted colours, from and to.
+    pub shifted: Vec<([u8; 3], [u8; 3])>,
+}
+
+/// What the dialog is for: a raster document or a vector one.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum WebDocument {
+    /// A raster document: Image Size shows the resample method.
+    #[default]
+    Raster,
+    /// A vector document: Image Size shows Anti-aliasing, Clip to Artboard and the Artboard select in place of
+    /// Resample; an Output row follows Metadata; Slices has no HTML check.
+    #[non_exhaustive]
+    Vector {
+        /// The artboards' names.
+        artboards: Vec<String>,
+    },
+}
+
+impl WebDocument {
+    /// A vector document with the artboards `artboards`.
+    pub fn vector(artboards: Vec<String>) -> Self {
+        WebDocument::Vector { artboards }
+    }
+}
+
+/// The search Optimize to File Size… asks the host to run.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct OptimizeRequest {
+    /// The desired file size in K.
+    pub desired_k: f64,
+    /// Where the search starts.
+    pub start: OptimizeStart,
+    /// Which slices it covers.
+    pub scope: OptimizeScope,
+    /// The options the search starts from.
+    pub options: SaveForWebOptions,
+}
+
+/// Where an optimize search starts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum OptimizeStart {
+    /// The current settings.
+    #[default]
+    Current,
+    /// An automatically selected GIF or JPEG.
+    Auto,
+}
+
+/// Which slices an optimize search covers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum OptimizeScope {
+    /// Every slice, together.
+    #[default]
+    AllSlices,
+    /// Every slice by itself.
+    EachSlice,
+    /// The current slice.
+    CurrentSlice,
+}
+
+/// The host's answer to an [`OptimizeRequest`].
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct OptimizeAnswer {
+    /// The options found, taken when given.
+    pub options: Option<SaveForWebOptions>,
+    /// The size the found options give, in bytes.
+    pub bytes: u64,
+    /// The size asked for, in bytes.
+    pub target_bytes: u64,
+    /// Whether the found options fit the target.
+    pub achieved: bool,
+}
+
+impl OptimizeAnswer {
+    /// An answer with the found `options`, their size `bytes`, the `target_bytes` and whether it was `achieved`.
+    pub fn new(options: Option<SaveForWebOptions>, bytes: u64, target_bytes: u64, achieved: bool) -> Self {
+        OptimizeAnswer { options, bytes, target_bytes, achieved }
+    }
+}
+
+/// What a preset row asked of the host; the host stores the presets and gives the new list back.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum WebPresetEvent {
+    /// The current options were saved under a new name.
+    Saved(WebPreset),
+    /// A saved preset was renamed.
+    #[non_exhaustive]
+    Renamed {
+        /// The old name.
+        from: String,
+        /// The new name.
+        to: String,
+    },
+    /// A saved preset was deleted.
+    Deleted(String),
+}
+
 /// Save for Web's settings: the result, what is remembered, and what the app encodes each variant with.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct SaveForWebOptions {
     /// The file format.
@@ -184,6 +373,18 @@ pub struct SaveForWebOptions {
     pub lossless: bool,
     /// Embeds the colour profile in the file.
     pub embed_profile: bool,
+    /// How much a GIF is allowed to lose to shrink, 0 to 100.
+    #[serde(default)]
+    pub lossy: u8,
+    /// The anti-aliasing of a vector document's output.
+    #[serde(default)]
+    pub anti_alias: WebAntiAlias,
+    /// A vector document's output is clipped to the artboard.
+    #[serde(default)]
+    pub clip_to_artboard: bool,
+    /// The artboard a clipped vector document is written for.
+    #[serde(default)]
+    pub artboard: Option<usize>,
     /// The matte, red, green and blue.
     pub matte: [u8; 3],
     /// Converts the colours to sRGB before encoding.
@@ -200,9 +401,6 @@ pub struct SaveForWebOptions {
     pub constrain_proportions: bool,
     /// How the pixels are made when the size differs from the document's.
     pub resample: Resample,
-    /// The palette colours the user edited, by index, as red, green and blue.
-    #[serde(default)]
-    pub palette_edits: BTreeMap<u16, [u8; 3]>,
     /// Which slices of the document the file holds.
     #[serde(default)]
     pub slices: WebSlices,
@@ -222,6 +420,7 @@ fn html_default() -> bool {
 
 /// Which slices of the document Save for Web writes.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum WebSlices {
     /// The whole image as one file.
@@ -288,6 +487,10 @@ impl Default for SaveForWebOptions {
             optimized: true,
             lossless: false,
             embed_profile: false,
+            lossy: 0,
+            anti_alias: WebAntiAlias::default(),
+            clip_to_artboard: false,
+            artboard: None,
             matte: [255, 255, 255],
             convert_srgb: true,
             metadata: WebMetadata::Copyright,
@@ -295,7 +498,6 @@ impl Default for SaveForWebOptions {
             size: None,
             constrain_proportions: true,
             resample: Resample::Bicubic,
-            palette_edits: BTreeMap::new(),
             slices: WebSlices::All,
             html: true,
         }
@@ -346,16 +548,15 @@ impl SaveForWebOptions {
         }
     }
 
-    /// Starts on the next document's full size with proportions linked.
+    /// The options as the next open remembers them: the slices and the artboard belong to one document, so they are
+    /// left at their defaults, and the next document starts at its full size with proportions linked.
     pub(super) fn without_document_fields(&self) -> Self {
-        SaveForWebOptions {
-            percent: 100.0,
-            size: None,
-            constrain_proportions: true,
-            slices: WebSlices::default(),
-            palette_edits: BTreeMap::new(),
-            ..self.clone()
-        }
+        SaveForWebOptions { percent: 100.0, size: None, constrain_proportions: true, slices: WebSlices::default(), artboard: None, ..self.clone() }
+    }
+
+    /// What decides the palette the encoder generates: a change of it drops the host's edits of the generated table.
+    pub(super) fn reduction(&self) -> (WebFormat, ColorTable, u16) {
+        (self.format, self.color_table, self.colors)
     }
 
     /// Whether the matte row shows: the matte fills the transparency of formats that cannot keep it.
@@ -381,23 +582,27 @@ pub struct WebPreset {
     pub name: String,
     /// The options the preset sets.
     pub options: SaveForWebOptions,
+    /// A built-in preset is not renamed or deleted.
+    pub built_in: bool,
 }
 
 impl WebPreset {
     /// A preset named `name`.
     pub fn new(name: impl Into<String>, options: SaveForWebOptions) -> Self {
-        WebPreset { name: name.into(), options }
+        WebPreset { name: name.into(), options, built_in: false }
     }
 
-    /// Whether the preset is what `current` shows apart from the size, the slices and the palette edits.
+    /// Whether the preset is what `current` shows apart from what belongs to the document: the size and its link, the
+    /// resample method, the slices and the artboard.
     pub fn is_set_in(&self, current: &SaveForWebOptions) -> bool {
         let own = &self.options;
         own == &SaveForWebOptions {
             percent: own.percent,
             size: own.size,
             constrain_proportions: own.constrain_proportions,
+            resample: own.resample,
             slices: own.slices.clone(),
-            palette_edits: own.palette_edits.clone(),
+            artboard: own.artboard,
             ..current.clone()
         }
     }
@@ -473,8 +678,8 @@ pub struct WantedVariant {
 pub struct SaveForWebResult {
     /// The settings the user confirmed.
     pub options: SaveForWebOptions,
-    /// The file the user chose to write.
-    pub path: PathBuf,
+    /// The file the user chose to write; `None` when the dialog closed with Done (keep the settings, write nothing).
+    pub path: Option<PathBuf>,
     /// The output width in pixels.
     pub width: u32,
     /// The output height in pixels.

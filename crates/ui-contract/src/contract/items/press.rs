@@ -1,16 +1,17 @@
 //! Presses on rows: select, activate, ask for a row's menu, and the parts an item opens menus from.
 
 use super::drag::SlowClick;
-use super::{ItemsHooks, Placement, RowPress, SECTION};
-use crate::contract::collection::{ActivateOn, CollectionEvent, CollectionProps, ContextMenuRequest, LeadSource, RowPressed, SelectMode};
-use crate::contract::{Collection, Cx, ItemOpener};
+use super::lead::PickBy;
+use super::{ItemsHooks, Placement, RowPress, SECTION, section_part};
+use crate::contract::collection::{ActivateOn, CollectionEvent, CollectionProps, ContextMenuRequest, LeadSource, OpenChange, RowPressed, SelectMode};
+use crate::contract::{Collection, Cx, ItemOpener, ItemOutput};
 use crate::runtime::egui::response;
 use crate::runtime::env::ArenaId;
 use crate::runtime::focus;
 use crate::runtime::frame;
 use crate::runtime::memory::sub;
 use crate::runtime::motion::Animate as _;
-use craft_behavior::{Flow, ItemLayout, PressPhase, SelectionChange, Sense};
+use craft_behavior::{Flow, ItemLayout, MiddleButton, PointerButton, PressPhase, SelectionChange, Sense};
 use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
 
 impl<C: Collection> ItemsHooks<'_, '_, C> {
@@ -82,8 +83,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             }
             _ => None,
         };
+        // Under `AutoScroll` a middle press on the rows starts or ends the latch (the items step's `middle_scroll`) and
+        // picks no row. In a collection that senses `MIDDLE_CLICK` the middle click is the row's own action
+        // (`CollectionEvent::MiddleClick`: a tab strip closes the tab), so the press picks no row there either.
+        let middle_clicks = cx.core.root_sense.contains(craft_behavior::Sense::MIDDLE_CLICK);
         if let PressPhase::Down { start, .. } = cx.core.press.phase
             && local(start.origin).y >= 0.0
+            && !(start.button == PointerButton::Middle && (props.middle_button == MiddleButton::AutoScroll || middle_clicks))
         {
             // A second press, slow or not, ends the wait of the first.
             self.drags.slow = None;
@@ -99,14 +105,16 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     // A command on the row, reported when the press ends as a click; the selection stays.
                     self.drags.command = Some(self.source.key(at));
                     self.move_lead(at, LeadSource::Pointer);
-                } else if !secondary_on_toggle {
+                } else if !secondary_on_toggle && (primary || !props.primary_picks) {
                     let mods = crate::runtime::pointer::frame_raw(&ctx).mods;
                     let key = self.source.key(at);
                     let column = if Self::selects_cells(comp) { layout.column_at(local(start.origin), offset) } else { None };
                     // A plain press on a selected row of a multiple selection leaves the selection whole, so a drag
                     // carries all of it; the release as a click narrows it to the row. In a single selection that
-                    // allows an empty one, the release as a click empties it. A later click of a multi-click on a
-                    // held row keeps the selection the earlier click left (`keeps_pick`).
+                    // allows an empty one, the release as a click empties it. A plain press on a row outside the
+                    // selection picks it when it ends as a click, so a drag carries the row and leaves the selection
+                    // as it was. A later click of a multi-click on a held row keeps the selection the earlier click
+                    // left (`keeps_pick`).
                     let holds = match Self::select_mode(comp) {
                         SelectMode::Multi => true,
                         SelectMode::Single => props.allow_empty,
@@ -134,9 +142,15 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         None if again => {}
                         None if hold => self.drags.collapse = Some(key.clone()),
                         None if keep => {}
-                        None => self.pick(comp, at, mods.shift, mods.cmd),
+                        None if plain && !self.holds(at) => self.drags.pick = Some(key.clone()),
+                        None if primary => self.click_pick(comp, at, mods.shift, mods.cmd, mods),
+                        None => self.pick_by(comp, at, mods.shift, mods.cmd, PickBy::Pointer(mods)),
                     }
-                    self.move_lead(at, LeadSource::Pointer);
+                    // A modified click on a pick kept beside the current item changes the pick only: the lead, which the
+                    // host follows to the current item, stays.
+                    if !(props.picks_beside_current && primary && (mods.shift || mods.cmd)) {
+                        self.move_lead(at, LeadSource::Pointer);
+                    }
                     // A secondary press takes focus the way a primary press does: egui and the press classification only move it for the primary button.
                     if !primary && props.focus_on_press {
                         focus::request_now(&ctx, focus::FocusTarget::Id(cx.core.id));
@@ -160,7 +174,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     && !matches!(Self::select_mode(comp), SelectMode::None)
                     && self.selection != C::Selection::default()
                 {
-                    self.change(SelectionChange::Clear);
+                    self.change_by(SelectionChange::Clear, PickBy::Pointer(mods_now));
                 }
             }
         }
@@ -181,6 +195,19 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             if props.focus_on_press && !target.sense.intersects(Sense::TAKE_FOCUS | Sense::KEEP_FOCUS) {
                 focus::request_now(&ctx, focus::FocusTarget::Id(cx.core.id));
             }
+        }
+        // A selectable section owns its pointer surface. Pick on its click, without taking clicks on disclosure.
+        if let (Some(PressPhase::Release { start, click: true, .. }), Some(target)) = (outcome.phase, outcome.target)
+            && start.button == PointerButton::Primary
+            && target.owner == cx.core.id
+            && target.part.is_some_and(|part| part.key == SECTION)
+            && let Some((key, _)) = &self.drags.part_press
+            && target.part == Some(section_part(key))
+            && let Some(at) = self.index_of(key)
+            && self.source.selectable_section(at)
+        {
+            let mods = crate::runtime::pointer::frame(&ctx).pick_mods;
+            self.click_pick(comp, at, mods.shift, mods.cmd, mods);
         }
         // While a part of an item holds the press, and in the pass it ends, the row reads it with whether it held the lead
         // when the press began.
@@ -209,7 +236,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let mods = crate::runtime::pointer::frame_raw(&ctx).mods;
             if !(mods.shift || mods.cmd || mods.alt) {
                 if !self.keeps_pick(at, start.clicks) {
-                    self.pick(comp, at, false, false);
+                    self.click_pick(comp, at, false, false, mods);
                 }
             } else if props.command_click && mods.cmd {
                 self.events.push(CollectionEvent::CommandClick { key: self.source.key(at), mods });
@@ -217,6 +244,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
         match cx.core.press.phase {
             PressPhase::Release { click, start, pos, .. } => {
+                if let Some(key) = self.drags.pick.take()
+                    && click
+                    && let Some(at) = self.index_of(&key)
+                {
+                    self.click_pick(comp, at, false, false, mods_now);
+                }
                 if click
                     && props.menu_on_click
                     && start.button == craft_behavior::PointerButton::Primary
@@ -245,6 +278,15 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 {
                     self.events.push(CollectionEvent::CommandClick { key, mods: mods_now });
                 }
+                // The press machine makes a middle release a click only for a collection that senses `MIDDLE_CLICK`.
+                if click
+                    && start.button == PointerButton::Middle
+                    && props.middle_button != MiddleButton::AutoScroll
+                    && local(start.origin).y >= 0.0
+                    && let Some(at) = layout.hit(local(start.origin), offset).filter(|&at| self.source.enabled(at) && layout.shown(at))
+                {
+                    self.events.push(CollectionEvent::MiddleClick(self.source.key(at)));
+                }
                 if let Some(key) = self.drags.activate.take()
                     && click
                     && self.index_of(&key).is_some()
@@ -257,9 +299,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     && let Some(at) = self.index_of(&key)
                 {
                     if Self::select_mode(comp) == SelectMode::Single {
-                        self.change(SelectionChange::Clear);
+                        self.change_by(SelectionChange::Clear, PickBy::Pointer(mods_now));
                     } else {
-                        self.pick(comp, at, false, false);
+                        self.click_pick(comp, at, false, false, mods_now);
                     }
                 }
             }
@@ -267,6 +309,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             PressPhase::Cancel { .. } => {
                 self.drags.slow = None;
                 self.drags.collapse = None;
+                self.drags.pick = None;
                 self.drags.rename = None;
                 self.drags.activate = None;
                 self.drags.command = None;
@@ -274,32 +317,33 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             _ => {}
         }
         // A secondary release on a row asks for its menu (9.2 rule 3); the row joins the selection unless it is in it.
-        // Something over the collection, or a part of a row or of the collection that takes presses and is under the
-        // pointer, keeps the request away; a part that picks its item (a thumbnail) is the row's, and the request names
+        // Something over the collection, or a part of a row or of the collection that takes the secondary click itself
+        // (its own menu, L-198) and is under the pointer, keeps the request away; a part that picks its item (a thumbnail) is the row's, and the request names
         // it.
         let released = crate::runtime::pointer::frame_raw(&ctx);
         let hover = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id)).hover;
         let menu_at = if released.release == Some(craft_behavior::PointerButton::Secondary)
             && cx.core.response.hovered()
-            && hover.find(|hit| hit.part.is_some() && hit.sense.takes_press() && !hit.sense.contains(Sense::PICKS_ITEM)).is_none()
+            && hover.find(|hit| hit.part.is_some() && hit.sense.contains(Sense::CONTEXT_CLICK) && !hit.sense.contains(Sense::PICKS_ITEM)).is_none()
         {
             released.pos.filter(|pos| rect.contains(xf.map_or(*pos, |map| map.to_layer(*pos))))
         } else {
             None
         };
         let menu_row = menu_at.map(|pos| (pos, layout.hit(local(pos), offset)));
-        // A secondary release on the empty space asks for the collection's own menu.
+        // A secondary release on the empty space asks for the collection's own menu, which no item's menu is.
         if let Some((pos, None)) = menu_row {
+            self.drags.menu = None;
             self.events.push(CollectionEvent::EmptyContextMenu { at: pos });
         }
         if let Some((pos, Some(at))) = menu_row
             && self.source.enabled(at)
         {
-            if !self.holds(at) && self.toggle_cell(props, layout, at, offset, local(pos)).is_none() {
+            if !props.primary_picks && !self.holds(at) && self.toggle_cell(props, layout, at, offset, local(pos)).is_none() {
                 let column = if Self::selects_cells(comp) { layout.column_at(local(pos), offset) } else { None };
                 match column {
                     Some(column) => self.cell_press(comp, layout, at, column, false, false),
-                    None => self.pick(comp, at, false, false),
+                    None => self.pick_by(comp, at, false, false, PickBy::Pointer(released.mods)),
                 }
             }
             self.move_lead(at, LeadSource::Pointer);
@@ -347,8 +391,22 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// Reports a request for the menu of a row; the row keeps its menu button shown while a menu hung from the
     /// collection is open (`RowState::menu_open`).
     pub(super) fn ask_menu(&mut self, request: ContextMenuRequest<C::Key>) {
-        self.drags.menu = Some(request.key.clone());
+        self.drags.menu = Some(request.clone());
         self.events.push(CollectionEvent::ContextMenu(request));
+    }
+
+    /// Reports what the shown item `key` asked for: opening or closing its children, its menu, and its event.
+    pub(super) fn report_item_output(&mut self, ctx: &Context, id: Id, key: &C::Key, output: impl ItemOutput<C::ItemEvent>) {
+        if let Some(ask) = output.open_request() {
+            self.events.push(CollectionEvent::Open(OpenChange { key: key.clone(), open: ask.open, all: ask.all }));
+        }
+        if let Some(rect) = output.menu_request() {
+            crate::runtime::keys::request_context(ctx, id, rect, None);
+            self.ask_menu(ContextMenuRequest { key: key.clone(), at: self.on_screen(rect.left_bottom()), column: None, part: None });
+        }
+        if let Some(event) = output.into_event() {
+            self.events.push(CollectionEvent::Item(key.clone(), event));
+        }
     }
 
     /// The response of each part an item asked to open a menu from (`ItemCx::part_opener`).
@@ -376,7 +434,7 @@ fn item_openers(ui: &Ui, ctx: &Context, id: Id, enabled: bool, openers: Vec<Item
                     clicked: on_part(outcome.activated),
                     ..response::PressView::default()
                 },
-                pointer: ctx.pointer_latest_pos(),
+                pointer: crate::runtime::pointer::frame_raw(ctx).pos,
             };
             let response = response::member(ui, opener_id(opener.item, opener.part), rect, enabled, view);
             Some((opener, response))

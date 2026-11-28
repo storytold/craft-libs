@@ -1,5 +1,5 @@
-//! Pure focus rules (spec 9.3, 9.4, 8.3): key ownership, focus after removal, the Escape order and the
-//! focus-on-press kinds. The runtime's focus service feeds them facts and applies the result.
+//! Pure focus rules (spec 9.3, 9.4, 8.3): key ownership, the Escape order and the focus-on-press kinds. The runtime's
+//! focus service feeds them facts and applies the result.
 
 use crate::sense::Sense;
 
@@ -84,14 +84,6 @@ pub fn key_owner(blocked: bool, present: &[OwnerClass]) -> KeyOwner {
         .iter()
         .find_map(|rank| rank.iter().find(|class| present.contains(class)))
         .map_or(KeyOwner::Class(OwnerClass::App), |class| KeyOwner::Class(*class))
-}
-
-/// The stop that takes focus when `focused` is no longer registered: the one after it in last pass's order
-/// that is still registered, else the one before. `None` leaves the scope's initial stop to decide.
-pub fn after_removal<'a, T: PartialEq>(last_order: &'a [T], focused: &T, registered: impl Fn(&T) -> bool) -> Option<&'a T> {
-    let at = last_order.iter().position(|stop| stop == focused)?;
-    let after = last_order[at + 1..].iter().find(|stop| registered(stop));
-    after.or_else(|| last_order[..at].iter().rev().find(|stop| registered(stop)))
 }
 
 /// What the Escape of one pass reaches first.

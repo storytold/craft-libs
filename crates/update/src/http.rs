@@ -76,14 +76,14 @@ impl Http {
     /// `user_agent` names the product and its version (`PhotoCraft/0.9.0`) and nothing about the
     /// person using it.
     pub fn new(user_agent: &str) -> Result<Self, String> {
-        Self::build(user_agent)
+        Self::build(user_agent, !cfg!(feature = "local-mirror"))
     }
 
-    /// The agents for remote hosts, and every redirect they follow, stay on HTTPS in every build:
+    /// `https_only` keeps the agents for remote hosts, and every redirect they follow, on HTTPS:
     /// a release download that GitHub's file host redirected to `http://` is refused, not read in
     /// plain text. The `direct` agents only ever fetch `is_loopback` links (a local mirror), which
     /// are plain HTTP.
-    fn build(user_agent: &str) -> Result<Self, String> {
+    fn build(user_agent: &str, https_only: bool) -> Result<Self, String> {
         // The OS checks each certificate chain itself: Windows fetches roots it hasn't stored yet
         // and trusts what antivirus HTTPS scanning installs. Reading the store ourselves missed
         // both ("invalid peer certificate: UnknownIssuer").
@@ -93,7 +93,7 @@ impl Http {
         let small = ureq::Agent::config_builder()
             .tls_config(tls())
             .proxy(proxy.clone())
-            .https_only(true)
+            .https_only(https_only)
             .timeout_global(Some(Duration::from_secs(20)))
             .http_status_as_error(false)
             .user_agent(user_agent)
@@ -102,7 +102,7 @@ impl Http {
         let feed = ureq::Agent::config_builder()
             .tls_config(tls())
             .proxy(proxy.clone())
-            .https_only(true)
+            .https_only(https_only)
             .timeout_connect(Some(Duration::from_secs(5)))
             .timeout_global(Some(Duration::from_secs(10)))
             .http_status_as_error(false)
@@ -112,7 +112,7 @@ impl Http {
         let no_redirect = ureq::Agent::config_builder()
             .tls_config(tls())
             .proxy(proxy.clone())
-            .https_only(true)
+            .https_only(https_only)
             .timeout_global(Some(Duration::from_secs(20)))
             .http_status_as_error(false)
             .max_redirects(0)
@@ -123,7 +123,7 @@ impl Http {
         let download = ureq::Agent::config_builder()
             .tls_config(tls())
             .proxy(proxy.clone())
-            .https_only(true)
+            .https_only(https_only)
             .timeout_connect(Some(Duration::from_secs(20)))
             .timeout_recv_response(Some(Duration::from_secs(60)))
             // ureq has no idle timeout: cap each attempt instead, and resume where it stopped.

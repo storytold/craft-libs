@@ -82,7 +82,7 @@ impl Rng {
 fn seeded_mutations_never_panic() {
     let mut rng = Rng(0x5eed);
     for s in samples() {
-        for _ in 0..1500 {
+        for _ in 0..1500 / craft_testkit::hostile::divisor() {
             let mut d = s.clone();
             for _ in 0..1 + rng.below(4) {
                 let at = rng.below(d.len());

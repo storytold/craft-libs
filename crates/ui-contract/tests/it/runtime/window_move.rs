@@ -4,12 +4,15 @@
 //! move band is reported once.
 
 use craft_behavior::{Cursor, CursorIcon};
-use craft_host::target::{ShellInfo, WindowChrome, WindowInfo, WindowKind};
+use craft_host::target::{Backend, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
 use craft_ui::contract::overlay::Resize;
 use craft_ui::contract::{
-    BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Mount, Props as _, Role, Show as _, ShowContainer as _, Sizing,
+    BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Mount, Overlay, Props as _, Role, Show as _,
+    ShowContainer as _, Sizing,
 };
 use craft_ui::runtime::InstallSpec;
+use craft_ui::runtime::focus::FocusPolicy;
+use craft_ui::runtime::windows::WindowSpec;
 use craft_ui::style::StyleCx;
 use craft_ui::testing::layout::allocate;
 use craft_ui::testing::pointer::{moved, press, release};
@@ -17,8 +20,9 @@ use craft_ui::testing::trial;
 use craft_ui::testing::windows::FakeSystem;
 use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
 use craft_ui_test_kit::windows::Windows;
+use craft_window::policy::{Desktop, DesktopKind, Runtime, TitleBarPref};
 use egui::viewport::ResizeDirection;
-use egui::{Event, Pos2, Rect, Response, Ui, Vec2, ViewportCommand, pos2, vec2};
+use egui::{Event, Pos2, Rect, Response, Ui, Vec2, ViewportCommand, ViewportInfo, pos2, vec2};
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
@@ -184,4 +188,33 @@ fn where_appkit_resizes_a_window_the_app_registers_no_grips_and_leaves_the_curso
     rig.frame(&windows, vec![moved(edge)], vec![]);
     let cursor = craft_ui::runtime::cursor::current(&windows.ctx);
     assert!(matches!(cursor, None | Some(Cursor::System(CursorIcon::Default))), "over AppKit's edge the cursor is left to the OS: {cursor:?}");
+}
+
+/// photocraft#16905: a full-window container (RAW Develop, Vanishing Point) in an OS window of its own, in a window the
+/// app frames, moves by its title row and resizes by its edges. Its fallback overlay covers the main window and neither
+/// moves nor resizes, and the window took that rule: no move band and no grips, so the window could not be moved.
+#[trial]
+fn a_full_window_container_in_its_own_window_moves_and_resizes_it() {
+    const WINDOW: Vec2 = Vec2::new(900.0, 640.0);
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    let integrated =
+        craft_window::policy::decide(Os::Linux, Runtime::Native, Backend::X11, &desktop, WindowKind::Main, TitleBarPref::Integrated, None);
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(FakeSystem::new())).frame(integrated));
+    let rig = Rig::new(Mount::viewport_with(Overlay::full_window(FocusPolicy::DIALOG), WindowSpec::dialog()));
+    let rect = Rect::from_min_size(Pos2::new(100.0, 100.0), WINDOW);
+    windows.child_info(ViewportInfo {
+        inner_rect: Some(rect),
+        outer_rect: Some(rect),
+        native_pixels_per_point: Some(1.0),
+        ..ViewportInfo::default()
+    });
+    for _ in 0..4 {
+        rig.frame(&windows, vec![], vec![]);
+    }
+    let title = rig.header.get();
+    assert!(title.is_positive(), "the title row showed");
+    let sent = drag(pos2(title.center().x + 30.0, title.center().y), vec2(40.0, 20.0), |events| rig.frame(&windows, vec![], events));
+    assert!(sent.contains(&ViewportCommand::StartDrag), "a drag of the title row moves the window: {sent:?}");
+    let sent = drag(pos2(WINDOW.x - 1.0, WINDOW.y / 2.0), vec2(-20.0, 0.0), |events| rig.frame(&windows, vec![], events));
+    assert_eq!(resizes(&sent), [ResizeDirection::East], "a drag of the right edge resizes the window: {sent:?}");
 }

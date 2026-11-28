@@ -1,12 +1,15 @@
 //! Stories of the paint chip and the paint list.
 
-use super::{GradientPreview, ImagePreview, Paint, PaintChip, PaintLink, PaintLinkKind, PaintList, PaintListOptions, PaintRow};
+use super::{GradientPreview, ImagePreview, Paint, PaintChip, PaintChipSize, PaintLink, PaintLinkKind, PaintList, PaintListOptions, PaintRow};
 use craft_behavior::Mixed;
 use craft_theme::Srgba;
+use craft_ui::buttons::PopupMark;
 use craft_ui::contract::Role;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Validity};
-use craft_ui::layout_components::Stack;
+use craft_ui::display::{Shade, Text};
+use craft_ui::layout_components::{Row, Stack};
 use craft_ui::patterns::presets::PresetState;
+use craft_ui::primitives::FacePaint;
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -56,6 +59,94 @@ fn paint_chip(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         }
     });
     first.unwrap_or_default()
+}
+
+/// Host-picker mode: a click opens nothing and reports the modifiers held.
+#[story(PaintChip<'static>, covers = [], drive = Drive::Never)]
+fn paint_chip_host_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (held, clicks) = data.value("state", (Paint::Solid(BLUE), 0u32));
+    let shown = PaintChip::new("Fill", Bind::bound(held), BLUE).popover(false).show(ui);
+    if shown.clicked.is_some() {
+        *clicks += 1;
+    }
+    Text::new(format!("Clicks: {clicks}")).shade(Shade::Muted).show(ui);
+    shown.into()
+}
+
+/// The chip as a ring round an open middle, for a solid and a gradient paint.
+#[story(PaintChip<'static>, covers = [], drive = Drive::Never)]
+fn paint_chip_ring(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let gradient = GradientPreview::new(vec![(0.0, BLUE), (1.0, Srgba::rgb(1.0, 1.0, 1.0))]);
+    let paints = data.value("paints", [Paint::Solid(BLUE), Paint::Gradient(gradient)]);
+    let mut first = None;
+    Stack::new().show(ui, |ui, _| {
+        for (index, (label, paint)) in ["Stroke", "Gradient stroke"].into_iter().zip(paints.iter_mut()).enumerate() {
+            let shown = PaintChip::new(label, Bind::bound(paint), BLUE).ring(true).show(ui);
+            if index == 0 {
+                first = Some(StoryOutput::from(shown));
+            }
+        }
+    });
+    first.unwrap_or_default()
+}
+
+/// Fill and Stroke chips with the menu mark: the dropdown arrow after the well, inside the chip.
+#[story(PaintChip<'static>, covers = [], drive = Drive::Never)]
+fn paint_chip_menu_mark(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let paints = data.value("paints", [Paint::Solid(BLUE), Paint::Solid(Srgba::rgb(0.1, 0.1, 0.1))]);
+    let mut first = None;
+    Stack::new().show(ui, |ui, _| {
+        for (index, (label, paint)) in ["Fill", "Stroke"].into_iter().zip(paints.iter_mut()).enumerate() {
+            let shown = PaintChip::new(label, Bind::bound(paint), BLUE).ring(index == 1).popup_mark(PopupMark::Menu).show(ui);
+            if index == 0 {
+                first = Some(StoryOutput::from(shown));
+            }
+        }
+    });
+    first.unwrap_or_default()
+}
+
+/// Compact Fill and Stroke chips in a row, as among a task bar's buttons: a small well in a control-high slot.
+#[story(PaintChip<'static>, covers = [], drive = Drive::Never)]
+fn paint_chip_compact(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let paints = data.value("paints", [Paint::Solid(BLUE), Paint::Solid(Srgba::rgb(0.1, 0.1, 0.1))]);
+    let mut first = None;
+    Row::new().show(ui, |ui, _| {
+        for (index, (label, paint)) in ["Fill", "Stroke"].into_iter().zip(paints.iter_mut()).enumerate() {
+            let shown = PaintChip::new(label, Bind::bound(paint), BLUE).ring(index == 1).chip_size(PaintChipSize::Compact).popover(false).show(ui);
+            if index == 0 {
+                first = Some(StoryOutput::from(shown));
+            }
+        }
+    });
+    first.unwrap_or_default()
+}
+
+/// A tool rail's Color, Gradient and None as swatch chips, three in a row; a click opens nothing.
+#[story(PaintChip<'static>, covers = [], drive = Drive::Never)]
+fn paint_chip_swatches(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let gradient = GradientPreview::new(vec![(0.0, Srgba::rgb(1.0, 1.0, 1.0)), (1.0, Srgba::rgb(0.0, 0.0, 0.0))]);
+    let paints = data.value("paints", [Paint::Solid(BLUE), Paint::Gradient(gradient), Paint::None]);
+    let mut first = None;
+    Row::new().show(ui, |ui, _| {
+        for (index, (label, paint)) in ["Color", "Gradient", "None"].into_iter().zip(paints.iter_mut()).enumerate() {
+            let shown = PaintChip::new(label, Bind::bound(paint), BLUE).chip_size(PaintChipSize::Swatch).show(ui);
+            if index == 0 {
+                first = Some(StoryOutput::from(shown));
+            }
+        }
+    });
+    first.unwrap_or_default()
+}
+
+/// A gradient whose face is the host's painter: one coloured rect over the checker.
+#[story(PaintChip<'static>, covers = [], drive = Drive::Never)]
+fn paint_chip_gradient_face(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let face = FacePaint::new(1, |painter, rect| {
+        painter.painter.rect_filled(rect.shrink2(egui::vec2(rect.width() / 4.0, 0.0)), 0.0, egui::Color32::from_rgb(230, 120, 30));
+    });
+    let preview = GradientPreview::new(vec![(0.0, BLUE), (1.0, Srgba::rgb(1.0, 1.0, 1.0))]).face(face);
+    chip(ui, data, Paint::Gradient(preview))
 }
 
 #[story(PaintChip<'static>, covers = [Mixed], drive = Drive::Never)]

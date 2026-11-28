@@ -3,15 +3,15 @@
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
-use crate::contract::overlay::OverlayFit;
+use crate::contract::overlay::{OverlayFit, PlacementChange};
 use crate::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Mount, NoValue, Outcome, Overlay, Pad,
     Props as _, Role, SaveKey, Show as _, Sizing, WordSetCx as _,
 };
 use crate::runtime::env::Label;
 use crate::runtime::memory::{Remember as _, sub};
-use crate::runtime::overlay::CloseReason;
-use crate::runtime::windows::{WindowAction, WindowHost, WindowSpec};
+use crate::runtime::overlay::{self, CloseReason};
+use crate::runtime::windows::{WindowAction, WindowHost, WindowLevel, WindowSpec};
 use crate::sections::{HeaderAction, HeaderStrength, TitleRow};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::placement::{capped, cascade, monitor_of};
@@ -49,6 +49,10 @@ pub struct DocumentWindowOutput {
     /// Whether the window took the size a zoom edit asked for in this pass (`Fits`: the host centres the document) or
     /// the work area capped it (`Capped`: the zoomed spot stays); `None` when nothing was asked or sent.
     pub wrapped: Option<Wrapped>,
+    /// Where the user's move or resize of the fallback layer took the window in this pass, in the space
+    /// [`first_placed`](DocumentWindow::first_placed) takes: on a cancel, where it was before the gesture. `None` when
+    /// nothing moved it.
+    pub placed: Option<Rect>,
 }
 
 /// How a window answered the size a zoom edit asked for ([`DocumentWindow::wrap_in`]).
@@ -102,6 +106,7 @@ pub struct DocumentWindow<'a> {
     #[prop(flag)]
     raise: bool,
     closed: Option<CloseReason>,
+    placed: Option<Rect>,
 }
 
 impl<'a> DocumentWindow<'a> {
@@ -140,14 +145,15 @@ impl<'a> DocumentWindow<'a> {
 
     /// A window titled `title`, resizable, with the installed decision's frame.
     pub fn new(title: impl Into<Label>) -> Self {
-        let fallback = Overlay::floating().resizable(true).fit(OverlayFit::Resizable).body_scroll(false);
+        let fallback = Overlay::floating().movable(true).resizable(true).fit(OverlayFit::Resizable).body_scroll(false);
         let props = ContainerProps::new()
             .surface(SurfaceKind::Background)
             .pad(Pad::None)
             .sizing(Sizing::Fill)
             .header(HeaderRegion::new().band(DragBand::Move))
             .mount(Mount::viewport_with(fallback, WindowSpec::document()));
-        DocumentWindow { common: Common::new(), props, open: Bind::given(true), activate: None, raise: false, closed: None }.label(title)
+        DocumentWindow { common: Common::new(), props, open: Bind::given(true), activate: None, raise: false, closed: None, placed: None }
+            .label(title)
     }
 
     /// Changes the layer the window falls back to, for the settings without a setter of their own: the smallest and
@@ -161,10 +167,29 @@ impl<'a> DocumentWindow<'a> {
         self
     }
 
-    /// Where the window opens, as its outer rect in desktop points. A saved placement comes first.
+    /// Where the window is, as its outer rect in desktop points. A saved placement comes first. The window is kept
+    /// at `rect` while the app shows it, so an app whose user moves the window keeps `rect` where the window went (its
+    /// [`WindowHost::facts`], or [`DocumentWindowOutput::placed`] on the fallback layer); else the window goes back at
+    /// the next pass.
     #[must_use]
     pub fn first_placed(self, rect: Rect) -> Self {
         self.overlay(|overlay| overlay.placed(rect))
+    }
+
+    /// Stands the window at `level` among the windows, in place of an ordinary window's. With
+    /// [`WindowLevel::Palette`] a document window stays above the app's main window while the app is active, as a
+    /// floating document does in the references, drops below a blocking dialog in another window, and hides while the
+    /// main window is minimized.
+    #[must_use]
+    pub fn level(mut self, level: WindowLevel) -> Self {
+        self.props = match std::mem::take(&mut self.props.mount) {
+            Mount::Viewport { fallback, spec } => {
+                let spec = spec.unwrap_or_else(WindowSpec::document).level(level);
+                self.props.mount(Mount::Viewport { fallback, spec: Some(spec) })
+            }
+            other => self.props.mount(other),
+        };
+        self
     }
 
     /// Whether the user can resize the window.
@@ -240,10 +265,13 @@ impl Component for DocumentWindow<'_> {
     fn finish(mut self, mut cx: Cx<'_, Self>) -> DocumentWindowOutput {
         let host = WindowHost::of(&cx.ctx);
         let viewport = host.viewport_of(cx.id);
-        if self.raise
-            && let Some(viewport) = viewport
-        {
-            host.act(viewport, WindowAction::Focus);
+        if self.raise {
+            match viewport {
+                Some(viewport) => {
+                    host.act(viewport, WindowAction::Focus);
+                }
+                None => overlay::raise(&cx.ctx, cx.id),
+            }
         }
         let focused = viewport.and_then(|viewport| host.facts(viewport)).is_some_and(|facts| facts.focused);
         let had_focus = std::mem::replace(&mut cx.keep::<HadFocus>().0, focused);
@@ -261,6 +289,7 @@ impl Component for DocumentWindow<'_> {
             cascade: cx.style.cascade,
             focus_gained,
             wrapped,
+            placed: self.placed,
         }
     }
 }
@@ -283,5 +312,9 @@ impl Container for DocumentWindow<'_> {
 
     fn closed(&mut self, why: CloseReason) {
         self.closed.get_or_insert(why);
+    }
+
+    fn placement_changed(&mut self, change: &PlacementChange) {
+        self.placed = Some(change.rect);
     }
 }

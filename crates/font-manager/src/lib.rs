@@ -33,7 +33,7 @@ pub use craft_font_catalog;
 pub use craft_font_catalog::{Catalog, FaceInfo, FontEnv, Source};
 #[cfg(feature = "ui")]
 pub use panel::{
-    FontSources, FontSourcesOutput, FontsBrowseWords, FontsCommand, FontsPanel, FontsPanelOutput, FontsPanelSettings, FontsPanelView,
+    CATALOGS, FontSources, FontSourcesOutput, FontsBrowseWords, FontsCommand, FontsPanel, FontsPanelOutput, FontsPanelSettings, FontsPanelView,
     FontsPanelWords, Options, Preset, Tab, install_interface_fonts,
 };
 

@@ -11,7 +11,7 @@ Each folder holds only the files `icons.toml` lists, unchanged from the pinned s
 
 Carbon's licence file is the repository's root `LICENSE` (the icons package has none of its own).
 
-Every set folder's files come from the npm package of the version in the table (`@phosphor-icons/core` 2.0.8, `lucide-static` 1.63.0, `@carbon/icons` 11.91.0, `@tabler/icons` 3.50.0), the same releases as the tags above. Phosphor files are `regular` weight, except `star-filled.svg` and `circle-filled.svg`, which are Phosphor's `fill` weight (`star-fill.svg`, `circle-fill.svg`). `panel-left.svg` is Phosphor's `sidebar-simple` unchanged, and `panel-right.svg` is the same glyph mirrored.
+Every set folder's files come from the npm package of the version in the table (`@phosphor-icons/core` 2.0.8, `lucide-static` 1.63.0, `@carbon/icons` 11.91.0, `@tabler/icons` 3.50.0), the same releases as the tags above. Phosphor files are `regular` weight, except `star-filled.svg`, `circle-filled.svg` and `warning-filled.svg`, which are Phosphor's `fill` weight (`star-fill.svg`, `circle-fill.svg`, `warning-fill.svg`). `panel-left.svg` is Phosphor's `sidebar-simple` unchanged, and `panel-right.svg` is the same glyph mirrored.
 
 `phosphor/` also holds drawings made for the suite, for glyphs the pinned Phosphor release lacks. They follow Phosphor's regular style (256 view box, 16-unit round-capped strokes, some converted to filled outlines), take their shapes from PhotoCraft's glyphs, and carry the suite's own licence:
 
@@ -25,3 +25,4 @@ Every set folder's files come from the npm package of the version in the table (
 - `key-linear`, `key-linear-filled`, `key-hold`, `key-bezier`, `key-auto-bezier`, `key-continuous-bezier`, `key-ease-in`, `key-ease-out`, `keyframe-easy-ease` (the timeline's single keyframe marks and the graph editor's Easy Ease button, after FilmCraft's diamond, square and circle and After Effects' keys; solid shapes except the outline diamond and the rings)
 - `font-variable`, `scaling`, `slice-select`, `square-dashed-mouse-pointer`, `text-warp`, `triangle-right`, `type-mask`, `type-mask-vertical`
 - `crop-overlay-*` (the crop overlay menu's glyphs), `text-align-top`, `text-align-middle`, `text-align-bottom` (the vertical type options), `dash-align-exact`, `dash-align-corners` (the dash alignment options)
+- `eye-outline` (Phosphor's `eye` without the pupil: the Outline view), `layer-template` (a dashed layer: the Template view)

@@ -239,9 +239,9 @@ impl<'a> CommentBalloons<'a> {
             apply(event, state, &mut edits);
         }
         for thread in pressed {
-            if state.selected != Some(thread.id) {
-                state.reveal(thread);
-                edits.push(CommentEdit::Select(thread.id));
+            if state.selected.lead != Some(thread.id) {
+                state.reveal(thread.id);
+                edits.push(CommentEdit::Select(vec![thread.id]));
             }
         }
         CommentBalloonsOutput { response, edits, cards }
@@ -264,12 +264,13 @@ fn card<'r, 't: 'r>(
         BalloonItem::Thread { thread, .. } => {
             let name =
                 thread.messages.first().map_or_else(String::new, |first| words.card_name.fill(&[("author", &first.author), ("text", &first.text)]));
-            let selected = state.selected == Some(thread.id);
+            let selected = state.selected.lead == Some(thread.id);
             let editing = state.editing.as_ref().filter(|(id, ..)| *id == thread.id).map(|(_, index, text)| (*index, text.as_str()));
             let row = CommentRow::card(thread, name)
                 .actions(CardActions::Buttons)
                 .body_rows(BODY_ROWS)
                 .state(selected, !read_only && !thread.locked, now)
+                .lead(selected)
                 .drafts(editing, if selected { state.reply.as_str() } else { "" });
             (row, Some(thread))
         }

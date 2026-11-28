@@ -527,7 +527,7 @@ impl<'p, 'a> Cells<'p, 'a> {
 
 /// The side label of a cell shown by a short glyph (W, H) instead of its caption, which scrubs it.
 pub(super) fn glyph_side(glyph: &Label) -> SideLabel {
-    SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph.clone()))).scrub(true)
+    SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::caption(glyph.clone()))).scrub(true)
 }
 
 /// The change a Sides value makes: a whole number of sides in range.

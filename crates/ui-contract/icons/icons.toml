@@ -35,11 +35,11 @@ stroke_drawings = [
     "crop-overlay-thirds", "crop-overlay-triangle", "dash-align-corners", "dash-align-exact",
     "direct-select", "distribute-bottom", "distribute-hcenter", "distribute-horizontal", "distribute-left",
     "distribute-right", "distribute-top", "distribute-vcenter", "distribute-vertical", "eraser-background",
-    "eraser-magic", "extract-clip", "font-similar", "fx", "gradient-angle", "gradient-diamond", "gradient-linear",
+    "eraser-magic", "extract-clip", "eye-outline", "font-similar", "fx", "gradient-angle", "gradient-diamond", "gradient-linear",
     "gradient-radial", "gradient-reflected", "gradient-swatch", "insert-clip", "key-auto-bezier", "key-bezier", "key-continuous-bezier",
     "key-ease-in", "key-ease-out", "key-hold", "key-linear", "key-linear-filled", "keyframe-auto-bezier",
     "keyframe-bezier", "keyframe-ease-in", "keyframe-ease-out", "keyframe-easy-ease", "keyframe-hold",
-    "keyframe-linear", "lasso", "lasso-magnetic", "lasso-select", "layer-mask", "lift-clip", "lollipop", "mark-in",
+    "keyframe-linear", "lasso", "lasso-magnetic", "lasso-select", "layer-mask", "layer-template", "lift-clip", "lollipop", "mark-in",
     "mark-out", "marquee-column", "marquee-row", "overwrite-clip", "painting-symmetry", "pen-add-anchor",
     "pen-curvature", "pen-delete-anchor", "pen-freeform", "protractor", "quick-selection", "route-curved", "route-elbow",
     "route-straight", "stroke-align-center", "stroke-align-inside", "stroke-align-outside", "stroke-cap-butt",
@@ -453,6 +453,11 @@ lucide = "triangle-alert"
 phosphor = "warning"
 carbon = "warning--alt"
 tabler = "alert-triangle"
+
+[[icon]]
+name = "warning_filled"
+directional = false
+phosphor = "warning-filled"
 
 [[icon]]
 name = "web_colors"
@@ -1405,6 +1410,14 @@ carbon = "list--bulleted"
 tabler = "list"
 
 [[icon]]
+name = "list_numbered"
+directional = false
+lucide = "list-ordered"
+phosphor = "list-numbers"
+carbon = "list--numbered"
+tabler = "list-numbers"
+
+[[icon]]
 name = "gradient_linear"
 directional = false
 phosphor = "gradient-linear"  # drawn in Phosphor's style: no match in any set
@@ -1707,12 +1720,70 @@ carbon = "arrow--left"
 tabler = "arrow-left"
 
 [[icon]]
+name = "arrow_up"
+directional = false
+lucide = "arrow-up"
+phosphor = "arrow-up"
+carbon = "arrow--up"
+tabler = "arrow-up"
+
+[[icon]]
+name = "arrow_down"
+directional = false
+lucide = "arrow-down"
+phosphor = "arrow-down"
+carbon = "arrow--down"
+tabler = "arrow-down"
+
+# The suite's drawings (ATTRIBUTION.md): the other sets omit them and show the base set's file.
+[[icon]]
+name = "eye_outline"
+directional = false
+phosphor = "eye-outline"
+
+[[icon]]
+name = "layer_template"
+directional = false
+phosphor = "layer-template"
+
+[[icon]]
 name = "track_mute"
 directional = false
 lucide = "volume-off"
 phosphor = "speaker-simple-slash"
 carbon = "volume--mute"
 tabler = "volume-off"
+
+[[icon]]
+name = "volume"
+directional = false
+lucide = "volume-2"
+phosphor = "speaker-simple-high"
+carbon = "volume--up"
+tabler = "volume"
+
+[[icon]]
+name = "mic"
+directional = false
+lucide = "mic"
+phosphor = "microphone"
+carbon = "microphone"
+tabler = "microphone"
+
+[[icon]]
+name = "mic_off"
+directional = false
+lucide = "mic-off"
+phosphor = "microphone-slash"
+carbon = "microphone--off"
+tabler = "microphone-off"
+
+[[icon]]
+name = "radio"
+directional = false
+lucide = "radio"
+phosphor = "broadcast"
+tabler = "broadcast"  # near: arcs above the dot only
 
 [[icon]]
 name = "solo"

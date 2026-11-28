@@ -53,6 +53,7 @@ pub struct ItemCx<'a, 'r, K> {
     pub(crate) id: Id,
     pub(crate) memory: &'a mut MemoryStage,
     pub(crate) tip: Option<ItemTip<'r>>,
+    pub(crate) detail: Option<ItemTip<'r>>,
     pub(crate) openers: Vec<ItemOpener>,
     pub(crate) item: Id,
     pub(crate) cells: Vec<(craft_behavior::ColumnKey, Rect)>,
@@ -83,6 +84,19 @@ impl<'r, K> ItemCx<'_, 'r, K> {
     /// Rich tooltip content for the item; it may borrow app data.
     pub fn tip(&mut self, tip: impl FnOnce(&mut Ui) + 'r) {
         self.tip = Some(Box::new(tip));
+    }
+
+    /// Shows `body` under the item, across the content width, in a child `Ui` with id `sub(item_id, "detail")`. It adds
+    /// its height to the item's slot, which keeps its last shown height out of view.
+    pub fn detail(&mut self, body: impl FnOnce(&mut Ui) + 'r) {
+        self.detail = Some(Box::new(body));
+    }
+
+    /// The detail body the item gave, for a row that takes it: one of auto height (`auto`).
+    pub(crate) fn take_detail(&mut self, auto: bool) -> Option<ItemTip<'r>> {
+        let detail = self.detail.take();
+        debug_assert!(detail.is_none() || auto, "an item's detail needs an auto-height row; a grid and a fixed-height row ignore it");
+        detail.filter(|_| auto)
     }
 
     /// The opener for the item's part `part`: after the collection is shown, `CollectionResponse::opener` gives the

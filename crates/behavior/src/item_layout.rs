@@ -30,6 +30,12 @@ pub trait ItemLayout {
     /// The item under `point`.
     fn hit(&self, point: Pos2, offset: ScrollPos) -> Option<usize>;
 
+    /// The item whose drop area contains `point`. Layouts with visible gaps can include those in a drop area while
+    /// leaving them out of ordinary pointer hits.
+    fn drop_hit(&self, point: Pos2, offset: ScrollPos) -> Option<usize> {
+        self.hit(point, offset)
+    }
+
     /// How arrow keys move through the items.
     fn nav(&self) -> NavShape;
 
@@ -105,7 +111,8 @@ pub trait ItemLayout {
 
     /// Whether the items are as wide as they measure themselves. A layout that asks for widths places the items
     /// from their measured ideal and minimum widths (`set_width`), so every item must be built and measured: its
-    /// `visible` lists all items, and the collection does not virtualise it.
+    /// `visible` lists all items, and the collection does not virtualise it. Its items sit side by side, so where the
+    /// collection's width comes from its rows (a room that does not bound it) it is their ideal widths' sum.
     fn auto_widths(&self) -> bool {
         false
     }
@@ -116,6 +123,10 @@ pub trait ItemLayout {
 
     /// The viewport and scroll offset the grid view describes. Layouts without a grid ignore it.
     fn set_view(&mut self, _viewport: Vec2, _offset: ScrollPos) {}
+
+    /// Item `at` is as wide as it measured, `width` from the start edge, in a layout that gives every item one width;
+    /// `None` gives it that width again. Its rect and its hit test take the width. Layouts of other widths ignore it.
+    fn set_fit(&mut self, _at: usize, _width: Option<f32>) {}
 }
 
 /// Lines (rows or columns) with a default size, the lines whose size differs and their prefix sums, so the start
@@ -342,12 +353,14 @@ pub struct SpanLayout {
     /// Whether the rows form a tree: arrows expand, collapse and step to the parent.
     pub tree: bool,
     rows: Option<Sized>,
+    /// The rows as wide as they measured (`set_fit`), by position.
+    fits: BTreeMap<usize, f32>,
 }
 
 impl SpanLayout {
     /// One row of `row_h` per entry of `source`, `width` wide, with no columns.
     pub fn new<K>(source: &dyn DisplayOrder<K>, width: f32, row_h: f32) -> Self {
-        Self { row_h, count: source.len(), width, columns: Vec::new(), tree: false, rows: None }
+        Self { row_h, count: source.len(), width, columns: Vec::new(), tree: false, rows: None, fits: BTreeMap::new() }
     }
 
     /// Rows as tall as `source` says: `Height` and `Rect` are the app's, `Aspect` follows the width, and `Auto`
@@ -364,7 +377,12 @@ impl SpanLayout {
             row_h,
         );
         let auto = hints.iter().map(|hint| matches!(hint, SizeHint::Auto)).collect();
-        Self { row_h, count: hints.len(), width, columns: Vec::new(), tree: false, rows: Some(Sized { lines, auto }) }
+        Self { row_h, count: hints.len(), width, columns: Vec::new(), tree: false, rows: Some(Sized { lines, auto }), fits: BTreeMap::new() }
+    }
+
+    /// The width of row `at`: the rows', or less where it is as wide as it measured.
+    fn width_of(&self, at: usize) -> f32 {
+        self.fits.get(&at).map_or(self.width, |fit| fit.min(self.width))
     }
 
     fn top(&self, at: usize) -> f64 {
@@ -416,16 +434,20 @@ impl ItemLayout for SpanLayout {
 
     fn rect(&self, at: usize, offset: ScrollPos) -> Rect {
         let top = (self.top(at) - offset.y) as f32;
-        Rect::from_min_size(Pos2::new(-(offset.x as f32), top), Vec2::new(self.width, self.height(at)))
+        Rect::from_min_size(Pos2::new(-(offset.x as f32), top), Vec2::new(self.width_of(at), self.height(at)))
     }
 
     fn hit(&self, point: Pos2, offset: ScrollPos) -> Option<usize> {
         let y = f64::from(point.y) + offset.y;
-        if let Some(rows) = &self.rows {
-            return (0.0..rows.lines.total()).contains(&y).then(|| rows.lines.at(y) as usize).filter(|&at| at < self.count);
-        }
-        let at = (y / f64::from(self.row_h)).floor();
-        (at >= 0.0 && (at as usize) < self.count).then_some(at as usize)
+        let at = match &self.rows {
+            Some(rows) => (0.0..rows.lines.total()).contains(&y).then(|| rows.lines.at(y) as usize).filter(|&at| at < self.count),
+            None => {
+                let at = (y / f64::from(self.row_h)).floor();
+                (at >= 0.0 && (at as usize) < self.count).then_some(at as usize)
+            }
+        };
+        // A row as wide as it measured takes no point past its end.
+        at.filter(|&at| !self.fits.contains_key(&at) || f64::from(point.x) + offset.x < f64::from(self.width_of(at)))
     }
 
     fn column_count(&self) -> usize {
@@ -458,6 +480,13 @@ impl ItemLayout for SpanLayout {
         {
             rows.lines.set(line_of(at), height);
         }
+    }
+
+    fn set_fit(&mut self, at: usize, width: Option<f32>) {
+        match width {
+            Some(width) => self.fits.insert(at, width),
+            None => self.fits.remove(&at),
+        };
     }
 
     fn nav(&self) -> NavShape {
@@ -879,5 +908,20 @@ mod tests {
         assert_eq!(shown, vec![6, 8], "the hidden row takes no place");
         assert!(!layout.shown(7) && layout.shown(6));
         assert_eq!(layout.hit(Pos2::new(1.0, 5.0), ScrollPos { x: 0.0, y: 180.0 }), Some(8));
+    }
+
+    /// A row as wide as it measured is that wide from the start edge and takes no point past its end; the rows around
+    /// it keep the layout's width, and `None` gives it that width again.
+    #[test]
+    fn a_fitted_span_row_is_as_wide_as_it_measured_and_hit_only_inside() {
+        let mut layout = SpanLayout::new(&crate::item_source::keyed(&[0_u8, 1, 2], |key| *key), 300.0, 20.0);
+        layout.set_fit(1, Some(60.0));
+        let (row, other) = (layout.rect(1, ScrollPos::default()), layout.rect(2, ScrollPos::default()));
+        assert!(row.width() < other.width() && row.left() == other.left(), "the row is narrower from the start edge: {row:?} {other:?}");
+        assert_eq!(layout.hit(Pos2::new(row.center().x, row.center().y), ScrollPos::default()), Some(1), "inside the row hits it");
+        assert_eq!(layout.hit(Pos2::new(row.right() + 10.0, row.center().y), ScrollPos::default()), None, "past its end hits nothing");
+        assert_eq!(layout.hit(Pos2::new(row.right() + 10.0, other.center().y), ScrollPos::default()), Some(2), "the next row keeps its width");
+        layout.set_fit(1, None);
+        assert_eq!(layout.rect(1, ScrollPos::default()).width(), other.width(), "None gives the row the layout's width again");
     }
 }

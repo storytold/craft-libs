@@ -1,5 +1,5 @@
 //! The in-window bar is a memoized view: idle frames replay it, a title rename or Alt runs it once, and an open menu
-//! runs it while it is open.
+//! replays with it while nothing reaches the menu.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -67,18 +67,26 @@ fn alt_runs_the_menu_bar_once_each_way() {
     assert_eq!(counted(&fixture).0, 1, "Alt up runs the bar once");
 }
 
-/// A menu the bar opens is an overlay inside its run, which keeps the run from being replayed while it is open. The
-/// run in which the menu's fade ends is the last that shows it, so the replays after it match a real run (the audit).
+/// A menu the bar opens is an overlay of its run: with the focus on the menu's first row, an idle frame replays the bar
+/// and the open menu, and a key the menu takes runs the bar in its frame.
 #[trial]
-fn an_open_menu_runs_the_bar_and_closing_it_replays_it() {
+fn an_idle_open_menu_replays_and_a_key_in_it_runs_the_bar() {
     let bar = Rc::new(RefCell::new(model("File")));
     let mut fixture = fixture(&bar);
     audit_replays(fixture.ctx(), true);
     fixture.key(Key::F, Modifiers::ALT);
     fixture.settle();
     assert!(fixture.by_label("New").is_some(), "Alt+F opened File");
+    for _ in 0..3 {
+        fixture.frame(vec![]);
+        assert_eq!(counted(&fixture), (0, 1), "an idle frame replays the bar and its open menu");
+        assert!(fixture.by_label("New").is_some(), "the replayed menu keeps its rows' nodes");
+    }
+    fixture.key(Key::ArrowDown, Modifiers::NONE);
+    assert!(counted(&fixture).0 > 0, "a key in the open menu runs the bar in its frame");
+    fixture.settle();
     fixture.frame(vec![]);
-    assert!(counted(&fixture).0 > 0, "the bar runs while a menu is open");
+    assert_eq!(counted(&fixture), (0, 1), "then the bar replays again");
     // The first Escape closes the menu; the bar keeps the keyboard until the second one hands it back.
     fixture.key(Key::Escape, Modifiers::NONE);
     fixture.settle();
@@ -104,10 +112,12 @@ fn an_idle_bar_and_an_open_menu_build_no_labels() {
     fixture.key(Key::F, Modifiers::ALT);
     fixture.settle();
     assert!(fixture.by_label("New").is_some(), "Alt+F opened File");
+    fixture.key(Key::ArrowDown, Modifiers::NONE);
+    assert!(counted(&fixture).0 > 0, "a key in the open menu runs the bar");
+    assert_eq!(label_builds(&fixture), 0, "and builds no labels");
     for _ in 0..3 {
         fixture.frame(vec![]);
-        assert!(counted(&fixture).0 > 0, "the bar runs each pass while a menu is open");
-        assert_eq!(label_builds(&fixture), 0, "and builds no labels");
+        assert_eq!(label_builds(&fixture), 0, "an idle open menu builds no labels");
     }
 }
 
@@ -126,7 +136,7 @@ fn a_model_edit_builds_the_labels_once() {
 fn a_locale_change_builds_the_labels_once() {
     let bar = Rc::new(RefCell::new(model("File")));
     let mut fixture = fixture(&bar);
-    fixture.host(crate::mnemonic::turkish());
+    fixture.host(crate::mnemonic::host_in("tr"));
     fixture.frame(vec![]);
     assert_eq!(label_builds(&fixture), 1, "a language change builds the labels once");
     fixture.frame(vec![]);

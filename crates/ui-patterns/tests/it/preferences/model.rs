@@ -1,11 +1,16 @@
 //! The settings document without a window: rows, applied edits, rebase and row conditions.
 
+use craft_i18n::Folder;
+use craft_i18n::matcher::Matcher;
 use craft_theme::Rgba;
 use craft_ui::patterns::preferences::{
     CustomSettings, PageInfo, PrefValue, PreferencesDraft, PreferencesModel, RowKind, SettingRule, SettingsDocument, SettingsDraft, StandardPage,
+    list_pages, row_shown,
 };
-use craft_ui::testing::trial;
+use craft_ui::testing::{Fixture, trial};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::rc::Rc;
 use toml::Value;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -260,7 +265,7 @@ struct MemoryPrefs {
 struct TurnOff;
 
 impl CustomSettings<MemoryPrefs> for TurnOff {
-    fn nested(&mut self, _: &egui::Context, draft: &mut SettingsDraft) {
+    fn nested(&mut self, _: &mut egui::Ui, draft: &mut SettingsDraft) {
         draft.remove("memory.percent");
     }
 }
@@ -269,10 +274,34 @@ impl CustomSettings<MemoryPrefs> for TurnOff {
 #[trial]
 fn a_removed_draft_value_applies_as_no_value() {
     let saved = MemoryPrefs { memory: Memory { percent: Some(70) } };
-    let mut doc = SettingsDocument::new(saved).expect("serializes").custom(TurnOff);
-    doc.nested(&egui::Context::default());
+    let doc = Rc::new(RefCell::new(SettingsDocument::new(saved).expect("serializes").custom(TurnOff)));
+    let shown = Rc::clone(&doc);
+    // P3(pdf-dialogs-w8): L-176 `PreferencesModel::nested` takes the window's `Ui`.
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().nested(ui));
+    fixture.idle(1);
+    let mut doc = doc.borrow_mut();
     doc.apply().expect("the draft fits the struct");
     let edits = doc.take_applied_edits().expect("applied");
     assert_eq!(edits, vec![("memory.percent".to_owned(), None)]);
     assert_eq!(doc.saved().memory.percent, None);
+}
+
+/// A row whose app draws its own labels is found by its rule's label: the search lists its page and shows it.
+#[trial]
+fn the_search_finds_a_host_labelled_row_by_its_rules_label() {
+    let rules = vec![
+        SettingRule::new("export.format").choices(&[("png", "PNG"), ("webp", "WebP")]),
+        SettingRule::new("export.tablet").label("Tablet pressure").custom_rows(),
+    ];
+    let doc = SettingsDocument::new(ExportPrefs::default()).expect("serializes").rules(rules);
+    let pages = PreferencesModel::pages(&doc);
+    let matcher = Matcher::new(&Folder::new("en"), "tablet");
+    let listed = list_pages(&pages, &matcher);
+    let found: Vec<(&str, bool)> = listed
+        .iter()
+        .flat_map(|listed| pages[listed.index].groups.iter().flat_map(|group| group.rows.iter()).map(move |row| (row, listed)))
+        .filter(|(row, listed)| row_shown(&matcher, listed, row))
+        .map(|(row, _)| (row.key, matches!(row.kind, RowKind::CustomRows)))
+        .collect();
+    assert_eq!(found, [("export.tablet", true)], "the search shows the host-labelled row alone");
 }

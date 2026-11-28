@@ -1,4 +1,4 @@
-//! The panel menu's commands and the row context menus (Keyboard Shortcuts, Color; Save Set…).
+//! The panel menu's commands and the row context menus.
 
 use craft_keymap::Platform;
 use craft_ui::contract::{CommandSet, ContextMenuRequest, Props as _, Show as _, ShowContainer as _};
@@ -6,6 +6,7 @@ use craft_ui::display::Divider;
 use craft_ui::list::label_color_label;
 use craft_ui::menu::{Menu, MenuItem, PanelRow};
 use craft_ui::runtime::commands::{CommandRef, CommandState};
+use craft_ui::runtime::env::Label;
 use egui::{Response, Ui};
 
 use super::body::{Body, delete_event};
@@ -276,7 +277,7 @@ pub fn panel_rows(facts: ActionsMenuFacts, offered: &dyn Fn(ActionsPanelCommands
 /// The shortcut as the context menu has made it so far.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PendingShortcut {
-    /// 0 for none, else 1..=12.
+    /// 0 for none, else 1..=15.
     key: u8,
     shift: bool,
     command: bool,
@@ -291,7 +292,7 @@ impl PendingShortcut {
 /// The menu a context request opened, kept until the next request.
 #[derive(Clone, Debug)]
 pub(super) enum OpenMenu {
-    /// A set's menu: Save Set….
+    /// A set's menu.
     Set(String),
     /// An action's menu, with the shortcut as the menu has made it from the host's.
     Action { index: usize, shortcut: PendingShortcut },
@@ -318,34 +319,58 @@ impl OpenMenu {
 }
 
 /// Shows the menu the last request chose, hanging from `opener` (the list), and reports what its
-/// rows ran:
-/// - On an action: Keyboard Shortcuts (a caption), None and F1 to F12 as radio rows, then Shift and
-///   Command (Ctrl off macOS) check rows, enabled only with a key; the check rows keep the menu
-///   open so both can be ticked, and each tick is reported as it is made with the shortcut as it
-///   stands. A separator, then Color: a submenu of None, Red, Orange, Yellow, Green, Blue, Violet
-///   and Gray with the current one marked.
-/// - On a set: Save Set….
+/// rows ran. Rows that start or change something are off while an action plays or records, as the
+/// footer's are; Delete follows the footer's Delete.
+/// - On an action: Play and Record; Duplicate and Delete; Action Options… and Batch…. Then
+///   Keyboard Shortcuts (a caption), None and F1 to F15 as radio rows, then Shift and Command (Ctrl
+///   off macOS) check rows, enabled only with a key; the check rows keep the menu open so both can
+///   be ticked, and each tick is reported as it is made with the shortcut as it stands. Last Color:
+///   a submenu of None, Red, Orange, Yellow, Green, Blue, Violet and Gray with the current one
+///   marked.
+/// - On a set: New Action…, New Set…, Duplicate Set and Delete Set; Set Options…; Save Set….
 pub(super) fn show_menu(ui: &mut Ui, body: &Body<'_>, opener: &Response, session: &mut Session) -> Vec<ActionsEvent> {
-    let Body { list, words, list_words, .. } = *body;
+    let Body { list, host, words, list_words, .. } = *body;
+    let recording = host.is_some_and(|host| host.recording().is_some());
+    let playing = host.is_some_and(|host| host.playing());
+    let idle = !recording && !playing;
+    let hosted = host.is_some();
+    let deletable = |row: &ActionSelection| delete_event(row, recording).filter(|_| !playing);
     let mut events = Vec::new();
     match session.menu.as_mut() {
         None => {}
         Some(OpenMenu::Set(name)) => {
+            let set = ActionSelection::Set(name.clone());
             Menu::context(words.row_menu.clone(), opener).show(ui, |ui, _| {
-                if MenuItem::new(words.save_set.clone()).show(ui).ran {
-                    events.push(ActionsEvent::Save { set: Some(name.clone()) });
-                }
+                let events = &mut events;
+                event_row(ui, events, &words.menu_new_action, (hosted && idle).then_some(ActionsEvent::NewAction));
+                event_row(ui, events, &words.menu_new_set, idle.then_some(ActionsEvent::NewSet));
+                event_row(ui, events, &words.duplicate_set, idle.then(|| ActionsEvent::Duplicate(set.clone())));
+                event_row(ui, events, &words.delete_set, deletable(&set));
+                Divider::horizontal().show(ui);
+                event_row(ui, events, &words.set_options, Some(ActionsEvent::SetOptions(name.clone())));
+                Divider::horizontal().show(ui);
+                event_row(ui, events, &words.save_set, Some(ActionsEvent::save(Some(name.clone()))));
             });
         }
         Some(OpenMenu::Action { index, shortcut }) => {
             let (action, current) = (*index, list.action(*index).map(|held| held.color).unwrap_or_default());
+            let selection = ActionSelection::Action(action);
             Menu::context(words.row_menu.clone(), opener).show(ui, |ui, _| {
+                event_row(ui, &mut events, &words.menu_play, (hosted && idle).then(|| ActionsEvent::play(action, 0)));
+                event_row(ui, &mut events, &words.menu_record, (hosted && idle).then(|| ActionsEvent::begin_recording(Some(action))));
+                Divider::horizontal().show(ui);
+                event_row(ui, &mut events, &words.duplicate, idle.then(|| ActionsEvent::Duplicate(selection.clone())));
+                event_row(ui, &mut events, &words.delete, deletable(&selection));
+                Divider::horizontal().show(ui);
+                event_row(ui, &mut events, &words.action_options, Some(ActionsEvent::ActionOptions(action)));
+                event_row(ui, &mut events, &words.batch, Some(ActionsEvent::Batch(action)));
+                Divider::horizontal().show(ui);
                 MenuItem::new(words.keyboard_shortcuts.clone()).enabled(false).show(ui);
                 if MenuItem::new(words.none.clone()).radio_mark(shortcut.key == 0).show(ui).ran {
                     shortcut.key = 0;
                     events.push(ActionsEvent::AssignShortcut { action, choice: shortcut.choice() });
                 }
-                for key in 1..=12u8 {
+                for key in 1..=15u8 {
                     if MenuItem::new(format!("F{key}")).radio_mark(shortcut.key == key).show(ui).ran {
                         shortcut.key = key;
                         events.push(ActionsEvent::AssignShortcut { action, choice: shortcut.choice() });
@@ -374,4 +399,11 @@ pub(super) fn show_menu(ui: &mut Ui, body: &Body<'_>, opener: &Response, session
         }
     }
     events
+}
+
+/// A row of a row menu, enabled while it has an event, which it reports when it runs.
+fn event_row(ui: &mut Ui, events: &mut Vec<ActionsEvent>, label: &Label, event: Option<ActionsEvent>) {
+    if MenuItem::new(label.clone()).enabled(event.is_some()).show(ui).ran {
+        events.extend(event);
+    }
 }

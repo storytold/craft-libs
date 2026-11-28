@@ -18,8 +18,8 @@ pub enum DockEvent<P> {
     },
     /// Auto-Collapse Iconic Panels was chosen in a column menu. The host flips its preference and passes it back.
     ToggleAutoCollapse,
-    /// The area opened, switched or closed its flyout: an icon click, Escape, a press outside, or the focus
-    /// leaving it under Auto-Collapse. A host that binds the flyout takes it as the request when its binding is given.
+    /// The area opened, switched or closed its flyout: an icon click, Escape, or a press outside or the focus leaving
+    /// it under Auto-Collapse. A host that binds the flyout takes it as the request when its binding is given.
     FlyoutChanged {
         /// The panel now in the flyout; `None` when it closed.
         panel: Option<P>,
@@ -31,6 +31,22 @@ pub enum DockEvent<P> {
         panel: P,
         /// The command.
         command: DockCommands,
+    },
+    /// The tab of a panel's document was picked ([`PanelDocument`](super::PanelDocument)): the host shows the document
+    /// in the panel. The area also activates the panel, as a pick of its own tab does.
+    DocumentPicked {
+        /// The panel whose document it is.
+        panel: P,
+        /// The document's id.
+        document: u64,
+    },
+    /// The close button or a middle click on the tab of a panel's document asked to close it. The host closes it by
+    /// removing it from the panel's spec; the layout does not change.
+    DocumentClosed {
+        /// The panel whose document it is.
+        panel: P,
+        /// The document's id.
+        document: u64,
     },
     /// A floating frame holding `panel` was moved or resized to `rect`.
     FloatPlaced {

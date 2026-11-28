@@ -8,13 +8,15 @@ use crate::runtime::egui::areas::{self, Layer};
 use crate::runtime::egui::{input, pass};
 use crate::runtime::frame::{PerViewport, Stamped};
 use crate::runtime::inputs::{self, Input};
+use crate::runtime::sampler;
+use craft_behavior::press::{MULTI_TAP_SLOP, MULTI_TAP_TIME};
 use craft_behavior::{
-    Buttons, MultiTouch, PartRef, PointerButton, PointerEvent, PointerKind, PointerSample, PressCancel, PressStart, ResolveFor, Shape, Winner,
-    count_clicks, resolve,
+    Buttons, MultiTap, MultiTouch, PartRef, PointerButton, PointerEvent, PointerKind, PointerSample, PressCancel, PressStart, ResolveFor, Shape,
+    Winner, count_clicks, resolve,
 };
 use craft_keymap::Mods;
 use craft_theme::HitSizes;
-use egui::{Context, Id, IdMap, IdSet, Pos2, Rect, Vec2, ViewportId};
+use egui::{Context, Id, IdMap, IdSet, Pos2, Rect, TouchId, TouchPhase, Vec2, ViewportId};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -40,11 +42,22 @@ pub struct PointerFrame {
     pub buttons: Buttons,
     /// The primary press of the pass.
     pub press: Option<PressStart>,
+    /// Modifiers carried by `press`, including the app's latched modifiers. A pass has at most one press.
+    pub press_mods: Option<Mods>,
     /// The button released in the pass.
     pub release: Option<PointerButton>,
     /// The modifiers held, with the ones the app latches for the user (a Modifier Keys panel) added: the app holds
     /// them down for every press and drag. Key chords read the keyboard's own modifiers instead.
     pub mods: Mods,
+    /// The modifiers of the pass's last button release, with the latched ones added; the held `mods` in a pass with no
+    /// release and in a rerun pass. The one source of a pick's and a drop's modifiers.
+    pub pick_mods: Mods,
+    /// Where the pass's last button release went up; the latest `pos` in a pass with no release and in a rerun pass. The
+    /// one source of a drop's position: a pointer that moves on or leaves the window after the release in the same
+    /// frame does not move the drop.
+    pub pick_pos: Option<Pos2>,
+    /// The tap a per-viewport recognizer reports when the last finger lifts, in the frame's first pass only.
+    pub multi_tap: Option<craft_behavior::MultiTap>,
     /// The pass's time in seconds.
     pub time: f64,
     /// The device.
@@ -85,21 +98,100 @@ pub struct PassPointer {
     pub primary_down: bool,
     pub press_targets: PressTargets,
     pub focus_lost: bool,
-    /// Whether the real pointer moved or entered, or its modifiers changed, in the pass.
+    /// Whether the real pointer moved or entered, or a held modifier or key changed, in the pass.
     pub stirred: bool,
+    /// A finger landed in the pass while another was down: a press open now is a gesture's.
+    pub gesture: bool,
 }
 
 #[derive(Default)]
 pub(crate) struct Memory {
-    /// The latest primary press: where, when, its click count and the modifiers held with it.
+    /// The latest press of any button, until it moves past slop: where, when, its place in the click run and the
+    /// modifiers held with it.
     last_press: Option<(Pos2, f64, u32, Mods)>,
+    /// A button is down since `last_press`.
+    held: bool,
     press_targets: PressTargets,
     /// A cancel a service requested for the running pass.
     requested: Option<(u64, PressCancel)>,
     /// Whether any arena of the viewport holds an open press; sensing registers it, as the layer above.
-    press_probe: Option<fn(&Context) -> bool>,
+    press_probe: Option<fn(&Context, ViewportId) -> bool>,
+    /// The pass in which a container last held a press on its own surface (`hold_surface_press`); the end sweep
+    /// drops it after a pass with none.
+    surface_held: Option<u64>,
     /// The arena roots whose members the next pass resolves without (`withhold_members`), with the pass that asked.
     withheld: IdMap<u64>,
+    /// The touch under way, for the multi-finger tap.
+    taps: Taps,
+}
+
+/// What one pass's finger events made of the touch.
+struct Touched {
+    /// A finger landed while another was down.
+    landed: bool,
+    /// The tap whose last finger lifted in the pass.
+    tap: Option<MultiTap>,
+    /// The centre of the fingers' landing points while a finger is still down.
+    tracked: Option<Pos2>,
+}
+
+/// The recognizer of the multi-finger tap: the fingers of one touch, where each landed, the most down at once, when
+/// the first landed and whether the touch is spoiled (a finger moved past [`MULTI_TAP_SLOP`], stayed past [`MULTI_TAP_TIME`] or
+/// was cancelled).
+#[derive(Default)]
+struct Taps {
+    down: Vec<TouchId>,
+    landed: Vec<(TouchId, Pos2)>,
+    most: usize,
+    start: f64,
+    spoiled: bool,
+}
+
+impl Taps {
+    /// Follows the pass's finger events at time `now`.
+    fn feed(&mut self, fingers: &[input::Finger], now: f64) -> Touched {
+        let mut touched = Touched { landed: false, tap: None, tracked: None };
+        for finger in fingers {
+            match finger.phase {
+                TouchPhase::Start => {
+                    if self.down.is_empty() {
+                        *self = Taps { start: now, ..Taps::default() };
+                    }
+                    if !self.down.contains(&finger.id) {
+                        touched.landed |= !self.down.is_empty();
+                        self.down.push(finger.id);
+                        self.landed.push((finger.id, finger.pos));
+                    }
+                    self.most = self.most.max(self.down.len());
+                }
+                TouchPhase::Move => {
+                    let moved =
+                        self.landed.iter().rev().find(|(id, _)| *id == finger.id).is_some_and(|(_, at)| at.distance(finger.pos) > MULTI_TAP_SLOP);
+                    self.spoiled |= moved && self.down.contains(&finger.id);
+                }
+                TouchPhase::End | TouchPhase::Cancel => {
+                    let known = self.down.len();
+                    self.down.retain(|id| *id != finger.id);
+                    if self.down.len() == known {
+                        continue;
+                    }
+                    self.spoiled |= finger.phase == TouchPhase::Cancel || now - self.start > MULTI_TAP_TIME;
+                    if self.down.is_empty() && !self.spoiled && self.most >= 2 {
+                        let fingers = u8::try_from(self.most).unwrap_or(u8::MAX);
+                        touched.tap = Some(MultiTap::new(fingers, self.centre()));
+                    }
+                }
+            }
+        }
+        touched.tracked = (!self.down.is_empty()).then(|| self.centre());
+        touched
+    }
+
+    /// The centre of the landing points.
+    fn centre(&self) -> Pos2 {
+        let sum = self.landed.iter().fold(Vec2::ZERO, |sum, (_, at)| sum + at.to_vec2());
+        (sum / self.landed.len().max(1) as f32).to_pos2()
+    }
 }
 
 /// What one root registered on one layer: its shapes and its egui widgets.
@@ -137,23 +229,39 @@ pub(crate) struct Shapes {
     /// the last, each with its component: such a widget takes its press itself.
     this_texts: IdMap<Id>,
     last_texts: IdMap<Id>,
+    /// Every id components registered or made in the running pass: the roots, their egui widgets and the widgets made
+    /// for their text and editor parts (`made_by_component`).
+    this_made: IdSet,
     /// The layers' own egui widgets (an overlay `Area`'s, which senses a click where nothing on the layer does) in the
     /// running pass and the last: such a widget lies under every widget and shape on its layer and stands for none.
     this_grounds: IdSet,
     last_grounds: IdSet,
+    /// The screen rects the running pass's components follow the pointer in ([`follows_pointer`]): a move there runs a
+    /// pass whatever lies under it.
+    this_follows: Vec<Rect>,
     /// The paint order the running pass's next registration takes.
     next: u32,
     /// What lies under the pass's hover point, found over `last` at the begin hook with the pass's egui targets:
     /// every root's hover reads it, and a press at the same point and targets reuses it.
     hover: Option<(Pos2, PressTargets, Under)>,
+    /// The egui widgets under the pass's hover point in the last finished pass, with the click and drag targets there
+    /// (`Context::widgets_at`), found once at the begin hook for every view's `sensed`.
+    hover_widgets: Option<(Vec<Id>, Option<Id>, Option<Id>)>,
     /// A press was open when the pass began: only its target hovers.
     captured: bool,
+    /// The pass's tap went to a component.
+    tap_taken: bool,
+    /// Parts holding a press at the start of this pass, before enclosing arenas process its release.
+    pressed_parts: Vec<(Id, PartRef)>,
     /// What lies under another point a press asked for in the pass, with its targets: every root asks for the same
     /// press.
     winner: Option<(Pos2, PressTargets, Under)>,
     /// The resolutions the running pass made (`find_under`), for the count trials.
     #[cfg(feature = "testing")]
     resolutions: u32,
+    /// The `made_by_component` lookups the running pass made, for the count trials.
+    #[cfg(feature = "suite")]
+    made_lookups: u32,
 }
 
 /// The begin hook (H5): converts the pass's pointer input.
@@ -164,6 +272,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
     // Every pass reads its own input and the frame's latches, so a second pass of a frame builds the same
     // modifiers from its own (event-free) input and counts no press twice.
     let mods = with_latched(read.mods, latched);
+    let press_mods = read.press_mods.map(|mods| with_latched(mods, latched));
     // A drag that started in another window reaches this one through the desktop pointer (8.4), never at the place
     // this window saw the pointer last: the source window holds the pointer, and the window may have had no exit.
     if drag::runs_elsewhere(ctx, viewport) {
@@ -173,19 +282,41 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
     let hits = input::hit_targets(ctx);
     let other_pressed =
         read.events.iter().any(|event| matches!(event, PointerEvent::Pressed { button: PointerButton::Middle | PointerButton::Secondary, .. }));
-    let (events, targets) = PerViewport::<Memory>::with(ctx, viewport, |memory| {
+    let (events, targets, touched) = PerViewport::<Memory>::with(ctx, viewport, |memory| {
         let mut events = read.events.clone();
+        // Every button's press runs on the click run, as a click of any button did in the old apps: a middle-button pan
+        // click between two clicks makes the second a triple click. Only a primary press carries its count.
         for event in &mut events {
-            if let PointerEvent::Pressed { button: PointerButton::Primary, pos, time, clicks, .. } = event {
-                *clicks = count_clicks(memory.last_press, *pos, *time, mods, hit.slop);
-                memory.last_press = Some((*pos, *time, *clicks, mods));
+            match event {
+                PointerEvent::Pressed { button, pos, time, clicks, .. } => {
+                    let press_mods = press_mods.unwrap_or(mods);
+                    let counted = count_clicks(memory.last_press, *pos, *time, press_mods, hit.slop);
+                    memory.last_press = Some((*pos, *time, counted, press_mods));
+                    memory.held = true;
+                    if *button == PointerButton::Primary {
+                        *clicks = counted;
+                    }
+                }
+                // A press moved past slop is a drag, not a click: the next press starts a new run, as only clicks
+                // counted toward a double click in the old apps.
+                PointerEvent::Moved { at, .. } if memory.held && memory.last_press.is_some_and(|(from, ..)| from.distance(*at) > hit.slop) => {
+                    memory.last_press = None;
+                }
+                PointerEvent::Released { .. } => memory.held = false,
+                _ => {}
             }
         }
         if read.primary_pressed || other_pressed {
             memory.press_targets = PressTargets { click: hits.0, drag: hits.1 };
         }
-        (events, memory.press_targets)
+        (events, memory.press_targets, memory.taps.feed(&read.touches, read.time))
     });
+    // Where a modal holds the wheel off the canvas, a tap is not reported and a touch under way is dropped, by the
+    // wheel's own rule.
+    let tap = touched.tap.filter(|tap| sampler::wheel_allowed(ctx, tap.at));
+    if touched.tracked.is_some_and(|at| !sampler::wheel_allowed(ctx, at)) {
+        PerViewport::<Memory>::with(ctx, viewport, |memory| memory.taps = Taps::default());
+    }
     let press = events.iter().rev().find_map(|event| match event {
         PointerEvent::Pressed { button, pos, time, clicks, .. } => Some(PressStart::new(*pos, *button, *time, *clicks)),
         _ => None,
@@ -197,8 +328,12 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         delta: read.delta,
         buttons: read.buttons,
         press,
+        press_mods,
         release: read.release,
         mods,
+        pick_mods: read.released_at.map_or(mods, |(_, released)| with_latched(released, latched)),
+        pick_pos: read.released_at.map_or(read.pos, |(at, _)| Some(at)),
+        multi_tap: tap,
         time: read.time,
         kind: read.kind,
         sample: read.sample,
@@ -217,6 +352,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         press_targets: targets,
         focus_lost: read.focus_lost,
         stirred: read.stirred,
+        gesture: touched.landed,
     };
     let hover_at = pass_pointer.hover;
     // The pointer and the modifiers are tracked inputs: their generations move when the held facts change or the pass
@@ -231,11 +367,19 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
             || frame.zoom != 1.0
             || frame.rotation != 0.0
             || frame.multi_touch.is_some()
+            || frame.multi_tap.is_some()
+            || pass_pointer.gesture
             || pass_pointer.stirred
             || pass_pointer.focus_lost
             || !pass_pointer.events.is_empty();
         if events {
             inputs::bump(ctx, Input::Pointer);
+        }
+        // A press or release, or an outside press the layer stack's input hook took before egui saw it. The buttons
+        // held are part of the press state ([`press_state`]) too.
+        inputs::observe(ctx, Input::Press, frame.buttons);
+        if frame.press.is_some() || frame.release.is_some() || crate::runtime::overlay::absorbed_press_raw(ctx).is_some() {
+            inputs::bump(ctx, Input::Press);
         }
     }
     PerViewport::<Stamped<Arc<PassPointer>>>::with_pass(ctx, viewport, pass_nr, |_, _| {}, |record| *record = Arc::new(pass_pointer));
@@ -243,24 +387,40 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         shapes.last = std::mem::take(&mut shapes.this);
         shapes.last_bodies = std::mem::take(&mut shapes.this_bodies);
         shapes.last_texts = std::mem::take(&mut shapes.this_texts);
+        shapes.this_made.clear();
         shapes.last_grounds = std::mem::take(&mut shapes.this_grounds);
+        shapes.this_follows.clear();
         shapes.next = 0;
         shapes.hover = None;
         shapes.winner = None;
+        shapes.tap_taken = false;
         #[cfg(feature = "testing")]
         {
             shapes.resolutions = 0;
+        }
+        #[cfg(feature = "suite")]
+        {
+            shapes.made_lookups = 0;
         }
     });
     // The pointer's hover is resolved once for the pass, over last pass's complete record, with the targets egui's hit
     // test gives at the pointer now.
     let hover_targets = PressTargets { click: hits.0, drag: hits.1 };
-    let hover = hover_at.map(|at| (at, hover_targets, find_under(ctx, viewport, at, hover_targets)));
+    let hover = hover_at.map(|at| (at, hover_targets, find_under(ctx, viewport, at, hover_targets, false)));
     let captured = press_captured(ctx);
+    let hover_widgets = hover_at.and_then(|at| ctx.widgets_at(viewport, at));
     PerViewport::<Shapes>::with(ctx, viewport, |shapes| {
         shapes.hover = hover;
+        shapes.hover_widgets = hover_widgets;
         shapes.captured = captured;
+        shapes.pressed_parts.clear();
     });
+}
+
+/// The parts holding a press at the start of the running pass: the press arenas set them from the begin hook
+/// (`frame::register_begin_hook`), before an enclosing arena processes a release.
+pub(crate) fn set_pressed_parts(ctx: &Context, parts: Vec<(Id, PartRef)>) {
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |shapes| shapes.pressed_parts = parts);
 }
 
 /// The modifiers `held` with the app's `latched` ones added, field by field: `Mods` has no operator for it.
@@ -271,6 +431,13 @@ fn with_latched(held: Mods, latched: Mods) -> Mods {
 /// The running viewport's pass number.
 pub(crate) fn pass_of(ctx: &Context) -> u64 {
     pass::pass_nr(ctx, pass::current_viewport(ctx))
+}
+
+/// The primary press of this pass when it went down in `rect` on `layer` (`areas::lies_in`), whatever takes it. Read
+/// as the press step reads it, without noting a pointer input: the press engages the sensing of what it lands on.
+pub(crate) fn primary_press_in(ctx: &Context, layer: Layer, rect: egui::Rect) -> Option<PressStart> {
+    with_pass_raw(ctx, |pass| pass.frame.as_ref().and_then(|frame| frame.press))
+        .filter(|press| press.button == PointerButton::Primary && areas::lies_in(ctx, layer, rect, press.origin))
 }
 
 /// What the begin hook read of the running pass.
@@ -312,7 +479,8 @@ pub(crate) fn with_frame<R>(ctx: &Context, f: impl FnOnce(Option<&PointerFrame>,
 }
 
 /// The running pass's pointer input. A tracked input (`runtime::inputs`): a memoized view that reads it runs when the
-/// pointer changes. A view that reads only the modifiers reads [`mods`].
+/// pointer changes. A view that reads only the modifiers reads [`mods`], one that reads only the buttons, presses and
+/// releases [`press_state`].
 pub fn frame(ctx: &Context) -> PointerFrame {
     crate::runtime::replay::note_input(ctx, Input::Pointer);
     frame_raw(ctx)
@@ -325,6 +493,39 @@ pub fn mods(ctx: &Context) -> Mods {
     with_pass_raw(ctx, |pointer| pointer.frame.as_ref().map_or(Mods::NONE, |frame| frame.mods))
 }
 
+/// The press state of a pass: the buttons held, and the primary press and the release the pass brought.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PressState {
+    /// The buttons held (`PointerFrame::buttons`).
+    pub buttons: Buttons,
+    /// The primary press of the pass (`PointerFrame::press`).
+    pub press: Option<PressStart>,
+    /// The button released in the pass (`PointerFrame::release`).
+    pub release: Option<PointerButton>,
+}
+
+/// The press state of the running pass. A tracked input (`Input::Press`): a memoized view that reads it runs on a
+/// press or a release, and a pointer move leaves it alone. A view that needs the pointer's position reads [`frame`].
+pub fn press_state(ctx: &Context) -> PressState {
+    crate::runtime::replay::note_input(ctx, Input::Press);
+    with_pass_raw(ctx, |pointer| {
+        let frame = pointer.frame.as_ref();
+        PressState {
+            buttons: frame.map_or(Buttons::empty(), |frame| frame.buttons),
+            press: frame.and_then(|frame| frame.press),
+            release: frame.and_then(|frame| frame.release),
+        }
+    })
+}
+
+/// Where the primary press of the running pass started. A tracked input (`Input::Press`): a layer's dismissal decides by
+/// it, so a memoized view that shows a layer runs on a press anywhere, and a pointer move leaves it alone.
+pub(crate) fn primary_press(ctx: &Context) -> Option<Pos2> {
+    crate::runtime::replay::note_input(ctx, Input::Press);
+    frame_raw(ctx).press.filter(|press| press.button == craft_behavior::PointerButton::Primary).map(|press| press.origin)
+}
+
 /// `frame` without noting the read: for the steps of the component under the pointer and the pass machinery.
 pub(crate) fn frame_raw(ctx: &Context) -> PointerFrame {
     with_pass_raw(ctx, |pointer| pointer.frame.clone()).unwrap_or_else(|| PointerFrame {
@@ -332,8 +533,12 @@ pub(crate) fn frame_raw(ctx: &Context) -> PointerFrame {
         delta: Vec2::ZERO,
         buttons: Buttons::empty(),
         press: None,
+        press_mods: None,
         release: None,
         mods: Mods::NONE,
+        pick_mods: Mods::NONE,
+        pick_pos: None,
+        multi_tap: None,
         time: 0.0,
         kind: PointerKind::Mouse,
         sample: None,
@@ -383,22 +588,62 @@ fn withheld_roots(ctx: &Context, viewport: ViewportId) -> SmallVec<[Id; 2]> {
 }
 
 /// Registers how the viewport tells that a press is captured. Sensing owns the arenas' machines.
-pub(crate) fn register_press_probe(ctx: &Context, probe: fn(&Context) -> bool) {
+pub(crate) fn register_press_probe(ctx: &Context, probe: fn(&Context, ViewportId) -> bool) {
     PerViewport::<Memory>::with(ctx, pass::current_viewport(ctx), |memory| memory.press_probe = Some(probe));
 }
 
-/// Whether a press of the running viewport is open: Escape cancels it before anything else.
+/// Whether a press of the running viewport is open, in an arena or on a container's own surface: Escape cancels it
+/// before anything else.
 pub(crate) fn press_captured(ctx: &Context) -> bool {
-    let probe = PerViewport::<Memory>::with(ctx, pass::current_viewport(ctx), |memory| memory.press_probe);
-    probe.is_some_and(|probe| probe(ctx))
+    press_captured_in(ctx, pass::current_viewport(ctx))
 }
 
-/// Why captured presses end in the running pass: a cancel a service requested, else the window losing focus.
+/// Whether a press of `viewport` is open, as [`press_captured`] tells for the running one; the key stage reads it
+/// before the viewport's pass runs.
+pub(crate) fn press_captured_in(ctx: &Context, viewport: ViewportId) -> bool {
+    let (probe, surface) = PerViewport::<Memory>::with(ctx, viewport, |memory| (memory.press_probe, memory.surface_held));
+    surface.is_some() || probe.is_some_and(|probe| probe(ctx, viewport))
+}
+
+/// Records that a container holds a press on its own surface in the running pass, so the press counts as captured
+/// until the end of the next pass that holds none.
+pub(crate) fn hold_surface_press(ctx: &Context) {
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    PerViewport::<Memory>::with(ctx, viewport, |memory| memory.surface_held = Some(pass_nr));
+    crate::runtime::frame::register_end_sweep(ctx, std::any::TypeId::of::<Memory>(), sweep_surface_press);
+}
+
+/// Drops the surface press of a pass in which no container held one: it ended, or its container was not shown.
+fn sweep_surface_press(ctx: &Context) {
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    PerViewport::<Memory>::with(ctx, viewport, |memory| memory.surface_held = memory.surface_held.filter(|held| *held == pass_nr));
+}
+
+/// Why captured presses end in the running pass: a cancel a service requested, else the window losing focus, else a
+/// second finger landing.
 pub(crate) fn cancel_of_pass(ctx: &Context) -> Option<PressCancel> {
     let viewport = pass::current_viewport(ctx);
     let pass_nr = pass::pass_nr(ctx, viewport);
     let requested = PerViewport::<Memory>::with(ctx, viewport, |memory| memory.requested.filter(|(nr, _)| *nr == pass_nr).map(|(_, reason)| reason));
-    requested.or_else(|| with_pass_raw(ctx, |pointer| pointer.focus_lost).then_some(PressCancel::FocusLost))
+    requested
+        .or_else(|| with_pass_raw(ctx, |pointer| pointer.focus_lost).then_some(PressCancel::FocusLost))
+        .or_else(|| with_pass_raw(ctx, |pointer| pointer.gesture).then_some(PressCancel::Gesture))
+}
+
+/// The running pass's tap, once, for the component `id` when `accepts` takes its centre (the component's rect check, in
+/// its own space) and `id` or one of its members wins a press there.
+pub(crate) fn take_multi_tap(ctx: &Context, id: Id, accepts: impl FnOnce(Pos2) -> bool) -> Option<MultiTap> {
+    let tap = with_frame(ctx, |frame, _| frame.and_then(|frame| frame.multi_tap))?;
+    let viewport = pass::current_viewport(ctx);
+    if PerViewport::<Shapes>::with(ctx, viewport, |shapes| shapes.tap_taken) || !accepts(tap.at) {
+        return None;
+    }
+    let targets = with_pass_raw(ctx, |pointer| pointer.press_targets);
+    press_winner(ctx, tap.at, targets).filter(|(winner, root)| *root == id || winner.owner == id)?;
+    PerViewport::<Shapes>::with(ctx, viewport, |shapes| shapes.tap_taken = true);
+    Some(tap)
 }
 
 /// Writes `shapes` of the arena rooted at `root`, shown through `clip` (layer space), into the running pass's shape
@@ -422,9 +667,11 @@ pub(crate) fn record_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer
 /// `record_shapes_in` with no note in the run records, for a caller whose own note makes the shapes again: shapes at
 /// stack positions a replay takes from the arena it joins (`sensing`), not from the recorded run.
 pub(crate) fn add_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer, root: Id, clip: Rect, shapes: Vec<Shape<Id>>) {
+    crate::runtime::replay::note_sensors(ctx, shapes.iter().map(|shape| shape.owner));
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         let order = record.next;
         record.next += 1;
+        record.this_made.insert(root);
         let entry = record.this.entry(layer).or_default().entry(root).or_default();
         entry.shapes.extend(shapes);
         entry.placed.resize(entry.shapes.len(), Placed { order, clip });
@@ -432,11 +679,13 @@ pub(crate) fn add_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer, r
 }
 
 /// Records the egui widget `widget` that the component `owner` made for its own text (a field's text, a selection
-/// part): a press egui gives it is the widget's own and goes to no root, and the hover goes to `owner`.
+/// part, an editor part's focus widget): a press egui gives it is the widget's own and goes to no root, and the hover
+/// goes to `owner`.
 pub(crate) fn record_text_widget(ctx: &Context, widget: Id, owner: Id) {
     crate::runtime::replay::journal(ctx, || (widget, owner), |ctx, &(widget, owner)| record_text_widget(ctx, widget, owner));
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         record.this_texts.insert(widget, owner);
+        record.this_made.insert(widget);
     });
 }
 
@@ -444,10 +693,97 @@ pub(crate) fn record_text_widget(ctx: &Context, widget: Id, owner: Id) {
 /// it the press where no widget on the layer is, and the press and hover there go to the layer's shapes as if egui
 /// had named no target.
 pub(crate) fn record_layer_widget(ctx: &Context, widget: Id) {
+    crate::runtime::replay::journal(ctx, || widget, |ctx, &widget| record_layer_widget(ctx, widget));
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         record.this_grounds.insert(widget);
     });
 }
+
+/// Records that what the running pass shows in `rect` (screen points) follows the pointer: a cursor drawn at the
+/// pointer, a readout of the point under it. A pointer move into, out of or within `rect` runs a pass even when
+/// nothing under the pointer changes ([`gate_pointer_moves`]).
+///
+/// A memoized view whose run marked a rect runs on each pointer move into, out of or within it (`runtime::lazy`).
+pub fn follows_pointer(ctx: &Context, rect: Rect) {
+    crate::runtime::replay::journal(ctx, || rect, |ctx, &rect| follows_pointer(ctx, rect));
+    crate::runtime::replay::note_follows(ctx, rect);
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| record.this_follows.push(rect));
+}
+
+/// The running pass's hover point (screen points) when it lies in `rect` (screen points), for code that shows what
+/// it reads there (a readout, a cursor drawn at the point, a band at the line nearest it): `rect` then follows the
+/// pointer ([`follows_pointer`]). The one way component code reads where the pointer hovers.
+pub fn hover_point_in(ctx: &Context, rect: Rect) -> Option<Pos2> {
+    let at = with_frame(ctx, |_, hover| hover).filter(|at| rect.contains(*at))?;
+    follows_pointer(ctx, rect);
+    Some(at)
+}
+
+/// Marks the hit area of a part with the bounds `rect` on `layer` (layer space) as following the pointer: its owner
+/// read the hover position there (`Cx::hover_pos`). The area is the bounds grown to the least hit size across, as
+/// sensing grows them.
+pub(crate) fn follows_part(ctx: &Context, layer: Layer, rect: Rect) {
+    let target = with_frame(ctx, |frame, _| frame.map_or(0.0, |frame| frame.target));
+    let grow = (Vec2::splat(target) - rect.size()).max(Vec2::ZERO) / 2.0;
+    follows_pointer(ctx, areas::layer_to_screen(ctx, layer) * rect.expand2(grow));
+}
+
+/// Lets a pointer move run no pass when nothing it would change differs: egui's gate
+/// ([`egui::Context::set_pointer_move_gate`]) answers [`move_needs_pass`]. An app opts in once; without it every move
+/// runs a pass.
+pub fn gate_pointer_moves(ctx: &Context) {
+    ctx.set_pointer_move_gate(Some(Arc::new(|ctx: &Context, viewport: ViewportId, from: Option<Pos2>, to: Pos2| {
+        move_needs_pass(ctx, viewport, from, to)
+    })));
+}
+
+/// Whether a pointer move from `from` to `to` in `viewport`, with no button held, needs a pass, judged on the last
+/// finished pass: when the pointer comes in, a drag runs, either point lies in a rect that follows the pointer, or the
+/// layer, egui's widgets or the component shapes under the two points differ. Equal answers mean no hover, cursor or
+/// part under the pointer changes, so the frame would look the same; the move stays in egui's input for the next pass.
+pub fn move_needs_pass(ctx: &Context, viewport: ViewportId, from: Option<Pos2>, to: Pos2) -> bool {
+    let Some(from) = from else { return true };
+    if drag::runs_elsewhere(ctx, viewport) || drag::running(ctx) {
+        return true;
+    }
+    let follows =
+        PerViewport::<Shapes>::with(ctx, viewport, |record| record.this_follows.iter().any(|rect| rect.contains(from) || rect.contains(to)));
+    follows || ctx.widgets_at(viewport, from) != ctx.widgets_at(viewport, to) || shapes_under(ctx, viewport, from) != shapes_under(ctx, viewport, to)
+}
+
+/// The layer under `at` and, for each root with component shapes there that hit it as the last finished pass of
+/// `viewport` recorded them, the root, the indices of those shapes in the root's record and the ones that win its hover
+/// and its press: overlapping shapes can hit both points while the nearest centre picks another winner.
+fn shapes_under(ctx: &Context, viewport: ViewportId, at: Pos2) -> (Option<Layer>, Vec<UnderRoot>) {
+    let Some(layer) = areas::layer_at(ctx, at) else { return (None, Vec::new()) };
+    let point = areas::layer_map(ctx, layer).map_or(at, |map| map.to_layer(at));
+    let hit = PerViewport::<Shapes>::with(ctx, viewport, |record| {
+        record.this.get(&layer).map_or_else(Vec::new, |roots| {
+            let mut hit: Vec<UnderRoot> = roots
+                .iter()
+                .filter_map(|(root, entry)| {
+                    let indices: Vec<usize> = (0..entry.shapes.len().min(entry.placed.len()))
+                        .filter(|&index| entry.placed[index].clip.contains(point) && entry.shapes[index].hits(point))
+                        .collect();
+                    if indices.is_empty() {
+                        return None;
+                    }
+                    let shapes: Vec<Shape<Id>> = indices.iter().map(|&index| entry.shapes[index].clone()).collect();
+                    let winner = |kind| resolve(&shapes, point, kind).and_then(|winner| indices.get(winner.index).copied());
+                    let (hover, press) = (winner(ResolveFor::Hover), winner(ResolveFor::Press));
+                    Some((*root, indices, hover, press))
+                })
+                .collect();
+            hit.sort_unstable_by_key(|(root, ..)| root.value());
+            hit
+        })
+    });
+    (Some(layer), hit)
+}
+
+/// A root with shapes under a point ([`shapes_under`]): the root, the indices of its shapes that hit the point, and
+/// the indices of the ones that win its hover and its press there.
+type UnderRoot = (Id, Vec<usize>, Option<usize>, Option<usize>);
 
 /// Records that `layer` shows the transformed body of the root `root`, which is itself shown on `parent`: a press on
 /// the body layer reaches the root's own shapes beneath the body's.
@@ -472,6 +808,8 @@ pub(crate) fn record_widgets_in(ctx: &Context, viewport: ViewportId, layer: Laye
         |ctx, (layer, root, widgets, click)| record_widgets(ctx, *layer, *root, widgets, *click),
     );
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
+        record.this_made.insert(root);
+        record.this_made.extend(widgets.iter().copied());
         let entry = record.this.entry(layer).or_default().entry(root).or_default();
         entry.widgets.extend_from_slice(widgets);
         entry.click |= click;
@@ -561,7 +899,6 @@ pub(crate) fn part_bounds(ctx: &Context, owner: Id, part: craft_behavior::PartRe
 }
 
 /// Whether the part `part` of `owner` (the arena root or a member) senses all of `sense` in last pass's shape record.
-#[cfg(feature = "suite")]
 pub(crate) fn part_senses(ctx: &Context, owner: Id, part: craft_behavior::PartRef, sense: craft_behavior::Sense) -> bool {
     let viewport = pass::current_viewport(ctx);
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
@@ -614,6 +951,23 @@ pub(crate) fn child_part_bounds(ctx: &Context, subject: Id, part: craft_behavior
     })
 }
 
+/// The parts in last pass's shape record that take a press (a click or a drag), each with its owner and bounds: with
+/// the access tree, where the pointer-only ones lie, which have no node to read a place from.
+#[cfg(feature = "suite")]
+pub(crate) fn press_parts(ctx: &Context) -> Vec<(Id, craft_behavior::PartRef, egui::Rect)> {
+    let viewport = pass::current_viewport(ctx);
+    PerViewport::<Shapes>::with(ctx, viewport, |record| {
+        record
+            .last
+            .values()
+            .flat_map(|roots| roots.values())
+            .flat_map(|root| root.shapes.iter())
+            .filter(|shape| shape.sense.intersects(craft_behavior::Sense::CLICK | craft_behavior::Sense::DRAG))
+            .filter_map(|shape| Some((shape.owner, shape.part?, shape.shape.bounds())))
+            .collect()
+    })
+}
+
 /// The roots and egui widgets the root viewport's latest pass registered: what bypass detection counts as made by
 /// components.
 #[cfg(feature = "testing")]
@@ -628,11 +982,22 @@ pub(crate) fn registered_widgets(ctx: &Context) -> std::collections::HashSet<Id>
     })
 }
 
-/// Whether `id` is a root or an egui widget that a component registered in the running pass of `viewport`.
+/// Whether `id` is a root, an egui widget that a component registered, or a widget a component made for its text or
+/// editor part, in the running pass of `viewport`.
 pub(crate) fn made_by_component(ctx: &Context, viewport: ViewportId, id: Id) -> bool {
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
-        record.this.values().any(|roots| roots.contains_key(&id) || roots.values().any(|root| root.widgets.contains(&id)))
+        #[cfg(feature = "suite")]
+        {
+            record.made_lookups += 1;
+        }
+        record.this_made.contains(&id)
     })
+}
+
+/// How many `made_by_component` lookups the running pass of `viewport` made so far, for the count trials.
+#[cfg(feature = "suite")]
+pub(crate) fn made_lookups(ctx: &Context, viewport: ViewportId) -> u32 {
+    PerViewport::<Shapes>::with(ctx, viewport, |record| record.made_lookups)
 }
 
 /// The roots a press at a point goes to, each with the shape of it that wins it: its click's and its drag's (8.3, H7).
@@ -640,7 +1005,8 @@ pub(crate) fn made_by_component(ctx: &Context, viewport: ViewportId, id: Id) -> 
 /// their winning shapes' place in the pass's paint order, top first. The top one takes every kind of press its shape
 /// senses. Under a top shape that only drags (a window's resize grip), the click goes to the first root below whose
 /// shape clicks; under one that only clicks (a button), the drag goes to the first root below whose shape drags, when
-/// that root takes no click anywhere.
+/// that root takes no click anywhere. Under a top shape that clicks and passes its drag (`Sense::PASSES_DRAG`), the
+/// drag goes to the next shape under it that drags: its own root's, else the first root's below.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct PressWinners {
     pub click: Option<(Winner<Id>, Id)>,
@@ -688,6 +1054,11 @@ pub(crate) struct Under {
     pub hover_top: Option<(Winner<Id>, Id)>,
     /// Every root with a shape under the point, on top or not: the roots that contain the pointer.
     pub over: SmallVec<[Id; 4]>,
+    /// Every component (root or member) that owns a shape under the point, on top or not.
+    pub owners: SmallVec<[Id; 4]>,
+    /// The roots' own parts with a shape under the point, on top or not, each with its root: a collection's row that
+    /// contains the pointer under the row's own shapes.
+    pub parts: SmallVec<[(Id, PartRef); 4]>,
 }
 
 impl Under {
@@ -703,9 +1074,14 @@ impl Under {
 }
 
 /// The press winners at `at` for egui's press targets `targets` ([`Under::press`]): the pass's hover answer when the
-/// press is at the hover point, else found once per point and targets.
-pub(crate) fn press_winners(ctx: &Context, at: Pos2, targets: PressTargets) -> PressWinners {
+/// press is at the hover point, else found once per point and targets. A secondary press (`button`) is resolved among
+/// the shapes that sense `Sense::CONTEXT_CLICK` alone: a shape on top that takes no context click passes it to the next
+/// one under it, so a box that only drags leaves a right-click to the page beneath.
+pub(crate) fn press_winners(ctx: &Context, at: Pos2, targets: PressTargets, button: PointerButton) -> PressWinners {
     let viewport = pass::current_viewport(ctx);
+    if button == PointerButton::Secondary {
+        return find_under(ctx, viewport, at, targets, true).press;
+    }
     let found = PerViewport::<Shapes>::with(ctx, viewport, |record| {
         [&record.hover, &record.winner]
             .into_iter()
@@ -716,7 +1092,7 @@ pub(crate) fn press_winners(ctx: &Context, at: Pos2, targets: PressTargets) -> P
     if let Some(found) = found {
         return found;
     }
-    let under = find_under(ctx, viewport, at, targets);
+    let under = find_under(ctx, viewport, at, targets, false);
     let found = under.press;
     PerViewport::<Shapes>::with(ctx, viewport, |record| record.winner = Some((at, targets, under)));
     found
@@ -725,7 +1101,7 @@ pub(crate) fn press_winners(ctx: &Context, at: Pos2, targets: PressTargets) -> P
 /// The root a press at `at` belongs to, with its winning shape: the click's root (`press_winners`), else the drag's.
 /// What the focus service classifies a press by and a host asks a press about.
 pub(crate) fn press_winner(ctx: &Context, at: Pos2, targets: PressTargets) -> Option<(Winner<Id>, Id)> {
-    let winners = press_winners(ctx, at, targets);
+    let winners = press_winners(ctx, at, targets, PointerButton::Primary);
     winners.click.or(winners.drag)
 }
 
@@ -734,6 +1110,78 @@ pub(crate) fn press_winner(ctx: &Context, at: Pos2, targets: PressTargets) -> Op
 /// record's borrow.
 pub(crate) fn with_hover<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(Option<&Under>, bool) -> R) -> R {
     PerViewport::<Shapes>::with(ctx, viewport, |record| f(record.hover.as_ref().map(|(_, _, under)| under), record.captured))
+}
+
+/// A shape a memoized view's run sensed ([`Sensed::hover`]): its kind, root, owner and part.
+type SensedShape = (u8, Id, Id, Option<PartRef>);
+
+/// What pointer sensing gives a memoized view's run in the running pass (`runtime::lazy`): of the components that own
+/// shapes the run registered (arena roots and members) and of its egui widgets, the ones under the pass's hover point
+/// and what they win there. A component's facts are its own: a member's view sees a move over a sibling member or its
+/// root as nothing. Equal answers in two passes mean every hover, part and pointer-over fact the run's components read
+/// is the same; a hover position is not part of it, as the code that reads one marks itself ([`follows_pointer`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Sensed {
+    /// The press winners and the shape that hovers beside them (`Under`), each as its kind, root, owner and part, of
+    /// the run's components. None while a press is open: only the press's target hovers, and the press runs it.
+    hover: SmallVec<[SensedShape; 3]>,
+    /// The run's components with a shape under the point.
+    over: SmallVec<[Id; 4]>,
+    /// The own parts of the run's roots with a shape under the point (`Under::parts`).
+    parts: SmallVec<[(Id, PartRef); 4]>,
+    /// The run's egui widgets that contain the point, then its click and drag targets there.
+    widgets: SmallVec<[Id; 4]>,
+}
+
+impl Sensed {
+    /// Nothing of the run lies under the pointer.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.hover.is_empty() && self.over.is_empty() && self.parts.is_empty() && self.widgets.is_empty()
+    }
+}
+
+/// What pointer sensing gives the components `sensors` and egui widgets `widgets` of a run in the running pass
+/// ([`Sensed`]): read from the pass's one resolution at the hover point.
+pub(crate) fn sensed(ctx: &Context, sensors: &IdSet, widgets: &IdSet) -> Sensed {
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
+        let mut sensed = Sensed::default();
+        if let Some((_, _, under)) = &record.hover
+            && !sensors.is_empty()
+        {
+            if !record.captured {
+                let found = [under.press.click, under.press.drag, under.hover_top];
+                for (kind, (winner, root)) in (0u8..).zip(found).filter_map(|(kind, found)| Some((kind, found?))) {
+                    if sensors.contains(&winner.owner) {
+                        sensed.hover.push((kind, root, winner.owner, winner.part));
+                    }
+                }
+            }
+            sensed.over.extend(under.owners.iter().copied().filter(|owner| sensors.contains(owner)));
+            sensed.parts.extend(under.parts.iter().copied().filter(|(root, _)| sensors.contains(root)));
+        }
+        if let Some((contains, click, drag)) = &record.hover_widgets
+            && !widgets.is_empty()
+        {
+            sensed.widgets.extend(contains.iter().chain(click).chain(drag).copied().filter(|widget| widgets.contains(widget)));
+        }
+        sensed
+    })
+}
+
+/// The running pass's hover point, screen points; `None` while the pointer is not in the window.
+pub(crate) fn hover_point(ctx: &Context) -> Option<Pos2> {
+    with_frame(ctx, |_, hover| hover)
+}
+
+/// The own parts of the root `root` with a shape under the running pass's hover point, on top or not
+/// (`Under::parts`), by the pass's one resolution: the parts that contain the pointer.
+pub(crate) fn parts_under(ctx: &Context, root: Id) -> SmallVec<[PartRef; 4]> {
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
+        record
+            .hover
+            .as_ref()
+            .map_or_else(SmallVec::new, |(_, _, under)| under.parts.iter().filter(|(owner, _)| *owner == root).map(|(_, part)| *part).collect())
+    })
 }
 
 /// Whether a shape the component `id` registered shows hover in the running pass, by the pass's one resolution of
@@ -755,7 +1203,9 @@ pub(crate) fn resolutions(ctx: &Context) -> u32 {
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| record.resolutions)
 }
 
-fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTargets) -> Under {
+/// What lies under `at` ([`Under`]); with `context`, for a secondary press: its press winners only among the shapes
+/// that sense `Sense::CONTEXT_CLICK`.
+fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTargets, context: bool) -> Under {
     #[cfg(feature = "testing")]
     PerViewport::<Shapes>::with(ctx, viewport, |record| record.resolutions += 1);
     let Some(layer) = areas::layer_at(ctx, at).or_else(|| layer_past_window(ctx, viewport, at)) else {
@@ -802,9 +1252,29 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
             if !under.over.contains(&root) {
                 under.over.push(root);
             }
+            for &index in &kept {
+                let shape = &entry.shapes[index];
+                if !under.owners.contains(&shape.owner) {
+                    under.owners.push(shape.owner);
+                }
+                if let Some(part) = shape.part.filter(|_| shape.owner == root)
+                    && !under.parts.contains(&(root, part))
+                {
+                    under.parts.push((root, part));
+                }
+            }
             // The winner among the shapes at `indices` by `kind`, with its rank.
             let pick = |indices: &[usize], kind: ResolveFor| {
-                let shapes: Vec<Shape<Id>> = indices.iter().map(|&index| entry.shapes[index].clone()).collect();
+                let mut shapes: Vec<Shape<Id>> = indices.iter().map(|&index| entry.shapes[index].clone()).collect();
+                if context && kind == ResolveFor::Press {
+                    // A context-only part is a click candidate for this secondary press, while
+                    // its unmodified sense must still let primary presses reach what is below.
+                    for shape in &mut shapes {
+                        if shape.sense.contains(craft_behavior::Sense::CONTEXT_CLICK) {
+                            shape.sense.insert(craft_behavior::Sense::CLICK);
+                        }
+                    }
+                }
                 resolve(&shapes, point, kind).map(|mut winner| {
                     winner.index = indices[winner.index];
                     ((tier, entry.placed[winner.index].order), winner)
@@ -823,8 +1293,41 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
             {
                 top = Some((rank, winner, root));
             }
-            if let Some((rank, winner)) = pick(&kept, ResolveFor::Press) {
+            let takes_context = |index: &usize| {
+                let sense = entry.shapes[*index].sense;
+                !sense.takes_press() || sense.contains(craft_behavior::Sense::CONTEXT_CLICK)
+            };
+            let context_kept: Vec<usize>;
+            let pressable: &[usize] = if context {
+                context_kept = kept.iter().copied().filter(takes_context).collect();
+                &context_kept
+            } else {
+                &kept
+            };
+            if let Some((rank, winner)) = pick(pressable, ResolveFor::Press) {
+                // A shape that passes its drag keeps the click; the root's next shape under it that drags follows it
+                // in the ranking, at its rank: the stable sort in `winners_of` keeps it right after the winner.
+                let passes = winner.sense.contains(craft_behavior::Sense::CLICK | craft_behavior::Sense::PASSES_DRAG)
+                    && !winner.sense.contains(craft_behavior::Sense::DRAG);
+                let below = passes
+                    .then(|| {
+                        let dragging: Vec<usize> = pressable
+                            .iter()
+                            .copied()
+                            .filter(|&index| {
+                                let shape = &entry.shapes[index];
+                                index != winner.index
+                                    && shape.sense.contains(craft_behavior::Sense::DRAG)
+                                    && (!winner.drag_to_root || shape.owner == root)
+                            })
+                            .collect();
+                        pick(&dragging, ResolveFor::Press)
+                    })
+                    .flatten();
                 ranked.push((rank, winner, root, entry.click));
+                if let Some((_, under)) = below {
+                    ranked.push((rank, under, root, entry.click));
+                }
             }
         }
         if foreign {
@@ -843,7 +1346,8 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
 type Ranked = ((u8, u32), Winner<Id>, Id, bool);
 
 /// The press winners among `ranked`, each root's topmost shape under a point that takes a press with its rank and
-/// whether the root takes clicks anywhere: by the per-kind rule of [`PressWinners`].
+/// whether the root takes clicks anywhere, and under a top shape that passes its drag the root's next shape that drags:
+/// by the per-kind rule of [`PressWinners`].
 fn winners_of(mut ranked: Vec<Ranked>) -> PressWinners {
     ranked.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     let mut winners = PressWinners::default();
@@ -866,15 +1370,15 @@ fn winners_of(mut ranked: Vec<Ranked>) -> PressWinners {
                 }
             }
             // Under a top shape that only clicks, the first root below whose shape drags takes the drag, unless the
-            // root takes clicks anywhere: a drag-only root (a scroll view) is dragged from a button in it.
+            // root takes clicks anywhere: a drag-only root (a scroll view) is dragged from a button in it. Under a top
+            // shape that passes its drag, the next shape that drags takes it, in the same root or one below.
             (true, false) => {
-                if clicks || root_clicks {
-                    break;
-                }
-                if drags {
+                let passes = winners.click.is_some_and(|(top, _)| top.sense.contains(craft_behavior::Sense::PASSES_DRAG));
+                let root_target = winners.click.is_some_and(|(top, owner)| top.drag_to_root && root != owner);
+                if drags && !root_target && (passes || !(clicks || root_clicks)) {
                     winners.drag = Some((winner, root));
-                    break;
                 }
+                break;
             }
             (true, true) => break,
         }
@@ -909,6 +1413,14 @@ fn registered_in(layers: &LayerRecord, widget: Id) -> bool {
     layers.values().any(|roots| roots.values().any(|root| root.widgets.contains(&widget)))
 }
 
+/// Whether egui gives the latest press to a component's text widget (a focused field's), as `targets` name its
+/// widgets: the press is that text's, though it goes to no root and has no winner (`find_under`).
+pub(crate) fn text_takes_press(ctx: &Context, targets: PressTargets) -> bool {
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
+        targets.click.is_some_and(|widget| !record.last_grounds.contains(&widget) && record.last_texts.contains_key(&widget))
+    })
+}
+
 /// Whether the egui widget `widget`, one of the latest press's targets, is one no component registered or made for its
 /// text, and no layer shows beneath everything on it, in the pass the press was hit-tested against: a raw egui widget.
 pub(crate) fn foreign_target(ctx: &Context, widget: Id) -> bool {
@@ -934,6 +1446,35 @@ pub fn shapes_at(ctx: &Context, at: Pos2) -> Vec<(Id, Option<PartRef>)> {
             .filter(|shape| shape.hits(at))
             .map(|shape| (shape.owner, shape.part))
             .collect()
+    })
+}
+
+/// The part of `owner` holding a press in this viewport that was open when the pass began: in the pass that ends the
+/// press too, and in none after it.
+pub fn pressed_part(ctx: &Context, owner: Id) -> Option<PartRef> {
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
+        record.pressed_parts.iter().find_map(|(id, part)| (*id == owner).then_some(*part))
+    })
+}
+
+/// The part of `owner` holding the pointer's hover or an open press in this viewport.
+///
+/// An open press keeps its part while the pointer moves away. A press open at the start of the pass keeps its part
+/// for that whole pass, so a child can still declare it after an enclosing arena has processed the release.
+pub fn active_part(ctx: &Context, owner: Id) -> Option<PartRef> {
+    let pressed = pressed_part(ctx, owner);
+    if pressed.is_some() {
+        return pressed;
+    }
+    with_hover(ctx, pass::current_viewport(ctx), |under, captured| {
+        if captured {
+            return None;
+        }
+        let under = under?;
+        [under.press.click, under.press.drag, under.hover_top]
+            .into_iter()
+            .flatten()
+            .find_map(|(winner, _)| (winner.owner == owner).then_some(winner.part).flatten())
     })
 }
 

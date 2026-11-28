@@ -7,6 +7,8 @@ craft_ui::words! {
     pub struct CommonWords {
         cancel: "common.cancel" = "Cancel";
         ok: "common.ok" = "OK";
+        /// The button of a dialog whose fields are unchanged, in place of OK and Cancel.
+        close: "common.close" = "Close";
         dont_show_again: "common.dontShowAgain" = "Don't show again";
         /// The tooltip of a label's reset dot.
         reset_to_default: "common.resetToDefault" = "Reset to default";

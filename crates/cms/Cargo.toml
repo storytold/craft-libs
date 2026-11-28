@@ -20,4 +20,5 @@ md5 = { workspace = true }
 rayon = { workspace = true }
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 moxcms = "0.8"

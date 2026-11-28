@@ -279,7 +279,7 @@ impl<'a> RenderQueueList<'a> {
                 let mut out_events = events.borrow_mut();
                 for event in out.events {
                     match event {
-                        CollectionEvent::Selection(change) => out_events.push(RenderQueueEvent::Selection(change)),
+                        CollectionEvent::Selection { change, .. } => out_events.push(RenderQueueEvent::Selection(change)),
                         CollectionEvent::Reorder(edit) => out_events.push(RenderQueueEvent::Reorder(edit)),
                         CollectionEvent::Delete(keys) => {
                             let removable = |key: &RenderItemId| items.iter().any(|item| item.id == *key && !item.status.is_encoding());

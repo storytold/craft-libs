@@ -5,7 +5,7 @@ use crate::contract::{
     Animate as _, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, PaintUi, Pointer as _, Role, Styled as _, spec,
 };
 use crate::primitives::{Glyph, PaintShape, StrokeWidth};
-use crate::style::{ComponentStyle, IconLook, StyleCx, UiTokens, ink_color, rgba_color};
+use crate::style::{ComponentStyle, FocusLook, IconLook, StyleCx, UiTokens, ink_color, rgba_color};
 use craft_behavior::{Metrics, Sense};
 use craft_i18n::Direction;
 use egui::emath::GuiRounding as _;
@@ -36,6 +36,19 @@ pub enum ArrowForm {
     Dropdown,
 }
 
+/// Which arrow a field or a picker shows after its text ([`DisclosureGlyph::dropdown_of`]). An app sets it once at its
+/// root (`RootEnv::values`); the default is the stroked chevron.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum DropdownArrow {
+    /// The fine stroked chevron.
+    #[default]
+    Chevron,
+    /// The small filled triangle pointing down, the disclosure triangle opened: PdfCraft's fields and pickers.
+    Triangle,
+}
+
 /// The arrow every component shows for something that opens or unfolds. The disclosure is a filled triangle that
 /// turns from pointing to the end of the line (closed) to pointing down (open) as `open` goes from 0 to 1; a
 /// dropdown's arrow is the open chevron; a submenu's is the filled arrow to the end of the line. Components name these
@@ -52,8 +65,10 @@ pub struct DisclosureGlyph {
     pub stroke: StrokeWidth,
 }
 
-/// The arrow of a field or picker.
+/// The arrow of a field or picker: the fine stroked chevron.
 const DROPDOWN: DisclosureGlyph = DisclosureGlyph::dropdown_form();
+/// The arrow of a field or picker under [`DropdownArrow::Triangle`]: the small filled triangle pointing down.
+const DROPDOWN_TRIANGLE: DisclosureGlyph = DisclosureGlyph::new(1.0);
 /// The arrow of a button that opens a menu.
 const MENU_BUTTON: DisclosureGlyph = DisclosureGlyph { open: 1.0, form: ArrowForm::Dropdown, stroke: StrokeWidth::Medium };
 /// The submenu arrow.
@@ -75,9 +90,19 @@ impl DisclosureGlyph {
         !matches!(self.form, ArrowForm::Dropdown)
     }
 
-    /// The icon of the arrow after the text of a picker's face or a field with a list.
+    /// The icon of the arrow after the text of a picker's face or a field with a list: the chevron. A component reads
+    /// the app's choice through [`DisclosureGlyph::dropdown_of`].
     pub fn dropdown() -> crate::primitives::IconSpec<'static> {
         crate::primitives::IconSpec::glyph(&DROPDOWN)
+    }
+
+    /// The icon of the arrow after the text of a picker's face or a field with a list, in the form `arrow` names: a
+    /// component passes the scope's [`DropdownArrow`] (`cx.env.get::<DropdownArrow>()`).
+    pub fn dropdown_of(arrow: DropdownArrow) -> crate::primitives::IconSpec<'static> {
+        match arrow {
+            DropdownArrow::Chevron => crate::primitives::IconSpec::glyph(&DROPDOWN),
+            DropdownArrow::Triangle => crate::primitives::IconSpec::glyph(&DROPDOWN_TRIANGLE),
+        }
     }
 
     /// The icon of the arrow after the text of a button that opens a menu: the dropdown arrow in the firmer line.
@@ -165,6 +190,8 @@ impl Glyph for DisclosureGlyph {
 pub struct DisclosureStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
     /// The triangle.
     #[style(icon)]
     glyph: IconLook,
@@ -198,7 +225,7 @@ impl Component for Disclosure<'_> {
 
     fn style(cx: &StyleCx<'_>, _: DisclosureStyleKey) -> DisclosureStyle {
         let side = cx.control().icon;
-        DisclosureStyle { metrics: Metrics::new().min_size(Vec2::splat(side)), glyph: IconLook::new(side, cx.quiet_ink()) }
+        DisclosureStyle { metrics: Metrics::new().min_size(Vec2::splat(side)), focus: cx.focus_look(), glyph: IconLook::new(side, cx.quiet_ink()) }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {

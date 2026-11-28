@@ -175,7 +175,8 @@ struct Seen {
 ///   again when it is entered and when the window regains focus.
 /// - OK, Enter and a double click on a file accept: a folder is entered, a file is opened, a Save to a listed file
 ///   asks Replace once, a typed path elsewhere is listed first and accepted there. The result is
-///   `Ok(Answer::Paths(..))`; Cancel, Escape and the close action give `Cancel`.
+///   `Ok(Answer::Paths(..))` for Open and Folder, `Ok(Answer::Saved { .. })` with the type picked for Save; Cancel,
+///   Escape and the close action give `Cancel`.
 /// - Automation fields: `folder`, `name` and `selection` (names in the shown folder); `listed` (read only) says the
 ///   listing is ready, and `replace` (read only) names the file the open Replace question is about. The question is a
 ///   child prompt: it is answered as every prompt is.
@@ -254,6 +255,11 @@ impl FileChooser {
     }
 
     /// Whether the type selector shows: a Save with types, or an Open with a choice of them.
+    /// A Save's answer for `path`, with the file type picked when the request offers types.
+    fn saved(&self, path: PathBuf) -> Answer {
+        Answer::Saved { path, filter: (!self.request.filters.is_empty()).then_some(self.filter) }
+    }
+
     fn offers_types(&self) -> bool {
         !self.request.filters.is_empty() && (self.request.kind == PickKind::Save || self.request.filters.len() > 1)
     }
@@ -292,7 +298,7 @@ impl FileChooser {
         let picked_folder = matches!(selected.as_slice(), [one] if one.folder);
         match accept(&self.request, &typed, &folder, &rows, &selected, home.flatten().as_deref()) {
             Accept::Open(paths) => return Some(DialogResult::Ok(Answer::Paths(paths))),
-            Accept::Save(path) => return Some(DialogResult::Ok(Answer::Paths(vec![path]))),
+            Accept::Save(path) => return Some(DialogResult::Ok(self.saved(path))),
             Accept::Replace(path) => {
                 self.asks += 1;
                 let name = path.file_name().map_or_else(|| path.to_string_lossy(), |n| n.to_string_lossy()).into_owned();
@@ -449,7 +455,7 @@ impl FileChooser {
                         .events;
                     for event in events {
                         match event {
-                            CollectionEvent::Selection(change) => seen.selection.push(change),
+                            CollectionEvent::Selection { change, .. } => seen.selection.push(change),
                             CollectionEvent::Activate(path) => seen.activated = Some(path),
                             _ => {}
                         }
@@ -482,7 +488,7 @@ impl FileChooser {
             if let Some(choice) = given {
                 self.replacing = None;
                 if choice == PromptChoice::Proceed {
-                    return Some(DialogResult::Ok(Answer::Paths(vec![path])));
+                    return Some(DialogResult::Ok(self.saved(path)));
                 }
             }
             return None;

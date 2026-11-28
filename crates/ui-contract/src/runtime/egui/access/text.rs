@@ -1,20 +1,12 @@
 //! The text nodes of AccessKit: a text component's value, actions and selection, and the `TextRun` nodes below it.
 
 use egui::{Context, Id, Rect};
-use std::ops::Range;
 
 /// A selection end as AccessKit names it: a run node's key and a character index in the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NodeEnd {
     pub node: u64,
     pub character: usize,
-}
-
-/// A link inside a run: the characters it covers and where it leads.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct RunLink {
-    pub chars: Range<usize>,
-    pub target: String,
 }
 
 /// One `TextRun` node.
@@ -27,8 +19,6 @@ pub(crate) struct RunNode<'a> {
     /// Each character's start offset from the run's left edge, and its advance.
     pub positions: &'a [f32],
     pub widths: &'a [f32],
-    /// The links in the run, each written as a `Link` child of the run node.
-    pub links: &'a [RunLink],
 }
 
 /// What a text component's own node says beyond the common facts.
@@ -77,34 +67,6 @@ pub(crate) fn write_run(ctx: &Context, run: &RunNode<'_>) {
         node.set_character_widths(run.widths.to_vec());
         node.set_word_starts(word_starts(run.text));
         node.set_text_direction(if run.rtl { accesskit::TextDirection::RightToLeft } else { accesskit::TextDirection::LeftToRight });
-    });
-    for (at, link) in run.links.iter().enumerate() {
-        write_link(ctx, run, at, link);
-    }
-}
-
-/// The `Link` child of a run for `link`: named by the characters it covers, bounded by their extent in the run.
-fn write_link(ctx: &Context, run: &RunNode<'_>, at: usize, link: &RunLink) {
-    let end = link.chars.end.min(run.positions.len()).min(run.widths.len());
-    let start = link.chars.start.min(end);
-    if start == end {
-        return;
-    }
-    let name: String = run.text.chars().skip(start).take(end - start).collect();
-    let (from, to) = (run.positions[start], run.positions[end - 1] + run.widths[end - 1]);
-    let id = run.id.with(("link", at));
-    super::register_parent(ctx, id, run.id);
-    crate::runtime::egui::widgets::note_node(ctx, id);
-    ctx.accesskit_node_builder(id, |node| {
-        node.set_role(accesskit::Role::Link);
-        node.set_bounds(accesskit::Rect {
-            x0: f64::from(run.rect.min.x + from.min(to)),
-            y0: f64::from(run.rect.min.y),
-            x1: f64::from(run.rect.min.x + from.max(to)),
-            y1: f64::from(run.rect.max.y),
-        });
-        node.set_label(name);
-        node.set_url(link.target.clone());
     });
 }
 

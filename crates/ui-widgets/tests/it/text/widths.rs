@@ -90,7 +90,7 @@ fn a_small_percent_field_shows_its_value_whole_beside_the_chevron() {
     fixture.settle();
     let chevron = fixture.by_role(Role::BUTTON).first().unwrap_or_else(|| panic!("the field shows its chevron")).rect;
     let painted = |text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect);
-    let value = painted("100").unwrap_or_else(|| panic!("the field shows its value"));
+    let value = painted("100.0").unwrap_or_else(|| panic!("the field shows its value"));
     let unit = painted("%").unwrap_or_else(|| panic!("the field shows its unit"));
     assert!(value.max.x <= unit.min.x, "the value ends before its unit: {value:?} {unit:?}");
     assert!(unit.max.x <= chevron.min.x, "the unit ends before the chevron: {unit:?} {chevron:?}");

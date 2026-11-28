@@ -150,13 +150,15 @@ pub mod reserved;
 pub mod scope;
 
 pub use chord::foreign::Flavor;
-pub use chord::{Chord, Key, MAX_CHORD_TEXT, Mods, ParseError, Platform, Trigger};
+pub use chord::{Chord, Key, MAX_CHORD_TEXT, Mods, ParseError, Platform, PressKind, Trigger};
 pub use command::{CommandRef, MAX_KEY};
 pub use commands::KeymapCommands;
 pub use editor::{DOUBLE_PRESS, EditSession, MAX_UNDO, MAX_UNDO_BYTES, Recorded, Recorder};
-pub use import::{ContextRule, ForeignEntry, ForeignKey, ForeignSet, ImportOptions, ImportPlan, ImportReport, NoneDefined, Start, plan};
+pub use import::{
+    ContextRule, DecodedCode, ForeignEntry, ForeignKey, ForeignSet, ImportOptions, ImportPlan, ImportReport, NoneDefined, NotRead, Start, plan,
+};
 pub use keymap::{
-    AssignError, Assigned, Binding, BindingError, CommandDef, CommandKind, Conflict, ConflictKind, DropReason, Holder, Keymap, Lookup,
+    AssignError, Assigned, Binding, BindingError, CommandDef, CommandKind, Conflict, ConflictKind, DeleteKeys, DropReason, Holder, Keymap, Lookup,
     MAX_BINDING_TEXT, MAX_BINDINGS, MAX_COMMANDS, MAX_CONFLICTS, ModalRule, Overrides, Policy, Problem, TypingRule, text_editing_chords,
 };
 pub use layout::{COMMON_SYMBOLS, KeyInput, Layout, SYMBOL_TABLE, SymbolLayout};

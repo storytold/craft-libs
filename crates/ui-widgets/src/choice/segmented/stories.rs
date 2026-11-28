@@ -1,8 +1,9 @@
 //! Stories of `Segmented`.
 
 use super::Segmented;
+use crate::buttons::ActiveLook;
 use crate::contract::{Entry, Props as _, Show as _, Validity};
-use crate::runtime::env::Message;
+use crate::runtime::env::{Message, with_env};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{IconId, Mixed};
 use craft_theme::ControlSize;
@@ -88,4 +89,17 @@ fn segmented_icons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Segmented<'static, u8>, covers = [], drive = Drive::Never, group = "Icons", title = "Five icons")]
 fn segmented_icons_five(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     icon_row(ui, data, 5, 2)
+}
+
+/// The row of an app that sets `ActiveLook::Pressed` at its root: the picked segment takes the pressed
+/// fill with the normal text colour, as an icon button that is on does, at rest, under the pointer and pressed.
+#[story(Segmented<'static, u8>, covers = [], drive = Drive::Custom(pick_add), group = "Text", title = "Pressed look")]
+fn segmented_pressed_look(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(ActiveLook::Pressed);
+        },
+        |ui| text_row(ui, data, 3, 0, ControlSize::Md),
+    )
 }

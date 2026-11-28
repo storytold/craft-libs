@@ -160,7 +160,7 @@ note = "Words come from the scope."
 type = "CharacterControls"
 old = "font_picker(&Arc<Catalog>, &mut FontPickerSettings, &mut FontFilters)"
 new = "font_picker(FontPickerSource)"
-note = "Behind feature `font-picker`. The picker records a pick as recent itself."
+note = "Behind feature `font-picker`. The picker records a pick as recent itself. `FontPickerSource::new(catalog)` takes the catalogue only; the app's `settings`, `filters`, `host` and `current_host` are builders."
 
 [[setter]]
 type = "CharacterControls"

@@ -217,6 +217,89 @@ fn an_app_catalogs_alternate_key_for_a_registry_command_runs_it() {
     assert_eq!(fired(&frames), by_registry_key, "the catalog's alternate key does what the registry's key does");
 }
 
+const PANEL: &str = "trialCatalog.panel";
+const CLOSE: &str = "trialCatalog.close";
+
+/// A def of the parameterised `PANEL` command with `params` (a JSON object text), bound to `chord`.
+fn panel(params: &str, label: &str, chord: &str) -> CommandDef {
+    let command = CommandRef::parse_key(&format!("{PANEL} {params}")).expect("the trial's key parses");
+    CommandDef::new(command, label, Scope::app()).with_default(Binding::parse(chord).expect("the trial's chord parses"))
+}
+
+/// Two defs with one id and different params build, each with its own chord and label; the bare id's def answers a ref
+/// with other params; two defs with one key are refused.
+#[trial]
+fn parameterised_catalog_rows_keep_their_own_kinds_and_defaults() {
+    let layers = panel(r#"{"panel":"layers"}"#, "Layers", "Cmd+Alt+1");
+    let info = panel(r#"{"panel":"info"}"#, "Info", "Cmd+Alt+2");
+    let bare = def(PANEL, "Panel", "Cmd+Alt+3");
+    assert!(AppCatalog::new(vec![layers.clone(), layers.clone()], 1).is_err(), "one key twice is a duplicate");
+    let catalog = AppCatalog::new(vec![layers.clone(), info.clone(), bare], 1).expect("two params of one id are two rows");
+    let mut show = |ui: &mut Ui| {
+        AppShell::new(WindowKey::main()).show(ui, &mut ());
+    };
+    let mut frames = Frames::new();
+    frames.commands(CommandInput::new().catalog(catalog));
+    frames.idle(3, &mut show);
+    for (key, def) in [(Key::Num1, &layers), (Key::Num2, &info), (Key::Num3, &CommandDef::new(PANEL, "Panel", Scope::app()))] {
+        let chord = Modifiers::COMMAND | Modifiers::ALT;
+        frames.frame(vec![key_press(key, chord)], &mut show);
+        frames.frame(vec![key_release(key, chord)], &mut show);
+        let got: Vec<String> = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.key()).collect();
+        assert_eq!(got, [def.command.key()], "the chord fires the row's own ref");
+    }
+    let label = |command: &CommandRef| craft_ui::runtime::commands::resolve(&frames.ctx, command.clone()).label.to_string();
+    assert_eq!(label(&layers.command), "Layers");
+    assert_eq!(label(&info.command), "Info");
+    let unknown = CommandRef::parse_key(&format!(r#"{PANEL} {{"panel":"nope"}}"#)).expect("the trial's key parses");
+    assert_eq!(label(&unknown), "Panel", "the bare id's def answers a ref with other params");
+}
+
+/// The runtime's keymap reserves the system chords: a catalog default on one is not bound, and the keymap answers what
+/// `bindings` reads. It is `None` before the first frame.
+#[trial]
+fn the_runtime_keymap_reserves_the_system_chords() {
+    let untouched = Frames::uninstalled();
+    assert!(craft_ui::runtime::commands::keymap(&untouched.ctx).is_none(), "no keymap before the first frame");
+
+    let close = CommandRef::new(CLOSE);
+    let defs = vec![def(CLOSE, "Alt+F4", "Alt+F4"), def(QUICK, "Quick Mask", "Q")];
+    let mut frames = Frames::new();
+    craft_ui::testing::windows::set_os(&frames.ctx, craft_host::target::Os::Windows);
+    frames.commands(CommandInput::new().catalog(AppCatalog::new(defs, 1).expect("the trial's catalog is valid")));
+    let mut show = |ui: &mut Ui| {
+        AppShell::new(WindowKey::main()).show(ui, &mut ());
+    };
+    frames.idle(3, &mut show);
+    let keymap = craft_ui::runtime::commands::keymap(&frames.ctx).expect("a keymap after the first frame");
+    assert!(keymap.bindings(&close).is_empty(), "Alt+F4 is reserved on Windows");
+    assert_eq!(craft_ui::runtime::commands::bindings(&frames.ctx, &close), keymap.bindings(&close));
+    assert!(!keymap.bindings(&CommandRef::new(QUICK)).is_empty(), "an ordinary chord stays bound");
+    frames.frame(vec![key_press(Key::F4, Modifiers::ALT)], &mut show);
+    frames.frame(vec![key_release(Key::F4, Modifiers::ALT)], &mut show);
+    assert!(fired(&frames).is_empty(), "the reserved chord fires nothing");
+}
+
+/// A holder recorded in a pass is shown in the next, never in its own or before any pass.
+#[trial]
+fn a_command_shown_in_view_is_found_and_one_under_a_layer_is_not() {
+    use craft_ui::runtime::commands::{holds, shown};
+    let command = CommandRef::new(QUICK);
+    let rect = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(60.0, 20.0));
+    let seen = RefCell::new(Vec::new());
+    let mut show = |ui: &mut Ui| {
+        seen.borrow_mut().push(shown(ui.ctx(), &command));
+        holds(ui.ctx(), ui.layer_id(), rect, &std::sync::Arc::from([command.clone()]), "Quick".into());
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    let seen = seen.into_inner();
+    assert_eq!(seen[0], None, "before any pass");
+    let last = seen.last().expect("passes ran").clone().expect("shown after a pass that recorded it");
+    assert!(last.holder, "a holder's rect");
+    assert_eq!(last.rect, rect);
+}
+
 /// A story's commands: only an install that shows stories loads them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::CommandSet)]
 #[command(prefix = "trialStory", story)]

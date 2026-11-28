@@ -10,7 +10,7 @@ use std::sync::Arc;
 use super::super::context::PanelContext;
 use super::super::events::LayerColumn;
 use super::super::row::{EYE, LOCK};
-use super::super::{Groups, Session};
+use super::super::{Groups, LayerRowLook, Session};
 use crate::ui::filter::LayerFilter;
 use crate::ui::tree::{LayerInfo, LayerPart, LayerRowKey, LayerTree, SubRowGroup};
 
@@ -53,7 +53,8 @@ impl<Id: Clone + PartialEq> RowsModel<Id> {
     /// The rows of `tree` for `filter`, with the groups in `opened` shown open besides the tree's own.
     fn walk<T: LayerTree<Id = Id>>(tree: &T, filter: &LayerFilter, opened: &[Id], revision: u64) -> Self {
         let active = filter.active();
-        let mut walk = Walk { tree, filter, active, open_all: active && filter.lists_closed_contents(), opened, left_out: false };
+        let mut walk =
+            Walk { tree, filter, active, open_all: active && filter.lists_closed_contents(), holds: filter.keeps_holders(), opened, left_out: false };
         let mut rows = Vec::new();
         push_level(&mut walk, tree.children(None), Level { shown: 0, true_depth: 0 }, &mut rows);
         let keys = rows.iter().map(|row| row.key.clone()).collect();
@@ -176,6 +177,8 @@ struct Walk<'a, T: LayerTree> {
     active: bool,
     /// The filter lists the contents of closed groups.
     open_all: bool,
+    /// A row that holds a listed row stays listed at its own depth ([`LayerFilter::keeps_holders`]).
+    holds: bool,
     opened: &'a [T::Id],
     /// A layer was not listed.
     left_out: bool,
@@ -188,6 +191,21 @@ fn push_level<T: LayerTree>(walk: &mut Walk<'_, T>, children: Vec<T::Id>, level:
         let shown = !walk.active || tree.listed(&id, walk.filter);
         walk.left_out |= !shown;
         let open = walk.open_all || (!below.is_empty() && (tree.is_open(&id) || walk.opened.contains(&id)));
+        if !shown && walk.holds {
+            // The holder comes before what it holds, so what it holds is walked into its own buffer first.
+            let mut held = Vec::new();
+            if open {
+                push_level(walk, below, Level { shown: level.shown + 1, true_depth: level.true_depth + 1 }, &mut held);
+            }
+            if !held.is_empty() {
+                let mut row = leaf(LayerRowKey::Layer(id), level);
+                row.has_children = true;
+                row.open = true;
+                out.push(row);
+                out.append(&mut held);
+            }
+            continue;
+        }
         let at = out.len();
         if shown {
             let mut row = leaf(LayerRowKey::Layer(id.clone()), level);
@@ -301,14 +319,20 @@ pub(in crate::ui::panel) struct ToggleSweeps {
     lock: SweepApply,
 }
 
-impl Default for ToggleSweeps {
-    /// The eye shows only the pressed layer on Alt; the lock column ignores Alt.
-    fn default() -> Self {
-        ToggleSweeps { eye: SweepApply::show_only(), lock: SweepApply::new() }
-    }
-}
-
 impl ToggleSweeps {
+    /// The readers for `look`. The eye shows only the pressed layer on Alt; the lock column ignores Alt. Under
+    /// `ColorBar` the eye claims Cmd and Cmd+Alt and the lock claims Alt, for the host's Outline, Outline Others and
+    /// Lock Others.
+    pub(in crate::ui::panel) fn for_look(look: LayerRowLook) -> Self {
+        match look {
+            LayerRowLook::EyeLabel => ToggleSweeps { eye: SweepApply::show_only(), lock: SweepApply::new() },
+            LayerRowLook::ColorBar => ToggleSweeps {
+                eye: SweepApply::show_only().claims(Mods::CMD).claims(Mods { cmd: true, alt: true, ..Mods::NONE }),
+                lock: SweepApply::new().claims(Mods::ALT),
+            },
+        }
+    }
+
     /// The sweep reader of `column`.
     pub(super) fn of(&mut self, column: LayerColumn) -> &mut SweepApply {
         if column == LayerColumn::Visibility { &mut self.eye } else { &mut self.lock }

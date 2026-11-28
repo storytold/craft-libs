@@ -2,11 +2,11 @@
 
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{Axis, CancelReason, CanvasView, GESTURE_GAP, MotionMode, Wheel, WheelPhase, WheelUnit, ZoomLadder};
+use craft_behavior::{Axis, CancelReason, CanvasView, GESTURE_GAP, MotionMode, ZoomScheme};
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{
-    Autoscroll, Canvas, CanvasSpace, CanvasTool, Guide, GuideKey, MiddleButton, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions,
-    ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, TouchpadGlide, ViewCommands, ViewRequest, WheelNavigation, WheelScheme, tool_pass,
+    Autoscroll, Canvas, CanvasSpace, CanvasTool, Guide, GuideKey, MiddleAutoscrollFeel, MiddleButton, Momentary, MomentaryCommands, MomentaryTool,
+    NavigationOptions, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, ViewCommands, ViewRequest, WheelNavigation, WheelScheme, tool_pass,
 };
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
@@ -20,25 +20,93 @@ use egui::{Key, Modifiers, Pos2, TouchPhase, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+/// A canvas over a large document with Touchpad Glide set to `touchpad_glide`, whose view starts 210 points short of
+/// the document's right edge with the pointer over it, so a fast [`swipe`] (150 points) lifts 60 points short of it:
+/// the fixture and the view it shows.
+fn glide_rig(touchpad_glide: bool) -> (Fixture, Rc<Cell<CanvasView>>) {
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let shown = Rc::clone(&view);
+    let mut options = NavigationOptions::default();
+    options.touchpad_glide = touchpad_glide;
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(options).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+    });
+    fixture.settle();
+    let mut near = view.get();
+    near.center.x = 4000.0 - f64::from(near.rect.width()) / 2.0 - 210.0;
+    view.set(near);
+    fixture.frame(vec![pointer::moved(near.rect.center())]);
+    (fixture, view)
+}
+
+/// A two-finger swipe that scrolls the view `per_frame` points a frame toward the document's right edge over five
+/// frames, and lifts `pause` seconds after the last motion. The content follows the delta, so a leftward delta moves
+/// the view right.
+fn swipe(fixture: &mut Fixture, per_frame: f32, pause: f64) {
+    let event = |phase: TouchPhase, dx: f32| egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: Vec2::new(-dx, 0.0),
+        phase,
+        modifiers: Modifiers::NONE,
+        source: egui::MouseWheelSource::Trackpad,
+    };
+    fixture.frame(vec![event(TouchPhase::Start, per_frame)]);
+    for _ in 0..4 {
+        fixture.frame(vec![event(TouchPhase::Move, per_frame)]);
+    }
+    if pause > 0.0 {
+        fixture.advance(pause);
+    }
+    fixture.frame(vec![event(TouchPhase::End, 0.0)]);
+}
+
 #[trial]
 fn a_touchpad_glide_stops_in_the_pass_the_edge_clamp_leaves_the_view_where_it_was() {
-    const STEP: f64 = 0.016;
-    let mut glide = TouchpadGlide::new(true);
-    let mut now = 0.0;
-    glide.read(&Wheel::new(Vec2::new(30.0, 0.0), Mods::NONE, WheelUnit::Point, WheelPhase::Start), now, true);
-    for _ in 0..4 {
-        now += STEP;
-        glide.read(&Wheel::new(Vec2::new(30.0, 0.0), Mods::NONE, WheelUnit::Point, WheelPhase::Move), now, true);
+    let (mut fixture, view) = glide_rig(true);
+    let start = view.get();
+    swipe(&mut fixture, 30.0, 0.0);
+    let lifted = view.get().center.x;
+    eprintln!(
+        "DIAG a_touchpad_glide_stops_in_the_pass_the_edge_clamp_leaves_the_view_where_it_was: start x {} width {} zoom {}, lifted x {lifted}",
+        start.center.x,
+        start.rect.width(),
+        start.zoom
+    );
+    fixture.frame(vec![]);
+    let mut last = view.get().center.x;
+    assert!(last > lifted, "a fast lift glides on over later passes: {lifted} -> {last}");
+    let mut frames = 0;
+    loop {
+        fixture.frame(vec![]);
+        let x = view.get().center.x;
+        if x == last {
+            break;
+        }
+        last = x;
+        frames += 1;
+        assert!(frames < 120, "the glide ends");
     }
-    glide.read(&Wheel::new(Vec2::ZERO, Mods::NONE, WheelUnit::Point, WheelPhase::End), now, true);
-    now += STEP;
-    assert!(glide.step(now).x > 0.0, "a fast lift glides");
-    glide.moved(true);
-    now += STEP;
-    assert!(glide.step(now).x > 0.0, "a glide whose view moved goes on");
-    glide.moved(false);
-    now += STEP;
-    assert_eq!(glide.step(now), Vec2::ZERO, "a pass that left the view where it was ends the glide");
+    // Slowing alone would take about a hundred frames from this speed; the edge is 60 points away.
+    assert!(frames < 30, "the edge stopped the glide, not its slowing: {frames} frames");
+    // The pass in which the clamp left the view where it was ended the glide: a view moved back from the edge stays.
+    let mut back = view.get();
+    back.center.x -= 100.0;
+    view.set(back);
+    fixture.idle(2);
+    assert_eq!(view.get().center.x, back.center.x, "the glide ended at the edge");
+
+    for (case, glide, per_frame, pause) in
+        [("a slow lift", true, 1.0, 0.0), ("a lift after a pause", true, 30.0, 0.2), ("Touchpad Glide off", false, 30.0, 0.0)]
+    {
+        let (mut fixture, view) = glide_rig(glide);
+        swipe(&mut fixture, per_frame, pause);
+        let lifted = view.get().center.x;
+        fixture.idle(3);
+        assert_eq!(view.get().center.x, lifted, "{case} does not glide");
+    }
 }
 
 #[trial]
@@ -82,6 +150,42 @@ fn cmd_or_ctrl_with_page_down_scrolls_a_focused_canvas_sideways_on_every_os() {
         let down = view.get().center;
         assert!(down.y > sideways.y && down.x == sideways.x, "{os:?}: plain Page Down scrolls down");
     }
+}
+
+const NEXT_ARTBOARD: &str = "canvasTrial.nextArtboard";
+
+/// A page key the app binds to a command runs it ahead of the canvas's page scroll, with nothing focused and with the
+/// canvas focused (Page Down goes to the next artboard); an unbound page key still scrolls the view.
+#[trial]
+fn a_bound_page_key_runs_its_command_and_an_unbound_one_pages_the_canvas() {
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let shown = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+    });
+    let binding = Binding::parse("PageDown").expect("the trial's chord parses");
+    let catalog =
+        AppCatalog::new(vec![CommandDef::new(NEXT_ARTBOARD, "Next Artboard", Scope::app()).with_default(binding)], 1).expect("the catalog is valid");
+    fixture.commands(CommandInput::new().catalog(catalog));
+    fixture.settle();
+    let page = |fixture: &mut Fixture, key: Key| {
+        frame::take_output(fixture.ctx());
+        let before = view.get().center;
+        fixture.key(key, Modifiers::NONE).settle();
+        let fired: Vec<String> = frame::take_output(fixture.ctx()).fired.into_iter().map(|fired| fired.command.id).collect();
+        (fired, view.get().center != before)
+    };
+    assert_eq!(fixture.focused(), None, "nothing is focused");
+    assert_eq!(page(&mut fixture, Key::PageDown), (vec![NEXT_ARTBOARD.to_owned()], false), "unfocused: the bound Page Down runs its command");
+    assert_eq!(page(&mut fixture, Key::PageUp), (Vec::new(), true), "unfocused: the unbound Page Up scrolls");
+    let canvas = fixture.by_role(Role::CANVAS)[0];
+    fixture.click(&canvas);
+    assert!(fixture.focused().is_some(), "the click focuses the canvas");
+    assert_eq!(page(&mut fixture, Key::PageDown), (vec![NEXT_ARTBOARD.to_owned()], false), "focused: the bound Page Down runs its command");
+    assert_eq!(page(&mut fixture, Key::PageUp), (Vec::new(), true), "focused: the unbound Page Up scrolls");
 }
 
 #[trial]
@@ -177,9 +281,9 @@ type NavCase<'a> = (&'a str, NavigationOptions, &'a dyn Fn(Pos2) -> Vec<Vec<egui
 
 type WheelRig = (Fixture, Rc<Cell<CanvasView>>, Rc<Cell<Option<f64>>>, Rc<Cell<egui::Rect>>);
 
-/// A canvas over a large document at zoom 1 below a framework number field and an app's own text field, on `os`: the
-/// fixture, the view it shows, the number and where the app's field is.
-fn wheel_rig(os: Platform) -> WheelRig {
+/// A canvas over a large document at zoom 1 under `options` below a framework number field and an app's own text
+/// field, on `os`: the fixture, the view it shows, the number and where the app's field is.
+fn wheel_rig(os: Platform, options: NavigationOptions) -> WheelRig {
     let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
     let number = Rc::new(Cell::new(Some(10.0)));
     let app_field = Rc::new(Cell::new(egui::Rect::NOTHING));
@@ -192,7 +296,7 @@ fn wheel_rig(os: Platform) -> WheelRig {
         field_at.set(ui.add(egui::TextEdit::singleline(&mut text)).rect);
         let mut given = shown.get();
         given.rect = ui.available_rect_before_wrap();
-        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).view(given).show(ui, |_, _| {});
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(options).view(given).show(ui, |_, _| {});
         shown.set(canvas.output.view.unwrap_or(given));
     });
     fixture.os(os);
@@ -202,27 +306,33 @@ fn wheel_rig(os: Platform) -> WheelRig {
     (fixture, view, number, app_field)
 }
 
-/// One wheel line of `dy` with `modifiers` over the middle of the canvas.
-fn wheel_line(fixture: &mut Fixture, view: &Cell<CanvasView>, dy: f32, modifiers: Modifiers) {
-    let at = view.get().rect.center();
-    fixture.frame(vec![pointer::moved(at)]);
-    fixture.frame(vec![egui::Event::MouseWheel {
+/// A mouse wheel's line of `dy` with `modifiers`.
+fn line_event(dy: f32, modifiers: Modifiers) -> egui::Event {
+    egui::Event::MouseWheel {
         unit: egui::MouseWheelUnit::Line,
         delta: Vec2::new(0.0, dy),
         phase: egui::TouchPhase::Move,
         modifiers,
         source: egui::MouseWheelSource::Wheel,
-    }]);
+    }
+}
+
+/// One wheel line of `dy` with `modifiers` over the middle of the canvas.
+fn wheel_line(fixture: &mut Fixture, view: &Cell<CanvasView>, dy: f32, modifiers: Modifiers) {
+    let at = view.get().rect.center();
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![line_event(dy, modifiers)]);
 }
 
 #[trial]
 fn a_wheel_line_pans_the_canvas_photoshops_line_and_ctrl_alt_zooms_as_alt_does() {
+    let line = f64::from(NavigationOptions::default().wheel_line);
     for os in [Platform::Mac, Platform::Windows, Platform::Linux] {
-        let (mut fixture, view, _, _) = wheel_rig(os);
+        let (mut fixture, view, _, _) = wheel_rig(os, NavigationOptions::default());
         let before = view.get();
         wheel_line(&mut fixture, &view, -1.0, Modifiers::NONE);
         let panned = view.get();
-        assert!((panned.center.y - before.center.y - f64::from(WheelNavigation::LINE)).abs() < 1e-3, "{os:?}: {before:?} -> {panned:?}");
+        assert!((panned.center.y - before.center.y - line).abs() < 1e-3, "{os:?}: {before:?} -> {panned:?}");
         wheel_line(&mut fixture, &view, 1.0, Modifiers::ALT);
         let alt = view.get().zoom / panned.zoom;
         assert!((alt - WheelNavigation::NOTCH).abs() < 1e-3, "{os:?}: Alt + a line zooms a notch: {alt}");
@@ -244,6 +354,382 @@ fn a_wheel_line_pans_the_canvas_photoshops_line_and_ctrl_alt_zooms_as_alt_does()
 }
 
 #[trial]
+fn the_wheel_line_sets_the_scroll_but_not_the_zoom_per_notch_in_the_acrobat_scheme() {
+    const LINE: f32 = 40.0;
+    for scheme in [WheelScheme::Scroll, WheelScheme::Zoom, WheelScheme::Acrobat] {
+        let mut options = NavigationOptions::default();
+        options.wheel = scheme;
+        options.wheel_line = LINE;
+        let (mut fixture, view, _, _) = wheel_rig(Platform::Linux, options);
+        // The modifiers of a scrolling and of a zooming line in the scheme, and the zoom of one line.
+        let (scroll, zoom, notch) = match scheme {
+            WheelScheme::Zoom => (Modifiers::ALT, Modifiers::NONE, WheelNavigation::NOTCH),
+            WheelScheme::Acrobat => (Modifiers::NONE, Modifiers::COMMAND, WheelScheme::ACROBAT_NOTCH),
+            _ => (Modifiers::NONE, Modifiers::ALT, WheelNavigation::NOTCH),
+        };
+        let before = view.get();
+        wheel_line(&mut fixture, &view, -1.0, scroll);
+        let panned = view.get();
+        assert!(
+            (panned.center.y - before.center.y - f64::from(LINE)).abs() < 1e-3,
+            "{scheme:?}: a line scrolls the wheel line: {before:?} -> {panned:?}"
+        );
+        assert_eq!(panned.zoom, before.zoom, "{scheme:?}: a scrolling line does not zoom");
+        wheel_line(&mut fixture, &view, 1.0, zoom);
+        let ratio = view.get().zoom / panned.zoom;
+        assert!((ratio - notch).abs() < 1e-3, "{scheme:?}: a line zooms one notch whatever the wheel line: {ratio}");
+        let pinched = view.get();
+        fixture.frame(vec![egui::Event::Zoom(1.2)]);
+        assert!(view.get().zoom / pinched.zoom > 1.01, "{scheme:?}: a pinch zooms");
+    }
+
+    let mut options = NavigationOptions::default();
+    options.wheel = WheelScheme::Acrobat;
+    let (mut fixture, view, _, _) = wheel_rig(Platform::Linux, options);
+    let before = view.get();
+    wheel_line(&mut fixture, &view, -1.0, Modifiers::SHIFT);
+    let sideways = view.get();
+    assert!(sideways.center.x != before.center.x && sideways.center.y == before.center.y, "Shift scrolls sideways: {before:?} -> {sideways:?}");
+    wheel_line(&mut fixture, &view, 1.0, Modifiers::ALT);
+    assert_eq!(view.get().zoom, sideways.zoom, "Alt + wheel is no zoom in the Acrobat scheme");
+}
+
+type LatchRig = (Fixture, Rc<Cell<CanvasView>>, Rc<Cell<Option<egui::Id>>>);
+
+/// A canvas over a large document whose middle button latches a scroll: the fixture, the view it shows and the
+/// canvas's id.
+fn latch_rig() -> LatchRig {
+    let mut options = NavigationOptions::default();
+    options.middle_button = MiddleButton::AutoScroll;
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let canvas = Rc::new(Cell::new(None));
+    let (shown, seen) = (Rc::clone(&view), Rc::clone(&canvas));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(options).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+        seen.set(Some(canvas.output.response.id));
+    });
+    fixture.settle();
+    (fixture, view, canvas)
+}
+
+/// A latched middle scroll ends when the window loses focus, when the pointer leaves the window and when the canvas
+/// is not shown for a pass (another tab), and does not come back with it; a press, a move and a release that arrive in
+/// one frame latch it as a click does, measured from the press.
+#[trial]
+fn a_latched_middle_scroll_ends_on_blur_pointer_gone_and_a_hidden_canvas_and_latches_from_one_frame() {
+    let mut options = NavigationOptions::default();
+    options.middle_button = MiddleButton::AutoScroll;
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let open = Rc::new(Cell::new(true));
+    let (shown, visible) = (Rc::clone(&view), Rc::clone(&open));
+    let mut fixture = Fixture::new(move |ui| {
+        if !visible.get() {
+            return;
+        }
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(options).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+    });
+    fixture.settle();
+    let anchor = view.get().rect.center();
+    let below = anchor + Vec2::new(0.0, 80.0);
+    let latch = |fixture: &mut Fixture| {
+        middle(fixture, anchor, true);
+        middle(fixture, anchor, false);
+        fixture.frame(vec![pointer::moved(below)]);
+    };
+
+    latch(&mut fixture);
+    assert!(scrolls(&mut fixture, &view), "a click latches the scroll");
+    fixture.frame(vec![pointer::window_blurred()]);
+    assert!(!scrolls(&mut fixture, &view), "a window blur ends the latch");
+    fixture.frame(vec![egui::Event::WindowFocused(true), pointer::moved(below)]);
+    assert!(!scrolls(&mut fixture, &view), "the window's return does not bring it back");
+
+    latch(&mut fixture);
+    assert!(scrolls(&mut fixture, &view), "a click latches again");
+    fixture.frame(vec![egui::Event::PointerGone]);
+    assert!(!scrolls(&mut fixture, &view), "the pointer leaving the window ends the latch");
+
+    let button = |pressed, at| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Middle, pressed, modifiers: Modifiers::NONE };
+    fixture.frame(vec![pointer::moved(anchor), button(true, anchor), pointer::moved(below), button(false, below)]);
+    assert!(scrolls(&mut fixture, &view), "a press, a move and a release in one frame latch the scroll");
+    fixture.key(Key::Escape, Modifiers::NONE);
+
+    latch(&mut fixture);
+    assert!(scrolls(&mut fixture, &view), "a click latches again");
+    open.set(false);
+    fixture.idle(2);
+    open.set(true);
+    fixture.frame(vec![pointer::moved(below)]);
+    assert!(!scrolls(&mut fixture, &view), "a canvas shown again does not resume the latch");
+}
+
+/// The middle button going down (`pressed`) or up at `at`, with the pointer there. The testing kit has no
+/// middle-button helper.
+fn middle(fixture: &mut Fixture, at: Pos2, pressed: bool) {
+    let button = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Middle, pressed, modifiers: Modifiers::NONE };
+    fixture.frame(vec![pointer::moved(at), button]);
+}
+
+/// Whether the view moves over five frames with no input.
+fn scrolls(fixture: &mut Fixture, view: &Cell<CanvasView>) -> bool {
+    let before = view.get().center;
+    fixture.idle(5);
+    view.get().center != before
+}
+
+#[trial]
+fn middle_press_move_and_release_in_one_frame_latches_at_the_press() {
+    let (mut fixture, view, _) = latch_rig();
+    let at = view.get().rect.center();
+    let below = at + Vec2::new(0.0, 80.0);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Middle, pressed, modifiers: Modifiers::NONE };
+    fixture.frame(vec![pointer::moved(at), button(at, true), pointer::moved(below), button(below, false)]);
+    assert!(scrolls(&mut fixture, &view), "the pointer remains below the initial anchor");
+}
+
+#[trial]
+fn a_latched_middle_scroll_ends_on_escape_a_second_press_or_the_wheel_and_a_held_press_scrolls_until_its_release() {
+    let (mut fixture, view, canvas) = latch_rig();
+    let anchor = view.get().rect.center();
+    let below = anchor + Vec2::new(0.0, 80.0);
+    // A middle click latches the scroll; the pointer resting below the anchor, past the dead zone, scrolls the view.
+    let latch = |fixture: &mut Fixture| {
+        middle(fixture, anchor, true);
+        middle(fixture, anchor, false);
+        fixture.frame(vec![pointer::moved(below)]);
+    };
+
+    latch(&mut fixture);
+    assert!(
+        fixture.focused_stop().is_some_and(|(id, _)| Some(id) == canvas.get()),
+        "the middle press focuses the canvas, which its Escape claim needs"
+    );
+    assert!(scrolls(&mut fixture, &view), "a latched scroll moves the view");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    assert!(!scrolls(&mut fixture, &view), "Escape ends the latch");
+
+    latch(&mut fixture);
+    assert!(scrolls(&mut fixture, &view), "a click latches again");
+    middle(&mut fixture, below, true);
+    middle(&mut fixture, below, false);
+    assert!(!scrolls(&mut fixture, &view), "a second press ends the latch");
+
+    latch(&mut fixture);
+    assert!(scrolls(&mut fixture, &view), "a click latches again");
+    fixture.frame(vec![line_event(-1.0, Modifiers::NONE)]);
+    assert!(!scrolls(&mut fixture, &view), "the wheel ends the latch");
+
+    // A held press resting past the dead zone keeps scrolling with no pointer motion; its release ends the latch.
+    middle(&mut fixture, anchor, true);
+    fixture.frame(vec![pointer::moved(below)]);
+    assert!(scrolls(&mut fixture, &view), "a held press resting past the dead zone scrolls with no pointer motion");
+    middle(&mut fixture, below, false);
+    assert!(!scrolls(&mut fixture, &view), "the release of a held press ends the latch");
+}
+
+/// The seconds of one fixture frame.
+const FRAME: f64 = 1.0 / 60.0;
+
+/// A canvas over a large document whose middle button autoscrolls with `feel`: the fixture and the view it shows.
+fn feel_rig(feel: MiddleAutoscrollFeel) -> (Fixture, Rc<Cell<CanvasView>>) {
+    let mut options = NavigationOptions::default();
+    options.middle_button = MiddleButton::AutoScroll;
+    options.middle_autoscroll = feel;
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let shown = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(options).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+    });
+    fixture.settle();
+    (fixture, view)
+}
+
+/// Under `MiddleAutoscrollFeel::Reader` (a document reader's autoscroll) a held press dragged past the drag threshold
+/// but let go inside the dead zone keeps the run, where the default feel ends it; and the speed grows with the
+/// pointer's whole distance from the mark, |d|^2.2 x 0.04 points per second.
+#[trial]
+fn a_reader_autoscroll_keeps_a_short_hold_and_speeds_up_with_the_whole_distance() {
+    for feel in [MiddleAutoscrollFeel::Edge, MiddleAutoscrollFeel::Reader] {
+        let (mut fixture, view) = feel_rig(feel);
+        let anchor = view.get().rect.center();
+        let near = anchor + Vec2::new(0.0, 12.0);
+        middle(&mut fixture, anchor, true);
+        fixture.frame(vec![pointer::moved(anchor + Vec2::new(0.0, 6.0))]);
+        fixture.frame(vec![pointer::moved(near)]);
+        middle(&mut fixture, near, false);
+        fixture.frame(vec![pointer::moved(anchor + Vec2::new(0.0, 80.0))]);
+        let reader = feel == MiddleAutoscrollFeel::Reader;
+        assert_eq!(scrolls(&mut fixture, &view), reader, "{feel:?}: a release inside the dead zone keeps the run only for the reader");
+        fixture.key(Key::Escape, Modifiers::NONE);
+    }
+
+    let (mut fixture, view) = feel_rig(MiddleAutoscrollFeel::Reader);
+    let anchor = view.get().rect.center();
+    middle(&mut fixture, anchor, true);
+    middle(&mut fixture, anchor, false);
+    fixture.frame(vec![pointer::moved(anchor + Vec2::new(0.0, 50.0))]);
+    fixture.idle(2);
+    let before = view.get().center.y;
+    fixture.idle(60);
+    let travelled = view.get().center.y - before;
+    let expected = 50f64.powf(2.2) * 0.04 * 60.0 * FRAME;
+    assert!((travelled - expected).abs() < 1.0, "a second 50 points below the mark scrolls {expected}, not {travelled}");
+}
+
+type EasedRig = (Fixture, Rc<Cell<CanvasView>>, Rc<Cell<bool>>);
+
+/// A canvas over a large document with the eased wheel, whose app reruns the pass of a frame while the flag is set:
+/// the fixture, the view it shows and the flag.
+fn eased_rig() -> EasedRig {
+    let mut options = NavigationOptions::default();
+    options.eased_wheel = true;
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let rerun = Rc::new(Cell::new(false));
+    let (shown, again) = (Rc::clone(&view), Rc::clone(&rerun));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(options).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+        if again.replace(false) && frame::discardable(ui.ctx()) {
+            frame::discard_pass(ui.ctx(), "the trial's second pass");
+        }
+    });
+    fixture.settle();
+    (fixture, view, rerun)
+}
+
+/// One frame of `events`, run as two passes when `twice`.
+fn eased_frame(fixture: &mut Fixture, rerun: &Cell<bool>, twice: bool, events: Vec<egui::Event>) {
+    rerun.set(twice);
+    fixture.frame(events);
+    assert!(!twice || fixture.passes() >= 2, "the frame ran a second pass");
+}
+
+/// How far down the document the view travels from one wheel line through the `frames` frames of `step` seconds
+/// after it, each frame run as two passes when `twice`; and whether the first frame after the line still moved it.
+fn eased_travel(step: f64, frames: usize, twice: bool) -> (f64, bool) {
+    let (mut fixture, view, rerun) = eased_rig();
+    fixture.frame(vec![pointer::moved(view.get().rect.center())]);
+    let start = view.get().center.y;
+    eased_frame(&mut fixture, &rerun, twice, vec![line_event(-1.0, Modifiers::NONE)]);
+    let notched = view.get().center.y;
+    let mut moved_after = None;
+    for _ in 0..frames {
+        if step > FRAME {
+            fixture.advance(step - FRAME);
+        }
+        eased_frame(&mut fixture, &rerun, twice, vec![]);
+        moved_after.get_or_insert(view.get().center.y != notched);
+    }
+    (view.get().center.y - start, moved_after.unwrap_or(false))
+}
+
+#[trial]
+fn an_eased_wheel_pays_the_same_distance_at_any_frame_rate_keeps_paying_after_the_notch_and_stops_on_a_key_move() {
+    // A tenth of a second after the notch: six frames at 60 Hz, two at 20 Hz.
+    let (fast, moved_after) = eased_travel(FRAME, 6, false);
+    let (slow, _) = eased_travel(0.05, 2, false);
+    let (rerun, _) = eased_travel(FRAME, 6, true);
+    assert!(fast > 0.0, "the line moves the view: {fast}");
+    assert!(moved_after, "the view still moves on a pass after the notch");
+    assert!((fast - slow).abs() < 0.5, "the same distance at 60 Hz and at 20 Hz: {fast} and {slow}");
+    assert!((fast - rerun).abs() < 0.5, "a frame's second pass pays nothing more: {fast} and {rerun}");
+
+    let (mut fixture, view, _) = eased_rig();
+    let canvas = fixture.by_role(Role::CANVAS)[0];
+    fixture.click(&canvas);
+    fixture.frame(vec![pointer::moved(view.get().rect.center())]);
+    fixture.frame(vec![line_event(-1.0, Modifiers::NONE)]);
+    fixture.key(Key::PageDown, Modifiers::NONE);
+    let paged = view.get().center;
+    fixture.idle(5);
+    assert_eq!(view.get().center, paged, "a key move ends the owed motion");
+}
+
+/// A canvas over a large document whose app reruns the pass of a frame while the flag is set, with `eased_wheel_zoom`
+/// as `eased`: the fixture, the view it shows and the flag.
+fn zoom_rig(eased: bool) -> EasedRig {
+    let mut options = NavigationOptions::default();
+    options.eased_wheel_zoom = eased;
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let rerun = Rc::new(Cell::new(false));
+    let (shown, again) = (Rc::clone(&view), Rc::clone(&rerun));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(options).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+        if again.replace(false) && frame::discardable(ui.ctx()) {
+            frame::discard_pass(ui.ctx(), "the trial's second pass");
+        }
+    });
+    fixture.settle();
+    (fixture, view, rerun)
+}
+
+/// A zoom-modifier wheel notch of 60 points.
+fn zoom_notch() -> egui::Event {
+    egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, 60.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::COMMAND,
+        source: egui::MouseWheelSource::Wheel,
+    }
+}
+
+/// The zoom after each of the notch's frame and the `frames` frames after it, each run as two passes when `twice`.
+fn zooms_after_notch(eased: bool, frames: usize, twice: bool) -> Vec<f64> {
+    let (mut fixture, view, rerun) = zoom_rig(eased);
+    fixture.frame(vec![pointer::moved(view.get().rect.center())]);
+    let mut zooms = Vec::new();
+    eased_frame(&mut fixture, &rerun, twice, vec![zoom_notch()]);
+    zooms.push(view.get().zoom);
+    for _ in 0..frames {
+        eased_frame(&mut fixture, &rerun, twice, vec![]);
+        zooms.push(view.get().zoom);
+    }
+    zooms
+}
+
+#[trial]
+fn an_eased_wheel_zoom_spreads_a_notch_over_the_frames_after_it_and_lands_where_the_plain_one_jumps() {
+    let plain = zooms_after_notch(false, 3, false);
+    assert!(plain[0] > 1.0, "the notch zooms in: {plain:?}");
+    assert!(plain.windows(2).all(|pair| pair[0] == pair[1]), "upstream's default zooms at once: {plain:?}");
+
+    let eased = zooms_after_notch(true, 60, false);
+    let (first, last) = (eased[0], eased[eased.len() - 1]);
+    assert!(first > 1.0 && first < plain[0], "the notch's frame pays part of it: {first} of {}", plain[0]);
+    assert!(eased[2] > eased[1], "a frame after the notch still zooms: {eased:?}");
+    assert!((last / plain[0] - 1.0).abs() < 1e-3, "the ease lands on the plain zoom: {last} and {}", plain[0]);
+
+    let rerun = zooms_after_notch(true, 60, true);
+    assert!((rerun[1] - eased[1]).abs() < 1e-9, "a frame's second pass pays nothing more: {} and {}", rerun[1], eased[1]);
+
+    // A key move drops what is still owed.
+    let (mut fixture, view, _) = zoom_rig(true);
+    let canvas = fixture.by_role(Role::CANVAS)[0];
+    fixture.click(&canvas);
+    fixture.frame(vec![pointer::moved(view.get().rect.center())]);
+    fixture.frame(vec![zoom_notch()]);
+    fixture.key(Key::PageDown, Modifiers::NONE);
+    let paged = view.get().zoom;
+    fixture.idle(5);
+    assert_eq!(view.get().zoom, paged, "a key move ends the owed zoom");
+}
+
+#[trial]
 fn a_held_alt_key_is_in_the_wheels_modifiers_when_the_wheel_events_miss_it() {
     // Windows can report a held Alt in its key events and not in the wheel's modifier state.
     let alt_key = |pressed: bool, repeat: bool| egui::Event::Key {
@@ -253,7 +739,7 @@ fn a_held_alt_key_is_in_the_wheels_modifiers_when_the_wheel_events_miss_it() {
         repeat,
         modifiers: Modifiers::NONE,
     };
-    let (mut fixture, view, _, _) = wheel_rig(Platform::Windows);
+    let (mut fixture, view, _, _) = wheel_rig(Platform::Windows, NavigationOptions::default());
     fixture.frame(vec![alt_key(true, false)]);
     let before = view.get();
     wheel_line(&mut fixture, &view, 1.0, Modifiers::NONE);
@@ -272,7 +758,7 @@ fn a_held_alt_key_is_in_the_wheels_modifiers_when_the_wheel_events_miss_it() {
 
 #[trial]
 fn a_focused_field_takes_the_plain_wheel_over_the_canvas_and_leaves_it_the_view_keys() {
-    let (mut fixture, view, number, _) = wheel_rig(Platform::Linux);
+    let (mut fixture, view, number, _) = wheel_rig(Platform::Linux, NavigationOptions::default());
     let field = fixture.by_label("Smoothing").expect("the number field");
     fixture.click(&field);
     let before = view.get();
@@ -286,7 +772,7 @@ fn a_focused_field_takes_the_plain_wheel_over_the_canvas_and_leaves_it_the_view_
     assert!(view.get().center.x != zoomed.center.x, "Cmd/Ctrl + wheel still scrolls the view sideways");
     assert_eq!(number.get(), Some(11.0), "the view's wheel does not step the field");
 
-    let (mut fixture, view, _, app_field) = wheel_rig(Platform::Linux);
+    let (mut fixture, view, _, app_field) = wheel_rig(Platform::Linux, NavigationOptions::default());
     fixture.click_at(app_field.get().center());
     let before = view.get();
     wheel_line(&mut fixture, &view, 1.0, Modifiers::NONE);
@@ -297,7 +783,7 @@ fn a_focused_field_takes_the_plain_wheel_over_the_canvas_and_leaves_it_the_view_
 
 #[trial]
 fn the_view_commands_a_canvas_runs_are_in_the_frame_output_whatever_fired_them() {
-    let (mut fixture, view, _, _) = wheel_rig(Platform::Linux);
+    let (mut fixture, view, _, _) = wheel_rig(Platform::Linux, NavigationOptions::default());
     let canvas = fixture.by_role(Role::CANVAS)[0];
     fixture.click(&canvas);
     frame::take_output(fixture.ctx());
@@ -402,7 +888,7 @@ fn a_canvas_runs_the_view_commands_its_app_queues_before_the_fired_ones_and_repo
     queue.borrow_mut().extend([ViewRequest::Command(ViewCommands::ZoomIn), ViewRequest::Command(ViewCommands::ZoomIn)]);
     assert!(commands::fire(fixture.ctx(), ViewCommands::ZoomOut, FireSource::Menu));
     fixture.frame(vec![]);
-    let one_in = ZoomLadder::step(start, 1, DOCUMENT);
+    let one_in = ZoomScheme::PHOTOSHOP.step(start, 1, DOCUMENT);
     assert!((zoom::device(&view.get(), ppp) / one_in - 1.0).abs() < 1e-6, "in, in, out: one rung in");
     let delivered: Vec<_> = frame::take_output(fixture.ctx()).delivered.into_iter().map(|fired| fired.command).collect();
     assert_eq!(delivered, [CommandRef::from(ViewCommands::ZoomOut)], "a queued command is the app's, not delivered");
@@ -477,9 +963,15 @@ fn fingers(phase: TouchPhase, center: Pos2, half: Vec2) -> Vec<egui::Event> {
         .into()
 }
 
-/// The zoom ratio and the rotation of the view a canvas shows after the frames of `input` over its middle, under
-/// `options`, from a view turned `rotation` degrees and mirrored when `flip`.
-fn gestured(options: NavigationOptions, rotation: f64, flip: bool, input: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>>) -> (f64, f64) {
+/// The view a canvas shows before and after the frames of `input` over its middle, under `options` with `held`
+/// modifiers down, from a view turned `rotation` degrees and mirrored when `flip`.
+fn views_after(
+    options: NavigationOptions,
+    rotation: f64,
+    flip: bool,
+    held: Modifiers,
+    input: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>>,
+) -> (CanvasView, CanvasView) {
     // A view with a rect is shown as given: no first fit.
     let start = CanvasView::new(egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0)), Point::new(2000.0, 2000.0), 1.0);
     let view = Rc::new(Cell::new(start.rotation(rotation).flip_x(flip)));
@@ -493,11 +985,19 @@ fn gestured(options: NavigationOptions, rotation: f64, flip: bool, input: &dyn F
     fixture.settle();
     let middle = view.get().rect.center();
     fixture.frame(vec![pointer::moved(middle)]);
+    if held != Modifiers::NONE {
+        fixture.hold(held);
+    }
     let before = view.get();
     for events in input(middle) {
         fixture.frame(events);
     }
-    let after = view.get();
+    (before, view.get())
+}
+
+/// The zoom ratio and the rotation of the view a canvas shows after the frames of `input`, as [`views_after`].
+fn gestured(options: NavigationOptions, rotation: f64, flip: bool, input: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>>) -> (f64, f64) {
+    let (before, after) = views_after(options, rotation, flip, Modifiers::NONE, input);
     (after.zoom / before.zoom, after.rotation)
 }
 
@@ -549,6 +1049,32 @@ fn pinch_and_rotation_follow_the_gesture_options_and_the_flip() {
     let five: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>> = &|_| vec![vec![egui::Event::Rotate(5.0_f32.to_radians())]];
     let (_, wrapped) = gestured(navigation(true, true, true), 178.0, false, five);
     assert!(wrapped > -180.0 && wrapped <= 180.0 && (wrapped + 177.0).abs() < 0.05, "178° turned 5° more is -177°: {wrapped}");
+}
+
+#[trial]
+fn two_fingers_moving_together_pan_the_view_only_with_enable_gestures_and_before_the_modifier_rules() {
+    let shift = Vec2::new(30.0, 0.0);
+    let half = Vec2::new(50.0, 0.0);
+    let drag: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>> =
+        &|at| vec![fingers(TouchPhase::Start, at, half), fingers(TouchPhase::Move, at + shift, half), fingers(TouchPhase::End, at + shift, half)];
+    // (case, Enable Gestures, modifiers held, pans)
+    let cases = [
+        ("with Enable Gestures", true, Modifiers::NONE, true),
+        ("without Enable Gestures", false, Modifiers::NONE, false),
+        ("with Cmd held", true, Modifiers::COMMAND, true),
+    ];
+    for (case, gestures, held, pans) in cases {
+        let (before, after) = views_after(navigation(true, gestures, false), 0.0, false, held, drag);
+        if pans {
+            assert!(
+                after.center.x < before.center.x - 1.0 && (after.center.y - before.center.y).abs() < 1e-3,
+                "{case}: the content follows the fingers: {before:?} -> {after:?}"
+            );
+        } else {
+            assert_eq!(after.center, before.center, "{case}: the view stays");
+        }
+        assert!((after.zoom / before.zoom - 1.0).abs() < 1e-4, "{case}: a pan is no zoom");
+    }
 }
 
 #[trial]
@@ -790,10 +1316,10 @@ fn the_document_scheme_zooms_by_rungs_on_ctrl_or_cmd_wheel_and_drops_the_residua
 
     let start = device(&view);
     wheel_line(&mut fixture, &view, 1.0, Modifiers::COMMAND);
-    let one_in = ZoomLadder::step(start, 1, DOCUMENT);
+    let one_in = ZoomScheme::PHOTOSHOP.step(start, 1, DOCUMENT);
     assert!((device(&view) / one_in - 1.0).abs() < 1e-6, "Ctrl + one notch steps one rung in: {start} -> {}", device(&view));
     wheel_line(&mut fixture, &view, -1.0, Modifiers::COMMAND);
-    assert!((device(&view) / ZoomLadder::step(one_in, -1, DOCUMENT) - 1.0).abs() < 1e-6, "and one notch back steps one rung out");
+    assert!((device(&view) / ZoomScheme::PHOTOSHOP.step(one_in, -1, DOCUMENT) - 1.0).abs() < 1e-6, "and one notch back steps one rung out");
 
     let before = view.get();
     wheel_line(&mut fixture, &view, -1.0, Modifiers::NONE);
@@ -813,7 +1339,7 @@ fn the_document_scheme_zooms_by_rungs_on_ctrl_or_cmd_wheel_and_drops_the_residua
     wheel_line(&mut fixture, &view, 0.5, Modifiers::COMMAND);
     assert_eq!(device(&view), at, "the scroll between them dropped the first half");
     wheel_line(&mut fixture, &view, 0.5, Modifiers::COMMAND);
-    assert!((device(&view) / ZoomLadder::step(at, 1, DOCUMENT) - 1.0).abs() < 1e-6, "two halves in a row step one rung");
+    assert!((device(&view) / ZoomScheme::PHOTOSHOP.step(at, 1, DOCUMENT) - 1.0).abs() < 1e-6, "two halves in a row step one rung");
 }
 
 type ScrollRig = (Fixture, Rc<Cell<CanvasView>>, Rc<Cell<Option<Pos2>>>, Rc<RefCell<Vec<Point>>>, Rc<Cell<bool>>, Rc<Cell<bool>>);
@@ -823,7 +1349,7 @@ type ScrollRig = (Fixture, Rc<Cell<CanvasView>>, Rc<Cell<Option<Pos2>>>, Rc<RefC
 /// frame runs a second pass, and whether any pass reported a press to the tool since the flag was last cleared.
 fn autoscroll_rig() -> ScrollRig {
     let mut options = NavigationOptions::default();
-    options.middle_button = MiddleButton::Autoscroll;
+    options.middle_button = MiddleButton::AutoScroll;
     let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(500.0, 500.0), 1.0)));
     let mark = Rc::new(Cell::new(None));
     let passes = Rc::new(RefCell::new(Vec::new()));
@@ -1012,7 +1538,7 @@ fn the_wheel_scrolls_during_a_tool_drag_and_the_drag_follows_the_new_view() {
     }]);
     let after = view.get();
     assert!(
-        (after.center.y - before.center.y - f64::from(WheelNavigation::LINE)).abs() < 1e-3,
+        (after.center.y - before.center.y - f64::from(NavigationOptions::default().wheel_line)).abs() < 1e-3,
         "a wheel line scrolls the view while the drag runs: {before:?} -> {after:?}"
     );
 

@@ -4,6 +4,7 @@ use craft_behavior::CanvasView;
 use egui::Pos2;
 use kurbo::{Affine, CubicBez, ParamCurveNearest as _, Point};
 
+use super::model::SelectedAnchors;
 use super::{BezierHit, BezierOverlay, EditPath, HandleSide, HandlesShown, KnotRef, MAX_ANCHORS, PathSelection};
 
 /// A shown direction handle: its path's index, its knot, side and screen end.
@@ -46,15 +47,34 @@ impl BezierOverlay<'_> {
         reach: f32,
     ) -> Option<BezierHit> {
         // pc: crates/vector/src/edit.rs:337 `hit` (handles, anchors, segments; nearest per kind).
-        let shown = shown_handles(paths, selection, handles, view);
+        let shown = shown_handles(paths, selection, &SelectedAnchors::of(selection), handles, view);
         let anchors = paths.iter().map(EditPath::anchor_count).sum::<usize>() <= MAX_ANCHORS;
         hit_in(paths, &shown, anchors, view, at, reach)
     }
 }
 
 /// The handles to show, in path order, in then out, leaving out retracted ones and those of subpaths the selection
-/// does not show.
-pub(super) fn shown_handles(paths: &[EditPath], sel: &PathSelection, handles: HandlesShown, view: &CanvasView) -> Vec<Shown> {
+/// does not show. `anchors` holds the anchors `sel` selects.
+pub(super) fn shown_handles(
+    paths: &[EditPath],
+    sel: &PathSelection,
+    anchors: &SelectedAnchors,
+    handles: HandlesShown,
+    view: &CanvasView,
+) -> Vec<Shown> {
+    shown_handles_of(paths, sel, |path, knot| anchors.has_anchor(path, knot), sel.selected_len(), handles, view)
+}
+
+/// [`shown_handles`] with `has_anchor` answering whether a knot of a path is a selected anchor, and `selected` as the
+/// number of selected anchors that `OneAnchor` counts.
+fn shown_handles_of(
+    paths: &[EditPath],
+    sel: &PathSelection,
+    has_anchor: impl Fn(u64, KnotRef) -> bool,
+    selected: usize,
+    handles: HandlesShown,
+    view: &CanvasView,
+) -> Vec<Shown> {
     let mut shown = Vec::new();
     for (index, path) in paths.iter().enumerate() {
         let segment_ends = sel.segment.filter(|_| sel.path == Some(path.key)).and_then(|s| {
@@ -64,14 +84,15 @@ pub(super) fn shown_handles(paths: &[EditPath], sel: &PathSelection, handles: Ha
         for knot_ref in path.knot_refs().filter(|k| sel.shows(path.key, k.subpath)) {
             let Some(knot) = path.knot(knot_ref) else { continue };
             for side in [HandleSide::In, HandleSide::Out] {
+                let of_selection = || {
+                    has_anchor(path.key, knot_ref)
+                        || next_to_selected_anchor(path, &has_anchor, knot_ref, side)
+                        || segment_ends.is_some_and(|(a, b)| (side == HandleSide::Out && a == knot_ref) || (side == HandleSide::In && b == knot_ref))
+                };
                 let wanted = match handles {
                     HandlesShown::All => true,
-                    HandlesShown::Selected => {
-                        sel.has_anchor(path.key, knot_ref)
-                            || next_to_selected_anchor(path, sel, knot_ref, side)
-                            || segment_ends
-                                .is_some_and(|(a, b)| (side == HandleSide::Out && a == knot_ref) || (side == HandleSide::In && b == knot_ref))
-                    }
+                    HandlesShown::OneAnchor => selected == 1 && of_selection(),
+                    HandlesShown::Selected => of_selection(),
                 };
                 if wanted && !knot.retracted(side) {
                     shown.push(Shown { path: index, knot: knot_ref, side, at: view.to_screen(knot.handle(side)) });
@@ -82,16 +103,40 @@ pub(super) fn shown_handles(paths: &[EditPath], sel: &PathSelection, handles: Ha
     shown
 }
 
+/// The handles to draw for the anchors `sel` lists for the path at index `at` of `paths`, which the overlay does not
+/// edit: [`shown_handles`]' rule applied with that path as the selection's, the other selected anchors still counted.
+/// Empty for `All`, whose handles the scene already holds. The index of each is `at`. The overlay calls it once per
+/// path, so it reads the listed anchors and their count from `anchors`, the anchors `sel` selects, and copies none.
+pub(super) fn other_handles(
+    paths: &[EditPath],
+    at: usize,
+    sel: &PathSelection,
+    anchors: &SelectedAnchors,
+    handles: HandlesShown,
+    view: &CanvasView,
+) -> Vec<Shown> {
+    let Some(path) = paths.get(at) else { return Vec::new() };
+    if sel.path == Some(path.key) || handles == HandlesShown::All || !anchors.lists(path.key) {
+        return Vec::new();
+    }
+    let edited = sel.path.map_or(0, |_| sel.anchors.len());
+    let own = PathSelection::new(Some(path.key), Vec::new(), None);
+    shown_handles_of(std::slice::from_ref(path), &own, |key, knot| anchors.listed_anchor(key, knot), anchors.others_len() + edited, handles, view)
+        .into_iter()
+        .map(|shown| Shown { path: at, ..shown })
+        .collect()
+}
+
 /// Whether `side` of `knot` is the handle of a segment that a selected anchor ends: the previous anchor's out
 /// handle or the next anchor's in handle, across a closed subpath's seam too.
-fn next_to_selected_anchor(path: &EditPath, sel: &PathSelection, knot: KnotRef, side: HandleSide) -> bool {
+fn next_to_selected_anchor(path: &EditPath, has_anchor: &impl Fn(u64, KnotRef) -> bool, knot: KnotRef, side: HandleSide) -> bool {
     let Some(sub) = path.subpaths.get(knot.subpath) else { return false };
     let count = sub.knots.len();
     match side {
-        HandleSide::Out => sub.segment_ends(knot.knot).is_some_and(|(_, next)| sel.has_anchor(path.key, KnotRef::new(knot.subpath, next))),
+        HandleSide::Out => sub.segment_ends(knot.knot).is_some_and(|(_, next)| has_anchor(path.key, KnotRef::new(knot.subpath, next))),
         HandleSide::In => {
             let previous = (knot.knot + count.saturating_sub(1)) % count.max(1);
-            sub.segment_ends(previous).is_some_and(|(previous, _)| sel.has_anchor(path.key, KnotRef::new(knot.subpath, previous)))
+            sub.segment_ends(previous).is_some_and(|(previous, _)| has_anchor(path.key, KnotRef::new(knot.subpath, previous)))
         }
     }
 }

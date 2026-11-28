@@ -18,6 +18,7 @@ craft_ui::words! {
         kbd_insert: "kbd.insert" = "Insert";
         kbd_home: "kbd.home" = "Home";
         kbd_end: "kbd.end" = "End";
+        kbd_hold: template "kbd.hold" = "Hold {chord}";
     }
 }
 

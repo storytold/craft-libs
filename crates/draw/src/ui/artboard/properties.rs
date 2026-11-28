@@ -87,7 +87,7 @@ impl<'a> ArtboardProperties<'a> {
                 });
                 // A glyph-labelled number field; the pairs share a row, as W and H in the shape panel.
                 let field = |ui: &mut Ui, glyph: &Label, name: &Label, value: f64, range: &RangeInclusive<f64>| {
-                    let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph.clone()))).scrub(true);
+                    let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::caption(glyph.clone()))).scrub(true);
                     Field::new(name.clone())
                         .side(side)
                         .show(ui, |ui, _| {

@@ -4,7 +4,7 @@ use super::host::monitors;
 use super::native::{WindowAction, act, route_hit_test};
 use super::placement::{record_placement, saved_placement};
 use super::shell::{app_id, base_shell, os_of, refresh};
-use super::spec::{WindowSpec, frame_of_spec};
+use super::spec::{WindowLevel, WindowSpec, frame_of_spec};
 use super::{Record, refuse_close_under_modal, shared};
 use crate::runtime::egui::viewports;
 use crate::runtime::frame::PerViewport;
@@ -47,6 +47,11 @@ pub(crate) struct ViewportOpen<'a> {
 /// resizable window's size goes out only to open it (`ViewportOpen::follows_size`).
 pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: impl FnMut(&mut Ui)) {
     let viewport = viewports::viewport_id(open.id);
+    shared(ctx, |shared| {
+        if !shared.shown.contains(&viewport) {
+            shared.shown.push(viewport);
+        }
+    });
     let opened = PerViewport::<Record>::with(ctx, viewport, |record| record.seen.is_some());
     let (size, pos) = saved_geometry(ctx, open, opened).map_or((open.size, None), |(size, pos)| (Some(size), pos));
     let pos = pos.or(open.position);
@@ -54,6 +59,7 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         keep_placed(ctx, viewport, pos, size.filter(|_| open.follows_size));
     }
     let spec = open.spec;
+    let cancel_to = spec.hands_on_cancel.then(|| crate::runtime::egui::pass::current_viewport(ctx));
     let state = shared(ctx, |shared| shared.app);
     let os = os_of(ctx);
     let (chrome, captions) = frame_of_spec(ctx, spec);
@@ -64,6 +70,7 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         record.resizable = Some(open.resizable);
         record.min_size = open.limits.0;
         record.moved_by_app = open.moved_by_app;
+        record.cancel_to = cancel_to;
         record.awaiting_first_paint |= spec.shown_after_first_paint && record.facts.is_none();
         if record.title.as_deref() != Some(open.title) {
             record.title = Some(open.title.to_owned());
@@ -78,6 +85,10 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
     if standing.lowered {
         shared(ctx, |shared| shared.lowered = true);
     }
+    // A palette also yields to an app-modal or popup layer of the root window: hidden while one shows.
+    let yields = shared(ctx, |shared| shared.palettes_yield)
+        && PerViewport::<Record>::with(ctx, viewport, |record| record.level == Some(WindowLevel::Palette));
+    let hidden = !standing.shown || yields;
     let app = app_id(ctx);
     let opens = viewports::Spec {
         title: open.title,
@@ -94,7 +105,9 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         level: standing.level,
         resizable: open.resizable,
         taskbar: spec.taskbar,
-        hidden: PerViewport::<Record>::with(ctx, viewport, |record| record.awaiting_first_paint),
+        // The builder's visibility opens a window the app's state hides already hidden, and only opens it: egui would
+        // send each later change of it as a command beside the one below.
+        hidden: PerViewport::<Record>::with(ctx, viewport, |record| record.awaiting_first_paint || (hidden && record.facts.is_none())),
         active: spec.takes_focus,
         passes_pointer: spec.passes_pointer,
         app_id: &app,
@@ -122,7 +135,6 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
     });
     // A window opened hidden appears once its first pass ran; a window the app's state hides goes and comes back with
     // it. The builder's visibility only opens the window: egui sends no change of it once the window is open.
-    let hidden = !standing.shown;
     let (reveal, changed) = PerViewport::<Record>::with(ctx, viewport, |record| {
         let first = std::mem::take(&mut record.awaiting_first_paint);
         let changed = std::mem::replace(&mut record.hidden, hidden) != hidden;

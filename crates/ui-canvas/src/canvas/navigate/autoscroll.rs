@@ -1,6 +1,6 @@
 //! `MiddleAutoscroll`: the press, dead zone, mark and end of a middle-button autoscroll.
 
-use super::Autoscroll;
+use super::{Autoscroll, MiddleAutoscrollFeel};
 use crate::canvas::frame_step;
 use crate::primitives::{Draw, PaintShape, StrokeWidth};
 use crate::style::StyleColor;
@@ -43,11 +43,21 @@ pub(crate) struct MiddleAutoscroll {
     /// A press ended the run: it and its release reach no tool and start nothing.
     swallow: bool,
     last: Option<f64>,
+    /// Under [`MiddleAutoscrollFeel::Reader`], the stepped passes the held press rested past the dead zone.
+    held_passes: u32,
 }
 
 impl MiddleAutoscroll {
     /// Pointer distance around the mark, in screen points, that does not scroll.
     pub(crate) const DEAD_ZONE: f32 = 15.0;
+    /// Under [`MiddleAutoscrollFeel::Reader`], the held passes past the dead zone after which a release ends the run.
+    const READER_HELD_PASSES: u32 = 2;
+    /// Under [`MiddleAutoscrollFeel::Reader`], the power of the pointer's distance the speed grows with.
+    const READER_EXPONENT: f32 = 2.2;
+    /// Under [`MiddleAutoscrollFeel::Reader`], points per second per unit of the distance raised to the exponent.
+    const READER_GAIN: f32 = 0.04;
+    /// The farthest distance the reader's speed is computed from, so the power of a hostile pointer stays finite.
+    const READER_MAX_DISTANCE: f32 = 1_000_000.0;
 
     /// Starts the autoscroll with the mark at `at`, the point of the press that is now held. A point that is not finite
     /// starts nothing.
@@ -57,6 +67,7 @@ impl MiddleAutoscroll {
             self.held = true;
             self.dragged = false;
             self.last = None;
+            self.held_passes = 0;
         }
     }
 
@@ -67,25 +78,56 @@ impl MiddleAutoscroll {
 
     /// The press that started the run came up (or was cancelled): after a drag that ends the run, after a click the run
     /// goes on.
-    pub(crate) fn release(&mut self) {
-        let dragged = self.held && self.dragged;
+    ///
+    /// Under [`MiddleAutoscrollFeel::Reader`] the drag threshold does not count: the release ends the run after the held
+    /// press rested past the dead zone for two stepped passes, and keeps it after a shorter hold.
+    pub(crate) fn release(&mut self, feel: MiddleAutoscrollFeel) {
+        let ends = match feel {
+            MiddleAutoscrollFeel::Reader => self.held && self.held_passes >= Self::READER_HELD_PASSES,
+            _ => self.held && self.dragged,
+        };
         self.held = false;
         self.dragged = false;
-        if dragged {
+        if ends {
             self.end();
         }
+    }
+
+    /// Whether the press that started the run is still down.
+    pub(crate) fn held(&self) -> bool {
+        self.held
     }
 
     /// The view's step this pass for the pointer at `pointer`, `clock` being the pass clock in seconds: screen points
     /// toward the pointer, zero inside the dead zone, while stopped and in the first pass after the press. Later passes
     /// of one frame share the clock, so they step zero.
-    pub(crate) fn step(&mut self, pointer: Pos2, clock: f64) -> Vec2 {
+    ///
+    /// Under [`MiddleAutoscrollFeel::Reader`] the speed is the pointer's whole vertical distance from the mark raised to
+    /// the power 2.2, times 0.04, in points per second, and a held press resting past the dead zone counts its stepped
+    /// passes for [`release`](Self::release).
+    pub(crate) fn step(&mut self, pointer: Pos2, clock: f64, feel: MiddleAutoscrollFeel) -> Vec2 {
         let Some(origin) = self.origin else { return Vec2::ZERO };
         let dt = self.last.map_or(0.0, |last| frame_step(clock - last));
         if clock.is_finite() {
             self.last = Some(clock);
         }
-        Autoscroll::step(Self::past(origin, pointer), dt as f32)
+        let past = Self::past(origin, pointer);
+        match feel {
+            MiddleAutoscrollFeel::Reader => {
+                if past == Vec2::ZERO || dt <= 0.0 {
+                    return Vec2::ZERO;
+                }
+                // A frame's later passes take no time: counting them would count one frame's hold twice.
+                if self.held {
+                    self.held_passes = self.held_passes.saturating_add(1);
+                }
+                let dy = pointer.y - origin.y;
+                let speed = dy.abs().min(Self::READER_MAX_DISTANCE).powf(Self::READER_EXPONENT) * Self::READER_GAIN;
+                let step = dy.signum() * speed * dt as f32;
+                if step.is_finite() { Vec2::new(0.0, step) } else { Vec2::ZERO }
+            }
+            _ => Autoscroll::step(past, dt as f32),
+        }
     }
 
     /// The pointer's vertical offset from `origin` beyond the dead zone; zero inside it.
@@ -103,6 +145,7 @@ impl MiddleAutoscroll {
         self.held = false;
         self.dragged = false;
         self.last = None;
+        self.held_passes = 0;
     }
 
     /// The press that ended the run is still down: it is the autoscroll's to its release, so a stopping click cannot

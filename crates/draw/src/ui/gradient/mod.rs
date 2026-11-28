@@ -21,6 +21,6 @@ pub use fill_editor::{GradientFillEditor, GradientFillEditorOutput, GradientFill
 pub use gradient_line::{GradientLine, LineGradient, LinePart};
 pub use gradient_overlay::{GradientLineWords, GradientOverlay, GradientOverlayOutput, GradientOverlayStyle};
 pub use map::{GradientMap, GradientMapEditor, GradientMapOutput};
-pub use palette::{GradientGroup, GradientItem, GradientPalette, GradientPaletteOutput, GradientRef};
+pub use palette::{GradientGroup, GradientItem, GradientPalette, GradientPaletteOutput, GradientRef, RampSampler};
 pub use swatch::{GradientSwatch, GradientSwatchOutput};
 pub use tile::{FocusOutline, GradientTile};

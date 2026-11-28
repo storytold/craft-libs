@@ -2,7 +2,7 @@
 
 use super::app_values::EnvValue;
 use super::label::Label;
-use super::units::{PointSize, UnitWords, Units};
+use super::units::{PointSize, UnitWords, Units, ZoomPrecision};
 use super::values::{MotionPolicy, Scale};
 use super::{Held, ItemFacts, Scoped};
 use crate::runtime::commands::CommandChain;
@@ -32,6 +32,12 @@ impl<'a> EnvView<'a> {
         self.scoped.control(size)
     }
 
+    /// Whether an enclosing body is measuring the smallest width its children can use.
+    #[doc(hidden)]
+    pub fn measuring_least_width(&self) -> bool {
+        self.scoped.least
+    }
+
     /// The facts the collection recorded for the item `id`.
     #[doc(hidden)]
     pub fn facts_of(&self, id: Id) -> Option<&ItemFacts> {
@@ -48,6 +54,10 @@ impl<'a> EnvView<'a> {
         self.scoped.scroll_owner.map(|owner| owner.id)
     }
 
+    pub(crate) fn fallback_collection(&self) -> Option<Id> {
+        self.scoped.fallback_collection
+    }
+
     /// The view of the innermost scroll area around the scope.
     pub(crate) fn lazy_view(&self) -> Option<crate::runtime::lazy::View> {
         self.scoped.lazy
@@ -56,6 +66,14 @@ impl<'a> EnvView<'a> {
     /// The line length paragraphs wrap at in this scope, if a container around it sets one.
     pub(crate) fn measure(&self) -> Option<f32> {
         self.scoped.measure
+    }
+
+    /// The content-sized `Stack` column whose first sweep runs now, if the scope is a direct child of it in flow.
+    pub(crate) fn column_first_sweep(&self) -> Option<Id> {
+        match self.scoped.column {
+            Some(super::ColumnSweep::Count(column)) => Some(column),
+            _ => None,
+        }
     }
 
     /// The inside label the scope carries ([`inside_label`](EnvView::inside_label) reads it back).
@@ -151,6 +169,7 @@ impl<'a> EnvView<'a> {
     /// The scope's number format and unit words, to read and write numbers with their unit.
     pub fn units(&self) -> Units {
         Units::new(self.scoped.format.clone(), self.words::<UnitWords>(), self.scoped.words.clone(), self.scoped.values.get::<PointSize>())
+            .with_zoom_precision(self.scoped.values.get::<ZoomPrecision>())
     }
 
     /// How long ago `seconds` was, in the scope's language and digits: "Just now", "3 minutes ago", "Yesterday".

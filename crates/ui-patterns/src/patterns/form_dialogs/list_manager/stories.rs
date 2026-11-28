@@ -1,9 +1,10 @@
 //! Stories of `ListManager`.
 
-use super::{ActionEnabled, ListManager, ListManagerAction, ListManagerEntry, ListManagerWords};
+use super::{ActionEnabled, HostedListManager, ListManager, ListManagerAction, ListManagerEntry, ListManagerWords};
 use crate::buttons::Button;
 use crate::choice::{Checkbox, Radio, RadioGroup};
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
+use crate::dialog::stories::hosted;
 use crate::layout_components::Stack;
 use crate::runtime::env::Env;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -30,6 +31,15 @@ fn list_manager(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .opened(data.bind("open", true))
         .show(ui)
         .into()
+}
+
+/// Entries of kind 1 rename in place: F2 on a row edits its name there.
+#[story(ListManager<'static>, covers = [], drive = Drive::Never)]
+fn list_manager_renames(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<ListManagerWords>();
+    let actions = vec![ListManagerAction::run(&words), ListManagerAction::delete(&words)];
+    let entries: Vec<ListManagerEntry> = entries().into_iter().enumerate().map(|(at, entry)| if at == 1 { entry } else { entry.kind(1) }).collect();
+    ListManager::new("Macros", "Macro name:", entries, actions).renames(1).opened(data.bind("open", true)).show(ui).into()
 }
 
 /// A list manager whose name box the caller owns: the story keeps the name, and a button under the list sets it on
@@ -123,4 +133,14 @@ fn list_manager_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .opened(data.bind("open", true))
         .show(ui)
         .into()
+}
+
+/// The list manager on the dialog host: Run closes it with its choice, Delete keeps it open for the host.
+#[story(ListManager<'static>, covers = [], drive = Drive::Never)]
+fn hosted_list_manager(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<ListManagerWords>();
+    hosted(ui, data, (), || {
+        HostedListManager::new("macros", "Macros", "Macro name:", vec![ListManagerAction::run(&words), ListManagerAction::delete(&words)])
+            .entries(entries())
+    })
 }

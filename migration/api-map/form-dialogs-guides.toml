@@ -181,21 +181,21 @@ name = "PropertiesDialog"
 old = "craft_ui::dialog::properties::PropertiesDialog"
 new = "craft_ui::patterns::form_dialogs::PropertiesDialog"
 status = "moved"
-note = "A `FormDialog<DialogFields>`: `PropertiesDialog::new(title, tabs, Bind<DialogFields>)` with `.read_only(bool)`; `show(ui) -> PropertiesOutput { response, closed, result, rows }`. The tab is kept while the dialog is open; Alt turns Cancel into Reset."
+note = "A builder over a tabbed `ParamDialog`: `PropertiesDialog::new(key, title, tabs, Bind<DialogFields>)` with `.read_only(bool)`; `show(ui) -> PropertiesOutput { response, closed, result, rows, action }` is `into_param_dialog().show(ui)`. Without a `tab` binding the tab is kept while the dialog is open; Alt turns Cancel into Reset unless the dialog is read-only."
 
 [[type]]
 name = "PropertiesOutput"
 old = ""
 new = "craft_ui::patterns::form_dialogs::PropertiesOutput"
 status = "replaced"
-note = "`result` is the edited values at OK, or empty values when the dialog is read-only."
+note = "`result` is the edited values at OK, or empty values when the dialog is read-only; `action` is the id of the extra footer button or custom row button pressed this pass."
 
 [[type]]
 name = "PropertiesTab"
 old = "craft_ui::dialog::properties::PropertiesTab"
 new = "craft_ui::patterns::form_dialogs::PropertiesTab"
 status = "moved"
-note = "`PropertiesTab::new(title: impl Into<Label>, rows)`."
+note = "`PropertiesTab::new(title: impl Into<Label>, rows)`; `PropertiesTab::read_only(note: Option<Label>)` shows the tab's values without controls, under the note."
 
 [[type]]
 name = "PropertyRow"
@@ -207,18 +207,24 @@ note = "`Value { label, text }` and `Heading(Label)` as before, `Field(Box<Param
 [[setter]]
 type = "PropertiesDialog"
 old = "new(key, title, tabs)"
-new = "new(title, tabs, Bind<DialogFields>)"
+new = "new(key, title, tabs, Bind<DialogFields>)"
 
 [[setter]]
 type = "PropertiesDialog"
 old = "values(DialogFields)"
-new = "new(title, tabs, Bind<DialogFields>)"
+new = "new(key, title, tabs, Bind<DialogFields>)"
 note = "The values are the binding passed to `new`."
 
 [[setter]]
 type = "PropertiesDialog"
 old = "width(Width)"
 new = ""
+
+[[setter]]
+type = "PropertiesDialog"
+old = "tab(Bind<usize>) / extra_buttons(Vec<(String, Label)>) / shared(Vec<PropertyRow>) / shared_rows(SharedRows) / into_param_dialog()"
+new = "tab(Bind<usize>) / extra_buttons(Vec<(String, Label)>) / shared(Vec<PropertyRow>) / shared_rows(SharedRows) / into_param_dialog()"
+note = "New: the shown tab's binding; footer buttons that keep the dialog open, reported as `PropertiesOutput::action`; rows shown with every tab, above the strip or under the tab's rows; the tabbed `ParamDialog` the builder makes, which a `HostedParamDialog` owns."
 
 [[setter]]
 type = "GuideLayoutDialog"
@@ -234,6 +240,6 @@ new = "error(Label)"
 [[type]]
 name = "HostedPropertiesDialog"
 old = ""
-new = "craft_ui::patterns::form_dialogs::HostedPropertiesDialog"
-status = "replaced"
-note = "The `StackDialog` form of `PropertiesDialog`: the `DialogHost` owns the `DialogFields` and `build` makes the dialog over them each pass; it answers `DialogFields`."
+new = ""
+status = "removed"
+note = "Replaced by `HostedParamDialog`: `HostedParamDialog::new(ctx, key, fields, move |fields| PropertiesDialog::new(key, title, tabs.clone(), Bind::bound(fields)).into_param_dialog())`. It answers a `ParamResult`, whose `fields` are the values."

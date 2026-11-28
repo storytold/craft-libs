@@ -61,6 +61,9 @@ pub enum NamedPresetStyle {
     Menu,
 }
 
+/// A host's check of a typed preset name, as a closure: why it refuses the name, `None` when it accepts it.
+pub type NameRefuses<'a> = dyn Fn(&str) -> Option<PresetError> + 'a;
+
 /// Whether a name may be used: the host's answer for a typed name.
 pub struct NameCheck<'a>(Box<dyn NameChecker + 'a>);
 
@@ -72,7 +75,15 @@ impl<'a> NameCheck<'a> {
         NameCheck(Box::new(WithInputs { inputs, check }))
     }
 
-    fn refuses(&self, name: &str) -> Option<PresetError> {
+    /// The host's `check`, a closure: a memoized view that holds it runs every pass, as no key can follow what the
+    /// closure reads.
+    pub fn of_host(check: &'a NameRefuses<'a>) -> Self {
+        NameCheck::new(HostCheck(check), |host, name| (host.0)(name))
+    }
+
+    /// The refusal of `name`, `None` when the host accepts it; the preset editor of the PDF dialog asks it for its own
+    /// name field.
+    pub fn refuses(&self, name: &str) -> Option<PresetError> {
         self.0.refuses(name)
     }
 }
@@ -83,6 +94,11 @@ impl MemoProps for NameCheck<'_> {
         self.0.key(key);
     }
 }
+
+/// The inputs of [`NameCheck::of_host`].
+#[derive(MemoProps)]
+#[memo_props(every_pass = "the host's name check is a closure, whose answers no key can follow")]
+struct HostCheck<'a>(&'a NameRefuses<'a>);
 
 /// A name check: its answer, and the key of its inputs and `fn`.
 trait NameChecker {
@@ -106,10 +122,11 @@ impl<I: MemoProps> NameChecker for WithInputs<I> {
     }
 }
 
-/// What the name field checks a typed name against: the host's check, the suggestion an empty field stands for, the
-/// name of the preset being renamed and the messages.
+/// What a preset name field checks a typed name against: the host's check, the suggestion an empty field stands for, the
+/// name of the preset being renamed and the messages. A field takes it as the inputs of its binding's check
+/// (`Bind::check_with`).
 #[derive(MemoProps)]
-struct Naming<'n, 'c> {
+pub struct Naming<'n, 'c> {
     check_name: Option<&'n NameCheck<'c>>,
     fallback: Option<&'n str>,
     own: Option<&'n str>,
@@ -117,9 +134,14 @@ struct Naming<'n, 'c> {
     invalid: &'n Label,
 }
 
-impl Naming<'_, '_> {
-    /// Why `name` cannot be used, as the field shows it.
-    fn problem(&self, name: &str) -> Option<Label> {
+impl<'n, 'c> Naming<'n, 'c> {
+    /// A new name checked by `check_name`, refused with `taken` or `invalid`.
+    pub fn new(check_name: Option<&'n NameCheck<'c>>, taken: &'n Label, invalid: &'n Label) -> Self {
+        Naming { check_name, fallback: None, own: None, taken, invalid }
+    }
+
+    /// Why `name` cannot be used, as the field shows it; an empty name is not refused here.
+    pub fn problem(&self, name: &str) -> Option<Label> {
         let own = self.own.is_some_and(|label| label.to_lowercase() == name.to_lowercase());
         if name.is_empty() || own {
             return None;
@@ -210,7 +232,7 @@ enum Ask {
 #[must_use = "show the row with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 #[pattern(probe(NamedPresetRow<'static, u32>))]
-pub struct NamedPresetRow<'a, K: Value + Eq + Hash + 'static> {
+pub struct NamedPresetRow<'a, K: Value + Eq + Hash + crate::contract::MemoProps + 'static> {
     label: Label,
     picker: PresetPicker<'a, K>,
     /// The name the New prompt starts with, and the name an empty field stands for.
@@ -230,7 +252,7 @@ pub struct NamedPresetRow<'a, K: Value + Eq + Hash + 'static> {
     style: NamedPresetStyle,
 }
 
-impl<'a, K: Value + Eq + Hash + 'static> NamedPresetRow<'a, K> {
+impl<'a, K: Value + Eq + Hash + crate::contract::MemoProps + 'static> NamedPresetRow<'a, K> {
     /// A row named `label` around `picker`.
     pub fn new(label: impl Into<Label>, picker: PresetPicker<'a, K>) -> Self {
         NamedPresetRow {
@@ -250,7 +272,8 @@ impl<'a, K: Value + Eq + Hash + 'static> NamedPresetRow<'a, K> {
         let env = Env::of(ui);
         let words = env.words::<PresetWords>();
         let common = env.words::<CommonWords>();
-        let rows = picker.preset_rows();
+        let kept = picker.preset_source().rows(ui.ctx(), &env);
+        let rows = kept.as_slice();
         let is_built_in = |key: &K| built_in.as_ref().is_some_and(|test| test.passes(key));
         let suggestion = suggest_name.as_deref().unwrap_or("");
         let mut picker = Some(picker);
@@ -272,8 +295,9 @@ impl<'a, K: Value + Eq + Hash + 'static> NamedPresetRow<'a, K> {
             let naming = body.memory::<Option<Draft<K>>>();
             Row::new().wrap(true).show(ui, |ui, row| {
                 let mut field: Option<Response> = None;
-                if let Some(picker) = picker.take() {
-                    let out = picker.show(ui);
+                // The row's body runs more than once in a pass: each run shows its own copy of the picker.
+                if let Some(picker) = picker.as_mut() {
+                    let out = picker.reborrowed().show(ui);
                     field = Some(out.edit.response.clone());
                     if let Some(key) = out.picked {
                         if naming.as_ref().and_then(|draft| draft.target.as_ref()).is_some_and(|target| *target != key) {

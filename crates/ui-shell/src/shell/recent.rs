@@ -27,12 +27,35 @@ pub struct RecentFile {
     pub opened: Option<i64>,
     /// Created, in seconds since the Unix epoch, for sorting by Created.
     pub created: Option<i64>,
+    /// A note the app gives ("12 pages · 2.4 MB"), shown in place of the age line.
+    pub note: Option<String>,
 }
 
 impl RecentFile {
     /// A recent file at `path` shown as `name`, with no dates.
     pub fn new(path: impl Into<PathBuf>, name: impl Into<String>) -> Self {
-        RecentFile { path: path.into(), name: name.into(), opened: None, created: None }
+        RecentFile { path: path.into(), name: name.into(), opened: None, created: None, note: None }
+    }
+
+    /// This file last opened at `opened`, in seconds since the Unix epoch.
+    #[must_use]
+    pub fn opened(mut self, opened: i64) -> Self {
+        self.opened = Some(opened);
+        self
+    }
+
+    /// This file created at `created`, in seconds since the Unix epoch.
+    #[must_use]
+    pub fn created(mut self, created: i64) -> Self {
+        self.created = Some(created);
+        self
+    }
+
+    /// This file with `note` shown in place of its age line.
+    #[must_use]
+    pub fn note(mut self, note: impl Into<String>) -> Self {
+        self.note = Some(note.into());
+        self
     }
 }
 
@@ -46,12 +69,22 @@ pub struct Template {
     pub name: String,
     /// The line under the name: "1920 × 1080 px".
     pub detail: String,
+    /// The width and height of the page the template makes, in any one unit: its card shows the page
+    /// (`Tile::page`), as New Document's presets do, in place of the template's thumbnail.
+    pub page: Option<(f64, f64)>,
 }
 
 impl Template {
     /// A template `id` named `name`, with `detail` under the name.
     pub fn new(id: impl Into<String>, name: impl Into<String>, detail: impl Into<String>) -> Self {
-        Template { id: id.into(), name: name.into(), detail: detail.into() }
+        Template { id: id.into(), name: name.into(), detail: detail.into(), page: None }
+    }
+
+    /// This template makes a `width` by `height` page, which its card shows.
+    #[must_use]
+    pub fn page(mut self, width: f64, height: f64) -> Self {
+        self.page = Some((width, height));
+        self
     }
 }
 

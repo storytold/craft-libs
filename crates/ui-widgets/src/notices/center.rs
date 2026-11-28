@@ -34,12 +34,30 @@ pub struct PostedNotice {
     /// Stays until dismissed, whatever the center's timeout (an error the user must read).
     #[prop(flag)]
     sticky: bool,
+    /// How far the job has got, between 0 and 1: the card shows a progress bar and the percentage.
+    #[prop(quantity = "fraction done")]
+    progress: Option<f32>,
+    /// The notice's own action; activating it ends the notice as `NoticeEnd::Action`.
+    #[prop(into)]
+    action: Option<Label>,
+    /// The message under the title: a title and a message on one card.
+    #[prop(into)]
+    message: Option<String>,
 }
 
 impl PostedNotice {
     /// A notice titled `title` in the neutral tone.
     pub fn new(title: impl Into<String>) -> Self {
-        PostedNotice { title: title.into(), lines: Vec::new(), tone: Tone::Neutral, dismiss_key: None, sticky: false }
+        PostedNotice {
+            title: title.into(),
+            lines: Vec::new(),
+            tone: Tone::Neutral,
+            dismiss_key: None,
+            sticky: false,
+            progress: None,
+            action: None,
+            message: None,
+        }
     }
 }
 
@@ -53,6 +71,8 @@ pub enum NoticeEnd {
     Expired(ToastId),
     /// The window's card limit removed the notice to make room for a newer one.
     Dropped(ToastId),
+    /// The notice's own action ([`PostedNotice::action`]) was activated.
+    Action(ToastId),
     /// "Don't Show Again": the app stores `key` as silenced.
     #[non_exhaustive]
     Silenced {
@@ -81,9 +101,34 @@ impl Outcome for NoticeCenterOutput {
     }
 }
 
-/// The notices the center posted that have not ended, with their dismiss keys.
+/// A notice the center posted and has not heard the end of.
+#[derive(Clone)]
+struct Tracked {
+    id: ToastId,
+    /// The notice's dismiss key: its card then ends with a "Don't Show Again" action.
+    key: Option<String>,
+    /// The notice has its own action, the card's first.
+    action: bool,
+}
+
+impl Tracked {
+    /// What the app hears of the card's `end`. The card's actions are the notice's own action, if any, then "Don't
+    /// Show Again", if it has a dismiss key.
+    fn end(&self, end: ToastEnd) -> NoticeEnd {
+        let id = self.id;
+        match (end, &self.key) {
+            (ToastEnd::Action(0), _) if self.action => NoticeEnd::Action(id),
+            (ToastEnd::Action(_), Some(key)) => NoticeEnd::Silenced { id, key: key.clone() },
+            (ToastEnd::Action(_) | ToastEnd::Dismissed, _) => NoticeEnd::Closed(id),
+            (ToastEnd::Expired, _) => NoticeEnd::Expired(id),
+            (ToastEnd::Dropped, _) => NoticeEnd::Dropped(id),
+        }
+    }
+}
+
+/// The notices the center posted that have not ended.
 #[derive(Clone, Default)]
-struct Posted(Vec<(ToastId, Option<String>)>);
+struct Posted(Vec<Tracked>);
 
 fn posted_slot() -> egui::Id {
     unique("craft_ui.notice_center")
@@ -92,9 +137,9 @@ fn posted_slot() -> egui::Id {
 /// The app's way to post notices to a window. It holds only the window and its timeout: the queue, the timers, the
 /// hover pause and the announcement are the toast service's. So is the cap of `toast::MAX_CARDS` cards: a new notice
 /// always shows, and makes room by dropping the oldest earlier card that would leave by itself (no action, a timeout),
-/// else the oldest; `show` reports a dropped notice as `NoticeEnd::Dropped`. A body posts to its shell's window
-/// (`BodyCx::shell`). A notice with a dismiss key shows a "Don't Show Again" action; `show` reports how posted notices
-/// ended.
+/// else the oldest without progress; a progress notice is never dropped. `show` reports a dropped notice as
+/// `NoticeEnd::Dropped`. A body posts to its shell's window (`BodyCx::shell`). A notice's own action comes first on its
+/// card and a dismiss key's "Don't Show Again" last; `show` reports how posted notices ended.
 #[derive(Clone, Debug, PartialEq, crate::contract::Pattern, crate::contract::Props)]
 pub struct NoticeCenter {
     /// The window whose toasts show the notices.
@@ -118,7 +163,8 @@ impl NoticeCenter {
     }
 
     /// Posts `notice` to the center's window in the running viewport; `None` when its dismiss key is in `silenced`, and
-    /// in a measuring run, which posts nothing and tracks nothing (the real run posts it).
+    /// in a measuring run, which posts nothing and tracks nothing (the real run posts it). A notice with progress has no
+    /// timer.
     pub fn post(&self, ctx: &Context, notice: &PostedNotice, silenced: &[String]) -> Option<ToastId> {
         if notice.dismiss_key.as_ref().is_some_and(|key| silenced.contains(key)) {
             return None;
@@ -128,14 +174,21 @@ impl NoticeCenter {
         }
         let politeness = if notice.tone == Tone::Bad { Politeness::Assertive } else { Politeness::Polite };
         let timeout = if notice.sticky { None } else { self.timeout };
-        let mut card = Toast::new(Label::Empty).title(notice.title.clone()).lines(notice.lines.clone());
+        let message = notice.message.clone().map_or(Label::Empty, Label::from);
+        let mut card = Toast::new(message).title(notice.title.clone()).lines(notice.lines.clone());
         card = card.tone(notice.tone).timeout(timeout).politeness(politeness);
+        if let Some(fraction) = notice.progress {
+            card = card.progress(fraction);
+        }
+        if let Some(action) = &notice.action {
+            card = card.action(ToastAction::new(action.clone()));
+        }
         if notice.dismiss_key.is_some() {
             card = card.action(ToastAction::new(dont_show_again()));
         }
         let id = toast::post(ctx, &self.window, card);
         with_session(ctx, posted_slot(), |posted: &mut Posted| {
-            posted.0.push((id, notice.dismiss_key.clone()));
+            posted.0.push(Tracked { id, key: notice.dismiss_key.clone(), action: notice.action.is_some() });
             if posted.0.len() > TRACKED {
                 posted.0.remove(0);
             }
@@ -148,6 +201,12 @@ impl NoticeCenter {
         toast::keep(ctx, id);
     }
 
+    /// Sets how far the job of notice `id` has got, `fraction` between 0 and 1, and its message; the center keeps
+    /// tracking the id.
+    pub fn set_progress(&self, ctx: &Context, id: ToastId, fraction: f32, message: Option<Label>) {
+        toast::set_progress(ctx, id, fraction, message);
+    }
+
     /// Removes a notice the app no longer needs (the job it reported on was cancelled).
     pub fn remove(&self, ctx: &Context, id: ToastId) {
         toast::dismiss(ctx, id);
@@ -158,14 +217,9 @@ impl NoticeCenter {
         let ctx = ui.ctx().clone();
         let mut ends = Vec::new();
         with_session(&ctx, posted_slot(), |posted: &mut Posted| {
-            posted.0.retain(|(id, key)| {
-                let Some(end) = toast::end(&ctx, *id) else { return true };
-                ends.push(match (end, key) {
-                    (ToastEnd::Action(_), Some(key)) => NoticeEnd::Silenced { id: *id, key: key.clone() },
-                    (ToastEnd::Action(_) | ToastEnd::Dismissed, _) => NoticeEnd::Closed(*id),
-                    (ToastEnd::Expired, _) => NoticeEnd::Expired(*id),
-                    (ToastEnd::Dropped, _) => NoticeEnd::Dropped(*id),
-                });
+            posted.0.retain(|tracked| {
+                let Some(end) = toast::end(&ctx, tracked.id) else { return true };
+                ends.push(tracked.end(end));
                 false
             });
         });

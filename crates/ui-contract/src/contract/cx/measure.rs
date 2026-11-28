@@ -16,6 +16,9 @@ use std::hash::Hash;
 pub struct MeasureCx<'a, C: Component> {
     /// What the inherited context holds that component code may read.
     pub env: EnvView<'a>,
+    /// The env `env` views: the env installed for `ui`, in the component's own scope, so its layout facts are those of
+    /// the place `ui`'s children are shown in.
+    pub(crate) scope: &'a crate::runtime::env::Env,
     /// The component's cached style.
     pub style: &'a C::Style,
     /// `Common` after step 1.
@@ -44,6 +47,11 @@ impl<'a, C: Component> MeasureCx<'a, C> {
 }
 
 impl<C: Component> MeasureCx<'_, C> {
+    /// The enclosing container's reading-width cap, if it sets one.
+    pub fn wrap_limit(&self) -> Option<f32> {
+        self.env.measure()
+    }
+
     /// The bound command as step 1 resolved it, with the scoped bindings of the scopes above the component.
     pub fn command(&self) -> Option<&ResolvedCommand> {
         self.resolved.command
@@ -68,7 +76,7 @@ impl<C: Component> MeasureCx<'_, C> {
             // The column is an input of this measure call besides its room (step 5 opens the call), and of the calls
             // around it that measure it.
             let ctx = self.ui.ctx();
-            let width = crate::layout::row_alone_room(self.ui).unwrap_or_else(|| crate::layout::flow_room(self.ui).x);
+            let width = crate::layout::row_alone_room(self.scope).unwrap_or_else(|| crate::layout::flow_room(self.ui, self.scope).x);
             let width = layout_memory::read_input(ctx, layout_memory::calls_from(ctx), self.id.with("column_room"), width);
             Some(width).filter(|width| width.is_finite())
         });
@@ -78,16 +86,40 @@ impl<C: Component> MeasureCx<'_, C> {
         }
     }
 
-    /// The width a picture sizes at (a plot, a wheel, a well): it takes the room it is offered, down to `least` and up
-    /// to `most`. At its least, where the width is unbounded, and in a measuring run of a column that sizes its width
-    /// from its content (which offers no room), it is `least`: a picture needs no width of its own, so it never sets
-    /// that column's width, and the real run shows it across the width the column settles on. A band picture keeps a
-    /// height of its own; a square one is as tall as this.
+    /// Whether the component is a direct child of a `Row` body, a bar's included. A component that could wrap into
+    /// lines keeps its one-line least there, and the row's shrink step decides who gives way.
+    pub fn in_row(&self) -> bool {
+        crate::layout::row_alone_room(self.scope).is_some()
+    }
+
+    /// The width a band picture sizes at (a plot, a strip), one whose height is its own whatever its width: it takes
+    /// the room it is offered, up to `most`. At its least, where the width is unbounded, and in a measuring run of a
+    /// column that sizes its width from its content (which offers no room), it is `least`: a picture needs no width of
+    /// its own, so it never sets that column's width, and the real run shows it across the width the column settles
+    /// on. Offered less room than `least` (a panel at its narrowest width), it takes that room, down to the plot's
+    /// least height (`size.plot.height`, or `least` when that is smaller), so it stays inside its container.
     pub fn picture_width(&self, least: f32, most: f32) -> f32 {
         match self.room.filter(|_| self.proposal != Proposal::Min) {
-            Some(room) => room.clamp(least, most.max(least)),
+            Some(room) => room.clamp(least.min(self.tokens.size.plot.height), most.max(least)),
             None => least,
         }
+    }
+
+    /// The size of a picture whose height follows from its width (a square graph, a wheel, an image at its aspect):
+    /// [`picture_width`](Self::picture_width)'s width, and `height` of it. Where a content column's measuring run
+    /// offers it no room, it is a held child of the column (`layout::HeldKind::Picture`): when the column settles
+    /// wider than the picture, the column sweeps again and offers it that width, so the picture is measured as tall
+    /// as it shows.
+    pub fn picture_size(&self, least: f32, most: f32, height: impl FnOnce(f32) -> f32) -> Vec2 {
+        // The width it reports is its placed width, which the place step gives (`run::place_root`).
+        if self.room.is_none()
+            && self.proposal != Proposal::Min
+            && let Some(column) = self.env.column_first_sweep()
+        {
+            crate::layout::report_held(self.ui.ctx(), column, self.id, crate::layout::HeldKind::Picture, f32::INFINITY);
+        }
+        let width = self.picture_width(least, most);
+        Vec2::new(width, height(width))
     }
 
     /// The label as given.
@@ -131,7 +163,7 @@ impl<C: Component> MeasureCx<'_, C> {
     /// editor draws past its last letter, so the caret stays inside the control and the text never scrolls.
     pub fn field_text(&self, run: &TextRun<'_>) -> Vec2 {
         let text = self.layout(run).size();
-        Vec2::new(text.x + self.ui.visuals().text_cursor.stroke.width, text.y)
+        Vec2::new(text.x + crate::runtime::egui::style::caret_width(self.ui.ctx()), text.y)
     }
 
     /// Lays document `text` out `text.wrap` wide, as `ContentPainterCx::layout` will paint it: the galley a content

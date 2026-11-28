@@ -5,10 +5,28 @@ use craft_behavior::{IconId, keyed};
 use craft_ui::contract::ShowCollection as _;
 use craft_ui::primitives::IconSpec;
 use craft_ui::testing::{Fixture, pointer, trial, widest_runs};
-use craft_ui::tile_grid::{CaptionPlace, Tile, TileGrid};
+use craft_ui::tile_grid::{CaptionPlace, Tile, TileActionPlace, TileGrid};
 use egui::Vec2;
+use std::cell::Cell;
+use std::rc::Rc;
 
 const KEYS: [usize; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+#[trial]
+fn band_tile_check_does_not_cover_its_picture() {
+    let picture = Rc::new(Cell::new(egui::Rect::NOTHING));
+    let painted = Rc::clone(&picture);
+    let mut fixture = Fixture::new(move |ui| {
+        let source = keyed(&KEYS[..1], |key: &usize| *key);
+        let _ = TileGrid::new("Pages").checks(true).action_place(TileActionPlace::Band).show_items(ui, &source, &mut |_, _| {
+            let painted = Rc::clone(&painted);
+            Tile::new("Page").thumb(craft_ui::list::ThumbAspect::SQUARE, move |_, rect| painted.set(rect))
+        });
+    });
+    fixture.room(Vec2::new(600.0, 400.0)).settle();
+    let check = fixture.by_role(craft_ui::contract::Role::CHECK_BOX).first().expect("page check").rect;
+    assert!(check.bottom() <= picture.get().top(), "check {check:?} overlaps picture {:?}", picture.get());
+}
 
 fn icon_grid(content_cells: bool) -> Fixture {
     let mut fixture = Fixture::new(move |ui| {

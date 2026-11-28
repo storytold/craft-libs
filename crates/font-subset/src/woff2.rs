@@ -185,7 +185,9 @@ mod tests {
 
     #[test]
     fn round_trips_every_table_and_header_matches_spec() {
-        for path in FIXTURES {
+        // The gate runs a TrueType and a CFF font (the first and the last); nightly runs all of them.
+        let all = craft_testkit::hostile::divisor() == 1;
+        for path in FIXTURES.iter().enumerate().filter(|(i, _)| all || *i == 0 || *i == FIXTURES.len() - 1).map(|(_, p)| p) {
             let sfnt = fixture(path);
             let tables = parse_tables(&sfnt).unwrap();
             for quality in [Quality::Static, Quality::OnDemand] {

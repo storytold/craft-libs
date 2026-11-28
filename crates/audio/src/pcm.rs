@@ -14,7 +14,7 @@ pub(crate) fn le_u16(b: &[u8], pos: usize) -> Option<u16> {
 }
 
 /// Little-endian `u32` at `pos`.
-#[cfg(feature = "decode-native")]
+#[cfg(any(feature = "decode-native", feature = "flac-decode"))]
 pub(crate) fn le_u32(b: &[u8], pos: usize) -> Option<u32> {
     let s: [u8; 4] = b.get(pos..pos.checked_add(4)?)?.try_into().ok()?;
     Some(u32::from_le_bytes(s))
@@ -35,7 +35,7 @@ pub(crate) fn be_u16(b: &[u8], pos: usize) -> Option<u16> {
 }
 
 /// Big-endian `u32` at `pos`.
-#[cfg(feature = "decode-native")]
+#[cfg(any(feature = "decode-native", feature = "flac-decode"))]
 pub(crate) fn be_u32(b: &[u8], pos: usize) -> Option<u32> {
     let s: [u8; 4] = b.get(pos..pos.checked_add(4)?)?.try_into().ok()?;
     Some(u32::from_be_bytes(s))

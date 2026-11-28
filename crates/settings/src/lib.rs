@@ -58,6 +58,10 @@ pub use error::{LoadReport, MigrateError, ReadOnlyReason, SaveStatus, SectionErr
 pub use files::DiskFiles;
 #[cfg(target_arch = "wasm32")]
 pub use files::LocalStorageFiles;
+/// The browser's settings storage under its former name.
+#[cfg(target_arch = "wasm32")]
+#[deprecated(note = "use `LocalStorageFiles::new(cap)`")]
+pub type BrowserFiles = LocalStorageFiles;
 pub use files::SettingsFiles;
 pub use migrate::LegacyFile;
 pub use paths::{Location, Portable, Probe, Resolved, Rule};

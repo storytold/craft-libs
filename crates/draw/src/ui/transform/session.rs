@@ -205,6 +205,8 @@ pub struct TransformSession<W = ()> {
     nudge_pause: Option<f64>,
     /// When the latest arrow nudge was applied (the `now` of [`apply`](Self::apply)).
     last_nudge: Option<f64>,
+    /// See [`revision`](Self::revision).
+    revision: u64,
 }
 
 impl<W: TransformWarp> TransformSession<W> {
@@ -230,6 +232,7 @@ impl<W: TransformWarp> TransformSession<W> {
             reference_point: false,
             nudge_pause: None,
             last_nudge: None,
+            revision: 0,
         }
     }
 
@@ -424,6 +427,7 @@ impl<W: TransformWarp> TransformSession<W> {
                 }
             }
             TransformEdit::Warp(warp) => {
+                self.revision += u64::from(self.draft.warp.is_none());
                 if self.draft.warp.is_none()
                     && let Some(frame) = warp.frame()
                 {
@@ -434,6 +438,7 @@ impl<W: TransformWarp> TransformSession<W> {
                 self.draft.warp = Some(warp);
             }
             TransformEdit::LeaveWarp => {
+                self.revision += u64::from(self.draft.warp.is_some());
                 if let Some((frame, state)) = self.draft.unwarped.take() {
                     self.draft.frame = frame;
                     self.draft.state = state;
@@ -498,6 +503,14 @@ impl<W: TransformWarp> TransformSession<W> {
         self.step(Step::Redo)
     }
 
+    /// Moves whenever what [`can_undo`](Self::can_undo), [`can_redo`](Self::can_redo) or whether a
+    /// [`warp`](Self::warp) is open report may change: an undo step recorded or taken, the Warp phase opened
+    /// or closed. A new session starts at 0, where nothing can be undone or redone and no warp is open, so
+    /// an app keys what it shows of those on this number.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// Whether [`undo`](Self::undo) has a step to take back.
     pub fn can_undo(&self) -> bool {
         self.history.can_undo()
@@ -557,6 +570,7 @@ impl<W: TransformWarp> TransformSession<W> {
         let step = EditEvent::set(Mixed::Same(self.rested.clone()), self.draft.clone(), Arc::from(""), None);
         self.history.record(&step);
         self.rested = self.draft.clone();
+        self.revision += 1;
     }
 
     /// One box or field event. A Begin takes the draft as `before`; a Set outside a gesture is a
@@ -600,6 +614,7 @@ impl<W: TransformWarp> TransformSession<W> {
         let moved = self.history.step(&mut self.draft, step);
         self.rested = self.draft.clone();
         self.changed = false;
+        self.revision += u64::from(moved);
         moved
     }
 }

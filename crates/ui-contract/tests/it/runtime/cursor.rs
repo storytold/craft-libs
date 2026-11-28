@@ -2,8 +2,10 @@
 //! one at its size, and is painted at the pointer otherwise.
 
 use craft_behavior::{CountMark, Cursor, CursorBadge, CursorIcon, CursorPriority, IconId, PaintedCursor, PointerGlyph};
-use craft_host::target::{Backend, Os, Runtime, ShellInfo};
+use craft_host::target::{Backend, Caps, Os, Runtime, ShellInfo};
+use craft_theme::{Appearance, ColorToken, Contrast, Mode, ModeChoice, Rgba, Size, TextSize, ThemeDef, format, resolve};
 use craft_ui::runtime::cursor;
+use craft_ui::runtime::env::{RootEnv, Scale};
 use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Frames, install_spec, trial};
 use egui::{CustomCursorImage, Pos2, Rect, Vec2, ViewportId};
@@ -159,6 +161,26 @@ fn a_painted_pointer_is_the_window_cursor_image_where_the_window_takes_one() {
     assert!(hidden.image.is_none() && hidden.shapes == 0 && hidden.icon == egui::CursorIcon::None);
 }
 
+/// Sa-9 (4): a shell that cannot set the system cursor (Wayland with no cursor theme, where a hidden pointer never
+/// comes back) keeps the system pointer under every painted cursor and paints none, in the main window and another.
+#[trial]
+fn a_shell_that_cannot_set_the_system_cursor_keeps_the_system_pointer() {
+    let wayland = linux().backend(Backend::Wayland);
+    let without = wayland.clone().caps(wayland.caps.difference(Caps::SYSTEM_CURSOR));
+    for cursor in [PaintedCursor::circle(20.0), PaintedCursor::circle(300.0), PaintedCursor::Hand, PaintedCursor::Hidden] {
+        let mut with = frames(wayland.clone(), 1.25);
+        let seen = painted(&mut with, cursor.clone());
+        assert_eq!(seen.icon, egui::CursorIcon::None, "{cursor:?}: with the system cursor the painted one stands in for it");
+
+        let mut kept = frames(without.clone(), 1.0);
+        for viewport in [ViewportId::ROOT, ViewportId::from_hash_of("child window")] {
+            let seen = frame_in(&mut kept, viewport, &[(Cursor::Painted(cursor.clone()), CursorPriority::Tool)]);
+            assert_ne!(seen.icon, egui::CursorIcon::None, "{cursor:?} in {viewport:?}: the system pointer stays");
+            assert!(seen.image.is_none() && seen.shapes == 0, "{cursor:?} in {viewport:?}: no tool cursor is drawn");
+        }
+    }
+}
+
 /// A tool icon rides below and right of its pointer: beside the plain pointer, the image's marks reach as far left and up
 /// from the hotspot (the arrow's tip, the crosshair's centre) and farther right and down; an icon the catalog lacks
 /// leaves the plain pointer.
@@ -186,6 +208,87 @@ fn a_tool_icon_rides_below_right_of_its_pointer() {
         }
         let missing = reach(&painted(&mut frames, PaintedCursor::pointer_tool(pointer, IconId::new("no_such_icon"))).image.unwrap());
         assert_eq!(missing, plain, "{pointer:?}: only the pointer");
+    }
+}
+
+/// An arrow with a tool icon keeps ink on its hotspot (the arrow's tip), and a badge lands below right of the icon: the
+/// marks reach no farther left or up than without it, and farther right (photocraft#16671).
+#[trial]
+fn a_badged_tool_pointer_keeps_its_tip_on_the_hotspot_and_the_badge_below_right() {
+    fn reach(image: &CustomCursorImage) -> [i32; 4] {
+        let (side, [hx, hy]) = (i32::from(image.size[0]), image.hotspot.map(i32::from));
+        let mut reach = [0; 4];
+        for (i, px) in image.rgba.chunks(4).enumerate() {
+            if px[3] > 0 {
+                let (dx, dy) = (i as i32 % side - hx, i as i32 / side - hy);
+                reach = [reach[0].max(-dx), reach[1].max(-dy), reach[2].max(dx), reach[3].max(dy)];
+            }
+        }
+        reach
+    }
+    for scale in [1.0, 1.25, 2.0] {
+        let mut frames = frames(linux(), scale);
+        let plain = painted(&mut frames, PaintedCursor::pointer_tool(PointerGlyph::Arrow, IconId::new("lasso"))).image.unwrap();
+        let [hx, hy] = plain.hotspot.map(i32::from);
+        assert!(pixel(&plain, hx, hy)[3] > 0, "{scale}: the arrow's tip is on the hotspot");
+        for badge in [CursorBadge::Add, CursorBadge::Subtract, CursorBadge::Intersect] {
+            let badged = PaintedCursor::pointer_tool_badged(PointerGlyph::Arrow, IconId::new("lasso"), Some(badge));
+            let image = painted(&mut frames, badged).image.unwrap();
+            let [hx, hy] = image.hotspot.map(i32::from);
+            assert!(pixel(&image, hx, hy)[3] > 0, "{scale} {badge:?}: the arrow's tip is on the hotspot");
+            let (with, without) = (reach(&image), reach(&plain));
+            assert_eq!(with[..2], without[..2], "{scale} {badge:?}: nothing reaches farther left or up");
+            // A minus lies on the icon's bottom edge, so only the plus and the cross reach lower.
+            assert!(with[2] > without[2] && with[3] >= without[3], "{scale} {badge:?}: the badge lies at the icon's lower right");
+        }
+        let none = PaintedCursor::pointer_tool_badged(PointerGlyph::Arrow, IconId::new("lasso"), None);
+        assert_eq!(reach(&painted(&mut frames, none).image.unwrap()), reach(&plain), "{scale}: no badge is the plain pointer");
+    }
+}
+
+/// A library theme whose overlay marks take a blue tint from its accent, with `overlay.cursor` pinned to white in dark
+/// mode when `pinned`.
+fn tinted_theme(pinned: bool) -> Arc<ThemeDef> {
+    let pin = if pinned { r##", "dark": { "overlay.cursor": "#ffffff" }"## } else { "" };
+    let json = format!(
+        r##"{{
+            "schema": "craft-design-theme", "schema_version": 1,
+            "id": "trial.cursor-ink", "name": "Cursor ink",
+            "seeds": {{
+                "neutral": "#535353", "accent": "#78ADF6",
+                "status": {{ "good": "#85DC6A", "warn": "#E8B046", "bad": "#FF8080", "info": "#78ADF6" }}
+            }}{pin}
+        }}"##
+    );
+    Arc::new(format::parse(json.as_bytes()).expect("the trial's theme parses").theme)
+}
+
+/// A painted pointer is drawn in `overlay.cursor`: a theme that pins it gets a tool's icon and the pointer's own marks
+/// in the pin, with no pixel in `overlay.stroke`, and a theme that does not gets them in `overlay.stroke`, which the
+/// cursor colour follows.
+#[trial]
+fn a_painted_pointer_is_drawn_in_the_cursor_colour() {
+    let appearance =
+        Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size: Size::default(), text_size: TextSize::default(), reduced_motion: false };
+    for pinned in [false, true] {
+        let def = tinted_theme(pinned);
+        let tokens = resolve(&def, appearance, None).tokens;
+        let (ink, stroke) = (tokens.color(ColorToken::OverlayCursor), tokens.color(ColorToken::OverlayStroke));
+        assert_eq!(ink == stroke, !pinned, "pinned {pinned}: the cursor colour follows overlay.stroke unless pinned");
+        let mut frames = frames(linux(), 1.0);
+        frames.root(RootEnv::new().library_theme(def).mode(ModeChoice::Dark));
+        for cursor in [
+            PaintedCursor::tool(IconId::new("brush"), Vec2::new(4.0, 20.0), None),
+            PaintedCursor::pointer_tool(PointerGlyph::Arrow, IconId::new("lasso")),
+            PaintedCursor::Hand,
+        ] {
+            let image = painted(&mut frames, cursor.clone()).image.unwrap();
+            let drawn_in = |colour: Rgba| image.rgba.chunks(4).any(|p| p[3] == 255 && (0..3).all(|i| p[i].abs_diff(colour.0[i]) <= 2));
+            assert!(drawn_in(ink), "pinned {pinned}, {cursor:?}: drawn in overlay.cursor");
+            if pinned {
+                assert!(!drawn_in(stroke), "{cursor:?}: no pixel in overlay.stroke");
+            }
+        }
     }
 }
 
@@ -381,4 +484,58 @@ fn a_tip_outline_shows_only_inside_its_region() {
     // A request with no region keeps the pointer's own path at any position.
     let seen = painted(&mut frames, PaintedCursor::circle(RADIUS));
     assert!(seen.image.is_some() && seen.shapes == 0, "an outline with no region is the window's image");
+}
+
+/// Frames on `shell` on a display of `native` device pixels per point, at an interface zoom of `zoom`, with painted
+/// pointers following the zoom or not (`RootEnv::cursor_follows_zoom`).
+fn zoomed(shell: ShellInfo, native: f32, zoom: f32, follows: bool) -> Frames {
+    let mut frames = frames(shell, native);
+    frames.root(RootEnv::new().scale(Scale::new(zoom)).cursor_follows_zoom(follows));
+    // egui applies the zoom from the next pass.
+    frames.frame(Vec::new(), |_| {});
+    frames
+}
+
+/// The width on the display, in device pixels, of what one frame painted for `cursor`.
+fn painted_width(frames: &mut Frames, cursor: PaintedCursor) -> f32 {
+    frames.frame_in_viewport(ViewportId::ROOT, vec![moved(AT)], |ui| {
+        cursor::request(ui.ctx(), Cursor::Painted(cursor.clone()), CursorPriority::Tool);
+    });
+    let mut paint = frames.take_paint().expect("the frames record their paint");
+    paint.textures_delta.clear();
+    let bounds = paint.shapes.iter().map(|clipped| clipped.shape.visual_bounding_rect()).filter(|rect| rect.is_positive()).reduce(Rect::union);
+    bounds.expect("the pointer is painted").width() * paint.pixels_per_point
+}
+
+/// With `cursor_follows_zoom` off (the Scale Cursor Proportional to UI preference), a pointer keeps the size it has
+/// at zoom 1 at every interface zoom: as the window's image on each OS, and painted where the window takes no image.
+/// On, it grows with the zoom. A brush tip is canvas geometry, so it follows the zoom either way.
+#[trial]
+fn a_pointer_keeps_its_size_at_every_zoom_unless_it_follows_the_zoom() {
+    let rows: [(&str, ShellInfo, f32); 3] =
+        [("X11 at 1", linux(), 1.0), ("Windows at 1.5", linux().os(Os::Windows), 1.5), ("macOS at 2", linux().os(Os::Mac), 2.0)];
+    for (name, shell, native) in rows {
+        let image = |zoom: f32, follows: bool, cursor: PaintedCursor| {
+            let mut frames = zoomed(shell.clone(), native, zoom, follows);
+            painted(&mut frames, cursor).image.unwrap_or_else(|| panic!("{name}: the window takes the image"))
+        };
+        for glyph in [PaintedCursor::Hand, PaintedCursor::arrow(false), PaintedCursor::tool(IconId::new("brush"), Vec2::new(4.0, 20.0), None)] {
+            let base = image(1.0, true, glyph.clone());
+            assert_eq!(image(1.0, false, glyph.clone()).size, base.size, "{name} {glyph:?}: at zoom 1 the setting makes no difference");
+            let kept = image(2.0, false, glyph.clone());
+            assert_eq!((kept.size, kept.hotspot), (base.size, base.hotspot), "{name} {glyph:?}: off, the pointer keeps its size at zoom 2");
+            assert!(image(2.0, true, glyph.clone()).size[0] > base.size[0], "{name} {glyph:?}: on, the pointer grows with the zoom");
+        }
+        let tip = PaintedCursor::circle(20.0);
+        assert_eq!(image(2.0, false, tip.clone()).size, image(2.0, true, tip).size, "{name}: a brush tip keeps the canvas's size");
+    }
+
+    // The web paints the pointer into the window.
+    let web = linux().runtime(Runtime::Web);
+    let width = |zoom: f32, follows: bool, cursor: PaintedCursor| painted_width(&mut zoomed(web.clone(), 1.0, zoom, follows), cursor);
+    let base = width(1.0, true, PaintedCursor::Hand);
+    assert!((width(2.0, false, PaintedCursor::Hand) - base).abs() < 0.5, "off, the painted pointer keeps its size at zoom 2");
+    assert!(width(2.0, true, PaintedCursor::Hand) > base * 1.5, "on, the painted pointer grows with the zoom");
+    let tip = PaintedCursor::circle(20.0);
+    assert!((width(2.0, false, tip.clone()) - width(2.0, true, tip)).abs() < 0.5, "a painted brush tip keeps the canvas's size");
 }

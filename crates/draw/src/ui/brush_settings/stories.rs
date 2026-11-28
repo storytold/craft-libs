@@ -245,6 +245,14 @@ fn tip_ellipse(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     StoryOutput::from(shown).readout(note)
 }
 
+#[story(TipEllipse<'static>, covers = [], drive = Drive::Never)]
+fn tip_ellipse_flat(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let flat = TipAngle::new(0.0, 0.0);
+    let shown = TipEllipse::new("Tip angle and roundness", data.bind("flat_tip", flat)).least_roundness(0.0).show(ui);
+    let note = angle_note(*data.value("flat_tip", flat));
+    StoryOutput::from(shown).readout(note)
+}
+
 #[story(TipEllipse<'static>, covers = [Mixed], drive = Drive::Never)]
 fn tip_ellipse_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     TipEllipse::new("Tip angle and roundness", data.bind_mixed("mixed", Mixed::<TipAngle>::Mixed)).show(ui).into()

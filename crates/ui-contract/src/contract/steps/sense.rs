@@ -8,7 +8,9 @@ use egui::{Context, Id, Rect};
 
 /// Registers a wheel taker for next pass's split (8.6): `sensed`, the taker the wheel bits of the component's sense
 /// make (`WheelTaker::for_sense`). Every value control is a `WheelTaker::value` taker, in any scope: a wheel gesture it
-/// owns ends with a `WheelPhase::End` share. A value control with a text part is a field (`WheelTaker::field`). A value
+/// owns ends with a `WheelPhase::End` share. A value control with a text part that steps by the wheel (it senses a
+/// wheel axis: a number field) is a field (`WheelTaker::field`), which takes the plain wheel while focused wherever the
+/// pointer is; a text field that does not step leaves the wheel over the rest of the window to what is there. A value
 /// control takes the wheel only while focused or armed, on the axes it senses (the vertical one when it senses none);
 /// inside a `WheelScope::Free` scope one that senses the wheel takes it without focus. A value control that steps by
 /// the wheel declares the axis it steps in its sense, so a free scope frees it; one that does not step keeps the
@@ -29,7 +31,10 @@ pub(crate) fn register_wheel(
     if let Some(taker) = taker {
         wheel::register(
             ctx,
-            taker.value(value_control).field(value_control && text).gated(scope == WheelScope::Gated || (value_control && !free && !zone)),
+            taker
+                .value(value_control)
+                .field(value_control && text && sensed.is_some())
+                .gated(scope == WheelScope::Gated || (value_control && !free && !zone)),
         );
     }
 }

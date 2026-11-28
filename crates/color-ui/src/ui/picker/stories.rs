@@ -1,17 +1,19 @@
 //! Stories of `ColorPicker` and `ColorPickerDialog`: Compact, Compact with opacity, Compact with Only Web Colors, Full
 //! with Photoshop's models and both warnings, Full with an InDesign-like model set, and the dialog behind its button.
 
+use craft_behavior::Mixed;
 use craft_theme::{Channel, ColorModel, DefaultOn, HsbModel, LabModel, MAX_CHANNELS, ModelValues, OklchModel, RgbModel, Srgba};
-use craft_ui::contract::{Bind, Props as _, Show as _};
+use craft_ui::contract::{Bind, EditResponse, Props as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::stories::hosted;
+use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
-use super::channel::{ChannelRow, ChannelRule, TrackRamp};
+use super::channel::{ChannelRow, ChannelRule, ChannelUnit, TrackRamp};
 use super::screen_pick::ScreenPickButton;
 use super::{ColorPicker, ColorPickerLayout, ColorPickerOutput, PickedColor};
-use crate::ui::{AreaMode, ColorPickerDialog, ColorPickerDialogLayout, ColorPickerTab, ColorWarning};
+use crate::ui::{AreaMode, ColorPickerDialog, ColorPickerDialogLayout, ColorPickerTab, ColorWarning, PickerLibrary, PickerSwatches};
 
 type StandardColors = (Vec<(Label, Srgba)>, Vec<(Label, Srgba)>);
 
@@ -175,6 +177,35 @@ fn color_picker_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     hosted(ui, data, (), || ColorPickerDialog::foreground(Srgba::rgb(0.2, 0.5, 0.8)))
 }
 
+/// The dialog with the Color Swatches button after Cancel: two libraries, the first of eight colours.
+#[story(ColorPickerDialog, covers = [], drive = Drive::Never)]
+fn color_picker_dialog_with_swatches(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    hosted(ui, data, (), || {
+        let eight = [
+            ("Red", Srgba::rgb(0.9, 0.1, 0.1)),
+            ("Orange", Srgba::rgb(0.95, 0.5, 0.1)),
+            ("Yellow", Srgba::rgb(0.95, 0.85, 0.1)),
+            ("Green", Srgba::rgb(0.1, 0.65, 0.2)),
+            ("Cyan", Srgba::rgb(0.1, 0.75, 0.85)),
+            ("Blue", Srgba::rgb(0.1, 0.3, 0.9)),
+            ("Violet", Srgba::rgb(0.5, 0.2, 0.8)),
+            ("Magenta", Srgba::rgb(0.9, 0.1, 0.6)),
+        ];
+        let basic = PickerLibrary::new("Basic", eight.into_iter().map(|(name, color)| (Label::from(name), color)).collect());
+        let grays = PickerLibrary::new("Grays", vec![(Label::from("Black"), Srgba::BLACK), (Label::from("White"), Srgba::rgb(1.0, 1.0, 1.0))]);
+        ColorPickerDialog::foreground(Srgba::rgb(0.1, 0.3, 0.9)).swatch_view(PickerSwatches::new(vec![basic, grays], Label::from("No swatches")))
+    })
+}
+
+/// The dialog whose only library is empty: the Color Swatches view shows the notice.
+#[story(ColorPickerDialog, covers = [], drive = Drive::Never)]
+fn color_picker_dialog_with_an_empty_library(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    hosted(ui, data, (), || {
+        let libraries = vec![PickerLibrary::new("Empty", Vec::new())];
+        ColorPickerDialog::foreground(Srgba::rgb(0.2, 0.5, 0.8)).swatch_view(PickerSwatches::new(libraries, Label::from("No swatches")))
+    })
+}
+
 #[story(ScreenPickButton, covers = [Default], drive = Drive::Never)]
 fn screen_pick_button(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     ScreenPickButton::new().label("Sample color from the screen").show(ui).into()
@@ -185,14 +216,50 @@ fn track_ramp(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     TrackRamp::new(vec![Srgba::rgb(0.0, 0.0, 0.0), Srgba::rgb(1.0, 1.0, 1.0)], false).show(ui).into()
 }
 
+/// The saturation row the channel-row stories share: HSB's rule over a white-to-red track.
+fn saturation_row(value: Bind<'_, f64>) -> ChannelRow<'_> {
+    let channel = HsbModel.channels()[1];
+    ChannelRow::new("Saturation", value, ChannelRule::of(&channel)).track(vec![Srgba::rgb(1.0, 1.0, 1.0), Srgba::rgb(1.0, 0.0, 0.0)])
+}
+
+fn row_output(edit: Option<EditResponse<f64>>) -> StoryOutput {
+    edit.map_or_else(StoryOutput::default, StoryOutput::from)
+}
+
 #[story(ChannelRow<'static>, covers = [], drive = Drive::Never)]
 fn channel_row(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (value, value_at) = data.value_at("value", 40.0_f64);
-    let channel = HsbModel.channels()[1];
-    let row = ChannelRow::new("Saturation", value_at.bind(value), ChannelRule::of(&channel))
-        .track(vec![Srgba::rgb(1.0, 1.0, 1.0), Srgba::rgb(1.0, 0.0, 0.0)]);
-    match row.show(ui) {
-        Some(edit) => StoryOutput::from(edit),
-        None => StoryOutput::default(),
+    row_output(saturation_row(value_at.bind(value)).show(ui))
+}
+
+/// Rows whose number counts percent, degrees and a model's own unit text.
+#[story(ChannelRow<'static>, covers = [], drive = Drive::Never)]
+fn channel_row_units(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (value, value_at) = data.value_at("value", 40.0_f64);
+    let mut edit = None;
+    for unit in [ChannelUnit::Percent, ChannelUnit::Degrees, ChannelUnit::Text("pt")] {
+        edit = edit.or(saturation_row(value_at.bind(&mut *value)).unit(unit).show(ui));
     }
+    row_output(edit)
+}
+
+/// A row over a mixed value: the field shows the mixed readout until an edit makes it concrete.
+#[story(ChannelRow<'static>, covers = [], drive = Drive::Never)]
+fn channel_row_mixed(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    row_output(saturation_row(Bind::given(Mixed::<f64>::Mixed)).show(ui))
+}
+
+/// A row in a disabled container.
+#[story(ChannelRow<'static>, covers = [], drive = Drive::Never)]
+fn channel_row_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (value, value_at) = data.value_at("value", 40.0_f64);
+    let shown = Stack::new().enabled(false).show(ui, |ui, _| saturation_row(value_at.bind(value)).show(ui));
+    row_output(shown.inner.flatten())
+}
+
+/// A row with ticks at 0, 50 and 100 under the track.
+#[story(ChannelRow<'static>, covers = [], drive = Drive::Never)]
+fn channel_row_marks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let marks = [0.0, 50.0, 100.0];
+    row_output(saturation_row(data.bind("value", 40.0_f64)).marks(&marks).show(ui))
 }

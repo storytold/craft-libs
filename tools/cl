@@ -60,6 +60,7 @@ import shlex
 import subprocess
 import sys
 import time
+import tomllib
 from concurrent.futures import ThreadPoolExecutor
 
 FRAMEWORK = ["craft-ui-contract", "craft-ui-widgets", "craft-ui-panels", "craft-ui-canvas", "craft-ui-patterns", "craft-ui-shell", "craft-ui"]
@@ -70,6 +71,8 @@ RENDER_FEATURES = {
     "automation", "browse", "color-ui", "draw", "imaging", "layers", "menu", "pages", "print", "review", "table", "text",
     "theme-editor", "theme-store", "timeline", "dialogs", "font-manager", "update",
 }
+# The egui crates every framework crate builds on: a feature only a dev-dependency line asks of one rebuilds the framework.
+EGUI_FAMILY = {"egui", "epaint", "epaint_default_fonts", "emath", "ecolor"}
 REFUSED = {
     "--all-features": "it enables snapshot, system_fonts, color_fonts, all-languages and more, a set no loop uses, which rebuilds every dependency and the whole framework once; CI runs it",
     "--bins": "the gallery's binaries are 1 GB links each; build the one you need (`cl build gallery`)",
@@ -91,25 +94,32 @@ APP_KEYS = {
     "test_threads": (int, None),
 }
 APP_BUILDING = {"test", "check", "build", "run", "bench", "clippy", "doc", "rustc"}
+# cargo's own subcommands that resolve a profile; `cargo()` passes the dev settings after them.
+CARGO_BUILDING = {"test", "check", "build", "run", "bench", "doc", "rustc", "metadata", "tree"}
 APP_FEATURE_FLAGS = ("--features", "-F", "--no-default-features")
 # Set by main() from the workspace's `[workspace.metadata.cl]` in an app workspace; None in craft-libs.
 APP = None
 DRY_RUN = bool(os.environ.get("CL_DRY_RUN"))
-# The dev-build tuning of craft-libs, passed to every cargo command as `--config`. It lives here and not in Cargo.toml
-# because CI builds with the `[profile]` table of main (its cache key hashes that table), so CI's artifacts and cache
-# match main's; these settings speed up local screen tests, the debug gallery and design-lint.
-# lto off: with cargo's default rustc runs thin-local LTO across every optimised crate's codegen units on each rebuild;
-# off, a one-line edit re-optimises only the changed units. Dependencies build at opt-level 2, once per target dir.
-# craft-theme, craft-behavior and craft-proof run in every screen-test frame or in dictionary-sized tests and are rarely
-# edited, so they build at opt-level 1; every other workspace crate stays at 0, where rustc shares generic
-# instantiations across crates and an edit to the runtime (craft-ui-contract) rebuilds in seconds.
-DEV_PROFILE_CONFIG = [
-    'profile.dev.lto="off"',
-    'profile.dev.package."*".opt-level=2',
-    "profile.dev.package.craft-theme.opt-level=1",
-    "profile.dev.package.craft-behavior.opt-level=1",
-    "profile.dev.package.craft-proof.opt-level=1",
-]
+# The dev-build tuning of craft-libs (.config/cargo-dev.toml, which the CI gate passes too), as the `--config`
+# KEY=VALUE pairs passed to every cargo command.
+DEV_PROFILE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), ".config", "cargo-dev.toml")
+
+
+def dev_profile_config():
+    def key(part):
+        return part if re.fullmatch(r"[A-Za-z0-9_-]+", part) else json.dumps(part)
+
+    def flatten(table, path):
+        for name, value in table.items():
+            if isinstance(value, dict):
+                yield from flatten(value, path + [key(name)])
+            else:
+                yield ".".join(path + [key(name)]) + "=" + json.dumps(value)
+
+    with open(DEV_PROFILE_FILE, "rb") as f:
+        return list(flatten(tomllib.load(f), []))
+
+
 # What cl.log records about this command; filled in as it runs.
 RECORD = {"start": time.time(), "target": None, "build": None, "run": 0.0, "report": ""}
 # The manifest lines the one feature set rests on: (file, regex that must match, what its absence brings back).
@@ -120,8 +130,6 @@ PINS = [
      "craft-ui-macros must ask proc-macro2 for span-locations, or a build with design-lint in it changes the shared proc-macro2 and rebuilds the framework"),
     ("crates/ui-contract/Cargo.toml", r'^craft-window = \{[^\n]*features = \[[^\]]*"ui"',
      "craft-ui-contract must depend on craft-window with ui, or the shell's app flips craft-window under the whole framework"),
-    ("crates/ui-contract/Cargo.toml", r'^testing = \[[^\]]*"snapshot"',
-     "craft-ui-contract's testing must include snapshot, or crates above widgets cannot ask the runtime for the renderer and build a second variant"),
 ]
 
 
@@ -203,6 +211,18 @@ def own_targets(p):
     return flags
 
 
+def implied(p, features):
+    """The features a dependency line turns on in workspace package `p`: `features` and every feature of `p`'s own that
+    they imply. Without `p` (a crate outside the workspace) just `features`."""
+    on, todo = set(), list(features)
+    while todo:
+        f = todo.pop()
+        if f not in on:
+            on.add(f)
+            todo += [e for e in (p["features"].get(f, []) if p else []) if "/" not in e and not e.startswith("dep:")]
+    return on
+
+
 def doctor(top, packages, quiet=False):
     """Manifest lines that would bring the variant churn back. Returns the number of problems."""
     if APP:
@@ -212,16 +232,24 @@ def doctor(top, packages, quiet=False):
         text = open(os.path.join(top, path)).read()
         if not re.search(pattern, text, re.M):
             problems.append(f"{path}: {why}")
+    asked = {}
+    for p in packages.values():
+        for d in p["dependencies"]:
+            if d["name"] in EGUI_FAMILY and d["kind"] is None:
+                asked.setdefault(d["name"], set()).update(d["features"])
     for p in packages.values():
         manifest = os.path.relpath(p["manifest_path"], top)
         for d in p["dependencies"]:
-            if d["name"] == "egui" and d["kind"] == "dev" and d["features"]:
-                problems.append(f"{manifest}: the egui dev-dependency asks for {d['features']}; a feature on a dev-dependency "
-                                "line changes egui under the framework between a crate's tests and its render")
+            extra = set(d["features"]) - asked.get(d["name"], set())
+            if d["name"] in EGUI_FAMILY and d["kind"] == "dev" and extra:
+                problems.append(f"{manifest}: the {d['name']} dev-dependency asks for {sorted(extra)}, which no normal line "
+                                f"(feature-root's included) asks for; it changes {d['name']} under the framework between the "
+                                "crate's tests and every other build")
     gallery = packages.get("craft-ui-gallery")
     if gallery:
         for d in gallery["dependencies"]:
-            if d["name"].startswith("craft-") and "suite" in d["features"] and not d["optional"]:
+            domain = d["name"].startswith("craft-") and d["name"] not in FRAMEWORK
+            if domain and "suite" in d["features"] and not d["optional"]:
                 problems.append(f"crates/ui-gallery/Cargo.toml: {d['name']} must be optional (one feature per domain crate), or the story renderer links every crate")
     root = packages.get(ROOT)
     if not root:
@@ -243,9 +271,11 @@ def doctor(top, packages, quiet=False):
         theirs = {d["name"]: d for d in gallery["dependencies"] if d["kind"] is None}
         for d in render["dependencies"]:
             g = theirs.get(d["name"])
-            if d["kind"] is None and g and not set(d["features"]) <= set(g["features"]):
-                problems.append(f"crates/story-render/Cargo.toml: {d['name']} asks for {sorted(set(d['features']) - set(g['features']))} "
-                                "beyond the gallery's line, so renders build a second copy of it and everything above")
+            if d["kind"] is None and g:
+                extra = set(d["features"]) - implied(packages.get(d["name"]), g["features"])
+                if extra:
+                    problems.append(f"crates/story-render/Cargo.toml: {d['name']} asks for {sorted(extra)} beyond what the "
+                                    "gallery's line turns on, so renders build a second copy of it and everything above")
     for problem in problems:
         print(f"cl doctor: {problem}", file=sys.stderr)
     if not problems and not quiet:
@@ -351,9 +381,13 @@ def cargo(top, cargo_args, json_out=False, timings=True):
         RECORD["target"] = target
     if timings:
         cargo_args = cargo_args[:1] + ["--timings"] + cargo_args[1:]
-    # An app workspace keeps its own profile settings.
-    config = [] if APP else [x for c in DEV_PROFILE_CONFIG for x in ("--config", c)]
-    cmd = shlex.split(env.get("CL_LAUNCHER", "")) + ["cargo"] + config + cargo_args
+    # An app workspace keeps its own profile settings. For cargo's own build commands they go after the subcommand:
+    # cargo lets a `--config` given there replace every `--config` given before it, so a caller's own `--config`
+    # (.config/cargo-ci.toml) would otherwise drop the dev settings and build every crate, dependencies included, at
+    # opt-level 0. An external subcommand (fmt) would read them as its own options, so they stay before it.
+    config = [] if APP else [x for c in dev_profile_config() for x in ("--config", c)]
+    split = 1 if cargo_args[:1] and cargo_args[0] in CARGO_BUILDING else 0
+    cmd = shlex.split(env.get("CL_LAUNCHER", "")) + ["cargo"] + cargo_args[:split] + config + cargo_args[split:]
     print("cl: " + " ".join(cmd) + f"  (target {target})", file=sys.stderr)
     sys.stdout.flush()
     if DRY_RUN:
@@ -732,7 +766,7 @@ def run(top, cargo_args, then=None, timings=True):
     """Runs cargo; `then` (a binary in the target's debug dir and its arguments) runs after a successful cargo. Exits
     with the last return code."""
     rc, target, _ = cargo(top, cargo_args, timings=timings)
-    if rc == 0 and then:
+    if rc == 0 and then and not DRY_RUN:
         rc = run_binary([os.path.join(target, "debug", then[0])] + then[1:], top)
     sys.exit(rc)
 

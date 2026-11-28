@@ -37,24 +37,46 @@ pub struct RootEnv {
     pub tab_all_controls: bool,
     /// Whether a bare Tab toggles the window's chrome in place of moving focus where the key stage's gate allows it.
     pub tab_toggles_chrome: bool,
+    /// Whether Escape in a focused text field also takes the focus from it, with or without typing to revert, so the
+    /// next keys go to the window. A clearing field (a search box) still clears its text first. In a dialog whose Escape
+    /// closes it, modal or modeless, the field keeps the focus, and an Escape it does not take for its typing closes
+    /// the dialog.
+    pub escape_leaves_fields: bool,
+    /// Whether a held key's repeats run the command its chord binds again (`FirePhase::Repeat`), as a held Cmd+= keeps
+    /// zooming in. A key with a hold binding, and a key held down while a modal layer opened or closed, repeat nothing.
+    pub shortcuts_repeat: bool,
     /// Which Tab stops a dialog's Tab order visits.
     pub dialog_tab: TabReach,
     /// Whether the canvas surround shows the theme's pattern.
     pub canvas_pattern: bool,
+    /// Whether painted cursor images scale with the interface zoom.
+    pub cursor_follows_zoom: bool,
+    /// Whether tooltips show.
+    pub tooltips: bool,
     /// The theme the tokens resolve from; an id no built-in theme has resolves to the suite default.
     /// Private with `theme_def`, so the two change together.
     pub(super) theme: ThemeId,
     /// The definition of `theme` when it is a library theme: no built-in has its id, so the tokens resolve from this.
     /// Set only with `theme`, by `library_theme`; `theme(id)` clears it.
     pub(super) theme_def: Option<Arc<ThemeDef>>,
+    /// The user's accent over the theme (`ThemeDef::with_accent`); `None` keeps the theme's own.
+    pub(super) accent: Option<craft_theme::Rgba>,
     /// Root app values.
     pub values: AppValues,
     /// Today's date in the host's time zone; the runtime reads no wall clock.
     pub today: Option<CalendarDate>,
     /// This frame's wheel speed.
     pub wheel: WheelSpeed,
+    /// Sends the wheel to a focused field only while the pointer is over that field.
+    pub pointer_scoped_field_wheel: bool,
     /// The code pages that decode Alt+numpad codes.
     pub alt_codes: AltCodePages,
+    /// On Windows and Linux, a Ctrl+wheel in fractions of a notch (a point-unit one on Linux) is a touchpad pinch
+    /// and arrives as `egui::Event::Zoom`: Windows hands a precision touchpad's pinch to apps only that way, and some
+    /// Wayland stacks do too. On by default. Off, it stays a wheel event with Ctrl held, for an app whose Ctrl+wheel
+    /// does something else or zooms at its own rate (Zoom with Trackpad Pinch off). Whole notches stay wheel events
+    /// either way; macOS sends a pinch as its own event.
+    pub ctrl_wheel_pinch: bool,
 }
 
 impl Default for RootEnv {
@@ -70,14 +92,21 @@ impl Default for RootEnv {
             scale: Scale::default(),
             tab_all_controls: true,
             tab_toggles_chrome: false,
+            escape_leaves_fields: false,
+            shortcuts_repeat: false,
             dialog_tab: TabReach::Root,
             canvas_pattern: true,
+            cursor_follows_zoom: true,
+            tooltips: true,
             theme: ThemeId::suite_default(),
             theme_def: None,
+            accent: None,
             values: AppValues::default(),
             today: None,
             wheel: WheelSpeed::default(),
+            pointer_scoped_field_wheel: false,
             alt_codes: AltCodePages::default(),
+            ctrl_wheel_pinch: true,
         }
     }
 }
@@ -147,11 +176,34 @@ impl RootEnv {
         self
     }
 
+    /// Overrides `seeds.accent` of whichever theme resolves, built-in or library, in both modes; the accent ramp derives
+    /// from the seed, and the theme's fixed accent colours give way to it ([`ThemeDef::with_accent`]). `None` keeps the
+    /// theme's own.
+    pub fn accent(mut self, seed: Option<craft_theme::Rgba>) -> Self {
+        self.accent = seed;
+        self
+    }
+
     /// What the choices resolve to on `ctx`'s pass: the one place `System` is replaced by the OS's answer, as
     /// [`system_appearance`](super::system_appearance) reads it. A value the OS reports none for resolves to light,
     /// standard contrast and full motion.
     pub fn resolved(&self, ctx: &Context) -> ResolvedRoot {
         self.resolved_for(super::system_appearance(ctx).appearance)
+    }
+
+    /// The mode the root's theme actually shows on `ctx`: the resolved mode clamped to the theme's supported
+    /// variants (for example, `Mode::Light` for a light-only theme even when dark mode is requested).
+    pub(crate) fn effective_mode(&self, ctx: &Context) -> Mode {
+        let wanted = self.resolved(ctx).mode;
+        if let Some(def) = &self.theme_def {
+            return def.variants.mode_for(wanted);
+        }
+        let themes = craft_theme::builtins();
+        let theme = [self.theme.as_str(), craft_theme::SUITE_DEFAULT]
+            .into_iter()
+            .find_map(|id| themes.iter().find(|theme| theme.id.as_str() == id))
+            .unwrap_or(&themes[0]);
+        theme.variants.mode_for(wanted)
     }
 
     /// What the choices resolve to when the OS reports `system`.
@@ -192,6 +244,19 @@ impl RootEnv {
         self
     }
 
+    /// Sets whether painted pointers grow with the interface zoom (the Scale Cursor Proportional to UI preference).
+    /// Off, they keep the size they have at zoom 1; a brush tip follows the canvas either way. On by default.
+    pub fn cursor_follows_zoom(mut self, on: bool) -> Self {
+        self.cursor_follows_zoom = on;
+        self
+    }
+
+    /// Sets whether tooltips show (the Show Tool Tips preference). On by default.
+    pub fn tooltips(mut self, on: bool) -> Self {
+        self.tooltips = on;
+        self
+    }
+
     /// Sets the density preset.
     pub fn density(mut self, density: Size) -> Self {
         self.density = density;
@@ -221,9 +286,21 @@ impl RootEnv {
         self
     }
 
+    /// Sends the wheel to a focused field only while the pointer is over it when enabled.
+    pub fn pointer_scoped_field_wheel(mut self, enabled: bool) -> Self {
+        self.pointer_scoped_field_wheel = enabled;
+        self
+    }
+
     /// Sets the code pages that decode Alt+numpad codes.
     pub fn alt_code_pages(mut self, pages: AltCodePages) -> Self {
         self.alt_codes = pages;
+        self
+    }
+
+    /// Sets whether a fractional Ctrl+wheel arrives as a pinch (`ctrl_wheel_pinch`).
+    pub fn ctrl_wheel_pinch(mut self, pinch: bool) -> Self {
+        self.ctrl_wheel_pinch = pinch;
         self
     }
 }

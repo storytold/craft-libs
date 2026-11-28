@@ -1,6 +1,6 @@
-//! Desktop colour, contrast and motion preferences and GNOME's window-button layout through the
-//! XDG Settings portal, the system's animation setting on Windows and macOS, plus the browser's
-//! contrast and motion media queries on the web.
+//! Desktop colour, contrast, motion and text-scale preferences and GNOME's window-button layout
+//! through the XDG Settings portal, the system's animation setting on Windows and macOS, plus the
+//! browser's contrast and motion media queries on the web.
 //!
 //! Derived from PdfCraft's activation-safe subscription and GNOME schema fallback,
 //! CADCraft's BSD support, and ArtCraft Launcher's ReadOne/Read compatibility.
@@ -10,7 +10,7 @@ pub use reader::{Reading, SystemReader};
 use std::{
     sync::{
         Arc, Condvar, Mutex, PoisonError,
-        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -39,7 +39,10 @@ struct Shared {
     contrast: AtomicU8,
     /// 0 unknown, 1 animations allowed, 2 reduced motion.
     motion: AtomicU8,
-    /// Raised each time the theme, contrast or reduced motion changes; layout and icon changes leave it.
+    /// The text scale's `f32` bits; 0 unknown (no usable scale is 0.0).
+    text_scale: AtomicU32,
+    /// Raised each time the theme, contrast, reduced motion or text scale changes; layout and icon
+    /// changes leave it.
     generation: AtomicU64,
     active: AtomicBool,
     /// True once the source has answered, found no answer, or been cancelled.
@@ -62,6 +65,7 @@ impl Shared {
             value: AtomicU8::new(0),
             contrast: AtomicU8::new(0),
             motion: AtomicU8::new(0),
+            text_scale: AtomicU32::new(0),
             generation: AtomicU64::new(0),
             active: AtomicBool::new(active),
             settled: Mutex::new(false),
@@ -103,9 +107,13 @@ impl Shared {
     }
     #[cfg(not(target_arch = "wasm32"))]
     fn publish_code(&self, slot: &AtomicU8, code: u8) {
-        if slot.swap(code, Ordering::AcqRel) == code {
-            return;
+        if slot.swap(code, Ordering::AcqRel) != code {
+            self.changed();
         }
+    }
+    /// Raises the generation for a value just stored, then wakes an active host.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn changed(&self) {
         self.generation.fetch_add(1, Ordering::AcqRel);
         if self.active.load(Ordering::Acquire) {
             (self.wake)();
@@ -124,6 +132,14 @@ impl Shared {
     #[cfg(not(target_arch = "wasm32"))]
     fn publish_motion(&self, reduced: bool) {
         self.publish_code(&self.motion, if reduced { 2 } else { 1 });
+    }
+    /// `None` is no scaling: the desktop's value is out of range, or there is none.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn publish_text_scale(&self, scale: Option<f32>) {
+        let bits = scale.map_or(0, f32::to_bits);
+        if self.text_scale.swap(bits, Ordering::AcqRel) != bits {
+            self.changed();
+        }
     }
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     fn publish_layout(&self, layout: String) {
@@ -204,9 +220,10 @@ impl Watcher {
     pub fn current(&self) -> Option<Theme> {
         self.shared.get()
     }
-    /// Rises each time the theme, [`Watcher::contrast`] or [`Watcher::reduced_motion`] changes, before the wake
-    /// callback runs; a layout or icon theme change leaves it. Read the preferences again when it moved,
-    /// after reading this: a value is stored before the generation rises.
+    /// Rises each time the theme, [`Watcher::contrast`], [`Watcher::reduced_motion`] or
+    /// [`Watcher::text_scale`] changes, before the wake callback runs; a layout or icon theme
+    /// change leaves it. Read the preferences again when it moved, after reading this: a value is
+    /// stored before the generation rises.
     pub fn generation(&self) -> u64 {
         self.shared.generation.load(Ordering::Acquire)
     }
@@ -269,6 +286,18 @@ impl Watcher {
             2 => Some(true),
             _ => None,
         }
+    }
+    /// GNOME's `org.gnome.desktop.interface` `text-scaling-factor` (Settings ▸ Accessibility ▸
+    /// Large Text sets 1.25) through the portal, or the `gsettings` fallback when the portal has no
+    /// such key. A finite value within 0.5..=3.0 is the scale; one outside that range or one that
+    /// doesn't parse is no scaling and gives `None`, never a clamped value. A change raises the
+    /// generation and wakes, as the other appearance values do.
+    ///
+    /// `None` where the platform does not say: other Linux desktops, macOS, Windows and the web,
+    /// which scale the whole display instead.
+    pub fn text_scale(&self) -> Option<f32> {
+        let bits = self.shared.text_scale.load(Ordering::Acquire);
+        (bits != 0).then(|| f32::from_bits(bits))
     }
     /// Block until the first answer is known, then return it; at most `timeout`.
     ///

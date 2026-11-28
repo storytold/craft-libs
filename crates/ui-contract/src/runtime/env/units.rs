@@ -27,8 +27,17 @@ craft_ui::words! {
         pixels_per_centimetre: unit "units.pixelsPerCentimetre" = "{n} ppcm";
         lines_per_inch: unit "units.linesPerInch" = "{n} lpi";
         lines_per_centimetre: unit "units.linesPerCentimetre" = "{n} lpcm";
+        feet: unit "units.feet" = "{n} ft";
+        yards: unit "units.yards" = "{n} yd";
+        metres: unit "units.metres" = "{n} m";
+        q: unit "units.q" = "{n} Q";
+        ha: unit "units.ha" = "{n} H";
+        letters: unit "units.letters" = "{n} letters";
+        hyphens: unit "units.hyphens" = "{n} hyphens";
         minutes: unit "units.minutes" = "{n} min";
         columns: unit "units.columns" = "{n} col";
+        per_inch: unit "units.perInch" = "{n}/in";
+        milliseconds: unit "units.milliseconds" = "{n} ms";
         pixels_name: "units.pixelsName" = "Pixels";
         percent_name: "units.percentName" = "Percent";
         degrees_name: "units.degreesName" = "Degrees";
@@ -44,6 +53,15 @@ craft_ui::words! {
         columns_name: "units.columnsName" = "Columns";
         lines_per_inch_name: "units.linesPerInchName" = "Lines/Inch";
         lines_per_centimetre_name: "units.linesPerCentimetreName" = "Lines/Centimetre";
+        feet_name: "units.feetName" = "Feet";
+        yards_name: "units.yardsName" = "Yards";
+        metres_name: "units.metresName" = "Metres";
+        q_name: "units.qName" = "Q";
+        ha_name: "units.haName" = "Ha";
+        letters_name: "units.lettersName" = "Letters";
+        hyphens_name: "units.hyphensName" = "Hyphens";
+        per_inch_name: "units.perInchName" = "Per Inch";
+        milliseconds_name: "units.millisecondsName" = "Milliseconds";
     }
 }
 
@@ -79,8 +97,34 @@ impl EnvValue for PointSize {
     }
 }
 
+/// How many decimals a zoom shows. An app sets it once on its root env with `RootEnv::values`; [`Units::zoom_codec`]
+/// follows it, so every zoom display (a zoom field, the status bar's, a print preview's row) reads alike.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, crate::contract::MemoProps)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum ZoomPrecision {
+    /// Up to two decimals, for the ladder's rungs such as 66.67 %.
+    #[default]
+    Fractional,
+    /// A whole percent ("94 %"), as a word processor shows its zoom. The zoom itself keeps its fraction, and a typed
+    /// fraction still applies; only the shown number is whole.
+    Whole,
+}
+
+impl EnvValue for ZoomPrecision {
+    fn root() -> Self {
+        ZoomPrecision::default()
+    }
+}
+
+impl EnvValue for craft_behavior::ZoomScheme {
+    fn root() -> Self {
+        craft_behavior::ZoomScheme::PHOTOSHOP
+    }
+}
+
 /// What a number counts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum UnitKind {
@@ -114,10 +158,30 @@ pub enum UnitKind {
     LinesPerInch,
     /// `{n} lpcm`: a halftone screen's frequency.
     LinesPerCentimetre,
+    /// `{n} ft`.
+    Feet,
+    /// `{n} yd`.
+    Yards,
+    /// `{n} m`.
+    Metres,
+    /// `{n} Q`.
+    Q,
+    /// `{n} H`.
+    Ha,
+    /// `{n} letters`: a hyphenation setting counted in letters.
+    Letters,
+    /// `{n} hyphens`: a hyphenation setting counted in hyphens.
+    Hyphens,
+    /// `{n}/in`: how many of something fall in an inch of length, such as the points a distortion adds along a path.
+    /// It is a count, not a length: [`per_inch`](Self::per_inch) answers `None` for it.
+    PerInch,
+    /// `{n} ms`: a duration or delay in milliseconds.
+    Milliseconds,
 }
 
 impl UnitKind {
-    /// The kinds that measure a length, which [`per_inch`](Self::per_inch) answers for: what a length field offers.
+    /// The lengths a unit choice offers. [`per_inch`](Self::per_inch) answers for more kinds (feet, yards, metres, Q,
+    /// Ha), which a typed number still reads.
     pub const LENGTHS: [UnitKind; 5] = [UnitKind::Inches, UnitKind::Centimetres, UnitKind::Millimetres, UnitKind::Points, UnitKind::Picas];
 
     /// The kind a [`Reader`](craft_behavior::Reader) tag names: the tags `reader_over` registers are indexes of `ALL`.
@@ -126,7 +190,7 @@ impl UnitKind {
         Self::ALL.get(tag as usize).copied()
     }
 
-    const ALL: [UnitKind; 15] = [
+    const ALL: [UnitKind; 24] = [
         UnitKind::Pixels,
         UnitKind::Percent,
         UnitKind::Degrees,
@@ -142,13 +206,24 @@ impl UnitKind {
         UnitKind::Columns,
         UnitKind::LinesPerInch,
         UnitKind::LinesPerCentimetre,
+        UnitKind::Feet,
+        UnitKind::Yards,
+        UnitKind::Metres,
+        UnitKind::Q,
+        UnitKind::Ha,
+        UnitKind::Letters,
+        UnitKind::Hyphens,
+        UnitKind::PerInch,
+        UnitKind::Milliseconds,
     ];
 
     /// The digits after the decimal mark a number of this kind shows by default, at most.
     pub const fn decimals(self) -> RangeInclusive<usize> {
         match self {
-            UnitKind::Pixels | UnitKind::Minutes => 0..=0,
+            UnitKind::Pixels | UnitKind::Minutes | UnitKind::Letters | UnitKind::Hyphens | UnitKind::Milliseconds => 0..=0,
             UnitKind::Percent | UnitKind::Degrees | UnitKind::Points => 0..=1,
+            UnitKind::Q | UnitKind::Ha => 0..=2,
+            UnitKind::Feet | UnitKind::Yards | UnitKind::Metres => 0..=4,
             UnitKind::Times
             | UnitKind::Centimetres
             | UnitKind::Millimetres
@@ -156,7 +231,8 @@ impl UnitKind {
             | UnitKind::PixelsPerInch
             | UnitKind::PixelsPerCentimetre
             | UnitKind::LinesPerInch
-            | UnitKind::LinesPerCentimetre => 0..=2,
+            | UnitKind::LinesPerCentimetre
+            | UnitKind::PerInch => 0..=2,
             UnitKind::Inches | UnitKind::Columns => 0..=3,
         }
     }
@@ -165,7 +241,7 @@ impl UnitKind {
     /// the kind steps by the kind's rule.
     pub const fn step(self) -> f64 {
         match self {
-            UnitKind::Times | UnitKind::Inches | UnitKind::Centimetres => 0.1,
+            UnitKind::Times | UnitKind::Inches | UnitKind::Centimetres | UnitKind::Feet | UnitKind::Yards | UnitKind::Metres => 0.1,
             _ => 1.0,
         }
     }
@@ -182,6 +258,10 @@ impl UnitKind {
             UnitKind::Millimetres => Some(25.4),
             UnitKind::Points => Some(points_per_inch),
             UnitKind::Picas => Some(points_per_inch / 12.0),
+            UnitKind::Feet => Some(1.0 / 12.0),
+            UnitKind::Yards => Some(1.0 / 36.0),
+            UnitKind::Metres => Some(0.0254),
+            UnitKind::Q | UnitKind::Ha => Some(101.6),
             _ => None,
         }
     }
@@ -274,8 +354,8 @@ impl ColumnSize {
 }
 
 /// A length kept in one unit and shown in another: what a length field reads and writes (`stored`, the document's
-/// unit) and what it shows and parses bare numbers in (`shown`, the user's unit). Both are `UnitKind::Pixels` or one
-/// of [`UnitKind::LENGTHS`]; the document's resolution sizes pixels.
+/// unit) and what it shows and, unless `bare` names another unit, parses bare numbers in (`shown`, the user's unit). Both are `UnitKind::Pixels` or any
+/// kind [`UnitKind::per_inch`] answers; the document's resolution sizes pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct LengthUnits {
@@ -285,12 +365,22 @@ pub struct LengthUnits {
     pub shown: UnitKind,
     /// Pixels per inch of the document, for `Pixels` on either side.
     pub pixels_per_inch: f64,
+    /// The unit a number typed without a unit is in; `None` for `shown` ([`LengthUnits::bare_in`]).
+    pub bare: Option<UnitKind>,
 }
 
 impl LengthUnits {
     /// A length kept in `stored` and shown in `shown`, with `pixels_per_inch` sizing pixels.
     pub const fn new(stored: UnitKind, shown: UnitKind, pixels_per_inch: f64) -> Self {
-        LengthUnits { stored, shown, pixels_per_inch }
+        LengthUnits { stored, shown, pixels_per_inch, bare: None }
+    }
+
+    /// A number typed without a unit is in `unit` rather than in the shown unit (a preference such as "numbers
+    /// without units are points").
+    #[must_use]
+    pub const fn bare_in(mut self, unit: UnitKind) -> Self {
+        self.bare = Some(unit);
+        self
     }
 }
 
@@ -312,23 +402,35 @@ pub struct Units {
     readers: Arc<[OnceLock<Reader>; UnitKind::ALL.len() + 1]>,
     /// The scope's point size: what `reader` and `points_per_inch` use for Points and Picas.
     point_size: PointSize,
+    /// The decimals a zoom shows (`zoom_codec`).
+    zoom: ZoomPrecision,
 }
 
 /// What every number it reads and writes depends on: the format, the unit words and the scope's words (each by its
 /// generation) and the point size.
 impl crate::contract::MemoProps for Units {
     fn key(&self, key: &mut crate::contract::MemoKey) {
-        let Units { format, words, scope_words, readers: _, point_size } = self;
-        crate::contract::MemoProps::key(&(format, words, scope_words, point_size), key);
+        let Units { format, words, scope_words, readers: _, point_size, zoom } = self;
+        crate::contract::MemoProps::key(&(format, words, scope_words, point_size, zoom), key);
     }
 }
 
 impl Units {
     /// The codec of a zoom field in percent: the percent reader, up to two decimals (the zoom ladder has rungs such as
     /// 66.67 %), with zoom typing (`a/b` as a ratio, a second separator cutting the text), so every zoom field reads
-    /// typed text by the same rules.
+    /// typed text by the same rules. Under [`ZoomPrecision::Whole`] it writes whole percents.
     pub fn zoom_codec(&self) -> NumberCodec {
-        NumberCodec::new(self.reader(Some(UnitKind::Percent)), ZOOM_DECIMALS).zoom_typing()
+        NumberCodec::new(self.reader(Some(UnitKind::Percent)), self.zoom_decimals()).zoom_typing()
+    }
+}
+
+impl Units {
+    /// The most decimals a zoom shows: the env's [`ZoomPrecision`], shared by `zoom_codec` and `zoom_percent`.
+    fn zoom_decimals(&self) -> usize {
+        match self.zoom {
+            ZoomPrecision::Fractional => ZOOM_DECIMALS,
+            ZoomPrecision::Whole => 0,
+        }
     }
 }
 
@@ -338,7 +440,14 @@ const ZOOM_DECIMALS: usize = 2;
 impl Units {
     #[doc(hidden)]
     pub fn new(format: Arc<Format>, words: Arc<UnitWords>, scope_words: Arc<Words>, point_size: PointSize) -> Units {
-        Units { format, words, scope_words, readers: Arc::default(), point_size }
+        Units { format, words, scope_words, readers: Arc::default(), point_size, zoom: ZoomPrecision::default() }
+    }
+
+    /// The same units with `zoom` as the decimals a zoom shows: the env's [`ZoomPrecision`].
+    #[must_use]
+    pub(crate) fn with_zoom_precision(mut self, zoom: ZoomPrecision) -> Self {
+        self.zoom = zoom;
+        self
     }
 
     /// How many points make an inch in the scope: the app's point-size preference.
@@ -364,6 +473,15 @@ impl Units {
             UnitKind::Columns => words.columns.as_str(),
             UnitKind::LinesPerInch => words.lines_per_inch.as_str(),
             UnitKind::LinesPerCentimetre => words.lines_per_centimetre.as_str(),
+            UnitKind::Feet => words.feet.as_str(),
+            UnitKind::Yards => words.yards.as_str(),
+            UnitKind::Metres => words.metres.as_str(),
+            UnitKind::Q => words.q.as_str(),
+            UnitKind::Ha => words.ha.as_str(),
+            UnitKind::Letters => words.letters.as_str(),
+            UnitKind::Hyphens => words.hyphens.as_str(),
+            UnitKind::PerInch => words.per_inch.as_str(),
+            UnitKind::Milliseconds => words.milliseconds.as_str(),
         }
     }
 
@@ -386,6 +504,15 @@ impl Units {
             UnitKind::Columns => &words.columns_name,
             UnitKind::LinesPerInch => &words.lines_per_inch_name,
             UnitKind::LinesPerCentimetre => &words.lines_per_centimetre_name,
+            UnitKind::Feet => &words.feet_name,
+            UnitKind::Yards => &words.yards_name,
+            UnitKind::Metres => &words.metres_name,
+            UnitKind::Q => &words.q_name,
+            UnitKind::Ha => &words.ha_name,
+            UnitKind::Letters => &words.letters_name,
+            UnitKind::Hyphens => &words.hyphens_name,
+            UnitKind::PerInch => &words.per_inch_name,
+            UnitKind::Milliseconds => &words.milliseconds_name,
         };
         name.clone()
     }
@@ -393,6 +520,12 @@ impl Units {
     /// The unit's spelling in the user's language without the number: `mm`, `px`.
     pub fn symbol(&self, kind: UnitKind) -> String {
         self.template(kind).replace("{n}", "").trim().to_owned()
+    }
+
+    /// The text before and after the number in the user's language, spacing included: `("", " mm")`, `("", "%")`.
+    pub fn affixes(&self, kind: UnitKind) -> (String, String) {
+        let template = self.template(kind);
+        template.split_once("{n}").map_or_else(|| (String::new(), template.to_owned()), |(before, after)| (before.to_owned(), after.to_owned()))
     }
 
     /// The digits after the decimal mark `n` needs within `decimals`: the fewest that show it as it rounds at the most.
@@ -431,9 +564,9 @@ impl Units {
     }
 
     /// A zoom of `n` percent: `100%`, `12.5%`, `66.67%`. The fewest digits that show it to two decimals, so the
-    /// ladder's thirds read as Photoshop shows them.
+    /// ladder's thirds read as Photoshop shows them. Under [`ZoomPrecision::Whole`] a whole percent.
     pub fn zoom_percent(&self, n: f64) -> String {
-        self.text(UnitKind::Percent, n, 0..=2)
+        self.text(UnitKind::Percent, n, 0..=self.zoom_decimals())
     }
 
     /// `n` degrees: `12°`.
@@ -503,10 +636,16 @@ impl Units {
     }
 
     /// A reader for lengths shown in `lengths.shown`: the spellings of every length unit and of pixels convert to it,
-    /// and a bare number is in it. Plain numbers when `lengths` is not a pixel or length pair.
+    /// and a bare number is in it, or in `lengths.bare` when set. Plain numbers when `lengths` is not a pixel or length
+    /// pair.
     pub fn length_reader(&self, lengths: LengthUnits) -> Reader {
         let Some(shown) = self.length_per_inch(lengths.shown, lengths.pixels_per_inch) else { return self.reader(None) };
-        self.reader_over(|other| Some(shown / self.length_per_inch(other, lengths.pixels_per_inch)?))
+        let factor = |other: UnitKind| Some(shown / self.length_per_inch(other, lengths.pixels_per_inch)?);
+        let reader = self.reader_over(factor);
+        match lengths.bare.and_then(factor) {
+            Some(bare) => reader.bare(bare),
+            None => reader,
+        }
     }
 
     /// The index of the reader for `kind` in `readers`: 0 for plain numbers, then one per unit kind.
@@ -542,12 +681,19 @@ impl Units {
             reader = reader.group(group);
         }
         let english = Units::new(self.format.clone(), english_words(), Arc::new(Words::english()), self.point_size);
+        let points = factor(UnitKind::Points);
         for (tag, other) in UnitKind::ALL.into_iter().enumerate() {
             let Some(factor) = factor(other) else { continue };
             for spelling in [self.symbol(other), english.symbol(other)] {
                 if is_unit_spelling(&spelling) {
                     reader = reader.unit_tagged(&spelling, factor, tag as u32);
                 }
+            }
+            if other == UnitKind::Picas
+                && let Some(points) = points
+            {
+                // Picas and points as print apps read them: `2p6` is two picas and six points.
+                reader = reader.split_unit("p", factor, points, tag as u32);
             }
         }
         reader

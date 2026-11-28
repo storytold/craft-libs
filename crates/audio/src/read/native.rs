@@ -820,6 +820,11 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         return Some(Err(AudioError::Malformed("MP4 sample is larger than the file".into())));
     }
     let params = t.codec_params();
+    // Keep file-level FLAC on its existing path until this reader can index variable packet
+    // lengths and final duration from the frame headers. The packet API has no such timing role.
+    if params.codec == CodecId::Flac {
+        return None;
+    }
     let lookahead: Vec<Vec<u8>> =
         (0..t.samples.len().min(crate::track::LOOKAHEAD_PACKETS)).filter_map(|i| file.read_sample(src, track, i).ok()).collect();
     let timescale = t.timescale;
@@ -897,6 +902,11 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         return None;
     }
     let params = t.codec_params();
+    // The Matroska file API needs FLAC frame counts to undo timestamp rounding on seeks.
+    // Keep its existing fallback until it can index those counts.
+    if params.codec == CodecId::Flac {
+        return None;
+    }
     let lookahead: Vec<Vec<u8>> =
         (0..t.samples.len().min(crate::track::LOOKAHEAD_PACKETS)).filter_map(|i| demux.read_sample(track, i).ok()).collect();
     let probe = TrackDecoder::new(&params, &lookahead.iter().map(Vec::as_slice).collect::<Vec<_>>()).ok()?;

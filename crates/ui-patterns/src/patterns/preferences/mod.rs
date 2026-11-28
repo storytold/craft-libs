@@ -32,8 +32,8 @@ pub(crate) mod path_setting;
 mod rows;
 pub(crate) mod window;
 
-pub use page::{PreferencesPage, PreferencesPageOutput};
+pub use page::{PreferencesLayout, PreferencesPage, PreferencesPageOutput};
 
 pub use path_setting::{PathSetting, PathSettingOutput};
 
-pub use window::{DEFAULT_SIZE, MIN_SIZE, PreferencesState, PreferencesWindow};
+pub use window::{DEFAULT_SIZE, MIN_SIZE, PreferencesMode, PreferencesState, PreferencesWindow};

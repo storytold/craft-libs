@@ -1,5 +1,5 @@
 //! `AboutDialog`: Help > About in one window for every app, with the app's own data. Tabs About, Contributors and
-//! Models, then the app's own tabs.
+//! Models, then Licenses when the app gives license texts, then the app's own tabs.
 
 mod contributors;
 mod credits;
@@ -7,7 +7,7 @@ mod credits;
 pub(crate) mod stories;
 
 pub use contributors::{CommitShare, ContributorSort, NameMode};
-pub use credits::{AboutInfo, AboutLink, Contributor, Credits, ModelCredit};
+pub use credits::{AboutImage, AboutInfo, AboutLicense, AboutLink, Contributor, Credits, ModelCredit};
 
 use crate::buttons::{Button, IconButton, Link};
 use crate::choice::Segmented;
@@ -17,10 +17,10 @@ use crate::contract::{
     Show as _, ShowCollection as _, ShowContainer as _, clicked,
 };
 use crate::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
-use crate::display::{Divider, Shade, Text};
+use crate::display::{Divider, Picture, PictureSize, Shade, Text};
 use crate::layout::RowAlign;
 use crate::layout_components::{Row, Stack};
-use crate::list::ListRow;
+use crate::list::{ListRow, ThumbSize};
 use crate::pickers::Select;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
@@ -29,9 +29,10 @@ use crate::sections::{DialogRole, FooterButton};
 use crate::style::TypeRole;
 use crate::table::Table;
 use crate::tabs::{Tab, TabKind, TabStrip};
+use crate::text::SelectableText;
 use contributors::{Writer, sorted_indices};
 use craft_behavior::{ColumnKey, ColumnWidth, EditEvent, IconId, Mixed, SelectionChange, keyed};
-use craft_theme::Variant;
+use craft_theme::{Mode, Variant};
 use egui::{Response, Ui};
 use serde_json::{Value, json};
 use std::borrow::Cow;
@@ -45,6 +46,9 @@ craft_ui::words! {
         about_tab: "aboutDialog.tab" = "About";
         contributors_tab: "aboutDialog.contributors" = "Contributors";
         models_tab: "aboutDialog.models" = "Models";
+        licenses_tab: "aboutDialog.licenses" = "Licenses";
+        /// The name of the Licenses tab's picker, which lists the licenses by name.
+        license: "aboutDialog.license" = "License";
         /// The footer button of the listed layout ([`AboutLayout::Listed`]).
         close: "aboutDialog.close" = "Close";
         version: template "aboutDialog.version" = "Version {version}";
@@ -55,6 +59,7 @@ craft_ui::words! {
         sort: "aboutDialog.sort" = "Sort";
         reverse: "aboutDialog.reverse" = "Reverse the order";
         view: "aboutDialog.view" = "View";
+        part_of: "aboutDialog.partOf" = "Part of";
         grab_bag: "aboutDialog.grabBag" = "Grab bag";
         table: "aboutDialog.table" = "Table";
         counts: template "aboutDialog.counts" = "Contributors: {contributors} · Commits: {commits}";
@@ -106,7 +111,9 @@ pub enum AboutTab {
     Contributors,
     /// The credited AI models.
     Models,
-    /// The app's own tab at this position in the app's tabs, shown after Models.
+    /// The app's third-party license texts, shown after Models when the app gives any.
+    Licenses,
+    /// The app's own tab at this position in the app's tabs, shown after Models and Licenses.
     App(u8),
 }
 
@@ -114,7 +121,8 @@ pub enum AboutTab {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AboutLayout {
-    /// The blurb, the version, the community button and the link row centred, the built-with line faint; OK closes.
+    /// The mark and the app's name centred, the blurb and the version, then the community button and the link row
+    /// centred, then the built-with line faint, the blocks set apart by the section gap; OK closes.
     #[default]
     Centred,
     /// From the start edge, one item to a line: the app's name as a heading, the version, the blurb, the community
@@ -123,7 +131,7 @@ pub enum AboutLayout {
     Listed,
 }
 
-/// A tab the app adds after Models: a name for the hosted dialog's `tab` field, a title and a body.
+/// A tab the app adds after Models and Licenses: a name for the hosted dialog's `tab` field, a title and a body.
 ///
 /// The body is `Send` because a [`HostedAbout`] lives on the dialog stack, which needs its dialogs `Send`.
 pub struct AboutAppTab {
@@ -148,6 +156,8 @@ struct View {
     descending: bool,
     /// The contributors show as a table; the grab bag of name links otherwise.
     table: bool,
+    /// The position of the license the Licenses tab shows.
+    license: usize,
 }
 
 /// The Models table's columns, the first of which holds the row label.
@@ -227,20 +237,24 @@ impl Outcome for AboutOutput {
 
 /// Help > About: tabs About, Contributors and Models over the app's [`AboutInfo`] and [`Credits`], with an OK button.
 ///
-/// - **About.** The blurb, the version, the community button and the link row centred, the built-with line faint; or,
-///   with [`AboutLayout::Listed`], the name, version, blurb and links one to a line, and Close for OK.
+/// - **About.** The app's mark when it has one, the blurb, the version, the community button and the link row
+///   centred, then "Part of" with the suite's logo when it has one, the built-with line faint; or, with
+///   [`AboutLayout::Listed`], the name, version, blurb and links one to a line, and Close for OK.
 /// - **Contributors.** Show (Username, Display name, Real name), Sort (the list, with a button to reverse) and View
 ///   (Grab bag or Table). The grab bag flows the names as links: a click reports the contributor's profile URL as the
 ///   link (nothing for one without a profile), and the link's tooltip is the summary. The table has every figure; a
 ///   header press sorts by its column, activating a row (Enter or a double click) reports the profile URL, and the
 ///   row's tooltip is the summary.
 /// - **Models.** A table of the credited models with their commits, share of all commits and lines.
-/// - **App tabs.** The app's own [`AboutAppTab`]s ([`app_tabs`](AboutDialog::app_tabs)) follow Models, each body in a
-///   vertically scrolling stack.
+/// - **Licenses.** Shown only when the app gives [`AboutLicense`]s ([`licenses`](AboutDialog::licenses)): a License
+///   picker that lists them by name when there are several, then the picked license's full text, monospace and
+///   selectable, in a vertically scrolling stack.
+/// - **App tabs.** The app's own [`AboutAppTab`]s ([`app_tabs`](AboutDialog::app_tabs)) follow Models and Licenses,
+///   each body in a vertically scrolling stack.
 ///
-/// The name mode, the sort order and the view are kept in the dialog's container while it is open, and so is the tab
-/// unless [`tab`](AboutDialog::tab) binds it. Links are reported
-/// in [`AboutOutput::link`] and never opened from here. Enter and Escape close the dialog.
+/// The name mode, the sort order, the view and the picked license are kept in the dialog's container while it is open,
+/// and so is the tab unless [`tab`](AboutDialog::tab) binds it. Links are reported in [`AboutOutput::link`] and never
+/// opened from here. Enter and Escape close the dialog.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 pub struct AboutDialog<'a> {
@@ -252,7 +266,10 @@ pub struct AboutDialog<'a> {
     /// Binds the shown tab to `tab`; the dialog opens on it.
     #[prop]
     tab: Option<Bind<'a, AboutTab>>,
-    /// The app's own tabs, shown after Models.
+    /// The third-party license texts the Licenses tab shows; without any the dialog has no Licenses tab.
+    #[prop]
+    licenses: Option<&'a [AboutLicense]>,
+    /// The app's own tabs, shown after Models and Licenses.
     #[prop]
     app_tabs: Option<&'a mut [AboutAppTab]>,
     /// How the About tab lays out the info, and the footer button that goes with it.
@@ -263,12 +280,13 @@ pub struct AboutDialog<'a> {
 impl<'a> AboutDialog<'a> {
     /// The dialog over `info` and `credits`, opening on the About tab.
     pub fn new(info: &'a AboutInfo, credits: &'a Credits) -> Self {
-        AboutDialog { info, credits, open: None, tab: None, app_tabs: None, layout: AboutLayout::default() }
+        AboutDialog { info, credits, open: None, tab: None, licenses: None, app_tabs: None, layout: AboutLayout::default() }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> AboutOutput {
-        let AboutDialog { info, credits, open, tab, mut app_tabs, layout } = self;
+        let AboutDialog { info, credits, open, tab, licenses, mut app_tabs, layout } = self;
+        let licenses = licenses.unwrap_or_default();
         // The strip shows the titles while the body draws a tab, so it reads its own copy of them.
         let app_titles: Vec<Label> = app_tabs.as_deref().unwrap_or_default().iter().map(|app| app.title.clone()).collect();
         let env = Env::of(ui);
@@ -277,7 +295,7 @@ impl<'a> AboutDialog<'a> {
         let dates = env.dates();
         let writer = Writer { format: env.format(), dates: &dates, words: &words };
         let title = Label::from(words.title.fill(&[("app", info.app_name.as_str())]));
-        let shown = Shown { words: &words, writer: &writer, info, credits, layout };
+        let shown = Shown { words: &words, writer: &writer, info, credits, licenses, layout };
 
         let mut tab = tab;
         let view = RefCell::new(View::default());
@@ -304,7 +322,7 @@ impl<'a> AboutDialog<'a> {
             }
             let before = kept.tab;
             *view.borrow_mut() = kept;
-            Stack::new().header(|ui, _| shown.tabs(ui, &title, &app_titles, &view)).show(ui, |ui, _| {
+            Stack::new().header(|ui, _| shown.tabs(ui, &title, &app_titles, &view)).fill_width().show(ui, |ui, _| {
                 let tab = view.borrow().tab;
                 let app = match tab {
                     AboutTab::App(at) => app_tabs.as_deref_mut().and_then(|tabs| tabs.get_mut(usize::from(at))),
@@ -313,10 +331,11 @@ impl<'a> AboutDialog<'a> {
                 match (tab, app) {
                     (AboutTab::Contributors, _) => shown.contributors(ui, &view, &link),
                     (AboutTab::Models, _) => shown.models(ui),
+                    (AboutTab::Licenses, _) if !shown.licenses.is_empty() => shown.licenses(ui, &view),
                     (AboutTab::App(_), Some(app)) => {
                         Stack::new().scroll(Scroll::vertical()).fill().show(ui, |ui, _| (app.body)(ui));
                     }
-                    // An app tab past the given ones shows About.
+                    // An app tab past the given ones, and Licenses without licenses, show About.
                     _ => shown.about(ui, &link),
                 }
             });
@@ -340,11 +359,13 @@ struct Shown<'s> {
     writer: &'s Writer<'s>,
     info: &'s AboutInfo,
     credits: &'s Credits,
+    licenses: &'s [AboutLicense],
     layout: AboutLayout,
 }
 
 impl Shown<'_> {
-    /// The tab strip: the three built in, then one per app tab titled `app`. A pick of a tab is kept in `view`.
+    /// The tab strip: the three built in, Licenses when there are licenses, then one per app tab titled `app`. A pick
+    /// of a tab is kept in `view`.
     fn tabs(&self, ui: &mut Ui, title: &Label, app: &[Label], view: &RefCell<View>) {
         let words = self.words;
         let mut tabs = vec![
@@ -352,6 +373,9 @@ impl Shown<'_> {
             (AboutTab::Contributors, words.contributors_tab.clone()),
             (AboutTab::Models, words.models_tab.clone()),
         ];
+        if !self.licenses.is_empty() {
+            tabs.push((AboutTab::Licenses, words.licenses_tab.clone()));
+        }
         tabs.extend(app.iter().enumerate().filter_map(|(at, title)| u8::try_from(at).ok().map(|at| (AboutTab::App(at), title.clone()))));
         let source = keyed(&tabs[..], |tab: &(AboutTab, Label)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
         let shown = view.borrow().tab;
@@ -367,7 +391,7 @@ impl Shown<'_> {
                 Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(Label::default, |tab| tab.1.clone()))
             });
         for event in out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                 && let Some(picked) = keys.last()
             {
                 view.borrow_mut().tab = *picked;
@@ -398,26 +422,51 @@ impl Shown<'_> {
             });
             return;
         }
-        Stack::new().show(ui, |ui, _| {
-            Text::new(info.blurb.clone()).show(ui);
-            Text::new(words.version.fill(&[("version", info.version.as_str())])).show(ui);
-            Row::new().align(RowAlign::Center).show(ui, |ui, _| {
-                if let Some(community) = &info.community
-                    && clicked(&Button::new(community.label.clone()).variant(Variant::PRIMARY).id_salt("community").show(ui))
-                {
-                    *link.borrow_mut() = Some(community.url.clone());
-                }
+        let dark = Env::of(ui).view().mode() == Mode::Dark;
+        // Four blocks set apart by the section gap: the blurb and version at the start edge, the community button and
+        // the link row each centred across the body, the built-with line at the start edge. The app's mark, when it has
+        // one, is centred above them, and "Part of" with the suite's logo, when it has one, follows the link row.
+        Stack::new().gap(Gap::Section).fill_width().show(ui, |ui, _| {
+            if let Some(mark) = &info.mark {
+                Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
+                    Picture::svg(mark.label.clone(), mark.source(dark)).extent(PictureSize::Thumb(ThumbSize::Small)).show(ui);
+                });
+            }
+            Stack::new().show(ui, |ui, _| {
+                Text::new(info.blurb.clone()).show(ui);
+                Text::new(words.version.fill(&[("version", info.version.as_str())])).show(ui);
             });
-            Row::new().align(RowAlign::Center).show(ui, |ui, _| {
-                for (at, item) in info.links.iter().enumerate() {
-                    if at > 0 {
-                        Text::new("·").shade(Shade::Faint).show(ui);
+            if let Some(community) = &info.community {
+                Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
+                    if clicked(&Button::new(community.label.clone()).variant(Variant::PRIMARY).id_salt("community").show(ui)) {
+                        *link.borrow_mut() = Some(community.url.clone());
                     }
-                    if clicked(&Link::new(item.label.clone()).id_salt(("link", at)).show(ui)) {
-                        *link.borrow_mut() = Some(item.url.clone());
+                });
+            }
+            if !info.links.is_empty() {
+                Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
+                    for (at, item) in info.links.iter().enumerate() {
+                        // A dot sets apart two text links; a link with an icon is a button of its own.
+                        if at > 0 && item.icon.is_none() && info.links.get(at - 1).is_some_and(|previous| previous.icon.is_none()) {
+                            Text::new("·").shade(Shade::Faint).show(ui);
+                        }
+                        let activated = if let Some(icon) = &item.icon {
+                            clicked(&Button::new(item.label.clone()).icon(icon.clone()).variant(Variant::GHOST).id_salt(("link", at)).show(ui))
+                        } else {
+                            clicked(&Link::new(item.label.clone()).id_salt(("link", at)).show(ui))
+                        };
+                        if activated {
+                            *link.borrow_mut() = Some(item.url.clone());
+                        }
                     }
-                }
-            });
+                });
+            }
+            if let Some(logo) = &info.part_of {
+                Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
+                    Text::new(words.part_of.clone()).shade(Shade::Muted).show(ui);
+                    Picture::svg(logo.label.clone(), logo.source(dark)).show(ui);
+                });
+            }
             Text::new(info.built_with.clone()).shade(Shade::Faint).show(ui);
         });
     }
@@ -559,6 +608,32 @@ impl Shown<'_> {
             },
         );
     }
+
+    /// The Licenses tab: the License picker when there are several licenses, then the picked license's text.
+    fn licenses(&self, ui: &mut Ui, view: &RefCell<View>) {
+        let words = self.words;
+        let licenses = self.licenses;
+        let mut work = view.borrow().clone();
+        // A kept pick past the licenses given in this pass shows the first.
+        if work.license >= licenses.len() {
+            work.license = 0;
+        }
+        Stack::new().show(ui, |ui, _| {
+            if licenses.len() > 1 {
+                let entries: Vec<Entry<usize>> = licenses.iter().enumerate().map(|(at, license)| Entry::new(at, license.name.clone())).collect();
+                Row::new().show(ui, |ui, _| {
+                    Text::new(words.license.clone()).show(ui);
+                    Select::new(words.license.clone(), Bind::bound(&mut work.license), &entries).show(ui);
+                });
+            }
+            if let Some(license) = licenses.get(work.license) {
+                Stack::new().scroll(Scroll::vertical()).fill().show(ui, |ui, _| {
+                    SelectableText::new(license.name.clone(), &license.text).multiline().mono().id_salt(("license", work.license)).show(ui);
+                });
+            }
+        });
+        *view.borrow_mut() = work;
+    }
 }
 
 /// An [`AboutDialog`] the [`DialogHost`](crate::dialog::DialogHost) owns, with the app's info and credits. A link the
@@ -576,6 +651,7 @@ pub struct HostedAbout {
     tab: AboutTab,
     link: Option<String>,
     open: bool,
+    licenses: Vec<AboutLicense>,
     app_tabs: Vec<AboutAppTab>,
     layout: AboutLayout,
     #[cfg(feature = "testing")]
@@ -592,6 +668,7 @@ impl HostedAbout {
             tab: AboutTab::default(),
             link: None,
             open: true,
+            licenses: Vec::new(),
             app_tabs: Vec::new(),
             layout: AboutLayout::default(),
             #[cfg(feature = "testing")]
@@ -599,7 +676,14 @@ impl HostedAbout {
         }
     }
 
-    /// Adds an app tab after Models.
+    /// The license texts of the Licenses tab ([`AboutDialog::licenses`]); without any the dialog has no Licenses tab.
+    #[must_use]
+    pub fn licenses(mut self, licenses: impl IntoIterator<Item = AboutLicense>) -> Self {
+        self.licenses = licenses.into_iter().collect();
+        self
+    }
+
+    /// Adds an app tab after Models and Licenses.
     #[must_use]
     pub fn app_tab(mut self, tab: AboutAppTab) -> Self {
         self.app_tabs.push(tab);
@@ -630,27 +714,34 @@ impl HostedAbout {
 const ABOUT_KEY: &str = "help.about";
 
 /// The tabs' names in the hosted dialog's `tab` field.
-const TAB_NAMES: [(AboutTab, &str); 3] = [(AboutTab::About, "about"), (AboutTab::Contributors, "contributors"), (AboutTab::Models, "models")];
+const TAB_NAMES: [(AboutTab, &str); 4] =
+    [(AboutTab::About, "about"), (AboutTab::Contributors, "contributors"), (AboutTab::Models, "models"), (AboutTab::Licenses, "licenses")];
 
 impl HostedAbout {
-    /// The name of `tab` in the dialog's `tab` field: the app tabs' names as well as the three built in. An app tab
-    /// past the given ones shows About, so it is named so.
+    /// The name of `tab` in the dialog's `tab` field: the app tabs' names as well as the ones built in. An app tab
+    /// past the given ones, and Licenses without licenses, show About, so they are named so.
     fn tab_name(&self, tab: AboutTab) -> &str {
         if let AboutTab::App(at) = tab
             && let Some(app) = self.app_tabs.get(usize::from(at))
         {
             return app.name;
         }
-        TAB_NAMES.iter().find(|(known, _)| *known == tab).map_or("about", |(_, name)| *name)
+        TAB_NAMES.iter().find(|(known, _)| *known == tab && self.has(*known)).map_or("about", |(_, name)| *name)
     }
 
-    /// The tab named `name` in the dialog's `tab` field; a name built in wins over an app tab's of the same name.
+    /// The tab named `name` in the dialog's `tab` field; a name built in wins over an app tab's of the same name while
+    /// the dialog shows that tab.
     fn tab_named(&self, name: &str) -> Option<AboutTab> {
-        if let Some((tab, _)) = TAB_NAMES.iter().find(|(_, known)| *known == name) {
+        if let Some((tab, _)) = TAB_NAMES.iter().find(|(tab, known)| *known == name && self.has(*tab)) {
             return Some(*tab);
         }
         let at = self.app_tabs.iter().position(|app| app.name == name)?;
         u8::try_from(at).ok().map(AboutTab::App)
+    }
+
+    /// Whether the dialog shows the built-in `tab`: Licenses only with licenses, the others always.
+    fn has(&self, tab: AboutTab) -> bool {
+        tab != AboutTab::Licenses || !self.licenses.is_empty()
     }
 }
 
@@ -685,6 +776,7 @@ impl StackDialog for HostedAbout {
             credits: &self.credits,
             open: Some(Bind::bound(&mut self.open)),
             tab: Some(Bind::bound(&mut self.tab)),
+            licenses: Some(&self.licenses[..]),
             app_tabs: Some(&mut self.app_tabs[..]),
             layout: self.layout,
         }

@@ -739,3 +739,48 @@ fn image_mode_moves_and_turns_the_view_and_classic_mode_the_frame() {
         assert!(rig.view_turn().is_some_and(|turn| turn.abs() < 1e-6), "the view is upright after {}", if leave { "leave" } else { "Apply" });
     }
 }
+
+/// photocraft#16404: with the default settings (image mode, Auto Center Preview, Delete Cropped Pixels on), moving
+/// the image under an upright frame takes the frame past the canvas, where the crop grows the canvas.
+#[trial]
+fn a_move_takes_an_upright_frame_past_the_canvas_with_delete_cropped_pixels_on() {
+    use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTargets};
+    use std::sync::Arc;
+    // With and without snapping to the document's edges, as View > Snap To > Document Bounds sets it.
+    for snapping in [false, true] {
+        let start = upright(20.0, 50.0, 120.0, 150.0);
+        let mut rig = Rig::new(CropSettings::default());
+        if snapping {
+            let mut targets = SnapTargets::new();
+            targets.add_rect(Rect::new(0.0, 0.0, SIZE.width, SIZE.height), SnapKind::Bounds, SnapKind::Center);
+            rig.host.borrow_mut().snap = Some(Snap::new(Arc::new(targets), SnapOptions::default()));
+        }
+        rig.host.borrow_mut().tool.crop_to(start);
+        rig.run();
+        // At 31 %, as a large document fits the window.
+        {
+            let mut host = rig.host.borrow_mut();
+            let view = host.view.expect("the tool set the view");
+            let mut zoomed = view;
+            zoomed.zoom = 0.31;
+            host.view = Some(zoomed);
+        }
+        rig.run();
+        // The image moves right under the frame: the frame goes left, past the canvas's left edge at 0.
+        let (from, to) = {
+            let host = rig.host.borrow();
+            let view = host.view.expect("the view");
+            (view.to_screen(Point::new(70.0, 100.0)), view.to_screen(Point::new(70.0, 100.0)) + Vec2::new(150.0, 0.0))
+        };
+        rig.fixture.frame(vec![pointer::moved(from)]);
+        rig.fixture.frame(vec![pointer::press(from)]);
+        for step in 1..=30 {
+            rig.fixture.frame(vec![pointer::moved(from + (to - from) * (step as f32 / 30.0))]);
+        }
+        rig.fixture.frame(vec![pointer::release(to)]);
+        rig.run();
+        let moved = rig.frame().expect("the frame");
+        assert!(moved.rect.x0 < -1.0, "snapping {snapping}: the frame moved past the canvas's left edge: {:?}", moved.rect);
+        assert_eq!((moved.rect.width(), moved.rect.height()), (100.0, 100.0), "snapping {snapping}: a move keeps the frame's size");
+    }
+}

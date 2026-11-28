@@ -1,5 +1,7 @@
 //! The reader on small packages written by hand.
 
+use super::common;
+
 use craft_opc::{PackageOut, RelsOut};
 use craft_pptx::{Defaults, Geom, LayoutType, Master, PhType, Plain, Presentation, ShapeKind, Size};
 
@@ -103,6 +105,40 @@ fn shape<'a>(p: &'a Presentation, name: &str) -> &'a craft_pptx::Shape {
         }
     });
     found.unwrap_or_else(|| panic!("no shape {name}"))
+}
+
+#[test]
+fn direct_nested_compatibility_choice_imports_selected_shape() {
+    let before = sp(20, "Before choice", "", XFRM, "Before");
+    let outer_rejected = sp(21, "Outer rejected", "", XFRM, "Outer");
+    let selected = sp(22, "Nested selected", "", XFRM, "Selected");
+    let inner_rejected = sp(23, "Inner rejected", "", XFRM, "Inner");
+    let after = sp(24, "After choice", "", XFRM, "After");
+    let nested = format!(
+        r#"{before}<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:future="urn:example:future">
+            <mc:Choice Requires="future">{outer_rejected}</mc:Choice>
+            <mc:Fallback><mc:AlternateContent xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main">
+                <mc:Choice Requires="p14">{selected}</mc:Choice>
+                <mc:Fallback>{inner_rejected}</mc:Fallback>
+            </mc:AlternateContent></mc:Fallback>
+        </mc:AlternateContent>{after}</p:spTree>"#
+    );
+    let bytes = common::rewrite(
+        &deck(),
+        |part, data| {
+            if part == "ppt/slides/slide1.xml" {
+                Some(std::str::from_utf8(data).unwrap().replace("</p:spTree>", &nested).into_bytes())
+            } else {
+                Some(data.to_vec())
+            }
+        },
+        &[],
+    );
+    let p = craft_pptx::import(&bytes, &Plain).unwrap();
+    let names: Vec<_> = p.slides[0].shapes.iter().map(|shape| shape.name.as_str()).collect();
+    assert!(names.ends_with(&["Before choice", "Nested selected", "After choice"]), "{names:?}");
+    assert_eq!(names.iter().filter(|&&name| name == "Nested selected").count(), 1);
+    assert!(!names.contains(&"Outer rejected") && !names.contains(&"Inner rejected"));
 }
 
 #[test]

@@ -208,13 +208,15 @@ pub enum PaintedCursor {
         end: bool,
     },
     /// A pointer with the tool's icon below and right of it: a crosshair (Perspective Crop), or an arrow with its tip
-    /// on the hotspot (Paint Bucket, Ruler).
+    /// on the hotspot (Paint Bucket, Ruler, the lassos).
     #[non_exhaustive]
     PointerTool {
         /// The pointer the icon rides beside.
         pointer: PointerGlyph,
         /// The icon.
         icon: IconId,
+        /// A mark at the icon's lower right.
+        badge: Option<CursorBadge>,
     },
     /// No cursor at all.
     Hidden,
@@ -294,7 +296,12 @@ impl PaintedCursor {
 
     /// `pointer` with the tool's icon below and right of it.
     pub const fn pointer_tool(pointer: PointerGlyph, icon: IconId) -> Self {
-        PaintedCursor::PointerTool { pointer, icon }
+        PaintedCursor::PointerTool { pointer, icon, badge: None }
+    }
+
+    /// `pointer` with the tool's icon below and right of it, and `badge` at the icon's lower right.
+    pub const fn pointer_tool_badged(pointer: PointerGlyph, icon: IconId, badge: Option<CursorBadge>) -> Self {
+        PaintedCursor::PointerTool { pointer, icon, badge }
     }
 
     /// A system cursor with a mark.
@@ -351,6 +358,8 @@ pub enum CursorPriority {
     DropTarget,
     /// A drag in progress.
     Drag,
+    /// Hides the pointer over everything, links included, while a presentation runs.
+    Hidden,
 }
 
 /// The winning request: the highest priority, the later request on a tie.

@@ -1,7 +1,11 @@
 //! Stories of `DatePicker` and `Calendar`.
 
-use super::{Calendar, CalendarView, DatePicker, DatePrecision, PickedDate};
-use crate::contract::{Props as _, Show as _, Validity};
+use super::{Calendar, CalendarPopover, CalendarView, DatePicker, DatePrecision, PickedDate};
+use crate::buttons::Button;
+use crate::contract::overlay::Anchor;
+use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Validity, clicked};
+use crate::display::Text;
+use crate::layout_components::Stack;
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::Mixed;
@@ -65,6 +69,59 @@ fn date_picker_days_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn date_picker_with_reason(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tooltip = data.tooltip("The date the photo was taken");
     DatePicker::new("Captured", data.bind("captured", Some(today()))).tooltip(tooltip).show(ui).into()
+}
+
+/// The button opens the calendar, which hangs from the date shown above it rather than from the button.
+#[story(CalendarPopover<'static>, covers = [Default], drive = Drive::Never)]
+fn calendar_popover_at_rect(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut open = *data.value("open", false);
+    let mut picked = *data.value("picked", Some(today()));
+    let shown = Stack::new().show(ui, |ui, _| {
+        let date = Text::new(picked.map_or_else(|| "No date".to_owned(), |date| date.iso())).show(ui);
+        let opener = Button::new("Choose a date").show(ui);
+        open |= clicked(&opener);
+        CalendarPopover::new("Due date", Bind::bound(&mut open), Bind::bound(&mut picked))
+            .today(today())
+            .opened_by(&opener)
+            .overlay(|overlay| overlay.opener_anchor(Anchor::Rect(date.rect)))
+            .show(ui, |_, _| {})
+            .output
+    });
+    *data.value("open", false) = open;
+    *data.value("picked", Some(today())) = picked;
+    match shown.inner {
+        Some(output) => output.into(),
+        None => shown.output.into(),
+    }
+}
+
+/// Focuses the opener and presses Enter, which opens the popover.
+fn open_popover(fixture: &mut Fixture) {
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.idle(4);
+}
+
+/// The calendar popover, opened by its opener and hanging from it.
+#[story(CalendarPopover<'static>, covers = [Open], drive = Drive::Custom(open_popover))]
+fn calendar_popover_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut open = *data.value("open", false);
+    let mut picked = *data.value("picked", Some(today()));
+    let shown = Stack::new().show(ui, |ui, _| {
+        let opener = Button::new("Choose a date").show(ui);
+        open |= clicked(&opener);
+        CalendarPopover::new("Due date", Bind::bound(&mut open), Bind::bound(&mut picked))
+            .today(today())
+            .opened_by(&opener)
+            .show(ui, |_, _| {})
+            .output
+    });
+    *data.value("open", false) = open;
+    *data.value("picked", Some(today())) = picked;
+    match shown.inner {
+        Some(output) => output.into(),
+        None => shown.output.into(),
+    }
 }
 
 #[story(Calendar, covers = [Default], drive = Drive::Never)]

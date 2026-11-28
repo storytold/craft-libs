@@ -6,7 +6,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use craft_i18n::Folder;
 use craft_keymap::chord::{Platform, Trigger};
 use craft_keymap::command::CommandRef;
-use craft_keymap::keymap::{Binding, CommandDef, CommandKind, ConflictKind, Keymap, Overrides};
+use craft_keymap::keymap::{Binding, CommandDef, CommandKind, ConflictKind, Keymap, MAX_BINDINGS, Overrides};
 
 use crate::shortcuts::Options;
 use crate::shortcuts::words::{Say, around_chord};
@@ -82,7 +82,10 @@ pub(crate) struct Row {
     pub label: String,
     /// Translated path parts between the group header and the label, shown dim before it.
     pub prefix: Vec<String>,
+    /// The shortcut column's bindings: single and double presses.
     pub chips: Vec<Chip>,
+    /// The Hold column's bindings; empty while the keymap leaves holds out.
+    pub hold_chips: Vec<Chip>,
     /// Override texts that do not parse, as written.
     pub unparsed: Vec<String>,
     /// An overrides entry exists.
@@ -91,6 +94,13 @@ pub(crate) struct Row {
     pub cycles: bool,
     /// In a clash.
     pub conflict: bool,
+}
+
+impl Row {
+    /// The command has [`MAX_BINDINGS`] bindings, holds counted: neither column takes another.
+    pub(crate) fn full(&self) -> bool {
+        self.chips.len() + self.hold_chips.len() >= MAX_BINDINGS
+    }
 }
 
 /// A read-only row from [`Options::fixed`].
@@ -146,9 +156,11 @@ struct Key {
     collapsed: BTreeSet<String>,
     overrides: Overrides,
     platform: Platform,
+    /// The keymap's holds: the switch changes the bindings without changing the overrides.
+    holds: bool,
 }
 
-/// The built lines, rebuilt only when the view or the keymap's overrides change.
+/// The built lines, rebuilt only when the view, the keymap's overrides or its holds change.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RowCache {
     key: Option<Key>,
@@ -165,6 +177,7 @@ impl RowCache {
                 && k.collapsed == *view.collapsed
                 && k.platform == keymap.platform()
                 && k.overrides == *keymap.overrides()
+                && k.holds == keymap.holds()
         });
         if !fresh {
             self.built = build(keymap, options, text, view);
@@ -176,6 +189,7 @@ impl RowCache {
                 collapsed: view.collapsed.clone(),
                 overrides: keymap.overrides().clone(),
                 platform: keymap.platform(),
+                holds: keymap.holds(),
             });
         }
         &self.built
@@ -196,8 +210,30 @@ fn listed<'k>(keymap: &'k Keymap, options: &Options) -> impl Iterator<Item = &'k
     keymap.catalog().iter().filter(move |b| visible.is_none_or(|f| f(b)))
 }
 
-/// The Show entries, in catalog order, leaving out areas with no rows.
+/// The Show entries, in catalog order, leaving out areas with no rows; with [`Options::own_areas`], only the app's own
+/// entries and Fixed Keys.
 pub(crate) fn areas(keymap: &Keymap, options: &Options, text: &Say) -> Vec<AreaEntry> {
+    let mut out = if options.own_areas { Vec::new() } else { built_in_areas(keymap, options, text) };
+    let catalog = listed(keymap, options);
+    for a in options.areas.iter().filter(|a| catalog.clone().any(a.rows)) {
+        out.push(AreaEntry { id: AreaId::App(a.id), label: text.segment(a.label).into_owned() });
+    }
+    if !options.fixed.is_empty() {
+        out.push(AreaEntry { id: AreaId::Fixed, label: text.words().fixed_keys.as_str().to_owned() });
+    }
+    out
+}
+
+/// The area that shows `b`'s row: All Commands when Show lists it, else the first listed area that holds the row.
+pub(crate) fn area_of(areas: &[AreaEntry], b: &CommandDef, options: &Options) -> AreaId {
+    if areas.iter().any(|area| area.id == AreaId::All) {
+        return AreaId::All;
+    }
+    areas.iter().find(|area| in_area(&area.id, b, options)).map_or(AreaId::All, |area| area.id.clone())
+}
+
+/// All Commands, each menu, Tools, each panel and Other, leaving out areas with no rows.
+fn built_in_areas(keymap: &Keymap, options: &Options, text: &Say) -> Vec<AreaEntry> {
     let catalog = listed(keymap, options);
     let mut out = vec![AreaEntry { id: AreaId::All, label: text.words().all_commands.as_str().to_owned() }];
     let mut menus: Vec<&str> = Vec::new();
@@ -224,12 +260,6 @@ pub(crate) fn areas(keymap: &Keymap, options: &Options, text: &Say) -> Vec<AreaE
     }
     if catalog.clone().any(|b| top_menu(b).is_none() && !is_tool(b)) {
         out.push(AreaEntry { id: AreaId::Other, label: text.words().other.as_str().to_owned() });
-    }
-    for a in options.areas.iter().filter(|a| catalog.clone().any(a.rows)) {
-        out.push(AreaEntry { id: AreaId::App(a.id), label: text.segment(a.label).into_owned() });
-    }
-    if !options.fixed.is_empty() {
-        out.push(AreaEntry { id: AreaId::Fixed, label: text.words().fixed_keys.as_str().to_owned() });
     }
     out
 }
@@ -345,11 +375,12 @@ fn build(keymap: &Keymap, options: &Options, text: &Say, view: &View) -> Built {
     }
 
     let bindings: Vec<Vec<Binding>> = catalog.iter().map(|b| keymap.bindings(&b.command)).collect();
-    // How many tools of a group hold each effective trigger.
+    // How many tools of a group hold each effective trigger. A hold has no repeated press to cycle with, so holds
+    // are not counted.
     let mut tool_keys: HashMap<(Option<&str>, Trigger), usize> = HashMap::new();
     for (b, list) in catalog.iter().zip(&bindings) {
         if let CommandKind::Tool { group } = &b.kind {
-            for x in list {
+            for x in list.iter().filter(|x| !x.trigger.is_hold()) {
                 *tool_keys.entry((group.as_deref().filter(|_| !keymap.shares_tool_keys()), x.trigger.effective(platform))).or_default() += 1;
             }
         }
@@ -382,26 +413,26 @@ fn build(keymap: &Keymap, options: &Options, text: &Say, view: &View) -> Built {
         let path = b.paths.first().map(Vec::as_slice).unwrap_or_default();
         let prefix = path.get(depth..path.len().saturating_sub(1)).unwrap_or_default().iter().map(|s| text.segment(s).into_owned()).collect();
         let defaults = &b.defaults;
-        let chips = list
-            .iter()
-            .map(|x| {
-                let mut t = text.trigger(&x.trigger, platform);
-                if x.scope_or(&b.scope) != &b.scope {
-                    let scope = text.segment(x.scope_or(&b.scope).as_str());
-                    let s = text.words().chord_scope.fill(&[("chord", &t), ("scope", &scope)]);
-                    t = around_chord(text.rtl(), &s, &t);
-                }
-                Chip { binding: x.clone(), text: t, changed: !defaults.contains(x) }
-            })
-            .collect();
+        let chip = |x: &Binding| {
+            let mut t = text.trigger(&x.trigger, platform);
+            if x.scope_or(&b.scope) != &b.scope {
+                let scope = text.segment(x.scope_or(&b.scope).as_str());
+                let s = text.words().chord_scope.fill(&[("chord", &t), ("scope", &scope)]);
+                t = around_chord(text.rtl(), &s, &t);
+            }
+            Chip { binding: x.clone(), text: t, changed: !defaults.contains(x) }
+        };
+        let chips = list.iter().filter(|x| !x.trigger.is_hold()).map(chip).collect();
+        let hold_chips = list.iter().filter(|x| x.trigger.is_hold()).map(chip).collect();
         let cycles = match &b.kind {
-            CommandKind::Tool { group } => list.iter().any(|x| {
+            CommandKind::Tool { group } => list.iter().filter(|x| !x.trigger.is_hold()).any(|x| {
                 tool_keys.get(&(group.as_deref().filter(|_| !keymap.shares_tool_keys()), x.trigger.effective(platform))).is_some_and(|n| *n > 1)
             }),
             _ => false,
         };
         let unparsed = keymap.unparsed_texts(&b.command).into_iter().map(str::to_owned).collect();
-        let row = Row { index, command: b.command.clone(), key, label: text.command(b), prefix, chips, unparsed, changed, cycles, conflict };
+        let row =
+            Row { index, command: b.command.clone(), key, label: text.command(b), prefix, chips, hold_chips, unparsed, changed, cycles, conflict };
         match groups.iter_mut().find(|(r, h, _)| *r == rank && *h == header) {
             Some((_, _, rows)) => rows.push(row),
             None => groups.push((rank, header, vec![row])),

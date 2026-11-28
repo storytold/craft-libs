@@ -161,6 +161,10 @@ pub struct Action {
     /// Written by an automation client: playback keeps that client's gate.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub automation: bool,
+    /// The app's own options for the action. The framework never reads them; every edit, duplicate, move, merge and
+    /// the file keep them.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub options: serde_json::Map<String, serde_json::Value>,
 }
 
 fn is_no_color(color: &ActionColor) -> bool {

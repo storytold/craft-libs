@@ -3,4 +3,5 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 pub(crate) mod dialog;
+pub(crate) mod panel;
 pub(crate) mod print;

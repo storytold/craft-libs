@@ -2,6 +2,8 @@
 //! lives here; the text of a distance or a tick is written by craft-ui over `Env::units`, so no second number
 //! formatter exists.
 
+use std::ops::RangeInclusive;
+
 /// How a ruler divides its unit at a zoom.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
@@ -19,8 +21,20 @@ pub enum Ticks {
     Custom(fn(f64) -> (f64, u32)),
 }
 
-/// The ruler unit of one document axis: its size and its ticks. Rulers label their ticks with it; guides use it for
-/// the readout of a drag, their AccessKit values and Shift's snap to the ticks.
+/// How a ruler writes the number at a labelled tick.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TickLabels {
+    /// PhotoCraft's: the distance from the zero point with no minus sign, a step under 1 with at least two decimals
+    /// (`2.50`, `0.30`, `1.0000` on a sixteenth-inch ruler).
+    #[default]
+    Distance,
+    /// VectorCraft's: the signed position, with only the decimals the tick needs (`-2.5`, `0.3`, `1`).
+    Signed,
+}
+
+/// The ruler unit of one document axis: its size, its ticks and how it labels them. Rulers label their ticks with it;
+/// guides use it for the readout of a drag, their AccessKit values and Shift's snap to the ticks.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct RulerUnits {
@@ -28,6 +42,8 @@ pub struct RulerUnits {
     pub per_doc: f64,
     /// How the ticks are spaced.
     pub ticks: Ticks,
+    /// How the labelled ticks are written.
+    pub labels: TickLabels,
 }
 
 impl Ticks {
@@ -38,9 +54,16 @@ impl Ticks {
 }
 
 impl RulerUnits {
-    /// Ruler units of `per_doc` per document unit, spaced by `ticks`.
+    /// Ruler units of `per_doc` per document unit, spaced by `ticks`, labelled as [`TickLabels::Distance`].
     pub const fn new(per_doc: f64, ticks: Ticks) -> Self {
-        Self { per_doc, ticks }
+        Self { per_doc, ticks, labels: TickLabels::Distance }
+    }
+
+    /// The units with their ticks written as `labels`.
+    #[must_use]
+    pub const fn with_labels(mut self, labels: TickLabels) -> Self {
+        self.labels = labels;
+        self
     }
 
     /// Whole document pixels.
@@ -78,22 +101,31 @@ impl RulerUnits {
         (position - zero) * self.per_doc
     }
 
-    /// The decimals a ruler writes a tick of labelled step `step` with. Whole ticks are whole numbers; a step of at
-    /// least 1 takes the decimals it has (none for 5, one for 2.5), a smaller one at least two (PhotoCraft's
-    /// `0.50`), more when it has them (0.025).
-    pub fn label_decimals(&self, step: f64) -> usize {
-        match self.ticks {
+    /// The least and most decimals a ruler writes a tick of labelled step `step` with. Whole ticks are whole numbers;
+    /// a step of at least 1 takes the decimals it has (none for 5, one for 2.5). Under [`TickLabels::Distance`] a
+    /// smaller step takes at least two (PhotoCraft's `0.50`), more when it has them (0.025), and every tick takes them
+    /// all; under [`TickLabels::Signed`] a tick drops the trailing zeros (`1` on a sixteenth-inch ruler).
+    pub fn label_decimals(&self, step: f64) -> RangeInclusive<usize> {
+        let most = match self.ticks {
             Ticks::Decimal { whole: true } => 0,
-            _ if step.abs() < 1.0 => step_decimals(step).max(2),
+            _ if step.abs() < 1.0 && self.labels == TickLabels::Distance => step_decimals(step).max(2),
             _ => step_decimals(step),
+        };
+        match self.labels {
+            TickLabels::Distance => most..=most,
+            TickLabels::Signed => 0..=most,
         }
     }
 
     /// The number a ruler prints at the tick `value` (ruler units from the zero point) for a labelled step `step`:
-    /// the distance without a minus sign left of or above the zero point (PhotoCraft's `ruler_label`), rounded when
-    /// the ticks are whole.
+    /// under [`TickLabels::Distance`] the distance without a minus sign left of or above the zero point (PhotoCraft's
+    /// `ruler_label`), under [`TickLabels::Signed`] the value itself; rounded when the ticks are whole.
     pub fn label_value(&self, value: f64, step: f64) -> f64 {
-        if self.label_decimals(step) == 0 { value.abs().round() } else { value.abs() }
+        let value = match self.labels {
+            TickLabels::Distance => value.abs(),
+            TickLabels::Signed => value,
+        };
+        if *self.label_decimals(step).end() == 0 { value.round() } else { value }
     }
 }
 

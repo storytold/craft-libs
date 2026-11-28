@@ -207,3 +207,26 @@ fn a_result_of_an_older_revision_is_discarded() {
     assert!(matches!(state.into_inner(), TextureState::Ready(texture) if texture.size == size), "the revision-2 result is stored");
     assert_eq!(runs.load(Ordering::Relaxed), 3);
 }
+
+/// A job that finishes with no input after it still gets a pass, so its picture is drawn without waiting for the
+/// pointer to move.
+#[trial]
+fn a_finished_render_asks_for_a_repaint() {
+    let mut frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    let (loader, jobs) = loader_with(&ctx, 1, 16);
+    let runs = Arc::new(AtomicUsize::new(0));
+    // egui's own first frames ask for follow-up passes; the job is asked for once they are over.
+    frames.idle(QUIET_FRAMES, |_| {});
+    frame(&mut frames, || {
+        loader.request(&ctx, &1, Revision::new(1), Priority::VISIBLE, || counted(&runs, SMALL));
+    });
+    assert!(!frames.repaint_requested(), "a waiting job asks for no pass");
+    jobs.run_all();
+    assert_eq!(runs.load(Ordering::Relaxed), 1, "the job ran");
+    assert!(frames.repaint_requested(), "the finished job asks for a pass");
+    let state = Cell::new(TextureState::Missing);
+    frame(&mut frames, || state.set(loader.ask(&ctx, &1, Revision::new(1), Priority::VISIBLE).expect("settled")));
+    let state = state.into_inner();
+    assert!(ready(&state), "the pass it asked for shows the picture: {state:?}");
+}

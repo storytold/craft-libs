@@ -45,8 +45,13 @@ pub struct FieldLabel {
     pub detail: Option<String>,
     /// The label was clicked or activated this pass: focus goes to its control.
     pub activated: bool,
+    /// The label is a link and was clicked this pass: the control's host is told (`Cx::link_activated`), focus stays.
+    pub link: bool,
     /// The container shows its control's validity message as its status line (`FooterRegion::status`).
     pub status: bool,
+    /// The label shows as a node of its own. A hidden label and one drawn inside its control have none: they name
+    /// their control by their text alone.
+    pub shown: bool,
 }
 
 impl FieldLabel {
@@ -61,8 +66,17 @@ impl FieldLabel {
             role: FieldLabelRole::Names,
             detail: None,
             activated: false,
+            link: false,
             status: false,
+            shown: true,
         }
+    }
+
+    /// Whether the label shows as a node of its own.
+    #[must_use]
+    pub fn shown(mut self, shown: bool) -> Self {
+        self.shown = shown;
+        self
     }
 
     /// Whether the label names or describes the controls.
@@ -90,6 +104,13 @@ impl FieldLabel {
     #[must_use]
     pub fn activated(mut self, activated: bool) -> Self {
         self.activated = activated;
+        self
+    }
+
+    /// Whether the label is a link that was clicked this pass.
+    #[must_use]
+    pub fn linked(mut self, link: bool) -> Self {
+        self.link = link;
         self
     }
 
@@ -160,6 +181,8 @@ struct Open {
     stops: usize,
     /// The nodes that registered inside it and in no node component inside it.
     held: Vec<ScopeNode>,
+    /// The child whose stop a click on the label focuses, in place of the first stop inside it (`label_target`).
+    label_target: Option<Id>,
 }
 
 /// A control that reported its node in a scope: the name and description its node got at its own report.
@@ -172,7 +195,8 @@ pub(crate) struct ScopeNode {
     pub description: Option<String>,
     /// The missing-name finding of a node that may still be named by the scope: reported when it is not.
     pub unnamed: Option<Finding>,
-    /// The first focus stop inside a control that has none of its own: where a click on its label moves focus.
+    /// The first focus stop inside a control that has none of its own, or the stop of the child it named
+    /// (`label_target`): where a click on its label moves focus.
     pub inner_stop: Option<crate::runtime::focus::FocusTarget>,
     /// The control takes key focus, at its own stop or at a part's (a segmented control's segments).
     pub focusable: bool,
@@ -250,7 +274,17 @@ pub(crate) fn field_label(ctx: &Context) -> Option<FieldLabel> {
 pub(crate) fn enter(ctx: &Context, id: Id) {
     pass_state::with::<Stack, _>(ctx, |stack| {
         if let Some(scope) = stack.0.last_mut() {
-            scope.open.push(Open { id, stops: crate::runtime::focus::stop_count(ctx), held: Vec::new() });
+            scope.open.push(Open { id, stops: crate::runtime::focus::stop_count(ctx), held: Vec::new(), label_target: None });
+        }
+    });
+}
+
+/// Names `child` as the component whose stop a click on the label of the node component `id` focuses, in place of
+/// the first stop inside `id`. Read at `id`'s step 16; a child with no stop this pass leaves the first stop.
+pub(crate) fn label_target(ctx: &Context, id: Id, child: Id) {
+    pass_state::with::<Stack, _>(ctx, |stack| {
+        if let Some(open) = stack.0.iter_mut().rev().find_map(|scope| scope.open.iter_mut().rfind(|open| open.id == id)) {
+            open.label_target = Some(child);
         }
     });
 }
@@ -263,7 +297,7 @@ pub(crate) fn register(ctx: &Context, mut node: ScopeNode) {
         let Some(scope) = stack.0.last_mut() else { return node.unnamed.take().into_iter().collect() };
         let mut unnamed = Vec::new();
         if let Some(at) = scope.open.iter().rposition(|open| open.id == node.id) {
-            node.inner_stop = crate::runtime::focus::first_stop_inside(ctx, node.id, scope.open[at].stops);
+            node.inner_stop = crate::runtime::focus::first_stop_inside(ctx, node.id, scope.open[at].stops, scope.open[at].label_target);
             // What the node held sits inside it: none of it is a control of the scope.
             unnamed.extend(scope.open.drain(at..).flat_map(|open| open.held).filter_map(|held| held.unnamed));
         }
@@ -345,27 +379,54 @@ pub(crate) fn record_control_min(ctx: &Context, width: f32) {
         stack.0.iter().rev().find(|scope| matches!(scope.kind, Kind::Label(_))).map(|scope| scope.container)
     });
     if let Some(container) = container {
-        layout_memory::contribute(ctx, std::sync::Arc::new(ControlMin { container, width }));
+        layout_memory::contribute(ctx, std::sync::Arc::new(ControlMin { container, width, whole: false }));
     }
+}
+
+/// The innermost open label scope, when no control inside it has reported its narrowest width yet.
+pub(crate) fn label_awaiting_min(ctx: &Context) -> Option<Id> {
+    pass_state::with::<Stack, _>(ctx, |stack| {
+        stack
+            .0
+            .iter()
+            .rev()
+            .find(|scope| matches!(scope.kind, Kind::Label(_)))
+            .filter(|scope| scope.control_min.is_none())
+            .map(|scope| scope.container)
+    })
+}
+
+/// Records `width` as the narrowest width of the controls of `container`'s label scope, in place of what the first of
+/// them reported: the least of a row that holds them side by side, the first control of the scope
+/// (`label_awaiting_min`). Only a measuring run records it.
+pub(crate) fn record_row_min(ctx: &Context, container: Id, width: f32) {
+    layout_memory::contribute(ctx, std::sync::Arc::new(ControlMin { container, width, whole: true }));
 }
 
 /// A control's narrowest width reported to the label scope of `container`, as a measuring run hands it forward.
 struct ControlMin {
     container: Id,
     width: f32,
+    /// The width is the least of a row of controls (`record_row_min`): it replaces the first control's.
+    whole: bool,
 }
 
 impl layout_memory::Contribution for ControlMin {
     fn apply(&self, ctx: &Context) {
         pass_state::with::<Stack, _>(ctx, |stack| {
             if let Some(scope) = stack.0.iter_mut().rev().find(|scope| scope.container == self.container && matches!(scope.kind, Kind::Label(_))) {
-                scope.control_min.get_or_insert(self.width);
+                if self.whole {
+                    scope.control_min = Some(self.width);
+                } else {
+                    scope.control_min.get_or_insert(self.width);
+                }
             }
         });
     }
 
     fn report(&self) -> Option<(Id, f32)> {
-        Some((sub(self.container, "control_min"), self.width))
+        // A row's shrink step sweeps only in a measuring run, so a real run has no row least to compare.
+        (!self.whole).then(|| (sub(self.container, "control_min"), self.width))
     }
 
     fn undo(&self, ctx: &Context) -> layout_memory::TakeBack {
@@ -484,13 +545,14 @@ pub(crate) struct Merged {
 /// One change a label scope makes to a node, decided here and written by `runtime::egui::access`.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum LabelPatch {
-    /// The label's own node: made with the role `Label` and the label's text where no component wrote it (a hidden
-    /// label), and disabled when every control it labels is.
+    /// The label's own node, which its leaf wrote: made with the role `Label` and the label's text where the leaf wrote
+    /// none this pass, and disabled when every control it labels is.
     Label { id: Id, text: String, disabled: bool },
     /// `node` keeps its name and is described by `label`.
     DescribedBy { node: Id, label: Id },
-    /// `node` is named `text`, the label's text, and keeps `label` as the node that labels it.
-    LabelledBy { node: Id, label: Id, text: String },
+    /// `node` is named `text`, the label's text, and keeps `label` as the node that labels it; `None` for a label with
+    /// no node of its own.
+    LabelledBy { node: Id, label: Option<Id>, text: String },
     /// `container` is labelled by `label`: it holds several controls.
     GroupLabelledBy { container: Id, label: Id },
     /// `text` joins the description of `node`.
@@ -499,12 +561,17 @@ pub(crate) enum LabelPatch {
 
 /// What `label` does to the `nodes` registered in the scope of `container`: one control is labelled by it
 /// (described by it when the control keeps its own name or the label describes), several make the container's node
-/// labelled by it, none leaves everything alone.
+/// labelled by it, none, or a label without text, leaves everything alone. A label with no node of its own names its
+/// one control by its text, or joins the control's description, and leaves the container its own name.
 pub(crate) fn label_patches(container: Id, label: &FieldLabel, nodes: &[ScopeNode]) -> Vec<LabelPatch> {
     if nodes.is_empty() {
         return Vec::new();
     }
-    let mut patches = vec![LabelPatch::Label { id: label.id, text: label.text.clone(), disabled: nodes.iter().all(|node| node.disabled) }];
+    // A label without text has nothing to name or describe: the controls keep their own names.
+    let named = !label.text.is_empty();
+    let own = label.shown.then_some(label.id).filter(|_| named);
+    let mut patches: Vec<LabelPatch> =
+        own.map(|id| LabelPatch::Label { id, text: label.text.clone(), disabled: nodes.iter().all(|node| node.disabled) }).into_iter().collect();
     // The label is about one control only when that control sits directly in the scope. One in an unlabelled row is
     // part of the field's arrangement: the label names the group, as for several controls, and the control keeps the
     // name its own content gives it (a link's file name, a command button's words).
@@ -512,12 +579,17 @@ pub(crate) fn label_patches(container: Id, label: &FieldLabel, nodes: &[ScopeNod
         [only] if !only.arranged => Some(only),
         _ => None,
     };
-    match single {
-        Some(only) if label.role == FieldLabelRole::Describes || only.keeps_name => {
-            patches.push(LabelPatch::DescribedBy { node: only.id, label: label.id });
+    match (single, own) {
+        _ if !named => {}
+        (Some(only), Some(own)) if label.role == FieldLabelRole::Describes || only.keeps_name => {
+            patches.push(LabelPatch::DescribedBy { node: only.id, label: own });
         }
-        Some(only) => patches.push(LabelPatch::LabelledBy { node: only.id, label: label.id, text: label.text.clone() }),
-        None => patches.push(LabelPatch::GroupLabelledBy { container, label: label.id }),
+        (Some(only), None) if label.role == FieldLabelRole::Describes || only.keeps_name => {
+            patches.push(LabelPatch::Detail { node: only.id, text: label.text.clone() });
+        }
+        (Some(only), _) => patches.push(LabelPatch::LabelledBy { node: only.id, label: own, text: label.text.clone() }),
+        (None, Some(own)) => patches.push(LabelPatch::GroupLabelledBy { container, label: own }),
+        (None, None) => {}
     }
     if let Some(text) = &label.detail {
         patches.push(LabelPatch::Detail { node: single.map_or(container, |only| only.id), text: text.clone() });
@@ -607,7 +679,7 @@ pub(crate) fn finish(ctx: &Context, container: Id, merged: Option<Merged>) {
             }
             for patch in &patches {
                 adapter::write_label_patch(ctx, patch);
-                if let LabelPatch::LabelledBy { node, label, .. } = patch
+                if let LabelPatch::LabelledBy { node, label: Some(label), .. } = patch
                     && crate::runtime::inspect::recording(ctx)
                 {
                     crate::runtime::inspect::labelled(ctx, *node, *label);

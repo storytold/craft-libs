@@ -3,11 +3,10 @@
 use craft_ui::contract::ShowContainer as _;
 use craft_ui::form::Field;
 use craft_ui::patterns::presets::PresetState;
-use craft_ui::runtime::env::Env;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
-use super::{ContourField, ContourKey, ContourWords, contour_rows};
+use super::{ContourField, ContourKey, contour_source};
 use crate::layer_style::{Contour, ContourPoint};
 
 fn user_contours() -> Vec<Contour> {
@@ -18,9 +17,9 @@ fn user_contours() -> Vec<Contour> {
 /// The field over `start` with its Anti-aliased check box, in the host's Field, and the contour it holds as the
 /// readout.
 fn field(ui: &mut Ui, data: &mut StoryData, start: Contour, anti_alias: bool) -> StoryOutput {
-    let words = Env::of(ui).words::<ContourWords>();
     let user = user_contours();
-    let rows = contour_rows(&Contour::presets(), &user, &words, None);
+    let presets = Contour::presets();
+    let rows = contour_source(&presets, &user, None);
     let ((contour, state, anti_alias), field_at) = data.value_at("field", (start, PresetState::<ContourKey>::new(), Some(anti_alias)));
     let shown = Field::new("Contour").show(ui, |ui, _| {
         ContourField::new("Contour", field_at.bind(&mut *contour), &rows, field_at.bind(&mut *state))

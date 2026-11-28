@@ -223,7 +223,7 @@ impl<K: Clone + Send + 'static> SearchRun<K> {
         wake: Wake,
     ) -> Self {
         // filmcraft: crates/ui-egui/src/panels/media_dialogs.rs:146 (`link_media` ran `media.search` on the UI thread).
-        let queue = JobQueue::new(jobs, wake.clone(), QueueOptions { lanes: 1, name: "relink-search" });
+        let queue = JobQueue::new(jobs, wake.clone(), QueueOptions { lanes: 1, name: "relink-search", ..QueueOptions::default() });
         let updates = Arc::new(Mutex::new(Vec::new()));
         let cancel = Cancel::new();
         let inbox = Arc::clone(&updates);

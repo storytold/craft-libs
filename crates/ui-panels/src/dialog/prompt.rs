@@ -2,14 +2,17 @@
 
 use super::frame::DialogOutput;
 use super::modal::Dialog;
+use crate::choice::Checkbox;
 use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
-use crate::display::Text;
-use crate::layout_components::Stack;
+use crate::display::{Icon, Shade, Text};
+use crate::layout_components::{Row, Stack};
 use crate::notices::{Notice, NoticeLayout};
+use crate::primitives::IconSpec;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::Initial;
-use crate::runtime::overlay::CloseReason;
+use crate::runtime::overlay::{CloseReason, LayerRole};
 use crate::sections::{DialogRole, FooterButton, Section};
+use craft_behavior::{IconId, Mixed};
 use craft_keymap::{Chord, mnemonic};
 use craft_theme::variant::Tone;
 use egui::{Response, Ui};
@@ -32,6 +35,11 @@ impl Reply {
     /// An answer with a letter.
     pub(super) fn new(label: impl Into<Label>, role: DialogRole) -> Self {
         Reply { label: label.into(), role, lettered: true, chord: None, enabled: true, reason: None }
+    }
+
+    /// The answer's label.
+    pub(super) fn label(&self) -> &Label {
+        &self.label
     }
 
     /// An answer without a letter.
@@ -81,6 +89,22 @@ pub(super) fn buttons(env: &Env, replies: Vec<Reply>) -> Vec<FooterButton> {
         .collect()
 }
 
+/// Adds the "Apply to All" box (`label`) under `prompt`'s message while `remaining`, the documents still asked about
+/// this one included, is above one. `hosted` is the dialog's own field on the dialog host; without one the box keeps
+/// its state in memory. `ticked` starts at the hosted state and holds the box's state once the prompt is shown.
+pub(super) fn apply_to_all<'a>(prompt: Prompt<'a>, label: Label, remaining: usize, hosted: Option<&'a mut bool>, ticked: &'a mut bool) -> Prompt<'a> {
+    if remaining <= 1 {
+        return prompt;
+    }
+    let mut hosted = hosted;
+    prompt.extras(move |ui| {
+        let bind = hosted.as_mut().map_or_else(Bind::kept, |value| Bind::bound(&mut **value));
+        if let Some(Mixed::Same(shown)) = Checkbox::new(bind).label(label.clone()).show(ui).shown {
+            *ticked = *shown;
+        }
+    })
+}
+
 /// What a prompt reports: its response, how it closed in this pass and the answer given.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -103,10 +127,15 @@ impl Outcome for PromptOutput {
 }
 
 /// The index Escape and the close action answer with: the answer of `chosen` when there is one, else Cancel, else
-/// the first Other answer, else the default answer.
+/// the first Alternate answer, else the first Other answer, else the default answer.
 fn escape_answer(answers: &[FooterButton], chosen: Option<DialogRole>) -> Option<usize> {
     let find = |wanted: DialogRole| answers.iter().position(|answer| answer.role() == wanted);
-    chosen.and_then(find).or_else(|| find(DialogRole::Cancel)).or_else(|| find(DialogRole::Other)).or_else(|| default_answer(answers))
+    chosen
+        .and_then(find)
+        .or_else(|| find(DialogRole::Cancel))
+        .or_else(|| find(DialogRole::Alternate))
+        .or_else(|| find(DialogRole::Other))
+        .or_else(|| default_answer(answers))
 }
 
 /// The first Accept answer, else the first Destructive one, whether it is enabled or not.
@@ -120,11 +149,6 @@ fn default_answer(answers: &[FooterButton]) -> Option<usize> {
     default_position(answers).filter(|at| answers[*at].is_enabled())
 }
 
-/// Whether the answers include a default one, available or not.
-fn has_default(answers: &[FooterButton]) -> bool {
-    default_position(answers).is_some()
-}
-
 type Below<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
 /// What a prompt shows under its message, in this order: a tone line, paragraphs, a list of lines, a collapsible
@@ -133,6 +157,8 @@ type Below<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 pub(super) struct Extras<'a> {
     tone: Option<(Tone, Label)>,
     paragraphs: Vec<Label>,
+    /// A muted note after the paragraphs.
+    note: Option<Label>,
     lines: Vec<Label>,
     details: Option<(Label, Label)>,
     below: Option<Below<'a>>,
@@ -140,16 +166,24 @@ pub(super) struct Extras<'a> {
 
 impl Extras<'_> {
     fn is_empty(&self) -> bool {
-        self.tone.is_none() && self.paragraphs.is_empty() && self.lines.is_empty() && self.details.is_none() && self.below.is_none()
+        self.tone.is_none()
+            && self.paragraphs.is_empty()
+            && self.note.is_none()
+            && self.lines.is_empty()
+            && self.details.is_none()
+            && self.below.is_none()
     }
 
     fn show(&mut self, ui: &mut Ui) {
-        let Extras { tone, paragraphs, lines, details, below } = self;
+        let Extras { tone, paragraphs, note, lines, details, below } = self;
         if let Some((tone, text)) = tone {
             Notice::new(*tone, text.clone()).layout(NoticeLayout::Inline).show(ui);
         }
         for paragraph in paragraphs.iter() {
             Text::new(paragraph.clone()).show(ui);
+        }
+        if let Some(note) = note {
+            Text::new(note.clone()).shade(Shade::Muted).show(ui);
         }
         for line in lines.iter() {
             Text::new(line.clone()).show(ui);
@@ -169,7 +203,9 @@ impl Extras<'_> {
 /// and one footer button per answer.
 ///
 /// - Answers: `FooterButton`s with a `DialogRole` each, placed in the platform's order. A bare letter given with
-///   `FooterButton::letter` answers while the focus is inside the prompt and no text part owns keys.
+///   `FooterButton::letter` answers while the focus is inside the prompt and no text part owns keys; on Windows and
+///   Linux, Alt with the letter answers while the prompt is the top modal. A button's `FooterButton::chord` (Cmd+D
+///   for Don't Save on macOS) answers while the prompt is the top modal.
 /// - Escape and the close action give the escape answer (Cancel, else the first Other answer, else the default
 ///   answer); Enter, when no part takes it, gives the Accept answer while that button is enabled. Both come back as
 ///   `PromptOutput::picked`.
@@ -180,14 +216,20 @@ pub struct Prompt<'a> {
     message: Label,
     answers: Vec<FooterButton>,
     extras: Extras<'a>,
+    /// An icon of the catalog beside the message, in the accent tone.
+    #[prop]
+    icon: Option<IconId>,
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
     /// The role whose answer Escape and the close action give, instead of the default choice.
     #[prop]
     escape: Option<DialogRole>,
-    /// Whether the dialog reports the alert-dialog role, described by the message.
+    /// Whether the dialog reports the alert-dialog role, described by the message and any tone.
     alert: bool,
+    /// What the dialog's layer is for: `LayerRole::Progress` for a job's progress window.
+    #[prop(vis = "pub(super)")]
+    layer_role: LayerRole,
 }
 
 impl<'a> Prompt<'a> {
@@ -198,13 +240,16 @@ impl<'a> Prompt<'a> {
             message: message.into(),
             answers: Vec::new(),
             extras: Extras::default(),
+            icon: None,
             open: None,
             escape: None,
             alert: false,
+            layer_role: LayerRole::Plain,
         }
     }
 
-    /// The prompt is an alert: its node has the alert-dialog role and the message as its description.
+    /// The prompt is an alert: its node has the alert-dialog role and the message (including any tone) as its
+    /// description.
     #[must_use]
     pub(super) fn alert(mut self) -> Self {
         self.alert = true;
@@ -222,6 +267,13 @@ impl<'a> Prompt<'a> {
     #[must_use]
     pub fn tone(mut self, tone: Tone, text: impl Into<Label>) -> Self {
         self.extras.tone = Some((tone, text.into()));
+        self
+    }
+
+    /// A muted note after the paragraphs: secondary text.
+    #[must_use]
+    pub fn note(mut self, text: impl Into<Label>) -> Self {
+        self.extras.note = Some(text.into());
         self
     }
 
@@ -255,14 +307,38 @@ impl<'a> Prompt<'a> {
 
     /// Shows the prompt.
     pub fn show(self, ui: &mut Ui) -> PromptOutput {
-        let Prompt { title, message, answers, extras, open, escape, alert } = self;
+        let Prompt { title, message, answers, extras, icon, open, escape, alert, layer_role } = self;
         let (escape_at, enter_at) = (escape_answer(&answers, escape), default_answer(&answers));
-        // A blocked default answer leaves focus off the buttons: landing on the first other one would let Enter answer
-        // with it (Discard under a blocked Recover).
-        let initial = if enter_at.is_none() && has_default(&answers) { Initial::Keep } else { Initial::Default };
-        let mut dialog = Dialog::prompt(title).buttons(answers).initial_focus(initial).close_on_enter(enter_at.is_some());
+        // With no available default answer (none, or a blocked one) focus stays off the buttons: landing on the first
+        // other one would let Enter answer with it (Discard under a blocked Recover, Cancel in a job window).
+        let initial = if enter_at.is_some() { Initial::Default } else { Initial::Keep };
+        let mut dialog = Dialog::prompt(title)
+            .buttons(answers)
+            .initial_focus(initial)
+            .close_on_enter(enter_at.is_some())
+            .overlay(|overlay| overlay.role(layer_role));
         if alert {
-            dialog = dialog.alert().description(Env::of(ui).view().resolve(&message).as_str());
+            let env = Env::of(ui);
+            let view = env.view();
+            let message_str = view.resolve(&message);
+            let description = match &extras.tone {
+                Some((_, tone_label)) => {
+                    let tone_str = view.resolve(tone_label);
+                    let tone = tone_str.as_str().trim();
+                    let msg = message_str.as_str().trim();
+                    if tone.is_empty() {
+                        msg.to_owned()
+                    } else if msg.is_empty() {
+                        tone.to_owned()
+                    } else if msg.ends_with(['.', '!', '?']) {
+                        format!("{msg} {tone}")
+                    } else {
+                        format!("{msg}. {tone}")
+                    }
+                }
+                None => message_str.as_str().to_owned(),
+            };
+            dialog = dialog.alert().description(description);
         }
         if let Some(open) = open {
             dialog = dialog.opened(open);
@@ -270,7 +346,17 @@ impl<'a> Prompt<'a> {
         let mut extras = extras;
         let shown = dialog.show(ui, |ui, _| {
             Stack::new().show(ui, |ui, _| {
-                Text::new(message.clone()).show(ui);
+                match &icon {
+                    Some(icon) => {
+                        Row::new().show(ui, |ui, _| {
+                            Icon::new(IconSpec::svg(icon.clone())).tone(Tone::Accent).show(ui);
+                            Text::new(message.clone()).show(ui);
+                        });
+                    }
+                    None => {
+                        Text::new(message.clone()).show(ui);
+                    }
+                }
                 if !extras.is_empty() {
                     extras.show(ui);
                 }

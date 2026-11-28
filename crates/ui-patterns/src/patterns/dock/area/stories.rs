@@ -1,15 +1,17 @@
 //! Stories of the dock area.
 
 use super::DockArea;
+use crate::buttons::IconButton;
 use crate::contract::SizeLimits;
-use crate::contract::{BodyCx, Show as _, Tracked};
+use crate::contract::{BodyCx, Props as _, Show as _, Tracked};
 use crate::display::Text;
-use crate::docking::{DockConfig, DockGrid, DockPanels, GroupAt, PanelSpec, PanelSpecs};
+use crate::docking::{ColumnCards, DockConfig, DockGrid, DockPanels, GroupAt, IconicMode, PanelSpec, PanelSpecs};
 use crate::menu::PanelRow;
 use crate::patterns::presets::{PresetPanelMenu, PresetView};
+use crate::tabs::PanelTabLook;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::dock::{Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace};
-use craft_behavior::{Axis, Proposal};
+use craft_behavior::{Axis, IconId, Proposal};
 use egui::{Pos2, Rect, Ui};
 use std::sync::{Arc, LazyLock};
 
@@ -76,6 +78,11 @@ impl DockPanels<usize> for Demo {
         Text::new(name(*panel)).show(ui);
     }
 
+    fn rail_footer(&mut self, _: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        IconButton::new(IconId::new("chevron_up")).label("Previous").show(ui);
+        IconButton::new(IconId::new("chevron_down")).label("Next").show(ui);
+    }
+
     fn panel_rows(&mut self, panel: &usize) -> Vec<PanelRow> {
         if self.host_rows && *panel == SWATCHES { PresetPanelMenu::<usize>::new(PresetView::Grid).new_group(true).rows() } else { Vec::new() }
     }
@@ -111,11 +118,16 @@ fn workspace(minimized: bool) -> Arc<Workspace<usize>> {
     Arc::new(Workspace::new(Layout::new(Some(root), vec![window, collapsed])))
 }
 
+/// One spec model for every story, so its revision stays put across frames.
+static SPECS: LazyLock<Tracked<DemoSpecs>> = LazyLock::new(|| Tracked::new(DemoSpecs));
+
 fn dock(ui: &mut Ui, data: &mut StoryData, demo: &mut Demo, minimized: bool) -> StoryOutput {
-    /// One spec model for every story, so its revision stays put across frames.
-    static SPECS: LazyLock<Tracked<DemoSpecs>> = LazyLock::new(|| Tracked::new(DemoSpecs));
+    dock_with(ui, data, demo, minimized, DockConfig::default())
+}
+
+fn dock_with(ui: &mut Ui, data: &mut StoryData, demo: &mut Demo, minimized: bool, config: DockConfig) -> StoryOutput {
     let (workspace, workspace_at) = data.value_at("workspace", workspace(minimized));
-    DockArea::new("Dock", workspace_at.bind(&mut *workspace), &*SPECS, demo, DockConfig::default()).show(ui).into()
+    DockArea::new("Dock", workspace_at.bind(&mut *workspace), &*SPECS, demo, config).show(ui).into()
 }
 
 #[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never)]
@@ -133,8 +145,46 @@ fn host_rows_above_the_dock_rows_in_a_panel_menu(ui: &mut Ui, data: &mut StoryDa
     dock(ui, data, &mut Demo { canvas_view: false, host_rows: true }, false)
 }
 
+/// Every group shows its panel menu button, the three-line mark, whether its shown panel has rows of its own or only
+/// the dock's (`DockConfig::panel_menu_always`, `DockConfig::panel_menu_icon`): VectorCraft's dock.
+#[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never)]
+fn a_menu_button_on_every_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let config = DockConfig::default().panel_menu_always(true).panel_menu_icon(IconId::new("menu"));
+    dock_with(ui, data, &mut Demo { canvas_view: false, host_rows: false }, false, config)
+}
+
 /// The floating group minimized: its window shows the title row and the tab strip at its width.
 #[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never)]
 fn a_minimized_floating_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     dock(ui, data, &mut Demo { canvas_view: false, host_rows: false }, true)
+}
+
+#[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never, title = "Rail with fixed controls")]
+fn rail_with_fixed_controls(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (workspace, workspace_at) = data.value_at("rail workspace", {
+        let side = Column::new(vec![Group::new(vec![LAYERS, CHANNELS, PROPERTIES, HISTORY, SWATCHES, NAVIGATOR], 0)]).with_iconic(true);
+        let root = Node::split(Axis::X, SplitSize::Ratio(0.8), Node::tabs(vec![CANVAS], 0), Node::dock(DockEdge::End, vec![side]));
+        Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))
+    });
+    let mut demo = Demo { canvas_view: false, host_rows: false };
+    let config = DockConfig::default().iconic_mode(IconicMode::Rail);
+    DockArea::new("Rail dock", workspace_at.bind(&mut *workspace), &*SPECS, &mut demo, config).rail_footer(LAYERS).show(ui).into()
+}
+
+/// VectorCraft 0.24's dock frame: only the stepped tool column is a card (`ColumnCards::Stepped`); the docks stand flush
+/// against the canvas, the column of icons framed as the panel column is (`DockConfig::flush_docks`); the panel tabs and
+/// the column bars in the block look (`PanelTabLook::Block`).
+#[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never)]
+fn a_tool_card_beside_flush_panels(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (workspace, workspace_at) = data.value_at("stepped cards workspace", {
+        let tools = Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(1);
+        let side = Column::new(vec![Group::new(vec![PROPERTIES, LAYERS], 0), Group::new(vec![HISTORY], 0)]);
+        let icons = Column::new(vec![Group::new(vec![SWATCHES], 0), Group::new(vec![NAVIGATOR], 0)]).with_iconic(true);
+        let docked = Node::split(Axis::X, SplitSize::Ratio(0.6), Node::tabs(vec![CANVAS], 0), Node::dock(DockEdge::End, vec![side, icons]));
+        let root = Node::split(Axis::X, SplitSize::FixedFirst(60.0), Node::dock(DockEdge::Start, vec![tools]), docked);
+        Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))
+    });
+    let mut demo = Demo { canvas_view: false, host_rows: false };
+    let config = DockConfig::default().column_cards(ColumnCards::Stepped).flush_docks(true).tab_look(PanelTabLook::Block);
+    DockArea::new("Stepped cards dock", workspace_at.bind(&mut *workspace), &*SPECS, &mut demo, config).show(ui).into()
 }

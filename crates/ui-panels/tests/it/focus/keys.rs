@@ -5,6 +5,7 @@ use craft_behavior::{AccessRequest, EditCommand, Input, Intent, NavMove, PartKey
 use craft_keymap::Chord;
 use craft_ui::contract::{Role, Show as _};
 use craft_ui::runtime::focus::{EditSet, KeyUse};
+use craft_ui::runtime::keys::{claim_alt_tap, escape_mods, take_alt_tap};
 use craft_ui::testing::focus::{intents_of, take_claimed};
 use craft_ui::testing::input::{key_press, key_repeat};
 use craft_ui::testing::{Frames, trial};
@@ -35,15 +36,42 @@ fn the_first_arrow_and_escape_after_a_focus_change_act_as_intents() {
     assert_eq!(focused(&frames.ctx), Some(id("a")), "Escape cleared no egui focus");
 }
 
+/// A held Escape cancels once, focused or not: its repeats raise no `Cancel`, and a fresh press after its release does.
+#[trial]
+fn a_held_escape_cancels_once() {
+    use craft_ui::testing::focus::key_release;
+    for target in [Some(id("a")), None] {
+        let mut frames = Frames::new();
+        let cancels = Cell::new(0);
+        let mut show = |ui: &mut egui::Ui| {
+            control(ui, "a");
+            cancels.set(cancels.get() + usize::from(intents_of(ui.ctx(), target, false).take(Intent::Cancel)));
+        };
+        frames.idle(2, &mut show);
+        if target.is_some() {
+            focus(&mut frames, "a", &mut show);
+        }
+        frames.frame(vec![key_press(Key::Escape, Modifiers::NONE)], &mut show);
+        for _ in 0..3 {
+            frames.frame(vec![key_repeat(Key::Escape, Modifiers::NONE)], &mut show);
+        }
+        assert_eq!(cancels.get(), 1, "{target:?}: the press cancels and its repeats do not");
+        frames.frame(vec![key_release(Key::Escape, Modifiers::NONE)], &mut show);
+        frames.frame(vec![key_press(Key::Escape, Modifiers::NONE)], &mut show);
+        assert_eq!(cancels.get(), 2, "{target:?}: a fresh press cancels again");
+    }
+}
+
 /// Static claims hold in the frame after focus arrives; the chord is withheld from egui and read once through
-/// `take_claimed`, and a claimed Escape is no `Cancel`.
+/// `take_claimed`, and a claimed Escape is no `Cancel`. The stop is a canvas control, not the window's document canvas,
+/// whose claims hold with nothing focused too.
 #[trial]
 fn claimed_chords_hold_after_focus_arrives_and_a_claimed_escape_is_no_cancel() {
     const CLAIMS: &[Chord] = &[Chord::plain(craft_keymap::Key::Up), Chord::plain(craft_keymap::Key::Escape)];
     let mut frames = Frames::new();
     let reads = RefCell::new((Vec::new(), 0, true));
     let mut show = |ui: &mut egui::Ui| {
-        stop_with(ui, "canvas", KeyUse::CANVAS.with_claims(CLAIMS));
+        stop_with(ui, "canvas", KeyUse::CANVAS.with_chrome_key(false).with_claims(CLAIMS));
         let ctx = ui.ctx();
         let mut reads = reads.borrow_mut();
         reads.0.push((take_claimed(ctx, id("canvas"), CLAIMS[0]), take_claimed(ctx, id("canvas"), CLAIMS[1])));
@@ -126,19 +154,67 @@ fn accesskit_requests_reach_the_owner_of_their_node() {
     assert_eq!(access.as_ref().map(|r: &AccessRequest| (Action::Expand.is(r), r.target)), Some((true, Some(other.into()))));
 }
 
-/// A field's Enter that raises a modal alert, held down, leaves the alert open: its repeats began before the layer
-/// opened. A fresh Enter answers it.
+/// Escape with Shift, with Alt and plain: the pass that cancels reports the modifiers, other passes report none.
 #[trial]
-fn a_held_enter_that_opened_a_modal_does_not_answer_it() {
+fn escape_mods_says_whether_shift_or_alt_was_held() {
+    let mut frames = Frames::new();
+    let seen = Cell::new(None);
+    let mut show = |ui: &mut egui::Ui| {
+        control(ui, "a");
+        seen.set(escape_mods(ui.ctx()).map(|mods| (mods.shift, mods.alt)));
+    };
+    frames.idle(2, &mut show);
+    focus(&mut frames, "a", &mut show);
+    for (mods, expected) in [(Modifiers::SHIFT, (true, false)), (Modifiers::ALT, (false, true)), (Modifiers::NONE, (false, false))] {
+        frames.frame(vec![key_press(Key::Escape, mods)], &mut show);
+        assert_eq!(seen.get(), Some(expected), "Escape with {mods:?}");
+        frames.frame(vec![craft_ui::testing::focus::key_release(Key::Escape, mods)], &mut show);
+        assert_eq!(seen.get(), None, "a pass without Escape has no modifiers");
+    }
+}
+
+/// A claimed lone Alt tap reaches the claimer once, in two passes or one; a key between or Alt with Shift spoils it.
+#[trial]
+fn a_claimed_lone_alt_tap_goes_to_the_claimer_and_any_other_input_spoils_it() {
+    let mut frames = Frames::new();
+    let taps = Cell::new(0);
+    let mut show = |ui: &mut egui::Ui| {
+        taps.set(taps.get() + usize::from(take_alt_tap(ui.ctx(), id("tool"))));
+        claim_alt_tap(ui.ctx(), id("tool"));
+    };
+    let alt = |down: bool| Event::ModifiersChanged(if down { Modifiers::ALT } else { Modifiers::NONE });
+    frames.idle(2, &mut show);
+    frames.frame(vec![alt(true)], &mut show);
+    frames.frame(vec![alt(false)], &mut show);
+    assert_eq!(taps.get(), 1, "a lone tap");
+    frames.frame(vec![alt(true), alt(false)], &mut show);
+    assert_eq!(taps.get(), 2, "a tap inside one pass");
+    frames.frame(vec![alt(true)], &mut show);
+    frames.frame(vec![key_press(Key::A, Modifiers::ALT)], &mut show);
+    frames.frame(vec![craft_ui::testing::focus::key_release(Key::A, Modifiers::ALT), alt(false)], &mut show);
+    assert_eq!(taps.get(), 2, "a key between spoils the tap");
+    let alt_shift = Event::ModifiersChanged(Modifiers { alt: true, shift: true, ..Modifiers::NONE });
+    frames.frame(vec![alt(true), alt_shift, alt(false)], &mut show);
+    assert_eq!(taps.get(), 2, "Alt with Shift spoils the tap");
+    frames.idle(2, &mut show);
+    assert_eq!(taps.get(), 2, "a tap is read once");
+}
+
+/// A key held when a modal layer opens or closes reaches neither layer; a fresh press answers.
+#[trial]
+fn a_key_held_when_a_modal_opens_or_closes_reaches_neither_layer() {
     use craft_behavior::Input;
     use craft_ui::contract::Bind;
     use craft_ui::dialog::Alert;
     use craft_ui::testing::focus::key_release;
     let mut frames = Frames::new();
     let open = Cell::new(false);
+    let cancels = Cell::new(0);
     let mut show = |ui: &mut egui::Ui| {
         stop_with(ui, "field", KeyUse::of(Input::Text));
-        if intents_of(ui.ctx(), Some(id("field")), false).take(Intent::Submit) {
+        let mut intents = intents_of(ui.ctx(), Some(id("field")), false);
+        cancels.set(cancels.get() + usize::from(intents.take(Intent::Cancel)));
+        if intents.take(Intent::Submit) {
             open.set(true);
         }
         let mut now = open.get();
@@ -161,6 +237,41 @@ fn a_held_enter_that_opened_a_modal_does_not_answer_it() {
     frames.frame(vec![key_press(Key::Enter, Modifiers::NONE)], &mut show);
     frames.idle(3, &mut show);
     assert!(!open.get(), "a fresh Enter answers the alert");
+    for _ in 0..3 {
+        frames.frame(vec![repeat()], &mut show);
+        frames.idle(3, &mut show);
+    }
+    assert!(!open.get(), "the Enter held while the alert closed submits nothing in the field it uncovers");
+    frames.frame(vec![key_release(Key::Enter, Modifiers::NONE)], &mut show);
+    // An Escape that closes the alert, held, cancels nothing in the field it uncovers.
+    frames.idle(3, &mut show);
+    focus(&mut frames, "field", &mut show);
+    frames.frame(vec![key_press(Key::Enter, Modifiers::NONE), key_release(Key::Enter, Modifiers::NONE)], &mut show);
+    frames.idle(3, &mut show);
+    assert!(open.get(), "a fresh Enter opens the alert again");
+    frames.frame(vec![key_press(Key::Escape, Modifiers::NONE)], &mut show);
+    frames.idle(3, &mut show);
+    assert!(!open.get(), "Escape closes the alert");
+    let before = cancels.get();
+    for _ in 0..3 {
+        frames.frame(vec![key_repeat(Key::Escape, Modifiers::NONE)], &mut show);
+        frames.idle(3, &mut show);
+    }
+    assert_eq!(cancels.get(), before, "the repeats of the Escape that closed the alert cancel nothing beneath it");
+    frames.frame(vec![key_release(Key::Escape, Modifiers::NONE)], &mut show);
+    frames.idle(3, &mut show);
+    open.set(false);
+    frames.idle(3, &mut show);
+    focus(&mut frames, "field", &mut show);
+    frames.frame(vec![key_press(Key::Enter, Modifiers::NONE), key_release(Key::Enter, Modifiers::NONE)], &mut show);
+    frames.idle(3, &mut show);
+    assert!(open.get(), "the alert opens again");
+    frames.frame(vec![key_press(Key::Enter, Modifiers::NONE)], &mut show);
+    frames.idle(3, &mut show);
+    assert!(!open.get(), "a fresh Enter answers it");
+    frames.frame(vec![key_release(Key::Enter, Modifiers::NONE)], &mut show);
+    frames.idle(3, &mut show);
+    focus(&mut frames, "field", &mut show);
     // An Enter pressed and released in the pass that opens the alert leaves it open as well: nothing of it is held
     // when the alert shows, and a fresh press answers it.
     frames.frame(vec![key_release(Key::Enter, Modifiers::NONE)], &mut show);
@@ -205,11 +316,11 @@ fn drive_fixture(in_modal: bool) -> (craft_ui::testing::Fixture, std::rc::Rc<Ref
         let body = |ui: &mut egui::Ui| {
             let mut text = query.borrow().clone();
             TextField::search("Search", Bind::bound(&mut text)).drives(list_id).show(ui);
-            let out = List::new("Names").id(list_id).select(SelectMode::Single).filter(&text, |key: &usize| Label::from(NAMES[*key])).show_items(
-                ui,
-                &Names,
-                &mut |key, _| ListRow::new(NAMES[*key]),
-            );
+            let out = List::new("Names")
+                .id(list_id)
+                .select(SelectMode::Single)
+                .filter(&text, |key: &usize| vec![Label::from(NAMES[*key])])
+                .show_items(ui, &Names, &mut |key, _| ListRow::new(NAMES[*key]));
             sink.borrow_mut().extend(out.events.iter().filter_map(|event| match event {
                 CollectionEvent::Activate(key) => Some(*key),
                 _ => None,

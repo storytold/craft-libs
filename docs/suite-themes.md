@@ -93,12 +93,12 @@ High contrast meets every minimum below: it moves pinned values that miss one. S
 
 | Pair | Standard | High |
 |---|---|---|
-| `text.normal`, `text.muted`, `text.faint` on surfaces (background, panel, chrome, raised, sunken), `state.hover` and `state.pressed` | 4.5 | 7 |
-| `text.on_selected` on `state.selected` and `state.selected_hover` | 4.5 | 7 |
+| `text.normal`, `text.muted`, `text.faint` on surfaces (background, panel, chrome, raised, sunken, control), `state.hover` and `state.pressed` | 4.5 | 7 |
+| `text.on_selected` on `state.selected` and `state.selected_hover`; `text.on_inverse` on `surface.inverse` | 4.5 | 7 |
 | `accent.text` on `surface.panel`, `surface.raised` and `surface.sunken`; `accent.on_soft` on `accent.soft` | 4.5 | 7 |
 | Status text (`status.good.fg` ...) on `surface.panel`, `surface.raised` and its own `status.*.bg` | 4.5 | 7 |
 | `text.on_accent` on `accent.solid`, `accent.hover` and `accent.pressed`; `text.on_strong` on `accent.strong`, `accent.strong_hover` and `accent.strong_pressed`; `text.on_status` on the status solids and their hover and pressed steps | 4.5 | 7 |
-| `line.focus` on the surfaces; `accent.solid` on the control surfaces (panel, raised, sunken: checked and selected marks); `line.mark` (slider marks and ticks, the badge ring) on the control surfaces, `state.hover` and `state.pressed`; `overlay.stroke` on `overlay.halo` over black and over white | 3 | 4.5 |
+| `line.focus` on the surfaces; `accent.solid` on the control surfaces (panel, raised, sunken: checked and selected marks); `line.mark` (slider marks and ticks, the badge ring) on the control surfaces, `state.hover` and `state.pressed`; `overlay.stroke` and `overlay.cursor` on `overlay.halo` over black and over white | 3 | 4.5 |
 | State cues: `accent.border` (the outline of a selected or on control) on the control surfaces; `overlay.handle_stroke` on `overlay.handle_fill` (a selected anchor against a hollow one); the data channel colours (`data.red` ... `data.yellow`) on `surface.sunken` (a curve editor's plot) | 0 (listed, never warned) | 4.5 |
 | The thumb of a canvas scroll bar (`text.faint`, `text.muted`) on its track (`surface.chrome`) | 0 (listed, never warned) | 3 |
 

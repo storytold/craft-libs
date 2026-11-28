@@ -1,5 +1,6 @@
 //! Stories of `CommentBalloons`: cards beside a page.
 
+use craft_behavior::Selection;
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_pages::ui::PlacedPage;
 use craft_ui::testing::canvas_story::{OUTLINE, StoryPicture, StoryShape, accent, on_picture, paint_shapes};
@@ -7,7 +8,7 @@ use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::{Color32, Pos2, Rect, Ui};
 
 use super::{BalloonItem, BalloonPlace, CommentBalloons};
-use crate::comments::{CommentAnchor, CommentMessage, CommentThread, ReviewStatus, ThreadId};
+use crate::comments::{CommentAnchor, CommentMessage, CommentThread, ThreadId};
 use crate::revisions::{Revision, RevisionKind};
 use crate::ui::comments::CommentsPanelState;
 
@@ -24,6 +25,7 @@ fn thread(id: u64, author: &str, text: &str, locked: bool) -> CommentThread {
         text: text.into(),
         reactions: Vec::new(),
         read: true,
+        deletable: true,
     };
     CommentThread {
         id: ThreadId(id),
@@ -31,7 +33,8 @@ fn thread(id: u64, author: &str, text: &str, locked: bool) -> CommentThread {
         kind: None,
         color: None,
         messages: vec![message(author, text), message("Bo", "Agreed.")],
-        status: ReviewStatus::None,
+        statuses: Vec::new(),
+        reply_statuses: Vec::new(),
         marked: false,
         locked,
         resolved: false,
@@ -48,7 +51,11 @@ fn beside_page(
     place: BalloonPlace,
     read_only: bool,
 ) -> StoryOutput {
-    let state = data.value("state", CommentsPanelState { selected: selected.map(ThreadId), ..CommentsPanelState::default() });
+    let state = data.value("state", {
+        let mut state = CommentsPanelState::default();
+        state.selected = selected.map_or_else(Selection::default, |id| Selection::single(ThreadId(id)));
+        state
+    });
     // design: allow[raw-colour/const](the demo page is white paper, document data and not a theme colour)
     let (fill, line) = (Color32::WHITE, accent(ui, 1.0));
     let shapes = [StoryShape::filled(&DocRect::new(0.0, 0.0, PAGE.0, PAGE.1), fill).outlined(OUTLINE, line)];

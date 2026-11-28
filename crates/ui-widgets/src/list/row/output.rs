@@ -7,6 +7,7 @@ use super::thumb::ThumbTarget;
 use super::trailing::TrailingPart;
 use crate::contract::{ItemOutput, NoValue, OpenChange, Outcome};
 use crate::runtime::commands::FireSource;
+use craft_behavior::ColumnKey;
 use craft_keymap::Mods;
 use egui::{Rect, Response};
 
@@ -59,6 +60,12 @@ pub enum RowEvent {
         /// The press count of the click, as [`ThumbClicked`](Self::ThumbClicked) counts it.
         clicks: u32,
     },
+    /// The action of a status cell ([`ListRow::cell_status`]) was activated.
+    #[non_exhaustive]
+    CellAction {
+        /// The column of the cell.
+        column: ColumnKey,
+    },
 }
 
 /// What a row returns.
@@ -76,6 +83,8 @@ pub struct RowOutput {
     pub menu: Option<Rect>,
     /// Where the label and detail are drawn, the full height of the row.
     pub label: Rect,
+    pub(super) lead_fill: Option<craft_theme::Rgba>,
+    pub(super) lead_focus_bounds: Option<Rect>,
 }
 
 impl Outcome for RowOutput {
@@ -101,5 +110,13 @@ impl ItemOutput<RowEvent> for RowOutput {
 
     fn label_rect(&self) -> Option<Rect> {
         Some(self.label)
+    }
+
+    fn lead_fill(&self) -> Option<craft_theme::Rgba> {
+        self.lead_fill
+    }
+
+    fn lead_focus_bounds(&self) -> Option<Rect> {
+        self.lead_focus_bounds
     }
 }

@@ -83,6 +83,7 @@ pub fn ids(nodes: &[Node]) -> Vec<String> {
             Node::Separator => "---".into(),
             Node::Submenu { label, .. } => format!("[{label}]"),
             Node::Standard { kind, .. } => format!("<{kind:?}>"),
+            Node::Heading(label) => format!("#{label}"),
             _ => "?".into(),
         })
         .collect()

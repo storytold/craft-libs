@@ -6,7 +6,7 @@ mod words;
 mod rules;
 pub(crate) mod tab;
 
-pub use rules::{CloseSide, FitMode, OverflowMenu, OverflowPlace, TabKind, close_side};
+pub use rules::{CloseSide, DocumentTabLook, FitMode, OverflowMenu, OverflowPlace, PanelTabLook, TabCloseLook, TabKind, close_side};
 pub use tab::{Tab, TabOutput, TabPartEvent, TabRole, TabStyle};
 pub use words::TabWords;
 

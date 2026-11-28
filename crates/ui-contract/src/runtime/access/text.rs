@@ -97,9 +97,10 @@ pub(crate) fn fold_editor(ctx: &Context, widget: Id, owner: Id) {
 
 /// Adds the text facts to the node of `owner` and fills its run nodes. The owner's node is the one node of the text:
 /// the widget's own node folds into it, so a component whose root edits its value through the text (a text field, a
-/// spin button, an editable combo box) is one node that takes focus and the text actions. Call it after the node's
-/// common facts.
-pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts) {
+/// spin button, an editable combo box) is one node that takes focus and the text actions. The value reads `unit`, the
+/// unit the component draws after the text, after a shown text, or `value_override` when the text is empty. Call it
+/// after the node's common facts.
+pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts, unit: Option<&str>, value_override: Option<&str>) {
     adapter::fold_widget(ctx, facts.widget, owner);
     let mut entries = Vec::new();
     if !facts.masked {
@@ -109,7 +110,7 @@ pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts) {
                 let text = line.text.get(run.bytes.clone()).unwrap_or_default();
                 adapter::write_run(
                     ctx,
-                    &RunNode { id, parent: owner, rect: line.rect, text, rtl: run.rtl, positions: &run.positions, widths: &run.widths, links: &[] },
+                    &RunNode { id, parent: owner, rect: line.rect, text, rtl: run.rtl, positions: &run.positions, widths: &run.widths },
                 );
                 let index = u64::try_from(entries.len()).ok();
                 keys::register_node(ctx, id, owner, Some(PartRef { key: RUN, index }), false);
@@ -122,8 +123,17 @@ pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts) {
         let (focus_node, focus_at) = end_of(&entries, owner, focus)?;
         Some((anchor_node, anchor_at, focus_node, focus_at))
     });
-    let value = (!facts.masked).then_some(facts.text.as_str());
-    adapter::write_text(ctx, owner, &TextNode { value, editable: facts.editable, disabled: facts.disabled, selection });
+    // An empty editor can name a mixed value without turning its label into editable text.
+    let value = (!facts.masked).then(|| {
+        if facts.text.is_empty() {
+            value_override.unwrap_or(&facts.text).to_owned()
+        } else if let Some(unit) = unit {
+            format!("{} {unit}", facts.text)
+        } else {
+            facts.text.clone()
+        }
+    });
+    adapter::write_text(ctx, owner, &TextNode { value: value.as_deref(), editable: facts.editable, disabled: facts.disabled, selection });
     Service::<Tables>::run(ctx, |tables| tables.0.insert(owner, entries));
 }
 

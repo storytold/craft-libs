@@ -47,3 +47,51 @@ fn canvas_tool_release_in_a_discarded_pass_reaches_the_tool_once() {
     assert_eq!(passes, 2, "the release frame ran twice");
     assert_eq!(releases(&canvas.borrow()), 1, "the tool saw its release once: {:?}", canvas.borrow().press);
 }
+
+/// A leaf with one part across its rect that reads the part's press in `finish`, as a canvas reads its background.
+#[derive(craft_ui::contract::Component)]
+struct ReadsPart<'a> {
+    #[common]
+    common: craft_ui::contract::Common,
+    read: &'a Cell<Option<PressPhase>>,
+}
+
+const READ_PART: craft_behavior::PartKey = craft_behavior::PartKey::new("background");
+
+impl craft_ui::contract::Component for ReadsPart<'_> {
+    const ROLE: craft_ui::contract::Role = craft_ui::contract::Role::GROUP;
+    type Style = craft_ui_test_kit::contract::PlainStyle;
+    type Output = egui::Response;
+
+    fn style(_: &craft_ui::style::StyleCx<'_>, _: ReadsPartStyleKey) -> Self::Style {
+        craft_ui_test_kit::contract::PlainStyle::default()
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn parts(&mut self, rect: Rect, cx: &mut craft_ui::contract::PartsCx<'_, Self>) {
+        cx.part(READ_PART, rect).sense(Sense::CLICK).pointer_only("a test surface");
+    }
+
+    fn finish(self, cx: craft_ui::contract::Cx<'_, Self>) -> egui::Response {
+        use craft_ui::contract::Pointer as _;
+        self.read.set(Some(cx.part(READ_PART).press.phase));
+        cx.response.clone()
+    }
+}
+
+/// A component shown at a size past the extent limit shows nothing and declares no parts, so its parts read idle,
+/// as in a run that stopped before the parts step (a canvas on a window wider than the limit reads its background).
+/// Guards against such a run counting as parted and its part read failing.
+#[trial]
+fn a_part_read_in_a_run_too_large_to_show_is_idle() {
+    let mut frames = Frames::new();
+    let read = Cell::new(None);
+    let wide = rect(0.0, 0.0, craft_ui::contract::MAX_EXTENT * 2.0, 32.0);
+    frames.idle(2, &mut |ui: &mut Ui| {
+        ReadsPart { common: craft_ui::contract::Common::new(), read: &read }.id_salt("wide").show_at(ui, wide);
+    });
+    assert!(matches!(read.get(), Some(PressPhase::Idle)), "the part reads idle: {:?}", read.get());
+}

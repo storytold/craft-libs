@@ -1,5 +1,6 @@
 //! Keyboard moves and actions at the lead: navigation, pages, sections, Space, Delete, the menu key and type-ahead.
 
+use super::lead::PickBy;
 use super::rows;
 use super::{ItemsHooks, Placement, Typing};
 use crate::contract::collection::{
@@ -15,7 +16,6 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     pub(super) fn navigate(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, view: f32, header_held: bool) {
         let len = self.source.len();
         let mode = Self::select_mode(comp);
-        let outline = Outline::new(self.source).columns(layout.column_count()).layout(layout);
         let cells = layout.column_count() > 0 && Self::selects_cells(comp);
         let page = self.page_rows(layout, view);
         while !header_held && let Some((mv, mods)) = cx.core.intents.take_move() {
@@ -38,9 +38,15 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let mut state = NavState::new().page(page).wrap(comp.items().arrows_wrap).column(start.map_or(self.lead.column, |(_, column)| column));
             state.lead = start.map(|(at, _)| at);
             state.anchor = lead.map(|at| self.anchor_at(at)).filter(|_| mods.extend);
+            // Built per move: it borrows the source the hooks own, and the moves above take the hooks mutably.
+            let outline = Outline::new(&*self.source).columns(layout.column_count()).layout(layout);
             let step = match nav::step(layout.nav(), &outline, &mut state, mv, mods) {
                 // The ends of the outline, and the first move into it, land on an item, not on a section stop.
-                NavStep::Moved(to) if self.source.section_stop(to) && (lead.is_none() || matches!(mv, NavMove::Start | NavMove::End)) => {
+                NavStep::Moved(to)
+                    if self.source.section_stop(to)
+                        && !self.source.selectable_section(to)
+                        && (lead.is_none() || matches!(mv, NavMove::Start | NavMove::End)) =>
+                {
                     let forward = !matches!(mv, NavMove::End | NavMove::Back | NavMove::Up | NavMove::PageUp);
                     NavStep::Moved(self.off_section(layout, to, forward))
                 }
@@ -68,9 +74,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     self.move_lead(to, LeadSource::Keys);
                     if mods.extend && matches!(mode, SelectMode::Multi | SelectMode::Cells) {
                         let anchor = state.anchor.unwrap_or(to);
-                        self.change(SelectionChange::Set(self.range(anchor, to)));
+                        self.change_by(SelectionChange::Set(self.range(anchor, to)), PickBy::Keys);
                     } else if !mods.lead && !mods.extend && comp.items().arrows_select {
-                        self.pick(comp, to, false, false);
+                        self.pick_by(comp, to, false, false, PickBy::Keys);
                     }
                     self.reveal_with(layout, to);
                 }
@@ -100,7 +106,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let to = (1..len).map(|step| if forward { (from + step) % len } else { (from + len - step) % len }).find(takes);
         if let Some(to) = to {
             self.move_lead(to, LeadSource::Keys);
-            self.pick(comp, to, false, false);
+            self.pick_by(comp, to, false, false, PickBy::Keys);
             self.reveal_with(layout, to);
         }
     }
@@ -141,24 +147,31 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             && cx.core.intents.take(Intent::TogglePick)
             && let Some(row) = lead_at
         {
-            self.pick(comp, row, false, true);
+            self.pick_by(comp, row, false, true, PickBy::Keys);
         }
         self.column_keys(cx, lead_at.filter(|_| !header_held));
         // The pass's `update_inputs` turned an `Activate` intent into the keyed activation.
         let activated = cx.core.intents.take(Intent::Activate) || cx.core.activation.is_some_and(|activation| activation.by_key);
-        // A disabled lead does not run, as a press on it does not.
         if activated
             && !header_held
-            && let Some(row) = lead_at.filter(|&row| self.source.enabled(row))
+            && let Some(row) = lead_at
         {
-            // Where the arrows leave the selection, Enter picks the lead it activates.
-            if !props.arrows_select && !self.holds(row) {
-                self.pick(comp, row, false, false);
-            }
-            let key = self.source.key(row);
-            self.keyed_activation = Some(key.clone());
-            self.events.push(CollectionEvent::Activate(key));
+            self.activate_lead(comp, props, row);
         }
+    }
+
+    /// Activates the lead after a keyboard press, with the same disabled check as pointer activation.
+    fn activate_lead(&mut self, comp: &C, props: &CollectionProps, row: usize) {
+        let key = self.source.key(row);
+        if !self.source.enabled(row) {
+            self.events.push(CollectionEvent::Refused(key));
+            return;
+        }
+        if !props.arrows_select && !self.holds(row) {
+            self.pick_by(comp, row, false, false, PickBy::Keys);
+        }
+        self.keyed_activation = Some(key.clone());
+        self.events.push(CollectionEvent::Activate(key));
     }
 
     /// The context-menu key at the lead: the event's request is at the row's bottom start corner, and the context
@@ -183,7 +196,22 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
         let forward = cx.core.intents.take_exact(&Intent::delete(true, Granularity::Unit));
         let back = cx.core.intents.take_exact(&Intent::delete(false, Granularity::Unit));
-        let Some(row) = lead_at.filter(|_| forward || back) else { return };
+        if !(forward || back) {
+            return;
+        }
+        if props.delete_target == crate::contract::DeleteTarget::FocusOrHover {
+            let picked = self.placed().rows();
+            if !picked.is_empty() {
+                self.events.push(CollectionEvent::Delete(self.keys_at(&picked)));
+                return;
+            }
+            let current = props.current.as_deref().and_then(|key| key.downcast_ref::<C::Key>()).and_then(|key| self.index_of(key));
+            if let Some(row) = current.or(lead_at) {
+                self.events.push(CollectionEvent::Delete(self.keys_at(&[row])));
+            }
+            return;
+        }
+        let Some(row) = lead_at else { return };
         self.events.push(CollectionEvent::Delete(self.keys_at(&self.acted_on(row))));
     }
 
@@ -192,8 +220,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         match props.space {
             SpaceAction::Activate => match Self::select_mode(comp) {
                 SelectMode::None => self.events.push(CollectionEvent::Activate(self.source.key(row))),
-                mode => self.pick(comp, row, false, mode != SelectMode::Single),
+                mode => self.pick_by(comp, row, false, mode != SelectMode::Single, PickBy::Keys),
             },
+            SpaceAction::ActivateLead => {
+                if crate::contract::steps::takes_activation(cx.core.resolved) {
+                    self.activate_lead(comp, props, row);
+                }
+            }
             SpaceAction::ToggleCell => self.toggle_by_key(cx, row),
             SpaceAction::Preview => self.events.push(CollectionEvent::Preview(self.source.key(row))),
             SpaceAction::None => {}
@@ -245,7 +278,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             && !self.source.section_stop(at)
             && comp.can_drag(&self.source.key(at))
         {
-            self.key_reorder(cx, props, at, mv);
+            self.key_reorder(comp, cx, props, at, mv);
         }
         if props.rename
             && cx.core.intents.take(Intent::Rename)
@@ -257,7 +290,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
     }
 
-    /// Typed text moves the lead to the next row whose label starts with it.
+    /// Typed text moves the lead to the next enabled, shown item whose label starts with it.
     pub(super) fn type_ahead(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, lead_at: Option<usize>) {
         let (ctx, id, len) = (cx.core.ctx.clone(), cx.core.id, self.source.len());
         let folder = cx.core.env.folder();
@@ -269,10 +302,17 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 prefix = typing.push(letter, now).to_owned();
             }
             cx.core.memory.session::<Typing>(sub(id, "typing")).0 = typing;
-            let source = self.source;
-            if let Some(to) = TypeAhead::pick(&prefix, lead_at, len, |at| source.text(at).unwrap_or_default(), |text| folder.key(text)) {
+            let source = &*self.source;
+            let label = |at| {
+                if source.enabled(at) && !source.is_section(at) && layout.shown(at) {
+                    source.text(at).unwrap_or_default()
+                } else {
+                    Default::default()
+                }
+            };
+            if let Some(to) = TypeAhead::pick(&prefix, lead_at, len, label, |text| folder.key(text)) {
                 self.move_lead(to, LeadSource::Keys);
-                self.pick(comp, to, false, false);
+                self.pick_by(comp, to, false, false, PickBy::Keys);
                 self.reveal_with(layout, to);
             }
         }

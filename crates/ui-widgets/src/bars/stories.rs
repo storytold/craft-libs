@@ -1,27 +1,30 @@
 //! Stories of the bars.
 
 use super::{Bar, BarHome, BarItem, BarItems, BarKind, BarTool, ItemDisplay, StatusItem, StatusMessage, StatusProgress, StatusReadout, StatusValues};
-use crate::buttons::Link;
+use crate::buttons::{Button, Link};
 use crate::choice::{Checkbox, Segmented};
 use crate::contract::{Bind, Entry, Props as _};
 use crate::contract::{Show as _, ShowContainer as _};
 use crate::display::{Divider, Shade, Text};
 use crate::form::Field;
+use crate::layout_components::Row;
 use crate::menu::{Menu, MenuItem};
 use crate::pickers::Select;
 use crate::runtime::commands::EditCommands;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use crate::text::NumberField;
-use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{CanvasView, IconId};
+use craft_behavior::IconId;
+use craft_behavior::kurbo::Size;
 use craft_theme::variant::Tone;
-use egui::{Key, Modifiers, Pos2, Rect, Ui};
+use egui::{Key, Modifiers, Ui};
 
 /// A width that holds the first items of `items` and not the rest.
 const NARROW: f32 = 80.0;
 /// The widths of the old status bar stories.
 const STATUS_WIDTH: f32 = 640.0;
 const STATUS_NARROW: f32 = 480.0;
+/// A width that holds two or three of the tool buttons of a row and not all of them.
+const TOOLS_NARROW: f32 = 220.0;
 /// The document the status readout zooms, in document units.
 const DOCUMENT: Size = Size::new(2000.0, 1500.0);
 
@@ -42,6 +45,46 @@ fn bar(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
             BarItems::new(items()).show(ui);
         })
         .into()
+}
+
+/// A bar made to wrap: its members continue on a new line in a narrow stage instead of scrolling.
+#[story(Bar<'static>, covers = [], drive = Drive::Never)]
+fn bar_wrapping(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    crate::testing::memory::scoped(ui, |ui| {
+        ui.set_max_width(TOOLS_NARROW);
+        Bar::new("Tools", BarKind::Tool)
+            .wrap()
+            .show(ui, |ui, _| {
+                for name in ["Undo", "Redo", "Cut", "Copy", "Paste", "Delete"] {
+                    Button::new(name).show(ui);
+                }
+            })
+            .output
+    })
+    .into()
+}
+
+/// A bar whose members sit in ranked rows in a narrow stage: the row of the lowest rank leaves first, the unranked row
+/// stays.
+#[story(Bar<'static>, covers = [], drive = Drive::Never)]
+fn ranked_row_in_a_narrow_bar(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    crate::testing::memory::scoped(ui, |ui| {
+        ui.set_max_width(TOOLS_NARROW);
+        Bar::new("Tools", BarKind::Tool)
+            .show(ui, |ui, _| {
+                Row::new().fit_rank(1).show(ui, |ui, _| {
+                    Button::new("Low").show(ui);
+                });
+                Row::new().fit_rank(2).show(ui, |ui, _| {
+                    Button::new("Mid").show(ui);
+                });
+                Row::new().show(ui, |ui, _| {
+                    Button::new("Keep").show(ui);
+                });
+            })
+            .output
+    })
+    .into()
 }
 
 /// The brush tool's bar: Home and the tool, the brush cells, a rule, the sampling group and its hint, then commit
@@ -88,9 +131,8 @@ fn bar_captioned(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 /// PhotoCraft's status bar: the zoom and the chosen readout, the message, and the render path in the trailing group.
 fn status_bar(ui: &mut Ui, data: &mut StoryData, message: StatusMessage, width: f32) -> StoryOutput {
     let values = StatusValues { document_sizes: Some((26_100_000, 31_400_000)), ..StatusValues::default() };
-    let canvas = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
     let mut item = *data.value("item", StatusItem::DocumentSizes);
-    let (view, view_at) = data.value_at("view", CanvasView::new(canvas, Point::new(1000.0, 750.0), 0.6667));
+    let (zoom, zoom_at) = data.value_at("zoom", 0.6667);
     let shown = crate::testing::memory::scoped(ui, |ui| {
         ui.set_max_width(width.min(ui.available_width()));
         Bar::new("Status", BarKind::Status)
@@ -98,7 +140,7 @@ fn status_bar(ui: &mut Ui, data: &mut StoryData, message: StatusMessage, width: 
                 Link::new("CPU Rendering").tone(Tone::Warn).show(ui);
             })
             .show(ui, |ui, _| {
-                if let Some(picked) = StatusReadout::new(view_at.bind(view), DOCUMENT, item, &values).show(ui).item {
+                if let Some(picked) = StatusReadout::new(zoom_at.bind(zoom), DOCUMENT, item, &values).show(ui).item {
                     item = picked;
                 }
                 message.show(ui);

@@ -1,7 +1,7 @@
 //! The loopback JSON-lines TCP transport: one request per line, one reply per line.
 
-use std::io::{BufReader, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::io::{BufReader, Read, Write};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -56,7 +56,8 @@ pub fn listen(port: u16, token: String, host: WindowHost) -> std::io::Result<(Re
 
 /// Serves a listener bound earlier (an app's `--control`, bound before its window opens) until the
 /// returned [`Listening`] is dropped: authenticates each connection with `token`, forwards its
-/// requests to the receiver and wakes the root window through `host`. The app prints
+/// requests to the receiver and wakes the root window through `host`, which keeps each window's access tree
+/// ([`WindowHost::keep_access_tree`]) for [`crate::access`]. The app prints
 /// `control server listening on <addr>`.
 pub fn serve(listener: TcpListener, token: String, host: WindowHost) -> std::io::Result<(Receiver<ControlRequest>, Listening)> {
     serve_with_deadline(listener, token, host, AUTH_DEADLINE)
@@ -73,6 +74,9 @@ pub fn serve_with_deadline(
 ) -> std::io::Result<(Receiver<ControlRequest>, Listening)> {
     let (tx, rx) = channel::<ControlRequest>();
     let addr = listener.local_addr()?;
+    // `ui.inspect`, `ui.click {label}` and `ui.focus` read the kept tree of the last presented frame; it is kept
+    // from before the first connection, so the first request already finds it.
+    host.keep_access_tree();
     let stop = Arc::new(AtomicBool::new(false));
     let stopped = Arc::clone(&stop);
     let accept = std::thread::Builder::new().name("control server".into()).spawn(move || {
@@ -85,6 +89,7 @@ pub fn serve_with_deadline(
             let Some(permit) = limiter.try_acquire() else {
                 let _ = configure_stream(&stream);
                 let _ = writeln!(stream, "{}", json!({"id": null, "ok": false, "error": "connection limit reached"}));
+                close_after_reply(&stream);
                 continue;
             };
             let tx = tx.clone();
@@ -173,6 +178,29 @@ fn serve_connection(stream: TcpStream, token: &str, tx: &Sender<ControlRequest>,
         };
         if write_reply(&mut out, &reply).is_err() || out.flush().is_err() {
             break;
+        }
+    }
+    close_after_reply(&out);
+}
+
+/// How long a closing connection's leftover input is read and dropped ([`close_after_reply`]).
+const CLOSE_LINGER: Duration = Duration::from_millis(250);
+
+/// Closes `stream` after its last reply without resetting it: the write side ends first, so the client reads the
+/// reply and then the end of the stream, and what the client still sends is read and dropped until it closes too, for
+/// at most [`CLOSE_LINGER`]. A socket closed with input unread is reset instead, and the client loses the reply
+/// (Linux) or reads the reset where the end of the stream should be (Windows).
+fn close_after_reply(mut stream: &TcpStream) {
+    let _ = stream.shutdown(Shutdown::Write);
+    let deadline = motion::now() + CLOSE_LINGER;
+    let mut sink = [0; 1024];
+    loop {
+        let left = deadline.saturating_duration_since(motion::now());
+        if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
+            return;
+        }
+        if matches!(stream.read(&mut sink), Ok(0) | Err(_)) {
+            return;
         }
     }
 }

@@ -94,6 +94,8 @@ pub(super) fn write(handle: &mut arboard::Clipboard, state: &mut State, plan: &P
                 add(HTML_FORMAT, &wrap_cf_html(&html.text));
             }
         }
+        // arboard's file list is the whole copy.
+        Primary::Files => {}
     }
     state.unmarked = !add(OWNER_FORMAT, owner);
     Ok(index)

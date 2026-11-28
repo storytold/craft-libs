@@ -3,7 +3,7 @@
 
 use super::words::PickerWords;
 use crate::contract::overlay::Popup;
-use crate::contract::{Bind, BodyCx, Component, Cx, PopupHandle, Remember as _, Show as _, WordSetCx as _};
+use crate::contract::{Bind, BodyCx, Component, Cx, PopupHandle, Props as _, Remember as _, Show as _, Sizing, WordSetCx as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::{self, FocusTarget};
 use crate::text::TextField;
@@ -21,13 +21,28 @@ struct Query {
 /// the query. The dropdown leaves the key focus on the picker; the field takes it once the layer has recorded the
 /// picker as its opener, so typing reaches the field.
 pub(super) fn show<C: Component>(ui: &mut Ui, body: &mut BodyCx<'_>, popup: PopupHandle, cx: &Cx<'_, C>, owner: &Label, list: Id) -> String {
+    show_named(ui, body, popup, cx, owner, (None, false), list)
+}
+
+/// [`show`] with the field named `named` when given, filling the popup's width with `fill`.
+pub(super) fn show_named<C: Component>(
+    ui: &mut Ui,
+    body: &mut BodyCx<'_>,
+    popup: PopupHandle,
+    cx: &Cx<'_, C>,
+    owner: &Label,
+    (named, fill): (Option<&Label>, bool),
+    list: Id,
+) -> String {
     let words = cx.words::<PickerWords>();
     let opening = Popup::opening(popup, cx);
     let typed = body.memory::<Query>();
     if opening {
         *typed = Query::default();
     }
-    let field = TextField::search(name(&words, owner), Bind::bound(&mut typed.text)).drives(list).show(ui);
+    let label = named.cloned().unwrap_or_else(|| name(&words, owner));
+    let field = TextField::search(label, Bind::bound(&mut typed.text)).drives(list);
+    let field = if fill { field.sizing(Sizing::FillWidth) } else { field }.show(ui);
     let query = typed.text.clone();
     let taken = &mut body.memory::<Query>().focused;
     if field.response.has_focus() {

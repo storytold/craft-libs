@@ -6,8 +6,11 @@ pub(crate) mod panel;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
-pub use dialog::{HostedPrint, PrintAnswer, PrintDialog, PrintDialogOutput, PrintDialogWords, PrintFinish, PrintMarks, PrintSection, PrintSheet};
-pub use panel::{PrintPanel, PrintPanelOutput, PrintWords};
+pub use dialog::{
+    HostedPrint, PrintAnswer, PrintDialog, PrintDialogOutput, PrintDialogWords, PrintFinish, PrintLayout, PrintMarks, PrintMode, PrintPresets,
+    PrintSection, PrintSheet, SheetContent, SheetPage,
+};
+pub use panel::{Destinations, DriverControls, PrintPanel, PrintPanelLayout, PrintPanelOutput, PrintWords};
 
 use craft_ui::contract::Bind;
 use craft_ui::runtime::frame::request_repaint_after;
@@ -22,19 +25,21 @@ const POLL_SECONDS: f64 = 0.1;
 #[non_exhaustive]
 /// A printer the spooler offers.
 pub struct Printer {
-    /// The spooler's destination: what [`Settings::printer`] and jobs name.
+    /// The spooler's destination: what [`Settings::destination`] and jobs name.
     pub name: String,
     /// What the dialog shows; empty shows `name`. CUPS, for one, describes the queue
     /// `_192_0_2_15` as `192.0.2.15`, the name the user gave the printer.
     pub label: String,
     /// Whether it is the system's default printer.
     pub default: bool,
+    /// The note shown when the printer's own dialog decides copies, collate, two-sided and colour.
+    pub own_dialog: Option<String>,
 }
 
 impl Printer {
     /// A printer queue named `name`, with no label, not the default.
     pub fn new(name: impl Into<String>) -> Self {
-        Printer { name: name.into(), label: String::new(), default: false }
+        Printer { name: name.into(), label: String::new(), default: false, own_dialog: None }
     }
 
     /// The text the dialog shows for the printer.
@@ -49,6 +54,21 @@ impl Printer {
     pub fn is_default(mut self, default: bool) -> Self {
         self.default = default;
         self
+    }
+
+    /// Marks the printer's own dialog as deciding copies, collate, two-sided and colour; the panel disables those
+    /// controls and shows `note` under them while the printer is chosen.
+    #[must_use]
+    pub fn own_dialog(mut self, note: impl Into<String>) -> Self {
+        self.own_dialog = Some(note.into());
+        self
+    }
+}
+
+impl From<crate::Printer> for Printer {
+    /// The dialog's printer for a discovered one: `name`, the `description` as the label, and `default`.
+    fn from(printer: crate::Printer) -> Self {
+        Printer { name: printer.name, label: printer.description, default: printer.default, own_dialog: None }
     }
 }
 
@@ -112,21 +132,33 @@ pub enum Duplex {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
+/// Where a print job goes.
+pub enum Destination {
+    /// The printer with this name.
+    Printer(String),
+    /// Save as PDF.
+    File,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 /// What the user chose for one print job.
 pub struct Settings {
-    /// The chosen printer's [`Printer::name`].
-    pub printer: String,
     /// Number of copies.
     pub copies: u32,
     /// None preserves the printer's default instead of forcing simplex.
     pub duplex: Option<Duplex>,
     /// Print in grayscale.
     pub grayscale: bool,
+    /// Where the job goes: a printer by its [`Printer::name`], or Save as PDF.
+    pub destination: Destination,
+    /// Collate the copies.
+    pub collate: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { printer: String::new(), copies: 1, duplex: None, grayscale: false }
+        Self { copies: 1, duplex: None, grayscale: false, destination: Destination::Printer(String::new()), collate: true }
     }
 }
 
@@ -184,9 +216,18 @@ impl State {
     }
 
     /// A refresh invalidates the old list until discovery completes: a removed queue must
-    /// not remain selectable while the host is checking it.
+    /// not remain selectable while the host is checking it. Save as PDF needs no queue, so it
+    /// waits only for a running job.
     pub fn ready(&self) -> bool {
-        !self.busy() && !self.discovering() && self.printers.iter().any(|p| p.name == self.settings.printer)
+        match &self.settings.destination {
+            Destination::File => !self.busy(),
+            Destination::Printer(name) => !self.busy() && !self.discovering() && self.listed(name),
+        }
+    }
+
+    /// Whether the last discovery found a printer named `name`.
+    fn listed(&self, name: &str) -> bool {
+        self.printers.iter().any(|p| p.name == name)
     }
 
     /// Refuse replacing an active job's receiver. The caller still owns the refused receiver;
@@ -226,9 +267,11 @@ impl State {
             match receiver.try_recv() {
                 Ok(printers) => {
                     self.printers = printers;
-                    if !self.printers.iter().any(|p| p.name == self.settings.printer) {
-                        self.settings.printer =
-                            self.printers.iter().find(|p| p.default).or(self.printers.first()).map(|p| p.name.clone()).unwrap_or_default();
+                    // Save as PDF stays whatever the spooler lists; only a printer that is gone is replaced.
+                    let gone = matches!(&self.settings.destination, Destination::Printer(name) if !self.listed(name));
+                    if gone {
+                        let fallback = self.printers.iter().find(|p| p.default).or(self.printers.first());
+                        self.settings.destination = Destination::Printer(fallback.map(|p| p.name.clone()).unwrap_or_default());
                     }
                     self.message = self.printers.is_empty().then_some(Feedback::NoPrinters);
                     self.discovery = None;

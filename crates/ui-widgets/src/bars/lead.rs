@@ -82,7 +82,7 @@ impl BarTool {
     /// Shows the icon, its arrow and the rule after them.
     pub fn show(self, ui: &mut Ui) -> BarToolOutput {
         let shown: ButtonOutput = IconButton::new(self.icon).label(self.label).enabled(self.enabled).show(ui);
-        Icon::new(DisclosureGlyph::dropdown()).enabled(self.enabled).show(ui);
+        Icon::new(DisclosureGlyph::dropdown_of(crate::runtime::env::Env::of(ui).get())).enabled(self.enabled).show(ui);
         Divider::vertical().show(ui);
         BarToolOutput { response: shown.response }
     }

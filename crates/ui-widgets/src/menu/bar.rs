@@ -9,7 +9,10 @@
 //!
 //! Keys follow spec 9.7: Alt and a letter open the menu with that mnemonic (also while another is open). F10 or a
 //! lone Alt closes an open menu; with none open it moves focus to the first title, and the next F10 or lone Alt, an
-//! Escape, or running a row returns focus to where it was. A `&` in a title's words row marks its mnemonic; without
+//! Escape, a shortcut (Space, a canvas's momentary Hand, among them) or running a row returns focus to where it was.
+//! On the focused bar a letter without Alt is a mnemonic too: it opens the title it marks, and one no title marks does
+//! nothing, so it runs no shortcut.
+//! Down and Enter open the focused title's menu; Space opens none. A `&` in a title's words row marks its mnemonic; without
 //! one the title takes the first letter no earlier title holds. The mnemonic is underlined while Alt is held.
 //!
 //! The Help menu can start with a search field over a list of `HelpEntry` commands: typing lists up to `search::MAX_RESULTS`
@@ -18,7 +21,7 @@
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
-use super::search::{HelpEntry, search_order};
+use super::search::{HelpEntry, MAX_RESULTS, SearchIndex, SearchWords, Synonyms, rank};
 use super::words::MenuWords;
 use super::{Menu, MenuItem, MenuStep};
 use crate::buttons::face::{self, FaceLook, FaceSpec};
@@ -29,25 +32,53 @@ use crate::contract::{
 use crate::display::{Divider, Shade, Text};
 use crate::layout_components::Stack;
 use crate::list::RowStyleCx as _;
-use crate::runtime::commands::CommandRef;
+use crate::runtime::commands::{self, CommandRef};
 use crate::runtime::env::{EnvView, Label};
 use crate::runtime::focus::{self, FocusTarget};
 use crate::runtime::memory::{Facts, Remember as _};
 use crate::runtime::words::common::CommonWords;
-use crate::style::{ComponentStyle, FocusLook, IconLook, StyleCx, SurfaceLook, TextLook, TypeRole};
+use crate::style::{ComponentStyle, FocusLook, IconLook, StyleCx, SurfaceLook, TextLook, TypeRole, UiTokens};
 use crate::text::TextField;
 use craft_behavior::fit::{FitItem, FitKeep, fit_items};
-use craft_behavior::{Arrows, Axis, Flow, Intent, Metrics, NavMove, NavShape, PartKey, PartRef, Roving, Sense};
+use craft_behavior::{Arrows, Flow, Intent, Metrics, NavMove, NavShape, PartKey, PartRef, Proposal, Roving, Sense};
 use craft_host::target::MenuPlacement;
 use craft_keymap::mnemonic;
 use craft_theme::Flags;
 use egui::{Context, Pos2, Rect, Response, Ui, Vec2};
+use std::sync::Arc;
 
 const TITLE: PartKey = PartKey::new("title");
 const MORE: PartKey = PartKey::new("more");
 
-/// The style of a title's face: a menu row's surface and ink (flat, square corners, no border), with the accent fill
-/// and `text.on_accent` under the pointer and while its menu is open or the keyboard is on it.
+/// How much room a menu bar's titles take on each side of their text, and so how far apart they stand. An app sets it
+/// once at its root (`RootEnv::values`); the default is the regular padding.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum MenuTitlePad {
+    /// The padding inside panels (`space.pad.regular`).
+    #[default]
+    Regular,
+    /// The padding inside controls (`space.pad.control`): titles set closer, as in an app bar whose menus share the
+    /// line with many controls.
+    Control,
+}
+
+/// How a menu bar's titles stand. An app sets it once at its root (`RootEnv::values`); the default is a menu row's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum MenuTitleLook {
+    /// A menu row's: square corners, a control high, [`MenuTitlePad`] beside the text.
+    #[default]
+    Row,
+    /// A bare push button's, as egui's menu bar draws its titles: a push button high with the button's corners
+    /// (`radius.button`) and `space.gap.tight` beside the text, the titles `space.pad.control` apart.
+    Button,
+}
+
+/// The style of a title's face: a menu row's surface and ink (flat, square corners, no border), with the command
+/// highlight (`CommandHighlight`) under the pointer and while its menu is open or the keyboard is on it.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 struct TitleFaceStyle {
@@ -97,12 +128,14 @@ impl Component for TitleFace {
         let surface = cx.command_row_look();
         let ink = cx.command_row_ink(tokens.color.text.normal);
         let control = cx.control();
+        let (surface, pad, height) = match (cx.env::<MenuTitleLook>(), cx.env::<MenuTitlePad>()) {
+            (MenuTitleLook::Button, _) => (surface.radius(UiTokens::corner(tokens.shape.radius.button)), tokens.space.gap.tight, cx.button_height()),
+            (MenuTitleLook::Row, MenuTitlePad::Regular) => (surface, tokens.space.pad.regular, control.height),
+            (MenuTitleLook::Row, MenuTitlePad::Control) => (surface, tokens.space.pad.control, control.height),
+        };
         TitleFaceStyle {
             surface,
-            metrics: Metrics::new()
-                .padding(craft_behavior::Insets::horizontal(tokens.space.pad.regular))
-                .min_size(Vec2::new(0.0, control.height))
-                .gap(control.gap),
+            metrics: Metrics::new().padding(craft_behavior::Insets::horizontal(pad)).min_size(Vec2::new(0.0, height)).gap(control.gap),
             focus: cx.focus_look(),
             text: TextLook::new(TypeRole::Label, ink.clone()),
             icon: IconLook::new(control.icon, ink),
@@ -123,6 +156,8 @@ impl Component for TitleFace {
                 loading: false,
                 mnemonic: None,
                 align: crate::primitives::HAlign::Center,
+                chord: None,
+                detail: None,
             },
         )
     }
@@ -146,6 +181,8 @@ impl Component for TitleFace {
             loading: false,
             mnemonic: self.mnemonic,
             align: crate::primitives::HAlign::Center,
+            chord: None,
+            detail: None,
         };
         face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &spec, cx.content_rect);
     }
@@ -155,24 +192,49 @@ impl Component for TitleFace {
     }
 }
 
-/// The style of a menu bar: the titles wear row faces, which underline their mnemonics.
+/// The style of a menu bar: the titles wear row faces, which underline their mnemonics, and the title the keyboard is
+/// on is ringed with the focus look.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct MenuBarStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
 }
+
+/// A title's text without its marker, and its mnemonic: the letter and its character index in the text, none for a
+/// letter the text does not show.
+type TitleText = (String, Option<(char, Option<usize>)>);
 
 /// A menu of the bar: its title and the body that fills the menu when it opens.
 pub struct MenuTitle<'a> {
     label: Label,
     body: Box<dyn FnMut(&mut Ui) + 'a>,
+    holds: Arc<[CommandRef]>,
+    /// The letter that opens the menu in place of the bar's own pick.
+    mnemonic: Option<char>,
 }
 
 impl<'a> MenuTitle<'a> {
     /// A menu titled `label` (a `&` marks the mnemonic) whose rows `body` shows.
     pub fn new(label: impl Into<Label>, body: impl FnMut(&mut Ui) + 'a) -> Self {
-        MenuTitle { label: label.into(), body: Box::new(body) }
+        MenuTitle { label: label.into(), body: Box::new(body), holds: Arc::default(), mnemonic: None }
+    }
+
+    /// The letter that opens the menu, in place of the bar's own pick. A letter the title lacks still opens it, with
+    /// nothing underlined.
+    #[must_use]
+    pub fn mnemonic(mut self, letter: char) -> Self {
+        self.mnemonic = Some(letter);
+        self
+    }
+
+    /// Records the title's rect for `commands` with `commands::holds` in every pass it is shown.
+    #[must_use]
+    pub fn holds(mut self, commands: impl Into<Arc<[CommandRef]>>) -> Self {
+        self.holds = commands.into();
+        self
     }
 }
 
@@ -209,6 +271,13 @@ pub struct MenuBarOutput {
     pub open: bool,
     /// The titles alone (with "…" when it shows), from the first title's reading start to the last title's end.
     pub titles: Rect,
+    /// The width every title takes side by side with none in "…", whatever room the bar had: a host that places
+    /// controls after the titles on the same row compares it with the room it leaves the bar. Zero when the bar
+    /// shows nothing (`MenuPlacement::ScreenTop`).
+    pub natural: f32,
+    /// True in the one pass where a menu of the bar opened while no menu of the bar was open when the pass began. A
+    /// rerun pass in the same frame and a switch from one open title to another report false.
+    pub opened: bool,
 }
 
 impl Outcome for MenuBarOutput {
@@ -249,12 +318,12 @@ struct BarFact {
 /// Whether a menu of a bar is open. The app leaves the keys to it meanwhile: its shortcuts wait until the menu
 /// closes.
 pub fn is_open(ctx: &Context) -> bool {
-    Facts::<BarFact>::of_last_pass(ctx).iter().any(|fact| fact.open)
+    Facts::<BarFact>::with_last_pass(ctx, |facts| facts.iter().any(|fact| fact.open))
 }
 
 /// Whether the keyboard is on a menu bar's titles.
 pub fn is_focused(ctx: &Context) -> bool {
-    Facts::<BarFact>::of_last_pass(ctx).iter().any(|fact| fact.focused)
+    Facts::<BarFact>::with_last_pass(ctx, |facts| facts.iter().any(|fact| fact.focused))
 }
 
 /// The titles a bar shows in a given room.
@@ -304,25 +373,30 @@ pub struct MenuBar<'a> {
     #[prop]
     keyboard: bool,
     open: bool,
+    /// The width of every title side by side, from this pass's measure or parts step.
+    natural: f32,
+    /// A menu opened in this pass while none was open when it began.
+    opened: bool,
 }
 
 impl<'a> MenuBar<'a> {
     /// A bar named `label` with one title per menu, in reading order.
     pub fn new(label: impl Into<Label>, titles: Vec<MenuTitle<'a>>) -> Self {
-        MenuBar { common: Common::new(), titles, help: None, keyboard: true, open: false }.label(label)
+        MenuBar { common: Common::new(), titles, help: None, keyboard: true, open: false, natural: 0.0, opened: false }.label(label)
     }
 
     fn in_window(env: &EnvView<'_>) -> bool {
         env.shell().menu() == MenuPlacement::InWindow
     }
 
-    /// Each title's text without its marker, and its mnemonic: the letter and its character index in the text. A Mac
-    /// menu has no access letters.
-    fn texts(&self, env: &EnvView<'_>) -> Vec<(String, Option<(char, usize)>)> {
+    /// Each title's text without its marker, and its mnemonic: the letter and its character index in the text, none
+    /// for a letter the text does not show. A Mac menu has no access letters.
+    fn texts(&self, env: &EnvView<'_>) -> Vec<TitleText> {
         let labels: Vec<Label> = self.titles.iter().map(|title| env.resolve(&title.label)).collect();
         let refs: Vec<&str> = labels.iter().map(Label::as_str).collect();
+        let own: Vec<Option<char>> = self.titles.iter().map(|title| title.mnemonic).collect();
         let folder = env.folder();
-        let marks = if env.shell().os.is_mac() { vec![None; refs.len()] } else { mnemonic::assign(&refs, &folder) };
+        let marks = if env.shell().os.is_mac() { vec![None; refs.len()] } else { mnemonic::assign_with(&refs, &own, &folder) };
         refs.iter().zip(marks).map(|(label, mark)| (mnemonic::marked(label, &folder).0, mark)).collect()
     }
 
@@ -335,13 +409,23 @@ impl<'a> MenuBar<'a> {
         if shown == 0 { words.bar_all.as_str().to_owned() } else { words.bar_more.as_str().to_owned() }
     }
 
-    /// Each title's width as its face measures, the face height, and the width of the "…" title.
+    /// Each title's width as its face measures, the face height, and the width of the "…" title, each with the gap
+    /// after it ([`Self::gap`]).
     fn widths(&self, cx: &MeasureCx<'_, Self>) -> (Vec<f32>, f32, f32) {
         let texts = self.texts(&cx.env);
+        let gap = Self::gap(cx);
         let sizes: Vec<Vec2> = texts.iter().map(|(text, _)| cx.face(Self::face(text, false, None))).collect();
         let more = cx.face(Self::face(&Self::more_text(&cx.env.words::<MenuWords>(), 1), false, None));
         let height = sizes.iter().map(|size| size.y).fold(more.y, f32::max);
-        (sizes.iter().map(|size| size.x).collect(), height, more.x)
+        (sizes.iter().map(|size| size.x + gap).collect(), height, more.x + gap)
+    }
+
+    /// The room after each title: `space.pad.control` between titles that stand as buttons, none between rows.
+    fn gap(cx: &MeasureCx<'_, Self>) -> f32 {
+        match cx.env.get::<MenuTitleLook>() {
+            MenuTitleLook::Button => cx.tokens.space.pad.control,
+            MenuTitleLook::Row => 0.0,
+        }
     }
 
     fn slot_part(open: Open) -> PartRef {
@@ -412,42 +496,31 @@ impl<'a> MenuBar<'a> {
         let to = if forward { (at + 1) % slots.len() } else { (at + slots.len() - 1) % slots.len() };
         Self::open_only(cx, slots, declared, slots[to]);
     }
-
-    /// The help search's entries as `[label, English label, path, command id]` texts.
-    fn help_texts(entries: &[HelpEntry], env: &EnvView<'_>, separator: &str) -> Vec<[String; 4]> {
-        entries
-            .iter()
-            .map(|entry| {
-                let path: Vec<String> = entry.path().iter().map(|label| env.resolve(label).as_str().to_owned()).collect();
-                let english = entry.english().map(|label| env.resolve(label).as_str().to_owned());
-                [env.resolve(entry.label()).as_str().to_owned(), english.unwrap_or_default(), path.join(separator), entry.command().id.clone()]
-            })
-            .collect()
-    }
 }
 
 impl Component for MenuBar<'_> {
     const ROLE: Role = Role::MENU_BAR;
-    const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_moves();
+    // Enter and Down open the focused title's menu; Space does not. Space is a canvas's momentary Hand, so it goes on
+    // to the app's shortcuts, and a shortcut pressed on the bar gives the keyboard back to where it was.
+    const KEYS: crate::runtime::focus::KeyUse =
+        crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_moves().with_activate(crate::runtime::focus::ActivateKeys::Enter);
     type Style = MenuBarStyle;
     type Output = MenuBarOutput;
 
-    fn style(_: &StyleCx<'_>, _: MenuBarStyleKey) -> MenuBarStyle {
-        MenuBarStyle { metrics: Metrics::new() }
+    fn style(cx: &StyleCx<'_>, _: MenuBarStyleKey) -> MenuBarStyle {
+        MenuBarStyle { metrics: Metrics::new(), focus: cx.focus_look() }
     }
 
-    /// Every title's width when the room allows it; the bar fills the row, so what is left over is room for the
-    /// overflow.
+    /// Every title's width; at its least (`Proposal::Min`) the width of the "…" title alone. A row that has less room
+    /// than every title needs narrows the bar, and the titles that no longer fit go into "…".
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         if !Self::in_window(&cx.env) {
             return Vec2::ZERO;
         }
-        let (widths, height, _) = self.widths(cx);
-        Vec2::new(widths.iter().sum(), height)
-    }
-
-    fn fills(&self) -> Option<Axis> {
-        Some(Axis::X)
+        let (widths, height, more) = self.widths(cx);
+        self.natural = widths.iter().sum();
+        let width = if cx.proposal == Proposal::Min { more } else { self.natural };
+        Vec2::new(width, height)
     }
 
     fn sense(&self) -> Sense {
@@ -459,15 +532,18 @@ impl Component for MenuBar<'_> {
             return;
         }
         let (widths, _, more) = self.widths(cx);
+        self.natural = widths.iter().sum();
         let fit = fit_titles(&widths, more, rect.width());
+        let gap = Self::gap(cx);
         let mut flow = Flow::new(rect, cx.flow.is_rtl());
         for (at, width) in widths.iter().take(fit.shown).enumerate() {
             let (cell, rest) = flow.take_start(*width);
             flow = rest;
+            let cell = Flow::new(cell, cx.flow.is_rtl()).take_start(width - gap).0;
             cx.part(TITLE.at(at as u64), cell).sense(Sense::CLICK | Sense::FOCUS).focusable().toggles_at("menu", at);
         }
         if fit.overflow {
-            let (cell, _) = flow.take_start(more);
+            let cell = flow.take_start(more - gap).0;
             cx.part(MORE, cell).sense(Sense::CLICK | Sense::FOCUS).focusable().toggles_at("menu", fit.shown);
         }
         cx.roving(Roving::new(NavShape::Flat).arrows(Arrows::Horizontal));
@@ -490,7 +566,7 @@ impl Component for MenuBar<'_> {
         for key in keys {
             match key {
                 MenuKey::Letter(letter) => {
-                    let held = |(_, mark): &(String, Option<(char, usize)>)| mark.is_some_and(|(held, _)| held == letter);
+                    let held = |(_, mark): &TitleText| mark.is_some_and(|(held, _)| held == letter);
                     if let Some(at) = texts.iter().take(found.shown).position(held) {
                         Self::open_only(cx, &slots, found, Open::Title(at));
                     }
@@ -520,6 +596,13 @@ impl Component for MenuBar<'_> {
             None => state.hover = None,
         }
         let opened = Self::opened(cx, &slots, found);
+        // A popup began open when its open state differs from `changed`: switching titles closes one popup and opens
+        // another, so the edge is that some menu is open now and none began open.
+        let began_open = slots.iter().any(|slot| {
+            let popup = Self::popup(cx, *slot, found);
+            popup.is_open(cx) != popup.changed(cx)
+        });
+        self.opened = opened.is_some() && !began_open;
         self.open = opened.is_some();
         Facts::<BarFact>::register(&cx.ctx, BarFact { open: self.open, focused: cx.is_focused() });
         *cx.memory::<BarState>() = state;
@@ -535,15 +618,13 @@ impl Component for MenuBar<'_> {
         let slots = Self::slots(found);
         let opened = Self::opened(cx, &slots, found);
         let words = cx.env.words::<MenuWords>();
-        let folder = cx.env.folder();
+        let separator = cx.env.words::<CommonWords>().path_separator.as_str().to_owned();
         let texts = self.texts(&cx.env);
         let help = self.help;
         // Only a pass that shows the Help menu needs its commands: the entries function runs here and nowhere else.
         let help_entries = help.filter(|help| opened == Some(Open::Title(help.menu))).map(|help| (help.entries)());
-        let help_rows =
-            help_entries.as_deref().map(|entries| Self::help_texts(entries, &cx.env, cx.env.words::<CommonWords>().path_separator.as_str()));
         // The search starts empty each time the Help menu opens.
-        let mut query = if help_rows.is_some() { cx.memory::<Query>().clone() } else { Query::default() };
+        let mut query = if help_entries.is_some() { cx.memory::<Query>().clone() } else { Query::default() };
         let mut stepped = None;
         for slot in &slots {
             let popup = Self::popup(cx, *slot, found);
@@ -557,9 +638,7 @@ impl Component for MenuBar<'_> {
                 Menu::inline(Label::from(name.clone()))
                     .show(ui, |ui, menu| match slot {
                         Open::Title(at) => {
-                            if let (Some(_), Some(rows), Some(entries)) =
-                                (help.filter(|help| help.menu == *at), help_rows.as_ref(), help_entries.as_deref())
-                            {
+                            if let (Some(_), Some(entries)) = (help.filter(|help| help.menu == *at), help_entries.as_deref()) {
                                 // The field sits in a padded frame: its edge lines up with the row labels and it keeps clear of the first row.
                                 // The field drives the menu: Up, Down, Home and End move its active row and Enter runs
                                 // it, or the first enabled match, while typing stays in the field.
@@ -585,27 +664,31 @@ impl Component for MenuBar<'_> {
                                     }
                                 }
                                 query.1 = query.1.saturating_add(1);
-                                let refs: Vec<[&str; 4]> = rows
-                                    .iter()
-                                    .map(|[label, english, path, id]| [label.as_str(), english.as_str(), path.as_str(), id.as_str()])
-                                    .collect();
+                                // The index is built only for a query, from the entries this pass collected.
                                 let mut seen: Vec<&CommandRef> = Vec::new();
-                                let listed: Vec<usize> = search_order(&folder, &query.0, &refs)
-                                    .into_iter()
-                                    .filter(|at| {
-                                        let command = entries[*at].command();
-                                        let fresh = !seen.contains(&command);
-                                        seen.push(command);
-                                        fresh
-                                    })
-                                    .collect();
-                                for at in &listed {
-                                    let entry = &entries[*at];
+                                let listed: Vec<&HelpEntry> = if query.0.trim().is_empty() {
+                                    Vec::new()
+                                } else {
+                                    let synonyms = Synonyms::of(&cx.env.words::<SearchWords>());
+                                    let index = SearchIndex::new(&cx.env, entries, &synonyms);
+                                    rank(&index, &query.0, &[], &|_| 0)
+                                        .into_iter()
+                                        .filter_map(|at| entries.get(at))
+                                        .filter(|entry| {
+                                            let fresh = !seen.contains(&entry.command());
+                                            seen.push(entry.command());
+                                            fresh
+                                        })
+                                        .take(MAX_RESULTS)
+                                        .collect()
+                                };
+                                for entry in &listed {
                                     let row = MenuItem::command(entry.command().clone()).label(entry.label().clone());
                                     if entry.path().is_empty() {
                                         row.show(ui)
                                     } else {
-                                        row.detail(rows[*at][2].clone()).show(ui)
+                                        let path: Vec<String> = entry.path().iter().map(|label| cx.env.resolve(label).as_str().to_owned()).collect();
+                                        row.detail(path.join(&separator)).show(ui)
                                     };
                                 }
                                 if listed.is_empty() && !query.0.trim().is_empty() {
@@ -669,9 +752,10 @@ impl Component for MenuBar<'_> {
             };
             let open = cx.core.toggles.iter().any(|toggle| toggle.part == part && toggle.open);
             // Under the pointer a title is the active row, as it is while its menu is open or the keyboard is on it.
-            let lit = open || cx.hover_pos(part).is_some() || cx.part_state(part).flags.contains(Flags::FOCUS_VISIBLE);
+            let lit =
+                open || cx.part_if_declared(part).is_some_and(|result| result.hovered) || cx.part_state(part).flags.contains(Flags::FOCUS_VISIBLE);
             let mnemonic = match slot {
-                Open::Title(at) if underlined => texts[at].1.map(|(_, index)| index),
+                Open::Title(at) if underlined => texts[at].1.and_then(|(_, index)| index),
                 _ => None,
             };
             ui.face(part, Self::face(&text, lit, mnemonic));
@@ -680,9 +764,18 @@ impl Component for MenuBar<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> MenuBarOutput {
         let found = declared(&cx);
+        let texts = self.texts(&cx.env);
+        // A title in the overflow menu has no part rect, so it records nothing.
+        for (at, title) in self.titles.iter().enumerate().take(found.shown) {
+            if let (false, Some(result), Some((text, _))) =
+                (title.holds.is_empty(), cx.part_if_declared(Self::slot_part(Open::Title(at))), texts.get(at))
+            {
+                commands::holds(&cx.ctx, cx.response.layer_id, result.rect, &title.holds, Label::from(text.clone()));
+            }
+        }
         let rects = Self::slots(found).into_iter().filter_map(|slot| cx.part_if_declared(Self::slot_part(slot)).map(|result| result.rect));
         let start = if cx.flow.is_rtl() { cx.rect.right_top() } else { cx.rect.left_top() };
         let titles = rects.reduce(Rect::union).unwrap_or_else(|| Rect::from_min_size(start, Vec2::ZERO));
-        MenuBarOutput { response: cx.response.clone(), open: self.open, titles }
+        MenuBarOutput { response: cx.response.clone(), open: self.open, titles, natural: self.natural, opened: self.opened }
     }
 }

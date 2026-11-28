@@ -1,9 +1,10 @@
-//! The detail pane: the selected command's name and place, its current shortcuts with Remove, the New Shortcut
+//! The detail pane: the selected command's name and place, its current shortcuts with Replace and Remove, the New Shortcut
 //! field (recording, or typed entry), Context, the holders of the new chord, and Assign, Use Default and Clear.
 
 use craft_keymap::command::CommandRef;
 use craft_keymap::keymap::Binding;
 use craft_keymap::scope::Scope;
+use craft_keymap::{Chord, Key};
 use craft_ui::buttons::{Button, IconButton, Link};
 use craft_ui::contract::{Bind, BodyCx, Entry, Props as _, Scroll, Show as _, ShowContainer as _, clicked};
 use craft_ui::display::{Shade, Text};
@@ -16,7 +17,7 @@ use craft_ui::style::TypeRole;
 use craft_ui::text::TextField;
 use egui::Ui;
 
-use crate::shortcuts::recorder::ChordRecorder;
+use crate::shortcuts::recorder::{ChordRecorder, RecorderOutput};
 use crate::shortcuts::state::{DialogState, Env, Target};
 use crate::shortcuts::view::recording_text;
 use crate::shortcuts::words::around_chord;
@@ -27,6 +28,11 @@ const PATH_SEPARATOR: &str = " \u{203a} ";
 pub(super) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, now: f64, env: &mut Env<'_>, state: &mut DialogState) {
     Stack::new().fill().scroll(Scroll::vertical()).show(ui, |ui, _| {
         let selected = state.selected.clone().filter(|command| env.keymap.bindable(command).is_some());
+        if let Some(Target::Detail { command, old }) = state.recording.as_ref().map(|recording| &recording.target)
+            && (selected.as_ref() != Some(command) || !env.keymap.bindings(command).contains(old))
+        {
+            state.stop_recording();
+        }
         match selected {
             Some(command) => of_command(ui, now, env, state, &command),
             None => {
@@ -79,25 +85,71 @@ fn of_command(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState,
     if bindings.is_empty() {
         Text::new(words.none.clone()).shade(Shade::Muted).show(ui);
     }
+    let command_key = command.key();
     let mut remove = None;
-    for (n, binding) in bindings.iter().enumerate() {
+    for (index, binding) in bindings.iter().enumerate() {
         let text = binding_text(env, binding, &home);
         let shown = if defaults.contains(binding) { words.chord_default.fill(&[("chord", &text)]) } else { text.clone() };
         let chord = env.text.trigger(&binding.trigger, env.keymap.platform());
-        Row::new().show(ui, |ui, _| {
-            Text::new(around_chord(env.text.rtl(), &shown, &chord)).show(ui);
-            if editable {
+        let target = Target::Detail { command: command.clone(), old: binding.clone() };
+        let recording = state.recording.as_ref().filter(|r| r.target == target);
+        let started = recording.is_some_and(|r| r.started);
+        let recording = recording.is_some();
+        let shown = around_chord(env.text.rtl(), &shown, &chord);
+        let row = Row::new()
+            .id_salt(("shortcut", &command_key, index))
+            .wrap(true)
+            .show(ui, |ui, _| {
+                Text::new(shown.clone()).show(ui);
+                if !editable {
+                    return None;
+                }
+
+                let (out, replace) = if recording {
+                    let prompt = recording_text(env, state);
+                    (Some(ChordRecorder::new(prompt.clone(), true, prompt).id_salt("replace").take_focus(false).show(ui)), false)
+                } else {
+                    let name = words.replace_chord_for_label.fill(&[("chord", &text), ("label", &label)]);
+                    let icon = IconSpec::svg(craft_behavior::IconId::new("pencil"));
+                    let button = IconButton::new(icon).id_salt("replace").label(name.clone()).tooltip(name).show(ui);
+                    (None, clicked(&button))
+                };
                 let name = words.remove_chord_from_label.fill(&[("chord", &text), ("label", &label)]);
-                let button = IconButton::new(IconSpec::svg(craft_behavior::IconId::new("close")))
-                    .id_salt(("remove", n))
-                    .label(name.clone())
-                    .tooltip(name)
-                    .show(ui);
-                if clicked(&button) {
-                    remove = Some(binding.clone());
+                let icon = IconSpec::svg(craft_behavior::IconId::new("close"));
+                let button = IconButton::new(icon).id_salt("remove").label(name.clone()).tooltip(name).show(ui);
+                Some((out, replace, clicked(&button)))
+            })
+            .inner
+            .flatten();
+        if let Some((out, replace, removed)) = row
+            && !ui.is_sizing_pass()
+            && !craft_ui::runtime::measure::active(ui.ctx())
+        {
+            if replace {
+                state.record(env, target);
+                // Switch key routing to the recorder before the next input frame.
+                craft_ui::runtime::frame::discard_pass(ui.ctx(), "shortcuts detail recorder activated");
+            } else if let Some(out) = out {
+                let response = &out.response;
+                let bounds = ui.ctx().layer_transform_to_global(response.layer_id).map_or(response.interact_rect, |map| map * response.interact_rect);
+                let pressed_elsewhere = craft_ui::runtime::pointer::frame(ui.ctx()).press.is_some_and(|press| !bounds.contains(press.origin));
+                if out.chords.contains(&Chord::plain(Key::Escape)) || pressed_elsewhere || (started && !out.response.has_focus()) {
+                    state.stop_recording();
+                } else {
+                    if !started {
+                        // Replacing the button with a wider recorder can wrap to a different line in this scroll.
+                        focus::request(ui.ctx(), FocusTarget::Id(response.id));
+                    }
+                    if out.response.has_focus() {
+                        state.settle_recording(env, now);
+                        receive_recorded_keys(env, state, now, out);
+                    }
                 }
             }
-        });
+            if removed {
+                remove = Some(binding.clone());
+            }
+        }
     }
     if let Some(binding) = remove {
         state.remove(env, command, &binding);
@@ -172,7 +224,8 @@ pub(super) fn new_shortcut(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut
         }
         return;
     }
-    let recording = matches!(state.recording.as_ref().map(|r| &r.target), Some(Target::Field { command: c }) if c == command);
+    let target = Target::Field { command: command.clone() };
+    let recording = state.recording.as_ref().is_some_and(|r| r.target == target);
     let shown = if recording {
         recording_text(env, state)
     } else {
@@ -188,24 +241,27 @@ pub(super) fn new_shortcut(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut
         })
         .inner;
     let Some((out, type_more)) = shown_row else { return };
-    if out.started && !recording {
-        state.record(env, Target::Field { command: command.clone() });
-    }
     if recording {
-        if let Some(recording) = state.recording.as_mut() {
-            recording.started = true;
-        }
-        if !out.chords.is_empty() {
-            state.feed(env, &out.chords, now);
-        } else if out.response.lost_focus() {
-            state.stop_recording();
-        }
+        receive_recorded_keys(env, state, now, out);
+    } else if out.started {
+        state.record(env, target);
     }
     if type_more {
         state.stop_recording();
         state.typing = Some(String::new());
         state.typing_focus = true;
         state.type_error = None;
+    }
+}
+
+fn receive_recorded_keys(env: &mut Env<'_>, state: &mut DialogState, now: f64, out: RecorderOutput) {
+    if let Some(recording) = state.recording.as_mut() {
+        recording.started = true;
+    }
+    if !out.chords.is_empty() {
+        state.feed(env, &out.chords, now);
+    } else if out.response.lost_focus() {
+        state.stop_recording();
     }
 }
 
@@ -257,6 +313,6 @@ fn holders(ui: &mut Ui, env: &Env<'_>, state: &mut DialogState) {
         }
     }
     if let Some(command) = go {
-        state.go_to(&command);
+        state.go_to(env, &command);
     }
 }

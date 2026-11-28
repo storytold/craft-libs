@@ -50,6 +50,23 @@ impl BitReader<'_> {
 }
 
 pub fn decode(data: &[u8], early: bool, max: usize) -> Step {
+    let out = Vec::with_capacity(data.len().saturating_mul(2).min(max));
+    decode_stream(data, early, max, out).map(|(out, _)| out)
+}
+
+/// Decode one LZW stream and return its bytes and the number of input bytes consumed.
+///
+/// The count includes the byte containing the final bits of the end-of-data code (257).
+/// Later bytes remain unread. If the input ends without EOD, complete codes still decode
+/// and the count includes all bytes available. As in [`decode`], `early` selects the early
+/// width change and `max` bounds the decoded output.
+///
+/// Output grows as codes arrive because the input may include a program after the compressed data.
+pub fn decode_prefix(data: &[u8], early: bool, max: usize) -> Result<(Vec<u8>, usize), Failure> {
+    decode_stream(data, early, max, Vec::new())
+}
+
+fn decode_stream(data: &[u8], early: bool, max: usize, mut out: Vec<u8>) -> Result<(Vec<u8>, usize), Failure> {
     // Table entry = (prefix code, last byte, first byte, length).
     let mut prefix = vec![0u16; TABLE];
     let mut last = vec![0u8; TABLE];
@@ -64,7 +81,6 @@ pub fn decode(data: &[u8], early: bool, max: usize) -> Step {
     let mut w = 9;
     let mut prev: Option<usize> = None;
     let mut r = BitReader { data, pos: 0, acc: 0, bits: 0 };
-    let mut out = Vec::with_capacity(data.len().saturating_mul(2).min(max));
 
     while let Some(code) = r.read(w) {
         match code {
@@ -111,7 +127,7 @@ pub fn decode(data: &[u8], early: bool, max: usize) -> Step {
         prev = Some(code);
         w = width(next, early);
     }
-    Ok(out)
+    Ok((out, r.pos))
 }
 
 struct BitWriter {
@@ -205,6 +221,46 @@ mod tests {
     }
 
     #[test]
+    fn prefix_stops_at_the_byte_containing_end_of_data() {
+        let mut aligned = SPEC_OUT.to_vec();
+        let following = b"\nshowpage";
+        aligned.extend_from_slice(following);
+        let (decoded, consumed) = decode_prefix(&aligned, true, SPEC_IN.len()).ok().unwrap();
+        assert_eq!(decoded, SPEC_IN);
+        assert_eq!(&aligned[consumed..], following);
+
+        // Two 9-bit codes: literal 'A', then 257. The last six bits are padding.
+        let mut partial_byte = vec![0x20, 0xc0, 0x7f];
+        partial_byte.resize(1 << 20, b'x');
+        let (decoded, consumed) = decode_prefix(&partial_byte, true, usize::MAX).ok().unwrap();
+        assert_eq!(decoded, b"A");
+        assert_eq!(consumed, 3);
+        assert!(decoded.capacity() < partial_byte.len(), "the unread suffix must not reserve output");
+    }
+
+    #[test]
+    fn prefix_tolerates_eof_with_unused_bits() {
+        assert_eq!(decode_prefix(&[], true, 0).ok().unwrap(), (vec![], 0));
+        // Literal 'A' and just the first seven bits of EOD.
+        assert_eq!(decode_prefix(&[0x20, 0xc0], true, 1).ok().unwrap(), (b"A".to_vec(), 2));
+    }
+
+    #[test]
+    fn prefix_preserves_corruption_and_output_limit() {
+        let mut w = BitWriter { out: vec![], acc: 0, bits: 0 };
+        for c in [65, 66, 300] {
+            w.write(c, 9);
+        }
+        let bytes = w.finish();
+        let at_limit = decode_prefix(&bytes, true, 2).err().unwrap();
+        assert!(matches!(at_limit.error, CodecError::Corrupt { .. }));
+        assert_eq!(at_limit.partial, b"AB");
+        let too_small = decode_prefix(&bytes, true, 1).err().unwrap();
+        assert!(matches!(too_small.error, CodecError::LimitExceeded(1)));
+        assert!(too_small.partial.is_empty());
+    }
+
+    #[test]
     fn missing_eod_and_clear() {
         // Drop the EOD (last 9 bits span the final 2 bytes; keep bits for 66 only).
         let mut w = BitWriter { out: vec![], acc: 0, bits: 0 };
@@ -263,6 +319,14 @@ mod tests {
             assert_eq!(dec(&tiff, true).unwrap(), data);
             let plain = weezl::encode::Encoder::new(Msb, 8).encode(&data).unwrap();
             assert_eq!(dec(&plain, false).unwrap(), data);
+            // Both independent bitstreams may be followed by uncompressed data.
+            for (mut bytes, early) in [(tiff, true), (plain, false)] {
+                let following = b"\nshowpage";
+                bytes.extend_from_slice(following);
+                let (out, used) = decode_prefix(&bytes, early, data.len()).ok().unwrap();
+                assert_eq!(out, data);
+                assert_eq!(&bytes[used..], following);
+            }
             let ours = encode(&data, true);
             assert_eq!(weezl::decode::Decoder::with_tiff_size_switch(Msb, 8).decode(&ours).unwrap(), data);
             let ours = encode(&data, false);

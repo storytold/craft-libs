@@ -44,10 +44,10 @@ pub use grid::{PageGrid, PageGridColors, PageGrids, baseline_lines};
 pub use header_footer::{HeaderFooterPage, HeaderFooterZones, HeaderFooterZonesOutput, Zone, ZoneAt, ZoneBands, ZoneText};
 pub use list::{PageList, PageListEvent, PageListOutput, PageListRow, PageListWords};
 pub use margins::{MarginChange, MarginEdge, MarginHandles, MarginHandlesOutput, MarginRules, PageEdges, clamp_margin, dragged_margin, margin_range};
-pub use marks::{FrameExtras, HiddenMark, PlacedMark, TextFrameMarks};
+pub use marks::{FrameExtras, HiddenMark, MarkAnchor, PlacedMark, TextFrameMarks};
 pub use page_rulers::{PageRulers, PageRulersOutput, RowDrag, VerticalRuler, VerticalRulerOutput};
 pub use preview::{PagePreview, PagePreviewCommands, PagePreviewOutput, PagePreviewWords};
-pub use range::{PageRangeCodec, PageRangeField, PageRangeFieldOutput, PageRangeOptions, PageRangeOptionsOutput, PageSelection};
+pub use range::{PageRangeChoices, PageRangeCodec, PageRangeField, PageRangeFieldOutput, PageRangeOptions, PageRangeOptionsOutput, PageSelection};
 pub use reading::{ReadingNav, ReadingNavOutput, ReadingState, ReadingView, ReadingViewOutput};
 pub use setup::{PageLayoutChoice, PageLayoutMenus, PageSetupDialog};
 pub use sync_views::{Lead, SyncedViews, SyncedViewsOutput, SyncedViewsState};
@@ -59,6 +59,10 @@ pub use text_selection::{
     MarkArea, MarkKind, PageTextSource, PageTexts, TextMark, TextMarks, TextSelectState, TextSelectTool, TextSelection, TextSpan,
 };
 pub use thumbnails::{
-    PageThumbnails, PageThumbnailsOutput, THUMBNAIL_ZOOM, ThumbnailEvent, ThumbnailMarks, ThumbnailSection, ThumbnailWords, moved_page,
+    ORGANIZE_ZOOM, PageThumbnails, PageThumbnailsOutput, THUMBNAIL_ZOOM, ThumbnailArrangement, ThumbnailEvent, ThumbnailMarks, ThumbnailSection,
+    ThumbnailWords, moved_page,
 };
-pub use view::{PICTURE_REACH, PageBody, PageRegion, PageSnap, PageSource, PageView, PageViewOutput, PageViewState, PageViewWords, PlacedPage};
+pub use view::{
+    GoTo, GoToPlace, PICTURE_REACH, PageBody, PageInsets, PageRegion, PageRevision, PageSnap, PageSource, PageView, PageViewOutput, PageViewState,
+    PageViewWords, PlacedPage,
+};

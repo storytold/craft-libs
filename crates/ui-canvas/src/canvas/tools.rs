@@ -7,24 +7,24 @@
 //! change eases).
 
 use super::navigate::{FlickPan, NavigationOptions, pan};
+use super::readout::angle_row;
 use super::rotate::ViewTurn;
 use super::zoom_motion::{HoldZoom, ZoomDrag};
-use super::{CanvasTool, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
+use super::{CanvasTool, CanvasWords, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
 use crate::primitives::Draw;
 use craft_behavior::PointerButton;
 use craft_behavior::canvas::zoom;
 use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::kurbo::{Rect, Size, Vec2};
-use craft_behavior::{CancelReason, CanvasView, Cursor, PaintedCursor, ZoomLadder};
-use craft_keymap::Mods;
+use craft_behavior::{CancelReason, CanvasView, Cursor, PaintedCursor, ZoomScheme};
+use craft_keymap::{Key, Mods};
 use egui::Pos2;
 
 /// The rotation step of the Rotate View commands, in degrees.
 const ROTATE_STEP_DEG: f64 = 15.0;
 
-/// The room Fit Artboard on Screen leaves around the board, in points: at the sides, and above and below (the board's
-/// name sits above it).
-const ARTBOARD_MARGIN: Vec2 = Vec2::new(30.0, 40.0);
+/// The room Fit Artboard on Screen leaves around the board on each side, in points.
+const ARTBOARD_MARGIN: Vec2 = Vec2::new(30.0, 30.0);
 
 /// The room Fit Layers on Screen leaves around the layers' bounds, in points.
 const LAYERS_MARGIN: Vec2 = Vec2::new(20.0, 20.0);
@@ -182,23 +182,30 @@ impl ViewCommands {
 
     /// Applies the command to `view` for `target` and the layers' bounds `layers` at `pixels_per_point`. Returns whether
     /// the view changed: a command whose fact is absent changes nothing. Only Fit Layers asks `layers`.
-    pub fn apply(self, view: &mut CanvasView, target: &ViewTarget, layers: Option<LayerBounds<'_>>, pixels_per_point: f32) -> bool {
+    pub fn apply(
+        self,
+        view: &mut CanvasView,
+        target: &ViewTarget,
+        layers: Option<LayerBounds<'_>>,
+        pixels_per_point: f32,
+        scheme: &ZoomScheme,
+    ) -> bool {
         let before = *view;
         let size = target.document;
         let zoom_about_centre = |view: &mut CanvasView, device: f64| {
-            zoom::about(view, view.rect.center(), ZoomLadder::clamp(device, size), false, pixels_per_point);
+            zoom::about(view, view.rect.center(), scheme.clamp(device, size), false, pixels_per_point);
         };
         match self {
             ViewCommands::ZoomIn => {
-                zoom::step(view, 1, size, pixels_per_point);
+                zoom::step(view, 1, size, pixels_per_point, scheme);
             }
             ViewCommands::ZoomOut => {
-                zoom::step(view, -1, size, pixels_per_point);
+                zoom::step(view, -1, size, pixels_per_point, scheme);
             }
-            ViewCommands::FitOnScreen => zoom::fit_up_to(view, size, pixels_per_point, target.fit_ceiling, FIT_MARGIN),
-            ViewCommands::FillScreen => zoom::fill(view, size, pixels_per_point),
-            ViewCommands::ActualPixels => zoom_about_centre(view, 1.0),
-            ViewCommands::TwoHundredPercent => zoom_about_centre(view, 2.0),
+            ViewCommands::FitOnScreen => zoom::fit_up_to(view, size, pixels_per_point, target.fit_ceiling, FIT_MARGIN, scheme),
+            ViewCommands::FillScreen => zoom::fill(view, size, pixels_per_point, scheme),
+            ViewCommands::ActualPixels => zoom_about_centre(view, scheme.hundred),
+            ViewCommands::TwoHundredPercent => zoom_about_centre(view, 2.0 * scheme.hundred),
             ViewCommands::PrintSize => {
                 if let Some(device) = target.print_zoom() {
                     zoom_about_centre(view, device);
@@ -206,12 +213,12 @@ impl ViewCommands {
             }
             ViewCommands::FitArtboard => {
                 if let Some(board) = with_area(target.artboard) {
-                    zoom::fit_rect(view, board, size, pixels_per_point, ARTBOARD_MARGIN);
+                    zoom::fit_rect(view, board, size, pixels_per_point, ARTBOARD_MARGIN, scheme);
                 }
             }
             ViewCommands::FitLayers => {
                 if let Some(bounds) = with_area(layers.and_then(|layers| layers())) {
-                    zoom::fit_rect(view, bounds, size, pixels_per_point, LAYERS_MARGIN);
+                    zoom::fit_rect(view, bounds, size, pixels_per_point, LAYERS_MARGIN, scheme);
                 }
             }
             ViewCommands::RotateClockwise => view.rotation = normalized_angle(view.rotation + ViewTurn::screen_delta(ROTATE_STEP_DEG, view.flip_x)),
@@ -226,9 +233,16 @@ impl ViewCommands {
     /// Whether the command can run on `view` for `target` and the layers' bounds `layers`: Zoom In and Zoom Out stop at
     /// the ends of the zoom range, Print Size needs the document's resolution, Fit Artboard an artboard and Fit Layers
     /// the layers' bounds, which it does not ask for here.
-    pub fn available(self, view: &CanvasView, target: &ViewTarget, layers: Option<LayerBounds<'_>>, pixels_per_point: f32) -> bool {
+    pub fn available(
+        self,
+        view: &CanvasView,
+        target: &ViewTarget,
+        layers: Option<LayerBounds<'_>>,
+        pixels_per_point: f32,
+        scheme: &ZoomScheme,
+    ) -> bool {
         match self {
-            ViewCommands::ZoomIn | ViewCommands::ZoomOut => self.apply(&mut view.clone(), target, None, pixels_per_point),
+            ViewCommands::ZoomIn | ViewCommands::ZoomOut => self.apply(&mut view.clone(), target, None, pixels_per_point, scheme),
             ViewCommands::PrintSize => target.print_zoom().is_some(),
             ViewCommands::FitArtboard => with_area(target.artboard).is_some(),
             ViewCommands::FitLayers => layers.is_some(),
@@ -402,7 +416,8 @@ impl CanvasTool for HandTool {
 
 /// The Zoom tool: a click steps the ladder about the clicked point (Alt: out; Zoom Clicked Point to Center centres
 /// it), a press held still zooms continuously ([`HoldZoom`], Animated Zoom only), a drag scrubs or draws a zoom
-/// rectangle ([`ZoomDrag`], Scrubby Zoom). The cursor is the magnifier, with a minus while the tool zooms out. At a
+/// rectangle ([`ZoomDrag`], Scrubby Zoom), which Space moves while held. Space held since the press (Cmd+Space lends
+/// the tool) sizes the rectangle until it is let go. The cursor is the magnifier, with a minus while the tool zooms out. At a
 /// zoom limit the view stays put. The tool reads the document's size from
 /// the canvas's [`CanvasSpace`](super::CanvasSpace) (the size given to [`Canvas::document`](super::Canvas::document));
 /// on a canvas given no document it does nothing.
@@ -423,12 +438,14 @@ pub struct ZoomTool {
     last: Pos2,
     /// The host called `drag` in this press: the pointer moved past the arena's slop.
     dragged: bool,
+    /// Space moves the rectangle while held: it was up at the press, or let go since.
+    space_moves: bool,
 }
 
 impl ZoomTool {
     /// A Zoom tool under `options`.
     pub fn new(options: NavigationOptions) -> Self {
-        Self { out: false, lent: false, options, hold: None, drag: None, press: None, last: Pos2::ZERO, dragged: false }
+        Self { out: false, lent: false, options, hold: None, drag: None, press: None, last: Pos2::ZERO, dragged: false, space_moves: false }
     }
 
     /// This tool as the momentary set lends it: its direction is final.
@@ -450,12 +467,13 @@ impl ZoomTool {
         let (Some(drag), Some(space)) = (self.drag.as_mut(), cx.space()) else { return };
         let Some(size) = space.document() else { return };
         let ppp = space.pixels_per_point;
+        let scheme = space.zoom_scheme();
         let mut view = space.view;
         let before = view;
         let mut waiting = false;
         let held = match self.hold.as_mut() {
             Some(hold) => {
-                let held = hold.advance(&mut view, time, out, size, ppp);
+                let held = hold.advance(&mut view, time, out, size, ppp, &scheme);
                 // The press asks for passes while it waits out the delay and while it zooms.
                 waiting = held || hold.waiting(time);
                 held
@@ -463,7 +481,7 @@ impl ZoomTool {
             None => false,
         };
         if !held {
-            drag.drag(&mut view, at, size, ppp);
+            drag.drag(&mut view, at, size, ppp, &scheme);
         }
         if waiting {
             cx.request_repaint();
@@ -474,11 +492,19 @@ impl ZoomTool {
     }
 }
 
-/// The view after a Zoom tool click at `screen`: one ladder rung in (or `out`) about the point, or centred on it with
-/// Zoom Clicked Point to Center. `None` at a zoom limit.
-fn click_step(view: &CanvasView, screen: Pos2, out: bool, size: Size, options: &NavigationOptions, pixels_per_point: f32) -> Option<CanvasView> {
+/// The view after a Zoom tool click at `screen`: one rung of `scheme` in (or `out`) about the point, or centred on it
+/// with Zoom Clicked Point to Center. `None` at a zoom limit.
+fn click_step(
+    view: &CanvasView,
+    screen: Pos2,
+    out: bool,
+    size: Size,
+    options: &NavigationOptions,
+    pixels_per_point: f32,
+    scheme: &ZoomScheme,
+) -> Option<CanvasView> {
     let current = zoom::device(view, pixels_per_point);
-    let next = ZoomLadder::step(current, if out { -1 } else { 1 }, size);
+    let next = scheme.step(current, if out { -1 } else { 1 }, size);
     if !next.is_finite() || (next / current - 1.0).abs() <= 1e-9 {
         return None;
     }
@@ -508,6 +534,7 @@ impl CanvasTool for ZoomTool {
         self.press = Some((view, pointer.time, pointer.pos));
         self.last = pointer.pos;
         self.dragged = false;
+        self.space_moves = !cx.held(Key::Space);
         self.hold = self.options.animated_zoom.then(|| HoldZoom::press(pointer.pos, view.to_doc(pointer.pos), pointer.time));
         self.drag = Some(ZoomDrag::begin(&view, pointer.pos, self.options.scrubby_zoom, space.pixels_per_point));
         if self.hold.is_some() {
@@ -517,6 +544,11 @@ impl CanvasTool for ZoomTool {
     }
 
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        let space = cx.held(Key::Space);
+        self.space_moves |= !space;
+        if let (true, Some(drag), Some(view)) = (space && self.space_moves, self.drag.as_mut(), cx.space().map(|space| space.view)) {
+            drag.shift(&view, pointer.pos - self.last);
+        }
         self.last = pointer.pos;
         self.dragged = true;
         // A hold that has not started zooming is a drag now.
@@ -531,6 +563,7 @@ impl CanvasTool for ZoomTool {
         let hold = self.hold.take();
         let Some(size) = space.document() else { return };
         let ppp = space.pixels_per_point;
+        let scheme = space.zoom_scheme();
         let out = self.zooms_out(pointer.mods);
         // A hold that zoomed has already changed the view; the release is no click.
         if hold.is_some_and(|hold| hold.zooming()) {
@@ -538,7 +571,7 @@ impl CanvasTool for ZoomTool {
         }
         if !self.dragged {
             // A click steps from the view the press found.
-            match click_step(&start, anchor, out, size, &self.options, ppp) {
+            match click_step(&start, anchor, out, size, &self.options, ppp, &scheme) {
                 Some(next) if self.options.animated_zoom => {
                     let anchored = (!self.options.zoom_clicked_point_to_center).then(|| (start.to_doc(anchor), anchor));
                     cx.ease_view(next, anchored);
@@ -550,8 +583,8 @@ impl CanvasTool for ZoomTool {
         }
         let mut view = space.view;
         let mut drag = drag;
-        drag.drag(&mut view, pointer.pos, size, ppp);
-        drag.release(&mut view, out, size, ppp, cx.slop);
+        drag.drag(&mut view, pointer.pos, size, ppp, &scheme);
+        drag.release(&mut view, out, size, ppp, cx.slop, &scheme);
         cx.set_view(view);
     }
 
@@ -604,7 +637,9 @@ impl CanvasTool for RotateViewTool {
         let Some((turn, start)) = &self.drag else { return };
         let mut view = *start;
         view.rotation = turn.drag(pointer.pos, pointer.mods.shift, start.flip_x);
+        let rows = angle_row(&cx.words::<CanvasWords>(), &cx.units(), view.rotation);
         cx.set_view(view);
+        cx.readout(rows);
     }
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {

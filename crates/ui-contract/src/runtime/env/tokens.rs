@@ -4,7 +4,7 @@ use super::root::{ResolvedRoot, RootEnv};
 use crate::runtime::egui::pass;
 use crate::runtime::pass_state;
 use crate::style::UiTokens;
-use craft_theme::{AppId, AppSizes, Appearance, Contrast, Mode, SUITE_DEFAULT, Size, TextSize, ThemeDef, ThemeId, builtins};
+use craft_theme::{AppId, AppSizes, Appearance, Contrast, Mode, Rgba, SUITE_DEFAULT, Size, TextSize, ThemeDef, ThemeId, builtins};
 use egui::Context;
 use std::sync::Arc;
 
@@ -105,12 +105,15 @@ fn resolve_inputs(inputs: &TokenInputs) -> Arc<UiTokens> {
     let appearance =
         Appearance { mode: inputs.mode, contrast: inputs.contrast, size: inputs.density, text_size: inputs.text_size, reduced_motion: false };
     let themes = builtins();
-    if let Some(def) = &inputs.theme_def {
-        return Arc::new(UiTokens::of_theme(def, appearance, inputs.app.as_ref(), &inputs.sizes));
-    }
-    let theme: &ThemeDef =
-        [inputs.theme.as_str(), SUITE_DEFAULT].into_iter().find_map(|id| themes.iter().find(|theme| theme.id.as_str() == id)).unwrap_or(&themes[0]);
-    Arc::new(UiTokens::of_theme(theme, appearance, inputs.app.as_ref(), &inputs.sizes))
+    let theme: &ThemeDef = match &inputs.theme_def {
+        Some(def) => def,
+        None => [inputs.theme.as_str(), SUITE_DEFAULT]
+            .into_iter()
+            .find_map(|id| themes.iter().find(|theme| theme.id.as_str() == id))
+            .unwrap_or(&themes[0]),
+    };
+    let accented = inputs.accent.map(|seed| theme.with_accent(seed));
+    Arc::new(UiTokens::of_theme(accented.as_ref().unwrap_or(theme), appearance, inputs.app.as_ref(), &inputs.sizes))
 }
 
 /// What the resolved root tokens depend on. The sizes are compared by identity, as `set_input` does.
@@ -119,6 +122,8 @@ pub(crate) struct TokenInputs {
     pub(super) sizes: Arc<AppSizes>,
     pub(super) theme: ThemeId,
     pub(super) theme_def: Option<Arc<ThemeDef>>,
+    /// The user's accent over the theme.
+    pub(super) accent: Option<Rgba>,
     pub(super) mode: Mode,
     pub(super) contrast: Contrast,
     pub(super) density: Size,
@@ -134,6 +139,7 @@ impl TokenInputs {
             sizes: root.sizes.clone(),
             theme: root.theme.clone(),
             theme_def: root.theme_def.clone(),
+            accent: root.accent,
             mode: resolved.mode,
             contrast: resolved.contrast,
             density: root.density,
@@ -148,6 +154,7 @@ impl TokenInputs {
         (Arc::ptr_eq(&self.sizes, &other.sizes) || self.sizes == other.sizes)
             && self.theme == other.theme
             && same_def(&self.theme_def, &other.theme_def)
+            && self.accent == other.accent
             && self.mode == other.mode
             && self.contrast == other.contrast
             && self.density == other.density
@@ -159,6 +166,7 @@ impl TokenInputs {
         Arc::ptr_eq(&self.sizes, &other.sizes)
             && self.theme == other.theme
             && same_def(&self.theme_def, &other.theme_def)
+            && self.accent == other.accent
             && self.mode == other.mode
             && self.contrast == other.contrast
             && self.density == other.density

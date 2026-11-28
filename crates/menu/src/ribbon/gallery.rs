@@ -19,7 +19,7 @@ use craft_ui::primitives::textures::{Revision, ThumbSource, Thumbnails};
 use craft_ui::primitives::{ContentPainterCx, HAlign, PaintShape, TextRun};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::KeyUse;
-use craft_ui::style::{ComponentStyle, Flags, FocusLook, StyleColor, StyleCx, TypeRole};
+use craft_ui::style::{ComponentStyle, Flags, FocusLook, GlyphRole, StyleColor, StyleCx, TypeRole};
 use craft_ui::tile_grid::{CaptionPlace, Tile, TileGrid};
 use egui::{ColorImage, CornerRadius, Rect, Response, Ui, Vec2};
 
@@ -85,6 +85,8 @@ pub struct Gallery<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     caption: CaptionPlace,
     /// Each shown tile's rect.
     laid: Vec<Rect>,
+    /// The column of stepper buttons, if shown.
+    column: Rect,
     picked: Option<K>,
     menu: Option<ContextMenuRequest<K>>,
 }
@@ -118,6 +120,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Gallery<'a, K> {
             thumb_size: ThumbSize::Medium,
             caption: CaptionPlace::None,
             laid: Vec::new(),
+            column: Rect::NOTHING,
             picked: None,
             menu: None,
         }
@@ -131,7 +134,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Gallery<'a, K> {
         self
     }
 
-    /// One rounded frame on the raised surface around the tiles and the buttons, as the old Word-style ribbon drew
+    /// One rounded frame on the sunken well surface around the tiles and the buttons, as the old Word-style ribbon drew
     /// its Styles gallery.
     pub fn framed(mut self) -> Self {
         self.framed = true;
@@ -186,7 +189,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Gallery<'a, K> {
 
     fn sizes(&self, cx: &MeasureCx<'_, Self>) -> Sizes {
         let words = cx.env.words::<GalleryWords>();
-        let button = cx.face(IconButton::new(IconId::new("more")).label(words.more.clone()));
+        let button = cx.face(IconButton::new(IconId::new("more")).label(words.more.clone()).glyphs(GlyphRole::Compact));
         Sizes { tile: cx.face(GalleryTile::blank(self.aspect, self.thumb_size, self.captioned())), button, gap: cx.gap() }
     }
 }
@@ -338,7 +341,7 @@ fn grid<K>(ui: &mut Ui, label: &Label, items: &[GalleryItem<'_, K>], current: Op
     for event in out.response.events {
         match event {
             CollectionEvent::Activate(key) => result.picked = Some(key),
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                 if let Some(key) = keys.last() {
                     result.picked = Some(*key);
                 }
@@ -353,7 +356,7 @@ fn grid<K>(ui: &mut Ui, label: &Label, items: &[GalleryItem<'_, K>], current: Op
 // ---------------------------------------------------------------------------------------------------------------
 // The tile.
 
-/// The style of a gallery tile: the theme's selection fill and edge while it is the current one.
+/// The style of a gallery tile: the accent fill and edge while it is the current one.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 struct GalleryTileStyle {
@@ -363,14 +366,14 @@ struct GalleryTileStyle {
     focus: FocusLook,
     /// Between the tile's edge and its picture.
     pad: f32,
-    /// The selection edge's width.
-    stroke: f32,
-    /// The current tile's fill.
+    /// The current tile's fill: `accent.soft`, so the tile still reads as current under the focus ring.
     fill: StyleColor,
-    /// The current tile's edge.
+    /// The current tile's edge: `accent.solid`, not the translucent `accent.border`.
     edge: StyleColor,
     /// The ink of the item's name under the picture, in a captioned gallery.
     caption: StyleColor,
+    /// The caption's ink on the current tile's `accent.soft` fill: `accent.on_soft`.
+    caption_current: StyleColor,
     /// Between the picture and the caption.
     gap: f32,
     /// The picture's height at each thumbnail size, small, medium and large (`size.thumb.sm`, `md`, `lg`), as `thumb`
@@ -440,10 +443,10 @@ impl Component for GalleryTile<'_> {
             metrics: Metrics::new().padding(Insets::new(pad, pad, pad, pad)),
             focus: cx.focus_look(),
             pad,
-            stroke: cx.tokens.stroke.thin,
-            fill: cx.color(colors.state.selected),
-            edge: cx.color(colors.line.control_edge),
+            fill: cx.color(colors.accent.soft),
+            edge: cx.color(colors.accent.solid),
             caption: cx.color(colors.text.normal),
+            caption_current: cx.color(colors.accent.on_soft),
             gap: cx.tokens.space.gap.tight,
             thumbs: [cx.tokens.size.thumb.sm, cx.tokens.size.thumb.md, cx.tokens.size.thumb.lg],
         }
@@ -470,8 +473,11 @@ impl Component for GalleryTile<'_> {
         if self.selected {
             let outer = area.expand(cx.style.pad);
             let draw = ui.draw();
-            draw.fill(&PaintShape::Rect(outer, CornerRadius::ZERO), cx.style.edge);
-            draw.fill(&PaintShape::Rect(outer.shrink(cx.style.stroke), CornerRadius::ZERO), cx.style.fill);
+            // The fill goes under the edge, not inside it: `accent.soft` is translucent in some themes, and a solid
+            // edge-coloured fill under it would show through. A rect stroke paints inside its rect.
+            let shape = PaintShape::Rect(outer, CornerRadius::ZERO);
+            draw.fill(&shape, cx.style.fill);
+            draw.stroke(&shape, craft_ui::primitives::StrokeWidth::Thin, cx.style.edge);
         }
         // A captioned tile keeps the picture's height at the top and shows the name in the rest under it.
         let (area, caption) = match self.caption {
@@ -486,7 +492,11 @@ impl Component for GalleryTile<'_> {
             let _ = ui.child("picture", area, picture);
         }
         if let (Some(rect), Some(name)) = (caption, self.caption.as_ref()) {
-            let run = TextRun::new(name.as_str()).role(CAPTION).color(cx.style.caption).align(HAlign::Center).elide();
+            let run = TextRun::new(name.as_str())
+                .role(CAPTION)
+                .color(if self.selected { cx.style.caption_current } else { cx.style.caption })
+                .align(HAlign::Center)
+                .elide();
             let _ = ui.draw().text(rect, &run);
         }
     }
@@ -509,6 +519,9 @@ pub struct GalleryStyle {
     frame: (StyleColor, StyleColor, f32),
     /// The room inside a frame.
     inset: f32,
+    /// The stepper buttons column's track fill and divider.
+    track: StyleColor,
+    divider: StyleColor,
 }
 
 /// The sizes the gallery's faces measure.
@@ -527,8 +540,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
         let colors = &cx.tokens.color;
         GalleryStyle {
             metrics: Metrics::new().gap(cx.tokens.space.gap.inline),
-            frame: (cx.color(colors.surface.raised), cx.color(colors.line.control_edge), cx.tokens.shape.radius.control),
+            frame: (cx.color(colors.surface.sunken), cx.color(colors.line.control_edge), cx.tokens.shape.radius.control),
             inset: cx.tokens.space.gap.inline,
+            track: cx.color(colors.surface.panel),
+            divider: cx.color(colors.line.divider),
         }
     }
 
@@ -566,6 +581,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
         let buttons = self.buttons(level);
         let rect = rect.shrink2(Vec2::new(self.inset(cx.style), 0.0));
         let (column, rest) = Flow::new(rect, cx.flow.is_rtl()).take_end(if buttons { sizes.button.x } else { 0.0 });
+        self.column = if buttons { column } else { Rect::NOTHING };
         self.laid.clear();
         for at in 0..shown {
             let cell = rest.span(at as f32 * (sizes.tile.x + sizes.gap), sizes.tile.x);
@@ -702,9 +718,21 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
         if !self.buttons(level) {
             return;
         }
-        ui.face(UP, IconButton::new(IconId::new("chevron_up")).label(words.up.clone()).enabled(start > 0));
-        ui.face(DOWN, IconButton::new(IconId::new("chevron_down")).label(words.down.clone()).enabled(start < last));
-        ui.face(MORE, IconButton::new(IconId::new("more")).label(words.more.clone()));
+        if self.framed && self.column.is_positive() {
+            let draw = ui.draw();
+            let radius = cx.style.frame.2.round().clamp(0.0, 255.0) as u8;
+            let track_shape = PaintShape::Rect(self.column, CornerRadius::same(radius));
+            draw.fill(&track_shape, cx.style.track);
+            draw.stroke(&track_shape, craft_ui::primitives::StrokeWidth::Thin, cx.style.divider);
+            let height = self.column.height() / 3.0;
+            let y1 = self.column.min.y + height;
+            let y2 = self.column.min.y + 2.0 * height;
+            draw.rule(craft_ui::style::RuleKind::Divider, egui::pos2(self.column.left(), y1), egui::pos2(self.column.right(), y1));
+            draw.rule(craft_ui::style::RuleKind::Divider, egui::pos2(self.column.left(), y2), egui::pos2(self.column.right(), y2));
+        }
+        ui.face(UP, IconButton::new(IconId::new("chevron_up")).label(words.up.clone()).enabled(start > 0).glyphs(GlyphRole::Compact));
+        ui.face(DOWN, IconButton::new(IconId::new("chevron_down")).label(words.down.clone()).enabled(start < last).glyphs(GlyphRole::Compact));
+        ui.face(MORE, IconButton::new(IconId::new("more")).label(words.more.clone()).glyphs(GlyphRole::Compact));
     }
 
     /// The context request is recorded after `update`, so `finish` reads it: a secondary click on a tile, or the Menu

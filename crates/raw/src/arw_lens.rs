@@ -1377,10 +1377,12 @@ mod tests {
                     assert_eq!((h.lens_metadata, h.opcodes), (f.lens_metadata, f.opcodes));
                 }
             };
-            for len in 0..good.len() {
+            // The gate runs every divisor-th truncation and byte; nightly runs every one.
+            let step = craft_testkit::hostile::divisor();
+            for len in (0..good.len()).step_by(step) {
                 check(&good[..len]);
             }
-            for at in (0..good.len()).filter(|at| !image.contains(at)) {
+            for at in (0..good.len()).step_by(step).filter(|at| !image.contains(at)) {
                 for v in [0, 0xff, good[at] ^ 0x80, good[at] ^ 0x01] {
                     let mut file = good.clone();
                     file[at] = v;

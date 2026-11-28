@@ -158,12 +158,19 @@ impl<'a> Section<'a> {
         self.props.header = Some(header);
     }
 
-    /// The header's weight: `Section` by default, under a rule; `Caption` for a quiet heading over a group of
-    /// controls, with no rule.
+    /// The header's weight: `Section` by default, under a rule; `Caption`, `Subheading`, `Quiet` or `Overline` for a
+    /// heading over a group of controls, with no rule.
     #[must_use]
     pub fn strength(mut self, strength: HeaderStrength) -> Self {
         self.strength = strength;
-        self.update_header(|header| header.rule_above(strength != HeaderStrength::Caption));
+        self.update_header(|header| header.rule_above(strength.ruled()));
+        self
+    }
+
+    /// The header carries no rule above it: a page heading rather than a boundary between panel sections.
+    #[must_use]
+    pub fn quiet_header(mut self) -> Self {
+        self.update_header(|header| header.rule_above(false));
         self
     }
 

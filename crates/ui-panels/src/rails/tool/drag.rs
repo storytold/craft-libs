@@ -4,6 +4,7 @@ use super::data::SlotId;
 use crate::contract::{DropMark, DropTarget};
 use craft_behavior::DropOperation;
 use egui::{Pos2, Rect};
+use std::cell::Cell;
 
 /// The payload of the drag session between the Edit Toolbar drawer and the rail. Positions, not tools: each side
 /// resolves them against the slots it was given.
@@ -107,6 +108,7 @@ pub fn drop_in_slot(fraction: f32, slot: SlotId, index: usize, tools: usize) -> 
 }
 
 /// A slot's button as a drop target: the drop's place comes from where over the button it falls.
+#[derive(Clone, Copy)]
 pub(crate) struct SlotDrop {
     pub rect: Rect,
     pub slot: SlotId,
@@ -141,5 +143,42 @@ impl DropTarget<ToolDrag> for SlotDrop {
                 }
             }
         }
+    }
+}
+
+/// The rail around its slot buttons as a drop target, for a blank toolbar and the room after the last slot. A drop off
+/// the buttons makes a slot of its own beside the nearest button: before it when above it, or level with it and on its
+/// leading half; else after it. On a rail with no buttons it goes after the host's `count` slots.
+pub(crate) struct RailDrop {
+    pub rect: Rect,
+    pub slots: Vec<SlotDrop>,
+    pub count: usize,
+    /// The button the last accepted drop goes beside, whose edge the mark lines.
+    pub beside: Cell<Option<SlotDrop>>,
+}
+
+impl DropTarget<ToolDrag> for RailDrop {
+    type Drop = ToolDropped;
+
+    /// Over a button the button's own target takes the drop.
+    fn accept(&self, payload: &ToolDrag, at: Pos2, _: DropOperation) -> Option<ToolDropped> {
+        if self.slots.iter().any(|slot| slot.rect.contains(at)) {
+            return None;
+        }
+        let nearest = self.slots.iter().min_by(|a, b| a.rect.distance_sq_to_pos(at).total_cmp(&b.rect.distance_sq_to_pos(at))).copied();
+        self.beside.set(nearest);
+        let before = match nearest {
+            Some(slot) => {
+                let leading = if slot.rtl { at.x > slot.rect.center().x } else { at.x < slot.rect.center().x };
+                let before = at.y < slot.rect.top() || (at.y <= slot.rect.bottom() && leading);
+                slot.index + usize::from(!before)
+            }
+            None => self.count,
+        };
+        Some(ToolDropped { drag: *payload, at: DropAt::new_slot(before) })
+    }
+
+    fn mark(&self, drop: &ToolDropped) -> DropMark {
+        self.beside.get().map_or(DropMark::Into(self.rect), |slot| slot.mark(drop))
     }
 }

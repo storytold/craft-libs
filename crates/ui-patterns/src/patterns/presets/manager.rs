@@ -8,12 +8,12 @@ use super::browser::PresetBrowser;
 use super::event::PresetEvent;
 use super::footer::PresetFooterOptions;
 use super::model::PresetRow;
+use super::source::{PresetFns, PresetSource};
 use super::state::{PresetState, PresetView};
 use super::words::PresetWords;
-use crate::contract::{Bind, Entry, NoValue, Outcome, Pattern, Props, Show as _, ShowContainer as _};
+use crate::contract::{Bind, Entry, MemoProps, NoValue, Outcome, Pattern, Props, Show as _, ShowContainer as _};
 use crate::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use crate::layout_components::Stack;
-use crate::list::RowTest;
 use crate::pickers::Select;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
@@ -84,20 +84,14 @@ impl<G, K> Outcome for PresetManagerOutput<G, K> {
 #[must_use = "show the manager with `show`"]
 #[derive(Pattern, Props)]
 #[pattern(probe(PresetManager<'static, u32, u32>))]
-pub struct PresetManager<'a, G: Value, K: Clone + Eq + Hash + Send + Sync + 'static> {
+pub struct PresetManager<'a, G: Value, K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> {
     title: Label,
     kinds: &'a [Entry<G>],
     kind: Bind<'a, G>,
-    rows: &'a [PresetRow<K>],
+    source: &'a PresetSource<'a, K>,
     /// The host's buttons: a label and a tooltip each.
     #[prop]
     actions: Vec<(Label, Option<Label>)>,
-    /// Which presets Rename applies to.
-    #[prop(func = "Fn(&K) -> bool")]
-    can_rename: Option<RowTest<'a, K>>,
-    /// Which presets Delete applies to.
-    #[prop(func = "Fn(&K) -> bool")]
-    can_delete: Option<RowTest<'a, K>>,
     /// What the list shows when `rows` is empty.
     #[prop(into)]
     empty: Option<Label>,
@@ -106,15 +100,16 @@ pub struct PresetManager<'a, G: Value, K: Clone + Eq + Hash + Send + Sync + 'sta
     open: Option<Bind<'a, bool>>,
 }
 
-impl<'a, G: Value, K: Clone + Eq + Hash + Send + Sync + 'static> PresetManager<'a, G, K> {
-    /// A manager titled `title` over the preset `kinds`, with `kind` the picked one and `rows` its presets.
-    pub fn new(title: impl Into<Label>, kinds: &'a [Entry<G>], kind: Bind<'a, G>, rows: &'a [PresetRow<K>]) -> Self {
-        PresetManager { title: title.into(), kinds, kind, rows, actions: Vec::new(), can_rename: None, can_delete: None, empty: None, open: None }
+impl<'a, G: Value, K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetManager<'a, G, K> {
+    /// A manager titled `title` over the preset `kinds`, with `kind` the picked one and `source` its presets (whose
+    /// tests say which presets Rename and Delete apply to).
+    pub fn new(title: impl Into<Label>, kinds: &'a [Entry<G>], kind: Bind<'a, G>, source: &'a PresetSource<'a, K>) -> Self {
+        PresetManager { title: title.into(), kinds, kind, source, actions: Vec::new(), empty: None, open: None }
     }
 
     /// Shows the manager.
     pub fn show(self, ui: &mut Ui) -> PresetManagerOutput<G, K> {
-        let PresetManager { title, kinds, mut kind, rows, actions, can_rename, can_delete, empty, open } = self;
+        let PresetManager { title, kinds, mut kind, source, actions, empty, open } = self;
         let env = Env::of(ui);
         let words = env.words::<PresetWords>();
         let empty = empty.unwrap_or_else(|| words.manager_empty.clone());
@@ -149,12 +144,9 @@ impl<'a, G: Value, K: Clone + Eq + Hash + Send + Sync + 'static> PresetManager<'
                 .id_salt(("preset-kind", index))
                 .fill_width()
                 .show(ui, |ui, _| {
-                    PresetBrowser::new(title.clone(), Bind::<PresetState<K>>::kept(), rows)
+                    PresetBrowser::new(title.clone(), Bind::<PresetState<K>>::kept(), source)
                         .view_lock(PresetView::List)
                         .toolbar(false)
-                        .row_menu(true)
-                        .can_rename(|key| can_rename.as_ref().is_none_or(|test| test.passes(key)))
-                        .can_delete(|key| can_delete.as_ref().is_none_or(|test| test.passes(key)))
                         .empty(empty.clone())
                         .max_rows(LIST_ROWS)
                         .footer(PresetFooterOptions::new().can_delete(true))
@@ -177,19 +169,24 @@ impl<'a, G: Value, K: Clone + Eq + Hash + Send + Sync + 'static> PresetManager<'
     }
 }
 
-/// A [`PresetManager`] the [`DialogHost`](crate::dialog::DialogHost) owns. The app reads what the user did with
-/// [`take`](HostedPresetManager::take).
-pub struct HostedPresetManager<G, K> {
+/// A [`PresetManager`] the [`DialogHost`](crate::dialog::DialogHost) owns, over the names of the picked kind's
+/// presets, each keyed by its index. The app reads what the user did with [`take`](HostedPresetManager::take).
+pub struct HostedPresetManager<G> {
     id: DialogId,
     title: Label,
     kinds: Vec<Entry<G>>,
     kind: G,
-    rows: Vec<PresetRow<K>>,
+    names: Vec<String>,
     actions: Vec<(Label, Option<Label>)>,
-    queued: PresetManagerTaken<G, K>,
+    queued: PresetManagerTaken<G, usize>,
 }
 
-impl<G: Value, K: Clone + Eq + Hash + Send + Sync + 'static> HostedPresetManager<G, K> {
+/// One preset row per name, keyed by its index.
+fn name_rows(names: &&Vec<String>, _: &Env) -> Vec<PresetRow<usize>> {
+    names.iter().enumerate().map(|(index, name)| PresetRow::item(index, name.clone(), 0)).collect()
+}
+
+impl<G: Value> HostedPresetManager<G> {
     /// A hosted manager titled `title` over the preset `kinds`, opening on `kind`.
     pub fn new(title: impl Into<Label>, kinds: Vec<Entry<G>>, kind: G) -> Self {
         HostedPresetManager {
@@ -197,15 +194,15 @@ impl<G: Value, K: Clone + Eq + Hash + Send + Sync + 'static> HostedPresetManager
             title: title.into(),
             kinds,
             kind,
-            rows: Vec::new(),
+            names: Vec::new(),
             actions: Vec::new(),
             queued: PresetManagerTaken::default(),
         }
     }
 
-    /// Sets the presets of the picked kind.
-    pub fn rows(&mut self, rows: Vec<PresetRow<K>>) {
-        self.rows = rows;
+    /// Sets the names of the picked kind's presets.
+    pub fn names(&mut self, names: Vec<String>) {
+        self.names = names;
     }
 
     /// Sets the host's footer buttons: a label and a tooltip each. A press is reported by its index in
@@ -220,14 +217,12 @@ impl<G: Value, K: Clone + Eq + Hash + Send + Sync + 'static> HostedPresetManager
     }
 
     /// What the user did since the last call.
-    pub fn take(&mut self) -> PresetManagerTaken<G, K> {
+    pub fn take(&mut self) -> PresetManagerTaken<G, usize> {
         std::mem::take(&mut self.queued)
     }
 }
 
-impl<G: Value + Send + Serialize + DeserializeOwned + 'static, K: Clone + Eq + Hash + Send + Sync + 'static> StackDialog
-    for HostedPresetManager<G, K>
-{
+impl<G: Value + Send + Serialize + DeserializeOwned + 'static> StackDialog for HostedPresetManager<G> {
     type Result = ();
 
     fn id(&self) -> DialogId {
@@ -235,8 +230,9 @@ impl<G: Value + Send + Serialize + DeserializeOwned + 'static, K: Clone + Eq + H
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
-        let HostedPresetManager { title, kinds, kind, rows, actions, queued, .. } = self;
-        let out = PresetManager::new(title.clone(), kinds, Bind::bound(kind), rows).actions(actions.clone()).show(ui);
+        let HostedPresetManager { title, kinds, kind, names, actions, queued, .. } = self;
+        let source = PresetSource::new(&*names, PresetFns::new(name_rows));
+        let out = PresetManager::new(title.clone(), kinds, Bind::bound(kind), &source).actions(actions.clone()).show(ui);
         queued.absorb(out.taken);
         match out.closed? {
             CloseReason::Enter | CloseReason::Activated => Some(DialogResult::Ok(())),
@@ -249,8 +245,7 @@ impl<G: Value + Send + Serialize + DeserializeOwned + 'static, K: Clone + Eq + H
     }
 
     fn json_fields(&self) -> Option<serde_json::Value> {
-        let names: Vec<&str> = self.rows.iter().filter(|row| !row.is_group()).map(|row| row.label.as_str()).collect();
-        Some(serde_json::json!({ "kind": serde_json::to_value(&self.kind).ok()?, "rows": names }))
+        Some(serde_json::json!({ "kind": serde_json::to_value(&self.kind).ok()?, "rows": self.names }))
     }
 
     fn set_json_field(&mut self, _: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {

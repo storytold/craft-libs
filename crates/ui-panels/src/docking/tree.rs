@@ -28,6 +28,7 @@ pub struct FrameRules<'a, P> {
     limits: &'a dyn Fn(&P) -> SizeLimits,
     dock_width: Option<&'a DockWidthFn<'a, P>>,
     stripless: Option<&'a dyn Fn(&P) -> bool>,
+    dock_gap: Option<f32>,
 }
 
 impl<P> Clone for FrameRules<'_, P> {
@@ -42,7 +43,14 @@ impl<'a, P> FrameRules<'a, P> {
     /// Rules with the panels' `limits`. A dock is as wide as its columns' stored widths (the dock column width for
     /// a column without one) until a `dock_width` says otherwise, and every panel has a strip.
     pub fn new(limits: &'a dyn Fn(&P) -> SizeLimits) -> Self {
-        FrameRules { limits, dock_width: None, stripless: None }
+        FrameRules { limits, dock_width: None, stripless: None, dock_gap: None }
+    }
+
+    /// The room between a dock and the node beside it, in place of the dividers' gap (`DockSizes::dock_gap`).
+    #[must_use]
+    pub fn dock_gap(mut self, gap: f32) -> Self {
+        self.dock_gap = Some(gap);
+        self
     }
 
     /// The width of a dock's columns, as dock columns are drawn.
@@ -336,7 +344,7 @@ impl<P> Sizer<'_, '_, P> {
             }
             Node::Split { axis, first, second, .. } => {
                 let (a, b) = (self.bounds(first), self.bounds(second));
-                let gap = sizes.gap;
+                let gap = if *axis == Axis::X && (is_dock(first) || is_dock(second)) { self.rules.dock_gap.unwrap_or(sizes.gap) } else { sizes.gap };
                 let (min, max) = match axis {
                     Axis::X => (vec2(a.min.x + b.min.x + gap, a.min.y.max(b.min.y)), vec2(a.max.x + b.max.x + gap, a.max.y.min(b.max.y))),
                     _ => (vec2(a.min.x.max(b.min.x), a.min.y + b.min.y + gap), vec2(a.max.x.min(b.max.x), a.max.y + b.max.y + gap)),
@@ -357,7 +365,7 @@ impl<P> Sizer<'_, '_, P> {
 
     /// The rects of a dock and of the node beside it in `rect`.
     fn dock_cells(&self, edge: DockEdge, columns: &[Column<P>], other: &Node<P>, rect: Rect) -> (Rect, Rect) {
-        let gap = self.sizes.gap;
+        let gap = self.rules.dock_gap.unwrap_or(self.sizes.gap);
         let room = (rect.width() - gap - self.bounds(other).min.x).clamp(0.0, rect.width());
         let width = self.rules.dock_width_of(columns, self.sizes.column).clamp(0.0, room);
         match edge {

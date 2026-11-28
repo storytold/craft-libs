@@ -2,20 +2,29 @@
 
 use super::{
     Caller, Cancel, Error, FontStore, INDEX_CACHE, Index, IndexError, IndexPin, MAX_INDEX_BYTES, MAX_SETTINGS_BYTES, MAX_SOURCES_BYTES,
-    MAX_USER_SOURCES, Network, PathBuf, SETTINGS, SOURCES_CACHE, Settings, SourceEntry, SourceProblem, SourcesFile, SystemTime, UserSource,
-    VerifyError, io, is_source_url, read_limited, sha256_hex, slug,
+    MAX_USER_SOURCES, Network, PREVIEW_SERVICE_ENV, PathBuf, PreviewServiceSource, SETTINGS, SOURCES_CACHE, Settings, SourceEntry, SourceProblem,
+    SourcesFile, SystemTime, UserSource, VerifyError, check_preview_service, io, is_source_url, read_limited, resolve_preview_source, sha256_hex,
+    slug,
 };
 
 impl FontStore {
     // ----- consent
 
-    /// The user's setting; [`Network::Off`] when it was never set or can't be read.
+    /// The user's saved choice, else the host's default ([`FontStore::with_default_network`]),
+    /// else [`Network::Off`]. A missing `settings.json` is no choice; one that can't be read or
+    /// parsed is [`Network::Off`].
     pub fn network(&self) -> Network {
-        self.settings().network
+        self.settings().network.or(self.default_network).unwrap_or_default()
     }
 
+    /// The saved settings: the defaults without a file, [`Settings::unreadable`] for a file that
+    /// can't be read, is too large or doesn't parse.
     fn settings(&self) -> Settings {
-        read_limited(&self.dir.join(SETTINGS), MAX_SETTINGS_BYTES).and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).unwrap_or_default()
+        let path = self.dir.join(SETTINGS);
+        if std::fs::metadata(&path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+            return Settings::default();
+        }
+        read_limited(&path, MAX_SETTINGS_BYTES).and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).unwrap_or_else(Settings::unreadable)
     }
 
     /// Turns downloading on: call it only from the user's own action (a setting, an Install
@@ -24,12 +33,102 @@ impl FontStore {
         if self.caller != Caller::User {
             return Err(Error::NotAllowed);
         }
-        self.change_settings(|s| s.network = Network::On)
+        self.change_settings(|s| s.network = Some(Network::On))
+    }
+
+    /// The preview service's base URL, or `None` while there is none: [`PREVIEW_SERVICE_ENV`]
+    /// environment variable when set and not empty, else the `preview_service` setting, else the
+    /// host's default ([`FontStore::with_default_preview_service`]); no host default while
+    /// `settings.json` can't be read or parsed. Installs of curated families
+    /// ([`crate::Family::is_curated`]) try its mirror (`<service>/v1/files/<sha256>`,
+    /// `<service>/v1/licences/<sha256>`) before the index's URLs. A value that is not a usable URL
+    /// counts as unset.
+    pub fn preview_service(&self) -> Option<String> {
+        self.preview_service_and_source().0
+    }
+
+    /// Where [`FontStore::preview_service`] gets its value: the environment, the saved setting,
+    /// the host's default, or nowhere. An unusable value counts as unset, as there.
+    pub fn preview_service_source(&self) -> PreviewServiceSource {
+        self.preview_service_and_source().1
+    }
+
+    fn preview_service_and_source(&self) -> (Option<String>, PreviewServiceSource) {
+        #[cfg(test)]
+        let env = self.preview_env.clone().unwrap_or_else(|| std::env::var(PREVIEW_SERVICE_ENV).ok());
+        #[cfg(not(test))]
+        let env = std::env::var(PREVIEW_SERVICE_ENV).ok();
+        let settings = self.settings();
+        let default = if settings.unreadable { None } else { self.default_preview_service.as_deref() };
+        resolve_preview_source(env.as_deref(), settings.preview_service.as_deref(), default)
+    }
+
+    /// Sets (or with `None` clears) the preview service in `settings.json`, from the user's own
+    /// action. Only https URLs are accepted, and http for a loopback host. The environment
+    /// variable still takes precedence; while the setting is clear, the host's default applies.
+    /// Installs and [`FontStore::legal_text`] ask the service only for curated families
+    /// ([`crate::Family::is_curated`]), never with the hashes of files from the user's sources.
+    /// [`Error::NotAllowed`] for an agent, [`Error::BadServiceUrl`] for an unusable URL.
+    pub fn set_preview_service(&self, url: Option<&str>) -> Result<(), Error> {
+        if self.caller != Caller::User {
+            return Err(Error::NotAllowed);
+        }
+        let url = match url {
+            Some(u) => Some(check_preview_service(u)?),
+            None => None,
+        };
+        self.change_settings(|s| s.preview_service = url)
     }
 
     /// Turns downloading off. Anyone may.
     pub fn disable_network(&self) -> Result<(), Error> {
-        self.change_settings(|s| s.network = Network::Off)
+        self.change_settings(|s| s.network = Some(Network::Off))
+    }
+
+    /// Whether the app may fetch font previews from the preview service. On unless the user
+    /// turned it off. It matters only while a service is set; it doesn't affect installs.
+    pub fn previews_enabled(&self) -> bool {
+        self.settings().previews
+    }
+
+    /// Turns previews from the preview service on or off, from the user's own action.
+    /// [`Error::NotAllowed`] for an agent.
+    pub fn set_previews_enabled(&self, enabled: bool) -> Result<(), Error> {
+        if self.caller != Caller::User {
+            return Err(Error::NotAllowed);
+        }
+        self.change_settings(|s| s.previews = enabled)
+    }
+
+    /// Whether the user keeps store fonts in Craft apps only by default. Off by default: the font
+    /// manager then copies each family it installs into the OS user font folder
+    /// ([`FontStore::make_available`]), so other apps can use it, unless the user chose otherwise
+    /// for that family ([`crate::InstalledFamily::available_to_all`]).
+    pub fn craft_apps_only(&self) -> bool {
+        self.settings().craft_apps_only
+    }
+
+    /// Sets [`FontStore::craft_apps_only`], from the user's own action. It only records the choice;
+    /// installed families keep theirs. [`Error::NotAllowed`] for an agent.
+    pub fn set_craft_apps_only(&self, on: bool) -> Result<(), Error> {
+        if self.caller != Caller::User {
+            return Err(Error::NotAllowed);
+        }
+        self.change_settings(|s| s.craft_apps_only = on)
+    }
+
+    /// Records the user's choice for the installed family ([`crate::InstalledFamily::available_to_all`]).
+    /// It only records it: the caller copies or withdraws the family. [`Error::NotAllowed`] for an
+    /// agent, [`Error::NotInstalled`] for a family that isn't installed.
+    pub fn set_available_to_all_choice(&self, source: &str, name: &str, on: bool) -> Result<(), Error> {
+        if self.caller != Caller::User {
+            return Err(Error::NotAllowed);
+        }
+        let _lock = self.lock()?;
+        let mut manifest = self.read_manifest();
+        let entry = manifest.families.iter_mut().find(|f| f.is(source, name)).ok_or_else(|| Error::NotInstalled(name.to_string()))?;
+        entry.available_to_all = Some(on);
+        self.write_manifest(&manifest)
     }
 
     fn change_settings(&self, change: impl FnOnce(&mut Settings)) -> Result<(), Error> {
@@ -140,7 +239,7 @@ impl FontStore {
     pub fn fetch_indexes(&self, pin: &IndexPin, cancel: &Cancel) -> Result<Index, Error> {
         self.require_network()?;
         let check = |bytes: &[u8]| if sha256_hex(bytes) == pin.sha256 { Ok(()) } else { Err(VerifyError::Sha256) };
-        let bytes = self.fetch(&pin.urls(), MAX_SOURCES_BYTES as u64, "sources.json", cancel, &mut |_| {}, &check)?;
+        let bytes = self.fetch(&pin.urls(), 0, MAX_SOURCES_BYTES as u64, "sources.json", cancel, &mut |_| {}, &check)?;
         let sources = SourcesFile::from_json(&bytes)?;
         let cache = self.dir.join(INDEX_CACHE);
         std::fs::create_dir_all(&cache).map_err(io("creating the index folder"))?;
@@ -175,14 +274,14 @@ impl FontStore {
                 Ok(())
             }
         };
-        let bytes = self.fetch(&pin.file_urls(path), size, &entry.name, cancel, &mut |_| {}, &check)?;
+        let bytes = self.fetch(&pin.file_urls(path), 0, size, &entry.name, cancel, &mut |_| {}, &check)?;
         let index = entry.read(&bytes, entry.gz().is_some())?;
         self.write_file(&format!("{INDEX_CACHE}/{}", builtin_cache_name(entry)), &bytes)?;
         Ok(index)
     }
 
     fn fetch_user(&self, user: &UserSource, cancel: &Cancel) -> Result<Index, Error> {
-        let bytes = self.fetch(std::slice::from_ref(&user.url), MAX_INDEX_BYTES as u64, &user.url, cancel, &mut |_| {}, &|_| Ok(()))?;
+        let bytes = self.fetch(std::slice::from_ref(&user.url), 0, MAX_INDEX_BYTES as u64, &user.url, cancel, &mut |_| {}, &|_| Ok(()))?;
         let index = user_index(&bytes, user)?;
         if let Some(name) = self.user_cache(&user.url).file_name().and_then(|n| n.to_str()) {
             self.write_file(&format!("{INDEX_CACHE}/{name}"), &bytes)?;

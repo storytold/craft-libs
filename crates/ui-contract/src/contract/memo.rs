@@ -376,6 +376,8 @@ pub struct MemoKey {
     /// The context of the view that takes the key: framework values whose writes the context counts (kept and saved
     /// bindings) feed that count.
     context: Option<egui::Context>,
+    /// An input the key cannot follow was fed (`changes_every_pass`).
+    every_pass: bool,
 }
 
 impl std::fmt::Debug for MemoKey {
@@ -419,7 +421,18 @@ impl MemoKey {
         if let Some(ctx) = &self.context {
             let pass = ctx.cumulative_pass_nr();
             self.write(&pass.to_le_bytes());
+            self.every_pass = true;
         }
+    }
+
+    /// Whether the key follows every input fed into it: none was fed through `changes_every_pass`.
+    pub(crate) const fn follows(&self) -> bool {
+        !self.every_pass
+    }
+
+    /// Takes the inputs `child` (from `child`) fed that the key cannot follow, once its hash is fed.
+    pub(crate) fn absorb(&mut self, child: &MemoKey) {
+        self.every_pass |= child.every_pass;
     }
 
     /// Feeds `bytes`.
@@ -843,6 +856,16 @@ impl<T: MemoProps> MemoProps for craft_behavior::Mixed<T> {
 }
 
 /// The translator (`Words::generation`): words with the same generation read every word the same.
+/// Every field (`#[non_exhaustive]`, so a field added later is listed here by hand): the selected keys, the lead and
+/// the anchor.
+impl<K: MemoProps> MemoProps for craft_behavior::Selection<K> {
+    fn key(&self, key: &mut MemoKey) {
+        self.items.key(key);
+        self.lead.key(key);
+        self.anchor.key(key);
+    }
+}
+
 impl MemoProps for craft_i18n::Words {
     fn key(&self, key: &mut MemoKey) {
         self.generation().key(key);
@@ -951,6 +974,20 @@ impl MemoProps for craft_theme::Srgba {
     }
 }
 
+impl MemoProps for craft_theme::Rgba {
+    fn key(&self, key: &mut MemoKey) {
+        let craft_theme::Rgba(channels) = *self;
+        channels.key(key);
+    }
+}
+
+/// Derived `Hash` over a unit enum.
+impl MemoProps for craft_theme::TypeRole {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
 /// Derived `Hash` (`#[non_exhaustive]`).
 impl MemoProps for craft_theme::variant::Tone {
     fn key(&self, key: &mut MemoKey) {
@@ -989,6 +1026,27 @@ impl MemoProps for craft_behavior::canvas::CanvasView {
             value.key(key);
         }
         self.flip_x.key(key);
+    }
+}
+
+/// Every field (`#[non_exhaustive]`, so a field added later is listed here by hand): the rungs, the greatest zoom, the
+/// least zoom and the device zoom of 100 %.
+impl MemoProps for craft_behavior::ZoomScheme {
+    fn key(&self, key: &mut MemoKey) {
+        self.rungs.key(key);
+        self.max.key(key);
+        match self.floor {
+            craft_behavior::ZoomFloor::ShorterSide(side) => {
+                key.write_u32(0);
+                side.key(key);
+            }
+            craft_behavior::ZoomFloor::Fixed(zoom) => {
+                key.write_u32(1);
+                zoom.key(key);
+            }
+            other => format!("{other:?}").key(key),
+        }
+        self.hundred.key(key);
     }
 }
 
@@ -1036,6 +1094,13 @@ impl MemoProps for craft_host::target::Os {
 
 /// Derived `Hash` (`#[non_exhaustive]`).
 impl MemoProps for craft_host::target::WindowKind {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash` (the layer's order and id).
+impl MemoProps for crate::runtime::egui::areas::LayerKey {
     fn key(&self, key: &mut MemoKey) {
         key.feed_hash(self);
     }

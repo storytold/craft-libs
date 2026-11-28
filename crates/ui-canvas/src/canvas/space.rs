@@ -11,7 +11,7 @@ use crate::primitives::PaintSlot;
 use crate::runtime::env::{AppValues, EnvValue, EnvView, UnitKind, Units};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{Axis, CanvasView, Intent, MoveMods, NavMove, PartRef, PointerButton, PressPhase, PressState, RulerUnits, Ticks};
+use craft_behavior::{Axis, CanvasView, Intent, MoveMods, NavMove, PartRef, PointerButton, PressPhase, PressState, RulerUnits, Ticks, ZoomScheme};
 use craft_keymap::Mods;
 use egui::{Pos2, Vec2};
 use std::ops::RangeInclusive;
@@ -37,9 +37,12 @@ pub struct CanvasSpace {
     canvas: Option<egui::Id>,
     pasteboard: PasteboardColor,
     precise: bool,
+    zoom_scheme: ZoomScheme,
+    space_held: bool,
     /// The canvas's picture slot for this pass, which [`paint_picture`](Self::paint_picture) appends to; `None` in a
     /// measuring pass.
     picture: Option<PaintSlot>,
+    wheel: Option<craft_behavior::Wheel>,
     zoom_anchor: Option<Pos2>,
 }
 
@@ -60,9 +63,24 @@ impl CanvasSpace {
             canvas: None,
             pasteboard: PasteboardColor::Default,
             precise: false,
+            zoom_scheme: ZoomScheme::PHOTOSHOP,
+            space_held: false,
             picture: None,
+            wheel: None,
             zoom_anchor: None,
         }
+    }
+
+    /// The wheel share the canvas read this pass, for a body that pages by wheel to read once.
+    pub fn wheel(&self) -> Option<craft_behavior::Wheel> {
+        self.wheel
+    }
+
+    /// This space with the wheel share the canvas read this pass.
+    #[must_use]
+    pub fn with_wheel(mut self, wheel: Option<craft_behavior::Wheel>) -> Self {
+        self.wheel = wheel;
+        self
     }
 
     /// This space for a pass in which the app's tool moves the view with the pointer
@@ -105,6 +123,21 @@ impl CanvasSpace {
     /// The one source for the canvas's tool (`ToolContext::precise`) and its controls.
     pub fn precise(&self) -> bool {
         self.precise
+    }
+
+    /// This space with Space held or released for this pass. A `Canvas` supplies the same real and injected key
+    /// state its tool reads; a space built with [`new`](Self::new) starts with Space released.
+    #[must_use]
+    pub fn with_space_held(mut self, held: bool) -> Self {
+        self.space_held = held;
+        self
+    }
+
+    /// Whether Space is held this pass, including an injected held key. A canvas control that owns a drag can
+    /// read it without turning a key press into a repeat or changing who owns the pointer. This does not claim
+    /// the key or start a pan; the canvas's tool host still handles momentary tools.
+    pub fn space_held(&self) -> bool {
+        self.space_held
     }
 
     /// This space with the keys the canvas left to its body in the pass.
@@ -156,6 +189,18 @@ impl CanvasSpace {
         if let Some(slot) = self.picture {
             slot.extend(ctx, shapes);
         }
+    }
+
+    /// The zoom scheme of the root env, published for the body and the tool: the rungs, range and 100 % they zoom by.
+    pub fn zoom_scheme(&self) -> ZoomScheme {
+        self.zoom_scheme
+    }
+
+    /// This space with the root env's zoom `scheme`.
+    #[must_use]
+    pub(crate) fn with_zoom_scheme(mut self, scheme: ZoomScheme) -> Self {
+        self.zoom_scheme = scheme;
+        self
     }
 
     /// This space with the canvas's picture slot of this pass.
@@ -228,9 +273,29 @@ impl CanvasSpace {
         self
     }
 
-    /// The page and arrow keys the canvas left to its body in this pass ([`Canvas::keys_to_body`](super::Canvas)).
+    /// The page keys the canvas left to its body in this pass ([`Canvas::keys_to_body`](super::Canvas)).
     pub fn keys(&self) -> BodyKeys {
         self.keys
+    }
+
+    /// Takes this pass's arrow that nothing in the canvas's body took: the one routed to the focused canvas, or, with
+    /// nothing in the window focused, the window's. A body that pages its document itself
+    /// ([`Canvas::keys_to_body`](super::Canvas)) runs its tool host and controls first, which take the arrows a tool
+    /// or a session claims, and moves its view with what is left in the same pass. `None` when the arrow was taken,
+    /// or there was none; a measuring run reads it without taking it.
+    pub fn take_nudge(&self, ctx: &egui::Context) -> Option<(Vec2, Mods)> {
+        let canvas = self.canvas?;
+        let mut own = crate::runtime::keys::intents_of(ctx, Some(canvas), false);
+        if let Some(nudge) = own.take_nudge() {
+            crate::runtime::keys::settle(ctx, Some(canvas), &own);
+            return Some(nudge);
+        }
+        let mut nudge = None;
+        crate::runtime::keys::with_canvas_window_intents(ctx, false, |window| {
+            nudge = window.take_nudge();
+            nudge.is_some()
+        });
+        nudge
     }
 
     /// Device pixels per document unit (1 is 100 %) of the view at this scale.
@@ -316,15 +381,14 @@ pub struct BackgroundPress {
     pub context_key: bool,
 }
 
-/// The keys a canvas that leaves them to its body took in a pass, one of each kind: a key held down repeats over
-/// passes, not within one.
+/// The page keys a canvas that leaves them to its body took in a pass: a key held down repeats over passes, not
+/// within one. The arrows stay with the body's tool host and controls first; the body takes what they left with
+/// [`CanvasSpace::take_nudge`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct BodyKeys {
     /// Page Up, Page Down, Home or End, with the modifiers held.
     pub page: Option<(NavMove, MoveMods)>,
-    /// An arrow: a unit direction on screen and the modifiers held.
-    pub nudge: Option<(Vec2, Mods)>,
 }
 
 impl BackgroundPress {
@@ -340,12 +404,13 @@ impl BackgroundPress {
 }
 
 /// Where `press` is the release of a secondary press: the one reading of a context press from a part's press. The press
-/// machine captures a secondary press only for a part that senses a drag or a `CONTEXT_CLICK`, so the release is the
-/// request whether or not the pointer moved.
+/// machine gives a secondary press only to a part that senses `CONTEXT_CLICK`, so the release is the request whether
+/// or not the pointer moved. A secondary press made during another open press (a right-click during a drag) comes up
+/// beside that press's phase, as `PressState::context`, and is the request too.
 pub fn context_click(press: &PressState) -> Option<Pos2> {
     match press.phase {
         PressPhase::Release { start, pos, .. } if start.button == PointerButton::Secondary => Some(pos),
-        _ => None,
+        _ => press.context,
     }
 }
 
@@ -413,6 +478,17 @@ pub fn canvas_space(env: &EnvView<'_>) -> Option<CanvasSpace> {
     env.get::<InCanvas>().0
 }
 
+/// Runs `body` with `space` as the canvas space inherited by its controls.
+pub fn with_canvas_space<R>(ui: &mut egui::Ui, space: CanvasSpace, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    crate::runtime::env::with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(InCanvas(Some(space)));
+        },
+        body,
+    )
+}
+
 /// The text of one axis' ruler units: its tick maths with the unit kind it is written in, over `Units` (the one
 /// number formatter of the env).
 #[derive(Clone, Copy, Debug)]
@@ -431,7 +507,7 @@ impl PartialEq for RulerText {
             (Ticks::Custom(a), Ticks::Custom(b)) => std::ptr::fn_addr_eq(a, b),
             _ => false,
         };
-        self.kind == other.kind && self.units.per_doc == other.units.per_doc && same_ticks
+        self.kind == other.kind && self.units.per_doc == other.units.per_doc && same_ticks && self.units.labels == other.units.labels
     }
 }
 
@@ -455,10 +531,9 @@ impl RulerText {
     }
 
     /// The number a ruler prints at the tick `value` (ruler units from the zero point) of labelled step `step`, with
-    /// no unit.
+    /// no unit, as the units' [`TickLabels`](craft_behavior::TickLabels) write it.
     pub fn tick_label(&self, numbers: &Units, value: f64, step: f64) -> String {
-        let digits = self.units.label_decimals(step);
-        numbers.number_ungrouped(self.units.label_value(value, step), digits..=digits)
+        numbers.number_ungrouped(self.units.label_value(value, step), self.units.label_decimals(step))
     }
 
     /// The unit's short name: `px`.

@@ -21,6 +21,16 @@ pub enum Help {
     Status(Tone, Label),
 }
 
+impl Help {
+    /// The help line as a field shows it under its control.
+    pub fn text(&self) -> Text {
+        match self {
+            Help::Text(text) => Text::new(text.clone()).role(TypeRole::Caption).shade(Shade::Muted),
+            Help::Status(tone, text) => Text::new(text.clone()).role(TypeRole::Caption).tone(*tone),
+        }
+    }
+}
+
 /// The style of a field: no look of its own; the label step and the help line carry it.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
 #[non_exhaustive]
@@ -40,8 +50,7 @@ pub struct Field {
     common: Common,
     #[container]
     props: ContainerProps,
-    /// Shows `help` under the control while the control has no validity message.
-    #[prop]
+    /// Shown under the control while the control has no validity message (`Field::help`).
     help: Option<Help>,
     /// The layout `Field::layout` set, which `Field::side` keeps.
     layout: Option<FieldLayout>,
@@ -68,6 +77,16 @@ impl Field {
     pub fn layout(mut self, layout: FieldLayout) -> Self {
         self.layout = Some(layout);
         self.props.label = self.props.label.take().map(|side| side.layout(layout));
+        self
+    }
+
+    /// Shows `help` under the control while the control has no validity message. Its text is the help line of the
+    /// field's label scope (`ContainerProps::help`), so it joins the control's description.
+    #[must_use]
+    pub fn help(mut self, help: Help) -> Self {
+        let (Help::Text(text) | Help::Status(_, text)) = &help;
+        self.props = self.props.help(text.clone());
+        self.help = Some(help);
         self
     }
 
@@ -116,10 +135,8 @@ impl Container for Field {
             Text::new(message.text.clone()).role(TypeRole::Caption).tone(tone).show(ui);
             return;
         }
-        match &self.help {
-            Some(Help::Text(text)) => Text::new(text.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui),
-            Some(Help::Status(tone, text)) => Text::new(text.clone()).role(TypeRole::Caption).tone(*tone).show(ui),
-            None => return,
-        };
+        if let Some(help) = &self.help {
+            help.text().show(ui);
+        }
     }
 }

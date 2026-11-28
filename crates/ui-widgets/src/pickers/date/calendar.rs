@@ -534,6 +534,9 @@ pub struct Calendar {
     /// The day that carries the ring.
     #[prop]
     today: Option<PickedDate>,
+    /// The day the weeks start on; the locale's when not set.
+    #[prop]
+    first_weekday: Option<Weekday>,
     picked: Option<PickedDate>,
     hovered: Option<PickedDate>,
     moved: Option<CalendarView>,
@@ -544,8 +547,28 @@ pub struct Calendar {
 impl Calendar {
     /// The page of `view` named `label`, with the cell of `value` selected.
     pub fn new(label: impl Into<crate::runtime::env::Label>, view: CalendarView, value: Option<PickedDate>) -> Self {
-        Calendar { common: Common::new(), view, value, min: None, max: None, today: None, picked: None, hovered: None, moved: None, lines: [0.0; 3] }
-            .label(label)
+        Calendar {
+            common: Common::new(),
+            view,
+            value,
+            min: None,
+            max: None,
+            today: None,
+            first_weekday: None,
+            picked: None,
+            hovered: None,
+            moved: None,
+            lines: [0.0; 3],
+        }
+        .label(label)
+    }
+
+    /// The scope's dates, with this calendar's first weekday when it sets one.
+    fn dates(&self, env: &EnvView<'_>) -> Arc<DateFormat> {
+        match self.first_weekday {
+            Some(day) => Arc::new((*env.dates()).clone().with_first_weekday(day)),
+            None => env.dates(),
+        }
     }
 
     /// Whether any day of the cell lies within the bounds.
@@ -580,7 +603,7 @@ impl Calendar {
     /// The widest title the page shows at the current type scale: across the months of the page's year on a Day page,
     /// so the header keeps its width while the month changes.
     fn title_width(&self, cx: &MeasureCx<'_, Self>) -> f32 {
-        let dates = cx.env.dates();
+        let dates = self.dates(&cx.env);
         let numbers = Numbers(cx.env.format());
         let width = |title: String| cx.layout(&TextRun::new(title).role(cx.style.title.role)).size().x;
         match self.view.precision {
@@ -714,7 +737,7 @@ impl Component for Calendar {
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         self.measure_lines(cx);
-        let dates = cx.env.dates();
+        let dates = self.dates(&cx.env);
         let numbers = Numbers(cx.env.format());
         let page = Page::of(&self.view, &dates, &numbers, false);
         let geometry = Geometry::of(rect, cx.style, cx.flow.is_rtl(), &self.view, page.columns);
@@ -738,7 +761,7 @@ impl Component for Calendar {
     /// Arrows, Home and End move focus over the cells; a move past the grid, Page Up and Page Down change the page; a
     /// click, Enter or Space on a cell picks it, or on a navigation cell opens it; the buttons and the title page.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        let dates = cx.env.dates();
+        let dates = self.dates(&cx.env);
         let format = cx.env.format();
         let today = self.current_day(&cx.env);
         let page = Page::of(&self.view, &dates, &Numbers(format), false);
@@ -787,7 +810,7 @@ impl Component for Calendar {
 
     /// The grid's size, its cells with their places, and the title's button.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
-        let dates = cx.env.dates();
+        let dates = self.dates(&cx.env);
         let numbers = Numbers(cx.env.format());
         let page = Page::of(&self.view, &dates, &numbers, true);
         access.grid(GridPlace::grid(page.rows(), page.columns));
@@ -809,7 +832,7 @@ impl Component for Calendar {
         let words = cx.words::<PickerWords>();
         ui.face(PREVIOUS, IconButton::new(IconId::new(PREVIOUS_ICON)).label(words.date_previous.clone()));
         ui.face(NEXT, IconButton::new(IconId::new(NEXT_ICON)).label(words.date_next.clone()));
-        let dates: Arc<DateFormat> = cx.env.dates();
+        let dates: Arc<DateFormat> = self.dates(&cx.env);
         let today = self.current_day(&cx.env);
         let numbers = Numbers(cx.env.format());
         let page = Page::of(&self.view, &dates, &numbers, false);
@@ -824,7 +847,7 @@ impl Component for Calendar {
         if let Some(row) = geometry.weekdays {
             let first = dates.first_weekday() as usize;
             for column in 0..DAY_COLUMNS {
-                let name = dates.weekday_name(Weekday::ALL[(first + column) % 7], NameLength::Narrow);
+                let name = dates.weekday_name(Weekday::ALL[(first + column) % 7], NameLength::Short);
                 let x = geometry.column(column);
                 centred(Rect::from_min_max(egui::pos2(x.min.x, row.min.y), egui::pos2(x.max.x, row.max.y)), &name, &style.weekday, self.lines[1]);
             }

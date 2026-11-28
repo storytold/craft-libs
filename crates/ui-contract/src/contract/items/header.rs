@@ -91,18 +91,34 @@ impl DropTarget<ColumnDrag> for ColumnGap {
     }
 }
 
-/// The names the toggle cells of one row gave themselves this pass, by column.
-#[derive(Clone, Default)]
-struct ToggleNames(std::sync::Arc<[(ColumnKey, String, bool)]>);
-
-/// Records the toggle cells of the row `item` with their accessible names (`{row}` filled; empty when the cell gives
-/// none) and whether each shows the mixed state, for the collection's cell nodes of the same pass. A row that has none records an empty list.
+/// One toggle cell of a row as the row records it for the collection's node of that cell.
 #[doc(hidden)]
-pub fn put_toggle_names(ctx: &Context, item: Id, names: Vec<(ColumnKey, String, bool)>) {
+#[derive(Clone, Debug)]
+pub struct RowToggle {
+    /// The cell's column.
+    pub column: ColumnKey,
+    /// The accessible name, `{row}` filled; empty when the cell gives none.
+    pub name: String,
+    /// The cell shows the mixed state.
+    pub mixed: bool,
+    /// The cell is announced as a check box.
+    pub check_box: bool,
+    /// The row's node for the cell, which the collection's node for the cell goes under.
+    pub cell: Id,
+}
+
+/// The toggle cells of one row this pass, by column.
+#[derive(Clone, Default)]
+struct ToggleNames(std::sync::Arc<[RowToggle]>);
+
+/// Records the toggle cells of the row `item`, for the collection's cell nodes of the same pass. A row that has none
+/// records an empty list.
+#[doc(hidden)]
+pub fn put_toggle_names(ctx: &Context, item: Id, names: Vec<RowToggle>) {
     crate::runtime::egui::memory::put(ctx, sub(item, "toggle_names"), ToggleNames(names.into()));
 }
 
-fn recorded_toggle_names(ctx: &Context, item: Id) -> Option<std::sync::Arc<[(ColumnKey, String, bool)]>> {
+fn recorded_toggle_names(ctx: &Context, item: Id) -> Option<std::sync::Arc<[RowToggle]>> {
     crate::runtime::egui::memory::peek_clone::<ToggleNames>(ctx, sub(item, "toggle_names")).map(|ToggleNames(names)| names)
 }
 
@@ -157,8 +173,9 @@ pub(super) struct Header {
     /// The columns whose header cell the collection hosts a component in (`Collection::hosts_header`): they paint no
     /// label and are no sort target.
     hosted: Vec<ColumnKey>,
-    /// The widest cell of each `Content` column among all rows, or its header label when wider, from the items'
-    /// measure of this pass (`content_id`); zero for the other columns and while unknown.
+    /// The widest cell of each `Content` column among all rows, or its header label or its least width
+    /// (`ColumnSpec::min_width`) when wider, from the items' measure of this pass (`content_id`); zero for the other
+    /// columns and while unknown.
     content: Vec<f32>,
     /// The column a double click on its edge fits to its widest cell in view, with its width as shown.
     pub(super) fit: Option<(ColumnKey, f32)>,
@@ -271,8 +288,10 @@ impl Header {
             .specs
             .iter()
             .map(|spec| {
-                let measured = matches!(spec.width, ColumnWidth::Content).then(|| layout_memory::measured(ctx, content_id(id, &spec.key))).flatten();
-                measured.map_or(0.0, |measured| measured.took.x)
+                if !matches!(spec.width, ColumnWidth::Content) {
+                    return 0.0;
+                }
+                layout_memory::measured(ctx, content_id(id, &spec.key)).map_or(0.0, |measured| measured.took.x).max(spec.min_width)
             })
             .collect();
     }
@@ -346,27 +365,26 @@ impl Header {
         self.toggle_columns().filter_map(|(column, toggle)| Some((column, toggle.key?))).collect()
     }
 
-    /// The name of the cell of toggle column `key` in the row `item` and whether it shows the mixed state: the name the
-    /// row's cell gave (`put_toggle_names`), else the column's header text, else its icon's name, resolved in `env`.
-    /// `None` when the row recorded its toggle cells and has none in this column: the collection reports no node there.
-    pub(super) fn cell_name(&self, ctx: &Context, item: Id, key: &ColumnKey, env: &crate::runtime::env::EnvView<'_>) -> Option<(String, bool)> {
+    /// The cell of toggle column `key` in the row `item` as the row recorded it (`put_toggle_names`), else a cell under
+    /// the row's node. Its name is the one the row's cell gave, else the column's header text, else its icon's name,
+    /// resolved in `env`. `None` when the row recorded its toggle cells and has none in this column: the collection
+    /// reports no node there.
+    pub(super) fn toggle_cell(&self, ctx: &Context, item: Id, key: &ColumnKey, env: &crate::runtime::env::EnvView<'_>) -> Option<RowToggle> {
         let recorded = recorded_toggle_names(ctx, item);
-        let (given, mixed) = match &recorded {
-            Some(names) => names.iter().find(|(held, ..)| held == key).map(|(_, name, mixed)| (name.as_str(), *mixed))?,
-            None => ("", false),
+        let mut cell = match &recorded {
+            Some(cells) => cells.iter().find(|cell| cell.column == *key).cloned()?,
+            None => RowToggle { column: key.clone(), name: String::new(), mixed: false, check_box: false, cell: item },
         };
-        if !given.is_empty() {
-            return Some((given.to_owned(), mixed));
+        if !cell.name.is_empty() {
+            return Some(cell);
         }
-        let Some(spec) = self.specs.iter().find(|spec| spec.key == *key) else { return Some((String::new(), mixed)) };
+        let Some(spec) = self.specs.iter().find(|spec| spec.key == *key) else { return Some(cell) };
         let header = env.resolve(&spec.header);
-        Some((
-            match (header.as_str(), &spec.icon) {
-                ("", Some(icon)) => icon.name().to_owned(),
-                (text, _) => text.to_owned(),
-            },
-            mixed,
-        ))
+        cell.name = match (header.as_str(), &spec.icon) {
+            ("", Some(icon)) => icon.name().to_owned(),
+            (text, _) => text.to_owned(),
+        };
+        Some(cell)
     }
 
     /// The key of the column at position `at`.
@@ -603,7 +621,7 @@ impl Header {
                 }
             }
             if cx.part(HEADER.at(hash)).hovered && crate::runtime::pointer::frame_raw(&ctx).release == Some(PointerButton::Secondary) {
-                self.ask_menu(&ctx, Some(key.clone()), ctx.pointer_latest_pos().unwrap_or(rect.left_bottom()));
+                self.ask_menu(&ctx, Some(key.clone()), crate::runtime::pointer::frame_raw(&ctx).pos.unwrap_or(rect.left_bottom()));
             }
             if movable && primary && matches!(phase, PressPhase::DragStart { .. }) {
                 cx.start_drag(ColumnDrag { table: id, key: key.clone() }, DragPreview::None);
@@ -650,7 +668,7 @@ impl Header {
             && cx.part(ROOM).hovered
             && crate::runtime::pointer::frame_raw(&ctx).release == Some(PointerButton::Secondary)
         {
-            self.ask_menu(&ctx, None, ctx.pointer_latest_pos().unwrap_or(room.left_bottom()));
+            self.ask_menu(&ctx, None, crate::runtime::pointer::frame_raw(&ctx).pos.unwrap_or(room.left_bottom()));
         }
         self.column_drop(cx, id, rtl);
         self.keyboard_resize(cx);
@@ -797,7 +815,7 @@ impl Header {
     /// where the `PaintUi` the hosting needs exists.
     pub(super) fn paint<C: Collection>(&self, ui: &mut Ui, cx: &Cx<'_, C>, comp: &mut C, env: &Env, id: Id, rtl: bool) {
         let ctx = ui.ctx().clone();
-        let group = crate::contract::steps::parts_group(id, env.roving.filter(|_| cx.core.roving_member));
+        let group = crate::contract::steps::parts_group(&ctx, id, env.roving.filter(|_| cx.core.roving_member));
         for cell in &self.cells {
             let spec = &self.specs[cell.spec];
             let hosted = self.hosted.contains(&spec.key);

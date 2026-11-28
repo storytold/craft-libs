@@ -84,7 +84,9 @@ impl<'a> TokenBrowser<'a> {
                 let mut picked = None;
                 for event in events {
                     match event {
-                        CollectionEvent::Selection(SelectionChange::Set(keys)) => picked = keys.last().and_then(|row| row.pick(explained)),
+                        CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
+                            picked = keys.last().and_then(|row| row.pick(explained))
+                        }
                         CollectionEvent::Activate(row) => match row.pick(explained) {
                             Some(pick) => picked = Some(pick),
                             None => session.open.set(&row, !rows.is_open(&row)),

@@ -24,6 +24,7 @@ fn with_item_facts<R>(ui: &mut Ui, at: crate::runtime::access::SetPosition, body
         columns: Vec::new(),
         toggles: Vec::new(),
         toggle_keys: Vec::new(),
+        closed_toggles: Vec::new(),
         aligns: Vec::new(),
         pressed: None,
         menu_open: false,
@@ -69,7 +70,7 @@ pub use drag::{SweepApply, SweepStep};
 pub use header::ColumnCommands;
 pub(crate) use header::HeaderFacts;
 #[doc(hidden)]
-pub use header::put_toggle_names;
+pub use header::{RowToggle, put_toggle_names};
 pub use press::item_part_open;
 #[doc(hidden)]
 pub use request::lead_position;
@@ -85,6 +86,7 @@ mod keys;
 mod lead;
 mod measure;
 mod members;
+pub use members::item_node;
 mod output;
 mod press;
 mod rename;
@@ -105,6 +107,10 @@ const SECTION: craft_behavior::PartKey = craft_behavior::PartKey::new("section")
 const EDGE: craft_behavior::PartKey = craft_behavior::PartKey::new("items_edge");
 /// The sub-node of a toggle cell of an item row; the index is the hash of the row's key and the column.
 const TOGGLE_CELL: craft_behavior::PartKey = craft_behavior::PartKey::new("toggle_cell");
+/// The hover-only part over an item row's rect; the index is the hash of the row's key. The parts under the pointer
+/// (`pointer::parts_under`) name the row it is over, under the row's own shapes, so a memoized view around the
+/// collection replays while the pointer moves within one row.
+const ROW: craft_behavior::PartKey = craft_behavior::PartKey::new("items_row");
 /// The part an item row's own access node stands for in the collection: AccessKit requests on the row's node reach
 /// the collection under this part, the index being the hash of the row's key.
 const ITEM_NODE: craft_behavior::PartKey = craft_behavior::PartKey::new("item_node");
@@ -151,13 +157,15 @@ struct Renaming<K> {
     draft: String,
     gesture: GestureId,
     focused: bool,
+    /// The field has held the focus: losing it afterwards ends the rename.
+    held: bool,
     /// The field opened with a draft the collection proposed that differs from the row's text.
     proposed: bool,
 }
 
 impl<K> Default for Renaming<K> {
     fn default() -> Self {
-        Renaming { key: None, draft: String::new(), gesture: GestureId::default(), focused: false, proposed: false }
+        Renaming { key: None, draft: String::new(), gesture: GestureId::default(), focused: false, held: false, proposed: false }
     }
 }
 
@@ -183,8 +191,27 @@ impl<S: Default> Default for Held<S> {
     }
 }
 
+/// The rows the item step walks in a pass: the source the caller gave, or the view `Collection::filtered` made of it,
+/// which the hooks own for the pass.
+enum Source<'s, K> {
+    Given(&'s dyn ItemSource<K>),
+    Filtered(Box<dyn ItemSource<K> + 's>),
+}
+
+impl<'s, K> std::ops::Deref for Source<'s, K> {
+    type Target = dyn ItemSource<K> + 's;
+
+    fn deref(&self) -> &(dyn ItemSource<K> + 's) {
+        match self {
+            Source::Given(given) => *given,
+            Source::Filtered(view) => &**view,
+        }
+    }
+}
+
 pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
-    source: &'s dyn ItemSource<C::Key>,
+    /// The rows of the pass: the read step applies the collection's filter once (`Collection::filtered`).
+    source: Source<'s, C::Key>,
     item: &'s mut ItemFn<'r, C>,
     layout: Option<Arc<C::ItemLayout>>,
     /// The layout's column count this pass, which a row pick's whole-row cells span.
@@ -219,6 +246,8 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     visible: Range<usize>,
     /// The rows built this pass with their rects, for `collection_response`.
     shown: Vec<ShownRow<C::Key>>,
+    /// The row under the pointer this pass, for `collection_response`.
+    hovered: Option<C::Key>,
     offset: f64,
     offset_at_read: f64,
     offset_x: f64,
@@ -249,6 +278,9 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     pressed: Option<(usize, crate::contract::collection::RowPressed)>,
     /// The rows above and below the edge-press band declared this pass.
     edge: Option<(C::Key, C::Key)>,
+    /// The item rows that declare their `ROW` part this pass: the hash of the row's key, the row and its rect in the
+    /// rows' view.
+    row_parts: Vec<(u64, usize, Rect)>,
 }
 
 /// The primary-ness, click count, position in the layout's coordinates and scroll offset of a press on a row.
@@ -271,7 +303,7 @@ struct Placement {
 impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     pub(super) fn new(source: &'s dyn ItemSource<C::Key>, item: &'s mut ItemFn<'r, C>) -> Self {
         ItemsHooks {
-            source,
+            source: Source::Given(source),
             item,
             layout: None,
             columns: 0,
@@ -292,6 +324,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             keyed_activation: None,
             visible: 0..0,
             shown: Vec::new(),
+            hovered: None,
             offset: 0.0,
             offset_at_read: 0.0,
             offset_x: 0.0,
@@ -312,6 +345,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             renaming_at_read: None,
             pressed: None,
             edge: None,
+            row_parts: Vec::new(),
         }
     }
 }

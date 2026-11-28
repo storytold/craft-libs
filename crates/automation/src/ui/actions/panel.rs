@@ -100,13 +100,27 @@ pub struct ActionsPanelState {
     pub selected: Option<ActionSelection>,
     /// The expanded actions, by name (names are unique, so expansion survives moves).
     pub expanded: BTreeSet<String>,
+    /// The sets a shift-click selected, from the current set to the clicked one, in the set order; empty when there is
+    /// no range.
+    pub selected_sets: Vec<String>,
+}
+
+/// Which step cells the rows show.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum StepCells {
+    /// The include cell and the dialog cell.
+    #[default]
+    IncludeAndDialog,
+    /// The include cell only: the dialog column is left out of the cells and the list's columns.
+    Include,
 }
 
 /// A function-key shortcut chosen in the context menu (Photoshop's Action Options).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct ShortcutChoice {
-    /// F1 to F12: 1..=12.
+    /// F1 to F15: 1..=15.
     pub key: u8,
     /// Shift is part of the shortcut.
     pub shift: bool,
@@ -115,7 +129,7 @@ pub struct ShortcutChoice {
 }
 
 impl ShortcutChoice {
-    /// Function key `key` (1 to 12) with the given modifiers.
+    /// Function key `key` (1 to 15) with the given modifiers.
     pub const fn new(key: u8, shift: bool, command: bool) -> Self {
         Self { key, shift, command }
     }
@@ -126,7 +140,7 @@ impl ShortcutChoice {
         self.chord().display(Platform::current())
     }
 
-    /// The shortcut as a keymap chord; a key above 12 is taken as F12.
+    /// The shortcut as a keymap chord; a key outside 1..=15 is taken as F12.
     fn chord(&self) -> Chord {
         let key = match self.key {
             1 => Key::F1,
@@ -140,6 +154,9 @@ impl ShortcutChoice {
             9 => Key::F9,
             10 => Key::F10,
             11 => Key::F11,
+            13 => Key::F13,
+            14 => Key::F14,
+            15 => Key::F15,
             _ => Key::F12,
         };
         Chord::new(Mods { cmd: self.command, shift: self.shift, ..Mods::NONE }, key)
@@ -217,6 +234,8 @@ pub enum ActionsEvent {
     InsertStop,
     /// Batch… with this action (the app's dialog).
     Batch(usize),
+    /// Action Options… from an action's menu: the app's dialog for this action's name, set, function key and colour.
+    ActionOptions(usize),
     /// Load Actions… (the app's file dialog).
     Load,
     /// Clear All Actions: the app asks with [`LibraryPrompt::ClearAll`](super::LibraryPrompt) and
@@ -237,6 +256,8 @@ pub enum ActionsEvent {
     /// Duplicate this row ([`ActionList::duplicate_action`], [`ActionList::duplicate_step`],
     /// [`ActionList::duplicate_set`]): from the menu row or a row dropped on New Action.
     Duplicate(ActionSelection),
+    /// Delete with a range of sets selected: the range, in one event, so the app asks one question.
+    DeleteSets(Vec<String>),
     /// Record Again: replace step `step` of `action` with a new recording
     /// ([`ActionList::replace_step`]).
     #[non_exhaustive]
@@ -359,7 +380,9 @@ impl Default for Session {
 ///   all); a double click on an action's name renames it, elsewhere on an action it plays it. The
 ///   cells sweep down their column as one gesture. A drag moves an action (into or out of a set)
 ///   or a step (within or between actions), or drops it on the footer's Delete. Right-click on an
-///   action opens Keyboard Shortcuts and Color; on a set, Save Set….
+///   action or a set selects it and opens its menu: on an action Play, Record, Duplicate, Delete,
+///   Action Options…, Batch…, Keyboard Shortcuts and Color; on a set New Action…, New Set…,
+///   Duplicate Set, Delete Set, Set Options… and Save Set….
 /// - **Keys**: the rows are one Tab stop: arrows move, Left and Right close and open, Enter plays
 ///   an action or toggles a set, Space toggles the include cell, F2 renames, Delete deletes the
 ///   selection (not an action while recording), Cmd/Ctrl+] and [ move the row, Shift to the ends. The footer
@@ -376,12 +399,13 @@ pub struct ActionsPanel<'a> {
     host: Option<&'a dyn ActionsHost>,
     rename: Option<usize>,
     enabled: bool,
+    step_cells: StepCells,
 }
 
 impl<'a> ActionsPanel<'a> {
     /// A panel over `list` with `state`.
     pub fn new(state: &'a mut ActionsPanelState, list: &'a ActionList) -> Self {
-        Self { state, list, host: None, rename: None, enabled: true }
+        Self { state, list, host: None, rename: None, enabled: true, step_cells: StepCells::default() }
     }
 
     /// The app's side; without one, steps show their command ids and nothing records or plays.
@@ -397,6 +421,12 @@ impl<'a> ActionsPanel<'a> {
         self
     }
 
+    /// Which step cells the rows show.
+    pub fn step_cells(mut self, cells: StepCells) -> Self {
+        self.step_cells = cells;
+        self
+    }
+
     /// Whether the panel takes input (default true).
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
@@ -406,7 +436,7 @@ impl<'a> ActionsPanel<'a> {
     /// Draws the tree (or the buttons) and the footer, and reports this pass's events in order:
     /// the list's, the cells', the context menu's, the footer's.
     pub fn show(self, ui: &mut Ui) -> ActionsPanelOutput {
-        let ActionsPanel { state, list, host, rename, enabled } = self;
+        let ActionsPanel { state, list, host, rename, enabled, step_cells } = self;
         let env = Env::of(ui);
         let words = env.words::<ActionsWords>();
         let list_words = env.words::<ListWords>();
@@ -414,7 +444,7 @@ impl<'a> ActionsPanel<'a> {
         let settings_before = state.settings.clone();
         let events = RefCell::new(Vec::new());
         let state = RefCell::new(state);
-        let body = Body { list, host, words: &words, list_words: &list_words, env: &env, list_id };
+        let body = Body { list, host, words: &words, list_words: &list_words, env: &env, list_id, step_cells };
 
         let shown = Stack::new()
             .fill()
@@ -436,8 +466,10 @@ impl<'a> ActionsPanel<'a> {
         let mut reported = Vec::new();
         if let Some((body_events, selected)) = shown.inner {
             reported = body_events;
-            if let Some(selected) = selected {
-                state.borrow_mut().selected = selected;
+            if let Some((row, sets)) = selected {
+                let mut state = state.borrow_mut();
+                state.selected = row;
+                state.selected_sets = sets;
             }
         }
         reported.extend(events.into_inner());

@@ -103,41 +103,36 @@ pub struct ImeSeen {
 }
 
 /// The files the OS hovers over or drops on a frame's window, by name; a hovered file also has the media type the OS gave.
+/// `read` are pathless files dropped in the frame whose bytes the page reads after it, by name with the bytes the read
+/// gives. `given` are files dropped in the frame by a relative name with their bytes at hand, as a browser hands them over.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OsFiles {
     pub hovered: Vec<(String, String)>,
     pub dropped: Vec<String>,
+    pub read: Vec<(String, Vec<u8>)>,
+    pub given: Vec<(String, Vec<u8>)>,
 }
 
-/// A dropped file that exists only as a path.
-#[derive(Debug)]
-struct DroppedPath(std::path::PathBuf);
-
-impl egui::DroppedFile for DroppedPath {
-    fn path(&self) -> &std::path::Path {
-        &self.0
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn bytes(&self) -> Result<Vec<u8>, String> {
-        std::fs::read(&self.0).map_err(|error| error.to_string())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn bytes_async(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + '_>> {
-        Box::pin(std::future::ready(Err("there is no file system on the web".to_owned())))
-    }
-}
-
-/// The viewport facts a frame reports: a window-focus event also sets the root viewport's focus fact, as a host
-/// reports both, and the fact stays until the next such event. Before any event the focus is unknown.
-fn window_focus_facts(ctx: &Context, events: &[Event], native_pixels_per_point: Option<f32>) -> egui::ViewportIdMap<egui::ViewportInfo> {
+/// The viewport facts a frame reports: the root window's inner rect when the frame is the root's (`inner`), and its
+/// focus: a window-focus event also sets the root viewport's focus fact, as a host reports both, and the fact stays
+/// until the next such event. Before any event the focus is unknown. The root's input
+/// reports the same focus (`RawInput::focused`), a window with focus while it is unknown.
+fn window_facts(
+    ctx: &Context,
+    events: &[Event],
+    native_pixels_per_point: Option<f32>,
+    inner: Option<Rect>,
+) -> egui::ViewportIdMap<egui::ViewportInfo> {
     let last = events.iter().rev().find_map(|event| if let Event::WindowFocused(focused) = event { Some(*focused) } else { None });
     let focused = Service::<WindowFocus>::run(ctx, |state| {
         state.0 = last.or(state.0);
         state.0
     });
-    std::iter::once((egui::ViewportId::ROOT, egui::ViewportInfo { focused, native_pixels_per_point, ..egui::ViewportInfo::default() })).collect()
+    std::iter::once((
+        egui::ViewportId::ROOT,
+        egui::ViewportInfo { focused, native_pixels_per_point, inner_rect: inner, ..egui::ViewportInfo::default() },
+    ))
+    .collect()
 }
 
 /// The focus the fixture's window last reported; unset before any focus event.
@@ -248,9 +243,21 @@ pub(crate) fn run_frame(
 ) -> FrameResult {
     let screen = Rect::from_min_size(Pos2::ZERO, screen);
     let hovered_files = files.hovered.iter().map(|(name, mime)| egui::HoveredFile { path: Some(name.into()), mime: mime.clone() }).collect();
-    let dropped_files = files.dropped.iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
+    let dropped_files = files
+        .dropped
+        .iter()
+        .map(|name| Arc::new(super::files::DroppedPath(name.into())) as egui::DroppedFileHandle)
+        .chain(
+            files.given.into_iter().map(|(name, bytes)| Arc::new(super::files::DroppedBytes { name: name.into(), bytes }) as egui::DroppedFileHandle),
+        )
+        .collect();
+    // The web drop of a pathless file: its reads open in the pass of the drop, and their bytes arrive after it.
+    if !files.read.is_empty() {
+        super::files::open_reads(ctx, viewport, files.read.len());
+    }
     Service::<ImeResets>::run(ctx, |resets| resets.input(viewport, &mut events));
-    let mut viewports = window_focus_facts(ctx, &events, native_pixels_per_point);
+    let mut viewports = window_facts(ctx, &events, native_pixels_per_point, (viewport == egui::ViewportId::ROOT).then_some(screen));
+    let focused = viewport != egui::ViewportId::ROOT || viewports.get(&egui::ViewportId::ROOT).and_then(|info| info.focused).unwrap_or(true);
     let children = open_children(ctx, viewport);
     for child in &children {
         viewports
@@ -260,6 +267,7 @@ pub(crate) fn run_frame(
         screen_rect: Some(screen),
         time: Some(time),
         viewport_id: viewport,
+        focused,
         events,
         hovered_files,
         dropped_files,
@@ -268,6 +276,10 @@ pub(crate) fn run_frame(
     };
     let mut output = drive(|| run_ui(ctx, input, &children, ui));
     Service::<ImeResets>::run(ctx, |resets| resets.output(viewport, &output.platform_output));
+    for (name, bytes) in files.read {
+        let file = crate::runtime::drag::OsFile { name, path: None, mime: String::new(), bytes: Some(bytes.into()) };
+        super::files::post(ctx, viewport, Some(file));
+    }
     let mut flat = Vec::new();
     for clipped in &output.shapes {
         let mut shapes = Vec::new();
@@ -396,7 +408,7 @@ pub(crate) fn click_options(ctx: &Context) -> (f32, f64) {
 /// A fresh context with no plugin and AccessKit on.
 pub(crate) fn bare_context() -> Context {
     let ctx = Context::default();
-    ctx.set_fonts(test_fonts());
+    super::fonts::set_definitions(&ctx, test_fonts());
     ctx.enable_accesskit();
     ctx
 }
@@ -407,7 +419,21 @@ pub(crate) fn bare_context() -> Context {
 /// one build to the next.
 fn test_fonts() -> egui::FontDefinitions {
     static FONTS: std::sync::OnceLock<egui::FontDefinitions> = std::sync::OnceLock::new();
-    FONTS.get_or_init(crate::fonts::deflated_default_definitions).clone()
+    FONTS
+        .get_or_init(|| {
+            let mut definitions = crate::fonts::deflated_default_definitions();
+            // A fixture reads text through the AccessKit tree and the painted bounds, never the atlas pixels, and
+            // hinting changes only how outlines are rasterized (advances and layout do not read it). Without it no
+            // face builds a hinting instance and no glyph runs the hinter. An app's own stack (`UiFonts::install`)
+            // keeps hinting, which the review renders use.
+            for data in definitions.font_data.values_mut() {
+                let mut face = (**data).clone();
+                face.tweak.hinting = Some(false);
+                *data = Arc::new(face);
+            }
+            definitions
+        })
+        .clone()
 }
 
 /// A paragraph of `text` wrapped to the available width.
@@ -491,6 +517,86 @@ pub(crate) fn host_field(ui: &mut Ui, id: egui::Id, text: &mut String) -> Rect {
     ui.add(egui::TextEdit::singleline(text).id(id)).rect
 }
 
+/// A host's own multi-line egui text field of `id` over `text` that locks focus, as a code editor of the app's own:
+/// its egui key filter keeps Tab, which it types.
+#[cfg(feature = "suite")]
+pub(crate) fn host_code_field(ui: &mut Ui, id: egui::Id, text: &mut String) -> Rect {
+    ui.add(egui::TextEdit::multiline(text).id(id).lock_focus(true)).rect
+}
+
+/// A host's own text editor of `id` at `rect`, as a canvas text tool draws it: it reads the IME events from egui's
+/// input into `text` (a commit appends, a deletion before the caret removes characters from its end) and writes the
+/// pass's IME output, context generation 1.
+#[cfg(feature = "suite")]
+pub(crate) fn host_ime_editor(ui: &Ui, id: egui::Id, rect: Rect, text: &mut String) {
+    let _ = ui.interact(rect, id, egui::Sense::click());
+    for event in ui.input(|input| input.events.clone()) {
+        match event {
+            Event::Ime(egui::ImeEvent::Commit(committed)) => text.push_str(&committed),
+            Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars, .. }) => {
+                for _ in 0..before_chars {
+                    text.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    ui.ctx().output_mut(|output| output.ime = Some(egui::output::IMEOutput::new(id, 1, egui::IMEPurpose::Normal, rect, rect)));
+}
+
+/// What [`host_resetting_ime_editor`] holds between passes.
+#[cfg(feature = "suite")]
+#[derive(Default)]
+pub(crate) struct ResettingEditor {
+    pub(crate) text: String,
+    pub(crate) composing: bool,
+    /// The reset the editor asked for last, until its completion arrives; the editor takes no IME event meanwhile.
+    pub(crate) reset: Option<egui::ImeResetId>,
+    /// The editor also writes its request into its IME output's `reset_request`. Otherwise it leaves that field to egui,
+    /// which publishes the request asked through `Context::request_ime_reset`, as EffectCraft's editor does.
+    pub(crate) in_output: bool,
+    /// Ask for a reset at the next pass, as EffectCraft's editor does when its caret moves after an outside press.
+    pub(crate) ask: bool,
+}
+
+/// A host's own text editor of `id` at `rect` that fences its own interrupted composition, as EffectCraft's viewer text
+/// editor does: a primary press on it while it composes ends the composition and asks the platform for a reset, and the
+/// editor ignores IME events until that reset's completion. A press elsewhere asks for nothing. Otherwise as
+/// [`host_ime_editor`].
+#[cfg(feature = "suite")]
+pub(crate) fn host_resetting_ime_editor(ui: &Ui, id: egui::Id, rect: Rect, editor: &mut ResettingEditor) {
+    let _ = ui.interact(rect, id, egui::Sense::click());
+    let pressed = ui.input(|input| input.pointer.primary_pressed() && input.pointer.press_origin().is_some_and(|at| rect.contains(at)));
+    for event in ui.input(|input| input.events.clone()) {
+        match event {
+            Event::ImeResetCompleted { request_id } if editor.reset == Some(request_id) => editor.reset = None,
+            _ if editor.reset.is_some() => {}
+            Event::Ime(egui::ImeEvent::Preedit { text, .. }) => editor.composing = !text.is_empty(),
+            Event::Ime(egui::ImeEvent::Commit(committed)) => {
+                editor.text.push_str(&committed);
+                editor.composing = false;
+            }
+            Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars, .. }) => {
+                for _ in 0..before_chars {
+                    editor.text.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut ime = egui::output::IMEOutput::new(id, 1, egui::IMEPurpose::Normal, rect, rect);
+    let interrupted = editor.composing && pressed;
+    if interrupted || std::mem::take(&mut editor.ask) {
+        editor.composing = false;
+        editor.reset = ui.ctx().request_ime_reset(ui.ctx().viewport_id());
+        ime.should_interrupt_composition = interrupted;
+        if editor.in_output {
+            ime.reset_request = editor.reset;
+        }
+    }
+    ui.ctx().output_mut(|output| output.ime = Some(ime));
+}
+
 /// Gives the host's own egui widget `id` key focus, as the host's code does.
 #[cfg(feature = "suite")]
 pub(crate) fn host_focus(ctx: &Context, id: egui::Id) {
@@ -510,6 +616,18 @@ pub(crate) fn host_button(ui: &Ui, id: egui::Id, rect: Rect) -> bool {
 pub(crate) fn host_drag_area(ui: &Ui, id: egui::Id, rect: Rect) -> (bool, bool) {
     let response = ui.interact(rect, id, egui::Sense::drag());
     (response.dragged(), response.drag_stopped())
+}
+
+/// A host's own clickable egui widget `id` at `rect` in a disabled `Ui`.
+#[cfg(feature = "suite")]
+pub(crate) fn host_disabled_button(ui: &mut Ui, id: egui::Id, rect: Rect) {
+    ui.scope_builder(egui::UiBuilder::new().disabled(), |ui| host_button(ui, id, rect));
+}
+
+/// A host's own egui widget `id` at `rect` that senses drags and takes no focus.
+#[cfg(feature = "suite")]
+pub(crate) fn host_unfocusable_area(ui: &Ui, id: egui::Id, rect: Rect) {
+    ui.interact(rect, id, egui::Sense::DRAG);
 }
 
 /// A host's own selectable egui label of `text`; returns its rect.

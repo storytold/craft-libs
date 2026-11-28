@@ -687,3 +687,46 @@ fn a_menu_opened_in_a_scroll_region_leaves_the_region_where_it_is() {
     assert!(fixture.by_label("Quit").is_some(), "the menu is open");
     assert!((top.get() - start).abs() < SAME, "the region keeps its offset: content top {} from {start}", top.get());
 }
+
+/// A field that takes the focus, above a scrolling row whose view its bottom edge touches and whose end it reaches past:
+/// the row is no scroll owner of the field, so the reveal that follows the focus moves nothing in it. Guards that a
+/// reveal goes to the scroll owner around the component, never to a region beside it (a status bar scrolled to its end
+/// when the document above it took the focus in its first pass).
+#[trial]
+fn a_focus_beside_a_scrolling_row_leaves_the_row_where_it_is() {
+    const ROW_VIEW: Vec2 = Vec2::new(120.0, 30.0);
+    let field = Cell::new((Id::NULL, Rect::NOTHING));
+    let first = Cell::new(Rect::NOTHING);
+    let mut show = |ui: &mut Ui| {
+        // The field starts inside the row's view and runs past its end.
+        let at = Rect::from_min_size(ORIGIN + Vec2::new(ROW_VIEW.x / 2.0, 0.0), Vec2::new(VIEW.x, LINE.y));
+        let bottom = in_region(ui, at, |ui| {
+            let out = TextField::new("Field", Bind::given(String::new())).id_salt("field").show(ui);
+            if !ui.is_sizing_pass() {
+                field.set((widget_id(out.response.id, PartKey::new("text")), out.response.rect));
+            }
+            out.response.rect.bottom()
+        });
+        let row = Rect::from_min_size(Pos2::new(ORIGIN.x, bottom), ROW_VIEW);
+        in_region(ui, row, |ui| {
+            craft_ui::layout_components::Row::new().scroll(Scroll::horizontal()).fill_width().id_salt("row").show(ui, |ui, _| {
+                for at in 0..10 {
+                    let rect = Block::new(Vec2::new(LINE.y * 3.0, LINE.y)).id_salt(("block", at)).show(ui).rect;
+                    if at == 0 && !ui.is_sizing_pass() {
+                        first.set(rect);
+                    }
+                }
+            });
+        });
+    };
+    let mut frames = Frames::new();
+    frames.screen(VIEW + ORIGIN.to_vec2() * 4.0);
+    frames.idle(3, &mut show);
+    let (id, rect) = field.get();
+    let start = first.get();
+    assert!(rect.max.x > start.min.x + ROW_VIEW.x, "the field runs past the row's view: {rect:?}");
+    request(&frames.ctx, FocusTarget::Id(id));
+    frames.idle(3, &mut show);
+    assert_eq!(frames.ctx.memory(|memory| memory.focused()), Some(id), "the field took the focus");
+    assert!((first.get().min.x - start.min.x).abs() < SAME, "the row kept its offset: {:?} then {start:?}", first.get());
+}

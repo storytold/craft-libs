@@ -6,7 +6,7 @@ use craft_ui::dialog::Dialog;
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::WindowKey;
 use craft_ui::sections::{DialogRole, FooterButton};
-use craft_ui::shell::AppShell;
+use craft_ui::shell::{AppShell, Slot, SlotSize};
 use craft_ui::testing::contract::clicked;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Rect, Ui};
@@ -87,16 +87,28 @@ fn a_dialog_in_an_embedded_region_is_placed_in_it_and_blocks_only_it() {
 }
 
 /// An embedded shell scrolled out of sight with its dialog open shows nothing and does not fail: its region has no
-/// room, so neither its body nor its dialog runs in that pass.
+/// room, so neither its body, its dialog nor a slot sized by its content runs in that pass.
 #[trial]
 fn an_embedded_shell_out_of_sight_shows_nothing() {
-    let mut fixture = Fixture::new(|ui| {
+    let real = Rc::new(Cell::new(0_u32));
+    let count = Rc::clone(&real);
+    let mut fixture = Fixture::new(move |ui| {
         Stack::new().fill().scroll(Scroll::vertical()).show(ui, |ui, _| {
             let _ = Button::new("Top").show(ui);
             let view = ui.clip_rect();
             let below = Rect::from_min_size(egui::pos2(view.min.x, view.max.y + view.height()), egui::vec2(view.width(), view.height()));
             let mut open = true;
             AppShell::embedded(WindowKey::new("out-of-sight"))
+                .top(
+                    Slot::new("ribbon").size(SlotSize::Content),
+                    |_| None,
+                    |ui, _, _: &mut ()| {
+                        if !ui.is_sizing_pass() {
+                            count.set(count.get() + 1);
+                        }
+                        let _ = Button::new("Slot").show(ui);
+                    },
+                )
                 .body(|ui, _, _| {
                     let _ = Button::new("Hidden").show(ui);
                     Dialog::new("Out of sight").opened(Bind::bound(&mut open)).show(ui, |_, _| {});
@@ -108,4 +120,5 @@ fn an_embedded_shell_out_of_sight_shows_nothing() {
     assert!(fixture.by_label("Top").is_some(), "the visible part is shown");
     assert!(fixture.by_role(Role::DIALOG).is_empty(), "the dialog of a shell out of sight is not shown");
     assert!(fixture.by_label("Hidden").is_none(), "the body of a shell out of sight does not run");
+    assert!(fixture.by_label("Slot").is_none() && real.get() == 0, "the content slot of a shell out of sight does not run");
 }

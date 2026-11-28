@@ -2,3 +2,4 @@
 
 mod dumps;
 mod selection;
+mod strong_hover;

@@ -44,7 +44,7 @@ impl FontStore {
         let bytes = match source {
             IndexSource::Pinned(pin) => {
                 let check = |b: &[u8]| if sha256_hex(b) == pin.sha256 { Ok(()) } else { Err(VerifyError::Sha256) };
-                self.fetch(&[pin.url.to_string()], MAX_PACK_INDEX_BYTES, "the Language pack index", cancel, &mut |_| {}, &check)?
+                self.fetch(&[pin.url.to_string()], 0, MAX_PACK_INDEX_BYTES, "the Language pack index", cancel, &mut |_| {}, &check)?
             }
             IndexSource::Override(at) => self.get_local(at, MAX_PACK_INDEX_BYTES, "the Language pack index", cancel, &mut |_| {}, &|_| Ok(()))?,
         };
@@ -65,7 +65,7 @@ impl FontStore {
         check: &dyn Fn(&[u8]) -> Result<(), VerifyError>,
     ) -> Result<Vec<u8>, Error> {
         let bytes = match local_source(at) {
-            Some(Ok(url)) if url.starts_with("https://") => return self.fetch(&[url.to_string()], max, what, cancel, on_bytes, check),
+            Some(Ok(url)) if url.starts_with("https://") => return self.fetch(&[url.to_string()], 0, max, what, cancel, on_bytes, check),
             Some(Ok(url)) => Client::allowing_http(Timeouts::default())
                 .get(url, max, cancel, on_bytes)
                 .map_err(|e| Error::Download { what: what.to_string(), reasons: vec![e.to_string()] })?,
@@ -129,7 +129,7 @@ impl FontStore {
         let bytes = if local {
             self.get_local(&pack.url, size, &what, cancel, &mut on_bytes, &check)?
         } else if pack.url.starts_with("https://") {
-            self.fetch(std::slice::from_ref(&pack.url), size, &what, cancel, &mut on_bytes, &check)?
+            self.fetch(std::slice::from_ref(&pack.url), 0, size, &what, cancel, &mut on_bytes, &check)?
         } else {
             return Err(Error::BadUrl(pack.url.chars().take(200).collect()));
         };

@@ -107,6 +107,12 @@ fn skip_sub_blocks(b: &[u8], mut at: usize) -> Option<usize> {
 /// `None` when `bytes` is not a GIF or ends inside its Logical Screen Descriptor. A file that
 /// breaks off later gives what was read, with [`Info::complete`] false.
 pub fn scan(bytes: &[u8], max_frames: usize) -> Option<Info> {
+    scan_with_text_controls(bytes, max_frames, |_| {})
+}
+
+// Report the control payloads that the image decoder would carry past a text block
+// to an image without a control of its own.
+fn scan_with_text_controls(bytes: &[u8], max_frames: usize, mut text_control: impl FnMut(usize)) -> Option<Info> {
     let b = bytes;
     if !sniff(b) {
         return None;
@@ -116,8 +122,10 @@ pub fn scan(bytes: &[u8], max_frames: usize) -> Option<Info> {
     b.get(12)?;
     let mut info = Info { width, height, global_table: packed & 0x80 != 0, frames: Vec::new(), complete: false, loop_count: None };
     let mut at = 13 + table_len(packed);
-    // What the last Graphic Control Extension said, for the next image.
+    // What the last Graphic Control Extension said, for the next rendering block.
     let (mut delay_cs, mut transparent, mut disposal) = (0u16, None, 0u8);
+    let mut control_offset = None;
+    let mut text_control_offset = None;
     // Each step either finishes the walk or moves `at` forward, so this ends with the file.
     let mut step = || -> Option<bool> {
         match *b.get(at)? {
@@ -132,6 +140,8 @@ pub fn scan(bytes: &[u8], max_frames: usize) -> Option<Info> {
                     delay_cs = u16_at(b, body + 2)?;
                     transparent = (flags & 0x01 != 0).then_some(*b.get(body + 4)?);
                     disposal = (flags >> 2) & 7;
+                    control_offset = Some(body + 1);
+                    text_control_offset = None;
                 }
                 // Application Extension NETSCAPE2.0 (or ANIMEXTS1.0): sub-block 3, 1, loop count.
                 if label == 0xFF
@@ -141,6 +151,13 @@ pub fn scan(bytes: &[u8], max_frames: usize) -> Option<Info> {
                     info.loop_count = u16_at(b, body + 14);
                 }
                 at = skip_sub_blocks(b, body)?;
+                // GIF89a §12: a Plain Text Extension consumes the pending graphic control.
+                if label == 0x01 {
+                    (delay_cs, transparent, disposal) = (0, None, 0);
+                    if let Some(offset) = control_offset.take() {
+                        text_control_offset = Some(offset);
+                    }
+                }
                 Some(true)
             }
             // Image Descriptor: separator, left, top, width, height, packed fields, then the
@@ -162,6 +179,10 @@ pub fn scan(bytes: &[u8], max_frames: usize) -> Option<Info> {
                     local_table: packed & 0x80 != 0,
                 });
                 (delay_cs, transparent, disposal) = (0, None, 0);
+                control_offset = None;
+                if let Some(offset) = text_control_offset.take() {
+                    text_control(offset);
+                }
                 at = skip_sub_blocks(b, (at + 10).checked_add(table_len(packed))?.checked_add(1)?)?;
                 Some(true)
             }

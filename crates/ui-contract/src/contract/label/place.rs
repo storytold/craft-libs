@@ -1,7 +1,7 @@
 //! Where the label and its control sit: the beside, above and after placements and the gap.
 
 use super::leaf::{LabelLeaf, colon};
-use super::props::{FieldLayout, LabelKind, LabelScheme};
+use super::props::{CaptionColumn, FieldLayout, LabelKind, LabelScheme};
 use super::step::LabelIn;
 use crate::contract::Show;
 use crate::runtime::access::scope::{self};
@@ -59,6 +59,7 @@ pub(super) fn hidden_control(ctx: &egui::Context, input: &LabelIn<'_>, flow: Flo
     }
     match crate::layout::ambient_width(ctx, &crate::layout::LABELS, 0.0).filter(|column| *column > 0.0) {
         Some(column) if input.room >= column + gap + input.control_min => {
+            crate::layout::note_beside(ctx, &crate::layout::LABELS, input.room - gap - input.control_min);
             let (_, rest) = flow.take_start(column);
             rest.take_start(gap).1.rect()
         }
@@ -66,17 +67,22 @@ pub(super) fn hidden_control(ctx: &egui::Context, input: &LabelIn<'_>, flow: Flo
     }
 }
 
-/// How far a control with its label after it (a check box row: a labelled check box, or a field whose label follows
-/// its control) starts from its row's start. Under a form whose labelled rows share a label column, a row of the
-/// column's flow starts past the column and the gap, so its control lines up with theirs, when the row has room for
-/// the column, the gap and the control; 0 elsewhere. An inspector's check rows stay at the row's start.
-fn after_indent(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, gap: f32) -> f32 {
+/// The label column a control with its label after it (a check box row: a labelled check box, or a field whose label
+/// follows its control) starts past. Under a form whose labelled rows share a label column, a row of the column's flow
+/// starts past the column and the gap, so its control lines up with theirs, when the row has room for the column, the
+/// gap and the control: that column, or 0 while the form has none. `None` where the row stays at its start whatever
+/// the column: an inspector's check rows, a row outside the column's flow, and a row too narrow for the column.
+fn after_column(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, gap: f32) -> Option<f32> {
     if input.side.layout != FieldLayout::After || !input.in_column || env.values.get::<LabelScheme>() != LabelScheme::Form {
-        return 0.0;
+        return None;
     }
     match crate::layout::ambient_width(ctx, &crate::layout::LABELS, 0.0).filter(|column| *column > 0.0) {
-        Some(column) if input.room >= column + gap + input.control_min => column + gap,
-        _ => 0.0,
+        Some(column) if input.room >= column + gap + input.control_min => {
+            crate::layout::note_beside(ctx, &crate::layout::LABELS, input.room - gap - input.control_min);
+            Some(column)
+        }
+        Some(_) => None,
+        None => Some(0.0),
     }
 }
 
@@ -85,29 +91,47 @@ fn after_indent(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, gap: f32) -
 pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: &Ui, leaf: &mut LabelLeaf, glyph: bool, flow: Flow) -> Placed {
     let rtl = env.direction.is_rtl();
     let gap = label_gap(env);
-    let indent = after_indent(ctx, env, input, gap);
+    let after_column = after_column(ctx, env, input, gap);
+    let indent = after_column.filter(|column| *column > 0.0).map_or(0.0, |column| column + gap);
     let mut natural = leaf.measure_in(kids, craft_behavior::Proposal::Ideal);
-    if input.side.layout == FieldLayout::After {
+    if input.side.layout == FieldLayout::After && !input.egui_cell {
         // The label takes the room the control and the gap leave, and its detail wraps there.
         let room = (input.row.width() - indent - input.control_min - gap).max(0.0);
-        if natural.x > room {
+        let wraps = natural.x > room;
+        // A wider label column leaves the label less room: the row's measure holds while the group's column stays
+        // within the column it read, or for a label on one line, within the widest column that keeps it there.
+        if let Some(column) = after_column {
+            let one_line = input.row.width() - input.control_min - gap - natural.x - gap;
+            crate::layout::note_beside(ctx, &crate::layout::LABELS, if wraps { column } else { one_line });
+        }
+        if wraps {
             natural = leaf.measure_in(kids, craft_behavior::Proposal::Width(room));
         }
     }
     let baseline = leaf.baseline.get();
+    // An egui grid's cell is decided at what it needs from its left edge in any direction (`LabelIn::egui_cell`); a
+    // row grows at its end edge.
+    let grows = if input.egui_cell { Grows::Cell } else { Grows::End };
     if input.side.layout == FieldLayout::Line {
-        let (cell, rest) = flow.take_end(env.control(input.size).number);
+        let number = env.control(input.size).number;
+        let flow = if input.egui_cell { widened(flow, natural.x + gap + number, grows) } else { flow };
+        let (cell, rest) = flow.take_end(number);
         let width = natural.x.min((rest.rect().width() - gap).max(0.0));
         let drop = (cell.height() - natural.y).max(0.0) / 2.0;
         let label = Flow::new(rest.rect(), rtl).align(Vec2::new(width, natural.y), Align::Min, Align::Min).translate(Vec2::new(0.0, drop));
         return Placed { label, control: cell, trailing: Rect::NOTHING, caption: 0.0 };
     }
+    let key = if glyph { crate::layout::GLYPHS } else { crate::layout::LABELS };
+    let mut read = false;
     let (column, stack_below) = match input.side.layout {
         FieldLayout::Beside => {
             let own = natural.x;
-            let width = crate::layout::ambient_width(ctx, &if glyph { crate::layout::GLYPHS } else { crate::layout::LABELS }, own)
-                .filter(|width| *width > 0.0)
-                .unwrap_or(own);
+            // An inline form shares no label column unless it asks for one ([`CaptionColumn`]): each caption is as wide
+            // as its own text.
+            let shared = env.values.get::<LabelScheme>() != LabelScheme::Inline || env.values.get::<CaptionColumn>().shared();
+            let width = crate::layout::ambient_width(ctx, &key, own).filter(|width| shared && *width > 0.0);
+            read = width.is_some();
+            let width = width.unwrap_or(own);
             (width, width + gap + input.control_min)
         }
         FieldLayout::Above => (natural.x, f32::INFINITY),
@@ -124,20 +148,23 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
     let caption = if matches!(input.side.layout, FieldLayout::Above | FieldLayout::Caption(_)) { column } else { 0.0 };
     // The room decides; a beside label gets the width it needs even where last frame's content was narrower. A label
     // that never sits beside stacks in an unbounded room as well.
-    let stacks = (input.room < stack_below || stack_below == f32::INFINITY) && !(input.content_row && input.side.layout == FieldLayout::Beside);
-    // A stacked label has the row's width at most; its name elides there.
-    let column = if stacks { column.min(input.row.width()) } else { column };
-    let flow = if stacks || input.row.width() >= stack_below {
-        flow
-    } else {
-        let mut wide = input.row;
-        if rtl {
-            wide.min.x = wide.max.x - stack_below;
-        } else {
-            wide.max.x = wide.min.x + stack_below;
-        }
-        Flow::new(wide, rtl)
+    let pinned = (input.content_row || input.egui_cell) && input.side.layout == FieldLayout::Beside;
+    let stacks = (input.room < stack_below || stack_below == f32::INFINITY) && !pinned;
+    // A label that sits beside the group's column measured so far stacks once the column passes this.
+    if read && !stacks && !pinned {
+        crate::layout::note_beside(ctx, &key, input.room - gap - input.control_min);
+    }
+    // A stacked label has the row's width at most, where its name elides; in an egui grid's cell it keeps its own.
+    let column = if stacks && !input.egui_cell { column.min(input.row.width()) } else { column };
+    // A beside label that does not stack takes its column, the gap and the control's least, past the row's end where
+    // the row is narrower. An egui grid's cell is as wide as its label and control need, whatever the layout.
+    let need = match input.side.layout {
+        FieldLayout::After if input.egui_cell => indent + input.control_min + gap + natural.x,
+        _ if input.egui_cell && stacks => column.max(input.control_min),
+        _ if stacks => 0.0,
+        _ => stack_below,
     };
+    let flow = widened(flow, need, grows);
 
     if input.side.layout == FieldLayout::After {
         let flow = if indent > 0.0 { flow.take_start(indent).1 } else { flow };
@@ -160,6 +187,29 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
         }
         Placed { label, control: placed.control, trailing: Rect::NOTHING, caption }
     }
+}
+
+/// How a flow takes the width its label and control need (`widened`).
+#[derive(Clone, Copy)]
+enum Grows {
+    /// A flow that is too narrow grows at its end edge: the left one under RTL.
+    End,
+    /// An egui grid's cell: exactly as wide as they need from its left edge, in either direction, narrowed as well as
+    /// widened. egui offers a grid's last column the rest of the room, where the control would sit at its far edge
+    /// under RTL.
+    Cell,
+}
+
+/// `flow` widened to `need` as `grows` says.
+fn widened(flow: Flow, need: f32, grows: Grows) -> Flow {
+    let mut wide = flow.rect();
+    match grows {
+        Grows::Cell => wide.max.x = wide.min.x + need,
+        Grows::End if wide.width() >= need => return flow,
+        Grows::End if flow.is_rtl() => wide.min.x = wide.max.x - need,
+        Grows::End => wide.max.x = wide.min.x + need,
+    }
+    Flow::new(wide, flow.is_rtl())
 }
 
 /// The gap between a label and its control: `space.gap.inline`, `space.gap.item` inside a bar.

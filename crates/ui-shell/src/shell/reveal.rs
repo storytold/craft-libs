@@ -23,6 +23,9 @@ pub(crate) struct Reveal {
     tab: bool,
     edges: [bool; 3],
     shown: Vec<(RevealEdge, Rect)>,
+    /// The edge a reveal request pinned, with the pointer the pinning pass saw: the pin holds while the pointer stays
+    /// the same.
+    pinned: Option<(RevealEdge, Option<Option<Pos2>>)>,
 }
 
 /// What the reveal depends on in this pass.
@@ -87,6 +90,7 @@ impl Reveal {
             ChromeToggle::Panels if host_only => {
                 if allow_reveal {
                     self.tab = !self.tab;
+                    self.pinned = None;
                     if self.tab {
                         self.edges = [false; 3];
                     }
@@ -98,6 +102,22 @@ impl Reveal {
                 self.end_reveal();
             }
             ChromeToggle::PanelsKeepTools if !host_only && !self.hidden => self.panels_hidden = !self.panels_hidden,
+            ChromeToggle::ShowPanels => {
+                if self.hidden || self.panels_hidden {
+                    self.hidden = false;
+                    self.panels_hidden = false;
+                    self.end_reveal();
+                }
+            }
+            ChromeToggle::Reveal(Some(edge)) if allow_reveal && !self.tab && (self.only(host_only) || self.panels_hidden()) => {
+                self.edges = [false; 3];
+                self.edges[at(edge)] = true;
+                self.pinned = Some((edge, None));
+            }
+            ChromeToggle::Reveal(None) => {
+                self.edges = [false; 3];
+                self.pinned = None;
+            }
             _ => {}
         }
     }
@@ -112,6 +132,7 @@ impl Reveal {
     fn end_reveal(&mut self) {
         self.tab = false;
         self.edges = [false; 3];
+        self.pinned = None;
     }
 
     /// Whether the window shows the body only: the screen mode says so or the user hid the chrome.
@@ -129,27 +150,60 @@ impl Reveal {
         self.tab
     }
 
+    /// Whether the user hid every panel, tool and bar.
+    pub(crate) fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    /// The edge whose reveal is on, when one is.
+    pub(crate) fn revealed_edge(&self) -> Option<RevealEdge> {
+        EDGES.into_iter().find(|edge| self.edges[at(*edge)])
+    }
+
     /// Whether the edge reveal of `edge` is on.
     pub(crate) fn edge(&self, edge: RevealEdge) -> bool {
         self.edges[at(edge)]
     }
 
-    /// Updates the reveal at the start of a pass. A held button or an open popup freezes the edge reveal: it neither
-    /// starts nor ends.
+    /// Updates the reveal at the start of a pass. A held button or an open popup freezes the edge reveal and a pinned
+    /// edge: they neither start nor end. Hidden panels reveal from the start and end strips as body-only mode does; the
+    /// top strip is body-only mode's alone.
     pub(crate) fn track(&mut self, mode: Tracking, aim: Aim) {
-        if !mode.only || !mode.allow_reveal {
+        if !mode.allow_reveal || !(mode.only || self.panels_hidden()) {
             self.end_reveal();
             return;
         }
-        if self.tab || !mode.edge_reveal {
+        if self.tab || (!mode.edge_reveal && self.pinned.is_none()) {
             self.edges = [false; 3];
             return;
         }
         if aim.frozen {
             return;
         }
+        // The pin holds while the pointer is where the pinning pass saw it (a request carries no pointer, so the first
+        // pass records it); a move or a leave hands the edge back to the strips.
+        if let Some((edge, seen)) = self.pinned {
+            match seen {
+                None => self.pinned = Some((edge, Some(aim.pointer))),
+                Some(held) if held != aim.pointer => self.pinned = None,
+                Some(_) => {}
+            }
+        }
+        if let Some((edge, _)) = self.pinned {
+            self.edges = [false; 3];
+            self.edges[at(edge)] = true;
+            return;
+        }
+        if !mode.edge_reveal {
+            self.edges = [false; 3];
+            return;
+        }
         let pointer = aim.pointer.filter(|point| aim.window.contains(*point));
         for edge in EDGES {
+            if !mode.only && edge == RevealEdge::Top {
+                self.edges[at(edge)] = false;
+                continue;
+            }
             let in_zone = pointer.is_some_and(|point| strip(aim.window, edge, aim.rtl).contains(point));
             let over_slot =
                 self.edges[at(edge)] && pointer.is_some_and(|point| self.shown.iter().any(|(shown, rect)| *shown == edge && rect.contains(point)));

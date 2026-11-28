@@ -1,5 +1,7 @@
 //! Building `TextEdit` and its state: the one caller of egui's text editing.
 
+use crate::primitives::{COLORED_TEXT_LIMIT, ColorRange, ColorRanges, RangeInk};
+use crate::runtime::env::Env;
 use craft_theme::TypeRole;
 use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat};
 use egui::text_edit::TextEditState;
@@ -23,6 +25,7 @@ pub(crate) struct Edit<'a> {
     pub multiline: bool,
     pub password: bool,
     pub hint: Option<&'a str>,
+    pub muted_hint: bool,
     pub mono: bool,
     pub role: TypeRole,
     pub ink: Color32,
@@ -33,6 +36,8 @@ pub(crate) struct Edit<'a> {
     pub rtl: bool,
     /// The text sits in the middle of the rect.
     pub centred: bool,
+    /// The text sits at the end edge of the rect (unless `centred`).
+    pub end_aligned: bool,
     /// Whether the caret is drawn in this pass.
     pub caret_visible: bool,
     /// The width of the preedit underline.
@@ -46,6 +51,12 @@ pub(crate) struct Edit<'a> {
     /// How far a multi-line text taller than `rect` is scrolled up inside it, in points; the text part owns the offset
     /// (`text_adapter`), and a single line or a laid-out galley ignores it.
     pub scroll: f32,
+    /// The modifiers of the Enter chord that breaks the line of a multi-line text. egui inserts the line break itself
+    /// before the adapter sees the Enter, so the adapter passes the chord its submit key leaves free: Shift under a plain
+    /// Enter submit, none under Cmd or Ctrl+Enter.
+    pub line_break: egui::Modifiers,
+    /// The app's colour ranges of the text (`TextOptions::color_ranges`).
+    pub colors: Option<&'a ColorRanges>,
 }
 
 /// What the widget did in one pass.
@@ -65,8 +76,8 @@ pub(crate) struct Shown {
     pub content: f32,
 }
 
-/// Runs the widget at `edit.rect`.
-pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
+/// Runs the widget at `edit.rect`, under `env`, the env of the `Ui` the caller shows the field in.
+pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) -> Shown {
     let Edit {
         id,
         rect,
@@ -78,6 +89,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         multiline,
         password,
         hint,
+        muted_hint,
         mono,
         role,
         ink,
@@ -86,14 +98,16 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         preedit,
         rtl,
         centred,
+        end_aligned,
         caret_visible,
         underline,
         galley,
         baseline,
         scroll,
+        line_break,
+        colors,
     } = edit;
     // The same font and optical size as a label of the same role: one text path.
-    let env = crate::runtime::env::Env::of(ui);
     let tokens = &env.tokens;
     // Behind selected text and the selected text itself: the field's roles.
     let selection = (tokens.color.accent.soft, tokens.color.text.normal);
@@ -102,6 +116,10 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
     let optical_size = tokens.optical_size(facts, role, mono);
     let had_focus = ui.memory(|memory| memory.has_focus(id));
     let entered = had_focus && ui.input(|input| input.key_pressed(egui::Key::Enter));
+    // A masked text shows dots and a disabled one the disabled colour: neither is coloured.
+    let colors = colors.filter(|_| !password && enabled);
+    let inks = colors.map(|_| RANGE_INKS.map(|range_ink| (range_ink, ink_of(env, range_ink))));
+    let ink_of_range = |range_ink: RangeInk| inks.iter().flatten().find(|(of, _)| *of == range_ink).map_or(ink, |(_, color)| *color);
     let mut layouter = |ui: &Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
         if let Some(galley) = &galley {
             return galley.clone();
@@ -121,17 +139,23 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         if let Some(size) = optical_size {
             plain.coords.push(*b"opsz", size);
         }
-        match preedit
-            .as_ref()
+        let preedit = preedit
+            .clone()
             .filter(|_| !password)
-            .filter(|range| range.end <= text.len() && text.is_char_boundary(range.start) && text.is_char_boundary(range.end))
-        {
-            Some(range) => {
-                job.append(&text[..range.start], 0.0, plain.clone());
-                job.append(&text[range.clone()], 0.0, TextFormat { underline: egui::Stroke::new(underline, ink), ..plain.clone() });
-                job.append(&text[range.end..], 0.0, plain);
+            .filter(|range| range.end <= text.len() && text.is_char_boundary(range.start) && text.is_char_boundary(range.end));
+        if let Some(colors) = colors.filter(|_| !text.is_empty() && text.len() <= COLORED_TEXT_LIMIT) {
+            for (run, color) in color_runs(text, &colors(text), ink, &ink_of_range) {
+                append_run(&mut job, text, run, &TextFormat { color, ..plain.clone() }, preedit.as_ref(), underline);
             }
-            None => job.append(text, 0.0, plain),
+        } else {
+            match preedit {
+                Some(range) => {
+                    job.append(&text[..range.start], 0.0, plain.clone());
+                    job.append(&text[range.clone()], 0.0, TextFormat { underline: egui::Stroke::new(underline, ink), ..plain.clone() });
+                    job.append(&text[range.end..], 0.0, plain);
+                }
+                None => job.append(text, 0.0, plain),
+            }
         }
         #[cfg(feature = "testing")]
         crate::runtime::measure::count_text_layout(ui.ctx());
@@ -176,9 +200,15 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         if !enabled && !focusable {
             super::style::disable_without_fade(ui);
         }
-        // The placeholder is the faint text colour, the disabled one when the field is off.
-        let text_colors = &crate::runtime::env::Env::of(ui).tokens.color.text;
-        super::style::set_hint_color(ui, crate::style::rgba_color(if enabled { text_colors.faint } else { text_colors.disabled }));
+        // The placeholder is the faint text colour, or the muted one on a fill the faint one does not read on, and the
+        // disabled one when the field is off.
+        let text_colors = &tokens.color.text;
+        let hint_color = match (enabled, muted_hint) {
+            (false, _) => text_colors.disabled,
+            (true, true) => text_colors.muted,
+            (true, false) => text_colors.faint,
+        };
+        super::style::set_hint_color(ui, crate::style::rgba_color(hint_color));
         super::style::set_text_cursor(ui, caret_visible);
         super::style::set_text_selection(ui, crate::style::rgba_color(selection.0), crate::style::rgba_color(selection.1));
         let mut read = text.as_str();
@@ -197,14 +227,20 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
                     .desired_rows(1)
                     .password(password)
                     .event_filter(filter)
-                    .return_key(if multiline { Some(egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Enter)) } else { None })
+                    .return_key(if multiline { Some(egui::KeyboardShortcut::new(line_break, egui::Key::Enter)) } else { None })
                     .layouter(&mut layouter)
                     // A laid-out galley sits at the rect's corner, as a painted run does.
                     .align(match (centred, rtl) {
                         _ if galley.is_some() => egui::Align2::LEFT_TOP,
-                        (true, _) => egui::Align2::CENTER_CENTER,
-                        (false, true) => egui::Align2::RIGHT_CENTER,
-                        (false, false) => egui::Align2::LEFT_CENTER,
+                        (centred, rtl) => {
+                            let across = match (centred, end_aligned == rtl) {
+                                (true, _) => egui::Align::Center,
+                                (false, true) => egui::Align::Min,
+                                (false, false) => egui::Align::Max,
+                            };
+                            // A multi-line text starts at the part's top, however many of its lines the text fills.
+                            egui::Align2([across, if multiline { egui::Align::Min } else { egui::Align::Center }])
+                        }
                     });
                 if let Some(hint) = hint_text.clone() {
                     edit = edit.hint_text(hint);
@@ -237,7 +273,10 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         let content = placed.union(output.response.rect).union(text_rect);
         super::widgets::note_scroll_region(ui.ctx(), rect.intersect(ui.clip_rect()), content);
     }
-    let focused = output.response.has_focus();
+    // The widget's key focus, whether or not the window has the system's: switching to another app is no focus move,
+    // so the typing run, caret and selection carry on (egui's `Response::has_focus` is false while the window is in
+    // the background).
+    let focused = ui.memory(|memory| memory.has_focus(id));
     let caret = output.cursor_range.map(|range| {
         let at = output.galley.pos_from_cursor(range.primary);
         at.translate(output.galley_pos.to_vec2())
@@ -255,6 +294,57 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
     }
 }
 
+/// Every [`RangeInk`].
+const RANGE_INKS: [RangeInk; 6] = [RangeInk::Muted, RangeInk::Accent, RangeInk::Good, RangeInk::Warn, RangeInk::Bad, RangeInk::Info];
+
+/// The colour of `ink` on a field: its token moved to the text contrast minimum on the field's fill where it is short of it.
+fn ink_of(env: &Env, ink: RangeInk) -> Color32 {
+    let colors = &env.tokens.color;
+    let token = match ink {
+        RangeInk::Muted => colors.text.muted,
+        RangeInk::Accent => colors.accent.text,
+        RangeInk::Good => colors.status.good.fg,
+        RangeInk::Warn => colors.status.warn.fg,
+        RangeInk::Bad => colors.status.bad.fg,
+        RangeInk::Info => colors.status.info.fg,
+    };
+    let min = craft_theme::text_contrast_min(env.tokens.contrast());
+    crate::style::rgba_color(craft_theme::ensure_contrast(token, colors.surface.sunken, min))
+}
+
+/// `text` cut into runs that cover it in order, each with its colour: the valid `ranges` in theirs, the gaps in `plain`.
+/// A range that is empty, starts before the end of the one before, ends past the text or splits a character is skipped.
+fn color_runs(text: &str, ranges: &[ColorRange], plain: Color32, ink: &impl Fn(RangeInk) -> Color32) -> Vec<(Range<usize>, Color32)> {
+    let mut runs = Vec::new();
+    let mut at = 0;
+    for ColorRange { range, ink: range_ink } in ranges {
+        let Range { start, end } = *range;
+        if start < at || end <= start || end > text.len() || !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+            continue;
+        }
+        if start > at {
+            runs.push((at..start, plain));
+        }
+        runs.push((start..end, ink(*range_ink)));
+        at = end;
+    }
+    if at < text.len() {
+        runs.push((at..text.len(), plain));
+    }
+    runs
+}
+
+/// Appends the bytes `run` of `text` in `format`, the part inside `preedit` underlined in the run's colour.
+fn append_run(job: &mut LayoutJob, text: &str, run: Range<usize>, format: &TextFormat, preedit: Option<&Range<usize>>, underline: f32) {
+    let composed = preedit.map_or(run.end..run.end, |preedit| preedit.start.clamp(run.start, run.end)..preedit.end.clamp(run.start, run.end));
+    let underlined = TextFormat { underline: egui::Stroke::new(underline, format.color), ..format.clone() };
+    for (piece, format) in [(run.start..composed.start, format), (composed.clone(), &underlined), (composed.end..run.end, format)] {
+        if let Some(piece) = text.get(piece).filter(|piece| !piece.is_empty()) {
+            job.append(piece, 0.0, format.clone());
+        }
+    }
+}
+
 /// The selection of the widget as character indices, `(primary, secondary)`.
 pub(crate) fn selection(ctx: &Context, id: Id) -> Option<(usize, usize)> {
     TextEditState::load(ctx, id).and_then(|state| state.cursor.char_range()).map(|range| (range.primary.index.0, range.secondary.index.0))
@@ -265,6 +355,14 @@ pub(crate) fn select(ctx: &Context, id: Id, anchor: usize, caret: usize) {
     let mut state = TextEditState::load(ctx, id).unwrap_or_default();
     state.cursor.set_char_range(Some(CCursorRange { primary: CCursor::new(caret), secondary: CCursor::new(anchor), h_pos: None }));
     state.store(ctx, id);
+}
+
+/// Discards Undo and Redo belonging to the previous target while keeping the widget's caret and focus.
+pub(crate) fn clear_history(ctx: &Context, id: Id) {
+    if let Some(mut state) = TextEditState::load(ctx, id) {
+        state.set_undoer(Default::default());
+        state.store(ctx, id);
+    }
 }
 
 /// Whether the widget's field has an undo step and a redo step, as `(undo, redo)`, against its current text `text`

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 /// Crates the facade leaves out, by directory, with the reason. Everything else under `crates/` is a member.
 pub const NOT_IN_FACADE: &[(&str, &str)] = &[
+    ("appkit", "the `unsafe` AppKit calls behind a safe API, used by craft-window and craft-dialogs"),
     ("design-lint", "a lint template and checker for apps' clippy.toml, run from xtask"),
     ("feature-root", "a build tool: the dependency set tools/cl resolves every local build's features with; never built"),
     ("fonts-build", "a build-script helper; apps call it from build.rs"),

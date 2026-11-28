@@ -1,24 +1,27 @@
 //! Stories of the menu rows and the menu.
 
-use super::{Menu, MenuItem};
+use super::{Alternate, Menu, MenuIcon, MenuIconRow, MenuItem, PanelMenu, PanelRow};
 use crate::buttons::{Button, IconButton};
-use crate::contract::{Entry, Props as _, Show as _, ShowContainer as _, Trigger};
+use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Trigger};
 use crate::display::Divider;
+use crate::fonts::FontRef;
 use crate::layout_components::{Row, Stack};
-use crate::primitives::ContentPainterCx;
+use crate::list::ThumbAspect;
+use crate::primitives::{DocRun, DocText, FacePaint};
 use crate::runtime::commands::EditCommands;
 use crate::style::DataColor;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::{Axis, IconId};
+use craft_keymap::Mods;
 use craft_theme::ControlSize;
-use egui::{Color32, CornerRadius, Rect, Ui};
+use egui::{Color32, CornerRadius, Ui, pos2};
 
-/// A sample that paints a colour ramp from `from` to `to` across its slot, as a style or colour preset row previews
+/// A sample that paints a colour ramp from `from` to `to` across its cell, as a style or colour preset row previews
 /// its look.
-fn ramp_sample(from: Color32, to: Color32) -> impl FnOnce(&ContentPainterCx<'_>, Rect) {
-    move |cx, rect| {
+fn ramp_sample(key: u64, from: Color32, to: Color32) -> FacePaint {
+    FacePaint::new(key, move |cx, rect| {
         cx.ramp(rect, CornerRadius::ZERO, &[(0.0, DataColor::new(from)), (1.0, DataColor::new(to))], Axis::X);
-    }
+    })
 }
 
 const WARM: (Color32, Color32) = (Color32::from_rgb(250, 200, 60), Color32::from_rgb(220, 60, 40));
@@ -26,12 +29,13 @@ const COOL: (Color32, Color32) = (Color32::from_rgb(80, 200, 220), Color32::from
 
 /// Rows with a sample between the label and the shortcut; the disabled row fades its sample.
 #[story(MenuItem<'static>, covers = [], drive = Drive::Never)]
-fn menu_item_samples(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+fn menu_item_ramp_samples(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let wide = ThumbAspect::new(3, 1);
     Stack::new()
         .show(ui, |ui, _| {
-            MenuItem::new("Sunset").sample(ramp_sample(WARM.0, WARM.1)).shortcut("Ctrl+Alt+1").show(ui);
-            MenuItem::new("Ocean").sample(ramp_sample(COOL.0, COOL.1)).shortcut("Ctrl+Alt+2").show(ui);
-            MenuItem::new("Ember").sample(ramp_sample(WARM.1, WARM.0)).enabled(false).show(ui)
+            MenuItem::new("Sunset").sample(wide, ramp_sample(1, WARM.0, WARM.1)).shortcut("Ctrl+Alt+1").show(ui);
+            MenuItem::new("Ocean").sample(wide, ramp_sample(2, COOL.0, COOL.1)).shortcut("Ctrl+Alt+2").show(ui);
+            MenuItem::new("Ember").sample(wide, ramp_sample(3, WARM.1, WARM.0)).enabled(false).show(ui)
         })
         .inner
         .map(StoryOutput::from)
@@ -41,10 +45,11 @@ fn menu_item_samples(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 /// Rows whose sample stands in for the label; the label stays each row's name.
 #[story(MenuItem<'static>, covers = [], drive = Drive::Never)]
 fn menu_item_sample_only(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let wide = ThumbAspect::new(3, 1);
     Stack::new()
         .show(ui, |ui, _| {
-            MenuItem::new("Warm").sample(ramp_sample(WARM.0, WARM.1)).sample_only().show(ui);
-            MenuItem::new("Cool").sample(ramp_sample(COOL.0, COOL.1)).sample_only().show(ui)
+            MenuItem::new("Warm").sample(wide, ramp_sample(1, WARM.0, WARM.1)).sample_only().show(ui);
+            MenuItem::new("Cool").sample(wide, ramp_sample(2, COOL.0, COOL.1)).sample_only().show(ui)
         })
         .inner
         .map(StoryOutput::from)
@@ -97,6 +102,36 @@ fn menu_item_marks_and_submenu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .unwrap_or_default()
 }
 
+/// A sample of `font` that paints "Handgloves" across its cell, as a font menu shows a family.
+fn family_sample(key: u64, font: FontRef, italic: bool) -> FacePaint {
+    FacePaint::new(key, move |painter, rect| {
+        let mut run = DocRun::new("Handgloves", font.clone(), rect.height() * 0.75, DataColor::new(painter.ink()));
+        if italic {
+            run = run.italic();
+        }
+        let runs = [run];
+        let layout = painter.layout(&DocText { wrap: Some(rect.width()), ..DocText::new(&runs) }.elide());
+        let at = pos2(rect.left(), rect.center().y - layout.size().y / 2.0);
+        painter.painter.galley(at, layout.galley, Color32::PLACEHOLDER);
+    })
+}
+
+/// A "Font family" menu: each row shows its face in the level's sample column, between the label and the shortcut.
+#[story(MenuItem<'static>, covers = [], drive = Drive::Never)]
+fn menu_item_samples(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let shown = Menu::inline("Font family").show(ui, |ui, _| {
+        let families = [
+            (1, "Sans", FontRef::proportional(), false, "Ctrl+1"),
+            (2, "Sans Italic", FontRef::proportional(), true, "Ctrl+2"),
+            (3, "Mono", FontRef::monospace(), false, "Ctrl+3"),
+        ];
+        for (key, label, font, italic, shortcut) in families {
+            MenuItem::new(label).shortcut(shortcut).sample(ThumbAspect::new(4, 1), family_sample(key, font, italic)).show(ui);
+        }
+    });
+    StoryOutput::from(shown.output)
+}
+
 /// Shows `story` in a row as wide as the room: the opener sits at the start edge and the menu hangs from it, so the
 /// menu's place mirrors with the direction.
 fn in_row(ui: &mut Ui, mut story: impl FnMut(&mut Ui) -> StoryOutput) -> StoryOutput {
@@ -143,6 +178,19 @@ fn menu_taller_than_the_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
         let mut output = StoryOutput::from(shown.output);
         output.clicked |= ran;
         output
+    })
+}
+
+/// A panel menu whose Undo row runs Redo while Alt is held, and shows it then, as the bar's rows with an alternate do.
+#[story(PanelMenu, covers = [], drive = Drive::Never)]
+fn panel_menu_alternate(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    in_row(ui, |ui| {
+        let opener = Button::new("Panel menu").show(ui);
+        let shown = Menu::new("Panel menu").open(data.bind("open", true)).opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+            let undo = PanelRow::Alternated(EditCommands::Undo.into(), Alternate::new(Mods::ALT, EditCommands::Redo));
+            PanelMenu::new(vec![undo], vec![PanelRow::Command(EditCommands::Copy.into())]).show(ui);
+        });
+        StoryOutput::from(shown.output)
     })
 }
 
@@ -277,6 +325,32 @@ fn context_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             ran |= MenuItem::new("Show Guides (stays open)").check(true).keep_open(true).show(ui).ran;
         });
         let mut output = StoryOutput::from(shown.output);
+        output.clicked |= ran;
+        output
+    })
+}
+
+/// An open context menu with a row of alignment icons between two rows, its middle icon disabled.
+#[story(MenuIconRow<'static>, covers = [Default], drive = Drive::Never)]
+fn menu_icon_row(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let icons = [
+        MenuIcon::new(IconId::new("align_edge_left"), "Align Left Edges"),
+        MenuIcon::new(IconId::new("align_edge_hcenter"), "Align Centres").enabled(false),
+        MenuIcon::new(IconId::new("align_edge_right"), "Align Right Edges"),
+    ];
+    in_row(ui, |ui| {
+        let target = Button::new("Right-click, or focus and press Shift+F10").show(ui);
+        let mut ran = false;
+        let shown = Menu::context("Arrange", &target).open(Bind::bound(data.value("open", true))).show(ui, |ui, _| {
+            ran |= MenuItem::new("Group").shortcut("Ctrl+G").show(ui).ran;
+            let row = MenuIconRow::new("Align", &icons).show(ui);
+            ran |= MenuItem::new("Ungroup").shortcut("Ctrl+Shift+G").show(ui).ran;
+            StoryOutput::from(row)
+        });
+        let mut output = match shown.inner {
+            Some(row) => row,
+            None => StoryOutput::from(shown.output),
+        };
         output.clicked |= ran;
         output
     })

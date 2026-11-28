@@ -20,12 +20,14 @@
 //! }
 //! ```
 
+pub mod app;
 mod catalog;
 mod embedding;
 mod env;
 mod face_data;
 mod fallback;
 mod fontconfig;
+mod generic;
 mod ligature;
 mod line_break;
 mod outline;
@@ -40,12 +42,13 @@ mod suitcase;
 pub mod system;
 mod visual_order;
 
-pub use catalog::{Catalog, FontData, FontFileError, Limits, Lister, LoadedFace, Match, Watch};
+pub use catalog::{Catalog, Changes, FontData, FontFileError, Limits, Lister, LoadedFace, Match, Watch, is_private_family, read_faces};
 pub use embedding::{SubsetEmbedding, subset_embedding};
 pub use env::{FontEnv, Os, font_dirs, font_store_dir, office_font_dirs};
 pub use face_data::FaceData;
 pub use fallback::{cluster_face, drawable_characters};
 pub use fontconfig::fontconfig_dirs;
+pub use generic::Generic;
 pub use ligature::ligature_caret_stops;
 pub use line_break::settle_line_break;
 pub use outline::{FontOutline, GlyphPen, OutlineError};

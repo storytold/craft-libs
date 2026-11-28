@@ -206,8 +206,8 @@ fn lying_sizes_and_checksums_are_damaged() {
 
 #[test]
 fn compression_bombs_are_refused() {
-    // A real 64 MB of zeros deflates past the ratio cap: refused before inflating.
-    let zeros = vec![0u8; 64 << 20];
+    // A real 16 MiB of zeros deflates past the ratio cap: refused before inflating.
+    let zeros = vec![0u8; 16 << 20];
     let z = zip(&[("bomb.xml", &zeros, true)]);
     assert!(z.len() < 100_000, "{}", z.len());
     assert_eq!(Archive::open(&z).err(), Some(ZipError::Bomb("bomb.xml".into())));

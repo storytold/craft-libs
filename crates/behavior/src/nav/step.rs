@@ -330,17 +330,17 @@ fn ragged_at(outline: &dyn NavOutline, row: usize, column: usize) -> Option<usiz
 fn ragged(outline: &dyn NavOutline, state: &NavState, lead: usize, mv: NavMove) -> NavStep {
     let Some((row, column, _)) = locate(outline, lead) else { return NavStep::Unhandled };
     let rows = (0..).take_while(|&r| outline.row_len(r).is_some()).count();
-    // A row without a position that takes the lead (a closed group's) is passed over in the move's direction.
+    // A row without a position that takes the lead (a closed group's, a divider's) is passed over in the move's
+    // direction.
     let shifted = |to: usize| column.saturating_add_signed(outline.column_shift(row, to));
     let toward = |rows: Vec<usize>| moved(rows.into_iter().find_map(|to| ragged_at(outline, to, shifted(to))));
-    let vertical = |to: Option<usize>| moved(to.and_then(|to| ragged_at(outline, to, shifted(to))));
     match mv {
         NavMove::Back => moved(neighbour(outline, state, lead, false)),
         NavMove::Forward => moved(neighbour(outline, state, lead, true)),
         NavMove::Up => toward((0..row).rev().collect()),
         NavMove::Down => toward((row + 1..rows).collect()),
-        NavMove::PageUp => vertical(Some(row.saturating_sub(state.page))),
-        NavMove::PageDown => vertical(Some((row + state.page).min(rows - 1))),
+        NavMove::PageUp => toward((0..=row.saturating_sub(state.page)).rev().collect()),
+        NavMove::PageDown => toward(((row + state.page).min(rows - 1)..rows).collect()),
         NavMove::Start => moved(first_enabled(outline)),
         NavMove::End => moved(last_enabled(outline)),
     }

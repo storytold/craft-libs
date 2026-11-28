@@ -108,11 +108,16 @@ fn picked(path: impl AsRef<Path>) -> Option<DialogResult<Answer>> {
     Some(DialogResult::Ok(Answer::Paths(vec![path.as_ref().to_path_buf()])))
 }
 
+/// A Save's answer of `path`, from a request that offers no file types.
+fn saved(path: impl AsRef<Path>) -> Option<DialogResult<Answer>> {
+    Some(DialogResult::Ok(Answer::Saved { path: path.as_ref().to_path_buf(), filter: None }))
+}
+
 // WordCraft's `save_adds_the_extension_and_asks_before_replacing`, `selecting_a_file_preserves_leading_spaces`,
 // `a_selected_folder_never_replaces_the_typed_save_name` and `a_removed_selected_file_keeps_its_exact_save_path`, with
 // `~` and "not found". The extension is the service's policy now, so the chooser answers the name as typed.
 #[trial]
-fn the_chooser_lists_and_accepts_like_a_file_panel() {
+fn a_typed_folder_is_entered_and_a_new_name_is_saved_as_typed() {
     // A typed folder is entered and its name used up; a new name is answered as typed.
     let mut save = Chooser::open(PickRequest::save("document").directory("/d"));
     save.type_name("drafts");
@@ -120,16 +125,22 @@ fn the_chooser_lists_and_accepts_like_a_file_panel() {
     assert_eq!((save.field("folder"), save.field("name")), (Value::from(shown("/d", "drafts")), Value::from("")), "the typed folder opens");
     save.type_name("chapter");
     save.click("Save");
-    assert_eq!(save.answer(), picked("/d/drafts/chapter"), "a new name is saved to as typed");
+    assert_eq!(save.answer(), saved("/d/drafts/chapter"), "a new name is saved to as typed");
+}
 
+#[trial]
+fn a_listed_file_is_replaced_only_after_the_question() {
     // A listed file is replaced only after the question, asked once.
     let mut replace = Chooser::open(PickRequest::save("document").directory("/d/drafts"));
     replace.type_name("old.docx");
     replace.click("Save");
     assert_eq!(replace.answer(), None, "the chooser asks before replacing");
     replace.click("Replace");
-    assert_eq!(replace.answer(), picked("/d/drafts/old.docx"));
+    assert_eq!(replace.answer(), saved("/d/drafts/old.docx"));
+}
 
+#[trial]
+fn a_selected_file_keeps_its_exact_name_for_open_and_for_the_save_question() {
     // A selected file keeps its exact name, leading space and all, for Open and for Save's question.
     let mut open = Chooser::open(PickRequest::open("document").directory("/d"));
     open.click(" report.docx");
@@ -141,16 +152,22 @@ fn the_chooser_lists_and_accepts_like_a_file_panel() {
     save.click("Save");
     assert_eq!(save.answer(), None, "Save asks before replacing the selected file");
     save.click("Replace");
-    assert_eq!(save.answer(), picked("/d/ report.docx"));
+    assert_eq!(save.answer(), saved("/d/ report.docx"));
+}
 
+#[trial]
+fn a_removed_selected_file_keeps_its_exact_save_path() {
     // A selected file removed meanwhile still names the exact path, and nothing is asked.
     let mut removed = Chooser::open(PickRequest::save("document").file_name("Draft.docx").directory("/d"));
     removed.click(" report.docx");
     removed.fake.remove_file("/d/ report.docx");
     removed.refocus();
     removed.click("Save");
-    assert_eq!(removed.answer(), picked("/d/ report.docx"), "the removed selection keeps its path, not `report.docx`");
+    assert_eq!(removed.answer(), saved("/d/ report.docx"), "the removed selection keeps its path, not `report.docx`");
+}
 
+#[trial]
+fn a_selected_folder_is_entered_and_never_becomes_the_save_name() {
     // A selected folder is entered and never becomes the save name; once it is gone, the typed name is saved to.
     let mut folder = Chooser::open(PickRequest::save("document").file_name("chapter.docx").directory("/d"));
     folder.click("Chapters");
@@ -162,14 +179,20 @@ fn the_chooser_lists_and_accepts_like_a_file_panel() {
     gone.fake.remove_folder("/d/Chapters");
     gone.refocus();
     gone.click("Save");
-    assert_eq!(gone.answer(), picked("/d/chapter.docx"), "the removed folder is not saved over as `Chapters.docx`");
+    assert_eq!(gone.answer(), saved("/d/chapter.docx"), "the removed folder is not saved over as `Chapters.docx`");
+}
 
+#[trial]
+fn the_home_root_and_a_typed_path_elsewhere_open() {
     // `~` is the Home root; a typed path elsewhere is listed, then opened.
     let mut home = Chooser::open(PickRequest::open("document").directory("/d"));
     home.type_name("~/Letters/aunt.txt");
     home.click("Open");
     assert_eq!(home.answer(), picked("/home/u/Letters/aunt.txt"));
+}
 
+#[trial]
+fn a_missing_name_on_open_is_refused_and_said() {
     // A missing name on Open is refused and said.
     let mut missing = Chooser::open(PickRequest::open("document").directory("/d"));
     missing.type_name("missing.docx");
@@ -205,7 +228,12 @@ fn an_unavailable_or_forced_pick_opens_the_chooser_and_settles_its_answer() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("report.docx"), b"x").unwrap();
 
-    let (service, panels) = FileService::scripted(Wake::none(), [Answer::Unavailable("no portal".to_owned())]);
+    // The service lists the real folder on its own threads and wakes the app when each listing is in.
+    let (woke, wakes) = std::sync::mpsc::channel();
+    let wake = Wake::new(move || {
+        let _ = woke.send(());
+    });
+    let (service, panels) = FileService::scripted(wake, [Answer::Unavailable("no portal".to_owned())]);
     let panels = Rc::new(RefCell::new(panels));
     let host = Rc::new(RefCell::new(DialogHost::new()));
     let (pumped, shown) = (panels.clone(), host.clone());
@@ -213,16 +241,15 @@ fn an_unavailable_or_forced_pick_opens_the_chooser_and_settles_its_answer() {
         pumped.borrow_mut().pump_with(&mut shown.borrow_mut(), NONE);
         shown.borrow_mut().run(ui);
     });
-    // The service lists the real folder on its own threads: wait until the chooser is listed.
-    let listed = |fixture: &mut Fixture| {
-        for _ in 0..400 {
-            fixture.idle(1);
-            if fields(&host).get("listed") == Some(&Value::Bool(true)) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(5));
+    // A pass takes in the listings that are in; until the chooser is listed, the next pass waits for the next wake.
+    let listed = |fixture: &mut Fixture| loop {
+        fixture.idle(1);
+        if fields(&host).get("listed") == Some(&Value::Bool(true)) {
+            // The chooser lays out its listing in the next passes: a click reads where the controls rest.
+            fixture.settle();
+            return;
         }
-        panic!("the chooser listed the folder");
+        wakes.recv_timeout(Duration::from_secs(10)).expect("a finished listing wakes the app");
     };
     let click = |fixture: &mut Fixture, label: &str| {
         let target = fixture.by_label(label).unwrap_or_else(|| panic!("`{label}` is shown"));
@@ -238,7 +265,7 @@ fn an_unavailable_or_forced_pick_opens_the_chooser_and_settles_its_answer() {
     click(&mut fixture, "File name");
     fixture.type_text("novel");
     click(&mut fixture, "Save");
-    assert_eq!(service.take_answer(id), Some(Picked::Paths(vec![dir.join("novel.docx")])), "the policy adds the extension");
+    assert_eq!(service.take_answer(id), Some(Picked::Saved { path: dir.join("novel.docx"), file_type: None }), "the policy adds the extension");
 
     // A forced chooser: `report` is no listed file, so the chooser asks nothing; the policy's `report.docx` is,
     // so the service asks once.
@@ -249,7 +276,7 @@ fn an_unavailable_or_forced_pick_opens_the_chooser_and_settles_its_answer() {
     click(&mut fixture, "Save");
     assert_eq!(service.take_answer(id), None, "the Replace question waits");
     click(&mut fixture, "Replace");
-    assert_eq!(service.take_answer(id), Some(Picked::Paths(vec![dir.join("report.docx")])));
+    assert_eq!(service.take_answer(id), Some(Picked::Saved { path: dir.join("report.docx"), file_type: None }));
 
     // Cancel settles as Cancelled.
     let id = service.pick(PickRequest::open("document").directory(&dir).fallback(true));

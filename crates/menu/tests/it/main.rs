@@ -2,7 +2,9 @@
 
 #[cfg(target_os = "macos")]
 mod appkit;
+pub(crate) mod bar;
 pub(crate) mod from_items;
+pub(crate) mod heading;
 pub(crate) mod keytips;
 pub(crate) mod layout;
 pub(crate) mod memo;
@@ -12,6 +14,7 @@ pub(crate) mod ribbon;
 pub(crate) mod ribbon_gallery;
 mod sample;
 pub(crate) mod shortcuts;
+pub(crate) mod title_bar;
 
 craft_ui::registry!();
 

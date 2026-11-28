@@ -1,15 +1,16 @@
 //! The tooltip of a control that paints no label: its own label shows there, inside a field or not; a control named
 //! only by its field label shows none, and the field's label stays where it was. A bound command's hint is the
-//! tooltip's second line, and makes a disabled control a focus stop that shows it.
+//! tooltip's second line, and makes a disabled control a focus stop that shows it. A label the layout cut shows its full
+//! text as its tooltip.
 
 use super::kit::PlainStyle;
 use craft_behavior::Sense;
 use craft_ui::buttons::Button;
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{
-    CommandSet, Common, Component, Cx, GlyphLabel, LabelKind, MeasureCx, Props as _, Role, Show as _, ShowContainer as _, SideLabel,
+    CommandSet, Common, Component, Cx, GlyphLabel, LabelKind, LabelScheme, MeasureCx, Props as _, Role, Show as _, ShowContainer as _, SideLabel,
 };
-use craft_ui::form::Field;
+use craft_ui::form::{Field, FieldGroup};
 use craft_ui::runtime::commands::CommandState;
 use craft_ui::style::StyleCx;
 use craft_ui::testing::pointer::moved;
@@ -133,6 +134,65 @@ fn a_control_that_paints_no_label_shows_its_own_label_as_tooltip() {
     assert_eq!(glyph_label(Some("Leading (1/1000 em)")), ["Leading (1/1000 em)"], "a glyph label's tooltip replaces its name");
 }
 
+/// A label the layout cut shows its full text as the tooltip of a rest on it.
+#[trial]
+fn an_elided_label_shows_its_full_text_as_its_tooltip() {
+    let long = "Harbour at dusk, seen from the lighthouse on the northern breakwater";
+    let shown = texts_added_by_hover(move |ui| ui.allocate_ui(Vec2::new(72.0, 32.0), |ui| Button::new(long).show(ui).rect).inner);
+    assert_eq!(shown, [long], "the cut label's tooltip is its whole text, shown once");
+}
+
+const SPOT: craft_behavior::PartKey = craft_behavior::PartKey::new("spot");
+
+/// A layer of pointer-only spots over content it does not paint (comments over a page): it takes no room of its own,
+/// is shown at a rect, and each spot carries a tip.
+#[derive(craft_ui::contract::Component)]
+struct Spots {
+    #[common]
+    common: Common,
+    spot: Rect,
+    at: craft_ui::contract::TooltipAt,
+}
+
+impl Component for Spots {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: SpotsStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::ZERO
+    }
+
+    fn parts(&mut self, _: Rect, cx: &mut craft_ui::contract::PartsCx<'_, Self>) {
+        let tip = craft_ui::contract::TooltipSpec::new(craft_ui::runtime::env::Label::from("Alpha\nUnchecked comment")).at(self.at);
+        let _ =
+            cx.part(SPOT, self.spot).sense(Sense::CLICK | Sense::CONTEXT_CLICK | Sense::DRAG).tooltip(tip).pointer_only("a panel reaches the spots");
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// A part's tip shows when the pointer rests on the part, hung from the part or from the pointer, also on a component
+/// that takes no room of its own and is shown at a rect.
+#[trial]
+fn a_part_tip_shows_on_a_rest_on_the_part() {
+    use craft_ui::contract::TooltipAt;
+    for at in [TooltipAt::Pointer, TooltipAt::Control] {
+        let spot = Rect::from_min_size(Pos2::new(60.0, 60.0), Vec2::splat(30.0));
+        let added = texts_added_by_hover(move |ui| {
+            Spots { common: Common::new(), spot, at }.show_at(ui, Rect::from_min_size(Pos2::ZERO, Vec2::splat(200.0)));
+            spot
+        });
+        assert!(added.iter().any(|text| text.contains("Alpha")), "the spot's tip shows ({at:?}): {added:?}");
+    }
+}
+
 /// The command the hint trials bind: an app command with a chord.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
 #[command(prefix = "tooltipHintTrial")]
@@ -237,4 +297,74 @@ fn a_tooltip_shown_from_inside_a_body_keeps_its_rect_frame_to_frame() {
     }
     let first = frames[0].1;
     assert!(first.is_some() && frames.iter().all(|(passes, rect)| *passes == 1 && *rect == first), "one pass a frame and one rect: {frames:?}");
+}
+
+/// A tooltip longer than a mark's cell and far shorter than the layer's cap.
+const STROKE_TIP: &str = "Set shape stroke type";
+
+/// The width of the tooltip a rest on a mark labelled `STROKE_TIP` shows in a wide window, with `inspector` in an
+/// inspector's field, whose control fills the cell its label leaves; and the window's width.
+fn stroke_tip_width(inspector: bool) -> (f32, f32) {
+    let at = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&at);
+    let mut fixture = Fixture::new(move |ui| {
+        let field = |ui: &mut Ui| {
+            Field::new("Stroke").show(ui, |ui, _| seen.set(Mark { common: Common::new() }.label(STROKE_TIP).show(ui).rect));
+        };
+        if inspector {
+            FieldGroup::new("Shape").labels(LabelScheme::Inspector).show(ui, |ui, _| field(ui));
+        } else {
+            field(ui);
+        }
+    });
+    let room = Vec2::new(1600.0, 600.0);
+    fixture.room(room);
+    fixture.settle();
+    fixture.frame(vec![moved(at.get().center())]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    let tip = fixture.by_role(Role::TOOLTIP).first().map(|tip| tip.rect).expect("the tooltip shows");
+    (tip.width(), room.x)
+}
+
+/// A control beside an inspector label fills its cell, its tooltip does not: the tooltip layer takes its text's width,
+/// as it does outside an inspector, not the layer's cap of the window (photocraft#16593).
+#[trial]
+fn a_tooltip_of_a_control_in_an_inspector_cell_keeps_its_text_width() {
+    let (plain, _) = stroke_tip_width(false);
+    let (inspector, room) = stroke_tip_width(true);
+    assert!(inspector <= plain + 0.5, "the tooltip in an inspector cell is as wide as outside one: {inspector} vs {plain}");
+    assert!(inspector < room / 4.0, "the tooltip does not span the window: {inspector} of {room}");
+}
+
+/// A press on a control hides its tooltip until the pointer leaves the control, so what the press opens (a popover
+/// under a swatch) is not covered; a rest after the pointer came back shows it again.
+#[trial]
+fn a_press_on_a_control_hides_its_tooltip_until_the_pointer_leaves() {
+    let at = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&at);
+    let mut fixture = Fixture::new(move |ui| {
+        ui.add_space(20.0);
+        seen.set(Button::new("Stroke").tooltip(STROKE_TIP.to_owned()).show(ui).rect);
+    });
+    fixture.settle();
+    let shows = |fixture: &Fixture| fixture.texts().iter().any(|run| run.text == STROKE_TIP);
+    let center = at.get().center();
+    fixture.frame(vec![moved(center)]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    assert!(shows(&fixture), "a rest on the button shows its tooltip");
+
+    fixture.click_at(center);
+    fixture.advance(DELAY);
+    fixture.settle();
+    assert!(!shows(&fixture), "after a press on the button its tooltip stays hidden while the pointer rests there");
+
+    fixture.frame(vec![moved(at.get().right_bottom() + Vec2::splat(200.0))]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    fixture.frame(vec![moved(center)]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    assert!(shows(&fixture), "once the pointer left and came back, a rest shows the tooltip again");
 }

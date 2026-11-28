@@ -1,8 +1,9 @@
 //! Stories of the footer actions.
 
-use super::{DropAction, FooterAction, FooterBar};
+use super::{DialogButtonLook, DialogRole, DropAction, FooterAction, FooterBar, FooterButton};
 use crate::buttons::IconButton;
 use crate::contract::{PopupKind, Props as _, Show as _, ShowContainer as _};
+use crate::runtime::env::with_env;
 use crate::story_kit::sample::words;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::IconId;
@@ -22,6 +23,25 @@ fn footer_actions(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         FooterAction::new(IconId::new("settings"), "Layer settings").pressed(true).tone(Tone::Accent),
     ];
     FooterBar::actions(actions).show_footer(ui).into()
+}
+
+/// The dialog buttons of an app that sets `DialogButtonLook::Filled` at its root: Cancel, the Alternate answer and
+/// another outcome are filled neutral tiles with no edge beside the accented OK, at rest, under the pointer and pressed.
+#[story(FooterBar, covers = [], drive = Drive::Never, title = "Filled dialog buttons")]
+fn footer_filled_buttons(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let buttons = [
+        FooterButton::new("Reset", DialogRole::Other),
+        FooterButton::new("Don't Save", DialogRole::Alternate),
+        FooterButton::new("Cancel", DialogRole::Cancel),
+        FooterButton::new("OK", DialogRole::Accept),
+    ];
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(DialogButtonLook::Filled);
+        },
+        |ui| FooterBar::buttons(buttons).show_footer(ui).into(),
+    )
 }
 
 #[story(DropAction<u8>, covers = [Default], drive = Drive::Never)]

@@ -3,6 +3,7 @@
 // draw-shape
 pub(crate) mod add_beside;
 pub(crate) mod corner;
+pub(crate) mod presses;
 pub(crate) mod shape_cells;
 
 // draw-gradient-b
@@ -34,7 +35,6 @@ pub(crate) mod artboard;
 // draw-bars
 pub(crate) mod measure;
 pub(crate) mod slice;
-pub(crate) mod slice_divide;
 
 // draw-stroke
 pub(crate) mod stroke_button;
@@ -44,6 +44,7 @@ pub(crate) mod stroke_editor;
 pub(crate) mod brush_presets;
 pub(crate) mod brush_size;
 pub(crate) mod paint_bar;
+pub(crate) mod tip_ellipse;
 
 // draw-transform-a
 pub(crate) mod transform_box;

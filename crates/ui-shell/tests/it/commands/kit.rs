@@ -21,7 +21,7 @@ pub struct FixedStyle {
 pub enum AppCommand {
     #[command(label = "Go")]
     Go,
-    #[command(label = "Save", default = "Cmd+K")]
+    #[command(label = "Save", default = "Cmd+Alt+Shift+K")]
     Save,
     #[command(label = "Play", default = "F8")]
     Play,

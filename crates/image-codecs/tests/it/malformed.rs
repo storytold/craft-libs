@@ -6,7 +6,7 @@ use craft_image_codecs::*;
 use proptest::prelude::*;
 
 fn tight() -> DecodeOptions {
-    DecodeOptions { limits: Limits { max_width: 4096, max_height: 4096, max_pixels: 1 << 22, max_alloc: 64 << 20 }, ..Default::default() }
+    DecodeOptions { limits: Limits { max_width: 4096, max_height: 4096, max_pixels: 1 << 21, max_alloc: 16 << 20 }, ..Default::default() }
 }
 
 fn samples() -> Vec<(Format, Vec<u8>)> {
@@ -42,7 +42,7 @@ fn no_panic(f: Format, bytes: &[u8]) {
 }
 
 #[test]
-fn truncated_at_many_offsets() {
+fn feature_config_truncated_at_many_offsets() {
     for (f, bytes) in samples() {
         let n = bytes.len();
         let step = (n / 97).max(1);
@@ -56,7 +56,7 @@ fn truncated_at_many_offsets() {
 }
 
 #[test]
-fn truncated_files_mostly_error() {
+fn feature_config_truncated_files_mostly_error() {
     // Chopping off the second half must not silently succeed for formats
     // with length-checked rasters.
     for (f, bytes) in samples() {
@@ -75,7 +75,7 @@ fn truncated_files_mostly_error() {
 }
 
 #[test]
-fn bit_flips_never_panic() {
+fn feature_config_bit_flips_never_panic() {
     // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs 1/N of the flips.
     let rounds = 150usize.div_ceil(craft_media_testkit::hostile::divisor());
     let mut rng = common::Rng::new(42);
@@ -93,15 +93,18 @@ fn bit_flips_never_panic() {
 }
 
 #[test]
-fn byte_overwrites_in_header_never_panic() {
+fn feature_config_byte_overwrites_in_header_never_panic() {
     // CRAFT_HOSTILE_DIVISOR=N (pull requests) overwrites every N-th byte, from a different offset
     // for each sample, so the samples together still reach every header position.
     let step = craft_media_testkit::hostile::divisor();
     for (k, (f, bytes)) in samples().into_iter().enumerate() {
         for i in (0..bytes.len().min(64)).filter(|i| (i + k) % step == 0) {
-            for v in [0x00, 0x7F, 0xFF] {
+            // nightly writes every value to each byte; the gate one per byte, rotating, so the sampled bytes together see all
+            let values = [0x00, 0x7F, 0xFF];
+            let one = [values[(i / step) % 3]];
+            for v in if step == 1 { &values[..] } else { &one[..] } {
                 let mut b = bytes.clone();
-                b[i] = v;
+                b[i] = *v;
                 no_panic(f, &b);
             }
         }
@@ -109,7 +112,7 @@ fn byte_overwrites_in_header_never_panic() {
 }
 
 #[test]
-fn empty_input_errors_for_every_format() {
+fn feature_config_empty_input_errors_for_every_format() {
     for f in Format::ALL {
         assert!(decode_as(f, &[]).is_err(), "{f:?}");
     }
@@ -191,7 +194,7 @@ proptest! {
     }
 
     #[test]
-    fn random_bytes_with_magic_never_panic(idx in 0usize..14, data in proptest::collection::vec(any::<u8>(), 0..1024)) {
+    fn feature_config_random_bytes_with_magic_never_panic(idx in 0usize..14, data in proptest::collection::vec(any::<u8>(), 0..1024)) {
         let magics: [&[u8]; 14] = [
             b"\x89PNG\r\n\x1a\n", &[0xFF, 0xD8, 0xFF], b"II*\0", b"RIFF\0\0\0\0WEBP", b"GIF89a", b"BM",
             &[0, 0, 1, 0, 1, 0], b"P6\n", b"qoif", &[0x76, 0x2F, 0x31, 0x01], b"#?RADIANCE\n", b"P7\n", b"PF\n",
@@ -203,12 +206,12 @@ proptest! {
     }
 
     #[test]
-    fn random_bytes_each_format_never_panic(idx in 0usize..Format::ALL.len(), data in proptest::collection::vec(any::<u8>(), 0..512)) {
+    fn feature_config_random_bytes_each_format_never_panic(idx in 0usize..Format::ALL.len(), data in proptest::collection::vec(any::<u8>(), 0..512)) {
         let _ = decode_as_with(Format::ALL[idx], &data, &tight());
     }
 
     #[test]
-    fn mutated_valid_files_never_panic(which in 0usize..40, pos in any::<usize>(), val in any::<u8>(), cut in any::<usize>()) {
+    fn feature_config_mutated_valid_files_never_panic(which in 0usize..40, pos in any::<usize>(), val in any::<u8>(), cut in any::<usize>()) {
         let s = samples_cached();
         let (f, bytes) = &s[which % s.len()];
         let mut b = bytes.clone();

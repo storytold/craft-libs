@@ -179,6 +179,19 @@ pub enum TypingRule {
     AllWait,
 }
 
+/// How a press of Delete or Backspace finds its binding.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DeleteKeys {
+    /// Delete and Backspace are one key, as in Photoshop: a press runs its own key's binding, else the other key's
+    /// with the same modifiers. The Mac's key labelled "delete" sends Backspace, so a Delete binding runs from it.
+    #[default]
+    OneKey,
+    /// Delete and Backspace are two keys: a press runs only its own key's binding, for an app that gives them
+    /// different jobs (Delete removes the layer, Backspace a path tool's point).
+    Apart,
+}
+
 impl TypingRule {
     /// Whether `chord` may fire while typing on `platform`.
     pub fn fires(self, chord: &Chord, platform: Platform) -> bool {

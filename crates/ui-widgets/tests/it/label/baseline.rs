@@ -122,7 +122,7 @@ fn a_bar_number_field_sets_its_digits_and_unit_on_the_line_of_a_select() {
         });
     });
     fixture.settle();
-    let (face, digits, unit) = (baseline_of(&fixture, "Normal"), baseline_of(&fixture, "100"), baseline_of(&fixture, "%"));
+    let (face, digits, unit) = (baseline_of(&fixture, "Normal"), baseline_of(&fixture, "100.0"), baseline_of(&fixture, "%"));
     assert!((digits - face).abs() < 0.5, "the digits sit on the select's baseline: digits {digits}, select {face}");
     assert!((unit - face).abs() < 0.5, "the unit sits on the select's baseline: unit {unit}, select {face}");
 }

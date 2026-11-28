@@ -420,6 +420,72 @@ fn a_region_past_the_document_draws_out_to_the_region() {
     assert!(document.reads.borrow().contains(&(moved, 1)), "a moved region is read: {:?}", document.reads.borrow());
 }
 
+/// One frame of a display of `document` reaching out to `region`, with `fill` past the document: its shapes and the
+/// view.
+fn region_fill_shapes(document: &Rc<Document>, extent: Extent, fill: Option<Color32>, painted: bool) -> (Vec<Shape>, CanvasView) {
+    let center = Point::new(70.0, 45.0);
+    let view = CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, 2.0);
+    let document = Rc::clone(document);
+    let callback: Arc<dyn std::any::Any + Send + Sync> = Arc::new(());
+    let mut fixture = Fixture::new(move |ui| {
+        Canvas::new("Document").view(view).show(ui, |ui, body| {
+            let display = if painted {
+                let callback = Arc::clone(&callback);
+                let paint = AppPaint::new(move |painter, view: CanvasView| {
+                    painter.painter.add(Shape::Callback(PaintCallback { rect: view.rect, callback: Arc::clone(&callback) }));
+                });
+                RasterDisplay::painted("Picture", document.size, paint)
+            } else {
+                RasterDisplay::new("Picture", &*document)
+            };
+            let display = display.checkerboard(Checker::new()).extent(extent);
+            let display = match fill {
+                Some(fill) => display.region_fill(fill),
+                None => display,
+            };
+            display.show_at(ui, body.rect);
+        });
+    });
+    fixture.room(CANVAS);
+    fixture.settle();
+    (fixture.frame_shapes(), view)
+}
+
+#[trial]
+fn a_region_fill_shows_past_the_document_under_the_picture() {
+    // Crop's preview of a crop that grows a Background: the area past the canvas takes the background colour.
+    let document = Document::new(100, 70);
+    let region = PixelRect::new(-60, -30, 200, 120);
+    let red = Color32::from_rgb(255, 0, 0);
+    let filled = |shape: &Shape| matches!(shape, Shape::Path(path) if path.fill == red);
+    for painted in [false, true] {
+        let (shapes, view) = region_fill_shapes(&document, Extent::Region(region), Some(red), painted);
+        let at = |x: f64, y: f64| view.to_screen(Point::new(x, y));
+        // Left of, above, below and right of the document, and at a corner of the region: the fill.
+        for (x, y) in [(-30.0, 10.0), (50.0, -10.0), (50.0, 100.0), (150.0, 10.0), (-55.0, 115.0)] {
+            assert_eq!(colour_at(&shapes, at(x, y)), [255.0, 0.0, 0.0, 255.0], "painted {painted}: ({x}, {y}) past the document is filled");
+        }
+        assert_ne!(colour_at(&shapes, at(50.0, 35.0)), [255.0, 0.0, 0.0, 255.0], "painted {painted}: the document itself is not filled");
+        assert_ne!(colour_at(&shapes, at(-70.0, 10.0)), [255.0, 0.0, 0.0, 255.0], "painted {painted}: nothing past the region is filled");
+        // The fill lies over the checkerboard and under the picture, which shows layers past the canvas over it.
+        let first_fill = shapes.iter().position(filled).expect("a fill");
+        let last_fill = shapes.iter().rposition(filled).expect("a fill");
+        let checker = shapes.iter().position(|shape| matches!(shape, Shape::Mesh(mesh) if mesh.texture_id != TextureId::default()));
+        let picture = shapes
+            .iter()
+            .rposition(|shape| matches!(shape, Shape::Callback(_)) || matches!(shape, Shape::Mesh(mesh) if mesh.texture_id != TextureId::default()));
+        assert!(checker.is_some_and(|c| c < first_fill), "painted {painted}: over the checkerboard");
+        assert!(picture.is_some_and(|p| last_fill < p), "painted {painted}: under the picture");
+
+        // No fill: the checkerboard alone, as before.
+        let (plain, _) = region_fill_shapes(&document, Extent::Region(region), None, painted);
+        assert!(!plain.iter().any(filled), "painted {painted}: no fill without a colour");
+        // A fill with nothing past the document draws nothing.
+        let (document_only, _) = region_fill_shapes(&document, Extent::Document, Some(red), painted);
+        assert!(!document_only.iter().any(filled), "painted {painted}: no region, no fill");
+    }
+}
+
 #[trial]
 fn a_picture_whose_area_is_off_the_document_has_its_checkerboard_and_edge_there() {
     // A 100 x 70 document; its picture turned a quarter about the document's centre (70 x 100), then moved past the

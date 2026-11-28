@@ -27,7 +27,7 @@ pub use line_preview::{LineGuideStyle, StraightLinePreview};
 pub use marquee::{Marquee, MarqueeLook, MarqueeShape, MarqueeStyle, Run};
 pub use outline::{HoverMask, HoverOutline, HoverShape, OutlineStyle, SelectionOutline, SelectionOutlineLook, path_runs};
 pub use pixel_grid::{GridSegment, PixelGrid, PixelGridStyle};
-pub use task_bar::{TaskBar, TaskBarCx, TaskBarDismiss, TaskBarKind, TaskBarOutput, TaskBarPlace};
+pub use task_bar::{TaskBar, TaskBarCx, TaskBarDismiss, TaskBarGrip, TaskBarHang, TaskBarKind, TaskBarOutput, TaskBarPlace};
 // End of canvas-controls-b.
 
 // Brush overlays.

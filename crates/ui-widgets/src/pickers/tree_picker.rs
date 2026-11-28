@@ -357,10 +357,10 @@ impl<K: Value + Eq + Hash + 'static> Component for TreePicker<'_, K> {
             }
         };
         // Folders open and close inside the popup, so activating one must not close it: a pick closes it below.
-        let overlay = Overlay::dropdown().dismiss(Dismiss::new());
+        let list_id = cx.id.with("tree");
+        let overlay = Overlay::dropdown().dismiss(Dismiss::new()).list(list_id);
         let events = ui.show(popup, overlay, |ui, body| {
             let fresh = Popup::opening(popup, cx);
-            let list_id = ui.scope_id().with("tree");
             let query = search::show(ui, body, popup, cx, &name, list_id);
             if fresh {
                 cx.memory::<Browsing<K>>().open = tree.opened_for(chosen.as_ref());

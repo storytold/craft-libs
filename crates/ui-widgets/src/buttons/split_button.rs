@@ -22,7 +22,7 @@ const ARROW: PartKey = PartKey::new("arrow");
 /// The style of a split button: one surface under both parts, each part's hover and pressed fill over it, and a
 /// divider between them.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
-#[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent)])]
+#[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent), super::FILLED])]
 #[non_exhaustive]
 pub struct SplitButtonStyle {
     #[style(surface)]
@@ -51,13 +51,15 @@ pub struct SplitButtonStyle {
     radius: CornerRadius,
 }
 
-/// What a split button reports: the main part's response (`clicked()` runs the action) and the entry picked from
-/// the menu this pass.
+/// What a split button reports: whether its action runs, and the entry picked from the menu this pass.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct SplitOutput<T> {
-    /// The main part's response.
+    /// The button's response, which reports the clicks on the arrow as the main part's.
     pub response: Response,
+    /// The action runs in this pass: a click on the main part, or an activation by key or AccessKit. Never a click on
+    /// the arrow.
+    pub activated: bool,
     /// The entry the user picked.
     pub chosen: Option<T>,
     /// The pointer's stay over the main part: hovered, entered, left and clicked under the pointer.
@@ -141,6 +143,8 @@ impl<'a, T: Value + 'static> SplitButton<'a, T> {
             loading: false,
             mnemonic: None,
             align: crate::primitives::HAlign::Center,
+            chord: None,
+            detail: None,
         }
     }
 }
@@ -158,6 +162,10 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_moves();
     type Style = SplitButtonStyle;
     type Output = SplitOutput<T>;
+
+    fn default_variant(env: &crate::runtime::env::Env) -> Option<Variant> {
+        super::push_default(env)
+    }
 
     fn style(cx: &StyleCx<'_>, key: SplitButtonStyleKey<T>) -> SplitButtonStyle {
         let cx = &super::placed(cx);
@@ -220,6 +228,11 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
         if let Some(label) = &self.arrow_label {
             part.tooltip(label.clone());
         }
+    }
+
+    /// The arrow opens the menu: a click on it never runs the action, nor fires the bound command.
+    fn activated(&self, cx: &Cx<'_, Self>) -> bool {
+        cx.activation().is_some() && cx.part_activated(ARROW).is_none()
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
@@ -301,7 +314,7 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SplitOutput<T> {
-        SplitOutput { response: cx.response.clone(), chosen: self.chosen, hover: cx.hover() }
+        SplitOutput { activated: self.activated(&cx), response: cx.response.clone(), chosen: self.chosen, hover: cx.hover() }
     }
 }
 

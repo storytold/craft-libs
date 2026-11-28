@@ -4,13 +4,14 @@
 use super::kit::Row;
 use super::table::Table;
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, ItemSource};
+use craft_keymap::Mods;
 use craft_ui::contract::{
     CollectionEvent, CollectionProps, ColumnKind, ColumnSpec, Props as _, ShowCollection as _, SweepApply, SweepStep, ToggleColumn,
 };
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Frames, input, pointer, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Ui, Vec2};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 const ORIGIN: Pos2 = Pos2::new(10.0, 10.0);
 const VIEW: Vec2 = Vec2::new(400.0, 240.0);
@@ -47,6 +48,8 @@ struct Host {
     apply: RefCell<SweepApply>,
     rows: RefCell<Vec<(usize, Rect)>>,
     frames: RefCell<Frames>,
+    /// How many presses the host was told it owns (`SweepStep::Claimed`).
+    claimed: Cell<usize>,
 }
 
 impl Host {
@@ -55,7 +58,13 @@ impl Host {
     }
 
     fn with(state: &[bool], apply: SweepApply) -> Self {
-        Host { eyes: Eyes(RefCell::new(state.to_vec())), apply: RefCell::new(apply), rows: RefCell::default(), frames: RefCell::new(Frames::new()) }
+        Host {
+            eyes: Eyes(RefCell::new(state.to_vec())),
+            apply: RefCell::new(apply),
+            rows: RefCell::default(),
+            frames: RefCell::new(Frames::new()),
+            claimed: Cell::new(0),
+        }
     }
 
     fn show(&self, ui: &mut Ui) {
@@ -75,6 +84,7 @@ impl Host {
                 let mut eyes = self.eyes.0.borrow_mut();
                 match self.apply.borrow_mut().feed(&edit) {
                     Some(SweepStep::Flip(toggle) | SweepStep::Restore(toggle)) => eyes[toggle.key] = toggle.on,
+                    Some(SweepStep::Claimed(_)) => self.claimed.set(self.claimed.get() + 1),
                     None => {}
                     Some(_) => {}
                 }
@@ -89,6 +99,10 @@ impl Host {
 
     fn frame(&self, events: Vec<egui::Event>) {
         self.frames.borrow_mut().frame(events, |ui| self.show(ui));
+    }
+
+    fn hold(&self, modifiers: Modifiers) {
+        self.frames.borrow_mut().hold(modifiers);
     }
 
     fn idle(&self, n: usize) {
@@ -118,4 +132,24 @@ fn a_sweep_flips_each_switch_live_and_escape_restores_all() {
     host.frame(vec![input::key_press(Key::Escape, Modifiers::NONE)]);
     host.idle(2);
     assert_eq!(host.state(), vec![false; 4], "Escape restores every crossed switch");
+}
+
+/// A press with the claimed modifier belongs to the host: nothing flips, the sweep applies nothing and Escape gives
+/// nothing; the same press without the modifier sweeps.
+#[trial]
+fn a_claimed_press_flips_nothing_and_its_sweep_applies_nothing() {
+    let host = Host::with(&[false; 4], SweepApply::new().claims(Mods::CMD));
+    host.hold(Modifiers::COMMAND);
+    host.sweep_down();
+    assert_eq!(host.state(), vec![false; 4], "a claimed press and the cells its drag crosses flip nothing");
+    assert_eq!(host.claimed.get(), 1, "the claim is reported once");
+    host.frame(vec![input::key_press(Key::Escape, Modifiers::NONE)]);
+    host.idle(2);
+    assert_eq!(host.state(), vec![false; 4], "Escape of a claimed press restores nothing");
+    assert_eq!(host.claimed.get(), 1, "Escape reports no second claim");
+
+    let plain = Host::with(&[false; 4], SweepApply::new().claims(Mods::CMD));
+    plain.sweep_down();
+    assert_eq!(plain.state(), vec![true, true, true, false], "the same press without the modifier sweeps");
+    assert_eq!(plain.claimed.get(), 0, "an unclaimed press reports no claim");
 }

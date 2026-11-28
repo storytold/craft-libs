@@ -4,11 +4,18 @@
 //! and scroll before it is drawn, in the same pass. The halves and the divider are craft-ui's [`SplitViews`] with
 //! [`SplitLayout::TwoUpVertical`]: pane 0 is the left half, pane 1 the right half and main view.
 
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+
 use super::view::{PageViewOutput, PageViewState};
+use craft_behavior::Proposal;
 use craft_ui::canvas::{SplitAt, SplitLayout, SplitViews};
-use craft_ui::contract::{Bind, EditResponse, Outcome, ShowContainer as _};
+use craft_ui::contract::{Bind, EditResponse, Outcome, Pad, Show as _, ShowContainer as _};
+use craft_ui::display::{Elide, Shade, Text};
+use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::Label;
-use egui::{Rect, Response, Ui};
+use craft_ui::style::{SurfaceKind, TypeRole};
+use egui::{Rect, Response, Ui, pos2};
 
 /// Which half leads.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -54,7 +61,8 @@ impl Outcome for SyncedViewsOutput {
 }
 
 /// The pair, built per pass: the app draws each half with its own [`PageView`](super::view::PageView) inside the
-/// closure, which gets the half's rect, its state and which half it is; the pair keeps the states together.
+/// closure, which gets the half's rect, its state and which half it is, and returns the half's page view output
+/// (`None` for a half with no pages to show: a closed or empty document); the pair keeps the states together.
 ///
 /// ```ignore
 /// SyncedViews::new("Compare", &mut pair).halves(ui, (&mut old_state, &mut new_state), |ui, rect, state, half| {
@@ -62,39 +70,42 @@ impl Outcome for SyncedViewsOutput {
 ///         Lead::Left => ("Old", &old_pages),
 ///         Lead::Right => ("New", &new_pages),
 ///     };
-///     // Each half runs the Hand tool in its own canvas body.
-///     let mut reply = None;
-///     let out = PageView::new(label, pages, &mut *state, paper).show_at(ui, rect, |ui, body| {
-///         if let Some(pass) = body.pass {
-///             reply = Some(ToolHost::new().run(ui, pass, &mut hand));
-///         }
-///     });
-///     if let Some(view) = reply.and_then(|reply| reply.view) {
-///         out.adopt(state, &view);
-///     }
-///     out
+///     let out = PageView::new(label, pages, &mut *state, paper).show_at_with(ui, rect, &mut hand,
+///         |ui, body, hand| body.pass.and_then(|pass| ToolHost::new().run(ui, pass, hand).view),
+///         |_, _, _| ());
+///     Some(out)
 /// });
 /// ```
+#[derive(craft_ui::contract::Pattern)]
 pub struct SyncedViews<'a> {
     label: Label,
     state: &'a mut SyncedViewsState,
+    captions: Option<(Label, Label)>,
 }
 
 impl<'a> SyncedViews<'a> {
     /// A pair named `label`, with its state kept in `state`.
     pub fn new(label: impl Into<Label>, state: &'a mut SyncedViewsState) -> Self {
-        SyncedViews { label: label.into(), state }
+        SyncedViews { label: label.into(), state, captions: None }
     }
 
-    /// Splits the room in two halves (`SplitViews`, its divider and gap) and runs `half` for each, the leader first.
+    /// A caption line over each half: `left` over the left half and `right` over the right.
+    #[must_use]
+    pub fn captions(mut self, left: impl Into<Label>, right: impl Into<Label>) -> Self {
+        self.captions = Some((left.into(), right.into()));
+        self
+    }
+
+    /// Splits the room in two halves (`SplitViews`, its divider on the boundary of the two panes) and runs `half` for each, the leader first.
+    /// With [`captions`](Self::captions) each half shows its caption band at its top and `half` gets the rect under it.
     // pdfcraft: crates/ui-egui/src/workflows/compare_ui.rs:344 `compare_area`.
     pub fn halves(
         self,
         ui: &mut Ui,
         states: (&mut PageViewState, &mut PageViewState),
-        mut half: impl FnMut(&mut Ui, Rect, &mut PageViewState, Lead) -> PageViewOutput,
+        mut half: impl FnMut(&mut Ui, Rect, &mut PageViewState, Lead) -> Option<PageViewOutput>,
     ) -> SyncedViewsOutput {
-        let SyncedViews { label, state } = self;
+        let SyncedViews { label, state, captions } = self;
         let (left, right) = states;
         let lead = state.lead;
         let SyncedViewsState { at, last_offset, last_current, .. } = state;
@@ -114,10 +125,24 @@ impl<'a> SyncedViews<'a> {
             // The follower is a copy per run, so the body writes nothing kept; `settle` stores the last copy.
             let mut followed = None;
             let rects = divider.placed(layout, 2, body.rect, body.env.direction().is_rtl());
+            // The band is the framework's `Stack` (panel surface, `Pad::Control`) around a caption `Text`, so its padding
+            // and line height come from the components' own styles and the pattern reads no tokens.
+            // Both captions share one type role, so one measurement gives both bands' height.
+            let band = captions.as_ref().map(|(left, _)| caption_band().measure_in(ui, Proposal::Ideal, |ui, _| caption(left).show(ui)).y);
             for pane in [active, 1 - active] {
                 let Some(&rect) = rects.get(pane) else { continue };
                 let this = if pane == 0 { Lead::Left } else { Lead::Right };
-                views[pane] = Some(if this == lead {
+                // The band is cut inside the pane, so the divider and the active edge keep the full height.
+                let rect = match (&captions, band) {
+                    (Some((left, right)), Some(height)) => {
+                        let (band, view) = cut_band(rect, height);
+                        let text = if this == Lead::Left { left } else { right };
+                        caption_band().show_at(ui, band, |ui, _| caption(text).show(ui));
+                        view
+                    }
+                    _ => rect,
+                };
+                views[pane] = if this == lead {
                     half(ui, rect, leader, this)
                 } else {
                     let mut copy = follower.clone();
@@ -126,7 +151,7 @@ impl<'a> SyncedViews<'a> {
                     let output = half(ui, rect, &mut copy, this);
                     followed = Some((copy, offset, current));
                     output
-                });
+                };
             }
             followed
         });
@@ -143,6 +168,22 @@ impl<'a> SyncedViews<'a> {
         }
         SyncedViewsOutput { edit: split.output.edit, views }
     }
+}
+
+/// The band a caption sits in: the panel surface with control padding, as wide as its half.
+fn caption_band() -> Stack<'static> {
+    Stack::new().surface(SurfaceKind::Panel).pad(Pad::Control).fill_width()
+}
+
+/// A half's caption: one muted caption line, cut at the end when the half is narrow.
+fn caption(text: &Label) -> Text {
+    Text::new(text.clone()).role(TypeRole::Caption).shade(Shade::Muted).elide(Elide::End)
+}
+
+/// Cuts `rect` into the band of `height` at its top and the rest under it; a pane shorter than the band is all band.
+fn cut_band(rect: Rect, height: f32) -> (Rect, Rect) {
+    let edge = (rect.min.y + height).min(rect.max.y);
+    (Rect::from_min_max(rect.min, pos2(rect.max.x, edge)), Rect::from_min_max(pos2(rect.min.x, edge), rect.max))
 }
 
 /// The follower takes the leader's zoom, layout and rotation, its scroll offset once the leader has moved since the

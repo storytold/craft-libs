@@ -5,10 +5,13 @@
 mod parse;
 
 use super::fields::{DialogFields, FieldValue};
+use crate::contract::Tooltip;
 use crate::patterns::blend_keys::BlendKeyEntry;
-use crate::runtime::env::{Label, UnitKind};
+use crate::runtime::env::{Label, LengthUnits, UnitKind};
 use crate::runtime::requests::{ColorRequest, EyedropperRequest, ListingRequest, PathKind};
+use crate::text::StepArrows;
 use crate::value_drag::SliderScale;
+use craft_behavior::{CancelReason, EditEvent, EditEvents, GestureId, GesturePhase, NumberCodec};
 use craft_host::PickRequest;
 use craft_theme::Srgba;
 use egui::{Response, Ui};
@@ -81,6 +84,8 @@ pub enum ParamKind {
         options: Vec<(String, Label)>,
         /// The id selected when nothing is remembered; `None` selects the first option.
         default: Option<String>,
+        /// The detail line under each option, in option order; empty for a group without details.
+        details: Vec<Label>,
     },
     /// An angle dial with its field, in degrees.
     #[non_exhaustive]
@@ -94,11 +99,16 @@ pub enum ParamKind {
         /// The digits after the decimal point the field keeps; 0 takes whole degrees.
         decimals: u32,
     },
-    /// A colour the host's picker chooses; `None`: unset until picked.
+    /// A color the host's picker chooses; `None`: unset until picked. Without `alpha` the field holds a
+    /// [`FieldValue::Color`]. With it the row adds an opacity field in percent beside the swatch and the field holds a
+    /// [`FieldValue::Rgba`]; the picker and the eyedropper set the color and keep the opacity.
     #[non_exhaustive]
     Color {
         /// The colour as RGB in 0 to 1; `None` leaves it unset.
         default: Option<[f32; 3]>,
+        /// The opacity in 0 to 1 that the default opens with and that a color picked into an unset row takes; `None`
+        /// for a row without opacity.
+        alpha: Option<f32>,
     },
     /// A grid of `cells` integer fields, [`grid_side`](ParamKind::grid_side) per row (`int[25]` is 5×5). A `cells`
     /// that is not square wraps every `round(sqrt(cells))` fields and the last row is short.
@@ -209,7 +219,13 @@ impl ParamKind {
 
     /// A group of radio buttons over `(id, label)` options, in a section of its own titled by the parameter's label.
     pub fn radio(options: Vec<(String, Label)>, default: Option<String>) -> Self {
-        ParamKind::Radio { options, default }
+        ParamKind::Radio { options, default, details: Vec::new() }
+    }
+
+    /// A group of radio buttons whose options each carry a detail line: `(id, label, detail)`.
+    pub fn radio_with_details(options: Vec<(String, Label, Label)>, default: Option<String>) -> Self {
+        let (options, details) = options.into_iter().map(|(id, label, detail)| ((id, label), detail)).unzip();
+        ParamKind::Radio { options, default, details }
     }
 
     /// An angle dial with its field: one turn, -180 to 180, to a tenth of a degree.
@@ -225,7 +241,14 @@ impl ParamKind {
 
     /// A colour the host's picker chooses.
     pub fn color(default: Option<[f32; 3]>) -> Self {
-        ParamKind::Color { default }
+        ParamKind::Color { default, alpha: None }
+    }
+
+    /// A color the host's picker chooses, with an opacity field beside it: a `#rrggbbaa` value. `default` is RGBA in
+    /// 0 to 1; `None` leaves the color unset, and a color picked into it starts opaque.
+    pub fn color_with_alpha(default: Option<[f32; 4]>) -> Self {
+        let alpha = default.map_or(1.0, |[_, _, _, a]| a.clamp(0.0, 1.0));
+        ParamKind::Color { default: default.map(|[r, g, b, _]| [r, g, b]), alpha: Some(alpha) }
     }
 
     /// A grid of `cells` integer fields.
@@ -275,11 +298,15 @@ impl ParamKind {
             ParamKind::Int { default, .. } => FieldValue::Int(*default),
             ParamKind::Number { default, .. } => FieldValue::Number(*default),
             ParamKind::Bool { default } => FieldValue::Bool(*default),
-            ParamKind::Choice { options, default } | ParamKind::Radio { options, default } => {
+            ParamKind::Choice { options, default } | ParamKind::Radio { options, default, .. } => {
                 let initial = default.as_deref().or_else(|| options.first().map(|(id, _)| id.as_str()));
                 FieldValue::Text(initial.unwrap_or_default().to_owned())
             }
-            ParamKind::Color { default } => FieldValue::Color((*default)?),
+            ParamKind::Color { default, alpha: None } => FieldValue::Color((*default)?),
+            ParamKind::Color { default, alpha: Some(alpha) } => {
+                let [r, g, b] = (*default)?;
+                FieldValue::Rgba([r, g, b, *alpha])
+            }
             ParamKind::Grid { cells: count, default } => {
                 let mut cells = vec![*default; *count];
                 // A grid that starts at 0 is a kernel: the identity, 1 in the centre.
@@ -323,7 +350,10 @@ impl ParamKind {
             (ParamKind::Choice { options, .. } | ParamKind::Radio { options, .. }, FieldValue::Text(id)) => {
                 options.iter().any(|(option, _)| option == id)
             }
-            (ParamKind::Color { .. }, FieldValue::Color(c)) => c.iter().all(|v| v.is_finite()),
+            (ParamKind::Color { alpha: None, .. }, FieldValue::Color(c)) => c.iter().all(|v| v.is_finite()),
+            (ParamKind::Color { alpha: Some(_), .. }, FieldValue::Rgba([r, g, b, a])) => {
+                [r, g, b].iter().all(|v| v.is_finite()) && (0.0..=1.0).contains(a)
+            }
             (ParamKind::Grid { cells: count, .. }, FieldValue::Grid(cells)) => cells.len() == *count,
             (ParamKind::Point { .. }, FieldValue::Point(p)) => p.iter().all(|v| v.is_finite()),
             (ParamKind::Channel { names, .. }, FieldValue::Int(i)) => usize::try_from(*i).is_ok_and(|i| i < names.len()),
@@ -341,6 +371,9 @@ impl ParamKind {
 
 type CustomDraw = dyn Fn(&mut Ui, &mut DialogFields, &mut CustomContext) -> Response + Send + Sync;
 
+/// A [`Param::custom`] row's set-time rule ([`Param::on_set`]).
+pub(crate) type SetRule = fn(&mut DialogFields, &str, serde_json::Value) -> Result<(), String>;
+
 /// What draws a [`ParamKind::Custom`] row: it gets the row's control cell, the form's values and the row's
 /// [`CustomContext`], and returns the response the row label names. Besides the row's own key, `draw` may keep values
 /// under its companion keys ([`Param::companions`]). Equal only to a clone of itself with the same value and companions.
@@ -351,12 +384,14 @@ pub struct CustomRow {
     opens_with: Option<FieldValue>,
     /// The other keys `draw` keeps values under.
     companions: Vec<String>,
+    /// The rule a value set from outside the row goes through ([`Param::on_set`]).
+    on_set: Option<SetRule>,
 }
 
 impl CustomRow {
     /// Wraps `draw`, which draws the row and edits the values it owns through the [`DialogFields`].
     pub fn new(draw: impl Fn(&mut Ui, &mut DialogFields, &mut CustomContext) -> Response + Send + Sync + 'static) -> Self {
-        Self { draw: Arc::new(draw), opens_with: None, companions: Vec::new() }
+        Self { draw: Arc::new(draw), opens_with: None, companions: Vec::new(), on_set: None }
     }
 
     /// Draws the row.
@@ -368,6 +403,11 @@ impl CustomRow {
     pub(crate) fn has_companion(&self, key: &str) -> bool {
         self.companions.iter().any(|companion| companion == key)
     }
+
+    /// The rule a value set from outside the row goes through, if the row has one.
+    pub(crate) fn on_set(&self) -> Option<SetRule> {
+        self.on_set
+    }
 }
 
 impl fmt::Debug for CustomRow {
@@ -378,7 +418,11 @@ impl fmt::Debug for CustomRow {
 
 impl PartialEq for CustomRow {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.draw, &other.draw) && self.opens_with == other.opens_with && self.companions == other.companions
+        let same_rule = match (self.on_set, other.on_set) {
+            (Some(a), Some(b)) => std::ptr::fn_addr_eq(a, b),
+            (a, b) => a.is_none() && b.is_none(),
+        };
+        Arc::ptr_eq(&self.draw, &other.draw) && self.opens_with == other.opens_with && self.companions == other.companions && same_rule
     }
 }
 
@@ -391,12 +435,58 @@ pub struct CustomContext {
     canvas: Option<egui::Id>,
     eyedropper: Option<EyedropperRequest>,
     sampling: bool,
+    /// Whether an Escape ended sampling in the previous pass.
+    sampling_ended: bool,
+    /// The gesture steps the row's controls reported ([`CustomContext::gesture`]).
+    gestures: Vec<Lifted>,
+    /// The ids of the actions the row asked the host to run ([`CustomContext::request_action`]).
+    actions: Vec<String>,
+    action: Option<String>,
+}
+
+/// One edit event of a custom row's control with its value erased.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Lifted {
+    /// The gesture, `None` for a one-step set.
+    pub(crate) id: Option<GestureId>,
+    /// Where the gesture stands, `None` for a set.
+    pub(crate) phase: Option<GesturePhase>,
+    /// Why a cancel ended it.
+    pub(crate) reason: Option<CancelReason>,
 }
 
 impl CustomContext {
-    /// The context of a row labelled `title`.
-    pub(crate) fn new(title: Label, canvas: Option<egui::Id>) -> Self {
-        CustomContext { title, request: None, canvas, eyedropper: None, sampling: false }
+    /// The context of a row labelled `title`; `sampling_ended` says an Escape ended sampling in the previous pass.
+    pub(crate) fn new(title: Label, canvas: Option<egui::Id>, sampling_ended: bool) -> Self {
+        CustomContext {
+            title,
+            request: None,
+            canvas,
+            eyedropper: None,
+            sampling: false,
+            sampling_ended,
+            gestures: Vec::new(),
+            actions: Vec::new(),
+            action: None,
+        }
+    }
+
+    /// The gesture steps the row reported, once.
+    pub(crate) fn take_gestures(&mut self) -> Vec<Lifted> {
+        std::mem::take(&mut self.gestures)
+    }
+
+    /// Asks the host to run the action `id`; the host takes this pass's requests once with
+    /// `HostedParamDialog::take_actions` or `HostedParamDialog::take_action`.
+    pub fn request_action(&mut self, id: impl Into<String>) {
+        let id = id.into();
+        self.actions.push(id.clone());
+        self.action = Some(id);
+    }
+
+    /// The ids of the actions the row asked for, once.
+    pub(crate) fn take_actions(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.actions)
     }
 
     /// Arms the host's eyedropper for the colour under `request.key`, as a colour row's dropper toggle does.
@@ -404,9 +494,27 @@ impl CustomContext {
         self.eyedropper = Some(request);
     }
 
+    /// Whether an Escape ended the row's sampling in the previous pass (the dialog claims Escape while a row samples).
+    pub fn sampling_ended(&self) -> bool {
+        self.sampling_ended
+    }
+
     /// Whether the row's dropper samples now: `true` while the row wants canvas presses to pick colours.
     pub fn sampling(&mut self, on: bool) {
         self.sampling = on;
+    }
+
+    /// Hands a custom row's control events to the rows, which lift them as a value row's: each event's gesture id,
+    /// phase and cancel reason, type-erased.
+    pub fn gesture<T>(&mut self, events: &EditEvents<T>) {
+        self.gestures.extend(events.iter().map(|event| Lifted {
+            id: event.id(),
+            phase: event.phase(),
+            reason: match event {
+                EditEvent::Cancel { reason, .. } => Some(*reason),
+                _ => None,
+            },
+        }));
     }
 
     /// The canvas the dialog's rows work on (`ParamDialog::canvas`), when it has one.
@@ -419,6 +527,11 @@ impl CustomContext {
     /// reported once, as a colour row's press is (`ParamRowsOutput::pick_color`).
     pub fn pick_color(&mut self, key: &str, color: Srgba) {
         self.request = Some(ColorRequest::new(key, color).title(self.title.clone()));
+    }
+
+    /// The action the row asked for, once.
+    pub(crate) fn take_action(&mut self) -> Option<String> {
+        self.action.take()
     }
 
     /// The dropper the row armed, once.
@@ -463,14 +576,26 @@ impl NumberUnit {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RowOptions {
     range_decimals: Option<u32>,
+    /// The step of a range row's slider and field ([`Param::step`]).
+    range_step: Option<f64>,
     pub(crate) popup_slider: bool,
     randomize: bool,
     eyedropper: bool,
     eyedropper_armed: bool,
     full_width: bool,
+    hide_caption: bool,
+    /// The row or section stands beside the one before it ([`Param::beside`]).
+    beside: bool,
+    /// The field pairs with the next one in its section ([`Param::beside_next`]).
     beside_next: bool,
+    /// A range row's slider is short and its number field content-wide ([`Param::short_slider`]).
+    short_slider: bool,
     /// A radio row's options stand in one row with no caption ([`Param::options_in_row`]).
     options_in_row: bool,
+    /// A radio row's options stand in a column with no caption, in a document dialog too ([`Param::stacked_options`]).
+    stacked_options: bool,
+    /// The option of the radio row before this one that the row stands under ([`Param::under_option`]).
+    under_option: Option<String>,
     not_remembered: bool,
     /// The lines a multi-line text row shows.
     lines: Option<usize>,
@@ -478,15 +603,109 @@ pub(crate) struct RowOptions {
     max_chars: Option<usize>,
     /// Whether a text row shows its text in the monospace face ([`Param::mono`]).
     mono: bool,
+    /// Whether a text row selects its text when it takes the focus ([`Param::select_on_focus`]).
+    select_on_focus: bool,
     /// The width a text row's field asks for, in characters ([`Param::field_chars`]).
     field_chars: Option<u16>,
     units: Option<UnitChoices>,
     /// The ids of the options a choice row shows disabled.
     disabled_options: Vec<String>,
+    /// Why an option of `disabled_options` is disabled, by option id ([`Param::disabled_option`]).
+    disabled_reasons: Vec<(String, Label)>,
+    /// The description of an option of a choice or radio row, by option id ([`Param::option_description`]).
+    option_descriptions: Vec<(String, Label)>,
     /// The row's select has a search field.
     searchable: bool,
+    /// The indexes of the options a choice row draws a separator before ([`Param::separated_at`]).
+    separated_at: Vec<usize>,
     /// The keys a change of the row's value removes ([`Param::resets`]).
     resets: Vec<String>,
+    /// The row takes input only while the number under the key is above the bound ([`Param::enabled_above`]).
+    enabled_above: Option<(String, f64)>,
+    /// Additional field conditions that must all hold ([`Param::and_enabled_when_in`]).
+    enabled_when_also: Vec<(String, Vec<FieldValue>)>,
+    /// The row takes input only while the values under the two keys differ ([`Param::enabled_when_differs`]).
+    enabled_when_differs: Option<(String, String)>,
+    /// The value the row shows while it is disabled ([`Param::disabled_value`]).
+    disabled_value: Option<FieldValue>,
+    /// How a section head draws ([`Param::group`], [`Param::section_check`]).
+    head: Head,
+    /// The row's label shows a reset dot ([`Param::resettable`]).
+    resettable: bool,
+    /// The label a footer row shows while on ([`Param::in_footer`]).
+    footer_on: Option<Label>,
+    /// The lengths a number row keeps and shows ([`Param::length`]).
+    length: Option<LengthUnits>,
+    /// The codec a number row reads and writes with ([`Param::codec`]).
+    codec: Option<NumberCodec>,
+    /// The step arrows of a number row's field.
+    step_arrows: Option<StepArrows>,
+    /// The labelled marks of a range row's slider.
+    marks: Vec<(f64, Label)>,
+    /// The link the row's help button reports ([`Param::help_link`]).
+    help_link: Option<String>,
+}
+
+/// How a section head draws: a fixed title, a disclosure over its rows, or a check box that switches its rows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Head {
+    /// A title over a rule.
+    #[default]
+    Fixed,
+    /// A title that opens and closes the rows.
+    Group {
+        /// Whether the disclosure starts open.
+        open: bool,
+    },
+    /// A check box over the rows, which take input only while it is checked.
+    Check,
+}
+
+impl RowOptions {
+    /// Whether the field's label names it without drawing a caption.
+    pub(crate) fn hides_caption(&self) -> bool {
+        self.hide_caption
+    }
+
+    /// Whether the row or section stands beside the one before it.
+    pub(crate) fn beside(&self) -> bool {
+        self.beside
+    }
+
+    /// How a section head draws.
+    pub(crate) fn head(&self) -> Head {
+        self.head
+    }
+
+    /// Whether the row's label shows a reset dot.
+    pub(crate) fn resettable(&self) -> bool {
+        self.resettable
+    }
+
+    /// The lengths a number row keeps and shows.
+    pub(crate) fn length(&self) -> Option<LengthUnits> {
+        self.length
+    }
+
+    /// The codec a number row reads and writes with.
+    pub(crate) fn codec(&self) -> Option<&NumberCodec> {
+        self.codec.as_ref()
+    }
+
+    /// The step arrows of a number row's field.
+    pub(crate) fn step_arrows(&self) -> Option<StepArrows> {
+        self.step_arrows
+    }
+
+    /// The labelled marks of a range row's slider.
+    pub(crate) fn marks(&self) -> &[(f64, Label)] {
+        &self.marks
+    }
+
+    /// The link the row's help button reports.
+    pub(crate) fn help_link(&self) -> Option<&str> {
+        self.help_link.as_deref()
+    }
 }
 
 /// The units of a number row ([`Param::number_with_units`]).
@@ -518,7 +737,22 @@ fn is_path_list(value: &FieldValue) -> bool {
 #[derive(Clone, Debug, Default, PartialEq)]
 struct RowTexts {
     hint: Option<Label>,
-    tooltip: Option<Label>,
+    tooltip: Option<Tooltip>,
+    /// The text after the number ([`Param::unit_label`]).
+    unit: Option<Label>,
+}
+
+/// When a row takes input.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum Enable {
+    /// Always.
+    #[default]
+    Always,
+    /// While `fields[key]` equals one of the values.
+    When(String, Vec<FieldValue>),
+    /// Never.
+    Off,
 }
 
 /// One row of a parameter form.
@@ -533,11 +767,15 @@ pub struct Param {
     pub kind: ParamKind,
     /// Shown after the number (`px`, `%`, `°`); formats through the locale.
     pub unit: Option<UnitKind>,
-    /// The row takes input only while `fields[key]` equals one of the values.
-    pub enabled_when: Option<(String, Vec<FieldValue>)>,
-    /// The row is shown only while `fields[key]` equals the value ([`Param::visible_when`]). A hidden row takes no
-    /// space; its value stays in the fields and in the result.
-    pub visible_when: Option<(String, FieldValue)>,
+    /// When the row takes input: always, while `fields[key]` equals one of the values, or never.
+    pub enable: Enable,
+    /// The row is shown only while every condition holds: `fields[key]` equals the value, or one of the values
+    /// ([`Param::visible_when`]). A hidden row takes no space; its value stays in the fields and in the result.
+    pub visible_when: Vec<(String, Vec<FieldValue>)>,
+    /// Whether the row is shown at all, whatever the values ([`Param::shown`]): what decides it lies outside the
+    /// values, such as what a host's job found. A hidden row takes no space; its value stays in the fields and in the
+    /// result.
+    pub shown: bool,
     /// A Browse button after a [`ParamKind::Text`] field.
     pub browse: Option<PathKind>,
     /// The hint and tooltip, boxed so rows without them stay small.
@@ -554,8 +792,9 @@ impl Param {
             label: label.into(),
             kind,
             unit: None,
-            enabled_when: None,
-            visible_when: None,
+            enable: Enable::Always,
+            visible_when: Vec::new(),
+            shown: true,
             browse: None,
             texts: None,
             options: None,
@@ -599,10 +838,62 @@ impl Param {
         self.options.as_deref().is_none_or(|options| !options.disabled_options.iter().any(|disabled| disabled == id))
     }
 
+    /// Shows `text` as the description of the option `id` of a choice or radio row.
+    #[must_use]
+    pub fn option_description(mut self, id: impl Into<String>, text: impl Into<Label>) -> Self {
+        keyed_text(&mut self.options.get_or_insert_default().option_descriptions, id.into(), text.into());
+        self
+    }
+
+    /// Shows the option `id` disabled, with `reason` as its tooltip. It joins the options
+    /// [`disabled_options`](Param::disabled_options) lists, so automation refuses it as it refuses those.
+    #[must_use]
+    pub fn disabled_option(mut self, id: impl Into<String>, reason: impl Into<Label>) -> Self {
+        let options = self.options.get_or_insert_default();
+        let id = id.into();
+        if !options.disabled_options.contains(&id) {
+            options.disabled_options.push(id.clone());
+        }
+        keyed_text(&mut options.disabled_reasons, id, reason.into());
+        self
+    }
+
+    /// The description of the option `id` of a choice or radio row ([`option_description`](Param::option_description)).
+    pub(crate) fn option_description_text(&self, id: &str) -> Option<&Label> {
+        self.options.as_deref()?.option_descriptions.iter().find(|(held, _)| held == id).map(|(_, text)| text)
+    }
+
+    /// Why the option `id` is disabled, while it is ([`disabled_option`](Param::disabled_option)).
+    pub(crate) fn disabled_reason(&self, id: &str) -> Option<&Label> {
+        if self.option_enabled(id) {
+            return None;
+        }
+        self.options.as_deref()?.disabled_reasons.iter().find(|(held, _)| held == id).map(|(_, reason)| reason)
+    }
+
+    /// The row never takes input: it is shown disabled.
+    #[must_use]
+    pub fn disabled(mut self) -> Self {
+        self.enable = Enable::Off;
+        self
+    }
+
     /// Gives a choice row's select a search field.
     #[must_use]
     pub fn searchable(mut self) -> Self {
         self.options.get_or_insert_default().searchable = true;
+        self
+    }
+
+    /// Draws a separator line before the option at `index` in a choice row's open list, between two groups of options
+    /// (standard and custom paper sizes). Repeat the call for each group start. An `index` of 0, or past the last
+    /// option, draws nothing: a separator sits between options.
+    #[must_use]
+    pub fn separated_at(mut self, index: usize) -> Self {
+        let separated = &mut self.options.get_or_insert_default().separated_at;
+        if !separated.contains(&index) {
+            separated.push(index);
+        }
         self
     }
 
@@ -629,7 +920,51 @@ impl Param {
     /// The row takes input only while `fields[key]` equals one of `values`; otherwise it is shown disabled.
     #[must_use]
     pub fn enabled_when_in(mut self, key: impl Into<String>, values: impl IntoIterator<Item = impl Into<FieldValue>>) -> Self {
-        self.enabled_when = Some((key.into(), values.into_iter().map(Into::into).collect()));
+        self.enable = Enable::When(key.into(), values.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Adds a condition: the row takes input only while `fields[key]` equals one of `values` and every other
+    /// enable condition holds. A missing field does not satisfy it.
+    #[must_use]
+    pub fn and_enabled_when_in(mut self, key: impl Into<String>, values: impl IntoIterator<Item = impl Into<FieldValue>>) -> Self {
+        self.options.get_or_insert_default().enabled_when_also.push((key.into(), values.into_iter().map(Into::into).collect()));
+        self
+    }
+
+    /// The row takes input only while the number `fields[key]` is above `bound` (an int reads as a number); otherwise
+    /// it is shown disabled.
+    #[must_use]
+    pub fn enabled_above(mut self, key: impl Into<String>, bound: f64) -> Self {
+        self.options.get_or_insert_default().enabled_above = Some((key.into(), bound));
+        self
+    }
+
+    /// The row takes input only while `fields[a]` and `fields[b]` differ (for two switches: exactly one is on);
+    /// otherwise it is shown disabled.
+    #[must_use]
+    pub fn enabled_when_differs(mut self, a: impl Into<String>, b: impl Into<String>) -> Self {
+        self.options.get_or_insert_default().enabled_when_differs = Some((a.into(), b.into()));
+        self
+    }
+
+    /// The value the row shows while it is disabled, in place of its own.
+    #[must_use]
+    pub fn disabled_value(mut self, value: impl Into<FieldValue>) -> Self {
+        self.options.get_or_insert_default().disabled_value = Some(value.into());
+        self
+    }
+
+    /// A [`Param::custom`] row's set-time rule: `set` runs for the row's key and its companions when a value is set
+    /// from outside the row (automation), and may change other fields or refuse the value. Other rows ignore it.
+    ///
+    /// `set` gets the fields, the key being set and the incoming value, and writes in place of the row's default
+    /// write; an `Err` refuses the value and is the refusal's message.
+    #[must_use]
+    pub fn on_set(mut self, set: fn(&mut DialogFields, &str, serde_json::Value) -> Result<(), String>) -> Param {
+        if let ParamKind::Custom(row) = &mut self.kind {
+            row.on_set = Some(set);
+        }
         self
     }
 
@@ -693,6 +1028,99 @@ impl Param {
         Self::new(format!("section:{}", label.as_str()), label, ParamKind::Section)
     }
 
+    /// A section head that is a check box: it holds a `Bool` under `key`, and its rows take input only while it is
+    /// checked.
+    pub fn section_check(key: impl Into<String>, label: impl Into<Label>, default: bool) -> Self {
+        let mut head = Self::new(key, label, ParamKind::Bool { default });
+        head.options.get_or_insert_default().head = Head::Check;
+        head
+    }
+
+    /// A section head whose title is a disclosure, open by default: its rows hide while it is closed and keep their
+    /// values.
+    pub fn group(label: impl Into<Label>) -> Self {
+        let mut head = Self::section(label);
+        head.options.get_or_insert_default().head = Head::Group { open: true };
+        head
+    }
+
+    /// Binds the row's control to the value's reset (`Bind::given(value).reset(default)`) and shows the label's reset
+    /// dot while the value differs from the default.
+    #[must_use]
+    pub fn resettable(mut self) -> Self {
+        self.options.get_or_insert_default().resettable = true;
+        self
+    }
+
+    /// On a [`Param::group`]: whether its disclosure starts open (the default is open).
+    #[must_use]
+    pub fn initially_open(mut self, on: bool) -> Self {
+        if let Some(Head::Group { open }) = self.options.as_deref_mut().map(|options| &mut options.head) {
+            *open = on;
+        }
+        self
+    }
+
+    /// Draws a `Bool` row as a footer button that shows the row's label while off and `on_label` while on; a press
+    /// flips the value and the dialog stays open.
+    #[must_use]
+    pub fn in_footer(mut self, on_label: impl Into<Label>) -> Self {
+        self.options.get_or_insert_default().footer_on = Some(on_label.into());
+        self
+    }
+
+    /// The row or section stands beside the one before it; the pair falls under when the form lacks room. A custom
+    /// row beside its section's rows spans its width, as [`full_width`](Param::full_width) does.
+    #[must_use]
+    pub fn beside(mut self) -> Self {
+        let custom = matches!(self.kind, ParamKind::Custom(_));
+        let options = self.options.get_or_insert_default();
+        options.beside = true;
+        options.full_width |= custom;
+        self
+    }
+
+    /// Draws a `Number` row as a length: the stored unit in the binding, the shown unit in the field.
+    #[must_use]
+    pub fn length(mut self, lengths: LengthUnits) -> Self {
+        self.options.get_or_insert_default().length = Some(lengths);
+        self
+    }
+
+    /// Sets the `Number` row's codec.
+    #[must_use]
+    pub fn codec(mut self, codec: NumberCodec) -> Self {
+        self.options.get_or_insert_default().codec = Some(codec);
+        self
+    }
+
+    /// Passes `arrows` to the `Number` row's field.
+    #[must_use]
+    pub fn step_arrows(mut self, arrows: StepArrows) -> Self {
+        self.options.get_or_insert_default().step_arrows = Some(arrows);
+        self
+    }
+
+    /// Passes labelled `marks` to the `Range` row's slider.
+    #[must_use]
+    pub fn marks_labelled<L: Into<Label>>(mut self, marks: impl IntoIterator<Item = (f64, L)>) -> Self {
+        self.options.get_or_insert_default().marks = marks.into_iter().map(|(at, label)| (at, label.into())).collect();
+        self
+    }
+
+    /// Adds an icon button after the row's control that reports `link` as the help link; a press opens nothing.
+    #[must_use]
+    pub fn help_link(mut self, link: impl Into<String>) -> Self {
+        self.options.get_or_insert_default().help_link = Some(link.into());
+        self
+    }
+
+    /// Whether the row starts a section: a section head, or a check head ([`Param::section_check`]).
+    pub(crate) fn is_head(&self) -> bool {
+        // A section head and a check head are the two rows that open a section.
+        matches!(self.kind, ParamKind::Section) || matches!(self.options.as_deref(), Some(options) if options.head == Head::Check)
+    }
+
     /// A number row with a unit menu after the field. `base` is the value in base units; the field shows
     /// `base / factor` of the chosen unit, and an edit stores `shown * factor`. The first of `units` is chosen at
     /// first (see [`Param::default_unit`]).
@@ -744,8 +1172,25 @@ impl Param {
     /// The row is shown only while `fields[key]` equals `value`, as [`enabled_when`](Param::enabled_when) enables it;
     /// otherwise it takes no space. Its value stays in the fields and in the result.
     #[must_use]
-    pub fn visible_when(mut self, key: impl Into<String>, value: impl Into<FieldValue>) -> Self {
-        self.visible_when = Some((key.into(), value.into()));
+    pub fn visible_when(self, key: impl Into<String>, value: impl Into<FieldValue>) -> Self {
+        self.visible_when_in(key, [value])
+    }
+
+    /// The row is shown only while `fields[key]` is one of `values`, besides the conditions it already has; the
+    /// one-value case is [`visible_when`](Param::visible_when).
+    #[must_use]
+    pub fn visible_when_in(mut self, key: impl Into<String>, values: impl IntoIterator<Item = impl Into<FieldValue>>) -> Self {
+        self.visible_when.push((key.into(), values.into_iter().map(Into::into).collect()));
+        self
+    }
+
+    /// Whether the row is shown at all; a hidden row takes no space, as one whose
+    /// [`visible_when`](Param::visible_when) fails. For what the values do not decide; a
+    /// [`HostedParamDialog`](super::HostedParamDialog) host sets it between passes with
+    /// [`set_param_shown`](super::HostedParamDialog::set_param_shown).
+    #[must_use]
+    pub fn shown(mut self, shown: bool) -> Self {
+        self.shown = shown;
         self
     }
 
@@ -753,7 +1198,7 @@ impl Param {
     /// of [`enabled_when_in`](Param::enabled_when_in).
     #[must_use]
     pub fn enabled_when(mut self, key: impl Into<String>, value: impl Into<FieldValue>) -> Self {
-        self.enabled_when = Some((key.into(), vec![value.into()]));
+        self.enable = Enable::When(key.into(), vec![value.into()]);
         self
     }
 
@@ -786,6 +1231,14 @@ impl Param {
         self
     }
 
+    /// A [`ParamKind::Text`] row selects its whole text when it takes the focus, so typing replaces it (a Rename
+    /// dialog opening on the name); by default the caret goes to the end. Other kinds are unchanged.
+    #[must_use]
+    pub fn select_on_focus(mut self) -> Self {
+        self.options.get_or_insert_default().select_on_focus = true;
+        self
+    }
+
     /// The width of a [`ParamKind::Text`] row's field, in characters (`TextField::width_chars`): the field asks for
     /// `chars` times the width of a `0` in its face instead of the field length, so one row of a form can be wider or
     /// narrower than the others (a watermark's text against a short name). A row that lacks room still narrows it.
@@ -798,7 +1251,7 @@ impl Param {
 
     /// Hover text for the whole row, label and control, of any kind.
     #[must_use]
-    pub fn tooltip(mut self, text: impl Into<Label>) -> Self {
+    pub fn tooltip(mut self, text: impl Into<Tooltip>) -> Self {
         self.texts.get_or_insert_default().tooltip = Some(text.into());
         self
     }
@@ -812,6 +1265,18 @@ impl Param {
             ParamKind::OptionalNumber { decimals, .. } => *decimals = places,
             ParamKind::Range { .. } => self.options.get_or_insert_default().range_decimals = Some(places),
             _ => {}
+        }
+        self
+    }
+
+    /// The step of a [`ParamKind::Range`] row, as `SliderField::step`: the slider and the field move by `step` on arrow
+    /// keys, the wheel and a scrub, and drags, clicks on the track and typed values snap to it. It takes the place of
+    /// the step [`decimals`](Param::decimals) implies; the stored value is still rounded to those decimals. A step that
+    /// is not finite and positive leaves the row's step as it was; other kinds are unchanged.
+    #[must_use]
+    pub fn step(mut self, step: f64) -> Self {
+        if matches!(self.kind, ParamKind::Range { .. }) && step.is_finite() && step > 0.0 {
+            self.options.get_or_insert_default().range_step = Some(step);
         }
         self
     }
@@ -857,11 +1322,61 @@ impl Param {
         self
     }
 
+    /// For a field with a side caption, hides the caption while keeping the row label as its accessible name.
+    /// Resettable fields keep their caption and reset dot. Separate headings, radio groups and stacked sliders
+    /// keep their own captions.
+    #[must_use]
+    pub fn hide_caption(mut self) -> Self {
+        self.options.get_or_insert_default().hide_caption = true;
+        self
+    }
+
+    /// For a [`ParamKind::Range`] row: the slider asks for a short field's length and the number field is as wide as
+    /// its widest value, so the row takes its content's width rather than the form's (production's Opacity). Other
+    /// kinds and a popup slider are unchanged.
+    #[must_use]
+    pub fn short_slider(mut self) -> Self {
+        self.options.get_or_insert_default().short_slider = true;
+        self
+    }
+
     /// For a [`ParamKind::Radio`] row: the options stand side by side in one row, with no caption over them; the label
     /// still names the group for assistive technology. Other kinds are unchanged.
     #[must_use]
     pub fn options_in_row(mut self) -> Self {
         self.options.get_or_insert_default().options_in_row = true;
+        self
+    }
+
+    /// For a [`ParamKind::Radio`] row: the options stand in a column with no caption over or beside them, in a document
+    /// dialog too (production's Split); the label still names the group for assistive technology. Other kinds are
+    /// unchanged.
+    #[must_use]
+    pub fn stacked_options(mut self) -> Self {
+        self.options.get_or_insert_default().stacked_options = true;
+        self
+    }
+
+    /// The row belongs to the option `id` of the radio row it follows: it stands under that option, one indent step in
+    /// (production's Pages per file under Number of pages), or right after the option, with no caption of its own,
+    /// when the radio row's options stand in a row ([`options_in_row`](Param::options_in_row); production's colour
+    /// well after From colour). Only the rows that directly follow a radio row nest; elsewhere the mark is ignored.
+    #[must_use]
+    pub fn under_option(mut self, id: impl Into<String>) -> Self {
+        self.options.get_or_insert_default().under_option = Some(id.into());
+        self
+    }
+
+    /// The option of the radio row before this one that the row stands under ([`under_option`](Param::under_option)).
+    pub(crate) fn nested_under(&self) -> Option<&str> {
+        self.options.as_deref()?.under_option.as_deref()
+    }
+
+    /// The row stands on the same line as the row before it (production's Font, Size, Underline and Colour on one
+    /// line), wrapping to the next line when the form is too narrow. The first row of a form or group ignores it.
+    #[must_use]
+    pub fn beside_previous(mut self) -> Self {
+        self.options.get_or_insert_default().beside = true;
         self
     }
 
@@ -901,6 +1416,15 @@ impl Param {
         self
     }
 
+    /// Text shown after the number of a number, int, optional-number or range row in place of the symbol of its
+    /// [`unit`](Self::unit), for a quantity no [`UnitKind`] names (`kbps`, `MB`). The host passes it in the user's
+    /// language. Typed text is still read by the row's `unit`, or as a plain number without one.
+    #[must_use]
+    pub fn unit_label(mut self, text: impl Into<Label>) -> Self {
+        self.texts.get_or_insert_default().unit = Some(text.into());
+        self
+    }
+
     /// Parses the registry notation into a list, labels from the keys in Title Case with two fixed names (`cellSize`
     /// is `Cell Size`, `bpc` is `Black Point Compensation`;
     /// `{"radius":0.1..1000=1,"method":"spin|zoom","monochromatic":bool,"seed":u32=0}`). Apps with their own command
@@ -923,14 +1447,29 @@ impl Param {
         self.options.as_deref().cloned().unwrap_or_default()
     }
 
+    /// The value the row shows while it is disabled ([`Param::disabled_value`]).
+    pub(crate) fn shown_disabled(&self) -> Option<&FieldValue> {
+        self.options.as_deref()?.disabled_value.as_ref()
+    }
+
     /// The hint text.
     pub(crate) fn hint_text(&self) -> Option<&Label> {
         self.texts.as_deref()?.hint.as_ref()
     }
 
     /// The row's tooltip text.
-    pub(crate) fn tooltip_text(&self) -> Option<&Label> {
+    pub(crate) fn tooltip_text(&self) -> Option<&Tooltip> {
         self.texts.as_deref()?.tooltip.as_ref()
+    }
+
+    /// The text after the row's number ([`Param::unit_label`]).
+    pub(crate) fn unit_label_text(&self) -> Option<&Label> {
+        self.texts.as_deref()?.unit.as_ref()
+    }
+
+    /// The label a [`Param::in_footer`] row shows while on; `None` for a row in the body.
+    pub(crate) fn footer_on(&self) -> Option<Label> {
+        self.options.as_deref()?.footer_on.clone()
     }
 
     /// Whether the row's value is saved with the form.
@@ -999,12 +1538,22 @@ impl Param {
 
     /// Whether the row is shown with `fields`.
     pub fn visible(&self, fields: &DialogFields) -> bool {
-        self.visible_when.as_ref().is_none_or(|(key, value)| fields.get(key) == Some(value))
+        self.shown && self.visible_when.iter().all(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held)))
     }
 
-    /// Whether the row takes input with `fields`.
+    /// Whether the row takes input with `fields`: every enable condition must hold.
     pub fn enabled(&self, fields: &DialogFields) -> bool {
-        self.enabled_when.as_ref().is_none_or(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held)))
+        let options = self.options.as_deref();
+        let enabled = match &self.enable {
+            Enable::Always => true,
+            Enable::When(key, values) => fields.get(key).is_some_and(|held| values.contains(held)),
+            Enable::Off => false,
+        };
+        enabled
+            && options
+                .is_none_or(|options| options.enabled_when_also.iter().all(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held))))
+            && options.and_then(|options| options.enabled_above.as_ref()).is_none_or(|(key, bound)| fields.number(key).is_some_and(|n| n > *bound))
+            && options.and_then(|options| options.enabled_when_differs.as_ref()).is_none_or(|(a, b)| fields.get(a) != fields.get(b))
     }
 }
 
@@ -1012,6 +1561,12 @@ impl RowOptions {
     /// The decimals a range row stores, or `None` for as typed.
     pub(crate) fn range_places(&self) -> Option<u32> {
         self.range_decimals
+    }
+
+    /// The step a range row's slider and field use: the one [`Param::step`] set, else the one its decimals imply, or
+    /// `None` for the controls' own.
+    pub(crate) fn range_step(&self) -> Option<f64> {
+        self.range_step.or_else(|| self.range_decimals.map(|places| 10f64.powi(-(places as i32))))
     }
 
     /// Whether an int row has a Random button.
@@ -1034,9 +1589,19 @@ impl RowOptions {
         self.full_width
     }
 
+    /// Whether a range row's slider is short.
+    pub(crate) fn short_slider(&self) -> bool {
+        self.short_slider
+    }
+
     /// Whether a radio row's options stand in one row with no caption.
     pub(crate) fn options_in_row(&self) -> bool {
         self.options_in_row
+    }
+
+    /// Whether a radio row's options stand in a column with no caption.
+    pub(crate) fn stacked_options(&self) -> bool {
+        self.stacked_options
     }
 
     /// The lines of a multi-line text row; `None` for a single line.
@@ -1054,6 +1619,11 @@ impl RowOptions {
         self.mono
     }
 
+    /// Whether a text row selects its text when it takes the focus.
+    pub(crate) fn select_on_focus(&self) -> bool {
+        self.select_on_focus
+    }
+
     /// The width a text row's field asks for, in characters; `None` for the field length.
     pub(crate) fn field_chars(&self) -> Option<u16> {
         self.field_chars
@@ -1062,6 +1632,11 @@ impl RowOptions {
     /// Whether a choice row's select has a search field.
     pub(crate) fn searchable(&self) -> bool {
         self.searchable
+    }
+
+    /// Whether a choice row's list has a separator before the option at `index`.
+    pub(crate) fn separated_before(&self, index: usize) -> bool {
+        self.separated_at.contains(&index)
     }
 
     /// The units of a number row.
@@ -1110,13 +1685,43 @@ pub fn encode(component: f32) -> u8 {
 }
 
 /// Writes `color` into the colour parameter `key` of `params`, or into a key no parameter has when a
-/// [`Param::custom`] row can have asked for it; other keys are ignored.
+/// [`Param::custom`] row can have asked for it; other keys are ignored. A row with opacity takes the color's RGB and
+/// keeps its opacity, or takes the row's starting opacity when it had no color; `color`'s alpha is not read.
 pub fn set_color_field(params: &[Param], fields: &mut DialogFields, key: &str, color: Srgba) {
-    let colour_row = params.iter().any(|param| param.key == key && matches!(param.kind, ParamKind::Color { .. }));
-    let custom_request = params.iter().any(|param| matches!(param.kind, ParamKind::Custom(_))) && params.iter().all(|param| param.key != key);
+    let row = params.iter().find(|param| param.key == key);
+    if let Some(ParamKind::Color { alpha: Some(start), .. }) = row.map(|param| &param.kind) {
+        let alpha = fields.rgba(key).map_or(*start, |[_, _, _, a]| a);
+        let [r, g, b] = color.to_rgb_array();
+        fields.set(key, FieldValue::Rgba([r, g, b, alpha]));
+        return;
+    }
+    let colour_row = row.is_some_and(|param| matches!(param.kind, ParamKind::Color { .. }));
+    let custom_request = params.iter().any(|param| matches!(param.kind, ParamKind::Custom(_))) && row.is_none();
     if colour_row || custom_request {
         fields.set(key, FieldValue::Color(color.to_rgb_array()));
     }
+}
+
+/// The keys of the rows of `params` whose values differ between `before` and `after`: a row's own key, its unit key, a
+/// custom row's companions or a Files row's folder and mode. Every record of the rows an edit changed reads this rule.
+pub(crate) fn edited_rows(params: &[Param], before: &DialogFields, after: &DialogFields) -> Vec<String> {
+    let differs = |key: &str| before.get(key) != after.get(key);
+    params
+        .iter()
+        .filter(|param| {
+            differs(&param.key)
+                || param.unit_key().is_some_and(differs)
+                || matches!(&param.kind, ParamKind::Custom(row) if row.companions.iter().any(|key| differs(key)))
+                || (matches!(param.kind, ParamKind::Files { .. }) && (differs(&param.folder_key()) || differs(&param.use_folder_key())))
+        })
+        .map(|param| param.key.clone())
+        .collect()
+}
+
+/// Sets `text` as the one text of `id` in `texts`.
+fn keyed_text(texts: &mut Vec<(String, Label)>, id: String, text: Label) {
+    texts.retain(|(held, _)| *held != id);
+    texts.push((id, text));
 }
 
 /// Fills the keys `params` have defaults for and `fields` lack, and takes the opening snapshot.
@@ -1125,10 +1730,12 @@ pub fn open_fields(params: &[Param], fields: &mut DialogFields) {
     fields.snapshot();
 }
 
-/// Fills the keys `params` have defaults for and `fields` lack, including the unit key of a row with units.
+/// Fills the keys `params` have defaults for and `fields` lack, including the unit key of a row with units. A key
+/// marked mixed stays absent: its row shows it blank.
 pub(crate) fn fill_defaults(params: &[Param], fields: &mut DialogFields) {
     for param in params {
         if !fields.contains(&param.key)
+            && !fields.is_mixed(&param.key)
             && let Some(value) = param.default_value()
         {
             fields.set(param.key.as_str(), value);

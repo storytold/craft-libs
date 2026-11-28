@@ -7,6 +7,7 @@ pub(crate) mod document_window;
 pub(crate) mod embed;
 pub(crate) mod f6;
 pub(crate) mod opening;
+pub(crate) mod options_place;
 pub(crate) mod reveal;
 pub(crate) mod screen_mode;
 pub(crate) mod start;

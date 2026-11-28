@@ -8,7 +8,9 @@ use std::collections::HashSet;
 use std::hash::Hash;
 
 /// How the presets are shown.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, crate::contract::PlainData, crate::contract::MemoProps,
+)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum PresetView {
@@ -20,7 +22,7 @@ pub enum PresetView {
 }
 
 /// Which groups are open before the user toggles any.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum DefaultOpen {
     /// Every group.
@@ -37,7 +39,7 @@ pub enum DefaultOpen {
 ///
 /// A group is open when its default (from [`DefaultOpen`]) differs from membership in `toggled`. While the search
 /// text is not empty, every group is open.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, crate::contract::PlainData)]
 #[serde(default, bound(serialize = "K: serde::Serialize", deserialize = "K: serde::Deserialize<'de> + Eq + std::hash::Hash"))]
 #[non_exhaustive]
 pub struct PresetState<K> {

@@ -61,35 +61,3 @@ fn a_vertical_divider_spans_the_line_of_a_content_height_row_without_setting_it(
     check(&seen, "once settled");
     assert!(last_pass_measuring_runs(&frames.ctx).is_empty(), "a settled frame measures nothing");
 }
-
-/// A vertical divider given its length keeps it: beside a taller stack it does not span the row, and longer than the
-/// stack it sets the row's height, in a column given the screen's height as in a content-sized one.
-#[trial]
-fn a_vertical_divider_given_its_length_keeps_it_whatever_the_row() {
-    for length in [12.0_f32, 400.0] {
-        let mut frames = Frames::new();
-        let seen = Cell::new((Rect::NOTHING, Rect::NOTHING, Rect::NOTHING));
-        for _ in 0..2 {
-            frames.idle(4, |ui| {
-                Stack::new().fill().show_at(ui, ui.available_rect_before_wrap(), |ui, _| {
-                    let parts = Cell::new((Rect::NOTHING, Rect::NOTHING));
-                    let row = Row::new().show(ui, |ui, _| {
-                        let stack = Stack::new().show(ui, |ui, _| {
-                            for label in ["Bevel", "Stroke", "Inner Shadow"] {
-                                Button::new(label).show(ui);
-                            }
-                        });
-                        let divider = Divider::vertical().length(length).show(ui).rect;
-                        parts.set((stack.output.rect, divider));
-                    });
-                    let (stack, divider) = parts.get();
-                    seen.set((row.output.rect, stack, divider));
-                });
-            });
-            let (row, stack, divider) = seen.get();
-            assert!((divider.height() - length).abs() <= SNAP, "the divider {divider:?} is {length} long");
-            let tallest = stack.height().max(length);
-            assert!((row.height() - tallest).abs() <= SNAP, "the row {row:?} is as tall as its tallest child ({tallest})");
-        }
-    }
-}

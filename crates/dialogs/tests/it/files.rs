@@ -1,7 +1,7 @@
 //! The path field and the picker ticket it keeps, against a file service that records its requests.
 
 use craft_dialogs::ui::PathField;
-use craft_host::{AppInfo, FileError, Files, Host, PickAnswer, PickId, PickRequest, Picked};
+use craft_host::{AppInfo, FileError, Files, Host, PickAnswer, PickId, PickRequest, Picked, WriteIntent};
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};
 use std::cell::{Cell, RefCell};
@@ -47,15 +47,15 @@ impl Files for StubFiles {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).answered.retain(|a| a.id != id);
     }
 
-    fn pick_pending(&self) -> bool {
-        false
+    fn pending_pick(&self) -> Option<craft_host::PendingPick> {
+        None
     }
 
     fn read(&self, _path: &Path) -> Result<Vec<u8>, FileError> {
         Err(FileError::Unsupported)
     }
 
-    fn write(&self, _path: &Path, _bytes: &[u8]) -> Result<(), FileError> {
+    fn write(&self, _path: &Path, _bytes: &[u8], _intent: WriteIntent) -> Result<bool, FileError> {
         Err(FileError::Unsupported)
     }
 

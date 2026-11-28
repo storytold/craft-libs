@@ -8,7 +8,8 @@
 //!
 //! - **Unset or empty:** the table is empty and the app uses its own and system fonts.
 //! - **Set:** every selected face in `fonts/manifest.txt` is embedded with `include_bytes!`.
-//! - **Set, but not readable as a checkout:** a `cargo::warning` and an empty table.
+//! - **Set, but not readable as a checkout:** a `cargo::warning` and an empty table. A selected
+//!   font file whose SHA-256 is not the one its manifest line gives counts as unreadable.
 //! - **`CRAFT_FONTS_REQUIRED=1`** (release builds; any other value is ignored): a missing or
 //!   unreadable checkout, no selected face, or a requested script without a face is an [`Error`].
 //!
@@ -56,13 +57,12 @@ mod cmap;
 pub mod coverage;
 mod embed;
 mod manifest;
-#[cfg(feature = "subset")]
 mod sha256;
 #[cfg(test)]
 mod tests;
 
 pub use embed::{Embed, Error, target_is_wasm};
-pub use manifest::{CJK_SCRIPTS, MONO_ROLE, ManifestEntry, ParseError, UI_ROLE, parse_manifest};
+pub use manifest::{CJK_SCRIPTS, MONO_ROLE, ManifestEntry, ParseError, SIGNATURE_ROLE, TAB_FACE, TAB_ROLE, UI_ROLE, parse_manifest};
 
 /// A craft-fonts face embedded by [`Embed`]: one line of `fonts/manifest.txt`.
 ///
@@ -81,7 +81,8 @@ pub struct EmbeddedFace {
     /// The font file's bytes, from `include_bytes!`.
     pub bytes: &'static [u8],
     /// The manifest line's `role`: `Some("ui")` for an interface face ([`UI_ROLE`]), `Some("mono")` for the
-    /// monospace face ([`MONO_ROLE`]), `None` for a line without one.
+    /// monospace face ([`MONO_ROLE`]), `Some("signature")` for the signature face ([`SIGNATURE_ROLE`]), `Some("tab")`
+    /// for the tab-title face [`Embed::tab_face`] adds ([`TAB_ROLE`]), `None` for a line without one.
     pub role: Option<&'static str>,
 }
 

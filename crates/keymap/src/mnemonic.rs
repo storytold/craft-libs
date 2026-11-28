@@ -44,9 +44,34 @@ pub fn marked_at(label: &str, folder: &Folder) -> (String, Option<(char, usize)>
 /// marker, takes the first letter or digit of its text not yet used, trying the first character of each word before
 /// the others.
 pub fn assign(labels: &[&str], folder: &Folder) -> Vec<Option<(char, usize)>> {
-    let parsed: Vec<(String, Option<(char, usize)>)> = labels.iter().map(|label| marked_at(label, folder)).collect();
+    let own = vec![None; labels.len()];
+    assign_with(labels, &own, folder).into_iter().map(|mark| mark.and_then(|(letter, at)| Some((letter, at?)))).collect()
+}
+
+/// A mnemonic letter and its character index in the label's text, none when the text does not show it.
+type Placed = (char, Option<usize>);
+
+/// [`assign`] where a label may come with a letter of its own: a label without a `&` marker holds its `own` letter as a
+/// marker would, at the first character of its text that types it, or with no index when the text has none (a
+/// translated label keeps its English label's key). An own letter that is not a typable key is ignored.
+pub fn assign_with(labels: &[&str], own: &[Option<char>], folder: &Folder) -> Vec<Option<(char, Option<usize>)>> {
+    let turkic = folder.turkic();
+    let parsed: Vec<(String, Option<Placed>)> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            let (text, mark) = marked_at(label, folder);
+            let own = own
+                .get(i)
+                .copied()
+                .flatten()
+                .and_then(|c| letter(c, turkic))
+                .map(|key| (key, text.chars().position(|c| letter(c, turkic) == Some(key))));
+            (text, mark.map(|(letter, at)| (letter, Some(at))).or(own))
+        })
+        .collect();
     let mut used: Vec<char> = Vec::new();
-    let mut out: Vec<Option<(char, usize)>> = Vec::with_capacity(parsed.len());
+    let mut out: Vec<Option<Placed>> = Vec::with_capacity(parsed.len());
     for (_, mark) in &parsed {
         let held = mark.filter(|(letter, _)| !used.contains(letter));
         used.extend(held.map(|(letter, _)| letter));
@@ -54,7 +79,7 @@ pub fn assign(labels: &[&str], folder: &Folder) -> Vec<Option<(char, usize)>> {
     }
     for ((text, _), slot) in parsed.iter().zip(&mut out) {
         if slot.is_none() {
-            *slot = first_unused(text, &used, folder.turkic());
+            *slot = first_unused(text, &used, turkic).map(|(letter, at)| (letter, Some(at)));
             used.extend(slot.map(|(letter, _)| letter));
         }
     }

@@ -71,8 +71,10 @@ pub enum RuleKind {
     Choice(Vec<(String, String)>),
     /// A `#rrggbb` string as a swatch and hex field.
     Color,
-    /// The app draws it ([`CustomSettings::row`]).
+    /// The app draws it ([`CustomSettings::row`]); the window labels it.
     Custom,
+    /// The app draws whole rows, labels included ([`CustomSettings::row`]).
+    CustomRows,
 }
 
 impl SettingRule {
@@ -158,10 +160,18 @@ impl SettingRule {
         self
     }
 
-    /// The app draws the control ([`CustomSettings::row`]).
+    /// The app draws the control ([`CustomSettings::row`]); the window labels it beside the control.
     #[must_use]
     pub fn custom(mut self) -> Self {
         self.kind = Some(RuleKind::Custom);
+        self
+    }
+
+    /// The app draws whole rows with their labels ([`CustomSettings::row`]): the window adds none. The rule's label
+    /// stays the row's search text and its group's name.
+    #[must_use]
+    pub fn custom_rows(mut self) -> Self {
+        self.kind = Some(RuleKind::CustomRows);
         self
     }
 

@@ -1,3 +1,4 @@
+pub(crate) mod app_measure;
 pub(crate) mod cross_fill;
 pub(crate) mod fill_column;
 pub(crate) mod fill_height;
@@ -11,6 +12,7 @@ pub(crate) mod row_line;
 pub(crate) mod row_room;
 pub(crate) mod rtl_scroll;
 pub(crate) mod scroll_region;
+pub(crate) mod segmented_lines;
 pub(crate) mod shrink_order;
 pub(crate) mod stack_header;
 pub(crate) mod stack_widths;

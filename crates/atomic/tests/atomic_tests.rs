@@ -99,3 +99,49 @@ fn private_staging_preserves_existing_modes_after_callback() -> io::Result<()> {
     assert_no_temp(&d.0);
     Ok(())
 }
+
+/// Extended attribute names on `path`, read by path.
+#[cfg(target_os = "macos")]
+fn xattr_names(path: &Path) -> Vec<Vec<u8>> {
+    let mut names = vec![0u8; 64 * 1024];
+    let len = rustix::fs::listxattr(path, names.as_mut_slice()).unwrap_or(0);
+    names.truncate(len);
+    names.split(|b| *b == 0).filter(|n| !n.is_empty()).map(<[u8]>::to_vec).collect()
+}
+
+/// A write-only file (mode 0200) saves: macOS lets its owner neither read its data nor list its
+/// attributes, so its attributes are dropped, as before attributes were kept.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_write_only_file_saves_and_drops_the_attributes_it_cannot_read() -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let d = TempDir::new("write_only_xattrs");
+    let p = d.0.join("doc.craft");
+    std::fs::write(&p, ORIGINAL)?;
+    rustix::fs::setxattr(&p, "com.craft.t", b"tag", rustix::fs::XattrFlags::empty())?;
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o200))?;
+    atomic_write(&p, b"new")?;
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600))?;
+    assert_eq!(std::fs::read(&p)?, b"new");
+    assert!(!xattr_names(&p).iter().any(|n| n == b"com.craft.t"), "the unreadable attribute is dropped");
+    Ok(())
+}
+
+/// A file whose data an ACL denies but whose attribute names can be listed is not replaced: its
+/// attributes can't be copied without its data, and the save refuses rather than drop them.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_unreadable_file_with_listable_attributes_is_not_replaced() -> io::Result<()> {
+    let d = TempDir::new("acl_denied_xattrs");
+    let p = d.0.join("doc.craft");
+    std::fs::write(&p, ORIGINAL)?;
+    rustix::fs::setxattr(&p, "com.craft.t", b"tag", rustix::fs::XattrFlags::empty())?;
+    let denied = std::process::Command::new("/bin/chmod").arg("+a").arg("everyone deny read").arg(&p).status()?;
+    assert!(denied.success(), "the ACL is set");
+    let result = atomic_write(&p, b"new");
+    let _ = std::process::Command::new("/bin/chmod").arg("-N").arg(&p).status();
+    assert!(result.is_err(), "the save is refused");
+    assert_eq!(std::fs::read(&p)?, ORIGINAL, "the original is unchanged");
+    assert!(xattr_names(&p).iter().any(|n| n == b"com.craft.t"), "and keeps its attribute");
+    Ok(())
+}

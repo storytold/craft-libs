@@ -1,14 +1,14 @@
 //! The list trials: wheel chaining, keys and selection, and large sources.
 
 use super::kit::{Count, Dismissed, List, ROW_H, Row, Words};
-use craft_behavior::{Selection, SelectionChange};
+use craft_behavior::{DisplayOrder, ItemSource, Selection, SelectionChange, SizeHint};
 use craft_keymap::{Chord, Mods};
 use craft_ui::contract::{Bind, CollectionEvent, CollectionResponse, Props as _, SelectMode, Show as _, ShowCollection as _};
 use craft_ui::runtime::focus::{FocusTarget, request};
 use craft_ui::runtime::keys;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Frames, input, pointer, trial};
-use egui::{Event, Id, Key, Modifiers, Pos2, Rect, Ui, Vec2};
+use egui::{Event, Id, Key, Modifiers, Pos2, Rect, Sense, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 
 const VIEW: Vec2 = Vec2::new(300.0, 200.0);
@@ -53,11 +53,23 @@ impl Seen {
         self.events.borrow().iter().filter_map(|event| if let CollectionEvent::LeadMoved { key, .. } = event { Some(*key) } else { None }).collect()
     }
 
+    /// The reorders reported since the last call, as the moved keys and where they go.
+    fn moves(&self) -> Vec<(Vec<usize>, usize)> {
+        let events: Vec<_> = self.events.borrow_mut().drain(..).collect();
+        events
+            .iter()
+            .filter_map(|event| match event {
+                CollectionEvent::Reorder(edit) => edit.value().map(|mv| (mv.keys.clone(), mv.to)),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn selections(&self) -> Vec<SelectionChange<usize>> {
         self.events
             .borrow()
             .iter()
-            .filter_map(|event| if let CollectionEvent::Selection(change) = event { Some(change.clone()) } else { None })
+            .filter_map(|event| if let CollectionEvent::Selection { change, .. } = event { Some(change.clone()) } else { None })
             .collect()
     }
 }
@@ -367,23 +379,44 @@ fn stacking_keys_move_the_selected_rows() {
     press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
     press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
     press(&mut frames, Key::ArrowDown, Modifiers::SHIFT, &mut show);
-    let moves = |seen: &Seen| -> Vec<(Vec<usize>, usize)> {
-        let events: Vec<_> = seen.events.borrow_mut().drain(..).collect();
-        events
-            .iter()
-            .filter_map(|event| match event {
-                CollectionEvent::Reorder(edit) => edit.value().map(|mv| (mv.keys.clone(), mv.to)),
-                _ => None,
-            })
-            .collect()
-    };
-    moves(&seen);
+    seen.moves();
     press(&mut frames, Key::ArrowDown, Modifiers::ALT, &mut show);
-    assert_eq!(moves(&seen), Vec::new(), "Alt+Down moves nothing");
+    assert_eq!(seen.moves(), Vec::new(), "Alt+Down moves nothing");
     press(&mut frames, Key::CloseBracket, Modifiers::COMMAND, &mut show);
-    assert_eq!(moves(&seen), vec![(vec![2, 3], 1)], "Cmd+] moves both selected rows one place up");
+    assert_eq!(seen.moves(), vec![(vec![2, 3], 1)], "Cmd+] moves both selected rows one place up");
     press(&mut frames, Key::OpenBracket, Modifiers::COMMAND | Modifiers::SHIFT, &mut show);
-    assert_eq!(moves(&seen), vec![(vec![2, 3], 4)], "Shift+Cmd+[ moves them to the bottom");
+    assert_eq!(seen.moves(), vec![(vec![2, 3], 4)], "Shift+Cmd+[ moves them to the bottom");
+}
+
+/// Under the Alt+arrow scheme Alt+Down moves the selected row one place later and Alt+Up one place earlier, and the
+/// stacking keys move nothing. Guards the scheme reaching the key table from the collection's reorder rule: read at
+/// the wrong place, Alt+Down opens or closes instead and Cmd+] still reorders.
+#[trial]
+fn alt_arrows_reorder_under_the_alt_arrow_scheme() {
+    use super::table::Table;
+    use craft_ui::contract::{CollectionProps, ReorderKeys, ReorderRule};
+    // The kit's `List` builds its rule itself; the trial's `Table` takes the collection props whole.
+    let source = Count(labels().len());
+    let seen = Seen::default();
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let items = CollectionProps::new().select(SelectMode::Single).reorder(ReorderRule::new().keys(ReorderKeys::AltArrows));
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            seen.take(Table::new(items).id_salt("list").show_items(ui, &source, &mut |_, _| Row::new()));
+        });
+    };
+    frames.idle(2, &mut show);
+    focus_list(&mut frames, &seen, &mut show);
+    for _ in 0..3 {
+        press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
+    }
+    seen.moves();
+    press(&mut frames, Key::ArrowDown, Modifiers::ALT, &mut show);
+    assert_eq!(seen.moves(), vec![(vec![2], 3)], "Alt+Down moves the selected row one place down");
+    press(&mut frames, Key::ArrowUp, Modifiers::ALT, &mut show);
+    assert_eq!(seen.moves(), vec![(vec![2], 1)], "Alt+Up moves it one place up");
+    press(&mut frames, Key::CloseBracket, Modifiers::COMMAND, &mut show);
+    assert_eq!(seen.moves(), Vec::new(), "Cmd+] is no key of this scheme");
 }
 
 /// A million rows: the last row places and hits exactly through the runtime.
@@ -416,6 +449,126 @@ fn a_million_row_layout_places_and_hits_the_last_row_exactly() {
     let click = last.get().center();
     pointer::click(&mut frames, click, &mut show);
     assert!(seen.leads().contains(&(COUNT - 1)), "a press at the last row's centre hits it");
+}
+
+/// `n` rows whose height comes from their content, so a row can take a detail body under it.
+struct Detailed(usize);
+
+impl DisplayOrder<usize> for Detailed {
+    fn len(&self) -> usize {
+        self.0
+    }
+
+    fn key(&self, at: usize) -> usize {
+        at
+    }
+
+    fn index_of(&self, key: &usize) -> Option<usize> {
+        (*key < self.0).then_some(*key)
+    }
+}
+
+impl ItemSource<usize> for Detailed {
+    fn size_hint(&self, _: usize) -> SizeHint {
+        SizeHint::Auto
+    }
+}
+
+/// A row's detail body takes room under it: the rows after it move down by its height, a press in it is its own and
+/// selects nothing, and the slot is as tall again once the row scrolls back into view.
+#[trial]
+fn a_detail_body_takes_room_under_its_row_and_keeps_its_presses() {
+    const DETAIL: f32 = 40.0;
+    const WITH: usize = 1;
+    let source = Detailed(ROWS);
+    let seen = Seen::default();
+    let rects = RefCell::new(vec![Rect::NOTHING; ROWS]);
+    let body = Cell::new(Rect::NOTHING);
+    let pressed = Cell::new(false);
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            let list = List::new(SelectMode::Single).sized().id_salt("list");
+            seen.take(list.show_items(ui, &source, &mut |key, cx| {
+                rects.borrow_mut()[*key] = cx.rect;
+                if *key == WITH {
+                    let (body, pressed) = (&body, &pressed);
+                    cx.detail(move |ui| {
+                        let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), DETAIL), Sense::click());
+                        body.set(rect);
+                        if response.clicked() {
+                            pressed.set(true);
+                        }
+                    });
+                }
+                Row::new()
+            }));
+        });
+    };
+    let gap = |at: usize| rects.borrow()[at + 1].min.y - rects.borrow()[at].min.y;
+    frames.idle(3, &mut show);
+    let leaf = gap(0);
+    assert!((gap(WITH) - leaf - DETAIL).abs() < SAME, "the row with a body is as tall as its leaf and the body: {} vs {leaf} + {DETAIL}", gap(WITH));
+    assert!((gap(WITH + 1) - leaf).abs() < SAME, "the rows after it keep their height");
+
+    pointer::click(&mut frames, body.get().center(), &mut show);
+    assert!(pressed.get(), "a press in the body reaches the body");
+    assert!(seen.selections().is_empty(), "and leaves the selection alone");
+
+    frames.frame(vec![pointer::moved(seen.rect.get().center())], &mut show);
+    for _ in 0..3 {
+        frames.frame(vec![pointer::wheel(-100_000.0)], &mut show);
+    }
+    assert!(seen.range().start > WITH, "the row scrolled out of view");
+    for _ in 0..3 {
+        frames.advance(craft_behavior::GESTURE_GAP);
+        frames.frame(vec![pointer::wheel(100_000.0)], &mut show);
+    }
+    frames.idle(2, &mut show);
+    assert_eq!(seen.range().start, 0, "the list is back at its first row");
+    assert!((gap(WITH) - leaf - DETAIL).abs() < SAME, "the slot keeps its height after it was out of view: {}", gap(WITH));
+}
+
+/// A click with the modifiers held.
+fn click_with(frames: &mut Frames, at: Pos2, mods: Modifiers, show: &mut impl FnMut(&mut Ui)) {
+    frames.hold(mods);
+    pointer::click(frames, at, &mut *show);
+    frames.hold(Modifiers::NONE);
+}
+
+/// Shift+Cmd on a click adds the range from the anchor to the selection and keeps the anchor, so a later plain Shift
+/// click still ranges from the first click.
+#[trial]
+fn shift_cmd_adds_the_range_and_keeps_the_anchor() {
+    let words = Words::flat(&labels());
+    let seen = Seen::default();
+    let selection = RefCell::new(Selection::<usize>::default());
+    let rects = RefCell::new(vec![Rect::NOTHING; 6]);
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let mut held = selection.borrow().clone();
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            let list = List::new(SelectMode::Multi).id_salt("list").selection(Bind::bound(&mut held));
+            seen.take(list.show_items(ui, &words, &mut |key, cx| {
+                rects.borrow_mut()[*key] = cx.rect;
+                Row::new()
+            }));
+        });
+        *selection.borrow_mut() = held;
+    };
+    let sorted = || {
+        let mut items = selection.borrow().items.clone();
+        items.sort_unstable();
+        items
+    };
+    frames.idle(3, &mut show);
+    let at = |row: usize| rects.borrow()[row].center();
+    click_with(&mut frames, at(1), Modifiers::NONE, &mut show);
+    assert_eq!(sorted(), vec![1], "a plain click selects the row");
+    click_with(&mut frames, at(4), Modifiers::COMMAND | Modifiers::SHIFT, &mut show);
+    assert_eq!(sorted(), vec![1, 2, 3, 4], "Shift+Cmd adds the range from the anchor");
+    click_with(&mut frames, at(0), Modifiers::SHIFT, &mut show);
+    assert_eq!(sorted(), vec![0, 1], "the anchor stayed on the first click");
 }
 
 /// A press the focused list takes as a move or a stacking move is gone from egui's input, where the app reads its

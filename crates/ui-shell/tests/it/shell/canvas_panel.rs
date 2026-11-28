@@ -1,14 +1,18 @@
 //! `CanvasPanel`: a double click on the empty document area is the panel's `empty_double` (the host opens a file);
-//! over a document whose canvas takes the press, it is never reported.
+//! over a document whose canvas takes the press, it is never reported. The tab strip is as high as its tabs.
 
 use craft_behavior::{HitLevel, HitPriority, PartKey, Sense};
+use craft_theme::{AppSizes, SizeValue};
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, PartsCx, Role, Show as _};
+use craft_ui::runtime::env::{Env, RootEnv};
 use craft_ui::shell::CanvasPanel;
+use craft_ui::tabs::{DocumentTab, DocumentTabs};
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::trial;
 use craft_ui_test_kit::contract::PlainStyle;
 use craft_ui_test_kit::windows::Windows;
 use egui::{Event, Rect, Response, Vec2};
+use std::sync::Arc;
 
 const BACKGROUND: PartKey = PartKey::new("background");
 
@@ -89,4 +93,38 @@ fn an_empty_canvas_panel_reports_a_double_click_on_its_room() {
     // Steps: move, press, release, press (the second press of the double click), release.
     assert_eq!(empty_doubles(false, 2), vec![3], "the second press on the empty room reports once");
     assert_eq!(empty_doubles(true, 2), Vec::<usize>::new(), "a document that takes the press leaves the room's double click unreported");
+}
+
+/// Regression: the tab pane had no extent, so it kept the height it first took (the strip before its tabs measured) and
+/// cut the tabs of a taller `size.bar.tab`; large tabs took the title bar's height. Each form of the strip shows its
+/// tabs whole in a pane at least as high as its own token, the large form above the regular.
+#[trial]
+fn the_tab_strip_is_as_high_as_its_tabs() {
+    let tabs = [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two")];
+    let shown = |large: bool| {
+        let windows = Windows::new();
+        let mut root = RootEnv::default();
+        let mut sizes = AppSizes::default();
+        sizes.all.insert("size.bar.tab".to_owned(), SizeValue::Number(44.0));
+        sizes.all.insert("size.bar.tab_large".to_owned(), SizeValue::Number(60.0));
+        root.sizes = Arc::new(sizes);
+        windows.root_env(root);
+        let (mut pane, mut strip, mut token) = (None, Rect::NOTHING, 0.0);
+        for _ in 0..3 {
+            windows.frame(vec![], vec![], |ui| {
+                let bar = Env::of(ui).tokens.size.bar;
+                token = if large { bar.tab_large } else { bar.tab };
+                pane = CanvasPanel::new()
+                    .large_tabs(large)
+                    .tabs(|ui, _| strip = DocumentTabs::new("Documents", &tabs).large(large).show(ui).response.rect)
+                    .show(ui, |_, _| {})
+                    .tabs;
+            });
+        }
+        let (pane, form) = (pane.expect("the panel shows its tab strip"), if large { "large" } else { "regular" });
+        assert!(pane.height() >= token, "the {form} strip's pane {pane:?} is as high as its token {token}");
+        assert!(strip.is_positive() && pane.contains_rect(strip), "the {form} strip's tabs {strip:?} lie whole in its pane {pane:?}");
+        pane.height()
+    };
+    assert!(shown(true) > shown(false), "large tabs take the taller strip");
 }

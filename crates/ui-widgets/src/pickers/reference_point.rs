@@ -12,7 +12,8 @@ use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeyUse};
 use crate::style::{ComponentStyle, Flags, FocusLook, Stateful, States, StyleColor, StyleCx, SurfaceKind, SurfaceLook, UiTokens};
 use craft_behavior::{Anchor9, Metrics, NavShape, PartKey, PartRef, Roving, Sense};
-use egui::{Pos2, Rect, Vec2, vec2};
+use craft_theme::Rgba;
+use egui::{CornerRadius, Pos2, Rect, Vec2, vec2};
 
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
@@ -21,6 +22,9 @@ const CELL: PartKey = PartKey::new("cell");
 
 /// Points on each side of the grid.
 const GRID: usize = 3;
+
+/// The eight outer points in the order the `Squares` line joins them round the box; the centre point is left out.
+const RING: [usize; 8] = [0, 1, 2, 5, 8, 7, 6, 3];
 
 /// The side of the dot every point shows; the large picker draws the picked one twice as wide.
 const DOT: f32 = 3.5;
@@ -51,7 +55,7 @@ pub struct ReferencePointStyle {
     surface: SurfaceLook,
     #[style(focus)]
     focus: FocusLook,
-    /// The side of one point's cell.
+    /// The side of one point's cell; in the `Squares` look, the step from one square's centre to the next.
     cell: f32,
     /// The side of an unpicked point's dot.
     dot: f32,
@@ -59,12 +63,16 @@ pub struct ReferencePointStyle {
     picked_dot: f32,
     /// The dots' corner radius.
     dot_radius: egui::CornerRadius,
-    /// The picked point's dot.
+    /// The picked point's dot or square: `accent.text`, `text.normal` in the `Squares` look.
     ink: Stateful<StyleColor>,
     /// The side of the square one growth arrow fits in.
     arrow: f32,
-    /// The unpicked dots and the growth arrows.
+    /// The unpicked dots and squares, the line joining the squares and the growth arrows.
     arrow_ink: Stateful<StyleColor>,
+    /// The side of a square of the `Squares` look, which is two cells and a square wide.
+    square: f32,
+    /// The width of the `Squares` line and of the unpicked squares' outline.
+    line: StrokeWidth,
     /// The length of a long text bar of an alignment cell.
     bar: f32,
     /// The length of an alignment cell's short text bar.
@@ -83,11 +91,25 @@ pub struct ReferencePointStyle {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ReferencePointKind {
-    /// A point of a box: a dot in each cell.
+    /// A point of a box, drawn as the picker's [`ReferencePointLook`] sets.
     #[default]
     Point,
     /// The alignment of text in a cell: three text bars in each cell, set to its side and edge.
     Alignment,
+}
+
+/// How a [`ReferencePoint`] draws its nine points.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
+#[non_exhaustive]
+pub enum ReferencePointLook {
+    /// A dot for each point, the pick's twice as wide.
+    #[default]
+    Dots,
+    /// Eight outer squares joined by one line round the box and a lone centre square in the muted ink, the pick
+    /// filled in the normal text ink, on the surface around the picker with no well of its own. The squares are
+    /// `shape.locator.square` on a side, `shape.locator.cell` apart, the same in the compact picker. Growth arrows are
+    /// in `Dots` only.
+    Squares,
 }
 
 /// The 3 by 3 picker of a box's nine points: the point a transform, a resize or a watermark works about. The nine
@@ -115,12 +137,24 @@ pub struct ReferencePoint<'a> {
     #[style_key]
     #[prop(flag)]
     compact: bool,
+    /// How the nine points are drawn: dots, or squares joined by a line round the box.
+    #[style_key]
+    #[prop]
+    look: ReferencePointLook,
 }
 
 impl<'a> ReferencePoint<'a> {
     /// A picker named `label` over `value`.
     pub fn new(label: impl Into<Label>, value: Bind<'a, Option<Anchor9>>) -> Self {
-        ReferencePoint { common: Common::new(), value, kind: ReferencePointKind::default(), growth: None, compact: false }.label(label)
+        ReferencePoint {
+            common: Common::new(),
+            value,
+            kind: ReferencePointKind::default(),
+            growth: None,
+            compact: false,
+            look: ReferencePointLook::Dots,
+        }
+        .label(label)
     }
 
     /// The direction of the arrow `cell` shows when the pick is `anchor`, in cell steps (each -1, 0 or 1): away from
@@ -182,20 +216,33 @@ impl Component for ReferencePoint<'_> {
         let edge = Stateful::new(cx.color(colors.line.control_edge));
         let disabled = cx.color(colors.text.disabled);
         let look = |rest: StyleColor| Stateful::new(rest).off(States::new(rest, rest, rest, disabled));
-        ReferencePointStyle {
-            metrics: Metrics::new(),
-            surface: SurfaceLook::new(Stateful::new(StyleColor(sunken.fill)))
+        let squares = key.look == ReferencePointLook::Squares;
+        // The squares stand on the surface around them, joined by their own line; the dots sit in a sunken well.
+        let surface = if squares {
+            SurfaceLook::new(Stateful::new(cx.color(Rgba::TRANSPARENT)))
+        } else {
+            SurfaceLook::new(Stateful::new(StyleColor(sunken.fill)))
                 .kind(SurfaceKind::Sunken)
                 .radius(sunken.radius)
-                .border(edge, cx.tokens.stroke.thin),
+                .border(edge, cx.tokens.stroke.thin)
+        };
+        ReferencePointStyle {
+            metrics: Metrics::new(),
+            surface,
             focus: cx.focus_look(),
-            cell: if key.compact { cx.tokens.size.icon.md / GRID as f32 } else { cx.tokens.size.control.md },
+            cell: match (squares, key.compact) {
+                (true, _) => cx.tokens.shape.locator.cell,
+                (false, true) => cx.tokens.size.icon.md / GRID as f32,
+                (false, false) => cx.tokens.size.control.md,
+            },
             dot: DOT,
             picked_dot: if key.compact { DOT } else { DOT * 2.0 },
             dot_radius: UiTokens::corner(cx.tokens.shape.radius.sm),
-            ink: look(cx.color(colors.accent.text)),
+            ink: look(cx.color(if squares { colors.text.normal } else { colors.accent.text })),
             arrow: cx.tokens.size.icon.sm,
             arrow_ink: look(cx.color(colors.text.muted)),
+            square: cx.tokens.shape.locator.square,
+            line: StrokeWidth::Thin,
             bar: cx.tokens.size.icon.sm,
             bar_short: cx.tokens.size.icon.sm * BAR_SHORT,
             bar_gap: cx.tokens.size.icon.sm * BAR_GAP,
@@ -206,7 +253,11 @@ impl Component for ReferencePoint<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::splat(cx.style.cell * GRID as f32)
+        Vec2::splat(if self.look == ReferencePointLook::Squares {
+            cx.style.cell * (GRID - 1) as f32 + cx.style.square
+        } else {
+            cx.style.cell * GRID as f32
+        })
     }
 
     fn sense(&self) -> Sense {
@@ -254,10 +305,11 @@ impl Component for ReferencePoint<'_> {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let current = Self::position_of(cx.value());
-        debug_assert!(!(self.compact && self.growth.is_some()), "the compact picker shows no growth arrows");
+        let squares = self.look == ReferencePointLook::Squares;
+        debug_assert!(!(self.growth.is_some() && (self.compact || squares)), "the compact picker and the squares look show no growth arrows");
         debug_assert!(
-            self.kind == ReferencePointKind::Point || (!self.compact && self.growth.is_none()),
-            "only the point picker has growth arrows and a compact size"
+            self.kind == ReferencePointKind::Point || (!self.compact && self.growth.is_none() && !squares),
+            "only the point picker has growth arrows, a compact size and the squares look"
         );
         let draw = ui.draw();
         if self.kind == ReferencePointKind::Alignment {
@@ -285,6 +337,33 @@ impl Component for ReferencePoint<'_> {
                     };
                     let y = middle + (line as f32 - 1.0) * gap;
                     draw.stroke(&PaintShape::Path(vec![Pos2::new(start, y), Pos2::new(start + length, y)]), StrokeWidth::Medium, color);
+                }
+            }
+            return;
+        }
+        if squares {
+            // The outer squares' edges meet the picker's edges, a cell apart.
+            let first = cx.rect.min + Vec2::splat(cx.style.square / 2.0);
+            let centres: Vec<Pos2> = Anchor9::ALL
+                .iter()
+                .map(|point| {
+                    let (column, row) = point.cell();
+                    first + vec2(column as f32, row as f32) * cx.style.cell
+                })
+                .collect();
+            let (half, outline) = (cx.style.square / 2.0, cx.resolve(&cx.style.arrow_ink));
+            // Each side of the ring runs between the squares it joins, so the line never crosses a square.
+            for (from, to) in RING.iter().zip(RING.iter().cycle().skip(1)) {
+                let (from, to) = (centres[*from], centres[*to]);
+                let along = (to - from).normalized() * half;
+                draw.stroke(&PaintShape::Path(vec![from + along, to - along]), cx.style.line, outline);
+            }
+            for (at, centre) in centres.iter().enumerate() {
+                let square = PaintShape::Rect(Rect::from_center_size(*centre, Vec2::splat(cx.style.square)), CornerRadius::ZERO);
+                if current == Some(at) {
+                    draw.fill(&square, cx.resolve(&cx.style.ink));
+                } else {
+                    draw.stroke(&square, cx.style.line, outline);
                 }
             }
             return;

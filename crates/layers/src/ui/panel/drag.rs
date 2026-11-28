@@ -67,6 +67,71 @@ fn sub_row_group<K>(key: &LayerRowKey<K>) -> Option<SubRowGroup> {
     }
 }
 
+/// The rows of `order` that stay once the rows `mv` moves are taken out, and the position `mv` lands at among them.
+fn landing<'o, K: PartialEq>(order: &'o [LayerRowKey<K>], mv: &ReorderMove<LayerRowKey<K>>) -> (Vec<&'o LayerRowKey<K>>, usize) {
+    let remaining: Vec<&LayerRowKey<K>> = order.iter().filter(|key| !mv.keys.contains(key)).collect();
+    let to = mv.to.min(remaining.len());
+    (remaining, to)
+}
+
+/// The layer and the place a move of layers means on the displayed rows: the one encoding every layer drop reports,
+/// as a target and a position. A place is reported one way: into a group at its first slot, else before the next
+/// sibling, else after the last sibling. `None` for a place no layer names.
+pub(super) fn host_place<K: Clone + PartialEq>(
+    mv: &ReorderMove<LayerRowKey<K>>,
+    order: &[LayerRowKey<K>],
+    parent_of: &dyn Fn(&K) -> Option<K>,
+    relaxed: bool,
+) -> Option<(K, LayerPosition)> {
+    let (remaining, to) = landing(order, mv);
+    let parent = mv.parent.as_ref().map(|key| key.layer().clone());
+    // A place beside a layer's effects or Smart Filter rows is below that layer. The list lays those rows under the
+    // layer as its children, so the place has the layer as `parent` when it is above or between them.
+    let sub_row_owner = [to.checked_sub(1).and_then(|at| remaining.get(at)), remaining.get(to)]
+        .into_iter()
+        .flatten()
+        .find(|key| sub_row_group(key).is_some())
+        .map(|key| key.layer());
+    if let Some(owner) = sub_row_owner
+        .filter(|owner| (parent.as_ref() == Some(*owner) || parent == parent_of(owner)) && !mv.keys.contains(&LayerRowKey::Layer((*owner).clone())))
+    {
+        return Some((owner.clone(), LayerPosition::After));
+    }
+    if let Some(group) = parent.clone().filter(|group| to > 0 && matches!(remaining[to - 1], LayerRowKey::Layer(id) if id == group)) {
+        return Some((group, LayerPosition::Into));
+    }
+    let fits = |id: &K| relaxed || parent_of(id) == parent;
+    let next = remaining.get(to).copied().and_then(|key| match key {
+        LayerRowKey::Layer(id) if fits(id) => Some(id.clone()),
+        _ => None,
+    });
+    let previous = remaining[..to].iter().rev().find_map(|key| match key {
+        LayerRowKey::Layer(id) if fits(id) => Some(id.clone()),
+        _ => None,
+    });
+    match (next, previous, parent) {
+        (Some(next), _, _) => Some((next, LayerPosition::Before)),
+        (None, Some(previous), _) => Some((previous, LayerPosition::After)),
+        (None, None, Some(parent)) => Some((parent, LayerPosition::Into)),
+        (None, None, None) => None,
+    }
+}
+
+/// The layer and the position a host payload dropped at `at` means: onto a layer row is `Into` it; a gap goes through
+/// [`host_place`] as a move of no rows, matched by neighbours alone because the gap names no group. `None` onto an
+/// effects or Smart Filter row and where no layer is near.
+pub(super) fn host_drop_place<K: Clone + PartialEq>(
+    order: &[LayerRowKey<K>],
+    parent_of: &dyn Fn(&K) -> Option<K>,
+    at: &DropAt<LayerRowKey<K>>,
+) -> Option<(K, LayerPosition)> {
+    match at {
+        DropAt::Onto(LayerRowKey::Layer(id)) => Some((id.clone(), LayerPosition::Into)),
+        DropAt::Gap { key: Some(key), insert, .. } => host_place(&ReorderMove::new(key.clone(), Vec::new(), *insert, false), order, parent_of, true),
+        _ => None,
+    }
+}
+
 /// What a reorder of the displayed rows means. `order` is the display order the move was made in and
 /// `parent_of` the tree's parent of a layer. A filtered view shows every layer at the top level, so
 /// it matches the landing place by neighbours alone (`relaxed`).
@@ -79,45 +144,12 @@ pub(super) fn layer_drop<K: Clone + PartialEq>(
     if mv.keys.is_empty() {
         return None;
     }
-    let remaining: Vec<&LayerRowKey<K>> = order.iter().filter(|key| !mv.keys.contains(key)).collect();
-    let to = mv.to.min(remaining.len());
     if mv.keys.iter().all(LayerRowKey::is_layer) {
         let layers: Vec<K> = mv.keys.iter().map(|key| key.layer().clone()).collect();
-        let parent = mv.parent.as_ref().map(|key| key.layer().clone());
-        // A place beside a layer's effects or Smart Filter rows is below that layer. The list lays those rows under the
-        // layer as its children, so the place has the layer as `parent` when it is above or between them.
-        let sub_row_owner = [to.checked_sub(1).and_then(|at| remaining.get(at)), remaining.get(to)]
-            .into_iter()
-            .flatten()
-            .find(|key| sub_row_group(key).is_some())
-            .map(|key| key.layer());
-        if let Some(owner) = sub_row_owner.filter(|owner| {
-            (parent.as_ref() == Some(*owner) || parent == parent_of(owner)) && !mv.keys.contains(&LayerRowKey::Layer((*owner).clone()))
-        }) {
-            return Some(LayerDrop::Layers(LayerMove::new(layers, owner.clone(), LayerPosition::After, mv.copy)));
-        }
-        // A place is reported one way: into a group at its first slot, else before the next sibling, else after the
-        // last sibling.
-        if let Some(group) = parent.clone().filter(|group| to > 0 && matches!(remaining[to - 1], LayerRowKey::Layer(id) if id == group)) {
-            return Some(LayerDrop::Layers(LayerMove::new(layers, group, LayerPosition::Into, mv.copy)));
-        }
-        let fits = |id: &K| relaxed || parent_of(id) == parent;
-        let next = remaining.get(to).copied().and_then(|key| match key {
-            LayerRowKey::Layer(id) if fits(id) => Some(id.clone()),
-            _ => None,
-        });
-        let previous = remaining[..to].iter().rev().find_map(|key| match key {
-            LayerRowKey::Layer(id) if fits(id) => Some(id.clone()),
-            _ => None,
-        });
-        let (target, position) = match (next, previous, parent) {
-            (Some(next), _, _) => (next, LayerPosition::Before),
-            (None, Some(previous), _) => (previous, LayerPosition::After),
-            (None, None, Some(parent)) => (parent, LayerPosition::Into),
-            (None, None, None) => return None,
-        };
+        let (target, position) = host_place(mv, order, parent_of, relaxed)?;
         return Some(LayerDrop::Layers(LayerMove::new(layers, target, position, mv.copy)));
     }
+    let (remaining, to) = landing(order, mv);
     // Sub-rows: all of one layer and one group.
     let owner = mv.keys[0].layer();
     let group = sub_row_group(&mv.keys[0])?;

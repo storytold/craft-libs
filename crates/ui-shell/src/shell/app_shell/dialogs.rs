@@ -26,8 +26,10 @@ struct Hosts(HashMap<WindowKey, WindowDialogs>);
 pub struct WindowDialogs(Arc<Mutex<DialogHost>>);
 
 impl WindowDialogs {
-    /// The host of `window`, created on first use.
-    fn of(ctx: &Context, window: &WindowKey) -> WindowDialogs {
+    /// The host of `window` that its `AppShell` runs, created on first use: for app code outside a body (the control
+    /// channel, command handlers, the per-frame result pump). Never call [`with`](Self::with) from inside a dialog the
+    /// host runs: that is its own lock. [`ShellDialogsCx::dialogs`] stays the body path.
+    pub fn of(ctx: &Context, window: &WindowKey) -> WindowDialogs {
         memory::with::<Hosts, _>(ctx, |hosts| hosts.0.entry(window.clone()).or_default().clone())
     }
 

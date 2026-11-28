@@ -243,10 +243,14 @@ pub(crate) struct Wanted {
     wake: Option<f64>,
 }
 
+/// The instant type [`now`] returns: `std::time::Instant` on native targets, a clock that works in the browser on
+/// wasm.
+pub use web_time::Instant;
+
 /// The wall clock's reading, for a host that drives a store on real time (`ShellApp::tick`). It is the one place
 /// outside a pass that reads the clock.
-pub fn now() -> web_time::Instant {
-    web_time::Instant::now()
+pub fn now() -> Instant {
+    Instant::now()
 }
 
 /// Marks the running viewport as having an animation that is not at its end value.
@@ -395,6 +399,10 @@ impl Driver<'_> {
         let sizing = self.stage.is_peek();
         let now = frame::clock(ctx);
         let existing = if sizing { store::peek_clone::<Tween<T>>(ctx, id) } else { store::take::<Tween<T>>(ctx, id) };
+        // A tween that moves in this pass (a new target, also one it jumps to, or a step, also its last one) leaves the
+        // slot in another state than the run found it in, which the next run reads (`layer_fading` among others): a
+        // record of the run is not replayed. Only a tween still running asks for another frame.
+        let moved = existing.as_ref().is_some_and(|tween| tween.target() != target || !tween.is_settled());
         let mut tween = match existing {
             Some(tween) => tween,
             None => {
@@ -409,6 +417,8 @@ impl Driver<'_> {
         if !sizing {
             if !tween.is_settled() {
                 note_unsettled(ctx);
+            } else if moved {
+                crate::runtime::replay::note_unsettled(ctx);
             }
             store::put(ctx, id, tween);
         }

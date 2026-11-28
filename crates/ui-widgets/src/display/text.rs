@@ -2,6 +2,7 @@
 
 use crate::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Styled as _};
 use crate::primitives::{DocRun, DocText, Span, TextRun, Wrap};
+use crate::runtime::access::{Access, Numeric};
 use crate::runtime::env::Label;
 use std::borrow::Cow;
 
@@ -80,8 +81,15 @@ pub struct Text {
     spans: Vec<DocRun<'static>>,
     /// The interface spans that replace the label's text, in the type role, shade and tone of the text; empty for plain text.
     styled: Vec<Span<'static>>,
+    /// Sets the text's ideal and least width to those of this text, so a readout keeps its width while its value changes.
+    #[prop(into)]
+    sample: Option<Label>,
     /// Whether every span is italic, a value set apart from the words around it.
     italic: bool,
+    /// Gives the text an accessible numeric value, `value`, so tests and assistive technology read a position or a count
+    /// without parsing the translated text.
+    #[prop(quantity = "an accessible numeric value: a position or a count")]
+    numeric: Option<f64>,
 }
 
 impl Text {
@@ -95,7 +103,9 @@ impl Text {
             elide: Elide::Off,
             spans: Vec::new(),
             styled: Vec::new(),
+            sample: None,
             italic: false,
+            numeric: None,
         }
         .label(text)
     }
@@ -204,8 +214,22 @@ impl Component for Text {
             };
         }
         let role = cx.style.text.role;
-        // A line breaks between words, never inside one: a wrapped text is never narrower than its widest word.
-        let widest = || self.word_runs(role, cx.resolved.label).iter().map(|word| cx.layout_at(word, f32::INFINITY).size().x).fold(0.0, f32::max);
+        let sample = self.sample.as_ref().map(|sample| cx.layout_at(&self.run(role, sample.as_str()), f32::INFINITY).size().x);
+        if let Some(width) = sample
+            && matches!(cx.proposal, Proposal::Ideal | Proposal::Min)
+        {
+            let height = cx.layout_at(&self.run(role, cx.resolved.label), f32::INFINITY).size().y;
+            return Vec2::new(width, height);
+        }
+        // A line breaks between words, never inside one: a wrapped text is never narrower than its widest word, up to
+        // an enclosing reading-width cap.
+        let widest = || {
+            self.word_runs(role, cx.resolved.label)
+                .iter()
+                .map(|word| cx.layout_at(word, f32::INFINITY).size().x)
+                .fold(0.0, f32::max)
+                .min(cx.wrap_limit().unwrap_or(f32::INFINITY))
+        };
         if cx.proposal == Proposal::Min && self.elide == Elide::Off {
             let widest = widest();
             return Vec2::new(widest, cx.layout_at(&self.run(role, cx.resolved.label), widest).size().y);
@@ -215,7 +239,8 @@ impl Component for Text {
             let run = self.run(role, cx.resolved.label);
             return cx.least(&run).size();
         }
-        let band = wrap.unwrap_or(f32::INFINITY);
+        // A wrapping text is never narrower than its sample.
+        let band = wrap.unwrap_or(f32::INFINITY).max(if self.elide == Elide::Off { sample.unwrap_or(0.0) } else { 0.0 });
         let mut layout = cx.layout_at(&self.run(role, cx.resolved.label), band);
         // In a row the room is what the earlier siblings left, which can be less than a word; the row's shrink step
         // then makes room for the word.
@@ -238,6 +263,12 @@ impl Component for Text {
 
     fn sense(&self) -> Sense {
         super::display_sense(&self.common, self.elide != Elide::Off)
+    }
+
+    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
+        if let Some(value) = self.numeric {
+            access.numeric(Numeric::new(value, value..=value).text(cx.resolved.label));
+        }
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {

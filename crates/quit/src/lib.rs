@@ -18,6 +18,8 @@
 mod close;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_arch = "wasm32")]
+pub mod web;
 
 pub use close::{CloseAnswer, CloseGuard, CloseScope, GuardStep, QUIT_MENU_ID};
 #[cfg(feature = "ui")]

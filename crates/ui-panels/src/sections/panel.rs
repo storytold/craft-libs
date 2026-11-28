@@ -99,8 +99,6 @@ pub struct Panel<'a> {
     closed: Option<CloseReason>,
     pickable: bool,
     framed: bool,
-    /// How much weight the header's title carries; a panel title by default.
-    #[prop]
     strength: HeaderStrength,
 }
 
@@ -134,10 +132,27 @@ impl<'a> Panel<'a> {
         .label(title)
     }
 
-    /// A header showing the title in a title row, with a rule under it: for a panel that no dock tab or window names.
+    /// A header showing the title in a title row, with a rule under it unless the title's weight is a quiet one
+    /// ([`strength`](Panel::strength)): for a panel that no dock tab or window names. Where the app's quiet titles head
+    /// their body ([`QuietHeader::Heads`](crate::contract::QuietHeader)), the first section under a quiet title draws
+    /// no rule above it.
     #[must_use]
     pub fn titled(mut self) -> Self {
-        self.props.header = Some(HeaderRegion::new().rule(true));
+        self.props.header = Some(HeaderRegion::new().rule(self.strength.ruled()).heads(true));
+        self
+    }
+
+    /// How much weight the header's title carries, a panel title (`HeaderStrength::Strong`) by default. A quiet weight
+    /// (`Caption`, `Subheading`, `Quiet`, `Overline`) stands with no rule under a titled header.
+    #[must_use]
+    pub fn strength(mut self, strength: HeaderStrength) -> Self {
+        self.strength = strength;
+        // A band header stands with no rule whatever its weight.
+        if let Some(header) = self.props.header.as_mut()
+            && header.fill.is_none()
+        {
+            header.rule = strength.ruled();
+        }
         self
     }
 

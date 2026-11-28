@@ -157,3 +157,31 @@ fn the_completion_list_describes_the_highlighted_candidate() {
     let second = shown_after(&mut rig, vec![key_press(Key::ArrowDown, Modifiers::NONE)]);
     assert!(second.iter().any(|t| t == "Adds numbers that meet a condition."), "the description follows the highlight: {second:?}");
 }
+
+/// With `RootEnv::escape_leaves_fields` Escape takes the focus from a field clicked into, with typing to revert or none;
+/// without it the field keeps the focus, as before.
+#[trial]
+fn escape_gives_up_a_fields_focus_only_where_the_app_asks() {
+    for leaves in [false, true] {
+        for typed in [None, Some("12")] {
+            let value = std::rc::Rc::new(std::cell::RefCell::new(Some(1.0f64)));
+            let shown = value.clone();
+            let mut fixture = craft_ui::testing::Fixture::new(move |ui| {
+                NumberField::new("Opacity", Bind::bound(&mut *shown.borrow_mut())).show(ui);
+            });
+            let mut root = craft_ui::runtime::env::RootEnv::new();
+            root.escape_leaves_fields = leaves;
+            fixture.root(root).settle();
+            let field = fixture.by_label("Opacity").expect("the field has a node");
+            fixture.click(&field).settle();
+            assert!(fixture.focused().is_some(), "a click puts the focus in the field");
+            if let Some(text) = typed {
+                fixture.type_text(text);
+                fixture.idle(1);
+            }
+            fixture.key(Key::Escape, Modifiers::NONE).settle();
+            assert_eq!(fixture.focused().is_none(), leaves, "leaves {leaves}, typed {typed:?}: Escape gives up the focus only when asked");
+            assert_eq!(*value.borrow(), Some(1.0), "leaves {leaves}, typed {typed:?}: Escape keeps the value from before the typing");
+        }
+    }
+}

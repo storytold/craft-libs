@@ -52,7 +52,12 @@ pub fn parse_pages(text: &str, count: usize) -> Result<Vec<usize>, PageRangeErro
         return Ok(Vec::new());
     }
     let number = |token: &str| {
-        let page = token.trim().parse::<usize>().map_err(|_| PageRangeError::NotAPage(token.into()))?;
+        // `usize::from_str` takes a leading `+`; a page number is digits only, as PdfCraft reads it.
+        let digits = token.trim();
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(PageRangeError::NotAPage(token.into()));
+        }
+        let page = digits.parse::<usize>().map_err(|_| PageRangeError::NotAPage(token.into()))?;
         if page == 0 || page > count { Err(PageRangeError::OutOfRange { page, count }) } else { Ok(page - 1) }
     };
     let mut pages = BTreeSet::new();
@@ -103,13 +108,30 @@ pub enum Subset {
     Odd,
 }
 
-/// Acrobat's Page Range Options: All pages, or Pages from `from` to `to` (1-based), and a subset.
+/// Which pages a [`PageRange`] starts from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum PageScope {
+    /// All pages; `from` and `to` are kept but not applied.
+    #[default]
+    All,
+    /// The current page.
+    Current,
+    /// The selected pages, in order without repeats; an empty selection falls back to the current page.
+    Selection,
+    /// Pages `from` to `to`.
+    Range,
+}
+
+/// Acrobat's Page Range Options: All pages, the current page, the selected pages, or Pages from `from` to `to`
+/// (1-based), and a subset.
 /// Shared by the Header & Footer, Watermark and Background dialogs in PdfCraft.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct PageRange {
-    /// All pages; `from` and `to` are kept but not applied.
-    pub all: bool,
+    /// Which pages the range starts from.
+    pub scope: PageScope,
     /// First page of the range, 1-based.
     pub from: usize,
     /// The last page of the range; `None` is the document's last page, whatever its length.
@@ -120,22 +142,39 @@ pub struct PageRange {
 
 impl Default for PageRange {
     fn default() -> Self {
-        PageRange { all: true, from: 1, to: None, subset: Subset::All }
+        PageRange { scope: PageScope::All, from: 1, to: None, subset: Subset::All }
     }
 }
 
 impl PageRange {
-    /// The pages (0-based) the range selects in a document of `count` pages.
+    /// The pages (0-based) the range selects in a document of `count` pages, with `current` the current page and
+    /// `selection` the selected pages (all 0-based). The scope picks the pages, then the subset keeps the even or odd
+    /// page numbers among them; a page past the document is never returned. An end below the start selects the start
+    /// page, as the range fields do when an edit is committed.
     // pdfcraft: crates/ui-egui/src/dialogs/marks_ui.rs:46 `PageRange::pages`.
-    pub fn pages(&self, count: usize) -> Vec<usize> {
-        let (from, to) = if self.all { (1, count) } else { (self.from.max(1), self.to.map_or(count, |to| to.min(count))) };
-        (from..=to)
+    pub fn pages(&self, count: usize, current: usize, selection: &[usize]) -> Vec<usize> {
+        let picked: Vec<usize> = match self.scope {
+            PageScope::All => (0..count).collect(),
+            PageScope::Current => vec![current],
+            PageScope::Selection if selection.is_empty() => vec![current],
+            PageScope::Selection => {
+                let mut seen = BTreeSet::new();
+                selection.iter().copied().filter(|page| seen.insert(*page)).collect()
+            }
+            // `from` and `to` are 1-based and inclusive: pages `from - 1` up to, not including, `to`.
+            PageScope::Range => {
+                let from = self.from.max(1);
+                (from - 1..self.to.map_or(count, |to| to.max(from).min(count))).collect()
+            }
+        };
+        picked
+            .into_iter()
+            .filter(|&page| page < count)
             .filter(|page| match self.subset {
                 Subset::All => true,
-                Subset::Even => page % 2 == 0,
-                Subset::Odd => page % 2 == 1,
+                Subset::Even => (page + 1) % 2 == 0,
+                Subset::Odd => (page + 1) % 2 == 1,
             })
-            .map(|page| page - 1)
             .collect()
     }
 }

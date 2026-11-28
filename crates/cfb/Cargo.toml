@@ -13,4 +13,5 @@ workspace = true
 [dependencies]
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 craft-media-testkit = { workspace = true }

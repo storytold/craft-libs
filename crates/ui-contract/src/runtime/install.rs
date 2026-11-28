@@ -1,10 +1,11 @@
 //! `runtime::install`: adds the runtime plugin once and sets the egui options the runtime owns.
 
 use crate::runtime::egui::{clipboard, input, plugin};
-use crate::runtime::env::{SystemReader, system};
+use crate::runtime::env::{self, SystemReader, system};
 use crate::runtime::pen::PenSource;
 use crate::runtime::{commands, frame, pen, windows};
 use crate::style::{DuplicateStyle, StyleReplacements};
+use craft_host::Jobs;
 use craft_host::target::ShellInfo;
 use craft_window::policy::Decision;
 use craft_window::restore::Store;
@@ -45,6 +46,9 @@ pub struct InstallSpec {
     /// The clipboard the host installs (system, browser event, memory); without one the runtime uses
     /// `Clipboard::new(EguiClipboard)`.
     pub clipboard: Option<craft_platform::clipboard::Clipboard>,
+    /// Where the context's background work (document faces, texture loads) runs while no host is installed; none
+    /// runs it on `craft_host::default_jobs()`. A host's jobs come first.
+    pub jobs: Option<Arc<dyn Jobs>>,
 }
 
 /// The modifiers the mouse wheel zooms and scrolls sideways with.
@@ -86,7 +90,14 @@ impl InstallSpec {
             pen: None,
             stories: false,
             clipboard: None,
+            jobs: None,
         }
+    }
+
+    /// Runs the context's background work on `jobs` while no host is installed.
+    pub fn jobs(mut self, jobs: Arc<dyn Jobs>) -> Self {
+        self.jobs = Some(jobs);
+        self
     }
 
     /// Installs the host's clipboard (system, browser event, memory) in place of the runtime's own.
@@ -193,8 +204,8 @@ fn with_browser_caps(shell: ShellInfo) -> ShellInfo {
     shell
 }
 
-/// Adds the runtime plugin to `ctx` and sets the egui options the runtime owns: interface scale is a command, quit goes
-/// through the close guard, and the wheel's modifiers are the spec's. A second call on the same context is an error,
+/// Adds the runtime plugin to `ctx` and sets the egui options the runtime owns: the interface scale is the app's
+/// (`RootEnv::scale`), quit is a command that goes through the close guard, and the wheel's modifiers are the spec's. A second call on the same context is an error,
 /// checked first so an app that installs again (a language change) gets that answer; a call inside a pass is one too.
 pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError> {
     if plugin::is_registered(ctx) {
@@ -211,6 +222,7 @@ pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError> {
     input::set_wheel_modifiers(ctx, spec.wheel.zoom, spec.wheel.sideways);
     system::install(ctx, spec.system);
     pen::install(ctx, spec.pen);
+    env::install_jobs(ctx, spec.jobs);
     clipboard::install(ctx, spec.clipboard);
     windows::install(ctx, with_browser_caps(spec.shell_info), spec.window_system, spec.placement, spec.frame, spec.app_id);
     frame::set_frame_layers(ctx, spec.frame_layers);

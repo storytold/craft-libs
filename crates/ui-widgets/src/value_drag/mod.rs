@@ -11,7 +11,7 @@ mod words;
 pub use angle_dial::{AngleDial, AngleDialStyle, AngleOrientation};
 pub use point_picker::{Backdrop, PointMark, PointPicker, PointPickerStyle, PointPickerWords, SamePoint};
 pub use range_slider::{RangeSlider, RangeSliderStyle};
-pub use slider::{Slider, SliderStyle, SliderThumb};
+pub use slider::{Slider, SliderStyle, SliderThumb, TrackPress};
 pub use thumb_row::{
     Anchor, Follow, Neighbours, OffThumbs, Order, RowOp, RowRules, SpanInk, Thumb, ThumbHold, ThumbOp, ThumbRow, ThumbRowOutput, ThumbRowStyle,
     ThumbSpan,

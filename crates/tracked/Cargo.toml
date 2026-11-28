@@ -10,7 +10,13 @@ description = "Tracked<T>: app data whose every write moves a revision, so a rea
 [lints]
 workspace = true
 
-# No dependencies, so engine crates can hold and move a revision without the UI.
+# No dependencies but an optional serde, so engine crates can hold and move a revision without the UI.
+[dependencies]
+serde = { workspace = true, optional = true }
+
+[features]
+# `Serialize` and `Deserialize` for `Tracked<T>`: saved as its value, loaded as a new source.
+serde = ["dep:serde"]
 
 [dev-dependencies]
 # `#[derive(PlainData)]` in the doc tests.

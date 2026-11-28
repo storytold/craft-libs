@@ -149,7 +149,20 @@ fn resized(widths: &[f64], at: usize, target: f32, width: f32) -> Vec<f64> {
         return widths.to_vec();
     }
     let scale = if width > 0.0 { total / f64::from(width) } else { 0.0 };
-    extents.into_iter().map(|extent| f64::from(extent) * scale).collect()
+    // A column the divider did not move keeps its width exactly, and the pair it divides keeps the sum it had, so the
+    // total does not drift with the f32 round trip however many columns the bar has.
+    let mut moved = (0..widths.len()).filter(|&i| (current[i].extent - extents[i]).abs() > slack);
+    let (first, second) = (moved.next(), moved.next());
+    let mut out = widths.to_vec();
+    if let Some(first) = first {
+        out[first] = f64::from(extents[first]) * scale;
+    }
+    match (first, second) {
+        (Some(first), Some(second)) if moved.next().is_none() => out[second] = widths[first] + widths[second] - out[first],
+        (_, Some(_)) => return extents.into_iter().map(|extent| f64::from(extent) * scale).collect(),
+        _ => {}
+    }
+    out
 }
 
 /// The distance of the divider after column `at` from the bar's reading start, in points.
@@ -219,7 +232,7 @@ impl Component for ColumnBar<'_> {
             start = end;
         }
         for (at, divider) in dividers(&shares, rect, cx.style.grab) {
-            divider::declare(cx, rect, DIVIDER, at, &divider);
+            divider::declare_focusing(cx, rect, DIVIDER, at, &divider);
         }
     }
 

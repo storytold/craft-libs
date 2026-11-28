@@ -453,8 +453,8 @@ note = "`#[non_exhaustive]`; `deadline` stays a public field."
 [[setter]]
 type = "Reply"
 old = "Reply::Screenshot { token, path } (struct literal)"
-new = "Reply::screenshot(token, path)"
-note = "`Reply` and its `Screenshot` variant are `#[non_exhaustive]`."
+new = "Reply::screenshot(token, params, viewport)"
+note = "`Reply` and its `Screenshot` variant are `#[non_exhaustive]`. `params` is a `ScreenshotParams` (`ScreenshotParams::from_params(&req.params)?`): the path and the region."
 
 [[setter]]
 type = "ControlChannel"
@@ -477,14 +477,14 @@ note = "`#[non_exhaustive]`: `from_facts` builds it from the window's facts; `ne
 [[setter]]
 type = "Finished"
 old = "Finished { token, path, reply, result } (struct literal)"
-new = "Finished::new(token, path, reply, result)"
-note = "`#[non_exhaustive]`."
+new = "Finished::new(token, path, region, geometry, reply, result)"
+note = "`#[non_exhaustive]`. `region` and `geometry` (the `CaptureGeometry` the image was captured at) are what `screenshot_reply` crops with."
 
 [[setter]]
 type = "Click"
 old = "Click { at, button, count } (struct literal)"
 new = "Click::from_params(params)"
-note = "`#[non_exhaustive]`."
+note = "`#[non_exhaustive]`. The `target` field replaces `at`: `ClickTarget::At` for a point, `ClickTarget::Node` for a node of the access tree named by `id` or `label`."
 
 [[setter]]
 type = "KeyPress"

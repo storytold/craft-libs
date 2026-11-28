@@ -13,7 +13,7 @@ use crate::display::Divider;
 use crate::list::{DropTest, ListRow, RowEvent, RowTest, RowText};
 use crate::menu::{Menu, MenuItem};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleCx};
+use crate::style::{ComponentStyle, FocusLook, StyleCx};
 use craft_behavior::{ColumnKey, ItemSource, Metrics, Selection, SpanLayout};
 use egui::{Rect, Ui};
 use std::hash::Hash;
@@ -21,12 +21,14 @@ use std::hash::Hash;
 /// The header menu's popup.
 const HEADER_MENU: &str = "header_menu";
 
-/// The style of the table: it has no look of its own beyond its container's surface.
-#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+/// The style of the table: the focus ring of its header cells, and no other look beyond its container's surface.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct TableStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
 }
 
 /// A table: one Tab stop, a header row over the columns, the selection rules of the collection contract, type-ahead on
@@ -62,6 +64,10 @@ pub struct Table<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// A tree: rows are indented by depth and groups open and close.
     #[prop]
     tree: bool,
+    /// The header menu lists the column choices and Reset Columns only, without the column commands (Resize Column,
+    /// Move Column Left and Right): a table whose columns the pointer arranges.
+    #[prop]
+    plain_header_menu: bool,
     /// Which rows may be renamed; a rename request on another row does nothing.
     #[prop(func = "Fn(&K) -> bool")]
     can_rename: Option<RowTest<'a, K>>,
@@ -96,6 +102,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Table<'a, K> {
             column_layout: None,
             reveal: None,
             tree: false,
+            plain_header_menu: false,
             can_rename: None,
             rename_draft: None,
             can_drag: None,
@@ -129,8 +136,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Table<'_, K> {
     type Style = TableStyle;
     type Output = CollectionResponse<K, RowEvent>;
 
-    fn style(_: &StyleCx<'_>, _: TableStyleKey<K>) -> TableStyle {
-        TableStyle::default()
+    fn style(cx: &StyleCx<'_>, _: TableStyleKey<K>) -> TableStyle {
+        TableStyle { metrics: Metrics::default(), focus: cx.focus_look() }
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
@@ -148,7 +155,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Table<'_, K> {
         let (at, for_column) = (menu.at, menu.column.is_some());
         let hidden = cx.hidden_columns().to_vec();
         let hideable: Vec<_> = self.items.columns.iter().filter(|spec| spec.hideable).map(|spec| (spec.key.clone(), spec.header.clone())).collect();
-        let commands: Vec<(ColumnCommands, bool)> = if for_column {
+        let commands: Vec<(ColumnCommands, bool)> = if for_column && !self.plain_header_menu {
             ColumnCommands::ALL.into_iter().map(|command| (command, cx.column_command_enabled(command))).collect()
         } else {
             Vec::new()
@@ -204,6 +211,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for Table<'_, K> {
         &self.items
     }
 
+    fn shows_row_focus(&self) -> bool {
+        true
+    }
+
     fn selection(&mut self) -> Option<BindMut<'_, Selection<K>>> {
         self.selection.as_mut().map(Bind::reborrow)
     }
@@ -247,7 +258,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for Table<'_, K> {
     }
 
     fn rename_editor(&mut self, ui: &mut Ui, draft: Bind<'_, String>, label: Rect, name: &str) -> Option<EditResponse<String>> {
-        Some(crate::text::rename_field(ui, draft, label, name))
+        Some(crate::text::rename_field(draft, name).show_at(ui, label))
     }
 
     fn hosts_header(&self, column: &ColumnKey) -> bool {

@@ -132,6 +132,18 @@ impl NativeWindow {
         Some(NativeWindow { hwnd: crate::win32::Hwnd::new(win32.hwnd.get()) })
     }
 
+    /// The Win32 `HWND` value of the window, which a driver dialog takes as its owner; `None` on other platforms.
+    pub fn raw_handle(&self) -> Option<std::num::NonZeroIsize> {
+        #[cfg(windows)]
+        {
+            std::num::NonZeroIsize::new(self.hwnd.raw())
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+
     /// Sets the window's opacity, 1 being opaque. Returns whether the platform applied it: a layered window on
     /// Windows, `NSWindow.alphaValue` on macOS, nothing elsewhere.
     pub fn set_opacity(&self, opacity: f32) -> bool {
@@ -158,5 +170,21 @@ impl NativeWindow {
             let _ = hits;
             false
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::num::NonZeroIsize;
+
+    /// A driver dialog takes the main window's handle as its owner: a window with a Win32 handle gives that value,
+    /// a null handle gives none, so no dialog is owned by a window that is not there.
+    #[test]
+    fn a_window_gives_its_win32_handle_and_a_null_handle_gives_none() {
+        let window = NativeWindow { hwnd: crate::win32::Hwnd::new(0x1a2b) };
+        assert_eq!(window.raw_handle(), NonZeroIsize::new(0x1a2b));
+        let null = NativeWindow { hwnd: crate::win32::Hwnd::new(0) };
+        assert_eq!(null.raw_handle(), None);
     }
 }

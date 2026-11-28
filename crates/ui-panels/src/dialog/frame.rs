@@ -7,9 +7,11 @@ use crate::contract::{
     Show as _, ShowContainer as _, WordSetCx as _, WrapWidth,
 };
 use crate::contract::{NoValue, Outcome};
+use crate::primitives::IconSpec;
 use crate::runtime::env::Label;
 use crate::runtime::overlay::CloseReason;
 use crate::sections::{DialogRole, FooterBar, FooterButton, HeaderAction, HeaderStrength, TitleRow};
+use crate::style::Ink;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::{Metrics, Sense};
 use egui::{Response, Ui};
@@ -136,10 +138,18 @@ pub struct FooterHost<'s, 'a> {
     pub settle: &'s mut Option<ButtonState<'a>>,
 }
 
-/// Fills the header region: the title and, for a closable shell, the close action.
+/// Fills the header region: the title, the muted `note` after it when there is one and, for a closable shell, the
+/// close action.
 #[doc(hidden)]
-pub fn header(ui: &mut Ui, cx: &mut BodyCx<'_>, actions: &[HeaderAction]) {
-    let shown = TitleRow::new(cx.label()).strength(HeaderStrength::Heading).level(TITLE_LEVEL).actions(actions.iter().copied()).show(ui);
+pub fn header(ui: &mut Ui, cx: &mut BodyCx<'_>, actions: &[HeaderAction], note: Option<&Label>, icon: Option<&craft_behavior::IconId>) {
+    let mut row = TitleRow::new(cx.label()).strength(HeaderStrength::Heading).level(TITLE_LEVEL);
+    if let Some(icon) = icon {
+        row = row.icon(IconSpec::svg(icon.clone())).icon_ink(Ink::Accent);
+    }
+    if let Some(note) = note {
+        row = row.note(note.clone());
+    }
+    let shown = row.actions(actions.iter().copied()).show(ui);
     if shown.action == Some(HeaderAction::Close) {
         cx.request_close();
     }
@@ -223,6 +233,26 @@ pub(crate) fn footer_in(
     }
 }
 
+/// Whether dialogs show the close x in their title row (true until an app turns it off).
+pub fn close_button(ctx: &egui::Context) -> bool {
+    !crate::runtime::memory::with_session(ctx, close_button_id(), |hidden: &mut CloseButtonHidden| hidden.0)
+}
+
+/// Turns the close x of every dialog's title row on or off, as an app's look decides; Escape and the footer buttons
+/// still close a dialog. Call it every pass or once at start.
+pub fn set_close_button(ctx: &egui::Context, on: bool) {
+    crate::runtime::memory::with_session(ctx, close_button_id(), |hidden: &mut CloseButtonHidden| hidden.0 = !on);
+}
+
+/// The session slot of the app's close-x choice.
+fn close_button_id() -> egui::Id {
+    crate::runtime::memory::unique(("craft_ui::dialog", "close button"))
+}
+
+/// The app turned the dialogs' close x off; the default shows it.
+#[derive(Clone, Copy, Default)]
+struct CloseButtonHidden(bool);
+
 /// The header actions of a shell: the close action when it has one.
 #[doc(hidden)]
 pub fn close_action(closable: bool) -> &'static [HeaderAction] {
@@ -248,7 +278,7 @@ pub const SIDE_BUTTONS: EndRegion = EndRegion::new().gap(REGION_GAP);
 /// `size.dialog.least` with paragraphs wrapping at `size.dialog.wrap`. A layer scrolls its body vertically unless the
 /// body is a collection; a frame in a parent's flow asks for the scroll itself.
 pub(crate) fn chrome_props() -> ContainerProps {
-    ContainerProps::new().surface(SurfaceKind::Dialog).pad(Pad::Regular).header(HEADER).least_width(LeastWidth::Dialog).wrap_width(WrapWidth::Dialog)
+    ContainerProps::new().surface(SurfaceKind::Dialog).pad(Pad::Dialog).header(HEADER).least_width(LeastWidth::Dialog).wrap_width(WrapWidth::Dialog)
 }
 
 /// The style of a dialog frame: the surface and padding come from the container.
@@ -283,7 +313,7 @@ impl<'a> DialogFrame<'a> {
     /// The larger frame margin.
     #[must_use]
     pub fn roomy(mut self, on: bool) -> Self {
-        self.props = self.props.pad(if on { Pad::Roomy } else { Pad::Regular });
+        self.props = self.props.pad(if on { Pad::Roomy } else { Pad::Dialog });
         self
     }
 
@@ -318,7 +348,7 @@ impl Component for DialogFrame<'_> {
 
 impl Container for DialogFrame<'_> {
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        header(ui, cx, close_action(self.closable));
+        header(ui, cx, close_action(self.closable && close_button(ui.ctx())), None, None);
     }
 
     fn footer(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {

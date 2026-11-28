@@ -374,8 +374,8 @@ impl<'a> PaintList<'a> {
         let mut events = acted.into_inner();
         for event in list.events {
             match event {
-                CollectionEvent::Selection(SelectionChange::Set(keys)) => selected = keys.last().copied().or(selected),
-                CollectionEvent::Selection(SelectionChange::Toggle(row)) => selected = Some(row),
+                CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => selected = keys.last().copied().or(selected),
+                CollectionEvent::Selection { change: SelectionChange::Toggle(row), .. } => selected = Some(row),
                 CollectionEvent::Rename(event) if matches!(event, EditEvent::Commit { .. }) => {
                     if let Some(Rename { key, name, .. }) = event.value() {
                         events.push(PaintListEvent::Rename { row: *key, name: name.clone() });

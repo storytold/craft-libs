@@ -151,6 +151,7 @@ impl TryFrom<RawLayout> for ChannelLayout {
     feature = "opus-decode",
     feature = "ac3-decode",
     feature = "mpa-decode",
+    feature = "flac-decode",
     feature = "pcm-encode"
 ))]
 pub(crate) fn count(n: usize) -> u16 {
@@ -273,7 +274,7 @@ impl std::fmt::Display for ChannelLayout {
 /// The layout decoders assume for 1–8 FLAC channels with no channel mask comment, as a WAV mask.
 /// RFC 9639 §9.1.3 leaves "back/surround" open for 5 and 6 channels; libFLAC and ffmpeg read side
 /// surrounds. 7 channels are 6.1 with sides (FL FR FC LFE BC SL SR).
-#[cfg(any(feature = "symphonia", feature = "flac-encode"))]
+#[cfg(any(feature = "symphonia", feature = "flac-encode", feature = "flac-decode"))]
 pub(crate) fn flac_assumed_mask(channels: usize) -> u32 {
     match channels {
         5 => 0x607,

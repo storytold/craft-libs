@@ -113,7 +113,8 @@ impl Kbd {
     }
 
     /// `trigger` as one text, the way `Kbd` shows a chord: the platform's modifier notation and the key named from
-    /// `words`; a double press is written twice. Menus and dialogs that need the chord as a string build on it.
+    /// `words`; a double press is written twice and a hold with the word of `DisplayWords::kbd_hold`. Menus and dialogs
+    /// that need the chord as a string build on it.
     pub fn text(trigger: &Trigger, os: Os, words: &DisplayWords, write: ChordWrite) -> String {
         let key = trigger.chord.key;
         let one = trigger.chord.display_with_return(os, write.return_glyph);
@@ -127,7 +128,11 @@ impl Kbd {
             }
             None => one,
         };
-        if trigger.double { format!("{one} {one}") } else { one }
+        match trigger.press {
+            craft_keymap::chord::PressKind::Single => one,
+            craft_keymap::chord::PressKind::Double => format!("{one} {one}"),
+            craft_keymap::chord::PressKind::Hold => words.kbd_hold.fill(&[("chord", one.as_str())]),
+        }
     }
 
     /// The name of `key` alone for `os`, in the language of `words`: its word when it has one, else the key as the

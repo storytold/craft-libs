@@ -1,7 +1,7 @@
 //! The canvas view's mapping between document and screen.
 
 use craft_behavior::CanvasView;
-use craft_behavior::canvas::zoom;
+use craft_behavior::canvas::{ZoomScheme, zoom};
 use emath::{Rect as ScreenRect, pos2, vec2};
 use kurbo::{Point, Rect, Size};
 
@@ -55,22 +55,44 @@ fn fit_and_fill_measure_the_stretched_document() {
 
     // Fit keeps 20 points of margin per side: 1000 points across for a 1000 px wide document, 2000 shown at aspect 2.
     let (mut square, mut wide) = (stage(1.0, rect(1040.0, 800.0)), stage(2.0, rect(1040.0, 800.0)));
-    zoom::fit(&mut square, size, 1.0, 20.0);
-    zoom::fit(&mut wide, size, 1.0, 20.0);
+    zoom::fit(&mut square, size, 1.0, 20.0, &ZoomScheme::PHOTOSHOP);
+    zoom::fit(&mut wide, size, 1.0, 20.0, &ZoomScheme::PHOTOSHOP);
     assert!(near(square.zoom, 1.0), "{}", square.zoom);
     assert!(near(wide.zoom, 0.5), "{}", wide.zoom);
     assert!(near(wide.center.x, 500.0) && near(wide.center.y, 250.0), "{:?}", wide.center);
 
     // On a square rect the height limits fill at both aspects; the 1000 by 400 rect below is where the stretched width decides.
     let (mut square, mut wide) = (stage(1.0, rect(1000.0, 1000.0)), stage(2.0, rect(1000.0, 1000.0)));
-    zoom::fill(&mut square, size, 1.0);
-    zoom::fill(&mut wide, size, 1.0);
+    zoom::fill(&mut square, size, 1.0, &ZoomScheme::PHOTOSHOP);
+    zoom::fill(&mut wide, size, 1.0, &ZoomScheme::PHOTOSHOP);
     assert!(near(square.zoom, 2.0) && near(wide.zoom, 2.0), "{} {}", square.zoom, wide.zoom);
     // A wide rect: the unstretched document is limited by its width, the stretched one by its height.
     let (mut square, mut wide) = (stage(1.0, rect(1000.0, 400.0)), stage(2.0, rect(1000.0, 400.0)));
-    zoom::fill(&mut square, size, 1.0);
-    zoom::fill(&mut wide, size, 1.0);
+    zoom::fill(&mut square, size, 1.0, &ZoomScheme::PHOTOSHOP);
+    zoom::fill(&mut wide, size, 1.0, &ZoomScheme::PHOTOSHOP);
     assert!(near(square.zoom, 1.0), "{}", square.zoom);
     assert!(near(wide.zoom, 0.8), "{}", wide.zoom);
     assert!(near(wide.center.x, 500.0) && near(wide.center.y, 250.0), "{:?}", wide.center);
+}
+
+#[test]
+fn a_scheme_steps_and_clamps_in_its_own_units_about_its_hundred() {
+    let (small, big) = (Size::new(100.0, 100.0), Size::new(10_000.0, 10_000.0));
+
+    let illustrator = ZoomScheme::ILLUSTRATOR;
+    let up = illustrator.step(1.0, 1, big);
+    assert!(near(up, 1.5), "{up}");
+    assert!(near(illustrator.step(up, -1, big), 1.0), "a step in then out returns to the rung");
+    assert!(near(illustrator.min(small), 0.0313) && near(illustrator.min(big), 0.0313), "a fixed floor ignores the document");
+
+    let photoshop = ZoomScheme::PHOTOSHOP;
+    assert!(near(photoshop.min(small), 0.02), "{}", photoshop.min(small));
+    assert!(photoshop.min(big) < photoshop.min(small), "the floor follows the shorter side");
+
+    let doubled = photoshop.with_hundred(2.0);
+    for device in [0.5, 3.0, 40.0] {
+        assert!(near(doubled.device(doubled.percent(device)), device), "{device}");
+    }
+    assert!(near(doubled.step(2.0, 1, small), 4.0), "the rung after the scheme's 100 % is the next rung times it");
+    assert!(near(photoshop.clamp(f64::NAN, small), 1.0) && near(doubled.clamp(f64::NAN, small), 2.0), "a non-finite zoom is 100 %");
 }

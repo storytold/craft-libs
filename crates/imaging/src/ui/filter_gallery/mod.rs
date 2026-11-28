@@ -31,9 +31,9 @@ mod words;
 
 pub use catalog::{FilterCatalog, FilterCategory, FilterGallerySource, FilterIndex, GalleryFilter, GalleryThumb};
 pub use parameters::{EffectParameters, EffectParametersOutput};
-pub use session::{EffectChange, EffectLayer, FilterGallerySession};
+pub use session::{EffectChange, EffectLayer, FilterGallerySession, LayerId, SessionField};
 pub use stack::{EffectStack, EffectStackOutput};
-pub use tree::{FilterTree, FilterTreeOutput};
+pub use tree::{FilterTree, FilterTreeLayout, FilterTreeOutput};
 pub use words::FilterGalleryWords;
 
 use std::cell::RefCell;
@@ -49,11 +49,11 @@ use craft_ui::dialog::{
     FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, FullWindowWorkspace,
     FullWindowZoomBar, SideFooter, WorkspaceCx, WorkspacePass,
 };
-use craft_ui::patterns::form_dialogs::{FieldValue, set_param_field};
+use craft_ui::patterns::form_dialogs::FieldValue;
 use craft_ui::primitives::Checker;
 use craft_ui::primitives::textures::{ThumbnailOptions, Thumbnails};
 use craft_ui::runtime::env::{Env, Label};
-use craft_ui::runtime::requests::ColorRequest;
+use craft_ui::runtime::requests::{ColorRequest, PathRequest};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
 use egui::{Context, Ui};
@@ -109,6 +109,15 @@ pub enum FilterGalleryEvent {
     Select(usize),
     /// A colour parameter's swatch was pressed: the app opens its picker and answers with `set_color`.
     PickColor(ColorRequest),
+    /// A Browse button was pressed on the layer `layer`: the app opens its file picker and answers with
+    /// `set_layer_fields`, which follows the layer if it moved meanwhile.
+    #[non_exhaustive]
+    PickPath {
+        /// The layer whose parameter asked.
+        layer: LayerId,
+        /// The parameter's key and what the picker offers.
+        request: PathRequest,
+    },
 }
 
 /// The undo step name of every stack change: the workspace's name.
@@ -212,10 +221,31 @@ impl FilterGalleryWorkspace {
         self.queued.push(FilterGalleryEvent::Stack(EffectChange::with_fields(index, fields)));
     }
 
+    /// The answer to a [`FilterGalleryEvent::PickPath`]: writes `entries` into the fields of the layer `layer` as one
+    /// undo step. Returns `false`, changing nothing, once the layer is deleted.
+    pub fn set_layer_fields(&mut self, layer: LayerId, entries: impl IntoIterator<Item = (String, FieldValue)>) -> bool {
+        let Some(at) = self.session.position(layer) else { return false };
+        let before = self.session.clone();
+        let Some(effect) = self.session.effects.get_mut(at) else { return false };
+        let mut fields = effect.fields.clone();
+        let mut name = None;
+        for (key, value) in entries {
+            name.get_or_insert_with(|| Arc::<str>::from(key.as_str()));
+            fields.set(key, value);
+        }
+        let Some(name) = name.filter(|_| fields != effect.fields) else { return true };
+        effect.fields = fields.clone();
+        self.record(before, &name);
+        self.queued.push(FilterGalleryEvent::Stack(EffectChange::with_fields(at, fields)));
+        true
+    }
+
     /// Undoes or redoes, keeping the selection on a layer that remains. The pass reports the selection as a `Select`
     /// event when it moved.
     fn step(&mut self, step: Step) {
+        let next_layer = self.session.next_layer;
         if self.history.step(&mut self.session, step) {
+            self.session.next_layer = next_layer.max(self.session.next_layer);
             self.selected = self.selected.min(self.session.effects.len().saturating_sub(1));
             self.revision += 1;
         }
@@ -249,66 +279,21 @@ impl FilterGalleryWorkspace {
 
     /// Sets the automation field `field` to `value` over `catalog`; `Err` says why it refused.
     fn set_field(&mut self, catalog: &dyn FilterCatalog, name: &Arc<str>, field: &str, value: Value) -> Result<(), String> {
-        let rejects = |value: &Value| FieldRefusal::Rejects(value).message(field);
-        let index = |value: &Value| value.as_u64().and_then(|at| usize::try_from(at).ok());
-        let selected = self.clamped_selection();
-        let change = match field {
-            "effects" => {
-                let effects: Vec<EffectLayer> = serde_json::from_value(value.clone()).map_err(|_| rejects(&value))?;
-                if effects.is_empty() || effects.iter().any(|effect| catalog.filter(&effect.filter).is_none()) {
-                    return Err(rejects(&value));
-                }
-                EffectChange::Replace { effects }
+        if field == "zoom" {
+            match (value.as_str(), value.as_f64()) {
+                (Some("fit"), _) => self.view.apply(ViewCommands::FitOnScreen),
+                (_, Some(zoom)) if zoom.is_finite() && zoom > 0.0 => self.view.set_device_zoom(zoom),
+                _ => return Err(FieldRefusal::Rejects(&value).message(field)),
+            };
+            return Ok(());
+        }
+        match self.session.field_change(catalog, self.clamped_selection(), field, &value)? {
+            Some(SessionField::Select(at)) => self.selected = at,
+            Some(SessionField::Change(change)) => {
+                self.change(change, catalog, name);
             }
-            "select" => {
-                let at = index(&value).ok_or_else(|| rejects(&value))?;
-                self.selected = at.min(self.session.effects.len().saturating_sub(1));
-                return Ok(());
-            }
-            "zoom" => {
-                match (value.as_str(), value.as_f64()) {
-                    (Some("fit"), _) => self.view.apply(ViewCommands::FitOnScreen),
-                    (_, Some(zoom)) if zoom.is_finite() && zoom > 0.0 => self.view.set_device_zoom(zoom),
-                    _ => return Err(rejects(&value)),
-                };
-                return Ok(());
-            }
-            "add" | "delete" => match value.as_bool() {
-                Some(true) if field == "add" => EffectChange::Add,
-                Some(true) => EffectChange::Delete,
-                Some(false) => return Ok(()),
-                None => return Err(rejects(&value)),
-            },
-            "toggle" => {
-                let at = index(&value).ok_or_else(|| rejects(&value))?;
-                let effect = self.session.effects.get(at).ok_or_else(|| rejects(&value))?;
-                EffectChange::set_visible(at, !effect.visible)
-            }
-            "move" => {
-                let count = self.session.effects.len();
-                let (from, to) = (value.get("from").and_then(index), value.get("to").and_then(index));
-                let (Some(from), Some(to)) = (from, to) else { return Err(rejects(&value)) };
-                if from >= count || to >= count {
-                    return Err(rejects(&value));
-                }
-                EffectChange::move_to(from, to)
-            }
-            "filter" => {
-                let key = value.as_str().filter(|key| catalog.filter(key).is_some()).ok_or_else(|| rejects(&value))?;
-                EffectChange::set_filter(selected, key)
-            }
-            "params" => {
-                let (Some(effect), Some(entries)) = (self.session.effects.get(selected), value.as_object()) else { return Err(rejects(&value)) };
-                let filter = catalog.filter(&effect.filter).ok_or_else(|| FieldRefusal::Inactive.message(field))?;
-                let mut fields = effect.fields.clone();
-                for (key, entry) in entries {
-                    set_param_field(&filter.params, &mut fields, key, entry.clone())?;
-                }
-                EffectChange::with_fields(selected, fields)
-            }
-            _ => return Err(FieldRefusal::Unknown.message(field)),
-        };
-        self.change(change, catalog, name);
+            None => {}
+        }
         Ok(())
     }
 }
@@ -356,11 +341,13 @@ impl FullWindowWorkspace for FilterGalleryWorkspace {
                 let mut changes = Vec::new();
                 let mut stack_pick = None;
                 let mut pick_color = None;
+                let mut pick_path = None;
                 FullWindowSide::new(words.settings.clone()).headerless().show(ui, |ui, _| {
                     if let Some(effect) = workspace.session.effects.get(current) {
                         let parameters = EffectParameters::new(current, effect, &index).show(ui);
                         changes.extend(parameters.change);
                         pick_color = parameters.pick_color;
+                        pick_path = parameters.path;
                     }
                     let stack = EffectStack::new(&workspace.session.effects, current, &index).show(ui);
                     stack_pick = stack.selected;
@@ -369,6 +356,11 @@ impl FullWindowWorkspace for FilterGalleryWorkspace {
                 });
                 if let Some(request) = pick_color {
                     workspace.queued.push(FilterGalleryEvent::PickColor(request));
+                }
+                if let Some(request) = pick_path
+                    && let Some(layer) = workspace.session.effects.get(current).map(|effect| effect.id)
+                {
+                    workspace.queued.push(FilterGalleryEvent::PickPath { layer, request });
                 }
                 for change in changes {
                     workspace.change(change, catalog, &history_name);
@@ -440,8 +432,11 @@ impl FullWindowWorkspace for FilterGalleryWorkspace {
 
     fn json_fields(&self, _source: &Self::Source) -> Option<Value> {
         let zoom = if self.view.is_fit() { json!("fit") } else { json!(self.view.device_zoom()) };
-        let effects = serde_json::to_value(&self.session.effects).unwrap_or_default();
-        Some(json!({ "effects": effects, "select": self.clamped_selection(), "zoom": zoom }))
+        let mut fields = self.session.json_fields(self.clamped_selection());
+        if let Value::Object(map) = &mut fields {
+            map.insert("zoom".to_owned(), zoom);
+        }
+        Some(fields)
     }
 
     fn set_json_field(&mut self, ctx: &Context, source: &Self::Source, field: &str, value: Value) -> Result<(), String> {

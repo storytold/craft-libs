@@ -6,6 +6,7 @@ use craft_ui::testing::style::{tokens, with_cx};
 
 pub(crate) mod render;
 
+pub(crate) mod focus;
 pub(crate) mod panel_menu;
 pub(crate) mod runs;
 
@@ -15,16 +16,27 @@ pub(crate) mod drop;
 pub(crate) mod drop_preview;
 pub(crate) mod drop_session;
 
+pub(crate) mod float_order;
 pub(crate) mod floating;
 pub(crate) mod floating_area;
+pub(crate) mod floating_rail;
 pub(crate) mod hidden;
+pub(crate) mod sources;
 
+pub(crate) mod app_modal;
 pub(crate) mod columns;
 pub(crate) mod dock_back;
+pub(crate) mod documents;
 pub(crate) mod group_view;
+pub(crate) mod host_body;
+pub(crate) mod host_keys;
+pub(crate) mod host_runs;
+pub(crate) mod tab_focus;
 pub(crate) mod workspace_dialogs;
 
 pub(crate) mod native;
+pub(crate) mod native_drag;
+pub(crate) mod native_float;
 pub(crate) mod panes;
 
 /// The docking sizes of the default theme with the given divider gap, least pane and strip height.

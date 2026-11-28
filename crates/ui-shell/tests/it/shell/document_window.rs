@@ -183,3 +183,126 @@ fn a_document_window_body_fills_the_windows_room_and_does_not_scroll() {
         assert!(height < MAX_EXTENT / 2.0, "{mount}: the body's height is the window's room, got {height}");
     }
 }
+
+/// A document window at the palette level stands above the app's main window while the app is active (photocraft
+/// floating documents, as the references keep them); without a level it is an ordinary window.
+#[trial]
+fn a_document_window_at_the_palette_level_stands_above_the_main_window() {
+    let level = |palette: bool| {
+        let windows = Windows::new();
+        windows.root_info(ViewportInfo { focused: Some(true), ..ViewportInfo::default() });
+        let mut seen = None;
+        for _ in 0..3 {
+            let out = windows.frame(vec![], vec![], |ui| {
+                windows.child_info(ViewportInfo { focused: Some(false), ..ViewportInfo::default() });
+                let window = DocumentWindow::new("Landscape.psd");
+                let window = if palette { window.level(craft_ui::runtime::windows::WindowLevel::Palette) } else { window };
+                window.show(ui, |_, _| {});
+            });
+            if let Some((_, builder)) = out.builders.iter().find(|(_, builder)| builder.title.as_deref() == Some("Landscape.psd")) {
+                seen = builder.window_level.or(seen);
+            }
+        }
+        seen
+    };
+    assert_eq!(level(true), Some(egui::WindowLevel::AlwaysOnTop), "a palette-level document window stands above the main window");
+    assert_ne!(level(false), Some(egui::WindowLevel::AlwaysOnTop), "an ordinary document window does not");
+}
+
+/// On the fallback layer, a document window dragged by its title row reports where it went, and a host that places it
+/// there shows it there: its access node, which tests and assistive tools read its bounds from, moves with the drag.
+#[trial]
+fn a_fallback_document_window_dragged_by_its_title_reports_where_it_went() {
+    use craft_ui::testing::Fixture;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let place = Rc::new(Cell::new(Rect::from_min_size(pos2(100.0, 80.0), vec2(400.0, 300.0))));
+    let kept = place.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = DocumentWindow::new("Landscape.psd").id_salt("landscape").first_placed(kept.get()).show(ui, |_, _| {});
+        if let Some(rect) = shown.output.placed {
+            kept.set(rect);
+        }
+    });
+    fixture.settle();
+    let window = |fixture: &Fixture| fixture.by_label("Landscape.psd").expect("the window's node names it").rect;
+    let before = window(&fixture);
+    let title = fixture.by_role(craft_ui::contract::Role::HEADING).into_iter().next().expect("the fallback layer shows its title row");
+    fixture.drag(&title, vec2(50.0, 30.0)).settle();
+    let after = window(&fixture);
+    assert!(after.min.x > before.min.x && after.min.y > before.min.y, "the window follows the drag: {before:?} to {after:?}");
+    assert!(near(after.size(), before.size()), "a move keeps the window's size: {before:?} to {after:?}");
+    assert_eq!(place.get(), after, "the host keeps the window where the drag reported it");
+}
+
+/// On the fallback layer, `raise` brings a document window in front of one opened after it in the pass it is set, as a
+/// press on its layer does. Guards against a raise that only asked an OS window for focus, so the layer stayed behind.
+#[trial]
+fn a_raised_fallback_document_window_comes_to_the_front() {
+    use craft_ui::runtime::overlay;
+    use craft_ui::testing::Fixture;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let (raise, first, top) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(None)), Rc::new(Cell::new(None)));
+    let (asked, seen, front) = (raise.clone(), first.clone(), top.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        front.set(overlay::top(ui.ctx()));
+        for (name, at) in [("First.psd", 40.0), ("Second.psd", 80.0)] {
+            let window = DocumentWindow::new(name).id_salt(name).first_placed(Rect::from_min_size(pos2(at, at), vec2(300.0, 200.0)));
+            let raised = name == "First.psd" && asked.get();
+            let shown = if raised { window.raise() } else { window }.show(ui, |_, _| {});
+            if name == "First.psd" {
+                seen.set(Some(shown.output.response.id));
+            }
+        }
+    });
+    fixture.settle();
+    assert!(first.get().is_some() && top.get() != first.get(), "the window opened last is in front");
+    raise.set(true);
+    fixture.frame(Vec::new());
+    raise.set(false);
+    fixture.frame(Vec::new());
+    assert_eq!(top.get(), first.get(), "the raised window is in front");
+}
+
+/// A document window raised in the pass the windows show again after a pass with none shown (Presentation Mode ending)
+/// comes to the front where the windows overlap. egui raises every layer that shows again and keeps the old order
+/// among them, so a raise asked in that pass alone left the window behind the one opened after it.
+#[trial]
+fn a_window_raised_as_the_windows_show_again_comes_to_the_front() {
+    use craft_ui::testing::Fixture;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let overlap = pos2(200.0, 200.0);
+    let (showing, raise, first, top) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(false)), Rc::new(Cell::new(None)), Rc::new(Cell::new(None)));
+    let (shows, asked, seen, front) = (showing.clone(), raise.clone(), first.clone(), top.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        front.set(ui.ctx().layer_id_at(overlap));
+        if !shows.get() {
+            return;
+        }
+        for (name, at) in [("First.psd", 40.0), ("Second.psd", 80.0)] {
+            let window = DocumentWindow::new(name).id_salt(name).first_placed(Rect::from_min_size(pos2(at, at), vec2(300.0, 200.0)));
+            let raised = name == "First.psd" && asked.get();
+            if raised { window.raise() } else { window }.show(ui, |ui, _| {
+                if name == "First.psd" {
+                    seen.set(Some(ui.layer_id()));
+                }
+            });
+        }
+    });
+    fixture.settle();
+    assert!(first.get().is_some() && top.get() != first.get(), "the window opened last is in front");
+    showing.set(false);
+    fixture.frame(Vec::new());
+    showing.set(true);
+    raise.set(true);
+    fixture.frame(Vec::new());
+    raise.set(false);
+    fixture.frame(Vec::new());
+    fixture.frame(Vec::new());
+    assert_eq!(top.get(), first.get(), "the window raised as they showed again is in front");
+}

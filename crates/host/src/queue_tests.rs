@@ -1,11 +1,14 @@
 //! `JobQueue` and `ManualJobs`: order, replacement, one job per key, cancellation, wakes and
 //! inline runs. Every test drives lanes with `ManualJobs` (or `lanes: 0`), so nothing depends on
-//! thread timing.
+//! thread timing. The tests of `Cancel::wait` block a second thread and hand off over channels.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, TryRecvError};
+use std::thread;
+use std::time::Duration;
 
-use crate::queue::{Cancel, Finished, JobQueue, Priority, QueueOptions};
+use crate::queue::{Cancel, Finished, JobQueue, Priority, QueueOptions, QueueOrder};
 use crate::{ManualJobs, Wake};
 
 fn queue(lanes: usize) -> (JobQueue<&'static str, &'static str>, Arc<ManualJobs>, Arc<AtomicUsize>) {
@@ -15,8 +18,22 @@ fn queue(lanes: usize) -> (JobQueue<&'static str, &'static str>, Arc<ManualJobs>
     let wake = Wake::new(move || {
         counter.fetch_add(1, Ordering::Relaxed);
     });
-    let queue = JobQueue::new(jobs.clone(), wake, QueueOptions { lanes, name: "test" });
+    let queue = JobQueue::new(jobs.clone(), wake, QueueOptions { lanes, name: "test", ..QueueOptions::default() });
     (queue, jobs, wakes)
+}
+
+/// A queue without lanes in `order`: jobs run one at a time through `run_inline`.
+fn inline_queue(order: QueueOrder) -> JobQueue<&'static str, &'static str> {
+    JobQueue::new(Arc::new(ManualJobs::new()), Wake::new(|| {}), QueueOptions { lanes: 0, name: "test", order })
+}
+
+/// Runs the waiting jobs one `run_inline(1)` at a time and returns their results in run order.
+fn run_one_by_one(queue: &JobQueue<&'static str, &'static str>) -> Vec<&'static str> {
+    let mut ran = Vec::new();
+    while queue.run_inline(1) == 1 {
+        ran.extend(drain(queue));
+    }
+    ran
 }
 
 fn drain(queue: &JobQueue<&'static str, &'static str>) -> Vec<&'static str> {
@@ -69,6 +86,62 @@ fn queue_dropped_keys_are_cancelled() {
     assert!(!queue.contains(&"waiting") && !queue.contains(&"running"));
 }
 
+// `wait_timeout` reads the flag, a clone shares it, and `wait` returns at once on a set flag.
+#[test]
+fn cancel_wait_timeout_reports_the_flag() {
+    let cancel = Cancel::new();
+    let shared = cancel.clone();
+    assert!(!cancel.wait_timeout(Duration::ZERO));
+    shared.cancel();
+    assert!(cancel.is_cancelled());
+    assert!(cancel.wait_timeout(Duration::ZERO));
+    cancel.wait();
+}
+
+// A thread blocked in `wait` returns once another thread cancels. The 60-second bound only fails
+// the test when the wake never comes.
+#[test]
+fn cancel_wait_returns_once_another_thread_cancels() {
+    let cancel = Cancel::new();
+    let (started, has_started) = mpsc::channel();
+    let (returned, has_returned) = mpsc::channel();
+    let waiter = {
+        let cancel = cancel.clone();
+        thread::spawn(move || {
+            let _ = started.send(());
+            cancel.wait();
+            let _ = returned.send(());
+        })
+    };
+    has_started.recv().expect("the waiter starts");
+    assert_eq!(has_returned.try_recv(), Err(TryRecvError::Empty), "wait returned before the cancel");
+    cancel.cancel();
+    has_returned.recv_timeout(Duration::from_secs(60)).expect("wait returns after the cancel");
+    waiter.join().expect("the waiter ends");
+}
+
+// A running job blocked in `wait` ends when the queue drops its key, and its result never arrives.
+#[test]
+fn a_job_waiting_on_its_cancel_ends_when_its_key_is_dropped() {
+    let (queue, jobs, wakes) = queue(1);
+    let (started, has_started) = mpsc::channel();
+    queue.submit("running", Priority::VISIBLE, move |cancel: &Cancel| {
+        let _ = started.send(());
+        cancel.wait();
+        "running"
+    });
+    let (ran, has_run) = mpsc::channel();
+    let lane = thread::spawn(move || {
+        let _ = ran.send(jobs.run_all());
+    });
+    has_started.recv().expect("the job starts");
+    assert_eq!(queue.reprioritize(|_, _| None), ["running"]);
+    assert_eq!(has_run.recv_timeout(Duration::from_secs(60)), Ok(1), "the job ends after the cancel");
+    lane.join().expect("the lane ends");
+    assert!(drain(&queue).is_empty());
+    assert_eq!(wakes.load(Ordering::Relaxed), 0);
+}
+
 // The wake is called once per finished job, never for a dropped or cancelled one.
 
 // With `lanes == 0` nothing runs on submit; `run_inline(1)` runs the best job and returns 1.
@@ -88,7 +161,11 @@ fn queue_gives_back_a_lane_the_host_dropped() {
         }
     }
     let jobs = Arc::new(Refusing(AtomicUsize::new(0), ManualJobs::new()));
-    let queue = JobQueue::<&'static str, &'static str>::new(jobs.clone(), Wake::new(|| {}), QueueOptions { lanes: 1, name: "test" });
+    let queue = JobQueue::<&'static str, &'static str>::new(
+        jobs.clone(),
+        Wake::new(|| {}),
+        QueueOptions { lanes: 1, name: "test", ..QueueOptions::default() },
+    );
     queue.submit("a", Priority::VISIBLE, |_| "a");
     jobs.0.store(1, Ordering::Relaxed);
     queue.submit("b", Priority::VISIBLE, |_| "b");
@@ -112,4 +189,32 @@ fn queue_finish_runs_the_waiting_jobs_inline() {
     let mut done = drain(&queue);
     done.sort_unstable();
     assert_eq!(done, ["a", "b"], "each job ran once");
+}
+
+// Among equal priorities `OldestFirst` runs jobs in arrival order and the default runs the newest first; a tie rule
+// flipped or ignored would reorder an app's file opens or its thumbnails.
+#[test]
+fn a_queue_ordered_oldest_first_runs_equal_priorities_in_arrival_order() {
+    let oldest = inline_queue(QueueOrder::OldestFirst);
+    let newest = inline_queue(QueueOrder::default());
+    for queue in [&oldest, &newest] {
+        queue.submit("one", Priority::NEAR, |_| "one");
+        queue.submit("two", Priority::NEAR, |_| "two");
+        queue.submit("three", Priority::NEAR, |_| "three");
+    }
+    assert_eq!(run_one_by_one(&oldest), ["one", "two", "three"]);
+    assert_eq!(run_one_by_one(&newest), ["three", "two", "one"]);
+}
+
+// Priority decides before arrival in both orders: background work submitted first never runs before visible work
+// submitted later, nor does newer background work outrank older visible work.
+#[test]
+fn a_higher_priority_runs_before_a_lower_one_in_either_order() {
+    for order in [QueueOrder::NewestFirst, QueueOrder::OldestFirst] {
+        let queue = inline_queue(order);
+        queue.submit("background", Priority::BACKGROUND, |_| "background");
+        queue.submit("visible", Priority::VISIBLE, |_| "visible");
+        queue.submit("near", Priority::NEAR, |_| "near");
+        assert_eq!(run_one_by_one(&queue), ["visible", "near", "background"], "{order:?}");
+    }
 }

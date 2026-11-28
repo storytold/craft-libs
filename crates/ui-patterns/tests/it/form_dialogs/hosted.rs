@@ -2,14 +2,16 @@
 //! closing; OK answers with the dialog's own result type.
 
 use craft_behavior::PixelSize;
+use craft_ui::contract::Bind;
 use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, StackDialog};
 use craft_ui::patterns::form_dialogs::{
-    AboutInfo, AboutLink, CanvasSize, CanvasSizeValues, Credits, ExportOptions, ExportOptionsKind, FormatOptions, GuideLayoutDialog,
+    AboutInfo, AboutLink, CanvasSize, CanvasSizeValues, Credits, DialogFields, ExportOptions, ExportOptionsKind, FormatOptions, GuideLayoutDialog,
     GuideLayoutValues, GuideRect, GuideUnits, HostedAbout, HostedCanvasSize, HostedExportAs, HostedFormatOptions, HostedGuideLayoutDialog,
-    HostedImageSize, HostedNewDocument, HostedNewGuideDialog, ImageSize, ImageSizeValues, JpegOptions, NewDocumentDialog, NewGuideDialog,
-    NewGuideValues,
+    HostedImageSize, HostedNewDocument, HostedNewGuideDialog, HostedParamDialog, ImageSize, ImageSizeValues, JpegOptions, NewDocumentDialog,
+    NewGuideDialog, NewGuideValues, Param, ParamDialog, ParamKind,
 };
 use craft_ui::runtime::env::UnitKind;
+use craft_ui::runtime::measure;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Vec2};
 use serde_json::{Value, json};
@@ -77,6 +79,20 @@ fn automate<D: StackDialog>(dialog: D, field: &str, value: Value) -> Option<D::R
 fn fixture(host: &Rc<RefCell<DialogHost>>) -> Fixture {
     let shown = Rc::clone(host);
     let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    fixture
+}
+
+/// A fixture that runs `host` in a measuring run, then in the real run, every pass, as a host inside a measured body
+/// runs: the measuring run comes first, before the real run takes the pass's input.
+pub(crate) fn measured_fixture(host: &Rc<RefCell<DialogHost>>) -> Fixture {
+    let shown = Rc::clone(host);
+    let mut fixture = Fixture::new(move |ui| {
+        let ctx = ui.ctx().clone();
+        let builder = egui::UiBuilder::new().sizing_pass().invisible();
+        measure::run(&ctx, || ui.scope_builder(builder, |ui| shown.borrow_mut().run(ui)));
+        shown.borrow_mut().run(ui);
+    });
     fixture.room(Vec2::new(1400.0, 1000.0));
     fixture
 }
@@ -258,6 +274,26 @@ fn hosted_export_as_finishes_when_the_app_answers_its_save_request() {
     assert_eq!(answered, Some(path), "the answered path finishes the dialog with it");
 }
 
+/// A path the host answers in a frame whose first run measures Export As still finishes the dialog with it. Guards
+/// against a hosted dialog that took its host's answers in the measuring run, whose form drops them.
+#[trial]
+fn export_as_takes_a_path_answer_in_the_real_run_after_a_measuring_run() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = measured_fixture(&host);
+    host.borrow_mut().open(HostedExportAs::new("Poster", PICTURE, ExportOptions::default()));
+    fixture.idle(10);
+    let export = fixture.by_label("Export…").expect("the Export button");
+    fixture.click(&export).idle(4);
+    let request = host.borrow_mut().get_mut::<HostedExportAs>().and_then(HostedExportAs::pick_path).expect("Export asks for a path");
+    let path = PathBuf::from("/tmp/poster.png");
+    if let Some(dialog) = host.borrow_mut().get_mut::<HostedExportAs>() {
+        dialog.answer_path(request.key, path.clone());
+    }
+    fixture.idle(6);
+    let answered = host.borrow_mut().take::<HostedExportAs>().and_then(DialogResult::ok).map(|result| result.path);
+    assert_eq!(answered, Some(path), "the answered path finishes the dialog with it");
+}
+
 /// Export As: Enter alone does not export; Convert to sRGB starts on and its box gives the document's profile; + adds
 /// 0.5x "@0.5x", then 0.75x, and a row's trash button removes it while more than one is left; two rows ask for a folder
 /// and answer one output per row; without folder export, two rows refuse Export.
@@ -350,19 +386,19 @@ fn export_as_keeps_scale_all_within_its_limits_and_enter_in_a_field_only_commits
     let host = Rc::new(RefCell::new(DialogHost::new()));
     let mut fixture = fixture(&host);
     host.borrow_mut().open(HostedExportAs::new("Poster", PICTURE, ExportOptions::default()));
-    fixture.idle(10);
+    fixture.settle();
     let options = |host: &Rc<RefCell<DialogHost>>| host.borrow().get::<HostedExportAs>().map(|dialog| dialog.options().clone()).expect("open");
 
     let scale = fixture.by_label("Scale").expect("the Scale field");
-    fixture.click(&scale).idle(2);
+    fixture.click(&scale).settle();
     fixture.key(Key::A, Modifiers::COMMAND).type_text("50");
-    fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
     assert!(host.borrow().is_open::<HostedExportAs>(), "Enter in the Scale field leaves the dialog open");
     assert_eq!(options(&host).output_size(PICTURE), PixelSize::new(800, 450), "Enter commits the field");
 
     for _ in 1..ScaleRow::MAX_ROWS {
         let add = fixture.by_label("Add a size").expect("the + button");
-        fixture.click(&add).idle(4);
+        fixture.click(&add).settle();
     }
     let rows = options(&host).scale_rows();
     assert_eq!(rows.len(), ScaleRow::MAX_ROWS, "+ adds rows up to the limit");
@@ -373,9 +409,9 @@ fn export_as_keeps_scale_all_within_its_limits_and_enter_in_a_field_only_commits
     assert!(fixture.tree().is_disabled_key(add.node), "+ is disabled at the limit");
 
     let suffix = fixture.by_label("Suffix 2").expect("the second row's suffix");
-    fixture.click(&suffix).idle(2);
+    fixture.click(&suffix).settle();
     fixture.key(Key::A, Modifiers::COMMAND).type_text(&"s".repeat(ScaleRow::MAX_SUFFIX + 10));
-    fixture.key(Key::Tab, Modifiers::NONE).idle(4);
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
     assert_eq!(options(&host).scale_rows()[1].suffix.chars().count(), ScaleRow::MAX_SUFFIX, "a suffix is cut at its limit");
 }
 
@@ -463,6 +499,31 @@ fn image_size_alt_digits_pick_resample_without_typing_into_a_field() {
     assert_eq!(resample(&host), Some(json!("automatic")), "Alt+5 picks nothing when Bicubic Sharper is not listed");
     alt_digit(&mut fixture, Key::Num7, "7", alt);
     assert_eq!(resample(&host), Some(json!("nearestNeighbor")), "Alt+7 picks a listed method");
+}
+
+/// A dialog with one colour row whose dropper opens armed.
+fn dropper(fields: &mut DialogFields) -> ParamDialog<'_> {
+    let tint = Param::new("tint", "Tint", ParamKind::color(Some([0.0, 0.0, 1.0]))).eyedropper().armed(true);
+    ParamDialog::new("dropper", "Dropper", vec![tint]).values(Bind::bound(fields))
+}
+
+// While a colour row samples, Escape ends the sampling and the dialog stays open with its edit; the next Escape cancels.
+#[trial]
+fn escape_ends_a_sampling_row_before_it_cancels_the_dialog() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "dropper", DialogFields::new(), dropper));
+    fixture.idle(10);
+    let ended = || host.borrow_mut().get_mut::<HostedParamDialog>().is_some_and(HostedParamDialog::take_sampling_ended);
+    assert!(!ended(), "nothing ended yet");
+
+    fixture.key(Key::Escape, Modifiers::NONE).idle(4);
+    assert!(host.borrow().is_open::<HostedParamDialog>(), "the first Escape leaves the dialog open");
+    assert!(ended(), "and ends the sampling");
+    assert!(!ended(), "once");
+
+    fixture.key(Key::Escape, Modifiers::NONE).idle(4);
+    assert!(host.borrow().is_empty(), "the next Escape cancels the dialog");
 }
 
 /// Opens a dialog on a host.

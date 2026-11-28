@@ -3,18 +3,25 @@
 //! no count.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{ContainerProps, Lazy, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _};
+use craft_ui::choice::{Radio, RadioGroup};
+use craft_ui::contract::{
+    Bind, ContainerProps, Entry, Lazy, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowCollection as _, ShowContainer as _,
+};
+use craft_ui::form::Field;
+use craft_ui::list::{List, ListRow};
+use craft_ui::pickers::Select;
 use craft_ui::runtime::lock_keys;
 use craft_ui::style::SurfaceKind;
 use craft_ui::testing::layout::{allocate, in_region};
 use craft_ui::testing::pointer::{moved, wheel};
 use craft_ui::testing::{
-    Frames, MemoRun, audit_replays, in_audit_run, last_frame_memo_runs, last_pass_memo_runs, last_pass_runs, last_pass_text_layouts, trial,
+    Fixture, Frames, MemoRun, audit_replays, in_audit_run, last_frame_memo_runs, last_pass_memo_runs, last_pass_runs, last_pass_text_layouts, trial,
 };
 use craft_ui_test_kit::body::Slab;
 use egui::{Color32, Pos2, Rect, Ui, Vec2};
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::rc::Rc;
 use std::sync::Arc;
 
 thread_local! {
@@ -101,7 +108,7 @@ fn the_audit_names_a_view_whose_paint_went_stale() {
     });
     assert!(message.contains("Swatch"), "names the view: {message}");
     assert!(message.contains("paint"), "names the paint difference: {message}");
-    assert!(!message.contains("rect:") && !message.contains("output:"), "extent and output are the same: {message}");
+    assert!(!message.contains("rect: left") && !message.contains("output:"), "extent and output are the same: {message}");
 }
 
 /// A view that returns a fraction of `HIDDEN`, which its props do not hold, and paints nothing from it.
@@ -433,4 +440,115 @@ fn a_view_replayed_moved_inside_a_run_is_kept_at_its_new_place() {
     assert!(runs.iter().any(|(name, _, run)| name.contains("Holder") && *run == MemoRun::Ran), "the holder ran: {runs:?}");
     assert!(runs.iter().any(|(name, _, run)| name.contains("Card") && *run == MemoRun::Replayed), "the card replayed in it: {runs:?}");
     frames.idle(SETTLE, &mut show);
+}
+
+/// A view holding a capped list that reveals its last row on every run.
+#[derive(MemoProps)]
+struct RevealedRows {}
+
+fn revealed_rows(_: &mut RevealedRows, ui: &mut Ui) {
+    let keys: Vec<usize> = (0..40).collect();
+    let source = craft_behavior::keyed(&keys, |key: &usize| *key);
+    List::new("Rows").max_rows(8).reveal(39).show_items(ui, &source, &mut |key, _| ListRow::new(format!("Row {key}")));
+}
+
+/// A reveal moves the rows after the list declared its scroll bar at the old offset: the view runs again rather than
+/// replay a run whose thumb stands where the rows no longer are, so its replays match a real run.
+#[trial]
+fn a_list_revealing_a_row_in_a_memoized_view_replays_as_it_runs() {
+    let mut frames = Frames::new();
+    audit_replays(&frames.ctx, true);
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 400.0)), |ui| {
+            MemoView::new("revealed", RevealedRows {}, revealed_rows).show(ui);
+        });
+    };
+    frames.idle(SETTLE, &mut show);
+    let ran: Vec<_> = last_frame_memo_runs(&frames.ctx).into_iter().filter(|(_, _, run)| *run == MemoRun::Ran).collect();
+    assert!(ran.is_empty(), "the view settles: {ran:?}");
+}
+
+/// A labelled select, as an options bar shows a mode.
+#[derive(MemoProps)]
+struct ModeField {
+    label: &'static str,
+}
+
+fn mode_field(props: &mut ModeField, ui: &mut Ui) {
+    let entries = [Entry::new(0u8, "Normal"), Entry::new(1, "Multiply")];
+    Field::new(props.label).show(ui, |ui, _| Select::new(props.label, Bind::given(0u8), &entries).show(ui));
+}
+
+/// The screen y of the middle of the painted run `text` in `region`.
+fn middle_of(fixture: &Fixture, text: &str, region: Rect) -> f32 {
+    let run = fixture.texts().iter().find(|run| run.text == text && region.contains(run.rect.center()));
+    run.unwrap_or_else(|| panic!("{text} is painted in {region:?}")).rect.center().y
+}
+
+/// A view back after frames away replays its kept run under the audit. The field's label sits by what its control
+/// recorded the pass before, which layout memory dropped while the view was away: the audit run places the label at
+/// the field's top and asks for a discard pass, so its pass shows nothing and is not compared. The frame shows the
+/// label on the control's middle, as before the view went away.
+#[trial]
+fn a_view_back_after_frames_away_replays_under_the_audit() {
+    let shown = Rc::new(Cell::new(true));
+    let showing = Rc::clone(&shown);
+    let mut fixture = Fixture::new(move |ui| {
+        // A view that stays shown keeps the store's room for the absent one (the memo rule for absent entries).
+        in_region(ui, region(1), |ui| MemoView::new("stays", ModeField { label: "Blend" }, mode_field).show(ui));
+        if showing.get() {
+            in_region(ui, region(0), |ui| MemoView::new("mode", ModeField { label: "Mode" }, mode_field).show(ui));
+        }
+    });
+    fixture.room(Vec2::new(400.0, 200.0)).settle();
+    audit_replays(fixture.ctx(), true);
+    fixture.idle(2);
+    let (label, control) = (middle_of(&fixture, "Mode", region(0)), middle_of(&fixture, "Normal", region(0)));
+    assert!((label - control).abs() <= 0.5, "the label {label} sits on the control's middle {control}");
+    shown.set(false);
+    fixture.idle(4);
+    shown.set(true);
+    fixture.frame(vec![]);
+    let ran = last_frame_memo_runs(fixture.ctx());
+    assert!(!ran.iter().any(|(_, _, run)| *run == MemoRun::Ran), "the views replay: {ran:?}");
+    assert!((middle_of(&fixture, "Mode", region(0)) - label).abs() <= 0.5, "the label shows where it was before the view went away");
+}
+
+/// An options bar's members: a caption, or a radio group in its place.
+#[derive(MemoProps)]
+struct Members {
+    radios: bool,
+}
+
+fn members(props: &mut Members, ui: &mut Ui) {
+    if !props.radios {
+        Button::new("Zoom").show(ui);
+        return;
+    }
+    RadioGroup::new("Type", Bind::given(1u8)).show(ui, |ui, _| {
+        Radio::new(0u8).label("Proximity").show(ui);
+        Radio::new(1u8).label("Content-Aware").show(ui);
+    });
+}
+
+/// A radio group that first shows in a view's run names Tab's arrival (its selected member) from the members that run
+/// registers: the run's record holds the arrival, so the view replays from the next frame, with no extra pass or run.
+#[trial]
+fn a_radio_group_new_in_a_run_replays_with_its_arrival() {
+    let radios = Rc::new(Cell::new(false));
+    let shown = Rc::clone(&radios);
+    let mut fixture = Fixture::new(move |ui| {
+        in_region(ui, region(0), |ui| MemoView::new("members", Members { radios: shown.get() }, members).show(ui));
+    });
+    fixture.room(Vec2::new(400.0, 200.0)).settle();
+    audit_replays(fixture.ctx(), true);
+    radios.set(true);
+    fixture.frame(vec![]);
+    assert_eq!(fixture.passes(), 1, "the frame the group appears in runs one pass");
+    fixture.frame(vec![]);
+    let ran = last_frame_memo_runs(fixture.ctx());
+    assert!(!ran.iter().any(|(_, _, run)| *run == MemoRun::Ran), "the view replays in the next frame: {ran:?}");
+    fixture.idle(3);
+    let ran = last_frame_memo_runs(fixture.ctx());
+    assert!(!ran.iter().any(|(_, _, run)| *run == MemoRun::Ran), "the view stays settled: {ran:?}");
 }

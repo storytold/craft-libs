@@ -511,6 +511,11 @@ impl Decoder {
         Ok(Decoder { params, width, height })
     }
 
+    /// Transparency flag from the validated v3 configuration record.
+    pub(crate) fn has_alpha(&self) -> bool {
+        self.params.extra_plane
+    }
+
     /// Decode one frame (a packet from the container).
     pub fn decode(&self, packet: &[u8]) -> Result<Frame> {
         let p = &self.params;

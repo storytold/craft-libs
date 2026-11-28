@@ -2,7 +2,7 @@
 //! the canvas's arena; the perspective grid shows while the quad can be committed.
 
 use craft_behavior::geometry::{Homography, screen_step};
-use craft_behavior::kurbo::{Point, Vec2 as DocVec};
+use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_behavior::{
     CanvasView, CursorIcon, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PaintedCursor, PartKey, PartRef, PointerButton, PressPhase,
     Roving, Sense,
@@ -119,6 +119,9 @@ struct Report {
 /// - Shift on a corner drag keeps the axis the pointer moved less along; Alt on a corner of an upright quad moves the
 ///   neighbouring corners too, so it stays a rectangle.
 /// - With a `shield` the document outside a valid quad is dimmed, under the grid.
+/// - With `bounds` a drag or an arrow key stops each corner it moves at the bounds' edge; a whole-quad move stops when
+///   its farthest corner reaches the edge, so the quad keeps its shape. The shield then dims the bounds outside the
+///   quad.
 /// - The corners stay where the user puts them: a quad wound counter-clockwise (a box flipped on one axis) applies
 ///   mirrored, a box turned half way round applies upside down.
 /// - A quad that is not convex draws in the invalid colour without the grid and cannot be committed.
@@ -140,13 +143,17 @@ pub struct PerspectiveCropQuad<'a> {
     /// The shield painted over the document outside a valid quad; `None` paints none.
     #[prop]
     shield: Option<CropShield>,
+    /// The rectangle every corner stays inside while dragged or moved by keys, in document units; the shield covers it
+    /// outside the quad. `None` leaves the corners unbounded and shields the whole document.
+    #[prop]
+    bounds: Option<DocRect>,
     report: Report,
 }
 
 impl<'a> PerspectiveCropQuad<'a> {
     /// A quad named `label` over `quad`, in document units.
     pub fn new(label: impl Into<Label>, quad: Bind<'a, PerspectiveQuad>) -> Self {
-        PerspectiveCropQuad { common: Common::new(), quad, show_grid: true, shield: None, report: Report::default() }.label(label)
+        PerspectiveCropQuad { common: Common::new(), quad, show_grid: true, shield: None, bounds: None, report: Report::default() }.label(label)
     }
 }
 
@@ -234,6 +241,43 @@ fn dragged(drag: &Drag, to: Point, mods: Mods) -> [Point; 4] {
     }
 }
 
+/// The quad `after` that `grab` made of `before`, kept inside `bounds`.
+///
+/// - A corner grab clamps each coordinate it moved. A coordinate nothing moved stays as it lies, even outside the
+///   bounds: that corner is the caller's. So a click with no drag changes nothing, and Alt's neighbours, clamped from
+///   the same coordinate as the corner, keep the rectangle.
+/// - A move shifts the whole quad back by the overshoot of its farthest corner on each axis, so it keeps its shape.
+/// - Nothing is pushed further out than `before` lay: the allowed range on each axis takes in what `before` covered.
+fn clamped(before: &[Point; 4], after: [Point; 4], grab: Grab, bounds: Option<DocRect>) -> [Point; 4] {
+    let Some(b) = bounds.map(|b| b.abs()) else { return after };
+    match grab {
+        Grab::Corner { .. } => {
+            // `max` then `min` rather than `f64::clamp`, which panics on reversed or NaN limits.
+            let keep = |was: f64, to: f64, lo: f64, hi: f64| to.max(lo.min(was)).min(hi.max(was));
+            std::array::from_fn(|i| Point::new(keep(before[i].x, after[i].x, b.x0, b.x1), keep(before[i].y, after[i].y, b.y0, b.y1)))
+        }
+        Grab::Move => {
+            let span = |q: &[Point; 4], axis: fn(&Point) -> f64| {
+                q.iter().map(axis).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)))
+            };
+            let x = kept_in(span(before, |p| p.x), span(&after, |p| p.x), b.x0, b.x1);
+            let y = kept_in(span(before, |p| p.y), span(&after, |p| p.y), b.y0, b.y1);
+            after.map(|p| p + DocVec::new(x, y))
+        }
+    }
+}
+
+/// The shift along one axis that brings the span `after` (min, max) inside `lo..hi`, widened to the span `before`
+/// covered: the max side is pulled back first, then the min side while the span fits.
+fn kept_in(before: (f64, f64), after: (f64, f64), lo: f64, hi: f64) -> f64 {
+    let (lo, hi) = (lo.min(before.0), hi.max(before.1));
+    let mut shift = (hi - after.1).min(0.0);
+    if after.1 - after.0 <= hi - lo {
+        shift += (lo - (after.0 + shift)).max(0.0);
+    }
+    shift
+}
+
 impl PerspectiveCropQuad<'_> {
     /// Starts the drag of the part pressed at screen point `origin`.
     fn begin(cx: &mut Cx<'_, Self>, view: &CanvasView, quad: [Point; 4], corner: Option<usize>, origin: Pos2) -> Drag {
@@ -246,9 +290,9 @@ impl PerspectiveCropQuad<'_> {
         Drag { grab, at_press: quad, from }
     }
 
-    /// Follows the pointer at screen point `pos`.
-    fn step(cx: &mut Cx<'_, Self>, view: &CanvasView, drag: &Drag, pos: Pos2, mods: Mods) {
-        let next = dragged(drag, view.to_doc(pos), mods);
+    /// Follows the pointer at screen point `pos`, inside `bounds`.
+    fn step(cx: &mut Cx<'_, Self>, view: &CanvasView, drag: &Drag, pos: Pos2, mods: Mods, bounds: Option<DocRect>) {
+        let next = clamped(&drag.at_press, dragged(drag, view.to_doc(pos), mods), drag.grab, bounds);
         if finite(&next) {
             cx.propose(Some(next));
         }
@@ -266,15 +310,18 @@ impl PerspectiveCropQuad<'_> {
         let Some((direction, mods)) = cx.intents().take_nudge() else { return };
         let distance = if mods.shift { NUDGE_FAR } else { NUDGE };
         let by = screen_step(view, DocVec::new(f64::from(direction.x), f64::from(direction.y)) * distance);
-        let next = match corner {
+        let (next, grab) = match corner {
             Some(index) => {
+                let index = index as usize;
                 let mut moved = quad;
-                moved[index as usize] += by;
-                moved
+                moved[index] += by;
+                (moved, Grab::Corner { index, offset: DocVec::ZERO })
             }
-            None => quad.map(|p| p + by),
+            None => (quad.map(|p| p + by), Grab::Move),
         };
-        if finite(&next) {
+        let next = clamped(&quad, next, grab, self.bounds);
+        // A nudge into the bounds' edge leaves the quad as it is and sets nothing.
+        if finite(&next) && next != quad {
             cx.set(Some(next));
         }
     }
@@ -336,6 +383,7 @@ impl Component for PerspectiveCropQuad<'_> {
         let space = space_of(&cx.env, cx.rect);
         let Some(quad) = shown(cx.value()) else { return };
         let view = space.view;
+        let bounds = self.bounds;
         let mut live = cx.memory::<Live>().clone();
         let grabs = std::iter::once((PartRef::from(INSIDE), None)).chain((0..CORNERS).map(|at| (CORNER.at(at), Some(at as usize))));
         for (part, corner) in grabs {
@@ -346,12 +394,12 @@ impl Component for PerspectiveCropQuad<'_> {
             match press.phase {
                 PressPhase::DragStart { start, pos, .. } if start.button == PointerButton::Primary => {
                     let drag = Self::begin(cx, &view, quad, corner, start.origin);
-                    Self::step(cx, &view, &drag, pos, mods);
+                    Self::step(cx, &view, &drag, pos, mods, bounds);
                     live.drag = Some(drag);
                 }
                 PressPhase::Drag { pos, .. } => {
                     if let Some(drag) = live.drag {
-                        Self::step(cx, &view, &drag, pos, mods);
+                        Self::step(cx, &view, &drag, pos, mods, bounds);
                     }
                 }
                 PressPhase::Release { start, pos, click: false, .. } => {
@@ -362,7 +410,7 @@ impl Component for PerspectiveCropQuad<'_> {
                         None => None,
                     };
                     if let Some(drag) = drag {
-                        Self::step(cx, &view, &drag, pos, mods);
+                        Self::step(cx, &view, &drag, pos, mods, bounds);
                         cx.commit();
                     }
                 }
@@ -383,10 +431,11 @@ impl Component for PerspectiveCropQuad<'_> {
         let style = &cx.style;
         let draw = ui.draw();
         let screen: Vec<Pos2> = quad.iter().map(|p| view.to_screen(*p)).collect();
-        // The shield dims the document outside a quad that can be committed, before the grid.
+        // The shield dims the bounds, or the whole document, outside a quad that can be committed, before the grid.
         if valid && let (Some(shield), Some(document)) = (&self.shield, space.document()) {
-            let (w, h) = (document.width, document.height);
-            let canvas = [Point::new(0.0, 0.0), Point::new(w, 0.0), Point::new(w, h), Point::new(0.0, h)].map(|p| view.to_screen(p));
+            let area = self.bounds.unwrap_or_else(|| DocRect::new(0.0, 0.0, document.width, document.height));
+            let canvas = [Point::new(area.x0, area.y0), Point::new(area.x1, area.y0), Point::new(area.x1, area.y1), Point::new(area.x0, area.y1)]
+                .map(|p| view.to_screen(p));
             if let Some(fill) = shield.fill_on(&space, style.canvas.egui(), self.report.dragging) {
                 paint_outside(&draw, canvas, &screen, DataColor::new(fill));
             }

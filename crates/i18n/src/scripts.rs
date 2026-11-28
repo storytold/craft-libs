@@ -108,6 +108,12 @@ impl Script {
     pub fn rtl(self) -> bool {
         matches!(self, Script::Arab | Script::Hebr | Script::Syrc | Script::Thaa)
     }
+
+    /// Whether the script is one of the CJK scripts (Han, Hiragana, Katakana, Hangul), whose interface labels show
+    /// the Latin letter of their access key after them: "文件(F)".
+    pub fn cjk(self) -> bool {
+        matches!(self, Script::Hani | Script::Hira | Script::Kana | Script::Hang)
+    }
 }
 
 /// Which way a language's text, and an interface in it, runs.

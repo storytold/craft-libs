@@ -4,7 +4,7 @@ use craft_layers::ui::filter::{FilterBy, LayerFilter};
 use craft_layers::ui::mock::FakeLayers;
 use craft_layers::ui::panel::{LayersEvent, LayersPanel};
 use craft_ui::contract::{Bind, MemoProps, MemoView, Outbox, Tracked};
-use craft_ui::testing::{Fixture, MemoRun, last_frame_derived_builds, last_frame_memo_runs, pointer, trial};
+use craft_ui::testing::{Fixture, MemoRun, last_frame_derived_builds, last_frame_memo_runs, last_pass_memo_runs, pointer, trial};
 use egui::{Ui, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -64,6 +64,18 @@ impl Rig {
         let runs = last_frame_memo_runs(self.fixture.ctx());
         let count = |wanted: MemoRun| runs.iter().filter(|(name, _, run)| name.contains("Host") && *run == wanted).count() as u32;
         (count(MemoRun::Ran), count(MemoRun::Replayed))
+    }
+
+    /// The runs and replays in the last frame of the memoized views whose type name holds `name`.
+    fn view_runs(&self, name: &str) -> (u32, u32) {
+        let runs = last_frame_memo_runs(self.fixture.ctx());
+        let count = |wanted: MemoRun| runs.iter().filter(|(ty, _, run)| ty.contains(name) && *run == wanted).count() as u32;
+        (count(MemoRun::Ran), count(MemoRun::Replayed))
+    }
+
+    /// The real runs in the last pass of the memoized views whose type name holds `name`.
+    fn real_runs(&self, name: &str) -> u32 {
+        last_pass_memo_runs(self.fixture.ctx()).iter().filter(|(ty, _, run)| ty.contains(name) && *run == MemoRun::Ran).count() as u32
     }
 
     /// One frame with no input, after the edit of the trial.
@@ -131,4 +143,68 @@ fn a_clicks_event_is_delivered_once_across_the_run_and_the_replays() {
     rig.fixture.click(&row).idle(4);
     let selects = rig.seen.borrow().iter().filter(|event| matches!(event, LayersEvent::Select(_))).count();
     assert_eq!(selects, 1, "{:?}", rig.seen.borrow());
+}
+
+/// A pointer move beside the panel replays its view: the panel reads the modifiers it shows its rows with, not the
+/// pointer, so only a modifier change runs it (#2812). Before, every pointer move in the window ran it.
+#[trial]
+fn a_pointer_move_beside_the_panel_replays_it_and_a_modifier_runs_it() {
+    let tree = Tracked::new(FakeLayers::fifty());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut filter = LayerFilter::default();
+        let mut events = Vec::new();
+        let at = egui::Rect::from_min_size(ui.max_rect().min, PANEL);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(at), |ui| {
+            MemoView::new("layers", Host { tree: &tree, filter: Bind::bound(&mut filter), events: Outbox::new(&mut events) }, host).show(ui);
+        });
+    });
+    fixture.room(Vec2::new(PANEL.x + 400.0, PANEL.y));
+    fixture.settle().idle(2);
+    let runs = |fixture: &Fixture| {
+        let runs = last_frame_memo_runs(fixture.ctx());
+        let count = |wanted: MemoRun| runs.iter().filter(|(name, _, run)| name.contains("Host") && *run == wanted).count();
+        (count(MemoRun::Ran), count(MemoRun::Replayed))
+    };
+    // The pointer enters the window beside the panel; in an app it is already there.
+    fixture.frame(vec![pointer::moved(egui::Pos2::new(PANEL.x + 200.0, 90.0))]);
+    for step in 0..3 {
+        fixture.frame(vec![pointer::moved(egui::Pos2::new(PANEL.x + 200.0, 100.0 + step as f32 * 10.0))]);
+        assert_eq!(runs(&fixture), (0, 1), "pointer move {step} beside the panel replays its view");
+    }
+    fixture.hold(egui::Modifiers::ALT).frame(Vec::new());
+    assert_eq!(runs(&fixture).0, 1, "Alt held runs the view");
+    fixture.frame(Vec::new());
+    assert_eq!(runs(&fixture), (0, 1), "and it replays while Alt stays held");
+}
+
+/// The pointer moving over the rows runs the panel but replays its blend, Opacity, Fill and lock rows: they show only the
+/// active layer's properties, and running them was about half of the panel's time in such a frame (photocraft#17131).
+#[trial]
+fn a_pointer_over_the_rows_replays_the_blend_rows() {
+    let mut rig = rig(FakeLayers::fifty());
+    for step in 0..3 {
+        rig.fixture.frame(vec![pointer::moved(egui::Pos2::new(100.0, 300.0 + step as f32))]);
+        assert_eq!(rig.host_runs().0, 1, "step {step}: the pointer runs the panel");
+        assert_eq!(rig.view_runs("BlendProps"), (0, 1), "step {step}: the blend rows replay");
+    }
+}
+
+/// A new blend mode on the active layer runs the blend rows, so they never show a stale value. The edit is a new
+/// version of the panel's view, so the header measures its content afresh in the frame's one pass: the blend rows run
+/// in that measuring run and once more in the real run.
+#[trial]
+fn the_active_layers_blend_mode_runs_the_blend_rows() {
+    let mut rig = rig(FakeLayers::fifty());
+    {
+        let mut tree = rig.tree.borrow_mut();
+        let active = tree.selection.active.expect("the sample has an active layer");
+        let layer = tree.layers.iter_mut().find(|layer| layer.id == active).expect("the active layer is listed");
+        layer.info.blend_key = String::from("multiply");
+    }
+    rig.frame();
+    assert_eq!(rig.fixture.passes(), 1, "the edit runs one pass");
+    assert_eq!(rig.real_runs("BlendProps"), 1, "the edit runs the blend rows in the real run");
+    assert!(rig.view_runs("BlendProps").0 <= 2, "and at most once more, in the header's measuring run");
+    rig.frame();
+    assert_eq!(rig.host_runs(), (0, 1), "and the panel replays after it");
 }

@@ -4,6 +4,7 @@
 use super::FieldStyle;
 use crate::buttons::IconButton;
 use crate::contract::{MeasureCx, PaintUi, Props as _};
+use crate::controls::disclosure::DisclosureGlyph;
 use crate::primitives::{IconSpec, Span, TextRun};
 use crate::runtime::env::Label;
 use crate::style::{StyleColor, TypeRole};
@@ -11,6 +12,11 @@ use craft_behavior::{ColumnKey, Flow, PartKey};
 use craft_theme::ControlSize;
 use egui::{Rect, Vec2, vec2};
 use smallvec::SmallVec;
+
+/// The chevron of the up half of a step strip.
+const UP_GLYPH: DisclosureGlyph = DisclosureGlyph { open: -1.0, ..DisclosureGlyph::dropdown_form() };
+/// The chevron of the down half of a step strip.
+const DOWN_GLYPH: DisclosureGlyph = DisclosureGlyph { open: 1.0, ..DisclosureGlyph::dropdown_form() };
 
 /// Something a field draws beside its text.
 pub struct Adornment {
@@ -20,6 +26,8 @@ pub struct Adornment {
 enum Kind {
     Glyph(IconSpec<'static>),
     Button(PartKey, IconSpec<'static>, Label),
+    /// The up and down step halves of a number field's leading arrows, by their part keys.
+    Steps(PartKey, PartKey),
     /// Text in the line, of `role`, monospace with `mono`, the gap kept before the text with `apart`; `size` is its
     /// measured run, zero until [`Adornment::measured`].
     Text {
@@ -40,6 +48,24 @@ impl Adornment {
     /// An icon button, the part `part` named `name`, of the style's button side.
     pub fn button(part: PartKey, icon: impl Into<IconSpec<'static>>, name: Label) -> Adornment {
         Adornment { kind: Kind::Button(part, icon.into(), name) }
+    }
+
+    /// A strip of two step halves, `up` above `down`, flush with the box edge: the leading arrows of a number field.
+    pub fn steps(up: PartKey, down: PartKey) -> Adornment {
+        Adornment { kind: Kind::Steps(up, down) }
+    }
+
+    /// Whether this is a step strip.
+    pub fn is_steps(&self) -> bool {
+        matches!(self.kind, Kind::Steps(..))
+    }
+
+    /// The part keys and rects of a step strip's up and down halves in `rect`, one of `place`'s rects; `None` for any
+    /// other adornment.
+    pub fn halves(&self, rect: Rect) -> Option<[(PartKey, Rect); 2]> {
+        let Kind::Steps(up, down) = &self.kind else { return None };
+        let (top, bottom) = rect.split_top_bottom_at_fraction(0.5);
+        Some([(*up, top), (*down, bottom)])
     }
 
     /// Text in the field's line, in `role`, such as a unit after a number. It takes the width of
@@ -106,6 +132,7 @@ impl Adornment {
         match &self.kind {
             Kind::Glyph(_) => Vec2::splat(style.glyph.side),
             Kind::Button(..) => Vec2::splat(style.button),
+            Kind::Steps(..) => Vec2::new(style.glyph.side, style.metrics.min_size.y),
             Kind::Text { size, .. } => *size,
         }
     }
@@ -130,6 +157,11 @@ impl Adornment {
             Kind::Button(part, icon, name) => {
                 ui.face(*part, IconButton::new(Self::spec(icon, None)).label(name.clone()).focusable(false).size(ControlSize::Sm))
             }
+            Kind::Steps(..) => {
+                for (glyph, (_, half)) in [&UP_GLYPH, &DOWN_GLYPH].into_iter().zip(self.halves(rect).into_iter().flatten()) {
+                    ui.draw().icon(half, &Self::spec(&IconSpec::glyph(glyph), Some(color)));
+                }
+            }
             Kind::Text { label, role, mono, .. } => {
                 ui.draw().text_on_line(rect, &Self::run(label, *role, *mono).color(color), line);
             }
@@ -150,9 +182,11 @@ pub struct Placed {
 }
 
 /// The room a button at the end of a line takes from the box edge: `(line - side) / 2`, the same on every side, so
-/// the button sits in the line's square. A glyph keeps the field's padding.
+/// the button sits in the line's square. A glyph keeps the field's padding and a step strip has none: it is flush with
+/// the box edge.
 fn inset(style: &FieldStyle, first: Option<&Adornment>, padding: f32) -> f32 {
     match first {
+        Some(adornment) if adornment.is_steps() => 0.0,
         Some(adornment) if adornment.part().is_some() => ((style.metrics.min_size.y - adornment.extent(style).y) / 2.0).max(0.0),
         _ => padding,
     }

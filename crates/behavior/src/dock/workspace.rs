@@ -12,7 +12,7 @@ use super::{
     DockSide,
     action::{Action, DockPlacement, Location},
     edit::tree_panels,
-    groups::{Column, DockEdge, PanelPlace, Target},
+    groups::{Column, DockEdge, PanelPlace, Target, Unit},
     layout::Layout,
     limits::MAX_PANELS,
     node::Node,
@@ -41,8 +41,9 @@ pub struct Workspace<P> {
     /// goes back.
     #[serde(default)]
     hidden: Vec<(P, Location<P>)>,
-    /// Floating panels with the docked location each one left, so Dock Panel can return it. Saved with the
-    /// workspace.
+    /// Floating panels, and closed panels that were floating, with the docked location each one left, so Dock Panel
+    /// can return it; a closed panel that floats records the place it would reopen at. A closed panel's record lives
+    /// as long as its `hidden` record. Saved with the workspace.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     floated: Vec<(P, Location<P>)>,
     /// Counts the replacements of this live workspace. Not saved, and not part of equality.
@@ -105,7 +106,7 @@ impl<P> Workspace<P> {
         &self.hidden
     }
 
-    /// The floating panels with the docked location each one left.
+    /// The floating panels, and the closed panels that were floating, with the docked location each one left.
     pub fn floated(&self) -> &[(P, Location<P>)] {
         &self.floated
     }
@@ -162,8 +163,46 @@ impl<P> Workspace<P> {
 }
 
 impl<P: Clone + Eq + Hash> Workspace<P> {
+    /// Renames a panel in `layout`, `hidden` and `floated` (keys and anchors), keeping its place; all or nothing.
+    /// An edit: it moves the revision and keeps the generation. `MissingPanel` when `from` is in none of them, `DuplicatePanel` when `to` is
+    /// already there.
+    pub fn rename(&mut self, from: &P, to: P) -> Result<(), DockError> {
+        if !self.holds(from) {
+            return Err(DockError::MissingPanel);
+        }
+        if self.holds(&to) {
+            return Err(DockError::DuplicatePanel);
+        }
+        let swap = |panel: &mut P| {
+            if *panel == *from {
+                *panel = to.clone();
+            }
+        };
+        let mut proposed = self.clone();
+        if let Some(root) = proposed.layout.root.as_mut() {
+            rename_in_tree(root, &swap);
+        }
+        for window in &mut proposed.layout.floating {
+            rename_in_column(&mut window.column, &swap);
+        }
+        for (panel, location) in proposed.hidden.iter_mut().chain(&mut proposed.floated) {
+            swap(panel);
+            rename_in_location(location, &swap);
+        }
+        proposed.validate()?;
+        let Workspace { layout, hidden, floated, .. } = proposed;
+        (self.layout, self.hidden, self.floated) = (layout, hidden, floated);
+        self.touch();
+        Ok(())
+    }
+
+    /// Whether `panel` is in the layout or is the key of a hidden or floated record.
+    fn holds(&self, panel: &P) -> bool {
+        self.layout.contains(panel) || self.hidden.iter().chain(&self.floated).any(|(held, _)| held == panel)
+    }
+
     /// Check the version, the layout, that every hidden panel is hidden once and absent
-    /// from the layout, and that the floated records are bounded and one per panel.
+    /// from the layout and its record is bounded, and that the floated records are bounded and one per panel.
     pub fn validate(&self) -> Result<(), DockError> {
         if self.version > Self::VERSION {
             return Err(DockError::UnsupportedVersion);
@@ -174,9 +213,12 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
         }
         let visible: HashSet<&P> = self.layout.panels().into_iter().collect();
         let mut seen = HashSet::new();
-        for (panel, _) in &self.hidden {
+        for (panel, location) in &self.hidden {
             if visible.contains(panel) || !seen.insert(panel) {
                 return Err(DockError::DuplicatePanel);
+            }
+            if location.closed_with.len() > MAX_PANELS {
+                return Err(DockError::LimitExceeded);
             }
         }
         if self.floated.len() > MAX_PANELS {
@@ -211,14 +253,27 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
         let policy = |panel: &P| if locked { permissions(panel).locked() } else { permissions(panel) };
         let mut proposed = self.clone();
         let mut all_closed = Vec::new();
+        // The group of each panel as it closes, in closing order.
+        let mut closing_groups = Vec::new();
         for action in actions {
             let closed = proposed.layout.closed_by(&action)?;
+            closing_groups.extend(closed.iter().map(|panel| proposed.layout.members(panel, Unit::Group).unwrap_or_else(|_| vec![panel.clone()])));
             let locations = close_locations(&proposed.layout, &closed);
             let before = proposed.layout.clone();
             // Opening a hidden panel puts it back where it was.
             let reopened = match &action {
                 Action::Open { panel, .. } if proposed.hidden.iter().any(|(p, _)| p == panel) => proposed.reopen(panel, &policy)?,
                 _ => false,
+            };
+            // Floating a hidden panel records the docked place it would reopen at, without reopening it there. A panel
+            // that would reopen in a floating window has no docked place.
+            let hidden_place = match &action {
+                Action::Float { panel, .. } if !proposed.layout.contains(panel) && proposed.hidden.iter().any(|(p, _)| p == panel) => proposed
+                    .restored(panel, &policy)
+                    .filter(|restored| !floats(&restored.layout, panel))
+                    .and_then(|restored| restored.layout.location(panel).ok())
+                    .map(|location| (panel.clone(), location)),
+                _ => None,
             };
             if !reopened {
                 // SetNative records where the window system has a floating window, so a lock
@@ -234,12 +289,19 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
                 proposed.hidden.push((panel, location));
             }
             proposed.track_floated(&before);
+            if let Some((panel, location)) = hidden_place
+                && floats(&proposed.layout, &panel)
+                && !proposed.floated.iter().any(|(p, _)| p == &panel)
+            {
+                proposed.floated.push((panel, location));
+            }
             all_closed.extend(closed);
         }
         let visible: HashSet<P> = proposed.layout.panels().into_iter().cloned().collect();
         proposed.hidden.retain(|(p, _)| !visible.contains(p));
         let mut seen = HashSet::new();
         all_closed.retain(|p| !visible.contains(p) && seen.insert(p.clone()));
+        proposed.record_closed_together(&all_closed, &closing_groups);
         proposed.validate()?;
         let Workspace { layout, hidden, floated, .. } = proposed;
         (self.layout, self.hidden, self.floated) = (layout, hidden, floated);
@@ -248,10 +310,11 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
     }
 
     /// Show or hide one panel. Showing restores its recorded location, following the chain of
-    /// hidden anchors when its own anchor is hidden too; otherwise it opens as
-    /// [`Action::Open`] with `fallback` as the anchor, following `permissions`. The hidden
-    /// panels on that chain reopen beside it later, so a group or window closed one panel at a
-    /// time comes back as one.
+    /// hidden anchors when its own anchor is hidden too, and brings back the hidden panels of its
+    /// group that closed with it in one batch (Close Tab Group, a preset) as tabs of its group;
+    /// otherwise it opens as [`Action::Open`] with `fallback` as the anchor, following
+    /// `permissions`. The other hidden panels on that chain reopen beside it later, so a group or
+    /// window closed one panel at a time comes back as one.
     /// A shown panel becomes the active tab of its group. Hiding follows `permissions` and
     /// `locked`, as [`Self::apply`] does, so a protected canvas stays shown.
     pub fn set_visible(
@@ -276,36 +339,99 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
         self.apply_all([open, Action::Activate { panel }], locked, permissions).map(drop)
     }
 
-    /// Restore a hidden `panel` to its recorded place and make it the active tab. `Ok(false)` when the record
-    /// cannot be restored, or the place it restores to refuses the panel under `permissions`; the workspace stays
-    /// as it was and the caller opens the panel by the ordinary, checked path.
+    /// Restore a hidden `panel` to its recorded place, with the hidden panels closed with it, and make it the
+    /// active tab. The set is restored in group order, each panel by its own record, so the group comes back in
+    /// the order it had; a panel closed with it whose place refuses it stays hidden. `Ok(false)` when `panel`'s
+    /// record cannot be restored, or the place it restores to refuses the panel under `permissions`; the workspace
+    /// stays as it was and the caller opens the panel by the ordinary, checked path.
     fn reopen(&mut self, panel: &P, permissions: &impl Fn(&P) -> Permissions) -> Result<bool, DockError> {
-        // The restore also rewrites the records of the hidden panels it passed, so it runs on a copy.
+        let mut restored = self.clone();
+        for member in self.closed_together(panel) {
+            match restored.restored(&member, permissions) {
+                Some(next) => restored = next,
+                None if &member == panel => return Ok(false),
+                None => {}
+            }
+        }
+        restored.layout.apply(Action::Activate { panel: panel.clone() })?;
+        self.layout = restored.layout;
+        self.hidden = restored.hidden;
+        Ok(true)
+    }
+
+    /// The workspace with the hidden `panel` restored to its recorded place, `None` when the record cannot be
+    /// restored or the place refuses the panel under `permissions`. The restore also rewrites the records of the
+    /// hidden panels it passed, so it runs on a copy.
+    fn restored(&self, panel: &P, permissions: &impl Fn(&P) -> Permissions) -> Option<Self> {
         let mut trial = self.clone();
         let mut layout = self.layout.clone();
-        if trial.restore_from_hidden(&mut layout, panel).is_err() {
-            return Ok(false);
-        }
+        trial.restore_from_hidden(&mut layout, panel).ok()?;
         let allowed = layout
             .location(panel)
             .ok()
             .and_then(|location| location.anchor.map(|anchor| location.placement.allowed_by(permissions(&anchor))))
             .unwrap_or(true);
         if !allowed || layout.breaks_columns_beyond(&self.layout, permissions) {
-            return Ok(false);
+            return None;
         }
-        layout.apply(Action::Activate { panel: panel.clone() })?;
-        self.layout = layout;
-        self.hidden = trial.hidden;
-        self.hidden.retain(|(p, _)| p != panel);
-        Ok(true)
+        trial.layout = layout;
+        trial.hidden.retain(|(p, _)| p != panel);
+        Some(trial)
     }
 
-    /// Update the floated records after an action that turned `before` into the current layout: drop the records of
-    /// panels that no longer float, and record the docked place of each panel that floats now and did not before.
+    /// The hidden `panel` and the hidden panels closed with it, in group order: those its record's
+    /// [`closed_with`](Location::closed_with) names whose own records name it back. A panel that closed again on
+    /// its own since names it no more. `[panel]` when it closed alone.
+    fn closed_together(&self, panel: &P) -> Vec<P> {
+        let record = |p: &P| self.hidden.iter().find(|(q, _)| q == p).map(|(_, location)| location);
+        let mut seen = HashSet::new();
+        let together: Vec<P> = record(panel)
+            .map(|location| &location.closed_with[..])
+            .unwrap_or_default()
+            .iter()
+            .filter(|&p| p == panel || record(p).is_some_and(|location| location.closed_with.contains(panel)))
+            .filter(|&p| seen.insert(p))
+            .cloned()
+            .collect();
+        if together.len() > 1 && together.contains(panel) { together } else { vec![panel.clone()] }
+    }
+
+    /// Records on the hidden panels `closed`, which this batch closed, the panels of their group that closed with
+    /// them. `groups` holds each closing panel's group as it closed, in closing order. The closed panels of one
+    /// group, or of groups that share one, form one set in the order the groups name them.
+    fn record_closed_together(&mut self, closed: &[P], groups: &[Vec<P>]) {
+        let closed: HashSet<&P> = closed.iter().collect();
+        let mut sets: Vec<Vec<P>> = Vec::new();
+        for group in groups {
+            let members: Vec<&P> = group.iter().filter(|p| closed.contains(p)).collect();
+            let (joined, rest): (Vec<Vec<P>>, Vec<Vec<P>>) =
+                std::mem::take(&mut sets).into_iter().partition(|set| set.iter().any(|p| members.contains(&p)));
+            let mut set: Vec<P> = joined.into_iter().flatten().collect();
+            for panel in members {
+                if !set.contains(panel) {
+                    set.push(panel.clone());
+                }
+            }
+            sets = rest;
+            if !set.is_empty() {
+                sets.push(set);
+            }
+        }
+        for set in sets.into_iter().filter(|set| set.len() > 1) {
+            for (panel, location) in &mut self.hidden {
+                if set.contains(panel) {
+                    location.closed_with.clone_from(&set);
+                }
+            }
+        }
+    }
+
+    /// Update the floated records after an action that turned `before` into the current layout: drop the stale
+    /// records ([`Self::drop_stale_floated`]), and record the docked place of each panel that floats now and did not
+    /// before.
     fn track_floated(&mut self, before: &Layout<P>) {
+        self.drop_stale_floated();
         let layout = &self.layout;
-        self.floated.retain(|(p, _)| floats(layout, p));
         let fresh: Vec<(P, Location<P>)> = layout
             .panels()
             .into_iter()
@@ -313,6 +439,13 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
             .filter_map(|p| before.location(p).ok().map(|location| (p.clone(), location)))
             .collect();
         self.floated.extend(fresh);
+    }
+
+    /// Drop the floated records of panels that neither float nor are hidden: a panel that closed while floating keeps
+    /// its record as long as its hidden record, so it docks back to its place after it reopens floating.
+    fn drop_stale_floated(&mut self) {
+        let (layout, hidden) = (&self.layout, &self.hidden);
+        self.floated.retain(|(p, _)| floats(layout, p) || hidden.iter().any(|(q, _)| q == p));
     }
 
     /// Restore `panel` where the chain of hidden anchors from its location ends, else at the
@@ -384,7 +517,6 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
             self.layout.take(panel);
         }
         self.hidden.extend(locations);
-        self.floated.retain(|(p, _)| registered(p));
         let known: HashSet<P> = self.layout.panels().into_iter().chain(self.hidden.iter().map(|(p, _)| p)).cloned().collect();
         let mut missing: Vec<(P, Location<P>)> = Vec::new();
         for panel in default.layout.panels() {
@@ -428,6 +560,7 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
             !drop
         });
         self.hidden.truncate(MAX_PANELS);
+        self.drop_stale_floated();
     }
 }
 
@@ -513,6 +646,37 @@ fn dock_columns_mut<P>(root: &mut Node<P>) -> Vec<&mut Column<P>> {
         }
     }
     out
+}
+
+/// Applies `swap` to every panel of `root`, walking the tree with a stack: a loaded tree can be deeper than the call
+/// stack.
+fn rename_in_tree<P>(root: &mut Node<P>, swap: &impl Fn(&mut P)) {
+    let mut visit = vec![root];
+    while let Some(node) = visit.pop() {
+        match node {
+            Node::Split { first, second, .. } => {
+                visit.push(second);
+                visit.push(first);
+            }
+            Node::Tabs { panels, .. } => panels.iter_mut().for_each(swap),
+            Node::Stack { entries } => entries.iter_mut().for_each(|entry| swap(&mut entry.panel)),
+            Node::Dock { columns, .. } => columns.iter_mut().for_each(|column| rename_in_column(column, swap)),
+        }
+    }
+}
+
+/// Applies `swap` to every panel of the groups of `column`.
+fn rename_in_column<P>(column: &mut Column<P>, swap: &impl Fn(&mut P)) {
+    column.groups.iter_mut().for_each(|group| group.panels.iter_mut().for_each(swap));
+}
+
+/// Applies `swap` to the panels a location names: its anchor, its siblings and the tab it goes before.
+fn rename_in_location<P>(location: &mut Location<P>, swap: &impl Fn(&mut P)) {
+    location.anchor.iter_mut().for_each(swap);
+    location.sibling.iter_mut().for_each(swap);
+    if let DockPlacement::Tab { before: Some(panel) } = &mut location.placement {
+        swap(panel);
+    }
 }
 
 /// Whether `panel` is in a floating window of `layout`.

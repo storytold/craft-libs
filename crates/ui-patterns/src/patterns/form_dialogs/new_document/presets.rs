@@ -5,8 +5,9 @@ use crate::patterns::form_dialogs::{LinkedSize, MAX_DOCUMENT_SIDE};
 use crate::runtime::env::{Label, UnitKind, Units};
 use craft_behavior::PixelSize;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
-use super::NewDocumentWords;
+use super::{DocumentSettings, NewDocumentWords};
 
 /// The most documents Recent keeps.
 pub(super) const MAX_RECENT: usize = 20;
@@ -265,12 +266,14 @@ pub struct DocumentPreset {
     pub pixels_per_inch: f64,
     /// Picking the card turns Artboards on (Photoshop's Web and Mobile presets).
     pub artboard: bool,
+    /// A print preset sized in pixels (a pixel grid): it shows and applies its pixels, at the app's print resolution.
+    pub pixel_sized: bool,
 }
 
 impl DocumentPreset {
     /// The card `id`, named `name` in English, for a page of `width` x `height` pixels at `pixels_per_inch`.
     pub const fn new(id: &'static str, name: &'static str, width: u32, height: u32, pixels_per_inch: f64) -> Self {
-        Self { id, name, width, height, pixels_per_inch, artboard: false }
+        Self { id, name, width, height, pixels_per_inch, artboard: false, pixel_sized: false }
     }
 
     /// The card turns Artboards on when picked.
@@ -280,10 +283,23 @@ impl DocumentPreset {
         self
     }
 
-    /// Whether the preset is for print (300 ppi and up): its card and fields show inches at the app's print resolution;
-    /// screen presets stay in pixels.
+    /// The card keeps its pixels: it shows and applies them at the app's print resolution instead of keeping a page
+    /// size in inches.
+    #[must_use]
+    pub const fn pixel_sized(mut self) -> Self {
+        self.pixel_sized = true;
+        self
+    }
+
+    /// Whether the preset is for print (300 ppi and up): it takes the app's print resolution; screen presets take the
+    /// screen resolution.
     pub fn is_print(&self) -> bool {
         self.pixels_per_inch >= 300.0
+    }
+
+    /// Whether the card and fields show the preset in inches: a print preset that is not [`pixel_sized`](Self::pixel_sized).
+    pub fn in_inches(&self) -> bool {
+        self.is_print() && !self.pixel_sized
     }
 
     /// The preset turned to `orientation`; a square preset stays as it is.
@@ -296,14 +312,15 @@ impl DocumentPreset {
         DocumentPreset { width: self.height, height: self.width, ..self.clone() }
     }
 
-    /// The preset as settings: the unit (inches for print, pixels for screen) and the resolution moved to the app's
-    /// print or screen resolution, keeping a print preset's physical size.
+    /// The preset as settings: the unit (inches for print, pixels for screen and pixel-sized presets) and the
+    /// resolution moved to the app's print or screen resolution, keeping a print preset's physical size and any other
+    /// preset's pixels.
     pub fn options(&self, print_ppi: f64, screen_ppi: f64) -> DocumentOptions {
-        let print = self.is_print();
-        let wanted = if print { print_ppi } else { screen_ppi };
+        let inches = self.in_inches();
+        let wanted = if self.is_print() { print_ppi } else { screen_ppi };
         let (width, height, pixels_per_inch) = if !(wanted.is_finite() && wanted > 0.0) {
             (self.width, self.height, self.pixels_per_inch)
-        } else if print {
+        } else if inches {
             let scale = wanted / self.pixels_per_inch;
             let pixels = |side: u32| (f64::from(side) * scale).round().clamp(1.0, MAX_DOCUMENT_SIDE) as u32;
             (pixels(self.width), pixels(self.height), wanted)
@@ -313,7 +330,7 @@ impl DocumentPreset {
         DocumentOptions {
             size: PixelSize::new(width, height),
             pixels_per_inch,
-            unit: if print { UnitKind::Inches } else { UnitKind::Pixels },
+            unit: if inches { UnitKind::Inches } else { UnitKind::Pixels },
             ..DocumentOptions::default()
         }
     }
@@ -322,21 +339,23 @@ impl DocumentPreset {
 /// A category tab and its cards.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-pub struct PresetCategory {
+pub struct PresetCategory<P = DocumentPreset> {
     /// Stable id: `"photo"`.
-    pub id: &'static str,
-    /// The English title, shown when no word names the id.
-    pub title: &'static str,
+    pub id: Cow<'static, str>,
+    /// The title, shown when no word names the id.
+    pub title: Label,
     /// The category's cards in display order.
-    pub presets: Vec<DocumentPreset>,
+    pub presets: Vec<P>,
 }
 
-impl PresetCategory {
-    /// The category `id` titled `title` in English, with its `presets`.
-    pub fn new(id: &'static str, title: &'static str, presets: Vec<DocumentPreset>) -> Self {
-        Self { id, title, presets }
+impl<P> PresetCategory<P> {
+    /// The category `id` titled `title`, with its `presets`.
+    pub fn new(id: impl Into<Cow<'static, str>>, title: impl Into<Label>, presets: Vec<P>) -> Self {
+        Self { id: id.into(), title: title.into(), presets }
     }
+}
 
+impl PresetCategory<DocumentPreset> {
     /// PhotoCraft's categories in tab order: Photo, Print, Art & Illustration, Web, Mobile, Film & Video, with their
     /// presets. Recent and Saved are not in this list: the dialog adds them first and last.
     pub fn standard() -> Vec<PresetCategory> {
@@ -345,12 +364,15 @@ impl PresetCategory {
                 "photo",
                 "Photo",
                 vec![
+                    DocumentPreset::new(DEFAULT_ID, "Default Size", 2100, 1500, 300.0),
+                    DocumentPreset::new("landscape-3x2", "Landscape, 3 x 2", 900, 600, 300.0),
                     DocumentPreset::new("landscape-6x4", "Landscape, 6 x 4", 1800, 1200, 300.0),
                     DocumentPreset::new("landscape-7x5", "Landscape, 7 x 5", 2100, 1500, 300.0),
                     DocumentPreset::new("landscape-10x8", "Landscape, 10 x 8", 3000, 2400, 300.0),
+                    DocumentPreset::new("portrait-2x3", "Portrait, 2 x 3", 600, 900, 300.0),
                     DocumentPreset::new("portrait-4x6", "Portrait, 4 x 6", 1200, 1800, 300.0),
                     DocumentPreset::new("portrait-5x7", "Portrait, 5 x 7", 1500, 2100, 300.0),
-                    DocumentPreset::new("square-5x5", "Square, 5 x 5", 1500, 1500, 300.0),
+                    DocumentPreset::new("portrait-8x10", "Portrait, 8 x 10", 2400, 3000, 300.0),
                 ],
             ),
             PresetCategory::new(
@@ -361,20 +383,28 @@ impl PresetCategory {
                     DocumentPreset::new("legal", "Legal", 2550, 4200, 300.0),
                     DocumentPreset::new("tabloid", "Tabloid", 3300, 5100, 300.0),
                     DocumentPreset::new("a4", "A4", 2480, 3508, 300.0),
-                    DocumentPreset::new("a3", "A3", 3508, 4961, 300.0),
+                    DocumentPreset::new("a6", "A6", 1240, 1748, 300.0),
                     DocumentPreset::new("a5", "A5", 1748, 2480, 300.0),
-                    DocumentPreset::new("b3", "B3", 4169, 5906, 300.0),
+                    DocumentPreset::new("a3", "A3", 3508, 4961, 300.0),
+                    DocumentPreset::new("b5", "B5", 2079, 2953, 300.0),
                     DocumentPreset::new("b4", "B4", 2953, 4169, 300.0),
+                    DocumentPreset::new("b3", "B3", 4169, 5906, 300.0),
+                    DocumentPreset::new("c4", "C4", 2705, 3827, 300.0),
+                    DocumentPreset::new("c5", "C5", 1913, 2705, 300.0),
+                    DocumentPreset::new("c6", "C6", 1346, 1913, 300.0),
+                    DocumentPreset::new("dl", "DL", 1299, 2598, 300.0),
                 ],
             ),
             PresetCategory::new(
                 "art",
                 "Art & Illustration",
                 vec![
+                    DocumentPreset::new("grid-1000", "1000 pixel grid", 1000, 1000, 300.0).pixel_sized(),
+                    DocumentPreset::new("grid-2000", "2000 pixel grid", 2000, 2000, 300.0).pixel_sized(),
                     DocumentPreset::new("poster", "Poster", 5400, 7200, 300.0),
-                    DocumentPreset::new("postcard", "Postcard", 1800, 1200, 300.0),
-                    DocumentPreset::new("comic-book", "Comic Book", 1988, 3075, 300.0),
-                    DocumentPreset::new("square-12x12", "Square, 12 x 12", 3600, 3600, 300.0),
+                    DocumentPreset::new("postcard", "Postcard", 1200, 1800, 300.0),
+                    DocumentPreset::new("video-1080p", "1080p", 1920, 1080, 72.0),
+                    DocumentPreset::new("video-720p", "720p", 1280, 720, 72.0),
                 ],
             ),
             PresetCategory::new(
@@ -440,7 +470,7 @@ impl ColorProfiles {
 
 /// The recent list after creating `settings`: equal settings move to the front instead of repeating, and the list
 /// keeps at most `max` entries (20 in the dialog).
-pub(crate) fn push_recent(recent: &mut Vec<DocumentOptions>, settings: DocumentOptions, max: usize) {
+pub(crate) fn push_recent<S: DocumentSettings>(recent: &mut Vec<S>, settings: S, max: usize) {
     recent.retain(|held| !held.same_document(&settings));
     recent.insert(0, settings);
     recent.truncate(max);
@@ -461,24 +491,34 @@ craft_ui::words! {
     /// The names of the built-in presets, in the order of `PRESET_IDS`.
     pub struct NewDocumentPresetWords {
         names: array [
+            "newDocumentPreset.landscape3x2" = "Landscape, 3 x 2",
             "newDocumentPreset.landscape6x4" = "Landscape, 6 x 4",
             "newDocumentPreset.landscape7x5" = "Landscape, 7 x 5",
             "newDocumentPreset.landscape10x8" = "Landscape, 10 x 8",
+            "newDocumentPreset.portrait2x3" = "Portrait, 2 x 3",
             "newDocumentPreset.portrait4x6" = "Portrait, 4 x 6",
             "newDocumentPreset.portrait5x7" = "Portrait, 5 x 7",
-            "newDocumentPreset.square5x5" = "Square, 5 x 5",
+            "newDocumentPreset.portrait8x10" = "Portrait, 8 x 10",
             "newDocumentPreset.letter" = "Letter",
             "newDocumentPreset.legal" = "Legal",
             "newDocumentPreset.tabloid" = "Tabloid",
             "newDocumentPreset.a4" = "A4",
-            "newDocumentPreset.a3" = "A3",
+            "newDocumentPreset.a6" = "A6",
             "newDocumentPreset.a5" = "A5",
-            "newDocumentPreset.b3" = "B3",
+            "newDocumentPreset.a3" = "A3",
+            "newDocumentPreset.b5" = "B5",
             "newDocumentPreset.b4" = "B4",
+            "newDocumentPreset.b3" = "B3",
+            "newDocumentPreset.c4" = "C4",
+            "newDocumentPreset.c5" = "C5",
+            "newDocumentPreset.c6" = "C6",
+            "newDocumentPreset.dl" = "DL",
+            "newDocumentPreset.grid1000" = "1000 pixel grid",
+            "newDocumentPreset.grid2000" = "2000 pixel grid",
             "newDocumentPreset.poster" = "Poster",
             "newDocumentPreset.postcard" = "Postcard",
-            "newDocumentPreset.comicBook" = "Comic Book",
-            "newDocumentPreset.square12x12" = "Square, 12 x 12",
+            "newDocumentPreset.video1080p" = "1080p",
+            "newDocumentPreset.video720p" = "720p",
             "newDocumentPreset.webMostCommon" = "Web Most Common",
             "newDocumentPreset.webMinimum" = "Web Minimum",
             "newDocumentPreset.webLarge" = "Web Large",
@@ -499,25 +539,35 @@ craft_ui::words! {
 }
 
 /// The ids of the built-in presets, in the order of `PresetWords::names`.
-const PRESET_IDS: [&str; 33] = [
+const PRESET_IDS: [&str; 43] = [
+    "landscape-3x2",
     "landscape-6x4",
     "landscape-7x5",
     "landscape-10x8",
+    "portrait-2x3",
     "portrait-4x6",
     "portrait-5x7",
-    "square-5x5",
+    "portrait-8x10",
     "letter",
     "legal",
     "tabloid",
     "a4",
-    "a3",
+    "a6",
     "a5",
-    "b3",
+    "a3",
+    "b5",
     "b4",
+    "b3",
+    "c4",
+    "c5",
+    "c6",
+    "dl",
+    "grid-1000",
+    "grid-2000",
     "poster",
     "postcard",
-    "comic-book",
-    "square-12x12",
+    "video-1080p",
+    "video-720p",
     "web-most-common",
     "web-minimum",
     "web-large",

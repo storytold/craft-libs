@@ -61,8 +61,11 @@ pub(crate) fn opener_open(stage: &mut MemoryStage, first: &Opener) -> bool {
     open
 }
 
-/// Whether the container hung from the opener `opener` (the id of its response) is open, as its slot holds it.
-pub(crate) fn opened_from(ctx: &egui::Context, opener: Id) -> bool {
+/// Whether the container hung from the opener `opener` (the id of its response, [`Overlay::opened_by`]) is open, as
+/// its slot holds it: an opener reports its expanded state by it.
+///
+/// [`Overlay::opened_by`]: super::Overlay::opened_by
+pub fn opened_from(ctx: &egui::Context, opener: Id) -> bool {
     MemoryStage::peek_session::<OpenerOpen>(ctx, sub(opener, "opens")).open
 }
 

@@ -34,8 +34,10 @@ serde_json = { workspace = true }
 [dev-dependencies]
 craft-ui-canvas = { path = ".", features = ["suite"] }
 craft-behavior = { workspace = true }
+craft-host = { workspace = true }
 craft-keymap = { workspace = true, features = ["egui"] }
 craft-ui-test-kit = { workspace = true, features = ["suite"] }
+craft-window = { workspace = true }
 egui = { workspace = true }
 
 [[test]]

@@ -6,6 +6,7 @@
 
 use super::{DragUnit, PanelKey, PanelSpec, scale_widths, width_bounds};
 use crate::contract::DropMark;
+use crate::rails::RailDensity;
 use crate::runtime::frame::{self, PassStep, PerViewport, Stamped, Stored};
 use crate::style::{RuleKind, RuleWidth, StyleCx};
 use craft_behavior::DockSide;
@@ -17,7 +18,7 @@ pub use craft_behavior::dock::{SIDE_ZONE_DEPTH_SHARE, SIDE_ZONE_FRACTION};
 
 /// The sizes of a dock's drop bands and zones and of the windows it floats, resolved from the theme's tokens.
 /// A dock's component style calls [`Self::style`] from `Component::style`, so the sizes are cached with it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct DockSizes {
     /// Depth of a group's side zones with `DockConfig::side_edge_zones` (the rail width).
@@ -40,8 +41,12 @@ pub struct DockSizes {
     pub cascade_inset: f32,
     /// The size a command floats a panel at when the panel gives none (the float window size).
     pub float_size: Vec2,
-    /// The divider between two docked groups or between a dock and its neighbour (the inline gap).
+    /// The divider between two docked groups or between a dock and its neighbour (the tight gap: the references'
+    /// dock dividers are 3 px at 100%).
     pub gap: f32,
+    /// The room between a dock and the node beside it: [`gap`](Self::gap), or none in a flush dock
+    /// ([`DockConfig::flush_docks`](super::DockConfig::flush_docks)).
+    pub dock_gap: f32,
     /// How far a band (edge, seam, column edge, new dock) reaches into a tab strip from its drop line (the least hit
     /// size): the rest of the strip joins the group.
     pub strip_reach: f32,
@@ -49,7 +54,7 @@ pub struct DockSizes {
     pub least_pane: f32,
     /// The height of a group's tab strip or section title row (the panel header height), which every group height includes.
     pub strip: f32,
-    /// The height of a column bar (a small control).
+    /// The height of a column bar (`size.bar.column`).
     pub bar: f32,
     /// The height of a floating window's title row, which is the bar of the column the window holds.
     pub title_row: f32,
@@ -80,6 +85,48 @@ pub struct DockSizes {
     pub rail_first: f32,
     /// The width each further column of a tool rail adds: a rail button and the tight gap before it.
     pub rail_step: f32,
+    /// [`rail_first`](Self::rail_first) with the buttons of a dense rail ([`RailDensity::Dense`]).
+    pub dense_rail_first: f32,
+    /// [`rail_step`](Self::rail_step) with the buttons of a dense rail ([`RailDensity::Dense`]).
+    pub dense_rail_step: f32,
+    /// The inset of a docked column shown as a card ([`column_cards`](Self::column_cards)) on its top and bottom, and
+    /// on its outer side at the dock's window edge: `space.gap.stack`.
+    pub card: f32,
+    /// The gutter between two neighbouring cards of a dock, on the outer side of each card past the window edge's:
+    /// `space.gap.tight`.
+    pub card_gutter: f32,
+    /// Which docked columns the dock shows as cards
+    /// ([`DockConfig::column_cards`](super::DockConfig::column_cards)): none in the style, set by the dock that shows
+    /// them.
+    pub column_cards: ColumnCards,
+    /// The height of a grip strip, the band with the dock's grip marks: above each icon group of a collapsed column,
+    /// and under the column bar of a tool rail (a group whose panel has a [`DockGrid`](super::DockGrid)) that the host
+    /// shows itself: the least hit size, or the theme's grip marks with `space.gap.tight` above and below them.
+    pub grip: f32,
+}
+
+/// Which docked columns a dock shows as cards ([`DockConfig::column_cards`](super::DockConfig::column_cards)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
+#[non_exhaustive]
+pub enum ColumnCards {
+    /// None: every column fills its cell.
+    #[default]
+    None,
+    /// Every docked column, expanded or collapsed to icons.
+    All,
+    /// Only the stepped columns, such as a docked tool rail ([`DockSizes::stepped`]); the panel columns stand flush:
+    /// VectorCraft 0.24's dock.
+    Stepped,
+}
+
+/// Which inset a docked column's card takes on its outer side ([`DockSizes::card_place`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CardInset {
+    /// The first column, at the dock's window edge: [`DockSizes::card`].
+    Edge,
+    /// A column past its outer neighbour's card: [`DockSizes::card_gutter`].
+    Gutter,
 }
 
 impl DockSizes {
@@ -98,6 +145,11 @@ impl DockSizes {
     /// The sizes of the style context `cx`.
     pub fn style(cx: &StyleCx<'_>) -> Self {
         let size = &cx.tokens.size;
+        let rail = |density: RailDensity| {
+            let button = density.button(cx.tokens);
+            (button + 2.0 * cx.tokens.space.pad.control, button + cx.tokens.space.gap.tight)
+        };
+        let ((rail_first, rail_step), (dense_rail_first, dense_rail_step)) = (rail(RailDensity::Regular), rail(RailDensity::Dense));
         DockSizes {
             zone_depth: size.rail.width,
             edge_band: size.control.md,
@@ -107,11 +159,12 @@ impl DockSizes {
             new_dock_band: size.control.md,
             cascade_inset: size.window.cascade,
             float_size: Vec2::new(size.float.width, size.float.height),
-            gap: cx.tokens.space.gap.inline,
+            gap: cx.tokens.space.gap.tight,
+            dock_gap: cx.tokens.space.gap.tight,
             strip_reach: size.hit.target,
             least_pane: size.pane.least,
             strip: size.panel_header,
-            bar: size.control.sm,
+            bar: size.bar.column,
             title_row: super::floating::title_row(cx.tokens),
             title_rule: cx.rule(RuleKind::Divider).width,
             pixels_per_point: cx.frame_ctx().pixels_per_point(),
@@ -122,15 +175,28 @@ impl DockSizes {
             jump: cx.control().height,
             iconic_least: size.rail.width,
             column: size.dock.column,
-            rail_first: size.rail.button + 2.0 * cx.tokens.space.pad.control,
-            rail_step: size.rail.button + cx.tokens.space.gap.tight,
+            rail_first,
+            rail_step,
+            dense_rail_first,
+            dense_rail_step,
+            card: cx.tokens.space.gap.stack,
+            card_gutter: cx.tokens.space.gap.tight,
+            column_cards: ColumnCards::None,
+            grip: super::group::grip_strip(cx.tokens),
         }
     }
 
     /// The height above a floating window's body: its title row, the rule under it and, for a window in the app
     /// window (`in_app`), the band over it.
     pub fn window_chrome(&self, in_app: bool) -> f32 {
-        self.title_row + self.title_rule.points(self.pixels_per_point) + if in_app { self.top_band } else { 0.0 }
+        self.window_chrome_ruled(in_app, true)
+    }
+
+    /// The height above a floating window's body with or without the rule under its title row: a grip title row
+    /// (`FloatingGroup::grip`) draws no rule and keeps no band for one.
+    pub(crate) fn window_chrome_ruled(&self, in_app: bool, ruled: bool) -> f32 {
+        let rule = if ruled { self.title_rule.points(self.pixels_per_point) } else { 0.0 };
+        self.title_row + rule + if in_app { self.top_band } else { 0.0 }
     }
 
     /// The sizes for a window on a display of `pixels_per_point`: an OS window lays out at its own monitor's scale.
@@ -163,6 +229,34 @@ impl DockSizes {
         column.width.unwrap_or(self.column).clamp(lo, hi)
     }
 
+    /// The inset on the outer side of the card of `column`, a dock's docked column `at` from the window edge inwards:
+    /// none for a column [`column_cards`](Self::column_cards) shows as no card; [`card`](Self::card) for the first
+    /// column, at the window edge; [`card_gutter`](Self::card_gutter) for the others, which stand that far from their
+    /// outer neighbour. A docked column is that much wider than its content.
+    pub fn card_inset<P>(&self, at: usize, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> f32 {
+        self.card_place(at, column, spec).map_or(0.0, |place| self.inset(place))
+    }
+
+    /// Which inset the card of `column`, a dock's docked column `at` from the window edge inwards, takes on its outer
+    /// side: none for a column [`column_cards`](Self::column_cards) shows as no card; [`CardInset::Edge`] for the
+    /// first column, [`CardInset::Gutter`] for the others.
+    pub fn card_place<P>(&self, at: usize, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> Option<CardInset> {
+        let card = match self.column_cards {
+            ColumnCards::None => false,
+            ColumnCards::All => true,
+            ColumnCards::Stepped => !column.iconic && self.stepped(column, spec).is_some(),
+        };
+        card.then_some(if at == 0 { CardInset::Edge } else { CardInset::Gutter })
+    }
+
+    /// The inset on the outer side of a card at `place`: [`card`](Self::card) or [`card_gutter`](Self::card_gutter).
+    pub fn inset(&self, place: CardInset) -> f32 {
+        match place {
+            CardInset::Edge => self.card,
+            CardInset::Gutter => self.card_gutter,
+        }
+    }
+
     /// The width bounds of a column collapsed to icons, docked or floating: the rail width up to the width it expands
     /// to. A docked column's inner edge and a floating window's sides resize it within them.
     pub fn iconic_bounds<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> (f32, f32) {
@@ -184,12 +278,15 @@ impl DockSizes {
 
     /// The width of a column before the dock's room shrinks it.
     pub fn width<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> f32 {
-        if column.iconic {
-            let (lo, hi) = self.shown_bounds(column, spec);
-            column.iconic_width.unwrap_or(lo).clamp(lo, hi)
-        } else {
-            self.expanded_width(column, spec)
-        }
+        if column.iconic { self.iconic_width(column, spec) } else { self.expanded_width(column, spec) }
+    }
+
+    /// The width of the icons of `column`, whether it is iconic or expanded beside a rail of its icons
+    /// ([`IconicMode::Rail`](super::IconicMode::Rail)): its iconic width from the rail width up to the width it
+    /// expands to.
+    pub fn iconic_width<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> f32 {
+        let (lo, hi) = (self.iconic_least, self.expanded_width(column, spec).max(self.iconic_least));
+        column.iconic_width.unwrap_or(lo).clamp(lo, hi)
     }
 
     /// The actions that give the dock on `side` of `layout` the total width `total`, its columns scaled within
@@ -210,33 +307,41 @@ impl DockSizes {
             _ => return Vec::new(),
         };
         let fixed = |column: &Column<P>| !column.iconic && self.stepped(column, spec).is_some();
+        // Each column with its card's inset, which the scaling leaves as it is.
         let current: Vec<(f32, (f32, f32))> = columns
             .iter()
-            .map(|column| {
-                let width = self.width(column, spec);
-                (width, if fixed(column) { (width, width) } else { self.shown_bounds(column, spec) })
+            .enumerate()
+            .map(|(at, column)| {
+                let (width, inset) = (self.width(column, spec), self.card_inset(at, column, spec));
+                let (lo, hi) = if fixed(column) { (width, width) } else { self.shown_bounds(column, spec) };
+                (width + inset, (lo + inset, hi + inset))
             })
             .collect();
         let widths = scale_widths(&current, total);
         columns
             .iter()
+            .enumerate()
             .zip(current.iter().zip(widths))
-            .filter(|(column, ((width, _), scaled))| !fixed(column) && (scaled - width).abs() >= 0.01)
-            .filter_map(|(column, (_, width))| {
+            .filter(|((_, column), ((width, _), scaled))| !fixed(column) && (scaled - width).abs() >= 0.01)
+            .filter_map(|((at, column), (_, width))| {
+                let width = width - self.card_inset(at, column, spec);
                 let panel = column.groups.iter().find_map(|group| group.panels.first())?.clone();
                 Some(if column.iconic { Action::resize_iconic(panel, Some(width)) } else { Action::resize_column(panel, width) })
             })
             .collect()
     }
 
-    /// The `(width, floor)` of every column, for [`fit_widths`](super::fit_widths): an expanded column shrinks down to
-    /// its least width, an iconic or stepped one keeps its width.
+    /// The `(width, floor)` of every column of a dock, from its window edge inwards, for
+    /// [`fit_widths`](super::fit_widths), each with its card's inset ([`card_inset`](Self::card_inset)): an expanded
+    /// column shrinks down to its least width, an iconic or stepped one keeps its width.
     pub fn natural<P>(&self, columns: &[Column<P>], spec: &dyn Fn(&P) -> PanelSpec) -> Vec<(f32, Option<f32>)> {
         columns
             .iter()
-            .map(|column| {
+            .enumerate()
+            .map(|(at, column)| {
                 let keeps = column.iconic || self.stepped(column, spec).is_some();
-                (self.width(column, spec), (!keeps).then(|| self.width_bounds(column, spec).0.max(1.0)))
+                let inset = self.card_inset(at, column, spec);
+                (self.width(column, spec) + inset, (!keeps).then(|| self.width_bounds(column, spec).0.max(1.0) + inset))
             })
             .collect()
     }
@@ -512,6 +617,20 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
     pub fn resolve(ctx: &Context, dock: Id, at: Pos2) -> Option<(DockSpot<P>, Rect)> {
         Self::with_pass(ctx, |pass| pass.before.iter().find(|(id, _)| *id == dock).and_then(|(_, targets)| targets.at(at))).flatten()
     }
+
+    /// The rect of a group in the dock `dock` as the previous pass showed it, by the side spots it registered (a
+    /// [`DockSpot::Group`] applies to its group's rect); `in_group` tells the group's panels. `None` outside a pass
+    /// and for a group that registered no side spots, such as a minimized one.
+    pub(crate) fn group_rect(ctx: &Context, dock: Id, in_group: impl Fn(&P) -> bool) -> Option<Rect> {
+        Self::with_pass(ctx, |pass| {
+            let (_, targets) = pass.before.iter().find(|(id, _)| *id == dock)?;
+            targets.targets.iter().find_map(|target| match &target.spot {
+                DockSpot::Group { anchor, .. } if in_group(anchor) => Some(target.applies),
+                _ => None,
+            })
+        })
+        .flatten()
+    }
 }
 
 /// The registrations of a pass. A settled memoized view's run record keeps each one to make it again and compares it
@@ -596,6 +715,14 @@ pub struct GroupDrag<P> {
     pub strip: Option<Vec2>,
     /// The panel the unit shows, for the drag's preview.
     pub active: PanelKey,
+    /// Where the press that started the drag was, for a drag that moves a floating window it is the whole of (a
+    /// floating tool rail by its grip): the window moves by the pointer's travel from here, so the point grabbed stays
+    /// under the pointer. `None` elsewhere.
+    pub press: Option<egui::Pos2>,
     /// The arrangement the drag started on, when it started in a dock area.
     pub(crate) started: Option<super::drop::Arrangement>,
+    /// The drag is a floating window's move by its title row, which docks only with `DockConfig::title_bar_docks`. A
+    /// window that took over a panel's drag ([`FloatingGroup::continue_move`](super::FloatingGroup::continue_move))
+    /// docks as that drag would.
+    pub title_row: bool,
 }

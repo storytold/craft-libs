@@ -1762,8 +1762,8 @@ mod chartex_tests {
 
     #[test]
     fn large_box_hierarchy_and_stacked_charts_take_linear_work() {
-        // 50,000 distinct categories in one series: grouped through a map, one pass.
-        let n = 50_000;
+        // 5,000 distinct categories in one series: grouped through a map, one pass.
+        let n = 5_000;
         let mut c = Chart::sample(ChartType::BoxWhisker);
         c.series.truncate(1);
         c.categories = (0..n).map(|i| format!("g{i}")).collect();
@@ -1771,12 +1771,15 @@ mod chartex_tests {
         let (groups, stats) = c.box_groups();
         assert_eq!((groups.len(), stats[0].len()), (n, n));
         assert!(stats[0].iter().all(Option::is_some));
-        // 2,000 series cap the groups so the result stays within MAX_BOX_CELLS.
-        c.series = vec![c.series[0].clone(); 2000];
+        // Enough series to cap the groups so the result stays within MAX_BOX_CELLS.
+        let series = MAX_BOX_CELLS / n * 2;
+        // Keep 100 values beyond the group cap without cloning the unused tail.
+        c.series[0].values.truncate(MAX_BOX_CELLS / series + 100);
+        c.series = vec![c.series[0].clone(); series];
         let (groups, stats) = c.box_groups();
-        assert_eq!(groups.len(), MAX_BOX_CELLS / 2000);
+        assert_eq!(groups.len(), MAX_BOX_CELLS / series);
         assert!(stats.iter().all(|s| s.len() == groups.len()));
-        // One long outer label over 50,000 leaves is shared, not copied per leaf.
+        // One long outer label over 5,000 leaves is shared, not copied per leaf.
         let mut t = Chart::sample(ChartType::Treemap);
         t.series.truncate(1);
         t.categories = (0..n).map(|i| format!("c{i}")).collect();

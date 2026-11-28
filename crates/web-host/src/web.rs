@@ -7,7 +7,7 @@
 //! }
 //! ```
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use wasm_bindgen::closure::Closure;
@@ -56,11 +56,25 @@ enum Transport {
     Page { canvas: web_sys::EventTarget },
 }
 
-/// The connection to the page hosting the app.
-pub struct Host {
+struct Inner {
     app: &'static str,
     transport: Transport,
     dirty: Cell<Option<bool>>,
+}
+
+/// The connection to the page hosting the app. Clones share the one connection.
+#[derive(Clone)]
+pub struct Host(Rc<Inner>);
+
+thread_local! {
+    /// The connection [`Host::connect`] made, for the services that deliver through the page
+    /// ([`crate::files::BrowserFiles`]).
+    static CONNECTED: RefCell<Option<Host>> = const { RefCell::new(None) };
+}
+
+/// The connection to the hosting page, once [`Host::connect`] found one.
+pub(crate) fn connected() -> Option<Host> {
+    CONNECTED.with(|connected| connected.borrow().clone())
 }
 
 impl Host {
@@ -85,11 +99,13 @@ impl Host {
             }
             Mode::Page => Transport::Page { canvas: canvas.clone().into() },
         };
-        Some(Self { app, transport, dirty: Cell::new(None) })
+        let host = Self(Rc::new(Inner { app, transport, dirty: Cell::new(None) }));
+        CONNECTED.with(|connected| *connected.borrow_mut() = Some(host.clone()));
+        Some(host)
     }
 
     pub fn mode(&self) -> Mode {
-        match self.transport {
+        match self.0.transport {
             Transport::Parent { .. } => Mode::Parent,
             Transport::Page { .. } => Mode::Page,
         }
@@ -100,9 +116,9 @@ impl Host {
     /// `saved` for the `save` the handler just posted), and wasm-bindgen refuses to re-enter an
     /// `FnMut` closure before its body runs, so the message would never reach the queue.
     pub fn listen(&self, handler: impl FnMut(Message) + 'static) {
-        let app = self.app;
+        let app = self.0.app;
         let inbox = Rc::new(Inbox::new(handler));
-        match &self.transport {
+        match &self.0.transport {
             Transport::Parent { window, parent, origin } => {
                 let (parent, origin, inbox) = (parent.clone(), origin.clone(), inbox.clone());
                 let on_message = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
@@ -146,7 +162,7 @@ impl Host {
     /// The new state is recorded before the send: a page host can report another state while the
     /// event is still dispatching, and that later report wins. A failed send is forgotten.
     pub fn post_dirty(&self, dirty: bool) {
-        crate::note_dirty(&self.dirty, dirty, || self.post(Outgoing::Dirty, &[("dirty", dirty.into())], None).is_ok());
+        crate::note_dirty(&self.0.dirty, dirty, || self.post(Outgoing::Dirty, &[("dirty", dirty.into())], None).is_ok());
     }
 
     /// Hand the host a file the app would otherwise download: Save, Save As, Export. With an
@@ -180,9 +196,9 @@ impl Host {
     }
 
     fn post(&self, kind: Outgoing, fields: &[(&str, JsValue)], transfer: Option<&js_sys::ArrayBuffer>) -> Result<(), String> {
-        let message_type = message_type(self.app, kind.kind());
+        let message_type = message_type(self.0.app, kind.kind());
         let error = |e: JsValue| e.as_string().unwrap_or_else(|| format!("{e:?}"));
-        match &self.transport {
+        match &self.0.transport {
             Transport::Parent { parent, origin, .. } => {
                 let message = object(&[("type", message_type.as_str().into())], fields)?;
                 match transfer {
@@ -288,11 +304,11 @@ mod tests {
     fn test_attach_pdf_rejects_foreign_origin() {
         let window = web_sys::window().unwrap();
         let origin = window.location().origin().unwrap();
-        let host = Host {
+        let host = Host(Rc::new(Inner {
             app: "pdf-attach-test",
             transport: Transport::Parent { window: window.clone(), parent: window.clone(), origin: origin.clone() },
             dirty: Cell::new(None),
-        };
+        }));
         let received = Rc::new(Cell::new(0));
         let counter = received.clone();
         host.listen(move |_| counter.set(counter.get() + 1));

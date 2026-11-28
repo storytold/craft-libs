@@ -7,14 +7,12 @@ mod library;
 pub use library::{GroupPath, PresetChange, PresetError, PresetGroup, PresetId, PresetItem, PresetKey, PresetLibrary, PresetNames};
 
 use crate::list::ThumbAspect;
-use crate::primitives::ContentPainterCx;
+use crate::primitives::{FacePaint, IconSpec};
 use craft_behavior::IconId;
-use egui::Rect;
 use std::fmt;
-use std::sync::Arc;
 
 /// The shape of a grid cell's thumbnail.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum CellShape {
     /// As wide as high.
@@ -46,7 +44,7 @@ impl CellShape {
 }
 
 /// How large the grid view's tiles are.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum PresetTiles {
     /// Thumbnails at the browser's zoom, with captions when the rows have them, under control-high group headers: a
@@ -77,9 +75,6 @@ impl<'a, K> ThumbInfo<'a, K> {
     }
 }
 
-/// Paints a [`Preview`] band into its rect.
-pub type PreviewPaint = Arc<dyn Fn(&ContentPainterCx, Rect) + Send + Sync>;
-
 /// A second band of a list row, in list view only: the brush's stroke preview.
 #[derive(Clone)]
 #[non_exhaustive]
@@ -87,7 +82,7 @@ pub struct Preview {
     /// Width over height of the band.
     pub aspect: ThumbAspect,
     /// Paints the band into the rect, clipped to it.
-    pub paint: PreviewPaint,
+    pub paint: FacePaint,
 }
 
 impl fmt::Debug for Preview {
@@ -133,6 +128,24 @@ pub struct PresetRow<K> {
     pub tooltip: Option<String>,
     /// The name a screen reader reads, instead of the label (and caption): the label stays what a rename starts from.
     pub accessible_name: Option<String>,
+    /// List view: icons after the label at the row's end, each with its accessible name; the grid ignores them.
+    pub trailing: Vec<(IconSpec<'static>, String)>,
+    /// The name the browser's Find also matches, beside the label: a library item's stored name beside its shown,
+    /// translated name.
+    pub search_name: Option<String>,
+}
+
+/// What the row menu of a browser or picker shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
+#[non_exhaustive]
+pub enum PresetRowMenu {
+    /// Rename, Move to, Delete, a divider, then the host's `row_items`.
+    #[default]
+    Standard,
+    /// Only the host's `row_items`.
+    Host,
+    /// No row menu.
+    Off,
 }
 
 impl<K> PresetRow<K> {
@@ -149,6 +162,8 @@ impl<K> PresetRow<K> {
             dimmed: false,
             tooltip: None,
             accessible_name: None,
+            trailing: Vec::new(),
+            search_name: None,
         }
     }
 
@@ -183,10 +198,10 @@ impl<K> PresetRow<K> {
         self
     }
 
-    /// Adds a band of `aspect` in list view, painted by `paint`.
+    /// Adds a band of `aspect` in list view, painted by `face`, which the host keys by the picture's identity.
     #[must_use]
-    pub fn preview(mut self, aspect: ThumbAspect, paint: impl Fn(&ContentPainterCx, Rect) + Send + Sync + 'static) -> Self {
-        self.preview = Some(Preview { aspect, paint: Arc::new(paint) });
+    pub fn preview_face(mut self, aspect: ThumbAspect, face: FacePaint) -> Self {
+        self.preview = Some(Preview { aspect, paint: face });
         self
     }
 

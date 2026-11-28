@@ -1,6 +1,6 @@
 //! Stories of `ReportDialog`.
 
-use super::{ReportDialog, ReportNote};
+use super::{ReportDialog, ReportGroup, ReportNote};
 use crate::runtime::env::Label;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_theme::variant::Tone;
@@ -22,4 +22,17 @@ fn report_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         dialog = dialog.lines((0..count).map(|n| Label::from(format!("page-{:03}.png: 2 layers merged", n + 1))).collect());
     }
     dialog.opened(data.bind("open", true)).show(ui).into()
+}
+
+/// Two groups under headings: notes with a detail and a note in the mono role.
+#[story(ReportDialog<'static>, covers = [], drive = Drive::Never)]
+fn report_dialog_grouped(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let groups = vec![
+        ReportGroup::new(
+            "Fonts",
+            vec![ReportNote::new(Tone::Warn, "Arial was substituted").detail("page 2"), ReportNote::new(Tone::Info, "Inter Variable").code()],
+        ),
+        ReportGroup::new("Images", vec![ReportNote::new(Tone::Bad, "hero.png could not be read").detail("3 uses")]),
+    ];
+    ReportDialog::new("Check Script Report", "Checked 2 scripts.", Vec::new()).groups(groups).opened(data.bind("open", true)).show(ui).into()
 }

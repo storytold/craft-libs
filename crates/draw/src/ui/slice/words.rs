@@ -49,14 +49,31 @@ craft_ui::words! {
         background: "slice.background" = "Background";
         background_none: "slice.backgroundNone" = "None";
         background_color: "slice.backgroundColor" = "Slice Background Color";
-        background_kind: "slice.backgroundKind" = "Background Type";
-        background_color_choice: "slice.backgroundColorChoice" = "Color";
+
+        h_align: "slice.hAlign" = "Horizontal";
+        v_align: "slice.vAlign" = "Vertical";
+        align_default: "slice.alignDefault" = "Default";
+        align_left: "slice.alignLeft" = "Left";
+        align_center: "slice.alignCenter" = "Center";
+        align_right: "slice.alignRight" = "Right";
+        valign_default: "slice.valignDefault" = "Default";
+        valign_top: "slice.valignTop" = "Top";
+        valign_middle: "slice.valignMiddle" = "Middle";
+        valign_baseline: "slice.valignBaseline" = "Baseline";
+        valign_bottom: "slice.valignBottom" = "Bottom";
+        background_matte: "slice.backgroundMatte" = "Matte";
+        background_white: "slice.backgroundWhite" = "White";
+        background_black: "slice.backgroundBlack" = "Black";
+        html_note: "slice.htmlNote" = "The cell's text is the slice's HTML text.";
         divide_title: "slice.divideTitle" = "Divide Slice";
         horizontally: "slice.horizontally" = "Divide Horizontally Into";
         vertically: "slice.vertically" = "Divide Vertically Into";
         divide_by: "slice.divideBy" = "Divide By";
         count: "slice.count" = "slices, evenly spaced";
-        size: "slice.size" = "pixels per slice";
+        size: "slice.size" = "per slice";
         divide_value: "slice.divideValue" = "Value";
+        /// The name a screen reader reads for one axis's Divide By group and value field: `{control}` the row's
+        /// visible label, `{axis}` the axis's caption.
+        axis_control: template "slice.axisControl" = "{control}, {axis}";
     }
 }

@@ -30,7 +30,7 @@ pub(super) use id::measuring;
 pub(crate) use id::{claim_id, draft, id, keeping_ids};
 pub(crate) use label::scrub_by_label;
 pub(crate) use measure::{MeasureIn, guard, measure, measure_content, measure_cx, padding, whole};
-pub(crate) use paint::{Fade, UnderVeil, fade, next_shape, paint_focus, paint_part_layers, paint_surface, surface_ink, unfade};
+pub(crate) use paint::{Fade, UnderVeil, fade, paint_focus, paint_part_layers, paint_surface, surface_ink, unfade};
 #[cfg(feature = "testing")]
 pub(crate) use parts::declares_none;
 pub(crate) use parts::{PartsStep, check_parts};
@@ -39,10 +39,10 @@ pub(crate) use report::{ReportIn, report, report_inert, report_parts, validity_o
 #[cfg(feature = "testing")]
 pub(crate) use scroll_owner::queue_reveal;
 pub use scroll_owner::scroll_step;
-pub(crate) use scroll_owner::{child_reveal, peek_reveal, queue_child_reveal, reveal_move, scroll_moves, take_reveal};
+pub(crate) use scroll_owner::{child_reveal, peek_reveal, queue_child_reveal, reveal_move, scroll_and_fallback_moves, scroll_moves, take_reveal};
 pub(crate) use sense::{part_state, register_wheel};
 pub(crate) use settle::settle;
-pub(crate) use state::{register_reset, state, value_flags};
+pub(crate) use state::{register_reset, shown_bool, state, value_flags};
 pub(crate) use stops::{StopsIn, body_group, parts_group, register_stops, takes_focus};
 pub(crate) use style::{style, style_cx};
 pub(crate) use update::{after_update, edit_intents, gesture_gate, key_activation, record_context, secondary_click, takes_activation, update_inputs};

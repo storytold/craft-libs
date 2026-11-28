@@ -14,7 +14,7 @@ use craft_ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, stage_fitting, story};
 use egui::{Pos2, Rect, Response, Ui, Vec2};
 
-use super::{CaretLine, EditKind, HostLine, HostRun, TextEditor, TextEditorHost, TextSelection};
+use super::{CaretLine, EditKind, EditorMode, HostLine, HostRun, TextEditor, TextEditorHost, TextSelection};
 
 /// The width of a char's cell, in document units.
 const CELL: f64 = 10.0;
@@ -24,10 +24,12 @@ const LINE: f64 = 24.0;
 const TEXT_SIZE: f32 = 16.0;
 
 /// A text in a monospace layout: char `c` of row `r` sits in the cell at x = 10c, y = 24r. Rows break at `\n` and
-/// wrap after the last space that fits `columns` cells; a wrapped row keeps the spaces it ends with.
+/// wrap after the last space that fits `columns` cells; a wrapped row keeps the spaces it ends with. With `max_chars`
+/// the host keeps the start of an insertion that fits, as a field with a maximum length does.
 struct MonoHost {
     text: String,
     columns: usize,
+    max_chars: Option<usize>,
 }
 
 impl MonoHost {
@@ -99,11 +101,17 @@ impl TextEditorHost for MonoHost {
         &self.text
     }
 
-    fn replace(&mut self, range: Range<usize>, text: &str, _: EditKind) -> bool {
+    fn replace(&mut self, range: Range<usize>, text: &str, _: EditKind) -> Option<usize> {
         let byte = |chars: usize| self.text.char_indices().nth(chars).map_or(self.text.len(), |(at, _)| at);
         let (from, to) = (byte(range.start), byte(range.end));
-        self.text.replace_range(from..to, text);
-        true
+        let room = self.max_chars.map_or(usize::MAX, |max| max.saturating_sub(self.text.chars().count().saturating_sub(range.len())));
+        let kept: String = text.chars().take(room).collect();
+        // A full field takes no more: nothing to replace and nothing kept is a refusal.
+        if range.is_empty() && kept.is_empty() && !text.is_empty() {
+            return None;
+        }
+        self.text.replace_range(from..to, &kept);
+        Some(kept.chars().count())
     }
 
     fn hit(&mut self, at: Point) -> (usize, usize) {
@@ -192,6 +200,8 @@ struct MonoText {
     #[common]
     common: Common,
     rows: Vec<String>,
+    /// Each char is painted as a bullet, as a password field's host lays it out.
+    masked: bool,
 }
 
 impl Component for MonoText {
@@ -223,6 +233,7 @@ impl Component for MonoText {
         let size = TEXT_SIZE * space.view.zoom as f32;
         for (line, text) in self.rows.iter().enumerate() {
             for (column, c) in text.chars().enumerate() {
+                let c = if self.masked { '•' } else { c };
                 let centre = space.view.to_screen(Point::new((column as f64 + 0.5) * CELL, (line as f64 + 0.5) * LINE));
                 let run = [DocRun::new(c.to_string(), FontRef::monospace(), size, ink)];
                 let layout = cx.layout_doc(&DocText::new(&run));
@@ -239,11 +250,28 @@ impl Component for MonoText {
 /// The text the stories edit.
 const SAMPLE: &str = "The quick brown fox\njumps over the lazy dog";
 
-/// The editor over `text` with the selection bound to `bind`, on a canvas as tall as the text wrapped at the stage's
-/// width, whose view puts document (0, 0) at its top left. The host's edits (typed, pasted and composed text) are
-/// written back to `text`, which the story keeps between passes.
-fn over_canvas(ui: &mut Ui, text: &mut String, mut bind: Bind<'_, TextSelection>) -> StoryOutput {
-    let mut host = MonoHost { text: std::mem::take(text), columns: 1 };
+/// What the story's editor is: its mode, a password field (`masked`), and the most chars its host keeps.
+#[derive(Clone, Copy)]
+struct Field {
+    mode: EditorMode,
+    masked: bool,
+    max_chars: Option<usize>,
+}
+
+impl Field {
+    const CANVAS: Field = Field { mode: EditorMode::Canvas, masked: false, max_chars: None };
+
+    fn mode(mode: EditorMode) -> Field {
+        Field { mode, ..Field::CANVAS }
+    }
+}
+
+/// The editor `field` over `text` with the selection bound to `bind`, on a canvas as tall as the text wrapped at the
+/// stage's width, whose view puts document (0, 0) at its top left. The host's edits (typed, pasted and composed text)
+/// are written back to `text`, which the story keeps between passes.
+fn over_canvas(ui: &mut Ui, text: &mut String, mut bind: Bind<'_, TextSelection>, field: Field) -> StoryOutput {
+    let Field { mode, masked, max_chars } = field;
+    let mut host = MonoHost { text: std::mem::take(text), columns: 1, max_chars };
     let room = stage_fitting(ui, |width| {
         // One cell stays free at the end of a row for the caret after its last char.
         host.columns = ((f64::from(width) / CELL).floor() as usize).saturating_sub(1);
@@ -252,18 +280,24 @@ fn over_canvas(ui: &mut Ui, text: &mut String, mut bind: Bind<'_, TextSelection>
     let view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
     let shown = Canvas::new("Document").view(view).show_at(ui, room, |ui, _| {
         let bounds = Rect::from_min_size(view.to_screen(Point::ZERO), host.extent_with_caret_cell());
-        MonoText { common: Common::new(), rows: host.row_texts() }.show_at(ui, bounds);
-        TextEditor::new("Text", &mut host, bind.reborrowed()).show_at(ui, bounds)
+        MonoText { common: Common::new(), rows: host.row_texts(), masked }.show_at(ui, bounds);
+        let editor = TextEditor::new("Text", &mut host, bind.reborrowed()).mode(mode);
+        if masked { editor.masked() } else { editor }.show_at(ui, bounds)
     });
     *text = host.text;
     shown.inner.map(StoryOutput::from).unwrap_or_default()
 }
 
-/// The editor over `text` with `selection` on a canvas.
+/// The canvas editor over `text` with `selection` on a canvas.
 fn on_canvas(ui: &mut Ui, data: &mut StoryData, text: &str, selection: TextSelection) -> StoryOutput {
+    as_field(ui, data, text, selection, Field::CANVAS)
+}
+
+/// The editor `field` over `text` with `selection` on a canvas.
+fn as_field(ui: &mut Ui, data: &mut StoryData, text: &str, selection: TextSelection, field: Field) -> StoryOutput {
     let mut host = data.value("text", text.to_owned()).clone();
     let (selection, selection_at) = data.value_at("selection", selection);
-    let out = over_canvas(ui, &mut host, selection_at.bind(&mut *selection));
+    let out = over_canvas(ui, &mut host, selection_at.bind(&mut *selection), field);
     *data.value("text", String::new()) = host;
     out
 }
@@ -298,7 +332,7 @@ fn composing(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn selections_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut host = data.value("text", SAMPLE.to_owned()).clone();
     let (selection, selection_at) = data.value_at("selection", Mixed::<TextSelection>::Mixed);
-    over_canvas(ui, &mut host, selection_at.bind_mixed(&mut *selection))
+    over_canvas(ui, &mut host, selection_at.bind_mixed(&mut *selection), Field::CANVAS)
 }
 
 #[story(TextEditor<'static>, covers = [Invalid], drive = Drive::Never)]
@@ -309,5 +343,30 @@ fn selection_past_the_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let inside = |end: &usize, selection: &TextSelection| {
         if selection.caret > *end { Validity::Refuse(Message::new("The selection is past the text")) } else { Validity::Ok }
     };
-    over_canvas(ui, &mut host, selection_at.bind(&mut *selection).check_with(end, inside))
+    over_canvas(ui, &mut host, selection_at.bind(&mut *selection).check_with(end, inside), Field::CANVAS)
+}
+
+/// A one-line form field with the caret after its text.
+#[story(TextEditor<'static>, covers = [], drive = Drive::Never)]
+fn editor_field_line(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    as_field(ui, data, "Jane Doe", TextSelection::caret_at(8), Field::mode(EditorMode::FieldLine))
+}
+
+/// A one-line form field of at most ten chars, the caret after "Jane": typed and pasted text past the tenth char is
+/// left out, and the caret stays after what the field kept.
+#[story(TextEditor<'static>, covers = [], drive = Drive::Never)]
+fn editor_field_max_length(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    as_field(ui, data, "Jane Doe", TextSelection::caret_at(4), Field { max_chars: Some(10), ..Field::mode(EditorMode::FieldLine) })
+}
+
+/// A multi-line form field with "quick" selected.
+#[story(TextEditor<'static>, covers = [], drive = Drive::Never)]
+fn editor_field_lines(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    as_field(ui, data, SAMPLE, TextSelection::new(4, 9), Field::mode(EditorMode::FieldLines))
+}
+
+/// A password field: the host lays its text out as bullets.
+#[story(TextEditor<'static>, covers = [], drive = Drive::Never)]
+fn editor_masked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    as_field(ui, data, "hunter22", TextSelection::caret_at(8), Field { masked: true, ..Field::mode(EditorMode::FieldLine) })
 }

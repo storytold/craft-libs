@@ -12,6 +12,15 @@ pub fn text_contrast_min(contrast: Contrast) -> f64 {
     }
 }
 
+/// The least contrast ratio non-text elements (controls, boundaries, icons) need against their background:
+/// WCAG non-text minimum, and the higher minimum under high contrast.
+pub fn non_text_contrast_min(contrast: Contrast) -> f64 {
+    match contrast {
+        Contrast::Standard => values::NON_TEXT_MIN.0,
+        Contrast::High => values::NON_TEXT_MIN.1,
+    }
+}
+
 /// WCAG relative luminance, 0 (black) to 1 (white). Alpha is ignored.
 pub fn relative_luminance(c: Rgba) -> f64 {
     let [r, g, b] = c.to_linear();

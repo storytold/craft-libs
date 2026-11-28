@@ -9,7 +9,7 @@ pub const TURN_STEP_DEGREES: f64 = 15.0;
 
 /// The straight symmetry modes PhotoCraft has (lead call 23). Photoshop's Wavy, Circle, Spiral,
 /// Parallel Lines, Radial and Mandala modes need engine work and are not built.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, craft_ui::contract::MemoProps)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum SymmetryMode {

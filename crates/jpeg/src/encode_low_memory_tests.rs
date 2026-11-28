@@ -42,12 +42,19 @@ fn compare(src: &[u8], w: usize, h: usize, ch: usize, q: u8, sub: ChromaSubsampl
 
 #[test]
 fn all_sampling_and_channels_match_retained_tokens_byte_for_byte() {
+    // The gate compares every divisor-th case, so every size, channel count, subsampling and quality still runs;
+    // nightly compares them all.
+    let divisor = craft_testkit::hostile::divisor();
+    let mut case = 0usize;
     for (w, h) in [(1, 1), (7, 9), (17, 31), (33, 65), (17, 1025)] {
         for ch in [1, 3, 4] {
             let src = noise(w * h * ch);
             for sub in [ChromaSubsampling::S444, ChromaSubsampling::S422, ChromaSubsampling::S420] {
                 for q in [0, 1, 25, 50, 90, 100, 255] {
-                    compare(&src, w, h, ch, q, sub, &[]);
+                    case += 1;
+                    if case.is_multiple_of(divisor) {
+                        compare(&src, w, h, ch, q, sub, &[]);
+                    }
                 }
             }
         }

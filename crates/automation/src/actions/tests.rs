@@ -80,6 +80,22 @@ fn action_list_file_round_trip_keeps_pc_json() {
     assert_eq!(back.sets, ["Empty"]);
     assert_eq!(ActionList::from_file(back).sets(), ["S", "Empty"]);
 }
+// An empty set made before filled ones keeps its place through a save; a file of the older layout
+// (empty sets in `sets`, no `set_order`) loads with its filled sets first.
+#[trial]
+fn set_order_survives_the_file() {
+    let mut list = ActionList::new();
+    list.new_set("A").unwrap();
+    list.new_set("B").unwrap();
+    list.new_set("C").unwrap();
+    list.push(Action { set: Some("B".into()), ..action("X", &[]) }).unwrap();
+    list.push(Action { set: Some("C".into()), ..action("Y", &[]) }).unwrap();
+    let back = ActionList::from_file(ActionsFile::from_json(&list.to_file().to_json().unwrap()).unwrap());
+    assert_eq!(back.sets(), ["A", "B", "C"]);
+
+    let old = r#"{"version":1,"actions":[{"name":"X","steps":[],"set":"F"}],"sets":["E"]}"#;
+    assert_eq!(ActionList::from_file(ActionsFile::from_json(old).unwrap()).sets(), ["F", "E"]);
+}
 // A file that repeats a name keeps a later action's own name: `Foo, Foo, Foo 2` renames the repeat
 // (`Foo 3`), never the real `Foo 2`; a merge does the same against the names already in the list.
 #[trial]
@@ -270,4 +286,82 @@ fn action_player_charges_a_shared_budget_and_detects_loops() {
         deep.enter(&n.to_string()).unwrap();
     }
     assert_eq!(deep.enter("more"), Err(PlaybackRefusal::TooDeep));
+}
+
+// A set keeps its place as it gets its first action and loses its last; a duplicate goes right after its source;
+// rename keeps the place and moves the members and refuses empty, taken and unknown names; delete returns the members
+// in list order.
+#[trial]
+fn sets_keep_their_place_as_they_fill_empty_rename_and_go() {
+    let mut list = ActionList::new();
+    for set in ["A", "B", "C"] {
+        list.new_set(set).unwrap();
+    }
+    list.new_action("x", Some("B".into())).unwrap();
+    assert_eq!(list.sets(), ["A", "B", "C"], "B keeps its place when it gets its first action");
+    list.delete_action(0).unwrap();
+    assert_eq!(list.sets(), ["A", "B", "C"], "B keeps its place when it loses its last");
+
+    assert_eq!(list.duplicate_set("A", |_, _, _| {}).unwrap(), "A copy");
+    list.new_action("y", Some("B".into())).unwrap();
+    assert_eq!(list.duplicate_set("B", |_, _, _| {}).unwrap(), "B copy");
+    list.new_action("z", Some("B".into())).unwrap();
+    assert_eq!(list.sets(), ["A", "A copy", "B", "B copy", "C"], "a copy follows its source, with or without actions");
+
+    let revision = list.revision();
+    list.rename_set("B", "B").unwrap();
+    assert_eq!(list.revision(), revision, "the same name changes nothing");
+    assert_eq!(list.rename_set("B", "  "), Err(ActionListError::EmptyName));
+    assert_eq!(list.rename_set("B", "C"), Err(ActionListError::NameTaken("C".into())));
+    assert_eq!(list.rename_set("Nope", "Z"), Err(ActionListError::NoSuchSet("Nope".into())));
+    assert_eq!(list.revision(), revision, "a refused rename changes nothing");
+    list.rename_set("B", " Beta ").unwrap();
+    assert_eq!(list.sets(), ["A", "A copy", "Beta", "B copy", "C"]);
+    let members = list.actions().iter().filter(|action| action.set.as_deref() == Some("Beta")).count();
+    assert_eq!(members, 2, "the members follow the rename");
+
+    let gone = list.delete_set("Beta").unwrap();
+    assert_eq!(gone.iter().map(|action| action.name.as_str()).collect::<Vec<_>>(), ["y", "z"]);
+    assert_eq!(list.sets(), ["A", "A copy", "B copy", "C"]);
+    assert_eq!(list.actions().len(), 1);
+    assert_eq!(list.delete_set("Beta"), Err(ActionListError::NoSuchSet("Beta".into())));
+}
+
+// An option of an action stays with it through a duplicate, a set duplicate, a step move, the file and a merge.
+#[trial]
+fn app_options_ride_with_an_action_through_edits_and_files() {
+    let mut base = action("A", &["a", "b"]);
+    base.set = Some("S".into());
+    base.options.insert("key".into(), json!(3));
+    let mut list = list_of(vec![base]);
+    list.duplicate_action(0, |_, _, _| {}).unwrap();
+    list.duplicate_set("S", |_, _, _| {}).unwrap();
+    list.move_step(0, 0, 0, 1).unwrap();
+    assert_eq!(list.actions().len(), 4);
+    assert!(list.actions().iter().all(|action| action.options.get("key") == Some(&json!(3))));
+
+    let text = list.to_file().to_json().unwrap();
+    assert!(text.contains("\"options\""));
+    let loaded = ActionList::from_file(ActionsFile::from_json(&text).unwrap());
+    assert!(loaded.actions().iter().all(|action| action.options.get("key") == Some(&json!(3))));
+    let mut merged = ActionList::new();
+    merged.merge_file(ActionsFile::from_json(&text).unwrap(), false, |_, _| {});
+    assert!(merged.actions().iter().all(|action| action.options.get("key") == Some(&json!(3))));
+}
+
+// An action's options are set in the list, kept through a duplicate and the file, and the same options or an unknown
+// action change nothing.
+#[trial]
+fn an_actions_options_are_set_and_kept_through_a_duplicate_and_the_file() {
+    let mut list = list_of(vec![action("a", &["one"])]);
+    let options = json!({"key": "F5", "automaticAlignTo": "artboard"}).as_object().cloned().unwrap();
+    list.set_options(0, options.clone()).unwrap();
+    assert_eq!(list.action(0).unwrap().options, options);
+    let revision = list.revision();
+    list.set_options(0, options.clone()).unwrap();
+    assert_eq!(list.revision(), revision, "the options it holds change nothing");
+    assert_eq!(list.set_options(7, serde_json::Map::new()), Err(ActionListError::NoSuchAction(7)));
+    let copy = list.duplicate_action(0, |_, _, _| {}).unwrap();
+    assert_eq!(list.action(copy).unwrap().options, options, "a duplicate keeps them");
+    assert_eq!(ActionList::from_file(list.to_file()).action(0).unwrap().options, options, "the file keeps them");
 }

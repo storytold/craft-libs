@@ -22,10 +22,10 @@ pub enum WindowLevel {
     AlwaysOnTop,
 }
 
-/// The app's state that its palettes follow, as its windows reported it in the last frame.
+/// The app's state that its palettes follow, as its windows reported it in the last root frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct AppState {
-    /// No window of the app has focus.
+    /// Every window of the app reported that it has no focus.
     pub away: bool,
     /// The window that holds an app-modal layer, which blocks the app's other windows.
     pub modal: Option<ViewportId>,
@@ -89,6 +89,9 @@ pub struct WindowSpec {
     pub takes_focus: bool,
     /// Whether pointer input passes through the window to the window below it.
     pub passes_pointer: bool,
+    /// Whether an Escape nothing in the window takes is the Cancel of the window it was opened from (a dock window's):
+    /// no component, layer, capture or app widget of the window, and no reader of its intents.
+    pub hands_on_cancel: bool,
 }
 
 impl WindowSpec {
@@ -121,6 +124,7 @@ impl WindowSpec {
             shown_after_first_paint: false,
             takes_focus: true,
             passes_pointer: false,
+            hands_on_cancel: false,
         }
     }
 
@@ -181,6 +185,13 @@ impl WindowSpec {
     #[must_use]
     pub fn passes_pointer(mut self, passes_pointer: bool) -> Self {
         self.passes_pointer = passes_pointer;
+        self
+    }
+
+    /// Sets whether an Escape nothing in the window takes is the Cancel of the window it was opened from.
+    #[must_use]
+    pub fn hands_on_cancel(mut self, hands_on_cancel: bool) -> Self {
+        self.hands_on_cancel = hands_on_cancel;
         self
     }
 

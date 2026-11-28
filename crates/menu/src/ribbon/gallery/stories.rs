@@ -1,8 +1,5 @@
 //! Stories of the in-ribbon gallery.
 
-use std::sync::Arc;
-
-use craft_host::InlineJobs;
 use craft_ui::contract::Show as _;
 use craft_ui::list::{ThumbAspect, ThumbSize};
 use craft_ui::primitives::textures::Revision;
@@ -171,10 +168,8 @@ fn gallery_painted(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(Gallery<'static, usize>, covers = [], drive = Drive::Never)]
 fn gallery_rendered(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    // The source renders as a `Later` job: each tile shows the store's placeholder, then its picture. The jobs run
-    // inline, so the pictures land in the next frame and not whenever a thread ends: the suite's settled frames are
-    // the same on every run.
-    let options = ThumbnailOptions::new().jobs(Arc::new(InlineJobs));
+    // The source renders as a `Later` job: each tile shows the store's placeholder, then its picture.
+    let options = ThumbnailOptions::new();
     let thumbnails = Thumbnails::<u64>::in_context(ui.ctx(), "craft_menu.gallery.story", options);
     let source = FakeThumbSource::<u64>::new().later(true);
     let items: Vec<GalleryItem<'_, usize>> = (0..COUNT)

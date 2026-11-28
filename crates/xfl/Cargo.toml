@@ -14,3 +14,6 @@ workspace = true
 craft-xml = { workspace = true }
 miniz_oxide = "0.8"
 thiserror = { workspace = true }
+
+[dev-dependencies]
+craft-testkit = { workspace = true }

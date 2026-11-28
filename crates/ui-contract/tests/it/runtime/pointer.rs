@@ -1,14 +1,137 @@
 //! The sensing core over probe roots: the press lifecycle, arenas, press targets, parts and the shape record.
 
-use craft_behavior::{CanvasTransform, HitLevel, PartKey, PressPhase, Sense};
+use craft_behavior::{CanvasTransform, HitLevel, PartKey, PointerButton, PressPhase, Sense};
+use craft_ui::contract::{MemoProps, MemoView};
 use craft_ui::testing::pointer::{self, drag};
 use craft_ui::testing::sensing::{ProbeMember, ProbePart, ProbeRoot, RootReport, SenseReport, egui_click_target, show};
-use craft_ui::testing::{Frames, trial};
+use craft_ui::testing::{Frames, MemoRun, last_frame_memo_runs, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
 const BACKGROUND: PartKey = PartKey::new("background");
+
+#[trial]
+fn a_context_only_part_receives_a_secondary_click_in_one_frame() {
+    let page = rect(100.0, 100.0, 400.0, 300.0);
+    let field = rect(150.0, 150.0, 60.0, 50.0);
+    let root = ProbeRoot::new("page", page, Sense::CLICK | Sense::DRAG)
+        .part(ProbePart::new(BACKGROUND, field, Sense::CONTEXT_CLICK).level(HitLevel::Body, 0));
+    let (mut show, log) = scene(vec![root]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let at = field.center();
+    frames.frame(vec![pointer::moved(at)], &mut show);
+    log.borrow_mut().clear();
+    frames.frame(vec![pointer::secondary(at, true), pointer::secondary(at, false)], &mut show);
+    frames.idle(2, &mut show);
+    let phases = log.borrow().root_phases(0, Some(BACKGROUND));
+    assert!(
+        phases.iter().any(|phase| matches!(phase, PressPhase::Release { start, click: true, .. } if start.button == PointerButton::Secondary)),
+        "the context part receives the click: {phases:?}"
+    );
+    log.borrow_mut().clear();
+    pointer::click(&mut frames, at, &mut show);
+    let log = log.borrow();
+    assert!(log.root_phases(0, Some(BACKGROUND)).is_empty(), "a primary click passes the context-only part");
+    assert!(
+        log.root_phases(0, None).iter().any(|phase| matches!(phase, PressPhase::Release { click: true, .. })),
+        "the surface receives the primary click"
+    );
+}
+
+#[trial]
+fn quick_presses_count_clicks_with_their_own_modifiers() {
+    let mut frames = Frames::new();
+    let at = Pos2::new(100.0, 100.0);
+    let mut counts = Vec::new();
+    let mut show = |ui: &mut Ui| {
+        craft_ui::runtime::pointer::with_pass_pointer(ui.ctx(), |pass| {
+            for event in &pass.events {
+                if let craft_behavior::PointerEvent::Pressed { clicks, .. } = event {
+                    counts.push(*clicks);
+                }
+            }
+        });
+    };
+    let button = |pressed, modifiers| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers };
+    frames.frame(
+        vec![pointer::moved(at), button(true, egui::Modifiers::SHIFT), button(false, egui::Modifiers::SHIFT), button(true, egui::Modifiers::NONE)],
+        &mut show,
+    );
+    frames.idle(1, &mut show);
+    assert_eq!(counts, vec![1, 1], "a change in modifiers starts a new click sequence");
+}
+
+#[trial]
+fn a_press_uses_its_event_modifiers_when_the_frame_has_released_them() {
+    let area = rect(100.0, 100.0, 80.0, 80.0);
+    let (mut show, log) = scene(vec![ProbeRoot::new("modified-press", area, Sense::CLICK)]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let at = area.center();
+    frames.frame(vec![pointer::moved(at)], &mut show);
+    frames.frame(
+        vec![egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::SHIFT }],
+        &mut show,
+    );
+    assert!(log.borrow().last().root.press.mods.shift, "the press reads Shift even after the frame has released it");
+}
+
+/// A view that shows whether a button is held, from the press state.
+#[derive(MemoProps)]
+struct Held {}
+
+fn held(_: &mut Held, ui: &mut Ui) {
+    let state = craft_ui::runtime::pointer::press_state(ui.ctx());
+    ui.label(if state.buttons.is_empty() { "Up" } else { "Down" });
+}
+
+/// Whether the press-state reader ran in any pass of the last frame.
+fn held_ran(frames: &Frames) -> bool {
+    last_frame_memo_runs(&frames.ctx).iter().any(|(name, _, run)| name.ends_with("Held") && *run == MemoRun::Ran)
+}
+
+/// A view that reads the press state runs on a press and on a release, wherever they land, and replays while the
+/// pointer only moves, with a button held or not.
+#[trial]
+fn a_press_state_reader_runs_on_a_press_or_release_and_replays_on_a_move() {
+    let mut show = |ui: &mut Ui| {
+        MemoView::new("held", Held {}, held).show(ui);
+    };
+    let away = Pos2::new(300.0, 300.0);
+    let mut frames = Frames::new();
+    frames.frame(vec![pointer::moved(away)], &mut show);
+    frames.idle(30, &mut show);
+    frames.frame(vec![pointer::moved(away + Vec2::new(20.0, 0.0))], &mut show);
+    assert!(!held_ran(&frames), "a pointer move replays the reader: {:?}", last_frame_memo_runs(&frames.ctx));
+    frames.frame(vec![pointer::press(away)], &mut show);
+    assert!(held_ran(&frames), "a press runs the reader");
+    frames.idle(2, &mut show);
+    frames.frame(vec![pointer::moved(away + Vec2::new(0.0, 20.0))], &mut show);
+    assert!(!held_ran(&frames), "a move with the button held replays the reader: {:?}", last_frame_memo_runs(&frames.ctx));
+    frames.frame(vec![pointer::release(away + Vec2::new(0.0, 20.0))], &mut show);
+    assert!(held_ran(&frames), "a release runs the reader");
+}
+
+/// A hover-revealed part must remain identifiable when a drag leaves its shape.
+#[trial]
+fn active_part_survives_a_drag_outside_its_shape() {
+    let area = rect(100.0, 100.0, 80.0, 80.0);
+    let root = ProbeRoot::new("active-part", area, Sense::empty()).part(ProbePart::new(BACKGROUND, area, Sense::DRAG));
+    let (mut show_frame, _) = scene(vec![root]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+    let point = area.center();
+    frames.frame(vec![pointer::moved(point)], &mut show_frame);
+    assert_eq!(craft_ui::runtime::pointer::active_part(&frames.ctx, ProbeRoot::id("active-part")), Some(BACKGROUND.into()));
+    frames.frame(vec![pointer::press(point)], &mut show_frame);
+    frames.frame(vec![pointer::moved(point + Vec2::new(150.0, 0.0))], &mut show_frame);
+    assert_eq!(craft_ui::runtime::pointer::active_part(&frames.ctx, ProbeRoot::id("active-part")), Some(BACKGROUND.into()));
+    frames.frame(vec![pointer::release(point + Vec2::new(150.0, 0.0))], &mut show_frame);
+    frames.idle(1, &mut show_frame);
+    assert_eq!(craft_ui::runtime::pointer::active_part(&frames.ctx, ProbeRoot::id("active-part")), None);
+}
 
 fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
     Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h))
@@ -356,6 +479,31 @@ fn a_rerun_pass_delivers_none_of_the_frames_input_again() {
     assert!(log[0].stirred && log[0].injected && !log[1].stirred && !log[1].injected, "the first pass carries the input");
 }
 
+/// An injected step that enters a frame behind a real pointer press waits for the next frame (one press per pass), and
+/// the pass that carries it acts for the automation client. Guards against a step whose flight ended with the frame it
+/// entered, so the pass its text arrived in read as the user's (`injected_pass` false).
+#[trial]
+fn an_injected_step_held_behind_a_press_arrives_in_an_injected_pass() {
+    let log: Rc<RefCell<Vec<(bool, bool)>>> = Rc::default();
+    let sink = log.clone();
+    let mut show = move |ui: &mut Ui| {
+        let ctx = ui.ctx().clone();
+        let typed = ctx.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Text(text) if text == "x")));
+        sink.borrow_mut().push((typed, craft_ui::runtime::windows::WindowHost::of(&ctx).injected_pass()));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    craft_ui::runtime::windows::WindowHost::of(&frames.ctx).inject_text(egui::ViewportId::ROOT, "x");
+    log.borrow_mut().clear();
+    let at = Pos2::new(20.0, 20.0);
+    frames.frame(vec![pointer::moved(at), pointer::press(at)], &mut show);
+    frames.frame(vec![pointer::release(at)], &mut show);
+    frames.idle(2, &mut show);
+    let log = log.borrow();
+    let carrying: Vec<bool> = log.iter().filter(|(typed, _)| *typed).map(|(_, injected)| *injected).collect();
+    assert_eq!(carrying, [true], "one pass carries the text, and it is the client's: {log:?}");
+}
+
 fn downs(phases: &[PressPhase]) -> usize {
     phases.iter().filter(|phase| matches!(phase, PressPhase::Down { .. })).count()
 }
@@ -525,6 +673,132 @@ fn one_pointer_resolution_per_pass_whatever_the_number_of_roots() {
     assert!(one.contains(&1), "the pointer in the window is resolved: {one:?}");
 }
 
+const LINK: PartKey = PartKey::new("link");
+const SURFACE: PartKey = PartKey::new("surface");
+
+#[trial]
+fn passed_drag_reaches_an_arena_roots_background_part() {
+    let page = rect(100.0, 100.0, 400.0, 300.0);
+    let area = rect(150.0, 150.0, 60.0, 40.0);
+    let background = ProbePart::new(BACKGROUND, page, Sense::CLICK | Sense::DRAG).level(HitLevel::Background, 0);
+    let field = ProbePart::new(SURFACE, area, Sense::CLICK | Sense::DRAG);
+    let overlay = ProbePart::new(LINK, area, Sense::CLICK | Sense::PASSES_DRAG).level(HitLevel::Edge, 0).drag_to_root();
+    let root = ProbeRoot::new("canvas", page, Sense::FOCUS | Sense::WHEEL)
+        .arena()
+        .part(background)
+        .member(ProbeMember::new("parts", page, Sense::empty()).part(field).part(overlay));
+    let (mut show_frame, log) = scene(vec![root]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+    drag(&mut frames, area.center(), Vec2::new(40.0, 30.0), &mut show_frame);
+    assert_eq!(drags(&log.borrow().root_phases(0, Some(BACKGROUND))), 1, "background part takes the drag");
+    assert_eq!(drags(&log.borrow().member_phases(0, "parts", Some(SURFACE))), 0, "field does not drag");
+    log.borrow_mut().clear();
+    pointer::click(&mut frames, area.center(), &mut show_frame);
+    assert!(log.borrow().member_phases(0, "parts", Some(LINK)).iter().any(|phase| matches!(phase, PressPhase::Release { click: true, .. })));
+}
+
+/// A clickable overlay can send its drag to the canvas root past a draggable field.
+#[trial]
+fn passed_drag_can_target_the_arena_root_past_a_field() {
+    let page = rect(100.0, 100.0, 400.0, 300.0);
+    let area = rect(150.0, 150.0, 60.0, 40.0);
+    let field = ProbePart::new(SURFACE, area, Sense::CLICK | Sense::DRAG);
+    let comment = ProbePart::new(LINK, area, Sense::CLICK | Sense::PASSES_DRAG).level(HitLevel::Edge, 0).drag_to_root();
+    let root = ProbeRoot::new("canvas", page, Sense::DRAG).arena().member(ProbeMember::new("parts", page, Sense::empty()).part(field).part(comment));
+    let (mut show_frame, log) = scene(vec![root]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+    drag(&mut frames, area.center(), Vec2::new(40.0, 30.0), &mut show_frame);
+    assert_eq!(drags(&log.borrow().root_phases(0, None)), 1, "canvas takes the drag");
+    assert_eq!(drags(&log.borrow().member_phases(0, "parts", Some(SURFACE))), 0, "field does not drag");
+    log.borrow_mut().clear();
+    pointer::click(&mut frames, area.center(), &mut show_frame);
+    assert!(log.borrow().member_phases(0, "parts", Some(LINK)).iter().any(|phase| matches!(phase, PressPhase::Release { click: true, .. })));
+}
+
+/// L-19: a link on a page clicks, but a drag that starts on it belongs to the page under it (production's
+/// `Hit::declines_drag`). A press past slop on a click part that passes its drag gives the `DragStart` to the next
+/// shape below that drags, whether that shape is the same root's own part or a root shown below; the link sees no
+/// press of its own then, and a release within slop is the link's click with nothing below pressed.
+#[trial]
+fn a_press_over_a_passing_click_part_hands_its_drag_to_the_shape_below_in_its_root_and_in_the_root_below() {
+    let page = rect(100.0, 100.0, 400.0, 300.0);
+    let link_rect = rect(150.0, 150.0, 60.0, 20.0);
+    let link = || ProbePart::new(LINK, link_rect, Sense::CLICK | Sense::PASSES_DRAG).level(HitLevel::Edge, 0);
+    let surface = || ProbePart::new(SURFACE, page, Sense::DRAG).level(HitLevel::Background, 0);
+    let own = vec![ProbeRoot::new("page", page, Sense::empty()).part(surface()).part(link())];
+    let stacked = vec![ProbeRoot::new("page", page, Sense::empty()).part(surface()), ProbeRoot::new("link", link_rect, Sense::empty()).part(link())];
+    // Each case: its roots, the root of the link and the root of the dragging shape below it.
+    for (case, roots, link_root, below_root) in [("in its own root", own, 0, 0), ("in the root below", stacked, 1, 0)] {
+        let (mut show_frame, log) = scene(roots);
+        let mut frames = Frames::new();
+        frames.idle(2, &mut show_frame);
+        let on_link = link_rect.center();
+        log.borrow_mut().clear();
+
+        drag(&mut frames, on_link, Vec2::new(40.0, 30.0), &mut show_frame);
+        {
+            let log = log.borrow();
+            let below = log.root_phases(below_root, Some(SURFACE));
+            assert_eq!(drags(&below), 1, "{case}: the shape below takes the drag: {below:?}");
+            assert!(matches!(below.last(), Some(PressPhase::Release { .. })), "{case}: and its release: {below:?}");
+            let on = log.root_phases(link_root, Some(LINK));
+            assert!(
+                !on.iter().any(|phase| matches!(phase, PressPhase::DragStart { .. } | PressPhase::Release { click: true, .. })),
+                "{case}: the link neither drags nor clicks: {on:?}"
+            );
+        }
+
+        log.borrow_mut().clear();
+        pointer::click(&mut frames, on_link, &mut show_frame);
+        let log = log.borrow();
+        let on = log.root_phases(link_root, Some(LINK));
+        assert!(
+            on.iter().any(|phase| matches!(phase, PressPhase::Release { click: true, .. })),
+            "{case}: a release within slop clicks the link: {on:?}"
+        );
+        let below = log.root_phases(below_root, Some(SURFACE));
+        assert!(below.is_empty(), "{case}: the shape below sees no press of a click: {below:?}");
+    }
+}
+
+/// A secondary press over a part that drags and clicks but takes no context click (a transform box's) goes to the
+/// context target under it, in its own root or in the root below, and the box sees none of it; a primary press there
+/// is still the box's.
+#[trial]
+fn a_right_click_over_a_drag_only_part_reaches_the_context_target_under_it() {
+    let page = rect(100.0, 100.0, 400.0, 300.0);
+    let box_rect = rect(150.0, 150.0, 120.0, 80.0);
+    let handle = || ProbePart::new(CORNER, box_rect, Sense::DRAG | Sense::CLICK).level(HitLevel::Handle, 0);
+    let surface = || ProbePart::new(SURFACE, page, Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK).level(HitLevel::Background, 0);
+    let own = vec![ProbeRoot::new("page", page, Sense::empty()).part(surface()).part(handle())];
+    let stacked = vec![ProbeRoot::new("page", page, Sense::empty()).part(surface()), ProbeRoot::new("box", box_rect, Sense::empty()).part(handle())];
+    for (case, roots, box_root) in [("in its own root", own, 0), ("in the root below", stacked, 1)] {
+        let (mut show_frame, log) = scene(roots);
+        let mut frames = Frames::new();
+        frames.idle(2, &mut show_frame);
+        let on_box = box_rect.center();
+        move_to(&mut frames, on_box, &mut show_frame);
+        log.borrow_mut().clear();
+        frames.frame(vec![pointer::secondary(on_box, true)], &mut show_frame);
+        frames.frame(vec![pointer::secondary(on_box, false)], &mut show_frame);
+        frames.idle(1, &mut show_frame);
+        {
+            let log = log.borrow();
+            let below = log.root_phases(0, Some(SURFACE));
+            let released = below.iter().any(|phase| matches!(phase, PressPhase::Release { start, .. } if start.button == PointerButton::Secondary));
+            assert!(released, "{case}: the context target under the box takes the right-click: {below:?}");
+            let on = log.root_phases(box_root, Some(CORNER));
+            assert!(on.is_empty(), "{case}: the box sees none of it: {on:?}");
+        }
+        log.borrow_mut().clear();
+        enter_and_click(&mut frames, on_box, &mut show_frame);
+        let log = log.borrow();
+        assert_eq!(downs(&log.root_phases(box_root, Some(CORNER))), 1, "{case}: a primary press is still the box's");
+    }
+}
+
 /// While a press on one root is held, another root the pointer moves over does not hover; it hovers once the press
 /// ends.
 #[trial]
@@ -546,4 +820,207 @@ fn a_held_press_keeps_hover_off_other_roots() {
     frames.frame(vec![pointer::release(on_b)], &mut show_frame);
     frames.idle(1, &mut show_frame);
     assert!(log.borrow().last_root(1).root.hovered, "b hovers once the press ends");
+}
+
+/// A pick's modifiers are the ones its release carried: Shift that came after the button went down and is let go in
+/// the release's pass belongs to the pick in that pass only; every other pass reads the held modifiers.
+#[trial]
+fn a_click_carries_the_modifiers_its_release_carried() {
+    let seen: Rc<RefCell<Vec<(bool, bool, bool)>>> = Rc::default();
+    let sink = seen.clone();
+    let mut show = move |ui: &mut Ui| {
+        let frame = craft_ui::runtime::pointer::frame(ui.ctx());
+        sink.borrow_mut().push((frame.release.is_some(), frame.pick_mods.shift, frame.mods.shift));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let at = Pos2::new(150.0, 120.0);
+    frames.frame(vec![pointer::moved(at), pointer::press(at)], &mut show);
+    seen.borrow_mut().clear();
+    let release = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::SHIFT };
+    frames.frame(vec![release], &mut show);
+    frames.idle(1, &mut show);
+    let seen = seen.borrow();
+    assert!(seen.iter().any(|(released, ..)| *released), "the release pass ran: {seen:?}");
+    for (released, pick, held) in seen.iter() {
+        assert!(!held, "no Shift is held: {seen:?}");
+        assert_eq!(pick, released, "Shift is the pick's in the release pass only: {seen:?}");
+    }
+}
+
+/// A press of another button counts in the click run as a primary one does: a primary click, a middle click (a pan the
+/// view tools take) and a primary click make the last a triple click, as the old apps counted them. Only primary
+/// presses carry the count.
+#[trial]
+fn a_middle_click_between_primary_clicks_counts_in_the_click_run() {
+    let at = Pos2::new(50.0, 50.0);
+    let counts: Rc<RefCell<Vec<u32>>> = Rc::default();
+    let sink = counts.clone();
+    let mut show = move |ui: &mut Ui| {
+        if let Some(press) = craft_ui::runtime::pointer::frame(ui.ctx()).press.filter(|press| press.button == craft_behavior::PointerButton::Primary)
+        {
+            sink.borrow_mut().push(press.clicks);
+        }
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    frames.frame(vec![pointer::moved(at)], &mut show);
+    for button in ["primary", "middle", "primary"] {
+        let (down, up) =
+            if button == "middle" { (pointer::middle(at, true), pointer::middle(at, false)) } else { (pointer::press(at), pointer::release(at)) };
+        frames.frame(vec![down], &mut show);
+        frames.frame(vec![up], &mut show);
+    }
+    let counts = counts.borrow();
+    assert!(counts.len() == 2 && counts[1] == counts[0] + 2, "the middle press counts in the run: {counts:?}");
+}
+
+/// A press that became a drag leaves the click run: a press at the same place right after the drag's release is a
+/// single press, as only clicks counted toward a double click in the old apps.
+#[trial]
+fn a_press_after_a_drag_starts_a_new_click_run() {
+    let at = Pos2::new(50.0, 50.0);
+    let counts: Rc<RefCell<Vec<u32>>> = Rc::default();
+    let sink = counts.clone();
+    let mut show = move |ui: &mut Ui| {
+        if let Some(press) = craft_ui::runtime::pointer::frame(ui.ctx()).press {
+            sink.borrow_mut().push(press.clicks);
+        }
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    frames.frame(vec![pointer::moved(at), pointer::press(at)], &mut show);
+    frames.frame(vec![pointer::moved(at + Vec2::new(60.0, 0.0))], &mut show);
+    frames.frame(vec![pointer::moved(at), pointer::release(at)], &mut show);
+    for _ in 0..2 {
+        frames.frame(vec![pointer::press(at)], &mut show);
+        frames.frame(vec![pointer::release(at)], &mut show);
+    }
+    let counts = counts.borrow();
+    assert!(counts.len() == 3 && counts[1] == 1 && counts[2] == 2, "the drag's press is out of the run, the clicks after it count: {counts:?}");
+}
+
+/// The pointer-move gate (photocraft#17148): a move over the same shapes and widgets of the last pass runs no pass; a move
+/// onto another root's shape, into a rect that follows the pointer, or into the window from outside runs one.
+#[trial]
+fn a_move_that_changes_nothing_under_the_pointer_needs_no_pass() {
+    use craft_ui::runtime::pointer::{follows_pointer, move_needs_pass};
+    use egui::ViewportId;
+    let left = rect(100.0, 100.0, 120.0, 40.0);
+    let right = rect(300.0, 100.0, 120.0, 40.0);
+    let follow = rect(100.0, 300.0, 200.0, 100.0);
+    let roots = vec![ProbeRoot::new("left", left, Sense::CLICK), ProbeRoot::new("right", right, Sense::CLICK)];
+    let (mut scene, _) = scene(roots);
+    let mut show = move |ui: &mut Ui| {
+        scene(ui);
+        follows_pointer(ui.ctx(), follow);
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let needs = |from: Option<Pos2>, to: Pos2| move_needs_pass(&frames.ctx, ViewportId::ROOT, from, to);
+    let inside = left.center();
+    assert!(!needs(Some(inside), inside + Vec2::new(10.0, 3.0)), "a move within one root's shape changes nothing");
+    assert!(needs(Some(inside), right.center()), "a move onto another root runs a pass");
+    assert!(needs(Some(inside), Pos2::new(250.0, 120.0)), "a move off the root runs a pass");
+    assert!(!needs(Some(Pos2::new(250.0, 30.0)), Pos2::new(260.0, 40.0)), "a move over empty room changes nothing");
+    assert!(needs(Some(follow.center()), follow.center() + Vec2::new(5.0, 0.0)), "a move in a rect that follows the pointer runs a pass");
+    assert!(needs(None, inside), "the pointer coming in runs a pass");
+}
+
+/// The part of `Knob` over its start half.
+const KNOB: PartKey = PartKey::new("knob");
+
+/// A leaf whose knob part covers its start half, and which logs where the pointer hovers on the knob each pass
+/// (`Cx::hover_pos`).
+#[derive(craft_ui::contract::Component)]
+struct Knob<'a> {
+    #[common]
+    common: craft_ui::contract::Common,
+    seen: &'a RefCell<Vec<Option<Pos2>>>,
+}
+
+impl craft_ui::contract::Component for Knob<'_> {
+    const ROLE: craft_ui::contract::Role = craft_ui::contract::Role::GROUP;
+    type Style = craft_ui_test_kit::contract::PlainStyle;
+    type Output = egui::Response;
+
+    fn style(_: &craft_ui::style::StyleCx<'_>, _: KnobStyleKey) -> Self::Style {
+        craft_ui_test_kit::contract::PlainStyle::min(Vec2::new(200.0, 40.0))
+    }
+
+    fn parts(&mut self, rect: Rect, cx: &mut craft_ui::contract::PartsCx<'_, Self>) {
+        cx.part(KNOB, Rect::from_min_max(rect.min, rect.center_bottom()));
+    }
+
+    fn update(&mut self, cx: &mut craft_ui::contract::Cx<'_, Self>) {
+        use craft_ui::contract::Pointer as _;
+        self.seen.borrow_mut().push(cx.hover_pos(KNOB));
+    }
+
+    fn finish(self, cx: craft_ui::contract::Cx<'_, Self>) -> egui::Response {
+        cx.response.clone()
+    }
+}
+
+/// The knob at `KNOB_AT`, logging into `seen`.
+fn show_knob(seen: &RefCell<Vec<Option<Pos2>>>) -> impl FnMut(&mut Ui) + '_ {
+    use craft_ui::contract::Show as _;
+    move |ui: &mut Ui| {
+        Knob { common: craft_ui::contract::Common::new(), seen }.show_at(ui, KNOB_AT);
+    }
+}
+
+const KNOB_AT: Rect = Rect { min: Pos2::new(100.0, 100.0), max: Pos2::new(300.0, 140.0) };
+
+/// `Cx::hover_pos` gives the hover point while the part is hovered, and nothing over the rest of the component.
+#[trial]
+fn hover_pos_reads_the_point_over_its_part_only() {
+    let seen = RefCell::new(Vec::new());
+    let mut show = show_knob(&seen);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let on_knob = Pos2::new(130.0, 120.0);
+    frames.frame(vec![pointer::moved(on_knob)], &mut show);
+    assert_eq!(seen.borrow().last(), Some(&Some(on_knob)), "the point over the knob, in the component's layer space");
+    frames.frame(vec![pointer::moved(Pos2::new(260.0, 120.0))], &mut show);
+    assert_eq!(seen.borrow().last(), Some(&None), "no point over the rest of the component");
+}
+
+/// A component that read the hover position on its part follows the pointer there: a move within the part needs a
+/// pass (`move_needs_pass`); over the rest of the component, which it read nothing on, a move needs none.
+#[trial]
+fn a_hover_position_read_follows_the_pointer() {
+    use craft_ui::runtime::pointer::move_needs_pass;
+    let seen = RefCell::new(Vec::new());
+    let mut show = show_knob(&seen);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let (on_knob, off_knob) = (Pos2::new(130.0, 120.0), Pos2::new(260.0, 120.0));
+    let step = Vec2::new(5.0, 0.0);
+    frames.frame(vec![pointer::moved(on_knob)], &mut show);
+    assert!(move_needs_pass(&frames.ctx, egui::ViewportId::ROOT, Some(on_knob), on_knob + step), "a move within the read part runs a pass");
+    frames.frame(vec![pointer::moved(off_knob)], &mut show);
+    assert!(
+        !move_needs_pass(&frames.ctx, egui::ViewportId::ROOT, Some(off_knob), off_knob + step),
+        "a move over the rest of the component, which read no position, runs none"
+    );
+}
+
+/// Two overlapping parts of one root that hit both points of a move, where the nearest centre picks another part at
+/// the end: the hover changes, so the move runs a pass.
+#[trial]
+fn a_move_that_changes_the_nearest_part_needs_a_pass() {
+    use craft_ui::runtime::pointer::move_needs_pass;
+    use egui::ViewportId;
+    const LEFT: PartKey = PartKey::new("left");
+    const RIGHT: PartKey = PartKey::new("right");
+    let root = ProbeRoot::new("parts", rect(0.0, 0.0, 140.0, 100.0), Sense::empty())
+        .part(ProbePart::new(LEFT, rect(0.0, 0.0, 100.0, 100.0), Sense::CLICK))
+        .part(ProbePart::new(RIGHT, rect(40.0, 0.0, 100.0, 100.0), Sense::CLICK));
+    let (mut show, _) = scene(vec![root]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let needs = |from: Pos2, to: Pos2| move_needs_pass(&frames.ctx, ViewportId::ROOT, Some(from), to);
+    assert!(!needs(Pos2::new(60.0, 50.0), Pos2::new(65.0, 50.0)), "both points nearer the left part's centre");
+    assert!(needs(Pos2::new(60.0, 50.0), Pos2::new(80.0, 50.0)), "the right part's centre is nearer at the end");
 }

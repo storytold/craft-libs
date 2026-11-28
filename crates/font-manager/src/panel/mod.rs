@@ -10,12 +10,15 @@ pub(crate) mod faces;
 #[cfg(feature = "screen-testing")]
 pub(crate) mod fixtures;
 pub(crate) mod jobs;
+pub(crate) mod legal;
 pub(crate) mod samples;
 pub(crate) mod sources;
 pub(crate) mod specimen;
+pub(crate) mod subsets;
 
 pub use app::{
     FontsCommand, FontsPanel, FontsPanelOutput, FontsPanelSettings, FontsPanelView, FontsPanelWords, Options, Preset, Tab, install_interface_fonts,
 };
 pub use browse::FontsBrowseWords;
+pub use i18n::CATALOGS;
 pub use sources::{FontSources, FontSourcesOutput};

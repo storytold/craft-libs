@@ -3,32 +3,32 @@
 use super::ListRowStyleKey;
 use super::output::{RowEvent, RowOutput};
 use super::paint::draw_clip_arrow;
-use super::placement::{Sizes, lead_run};
-use super::style::{FillKey, ListRowStyle, RowForm, fill_of, quiet_row_ink, row_ink_of, selected_outline};
+use super::placement::{Placed, Sizes, StatusMeasure, action_link, lead_run};
+use super::style::{FillKey, ListRowStyle, RowForm, fill_of, hued_ink, quiet_row_ink, row_ink_of, selected_outline};
 use super::thumb::{RowThumb, target_at};
 use super::trailing::{HostedSize, TrailingFace, TrailingItem, TrailingPart, below_key, cell_key, field_key};
-use super::{ListRow, RowDragSpot, RowInk};
+use super::{HueTarget, ListRow, RowDragSpot, RowInk};
 use crate::contract::{
     Access, Bind, Component, Cx, DragPreview, Focus as _, MeasureCx, Name, OpenChange, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowPressed,
     Styled as _, WordSetCx as _,
 };
 use crate::controls::disclosure::Disclosure;
 use crate::display::Progress;
-use crate::list::toggle::{ToggleFace, ToggleState};
+use crate::list::toggle::{ToggleCell, ToggleFace, ToggleState};
 use crate::list::words::ListWords;
-use crate::primitives::{RectSide, RuleKind, StrokeWidth, TextRun, Wrap, glyph};
+use crate::primitives::{DocRun, DocText, RectSide, RuleKind, StrokeWidth, TextRun, Wrap, glyph};
 use crate::runtime::commands::FireSource;
 use crate::runtime::env::{Label, WordTemplate};
-use crate::style::{Flags, IconLook, StyleCx, SurfaceLook, TextLook, UiTokens};
-use craft_behavior::{ColumnKey, Metrics, NavShape, PartKey, PartRef, PressPhase, Proposal, Roving, Sense};
+use crate::style::{DataColor, Flags, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook, UiTokens};
+use craft_behavior::{ColumnKey, Metrics, NavShape, PartKey, PartRef, PointerButton, PressPhase, Proposal, Roving, Sense};
 use craft_keymap::Mods;
 use craft_theme::variant::Tone;
-use craft_theme::{Rgba, Stateful, TypeRole};
+use craft_theme::{Rgba, Stateful, TypeRole, over};
 use egui::{CornerRadius, Pos2, Rect, Vec2};
 
 pub(super) const TOGGLE: PartKey = PartKey::new("toggle");
 pub(super) const TEXT_CELL: PartKey = PartKey::new("text-cell");
-const TOGGLE_CELL: PartKey = PartKey::new("toggle-cell");
+pub(super) const TOGGLE_CELL: PartKey = PartKey::new("toggle-cell");
 const LABEL_CELL: PartKey = PartKey::new("label-cell");
 const DISCLOSURE: PartKey = PartKey::new("disclosure");
 
@@ -40,6 +40,12 @@ const TRAILING_ICON: PartKey = PartKey::new("trailing-icon");
 const TRAILING_TEXT: PartKey = PartKey::new("trailing-text");
 pub(super) const THUMB: PartKey = PartKey::new("thumb");
 const LEAD: PartKey = PartKey::new("lead");
+/// A status cell, by its column's position: its tip's part and its cell node.
+const STATUS: PartKey = PartKey::new("status");
+/// A status cell's action link, by the cell's index among the row's status cells.
+pub(super) const STATUS_ACTION: PartKey = PartKey::new("status-action");
+/// The tooltip over a text cell, by its column's position.
+const CELL_TIP: PartKey = PartKey::new("cell-tip");
 
 /// The name a pattern with `{row}` gives for the row labelled `row`.
 pub(super) fn named(pattern: &Label, row: &str) -> String {
@@ -59,11 +65,7 @@ impl Component for ListRow<'_> {
         let text = &colors.text;
         let clear = Rgba::TRANSPARENT;
         let c = |rgba: Rgba| cx.color(rgba);
-        let form = match () {
-            _ if key.option && key.command => RowForm::Command,
-            _ if key.option => RowForm::Option,
-            _ => RowForm::List,
-        };
+        let form = RowForm::of(key.option, key.command);
         let fill = fill_of(cx, FillKey { striped: key.striped, layer: key.layer, form });
         // An option sits inset in its popup with rounded corners; every other row is square.
         let radius = if key.option { UiTokens::corner(tokens.shape.radius.control) } else { CornerRadius::ZERO };
@@ -86,7 +88,9 @@ impl Component for ListRow<'_> {
         let muted = if key.ink == RowInk::Dimmed { text.faint } else { text.muted };
         ListRowStyle {
             surface,
-            metrics: Metrics::new().min_size(Vec2::new(0.0, sizes.row)).gap(sizes.gap),
+            // A separator is as high as its rule and the room around it.
+            metrics: Metrics::new().min_size(Vec2::new(0.0, if key.separator { 0.0 } else { sizes.row })).gap(sizes.gap),
+            focus: cx.focus_look(),
             text: TextLook::new(role, ink(base)),
             icon: IconLook::new(
                 sizes.icon,
@@ -107,8 +111,10 @@ impl Component for ListRow<'_> {
             detail: TextLook::new(TypeRole::Caption, ink(text.faint)),
             cell: TextLook::new(role, ink(base)),
             cell_muted: TextLook::new(role, ink(muted)),
+
             thumb_frame: c(colors.line.frame),
             thumb_frame_width: tokens.stroke.thin,
+            separator: crate::display::divider::SeparatorRule::of(cx),
             sizes,
         }
     }
@@ -116,23 +122,45 @@ impl Component for ListRow<'_> {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         self.adopt_facts(&cx.env, cx.resolved.id);
         let sizes = &cx.style.sizes;
+        if self.separator {
+            return Vec2::new(0.0, cx.style.separator.height(cx.ui.ctx().pixels_per_point()));
+        }
         if self.spacer {
             return Vec2::ZERO;
         }
         let above = if self.space_above { sizes.gap_row } else { 0.0 };
         let height = sizes.height(self.thumb, self.detail_line());
         let rtl = cx.env.direction().is_rtl();
-        let room = cx.room.unwrap_or(0.0);
-        let columns = self.toggles.iter().map(|toggle| &toggle.column).chain(self.texts.iter().map(|text| &text.column));
+        // A collection measures a row's height at the row's width (`Proposal::Width`), which offers no room of its own.
+        let offered = match cx.proposal {
+            Proposal::Width(width) => Some(width),
+            _ => cx.room,
+        };
+        let room = offered.unwrap_or(0.0);
+        let columns = self
+            .toggles
+            .iter()
+            .map(|toggle| &toggle.column)
+            .chain(self.texts.iter().map(|text| &text.column))
+            .chain(self.statuses.iter().map(|status| &status.column));
         let toggles: f32 = columns.filter_map(|key| self.cells.iter().find(|(column, _)| column == key)).map(|(_, cell)| cell.width()).sum();
         self.measure_hosted(cx);
         let widths = self.widths(sizes, &|run| cx.layout_at(run, f32::INFINITY).size().x);
+        if self.thumbnails_only {
+            let extent = self.thumbs_extent(sizes, &widths);
+            return Vec2::new(extent.x + toggles, extent.y + above);
+        }
         let probe = self.place_in(&[], sizes, &widths, Rect::from_min_size(Pos2::ZERO, Vec2::new(room, height)), rtl);
         let probe_min = probe.min_width + toggles;
-        let band = cx.room.map_or(f32::INFINITY, |_| (probe.label.width() - toggles).max(0.0));
-        let wrapped = self.lines.as_ref().map_or(0.0, |text| {
-            let run = TextRun::new(text.as_str()).role(cx.style.detail.role).wrap(self.lines_wrap());
+        let band = offered.map_or(f32::INFINITY, |_| (probe.label.width() - toggles).max(0.0));
+        let wrapped = self.lines.as_ref().map_or(0.0, |lines| {
+            let run = lines.run().role(cx.style.detail.role).wrap(self.lines_wrap());
             sizes.gap + cx.layout_at(&run, band).size().y
+        });
+        // A document label is laid out as it paints, at the document's size; its colour does not change its size.
+        let document = self.document_run(cx.resolved.label, egui::Color32::PLACEHOLDER).map(|run| {
+            let runs = [run];
+            DocText::new(&runs).layout(cx.ui.ctx(), cx.tokens, cx.env.text_direction()).size()
         });
         let detail = if self.detail_line() { sizes.detail_line } else { 0.0 };
         let text = sizes.label_line + detail + self.progress_line(sizes) + wrapped + self.below_height(sizes);
@@ -141,6 +169,9 @@ impl Component for ListRow<'_> {
         } else {
             height.max(sizes.label_line)
         };
+        // A document label taller than the row's line makes the row its line's height with the room a row keeps around
+        // a line of its own text.
+        let height = document.map_or(height, |size| height.max(size.y + sizes.gap));
         let height = self
             .texts
             .iter()
@@ -154,7 +185,7 @@ impl Component for ListRow<'_> {
         if cx.proposal == Proposal::Min {
             return Vec2::new(probe_min, height);
         }
-        let label = cx.layout(&self.label_run(cx.resolved.label).role(cx.style.text.role)).size().x;
+        let label = document.map_or_else(|| cx.layout(&self.label_run(cx.resolved.label).role(cx.style.text.role)).size().x, |size| size.x);
         // The label band holds the detail line under the label, so it is as wide as the wider of the two.
         let label = match self.detail.as_ref().filter(|_| self.detail_line()) {
             Some(detail) => label.max(cx.layout(&TextRun::new(detail.as_str()).role(cx.style.detail.role)).size().x),
@@ -169,51 +200,20 @@ impl Component for ListRow<'_> {
     }
 
     fn sense(&self) -> Sense {
-        if self.spacer { Sense::empty() } else { Sense::CLICK | Sense::FOCUS }
+        if self.spacer || self.rule_head { Sense::empty() } else { Sense::CLICK | Sense::FOCUS }
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         self.record_toggle_names(cx);
-        if self.spacer {
+        if self.spacer || self.rule_head {
             return;
         }
         self.adopt_facts(&cx.env, cx.resolved.id);
         self.measure_hosted(cx);
         let widths = self.widths(&cx.style.sizes, &|run| cx.layout_at(run, f32::INFINITY).size().x);
         let placed = self.place(&cx.style.sizes, &widths, rect, cx.flow.is_rtl());
-        for (at, cell) in &placed.toggles {
-            let toggle = &self.toggles[*at];
-            let mut flags = Flags::empty();
-            flags.set(Flags::CHECKED, toggle.state == ToggleState::On);
-            flags.set(Flags::MIXED, toggle.state == ToggleState::Mixed);
-            let shape = if matches!(toggle.face, ToggleFace::Check) {
-                Rect::from_center_size(cell.center(), Vec2::splat(cx.style.sizes.icon))
-            } else {
-                *cell
-            };
-            let key = self.toggle_keys.iter().find(|(column, _)| *column == toggle.column).map(|(_, chord)| *chord);
-            let tip = match (&toggle.tooltip, key) {
-                (Some(tip), None) => Some(tip.clone()),
-                (tip, Some(chord)) => {
-                    let base = match tip {
-                        Some(tip) => cx.env.resolve(tip).as_str().to_owned(),
-                        None => named(toggle.name_pattern(&cx.words::<ListWords>()), cx.resolved.label),
-                    };
-                    Some(Label::from(crate::contract::tooltip::with_chord(&base, &chord, crate::runtime::windows::os_of(cx.ui.ctx()))))
-                }
-                (None, None) => None,
-            };
-            let held = match &self.pressed {
-                Some(RowPressed::Cell(column)) => *column == toggle.column,
-                Some(RowPressed::Row) => toggle.row_press,
-                _ => false,
-            };
-            let part = cx.part(TOGGLE.at(*at as u64), shape).flags(flags).held(held);
-            let _ = match tip {
-                Some(tip) => part.tooltip(tip),
-                None => part,
-            };
-        }
+        self.record_cell_bounds(&placed);
+        self.toggle_parts(&placed, cx);
         for (at, position, _) in &placed.texts {
             if self.cell_selects(*at) {
                 cx.selectable_text(TEXT_CELL.at(*position as u64), &self.cell_run(cx.style, *at));
@@ -231,17 +231,49 @@ impl Component for ListRow<'_> {
         // row does not hide.
         if let Some(text) = self.lines.as_ref().filter(|_| self.line_limit.is_some()) {
             let sizes = &cx.style.sizes;
-            let run = TextRun::new(text.as_str()).role(cx.style.detail.role).wrap(self.lines_wrap());
+            let run = text.run().role(cx.style.detail.role).wrap(self.lines_wrap());
             let layout = cx.layout_at(&run, self.text_block(placed.label, sizes, 0.0).0.width());
             if layout.elided {
                 let (band, top) = self.text_block(placed.label, sizes, sizes.gap + layout.size().y);
                 let detail = if self.detail_line() { sizes.detail_line } else { 0.0 };
                 let lines_top = top + sizes.label_line + detail + sizes.gap;
                 let rect = Rect::from_x_y_ranges(band.x_range(), lines_top..=lines_top + layout.size().y);
-                cx.part(LINES, rect).tooltip(text.clone());
+                cx.part(LINES, rect).tooltip(Label::from(text.text().into_owned()));
+            }
+        }
+        // A selectable cell's text part takes the pointer over its text, so a tip there would never show.
+        for (at, position, cell) in &placed.texts {
+            let Some((_, tip)) = self.tips.iter().find(|(column, _)| *column == self.texts[*at].column) else { continue };
+            if !self.cell_selects(*at) {
+                cx.part(CELL_TIP.at(*position as u64), Rect::from_x_y_ranges(cell.x_range(), rect.y_range())).tooltip(tip.clone());
             }
         }
         let mut focusable = false;
+        let role = cx.style.cell.role;
+        for (at, position, cell) in &placed.statuses {
+            let cell = Rect::from_x_y_ranges(cell.x_range(), rect.y_range());
+            let slots = self.status_slots(
+                *at,
+                cell,
+                &cx.style.sizes,
+                cx.flow.is_rtl(),
+                role,
+                StatusMeasure {
+                    text_width: &|run| cx.layout_at(run, f32::INFINITY).size().x,
+                    action_width: &|action| cx.face(action_link(action, role)).x,
+                },
+            );
+            let status = &self.statuses[*at].status;
+            if let Some(tip) = &status.tip {
+                // The tip covers the icon and the text; the action keeps its own pointer target beside them.
+                let tipped = slots.icon.map_or(slots.text, |icon| icon.union(slots.text));
+                cx.part(STATUS.at(*position as u64), tipped).tooltip(tip.clone());
+            }
+            if let Some(action) = slots.action {
+                cx.part(STATUS_ACTION.at(*at as u64), action).sense(Sense::CLICK | Sense::FOCUS).focusable();
+                focusable = true;
+            }
+        }
         for (at, (_, link)) in placed.extras.iter().enumerate() {
             if let Some(link) = link {
                 cx.part(LINK.at(at as u64), *link).sense(Sense::CLICK | Sense::FOCUS).focusable();
@@ -334,13 +366,20 @@ impl Component for ListRow<'_> {
             let target = target_at(at);
             let Some(result) = cx.part_if_declared(target.part()) else { continue };
             let phase = result.press.phase;
-            if let (PressPhase::DragStart { .. }, Some(payload)) = (phase, self.drag_at(RowDragSpot::Thumb(target))) {
+            if let (PressPhase::DragStart { start, .. }, Some(payload)) = (phase, self.drag_at(RowDragSpot::Thumb(target)))
+                && start.button == PointerButton::Primary
+            {
                 let preview = DragPreview::frame(self.thumb_size(&cx.style.sizes), None);
-                crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), None, preview);
+                crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), Vec::new(), preview);
                 self.event = Some(RowEvent::PartDrag(RowDragSpot::Thumb(target)));
             } else if let Some(source) = cx.part_activated(target.part()) {
                 let clicks = part_clicks(source, phase);
                 self.event = Some(RowEvent::ThumbClicked { target, mods: part_mods(cx, target.part(), source), clicks });
+            }
+        }
+        for (at, cell) in self.statuses.iter().enumerate() {
+            if cell.status.action.is_some() && cx.part_activated(STATUS_ACTION.at(at as u64)).is_some() {
+                self.event = Some(RowEvent::CellAction { column: cell.column.clone() });
             }
         }
         if self.lead_text.is_some()
@@ -355,10 +394,10 @@ impl Component for ListRow<'_> {
             if let Some(payload) = self.drag_at(RowDragSpot::Trailing(*part)) {
                 // A handle's click is the row's: only its drag is its own.
                 if let Some(result) = cx.part_if_declared(key)
-                    && matches!(result.press.phase, PressPhase::DragStart { .. })
+                    && matches!(result.press.phase, PressPhase::DragStart { start, .. } if start.button == PointerButton::Primary)
                 {
                     let preview = DragPreview::frame(result.rect.size(), None);
-                    crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), None, preview);
+                    crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), Vec::new(), preview);
                     self.event = Some(RowEvent::PartDrag(RowDragSpot::Trailing(*part)));
                 }
                 continue;
@@ -409,7 +448,7 @@ impl Component for ListRow<'_> {
             .then(|| words.clipped.as_str().to_owned())
             .into_iter()
             .chain(self.common.description.clone())
-            .chain(self.lines.as_ref().filter(|_| self.line_limit.is_some()).map(|text| text.as_str().to_owned()))
+            .chain(self.lines.as_ref().filter(|_| self.line_limit.is_some()).map(|text| text.text().into_owned()))
             .chain(percent)
             .chain(icons)
             .collect();
@@ -424,11 +463,13 @@ impl Component for ListRow<'_> {
         if self.progress.is_some() {
             access.node(PROGRESS, Role::PROGRESS_INDICATOR).name = Name::Text(label.to_owned());
         }
-        if let Some(open) = self.group {
+        // A rule head's group is always open and has no disclosure.
+        if let Some(open) = self.group.filter(|_| !self.rule_head) {
             access.expanded(open);
             if !self.disclosure_by_host {
                 let pattern = if open { &words.collapse } else { &words.expand };
-                access.node(DISCLOSURE, Role::BUTTON).name = Name::Text(named(pattern, label));
+                // the triangle names the row as a screen reader hears it
+                access.node(DISCLOSURE, Role::BUTTON).name = Name::Text(named(pattern, self.accessible_name.as_deref().unwrap_or(label)));
             }
         }
         let selected =
@@ -437,15 +478,27 @@ impl Component for ListRow<'_> {
         let column_of = |key: &ColumnKey| self.cells.iter().position(|(column, _)| column == key);
         if let Some(column) = self.label_column(&self.cells) {
             let node = access.node(LABEL_CELL, Role::CELL);
+            if let Some(rect) = self.cell_rect(LABEL_CELL) {
+                node.bounds(rect);
+            }
             node.name = Name::Text(label.to_owned());
             node.grid.column_index = column_of(column);
             node.flags.set(Flags::SELECTED, selected);
         }
         for (at, toggle) in self.toggles.iter().enumerate() {
             let cell = access.node(TOGGLE_CELL.at(at as u64), Role::CELL);
+            if let Some(rect) = self.cell_rect(TOGGLE_CELL.at(at as u64)) {
+                cell.bounds(rect);
+            }
             cell.name = Name::Text(label.to_owned());
             cell.grid.column_index = column_of(&toggle.column);
             cell.flags.set(Flags::SELECTED, selected);
+            // The collection reports the toggle of its own toggle column under this cell, with its state and click: the
+            // painted toggle adds no node of its own.
+            if self.toggle_columns.contains(&toggle.column) {
+                access.node(TOGGLE.at(at as u64), Role::None);
+                continue;
+            }
             let role = if toggle.check_box { Role::CHECK_BOX } else { Role::BUTTON };
             let node = access.node(TOGGLE.at(at as u64), role);
             node.name = Name::Text(named(toggle.name_pattern(&words), label));
@@ -454,9 +507,29 @@ impl Component for ListRow<'_> {
         for text in &self.texts {
             let Some(position) = self.cells.iter().position(|(column, _)| *column == text.column) else { continue };
             let node = access.node(TEXT_CELL.at(position as u64), Role::CELL);
+            if let Some(rect) = self.cell_rect(TEXT_CELL.at(position as u64)) {
+                node.bounds(rect);
+            }
             node.name = Name::Text(text.text.as_str().to_owned());
+            node.description = self.tips.iter().find(|(column, _)| *column == text.column).map(|(_, tip)| tip.as_str().to_owned());
             node.grid.column_index = Some(position);
             node.flags.set(Flags::SELECTED, selected);
+        }
+        for (at, cell) in self.statuses.iter().enumerate() {
+            let Some(position) = self.cells.iter().position(|(column, _)| *column == cell.column) else { continue };
+            let node = access.node(STATUS.at(position as u64), Role::CELL);
+            if let Some(rect) = self.cell_rect(STATUS.at(position as u64)) {
+                node.bounds(rect);
+            }
+            node.name = Name::Text(cell.status.text.as_str().to_owned());
+            node.description = cell.status.tip.as_ref().map(|tip| tip.as_str().to_owned());
+            node.grid.column_index = Some(position);
+            node.flags.set(Flags::SELECTED, selected);
+            if let Some(action) = &cell.status.action {
+                let node = access.node(STATUS_ACTION.at(at as u64), Role::LINK);
+                node.name = Name::Text(action.as_str().to_owned());
+                node.under(STATUS.at(position as u64));
+            }
         }
         for (at, thumb) in self.extras.iter().enumerate() {
             if let Some((_, name)) = &thumb.link {
@@ -470,6 +543,7 @@ impl Component for ListRow<'_> {
                 TrailingItem::Icon { name, .. } => {
                     access.node(TRAILING_ICON.at(at as u64), Role::IMAGE).name = Name::Text(name.as_str().to_owned());
                 }
+                TrailingItem::Part { part, revealed, .. } if !Self::part_shown(cx, part.part(), *revealed, selected, self.menu_open) => {}
                 TrailingItem::Part { part, face, name, .. } => {
                     let name = self.part_name(*part, name, &words, label);
                     let node = access.node(part.part(), Role::BUTTON);
@@ -483,6 +557,10 @@ impl Component for ListRow<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if self.separator {
+            ui.draw().rule(RuleKind::Divider, cx.rect.left_center(), cx.rect.right_center());
+            return;
+        }
         if self.spacer {
             return;
         }
@@ -490,12 +568,40 @@ impl Component for ListRow<'_> {
         let sizes = &style.sizes;
         let rtl = cx.env.direction().is_rtl();
         let rect = cx.rect;
+        if self.rule_head {
+            let y = rect.center().y;
+            ui.draw().rule(RuleKind::Divider, Pos2::new(rect.left(), y), Pos2::new(rect.right(), y));
+            return;
+        }
+        self.lead_fill = cx.state().flags.contains(Flags::LEAD).then(|| cx.resolve(&style.surface.fill).egui().into());
         let widths = self.widths(sizes, &|run| ui.draw().layout(run, f32::INFINITY).size().x);
         let placed = self.place(sizes, &widths, rect, rtl);
         self.label_rect = placed.label;
+        if self.lead_fill.is_some() {
+            // Keep the focus ring inside existing row outlines and clear of the row's color marker.
+            let mut focus_bounds = if self.layer || self.run.is_some() { rect.shrink(ui.draw().width(StrokeWidth::Thin)) } else { rect };
+            if let Some((_, width)) = self.stripe {
+                let width = ui.draw().width(width);
+                if rtl {
+                    focus_bounds.max.x = focus_bounds.max.x.min(placed.band.right() - width);
+                } else {
+                    focus_bounds.min.x = focus_bounds.min.x.max(placed.band.left() + width);
+                }
+            }
+            if self.corner_mark {
+                if rtl {
+                    focus_bounds.min.x = focus_bounds.min.x.max(rect.left() + sizes.handle);
+                } else {
+                    focus_bounds.max.x = focus_bounds.max.x.min(rect.right() - sizes.handle);
+                }
+            }
+            if focus_bounds.is_positive() {
+                self.lead_focus_bounds = Some(focus_bounds);
+            }
+        }
         {
             let draw = ui.draw();
-            if self.rule || (self.layer && self.divider_below) {
+            if self.layer && self.divider_below {
                 draw.edge_rule(RuleKind::Divider, rect, RectSide::Bottom);
             }
             if self.layer {
@@ -509,6 +615,12 @@ impl Component for ListRow<'_> {
         let lead_painted = self.lead_paint.is_some() || self.lead_text.is_some();
         self.paint_toggles(ui, cx, &placed);
         let ink = cx.resolve(&style.text.color);
+        self.paint_marks(&ui.draw(), cx, &placed, ink);
+        let (label_hue, icon_hue) = (self.hued(ui, cx, HueTarget::Label), self.hued(ui, cx, HueTarget::Icon));
+        let document = self.document_run(cx.resolved.label, egui::Color32::PLACEHOLDER).map(|run| {
+            let runs = [run];
+            ui.with_style(cx.resolved.variant, |scx| DocText::new(&runs).layout(&cx.ctx, scx.tokens, cx.env.text_direction()).size().y)
+        });
         if let (Some(slot), Some((text, _))) = (placed.icon, &self.lead_text) {
             let draw = ui.draw();
             let run = lead_run(text, self.lead_role).color(cx.resolve(&style.detail.color));
@@ -522,7 +634,10 @@ impl Component for ListRow<'_> {
             && placed.disclosure.is_some()
             && !self.disclosure_by_host
         {
-            ui.face(DISCLOSURE, Disclosure::new(Bind::given(open)).node(false).label(cx.resolved.label.to_owned()));
+            ui.face(
+                DISCLOSURE,
+                Disclosure::new(Bind::given(open)).node(false).label(self.accessible_name.clone().unwrap_or_else(|| cx.resolved.label.to_owned())),
+            );
         }
         {
             let draw = ui.draw();
@@ -536,12 +651,12 @@ impl Component for ListRow<'_> {
                 && let Some(icon) = self.icon.as_mut()
                 && !lead_painted
             {
-                icon.color.get_or_insert(cx.resolve(&style.icon.color));
+                icon.color.get_or_insert(icon_hue.unwrap_or_else(|| cx.resolve(&style.icon.color)));
                 draw.icon(Rect::from_center_size(slot.center(), Vec2::splat(sizes.mark)), icon);
             }
         }
         self.paint_thumbs(ui, cx, &placed, ink);
-        let text_end = self.paint_text(&ui.draw(), cx, placed.label);
+        let text_end = if self.thumbnails_only { placed.label.top() } else { self.paint_text(&ui.draw(), cx, placed.label, label_hue, document) };
         let mut from = 0.0;
         for (at, below) in self.below.iter_mut().enumerate() {
             let (Some(item), Some(size)) = (below.item.take(), below.size) else { continue };
@@ -554,12 +669,21 @@ impl Component for ListRow<'_> {
             ui.face(PROGRESS, Progress::new(fraction));
         }
         self.paint_cells(ui, cx, &placed);
+        self.paint_statuses(ui, cx, &placed);
         self.paint_cell_fields(ui, cx, &placed);
         self.paint_trailing(ui, cx, &placed);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> RowOutput {
-        RowOutput { response: cx.response.clone(), event: self.event, open: self.open, menu: self.menu, label: self.label_rect }
+        RowOutput {
+            response: cx.response.clone(),
+            event: self.event,
+            open: self.open,
+            menu: self.menu,
+            label: self.label_rect,
+            lead_fill: self.lead_fill,
+            lead_focus_bounds: self.lead_focus_bounds,
+        }
     }
 }
 
@@ -595,6 +719,48 @@ impl ListRow<'_> {
                 cx.cell_width(&text.column, line + inset);
             }
         }
+        for (column, field) in &self.cell_fields {
+            if let Some(size) = field.size
+                && self.cells.iter().any(|(key, _)| key == column)
+            {
+                let suffix = self.texts.iter().find(|text| text.column == *column && self.field_suffixes.contains(column)).map_or(0.0, |text| {
+                    cx.layout_at(&TextRun::new(text.text.as_str()).role(cx.style.cell.role), f32::INFINITY).size().x + cx.style.sizes.gap
+                });
+                cx.cell_width(column, size.ideal.x + suffix + inset);
+            }
+        }
+        // A status cell holds its icon, text and action whole, with the gaps the slots keep between them.
+        let (role, sizes) = (cx.style.cell.role, &cx.style.sizes);
+        for cell in &self.statuses {
+            if self.cells.iter().any(|(column, _)| *column == cell.column) {
+                let width = |run: &TextRun<'_>| cx.layout_at(run, f32::INFINITY).size().x;
+                let status = &cell.status;
+                let icon = if crate::notices::tone_icon(status.tone).is_some() { sizes.icon + sizes.gap } else { 0.0 };
+                let action = status.action.as_ref().map_or(0.0, |action| sizes.gap + cx.face(action_link(action, role)).x);
+                cx.cell_width(&cell.column, icon + width(&TextRun::new(status.text.as_str()).role(role)) + action + inset);
+            }
+        }
+    }
+
+    /// The ink of the part `target` when a colour from data inks it (`hue`): the colour read against the row's fill this
+    /// pass over the surface the row sits on, with the selection's and the disabled row's paired inks. A dimmed row
+    /// keeps its own ink.
+    fn hued(&self, ui: &PaintUi<'_>, cx: &Cx<'_, Self>, target: HueTarget) -> Option<StyleColor> {
+        let (color, _) = self.hue.filter(|(_, on)| *on == target && self.ink != RowInk::Dimmed)?;
+        let fill = Rgba::from(cx.resolve(&cx.style.surface.fill).egui());
+        let form = RowForm::of(self.option, self.command);
+        let ink = ui.with_style(cx.resolved.variant, |scx| {
+            let ground = Rgba::from(scx.surface(cx.env.surface()).fill);
+            hued_ink(scx, color, over(fill, ground), form)
+        });
+        Some(cx.resolve(&ink))
+    }
+
+    /// The label as one run of document text in `ink`, for a row of `document_rows`; `None` for a row of UI text.
+    pub(super) fn document_run<'s>(&self, label: &'s str, ink: egui::Color32) -> Option<DocRun<'s>> {
+        let rows = self.document.as_ref()?;
+        let run = DocRun::new(label, rows.font.clone(), rows.size, DataColor::new(ink));
+        Some(if self.italic { run.italic() } else { run })
     }
 
     /// Measures each hosted component not yet measured in this pass, for its slot.
@@ -632,5 +798,63 @@ impl ListRow<'_> {
     /// The name of the trailing part `part`: the one given, or "More ({row})" for the row's menu button.
     fn part_name(&self, part: TrailingPart, name: &Label, words: &ListWords, row: &str) -> Label {
         if part == TrailingPart::MENU { Label::from(named(&words.more, row)) } else { name.clone() }
+    }
+
+    /// Keeps the placed rect of each cell node for the access step: the label cell's is the label band, which spans
+    /// the label column and the empty toggle columns beside it.
+    fn record_cell_bounds(&mut self, placed: &Placed) {
+        let toggles = placed.toggles.iter().map(|(at, cell)| (TOGGLE_CELL.at(*at as u64), *cell));
+        let texts = placed.texts.iter().map(|(_, position, cell)| (TEXT_CELL.at(*position as u64), *cell));
+        let statuses = placed.statuses.iter().map(|(_, position, cell)| (STATUS.at(*position as u64), *cell));
+        self.cell_bounds = std::iter::once((LABEL_CELL.into(), placed.band)).chain(toggles).chain(texts).chain(statuses).collect();
+    }
+
+    /// The placed rect of the cell node `part`, which `parts` recorded.
+    fn cell_rect(&self, part: impl Into<PartRef>) -> Option<Rect> {
+        let part = part.into();
+        self.cell_bounds.iter().find(|(key, _)| *key == part).map(|(_, rect)| *rect)
+    }
+
+    /// The collection does not flip `toggle` in this row (`ItemSource::toggle_enabled`): its cell paints in the
+    /// Disabled state and shows no hover.
+    pub(super) fn toggle_closed(&self, toggle: &ToggleCell) -> bool {
+        self.closed_toggles.contains(&toggle.column)
+    }
+
+    /// The parts of the row's toggle cells: their flags, held state, inactive state and tooltip with the toggle's key.
+    fn toggle_parts(&self, placed: &Placed, cx: &mut PartsCx<'_, Self>) {
+        for (at, cell) in &placed.toggles {
+            let toggle = &self.toggles[*at];
+            let mut flags = Flags::empty();
+            flags.set(Flags::CHECKED, toggle.state == ToggleState::On);
+            flags.set(Flags::MIXED, toggle.state == ToggleState::Mixed);
+            let shape = if matches!(toggle.face, ToggleFace::Check) {
+                Rect::from_center_size(cell.center(), Vec2::splat(cx.style.sizes.icon))
+            } else {
+                *cell
+            };
+            let key = self.toggle_keys.iter().find(|(column, _)| *column == toggle.column).map(|(_, chord)| *chord);
+            let tip = match (&toggle.tooltip, key) {
+                (Some(tip), None) => Some(tip.clone()),
+                (tip, Some(chord)) => {
+                    let base = match tip {
+                        Some(tip) => cx.env.resolve(tip).as_str().to_owned(),
+                        None => named(toggle.name_pattern(&cx.words::<ListWords>()), cx.resolved.label),
+                    };
+                    Some(Label::from(crate::contract::tooltip::with_chord(&base, &chord, crate::runtime::windows::os_of(cx.ui.ctx()))))
+                }
+                (None, None) => None,
+            };
+            let held = match &self.pressed {
+                Some(RowPressed::Cell(column)) => *column == toggle.column,
+                Some(RowPressed::Row) => toggle.row_press,
+                _ => false,
+            };
+            let part = cx.part(TOGGLE.at(*at as u64), shape).flags(flags).held(held).inactive(self.toggle_closed(toggle));
+            let _ = match tip {
+                Some(tip) => part.tooltip(tip),
+                None => part,
+            };
+        }
     }
 }

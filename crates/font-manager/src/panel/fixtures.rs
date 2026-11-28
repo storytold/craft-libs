@@ -36,14 +36,20 @@ pub(crate) fn story_index() -> Result<Index, String> {
     Index::from_json(json.as_bytes()).map_err(|e| format!("the story index: {e}"))
 }
 
-/// An in-memory catalog of two bundled faces (Ubuntu Light and Hack), no folders scanned.
+/// An in-memory catalog of two bundled faces (Ubuntu Light and Hack), scanned (it has no folders), so pickers over it
+/// show its faces at once.
 pub(crate) fn story_catalog() -> Arc<Catalog> {
     let catalog = Arc::new(Catalog::new(FontEnv { os: Os::None, ..FontEnv::default() }).with_font_service(false));
     for bytes in [epaint_default_fonts::UBUNTU_LIGHT, epaint_default_fonts::HACK_REGULAR] {
         let _ = catalog.add_bytes(bytes.to_vec(), Source::Bundled, &Limits::default());
     }
+    catalog.rescan();
     catalog
 }
+
+/// A variable font (`wght`), for the samples drawn at variation coordinates.
+#[cfg(feature = "suite")]
+pub(crate) const VARIABLE: &[u8] = include_bytes!("../../../font-subset/tests/data/orbitron/Orbitron[wght].ttf");
 
 /// The panel over the story catalog and index; its store is a fake that refuses downloads.
 pub(crate) fn story_panel() -> FontsPanel {

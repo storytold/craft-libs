@@ -3,7 +3,7 @@
 use super::BodyHooks;
 use super::scroll::scroll_of;
 use crate::contract::cx::BodyCx;
-use crate::contract::{Container, ContainerProps, FooterPlace, Gap, HeaderParts, LeastWidth, Mount, Pad, PadEdges, Sizing};
+use crate::contract::{Container, ContainerProps, FooterPlace, Gap, HeaderParts, LeastWidth, Mount, Pad, PadEdges, SectionRhythm, Sizing};
 use crate::layout::{ColumnGroup, Columns, Reached};
 use crate::primitives::{RectSide, Rule};
 use crate::runtime::access::{self};
@@ -49,8 +49,10 @@ pub(super) fn shared_line(props: &ContainerProps, sizes: RegionSizes) -> Option<
 pub fn pad_of(tokens: &UiTokens, pad: Pad) -> f32 {
     let pads = &tokens.tokens().space.pad;
     match pad {
+        Pad::Tight => tokens.tokens().space.gap.tight,
         Pad::Control => pads.control,
         Pad::Regular => pads.regular,
+        Pad::Dialog => pads.dialog,
         Pad::Roomy => pads.roomy,
         Pad::Page => pads.roomy * 2.5,
         _ => 0.0,
@@ -69,11 +71,16 @@ pub(super) fn pad_vec(tokens: &UiTokens, pad: Pad, edges: PadEdges) -> Vec2 {
 
 /// The room the rules between a container's regions take, in points: the divider rule's width on the display for each
 /// rule the container draws, none for one it doesn't. Each rule lies in a band of its own, so it shares no pixel with
-/// a region's content at any scale.
+/// a region's content at any scale. Under `SectionRhythm::Spaced` the rule above a header has room around it.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct RuleBands {
+    /// Before the rule above the header: what makes the gap the container's `Stack` leaves before it up to
+    /// `space.gap.section`.
+    pub(super) lead: f32,
     /// Above a header with `HeaderRegion::rule_above`.
     pub(super) above: f32,
+    /// Between the rule above and the header: `space.gap.row`.
+    pub(super) trail: f32,
     /// Under a stacked header with `HeaderRegion::rule`, before its gap.
     pub(super) under: f32,
     /// Between a footer with `FooterRegion::rule` and the content beside it: over the footer, or under it in the end
@@ -84,17 +91,30 @@ pub(super) struct RuleBands {
 }
 
 impl RuleBands {
-    /// The bands of `props`' rules in `tokens` on a display of `pixels_per_point`. A rule above separates the
-    /// container from what precedes it in flow: right after a rule (`after_rule`) there is none.
-    pub(super) fn of(props: &ContainerProps, tokens: &UiTokens, pixels_per_point: f32, after_rule: bool) -> Self {
+    /// The bands of `props`' rules under `env` on a display of `pixels_per_point`, for a container whose flow start is
+    /// `start` (`layout::flow_start`). A rule above separates the container from what precedes it in flow: right after
+    /// a rule there is none, and at its flow's start nothing precedes it to stand off from.
+    pub(super) fn of(props: &ContainerProps, env: &Env, pixels_per_point: f32, start: Option<bool>) -> Self {
+        let tokens = &env.tokens;
         let width = rule_look(tokens, RuleKind::Divider).width.points(pixels_per_point);
         let on = |rule: bool| if rule { width } else { 0.0 };
+        let above = on(start != Some(true) && props.header.is_some_and(|header| header.rule_above));
+        let spaced = above > 0.0 && env.get::<SectionRhythm>() == SectionRhythm::Spaced;
+        let gaps = &tokens.tokens().space.gap;
+        let stack_gap = env.stack_gap.filter(|(body, _)| env.flow_body == Some(*body)).map_or(0.0, |(_, gap)| gap);
         RuleBands {
-            above: on(!after_rule && props.header.is_some_and(|header| header.rule_above)),
+            lead: if spaced && start.is_none() { (gaps.section - stack_gap).max(0.0) } else { 0.0 },
+            above,
+            trail: if spaced { gaps.row } else { 0.0 },
             under: on(props.header.is_some_and(|header| header.rule && !header.inline)),
             footer: on(props.footer.is_some_and(|footer| footer.rule)),
             end: on(props.end.is_some_and(|end| end.rule)),
         }
+    }
+
+    /// The band of the rule above the header with the room around it.
+    pub(super) fn above_band(&self) -> f32 {
+        self.lead + self.above + self.trail
     }
 }
 
@@ -117,7 +137,7 @@ impl Gap {
 }
 
 pub(super) fn gap_of(tokens: &UiTokens, gap: Gap) -> f32 {
-    let gaps = &tokens.tokens().space.gap;
+    let (gaps, page) = (&tokens.tokens().space.gap, &tokens.tokens().size.page.gap);
     match gap {
         Gap::None => 0.0,
         Gap::Tight => gaps.tight,
@@ -127,6 +147,12 @@ pub(super) fn gap_of(tokens: &UiTokens, gap: Gap) -> f32 {
         Gap::CardColumn => gaps.card_column,
         Gap::CardRow => gaps.card_row,
         Gap::Inline => gaps.inline,
+        Gap::PageTitle => page.title,
+        Gap::PageLead => page.lead,
+        Gap::PageActions => page.actions,
+        Gap::PageSection => page.section,
+        Gap::PageHeading => page.heading,
+        Gap::PageLink => page.link,
         _ => gaps.row,
     }
 }
@@ -257,11 +283,12 @@ impl BodyHooks<'_> {
             regions.footer.max.y = bottom + self.measured_footer.y;
         }
         let mut footer_rect = regions.footer;
+        // The footer's start edge moves to the control column's, never past its own end edge.
         if props.label.is_some() {
             if rtl {
-                footer_rect.max.x = body_rect.max.x.clamp(footer_rect.min.x, footer_rect.max.x);
+                footer_rect.max.x = body_rect.max.x.min(footer_rect.max.x).max(footer_rect.min.x);
             } else {
-                footer_rect.min.x = body_rect.min.x.clamp(footer_rect.min.x, footer_rect.max.x);
+                footer_rect.min.x = body_rect.min.x.max(footer_rect.min.x).min(footer_rect.max.x);
             }
         }
         let offset = if rtl { regions.footer.max.x - footer_rect.max.x } else { footer_rect.min.x - regions.footer.min.x };
@@ -336,7 +363,8 @@ impl<'b> BodyHooks<'b> {
     }
 
     /// The header's line inside its inset, less the slots of the container's own header parts at its two edges: the
-    /// rect the header's children get, and the slots.
+    /// rect the header's children get, and the slots. An end edge that narrows (`HeaderParts::end_narrows`) gives up
+    /// room, down to its least, until the children keep their room.
     pub(super) fn header_line(&self, header: Rect, inset: f32, parts: HeaderParts, rtl: bool) -> (Rect, HeaderSlots) {
         let mut flow = craft_behavior::Flow::new(header.shrink2(Vec2::new(inset, 0.0)), rtl);
         let mut slots = HeaderSlots::default();
@@ -345,8 +373,12 @@ impl<'b> BodyHooks<'b> {
             slots.start = Some(slot);
             flow = rest.take_start(self.region_gap).1;
         }
-        if parts.end > 0.0 {
-            let (slot, rest) = flow.take_end(parts.end);
+        let end = match parts.end_least {
+            Some(least) => parts.end.min((flow.rect().width() - self.region_gap - parts.keep).max(least)),
+            None => parts.end,
+        };
+        if end > 0.0 {
+            let (slot, rest) = flow.take_end(end);
             slots.end = Some(slot);
             flow = rest.take_end(self.region_gap).1;
         }
@@ -404,7 +436,7 @@ impl<'b> BodyHooks<'b> {
         let end_h = sizes.end.map_or(0.0, |end| end.y) + if in_end { footer_h } else { 0.0 };
         // An inline header takes no height of its own: the line is as high as the taller of header and body. A rule
         // above the header takes its band either way.
-        let stacked_h = self.rules.above + if inline { 0.0 } else { header_h + self.header_space(header_h) };
+        let stacked_h = self.rules.above_band() + if inline { 0.0 } else { header_h + self.header_space(header_h) };
         let top = inner.min.y + stacked_h;
         // Along an axis the container is not given, its body is offered the room the container was offered and the
         // container takes what the body took.
@@ -447,7 +479,9 @@ impl<'b> BodyHooks<'b> {
         } else if !self.given.0 {
             self.shared_width(room.x, props).max(inner.width())
         } else {
-            inner.width()
+            // A container given less width than its padding has an inverted inner rect: its regions take no width,
+            // at their start edge.
+            inner.width().max(0.0)
         };
         // A measure with no room limit along x offers an unbounded width. Left to right the body runs from its start
         // edge to +inf as egui allows; right to left its start edge is the right one, and an unbounded width would put
@@ -456,7 +490,7 @@ impl<'b> BodyHooks<'b> {
         let width = if rtl && !width.is_finite() { crate::contract::MAX_EXTENT } else { width };
         let (left, right) = if rtl { (inner.max.x - width, inner.max.x) } else { (inner.min.x, inner.min.x + width) };
         let band = |top: f32, bottom: f32| Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom.max(top)));
-        let header_top = inner.min.y + self.rules.above;
+        let header_top = inner.min.y + self.rules.above_band();
         let header = band(header_top, if props.header.is_some() { header_top + header_h.max(0.0) } else { header_top });
         let mut body = band(top, bottom);
         let header = if inline {
@@ -475,7 +509,7 @@ impl<'b> BodyHooks<'b> {
             header
         };
         let across = |top: f32, width: f32| (width > 0.0).then(|| (Rect::from_x_y_ranges(inner.x_range(), top..=top + width), RectSide::Top));
-        let above = across(inner.min.y, self.rules.above);
+        let above = across(inner.min.y + self.rules.lead, self.rules.above);
         let under = if inline { None } else { across(header.max.y, self.rules.under) };
         // The end region keeps the width it measured (with a footer in it, the wider of the two) and takes the end
         // edge; the body takes the rest. Before its first measure it spans the line and the body keeps its width.

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
@@ -20,6 +21,8 @@ struct Spec {
     legacy: Option<(&'static str, &'static str)>,
     /// Japanese family name.
     ja: Option<&'static str>,
+    /// Japanese legacy family name (name ID 1), beside a typographic family.
+    legacy_ja: Option<&'static str>,
     weight: u16,
     width: u16,
     italic: bool,
@@ -30,7 +33,7 @@ struct Spec {
 }
 
 fn spec(family: &'static str, style: &'static str, weight: u16) -> Spec {
-    Spec { family, style, legacy: None, ja: None, weight, width: 5, italic: false, fs_type: 0, instances: vec![], outlines: true }
+    Spec { family, style, legacy: None, ja: None, legacy_ja: None, weight, width: 5, italic: false, fs_type: 0, instances: vec![], outlines: true }
 }
 
 fn font(s: &Spec) -> Vec<u8> {
@@ -53,6 +56,9 @@ fn font(s: &Spec) -> Vec<u8> {
     add(0x409, 6, ps);
     if let Some(ja) = s.ja {
         add(0x411, if s.legacy.is_some() { 16 } else { 1 }, ja.into());
+    }
+    if let Some(ja) = s.legacy_ja {
+        add(0x411, 1, ja.into());
     }
     let mut instances = Vec::new();
     for (next_id, (style, wght)) in (256..).zip(&s.instances) {
@@ -254,6 +260,23 @@ fn lookup_by_every_name_kind() {
 }
 
 #[test]
+fn the_stores_face_wins_over_its_copy_in_the_os_folder() {
+    // A Flatpak's store sits under ~/.var/app, which sorts after the host's ~/.local/share/fonts
+    // the store copies its fonts into.
+    let root = temp("store-copy");
+    let bytes = font(&spec("Copied Sans", "Regular", 400));
+    write(&root.join("home/.local/share/fonts/Craft/Copied Sans/CopiedSans-Regular.ttf"), &bytes);
+    let store = root.join("home/.var/app/org.example.Fonts/data/craft-fonts");
+    write(&store.join("Copied Sans/CopiedSans-Regular.ttf"), &bytes);
+    let cat = Catalog::new(FontEnv { font_store: Some(store), ..linux_env(&root) }).with_font_service(false);
+    cat.rescan();
+    let styles = cat.styles("Copied Sans");
+    assert_eq!(styles.len(), 1);
+    assert_eq!(styles[0].source, Source::Store);
+    assert_eq!(cat.scanned_faces().iter().filter(|f| f.family == "Copied Sans").count(), 2);
+}
+
+#[test]
 fn installed_and_removed_fonts_are_seen_without_a_restart() {
     let root = temp("rescan");
     let cat = system(&root);
@@ -277,6 +300,75 @@ fn installed_and_removed_fonts_are_seen_without_a_restart() {
 }
 
 #[test]
+fn a_rescan_with_no_changes_keeps_the_generation() {
+    let root = temp("rescan-same");
+    write(&root.join("home/.local/share/fonts/Same-Regular.ttf"), font(&spec("Same", "Regular", 400)));
+    let cat = Catalog::new(linux_env(&root)).with_font_service(false);
+    cat.rescan();
+    let generation = cat.generation();
+    assert_eq!(cat.families().as_ref(), ["Same"]);
+    cat.rescan();
+    assert_eq!(cat.generation(), generation, "nothing changed, so the catalog keeps its generation");
+    write(&root.join("home/.local/share/fonts/Other-Regular.ttf"), font(&spec("Other", "Regular", 400)));
+    cat.rescan();
+    assert!(cat.generation() > generation, "a new font file publishes a new generation");
+}
+
+#[test]
+fn a_font_store_install_shows_in_the_change_list() {
+    let root = temp("store-watch");
+    let store = root.join("home/.local/share/craft-fonts");
+    // As the font store installs: a staged `.part` file moved into the family's folder.
+    let staging = store.join(".staging/1");
+    let install = |dest: &str, family: &'static str, style: &'static str| {
+        let part = staging.join("face.part");
+        write(&part, font(&spec(family, style, 400)));
+        let dest = store.join(dest);
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::rename(&part, dest).unwrap();
+    };
+    install("ofl/storeone/StoreOne-Regular.ttf", "Store One", "Regular");
+    let cat = Arc::new(Catalog::new(linux_env(&root)).with_font_service(false));
+    let start = cat.generation();
+    cat.rescan();
+    assert_eq!(cat.changes_since(start).added, ["Store One"]);
+    assert!(!cat.store_changed());
+
+    let (tx, rx) = mpsc::channel();
+    let on_change: app::OnChange = Arc::new(move |_| {
+        let _ = tx.send(());
+    });
+    let refresh = Arc::new(app::Refresh::new(Arc::clone(&cat), Duration::MAX, Some(on_change)));
+    refresh.watch_store(Duration::from_millis(20));
+    let wait_for = |since: u64, added: &[&str], removed: &[&str], changed: &[&str]| loop {
+        rx.recv_timeout(Duration::from_secs(10)).expect("a store change wakes the app");
+        let c = cat.changes_since(since);
+        if c.added == added && c.removed == removed && c.changed == changed {
+            return c.generation;
+        }
+    };
+
+    let before = cat.generation();
+    install("ofl/storetwo/StoreTwo-Regular.ttf", "Store Two", "Regular");
+    let two = wait_for(before, &["Store Two"], &[], &[]);
+    assert_eq!(cat.styles("Store Two")[0].source, Source::Store);
+    install("ofl/storeone/StoreOne-Bold.ttf", "Store One", "Bold");
+    std::fs::remove_dir_all(store.join("ofl/storetwo")).unwrap();
+    wait_for(two, &[], &["Store Two"], &["Store One"]);
+    assert!(cat.changes_since(cat.generation()).is_empty());
+
+    // The history keeps the last 64 changes of the family set; older generations get `full`.
+    let bytes = font(&spec("Churn", "Regular", 400));
+    for _ in 0..40 {
+        cat.add_bytes(bytes.clone(), Source::User, &Limits::default()).unwrap();
+        cat.remove_added(Source::User);
+    }
+    let changes = cat.changes_since(before);
+    assert!(changes.full && changes.added.is_empty() && !changes.is_empty());
+    assert!(!cat.changes_since(cat.generation() - 10).full);
+}
+
+#[test]
 fn a_family_loads_once_for_every_thread() {
     let root = temp("load");
     let cat = system(&root);
@@ -296,6 +388,39 @@ fn a_family_loads_once_for_every_thread() {
     cat.rescan();
     assert!(!Arc::ptr_eq(&cat.load_family("Host Serif"), &loads[0]));
     assert!(cat.load_family("Missing").is_empty());
+}
+
+#[test]
+fn generic_families_follow_the_platforms_list_then_the_others() {
+    let root = temp("generic");
+    let dir = root.join("listed");
+    write(&dir.join("Arial.ttf"), font(&spec("Arial", "Regular", 400)));
+    write(&dir.join("NotoSans.ttf"), font(&spec("Noto Sans", "Regular", 400)));
+    write(&dir.join("Mono.ttf"), font(&spec("DEJAVU SANS MONO", "Regular", 400)));
+    write(&dir.join("Times.ttf"), font(&Spec { legacy: Some(("Times New Roman", "Regular")), ..spec("Times New Roman Pro", "Regular", 400) }));
+    write(&dir.join("DejaVuSans.ttf"), font(&Spec { outlines: false, ..spec("DejaVu Sans", "Regular", 400) }));
+    let catalog = |os: Os| {
+        let listed = dir.clone();
+        Catalog::new(FontEnv { os, ..linux_env(&root) }).with_font_service(false).with_lister(Arc::new(move || vec![listed.clone()]))
+    };
+    // Linux: DejaVu Sans has no outlines, so Noto Sans; the family's own spelling comes back.
+    let linux = catalog(Os::Unix);
+    assert_eq!(linux.generic_family(Generic::SansSerif).as_deref(), Some("Noto Sans"));
+    assert_eq!(linux.generic_family(Generic::Monospace).as_deref(), Some("DEJAVU SANS MONO"));
+    // A legacy family name finds its family.
+    assert_eq!(linux.generic_family(Generic::Serif).as_deref(), Some("Times New Roman Pro"));
+    assert_eq!(linux.generic_family(Generic::SystemUi).as_deref(), Some("Noto Sans"));
+    // Windows tries Arial before the Linux names.
+    let windows = catalog(Os::Windows);
+    assert_eq!(windows.generic_family(Generic::SansSerif).as_deref(), Some("Arial"));
+    // Nothing of macOS's system-ui list: sans-serif's answer.
+    assert_eq!(catalog(Os::MacOs).generic_family(Generic::SystemUi).as_deref(), Some("Arial"));
+    // An added face counts; with nothing installed there is no answer.
+    let empty = Catalog::new(linux_env(&root.join("empty"))).with_font_service(false);
+    assert_eq!(empty.generic_family(Generic::Monospace), None);
+    empty.add_bytes(font(&spec("Liberation Mono", "Regular", 400)), Source::Document, &Limits::default()).unwrap();
+    assert_eq!(empty.generic_family(Generic::Monospace).as_deref(), Some("Liberation Mono"));
+    assert_eq!(empty.generic_family(Generic::Serif), None);
 }
 
 #[test]
@@ -385,4 +510,130 @@ fn bounded_sfnt_reader_preserves_face_names_and_collection_indices() {
     assert_eq!(faces.len(), 1);
     assert_eq!((faces[0].index, faces[0].family.as_str()), (1, "Example"));
     assert!(crate::sfnt::read_faces_bytes(b"invalid").is_empty());
+}
+
+/// In a confined folder a link is followed only when it leads inside a confined folder; elsewhere links are followed.
+#[cfg(unix)]
+#[test]
+fn a_confined_folder_follows_only_links_that_stay_inside_it() {
+    let root = temp("confined");
+    let picked = root.join("picked");
+    write(&picked.join("own/Inside.ttf"), font(&spec("Inside Face", "Regular", 400)));
+    write(&root.join("elsewhere/Outside.ttf"), font(&spec("Outside Face", "Regular", 400)));
+    std::os::unix::fs::symlink(picked.join("own/Inside.ttf"), picked.join("inner.ttf")).unwrap();
+    std::os::unix::fs::symlink(root.join("elsewhere/Outside.ttf"), picked.join("outer.ttf")).unwrap();
+    std::os::unix::fs::symlink(root.join("elsewhere"), picked.join("outer-folder")).unwrap();
+    let families = |confined: bool| {
+        let cat = Catalog::new(linux_env(&root)).with_font_service(false);
+        cat.set_app_dirs(vec![picked.clone()]);
+        if confined {
+            cat.set_confined_dirs(vec![picked.clone()]);
+        }
+        let families = cat.families();
+        (families.iter().any(|f| f == "Inside Face"), families.iter().any(|f| f == "Outside Face"))
+    };
+    assert_eq!(families(false), (true, true), "links are followed out of a folder that isn't confined");
+    assert_eq!(families(true), (true, false), "a confined folder follows no link out of it");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A language the typographic family records leave out names the family by its legacy record, so an English-only
+/// typographic family keeps its Japanese legacy name; a language they cover keeps the typographic name.
+#[test]
+fn a_language_without_a_typographic_family_name_keeps_its_legacy_name() {
+    let localized = |s: &Spec| {
+        let faces = crate::scan::data_faces(&font(s), 1, None, Source::System);
+        faces[0].info.localized_families.iter().map(|l| l.name.clone()).collect::<Vec<_>>()
+    };
+    let typographic_english = Spec { legacy: Some(("Test Mincho", "Regular")), ..spec("Test Mincho", "Regular", 400) };
+    assert_eq!(localized(&Spec { legacy_ja: Some("テスト明朝"), ..typographic_english.clone() }), ["テスト明朝"]);
+    let both = Spec { ja: Some("テスト明朝 Pro"), legacy_ja: Some("テスト明朝"), ..typographic_english.clone() };
+    assert_eq!(localized(&both), ["テスト明朝 Pro"], "the typographic record of a language wins over its legacy one");
+    assert!(localized(&typographic_english).is_empty());
+}
+
+/// A face installed from two files is listed once, and each file's version is found from either, as rescans add and
+/// remove the second file.
+#[test]
+fn every_file_of_a_face_is_one_of_its_versions() {
+    let root = temp("versions");
+    let cat = system(&root);
+    let bold = cat.resolve("Test Sans", "Bold").unwrap().0;
+    assert_eq!(cat.versions(&bold), std::slice::from_ref(&bold));
+    let second = root.join("home/.local/share/fonts/TestSans-Bold.ttf");
+    write(&second, font(&spec("Test Sans", "Bold", 700)));
+    cat.rescan();
+    assert_eq!(cat.styles("Test Sans").iter().filter(|f| f.style == "Bold").count(), 1, "the lists show a face once");
+    let versions = cat.versions(&bold);
+    let paths: HashSet<_> = versions.iter().filter_map(|f| f.path.clone()).collect();
+    assert_eq!(paths, HashSet::from([bold.path.clone().unwrap(), second.clone()]));
+    let other = versions.iter().find(|f| f.path.as_ref() == Some(&second)).unwrap();
+    assert_eq!(cat.versions(other), versions);
+    std::fs::remove_file(&second).unwrap();
+    cat.rescan();
+    assert_eq!(cat.versions(&bold).len(), 1);
+    assert!(cat.versions(other).is_empty());
+}
+
+#[test]
+fn a_background_scan_that_panics_lets_the_next_call_scan_again() {
+    let root = temp("panic");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let lister: Lister = Arc::new(move || {
+        assert!(counted.fetch_add(1, Ordering::Relaxed) > 0, "the first scan fails");
+        Vec::new()
+    });
+    let cat = Arc::new(Catalog::new(linux_env(&root)).with_font_service(false).with_lister(lister));
+    // Each call starts a scan only when none is running; the second starts once the failed one has ended.
+    let failed = cat.start_background_scan().expect("the first call starts a scan");
+    assert!(failed.join().is_err(), "the first scan fails");
+    assert!(!cat.is_ready());
+    let again = cat.start_background_scan().expect("a failed scan must not leave the catalog waiting on it");
+    again.join().unwrap();
+    assert!(cat.is_ready(), "a failed scan must not leave the catalog waiting on it");
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+}
+
+/// An app adds its own fonts when it makes its font database: that must not wait for a scan of every installed font,
+/// neither one it starts nor one running in the background. The installed faces join the added ones when a lookup
+/// scans, and a rescan counts each listed face once.
+#[test]
+fn adding_fonts_does_not_wait_for_the_installed_fonts() {
+    let root = temp("added");
+    drop(system(&root));
+    let (entered, scan_entered) = mpsc::channel();
+    let (release, scan_released) = mpsc::channel::<()>();
+    let scan_released = std::sync::Mutex::new(scan_released);
+    let lister: Lister = Arc::new(move || {
+        let _ = entered.send(());
+        // The first scan stays here until the test sends on `release`; once it is dropped, scans go straight through.
+        let _ = scan_released.lock().unwrap().recv();
+        Vec::new()
+    });
+    let cat = Arc::new(Catalog::new(linux_env(&root)).with_font_service(false).with_lister(lister));
+    let bold = cat.add_bytes(font(&spec("Test Sans", "Bold", 700)), Source::Bundled, &Limits::default()).unwrap();
+    assert!(!cat.is_ready(), "adding started no scan");
+    cat.scan_in_background();
+    scan_entered.recv_timeout(Duration::from_secs(10)).unwrap();
+    let adding = Arc::clone(&cat);
+    let (added, add_returned) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = added.send(adding.add_bytes(font(&spec("App Face", "Regular", 400)), Source::Bundled, &Limits::default()));
+    });
+    // The scan cannot end before `release` sends, so an add that returns now did not wait for it. The limit only stops a
+    // test whose add waits.
+    let returned = add_returned.recv_timeout(Duration::from_secs(10));
+    release.send(()).unwrap();
+    // Later scans (the rescans below) go straight through.
+    drop(release);
+    returned.expect("the add during the scan returned before the scan did").unwrap();
+    assert_eq!(cat.styles("App Face").len(), 1);
+    // The added Bold comes first; the installed file's Bold is another version of it, not another face.
+    assert_eq!(cat.resolve("Test Sans", "Bold").map(|(f, _)| f), bold.first().cloned());
+    assert_eq!(cat.versions(&bold[0]).len(), 2);
+    let with_added = cat.rescan();
+    assert_eq!(cat.remove_added(Source::Bundled), 2);
+    assert_eq!(cat.rescan(), with_added - 1, "only the added face no installed file has was counted");
+    assert!(cat.versions(&bold[0]).is_empty());
 }

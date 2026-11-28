@@ -142,7 +142,7 @@ fn scrolled_view(room: Rect, pixels_per_point: f32) -> craft_behavior::CanvasVie
 #[story(Canvas, covers = [], drive = Drive::Custom(middle_click_centre))]
 fn middle_autoscroll(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let room = stage(ui);
-    let navigation = NavigationOptions { middle_button: MiddleButton::Autoscroll, ..NavigationOptions::default() };
+    let navigation = NavigationOptions { middle_button: MiddleButton::AutoScroll, ..NavigationOptions::default() };
     let (view, view_at) = data.value_at("view", scrolled_view(room, ui.pixels_per_point()));
     let shown = Canvas::new("Document")
         .navigation(navigation)

@@ -3,9 +3,10 @@
 //! The GTK file chooser behind the portal keeps the typed name when the user picks another file
 //! type, and rfd 0.17 reads only the file name from the portal's answer, so `image.psd` with PNG
 //! picked came back as `image.psd`. The answer does say which type was picked (`current_filter`),
-//! so Save asks the portal itself and gives a name the dialog left alone that type's extension
-//! ([`with_chosen_type`]). rfd stays the fallback (zenity, or no portal), and this can go once an
-//! rfd release reads the picked type (PolyMeilex/rfd#341).
+//! so Save asks the portal itself and reports that type with the typed path; the service gives a
+//! name the dialog left alone the type's extension ([`crate::service::with_chosen_type`]). rfd stays
+//! the fallback (zenity, or no portal), and this can go once an rfd release reads the picked type
+//! (PolyMeilex/rfd#341).
 //!
 //! A Save in flight can be stopped through its [`Cancel`] (its pick was forgotten): the wait for
 //! the portal's answer races the cancel and the portal leaving the bus, and a cancel closes the
@@ -25,6 +26,7 @@ use std::time::{Duration, Instant};
 use raw_window_handle::RawWindowHandle;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
+use crate::service::normal;
 use crate::{FileDialog, Filter};
 
 /// How soon an empty answer means the dialog never showed: a portal that fails answers at once
@@ -49,9 +51,6 @@ pub(crate) struct SaveRequest {
     /// The name the dialog shows: the stem of the suggested file (`test`), see
     /// [`crate::service::dialog_file_name`].
     pub name: Option<String>,
-    /// The suggested file's name (`test.psd`): a name that comes back with its extension still
-    /// takes the extension of the type picked ([`with_chosen_type`]).
-    pub suggested: Option<String>,
     /// The folder the dialog opens in.
     pub folder: Option<PathBuf>,
     /// The file types offered.
@@ -72,7 +71,6 @@ impl SaveRequest {
         Self {
             parent,
             name: dialog.file_name.as_deref().and_then(|n| crate::service::dialog_file_name(n, true)),
-            suggested,
             folder: dialog.directory.clone(),
             filters: dialog.filters.clone(),
             current: current.filter(|_| !dialog.filters.is_empty()),
@@ -85,11 +83,6 @@ impl SaveRequest {
 pub(crate) struct Saved {
     path: PathBuf,
     filter: Option<String>,
-}
-
-/// An extension as compared: without the dot, in lower case.
-fn normal(ext: &str) -> String {
-    ext.trim_start_matches('.').to_ascii_lowercase()
 }
 
 /// A flag that cancels a portal Save in flight. Clones share the flag: the dialog's owner keeps
@@ -134,8 +127,9 @@ impl Cancel {
 /// How a portal Save ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SaveOutcome {
-    /// The user saved to this path.
-    Saved(PathBuf),
+    /// The user saved to this path, as typed, with the index of the file type picked (into the
+    /// request's filters) when the portal reported one.
+    Saved(PathBuf, Option<usize>),
     /// The user cancelled, or the Save was cancelled.
     Cancelled,
     /// The portal could not show the dialog: the caller shows rfd's.
@@ -196,10 +190,7 @@ fn saved(results: &HashMap<String, OwnedValue>) -> Result<Saved, String> {
         .map_err(|e: zbus::zvariant::Error| e.to_string())?;
     let uri = uris.first().ok_or("no file in the portal's answer")?;
     let path = file_uri_path(uri).ok_or_else(|| format!("not a local file: {uri}"))?;
-    let filter = results.get("current_filter").and_then(|v| {
-        let (label, _globs): (String, Vec<(u32, String)>) = v.try_clone().ok()?.try_into().ok()?;
-        Some(label)
-    });
+    let filter = results.get("current_filter").and_then(|v| filter_label(v));
     Ok(Saved { path, filter })
 }
 
@@ -315,6 +306,18 @@ fn options<'a>(req: &'a SaveRequest, token: &'a str) -> HashMap<&'static str, Va
     o
 }
 
+/// The label of a file type as the portal sends it, a `(sa(us))` structure; `None` for a value of
+/// another shape.
+fn filter_label(value: &Value<'_>) -> Option<String> {
+    match value {
+        Value::Structure(s) => match s.fields() {
+            [Value::Str(label), Value::Array(globs)] if globs.element_signature() == "(us)" => Some(label.to_string()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// `file:///home/me/A%20b.psd` → `/home/me/A b.psd`; `None` for other schemes.
 // pc: apps/photocraft/src/portal_save.rs:134 file_uri_path
 fn file_uri_path(uri: &str) -> Option<PathBuf> {
@@ -342,21 +345,8 @@ fn file_uri_path(uri: &str) -> Option<PathBuf> {
     Some(PathBuf::from(std::ffi::OsString::from_vec(out)))
 }
 
-/// Which file type's extensions belong on the name the dialog returned: the one it reported, or,
-/// when the dialog offered only one type, that one. It reports no pick then, and the name it was
-/// given is the stem, so a bare `Swatches` has to come back as `Swatches.aco`. `None` when the
-/// answer names no type this dialog offered.
-// pc: apps/photocraft/src/portal_save.rs:163 chosen_type
-fn chosen_type(filters: &[Filter], picked: Option<usize>) -> Option<usize> {
-    match picked {
-        Some(i) if i < filters.len() => Some(i),
-        None if filters.len() == 1 => Some(0),
-        _ => None,
-    }
-}
-
-/// Whether a Save answer with no file type ([`chosen_type`] is `None`) leaves the format open:
-/// several types were offered and the typed name's extension is none of theirs.
+/// Whether a Save answer with no file type picked leaves the format open: several types were
+/// offered and the typed name's extension is none of theirs.
 // pc: apps/wordcraft/src/portal_save.rs:446 is_ambiguous_filter
 fn is_ambiguous(filters: &[Filter], path: &Path) -> bool {
     let listed = path
@@ -367,70 +357,28 @@ fn is_ambiguous(filters: &[Filter], path: &Path) -> bool {
     filters.len() > 1 && !listed
 }
 
-/// `path` with the extension of the file type picked in the Save dialog (`chosen`, its extensions
-/// without the dot), where the dialog left the name alone: the format follows the extension, and
-/// the GTK file chooser keeps the typed name when another type is picked. Only a name that still
-/// has the extension the dialog opened with (`opened_with`, `Untitled-1.psd` with PNG picked) or
-/// none gets the type's first extension, as PolyMeilex/rfd#341 does. An extension of the picked
-/// type stays (`.psb` for PSD), and so does one that any of the request's `filters` lists
-/// (`art.png` with the PSD type untouched): the user typed a type the app saves. Any other
-/// extension (`scan.2024`) is part of the name, and the type's extension is added after it. With
-/// no type picked the path is as typed. Extensions compare in any letter case.
-// pc: apps/photocraft/src/services.rs:161 with_chosen_type
-pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &[String], filters: &[Filter]) -> PathBuf {
-    let Some(first) = chosen.first() else { return path.to_path_buf() };
-    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
-    let opened_ext = opened_with.and_then(|n| Path::new(n).extension()).and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
-    let first = normal(first);
-    let lists = |ext: &str| filters.iter().any(|f| f.extensions.iter().any(|e| normal(e) == ext));
-    match ext {
-        Some(ext) if chosen.iter().any(|e| normal(e) == ext) => path.to_path_buf(),
-        Some(ext) if opened_ext.as_ref() == Some(&ext) => path.with_extension(first),
-        Some(ext) if lists(&ext) => path.to_path_buf(),
-        _ => {
-            let mut name = path.as_os_str().to_owned();
-            name.push(".");
-            name.push(first);
-            PathBuf::from(name)
-        }
-    }
-}
-
-/// Save on Linux and the BSDs: the portal's dialog, with the name given the extension of the file
-/// type picked. When that changes the name to one that already exists, the dialog opens again
-/// under the new name, so the portal asks before replacing it (it asked only about the typed
-/// name). A portal that can't be reached or can't show the dialog answers
-/// [`SaveOutcome::UseRfd`]; an answer whose file type nothing tells answers
-/// [`SaveOutcome::Unavailable`], never a guess.
+/// Save on Linux and the BSDs: the portal's dialog, answering the typed path and the index of the
+/// file type picked (into `req.filters`); the service settles the name from them. A portal that
+/// can't be reached or can't show the dialog answers [`SaveOutcome::UseRfd`]; an answer whose file
+/// type nothing tells answers [`SaveOutcome::Unavailable`], never a guess.
 // pc: apps/photocraft/src/portal_save.rs:174 save_as, services.rs:244-280; apps/wordcraft/src/portal_save.rs:471 save_as
-pub(crate) fn save_as(mut req: SaveRequest, cancel: &Cancel) -> SaveOutcome {
+pub(crate) fn save_as(req: SaveRequest, cancel: &Cancel) -> SaveOutcome {
     let conn = match zbus::blocking::connection::Builder::session().and_then(|b| b.build()) {
         Ok(conn) => conn,
         Err(e) => return SaveOutcome::UseRfd(e.to_string()),
     };
-    loop {
-        let saved = match save_file(&conn, &req, cancel) {
-            Ok(Decision::Saved(saved)) => saved,
-            Ok(Decision::Cancelled) => return SaveOutcome::Cancelled,
-            Ok(Decision::Retry) => return SaveOutcome::UseRfd(CLOSED_AT_ONCE.into()),
-            Ok(Decision::Unavailable(why)) | Err(why) => return SaveOutcome::UseRfd(why),
-        };
-        let picked = saved.filter.as_deref().and_then(|label| req.filters.iter().position(|f| f.name == label));
-        let chosen = chosen_type(&req.filters, picked);
-        if chosen.is_none() && is_ambiguous(&req.filters, &saved.path) {
-            return SaveOutcome::Unavailable(AMBIGUOUS.into());
-        }
-        // A typed extension is the user's own: `with_chosen_type` keeps one it recognises.
-        let exts: &[String] = chosen.and_then(|i| req.filters.get(i)).map_or(&[], |f| f.extensions.as_slice());
-        let path = with_chosen_type(&saved.path, req.suggested.as_deref(), exts, &req.filters);
-        if path == saved.path || !path.exists() {
-            return SaveOutcome::Saved(path);
-        }
-        req.name = path.file_name().map(|n| n.to_string_lossy().into_owned());
-        req.suggested = req.name.clone();
-        req.folder = path.parent().map(Path::to_path_buf);
-        req.current = picked;
+    let saved = match save_file(&conn, &req, cancel) {
+        Ok(Decision::Saved(saved)) => saved,
+        Ok(Decision::Cancelled) => return SaveOutcome::Cancelled,
+        Ok(Decision::Retry) => return SaveOutcome::UseRfd(CLOSED_AT_ONCE.into()),
+        Ok(Decision::Unavailable(why)) | Err(why) => return SaveOutcome::UseRfd(why),
+    };
+    let picked = saved.filter.as_deref().and_then(|label| req.filters.iter().position(|f| f.name == label));
+    // With one type offered the service takes that one; with several, the typed extension must name one.
+    if picked.is_none() && is_ambiguous(&req.filters, &saved.path) {
+        return SaveOutcome::Unavailable(AMBIGUOUS.into());
     }
+    SaveOutcome::Saved(saved.path, picked)
 }
 
 #[cfg(test)]

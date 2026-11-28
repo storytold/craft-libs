@@ -53,8 +53,23 @@ fn title_row_with_icon_and_subtitle(ui: &mut Ui, _: &mut StoryData) -> StoryOutp
 }
 
 #[story(TitleRow<'static>, covers = [], drive = Drive::Never)]
+fn title_row_with_note(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    TitleRow::new("Properties").strength(HeaderStrength::Heading).note("Changes apply to the selection").show(ui).edit.into()
+}
+
+#[story(TitleRow<'static>, covers = [], drive = Drive::Never)]
 fn title_row_caption(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     TitleRow::new("Preset details").strength(HeaderStrength::Caption).show(ui).edit.into()
+}
+
+#[story(TitleRow<'static>, covers = [], drive = Drive::Never)]
+fn title_row_subheading(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    TitleRow::new("Ellipse Properties:").strength(HeaderStrength::Subheading).show(ui).edit.into()
+}
+
+#[story(TitleRow<'static>, covers = [], drive = Drive::Never)]
+fn title_row_quiet(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    TitleRow::new("Ellipse").strength(HeaderStrength::Quiet).show(ui).edit.into()
 }
 
 #[story(TitleRow<'static>, covers = [], drive = Drive::Never)]

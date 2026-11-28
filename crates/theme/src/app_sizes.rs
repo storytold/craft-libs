@@ -33,6 +33,24 @@ pub struct AppSizes {
     pub text_steps: TextSizeSteps,
 }
 
+/// Base values that follow another's override when an app sets none of their own: a push button stands a control high
+/// in an app that changes the control's height alone, a menu row too, a dialog's footer button a push button high, a
+/// dialog is padded as a panel is, and a page keeps the rhythm of the gaps its own stand in for. Each size set gives
+/// the follower the value it follows.
+pub(crate) const FOLLOWS: [(&str, &str); 11] = [
+    ("size.button", "size.control.md"),
+    ("size.row.menu", "size.control.md"),
+    ("size.dialog.button_height", "size.button"),
+    ("space.pad.dialog", "space.pad.regular"),
+    ("size.page.button", "size.button"),
+    ("size.page.gap.title", "space.gap.tight"),
+    ("size.page.gap.lead", "space.gap.section"),
+    ("size.page.gap.actions", "space.gap.stack"),
+    ("size.page.gap.section", "space.gap.section"),
+    ("size.page.gap.heading", "space.gap.stack"),
+    ("size.page.gap.link", "space.gap.stack"),
+];
+
 /// The base paths an app may override: sizes, spacing, corner radii, strokes and type sizes, not the
 /// edge or fonts.
 pub(crate) fn base_path(path: &str) -> bool {
@@ -80,6 +98,12 @@ impl AppSizes {
         self.all.is_empty() && self.compact.is_empty() && self.comfortable.is_empty()
     }
 
+    /// The override of base value `path` (with no `base.` prefix) in `merged`: its own, else the one of the value it
+    /// follows when it has none, through every step of `FOLLOWS`.
+    pub(crate) fn override_of<'m>(merged: &'m SizeMap, path: &str) -> Option<&'m SizeValue> {
+        merged.get(path).or_else(|| FOLLOWS.iter().find(|(own, _)| *own == path).and_then(|(_, of)| Self::override_of(merged, of)))
+    }
+
     /// The overrides for `size`: `all`, with the set's own map over it.
     pub(crate) fn merged(&self, size: Size) -> SizeMap {
         let own = match size {
@@ -98,7 +122,7 @@ impl AppSizes {
             return;
         }
         for Leaf { path, slot, .. } in leaves(base) {
-            let Some(value) = path.strip_prefix("base.").and_then(|p| merged.get(p)) else { continue };
+            let Some(value) = path.strip_prefix("base.").and_then(|p| Self::override_of(&merged, p)) else { continue };
             let SizeValue::Number(n) = value;
             if let Slot::Num(x) | Slot::Length(x) = slot {
                 *x = *n;

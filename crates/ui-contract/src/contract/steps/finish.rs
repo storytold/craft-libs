@@ -4,6 +4,7 @@ use crate::contract::Mount;
 use crate::contract::cx::CxCore;
 use crate::runtime::commands::{self, FireSource};
 use crate::runtime::egui::response;
+use crate::runtime::pointer;
 use crate::runtime::{layout_memory, windows};
 use craft_behavior::{EditEvent, Mixed};
 use egui::{Context, Id, Response, Ui, Vec2};
@@ -21,9 +22,12 @@ pub(crate) fn before_finish(core: &mut CxCore<'_>, activated: bool, injected: Op
     if activated && let Some(command) = &core.command {
         match injected {
             Some(source) => {
-                commands::fire_resolved(&core.ctx, command, source);
+                commands::fire_resolved(&core.ctx, command, source, pointer::frame(&core.ctx).mods);
             }
-            None => commands::fire_bound(&core.ctx, command),
+            None => {
+                let mods = core.activation.map_or_else(|| pointer::frame(&core.ctx).mods, |activation| activation.mods);
+                commands::fire_bound(&core.ctx, command, mods);
+            }
         }
     }
 }

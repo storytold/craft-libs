@@ -169,3 +169,14 @@ fn diff(old: &str, new: &str) -> String {
     }
     out.join("\n")
 }
+
+/// L-310: at the comfortable density the page view keeps production's 70 pt side margins, 28 pt above the first page and
+/// 14 pt between pages.
+#[test]
+fn comfortable_page_spacing_is_production_s() {
+    let theme = builtins().iter().find(|t| t.id.as_str() == "craft.artcraft").unwrap();
+    let appearance =
+        Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size: Size::Comfortable, text_size: TextSize::Small, reduced_motion: false };
+    let inset = resolve(theme, appearance, None).tokens.space.inset;
+    assert_eq!((inset.page_side, inset.page_margin, inset.page_gap), (70.0, 28.0, 14.0));
+}

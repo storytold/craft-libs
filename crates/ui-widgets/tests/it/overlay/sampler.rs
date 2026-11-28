@@ -422,3 +422,36 @@ fn a_press_under_a_modal_starts_nothing_on_the_canvas() {
     assert!(!scene.took(PointerButton::Primary), "the press stays blocked while the dialog is open");
     assert!(scene.dialog.shown.get(), "the presses leave the dialog open");
 }
+
+/// A press on the canvas a modal dialog keeps open for its gesture is the canvas's (a colour sampled): it does not
+/// nudge the dialog, which stays where it is. A press beside both the dialog and the canvas still nudges it.
+#[trial]
+fn a_press_the_kept_canvas_takes_does_not_nudge_the_dialog() {
+    use craft_ui::testing::snapshot::layer_rects;
+    let mut frames = Frames::new();
+    frames.root(craft_ui::runtime::env::RootEnv::default().motion(craft_behavior::MotionMode::Full));
+    let scene = Scene::new(Arm::Gesture(CanvasGesture::PRIMARY));
+    scene.open_dialog(&mut frames);
+    let rest = layer_rects(&frames.ctx);
+    assert_eq!(rest.len(), 1, "the dialog's layer shows: {rest:?}");
+    let press = |pos, pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    // A press and release at `at`, then a few frames; whether the dialog's layer moved from its rest meanwhile.
+    let moved_by_press = |frames: &mut Frames, at: Pos2| {
+        let mut moved_away = false;
+        for events in [vec![moved(at)], vec![press(at, true)], vec![press(at, false)], vec![], vec![], vec![]] {
+            scene.frame(frames, events);
+            moved_away |= layer_rects(&frames.ctx) != rest;
+        }
+        scene.settle(frames, 20);
+        moved_away
+    };
+
+    assert!(!moved_by_press(&mut frames, CANVAS.center()), "a press the canvas takes does not nudge the dialog");
+    assert!(scene.took(PointerButton::Primary), "the press reached the canvas");
+    scene.assert_dialog_holds(&frames);
+
+    let beside = Pos2::new(760.0, 560.0);
+    assert!(!CANVAS.contains(beside) && !OPENER.contains(beside) && !rest[0].contains(beside), "the point lies beside dialog and canvas");
+    assert!(moved_by_press(&mut frames, beside), "a press beside the dialog and the canvas nudges it");
+    assert!(scene.dialog.shown.get(), "the press beside leaves the dialog open");
+}

@@ -1,5 +1,5 @@
-//! The item step under the layers around it: a multiple selection dragged as one, and a press that shares its frame
-//! with a wheel scroll.
+//! The item step under the layers around it: a multiple selection dragged as one, a row outside it dragged alone, and
+//! a press that shares its frame with a wheel scroll.
 
 use super::kit::{Count, Dismissed, List, ROW_H, Row};
 use craft_behavior::Selection;
@@ -75,6 +75,54 @@ fn dragging_a_selected_range_reorders_every_row_of_it() {
         .collect();
     assert_eq!(moves, [(vec![1, 2], 3)], "rows 1 and 2 land together before the row that followed row 4");
     assert_eq!(selection.borrow().items, [1, 2], "the press on a selected row kept the range for the drag");
+}
+
+/// A plain press on a row outside the selection picks it only when it ends as a click: a drag of the row carries it
+/// alone and leaves the selection as it was, as the old apps picked a row on the click's release.
+#[trial]
+fn dragging_an_unselected_row_moves_it_alone_and_a_click_on_it_picks_it_at_the_release() {
+    let words = Count(8);
+    let (run, selection) = (Run::default(), RefCell::new(Selection::new(vec![1, 2], Some(2), Some(1))));
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            let mut held = selection.borrow().clone();
+            let out =
+                List::new(SelectMode::Multi).reorder().selection(Bind::bound(&mut held)).id_salt("list").show_items(ui, &words, &mut |key, cx| {
+                    run.note(*key, cx.rect);
+                    Row::new()
+                });
+            *selection.borrow_mut() = held;
+            run.take(out);
+        });
+    };
+    frames.idle(3, &mut show);
+    let (from, below) = (run.row(5).center(), run.row(6));
+    let target = Pos2::new(from.x, below.max.y - 1.0);
+    frames.frame(vec![pointer::moved(from)], &mut show);
+    frames.frame(vec![pointer::press(from)], &mut show);
+    assert_eq!(selection.borrow().items, [1, 2], "the press leaves the selection");
+    for step in 1..=4 {
+        frames.frame(vec![pointer::moved(from + (target - from) * (step as f32 / 4.0))], &mut show);
+    }
+    frames.frame(vec![pointer::release(target)], &mut show);
+    frames.idle(2, &mut show);
+    let moves: Vec<Vec<usize>> = run
+        .events
+        .borrow()
+        .iter()
+        .filter_map(|event| if let CollectionEvent::Reorder(edit) = event { edit.value().map(|moved| moved.keys.clone()) } else { None })
+        .collect();
+    assert_eq!(moves, [vec![5]], "the drag moves the pressed row alone");
+    assert_eq!(selection.borrow().items, [1, 2], "the drag leaves the selection");
+
+    let at = run.row(0).center();
+    frames.frame(vec![pointer::moved(at)], &mut show);
+    frames.frame(vec![pointer::press(at)], &mut show);
+    assert_eq!(selection.borrow().items, [1, 2], "the press of a click leaves the selection");
+    frames.frame(vec![pointer::release(at)], &mut show);
+    frames.idle(1, &mut show);
+    assert_eq!(selection.borrow().items, [0], "the click's release picks the row");
 }
 
 /// A press in the frame of a wheel scroll lands on the row the user saw under the pointer.

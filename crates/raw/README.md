@@ -248,6 +248,20 @@ sequence. It is empty for images without a CFA. Active area and crop are `x,y,wi
 crop coordinates relative to the active area. Orientation is the Exif integer code, and baseline
 exposure is the `f64` bit pattern as 16 lowercase hexadecimal digits.
 
+Use `--linearization` before the paths to select schema version 2:
+
+```sh
+cargo run --quiet --locked --release -p craft-raw --example decode_report -- --linearization fixture-a.dng fixture-b.dng > report.tsv
+```
+
+Schema 2 appends `linearization_state` and `linearization_table_sha256`. The state is `absent`,
+`applied`, or `deferred`. A deferred table is carried by the decoder for application after DNG
+`OpcodeList1`. The digest hashes all decoded table entries in index order as little-endian `u16`
+values. It is empty when the table is absent. Both fields are empty for failed inputs. The sample
+digest still describes `RawImage::data`, so two deferred inputs with identical stored samples can
+have the same sample digest and different table digests. Use a `--` separator before the paths to
+pass a path literally when its name matches an option.
+
 Each row's status is `ok`, `read_error`, `input_limit`, `not_raw`, `unsupported`, `corrupt`,
 `decode_limit`, or `tiff_error`. `input_limit` means the encoded-byte cap was exceeded.
 `decode_limit` covers RAW and TIFF decoder limits. A failed input has empty fields after `status`,
@@ -259,10 +273,14 @@ To compare two pinned decoder revisions, use separate clean checkouts and keep t
 enabled features, and ordered fixture list identical. If a revision predates the example, copy both
 `examples/decode_report/main.rs` and `examples/decode_report/report.rs` at the same relative paths
 under that checkout's `crates/raw/` directory. The example uses the crate's existing `sha2` dev
-dependency. It builds on `main` from
+dependency. The schema 2-capable example requires
+[`a99c8f8e`](https://github.com/storytold/craft-libs/commit/a99c8f8e366363ac5ff2f1eee535751610c2c82c)
+or later for `RawImage::linearization_table`. For comparisons involving an older decoder, use
+both example files from [#2417](https://github.com/storytold/craft-libs/pull/2417) in each checkout
+to produce schema 1. Those files require
 [`ecee6933`](https://github.com/storytold/craft-libs/commit/ecee693322c27acdbcafed4b57066356404e8378)
-(#1171, 2026-11-13) onwards, the first revision whose `Cfa` has `origin_x` and `origin_y`. Older
-revisions fail to build it. Build and save one report from each checkout, then compare them.
+or later for `Cfa::origin_x` and `Cfa::origin_y`. Build and save one report from each checkout, then
+compare them.
 
 ```sh
 git diff --no-index -- before.tsv after.tsv

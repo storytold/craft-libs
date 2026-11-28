@@ -6,11 +6,13 @@
 //! row's `.kys` export is an [`super::Options::export_formats`] entry the app writes with
 //! [`craft_keymap::import::kys::write`].
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 
 use craft_keymap::{CommandDef, CommandKind, CommandRef, Keymap};
 
-use super::state::Target;
+use super::state::Review;
 use super::view::area_key;
 use super::{Area, DialogState, ShortcutsDialog};
 
@@ -118,7 +120,7 @@ pub struct DialogSnapshot {
     pub selected: Option<CommandRef>,
     /// Commands whose bindings differ from the defaults, with their binding texts.
     pub overrides: Vec<(CommandRef, Vec<String>)>,
-    /// The conflict bar's chord and the commands holding it, while it shows.
+    /// The pending conflict's chord and the commands holding it. Another prompt or app tab can hide the conflict bar.
     pub conflict: Option<(String, Vec<CommandRef>)>,
     /// Whether a chord is being recorded, and the command it is for.
     pub recording: Option<CommandRef>,
@@ -126,12 +128,102 @@ pub struct DialogSnapshot {
     pub set: Option<String>,
     /// Whether there is an edit to undo.
     pub can_undo: bool,
+    /// Whether Hold Shortcuts is on, with the hold setting shown.
+    pub holds: Option<bool>,
+    /// The command a hold is being recorded for.
+    pub recording_hold: Option<CommandRef>,
+    /// The import review, while it shows.
+    pub review: Option<ReviewSnapshot>,
     /// The chord in the New Shortcut field, as canonical text, while there is one.
     pub pressed: Option<String>,
     /// The commands that hold the pressed chord now.
     pub holders: Vec<CommandRef>,
     /// The selected command's keys as canonical text, as `remove` names them.
     pub keys: Vec<String>,
+}
+
+/// The import review as automation reads it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct ReviewSnapshot {
+    /// The new set's name.
+    pub name: String,
+    /// The set's entries, in source order.
+    pub entries: Vec<ReviewEntry>,
+    /// The undecided codes the plan decoded or the user answered.
+    pub codes: Vec<ReviewCode>,
+    /// How many entries are in each [`ReviewEntry::state`].
+    pub counts: BTreeMap<&'static str, usize>,
+}
+
+/// One entry of the set under review.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct ReviewEntry {
+    /// The source's path of the entry, as the set names it.
+    pub item: String,
+    /// The entry's line in the source file, when the reader gives one.
+    pub line: Option<usize>,
+    /// The command the entry is matched to.
+    pub target: Option<CommandRef>,
+    /// Whether the entry is imported.
+    pub included: bool,
+    /// `ready`, `unmatched`, `unreadable` or `leftOut`.
+    pub state: &'static str,
+}
+
+/// An undecided key or modifier code of the set under review.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct ReviewCode {
+    /// The code, as `key:N` or `mods:N`.
+    pub code: String,
+    /// The chord text the code stands for; `None`: No equivalent.
+    pub text: Option<String>,
+}
+
+impl ReviewSnapshot {
+    fn of(review: &Review) -> ReviewSnapshot {
+        let report = &review.plan.report;
+        let entries: Vec<ReviewEntry> = review
+            .set
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let (item, line) = (entry.item(), entry.line);
+                // Report rows name their entry by its item and line, as `Review::entry_at` finds it.
+                let here = |row_item: &str, row_line: Option<usize>| row_item == item && row_line == line;
+                let included = review.included.get(i).copied().unwrap_or(true);
+                let target = review
+                    .plan
+                    .commands
+                    .iter()
+                    .find(|p| here(&p.item, p.line) || p.bindings.iter().any(|b| here(&b.item, b.line)))
+                    .map(|p| p.command.clone())
+                    .or_else(|| report.matched_without_change.iter().find(|m| here(&m.item, m.line)).map(|m| m.command.clone()));
+                let state = if !included {
+                    "leftOut"
+                } else if report.unreadable.iter().any(|u| here(&u.item, u.line)) {
+                    "unreadable"
+                } else if target.is_none() || report.unmatched.iter().any(|u| here(&u.item, u.line)) {
+                    "unmatched"
+                } else {
+                    "ready"
+                };
+                ReviewEntry { item, line, target, included, state }
+            })
+            .collect();
+        let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+        for entry in &entries {
+            *counts.entry(entry.state).or_default() += 1;
+        }
+        let codes = report.codes.iter().map(|c| ReviewCode { code: c.code.clone(), text: c.text.clone() }).collect();
+        ReviewSnapshot { name: review.name.clone(), entries, codes, counts }
+    }
 }
 
 impl DialogState {
@@ -149,12 +241,13 @@ impl DialogState {
             selected: self.selected.clone(),
             overrides: keymap.overrides().iter().filter_map(|(key, texts)| Some((command(key)?, texts.to_vec()))).collect(),
             conflict: self.conflict.as_ref().map(|c| (c.binding.to_string(), c.holders.iter().map(|h| h.command.clone()).collect())),
-            recording: self.recording.as_ref().and_then(|r| match &r.target {
-                Target::Cell { command, .. } | Target::Field { command } => Some(command.clone()),
-                Target::Search => None,
-            }),
+            recording: self.recording.as_ref().and_then(|r| r.target.command().cloned()),
             set: self.set.clone(),
             can_undo: self.can_undo(),
+            // The switch sets the setting and the keymap's holds in one step, so the keymap's flag is the setting's.
+            holds: self.holds_shown.then(|| keymap.holds()),
+            recording_hold: self.recording.as_ref().filter(|r| r.target.is_hold()).and_then(|r| r.target.command().cloned()),
+            review: self.review.as_ref().map(ReviewSnapshot::of),
             pressed: self.field.as_ref().map(|f| f.binding.to_string()),
             holders: self.field.as_ref().map(|f| f.holders.iter().map(|h| h.command.clone()).collect()).unwrap_or_default(),
             keys: self.selected.as_ref().map(|c| keymap.bindings(c).iter().map(ToString::to_string).collect()).unwrap_or_default(),

@@ -26,8 +26,10 @@ fn icon_limits() -> Limits {
     }
 }
 
-/// The render tree of `svg`, or why it was refused.
-#[doc(hidden)]
+/// The render tree of `svg`, or why it was refused: the suite's one bounded SVG entry point, for icons and for
+/// pictures alike. A gzip stream, a DTD and entity markup are refused; the input is capped at 1 MiB, the XML at
+/// 10,000 nodes and the nesting at 32 levels; an `<image>` resolves to nothing, so a document reads no other file and
+/// embeds no raster or nested SVG.
 pub fn parse(svg: &[u8]) -> Result<usvg::Tree, String> {
     parse_styled(svg, None)
 }

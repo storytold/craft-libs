@@ -21,7 +21,12 @@
 //! first face's baseline, scaled down only if a glyph would leave the row ([`CjkRows::Fit`]).
 //! Monospace, and every family declared [`Family::monospaced`], always keeps its Latin face first. A
 //! craft face with the `mono` role (craft-fonts' monospace face) leads those families when the app
-//! embeds it, ahead of egui's Hack.
+//! embeds it, ahead of egui's Hack. The same way, a craft face with the `signature` role leads the
+//! [`FontRef::signature`] family, which every stack registers and which falls back to the
+//! proportional chain; no other family takes that face. A craft face with the `tab` role
+//! (`Embed::tab_face`, Noto Sans Condensed SemiBold) leads the [`TAB_TITLE`] family, scaled to the
+//! x-height of the semibold family's first face and followed by the semibold family's chain; the
+//! stack has that family only when the app embeds the face and does not use the OS's interface face.
 //! On the suite's egui fork, the other craft faces and installed text faces used as fallbacks sit
 //! on the row's baseline and rows grow to fit them by themselves; emoji and symbol faces stay
 //! centred.
@@ -42,11 +47,12 @@ mod install;
 
 use std::sync::Arc;
 
-use craft_fonts_build::{EmbeddedFace, ServedFace};
+use craft_fonts_build::{EmbeddedFace, MONO_ROLE, SIGNATURE_ROLE, ServedFace};
 use craft_theme::InterfaceFont;
 use egui::{FontData, FontDefinitions, FontFamily, FontProvider};
 
 pub(super) use chain::{EM_SQUARE_SCRIPTS, covers, is_cjk};
+pub(in crate::fonts) use install::record_facts;
 pub(crate) use install::{StackFacts, stack_facts};
 
 use super::FontRef;
@@ -62,6 +68,10 @@ use super::system::ui_face;
 /// proportional family.
 pub const SEMIBOLD: &str = "semibold";
 
+/// The family [`crate::style`] draws the `TabTitle` type role with (document tab titles in the semibold look), led by the
+/// craft face with the `tab` role. Without it, that role draws as the semibold roles do.
+pub const TAB_TITLE: &str = "tab-title";
+
 /// A font family the app uses, beyond what its own faces imply.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -70,6 +80,8 @@ pub struct Family {
     weight: u16,
     lead: Option<String>,
     monospaced: bool,
+    /// The craft-fonts face role that leads the family's chain.
+    lead_role: Option<&'static str>,
 }
 
 impl Family {
@@ -85,11 +97,17 @@ impl Family {
 
     /// egui's monospace family, e.g. to set its weight.
     pub fn monospace() -> Self {
-        Self::of(FontRef::monospace(), true)
+        Self { lead_role: Some(MONO_ROLE), ..Self::of(FontRef::monospace(), true) }
+    }
+
+    /// The family of [`FontRef::signature`], led by craft-fonts' signature face; it orders languages as the
+    /// proportional family does.
+    pub(crate) fn signature() -> Self {
+        Self { lead_role: Some(SIGNATURE_ROLE), ..Self::of(FontRef::signature(), false) }
     }
 
     fn of(family: FontRef, monospaced: bool) -> Self {
-        Self { family: family.family(), weight: REGULAR, lead: None, monospaced }
+        Self { family: family.family(), weight: REGULAR, lead: None, monospaced, lead_role: None }
     }
 
     /// The weight (`wght`) this family's faces draw at: bold craft faces are used from 600 up, and
@@ -107,10 +125,11 @@ impl Family {
     }
 
     /// Lay the family out as egui's monospace one, e.g. `Family::named("mono").monospaced()` for
-    /// an app's own code face: its app face stays first in every UI language, and a family without
-    /// app faces starts with egui's monospace faces.
+    /// an app's own code face: its app face stays first in every UI language, a family without
+    /// app faces starts with egui's monospace faces, and craft-fonts' monospace face leads it.
     pub fn monospaced(mut self) -> Self {
         self.monospaced = true;
+        self.lead_role = Some(MONO_ROLE);
         self
     }
 }

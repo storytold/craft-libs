@@ -11,11 +11,12 @@ use craft_ui::docking::{DockConfig, DockPanels, PanelDrag, PanelSpec, PanelSpecs
 use craft_ui::menu::PanelRow;
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag;
-use craft_ui::testing::in_audit_run;
 use craft_ui::testing::pointer::{moved, press};
 use craft_ui::testing::{
-    Fixture, MemoRun, last_frame_memo_runs, last_pass_derived_builds, last_pass_memo_key_bytes, last_pass_memo_runs, last_pass_runs, trial,
+    Fixture, MemoRun, last_frame_derived_builds, last_frame_memo_runs, last_pass_derived_builds, last_pass_memo_key_bytes, last_pass_memo_runs,
+    last_pass_runs, trial,
 };
+use craft_ui::testing::{audit_replays, in_audit_run};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -511,4 +512,188 @@ fn idle_key_bytes(tabs: usize) -> usize {
 #[trial]
 fn a_docks_idle_key_bytes_do_not_grow_with_its_panels() {
     assert_eq!(idle_key_bytes(4), idle_key_bytes(32), "the tab row's key follows the dock's revisions, not its titles");
+}
+
+/// In the pass a click on another tab of the focused group picks its panel, `focused` names that panel, and so do the
+/// passes after it. Guards against a dock that named the panel the group drew in that pass, the one before the click.
+#[trial]
+fn a_tab_picked_in_the_focused_group_is_the_focused_panel() {
+    let labels = Tracked::new(Labels((0..32).map(|panel| format!("Panel {panel}")).collect()));
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(side_by_side(2)))));
+    let reported = Rc::new(RefCell::new(Vec::new()));
+    let (shown, seen) = (Rc::clone(&workspace), Rc::clone(&reported));
+    let mut panels = Memo { plain: None, plain_runs: Rc::new(Cell::new(0)) };
+    let mut fixture = Fixture::new(move |ui| {
+        let output = DockArea::new("Dock", Bind::bound(&mut *shown.borrow_mut()), &labels, &mut panels, DockConfig::default()).show(ui);
+        seen.borrow_mut().push((output.focused, output.picked));
+    });
+    fixture.room(Vec2::new(1200.0, 600.0)).settle().idle(1);
+    // A click on a tab leaves key focus where it is: Tab moves it into the first group, whose shown panel is panel 0.
+    for _ in 0..4 {
+        if reported.borrow().last() == Some(&(Some(0), None)) {
+            break;
+        }
+        fixture.key(egui::Key::Tab, egui::Modifiers::NONE).idle(1);
+    }
+    assert_eq!(reported.borrow().last(), Some(&(Some(0), None)), "Tab reaches the first group");
+    let tab = |fixture: &Fixture, name: &str| fixture.by_label(name).expect("the first group's tab");
+    let second = tab(&fixture, "Panel 1");
+    fixture.click(&second).idle(3);
+    assert_eq!(reported.borrow().last(), Some(&(Some(1), None)), "the clicked tab's group holds the focus");
+    reported.borrow_mut().clear();
+    let first = tab(&fixture, "Panel 0");
+    fixture.click(&first).idle(3);
+    let reported = reported.borrow();
+    let at = reported.iter().position(|(_, picked)| *picked == Some(0)).expect("the click picks panel 0");
+    assert!(reported[at..].iter().all(|(focused, _)| *focused == Some(0)), "from the pick on, panel 0 is focused: {reported:?}");
+}
+
+/// Panels whose bodies are memoized views and whose host views have versions ([`DockPanels::content`]), one per
+/// panel, in a list a trial moves.
+struct Versioned {
+    versions: Rc<RefCell<Vec<u64>>>,
+}
+
+impl DockPanels<usize> for Versioned {
+    fn body(&mut self, panel: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        let _ = MemoView::new(("body", *panel), BodyProps { panel: *panel }, panel_body).show(ui);
+    }
+
+    fn content(&self, panel: &usize) -> Option<u64> {
+        self.versions.borrow().get(*panel).copied()
+    }
+
+    fn panel_rows(&mut self, _: &usize) -> Vec<PanelRow> {
+        vec![PanelRow::Separator]
+    }
+}
+
+/// A settled dock over `layout` whose panels are [`Versioned`], with the versions and what each pass reported focused.
+struct VersionedDock {
+    fixture: Fixture,
+    versions: Rc<RefCell<Vec<u64>>>,
+    workspace: Rc<RefCell<Arc<Workspace<usize>>>>,
+    focused: Rc<RefCell<Vec<Option<usize>>>>,
+    /// How many docked columns and gesture sources each pass reported.
+    reported: Rc<RefCell<Vec<(usize, usize)>>>,
+}
+
+fn versioned_dock(layout: Layout<usize>) -> VersionedDock {
+    let labels = Tracked::new(Labels((0..32).map(|panel| format!("Panel {panel}")).collect()));
+    let versions = Rc::new(RefCell::new(vec![0; 32]));
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(layout))));
+    let focused = Rc::new(RefCell::new(Vec::new()));
+    let reported = Rc::new(RefCell::new(Vec::new()));
+    let mut panels = Versioned { versions: Rc::clone(&versions) };
+    let (shown, seen, counts) = (Rc::clone(&workspace), Rc::clone(&focused), Rc::clone(&reported));
+    let mut fixture = Fixture::new(move |ui| {
+        let output = DockArea::new("Dock", Bind::bound(&mut *shown.borrow_mut()), &labels, &mut panels, DockConfig::default()).show(ui);
+        seen.borrow_mut().push(output.focused);
+        counts.borrow_mut().push((output.columns.len(), output.sources.len()));
+    });
+    fixture.room(Vec2::new(1200.0, 600.0)).settle().idle(SETTLE);
+    body_runs();
+    spec_reads();
+    focused.borrow_mut().clear();
+    VersionedDock { fixture, versions, workspace, focused, reported }
+}
+
+/// The dock's containers: what a settled dock whose panels all have versions runs none of.
+const CONTAINERS: [&str; 4] = ["SplitArea", "DockColumn", "DockGroup", "IconicColumn"];
+
+/// At rest a dock whose panels all have versions runs none of its containers, whatever its groups and panels: the
+/// docked tree replays as one record, and the floating window's column as its own. The replayed tabs still paint.
+#[trial]
+fn an_idle_versioned_dock_runs_no_dock_container() {
+    let twelve = Layout::new(Some(Node::tabs((0..12).collect(), 0)), Vec::new());
+    for layout in [full(1), full(2), full(3), twelve] {
+        let VersionedDock { mut fixture, .. } = versioned_dock(layout);
+        fixture.frame(Vec::new());
+        assert_eq!(runs_of(&fixture, &CONTAINERS), 0, "an idle dock ran containers: {:?}", last_pass_runs(fixture.ctx()));
+        assert_eq!(memo_of(&fixture, "TreeView"), (0, 1), "the docked tree replays: {:?}", memo_runs(&fixture));
+        assert_eq!(body_runs(), Vec::<usize>::new(), "no body ran");
+        assert!(fixture.texts().iter().any(|text| text.text == "Panel 0"), "the replayed tabs paint their titles");
+    }
+    let VersionedDock { mut fixture, .. } = versioned_dock(full(2));
+    fixture.frame(Vec::new());
+    assert_eq!(memo_of(&fixture, "ColumnView"), (0, 1), "the floating window's column replays: {:?}", memo_runs(&fixture));
+}
+
+/// A new version of one docked column's panel runs that column and its group; the iconic column and the floating
+/// window's column replay.
+#[trial]
+fn a_panel_version_change_runs_only_its_column() {
+    let VersionedDock { mut fixture, versions, .. } = versioned_dock(full(2));
+    versions.borrow_mut()[20] += 1;
+    fixture.frame(Vec::new());
+    assert_eq!(memo_of(&fixture, "ColumnView"), (1, 2), "only panel 20's column ran: {:?}", memo_runs(&fixture));
+    assert_eq!(runs_of(&fixture, &["IconicColumn"]), 0, "the iconic column replays");
+    fixture.frame(Vec::new());
+    assert_eq!(runs_of(&fixture, &CONTAINERS), 0, "and the dock settles again: {:?}", last_pass_runs(fixture.ctx()));
+}
+
+/// The pointer over a docked column's body runs that column and that body; the other columns and bodies replay. The
+/// pointer over a group of the docked tree runs no column.
+#[trial]
+fn the_pointer_over_one_column_runs_only_that_column() {
+    let VersionedDock { mut fixture, .. } = versioned_dock(full(2));
+    let tree = fixture.by_label("Body 0").expect("a tree group's body").center();
+    fixture.frame(vec![moved(tree)]);
+    assert_eq!(memo_of(&fixture, "ColumnView").0, 0, "the pointer over the tree ran a column: {:?}", memo_runs(&fixture));
+    body_runs();
+    let body = fixture.by_label("Body 20").expect("the column's body").center();
+    fixture.frame(vec![moved(body)]);
+    assert_eq!(memo_of(&fixture, "ColumnView"), (1, 2), "only the column under the pointer ran: {:?}", memo_runs(&fixture));
+    // The tree body the pointer left runs once too; of the columns' bodies (panels 20 to 22) only panel 20's runs.
+    let columns: Vec<usize> = body_runs().into_iter().filter(|panel| *panel >= 20).collect();
+    assert_eq!(columns, vec![20], "only panel 20's body ran of the columns' bodies");
+}
+
+/// A pass that runs the docked tree without changing it builds no derived value (the docks' geometry and the tree's
+/// frames included); a column resize builds each of them once.
+#[trial]
+fn the_docks_geometry_builds_once_per_layout_change() {
+    let VersionedDock { mut fixture, workspace, .. } = versioned_dock(full(2));
+    let body = fixture.by_label("Body 0").expect("a tree group's body").center();
+    fixture.frame(vec![moved(body)]);
+    assert!(runs_of(&fixture, &["SplitArea"]) > 0, "the pointer over a tree group runs the tree");
+    assert_eq!(last_pass_derived_builds(fixture.ctx()), Vec::new(), "an unchanged layout builds nothing");
+    Arc::make_mut(&mut workspace.borrow_mut()).apply(Action::resize_column(20, 300.0), false, |_| Permissions::ALL).expect("the column resizes");
+    fixture.frame(Vec::new());
+    let builds = last_frame_derived_builds(fixture.ctx());
+    assert!(!builds.is_empty() && builds.iter().all(|(_, count)| *count == 1), "the resize builds each value once: {builds:?}");
+}
+
+/// Key focus resting in a group of a dock that replays is still reported, pass after pass.
+#[trial]
+fn a_replayed_group_reports_the_focus_it_holds() {
+    let VersionedDock { mut fixture, focused, .. } = versioned_dock(side_by_side(2));
+    for _ in 0..4 {
+        if focused.borrow().last() == Some(&Some(0)) {
+            break;
+        }
+        fixture.key(egui::Key::Tab, egui::Modifiers::NONE).idle(1);
+    }
+    assert_eq!(focused.borrow().last(), Some(&Some(0)), "Tab reaches the first group");
+    focused.borrow_mut().clear();
+    fixture.idle(3);
+    assert_eq!(runs_of(&fixture, &CONTAINERS), 0, "the focused dock replays");
+    assert!(focused.borrow().iter().all(|panel| *panel == Some(0)), "every replay reports the focus: {:?}", focused.borrow());
+}
+
+/// The docked tree and its columns report each column and gesture source once in every pass, and replay what they
+/// ran: the replay audit runs the tree in place of each replay, at rest and through new rooms, where the docks' split
+/// area measures them before it shows them.
+#[trial]
+fn a_measured_versioned_dock_reports_each_column_and_source_once() {
+    let VersionedDock { mut fixture, reported, .. } = versioned_dock(full(2));
+    let settled = *reported.borrow().last().expect("the dock reported");
+    assert_eq!(settled.0, 2, "the dock's two columns are placed");
+    audit_replays(fixture.ctx(), true);
+    reported.borrow_mut().clear();
+    fixture.idle(4);
+    fixture.room(Vec2::new(1100.0, 600.0)).idle(4).room(Vec2::new(1200.0, 640.0)).idle(4);
+    audit_replays(fixture.ctx(), false);
+    let reported = reported.borrow();
+    assert!(reported.iter().all(|counts| *counts == settled), "every pass reports {settled:?}: {reported:?}");
 }

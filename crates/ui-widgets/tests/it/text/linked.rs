@@ -3,7 +3,7 @@
 use craft_behavior::Mixed;
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::testing::{Fixture, trial};
-use craft_ui::text::LinkedFields;
+use craft_ui::text::{LinkMode, LinkedFields};
 use egui::{Key, Modifiers};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -39,4 +39,25 @@ fn typing_into_a_linked_field_keeps_the_starting_ratio() {
     fixture.key(Key::Enter, Modifiers::NONE);
     fixture.idle(2);
     assert_eq!(values.get(), same(100.0, 80.0));
+}
+
+/// Values and a link the host sets between frames apply as set: a link the host turned on and off again before the
+/// pass that sees it turn on sets no field to the first one's value.
+#[trial]
+fn an_equal_link_turned_off_again_leaves_the_values_alone() {
+    let values: Values = Rc::new(Cell::new(same(20.0, 20.0)));
+    let link = Rc::new(Cell::new(false));
+    let (shown, linked) = (values.clone(), link.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut current = shown.get();
+        LinkedFields::new("Scale", Bind::bound(&mut current), Bind::given(linked.get())).mode(LinkMode::Equal).show(ui);
+        shown.set(current);
+    });
+    fixture.settle();
+    link.set(true);
+    fixture.idle(1);
+    values.set(same(20.0, 60.0));
+    link.set(false);
+    fixture.idle(2);
+    assert_eq!(values.get(), same(20.0, 60.0));
 }

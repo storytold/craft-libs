@@ -22,10 +22,10 @@ pub(crate) struct EnvStep {
     pub command: Option<Arc<ResolvedCommand>>,
 }
 
-/// The variant `asked` for, else the style's first, and the variant `C` accepts for it.
-pub(crate) fn variants<C: Component>(asked: Option<Variant>) -> (Variant, Variant) {
+/// The variant `asked` for, else `C`'s default in `env`, else the style's first, and the variant `C` accepts for it.
+pub(crate) fn variants<C: Component>(asked: Option<Variant>, env: &Env) -> (Variant, Variant) {
     let default = <C::Style as ComponentStyle>::VARIANTS.first().copied().unwrap_or(Variant::SECONDARY);
-    let requested = asked.unwrap_or(default);
+    let requested = asked.or_else(|| C::default_variant(env)).unwrap_or(default);
     (requested, accepted_variant::<C::StyleKey, C::Style>(requested).variant)
 }
 
@@ -64,6 +64,7 @@ pub(crate) fn resolved<'p>(id: Id, step: &'p EnvStep, common: &'p Common) -> Res
         keeps_name: common.keeps_name,
         access_key: common.access_key,
         default_stop: common.default_stop,
+        focus_request: common.focus_request,
         ltr_axis: common.ltr_axis,
         sizing: common.sizing,
         pad: 0.0,

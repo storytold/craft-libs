@@ -5,6 +5,7 @@
 //! on or off in place of the platform (`WindowHost::set_caps_lock`).
 
 use crate::runtime::memory::{global, with_session};
+use crate::runtime::windows::WindowHost;
 use egui::Context;
 
 #[derive(Clone, Default)]
@@ -28,7 +29,7 @@ pub(crate) fn caps_on(ctx: &Context) -> bool {
     let pass = ctx.cumulative_pass_nr();
     with_session(ctx, global("craft-ui lock keys", ()), |reading: &mut Reading| {
         if reading.pass != Some(pass) {
-            *reading = Reading { pass: Some(pass), caps: craft_window::caps_lock() };
+            *reading = Reading { pass: Some(pass), caps: craft_window::caps_lock(WindowHost::of(ctx).shell().backend) };
         }
         reading.caps
     })

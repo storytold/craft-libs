@@ -52,3 +52,30 @@ fn another_writer_is_a_change_and_an_own_save_is_not() {
     settle(&mut watch);
     assert!(watch.take_changes().is_empty());
 }
+
+// A permission change (or a Finder tag, LaunchServices) moves only the Unix change time. With
+// the bytes the app saved still on disk that is no edit, so Save doesn't ask about a change
+// nobody made; different bytes, or none to compare, are still a difference.
+#[cfg(unix)]
+#[test]
+fn a_stamp_that_differs_only_in_metadata_is_not_a_content_change() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = TempDir::new("craft-watch-test").unwrap();
+    let path = file(&dir, "doc.txt", "saved");
+    let mut watch = watcher();
+    watch.known_now(1, &path);
+    let before = FileStamp::at(&path).unwrap();
+    // Past the change time's resolution on every common file system.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode ^ 0o004)).unwrap();
+    let after = FileStamp::at(&path).unwrap();
+    assert!(after != before && after.metadata_only_change(before), "only the change time moved");
+
+    assert!(!watch.disk_differs(&1, &path, Some(b"saved")));
+    assert!(watch.disk_differs(&1, &path, Some(b"other")));
+    assert!(watch.disk_differs(&1, &path, None), "nothing to compare with");
+
+    std::fs::write(&path, "edits").unwrap();
+    assert!(watch.disk_differs(&1, &path, Some(b"saved")), "a content edit");
+}

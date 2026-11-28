@@ -9,8 +9,8 @@ pub(crate) fn write_label_patch(ctx: &Context, patch: &LabelPatch) {
     match patch {
         LabelPatch::Label { id, text, disabled } => {
             ctx.accesskit_node_builder(*id, |node| {
-                // A shown label's leaf wrote its node, named, in this pass; a hidden label has no component, and its
-                // node is made here, named by the same rule.
+                // The label's leaf wrote its node, named, in this pass; one it did not write is made here, named by the
+                // same rule.
                 if node.role() == accesskit::Role::Unknown {
                     node.set_role(accesskit::Role::Label);
                     super::node::write_name(node, text);
@@ -30,7 +30,9 @@ pub(crate) fn write_label_patch(ctx: &Context, patch: &LabelPatch) {
         LabelPatch::LabelledBy { node, label, text } => {
             ctx.accesskit_node_builder(*node, |node| {
                 node.set_label(text.clone());
-                node.set_labelled_by(vec![label.accesskit_id()]);
+                if let Some(label) = label {
+                    node.set_labelled_by(vec![label.accesskit_id()]);
+                }
             });
         }
         LabelPatch::GroupLabelledBy { container, label } => {

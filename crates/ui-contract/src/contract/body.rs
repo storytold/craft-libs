@@ -33,11 +33,10 @@ pub use regions::pad_of;
 #[doc(hidden)]
 pub use reorder::REORDER_BAND;
 pub use scroll::{STRIP_BACK, STRIP_FORWARD};
-#[cfg(feature = "suite")]
 pub(crate) use window::MOVE_BAND;
 use window::WindowMode;
 pub use window::grip_band;
-pub(crate) use window::keep_inside;
+pub use window::keep_inside;
 
 /// The scroll region's view in the last pass that showed it.
 #[derive(Clone, Default)]
@@ -80,6 +79,10 @@ pub(super) struct BodyHooks<'b> {
     overflow: f32,
     /// The room the mount offers, in which a content-sized body runs.
     room: Vec2,
+    /// What the view of a scroll area around the container shows along x from the container's start
+    /// (`layout::view_room`), where that view scrolls along x and leaves the container's width unbounded: the rows of
+    /// its body shrink to it.
+    view_room: Option<f32>,
     open: bool,
     open_at_read: bool,
     open_bound: bool,
@@ -128,6 +131,10 @@ pub(super) struct BodyHooks<'b> {
     /// found it has to run again at (`ColumnGroup::scope_measured`).
     settle: Option<crate::layout::Columns>,
     unsettled: Option<crate::layout::Columns>,
+    /// How far the ranked units of an end region that joins the body's fit (`EndRegion::fit`) give way in the
+    /// measuring run's second sweep, and the body's shortfall a first sweep found.
+    end_fit: Option<f32>,
+    end_unfit: Option<f32>,
     extent: Option<Vec2>,
     /// The content extent a measuring run found that leaves another view than the one the run laid the content out
     /// for: the run lays it out again at that view.
@@ -166,6 +173,9 @@ pub(super) struct BodyHooks<'b> {
     /// The container is a row of a vertical flow, not a member of a row's line (`label::in_column`), as its parent
     /// flow showed it this run: its own measuring run shows its content in a flow of its own.
     in_column: bool,
+    /// The container is shown in a cell of an `egui::Grid` (`LabelIn::egui_cell`), as its parent flow showed it this
+    /// run: its label is decided at its own width.
+    egui_cell: bool,
     /// The line just before the container in its flow is a rule (`layout::flow_start`), as its parent flow showed it
     /// this run: a rule above its header is not drawn, so two rules never follow each other.
     after_rule: bool,
@@ -174,9 +184,10 @@ pub(super) struct BodyHooks<'b> {
 }
 
 impl<'b> BodyHooks<'b> {
-    /// The hooks of `comp`'s run, over its props as they are now.
-    pub(super) fn of<C: super::Container>(comp: &C, body: &'b mut dyn FnMut(&mut Ui, &mut BodyCx<'_>)) -> Self {
-        Self::new(body, Arc::new(comp.props(super::Internal::new()).clone()))
+    /// The hooks of `comp`'s run, over its props as they are now. They live on the heap: the run holds them while its
+    /// children run.
+    pub(super) fn of<C: super::Container>(comp: &C, body: &'b mut dyn FnMut(&mut Ui, &mut BodyCx<'_>)) -> Box<Self> {
+        Box::new(Self::new(body, Arc::new(comp.props(super::Internal::new()).clone())))
     }
 
     pub(super) fn new(body: &'b mut dyn FnMut(&mut Ui, &mut BodyCx<'_>), props: Arc<ContainerProps>) -> Self {
@@ -198,6 +209,7 @@ impl<'b> BodyHooks<'b> {
             least_width: 0.0,
             overflow: 0.0,
             room: Vec2::ZERO,
+            view_room: None,
             open: true,
             open_at_read: true,
             open_bound: false,
@@ -228,6 +240,8 @@ impl<'b> BodyHooks<'b> {
             reached: None,
             settle: None,
             unsettled: None,
+            end_fit: None,
+            end_unfit: None,
             extent: None,
             view_moves: None,
             view: None,
@@ -245,6 +259,7 @@ impl<'b> BodyHooks<'b> {
             held: false,
             across: false,
             in_column: true,
+            egui_cell: false,
             after_rule: false,
             follows_end: false,
         }

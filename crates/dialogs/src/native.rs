@@ -63,10 +63,13 @@ pub(crate) fn show<W: HasWindowHandle + HasDisplayHandle>(request: Request, pare
 
 fn show_file<W: HasWindowHandle + HasDisplayHandle>(d: FileDialog, parent: Option<&W>, reply: Reply) -> Shown {
     #[cfg(target_os = "macos")]
-    let parent = match d.kind {
+    let (parent, reply) = match d.kind {
         Kind::Open { .. } | Kind::Folder => return Shown { panel: crate::macos::show_panel(&d, reply) },
         Kind::Save => match crate::macos::sheet_parent(parent) {
-            Ok(parent) => Some(parent),
+            Ok(parent) => match crate::macos::show_save_sheet(&d, parent, reply) {
+                Ok(()) => return Shown::default(),
+                Err(reply) => (Some(parent), reply),
+            },
             Err(why) => {
                 reply.send(Answer::Unavailable(why));
                 return Shown::default();
@@ -105,7 +108,7 @@ fn show_file<W: HasWindowHandle + HasDisplayHandle>(d: FileDialog, parent: Optio
             let shown = Shown { cancel: Some(cancel.clone()) };
             let pending: Pending = Box::pin(async move {
                 match crate::portal::save_as(request, &cancel) {
-                    crate::portal::SaveOutcome::Saved(path) => Answer::Paths(vec![path]),
+                    crate::portal::SaveOutcome::Saved(path, filter) => Answer::Saved { path, filter },
                     crate::portal::SaveOutcome::Cancelled => Answer::Cancelled,
                     crate::portal::SaveOutcome::Unavailable(why) => Answer::Unavailable(why),
                     crate::portal::SaveOutcome::UseRfd(why) => {
@@ -129,6 +132,7 @@ fn show_file<W: HasWindowHandle + HasDisplayHandle>(d: FileDialog, parent: Optio
 /// runs where the dialog is to show.
 fn rfd_pick(dialog: rfd::AsyncFileDialog, kind: Kind) -> Pending {
     let one = |file: Option<rfd::FileHandle>| file.map_or(Answer::Cancelled, |f| Answer::Paths(vec![f.path().to_path_buf()]));
+    let saved = |file: Option<rfd::FileHandle>| file.map_or(Answer::Cancelled, |f| Answer::Saved { path: f.path().to_path_buf(), filter: None });
     match kind {
         Kind::Open { multiple: false } => {
             let picked = dialog.pick_file();
@@ -149,7 +153,7 @@ fn rfd_pick(dialog: rfd::AsyncFileDialog, kind: Kind) -> Pending {
         }
         Kind::Save => {
             let picked = dialog.save_file();
-            Box::pin(async move { one(picked.await) })
+            Box::pin(async move { saved(picked.await) })
         }
     }
 }

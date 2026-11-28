@@ -1,7 +1,7 @@
 //! The ruler's drawing.
 
 use super::geometry::glyph;
-use super::items::{Item, SELECTOR};
+use super::items::{RulerItem, SELECTOR};
 use super::run::{Held, ruler_text};
 use super::{TextRuler, TextRulerStyle};
 use craft_ui::canvas::{RulerTick, Rulers, TickRule};
@@ -37,7 +37,7 @@ impl TextRuler<'_> {
             }
         }
 
-        let items = Item::all(&values);
+        let items = RulerItem::all(&values);
         let column_boxes: Vec<Rect> = self.columns.iter().map(|at| shapes.column_marker(g.strip, g.x(*at))).collect();
         let keep_clear: Vec<Rect> = items.iter().map(|item| shapes.rect(&g, *item, &values)).chain(column_boxes.iter().copied()).collect();
         self.paint_ticks(ui, cx, &keep_clear);
@@ -45,8 +45,8 @@ impl TextRuler<'_> {
         let draw = ui.draw();
         let base = g.strip.max.y;
         for (at, stop) in values.stops.iter().enumerate() {
-            let off = held.off && held.now == Some(Item::Stop(at));
-            let line = if off { style.marker_off } else { cx.resolve_part(Item::Stop(at).part(), &style.marker) };
+            let off = held.off && held.now == Some(RulerItem::Stop(at));
+            let line = if off { style.marker_off } else { cx.resolve_part(RulerItem::Stop(at).part(), &style.marker) };
             let (segments, dot) = glyph(&shapes, g.x(stop.position), base, stop.align, g.right_to_left);
             for [a, b] in segments {
                 draw.stroke(&path(a, b), StrokeWidth::Thin, line);
@@ -77,23 +77,23 @@ impl TextRuler<'_> {
                 draw.text(boxed, &run);
             }
         }
-        let x = |item: Item| g.x(item.position(&values, g.width));
-        let line = |item: Item| cx.resolve_part(item.part(), &style.marker);
-        let triangle = |a: Pos2, b: Pos2, c: Pos2, item: Item| {
+        let x = |item: RulerItem| g.x(item.position(&values, g.width));
+        let line = |item: RulerItem| cx.resolve_part(item.part(), &style.marker);
+        let triangle = |a: Pos2, b: Pos2, c: Pos2, item: RulerItem| {
             let shape = PaintShape::Polygon(vec![a, b, c]);
             draw.fill(&shape, style.marker_fill);
             draw.stroke(&shape, StrokeWidth::Thin, line(item));
         };
-        let (first, left, right) = (x(Item::FirstLine), x(Item::LeftBox), x(Item::Right));
+        let (first, left, right) = (x(RulerItem::FirstLine), x(RulerItem::LeftBox), x(RulerItem::Right));
         let top = shapes.first_line(g.strip, first);
-        triangle(top.left_top(), top.right_top(), pos2(first, top.max.y), Item::FirstLine);
+        triangle(top.left_top(), top.right_top(), pos2(first, top.max.y), RulerItem::FirstLine);
         let hanging = shapes.hanging(g.strip, left);
-        triangle(hanging.left_bottom(), hanging.right_bottom(), pos2(left, hanging.min.y), Item::Hanging);
+        triangle(hanging.left_bottom(), hanging.right_bottom(), pos2(left, hanging.min.y), RulerItem::Hanging);
         let boxed = rect(shapes.left_box(g.strip, left));
         draw.fill(&boxed, style.marker_fill);
-        draw.stroke(&boxed, StrokeWidth::Thin, line(Item::LeftBox));
+        draw.stroke(&boxed, StrokeWidth::Thin, line(RulerItem::LeftBox));
         let end = shapes.right(g.strip, right);
-        triangle(end.left_bottom(), end.right_bottom(), pos2(right, end.min.y), Item::Right);
+        triangle(end.left_bottom(), end.right_bottom(), pos2(right, end.min.y), RulerItem::Right);
 
         if let (Some(kind), Some(corner)) = (self.kind, layout.corner) {
             // The corner continues the strip round it, the box is the column's colour.

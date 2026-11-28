@@ -322,7 +322,7 @@ fn a_finished_update_is_announced_once_by_the_version_it_installed() {
 #[trial]
 fn a_check_answering_during_an_update_reports_the_update() {
     let ctx = egui::Context::default();
-    for answer in [Ok(None), Err("offline".to_owned()), Ok(Some((newer(), false)))] {
+    for answer in [Ok(None), Err("offline".into()), Ok(Some((newer(), false)))] {
         let mut u = updater(Ok(None));
         offer_now(&mut u);
         u.check_now();
@@ -367,6 +367,29 @@ fn a_failed_install_ends_the_installing_status() {
     u.tick(&ctx);
     assert_eq!(u.status(), &Status::Idle);
     assert_eq!(u.prompt.as_ref().and_then(Offer::message).as_deref(), Some("disk full"));
+}
+
+/// A source set with `with_check` is passed the app and the version the updater compares, so
+/// it decides on them without working them out again.
+#[trial]
+fn a_check_source_is_passed_the_app_and_running_version() {
+    let seen = Arc::new(Mutex::new(None));
+    let source: ContextSource = {
+        let seen = Arc::clone(&seen);
+        Arc::new(move |check: &CheckContext| {
+            *seen.lock().unwrap() = Some(check.clone());
+            let running = crate::version::parse(&check.version);
+            let offered = newer();
+            Ok(offered.version.as_ref().zip(running.as_ref()).is_some_and(|(new, cur)| crate::is_newer(new, cur)).then_some(offered))
+        })
+    };
+    let ctx = egui::Context::default();
+    let mut u = Updater::new(&PHOTOCRAFT, "0.1.0").with_check(source).with_pins_path(no_pins()).with_probe(Arc::new(|_, _| false));
+    u.check_now();
+    u.settle_for_tests(&ctx);
+    let seen = seen.lock().unwrap().clone().expect("the check asked its source");
+    assert_eq!(seen, CheckContext { app: &PHOTOCRAFT, version: u.version.clone() });
+    assert!(u.prompt_open(), "the release the source found for that version is offered");
 }
 
 /// A helper that started while the app kept running and then failed is found by the next

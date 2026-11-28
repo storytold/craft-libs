@@ -20,7 +20,9 @@ mod thumbnails;
 pub use thumbnails::FakeThumbSource;
 #[cfg(feature = "testing")]
 pub(crate) use thumbnails::fake_thumb_image;
-pub use thumbnails::{ThumbFit, ThumbJob, ThumbPaint, ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails, fit_rect, thumb_image};
+pub use thumbnails::{
+    StateLook, ThumbFit, ThumbJob, ThumbPaint, ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails, fit_rect, thumb_image,
+};
 
 use crate::runtime::egui::{memory, pass, textures};
 use egui::{Color32, ColorImage, Context, TextureHandle, TextureId, TextureOptions};

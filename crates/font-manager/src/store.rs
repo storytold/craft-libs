@@ -13,9 +13,10 @@ use std::sync::{Condvar, Mutex};
 
 #[cfg(not(target_arch = "wasm32"))]
 use craft_font_catalog::Catalog;
-pub use craft_font_store::UserSource;
+pub use craft_font_store::PreviewStore;
 #[cfg(not(target_arch = "wasm32"))]
 use craft_font_store::{Cancel, Client, Face, FontStore, Network, PINNED_INDEX, verify_font};
+pub use craft_font_store::{Conflict, LegalText, PREVIEW_SERVICE_ENV, PreviewServiceSource, UserSource};
 
 use crate::index::{Family, Index};
 
@@ -96,12 +97,24 @@ impl std::fmt::Display for StoreError {
 
 impl std::error::Error for StoreError {}
 
+/// What [`Installer::make_available`] did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MadeAvailable {
+    /// The family's copies are in the OS user font folder.
+    Done,
+    /// Refused, changing nothing: fonts on the system already have the family's PostScript
+    /// names, or sit where its copies would go.
+    Refused(Vec<Conflict>),
+}
+
 fn err(e: impl std::fmt::Display) -> StoreError {
     StoreError(e.to_string())
 }
 
-/// The font store. Calls block; the app makes the downloading ones on a worker thread.
-pub trait Installer: Send + Sync {
+/// The font store. Calls block; the app makes the downloading ones on a worker thread. What the preview pool reads
+/// (the preview service, the previews setting, the HTTP client and the cache folder) is its [`PreviewStore`] part.
+pub trait Installer: PreviewStore {
     /// Has the user allowed downloads? The setting is the whole suite's.
     fn downloads_allowed(&self) -> bool;
 
@@ -147,15 +160,116 @@ pub trait Installer: Send + Sync {
     fn remove_user_source(&self, _url: &str) -> Result<(), StoreError> {
         Err(StoreError(NO_FOLDER.into()))
     }
+
+    /// Where [`PreviewStore::preview_service`] comes from: the environment variable (the setting
+    /// can't change it), the saved setting, the host's default
+    /// ([`PreviewServiceSource::Default`]), or nowhere.
+    fn preview_service_source(&self) -> PreviewServiceSource {
+        PreviewServiceSource::None
+    }
+
+    /// Turns previews on or off, as the user's own action.
+    fn set_previews_enabled(&self, _enabled: bool) -> Result<(), StoreError> {
+        Err(StoreError(NO_FOLDER.into()))
+    }
+
+    /// Sets or clears the preview service (https, or http for a loopback host), as the user's own
+    /// action.
+    fn set_preview_service(&self, _url: Option<&str>) -> Result<(), StoreError> {
+        Err(StoreError(NO_FOLDER.into()))
+    }
+
+    /// The text of `family`'s licence or NOTICE file: the installed copy, else downloaded when
+    /// downloads are allowed. `None` when the family has no such file.
+    fn legal_text(&self, _index: &Index, _family: &Family, _which: LegalText) -> Result<Option<String>, StoreError> {
+        Err(StoreError(NO_FOLDER.into()))
+    }
+
+    /// Whether store families can be made available to all apps (copied into the OS user font
+    /// folder). The interface offers the action only when this is true.
+    fn available_to_all_supported(&self) -> bool {
+        false
+    }
+
+    /// Why store families can't be made available to all apps here, in English; `None` when they
+    /// can.
+    fn available_to_all_unsupported(&self) -> Option<String> {
+        (!self.available_to_all_supported()).then(|| NOT_HERE.to_owned())
+    }
+
+    /// Whether the user keeps store fonts in Craft apps only by default (a setting of the font
+    /// store, off by default): what a plain Install does with a family that has no choice of its
+    /// own ([`Installer::available_to_all_choice`]).
+    fn craft_apps_only(&self) -> bool {
+        false
+    }
+
+    /// Sets [`Installer::craft_apps_only`], as the user's own action. Installed families keep
+    /// their choice and their copies.
+    fn set_craft_apps_only(&self, _on: bool) -> Result<(), StoreError> {
+        Err(StoreError(NO_FOLDER.into()))
+    }
+
+    /// The installed store families, by name, each with its folder in the store (which tells
+    /// families of the same name from different sources apart, as `files` below).
+    fn store_families(&self) -> Vec<(String, Vec<PathBuf>)> {
+        Vec::new()
+    }
+
+    /// The user's choice for the store family `family`: available to all apps (`true`) or kept
+    /// in Craft apps only (`false`). `None` when none is recorded (installed before the choice
+    /// existed, or by an agent): [`Installer::craft_apps_only`] decides.
+    fn available_to_all_choice(&self, _family: &str, _files: &[PathBuf]) -> Option<bool> {
+        None
+    }
+
+    /// Records [`Installer::available_to_all_choice`], as the user's own action. It neither copies
+    /// nor withdraws the family.
+    fn set_available_to_all_choice(&self, _family: &str, _files: &[PathBuf], _on: bool) -> Result<(), StoreError> {
+        Err(StoreError(NOT_HERE.into()))
+    }
+
+    /// Whether the store family `family` belongs in the OS user font folder: its own choice, else
+    /// the default; never where families can't be copied there.
+    fn shares(&self, family: &str, files: &[PathBuf]) -> bool {
+        self.available_to_all_supported() && self.available_to_all_choice(family, files).unwrap_or(!self.craft_apps_only())
+    }
+
+    /// Whether the store family `family` (its name, and the files the catalog found for it in
+    /// the font store) is available to all apps. Cheap enough to call for every row.
+    fn is_available_to_all(&self, _family: &str, _files: &[PathBuf]) -> bool {
+        false
+    }
+
+    /// The files of an available store family not available to all apps yet (styles an agent
+    /// installed, say), by their names in the store, for the interface to offer copying them.
+    fn not_yet_available(&self, _family: &str, _files: &[PathBuf]) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Makes a store family available to all apps, as the user's own action; calling it again
+    /// copies the styles [`Installer::not_yet_available`] lists. A font on the system with one of
+    /// its PostScript names refuses it ([`MadeAvailable::Refused`]). It blocks (hashing, copying,
+    /// a catalog rescan): call it on a worker thread.
+    fn make_available(&self, _family: &str, _files: &[PathBuf]) -> Result<MadeAvailable, StoreError> {
+        Err(StoreError(NOT_HERE.into()))
+    }
+
+    /// Takes a store family's copies out of the OS user font folder, as the user's own action.
+    /// Returns the copies left in place because they changed since. It blocks: call it on a
+    /// worker thread.
+    fn withdraw(&self, _family: &str, _files: &[PathBuf]) -> Result<Vec<PathBuf>, StoreError> {
+        Err(StoreError(NOT_HERE.into()))
+    }
 }
 
 const NO_FOLDER: &str = "there is no folder for the font store";
+const NOT_HERE: &str = "fonts can't be made available to all apps here";
 
 #[cfg(not(target_arch = "wasm32"))]
 /// craft-font-store's store, in the user's font store folder.
 pub struct SuiteStore {
     store: FontStore,
-    client: Client,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -163,20 +277,46 @@ impl SuiteStore {
     /// The store the catalog's environment names, rescanning `catalog` after each change.
     pub fn for_user(catalog: Arc<Catalog>) -> Option<SuiteStore> {
         let store = FontStore::for_user(catalog.env())?.with_catalog(catalog);
-        Some(SuiteStore { store, client: Client::default() })
+        Some(SuiteStore { store })
     }
 
-    /// The store's source and name for the family holding `files`, which can differ from the
-    /// name in the fonts themselves.
-    fn installed_name(&self, request: &RemoveRequest) -> Option<(String, String)> {
+    /// Uses `url` as the preview service while neither [`PREVIEW_SERVICE_ENV`] nor the user's
+    /// setting names one; see [`FontStore::with_default_preview_service`]. Never saved.
+    pub fn with_default_preview_service(self, url: &str) -> SuiteStore {
+        SuiteStore { store: self.store.with_default_preview_service(url) }
+    }
+
+    /// Uses `network` for "Allow font downloads" while the user hasn't chosen; see
+    /// [`FontStore::with_default_network`]. Never saved.
+    pub fn with_default_network(self, network: Network) -> SuiteStore {
+        SuiteStore { store: self.store.with_default_network(network) }
+    }
+
+    /// The store's HTTP client. Clones share the preview service's down state with installs;
+    /// [`Previews::new`](craft_font_store::preview::Previews::new) takes it through [`PreviewStore::http_client`].
+    pub fn client(&self) -> Client {
+        self.store.client()
+    }
+
+    /// The store's source and name for the family `family` holding `files`, which can differ
+    /// from the name in the fonts themselves.
+    fn installed_name(&self, family: &str, files: &[PathBuf]) -> Option<(String, String)> {
+        self.installed_entry(family, files).map(|f| (f.source, f.family))
+    }
+
+    fn installed_entry(&self, family: &str, files: &[PathBuf]) -> Option<craft_font_store::InstalledFamily> {
         let dir = self.store.dir();
-        let installed = self.store.installed();
-        let lower = request.family.to_lowercase();
-        installed
+        let mut installed = self.store.installed();
+        let lower = family.to_lowercase();
+        let pos = installed
             .iter()
-            .find(|f| request.files.iter().any(|path| path.starts_with(dir.join(&f.dir))))
-            .or_else(|| installed.iter().find(|f| f.family.to_lowercase() == lower))
-            .map(|f| (f.source.clone(), f.family.clone()))
+            .position(|f| files.iter().any(|path| path.starts_with(dir.join(&f.dir))))
+            .or_else(|| installed.iter().position(|f| f.family.to_lowercase() == lower))?;
+        Some(installed.swap_remove(pos))
+    }
+
+    fn found(&self, family: &str, files: &[PathBuf]) -> Result<(String, String), StoreError> {
+        self.installed_name(family, files).ok_or_else(|| err(craft_font_store::Error::NotInstalled(family.to_owned())))
     }
 }
 
@@ -202,7 +342,7 @@ impl Installer for SuiteStore {
     }
 
     fn remove(&self, request: &RemoveRequest) -> Result<(), StoreError> {
-        let (source, name) = self.installed_name(request).ok_or_else(|| err(craft_font_store::Error::NotInstalled(request.family.clone())))?;
+        let (source, name) = self.found(&request.family, &request.files)?;
         if request.whole {
             return self.store.remove_family(&source, &name).map_err(err);
         }
@@ -222,7 +362,7 @@ impl Installer for SuiteStore {
             let mut reasons = Vec::new();
             for url in index.file_urls(family, file) {
                 let mut on_bytes = |n: u64| progress(Progress { done: before.saturating_add(n), total });
-                match self.client.get(&url, file.size, &cancel, &mut on_bytes) {
+                match self.store.client().get(&url, file.size, &cancel, &mut on_bytes) {
                     Ok(bytes) => match verify_font(file, &bytes) {
                         Ok(()) => {
                             out.push(Downloaded { path: file.path.clone(), bytes });
@@ -261,10 +401,100 @@ impl Installer for SuiteStore {
     fn remove_user_source(&self, url: &str) -> Result<(), StoreError> {
         self.store.remove_user_source(url).map_err(err)
     }
+
+    fn preview_service_source(&self) -> PreviewServiceSource {
+        self.store.preview_service_source()
+    }
+
+    fn set_preview_service(&self, url: Option<&str>) -> Result<(), StoreError> {
+        self.store.set_preview_service(url).map_err(err)
+    }
+
+    fn set_previews_enabled(&self, enabled: bool) -> Result<(), StoreError> {
+        self.store.set_previews_enabled(enabled).map_err(err)
+    }
+
+    fn legal_text(&self, index: &Index, family: &Family, which: LegalText) -> Result<Option<String>, StoreError> {
+        self.store.legal_text(index, family, which, &Cancel::new()).map_err(err)
+    }
+
+    fn available_to_all_supported(&self) -> bool {
+        self.store.available_to_all_supported()
+    }
+
+    fn available_to_all_unsupported(&self) -> Option<String> {
+        self.store.available_to_all_unsupported().map(str::to_owned)
+    }
+
+    fn craft_apps_only(&self) -> bool {
+        self.store.craft_apps_only()
+    }
+
+    fn set_craft_apps_only(&self, on: bool) -> Result<(), StoreError> {
+        self.store.set_craft_apps_only(on).map_err(err)
+    }
+
+    fn store_families(&self) -> Vec<(String, Vec<PathBuf>)> {
+        let dir = self.store.dir();
+        self.store.installed().into_iter().map(|f| (f.family, vec![dir.join(&f.dir)])).collect()
+    }
+
+    fn available_to_all_choice(&self, family: &str, files: &[PathBuf]) -> Option<bool> {
+        self.installed_entry(family, files)?.available_to_all
+    }
+
+    fn set_available_to_all_choice(&self, family: &str, files: &[PathBuf], on: bool) -> Result<(), StoreError> {
+        let (source, name) = self.found(family, files)?;
+        self.store.set_available_to_all_choice(&source, &name, on).map_err(err)
+    }
+
+    fn is_available_to_all(&self, family: &str, files: &[PathBuf]) -> bool {
+        self.store.available_family_holding(family, files).is_some()
+    }
+
+    fn not_yet_available(&self, family: &str, files: &[PathBuf]) -> Vec<String> {
+        self.installed_name(family, files).map(|(source, name)| self.store.pending_files(&source, &name)).unwrap_or_default()
+    }
+
+    fn make_available(&self, family: &str, files: &[PathBuf]) -> Result<MadeAvailable, StoreError> {
+        let (source, name) = self.found(family, files)?;
+        match self.store.make_available(&source, &name) {
+            Ok(_) => Ok(MadeAvailable::Done),
+            Err(craft_font_store::Error::Conflict(conflicts)) => Ok(MadeAvailable::Refused(conflicts)),
+            Err(e) => Err(err(e)),
+        }
+    }
+
+    fn withdraw(&self, family: &str, files: &[PathBuf]) -> Result<Vec<PathBuf>, StoreError> {
+        // A family an unsupported build removed keeps its ledger entry and copies.
+        let (source, name) = self.found(family, files).or_else(|e| self.store.available_family_holding(family, files).ok_or(e))?;
+        self.store.withdraw(&source, &name).map_err(err)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PreviewStore for SuiteStore {
+    fn preview_service(&self) -> Option<String> {
+        self.store.preview_service()
+    }
+
+    fn http_client(&self) -> Option<Client> {
+        Some(self.store.client())
+    }
+
+    fn previews_enabled(&self) -> bool {
+        self.store.previews_enabled()
+    }
+
+    fn preview_cache(&self) -> Option<PathBuf> {
+        Some(self.store.previews_dir())
+    }
 }
 
 /// The store when the system names no folder for it (no home folder): nothing installs.
 pub struct NoStore;
+
+impl PreviewStore for NoStore {}
 
 impl Installer for NoStore {
     fn downloads_allowed(&self) -> bool {

@@ -6,10 +6,11 @@ use std::sync::Arc;
 
 use craft_behavior::{CancelReason, PixelSize};
 use craft_imaging::ui::liquify::{
-    LiquifyBrush, LiquifyEvent, LiquifyMesh, LiquifyOpen, LiquifySettings, LiquifySource, LiquifyTool, LiquifyWorkspace, MeshSize, StrokeEvent,
-    StrokeRecorder,
+    LiquifyBrush, LiquifyEvent, LiquifyMesh, LiquifyOpen, LiquifyPanel, LiquifySettings, LiquifySource, LiquifyTool, LiquifyWorkspace, MeshSize,
+    StrokeEvent, StrokeRecorder,
 };
 use craft_ui::canvas::{PixelRect, RasterSource};
+use craft_ui::contract::Bind;
 use craft_ui::dialog::{DialogHost, HostedWorkspace};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::access::Role;
@@ -246,4 +247,18 @@ fn liquify_remembers_its_settings_on_every_change() {
     app.borrow_mut().host.open(HostedWorkspace::new(remembered(), source()));
     fixture.settle();
     assert!(app.borrow().hosted().workspace().settings().show_mesh, "the next opening takes the stored settings");
+}
+
+// A select names itself by its label but does not draw it: each choice of View Options shows its label beside it.
+#[trial]
+fn liquify_view_options_label_their_choices() {
+    let layers = [(7, "Sky".to_owned())];
+    let mut fixture = Fixture::new(move |ui| {
+        let settings = LiquifySettings { show_backdrop: true, ..LiquifySettings::default() };
+        let _ = LiquifyPanel::new(Bind::given(settings)).layers(&layers).show(ui);
+    });
+    fixture.room(by(320.0, 2000.0)).settle();
+    for label in ["Mesh Size", "Use", "Mode"] {
+        assert!(fixture.texts().iter().any(|text| text.text.trim_end_matches(':') == label), "{label} is drawn beside its select");
+    }
 }

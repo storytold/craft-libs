@@ -7,9 +7,10 @@ use super::cx::{Cx, Edit as _, PartsCx};
 use crate::primitives::{EditorPurpose, EditorState, ImeStamp, ImeSurface};
 use crate::runtime::access::text::{self as text_access, Line, Run, TextFacts};
 
+use crate::runtime::commands::{self, CommandSet, Commands as _, Fired};
 use crate::runtime::egui::{editor as egui_editor, focus as egui_focus};
 use crate::runtime::focus::KeyUse;
-use crate::runtime::{commands, ime};
+use crate::runtime::ime;
 use craft_behavior::{EditCommand, EditorInput, PartKey};
 use egui::{Rect, Ui};
 
@@ -20,6 +21,20 @@ pub(crate) struct EditorDecl {
     pub purpose: EditorPurpose,
 }
 
+/// Where an editor input or a command goes among the pass's events: the event's place, then its kind (IME edits, an
+/// AccessKit selection, then keys, texts and the commands keys fired). An input or command of no one event goes last.
+pub(crate) type Order = (usize, u8);
+
+/// One step of an editor's pass, in the order of the events it came from ([`Cx::editor_steps`]).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum EditorStep<S> {
+    /// An input of the editor part.
+    Input(EditorInput),
+    /// A command of the component's scope that a key or another source fired.
+    Command(S, Fired),
+}
+
 /// The editor part as step 8b set it up, for `editor_state`.
 pub(crate) struct EditorInfo {
     pub widget: egui::Id,
@@ -27,6 +42,7 @@ pub(crate) struct EditorInfo {
     pub purpose: EditorPurpose,
     pub focused: bool,
     pub read_only: bool,
+    pub commit_now: bool,
 }
 
 impl<C: Component> PartsCx<'_, C> {
@@ -56,14 +72,17 @@ pub(crate) fn run<C: Component>(cx: &mut Cx<'_, C>, ui: &mut Ui, step: &mut supe
     }
     let (ctx, id) = (cx.core.ctx.clone(), cx.core.id);
     let widget = ImeSurface::of(id, decl.key).widget();
-    let focused = egui_editor::show(ui, widget, decl.rect, egui_focus::event_filter(keys.keep, false));
+    let focusable = super::steps::takes_focus(cx.core.resolved);
+    let focused = egui_editor::show(ui, widget, decl.rect, egui_focus::event_filter(keys.keep, false), focusable);
+    // The focus widget is the component's, enabled or not: it is never one of the app's own widgets (`take_app_widgets`).
+    crate::runtime::pointer::record_text_widget(&ctx, widget, id);
     let read_only = cx.core.resolved.read_only || !cx.core.resolved.enabled;
-    let mut inputs = Vec::new();
+    let mut inputs: Vec<(Order, EditorInput)> = Vec::new();
     if focused {
         // Each input goes where its event arrived among the frame's events: an IME edit before the press or text that
         // came after it, and keys and texts in their own order. An AccessKit selection comes after the IME edits that
         // came before any key, and an intent of no one event (an Escape, a queued edit command) last, as routed.
-        let mut placed: Vec<((usize, u8), EditorInput)> = Vec::new();
+        let mut placed: Vec<(Order, EditorInput)> = Vec::new();
         placed.extend(ime::take_placed(&ctx, widget, read_only).into_iter().map(|(input, place)| ((place, 0), input)));
         while let Some(request) = cx.core.intents.take_access_where(text_access::is_text_request) {
             if let Some((anchor, focus)) = text_access::requested_selection(&ctx, id, &request) {
@@ -75,13 +94,13 @@ pub(crate) fn run<C: Component>(cx: &mut Cx<'_, C>, ui: &mut Ui, step: &mut supe
         }
         // A stable sort: inputs of one place keep the order they were taken in.
         placed.sort_by_key(|(order, _)| *order);
-        inputs.extend(placed.into_iter().map(|(_, input)| input));
+        inputs = placed;
     }
     if read_only {
-        inputs.retain(EditorInput::is_read_only_safe);
+        inputs.retain(|(_, input)| input.is_read_only_safe());
     } else {
         let (can_undo, can_redo) = ime::editor_history(&ctx, widget);
-        inputs.retain(|input| {
+        inputs.retain(|(_, input)| {
             let EditorInput::Edit(command @ (EditCommand::Undo | EditCommand::Redo)) = input else { return true };
             let can = if *command == EditCommand::Undo { can_undo } else { can_redo };
             if !can {
@@ -90,7 +109,7 @@ pub(crate) fn run<C: Component>(cx: &mut Cx<'_, C>, ui: &mut Ui, step: &mut supe
             can
         });
     }
-    cx.core.editor = Some(EditorInfo { widget, rect: decl.rect, purpose: decl.purpose, focused, read_only });
+    cx.core.editor = Some(EditorInfo { widget, rect: decl.rect, purpose: decl.purpose, focused, read_only, commit_now: step.commit_now });
     cx.core.editor_inputs = inputs;
 }
 
@@ -109,6 +128,11 @@ impl EditorHandle {
     /// The handle of the editor part step 8b set up.
     fn of(info: &EditorInfo) -> EditorHandle {
         EditorHandle { widget: info.widget, rect: info.rect, purpose: info.purpose, focused: info.focused, read_only: info.read_only }
+    }
+
+    /// Whether the editor part holds the key focus this pass, whether or not its window has the system's.
+    pub fn focused(&self) -> bool {
+        self.focused
     }
 
     /// Reports the caret and composition to the input-method engine and puts the text facts in the running pass's
@@ -182,6 +206,11 @@ impl<C: Component> Cx<'_, C> {
         self.core.editor.as_ref().map(EditorHandle::of)
     }
 
+    /// Whether a press moved focus away from the editor and asks it to commit its session in this pass.
+    pub fn editor_commit_requested(&self) -> bool {
+        self.core.editor.as_ref().is_some_and(|editor| editor.commit_now)
+    }
+
     /// Notes the input-method receipt between the stamps `before` and `after` on the egui fork's tracker for this
     /// viewport and frame; true when the stamps prove the engine applied it.
     pub fn ime_receipt(&self, before: ImeStamp, after: ImeStamp) -> bool {
@@ -205,7 +234,22 @@ impl<C: Component> Cx<'_, C> {
     /// The editor part's inputs of this pass in the order they arrived; call it in `update`. The editor applies them
     /// to its own document.
     pub fn editor_input(&mut self) -> impl Iterator<Item = EditorInput> + '_ {
-        std::mem::take(&mut self.core.editor_inputs).into_iter()
+        std::mem::take(&mut self.core.editor_inputs).into_iter().map(|(_, input)| input)
+    }
+
+    /// The editor part's inputs of this pass and the commands of set `S` routed to this component, as one stream in the
+    /// order their events arrived: a command a key fired comes between the inputs typed before and after its chord, so
+    /// an editor that Cmd+Enter ends applies none of the frame's typing after it. A command of no one key event (a menu
+    /// pick, the palette) comes last. Call it in `update` in place of `editor_input` and `take_command`.
+    pub fn editor_steps<S: CommandSet>(&mut self) -> Vec<EditorStep<S>> {
+        let mut steps: Vec<(Order, EditorStep<S>)> =
+            std::mem::take(&mut self.core.editor_inputs).into_iter().map(|(order, input)| (order, EditorStep::Input(input))).collect();
+        while let Some((command, fired)) = self.take_command::<S>() {
+            steps.push((fired.place.map_or((usize::MAX, 3), |place| (place, 2)), EditorStep::Command(command, fired)));
+        }
+        // A stable sort: the steps of one place keep the order they were taken in.
+        steps.sort_by_key(|(order, _)| *order);
+        steps.into_iter().map(|(_, step)| step).collect()
     }
 
     /// Reports the editor's caret, visible lines, selection and undo state once per pass, from `update` or `paint`.

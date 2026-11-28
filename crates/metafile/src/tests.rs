@@ -176,7 +176,8 @@ fn truncated_random_and_mutated_inputs_never_panic() {
         [0, 0, 20, 10],
         [0, 0, 2540, 1270],
     );
-    for file in [&wfile, &efile] {
+    let wmfc_file = wmf(&wmfc_chunks(&efile, &[efile.len() / 2, efile.len() - efile.len() / 2]), None);
+    for file in [&wfile, &efile, &wmfc_file] {
         for n in 0..=file.len() {
             let prefix = &file[..n];
             let _ = parse(prefix);
@@ -190,7 +191,11 @@ fn truncated_random_and_mutated_inputs_never_panic() {
         let _ = parse(&buf);
     }
     for i in 0..1500usize {
-        let mut buf = if i.is_multiple_of(2) { efile.clone() } else { wfile.clone() };
+        let mut buf = match i % 3 {
+            0 => efile.clone(),
+            1 => wfile.clone(),
+            _ => wmfc_file.clone(),
+        };
         for _ in 0..8 {
             let at = rng.rnd() as usize % buf.len();
             buf[at] = rng.rnd() as u8;
@@ -198,7 +203,11 @@ fn truncated_random_and_mutated_inputs_never_panic() {
         let _ = parse(&buf);
     }
     for i in 0..500usize {
-        let mut buf = if i.is_multiple_of(2) { efile.clone() } else { wfile.clone() };
+        let mut buf = match i % 3 {
+            0 => efile.clone(),
+            1 => wfile.clone(),
+            _ => wmfc_file.clone(),
+        };
         let at = rng.rnd() as usize % buf.len();
         buf[at..].iter_mut().for_each(|b| *b = 0xFF);
         let _ = parse(&buf);
@@ -2138,4 +2147,203 @@ fn wmf_viewport_scaling_before_first_window_is_retained() {
     assert_eq!((p.width, p.height), (100.0, 100.0));
     assert_eq!(p.skipped_records, 0);
     assert_eq!(rect_extent(&p.items[0]), (0.0, 0.0, 50.0, 100.0));
+}
+
+struct WmfcChunk<'a> {
+    escape_fn: u16,
+    identifier: u32,
+    comment_type: u32,
+    version: u32,
+    flags: u32,
+    record_count: u32,
+    current_size: u32,
+    remaining: u32,
+    total_size: u32,
+    data: &'a [u8],
+}
+
+impl<'a> WmfcChunk<'a> {
+    fn single(data: &'a [u8]) -> Self {
+        let n = data.len() as u32;
+        Self {
+            escape_fn: 0x000F,
+            identifier: 0x4346_4D57,
+            comment_type: 1,
+            version: 0x0001_0000,
+            flags: 0,
+            record_count: 1,
+            current_size: n,
+            remaining: 0,
+            total_size: n,
+            data,
+        }
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        let byte_count = (34 + self.data.len()) as u16;
+        let mut p = Vec::with_capacity(4 + 34 + self.data.len());
+        p.extend(self.escape_fn.to_le_bytes());
+        p.extend(byte_count.to_le_bytes());
+        p.extend(self.identifier.to_le_bytes());
+        p.extend(self.comment_type.to_le_bytes());
+        p.extend(self.version.to_le_bytes());
+        p.extend(0u16.to_le_bytes()); // checksum
+        p.extend(self.flags.to_le_bytes());
+        p.extend(self.record_count.to_le_bytes());
+        p.extend(self.current_size.to_le_bytes());
+        p.extend(self.remaining.to_le_bytes());
+        p.extend(self.total_size.to_le_bytes());
+        p.extend(self.data);
+        wrec(0x0626, &p)
+    }
+}
+
+fn wmfc_chunks(emf_bytes: &[u8], chunk_sizes: &[usize]) -> Vec<Vec<u8>> {
+    let total = emf_bytes.len() as u32;
+    let count = chunk_sizes.len() as u32;
+    let mut off = 0usize;
+    let mut out = Vec::with_capacity(chunk_sizes.len());
+    for &sz in chunk_sizes {
+        let end = off + sz;
+        let rem = (emf_bytes.len() - end) as u32;
+        out.push(
+            WmfcChunk { record_count: count, current_size: sz as u32, remaining: rem, total_size: total, ..WmfcChunk::single(&emf_bytes[off..end]) }
+                .encode(),
+        );
+        off = end;
+    }
+    assert_eq!(off, emf_bytes.len());
+    out
+}
+
+fn sample_ole_emf() -> Vec<u8> {
+    let mut stretch = cat(vec![
+        e32(0),
+        e32(0),
+        e32(100),
+        e32(50),
+        e32(0),
+        e32(0),
+        e32(0),
+        e32(0),
+        e32(2),
+        e32(2),
+        e32(80),
+        e32(40),
+        e32(120),
+        e32(16),
+        e32(0),
+        e32(0x00CC_0020),
+        e32(100),
+        e32(50),
+    ]);
+    stretch.extend(info_header(2, 2, 24, 16));
+    stretch.extend(dib24_bottom_up().get(40..).unwrap_or_default());
+    // EMR_STRETCHDIBITS + stock HOLLOW_BRUSH (0x8000_0005) + Rectangle, with rclBounds = (0, 0, -1, -1).
+    emf(
+        &[erec(81, &stretch), erec(37, &h32(0x8000_0005)), erec(43, &cat(vec![e32(10), e32(10), e32(90), e32(40)]))],
+        [0, 0, -1, -1],
+        [0, 0, 2500, 1250],
+    )
+}
+
+#[test]
+fn wmf_meta_escape_enhanced_metafile_single_and_multi_chunk() {
+    let inner = sample_ole_emf();
+    let direct = parse(&inner).unwrap();
+    assert_eq!(direct.items.len(), 2);
+    assert!(matches!(direct.items[0], Item::Bitmap { width: 2, height: 2, .. }));
+    assert!(matches!(direct.items[1], Item::Path { fill: None, stroke: Some(_), .. }));
+
+    // Single-chunk WMFC inside a placeable WMF with no native drawing records.
+    let single = wmf(&wmfc_chunks(&inner, &[inner.len()]), Some([0, 0, 1000, 500]));
+    let p1 = parse(&single).unwrap();
+    assert_eq!(p1.items, direct.items);
+    assert!((p1.width - direct.width).abs() < 1e-3 && (p1.height - direct.height).abs() < 1e-3);
+    assert_eq!(crate::size(&single).unwrap(), (p1.width, p1.height));
+
+    // Multi-chunk WMFC including an odd-sized chunk padded to a 16-bit WMF word boundary.
+    let c0 = 33usize;
+    let c1 = 75usize;
+    let c2 = inner.len() - c0 - c1;
+    let multi = wmf(&wmfc_chunks(&inner, &[c0, c1, c2]), None);
+    let p2 = parse(&multi).unwrap();
+    assert_eq!(p2.items, direct.items);
+    assert_eq!(crate::size(&multi).unwrap(), (p2.width, p2.height));
+}
+
+#[test]
+fn wmf_with_native_records_ignores_embedded_emf_escape() {
+    let inner = sample_ole_emf();
+    let mut recs = wmfc_chunks(&inner, &[inner.len()]);
+    recs.push(wrec(0x041B, &cat(vec![h16(20), h16(20), h16(10), h16(10)])));
+    let p = parse(&wmf(&recs, Some([0, 0, 100, 100]))).unwrap();
+    assert_eq!(p.items.len(), 1);
+    assert!(matches!(p.items[0], Item::Path { .. }));
+    assert_eq!(p.skipped_records, 0);
+}
+
+#[test]
+fn wmf_malformed_or_oversized_wmfc_is_rejected_without_panic() {
+    let inner = sample_ole_emf();
+
+    // 1. Truncated stream (RemainingBytes > 0 with no following chunk).
+    let truncated = wmf(
+        &[WmfcChunk { record_count: 2, remaining: (inner.len() - 10) as u32, total_size: inner.len() as u32, ..WmfcChunk::single(&inner[..10]) }
+            .encode()],
+        None,
+    );
+    let p = parse(&truncated).unwrap();
+    assert!(p.items.is_empty());
+
+    // 2. Mismatched RemainingBytes on the second chunk.
+    let half = inner.len() / 2;
+    let bad_rem = wmf(
+        &[
+            WmfcChunk {
+                record_count: 2,
+                remaining: (inner.len() - half) as u32,
+                total_size: inner.len() as u32,
+                ..WmfcChunk::single(&inner[..half])
+            }
+            .encode(),
+            WmfcChunk { record_count: 2, remaining: 1, total_size: inner.len() as u32, ..WmfcChunk::single(&inner[half..]) }.encode(),
+        ],
+        None,
+    );
+    assert!(parse(&bad_rem).unwrap().items.is_empty());
+
+    // 3. Mismatched EnhancedMetafileDataSize across chunks.
+    let bad_total = wmf(
+        &[
+            WmfcChunk {
+                record_count: 2,
+                remaining: (inner.len() - half) as u32,
+                total_size: inner.len() as u32,
+                ..WmfcChunk::single(&inner[..half])
+            }
+            .encode(),
+            WmfcChunk { record_count: 2, total_size: (inner.len() + 4) as u32, ..WmfcChunk::single(&inner[half..]) }.encode(),
+        ],
+        None,
+    );
+    assert!(parse(&bad_total).unwrap().items.is_empty());
+
+    // 4. Invalid Version and non-zero Flags.
+    let bad_ver = wmf(&[WmfcChunk { version: 0x0002_0000, ..WmfcChunk::single(&inner) }.encode()], None);
+    assert!(parse(&bad_ver).unwrap().items.is_empty());
+    let bad_flags = wmf(&[WmfcChunk { flags: 1, ..WmfcChunk::single(&inner) }.encode()], None);
+    assert!(parse(&bad_flags).unwrap().items.is_empty());
+
+    // 5. Oversized EnhancedMetafileDataSize (> MAX_EMBEDDED_EMF_BYTES) with a tiny payload.
+    let over = (crate::wmf::MAX_EMBEDDED_EMF_BYTES + 1) as u32;
+    let oversized = wmf(&[WmfcChunk { remaining: over - 8, total_size: over, ..WmfcChunk::single(&[0u8; 8]) }.encode()], None);
+    let p_over = parse(&oversized).unwrap();
+    assert!(p_over.items.is_empty());
+    assert!(p_over.truncated);
+
+    // 6. Non-EMF bytes (e.g. a WMF) inside valid WMFC chunks are ignored safely.
+    let fake_wmf = wmf(&[wrec(0x041B, &cat(vec![h16(10), h16(10), h16(0), h16(0)]))], None);
+    let wrapped_wmf = wmf(&wmfc_chunks(&fake_wmf, &[fake_wmf.len()]), None);
+    assert!(parse(&wrapped_wmf).unwrap().items.is_empty());
 }

@@ -8,7 +8,7 @@ use craft_behavior::EditEvents;
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Pattern, Props as _, SaveKey, Show as _, ShowContainer as _, clicked};
-use craft_ui::form::SliderField;
+use craft_ui::form::{Field as FieldRow, SliderField};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label, UnitKind};
@@ -225,9 +225,13 @@ impl Rows<'_> {
         set: Field<T>,
     ) -> Option<T> {
         let entries: Vec<Entry<T>> = options.iter().map(|(value, text)| Entry::new(value.clone(), (*text).clone())).collect();
-        let events = Select::new(label.clone(), Bind::given(current), &entries).show(ui).events;
-        let picked = events.value().cloned();
-        self.pass.edit.extend(lift(events, self.base, set));
+        // The select's own label only names it; the field shows it beside the select.
+        let mut picked = None;
+        FieldRow::new(label.clone()).show(ui, |ui, _| {
+            let events = Select::new(label.clone(), Bind::given(current.clone()), &entries).show(ui).events;
+            picked = events.value().cloned();
+            self.pass.edit.extend(lift(events, self.base, set));
+        });
         picked
     }
 }

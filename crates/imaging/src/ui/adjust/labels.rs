@@ -96,6 +96,10 @@ craft_ui::words! {
         /// The degrees readout under the spectrum bars: the range's outer start, inner start, inner
         /// end and outer end, "{a} / {b}  ·  {c} \\ {d}".
         range_readout: template "adjust.rangeReadout" = "{a} / {b}  ·  {c} \\ {d}";
+        /// The centre of the range shown, where its Hue moves it: "0° / 30°".
+        range_centre_moved: template "adjust.rangeCentreMoved" = "{from} / {to}";
+        /// The one swatch Colorize shows: what it makes of a mid grey.
+        colorize_color: "adjust.colorizeColor" = "Colorize Color";
 
         // Black & White.
         /// The Black & White editor's group name (AccessKit).

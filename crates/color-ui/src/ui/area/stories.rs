@@ -2,6 +2,7 @@
 
 use super::{AreaShape, ColorArea};
 use crate::AreaMode;
+use crate::ui::Gamut;
 use craft_theme::{ColorModel, HsbModel, Srgba};
 use craft_ui::contract::{Props as _, Show as _, Validity};
 use craft_ui::runtime::env::Message;
@@ -42,4 +43,16 @@ fn color_area_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn color_area_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (values, values_at) = data.value_at("values", HsbModel.from_srgb(Srgba::rgb(0.2, 0.5, 0.8)));
     ColorArea::new("Saturation and brightness", AreaMode::Hue, values_at.bind(values)).enabled(false).show(ui).into()
+}
+
+/// A gamut that moves the pale colours (the top-left quarter of the hue field) to black: the cells it moves are shaded
+/// and edged.
+#[story(ColorArea<'static>, covers = [], drive = Drive::Never)]
+fn color_area_gamut(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let values = data.bind("values", HsbModel.from_srgb(Srgba::rgb(0.2, 0.5, 0.8)));
+    let pale_to_black = Gamut::new(|color: Srgba| {
+        let (high, low) = (color.r.max(color.g).max(color.b), color.r.min(color.g).min(color.b));
+        if high > 0.5 && low > high / 2.0 { Srgba::rgb(0.0, 0.0, 0.0) } else { color }
+    });
+    ColorArea::new("Saturation and brightness", AreaMode::Hue, values).shape(AreaShape::Square).gamut(pale_to_black).show(ui).into()
 }

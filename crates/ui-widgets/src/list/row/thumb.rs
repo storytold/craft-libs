@@ -13,7 +13,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// The width of a thumbnail as a multiple of its height.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps, crate::contract::PlainData)]
 pub struct ThumbAspect(f32);
 
 impl ThumbAspect {
@@ -23,6 +23,10 @@ impl ThumbAspect {
     /// `wide` parts of width to `high` parts of height; a zero part counts as a vanishing one.
     pub fn new(wide: u16, high: u16) -> Self {
         Self((f32::from(wide) / f32::from(high.max(1))).max(f32::EPSILON))
+    }
+
+    pub(crate) fn high(self, width: f32) -> f32 {
+        width / self.0
     }
 
     pub(crate) fn of(self, height: f32) -> f32 {

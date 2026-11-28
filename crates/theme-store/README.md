@@ -38,7 +38,7 @@ match store.update(&base, SelectionChange::pick_theme(&picked)) {
 | `ThemeRecord`, `ThemeEntry`, `format` | a parsed user theme file (`craft-design-theme` v1, craft-theme's `format`) with its stored bytes, unknown keys included; the library skips files in another format, such as the pilot's `craft-theme` |
 | `SuiteClient` | what an app calls: per-frame `sync`, the optimistic `shown` choice, `change`, conflict and failure notices with `apply_mine` and `retry`, the `theme` lookup, `preview` for any theme's picker card, `save_theme` and `take_saved` for a theme editor |
 | `SuiteWatch`, `Snapshot`, `Op`, `OpOutput` | the store on a worker thread: snapshots by generation, queued operations with results |
-| `ui` (feature `ui`) | the Preferences appearance page `AppearancePage` (modes, light and dark theme rows of `ThemeChip`s with favorites, Size and UI Font Size; tokens `theme_chip.*`); feature `screen-testing` adds egui_kittest input tests of the page |
+| `ui` (feature `ui`) | the Preferences appearance page `AppearancePage` (modes, light and dark theme rows of `ThemeChip`s with favorites, Size, UI Font Size, Contrast and Motion, where an app leaves out favorites and the rows it does not keep; tokens `theme_chip.*`); feature `screen-testing` adds egui_kittest input tests of the page |
 | `FileStamp`, `library_files`, `selection_stamp`, `theme_stamp`, `parse_counts` | cheap change checks for a watcher |
 
 `Store` methods block on file I/O and on the lock (up to 2 s). Apps use `SuiteClient` over a

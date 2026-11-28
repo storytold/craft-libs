@@ -16,6 +16,7 @@ unicode-normalization = "0.1.26"
 write-fonts = { version = "0.55", features = ["read"] }
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 rustybuzz = "0.20.1"
 serde_json = "1"
 wuff = "0.2.9"

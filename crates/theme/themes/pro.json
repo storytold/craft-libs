@@ -53,6 +53,7 @@
     "line.border": "#1e1e1e",
     "line.control_edge": "#4a4a4a",
     "line.divider": "#1e1e1e",
+    "line.grip": "#555555",
     "line.knob_edge": "#282828",
     "state.hover": "#424242",
     "state.pressed": "#4e4e4e",

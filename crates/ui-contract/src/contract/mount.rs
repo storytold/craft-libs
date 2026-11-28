@@ -143,13 +143,24 @@ pub(super) fn pane_grip_id(id: Id) -> Id {
 
 impl Host for PaneHost {
     fn run(&mut self, id: Id, parent: &mut Ui, env: &Env, pass: &mut HostPass<'_>) {
-        // A pane the caller laid out shows in its rect and leaves the room of its siblings alone; one as tall as its
-        // content flows from the rect's top and takes its height in the parent's flow.
+        // A pane the caller laid out shows in its rect and leaves the room of its siblings alone; one as large as its
+        // content flows from the rect's outer edge and takes its extent in the parent's flow.
         if let Some(rect) = self.0.at {
-            if self.0.content_height {
+            if self.0.content_extent {
+                let rtl = env.direction.is_rtl();
                 let builder = egui::UiBuilder::new().max_rect(rect);
+                let builder = match self.0.edge {
+                    PaneEdge::Bottom => builder.layout(egui::Layout::bottom_up(egui::Align::Min)),
+                    PaneEdge::Start | PaneEdge::End if (self.0.edge == PaneEdge::Start) == rtl => {
+                        builder.layout(egui::Layout::right_to_left(egui::Align::Min))
+                    }
+                    PaneEdge::Start | PaneEdge::End => builder.layout(egui::Layout::left_to_right(egui::Align::Min)),
+                    _ => builder,
+                };
                 let mut ui = crate::runtime::egui::alloc::child(parent, builder);
-                pass(&mut ui, Some(ShowAt::Flow), None);
+                // A layout room of its own, as a docked pane's.
+                let room = env.new_room();
+                Env::run_in(&mut ui, room.clone(), |ui| pass(ui, Some(ShowAt::Flow), Some(&room)));
                 crate::runtime::egui::alloc::advance_past(parent, ui.min_rect());
             } else {
                 pass(parent, Some(ShowAt::Rect(rect)), None);
@@ -342,6 +353,8 @@ impl Host for ViewportHost {
             return;
         }
         let ctx = parent.ctx().clone();
+        // The window's content runs in its own viewport's pass, which no record of this one holds.
+        crate::runtime::replay::block(&ctx);
         let focus = self.overlay.focus;
         let mut window_rules = self.overlay.clone();
         window_rules.dismiss.outside = Outside::Keep;
@@ -352,25 +365,24 @@ impl Host for ViewportHost {
         let spec = self.spec.clone().unwrap_or_else(by_rank);
         let placed = self.overlay.placed;
         let full_window = self.overlay.is_full_window();
-        // A full-window container fills its window, so the window's own layout memory holds the size the user gave
-        // it; before it has one the window opens at the opener's content size, large enough for a workspace.
-        let measured = || {
-            let remembered = layout_memory::read(&ctx, id);
-            if full_window { remembered.or_else(|| Some(ctx.content_rect().size())) } else { remembered }
-        };
+        // A full-window container fills its window and has no content size: its window opens at the opener's content
+        // size, large enough for a workspace. What its body took is no size for the window: side panels, header and
+        // footer are no part of it, and a window sent it shrank by them each pass (photocraft#16595).
+        let measured = || if full_window { Some(ctx.content_rect().size()) } else { layout_memory::read(&ctx, id) };
         let open = ViewportOpen {
             id,
             title: title.as_str(),
             // A placed rect is the caller's size for the window, within the window's limits, which the OS would clamp it
             // to; then a resizable fallback's default size, as the layer takes it; the measured size is for a window
             // sized by content: what its body took in the window, recorded once the window reported its place
-            // (`steps::record_body_size`).
+            // (`steps::record_body_size`), or a full-window container's opening size.
             size: placed
                 .map(|rect| self.overlay.size_limits.clamp(rect.size()))
                 .or(self.overlay.size.filter(|_| self.overlay.fit == overlay::OverlayFit::Resizable))
                 .or_else(measured),
-            // A resizable window takes its default or content size to open; from then on its size is the user's.
-            follows_size: placed.is_some() || self.overlay.fit != overlay::OverlayFit::Resizable,
+            // A resizable window takes its default or content size to open; from then on its size is the user's, as a
+            // full-window container's is.
+            follows_size: placed.is_some() || (!full_window && self.overlay.fit != overlay::OverlayFit::Resizable),
             save: self.save.as_deref(),
             spec: &spec,
             limits: (Some(self.overlay.size_limits.min), self.overlay.size_limits.max),

@@ -2,10 +2,10 @@
 
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
-use craft_ui::contract::{Bind, FieldLayout, GlyphLabel, LabelKind, LabelScheme, Props as _, Show as _, ShowContainer as _, SideLabel};
+use craft_ui::contract::{Bind, FieldLayout, GlyphColon, GlyphLabel, LabelKind, LabelScheme, Props as _, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::testing::{Fixture, trial};
-use craft_ui::text::NumberField;
+use craft_ui::text::{HexField, NumberField};
 use egui::{Rect, Ui};
 
 const SHORT: &str = "Size";
@@ -57,6 +57,19 @@ fn a_form_and_an_inspector_lay_out_the_same_rows_their_own_way() {
     assert!(short.width() > kept.width() + SLACK, "an inspector's control fills the row, a form's keeps its width: {short:?} {kept:?}");
 }
 
+/// An inline form sets each caption at the row's start with a colon, its control right after it at its own width: the
+/// controls share no column.
+#[trial]
+fn an_inline_form_sets_each_control_right_after_its_caption() {
+    let form = rows(LabelScheme::Form);
+    let inline = rows(LabelScheme::Inline);
+    assert_eq!(colons(&inline), 2, "an inline form's captions end with a colon");
+    assert!((caption(&inline, SHORT).min.x - caption(&inline, LONG).min.x).abs() <= SLACK, "the captions start at the row's start");
+    let (short, long) = (control(&inline, SHORT), control(&inline, LONG));
+    assert!(short.min.x + SLACK < long.min.x, "no shared column: the short caption's control comes first: {short:?} {long:?}");
+    assert!((short.width() - control(&form, SHORT).width()).abs() <= SLACK, "the control keeps its width");
+}
+
 fn glyph_field(ui: &mut Ui) {
     let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text("X")));
     Field::new("Horizontal position").side(side).show(ui, |ui, _| {
@@ -81,6 +94,38 @@ fn a_glyph_caption_takes_a_colon_in_a_bar_only() {
     let mut plain = Fixture::new(glyph_field);
     plain.settle();
     assert_eq!(colons(&plain), 0, "a glyph caption outside a bar takes no colon");
+}
+
+/// Under `GlyphColon::Form` a glyph caption takes a form's colon as a word label does ("X:"), and a glyph that is a mark
+/// of its own keeps the bar's rule: the "#" before a hex value stays bare. Without it, neither takes one.
+#[trial]
+fn a_glyph_caption_takes_a_forms_colon_under_the_form_rule_and_the_hex_hash_does_not() {
+    let form = |rule: Option<GlyphColon>| {
+        let mut fixture = Fixture::new(|ui| {
+            FieldGroup::new("Transform").labels(LabelScheme::Form).show(ui, |ui, _| {
+                Field::new("Horizontal position").side(SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::caption("X")))).show(ui, |ui, _| {
+                    NumberField::new("Horizontal position", Bind::given(Some(10.0))).show(ui);
+                });
+                Field::new("Hex color").side(HexField::hash_label()).show(ui, |ui, _| {
+                    HexField::hex("Hex color", Bind::given(craft_theme::Rgba([0x33, 0x66, 0x99, 0xff]))).show(ui);
+                });
+            });
+        });
+        if let Some(rule) = rule {
+            fixture.root_value(rule);
+        }
+        fixture.settle();
+        fixture
+    };
+    assert_eq!(colons(&form(None)), 0, "by default a glyph takes no colon outside a bar");
+    let opted = form(Some(GlyphColon::Form));
+    assert_eq!(colons(&opted), 1, "only the caption takes the colon; the hash stays bare");
+    let colon = opted.texts().iter().find(|run| run.text.trim() == ":").map(|run| run.rect).unwrap_or(Rect::NOTHING);
+    let field = control(&opted, "Horizontal position");
+    assert!(
+        colon.min.x >= caption(&opted, "X").max.x - SLACK && colon.max.x <= field.min.x + SLACK && field.y_range().contains(colon.center().y),
+        "the colon follows the X, clear of its field: {colon:?} {field:?}"
+    );
 }
 
 /// A check box row of a form starts its box in the control column, where the rows labelled beside it start their

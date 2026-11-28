@@ -29,3 +29,6 @@ thiserror = { workspace = true }
 # `pcraft-pixels`: PhotoCraft's tiles are zstd frames named by the BLAKE3 hash of their samples.
 blake3 = { version = "1.8", default-features = false, features = ["pure"], optional = true }
 ruzstd = { version = "0.9", default-features = false, features = ["std"], optional = true }
+
+[dev-dependencies]
+craft-testkit = { workspace = true }

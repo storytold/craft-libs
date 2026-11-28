@@ -10,6 +10,9 @@ use super::offer;
 use super::types::{BITMAP, HTML, RGBA8, RTF, TEXT, URI_LIST};
 use super::types::{ClipboardError, ClipboardImage, Flavor};
 
+/// The slow part of a read, run off the UI thread ([`ClipboardBackend::read_later`]); `None` when it reads nothing.
+pub type LaterRead = Box<dyn FnOnce() -> Option<Flavor> + Send>;
+
 /// What a write did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use]
@@ -41,6 +44,16 @@ pub trait ClipboardBackend: Send {
     fn read_files(&mut self, limit: usize) -> Result<Option<Vec<PathBuf>>, ClipboardError>;
     /// Does the clipboard hold one of `mimes`? Cheap enough to ask a few times a second.
     fn has(&mut self, mimes: &[&str]) -> bool;
+    /// As [`read`](Self::read), but the slow part (the Wayland pipe, a DIB conversion) is left in the returned
+    /// closure, which runs off the UI thread. Reads now and wraps the result by default.
+    fn read_later(&mut self, mimes: &[&str], limit: u64) -> Result<Option<LaterRead>, ClipboardError> {
+        Ok(self.read(mimes, limit)?.map(|flavor| Box::new(move || Some(flavor)) as LaterRead))
+    }
+    /// Whether the clipboard can be read at any time; `false` where it can be read only inside a paste event (the
+    /// web).
+    fn readable_any_time(&self) -> bool {
+        true
+    }
     /// The flavours of a paste the host delivered as an event (the browser's Paste). Only
     /// [`EventClipboard`](crate::clipboard::EventClipboard) keeps them; the system clipboard ignores them.
     fn offer(&mut self, _flavors: Vec<Flavor>) {}
@@ -55,6 +68,44 @@ pub trait ClipboardBackend: Send {
     /// Whether a late paste arrived since the last call.
     fn take_arrived(&mut self) -> bool {
         false
+    }
+}
+
+/// A boxed backend is the backend it holds, so a host can choose one at run time
+/// (`Clipboard::new(services.clipboard)`).
+impl<B: ClipboardBackend + ?Sized> ClipboardBackend for Box<B> {
+    fn write(&mut self, flavors: &[Flavor]) -> Result<usize, ClipboardError> {
+        (**self).write(flavors)
+    }
+    fn read(&mut self, mimes: &[&str], limit: u64) -> Result<Option<Flavor>, ClipboardError> {
+        (**self).read(mimes, limit)
+    }
+    fn read_image(&mut self, limit: u64) -> Result<Option<ClipboardImage>, ClipboardError> {
+        (**self).read_image(limit)
+    }
+    fn read_files(&mut self, limit: usize) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
+        (**self).read_files(limit)
+    }
+    fn has(&mut self, mimes: &[&str]) -> bool {
+        (**self).has(mimes)
+    }
+    fn read_later(&mut self, mimes: &[&str], limit: u64) -> Result<Option<LaterRead>, ClipboardError> {
+        (**self).read_later(mimes, limit)
+    }
+    fn readable_any_time(&self) -> bool {
+        (**self).readable_any_time()
+    }
+    fn offer(&mut self, flavors: Vec<Flavor>) {
+        (**self).offer(flavors);
+    }
+    fn formats(&mut self) -> Vec<String> {
+        (**self).formats()
+    }
+    fn owns(&mut self) -> Option<bool> {
+        (**self).owns()
+    }
+    fn take_arrived(&mut self) -> bool {
+        (**self).take_arrived()
     }
 }
 

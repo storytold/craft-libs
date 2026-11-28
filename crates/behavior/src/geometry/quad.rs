@@ -97,6 +97,8 @@ pub enum ScaleRule {
     /// PhotoCraft's Use Legacy Free Transform, DesignCraft and VectorCraft: corners stretch freely
     /// and ⇧ keeps the proportions; edges stretch their one axis.
     Free,
+    /// Corners keep their proportions using the larger relative axis change; ⇧ frees them.
+    LargerAxis,
     /// A shape or path bounds box: a corner scales by the projection of the drag on the anchor-corner diagonal,
     /// keeping the proportions; an edge stretches its one axis.
     Shape,
@@ -203,6 +205,25 @@ pub struct BoxRules {
     /// minimum keeps a scale drag from flipping the box, and a side already shorter than it at
     /// the press keeps its length as its floor, so a click changes nothing.
     pub min_side: f64,
+    /// Which handles the box shows and takes keys and drags for.
+    pub handles: BoxHandles,
+    /// How far either side of a side's line a press grabs that side, in screen points, along the whole side and as
+    /// far past its ends: a paragraph frame whose edges rewrap it. Inside the box the band reaches at most a quarter of
+    /// the way across, so a narrow box keeps its middle. 0, the default, leaves each side its band outside the box.
+    pub edge_band: f32,
+}
+
+/// Which handles of a box are shown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BoxHandles {
+    /// The four corners and the four sides.
+    #[default]
+    All,
+    /// The four corners.
+    Corners,
+    /// The right and left sides.
+    Sides,
 }
 
 impl Default for BoxRules {
@@ -214,6 +235,8 @@ impl Default for BoxRules {
             allow: BoxAllow::default(),
             rotate_step: 15.0,
             min_side: 0.0,
+            handles: BoxHandles::default(),
+            edge_band: 0.0,
         }
     }
 }
@@ -249,6 +272,28 @@ impl BoxRules {
         self
     }
 
+    /// The rules with `handles` as the handles the box shows.
+    pub fn with_handles(mut self, handles: BoxHandles) -> BoxRules {
+        self.handles = handles;
+        self
+    }
+
+    /// The rules with each side grabbed within `points` of its line ([`edge_band`](Self::edge_band)).
+    pub fn with_edge_band(mut self, points: f32) -> BoxRules {
+        self.edge_band = points;
+        self
+    }
+
+    /// Whether the box shows `part`: `Corners` shows the four corners and no side, `Sides` the right and left sides
+    /// and no corner. The inside, the outside and the reference point always show.
+    pub fn shows(&self, part: BoxPart) -> bool {
+        match (self.handles, part) {
+            (BoxHandles::Corners, BoxPart::Edge(_)) | (BoxHandles::Sides, BoxPart::Corner(_)) => false,
+            (BoxHandles::Sides, BoxPart::Edge(k)) => k % 2 == 1,
+            _ => true,
+        }
+    }
+
     /// The mode drags follow: a mode the content refuses scales as Free Transform does.
     pub fn effective_mode(&self) -> TransformMode {
         let refused = match self.mode {
@@ -262,14 +307,15 @@ impl BoxRules {
 
     /// Whether a drag of `part` changes the box: in Distort only the corners, the inside and the
     /// reference point; in Skew everything but the outside; the outside only where rotating is
-    /// allowed. A click outside a refused zone still applies the box (the overlay's rule).
+    /// allowed; and never a handle the box does not [show](Self::shows). A click outside a refused
+    /// zone still applies the box (the overlay's rule).
     pub fn allows(&self, part: BoxPart) -> bool {
         let by_mode = match self.effective_mode() {
             TransformMode::Distort => !matches!(part, BoxPart::Outside | BoxPart::Edge(_)),
             TransformMode::Skew => part != BoxPart::Outside,
             _ => true,
         };
-        by_mode && (self.allow.rotate || part != BoxPart::Outside)
+        by_mode && (self.allow.rotate || part != BoxPart::Outside) && self.shows(part)
     }
 
     /// The modifiers a drag of `part` acts on, from the keys held: ⌘ is dropped on a corner or
@@ -504,16 +550,22 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
             }
             BoxState { quad, pivot: carry_pivot(q0, quad, c) }
         }
-        BoxPart::Corner(_) | BoxPart::Edge(_) => scale_drag(g, p, mods, rules.min_side).unwrap_or(BoxState { quad: q0, pivot: c }),
+        BoxPart::Corner(_) | BoxPart::Edge(_) => {
+            scale_drag(g, p, mods, rules.min_side, rules.scale == ScaleRule::LargerAxis).unwrap_or(BoxState { quad: q0, pivot: c })
+        }
     }
 }
 
 /// A plain corner or edge drag: scaling in the box's own frame (the unit square through the
 /// homography), so rotated and skewed boxes scale along their axes. A proportional corner follows
-/// the pointer's projection on the line from the anchor to the corner, so a distorted box scales
-/// along its own diagonal; past the anchor the factor turns negative and the box flips. Each
-/// scaled side keeps at least `min_side` ([`scale_floor`]). `None` for a collapsed box.
-fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64) -> Option<BoxState> {
+/// the pointer's projection on the diagonal, or the larger relative axis change when selected. Past the anchor
+/// the factor turns negative and the box flips. Each scaled side keeps at least `min_side`
+/// ([`scale_floor`]). `None` for a collapsed box.
+fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64, larger_axis: bool) -> Option<BoxState> {
+    let p = match g.part {
+        BoxPart::Corner(i) => g.quad0[usize::from(i) % 4] + (p - g.start),
+        _ => p,
+    };
     let h = Homography::unit_to_quad(g.quad0)?;
     let inv = h.inverse()?;
     let Point { x: u, y: v } = inv.apply(p);
@@ -556,16 +608,14 @@ fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64) -> Option<BoxSta
             kv = kv.max(lo_v);
         }
     } else if corner {
-        // The corner follows the pointer's projection on the line from the anchor to the dragged
-        // corner in document space. That line maps back onto the unit square's line through the
-        // same two points, so the factor read on one unit axis holds for both, also on a
-        // distorted box. One factor scales both axes, so it is clamped once, to the stricter
-        // axis' floor, and the box keeps its proportions.
+        // One factor holds both axes to the stricter floor, including on inward drags.
         let (hu, hv) = (if mu.0 { 0.0 } else { 1.0 }, if mv.0 { 0.0 } else { 1.0 });
         let a = h.apply(Point::new(au, av));
         let d = h.apply(Point::new(hu, hv)) - a;
         let len2 = d.hypot2();
-        let k = if len2 > 1e-12 {
+        let k = if larger_axis {
+            if (ku - 1.0).abs() > (kv - 1.0).abs() { ku } else { kv }
+        } else if len2 > 1e-12 {
             let q = inv.apply(a + d * ((p - a).dot(d) / len2));
             if (hu - au).abs() >= (hv - av).abs() { (q.x - au) / (hu - au) } else { (q.y - av) / (hv - av) }
         } else {

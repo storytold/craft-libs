@@ -1,6 +1,6 @@
 //! Stories of `ReferencePoint`.
 
-use super::{ReferencePoint, ReferencePointKind};
+use super::{ReferencePoint, ReferencePointKind, ReferencePointLook};
 use crate::contract::{Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -51,8 +51,35 @@ fn reference_point_alignment_unset(ui: &mut Ui, data: &mut StoryData) -> StoryOu
     ReferencePoint::new("Alignment", data.bind("alignment_unset", None::<Anchor9>)).kind(ReferencePointKind::Alignment).show(ui).into()
 }
 
+/// The squares look: eight squares joined by a line round the box, the centre one alone, the pick filled in the text
+/// ink, with no well behind them.
+#[story(ReferencePoint<'static>, covers = [], drive = Drive::Never)]
+fn reference_point_squares(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    ReferencePoint::new("Reference point", data.bind("squares", Some(Anchor9::TopRight))).look(ReferencePointLook::Squares).show(ui).into()
+}
+
+/// The squares look with a mixed value: no square is filled.
+#[story(ReferencePoint<'static>, covers = [], drive = Drive::Never)]
+fn reference_point_squares_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    ReferencePoint::new("Reference point", data.bind_mixed("squares_mixed", Mixed::<Option<Anchor9>>::Mixed))
+        .look(ReferencePointLook::Squares)
+        .show(ui)
+        .into()
+}
+
 /// The options bar's size: the grid is an icon square and every point is a dot.
 #[story(ReferencePoint<'static>, covers = [], drive = Drive::Never)]
 fn reference_point_compact(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ReferencePoint::new("Reference point", data.bind("compact", Some(Anchor9::Centre))).compact().show(ui).into()
+}
+
+/// The squares look in the compact picker, as an inspector's transform fields lead with it: the same size as the
+/// full picker, from `shape.locator`.
+#[story(ReferencePoint<'static>, covers = [], drive = Drive::Never)]
+fn reference_point_squares_compact(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    ReferencePoint::new("Reference point", data.bind("squares_compact", Some(Anchor9::Centre)))
+        .look(ReferencePointLook::Squares)
+        .compact()
+        .show(ui)
+        .into()
 }

@@ -26,8 +26,8 @@ use self::windows as platform;
 use std::borrow::Cow;
 
 use super::backend::{Decode, system_error};
-use super::convert::rgba8_image;
-use super::types::{ClipboardError, ClipboardImage, Flavor, HTML, MATHML, PNG, RGBA8, RTF, TEXT};
+use super::convert::{parse_uri_list, rgba8_image};
+use super::types::{ClipboardError, ClipboardImage, Flavor, HTML, MATHML, PNG, RGBA8, RTF, TEXT, URI_LIST};
 
 /// The platform's offer state: the cached X11 `TARGETS` connection and the macOS change count recorded at a write.
 pub(super) struct Offer {
@@ -55,6 +55,12 @@ struct Picture<'a> {
     png: Option<&'a [u8]>,
 }
 
+/// The copied files a write offers: the local paths of the first file list that names any.
+struct FileList {
+    index: usize,
+    paths: Vec<std::path::PathBuf>,
+}
+
 /// What a write puts on the clipboard: the first flavour of each kind among the caller's.
 struct Plan<'a> {
     text: Option<Part<'a>>,
@@ -62,13 +68,16 @@ struct Plan<'a> {
     rtf: Option<Part<'a>>,
     mathml: Option<Part<'a>>,
     picture: Option<Picture<'a>>,
+    files: Option<FileList>,
 }
 
-/// Which of a plan's two shapes a write takes: arboard holds a bitmap or rich text, not both.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Which of a plan's shapes a write takes: arboard holds a bitmap, rich text or a file list, one of them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Primary {
     Picture,
     Rich,
+    /// Copied files, the way a file manager's Copy puts them.
+    Files,
 }
 
 impl<'a> Plan<'a> {
@@ -89,18 +98,26 @@ impl<'a> Plan<'a> {
             }?;
             pixels.is_whole().then_some(Picture { index, pixels, png })
         });
-        Self { text: part(TEXT), html: part(HTML), rtf: part(RTF), mathml: part(MATHML), picture }
+        // Only `file:` URIs become files; a list that names none leaves the write to the other flavours.
+        let files = flavors.iter().enumerate().find_map(|(index, flavor)| {
+            let paths = (flavor.mime == URI_LIST).then(|| parse_uri_list(&String::from_utf8_lossy(&flavor.data)))?;
+            (!paths.is_empty()).then_some(FileList { index, paths })
+        });
+        Self { text: part(TEXT), html: part(HTML), rtf: part(RTF), mathml: part(MATHML), picture, files }
     }
 
-    /// The shape of the write: whichever of the bitmap and the HTML or text the caller put first.
+    /// The shape of the write: whichever of the bitmap, the HTML or text and the file list the caller put first.
     fn primary(&self) -> Option<Primary> {
         let rich = [&self.html, &self.text].into_iter().flatten().map(|part| part.index).min();
-        match (self.picture.as_ref().map(|picture| picture.index), rich) {
-            (Some(picture), Some(rich)) if rich < picture => Some(Primary::Rich),
-            (Some(_), _) => Some(Primary::Picture),
-            (None, Some(_)) => Some(Primary::Rich),
-            (None, None) => None,
-        }
+        [
+            self.picture.as_ref().map(|picture| (picture.index, Primary::Picture)),
+            rich.map(|index| (index, Primary::Rich)),
+            self.files.as_ref().map(|files| (files.index, Primary::Files)),
+        ]
+        .into_iter()
+        .flatten()
+        .min_by_key(|&(index, _)| index)
+        .map(|(_, primary)| primary)
     }
 }
 
@@ -127,6 +144,11 @@ fn arboard_write(handle: &mut arboard::Clipboard, plan: &Plan<'_>) -> Result<(us
             }
             (None, None) => Err(ClipboardError::NoFormat),
         },
+        Primary::Files => {
+            let files = plan.files.as_ref().ok_or(ClipboardError::NoFormat)?;
+            handle.set().file_list(&files.paths).map_err(system_error)?;
+            Ok((files.index, Primary::Files))
+        }
     }
 }
 

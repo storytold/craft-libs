@@ -7,8 +7,19 @@ use crate::intent::{Granularity, Intent, MoveMods, NavMove};
 use craft_host::target::Os;
 use craft_keymap::{Chord, Key, Mods};
 
-/// What the focused stop is, as far as the table's rows differ.
+/// The named key scheme of a reorderable collection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ReorderKeys {
+    /// The stacking keys (`REORDER_KEYS`): Cmd+] and Cmd+[.
+    #[default]
+    Stacking,
+    /// Alt with the arrows (`ALT_ARROW_KEYS`).
+    AltArrows,
+}
+
+/// What the focused stop is, as far as the table's rows differ.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct KeyRole {
     /// A value control with a reset value and no text part: Delete resets it.
@@ -17,8 +28,10 @@ pub struct KeyRole {
     pub space: bool,
     /// A collection that selects several items: Ctrl+Space (Control on macOS) toggles the lead's pick.
     pub multi_select: bool,
-    /// A reorderable collection: the stacking keys (`REORDER_KEYS`) move the selected items.
-    pub reorderable: bool,
+    /// The scheme whose keys move the selected items of a reorderable collection, `None` when it does not reorder.
+    pub reorderable: Option<ReorderKeys>,
+    /// The axis the collection's order is laid out along.
+    pub reorder_axis: Axis,
     /// A collection with `CollectionProps.rename`.
     pub rename: bool,
     /// `FocusPolicy.pages`: Ctrl+Tab switches pages.
@@ -52,6 +65,12 @@ pub struct KeyRole {
     pub home_row: usize,
 }
 
+impl Default for KeyRole {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KeyRole {
     /// A role with no special rows.
     pub const fn new() -> KeyRole {
@@ -59,7 +78,8 @@ impl KeyRole {
             resettable: false,
             space: false,
             multi_select: false,
-            reorderable: false,
+            reorderable: None,
+            reorder_axis: Axis::Y,
             rename: false,
             pages: false,
             nudge: false,
@@ -94,9 +114,15 @@ impl KeyRole {
         self
     }
 
-    /// The stacking keys move the selected items.
-    pub const fn reorderable(mut self, on: bool) -> Self {
-        self.reorderable = on;
+    /// The scheme's keys move the selected items; `None` when the stop does not reorder.
+    pub const fn reorderable(mut self, keys: Option<ReorderKeys>) -> Self {
+        self.reorderable = keys;
+        self
+    }
+
+    /// The axis the order is laid out along.
+    pub const fn reorder_axis(mut self, axis: Axis) -> Self {
+        self.reorder_axis = axis;
         self
     }
 
@@ -191,12 +217,29 @@ pub enum DropOperation {
     Link,
 }
 
-/// The drop operation the held modifiers pick.
-pub fn drop_operation(os: Os, mods: Mods) -> DropOperation {
-    let link = if os == Os::Mac { mods.cmd && mods.alt } else { mods.cmd && mods.shift };
+/// Which held key turns a drag into a copy over a target.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CopyKeys {
+    /// Alt, Option on macOS: a design app's duplicating drag (Photoshop's layers).
+    #[default]
+    Alt,
+    /// The file manager's: Ctrl off macOS, Option on macOS (Explorer, Finder, a document's page grid).
+    Platform,
+}
+
+/// The drop operation the held modifiers pick over a target that copies with `copy`. Link is Ctrl+Shift, Cmd+Option on
+/// macOS, whatever the copy keys.
+pub fn drop_operation(os: Os, mods: Mods, copy: CopyKeys) -> DropOperation {
+    let mac = os == Os::Mac;
+    let link = if mac { mods.cmd && mods.alt } else { mods.cmd && mods.shift };
+    let copies = match copy {
+        CopyKeys::Platform if !mac => mods.cmd,
+        _ => mods.alt,
+    };
     if link {
         DropOperation::Link
-    } else if mods.alt {
+    } else if copies {
         DropOperation::Copy
     } else {
         DropOperation::Move
@@ -221,14 +264,32 @@ pub const REORDER_KEYS: [Chord; 6] = [
     Chord::new(Mods { shift: true, ..Mods::CMD }, Key::OpenCurlyBracket),
 ];
 
-/// The `Intent::MoveItem` a stacking key asks for, `None` for any other press.
-pub fn reorder_intent(key: Key, mods: Mods) -> Option<Intent> {
+/// The four Alt+arrow chords of `ReorderKeys::AltArrows`.
+pub const ALT_ARROW_KEYS: [Chord; 4] =
+    [Chord::new(Mods::ALT, Key::Up), Chord::new(Mods::ALT, Key::Down), Chord::new(Mods::ALT, Key::Left), Chord::new(Mods::ALT, Key::Right)];
+
+/// The `Intent::MoveItem` a key of the scheme `keys` asks for in an order laid out along `axis`, `None` for any other
+/// press.
+pub fn reorder_intent(key: Key, mods: Mods, keys: ReorderKeys, axis: Axis) -> Option<Intent> {
     let chord = Chord::new(mods, key);
-    if !REORDER_KEYS.contains(&chord) {
-        return None;
+    match keys {
+        ReorderKeys::Stacking => {
+            if !REORDER_KEYS.contains(&chord) {
+                return None;
+            }
+            let front = matches!(key, Key::CloseBracket | Key::CloseCurlyBracket);
+            Some(Intent::move_item(front, mods.shift))
+        }
+        ReorderKeys::AltArrows => {
+            if !ALT_ARROW_KEYS.contains(&chord) {
+                return None;
+            }
+            // Down and Right are one place later in reading order on either axis; the item step turns `front` back
+            // into a direction with `toward_end` over the same axis, which is its own inverse.
+            let later = matches!(key, Key::Down | Key::Right);
+            Some(Intent::move_item(toward_end(later, axis), false))
+        }
     }
-    let front = matches!(key, Key::CloseBracket | Key::CloseCurlyBracket);
-    Some(Intent::move_item(front, mods.shift))
 }
 
 /// Whether a move toward the front goes toward the end of an order laid out along `axis`. The front of a vertical
@@ -256,8 +317,12 @@ pub fn intent(os: Os, key: Key, mods: Mods, role: KeyRole) -> Option<Intent> {
     if let Some(fine) = fine_move(key, mods, role) {
         return Some(fine);
     }
-    if role.reorderable
-        && let Some(reorder) = reorder_intent(key, mods)
+    // Before the Alt+Up and Alt+Down rows, so that the Alt+arrow scheme reorders instead of opening or closing. Rows
+    // stacked one per line have no neighbour across their axis: the arrows across it stay their move rows there.
+    let across = if role.reorder_axis == Axis::X { matches!(key, Key::Up | Key::Down) } else { matches!(key, Key::Left | Key::Right) };
+    if let Some(keys) = role.reorderable
+        && !(role.stacked && across)
+        && let Some(reorder) = reorder_intent(key, mods, keys, role.reorder_axis)
     {
         return Some(reorder);
     }

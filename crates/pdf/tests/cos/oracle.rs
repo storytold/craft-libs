@@ -147,8 +147,8 @@ macro_rules! or_skip {
         match $probe {
             ::core::result::Result::Ok(oracle) => oracle,
             ::core::result::Result::Err(absent) => {
-                let absent: $crate::oracle::Absent = absent;
-                ::core::assert!(!$crate::oracle::Absent::required(&absent), "{absent}");
+                let absent: $crate::integration::cos::oracle::Absent = absent;
+                ::core::assert!(!$crate::integration::cos::oracle::Absent::required(&absent), "{absent}");
                 ::std::eprintln!("{absent}");
                 return;
             }

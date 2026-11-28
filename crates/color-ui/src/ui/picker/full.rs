@@ -18,8 +18,9 @@ use super::{Collected, ColorPicker, ColorPickerWords, Pass, PickedColor};
 use crate::ui::{AreaMode, AreaShape, CompareSwatch};
 
 /// Two columns that never stack: the two halves of the picker, the right half (compare block and actions over the two
-/// field groups), and each field group (the radio cell, then the channel's letter, field and unit).
-const TWO_COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content];
+/// field groups), each field group (the radio cell, then the channel's letter, field and unit), and the dialog's Color
+/// Swatches view (the swatches, then the buttons' cell).
+pub(crate) const TWO_COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content];
 
 /// The models the picker shows and the area modes it offers.
 #[derive(Clone, Copy)]

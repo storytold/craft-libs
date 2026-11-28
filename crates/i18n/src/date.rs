@@ -250,6 +250,9 @@ pub enum NameLength {
     Narrow,
     /// `Sat`, `Oct`.
     Abbreviated,
+    /// `Sa`: a weekday's two-letter name, calendar column heads where there is room for two letters. A month takes
+    /// its abbreviation.
+    Short,
     /// `Saturday`, `October`.
     Wide,
 }
@@ -274,6 +277,8 @@ pub struct DateFormat {
     hour_cycle: Option<crate::HourCycle>,
     /// Write `0`–`9` whatever the locale's digits are.
     latin_digits: bool,
+    /// The day a week starts on when the app sets one apart from the locale.
+    week_start: Option<Weekday>,
     /// Formatters and names, built on first use and shared by clones.
     cache: Arc<Cache>,
     /// Unique per format built; a clone keeps it (`generation`).
@@ -314,12 +319,12 @@ impl Formatter {
     }
 }
 
-/// Standalone month and weekday names, indexed by [`NameLength`] (narrow, abbreviated, wide)
+/// Standalone month and weekday names, indexed by [`NameLength`] (narrow, abbreviated, short, wide)
 /// and then by month (January first) or weekday (Monday first).
 #[derive(Debug)]
 struct Names {
-    months: [[String; 12]; 3],
-    weekdays: [[String; 7]; 3],
+    months: [[String; 12]; 4],
+    weekdays: [[String; 7]; 4],
 }
 
 /// Which field comes first, second and third in a numeric date.
@@ -380,6 +385,7 @@ impl DateFormat {
             locale: region.time.clone(),
             hour_cycle: region.hour_cycle,
             latin_digits: false,
+            week_start: None,
             cache: Arc::default(),
             generation: crate::words::next_generation(),
         }
@@ -395,6 +401,12 @@ impl DateFormat {
     /// generation. What keys on the dates a format writes keys on this.
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// This format with weeks starting on `day` in place of the region's. It lays weeks out
+    /// differently, so it is a new [`generation`](Self::generation).
+    pub fn with_first_weekday(self, day: Weekday) -> DateFormat {
+        DateFormat { week_start: Some(day), generation: crate::words::next_generation(), ..self }
     }
 
     /// The format for a locale tag (`de-CH`), with the locale's clock.
@@ -516,13 +528,13 @@ impl DateFormat {
                     let formatted = names.load_for_pattern(&provider, &pattern).ok()?.format(&at);
                     Some(formatted.try_write_to_string().map_or_else(|(_, text)| text.into_owned(), |text| text.into_owned()))
                 };
-                let months = ["LLLLL", "LLL", "LLLL"].map(|pattern| {
+                let months = ["LLLLL", "LLL", "LLL", "LLLL"].map(|pattern| {
                     std::array::from_fn(|i| name(pattern, CalendarDate { year: 2026, month: i as u8 + 1, day: 1 }).unwrap_or_default())
                 });
-                // 2026-10-26 is a Monday.
-                let weekdays = ["ccccc", "ccc", "cccc"].map(|pattern| {
-                    std::array::from_fn(|i| name(pattern, CalendarDate { year: 2026, month: 10, day: 26 + i as u8 }).unwrap_or_default())
-                });
+                // 2026-10-26 is a Monday; the week runs on into November (October has 31 days).
+                let monday = CalendarDate { year: 2026, month: 10, day: 26 };
+                let weekdays = ["ccccc", "ccc", "cccccc", "cccc"]
+                    .map(|pattern| std::array::from_fn(|i| name(pattern, monday.add_days(i as i64)).unwrap_or_default()));
                 Some(Names { months, weekdays })
             })
             .as_ref()
@@ -573,6 +585,9 @@ impl DateFormat {
     /// The day a week starts on in the region: Sunday in the United States, Monday in most of
     /// Europe, Saturday in parts of the Middle East.
     pub fn first_weekday(&self) -> Weekday {
+        if let Some(day) = self.week_start {
+            return day;
+        }
         let first = self.cache.first_weekday.get_or_init(|| {
             let provider = data::dates_provider()?;
             let locale = self.icu_locale(false);
@@ -780,5 +795,20 @@ mod tests {
         assert_eq!(jan31.add_months(13), CalendarDate::new(2029, 2, 28).unwrap());
         assert_eq!(jan31.add_months(-2), CalendarDate::new(2027, 11, 30).unwrap());
         assert_eq!(saturday.add_days(1), CalendarDate::new(2026, 11, 1).unwrap());
+    }
+
+    // Sunday's name was blank (the table asked for 2026-10-32): every weekday has a name at every length, and the short
+    // length is two letters in English.
+    #[test]
+    fn every_weekday_has_a_name_at_every_length() {
+        let dates = DateFormat::from_tag("en-US");
+        for day in Weekday::ALL {
+            for length in [NameLength::Narrow, NameLength::Abbreviated, NameLength::Short, NameLength::Wide] {
+                assert!(!dates.weekday_name(day, length).is_empty(), "{day:?} {length:?}");
+            }
+        }
+        assert_eq!(dates.weekday_name(Weekday::Sunday, NameLength::Short), "Su");
+        assert_eq!(dates.weekday_name(Weekday::Monday, NameLength::Short), "Mo");
+        assert_eq!(dates.month_name(11, NameLength::Short), "Nov");
     }
 }

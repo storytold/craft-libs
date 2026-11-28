@@ -31,7 +31,9 @@ pub enum LatestRelease {
     Found(Release),
     /// The repo exists but has no published release.
     None,
-    /// Couldn't find out (offline, rate-limited, unreadable answer).
+    /// GitHub's request limit was reached and nothing was saved to answer from.
+    RateLimited,
+    /// Couldn't find out (offline, unreadable answer); the reason is data.
     Failed(String),
 }
 
@@ -74,7 +76,7 @@ pub const INSTALL_CANCELLED: &str = "install cancelled";
 /// Where release information came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Source {
-    /// ArtCraft's release feed (storyteller-web), which polls GitHub for everyone.
+    /// ArtCraft's signed release catalog (`getartcraft.com/launcher-catalog.toml`).
     Feed,
     /// The GitHub REST API.
     GitHubApi,

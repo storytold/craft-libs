@@ -103,6 +103,10 @@ pub struct SpellingItem {
     pub word: String,
     /// At most [`SUGGESTION_COUNT`], best first.
     pub suggestions: Vec<String>,
+    /// The sentence's text before the word; empty with `after` for the word alone.
+    pub before: String,
+    /// The sentence's text after the word.
+    pub after: String,
 }
 
 /// A button the app acts on. Ignore is the dialog's own (it moves to the next item).
@@ -130,6 +134,8 @@ pub enum SpellingAction {
     },
     /// Add `word` to the user's dictionary ([`SpellingSettings`]).
     Add(String),
+    /// Ignore reports the item it skipped; the dialog still moves to the next item itself.
+    Ignore(SpellingItem),
     /// Find the misspellings again: Ignore All added a word to [`CheckSpellingDialog::ignored`],
     /// or Check All Layers changed.
     Relist,
@@ -138,7 +144,15 @@ pub enum SpellingAction {
 impl SpellingItem {
     /// The misspelling `word` at `range` of the text object `object`, with the `suggestions` best first.
     pub fn new(object: u64, range: Range<usize>, word: impl Into<String>, suggestions: Vec<String>) -> Self {
-        SpellingItem { object, range, word: word.into(), suggestions }
+        SpellingItem { object, range, word: word.into(), suggestions, before: String::new(), after: String::new() }
+    }
+
+    /// Sets the sentence's text before and after the word.
+    #[must_use]
+    pub fn context(mut self, before: impl Into<String>, after: impl Into<String>) -> Self {
+        self.before = before.into();
+        self.after = after.into();
+        self
     }
 }
 
@@ -208,6 +222,14 @@ impl CheckSpellingDialog {
         self.action.take()
     }
 
+    /// Replaces the list and shows its first item (Change To from its first suggestion): a host that walks its text
+    /// itself hands the dialog the words from its current place.
+    pub fn restart(&mut self, items: Vec<SpellingItem>) {
+        self.action = None;
+        self.index = 0;
+        self.set_items(items);
+    }
+
     /// The misspellings found again after an action. The dialog keeps its position in the list (after Change, Ignore
     /// All and Add those words are gone, so the same position is the next misspelling; earlier ones skipped with
     /// Ignore stay skipped), except after Check All Layers changed, when it starts from the first. Change To gets the
@@ -258,7 +280,17 @@ impl CheckSpellingDialog {
         let shown = dialog.show(ui, |ui, _| {
             let word = item.as_ref().map_or_else(String::new, |i| i.word.clone());
             Field::new(words.not_in_dictionary.clone()).id_salt("word").show(ui, |ui, _| {
-                TextField::new(words.not_in_dictionary.clone(), Bind::given(word.clone())).enabled(false).show(ui);
+                // PLAN: the word should be strong, underlined and in the accent ink inside the sunken field; no display
+                // component takes a run of `Span`s (`Text::spans` wants `DocRun`s with fonts and data colours) and `Span`
+                // has no colour (contract-03 OQ1), so the context reads as one wrapped line.
+                match item.as_ref().filter(|i| !i.before.is_empty() || !i.after.is_empty()) {
+                    Some(i) => {
+                        Text::new(format!("{}{}{}", i.before, i.word, i.after)).show(ui);
+                    }
+                    None => {
+                        TextField::new(words.not_in_dictionary.clone(), Bind::given(word.clone())).enabled(false).show(ui);
+                    }
+                }
             });
             Field::new(words.change_to.clone()).id_salt("change-to").show(ui, |ui, _| {
                 TextField::new(words.change_to.clone(), Bind::bound(&mut *change_to)).enabled(has_item).show(ui);
@@ -279,7 +311,7 @@ impl CheckSpellingDialog {
                 .events;
             for event in events {
                 match event {
-                    CollectionEvent::Selection(SelectionChange::Set(rows)) => {
+                    CollectionEvent::Selection { change: SelectionChange::Set(rows), .. } => {
                         if let Some(row) = rows.last() {
                             change_to.clone_from(&suggestions[*row]);
                         }
@@ -305,6 +337,9 @@ impl CheckSpellingDialog {
 
         match body_press.get().or(button_press) {
             Some(Press::Ignore) => {
+                if let Some(item) = item {
+                    self.action = Some(SpellingAction::Ignore(item));
+                }
                 self.index = (self.index + 1).min(self.items.len());
                 self.change_to = self.items.get(self.index).and_then(|i| i.suggestions.first()).cloned().unwrap_or_default();
             }

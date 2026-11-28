@@ -8,6 +8,7 @@ use crate::runtime::egui::areas::{self};
 use crate::runtime::env::Env;
 use crate::runtime::memory::MemoryStage;
 use crate::runtime::overlay::{self};
+use craft_behavior::OwnerClass;
 use craft_behavior::overlay::{PlaceRequest, Side};
 use egui::{Context, Id, Pos2, Rect};
 
@@ -51,6 +52,35 @@ pub(super) fn opened_overlay(ctx: &Context, overlay: &Overlay, stored: Option<Op
     Some((resolved, opening))
 }
 
+/// Whether a layer of `overlay` may cover its anchor when it fits on neither side of it: a menu's layer (its key class
+/// is [`OwnerClass::Menu`]) hung at the pointer, at a point, or at the rect a context request named. No other overlay
+/// covers its anchor: a tooltip or a popover at the pointer stays off it, unless its place asks for it
+/// ([`Place::covering_anchor`]). `stored` is the opening the layer decided.
+pub(super) fn layer_covers_anchor(ctx: &Context, overlay: &Overlay, stored: Option<Opening>) -> bool {
+    if matches!(overlay.place, Place::Anchored { covers: true, .. }) {
+        return true;
+    }
+    if overlay.keys != OwnerClass::Menu {
+        return false;
+    }
+    let (anchor, requested) = match &overlay.opener {
+        Some(first) => {
+            let (opener, opening) = first.active(ctx, stored);
+            (opener_anchor(opener, opening, &overlay.place), opener.anchor.is_none() && matches!(opening, Opening::At(_)))
+        }
+        None => match &overlay.place {
+            Place::Anchored { anchor, .. } => (anchor.clone(), false),
+            Place::Float(_) => return false,
+        },
+    };
+    match anchor {
+        Anchor::Pointer | Anchor::Point(_) => true,
+        // `opener_anchor` gives a requested rect only for a context request's opening.
+        Anchor::Rect(_) => requested,
+        _ => false,
+    }
+}
+
 /// The opening the layer `id` decided when it appeared, `None` before the host has run for it.
 fn stored_opening(ctx: &Context, id: Id) -> Option<Opening> {
     MemoryStage::peek::<LayerMemory>(ctx, memory_slot(id)).opening
@@ -62,6 +92,13 @@ fn stored_opening(ctx: &Context, id: Id) -> Option<Opening> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct PopupRegion(pub Option<Rect>);
+
+impl PopupRegion {
+    /// Popups contained in `region`; `None` lets them take the whole safe rect.
+    pub fn new(region: Option<Rect>) -> Self {
+        PopupRegion(region)
+    }
+}
 
 impl crate::runtime::env::EnvValue for PopupRegion {
     fn root() -> Self {
@@ -172,7 +209,9 @@ pub(crate) fn measuring_room(
     inset: f32,
     rtl: bool,
 ) -> Option<egui::Vec2> {
-    let opened = opened_overlay(ctx, overlay, stored_opening(ctx, id));
+    let stored = stored_opening(ctx, id);
+    let covers = layer_covers_anchor(ctx, overlay, stored);
+    let opened = opened_overlay(ctx, overlay, stored);
     let overlay = opened.as_ref().map_or(overlay, |(overlay, _)| overlay);
     if !matches!(overlay.place, Place::Anchored { .. }) {
         return None;
@@ -183,7 +222,7 @@ pub(crate) fn measuring_room(
     let bounds = screen_for(ctx, env, overlay);
     let resolved = resolve_anchor(ctx, id, overlay, own, own_to_screen);
     let anchor = resolved_anchor(ctx, overlay, resolved, bounds, inset, &mut MemoryStage::peek::<LayerMemory>(ctx, memory_slot(id)).pointer_at);
-    Some(content_room(overlay, bounds, kept_in(overlay, resolved, bounds, inset), anchor, rtl))
+    Some(content_room(overlay, covers, bounds, kept_in(overlay, resolved, bounds, inset), anchor, rtl))
 }
 
 /// The most a layer's body may take: the fit's share of the safe rect `bounds`, at least as wide as the layer's
@@ -198,13 +237,13 @@ fn cap(overlay: &Overlay, bounds: Rect, anchor: Rect) -> egui::Vec2 {
 }
 
 /// The room a layer offers its content before it is placed: the cap (a share of the safe rect `bounds`), and for an
-/// anchored layer the cap within the larger side of its anchor along the side's axis, inside `kept` (`kept_in`).
-/// Content measured in it fits wherever `placement` puts it: on its preferred side when it fits there, else on the
-/// larger side.
-pub(crate) fn content_room(overlay: &Overlay, bounds: Rect, kept: Rect, anchor: Rect, rtl: bool) -> egui::Vec2 {
+/// anchored layer the cap within the larger side of its anchor along the side's axis, inside `kept` (`kept_in`), or
+/// within `kept` for a layer that `covers` its anchor. Content measured in it fits wherever `placement` puts it: on its
+/// preferred side when it fits there, else on the larger side, or over the anchor.
+pub(crate) fn content_room(overlay: &Overlay, covers: bool, bounds: Rect, kept: Rect, anchor: Rect, rtl: bool) -> egui::Vec2 {
     let cap = cap(overlay, bounds, anchor);
     let Place::Anchored { side, .. } = &overlay.place else { return cap.min(bounds.size()) };
-    let request = PlaceRequest::new(anchor, cap, kept).side(*side).rtl(rtl).min_width(overlay.min_width);
+    let request = PlaceRequest::new(anchor, cap, kept).side(*side).rtl(rtl).min_width(overlay.min_width).covers_anchor(covers);
     let on = |side: Side| craft_behavior::overlay::place(&request.kept(Some(side))).rect.size();
     let (vertical, other) = match side {
         Side::Below => (true, Side::Above),
@@ -221,6 +260,8 @@ pub(super) struct Placed {
     pub(super) at: Pos2,
     /// The side of the anchor an anchored layer took by its size; `None` while its size is unknown.
     pub(super) side: Option<Side>,
+    /// The side the layer asked for when it took `side`.
+    pub(super) asked: Option<Side>,
     /// The most the body may take from `at`: what the viewport leaves, within the fit's cap.
     pub(super) room: egui::Vec2,
 }
@@ -228,39 +269,45 @@ pub(super) struct Placed {
 /// The pure placement of the anchored forms; the centre or the given position for floats, kept inside the safe rect
 /// within the overlay's bounds (`within_bounds`) by the keep rule moves follow. An anchored layer takes its side by its
 /// size: below its anchor, above when the room below is too short and the room above is larger, and keeps that side
-/// while it stays open and the content fits there or that side is the larger. Before its size is known (a popup's
-/// first, hidden pass) it takes no side and its body is offered `content_room`, so the size it measures decides the
-/// side.
-pub(super) fn placement(ctx: &Context, layer: &Layer<'_>, size: Option<egui::Vec2>, bounds: Rect, anchor: Rect) -> Placed {
-    let rtl = layer.env.direction.is_rtl();
+/// while it stays open, asks for the same side, and the content fits there or that side is the larger. A layer that `covers` its anchor
+/// ([`layer_covers_anchor`]) and fits neither side keeps its height within the bounds and slides over the anchor.
+/// Before its size is known (a popup's first, hidden pass) it takes no side and its body is offered `content_room`, so
+/// the size it measures decides the side.
+pub(super) fn placement(ctx: &Context, layer: &Layer<'_>, covers: bool, size: Option<egui::Vec2>, bounds: Rect, anchor: Rect) -> Placed {
+    let rtl = layer.env.layer_direction().is_rtl();
     let cap = cap(layer.overlay, bounds, anchor);
     match &layer.overlay.place {
-        Place::Anchored { side, align, flips_across, .. } => {
+        Place::Anchored { side, align, flips_across, offset, clear, .. } => {
             let kept = layer_bounds(layer, bounds);
             let Some(size) = size else {
-                let room = content_room(layer.overlay, bounds, kept, anchor, rtl);
-                return Placed { at: anchor.left_bottom().clamp(kept.min, kept.max), side: None, room };
+                let room = content_room(layer.overlay, covers, bounds, kept, anchor, rtl);
+                return Placed { at: anchor.left_bottom().clamp(kept.min, kept.max), side: None, asked: None, room };
             };
-            // The side taken in an earlier pass is the preferred one while the layer stays open: it stays while the
-            // content fits there or that side is the larger, so a size measured later (a body that grew) still flips it.
-            let taken = overlay::entry(ctx, layer.id).and_then(|entry| entry.side).unwrap_or(*side);
+            // The side taken in an earlier pass is the preferred one while the layer stays open and asks for the same side:
+            // it stays while the content fits there or that side is the larger, so a size measured later (a body that
+            // grew) still flips it. A host that asks for another side gets that side's placement.
+            let taken = overlay::entry(ctx, layer.id).filter(|entry| entry.asked == Some(*side)).and_then(|entry| entry.side).unwrap_or(*side);
             let request = PlaceRequest::new(anchor, size, kept)
                 .side(taken)
                 .align(*align)
                 .rtl(rtl)
                 .min_width(layer.overlay.min_width)
-                .flips_across(*flips_across);
+                .flips_across(*flips_across)
+                .covers_anchor(covers)
+                .offset(*offset)
+                .clear(*clear);
             let placed = craft_behavior::overlay::place(&request);
-            // The room is what the side the layer took leaves for a body as large as the cap.
+            // The room is what the side the layer took leaves for a body as large as the cap, or for a layer that covers
+            // its anchor, what the bounds leave.
             let room = craft_behavior::overlay::place(&request.kept(Some(placed.side)).size(cap)).rect.size();
-            Placed { at: placed.rect.min, side: Some(placed.side), room }
+            Placed { at: placed.rect.min, side: Some(placed.side), asked: Some(*side), room }
         }
         Place::Float(float) => {
             let kept = within_bounds(layer.overlay, bounds);
             let size = size.unwrap_or(egui::Vec2::ZERO);
             let min = float.top_left(size).unwrap_or_else(|| kept.center() - size / 2.0);
             let at = crate::contract::body::keep_inside(Rect::from_min_size(min, size), kept).min;
-            Placed { at, side: None, room: (kept.max - at).max(egui::Vec2::ZERO).min(cap) }
+            Placed { at, side: None, asked: None, room: (kept.max - at).max(egui::Vec2::ZERO).min(cap) }
         }
     }
 }

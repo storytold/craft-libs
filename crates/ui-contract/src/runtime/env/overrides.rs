@@ -1,4 +1,5 @@
-//! Changes to the inherited values for a stretch of code: Overrides, with_env and ThemeScope.
+//! Changes to the inherited values for a stretch of code: Overrides, with_env and ThemeScope, and a region that is a
+//! layout room of its own (in_room).
 
 use super::app_values::AppValues;
 use super::host_words::overlaid_words;
@@ -8,7 +9,7 @@ use crate::runtime::egui::child;
 use craft_behavior::MotionMode;
 use craft_i18n::{Direction, WordRows, Words};
 use craft_theme::{Contrast, ControlSize, Mode, Size, ThemeDef};
-use egui::{Context, Ui};
+use egui::{Context, Rect, Ui, UiBuilder};
 use std::sync::Arc;
 
 /// Token-changing values for a container: the container itself (its surface, header, rules, scroll bars, pads and
@@ -124,10 +125,16 @@ pub struct Overrides {
     pub motion: Option<MotionMode>,
     /// Also the child `Ui`'s direction and layout.
     pub direction: Option<Direction>,
+    /// The flow direction alone (layout order, arrow keys and roving, and the child `Ui`'s layout): the paragraph
+    /// direction of text stays the inherited one. A strip mirrored to follow something physical (the macOS traffic
+    /// lights at the right end) keeps its labels reading as the interface does. Wins over `direction`'s flow.
+    pub flow: Option<Direction>,
     /// The words of the scope and everything inside it.
     pub words: Option<WordsOverride>,
     /// App values set for the scope.
     pub values: AppValues,
+    /// The child `Ui`'s id salt, as `ui.push_id` gives it: the ids of what it shows derive from it.
+    pub id_salt: Option<egui::Id>,
 }
 
 /// How a scope changes the built-in text: the only override path for words.
@@ -164,6 +171,9 @@ impl Overrides {
             scoped.direction = direction;
             scoped.text_direction = direction;
         }
+        if let Some(flow) = self.flow {
+            scoped.direction = flow;
+        }
         match self.words {
             Some(WordsOverride::Replace(words)) => scoped.inherited_mut().words = words,
             Some(WordsOverride::Overlay(rows)) => {
@@ -179,16 +189,37 @@ impl Overrides {
 /// Runs `body` in a child `Ui` with `set`'s changes applied to the inherited values. A scope that disables
 /// disables its child `Ui`; one that changes direction builds the child with an explicit layout and never
 /// inherits the parent's.
+///
+/// The components the child `Ui` shows are children of the body around `ui` as those shown in `ui` itself are, on its
+/// line and in its cells. It is the craft form of `ui.scope` and
+/// `ui.push_id` (`Overrides::id_salt`) around craft content: what a body sets up for its children in flow does not
+/// reach a `Ui` egui code makes below the body's own (`Env::of`). Content laid out along the other axis goes in a
+/// craft `Row` or `Stack`, a body of its own.
 pub fn with_env<R>(ui: &mut Ui, set: impl FnOnce(&mut Overrides), body: impl FnOnce(&mut Ui) -> R) -> R {
     let mut overrides = Overrides::default();
     set(&mut overrides);
+    let id_salt = overrides.id_salt.take();
     let outer = Env::of(ui);
     let ctx = ui.ctx().clone();
     let inner = outer.derive(|scoped| overrides.apply(&ctx, scoped));
     let direction = (inner.direction != outer.direction).then(|| inner.direction.is_rtl());
     let disabled = !inner.enabled;
-    child::scope(ui, disabled, direction, |child| {
+    child::scope(ui, id_salt, disabled, direction, |child| {
         let _restore = Restore { ctx: &ctx, installed: Some(Env::install_for(child, inner)) };
         body(child)
     })
+}
+
+/// Runs `body` in a child `Ui` held to `rect` and clipped to it, as a layout room of its own: the flow grid, content
+/// column and fill sharing of the body around it do not reach in, so a child that fills takes `rect`, whatever else
+/// that body holds. A split pane's body and a dock group's view show here.
+pub fn in_room<R>(ui: &mut Ui, rect: Rect, body: impl FnOnce(&mut Ui) -> R) -> R {
+    let ctx = ui.ctx().clone();
+    let room = Env::of(ui).new_room();
+    ui.scope_builder(UiBuilder::new().max_rect(rect), |child| {
+        child.shrink_clip_rect(rect);
+        let _restore = Restore { ctx: &ctx, installed: Some(Env::install_for(child, room)) };
+        body(child)
+    })
+    .inner
 }

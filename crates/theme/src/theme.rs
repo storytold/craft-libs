@@ -1,10 +1,10 @@
 //! What a theme supplies (seeds, pins, optional shape) and what the user chooses (appearance).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::color::Rgba;
 use super::ramp::Mode;
-use super::tokens::{ColorToken, ColorTokens, Edge, KnobShape, RadiusSet, Status, WellShape};
+use super::tokens::{ColorToken, ColorTokens, Edge, GripMark, GripShape, KnobShape, RadiusSet, Status, WellShape};
 use crate::{AppId, IconPackId, ThemeId};
 
 /// A theme: seeds to derive from, values that override the derivation, and an optional shape.
@@ -65,6 +65,52 @@ impl ThemeDef {
                 info: o.status.info.unwrap_or(self.seeds.status.info),
             },
         }
+    }
+
+    /// This theme with `seed` as its accent in both modes: a user's accent over the theme they picked. The accent
+    /// colours (the tokens the accent ramp gives, and the ones derived from them) and the text of every contrast pair
+    /// drawn on an accent colour drop their pins and references in every layer, the high-contrast and per-app ones
+    /// included, so they derive from the seed and the contrast pass fits them as it fits an unpinned theme. A token
+    /// the theme refers to an accent colour keeps its reference, and so follows the seed. A pinned `overlay.cursor`
+    /// keeps its pin, although its default follows the accent through `overlay.stroke`.
+    #[must_use]
+    pub fn with_accent(&self, seed: Rgba) -> ThemeDef {
+        let mut theme = self.clone();
+        theme.seeds.accent = seed;
+        theme.mode_seeds.light.accent = None;
+        theme.mode_seeds.dark.accent = None;
+        for mode in [Mode::Light, Mode::Dark] {
+            let derived = self.accent_derived(mode);
+            let apps = theme.apps.values_mut().flat_map(|app| [&mut app.pins, &mut app.high_contrast]);
+            for layer in [&mut theme.pins, &mut theme.high_contrast].into_iter().chain(apps) {
+                let pins = match mode {
+                    Mode::Light => &mut layer.light,
+                    Mode::Dark => &mut layer.dark,
+                };
+                pins.colors.retain(|token, _| !derived.contains(token));
+                pins.refs.retain(|token, _| !derived.contains(token));
+            }
+        }
+        theme
+    }
+
+    /// The tokens [`with_accent`](Self::with_accent) derives in `mode`: the ones whose default follows the accent ramp,
+    /// and the text of each contrast pair drawn on an accent colour, counting the tokens a layer refers to one.
+    fn accent_derived(&self, mode: Mode) -> BTreeSet<ColorToken> {
+        use crate::values::{Bg, RULES, follows_accent};
+        let own: BTreeSet<ColorToken> =
+            ColorToken::ALL.iter().copied().filter(|&token| token != ColorToken::OverlayCursor && follows_accent(token, mode)).collect();
+        let layers = [&self.pins, &self.high_contrast].into_iter().chain(self.apps.values().flat_map(|app| [&app.pins, &app.high_contrast]));
+        let refs: Vec<(ColorToken, ColorToken)> = layers.flat_map(|layer| layer.get(mode).refs.iter().map(|(&token, &to)| (token, to))).collect();
+        let mut shown = own.clone();
+        while let Some(token) = refs.iter().find(|(token, to)| shown.contains(to) && !shown.contains(token)).map(|&(token, _)| token) {
+            shown.insert(token);
+        }
+        let texts = RULES
+            .iter()
+            .filter(|rule| rule.bgs.iter().any(|bg| matches!(bg, Bg::Token(fill) if shown.contains(fill))))
+            .flat_map(|rule| rule.fgs.iter().copied());
+        own.iter().copied().chain(texts).collect()
     }
 }
 
@@ -196,6 +242,49 @@ pub struct ShapeSeed {
     pub knob: Option<KnobShape>,
     /// The shape of colour wells that stand on their own; square when unset.
     pub wells: Option<WellShape>,
+    /// The dock grips' marks; each value left unset keeps [`GripShape::DEFAULT`]'s.
+    pub grip: Option<GripSeed>,
+    /// The reference point's squares; each value left unset is the Size preset's handle size.
+    pub locator: Option<LocatorSeed>,
+}
+
+/// A theme's reference point squares ([`LocatorShape`](crate::LocatorShape)): each `None` takes the Size preset's value, `size.handle.md`
+/// for the step and `size.handle.sm` for the square.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LocatorSeed {
+    /// The step from one square's centre to the next, in points.
+    pub cell: Option<f32>,
+    /// A square's side, in points.
+    pub square: Option<f32>,
+}
+
+/// A theme's grip marks: each `None` keeps [`GripShape::DEFAULT`]'s value.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GripSeed {
+    /// Ticks or dots.
+    pub mark: Option<GripMark>,
+    /// How many marks.
+    pub count: Option<u16>,
+    /// How tall a tick is, in points.
+    pub length: Option<f32>,
+    /// How wide a tick is, or a dot's side, in points.
+    pub width: Option<f32>,
+    /// The space between two marks, in points.
+    pub gap: Option<f32>,
+}
+
+impl GripSeed {
+    /// The grip shape: these values over [`GripShape::DEFAULT`].
+    pub fn shape(&self) -> GripShape {
+        let d = GripShape::DEFAULT;
+        GripShape {
+            mark: self.mark.unwrap_or(d.mark),
+            count: self.count.unwrap_or(d.count),
+            length: self.length.unwrap_or(d.length),
+            width: self.width.unwrap_or(d.width),
+            gap: self.gap.unwrap_or(d.gap),
+        }
+    }
 }
 
 /// Per-tier additions to the corner radii, in logical pixels.

@@ -73,7 +73,7 @@ pub(crate) fn unfade(ui: &Ui, core: &mut CxCore<'_>, fade: Option<Fade>) {
 }
 
 /// The index the next shape `ui` paints gets in its layer's paint list.
-pub(crate) fn next_shape(ui: &Ui) -> usize {
+fn next_shape(ui: &Ui) -> usize {
     ui.ctx().graphics(|layers| layers.get(ui.layer_id()).map_or(0, |list| list.next_idx().0))
 }
 
@@ -84,7 +84,8 @@ pub(crate) fn paint_surface(ui: &Ui, env: &Env, core: &CxCore<'_>, style: &dyn S
     if core.faded {
         core.paint.borrow_mut().surface_radius = look.radius;
     }
-    let shapes = surface_look_shapes(&env.tokens, look, &core.state, core.rect, env.direction, ui.ctx().pixels_per_point());
+    let mut shapes = surface_look_shapes(&env.tokens, look, &core.state, core.rect, env.direction, ui.ctx().pixels_per_point());
+    crate::primitives::fit_to_frame(ui.ctx(), ui.layer_id(), &mut shapes);
     match core.surface_slot {
         Some(slot) => ui.painter().set(slot, egui::Shape::Vec(shapes)),
         None => {
@@ -111,9 +112,11 @@ pub(crate) fn paint_part_layers(ui: &Ui, env: &Env, core: &CxCore<'_>) {
 }
 
 /// Step 13, paint, after `C::paint`: the focus ring of the focused component or its active part, when focus is
-/// keyboard-visible. An active part's ring takes the shape the part declared (`focus_shape`), else its rect. Never on
-/// `Well` surfaces.
-pub(crate) fn paint_focus(ui: &Ui, core: &CxCore<'_>, style: &dyn StyleView) {
+/// keyboard-visible. An active part's ring takes the shape the part declared (`focus_shape`), else its rect; the
+/// component's own ring takes the shape it declared (`Cx::focus_shape`), else its rect with its surface's corners. Never
+/// on `Well` surfaces. A collection (`whole` false) shows a ring only around the shape it declared
+/// (`Collection::rings_lead`).
+pub(crate) fn paint_focus(ui: &Ui, core: &CxCore<'_>, style: &dyn StyleView, whole: bool) {
     let Some(look) = style.focus() else { return };
     let ppp = ui.ctx().pixels_per_point();
     let flags = core.state.flags;
@@ -123,8 +126,11 @@ pub(crate) fn paint_focus(ui: &Ui, core: &CxCore<'_>, style: &dyn StyleView) {
         let declared = core.focus_shapes.iter().find(|((key, index), _)| craft_behavior::PartRef { key: *key, index: *index } == part);
         let outline = declared.map_or(PaintShape::Rect(rect, egui::CornerRadius::ZERO), |(_, shape)| FocusRing::outline(shape, rect));
         ui.painter().extend(FocusRing::shapes(look, FocusKind::Ring, &outline, ppp));
-    } else if FocusRing::visible(flags) && !well {
-        let radius = style.surface().map_or(egui::CornerRadius::ZERO, |surface| surface.radius);
-        ui.painter().extend(FocusRing::shapes(look, FocusKind::Ring, &PaintShape::Rect(core.rect, radius), ppp));
+    } else if (whole || core.focus_shape.is_some()) && FocusRing::visible(flags) && !well {
+        let outline = match &core.focus_shape {
+            Some(shape) => FocusRing::outline(shape, core.rect),
+            None => PaintShape::Rect(core.rect, style.surface().map_or(egui::CornerRadius::ZERO, |surface| surface.radius)),
+        };
+        ui.painter().extend(FocusRing::shapes(look, FocusKind::Ring, &outline, ppp));
     }
 }

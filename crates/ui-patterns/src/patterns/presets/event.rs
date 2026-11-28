@@ -1,8 +1,8 @@
 //! What a preset browser reports.
 
 use super::footer::PresetFooterEvent;
-use crate::contract::{ListDrag, NoValue, OpenChange, Outcome, ReorderMove};
-use craft_behavior::EditEvent;
+use crate::contract::{DropAt, DropPayload, ListDrag, NoValue, OpenChange, Outcome, ReorderMove};
+use craft_behavior::{DropOperation, EditEvent, SelectionChange};
 use craft_keymap::Mods;
 use egui::{Pos2, Response};
 
@@ -11,8 +11,22 @@ use egui::{Pos2, Response};
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum PresetEvent<K> {
+    /// The selection changed, when the host gave the browser a `selection` binding that does not write through.
+    Selection(SelectionChange<K>),
+    /// A host payload was dropped onto a preset or between presets (`PresetBrowser::takes_drop`).
+    #[non_exhaustive]
+    Dropped {
+        /// Where the payload landed.
+        at: DropAt<K>,
+        /// What the drop does.
+        op: DropOperation,
+        /// The payload.
+        payload: DropPayload,
+        /// The modifiers held at the release.
+        mods: Mods,
+    },
     /// A click or Space on a preset. Not an edit: the host sets its selection (and applies the preset); `mods` let
-    /// Alt, Ctrl or Cmd choose a variant of the application.
+    /// Alt, Ctrl or Cmd choose a variant of the application. It fires only for a pick without Shift or Cmd/Ctrl.
     #[non_exhaustive]
     Select {
         /// The preset.

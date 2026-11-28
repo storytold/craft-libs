@@ -3,7 +3,7 @@
 
 use super::MenuItem;
 use super::popup::{Menu, entry_rows};
-use crate::contract::{Entry, Show as _};
+use crate::contract::{Entry, Props as _, Show as _};
 use crate::display::Divider;
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
@@ -32,6 +32,8 @@ pub enum PanelRow {
     Item(Entry<GroupItem>),
     /// A row that opens a submenu.
     Submenu(Label, Vec<PanelRow>),
+    /// A command row that runs its alternate's command while the alternate's modifiers are held, as the bar's rows do.
+    Alternated(CommandRef, super::Alternate),
     /// A separator.
     Separator,
 }
@@ -82,6 +84,13 @@ impl PanelMenu {
                 }
                 PanelRow::Submenu(label, rows) => {
                     Menu::submenu_row(ui, label.clone(), |ui, _| Self::rows(ui, rows, picked));
+                }
+                PanelRow::Alternated(command, alternate) => {
+                    // The alternate swaps the command only; the salt is the row's own command, so hover and focus stay
+                    // on the row through the swap.
+                    let held = crate::runtime::pointer::frame(ui.ctx()).mods;
+                    let shown = if alternate.selected_by(held) { &alternate.command } else { command };
+                    MenuItem::command(shown.clone()).id_salt(command.key()).show(ui);
                 }
                 PanelRow::Separator => {
                     Divider::horizontal().show(ui);

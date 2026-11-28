@@ -7,16 +7,17 @@ use std::hash::Hash;
 use craft_behavior::{Codec as _, EditEvent, EditEvents, IconId, Mixed, NumberCodec, Value};
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
-    Bind, BodyCx, EditResponse, Outcome, Props as _, Remember as _, SaveKey, Show as _, ShowContainer as _, TooltipSpec, Trigger, clicked,
+    Bind, BodyCx, EditResponse, MemoProps, MemoView, Outbox, Outcome, Props as _, Remember as _, SaveKey, Show as _, ShowContainer as _, TooltipSpec,
+    Trigger, clicked,
 };
 use craft_ui::display::Divider;
 use craft_ui::form::SliderField;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::patterns::presets::{
-    CellShape, PickerField, PresetBrowser, PresetEvent, PresetFooterOptions, PresetPicker, PresetRow, PresetState, PresetView, PreviewPaint,
+    CellShape, PickerField, PresetBrowser, PresetEvent, PresetFooterOptions, PresetPicker, PresetSource, PresetState, PresetView,
 };
-use craft_ui::primitives::IconSpec;
+use craft_ui::primitives::{FacePaint, IconSpec};
 use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::runtime::overlay::CloseReason;
 use egui::{Pos2, Response, Ui};
@@ -30,7 +31,7 @@ use crate::ui::brush_settings::{BrushSizeField, TipAngle, TipEllipse};
 const DEFAULT_MAX_DIAMETER: f64 = 5000.0;
 
 /// The brush values the picker's head edits, given by the app each pass.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct BrushPickerValues {
     /// The diameter in pixels: the Size field and its log slider.
@@ -103,21 +104,13 @@ pub enum GearSection {
     End,
 }
 
-type GearRowsFn<'a> = Box<dyn FnMut(&mut Ui, GearSection) + 'a>;
-
-/// The app's own rows of the gear menu: called once per [`GearSection`], after the picker's rows of that section.
-pub struct GearRows<'a>(GearRowsFn<'a>);
-
-impl<'a> GearRows<'a> {
-    /// The rows that `show` adds to each section.
-    pub fn new(show: impl FnMut(&mut Ui, GearSection) + 'a) -> Self {
-        GearRows(Box::new(show))
-    }
-}
+/// The app's own rows of the gear menu: called once per [`GearSection`], after the picker's rows of that section. A
+/// `fn`, which captures nothing, so the picker's tools view keys it by its address.
+pub type GearRows = fn(&mut Ui, GearSection);
 
 /// The picker's state, kept by the host while the app runs: the browser's view (search, open groups, scale), the
 /// parts the presets show and whether the search field shows. [`settings`](Self::settings) is what persists.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub struct BrushPickerState<K> {
     /// The browser's view settings; its zoom is the thumbnail scale.
@@ -233,7 +226,8 @@ impl Opened {
 ///   brush live and report [`BrushPresetPickerOutput::tip`], [`diameter`](BrushPresetPickerOutput::diameter) and
 ///   [`hardness`](BrushPresetPickerOutput::hardness).
 /// - **Search row.** The browser's search field (any letter case, groups open while filtering) unless Show Search
-///   Bar is off, then at its reading end the Brush Settings and New Brush Preset buttons and the gear.
+///   Bar is off, then at its reading end the Brush Settings and New Brush Preset buttons and the gear. The popover
+///   opens with the focus in the search field, so typing filters the presets.
 /// - **Gear menu.** New Brush Preset…; Rename Brush… (opens the name field on the current preset) and Delete Brush…
 ///   (enabled with a current preset); the Brush Name, Brush Stroke and Brush Tip boxes (at least one stays on); Show
 ///   Search Bar; Import Brushes… with [`import`](Self::import). The app adds its own rows to each section with
@@ -251,10 +245,10 @@ impl Opened {
 #[must_use = "show the picker with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
 #[pattern(probe(BrushPresetPicker<'static, u32>))]
-pub struct BrushPresetPicker<'a, K: Value + Eq + Hash> {
+pub struct BrushPresetPicker<'a, K: Value + Eq + Hash + MemoProps> {
     label: Label,
     current: Bind<'a, Option<K>>,
-    rows: &'a [PresetRow<K>],
+    source: &'a PresetSource<'a, K>,
     state: Bind<'a, BrushPickerState<K>>,
     values: BrushPickerValues,
     /// The largest diameter the app's engine paints; 5000 until set.
@@ -264,8 +258,8 @@ pub struct BrushPresetPicker<'a, K: Value + Eq + Hash> {
     #[prop(flag)]
     import: bool,
     /// The app's rows of the gear menu, added to each section.
-    #[prop(func = "FnMut(&mut Ui, GearSection)")]
-    gear_rows: Option<GearRows<'a>>,
+    #[prop]
+    gear_rows: Option<GearRows>,
     /// Edge grips resize the popover, and the size the user leaves it at is saved under this key.
     #[prop]
     resizable: Option<SaveKey>,
@@ -283,26 +277,26 @@ pub struct BrushPresetPicker<'a, K: Value + Eq + Hash> {
     /// Paints the brush's current tip on the chip, as the app's engine draws it (its falloff, angle and roundness, a
     /// sampled tip's shape); without it the chip shows the picked preset's tip.
     #[prop]
-    tip: Option<PreviewPaint>,
+    tip: Option<FacePaint>,
 }
 
 /// The app's own rows of the picker's gear menu.
 type AppRows<'a> = Box<dyn FnOnce(&mut Ui) + 'a>;
 
-impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
-    /// A picker named `label` over the presets in `rows` (build each with [`brush_row`](super::brush_row)), holding the
-    /// preset the brush was picked from in `current`, its view in `state` and the brush's `values`.
+impl<'a, K: Value + Eq + Hash + MemoProps> BrushPresetPicker<'a, K> {
+    /// A picker named `label` over the presets of `source` (build each row with [`brush_row`](super::brush_row)),
+    /// holding the preset the brush was picked from in `current`, its view in `state` and the brush's `values`.
     pub fn new(
         label: impl Into<Label>,
         current: Bind<'a, Option<K>>,
-        rows: &'a [PresetRow<K>],
+        source: &'a PresetSource<'a, K>,
         state: Bind<'a, BrushPickerState<K>>,
         values: BrushPickerValues,
     ) -> Self {
         Self {
             label: label.into(),
             current,
-            rows,
+            source,
             state,
             values,
             max_diameter: DEFAULT_MAX_DIAMETER,
@@ -329,12 +323,12 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
         let BrushPresetPicker {
             label,
             mut current,
-            rows,
+            source,
             mut state,
             values,
             max_diameter,
             import,
-            mut gear_rows,
+            gear_rows,
             resizable,
             mut opened_at,
             compact,
@@ -355,116 +349,45 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
                 Some(Mixed::Same(held)) => held,
                 _ => None,
             };
-            let has_current = held.as_ref().is_some_and(|key| rows.iter().any(|row| !row.is_group() && row.key == *key));
+            let has_current = held.as_ref().is_some_and(|key| source.rows(ui.ctx(), &env).iter().any(|row| !row.is_group() && row.key == *key));
             let mut browser = before.browser.clone();
             let next_parts = Cell::new(parts);
             let next_search = Cell::new(before.search);
             let tool_picks: RefCell<Vec<BrushPick<K>>> = RefCell::new(Vec::new());
             let (mut diameter, mut hardness, mut tip) = (EditEvents::new(), EditEvents::new(), EditEvents::new());
             let browser_id = ui.scope_id().with("browser");
-            let has_app_rows = gear_rows.is_some();
             let head = |ui: &mut Ui, _: &mut BodyCx<'_>| {
-                Row::new().show(ui, |ui, _| {
-                    tip = match values.tip {
-                        Some(angle) => TipEllipse::new(words.tip.clone(), Bind::given(angle)).show(ui).events,
-                        None => EditEvents::new(),
-                    };
-                    Stack::new().show(ui, |ui, _| {
-                        let size = BrushSizeField::new(words.size.clone(), Bind::given(values.diameter), max_diameter).show(ui);
-                        diameter = size.edit.events;
-                        hardness = EditEvents::new();
-                        if let Some(value) = values.hardness {
-                            let field = SliderField::new(words.hardness.clone(), Bind::given(value * 100.0), 0.0..=100.0)
-                                .step(1.0)
-                                .unit_kind(UnitKind::Percent)
-                                .show(ui);
-                            hardness = field.edit.events.map(|percent| (percent / 100.0).clamp(0.0, 1.0));
-                        }
-                    });
-                });
-                Divider::horizontal().show(ui);
+                let mut sent = Vec::new();
+                let props = HeadProps { values, max_diameter, sent: Outbox::new(&mut sent) };
+                let _ = MemoView::new("head", props, head_view).show(ui);
+                for edits in sent {
+                    (diameter, hardness, tip) = (edits.diameter, edits.hardness, edits.tip);
+                }
                 if let Some(rows) = app_rows.take() {
                     rows(ui);
                 }
             };
             // The buttons and the gear at the reading end of the browser's search row.
             let tools = |ui: &mut Ui| {
-                let mut picks = tool_picks.borrow_mut();
-                picks.clear();
-                next_parts.set(parts);
-                next_search.set(before.search);
-                Row::new().show(ui, |ui, _| {
-                    let icon = |name: &'static str| IconSpec::svg(IconId::new(name));
-                    let settings = IconButton::new(icon("adjustments")).label(words.settings.clone()).tooltip(words.settings.clone()).show(ui);
-                    if clicked(&settings) {
-                        picks.push(BrushPick::OpenSettings);
-                    }
-                    let new_preset = IconButton::new(icon("plus")).label(words.new_preset.clone()).tooltip(words.new_preset.clone()).show(ui);
-                    if clicked(&new_preset) {
-                        picks.push(BrushPick::NewPreset);
-                    }
-                    let gear = IconButton::new(icon("settings")).label(words.options.clone()).tooltip(words.options.clone()).show(ui);
-                    let _ = Menu::new(words.options.clone()).opened_by(&gear, Trigger::Click).show(ui, |ui, _| {
-                        let mut app_rows = |ui: &mut Ui, section: GearSection| {
-                            if let Some(rows) = gear_rows.as_mut() {
-                                (rows.0)(ui, section);
-                            }
-                        };
-                        if MenuItem::new(words.menu_new.clone()).show(ui).ran {
-                            picks.push(BrushPick::NewPreset);
-                        }
-                        app_rows(ui, GearSection::Create);
-                        Divider::horizontal().show(ui);
-                        let on_current = |row: MenuItem<'static>| {
-                            let row = row.enabled(has_current);
-                            if has_current {
-                                row
-                            } else {
-                                row.tooltip(TooltipSpec::new(words.no_current.clone()).disabled_text(words.no_current.clone()))
-                            }
-                        };
-                        if on_current(MenuItem::new(words.menu_rename.clone())).show(ui).ran
-                            && let Some(key) = held.as_ref()
-                        {
-                            PresetBrowser::request_rename(ui.ctx(), browser_id, key);
-                        }
-                        if on_current(MenuItem::new(words.menu_delete.clone())).show(ui).ran
-                            && let Some(key) = held.clone()
-                        {
-                            picks.push(BrushPick::List(PresetEvent::Delete(key)));
-                        }
-                        app_rows(ui, GearSection::Preset);
-                        Divider::horizontal().show(ui);
-                        for (part, label) in [
-                            (BrushCardPart::Name, &words.part_name),
-                            (BrushCardPart::Stroke, &words.part_stroke),
-                            (BrushCardPart::Tip, &words.part_tip),
-                        ] {
-                            let on = next_parts.get().get(part);
-                            if MenuItem::new(label.clone()).check(on).keep_open(true).show(ui).ran {
-                                next_parts.set(next_parts.get().set(part, !on));
-                            }
-                        }
-                        app_rows(ui, GearSection::Parts);
-                        Divider::horizontal().show(ui);
-                        let search = next_search.get();
-                        if MenuItem::new(words.search_bar.clone()).check(search).keep_open(true).show(ui).ran {
-                            next_search.set(!search);
-                        }
-                        app_rows(ui, GearSection::View);
-                        Divider::horizontal().show(ui);
-                        if import && MenuItem::new(words.menu_import.clone()).show(ui).ran {
-                            picks.push(BrushPick::Import);
-                        }
-                        app_rows(ui, GearSection::Library);
-                        if has_app_rows {
-                            Divider::horizontal().show(ui);
-                            app_rows(ui, GearSection::End);
-                        }
-                    });
-                });
+                let mut sent = Vec::new();
+                let props = ToolsProps {
+                    has_current,
+                    held: held.clone(),
+                    parts,
+                    search: before.search,
+                    import,
+                    browser_id,
+                    gear_rows,
+                    sent: Outbox::new(&mut sent),
+                };
+                let _ = MemoView::new("tools", props, tools_view::<K>).show(ui);
+                for run in sent {
+                    *tool_picks.borrow_mut() = run.picks;
+                    next_parts.set(run.parts);
+                    next_search.set(run.search);
+                }
             };
-            let mut picker = PresetPicker::new(words.picker.clone(), current.reborrowed(), rows, Bind::bound(&mut browser))
+            let mut picker = PresetPicker::new(words.picker.clone(), current.reborrowed(), source, Bind::bound(&mut browser))
                 .field(PickerField::Chip)
                 .caption(NumberCodec::new(env.units().reader(None), 0).format(&Some(values.diameter.round())))
                 .caption_range((1.0..=max_diameter.round(), 0))
@@ -529,6 +452,141 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
             },
         }
     }
+}
+
+/// Every input of the picker's head: the brush values it shows and the largest diameter, and an outbox for its edits.
+#[derive(MemoProps)]
+struct HeadProps<'a> {
+    values: BrushPickerValues,
+    max_diameter: f64,
+    sent: Outbox<'a, HeadEdits>,
+}
+
+/// What a run of the head reports: the Size, Hardness and angle widget edits.
+struct HeadEdits {
+    diameter: EditEvents<f64>,
+    hardness: EditEvents<f64>,
+    tip: EditEvents<TipAngle>,
+}
+
+/// The head: the angle widget, Size and Hardness, then a divider. A memoized view, so a drag of its Size runs it
+/// alone and the presets below replay.
+fn head_view(props: &mut HeadProps<'_>, ui: &mut Ui) {
+    let words = Env::of(ui).words::<BrushPresetWords>();
+    let (values, max_diameter) = (props.values, props.max_diameter);
+    let mut edits = HeadEdits { diameter: EditEvents::new(), hardness: EditEvents::new(), tip: EditEvents::new() };
+    Row::new().show(ui, |ui, _| {
+        if let Some(angle) = values.tip {
+            edits.tip = TipEllipse::new(words.tip.clone(), Bind::given(angle)).show(ui).events;
+        }
+        Stack::new().show(ui, |ui, _| {
+            edits.diameter = BrushSizeField::new(words.size.clone(), Bind::given(values.diameter), max_diameter).show(ui).edit.events;
+            if let Some(value) = values.hardness {
+                let field =
+                    SliderField::new(words.hardness.clone(), Bind::given(value * 100.0), 0.0..=100.0).step(1.0).unit_kind(UnitKind::Percent).show(ui);
+                edits.hardness = field.edit.events.map(|percent| (percent / 100.0).clamp(0.0, 1.0));
+            }
+        });
+    });
+    Divider::horizontal().show(ui);
+    props.sent.send(edits);
+}
+
+/// Every input of the search row's buttons and gear menu, and an outbox for what a run reports.
+#[derive(MemoProps)]
+struct ToolsProps<'a, K: 'static> {
+    has_current: bool,
+    held: Option<K>,
+    parts: BrushCardParts,
+    search: bool,
+    import: bool,
+    browser_id: egui::Id,
+    #[memo_props(hash = "a fn pointer: its address names the code, which captures nothing")]
+    gear_rows: Option<GearRows>,
+    sent: Outbox<'a, ToolsRun<K>>,
+}
+
+/// What a run of the search row's tools reports: the picks, and the parts and Show Search Bar as the gear left them.
+struct ToolsRun<K> {
+    picks: Vec<BrushPick<K>>,
+    parts: BrushCardParts,
+    search: bool,
+}
+
+/// The Brush Settings and New Brush Preset buttons and the gear menu. A memoized view: it runs while its menu is
+/// open, and replays while nothing it shows changes.
+fn tools_view<K: Value + Eq + Hash + MemoProps>(props: &mut ToolsProps<'_, K>, ui: &mut Ui) {
+    let words = Env::of(ui).words::<BrushPresetWords>();
+    let ToolsProps { has_current, ref held, parts, search, import, browser_id, gear_rows, .. } = *props;
+    let held = held.clone();
+    let mut picks = Vec::new();
+    let next_parts = Cell::new(parts);
+    let next_search = Cell::new(search);
+    Row::new().show(ui, |ui, _| {
+        let icon = |name: &'static str| IconSpec::svg(IconId::new(name));
+        let settings = IconButton::new(icon("adjustments")).label(words.settings.clone()).tooltip(words.settings.clone()).show(ui);
+        if clicked(&settings) {
+            picks.push(BrushPick::OpenSettings);
+        }
+        let new_preset = IconButton::new(icon("plus")).label(words.new_preset.clone()).tooltip(words.new_preset.clone()).show(ui);
+        if clicked(&new_preset) {
+            picks.push(BrushPick::NewPreset);
+        }
+        let gear = IconButton::new(icon("settings")).label(words.options.clone()).tooltip(words.options.clone()).show(ui);
+        let _ = Menu::new(words.options.clone()).opened_by(&gear, Trigger::Click).show(ui, |ui, _| {
+            let app_rows = |ui: &mut Ui, section: GearSection| {
+                if let Some(rows) = gear_rows {
+                    rows(ui, section);
+                }
+            };
+            if MenuItem::new(words.menu_new.clone()).show(ui).ran {
+                picks.push(BrushPick::NewPreset);
+            }
+            app_rows(ui, GearSection::Create);
+            Divider::horizontal().show(ui);
+            let on_current = |row: MenuItem<'static>| {
+                let row = row.enabled(has_current);
+                if has_current { row } else { row.tooltip(TooltipSpec::new(words.no_current.clone()).disabled_text(words.no_current.clone())) }
+            };
+            if on_current(MenuItem::new(words.menu_rename.clone())).show(ui).ran
+                && let Some(key) = held.as_ref()
+            {
+                PresetBrowser::request_rename(ui.ctx(), browser_id, key);
+            }
+            if on_current(MenuItem::new(words.menu_delete.clone())).show(ui).ran
+                && let Some(key) = held.clone()
+            {
+                picks.push(BrushPick::List(PresetEvent::Delete(key)));
+            }
+            app_rows(ui, GearSection::Preset);
+            Divider::horizontal().show(ui);
+            for (part, label) in
+                [(BrushCardPart::Name, &words.part_name), (BrushCardPart::Stroke, &words.part_stroke), (BrushCardPart::Tip, &words.part_tip)]
+            {
+                let on = next_parts.get().get(part);
+                if MenuItem::new(label.clone()).check(on).keep_open(true).show(ui).ran {
+                    next_parts.set(next_parts.get().set(part, !on));
+                }
+            }
+            app_rows(ui, GearSection::Parts);
+            Divider::horizontal().show(ui);
+            let shown = next_search.get();
+            if MenuItem::new(words.search_bar.clone()).check(shown).keep_open(true).show(ui).ran {
+                next_search.set(!shown);
+            }
+            app_rows(ui, GearSection::View);
+            Divider::horizontal().show(ui);
+            if import && MenuItem::new(words.menu_import.clone()).show(ui).ran {
+                picks.push(BrushPick::Import);
+            }
+            app_rows(ui, GearSection::Library);
+            if gear_rows.is_some() {
+                Divider::horizontal().show(ui);
+                app_rows(ui, GearSection::End);
+            }
+        });
+    });
+    props.sent.send(ToolsRun { picks, parts: next_parts.get(), search: next_search.get() });
 }
 
 /// Keeps what Escape goes back to while the popover is open and returns the values Escape sets back, if any.

@@ -20,8 +20,27 @@ pub struct DividerStyle {
     slot: f32,
     /// The least length of a line, vertical or horizontal: one control height.
     length: f32,
-    /// Above and below a horizontal line in a menu: `space.gap.inline`.
-    separator_pad: f32,
+    /// A horizontal line in a menu, with its room.
+    separator: SeparatorRule,
+}
+
+/// A line between groups of items, in a menu (a horizontal [`Divider`]) or a list (`ListRow::separator`): the divider
+/// rule with `space.gap.inline` of room above and below it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SeparatorRule {
+    width: RuleWidth,
+    pad: f32,
+}
+
+impl SeparatorRule {
+    pub(crate) fn of(cx: &StyleCx<'_>) -> Self {
+        SeparatorRule { width: cx.rule(RuleKind::Divider).width, pad: cx.tokens.space.gap.inline }
+    }
+
+    /// The height of the line and its room on a display of `pixels_per_point`.
+    pub(crate) fn height(self, pixels_per_point: f32) -> f32 {
+        self.width.points(pixels_per_point) + 2.0 * self.pad
+    }
 }
 
 /// Which way the line runs.
@@ -33,35 +52,23 @@ enum Axis {
 
 /// A separator line in the divider colour, snapped to the pixel grid. A horizontal line takes the width it is
 /// offered (at least one control height; in a content-sized column it never widens the column) and a vertical one the height of its row, at least a control's height. In a bar it
-/// shows only with the member after it. A line given its [`length`](Divider::length) takes that length and fills
-/// nothing. Decoration: it is not in the AccessKit tree.
+/// shows only with the member after it. Decoration: it is not in the AccessKit tree.
 #[derive(crate::contract::Component)]
 pub struct Divider {
     #[common]
     common: Common,
     axis: Axis,
-    /// The line's own length, in points; `None` fills the room as the axis says.
-    length: Option<f32>,
 }
 
 impl Divider {
     /// A line across the width offered.
     pub fn horizontal() -> Self {
-        Divider { common: Common::new(), axis: Axis::Horizontal, length: None }
+        Divider { common: Common::new(), axis: Axis::Horizontal }
     }
 
     /// A line down the full height of its row.
     pub fn vertical() -> Self {
-        Divider { common: Common::new(), axis: Axis::Vertical, length: None }
-    }
-
-    /// The line is `points` long, along its axis, whatever the room: it fills nothing. A separator whose owner knows its
-    /// own extent (a ribbon group, as tall as its content and title) takes that, so the line never sets the extent of
-    /// the row it sits in. A length that is not a finite positive number is ignored, and the line fills as before.
-    // design: allow[props/point-size](the length is the measured extent of the owner's content (a group as tall as its content and title), not a chosen size)
-    pub fn length(mut self, points: f32) -> Self {
-        self.length = (points.is_finite() && points > 0.0).then_some(points);
-        self
+        Divider { common: Common::new(), axis: Axis::Vertical }
     }
 }
 
@@ -82,15 +89,15 @@ impl Component for Divider {
             width: cx.rule(RuleKind::Divider).width,
             slot: cx.tokens.space.gap.item,
             length: cx.control().height,
-            separator_pad: cx.tokens.space.gap.inline,
+            separator: SeparatorRule::of(cx),
         }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let width = cx.style.width.points(cx.ui.ctx().pixels_per_point());
-        let length = self.length.unwrap_or(cx.style.length);
+        let length = cx.style.length;
         match self.axis {
-            Axis::Horizontal if cx.env.get::<InMenu>().0 => Vec2::new(length, width + 2.0 * cx.style.separator_pad),
+            Axis::Horizontal if cx.env.get::<InMenu>().0 => Vec2::new(length, cx.style.separator.height(cx.ui.ctx().pixels_per_point())),
             Axis::Horizontal => Vec2::new(length, width),
             Axis::Vertical if cx.env.get::<InBar>().0 => Vec2::new(cx.style.slot.max(width), length),
             Axis::Vertical => Vec2::new(width, length),
@@ -98,10 +105,6 @@ impl Component for Divider {
     }
 
     fn fills(&self) -> Option<craft_behavior::Axis> {
-        // A line given its length keeps it.
-        if self.length.is_some() {
-            return None;
-        }
         Some(match self.axis {
             Axis::Horizontal => craft_behavior::Axis::X,
             Axis::Vertical => craft_behavior::Axis::Y,

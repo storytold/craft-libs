@@ -1,12 +1,15 @@
 //! The data of a tool rail: tools, slots and the tool each slot showed last.
 
+use crate::primitives::IconSpec;
 use crate::runtime::commands::CommandRef;
+use crate::runtime::env::Label;
+use egui::Ui;
 
 /// Names a slot of the rail. The host numbers its slots; [`LastUsed`] remembers a tool under it.
 pub type SlotId = u32;
 
 /// One tool of a slot. A tool is a command: the command gives the label, the icon, the chord and the enabled state,
-/// and picking the tool runs it.
+/// and picking the tool runs it. An [`icon`](RailTool::icon) of the tool's own replaces the command's.
 #[derive(Clone, Debug, PartialEq, crate::contract::MemoProps, crate::contract::PlainData)]
 #[non_exhaustive]
 pub struct RailTool<T> {
@@ -14,12 +17,24 @@ pub struct RailTool<T> {
     pub id: T,
     /// The command the tool runs.
     pub command: CommandRef,
+    /// The icon the tool shows in place of its command's: the app's own artwork, a value glyph, where the icon sets
+    /// have none.
+    #[plain_data(assume = "an icon is a value: an SVG name, a colour or a 'static glyph compared by address, never written through")]
+    pub icon: Option<IconSpec<'static>>,
 }
 
 impl<T> RailTool<T> {
-    /// A tool reported as `id` that runs `command`.
+    /// A tool reported as `id` that runs `command`, showing its command's icon.
     pub fn new(id: T, command: impl Into<CommandRef>) -> Self {
-        RailTool { id, command: command.into() }
+        RailTool { id, command: command.into(), icon: None }
+    }
+
+    /// Shows `icon` for the tool, on its rail button, its flyout row and its drawer row, in place of its command's
+    /// icon: an app's own tool artwork (`IconSpec::glyph`).
+    #[must_use]
+    pub fn icon(mut self, icon: impl Into<IconSpec<'static>>) -> Self {
+        self.icon = Some(icon.into());
+        self
     }
 }
 
@@ -33,19 +48,38 @@ pub struct ToolSlot<T> {
     pub tools: Vec<RailTool<T>>,
     /// The slot ends a group of tools: the rail leaves a gap after it.
     pub group_end: bool,
+    /// The caption of the group the slot starts.
+    pub caption: Option<Label>,
 }
 
 impl<T> ToolSlot<T> {
     /// A slot that does not end a group.
     pub fn new(id: SlotId, tools: Vec<RailTool<T>>) -> Self {
-        ToolSlot { id, tools, group_end: false }
+        ToolSlot { id, tools, group_end: false, caption: None }
     }
 
     /// A slot that ends a group of tools: the rail leaves a gap after it, before the next slot. In two columns the
     /// gap follows the row that holds the slot.
     pub fn ending_group(id: SlotId, tools: Vec<RailTool<T>>) -> Self {
-        ToolSlot { id, tools, group_end: true }
+        ToolSlot { id, tools, group_end: true, caption: None }
     }
+
+    /// The slot starts a group captioned `caption`.
+    #[must_use]
+    pub fn captioned(mut self, caption: impl Into<Label>) -> Self {
+        self.caption = Some(caption.into());
+        self
+    }
+}
+
+/// The tips of a rail's tools: where a tool `has` one, its button (and the flyout's row) shows it in place of the
+/// command tooltip.
+pub trait ToolTips<T> {
+    /// Whether `tool` has a tip.
+    fn has(&self, tool: &T) -> bool;
+
+    /// Shows the tip of `tool`.
+    fn show(&self, tool: &T, ui: &mut Ui);
 }
 
 /// The tool each slot showed last. Plain data the host keeps with its workspace.

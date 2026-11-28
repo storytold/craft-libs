@@ -4,17 +4,19 @@
 use std::collections::BTreeSet;
 
 use craft_keymap::editor::{self, DOUBLE_PRESS, EditSession, Recorded, Recorder};
-use craft_keymap::import::{self, ForeignSet, ImportOptions, ImportPlan, ImportReport};
+use craft_keymap::import::{self, ForeignEntry, ForeignSet, ImportOptions, ImportPlan, ImportReport, Start};
 use craft_keymap::profiles::{Builtins, ProfileError, Profiles, set_name};
 use craft_keymap::{
-    AssignError, Assigned, Binding, BindingError, Chord, CommandRef, Holder, Key, Keymap, MAX_BINDINGS, Overrides, ParseError, Policy, Scope, Trigger,
+    AssignError, Assigned, Binding, BindingError, Chord, CommandRef, Holder, Key, Keymap, MAX_BINDINGS, Overrides, ParseError, Platform, Policy,
+    Scope, Trigger,
 };
+use craft_ui::primitives::ChordText;
 
 use super::keyboard::KeyboardState;
 use super::pages::TabSet;
 use super::rows::{self, AreaEntry, AreaId, Built, Filter, RowCache, View};
-use super::words::Say;
-use super::{ConflictMode, JSON_FORMAT, Layout, Options, Outcome, summary};
+use super::words::{Say, around_chord};
+use super::{ConflictMode, HoldSetting, JSON_FORMAT, Layout, Options, Outcome, summary};
 
 /// What the dialog edits this frame.
 pub(crate) struct Env<'e> {
@@ -23,9 +25,15 @@ pub(crate) struct Env<'e> {
     pub options: &'e Options,
     pub tabs: Option<&'e mut dyn TabSet>,
     pub text: &'e Say,
+    /// The app's Hold Shortcuts setting; `None`: the dialog has no hold parts.
+    pub holds: Option<&'e mut HoldSetting>,
 }
 
 impl Env<'_> {
+    pub(crate) fn has_app_tab(&self, id: Option<&str>) -> bool {
+        id.is_some_and(|id| self.tabs.as_ref().is_some_and(|tabs| (0..tabs.len()).any(|i| tabs.describe(i).is_some_and(|(tab, _)| tab == id))))
+    }
+
     fn chord_text(&self, t: &Trigger) -> String {
         self.text.trigger(t, self.keymap.platform())
     }
@@ -66,10 +74,42 @@ impl Env<'_> {
 pub(crate) enum Target {
     /// A row's shortcut cell: replaces `old`, or adds when `None`. Commits at once.
     Cell { command: CommandRef, old: Option<Binding> },
+    /// A row's hold cell: the chord recorded becomes a hold that replaces the hold `old`, or adds one when `None`.
+    /// Commits at once.
+    HoldCell { command: CommandRef, old: Option<Binding> },
+    /// An existing binding in the detail pane. Commits a replacement in the binding's scope.
+    Detail { command: CommandRef, old: Binding },
     /// The detail pane's New Shortcut field: the chord waits for Assign.
     Field { command: CommandRef },
     /// Search by key: the chord's text becomes the query.
     Search,
+    /// The import review's undecided key code `code` (`key:N`): the key pressed, without modifiers, answers it.
+    Code { code: String },
+}
+
+impl Target {
+    pub(crate) fn command(&self) -> Option<&CommandRef> {
+        match self {
+            Target::Cell { command, .. } | Target::HoldCell { command, .. } | Target::Detail { command, .. } | Target::Field { command } => {
+                Some(command)
+            }
+            Target::Search | Target::Code { .. } => None,
+        }
+    }
+
+    pub(crate) fn is_hold(&self) -> bool {
+        match self {
+            Target::HoldCell { .. } => true,
+            Target::Detail { old, .. } => old.trigger.is_hold(),
+            _ => false,
+        }
+    }
+
+    /// A single press waits for a second one ([`Options::double_press`]) only where a double press means something:
+    /// a hold or a code takes the chord alone.
+    fn takes_double(&self) -> bool {
+        !self.is_hold() && !matches!(self, Target::Code { .. })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -95,12 +135,41 @@ pub(crate) struct FieldChord {
 /// The conflict bar, for one pending chord.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ConflictBar {
+    pub revision: u64,
     pub command: CommandRef,
     pub old: Option<Binding>,
     pub binding: Binding,
     pub holders: Vec<Holder>,
+    pub can_steal: bool,
+    pub can_keep: bool,
+    before: Option<ConflictBasis>,
     /// "{chord} is used by {label}".
     pub text: String,
+}
+
+impl ConflictBar {
+    pub(crate) fn notice_text(&self, env: &Env) -> String {
+        if self.before.is_some() { self.text.clone() } else { around_chord(env.text.rtl(), &self.text, &env.chord_text(&self.binding.trigger)) }
+    }
+}
+
+/// The existing bindings and home scopes that an automation conflict was opened against.
+#[derive(Clone, Debug, PartialEq)]
+struct ConflictBasis {
+    bindings: Vec<Vec<Binding>>,
+    scopes: Vec<Option<Scope>>,
+    platform: Platform,
+}
+
+impl ConflictBasis {
+    fn of(keymap: &Keymap, command: &CommandRef, holders: &[Holder]) -> Self {
+        let scopes = std::iter::once(command)
+            .chain(holders.iter().map(|holder| &holder.command))
+            .map(|command| keymap.bindable(command).map(|entry| entry.scope.clone()))
+            .collect();
+        let bindings = std::iter::once(command).chain(holders.iter().map(|holder| &holder.command)).map(|command| keymap.bindings(command)).collect();
+        Self { bindings, scopes, platform: keymap.platform() }
+    }
 }
 
 /// A line under the table after an action.
@@ -154,6 +223,32 @@ pub(crate) struct Review {
     pub name: String,
     /// After Import as New Set: the set's name and the report.
     pub done: Option<(String, ImportReport)>,
+    /// Whether each entry of the set is imported, one flag per `set.entries`.
+    pub included: Vec<bool>,
+    /// The search over label, path and key text.
+    pub search: String,
+}
+
+impl Review {
+    /// The entry of the set named `item` at `line`: what a report row stands for.
+    pub(crate) fn entry_at(&self, item: &str, line: Option<usize>) -> Option<usize> {
+        self.set.entries.iter().position(|e| e.item() == item && e.line == line)
+    }
+
+    /// Plans the set again after a change of its options or of the entries left out.
+    fn replan(&mut self, keymap: &Keymap) {
+        self.plan = plan_included(&self.set, &self.included, keymap, &self.options);
+    }
+}
+
+/// The plan of the entries of `set` that `included` keeps; an entry left out is planned as if the set lacked it.
+fn plan_included(set: &ForeignSet, included: &[bool], keymap: &Keymap, options: &ImportOptions) -> ImportPlan {
+    if included.iter().all(|on| *on) {
+        return import::plan(set, keymap, options);
+    }
+    let mut kept = set.clone();
+    kept.entries = set.entries.iter().enumerate().filter(|(i, _)| included.get(*i).copied().unwrap_or(true)).map(|(_, e)| e.clone()).collect();
+    import::plan(&kept, keymap, options)
 }
 
 /// The set row's inline form: New Set… or Rename….
@@ -178,6 +273,8 @@ pub(crate) enum SetFormKind {
 struct Opened {
     profiles: Option<Profiles>,
     overrides: Overrides,
+    /// The hold setting as the app gave it, when it gave one.
+    holds: Option<HoldSetting>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,6 +304,7 @@ pub struct DialogState {
     pub(crate) recording: Option<Recording>,
     pub(crate) field: Option<FieldChord>,
     pub(crate) conflict: Option<ConflictBar>,
+    conflict_revision: u64,
     pub(crate) prompt: Option<Prompt>,
     pub(crate) message: Option<Message>,
     pub(crate) review: Option<Review>,
@@ -229,6 +327,8 @@ pub struct DialogState {
     pub(crate) tab: Option<&'static str>,
     /// The active set's name as of the last frame.
     pub(crate) set: Option<String>,
+    /// The app gave the dialog its hold setting as of the last frame.
+    pub(crate) holds_shown: bool,
 }
 
 impl Default for DialogState {
@@ -256,6 +356,7 @@ impl DialogState {
             recording: None,
             field: None,
             conflict: None,
+            conflict_revision: 0,
             prompt: None,
             message: None,
             review: None,
@@ -271,6 +372,7 @@ impl DialogState {
             keyboard: KeyboardState::default(),
             tab: None,
             set: None,
+            holds_shown: false,
         }
     }
 
@@ -287,9 +389,10 @@ impl DialogState {
         self.phase != Phase::New
     }
 
-    /// Records the active set's name for [`DialogState::snapshot`].
+    /// Records the active set's name and whether the hold setting is shown, for [`DialogState::snapshot`].
     pub(crate) fn sync_set(&mut self, env: &Env) {
         self.set = env.sets.as_ref().map(|(p, b)| p.active_name(b).to_string());
+        self.holds_shown = env.holds.is_some();
     }
 
     /// Shows an app tab (`None`: Keyboard Shortcuts); a chord being recorded is dropped.
@@ -339,15 +442,28 @@ impl DialogState {
 
     // ---- Frame ----
 
-    /// The first frame: snapshot for Cancel, an edit session, the Show entries.
+    /// The first frame: snapshot for Cancel, the keymap's holds as the setting says, an edit session, the Show entries.
     pub(crate) fn begin(&mut self, env: &mut Env) {
         if self.phase != Phase::New {
             return;
         }
         self.phase = Phase::Open;
-        self.opened = Some(Opened { profiles: env.sets.as_ref().map(|(p, _)| (**p).clone()), overrides: env.keymap.overrides().clone() });
+        let holds = env.holds.as_deref().cloned();
+        if let Some(setting) = &holds {
+            env.keymap.set_holds(setting.on);
+        }
+        self.opened = Some(Opened { profiles: env.sets.as_ref().map(|(p, _)| (**p).clone()), overrides: env.keymap.overrides().clone(), holds });
         self.session = Some(EditSession::begin(env.keymap));
         self.areas = rows::areas(env.keymap, env.options, env.text);
+        // Without All Commands in Show, the dialog opens on the area that lists the selected command, else the first.
+        if !self.areas.iter().any(|area| area.id == self.area) {
+            let listed = |id: &AreaId| self.areas.iter().any(|area| area.id == *id);
+            let selected = self.selected.as_ref().and_then(|command| env.keymap.bindable(command));
+            let home = selected.map(|b| rows::area_of(&self.areas, b, env.options)).filter(listed);
+            if let Some(area) = home.or_else(|| self.areas.first().map(|area| area.id.clone())) {
+                self.area = area;
+            }
+        }
         self.sync_set(env);
     }
 
@@ -406,11 +522,12 @@ impl DialogState {
         }
     }
 
-    /// Selects a command and shows its row: area All, no search, no filter.
-    pub(crate) fn go_to(&mut self, command: &CommandRef) {
+    /// Selects a command and shows its row: area All (or, when Show does not list All, the first listed area that holds
+    /// the row), no search, no filter.
+    pub(crate) fn go_to(&mut self, env: &Env, command: &CommandRef) {
         self.select_row(command);
         self.keys_pick = None;
-        self.area = AreaId::All;
+        self.area = env.keymap.bindable(command).map_or(AreaId::All, |b| rows::area_of(&self.areas, b, env.options));
         self.query.clear();
         self.filter = Filter::All;
         self.collapsed.clear();
@@ -449,7 +566,7 @@ impl DialogState {
         self.conflict = None;
         self.message = None;
         self.recorder.reset();
-        if let Target::Cell { command, .. } | Target::Field { command } = &target {
+        if let Some(command) = target.command() {
             self.select_row(command);
         }
         self.recording = Some(Recording { target, waiting: None, started: false });
@@ -460,8 +577,25 @@ impl DialogState {
         self.recorder.reset();
     }
 
-    /// Commits a single press whose double-press window has ended.
+    /// Clears unavailable editing targets and settles timers outside the detail pane.
     pub(crate) fn tick(&mut self, env: &mut Env, now: f64) {
+        if !env.options.editable {
+            self.conflict = None;
+            if self.recording.as_ref().is_some_and(|r| r.target.command().is_some()) {
+                self.stop_recording();
+            }
+        }
+        if self.recording.as_ref().is_some_and(|r| matches!(r.target, Target::Detail { .. })) {
+            if env.options.layout != Layout::Table {
+                self.stop_recording();
+            }
+        } else {
+            self.settle_recording(env, now);
+        }
+    }
+
+    /// Commits a single press whose double-press window has ended. The detail pane calls this after checking focus.
+    pub(crate) fn settle_recording(&mut self, env: &mut Env, now: f64) {
         let expired = self.recording.as_ref().and_then(|r| r.waiting).filter(|(_, at)| now < *at || now - *at >= DOUBLE_PRESS);
         if let Some((trigger, _)) = expired {
             self.commit_recorded(env, trigger);
@@ -477,7 +611,9 @@ impl DialogState {
                 let target = rec.target.clone();
                 self.stop_recording();
                 match target {
-                    Target::Cell { command, old: Some(old) } => self.remove(env, &command, &old),
+                    Target::Cell { command, old: Some(old) } | Target::HoldCell { command, old: Some(old) } | Target::Detail { command, old } => {
+                        self.remove(env, &command, &old);
+                    }
                     Target::Field { .. } => self.field = None,
                     _ => {}
                 }
@@ -485,7 +621,7 @@ impl DialogState {
             }
             match self.recorder.press(chord, now) {
                 Recorded::Cancel => self.stop_recording(),
-                Recorded::Single(t) if env.options.double_press => rec.waiting = Some((t, now)),
+                Recorded::Single(t) if env.options.double_press && rec.target.takes_double() => rec.waiting = Some((t, now)),
                 Recorded::Single(t) | Recorded::Double(t) => self.commit_recorded(env, t),
             }
         }
@@ -497,15 +633,33 @@ impl DialogState {
         self.recorder.reset();
         match rec.target {
             Target::Search => self.query = env.chord_text(&trigger),
-            Target::Cell { command, old } => {
-                let binding = match old.as_ref().and_then(|o| o.scope.clone()) {
-                    Some(scope) => Binding::in_scope(trigger, scope),
-                    None => Binding::new(trigger),
-                };
-                self.commit(env, &command, old, binding);
-            }
+            Target::Cell { command, old } => self.commit_cell(env, &command, old, trigger),
+            // A double press held is the same hold: the cell takes the chord alone.
+            Target::HoldCell { command, old } => self.commit_cell(env, &command, old, Trigger::hold(trigger.chord)),
             Target::Field { command } => self.set_field(env, command, trigger),
+            Target::Code { code } => {
+                if trigger.chord.mods.is_none() {
+                    self.answer_code(env, code, Some(trigger.chord.key.name().to_owned()));
+                } else {
+                    self.refuse(word!(env, press_a_key_without_modifiers));
+                }
+            }
+            Target::Detail { command, old } => {
+                if self.selected.as_ref() == Some(&command) && env.keymap.bindings(&command).contains(&old) {
+                    let trigger = if old.trigger.is_hold() { Trigger::hold(trigger.chord) } else { trigger };
+                    self.commit_cell(env, &command, Some(old), trigger);
+                }
+            }
         }
+    }
+
+    /// Commits `trigger` to a row's cell in the scope of the binding it replaces.
+    fn commit_cell(&mut self, env: &mut Env, command: &CommandRef, old: Option<Binding>, trigger: Trigger) {
+        let binding = match old.as_ref().and_then(|o| o.scope.clone()) {
+            Some(scope) => Binding::in_scope(trigger, scope),
+            None => Binding::new(trigger),
+        };
+        self.commit(env, command, old, binding);
     }
 
     /// Puts a chord into the New Shortcut field with the chosen Context, and finds who holds it.
@@ -562,6 +716,49 @@ impl DialogState {
         self.commit_with(env, command, old, binding, mode);
     }
 
+    /// Checks that a replacement can be saved before offering conflict confirmation to an automation caller.
+    pub(crate) fn replace_for_automation(&mut self, env: &mut Env, command: &CommandRef, old: &Binding, binding: Binding) -> Result<(), String> {
+        let mut actions = None;
+        if env.options.conflicts == ConflictMode::Ask && !editor::holders(env.keymap, command, &binding).is_empty() {
+            let preview = |policy| editor::check_replace(env.keymap, command, old, &binding, policy);
+            let steal = preview(Policy::Steal);
+            let keep = preview(Policy::Keep).is_ok();
+            if let Err(error) = &steal
+                && (!keep || !env.options.allow_keep)
+            {
+                let text = assign_error(env, error);
+                self.conflict = None;
+                self.refuse(text.clone());
+                return Err(text);
+            }
+            actions = Some((steal.is_ok(), keep));
+        }
+        self.commit(env, command, Some(old.clone()), binding);
+        if let (Some(conflict), Some((steal, keep))) = (&mut self.conflict, actions) {
+            conflict.can_steal = steal;
+            conflict.can_keep = keep;
+            conflict.before = Some(ConflictBasis::of(env.keymap, command, &conflict.holders));
+            let chord = |trigger| {
+                let text = env.chord_text(trigger);
+                if env.text.rtl() { ChordText::new(text).isolated() } else { text }
+            };
+            let label = env.label(command);
+            let target = match env.keymap.bindable(command) {
+                Some(entry) => fill!(env, label_scope, ("label", &label), ("scope", &env.text.scope_name(old.scope_or(&entry.scope)))),
+                None => label,
+            };
+            conflict.text = fill!(
+                env,
+                replace_old_for_command_with_chord_used_by_label,
+                ("old", &chord(&old.trigger)),
+                ("command", &target),
+                ("chord", &chord(&conflict.binding.trigger)),
+                ("label", &env.holder_labels(&conflict.holders))
+            );
+        }
+        self.edit_result()
+    }
+
     fn commit_with(&mut self, env: &mut Env, command: &CommandRef, old: Option<Binding>, binding: Binding, mode: ConflictMode) {
         self.conflict = None;
         self.message = None;
@@ -584,11 +781,31 @@ impl DialogState {
         match mode {
             ConflictMode::Ask => {
                 let text = fill!(env, chord_is_used_by_label, ("chord", &chord), ("label", &env.holder_labels(&holders)));
-                self.conflict = Some(ConflictBar { command: command.clone(), old, binding, holders, text });
+                self.conflict_revision = self.conflict_revision.wrapping_add(1);
+                self.conflict = Some(ConflictBar {
+                    revision: self.conflict_revision,
+                    command: command.clone(),
+                    old,
+                    binding,
+                    holders,
+                    can_steal: true,
+                    can_keep: true,
+                    before: None,
+                    text,
+                });
             }
-            ConflictMode::Steal => self.apply_and_say(env, command, old, binding, Policy::Steal),
-            ConflictMode::Keep => self.apply_and_say(env, command, old, binding, Policy::Keep),
+            ConflictMode::Steal => {
+                self.apply_and_say(env, command, old, binding, Policy::Steal);
+            }
+            ConflictMode::Keep => {
+                self.apply_and_say(env, command, old, binding, Policy::Keep);
+            }
         }
+    }
+
+    /// Reports the same refusal to an automation caller that the dialog shows to the user.
+    pub(crate) fn edit_result(&self) -> Result<(), String> {
+        self.message.as_ref().filter(|message| message.refused).map_or(Ok(()), |message| Err(message.text.clone()))
     }
 
     fn refuse(&mut self, text: String) {
@@ -614,6 +831,10 @@ impl DialogState {
             }
             Err(e) => {
                 let text = assign_error(env, &e);
+                let chord = match &e {
+                    AssignError::Unstorable { trigger, .. } => env.chord_text(trigger),
+                    _ => chord,
+                };
                 self.refuse_chord(text, chord);
                 None
             }
@@ -621,12 +842,12 @@ impl DialogState {
     }
 
     /// Applies with Steal or Keep and says what it did, with Go to Conflict (and Undo for Steal).
-    fn apply_and_say(&mut self, env: &mut Env, command: &CommandRef, old: Option<Binding>, binding: Binding, policy: Policy) {
+    fn apply_and_say(&mut self, env: &mut Env, command: &CommandRef, old: Option<Binding>, binding: Binding, policy: Policy) -> bool {
         let chord = env.chord_text(&binding.trigger);
-        let Some(a) = self.apply(env, command, old, binding, policy) else { return };
+        let Some(a) = self.apply(env, command, old, binding, policy) else { return false };
         let (holders, steal) = if policy == Policy::Steal { (&a.taken_from, true) } else { (&a.clashes, false) };
         if holders.is_empty() {
-            return;
+            return true;
         }
         let label = env.holder_labels(holders);
         let text = if steal {
@@ -636,22 +857,24 @@ impl DialogState {
         };
         let goto = holders.first().map(|h| h.command.clone());
         self.message = Some(Message { text, refused: false, goto, undo: policy == Policy::Steal, chord: Some(chord) });
+        true
     }
 
     /// Take It.
     pub(crate) fn take_it(&mut self, env: &mut Env) {
-        if let Some(c) = self.conflict.take() {
+        if let Some(c) = self.accept_conflict(env) {
             self.apply_and_say(env, &c.command, c.old, c.binding, Policy::Steal);
         }
     }
 
     /// Accept and Go to Conflict.
     pub(crate) fn take_it_and_go(&mut self, env: &mut Env) {
-        if let Some(c) = self.conflict.take() {
+        if let Some(c) = self.accept_conflict(env) {
             let first = c.holders.first().map(|h| h.command.clone());
-            self.apply_and_say(env, &c.command, c.old, c.binding, Policy::Steal);
-            if let Some(holder) = first {
-                self.go_to(&holder);
+            if self.apply_and_say(env, &c.command, c.old, c.binding, Policy::Steal)
+                && let Some(holder) = first
+            {
+                self.go_to(env, &holder);
             }
         }
     }
@@ -661,9 +884,35 @@ impl DialogState {
         if !env.options.allow_keep {
             return;
         }
-        if let Some(c) = self.conflict.take() {
+        if let Some(c) = self.accept_conflict(env) {
             self.apply_and_say(env, &c.command, c.old, c.binding, Policy::Keep);
         }
+    }
+
+    /// The pending conflict the user can currently answer.
+    pub(crate) fn visible_conflict(&self, env: &Env) -> Option<&ConflictBar> {
+        self.conflict.as_ref().filter(|conflict| {
+            conflict.before.is_none() || (env.options.editable && !self.modal() && !self.is_recording() && !env.has_app_tab(self.tab))
+        })
+    }
+
+    fn accept_conflict(&mut self, env: &Env) -> Option<ConflictBar> {
+        self.visible_conflict(env)?;
+        let conflict = self.conflict.take()?;
+        if let Some(before) = &conflict.before {
+            let holders = editor::holders(env.keymap, &conflict.command, &conflict.binding);
+            if holders != conflict.holders || ConflictBasis::of(env.keymap, &conflict.command, &holders) != *before {
+                self.refuse(word!(env, the_shortcuts_changed_try_replacing_again));
+                return None;
+            }
+            if let (Some(accept), Some(command)) = (&env.options.accept, env.keymap.bindable(&conflict.command))
+                && let Err(text) = accept(command, &conflict.binding)
+            {
+                self.refuse(text);
+                return None;
+            }
+        }
+        Some(conflict)
     }
 
     /// ✕ on the conflict bar: nothing was applied, so nothing changes.
@@ -697,7 +946,14 @@ impl DialogState {
 
     /// × on a chip, or Remove.
     pub(crate) fn remove(&mut self, env: &mut Env, command: &CommandRef, binding: &Binding) {
-        self.edit(env, |s, km| s.remove(km, command, binding));
+        self.message = None;
+        let km = &mut *env.keymap;
+        let result = self.session.get_or_insert_with(|| EditSession::begin(km)).edit(km, |km| km.try_remove(command, binding));
+        match result {
+            Ok(true) => self.edited(env),
+            Ok(false) => {}
+            Err(error) => self.refuse(assign_error(env, &error)),
+        }
     }
 
     /// Remove in [`Layout::CommandLists`]: takes away the key picked among the selected command's keys.
@@ -752,6 +1008,43 @@ impl DialogState {
         self.session.as_ref().is_some_and(EditSession::can_redo)
     }
 
+    // ---- Hold Shortcuts ----
+
+    /// The Hold Shortcuts switch: the setting and the keymap's holds in one step. The setting is not an override, so
+    /// Cancel restores it and Undo does not; a hold being recorded or waiting in the conflict bar is dropped when
+    /// holds go off.
+    pub(crate) fn set_holds_on(&mut self, env: &mut Env, on: bool) {
+        let Some(setting) = env.holds.as_deref_mut() else { return };
+        if setting.on == on {
+            return;
+        }
+        setting.on = on;
+        env.keymap.set_holds(on);
+        if !on {
+            if matches!(self.recording.as_ref().map(|r| &r.target), Some(Target::HoldCell { .. })) {
+                self.stop_recording();
+            }
+            if self.conflict.as_ref().is_some_and(|c| c.binding.trigger.is_hold()) {
+                self.conflict = None;
+            }
+        }
+        self.changed = true;
+    }
+
+    /// The hold delay, kept in the setting's range; Cancel restores it and Undo does not.
+    pub(crate) fn set_hold_delay(&mut self, env: &mut Env, delay: f64) {
+        let Some(setting) = env.holds.as_deref_mut() else { return };
+        if !delay.is_finite() {
+            return;
+        }
+        // `max` then `min` rather than `clamp`, which panics on a range given backwards.
+        let delay = delay.max(*setting.range.start()).min(*setting.range.end());
+        if delay != setting.delay {
+            setting.delay = delay;
+            self.changed = true;
+        }
+    }
+
     // ---- OK, Cancel, Escape, Enter ----
 
     /// OK: with sets, stores the overrides (a built-in's edits become a copy), then closes.
@@ -781,6 +1074,11 @@ impl DialogState {
                 undone |= **p != profiles;
                 **p = profiles;
             }
+            if let (Some(setting), Some(was)) = (env.holds.as_deref_mut(), opened.holds) {
+                undone |= *setting != was;
+                env.keymap.set_holds(was.on);
+                *setting = was;
+            }
         }
         self.close(Outcome::Cancel);
         self.changed = undone;
@@ -801,7 +1099,7 @@ impl DialogState {
     pub(crate) fn escape(&mut self, env: &mut Env) {
         if self.recording.is_some() {
             self.stop_recording();
-        } else if self.conflict.is_some() {
+        } else if self.visible_conflict(env).is_some() {
             self.conflict = None;
         } else if self.prompt.is_some() {
             self.prompt = None;
@@ -1095,19 +1393,47 @@ impl DialogState {
         let name = plan.report.set.clone().unwrap_or_else(|| word!(env, imported));
         self.stop_recording();
         self.conflict = None;
-        self.review = Some(Review { set, options, plan, name, done: None });
+        let included = vec![true; set.entries.len()];
+        self.review = Some(Review { set, options, plan, name, done: None, included, search: String::new() });
     }
 
-    /// Picks candidate `candidate` for suggestion `suggestion`, re-plans, and reports the answers
-    /// for the app to keep.
-    pub(crate) fn pick_suggestion(&mut self, env: &Env, suggestion: usize, candidate: usize) {
+    /// Starts the review from `start` and re-plans.
+    pub(crate) fn set_start(&mut self, env: &Env, start: Start) {
         let Some(r) = &mut self.review else { return };
-        let Some(s) = r.plan.report.suggestions.get(suggestion) else { return };
-        let Some(command) = s.candidates.get(candidate).cloned() else { return };
-        let Some(entry) = r.set.entries.iter().find(|e| e.item() == s.item && e.line == s.line) else { return };
-        r.options.remembered.insert(entry.remember_key(), command);
-        r.plan = import::plan(&r.set, env.keymap, &r.options);
-        self.outcome = Some(Outcome::Remembered(r.options.remembered.clone()));
+        r.options.start = start;
+        r.replan(env.keymap);
+    }
+
+    /// Imports entry `entry` or leaves it out, and re-plans.
+    pub(crate) fn include(&mut self, env: &Env, entry: usize, on: bool) {
+        let Some(r) = &mut self.review else { return };
+        let Some(flag) = r.included.get_mut(entry) else { return };
+        *flag = on;
+        r.replan(env.keymap);
+    }
+
+    /// Picks `command` for entry `entry` (`None` is No equivalent), re-plans and reports the answer.
+    pub(crate) fn pick_target(&mut self, env: &Env, entry: usize, command: Option<CommandRef>) {
+        let Some(r) = &mut self.review else { return };
+        let Some(key) = r.set.entries.get(entry).map(ForeignEntry::remember_key) else { return };
+        r.options.remembered.insert(key, command);
+        r.replan(env.keymap);
+        self.report_answers();
+    }
+
+    /// Answers the undecided `code` (`None` is No equivalent), re-plans and reports the answer.
+    pub(crate) fn answer_code(&mut self, env: &Env, code: String, answer: Option<String>) {
+        let Some(r) = &mut self.review else { return };
+        r.options.codes.insert(code, answer);
+        r.replan(env.keymap);
+        self.report_answers();
+    }
+
+    /// Every answer the review holds, for the app to keep for later imports.
+    fn report_answers(&mut self) {
+        if let Some(r) = &self.review {
+            self.outcome = Some(Outcome::Remembered { targets: r.options.remembered.clone(), codes: r.options.codes.clone() });
+        }
     }
 
     /// Import as New Set (with sets), else applies the plan to the keymap as one undo step.
@@ -1150,8 +1476,12 @@ fn assign_error(env: &Env, e: &AssignError) -> String {
         AssignError::TooMany => fill!(env, a_command_can_have_at_most, ("n", &MAX_BINDINGS.to_string())),
         AssignError::UnknownScope(s) => fill!(env, the_scope_scope_is_unknown, ("scope", s.as_str())),
         AssignError::Full => word!(env, too_many_shortcuts_are_assigned),
+        AssignError::Unstorable { command, trigger } => {
+            fill!(env, shortcut_cannot_be_saved_in_its_scope, ("chord", &env.chord_text(trigger)), ("command", &env.label(command)))
+        }
         AssignError::UnknownCommand => word!(env, this_command_is_unknown),
         AssignError::Taken(holders) => fill!(env, also_used_by_label, ("label", &env.holder_labels(holders))),
+        AssignError::NotHoldable(t) => fill!(env, not_holdable, ("chord", &env.chord_text(t))),
         _ => e.to_string(),
     }
 }

@@ -3,29 +3,36 @@
 use craft_behavior::{Metrics, MotionMode, PartKey, Sense};
 use craft_host::target::{Os, WindowChrome};
 use craft_quit::{CloseAnswer, CloseScope};
-use craft_ui::contract::overlay::{Dismiss, Outside};
+use craft_ui::contract::overlay::{Dismiss, OpenFilter, Outside, any_open};
 use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{
-    Alert, ChildDialog, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, PromptKind, StackDialog, StandardPrompt, StartupStage,
-    UnsavedChangesDialog, dialog_id,
+    Alert, ChildDialog, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, JobAnswer, JobProgress, Prompt, PromptChoice,
+    PromptKind, RecoveredDocument, RecoveryAnswer, RecoveryChoice, RecoveryDialog, StackDialog, StandardPrompt, StartupStage, UnsavedChangesDialog,
+    dialog_id,
 };
 use craft_ui::display::Text;
 use craft_ui::popover::Popover;
+use craft_ui::runtime::commands::{CommandSet as _, EditCommands};
+use craft_ui::runtime::frame::take_output;
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
 use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::testing::{Fixture, Frames, Story, StoryData, StoryOutput, pointer, trial};
+use craft_ui::text::TextField;
 use egui::{Modifiers, Pos2, Rect, Response, Ui, Vec2, ViewportId, vec2};
+use serde_json::json;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 /// A dialog with no content: it records whether it was the top of the stack when shown and finishes with
 /// `finish` once set.
 struct Probe<const N: usize> {
     key: &'static str,
+    instance: Option<DialogId>,
     top: bool,
     finish: Option<DialogResult<u32>>,
     shows: usize,
@@ -33,7 +40,7 @@ struct Probe<const N: usize> {
 
 impl<const N: usize> Probe<N> {
     fn new(key: &'static str) -> Self {
-        Self { key, top: false, finish: None, shows: 0 }
+        Self { key, instance: None, top: false, finish: None, shows: 0 }
     }
 }
 
@@ -42,6 +49,10 @@ impl<const N: usize> StackDialog for Probe<N> {
 
     fn id(&self) -> DialogId {
         dialog_id(self.key)
+    }
+
+    fn instance(&self) -> Option<DialogId> {
+        self.instance
     }
 
     fn show(&mut self, _: &mut Ui, stack: &DialogStack) -> Option<DialogResult<u32>> {
@@ -222,6 +233,107 @@ fn a_dialog_that_closed_itself_shows_when_opened_again() {
     }
 }
 
+/// Automation answers the recovery prompt through its `choice` field: Discard is reachable, Recover is refused while
+/// the document is blocked, and a value that is no answer is refused.
+#[trial]
+fn automation_answers_a_recovery_prompt_with_discard() {
+    let ctx = egui::Context::default();
+    let mut host = DialogHost::new();
+    let age = Duration::from_secs(300);
+
+    let blocked = RecoveredDocument::new("poster", "poster.psd", age).blocked("Stop recording first");
+    let id = host.open(RecoveryDialog::new(blocked));
+    assert!(host.set_json_field(&ctx, id, "choice", json!("recover")).is_err(), "a blocked document refuses recover");
+    assert!(host.set_json_field(&ctx, id, "choice", json!("maybe")).is_err(), "an unknown choice is refused");
+    assert!(host.set_json_field(&ctx, id, "other", json!("discard")).is_err(), "an unknown field is refused");
+    assert_eq!(host.set_json_field(&ctx, id, "choice", json!("discard")), Ok(()));
+    assert!(host.confirm_by_id(&ctx, id));
+    assert!(matches!(
+        host.take::<RecoveryDialog>(),
+        Some(DialogResult::Ok(RecoveryChoice { answer: RecoveryAnswer::Discard, apply_to_all: false, .. }))
+    ));
+
+    let id = host.open(RecoveryDialog::new(RecoveredDocument::new("poster", "poster.psd", age)));
+    assert!(host.confirm_by_id(&ctx, id));
+    assert!(
+        matches!(host.take::<RecoveryDialog>(), Some(DialogResult::Ok(RecoveryChoice { answer: RecoveryAnswer::Recover, apply_to_all: false, .. }))),
+        "Recover is the default choice"
+    );
+}
+
+/// A job window that answered Cancel shows again when the app draws it for the next job.
+#[trial]
+fn a_job_window_shows_again_for_the_next_job_after_cancel() {
+    let drawing = Rc::new(Cell::new(true));
+    let answered = Rc::new(Cell::new(None));
+    let (on, got) = (Rc::clone(&drawing), Rc::clone(&answered));
+    let mut fixture = Fixture::new(move |ui| {
+        if on.get()
+            && let Some(answer) = JobProgress::new("Exporting", "Page 1 of 3").show(ui).answer
+        {
+            got.set(Some(answer));
+        }
+    });
+    fixture.idle(6);
+    assert!(fixture.by_label("Exporting").is_some(), "the window shows for the first job");
+    let cancel = fixture.by_label("Cancel").expect("the window has Cancel");
+    fixture.click(&cancel).idle(4);
+    assert_eq!(answered.get(), Some(JobAnswer::Cancel));
+
+    drawing.set(false);
+    fixture.idle(3);
+    assert!(fixture.by_label("Exporting").is_none(), "the window is gone while no job wants it");
+    drawing.set(true);
+    fixture.idle(6);
+    assert!(fixture.by_label("Exporting").is_some(), "the window shows for the next job");
+}
+
+/// A prompt with no default answer (a job window's Cancel and Continue in Background) opens with no button focused, so
+/// Enter answers nothing; Escape still answers Cancel.
+#[trial]
+fn a_prompt_without_a_default_answer_opens_with_no_button_focused() {
+    let answered = Rc::new(Cell::new(None));
+    let got = Rc::clone(&answered);
+    let mut fixture = Fixture::new(move |ui| {
+        if let Some(answer) = JobProgress::new("Exporting", "Page 1 of 3").can_hide(true).show(ui).answer {
+            got.set(Some(answer));
+        }
+    });
+    fixture.idle(6);
+    assert!(fixture.by_label("Continue in Background").is_some(), "the window has a second answer");
+    assert_eq!(fixture.focused(), None, "no button has the focus");
+    fixture.key(egui::Key::Enter, Modifiers::NONE).idle(2);
+    assert_eq!(answered.get(), None, "Enter answers nothing");
+    fixture.key(egui::Key::Escape, Modifiers::NONE).idle(2);
+    assert_eq!(answered.get(), Some(JobAnswer::Cancel));
+}
+
+/// A job window is not a dialog that asks: an app that draws it only while no such dialog is open draws it in every
+/// pass, and the window still counts as a modal layer. A prompt with an answer counts as asking.
+#[trial]
+fn a_job_window_is_a_modal_layer_that_asks_nothing() {
+    let (passes, drawn) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (all, shown) = (Rc::clone(&passes), Rc::clone(&drawn));
+    let mut fixture = Fixture::new(move |ui| {
+        all.set(all.get() + 1);
+        if !any_open(ui.ctx(), OpenFilter::Asks) {
+            JobProgress::new("Exporting", "Page 1 of 3").show(ui);
+            shown.set(shown.get() + 1);
+        }
+    });
+    fixture.idle(6);
+    assert_eq!(drawn.get(), passes.get(), "the window is drawn in every pass");
+    assert!(fixture.by_label("Exporting").is_some(), "the window shows");
+    assert!(any_open(fixture.ctx(), OpenFilter::Modal), "the window is a modal layer");
+    assert!(!any_open(fixture.ctx(), OpenFilter::Asks), "the window asks nothing");
+
+    let mut fixture = Fixture::new(|ui| {
+        Prompt::new("Replace the file?", "A file with this name exists.").answers([FooterButton::new("Replace", DialogRole::Accept)]).show(ui);
+    });
+    fixture.idle(6);
+    assert!(any_open(fixture.ctx(), OpenFilter::Asks), "a prompt with an answer asks");
+}
+
 const BAND: PartKey = PartKey::new("band");
 
 /// A style with no look.
@@ -306,6 +418,19 @@ fn the_run_shows_each_dialog_once_per_pass() {
     assert!(over.top && !below.top, "the child over its parent is on top");
 }
 
+/// A real child dialog must be visible and accessible over its hosted parent.
+#[trial]
+fn a_hosted_child_dialog_is_visible() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = running(&host);
+    let parent = host.borrow_mut().open(SelfClosing);
+    fixture.idle(6);
+    host.borrow_mut().open_child(HostedAlert::new(Alert::new("Child notice", "Child message")), parent);
+    fixture.idle(6);
+    assert!(fixture.by_label("Child notice").is_some(), "the child is accessible");
+    assert!(fixture.texts().iter().any(|text| text.text == "Child message"), "the child is painted");
+}
+
 /// The startup queue opens its modals one at a time, in stage order, each once nothing else is open.
 #[trial]
 fn a_startup_modal_waits_for_the_open_dialogs_and_opens_in_stage_order() {
@@ -333,35 +458,164 @@ fn a_startup_modal_waits_for_the_open_dialogs_and_opens_in_stage_order() {
     assert!(host.borrow().is_open::<Probe<4>>(), "the update opens after the warning");
 }
 
-/// On macOS Cmd+D answers Don't Save on the unsaved-changes question and the app sees no press; Linux has no such
-/// chord.
+/// The platform's chords answer Don't Save on the unsaved-changes question and the app sees no press: Cmd+D on
+/// macOS, Ctrl+D or Alt with the button's letter ("No") on Linux. macOS has no Alt chord.
 #[trial]
-fn cmd_d_answers_dont_save_on_macos() {
-    for (os, answers) in [(Os::Mac, true), (Os::Linux, false)] {
+fn the_platform_chords_answer_dont_save() {
+    let cases = [
+        (Os::Mac, egui::Key::D, Modifiers::COMMAND, true),
+        (Os::Linux, egui::Key::D, Modifiers::COMMAND, true),
+        (Os::Linux, egui::Key::N, Modifiers::ALT, true),
+        (Os::Mac, egui::Key::D, Modifiers::ALT, false),
+    ];
+    for (os, key, mods, answers) in cases {
         let host = Rc::new(RefCell::new(DialogHost::new()));
-        let app_saw_d = Rc::new(Cell::new(false));
-        let (shown, saw) = (Rc::clone(&host), Rc::clone(&app_saw_d));
+        let app_saw_key = Rc::new(Cell::new(false));
+        let (shown, saw) = (Rc::clone(&host), Rc::clone(&app_saw_key));
         let mut fixture = Fixture::new(move |ui| {
             let pressed =
-                ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Key { key: egui::Key::D, pressed: true, .. })));
+                ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Key { key: k, pressed: true, .. } if *k == key)));
             saw.set(saw.get() || pressed);
             shown.borrow_mut().run(ui);
         });
         fixture.os(os);
         host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd"));
         fixture.idle(6);
-        fixture.key(egui::Key::D, Modifiers::COMMAND).idle(4);
+        fixture.key(key, mods).idle(4);
         let result = host.borrow_mut().take::<UnsavedChangesDialog>();
         if answers {
             assert_eq!(
                 result.and_then(DialogResult::ok).map(|answer| answer.answer),
                 Some(CloseAnswer::DontSave),
-                "{os:?}: Cmd+D answers Don't Save"
+                "{os:?}: {mods:?}+{key:?} answers Don't Save"
             );
-            assert!(!app_saw_d.get(), "{os:?}: the press reaches nothing but the question");
+            assert!(!app_saw_key.get(), "{os:?}: the press reaches nothing but the question");
         } else {
-            assert!(result.is_none() && host.borrow().is_open::<UnsavedChangesDialog>(), "{os:?}: Ctrl+D leaves the question open");
+            assert!(result.is_none() && host.borrow().is_open::<UnsavedChangesDialog>(), "{os:?}: {mods:?}+{key:?} leaves the question open");
         }
+    }
+}
+
+/// A long document name must remain within the unsaved question's dialog.
+#[trial]
+fn unsaved_question_keeps_long_text_inside_its_dialog() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = running(&host);
+    fixture.room(vec2(820.0, 520.0));
+    host.borrow_mut()
+        .open(UnsavedChangesDialog::new(CloseScope::Close, "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW.pdf"));
+    fixture.idle(6);
+    // The question is an alert dialog (upstream's role for the unsaved question).
+    let dialog = fixture.by_role(Role::ALERT_DIALOG).first().expect("the question").rect;
+    assert!(dialog.left() >= 0.0 && dialog.right() <= 820.0, "the question stays on screen: {dialog:?}");
+    let runs = fixture.texts();
+    let message = runs.iter().find(|run| run.text.contains("WWWWWWWW")).expect("the document name is painted");
+    assert!(message.rect.left() >= dialog.left() && message.rect.right() <= dialog.right(), "message {:?} exceeds dialog {dialog:?}", message.rect);
+}
+
+/// The unsaved-changes buttons run Yes, No, Cancel on Windows and Don't Save, Cancel, Save on macOS; on every OS Escape
+/// answers Cancel, and the Yes and No letters answer Save and Don't Save.
+#[trial]
+fn the_unsaved_question_orders_its_buttons_by_platform_and_answers_by_role() {
+    let order = |os: Os, names: [&str; 3]| {
+        let host = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&host);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.os(os);
+        host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd"));
+        fixture.idle(6);
+        let lefts = names.map(|name| fixture.by_label(name).unwrap_or_else(|| panic!("{os:?}: {name} shows")).rect.left());
+        assert!(lefts.windows(2).all(|pair| pair[0] < pair[1]), "{os:?}: {names:?} run left to right, at {lefts:?}");
+    };
+    order(Os::Windows, ["Yes", "No", "Cancel"]);
+    order(Os::Mac, ["Don't Save", "Cancel", "Save"]);
+
+    for (key, expected) in [(egui::Key::Escape, CloseAnswer::Cancel), (egui::Key::Y, CloseAnswer::Save), (egui::Key::N, CloseAnswer::DontSave)] {
+        let host = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&host);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.os(Os::Windows);
+        host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd"));
+        fixture.idle(6);
+        fixture.key(key, Modifiers::NONE).idle(4);
+        let answered = host.borrow_mut().take::<UnsavedChangesDialog>().and_then(DialogResult::ok).map(|answer| answer.answer);
+        assert_eq!(answered, Some(expected), "{key:?} answers {expected:?}");
+    }
+}
+
+/// The unsaved-changes dialog exposes Role::ALERT_DIALOG, with its title as its accessible name and its consequence
+/// message and save-failure reason in its AccessKit description.
+#[trial]
+fn the_unsaved_dialog_exposes_alert_dialog_role_and_folds_reason_into_description() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+
+    // 1. Without reason: Role::ALERT_DIALOG, label is "Unsaved changes", description contains the closing question.
+    host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd"));
+    fixture.idle(6);
+    let dialogs = fixture.by_role(Role::ALERT_DIALOG);
+    assert_eq!(dialogs.len(), 1, "the unsaved changes dialog exposes Role::ALERT_DIALOG");
+    let dialog = dialogs[0];
+    assert_eq!(fixture.tree().name_of(dialog.node), Some("Unsaved changes"), "accessible name is the dialog title");
+    let desc_without_reason = fixture.tree().description_of(dialog.node).expect("dialog has an accessible description").to_owned();
+    assert!(desc_without_reason.contains("poster.psd"), "description mentions the document name: {desc_without_reason}");
+    assert!(desc_without_reason.contains("before closing"), "description conveys closing consequence: {desc_without_reason}");
+
+    // Cancel to close
+    assert!(host.borrow_mut().cancel::<UnsavedChangesDialog>(fixture.ctx()));
+    fixture.idle(4);
+
+    // 2. With reason: Role::ALERT_DIALOG, description contains both the closing question and the save-failure reason.
+    let reason_text = "Disk full or permission denied";
+    host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd").reason(reason_text));
+    fixture.idle(6);
+    let dialogs = fixture.by_role(Role::ALERT_DIALOG);
+    assert_eq!(dialogs.len(), 1, "reopened unsaved dialog with reason exposes Role::ALERT_DIALOG");
+    let dialog = dialogs[0];
+    assert_eq!(fixture.tree().name_of(dialog.node), Some("Unsaved changes"));
+    let desc_with_reason = fixture.tree().description_of(dialog.node).expect("dialog has an accessible description");
+    assert!(desc_with_reason.contains("poster.psd"), "description mentions document name: {desc_with_reason}");
+    assert!(desc_with_reason.contains(reason_text), "description includes save failure reason: {desc_with_reason}");
+    assert_eq!(desc_with_reason, format!("{desc_without_reason} {reason_text}"));
+}
+
+/// Apply, an auxiliary action, stands after Cancel on Windows; the Alternate role does not move it.
+#[trial]
+fn windows_puts_an_auxiliary_apply_after_cancel() {
+    let mut fixture = Fixture::new(|ui| {
+        let mut open = true;
+        Dialog::new("Options")
+            .opened(Bind::bound(&mut open))
+            .buttons([
+                FooterButton::new("OK", DialogRole::Accept),
+                FooterButton::new("Apply", DialogRole::Other).stays_open(true),
+                FooterButton::new("Cancel", DialogRole::Cancel),
+            ])
+            .show(ui, |_, _| {});
+    });
+    fixture.os(Os::Windows);
+    fixture.idle(30);
+    let left = |name: &str| fixture.by_label(name).expect("the button shows").rect.left();
+    assert!(left("OK") < left("Cancel") && left("Cancel") < left("Apply"), "OK, Cancel, Apply from the start edge");
+}
+
+/// A destructive proceed is a committing button: Windows puts it first, before Cancel; macOS keeps Cancel nearer the
+/// end edge than Delete.
+#[trial]
+fn a_delete_prompt_reads_delete_then_cancel_on_windows() {
+    for os in [Os::Windows, Os::Mac] {
+        let mut fixture = Fixture::new(|ui| {
+            let mut open = true;
+            Dialog::new("Delete Layer")
+                .opened(Bind::bound(&mut open))
+                .buttons([FooterButton::new("Cancel", DialogRole::Cancel), FooterButton::new("Delete", DialogRole::Destructive)])
+                .show(ui, |_, _| {});
+        });
+        fixture.os(os);
+        fixture.idle(30);
+        let left = |name: &str| fixture.by_label(name).expect("the button shows").rect.left();
+        assert!(left("Delete") < left("Cancel"), "{os:?}: Delete, then Cancel, from the start edge");
     }
 }
 
@@ -380,6 +634,293 @@ fn each_open_of_a_dialog_has_its_own_serial() {
     let again = host.open(Probe::<1>::new("picker"));
     assert_eq!(again, id, "the reopened dialog has the same id");
     assert_ne!(host.open_serial(id), Some(first), "the reopened dialog has a serial of its own");
+}
+
+#[trial]
+fn results_belong_to_the_opening_that_reported_them() {
+    let frames = Frames::new();
+    let mut host = DialogHost::new();
+    let id = host.open(Probe::<1>::new("picker"));
+    let first = host.open_serial(id).unwrap();
+    assert_eq!(host.open(Probe::<1>::new("picker")), id);
+    let second = host.open_serial(id).unwrap();
+    assert_ne!(first, second);
+    assert_eq!(host.take_by_open_serial::<Probe<1>>(second), None);
+    assert_eq!(host.take_by_open_serial::<Probe<1>>(first), Some(DialogResult::Cancel));
+
+    assert!(host.confirm_by_id(&frames.ctx, id));
+    assert_eq!(host.take_by_open_serial::<Probe<1>>(first), None);
+    assert_eq!(host.take_by_open_serial::<Probe<2>>(second), None);
+    assert_eq!(host.take_by_open_serial::<Probe<1>>(second), Some(DialogResult::Ok(1)));
+    assert_eq!(host.take::<Probe<1>>(), None);
+}
+
+#[trial]
+fn a_new_opening_supersedes_an_unclaimed_result_at_the_same_id() {
+    let frames = Frames::new();
+    let mut host = DialogHost::new();
+    let id = host.open(Probe::<1>::new("picker"));
+    let first = host.open_serial(id).unwrap();
+    assert!(host.confirm_by_id(&frames.ctx, id));
+    assert_eq!(host.open(Probe::<1>::new("picker")), id);
+    let second = host.open_serial(id).unwrap();
+    assert_eq!(host.take_by_open_serial::<Probe<1>>(first), None);
+
+    assert!(host.cancel_by_id(&frames.ctx, id));
+    assert_eq!(host.take_by_id::<Probe<1>>(id), Some(DialogResult::Cancel));
+    assert_eq!(host.take_by_open_serial::<Probe<1>>(second), None);
+}
+
+#[trial]
+fn a_result_keeps_its_opening_serial_if_the_instance_changes() {
+    let frames = Frames::new();
+    let mut host = DialogHost::new();
+    let id = host.open(Probe::<1>::new("picker"));
+    let serial = host.open_serial(id).unwrap();
+    host.get_mut_by_id::<Probe<1>>(id).unwrap().instance = Some(dialog_id("instance"));
+    assert_eq!(host.open_serial(id), Some(serial));
+
+    assert!(host.confirm_by_id(&frames.ctx, id));
+    assert_eq!(host.take_by_open_serial::<Probe<1>>(serial), Some(DialogResult::Ok(1)));
+}
+
+#[trial]
+fn open_serial_reports_the_latest_opening_when_dialog_types_share_an_id() {
+    let frames = Frames::new();
+    let mut host = DialogHost::new();
+    let id = host.open(Probe::<1>::new("picker"));
+    let first = host.open_serial(id).unwrap();
+    assert_eq!(host.open(Probe::<2>::new("picker")), id);
+    let second = host.open_serial(id).unwrap();
+    assert_ne!(first, second);
+    assert_eq!(host.open_serial_by_id::<Probe<1>>(id), Some(first));
+    assert_eq!(host.open_serial_by_id::<Probe<2>>(id), Some(second));
+    assert_eq!(host.open_serial_by_id::<Probe<3>>(id), None);
+    assert!(host.get_by_id::<Probe<1>>(id).is_some());
+    host.get_mut_by_id::<Probe<2>>(id).unwrap().shows = 5;
+    assert_eq!(host.get_by_id::<Probe<2>>(id).unwrap().shows, 5);
+
+    assert!(host.confirm::<Probe<2>>(&frames.ctx));
+    assert_eq!(host.take_by_open_serial::<Probe<2>>(second), Some(DialogResult::Ok(2)));
+}
+
+#[trial]
+fn a_live_opening_can_be_mutated_independently_of_the_first_dialog_with_its_id() {
+    let mut host = DialogHost::new();
+    let mut first = Probe::<1>::new("picker");
+    first.instance = Some(dialog_id("first instance"));
+    let id = host.open(first);
+    let first = host.open_serial_by_id::<Probe<1>>(id).unwrap();
+    let mut second = Probe::<1>::new("picker");
+    second.instance = Some(dialog_id("second instance"));
+    assert_eq!(host.open(second), id);
+    let second = host.open_serial_by_id::<Probe<1>>(id).unwrap();
+    assert_ne!(first, second);
+
+    host.get_mut_by_open_serial::<Probe<1>>(second).unwrap().shows = 5;
+    assert_eq!(host.get_by_id::<Probe<1>>(id).unwrap().shows, 0);
+    assert_eq!(host.get_by_open_serial::<Probe<1>>(first).unwrap().shows, 0);
+    assert_eq!(host.get_by_open_serial::<Probe<1>>(second).unwrap().shows, 5);
+    assert!(host.get_mut_by_open_serial::<Probe<2>>(second).is_none());
+}
+
+/// The commands an Undo fired that a focused, unedited name field had nothing to do for, the field in a modal dialog
+/// or in the window.
+fn undo_with_nothing_to_undo(modal: bool) -> Vec<String> {
+    let mut name = String::new();
+    let mut fixture = Fixture::new(move |ui| {
+        if modal {
+            Dialog::new("Rename").show(ui, |ui, _| {
+                TextField::new("Name", Bind::bound(&mut name)).show(ui);
+            });
+        } else {
+            TextField::new("Name", Bind::bound(&mut name)).show(ui);
+        }
+    });
+    fixture.settle();
+    if !modal {
+        let field = fixture.by_label("Name").expect("the field shows");
+        fixture.click(&field).settle();
+    }
+    take_output(fixture.ctx());
+    fixture.key(egui::Key::Z, Modifiers::COMMAND).settle();
+    take_output(fixture.ctx()).fired.into_iter().map(|fired| fired.command.id).collect()
+}
+
+/// An Undo a focused text field has nothing to do for runs the window's Undo (11.3), but not past a modal dialog the
+/// field is in: the modal rule holds for it as for the key itself, so the document under the dialog stays.
+#[trial]
+fn an_undo_a_dialogs_field_leaves_runs_no_command_under_the_dialog() {
+    assert_eq!(undo_with_nothing_to_undo(false), [EditCommands::Undo.id()], "in the window, the field's leftover Undo is the app's");
+    assert!(undo_with_nothing_to_undo(true).is_empty(), "under the dialog it reaches no command");
+}
+
+/// A prompt can carry an icon beside its message and a muted note under it: the message starts after the icon, the
+/// note under it at the content's start.
+#[trial]
+fn a_prompt_shows_an_icon_beside_its_message_and_a_note_under_it() {
+    let mut fixture = Fixture::new(|ui| {
+        let _ = StandardPrompt::custom("Open this link?")
+            .icon(craft_behavior::IconId::new("info"))
+            .note("Links can lead to unsafe sites.")
+            .button(craft_ui::dialog::PromptChoice::Proceed, "Open")
+            .button(craft_ui::dialog::PromptChoice::Cancel, "Cancel")
+            .show(ui);
+    });
+    fixture.settle();
+    let at = |text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect).unwrap_or(Rect::NOTHING);
+    let (message, note) = (at("Open this link?"), at("Links can lead to unsafe sites."));
+    assert!(message.is_positive() && note.is_positive(), "both texts are painted: {message:?} {note:?}");
+    assert!(message.left() > note.left() + 8.0, "the message starts after the icon: {message:?} vs {note:?}");
+    assert!(note.top() > message.bottom() - 1.0, "the note is under the message");
+}
+
+/// A document app's save question words and orders its buttons the same on every platform: Don't Save, Cancel and
+/// Save last, with the app's title, question and note.
+#[trial]
+fn the_unsaved_question_can_ask_as_a_document_app_does() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = running(&host);
+    fixture.os(Os::Linux);
+    host.borrow_mut().open(
+        UnsavedChangesDialog::new(CloseScope::Close, "poster.pdf")
+            .document_wording(true)
+            .title("Save changes to “poster.pdf” before closing?")
+            .message("Your changes will be lost if you don't save them."),
+    );
+    fixture.idle(6);
+    let at = |name: &str| fixture.by_label(name).unwrap_or_else(|| panic!("{name:?} is a button")).rect.min.x;
+    assert!(at("Don't Save") < at("Cancel") && at("Cancel") < at("Save"), "Don't Save, Cancel, Save");
+    assert!(fixture.texts().iter().any(|run| run.text.contains("before closing?")), "the app's title is shown");
+}
+
+/// A row that fills the dialog's width and spreads its children (a count at the start, a Remove button at the end)
+/// puts them apart, the last at the row's end edge, not on top of each other.
+#[trial]
+fn a_space_between_row_in_a_dialog_keeps_its_children_apart_at_both_edges() {
+    use craft_ui::buttons::Button;
+    use craft_ui::display::Text;
+    use craft_ui::layout::RowAlign;
+    use craft_ui::layout_components::Row;
+    let mut fixture = Fixture::new(|ui| {
+        let mut open = true;
+        Dialog::new("Hidden").opened(Bind::bound(&mut open)).show(ui, |ui, _| {
+            Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
+                Text::new("3 hidden items").show(ui);
+                Button::new("Remove").show(ui);
+            });
+            Text::new("A longer paragraph of text that makes the dialog about as wide as production's does.").show(ui);
+        });
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    let remove = fixture.by_label("Remove").expect("the button is shown").rect;
+    let count = fixture.texts().iter().find(|run| run.text.contains("3 hidden")).map(|run| run.rect).expect("the count is painted");
+    assert!(count.max.x < remove.min.x, "the children do not overlap: {count:?} {remove:?}");
+    let dialog = fixture.by_role(craft_ui::contract::Role::DIALOG).first().map(|d| d.rect).expect("the dialog is shown");
+    assert!(dialog.max.x - remove.max.x < 40.0, "Remove sits at the row's end edge: {remove:?} in {dialog:?}");
+}
+
+/// The variants of the buttons a prompt's footer shows, with the app's `DialogButtonLook` when `look` names one.
+fn footer_variants(look: Option<craft_ui::sections::DialogButtonLook>) -> Vec<craft_theme::Variant> {
+    let mut fixture = Fixture::new(|ui| {
+        let _ = StandardPrompt::custom("Close?")
+            .button(craft_ui::dialog::PromptChoice::Proceed, "Save")
+            .button(craft_ui::dialog::PromptChoice::Alternate, "Don't Save")
+            .button(craft_ui::dialog::PromptChoice::Cancel, "Cancel")
+            .show(ui);
+    });
+    if let Some(look) = look {
+        fixture.root_value(look);
+    }
+    fixture.settle();
+    fixture.styles_of(std::any::type_name::<craft_ui::buttons::Button<'static>>()).iter().map(|style| style.variant).collect()
+}
+
+/// Upstream's footer by default: Cancel and the Alternate answer are outlined (secondary) buttons beside the accented
+/// answer; no button is a ghost.
+#[trial]
+fn a_footer_cancel_is_an_outlined_button_by_default() {
+    use craft_theme::Variant;
+    let seen = footer_variants(None);
+    assert!(seen.contains(&Variant::SECONDARY), "Cancel and Don't Save are outlined: {seen:?}");
+    assert!(!seen.contains(&Variant::GHOST), "no ghost button in the footer: {seen:?}");
+}
+
+/// Production's dialogs (`DialogButtonLook::Quiet`) show Cancel and Don't Save as plain text beside the accented
+/// answer: ghost buttons, not outlined ones.
+#[trial]
+fn a_footer_cancel_is_a_ghost_button_beside_the_accent_answer() {
+    use craft_theme::Variant;
+    let seen = footer_variants(Some(craft_ui::sections::DialogButtonLook::Quiet));
+    assert!(seen.contains(&Variant::GHOST), "Cancel is a ghost button: {seen:?}");
+    assert!(seen.contains(&Variant::PRIMARY), "Save is the accented button: {seen:?}");
+    assert!(!seen.contains(&Variant::SECONDARY), "no outlined button in the footer: {seen:?}");
+}
+
+/// VectorCraft's dialogs (`DialogButtonLook::Filled`) show Cancel and Don't Save as filled neutral tiles beside the
+/// accented answer, not as outlines.
+#[trial]
+fn a_footer_cancel_is_a_filled_button_beside_the_accent_answer() {
+    use craft_theme::Variant;
+    let seen = footer_variants(Some(craft_ui::sections::DialogButtonLook::Filled));
+    assert!(seen.contains(&craft_ui::buttons::FILLED), "Cancel is a filled button: {seen:?}");
+    assert!(seen.contains(&Variant::PRIMARY), "Save is the accented button: {seen:?}");
+    assert!(!seen.contains(&Variant::SECONDARY), "no outlined button in the footer: {seen:?}");
+}
+
+/// The left edges of a Save anyway / Save as… / Cancel prompt's buttons on Linux, with the Alternate's role set to
+/// `role` when it names one.
+fn alternate_edges(role: Option<DialogRole>) -> (f32, f32, f32) {
+    let mut fixture = Fixture::new(move |ui| {
+        let prompt = StandardPrompt::custom("Changed on disk")
+            .button(craft_ui::dialog::PromptChoice::Proceed, "Save anyway")
+            .button(craft_ui::dialog::PromptChoice::Alternate, "Save as…")
+            .button(craft_ui::dialog::PromptChoice::Cancel, "Cancel");
+        let prompt = match role {
+            Some(role) => prompt.alternate_role(role),
+            None => prompt,
+        };
+        let _ = prompt.show(ui);
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    let left = |name: &str| fixture.by_label(name).unwrap_or_else(|| panic!("{name} button")).rect.left();
+    (left("Save as…"), left("Cancel"), left("Save anyway"))
+}
+
+/// By default a prompt's Alternate answer is upstream's Alternate role: it closes the question, so it stands first off
+/// Windows ("Save as…, Cancel, Save anyway").
+#[trial]
+fn a_prompts_alternate_answer_stands_first_by_default() {
+    let (alternate, cancel, accept) = alternate_edges(None);
+    assert!(alternate < cancel && cancel < accept, "Save as…, Cancel, Save anyway: {alternate} {cancel} {accept}");
+}
+
+/// With `alternate_role(DialogRole::Alternative)` (production's order) the Alternate answer is a second way to answer,
+/// between Cancel and the accepting button ("Cancel, Save as…, Save anyway").
+#[trial]
+fn a_prompts_alternative_answer_stands_between_cancel_and_accept() {
+    let (alternate, cancel, accept) = alternate_edges(Some(DialogRole::Alternative));
+    assert!(cancel < alternate && alternate < accept, "Cancel, Save as…, Save anyway: {cancel} {alternate} {accept}");
+}
+
+/// A dialog's title row carries a close x; an app whose dialogs end with their buttons (production's) turns it off
+/// once with `dialog::set_close_button`, and no dialog of the app shows it.
+#[trial]
+fn an_app_can_take_the_close_x_off_every_dialog() {
+    let off = Rc::new(Cell::new(false));
+    let flag = Rc::clone(&off);
+    let mut fixture = Fixture::new(move |ui| {
+        craft_ui::dialog::set_close_button(ui.ctx(), !flag.get());
+        let _ = Dialog::new("Plain").buttons([FooterButton::new("OK", DialogRole::Accept)]).show(ui, |_, _| {});
+    });
+    fixture.idle(4);
+    assert!(fixture.by_label("Close").is_some(), "the close x is there by default");
+    off.set(true);
+    fixture.idle(4);
+    assert!(fixture.by_label("Close").is_none(), "the close x is gone once the app turned it off");
+    assert!(fixture.by_label("OK").is_some(), "the dialog still has its buttons");
 }
 
 /// The title of the hosted modal the nudge and popup trials open.
@@ -664,4 +1205,108 @@ fn typing_in_a_freshly_opened_dialog_replaces_its_first_field() {
     }
     // Typing replaced the first field's text: the text field first, then the number field first.
     assert_eq!(typed_into, [Some("7".to_owned()), Some("7".to_owned())]);
+}
+
+/// A prompt's readers give the title, message, paragraphs and buttons it shows under the same host, without a `Ui`.
+#[trial]
+fn a_prompts_readers_give_what_it_shows() {
+    let host = Arc::new(craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).build());
+    let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&dialogs);
+    let mut fixture = Fixture::new(move |ui| {
+        shown.borrow_mut().run(ui);
+    });
+    fixture.host(Arc::clone(&host));
+    let prompt = StandardPrompt::confirm_delete(["Layer 1"], 1).paragraph("It can't be undone.");
+    let (title, message, paragraphs, buttons) =
+        (prompt.shown_title(&host), prompt.shown_message(&host), prompt.shown_paragraphs(&host), prompt.shown_buttons(&host));
+    dialogs.borrow_mut().open(prompt);
+    fixture.idle(6);
+    assert!(message.contains("Layer 1"), "the message names what it deletes: {message}");
+    let painted: Vec<String> = fixture.texts().iter().map(|text| text.text.clone()).collect();
+    for text in std::iter::once(&title).chain([&message]).chain(&paragraphs) {
+        assert!(painted.contains(text), "{text:?} is shown: {painted:?}");
+    }
+    assert_eq!(buttons.iter().map(|(choice, _)| *choice).collect::<Vec<_>>(), [PromptChoice::Proceed, PromptChoice::Cancel]);
+    for (_, label) in &buttons {
+        assert!(fixture.by_label(label).is_some(), "the {label:?} button is shown");
+    }
+}
+
+/// A question with an OK armed after half a second, shown under the same ids whatever it asks about: an install
+/// approval asking about module `key`.
+struct Approval {
+    key: &'static str,
+}
+
+impl StackDialog for Approval {
+    type Result = ();
+
+    fn id(&self) -> DialogId {
+        dialog_id(self.key)
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
+        let shown = Dialog::new("Install")
+            .id_salt("approval")
+            .buttons([FooterButton::new("OK", DialogRole::Accept).armed_after(0.5), FooterButton::new("Cancel", DialogRole::Cancel)])
+            .show(ui, |_, _| {});
+        shown.output.closed.map(|_| DialogResult::Ok(()))
+    }
+}
+
+/// Tb-8 (6): a question the host puts in place of another between two frames waits its own delay before its armed OK
+/// takes a click, though its footer has the same ids: the footer counted on from the question before.
+#[trial]
+fn a_new_question_in_place_of_another_waits_again_for_its_armed_answer() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = running(&host);
+    let first = host.borrow_mut().open(Approval { key: "a" });
+    fixture.frame(vec![egui::Event::WindowFocused(true)]);
+    fixture.idle(60);
+    let ctx = fixture.ctx().clone();
+    assert!(host.borrow_mut().cancel_by_id(&ctx, first), "the first question goes");
+    host.borrow_mut().open(Approval { key: "b" });
+    let click_ok = |fixture: &mut Fixture| {
+        let ok = fixture.by_label("OK").expect("the OK button is shown");
+        fixture.click(&ok).idle(2);
+    };
+    click_ok(&mut fixture);
+    assert!(host.borrow().is_open::<Approval>(), "a click on the new question's OK before its delay answers nothing");
+    fixture.idle(60);
+    click_ok(&mut fixture);
+    assert!(host.borrow().is_empty(), "after its delay the OK answers it");
+}
+
+/// A dialog is padded `space.pad.dialog` and its footer buttons stand `size.dialog.button_height` high (VectorCraft's
+/// 22-point margin and 28-point buttons); an app that sets neither keeps a panel's padding and a push button's height.
+#[trial]
+fn a_dialog_takes_its_padding_and_footer_button_height_from_the_dialog_sizes() {
+    let shown = |overrides: &[(&str, f32)]| {
+        let mut sizes = craft_theme::AppSizes::default();
+        for (path, value) in overrides {
+            sizes.all.insert((*path).to_owned(), craft_theme::SizeValue::Number(*value));
+        }
+        let mut root = craft_ui::runtime::env::RootEnv::default();
+        root.sizes = Arc::new(sizes);
+        let mut fixture = Fixture::new(|ui| {
+            let mut open = true;
+            Dialog::new("Options").opened(Bind::bound(&mut open)).buttons([FooterButton::new("OK", DialogRole::Accept)]).show(ui, |ui, _| {
+                Text::new("Body text").show(ui);
+            });
+        });
+        fixture.root(root).room(vec2(1200.0, 800.0)).settle();
+        let dialog = fixture.by_role(Role::DIALOG).first().expect("the dialog shows").rect;
+        let text = fixture.texts().iter().find(|run| run.text == "Body text").expect("the body is painted").rect;
+        (text.left() - dialog.left(), fixture.by_label("OK").expect("the footer's OK").rect.height())
+    };
+    let standard = shown(&[]);
+    let dialog = shown(&[("space.pad.dialog", 30.0), ("size.dialog.button_height", 40.0)]);
+    assert!(dialog.0 > standard.0 + 10.0, "a larger dialog padding moves the body in from the edge: {standard:?} then {dialog:?}");
+    assert!(dialog.1 > standard.1 + 10.0, "a taller dialog button raises OK: {standard:?} then {dialog:?}");
+    let follows = shown(&[("space.pad.regular", 30.0), ("size.button", 40.0)]);
+    assert!(
+        (follows.0 - dialog.0).abs() < 0.5 && (follows.1 - dialog.1).abs() < 0.5,
+        "both follow the panel padding and the push button: {follows:?} and {dialog:?}"
+    );
 }

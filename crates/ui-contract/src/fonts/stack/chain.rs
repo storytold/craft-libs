@@ -1,11 +1,11 @@
 //! Building the chains: for each family, which faces come in which order.
 
-use craft_fonts_build::{EmbeddedFace, MONO_ROLE, ServedFace};
+use craft_fonts_build::{EmbeddedFace, MONO_ROLE, SIGNATURE_ROLE, ServedFace, TAB_ROLE};
 use craft_i18n::Han;
 use craft_theme::InterfaceFont;
 use egui::{FontData, FontDefinitions, FontFamily};
 
-use super::{CjkRows, Family, SEMIBOLD, Stack, SystemFonts, UiFonts};
+use super::{CjkRows, Family, SEMIBOLD, Stack, SystemFonts, TAB_TITLE, UiFonts, fit};
 use crate::fonts::defaults::SUITE_FACES;
 use crate::fonts::faces::{FaceList, baseline_fallback};
 use crate::fonts::script::EMOJI;
@@ -56,6 +56,13 @@ fn han_region(face: &EmbeddedFace) -> Option<Han> {
         "Kore" => Some(Han::Korean),
         _ => None,
     })
+}
+
+/// Whether `face` draws only where its role leads a family: craft-fonts' monospace face leads the monospaced families,
+/// its signature face the signature family and its tab-title face the tab-title family. As a fallback for a script
+/// they would set interface text in fixed-width letters, in handwriting or in condensed letters.
+fn lead_only(face: &EmbeddedFace) -> bool {
+    matches!(face.role, Some(MONO_ROLE | SIGNATURE_ROLE | TAB_ROLE))
 }
 
 /// `0` for the style a family of `weight` wants, `1` for an acceptable stand-in.
@@ -217,6 +224,12 @@ impl UiFonts<'_> {
         }
         stack.fit_into_rows(&cjk_faces);
         stack.cjk_faces = cjk_faces;
+        // With the OS's interface face, tab titles keep it: they draw in the semibold slot.
+        if self.interface != InterfaceFont::System
+            && let Some(index) = self.craft_faces.iter().position(|face| face.role == Some(TAB_ROLE) && !face.bytes.is_empty())
+        {
+            self.add_tab_title(&mut stack, self.craft_face(index));
+        }
         if self.interface == InterfaceFont::System {
             stack.system_ui_pending = true;
             if let Some(face) = resolved {
@@ -226,16 +239,53 @@ impl UiFonts<'_> {
         stack
     }
 
-    /// Proportional and Monospace, every family an app face names, then the declared families.
+    /// The [`TAB_TITLE`] family: `lead`, the craft face with the `tab` role, scaled to the x-height of the semibold
+    /// family's first face, then the semibold family's chain (the proportional family's where there is no semibold
+    /// family). The app's own faces in that chain are added again under their own names, set to sit on the lead's
+    /// baseline; craft faces already do, and egui's faces keep their names, under which egui leaves out some of their
+    /// characters.
+    fn add_tab_title(&self, stack: &mut Stack, mut lead: Face) {
+        let semibold = FontFamily::Name(SEMIBOLD.into());
+        let base = if stack.definitions.families.contains_key(&semibold) { semibold } else { FontFamily::Proportional };
+        let configured = stack.chain_of(&base).to_vec();
+        let reference = configured.iter().find_map(|name| stack.definitions.font_data.get(name)).cloned();
+        if let Some(reference) = reference {
+            fit::to_x_height(&reference, &mut lead.data);
+        }
+        let app_face = |name: &str| {
+            self.app_faces.iter().any(|face| name == face.name || name.strip_prefix(face.name.as_str()).is_some_and(|rest| rest.starts_with(" @")))
+        };
+        let mut chain = vec![stack.add_configured(lead)];
+        for name in configured {
+            match stack.definitions.font_data.get(&name) {
+                Some(data) if app_face(&name) => {
+                    let copy = format!("{name} (tab title)");
+                    let data = baseline_fallback((**data).clone());
+                    stack.definitions.font_data.insert(copy.clone(), std::sync::Arc::new(data));
+                    chain.push(copy);
+                }
+                _ => chain.push(name),
+            }
+        }
+        dedup(&mut chain);
+        let tail = stack.after_system.chain(&FontRef::from_family(base)).to_vec();
+        let family = FontRef::named(TAB_TITLE);
+        stack.definitions.families.insert(family.family(), chain);
+        stack.after_system.set_chain(family.clone(), tail);
+        stack.weights.push((family, 600));
+    }
+
+    /// Proportional, Monospace and the signature family, every family an app face names, then the declared families.
     fn family_specs(&self) -> Vec<Family> {
-        let mut specs = vec![Family::proportional(), Family::monospace()];
+        // The signature family goes in every build: egui fails on a `FontFamily::Name` it doesn't know.
+        let mut specs = vec![Family::proportional(), Family::monospace(), Family::signature()];
         // With no face of its own for the interface, the app gets the suite's, whose semibold roles draw in Inter SemiBold.
         if !self.app_faces.iter().any(|face| face.families.contains(&FontFamily::Proportional)) {
             specs.push(Family::named(super::SEMIBOLD).weight(600));
         }
         for family in self.app_faces.iter().flat_map(|f| &f.families) {
             if !specs.iter().any(|s| s.family == *family) {
-                specs.push(Family { family: family.clone(), weight: super::REGULAR, lead: None, monospaced: false });
+                specs.push(Family { family: family.clone(), weight: super::REGULAR, lead: None, monospaced: false, lead_role: None });
             }
         }
         for declared in &self.families {
@@ -278,8 +328,13 @@ impl UiFonts<'_> {
                 others.extend(self.candidates(script, han, weight));
             }
         }
-        let mut rest: Vec<(u8, usize)> =
-            self.craft_faces.iter().enumerate().filter_map(|(i, face)| style_rank(face, weight).map(|rank| (rank, i))).collect();
+        let mut rest: Vec<(u8, usize)> = self
+            .craft_faces
+            .iter()
+            .enumerate()
+            .filter(|(_, face)| !lead_only(face))
+            .filter_map(|(i, face)| style_rank(face, weight).map(|rank| (rank, i)))
+            .collect();
         rest.sort();
         others.extend(rest.into_iter().map(|(_, i)| i));
 
@@ -296,21 +351,23 @@ impl UiFonts<'_> {
             .collect();
         base.splice(0..0, self.system_ui_slot(&family.family));
 
-        // craft-fonts' monospace face leads a monospaced family when the build embeds it; Hack follows as the fallback.
-        let mono: Vec<usize> = if family.monospaced {
-            let mut mono: Vec<(u8, usize)> = self
-                .craft_faces
-                .iter()
-                .enumerate()
-                .filter(|(_, face)| face.role == Some(MONO_ROLE))
-                .filter_map(|(i, face)| style_rank(face, weight).map(|rank| (rank, i)))
-                .collect();
-            mono.sort();
-            mono.into_iter().map(|(_, i)| i).collect()
-        } else {
-            Vec::new()
+        // The craft-fonts faces of the family's role lead it when the build embeds them (the monospace face ahead of
+        // Hack, the signature face ahead of the proportional chain).
+        let role_lead: Vec<usize> = match family.lead_role {
+            Some(role) => {
+                let mut led: Vec<(u8, usize)> = self
+                    .craft_faces
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, face)| face.role == Some(role))
+                    .filter_map(|(i, face)| style_rank(face, weight).map(|rank| (rank, i)))
+                    .collect();
+                led.sort();
+                led.into_iter().map(|(_, i)| i).collect()
+            }
+            None => Vec::new(),
         };
-        let mut configured = craft(mono);
+        let mut configured = craft(role_lead);
         configured.extend(craft(lead));
         if language_first {
             configured.extend(craft(language));
@@ -372,7 +429,7 @@ impl UiFonts<'_> {
             .craft_faces
             .iter()
             .enumerate()
-            .filter(|(_, face)| covers(face.scripts, script))
+            .filter(|(_, face)| covers(face.scripts, script) && !lead_only(face))
             .filter_map(|(i, face)| {
                 let style = style_rank(face, weight)?;
                 let region = if script == "Hani" { region_rank(han_region(face), han) } else { 0 };

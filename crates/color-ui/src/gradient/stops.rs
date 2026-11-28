@@ -16,6 +16,17 @@ use super::value::{ColorStop, GradientStops, OpacityStop, StopRow, StopRows};
 /// new stops; the default is [`default_sampler`].
 pub type Sampler = dyn Fn(&GradientStops, f32) -> Srgba;
 
+/// What an Alt-drag of a colour stop does when it is held over another colour stop.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AltDrop {
+    /// The drag copies the stop (the default).
+    #[default]
+    Copy,
+    /// The drag swaps the two stops' colours.
+    Swap,
+}
+
 /// What a host allows of the stops of one row.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -28,6 +39,8 @@ pub struct StopRules {
     pub max: usize,
     /// The range a midpoint may take (PhotoCraft 0.05..=0.95; InDesign and Illustrator 0.13..=0.87).
     pub midpoint: RangeInclusive<f32>,
+    /// What an Alt-drag of a colour stop over another colour stop does.
+    pub alt_drop: AltDrop,
 }
 
 impl StopRules {
@@ -50,12 +63,34 @@ impl StopRules {
         self.midpoint = range;
         self
     }
+
+    /// What an Alt-drag of a colour stop over another colour stop does.
+    #[must_use]
+    pub fn alt_drop(mut self, rule: AltDrop) -> Self {
+        self.alt_drop = rule;
+        self
+    }
 }
 
 impl Default for StopRules {
     fn default() -> Self {
-        Self { rows: StopRows::Split, min: 2, max: 1024, midpoint: 0.05..=0.95 }
+        Self { rows: StopRows::Split, min: 2, max: 1024, midpoint: 0.05..=0.95, alt_drop: AltDrop::Copy }
     }
+}
+
+/// The stops with the colours of stops `i` and `j` exchanged (RGB and `tag`; locations, alpha and
+/// midpoints stay), and the index of the stop `i`; `None` for `i == j` or an index out of range.
+pub fn swap_colors(stops: &GradientStops, i: usize, j: usize) -> Option<(GradientStops, usize)> {
+    if i == j || i >= stops.color.len() || j >= stops.color.len() {
+        return None;
+    }
+    let (a, b) = (stops.color[i], stops.color[j]);
+    let mut out = stops.clone();
+    out.color[i].color = Srgba { a: a.color.a, ..b.color };
+    out.color[i].tag = b.tag;
+    out.color[j].color = Srgba { a: b.color.a, ..a.color };
+    out.color[j].tag = a.tag;
+    Some((out, i))
 }
 
 /// One Left or Right press moves a stop or midpoint by this share of the bar or line.
@@ -113,6 +148,7 @@ impl Stop for OpacityStop {
 }
 
 /// The location of stop `i` of `row`.
+#[cfg(feature = "ui")]
 pub(crate) fn location(stops: &GradientStops, row: StopRow, i: usize) -> f32 {
     match row {
         StopRow::Color => stops.color[i].location,
@@ -121,6 +157,7 @@ pub(crate) fn location(stops: &GradientStops, row: StopRow, i: usize) -> f32 {
 }
 
 /// The midpoint after stop `i` of `row`.
+#[cfg(feature = "ui")]
 pub(crate) fn midpoint(stops: &GradientStops, row: StopRow, i: usize) -> f32 {
     match row {
         StopRow::Color => stops.color[i].midpoint,
@@ -129,6 +166,7 @@ pub(crate) fn midpoint(stops: &GradientStops, row: StopRow, i: usize) -> f32 {
 }
 
 /// The locations of `row`'s stops as the bar shows them.
+#[cfg(feature = "ui")]
 pub(crate) fn locations(stops: &GradientStops, row: StopRow) -> Vec<f32> {
     match row {
         StopRow::Color => stops.color.iter().map(|s| s.location).collect(),
@@ -137,6 +175,7 @@ pub(crate) fn locations(stops: &GradientStops, row: StopRow) -> Vec<f32> {
 }
 
 /// Where the midpoint after stop `i` of `row` is, 0..=1 of the bar.
+#[cfg(feature = "ui")]
 pub(crate) fn midpoint_at(stops: &GradientStops, row: StopRow, i: usize) -> f32 {
     let at = locations(stops, row);
     at[i] + (at[i + 1] - at[i]) * midpoint(stops, row, i)

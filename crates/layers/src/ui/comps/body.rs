@@ -310,7 +310,7 @@ fn map_events(cx: &ListCx<'_>, session: &mut Session, list: Vec<CollectionEvent<
     let mut label: Arc<str> = Arc::from("");
     for event in list {
         match event {
-            CollectionEvent::Selection(change) => {
+            CollectionEvent::Selection { change, .. } => {
                 let key = match change {
                     SelectionChange::Set(keys) => keys.last().copied(),
                     SelectionChange::Toggle(key) => Some(key),

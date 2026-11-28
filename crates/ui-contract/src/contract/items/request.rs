@@ -1,6 +1,8 @@
-//! Requests to a collection's item step from outside it, taken at the collection's next pass.
+//! Requests to a collection's item step from outside it, taken at the collection's next pass. Each request moves the
+//! `Requests` input and each take reads it, so a pending request runs the memoized view that takes it.
 
 use crate::runtime::egui::memory as store;
+use crate::runtime::inputs::{self, Input};
 use egui::{Context, Id};
 
 /// The rename requests not yet taken: the collection and the key to rename.
@@ -24,15 +26,23 @@ pub fn request_rename<K: Clone + Send + Sync + 'static>(ctx: &Context, collectio
         requests.0.retain(|(id, _)| *id != collection);
         requests.0.push((collection, key.clone()));
     });
+    inputs::bump(ctx, Input::Requests);
     crate::runtime::egui::repaint::request_of(ctx, crate::runtime::egui::pass::current_viewport(ctx));
 }
 
 /// The rename request addressed to `collection`, once.
 pub(super) fn take_rename<K: Send + Sync + 'static>(ctx: &Context, collection: Id) -> Option<K> {
+    crate::runtime::replay::note_input(ctx, Input::Requests);
     store::Service::<RenameRequests<K>>::run(ctx, |requests| {
         let at = requests.0.iter().position(|(id, _)| *id == collection)?;
         Some(requests.0.remove(at).1)
     })
+}
+
+/// The rename request addressed to `collection`, left in place for the pass's own step to take. L-154's kept row
+/// covers a requested rename too, so a row the filter excludes is still listed while its rename starts.
+pub(super) fn peek_rename<K: Clone + Send + Sync + 'static>(ctx: &Context, collection: Id) -> Option<K> {
+    store::Service::<RenameRequests<K>>::run(ctx, |requests| requests.0.iter().find(|(id, _)| *id == collection).map(|(_, key)| key.clone()))
 }
 
 /// The lead's position as the item step left it at the end of its last pass.

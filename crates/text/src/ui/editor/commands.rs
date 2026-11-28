@@ -2,7 +2,8 @@
 //! toggle. They sit in the `textEditor` scope, a typing scope: while the editor holds the keys they reach it before an
 //! app's shortcut on the same chord (Cmd+T is Free Transform elsewhere), and the keymap's typing rule, which keeps Alt
 //! chords with a text field's text, lets them through (Alt+arrows kern and step leading, baseline and tracking). The
-//! editor reads them with `take_command`, so the keymap rebinds them like any command; the editor reads no raw keys.
+//! editor reads them in order with its inputs (`editor_steps`), so the keymap rebinds them like any command; the editor
+//! reads no raw keys.
 
 use craft_behavior::{Granularity, MoveMods, NavMove};
 

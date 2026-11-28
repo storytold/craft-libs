@@ -11,6 +11,7 @@ use crate::contract::{
     PartsCx, Role, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::layout::{Placed, arrange};
+use crate::layout_components::Row;
 use crate::runtime::access::Name;
 use crate::runtime::egui::pass;
 use crate::runtime::env::Env;
@@ -50,6 +51,9 @@ impl Outcome for TitleBarOutput {
 
 /// The bar of a window whose frame the app draws.
 ///
+/// The bar paints the chrome surface; `surface` names another role (`SurfaceKind::Background` for an app whose title
+/// bar is darker than its other bars).
+///
 /// The bar fills the width of its room; its height is its content's, the caption strip's `SlotSize::TitleBar`. What it shows follows the window's frame
 /// (`WindowHost::frame`):
 ///
@@ -57,7 +61,8 @@ impl Outcome for TitleBarOutput {
 ///   [`title_when_native`](TitleBar::title_when_native), the title.
 /// - **Inset (macOS).** The content starts after the traffic lights. A double click follows the system setting.
 /// - **Integrated.** The caption buttons of the window's layout sit at the two ends, flush with the window's edges.
-///   A double click maximizes or restores.
+///   A double click follows the desktop's setting (GNOME's `action-double-click-titlebar`), and elsewhere
+///   maximizes or restores.
 ///
 /// An end with no caption buttons or lights keeps the content `space.pad.regular` off the window's edge.
 ///
@@ -67,7 +72,9 @@ impl Outcome for TitleBarOutput {
 /// In an embedded shell (an app preview, a story) the bar is a picture of a window: it acts on no window and reads
 /// none. The captions show hover and report their clicks, but send no window command, and the bar has no move band. The body is the leading content; the
 /// trailing content ([`trailing`](TitleBar::trailing)) sits before the end's captions. [`show_titled`](TitleBar::show_titled)
-/// adds the title in the gap between them. Close never closes the window; see [`TitleBarOutput`].
+/// adds the title in the gap between them; [`show_fitted`](TitleBar::show_fitted) fits the trailing content after the
+/// leading content: its ranked members leave before the leading content narrows. Close never closes the window; see
+/// [`TitleBarOutput`].
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container)]
 pub struct TitleBar<'a> {
@@ -244,6 +251,25 @@ impl<'a> TitleBar<'a> {
             .output;
         out.title_activated = activated;
         out
+    }
+
+    /// Shows the bar with `leading` content at its start and `trailing` content before the end's captions, where the
+    /// end region joins the body's fit (`EndRegion::fit`): on a short bar the trailing members that carry a `fit_rank`
+    /// leave whole, lowest rank first, before the leading content narrows: an app bar whose menus stay whole while its
+    /// end controls go.
+    pub fn show_fitted(
+        mut self,
+        ui: &mut Ui,
+        leading: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a,
+        mut trailing: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a,
+    ) -> TitleBarOutput {
+        self.props = self.props.end(EndRegion::new().fit(true));
+        // The ranked members fit as units of the first row in the end region.
+        self.trailing(move |ui: &mut Ui, cx: &mut BodyCx<'_>| {
+            let _ = Row::new().show(ui, |ui, _| trailing(ui, cx));
+        })
+        .show(ui, leading)
+        .output
     }
 
     /// Shows one end of the bar and records its clicked caption: Close is reported, never acted on.

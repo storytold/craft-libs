@@ -267,7 +267,8 @@ impl KeyboardState {
         let platform = keymap.platform();
         let mut map: Index = HashMap::new();
         for b in keymap.catalog() {
-            for binding in keymap.bindings(&b.command) {
+            // The pane shows what a press of a key does; a hold does not change that, so the switch needs no new key.
+            for binding in keymap.bindings(&b.command).into_iter().filter(|x| !x.trigger.is_hold()) {
                 let scope = binding.scope_or(&b.scope).clone();
                 let holder = Holder { command: b.command.clone(), binding };
                 map.entry(holder.binding.trigger.chord.effective(platform)).or_default().push(KeyHolder { holder, scope });
@@ -660,7 +661,7 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, env: &mut Env<'_>, state: 
         state.keyboard.key = Some(key);
     }
     if let Some(c) = go {
-        state.go_to(&c);
+        state.go_to(env, &c);
     }
     if assign && let (Some(command), Some(key)) = (state.selected.clone(), state.keyboard.key) {
         let trigger = Trigger::single(Chord { mods, key });

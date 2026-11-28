@@ -33,7 +33,7 @@ pub struct DocumentWindows<D> {
     /// The floating groups, each with its window rect.
     #[serde(with = "floating_serde")]
     pub floating: Vec<(DocumentGroup<D>, Rect)>,
-    /// The n-up or Tile arrangement the document area shows: set by Window › Arrange, cleared by
+    /// The n-up, Tile All or Tile arrangement the document area shows: set by Window › Arrange, cleared by
     /// Consolidate and by floating a document.
     #[serde(default)]
     pub arrangement: Option<Arrangement>,

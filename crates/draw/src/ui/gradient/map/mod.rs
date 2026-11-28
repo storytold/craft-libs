@@ -14,7 +14,7 @@ use craft_ui::contract::{Bind, Pattern, Props as _, Remember as _, Show as _, Sh
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::Field;
 use craft_ui::layout_components::Stack;
-use craft_ui::patterns::presets::{PickerField, PresetPicker, PresetRow};
+use craft_ui::patterns::presets::{PickerField, PresetFns, PresetPicker, PresetRow, PresetSource};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::TypeRole;
 use egui::{Response, Ui};
@@ -136,26 +136,18 @@ impl<'a> GradientMapEditor<'a> {
             (words.preset.clone(), words.custom.clone(), words.import_presets.clone(), words.stops.clone());
         let (reverse_label, dither_label) = (words.reverse.clone(), words.dither.clone());
         let shown = Stack::new().label(self.label.clone()).show(ui, |ui, cx| {
-            let rows: Vec<PresetRow<GradientRef>> = self
-                .presets
-                .iter()
-                .enumerate()
-                .flat_map(|(group, g)| {
-                    let header = PresetRow::group(GradientRef::Item { group, item: usize::MAX }, g.name.clone(), 0);
-                    let items =
-                        g.items.iter().enumerate().map(move |(item, p)| PresetRow::item(GradientRef::Item { group, item }, p.name.clone(), 1));
-                    std::iter::once(header).chain(items)
-                })
-                .collect();
+            let source = PresetSource::new(self.presets, PresetFns::new(preset_rows));
             // Stop tags identify host data, so they do not determine which preset's colours match.
             let matches = |&key: &GradientRef| {
                 self.preset_colors(key).is_some_and(|colors| colors.map(|s| s.with_tag(0)).eq(base.stops.color.iter().map(|s| s.with_tag(0))))
             };
             let preferred = cx.keep::<PickedPreset>().0.filter(matches);
-            let current = preferred.or_else(|| rows.iter().map(|row| row.key).find(matches));
+            let mut items =
+                self.presets.iter().enumerate().flat_map(|(group, g)| (0..g.items.len()).map(move |item| GradientRef::Item { group, item }));
+            let current = preferred.or_else(|| items.find(matches));
             let picked = Field::new(preset_label.clone())
                 .show(ui, |ui, _| {
-                    PresetPicker::new(preset_label.clone(), Bind::given(current), &rows, Bind::kept())
+                    PresetPicker::new(preset_label.clone(), Bind::given(current), &source, Bind::kept())
                         .field(PickerField::Name)
                         .placeholder(custom.clone())
                         .show(ui)
@@ -199,4 +191,17 @@ impl<'a> GradientMapEditor<'a> {
         });
         GradientMapOutput { response: shown.output, event, color_requested, import }
     }
+}
+
+/// The picker's rows: each group's header, then its presets. A header's key names no preset (`item == usize::MAX`).
+fn preset_rows(presets: &&[GradientGroup], _: &Env) -> Vec<PresetRow<GradientRef>> {
+    presets
+        .iter()
+        .enumerate()
+        .flat_map(|(group, g)| {
+            let header = PresetRow::group(GradientRef::Item { group, item: usize::MAX }, g.name.clone(), 0);
+            let items = g.items.iter().enumerate().map(move |(item, p)| PresetRow::item(GradientRef::Item { group, item }, p.name.clone(), 1));
+            std::iter::once(header).chain(items)
+        })
+        .collect()
 }

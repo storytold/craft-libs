@@ -83,6 +83,7 @@ ttf-parser = "=0.25.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 proptest = { workspace = true }
+craft-testkit = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"

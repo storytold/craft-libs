@@ -34,6 +34,13 @@ craft_ui::words! {
         label_cycles: template "keyboardShortcuts.labelCycles" = "{label} (cycles)";
         shares_a_shortcut: "keyboardShortcuts.sharesAShortcut" = "Shares a shortcut with another command";
         label_changed: template "keyboardShortcuts.labelChanged" = "{label} (Changed)";
+        // Hold shortcuts.
+        hold_shortcuts: "keyboardShortcuts.holdShortcuts" = "Hold Shortcuts";
+        hold_delay: "keyboardShortcuts.holdDelay" = "Hold delay (seconds):";
+        hold_explanation: "keyboardShortcuts.holdExplanation" = "Hold down a key that types a character to use its command while the key is down; releasing the key goes back.";
+        hold_column: "keyboardShortcuts.holdColumn" = "Hold";
+        add_a_hold_shortcut_to_label: template "keyboardShortcuts.addAHoldShortcutToLabel" = "Add a hold shortcut to {label}";
+        not_holdable: template "keyboardShortcuts.notHoldable" = "{chord}: only a key that types a character, alone or with Shift, can be held";
         // Table and detail pane.
         command: "keyboardShortcuts.command" = "Command";
         commands: "keyboardShortcuts.commands" = "Commands";
@@ -61,6 +68,7 @@ craft_ui::words! {
         not_assigned: "keyboardShortcuts.notAssigned" = "Not assigned";
         label_scope_both_work: template "keyboardShortcuts.labelScopeBothWork" = "{label} ({scope}, both work)";
         add_a_shortcut_to_label: template "keyboardShortcuts.addAShortcutToLabel" = "Add a shortcut to {label}";
+        replace_chord_for_label: template "keyboardShortcuts.replaceChordForLabel" = "Replace {chord} for {label}";
         remove_chord_from_label: template "keyboardShortcuts.removeChordFromLabel" = "Remove {chord} from {label}";
         restore_the_default_for_label: template "keyboardShortcuts.restoreTheDefaultForLabel" = "Restore the default for {label}";
         label_chord: template "keyboardShortcuts.labelChord" = "{label}: {chord}";
@@ -106,6 +114,7 @@ craft_ui::words! {
         also_used_by_label: template "keyboardShortcuts.alsoUsedByLabel" = "Also used by {label}";
         chord_is_reserved_by_the_system: template "keyboardShortcuts.chordIsReservedByTheSystem" = "{chord} is reserved by the system";
         a_command_can_have_at_most: template "keyboardShortcuts.aCommandCanHaveAtMost" = "A command can have at most {n} shortcuts";
+        shortcut_cannot_be_saved_in_its_scope: template "keyboardShortcuts.shortcutCannotBeSavedInItsScope" = "{chord} for {command} cannot be saved in its current scope";
         the_scope_scope_is_unknown: template "keyboardShortcuts.theScopeScopeIsUnknown" = "The scope {scope} is unknown";
         too_many_shortcuts_are_assigned: "keyboardShortcuts.tooManyShortcutsAreAssigned" = "Too many shortcuts are assigned";
         this_command_is_unknown: "keyboardShortcuts.thisCommandIsUnknown" = "This command is unknown";
@@ -114,6 +123,8 @@ craft_ui::words! {
         keep_both: "keyboardShortcuts.keepBoth" = "Keep Both";
         go_to_conflict: "keyboardShortcuts.goToConflict" = "Go to Conflict";
         undo_changes: "keyboardShortcuts.undoChanges" = "Undo Changes";
+        replace_old_for_command_with_chord_used_by_label: template "keyboardShortcuts.replaceOldForCommandWithChordUsedByLabel" = "Replace {old} for {command} with {chord}, which is used by {label}";
+        the_shortcuts_changed_try_replacing_again: "keyboardShortcuts.theShortcutsChangedTryReplacingAgain" = "The shortcuts changed. Try the replacement again.";
         dismiss: "keyboardShortcuts.dismiss" = "Dismiss";
         // Saved shortcuts that could not be used.
         key_no_command_has_this_name: template "keyboardShortcuts.keyNoCommandHasThisName" = "{key}: no command has this name";
@@ -193,6 +204,24 @@ craft_ui::words! {
         the_shortcuts_could_not_be_removed: "keyboardShortcuts.theShortcutsCouldNotBeRemoved" = "the shortcuts could not be removed";
         copy_report: "keyboardShortcuts.copyReport" = "Copy Report";
         done: "keyboardShortcuts.done" = "Done";
+        start: "keyboardShortcuts.start" = "Start";
+        start_current: "keyboardShortcuts.startCurrent" = "Current shortcuts";
+        start_defaults: "keyboardShortcuts.startDefaults" = "Defaults";
+        include_entry: "keyboardShortcuts.includeEntry" = "Include";
+        search_entries: "keyboardShortcuts.searchEntries" = "Search entries";
+        no_equivalent: "keyboardShortcuts.noEquivalent" = "No equivalent";
+        not_read: "keyboardShortcuts.notRead" = "Not read";
+        keys_section: "keyboardShortcuts.keysSection" = "Keys";
+        record_a_key: "keyboardShortcuts.recordAKey" = "Record a key";
+        press_a_key_without_modifiers: "keyboardShortcuts.pressAKeyWithoutModifiers" = "Press a key without modifiers";
+        undecided_key: template "keyboardShortcuts.undecidedKey" = "key code {n} is not known";
+        undecided_modifier: template "keyboardShortcuts.undecidedModifier" = "modifier code {n} is not known";
+        // The parts of a modifier combination the review composes.
+        mod_none: "keyboardShortcuts.modNone" = "No modifier";
+        mod_cmd: "keyboardShortcuts.modCmd" = "Cmd";
+        mod_ctrl: "keyboardShortcuts.modCtrl" = "Ctrl";
+        mod_alt: "keyboardShortcuts.modAlt" = "Alt";
+        mod_shift: "keyboardShortcuts.modShift" = "Shift";
         // Why a `.kys` file is refused (`KysError`), and the tooltip of a saved text that is not a shortcut.
         the_file_is_larger_than_a: "keyboardShortcuts.theFileIsLargerThanA" = "The file is larger than a keyboard shortcut set can be.";
         the_file_is_not_a_photoshop: template "keyboardShortcuts.theFileIsNotAPhotoshop" = "The file is not a Photoshop keyboard shortcut set: {message}";
@@ -236,6 +265,14 @@ impl Say {
         let env = Env::of(ui);
         let view = env.view();
         Say { words: view.words(), keys: view.words(), host: view.host().cloned(), rtl: view.direction().is_rtl(), folder: env.folder() }
+    }
+
+    /// The words of `host`'s interface language, for code without a `Ui`: what [`Say::of`] reads in a scope under
+    /// `host`, with the direction of the language.
+    pub(crate) fn of_host(host: &Arc<Host>) -> Say {
+        let words = host.words();
+        let rtl = host.i18n().is_some_and(|i18n| i18n.rtl(host.lang()));
+        Say { words: words.set(), keys: words.set(), host: Some(Arc::clone(host)), rtl, folder: Folder::new(host.language_code()) }
     }
 
     /// The folder that folds search text in the dialog's language.

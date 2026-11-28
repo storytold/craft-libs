@@ -1,8 +1,10 @@
 //! Stories of `Checkbox`.
 
 use super::Checkbox;
-use crate::contract::{Props as _, Show as _, Validity};
-use crate::runtime::env::Message;
+use crate::choice::ChoiceLook;
+use crate::contract::{Props as _, Show as _, ShowContainer as _, Validity};
+use crate::layout_components::Stack;
+use crate::runtime::env::{Message, with_env};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::Mixed;
 use craft_theme::ControlSize;
@@ -58,4 +60,26 @@ fn checkbox_disabled_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Checkbox<'static>, covers = [], group = "States", title = "Long label")]
 fn checkbox_long_label(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Checkbox::new(data.bind("checked", true)).label(LONG_LABEL).show(ui).into()
+}
+
+/// The check boxes of an app that sets `ChoiceLook::Strong` at its root: a checked or mixed box fills with the strong
+/// accent under a white mark; an unchecked box and a disabled one look as they do by default.
+#[story(Checkbox<'static>, covers = [], drive = Drive::Never, group = "Looks", title = "Strong")]
+fn checkbox_strong(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut output = StoryOutput::default();
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(ChoiceLook::Strong);
+        },
+        |ui| {
+            Stack::new().show(ui, |ui, _| {
+                output = Checkbox::new(data.bind("checked", true)).label("Checked").show(ui).into();
+                Checkbox::new(data.bind("unchecked", false)).label("Unchecked").show(ui);
+                Checkbox::new(data.bind_mixed("mixed", Mixed::Mixed)).label("Mixed").show(ui);
+                Checkbox::new(data.bind("disabled", true)).label("Disabled (checked)").enabled(false).show(ui);
+            })
+        },
+    );
+    output
 }

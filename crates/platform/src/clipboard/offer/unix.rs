@@ -127,6 +127,8 @@ fn wayland_write(plan: &Plan<'_>, owner: &[u8]) -> Result<Option<usize>, Clipboa
             let Some((index, png)) = plan.picture.as_ref().and_then(|picture| Some((picture.index, picture.png?))) else { return Ok(None) };
             [Some((index, PNG, png.to_vec())), text(&plan.html, HTML), text(&plan.text, UTF8_TEXT)].into_iter().flatten().collect()
         }
+        // arboard offers a file list with the names file managers read (`text/uri-list` and GNOME's own).
+        Some(Primary::Files) => return Ok(None),
         // The text first: the plain-text aliases serve the first text type offered.
         _ => [text(&plan.text, UTF8_TEXT), text(&plan.html, HTML), text(&plan.rtf, RTF), text(&plan.mathml, MATHML)].into_iter().flatten().collect(),
     };

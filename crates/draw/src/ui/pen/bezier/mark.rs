@@ -32,6 +32,8 @@ pub enum AnchorsShown {
     /// Outlines only: no anchor, no handle, no part, no AccessKit object (a path under a transform box, PhotoCraft's
     /// `draw_outline`). Use it with [`BezierTool::Anchors`](super::BezierTool::Anchors).
     Hidden,
+    /// Anchors as circles and no direction handles (the Curvature tool's look).
+    Curvature,
 }
 
 /// The hover look of the part of a path a press would take, drawn by the overlay for the Add, Delete, Auto

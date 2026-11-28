@@ -4,7 +4,7 @@
 
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size, Vec2 as DocVec};
-use craft_behavior::{CanvasView, ZoomLadder};
+use craft_behavior::{CanvasView, ZoomScheme};
 use egui::{Pos2, Rect, pos2, vec2};
 
 /// A zoom rectangle under this many document units on a side steps one rung in instead.
@@ -49,11 +49,11 @@ pub fn proxy_quad(view: &CanvasView, size: Size, preview: Rect) -> [Pos2; 4] {
 ///   would turn a NaN edge into a document edge.
 /// - `doc_rect` is intersected with the document `(0, 0)..size`; a negative width or height after that (a rectangle
 ///   off the document) does nothing.
-/// - Under 2 document units on a side, or an empty canvas: one ladder rung in ([`ZoomLadder::step`] with `dir` 1).
+/// - Under 2 document units on a side, or an empty canvas: one rung of `scheme` in ([`ZoomScheme::step`] with `dir` 1).
 /// - Otherwise [`zoom::fit_rect`] with no margin: the whole clipped rectangle shows, with the view's pixel aspect and
 ///   rotation.
 /// - The centre becomes the clipped rectangle's centre.
-pub fn zoom_to_document_rect(view: &mut CanvasView, doc_rect: DocRect, size: Size, pixels_per_point: f32) -> bool {
+pub fn zoom_to_document_rect(view: &mut CanvasView, doc_rect: DocRect, size: Size, pixels_per_point: f32, scheme: &ZoomScheme) -> bool {
     let edges = [doc_rect.x0, doc_rect.y0, doc_rect.x1, doc_rect.y1];
     if !edges.iter().all(|edge| edge.is_finite()) {
         return false;
@@ -69,14 +69,14 @@ pub fn zoom_to_document_rect(view: &mut CanvasView, doc_rect: DocRect, size: Siz
     let canvas = view.rect.size();
     let before = *view;
     if width < MIN_ZOOM_BOX || height < MIN_ZOOM_BOX || canvas.x <= 0.0 || canvas.y <= 0.0 {
-        let device = ZoomLadder::step(zoom::device(view, ppp), 1, size);
+        let device = scheme.step(zoom::device(view, ppp), 1, size);
         if !device.is_finite() {
             return false;
         }
         view.zoom = CanvasView::points_per_unit(device, ppp);
         view.center = Point::new(x0 + width / 2.0, y0 + height / 2.0);
     } else {
-        zoom::fit_rect(view, DocRect::new(x0, y0, x1, y1), size, ppp, DocVec::ZERO);
+        zoom::fit_rect(view, DocRect::new(x0, y0, x1, y1), size, ppp, DocVec::ZERO, scheme);
     }
     *view != before
 }

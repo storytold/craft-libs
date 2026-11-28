@@ -72,7 +72,68 @@ pub enum WellShape {
     Round,
 }
 
-/// Corner radii, edge style, knob shape and well shape.
+/// The marks a dock grip's row is made of.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GripMark {
+    /// Upright ticks, [`GripShape::width`] wide and [`GripShape::length`] tall.
+    #[default]
+    Ticks,
+    /// Square dots, [`GripShape::width`] on a side.
+    Dots,
+    /// One level bar, [`GripShape::length`] long and [`GripShape::width`] thick: a tick turned on its side. The count
+    /// and the gap do not apply.
+    Bar,
+}
+
+impl GripMark {
+    /// The mark's name in a theme file and a token dump.
+    pub fn name(self) -> &'static str {
+        match self {
+            GripMark::Ticks => "ticks",
+            GripMark::Dots => "dots",
+            GripMark::Bar => "bar",
+        }
+    }
+}
+
+/// The row of marks a dock grip shows (the grip above an icon group, under a tool rail's column bar, at a floating
+/// panel's edge): what the marks are, how many, how large and how far apart, in points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GripShape {
+    /// Ticks, dots or a bar.
+    pub mark: GripMark,
+    /// How many marks the row has, at every display scale.
+    pub count: u16,
+    /// How tall a tick is, or how long the bar is; dots ignore it.
+    pub length: f32,
+    /// How wide a tick is, a dot's side, or how thick the bar is.
+    pub width: f32,
+    /// The space between two marks.
+    pub gap: f32,
+}
+
+impl GripShape {
+    /// Eleven upright ticks, 1 point wide, 5 points tall and 1 point apart.
+    pub const DEFAULT: GripShape = GripShape { mark: GripMark::Ticks, count: 11, length: 5.0, width: 1.0, gap: 1.0 };
+}
+
+impl Default for GripShape {
+    fn default() -> Self {
+        GripShape::DEFAULT
+    }
+}
+
+/// The squares of a reference point picker's square look: the step from one square's centre to the next and a
+/// square's side, in points. The picker is two steps and a square wide.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LocatorShape {
+    /// The step from one square's centre to the next.
+    pub cell: f32,
+    /// A square's side.
+    pub square: f32,
+}
+
+/// Corner radii, edge style, knob shape, well shape, grip marks and the reference point's squares.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShapeTokens {
     /// Corner radii.
@@ -83,6 +144,10 @@ pub struct ShapeTokens {
     pub knob: KnobShape,
     /// How colour wells that stand on their own are drawn.
     pub wells: WellShape,
+    /// The marks of the dock grips.
+    pub grip: GripShape,
+    /// The squares of a reference point picker's square look.
+    pub locator: LocatorShape,
 }
 
 /// Gaps between neighbouring elements, in logical pixels.
@@ -111,8 +176,11 @@ pub struct Gaps {
 pub struct Pads {
     /// Inside controls.
     pub control: f32,
-    /// Inside panels and default dialog frames.
+    /// Inside panels.
     pub regular: f32,
+    /// Inside default dialog frames. An app that sets `space.pad.regular` and not this keeps its dialogs padded as its
+    /// panels are.
+    pub dialog: f32,
     /// Inside roomy dialogs.
     pub roomy: f32,
     /// Inside badges, key caps and chips: tighter than a control.
@@ -137,6 +205,13 @@ pub struct SpaceTokens {
 pub struct Insets {
     /// The gap a floating layer (a dialog, a floating window) keeps from the screen edge.
     pub screen: f32,
+    /// The page view's side margin: kept clear at each side of the pages, so a page fitted to the width stands this far
+    /// from the view's edges.
+    pub page_side: f32,
+    /// The page view's margin above the first and below the last row of pages.
+    pub page_margin: f32,
+    /// The gap between pages and rows of pages.
+    pub page_gap: f32,
 }
 
 /// One length per control size, in logical pixels: control heights, field widths.
@@ -179,12 +254,16 @@ pub struct BarSizes {
     pub title: f32,
     /// Tab strip.
     pub tab: f32,
+    /// Tab strip in its large form: large document tabs.
+    pub tab_large: f32,
     /// Status bar.
     pub status: f32,
     /// Tool options bar.
     pub options: f32,
     /// Tool options bar in its narrow form, for a window too small for the full bar.
     pub options_narrow: f32,
+    /// A dock column's bar, with its collapse chevron: a small control's height in the built-in sets.
+    pub column: f32,
 }
 
 /// Fixed sizes of controls and chrome.
@@ -192,6 +271,9 @@ pub struct BarSizes {
 pub struct SizeTokens {
     /// Control heights.
     pub control: ControlSizes,
+    /// The height of a standard push button, a text button's face (a small one stands `control.sm` high). An app that
+    /// sets `size.control.md` and not this keeps its buttons a control high.
+    pub button: f32,
     /// Icon sizes.
     pub icon: IconSizes,
     /// Tool rail.
@@ -233,6 +315,46 @@ pub struct SizeTokens {
     pub dock: DockColumnSizes,
     /// Dialogs: their content width and their buttons.
     pub dialog: DialogSizes,
+    /// Full-window pages.
+    pub page: PageSizes,
+}
+
+/// The sizes of a full-window page (a start page), in logical pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PageSizes {
+    /// The widest a page's centred column of content grows; a narrower room keeps the page's margin at each side.
+    pub column: f32,
+    /// The room above and below a page's centred column.
+    pub margin: f32,
+    /// The height of a page's call to action (`ControlPlace::CallToAction`).
+    pub action: f32,
+    /// The height of a page's New and Open (`ControlPlace::PageAction`). An app that sets `size.button` and not this
+    /// keeps them a push button high.
+    pub button: f32,
+    /// The least room at each side of a page action's label; 0 keeps a push button's.
+    pub button_side: f32,
+    /// A page's rhythm, each following the gap it stands in for unless an app sets it (`Gap::Page*`).
+    pub gap: PageGaps,
+    /// The least height of a page's link row; 0 keeps a link its text's height.
+    pub link: f32,
+}
+
+/// The gaps of a full-window page's column, in logical pixels (`Gap::PageTitle` and its siblings). The size sets give
+/// each the value of the gap it follows, so a page keeps that rhythm unless an app sets its own.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PageGaps {
+    /// Between the title and the subtitle (follows `space.gap.tight`).
+    pub title: f32,
+    /// Between the title and subtitle and New and Open under them (follows `space.gap.section`).
+    pub lead: f32,
+    /// Between New and Open (follows `space.gap.stack`).
+    pub actions: f32,
+    /// Between the column's sections (follows `space.gap.section`).
+    pub section: f32,
+    /// Between a section's heading and its body (follows `space.gap.stack`).
+    pub heading: f32,
+    /// Between the links (follows `space.gap.stack`).
+    pub link: f32,
 }
 
 /// The sizes of the panes of a dock's split, in logical pixels.
@@ -260,6 +382,9 @@ pub struct DialogSizes {
     pub wrap: f32,
     /// The least width of a footer button.
     pub button: f32,
+    /// The height of a footer button. An app that sets `size.button` and not this keeps its footer buttons a push
+    /// button high.
+    pub button_height: f32,
     /// The least width of a button in a column beside the body.
     pub side_button: f32,
 }
@@ -319,6 +444,8 @@ pub struct RowSizes {
     /// The height of a row that shows text only: one body line and `space.gap.tight`. Read-only display tables (a
     /// metadata table) take it; rows the user picks from stay a control high.
     pub text: f32,
+    /// The height of a menu's row. An app that sets `size.control.md` and not this keeps its menu rows a control high.
+    pub menu: f32,
 }
 
 /// Thicknesses of gradient ramps, in logical pixels.
@@ -375,6 +502,8 @@ pub struct StrokeTokens {
     pub thick: f32,
     /// Heaviest line: an arc or indicator that must read at a glance.
     pub heavy: f32,
+    /// The keyboard focus ring.
+    pub focus: f32,
     /// Length of a dash.
     pub dash: f32,
     /// Gap between dashes.

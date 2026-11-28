@@ -18,6 +18,9 @@ pub struct SessionDocument {
     pub window: Option<String>,
     /// The app's view state for the document (PdfCraft's page, PhotoCraft's zoom and scroll), as
     /// the app wrote it; `Null` when it keeps none.
+    // TOML has no null: written as a null, the whole typed settings save would fail. Left out, it
+    // reads back as `Null` through `#[serde(default)]` and `from_json`.
+    #[serde(skip_serializing_if = "serde_json::Value::is_null")]
     pub view: serde_json::Value,
 }
 

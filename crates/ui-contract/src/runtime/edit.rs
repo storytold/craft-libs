@@ -36,8 +36,12 @@ pub(crate) fn gesture_key(id: Id) -> Id {
 
 /// The note the component `id` set on its running gesture with [`Cx::propose_with`](crate::contract::Cx::propose_with),
 /// when it is an `N`; `None` while no gesture of the component runs. `V` is the component's value type, under which
-/// its gesture is kept. A reader outside the component's pass, drawn before or after it, reads the same note.
+/// its gesture is kept. A reader outside the component's pass, drawn before or after it, reads the same note. A
+/// component not shown in the pass before has no running gesture: it lost its press, as its own value step finds.
 pub fn gesture_note<V: Value, N: Clone + 'static>(ctx: &Context, id: Id) -> Option<N> {
+    if !crate::runtime::memory::shown_last_pass(ctx, id) {
+        return None;
+    }
     MemoryStage::peek_with::<Gesture<V>, _>(ctx, gesture_key(id), |gesture| {
         if !gesture.is_running() {
             return None;
@@ -113,6 +117,40 @@ impl RemovalWatch {
     /// The gesture it watches runs.
     pub(crate) fn armed(&self) -> bool {
         self.armed.is_some()
+    }
+}
+
+/// The preview watch of a component with a live preview, kept in its shown memory. When eviction drops an armed
+/// watch it notes the ended preview (`FrameOutput::ended_previews`) and requests a repaint.
+#[derive(Default)]
+pub struct PreviewWatch {
+    armed: Option<(Context, Id)>,
+}
+
+impl PreviewWatch {
+    /// Arms the watch for the component `owner`.
+    pub fn arm(&mut self, ctx: &Context, owner: Id) {
+        self.armed = Some((ctx.clone(), owner));
+    }
+
+    /// Disarms the watch: its drop notes nothing.
+    pub fn disarm(&mut self) {
+        self.armed = None;
+    }
+}
+
+impl Clone for PreviewWatch {
+    fn clone(&self) -> Self {
+        PreviewWatch::default()
+    }
+}
+
+impl Drop for PreviewWatch {
+    fn drop(&mut self) {
+        if let Some((ctx, id)) = self.armed.take() {
+            super::frame::note_ended_preview(&ctx, id);
+            repaint::request(&ctx);
+        }
     }
 }
 

@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_pages::ui::PlacedPage;
-use craft_review::comments::{CommentAnchor, CommentMessage, CommentThread, ReviewStatus, ThreadId};
+use craft_review::comments::{CommentAnchor, CommentMessage, CommentThread, ThreadId};
 use craft_review::ui::{BalloonItem, BalloonPlace, CommentBalloons, CommentEdit, CommentsPanelState, CommentsWords};
 use craft_ui::runtime::env::Direction;
 use craft_ui::testing::{Fixture, trial};
@@ -16,12 +16,28 @@ fn thread(id: u64, text: &str) -> CommentThread {
         anchor: CommentAnchor::Page { page: 0, at: [0.0, 0.0] },
         kind: None,
         color: None,
-        messages: vec![CommentMessage { author: "Ana".into(), created: 0, modified: None, text: text.into(), reactions: Vec::new(), read: true }],
-        status: ReviewStatus::None,
+        messages: vec![CommentMessage {
+            author: "Ana".into(),
+            created: 0,
+            modified: None,
+            text: text.into(),
+            reactions: Vec::new(),
+            read: true,
+            deletable: true,
+        }],
+        statuses: Vec::new(),
+        reply_statuses: Vec::new(),
         marked: false,
         locked: false,
         resolved: false,
     }
+}
+
+/// A panel state with thread `id` selected.
+fn selecting(id: u64) -> CommentsPanelState {
+    let mut state = CommentsPanelState::default();
+    state.selected = craft_behavior::Selection::single(ThreadId(id));
+    state
 }
 
 /// The page at (20, 20), 200 wide, at one screen point per page point.
@@ -115,11 +131,11 @@ fn selecting_a_card_and_posting_a_reply_report_the_matching_edits() {
     let card = shown.card(1);
     shown.fixture.click_at(card.center()).settle();
     assert!(
-        shown.edits.borrow().iter().any(|edit| matches!(edit, CommentEdit::Select(thread) if *thread == ThreadId(1))),
+        shown.edits.borrow().iter().any(|edit| matches!(edit, CommentEdit::Select(threads) if threads == &[ThreadId(1)])),
         "a click on a card reports its selection: {:?}",
         shown.edits.borrow()
     );
-    assert_eq!(shown.state.borrow().selected, Some(ThreadId(1)));
+    assert_eq!(shown.state.borrow().selected.lead, Some(ThreadId(1)));
     let reply = shown.fixture.by_label(words.reply.as_str()).expect("the selected card's reply field");
     shown.fixture.click(&reply).settle();
     shown.fixture.type_text("Thanks").settle();
@@ -140,17 +156,18 @@ fn selecting_a_card_and_posting_a_reply_report_the_matching_edits() {
 fn reselecting_a_card_keeps_its_edit_draft() {
     let threads = vec![(thread(1, "First"), 100.0), (thread(2, "Second"), 400.0)];
     // The app left the balloon (no card selected) and kept the draft the document refused.
-    let left = CommentsPanelState { editing: Some((ThreadId(1), 0, "Edited".into())), ..CommentsPanelState::default() };
+    let mut left = CommentsPanelState::default();
+    left.editing = Some((ThreadId(1), 0, "Edited".into()));
     let mut shown = Shown::new(threads, left, BalloonPlace::Column, room(), Direction::Ltr);
     // A click on the card's heading, above the open edit's field.
     let card = shown.card(1);
     shown.fixture.click_at(card.left_top() + vec2(30.0, 8.0)).settle();
-    assert_eq!(shown.state.borrow().selected, Some(ThreadId(1)), "the click selects the card");
+    assert_eq!(shown.state.borrow().selected.lead, Some(ThreadId(1)), "the click selects the card");
     assert_eq!(shown.state.borrow().editing, Some((ThreadId(1), 0, "Edited".into())), "the card's own draft survives its selection");
 
     let other = shown.card(2);
     shown.fixture.click_at(other.center()).settle();
-    assert_eq!(shown.state.borrow().selected, Some(ThreadId(2)));
+    assert_eq!(shown.state.borrow().selected.lead, Some(ThreadId(2)));
     assert_eq!(shown.state.borrow().editing, None, "selecting another card drops the draft, as before");
 }
 
@@ -159,7 +176,7 @@ fn reselecting_a_card_keeps_its_edit_draft() {
 #[trial]
 fn an_edit_that_opens_takes_the_keyboard() {
     let threads = vec![(thread(1, "First"), 100.0)];
-    let selected = CommentsPanelState { selected: Some(ThreadId(1)), ..CommentsPanelState::default() };
+    let selected = selecting(1);
     let mut shown = Shown::new(threads, selected, BalloonPlace::Column, room(), Direction::Ltr);
     let words = CommentsWords::default();
     // The app opens the edit of the selected card's comment, as on a click on its balloon.
@@ -184,7 +201,7 @@ fn an_edit_that_opens_takes_the_keyboard() {
 #[trial]
 fn a_read_only_card_takes_no_typing() {
     let threads = vec![(thread(1, "First"), 100.0)];
-    let selected = CommentsPanelState { selected: Some(ThreadId(1)), ..CommentsPanelState::default() };
+    let selected = selecting(1);
     let mut shown = Shown::with(threads, selected, BalloonPlace::Column, room(), Direction::Ltr, true);
     let words = CommentsWords::default();
     assert!(shown.fixture.by_label(words.reply.as_str()).is_none(), "a read-only card shows no reply field");
@@ -200,7 +217,7 @@ fn a_read_only_card_takes_no_typing() {
 #[trial]
 fn a_selected_card_in_buttons_form_reports_reply_resolve_reopen_and_delete() {
     let words = CommentsWords::default();
-    let selected = || CommentsPanelState { selected: Some(ThreadId(1)), ..CommentsPanelState::default() };
+    let selected = || selecting(1);
     let open = vec![(thread(1, "Open"), 100.0)];
     let mut shown = Shown::new(open.clone(), selected(), BalloonPlace::Column, room(), Direction::Ltr);
 
@@ -246,7 +263,7 @@ fn balloons_stack_without_overlap_clip_long_bodies_and_keep_the_next_card_in_vie
     let mut locked = thread(4, "Locked body");
     locked.locked = true;
     let threads = vec![(thread(1, &long), 100.0), (thread(2, "Short."), 110.0), (thread(3, &long), 120.0), (locked, 130.0)];
-    let state = CommentsPanelState { selected: Some(ThreadId(3)), ..CommentsPanelState::default() };
+    let state = selecting(3);
     let shown = Shown::new(threads, state, BalloonPlace::Column, vec2(900.0, 1100.0), Direction::Ltr);
     let texts = shown.fixture.texts().to_vec();
     let line = texts.iter().find(|text| text.text == "Short.").map(|text| text.rect.height()).expect("the short card's body");

@@ -126,9 +126,13 @@ fn source_words(source: ColorSource, anchored_on: Option<ColorToken>) -> String 
         ColorSource::Fixed(c) => format!("fixed {}", c.to_hex()),
         ColorSource::Oklch(l, c, h) => format!("oklch {l} {c} {h}"),
         ColorSource::Same(t) | ColorSource::SolidFrom(t) => format!("= {}", t.path()),
-        ColorSource::ShiftedFrom { base, from, to, away_from } => {
-            format!("= {} moved away from {} as far as {} lies from {}", base.path(), away_from.path(), to.path(), from.path())
-        }
+        ColorSource::ShiftedFrom { base, from, to, away_from, min } => format!(
+            "= {} moved away from {} as far as {} lies from {}, at least {min} lightness (toward it when there is no room)",
+            base.path(),
+            away_from.path(),
+            to.path(),
+            from.path()
+        ),
         ColorSource::OnSolid([only]) => format!("white or black on {}", only.path()),
         ColorSource::OnSolid(solids) => match solids.first() {
             Some(first) => format!("white or black on {} and {} more solids", first.path(), solids.len() - 1),
@@ -253,7 +257,7 @@ fn size_origins(resolved: &Resolved, size: Size, app: &AppSizes) -> Vec<SizeOrig
             _ => continue,
         };
         // A theme's own corner radii win over the app's, so an override that did not take is the set's.
-        let set_by_app = merged.get(path).is_some_and(|o| !path.starts_with("radius.") || *o == value);
+        let set_by_app = AppSizes::override_of(&merged, path).is_some_and(|o| !path.starts_with("radius.") || *o == value);
         let layer = if set_by_app { SizeLayer::App } else { SizeLayer::SizeSet };
         out.push(SizeOrigin { path: path.to_owned(), layer, value, range: (leaf.lo, leaf.hi) });
     }

@@ -57,9 +57,11 @@ impl<P, S: PanelSpecs<P>> SpecSource<P> for Tracked<S> {
 ///    itself: the dock shows no tab strip and no panel body for that group, and calls neither `group_header` nor `body`
 ///    for it. A flyout measures its group before it shows it, so a host view runs at `GroupAt::Measure` too.
 /// 2. Otherwise `group_header` once, inside the group's header before its tab strip, then `body` for the panels whose
-///    bodies are shown.
+///    bodies are shown, and `footer` under the body of a shown panel whose spec has `PanelSpec::footer`.
 ///
-/// Each of these runs every pass the group shows. A host memoizes inside them: a body or view shown through a
+/// Each of these runs every pass the group runs. Where every shown panel of a column has a version
+/// ([`content`](Self::content)), the column runs only when one of them, the arrangement, the specs or its place
+/// changed, or input reached it. A host memoizes inside them: a body or view shown through a
 /// [`MemoView`](crate::contract::MemoView) runs only when its props changed or input reached it, and otherwise repaints
 /// its last run. The dock's own chrome (each group's tab row, each column's bar) is memoized on what it shows: the
 /// panels' specs ([`PanelSpecs`]), the arrangement and the look.
@@ -69,8 +71,31 @@ pub trait DockPanels<P> {
     /// Shows `panel`'s body in `ui`: the group's body, inset from its edges by the panel padding. The group is the
     /// body's panel and its tab the body's title, so the body shows no framework `Panel` or padding of its own; content
     /// taller than the group scrolls in the body's own scrolling container. A document panel's body
-    /// (`PanelSpec::window_kind` `Document`) gets the group's body edge to edge.
+    /// (`PanelSpec::window_kind` `Document`) gets the group's body edge to edge. The body lays out with the group's
+    /// spacing, or with the style of the `Ui` the dock was shown in where the panel's body is the app's own egui code
+    /// (`PanelSpec::host_body`).
     fn body(&mut self, panel: &P, ui: &mut Ui, cx: &mut BodyCx<'_>);
+
+    /// Shows the fixed trailing controls of the rail containing `panel`, in top-to-bottom order. The dock calls this
+    /// only when the area names a panel with `DockArea::rail_footer`; the controls remain in view while icons scroll.
+    fn rail_footer(&mut self, _panel: &P, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
+
+    /// Shows `panel`'s footer in `ui`: a footer bar pinned under the body, across the group, that stays in view while
+    /// the body scrolls (a panel's actions on everything its body lists). The dock calls it only for a panel whose
+    /// spec has `PanelSpec::footer` (the default shows nothing).
+    fn footer(&mut self, _panel: &P, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
+
+    /// The version of the app data the host shows for `panel` that the framework does not track (a document's
+    /// revision, a job's progress): everything its `body` and `footer` show, and the `group_header`, `group_view` and
+    /// `rail_footer` of a group or rail whose shown panel it is.
+    ///
+    /// The dock shows each column, and its docked tree, as a memoized view keyed by the versions of the panels shown
+    /// in it, the arrangement, the specs and the place: while those hold and no input reaches it, the column repaints
+    /// its last run and calls none of these methods. A column or tree that shows a panel without a version (`None`,
+    /// the default) runs every pass. The host memoizes inside its bodies itself, for the passes a column runs.
+    fn content(&self, _panel: &P) -> Option<u64> {
+        None
+    }
 
     /// Takes the group holding `panels`, whose tab `active` is selected, in place of its tab strip and body: at
     /// `GroupAt::Show(rect)` it shows its view in `ui`, which the dock holds to `rect` and clips to it; at

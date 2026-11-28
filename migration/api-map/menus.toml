@@ -131,7 +131,7 @@ name = "MenuBarResponse"
 old = "craft_ui::menu::bar::MenuBarResponse"
 new = ""
 status = "removed"
-note = "Replaced by `craft_ui::menu::MenuBarOutput`: `response`, `open` and `titles` remain; `chosen` and `focused` are removed (command rows run themselves; `bar::is_focused` reads the focus)."
+note = "Replaced by `craft_ui::menu::MenuBarOutput`: `response`, `open` and `titles` remain, and `opened` is true in the one pass a menu opened; `chosen` and `focused` are removed (command rows run themselves; `bar::is_focused` reads the focus)."
 
 [[type]]
 name = "is_open"
@@ -161,10 +161,18 @@ new = "craft_ui::menu::search::HelpEntry"
 status = "pending"
 
 [[type]]
-name = "search_order"
+name = "SearchIndex"
 old = ""
-new = "craft_ui::menu::search::search_order"
+new = "craft_ui::menu::search::SearchIndex"
 status = "pending"
+note = "`SearchIndex::new(&EnvView, &[HelpEntry], &Synonyms)` indexes the entries' labels, paths, ids and words once; the Help menu builds it per query and the palette keeps one while its entries stand."
+
+[[type]]
+name = "rank"
+old = ""
+new = "craft_ui::menu::search::rank"
+status = "pending"
+note = "`rank(&SearchIndex, query, recent, uses)` returns the entries' positions, best first and uncapped; the caller caps the list."
 
 [[setter]]
 type = "MenuItem"

@@ -28,7 +28,7 @@ craft_ui::words! {
 }
 
 /// The symmetry in force, as the menu marks it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum SymmetryChoice {
     /// No symmetry.
@@ -40,7 +40,7 @@ pub enum SymmetryChoice {
 }
 
 /// A path the symmetry can come from (the saved paths, the Work Path, the layer's path), in the app's order.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct SymmetryPathRow {
     /// The app's key ("work", "layer", or the saved path's name).

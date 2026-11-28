@@ -12,7 +12,8 @@ use craft_behavior::IconId;
 use craft_keymap::Mods;
 use craft_theme::LabelColor;
 use craft_ui::contract::{Entry, PlainData, ReorderMove};
-use craft_ui::list::ThumbTarget;
+use craft_ui::list::{LabelUnderline, ThumbTarget};
+use craft_ui::style::DataColor;
 
 use super::filter::{EffectKind, LayerFilter, SmartSource};
 use super::panel::MenuTarget;
@@ -87,7 +88,9 @@ pub trait LayerTree: PlainData {
     fn blend_modes(&self, group: bool, current: &str) -> Vec<Entry<String>>;
 
     /// What the footer shows: the mask and delete wording, what is enabled, the two menus.
-    fn footer(&self) -> LayersFooterState;
+    fn footer(&self) -> LayersFooterState {
+        LayersFooterState::new("")
+    }
 
     /// Whether a drag of rows may drop here. A drop the app refuses shows no marker and takes
     /// nothing (PhotoCraft: nothing goes below the Background; a multi-selection is not copied
@@ -177,6 +180,33 @@ pub struct LayerInfo {
     pub thumb_badge: Option<ThumbBadge>,
     /// The app's own words, added to the row's description for a screen reader.
     pub description: Option<String>,
+    /// The layer's colour, shown by `LayerRowLook::ColorBar`.
+    pub color: Option<DataColor>,
+    /// The eye cell's glyph while the layer is on.
+    pub view: LayerView,
+    /// The row's glyph in place of its kind's, in the kind tile and as the icon of a row without a thumbnail.
+    pub icon: Option<IconId>,
+    /// The row's label is italic.
+    pub italic: bool,
+    /// The line under the row's label.
+    pub underline: LabelUnderline,
+    /// Whether the row shows a thumbnail; false shows the kind glyph (or `icon`) where it would be and keeps the
+    /// thumbnail row's height.
+    pub thumbnail: bool,
+}
+
+/// What the eye cell of a layer row shows while the layer is on: `eye`, `eye_outline` or `layer_template`. Off is
+/// `eye_off` in every view.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PlainData)]
+#[non_exhaustive]
+pub enum LayerView {
+    /// The layer is shown as it is.
+    #[default]
+    Preview,
+    /// The layer is shown as an outline.
+    Outline,
+    /// The layer is shown as a template.
+    Template,
 }
 
 impl LayerInfo {
@@ -207,6 +237,12 @@ impl LayerInfo {
             thumb_loads_selection: true,
             thumb_badge: None,
             description: None,
+            color: None,
+            view: LayerView::default(),
+            icon: None,
+            italic: false,
+            underline: LabelUnderline::default(),
+            thumbnail: true,
         }
     }
 
@@ -283,6 +319,12 @@ pub enum LayerKind {
     /// ([`LayerPart::FrameShape`]) and its content ([`LayerPart::FrameContent`]); targeting
     /// [`LayerPart::Pixels`] targets both. The app lists no children under it.
     Frame,
+    /// A VectorCraft layer or sublayer: the `folder` glyph.
+    Layer,
+    /// A ruler guide: the `ruler` glyph in place of a thumbnail at every size, with its own eye and lock.
+    Guide,
+    /// A blend's spine: the `spline` glyph in place of a thumbnail, no toggle cells and no drag start.
+    Spine,
 }
 
 /// The part of a layer edits go to, and the thumbnail that stands for it.
@@ -318,7 +360,7 @@ pub struct MaskInfo {
 }
 
 /// A layer's locks. Start from `LayerLocks::default()` (nothing locked) and set the fields that are on.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PlainData)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PlainData, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct LayerLocks {
     /// Lock transparent pixels.
@@ -494,7 +536,7 @@ impl SubRow {
 }
 
 /// The active layer's properties, for [`BlendRows`](super::rows::BlendRows).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct LayerProperties {
     /// The blend mode's key.

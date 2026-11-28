@@ -38,9 +38,10 @@ std::thread_local! {
     // `InterpreterWarning::ContentTruncated`.
     static CONTENT_TRUNCATED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
     // PdfCraft patch (89): the form XObjects being drawn on this page, outermost first, across
-    // the contexts of the tiling patterns, Type 3 glyphs, soft masks and groups painted while
-    // they draw. A form already on it draws itself and is skipped. Its length is bounded by the
-    // nesting limits: every form on it is nested in the ones before it.
+    // the contexts of the tiling patterns, Type 3 glyphs and groups painted while they draw; a
+    // soft mask's group draws within the forms where the mask was set (`drawing_within`). A form
+    // already on it draws itself and is skipped. Its length is bounded by the nesting limits:
+    // every form on it is nested in the ones before it.
     static FORMS_DRAWING: RefCell<Vec<hayro_syntax::object::ObjectIdentifier>> =
         const { RefCell::new(Vec::new()) };
 }
@@ -136,6 +137,39 @@ pub(crate) fn hold_content(len: usize) -> Option<HeldContent> {
 /// PdfCraft patch: count `len` bytes held for the rest of the page (its own contents).
 pub(crate) fn charge_content(len: usize) {
     CONTENT_LEFT.with(|c| c.set(c.get().saturating_sub(len)));
+}
+
+/// PdfCraft patch (89): the forms being drawn now, outermost first.
+pub(crate) fn forms_drawing() -> Vec<hayro_syntax::object::ObjectIdentifier> {
+    FORMS_DRAWING.with(|forms| forms.try_borrow().map(|f| f.clone()).unwrap_or_default())
+}
+
+/// PdfCraft patch (89): runs `draw` with `forms` as the forms being drawn, then puts back the
+/// ones it replaced. A soft mask draws its group where the masked content paints, inside forms
+/// that only use the mask; it is nested in the forms drawing where it was set.
+pub(crate) fn drawing_within<R>(
+    forms: &[hayro_syntax::object::ObjectIdentifier],
+    draw: impl FnOnce() -> R,
+) -> R {
+    struct Restore(Vec<hayro_syntax::object::ObjectIdentifier>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let outer = std::mem::take(&mut self.0);
+            FORMS_DRAWING.with(|forms| {
+                if let Ok(mut forms) = forms.try_borrow_mut() {
+                    *forms = outer;
+                }
+            });
+        }
+    }
+    let outer = FORMS_DRAWING.with(|current| {
+        current
+            .try_borrow_mut()
+            .map(|mut current| std::mem::replace(&mut *current, forms.to_vec()))
+    });
+    // Restored on unwind too, so a caught panic leaves the stack of the forms still drawing.
+    let _restore = outer.ok().map(Restore);
+    draw()
 }
 
 /// PdfCraft patch (18): whether content was skipped because the page's budget ran out.
@@ -357,8 +391,13 @@ impl<'a> Context<'a> {
     /// PdfCraft patch (89): begins drawing the form `id`; `false` when that form is already
     /// being drawn, so drawing it again would never end (ISO 32000-2 §8.10.1: a form is a
     /// self-contained description; one that contains itself describes nothing finite). The
-    /// skip is reported as `InterpreterWarning::ContentTruncated`. A form without an object
-    /// number can't be told apart and is only bounded by the nesting limits.
+    /// inner drawing is skipped; that is not reported as `InterpreterWarning::ContentTruncated`,
+    /// because the page was not cut short by a size budget: a cycle was skipped as the
+    /// specification requires. A soft mask (or a knockout mask built from one) may legally
+    /// paint a form already on the stack; reporting that skip as truncation made VectorCraft
+    /// reject a 200-shape knockout-mask PDF that otherwise imported completely
+    /// (storytold/craft-libs#778). A form without an object number can't be told apart and is
+    /// only bounded by the nesting limits.
     ///
     /// The forms being drawn are those of this page's context and of every context painting
     /// inside it (a tiling pattern, a Type 3 glyph, a soft mask or a group), so a form that
@@ -385,7 +424,6 @@ impl<'a> Context<'a> {
         });
         if entered == Some(false) {
             warn!("form XObject draws itself; the inner drawing is skipped");
-            CONTENT_TRUNCATED.with(|truncated| truncated.set(true));
             return false;
         }
         true
@@ -846,5 +884,94 @@ mod saved_state_tests {
         ctx.pre_concat_affine(Affine::scale(2.0));
         ctx.restore_state(&mut device);
         assert_eq!(ctx.get().ctm, Affine::IDENTITY);
+    }
+}
+
+/// A form that paints itself is skipped so interpretation ends; that skip is not
+/// reported as [`crate::interpret::InterpreterWarning::ContentTruncated`] (craft-libs#778).
+#[cfg(test)]
+mod form_cycle_tests {
+    use super::*;
+    use crate::device::DummyDevice;
+    use crate::interpret::{InterpreterSettings, InterpreterWarning, interpret_page};
+    use hayro_syntax::Pdf;
+    use std::sync::{Arc, Mutex};
+
+    fn pdf_from_objects(bodies: &[String]) -> Pdf {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in bodies.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes());
+        for offset in offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
+        Pdf::new(out).expect("synthetic pdf")
+    }
+
+    fn stream(dict: &str, data: &str) -> String {
+        format!("<< {dict} /Length {} >>\nstream\n{data}endstream", data.len())
+    }
+
+    fn warnings_from(pdf: &Pdf) -> Vec<InterpreterWarning> {
+        let warnings = Arc::new(Mutex::new(Vec::new()));
+        let settings = InterpreterSettings {
+            warning_sink: {
+                let warnings = warnings.clone();
+                Arc::new(move |warning| warnings.lock().expect("warnings").push(warning))
+            },
+            ..InterpreterSettings::default()
+        };
+        let cache = InterpreterCache::new();
+        let mut context = Context::new(Affine::IDENTITY, Rect::new(0.0, 0.0, 100.0, 100.0), &cache, pdf.xref(), settings);
+        interpret_page(&pdf.pages()[0], &mut context, &mut DummyDevice);
+        warnings.lock().expect("warnings").clone()
+    }
+
+    fn is_truncated(warnings: &[InterpreterWarning]) -> bool {
+        warnings.iter().any(|w| matches!(w, InterpreterWarning::ContentTruncated))
+    }
+
+    /// A form whose content draws itself: the recursive `Do` is skipped, the fill still
+    /// paints, and the page is not reported as truncated.
+    #[test]
+    fn a_form_that_draws_itself_is_skipped_and_is_not_content_truncated() {
+        let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /XObject << /F 5 0 R >> >>", "0 0 100 100 re f\n/F Do\n");
+        let contents = stream("", "/F Do\n");
+        let pdf = pdf_from_objects(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Count 1 /Kids [3 0 R] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /XObject << /F 5 0 R >> >> >>".into(),
+            contents,
+            form,
+        ]);
+        let warnings = warnings_from(&pdf);
+        assert!(!content_was_truncated());
+        assert!(!is_truncated(&warnings), "{warnings:?}");
+    }
+
+    /// Form A draws form B, which draws form A: the cycle is skipped the same way, and
+    /// is not reported as a content-size truncation.
+    #[test]
+    fn a_pair_of_forms_that_draw_each_other_is_not_content_truncated() {
+        let form_a = stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /XObject << /B 6 0 R >> >>", "0 0 50 50 re f\n/B Do\n");
+        let form_b =
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /XObject << /A 5 0 R >> >>", "50 50 50 50 re f\n/A Do\n");
+        let contents = stream("", "/A Do\n");
+        let pdf = pdf_from_objects(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Count 1 /Kids [3 0 R] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /XObject << /A 5 0 R >> >> >>".into(),
+            contents,
+            form_a,
+            form_b,
+        ]);
+        let warnings = warnings_from(&pdf);
+        assert!(!content_was_truncated());
+        assert!(!is_truncated(&warnings), "{warnings:?}");
     }
 }

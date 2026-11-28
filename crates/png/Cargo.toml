@@ -1,0 +1,15 @@
+[package]
+name = "craft-png"
+description = "Writer for plain 8-bit PNG images"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+png = "0.18"
+thiserror = { workspace = true }

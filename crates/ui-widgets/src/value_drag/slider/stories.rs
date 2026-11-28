@@ -1,11 +1,12 @@
 //! Stories of `Slider`, in the old gallery's groups: Values, Step, Disabled and Right to left as form rows, then the
 //! groups the old gallery did not have.
 
-use super::{Slider, SliderScale, SliderThumb};
+use super::{Slider, SliderScale, SliderThumb, TrackPress};
 use crate::contract::{Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::Progress;
 use crate::form::Field;
-use crate::runtime::env::Message;
+use crate::runtime::env::{Message, with_env};
+use crate::style::TrackFill;
 use crate::testing::{Drive, Grip, StoryData, StoryOutput, story};
 use crate::value_drag::TrackFace;
 use craft_behavior::Mixed;
@@ -56,6 +57,13 @@ fn slider_triangle_ticks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Slider::new(data.bind_ranged("value", 30.0, RANGE), RANGE).thumb(SliderThumb::Triangle).ticks(10).label("Triangle").show(ui).into()
 }
 
+/// A press on the track sets the value as the button goes down, not on its release (`TrackPress::OnPress`): the
+/// thumb answers the first touch, as an editor's live preview wants.
+#[story(Slider<'static>, covers = [], drive = Drive::Never, group = "Track press", title = "On press")]
+fn slider_track_on_press(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    Slider::new(data.bind_ranged("value", 50.0, RANGE), RANGE).track_press(TrackPress::OnPress).label("On press").show(ui).into()
+}
+
 /// A slider of the "Step" group: steps of `step` from `start`.
 fn step_row(ui: &mut Ui, data: &mut StoryData, step: f64, start: f64) -> StoryOutput {
     Slider::new(data.bind_ranged("value", start, RANGE), RANGE).step(step).label(format!("Step {step}")).show(ui).into()
@@ -89,6 +97,18 @@ fn slider_disabled_2(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Slider<'static>, covers = [], drive = Drive::Never, group = "Disabled", title = "Disabled 3")]
 fn slider_disabled_3(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     disabled_row(ui, data, "Disabled 3", 100.0)
+}
+
+/// A slider of an app that sets `TrackFill::Accent` at its root: the filled part in the accent on an outline groove.
+#[story(Slider<'static>, covers = [], drive = Drive::Drag(Grip::new(Slider::THUMB)), group = "Values", title = "Accent fill")]
+fn slider_accent_fill(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(TrackFill::Accent);
+        },
+        |ui| value_row(ui, data, "Opacity", 60.0),
+    )
 }
 
 /// With the direction set to right to left the label moves to the right; the slider keeps its geometry.

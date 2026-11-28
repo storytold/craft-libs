@@ -1,26 +1,39 @@
-//! The editor contract: a component with an editor part receives one ordered input stream, a read-only editor
-//! receives only inputs that change no text, and its visible lines become AccessKit run nodes.
+//! The editor contract: a component with an editor part receives one ordered input stream, with the commands of its
+//! scope that keys fired in their place, a read-only editor receives only inputs that change no text, and its visible
+//! lines become AccessKit run nodes.
 
-use craft_behavior::{EditorInput, Granularity, PartKey, Sense, SurroundingUnit, TextPos};
-use craft_ui::contract::{Common, Component, Cx, EditorHandle, PaintUi, PartsCx, Props as _, Role, Show as _};
+use craft_behavior::{EditCommand, EditorInput, Granularity, PartKey, Sense, SurroundingUnit, TextPos};
+use craft_host::target::ShellInfo;
+use craft_ui::contract::{CommandSet, Common, Component, Cx, EditorHandle, EditorStep, PaintUi, PartsCx, Props as _, Role, Show as _};
 use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState, EditorSurrounding, ImeStamp};
+use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::runtime::frame::discard_pass;
 use craft_ui::style::StyleCx;
+use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{click, moved, press, release};
 use craft_ui::testing::text::ImeSeen;
+use craft_ui::testing::windows::FakeSystem;
 use craft_ui::testing::{Frames, trial};
 use craft_ui_test_kit::contract::{PlainStyle, Probe as Button, Seen};
 use egui::output::{IMESurroundingText, ImeChangeCause};
 use egui::{Event, Id, ImeEvent, Key, Modifiers, Pos2, Rect, Response};
 use std::cell::{Cell, RefCell};
+use std::sync::Arc;
 
 const AT: Rect = Rect { min: Pos2::new(10.0, 10.0), max: Pos2::new(210.0, 90.0) };
 /// Where the control after the probe sits, for the trials that Tab away from it.
 const NEXT: Rect = Rect { min: Pos2::new(10.0, 110.0), max: Pos2::new(90.0, 130.0) };
 const TEXT: &str = "fn main";
 const EDITOR: PartKey = PartKey::new("editor");
+
+thread_local! {
+    /// Whether the probe's editor part held the key focus in its last pass.
+    static EDITOR_FOCUSED: Cell<Option<bool>> = const { Cell::new(None) };
+    /// The window focus the pass's input reported, so a trial can tell a window in the background from one with focus.
+    static WINDOW_FOCUSED: Cell<Option<bool>> = const { Cell::new(None) };
+}
 
 /// An editor that logs the inputs it receives and, while `report` is set, reports its one line: `TEXT`, or the text
 /// of its `doc` when it keeps one.
@@ -74,6 +87,8 @@ impl Component for Probe<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        EDITOR_FOCUSED.set(cx.editor_handle().map(|handle| handle.focused()));
+        WINDOW_FOCUSED.set(Some(cx.core.ctx.input(|input| input.focused)));
         let inputs: Vec<EditorInput> = cx.editor_input().collect();
         if let Some(doc) = self.doc {
             doc.apply(cx, &inputs);
@@ -331,6 +346,61 @@ impl Rig {
     }
 }
 
+/// Switching to another app and back is no focus move for an editor: it keeps the key focus, and its input-method
+/// context runs on through it, with no new generation to reset the input method when the window comes back.
+#[trial]
+fn switching_apps_keeps_the_editor_focused_and_its_input_method_context() {
+    let mut rig = Rig::with(EditorPurpose::Code, Some(Doc::new(TEXT, Some(1))), false);
+    rig.focus();
+    rig.frame(Vec::new());
+    let generation = rig.ime().generation;
+    rig.frame(vec![craft_ui::testing::pointer::window_blurred()]);
+    for _ in 0..3 {
+        rig.frame(Vec::new());
+        assert_eq!(WINDOW_FOCUSED.get(), Some(false), "the window's input reports the background, as a host's does");
+        assert_eq!(EDITOR_FOCUSED.get(), Some(true), "the editor keeps the key focus while the window is in the background");
+    }
+    rig.frame(vec![Event::WindowFocused(true)]);
+    rig.frame(Vec::new());
+    assert_eq!(WINDOW_FOCUSED.get(), Some(true), "the window has the focus again");
+    assert_eq!(rig.ime().generation, generation, "the input method's context ran on through the switch");
+    rig.frame(vec![Event::Text("x".into())]);
+    assert!(rig.take().iter().any(|input| matches!(input, EditorInput::Text(text) if &**text == "x")), "typing goes on in the editor");
+}
+
+/// Shift+Enter reaches an editor as a newline with Shift held, told from a plain Enter in the same frame, in the order
+/// they were pressed: an editor gives Shift+Enter its own meaning (a line break within the paragraph). Guards against
+/// the press's Shift being lost between the press and the editor input.
+#[trial]
+fn shift_enter_reaches_an_editor_as_a_newline_with_shift_in_order() {
+    let mut rig = Rig::new();
+    rig.focus();
+    rig.frame(vec![key_press(Key::Enter, Modifiers::SHIFT), key_press(Key::Enter, Modifiers::NONE), key_press(Key::Enter, Modifiers::SHIFT)]);
+    let inputs = rig.take();
+    assert!(
+        matches!(
+            inputs.as_slice(),
+            [EditorInput::Newline { shift: true, .. }, EditorInput::Newline { shift: false, .. }, EditorInput::Newline { shift: true, .. }]
+        ),
+        "each Enter keeps its own Shift, in order: {inputs:?}"
+    );
+}
+
+/// A paste reaches an editor in its place among the frame's typing: text typed before it comes before it and text
+/// typed after it comes after. Guards against the clipboard command being routed after all of the frame's keys and
+/// texts.
+#[trial]
+fn a_paste_reaches_an_editor_in_order_with_the_typing_around_it() {
+    let mut rig = Rig::new();
+    rig.focus();
+    rig.frame(vec![Event::Text("a".into()), Event::Paste("b".into()), Event::Text("c".into())]);
+    let inputs = rig.take();
+    assert!(
+        matches!(inputs.as_slice(), [EditorInput::Text(a), EditorInput::Edit(EditCommand::Paste), EditorInput::Text(c)] if &**a == "a" && &**c == "c"),
+        "the paste sits between the texts it came between: {inputs:?}"
+    );
+}
+
 /// Text, Backspace, Tab and Enter reach an editor as one input stream in the order they were typed; a read-only
 /// editor still receives moves but none of the inputs that change text.
 #[trial]
@@ -343,7 +413,7 @@ fn editor_input_reaches_an_editor_part_and_read_only_filtering_drops_edits() {
     rig.frame(vec![key_press(Key::Enter, Modifiers::NONE)]);
     let inputs = rig.take();
     assert!(
-        matches!(inputs.as_slice(), [EditorInput::Text(text), EditorInput::Delete { forward: false, .. }, EditorInput::Tab, EditorInput::Newline] if &**text == "x"),
+        matches!(inputs.as_slice(), [EditorInput::Text(text), EditorInput::Delete { forward: false, .. }, EditorInput::Tab, EditorInput::Newline { shift: false, .. }] if &**text == "x"),
         "the inputs arrive in the pass they are typed, in order: {inputs:?}"
     );
 
@@ -466,6 +536,95 @@ fn a_reset_the_integration_retires_is_asked_again() {
     );
 }
 
+/// Focus moving from a composing editor to another ends the old one's input: it receives nothing after the move, and
+/// the new editor receives nothing of the old composition's late preedit until the reset's own completion arrives.
+#[trial]
+fn an_owner_change_mid_composition_interrupts_it_and_drops_its_late_input() {
+    const OTHER: Rect = Rect { min: Pos2::new(10.0, 110.0), max: Pos2::new(210.0, 190.0) };
+    let (first, second) = (RefCell::new(Vec::new()), RefCell::new(Vec::new()));
+    let mut ui = |ui: &mut egui::Ui| {
+        Probe::new(&first, true).label("First").id_salt("first").show_at(ui, AT);
+        Probe::new(&second, true).label("Second").id_salt("second").show_at(ui, OTHER);
+    };
+    let mut frames = Frames::new();
+    click(&mut frames, AT.center(), &mut ui);
+    frames.frame(vec![preedit("k")], &mut ui);
+    assert!(matches!(first.take().as_slice(), [EditorInput::Preedit { .. }]), "the first editor composes");
+
+    let mut request = None;
+    for events in [vec![moved(OTHER.center())], vec![press(OTHER.center())], vec![release(OTHER.center())]] {
+        frames.frame(events, &mut ui);
+        request = request.or(frames.ime().and_then(|ime| ime.reset));
+    }
+    let Some(request) = request else { panic!("the owner change asks for a reset") };
+    first.take();
+    second.take();
+
+    frames.frame(vec![preedit("late")], &mut ui);
+    assert!(first.take().is_empty(), "the old editor gets no input after the owner change");
+    assert!(second.take().is_empty(), "the old composition's late preedit reaches no editor before the reset completes");
+
+    frames.frame(vec![Event::ImeResetCompleted { request_id: request }, preedit("y")], &mut ui);
+    assert!(first.take().is_empty(), "the old editor still gets nothing");
+    let inputs = second.take();
+    assert!(
+        matches!(inputs.as_slice(), [EditorInput::Preedit { text, .. }] if &**text == "y"),
+        "after the completion the new editor receives its own preedit: {inputs:?}"
+    );
+}
+
+/// An editor that stops being shown while it composes is interrupted in the pass it vanished in. egui keeps its focus
+/// until the end of that pass, so waiting for the owner change at the next begin interrupted it a frame late. Guards
+/// against the interrupt depending on a second pass of the frame.
+#[trial]
+fn an_editor_that_vanishes_while_composing_is_interrupted_in_that_pass() {
+    let log = RefCell::new(Vec::new());
+    let shown = Cell::new(true);
+    let mut ui = |ui: &mut egui::Ui| {
+        if shown.get() {
+            Probe::new(&log, true).label("Source").id_salt("code").show_at(ui, AT);
+        }
+    };
+    let mut frames = Frames::new();
+    click(&mut frames, AT.center(), &mut ui);
+    frames.frame(vec![preedit("k")], &mut ui);
+    assert!(matches!(log.take().as_slice(), [EditorInput::Preedit { .. }]), "the editor composes");
+
+    shown.set(false);
+    let passes = frames.frame(Vec::new(), &mut ui);
+    let seen = frames.ime().cloned();
+    assert!(seen.as_ref().is_some_and(|ime| ime.interrupt && ime.reset.is_some()), "the pass the editor vanished in interrupts it: {seen:?}");
+    assert_eq!(passes, 1, "the interrupt needs no second pass");
+    frames.frame(Vec::new(), &mut ui);
+    assert!(frames.ime().is_none(), "with the editor gone, no one owns the IME: {:?}", frames.ime());
+}
+
+/// An editor losing focus while it composes asks the system once to discard the marked text: later frames and a retired
+/// request asked again add no discard.
+#[trial]
+fn an_interrupted_composition_asks_the_system_to_discard_its_marked_text_once() {
+    let system = Arc::new(FakeSystem::new());
+    let mut frames = Frames::uninstalled();
+    let installed = craft_ui::install(&frames.ctx, InstallSpec::new(ShellInfo::default(), system.clone()));
+    assert!(installed.is_ok(), "the context takes the runtime once");
+    let (log, id) = (RefCell::new(Vec::new()), Cell::new(Id::NULL));
+    let view = View { log: &log, id: &id, read_only: false, purpose: EditorPurpose::Code, doc: None, next: None, canvas: false };
+    let mut ui = |ui: &mut egui::Ui| view.show(ui);
+    frames.idle(3, &mut ui);
+    click(&mut frames, AT.center(), &mut ui);
+    frames.frame(vec![preedit("k")], &mut ui);
+    assert_eq!(system.discards(), 0, "a composition under way is not discarded");
+
+    let outside = Pos2::new(400.0, 300.0);
+    for events in [vec![moved(outside)], vec![press(outside)], vec![release(outside)]] {
+        frames.frame(events, &mut ui);
+    }
+    frames.idle(3, &mut ui);
+    assert_eq!(system.discards(), 1, "focus leaving the composition asks for one discard");
+    frames.idle(6, &mut ui);
+    assert_eq!(system.discards(), 1, "idle frames and the end hook's re-ask add none");
+}
+
 fn commit(text: &str) -> Event {
     Event::Ime(ImeEvent::Commit(text.to_owned()))
 }
@@ -580,7 +739,7 @@ fn keys_that_end_a_composition_do_not_reach_the_editor_while_it_composes() {
     assert!(inputs.is_empty(), "the Enter that confirmed the commit, a frame late, is no newline: {inputs:?}");
     rig.frame(vec![key_press(Key::Enter, Modifiers::NONE)]);
     let inputs = rig.take();
-    assert!(matches!(inputs.as_slice(), [EditorInput::Newline]), "after the guard frame Enter is a newline: {inputs:?}");
+    assert!(matches!(inputs.as_slice(), [EditorInput::Newline { .. }]), "after the guard frame Enter is a newline: {inputs:?}");
 
     rig.frame(vec![preedit("x")]);
     assert!(matches!(rig.take().as_slice(), [EditorInput::Preedit { .. }]), "a new composition starts");
@@ -589,6 +748,30 @@ fn keys_that_end_a_composition_do_not_reach_the_editor_while_it_composes() {
     rig.frame(vec![preedit("xy")]);
     let inputs = rig.take();
     assert!(inputs.is_empty(), "the interrupted composition's late preedit is fenced: {inputs:?}");
+}
+
+/// An empty commit with nothing marked is no edit, so a selection (the Type tool's placeholder) survives it and the
+/// Enter after it is a newline; an empty commit that ends a composition still ends it.
+#[trial]
+fn an_empty_commit_with_nothing_marked_reaches_no_editor() {
+    for (name, mut rig) in [("a field's editor", Rig::new()), ("a canvas's editor", Rig::canvas_editor())] {
+        rig.focus();
+        rig.frame(vec![commit("")]);
+        let inputs = rig.take();
+        assert!(inputs.is_empty(), "{name}: an empty commit with nothing marked reaches the editor: {inputs:?}");
+        rig.frame(vec![key_press(Key::Enter, Modifiers::NONE)]);
+        let inputs = rig.take();
+        assert!(matches!(inputs.as_slice(), [EditorInput::Newline { shift: false, .. }]), "{name}: the Enter after it is a newline: {inputs:?}");
+
+        rig.frame(vec![preedit("k")]);
+        assert!(matches!(rig.take().as_slice(), [EditorInput::Preedit { .. }]), "{name}: the editor composes");
+        rig.frame(vec![commit("")]);
+        let inputs = rig.take();
+        assert!(
+            matches!(inputs.as_slice(), [EditorInput::ImeCommit, EditorInput::Text(text)] if text.is_empty()),
+            "{name}: an empty commit ends the composition: {inputs:?}"
+        );
+    }
 }
 
 /// A body that runs inside the component reports through `EditorHandle::report`: its caret reaches the IME output
@@ -753,4 +936,170 @@ fn a_pre_edit_and_a_refused_deletion_in_one_frame_interrupt_the_composition() {
         assert!(!rig.doc().composing.get(), "the probe shows no marked text after the refusal");
         assert_eq!(interrupted, marks, "marks {marks}, split {split}: the composition is interrupted only by an editor that shows marked text");
     }
+}
+
+/// The commands of an editor's typing scope: Commit on Cmd+Enter, as a type tool ends editing with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
+#[command(prefix = "editorTrial", scope = "trial.editor", typing)]
+#[non_exhaustive]
+enum EditorCommand {
+    #[command(label = "Commit", default = "Cmd+Enter")]
+    Commit,
+}
+
+/// An editor that is the instance of `EditorCommand`'s scope and logs the steps of each pass.
+#[derive(craft_ui::contract::Component)]
+struct Typer<'a> {
+    #[common]
+    common: Common,
+    steps: &'a RefCell<Vec<EditorStep<EditorCommand>>>,
+}
+
+impl Component for Typer<'_> {
+    const ROLE: Role = Role::MULTILINE_TEXT_INPUT;
+    const INPUT: craft_ui::contract::Input = craft_ui::contract::Input::Editor;
+    const KEYS: KeyUse = KeyUse::CODE;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: TyperStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS
+    }
+
+    fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
+        cx.editor(EDITOR, rect, EditorPurpose::Text);
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        let steps = cx.editor_steps::<EditorCommand>();
+        self.steps.borrow_mut().extend(steps);
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// A command of the editor's scope that a chord fires reaches the editor between the inputs typed before and after
+/// the chord in the same frame, so an editor that Cmd+Enter ends applies none of the typing after it. Guards against
+/// the editor reading a frame's inputs and its commands as two batches.
+#[trial]
+fn a_command_a_chord_fires_reaches_its_editor_between_the_typing_around_it() {
+    let steps = RefCell::new(Vec::new());
+    let mut show = |ui: &mut egui::Ui| {
+        let _ = Typer { common: Common::new(), steps: &steps }.label("Type").command_scope(<EditorCommand as CommandSet>::SCOPE).show_at(ui, AT);
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    click(&mut frames, AT.center(), &mut show);
+    steps.take();
+    let cmd_enter = [
+        Event::ModifiersChanged(Modifiers::COMMAND),
+        key_press(Key::Enter, Modifiers::COMMAND),
+        key_release(Key::Enter, Modifiers::COMMAND),
+        Event::ModifiersChanged(Modifiers::NONE),
+    ];
+    frames.frame([vec![Event::Text("a".into())], cmd_enter.to_vec(), vec![Event::Text("b".into())]].concat(), &mut show);
+    let steps = steps.take();
+    assert!(
+        matches!(
+            steps.as_slice(),
+            [EditorStep::Input(EditorInput::Text(a)), EditorStep::Command(EditorCommand::Commit, _), EditorStep::Input(EditorInput::Text(b))]
+                if &**a == "a" && &**b == "b"
+        ),
+        "the command sits between the texts its chord came between: {steps:?}"
+    );
+}
+
+/// A type editor's typing scope with a chord that types a character on some layouts: a dash command on Alt+Shift+-,
+/// where Option+Shift+- types an em dash on the Mac.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
+#[command(prefix = "dashTrial", scope = "trial.dashes", typing)]
+#[non_exhaustive]
+enum DashCommand {
+    #[command(label = "Dash", default = "Alt+Shift+-")]
+    Dash,
+}
+
+/// The text of an Alt chord bound only in a scope that is not around the focus (the typing scope of a type editor shown
+/// beside the focused field) is typed in the field: the press runs nothing there. Guards a key stage that withheld the
+/// text for any enabled binding of the chord, whatever its scope, so the character went nowhere.
+#[trial]
+fn an_alt_chord_bound_only_out_of_scope_leaves_its_text_typed() {
+    use craft_behavior::Input;
+    use craft_ui::runtime::focus::{FocusTarget, request};
+    use craft_ui::runtime::frame::take_output;
+    use craft_ui::testing::focus::{Stop, intents_of, named_id, register_stop, widget};
+
+    let field = named_id("dash field");
+    let (typed, focus, steps) = (RefCell::new(String::new()), Cell::new(true), RefCell::new(Vec::new()));
+    let mut show = |ui: &mut egui::Ui| {
+        let _ = Typer { common: Common::new(), steps: &steps }.label("Type").command_scope(<DashCommand as CommandSet>::SCOPE).show_at(ui, AT);
+        widget(ui, field);
+        register_stop(ui.ctx(), Stop::new(field, KeyUse::of(Input::Text)));
+        if focus.take() {
+            request(ui.ctx(), FocusTarget::Id(field));
+        }
+        let mut intents = intents_of(ui.ctx(), Some(field), false);
+        while let Some(text) = intents.take_text() {
+            typed.borrow_mut().push_str(&text);
+        }
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    take_output(&frames.ctx);
+    let alt_shift = Modifiers { alt: true, shift: true, ..Modifiers::NONE };
+    frames.frame(vec![key_press(Key::Minus, alt_shift), Event::Text("\u{2014}".into())], &mut show);
+    frames.frame(vec![key_release(Key::Minus, alt_shift)], &mut show);
+    frames.idle(1, &mut show);
+    assert_eq!(typed.take(), "\u{2014}", "the field types the chord's text");
+    let fired: Vec<String> = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
+    assert!(fired.is_empty(), "nothing ran: {fired:?}");
+}
+
+/// A disabled editor registers no stop, and its focus widget is still the component's own and no egui focus candidate:
+/// it never becomes a Tab stop of the app's own widgets, and egui's arrows from the app's own focused widget never
+/// reach it. With every control in Tab order, Tab and Shift+Tab land on the button beside it each time.
+#[trial]
+fn tab_never_focuses_a_disabled_editor_s_widget() {
+    let log = RefCell::new(Vec::new());
+    let seen = RefCell::new(Seen::default());
+    let (editor, button) = (Cell::new(Id::NULL), Cell::new(Id::NULL));
+    // The app's own egui button, level with the editor on its right: the editor lies straight to its left.
+    let app = craft_ui::testing::focus::named_id("app button");
+    let app_at = Rect::from_min_size(Pos2::new(AT.right() + 40.0, AT.center().y - 10.0), egui::vec2(60.0, 20.0));
+    let mut show = |ui: &mut egui::Ui| {
+        editor.set(Probe::new(&log, true).label("Source").enabled(false).id_salt("code").show_at(ui, AT).id);
+        button.set(Button::new(&seen).id_salt("next").show_at(ui, NEXT).id);
+        ui.interact(app_at, app, egui::Sense::click());
+    };
+    let mut frames = Frames::new();
+    frames.root({
+        let mut root = craft_ui::runtime::env::RootEnv::default();
+        root.tab_all_controls = true;
+        root
+    });
+    frames.idle(3, &mut show);
+    for shift in [false, false, true, true] {
+        let mods = if shift { Modifiers::SHIFT } else { Modifiers::NONE };
+        frames.frame(vec![key_press(Key::Tab, mods), key_release(Key::Tab, mods)], &mut show);
+        frames.frame(Vec::new(), &mut show);
+        let focused = craft_ui::testing::focus::egui_focused(&frames.ctx);
+        assert!(
+            focused == Some(button.get()) || focused == Some(app),
+            "Tab (shift {shift}) lands on a control, never on the disabled editor {:?}: {focused:?}",
+            editor.get()
+        );
+    }
+    craft_ui::runtime::focus::request(&frames.ctx, craft_ui::runtime::focus::FocusTarget::Id(app));
+    frames.idle(2, &mut show);
+    assert_eq!(craft_ui::testing::focus::egui_focused(&frames.ctx), Some(app), "the app's button has the focus");
+    frames.frame(vec![key_press(Key::ArrowLeft, Modifiers::NONE), key_release(Key::ArrowLeft, Modifiers::NONE)], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    let focused = craft_ui::testing::focus::egui_focused(&frames.ctx);
+    assert!(focused == Some(app) || focused == Some(button.get()), "the arrow never reaches the disabled editor {:?}: {focused:?}", editor.get());
 }

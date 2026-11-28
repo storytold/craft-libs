@@ -66,6 +66,22 @@ pub enum Extent {
     Tiled,
 }
 
+/// `outer` without `inner`: the bands above, below, left and right of it, empty ones left out.
+fn ring(outer: PixelRect, inner: PixelRect) -> impl Iterator<Item = PixelRect> {
+    let i = inner.intersect(&outer);
+    let bands = if i.is_empty() {
+        [outer, PixelRect::default(), PixelRect::default(), PixelRect::default()]
+    } else {
+        [
+            PixelRect::new(outer.x0, outer.y0, outer.x1, i.y0),
+            PixelRect::new(outer.x0, i.y1, outer.x1, outer.y1),
+            PixelRect::new(outer.x0, i.y0, i.x0, i.y1),
+            PixelRect::new(i.x1, i.y0, outer.x1, i.y1),
+        ]
+    };
+    bands.into_iter().filter(|band| !band.is_empty())
+}
+
 /// Most copies a tiled display draws along each axis, the document included. A tiny document zoomed far out would
 /// otherwise need thousands of copies per pass; past this the pattern stops, and the run is centred on the view.
 const MOST_COPIES: i32 = 31;
@@ -262,6 +278,10 @@ pub struct RasterDisplay<'a> {
     /// How far the picture reaches past the document's edge.
     #[prop]
     extent: Extent,
+    /// What the region of [`Extent::Region`] shows past the document, under the picture: the checkerboard when none,
+    /// else this colour (Crop's preview of the area a crop adds to a Background, which takes the background colour).
+    #[prop]
+    region_fill: Option<Color32>,
     /// The display paints in the canvas's picture slot, under every canvas control of the body, when the canvas
     /// space carries a slot; otherwise it paints in place. A display under the controls fills its canvas, so the
     /// canvas content rect, the slot's clip, is its clip. It declares no faded look of its own (`DisabledLook::States`):
@@ -331,6 +351,7 @@ impl<'a> RasterDisplay<'a> {
             checkerboard: None,
             outlined: false,
             extent: Extent::Document,
+            region_fill: None,
             under_controls: false,
             read: PixelRect::default(),
             shown: None,
@@ -538,6 +559,14 @@ impl Component for RasterDisplay<'_> {
             let origin = corners.map_or(shown.view.rect.min, |corners| corners[0]);
             for area in areas.into_iter().flatten() {
                 painter.painter.add(checker.shape(painter.painter.ctx(), &ui.env.tokens, CheckerArea::Quad(area), origin));
+            }
+        }
+        // The region's colour past the document, over the checkerboard and under the picture. Only a region reaches
+        // past the document: a mapped or tiled picture's bounds are the document.
+        if let Some(fill) = self.region_fill {
+            for band in ring(shown.bounds, PixelRect::of_size(shown.size)) {
+                let band = Rect64::new(f64::from(band.x0), f64::from(band.y0), f64::from(band.x1), f64::from(band.y1));
+                painter.painter.add(Shape::convex_polygon(shown.view.quad(band).to_vec(), fill, egui::Stroke::NONE));
             }
         }
         match (&mut self.picture, &shown.textures, &self.mapping) {

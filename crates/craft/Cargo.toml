@@ -34,6 +34,7 @@ craft-draw = { workspace = true, optional = true }
 craft-ecproj-format = { workspace = true, optional = true }
 craft-font-catalog = { workspace = true, optional = true }
 craft-font-manager = { workspace = true, optional = true }
+craft-font-os-windows = { workspace = true, optional = true }
 craft-font-store = { workspace = true, optional = true }
 craft-font-subset = { workspace = true, optional = true }
 craft-imaging = { workspace = true, optional = true }
@@ -66,8 +67,10 @@ craft-ui = { workspace = true, optional = true }
 craft-aaf = { workspace = true, optional = true }
 craft-aep = { workspace = true, optional = true }
 craft-affinity = { workspace = true, optional = true }
+craft-android-res = { workspace = true, optional = true }
 craft-assuan = { workspace = true, optional = true }
 craft-captions = { workspace = true, optional = true }
+craft-cdr = { workspace = true, optional = true }
 craft-cfb = { workspace = true, optional = true }
 craft-codepage = { workspace = true, optional = true }
 craft-crs = { workspace = true, optional = true }
@@ -107,6 +110,7 @@ craft-kra = { workspace = true, optional = true }
 craft-latex = { workspace = true, optional = true }
 craft-lottie = { workspace = true, optional = true }
 craft-markdown = { workspace = true, optional = true }
+craft-material-graph = { workspace = true, optional = true }
 craft-materialx = { workspace = true, optional = true }
 craft-math = { workspace = true, optional = true }
 craft-mesh = { workspace = true, optional = true }
@@ -125,6 +129,7 @@ craft-pdn = { workspace = true, optional = true }
 craft-penpot = { workspace = true, optional = true }
 craft-pkcs7 = { workspace = true, optional = true }
 craft-plotter = { workspace = true, optional = true }
+craft-png = { workspace = true, optional = true }
 craft-pptx = { workspace = true, optional = true }
 craft-prc = { workspace = true, optional = true }
 craft-psd = { workspace = true, optional = true }
@@ -133,6 +138,7 @@ craft-raster-codecs = { workspace = true, optional = true }
 craft-raw = { workspace = true, optional = true }
 craft-rtf = { workspace = true, optional = true }
 craft-scraft-format = { workspace = true, optional = true }
+craft-scopes = { workspace = true, optional = true }
 craft-sf2 = { workspace = true, optional = true }
 craft-sheet = { workspace = true, optional = true }
 craft-silhouette-studio = { workspace = true, optional = true }
@@ -204,6 +210,7 @@ craft-jsonc = { workspace = true, optional = true }
 craft-pcap = { workspace = true, optional = true }
 craft-sourcemap = { workspace = true, optional = true }
 craft-wasm = { workspace = true, optional = true }
+craft-wayland = { workspace = true, optional = true }
 craft-xfdf = { workspace = true, optional = true }
 craft-color-transform = { workspace = true, optional = true }
 craft-develop = { workspace = true, optional = true }
@@ -215,6 +222,7 @@ craft-geom = { workspace = true, optional = true }
 craft-suite-account = { workspace = true, optional = true }
 craft-xfa = { workspace = true, optional = true }
 craft-gpu = { workspace = true, optional = true }
+craft-gpu-device = { workspace = true, optional = true }
 craft-gpu-null = { workspace = true, optional = true }
 craft-gpu-providers = { workspace = true, optional = true }
 craft-gpu-wgpu = { workspace = true, optional = true }
@@ -223,6 +231,10 @@ craft-ppt-binary = { workspace = true, optional = true }
 craft-sqlite = { workspace = true, optional = true }
 craft-audio-dsp = { workspace = true, optional = true }
 craft-sbs = { workspace = true, optional = true }
+craft-shared-vec = { workspace = true, optional = true }
+craft-ease = { workspace = true, optional = true }
+craft-i18n-build = { workspace = true, optional = true }
+craft-pbr = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -303,6 +315,8 @@ ai-local = ["ai", "craft-ai/local"]
 
 ai-core = ["dep:craft-ai-core"]
 
+android-res = ["dep:craft-android-res"]
+
 anicraft-format = ["dep:craft-anicraft-format"]
 
 assuan = ["dep:craft-assuan"]
@@ -342,6 +356,7 @@ audio-qoa = ["audio", "craft-audio/qoa"]
 audio-qoa-decode = ["audio", "craft-audio/qoa-decode"]
 audio-qoa-encode = ["audio", "craft-audio/qoa-encode"]
 audio-rayon = ["audio", "craft-audio/rayon"]
+audio-s302m = ["audio", "craft-audio/s302m"]
 audio-sbc = ["audio", "craft-audio/sbc"]
 audio-serde = ["audio", "craft-audio/serde"]
 audio-symphonia = ["audio", "craft-audio/symphonia"]
@@ -360,6 +375,9 @@ browse = ["dep:craft-browse"]
 
 captions = ["dep:craft-captions"]
 captions-mov-text = ["captions", "craft-captions/mov-text"]
+
+cdr = ["dep:craft-cdr"]
+cdr-synth = ["cdr", "craft-cdr/synth"]
 
 cfb = ["dep:craft-cfb"]
 
@@ -431,6 +449,9 @@ dwg = ["dep:craft-dwg"]
 
 dxf = ["dep:craft-dxf"]
 
+ease = ["dep:craft-ease"]
+ease-serde = ["ease", "craft-ease/serde"]
+
 ecproj-format = ["dep:craft-ecproj-format"]
 
 elf = ["dep:craft-elf"]
@@ -449,6 +470,7 @@ ews = ["dep:craft-ews"]
 
 exr = ["dep:craft-exr"]
 exr-decode = ["exr", "craft-exr/decode"]
+exr-zlib-inflate = ["exr", "craft-exr/zlib-inflate"]
 
 fcproj-format = ["dep:craft-fcproj-format"]
 
@@ -489,6 +511,8 @@ font-catalog-system = ["font-catalog", "craft-font-catalog/system"]
 
 font-manager = ["dep:craft-font-manager"]
 
+font-os-windows = ["dep:craft-font-os-windows"]
+
 font-store = ["dep:craft-font-store"]
 font-store-bundled-index = ["font-store", "craft-font-store/bundled-index"]
 
@@ -509,6 +533,13 @@ gif-frames = ["gif", "craft-gif/frames"]
 
 gpu = ["dep:craft-gpu"]
 gpu-startup = ["gpu", "craft-gpu/startup"]
+
+gpu-device = ["dep:craft-gpu-device"]
+gpu-device-native-dx12 = ["gpu-device", "craft-gpu-device/native-dx12"]
+gpu-device-native-gles = ["gpu-device", "craft-gpu-device/native-gles"]
+gpu-device-native-metal = ["gpu-device", "craft-gpu-device/native-metal"]
+gpu-device-native-vulkan = ["gpu-device", "craft-gpu-device/native-vulkan"]
+gpu-device-serde = ["gpu-device", "craft-gpu-device/serde"]
 
 gpu-null = ["dep:craft-gpu-null"]
 
@@ -543,6 +574,8 @@ http-url = ["dep:craft-http-url"]
 
 i18n-collate = ["craft-i18n/collate"]
 
+i18n-build = ["dep:craft-i18n-build"]
+
 ical = ["dep:craft-ical"]
 
 idml = ["dep:craft-idml"]
@@ -550,6 +583,7 @@ idml = ["dep:craft-idml"]
 image-codecs = ["dep:craft-image-codecs"]
 image-codecs-avif = ["image-codecs", "craft-image-codecs/avif"]
 image-codecs-avif-decode = ["image-codecs", "craft-image-codecs/avif-decode"]
+image-codecs-cms = ["image-codecs", "craft-image-codecs/cms"]
 image-codecs-corpus = ["image-codecs", "craft-image-codecs/corpus"]
 image-codecs-heif = ["image-codecs", "craft-image-codecs/heif"]
 image-codecs-jxl = ["image-codecs", "craft-image-codecs/jxl"]
@@ -599,6 +633,8 @@ macho-serde = ["macho", "craft-macho/serde"]
 
 markdown = ["dep:craft-markdown"]
 
+material-graph = ["dep:craft-material-graph"]
+
 materialx = ["dep:craft-materialx"]
 
 math = ["dep:craft-math"]
@@ -611,6 +647,7 @@ mcp-server = ["dep:craft-mcp-server"]
 
 media = ["dep:craft-media"]
 media-avi = ["media", "craft-media/avi"]
+media-bink = ["media", "craft-media/bink"]
 media-bitstream = ["media", "craft-media/bitstream"]
 media-isobmff = ["media", "craft-media/isobmff"]
 media-matroska = ["media", "craft-media/matroska"]
@@ -621,6 +658,7 @@ media-serde = ["media", "craft-media/serde"]
 media-vmd = ["media", "craft-media/vmd"]
 
 media-source = ["dep:craft-media-source"]
+media-source-y4m = ["media-source", "craft-media-source/y4m"]
 
 menu = ["dep:craft-menu"]
 
@@ -649,6 +687,7 @@ odf = ["dep:craft-odf"]
 odf-text = ["odf", "craft-odf/text"]
 
 ods = ["dep:craft-ods"]
+ods-test-support = ["ods", "craft-ods/test-support"]
 
 offcrypto = ["dep:craft-offcrypto"]
 
@@ -662,6 +701,9 @@ ora = ["dep:craft-ora"]
 pages = ["dep:craft-pages", "keymap", "text"]
 
 palette = ["dep:craft-palette"]
+
+pbr = ["dep:craft-pbr"]
+pbr-parallel = ["pbr", "craft-pbr/parallel"]
 
 pcap = ["dep:craft-pcap"]
 
@@ -710,6 +752,8 @@ plist = ["dep:craft-plist"]
 
 plotter = ["dep:craft-plotter"]
 plotter-serde = ["plotter", "craft-plotter/serde"]
+
+png = ["dep:craft-png"]
 
 ppt-binary = ["dep:craft-ppt-binary"]
 
@@ -775,6 +819,8 @@ rtf-outlook = ["rtf", "craft-rtf/outlook"]
 
 sbs = ["dep:craft-sbs"]
 
+scopes = ["dep:craft-scopes"]
+
 score = ["dep:craft-score"]
 
 scraft-format = ["dep:craft-scraft-format"]
@@ -784,6 +830,9 @@ settings-testing = ["settings", "craft-settings/testing"]
 
 sf2 = ["dep:craft-sf2"]
 sf2-test-support = ["sf2", "craft-sf2/test-support"]
+
+shared-vec = ["dep:craft-shared-vec"]
+shared-vec-serde = ["shared-vec", "craft-shared-vec/serde"]
 
 sheet = ["dep:craft-sheet"]
 
@@ -902,6 +951,7 @@ theme-editor = ["dep:craft-theme-editor"]
 theme-store = ["dep:craft-theme-store"]
 
 tiff = ["dep:craft-tiff"]
+tiff-plain-rgba16 = ["tiff", "craft-tiff/plain-rgba16"]
 
 time = ["dep:craft-time"]
 
@@ -910,6 +960,7 @@ timeline-otio = ["timeline", "craft-timeline/otio"]
 timeline-xml = ["timeline", "craft-timeline/xml"]
 
 tracked = ["dep:craft-tracked"]
+tracked-serde = ["tracked", "craft-tracked/serde"]
 
 ui-app = ["ui", "craft-ui/app"]
 ui-cloud = ["ui", "craft-ui/cloud"]
@@ -921,6 +972,7 @@ ui-system_fonts = ["ui", "craft-ui/system_fonts"]
 ui-testing = ["ui", "craft-ui/testing"]
 
 update = ["dep:craft-update"] # native only: downloads and installs through getrandom without wasm support
+update-local-mirror = ["update", "craft-update/local-mirror"]
 update-oci_migration = ["update", "craft-update/oci_migration"]
 
 usd = ["dep:craft-usd"]
@@ -939,6 +991,8 @@ video-av1 = ["video", "craft-video/av1"]
 video-av1-decode = ["video", "craft-video/av1-decode"]
 video-av1-encode = ["video", "craft-video/av1-encode"]
 video-av1-large-encode = ["video", "craft-video/av1-large-encode"]
+video-bink = ["video", "craft-video/bink"]
+video-bink-decode = ["video", "craft-video/bink-decode"]
 video-dnx = ["video", "craft-video/dnx"]
 video-ffv1 = ["video", "craft-video/ffv1"]
 video-h264 = ["video", "craft-video/h264"]
@@ -955,7 +1009,11 @@ video-mpeg2-encode = ["video", "craft-video/mpeg2-encode"]
 video-mpeg4 = ["video", "craft-video/mpeg4"]
 video-mpeg4-encode = ["video", "craft-video/mpeg4-encode"]
 video-prores = ["video", "craft-video/prores"]
+video-rawvideo = ["video", "craft-video/rawvideo"]
 video-screen-video = ["video", "craft-video/screen-video"]
+video-theora = ["video", "craft-video/theora"]
+video-theora-decode = ["video", "craft-video/theora-decode"]
+video-theora-encode = ["video", "craft-video/theora-encode"]
 video-threads = ["video", "craft-video/threads"]
 video-vmd = ["video", "craft-video/vmd"]
 video-vmd-decode = ["video", "craft-video/vmd-decode"]
@@ -967,6 +1025,8 @@ video-vp9-decode = ["video", "craft-video/vp9-decode"]
 video-vp9-encode = ["video", "craft-video/vp9-encode"]
 
 wasm = ["dep:craft-wasm"]
+
+wayland = ["dep:craft-wayland"]
 
 web-api = ["dep:craft-web-api"]
 

@@ -1,12 +1,12 @@
-//! The Sort by, Filter, Pages and card menus.
+//! The Sort by, Filter, Pages, More and card menus.
 
-use craft_behavior::IconId;
+use craft_behavior::{IconId, Value};
 use craft_ui::buttons::{Button, IconButton};
-use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, Trigger};
+use craft_ui::contract::{Entry, Props as _, Show as _, ShowContainer as _, Trigger};
 use craft_ui::display::Divider;
-use craft_ui::menu::{Menu, MenuItem};
+use craft_ui::menu::{Menu, MenuItem, entry_rows};
 use craft_ui::primitives::IconSpec;
-use craft_ui::runtime::env::Label;
+use craft_ui::runtime::env::{Env, Label};
 use egui::{Response, Ui};
 
 use super::{CardMenu, CommentsPanelState, CommentsWords, FilterRow, color_name, kind_name, status_label, toggle};
@@ -14,37 +14,85 @@ use crate::annotate::AnnotationKind;
 use crate::comments::{CommentSort, CommentThread, ReviewStatus};
 use crate::ui::annotate::AnnotateWords;
 
-/// The Sort by button and its menu.
-pub(super) fn sort_menu(ui: &mut Ui, words: &CommentsWords, state: &mut CommentsPanelState) {
-    let sorts = [
+/// The sorts the Sort by rows offer, in Acrobat's order, with their names.
+fn sorts(words: &CommentsWords) -> [(CommentSort, &Label); 5] {
+    [
         (CommentSort::Page, &words.sort_page),
         (CommentSort::Author, &words.sort_author),
         (CommentSort::Date, &words.sort_date),
         (CommentSort::Type, &words.sort_type),
         (CommentSort::Color, &words.sort_color),
-    ];
-    let current = sorts.iter().find(|(sort, _)| *sort == state.sort).map_or("", |(_, label)| label.as_str());
+    ]
+}
+
+/// The Sort by radio rows, `active` marked; the sort picked.
+fn sort_rows(ui: &mut Ui, words: &CommentsWords, active: CommentSort) -> Option<CommentSort> {
+    let mut chosen = None;
+    for (sort, label) in sorts(words) {
+        if MenuItem::new(label.as_str().to_owned()).radio_mark(active == sort).show(ui).ran {
+            chosen = Some(sort);
+        }
+    }
+    chosen
+}
+
+/// The Collapse all pages and Expand all pages rows; `Some(true)` when Collapse ran, `Some(false)` when Expand did.
+fn pages_rows(ui: &mut Ui, words: &CommentsWords) -> Option<bool> {
+    let mut collapse = None;
+    if MenuItem::new(words.collapse_all.as_str().to_owned()).show(ui).ran {
+        collapse = Some(true);
+    }
+    if MenuItem::new(words.expand_all.as_str().to_owned()).show(ui).ran {
+        collapse = Some(false);
+    }
+    collapse
+}
+
+/// Folds every page of `threads` when `collapse`, else unfolds them all.
+fn fold_pages(threads: &[CommentThread], state: &mut CommentsPanelState, collapse: bool) {
+    if collapse {
+        let mut pages: Vec<usize> = threads.iter().filter_map(|thread| thread.anchor.page()).collect();
+        pages.sort_unstable();
+        pages.dedup();
+        state.collapsed_pages = pages;
+    } else {
+        state.collapsed_pages.clear();
+    }
+}
+
+/// The Sort by button and its menu.
+pub(super) fn sort_menu(ui: &mut Ui, words: &CommentsWords, state: &mut CommentsPanelState) {
+    let current = sorts(words).into_iter().find(|(sort, _)| *sort == state.sort).map_or("", |(_, label)| label.as_str());
     let name = words.sort_by.fill(&[("sort", current)]);
     let button = Button::new(name.clone()).trailing_icon(craft_ui::controls::disclosure::DisclosureGlyph::menu_button()).show(ui);
     let mut chosen = None;
     let active = state.sort;
     Menu::new(name).opened_by(&button, Trigger::Click).show(ui, |ui, _| {
-        for (sort, label) in &sorts {
-            if MenuItem::new(label.as_str().to_owned()).radio_mark(active == *sort).show(ui).ran {
-                chosen = Some(*sort);
-            }
-        }
+        chosen = sort_rows(ui, words, active);
     });
     if let Some(sort) = chosen {
         state.sort = sort;
     }
 }
 
-/// The funnel and its menu: a submenu per property that lists its values as checks (checked = shown), and
-/// Show all while anything is hidden.
+/// The funnel and its menu.
 pub(super) fn filter_menu(ui: &mut Ui, words: &CommentsWords, kinds: &AnnotateWords, threads: &[CommentThread], state: &mut CommentsPanelState) {
     let active = state.filter.is_active();
     let button = IconButton::new(IconSpec::svg(IconId::new("funnel"))).label(words.filter.clone()).selected(active).show(ui);
+    filter_popup(ui, &button, words, kinds, threads, state);
+}
+
+/// The filter menu hanging from `opener`: a submenu per property that lists its values as checks (checked = shown),
+/// and Show all while anything is hidden.
+fn filter_popup(
+    ui: &mut Ui,
+    opener: &Response,
+    words: &CommentsWords,
+    kinds: &AnnotateWords,
+    threads: &[CommentThread],
+    state: &mut CommentsPanelState,
+) {
+    let active = state.filter.is_active();
     let mut kind_rows: Vec<Option<AnnotationKind>> = threads.iter().map(|thread| thread.kind).collect();
     kind_rows.sort_by_cached_key(|kind| kind_name(words, kinds, *kind));
     kind_rows.dedup();
@@ -61,7 +109,7 @@ pub(super) fn filter_menu(ui: &mut Ui, words: &CommentsWords, kinds: &AnnotateWo
             *ran = Some(row);
         }
     };
-    Menu::new(words.filter.clone()).opened_by(&button, Trigger::Click).show(ui, |ui, _| {
+    Menu::new(words.filter.clone()).opened_by(opener, Trigger::Click).show(ui, |ui, _| {
         let _ = Menu::submenu_row(ui, words.filter_type.clone(), |ui, _| {
             for &kind in &kind_rows {
                 check(ui, &mut ran, kind_name(words, kinds, kind), FilterRow::Type(kind), filter.hidden_types.contains(&kind));
@@ -119,60 +167,100 @@ pub(super) fn pages_menu(ui: &mut Ui, words: &CommentsWords, threads: &[CommentT
     let button = IconButton::new(IconSpec::svg(IconId::new("more"))).label(words.pages_menu.clone()).show(ui);
     let mut collapse = None;
     Menu::new(words.pages_menu.clone()).opened_by(&button, Trigger::Click).show(ui, |ui, _| {
-        if MenuItem::new(words.collapse_all.as_str().to_owned()).show(ui).ran {
-            collapse = Some(true);
-        }
-        if MenuItem::new(words.expand_all.as_str().to_owned()).show(ui).ran {
-            collapse = Some(false);
-        }
+        collapse = pages_rows(ui, words);
     });
-    match collapse {
-        Some(true) => {
-            let mut pages: Vec<usize> = threads.iter().filter_map(|thread| thread.anchor.page()).collect();
-            pages.sort_unstable();
-            pages.dedup();
-            state.collapsed_pages = pages;
-        }
-        Some(false) => state.collapsed_pages.clear(),
-        None => {}
+    if let Some(collapse) = collapse {
+        fold_pages(threads, state, collapse);
     }
 }
 
-/// The menu of message `index` of `thread`, hanging from the message's "..." button.
-pub(super) fn card_menu(
+/// The panel's More menu for a [`Hosted`](super::CommentsHeader::Hosted) header, hanging from the host's `opener`:
+/// the Sort by rows, Collapse all pages and Expand all pages under the Page sort, then `host_rows` behind a
+/// separator. It applies its own rows to `state` and returns the value of the host row picked. The `Own` header
+/// shows the same sort and page rows from its Sort by and Pages buttons.
+pub fn comments_more_menu<H: Value>(
+    ui: &mut Ui,
+    opener: &Response,
+    threads: &[CommentThread],
+    state: &mut CommentsPanelState,
+    host_rows: &[Entry<H>],
+) -> Option<H> {
+    let words = Env::of(ui).words::<CommentsWords>();
+    let active = state.sort;
+    let (mut sort, mut collapse, mut ran) = (None, None, None);
+    Menu::new(words.more.clone()).opened_by(opener, Trigger::Click).show(ui, |ui, _| {
+        MenuItem::heading(words.sort_heading.clone()).show(ui);
+        sort = sort_rows(ui, &words, active);
+        if active == CommentSort::Page {
+            collapse = pages_rows(ui, &words);
+        }
+        if !host_rows.is_empty() {
+            Divider::horizontal().show(ui);
+            ran = entry_rows(ui, host_rows);
+        }
+    });
+    if let Some(sort) = sort {
+        state.sort = sort;
+    }
+    if let Some(collapse) = collapse {
+        fold_pages(threads, state, collapse);
+    }
+    ran.and_then(|at| host_rows.get(at)).and_then(Entry::value).cloned()
+}
+
+/// The panel's filter menu over `threads` for a [`Hosted`](super::CommentsHeader::Hosted) header, hanging from the
+/// host's `opener`: a submenu per property (Type, Author, Status, Color, Checkmark) whose checks show or hide what
+/// they name, and Show all while anything is hidden. The `Own` header's funnel opens the same menu.
+pub fn comments_filter_menu(ui: &mut Ui, opener: &Response, threads: &[CommentThread], state: &mut CommentsPanelState) {
+    let env = Env::of(ui);
+    let (words, kinds) = (env.words::<CommentsWords>(), env.words::<AnnotateWords>());
+    filter_popup(ui, opener, &words, &kinds, threads, state);
+}
+
+/// The menu of message `index` of `thread`, hanging from the message's "..." button; the host's `host_rows` follow
+/// the card's rows behind a separator.
+pub(super) fn card_menu<H>(
     ui: &mut Ui,
     words: &CommentsWords,
     button: &Response,
     index: usize,
     thread: &CommentThread,
     editable: bool,
+    host_rows: &[Entry<H>],
 ) -> Option<CardMenu> {
     let ran = std::cell::Cell::new(None);
     Menu::new(words.more.clone()).id_salt(index).opened_by(button, Trigger::Click).show(ui, |ui, _| {
-        let row = |ui: &mut Ui, label: &Label, action: CardMenu| {
-            if MenuItem::new(label.as_str().to_owned()).show(ui).ran {
+        let row = |ui: &mut Ui, label: &Label, action: CardMenu, enabled: bool| {
+            if MenuItem::new(label.as_str().to_owned()).enabled(enabled).show(ui).ran {
                 ran.set(Some(action));
             }
         };
         if index == 0 {
-            row(ui, &words.edit, CardMenu::Edit);
+            row(ui, &words.edit, CardMenu::Edit, editable && !thread.locked);
             let _ = Menu::submenu_row(ui, words.set_status.clone(), |ui, _| {
                 for status in ReviewStatus::MENU {
-                    if MenuItem::new(status_label(words, status).as_str().to_owned()).radio_mark(thread.status == status).show(ui).ran {
+                    if MenuItem::new(status_label(words, status).as_str().to_owned()).radio_mark(thread.status() == status).show(ui).ran {
                         ran.set(Some(CardMenu::Status(status)));
                     }
                 }
             });
             Divider::horizontal().show(ui);
-            row(ui, &words.delete, CardMenu::Delete);
+            // Deleting the root also deletes its descendants; the host's flag covers that whole operation.
+            row(ui, &words.delete, CardMenu::Delete, editable && !thread.locked && thread.messages.first().is_some_and(|message| message.deletable));
         } else {
             if editable {
-                row(ui, &words.edit, CardMenu::Edit);
+                row(ui, &words.edit, CardMenu::Edit, true);
             }
-            row(ui, &words.copy_text, CardMenu::Copy);
+            row(ui, &words.copy_text, CardMenu::Copy, true);
             if editable {
                 Divider::horizontal().show(ui);
-                row(ui, &words.delete, CardMenu::Delete);
+                row(ui, &words.delete, CardMenu::Delete, thread.messages.get(index).is_some_and(|message| message.deletable));
+            }
+        }
+        if !host_rows.is_empty() {
+            Divider::horizontal().show(ui);
+            if let Some(at) = entry_rows(ui, host_rows) {
+                ran.set(Some(CardMenu::Host(at)));
             }
         }
     });

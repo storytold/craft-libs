@@ -1,12 +1,13 @@
 //! [`PaintBar`]: the options bar members of the Brush, Pencil, Eraser and Mixer Brush tools after the preset picker.
 
 use std::cell::RefCell;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, Value};
 use craft_theme::Srgba;
 use craft_ui::buttons::{IconButton, ToggleButton};
-use craft_ui::choice::{Checkbox, Swatch};
+use craft_ui::choice::{Checkbox, Swatch, SwatchFill, SwatchImage};
 use craft_ui::contract::{
     Bind, BodyCx, Entry, Gap, LabelKind, PopupKind, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Trigger, clicked,
 };
@@ -30,7 +31,7 @@ pub use words::PaintBarWords;
 const PRESSURE: &str = "target";
 
 /// The painting tools the bar serves.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum PaintTool {
     /// The Brush tool.
@@ -43,14 +44,10 @@ pub enum PaintTool {
     MixerBrush,
 }
 
-/// The bar's values.
-#[derive(Clone, Debug, PartialEq)]
+/// The bar's values. The size and the hardness are the preset picker's, which comes before the bar.
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct PaintValues<M> {
-    /// The brush size.
-    pub size: f64,
-    /// The brush hardness.
-    pub hardness: f64,
     /// The opacity.
     pub opacity: f64,
     /// The flow.
@@ -78,8 +75,6 @@ impl<M> PaintValues<M> {
     /// options overwrites every field.
     pub fn new(mode: M) -> Self {
         PaintValues {
-            size: 30.0,
-            hardness: 0.5,
             opacity: 1.0,
             flow: 1.0,
             smoothing: Smoothing::default(),
@@ -95,7 +90,7 @@ impl<M> PaintValues<M> {
 }
 
 /// The stroke smoothing options.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct Smoothing {
     /// The amount, 0 to 1.
@@ -117,8 +112,21 @@ impl Default for Smoothing {
     }
 }
 
+/// What the Mixer Brush holds: the paint its next stroke starts with.
+#[derive(Clone, Debug, Default, PartialEq, craft_ui::contract::MemoProps)]
+#[non_exhaustive]
+pub enum MixerLoad {
+    /// Nothing: the brush is clean.
+    #[default]
+    Clean,
+    /// One colour.
+    Color(Srgba),
+    /// The tip image an Alt-click sampled.
+    Image(SwatchImage),
+}
+
 /// The Mixer Brush's values.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct MixerValues {
     /// Load the brush after each stroke.
@@ -137,8 +145,8 @@ pub struct MixerValues {
     pub sample_all_layers: bool,
     /// The index into [`MIXER_COMBINATIONS`].
     pub combination: usize,
-    /// The colour the brush is loaded with, if any.
-    pub load_color: Option<Srgba>,
+    /// What the brush holds, which the load swatch shows.
+    pub current_load: MixerLoad,
     /// Only solid colours load.
     pub solid_colors_only: bool,
 }
@@ -155,14 +163,14 @@ impl Default for MixerValues {
             flow: 1.0,
             sample_all_layers: false,
             combination: 0,
-            load_color: None,
+            current_load: MixerLoad::Clean,
             solid_colors_only: false,
         }
     }
 }
 
 /// What the Eraser tool erases with.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum EraserMode {
     /// A brush.
@@ -194,6 +202,25 @@ pub const MIXER_COMBINATIONS: [Option<(f64, f64, f64)>; 13] = [
 /// The index of the first combination of each group (Dry, Moist, Wet, Very Wet); a separator goes above each.
 pub const MIXER_GROUP_STARTS: [usize; 4] = [1, 4, 7, 10];
 
+/// The percents a field of the bar holds, and whether it takes input.
+struct Percents {
+    range: RangeInclusive<f64>,
+    enabled: bool,
+}
+
+impl Percents {
+    /// 0 to 100 %.
+    fn any(enabled: bool) -> Self {
+        Percents { range: 0.0..=100.0, enabled }
+    }
+
+    /// 1 to 100 %, for Opacity and Flow: a stroke at 0 % paints nothing, so a typed 0 is out of range like 150, and
+    /// the range alert names 1 %.
+    fn from_one(enabled: bool) -> Self {
+        Percents { range: 1.0..=100.0, enabled }
+    }
+}
+
 /// Whether the smoothing options popover is open.
 #[derive(Clone, Default)]
 struct SmoothingOpen(bool);
@@ -201,7 +228,8 @@ struct SmoothingOpen(bool);
 /// The bar's members for one painting tool, after the preset picker that carries the size and the hardness: a rule,
 /// Mode, Opacity and the pressure-for-opacity toggle, Flow and the build-up toggle (not the Pencil), Smoothing and its
 /// options (the Pencil's Auto Erase in their place), Erase to History for the Eraser, a rule and the
-/// pressure-for-size toggle. The Mixer Brush shows its load, combinations and mix values instead.
+/// pressure-for-size toggle. Opacity and Flow hold 1 to 100 %, Smoothing 0 to 100 %. The Mixer Brush shows its load,
+/// combinations and mix values instead.
 #[must_use = "show the bar with `show`"]
 #[derive(craft_ui::contract::Pattern)]
 #[pattern(probe(PaintBar<'static, u32>))]
@@ -262,10 +290,10 @@ impl<'a, M: Value> PaintBar<'a, M> {
                 pass.check(ui, &words.load_after_stroke, true, None, pass.values.mixer.load_after_stroke, |v, x| v.mixer.load_after_stroke = x);
                 pass.check(ui, &words.clean_after_stroke, true, None, pass.values.mixer.clean_after_stroke, |v, x| v.mixer.clean_after_stroke = x);
                 pass.combination(ui, &words);
-                pass.percent(ui, "mixer-wet", &words.wet, true, pass.values.mixer.wet, |v, x| v.mixer.wet = x);
-                pass.percent(ui, "mixer-load", &words.load, true, pass.values.mixer.load, |v, x| v.mixer.load = x);
-                pass.percent(ui, "mixer-mix", &words.mix, true, pass.values.mixer.mix, |v, x| v.mixer.mix = x);
-                pass.percent(ui, "mixer-flow", &words.flow, true, pass.values.mixer.flow, |v, x| v.mixer.flow = x);
+                pass.percent(ui, "mixer-wet", &words.wet, Percents::any(true), pass.values.mixer.wet, |v, x| v.mixer.wet = x);
+                pass.percent(ui, "mixer-load", &words.load, Percents::any(true), pass.values.mixer.load, |v, x| v.mixer.load = x);
+                pass.percent(ui, "mixer-mix", &words.mix, Percents::any(true), pass.values.mixer.mix, |v, x| v.mixer.mix = x);
+                pass.percent(ui, "mixer-flow", &words.flow, Percents::any(true), pass.values.mixer.flow, |v, x| v.mixer.flow = x);
                 pass.check(ui, &words.sample_all_layers, true, None, pass.values.mixer.sample_all_layers, |v, x| v.mixer.sample_all_layers = x);
                 return;
             }
@@ -276,13 +304,13 @@ impl<'a, M: Value> PaintBar<'a, M> {
             } else {
                 pass.mode(ui, &words.mode, modes);
             }
-            pass.percent(ui, "opacity", &words.opacity, sized, pass.values.opacity, |v, x| v.opacity = x);
+            pass.percent(ui, "opacity", &words.opacity, Percents::from_one(sized), pass.values.opacity, |v, x| v.opacity = x);
             pass.toggle(ui, PRESSURE, &words.pressure_opacity, sized, pass.values.pressure_opacity, |v, x| v.pressure_opacity = x);
             if tool != PaintTool::Pencil {
-                pass.percent(ui, "flow", &words.flow, sized && soft, pass.values.flow, |v, x| v.flow = x);
+                pass.percent(ui, "flow", &words.flow, Percents::from_one(sized && soft), pass.values.flow, |v, x| v.flow = x);
                 pass.toggle(ui, "sparkles", &words.build_up, sized && soft, pass.values.build_up, |v, x| v.build_up = x);
             }
-            pass.percent(ui, "smoothing", &words.smoothing, true, pass.values.smoothing.amount, |v, x| v.smoothing.amount = x);
+            pass.percent(ui, "smoothing", &words.smoothing, Percents::any(true), pass.values.smoothing.amount, |v, x| v.smoothing.amount = x);
             if tool == PaintTool::Pencil {
                 Divider::vertical().show(ui);
                 pass.check(ui, &words.auto_erase, true, Some(&words.auto_erase_tip), pass.values.auto_erase, |v, x| v.auto_erase = x);
@@ -354,15 +382,16 @@ impl<M: Value> Pass<'_, M> {
         }
     }
 
-    /// A percent field over a fraction 0..1.
-    fn percent(&mut self, ui: &mut Ui, salt: &'static str, caption: &Label, enabled: bool, current: f64, set: fn(&mut PaintValues<M>, f64)) {
+    /// A percent field over a fraction 0..1, holding `percents`.
+    fn percent(&mut self, ui: &mut Ui, salt: &'static str, caption: &Label, percents: Percents, current: f64, set: fn(&mut PaintValues<M>, f64)) {
+        let Percents { range, enabled } = percents;
         // The body may run more than once in a pass and only the run that reads the input reports its events, so every
         // run's events and alert are collected.
         let collected: RefCell<(EditEvents<Option<f64>>, Option<RangeAlert>)> = RefCell::new((EditEvents::new(), None));
         let _ = Field::new(caption.clone()).side(SideLabel::new().scrub(true)).id_salt(salt).enabled(enabled).show(ui, |ui, _| {
             let field = NumberField::new(caption.clone(), Bind::given(Some(current * 100.0)))
                 .unit_kind(UnitKind::Percent)
-                .range(0.0..=100.0)
+                .range(range.clone())
                 .commit_decimals(0)
                 .scrub_by_label()
                 .show(ui);
@@ -448,12 +477,15 @@ impl<M: Value> Pass<'_, M> {
         cx.memory::<SmoothingOpen>().0 = open;
     }
 
-    /// The Mixer Brush's load swatch and its menu.
+    /// The Mixer Brush's load swatch, showing what the brush holds (a checkerboard when it is clean), and its menu.
     fn mixer_load(&mut self, ui: &mut Ui, words: &PaintBarWords) {
-        let color = self.values.mixer.load_color;
+        let fill = match &self.values.mixer.current_load {
+            MixerLoad::Clean => SwatchFill::Empty,
+            MixerLoad::Color(color) => SwatchFill::Color(Mixed::Same(*color)),
+            MixerLoad::Image(image) => SwatchFill::Image(image.clone()),
+        };
         let solid = self.values.mixer.solid_colors_only;
-        // `Swatch` has no empty face, so a brush with no load shows the mixed face.
-        let swatch = Swatch::new(words.load_swatch.clone(), color.map_or(Mixed::Mixed, Mixed::Same)).show(ui).response;
+        let swatch = Swatch::with_fill(words.load_swatch.clone(), fill).show(ui).response;
         let (mut load, mut clean, mut next_solid) = (false, false, None);
         let _ = Menu::new(words.load_swatch.clone()).opened_by(&swatch, Trigger::Click).show(ui, |ui, _| {
             load = MenuItem::new(words.load_brush.clone()).show(ui).ran;

@@ -3,3 +3,4 @@
 pub(crate) mod mounts;
 pub(crate) mod nesting;
 pub(crate) mod placement;
+pub(crate) mod surface;

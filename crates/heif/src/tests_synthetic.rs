@@ -186,7 +186,9 @@ fn grid_tiles_are_held_to_the_pixel_budget_together() {
 fn truncated_and_corrupted_files_are_errors_not_panics() {
     let bytes = build(&Spec { props: vec![FULL_601, Prop::Irot(1)], thumbnail: Some(&grey), ..Spec::new(64, 64, &grey) });
     let full = decode(&bytes, &Options::default()).unwrap();
-    for cut in (0..bytes.len()).step_by(7) {
+    // The gate runs a divisor's fraction of the cuts and flips; nightly runs all.
+    let divisor = craft_testkit::hostile::divisor();
+    for cut in (0..bytes.len()).step_by(7 * divisor) {
         let b = &bytes[..cut];
         // Cut inside the photo: an error. Cut in the trailing thumbnail: the whole photo.
         if let (Ok(_), Ok(d)) = (probe(b), decode(b, &Options::default())) {
@@ -197,7 +199,7 @@ fn truncated_and_corrupted_files_are_errors_not_panics() {
     }
     // Flip bits all over the file: any outcome but a panic.
     let mut state = 0x2545_f491_u32;
-    for _ in 0..400 {
+    for _ in 0..400 / divisor {
         let mut b = bytes.clone();
         for _ in 0..3 {
             state ^= state << 13;

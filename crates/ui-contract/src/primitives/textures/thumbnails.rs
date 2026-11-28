@@ -4,9 +4,10 @@
 use super::limits::MAX_TEXTURE;
 use super::loader::{LoadFailure, LoadedPicture, LoaderOptions, Priority, TextureLoader};
 use super::store::{CachedTexture, Revision, TextureKey, TextureState, TextureStoreOptions};
-use crate::primitives::{ContentPainterCx, IconSpec, Surface};
+use super::words::TextureWords;
+use crate::primitives::{ContentPainterCx, HAlign, IconSpec, Surface, TextRun, Wrap};
 use crate::runtime::egui::{memory, pass, repaint, textures};
-use crate::style::{Corners, DataColor, SurfaceKind, surface_style};
+use crate::style::{Corners, DataColor, SurfaceKind, TypeRole, surface_style};
 use craft_behavior::{IconId, PixelSize};
 use craft_host::Jobs;
 use craft_host::queue::{Cancel, QueueOptions};
@@ -33,6 +34,9 @@ pub struct ThumbRequest {
 
 /// Requested sides are multiples of this many pixels.
 const SIZE_STEP: u32 = 16;
+
+/// Seconds of waiting after which a `Captioned` thumbnail says it is still rendering.
+const STILL_RENDERING: f64 = 6.0;
 
 impl ThumbRequest {
     /// The request for a cell `points` wide on a screen of `pixels_per_point`: the side in pixels rounded up to a
@@ -180,11 +184,24 @@ pub struct ThumbPaint {
     pub paper: Option<DataColor>,
     /// Multiplies the picture (default untinted): a dimmed row's faint thumbnail.
     pub tint: DataColor,
+    /// What a picture that is not ready, or failed, shows: a glyph or a caption (default `Glyph`).
+    pub states: StateLook,
+}
+
+/// What a thumbnail that is not ready, or failed, shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StateLook {
+    /// The placeholder and the failure glyph.
+    #[default]
+    Glyph,
+    /// "Rendering…", then "Still rendering…" once the wait passes 6 s, then the failure text.
+    Captioned,
 }
 
 impl Default for ThumbPaint {
     fn default() -> Self {
-        Self { fit: ThumbFit::Contain, checker: true, paper: None, tint: DataColor::new(super::UNTINTED) }
+        Self { fit: ThumbFit::Contain, checker: true, paper: None, tint: DataColor::new(super::UNTINTED), states: StateLook::Glyph }
     }
 }
 
@@ -215,6 +232,13 @@ impl ThumbPaint {
     #[must_use]
     pub fn tint(mut self, tint: DataColor) -> Self {
         self.tint = tint;
+        self
+    }
+
+    /// Sets what a picture that is not ready, or failed, shows.
+    #[must_use]
+    pub fn states(mut self, states: StateLook) -> Self {
+        self.states = states;
         self
     }
 }
@@ -284,6 +308,12 @@ const _: () = {
 };
 
 impl<K: TextureKey> Thumbnails<K> {
+    /// Seconds `key` has waited for its picture since its job was queued, `None` when no job of it waits
+    /// (`TextureLoader::waited`).
+    pub fn waited(&self, ctx: &Context, key: &K) -> Option<f64> {
+        self.loader.waited(ctx, key)
+    }
+
     /// The thumbnails stored in `ctx` under `salt`, made with `options` the first time; the loader and its store
     /// live under the same salt.
     pub fn in_context(ctx: &Context, salt: impl std::hash::Hash + std::fmt::Debug, options: ThumbnailOptions) -> Self {
@@ -308,6 +338,13 @@ impl<K: TextureKey> Thumbnails<K> {
     /// `Ready` is put in the store (counted against the budget), `Blank` is stored as `Empty`, and `Later` is
     /// submitted at `priority`.
     pub fn state(&self, ctx: &Context, source: &dyn ThumbSource<K>, key: &K, request: &ThumbRequest, priority: Priority) -> TextureState {
+        match self.resolve(ctx, source, key, request, priority) {
+            TextureState::Loading { stand_in, .. } => TextureState::Loading { stand_in, waited: self.loader.waited(ctx, key) },
+            settled => settled,
+        }
+    }
+
+    fn resolve(&self, ctx: &Context, source: &dyn ThumbSource<K>, key: &K, request: &ThumbRequest, priority: Priority) -> TextureState {
         let max_side = self.lock().options.max_side;
         let side = request.side.min((max_side / SIZE_STEP * SIZE_STEP).max(SIZE_STEP));
         let request = ThumbRequest { side, ..*request };
@@ -315,7 +352,7 @@ impl<K: TextureKey> Thumbnails<K> {
         if let Some(state) = self.loader.ask(ctx, key, revision, priority) {
             return state;
         }
-        let stand_in = || TextureState::Loading { stand_in: self.loader.cache().state(ctx, key, revision).shown() };
+        let stand_in = || TextureState::Loading { stand_in: self.loader.cache().state(ctx, key, revision).shown(), waited: None };
         {
             let mut inner = self.lock();
             let frame = pass::root_frame_nr(ctx);
@@ -353,6 +390,8 @@ impl<K: TextureKey> Thumbnails<K> {
     ///   `paint.paper` when set).
     /// - `Failed`: the placeholder with the warning icon centred. The message is the host's tooltip
     ///   (`ListRow::tooltip`).
+    /// - With `StateLook::Captioned`, the placeholder carries a caption below its centre in place of the icon:
+    ///   "Rendering…", "Still rendering…" once the state's `waited` reaches 6 s, and the failure's text when it failed.
     /// - `Empty`: nothing; returns false, and the row paints its own tile.
     ///
     /// Rects are rounded to whole pixels.
@@ -360,17 +399,24 @@ impl<K: TextureKey> Thumbnails<K> {
         let rect = rect.round_to_pixels(cx.pixels_per_point());
         match state {
             TextureState::Empty => false,
-            TextureState::Ready(texture) | TextureState::Loading { stand_in: Some(texture) } => {
+            TextureState::Ready(texture) | TextureState::Loading { stand_in: Some(texture), .. } => {
                 paint_picture(cx, rect, texture, paint);
                 true
             }
-            TextureState::Missing | TextureState::Loading { stand_in: None } => {
+            TextureState::Missing | TextureState::Loading { stand_in: None, .. } => {
                 paint_placeholder(cx, rect, paint.paper);
+                if paint.states == StateLook::Captioned {
+                    let waited = if let TextureState::Loading { waited, .. } = state { *waited } else { None };
+                    paint_waiting(cx, rect, waited);
+                }
                 true
             }
-            TextureState::Failed { .. } => {
+            TextureState::Failed { failure } => {
                 paint_placeholder(cx, rect, paint.paper);
-                paint_failure(cx, rect);
+                match paint.states {
+                    StateLook::Glyph => paint_failure(cx, rect),
+                    StateLook::Captioned => paint_caption(cx, rect, failure.text(&cx.words::<TextureWords>())),
+                }
                 true
             }
         }
@@ -482,11 +528,37 @@ fn paint_placeholder(cx: &ContentPainterCx<'_>, rect: Rect, paper: Option<DataCo
     cx.painter.extend(Surface::shapes(&style, None, rect, Corners::None, cx.direction, cx.pixels_per_point()));
 }
 
+/// The caption of a picture that has not arrived: "Rendering…", then "Still rendering…" once it has waited
+/// [`STILL_RENDERING`] seconds, with a pass asked for at that moment so the caption changes without input.
+fn paint_waiting(cx: &ContentPainterCx<'_>, rect: Rect, waited: Option<f64>) {
+    let words = cx.words::<TextureWords>();
+    let text = match waited {
+        Some(waited) if waited >= STILL_RENDERING => &words.still_rendering,
+        Some(waited) => {
+            crate::runtime::frame::request_repaint_after(cx.painter.ctx(), STILL_RENDERING - waited);
+            &words.rendering
+        }
+        None => &words.rendering,
+    };
+    paint_caption(cx, rect, text.as_str());
+}
+
+/// `text` in the body role, centred below `rect`'s centre and wrapped to `rect` less the roomy padding on each side.
+fn paint_caption(cx: &ContentPainterCx<'_>, rect: Rect, text: &str) {
+    let room = rect.shrink(cx.tokens.space.pad.roomy);
+    let below = Rect::from_min_max(pos2(room.min.x, rect.center().y), room.max);
+    if !below.is_positive() {
+        return;
+    }
+    let run = TextRun::new(text).role(TypeRole::Body).wrap(Wrap::Wrap).align(HAlign::Center);
+    let _ = cx.with_draw(|draw| draw.text(below, &run));
+}
+
 /// The warning icon centred in `rect`, no larger than the small icon size.
 fn paint_failure(cx: &ContentPainterCx<'_>, rect: Rect) {
     let side = cx.tokens.size.icon.sm.min(rect.width().min(rect.height()));
     let icon = Rect::from_center_size(rect.center(), vec2(side, side));
-    crate::primitives::icon::paint(&cx.painter, cx.tokens, cx.direction, icon, &IconSpec::svg(IconId::new("warning")), false);
+    crate::primitives::icon::paint(&cx.painter, cx.tokens, cx.direction, icon, &IconSpec::svg(IconId::new("warning")), false, false);
 }
 
 /// A [`ThumbSource`] for stories and tests in every crate: pictures made from the key and a revision the test sets,

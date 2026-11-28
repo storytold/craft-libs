@@ -4,6 +4,7 @@ use super::fill::{Held, scrolled_fixture};
 use craft_behavior::ColumnWidth;
 use craft_ui::contract::{ContainerProps, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout::BodyLayout;
+use craft_ui::runtime::frame;
 use craft_ui::testing::layout::{Block, body, measured_block};
 use craft_ui::testing::{Frames, last_pass_measuring_runs, pointer, trial};
 use craft_ui_test_kit::body::Slab;
@@ -98,4 +99,26 @@ fn a_container_sharing_a_scrolled_view_runs_its_body_at_most_the_draft_more_than
         assert!(hover <= plain_hover + 1, "a hover frame runs the body at most the draft more: {case}");
         assert!(wheel <= plain_wheel + 1, "a wheel frame runs the body at most the draft more: {case}");
     }
+}
+
+/// A block whose size asks for the frame's discard pass shows in `frame::will_rerun` for the rest of the pass, a host
+/// after it included, while egui's `will_discard` stays false until the end hook requests the discard.
+#[trial]
+fn a_discard_asked_by_a_block_shows_in_will_rerun_in_the_same_pass() {
+    let mut frames = Frames::new();
+    let seen = std::cell::RefCell::new(Vec::new());
+    let mut run = |width: f32| {
+        seen.borrow_mut().clear();
+        let passes = frames.frame(vec![], |ui| {
+            measured_block(ui, "readout", Vec2::new(width, 20.0));
+            seen.borrow_mut().push((frame::will_rerun(ui.ctx()), ui.ctx().will_discard()));
+        });
+        (passes, seen.borrow().clone())
+    };
+    assert_eq!(run(20.0), (2, vec![(true, false), (false, false)]), "the first appearance asks, and the host after it reads the rerun");
+    for _ in 0..3 {
+        run(20.0);
+    }
+    assert_eq!(run(20.0), (1, vec![(false, false)]), "a settled block asks nothing");
+    assert_eq!(run(300.0), (2, vec![(true, false), (false, false)]), "a change after a settled frame asks in its first pass");
 }

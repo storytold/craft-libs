@@ -5,7 +5,9 @@ use std::rc::Rc;
 
 use craft_automation::actions::ActionList;
 use craft_automation::ui::actions::mock::{FakeActionsHost, action, list_of};
-use craft_automation::ui::actions::{ActionMove, ActionPlace, ActionSelection, ActionsEvent, ActionsPanel, ActionsPanelState, INCLUDE_COLUMN};
+use craft_automation::ui::actions::{
+    ActionMove, ActionPlace, ActionSelection, ActionsEvent, ActionsPanel, ActionsPanelState, INCLUDE_COLUMN, StepCells,
+};
 use craft_ui::testing::{Fixture, Target, pointer, trial};
 use egui::{Key, Modifiers, Pos2, Ui, Vec2};
 
@@ -29,16 +31,20 @@ fn app(list: ActionList) -> App {
     App { state: ActionsPanelState::default(), list, host: FakeActionsHost::prefixed("Run "), events: Vec::new() }
 }
 
-fn show(ui: &mut Ui, app: &mut App) {
+fn show(ui: &mut Ui, app: &mut App, cells: StepCells) {
     let App { state, list, host, events } = app;
-    let out = ActionsPanel::new(state, list).host(&*host).show(ui);
+    let out = ActionsPanel::new(state, list).host(&*host).step_cells(cells).show(ui);
     events.extend(out.events);
 }
 
 fn rig(app: App) -> (Fixture, Shared) {
+    rig_cells(app, StepCells::default())
+}
+
+fn rig_cells(app: App, cells: StepCells) -> (Fixture, Shared) {
     let shared = Rc::new(RefCell::new(app));
     let shown = Rc::clone(&shared);
-    let mut fixture = Fixture::new(move |ui| show(ui, &mut shown.borrow_mut()));
+    let mut fixture = Fixture::new(move |ui| show(ui, &mut shown.borrow_mut(), cells));
     fixture.room(PANEL);
     fixture.settle();
     (fixture, shared)
@@ -247,4 +253,97 @@ fn actions_panel_menu_offers_the_library_commands() {
     assert!(!C::ClearAll.state(&panel, &ActionList::new(), idle).is_enabled());
     let events: Vec<_> = [C::ClearAll, C::Reset, C::Replace].into_iter().map(|c| c.run(&mut panel, &list, idle)).collect();
     assert_eq!(events, [ActionsEvent::ClearAll, ActionsEvent::Reset, ActionsEvent::Replace].map(|event| Some(ActionsMenuAction::Event(event))));
+}
+
+/// A step row has an include and a dialog cell, or with `StepCells::Include` the include cell only; a set row with steps
+/// has an include cell whose press reports a toggle of the set, and a set without steps has none.
+#[trial]
+fn a_set_row_has_an_include_cell_and_the_include_variant_has_no_dialog_column() {
+    let mut shown = app(two_sets());
+    shown.state.expanded.insert("First".into());
+    let (fixture, _) = rig(shown);
+    assert!(fixture.by_label("Include in playback: Run b").is_some(), "a step row has its include cell");
+    assert!(fixture.by_label("Show dialog during playback: Run b").is_some(), "and its dialog cell");
+
+    let mut list = two_sets();
+    list.new_set("Hollow").unwrap();
+    let mut shown = app(list);
+    shown.state.expanded.insert("First".into());
+    let (mut fixture, shared) = rig_cells(shown, StepCells::Include);
+    assert!(fixture.by_label("Include in playback: Run b").is_some(), "the include cell stays");
+    assert!(fixture.by_label("Show dialog during playback: Run b").is_none(), "the dialog cell is left out");
+    assert!(fixture.by_label("Include in playback: Hollow").is_none(), "a set with no steps has no include cell");
+
+    let cell = node(&fixture, "Include in playback: Alpha");
+    click(&mut fixture, cell.center());
+    let toggled = take(&shared).into_iter().any(|event| {
+        matches!(event, ActionsEvent::Toggle(craft_ui::contract::SweepStep::Flip(edit))
+            if edit.key == ActionSelection::Set("Alpha".into()) && edit.column == INCLUDE_COLUMN)
+    });
+    assert!(toggled, "a press on a set's include cell reports a toggle of the set");
+}
+
+/// Shift on a later set row selects the sets between, across an expanded set's action rows; Delete reports the range in
+/// one event; a click on an action clears the range.
+#[trial]
+fn shift_clicking_a_set_selects_the_range_and_delete_reports_it_once() {
+    let list = list_of(vec![
+        action("Loose", None, &["a"]),
+        action("First", Some("Alpha"), &["b"]),
+        action("Second", Some("Beta"), &["c"]),
+        action("Third", Some("Gamma"), &["d"]),
+    ]);
+    let (mut fixture, shared) = rig(app(list));
+    let (first, last) = (node(&fixture, "Alpha").center(), node(&fixture, "Gamma").center());
+    click(&mut fixture, first);
+    fixture.hold(Modifiers::SHIFT);
+    click(&mut fixture, last);
+    fixture.hold(Modifiers::NONE);
+    let names = ["Alpha", "Beta", "Gamma"].map(str::to_owned).to_vec();
+    assert_eq!(shared.borrow().state.selected_sets, names, "the sets between, in list order, not the actions among them");
+
+    take(&shared);
+    fixture.key(Key::Delete, Modifiers::NONE).idle(2);
+    let events = take(&shared);
+    let deletes: Vec<_> = events.iter().filter(|event| matches!(event, ActionsEvent::Delete(_) | ActionsEvent::DeleteSets(_))).collect();
+    assert_eq!(deletes, [&ActionsEvent::DeleteSets(names)], "one event for the range");
+
+    let row = node(&fixture, "First").center();
+    click(&mut fixture, row);
+    assert!(shared.borrow().state.selected_sets.is_empty(), "a click on an action ends the range");
+    assert_eq!(shared.borrow().state.selected, Some(ActionSelection::Action(1)));
+}
+
+/// A right-click at `pos`, with the pointer moved there first.
+fn right_click(fixture: &mut Fixture, pos: Pos2) {
+    fixture.frame(vec![pointer::moved(pos)]);
+    fixture.frame(vec![pointer::secondary(pos, true)]);
+    fixture.frame(vec![pointer::secondary(pos, false)]);
+    fixture.idle(2);
+}
+
+/// What the row `item` of the menu a right-click on `row` opens reports.
+fn menu_ran(fixture: &mut Fixture, shared: &Shared, row: &str, item: &str) -> Vec<ActionsEvent> {
+    let at = node(fixture, row).center();
+    right_click(fixture, at);
+    let at = node(fixture, item).center();
+    click(fixture, at);
+    take(shared)
+}
+
+/// A right-click on an action or a set selects it and opens its menu, whose rows report their event for that row;
+/// Play reports nothing while an action plays.
+#[trial]
+fn a_rows_menu_selects_the_row_and_reports_its_rows_for_it() {
+    let (mut fixture, shared) = rig(app(two_sets()));
+    assert_eq!(menu_ran(&mut fixture, &shared, "First", "Action Options…"), [ActionsEvent::ActionOptions(1)]);
+    assert_eq!(shared.borrow().state.selected, Some(ActionSelection::Action(1)), "the right-click selects the action");
+    assert_eq!(menu_ran(&mut fixture, &shared, "Second", "Duplicate"), [ActionsEvent::Duplicate(ActionSelection::Action(2))]);
+    assert_eq!(menu_ran(&mut fixture, &shared, "Alpha", "Delete Set"), [ActionsEvent::Delete(ActionSelection::Set("Alpha".into()))]);
+    assert_eq!(shared.borrow().state.selected, Some(ActionSelection::Set("Alpha".into())), "the right-click selects the set");
+
+    let mut playing = app(two_sets());
+    playing.host.playing = true;
+    let (mut fixture, shared) = rig(playing);
+    assert_eq!(menu_ran(&mut fixture, &shared, "First", "Play"), [], "Play is off while an action plays");
 }

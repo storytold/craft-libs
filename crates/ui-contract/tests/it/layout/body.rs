@@ -1,15 +1,16 @@
 //! `BodyLayout` under direction: the physical layouts, measured `Row` placement and the `Grid` cursor; a content-sized
 //! column's held children, a spread row's room and the end region's line.
 
-use craft_behavior::{ColumnWidth, Proposal, Sense};
+use craft_behavior::{ColumnWidth, Insets, Metrics, Proposal, Sense};
 use craft_ui::contract::{
-    BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, MeasureCx, Props as _, Role, Show as _, ShowContainer as _, Sizing,
+    BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, MeasureCx, MemoProps, MemoView, Props as _, Role, Show as _,
+    ShowContainer as _, Sizing,
 };
 use craft_ui::layout::{BodyLayout, RowAlign};
 use craft_ui::runtime::env::{Direction, with_env};
-use craft_ui::style::StyleCx;
+use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::testing::layout::{Block, body};
-use craft_ui::testing::{Fixture, Frames, is_measuring, trial};
+use craft_ui::testing::{Fixture, Frames, audit_replays, is_measuring, trial};
 use craft_ui_test_kit::contract::{Panel, PlainStyle, Probe, Seen};
 use egui::{Rect, Response, Ui, Vec2};
 use std::cell::{Cell, RefCell};
@@ -237,6 +238,176 @@ fn a_held_fill_width_child_measures_again_only_when_a_sibling_widens_the_column(
     assert!(unbounded >= 1 && bounded == 0, "the narrower sibling: the held child measured again: {unbounded} and {bounded}");
 }
 
+/// A picture from `least` up to `MOST_PICTURE` wide: square (`picture_size`), or a band of its own height
+/// (`picture_width`), with `PICTURE_PAD` of padding at each side.
+#[derive(Component)]
+struct Picture<'a> {
+    #[common]
+    common: Common,
+    least: f32,
+    square: bool,
+    seen: &'a RefCell<Seen>,
+    measures: &'a Measures,
+}
+
+/// The widest a `Picture` takes.
+const MOST_PICTURE: f32 = 1000.0;
+
+/// A `Picture`'s padding at each side.
+const PICTURE_PAD: f32 = 20.0;
+
+/// A style padded `PICTURE_PAD` at each side.
+#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+struct PaddedStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+impl Component for Picture<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PaddedStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: PictureStyleKey) -> PaddedStyle {
+        PaddedStyle { metrics: Metrics::new().padding(Insets::new(PICTURE_PAD, PICTURE_PAD, 0.0, 0.0)) }
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        if cx.proposal == Proposal::Ideal && is_measuring(cx.ui.ctx()) {
+            let count = if cx.room.is_some() { &self.measures.bounded } else { &self.measures.unbounded };
+            count.set(count.get() + 1);
+        }
+        match self.square {
+            true => cx.picture_size(self.least, MOST_PICTURE, |width| width),
+            false => Vec2::new(cx.picture_width(self.least, MOST_PICTURE), LINE),
+        }
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        self.seen.borrow_mut().rect = cx.rect;
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// The picture a column trial shows: its least width and whether it is square.
+#[derive(Clone, Copy)]
+struct Shown {
+    least: f32,
+    square: bool,
+}
+
+impl Shown {
+    const fn square(least: f32) -> Self {
+        Shown { least, square: true }
+    }
+}
+
+/// What a content-sized column shows with a picture (none when `None`), a `Wrap` and a probe under them `sibling`
+/// wide: the column's rect, the picture's and the probe's, the picture's ideal measures in measuring runs without a
+/// room and in one, and the wrap's.
+struct PictureColumn {
+    rects: [Rect; 3],
+    picture: (usize, usize),
+    wrap: (usize, usize),
+}
+
+fn picture_in_column(picture: Option<Shown>, sibling: f32) -> PictureColumn {
+    let (seen, under, wrap) =
+        (Rc::new(RefCell::new(Seen::default())), Rc::new(RefCell::new(Seen::default())), Rc::new(RefCell::new(Seen::default())));
+    let (pictures, wraps, column) = (Rc::new(Measures::default()), Rc::new(Measures::default()), Rc::new(Cell::new(Rect::NOTHING)));
+    let (shown_picture, shown_under, shown_wrap) = (Rc::clone(&seen), Rc::clone(&under), Rc::clone(&wrap));
+    let (counted_pictures, counted_wraps, shown_column) = (Rc::clone(&pictures), Rc::clone(&wraps), Rc::clone(&column));
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = Panel::new().id_salt("column").show(ui, |ui, _| {
+            if let Some(Shown { least, square }) = picture {
+                let picture = Picture { common: Common::new(), least, square, seen: &shown_picture, measures: &counted_pictures };
+                picture.id_salt("picture").show(ui);
+            }
+            Wrap::new(&shown_wrap, &counted_wraps).id_salt("wrap").show(ui);
+            Probe::new(&shown_under).size(Vec2::new(sibling, LINE)).id_salt("under").show(ui);
+        });
+        shown_column.set(shown.output.rect);
+    });
+    fixture.room(Vec2::splat(800.0)).settle();
+    let rects = [column.get(), seen.borrow().rect, under.borrow().rect];
+    PictureColumn { rects, picture: (pictures.unbounded.get(), pictures.bounded.get()), wrap: (wraps.unbounded.get(), wraps.bounded.get()) }
+}
+
+// A square picture in a content-sized column takes no width of its own there; the column settles on its siblings'
+// width and the picture shows across it, as tall as wide, with what follows it laid out below the shown square.
+#[trial]
+fn a_square_picture_in_a_content_column_pushes_what_follows_below_its_shown_size() {
+    let PictureColumn { rects: [column, picture, under], .. } = picture_in_column(Some(Shown::square(60.0)), 300.0);
+    let dump = format!("column {column:?}, picture {picture:?}, under {under:?}");
+    assert!(picture.width() > 60.0 + 2.0 * PICTURE_PAD + SLACK, "the picture shows wider than its least, across the column: {dump}");
+    assert!((picture.width() - 2.0 * PICTURE_PAD - picture.height()).abs() < SLACK, "a square picture's content is as tall as it shows wide: {dump}");
+    assert!(under.top() >= picture.bottom() - SLACK, "what follows lies below the shown picture: {dump}");
+    assert!(column.bottom() >= under.bottom() - SLACK, "the column holds everything it shows: {dump}");
+}
+
+// Count trial: a column whose square picture took its least sweeps again once at its settled width; a column without
+// a picture, whose square picture is its widest child (padding included), or whose picture is a band of its own
+// height, sweeps once.
+#[trial]
+fn a_content_column_sweeps_again_only_for_a_square_picture_narrower_than_it() {
+    let none = picture_in_column(None, 300.0);
+    let narrow = picture_in_column(Some(Shown::square(60.0)), 300.0);
+    assert!(none.wrap.0 >= 1 && none.wrap.1 == 0, "no picture: the column sweeps its children: {:?}", none.wrap);
+    let (unbounded, bounded) = narrow.picture;
+    assert!(
+        bounded >= 1 && bounded == unbounded,
+        "a narrower square picture measures once more per measuring run, at the column: {unbounded} and {bounded}"
+    );
+    let once = [
+        ("a square picture wider than the column", Shown::square(400.0)),
+        ("a square picture as wide as the column with its padding", Shown::square(300.0 - 2.0 * PICTURE_PAD)),
+        ("a band picture", Shown { least: 60.0, square: false }),
+    ];
+    for (what, shown) in once {
+        let column = picture_in_column(Some(shown), 300.0);
+        assert_eq!(column.wrap, none.wrap, "{what} adds no sweep");
+        assert!(column.picture.0 >= 1 && column.picture.1 == 0, "{what} keeps its first measure: {:?}", column.picture);
+    }
+}
+
+/// The window's region and the rect of a `Picture` of `least` shown straight in a window `room` wide.
+fn picture_in_room(least: f32, square: bool, room: f32) -> (Rect, Rect) {
+    let (seen, region) = (Rc::new(RefCell::new(Seen::default())), Rc::new(Cell::new(Rect::NOTHING)));
+    let (shown, shown_region) = (Rc::clone(&seen), Rc::clone(&region));
+    let measures = Rc::new(Measures::default());
+    let mut fixture = Fixture::new(move |ui| {
+        shown_region.set(ui.available_rect_before_wrap());
+        Picture { common: Common::new(), least, square, seen: &shown, measures: &measures }.id_salt("picture").show(ui);
+    });
+    fixture.room(Vec2::new(room, 800.0)).settle();
+    let picture = seen.borrow().rect;
+    (region.get(), picture)
+}
+
+// A picture offered less room than its least (a panel at its narrowest) takes that room and stays inside it; offered
+// more, it shows across the room.
+#[trial]
+fn a_picture_offered_less_room_than_its_least_stays_inside_it() {
+    for square in [false, true] {
+        let (region, narrow) = picture_in_room(400.0, square, 300.0);
+        let dump = format!("square {square}, region {region:?}, picture {narrow:?}");
+        assert!(narrow.right() <= region.right() + SLACK, "the picture stays inside the room it is offered: {dump}");
+        assert!(narrow.width() > 2.0 * PICTURE_PAD + SLACK, "the picture still shows: {dump}");
+        if square {
+            assert!((narrow.width() - 2.0 * PICTURE_PAD - narrow.height()).abs() < SLACK, "a square picture stays square: {dump}");
+        }
+        let (region, wide) = picture_in_room(400.0, square, 700.0);
+        assert!(wide.width() > 400.0 + 2.0 * PICTURE_PAD + SLACK, "offered more than its least, it shows across the room: {wide:?} in {region:?}");
+    }
+}
+
 #[trial]
 fn a_space_between_child_leaves_room_for_the_siblings_after_it() {
     let (first, last) = (Rc::new(RefCell::new(Seen::default())), Rc::new(RefCell::new(Seen::default())));
@@ -264,6 +435,47 @@ fn a_space_between_child_leaves_room_for_the_siblings_after_it() {
     assert!(last.max.x <= row.max.x + SLACK, "the last child ends past the row: {dump}");
     assert!(first.max.x <= wrapped.min.x + SLACK && wrapped.max.x <= last.min.x + SLACK, "the children overlap: {dump}");
     assert!(first.width() >= WORD - SLACK, "the wrapping row asked for its one-line width as its least: {dump}");
+}
+
+/// The children of a wrapping `Row` stand on the line they wrap onto: one-line children sit at the middle of their
+/// line, a child of more than one line at its top, and each line is as tall as its tallest child, also in the frames
+/// that reuse the row's measurement. The row is sized from its content, so its real run is narrower than its
+/// measuring run's room.
+#[trial]
+fn a_wrapping_row_sets_its_children_on_the_middle_of_their_line() {
+    const SIZES: [Vec2; 5] = [ITEM, Vec2::new(40.0, 30.0), ITEM, Vec2::new(40.0, 40.0), ITEM];
+    let seen: Rc<[RefCell<Seen>; 7]> = Rc::new(Default::default());
+    let shown = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        Panel::new().layout(BodyLayout::row().wrap(true)).id_salt("wrapping").show(ui, |ui, _| {
+            for (i, size) in SIZES.iter().take(3).enumerate() {
+                Probe::new(&shown[i]).size(*size).id_salt(i).show(ui);
+            }
+            // A column of two lines: it starts the second line.
+            Panel::new().layout(BodyLayout::Stack).id_salt("column").show(ui, |ui, _| {
+                Probe::new(&shown[5]).size(ITEM).id_salt("upper").show(ui);
+                Probe::new(&shown[6]).size(ITEM).id_salt("lower").show(ui);
+            });
+            for (i, size) in SIZES.iter().enumerate().skip(3) {
+                Probe::new(&shown[i]).size(*size).id_salt(i).show(ui);
+            }
+        });
+    });
+    fixture.room(Vec2::new(150.0, 400.0)).settle();
+    let rects = || seen.each_ref().map(|seen| seen.borrow().rect);
+    let settled = rects();
+    let [first, tall, third, taller, last, upper, lower] = settled;
+    let dump = format!("{settled:?}");
+    assert!(
+        (first.center().y - tall.center().y).abs() < SLACK && (third.center().y - tall.center().y).abs() < SLACK,
+        "the first line's one-line children share its middle: {dump}"
+    );
+    assert!(upper.min.x < tall.min.x && upper.top() >= tall.bottom() - SLACK, "the column wraps onto the second line: {dump}");
+    assert!((upper.top() - taller.top()).abs() < SLACK && lower.bottom() < taller.bottom(), "the column sits at the top of its line: {dump}");
+    assert!((last.center().y - taller.center().y).abs() < SLACK, "the second line's one-line children share its middle: {dump}");
+    assert!(upper.top() - tall.bottom() < ITEM.y, "the first line is as tall as its tallest child: {dump}");
+    fixture.idle(3);
+    assert_eq!(rects(), settled, "the frames that reuse the measurement set the children on the same lines");
 }
 
 /// A container whose body is the caller's closure and whose end region holds a probe that records into `end`.
@@ -322,6 +534,92 @@ fn the_end_region_shares_the_members_line() {
     assert!((end.center().y - member.center().y).abs() < SLACK, "the end region's probe {end:?} is off the members' line {member:?}");
 }
 
+/// A memoized view of one short block.
+#[derive(MemoProps)]
+struct Short {}
+
+fn short(_: &mut Short, ui: &mut Ui) -> Rect {
+    Block::new(Vec2::new(40.0, 10.0)).show(ui).rect
+}
+
+/// A row of a tall block and the memoized short view beside it: the block's rect and the view's.
+fn row_of_short(ui: &mut Ui) -> (Rect, Rect) {
+    let rects = Cell::new((Rect::NOTHING, Rect::NOTHING));
+    Panel::new().layout(BodyLayout::row()).id_salt("row").show(ui, |ui, _| {
+        let tall = Block::new(Vec2::new(20.0, 30.0)).show(ui).rect;
+        let view = MemoView::new("short", Short {}, short).show(ui);
+        rects.set((tall, view.unwrap_or(Rect::NOTHING)));
+    });
+    rects.get()
+}
+
+/// A memoized view that holds the row.
+#[derive(MemoProps)]
+struct HeldRow {}
+
+fn held_row(_: &mut HeldRow, ui: &mut Ui) {
+    row_of_short(ui);
+}
+
+/// A memoized view in a row sits on the row's line, as the one-line child beside it does, from the first pass that
+/// shows it and while it replays. Its content starts a layout room of its own, which left it at the row's top (a menu
+/// bar beside an app icon, storytold/photocraft#16113); in its first pass it has no real run yet, so it sits by the
+/// extent the row's measuring run found in that pass. A view around the row keeps that first run, and replays it.
+#[trial]
+fn a_memoized_view_sits_on_the_rows_line() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let shown = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let rects = row_of_short(ui);
+        if !is_measuring(ui.ctx()) && !ui.is_sizing_pass() {
+            shown.borrow_mut().push(rects);
+        }
+    });
+    fixture.room(Vec2::splat(400.0)).settle();
+    for _ in 0..3 {
+        fixture.settle();
+    }
+    let seen = seen.borrow();
+    assert!(seen.len() > 1, "the row showed in several passes: {seen:?}");
+    for (pass, (tall, view)) in seen.iter().enumerate() {
+        assert!(view.height() > 0.0, "pass {pass}: the view showed: {view:?}");
+        assert!((view.center().y - tall.center().y).abs() < SLACK, "pass {pass}: the view {view:?} is off the line of {tall:?}");
+    }
+    // Held in a view of its own, the row's first run is what that view replays: the replay audit finds it the same as a
+    // run.
+    let mut fixture = Fixture::new(|ui| {
+        MemoView::new("held row", HeldRow {}, held_row).show(ui);
+    });
+    audit_replays(fixture.ctx(), true);
+    fixture.room(Vec2::splat(400.0)).settle();
+    for _ in 0..3 {
+        fixture.settle();
+    }
+}
+
+/// An unwrapped row in a row sits on the outer row's line by its own line, whatever its alignment: a row that places
+/// its block from its start, at its end, centred or spread reports its line as its first line alike.
+#[trial]
+fn an_unwrapped_row_sits_on_the_outer_line_by_its_line_in_every_alignment() {
+    for align in [RowAlign::Start, RowAlign::SpaceBetween, RowAlign::Center, RowAlign::End] {
+        let seen = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING)));
+        let shown = Rc::clone(&seen);
+        let mut fixture = Fixture::new(move |ui| {
+            Panel::new().layout(BodyLayout::row()).id_salt("outer").show(ui, |ui, _| {
+                let tall = Block::new(Vec2::new(20.0, 30.0)).show(ui).rect;
+                let short = Panel::new().layout(BodyLayout::row().align(align)).id_salt("inner").show(ui, |ui, _| Block::new(ITEM).show(ui).rect);
+                if !is_measuring(ui.ctx()) {
+                    shown.set((tall, short.inner.unwrap_or(Rect::NOTHING)));
+                }
+            });
+        });
+        fixture.room(Vec2::splat(400.0)).settle();
+        let (tall, short) = seen.get();
+        assert!(short.height() > 0.0, "{align:?}: the inner row showed its block: {short:?}");
+        assert!((short.center().y - tall.center().y).abs() < SLACK, "{align:?}: the inner row's block {short:?} is off the line of {tall:?}");
+    }
+}
+
 /// A Row in right-to-left holding a vertically scrolling container (content-sized, then filling its height) beside a
 /// probe: the container, the probe inside it and the probe beside it are finite, and the container lies in the row.
 #[trial]
@@ -348,5 +646,26 @@ fn a_scrolling_container_in_a_right_to_left_row_measures_and_shows_finite() {
         assert!(finite(row) && finite(panel) && finite(inside) && finite(beside), "every rect is finite: {dump}");
         assert!(panel.width() > 100.0 && panel.max.x <= region.max.x + SLACK, "the container shows in the row: {dump}");
         assert!(panel.min.x > beside.max.x - SLACK, "under RTL the container is right of the probe after it: {dump}");
+    }
+}
+
+/// A labelled container with a footer, shown in a rect narrower than its padding, in either direction: its measuring
+/// run places the footer under the control column of a line with no room, and the container shows.
+#[trial]
+fn a_labelled_container_narrower_than_its_padding_places_its_footer() {
+    use craft_ui::contract::{FooterRegion, Pad, SideLabel};
+    use craft_ui_test_kit::body::Slab;
+    for direction in [Direction::Ltr, Direction::Rtl] {
+        let (_, rects) = lay_out(Some(direction), |ui| {
+            let at = Rect::from_min_size(ui.available_rect_before_wrap().min, Vec2::new(4.0, 60.0));
+            let props = ContainerProps::new().label(SideLabel::new()).footer(FooterRegion::new()).pad(Pad::Regular).sizing(Sizing::FillWidth);
+            let narrow = ui.scope_builder(egui::UiBuilder::new().max_rect(at), |ui| {
+                Slab::new(props).label("Balance").id_salt("field").show(ui, |ui, _| {
+                    Block::new(ITEM).show(ui);
+                })
+            });
+            vec![narrow.inner.output.rect]
+        });
+        assert!(rects[0].min.is_finite() && rects[0].max.is_finite(), "{direction:?}: the container shows at {:?}", rects[0]);
     }
 }

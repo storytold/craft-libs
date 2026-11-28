@@ -1,8 +1,8 @@
 //! PDF export settings: the model a PDF export dialog edits and a preset stores, the checks that
 //! refuse settings a writer can't honour ([`checks`]) and the built-in presets ([`presets`]).
 //!
-//! The module needs no feature. Applications save settings with the `serde` feature (VectorCraft's
-//! camelCase JSON shape; every field optional, passwords never written) or through the stable `id`
+//! The module needs no feature. Applications save settings in VectorCraft's camelCase JSON shape
+//! (every field optional, passwords never written) or through the stable `id`
 //! (and `from_id`) of every choice enum. Checks and warnings that depend
 //! on colour profiles ask the application through [`ProfileCatalog`].
 
@@ -324,7 +324,7 @@ impl Encryption {
 }
 
 /// PDF export settings (the dialog's sections; what a preset stores).
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PdfSettings {
     #[allow(missing_docs)]
@@ -345,6 +345,9 @@ pub struct PdfSettings {
     /// Keep the layers whose Print option is off (they are left out otherwise, unless
     /// `create_layers` is on).
     pub include_non_printing: bool,
+    /// In files without a standard, a page with a side over 14,400 pt is written at its size in
+    /// points, without `UserUnit`.
+    pub long_pages_in_points: bool,
     #[allow(missing_docs)]
     pub compression: CompressionSettings,
     #[allow(missing_docs)]
@@ -361,6 +364,29 @@ pub struct PdfSettings {
     /// flattened with: a built-in or saved preset's name; empty, High Resolution. The app flattens
     /// the document before writing; the writer doesn't read it.
     pub flattener_preset: String,
+}
+
+impl Default for PdfSettings {
+    fn default() -> Self {
+        Self {
+            standard: Default::default(),
+            compatibility: Default::default(),
+            preserve_editing: Default::default(),
+            thumbnails: Default::default(),
+            fast_web_view: Default::default(),
+            view_after_saving: Default::default(),
+            create_layers: Default::default(),
+            include_non_printing: Default::default(),
+            long_pages_in_points: true,
+            compression: Default::default(),
+            marks: Default::default(),
+            bleed: Default::default(),
+            output: Default::default(),
+            advanced: Default::default(),
+            security: Default::default(),
+            flattener_preset: Default::default(),
+        }
+    }
 }
 
 /// Resampling and compression of one kind of image.
@@ -485,6 +511,18 @@ impl BleedSettings {
 /// document as in a CMYK one (Illustrator's "Document CMYK").
 pub const DOCUMENT_CMYK: &str = "Document CMYK";
 
+/// The id of an unset choice in a saved file (`null` and a missing key read as unset too).
+pub const UNSET_CHOICE: &str = "default";
+
+/// Reads `null` and [`UNSET_CHOICE`] as `None`, any other value as a choice.
+fn unset_or_choice<'de, D: serde::Deserializer<'de>, T: serde::Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    match <Option<String> as serde::Deserialize>::deserialize(d)? {
+        None => Ok(None),
+        Some(id) if id == UNSET_CHOICE => Ok(None),
+        Some(id) => <T as serde::Deserialize>::deserialize(serde::de::value::StringDeserializer::<D::Error>::new(id)).map(Some),
+    }
+}
+
 /// The Output section.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -494,8 +532,10 @@ pub struct OutputSettings {
     /// Destination profile name (empty: the document's profile; [`DOCUMENT_CMYK`]: the CMYK
     /// profile in effect, whatever the document's colour mode).
     pub destination: String,
-    #[allow(missing_docs)]
-    pub profiles: ProfileInclusion,
+    /// Which ICC profiles the file embeds; `None` is unset: colours are written as with
+    /// [`ProfileInclusion::None`], and grey and RGB images keep their profiles.
+    #[serde(default, deserialize_with = "unset_or_choice")]
+    pub profiles: Option<ProfileInclusion>,
     /// PDF/X output intent profile name.
     pub output_intent: String,
     /// Output condition text, as entered.

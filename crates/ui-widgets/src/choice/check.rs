@@ -23,18 +23,27 @@ pub struct CheckboxStyle {
     side: f32,
 }
 
+/// The side of a quiet check box, against the icon side.
+const QUIET_SIDE: f32 = 0.6;
+/// The corner radius of a quiet check box's well, in points: a small box keeps small corners.
+const QUIET_RADIUS: u8 = 2;
+
 /// A check box over a bool; a `Mixed` binding shows the mixed state and a click makes it checked.
-#[derive(crate::contract::Component)]
+#[derive(crate::contract::Component, crate::contract::Props)]
 pub struct Checkbox<'a> {
     #[common]
     common: Common,
     value: Bind<'a, bool>,
+    /// A small, dark box with a plain mark, for a check that sits over a picture (a thumbnail tile's).
+    #[style_key]
+    #[prop]
+    quiet: bool,
 }
 
 impl<'a> Checkbox<'a> {
     /// A check box of `value`.
     pub fn new(value: Bind<'a, bool>) -> Self {
-        Checkbox { common: Common::new(), value }
+        Checkbox { common: Common::new(), value, quiet: false }
     }
 }
 
@@ -46,8 +55,17 @@ impl Component for Checkbox<'_> {
     type Style = CheckboxStyle;
     type Output = EditResponse<bool>;
 
-    fn style(cx: &StyleCx<'_>, _: CheckboxStyleKey) -> CheckboxStyle {
+    fn style(cx: &StyleCx<'_>, key: CheckboxStyleKey) -> CheckboxStyle {
         let control = cx.control();
+        if key.quiet {
+            return CheckboxStyle {
+                metrics: Metrics::new().min_size(Vec2::new(0.0, control.icon * QUIET_SIDE)),
+                focus: cx.focus_look(),
+                well: super::quiet_indicator(cx, egui::CornerRadius::same(QUIET_RADIUS)),
+                mark: super::quiet_mark(cx),
+                side: control.icon * QUIET_SIDE,
+            };
+        }
         CheckboxStyle {
             // In a ribbon, the look's row height (`RibbonLook::row`), so check boxes stand at its buttons' pitch.
             metrics: Metrics::new().min_size(Vec2::new(0.0, crate::buttons::row_height(cx, control.height))),
@@ -63,7 +81,7 @@ impl Component for Checkbox<'_> {
     }
 
     fn sense(&self) -> Sense {
-        Sense::CLICK | Sense::FOCUS
+        Sense::CLICK | Sense::DRAG | Sense::FOCUS
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, bool>> {
@@ -71,9 +89,13 @@ impl Component for Checkbox<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        if cx.activation().is_some() {
-            let on = cx.value().copied().unwrap_or(false);
-            cx.set(!on);
+        let on = cx.value().copied();
+        if let Some(swept) = cx.swept_toggle(on) {
+            if on != Some(swept) {
+                cx.set(swept);
+            }
+        } else if cx.activation().is_some() {
+            cx.set(!on.unwrap_or(false));
         }
     }
 

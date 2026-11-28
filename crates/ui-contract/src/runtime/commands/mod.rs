@@ -7,16 +7,19 @@ mod registry;
 
 pub use clipboard::{ClipContent, ClipError, ClipItem, ClipboardHandle};
 pub use craft_behavior::EditCommand;
-pub use craft_keymap::{Binding, CommandDef, CommandKind, CommandRef, CommandScope, ModalRule, Platform, Scope, TypingRule};
+pub use craft_keymap::{Binding, CommandDef, CommandKind, CommandRef, CommandScope, ModalRule, Platform, Scope, Trigger, TypingRule};
 pub use library::ChromeCommand;
-pub(crate) use library::WindowShortcut;
-pub use library::{EditCommands, NavCommand, WindowCommand};
+pub use library::{EditCommands, NavCommand, QuitCommand, WindowCommand};
+pub(crate) use library::{WindowShortcut, yields_default};
 pub use registry::CommandDefError;
 #[doc(hidden)]
 pub use registry::{SetEntry, sets};
 #[cfg(feature = "suite")]
 pub(crate) use registry::{StorySelection, configure_story_sets, with_story_sets};
 
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub use board::clear_focus_vantage;
 #[doc(hidden)]
 pub use board::declare_child;
 #[doc(hidden)]
@@ -24,11 +27,14 @@ pub use board::focus_within;
 pub use board::keymap;
 #[doc(hidden)]
 pub use board::note_page_root;
+#[cfg(feature = "testing")]
+pub(crate) use board::observe_fired;
 pub(crate) use board::publish as publish_for;
 pub(crate) use board::runs_now;
 pub(crate) use board::take as take_for_instance;
 pub(crate) use board::{
-    begin, binds_scoped, edit_chords, end, install, note_focus, register_instance, set_input, take_delivered, take_fired, window_shortcuts,
+    begin, binds_scoped, edit_chords, end, install, note_focus, register_instance, set_input, take_declined, take_delivered, take_dimmed, take_fired,
+    window_shortcuts,
 };
 #[doc(hidden)]
 pub use board::{bound_around, keymap_generation, take_around};
@@ -39,12 +45,19 @@ pub(crate) use board::{fire_bound, fire_resolved, resolve_bound, resolve_scoped}
 pub(crate) use board::{keymap_built, queued_for};
 
 use crate::contract::{MemoKey, MemoProps, PlainData, Revision, Tracked};
+use crate::runtime::egui::areas::{self, LayerKey};
+use crate::runtime::egui::pass;
+use crate::runtime::env::Label;
+use crate::runtime::memory::Facts;
+use crate::runtime::overlay;
+use crate::runtime::{RecordShift, Shift};
 use craft_behavior::CommandFlags;
 use craft_behavior::edit_history::Step;
 use craft_keymap::{Chord, Overrides};
 use egui::{Context, Id, ViewportId};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
 /// Commands an app defines at run time (plug-ins, its tool list), all in the app scope ([`Scope::app`]). They join
@@ -70,7 +83,7 @@ impl AppCatalog {
             if !def.scope.is_app() {
                 return Err(CommandDefError::NotApp { command: def.command.id.clone() });
             }
-            registry::index_id(&mut index, &def.command.id, at)?;
+            registry::index_id(&mut index, &def.command.key_text(), at)?;
         }
         Ok(AppCatalog { defs: defs.into(), index: Arc::new(index), generation, replaced: Arc::from([]), typing: None })
     }
@@ -115,12 +128,16 @@ impl AppCatalog {
         self.generation
     }
 
-    pub(crate) fn defs(&self) -> &[CommandDef] {
+    /// The catalog's rows in the order the app gave them, each with its scope (always [`Scope::app`]), kind and
+    /// default bindings, as a shortcuts list reads them.
+    pub fn defs(&self) -> &[CommandDef] {
         &self.defs
     }
 
-    pub(crate) fn get(&self, id: &str) -> Option<&CommandDef> {
-        self.index.get(id).and_then(|&at| self.defs.get(at))
+    /// The def with the command's key, else the def with the bare id.
+    pub(crate) fn get(&self, command: &CommandRef) -> Option<&CommandDef> {
+        let at = self.index.get(command.key_text().as_ref()).or_else(|| self.index.get(command.id.as_str()))?;
+        self.defs.get(*at)
     }
 }
 
@@ -183,13 +200,44 @@ pub struct Fired {
     /// release arrived, also when the runtime held the event back to a later frame; the pass time for the other
     /// sources. A key's hold is the time between its press and its release, however late a frame runs them.
     pub time: f64,
+    /// The modifiers the firing input carried: a key's chord, a component's activation, the frame's held modifiers for
+    /// an injected activation. Automation and the palette carry none.
+    pub mods: craft_keymap::Mods,
+    /// For a key, the place of its event among the pass's events, which the editor inputs of the pass share, so an
+    /// editor runs the command between the inputs typed before and after it (`Cx::editor_steps`). `None` for the other
+    /// sources and for a key whose hold settles by its deadline or a modifier change, or whose window lost focus.
+    pub place: Option<usize>,
+    /// The clipboard's content, for a paste the platform delivered with its event (the clipboard event that stands for
+    /// the paste chord) when no focused component lists Paste: the command that event fires carries it, so the app
+    /// pastes what the event held in the pass it runs the command. `None` for every other command, and for a paste
+    /// whose content the app reads from the clipboard itself.
+    pub pasted: Option<ClipContent>,
+    /// The screen point supplied when requesting this paste, if any.
+    pub paste_at: Option<egui::Pos2>,
 }
 
 impl Fired {
     /// `command` fired from `source` in `phase` at the input time `time`, for the app scope (no target), without a group
-    /// cycle or the Alt variant.
+    /// cycle, the Alt variant or paste content.
     pub fn new(command: CommandRef, source: FireSource, phase: FirePhase, time: f64) -> Fired {
-        Fired { command, target: None, source, phase, cycle: false, alt_variant: false, time }
+        Fired {
+            command,
+            target: None,
+            source,
+            phase,
+            cycle: false,
+            alt_variant: false,
+            time,
+            mods: craft_keymap::Mods::NONE,
+            place: None,
+            pasted: None,
+            paste_at: None,
+        }
+    }
+
+    /// The command with `mods` as the modifiers its firing input carried.
+    pub fn mods(self, mods: craft_keymap::Mods) -> Fired {
+        Fired { mods, ..self }
     }
 }
 
@@ -218,7 +266,7 @@ pub enum FireSource {
 pub enum FirePhase {
     /// The press.
     Press,
-    /// A repeat of a held key.
+    /// A repeat of a held key, with `RootEnv::shortcuts_repeat` on.
     Repeat,
     /// The release of a momentary command's or a tool's key: a momentary command ends here, and a spring-loaded tool
     /// gives back the previous one.
@@ -231,7 +279,9 @@ pub enum FirePhase {
 pub struct CommandState {
     flags: CommandFlags,
     title: Option<Arc<str>>,
+    icon: Option<Cow<'static, str>>,
     hint: Option<Arc<str>>,
+    hint_alone: bool,
     marked: bool,
 }
 
@@ -270,6 +320,13 @@ impl CommandState {
         self
     }
 
+    /// An icon for this frame in place of the command's own, by catalogue name or registered app set name.
+    #[must_use]
+    pub fn icon(mut self, icon: impl Into<Cow<'static, str>>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
     /// The accessible description and second tooltip line.
     #[must_use]
     pub fn hint(mut self, hint: impl Into<Arc<str>>) -> Self {
@@ -277,9 +334,22 @@ impl CommandState {
         self
     }
 
+    /// Opt-in: on a control whose label shows whole and that has no tooltip of its own, the hint is the whole tooltip,
+    /// with the chord after it, in place of the label and chord over the hint (the default).
+    #[must_use]
+    pub fn hint_alone(mut self, alone: bool) -> Self {
+        self.hint_alone = alone;
+        self
+    }
+
     /// Whether the command can fire, as [`enabled`](Self::enabled) set it.
     pub fn is_enabled(&self) -> bool {
         self.flags.enabled
+    }
+
+    /// The checked state [`checked`](Self::checked) set; `None` for a command that is not a toggle or radio.
+    pub fn is_checked(&self) -> Option<bool> {
+        self.flags.checked
     }
 
     pub(crate) fn is_marked(&self) -> bool {
@@ -294,8 +364,16 @@ impl CommandState {
         self.title.as_ref()
     }
 
+    pub(crate) fn icon_ref(&self) -> Option<&Cow<'static, str>> {
+        self.icon.as_ref()
+    }
+
     pub(crate) fn hint_ref(&self) -> Option<&Arc<str>> {
         self.hint.as_ref()
+    }
+
+    pub(crate) fn is_hint_alone(&self) -> bool {
+        self.hint_alone
     }
 }
 
@@ -305,7 +383,10 @@ impl CommandState {
 pub struct ResolvedCommand {
     /// The state's title, else the command's label, else its id.
     pub label: Arc<str>,
-    /// The icon name.
+    /// The command's catalogue label (the registry's), whatever title the state sets; `None` for a command the
+    /// registry does not define.
+    pub catalog_label: Option<Arc<str>>,
+    /// The icon name: the state's icon, else the command's own.
     pub icon: Option<Cow<'static, str>>,
     /// The chord surfaces show: the first single-press binding that runs the command ([`chord`]).
     pub chord: Option<Chord>,
@@ -319,12 +400,19 @@ pub struct ResolvedCommand {
     pub marked: bool,
     /// The accessible description and second tooltip line.
     pub hint: Option<Arc<str>>,
+    /// The hint is the whole tooltip of a control whose label shows whole ([`CommandState::hint_alone`]).
+    pub hint_alone: bool,
     /// What the command is.
     pub kind: CommandKind,
     /// The command is an edit a focused component takes as its own (it has an `EditCommand` link): a control bound to
     /// it keeps the focus where it is on a press, so the edit reaches the focused component.
     pub edit: bool,
-    pub(crate) command: CommandRef,
+    /// Shared by every fact that shows this resolution, so a settled view's facts copy no command.
+    pub(crate) command: Arc<CommandRef>,
+    /// Something besides the command's own state refuses it: the gate, the modal rule, the instance's liveness or a
+    /// focused component whose edit does nothing now. A key whose app-scope command its state alone disables is
+    /// declined (`FrameOutput::declined`); a refused one is not.
+    pub(crate) refused: bool,
     #[doc(hidden)]
     pub instance: Option<Id>,
 }
@@ -362,10 +450,13 @@ impl CommandGate {
 
 /// The app-scope command states an app holds, in a [`Tracked`] it hands to [`CommandInput::states`] every frame. The
 /// runtime reads them again only when the revision moves.
-#[derive(Clone, Debug, Default, PartialEq, PlainData)]
+#[derive(Clone, Default, PlainData)]
 pub struct CommandStates {
     #[plain_data(assume = "command refs and states are plain values; the list is copied on write")]
     states: Arc<Vec<(CommandRef, CommandState)>>,
+    /// The positions in `states` of each command id's entries, so a lookup compares only the entries with its id.
+    #[plain_data(assume = "ids and positions are plain values; the map is copied on write")]
+    by_id: Arc<HashMap<String, Vec<usize>>>,
 }
 
 impl CommandStates {
@@ -377,27 +468,75 @@ impl CommandStates {
     /// Gives `command` `state`, in place of the state it had.
     pub fn set(&mut self, command: impl Into<CommandRef>, state: CommandState) {
         let command = command.into();
-        let states = Arc::make_mut(&mut self.states);
-        match states.iter_mut().find(|(held, _)| *held == command) {
-            Some((_, held)) => *held = state,
-            None => states.push((command, state)),
+        match self.position(&command) {
+            Some(at) => {
+                if let Some((_, held)) = Arc::make_mut(&mut self.states).get_mut(at) {
+                    *held = state;
+                }
+            }
+            None => {
+                let states = Arc::make_mut(&mut self.states);
+                Arc::make_mut(&mut self.by_id).entry(command.id.clone()).or_default().push(states.len());
+                states.push((command, state));
+            }
         }
     }
 
     /// Removes the state of `command`, which then resolves with its own label, enabled.
     pub fn remove(&mut self, command: &CommandRef) -> Option<CommandState> {
-        let at = self.states.iter().position(|(held, _)| held == command)?;
+        let at = self.position(command)?;
+        let by_id = Arc::make_mut(&mut self.by_id);
+        by_id.retain(|_, positions| {
+            positions.retain(|&p| p != at);
+            for p in positions.iter_mut().filter(|p| **p > at) {
+                *p -= 1;
+            }
+            !positions.is_empty()
+        });
         Some(Arc::make_mut(&mut self.states).remove(at).1)
     }
 
     /// The state of `command`.
     pub fn get(&self, command: &CommandRef) -> Option<&CommandState> {
-        self.states.iter().find(|(held, _)| held == command).map(|(_, state)| state)
+        self.states.get(self.position(command)?).map(|(_, state)| state)
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &(CommandRef, CommandState)> {
         self.states.iter()
     }
+
+    /// Where `command`'s entry is in `states`: among the entries with its id, the one equal to it.
+    fn position(&self, command: &CommandRef) -> Option<usize> {
+        self.by_id.get(command.id.as_str())?.iter().copied().find(|&at| {
+            #[cfg(feature = "testing")]
+            STATE_COMPARISONS.with(|n| n.set(n.get() + 1));
+            self.states.get(at).is_some_and(|(held, _)| held == command)
+        })
+    }
+}
+
+impl PartialEq for CommandStates {
+    fn eq(&self, other: &CommandStates) -> bool {
+        self.states == other.states
+    }
+}
+
+impl fmt::Debug for CommandStates {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CommandStates").field("states", &self.states).finish()
+    }
+}
+
+#[cfg(feature = "testing")]
+thread_local! {
+    static STATE_COMPARISONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many held commands this thread's [`CommandStates`] lookups have compared with the command looked up.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn command_state_comparisons() -> u64 {
+    STATE_COMPARISONS.with(std::cell::Cell::get)
 }
 
 /// App-scope command state for this frame, set from app state before the pass.
@@ -408,6 +547,8 @@ pub struct CommandInput {
     pub(crate) overrides: Option<Arc<Overrides>>,
     pub(crate) gate: Option<CommandGate>,
     pub(crate) catalog: Option<AppCatalog>,
+    pub(crate) holds: Option<f64>,
+    pub(crate) paste_reads_clipboard: bool,
 }
 
 impl CommandInput {
@@ -431,6 +572,14 @@ impl CommandInput {
         self
     }
 
+    /// Turns hold bindings on with the app's hold delay in seconds, `Some(delay)`; `None`, the default, turns them off.
+    /// The keymap is rebuilt when this changes.
+    #[must_use]
+    pub fn holds(mut self, delay: Option<f64>) -> Self {
+        self.holds = delay;
+        self
+    }
+
     /// The frame's app catalog; the keymap is rebuilt when the platform, the overrides or the catalog's generation change.
     #[must_use]
     pub fn catalog(mut self, catalog: AppCatalog) -> Self {
@@ -443,6 +592,16 @@ impl CommandInput {
     #[must_use]
     pub fn gate(mut self, gate: CommandGate) -> Self {
         self.gate = Some(gate);
+        self
+    }
+
+    /// Whether the library's Paste ([`EditCommands::Paste`]), fired at the app by a menu row, a toolbar button or the
+    /// palette, first asks the platform for the clipboard in the pass that fires it and reaches the app with the
+    /// clipboard's content, as ⌘V does. Off (the default), it reaches the app at once with no content and the app
+    /// reads its clipboard itself.
+    #[must_use]
+    pub fn paste_reads_clipboard(mut self, on: bool) -> Self {
+        self.paste_reads_clipboard = on;
         self
     }
 }
@@ -563,6 +722,14 @@ pub fn fire(ctx: &Context, command: impl Into<CommandRef>, source: FireSource) -
     board::fire_from(ctx, &command.into(), source)
 }
 
+/// Requests a paste at a screen point; the delivered command carries the point with its content. The next clipboard
+/// delivery in this viewport completes the request. A new request replaces any previous pending point there.
+pub fn request_paste_at(ctx: &Context, at: egui::Pos2) {
+    if crate::runtime::measure::effect(ctx, "commands::request_paste_at") {
+        board::request_paste_at(ctx, at);
+    }
+}
+
 /// `command` as a surface with no component of its own shows it: the label, icon, chord, enabled and checked state
 /// and hint, against the instance that [`fire`] would deliver it to. A scoped command with no live instance
 /// resolves disabled.
@@ -598,6 +765,119 @@ pub fn chord(ctx: &Context, command: &CommandRef) -> Option<Chord> {
 /// the first frame.
 pub fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
     board::holder(ctx, chord)
+}
+
+/// The commands shown at `rect` in `layer`, as a pass registered them: one bound component's command, or every command
+/// a container holds. A container's commands share one fact, so a menu title that holds its menu's hundred commands
+/// registers once per pass and a replay of the menu bar makes one registration per title, not one per command
+/// (photocraft#15493).
+#[derive(Clone, Debug, PartialEq)]
+struct ShownFact {
+    commands: ShownCommands,
+    layer: LayerKey,
+    rect: egui::Rect,
+    label: Label,
+}
+
+/// What a [`ShownFact`] shows: a bound component's command, or the commands a container holds.
+#[derive(Clone, Debug, PartialEq)]
+enum ShownCommands {
+    Bound(Arc<CommandRef>),
+    Held(Arc<[CommandRef]>),
+}
+
+impl ShownFact {
+    /// Whether the fact shows `command`.
+    fn shows(&self, command: &CommandRef) -> bool {
+        match &self.commands {
+            ShownCommands::Bound(bound) => **bound == *command,
+            ShownCommands::Held(held) => held.contains(command),
+        }
+    }
+}
+
+/// A replay moves the rect; the rest stays.
+impl Shift for ShownFact {
+    fn shifted(&self, by: &RecordShift) -> Self {
+        ShownFact { rect: self.rect.shifted(by), ..self.clone() }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        ShownFact { rect: self.rect.snapped(&to.rect, within), ..self.clone() }
+    }
+}
+
+/// Registers `commands` as shown for the next pass of the running viewport.
+fn register_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label: Label, commands: ShownCommands) {
+    Facts::register(ctx, ShownFact { commands, layer, rect, label });
+}
+
+/// Records that a container at `rect` holds `commands`, for this pass and viewport. Not [`CommandInput::holds`], which
+/// turns hold bindings on.
+pub fn holds(ctx: &Context, layer: LayerKey, rect: egui::Rect, commands: &Arc<[CommandRef]>, label: Label) {
+    if !commands.is_empty() {
+        register_shown(ctx, layer, rect, label, ShownCommands::Held(Arc::clone(commands)));
+    }
+}
+
+/// Records that the bound component of `command` was shown at `rect` in `layer`, with `label`, for this pass and
+/// viewport: the report step calls it for a component wholly inside its clip.
+// PLAN: the caller is the report step (menus-w3); until it lands nothing in this crate calls it.
+pub(crate) fn note_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label: Label, command: &Arc<CommandRef>) {
+    register_shown(ctx, layer, rect, label, ShownCommands::Bound(Arc::clone(command)));
+}
+
+/// How many shown-command registrations the running viewport's last pass made: one per bound component and one per
+/// container, whatever it holds.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn shown_registrations(ctx: &Context) -> usize {
+    Facts::<ShownFact>::with_last_pass(ctx, <[ShownFact]>::len)
+}
+
+/// The commands the bound components of the running viewport's last pass showed, in registration order: the values
+/// the facts hold, so two passes that copied no command give the same allocations.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn shown_commands(ctx: &Context) -> Vec<Arc<CommandRef>> {
+    Facts::<ShownFact>::with_last_pass(ctx, |facts| {
+        facts
+            .iter()
+            .filter_map(|fact| match &fact.commands {
+                ShownCommands::Bound(command) => Some(Arc::clone(command)),
+                ShownCommands::Held(_) => None,
+            })
+            .collect()
+    })
+}
+
+/// Where `command` was shown in the last pass: a bound component's clipped rect or a holder's rect. `None` unless it
+/// was wholly in view and not under another window.
+pub fn shown(ctx: &Context, command: &CommandRef) -> Option<Shown> {
+    let viewport = pass::current_viewport(ctx);
+    let scrim = overlay::top_modal_in(ctx, viewport).and_then(|top| top.cover);
+    // The rects over a fact are read outside the facts' record, which `with_last_pass` holds.
+    let showing: Vec<ShownFact> = Facts::<ShownFact>::with_last_pass(ctx, |facts| facts.iter().filter(|fact| fact.shows(command)).cloned().collect());
+    showing.into_iter().find(|fact| !areas::rects_over(ctx, fact.layer, scrim).iter().any(|over| over.intersects(fact.rect))).map(|fact| Shown {
+        rect: fact.rect,
+        viewport,
+        label: fact.label,
+        holder: matches!(fact.commands, ShownCommands::Held(_)),
+    })
+}
+
+/// Where a command was shown, from [`shown`].
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct Shown {
+    /// The rect it was shown in.
+    pub rect: egui::Rect,
+    /// The viewport it was shown in.
+    pub viewport: ViewportId,
+    /// The label it was shown with.
+    pub label: crate::runtime::env::Label,
+    /// Whether the rect is a holder's rather than a bound component's.
+    pub holder: bool,
 }
 
 /// `command` as [`resolve`] shows it, from the window under the modal layer whose body is running, as that window is

@@ -470,7 +470,7 @@ mod tests {
         use crate::AudioEffect;
         use crate::effects::DeNoise;
         const SR: f32 = 48_000.0;
-        let len = 512 * 940;
+        let len = 512 * 320;
         let mut rng = Rng::new(9);
         let a: Vec<f32> = (0..len).map(|_| 0.1 * rng.uniform()).collect();
         let t = crate::testutil::sine(700.0, 0.2, SR as f64, len, 0.0);

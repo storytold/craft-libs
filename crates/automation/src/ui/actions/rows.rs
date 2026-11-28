@@ -11,7 +11,7 @@ use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::Label;
 
 use super::body::Body;
-use super::panel::{ActionSelection, ActionsHost, ActionsPanelState};
+use super::panel::{ActionSelection, ActionsHost, ActionsPanelState, StepCells};
 use crate::actions::{ActionInclude, ActionList};
 
 /// The include column: a toggle on action rows (every step) and step rows.
@@ -145,6 +145,7 @@ impl ItemSource<ActionSelection> for ActionRows<'_> {
             (ActionSelection::Action(index), column) if *column == INCLUDE_COLUMN => {
                 self.list.action(*index).is_some_and(|action| action.include() == ActionInclude::All)
             }
+            (ActionSelection::Set(name), column) if *column == INCLUDE_COLUMN => matches!(set_include(self.list, name), Some(ToggleState::On)),
             _ => match self.recorded_step(at) {
                 Some((action, step)) if *column == INCLUDE_COLUMN => self.list.action(action).is_some_and(|held| held.step_enabled(step)),
                 Some((action, step)) if *column == DIALOG_COLUMN => self.list.action(action).is_some_and(|held| held.dialogs.contains(&step)),
@@ -158,9 +159,18 @@ impl ItemSource<ActionSelection> for ActionRows<'_> {
         match &row.key {
             ActionSelection::Action(index) => *column == INCLUDE_COLUMN && self.list.action(*index).is_some_and(|action| !action.steps.is_empty()),
             ActionSelection::Step(..) => self.recorded_step(at).is_some(),
-            ActionSelection::Set(_) => false,
+            ActionSelection::Set(name) => *column == INCLUDE_COLUMN && set_include(self.list, name).is_some(),
         }
     }
+}
+
+/// The include mark of the set `name` over its actions that have steps: on when every one is fully included, off when
+/// none is, mixed otherwise; `None` when no action of the set has a step.
+fn set_include(list: &ActionList, name: &str) -> Option<ToggleState> {
+    let mut marks =
+        list.actions().iter().filter(|action| action.set.as_deref() == Some(name) && !action.steps.is_empty()).map(|action| action.include());
+    let first = marks.next()?;
+    Some(if marks.all(|mark| mark == first) { include_state(first) } else { ToggleState::Mixed })
 }
 
 fn include_state(include: ActionInclude) -> ToggleState {
@@ -224,10 +234,10 @@ pub(super) fn build_row(body: &Body<'_>, state: &ActionsPanelState, key: &Action
     }
 }
 
-/// The toggle cells of a row: the include cell of an action with steps and of a recorded step, the
-/// dialog cell of a recorded step.
+/// The toggle cells of a row: the include cell of an action or set with steps and of a recorded step, the
+/// dialog cell of a recorded step unless the panel leaves the dialog column out.
 pub(super) fn cells(body: &Body<'_>, key: &ActionSelection) -> Vec<ToggleCell> {
-    let Body { list, words, .. } = *body;
+    let Body { list, words, step_cells, .. } = *body;
     let include = |state: ToggleState| ToggleCell::check(INCLUDE_COLUMN, state, words.include.clone()).tooltip(words.include_tooltip.clone());
     match key {
         ActionSelection::Action(index) => match list.action(*index) {
@@ -245,10 +255,14 @@ pub(super) fn cells(body: &Body<'_>, key: &ActionSelection) -> Vec<ToggleCell> {
                 )
                 .tooltip(words.dialog_tooltip.clone());
                 dialog.check_box = true;
-                vec![include(ToggleState::of(action.step_enabled(*step))), dialog]
+                let mut cells = vec![include(ToggleState::of(action.step_enabled(*step)))];
+                if step_cells == StepCells::IncludeAndDialog {
+                    cells.push(dialog);
+                }
+                cells
             }
             _ => Vec::new(),
         },
-        ActionSelection::Set(_) => Vec::new(),
+        ActionSelection::Set(name) => set_include(list, name).map_or_else(Vec::new, |state| vec![include(state)]),
     }
 }
