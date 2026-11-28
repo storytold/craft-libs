@@ -703,7 +703,7 @@ pub(crate) fn measured_extent<C: Component>(
 }
 
 /// A face run is steps 1, 2, 4 (read only), 12 and 13 of the face component, inside the composite's step 13, under
-/// the composite's `env`. It registers no id, senses nothing, opens no memory stage and fires nothing. Returns the
+/// the composite's `env` at the composite's resolved size (`PaintUi::face_with`). It registers no id, senses nothing, opens no memory stage and fires nothing. Returns the
 /// face's first text baseline and, for a reported face (`FaceSource::reported`), the record step 16 fills the part's
 /// sub-node from, with the facts the face's `access` declared.
 pub(crate) fn paint_face<C: Show>(
