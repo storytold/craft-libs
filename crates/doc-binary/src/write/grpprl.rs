@@ -350,6 +350,8 @@ fn kul(u: Underline) -> u8 {
         Underline::Dotted => 0x04,
         Underline::Thick => 0x06,
         Underline::Dash => 0x07,
+        // The legacy Kul set has no heavy dash: `dashHeavy` (0x21) is the close form.
+        Underline::DashHeavy => 0x21,
         Underline::DotDash => 0x09,
         Underline::DotDotDash => 0x0A,
         Underline::Wave => 0x0B,

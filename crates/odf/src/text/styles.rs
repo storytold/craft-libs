@@ -107,6 +107,8 @@ fn underline_kind(a: &Attrs) -> Underline {
     let words = get(a, "style:text-underline-mode").is_some_and(|m| m.trim() == "skip-white-space");
     match style {
         "dotted" => Underline::Dotted,
+        // A dash at a bold width is the heavy dash (`w:u w:val="dashedHeavy"`).
+        "dash" | "long-dash" if bold => Underline::DashHeavy,
         "dash" | "long-dash" => Underline::Dash,
         "dot-dash" => Underline::DotDash,
         "dot-dot-dash" => Underline::DotDotDash,
