@@ -586,11 +586,11 @@ fn a_background_scan_that_panics_lets_the_next_call_scan_again() {
     });
     let cat = Arc::new(Catalog::new(linux_env(&root)).with_font_service(false).with_lister(lister));
     // Each call starts a scan only when none is running; the second starts once the failed one has ended.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while !cat.is_ready() && std::time::Instant::now() < deadline {
-        cat.scan_in_background();
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    let failed = cat.start_background_scan().expect("the first call starts a scan");
+    assert!(failed.join().is_err(), "the first scan fails");
+    assert!(!cat.is_ready());
+    let again = cat.start_background_scan().expect("a failed scan must not leave the catalog waiting on it");
+    again.join().unwrap();
     assert!(cat.is_ready(), "a failed scan must not leave the catalog waiting on it");
     assert_eq!(calls.load(Ordering::Relaxed), 2);
 }
@@ -605,13 +605,10 @@ fn adding_fonts_does_not_wait_for_the_installed_fonts() {
     let (entered, scan_entered) = mpsc::channel();
     let (release, scan_released) = mpsc::channel::<()>();
     let scan_released = std::sync::Mutex::new(scan_released);
-    let waited_out = Arc::new(AtomicUsize::new(0));
-    let flag = Arc::clone(&waited_out);
     let lister: Lister = Arc::new(move || {
         let _ = entered.send(());
-        if let Err(mpsc::RecvTimeoutError::Timeout) = scan_released.lock().unwrap().recv_timeout(Duration::from_secs(10)) {
-            flag.fetch_add(1, Ordering::Relaxed);
-        }
+        // The first scan stays here until the test sends on `release`; once it is dropped, scans go straight through.
+        let _ = scan_released.lock().unwrap().recv();
         Vec::new()
     });
     let cat = Arc::new(Catalog::new(linux_env(&root)).with_font_service(false).with_lister(lister));
@@ -619,12 +616,19 @@ fn adding_fonts_does_not_wait_for_the_installed_fonts() {
     assert!(!cat.is_ready(), "adding started no scan");
     cat.scan_in_background();
     scan_entered.recv_timeout(Duration::from_secs(10)).unwrap();
-    cat.add_bytes(font(&spec("App Face", "Regular", 400)), Source::Bundled, &Limits::default()).unwrap();
+    let adding = Arc::clone(&cat);
+    let (added, add_returned) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = added.send(adding.add_bytes(font(&spec("App Face", "Regular", 400)), Source::Bundled, &Limits::default()));
+    });
+    // The scan cannot end before `release` sends, so an add that returns now did not wait for it. The limit only stops a
+    // test whose add waits.
+    let returned = add_returned.recv_timeout(Duration::from_secs(10));
     release.send(()).unwrap();
     // Later scans (the rescans below) go straight through.
     drop(release);
+    returned.expect("the add during the scan returned before the scan did").unwrap();
     assert_eq!(cat.styles("App Face").len(), 1);
-    assert_eq!(waited_out.load(Ordering::Relaxed), 0, "the add during the scan returned before the scan did");
     // The added Bold comes first; the installed file's Bold is another version of it, not another face.
     assert_eq!(cat.resolve("Test Sans", "Bold").map(|(f, _)| f), bold.first().cloned());
     assert_eq!(cat.versions(&bold[0]).len(), 2);

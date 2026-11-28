@@ -4,8 +4,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use craft_font_manager::craft_font_catalog::Os;
@@ -73,6 +73,36 @@ struct Rig {
     fx: Fixture,
     panel: Rc<RefCell<FontsPanel>>,
     store: Arc<FakeStore>,
+    woken: Arc<Woken>,
+}
+
+/// How long a test waits for another thread before it fails as hung. A result that comes does not depend on it.
+const HANG: Duration = Duration::from_secs(10);
+
+/// Counts the repaints asked for from threads other than the test's, as the preview workers ask for one after each
+/// result.
+#[derive(Default)]
+struct Woken {
+    count: Mutex<u64>,
+    changed: Condvar,
+}
+
+impl Woken {
+    fn count(&self) -> u64 {
+        *self.count.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn wake(&self) {
+        *self.count.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+        self.changed.notify_all();
+    }
+
+    /// Waits until a repaint is asked for after [`Woken::count`] was `seen`.
+    fn wait_past(&self, seen: u64) {
+        let count = self.count.lock().unwrap_or_else(PoisonError::into_inner);
+        let (count, _) = self.changed.wait_timeout_while(count, HANG, |count| *count == seen).unwrap_or_else(PoisonError::into_inner);
+        assert!(*count > seen, "previews kept loading");
+    }
 }
 
 fn root(name: &str) -> PathBuf {
@@ -132,9 +162,16 @@ fn show(panel: FontsPanel, store: Arc<FakeStore>, host: Arc<Host>) -> Rig {
     let mut fx = Fixture::new(move |ui| {
         FontsPanelView::new(&mut shown.borrow_mut()).show(ui);
     });
+    let woken = Arc::new(Woken::default());
+    let (counted, test) = (Arc::clone(&woken), std::thread::current().id());
+    fx.ctx().set_repaint_observer(move |_| {
+        if std::thread::current().id() != test {
+            counted.wake();
+        }
+    });
     fx.in_room(Room::Window).host(host);
     fx.settle();
-    Rig { fx, panel, store }
+    Rig { fx, panel, store, woken }
 }
 
 impl Rig {
@@ -367,8 +404,9 @@ fn a_cards_install_menu_chooses_where_the_fonts_go() {
 struct FakeService {
     answered: Mutex<Vec<String>>,
     cancelled: Mutex<Vec<String>>,
-    /// Requests that reached the service.
-    started: AtomicUsize,
+    /// Requests that reached the service, notified on `arrived` as each one does.
+    started: Mutex<usize>,
+    arrived: Condvar,
     held: AtomicBool,
     /// Answers sample subsets with HTTP 404, as for a sample text the service doesn't have.
     no_samples: AtomicBool,
@@ -378,7 +416,8 @@ struct FakeService {
 
 impl Fetch for FakeService {
     fn get(&self, url: &str, _: u64, cancel: &Cancel) -> Result<Vec<u8>, FetchError> {
-        self.started.fetch_add(1, Ordering::SeqCst);
+        *self.started.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+        self.arrived.notify_all();
         while self.held.load(Ordering::SeqCst) && !cancel.is_cancelled() {
             std::thread::sleep(Duration::from_millis(2));
         }
@@ -401,6 +440,18 @@ impl FakeService {
     /// The URLs answered since the last call.
     fn urls(&self) -> Vec<String> {
         std::mem::take(&mut *self.answered.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// The requests that reached the service.
+    fn started(&self) -> usize {
+        *self.started.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Waits until a request has reached the service.
+    fn wait_started(&self) {
+        let started = self.started.lock().unwrap_or_else(PoisonError::into_inner);
+        let (started, _) = self.arrived.wait_timeout_while(started, HANG, |started| *started == 0).unwrap_or_else(PoisonError::into_inner);
+        assert!(*started > 0, "the service was asked");
     }
 
     /// The numbers of the families whose `subset` the URLs of `answered` name: `sample`, `ascii`, or `u/` for typed
@@ -468,16 +519,22 @@ impl Rig {
         self.fx.settle();
     }
 
-    /// Runs passes until the panel has fetched what it asks for and asks for nothing more.
+    /// Runs passes until the panel has fetched what it asks for and asks for nothing more. While a preview is on its
+    /// way, the next pass waits for the repaint its worker asks for once the result is ready.
     fn load(&mut self) {
         let mut quiet = 0;
         for _ in 0..500 {
+            let seen = self.woken.count();
             self.fx.frame(Vec::new());
-            quiet = if self.panel.borrow().loading_previews() { 0 } else { quiet + 1 };
+            if self.panel.borrow().loading_previews() {
+                quiet = 0;
+                self.woken.wait_past(seen);
+                continue;
+            }
+            quiet += 1;
             if quiet == 3 {
                 return;
             }
-            std::thread::sleep(Duration::from_millis(1));
         }
         panic!("previews kept loading");
     }
@@ -563,13 +620,7 @@ fn a_resize_and_a_search_cancel_no_preview() {
     service.held.store(true, Ordering::SeqCst);
     let mut rig = service_rig("previews-kept", &service, latin_index());
     rig.set_previews(true);
-    for _ in 0..500 {
-        if service.started.load(Ordering::SeqCst) > 0 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    assert!(service.started.load(Ordering::SeqCst) > 0, "the service was asked");
+    service.wait_started();
     let shown = rig.numbers();
     rig.fx.room(Room::Window.size() + Vec2::new(40.0, 120.0)).settle();
     rig.type_into("Search", "Family");
@@ -602,7 +653,7 @@ fn a_family_of_an_added_source_is_not_asked_of_the_service() {
     rig.open("Added");
     rig.load();
     rig.named(Role::BUTTON, "Preview");
-    assert_eq!(service.started.load(Ordering::SeqCst), 0, "{:?}", service.urls());
+    assert_eq!(service.started(), 0, "{:?}", service.urls());
 }
 
 /// A sample the service has not (another text) is asked for as the sample's characters, once.
