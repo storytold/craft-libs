@@ -548,6 +548,10 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     /// Ctrl or Cmd held.
     #[prop(flag)]
     wheel_selects: bool,
+    /// The tabs keep their whole titles whatever the kind (`FitMode::Whole`): the tabs that do not fit overflow
+    /// instead of shrinking.
+    #[prop(flag)]
+    whole_titles: bool,
     /// Which tabs may be dragged.
     #[prop(func = "Fn(&K) -> bool")]
     can_drag: Option<RowTest<'a, K>>,
@@ -613,6 +617,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
             shown: None,
             tear_off: false,
             wheel_selects: false,
+            whole_titles: false,
             can_drag: None,
             can_close: None,
             roles: None,
@@ -1068,7 +1073,15 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         // Each end item is measured in this pass, with its label and icon only.
         let ends = self.trailing.iter().map(|end| end.fit_item(cx)).collect();
         let look = cx.env::<super::DocumentTabLook>();
-        let fitting = Fitting { selected, mode: self.kind.fit_mode_in(look), kept, ends, gap: cx.tokens.space.gap.inline, ghosts, departed };
+        let fitting = Fitting {
+            selected,
+            mode: if self.whole_titles { FitMode::Whole } else { self.kind.fit_mode_in(look) },
+            kept,
+            ends,
+            gap: cx.tokens.space.gap.inline,
+            ghosts,
+            departed,
+        };
         // Shrinking document tabs stand apart by the inline gap; the other kinds and looks touch.
         let tab_gap = if self.kind.shrinks_in(look) { cx.tokens.space.gap.inline } else { 0.0 };
         StripLayout::new(count, Vec2::new(width, cx.tokens.size.bar.tab), tab_gap, fitting, self.report.clone(), cx.frame_ctx().clone())
@@ -1079,9 +1092,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         true
     }
 
-    /// Every tab takes the strip's kind, panel look and size.
+    /// Every tab takes the strip's kind, panel look and size, and its whole title when the strip keeps whole titles.
     fn dress<'r>(&self, tab: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
         let tab = tab.kind(self.kind).panel_look(self.panel_look);
+        let tab = if self.whole_titles { tab.whole_title() } else { tab };
         if self.large { tab.large() } else { tab }
     }
 

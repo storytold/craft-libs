@@ -394,6 +394,9 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// The wheel over the tabs shows the next or previous panel, one per wheel notch.
     #[prop(flag)]
     wheel_selects_tabs: bool,
+    /// The tabs keep their whole titles and overflow instead of shrinking to their first letters.
+    #[prop(flag)]
+    whole_tab_titles: bool,
     /// The look of the tabs: [`tab_look`](DockGroup::tab_look).
     tab_look: PanelTabLook,
     /// The header shows the shown panel's title (with its count) and a close button in place of the tab strip, as a
@@ -459,6 +462,7 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
             movable: true,
             closable: false,
             wheel_selects_tabs: false,
+            whole_tab_titles: false,
             tab_look: PanelTabLook::Plain,
             titled: false,
             take_focus: false,
@@ -823,6 +827,7 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                     active: self.active,
                     closable: self.closable,
                     wheel_selects: self.wheel_selects_tabs,
+                    whole_titles: self.whole_tab_titles,
                     look: self.tab_look,
                     take_focus: self.take_focus,
                     dock: self.dock,
@@ -917,6 +922,7 @@ struct TabRow<'a, P> {
     active: PanelKey,
     closable: bool,
     wheel_selects: bool,
+    whole_titles: bool,
     look: PanelTabLook,
     /// The strip takes key focus in this pass (`DockGroup::take_focus`): in the key, so the row runs and the strip
     /// takes it while it runs.
@@ -1018,6 +1024,9 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
         });
     if row.wheel_selects {
         strip = strip.wheel_selects();
+    }
+    if row.whole_titles {
+        strip = strip.whole_titles();
     }
     // The strip takes the focus while it runs, so it runs focused and the keys of the next pass route through it.
     if row.take_focus {
