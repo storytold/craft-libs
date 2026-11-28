@@ -691,7 +691,7 @@ fn the_polygonal_lasso_shows_the_close_ring_where_a_click_closes() {
     let badge_at = |rig: &mut Rig<PolygonLassoTool>, point: (f64, f64)| {
         rig.fixture().frame(vec![pointer::moved(at(point))]).frame(Vec::new());
         match craft_ui::runtime::cursor::current(&ctx) {
-            Some(Cursor::Painted(PaintedCursor::Tool { badge, .. })) => badge,
+            Some(Cursor::Painted(PaintedCursor::PointerTool { badge, .. })) => badge,
             other => panic!("the lasso shows its own cursor: {other:?}"),
         }
     };
@@ -720,7 +720,7 @@ fn the_lasso_shows_the_close_ring_where_a_stroke_meets_its_start() {
     let badge_at = |rig: &mut Rig<LassoTool>, point: (f64, f64)| {
         rig.fixture().frame(vec![pointer::moved(at(point))]).frame(Vec::new());
         match craft_ui::runtime::cursor::current(&ctx) {
-            Some(Cursor::Painted(PaintedCursor::Tool { badge, .. })) => badge,
+            Some(Cursor::Painted(PaintedCursor::PointerTool { badge, .. })) => badge,
             other => panic!("the lasso shows its own cursor: {other:?}"),
         }
     };

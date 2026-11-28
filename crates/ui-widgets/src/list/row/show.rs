@@ -851,7 +851,8 @@ impl ListRow<'_> {
                 _ => false,
             };
             // A toggle cell is a button: the pointing hand says a click flips it.
-            let part = cx.part(TOGGLE.at(*at as u64), shape).flags(flags).held(held).inactive(self.toggle_closed(toggle)).cursor(CursorIcon::PointingHand);
+            let part =
+                cx.part(TOGGLE.at(*at as u64), shape).flags(flags).held(held).inactive(self.toggle_closed(toggle)).cursor(CursorIcon::PointingHand);
             let _ = match tip {
                 Some(tip) => part.tooltip(tip),
                 None => part,
