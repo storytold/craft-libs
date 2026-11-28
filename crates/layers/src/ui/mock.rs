@@ -1,0 +1,512 @@
+//! `FakeLayers`: a `LayerTree` for stories and tests.
+
+use craft_theme::LabelColor;
+use craft_ui::contract::{Entry, PlainData};
+use craft_ui::list::LabelUnderline;
+use craft_ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut as S, blend_entries};
+use craft_ui::runtime::env::Label;
+use craft_ui::style::DataColor;
+use egui::Color32;
+
+use super::filter::{EffectKind, FilterBy, LayerAttribute, LayerFilter, SmartKind, SmartSource};
+use super::tree::LayerRowKey;
+use super::tree::{
+    LayerInfo, LayerKind, LayerLocks, LayerPart, LayerProperties, LayerSelection, LayerTree, LayerView, LayersFooterState, MaskInfo, SubRow,
+    SubRowGroup, SubRows, ThumbBadge,
+};
+
+/// One layer of a [`FakeLayers`] tree.
+#[derive(Clone, Debug, PlainData)]
+#[non_exhaustive]
+pub struct FakeLayer {
+    /// The layer's id.
+    pub id: u32,
+    /// The group it is in.
+    pub parent: Option<u32>,
+    /// What its row shows.
+    pub info: LayerInfo,
+    /// Whether a group shows its children.
+    pub open: bool,
+    /// Whether the effects and Smart Filter rows show.
+    pub effects_open: bool,
+    /// The effects rows.
+    pub effects: Option<SubRows>,
+    /// The Smart Filter rows.
+    pub smart_filters: Option<SubRows>,
+}
+
+/// A fake document's layers, kept in plain vectors: the tests' and stories' `LayerTree`. Ids are
+/// `u32`; the app's state (open groups, selection, effects open) is a field the test sets.
+#[derive(Clone, Debug, Default, PlainData)]
+#[non_exhaustive]
+pub struct FakeLayers {
+    /// Every layer, each group before its children, topmost first among siblings.
+    pub layers: Vec<FakeLayer>,
+    /// The selection the tree reports.
+    pub selection: LayerSelection<u32>,
+    /// The layer under the pointer on the canvas.
+    pub hovered: Option<u32>,
+    /// The layers with no visible pixels, which only the app knows: the Attribute filter's Empty.
+    pub empty: Vec<u32>,
+    /// The linked smart objects whose file is not there, which only the app knows: the Smart Object
+    /// filter's Missing.
+    pub missing: Vec<u32>,
+}
+
+impl FakeLayers {
+    /// A small tree for tests: a group with two pixel layers (one clipped, one with a pixel mask),
+    /// a type layer, an adjustment with a disabled mask, a smart object with two Smart Filters,
+    /// a pixel layer with effects, a hidden layer, and the Background; the top layer active.
+    pub fn sample() -> Self {
+        let mut tree = Self::default();
+        tree.push(1, None, LayerInfo::new("Group 1", LayerKind::Group), true);
+        let mut clipped = LayerInfo::new("Clipped", LayerKind::Pixel);
+        clipped.clipped = true;
+        tree.push(2, Some(1), clipped, false);
+        let mut masked = LayerInfo::new("Masked", LayerKind::Pixel);
+        masked.masks.push(MaskInfo::new(LayerPart::LayerMask, true, true));
+        tree.push(3, Some(1), masked, false);
+        tree.push(4, None, LayerInfo::new("Title", LayerKind::Text), false);
+        let mut adjustment = LayerInfo::new("Levels 1", LayerKind::Adjustment);
+        adjustment.masks.push(MaskInfo::new(LayerPart::LayerMask, false, true));
+        tree.push(5, None, adjustment, false);
+        let mut smart = LayerInfo::new("Smart Object", LayerKind::SmartObject);
+        smart.has_smart_filters = true;
+        tree.push(6, None, smart, false);
+        tree.layers[5].smart_filters = Some(SubRows {
+            header: SubRow { mask: true, ..SubRow::new("Smart Filters") },
+            items: vec![sub_row("Gaussian Blur"), sub_row("Sharpen")],
+        });
+        let mut styled = LayerInfo::new("Styled", LayerKind::Pixel);
+        styled.has_effects = true;
+        tree.push(7, None, styled, false);
+        tree.layers[6].effects = Some(effects(&["Drop Shadow", "Stroke"]));
+        let mut hidden = LayerInfo::new("Hidden", LayerKind::Pixel);
+        hidden.visible = false;
+        hidden.dimmed = true;
+        tree.push(8, None, hidden, false);
+        let mut background = LayerInfo::new("Background", LayerKind::Pixel);
+        background.background = true;
+        background.renamable = false;
+        background.thumb_loads_selection = false;
+        background.locks = LayerLocks { all: true, ..LayerLocks::default() };
+        tree.push(9, None, background, false);
+        tree.selection = LayerSelection::new(vec![1], Some(1), LayerPart::Pixels);
+        tree
+    }
+
+    /// The stories' 50-layer tree: groups nested three deep, a clipped run, linked layers, pixel
+    /// mask, vector mask, both, a disabled mask, adjustment, solid and gradient fill, type, shape,
+    /// smart object with Smart Filters, effects open and closed, a locked layer, the Background,
+    /// a hidden layer (story `composites/layers-panel/tree`).
+    pub fn fifty() -> Self {
+        let mut tree = Self::default();
+        let header = tree.add(None, named("Header", LayerKind::Group, |_| {}), true);
+        let logo = tree.add(Some(header), named("Logo", LayerKind::Group, |_| {}), true);
+        let marks = tree.add(Some(logo), named("Marks", LayerKind::Group, |_| {}), true);
+        tree.add(Some(marks), named("Mark A", LayerKind::Pixel, |i| i.linked = true), false);
+        tree.add(Some(marks), named("Mark B", LayerKind::Pixel, |i| i.linked = true), false);
+        tree.add(Some(logo), named("Ring", LayerKind::Shape, |i| i.masks.push(mask(LayerPart::VectorMask, true, true))), false);
+        tree.add(Some(header), named("Title", LayerKind::Text, |_| {}), false);
+        tree.add(Some(header), named("Tagline", LayerKind::Pixel, |i| i.masks.push(mask(LayerPart::LayerMask, true, false))), false);
+
+        let photo = tree.add(None, named("Photo", LayerKind::Group, |_| {}), true);
+        tree.add(
+            Some(photo),
+            named("Curves 1", LayerKind::Adjustment, |i| {
+                i.masks.push(mask(LayerPart::LayerMask, false, true));
+                i.blend_key = String::from("multiply");
+                i.blend_label = Some(String::from("Multiply"));
+            }),
+            false,
+        );
+        tree.add(Some(photo), named("Retouch", LayerKind::Pixel, |i| i.clipped = true), false);
+        tree.add(
+            Some(photo),
+            named("Dodge", LayerKind::Pixel, |i| {
+                i.clipped = true;
+                i.advanced_blending = true;
+                i.blend_key = String::from("colorDodge");
+                i.blend_label = Some(String::from("Color Dodge"));
+            }),
+            false,
+        );
+        let portrait = tree.add(
+            Some(photo),
+            named("Portrait", LayerKind::Pixel, |i| {
+                i.masks.push(mask(LayerPart::LayerMask, true, true));
+                i.masks.push(mask(LayerPart::VectorMask, true, false));
+            }),
+            false,
+        );
+        let backdrop = tree.add(
+            Some(photo),
+            named("Backdrop", LayerKind::SmartObject, |i| {
+                i.has_smart_filters = true;
+                i.smart = Some(SmartSource::Embedded);
+            }),
+            false,
+        );
+        tree.layer_mut(backdrop).effects_open = true;
+        tree.layer_mut(backdrop).smart_filters = Some(SubRows {
+            header: SubRow { mask: true, ..SubRow::new("Smart Filters") },
+            items: vec![sub_row("Gaussian Blur"), SubRow { on: false, ..sub_row("Unsharp Mask") }, sub_row("Camera Raw Filter")],
+        });
+        let glow = tree.add(Some(photo), named("Glow", LayerKind::Pixel, |i| i.has_effects = true), false);
+        tree.layer_mut(glow).effects_open = true;
+        tree.layer_mut(glow).effects = Some(effects(&["Outer Glow", "Color Overlay"]));
+        tree.layer_mut(glow).info.effect_kinds = vec![EffectKind::OuterGlow, EffectKind::Overlay];
+        let outline = tree.add(Some(photo), named("Outline", LayerKind::Pixel, |i| i.has_effects = true), false);
+        tree.layer_mut(outline).effects = Some(effects(&["Stroke"]));
+        tree.layer_mut(outline).info.effect_kinds = vec![EffectKind::Stroke];
+
+        let details = tree.add(None, named("Details", LayerKind::Group, |_| {}), false);
+        tree.add(Some(details), named("Dust", LayerKind::Pixel, |_| {}), false);
+        tree.add(Some(details), named("Scratches", LayerKind::Pixel, |_| {}), false);
+        let grain = tree.add(Some(details), named("Grain", LayerKind::Group, |_| {}), true);
+        tree.add(Some(grain), named("Fine", LayerKind::Pixel, |_| {}), false);
+        tree.add(Some(grain), named("Coarse", LayerKind::Pixel, |_| {}), false);
+
+        tree.add(None, named("Solid Color 1", LayerKind::Fill, |i| i.masks.push(mask(LayerPart::LayerMask, true, true))), false);
+        tree.add(None, named("Gradient Fill 1", LayerKind::Fill, |_| {}), false);
+        tree.add(None, named("Hue/Saturation 1", LayerKind::Adjustment, |_| {}), false);
+        tree.add(
+            None,
+            named("Levels 2", LayerKind::Adjustment, |i| {
+                i.masks.push(mask(LayerPart::LayerMask, true, true));
+                i.label = Some(LabelColor::Blue);
+            }),
+            false,
+        );
+        tree.add(None, named("Rectangle 1", LayerKind::Shape, |i| i.thumb_badge = Some(ThumbBadge::Shape)), false);
+        tree.add(None, named("Ellipse 1", LayerKind::Shape, |i| i.locks.position = true), false);
+        tree.add(
+            None,
+            named("Headline", LayerKind::Text, |i| i.warning = Some(String::from("This layer uses a font that is not installed."))),
+            false,
+        );
+        tree.add(None, named("Paper", LayerKind::Pixel, |i| i.locks.transparency = true), false);
+        tree.add(None, named("Stamp", LayerKind::Pixel, |i| i.locks.pixels = true), false);
+        tree.add(
+            None,
+            named("Hidden Note", LayerKind::Pixel, |i| {
+                i.visible = false;
+                i.dimmed = true;
+            }),
+            false,
+        );
+        tree.add(None, named("Green Pass", LayerKind::Pixel, |i| i.label = Some(LabelColor::Green)), false);
+        let archive = tree.add(None, named("Archive", LayerKind::Group, |_| {}), false);
+        for n in 1..=3 {
+            tree.add(Some(archive), named(&format!("Old {n}"), LayerKind::Pixel, |_| {}), false);
+        }
+        tree.add(None, named("Placed Photo", LayerKind::Image, |_| {}), false);
+        let mut n = 1;
+        while tree.layers.len() < 49 {
+            let sketch = tree.add(None, named(&format!("Sketch {n}"), LayerKind::Pixel, |_| {}), false);
+            tree.empty.push(sketch);
+            n += 1;
+        }
+        tree.add(
+            None,
+            named("Background", LayerKind::Pixel, |i| {
+                i.background = true;
+                i.renamable = false;
+                i.thumb_loads_selection = false;
+                i.locks = LayerLocks { all: true, ..LayerLocks::default() };
+            }),
+            false,
+        );
+        tree.selection = LayerSelection::new(vec![portrait], Some(portrait), LayerPart::Pixels);
+        tree
+    }
+
+    /// The Artboard filter's tree: artboard "Cover" holding "Title" and the group "Trees" ("Oak",
+    /// "Pine"), artboard "Back" holding "Grass", the group "Shapes" ("Circle"), a linked smart object
+    /// whose file is missing, "Loose" in no artboard and the Background; "Oak" selected.
+    pub fn boards() -> Self {
+        let mut tree = Self::default();
+        let cover = tree.add(None, named("Cover", LayerKind::Artboard, |_| {}), true);
+        tree.add(Some(cover), named("Title", LayerKind::Text, |_| {}), false);
+        let trees = tree.add(Some(cover), named("Trees", LayerKind::Group, |_| {}), true);
+        let oak = tree.add(Some(trees), named("Oak", LayerKind::Pixel, |_| {}), false);
+        tree.add(Some(trees), named("Pine", LayerKind::Pixel, |_| {}), false);
+        let back = tree.add(None, named("Back", LayerKind::Artboard, |_| {}), true);
+        tree.add(Some(back), named("Grass", LayerKind::Pixel, |_| {}), false);
+        let shapes = tree.add(None, named("Shapes", LayerKind::Group, |_| {}), true);
+        tree.add(Some(shapes), named("Circle", LayerKind::Shape, |_| {}), false);
+        let linked = tree.add(None, named("Linked Logo", LayerKind::SmartObject, |i| i.smart = Some(SmartSource::Linked)), false);
+        tree.missing.push(linked);
+        tree.add(None, named("Loose", LayerKind::Pixel, |_| {}), false);
+        tree.add(
+            None,
+            named("Background", LayerKind::Pixel, |i| {
+                i.background = true;
+                i.renamable = false;
+                i.thumb_loads_selection = false;
+                i.locks = LayerLocks { all: true, ..LayerLocks::default() };
+            }),
+            false,
+        );
+        tree.selection = LayerSelection::new(vec![oak], Some(oak), LayerPart::Pixels);
+        tree
+    }
+
+    /// `count` pixel layers at the top level, for the long-list trials; counts the `info` and `sub_rows` calls.
+    pub fn flat(count: usize) -> Self {
+        let mut tree = Self::default();
+        for n in 0..count {
+            let id = u32::try_from(n + 1).expect("the mock tree holds fewer than 2^32 layers");
+            tree.push(id, None, LayerInfo::new(format!("Layer {id}"), LayerKind::Pixel), false);
+        }
+        tree
+    }
+
+    /// The row kinds PhotoCraft adds (story `composites/layers-panel/row-kinds`): an artboard
+    /// without masks (a heading) holding a frame and a smart object with Smart Filters, each with
+    /// its Blending Options button, the first filter selected on its own; an artboard with a
+    /// mask, which keeps its thumbnail; the Background.
+    pub fn row_kinds() -> Self {
+        let mut tree = Self::default();
+        let board = tree.add(None, named("Artboard 1", LayerKind::Artboard, |_| {}), true);
+        tree.add(Some(board), named("Frame 1", LayerKind::Frame, |_| {}), false);
+        let smart = tree.add(
+            Some(board),
+            named("Photo", LayerKind::SmartObject, |i| {
+                i.has_smart_filters = true;
+                i.thumb_badge = Some(ThumbBadge::SmartObject);
+            }),
+            false,
+        );
+        tree.layer_mut(smart).effects_open = true;
+        let filter = |label: &str| SubRow { options: true, ..sub_row(label) };
+        tree.layer_mut(smart).smart_filters =
+            Some(SubRows::new(SubRow { mask: true, ..SubRow::new("Smart Filters") }, vec![filter("Gaussian Blur"), filter("Add Noise")]));
+        let masked = tree.add(None, named("Artboard 2", LayerKind::Artboard, |i| i.masks.push(mask(LayerPart::LayerMask, true, true))), true);
+        tree.add(Some(masked), named("Sky", LayerKind::Pixel, |_| {}), false);
+        tree.add(
+            None,
+            named("Background", LayerKind::Pixel, |i| {
+                i.background = true;
+                i.renamable = false;
+                i.thumb_loads_selection = false;
+                i.locks = LayerLocks { all: true, ..LayerLocks::default() };
+            }),
+            false,
+        );
+        tree.selection = LayerSelection::new(vec![smart], Some(smart), LayerPart::Pixels);
+        tree.selection.sub_row = Some(LayerRowKey::Filters(smart, Some(0)));
+        tree
+    }
+
+    /// VectorCraft's rows (story `composites/layers-panel/color-bar`): a layer holding a sublayer, which holds a group
+    /// and a template path, the group holding a path with an italic solid-underlined label and an outline path with a
+    /// dashed one (neither shows a thumbnail), a horizontal and a vertical guide, and a spine; the sublayer is active.
+    pub fn row_looks() -> Self {
+        let mut tree = Self::default();
+        let tint = |red: u8, green: u8, blue: u8| Some(DataColor::new(Color32::from_rgb(red, green, blue)));
+        let layer = tree.add(None, named("Layer 1", LayerKind::Layer, |i| i.color = tint(0x4f, 0x80, 0xff)), true);
+        let sub = tree.add(Some(layer), named("Sublayer", LayerKind::Layer, |i| i.color = tint(0x2e, 0xb8, 0x5c)), true);
+        let group = tree.add(Some(sub), named("Group", LayerKind::Group, |i| i.color = tint(0xe0, 0x8a, 0x1e)), true);
+        tree.add(
+            Some(group),
+            named("Path", LayerKind::Path, |i| {
+                i.color = tint(0xe0, 0x8a, 0x1e);
+                i.thumbnail = false;
+                i.italic = true;
+                i.underline = LabelUnderline::Solid;
+            }),
+            false,
+        );
+        tree.add(
+            Some(group),
+            named("Outline Path", LayerKind::Path, |i| {
+                i.color = tint(0xe0, 0x8a, 0x1e);
+                i.thumbnail = false;
+                i.view = LayerView::Outline;
+                i.underline = LabelUnderline::Dashed;
+            }),
+            false,
+        );
+        tree.add(
+            Some(sub),
+            named("Template Path", LayerKind::Path, |i| {
+                i.color = tint(0x2e, 0xb8, 0x5c);
+                i.thumbnail = false;
+                i.view = LayerView::Template;
+            }),
+            false,
+        );
+        tree.add(Some(sub), named("Horizontal Guide", LayerKind::Guide, |i| i.color = tint(0x2e, 0xb8, 0x5c)), false);
+        tree.add(Some(sub), named("Vertical Guide", LayerKind::Guide, |i| i.color = tint(0x2e, 0xb8, 0x5c)), false);
+        tree.add(Some(layer), named("Spine", LayerKind::Spine, |i| i.color = tint(0x4f, 0x80, 0xff)), false);
+        tree.selection = LayerSelection::new(vec![sub], Some(sub), LayerPart::Pixels);
+        tree
+    }
+}
+
+impl FakeLayers {
+    /// Appends a layer under `parent` with the next id; returns the id.
+    pub fn add(&mut self, parent: Option<u32>, info: LayerInfo, open: bool) -> u32 {
+        let id = u32::try_from(self.layers.len() + 1).expect("the mock tree holds fewer than 2^32 layers");
+        self.push(id, parent, info, open);
+        id
+    }
+
+    /// The layer with `id`; the mock tree has it.
+    pub fn layer_mut(&mut self, id: u32) -> &mut FakeLayer {
+        let at = self.layers.iter().position(|layer| layer.id == id).expect("the layer is in the mock tree");
+        &mut self.layers[at]
+    }
+
+    fn push(&mut self, id: u32, parent: Option<u32>, info: LayerInfo, open: bool) {
+        self.layers.push(FakeLayer { id, parent, info, open, effects_open: false, effects: None, smart_filters: None });
+    }
+
+    fn layer(&self, id: &u32) -> Option<&FakeLayer> {
+        self.layers.iter().find(|layer| layer.id == *id)
+    }
+}
+
+fn named(name: &str, kind: LayerKind, edit: impl FnOnce(&mut LayerInfo)) -> LayerInfo {
+    let mut info = LayerInfo::new(name, kind);
+    edit(&mut info);
+    info
+}
+
+fn mask(part: LayerPart, enabled: bool, linked: bool) -> MaskInfo {
+    MaskInfo::new(part, enabled, linked)
+}
+
+/// An "Effects" group with one row per name.
+pub fn effects(names: &[&str]) -> SubRows {
+    SubRows::new(SubRow::new("Effects"), names.iter().map(|name| sub_row(name)).collect())
+}
+
+/// An "on" row reading `label`.
+pub fn sub_row(label: &str) -> SubRow {
+    SubRow::new(label)
+}
+
+fn command(label: &str, command: &str) -> Entry<String> {
+    Entry::new(command.to_owned(), label.to_owned())
+}
+
+impl LayerTree for FakeLayers {
+    type Id = u32;
+
+    fn children(&self, parent: Option<&u32>) -> Vec<u32> {
+        self.layers.iter().filter(|layer| layer.parent.as_ref() == parent).map(|layer| layer.id).collect()
+    }
+
+    fn parent(&self, id: &u32) -> Option<u32> {
+        self.layer(id).and_then(|layer| layer.parent)
+    }
+
+    fn is_open(&self, id: &u32) -> bool {
+        self.layer(id).is_some_and(|layer| layer.open)
+    }
+
+    fn effects_open(&self, id: &u32) -> bool {
+        self.layer(id).is_some_and(|layer| layer.effects_open)
+    }
+
+    fn info(&self, id: &u32) -> LayerInfo {
+        self.layer(id).map(|layer| layer.info.clone()).unwrap_or_else(|| LayerInfo::new(String::new(), LayerKind::Pixel))
+    }
+
+    /// The app's own answers for Empty, Not Empty and Missing ([`empty`](Self::empty),
+    /// [`missing`](Self::missing)); the generic rule for the rest.
+    fn listed(&self, id: &u32, filter: &LayerFilter) -> bool {
+        match filter.by {
+            FilterBy::Attribute if filter.attribute == LayerAttribute::Empty => self.empty.contains(id),
+            FilterBy::Attribute if filter.attribute == LayerAttribute::NotEmpty => !self.empty.contains(id),
+            FilterBy::SmartObject if filter.smart.contains(&SmartKind::Missing) && self.missing.contains(id) => true,
+            _ => filter.lists(self, id),
+        }
+    }
+
+    fn selection(&self) -> LayerSelection<u32> {
+        self.selection.clone()
+    }
+
+    fn sub_rows(&self, id: &u32, group: SubRowGroup) -> Option<SubRows> {
+        let layer = self.layer(id)?;
+        match group {
+            SubRowGroup::Effects => layer.effects.clone(),
+            SubRowGroup::SmartFilters => layer.smart_filters.clone(),
+        }
+    }
+
+    fn properties(&self) -> Option<LayerProperties> {
+        let active = self.selection.active.as_ref().and_then(|id| self.layer(id))?;
+        Some(LayerProperties {
+            group: active.info.kind == LayerKind::Group,
+            locks: active.info.locks,
+            editable: !active.info.background,
+            ..LayerProperties::new(active.info.blend_key.clone())
+        })
+    }
+
+    /// Photoshop's modes in its groups (Normal, Dissolve | Darken, Multiply, … ), Pass Through first
+    /// for a group.
+    fn blend_modes(&self, group: bool, _current: &str) -> Vec<Entry<String>> {
+        const MODES: [(&str, &str, Option<S>); 27] = [
+            ("normal", "Normal", Some(S::Normal)),
+            ("dissolve", "Dissolve", Some(S::Dissolve)),
+            ("darken", "Darken", Some(S::Darken)),
+            ("multiply", "Multiply", Some(S::Multiply)),
+            ("colorBurn", "Color Burn", Some(S::ColorBurn)),
+            ("linearBurn", "Linear Burn", Some(S::LinearBurn)),
+            ("darkerColor", "Darker Color", None),
+            ("lighten", "Lighten", Some(S::Lighten)),
+            ("screen", "Screen", Some(S::Screen)),
+            ("colorDodge", "Color Dodge", Some(S::ColorDodge)),
+            ("linearDodge", "Linear Dodge (Add)", Some(S::LinearDodge)),
+            ("lighterColor", "Lighter Color", None),
+            ("overlay", "Overlay", Some(S::Overlay)),
+            ("softLight", "Soft Light", Some(S::SoftLight)),
+            ("hardLight", "Hard Light", Some(S::HardLight)),
+            ("vividLight", "Vivid Light", Some(S::VividLight)),
+            ("linearLight", "Linear Light", Some(S::LinearLight)),
+            ("pinLight", "Pin Light", Some(S::PinLight)),
+            ("hardMix", "Hard Mix", Some(S::HardMix)),
+            ("difference", "Difference", Some(S::Difference)),
+            ("exclusion", "Exclusion", Some(S::Exclusion)),
+            ("subtract", "Subtract", None),
+            ("divide", "Divide", None),
+            ("hue", "Hue", Some(S::Hue)),
+            ("saturation", "Saturation", Some(S::Saturation)),
+            ("color", "Color", Some(S::Color)),
+            ("luminosity", "Luminosity", Some(S::Luminosity)),
+        ];
+        let mut modes = Vec::new();
+        if group {
+            modes.push(BlendKeyEntry::new(String::from("passThrough"), S::PassThrough));
+        }
+        modes.extend(MODES.iter().map(|(key, _, shortcut)| match shortcut {
+            Some(shortcut) => BlendKeyEntry::new((*key).to_owned(), *shortcut),
+            None => BlendKeyEntry::unlettered((*key).to_owned()),
+        }));
+        blend_entries(&modes, |mode| match MODES.iter().find(|(key, ..)| *key == mode.key) {
+            Some((_, label, _)) => Label::from(*label),
+            None => Label::from("Pass Through"),
+        })
+    }
+
+    fn hovered(&self) -> Option<u32> {
+        self.hovered
+    }
+
+    fn footer(&self) -> LayersFooterState {
+        let active = self.selection.active.is_some();
+        LayersFooterState {
+            link_enabled: self.selection.layers.len() > 1,
+            mask_label: active.then(|| String::from("Add Layer Mask")),
+            delete_enabled: active,
+            adjustment_menu: vec![command("Brightness/Contrast", "brightnessContrast"), command("Levels", "levels"), command("Curves", "curves")],
+            style_menu: vec![command("Drop Shadow", "dropShadow"), Entry::separator(), command("Stroke", "stroke")],
+            ..LayersFooterState::new("Delete Layer")
+        }
+    }
+}

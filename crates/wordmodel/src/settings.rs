@@ -124,8 +124,9 @@ pub struct Settings {
     pub protect_hash: Vec<(String, String)>,
     /// Word compatibility mode the document is laid out in (`compatibilityMode`): 15 for Word
     /// 2013 and later, which places a table's border at the margin rather than its text and lets
-    /// justified lines shrink their spaces to fit more text.
-    pub compat_mode: u32,
+    /// justified lines shrink their spaces to fit more text. `None` when omitted from the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compat_mode: Option<u32>,
     /// Fonts the document's font table classes as roman (serif, `w:family w:val="roman"`): Word
     /// draws one that isn't installed in a serif face.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -170,6 +171,13 @@ pub struct Settings {
     /// comments and tracked changes are saved without `w:date`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remove_date_time: bool,
+    /// Hide spelling errors in this document only (`w:hideSpellingErrors`): no squiggles under
+    /// misspelled words. Spelling & Grammar (F7) still finds them.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hide_spelling_errors: bool,
+    /// Hide grammar errors in this document only (`w:hideGrammaticalErrors`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hide_grammar_errors: bool,
     /// The document was opened from ODF: the standard's rules that differ from Word's apply as
     /// it is laid out.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -223,7 +231,7 @@ pub const DEFAULT_GRID: f32 = 9.0;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PagePicture {
-    /// Key into [`Document::media`].
+    /// Key into `Document::media`.
     pub media: String,
     /// `v:fill/@type` (`tile`, `frame`, `tile`...); tiled when `tile`, stretched to the page otherwise.
     pub fill_type: String,
@@ -319,7 +327,7 @@ impl Default for Settings {
             protection: None,
             protect_formatting: false,
             protect_hash: Vec::new(),
-            compat_mode: COMPAT_MODE_CURRENT,
+            compat_mode: Some(COMPAT_MODE_CURRENT),
             roman_fonts: Vec::new(),
             sum_paragraph_spacing: false,
             do_not_expand_shift_return: false,
@@ -333,7 +341,17 @@ impl Default for Settings {
             zoom: None,
             remove_personal_info: false,
             remove_date_time: false,
+            hide_spelling_errors: false,
+            hide_grammar_errors: false,
             odf: None,
         }
+    }
+}
+
+impl Settings {
+    /// The effective compatibility mode: the authored mode, or Word 2007 (`LEGACY_COMPAT_MODE` = 12)
+    /// when omitted from the file.
+    pub fn effective_compat_mode(&self) -> u32 {
+        self.compat_mode.unwrap_or(LEGACY_COMPAT_MODE)
     }
 }

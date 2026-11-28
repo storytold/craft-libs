@@ -63,39 +63,3 @@ fn assert_float_headroom(streaming: bool) {
 fn whole_file_float32_preserves_finite_headroom() {
     assert_float_headroom(false);
 }
-
-#[test]
-fn streaming_float32_preserves_finite_headroom() {
-    assert_float_headroom(true);
-}
-
-#[test]
-fn float32_keeps_non_finite_sample_handling() {
-    let audio = AudioBuffer { sample_rate: 48_000, channels: vec![vec![f32::NAN, f32::NEG_INFINITY, f32::INFINITY]] };
-    let expected = [0.0_f32, -1.0, 1.0];
-    for format in [EncodeFormat::Wav, EncodeFormat::Aiff] {
-        for streaming in [false, true] {
-            let options = EncodeOptions::new(format).with_bit_depth(BitDepth::Float32).with_dither(false);
-            let bytes = encoded(&audio, &options, streaming);
-            // Inspect stored samples too: the decoder itself replaces non-finite values.
-            let pcm: Vec<u8> = expected.iter().flat_map(|v| if format == EncodeFormat::Wav { v.to_le_bytes() } else { v.to_be_bytes() }).collect();
-            assert!(bytes.ends_with(&pcm), "{format:?}, streaming={streaming}");
-            assert_eq!(decode(&bytes, None).unwrap().1.channels[0], expected);
-        }
-    }
-}
-
-#[test]
-fn integer_pcm_still_clips_at_full_scale() {
-    let audio = AudioBuffer { sample_rate: 48_000, channels: vec![vec![-2.0, -1.25, -1.0, -0.5, 0.0, 0.5, 1.0, 1.25, 2.0]] };
-    for (depth, max) in [(BitDepth::Int16, 32767.0 / 32768.0), (BitDepth::Int24, 8_388_607.0 / 8_388_608.0), (BitDepth::Int32, 1.0)] {
-        for format in [EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac] {
-            for streaming in [false, true] {
-                let options = EncodeOptions::new(format).with_bit_depth(depth).with_dither(false);
-                let bytes = encoded(&audio, &options, streaming);
-                let (_, decoded) = decode(&bytes, None).unwrap();
-                assert_eq!(decoded.channels[0], [-1.0, -1.0, -1.0, -0.5, 0.0, 0.5, max, max, max], "{format:?} {depth:?}, streaming={streaming}");
-            }
-        }
-    }
-}

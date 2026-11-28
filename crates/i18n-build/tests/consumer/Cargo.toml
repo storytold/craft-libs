@@ -1,0 +1,22 @@
+[package]
+name = "craft-i18n-build-consumer"
+description = "Test crate: a build.rs that embeds the craft-i18n-build fixture the way an app does."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[build-dependencies]
+craft-i18n-build = { path = "../.." }
+
+[lints]
+workspace = true
+
+# Files of other crates that this crate's build or tests read. CI selects this crate's tests
+# when one of them changes (craft-common-actions' select-platforms).
+[package.metadata.craft]
+reads = [
+    "crates/i18n-build/tests/fixture",
+]

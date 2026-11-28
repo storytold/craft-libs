@@ -45,7 +45,7 @@ const MAX_PICT_PT: f64 = 31_680.0;
 
 /// Write `doc` as a Word 2003 XML Document.
 pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
-    let parts: BTreeMap<String, Vec<u8>> = crate::write::write_parts(doc, Flavor::Document)?.into_iter().collect();
+    let parts: BTreeMap<String, Vec<u8>> = crate::write::write_parts(doc, Flavor::Document, crate::WriteOptions::default())?.into_iter().collect();
     let pkg = Package::from_parts(parts);
     let doc_part = pkg
         .rels("_rels/.rels")

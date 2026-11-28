@@ -1,0 +1,56 @@
+//! `ScreenModeButton`: the status bar's screen mode button, a flyout of the shell's screen modes.
+
+use super::screen_mode::{ScreenMode, ScreenModeCommands, ScreenModeSet};
+use super::words::ShellWords;
+use crate::contract::{NoValue, Outcome, Props as _, Show as _};
+use crate::rails::{FlyoutButton, RailTool};
+use crate::runtime::env::Env;
+use egui::{Response, Ui};
+
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+
+/// A flyout button over the screen modes of the shell's set, with `mode` marked: a click, Enter or Space cycles; a
+/// hold, a drag away or a right click lists the modes without cycling. The face is the Cycle command's icon and tooltip; disabled
+/// while Cycle is disabled.
+#[must_use = "show the button with `show`"]
+#[derive(crate::contract::Pattern)]
+pub struct ScreenModeButton {
+    mode: ScreenMode,
+}
+
+/// What a [`ScreenModeButton`] reports.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct ScreenModeButtonOutput {
+    /// The button's response.
+    pub response: Response,
+}
+
+impl Outcome for ScreenModeButtonOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
+impl ScreenModeButton {
+    /// A button showing `mode` as the current one.
+    pub fn new(mode: ScreenMode) -> Self {
+        ScreenModeButton { mode }
+    }
+
+    /// Shows the button in `ui`. The rows are the radio commands of the modes of the shell's [`ScreenModeSet`], which
+    /// the shell publishes to its regions (`Panels` outside a shell), so their marks and states come from the shell; the
+    /// shell applies whichever command runs.
+    pub fn show(self, ui: &mut Ui) -> ScreenModeButtonOutput {
+        let env = Env::of(ui);
+        let modes = env.get::<ScreenModeSet>().modes();
+        let tools: Vec<RailTool<ScreenMode>> = modes.iter().map(|mode| RailTool::new(*mode, ScreenModeCommands::of(*mode))).collect();
+        // The shell's own word names the button when the Cycle command does not resolve.
+        let name = env.words::<ShellWords>().screen_mode.clone();
+        let out = FlyoutButton::new(&tools, &self.mode).label(name).hold_selects(false).click(ScreenModeCommands::Cycle).show(ui);
+        ScreenModeButtonOutput { response: out.response }
+    }
+}

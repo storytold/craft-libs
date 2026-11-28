@@ -132,7 +132,7 @@ const CODE_WORK: u64 = 4;
 ///
 /// Decoding spends from `work`, what decoding may still cost across a run of images, and there is
 /// no way in without it: a
-/// byte of rows a step, whether or not the data holds them, and [`CODE_WORK`] a byte of `data`.
+/// byte of rows a step, whether or not the data holds them, and `CODE_WORK` a byte of `data`.
 /// A blank row takes a bit of code, so the rows are what a few bytes can ask for. It is all paid
 /// before anything is decoded, and what `work` can't pay for spends all of it.
 pub fn decode_ccitt_within(data: &[u8], p: &CcittParams, max_rows: u32, work: &mut u64) -> Result<Vec<u8>, CodecError> {

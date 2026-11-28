@@ -1,0 +1,448 @@
+//! `LayersPanel` rows the app reads back: the hovered layer, a Smart Filter row selected on its own, its Blending
+//! Options button, and a frame's masks after its content thumbnail: linked and dragged by their own index.
+
+use craft_behavior::{EditEvent, Mixed, SelectionChange};
+use craft_layers::testing;
+use craft_layers::ui::mock::{FakeLayers, sub_row};
+use craft_layers::ui::panel::{ActivateOn, LayerDrop, LayersEvent, LayersPanel, MaskMove};
+use craft_layers::ui::tree::{LayerInfo, LayerKind, LayerPart, LayerRowKey, LayerSelection, MaskInfo, SubRow, SubRowGroup, SubRows};
+use craft_ui::contract::Tracked;
+use craft_ui::testing::{Fixture, Target, pointer, trial};
+use egui::{Key, Modifiers, Vec2};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+/// The panel's room: wide enough for a row's parts and inside the 800 by 600 screen of a fixture.
+const PANEL: Vec2 = Vec2::new(420.0, 560.0);
+
+/// The smart object of [`tree`].
+const SMART: u32 = 2;
+
+/// The app around the panel: the tree it shows, what it reported and the layer it last called hovered.
+struct App {
+    tree: Tracked<FakeLayers>,
+    events: Vec<LayersEvent<u32>>,
+    hovered: Option<u32>,
+}
+
+type Shared = Rc<RefCell<App>>;
+
+/// A type layer, a smart object with two Smart Filters shown, each with its Blending Options button, and the
+/// Background.
+fn tree() -> FakeLayers {
+    let mut tree = FakeLayers::default();
+    tree.add(None, LayerInfo::new("Title", LayerKind::Text), false);
+    let mut smart = LayerInfo::new("Smart Object", LayerKind::SmartObject);
+    smart.has_smart_filters = true;
+    let id = tree.add(None, smart, false);
+    let layer = tree.layer_mut(id);
+    layer.effects_open = true;
+    let filter = |label: &str| {
+        let mut row = sub_row(label);
+        row.options = true;
+        row
+    };
+    layer.smart_filters = Some(SubRows::new(SubRow::new("Smart Filters"), vec![filter("Gaussian Blur"), filter("Sharpen")]));
+    tree.add(None, LayerInfo::new("Background", LayerKind::Pixel), false);
+    tree.selection = LayerSelection::new(vec![1], Some(1), LayerPart::Pixels);
+    tree
+}
+
+/// Applies a selection change as an app that keeps a selected sub-row does.
+fn apply(tree: &mut FakeLayers, event: &LayersEvent<u32>) {
+    if let LayersEvent::Select(select) = event
+        && let SelectionChange::Set(layers) = &select.change
+    {
+        tree.selection = LayerSelection::new(layers.clone(), layers.last().copied(), select.part.unwrap_or(LayerPart::Pixels));
+        tree.selection.sub_row = select.row.clone();
+    }
+}
+
+fn rig(tree: FakeLayers) -> (Fixture, Shared) {
+    let app = Rc::new(RefCell::new(App { tree: Tracked::new(tree), events: Vec::new(), hovered: None }));
+    let shared = Rc::clone(&app);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut app = shared.borrow_mut();
+        let App { tree, events, hovered } = &mut *app;
+        let out = LayersPanel::new(tree).show(ui);
+        for event in &out.events {
+            apply(tree, event);
+        }
+        events.extend(out.events);
+        *hovered = out.hovered;
+    });
+    fixture.room(PANEL);
+    fixture.settle();
+    (fixture, app)
+}
+
+fn take(app: &Shared) -> Vec<LayersEvent<u32>> {
+    std::mem::take(&mut app.borrow_mut().events)
+}
+
+fn node(fixture: &Fixture, label: &str) -> Target {
+    fixture.by_label(label).unwrap_or_else(|| panic!("no node named {label:?}"))
+}
+
+/// An eye sweep from a visible layer across a hidden one to another visible one, cancelled with Escape, puts each eye
+/// back as it was: the sweep turns off only the eyes that were on, so the restore names those two and the hidden layer
+/// it crossed gets no event at all.
+#[trial]
+fn an_escaped_sweep_restores_the_eyes_it_switched_and_leaves_the_rest() {
+    let mut tree = FakeLayers::default();
+    tree.add(None, LayerInfo::new("Title", LayerKind::Text), false);
+    let mut hidden = LayerInfo::new("Background", LayerKind::Pixel);
+    hidden.visible = false;
+    tree.add(None, hidden, false);
+    tree.add(None, LayerInfo::new("Shape", LayerKind::Pixel), false);
+    let (mut fixture, app) = rig(tree);
+    let (start, end) = (node(&fixture, "Visibility Title").center(), node(&fixture, "Visibility Shape").center());
+    take(&app);
+    fixture.frame(vec![pointer::moved(start)]);
+    fixture.frame(vec![pointer::press(start)]);
+    let mut events = Vec::new();
+    for step in [0.25, 0.5, 0.75, 1.0] {
+        fixture.frame(vec![pointer::moved(start + (end - start) * step)]);
+        events.extend(take(&app));
+    }
+    fixture.key(Key::Escape, Modifiers::NONE).idle(2);
+    let cancelled = take(&app);
+    let names = |events: &[LayersEvent<u32>], layer: u32| {
+        events.iter().any(|event| matches!(event, LayersEvent::Toggle(toggle) if toggle.rows.iter().any(|row| *row.layer() == layer)))
+    };
+    assert!(!names(&events, 2) && !names(&cancelled, 2), "the hidden eye the sweep crossed is left as it is");
+    let mut restored = Vec::new();
+    for event in cancelled {
+        if let LayersEvent::Toggle(toggle) = event
+            && let EditEvent::Cancel { before: Some(Mixed::Same(before)), .. } = toggle.edit
+        {
+            restored.extend(toggle.rows.iter().map(|row| (*row.layer(), before)));
+        }
+    }
+    restored.sort();
+    assert_eq!(restored, [(1, true), (3, true)], "each switched eye goes back to visible");
+}
+
+/// The sub-rows the selections among `events` name.
+fn picked_rows(events: &[LayersEvent<u32>]) -> Vec<Option<LayerRowKey<u32>>> {
+    events.iter().filter_map(|event| if let LayersEvent::Select(select) = event { Some(select.row.clone()) } else { None }).collect()
+}
+
+/// The layer row under the pointer is reported as hovered; an effects or Smart Filter row and the room away from the rows
+/// are not.
+#[trial]
+fn the_hovered_layer_row_is_reported_and_a_sub_row_is_not() {
+    let (mut fixture, app) = rig(tree());
+    let [title, smart, filter] = ["Title", "Smart Object", "Gaussian Blur"].map(|label| node(&fixture, label).center());
+    let mut hovered = |at| {
+        fixture.frame(vec![pointer::moved(at)]).idle(1);
+        app.borrow().hovered
+    };
+    assert_eq!(hovered(title), Some(1), "over a layer row");
+    assert_eq!(hovered(smart), Some(SMART), "over the next layer row");
+    assert_eq!(hovered(filter), None, "over a Smart Filter row");
+    fixture.frame(vec![pointer::gone()]).idle(1);
+    assert_eq!(app.borrow().hovered, None, "with the pointer gone");
+}
+
+/// A click on a Smart Filter row selects its layer and names the row; once the app keeps that row selected it holds the
+/// lead, so Down moves to the next filter. A click on a layer row names no sub-row.
+#[trial]
+fn a_smart_filter_row_is_selected_on_its_own_and_holds_the_lead() {
+    let (mut fixture, app) = rig(tree());
+    take(&app);
+    fixture.click(&node(&fixture, "Gaussian Blur")).idle(2);
+    let events = take(&app);
+    assert!(
+        events.iter().any(|event| matches!(event, LayersEvent::Select(select) if select.change == SelectionChange::Set(vec![SMART]))),
+        "the click selects the smart object: {events:?}"
+    );
+    assert_eq!(picked_rows(&events), [Some(LayerRowKey::Filters(SMART, Some(0)))], "and names the filter row");
+    fixture.key(Key::ArrowDown, Modifiers::NONE).idle(2);
+    assert_eq!(picked_rows(&take(&app)), [Some(LayerRowKey::Filters(SMART, Some(1)))], "Down moves from the selected filter row");
+    fixture.click(&node(&fixture, "Title")).idle(2);
+    assert_eq!(picked_rows(&take(&app)), [None], "a layer row names no sub-row");
+}
+
+/// The Blending Options button of a Smart Filter row opens on a double click, not on one click, and leaves the selection.
+#[trial]
+fn the_blending_options_button_opens_on_a_double_click() {
+    let (mut fixture, app) = rig(tree());
+    let button = node(&fixture, "Blending Options (Gaussian Blur)").center();
+    let options = |events: &[LayersEvent<u32>]| -> Vec<LayerRowKey<u32>> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                LayersEvent::Activate { row, on: ActivateOn::Options, .. } => Some(row.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    take(&app);
+    fixture.click_at(button).settle();
+    let once = take(&app);
+    assert!(options(&once).is_empty(), "one click opens nothing: {once:?}");
+    fixture.click_at(button).settle();
+    let twice = take(&app);
+    assert_eq!(options(&twice), [LayerRowKey::Filters(SMART, Some(0))], "the double click opens the filter's options");
+    assert!(!once.iter().chain(&twice).any(|event| matches!(event, LayersEvent::Select(_))), "the button leaves the selection");
+}
+
+/// A frame's masks come after its content thumbnail: the chain before its layer mask links that mask.
+#[trial]
+fn a_frames_mask_chain_links_the_mask_after_the_content() {
+    let mut frame = LayerInfo::new("Frame 1", LayerKind::Frame);
+    frame.masks.push(MaskInfo::new(LayerPart::LayerMask, true, true));
+    let mut tree = FakeLayers::default();
+    tree.add(None, frame, false);
+    let (mut fixture, app) = rig(tree);
+    take(&app);
+    fixture.click(&node(&fixture, "Unlink layer mask of Frame 1")).idle(2);
+    let links: Vec<_> = take(&app)
+        .into_iter()
+        .filter_map(|event| if let LayersEvent::MaskLink { layer, part, linked, .. } = event { Some((layer, part, linked)) } else { None })
+        .collect();
+    assert_eq!(links, [(1, LayerPart::LayerMask, false)]);
+}
+
+/// A frame's layer mask thumbnail, after its content thumbnail, drags the mask: dropped on another layer it moves there.
+#[trial]
+fn a_frames_mask_thumbnail_drags_the_mask() {
+    let mut frame = LayerInfo::new("Frame 1", LayerKind::Frame);
+    frame.masks.push(MaskInfo::new(LayerPart::LayerMask, true, true));
+    let mut tree = FakeLayers::default();
+    tree.add(None, LayerInfo::new("Title", LayerKind::Text), false);
+    let id = tree.add(None, frame.clone(), false);
+    let (mut fixture, app) = rig(tree);
+    take(&app);
+    let row = node(&fixture, "Frame 1").node.into();
+    let from = testing::thumb_rect(fixture.ctx(), row, &frame, LayerPart::LayerMask).expect("the frame's layer mask thumbnail").center();
+    let to = node(&fixture, "Title").center();
+    fixture.drag_hold_at(from, to - from).release_at(to).idle(2);
+    let moves: Vec<_> = take(&app)
+        .into_iter()
+        .filter_map(|event| match event {
+            LayersEvent::Drop(EditEvent::Set { after: LayerDrop::Mask(mv), .. }) => Some(mv),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(moves, [MaskMove::new(id, LayerPart::LayerMask, 1, false)]);
+}
+
+/// The Activate events on a thumbnail among `events`: the layer and the part.
+fn thumb_activations(events: &[LayersEvent<u32>]) -> Vec<(LayerRowKey<u32>, LayerPart)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            LayersEvent::Activate { row, on: ActivateOn::Thumbnail(part), .. } => Some((row.clone(), *part)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A double click on a layer's thumbnail activates that thumbnail once; a single click only selects, and a double click on
+/// the name activates no thumbnail.
+#[trial]
+fn a_double_click_on_a_thumbnail_activates_it_once() {
+    let info = LayerInfo::new("Title", LayerKind::Text);
+    let (mut fixture, app) = rig(tree());
+    take(&app);
+    let row = node(&fixture, "Title").node.into();
+    let thumb = testing::thumb_rect(fixture.ctx(), row, &info, LayerPart::Pixels).expect("the layer's thumbnail").center();
+    fixture.click_at(thumb).settle();
+    let once = take(&app);
+    assert!(thumb_activations(&once).is_empty(), "one click activates nothing: {once:?}");
+    assert!(once.iter().any(|event| matches!(event, LayersEvent::Select(_))), "one click selects: {once:?}");
+    fixture.click_at(thumb).settle();
+    let twice = take(&app);
+    assert_eq!(thumb_activations(&twice), [(LayerRowKey::Layer(1), LayerPart::Pixels)], "the double click: {twice:?}");
+    assert!(
+        !twice.iter().any(|event| matches!(event, LayersEvent::Activate { on: ActivateOn::Row, .. })),
+        "the thumbnail is not also a row activation: {twice:?}"
+    );
+    let name = node(&fixture, "Smart Object").center();
+    fixture.click_at(name).settle();
+    fixture.click_at(name).settle();
+    let named = take(&app);
+    assert!(thumb_activations(&named).is_empty(), "a double click on the name is no thumbnail activation: {named:?}");
+}
+
+/// A double click whose two clicks arrive in one frame, on a Smart Filter row of a smart object that is not active,
+/// selects the row and then activates it, as two clicks in two frames do. No selection follows the activation: the app
+/// opens the filter's editor on the selection the activation found.
+#[trial]
+fn a_double_click_in_one_frame_selects_a_smart_filter_row_and_activates_it() {
+    let (mut fixture, app) = rig(tree());
+    take(&app);
+    let filter = node(&fixture, "Gaussian Blur").center();
+    fixture.frame(vec![pointer::moved(filter)]).idle(1);
+    fixture.frame(vec![pointer::press(filter), pointer::release(filter), pointer::press(filter), pointer::release(filter)]).settle();
+    let row = LayerRowKey::Filters(SMART, Some(0));
+    let events = take(&app);
+    let selected = events.iter().position(|event| matches!(event, LayersEvent::Select(select) if select.row.as_ref() == Some(&row)));
+    let activated = events.iter().position(|event| matches!(event, LayersEvent::Activate { row: on, on: ActivateOn::Row, .. } if *on == row));
+    assert!(selected.is_some() && activated.is_some() && selected < activated, "selected, then activated: {events:?}");
+    let last_select = events.iter().rposition(|event| matches!(event, LayersEvent::Select(_)));
+    assert!(last_select < activated, "no selection after the activation: {events:?}");
+}
+
+/// The thumbnail parts the selections among `events` name.
+fn picked_parts(events: &[LayersEvent<u32>]) -> Vec<Option<LayerPart>> {
+    events.iter().filter_map(|event| if let LayersEvent::Select(select) = event { Some(select.part) } else { None }).collect()
+}
+
+/// A double click on the picture thumbnail of a fill layer with a mask, under the active layer, selects the layer on its
+/// picture and activates the picture: no selection names no part, which would target the mask. The same holds when the
+/// app has not taken the first click's selection by the second click, so the second click selects again, and for a
+/// third click.
+#[trial]
+fn a_double_click_on_a_fill_thumbnail_selects_its_picture() {
+    let mut tree = FakeLayers::default();
+    tree.add(None, LayerInfo::new("Top", LayerKind::Pixel), false);
+    let mut fill = LayerInfo::new("Color Fill 1", LayerKind::Fill);
+    fill.masks.push(MaskInfo::new(LayerPart::LayerMask, true, true));
+    let id = tree.add(None, fill.clone(), false);
+    tree.selection = LayerSelection::new(vec![1], Some(1), LayerPart::Pixels);
+    let (mut fixture, app) = rig(tree);
+    take(&app);
+    let row = node(&fixture, "Color Fill 1").node.into();
+    let thumb = testing::thumb_rect(fixture.ctx(), row, &fill, LayerPart::Pixels).expect("the fill's picture thumbnail").center();
+    fixture.click_at(thumb).settle();
+    fixture.click_at(thumb).settle();
+    let events = take(&app);
+    assert!(!picked_parts(&events).is_empty(), "the double click selects the fill: {events:?}");
+    assert!(picked_parts(&events).iter().all(|part| *part == Some(LayerPart::Pixels)), "on its picture: {events:?}");
+    assert_eq!(thumb_activations(&events), [(LayerRowKey::Layer(id), LayerPart::Pixels)], "and activates the picture: {events:?}");
+
+    app.borrow_mut().tree.selection = LayerSelection::new(vec![1], Some(1), LayerPart::Pixels);
+    fixture.advance(1.0).idle(1);
+    take(&app);
+    fixture.click_at(thumb).settle();
+    app.borrow_mut().tree.selection = LayerSelection::new(vec![1], Some(1), LayerPart::Pixels);
+    fixture.click_at(thumb).settle();
+    let events = take(&app);
+    assert_eq!(picked_parts(&events), [Some(LayerPart::Pixels); 2], "each click selects the picture: {events:?}");
+    assert_eq!(thumb_activations(&events), [(LayerRowKey::Layer(id), LayerPart::Pixels)], "and the double click activates it: {events:?}");
+
+    app.borrow_mut().tree.selection = LayerSelection::new(vec![1], Some(1), LayerPart::Pixels);
+    fixture.click_at(thumb).settle();
+    let events = take(&app);
+    assert_eq!(picked_parts(&events), [Some(LayerPart::Pixels)], "a third click selects the picture once: {events:?}");
+    assert!(
+        !events.iter().any(|event| matches!(event, LayersEvent::ThumbClick { .. } | LayersEvent::Activate { .. })),
+        "and does nothing else: {events:?}"
+    );
+}
+
+/// A Smart Filter row dragged onto another smart object's row moves the filter there, with the active layer changing to
+/// the filter's smart object when the press selects its row. With the filter row selected beside its layer, a drag of
+/// the layer's row carries the layer alone.
+#[trial]
+fn a_smart_filter_row_dragged_onto_another_smart_object_moves_there() {
+    let mut tree = tree();
+    let other = tree.add(None, LayerInfo::new("Other Smart Object", LayerKind::SmartObject), false);
+    let (mut fixture, app) = rig(tree);
+    take(&app);
+    let from = node(&fixture, "Gaussian Blur").center();
+    let onto = node(&fixture, "Other Smart Object").rect;
+    let to = egui::pos2(onto.center().x, onto.bottom() - onto.height() / 4.0);
+    fixture.drag_hold_at(from, to - from).release_at(to).idle(2);
+    let events = take(&app);
+    let transfers: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            LayersEvent::Drop(EditEvent::Set { after: LayerDrop::Transfer(t), .. }) => Some((t.rows.clone(), t.to, t.copy)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(transfers, [(vec![LayerRowKey::Filters(SMART, Some(0))], other, false)], "{events:?}");
+    // The rig applies selections only, so the filter stays on its layer and its row stays selected for this drag.
+    let from = node(&fixture, "Smart Object").center();
+    fixture.drag_hold_at(from, to - from).release_at(to).idle(2);
+    let events = take(&app);
+    let moved: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            LayersEvent::Drop(EditEvent::Set { after: LayerDrop::Layers(mv), .. }) => Some(mv.layers.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(moved, [vec![SMART]], "{events:?}");
+}
+
+/// A stacking key on a selected Smart Filter row, selected beside its layer, moves that filter within its stack.
+#[trial]
+fn a_stacking_key_on_a_selected_smart_filter_row_moves_the_filter() {
+    let (mut fixture, app) = rig(tree());
+    fixture.click(&node(&fixture, "Gaussian Blur")).idle(2);
+    take(&app);
+    fixture.key(Key::OpenBracket, Modifiers::COMMAND).idle(2);
+    let events = take(&app);
+    let moves: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            LayersEvent::Drop(EditEvent::Set { after: LayerDrop::SubRows(mv), .. }) => Some((mv.layer, mv.group, mv.from, mv.to)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(moves, [(SMART, SubRowGroup::SmartFilters, 0, 1)], "{events:?}");
+}
+
+/// `count` pixel layers above a closed group and a smart object with two Smart Filters shown, at a fixed revision;
+/// returns the tree and the smart object.
+fn long(count: usize) -> (FakeLayers, u32) {
+    let mut tree = FakeLayers::flat(count);
+    let group = tree.add(None, LayerInfo::new("Closed Group", LayerKind::Group), false);
+    tree.add(Some(group), LayerInfo::new("Inside", LayerKind::Pixel), false);
+    let mut smart = LayerInfo::new("Smart Object", LayerKind::SmartObject);
+    smart.has_smart_filters = true;
+    let id = tree.add(None, smart, false);
+    let layer = tree.layer_mut(id);
+    layer.effects_open = true;
+    layer.smart_filters = Some(SubRows::new(SubRow::new("Smart Filters"), vec![sub_row("Gaussian Blur"), sub_row("Sharpen")]));
+    tree.selection = LayerSelection::new(vec![1], Some(1), LayerPart::Pixels);
+    (tree, id)
+}
+
+/// FW15: a long layer list builds only the rows in view: a settled frame builds as many rows for 2,000 layers as
+/// for 200, and an off-screen group or Smart Filter row lays out nothing.
+/// Scrolled into view they show; a filter selected there stays selected after it scrolls away again.
+#[trial]
+fn a_long_layer_list_asks_only_for_the_rows_in_view() {
+    let mut calls = Vec::new();
+    for count in [200, 2_000] {
+        let (tree, smart) = long(count);
+        let (mut fixture, app) = rig(tree);
+        fixture.frame(vec![]);
+        calls.push(craft_ui::testing::row_builds(fixture.ctx()).iter().map(|(_, builds)| builds).sum::<u32>());
+        for name in ["Closed Group", "Smart Object", "Gaussian Blur", "Sharpen"] {
+            assert!(fixture.by_label(name).is_none(), "{count} layers: the off-screen row {name:?} lays out nothing");
+        }
+
+        let list = node(&fixture, "Layers").center();
+        fixture.frame(vec![pointer::moved(list)]);
+        // The list's extent grows as it measures the rows a wheel brings in, so the end takes a few wheels.
+        for _ in 0..3 {
+            fixture.frame(vec![pointer::wheel(-1.0e7)]).settle();
+        }
+        for name in ["Closed Group", "Smart Object", "Gaussian Blur", "Sharpen"] {
+            assert!(fixture.by_label(name).is_some(), "{count} layers: scrolled to the bottom, {name:?} shows");
+        }
+        let blur = node(&fixture, "Gaussian Blur");
+        fixture.click(&blur).settle();
+        let selected = Some(LayerRowKey::Filters(smart, Some(0)));
+        assert_eq!(app.borrow().tree.selection.sub_row, selected, "{count} layers: the filter is selected");
+        take(&app);
+        for _ in 0..3 {
+            fixture.frame(vec![pointer::wheel(1.0e7)]).settle();
+        }
+        // The selected filter is the list's lead, which stays built out of view.
+        let view = node(&fixture, "Layers").rect;
+        let left = fixture.by_label("Gaussian Blur");
+        assert!(left.is_none_or(|row| !row.rect.intersects(view)), "{count} layers: scrolled back to the top, the filter is out of view");
+        assert!(take(&app).iter().all(|event| !matches!(event, LayersEvent::Select(_))), "{count} layers: scrolling selects nothing");
+        assert_eq!(app.borrow().tree.selection.sub_row, selected, "{count} layers: the filter stays selected");
+    }
+    assert!(calls[0] > 0, "the rows in view are built");
+    assert_eq!(calls[0], calls[1], "a settled frame builds as many rows for 2,000 layers as for 200");
+}

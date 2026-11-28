@@ -235,7 +235,11 @@ pub fn linear_to_latex(linear: &str) -> String {
 fn linear_to_latex_at(linear: &str, depth: usize) -> String {
     let chars: Vec<char> = linear.chars().collect();
     let parens = closers(&chars, '(', ')');
+    let brackets = closers(&chars, '〖', '〗');
     let mut o = String::new();
+    // Where the output ended after the last plain letter written below: while it still ends
+    // there, its trailing letters are plain text, not a control word, and needn't be scanned.
+    let mut plain_end = usize::MAX;
     let mut i = 0;
     let sub = |s: &str| if depth < MAX_NEST { linear_to_latex_at(s, depth + 1) } else { escape_math_text(s) };
     while let Some(&c) = chars.get(i) {
@@ -309,6 +313,16 @@ fn linear_to_latex_at(linear: &str, depth: usize) -> String {
                 o.push('\\');
                 o.push(c);
             }
+            // Invisible brackets (`〖a^b〗^c`, a script base that isn't simple) only group: a TeX
+            // group. One without its partner shows nothing and is dropped.
+            '〖' => {
+                if let Some((inner, end)) = balanced(&chars, &brackets, i) {
+                    o.push_str(&format!("{{{}}}", sub(&inner)));
+                    i = end;
+                    continue;
+                }
+            }
+            '〗' => {}
             '{' => o.push_str("\\{"),
             '}' => o.push_str("\\}"),
             '~' => o.push_str("\\sim "),
@@ -322,7 +336,20 @@ fn linear_to_latex_at(linear: &str, depth: usize) -> String {
                     }
                 }
                 None if c.is_control() => {}
-                None => o.push(c),
+                None => {
+                    // A letter after a control word would extend it. The lookahead above only sees
+                    // the next input character, so a character dropped in between (an unmatched
+                    // `〖` or `〗`, a control character) would join `\in` and `put` into `\input`.
+                    // Scanning only when other output came since the last plain letter keeps a long
+                    // run of letters linear.
+                    if c.is_ascii_alphabetic() && o.len() != plain_end && ends_with_control_word(&o) {
+                        o.push(' ');
+                    }
+                    o.push(c);
+                    if c.is_ascii_alphabetic() {
+                        plain_end = o.len();
+                    }
+                }
             },
         }
         i += 1;
@@ -330,9 +357,15 @@ fn linear_to_latex_at(linear: &str, depth: usize) -> String {
     o.trim().to_string()
 }
 
+/// Does `o` end in a control word (`\` and letters), which a following letter would extend?
+fn ends_with_control_word(o: &str) -> bool {
+    let head = o.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    head.len() < o.len() && head.ends_with('\\')
+}
+
 fn escape_math_text(s: &str) -> String {
     let mut o = String::new();
-    for c in s.chars().filter(|c| !matches!(c, '{' | '}' | '\\' | '$' | '%' | '#' | '&') && !c.is_control()) {
+    for c in s.chars().filter(|c| !matches!(c, '{' | '}' | '\\' | '$' | '%' | '#' | '&' | '〖' | '〗') && !c.is_control()) {
         // Never `^^` (see `linear_to_latex_at`).
         if c == '^' && o.ends_with('^') {
             continue;
@@ -625,5 +658,23 @@ mod tests {
         for linear in ["a^^5cinput", "x^(^^5cinput)"] {
             assert!(!linear_to_latex(linear).contains("^^"), "{linear}");
         }
+    }
+
+    /// A character the export drops (an unmatched invisible bracket, a control character) must not
+    /// join a control word to the letters after it: `\in〗put` would otherwise be `\input`.
+    #[test]
+    fn a_dropped_character_does_not_join_a_command_to_the_next_letters() {
+        for linear in ["\\in〗put x", "\\in〖put x", "∈〗put x", "∈〖put x", "\\in\u{1}put x", "∈\u{1}put x", "\\in〗〗〖put"] {
+            let tex = linear_to_latex(linear);
+            assert!(!tex.contains("\\input"), "{linear:?} → {tex}");
+            assert!(tex.starts_with("\\in put"), "{linear:?} → {tex}");
+        }
+        // A command followed by a letter directly is still separated, and grouping still works.
+        assert_eq!(linear_to_latex("∈x"), "\\in x");
+        assert_eq!(linear_to_latex("〖a+b〗^2"), "{a+b}^2");
+        // The check stays linear: a long run of letters, plain or after a command, is one pass.
+        let letters = "a".repeat(400_000);
+        assert_eq!(linear_to_latex(&letters).len(), 400_000);
+        assert_eq!(linear_to_latex(&format!("∈〗{letters}")), format!("\\in {letters}"));
     }
 }

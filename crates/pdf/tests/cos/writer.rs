@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crate::testkit::Pdf;
+use super::testkit::Pdf;
 use craft_pdf::cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full, write_incremental};
 
 /// Four pages, a shared font, document info with a non-ASCII title.
@@ -150,7 +150,7 @@ fn classic_table() -> Vec<u8> {
     bytes
 }
 
-fn qpdf_check(qpdf: &crate::oracle::Oracle, bytes: &[u8]) -> std::process::Output {
+fn qpdf_check(qpdf: &super::oracle::Oracle, bytes: &[u8]) -> std::process::Output {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("pdfcraft-xref-{}-{n}.pdf", std::process::id()));
@@ -168,7 +168,7 @@ fn page(doc: &Document) -> Dict {
 }
 
 fn assert_qpdf_clean(bytes: &[u8]) {
-    let qpdf = crate::oracle::or_skip!(crate::oracle::qpdf());
+    let qpdf = super::oracle::or_skip!(super::oracle::qpdf());
     let check = qpdf_check(&qpdf, bytes);
     let report = format!("{}{}", String::from_utf8_lossy(&check.stdout), String::from_utf8_lossy(&check.stderr));
     assert!(check.status.success() && !report.contains("WARNING"), "{report}");
@@ -299,7 +299,7 @@ fn incremental_save_leaves_out_additions_nothing_refers_to() {
 
 #[test]
 fn qpdf_accepts_object_stream_output() {
-    let qpdf = crate::oracle::or_skip!(crate::oracle::qpdf());
+    let qpdf = super::oracle::or_skip!(super::oracle::qpdf());
     let doc = Document::open(Arc::new(fixture())).unwrap();
     let packed = write_full(&doc, &SaveOptions::default()).unwrap();
     let path = std::env::temp_dir().join(format!("pdfcraft-objstm-{}.pdf", std::process::id()));

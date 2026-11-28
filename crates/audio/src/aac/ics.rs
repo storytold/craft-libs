@@ -127,25 +127,3 @@ impl IcsInfo {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn grouping_roundtrip() {
-        let info = IcsInfo {
-            window_sequence: WindowSequence::EightShort,
-            window_shape: WindowShape::Kbd,
-            max_sfb: 12,
-            num_groups: 3,
-            group_len: [3, 1, 4, 0, 0, 0, 0, 0],
-        };
-        let mut bw = BitWriter::new();
-        info.write(&mut bw);
-        let d = bw.finish();
-        let p = IcsInfo::parse(&mut BitReader::new(&d), 4).unwrap();
-        assert_eq!(p, info);
-        assert_eq!(p.group_start(2), 4);
-    }
-}

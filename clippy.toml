@@ -4,5 +4,5 @@ allow-panic-in-tests = true
 allow-indexing-slicing-in-tests = true
 cognitive-complexity-threshold = 30
 disallowed-types = [
-    { path = "egui::ComboBox", reason = "use craft_ui::ComboBox: egui's combo box menu can't grow back while open (egui#5225)" },
+    { path = "egui::ComboBox", reason = "use craft_ui::controls::Select: egui's combo box menu can't grow back while open (egui#5225)" },
 ]

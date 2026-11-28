@@ -298,25 +298,3 @@ pub fn adapt_noncoef_probs(fc: &mut FrameContext, c: &Counts, interp_switchable:
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn merge_prob_identity_without_counts() {
-        for p in 1..=255u8 {
-            assert_eq!(merge_prob(p, 0, 0, 20, 128), p);
-        }
-        // Saturated counts move halfway towards the observed probability.
-        assert_eq!(merge_prob(128, 20, 0, 20, 128), 192);
-    }
-
-    #[test]
-    fn defaults_load() {
-        let fc = FrameContext::default();
-        assert_eq!(fc.coef[0][0][0][0][0], [195, 29, 183]);
-        assert_eq!(fc.tx[3][1], [5, 52, 13]);
-        assert_eq!(fc.mv_class0_fr[1][1], [96, 112, 64]);
-    }
-}

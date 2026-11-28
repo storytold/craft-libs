@@ -1,0 +1,290 @@
+# API map of the "Timeline" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Timeline"
+new_module = "craft_timeline::ui"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "TimelineRuler"
+old = "craft_timeline::ui::ruler::TimelineRuler"
+new = "craft_timeline::ui::ruler::TimelineRuler"
+status = "same"
+note = "`TimelineRuler<'a>` is a leaf that reads the `TimeAxis` of its `TimelineView`. `new(id_salt, view: &mut TimeView, format, end)` becomes `new(label, playhead: Bind<Tick>)`; the scrub is the playhead's edit. `show(ui)` returns `TimelineRulerResponse`."
+
+[[type]]
+name = "TimelineRulerResponse"
+old = "craft_timeline::ui::ruler::TimelineRulerResponse"
+new = "craft_timeline::ui::ruler::TimelineRulerResponse"
+status = "same"
+note = "An `Outcome` over the playhead: `playhead` (`EditResponse<Tick>`, also by deref), `work_area` (`Option<DragEvent<TimeRange>>`), `snapped_at`, `context`. `scrub` is `playhead.event`; `markers` is gone (`MarkerStrip` shows beside the ruler); `response` is `playhead.response`."
+
+[[type]]
+name = "RenderBarState"
+old = "craft_timeline::ui::ruler::RenderBarState"
+new = "craft_timeline::ui::ruler::RenderBarState"
+status = "same"
+
+[[type]]
+name = "RenderSpan"
+old = "craft_timeline::ui::ruler::RenderSpan"
+new = "craft_timeline::ui::ruler::RenderSpan"
+status = "same"
+note = "The tooltip is the span's part tooltip."
+
+[[type]]
+name = "SplitMarks"
+old = "craft_timeline::ui::ruler::SplitMarks"
+new = "craft_timeline::ui::ruler::SplitMarks"
+status = "same"
+note = "`#[non_exhaustive]`: build it from `SplitMarks::default()` and set its fields."
+
+[[type]]
+name = "RulerScale"
+old = "craft_timeline::ui::ruler::RulerScale"
+new = ""
+status = "removed"
+note = "The ruler counts frames in its axis's format; a custom tick scale is a `StepLadder` in `craft_ui::canvas::TickRule::Steps`."
+
+[[type]]
+name = "ruler_steps"
+old = "craft_timeline::ui::ruler::ruler_steps"
+new = ""
+status = "removed"
+note = "`StepLadder::new(base, label_gap, tick_gap).steps(frame_points)` returns the same `(tick, label)` strides; the ladder lives with the one tick rule."
+
+[[type]]
+name = "StepLadder"
+old = ""
+new = "craft_ui::canvas::StepLadder"
+status = "replaced"
+note = "The time ruler's step table, a `TickRule::Steps` of the one tick rule."
+
+[[type]]
+name = "ruler_ticks"
+old = "craft_timeline::ui::ruler::ruler_ticks"
+new = "craft_timeline::ui::ruler::ruler_ticks"
+status = "same"
+note = "`ruler_ticks(axis: &TimeAxis, width, ladder: StepLadder)`: the ticks come from the one tick rule (`TickRule::Steps`); `ruler_ladder(base, line)` builds the ladder from a label height."
+
+[[type]]
+name = "RulerTick"
+old = "craft_timeline::ui::ruler::RulerTick"
+new = ""
+status = "removed"
+note = "Renamed `TimeTick` (spec 20.5); `craft_ui::canvas::RulerTick` keeps its name."
+
+[[type]]
+name = "TimeTick"
+old = ""
+new = "craft_timeline::ui::ruler::TimeTick"
+status = "replaced"
+note = "The legacy `RulerTick` of the time ruler, with `at`, `label` and `major`."
+
+[[type]]
+name = "RulerLabels"
+old = "craft_timeline::ui::ruler::RulerLabels"
+new = ""
+status = "removed"
+note = "A custom tick source is a `StepLadder`."
+
+[[type]]
+name = "TimelineRulerLabels"
+old = "craft_timeline::ui::ruler::TimelineRulerLabels"
+new = ""
+status = "removed"
+note = "Words: `TimelineRulerWords` registers through `words!`; the ruler's name is its label."
+
+[[type]]
+name = "TimelineScrollBar"
+old = "craft_timeline::ui::ruler::TimelineScrollBar"
+new = ""
+status = "removed"
+note = "`TimelineView`'s scroll part replaces it."
+
+[[type]]
+name = "GraphEditor"
+old = "craft_timeline::ui::graph::GraphEditor"
+new = "craft_timeline::ui::graph::GraphEditor"
+status = "same"
+note = "`GraphEditor<'a>` is a leaf with a content painter: `new(label, range: Bind<GraphRange>, curves, selection: &Selection<KeyframeId>)`, `show_at(ui, rect)` in place of `show(ui, rect)`. The time axis comes from the `TimelineView` around it; `playhead` and `reference` are props."
+
+[[type]]
+name = "GraphEditorOutput"
+old = "craft_timeline::ui::graph::GraphEditorOutput"
+new = "craft_timeline::ui::graph::GraphEditorOutput"
+status = "same"
+note = "An `Outcome` over the range: `range` (`EditResponse<GraphRange>`, also by deref), `selection` (the `SelectionChange` for the app to apply), `keys_moved` and `handle_moved` (`DragEvent`s), `actions`."
+
+[[type]]
+name = "GraphAction"
+old = "craft_timeline::ui::graph::GraphAction"
+new = "craft_timeline::ui::graph::GraphAction"
+status = "same"
+
+[[type]]
+name = "GraphCurve"
+old = "craft_timeline::ui::graph::GraphCurve"
+new = "craft_timeline::ui::graph::GraphCurve"
+status = "same"
+note = "`#[non_exhaustive]`: `GraphCurve::new(id, name, samples, keys)` and `.color(..)`."
+
+[[type]]
+name = "GraphKey"
+old = "craft_timeline::ui::graph::GraphKey"
+new = "craft_timeline::ui::graph::GraphKey"
+status = "same"
+note = "`#[non_exhaustive]`: `GraphKey::new(id, time, value, interpolation)` and `.handles(in, out)`."
+
+[[type]]
+name = "GraphKeyMove"
+old = "craft_timeline::ui::graph::GraphKeyMove"
+new = "craft_timeline::ui::graph::GraphKeyMove"
+status = "same"
+note = "Reported in a `DragEvent`, not an `EditEvent`."
+
+[[type]]
+name = "GraphMode"
+old = "craft_timeline::ui::graph::GraphMode"
+new = "craft_timeline::ui::graph::GraphMode"
+status = "same"
+
+[[type]]
+name = "GraphRange"
+old = "craft_timeline::ui::graph::GraphRange"
+new = "craft_timeline::ui::graph::GraphRange"
+status = "same"
+note = "Bound by `Bind<GraphRange>`; `#[non_exhaustive]`, so build it from `GraphRange::default()`."
+
+[[type]]
+name = "HandleMove"
+old = "craft_timeline::ui::graph::HandleMove"
+new = "craft_timeline::ui::graph::HandleMove"
+status = "same"
+note = "Reported in a `DragEvent`, not an `EditEvent`."
+
+[[type]]
+name = "HandleSide"
+old = "craft_timeline::ui::graph::HandleSide"
+new = "craft_timeline::ui::graph::HandleSide"
+status = "same"
+
+[[type]]
+name = "GraphEditorLabels"
+old = "craft_timeline::ui::graph::GraphEditorLabels"
+new = ""
+status = "removed"
+note = "Words: `GraphEditorWords` registers through `words!`."
+
+[[type]]
+name = "LabelPalette"
+old = "craft_timeline::ui::LabelPalette"
+new = "craft_timeline::ui::LabelPalette"
+status = "replaced"
+note = "Now an app value (`EnvValue`) with Premiere's palette as root, read with `label_palette(env)`; `color(label)` returns a `DataColor`. The `palette(..)` setters are gone."
+
+[[type]]
+name = "stories"
+old = "craft_timeline::ui::stories"
+new = ""
+status = "removed"
+note = "Stories register themselves; `#[story]` in each module's `stories.rs`."
+
+[[type]]
+name = "WORDS"
+old = "craft_timeline::ui::WORDS"
+new = ""
+status = "removed"
+note = "Words structs register through `words!`."
+
+[[type]]
+name = "COUNTS"
+old = "craft_timeline::ui::COUNTS"
+new = ""
+status = "removed"
+note = "Words structs register through `words!`."
+
+[[type]]
+name = "DragEvent"
+old = ""
+new = "craft_timeline::ui::DragEvent"
+status = "replaced"
+note = "New: one step of a drag a component reports without a value of its own (`Begin`, `Update`, `Commit`, `Cancel`, `Set`)."
+
+[[setter]]
+type = "TimelineRuler"
+old = "new(id_salt, view: &mut TimeView, format, end)"
+new = "new(label, playhead: Bind<Tick>)"
+note = "The view, the format and the end come from the `TimeAxis` of the enclosing `TimelineView`."
+
+[[setter]]
+type = "TimelineRuler"
+old = "playhead(t)"
+new = "new(label, playhead: Bind<Tick>)"
+note = "The playhead is the bound value."
+
+[[setter]]
+type = "TimelineRuler"
+old = "scale(scale)"
+note = "Removed: the ruler counts frames in the axis's format."
+
+[[setter]]
+type = "TimelineRuler"
+old = "work_area(Option<TimeRange>)"
+new = "work_area(TimeRange)"
+note = "A prop of the plain range; leave it out for none."
+
+[[setter]]
+type = "TimelineRuler"
+old = "markers(markers)"
+note = "Removed: `MarkerStrip` shows the sequence markers beside the ruler."
+
+[[setter]]
+type = "TimelineRuler"
+old = "palette(palette)"
+note = "Removed: the palette is an app value (`LabelPalette`)."
+
+[[setter]]
+type = "TimelineRuler"
+old = "marker_bin(rect)"
+note = "Removed with the marker band."
+
+[[setter]]
+type = "TimelineRuler"
+old = "height(height)"
+note = "Removed: the height comes from the ruler's content."
+
+[[setter]]
+type = "TimelineRuler"
+old = "labels(labels)"
+note = "Removed: words register through `words!`."
+
+[[setter]]
+type = "TimelineRuler"
+old = "snap(Option<&SnapTargets>)"
+new = "snap(&SnapTargets)"
+note = "A prop of the targets themselves."
+
+[[setter]]
+type = "GraphEditor"
+old = "new(id_salt, curves, selection: &mut Selection, view: &TimeView, range: &mut GraphRange)"
+new = "new(label, range: Bind<GraphRange>, curves, selection: &Selection<KeyframeId>)"
+note = "The time view is the `TimeAxis`; the selection change comes back in `GraphEditorOutput::selection`."
+
+[[setter]]
+type = "GraphEditor"
+old = "show(ui, rect)"
+new = "show_at(ui, rect)"
+note = "The rect is the whole editor, plot and bar."
+
+[[setter]]
+type = "GraphEditor"
+old = "format(format)"
+note = "Removed: the format is the axis's."
+
+[[setter]]
+type = "GraphEditor"
+old = "labels(labels)"
+note = "Removed: words register through `words!`."

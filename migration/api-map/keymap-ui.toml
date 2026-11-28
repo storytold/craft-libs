@@ -1,0 +1,231 @@
+# API map of the "Keymap UI" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Keymap UI"
+new_module = "craft_menu::shortcuts"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "ShortcutsDialog"
+old = "craft_keymap::ui::ShortcutsDialog"
+new = "craft_menu::shortcuts::ShortcutsDialog"
+status = "moved"
+
+[[type]]
+name = "DialogState"
+old = "craft_keymap::ui::DialogState"
+new = "craft_menu::shortcuts::DialogState"
+status = "moved"
+
+[[type]]
+name = "DialogSnapshot"
+old = "craft_keymap::ui::DialogSnapshot"
+new = "craft_menu::shortcuts::DialogSnapshot"
+status = "moved"
+
+[[type]]
+name = "DialogTab"
+old = "craft_keymap::ui::DialogTab"
+new = "craft_menu::shortcuts::DialogTab"
+status = "moved"
+
+[[type]]
+name = "ConflictMode"
+old = "craft_keymap::ui::ConflictMode"
+new = "craft_menu::shortcuts::ConflictMode"
+status = "moved"
+
+[[type]]
+name = "Area"
+old = "craft_keymap::ui::Area"
+new = "craft_menu::shortcuts::Area"
+status = "moved"
+
+[[type]]
+name = "FixedRow"
+old = "craft_keymap::ui::FixedRow"
+new = "craft_menu::shortcuts::FixedRow"
+status = "moved"
+
+[[type]]
+name = "Format"
+old = "craft_keymap::ui::Format"
+new = "craft_menu::shortcuts::Format"
+status = "moved"
+
+[[type]]
+name = "JSON_FORMAT"
+old = "craft_keymap::ui::JSON_FORMAT"
+new = "craft_menu::shortcuts::JSON_FORMAT"
+status = "moved"
+
+[[type]]
+name = "summary"
+old = "craft_keymap::ui::summary"
+new = "craft_menu::shortcuts::summary"
+status = "moved"
+
+[[type]]
+name = "Options"
+old = "craft_keymap::ui::Options"
+new = "craft_menu::shortcuts::Options"
+status = "moved"
+note = "`title` and `custom_set_name` are `Option<String>` (already translated text; `None` is the dialog's own word). `style` and `on_widget` are gone. `Options` stays `#[non_exhaustive]`: build it with `Options::default().with(|o| ..)`."
+
+[[type]]
+name = "Outcome"
+old = "craft_keymap::ui::Outcome"
+new = "craft_menu::shortcuts::Outcome"
+status = "moved"
+note = "The value `ShortcutsOutput::outcome` carries. The contract's `Outcome` trait is a different name."
+
+[[type]]
+name = "Accept"
+old = "craft_keymap::ui::Accept"
+new = "craft_menu::shortcuts::Accept"
+status = "moved"
+
+[[type]]
+name = "OnWidget"
+old = "craft_keymap::ui::OnWidget"
+new = ""
+status = "removed"
+note = "Automation reads the AccessKit ids of the controls."
+
+[[type]]
+name = "ShortcutsOutput"
+old = ""
+new = "craft_menu::shortcuts::ShortcutsOutput"
+status = "replaced"
+note = "New: what `ShortcutsDialog::show` returns; `response` and the pass's `outcome`. It replaces `Option<Outcome>`."
+
+[[type]]
+name = "KeyRouter"
+old = "craft_keymap::ui::KeyRouter"
+new = ""
+status = "removed"
+note = "The runtime's key stage routes keys: a recording component takes every key and the dispatcher runs over `craft_keymap::Matcher`."
+
+[[type]]
+name = "KeyGate"
+old = "craft_keymap::ui::KeyGate"
+new = ""
+status = "removed"
+note = "`CommandGate` and `ModalRule::InDialogs` (core 11.3) decide which commands run while a dialog is open."
+
+[[type]]
+name = "KeyOwner"
+old = "craft_keymap::ui::KeyOwner"
+new = ""
+status = "removed"
+note = "The runtime's key owner (`OwnerClass::Recorder` for a recording component)."
+
+[[type]]
+name = "stories"
+old = "craft_keymap::ui::stories"
+new = ""
+status = "removed"
+note = "Stories register themselves with `#[story(..)]`."
+
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "ShortcutsDialog"
+old = "show(ctx, state) -> Option<Outcome>"
+new = "show(ui, state) -> ShortcutsOutput"
+note = "The dialog is a modal `Dialog` shown from the pass's `Ui`; read the outcome from `ShortcutsOutput::outcome`."
+
+[[setter]]
+type = "ShortcutsDialog"
+old = "ui(ui, state)"
+note = "Removed: the dialog is always a `Dialog`. An app that hosts it in its own preferences shows `ShortcutsDialog` from a `DialogTab` of its own pattern."
+
+[[setter]]
+type = "ShortcutsDialog"
+old = "ok(ctx, state)"
+new = "ok(ui, state)"
+note = "Takes the pass's `&Ui` for the dialog's words."
+
+[[setter]]
+type = "ShortcutsDialog"
+old = "cancel(ctx, state)"
+new = "cancel(ui, state)"
+note = "Takes the pass's `&Ui` for the dialog's words."
+
+[[setter]]
+type = "ShortcutsDialog"
+old = "import_json(ctx, state, text)"
+new = "import_json(ui, state, text)"
+note = "Takes the pass's `&Ui` for the dialog's words."
+
+[[setter]]
+type = "ShortcutsDialog"
+old = "review_import(ctx, state, set, options)"
+new = "review_import(ui, state, set, options)"
+note = "Takes the pass's `&Ui` for the dialog's words."
+
+[[setter]]
+type = "Options"
+old = "style"
+note = "Removed: the theme gives the looks."
+
+[[setter]]
+type = "Options"
+old = "on_widget"
+note = "Removed: automation reads the AccessKit ids of the controls."
+
+[[setter]]
+type = "Options"
+old = "title: &'static str"
+new = "title: Option<String>"
+note = "Already translated text; `None` is the dialog's own Keyboard Shortcuts word."
+
+[[setter]]
+type = "Options"
+old = "custom_set_name: &'static str"
+new = "custom_set_name: Option<String>"
+note = "Already translated text; `None` is the dialog's own Custom word."
+
+[[setter]]
+type = "DialogState"
+old = "input(ctx)"
+note = "Removed: the dialog's view feeds the chords of its recorder."
+
+[[setter]]
+type = "DialogTab"
+old = "DialogTab { id, label, body }"
+new = "DialogTab::new(id, label, body)"
+note = "The struct is `#[non_exhaustive]`; the body takes the `&mut Ui` craft-ui shows."
+
+[[setter]]
+type = "Area"
+old = "Area { id, label, rows }"
+new = "Area::new(id, label, rows)"
+note = "The struct is `#[non_exhaustive]`."
+
+[[setter]]
+type = "FixedRow"
+old = "FixedRow { group, label, keys, chord }"
+new = "FixedRow::new(group, label, keys).chord(trigger)"
+note = "The struct is `#[non_exhaustive]`."
+
+[[setter]]
+type = "Format"
+old = "Format { id, label, extensions }"
+new = "Format::new(id, label, extensions)"
+note = "The struct is `#[non_exhaustive]`."
+
+[[setter]]
+type = "summary"
+old = "html(km, ctx, title)"
+new = "html(km, ui, title)"
+note = "Takes the pass's `&Ui` for the dialog's words."
+
+[[setter]]
+type = "summary"
+old = "text(km, ctx, title)"
+new = "text(km, ui, title)"
+note = "Takes the pass's `&Ui` for the dialog's words."

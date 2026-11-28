@@ -6,10 +6,20 @@ use super::{
 impl Reader<'_> {
     pub(super) fn read_settings(&mut self, path: &str) -> Result<(), DocxError> {
         let Some(root) = self.xml(path)? else { return Ok(()) };
-        if let Some(b) = self.pkg.get(path).filter(|b| crate::write::settings_has_unowned(b)) {
+        let mail_merge = root.child("w:mailMerge").is_some();
+        if let Some(b) = self.pkg.get(path).filter(|b| mail_merge || crate::write::settings_has_unowned(b)) {
             self.doc.passthrough.insert(crate::package::SETTINGS_ORIG.into(), Arc::new(b.to_vec()));
         }
         let rels = self.pkg.rels(path);
+        if mail_merge {
+            // Relationship limits must not stop import of the owned settings below.
+            match crate::write::mail_merge_rels(&rels) {
+                Ok(kept) => {
+                    self.doc.passthrough.insert(crate::package::MAIL_MERGE_RELS.into(), Arc::new(kept));
+                }
+                Err(e) => log::warn!("docx: not keeping mail merge relationships: {e}"),
+            }
+        }
         let s = &mut self.doc.settings;
         for k in root.els() {
             match k.name.as_str() {
@@ -24,6 +34,8 @@ impl Reader<'_> {
                 "w:linkStyles" => s.link_styles = on_off(k),
                 "w:removePersonalInformation" => s.remove_personal_info = on_off(k),
                 "w:removeDateAndTime" => s.remove_date_time = on_off(k),
+                "w:hideSpellingErrors" => s.hide_spelling_errors = on_off(k),
+                "w:hideGrammaticalErrors" => s.hide_grammar_errors = on_off(k),
                 "w:compat" => {
                     s.allow_space_of_same_style_in_table = k.child("w:allowSpaceOfSameStyleInTable").is_some_and(on_off);
                     // Only Word's own setting: another `w:uri` names a different application's.
@@ -35,7 +47,7 @@ impl Reader<'_> {
                         })
                         .and_then(|c| c.attr("w:val"));
                     if let Some(m) = mode.and_then(u32_of) {
-                        s.compat_mode = m.clamp(11, 99);
+                        s.compat_mode = Some(m.clamp(11, 99));
                     }
                     s.sum_paragraph_spacing = k.children("w:doNotUseHTMLParagraphAutoSpacing").any(on_off);
                     s.do_not_expand_shift_return = k.children("w:doNotExpandShiftReturn").any(on_off);

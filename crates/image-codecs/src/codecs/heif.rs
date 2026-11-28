@@ -95,7 +95,7 @@ mod tests {
 
     #[cfg(not(feature = "heif"))]
     #[test]
-    fn without_the_feature_heif_is_a_clear_unsupported_error() {
+    fn feature_config_without_the_feature_heif_is_a_clear_unsupported_error() {
         let header = b"\0\0\0\x18ftypheic\0\0\0\0mif1heic";
         assert_eq!(crate::detect(header), Some(F), "still recognised");
         let r = crate::decode(header);
@@ -108,7 +108,7 @@ mod tests {
 
     #[cfg(feature = "heif")]
     #[test]
-    fn with_the_feature_heif_is_readable_and_errors_map() {
+    fn feature_config_with_the_feature_heif_is_readable_and_errors_map() {
         assert!(crate::caps(F).read);
         let r = crate::decode(b"\0\0\0\x18ftypmsf1\0\0\0\0msf1hevc");
         assert!(matches!(&r, Err(CodecError::Unsupported { format: Format::Heif, reason }) if reason.contains("sequence")), "{r:?}");
@@ -127,7 +127,7 @@ mod tests {
 
     #[cfg(feature = "heif")]
     #[test]
-    fn a_heic_rs_panic_is_a_malformed_file_error() {
+    fn feature_config_a_heic_rs_panic_is_a_malformed_file_error() {
         assert_eq!(crate::detect(&HEIC_RS_BOX_PANIC), Some(Format::Heif));
         for opts in [crate::DecodeOptions::default(), crate::DecodeOptions { keep_orientation: true, ..Default::default() }] {
             let r = crate::decode_with(&HEIC_RS_BOX_PANIC, &opts);

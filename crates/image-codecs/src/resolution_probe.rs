@@ -17,7 +17,7 @@
 //! non-positive or past [`MAX_PPI`] gives `None`, so the caller keeps its own default.
 
 use crate::Limits;
-use crate::codecs::{jpeg, png, webp};
+use crate::codecs::{jpeg, png};
 use crate::resolution::exif_resolution;
 
 /// Resolutions above this many pixels per inch are treated as corrupt.
@@ -69,14 +69,19 @@ fn le_i32(b: &[u8], at: usize) -> Option<i32> {
     Some(i32::from_le_bytes(b.get(at..at.checked_add(4)?)?.try_into().ok()?))
 }
 
-fn png_phys(bytes: &[u8]) -> Option<(f32, f32)> {
+/// Raw PNG `pHYs` pixels per metre `(x, y)` before any DPI snapping, when the chunk precedes
+/// `IDAT`/`IEND` within the shared chunk limit, has unit `1` (metre), and both axes are nonzero.
+pub fn png_pixels_per_meter(bytes: &[u8]) -> Option<(u32, u32)> {
+    if !bytes.starts_with(PNG_SIGNATURE) {
+        return None;
+    }
     let mut pos = PNG_SIGNATURE.len();
     for _ in 0..MAX_CHUNKS {
         let len = usize::try_from(be_u32(bytes, pos)?).ok()?;
         let data = pos.checked_add(8)?;
         match bytes.get(pos.checked_add(4)?..data)? {
             // A `pHYs` chunk holds exactly nine bytes; the whole chunk, CRC included, must be there.
-            b"pHYs" if len == 9 => return bytes.get(data..data.checked_add(13)?).and_then(|chunk| phys(chunk.get(..9)?)),
+            b"pHYs" if len == 9 => return bytes.get(data..data.checked_add(13)?).and_then(|chunk| phys_ppm(chunk.get(..9)?)),
             b"pHYs" => return None,
             b"IDAT" | b"IEND" => return None,
             _ => pos = data.checked_add(len)?.checked_add(4)?,
@@ -85,15 +90,20 @@ fn png_phys(bytes: &[u8]) -> Option<(f32, f32)> {
     None
 }
 
+fn png_phys(bytes: &[u8]) -> Option<(f32, f32)> {
+    let (x, y) = png_pixels_per_meter(bytes)?;
+    Some((png::dpi_of_ppm(x), png::dpi_of_ppm(y)))
+}
+
 /// `pHYs`: pixels per unit in x and y, then the unit (1 = metre; 0 = aspect ratio only).
-fn phys(data: &[u8]) -> Option<(f32, f32)> {
+fn phys_ppm(data: &[u8]) -> Option<(u32, u32)> {
     let (x, y) = (be_u32(data, 0)?, be_u32(data, 4)?);
     // As the decoder does: a zero count, or a unit other than the metre, records no resolution,
     // so the `eXIf` resolution can still answer.
     if *data.get(8)? != 1 || x == 0 || y == 0 {
         return None;
     }
-    Some((png::dpi_of_ppm(x), png::dpi_of_ppm(y)))
+    Some((x, y))
 }
 
 /// The resolution of a PNG's `eXIf` chunk, read by the decoder's own header probe.
@@ -102,10 +112,28 @@ fn png_exif(bytes: &[u8]) -> Option<(f32, f32)> {
     exif_resolution(&exif?)
 }
 
-/// The resolution of a WebP's `EXIF` chunk, read by the decoder's own container probe.
+/// The resolution of a WebP's `EXIF` chunk, read from the RIFF container within its declared size.
 fn webp_exif(bytes: &[u8]) -> Option<(f32, f32)> {
-    let (_, _, exif) = webp::probe(bytes, &Limits::default()).ok()?;
-    exif_resolution(&exif?)
+    let riff = usize::try_from(le_u32(bytes, 4)?).ok()?;
+    let end = 8usize.checked_add(riff)?.min(bytes.len());
+    let mut pos = 12usize;
+    for _ in 0..MAX_CHUNKS {
+        let kind = bytes.get(pos..pos.checked_add(4)?)?;
+        let size = usize::try_from(le_u32(bytes, pos.checked_add(4)?)?).ok()?;
+        let data = pos.checked_add(8)?;
+        if data.checked_add(size)? > end {
+            return None;
+        }
+        if kind == b"EXIF" {
+            let exif = bytes.get(data..data + size)?;
+            let tiff = exif.strip_prefix(b"Exif\0\0").unwrap_or(exif);
+            if let Some(dpi) = exif_resolution(tiff).filter(|&d| usable(d)) {
+                return Some(dpi);
+            }
+        }
+        pos = data.checked_add(size.checked_add(size & 1)?)?;
+    }
+    None
 }
 
 /// BMP: the info header size at 14 (40 or more for a header with resolution fields), then the

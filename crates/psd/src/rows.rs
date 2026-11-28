@@ -3,7 +3,7 @@
 //! [`ChannelData::decode`] returns the whole plane, so turning a layer into tiles holds every
 //! channel's plane plus an interleaved copy at once: for a 20000×15000 RGBA layer that is 2.4 GB
 //! on top of the tiles. A [`RowDecoder`] hands out any band of rows instead. RLE and raw channels
-//! are read band by band (a channel still in its [`Stored`](crate::Stored) source reads only the
+//! are read band by band (a channel still in its [`Stored`] source reads only the
 //! band's bytes: RLE's per-row byte counts give each row's offset); ZIP streams cannot be entered
 //! part way, so a ZIP channel is inflated once, when the decoder is made.
 

@@ -1,0 +1,171 @@
+# API map of the "Puppet and Perspective Warp" family: Puppet Warp (pins) and Perspective Warp (planes).
+
+family = "Puppet and Perspective Warp"
+new_module = "craft_imaging::ui::warp"
+
+[[type]]
+name = "PinWarp"
+old = "craft_imaging::ui::warp::pin::PinWarp"
+new = "craft_imaging::ui::warp::pin::PinWarp"
+status = "same"
+
+[[type]]
+name = "PinWarpBar"
+old = "craft_imaging::ui::warp::pin::PinWarpBar"
+new = "craft_imaging::ui::warp::pin::PinWarpBar"
+status = "same"
+
+[[type]]
+name = "PinWarpBarOutput"
+old = "craft_imaging::ui::warp::pin::PinWarpBarOutput"
+new = "craft_imaging::ui::warp::pin::PinWarpBarOutput"
+status = "same"
+
+[[type]]
+name = "PerspectiveWarp"
+old = "craft_imaging::ui::warp::perspective::PerspectiveWarp"
+new = "craft_imaging::ui::warp::perspective::PerspectiveWarp"
+status = "same"
+
+[[type]]
+name = "PerspectiveBar"
+old = "craft_imaging::ui::warp::perspective::PerspectiveBar"
+new = "craft_imaging::ui::warp::perspective::PerspectiveBar"
+status = "same"
+
+[[type]]
+name = "PerspectiveBarOutput"
+old = "craft_imaging::ui::warp::perspective::PerspectiveBarOutput"
+new = "craft_imaging::ui::warp::perspective::PerspectiveBarOutput"
+status = "same"
+
+[[type]]
+name = "PinWarpResponse"
+old = "craft_imaging::ui::warp::pin::PinWarpResponse"
+new = ""
+status = "replaced"
+note = "`PinWarpOutput`: `pins: EditResponse<Vec<Pin>>` (the edit), `select`, `apply`, `discard`, `hovered`, `pointer`; `PinWarpOutput::edits()` gives the `PinEdit`s in the legacy order (select, pins). `id` is `pins.response.id`; `claimed` is gone (the arena is the one press path)."
+
+[[type]]
+name = "PinWarpOutput"
+old = ""
+new = "craft_imaging::ui::warp::pin::PinWarpOutput"
+status = "replaced"
+note = "Replaces `PinWarpResponse`."
+
+[[type]]
+name = "PerspectiveWarpResponse"
+old = "craft_imaging::ui::warp::perspective::PerspectiveWarpResponse"
+new = ""
+status = "replaced"
+note = "`PerspectiveWarpOutput`: `planes: EditResponse<Vec<Plane>>`, `apply`, `discard`, `hovered`; `PerspectiveWarpOutput::edits()` gives the `PerspectiveEdit`s. `claimed` is gone."
+
+[[type]]
+name = "PerspectiveWarpOutput"
+old = ""
+new = "craft_imaging::ui::warp::perspective::PerspectiveWarpOutput"
+status = "replaced"
+note = "Replaces `PerspectiveWarpResponse`."
+
+[[type]]
+name = "PinWarpLabels"
+old = "craft_imaging::ui::warp::pin::PinWarpLabels"
+new = ""
+status = "replaced"
+note = "`PinWarpWords`, a `words!` set read from the env; there is no `labels()` setter."
+
+[[type]]
+name = "PinWarpWords"
+old = ""
+new = "craft_imaging::ui::warp::pin::PinWarpWords"
+status = "replaced"
+note = "Replaces `PinWarpLabels`."
+
+[[type]]
+name = "PinWarpBarLabels"
+old = "craft_imaging::ui::warp::pin::PinWarpBarLabels"
+new = ""
+status = "replaced"
+note = "`PinWarpBarWords`, a `words!` set read from the env; there is no `labels()` setter."
+
+[[type]]
+name = "PinWarpBarWords"
+old = ""
+new = "craft_imaging::ui::warp::pin::PinWarpBarWords"
+status = "replaced"
+note = "Replaces `PinWarpBarLabels`."
+
+[[type]]
+name = "PerspectiveWarpLabels"
+old = "craft_imaging::ui::warp::perspective::PerspectiveWarpLabels"
+new = ""
+status = "replaced"
+note = "`PerspectiveWarpWords`, a `words!` set read from the env; there is no `labels()` setter."
+
+[[type]]
+name = "PerspectiveWarpWords"
+old = ""
+new = "craft_imaging::ui::warp::perspective::PerspectiveWarpWords"
+status = "replaced"
+note = "Replaces `PerspectiveWarpLabels`."
+
+[[type]]
+name = "PerspectiveBarLabels"
+old = "craft_imaging::ui::warp::perspective::PerspectiveBarLabels"
+new = ""
+status = "replaced"
+note = "`PerspectiveBarWords`, a `words!` set read from the env; there is no `labels()` setter."
+
+[[type]]
+name = "PerspectiveBarWords"
+old = ""
+new = "craft_imaging::ui::warp::perspective::PerspectiveBarWords"
+status = "replaced"
+note = "Replaces `PerspectiveBarLabels`."
+
+[[type]]
+name = "PinWarpStyle"
+old = "craft_imaging::ui::warp::PinWarpStyle"
+new = "craft_imaging::ui::warp::pin::PinWarpStyle"
+status = "moved"
+note = "The component style of `PinWarp`, defined beside it; the look comes from theme tokens (pin disc `size.handle.md`, core `size.handle.sm`, ring and core `overlay.handle_stroke`, fixed-rotation ring `overlay.stroke`) and Photoshop's yellow as a fixed data colour. Its fields are private."
+
+[[type]]
+name = "PerspectiveWarpStyle"
+old = "craft_imaging::ui::warp::PerspectiveWarpStyle"
+new = "craft_imaging::ui::warp::perspective::PerspectiveWarpStyle"
+status = "moved"
+note = "The component style of `PerspectiveWarp`, defined beside it; outline and thirds in `overlay.line`, corners at `size.handle.md` filled with `overlay.handle_fill`. Its fields are private."
+
+[[type]]
+name = "PLANES"
+old = "craft_imaging::ui::warp::perspective::PLANES"
+new = ""
+status = "removed"
+
+[[type]]
+name = "PerspectiveStoryLabels"
+old = "craft_imaging::ui::warp::perspective::stories::PerspectiveStoryLabels"
+new = ""
+status = "removed"
+
+[[type]]
+name = "PinWarpStoryLabels"
+old = "craft_imaging::ui::warp::pin::stories::PinWarpStoryLabels"
+new = ""
+status = "removed"
+
+[[type]]
+name = "PinWarpCommands"
+old = ""
+new = "craft_imaging::ui::warp::pin::PinWarpCommands"
+status = "replaced"
+note = "New: Insert places a pin (`PinWarpCommands::AddPin`, default chord Insert); the app runs it with `PinWarpCommands::apply(session, solver, mesh, pointer)`. It replaces the Insert key the overlay read."
+
+[[type]]
+name = "PerspectiveCommands"
+old = ""
+new = "craft_imaging::ui::warp::perspective::PerspectiveCommands"
+status = "replaced"
+note = "New: Insert adds a plane in Layout (`PerspectiveCommands::AddPlane`, default chord Insert); the app runs it with `PerspectiveCommands::apply(session)`. It replaces the Insert key the overlay read."
+

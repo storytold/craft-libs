@@ -4,7 +4,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use craft_wordmodel::fill::Fill;
-use craft_wordmodel::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
+use craft_wordmodel::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use craft_wordmodel::props::{Align, Border, BorderStyle, Rgb, TextColor, Underline, VMerge};
 use craft_wordmodel::{Block, Document, InlineObject, Paragraph, RevisionKind};
 
@@ -612,6 +612,103 @@ fn table_look_bitmask_and_legacy_merges() {
     assert!(!l.header_row && l.total_row && l.first_column && !l.last_column && !l.banded_rows && l.banded_columns);
 }
 
+/// A table without `w:tblGrid` (template libraries leave it out) gets its grid from the cells'
+/// preferred widths, as Word rebuilds it on opening: the widest `w:tcW` among the cells that
+/// occupy a column alone, a spanning cell's width shared among the columns no cell sizes, and an
+/// inch for a column nothing sizes. A row after `w:gridBefore` starts at its own column.
+#[test]
+fn a_table_without_a_grid_takes_its_columns_from_the_cells() {
+    let body = r#"
+<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="auto"/></w:tblPr>
+ <w:tr><w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="24000" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>
+ <w:tr><w:tc><w:tcPr><w:tcW w:w="30000" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr><w:p/></w:tc></w:tr>
+</w:tbl>
+<w:tbl><w:tblPr/>
+ <w:tr><w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr><w:p/></w:tc></w:tr>
+ <w:tr><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr>
+</w:tbl>
+<w:tbl><w:tblPr/><w:tr><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl>
+<w:tbl><w:tblPr/>
+ <w:tr><w:tc><w:tcPr><w:tcW w:w="1440" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="2880" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>
+ <w:tr><w:trPr><w:gridBefore w:val="1"/></w:trPr><w:tc><w:tcPr><w:tcW w:w="4320" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>
+</w:tbl>
+<w:tbl><w:tblPr/>
+ <w:tr><w:tc><w:tcPr><w:tcW w:w="10" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="3000" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>
+</w:tbl>
+<w:p/>"#;
+    let d = read_body(body);
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid, vec![300.0, 1200.0]);
+    let Block::Table(t) = &*d.body[1] else { panic!() };
+    assert_eq!(t.grid, vec![50.0, 125.0, 125.0]);
+    let Block::Table(t) = &*d.body[2] else { panic!() };
+    assert_eq!(t.grid, vec![72.0, 72.0]);
+    // A row after `w:gridBefore` starts at its own column: its cell sizes the second one.
+    let Block::Table(t) = &*d.body[3] else { panic!() };
+    assert_eq!(t.grid, vec![72.0, 216.0]);
+    // A tiny width is kept down to Word's narrowest column, 26 twips (measured), not 4 pt.
+    let Block::Table(t) = &*d.body[4] else { panic!() };
+    assert_eq!(t.grid, vec![1.3, 150.0]);
+}
+
+/// Spanning cells of a table without `w:tblGrid`, against the grid Word saves for the same cells
+/// (points; Word also merges columns no cell edge separates, which draws the same).
+#[test]
+fn spanning_cells_size_a_gridless_table_as_in_word() {
+    let tc = |w: u32, span: u32| format!(r#"<w:tc><w:tcPr><w:tcW w:w="{}" w:type="dxa"/><w:gridSpan w:val="{span}"/></w:tcPr><w:p/></w:tc>"#, w * 20);
+    let grid = |rows: &[&[(u32, u32)]]| {
+        let rows: String = rows.iter().map(|r| format!("<w:tr>{}</w:tr>", r.iter().map(|&(w, s)| tc(w, s)).collect::<String>())).collect();
+        let d = read_body(&format!("<w:tbl><w:tblPr/>{rows}</w:tbl><w:p/>"));
+        let Block::Table(t) = &*d.body[0] else { panic!() };
+        t.grid.clone()
+    };
+    // What a span lacks goes to its last column, in whichever order the rows come.
+    assert_eq!(grid(&[&[(100, 1), (100, 1)], &[(300, 2)]]), [100.0, 200.0]);
+    assert_eq!(grid(&[&[(300, 2)], &[(100, 1), (100, 1)]]), [100.0, 200.0]);
+    assert_eq!(grid(&[&[(50, 1), (50, 1)], &[(300, 2)], &[(50, 1), (70, 1)]]), [50.0, 250.0]);
+    // The widest of several spans over the same columns decides (Word: one column, 300).
+    assert_eq!(grid(&[&[(100, 2)], &[(300, 2)]]).iter().sum::<f32>(), 300.0);
+    assert_eq!(grid(&[&[(300, 2)], &[(100, 2)]]), grid(&[&[(100, 2)], &[(300, 2)]]));
+    assert_eq!(grid(&[&[(100, 2), (100, 1)], &[(300, 2), (100, 1)]]).iter().sum::<f32>(), 400.0);
+    // Overlapping spans are taken from the left.
+    assert_eq!(grid(&[&[(100, 2), (100, 1)], &[(50, 1), (300, 2)]]), [50.0, 50.0, 250.0]);
+    assert_eq!(grid(&[&[(100, 2), (100, 2)], &[(40, 1), (200, 2), (40, 1)]]), [40.0, 60.0, 140.0, 40.0]);
+    assert_eq!(grid(&[&[(40, 1), (200, 2), (40, 1)], &[(100, 2), (100, 2)]]), [40.0, 60.0, 140.0, 40.0]);
+    assert_eq!(grid(&[&[(300, 3)], &[(100, 2), (50, 1)], &[(30, 1), (30, 1), (30, 1)]]), [30.0, 70.0, 200.0]);
+    // A span narrower than its columns narrows nothing.
+    assert_eq!(grid(&[&[(100, 1), (100, 1)], &[(50, 2)]]), [100.0, 100.0]);
+    // A span past the last column, and a width that means nothing, break nothing.
+    assert!((grid(&[&[(100, 1), (100, 1)], &[(500, 9)]]).iter().sum::<f32>() - 500.0).abs() < 0.01);
+    let d = read_body(
+        r#"<w:tbl><w:tblPr/><w:tr><w:tc><w:tcPr><w:tcW w:w="NaN" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="-40" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p/>"#,
+    );
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid, vec![72.0, 72.0]);
+    // An empty `w:tblGrid` is a grid all the same: the columns keep their inch.
+    let d =
+        read_body(r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p/>"#);
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid, vec![72.0]);
+    // The narrowest column counts before a span shares out what it lacks: the span keeps its width.
+    let d = read_body(
+        r#"<w:tbl><w:tblPr/><w:tr><w:tc><w:tcPr><w:tcW w:w="10" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr><w:tr><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p/>"#,
+    );
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid[0], 1.3);
+    assert!((t.grid.iter().sum::<f32>() - 100.0).abs() < 0.01, "{:?}", t.grid);
+    // A span cut off at the last column kept gives the rest to no other column.
+    let ones = tc(20, 1).repeat(62);
+    let d = read_body(&format!("<w:tbl><w:tblPr/><w:tr>{ones}{}</w:tr><w:tr>{ones}{}</w:tr></w:tbl><w:p/>", tc(50, 1), tc(300, 2)));
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid.len(), 63);
+    assert_eq!(t.grid[62], 50.0);
+    // With no width of its own there, the kept column takes its share of the span, not all of it.
+    let d = read_body(&format!("<w:tbl><w:tblPr/><w:tr>{ones}</w:tr><w:tr>{ones}{}</w:tr></w:tbl><w:p/>", tc(300, 2)));
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid.len(), 63);
+    assert_eq!(t.grid[62], 150.0);
+}
+
 #[test]
 fn styles_numbering_settings_notes_comments_from_parts() {
     let styles = format!(
@@ -1183,17 +1280,17 @@ fn compatibility_mode_is_read_and_defaults_to_word_2007() {
     let compat = |v: &str| {
         format!(r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="{v}"/></w:compat>"#)
     };
-    assert_eq!(with_settings(Some(&compat("15"))).settings.compat_mode, 15);
-    assert_eq!(with_settings(Some(&compat("14"))).settings.compat_mode, 14);
+    assert_eq!(with_settings(Some(&compat("15"))).settings.compat_mode, Some(15));
+    assert_eq!(with_settings(Some(&compat("14"))).settings.compat_mode, Some(14));
     // Unnamed, out of range or junk values.
-    assert_eq!(with_settings(Some("<w:compat/>")).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
-    assert_eq!(with_settings(None).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
-    assert_eq!(with_settings(Some(&compat("-3"))).settings.compat_mode, 11);
-    assert_eq!(with_settings(Some(&compat("99999"))).settings.compat_mode, 99);
-    assert_eq!(with_settings(Some(&compat("abc"))).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
+    assert_eq!(with_settings(Some("<w:compat/>")).settings.compat_mode, None);
+    assert_eq!(with_settings(None).settings.compat_mode, None);
+    assert_eq!(with_settings(Some(&compat("-3"))).settings.compat_mode, Some(11));
+    assert_eq!(with_settings(Some(&compat("99999"))).settings.compat_mode, Some(99));
+    assert_eq!(with_settings(Some(&compat("abc"))).settings.compat_mode, None);
     // Another vendor's setting of the same name is ignored.
     let other = r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="urn:example" w:val="15"/></w:compat>"#;
-    assert_eq!(with_settings(Some(other)).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
+    assert_eq!(with_settings(Some(other)).settings.compat_mode, None);
 }
 
 #[test]
@@ -1239,6 +1336,75 @@ fn char_border_reads_and_nil_resolves_off() {
     let nil = p.props_of_char(1);
     assert_eq!(nil.border.map(|b| b.style), Some(BorderStyle::None));
     assert_eq!(d.styles.resolve_char(None, nil).border, None);
+}
+
+/// storytold/wordcraft#5065: a paragraph, character or page border without `w:sz` is width 0, as
+/// `w:sz="0"` (Word draws both at its thinnest line and gives them no room), and saving writes
+/// `w:sz="0"`. Table and cell borders are read on their own (`PropCtx::table_borders`).
+#[test]
+fn a_border_without_a_size_is_width_0() {
+    let body = |sz: &str| {
+        let b = |side: &str| format!(r#"<w:{side} w:val="single"{sz}/>"#);
+        format!(
+            r#"<w:p><w:pPr><w:pBdr>{}</w:pBdr></w:pPr><w:r><w:rPr><w:bdr w:val="single"{sz}/></w:rPr><w:t>a</w:t></w:r></w:p><w:sectPr><w:pgBorders>{}</w:pgBorders></w:sectPr>"#,
+            b("bottom"),
+            b("left")
+        )
+    };
+    // Paragraph, character and page border widths.
+    let widths = |d: &Document| {
+        let p = paras(d)[0];
+        [
+            p.props.borders.and_then(|b| b.bottom).map(|b| b.width),
+            p.props_of_char(0).border.map(|b| b.width),
+            d.last_section.page_borders.and_then(|b| b.left).map(|b| b.width),
+        ]
+    };
+    for (sz, width) in [("", 0.0), (r#" w:sz="0""#, 0.0), (r#" w:sz="1""#, 0.125), (r#" w:sz="2""#, 0.25), (r#" w:sz="4""#, 0.5)] {
+        assert_eq!(widths(&read_body(&body(sz))), [Some(width); 3], "{sz:?}");
+    }
+    // A width-0 border is still a border: it resolves, to be drawn.
+    let d = read_body(&body(""));
+    let p = paras(&d)[0];
+    assert!(d.styles.resolve_para(&p.props).borders.and_then(|b| b.bottom).is_some());
+    assert!(d.styles.resolve_char(None, p.props_of_char(0)).border.is_some());
+    let saved = craft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&saved), "word/document.xml");
+    assert!(xml.contains(r#"w:val="single" w:sz="0""#) && !xml.contains(r#"w:sz="1""#), "{xml}");
+    assert_eq!(widths(&craft_docx::read(&saved).unwrap()), [Some(0.0); 3]);
+}
+
+/// storytold/wordcraft#5764: a table, cell or table-style border without `w:sz` is width 0 too, as
+/// `w:sz="0"`. Word gives neither any room (`w:sz="1"` takes an eighth of a point), so read as half
+/// a point it moved every row below a pandoc table's header rule. Saving writes `w:sz="0"`.
+#[test]
+fn a_table_border_without_a_size_is_width_0() {
+    let styles = format!(
+        r#"<w:styles {W_NS}><w:style w:type="table" w:styleId="Ruled"><w:name w:val="Ruled"/><w:tblPr><w:tblBorders><w:top w:val="single"/></w:tblBorders></w:tblPr><w:tblStylePr w:type="firstRow"><w:tcPr><w:tcBorders><w:bottom w:val="single"/></w:tcBorders></w:tcPr></w:tblStylePr></w:style></w:styles>"#
+    );
+    let body = r#"<w:tbl><w:tblPr><w:tblStyle w:val="Ruled"/><w:tblBorders><w:bottom w:val="single"/></w:tblBorders><w:tblLook w:firstRow="1" w:val="0020"/></w:tblPr><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcBorders><w:left w:val="single"/></w:tcBorders></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p/>"#;
+    let widths = |d: &Document| {
+        let t = d.body.iter().find_map(|b| b.as_table()).expect("a table");
+        let parts = d.styles.get("Ruled").and_then(|s| s.table.clone()).expect("the style's parts");
+        [
+            t.props.borders.and_then(|b| b.bottom).map(|b| b.width),
+            t.rows[0].cells[0].props.borders.and_then(|b| b.left).map(|b| b.width),
+            parts.borders.and_then(|b| b.top).map(|b| b.width),
+            parts.header_borders.and_then(|b| b.bottom).map(|b| b.width),
+        ]
+    };
+    let d = craft_docx::read(&docx(body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    assert_eq!(widths(&d), [Some(0.0); 4]);
+    let rule = d.styles.get("Ruled").and_then(|s| s.table.clone()).and_then(|p| p.header_borders).and_then(|b| b.bottom).expect("the header rule");
+    assert!(rule.is_drawn() && !rule.is_visible(), "drawn, taking no room: {rule:?}");
+    let saved = craft_docx::write(&d).unwrap();
+    let parts = unzip(&saved);
+    let styles = text(&parts, "word/styles.xml");
+    let ruled = styles.split("<w:style ").find(|s| s.contains(r#"w:styleId="Ruled""#)).expect("the style is saved");
+    for xml in [text(&parts, "word/document.xml").as_str(), ruled] {
+        assert!(xml.contains(r#"w:val="single" w:sz="0""#) && !xml.contains(r#"w:sz="4""#), "{xml}");
+    }
+    assert_eq!(widths(&craft_docx::read(&saved).unwrap()), [Some(0.0); 4]);
 }
 
 #[test]
@@ -1292,7 +1458,9 @@ fn anchor_stacking_order_is_read_and_kept() {
 
 #[test]
 fn documents_without_a_compatibility_mode_are_laid_out_as_word_2007() {
-    assert_eq!(read_body("<w:p/>").settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
+    let d = read_body("<w:p/>");
+    assert_eq!(d.settings.compat_mode, None);
+    assert_eq!(d.settings.effective_compat_mode(), craft_wordmodel::LEGACY_COMPAT_MODE);
 }
 
 #[test]
@@ -1570,6 +1738,39 @@ fn body_cell_vml_picture_stays_in_its_cell() {
         .flat_map(|p| p.objects.iter().filter_map(|o| o.frame()).map(|(_, _, f)| f.outside_cell))
         .collect();
     assert_eq!(floats, vec![false]);
+}
+
+/// A VML shape in a body table cell with Layout in table cell off (`o:allowincell="f"`, which
+/// Word writes for such a shape in a document in Word 2003 compatibility mode, user-checked) is
+/// placed outside its cell, as Word draws it: beside the table, and the cell's text doesn't wrap
+/// around it. Without the attribute, or with it on, the shape stays laid out in its cell. Both
+/// survive save and reopen.
+#[test]
+fn body_cell_vml_shape_with_layout_in_cell_off_is_placed_outside_the_cell() {
+    let shape = |allow: &str| {
+        format!(
+            r##"<w:r><w:pict><v:shape id="Box1" type="#_x0000_t202" style="position:absolute;margin-left:-60pt;margin-top:4pt;width:48pt;height:40pt;z-index:251659264;mso-position-horizontal-relative:text;mso-position-vertical-relative:text" {allow} filled="f"><v:textbox><w:txbxContent><w:p><w:r><w:t>ICON</w:t></w:r></w:p></w:txbxContent></v:textbox><w10:wrap xmlns:w10="urn:schemas-microsoft-com:office:word" type="topAndBottom"/></v:shape></w:pict></w:r>"##
+        )
+    };
+    let floats = |d: &Document| -> Vec<(bool, Wrap)> {
+        let Block::Table(t) = &*d.body[0] else { panic!("table first") };
+        t.rows[0].cells[0]
+            .blocks
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| p.objects.iter().filter_map(|o| o.frame()).map(|(_, _, f)| (f.outside_cell, f.wrap)))
+            .collect()
+    };
+    for (allow, outside) in [(r#"o:allowincell="f""#, true), (r#"o:allowincell="false""#, true), (r#"o:allowincell="t""#, false), ("", false)] {
+        let run = shape(allow);
+        let body = format!(
+            r#"<w:tbl><w:tblGrid><w:gridCol w:w="7200"/></w:tblGrid><w:tr><w:tc><w:p>{run}<w:r><w:t>Box title</w:t></w:r></w:p><w:p><w:r><w:t>Box text</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>"#
+        );
+        let d = craft_docx::read(&docx(&body, &[], &[])).unwrap();
+        assert_eq!(floats(&d), vec![(outside, Wrap::TopAndBottom)], "{allow}");
+        let d2 = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+        assert_eq!(floats(&d2), vec![(outside, Wrap::TopAndBottom)], "saved: {allow}");
+    }
 }
 
 /// Issue #149: an absolutely positioned VML text box in a header floats where its style puts it
@@ -2189,9 +2390,10 @@ fn rotated_ole_objects_round_trip() {
     let body = text(&unzip(&out), "word/document.xml");
     assert_eq!(attr_values(&body, "a:xfrm", "rot"), ["5400000"]);
     assert_eq!(attr_values(&body, "a:xfrm", "flipH"), ["1"]);
-    // 72 × 36 pt turned 90°: 18 pt narrower each side, 18 pt taller each side.
-    assert_eq!(attr_values(&body, "wp:effectExtent", "l"), ["-228600"]);
-    assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["228600"]);
+    // 72 × 36 pt turned 90°: Word measures that against the frame turned with it, so a quarter
+    // turn adds no effect extent.
+    assert_eq!(attr_values(&body, "wp:effectExtent", "l"), ["0"]);
+    assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["0"]);
     let back = craft_docx::read(&out).unwrap();
     let o = &paras(&back)[0].objects[0];
     assert!(matches!(o, InlineObject::Image { ole: Some(_), .. }), "{o:?}");
@@ -2504,6 +2706,42 @@ fn move_revisions_round_trip() {
     let to_end = xml.find("<w:moveToRangeEnd").unwrap();
     assert!(xml[to_start..to_end].contains("</w:p>"), "{xml}");
     check(&craft_docx::read(&out).unwrap());
+}
+
+/// Two insertions by one author with one local `w:date`, told apart (or not) by `dateUtc`.
+fn two_insertions_at_one_local_time(utc: [&str; 2]) -> String {
+    let ins = |id: u32, utc: &str, text: &str| {
+        format!(r#"<w:ins w:id="{id}" w:author="Ada" w:date="2026-11-01T01:30:00Z" {utc}><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:ins>"#)
+    };
+    format!("<w:p>{}{}</w:p>", ins(1, utc[0], " One"), ins(2, utc[1], " Two"))
+}
+
+/// Issue #3206: a tracked change's `dateUtc` is read under any prefix bound to Word's namespace
+/// for it, and saved under that namespace.
+#[test]
+fn a_tracked_change_utc_time_is_read_under_any_prefix_for_its_namespace() {
+    let du = r#"xmlns:du="http://schemas.microsoft.com/office/word/2023/wordml/word16du""#;
+    let body = two_insertions_at_one_local_time([
+        &format!(r#"{du} du:dateUtc="2026-11-01T05:30:00Z""#),
+        &format!(r#"{du} du:dateUtc="2026-11-01T06:30:00Z""#),
+    ]);
+    let d = read_body(&body);
+    let utc: Vec<_> = d.revisions.iter().map(|r| r.date_utc.as_deref()).collect();
+    assert_eq!(utc, [Some("2026-11-01T05:30:00Z"), Some("2026-11-01T06:30:00Z")]);
+    let xml = text(&unzip(&craft_docx::write(&d).unwrap()), "word/document.xml");
+    assert_eq!(attr_values(&xml, "w:ins", "w16du:dateUtc"), ["2026-11-01T05:30:00Z", "2026-11-01T06:30:00Z"]);
+}
+
+/// Issue #3206: an unqualified `dateUtc` doesn't say it's Word's UTC time, so it neither tells
+/// changes apart nor is saved under Word's namespace.
+#[test]
+fn an_unqualified_date_utc_is_not_a_tracked_change_utc_time() {
+    let body = two_insertions_at_one_local_time([r#"dateUtc="2026-11-01T05:30:00Z""#, r#"dateUtc="2026-11-01T06:30:00Z""#]);
+    let d = read_body(&body);
+    assert_eq!(d.revisions.len(), 1, "one author, kind and local date is one change");
+    assert_eq!(d.revisions[0].date_utc, None);
+    let xml = text(&unzip(&craft_docx::write(&d).unwrap()), "word/document.xml");
+    assert!(!xml.contains("dateUtc="), "{xml}");
 }
 
 /// A document's own footnote separators and continuation notice are kept (ECMA-376 §17.11), and
@@ -2986,6 +3224,83 @@ fn arrowheads_keep_their_kind_and_size() {
     assert_eq!(ends(&craft_docx::read(&bytes).unwrap()), expected);
 }
 
+/// A `v:stroke` that is switched off or fully transparent leaves the shape without an outline:
+/// Google Docs writes its horizontal rules as such rectangles, which Word doesn't show. Its `on`
+/// wins over the shape's `stroked`, in both directions, as in Word.
+#[test]
+fn vml_invisible_strokes_draw_no_outline() {
+    let red = Some(Rgb(0xC0, 0, 0));
+    for (attrs, stroke, want) in [
+        ("", r##"<v:stroke color="#000000" filltype="solid" opacity="0" weight="1.0pt"/>"##, None),
+        ("", r#"<v:stroke on="f"/>"#, None),
+        // A VML opacity can also be a percentage or 65536ths with an `f` suffix.
+        ("", r#"<v:stroke opacity="0%"/>"#, None),
+        ("", r#"<v:stroke opacity="0f"/>"#, None),
+        ("", r#"<v:stroke opacity="50%"/>"#, Some(Rgb::BLACK)),
+        ("", "", Some(Rgb::BLACK)),
+        (r##" stroked="t" strokecolor="#c00000""##, r#"<v:stroke on="f"/>"#, None),
+        (r##" stroked="f" strokecolor="#c00000""##, r#"<v:stroke on="t"/>"#, red),
+        // The stroke's own colour wins over the shape's `strokecolor`, as in Word.
+        (r##" strokecolor="#0000ff""##, r##"<v:stroke color="#c00000"/>"##, red),
+        (r##" stroked="f" strokecolor="#0000ff""##, r##"<v:stroke on="t" color="#c00000"/>"##, red),
+    ] {
+        let body = format!(
+            r#"<w:p><w:r><w:pict><v:rect style="width:475.5pt;height:.05pt" alt="" o:hr="f" o:hrstd="t" o:hralign="center"{attrs}>{stroke}</v:rect></w:pict></w:r></w:p>"#
+        );
+        let d = read_body(&body);
+        let InlineObject::Shape { kind: ShapeKind::Rectangle, stroke: got, .. } = &paras(&d)[0].objects[0] else { panic!("{body}") };
+        assert_eq!(*got, want, "{body}");
+        let again = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+        let InlineObject::Shape { stroke: saved, .. } = &paras(&again)[0].objects[0] else { panic!("{body}") };
+        assert_eq!(saved, got, "{body}");
+    }
+    // A freeform's outline is switched off the same way.
+    let freeform = r##"<w:p><w:r><w:pict><v:shape style="width:200pt;height:40pt" coordsize="200,40" path="m0,0l200,0,200,40,0,40xe" fillcolor="#ffffcc" strokecolor="#c00000"><v:stroke on="f"/></v:shape></w:pict></w:r></w:p>"##;
+    let d = read_body(freeform);
+    let InlineObject::Shape { kind: ShapeKind::Freeform, stroke, .. } = &paras(&d)[0].objects[0] else { panic!("{freeform}") };
+    assert_eq!(*stroke, None);
+}
+
+/// Word resolves each stroke property separately: the shape's own `v:stroke`, then the shape's
+/// attribute, then the same two on its shapetype, so a shapetype's stroke switched off or made
+/// transparent still applies to a shape whose own `v:stroke` only sets a dash (checked in Word).
+#[test]
+fn vml_stroke_properties_inherit_one_by_one() {
+    let green = Some(Rgb(0, 0x80, 0));
+    let blue = Some(Rgb(0, 0, 0xFF));
+    for (shapetype, shape, want) in [
+        (r#"<v:stroke on="f"/>"#, r##"strokecolor="#008000"><v:stroke dashstyle="dash"/>"##, None),
+        (r#"<v:stroke opacity="0"/>"#, r##"strokecolor="#008000"><v:stroke dashstyle="dash"/>"##, None),
+        (r#"<v:stroke on="f"/>"#, r##"stroked="t" strokecolor="#008000">"##, green),
+        (r##"<v:stroke color="#c00000"/>"##, r##"strokecolor="#0000ff">"##, blue),
+    ] {
+        let body = format!(
+            r##"<w:p><w:r><w:pict><v:shapetype id="st" coordsize="21600,21600" o:spt="1" path="m,l,21600r21600,l21600,xe">{shapetype}</v:shapetype><v:shape type="#st" style="width:100pt;height:30pt" {shape}</v:shape></w:pict></w:r></w:p>"##
+        );
+        let d = read_body(&body);
+        let InlineObject::Shape { stroke, .. } = &paras(&d)[0].objects[0] else { panic!("{body}") };
+        assert_eq!(*stroke, want, "{body}");
+    }
+    // An inherited transparent stroke also clears a freeform's outline alpha.
+    let freeform = r##"<w:p><w:r><w:pict><v:shapetype id="st"><v:stroke opacity="0"/></v:shapetype><v:shape type="#st" style="width:200pt;height:40pt" coordsize="200,40" path="m0,0l200,0,200,40,0,40xe" fillcolor="#ffffcc"/></w:pict></w:r></w:p>"##;
+    let d = read_body(freeform);
+    let InlineObject::Shape { kind: ShapeKind::Freeform, freeform: Some(f), .. } = &paras(&d)[0].objects[0] else { panic!("{freeform}") };
+    assert_eq!(f.alpha, 0.0);
+}
+
+/// A line whose stroke is fully transparent stays in the document without an outline, as Word
+/// keeps it, and is saved that way instead of being dropped.
+#[test]
+fn vml_transparent_line_is_kept() {
+    let body = r##"<w:p><w:r><w:pict><v:line from="0,0" to="200pt,0" strokecolor="#000000"><v:stroke opacity="0"/></v:line></w:pict></w:r></w:p>"##;
+    let d = read_body(body);
+    let InlineObject::Shape { kind: ShapeKind::Line, stroke: None, .. } = &paras(&d)[0].objects[0] else { panic!("{:?}", paras(&d)[0].objects) };
+    let again = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+    let InlineObject::Shape { kind: ShapeKind::Line, stroke: None, .. } = &paras(&again)[0].objects[0] else {
+        panic!("{:?}", paras(&again)[0].objects)
+    };
+}
+
 /// The right arrow's shapetype as Word writes it (ECMA-376 Part 4 `v:shapetype`, `o:spt` 13).
 const VML_RIGHT_ARROW_TYPE: &str = r#"<v:shapetype id="_x0000_t13" coordsize="21600,21600" o:spt="13" adj="16200,5400" path="m@0,l@0@1,0@1,0@2@0@2@0,21600,21600,10800xe"><v:stroke joinstyle="miter"/><v:formulas><v:f eqn="val #0"/><v:f eqn="val #1"/></v:formulas><v:path o:connecttype="custom"/></v:shapetype>"#;
 
@@ -3353,7 +3668,7 @@ const INK_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordprocessi
 const INK_XML: &str = r##"<ink xmlns="http://www.w3.org/2003/InkML"><definitions><context xml:id="ctx"><inkSource xml:id="src"><traceFormat><channel name="X" type="integer" units="cm"/><channel name="Y" type="integer" units="cm"/></traceFormat></inkSource></context><brush xml:id="blue"><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="0.08" units="cm"/></brush></definitions><trace contextRef="#ctx" brushRef="#blue">0 0, 1 1, 2 0</trace></ink>"##;
 const INK_TYPES: &str = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/ink/ink1.xml" ContentType="application/inkml+xml"/><Default Extension="png" ContentType="image/png"/></Types>"#;
 
-fn ink_docx(fallback: bool, alias: bool) -> Vec<u8> {
+pub(super) fn ink_docx(fallback: bool, alias: bool) -> Vec<u8> {
     let content = r#"<q:contentPart xmlns:q="http://schemas.microsoft.com/office/word/2010/wordml" r:id="rInk"><q:xfrm><a:off x="0" y="0"/><a:ext cx="1828800" cy="914400"/></q:xfrm></q:contentPart>"#;
     let drawing = format!(
         r#"<w:drawing><wp:inline><wp:extent cx="1828800" cy="914400"/><wp:docPr id="1" name="Study ink"/><a:graphic><a:graphicData uri="{INK_NS}">{content}</a:graphicData></a:graphic></wp:inline></w:drawing>"#
@@ -3563,7 +3878,7 @@ fn native_ink_markup_limit_does_not_write_a_dangling_reference() {
 fn native_ink_preserves_inner_transform_and_rotation_padding_on_unrelated_saves() {
     let mut files = unzip(&ink_docx(false, false));
     let body = text(&files, "word/document.xml")
-        .replace("<wp:docPr", r#"<wp:effectExtent l="55468" t="512668" r="55468" b="512668"/><wp:docPr"#)
+        .replace("<wp:docPr", r#"<wp:effectExtent l="512668" t="55468" r="512668" b="55468"/><wp:docPr"#)
         .replace("<q:xfrm>", r#"<q:xfrm rot="2700000">"#)
         .replace(r#"<a:off x="0" y="0"/><a:ext cx="1828800" cy="914400"/>"#, r#"<a:off x="127000" y="254000"/><a:ext cx="914400" cy="457200"/>"#);
     files.insert("word/document.xml".into(), body.into_bytes());
@@ -4672,6 +4987,61 @@ fn bare_turns_are_kept_through_a_save() {
     // Only inline ones: a floating one keeps text clear of its rotated bounds as before.
     let anchored = pic("").replace("<wp:inline>", "<wp:anchor>").replace("</wp:inline>", "</wp:anchor>");
     assert!(!bare(&read(&anchored)));
+}
+
+/// From 45° up to (not including) 135° Word measures a turned picture's overhang against its frame
+/// with width and height exchanged, so a quarter turn records no effect extent; at 135° it uses the
+/// frame as it is again (and the same from 225° up to 315°). Reading must not take the turn for
+/// effects room, and saving must not write the turn's overhang (Word crops a picture by the
+/// negative extents that gives).
+#[test]
+fn turned_pictures_keep_words_effect_extent() {
+    // A 254 × 337 pt picture with the effect extents (pt, left / top / right / bottom) Word for
+    // Microsoft 365 (build 16.0.20527) saves for it at 60°, a quarter turn and on both sides of
+    // each boundary of the exchanged-frame range. Near the boundaries Word's own values are a few
+    // points uneven (33 pt right against 41 pt left at 45°); the frame changes them by about 41 pt,
+    // so 10 pt there still tells the frames apart.
+    let cases: [(i64, [f32; 4], f32); 10] = [
+        (60, [41.0, 68.5, 42.0, 67.5], 1.0),
+        (90, [0.5, 0.0, 0.0, 0.0], 1.0),
+        (44, [82.5, 42.0, 77.5, 41.0], 10.0),
+        (45, [41.0, 82.0, 33.0, 82.5], 10.0),
+        (134, [41.0, 82.0, 36.0, 82.5], 10.0),
+        (135, [82.5, 40.5, 82.0, 41.0], 1.0),
+        (224, [82.5, 42.0, 77.5, 41.0], 10.0),
+        (225, [41.0, 82.0, 33.0, 82.5], 10.0),
+        (314, [41.0, 82.0, 36.0, 82.5], 10.0),
+        (315, [82.5, 40.5, 82.0, 41.0], 1.0),
+    ];
+    let effect_of = |bytes: &[u8]| paras(&craft_docx::read(bytes).unwrap())[0].objects[0].frame().unwrap().2.effect;
+    for (degrees, ext_pt, tolerance_pt) in cases {
+        let [l, t, r, b] = ext_pt.map(|v| (v * 12_700.0).round() as i64);
+        let body = format!(
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="3225800" cy="4279900"/><wp:effectExtent l="{l}" t="{t}" r="{r}" b="{b}"/><wp:docPr id="1" name="Synthetic picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill><pic:spPr><a:xfrm rot="{}"><a:off x="0" y="0"/><a:ext cx="3225800" cy="4279900"/></a:xfrm></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#,
+            degrees * 60_000
+        );
+        let file = docx(&body, &[("rId1", "image", "media/marker.png")], &[("word/media/marker.png", "synthetic")]);
+        let effect = effect_of(&file);
+        assert!(effect.iter().all(|e| (0.0..1.5).contains(e)), "{degrees}°: {effect:?}");
+        let d = craft_docx::read(&file).unwrap();
+        let saved_file = craft_docx::write(&d).unwrap();
+        let xml = text(&unzip(&saved_file), "word/document.xml");
+        let start = xml.find("<wp:effectExtent ").expect("effect extent");
+        let saved = &xml[start..start + xml[start..].find("/>").expect("end")];
+        for (k, want) in ["l", "t", "r", "b"].into_iter().zip([l, t, r, b]) {
+            let at = saved.find(&format!(" {k}=\"")).expect("attribute") + k.len() + 3;
+            let got: i64 = saved[at..at + saved[at..].find('"').expect("quote")].parse().expect("number");
+            assert!(((got - want).abs() as f32) <= tolerance_pt * 12_700.0, "{degrees}°: {saved}");
+        }
+        // Reading the saved file back finds no effects room either: the round trip is stable.
+        let again = effect_of(&saved_file);
+        assert!(again.iter().all(|e| (0.0..1.5).contains(e)), "{degrees}° saved: {again:?}");
+    }
+    // An angle the file rounds to 45° is measured against the exchanged frame, as 45° is.
+    let pad = |rot: f32| Float { rot, ..Float::default() }.effect_spin_pad(254.0, 337.0);
+    let (near, at) = (pad(44.999_996), pad(45.0));
+    assert!((near.0 - at.0).abs() < 0.01 && (near.1 - at.1).abs() < 0.01, "{near:?} against {at:?}");
+    assert!((pad(44.99).0 - at.0).abs() > 1.0);
 }
 
 /// The math namespace, declared on the math element itself (the fixture root doesn't).

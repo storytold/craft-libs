@@ -4,8 +4,9 @@
 //! audio level and pan, and for the common dissolves. The readers and writers map those onto the
 //! effect and parameter ids below, so an application's [`Catalog`] has to answer for at least
 //! these ids (with whatever defaults it uses) and for anything else it wants carried.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use crate::model::{Catalog, EffectDef, EffectInstance, EffectKind, ParamDef, ParamValue, TrackKind, Vec2};
+use crate::interchange::{Catalog, EffectDef, EffectInstance, EffectKind, ParamDef, ParamValue, TrackKind, Vec2};
 
 /// Motion: `position` and `anchor` (points in pixels; NaN = automatic, the centre), `scale` and
 /// `scale_width` (percent), `uniform_scale`, `rotation` (degrees), `anti_flicker` (0..=1).

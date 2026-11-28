@@ -176,6 +176,8 @@ fn spa_float(flags: u16, p: &crate::officeart::Props) -> Float {
         dist: emu(dl, 9.0).max(emu(dr, 9.0)),
         dist_top: emu(dt, 0.0),
         dist_bottom: emu(db, 0.0),
+        // Layout in table cell off: placed outside the cell the shape is anchored in.
+        outside_cell: p.layout_in_cell == Some(false),
         ..Float::default()
     }
 }
@@ -275,7 +277,7 @@ fn members_into(nodes: &[Node], t: (f32, f32, f32, f32), depth: usize, b: &Build
                 let float = Float { rot: sp.props.rot, flip_h: sp.flip_h(), flip_v: sp.flip_v(), ..Float::default() };
                 let (w, h) = (fit(ew * sx).max(0.0), fit(eh * sy).max(0.0));
                 if let Some(obj) = leaf(sp, w, h, float, b, pics) {
-                    out.push(GroupChild { x: fit(x0 + ox * sx), y: fit(y0 + oy * sy), obj });
+                    out.push(GroupChild { link: None, x: fit(x0 + ox * sx), y: fit(y0 + oy * sy), obj });
                 }
             }
         }

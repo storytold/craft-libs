@@ -31,7 +31,7 @@
 //! they are.
 //!
 //! [`parse`] never panics: every count is bounds-checked against the bytes left, descriptor
-//! nesting is bounded, and allocations are capped. [`write`] always produces version 16, so
+//! nesting is bounded, and allocations are capped. [`fn@write`] always produces version 16, so
 //! `parse(write(f)) == f` for sets [`parse`] read. The existing single-set API retains trailing-byte
 //! warnings. [`parse_sets`] and [`write_sets`] preserve complete version-16 multi-set files with
 //! one version header; a version-12 file's legacy descriptors keep their meaning, not their layout.
@@ -134,7 +134,7 @@ pub struct AtnFile {
     /// "macintosh"…): the one given to [`parse_with_encoding`], else the one that turns such
     /// names into the Unicode class names stored with them, else a guess from the names shown
     /// from their bytes alone. `None` when there are no such names, or nothing tells and no
-    /// name depends on it. [`write`] ignores it: names are written as stored.
+    /// name depends on it. [`fn@write`] ignores it: names are written as stored.
     #[cfg_attr(feature = "serde", serde(default))]
     pub encoding: Option<String>,
 }

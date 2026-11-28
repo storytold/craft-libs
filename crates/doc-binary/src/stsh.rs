@@ -32,6 +32,9 @@ pub(crate) struct StandardFonts {
     pub(crate) bidi: Option<u16>,
 }
 
+/// `sti` of no style ([MS-DOC] `StdfBase`): read when the record is too short for one.
+const STI_NIL: u16 = 0x0FFF;
+
 /// `StshiLsd.cbLSD`: the size of a latent style's `LSD` ([MS-DOC] `StshiLsd`).
 const LSD_SIZE: u16 = 4;
 
@@ -53,6 +56,287 @@ pub(crate) fn standard_fonts(table: &[u8], fc: u32, lcb: u32) -> StandardFonts {
         (b, _) => b,
     };
     StandardFonts { ascii: at(12), east_asian: at(14), other: at(16), bidi }
+}
+
+/// The names of Word's built-in styles by `sti`: the "Index within built-in styles" of the
+/// reserved style names in [MS-OE376] (Part 4 §2.7.3.9, 0–266), which [MS-DOC]'s `StdfBase` says
+/// `sti` is. Spelled as that table spells them.
+const BUILT_IN_NAMES: [&str; 267] = [
+    "Normal",
+    "heading 1",
+    "heading 2",
+    "heading 3",
+    "heading 4",
+    "heading 5",
+    "heading 6",
+    "heading 7",
+    "heading 8",
+    "heading 9",
+    "index 1",
+    "index 2",
+    "index 3",
+    "index 4",
+    "index 5",
+    "index 6",
+    "index 7",
+    "index 8",
+    "index 9",
+    "toc 1",
+    "toc 2",
+    "toc 3",
+    "toc 4",
+    "toc 5",
+    "toc 6",
+    "toc 7",
+    "toc 8",
+    "toc 9",
+    "Normal Indent",
+    "footnote text",
+    "annotation text",
+    "header",
+    "footer",
+    "index heading",
+    "caption",
+    "table of figures",
+    "envelope address",
+    "envelope return",
+    "footnote reference",
+    "annotation reference",
+    "line number",
+    "page number",
+    "endnote reference",
+    "endnote text",
+    "table of authorities",
+    "macro",
+    "toa heading",
+    "List",
+    "List Bullet",
+    "List Number",
+    "List 2",
+    "List 3",
+    "List 4",
+    "List 5",
+    "List Bullet 2",
+    "List Bullet 3",
+    "List Bullet 4",
+    "List Bullet 5",
+    "List Number 2",
+    "List Number 3",
+    "List Number 4",
+    "List Number 5",
+    "Title",
+    "Closing",
+    "Signature",
+    "Default Paragraph Font",
+    "Body Text",
+    "Body Text Indent",
+    "List Continue",
+    "List Continue 2",
+    "List Continue 3",
+    "List Continue 4",
+    "List Continue 5",
+    "Message Header",
+    "Subtitle",
+    "Salutation",
+    "Date",
+    "Body Text First Indent",
+    "Body Text First Indent 2",
+    "Note Heading",
+    "Body Text 2",
+    "Body Text 3",
+    "Body Text Indent 2",
+    "Body Text Indent 3",
+    "Block Text",
+    "Hyperlink",
+    "FollowedHyperlink",
+    "Strong",
+    "Emphasis",
+    "Document Map",
+    "Plain Text",
+    "E-mail Signature",
+    "HTML Top of Form",
+    "HTML Bottom of Form",
+    "Normal (Web)",
+    "HTML Acronym",
+    "HTML Address",
+    "HTML Cite",
+    "HTML Code",
+    "HTML Definition",
+    "HTML Keyboard",
+    "HTML Preformatted",
+    "HTML Sample",
+    "HTML Typewriter",
+    "HTML Variable",
+    "Normal Table",
+    "annotation subject",
+    "No List",
+    "Outline List 1",
+    "Outline List 2",
+    "Outline List 3",
+    "Table Simple 1",
+    "Table Simple 2",
+    "Table Simple 3",
+    "Table Classic 1",
+    "Table Classic 2",
+    "Table Classic 3",
+    "Table Classic 4",
+    "Table Colorful 1",
+    "Table Colorful 2",
+    "Table Colorful 3",
+    "Table Columns 1",
+    "Table Columns 2",
+    "Table Columns 3",
+    "Table Columns 4",
+    "Table Columns 5",
+    "Table Grid 1",
+    "Table Grid 2",
+    "Table Grid 3",
+    "Table Grid 4",
+    "Table Grid 5",
+    "Table Grid 6",
+    "Table Grid 7",
+    "Table Grid 8",
+    "Table List 1",
+    "Table List 2",
+    "Table List 3",
+    "Table List 4",
+    "Table List 5",
+    "Table List 6",
+    "Table List 7",
+    "Table List 8",
+    "Table 3D effects 1",
+    "Table 3D effects 2",
+    "Table 3D effects 3",
+    "Table Contemporary",
+    "Table Elegant",
+    "Table Professional",
+    "Table Subtle 1",
+    "Table Subtle 2",
+    "Table Web 1",
+    "Table Web 2",
+    "Table Web 3",
+    "Balloon Text",
+    "Table Grid",
+    "Table Theme",
+    "Placeholder Text",
+    "No Spacing",
+    "Light Shading",
+    "Light List",
+    "Light Grid",
+    "Medium Shading 1",
+    "Medium Shading 2",
+    "Medium List 1",
+    "Medium List 2",
+    "Medium Grid 1",
+    "Medium Grid 2",
+    "Medium Grid 3",
+    "Dark List",
+    "Colorful Shading",
+    "Colorful List",
+    "Colorful Grid",
+    "Light Shading Accent 1",
+    "Light List Accent 1",
+    "Light Grid Accent 1",
+    "Medium Shading 1 Accent 1",
+    "Medium Shading 2 Accent 1",
+    "Medium List 1 Accent 1",
+    "Revision",
+    "List Paragraph",
+    "Quote",
+    "Intense Quote",
+    "Medium List 2 Accent 1",
+    "Medium Grid 1 Accent 1",
+    "Medium Grid 2 Accent 1",
+    "Medium Grid 3 Accent 1",
+    "Dark List Accent 1",
+    "Colorful Shading Accent 1",
+    "Colorful List Accent 1",
+    "Colorful Grid Accent 1",
+    "Light Shading Accent 2",
+    "Light List Accent 2",
+    "Light Grid Accent 2",
+    "Medium Shading 1 Accent 2",
+    "Medium Shading 2 Accent 2",
+    "Medium List 1 Accent 2",
+    "Medium List 2 Accent 2",
+    "Medium Grid 1 Accent 2",
+    "Medium Grid 2 Accent 2",
+    "Medium Grid 3 Accent 2",
+    "Dark List Accent 2",
+    "Colorful Shading Accent 2",
+    "Colorful List Accent 2",
+    "Colorful Grid Accent 2",
+    "Light Shading Accent 3",
+    "Light List Accent 3",
+    "Light Grid Accent 3",
+    "Medium Shading 1 Accent 3",
+    "Medium Shading 2 Accent 3",
+    "Medium List 1 Accent 3",
+    "Medium List 2 Accent 3",
+    "Medium Grid 1 Accent 3",
+    "Medium Grid 2 Accent 3",
+    "Medium Grid 3 Accent 3",
+    "Dark List Accent 3",
+    "Colorful Shading Accent 3",
+    "Colorful List Accent 3",
+    "Colorful Grid Accent 3",
+    "Light Shading Accent 4",
+    "Light List Accent 4",
+    "Light Grid Accent 4",
+    "Medium Shading 1 Accent 4",
+    "Medium Shading 2 Accent 4",
+    "Medium List 1 Accent 4",
+    "Medium List 2 Accent 4",
+    "Medium Grid 1 Accent 4",
+    "Medium Grid 2 Accent 4",
+    "Medium Grid 3 Accent 4",
+    "Dark List Accent 4",
+    "Colorful Shading Accent 4",
+    "Colorful List Accent 4",
+    "Colorful Grid Accent 4",
+    "Light Shading Accent 5",
+    "Light List Accent 5",
+    "Light Grid Accent 5",
+    "Medium Shading 1 Accent 5",
+    "Medium Shading 2 Accent 5",
+    "Medium List 1 Accent 5",
+    "Medium List 2 Accent 5",
+    "Medium Grid 1 Accent 5",
+    "Medium Grid 2 Accent 5",
+    "Medium Grid 3 Accent 5",
+    "Dark List Accent 5",
+    "Colorful Shading Accent 5",
+    "Colorful List Accent 5",
+    "Colorful Grid Accent 5",
+    "Light Shading Accent 6",
+    "Light List Accent 6",
+    "Light Grid Accent 6",
+    "Medium Shading 1 Accent 6",
+    "Medium Shading 2 Accent 6",
+    "Medium List 1 Accent 6",
+    "Medium List 2 Accent 6",
+    "Medium Grid 1 Accent 6",
+    "Medium Grid 2 Accent 6",
+    "Medium Grid 3 Accent 6",
+    "Dark List Accent 6",
+    "Colorful Shading Accent 6",
+    "Colorful List Accent 6",
+    "Colorful Grid Accent 6",
+    "Subtle Emphasis",
+    "Intense Emphasis",
+    "Subtle Reference",
+    "Intense Reference",
+    "Book Title",
+    "Bibliography",
+    "TOC Heading",
+];
+
+/// The built-in name of a style whose `sti` is `sti`. Word names a built-in style by its `sti`,
+/// whatever name the file stores (a non-English Word stores "Обычный" or "Kop 1"): `None` for a
+/// user-defined style (0x0FFE), the null 0x0FFF, and anything else past the table, which keep the
+/// stored name.
+pub(crate) fn built_in_name(sti: u16) -> Option<&'static str> {
+    BUILT_IN_NAMES.get(usize::from(sti)).copied()
 }
 
 /// Parse the `STSH` at `table[fc..fc+lcb]`.
@@ -95,6 +379,7 @@ pub(crate) fn parse(table: &[u8], fc: u32, lcb: u32) -> Result<Vec<RawStyle>, Do
         // StdfBase ([MS-DOC] §2.9.260, 10 bytes): sti(12)+flags(4); stk(4)+istdBase(12);
         // cupx(4)+istdNext(12); bchUpe(16) (= cbStd); grfstd(16). istdBase is a zero-based
         // index into the stylesheet, 0x0FFF meaning "no parent".
+        let sti = stdf.get(0..2).map_or(STI_NIL, |b| u16::from_le_bytes([b[0], b[1]]) & 0x0FFF);
         let stk = (stdf.get(2).copied().unwrap_or(1) & 0x0F).max(1);
         let w1 = stdf.get(2..4).map(|b| u16::from_le_bytes([b[0], b[1]])).unwrap_or(0xFFF1);
         let istd_base = w1 >> 4;
@@ -135,6 +420,8 @@ pub(crate) fn parse(table: &[u8], fc: u32, lcb: u32) -> Result<Vec<RawStyle>, Do
         {
             chpx = u.clone();
         }
+        // A built-in style goes by its built-in name ("Normal", "heading 1"), as in Word.
+        let name = built_in_name(sti).map_or(name, str::to_owned);
         out.push(RawStyle { stk, istd_base, name, papx, chpx });
     }
     Ok(out)
@@ -192,3 +479,84 @@ pub(crate) fn fonts(table: &[u8], fc: u32, lcb: u32) -> Vec<String> {
 
 /// Bytes of an FFN before its primary name ([MS-DOC] §2.9.82).
 const FFN_HEADER: usize = 39;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One Word 97 STD ([MS-DOC] §2.9.260, `cbSTDBaseInFile` 10) with this `sti`, `stk` and
+    /// stored name, and empty UPXs.
+    fn std_record(sti: u16, stk: u16, name: &str) -> Vec<u8> {
+        let cupx: u16 = if stk == 1 { 2 } else { 1 };
+        let mut v = Vec::new();
+        v.extend_from_slice(&sti.to_le_bytes());
+        v.extend_from_slice(&(stk | 0x0FFF << 4).to_le_bytes()); // stk, istdBase none
+        v.extend_from_slice(&(cupx | 0x0FFF << 4).to_le_bytes()); // cupx, istdNext none
+        v.extend_from_slice(&[0; 4]); // bchUpe, grfstd
+        let units: Vec<u16> = name.encode_utf16().collect();
+        v.extend_from_slice(&(units.len() as u16).to_le_bytes());
+        v.extend(units.iter().flat_map(|u| u.to_le_bytes()));
+        v.extend_from_slice(&[0, 0]);
+        if stk == 1 {
+            v.extend_from_slice(&[2, 0, 0, 0]); // UpxPapx: istd 0, no sprms
+        }
+        v.extend_from_slice(&[0, 0]); // UpxChpx: no sprms
+        [(v.len() as u16).to_le_bytes().to_vec(), v].concat()
+    }
+
+    /// An STSH holding these STDs.
+    fn stsh(stds: &[Vec<u8>]) -> Vec<u8> {
+        let mut v = vec![4, 0];
+        v.extend_from_slice(&(stds.len() as u16).to_le_bytes());
+        v.extend_from_slice(&10u16.to_le_bytes());
+        v.extend(stds.iter().flatten());
+        v
+    }
+
+    fn names(stds: &[Vec<u8>]) -> Vec<String> {
+        let t = stsh(stds);
+        parse(&t, 0, t.len() as u32).expect("STSH").into_iter().map(|s| s.name).collect()
+    }
+
+    /// #1805: a non-English Word stores its built-in styles under its own names; Word reads them
+    /// by `sti`, under the built-in names.
+    #[test]
+    fn built_in_styles_take_their_built_in_names() {
+        let read = names(&[
+            std_record(0, 1, "Обычный"),
+            std_record(1, 1, "Kop 1"),
+            std_record(65, 2, "Fuente de párrafo predeter."),
+            std_record(153, 1, "Sprechblasentext"),
+            std_record(154, 3, "表 (格子)"),
+            std_record(266, 1, "Inhaltsverzeichnisüberschrift"),
+        ]);
+        assert_eq!(read, ["Normal", "heading 1", "Default Paragraph Font", "Balloon Text", "Table Grid", "TOC Heading"]);
+    }
+
+    /// #1805: a user-defined style (0x0FFE), and an `sti` past the table, keep the stored name.
+    #[test]
+    fn other_styles_keep_their_stored_names() {
+        assert_eq!(
+            names(&[std_record(0x0FFE, 1, "Mijn stijl"), std_record(267, 2, "Later"), std_record(0x0FFF, 1, "Nil")]),
+            ["Mijn stijl", "Later", "Nil"]
+        );
+    }
+
+    /// #1805: the document's own Normal is the model's `Normal`, and a heading is a heading.
+    #[test]
+    fn a_localized_normal_is_the_models_normal() {
+        let t = stsh(&[std_record(0, 1, "Standaard"), std_record(1, 1, "Kop 1")]);
+        let sheet = crate::fmt::stylesheet(&parse(&t, 0, t.len() as u32).expect("STSH"), &[], StandardFonts::default());
+        assert!(sheet.get("Normal").is_some());
+        let h = sheet.styles.iter().find(|s| s.name == "Heading 1").expect("Heading 1");
+        assert_eq!(h.para.outline_level, Some(0));
+    }
+
+    #[test]
+    fn the_table_has_every_sti_of_ms_oe376() {
+        assert_eq!(BUILT_IN_NAMES.len(), 267);
+        assert_eq!(built_in_name(106), Some("annotation subject"));
+        assert_eq!(built_in_name(107), Some("No List"));
+        assert_eq!(built_in_name(0x0FFE), None);
+    }
+}

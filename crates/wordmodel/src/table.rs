@@ -723,9 +723,9 @@ mod tests {
         assert_eq!(t.rows.len(), 3);
         assert_eq!(t.cols(), 4);
         assert_eq!(t.total_width(), 468.0);
-        let huge = Table::new(1_000_000, 1000, 100.0);
-        assert_eq!(huge.rows.len(), MAX_ROWS);
-        assert_eq!(huge.cols(), MAX_COLS);
+        // Each cap on its own: the grid of both at once would be millions of cells.
+        assert_eq!(Table::new(1_000_000, 1, 100.0).rows.len(), MAX_ROWS);
+        assert_eq!(Table::new(1, 1000, 100.0).cols(), MAX_COLS);
     }
 
     #[test]

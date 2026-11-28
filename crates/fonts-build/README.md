@@ -12,7 +12,7 @@ build. The build reads a local checkout named by `CRAFT_FONTS_DIR` instead.
 |---|---|
 | `CRAFT_FONTS_DIR` unset or empty | Empty table. |
 | `CRAFT_FONTS_DIR` = a craft-fonts checkout | Every selected face of `fonts/manifest.txt`, embedded with `include_bytes!`. |
-| `CRAFT_FONTS_DIR` set, but no manifest or a missing font file | `cargo::warning`, empty table. |
+| `CRAFT_FONTS_DIR` is set, but the main manifest or a main font file is missing, or a main font's SHA-256 differs from its manifest. | `Embed` prints `cargo::warning` and writes an empty table. |
 | `CRAFT_FONTS_REQUIRED=1` (exactly `1`; other values are ignored) | Error instead when the directory is unset, unreadable, has no selected face, or has no face for a script passed to `scripts`. |
 
 Give `CRAFT_FONTS_DIR` as an absolute path: Cargo runs build scripts in the package's directory.
@@ -20,8 +20,8 @@ Give `CRAFT_FONTS_DIR` as an absolute path: Cargo runs build scripts in the pack
 ## Using it
 
 `Cargo.toml` (same `rev` as the app's other craft-libs crates). The `subset` feature goes on the
-build-dependency only: it brings in the subsetter ([skera](https://crates.io/crates/skera) and the
-fontations crates), which the app itself never needs. Cargo's resolver 2 and later (edition 2021
+build-dependency only: it brings in the subsetter (craft-font-subset, which compiles HarfBuzz's
+C++), which the app itself needs only for its own run-time subsetting. Cargo's resolver 2 and later (edition 2021
 and later) keep build-dependency features apart from the app's, so the dependency stays without
 it.
 
@@ -95,11 +95,18 @@ below), and `Embed::documents(&["Noto Sans", …])` only the families it names (
 - `embedded_elsewhere(&["Noto Sans Math", …])` names families another table of the app embeds,
   so `check_text` and the catalog check count their characters as covered.
 - `dir(path)` and `required(bool)` override the two environment variables.
+- `tab_face()` also embeds Noto Sans Condensed SemiBold from `fonts/latin-manifest.txt`, with the
+  role `tab`. `scripts` and `filter` do not apply to it. A checkout without that manifest or its
+  row embeds the other faces and prints a warning, even with `CRAFT_FONTS_REQUIRED=1`.
 
 `write` returns the embedded `ManifestEntry`s, for build-time checks such as "the interface face
 is present". The generated file is a slice expression of `EmbeddedFace { family, style, scripts,
-index, bytes }` literals; any struct with those fields and that name in scope works too.
-`EmbeddedFace` itself has `name()`, `has_script(tag)`, `is_cjk()` and `weight()`.
+index, bytes, role }` literals; any struct with those fields and that name in scope works too.
+`role` is the manifest line's ninth field: `Some("ui")`, `Some("mono")`, `Some("signature")` or
+`None`, or `Some("tab")` on the face `tab_face()` adds; craft-ui's font stack leads the Monospace
+family with the `mono` face, the signature family (`FontRef::signature()`) with the `signature`
+face and the tab-title family with the `tab` face. `EmbeddedFace` itself has `name()`,
+`has_script(tag)`, `is_cjk()` and `weight()`.
 
 ## Document fonts
 
@@ -178,8 +185,8 @@ the five cuts take about 3 MB together.
   with a `cargo::warning`: a full CJK face is never embedded for the interface by accident. A
   checkout whose manifest has no interface face is a `cargo::warning` too. With `CRAFT_FONTS_REQUIRED=1` that
   makes `scripts(&["Hant"])` an error; with catalogs, an interface face satisfies it.
-- An interface face with CFF outlines is an error (`Error::NotTrueType`), even when not required:
-  the subsetter cuts TrueType (`glyf`) faces correctly, but not CFF ones.
+- Interface faces may have TrueType (`glyf`) or CFF outlines; a cut keeps its source's format and
+  extension.
 
 The catalogs come from craft-i18n. An app's build reads them from the checkout `CRAFT_I18N_DIR`
 names (craft-i18n's `docs/integration.md`); the fonts build script reads the same variable, as in
@@ -199,4 +206,17 @@ exact only for the catalogs it was cut to. It also reruns the build script when 
 One face per line, eight or nine fields separated by `" | "`; craft-fonts' `docs/integration.md`
 defines them. Lines starting with `#` are comments. A file field ending in `#<n>` names face `n` of
 a font collection (`fonts/noto-sans-cjk/NotoSansCJK.ttc#2`); without it the index is 0. The ninth
-field, `role`, is `ui` on interface faces and absent elsewhere. Fields after the ninth are ignored.
+field, `role`, is `ui` on interface faces, `mono` on the monospace face, `signature` on the signature
+face and absent elsewhere. Fields
+after the ninth are ignored.
+
+Each selected font file is hashed and compared with the line's `sha256` field, in either letter
+case; a field that is not 64 hex digits is not checked. A mismatch in a main font is `Error::HashMismatch`, treated
+like a missing font file: a build error with `CRAFT_FONTS_REQUIRED=1`, and a `cargo::warning` with an
+empty table otherwise. A hash mismatch in the optional `tab_face()` font returns the same error
+with `CRAFT_FONTS_REQUIRED=1`. Otherwise, `Embed` warns and omits only that font, retaining the other
+faces. The error names the manifest that supplied the expected hash.
+
+Without `CRAFT_FONTS_REQUIRED=1`, `Embed` caches hashes at the generated
+table's path with `.sha256.txt` appended. Each entry records the font file's size and modification
+time, and a file is hashed again only when one of those changes. A required build hashes every file.

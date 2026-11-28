@@ -2,8 +2,8 @@
 //! their entries and values, and the SubIFD tree.
 //!
 //! Every offset and count comes from the file and is checked before use: an entry whose value lies
-//! outside the file is an error when it is read, the walk visits at most [`MAX_IFDS`] directories,
-//! never the same one twice (cyclic chains end), and goes at most [`MAX_DEPTH`] SubIFD levels deep.
+//! outside the file is an error when it is read, the walk visits at most [`crate::classic::MAX_IFDS`] directories,
+//! never the same one twice (cyclic chains end), and goes at most [`crate::classic::MAX_DEPTH`] SubIFD levels deep.
 
 use std::collections::HashSet;
 

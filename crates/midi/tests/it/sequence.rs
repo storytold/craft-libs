@@ -18,6 +18,7 @@ fn sequence_helpers() {
             CtrlEvent { tick: 500, channel: 0, kind: CtrlKind::Cc(1), value: 3 },
             CtrlEvent { tick: 500, channel: 0, kind: CtrlKind::Cc(2), value: 4 },
         ],
+        ..Default::default()
     };
     assert_eq!(seq.end_tick(), 500);
     seq.sort();
@@ -39,7 +40,11 @@ fn sequence_helpers() {
 #[cfg(feature = "serde")]
 #[test]
 fn sequence_serde_round_trip() {
-    let seq = Sequence { notes: vec![n(60, 0, 1)], ctrls: vec![CtrlEvent { tick: 1, channel: 0, kind: CtrlKind::PolyPressure(60), value: 9 }] };
+    let seq = Sequence {
+        notes: vec![n(60, 0, 1)],
+        ctrls: vec![CtrlEvent { tick: 1, channel: 0, kind: CtrlKind::PolyPressure(60), value: 9 }],
+        ..Default::default()
+    };
     let json = serde_json::to_string(&seq).unwrap();
     assert_eq!(serde_json::from_str::<Sequence>(&json).unwrap(), seq);
 }
@@ -53,7 +58,7 @@ fn remove_duplicates_handles_a_large_same_tick_controller_group() {
         .iter()
         .flat_map(|&pass| keys.iter().map(move |&(channel, cc)| CtrlEvent { tick: 7, channel, kind: CtrlKind::Cc(cc), value: pass }))
         .collect();
-    let mut seq = Sequence { notes: Vec::new(), ctrls };
+    let mut seq = Sequence { notes: Vec::new(), ctrls, ..Default::default() };
     let start = std::time::Instant::now();
     assert_eq!(seq.remove_duplicates(), keys.len());
     assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
@@ -105,7 +110,7 @@ fn remove_duplicates_matches_a_per_tick_rescan_on_mixed_ticks() {
             let r = next();
             ctrls.push(CtrlEvent { tick: (r % 6) as i64 - 2, channel: (r >> 16) as u8 % 3, kind: kinds(r >> 24), value: (round * 100 + i) as i32 });
         }
-        let mut seq = Sequence { notes: Vec::new(), ctrls: ctrls.clone() };
+        let mut seq = Sequence { notes: Vec::new(), ctrls: ctrls.clone(), ..Default::default() };
         let removed = seq.remove_duplicates();
         let expected = reference(ctrls.clone());
         assert_eq!(seq.ctrls, expected, "round {round}");

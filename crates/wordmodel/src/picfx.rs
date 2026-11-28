@@ -1,9 +1,9 @@
-//! Picture colour corrections read from a file: brightness, contrast and transparency
+//! Picture effects read from a file: brightness, contrast, transparency and soft edges
 //! (DrawingML `a:lum` and `a:alphaModFix` inside `a:blip`, ECMA-376 §20.1.8.42 and §20.1.8.4;
 //! VML `v:imagedata` `gain` and `blacklevel`, which Word's picture watermark "Washout" sets).
 //!
-//! Values are kept in OOXML units: thousandths of a percent, so 100 000 is 100 %. All zero is
-//! the picture as it is.
+//! Colour corrections use OOXML's thousandths of a percent, so 100 000 is 100 %. A picture's
+//! DrawingML soft-edge radius uses EMUs, independent of its shared image pixels.
 //!
 //! The pixel formula was measured on Word (#1711, #1766): Word bakes the corrected pixels into
 //! the picture it embeds in a PDF export, so a synthetic grey and colour ramp exported with
@@ -30,7 +30,9 @@ use serde::{Deserialize, Serialize};
 /// The largest magnitude of a correction (100 %).
 pub const FX_MAX: i32 = 100_000;
 
-/// Brightness, contrast and transparency of a picture (see the module docs).
+const MAX_SOFT_EDGE_EMU: i64 = crate::effects::MAX_SOFT_EDGE as i64 * 12_700;
+
+/// Per-picture effects (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PicFx {
@@ -40,17 +42,31 @@ pub struct PicFx {
     pub contrast: i32,
     /// 0 (opaque) ..= 100 000 (invisible).
     pub transparency: i32,
+    /// Radius of a DrawingML soft edge in EMUs. An absent or zero radius leaves a sharp edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub soft_edge_emu: Option<u32>,
 }
 
 impl PicFx {
     /// Corrections clamped to their ranges.
     pub fn new(bright: i32, contrast: i32, transparency: i32) -> PicFx {
-        PicFx { bright: bright.clamp(-FX_MAX, FX_MAX), contrast: contrast.clamp(-FX_MAX, FX_MAX), transparency: transparency.clamp(0, FX_MAX) }
+        PicFx {
+            bright: bright.clamp(-FX_MAX, FX_MAX),
+            contrast: contrast.clamp(-FX_MAX, FX_MAX),
+            transparency: transparency.clamp(0, FX_MAX),
+            soft_edge_emu: None,
+        }
     }
 
     /// The same corrections, each clamped to its range (for values that came from anywhere).
     pub fn clamped(self) -> PicFx {
-        PicFx::new(self.bright, self.contrast, self.transparency)
+        PicFx::new(self.bright, self.contrast, self.transparency).with_soft_edge_emu(self.soft_edge_emu.map_or(0, i64::from))
+    }
+
+    /// Sets and bounds the picture's soft-edge radius without changing its other effects.
+    pub fn with_soft_edge_emu(mut self, radius: i64) -> Self {
+        self.soft_edge_emu = u32::try_from(radius.clamp(0, MAX_SOFT_EDGE_EMU)).ok().filter(|&value| value != 0);
+        self
     }
 
     /// No correction at all.
@@ -174,7 +190,7 @@ mod tests {
     #[test]
     fn hostile_values_clamp() {
         for v in [i32::MIN, -100_001, 0, 100_001, i32::MAX] {
-            let fx = PicFx { bright: v, contrast: v, transparency: v };
+            let fx = PicFx { bright: v, contrast: v, transparency: v, ..Default::default() };
             let _ = fx.table();
             assert!((0.0..=1.0).contains(&fx.opacity()));
             let mut px = [1u8, 2, 3, 4];

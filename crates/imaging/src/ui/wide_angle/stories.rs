@@ -1,0 +1,140 @@
+//! Stories of the Adaptive Wide Angle workspace, its constraint lines and its panel.
+//!
+//! The source and the corrected preview are the stories' generated picture; the geometry bows every line outward from
+//! the picture's centre, so the curves show, and the corrected preview's mapping is the identity.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use craft_behavior::PixelSize;
+use craft_behavior::kurbo::Point;
+use craft_ui::canvas::RasterSource;
+use craft_ui::contract::Show as _;
+use craft_ui::dialog::stories::hosted;
+use craft_ui::dialog::{FullWindowCanvas, FullWindowView, HostedWorkspace};
+use craft_ui::runtime::pending::Job;
+use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
+use egui::Ui;
+
+use crate::ui::mock_image::MockImage;
+
+use super::{
+    ConstraintLines, ConstraintOrientation, PreviewDone, WideAngleConstraint, WideAngleGeometry, WideAngleOpen, WideAnglePanel, WideAngleSession,
+    WideAngleSource, WideAngleWorkspace,
+};
+
+/// The picture's size in pixels.
+const IMAGE: PixelSize = PixelSize::new(480, 320);
+
+/// How far a curve bows at its middle, as a share of the line's length.
+const BOW: f64 = 0.06;
+
+/// Lines bowed away from the centre; the corrected preview maps every point to itself.
+struct Bowed;
+
+impl WideAngleGeometry for Bowed {
+    fn arc(&self, _: &WideAngleSession, a: [f64; 2], b: [f64; 2], segments: usize) -> Vec<Point> {
+        let centre = [f64::from(IMAGE.width) / 2.0, f64::from(IMAGE.height) / 2.0];
+        let length = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+        let middle = [(a[0] + b[0]) / 2.0 - centre[0], (a[1] + b[1]) / 2.0 - centre[1]];
+        let norm = (middle[0].powi(2) + middle[1].powi(2)).sqrt().max(1.0);
+        (0..=segments)
+            .map(|i| {
+                let t = i as f64 / segments as f64;
+                let bow = 4.0 * t * (1.0 - t) * BOW * length;
+                Point::new(a[0] + (b[0] - a[0]) * t + middle[0] / norm * bow, a[1] + (b[1] - a[1]) * t + middle[1] / norm * bow)
+            })
+            .collect()
+    }
+
+    fn corrected(&self, _: &WideAngleSession, at: Point) -> Option<Point> {
+        Some(at)
+    }
+}
+
+/// The two pictures and the lens that curves the lines over them.
+struct Pictures {
+    source: MockImage,
+    corrected: MockImage,
+    lens: Bowed,
+}
+
+impl WideAngleSource for Pictures {
+    fn geometry(&self) -> &dyn WideAngleGeometry {
+        &self.lens
+    }
+
+    fn source(&self) -> &dyn RasterSource {
+        &self.source
+    }
+
+    fn corrected(&self) -> Option<&dyn RasterSource> {
+        Some(&self.corrected)
+    }
+
+    fn preview_job(&self, _: &WideAngleSession) -> Job<PreviewDone, String> {
+        Job::new(|_, _| Ok(PreviewDone::new(Duration::from_millis(12))))
+    }
+}
+
+fn pictures() -> Pictures {
+    let picture = MockImage::new([IMAGE.width, IMAGE.height]);
+    Pictures { source: picture, corrected: picture, lens: Bowed }
+}
+
+/// One constraint of each orientation, near the picture's edges where the bow shows.
+fn constraints() -> Vec<WideAngleConstraint> {
+    let line = WideAngleConstraint::new;
+    vec![
+        line([60.0, 50.0], [420.0, 50.0], ConstraintOrientation::Horizontal),
+        line([50.0, 70.0], [50.0, 280.0], ConstraintOrientation::Vertical),
+        line([130.0, 270.0], [400.0, 230.0], ConstraintOrientation::Free),
+    ]
+}
+
+fn session() -> WideAngleSession {
+    WideAngleSession::default().with_constraints(constraints())
+}
+
+/// The workspace on the story's dialog host, opened as an app opens one.
+fn hosted_workspace(ui: &mut Ui, data: &mut StoryData, preview: bool) -> StoryOutput {
+    hosted(ui, data, preview, || {
+        let mut workspace = WideAngleWorkspace::new(WideAngleOpen::new([IMAGE.width, IMAGE.height], "Layer 1").session(session()));
+        workspace.preview(preview);
+        HostedWorkspace::new(workspace, Arc::new(pictures()))
+    })
+}
+
+#[story(WideAngleWorkspace, covers = [Default], drive = Drive::Never)]
+fn workspace_source(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    hosted_workspace(ui, data, false)
+}
+
+#[story(WideAngleWorkspace, covers = [], drive = Drive::Never)]
+fn workspace_corrected(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    hosted_workspace(ui, data, true)
+}
+
+#[story(ConstraintLines<'static>, covers = [Default], drive = Drive::Never)]
+fn lines(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let session = session();
+    let pictures = pictures();
+    let (view, view_at) = data.value_at("view", FullWindowView::new());
+    let mut seen = None;
+    let canvas = FullWindowCanvas::new(view_at.bind(view), pictures.source()).controls(|ui, rect| {
+        seen = Some(
+            ConstraintLines::new("Constraint lines", &session, &Bowed)
+                .picture([IMAGE.width, IMAGE.height], [IMAGE.width, IMAGE.height])
+                .show_at(ui, rect),
+        );
+    });
+    canvas.show(ui);
+    seen.map(StoryOutput::from).unwrap_or_default()
+}
+
+#[story(WideAnglePanel<'static>, covers = [Default], drive = Drive::Never)]
+fn panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let session = session();
+    let (preview, preview_at) = data.value_at("preview", true);
+    WideAnglePanel::new(&session, preview_at.bind(preview)).show(ui).into()
+}

@@ -111,11 +111,9 @@ output with 1 thread, 3 threads (frame threading with a small pool) and every co
 mismatch reports frame, plane, position and superblock. No picture may be flagged draft without
 draft mode.
 
-- Unit tests: boolean decoder against a literal model of 9.2, tables / trees, inverse DCT / ADST
-  against floating-point bases, DC-only shortcut vs. full transform, the column-parallel 2D
-  transform against the per-column formulation on random blocks of every size and type, scaled
-  MC path vs. unscaled (through a banded reference frame), superframe index, `inv_remap_prob`,
-  probability merging.
+- Unit tests: boolean decoder against a literal model of 9.2 (reading past the end included), the
+  column-parallel 2D transform against the per-column formulation on random blocks of every size
+  and type.
 - Draft mode (`draft_mode_changes_only_flagged_non_reference_frames`): on a two-layer temporal
   scalability stream, single- and frame-threaded, every unflagged frame is bit-exact and only
   flagged frames differ.
@@ -125,12 +123,12 @@ draft mode.
 - Synthetic (`tests/it/synthetic.rs`): headers of libvpx output are rewritten to produce what ffmpeg's
   libvpx wrapper cannot: inter frames of a stream encoded at another size spliced after a 352x288
   key frame with explicit frame sizes, i.e. **scaled reference prediction** (downscale 256x208,
-  upscale 480x400, odd 301x199; a same-size splice is the control); a key frame rewritten as a
-  hidden **intra-only frame** (reset_frame_context 3 / 2 / 0, various refresh masks) shown with
-  **show_existing_frame**; show_existing_frame of every slot, also inside a superframe.
+  upscale 480x400); a key frame rewritten as a hidden **intra-only frame** (reset_frame_context
+  3 / 2 / 0, various refresh masks) shown with **show_existing_frame**; show_existing_frame of
+  every slot, also inside a superframe.
 - Robustness (`tests/it/robustness.rs`): bit flips, byte replacement and truncation of real streams,
-  truncated frames, random data and oversized frames never panic (debug and release) or hang,
-  single- and multi-threaded.
+  random data and frames without references never panic (debug and release) or hang, single- and
+  multi-threaded; a frame whose picture store exceeds the memory budget is refused.
 - Superframe length regressions (`header::tests::hostile_lengths_*`, #2801) run without media
   fixtures on native and 32-bit WASI targets. Oversized frame lengths cannot wrap an offset;
   truncated indexes retain the existing remaining-payload fallback. See

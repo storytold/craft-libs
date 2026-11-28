@@ -85,7 +85,7 @@ const GROUP_BYTES: usize = 64 << 20;
 /// A TIFF page opened for decoding a group of bands at a time, for images too large to hold
 /// twice (#8169): [`TiffBands::decode`] hands each group to its caller, who writes it into the
 /// document, so only one group exists beside the document. The pixels, layout and metadata are
-/// those [`decode_page`] returns; [`TiffBands::upright`] applies the orientation as
+/// those `decode_page` returns; `TiffBands::upright` applies the orientation as
 /// [`Image::oriented`] does.
 pub struct TiffBands<'a> {
     b: &'a [u8],
@@ -103,7 +103,7 @@ pub struct TiffBands<'a> {
 }
 
 impl<'a> TiffBands<'a> {
-    /// Opens page `page` (`None`: the page [`decode_page`] opens by default) and checks it
+    /// Opens page `page` (`None`: the page `decode_page` opens by default) and checks it
     /// against `limits`; on 64-bit targets its `max_alloc` bounds each group of bands, not the
     /// whole image.
     pub fn open(bytes: &'a [u8], page: Option<usize>, limits: &Limits) -> Result<Self, CodecError> {

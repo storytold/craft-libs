@@ -69,7 +69,7 @@ impl<'a> Entry<'a> {
 
 /// An entry of an index whose bytes are still being written (the `.aepx` reader decodes into a
 /// buffer that grows, so it keeps positions, not slices): the body is `start..start + len` of
-/// that buffer. The fields are those of [`Entry`]; [`TreeIndex::from_drafts`] turns the list
+/// that buffer. The fields are those of `Entry`; [`TreeIndex::from_drafts`] turns the list
 /// into an index once the buffer is final.
 #[derive(Debug, Clone, Copy)]
 pub struct Draft {
@@ -140,7 +140,7 @@ impl<'a> TreeIndex<'a> {
 
     /// The index of the entries `drafts` (in depth-first order, see [`Draft`]) whose bodies and
     /// trailer are ranges of `buffer`. A range outside `buffer` reads as empty. The list is turned
-    /// into entries; a [`Draft`] and an [`Entry`] have the same size and alignment, so the standard
+    /// into entries; a [`Draft`] and an `Entry` have the same size and alignment, so the standard
     /// library reuses the list's allocation for them.
     pub fn from_drafts(buffer: &'a [u8], drafts: Vec<Draft>, trailer: (usize, usize)) -> Self {
         let slice = |start: usize, len: usize| start.checked_add(len).and_then(|end| buffer.get(start..end)).unwrap_or(&[]);

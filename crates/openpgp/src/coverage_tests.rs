@@ -4,7 +4,7 @@
 use pgp::crypto::hash::HashAlgorithm;
 
 use crate::fixtures::*;
-use crate::{CantCheck, Checked, Coverage, Fingerprint, KeyRing, MAX_MESSAGE, NotVerified, Outcome, verify};
+use crate::{CantCheck, Checked, Coverage, Fingerprint, KeyRing, MAX_MESSAGE, NotVerified, Outcome, verify, verify_within};
 
 const ALICE: &str = "Alice <alice@example.org>";
 
@@ -120,17 +120,21 @@ fn an_armour_header_other_than_hash_or_an_unescaped_dash_line_is_unreadable() {
 
 #[test]
 fn a_signed_message_too_large_to_check_says_so() {
-    let mut big = signed_message(&secret(ALICE, Make::default()), HashAlgorithm::Sha256);
-    big.resize(MAX_MESSAGE + 1, b'a');
-    let checked = verify(&big, ALICE, &KeyRing::new(), LATER, yes).unwrap();
-    assert!(matches!(checked.outcome, Outcome::CantCheck { why: CantCheck::TooLarge, .. }));
-    // Inline-signed, the block found anywhere in it.
-    let mut big = plain(ALICE, "7bit", &"a".repeat(1 << 20));
-    big.extend_from_slice(b"\r\n-----BEGIN PGP SIGNED MESSAGE-----\r\n");
-    big.resize(MAX_MESSAGE + 1, b'a');
-    assert!(verify(&big, ALICE, &KeyRing::new(), LATER, yes).is_some());
-    // Not signed at all: nothing to say.
-    let mut big = plain(ALICE, "7bit", "Just text.\r\n");
-    big.resize(MAX_MESSAGE + 1, b'a');
-    assert_eq!(verify(&big, ALICE, &KeyRing::new(), LATER, yes), None);
+    // At a 64 KiB limit; nightly also at MAX_MESSAGE.
+    let full = craft_testkit::hostile::divisor() == 1;
+    for max in [64 << 10].into_iter().chain(full.then_some(MAX_MESSAGE)) {
+        let mut big = signed_message(&secret(ALICE, Make::default()), HashAlgorithm::Sha256);
+        big.resize(max + 1, b'a');
+        let checked = verify_within(&big, max, ALICE, &KeyRing::new(), LATER, yes).unwrap();
+        assert!(matches!(checked.outcome, Outcome::CantCheck { why: CantCheck::TooLarge, .. }));
+        // Inline-signed, the block found anywhere in it.
+        let mut big = plain(ALICE, "7bit", &"a".repeat(max / 2));
+        big.extend_from_slice(b"\r\n-----BEGIN PGP SIGNED MESSAGE-----\r\n");
+        big.resize(max + 1, b'a');
+        assert!(verify_within(&big, max, ALICE, &KeyRing::new(), LATER, yes).is_some());
+        // Not signed at all: nothing to say.
+        let mut big = plain(ALICE, "7bit", "Just text.\r\n");
+        big.resize(max + 1, b'a');
+        assert_eq!(verify_within(&big, max, ALICE, &KeyRing::new(), LATER, yes), None);
+    }
 }

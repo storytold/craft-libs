@@ -99,7 +99,8 @@ pub(super) fn read_meta(bytes: &[u8], limits: &Limits) -> Result<MetaData, Codec
     // DWAA/DWAB parts are counted apart: they go past 2^16:1 (a flat 8192x4320 frame with 12
     // alpha-scheme mattes is about 30 KB, over 75000:1).
     let mut dwa: u64 = 0;
-    for header in meta.headers.iter() {
+    let selected = if meta.requirements.has_deep_data { None } else { Some(pick_part(&meta)) };
+    for (index, header) in meta.headers.iter().enumerate() {
         let size = header.layer_size;
         let (w, h) = (u32::try_from(size.0).unwrap_or(u32::MAX), u32::try_from(size.1).unwrap_or(u32::MAX));
         let bpp = header.channels.list.len().max(1) as u64 * 4;
@@ -108,6 +109,17 @@ pub(super) fn read_meta(bytes: &[u8], limits: &Limits) -> Result<MetaData, Codec
         total = total.saturating_add(bytes);
         if matches!(header.compression, Compression::DWAA(_) | Compression::DWAB(_)) {
             dwa = dwa.saturating_add(bytes);
+        }
+        let data = header.own_attributes.layer_position;
+        let display = header.shared_attributes.display_window;
+        let contained = data.0 >= display.position.0
+            && data.1 >= display.position.1
+            && i64::from(data.0) + size.0 as i64 <= i64::from(display.position.0) + display.size.0 as i64
+            && i64::from(data.1) + size.1 as i64 <= i64::from(display.position.1) + display.size.1 as i64;
+        if contained && (selected.is_none() || selected == Some(index)) {
+            let sw = u32::try_from(display.size.0).unwrap_or(u32::MAX);
+            let sh = u32::try_from(display.size.1).unwrap_or(u32::MAX);
+            limits.check_bytes(sw, sh, 16)?;
         }
     }
     if total > limits.max_alloc {
@@ -238,6 +250,65 @@ fn layer_to_image(layer: &Layer<AnyChannels<FlatSamples>>) -> Result<Image, Code
     Ok(img)
 }
 
+fn stage_image(mut image: Image, header: &exr::meta::header::Header, limits: &Limits) -> Result<Image, CodecError> {
+    let data = header.own_attributes.layer_position;
+    let display = header.shared_attributes.display_window;
+    let (dw, dh) = (header.layer_size.0 as i64, header.layer_size.1 as i64);
+    let (sw, sh) = (display.size.0 as i64, display.size.1 as i64);
+    if data.0 == display.position.0 && data.1 == display.position.1 && dw == sw && dh == sh {
+        return Ok(image);
+    }
+    if data.0 < display.position.0
+        || data.1 < display.position.1
+        || i64::from(data.0) + dw > i64::from(display.position.0) + sw
+        || i64::from(data.1) + dh > i64::from(display.position.1) + sh
+    {
+        return Ok(image);
+    }
+    let (w, h) = (u32::try_from(sw).map_err(err)?, u32::try_from(sh).map_err(err)?);
+    limits.check_bytes(w, h, 16)?;
+    let x = usize::try_from(data.0 - display.position.0).map_err(err)?;
+    let y = usize::try_from(data.1 - display.position.1).map_err(err)?;
+    let nc = image.layout().channels();
+    let npx = usize::try_from(w).map_err(err)?.checked_mul(usize::try_from(h).map_err(err)?).ok_or_else(|| err("EXR stage size"))?;
+    let src_w = image.width() as usize;
+    if let Some(source) = image.to_f16_samples() {
+        let mut pixels = Vec::new();
+        let len = npx.checked_mul(nc).ok_or_else(|| err("EXR stage allocation"))?;
+        pixels.try_reserve_exact(len).map_err(|_| CodecError::LimitExceeded("EXR stage allocation".into()))?;
+        pixels.resize(len, f16::ZERO);
+        for row in 0..image.height() as usize {
+            let src = row * src_w * nc;
+            let dst = ((y + row) * w as usize + x) * nc;
+            pixels
+                .get_mut(dst..dst + src_w * nc)
+                .ok_or_else(|| err("EXR stage row"))?
+                .copy_from_slice(source.get(src..src + src_w * nc).ok_or_else(|| err("EXR source row"))?);
+        }
+        image = Image::from_f16(w, h, image.layout(), &pixels)?;
+    } else if let Some(source) = image.to_f32_samples() {
+        let mut pixels = Vec::new();
+        let len = npx.checked_mul(nc).ok_or_else(|| err("EXR stage allocation"))?;
+        pixels.try_reserve_exact(len).map_err(|_| CodecError::LimitExceeded("EXR stage allocation".into()))?;
+        pixels.resize(len, 0.0_f32);
+        for row in 0..image.height() as usize {
+            let src = row * src_w * nc;
+            let dst = ((y + row) * w as usize + x) * nc;
+            pixels
+                .get_mut(dst..dst + src_w * nc)
+                .ok_or_else(|| err("EXR stage row"))?
+                .copy_from_slice(source.get(src..src + src_w * nc).ok_or_else(|| err("EXR source row"))?);
+        }
+        image = Image::from_f32(w, h, image.layout(), &pixels)?;
+    } else {
+        return Err(err("EXR sample conversion"));
+    }
+    image
+        .warnings
+        .push(DecodeWarning::DisplayWindowStage { stage: (w, h), origin: (i32::try_from(x).map_err(err)?, i32::try_from(y).map_err(err)?) });
+    Ok(image)
+}
+
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     let meta = read_meta(bytes, limits)?;
 
@@ -249,7 +320,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
     }
 
     let pick = pick_part(&meta);
-    let mut img = layer_to_image(&read_layer(bytes, pick)?)?;
+    let mut img = stage_image(layer_to_image(&read_layer(bytes, pick)?)?, &meta.headers[pick], limits)?;
     if meta.headers.len() > 1 {
         let total = u32::try_from(meta.headers.len()).ok();
         img.warnings.push(DecodeWarning::MoreParts { total });
@@ -285,7 +356,7 @@ pub(crate) fn decode_part(bytes: &[u8], index: usize, limits: &Limits) -> Result
     if index >= meta.headers.len() {
         return Err(err(format!("part index {index} is out of range ({} parts)", meta.headers.len())));
     }
-    layer_to_image(&read_layer(bytes, index)?)
+    stage_image(layer_to_image(&read_layer(bytes, index)?)?, &meta.headers[index], limits)
 }
 
 /// Decodes the named channels of one flat part (exact names as the file stores them, e.g.
@@ -402,9 +473,21 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     let encoding = Encoding { compression, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
     let channels = AnyChannels::sort(list.into_iter().collect());
     let layer = Layer::new((w, h), LayerAttributes::default(), encoding, channels);
-    let image = exr::image::Image::from_layer(layer);
+    let mut image = exr::image::Image::from_layer(layer);
+    if let Some([red, green, blue, white]) = opts.exr_chromaticities {
+        use exr::math::Vec2;
+        image.attributes.chromaticities = Some(exr::meta::attribute::Chromaticities {
+            red: Vec2(red[0], red[1]),
+            green: Vec2(green[0], green[1]),
+            blue: Vec2(blue[0], blue[1]),
+            white: Vec2(white[0], white[1]),
+        });
+    }
     let mut cursor = Cursor::new(Vec::new());
-    image.write().to_buffered(&mut cursor).map_err(|e| CodecError::encode(F, e))?;
+    let writer = image.write();
+    #[cfg(target_arch = "wasm32")]
+    let writer = writer.non_parallel();
+    writer.to_buffered(&mut cursor).map_err(|e| CodecError::encode(F, e))?;
     Ok(cursor.into_inner())
 }
 
@@ -447,5 +530,16 @@ mod preview_tests {
         }
         // A header cut off mid-attribute is left to the crate.
         check_previews(&good[..at]).unwrap();
+    }
+
+    #[test]
+    fn encode_writes_chromaticities_attribute() {
+        let img = Image::from_f32(2, 2, ChannelLayout::Rgb, &[0.5; 12]).unwrap();
+        let chroma = [[0.713, 0.293], [0.165, 0.830], [0.128, 0.044], [0.32168, 0.33767]];
+        let opts = EncodeOptions { exr_chromaticities: Some(chroma), ..EncodeOptions::default() };
+        let encoded = encode(&img, Plan { layout: ChannelLayout::Rgb, sample: SampleType::F32 }, &opts).unwrap();
+        let meta = MetaData::read_from_buffered(Cursor::new(&encoded), false).unwrap();
+        let c = meta.headers[0].shared_attributes.chromaticities.unwrap();
+        assert_eq!([[c.red.0, c.red.1], [c.green.0, c.green.1], [c.blue.0, c.blue.1], [c.white.0, c.white.1]], chroma);
     }
 }

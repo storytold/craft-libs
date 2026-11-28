@@ -110,11 +110,27 @@ impl Reader<'_> {
             log::warn!("docx: alternative format chunks nest deeper than {MAX_CHUNK_NESTING}; the inner ones are left out");
             return None;
         }
-        let pkg =
-            Package::open_limited(bytes, MAX_PART, self.chunks.bytes).map_err(|e| log::warn!("docx: unreadable nested document chunk: {e}")).ok()?;
+        // The nested document shares the file's element budget: open_limited_within, not a
+        // fresh cap — nesting goes deep, so 5 packages each getting 16M is the OOM class the
+        // budget exists for. The container's own parse spent part of the chain, so the cap is
+        // the lesser of the chain and what the container has left.
+        let cap = self.chunks.elements.min(self.pkg.elements_left());
+        let pkg = Package::open_limited_within(bytes, MAX_PART, self.chunks.bytes, cap)
+            .map_err(|e| log::warn!("docx: unreadable nested document chunk: {e}"))
+            .ok()?;
         self.chunks.bytes = self.chunks.bytes.saturating_sub(pkg.size());
         let state = ChunkState { nesting: self.chunks.nesting + 1, depth: depth + 1, ..self.chunks };
-        let (doc, left, bytes, graphic) = match super::read_opened_in(&pkg, state) {
+        let read = super::read_opened_in(&pkg, state);
+        // A parsed main part can still fail semantic validation (for example, a non-Word
+        // root). Charge its elements before returning that error, so later siblings cannot
+        // reuse the reservation. On success this is the same single charge as before.
+        let elements = pkg.elements_left();
+        self.chunks.elements = elements;
+        let spent = cap.saturating_sub(elements);
+        if let Err(e) = self.pkg.charge(spent) {
+            log::warn!("docx: nested document chunk outspent the container's element budget: {e}");
+        }
+        let (doc, left, bytes, graphic, _) = match read {
             Ok(read) => read,
             Err(e) => {
                 log::warn!("docx: unreadable nested document chunk: {e}");
@@ -139,6 +155,9 @@ pub(crate) struct ChunkState<'a> {
     /// Graphic work left in the file's budget ([`super::MAX_GRAPHIC_WORK`]): nested documents'
     /// charts and diagrams count against it too.
     pub graphic: usize,
+    /// XML elements left in the file's budget: nested packages share their container's
+    /// ([`crate::xml::MAX_ELEMENTS_TOTAL`]), not one of their own.
+    pub elements: usize,
     /// How deep in nested WordprocessingML chunks this reader is.
     pub nesting: u8,
     /// The XML depth its stories start at (a nested document's: that of the chunk naming it).
@@ -148,7 +167,15 @@ pub(crate) struct ChunkState<'a> {
 
 impl<'a> ChunkState<'a> {
     pub fn new(import: Option<ChunkImporter<'a>>) -> Self {
-        ChunkState { left: MAX_CHUNKS, bytes: MAX_TOTAL, graphic: super::MAX_GRAPHIC_WORK, nesting: 0, depth: 0, import }
+        ChunkState {
+            left: MAX_CHUNKS,
+            bytes: MAX_TOTAL,
+            graphic: super::MAX_GRAPHIC_WORK,
+            elements: crate::xml::MAX_ELEMENTS_TOTAL,
+            nesting: 0,
+            depth: 0,
+            import,
+        }
     }
 }
 
@@ -159,7 +186,7 @@ mod tests {
     use craft_wordmodel::{Block, Document, InlineObject};
 
     use super::ChunkState;
-    use crate::package::Package;
+    use crate::package::{MAX_PART, MAX_TOTAL, Package};
 
     /// A package whose body is `body`, with the document relationship `rel` (id, type, target) to
     /// the part `(name, bytes)`.
@@ -198,13 +225,161 @@ mod tests {
         let outer = package(r#"<w:altChunk r:id="rIdC"/>"#, ("rIdC", "aFChunk", "afchunk.docx"), ("word/afchunk.docx", &inner));
         let pkg = Package::open(&outer).unwrap();
         let read = |graphic| {
-            let (d, .., left) = super::super::read_opened_in(&pkg, ChunkState { graphic, ..ChunkState::new(None) }).unwrap();
-            (drawn(&d), left)
+            let (d, .., work, _) = super::super::read_opened_in(&pkg, ChunkState { graphic, ..ChunkState::new(None) }).unwrap();
+            (drawn(&d), work)
         };
         let (shown, left) = read(super::super::MAX_GRAPHIC_WORK);
         assert!(shown);
         assert!(left < super::super::MAX_GRAPHIC_WORK, "the nested chart's work is the file's");
         // With the file's budget spent, the nested document doesn't get one of its own.
         assert_eq!(read(0), (false, 0));
+    }
+
+    /// A package whose body is `body`, with the document relationships `rels` (id, type, target)
+    /// and the parts `(name, bytes)` they name.
+    fn package_parts(body: &str, rels: &[(&str, &str, &str)], parts: &[(&str, &[u8])]) -> Vec<u8> {
+        let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main""#;
+        let rels_xml =
+            |inner: &str| format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{inner}</Relationships>"#);
+        let rel = |(id, ty, target): &(&str, &str, &str)| {
+            format!(r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{ty}" Target="{target}"/>"#)
+        };
+        let names: String = rels.iter().map(rel).collect::<Vec<_>>().join("");
+        let mut files: Vec<(&str, Vec<u8>)> = vec![
+            ("_rels/.rels", rels_xml(&rel(&("rId1", "officeDocument", "word/document.xml"))).into_bytes()),
+            ("word/document.xml", format!(r#"<w:document {ns}><w:body>{body}</w:body></w:document>"#).into_bytes()),
+            ("word/_rels/document.xml.rels", rels_xml(&names).into_bytes()),
+        ];
+        files.extend(parts.iter().map(|(name, bytes)| (*name, bytes.to_vec())));
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, bytes) in files {
+            zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zw.write_all(&bytes).unwrap();
+        }
+        zw.finish().unwrap().into_inner()
+    }
+
+    /// Whether the body holds a paragraph with `s`.
+    fn has(d: &Document, s: &str) -> bool {
+        d.body.iter().any(|b| b.as_para().map(|p| p.text.contains(s)).unwrap_or(false))
+    }
+
+    #[test]
+    fn a_nested_documents_elements_come_out_of_the_files_budget() {
+        // Three levels: the outer's altChunk names the inner, whose altChunk names the
+        // innermost. The chain spends down: the inner's own parse charges the file's budget,
+        // so the innermost opens with what the inner has left, not a fresh cap.
+        let innermost = package(r#"<w:p><w:r><w:t>innermost</w:t></w:r></w:p>"#, ("rIdZ", "chart", "charts/z.xml"), ("word/charts/z.xml", b"<a/>"));
+        let inner = package(
+            r#"<w:p><w:r><w:t>inner</w:t></w:r></w:p><w:altChunk r:id="rIdD"/>"#,
+            ("rIdD", "aFChunk", "afchunk.docx"),
+            ("word/afchunk.docx", &innermost),
+        );
+        let outer = package(r#"<w:altChunk r:id="rIdC"/>"#, ("rIdC", "aFChunk", "afchunk.docx"), ("word/afchunk.docx", &inner));
+        let pkg = Package::open(&outer).unwrap();
+        let read = |elements| {
+            let (d, ..) = super::super::read_opened_in(&pkg, ChunkState { elements, ..ChunkState::new(None) }).unwrap();
+            (has(&d, "inner"), has(&d, "innermost"))
+        };
+        // With room, both levels flow in.
+        assert_eq!(read(crate::xml::MAX_ELEMENTS_TOTAL), (true, true));
+        // The inner's own parse (its rels, then its main part) charged the file's budget: the
+        // innermost is left out instead of getting one of its own (before this, each nested
+        // package started with the full 16M).
+        assert_eq!(read(10), (true, false));
+    }
+
+    #[test]
+    fn a_nested_documents_elements_charge_the_container() {
+        // The nested document's XML usage comes out of the container's budget too: the cap
+        // the nested package was given, minus its returned remainder, is charged, so the
+        // container's remaining parts parse against what is left of the shared cap — not a
+        // budget that ignores the chunk.
+        let nested = package(r#"<w:p><w:r><w:t>inner</w:t></w:r></w:p>"#, ("rIdZ", "chart", "charts/z.xml"), ("word/charts/z.xml", b"<a/>"));
+        let body = r#"<w:p><w:r><w:t>after</w:t></w:r></w:p>"#;
+        let with = package(&format!(r#"<w:altChunk r:id="rIdC"/>{body}"#), ("rIdC", "aFChunk", "afchunk.docx"), ("word/afchunk.docx", &nested));
+        let without = package(body, ("rIdZ", "chart", "charts/z.xml"), ("word/charts/z.xml", b"<a/>"));
+        let read = |outer: &[u8]| {
+            let pkg = Package::open(outer).unwrap();
+            let (d, ..) = super::super::read_opened_in(&pkg, ChunkState { elements: 10, ..ChunkState::new(None) }).unwrap();
+            (has(&d, "inner"), pkg.elements_left())
+        };
+        let (inner_in, charged) = read(&with);
+        assert!(inner_in);
+        let (_, base) = read(&without);
+        assert!(charged < base, "the nested document's usage is the container's: {charged} of {base}");
+    }
+
+    #[test]
+    fn a_grandchilds_reservation_charges_every_level() {
+        // Three levels: the innermost's reservation comes out of the inner's budget, and the
+        // inner's out of the outer's — the chain charges every container, so the outer's
+        // remainder is smaller with the deeper chain than with a shallow one.
+        let innermost = package(r#"<w:p><w:r><w:t>leaf</w:t></w:r></w:p>"#, ("rIdZ", "chart", "charts/z.xml"), ("word/charts/z.xml", b"<a/>"));
+        let inner = package(
+            r#"<w:p><w:r><w:t>mid</w:t></w:r></w:p><w:altChunk r:id="rIdD"/>"#,
+            ("rIdD", "aFChunk", "afchunk.docx"),
+            ("word/afchunk.docx", &innermost),
+        );
+        let outer = package(r#"<w:altChunk r:id="rIdC"/>"#, ("rIdC", "aFChunk", "afchunk.docx"), ("word/afchunk.docx", &inner));
+        let pkg = Package::open(&outer).unwrap();
+        let (d, .., elements) = super::super::read_opened_in(&pkg, ChunkState::new(None)).unwrap();
+        assert!(has(&d, "mid"), "the inner document didn't flow in");
+        assert!(has(&d, "leaf"), "the innermost document didn't flow in");
+        // The same container with a shallow chain: one reservation instead of two.
+        let shallow = package(r#"<w:altChunk r:id="rIdC"/>"#, ("rIdC", "aFChunk", "afchunk.docx"), ("word/afchunk.docx", &innermost));
+        let pkg = Package::open(&shallow).unwrap();
+        let (.., shallow_elements) = super::super::read_opened_in(&pkg, ChunkState::new(None)).unwrap();
+        assert!(elements < shallow_elements, "every level's reservation is charged: {elements} of {shallow_elements}");
+    }
+
+    #[test]
+    fn a_charged_budget_bounds_the_containers_part_and_the_sibling_after_it() {
+        // The container's budget pays for the parts it parses (the section's header, read
+        // during the chunk's own walk) and for the chunks after the first one: with a budget
+        // that fits the grandchild chunk and the header but not the sibling document's XML,
+        // the sibling is left out; skip the header's charge and it would flow in.
+        let hdr = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>head</w:t></w:r></w:p><w:p><w:r><w:t>head</w:t></w:r></w:p><w:p><w:r><w:t>head</w:t></w:r></w:p></w:hdr>"#;
+        let gc = package(r#"<w:p><w:r><w:t>gc</w:t></w:r></w:p>"#, ("rIdZ", "chart", "charts/z.xml"), ("word/charts/z.xml", b"<a/>"));
+        let sibling =
+            package(&r#"<w:p><w:r><w:t>sibling</w:t></w:r></w:p>"#.repeat(8), ("rIdZ", "chart", "charts/z.xml"), ("word/charts/z.xml", b"<a/>"));
+        let inner = package_parts(
+            r#"<w:p><w:r><w:t>mid</w:t></w:r></w:p><w:altChunk r:id="rIdD"/><w:p><w:pPr><w:sectPr><w:headerReference r:id="rIdH"/></w:sectPr></w:pPr></w:p><w:altChunk r:id="rIdS"/>"#,
+            &[("rIdD", "aFChunk", "afchunk.docx"), ("rIdH", "header", "header1.xml"), ("rIdS", "aFChunk", "afchunk2.docx")],
+            &[("word/afchunk.docx", &gc), ("word/header1.xml", hdr.as_bytes()), ("word/afchunk2.docx", &sibling)],
+        );
+        let outer = package(r#"<w:altChunk r:id="rIdC"/>"#, ("rIdC", "aFChunk", "afchunk.docx"), ("word/afchunk.docx", &inner));
+        let pkg = Package::open(&outer).unwrap();
+        let read = |elements| {
+            let (d, ..) = super::super::read_opened_in(&pkg, ChunkState { elements, ..ChunkState::new(None) }).unwrap();
+            (has(&d, "mid"), has(&d, "gc"), has(&d, "sibling"))
+        };
+        // With room, everything flows in.
+        assert_eq!(read(crate::xml::MAX_ELEMENTS_TOTAL), (true, true, true));
+        // The grandchild chunk and the header fit the file's budget; the sibling document's
+        // XML (8 paragraphs) doesn't, so it's left out instead of getting a fresh cap.
+        assert_eq!(read(40), (true, true, false));
+    }
+
+    #[test]
+    fn a_rejected_nested_root_still_charges_the_siblings_budget() {
+        // Four outer elements, sixty rejected elements, five sibling elements: 69 in total.
+        let bad_xml = format!("<notword>{}</notword>", "<a/>".repeat(59));
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("word/document.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(bad_xml.as_bytes()).unwrap();
+        let bad = zip.finish().unwrap().into_inner();
+        let sibling = package_parts(r#"<w:p><w:r><w:t>sibling</w:t></w:r></w:p>"#, &[], &[]);
+        let outer = package_parts(
+            r#"<w:altChunk r:id="bad"/><w:altChunk r:id="good"/>"#,
+            &[("bad", "aFChunk", "bad.docx"), ("good", "aFChunk", "good.docx")],
+            &[("word/bad.docx", &bad), ("word/good.docx", &sibling)],
+        );
+        for (cap, included, remaining) in [(69, true, 0), (68, false, 4)] {
+            let pkg = Package::open_limited_within(&outer, MAX_PART, MAX_TOTAL, cap).unwrap();
+            let doc = super::super::read_opened(&pkg, None).unwrap();
+            assert_eq!(has(&doc, "sibling"), included, "budget {cap}");
+            assert_eq!(pkg.elements_left(), remaining, "budget {cap}");
+        }
     }
 }

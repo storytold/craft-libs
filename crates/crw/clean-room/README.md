@@ -31,8 +31,7 @@ decoder documentation.
   maintainer; only `unprocessed_raw.exe` was ever run, as a black box. The source tree shipped
   alongside it was never opened, read or searched.
 - Canon's CIFF specification PDF (copyrighted; archive URL and SHA-256 in `sources.md`).
-- The reference TIFFs (`<name>.crw.tiff`) the verification compared against; `CRAFT_CRW_ORACLE`
-  points the test at a local copy.
+- The reference TIFFs (`<name>.crw.tiff`) the verification compared against.
 
 ## Path mapping (LightCraft at the time → craft-libs)
 
@@ -41,7 +40,7 @@ decoder documentation.
 | `clean-room/crw/…` | `crates/crw/clean-room/…` |
 | `crates/raw/src/vendor/crw.rs` | `crates/crw/src/lib.rs` |
 | `crates/raw/src/vendor/crw_tables.rs` | `crates/crw/src/tables.rs` |
-| `crates/raw/tests/crw_oracle.rs` | `crates/crw/tests/samples.rs` (`CRAFT_CRW_ORACLE`, formerly `LIGHTCRAFT_CRW_ORACLE`) |
+| `crates/raw/tests/crw_oracle.rs` | `crates/crw/tests/samples.rs` (pins the verified decode as SHA-256s; the reference-TIFF comparison is not in this repository) |
 | `white_from_data` (LightCraft's shared estimate) | `saturation_plateau` in `crates/crw/src/lib.rs` |
 | `xtask/src/main.rs` `RAW_SAMPLES` (corpus URLs) | `crates/crw/tests/samples.json` + `scripts/fetch-crw-samples.py` |
 | `plan/crw/model/gen_tables.py` | LightCraft PR #3021 |

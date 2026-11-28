@@ -252,12 +252,25 @@ struct DataChunk {
     declared: u64,
 }
 
+/// Ids of the chunks that commonly follow a `data` chunk: metadata a writer appends after the
+/// samples, sometimes without correcting the RIFF size.
+const TRAILING_IDS: [&[u8; 4]; 12] = [b"LIST", b"fact", b"id3 ", b"ID3 ", b"cue ", b"JUNK", b"PEAK", b"bext", b"smpl", b"iXML", b"inst", b"PAD "];
+
 /// Bytes of audio a `data` chunk holds: leniently, whatever is present when the size is wrong or
 /// the recording was never finalised.
+///
+/// A size of 0 is an empty chunk when only whole chunks follow it and either the RIFF size is the
+/// file's or the first of them has an id that follows audio (#2123: a `LIST` chunk appended after
+/// the RIFF size was written). Otherwise it is a recording that was never finalised, and what
+/// follows is audio: the bytes of PCM can spell any id, but rarely whole chunks to the end.
 fn data_chunk_len(src: &Src<'_>, c: DataChunk) -> u64 {
+    if c.size32 != 0 || c.is_rf64 {
+        return c.declared.min(c.remaining);
+    }
     let finished = u64::from(src.le_u32(4).unwrap_or(0)) + 8 == src.size();
-    let empty = c.size32 == 0 && !c.is_rf64 && finished && only_chunks_follow(src, c.body);
-    if c.size32 == 0 && !c.is_rf64 && !empty { c.remaining } else { c.declared.min(c.remaining) }
+    let metadata_follows = src.tag(c.body).is_some_and(|id| TRAILING_IDS.contains(&&id));
+    let empty = (finished || metadata_follows) && only_chunks_follow(src, c.body);
+    if empty { 0 } else { c.remaining }
 }
 
 /// The sample layout of a `fmt` chunk, `None` for a format we do not read natively.

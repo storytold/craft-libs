@@ -12,6 +12,9 @@ pub mod lex;
 
 use crate::{Command, Error, Framing, Job, Program, y_up};
 
+pub mod plot;
+pub mod write;
+
 /// Plotter units per mm (1 plu = 0.025 mm).
 pub const UNITS_PER_MM: f64 = 40.0;
 

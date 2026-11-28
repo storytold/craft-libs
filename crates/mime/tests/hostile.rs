@@ -145,7 +145,8 @@ fn mutations_read() {
     };
     const INTERESTING: &[u8] = b"\0\r\n\t \"\\()<>;:=?-_%*'/@,.\x7f\x80\xff";
     for original in [sample(), archive()] {
-        for round in 0..4000u32 {
+        // The gate runs a divisor's fraction of the rounds; nightly runs all.
+        for round in 0..4000 / craft_testkit::hostile::divisor() as u32 {
             let mut bytes = original.clone();
             for _ in 0..=(round % 4) {
                 let at = (next() as usize) % bytes.len().max(1);

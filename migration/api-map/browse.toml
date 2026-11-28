@@ -1,0 +1,236 @@
+# API map of the "Browse" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+# The media bin, compare tile and places tree are mapped in `browse-bin.toml`, `browse-places.toml`.
+
+family = "Browse"
+new_module = "craft_browse::ui::relink"
+
+[[type]]
+name = "LinkList"
+old = "craft_browse::ui::relink::list::LinkList"
+new = "craft_browse::ui::relink::LinkList"
+status = "replaced"
+note = "A `Pattern` over `Bind<LinkListState>` shown with `show(ui)`; the actions are a footer `FooterBar`, the menu button and the context menu one row set, the status glyph the row's trailing icon."
+
+[[type]]
+name = "StatusBadge"
+old = "craft_browse::ui::relink::StatusBadge"
+new = "craft_browse::ui::relink::StatusBadge"
+status = "replaced"
+note = "Two functions: `StatusBadge::icon(status) -> Option<IconSpec>` and `StatusBadge::words(status, &LinkListWords) -> Label`; there is no painter."
+
+[[type]]
+name = "RelinkDialog"
+old = "craft_browse::ui::relink::RelinkDialog"
+new = "craft_browse::ui::relink::RelinkDialog"
+status = "same"
+note = "A `StackDialog` whose `show` takes `&mut Ui` and the `DialogStack`; content sizing, no width."
+
+[[type]]
+name = "RelinkOptions"
+old = "craft_browse::ui::relink::RelinkOptions"
+new = "craft_browse::ui::relink::RelinkOptions"
+status = "same"
+note = "The `layout` field is gone."
+
+[[type]]
+name = "RelinkOutcome"
+old = "craft_browse::ui::relink::RelinkOutcome"
+new = "craft_browse::ui::relink::RelinkOutcome"
+status = "same"
+
+[[type]]
+name = "RelinkRow"
+old = "craft_browse::ui::relink::RelinkRow"
+new = "craft_browse::ui::relink::RelinkRow"
+status = "same"
+
+[[type]]
+name = "RelinkCriterion"
+old = "craft_browse::ui::relink::RelinkCriterion"
+new = "craft_browse::ui::relink::RelinkCriterion"
+status = "same"
+
+[[type]]
+name = "CandidateChecker"
+old = "craft_browse::ui::relink::CandidateChecker"
+new = "craft_browse::ui::relink::CandidateChecker"
+status = "same"
+
+[[type]]
+name = "RelinkLayout"
+old = "craft_browse::ui::relink::RelinkLayout"
+new = ""
+status = "removed"
+note = "The table's column order, widths and sort are its header row's memory under the table id."
+
+[[type]]
+name = "RelinkColumn"
+old = "craft_browse::ui::relink::RelinkColumn"
+new = ""
+status = "removed"
+note = "The columns are `ColumnKey`s of the table's `ColumnSpec`s."
+
+[[type]]
+name = "LinkListState"
+old = "craft_browse::ui::relink::LinkListState"
+new = "craft_browse::ui::relink::LinkListState"
+status = "same"
+note = "`selection` is `craft_behavior::Selection`."
+
+[[type]]
+name = "LinkListSettings"
+old = "craft_browse::ui::relink::LinkListSettings"
+new = "craft_browse::ui::relink::LinkListSettings"
+status = "same"
+
+[[type]]
+name = "LinkListEvent"
+old = "craft_browse::ui::relink::LinkListEvent"
+new = "craft_browse::ui::relink::LinkListEvent"
+status = "same"
+note = "`Selection` carries `craft_behavior::SelectionChange`."
+
+[[type]]
+name = "LinkListOutput"
+old = "craft_browse::ui::relink::LinkListOutput"
+new = "craft_browse::ui::relink::LinkListOutput"
+status = "same"
+
+[[type]]
+name = "LinkFilter"
+old = "craft_browse::ui::relink::LinkFilter"
+new = "craft_browse::ui::relink::LinkFilter"
+status = "same"
+
+[[type]]
+name = "LinkSort"
+old = "craft_browse::ui::relink::LinkSort"
+new = "craft_browse::ui::relink::LinkSort"
+status = "same"
+note = "Name order is the interface language's collator with digits by value."
+
+[[type]]
+name = "LinkListLabels"
+old = "craft_browse::ui::relink::LinkListLabels"
+new = ""
+status = "removed"
+note = "Renamed `LinkListWords`."
+
+[[type]]
+name = "LinkListWords"
+old = ""
+new = "craft_browse::ui::relink::LinkListWords"
+status = "replaced"
+note = "Replaces `LinkListLabels`. A `craft_ui::words!` struct, ids `linkList.*`."
+
+[[type]]
+name = "RelinkLabels"
+old = "craft_browse::ui::relink::RelinkLabels"
+new = ""
+status = "removed"
+note = "Renamed `RelinkWords`."
+
+[[type]]
+name = "RelinkWords"
+old = ""
+new = "craft_browse::ui::relink::RelinkWords"
+status = "replaced"
+note = "Replaces `RelinkLabels`. A `craft_ui::words!` struct, ids `relinkDialog.*`; the searching count is the `searching` count word."
+
+[[type]]
+name = "RelinkStyle"
+old = "craft_browse::ui::relink::RelinkStyle"
+new = ""
+status = "removed"
+note = "The sizes are the components' own; there is no per-widget style."
+
+[[type]]
+name = "SEARCHING"
+old = "craft_browse::ui::relink::SEARCHING"
+new = ""
+status = "removed"
+note = "The `searching` count row of `RelinkWords`."
+
+[[type]]
+name = "FileThumbSource"
+old = "craft_browse::thumbs::FileThumbSource"
+new = "craft_browse::thumbs::FileThumbSource"
+status = "same"
+note = "A `ThumbSource` over `craft_ui::primitives::textures`."
+
+[[type]]
+name = "FileThumbOptions"
+old = "craft_browse::thumbs::FileThumbOptions"
+new = "craft_browse::thumbs::FileThumbOptions"
+status = "same"
+
+[[type]]
+name = "KeyedFileThumbs"
+old = "craft_browse::thumbs::KeyedFileThumbs"
+new = "craft_browse::thumbs::KeyedFileThumbs"
+status = "same"
+
+[[type]]
+name = "TileGrid"
+old = "craft_browse::ui::grid::TileGrid"
+new = ""
+status = "removed"
+note = "Import `craft_ui::tile_grid::TileGrid`."
+
+[[type]]
+name = "TileLabels"
+old = "craft_browse::ui::grid::TileLabels"
+new = ""
+status = "removed"
+note = "Import `craft_ui::tile_grid` and its words."
+
+[[type]]
+name = "TileStyle"
+old = "craft_browse::ui::grid::TileStyle"
+new = ""
+status = "removed"
+note = "Import `craft_ui::tile_grid`."
+
+[[setter]]
+type = "LinkList"
+old = "new(id_salt, links, statuses, &mut state)"
+new = "new(label, links, statuses, Bind::bound(state))"
+
+[[setter]]
+type = "LinkList"
+old = "labels(LinkListLabels)"
+new = ""
+note = "The words come from the environment: `Env::words::<LinkListWords>()`."
+
+[[setter]]
+type = "LinkList"
+old = "thumbnails(&Thumbnails, &dyn ThumbSource)"
+new = "thumbnails(&Thumbnails, &dyn ThumbSource)"
+
+[[setter]]
+type = "LinkList"
+old = "actions(bool)"
+new = "actions(bool)"
+
+[[setter]]
+type = "LinkList"
+old = "info(FnOnce(&mut Ui))"
+new = "info(FnOnce(&mut Ui))"
+
+[[setter]]
+type = "RelinkDialog"
+old = "new(rows, files, options)"
+new = "new(rows, files, options)"
+
+[[setter]]
+type = "RelinkDialog"
+old = "checker(Arc<dyn CandidateChecker>)"
+new = "checker(Arc<dyn CandidateChecker>)"
+
+[[setter]]
+type = "RelinkDialog"
+old = "preview(FileThumbSource)"
+new = "preview(FileThumbSource)"
+note = "The preview is a `PreviewPane` over the thumbnail cache."
+

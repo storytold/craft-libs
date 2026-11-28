@@ -1,0 +1,65 @@
+# API map of the "Imaging layer style" family: old path to new path and setter renames.
+
+family = "Imaging layer style"
+new_module = "craft_imaging::ui::layer_style"
+
+[[type]]
+name = "LayerStyleDialog"
+old = "craft_imaging::ui::layer_style::LayerStyleDialog"
+new = "craft_imaging::ui::layer_style::LayerStyleDialog"
+status = "same"
+
+[[type]]
+name = "LayerStyleOutput"
+old = "craft_imaging::ui::layer_style::LayerStyleOutput"
+new = "craft_imaging::ui::layer_style::LayerStyleOutput"
+status = "same"
+
+[[type]]
+name = "PatternChoice"
+old = "craft_imaging::ui::layer_style::PatternChoice"
+new = ""
+status = "removed"
+note = "the host's patterns are PresetRow<String> rows of the preset library"
+
+[[type]]
+name = "StylePresets"
+old = "craft_imaging::ui::layer_style::StylePresets"
+new = "craft_imaging::ui::layer_style::StylePresets"
+status = "same"
+
+[[type]]
+name = "StyleThumb"
+old = "craft_imaging::ui::layer_style::StyleThumb"
+new = ""
+status = "removed"
+note = "StylePresets::new takes the thumbnail painter closure itself"
+
+[[type]]
+name = "LayerStyleLabels"
+old = "craft_imaging::ui::layer_style::LayerStyleLabels"
+new = ""
+status = "removed"
+note = "the words! set is LayerStyleWords"
+
+[[type]]
+name = "LayerStyleWords"
+old = ""
+new = "craft_imaging::ui::layer_style::LayerStyleWords"
+status = "replaced"
+note = "the words! set that replaces LayerStyleLabels, with the legacy field names"
+
+[[type]]
+name = "LayerStyleCommand"
+old = ""
+new = "craft_imaging::ui::layer_style::LayerStyleCommand"
+status = "replaced"
+note = "the + and - keys of the effect list as a command set in the layerStyleList scope"
+
+[[type]]
+name = "LayerStyleDialogStyle"
+old = "craft_imaging::ui::layer_style::LayerStyleDialogStyle"
+new = ""
+status = "removed"
+note = "sizes come from the controls the dialog uses"
+

@@ -1,7 +1,7 @@
 //! Canon CRW entropy code tables, frozen clean-room data.
 //!
 //! Frozen code tables extracted by known-plaintext alignment in the clean-room derivation record
-//! retained at https://github.com/storytold/lightcraft (see ATTRIBUTION.md). Do not edit by hand.
+//! retained at <https://github.com/storytold/lightcraft> (see ATTRIBUTION.md). Do not edit by hand.
 //! Each entry is `(code bits, code length, run, size)`; codes are MSB-first.
 
 /// One selector's pair of canonical Huffman tables: the code starting each 64-sample

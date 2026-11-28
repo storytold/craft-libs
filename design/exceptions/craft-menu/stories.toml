@@ -1,0 +1,9 @@
+config_version = 1
+
+[[exception]]
+name = "ribbon-story-context-menu"
+kind = "marker"
+rule = "contract/layers"
+path = "crates/menu/src/ribbon/stories.rs"
+reason = "Ribbon::context_menu is the ribbon's own builder for its menu rows, not egui's layer-opening method."
+count = 1

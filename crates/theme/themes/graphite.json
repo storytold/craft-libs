@@ -1,0 +1,44 @@
+{
+  "schema": "craft-design-theme",
+  "schema_version": 1,
+  "id": "craft.graphite",
+  "name": "Graphite",
+  "version": 1,
+  "variants": "both",
+  "contrast_intent": "standard",
+  "seeds": {
+    "accent": "#4b8bf5",
+    "neutral": "#26262a",
+    "status": {
+      "bad": "#ff6259",
+      "good": "#3fd6b8",
+      "info": "#4b8bf5",
+      "warn": "#ffc14d"
+    }
+  },
+  "shape": null,
+  "light": {
+    "accent.solid": "#1b63e0",
+    "line.border": "#dadade",
+    "line.focus": "#1b63e0",
+    "state.selected": "#e6eefd",
+    "surface.background": "#f1f1f3",
+    "surface.panel": "#ffffff",
+    "surface.raised": "#ffffff",
+    "text.muted": "#5e5e66",
+    "text.normal": "#222226",
+    "text.on_accent": "#ffffff"
+  },
+  "dark": {
+    "accent.solid": "#4b8bf5",
+    "line.border": "#3c3c43",
+    "line.focus": "#4b8bf5",
+    "state.selected": "#233a63",
+    "surface.background": "#19191c",
+    "surface.panel": "#26262a",
+    "surface.raised": "#2e2e33",
+    "text.muted": "#aeaeb6",
+    "text.normal": "#ececef",
+    "text.on_accent": "#19191c"
+  }
+}
