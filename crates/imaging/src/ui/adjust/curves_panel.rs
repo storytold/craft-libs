@@ -21,6 +21,7 @@ use craft_ui::layout_components::{Row, Stack};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::TypeRole;
+use craft_ui::text::RangeAlert;
 use egui::{Id, Response, Ui};
 
 use super::context::{read_shown, write_shown};
@@ -28,8 +29,10 @@ use super::{AdjustContext, AdjustWords, ToneChannel, ToneChannelCommands, ToneCh
 use crate::ui::curve::{Curve, CurveChannel, CurveEditor, CurveRules};
 use crate::ui::histogram::{ChannelColor, HistogramData};
 
-/// The levels of a Curves value (8-bit tones) and the most points Photoshop allows.
-const RULES: CurveRules = CurveRules::new(255.0, 16);
+/// The levels of a Curves value (8-bit tones) and the most points Photoshop allows; a moved point
+/// keeps [`MIN_GAP`](CurveRules::MIN_GAP) input levels from neighbours at least that far off, the
+/// ask of photocraft #14434.
+const RULES: CurveRules = CurveRules::new(255.0, 16).min_gap(CurveRules::MIN_GAP);
 /// Smooth's moving-average radius (PhotoCraft's `smooth_curve_map`).
 const SMOOTH_RADIUS: usize = 3;
 
@@ -118,6 +121,10 @@ pub struct CurvesPanelOutput {
     pub picker: Option<Option<TonePicker>>,
     /// The selected point of the shown curve after the pass.
     pub selected: Option<usize>,
+    /// A value typed past a point field's range and kept at the closest legal level, in the pass it committed: the
+    /// host shows it as the dialog's range alert (`Alert::range` with the dialog's title), as a hosted form dialog
+    /// does.
+    pub range_alert: Option<RangeAlert>,
 }
 
 impl Outcome for CurvesPanelOutput {
@@ -308,6 +315,7 @@ impl<'a> CurvesPanel<'a> {
         let curve_channels: Vec<CurveChannel> = channels.as_slice().iter().map(|c| CurveChannel::new(c.label(&words), c.color())).collect();
         let (mut edit, mut mode, mut picker) = (EditEvents::new(), None, None);
         let mut selected = None;
+        let mut range_alert = None;
         let mut shown_channel = 0;
         let stack = Stack::new().label(label).enabled(enabled);
         // Alt+2…Alt+6 pick the Channel select's entry in a dialog; Properties has no such keys.
@@ -393,6 +401,7 @@ impl<'a> CurvesPanel<'a> {
                 .hint(hint)
                 .levels(255)
                 .max_points(RULES.max_points)
+                .min_gap(RULES.min_gap)
                 .selection(selection);
             if pencil {
                 editor = editor.pencil();
@@ -413,6 +422,7 @@ impl<'a> CurvesPanel<'a> {
                 next
             };
             let mut events = shown.edit.events.clone().map(mapped);
+            range_alert = shown.range_alert;
             if let (true, Curve::Map(map)) = (smooth, curve) {
                 events = EditEvent::set(Mixed::Same(value.clone()), mapped(Curve::Map(smoothed(map))), Arc::from("Smooth"), None).into();
             }
@@ -427,6 +437,6 @@ impl<'a> CurvesPanel<'a> {
             let kept_channel = if channel_bind.is_some() { stored } else { shown_channel };
             *cx.keep::<Shown>() = Shown { channel: kept_channel, selected: if shown_channel == channel { selected } else { None } };
         });
-        CurvesPanelOutput { response: group.output, edit, channel: shown_channel, mode, picker, selected }
+        CurvesPanelOutput { response: group.output, edit, channel: shown_channel, mode, picker, selected, range_alert }
     }
 }

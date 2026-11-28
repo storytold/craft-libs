@@ -41,6 +41,13 @@ fn rig(points: &[[f32; 2]]) -> Rig {
 
 /// [`rig`] with `tab_steps` and `end_delete_deselects` when `point_keys`.
 pub(crate) fn rig_with(points: &[[f32; 2]], point_keys: bool) -> Rig {
+    rig_gap(points, point_keys, None)
+}
+
+/// [`rig_with`], with an editor whose moved points keep `min_gap` input levels between them and a
+/// neighbour that is already at least that far off when `min_gap` is `Some` (what a Curves host
+/// asks; [`rig_with`] keeps the plain default).
+pub(crate) fn rig_gap(points: &[[f32; 2]], point_keys: bool, min_gap: Option<f32>) -> Rig {
     let curve = Curve::smooth(points.to_vec());
     let shared = Rc::new(RefCell::new(curve.clone()));
     let selected = Rc::new(Cell::new(None));
@@ -51,6 +58,9 @@ pub(crate) fn rig_with(points: &[[f32; 2]], point_keys: bool) -> Rig {
     let mut fixture = Fixture::new(move |ui| {
         let mut value = c.borrow().clone();
         let mut editor = CurveEditor::new("Curve", Bind::bound(&mut value)).channels(&channels).channel(0).selection(s.get());
+        if let Some(gap) = min_gap {
+            editor = editor.min_gap(gap);
+        }
         if point_keys {
             editor = editor.tab_steps().end_delete_deselects();
         }

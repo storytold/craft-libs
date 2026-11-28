@@ -13,7 +13,7 @@ use craft_ui::form::Field;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::Label;
 use craft_ui::style::TypeRole;
-use craft_ui::text::NumberField;
+use craft_ui::text::{NumberField, RangeAlert};
 use egui::Ui;
 
 type CurveRowsFn<'a> = Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>;
@@ -28,7 +28,8 @@ impl<'a> CurveRows<'a> {
     }
 }
 
-/// What the editor reports: the curve's edit, from the graph or from a field, and the selected point after the pass.
+/// What the editor reports: the curve's edit, from the graph or from a field, the selected point after the pass, and
+/// a typed value the fields held to their range.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct CurveEditorOutput {
@@ -36,6 +37,9 @@ pub struct CurveEditorOutput {
     pub edit: EditResponse<Curve>,
     /// The selected point after the pass; the host that keeps the selection stores it.
     pub selected: Option<usize>,
+    /// A value typed past a field's range and kept at the closest legal level, in the pass it committed: the host
+    /// shows it as a range alert (`Alert::range` with its dialog's title), as a hosted form dialog does.
+    pub range_alert: Option<RangeAlert>,
 }
 
 impl Outcome for CurveEditorOutput {
@@ -80,7 +84,9 @@ struct Memory {
 ///
 /// Points follow Photoshop's rules: whole levels `0..=levels`, at most [`max_points`](CurveEditor::max_points), a new
 /// point within two levels of another's input is that point, the end points stay (they move in both axes), and a point
-/// stays strictly between its neighbours' inputs.
+/// keeps the host's [`min_gap`](CurveRules::min_gap) input levels between it and a neighbour that far off — one level
+/// (strictly between) for a plain editor, four for a Curves dialog ([`MIN_GAP`](CurveRules::MIN_GAP)); a curve loaded
+/// with a closer pair keeps the one-level rule there.
 ///
 /// Pointer: a press on a point selects and drags it; a press on the empty plot adds a point there and drags it, as one
 /// gesture. Dragged more than the handle reach off the plot an interior point is removed, and comes back on re-entry
@@ -112,6 +118,10 @@ pub struct CurveEditor<'a> {
     /// The most points the curve holds.
     #[prop(quantity = "points")]
     max_points: usize,
+    /// How many input levels a moved point keeps between it and a neighbour that is already at
+    /// least that far off: the Curves dialog passes [`MIN_GAP`](CurveRules::MIN_GAP), and a plain
+    /// editor keeps the one-level default.
+    min_gap: f32,
     /// The interpolation of the curve through its points.
     #[prop(func = "Fn(&[[f32; 2]]) -> Vec<f32>")]
     sampler: Option<CurveSampler<'a>>,
@@ -163,6 +173,7 @@ impl<'a> CurveEditor<'a> {
             channel: 0,
             levels: 255,
             max_points: 16,
+            min_gap: 1.0,
             sampler: None,
             bars: true,
             fields: true,
@@ -185,6 +196,13 @@ impl<'a> CurveEditor<'a> {
         self
     }
 
+    /// A moved point keeps `gap` input levels (at least 1.0) between it and a neighbour that is
+    /// already at least that far off; the fields show the same bounds.
+    pub fn min_gap(mut self, gap: f32) -> Self {
+        self.min_gap = gap.max(1.0);
+        self
+    }
+
     /// Shows the editor and returns this pass's edit.
     pub fn show(self, ui: &mut Ui) -> CurveEditorOutput {
         let CurveEditor {
@@ -194,6 +212,7 @@ impl<'a> CurveEditor<'a> {
             channel,
             levels,
             max_points,
+            min_gap,
             mut sampler,
             bars,
             fields,
@@ -209,8 +228,9 @@ impl<'a> CurveEditor<'a> {
             mut between,
         } = self;
         let words = craft_ui::runtime::env::Env::of(ui).words::<CurveWords>();
-        let rules = CurveRules { levels: levels as f32, max_points: max_points.max(2) };
+        let rules = CurveRules::new(levels as f32, max_points.max(2)).min_gap(min_gap);
         let mut out: Option<(EditResponse<Curve>, Option<usize>)> = None;
+        let mut range_alert: Option<RangeAlert> = None;
         let name = label.clone();
         let shown = Stack::new().label(label).show(ui, |ui, root| {
             let memory = root.memory::<Memory>();
@@ -229,6 +249,7 @@ impl<'a> CurveEditor<'a> {
                 .channel(channel)
                 .levels(levels)
                 .max_points(max_points)
+                .min_gap(min_gap)
                 .bars(bars)
                 .overlays(overlays);
             if let Some(data) = histogram {
@@ -266,7 +287,8 @@ impl<'a> CurveEditor<'a> {
             if let Some(now) = now.filter(|now| fields && !pencil && now.points().is_some()) {
                 let at = selected.filter(|&i| now.points().is_some_and(|points| i < points.len()));
                 let row = FieldsRow { words: &words, rules, now: &now, at, percent, corners };
-                let lifted = row.show(ui, root, &mut curve);
+                let (lifted, alert) = row.show(ui, root, &mut curve);
+                range_alert = alert;
                 if edit.events.is_empty() {
                     edit.events = lifted;
                 }
@@ -279,7 +301,7 @@ impl<'a> CurveEditor<'a> {
         });
         // A parent's measuring run reuses what it measured and does not run the body.
         let (edit, selected) = out.unwrap_or_else(|| (EditResponse::lifted(shown.output, EditEvents::new(), None), None));
-        CurveEditorOutput { edit, selected }
+        CurveEditorOutput { edit, selected, range_alert }
     }
 }
 
@@ -309,25 +331,24 @@ impl FieldsRow<'_> {
         }
     }
 
-    /// The range of the `axis` field. The input stays strictly between the neighbours' inputs, so the field never shows
-    /// what the curve can't take.
+    /// The range of the `axis` field: the input bounds of [`CurveRules::move_to`], so the field
+    /// never shows what the curve can't take.
     fn range(&self, axis: usize) -> std::ops::RangeInclusive<f64> {
         let points = self.now.points().unwrap_or_default();
         match (axis, self.at) {
             (0, Some(i)) => {
-                let lo = i.checked_sub(1).map_or(0.0, |j| points[j][0] + 1.0);
-                let hi = points.get(i + 1).map_or(self.rules.levels, |p| p[0] - 1.0);
-                self.to_field(lo)..=self.to_field(hi.max(lo))
+                let (lo, hi) = self.rules.input_bounds(points, i);
+                self.to_field(lo)..=self.to_field(hi)
             }
             _ => 0.0..=self.to_field(self.rules.levels),
         }
     }
 
     /// Shows the fields and the check box, and writes what the user did with them into `curve` as the edits of the
-    /// one curve. Returns the edit this pass made.
-    fn show(&self, ui: &mut Ui, root: &mut BodyCx<'_>, curve: &mut Bind<'_, Curve>) -> EditEvents<Curve> {
+    /// one curve. Returns the edit this pass made and a value a field held to its range.
+    fn show(&self, ui: &mut Ui, root: &mut BodyCx<'_>, curve: &mut Bind<'_, Curve>) -> (EditEvents<Curve>, Option<RangeAlert>) {
         let points = self.now.points().unwrap_or_default();
-        let mut reports: Vec<(usize, EditResponse<Option<f64>>)> = Vec::new();
+        let mut reports: Vec<(usize, EditResponse<Option<f64>>, Option<RangeAlert>)> = Vec::new();
         Row::new().show(ui, |ui, _| {
             for (axis, name) in [(0, self.words.input.clone()), (1, self.words.output.clone())] {
                 let value = Some(self.to_field(self.at.map_or(0.0, |i| points[i][axis])));
@@ -342,12 +363,14 @@ impl FieldsRow<'_> {
                 let mut field = Some(field);
                 let shown = Field::new(name).sizing(Sizing::Content).show(ui, |ui, _| field.take().map(|field| field.show(ui)));
                 if let Some(Some(output)) = shown.inner {
-                    reports.push((axis, output.edit));
+                    reports.push((axis, output.edit, output.out_of_range));
                 }
             }
         });
         let mut lifted = EditEvents::new();
-        for (axis, report) in reports {
+        let mut range_alert: Option<RangeAlert> = None;
+        for (axis, report, alert) in reports {
+            range_alert = range_alert.or(alert);
             let make = |base: &Curve, i: usize, value: f64| {
                 let mut to = *base.points()?.get(i)?;
                 to[axis] = self.to_level(value);
@@ -373,7 +396,7 @@ impl FieldsRow<'_> {
                 }
             }
         }
-        lifted
+        (lifted, range_alert)
     }
 }
 

@@ -274,12 +274,29 @@ pub struct CurveRules {
     pub levels: f32,
     /// Most control points the curve may hold.
     pub max_points: usize,
+    /// How many input levels a moved point keeps between it and a neighbour that is already at
+    /// least that far off; see [`min_gap`](Self::min_gap).
+    pub min_gap: f32,
 }
 
 impl CurveRules {
-    /// The rules of a curve with `levels` levels and at most `max_points` points.
+    /// The neighbour gap the Curves dialog asks for: a moved point keeps four input levels from
+    /// neighbours at least that far off.
+    pub const MIN_GAP: f32 = 4.0;
+
+    /// The rules of a curve with `levels` levels and at most `max_points` points: a moved point
+    /// stays strictly between its neighbours' inputs (a gap of one level, as today); a host with
+    /// a wider ask sets it with [`min_gap`](Self::min_gap).
     pub const fn new(levels: f32, max_points: usize) -> CurveRules {
-        CurveRules { levels, max_points }
+        CurveRules { levels, max_points, min_gap: 1.0 }
+    }
+
+    /// The same rules, but a moved point keeps `gap` input levels (at least 1.0) between it and
+    /// a neighbour that is already at least that far off. A fractional `gap` rounds up to the
+    /// next whole level, so bounds and moves stay on whole levels.
+    pub const fn min_gap(mut self, gap: f32) -> CurveRules {
+        self.min_gap = gap.max(1.0);
+        self
     }
 
     /// Adds a point at `v`, kept sorted, and returns its index. A point within
@@ -314,16 +331,30 @@ impl CurveRules {
         true
     }
 
-    /// Moves point `i` to `v` in whole levels, strictly between its neighbours' inputs; false
-    /// when nothing changed.
+    /// The inputs `move_to` allows point `i`: `min_gap` levels inside each neighbour that is at
+    /// least that far off already, one level inside a closer one (a curve a script or a file
+    /// loaded keeps its pair), and `0..=levels` at the ends. A pair sharing an input is held one
+    /// level apart. A host that moves points with these rules also shows these bounds in its
+    /// fields, as the point fields of [`CurveEditor`](super::CurveEditor) do.
+    pub fn input_bounds(&self, points: &[[f32; 2]], i: usize) -> (f32, f32) {
+        let Some(old) = points.get(i).copied() else { return (0.0, self.levels) };
+        let ask = self.min_gap.max(1.0).round();
+        let keep = |near: f32| if near >= self.min_gap { ask } else { 1.0 };
+        let lo = i.checked_sub(1).and_then(|j| points.get(j)).map_or(0.0, |p| p[0] + keep(old[0] - p[0]));
+        let hi = points.get(i + 1).map_or(self.levels, |p| p[0] - keep(p[0] - old[0]));
+        (lo, hi.max(lo))
+    }
+
+    /// Moves point `i` to `v` in whole levels, keeping `min_gap` input levels between it and the
+    /// neighbours that are that far off already (the ends of the input range at the ends of the
+    /// curve); false when nothing changed.
     pub fn move_to(&self, points: &mut [[f32; 2]], i: usize, v: [f32; 2]) -> bool {
         let Some(old) = points.get(i).copied() else { return false };
         if !v.iter().chain(old.iter()).all(|x| x.is_finite()) {
             return false;
         }
-        let lo = i.checked_sub(1).and_then(|j| points.get(j)).map_or(0.0, |p| p[0] + 1.0);
-        let hi = points.get(i + 1).map_or(self.levels, |p| p[0] - 1.0);
-        let new = [v[0].round().clamp(lo, hi.max(lo)), v[1].round().clamp(0.0, self.levels)];
+        let (lo, hi) = self.input_bounds(points, i);
+        let new = [v[0].round().clamp(lo, hi), v[1].round().clamp(0.0, self.levels)];
         points[i] = new;
         new != old
     }
@@ -360,7 +391,8 @@ impl CurveRules {
         Some(Curve::from_parts(points, curve.corner_flags()))
     }
 
-    /// `curve` with point `i` at `to`, strictly between its neighbours' inputs.
+    /// `curve` with point `i` at `to`, keeping `min_gap` input levels from the neighbours that are
+    /// that far off already.
     pub(crate) fn moved(&self, curve: &Curve, i: usize, to: [f32; 2]) -> Option<Curve> {
         let mut points = curve.points()?.to_vec();
         if !self.move_to(&mut points, i, to) {
