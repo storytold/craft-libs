@@ -629,6 +629,39 @@ impl TryFrom<crate::theora::Picture> for VideoFrame {
     }
 }
 
+#[cfg(feature = "dv-decode")]
+impl TryFrom<crate::dv::Picture> for VideoFrame {
+    type Error = FrameError;
+
+    /// An 8-bit interlaced frame, bottom field first as DV records it (IEC 61834-2, SMPTE ST 314), in its own
+    /// sampling (4:1:1, 4:2:0 or 4:2:2) and ITU-R BT.601 colours: the SMPTE 170M primaries and matrix for 525/60,
+    /// BT.470 BG for 625/50, in the limited range.
+    fn try_from(p: crate::dv::Picture) -> Result<Self, FrameError> {
+        use crate::dv::Layout;
+        let sub = match p.layout {
+            Layout::Yuv411 => Subsampling { x: 2, y: 0 },
+            Layout::Yuv420 => Subsampling::S420,
+            Layout::Yuv422 => Subsampling::S422,
+        };
+        let (cw, ch) = p.chroma_size();
+        let size = |n: usize| u32::try_from(n).map_err(|_| FrameError::Shape("DV picture size does not fit u32"));
+        let (width, height) = (size(p.width)?, size(p.height)?);
+        let (cw, ch) = (size(cw)?, size(ch)?);
+        let planes = vec![
+            Plane::packed(width, height, 8, Samples::U8(p.y))?,
+            Plane::packed(cw, ch, 8, Samples::U8(p.cb))?,
+            Plane::packed(cw, ch, 8, Samples::U8(p.cr))?,
+        ];
+        let mut f = VideoFrame::new(width, height, ColorFamily::YCbCr, sub, planes, None)?;
+        // H.273: 6 = SMPTE 170M (525/60), 5 = BT.470 BG (625/50); transfer 6 = BT.601.
+        let code = if height == 480 { 6 } else { 5 };
+        f.color = ColorTags { primaries: code, transfer: 6, matrix: code, full_range: false };
+        f.sar = Some(p.sample_aspect);
+        f.field_order = FieldOrder::BottomFieldFirst;
+        Ok(f)
+    }
+}
+
 #[cfg(feature = "vmd-decode")]
 impl TryFrom<&crate::vmd::Decoder> for VideoFrame {
     type Error = FrameError;

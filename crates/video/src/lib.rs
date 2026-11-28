@@ -21,6 +21,7 @@
 //! | `av1` | `av1` | AV1 (AOMedia Video 1): decoder (`av1-decode`) and encoder (`av1-encode`) |
 //! | `vmd` | `vmd` | Sierra VMD video (8-bit paletted): decoder (`vmd-decode`) |
 //! | `bink` | `bink` | Bink video (Bink 1, revisions `f` and `i`): decoder (`bink-decode`) |
+//! | `dv` | `dv` | DV (IEC 61834-2, SMPTE ST 314): 25 Mb/s (4:1:1, 4:2:0) and DVCPRO50 (4:2:2) decoder (`dv-decode`) |
 //!
 //! No codec is on by default. Feature `threads` spreads the work of the codecs that support it
 //! over rayon worker threads.
@@ -80,6 +81,9 @@ pub mod bink;
 
 #[cfg(feature = "dnx")]
 pub mod dnx;
+
+#[cfg(feature = "dv-decode")]
+pub mod dv;
 
 #[cfg(any(feature = "vp8-decode", feature = "vp8-encode"))]
 pub mod vp8;
