@@ -344,7 +344,8 @@ impl Bvh {
 
     /// The point nearest to `p` at most `max_dist` away on a triangle accepted by `filter`
     /// (original index): a [`Hit`] with the distance in `t` and the barycentrics of vertices 1
-    /// and 2. Squared distances are compared in `f64`.
+    /// and 2. Squared distances are compared in `f64`. A point whose distance does not fit in
+    /// `f32` is not found.
     pub fn nearest(&self, p: Vec3, max_dist: f32, filter: &dyn Fn(u32) -> bool) -> Option<Hit> {
         self.nodes.first().filter(|_| !self.tris.is_empty() && p.is_finite())?;
         let pd = p.as_dvec3();
@@ -361,12 +362,12 @@ impl Bvh {
                     if !filter(orig) {
                         continue;
                     }
-                    let (q, u, v, _) = closest_on_triangle_f64(pd, tri.map(|corner| corner.as_dvec3()));
-                    let dd = (q - pd).length_squared();
+                    let (_, u, v, dd) = closest_on_triangle_f64(pd, tri.map(|corner| corner.as_dvec3()));
+                    let t = dd.sqrt() as f32;
                     // The first point found may lie exactly at `max_dist`.
-                    if dd.is_finite() && (dd < best_d2 || (best.is_none() && dd <= best_d2)) {
+                    if t.is_finite() && (dd < best_d2 || (best.is_none() && dd <= best_d2)) {
                         best_d2 = dd;
-                        best = Some(Hit { t: dd.sqrt() as f32, tri: orig, u: u as f32, v: v as f32 });
+                        best = Some(Hit { t, tri: orig, u: u as f32, v: v as f32 });
                     }
                 }
             } else {
@@ -538,6 +539,21 @@ mod tests {
         assert!(bvh.nearest(point, 4e-8, &|_| true).is_none());
         let hit = bvh.nearest(point, 5e-8, &|_| true).expect("the plane projection is inside the distance limit");
         assert!(hit.t > 4e-8 && hit.t < 5e-8, "{hit:?}");
+    }
+
+    #[test]
+    fn nearest_finds_a_face_point_exactly_at_the_distance() {
+        let bvh = single_triangle(vec![Vec3::new(25.0, -14.0, 3.0), Vec3::new(41.0, -20.0, 1.0), Vec3::new(41.0, -16.0, -3.0)], vec![0, 1, 2]);
+        let hit = bvh.nearest(Vec3::new(32.0, -16.0, 0.0), 1.0, &|_| true).expect("the face is exactly 1 away");
+        assert_eq!(hit.t, 1.0);
+    }
+
+    #[test]
+    fn nearest_leaves_out_a_distance_that_does_not_fit_in_f32() {
+        let far =
+            single_triangle(vec![Vec3::new(-f32::MAX, 0.0, 0.0), Vec3::new(-f32::MAX, 1.0, 0.0), Vec3::new(-f32::MAX, 0.0, 1.0)], vec![0, 1, 2]);
+        let hit = far.nearest(Vec3::new(f32::MAX, 0.0, 0.0), f32::INFINITY, &|_| true);
+        assert!(hit.is_none_or(|h| h.t.is_finite()), "{hit:?}");
     }
 
     #[test]
