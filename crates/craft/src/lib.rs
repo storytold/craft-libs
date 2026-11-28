@@ -327,6 +327,8 @@ pub use craft_pst as pst;
 pub use craft_quit as quit;
 #[cfg(feature = "raster-codecs")]
 pub use craft_raster_codecs as raster_codecs;
+#[cfg(feature = "raster3d")]
+pub use craft_raster3d as raster3d;
 #[cfg(feature = "raw")]
 pub use craft_raw as raw;
 #[cfg(feature = "review")]

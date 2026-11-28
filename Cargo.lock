@@ -1903,6 +1903,7 @@ dependencies = [
  "craft-pst",
  "craft-quit",
  "craft-raster-codecs",
+ "craft-raster3d",
  "craft-raw",
  "craft-review",
  "craft-rtf",
@@ -3991,6 +3992,18 @@ dependencies = [
  "craft-image-codecs",
  "image",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-raster3d"
+version = "0.1.0"
+dependencies = [
+ "craft-pbr",
+ "craft-wasm",
+ "rayon",
+ "thiserror 2.0.21",
+ "wasm-bindgen-test",
+ "wasmi",
 ]
 
 [[package]]
