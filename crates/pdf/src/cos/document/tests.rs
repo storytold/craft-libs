@@ -26,6 +26,11 @@ std::thread_local! {
     pub(super) static FILE_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many times `Document::objstm` decoded an object stream on this thread.
     pub(super) static OBJSTM_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many times `Document::load` parsed each file object at an offset on this thread, by
+    /// object number.
+    pub(super) static OFFSET_PARSES: std::cell::RefCell<HashMap<u32, usize>> = std::cell::RefCell::new(HashMap::new());
+    /// The most offset parses of one object a test allows: one more fails the test at once.
+    pub(super) static OFFSET_PARSE_LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
 }
 
 /// A scan that doesn't find an object isn't made again: each reads the whole file, and a file can
@@ -2465,8 +2470,6 @@ fn the_chain_row_limit_counts_rows_an_xref_stream_index_repeats() {
     assert!(detail.contains("more than 7 entries"), "{detail}");
 }
 
-// Not on the web: it times the load on a thread, and wasm32-unknown-unknown has none.
-#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
     // From the nightly fuzz job: `6 0 obj << /Length 6 0 R >> stream` with no `endstream`
@@ -2476,14 +2479,16 @@ fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
     // only runs when the header is shifted.
     let mut bytes = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n".to_vec();
     bytes.extend_from_slice(b"6 0 obj\n<< /Length 6 0 R >>\nstream\nno end marker follows\n");
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        if let Ok(doc) = Document::open(Arc::new(bytes)) {
-            let _ = doc.try_get(6);
-        }
-        let _ = tx.send(());
-    });
-    rx.recv_timeout(std::time::Duration::from_secs(20)).expect("loading must not retry exponentially");
+    // Each object is parsed at its offset at most twice; a retry of each attempt is past this
+    // limit long before its end.
+    OFFSET_PARSES.with(|parses| parses.borrow_mut().clear());
+    OFFSET_PARSE_LIMIT.with(|limit| limit.set(2));
+    if let Ok(doc) = Document::open(Arc::new(bytes)) {
+        let _ = doc.try_get(6);
+    }
+    OFFSET_PARSE_LIMIT.with(|limit| limit.set(usize::MAX));
+    let parses = OFFSET_PARSES.with(|parses| parses.borrow().clone());
+    assert!(parses.get(&6).is_some_and(|&n| n <= 2) && parses.values().all(|&n| n <= 2), "{parses:?}");
 }
 
 /// A file whose object 3 (its `/Info`) can't be parsed: the rest reads.

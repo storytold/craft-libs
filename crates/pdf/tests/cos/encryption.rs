@@ -1310,14 +1310,15 @@ fn selectors_that_lead_to_selectors_load_at_once() {
         top = stream_of(&mut doc, vec![Object::Ref(a), first.clone(), second.clone(), Object::Ref(b)]);
     }
     let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
-    let (done, finished) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let doc = Document::open(Arc::new(saved)).unwrap();
-        let _ = done.send(doc.get(top).as_dict().is_some());
-    });
-    // With the budget it takes milliseconds, and without it longer than anyone would wait, so a
-    // margin this wide can't fail on a busy machine.
-    assert_eq!(finished.recv_timeout(std::time::Duration::from_secs(120)), Ok(true), "loading must not fan out");
+    let doc = Document::open(Arc::new(saved)).unwrap();
+    // The one read follows no more references than its budget allows; one that fans out is past
+    // this limit long before its end.
+    let budget = crate::cos::MAX_FOLLOWED as usize;
+    crate::cos::ALL_FOLLOWED.set(0);
+    crate::cos::ALL_FOLLOWED_LIMIT.set(budget);
+    assert!(doc.get(top).as_dict().is_some(), "loading must not fan out");
+    crate::cos::ALL_FOLLOWED_LIMIT.set(usize::MAX);
+    assert!(crate::cos::ALL_FOLLOWED.get() <= budget);
 }
 
 /// An R6 file of the fixture's page, its `/Encrypt` given `cf` as `/CF` and `selectors` (`/StmF`,

@@ -20,7 +20,7 @@ use crate::cos::{Dict, Document, Object, PdfString, Stream};
 /// file could make one read a tree of them, each object read again once the cache has let it go.
 /// An object takes a few of these, and two dozen if every part of it is given by reference; past
 /// this they read as absent. The parameters of an object stream, read together, count as one.
-const MAX_FOLLOWED: u32 = 32;
+pub(crate) const MAX_FOLLOWED: u32 = 32;
 
 std::thread_local! {
     /// How many [`FollowScope`]s this thread is inside.
@@ -58,7 +58,21 @@ pub(crate) fn following<T>(spent: T, f: impl FnOnce() -> T) -> T {
         return spent;
     }
     FOLLOWED.set(FOLLOWED.get() + 1);
+    #[cfg(test)]
+    {
+        let all = ALL_FOLLOWED.replace(ALL_FOLLOWED.get().saturating_add(1)).saturating_add(1);
+        let limit = ALL_FOLLOWED_LIMIT.get();
+        assert!(all <= limit, "{all} references followed, more than the {limit} allowed");
+    }
     f()
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// The references followed on this thread, in every [`FollowScope`].
+    pub(crate) static ALL_FOLLOWED: Cell<usize> = const { Cell::new(0) };
+    /// The most references a test lets this thread follow: one more fails the test at once.
+    pub(crate) static ALL_FOLLOWED_LIMIT: Cell<usize> = const { Cell::new(usize::MAX) };
 }
 
 /// `o`, or the object it refers to, for what decides how a stream or dictionary is treated. Past
