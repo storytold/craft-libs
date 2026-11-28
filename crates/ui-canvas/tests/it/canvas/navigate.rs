@@ -757,6 +757,40 @@ fn a_held_alt_key_is_in_the_wheels_modifiers_when_the_wheel_events_miss_it() {
 }
 
 #[trial]
+fn a_native_pinch_wins_over_legacy_ctrl_wheel_in_the_same_frame() {
+    let (mut fixture, view, _, _) = wheel_rig(Platform::Windows);
+    let wheel = |lines| egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: Vec2::new(0.0, lines),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers { ctrl: true, command: true, ..Modifiers::NONE },
+        source: egui::MouseWheelSource::Unknown,
+    };
+    fixture.frame(vec![pointer::moved(view.get().rect.center())]);
+
+    let start = view.get().zoom;
+    let legacy_factor = fixture.ctx().options(|options| {
+        let input = &options.input_options;
+        f64::from((input.scroll_zoom_speed * (0.25 * input.line_scroll_speed)).exp())
+    });
+    fixture.frame(vec![wheel(0.25)]);
+    let legacy_zoom = view.get().zoom / start;
+    assert!((legacy_zoom - legacy_factor).abs() < 1e-4, "a fractional Ctrl-wheel alone zooms by the fallback factor: {legacy_zoom}");
+
+    for events in [vec![egui::Event::Zoom(1.2), wheel(0.25)], vec![wheel(0.25), egui::Event::Zoom(1.2)]] {
+        let before = view.get().zoom;
+        fixture.frame(events);
+        let ratio = view.get().zoom / before;
+        assert!((ratio - 1.2).abs() < 1e-4, "the native pinch is the only zoom: {ratio}");
+    }
+
+    let before = view.get();
+    fixture.frame(vec![wheel(1.0)]);
+    assert_eq!(view.get().zoom, before.zoom, "the native pinch ends the legacy pinch continuation");
+    assert_ne!(view.get().center.x, before.center.x, "a whole Ctrl-wheel notch still scrolls sideways");
+}
+
+#[trial]
 fn a_focused_field_takes_the_plain_wheel_over_the_canvas_and_leaves_it_the_view_keys() {
     let (mut fixture, view, number, _) = wheel_rig(Platform::Linux, NavigationOptions::default());
     let field = fixture.by_label("Smoothing").expect("the number field");
