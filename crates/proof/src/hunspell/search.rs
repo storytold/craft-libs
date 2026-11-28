@@ -89,7 +89,10 @@ fn search_tiers(lo_exts: Option<&[String]>) -> (Vec<PathBuf>, Vec<PathBuf>) {
                 system.extend(lo_dirs(&base.join("LibreOffice").join("share").join("extensions").to_string_lossy()));
             }
         }
-        system.extend(lo_drive_dirs(lo_exts, || LO_DRIVE_BASES.get_or_init(|| lo_drive_bases(Path::is_dir))));
+        // Other drive letters are not searched (storytold/wordcraft#3662): checking
+        // `X:\Program Files` on a mapped drive whose server is offline blocks ~20 s per server,
+        // in every process. A LibreOffice installed elsewhere is reached through the
+        // dictionaries folder setting.
     } else if cfg!(target_os = "macos") {
         if let Some(h) = &home {
             // An app started from Finder or the Dock doesn't see `WORDCRAFT_DICTIONARIES`; this
@@ -118,26 +121,6 @@ fn search_tiers(lo_exts: Option<&[String]>) -> (Vec<PathBuf>, Vec<PathBuf>) {
     }
     (dirs, system)
 }
-
-/// LibreOffice's language folders (`<drive>:\Program Files\LibreOffice\share\extensions\<ext>`)
-/// on the drives C to Z where LibreOffice is installed (`bases`). No drive is probed without
-/// `lo_exts` (no LibreOffice folders are wanted then).
-pub(super) fn lo_drive_dirs<'a>(lo_exts: Option<&[String]>, bases: impl FnOnce() -> &'a [PathBuf]) -> Vec<PathBuf> {
-    let Some(exts) = lo_exts else { return Vec::new() };
-    bases().iter().flat_map(|base| exts.iter().map(|e| base.join(e))).collect()
-}
-
-/// The `LibreOffice\share\extensions` folders on drives C to Z (48 probes).
-pub(super) fn lo_drive_bases(is_dir: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
-    ('C'..='Z')
-        .flat_map(|drive| ["Program Files", "Program Files (x86)"].map(|pf| PathBuf::from(format!(r"{drive}:\{pf}\LibreOffice\share\extensions"))))
-        .filter(|base| is_dir(base))
-        .collect()
-}
-
-/// [`lo_drive_bases`], probed once per process.
-// ponytail: a LibreOffice installed while the app runs is seen after a restart.
-static LO_DRIVE_BASES: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
 
 /// The user's data folder on Linux and the BSDs: `$XDG_DATA_HOME` when it is an absolute path (the
 /// XDG Base Directory spec ignores a relative one), else `~/.local/share`.
