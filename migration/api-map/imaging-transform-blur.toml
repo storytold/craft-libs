@@ -1,0 +1,226 @@
+# API map of the "Imaging: transform preview, blur pins" family: old path to new path and setter renames.
+
+family = "Imaging: transform preview, blur pins"
+new_module = "craft_imaging::ui"
+
+[[type]]
+name = "PreviewMap"
+old = "craft_imaging::ui::transform_preview::PreviewMap"
+new = "craft_imaging::ui::transform_preview::PreviewMap"
+status = "same"
+
+[[type]]
+name = "PreviewQuality"
+old = "craft_imaging::ui::transform_preview::PreviewQuality"
+new = "craft_imaging::ui::transform_preview::PreviewQuality"
+status = "same"
+
+[[type]]
+name = "PreviewTextures"
+old = "craft_imaging::ui::transform_preview::PreviewTextures"
+new = "craft_imaging::ui::transform_preview::PreviewTextures"
+status = "same"
+note = "`PreviewTextures::new(name, pixels)` takes no `Context`; the uploads go through the texture store when the preview is painted. `pick` takes the context and is public."
+
+[[type]]
+name = "StyledPreview"
+old = "craft_imaging::ui::transform_preview::StyledPreview"
+new = "craft_imaging::ui::transform_preview::StyledPreview"
+status = "same"
+note = "`StyledPreview::texture` is `composite`; the composite is a texture store entry under the preview's name."
+
+[[type]]
+name = "TransformPreview"
+old = "craft_imaging::ui::transform_preview::TransformPreview"
+new = "craft_imaging::ui::transform_preview::TransformPreview"
+status = "same"
+note = "A paint-only canvas control: `TransformPreview::new(label, &textures)` shown with `show_at(ui, canvas_rect)` in the canvas body under the guides and the box; its view is the canvas's. `above` is removed: show a `RasterDisplay` of the layers above right after it."
+
+[[type]]
+name = "PreviewPixels"
+old = "craft_imaging::ui::transform_preview::PreviewPixels"
+new = "craft_imaging::ui::transform_preview::PreviewPixels"
+status = "same"
+
+[[type]]
+name = "PreviewMask"
+old = "craft_imaging::ui::transform_preview::PreviewMask"
+new = "craft_imaging::ui::transform_preview::PreviewMask"
+status = "same"
+
+[[type]]
+name = "PreviewDisplay"
+old = "craft_imaging::ui::transform_preview::PreviewDisplay"
+new = "craft_imaging::ui::transform_preview::PreviewDisplay"
+status = "same"
+
+[[type]]
+name = "TextureChoice"
+old = "craft_imaging::ui::transform_preview::TextureChoice"
+new = "craft_imaging::ui::transform_preview::TextureChoice"
+status = "same"
+
+[[type]]
+name = "StylePlan"
+old = "craft_imaging::ui::transform_preview::StylePlan"
+new = "craft_imaging::ui::transform_preview::StylePlan"
+status = "same"
+
+[[type]]
+name = "StyledBudget"
+old = "craft_imaging::ui::transform_preview::StyledBudget"
+new = "craft_imaging::ui::transform_preview::StyledBudget"
+status = "same"
+
+[[type]]
+name = "StyledContent"
+old = "craft_imaging::ui::transform_preview::StyledContent"
+new = "craft_imaging::ui::transform_preview::StyledContent"
+status = "same"
+
+[[type]]
+name = "StyledSource"
+old = "craft_imaging::ui::transform_preview::StyledSource"
+new = "craft_imaging::ui::transform_preview::StyledSource"
+status = "same"
+
+[[type]]
+name = "PreviewMesh"
+old = ""
+new = "craft_imaging::ui::transform_preview::PreviewMesh"
+status = "replaced"
+note = "The mesh a map draws, in document units: `PreviewMap::build` and `PreviewMesh::clipped` are public so the maps can be checked."
+
+[[type]]
+name = "StyledFrame"
+old = ""
+new = "craft_imaging::ui::transform_preview::StyledFrame"
+status = "replaced"
+note = "What a styled composite is made from in one pass: `StyledFrame::new(textures, quad, canvas, zoom)`."
+
+[[type]]
+name = "resample"
+old = ""
+new = "craft_imaging::ui::transform_preview::resample"
+status = "replaced"
+note = "The resampling of the moving texels over a work rectangle, public so it can be checked."
+
+[[type]]
+name = "BlurKind"
+old = "craft_imaging::ui::blur_pins::BlurKind"
+new = "craft_imaging::ui::blur_pins::BlurKind"
+status = "same"
+
+[[type]]
+name = "BlurPin"
+old = "craft_imaging::ui::blur_pins::BlurPin"
+new = "craft_imaging::ui::blur_pins::BlurPin"
+status = "same"
+note = "Built with `BlurPin::new(x, y, amount)`; the types are `#[non_exhaustive]`."
+
+[[type]]
+name = "BlurPins"
+old = "craft_imaging::ui::blur_pins::BlurPins"
+new = "craft_imaging::ui::blur_pins::BlurPins"
+status = "same"
+
+[[type]]
+name = "IrisShape"
+old = "craft_imaging::ui::blur_pins::IrisShape"
+new = "craft_imaging::ui::blur_pins::IrisShape"
+status = "same"
+
+[[type]]
+name = "TiltBand"
+old = "craft_imaging::ui::blur_pins::TiltBand"
+new = "craft_imaging::ui::blur_pins::TiltBand"
+status = "same"
+
+[[type]]
+name = "BlurGrab"
+old = "craft_imaging::ui::blur_pins::BlurGrab"
+new = "craft_imaging::ui::blur_pins::BlurGrab"
+status = "same"
+
+[[type]]
+name = "BlurPinsOverlay"
+old = "craft_imaging::ui::blur_pins::BlurPinsOverlay"
+new = "craft_imaging::ui::blur_pins::BlurPinsOverlay"
+status = "same"
+note = "A canvas control: `BlurPinsOverlay::new(label, Bind<BlurPins>)` shown with `show_at(ui, canvas_rect)`; a press on the canvas outside the pins adds one (a background part)."
+
+[[type]]
+name = "BlurPinsPanel"
+old = "craft_imaging::ui::blur_pins::BlurPinsPanel"
+new = "craft_imaging::ui::blur_pins::BlurPinsPanel"
+status = "same"
+note = "A pattern: `BlurPinsPanel::new(&mut pins).show(ui)`."
+
+[[type]]
+name = "BlurPinsPanelOutput"
+old = "craft_imaging::ui::blur_pins::BlurPinsPanelOutput"
+new = "craft_imaging::ui::blur_pins::BlurPinsPanelOutput"
+status = "same"
+
+[[type]]
+name = "BlurPinsStyle"
+old = "craft_imaging::ui::blur_pins::BlurPinsStyle"
+new = "craft_imaging::ui::blur_pins::BlurPinsStyle"
+status = "same"
+note = "The overlay's `ComponentStyle`; it has no setters."
+
+[[type]]
+name = "grab"
+old = "craft_imaging::ui::blur_pins::grab"
+new = "craft_imaging::ui::blur_pins::grab"
+status = "same"
+note = "Takes a `PinReach` in place of the style."
+
+[[type]]
+name = "drag"
+old = "craft_imaging::ui::blur_pins::drag"
+new = "craft_imaging::ui::blur_pins::drag"
+status = "same"
+
+[[type]]
+name = "BlurPinsResponse"
+old = "craft_imaging::ui::blur_pins::BlurPinsResponse"
+new = ""
+status = "removed"
+note = "Replaced by `BlurPinsOutput { edit }`; there is no `claimed` flag, the pins are parts in the canvas's arena."
+
+[[type]]
+name = "BlurPinsOutput"
+old = ""
+new = "craft_imaging::ui::blur_pins::BlurPinsOutput"
+status = "replaced"
+note = "Legacy `BlurPinsResponse`."
+
+[[type]]
+name = "BlurPinsLabels"
+old = "craft_imaging::ui::blur_pins::BlurPinsLabels"
+new = ""
+status = "removed"
+note = "Replaced by `BlurPinsWords`."
+
+[[type]]
+name = "BlurPinsWords"
+old = ""
+new = "craft_imaging::ui::blur_pins::BlurPinsWords"
+status = "replaced"
+note = "Legacy `BlurPinsLabels`; the keys are unchanged."
+
+[[type]]
+name = "BlurPinsCommand"
+old = ""
+new = "craft_imaging::ui::blur_pins::BlurPinsCommand"
+status = "replaced"
+note = "New: Add Pin (the keyboard path to creating a pin) and Delete Pin; `BlurPinsCommand::apply(&mut pins)`."
+
+[[type]]
+name = "PinReach"
+old = ""
+new = "craft_imaging::ui::blur_pins::PinReach"
+status = "replaced"
+note = "New: how near a press grabs each mark, taken by `grab`."
+

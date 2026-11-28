@@ -28,6 +28,9 @@ pub mod classic;
 pub mod image;
 pub mod makernote;
 pub mod packbits;
+/// Plain, uncompressed classic TIFF writing for existing RGBA16 callers.
+#[cfg(feature = "plain-rgba16")]
+pub mod plain;
 pub mod probe;
 mod reader;
 pub mod tags;

@@ -3,7 +3,7 @@
 //! picture's place in the BLIP store, crop, alt text) and the `OfficeArtFBSE` with the BLIP
 //! embedded in it. The character 0x01 in the text points here through `sprmCPicLocation`.
 
-use sha1::Digest;
+use md4::Digest;
 
 /// `PICF.cbHeader`.
 const CB_HEADER: u16 = 0x44;
@@ -77,14 +77,15 @@ impl Blip {
         }
     }
 
-    /// The `OfficeArtBlip*` record.
-    fn record(&self, w_emu: i32, h_emu: i32) -> Vec<u8> {
+    /// The `OfficeArtBlip*` record and its format-defined identifier.
+    fn record(&self, w_emu: i32, h_emu: i32) -> (Vec<u8>, [u8; 16]) {
         let (raw, (typ, inst)) = match self {
             Blip::Png(b) => (b, BLIP_PNG),
             Blip::Jpeg(b) => (b, BLIP_JPEG),
             Blip::Metafile(b, emf) => (b, if *emf { BLIP_EMF } else { BLIP_WMF }),
         };
-        let mut body = uid(raw).to_vec();
+        let id = uid(raw);
+        let mut body = id.to_vec();
         match self {
             Blip::Png(b) | Blip::Jpeg(b) => {
                 body.push(0xFF); // tag
@@ -106,16 +107,14 @@ impl Blip {
                 body.extend_from_slice(&packed);
             }
         }
-        rec(0, inst, typ, &body)
+        (rec(0, inst, typ, &body), id)
     }
 }
 
-/// A 16-byte id for a BLIP (the format wants an MD4; any digest identifies it).
+/// MS-ODRAW requires MD4 of the uncompressed BLIP payload, not the original import file.
+/// This legacy-format identifier is not authentication or a security integrity check.
 fn uid(bytes: &[u8]) -> [u8; 16] {
-    let d = sha1::Sha1::digest(bytes);
-    let mut u = [0u8; 16];
-    u.copy_from_slice(d.get(..16).unwrap_or(&[0; 16]));
-    u
+    md4::Md4::digest(bytes).into() // NOSONAR: MS-ODRAW spec-mandated BLIP UID (non-security format identifier)
 }
 
 /// An OfficeArt record: header (version, instance, type, length) then the body.
@@ -147,9 +146,10 @@ impl Pictures {
         let gh = (h.max(1.0) / (1.0 - ct - cb).max(0.01)).min(1584.0);
         let emu = |pt: f32| (pt * 12_700.0).round() as i32;
 
-        let blip_rec = blip.record(emu(gw), emu(gh));
+        let (blip_rec, id) = blip.record(emu(gw), emu(gh));
         let mut fbse = vec![blip.bt(), blip.bt()];
-        fbse.extend_from_slice(&uid(bytes));
+        // Reuse the embedded BLIP's identifier after PNG conversion/placeable-header removal.
+        fbse.extend_from_slice(&id);
         fbse.extend_from_slice(&0x00FFu16.to_le_bytes()); // tag
         fbse.extend_from_slice(&(blip_rec.len() as u32).to_le_bytes());
         fbse.extend_from_slice(&1u32.to_le_bytes()); // cRef
@@ -207,5 +207,72 @@ impl Pictures {
         self.data.extend_from_slice(&sp);
         self.data.extend_from_slice(&fbse);
         u32::try_from(at).ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blip_uid_matches_rfc1320_vectors() {
+        assert_eq!(uid(b""), [0x31, 0xd6, 0xcf, 0xe0, 0xd1, 0x6a, 0xe9, 0x31, 0xb7, 0x3c, 0x59, 0xd7, 0xe0, 0xc0, 0x89, 0xc0]);
+        assert_eq!(uid(b"abc"), [0xa4, 0x48, 0x01, 0x7a, 0xaf, 0x21, 0xd8, 0x52, 0x5f, 0xc1, 0x0a, 0xe8, 0x7a, 0xa6, 0x72, 0x9d]);
+    }
+
+    fn check_record_ids(input: &[u8], payload: &[u8]) {
+        let mut pictures = Pictures::default();
+        assert_eq!(pictures.add(input, 1.0, 1.0, [0.0; 4], ""), Some(0));
+        let bytes = &pictures.data;
+        let shape = usize::from(CB_HEADER);
+        let shape_len = u32::from_le_bytes(bytes[shape + 4..shape + 8].try_into().unwrap()) as usize;
+        let fbse = shape + 8 + shape_len;
+        assert_eq!(&bytes[fbse + 2..fbse + 4], &FBSE.to_le_bytes());
+        let embedded = fbse + 8 + 36;
+        let typ = u16::from_le_bytes(bytes[embedded + 2..embedded + 4].try_into().unwrap());
+        let emitted = if typ == BLIP_WMF.0 || typ == BLIP_EMF.0 {
+            // Controlled tiny fixtures: skip the UID and 34-byte metafile header.
+            miniz_oxide::inflate::decompress_to_vec_zlib(&bytes[embedded + 58..]).unwrap()
+        } else {
+            assert!(typ == BLIP_PNG.0 || typ == BLIP_JPEG.0);
+            bytes[embedded + 25..].to_vec()
+        };
+        assert_eq!(emitted, payload, "stored image bytes must retain the expected conversion");
+        let expected = uid(&emitted);
+        assert_eq!(&bytes[fbse + 10..fbse + 26], &expected, "FBSE must identify stored data");
+        assert_eq!(&bytes[embedded + 8..embedded + 24], &expected, "BLIP must share the same identifier");
+    }
+
+    #[test]
+    fn blip_ids_identify_unmodified_payloads() {
+        // Tiny format-dispatch fixtures exercise identifier bytes, not image validation.
+        let png = b"\x89PNGsmall";
+        check_record_ids(png, png);
+        let jpeg = b"\xff\xd8\xffsmall";
+        check_record_ids(jpeg, jpeg);
+        let wmf = [1, 0, 9, 0, 0, 3, 9, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0];
+        check_record_ids(&wmf, &wmf);
+        let mut emf = vec![0; 44];
+        emf[..4].copy_from_slice(&1u32.to_le_bytes());
+        emf[40..44].copy_from_slice(b" EMF");
+        check_record_ids(&emf, &emf);
+    }
+
+    #[test]
+    fn blip_ids_exclude_placeable_wmf_header() {
+        let wmf = [1, 0, 9, 0, 0, 3, 9, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0];
+        let mut placeable = vec![0; 22];
+        placeable[..4].copy_from_slice(&[0xd7, 0xcd, 0xc6, 0x9a]);
+        placeable.extend_from_slice(&wmf);
+        check_record_ids(&placeable, &wmf);
+    }
+
+    #[test]
+    fn blip_ids_identify_converted_bmp_payload() {
+        let mut bmp = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(1, 1).write_to(&mut bmp, image::ImageFormat::Bmp).unwrap();
+        let Blip::Png(encoded) = Blip::of(bmp.get_ref()).unwrap() else { panic!("BMP must become PNG") };
+        assert_ne!(bmp.get_ref(), &encoded);
+        check_record_ids(bmp.get_ref(), &encoded);
     }
 }

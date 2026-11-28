@@ -23,21 +23,22 @@ in part.
 Pixels are 8 bits per channel (`encode`, `Texture::decode`) or 16 bits per channel (`encode16`,
 `Texture::decode16`), interleaved and top row first, in one of four `Layout`s (`Gray`,
 `GrayA`, `Rgb`, `Rgba`). BC1 to BC3 are written from RGBA, BC4 from gray and BC5 from RGB
-(`DdsCompression::layout` names it). BC4 reads back as gray. BC5 stores red and green only, so it
-reads back as RGB with blue 0: for a tangent-space normal map, X and Y, with Z left to the
-renderer. ATI2 files are read as Microsoft's tools read them (red in the first block), not with
-the two blocks swapped as FFmpeg does.
+(`DdsCompression::layout` names it). BC4 reads back as gray. BC5 and `R16G16_UNORM` store red
+and green only, so they read as RGB with blue 0: for a tangent-space normal map, X and Y, with Z
+left to the renderer. ATI2 files are read as Microsoft's tools read them (red in the first block),
+not with the two blocks swapped as FFmpeg does.
 
 From 16-bit pixels, uncompressed textures keep 16 bits per channel: gray as `R16_UNORM`, gray
 and alpha (or any two channels, such as a normal map's X and Y) as `R16G16_UNORM`, RGB (alpha
-65535) and RGBA as `R16G16B16A16_UNORM`, all with the DX10 header; they read back as gray, gray
-and alpha, and RGBA. BC4 and BC5 keep 8-bit endpoints, as the formats store them, but pick them
-and the indices against the 16-bit values, so a smooth height or normal map has less error than
-when its 8-bit rounding is compressed. BC1 to BC3 round the pixels to 8 bits first.
+65535) and RGBA as `R16G16B16A16_UNORM`, all with the DX10 header; they read back as gray, RGB
+with blue 0 (red and green holding the two channels), and RGBA. BC4 and BC5 keep 8-bit
+endpoints, as the formats store them, but pick them and the indices against the 16-bit values,
+so a smooth height or normal map has less error than when its 8-bit rounding is compressed. BC1 to BC3 round the pixels to 8 bits first.
 `Texture::decode` rounds 16-bit formats to 8 bits; `Texture::decode16` returns them exactly,
 rescales channel-mask fields from their own width (a 16-bit luminance field exactly),
-interpolates BC4 and BC5 at 16 bits, and scales BC1 to BC3 by 257. `craft-image-codecs` still
-reads DDS at 8 bits.
+interpolates BC4 and BC5 at 16 bits, and scales BC1 to BC3 by 257. `Texture::bits_per_channel`
+gives the widest stored channel; `craft-image-codecs` reads a texture through `decode16` when it
+is wider than 8 bits.
 
 ```rust
 use craft_dds::{DdsCompression, DdsOptions, Layout, Texture};

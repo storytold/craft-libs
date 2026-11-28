@@ -423,3 +423,37 @@ fn bounded_feeds_keep_metadata_after_the_final_progressive_part() {
     assert_eq!(decoded.metadata.exif.as_deref(), Some(reference_exif.as_slice()));
     assert_eq!(decoded.metadata.xmp.as_deref(), Some(reference_xmp.as_slice()));
 }
+
+/// 64 MiB of `a`, Brotli-compressed to 54 bytes.
+const BROTLI_BOMB: [u8; 54] = [
+    0xcf, 0xff, 0xff, 0x7f, 0xf8, 0x25, 0xc2, 0xe2, 0xb1, 0x40, 0x20, 0xf7, 0xfe, 0x9f, 0xff, 0xff, 0xff, 0xf0, 0x4b, 0x00, 0xc4, 0x61, 0x01, 0x80,
+    0xee, 0xfd, 0x3f, 0xff, 0xff, 0xff, 0xe1, 0x97, 0x00, 0x88, 0xc3, 0x22, 0x00, 0xdd, 0xfb, 0x7f, 0xfe, 0xff, 0xff, 0xc3, 0x2f, 0x01, 0x10, 0x87,
+    0x05, 0x00, 0xba, 0xf7, 0xff, 0x03,
+];
+
+/// `<x:xmpmeta/>`, Brotli-compressed.
+const BROTLI_XMP: [u8; 16] = [0x8b, 0x05, 0x80, 0x3c, 0x78, 0x3a, 0x78, 0x6d, 0x70, 0x6d, 0x65, 0x74, 0x61, 0x2f, 0x3e, 0x03];
+
+fn container_with_brob(inner: &[u8; 4], compressed: &[u8]) -> Vec<u8> {
+    let image = ImageRef { width: 2, height: 2, layout: Layout::Rgb, samples: Samples::U8(&[1; 12]) };
+    let codestream = raw_codestream(&encode(&image, EncodeOptions::default(), &Metadata::default()).unwrap());
+    let mut file = b"\0\0\0\x0cJXL \r\n\x87\n".to_vec();
+    box_bytes(&mut file, b"ftyp", b"jxl \0\0\0\0jxl ");
+    box_bytes(&mut file, b"brob", &[inner.as_slice(), compressed].concat());
+    box_bytes(&mut file, b"jxlc", &codestream);
+    file
+}
+
+/// A 54-byte `brob` box inflated to 64 MiB of XMP inside the decoder, outside its allocation tracker.
+#[test]
+fn a_brotli_bomb_costs_the_metadata_not_the_decode() {
+    let decoded = decode(&container_with_brob(b"xml ", &BROTLI_BOMB), DecodeLimits::default()).unwrap();
+    assert_eq!((decoded.width, decoded.height), (2, 2));
+    assert_eq!(decoded.metadata.xmp, None, "the over-cap metadata is dropped");
+}
+
+#[test]
+fn a_small_brotli_xmp_box_still_comes_through() {
+    let decoded = decode(&container_with_brob(b"xml ", &BROTLI_XMP), DecodeLimits::default()).unwrap();
+    assert_eq!(decoded.metadata.xmp.as_deref(), Some(&b"<x:xmpmeta/>"[..]));
+}

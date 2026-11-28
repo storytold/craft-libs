@@ -225,6 +225,113 @@ impl EncoderConfig {
             writer: format!("craft-h264enc {}", env!("CARGO_PKG_VERSION")),
         }
     }
+
+    /// The level_idc (41 = level 4.1) of the stream an encoder built from this configuration writes,
+    /// after the checks of [`Encoder::new`]: a configuration it rejects (an invalid size or frame rate,
+    /// or a picture size, frame rate or bitrate past level 6.2) gets the same error here. A requested
+    /// [`EncoderConfig::level`] below the needed level is raised to it. [`Encoder::new`] can still
+    /// fail when it cannot start its worker threads.
+    pub fn level_idc(&self) -> Result<u8, Error> {
+        Ok(self.plan()?.level)
+    }
+
+    /// Validate the configuration and derive the picture size in macroblocks, the rate limits and the level.
+    fn plan(&self) -> Result<Plan, Error> {
+        if self.width == 0
+            || self.height == 0
+            || !self.width.is_multiple_of(2)
+            || !self.height.is_multiple_of(2)
+            || self.width > 16384
+            || self.height > 16384
+        {
+            return Err(Error::InvalidDimensions(self.width, self.height));
+        }
+        if self.fps_num == 0 || self.fps_den == 0 {
+            return Err(Error::InvalidFrameRate(self.fps_num, self.fps_den));
+        }
+        if self.bframes > 3 {
+            return Err(Error::InvalidConfig("bframes must be 0..=3".into()));
+        }
+        if !(8..=10).contains(&self.bit_depth) {
+            return Err(Error::InvalidConfig(format!("bit depth {} is not supported (8 to 10)", self.bit_depth)));
+        }
+        if self.bit_depth > 8 && self.profile != Profile::High10 {
+            return Err(Error::InvalidConfig(format!("bit depth {} needs the High 10 profile", self.bit_depth)));
+        }
+        let mbw = self.width.div_ceil(16) as usize;
+        let mbh = self.height.div_ceil(16) as usize;
+        let fps = self.fps_num as f64 / self.fps_den as f64;
+        let max_refs = if self.intra_only {
+            0
+        } else if self.bframes > 0 && self.profile != Profile::Baseline {
+            2
+        } else {
+            1
+        };
+        // QPY may go down to -QpBdOffset at higher bit depths.
+        let qp_min = -(Depth::new(self.bit_depth).qp_offset as f32);
+        if let Pass::Second(st) = &self.pass {
+            let invalid =
+                st.frames.is_empty() || !st.fps.is_finite() || st.fps <= 0.0 || st.frames.iter().any(|f| !f.qscale.is_finite() || f.qscale <= 0.0);
+            if invalid {
+                return Err(Error::InvalidConfig(
+                    "second pass needs non-empty first-pass statistics with a positive fps and valid frame qscales".into(),
+                ));
+            }
+            if (st.fps - fps).abs() > fps.max(1.0) * 1e-9 {
+                return Err(Error::InvalidConfig("second-pass frame rate must match the first pass".into()));
+            }
+        }
+        match self.rate {
+            RateControl::Crf(crf) if !crf.is_finite() => {
+                return Err(Error::InvalidConfig("CRF must be finite".into()));
+            }
+            RateControl::Cbr { kbps: 0 } => {
+                return Err(Error::InvalidConfig("bitrate must be non-zero".into()));
+            }
+            RateControl::Vbr { target_kbps: 0, .. } => {
+                return Err(Error::InvalidConfig("bitrate must be non-zero".into()));
+            }
+            RateControl::Vbr { target_kbps, max_kbps } if max_kbps == 0 || max_kbps < target_kbps => {
+                return Err(Error::InvalidConfig("VBR maximum bitrate must be at least the non-zero target bitrate".into()));
+            }
+            _ => {}
+        }
+        let (kbps_for_level, vbv) = match (&self.rate, &self.pass) {
+            (RateControl::Qp(_), _) => (None, (None, None)),
+            (RateControl::Crf(c), _) => (Some(crf_level_kbps(*c, qp_min, mbw, mbh, fps)), (None, None)),
+            (RateControl::Cbr { kbps }, Pass::First) => (Some(*kbps), (None, None)),
+            (RateControl::Cbr { kbps }, _) => (Some(*kbps), (Some(*kbps), Some(*kbps))),
+            (RateControl::Vbr { max_kbps, .. }, Pass::First) => (Some(*max_kbps), (None, None)),
+            (RateControl::Vbr { max_kbps, .. }, _) => {
+                let buffer =
+                    max_kbps.checked_mul(2).ok_or_else(|| Error::InvalidConfig("VBR buffer rate exceeds the supported integer range".into()))?;
+                (Some(*max_kbps), (Some(*max_kbps), Some(buffer)))
+            }
+        };
+        // cpbBrVclFactor / 1000 (Table A-2): MaxBR scales by 1.25 for High and 3 for High 10.
+        let br_factor = match self.profile {
+            Profile::Baseline | Profile::Main => 1000,
+            Profile::High => 1250,
+            Profile::High10 => 3000,
+        };
+        let auto = nal::pick_level(mbw as u32, mbh as u32, fps, max_refs as u32, kbps_for_level, br_factor)
+            .ok_or_else(|| Error::InvalidConfig("configuration exceeds H.264 level 6.2 limits".into()))?;
+        let level = self.level.map_or(auto, |l| nal::level_at_least(l, auto));
+        Ok(Plan { mbw, mbh, fps, max_refs, qp_min, vbv, level })
+    }
+}
+
+/// What [`EncoderConfig::plan`] derives from a valid configuration.
+struct Plan {
+    mbw: usize,
+    mbh: usize,
+    fps: f64,
+    max_refs: usize,
+    qp_min: f32,
+    /// VBV maximum rate and buffer size, in kbit/s and kbit.
+    vbv: (Option<u32>, Option<u32>),
+    level: u8,
 }
 
 /// A planar 4:2:0 8-bit input picture of the configured size.
@@ -248,11 +355,35 @@ pub struct YuvFrame16<'a> {
     pub uv_stride: usize,
 }
 
+/// A semi-planar 4:2:0 8-bit input picture (NV12) of the configured size: a luma plane and one chroma
+/// plane of interleaved pairs, Cb first. A chroma row holds `width` bytes (`width / 2` pairs). Strides
+/// are in bytes.
+#[derive(Clone, Copy, Debug)]
+pub struct Nv12Frame<'a> {
+    pub y: &'a [u8],
+    pub uv: &'a [u8],
+    pub y_stride: usize,
+    pub uv_stride: usize,
+}
+
+/// A semi-planar 4:2:0 input picture in the P010 layout: the arrangement of [`Nv12Frame`] with 16-bit
+/// samples whose value is in the high bits (a 10-bit sample `v` is stored as `v << 6`). The encoder keeps
+/// the top [`EncoderConfig::bit_depth`] bits of each sample and ignores the rest. Strides are in samples.
+#[derive(Clone, Copy, Debug)]
+pub struct P010Frame<'a> {
+    pub y: &'a [u16],
+    pub uv: &'a [u16],
+    pub y_stride: usize,
+    pub uv_stride: usize,
+}
+
 /// The planes of one input picture.
 #[derive(Clone, Copy)]
 enum Source<'a> {
     Eight(&'a YuvFrame<'a>),
     Deep(&'a YuvFrame16<'a>),
+    Nv12(&'a Nv12Frame<'a>),
+    P010(&'a P010Frame<'a>),
 }
 
 /// One input row, 8- or 16-bit.
@@ -260,6 +391,11 @@ enum Source<'a> {
 enum Row<'a> {
     Eight(&'a [u8]),
     Deep(&'a [u16]),
+    /// Interleaved chroma pairs and the index of the component in each pair (0 for Cb, 1 for Cr).
+    EightPairs(&'a [u8], usize),
+    /// P010 samples, with the value in the high bits.
+    High(&'a [u16]),
+    HighPairs(&'a [u16], usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -419,35 +555,12 @@ impl<P: Pixel> Core<P> {
     }
 
     fn new_with_extra_motion_search_starts(mut cfg: EncoderConfig, extra_motion_search_starts: bool) -> Result<Self, Error> {
-        if cfg.width == 0
-            || cfg.height == 0
-            || !cfg.width.is_multiple_of(2)
-            || !cfg.height.is_multiple_of(2)
-            || cfg.width > 16384
-            || cfg.height > 16384
-        {
-            return Err(Error::InvalidDimensions(cfg.width, cfg.height));
-        }
-        if cfg.fps_num == 0 || cfg.fps_den == 0 {
-            return Err(Error::InvalidFrameRate(cfg.fps_num, cfg.fps_den));
-        }
-        if cfg.bframes > 3 {
-            return Err(Error::InvalidConfig("bframes must be 0..=3".into()));
-        }
-        if !(8..=10).contains(&cfg.bit_depth) {
-            return Err(Error::InvalidConfig(format!("bit depth {} is not supported (8 to 10)", cfg.bit_depth)));
-        }
-        if cfg.bit_depth > 8 && cfg.profile != Profile::High10 {
-            return Err(Error::InvalidConfig(format!("bit depth {} needs the High 10 profile", cfg.bit_depth)));
-        }
+        let Plan { mbw, mbh, fps, max_refs, qp_min, vbv, level } = cfg.plan()?;
         if cfg.profile == Profile::Baseline || cfg.intra_only {
             cfg.bframes = 0;
         }
         cfg.keyint = if cfg.intra_only { 1 } else { cfg.keyint.max(1) };
         let depth = Depth::new(cfg.bit_depth);
-        let mbw = cfg.width.div_ceil(16) as usize;
-        let mbh = cfg.height.div_ceil(16) as usize;
-        let fps = cfg.fps_num as f64 / cfg.fps_den as f64;
         let cabac = cfg.profile != Profile::Baseline;
         let high = cfg.profile.high();
         let params = match cfg.preset {
@@ -512,71 +625,14 @@ impl<P: Pixel> Core<P> {
                 depth,
             },
         };
-        let max_refs = if cfg.intra_only {
-            0
-        } else if cfg.bframes > 0 {
-            2
-        } else {
-            1
+        let rc_kind = match (&cfg.rate, &cfg.pass) {
+            (RateControl::Qp(q), _) => RcKind::Qp((*q).min(51)),
+            (RateControl::Crf(c), _) => RcKind::Crf(c.clamp(qp_min, 51.0)),
+            (RateControl::Cbr { kbps: target_kbps } | RateControl::Vbr { target_kbps, .. }, Pass::Second(st)) => {
+                ratecontrol::RateControl::plan_two_pass(st, *target_kbps)
+            }
+            (RateControl::Cbr { kbps: target_kbps } | RateControl::Vbr { target_kbps, .. }, _) => RcKind::Abr { kbps: *target_kbps },
         };
-        // QPY may go down to -QpBdOffset at higher bit depths.
-        let qp_min = -(depth.qp_offset as f32);
-        if let Pass::Second(st) = &cfg.pass {
-            let invalid =
-                st.frames.is_empty() || !st.fps.is_finite() || st.fps <= 0.0 || st.frames.iter().any(|f| !f.qscale.is_finite() || f.qscale <= 0.0);
-            if invalid {
-                return Err(Error::InvalidConfig(
-                    "second pass needs non-empty first-pass statistics with a positive fps and valid frame qscales".into(),
-                ));
-            }
-            if (st.fps - fps).abs() > fps.max(1.0) * 1e-9 {
-                return Err(Error::InvalidConfig("second-pass frame rate must match the first pass".into()));
-            }
-        }
-        match cfg.rate {
-            RateControl::Crf(crf) if !crf.is_finite() => {
-                return Err(Error::InvalidConfig("CRF must be finite".into()));
-            }
-            RateControl::Cbr { kbps: 0 } => {
-                return Err(Error::InvalidConfig("bitrate must be non-zero".into()));
-            }
-            RateControl::Vbr { target_kbps: 0, .. } => {
-                return Err(Error::InvalidConfig("bitrate must be non-zero".into()));
-            }
-            RateControl::Vbr { target_kbps, max_kbps } if max_kbps == 0 || max_kbps < target_kbps => {
-                return Err(Error::InvalidConfig("VBR maximum bitrate must be at least the non-zero target bitrate".into()));
-            }
-            _ => {}
-        }
-        let (kbps_for_level, rc_kind, vbv) = match (&cfg.rate, &cfg.pass) {
-            (RateControl::Qp(q), _) => (None, RcKind::Qp((*q).min(51)), (None, None)),
-            (RateControl::Crf(c), _) => (Some(crf_level_kbps(*c, qp_min, mbw, mbh, fps)), RcKind::Crf(c.clamp(qp_min, 51.0)), (None, None)),
-            (RateControl::Cbr { kbps }, Pass::Second(st)) => {
-                (Some(*kbps), ratecontrol::RateControl::plan_two_pass(st, *kbps), (Some(*kbps), Some(*kbps)))
-            }
-            (RateControl::Cbr { kbps }, Pass::First) => (Some(*kbps), RcKind::Abr { kbps: *kbps }, (None, None)),
-            (RateControl::Cbr { kbps }, Pass::Single) => (Some(*kbps), RcKind::Abr { kbps: *kbps }, (Some(*kbps), Some(*kbps))),
-            (RateControl::Vbr { target_kbps, max_kbps }, Pass::Second(st)) => {
-                let buffer =
-                    max_kbps.checked_mul(2).ok_or_else(|| Error::InvalidConfig("VBR buffer rate exceeds the supported integer range".into()))?;
-                (Some(*max_kbps), ratecontrol::RateControl::plan_two_pass(st, *target_kbps), (Some(*max_kbps), Some(buffer)))
-            }
-            (RateControl::Vbr { target_kbps, max_kbps }, Pass::First) => (Some(*max_kbps), RcKind::Abr { kbps: *target_kbps }, (None, None)),
-            (RateControl::Vbr { target_kbps, max_kbps }, Pass::Single) => {
-                let buffer =
-                    max_kbps.checked_mul(2).ok_or_else(|| Error::InvalidConfig("VBR buffer rate exceeds the supported integer range".into()))?;
-                (Some(*max_kbps), RcKind::Abr { kbps: *target_kbps }, (Some(*max_kbps), Some(buffer)))
-            }
-        };
-        // cpbBrVclFactor / 1000 (Table A-2): MaxBR scales by 1.25 for High and 3 for High 10.
-        let br_factor = match cfg.profile {
-            Profile::Baseline | Profile::Main => 1000,
-            Profile::High => 1250,
-            Profile::High10 => 3000,
-        };
-        let auto = nal::pick_level(mbw as u32, mbh as u32, fps, max_refs as u32, kbps_for_level, br_factor)
-            .ok_or_else(|| Error::InvalidConfig("configuration exceeds H.264 level 6.2 limits".into()))?;
-        let level = cfg.level.map_or(auto, |l| nal::level_at_least(l, auto));
         let (profile_idc, constraint) = match cfg.profile {
             Profile::Baseline => (66u8, 0xC0u8), // constraint_set0 + set1 => Constrained Baseline
             Profile::Main => (77, 0x40),
@@ -835,27 +891,35 @@ impl<P: Pixel> Core<P> {
     fn import(&mut self, f: Source) -> Result<Frame<P>, Error> {
         let (w, h) = (self.cfg.width as usize, self.cfg.height as usize);
         let (cw, ch) = (w / 2, h / 2);
+        // A semi-planar chroma row holds both components, so it is twice as wide in samples.
+        let semi = matches!(f, Source::Nv12(_) | Source::P010(_));
         let (lens, ys, cs) = match f {
             Source::Eight(f) => ([f.y.len(), f.u.len(), f.v.len()], f.y_stride, f.uv_stride),
             Source::Deep(f) => ([f.y.len(), f.u.len(), f.v.len()], f.y_stride, f.uv_stride),
+            Source::Nv12(f) => ([f.y.len(), f.uv.len(), f.uv.len()], f.y_stride, f.uv_stride),
+            Source::P010(f) => ([f.y.len(), f.uv.len(), f.uv.len()], f.y_stride, f.uv_stride),
         };
+        let crow = if semi { 2 * cw } else { cw };
         let fits = |len: usize, stride: usize, pw: usize, ph: usize| {
             stride >= pw && stride.checked_mul(ph - 1).and_then(|n| n.checked_add(pw)).is_some_and(|n| len >= n)
         };
-        if !(fits(lens[0], ys, w, h) && fits(lens[1], cs, cw, ch) && fits(lens[2], cs, cw, ch)) {
+        if !(fits(lens[0], ys, w, h) && fits(lens[1], cs, crow, ch) && fits(lens[2], cs, crow, ch)) {
             return Err(Error::BadFrame);
         }
-        if matches!(f, Source::Deep(_)) && self.depth.bits == 8 {
+        if matches!(f, Source::Deep(_) | Source::P010(_)) && self.depth.bits == 8 {
             return Err(Error::DeepInput);
         }
         let depth = self.depth;
+        // P010 keeps the value in the high bits of each sample: the top BitDepth bits are the sample.
+        let down = 16 - u32::from(depth.bits);
         let mut fr = self.new_frame();
         for (k, (pl, stride, pw, ph)) in [(&mut fr.y, ys, w, h), (&mut fr.u, cs, cw, ch), (&mut fr.v, cs, cw, ch)].into_iter().enumerate() {
             let aw = pl.w;
+            let n = if semi && k > 0 { 2 * pw } else { pw };
             for y in 0..pl.h {
                 let sy = y.min(ph - 1);
                 let o = pl.idx(0, y as isize);
-                let (a, b) = (sy * stride, sy * stride + pw);
+                let (a, b) = (sy * stride, sy * stride + n);
                 let row = match (f, k) {
                     (Source::Eight(f), 0) => Row::Eight(&f.y[a..b]),
                     (Source::Eight(f), 1) => Row::Eight(&f.u[a..b]),
@@ -863,12 +927,19 @@ impl<P: Pixel> Core<P> {
                     (Source::Deep(f), 0) => Row::Deep(&f.y[a..b]),
                     (Source::Deep(f), 1) => Row::Deep(&f.u[a..b]),
                     (Source::Deep(f), _) => Row::Deep(&f.v[a..b]),
+                    (Source::Nv12(f), 0) => Row::Eight(&f.y[a..b]),
+                    (Source::Nv12(f), c) => Row::EightPairs(&f.uv[a..b], c - 1),
+                    (Source::P010(f), 0) => Row::High(&f.y[a..b]),
+                    (Source::P010(f), c) => Row::HighPairs(&f.uv[a..b], c - 1),
                 };
                 let dst = &mut pl.data[o..o + pw];
                 match row {
                     // 8-bit samples scale up exactly: v << (BitDepth - 8).
                     Row::Eight(r) => P::from_u8(dst, r, depth.shift),
                     Row::Deep(r) => dst.iter_mut().zip(r).for_each(|(d, &s)| *d = P::of((s as i32).min(depth.max))),
+                    Row::EightPairs(r, c) => dst.iter_mut().zip(r[c..].iter().step_by(2)).for_each(|(d, &s)| *d = P::of(i32::from(s) << depth.shift)),
+                    Row::High(r) => dst.iter_mut().zip(r).for_each(|(d, &s)| *d = P::of(i32::from(s >> down))),
+                    Row::HighPairs(r, c) => dst.iter_mut().zip(r[c..].iter().step_by(2)).for_each(|(d, &s)| *d = P::of(i32::from(s >> down))),
                 }
                 let last = pl.data[o + pw - 1];
                 pl.data[o + pw..o + aw].fill(last);
@@ -1325,6 +1396,17 @@ impl Encoder {
         core!(&mut self.core, c => c.try_encode(Source::Deep(frame), pts))
     }
 
+    /// Encode one NV12 picture, with the results and errors of [`Encoder::encode`].
+    pub fn encode_nv12(&mut self, frame: &Nv12Frame, pts: i64) -> Result<Vec<Packet>, Error> {
+        core!(&mut self.core, c => c.try_encode(Source::Nv12(frame), pts))
+    }
+
+    /// Encode one P010 picture, with the results and errors of [`Encoder::encode16`]: [`Error::DeepInput`]
+    /// for an 8-bit encoder.
+    pub fn encode_p010(&mut self, frame: &P010Frame, pts: i64) -> Result<Vec<Packet>, Error> {
+        core!(&mut self.core, c => c.try_encode(Source::P010(frame), pts))
+    }
+
     /// Encode all buffered pictures.
     pub fn flush(&mut self) -> Vec<Packet> {
         core!(&mut self.core, c => c.flush())
@@ -1344,61 +1426,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn avcc_and_codec_params_roundtrip() {
-        let cfg = EncoderConfig::new(320, 240, 30, 1);
-        let enc = Encoder::new(cfg).unwrap();
-        let params = enc.codec_params();
-        assert_eq!(params.codec, CodecId::H264);
-        assert_eq!(params.tag, Some(*b"avc1"));
-        assert_eq!((params.width, params.height), (Some(320), Some(240)));
-        let parsed = craft_media::isobmff::AvcConfig::parse(&params.extradata).unwrap();
-        assert_eq!(parsed.length_size, 4);
-        assert_eq!(parsed.sps.len(), 1);
-        assert_eq!(parsed.pps.len(), 1);
-        assert_eq!(parsed.to_bytes(), params.extradata);
-    }
-
-    #[test]
-    fn invalid_dimensions_report_the_upper_limit() {
-        let error = Encoder::new(EncoderConfig::new(16386, 2, 30, 1)).err().unwrap();
-        assert!(error.to_string().contains("16384x16384"));
-    }
-
-    #[test]
-    fn non_finite_crf_is_rejected() {
-        let mut cfg = EncoderConfig::new(16, 16, 30, 1);
-        cfg.rate = RateControl::Crf(f32::NAN);
-        assert!(matches!(Encoder::new(cfg), Err(Error::InvalidConfig(message)) if message == "CRF must be finite"));
-    }
-
-    #[test]
-    fn vbr_requires_a_positive_maximum_at_least_the_target() {
-        for (target_kbps, max_kbps) in [(1000, 0), (1000, 999)] {
-            let mut cfg = EncoderConfig::new(16, 16, 30, 1);
-            cfg.rate = RateControl::Vbr { target_kbps, max_kbps };
-            assert!(matches!(Encoder::new(cfg), Err(Error::InvalidConfig(_))));
+    fn level_idc_is_the_level_the_encoder_signals() {
+        let mut raised = EncoderConfig::new(1920, 1080, 30, 1);
+        raised.level = Some(30);
+        let mut kept = EncoderConfig::new(1280, 720, 30, 1);
+        kept.level = Some(51);
+        let mut bitrate = EncoderConfig::new(1920, 1080, 30, 1);
+        bitrate.rate = RateControl::Cbr { kbps: 40_000 };
+        for cfg in [EncoderConfig::new(320, 240, 30, 1), EncoderConfig::new(3840, 2160, 60, 1), raised, kept, bitrate] {
+            let level = cfg.level_idc().unwrap();
+            let params = Encoder::new(cfg).unwrap().codec_params();
+            assert_eq!(level, craft_media::isobmff::AvcConfig::parse(&params.extradata).unwrap().level);
         }
     }
 
     #[test]
-    fn second_pass_rejects_a_different_frame_rate() {
-        let stats = PassStats { frames: vec![FrameStat { slice_type: nal::SliceType::I, qscale: 1.0, bits: 100, cplx: 1.0 }], fps: 24.0 };
-        let mut cfg = EncoderConfig::new(16, 16, 48, 1);
-        cfg.rate = RateControl::Cbr { kbps: 100 };
-        cfg.pass = Pass::Second(stats);
-        assert!(matches!(Encoder::new(cfg), Err(Error::InvalidConfig(message)) if message.contains("frame rate")));
-    }
-
-    #[cfg(not(feature = "threads"))]
-    #[test]
-    fn automatic_slicing_is_serial_without_threads() {
-        let enc = Encoder::new(EncoderConfig::new(320, 240, 30, 1)).unwrap();
-        assert_eq!(core!(&enc.core, c => c.slices), 1);
-
-        let mut cfg = EncoderConfig::new(320, 240, 30, 1);
-        cfg.slices = 4;
-        let enc = Encoder::new(cfg).unwrap();
-        assert_eq!(core!(&enc.core, c => c.slices), 4, "explicit slice counts remain supported");
+    fn level_idc_rejects_what_the_encoder_rejects() {
+        let mut deep = EncoderConfig::new(320, 240, 30, 1);
+        deep.bit_depth = 10;
+        let odd = EncoderConfig::new(321, 240, 30, 1);
+        let no_rate = EncoderConfig::new(320, 240, 0, 1);
+        let past_level = EncoderConfig::new(7680, 4320, 300, 1);
+        for cfg in [odd, no_rate, past_level, deep] {
+            let check = cfg.level_idc().unwrap_err().to_string();
+            assert_eq!(check, Encoder::new(cfg).err().unwrap().to_string());
+        }
     }
 
     fn grey(w: usize, h: usize) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
@@ -1414,6 +1466,110 @@ mod tests {
         assert!(matches!(enc.encode(&f, 0), Err(Error::BadFrame)));
         let f = YuvFrame { y: &y, u: &u, v: &v, y_stride: 4, uv_stride: usize::MAX };
         assert!(matches!(enc.encode(&f, 0), Err(Error::BadFrame)));
+    }
+
+    /// Planar 8-bit picture `t` with different content in each plane.
+    fn ramp(w: usize, h: usize, t: usize) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let plane = |pw: usize, ph: usize, k: usize| (0..pw * ph).map(|i| ((i % pw) * (3 + k) + (i / pw) * (5 + 2 * k) + 7 * t) as u8).collect();
+        (plane(w, h, 0), plane(w / 2, h / 2, 1), plane(w / 2, h / 2, 2))
+    }
+
+    /// `u` and `v` interleaved into rows of `stride` samples, Cb first, the rest of each row `pad`.
+    fn interleave<T: Copy>(u: &[T], v: &[T], cw: usize, stride: usize, pad: T) -> Vec<T> {
+        let mut uv = Vec::new();
+        for (ru, rv) in u.chunks(cw).zip(v.chunks(cw)) {
+            ru.iter().zip(rv).for_each(|(&a, &b)| uv.extend([a, b]));
+            uv.resize(uv.len() + stride - 2 * cw, pad);
+        }
+        uv
+    }
+
+    /// `p` in rows of `stride` samples, the rest of each row `pad`.
+    fn padded<T: Copy>(p: &[T], pw: usize, stride: usize, pad: T) -> Vec<T> {
+        p.chunks(pw).flat_map(|r| r.iter().copied().chain(std::iter::repeat_n(pad, stride - pw))).collect()
+    }
+
+    fn streams(cfg: &EncoderConfig, mut encode: impl FnMut(&mut Encoder, usize) -> Vec<Packet>) -> Vec<Vec<u8>> {
+        let mut enc = Encoder::new(cfg.clone()).unwrap();
+        let mut packets: Vec<Packet> = (0..4).flat_map(|t| encode(&mut enc, t)).collect();
+        packets.extend(enc.flush());
+        packets.into_iter().map(|p| p.data).collect()
+    }
+
+    #[test]
+    fn nv12_input_codes_the_same_stream_as_planar_input() {
+        // 40x24 is not a multiple of 16, so the last macroblock column and row are padded from the edge.
+        let (w, h) = (40, 24);
+        let cfg = EncoderConfig::new(w as u32, h as u32, 30, 1);
+        let planar = streams(&cfg, |enc, t| {
+            let (y, u, v) = ramp(w, h, t);
+            enc.encode(&YuvFrame { y: &y, u: &u, v: &v, y_stride: w, uv_stride: w / 2 }, t as i64).unwrap()
+        });
+        let semi = streams(&cfg, |enc, t| {
+            let (y, u, v) = ramp(w, h, t);
+            let (y, uv) = (padded(&y, w, w + 8, 0xee), interleave(&u, &v, w / 2, w + 6, 0xee));
+            enc.encode_nv12(&Nv12Frame { y: &y, uv: &uv, y_stride: w + 8, uv_stride: w + 6 }, t as i64).unwrap()
+        });
+        assert_eq!(planar.len(), 4);
+        assert_eq!(planar, semi);
+    }
+
+    #[test]
+    fn p010_input_codes_the_same_stream_as_16_bit_input() {
+        let (w, h) = (32, 16);
+        for bits in [9, 10] {
+            let mut cfg = EncoderConfig::new(w as u32, h as u32, 30, 1);
+            cfg.profile = Profile::High10;
+            cfg.bit_depth = bits;
+            // 10-bit samples: the 8-bit ramp with two more bits of detail.
+            let ten = |t: usize| {
+                let (y, u, v) = ramp(w, h, t);
+                let up = |p: Vec<u8>| p.iter().enumerate().map(|(i, &s)| (u16::from(s) << 2) | (i % 4) as u16).collect::<Vec<u16>>();
+                (up(y), up(u), up(v))
+            };
+            let deep = streams(&cfg, |enc, t| {
+                let (y, u, v) = ten(t);
+                let keep = |p: Vec<u16>| p.iter().map(|&s| s >> (10 - bits)).collect::<Vec<u16>>();
+                let (y, u, v) = (keep(y), keep(u), keep(v));
+                enc.encode16(&YuvFrame16 { y: &y, u: &u, v: &v, y_stride: w, uv_stride: w / 2 }, t as i64).unwrap()
+            });
+            let semi = streams(&cfg, |enc, t| {
+                let (y, u, v) = ten(t);
+                // the six low bits P010 leaves unused carry noise, which the encoder ignores
+                let p010 = |p: Vec<u16>| p.iter().enumerate().map(|(i, &s)| (s << 6) | ((i as u16 * 13) & 0x3f)).collect::<Vec<u16>>();
+                let (y, u, v) = (p010(y), p010(u), p010(v));
+                let (y, uv) = (padded(&y, w, w + 2, u16::MAX), interleave(&u, &v, w / 2, w, u16::MAX));
+                enc.encode_p010(&P010Frame { y: &y, uv: &uv, y_stride: w + 2, uv_stride: w }, t as i64).unwrap()
+            });
+            assert_eq!(deep.len(), 4);
+            assert_eq!(deep, semi, "bit depth {bits}");
+        }
+    }
+
+    #[test]
+    fn short_or_overflowing_semi_planar_frames_are_bad_frames() {
+        let mut enc = Encoder::new(EncoderConfig::new(4, 4, 30, 1)).unwrap();
+        let y = vec![128u8; 16];
+        // A chroma plane sized for one planar component holds only half of each interleaved row.
+        let uv = vec![128u8; 4];
+        assert!(matches!(enc.encode_nv12(&Nv12Frame { y: &y, uv: &uv, y_stride: 4, uv_stride: 2 }, 0), Err(Error::BadFrame)));
+        let uv = vec![128u8; 7];
+        assert!(matches!(enc.encode_nv12(&Nv12Frame { y: &y, uv: &uv, y_stride: 4, uv_stride: 4 }, 0), Err(Error::BadFrame)));
+        let uv = vec![128u8; 8];
+        assert!(matches!(enc.encode_nv12(&Nv12Frame { y: &y, uv: &uv, y_stride: 4, uv_stride: usize::MAX }, 0), Err(Error::BadFrame)));
+        assert!(matches!(enc.encode_nv12(&Nv12Frame { y: &y, uv: &uv, y_stride: usize::MAX / 3, uv_stride: 4 }, 0), Err(Error::BadFrame)));
+        assert!(enc.encode_nv12(&Nv12Frame { y: &y, uv: &uv, y_stride: 4, uv_stride: 4 }, 0).is_ok());
+
+        let (y, uv) = (vec![0u16; 16], vec![0u16; 8]);
+        let p010 = P010Frame { y: &y, uv: &uv, y_stride: 4, uv_stride: 4 };
+        assert!(matches!(enc.encode_p010(&p010, 1), Err(Error::DeepInput)));
+        let mut cfg = EncoderConfig::new(4, 4, 30, 1);
+        cfg.profile = Profile::High10;
+        cfg.bit_depth = 10;
+        let mut enc = Encoder::new(cfg).unwrap();
+        let short = vec![0u16; 7];
+        assert!(matches!(enc.encode_p010(&P010Frame { y: &y, uv: &short, y_stride: 4, uv_stride: 4 }, 0), Err(Error::BadFrame)));
+        assert!(enc.encode_p010(&p010, 0).is_ok());
     }
 
     fn b_frame_encoder() -> Encoder {

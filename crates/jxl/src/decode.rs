@@ -3,6 +3,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use jxl_oxide::color::{ColourEncoding, ColourSpace, EnumColourEncoding, Primaries, RenderingIntent, TransferFunction, WhitePoint};
 use jxl_oxide::{AllocTracker, AuxBoxData, ExtraChannelType, InitializeResult, JxlImage};
 
+use crate::brob;
 use crate::{DecodeLimits, Decoded, Error, Layout, Metadata, OutputColor, Result};
 
 const INPUT_CHUNK: usize = 4096;
@@ -29,6 +30,10 @@ fn decode_inner(bytes: &[u8], limits: DecodeLimits, output_color: OutputColor) -
     if bytes.len() > limits.max_input_bytes {
         return Err(Error::LimitExceeded(format!("{} input bytes exceed the {} byte input limit", bytes.len(), limits.max_input_bytes)));
     }
+    // jxl-oxide inflates `brob` (Brotli-compressed Exif/XMP) boxes outside its allocation tracker, so a
+    // few hundred bytes could expand to gigabytes. Inflate them here, bounded, and hand over plain boxes.
+    let sanitized = brob::sanitize(bytes, brob::BROB_CAP);
+    let bytes = sanitized.as_deref().unwrap_or(bytes);
     let budget = limits.max_tracked_bytes.unwrap_or_else(|| limits.max_pixels.saturating_mul(TRACKED_BYTES_PER_PIXEL).max(MIN_TRACKED_BYTES));
     let tracker = AllocTracker::with_limit(usize::try_from(budget).unwrap_or(usize::MAX));
     let mut uninit = JxlImage::builder().alloc_tracker(tracker).build_uninit();

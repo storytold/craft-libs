@@ -20,5 +20,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 craft-audio = { workspace = true, features = ["decode", "serde"] }
 proptest.workspace = true

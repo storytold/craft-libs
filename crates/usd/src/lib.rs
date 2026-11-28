@@ -1,15 +1,21 @@
-//! Bounded USD Crate wire primitives. Not a complete USD scene reader or writer.
+//! Bounded USD Crate wire primitives and neutral `.usda`/`.usdc` scene/prim/layer read/write.
 //!
-//! The framing decoder is adapted from TextureCraft's `usd/codec.rs`, originally
+//! The Crate framing decoder is adapted from TextureCraft's `usd/codec.rs`, originally
 //! bflatastic, commit bdbb52c9b66b221a55b370105b42f485a76e6fc7.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+/// Shared USD Crate wire constants and type metadata.
+pub mod codec;
 
 /// Bounded single-block Crate LZ4 compression.
 pub mod compress;
 
 /// Bounded Crate integer delta arrays.
 pub mod integers;
+
+/// Neutral USDA/USDC scene, prim, and layer read/write.
+pub mod scene;
 
 /// Failure to read a bounded Crate LZ4 frame.
 #[derive(Debug, thiserror::Error)]

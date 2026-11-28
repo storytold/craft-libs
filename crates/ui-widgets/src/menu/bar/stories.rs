@@ -1,0 +1,166 @@
+//! Stories of the menu bar, the edit menu and the panel menu.
+
+use super::{MenuBar, MenuHelp, MenuTitle, MenuTitleLook, MenuTitlePad};
+use crate::buttons::{IconButton, PopupMark};
+use crate::contract::{Entry, PopupKind, Props as _, Show as _, ShowContainer as _, Trigger};
+use crate::display::Divider;
+use crate::list::CommandHighlight;
+use crate::menu::{EditMenu, GroupItem, HelpEntry, Menu, MenuItem, PanelMenu, PanelRow};
+use crate::runtime::commands::EditCommands;
+use crate::runtime::env::with_env;
+use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
+use craft_behavior::IconId;
+use craft_theme::ControlSize;
+use egui::Ui;
+use std::sync::LazyLock;
+
+fn file(ui: &mut Ui) {
+    MenuItem::new("&New\u{2026}").shortcut("Ctrl+N").show(ui);
+    MenuItem::new("&Open\u{2026}").shortcut("Ctrl+O").show(ui);
+    Menu::submenu_row(ui, "Open &Recent", |ui, _| {
+        MenuItem::new("poster.png").show(ui);
+        MenuItem::new("logo.svg").show(ui);
+    });
+    Divider::horizontal().show(ui);
+    MenuItem::new("&Save").shortcut("Ctrl+S").show(ui);
+    MenuItem::new("&Close").shortcut("Ctrl+W").show(ui);
+}
+
+fn view(ui: &mut Ui) {
+    MenuItem::new("&Rulers").check(true).show(ui);
+    MenuItem::new("&Grid").check(false).show(ui);
+    Divider::horizontal().show(ui);
+    MenuItem::new("&Fit on Screen").shortcut("Ctrl+0").show(ui);
+}
+
+fn image(ui: &mut Ui) {
+    Menu::submenu_row(ui, "&Adjustments", |ui, _| {
+        MenuItem::new("Levels\u{2026}").show(ui);
+        MenuItem::new("Curves\u{2026}").show(ui);
+        MenuItem::new("Hue/Saturation\u{2026}").show(ui);
+    });
+    MenuItem::new("Image &Size\u{2026}").show(ui);
+    MenuItem::new("&Canvas Size\u{2026}").show(ui);
+}
+
+fn window(ui: &mut Ui) {
+    MenuItem::new("&Workspace").show(ui);
+    MenuItem::new("&Layers").show(ui);
+}
+
+static HELP: LazyLock<Vec<HelpEntry>> = LazyLock::new(|| {
+    vec![HelpEntry::new(EditCommands::Undo, "Undo").with_path(["Edit"]), HelpEntry::new(EditCommands::SelectAll, "Select All").with_path(["Edit"])]
+});
+
+fn titles() -> Vec<MenuTitle<'static>> {
+    vec![
+        MenuTitle::new("&File", file),
+        MenuTitle::new("&Edit", |ui| {
+            EditMenu.show(ui);
+        }),
+        MenuTitle::new("&View", view),
+        MenuTitle::new("&Image", image),
+        MenuTitle::new("&Window", window),
+        MenuTitle::new("&Help", |ui| {
+            MenuItem::new("&Keyboard Shortcuts").show(ui);
+            MenuItem::new("&About").show(ui);
+        }),
+    ]
+}
+
+#[story(MenuBar<'static>, covers = [Default], drive = Drive::Never)]
+fn menu_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let size = *data.choice("size", ControlSize::Md, &[("Sm", ControlSize::Sm), ("Md", ControlSize::Md)]);
+    let search = *data.value("search", true);
+    let entries = || HELP.clone();
+    let bar = MenuBar::new("Main menu", titles()).size(size);
+    let bar = if search { bar.help(MenuHelp::new(5, &entries)) } else { bar };
+    bar.show(ui).into()
+}
+
+fn open_file(fixture: &mut Fixture) {
+    if let Some(file) = fixture.by_label("File") {
+        fixture.click(&file);
+    }
+}
+
+#[story(MenuBar<'static>, covers = [Open], drive = Drive::Custom(open_file))]
+fn menu_bar_open(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    MenuBar::new("Main menu", titles()).show(ui).into()
+}
+
+/// Titles set closer (`MenuTitlePad::Control`), as an app sets it at its root for a bar whose menus share the line with
+/// many controls.
+#[story(MenuBar<'static>, covers = [], drive = Drive::Never)]
+fn menu_bar_close_titles(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(MenuTitlePad::Control);
+        },
+        |ui| MenuBar::new("Main menu", titles()).show(ui),
+    )
+    .into()
+}
+
+/// Titles that stand as bare push buttons (`MenuTitleLook::Button`), a push button high with its corners and the tight
+/// gap beside the text, as egui's menu bar draws them; the open File menu's title shows the hover tint.
+#[story(MenuBar<'static>, covers = [], drive = Drive::Custom(open_file))]
+fn menu_bar_button_titles(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(MenuTitleLook::Button);
+            overrides.values.set(CommandHighlight::Hover);
+        },
+        |ui| MenuBar::new("Main menu", titles()).show(ui),
+    )
+    .into()
+}
+
+/// The open File menu under `CommandHighlight::Hover`: the open title and the active row show the hover tint with
+/// their own ink, as an app sets it at its root for a quiet command highlight.
+#[story(MenuBar<'static>, covers = [], drive = Drive::Custom(open_file))]
+fn menu_bar_hover_highlight(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(CommandHighlight::Hover);
+        },
+        |ui| MenuBar::new("Main menu", titles()).show(ui),
+    )
+    .into()
+}
+
+#[story(MenuBar<'static>, covers = [], drive = Drive::Never)]
+fn menu_bar_with_help_search(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let entries = || HELP.clone();
+    MenuBar::new("Main menu", titles()).help(MenuHelp::new(5, &entries)).show(ui).into()
+}
+
+#[story(EditMenu, covers = [Default], drive = Drive::Never)]
+fn edit_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    StoryOutput::from(Menu::new("Edit").open(data.bind("open", true)).show(ui, |ui, _| EditMenu.show(ui)).output)
+}
+
+#[story(PanelMenu, covers = [Default], drive = Drive::Never)]
+fn panel_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let panel = || {
+        let host = vec![PanelRow::Command(EditCommands::Undo.into()), PanelRow::Separator];
+        let group = vec![
+            PanelRow::Item(Entry::new(GroupItem::CollapseToIcons, "Collapse to Icons")),
+            PanelRow::Item(Entry::new(GroupItem::AutoCollapse, "Auto-Collapse Iconic Panels")),
+        ];
+        PanelMenu::new(host, group)
+    };
+    let opener = IconButton::new(IconId::new("menu")).popup(PopupKind::Menu).popup_mark(PopupMark::Menu).label("Panel menu").show(ui);
+    let mut picked = None;
+    let shown =
+        Menu::new("Panel menu").open(data.bind("open", false)).opened_by(&opener, Trigger::Click).show(ui, |ui, _| picked = panel().show(ui).picked);
+    let chosen = data.note("chosen", None::<GroupItem>);
+    if picked.is_some() {
+        *chosen = picked;
+    }
+    let readout = chosen.map_or_else(|| "Nothing chosen".to_owned(), |item| format!("Chosen: {item:?}"));
+    StoryOutput::from(shown.output).readout(readout)
+}

@@ -4,11 +4,15 @@
 use super::*;
 use crate as spool;
 use crate::cups::{self as ipp, Server};
+use craft_ui::testing::trial;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -18,6 +22,8 @@ const TIMEOUT: Duration = Duration::from_secs(2);
 struct FakeCups {
     server: Server,
     requests: Receiver<Vec<u8>>,
+    stopping: Arc<AtomicBool>,
+    listener: JoinHandle<()>,
 }
 
 impl FakeCups {
@@ -27,15 +33,17 @@ impl FakeCups {
         let listener = std::os::unix::net::UnixListener::bind(&path)?;
         // The socket must outlive this function; the folder is left for the process to reap.
         std::mem::forget(dir);
-        let requests = listen_unix(listener, replies);
-        Ok(FakeCups { server: Server::Unix(path), requests })
+        let stopping = Arc::new(AtomicBool::new(false));
+        let (requests, listener) = listen_unix(listener, replies, stopping.clone());
+        Ok(FakeCups { server: Server::Unix(path), requests, stopping, listener })
     }
 
     fn on_tcp(replies: Vec<Vec<u8>>) -> std::io::Result<Self> {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let server = Server::Tcp(listener.local_addr()?);
-        let requests = listen_tcp(listener, replies);
-        Ok(FakeCups { server, requests })
+        let stopping = Arc::new(AtomicBool::new(false));
+        let (requests, listener) = listen_tcp(listener, replies, stopping.clone());
+        Ok(FakeCups { server, requests, stopping, listener })
     }
 
     fn request(&self) -> Result<Vec<u8>, mpsc::RecvTimeoutError> {
@@ -46,28 +54,44 @@ impl FakeCups {
     fn endpoint(&self) -> &[Server] {
         std::slice::from_ref(&self.server)
     }
+
+    /// Stops the server once it has served every connection made before this call, and returns
+    /// the requests it recorded: the channel is closed after the last of them.
+    fn stop(self) -> Receiver<Vec<u8>> {
+        self.stopping.store(true, Ordering::SeqCst);
+        // A connection of its own wakes the listener; it carries no request.
+        let _ = super::connect(&self.server);
+        self.listener.join().unwrap();
+        self.requests
+    }
 }
 
-fn listen_unix(listener: std::os::unix::net::UnixListener, replies: Vec<Vec<u8>>) -> Receiver<Vec<u8>> {
+fn listen_unix(listener: std::os::unix::net::UnixListener, replies: Vec<Vec<u8>>, stopping: Arc<AtomicBool>) -> (Receiver<Vec<u8>>, JoinHandle<()>) {
     let (tx, rx) = mpsc::channel();
     let replies = Mutex::new(VecDeque::from(replies));
-    std::thread::spawn(move || {
+    let listening = std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             serve(stream, &replies, &tx);
+            if stopping.load(Ordering::SeqCst) {
+                break;
+            }
         }
     });
-    rx
+    (rx, listening)
 }
 
-fn listen_tcp(listener: std::net::TcpListener, replies: Vec<Vec<u8>>) -> Receiver<Vec<u8>> {
+fn listen_tcp(listener: std::net::TcpListener, replies: Vec<Vec<u8>>, stopping: Arc<AtomicBool>) -> (Receiver<Vec<u8>>, JoinHandle<()>) {
     let (tx, rx) = mpsc::channel();
     let replies = Mutex::new(VecDeque::from(replies));
-    std::thread::spawn(move || {
+    let listening = std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             serve(stream, &replies, &tx);
+            if stopping.load(Ordering::SeqCst) {
+                break;
+            }
         }
     });
-    rx
+    (rx, listening)
 }
 
 fn serve(mut stream: impl Read + Write, replies: &Mutex<VecDeque<Vec<u8>>>, requests: &mpsc::Sender<Vec<u8>>) {
@@ -165,7 +189,7 @@ fn entry(name: &str, default: bool) -> spool::Printer {
     spool::Printer { description: String::new(), name: name.into(), default, two_sided: None }
 }
 
-#[test]
+#[trial]
 fn discovery_finds_queues_and_the_default_over_a_unix_socket() {
     let fake = FakeCups::on_unix(vec![
         http_reply(&ipp_reply(
@@ -197,7 +221,7 @@ fn discovery_finds_queues_and_the_default_over_a_unix_socket() {
     assert_eq!(&default[..4], &[1, 1, 0x40, 0x01], "CUPS-Get-Default");
 }
 
-#[test]
+#[trial]
 fn a_print_job_carries_the_pdf_and_the_options() {
     let pdf: Vec<u8> = b"%PDF-1.7 fake print job\n".iter().copied().cycle().take(1 << 20).collect();
     let job = spool::Job {
@@ -233,7 +257,7 @@ fn a_print_job_carries_the_pdf_and_the_options() {
     assert!(request.ends_with(&pdf), "the whole job is the document data");
 }
 
-#[test]
+#[trial]
 fn the_default_printer_is_used_when_the_job_has_none() {
     let fake = FakeCups::on_tcp(vec![
         http_reply(&ipp_reply(0x0000, &[&group(0x01), &group(0x04), &printer_name("Office")])),
@@ -248,7 +272,7 @@ fn the_default_printer_is_used_when_the_job_has_none() {
     assert!(has(ipp_body(&taken).unwrap(), b"ipp://localhost/printers/Office"), "the resolved default is the target");
 }
 
-#[test]
+#[trial]
 fn a_default_outside_the_queue_list_still_gets_its_marker() {
     let fake = FakeCups::on_unix(vec![
         http_reply(&ipp_reply(0x0000, &[&group(0x01), &group(0x04), &printer_name("Office_Laser")])),
@@ -263,14 +287,14 @@ fn a_default_outside_the_queue_list_still_gets_its_marker() {
     );
 }
 
-#[test]
+#[trial]
 fn no_default_printer_is_an_error_when_the_job_names_none() {
     let fake = FakeCups::on_unix(vec![http_reply(&ipp_reply(0x0000, &[&group(0x01)]))]).unwrap();
     let err = ipp::print_job_at(fake.endpoint(), b"%PDF-1.7\n", &Job::default()).unwrap_err();
     assert!(err.to_string().contains("no default printer"), "{err}");
 }
 
-#[test]
+#[trial]
 fn a_printer_name_that_cannot_be_a_uri_path_is_refused() {
     let fake = FakeCups::on_tcp(vec![]).unwrap();
     let mut long = "x".repeat(257);
@@ -285,7 +309,7 @@ fn a_printer_name_that_cannot_be_a_uri_path_is_refused() {
     }
 }
 
-#[test]
+#[trial]
 fn an_ipp_refusal_is_an_error_that_names_the_problem() {
     let fake = FakeCups::on_tcp(vec![http_reply(&ipp_reply(0x0506, &[&group(0x01)]))]).unwrap();
     let job = spool::Job { printer: Some("Office".into()), ..Job::default() };
@@ -295,7 +319,7 @@ fn an_ipp_refusal_is_an_error_that_names_the_problem() {
     );
 }
 
-#[test]
+#[trial]
 fn malformed_replies_are_errors_never_a_panic() {
     let bodies: Vec<(&str, Vec<u8>)> = vec![
         // Shorter than an IPP header.
@@ -321,7 +345,7 @@ fn malformed_replies_are_errors_never_a_panic() {
     }
 }
 
-#[test]
+#[trial]
 fn http_replies_that_cannot_carry_an_answer_are_refused() {
     let replies: Vec<(&str, Vec<u8>)> = vec![
         ("requires authentication", b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n".to_vec()),
@@ -341,7 +365,7 @@ fn http_replies_that_cannot_carry_an_answer_are_refused() {
     assert!(ipp::post(&[fake.server], "/", b"ignored", TIMEOUT, true).is_err(), "a hang-up is an error");
 }
 
-#[test]
+#[trial]
 fn a_server_that_answers_is_reachable_and_silence_is_not() {
     let fake = FakeCups::on_unix(vec![]).unwrap();
     assert!(ipp::reachable(&fake.server), "a unix socket that accepts connections is reachable");
@@ -356,7 +380,7 @@ fn a_server_that_answers_is_reachable_and_silence_is_not() {
     assert!(!ipp::reachable(&Server::Tcp(addr)), "a port nothing listens on is not reachable");
 }
 
-#[test]
+#[trial]
 fn chunked_reply_is_bounded_and_rejects_ambiguous_framing() {
     let good = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n";
     assert_eq!(super::read_reply(&mut &good[..]).unwrap(), b"abcde");
@@ -370,7 +394,7 @@ fn chunked_reply_is_bounded_and_rejects_ambiguous_framing() {
     }
 }
 
-#[test]
+#[trial]
 fn explicit_server_rejects_header_injection_and_malformed_port() {
     for value in ["host\r\nInjected: yes", "host:0", "host:99999", "http://host", "user@host", ""] {
         assert!(Server::parse(value).is_err(), "{value:?}");
@@ -379,7 +403,7 @@ fn explicit_server_rejects_header_injection_and_malformed_port() {
     assert_eq!(Server::parse("print.example:8631").unwrap().authority(), "print.example:8631");
 }
 
-#[test]
+#[trial]
 fn class_submission_preserves_authority_user_and_numeric_job_id() {
     let fake = FakeCups::on_tcp(vec![http_reply(&ipp_reply(0, &[&group(2), &attr(0x21, "job-id", &42u32.to_be_bytes())]))]).unwrap();
     let destination = super::Destination { name: "Studio".into(), is_class: true };
@@ -391,17 +415,18 @@ fn class_submission_preserves_authority_user_and_numeric_job_id() {
     assert!(has(ipp_body(&request).unwrap(), &attr(0x42, "requesting-user-name", b"artist")));
 }
 
-#[test]
+#[trial]
 fn uncertain_submission_never_tries_the_second_endpoint() {
     let first = FakeCups::on_tcp(vec![]).unwrap();
     let second = FakeCups::on_tcp(vec![]).unwrap();
     let destination = super::Destination { name: "Studio".into(), is_class: false };
     assert!(super::submit_at(&[first.server.clone(), second.server.clone()], &destination, b"pdf", &Job::default()).is_err());
     let _ = first.request().unwrap();
-    assert!(second.requests.recv_timeout(Duration::from_millis(100)).is_err());
+    // Every connection the client made has been served once the second server stops.
+    assert!(matches!(second.stop().try_recv(), Err(mpsc::TryRecvError::Disconnected)), "the second endpoint got no request");
 }
 
-#[test]
+#[trial]
 fn queue_metadata_stays_with_its_printer_group() {
     let bytes = ipp_reply(
         0,
@@ -424,7 +449,7 @@ fn queue_metadata_stays_with_its_printer_group() {
     assert!(reply.queues[1].accepting_jobs);
 }
 
-#[test]
+#[trial]
 fn reply_identity_and_metadata_request_are_checked() {
     let request = super::discovery_request(0x4002);
     assert!(has(&request, b"printer-info"));
@@ -439,34 +464,62 @@ fn reply_identity_and_metadata_request_are_checked() {
     assert!(super::validate_reply_identity(&request, &reply).is_err());
 }
 
-#[test]
-fn slow_reply_cannot_reset_the_absolute_deadline() {
-    let (client, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
-    let producer = std::thread::spawn(move || {
-        // Finite work and a joined handle: no abandoned timeout worker.
-        for _ in 0..20 {
-            if peer.write_all(b"x").is_err() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    });
-    let start = std::time::Instant::now();
-    let mut stream = super::Stream::Unix(client);
-    let mut reader = super::DeadlineReader { stream: &mut stream, end: start + Duration::from_millis(80) };
-    let mut bytes = [0; 20];
-    assert!(reader.read_exact(&mut bytes).is_err(), "trickle reads must not extend the absolute deadline");
-    drop(stream);
-    producer.join().unwrap();
-    assert!(start.elapsed() < Duration::from_secs(3));
+/// A peer that trickles: each read gives one byte and each write takes one, and each takes 20 ms
+/// on the clock `now` holds. It records every timeout it is given.
+struct Trickle<'a> {
+    now: &'a Cell<Instant>,
+    timeouts: RefCell<Vec<Duration>>,
 }
 
-#[test]
+impl Trickle<'_> {
+    fn step(&self) -> usize {
+        self.now.set(self.now.get() + Duration::from_millis(20));
+        1
+    }
+}
+
+impl Read for Trickle<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let Some(first) = buf.first_mut() else { return Ok(0) };
+        *first = b'x';
+        Ok(self.step())
+    }
+}
+
+impl Write for Trickle<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.is_empty() { Ok(0) } else { Ok(self.step()) }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl super::Connection for Trickle<'_> {
+    fn set_timeouts(&self, timeout: Duration) -> std::io::Result<()> {
+        self.timeouts.borrow_mut().push(timeout);
+        Ok(())
+    }
+}
+
+#[trial]
+fn slow_reply_cannot_reset_the_absolute_deadline() {
+    let start = Instant::now();
+    let now = Cell::new(start);
+    let mut peer = Trickle { now: &now, timeouts: RefCell::default() };
+    let mut reader = super::DeadlineReader { stream: &mut peer, end: start + Duration::from_millis(80), now: &|| now.get() };
+    let mut bytes = [0; 20];
+    let error = reader.read_exact(&mut bytes).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut, "trickle reads must not extend the absolute deadline");
+    assert_eq!(*peer.timeouts.borrow(), [80, 60, 40, 20].map(Duration::from_millis), "each read gets only the time left");
+}
+
+#[trial]
 fn blocked_upload_obeys_the_same_absolute_deadline() {
-    let (client, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
-    let start = std::time::Instant::now();
-    let mut stream = super::Stream::Unix(client);
-    let mut writer = super::DeadlineReader { stream: &mut stream, end: start + Duration::from_millis(80) };
+    let start = Instant::now();
+    let now = Cell::new(start);
+    let mut peer = Trickle { now: &now, timeouts: RefCell::default() };
+    let mut writer = super::DeadlineReader { stream: &mut peer, end: start + Duration::from_millis(80), now: &|| now.get() };
     let chunk = [0u8; 64 * 1024];
     let mut timed_out = false;
     // A peer that never drains cannot turn each partial write into a fresh timeout budget.
@@ -477,16 +530,16 @@ fn blocked_upload_obeys_the_same_absolute_deadline() {
         }
     }
     assert!(timed_out, "blocked upload must terminate without a reader");
-    assert!(start.elapsed() < Duration::from_secs(3));
+    assert_eq!(*peer.timeouts.borrow(), [80, 60, 40, 20].map(Duration::from_millis), "each partial write gets only the time left");
 }
 
-#[test]
+#[trial]
 fn recorded_request_body_requires_complete_http_headers() {
     assert!(ipp_body(b"POST / HTTP/1.1\r\n").is_none());
     assert_eq!(ipp_body(b"POST / HTTP/1.1\r\n\r\nbody"), Some(b"body".as_slice()));
 }
 
-#[test]
+#[trial]
 fn named_destinations_encode_one_path_segment_on_both_wire_fields() {
     for is_class in [false, true] {
         let fake = FakeCups::on_tcp(vec![http_reply(&ipp_reply(0, &[&group(2), &attr(0x21, "job-id", &42u32.to_be_bytes())]))]).unwrap();
@@ -500,7 +553,7 @@ fn named_destinations_encode_one_path_segment_on_both_wire_fields() {
     }
 }
 
-#[test]
+#[trial]
 fn destination_path_rejects_routing_syntax_before_connecting() {
     for name in ["", ".", "..", "../admin", "a/b", "a\\b", "a\r\nb", "a\0b"] {
         let destination = super::Destination { name: name.into(), is_class: false };
@@ -510,7 +563,7 @@ fn destination_path_rejects_routing_syntax_before_connecting() {
     assert!(super::destination_path(&destination).is_err());
 }
 
-#[test]
+#[trial]
 fn separate_queue_query_preserves_optional_discovery_errors() {
     let fake = FakeCups::on_tcp(vec![http_reply(&ipp_reply(0x0403, &[&group(1)]))]).unwrap();
     assert!(super::queues_at(fake.endpoint(), true).is_err(), "authorization refusal is not an empty class list");
@@ -525,7 +578,7 @@ fn separate_queue_query_preserves_optional_discovery_errors() {
     assert_eq!(&ipp_body(&request).unwrap()[..4], &[1, 1, 0x40, 0x05]);
 }
 
-#[test]
+#[trial]
 fn ipv6_endpoint_keeps_scope_for_resolution_and_escapes_wire_authority() {
     assert_eq!(Server::parse("[::1]").unwrap().authority(), "[::1]:631");
     assert_eq!(Server::parse("::1").unwrap().authority(), "[::1]:631");
@@ -541,7 +594,7 @@ fn ipv6_endpoint_keeps_scope_for_resolution_and_escapes_wire_authority() {
     }
 }
 
-#[test]
+#[trial]
 fn long_printer_descriptions_are_not_limited_like_queue_names() {
     let description = "Studio ".repeat(200);
     let body = ipp_reply(0, &[&group(1), &group(4), &printer_name("Studio"), &attr(0x41, "printer-info", description.as_bytes())]);
@@ -549,7 +602,7 @@ fn long_printer_descriptions_are_not_limited_like_queue_names() {
     assert_eq!(parsed.queues[0].info, description);
 }
 
-#[test]
+#[trial]
 fn destination_limit_is_explicit_and_never_silently_truncates() {
     let mut body = vec![1, 1, 0, 0, 0, 0, 0, 1];
     for index in 0..super::MAX_PRINTERS {
@@ -565,31 +618,35 @@ fn destination_limit_is_explicit_and_never_silently_truncates() {
     assert!(super::parse_reply(&body).err().unwrap().to_string().contains("too many CUPS destinations"));
 }
 
-#[test]
+#[trial]
 fn closed_unix_peer_keeps_its_buffered_reply_readable_with_a_deadline() {
     let (client, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
     let body = ipp_reply(0, &[&group(1), &group(4), &printer_name("Studio")]);
     peer.write_all(&http_reply(&body)).unwrap();
     drop(peer);
     let mut stream = super::Stream::Unix(client);
-    let mut reader = super::DeadlineReader { stream: &mut stream, end: std::time::Instant::now() + Duration::from_secs(1) };
+    let start = Instant::now();
+    let mut reader = super::DeadlineReader { stream: &mut stream, end: start + Duration::from_secs(1), now: &|| start };
     assert_eq!(super::read_reply(&mut reader).unwrap(), body);
     let mut byte = [0];
     assert_eq!(reader.read(&mut byte).unwrap(), 0);
-    reader.end = std::time::Instant::now();
+    reader.end = start;
     assert_eq!(reader.read(&mut byte).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
 }
 
-#[test]
+/// The read waits on the socket for the time left, then fails: the deadline is the socket's
+/// timeout, never a blocking read.
+#[trial]
 fn stalled_unix_peer_still_fails_within_the_absolute_read_deadline() {
     let (client, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let mut stream = super::Stream::Unix(client);
-    let mut reader = super::DeadlineReader { stream: &mut stream, end: start + Duration::from_millis(80) };
+    let mut reader = super::DeadlineReader { stream: &mut stream, end: start + Duration::from_millis(80), now: &|| start };
     let mut byte = [0];
     let error = reader.read(&mut byte).unwrap_err();
     assert!(matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock));
-    assert!(start.elapsed() < Duration::from_secs(3));
+    let super::Stream::Unix(client) = &stream else { panic!("the stream is the unix socket") };
+    assert_eq!(client.read_timeout().unwrap(), Some(Duration::from_millis(80)), "the socket waits only for the time left");
 }
 
 #[test]

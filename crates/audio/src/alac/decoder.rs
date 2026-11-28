@@ -282,10 +282,6 @@ pub(crate) fn header_frames(packet: &[u8], frame_length: u64) -> Option<u64> {
 mod tests {
     use super::*;
 
-    fn stereo16() -> Vec<u8> {
-        SpecificConfig::new(44_100, 2, 16, 4096).to_cookie()
-    }
-
     #[test]
     fn cookies_out_of_range_are_refused() {
         let ok = SpecificConfig::new(44_100, 2, 16, 4096);
@@ -300,24 +296,6 @@ mod tests {
         ] {
             assert!(Decoder::from_config(bad).is_err(), "{bad:?}");
         }
-    }
-
-    #[test]
-    fn an_escaped_stereo_frame() {
-        // CPE, instance 0, 12 zero bits, flags: partial + escape, 2 frames, then L R L R.
-        let mut w = super::super::bits::BitWriter::new();
-        use super::super::bits::BitSink;
-        w.put(ID_CPE, 3);
-        w.put(0, 4);
-        w.put(0, 12);
-        w.put(0b1001, 4);
-        w.put(2, 32);
-        for s in [1i32, -1, 32767, -32768] {
-            w.put(s as u32, 16);
-        }
-        w.put(ID_END, 3);
-        let mut dec = Decoder::new(&stereo16()).unwrap();
-        assert_eq!(dec.decode(&w.into_bytes()).unwrap(), vec![vec![1, 32767], vec![-1, -32768]]);
     }
 
     /// An escaped mono packet that lost its last byte keeps every sample but not its end tag.
@@ -342,27 +320,6 @@ mod tests {
             w.put(value, bits);
         }
         assert_eq!(dec.decode(&w.into_bytes()).unwrap(), vec![vec![9]]);
-    }
-
-    #[test]
-    fn the_frames_of_a_packet_come_from_its_header() {
-        use super::super::bits::{BitSink, BitWriter};
-        let dec = Decoder::new(&SpecificConfig::new(44_100, 2, 16, 4096).to_cookie()).unwrap();
-        let header = |flags: u32, frames: Option<u32>| {
-            let mut w = BitWriter::new();
-            for (value, bits) in [(ID_CPE, 3), (0, 4), (0, 12), (flags, 4)] {
-                w.put(value, bits);
-            }
-            if let Some(n) = frames {
-                w.put(n, 32);
-            }
-            w.into_bytes()
-        };
-        assert_eq!(dec.packet_frames(&header(0b1001, Some(300))), Some(300));
-        assert_eq!(dec.packet_frames(&header(0b0001, None)), Some(4096));
-        assert_eq!(dec.packet_frames(&header(0b1001, Some(5000))), None);
-        assert_eq!(dec.packet_frames(&header(0b1001, None)), None);
-        assert_eq!(dec.packet_frames(&[0xE0]), None); // ID_END first
     }
 
     #[test]

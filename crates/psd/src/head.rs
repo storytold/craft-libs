@@ -79,7 +79,7 @@ pub struct Head {
 
 impl Head {
     /// Parses the head from `data`, which may be the whole file or any prefix that reaches the
-    /// end of the image resources. A shorter prefix is [`PsdError::UnexpectedEof`], whose
+    /// end of the image resources. A shorter prefix is `PsdError::UnexpectedEof`, whose
     /// `needed` says how many more bytes the structure being read asks for.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         let mut r = Reader::new(data);

@@ -18,12 +18,15 @@ use crate::http::{Fetched, Http};
 /// One answer from a source.
 #[derive(Clone, Debug)]
 pub struct Answer {
+    #[allow(missing_docs)]
     pub latest: LatestRelease,
+    /// Where the answer came from.
     pub source: Source,
 }
 
 /// Looks up latest releases. Called from worker threads.
 pub trait ReleaseSource: Send + Sync {
+    /// The latest release of `repo` (`owner/name`), including prereleases when `prereleases` is set.
     fn latest(&self, repo: &str, prereleases: bool) -> Answer;
     /// The last answer saved for `repo`, for an instant first paint.
     fn cached(&self, repo: &str, prereleases: bool) -> Option<LatestRelease>;
@@ -54,6 +57,8 @@ struct CacheFile {
     entries: BTreeMap<String, Entry>,
 }
 
+/// Release information from GitHub: the REST API, falling back to the release pages when the
+/// API is out of quota. See the module docs.
 pub struct GitHubSource {
     http: Http,
     cache: Mutex<CacheFile>,
@@ -62,6 +67,8 @@ pub struct GitHubSource {
 }
 
 impl GitHubSource {
+    /// A source that reads `cache_path` at start (a missing or unreadable file gives an empty
+    /// cache) and saves there in [`save`](ReleaseSource::save).
     pub fn new(http: Http, cache_path: std::path::PathBuf) -> Self {
         let cache = std::fs::read(&cache_path).ok().and_then(|b| serde_json::from_slice::<CacheFile>(&b).ok()).unwrap_or_default();
         Self { http, cache: Mutex::new(cache), cache_path, limited_until: Mutex::new(None) }
@@ -164,10 +171,9 @@ impl ReleaseSource for GitHubSource {
                 Err(e) => log::warn!("{repo}: release pages: {e}"),
             }
         }
-        let why = api_error.unwrap_or_else(|| "GitHub's request limit was reached".into());
         match self.cached(repo, prereleases) {
             Some(latest) => Answer { latest, source: Source::Cache },
-            None => Answer { latest: LatestRelease::Failed(why), source: Source::Cache },
+            None => Answer { latest: api_error.map_or(LatestRelease::RateLimited, LatestRelease::Failed), source: Source::Cache },
         }
     }
 
@@ -206,19 +212,160 @@ impl ReleaseSource for GitHubSource {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Release source that defaults to the signed `getartcraft.com` catalog and falls back to
+/// `fallback` (typically [`GitHubSource`]) when the catalog is unavailable, stale, or omits a repo.
+pub struct CatalogSource<F: ReleaseSource = GitHubSource> {
+    http: Http,
+    fallback: F,
+    cached: Mutex<Option<crate::catalog::SignedCatalog>>,
+}
 
-    #[test]
-    fn a_refusal_waits_for_the_reset_github_names() {
-        assert_eq!(retry_at(Some(1_000 + 600), 1_000), 1_600);
-        assert_eq!(retry_at(None, 1_000), 1_000 + 15 * 60);
+impl<F: ReleaseSource> CatalogSource<F> {
+    /// Creates a release source that checks the signed `getartcraft.com` catalog first and falls
+    /// back to `fallback` (typically [`GitHubSource`]).
+    pub fn new(http: Http, fallback: F) -> Self {
+        Self { http, fallback, cached: Mutex::new(None) }
     }
 
-    #[test]
+    fn catalog(&self) -> Option<crate::catalog::SignedCatalog> {
+        let now = crate::now();
+        {
+            let guard = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(c) = guard.as_ref()
+                && c.generated_at.is_some_and(|t| now.saturating_sub(t) <= crate::catalog::MAX_AGE)
+            {
+                return Some(c.clone());
+            }
+        }
+        match crate::catalog::SignedCatalog::fetch(&self.http) {
+            Ok(fresh) => {
+                *self.cached.lock().unwrap_or_else(PoisonError::into_inner) = Some(fresh.clone());
+                Some(fresh)
+            }
+            Err(why) => {
+                log::debug!("signed catalog unavailable ({why}); falling back to GitHub");
+                None
+            }
+        }
+    }
+}
+
+impl<F: ReleaseSource> ReleaseSource for CatalogSource<F> {
+    fn latest(&self, repo: &str, prereleases: bool) -> Answer {
+        if let Some(catalog) = self.catalog()
+            && let Some(release) = catalog.latest_for_repo(repo, prereleases, crate::now())
+        {
+            return Answer { latest: LatestRelease::Found(release), source: Source::Feed };
+        }
+        self.fallback.latest(repo, prereleases)
+    }
+
+    fn cached(&self, repo: &str, prereleases: bool) -> Option<LatestRelease> {
+        if let Some(c) = self.cached.lock().unwrap_or_else(PoisonError::into_inner).as_ref()
+            && let Some(r) = c.latest_for_repo(repo, prereleases, crate::now())
+        {
+            return Some(LatestRelease::Found(r));
+        }
+        self.fallback.cached(repo, prereleases)
+    }
+
+    fn newest_tag(&self, repo: &str) -> Option<String> {
+        self.fallback.newest_tag(repo)
+    }
+
+    fn rate_limited_until(&self) -> Option<i64> {
+        self.fallback.rate_limited_until()
+    }
+
+    fn save(&self) {
+        self.fallback.save();
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use craft_ui::testing::trial;
+
+    #[trial]
+    fn a_rate_limited_source_with_nothing_saved_answers_rate_limited_not_english_text() {
+        // Nothing is written (a rate-limited answer saves nothing), and a name only this run uses has no cache to read.
+        let dir = std::env::temp_dir().join(format!("craft-update-source-rate-limited-{}-{}", std::process::id(), crate::now()));
+        let http = Http::new("craft-update-test/0.0").expect("an HTTP client");
+        let source = GitHubSource::new(http, dir.join("releases.json"));
+        *source.limited_until.lock().expect("lock") = Some(crate::now() + 600);
+        assert_eq!(source.latest("storytold/none", true).latest, LatestRelease::RateLimited);
+    }
+
+    #[trial]
     fn a_reset_past_the_quota_window_cannot_stop_the_api_for_good() {
         assert_eq!(retry_at(Some(i64::MAX), 1_000), 1_000 + 60 * 60);
         assert_eq!(retry_at(Some(99_999_999_999), 1_000), 1_000 + 60 * 60);
+    }
+
+    /// A fallback that answers "no release" and records nothing, so a test sees which source answered.
+    struct Fallback;
+
+    impl ReleaseSource for Fallback {
+        fn latest(&self, _repo: &str, _prereleases: bool) -> Answer {
+            Answer { latest: LatestRelease::None, source: Source::GitHubApi }
+        }
+
+        fn cached(&self, _repo: &str, _prereleases: bool) -> Option<LatestRelease> {
+            Some(LatestRelease::RateLimited)
+        }
+
+        fn newest_tag(&self, _repo: &str) -> Option<String> {
+            Some("v9.9.9".into())
+        }
+
+        fn rate_limited_until(&self) -> Option<i64> {
+            Some(42)
+        }
+
+        fn save(&self) {}
+    }
+
+    fn catalog_source() -> CatalogSource<Fallback> {
+        let source = CatalogSource::new(Http::new("craft-update-test/0.0").expect("an HTTP client"), Fallback);
+        *source.cached.lock().expect("lock") = Some(crate::catalog::tests::fresh_signed_catalog());
+        source
+    }
+
+    #[trial]
+    fn the_catalog_answers_for_a_repo_it_lists_and_marks_the_answer_as_the_feed() {
+        let answer = catalog_source().latest("storytold/photocraft", false);
+        assert_eq!(answer.source, Source::Feed);
+        assert!(matches!(&answer.latest, LatestRelease::Found(release) if release.tag == "v0.23.1"), "{:?}", answer.latest);
+    }
+
+    #[trial]
+    fn a_repo_the_catalog_omits_falls_back_to_the_other_source() {
+        let answer = catalog_source().latest("storytold/unlisted", false);
+        assert_eq!(answer.source, Source::GitHubApi);
+        assert_eq!(answer.latest, LatestRelease::None);
+    }
+
+    #[trial]
+    fn the_saved_answer_comes_from_the_catalog_or_else_the_fallback() {
+        let source = catalog_source();
+        assert!(matches!(source.cached("storytold/photocraft", true), Some(LatestRelease::Found(release)) if release.tag == "v0.24.0-rc.1"));
+        assert_eq!(source.cached("storytold/unlisted", false), Some(LatestRelease::RateLimited));
+    }
+
+    #[trial]
+    fn tags_quota_and_saving_are_the_fallbacks_business() {
+        let source = catalog_source();
+        assert_eq!(source.newest_tag("storytold/photocraft").as_deref(), Some("v9.9.9"));
+        assert_eq!(source.rate_limited_until(), Some(42));
+        source.save();
+    }
+
+    #[trial]
+    fn a_stale_cached_catalog_is_not_used() {
+        let source = CatalogSource::new(Http::new("craft-update-test/0.0").expect("an HTTP client"), Fallback);
+        let stale = crate::catalog::tests::sample_toml().replace("2026-11-26T21:00:00Z", "2020-01-01T00:00:00Z");
+        *source.cached.lock().expect("lock") = Some(crate::catalog::tests::signed(&stale));
+        assert_eq!(source.cached("storytold/photocraft", false), Some(LatestRelease::RateLimited));
     }
 }

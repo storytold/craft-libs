@@ -1,0 +1,206 @@
+# API map of the imaging warp family: the mesh model, the grid, the options-bar group and the mesh lines.
+
+family = "Warp"
+new_module = "craft_imaging::ui::warp"
+
+[[type]]
+name = "WarpMesh"
+old = "craft_imaging::ui::warp::WarpMesh"
+new = "craft_imaging::ui::warp::WarpMesh"
+status = "same"
+
+[[type]]
+name = "WarpSide"
+old = "craft_imaging::ui::warp::WarpSide"
+new = "craft_imaging::ui::warp::WarpSide"
+status = "same"
+
+[[type]]
+name = "WarpSplit"
+old = "craft_imaging::ui::warp::WarpSplit"
+new = "craft_imaging::ui::warp::WarpSplit"
+status = "same"
+
+[[type]]
+name = "WarpEdit"
+old = "craft_imaging::ui::warp::WarpEdit"
+new = "craft_imaging::ui::warp::WarpEdit"
+status = "same"
+note = "`#[non_exhaustive]`; the grid reports the last edit in `WarpGridOutput::edit`. `WarpMesh::edited(&edit)` is the default rule (was `story::edited`)."
+
+[[type]]
+name = "WarpGrid"
+old = "craft_imaging::ui::warp::WarpGrid"
+new = "craft_imaging::ui::warp::WarpGrid"
+status = "same"
+note = "A canvas control: `WarpGrid::new(label, Bind<WarpMesh>, bounds)` shown with `show_at(ui, rect)`; the arena's parts are the one press path."
+
+[[type]]
+name = "WarpGridOutput"
+old = ""
+new = "craft_imaging::ui::warp::WarpGridOutput"
+status = "replaced"
+note = "Was `WarpResponse` (see that entry); holds `mesh: EditResponse<WarpMesh>`, `edit` and `picked`."
+
+[[type]]
+name = "WarpGridStyle"
+old = ""
+new = "craft_imaging::ui::warp::WarpGridStyle"
+status = "replaced"
+note = "Was `WarpStyle` (see that entry)."
+
+[[type]]
+name = "WarpWords"
+old = ""
+new = "craft_imaging::ui::warp::WarpWords"
+status = "replaced"
+note = "Was `WarpNames` (see that entry)."
+
+[[type]]
+name = "WarpRule"
+old = ""
+new = "craft_imaging::ui::warp::WarpRule"
+status = "replaced"
+note = "The closure prop `WarpGrid::rule` takes."
+
+[[type]]
+name = "WarpSurface"
+old = ""
+new = "craft_imaging::ui::warp::WarpSurface"
+status = "replaced"
+note = "The closure prop `WarpGrid::surface` takes."
+
+[[type]]
+name = "WarpFieldsWords"
+old = ""
+new = "craft_imaging::ui::warp::WarpFieldsWords"
+status = "replaced"
+note = "Was `WarpFieldsLabels`."
+
+[[type]]
+name = "MeshLines"
+old = ""
+new = "craft_imaging::ui::warp::MeshLines"
+status = "replaced"
+note = "Paint-only canvas control for the lines of a deformed mesh: `MeshLines::new(&edges).show_at(ui, rect)`; edges are document points. Crate-private."
+
+[[type]]
+name = "MeshLinesStyle"
+old = ""
+new = "craft_imaging::ui::warp::MeshLinesStyle"
+status = "replaced"
+note = "Was `MeshStyle`."
+
+[[type]]
+name = "WarpFields"
+old = "craft_imaging::ui::warp::WarpFields"
+new = "craft_imaging::ui::warp::WarpFields"
+status = "same"
+
+[[type]]
+name = "WarpFieldValues"
+old = "craft_imaging::ui::warp::WarpFieldValues"
+new = "craft_imaging::ui::warp::WarpFieldValues"
+status = "same"
+
+[[type]]
+name = "WarpFieldsEdit"
+old = "craft_imaging::ui::warp::WarpFieldsEdit"
+new = "craft_imaging::ui::warp::WarpFieldsEdit"
+status = "same"
+
+[[type]]
+name = "WarpFieldsOutput"
+old = "craft_imaging::ui::warp::WarpFieldsOutput"
+new = "craft_imaging::ui::warp::WarpFieldsOutput"
+status = "same"
+
+[[type]]
+name = "WarpGridChoice"
+old = "craft_imaging::ui::warp::WarpGridChoice"
+new = "craft_imaging::ui::warp::WarpGridChoice"
+status = "same"
+
+[[type]]
+name = "WarpStyleEntry"
+old = "craft_imaging::ui::warp::WarpStyleEntry"
+new = "craft_imaging::ui::warp::WarpStyleEntry"
+status = "same"
+
+[[type]]
+name = "WarpNames"
+old = "craft_imaging::ui::warp::WarpNames"
+new = ""
+status = "removed"
+note = "Replaced by `WarpWords` (`words!`); the names come from the language of the scope."
+
+[[type]]
+name = "WarpResponse"
+old = "craft_imaging::ui::warp::WarpResponse"
+new = ""
+status = "removed"
+note = "Replaced by `WarpGridOutput`."
+
+[[type]]
+name = "WarpStyle"
+old = "craft_imaging::ui::warp::WarpStyle"
+new = ""
+status = "removed"
+note = "Replaced by `WarpGridStyle`; hit reach and reveal distance are named constants."
+
+[[type]]
+name = "WarpTarget"
+old = "craft_imaging::ui::warp::WarpTarget"
+new = ""
+status = "removed"
+note = "Replaced by the arena's parts (`POINT`, `SURFACE`)."
+
+[[type]]
+name = "WarpPress"
+old = "craft_imaging::ui::warp::WarpPress"
+new = ""
+status = "removed"
+note = "Replaced by the arena's press path."
+
+[[type]]
+name = "WarpTrack"
+old = "craft_imaging::ui::warp::WarpTrack"
+new = ""
+status = "removed"
+note = "Replaced by the arena's press path."
+
+[[type]]
+name = "WarpRelease"
+old = "craft_imaging::ui::warp::WarpRelease"
+new = ""
+status = "removed"
+note = "Replaced by the arena's press path."
+
+[[type]]
+name = "WarpSplitPress"
+old = "craft_imaging::ui::warp::WarpSplitPress"
+new = ""
+status = "removed"
+note = "Replaced by the arena's press path."
+
+[[type]]
+name = "WarpSplitAt"
+old = "craft_imaging::ui::warp::WarpSplitAt"
+new = ""
+status = "removed"
+note = "Replaced by the arena's press path (crate-private `SplitAt`)."
+
+[[type]]
+name = "MeshStyle"
+old = "craft_imaging::ui::warp::MeshStyle"
+new = ""
+status = "removed"
+note = "Replaced by `MeshLinesStyle`."
+
+[[type]]
+name = "WarpFieldsLabels"
+old = "craft_imaging::ui::warp::WarpFieldsLabels"
+new = ""
+status = "removed"
+note = "Replaced by `WarpFieldsWords`."
+

@@ -870,3 +870,64 @@ fn packbits_slice_roundtrips_all_packet_lengths() {
         }
     }
 }
+
+#[test]
+fn rle_row_counts_parse_psd_and_psb_and_reject_short_tables() {
+    let psd = [0, 3, 0, 5, 1, 2, 3];
+    let (counts, rest) = read_rle_row_counts(&psd, 2, Version::Psd).unwrap();
+    assert_eq!(counts, vec![3, 5]);
+    assert_eq!(rest, &[1, 2, 3]);
+    assert!(matches!(read_rle_row_counts(&psd[..3], 2, Version::Psd), Err(PsdError::UnexpectedEof { .. })));
+
+    let psb = [0, 0, 0, 3, 0, 1, 0, 0, 9];
+    let (counts, rest) = read_rle_row_counts(&psb, 2, Version::Psb).unwrap();
+    assert_eq!(counts, vec![3, 0x10000]);
+    assert_eq!(rest, &[9]);
+    assert!(matches!(read_rle_row_counts(&psb[..7], 2, Version::Psb), Err(PsdError::UnexpectedEof { .. })));
+}
+
+#[test]
+fn zip_decompress_up_to_enforces_limit_and_verifies_trailer() {
+    let payload: Vec<u8> = (0..1024).map(|i| (i * 17 % 251) as u8).collect();
+    let compressed = zip_compress(&payload);
+
+    assert_eq!(zip_decompress_up_to(&compressed, payload.len()).unwrap(), payload);
+    assert_eq!(zip_decompress_up_to(&compressed, payload.len() * 2).unwrap(), payload);
+    assert!(matches!(zip_decompress_up_to(&compressed, payload.len() - 1), Err(PsdError::LimitExceeded(_))));
+
+    let mut bad_adler = compressed.clone();
+    let last = bad_adler.len() - 1;
+    bad_adler[last] ^= 0xff;
+    assert!(matches!(zip_decompress_up_to(&bad_adler, payload.len()), Err(PsdError::Decompress(_))));
+    assert!(matches!(zip_decompress_up_to(&compressed[..compressed.len() / 2], payload.len()), Err(PsdError::Decompress(_))));
+}
+
+#[test]
+fn plane_stream_stages_raw_rle_and_zip_planes() {
+    let raw_bytes = [1u8, 2, 3, 4, 5, 6];
+    let mut raw_stream = PlaneStream::open(Compression::Raw, &raw_bytes, 3, 2, Version::Psd, 0, |_| Ok(())).unwrap();
+    assert_eq!(raw_stream.next_raw_plane(2).unwrap(), &[1, 2]);
+    assert_eq!(raw_stream.next_raw_plane(2).unwrap(), &[3, 4]);
+
+    // Two RLE planes (2 rows x 2 bytes each); first row of plane 0 is short for padded recovery.
+    let mut rle_data = vec![0, 2, 0, 2, 0, 2, 0, 2];
+    rle_data.extend_from_slice(&[0, 9]); // 1 byte literal, zero-padded to 2 when padded=true
+    rle_data.extend_from_slice(&[255, 8]); // 2 copies of 8
+    rle_data.extend_from_slice(&[255, 7]);
+    rle_data.extend_from_slice(&[255, 6]);
+    let mut rle_stream = PlaneStream::open(Compression::Rle, &rle_data, 2, 2, Version::Psd, 0, |_| Ok(())).unwrap();
+    let mut plane0 = Vec::new();
+    rle_stream.next_rle_plane_into(0, 2, 2, true, &mut plane0).unwrap();
+    assert_eq!(plane0, vec![9, 0, 8, 8]);
+    let mut plane1 = Vec::new();
+    rle_stream.next_rle_plane_into(1, 2, 2, false, &mut plane1).unwrap();
+    assert_eq!(plane1, vec![7, 7, 6, 6]);
+
+    let zip_src = zip_compress(&[10, 20, 30, 40]);
+    let refused = PlaneStream::open(Compression::Zip, &zip_src, 2, 1, Version::Psd, 4, |_| Err(PsdError::LimitExceeded("budget")));
+    assert!(matches!(refused, Err(PsdError::LimitExceeded("budget"))));
+
+    let mut zip_stream = PlaneStream::open(Compression::Zip, &zip_src, 2, 1, Version::Psd, 4, |_| Ok(())).unwrap();
+    assert_eq!(zip_stream.zip_plane_mut(0, 2).unwrap(), &[10, 20]);
+    assert_eq!(zip_stream.zip_plane_mut(1, 2).unwrap(), &[30, 40]);
+}

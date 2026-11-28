@@ -1,5 +1,7 @@
 //! EBML / Matroska element IDs (RFC 8794, RFC 9559). IDs keep their VINT marker bits.
 #![allow(dead_code)]
+// Each constant is the ID of the element it names; the specs above define them.
+#![allow(missing_docs)]
 
 // EBML header + global elements
 pub const EBML: u32 = 0x1A45_DFA3;

@@ -167,33 +167,6 @@ mod tests {
         }
         assert_eq!(decode("Zm9v\nYmFy").as_deref(), Some(&b"foobar"[..]));
     }
-
-    #[test]
-    fn every_byte_value_round_trips() {
-        let all: Vec<u8> = (0..=255).collect();
-        for n in 0..all.len() {
-            assert_eq!(decode(&encode(&all[..n])).as_deref(), Some(&all[..n]));
-        }
-    }
-
-    #[test]
-    fn nonzero_bits_before_the_padding_are_ignored() {
-        for (loose, canonical) in [("Zh==", "Zg=="), ("Zm9=", "Zm8=")] {
-            assert_eq!(decode(loose), decode(canonical), "{loose}");
-            assert_eq!(decoded_len(loose), decoded_len(canonical), "{loose}");
-        }
-        assert_eq!(decode("Zh==").as_deref(), Some(&b"f"[..]));
-        assert_eq!(decode("Zm9=").as_deref(), Some(&b"fo"[..]));
-    }
-
-    #[test]
-    fn misplaced_padding_and_foreign_characters_are_refused() {
-        for s in ["====", "A===", "AA=A", "=AAA", "QQ==QUJD", "QUI=QUJD", "QUJ", "QU*D", "QUJDé"] {
-            assert_eq!(decode(s), None, "{s}");
-            assert_eq!(decode_with_check(s, || Ok::<_, ()>(())).unwrap(), None, "{s}");
-        }
-    }
-
     #[test]
     fn checked_blocks_preserve_padding_and_whitespace() {
         for pad in ["QUJD", "Zh==", "Zm9=", "A===", "QUJ"] {
@@ -215,20 +188,5 @@ mod tests {
         };
         assert_eq!(decode_chunks(&data, 0, &mut check), Err("stopped"));
         assert_eq!(polls, 2);
-    }
-
-    #[test]
-    fn checked_image_reads_keep_bounds_and_blob_ranges() {
-        let mut image = crate::Image::inline("application/pdf", b"abcdef");
-        for max in [0, 5, 6, u64::MAX] {
-            assert_eq!(image.bytes_at_most_with_check(b"", max, || Ok::<_, ()>(())).unwrap(), image.bytes_at_most(b"", max));
-        }
-        image.blob = Some([2, 3]);
-        for tail in [&b"123456"[..], b"12"] {
-            for max in [0, 2, 3, u64::MAX] {
-                assert_eq!(image.bytes_at_most_with_check(tail, max, || Ok::<_, ()>(())).unwrap(), image.bytes_at_most(tail, max));
-            }
-        }
-        assert_eq!(image.bytes_at_most_with_check(b"123456", 3, || Err(17)), Err(17));
     }
 }

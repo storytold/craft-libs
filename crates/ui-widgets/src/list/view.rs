@@ -1,0 +1,463 @@
+//! `List`: a list of `ListRow`s over a display order, with the selection, reorder, rename, reveal and tree settings of
+//! the collection contract. The item step does the work: virtualisation, lead and selection rules, type-ahead,
+//! drag with drop marks, rename lifecycle and the context-menu request. The list adds the item layout and the editor
+//! the rename lifecycle shows.
+
+use super::predicate::{DropTest, RowTest, RowText};
+use super::{ListRow, RowEvent, TreeLeaves};
+use crate::contract::{
+    Access, ActivateOn, Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnLayout, Common, Component, ContainerProps, Cx,
+    DragPayload, DropKind, EdgePress, EditResponse, HoverLead, LeadOnOpen, ListDrag, Props as _, Role, RowState, SelectMode, Show as _, Sizing,
+};
+use crate::fonts::FontRef;
+use crate::primitives::HAlign;
+use crate::runtime::env::{Env, Label};
+use crate::style::{ComponentStyle, StyleCx};
+use crate::tile_grid::GroupHeads;
+use craft_behavior::{ColumnKey, DisplayOrder, ItemSource, Metrics, Selection, SizeHint, SpanLayout};
+use craft_i18n::matcher::{Matcher, Rank};
+use egui::{Rect, Ui};
+use std::borrow::Cow;
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+/// How the rows of a list show their labels as document text: the document's font, size and alignment.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DocumentRows {
+    /// The font of the labels.
+    pub font: FontRef,
+    /// The size of the labels.
+    pub size: f32,
+    /// The alignment of the labels.
+    pub align: HAlign,
+}
+
+impl DocumentRows {
+    /// Rows whose labels are document text in `font` at `size`, aligned `align`.
+    pub fn new(font: FontRef, size: f32, align: HAlign) -> Self {
+        DocumentRows { font, size, align }
+    }
+}
+
+/// The style of the list: it has no look of its own beyond its container's surface.
+#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct ListStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+/// A list of rows: one Tab stop, the selection rules of the collection contract, type-ahead on the rows' text (off
+/// unless `type_ahead`, so tool keys keep working), rename in place, drag to reorder, and the request for the app's
+/// context menu.
+///
+/// Rows have the height their `ListRow` measures, or the height the item source's `size_hint` gives. A list of
+/// groups and their children is a tree: rows are indented by their depth in the display order, groups open and
+/// close with the arrow keys, and the list reports each change as `CollectionEvent::Open`.
+#[derive(crate::contract::Component, crate::contract::Props)]
+#[component(collection, probe(List<'static, usize>))]
+pub struct List<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+    #[collection]
+    items: CollectionProps,
+    /// The selection the caller owns.
+    #[prop]
+    selection: Option<Bind<'a, Selection<K>>>,
+    /// The column arrangement the caller owns: the header starts each pass from it and writes each change into it.
+    #[prop]
+    column_layout: Option<Bind<'a, ColumnLayout>>,
+    /// Scrolls the row of `key` into view once.
+    #[prop]
+    reveal: Option<K>,
+    /// A tree: rows are indented by depth and groups open and close.
+    #[prop]
+    tree: bool,
+    /// How the tree lines up its leaves with its groups: `Compact` unless set.
+    #[prop]
+    tree_leaves: TreeLeaves,
+    /// Which rows may be renamed; a rename request on another row does nothing.
+    #[prop(func = "Fn(&K) -> bool")]
+    can_rename: Option<RowTest<'a, K>>,
+    /// The text a row's rename field opens with, `None` for the row's text: an empty draft when several rows are picked
+    /// takes a name for all of them. Enter on a proposed draft nobody typed in commits it.
+    #[prop(func = "Fn(&K) -> Option<String>")]
+    rename_draft: Option<RowText<'a, K>>,
+    /// Which rows may be dragged.
+    #[prop(func = "Fn(&K) -> bool")]
+    can_drag: Option<RowTest<'a, K>>,
+    /// What the list takes from drags that did not start in it, in order.
+    drops: Vec<DropKind<'a, K>>,
+    /// The press on the line between two rows the list takes.
+    edge_press: Option<EdgePress<'a, K>>,
+    /// Where the list's own drag may land: the test gets the drag, the row under the pointer and the position before which the
+    /// dragged rows would go. A refused spot shows no drop mark.
+    #[prop(func = "Fn(&ListDrag<K>, Option<&K>, usize) -> bool")]
+    accepts: Option<DropTest<'a, K>>,
+    /// The list is a listbox of options: the popup of a value picker.
+    #[prop(flag)]
+    listbox: bool,
+    /// Every row has a "More" button, shown on a hovered or selected row and while its menu is open, that asks for the
+    /// row's menu as a secondary click does (`CollectionEvent::ContextMenu`). The menu's Rename sends `request_rename`.
+    #[prop(flag)]
+    row_menu: bool,
+    /// The rows the query keeps, set by `filter`.
+    filter: Option<Filter<'a, K>>,
+    /// The kept rows are in order of how well they match the query.
+    #[prop]
+    ranked: bool,
+    /// Whether every group after the first starts below a full-width divider row instead of a titled group row.
+    #[prop]
+    group_heads: crate::tile_grid::GroupHeads,
+    /// The rows' labels are document text at the document's font, size and alignment; UI text keeps its tokens.
+    #[prop(name = "document_rows")]
+    document: Option<DocumentRows>,
+}
+
+impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
+    /// A list named `label`, with multiple selection.
+    pub fn new(label: impl Into<Label>) -> Self {
+        List {
+            common: Common::new(),
+            props: ContainerProps::new().sizing(Sizing::Fill),
+            items: CollectionProps::new().select(SelectMode::Multi),
+            selection: None,
+            column_layout: None,
+            reveal: None,
+            tree: false,
+            tree_leaves: TreeLeaves::Compact,
+            can_rename: None,
+            rename_draft: None,
+            can_drag: None,
+            drops: Vec::new(),
+            edge_press: None,
+            accepts: None,
+            listbox: false,
+            row_menu: false,
+            filter: None,
+            ranked: false,
+            group_heads: crate::tile_grid::GroupHeads::Titled,
+            document: None,
+        }
+        .label(label)
+    }
+
+    /// The options list of a value picker's popup (completions, number presets, `PopupList`): one selection, a click
+    /// activates, the lead starts on the first row and follows the pointer, typed letters move it, and a press leaves
+    /// the key focus on the opener, whose list keys the host forwards while the popup is open. Its rows are
+    /// `ListRow::option()`. Menus are `Menu`s, not option lists.
+    pub fn options(label: impl Into<Label>) -> Self {
+        Self::new(label)
+            .select(SelectMode::Single)
+            .activate(ActivateOn::Click)
+            .lead_on_open(LeadOnOpen::First)
+            .hover_lead(HoverLead::Lead)
+            .focus_on_press(false)
+            .type_ahead(true)
+            .sizing(Sizing::Content)
+            .listbox()
+    }
+
+    /// Only the rows of which one of the `texts` matches `query` reach the item step, folded for the scope's language
+    /// (case and accents ignored); a row ranks by its best matching text. An empty query keeps every row.
+    ///
+    /// A `ranked` list shows the matches alone, best first. Any other list keeps its display order and, with each
+    /// match, the rows it sits under: its ancestors in a tree and the section row heading it. A section row with no
+    /// match under it goes; a section row never matches by its own text. The row whose rename runs stays, so it is
+    /// named in place, with its ancestors and heading.
+    ///
+    /// The rows stamp folds in the query, so the lead starts over on the first shown row and the layout rebuilds when
+    /// the query changes. Sets the rows stamp.
+    #[must_use]
+    pub fn filter(mut self, query: &str, texts: impl Fn(&K) -> Vec<Label> + 'a) -> Self {
+        let query = query.trim();
+        let mut hasher = DefaultHasher::new();
+        query.hash(&mut hasher);
+        self.items = self.items.rows_stamp(hasher.finish());
+        self.filter = Some(Filter { query: query.to_owned(), texts: Box::new(texts) });
+        self
+    }
+
+    /// Which end of the rows the list stays at while rows are added: `End` follows the newest row as long as the user
+    /// left the scroll at the end.
+    #[must_use]
+    pub fn scroll_anchor(mut self, anchor: crate::contract::ScrollAnchor) -> Self {
+        self.items.scroll_anchor = anchor;
+        self
+    }
+
+    /// A row drag carries `map` of it, for the drop targets of type `P`; a row the map gives `None` for does not drag
+    /// unless a reorder rule is set. The drag stays one session with one ghost.
+    #[must_use]
+    pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<K>) -> Option<P> + Send + Sync + 'static) -> Self {
+        self.items = self.items.drag_payload(map);
+        self
+    }
+
+    /// A row drag carries `payload` of it too, beside the payloads given before (`CollectionProps::carry`).
+    #[must_use]
+    pub fn carry(mut self, payload: DragPayload) -> Self {
+        self.items = self.items.carry(payload);
+        self
+    }
+
+    /// Takes the drops of `kind` from drags that did not start in the list; kinds given earlier come first.
+    #[must_use]
+    pub fn takes_drop(mut self, kind: DropKind<'a, K>) -> Self {
+        self.drops.push(kind);
+        self
+    }
+
+    /// While exactly `mods` are held, the line between two adjacent rows that `test` gives a cursor for is a target of
+    /// its own: the band around it shows the cursor and a click there reports `CollectionEvent::EdgePressed` with the
+    /// rows above and below, picking neither (Photoshop's Alt-click between two layers clips the upper one). A toggle
+    /// cell under the pointer keeps its press. Without it the rows take every press.
+    #[must_use]
+    pub fn edge_press(mut self, mods: craft_keymap::Mods, test: impl Fn(&K, &K) -> Option<craft_behavior::Cursor> + 'a) -> Self {
+        self.edge_press = Some(EdgePress::new(mods, test));
+        self
+    }
+}
+
+impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for List<'_, K> {
+    const ROLE: Role = Role::LIST;
+    const PARTS: bool = false;
+    const ALT_ROLES: &'static [Role] = &[Role::LIST_BOX];
+    type Style = ListStyle;
+    type Output = CollectionResponse<K, RowEvent>;
+
+    fn style(_: &StyleCx<'_>, _: ListStyleKey<K>) -> ListStyle {
+        ListStyle::default()
+    }
+
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        if self.listbox {
+            access.role(Role::LIST_BOX);
+        }
+    }
+
+    fn finish(self, mut cx: Cx<'_, Self>) -> Self::Output {
+        cx.collection_response()
+    }
+}
+
+impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
+    type Key = K;
+    type ItemLayout = SpanLayout;
+    type Selection = Selection<K>;
+    type Item<'r> = ListRow<'r>;
+    type ItemEvent = RowEvent;
+
+    fn items(&self) -> &CollectionProps {
+        &self.items
+    }
+
+    fn shows_row_focus(&self) -> bool {
+        true
+    }
+
+    fn filtered<'s>(&self, source: &'s dyn ItemSource<K>, env: &Env, kept: Option<&K>) -> Option<Box<dyn ItemSource<K> + 's>> {
+        let filter = self.filter.as_ref()?;
+        let matcher = Matcher::new(&env.folder(), &filter.query);
+        if matcher.is_empty() {
+            return None;
+        }
+        let mut matches: Vec<(Rank, usize)> = (0..source.len())
+            .filter(|&at| !source.is_section(at))
+            .filter_map(|at| filter.rank(&matcher, &source.key(at), env).map(|rank| (rank, at)))
+            .collect();
+        let renamed = kept.and_then(|key| source.index_of(key)).filter(|at| !matches.iter().any(|(_, held)| held == at));
+        if self.ranked {
+            matches.sort_by_key(|(rank, _)| *rank);
+            let at = matches.into_iter().map(|(_, at)| at).chain(renamed).collect();
+            return Some(Box::new(Filtered { source, at }));
+        }
+        let mut hit = vec![false; source.len()];
+        for at in matches.into_iter().map(|(_, at)| at).chain(renamed) {
+            hit[at] = true;
+        }
+        Some(Box::new(Filtered { source, at: with_context(source, &hit) }))
+    }
+
+    fn selection(&mut self) -> Option<BindMut<'_, Selection<K>>> {
+        self.selection.as_mut().map(Bind::reborrow)
+    }
+
+    fn column_layout(&mut self) -> Option<BindMut<'_, ColumnLayout>> {
+        self.column_layout.as_mut().map(Bind::reborrow)
+    }
+
+    fn reveal(&self) -> Option<&K> {
+        self.reveal.as_ref()
+    }
+
+    fn item_layout(&self, source: &dyn ItemSource<K>, width: f32, cx: &StyleCx<'_>) -> SpanLayout {
+        let layout = SpanLayout::sized(source, width, self.items.row_height.of(cx));
+        if self.tree { layout.tree() } else { layout }
+    }
+
+    fn dress<'r>(&self, row: Self::Item<'r>, state: &RowState) -> Self::Item<'r> {
+        // Under `Rule` every top-level group after the first is a divider row, not a titled one.
+        let rule = self.group_heads == GroupHeads::Rule && row.group.is_some() && row.depth == Some(0) && !state.first;
+        let row = row.rows(self.items.row_height).sub_row(state).leaves(self.tree_leaves);
+        let row = if rule { row.rule_head() } else { row };
+        let row = match self.document.clone() {
+            Some(document) => row.document(document),
+            None => row,
+        };
+        if self.row_menu { row.row_menu() } else { row }
+    }
+
+    /// The row menu and the document text, which `dress` gives every row.
+    fn dress_inputs(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.row_menu.hash(&mut hasher);
+        if let Some(document) = &self.document {
+            document.font.hash(&mut hasher);
+            document.size.to_bits().hash(&mut hasher);
+            (document.align as u8).hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    fn rename_draft(&self, key: &K) -> Option<String> {
+        self.rename_draft.as_ref().and_then(|draft| draft.text(key))
+    }
+
+    fn can_rename(&self, key: &K) -> bool {
+        self.can_rename.as_ref().is_none_or(|test| test.passes(key))
+    }
+
+    fn can_drag(&self, key: &K) -> bool {
+        self.can_drag.as_ref().is_none_or(|test| test.passes(key))
+    }
+
+    fn drops(&self) -> &[DropKind<'_, K>] {
+        &self.drops
+    }
+
+    fn edge_press(&self) -> Option<&EdgePress<'_, K>> {
+        self.edge_press.as_ref()
+    }
+
+    fn accepts(&self, drag: &ListDrag<K>, over: Option<&K>, insert: usize) -> bool {
+        self.accepts.as_ref().is_none_or(|test| test.passes(drag, over, insert))
+    }
+
+    fn rename_editor(&mut self, ui: &mut Ui, draft: Bind<'_, String>, label: Rect, name: &str) -> Option<EditResponse<String>> {
+        Some(crate::text::rename_field(draft, name).show_at(ui, label))
+    }
+}
+
+/// The texts a row's key matches by.
+type KeyTexts<'a, K> = Box<dyn Fn(&K) -> Vec<Label> + 'a>;
+
+/// What `List::filter` keeps: the query and the texts a row's key matches by.
+struct Filter<'a, K> {
+    query: String,
+    texts: KeyTexts<'a, K>,
+}
+
+impl<K> Filter<'_, K> {
+    /// The best rank of any text of `key`; `None` when none matches.
+    fn rank(&self, matcher: &Matcher, key: &K, env: &Env) -> Option<Rank> {
+        (self.texts)(key).iter().filter_map(|text| matcher.score(text.resolved(&env.words).as_str())).map(|found| found.rank).min()
+    }
+}
+
+/// The positions of `source` that are `hit`, in display order, with the rows each hit sits under: its ancestors, and
+/// the section row heading it.
+///
+/// The ancestors of a row are the nearest preceding row with a smaller depth, then the nearest row before that with a
+/// smaller depth still, down to the root: the threshold lowers at each step, so a sibling's subtree or an earlier root
+/// is no ancestor. The rows a section heads are those after it up to the next section row, whatever their depth: a
+/// flat source with section rows gives its headings no depth.
+fn with_context<K>(source: &dyn ItemSource<K>, hit: &[bool]) -> Vec<usize> {
+    let mut shown = vec![false; hit.len()];
+    // The chain of rows above the current one whose depths fall strictly toward the root, as (depth, position).
+    let mut path: Vec<(usize, usize)> = Vec::new();
+    let mut heading = None;
+    for (at, &is_hit) in hit.iter().enumerate() {
+        let depth = source.depth(at);
+        while path.last().is_some_and(|&(above, _)| above >= depth) {
+            path.pop();
+        }
+        if source.is_section(at) {
+            heading = Some(at);
+        } else if is_hit {
+            shown[at] = true;
+            for &(_, above) in &path {
+                shown[above] = true;
+            }
+            if let Some(heading) = heading {
+                shown[heading] = true;
+            }
+        }
+        path.push((depth, at));
+    }
+    shown.iter().enumerate().filter(|(_, shown)| **shown).map(|(at, _)| at).collect()
+}
+
+/// The rows of `source` at the positions `at`, in that order.
+struct Filtered<'s, K> {
+    source: &'s dyn ItemSource<K>,
+    at: Vec<usize>,
+}
+
+impl<K> DisplayOrder<K> for Filtered<'_, K> {
+    fn len(&self) -> usize {
+        self.at.len()
+    }
+
+    fn key(&self, at: usize) -> K {
+        self.source.key(self.at[at])
+    }
+
+    fn index_of(&self, key: &K) -> Option<usize>
+    where
+        K: PartialEq,
+    {
+        let held = self.source.index_of(key)?;
+        self.at.iter().position(|&at| at == held)
+    }
+
+    fn depth(&self, at: usize) -> usize {
+        self.source.depth(self.at[at])
+    }
+
+    fn has_children(&self, at: usize) -> bool {
+        self.source.has_children(self.at[at])
+    }
+
+    fn open(&self, at: usize) -> bool {
+        self.source.open(self.at[at])
+    }
+
+    fn is_section(&self, at: usize) -> bool {
+        self.source.is_section(self.at[at])
+    }
+
+    fn enabled(&self, at: usize) -> bool {
+        self.source.enabled(self.at[at])
+    }
+
+    fn text(&self, at: usize) -> Option<Cow<'_, str>> {
+        self.source.text(self.at[at])
+    }
+}
+
+impl<K> ItemSource<K> for Filtered<'_, K> {
+    fn size_hint(&self, at: usize) -> SizeHint {
+        self.source.size_hint(self.at[at])
+    }
+
+    fn toggled(&self, at: usize, column: &ColumnKey) -> bool {
+        self.source.toggled(self.at[at], column)
+    }
+
+    fn sub_row(&self, at: usize) -> Option<usize> {
+        self.source.sub_row(self.at[at])
+    }
+}

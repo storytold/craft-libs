@@ -806,6 +806,14 @@ fn zoo() -> Vec<Vec<u8>> {
 }
 
 fn poke(bytes: &[u8]) {
+    let started = std::time::Instant::now();
+    poke_all(bytes);
+    if started.elapsed() > std::time::Duration::from_millis(100) {
+        eprintln!("DIAG tiff poke slow: {} bytes, {:?}", bytes.len(), started.elapsed());
+    }
+}
+
+fn poke_all(bytes: &[u8]) {
     let _ = decode(bytes);
     let _ = decode_with(bytes, &DecodeOptions { limits: Limits { max_alloc: 16 << 20, ..Limits::default() }, ..Default::default() });
     let _ = exif_orientation(bytes);
@@ -820,23 +828,30 @@ fn poke(bytes: &[u8]) {
 
 #[test]
 fn zoo_decodes_and_never_panics_when_cut_or_corrupted() {
-    for f in zoo() {
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs every N-th cut and flip, from a different offset
+    // for each file, and 1/N of the random rounds.
+    let step = craft_media_testkit::hostile::divisor();
+    for (k, f) in zoo().into_iter().enumerate() {
         let info = tiff_info(&f).unwrap();
         for i in 0..info.pages.len() {
             decode_tiff_page(&f, i, &DecodeOptions::default()).unwrap();
         }
-        for cut in 0..f.len() {
+        for cut in (0..f.len()).filter(|cut| (cut + k) % step == 0) {
             poke(&f[..cut]);
         }
-        for i in 0..f.len() {
-            for flip in [0xffu8, 0x80, 0x01] {
+        for i in (0..f.len()).filter(|i| (i + k) % step == 0) {
+            // nightly flips each byte three ways; the gate one way per byte, rotating, so the sampled bytes together see all
+            let flips = [0xffu8, 0x80, 0x01];
+            let one = [flips[(i / step) % 3]];
+            for flip in if step == 1 { &flips[..] } else { &one[..] } {
+                let flip = *flip;
                 let mut g = f.clone();
                 g[i] ^= flip;
                 poke(&g);
             }
         }
         let mut r = Rng::new(f.len() as u64);
-        for _ in 0..300 {
+        for _ in 0..300usize.div_ceil(step) {
             let mut g = f.clone();
             for _ in 0..4 {
                 let i = (r.next_u64() as usize) % g.len();

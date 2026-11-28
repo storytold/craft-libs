@@ -1,7 +1,7 @@
 //! Fujifilm's striped predictive RAW compression.
 //!
 //! Clean-room implementation: Fabian's prose description of lossless RAF compression
-//! (https://capnfabs.net/posts/fuji-raf-compression-algorithm/) supplied the broad structure;
+//! (<https://capnfabs.net/posts/fuji-raf-compression-algorithm/>) supplied the broad structure;
 //! headers, colour-vector placement, predictors, contexts and adaptation were recovered
 //! from sample bytes and black-box comparisons of decoded sensor arrays. No other RAW
 //! decoder's source was consulted. See docs/raf-compression.md for verification details.

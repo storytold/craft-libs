@@ -810,8 +810,73 @@ mod tests {
 
     #[test]
     fn decoded_stops_at_renderer_cap_of_256_mib() {
-        let data = vec![0u8; (256 << 20) + 1];
+        // A zlib stream of `len` zero bytes written directly (one literal, then matches of 258
+        // bytes at distance 1 in a fixed-Huffman block): compressing 256 MiB would cost far more
+        // than decoding up to the cap.
+        fn zero_stream(len: usize) -> Stream {
+            struct Bits {
+                out: Vec<u8>,
+                acc: u64,
+                count: u32,
+            }
+            impl Bits {
+                fn put(&mut self, value: u64, count: u32) {
+                    self.acc |= value << self.count;
+                    self.count += count;
+                    while self.count >= 8 {
+                        self.out.push(self.acc as u8);
+                        self.acc >>= 8;
+                        self.count -= 8;
+                    }
+                }
+                /// A Huffman code, packed most significant bit first.
+                fn code(&mut self, value: u64, count: u32) {
+                    self.put(value.reverse_bits() >> (64 - count), count);
+                }
+            }
+            let mut w = Bits { out: vec![0x78, 0x9c], acc: 0, count: 0 };
+            w.put(1, 1);
+            w.put(1, 2);
+            w.code(0x30, 8);
+            let mut left = len - 1;
+            while left >= 258 {
+                w.code(0xC5, 8);
+                w.put(0, 5);
+                left -= 258;
+            }
+            for _ in 0..left {
+                w.code(0x30, 8);
+            }
+            w.put(0, 7);
+            if w.count > 0 {
+                w.out.push(w.acc as u8);
+            }
+            let mut out = w.out;
+            out.extend_from_slice(&(((len % 65521) as u32) << 16 | 1).to_be_bytes());
+            let mut dict = Dict::new();
+            dict.set(b"Filter".to_vec(), Object::Name(b"FlateDecode".to_vec()));
+            Stream::from_raw(dict, out)
+        }
+        let small = zero_stream(1000);
+        assert_eq!(&small.decoded().unwrap()[..], &[0u8; 1000][..], "the hand-written stream is a valid one");
+        assert_eq!(crate::cos::MAX_PAGE_DECODED, 256 << 20);
+        let max = 4096;
+        let mut data = vec![0u8; max];
         let stream = Stream::flate(Dict::new(), &data);
+        assert_eq!(stream.decoded_within(max).ok().as_deref(), Some(data.as_slice()));
+        data.push(0);
+        let stream = Stream::flate(Dict::new(), &data);
+        assert!(matches!(stream.decoded_within(max), Err(CosError::Filter(_))));
+        // Keep the default-cap wiring at full size in the existing native nightly convention.
+        // wasm32 has no divisor and always runs the small controls above.
+        #[cfg(not(target_arch = "wasm32"))]
+        let full = craft_testkit::hostile::divisor() == 1;
+        #[cfg(target_arch = "wasm32")]
+        let full = false;
+        if !full {
+            return;
+        }
+        let stream = zero_stream((256 << 20) + 1);
         assert!(matches!(stream.decoded(), Err(CosError::Filter(_))));
     }
 

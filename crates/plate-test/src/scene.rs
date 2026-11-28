@@ -24,11 +24,16 @@ pub const TEXT_PLATE: &str = "Black";
 /// The process plates, named as separation tools (Ghostscript `tiffsep`) name them.
 pub const PROCESS: [&str; 4] = ["Cyan", "Magenta", "Yellow", "Black"];
 
+/// One test page: what to draw, which plates a correct separation produces, and the PDF structure
+/// to expect.
+///
+/// Loaded from a JSON file by [`load`]; check it with [`Scene::validate`].
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scene {
     /// Short id, also the file name stem's prefix (`S01`, `D04`).
     pub id: String,
+    #[allow(missing_docs)]
     pub title: String,
     /// Where the scene comes from (research case or app regression).
     pub source: String,
@@ -38,16 +43,21 @@ pub struct Scene {
     #[serde(default)]
     pub inks: Vec<Ink>,
     #[serde(default)]
+    #[allow(missing_docs)]
     pub settings: Settings,
+    /// Objects drawn in order, back to front.
     pub objects: Vec<Object>,
+    #[allow(missing_docs)]
     pub expect: Expect,
     #[serde(default)]
+    #[allow(missing_docs)]
     pub structure: StructureExpect,
     /// The task that makes this scene writable, e.g. `"T4"`. Pending scenes are parsed but not
     /// written or checked.
     #[serde(default)]
     pub pending: Option<String>,
     #[serde(default)]
+    #[allow(missing_docs)]
     pub note: Option<String>,
 }
 
@@ -55,16 +65,20 @@ pub struct Scene {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Ink {
+    /// Ink name as it appears in the PDF and in plate file names.
     pub name: String,
     #[serde(default)]
+    #[allow(missing_docs)]
     pub cmyk: Option<[f32; 4]>,
     #[serde(default)]
+    #[allow(missing_docs)]
     pub lab: Option<[f32; 3]>,
 }
 
 /// Output intents a scene can name: `fogra39` is craft-cms's `COATED_FOGRA39_ICC`.
 pub const OUTPUT_INTENTS: &[&str] = &["fogra39"];
 
+/// Per-scene writer settings.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
@@ -77,22 +91,31 @@ pub struct Settings {
     pub output_intent: Option<String>,
 }
 
+/// Blending colour space of transparency groups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GroupCs {
+    #[allow(missing_docs)]
     Rgb,
+    #[allow(missing_docs)]
     Cmyk,
 }
 
+/// The type of an [`Object`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
+    #[allow(missing_docs)]
     Rect,
+    #[allow(missing_docs)]
     Ellipse,
+    #[allow(missing_docs)]
     Text,
+    #[allow(missing_docs)]
     Image,
     /// Another scene, written and placed as a PDF page.
     Pdf,
+    #[allow(missing_docs)]
     Group,
 }
 
@@ -102,6 +125,7 @@ pub enum Kind {
 #[serde(deny_unknown_fields)]
 pub struct Object {
     #[serde(rename = "type")]
+    #[allow(missing_docs)]
     pub kind: Kind,
     /// rect, ellipse (bounding box), image, pdf.
     #[serde(default)]
@@ -112,8 +136,10 @@ pub struct Object {
     /// text: font size in pt.
     #[serde(default)]
     pub size: Option<f32>,
+    /// text: the string to draw.
     #[serde(default)]
     pub text: Option<String>,
+    /// image: the synthetic image to fill `rect` with.
     #[serde(default)]
     pub image: Option<ImageSource>,
     /// pdf: id of the scene to place.
@@ -122,24 +148,32 @@ pub struct Object {
     /// group: children, drawn in order.
     #[serde(default)]
     pub objects: Vec<Object>,
+    /// group: write the group as isolated.
     #[serde(default)]
     pub isolated: bool,
+    /// group: write the group as a knockout group.
     #[serde(default)]
     pub knockout: bool,
     #[serde(default)]
+    #[allow(missing_docs)]
     pub fill: Option<Paint>,
     #[serde(default)]
+    #[allow(missing_docs)]
     pub stroke: Option<Stroke>,
     /// Whole-object opacity, 0–1 (a transparency group).
     #[serde(default)]
     pub opacity: Option<f32>,
     #[serde(default)]
+    #[allow(missing_docs)]
     pub blend: Option<Blend>,
     #[serde(default)]
+    #[allow(missing_docs)]
     pub overprint: Option<Overprint>,
     #[serde(default)]
+    #[allow(missing_docs)]
     pub mask: Option<Mask>,
     #[serde(default)]
+    #[allow(missing_docs)]
     pub note: Option<String>,
 }
 
@@ -149,37 +183,51 @@ pub struct Object {
 pub enum Paint {
     /// `"registration"`: the Separation `/All` colorant (every plate).
     Named(Named),
+    #[allow(missing_docs)]
     Cmyk {
+        #[allow(missing_docs)]
         cmyk: [f32; 4],
     },
     /// Black ink percentage, written as DeviceGray `1 - gray / 100`.
     Gray {
+        #[allow(missing_docs)]
         gray: f32,
     },
     /// 0–255 per channel.
     Rgb {
+        #[allow(missing_docs)]
         rgb: [f32; 3],
     },
+    /// A declared spot ink at `tint` percent.
     Spot {
+        /// Name of a spot ink declared in [`Scene::inks`].
         spot: String,
+        /// Tint percentage; 100 when absent.
         #[serde(default = "full")]
         tint: f32,
     },
     /// Several named inks at once (DeviceN); names are process plates or declared spots.
     Inks {
+        #[allow(missing_docs)]
         inks: BTreeMap<String, f32>,
     },
+    #[allow(missing_docs)]
     Linear {
+        #[allow(missing_docs)]
         linear: Gradient,
     },
+    #[allow(missing_docs)]
     Mesh {
+        #[allow(missing_docs)]
         mesh: Box<Mesh>,
     },
 }
 
+/// A named colorant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Named {
+    #[allow(missing_docs)]
     Registration,
 }
 
@@ -191,8 +239,11 @@ fn full() -> f32 {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Gradient {
+    /// Start point in page pt.
     pub from: [f32; 2],
+    /// End point in page pt.
     pub to: [f32; 2],
+    #[allow(missing_docs)]
     pub stops: Vec<GradientStop>,
 }
 
@@ -200,23 +251,29 @@ pub struct Gradient {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Mesh {
+    #[allow(missing_docs)]
     pub rect: [f32; 4],
     /// Solid paints at the top-left, top-right, bottom-right and bottom-left corners.
     pub corners: [Paint; 4],
 }
 
+/// One colour stop of a [`Gradient`].
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GradientStop {
     /// 0–1 along the gradient.
     pub at: f32,
+    #[allow(missing_docs)]
     pub paint: Paint,
 }
 
+/// An outline paint and width.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Stroke {
+    #[allow(missing_docs)]
     pub paint: Paint,
+    /// Line width in pt.
     pub width: f32,
 }
 
@@ -244,37 +301,59 @@ pub struct ImageSource {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ImageAlpha {
+    #[allow(missing_docs)]
     pub rect: [f32; 4],
+    #[allow(missing_docs)]
     pub opacity: f32,
 }
 
+/// A PDF blend mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Blend {
+    #[allow(missing_docs)]
     Normal,
+    #[allow(missing_docs)]
     Multiply,
+    #[allow(missing_docs)]
     Screen,
+    #[allow(missing_docs)]
     Overlay,
+    #[allow(missing_docs)]
     Darken,
+    #[allow(missing_docs)]
     Lighten,
+    #[allow(missing_docs)]
     ColorDodge,
+    #[allow(missing_docs)]
     ColorBurn,
+    #[allow(missing_docs)]
     HardLight,
+    #[allow(missing_docs)]
     SoftLight,
+    #[allow(missing_docs)]
     Difference,
+    #[allow(missing_docs)]
     Exclusion,
+    #[allow(missing_docs)]
     Hue,
+    #[allow(missing_docs)]
     Saturation,
+    #[allow(missing_docs)]
     Color,
+    #[allow(missing_docs)]
     Luminosity,
 }
 
+/// Overprint flags of an object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Overprint {
     #[serde(default)]
+    #[allow(missing_docs)]
     pub fill: bool,
     #[serde(default)]
+    #[allow(missing_docs)]
     pub stroke: bool,
     /// OPM: 1 = zero components leave the backdrop (nonzero overprint), 0 = all components paint.
     #[serde(default = "opm_default")]
@@ -289,7 +368,9 @@ fn opm_default() -> u8 {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Mask {
+    #[allow(missing_docs)]
     pub kind: MaskKind,
+    /// Objects drawn to make the mask.
     pub content: Vec<Object>,
     /// `/BC`: the color outside the mask content (luminosity masks).
     #[serde(default)]
@@ -299,10 +380,13 @@ pub struct Mask {
     pub transfer: Option<Vec<f32>>,
 }
 
+/// Whether a soft mask reads the luminosity or the alpha of its content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MaskKind {
+    #[allow(missing_docs)]
     Luminosity,
+    #[allow(missing_docs)]
     Alpha,
 }
 
@@ -312,14 +396,19 @@ pub enum MaskKind {
 pub struct Expect {
     /// Every plate the separation must produce (process plates included), and no others.
     pub plates: Vec<String>,
+    /// Where to measure the plates.
     pub points: Vec<SamplePoint>,
 }
 
+/// One place on the page where plate ink is measured, and the ink expected there.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SamplePoint {
+    /// Position in page pt. Area points sample around it; a text point with a `region` samples that
+    /// region instead.
     pub at: [f32; 2],
     #[serde(default)]
+    #[allow(missing_docs)]
     pub kind: PointKind,
     /// text: the glyph area to sample, `[x, y, w, h]`.
     #[serde(default)]
@@ -336,14 +425,18 @@ pub struct SamplePoint {
     #[serde(default)]
     pub info: bool,
     #[serde(default)]
+    #[allow(missing_docs)]
     pub note: Option<String>,
 }
 
+/// How a [`SamplePoint`] is measured.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PointKind {
     #[default]
+    #[allow(missing_docs)]
     Area,
+    #[allow(missing_docs)]
     Text,
 }
 
@@ -351,7 +444,9 @@ pub enum PointKind {
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum Level {
+    #[allow(missing_docs)]
     Value(f32),
+    #[allow(missing_docs)]
     Range([f32; 2]),
 }
 
@@ -380,6 +475,7 @@ pub fn load(path: &Path) -> Result<Scene, Error> {
 }
 
 impl Scene {
+    /// The declared spot ink called `name`, if any.
     pub fn ink(&self, name: &str) -> Option<&Ink> {
         self.inks.iter().find(|ink| ink.name == name)
     }

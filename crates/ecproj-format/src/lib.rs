@@ -52,6 +52,7 @@
 //!
 //! An `.ecprojx` file holds the same object encoded as XML. This crate reads and writes the JSON
 //! form only.
+#![warn(missing_docs)]
 
 use std::borrow::Cow;
 use std::fmt;
@@ -66,11 +67,7 @@ pub const SCHEMA_VERSION: u32 = 2;
 
 /// A project's schema is newer than [`SCHEMA_VERSION`].
 ///
-/// Other crates read its fields but do not build one:
-///
-/// ```compile_fail
-/// let _ = craft_ecproj_format::TooNew { schema: 3, supported: 2 };
-/// ```
+/// Other crates read its fields but do not build one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("project schema {schema} is newer than this version supports ({supported})")]
 #[non_exhaustive]
@@ -109,6 +106,7 @@ pub struct File<'a, V, P> {
 }
 
 impl<'a, V: Serialize, P: Serialize> File<'a, V, P> {
+    /// A file for `saved_by`, `view` and `project`.
     pub fn new(saved_by: &'a str, view: &'a V, project: &'a P) -> Self {
         File { saved_by, view, project }
     }
@@ -172,24 +170,6 @@ impl Head {
 ///     Err(e) => e.to_string(),
 /// };
 /// assert_eq!(message, "saved by 0.13.0: project schema 3 is newer than this version supports (2)");
-/// ```
-///
-/// ```compile_fail
-/// fn name(e: craft_ecproj_format::ReadError) -> &'static str {
-///     match e {
-///         craft_ecproj_format::ReadError::Json(_) => "json",
-///         craft_ecproj_format::ReadError::TooNew { .. } => "too new",
-///     }
-/// }
-/// ```
-///
-/// ```compile_fail
-/// fn saved_by(e: craft_ecproj_format::ReadError) -> Option<String> {
-///     match e {
-///         craft_ecproj_format::ReadError::TooNew { too_new: _, saved_by } => saved_by,
-///         _ => None,
-///     }
-/// }
 /// ```
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -318,3 +298,10 @@ impl<'de> Visitor<'de> for SavedByVisitor {
         Ok(SavedBy(None))
     }
 }
+
+#[cfg(test)]
+extern crate self as craft_ecproj_format;
+
+#[cfg(test)]
+#[path = "../tests/main.rs"]
+mod integration;

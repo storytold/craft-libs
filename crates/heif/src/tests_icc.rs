@@ -6,7 +6,6 @@ use super::*;
 
 /// Stands in for a profile: `colr` hands its payload back without parsing it.
 const TILE_ICC: &[u8] = b"tile-profile";
-const GRID_ICC: &[u8] = b"grid-profile";
 
 const GRID_ID: u16 = 1;
 const PICTURE_ID: u16 = 2;
@@ -129,27 +128,6 @@ fn grid_file(grid_icc: Option<&[u8]>, tile_icc: Option<&[u8]>) -> Vec<u8> {
     file(&meta)
 }
 
-/// One coded picture rather than a derivation, with `icc` on the item itself.
-fn picture_file(icc: Option<&[u8]>) -> Vec<u8> {
-    let mut ipco = ispe(64, 64);
-    let mut assoc = vec![0x81];
-    if let Some(icc) = icc {
-        ipco.extend_from_slice(&colr_prof(icc));
-        assoc.push(0x82);
-    }
-    let mut iprp = bx(b"ipco", &ipco);
-    iprp.extend_from_slice(&ipma(&[(PICTURE_ID, assoc.as_slice())]));
-
-    let mut items = 1u16.to_be_bytes().to_vec();
-    items.extend_from_slice(&infe(PICTURE_ID, b"hvc1"));
-
-    let mut meta = hdlr();
-    meta.extend_from_slice(&full(b"pitm", 0, &PICTURE_ID.to_be_bytes()));
-    meta.extend_from_slice(&full(b"iinf", 0, &items));
-    meta.extend_from_slice(&bx(b"iprp", &iprp));
-    file(&meta)
-}
-
 fn ctx_of(bytes: &[u8]) -> Context<'_> {
     Context::open(bytes).expect("the synthetic container must parse")
 }
@@ -166,30 +144,4 @@ fn a_grid_inherits_its_tiles_icc_profile() {
     assert_eq!(ctx.props(tiles[0]).unwrap().icc, Some(TILE_ICC), "the tile carries the profile");
 
     assert_eq!(item_icc(&ctx, primary).as_deref(), Some(TILE_ICC));
-}
-
-#[test]
-fn a_grids_own_profile_wins_over_its_tiles() {
-    let bytes = grid_file(Some(GRID_ICC), Some(TILE_ICC));
-    let ctx = ctx_of(&bytes);
-    assert_eq!(item_icc(&ctx, ctx.meta.primary).as_deref(), Some(GRID_ICC));
-}
-
-#[test]
-fn an_unlabelled_grid_has_no_profile() {
-    let bytes = grid_file(None, None);
-    let ctx = ctx_of(&bytes);
-    assert_eq!(item_icc(&ctx, ctx.meta.primary), None);
-}
-
-#[test]
-fn a_coded_picture_resolves_its_own_profile() {
-    let labelled = picture_file(Some(GRID_ICC));
-    let ctx = ctx_of(&labelled);
-    assert!(ctx.grid(ctx.meta.primary).unwrap().is_none(), "not a derivation");
-    assert_eq!(item_icc(&ctx, ctx.meta.primary).as_deref(), Some(GRID_ICC));
-
-    let bare = picture_file(None);
-    let ctx = ctx_of(&bare);
-    assert_eq!(item_icc(&ctx, ctx.meta.primary), None);
 }

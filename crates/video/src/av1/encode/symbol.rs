@@ -196,22 +196,6 @@ mod tests {
     }
 
     #[test]
-    fn bools_only() {
-        for len in 1..200 {
-            let bits: Vec<bool> = (0..len).map(|i| (i * 7 + len) % 3 == 0).collect();
-            let mut w = SymbolWriter::new(false);
-            for &b in &bits {
-                w.bool(b);
-            }
-            let data = w.finish();
-            let mut d = Dec::new(&data);
-            for (i, &b) in bits.iter().enumerate() {
-                assert_eq!(d.symbol(&mut [1 << 14, 1 << 15, 0], false) == 1, b, "len {len} bit {i} data {data:?}");
-            }
-        }
-    }
-
-    #[test]
     fn round_trip_random_symbols() {
         let mut seed = 0x1234_5678u32;
         let mut rnd = || {

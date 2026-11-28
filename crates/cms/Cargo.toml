@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-cms"
 version.workspace = true
 edition.workspace = true
@@ -19,4 +20,5 @@ md5 = { workspace = true }
 rayon = { workspace = true }
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 moxcms = "0.8"

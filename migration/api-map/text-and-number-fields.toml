@@ -1,0 +1,586 @@
+# API map of the "Text and number fields" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Text and number fields"
+new_module = "craft_ui::text"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "TextField"
+old = "craft_ui::controls::text_field::TextField"
+new = "craft_ui::text::TextField"
+status = "moved"
+note = "Generic over a `Codec` (`TextField::with_codec`); `TextField::new(label, Bind<String>)` is the plain field. The value is a `Bind`, not `&str`; the id salt is `.id_salt(..)`."
+
+[[type]]
+name = "SearchField"
+old = "craft_ui::controls::text_field::SearchField"
+new = ""
+status = "replaced"
+note = "`TextField::search(label, Bind<String>)`: a leading search glyph, a clear part while there is text, Escape clears the text and commits the empty value. The clear button's name is the library word `textField.clear`, not an argument."
+
+[[type]]
+name = "TextFieldOutput"
+old = "craft_ui::controls::text_field::TextFieldOutput"
+new = ""
+status = "replaced"
+note = "`TextField` shows to `EditResponse<String>`: `submitted`, `escaped` and the edit events are fields of it."
+
+[[type]]
+name = "TextFieldStyle"
+old = "craft_ui::controls::text_field::TextFieldStyle"
+new = ""
+status = "replaced"
+note = "Read-only style struct; the field look is `craft_ui::text::FieldStyle`, resolved from the tokens. A field's look is a custom variant."
+
+[[type]]
+name = "field_box"
+old = "craft_ui::controls::text_field::field_box"
+new = ""
+status = "removed"
+note = "The box is the component's surface; a widget that wants a field look shows a `TextField` or reuses `FieldStyle`."
+
+[[type]]
+name = "AltTextField"
+old = "craft_ui::controls::alt_text::AltTextField"
+new = "craft_ui::text::AltTextField"
+status = "moved"
+note = "A `Component` with a text part (the description box) and a faced check part, shown with `Show::show`; `AltTextField::new(label, Bind::bound(&mut alt))` replaces `new(id_salt, &mut alt)`. The label is the prompt that names the box, so `AltTextLabels::prompt` is the label and `AltTextLabels::alt_text`, `decorative` and `mixed` are the built-in `AltTextWords`. The output is `EditResponse<AltText>`; the whole `AltText` is the value, so the text and the flag arrive in one event. A mixed selection is `Bind::bound_mixed`, not `.mixed(bool)`; `enabled(bool)` is the `Props::enabled` setter; `labels(..)` is a words overlay of the scope; `style(tokens)` and `AltTextStyle` are gone."
+
+[[type]]
+name = "NumberField"
+old = "craft_ui::controls::number_field::NumberField"
+new = "craft_ui::text::NumberField"
+status = "moved"
+note = "A `Component`: `NumberField::new(label, Bind<Option<f64>>)`; the locale's digits, separators and units are the `NumberCodec` given to `.codec(..)`, and a blank field is `None`. `craft_ui::localized::NumberField` (deprecated) has the same replacement: its `LocaleNumbers` become a `NumberCodec` over a `quantity::Reader`. `show_full`, `show_optional` and `show_optional_full` are `show`; its `NumberOutput` is the edit response (through `Deref`) and `preset` and `typed_unit: Option<UnitKind>` (the unit the committed text named, `50 mm`, in the pass it commits; the value stays in the stored unit). The value type is `NumberValue` (default `Option<f64>`): `NumberField::named(label, Bind<V>)` over `text::NamedOr<K>` (`Named(K)` or `Number(f64)`, `K: NumberName` tied to the `NumberPick::Choice` ids of `.presets(..)`) holds a name from the dropdown or a typed number, and typing a name's label reads as that name."
+
+[[type]]
+name = "ChipField"
+old = "craft_ui::controls::chips::ChipField"
+new = "craft_ui::text::ChipField"
+status = "replaced"
+note = "A `Component` over `Bind<Vec<String>>`: the value is the list of chip texts, with a draft text part after the chips. `ChipField::new(label, Bind::bound(&mut keywords))` replaces `new(id_salt, label, &chips)`; the host no longer maps `removed` to its own list, because adds and removes arrive as edit events of the value. The remove part is an `IconButton` face and the chip body a `Badge` face. Not ported: `max_lines` and the +N more menu, `clear_all`, per-chip `partial`, `full_name` and `removable`, `clicked`, `context_menu`, `cleared`, `ChipFieldLabels` (the remove word is `ChipWords::remove`), `size(..)` (the scope's control size) and `enabled(..)` (`Props::enabled`)."
+
+[[type]]
+name = "LinkedFields"
+old = "craft_ui::controls::linked::LinkedFields"
+new = "craft_ui::text::LinkedFields"
+status = "moved"
+note = "A `Component` over one `Bind<[Option<f64>; N]>` and a link `Bind<bool>`; the output is `LinkedOutput` (the values' `EditResponse` and the link's event). Captions are `.captions([..])`, ranges `.range(..)` and `.ranges([..])`, the link kind `.mode(LinkMode)`, the arrangement `.layout(LinkedLayout)`. Decimals and units are the `NumberField` codec's. `show_cells` and `LinkedSlot` are gone: place the fields yourself with `NumberField` and `link_toggle`."
+
+[[type]]
+name = "ApplyRow"
+old = "craft_ui::controls::mixed::ApplyRow"
+new = ""
+status = "removed"
+note = "Replaced by `sections::GroupBox::apply`, a container: `GroupBox::apply(label, Bind<bool>).show(ui, |ui, _| field)`, a `GroupBox` configuration with no frame and an inline gate header. The check box is in the header and the body is enabled while `apply` is on. The field binds a `Mixed<T>` itself."
+
+[[type]]
+name = "NumberFieldOutput"
+old = "craft_ui::controls::number_field::NumberFieldOutput"
+new = ""
+status = "removed"
+note = "Replaced by `NumberOutput`."
+
+[[type]]
+name = "NumberOutput"
+old = ""
+new = "craft_ui::text::NumberOutput"
+status = "replaced"
+note = "The edit response of the value is `.edit` (and derefs); `preset` is the `NumberPick` of a picked row: `Number(f64)` or `Choice(u32)`."
+
+[[type]]
+name = "Preset"
+old = "craft_ui::controls::number_field::Preset"
+new = ""
+status = "removed"
+note = "Replaced by `craft_ui::contract::Entry<NumberPick>`: `Entry::new(NumberPick::Number(n), label)`, `Entry::new(NumberPick::Choice(id), label).checked(bool)` and `Entry::separator()`; labels are `Label`s. The rows go to `NumberField::presets(&[Entry<NumberPick>])`."
+
+[[type]]
+name = "PresetSource"
+old = "craft_ui::controls::number_field::PresetSource"
+new = ""
+status = "removed"
+note = "Private in legacy; the three preset builders it served (`presets(&[(label, value)])`, `preset_rows`, `preset_list`) are one `presets(&[Entry<NumberPick>])`."
+
+[[type]]
+name = "FieldRule"
+old = "craft_ui::controls::number_field::FieldRule"
+new = ""
+status = "removed"
+note = "The field applies its range and step itself. A composite that replayed `apply` with a rule shows a `NumberField` per value instead."
+
+[[type]]
+name = "LocalizedDragValue"
+old = "craft_ui::localized::LocalizedDragValue"
+new = ""
+status = "replaced"
+note = "Deprecated drag value; use `NumberField::new(label, bind).scrub_by_label()` with a `NumberCodec` for the locale."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[type]]
+name = "AltText"
+old = "craft_ui::controls::alt_text::AltText"
+new = "craft_ui::text::AltText"
+status = "moved"
+note = "`#[non_exhaustive]`: build it with `AltText::new(text)` and `.decorative(bool)`. `starts_decorative(flags)` is `AltText::starts_decorative(flags)`."
+
+[[type]]
+name = "starts_decorative"
+old = "craft_ui::controls::alt_text::starts_decorative"
+new = ""
+status = "replaced"
+note = "Use the associated function `AltText::starts_decorative`."
+
+[[type]]
+name = "Chip"
+old = "craft_ui::controls::chips::Chip"
+new = ""
+status = "removed"
+note = "A chip is its text, an entry of the field's `Vec<String>`. Keywords that only some of a selection have, a shortened label with a full name and a chip with no remove part have no counterpart."
+
+[[type]]
+name = "ChipFieldResponse"
+old = "craft_ui::controls::chips::ChipFieldResponse"
+new = ""
+status = "replaced"
+note = "`ChipField` returns `EditResponse<Vec<String>>`: `removed` and a typed add are the new list in the response's event. `clicked`, `context_menu` and `cleared` are not reported."
+
+[[type]]
+name = "chip_lines"
+old = "craft_ui::controls::chips::chip_lines"
+new = ""
+status = "removed"
+note = "The field flows its own chips; a host that laid chips out itself places chip rows with `Flow`."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[type]]
+name = "LinkMode"
+old = "craft_ui::controls::linked::LinkMode"
+new = "craft_ui::text::LinkMode"
+status = "moved"
+
+[[type]]
+name = "LinkedLayout"
+old = "craft_ui::controls::linked::LinkedLayout"
+new = "craft_ui::text::LinkedLayout"
+status = "moved"
+
+[[type]]
+name = "LinkedSlot"
+old = "craft_ui::controls::linked::LinkedSlot"
+new = ""
+status = "removed"
+note = "`show_cells` is gone; a host that lays the fields out itself shows `NumberField`s and `link_toggle`."
+
+[[type]]
+name = "LinkedFieldsLabels"
+old = "craft_ui::controls::linked::LinkedFieldsLabels"
+new = ""
+status = "replaced"
+note = "`craft_ui::text::LinkedWords` replaces it: the words of the link toggle are read from the installed words; `LinkMode::label(&words)` picks one."
+
+[[type]]
+name = "LinkButton"
+old = "craft_ui::controls::linked::LinkButton"
+new = ""
+status = "replaced"
+note = "`craft_ui::text::link_toggle(mode.label(&words), Bind<bool>)`, a `ToggleButton` face."
+
+[[type]]
+name = "MixedValue"
+old = "craft_ui::controls::mixed::MixedValue"
+new = ""
+status = "replaced"
+note = "`craft_behavior::Mixed`: `Mixed::Same(v)` or `Mixed::Mixed`; a field binds it with `Bind::given` or `Bind::bound_mixed`."
+
+[[type]]
+name = "ApplyValue"
+old = "craft_ui::controls::mixed::ApplyValue"
+new = ""
+status = "replaced"
+note = "A `Mixed<T>` for the value and a `bool` for apply: `GroupBox::apply` binds the bool, the field binds the `Mixed<T>`."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "TextField"
+old = "new(id_salt, label, &str)"
+new = "new(label, Bind<String>)"
+
+[[setter]]
+type = "TextField"
+old = "monospace()"
+new = "mono()"
+
+[[setter]]
+type = "TextField"
+old = "password(bool)"
+new = "masked()"
+
+[[setter]]
+type = "TextField"
+old = "secret(bool)"
+new = ""
+
+[[setter]]
+type = "TextField"
+old = "char_limit(usize)"
+new = "limit(usize)"
+
+[[setter]]
+type = "TextField"
+old = "multiline(rows)"
+new = "lines(usize)"
+
+[[setter]]
+type = "TextField"
+old = "enabled(bool)"
+new = "enabled(bool)"
+
+[[setter]]
+type = "TextField"
+old = "invalid(bool)"
+new = "Bind::check(..)"
+
+[[setter]]
+type = "TextField"
+old = "leading(Icon)"
+new = ""
+
+[[setter]]
+type = "TextField"
+old = "policy(EditPolicy)"
+new = ""
+
+[[setter]]
+type = "TextField"
+old = "size(ControlSize)"
+new = "size(ControlSize)"
+
+[[setter]]
+type = "TextField"
+old = "role(TypeRole)"
+new = ""
+
+[[setter]]
+type = "TextField"
+old = "keep_focus(bool)"
+new = ""
+
+[[setter]]
+type = "TextField"
+old = "edit_menu(bool)"
+new = ""
+
+[[setter]]
+type = "TextField"
+old = "width(f32)"
+new = ""
+
+[[setter]]
+type = "TextField"
+old = "trailing_arrow(bool)"
+new = ""
+
+[[setter]]
+type = "TextField"
+old = "layouter(..)"
+new = ""
+
+[[setter]]
+type = "TextField"
+old = "show_full(ui)"
+new = "show(ui)"
+
+[[setter]]
+type = "SearchField"
+old = "new(id_salt, label, &str, clear_label)"
+new = "TextField::search(label, Bind<String>)"
+
+[[setter]]
+type = "SearchField"
+old = "placeholder(..)"
+new = "TextField::placeholder(..)"
+
+[[setter]]
+type = "NumberField"
+old = "new(id_salt, label, value, numbers)"
+new = "new(label, Bind<Option<f64>>)"
+note = "`id_salt` is `Props::id_salt`; the locale is the codec; `optional(..)` is the same constructor with a `None` value."
+
+[[setter]]
+type = "NumberField"
+old = "with_id(Id)"
+new = "id_salt(..)"
+
+[[setter]]
+type = "NumberField"
+old = "width(f32)"
+new = ""
+note = "Removed: the width is the sample text, the unit and the chevrons."
+
+[[setter]]
+type = "NumberField"
+old = "labels(NumberFieldLabels)"
+new = ""
+note = "Removed: built-in words come from the word set."
+
+[[setter]]
+type = "NumberField"
+old = "range(RangeInclusive<V>)"
+new = "range(RangeInclusive<f64>)"
+
+[[setter]]
+type = "NumberField"
+old = "snap_typed(bool)"
+new = ""
+note = "Removed: a typed value is held to the range and kept as typed."
+
+[[setter]]
+type = "NumberField"
+old = "decimals(RangeInclusive<usize>)"
+new = "codec(NumberCodec::new(reader, decimals))"
+
+[[setter]]
+type = "NumberField"
+old = "commit_decimals(usize)"
+new = ""
+note = "Removed: a typed number keeps its digits."
+
+[[setter]]
+type = "NumberField"
+old = "unit(Unit)"
+new = "unit(impl Into<Label>)"
+note = "The text shown after the number. The spellings typed text may carry are `Reader::unit(spelling, factor)` on the codec."
+
+[[setter]]
+type = "NumberField"
+old = "unit_kind(UnitKind)"
+new = ""
+note = "Removed: units are the codec's."
+
+[[setter]]
+type = "NumberField"
+old = "or_parse(Fn)"
+new = "codec(..)"
+note = "Reading is the codec's."
+
+[[setter]]
+type = "NumberField"
+old = "expressions(bool)"
+new = ""
+note = "Removed: the reader always takes expressions on commit."
+
+[[setter]]
+type = "NumberField"
+old = "steps_with(Fn)"
+new = "stepper(Fn(f64, i32) -> f64)"
+note = "The function takes the value and the direction (1 up, -1 down) and returns the next value; arrows, Page keys and the wheel use it (`NumberStepper`)."
+
+[[setter]]
+type = "NumberField"
+old = "scrub_wrap(bool)"
+new = ""
+note = "Removed: a label scrub warps the pointer at the window edge where the platform can."
+
+[[setter]]
+type = "NumberField"
+old = "scrub_label(text)"
+new = ""
+note = "Removed: the scrub grip is the field's side label."
+
+[[setter]]
+type = "NumberField"
+old = "scrub_icon(Icon)"
+new = ""
+note = "Removed: the scrub grip is the field's side label."
+
+[[setter]]
+type = "NumberField"
+old = "scrub_by(&Response)"
+new = "scrub_by_label()"
+note = "A drag on the side label scrubs."
+
+[[setter]]
+type = "NumberField"
+old = "scrub_text(bool)"
+new = ""
+note = "Removed: text drags select; only the label scrubs."
+
+[[setter]]
+type = "NumberField"
+old = "scrub_rate(f64)"
+new = "step(f64)"
+note = "One point of label drag moves one step; Alt a tenth."
+
+[[setter]]
+type = "NumberField"
+old = "popup_slider(name)"
+new = "popup_slider(RangeInclusive<f64>)"
+note = "The slider runs over the given range and steps by `step`."
+
+[[setter]]
+type = "NumberField"
+old = "mixed(bool)"
+new = "Bind::bound_mixed(..)"
+
+[[setter]]
+type = "NumberField"
+old = "policy(EditPolicy)"
+new = ""
+note = "Removed: the edit policy is the pipeline's."
+
+[[setter]]
+type = "NumberField"
+old = "size(ControlSize)"
+new = "size(ControlSize)"
+note = "The `Props::size` setter."
+
+[[setter]]
+type = "NumberField"
+old = "enabled(bool)"
+new = "enabled(bool)"
+note = "The `Props::enabled` setter."
+
+[[setter]]
+type = "NumberField"
+old = "invalid(bool)"
+new = "Bind::check(..)"
+
+[[setter]]
+type = "NumberField"
+old = "max_chars(usize)"
+new = ""
+note = "Removed."
+
+[[setter]]
+type = "NumberField"
+old = "keep_focus(bool)"
+new = ""
+note = "Removed: Enter submits and the focus stays."
+
+[[setter]]
+type = "NumberField"
+old = "edit_menu(bool)"
+new = ""
+note = "Removed: the edit menu is the text part's."
+
+[[setter]]
+type = "NumberField"
+old = "unit_menu(entries, picked)"
+new = ""
+note = "Removed: a unit choice is `craft_ui::pickers::UnitSelect`, a `NumberField` with a `Select` of `Entry<UnitKind>` beside it."
+
+[[setter]]
+type = "NumberField"
+old = "presets(&[(String, f64)])"
+new = "presets(&[Entry<NumberPick>])"
+
+[[setter]]
+type = "NumberField"
+old = "preset_rows(labels, picked)"
+new = "presets(&[Entry<NumberPick>])"
+note = "Rows are `Entry::new(NumberPick::Choice(..), ..)`; the pick is `NumberOutput::preset`."
+
+[[setter]]
+type = "NumberField"
+old = "preset_list(rows, picked)"
+new = "presets(&[Entry<NumberPick>])"
+note = "The pick of a choice row is `NumberOutput::preset`."
+
+[[setter]]
+type = "NumberField"
+old = "part(bool)"
+new = ""
+note = "Removed: a composite shows the field as a child."
+
+[[setter]]
+type = "AltTextField"
+old = "new(id_salt, &mut AltText)"
+new = "new(label, Bind<AltText>)"
+
+[[setter]]
+type = "AltTextField"
+old = "mixed(bool)"
+new = "Bind::bound_mixed"
+
+[[setter]]
+type = "ChipField"
+old = "new(id_salt, label, &[Chip])"
+new = "new(label, Bind<Vec<String>>)"
+
+[[setter]]
+type = "ChipField"
+old = "max_lines(usize)"
+new = ""
+
+[[setter]]
+type = "LinkedFields"
+old = "LinkedFields::new(id_salt, captions, values, &mut linked, mode, &numbers)"
+new = "LinkedFields::new(label, Bind::bound(&mut values), Bind::bound(&mut linked)).captions(captions).mode(mode)"
+
+[[setter]]
+type = "LinkedFields"
+old = "units(&ExprUnits)"
+new = ""
+note = "The units and decimals are the number codec's."
+
+[[setter]]
+type = "LinkedFields"
+old = "decimals(RangeInclusive<usize>)"
+new = ""
+note = "The units and decimals are the number codec's."
+
+[[setter]]
+type = "LinkedFields"
+old = "captions_as_names()"
+new = ""
+note = "Without `.captions(..)` no caption is shown and each field is named from the group's label."
+
+[[setter]]
+type = "LinkedFields"
+old = "size(ControlSize)"
+new = ""
+note = "The size is the scope's `ControlSize`."
+
+[[setter]]
+type = "LinkedFields"
+old = "labels(LinkedFieldsLabels)"
+new = ""
+note = "Words come from the installed `LinkedWords`."
+
+[[setter]]
+type = "ApplyRow"
+old = "ApplyRow::new(id_salt, label, &mut apply_value).show(ui, |ui, value| ..)"
+new = "GroupBox::apply(label, Bind::bound(&mut apply)).show(ui, |ui, _| ..)"
+note = "The group no longer owns the value: the field in the body binds its own `Mixed<T>`."
+
+[[setter]]
+type = "ApplyRow"
+old = "labels(ApplyRowLabels)"
+new = ""
+note = "The mixed text is the field's placeholder."
+
+
+[[setter]]
+type = "TextField"
+old = "raw `consume_key(ArrowDown)` beside a filter field"
+new = "drives(Id)"
+note = "The field names the collection that takes its list keys: the id the collection is built with (`Props::id`). Up, Down, Page Up, Page Down and Enter go to it; Home and End go to it while the field is empty, and Left and Right too when the collection is a tree (the item step records each collection's navigation shape)."

@@ -100,6 +100,32 @@ fn make(algorithm: Algorithm, user: &str, owner: &str) -> SecurityHandler {
     .unwrap()
 }
 
+/// The handler for `user` / `owner` per algorithm, derived once: AES-256's key derivation is
+/// slow and these properties draw the same file for every case.
+fn standard(algorithm: Algorithm) -> &'static SecurityHandler {
+    use std::sync::OnceLock;
+    static CACHE: [OnceLock<SecurityHandler>; 4] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
+    let slot = match algorithm {
+        Algorithm::Rc4_40 => 0,
+        Algorithm::Rc4_128 => 1,
+        Algorithm::Aes128 => 2,
+        Algorithm::Aes256 => 3,
+    };
+    CACHE[slot].get_or_init(|| make(algorithm, "user", "owner"))
+}
+
+/// A file with no user password and the owner password `owner`, AES-256, derived once.
+fn open_aes256() -> &'static SecurityHandler {
+    static HANDLER: std::sync::OnceLock<SecurityHandler> = std::sync::OnceLock::new();
+    HANDLER.get_or_init(|| make(Algorithm::Aes256, "", "owner"))
+}
+
+/// Cases for the expensive properties (each case creates a file and runs a password hash per
+/// password it tries): `gate` cases at the gate, `full` nightly (hostile-input divisor 1).
+fn cases(full: u32, gate: u32) -> ProptestConfig {
+    ProptestConfig::with_cases(if craft_testkit::hostile::divisor() == 1 { full } else { gate })
+}
+
 proptest! {
     /// Encrypting then decrypting returns the input at every length, as a string and as each kind
     /// of stream — and is byte-for-byte reproducible, because re-running a save must not silently
@@ -107,7 +133,7 @@ proptest! {
     /// need an all-zero keystream to leave them alone, and CBC cannot shrink a padded block.
     #[test]
     fn content_survives_the_trip_at_every_length(alg in algorithms(), data in payloads()) {
-        let h = make(alg, "user", "owner");
+        let h = standard(alg);
 
         // The key width each algorithm promises: 5 bytes for export-grade 40-bit RC4, 16 for
         // AES-128 and RC4-128, 32 for AES-256. `key_len` is the only place that decides this and
@@ -116,7 +142,7 @@ proptest! {
         let want_len = match alg { Algorithm::Rc4_40 => 5, Algorithm::Aes128 | Algorithm::Rc4_128 => 16, Algorithm::Aes256 => 32 };
         prop_assert_eq!(h.file_key().len(), want_len, "{:?} must use a {} byte file key", alg, want_len);
 
-        let h = make(alg, "user", "owner");
+        let h = standard(alg);
         for num in [0u32, 1, 4096, u32::MAX] {
             let generation = (num % 65_535) as u16;
 
@@ -143,7 +169,7 @@ proptest! {
     /// whatever the bytes are. An input shorter than the IV has nothing left to decode.
     #[test]
     fn damaged_ciphertext_never_panics(alg in algorithms(), enc in prop::collection::vec(any::<u8>(), 0..64)) {
-        let h = make(alg, "user", "owner");
+        let h = standard(alg);
         for cut in 0..=enc.len() {
             let broken = &enc[..cut];
             let out = h.decrypt_string(7, 3, broken);
@@ -180,7 +206,7 @@ proptest! {
         name in prop::sample::select(vec!["Identity", "StdCF", "Nope"]),
         bogus_identity_in_cf in any::<bool>(),
     ) {
-        let mut d = make(Algorithm::Aes256, "", "owner").dict().clone();
+        let mut d = open_aes256().dict().clone();
         d.str_f = name.as_bytes().to_vec();
         d.stm_f = b"Identity".to_vec();
         d.ef_f = b"StdCF".to_vec();
@@ -223,7 +249,7 @@ proptest! {
     /// differs would prove less, because our initial vector already covers `/Num`.
     #[test]
     fn object_keys_are_scoped_to_their_object(alg in prop::sample::select(vec![Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128]), data in prop::collection::vec(any::<u8>(), 8..40)) {
-        let h = make(alg, "user", "owner");
+        let h = standard(alg);
 
         let enc = h.encrypt_string(100, 0, &data);
         prop_assert_eq!(h.decrypt_string(100, 0, &enc), &data[..], "{:?} reads its own object back", alg);
@@ -240,7 +266,7 @@ proptest! {
         prop_assert_ne!(&h.decrypt_string(1 << 23, 0, &low)[..], &data[..], "{:?}: the third byte of /Num must still reach the key", alg);
         prop_assert_eq!(&h.decrypt_string(1 << 24, 0, &low)[..], &data[..], "{:?}: /Num is folded three bytes wide, so a difference above bit 23 shares the key by design", alg);
 
-        let r6 = make(Algorithm::Aes256, "user", "owner");
+        let r6 = standard(Algorithm::Aes256);
         let enc6 = r6.encrypt_string(100, 0, &data);
         prop_assert_eq!(&r6.decrypt_string(101, 3, &enc6)[..], &data[..], "AES-256 uses the file key for every object (§7.6.3.3)");
         // ...which is exactly why the initial vector has to vary: revisions 5 and 6 reuse one key
@@ -251,6 +277,10 @@ proptest! {
         prop_assert_ne!(&r6.encrypt_string(100, 1, &data)[..], &enc6[..], "AES-256 reused the same initial vector across generations");
     }
 
+}
+
+proptest! {
+    #![proptest_config(cases(256, 3))]
     /// A file created for `user` and `owner` opens for exactly the passwords whose effective bytes
     /// equal one of theirs, and reports the role that match earned — owner first, since viewers try
     /// `/O` before `/U`. Everything else is `WrongPassword`: never an opening, and no panic on odd
@@ -308,6 +338,7 @@ proptest! {
         suspects.push(collision_partner.clone());
         suspects.dedup();
 
+        let user_session = SecurityHandler::open(d.clone(), ID, Some(&user)).ok();
         for suspect in &suspects {
             let want = expected_auth(alg, &user_bytes, &owner_bytes, suspect);
             match (want, SecurityHandler::open(d.clone(), ID, Some(suspect))) {
@@ -324,7 +355,7 @@ proptest! {
             // The owner password upgrades a user session; nothing else does. When the two share
             // bytes, `create` gave /O the user's own bytes (revisions 2–4) or left it empty
             // (AES-256, pdfcraft #1185's sharp edge), so the open password *is* an owner password here.
-            if let Ok(session) = SecurityHandler::open(d.clone(), ID, Some(&user)) {
+            if let Some(session) = &user_session {
                 let is_owner_password = expected_auth(alg, &user_bytes, &owner_bytes, suspect) == Some(Auth::Owner);
                 let upgrade = session.authenticate_owner(ID, suspect).map(|u| u.auth());
                 if is_owner_password {
@@ -347,6 +378,9 @@ proptest! {
         }
     }
 
+}
+
+proptest! {
     /// The AES-CBC and RC4 primitives taken directly: a damaged file's `/Length` and crypt filters
     /// hand them keys and data of shapes `create` would never build, so they must invert each other
     /// for any key length (`Cipher::new` takes AES-256 at 32 bytes and zero-padded AES-128 below
@@ -377,6 +411,10 @@ proptest! {
         prop_assert_eq!(rc4(&[], &data), &data[..], "an empty RC4 key passes bytes through");
     }
 
+}
+
+proptest! {
+    #![proptest_config(cases(256, 5))]
     /// `/Perms` certifies the permission bits and `/EncryptMetadata`: decrypted with the file key it
     /// must hold `/P` little-endian, four set bytes, 'T' or 'F', and the `adb` sentinel (Algorithm 10).
     /// Nothing else in this crate reads it — `cos` writes it out and no code takes it back apart — so
@@ -410,22 +448,15 @@ proptest! {
         prop_assert_eq!(as_user.permissions().copy(), normalised & 0b1_0000 != 0, "/P bit 5 decides copying");
         prop_assert!(!as_user.permissions().owner, "the user password must not report owner rights");
 
-        // Bytes 13-16 of /Perms are the non-repeating filler. Nothing reads them, so pinning that
-        // they move with the seed is the only way to notice a producer that freezes them at zero.
-        let other = create(
-            &NewEncryption { algorithm: Algorithm::Aes256, user_password: "user", owner_password: "owner", permissions, encrypt_metadata, seed: [0x11; 32] },
-            ID,
-        )
-        .unwrap();
-        let open_other = aes_cbc_decrypt(other.file_key(), &[0u8; 16], &other.dict().perms, false);
-        prop_assert_ne!(&open[12..16], &open_other[12..16], "the four filler bytes of /Perms must follow the seed, not sit constant");
-
         // Revisions below 5 carry no /Perms; pinned so the boundary of what we emit is explicit.
         for older in [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128] {
-            let legacy = make(older, "user", "owner");
+            let legacy = standard(older);
             prop_assert!(legacy.dict().perms.is_empty(), "{:?} must emit no /Perms", older);
         }
     }
+}
+
+proptest! {
     /// Revisions 4 mix four set bytes into every file key when `/EncryptMetadata` is false (Algorithm
     /// 2, step f), so the same password over the same `/ID` must produce a *different* key than when
     /// metadata is encrypted. Every other test in this crate builds `encrypt_metadata: true` only,
@@ -465,4 +496,26 @@ proptest! {
         prop_assert!(legacy.dict().encrypt_metadata && legacy.encrypts_metadata(), "V<4 always encrypts metadata, as create() documents");
     }
 
+}
+
+/// Bytes 13-16 of `/Perms` are the non-repeating filler. Nothing reads them, so pinning that
+/// they move with the seed is the only way to notice a producer that freezes them at zero.
+#[test]
+fn perms_filler_follows_the_seed() {
+    let perms = |seed: u8| {
+        let h = create(
+            &NewEncryption {
+                algorithm: Algorithm::Aes256,
+                user_password: "user",
+                owner_password: "owner",
+                permissions: -1,
+                encrypt_metadata: true,
+                seed: [seed; 32],
+            },
+            ID,
+        )
+        .unwrap();
+        aes_cbc_decrypt(h.file_key(), &[0u8; 16], &h.dict().perms, false)
+    };
+    assert_ne!(&perms(0x5e)[12..16], &perms(0x11)[12..16], "the four filler bytes of /Perms must follow the seed, not sit constant");
 }

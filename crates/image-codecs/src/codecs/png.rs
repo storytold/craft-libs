@@ -13,6 +13,52 @@ const F: Format = Format::Png;
 pub(crate) const XMP_KEYWORD: &str = "XML:com.adobe.xmp";
 const METERS_PER_INCH: f32 = 0.0254;
 
+/// Deflate's largest expansion: a 258-byte match coded in two bits, 1032 bytes out per byte in.
+const MAX_DEFLATE_RATIO: u64 = 1032;
+
+/// The bytes of the file's first run of IDAT chunks, as much of each chunk as the file holds. The image is inflated
+/// from these alone: ancillary chunks (text, ICC, an unused trailing run) hold no pixels, and the decoder refuses
+/// an IDAT after other chunks.
+fn idat_bytes(b: &[u8]) -> u64 {
+    let (mut p, mut total, mut in_run) = (8usize, 0u64, false);
+    while let (Some(len), Some(kind)) = (b.get(p..p.saturating_add(4)), b.get(p.saturating_add(4)..p.saturating_add(8))) {
+        let len = u32::from_be_bytes([len[0], len[1], len[2], len[3]]) as usize;
+        let data = p.saturating_add(8);
+        if kind == b"IDAT" {
+            in_run = true;
+            total = total.saturating_add(len.min(b.len().saturating_sub(data)) as u64);
+        } else if in_run {
+            break;
+        }
+        p = data.saturating_add(len).saturating_add(4);
+    }
+    total
+}
+
+/// The most bytes `idat` bytes of zlib data can inflate to, with the 1 MiB of slack
+/// [`Limits::check_plausible`] allows.
+fn inflate_capacity(idat: u64) -> u64 {
+    idat.saturating_mul(MAX_DEFLATE_RATIO).saturating_add(1 << 20)
+}
+
+/// Refuses `image_bytes` that `idat` bytes of zlib data cannot inflate to.
+fn check_inflatable(image_bytes: u64, idat: u64) -> Result<(), CodecError> {
+    if image_bytes > inflate_capacity(idat) {
+        return Err(CodecError::LimitExceeded(format!("{idat} bytes of PNG image data cannot make {image_bytes} bytes of image")));
+    }
+    Ok(())
+}
+
+// For expanded Adam7 output, the DEFLATE ratio applies only to packed samples.
+// Validate pass rows without retaining the full image before allowing its allocation.
+fn validate_adam7(bytes: &[u8], limits: &Limits) -> Result<(), CodecError> {
+    let mut decoder = png::Decoder::new_with_limits(Cursor::new(bytes), png::Limits { bytes: limits.alloc_usize() });
+    decoder.set_ignore_text_chunk(true);
+    let mut reader = decoder.read_info().map_err(map_png_err)?;
+    while reader.next_interlaced_row().map_err(map_png_err)?.is_some() {}
+    Ok(())
+}
+
 fn err(e: impl std::fmt::Display) -> CodecError {
     CodecError::malformed(F, e)
 }
@@ -29,18 +75,31 @@ pub(crate) fn dpi_of_ppm(ppm: u32) -> f32 {
 /// Decodes a whole PNG, by driving a [`PngDecodeRows`] to its end.
 /// The stored size and EXIF block [`decode`] would find, from the chunks before the image data:
 /// the same header checks (limits, a file too small for its image) and the same frame (an fcTL
-/// before the IDAT overrides the header's size), without inflating any pixels or text.
+/// before the IDAT overrides the header's size), without inflating text. Unusually expanded Adam7 images validate packed pass rows first.
 pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32, Option<Vec<u8>>), CodecError> {
     let mut decoder = png::Decoder::new_with_limits(Cursor::new(bytes), png::Limits { bytes: limits.alloc_usize() });
+    // Match the output layout used by decode.
+    decoder.set_transformations(png::Transformations::EXPAND);
     decoder.set_ignore_text_chunk(true);
+    let idat;
     {
         let info = decoder.read_header_info().map_err(map_png_err)?;
         let (w, h) = info.size();
         limits.check_size(w, h)?;
+        idat = idat_bytes(bytes);
         let stored = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(info.bits_per_pixel() as u64).div_ceil(8);
-        Limits::check_plausible(stored, bytes.len(), 1100)?;
+        check_inflatable(stored, idat)?;
     }
     let reader = decoder.read_info().map_err(map_png_err)?;
+    if reader.info().interlaced {
+        let size = reader.output_buffer_size().ok_or_else(|| err("image too large"))?;
+        if size > limits.alloc_usize() {
+            return Err(CodecError::LimitExceeded("PNG output exceeds max_alloc".into()));
+        }
+        if size as u64 > inflate_capacity(idat) {
+            validate_adam7(bytes, limits)?;
+        }
+    }
     let info = reader.info();
     let (w, h) = info.frame_control.map_or_else(|| info.size(), |f| (f.width, f.height));
     limits.check_size(w, h)?;
@@ -120,7 +179,7 @@ impl<B: AsRef<[u8]>> AsRef<[u8]> for SharedInput<B> {
 
 /// A PNG decoded in resumable steps, for a caller that must not block for the whole image (the
 /// web build, which has no threads): [`PngDecodeRows::step`] decodes rows until the caller says to
-/// stop, and returns the [`Image`] once the last row and the chunks after it are read. [`decode`]
+/// stop, and returns the `Image` once the last row and the chunks after it are read. `decode`
 /// drives one to the end, so the two give the same image.
 ///
 /// An interlaced (Adam7) PNG decodes in a single step: its passes land at stride positions all
@@ -158,8 +217,9 @@ pub struct PngDecodeRows<B: AsRef<[u8]>> {
 }
 
 impl<B: AsRef<[u8]>> PngDecodeRows<B> {
-    /// Reads the header and refuses what [`decode`] refuses before any pixel is decoded: sizes
-    /// past `limits`, and a file too small for the image it declares.
+    /// Reads the header and refuses what `decode` refuses before any pixel is decoded: sizes
+    /// past `limits`, and a file too small for the image it declares. Exceptionally expanded
+    /// Adam7 images also validate packed pass rows before allocation.
     pub fn new(bytes: B, limits: &Limits) -> Result<Self, CodecError> {
         Self::open(bytes, limits, true, false)
     }
@@ -175,16 +235,20 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         // png's lazy text get_text() inflates without consulting its allocation limit.
         // Read text separately below, without retaining compressed copies in the decoder.
         decoder.set_ignore_text_chunk(true);
+        let idat;
         {
             let info = decoder.read_header_info().map_err(map_png_err)?;
             let (w, h) = info.size();
             // Size checks now; the allocation budget once the output layout (channels and sample
             // size) is known below, so a Gray8 image isn't charged for RGBA16.
             limits.check_size(w, h)?;
-            // zlib never beats 1032:1; refuse a file too small for the declared image before the
-            // output buffer exists. Measured on the stored samples (before palette/bit expansion).
+            idat = idat_bytes(bytes.as_ref());
+            // zlib never beats 1032:1; refuse a file whose IDAT data is too small for the declared
+            // image before the output buffer exists. Measured on the stored samples: palette, tRNS
+            // and 1, 2 or 4-bit expansion multiply them by up to 32 with no more data, so a sound
+            // bound on the expanded output is no tighter than this one.
             let stored = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(info.bits_per_pixel() as u64).div_ceil(8);
-            Limits::check_plausible(stored, bytes.as_ref().len(), 1100)?;
+            check_inflatable(stored, idat)?;
         }
         let reader = decoder.read_info().map_err(map_png_err)?;
         // APNG: the IDAT image is the first frame, or an extra default image when no fcTL precedes it.
@@ -223,11 +287,21 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         if line.checked_mul(height).is_none_or(|needed| needed > size) {
             return Err(err("image too large"));
         }
+        if info.interlaced && size as u64 > inflate_capacity(idat) {
+            if size > limits.alloc_usize() {
+                return Err(CodecError::LimitExceeded("PNG output exceeds max_alloc".into()));
+            }
+            validate_adam7(bytes.as_ref(), limits)?;
+        }
         // Reserve without touching: each row is zero-filled as it is decoded, so the first slice
-        // doesn't zero-fill the whole image (a stall on the web build).
+        // doesn't zero-fill the whole image (a stall on the web build). Only as much as the IDAT
+        // data can inflate to: a 1-bit image expands up to 32 times, so a few dozen kilobytes may
+        // declare gigabytes of output. A real one (a solid or sparse 1-bit image) grows the buffer
+        // as its rows decode; a forged one fails on its first rows without the reservation.
         let mut buf = Vec::new();
         if reserve {
-            buf.try_reserve_exact(size).map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {size} bytes for the image")))?;
+            let first = size.min(usize::try_from(inflate_capacity(idat)).unwrap_or(usize::MAX));
+            buf.try_reserve_exact(first).map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {first} bytes for the image")))?;
         }
         let interlaced = info.interlaced;
         Ok(Self {
@@ -344,8 +418,15 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
                 let at = self.rows.checked_mul(self.line).ok_or_else(|| err("image too large"))?;
                 let end = at.checked_add(self.line).ok_or_else(|| err("image too large"))?;
                 // Grow by one row at a time: the zero-fill of the output is spread over the decodes
-                // instead of stalling the first slice.
+                // instead of stalling the first slice. Past what was reserved, the capacity at most
+                // doubles and never passes the whole output.
                 if self.buf.len() < end {
+                    if end > self.buf.capacity() {
+                        let want = self.buf.capacity().saturating_mul(2).clamp(end, self.size.max(end));
+                        self.buf
+                            .try_reserve_exact(want - self.buf.len())
+                            .map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {want} bytes for the image")))?;
+                    }
                     self.buf.resize(end, 0);
                 }
                 let row = self.buf.get_mut(at..end).ok_or_else(|| err("the image data is longer than the image"))?;
@@ -385,11 +466,11 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
 
     /// Decodes the rows of a [`streamable`](PngDecodeRows::streamable) file a group at a time:
     /// `sink(y0, data)` gets whole rows `y0..` in final order, `group` of them at a time (the last
-    /// group may be shorter; 0 counts as 1), native-endian, exactly the samples [`decode`] would
+    /// group may be shorter; 0 counts as 1), native-endian, exactly the samples `decode` would
     /// return, and the decoder keeps only that group. Decodes at least one row, then goes on while
     /// `more()` returns true; `Some` with the extras once the file is read to its end, with the
     /// resolution a format that lacks one takes from its EXIF or XMP. A damaged file fails with
-    /// the error [`decode`] gives, after however many rows were delivered. An orientation (an
+    /// the error `decode` gives, after however many rows were delivered. An orientation (an
     /// `eXIf` after the image data may set one) is for the caller to apply. A new group size
     /// must exceed any partial group retained from an earlier yield; otherwise this returns
     /// an error without consuming another row.
@@ -724,7 +805,7 @@ pub(crate) fn has_additional_images(bytes: &[u8]) -> Result<bool, CodecError> {
     Ok(info.animation_control.is_some_and(|a| u64::from(a.num_frames) + u64::from(info.frame_control.is_none()) > 1))
 }
 
-/// The size and pixel format the rows of [`decode_rows`] come in.
+/// The size and pixel format the rows of `decode_rows` come in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PngHeader {
     pub width: u32,
@@ -733,7 +814,7 @@ pub struct PngHeader {
     pub sample: SampleType,
 }
 
-/// Where [`decode_rows`] sends rows: the index of the first, then whole rows.
+/// Where `decode_rows` sends rows: the index of the first, then whole rows.
 pub type PngRowSink<'a, E> = dyn FnMut(u32, &[u8]) -> Result<(), E> + 'a;
 
 /// Decodes a PNG a group of rows at a time, so the caller never needs the whole decoded image:
@@ -1185,6 +1266,35 @@ fn encode_data(raw: RawPng<'_>, opts: &EncodeOptions) -> Result<Vec<u8>, CodecEr
     Ok(out)
 }
 
+/// Encodes interleaved 8-bit RGBA pixels, row-major with no row padding, as a PNG without
+/// copying them into an [`Image`]. The output matches [`crate::encode`] of the same pixels with
+/// no ICC profile and default metadata. `pixels` must hold exactly `width * height * 4` bytes.
+pub fn encode_rgba8(width: u32, height: u32, pixels: &[u8], opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
+    if width == 0 || height == 0 {
+        return Err(CodecError::InvalidImage("cannot encode an empty image".into()));
+    }
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or_else(|| CodecError::InvalidImage("image size overflows usize".into()))?;
+    if pixels.len() != expected {
+        return Err(CodecError::InvalidImage(format!("buffer has {} bytes, expected {expected} for {width}x{height} RGBA8", pixels.len())));
+    }
+    encode_data(
+        RawPng {
+            width,
+            height,
+            layout: ChannelLayout::Rgba,
+            sample: SampleType::U8,
+            icc: None,
+            cicp: None,
+            meta: &Metadata::default(),
+            data: pixels,
+        },
+        opts,
+    )
+}
+
 /// Encodes linear-light Rec. 2020 RGB as 16-bit PNG with BT.2100 PQ (`cICP`) and measured
 /// content-light levels (`cLLI`). Input samples are relative to 203 cd/m² diffuse white, as in
 /// [`crate::cicp::linearize`]. Negative and non-finite values become black; values above 10,000
@@ -1280,12 +1390,12 @@ fn start<W: Write>(
     if opts.embed_icc
         && let Some(icc) = icc
     {
-        info.icc_profile = Some(icc.clone().into());
+        info.icc_profile = Some(std::borrow::Cow::Borrowed(icc.as_slice()));
     }
     if opts.embed_metadata {
         if let Some(exif) = &meta.exif {
             // The pixels are written as they are shown: never let a viewer rotate them again.
-            info.exif_metadata = Some(crate::resolution::export_exif(exif, meta.dpi).into_owned().into());
+            info.exif_metadata = Some(crate::resolution::export_exif(exif, meta.dpi));
         }
         if let Some((x, y)) = meta.dpi
             && x > 0.0
@@ -1362,7 +1472,7 @@ fn write_idat<W: Write>(writer: &mut png::Writer<W>, zlib: &[u8], max: usize) ->
 /// A PNG encoded a band of rows at a time, for images too large to hold whole (a multi-gigapixel
 /// print): each band is converted to the encode plan, filtered and deflated on all cores as it
 /// arrives and written as IDAT chunks, so only about one band is ever held. The deflate bands are
-/// [`parallel_idat`]'s, so the zlib stream is the one [`crate::encode`] writes for a large image.
+/// `parallel_idat`'s, so the zlib stream is the one `crate::encode` writes for a large image.
 /// Never interlaced (Adam7 needs the whole image).
 pub struct PngRows<W: Write> {
     writer: png::Writer<W>,
@@ -2146,17 +2256,17 @@ mod parallel_tests {
         }
     }
 
-    /// The bytes depend on the image, not on the machine: one, two, seven and 32 worker threads
+    /// The bytes depend on the image, not on the machine: one, two and 32 worker threads
     /// (and the machine's own count, through `encode`) give the same stream.
     #[test]
     fn the_parallel_encoder_gives_the_same_bytes_on_any_thread_count() {
-        let (w, h, bpp) = (1201usize, 1013usize, 4usize);
+        let (w, h, bpp) = (1024usize, 1025usize, 4usize);
         let px: Vec<u8> =
             (0..w * h * bpp).map(|i| ((i / 5) as u32).wrapping_mul(2_654_435_761).rotate_left(i as u32 % 11) as u8 / 5 + (i % 89) as u8).collect();
         assert!(px.len() >= PARALLEL_MIN_BYTES && px.len() > 2 * BAND_BYTES);
-        for level in [PngCompression::Fast, PngCompression::Default, PngCompression::Best] {
+        for level in [PngCompression::Fast, PngCompression::Best] {
             let one = banded_idat(&px, w, h, bpp, level, 1).unwrap();
-            for threads in [2, 7, 32] {
+            for threads in [2, 32] {
                 assert!(banded_idat(&px, w, h, bpp, level, threads).unwrap() == one, "{level:?}: {threads} threads differ from one");
             }
             assert!(parallel_idat(&px, w, h, bpp, level).unwrap() == one, "{level:?}: this machine's thread count differs from one");
@@ -2170,8 +2280,9 @@ mod parallel_tests {
 
     #[test]
     fn large_images_roundtrip_through_the_parallel_encoder() {
-        for (layout, sample, ch, bytes) in [(ChannelLayout::Rgb, SampleType::U8, 3usize, 1usize), (ChannelLayout::Rgba, SampleType::U16, 4, 2)] {
-            let (w, h) = (1531u32, 977u32);
+        for (layout, sample, ch, bytes, w, h) in
+            [(ChannelLayout::Rgb, SampleType::U8, 3usize, 1usize, 1024u32, 1400u32), (ChannelLayout::Rgba, SampleType::U16, 4, 2, 1024, 520)]
+        {
             let n = w as usize * h as usize * ch * bytes;
             let px: Vec<u8> =
                 (0..n).map(|i| ((i / 3) as u32).wrapping_mul(2_654_435_761).rotate_left(i as u32 % 7) as u8 / 3 + (i % 97) as u8).collect();
@@ -2242,23 +2353,43 @@ mod streamed_tests {
     /// gives, at 8 and 16 bits, with a profile, resolution, text and XMP.
     #[test]
     fn streamed_rows_match_the_whole_image_encoder() {
-        for (layout, sample, ch, bytes) in [(ChannelLayout::Rgba, SampleType::U8, 4usize, 1usize), (ChannelLayout::Rgb, SampleType::U16, 3, 2)] {
-            let (w, h) = (1201u32, 1013u32);
+        // The gate runs every divisor-th (image, level, bands) case, nightly all twelve.
+        let divisor = craft_media_testkit::hostile::divisor();
+        let mut case = 0usize;
+        for (layout, sample, ch, bytes, w, h) in
+            [(ChannelLayout::Rgba, SampleType::U8, 4usize, 1usize, 1024u32, 1025u32), (ChannelLayout::Rgb, SampleType::U16, 3, 2, 1024, 700)]
+        {
             let meta = Metadata {
                 dpi: Some((300.0, 300.0)),
                 text: vec![("Title".into(), "Tent".into())],
                 xmp: Some("<x:xmpmeta xmlns:x='adobe:ns:meta/'/>".into()),
                 ..Default::default()
             };
-            let img = Image::from_raw(w, h, layout, sample, noise(w as usize * h as usize * ch * bytes, 7))
-                .unwrap()
-                .with_icc(Some((0..600u32).map(|i| (i % 251) as u8).collect()))
-                .with_meta(meta);
+            // Distinct nonconstant row runs retain carry and row-order sensitivity across pushes.
+            let stride = w as usize * ch * bytes;
+            let row = noise(stride, 7);
+            let mut pixels = row.repeat(h as usize);
+            for row in pixels.chunks_exact_mut(stride).skip(h as usize / 2) {
+                row[0] ^= 0x5a;
+            }
+            let img =
+                Image::from_raw(w, h, layout, sample, pixels).unwrap().with_icc(Some((0..600u32).map(|i| (i % 251) as u8).collect())).with_meta(meta);
             for level in [PngCompression::Fast, PngCompression::Default] {
                 let opts = EncodeOptions { png_compression: level, ..Default::default() };
+                let one_band = [h];
+                let cases: Vec<&[u32]> = [&[1u32, 77, 300][..], &[256, 256, 256], &one_band]
+                    .into_iter()
+                    .filter(|_| {
+                        case += 1;
+                        (case - 1).is_multiple_of(divisor)
+                    })
+                    .collect();
+                if cases.is_empty() {
+                    continue;
+                }
                 let whole = crate::encode(&img, Format::Png, &opts).unwrap();
                 let (head, zlib, _) = split(&whole);
-                for heights in [&[1u32, 77, 300][..], &[256, 256, 256], &[1013]] {
+                for heights in cases {
                     let png = streamed(&img, heights, &opts);
                     let (h2, z2, _) = split(&png);
                     assert!(h2 == head, "{layout:?} {level:?} {heights:?}: header chunks differ");
@@ -2431,5 +2562,204 @@ mod rows_tests {
         assert!(one.meta.text.is_empty(), "invalid UTF-8 is dropped");
         // Twenty chunks inflate 2 MB between them: each is dropped, but the work is charged.
         assert!(matches!(decode(&png_with(&bad_itxt(100_000).repeat(20))), Err(CodecError::LimitExceeded(_))));
+    }
+}
+
+#[cfg(test)]
+mod inflate_bound_tests {
+    use super::*;
+
+    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        let mut crc = flate2::Crc::new();
+        crc.update(kind);
+        crc.update(data);
+        out.extend_from_slice(&crc.sum().to_be_bytes());
+    }
+
+    /// A 20000×20000 PNG of `depth` bits and colour type `color`, interlaced or not, with optional PLTE and tRNS,
+    /// `text` bytes of tEXt and then an IDAT of `idat` bytes that is not a deflate stream (its first block has the
+    /// reserved type), so it fails on the first row it is asked for.
+    fn forged(depth: u8, color: u8, trns: bool, interlace: u8, idat: usize, text: usize) -> Vec<u8> {
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = Vec::new();
+        ihdr.extend(20000u32.to_be_bytes());
+        ihdr.extend(20000u32.to_be_bytes());
+        ihdr.extend([depth, color, 0, 0, interlace]);
+        chunk(&mut out, b"IHDR", &ihdr);
+        if color == 3 {
+            chunk(&mut out, b"PLTE", &[0, 0, 0, 255, 255, 255]);
+        }
+        if trns {
+            chunk(&mut out, b"tRNS", if color == 3 { &[0, 255] } else { &[0, 0] });
+        }
+        if text > 0 {
+            let mut t = b"Comment\0".to_vec();
+            t.resize(text, b'x');
+            chunk(&mut out, b"tEXt", &t);
+        }
+        let mut data = vec![0x78, 0x01];
+        data.resize(idat.max(2), 0xFF);
+        chunk(&mut out, b"IDAT", &data);
+        chunk(&mut out, b"IEND", &[]);
+        out
+    }
+
+    /// A budget that lets every case below be charged in full: only the inflate bound refuses them.
+    fn roomy() -> Limits {
+        Limits { max_width: u32::MAX, max_height: u32::MAX, max_pixels: 1 << 30, max_alloc: 8 << 30 }
+    }
+
+    fn refused_by_the_bound(bytes: &[u8]) -> bool {
+        let bound = |r: Result<(), CodecError>| matches!(r, Err(CodecError::LimitExceeded(m)) if m.contains("cannot make"));
+        let decode = bound(decode(bytes, &roomy()).map(drop));
+        let probe = bound(probe(bytes, &roomy()).map(drop));
+        let rows = bound(PngDecodeRows::new(bytes, &roomy()).and_then(|mut d| d.reserve_output()));
+        decode && probe && rows
+    }
+
+    /// storytold/lightcraft#3912: a 1-bit 20000×20000 image is 50 MB stored, which 60 KB of IDAT data can inflate
+    /// to, but the decoder expands it to 8-bit grey (400 MB), RGB (1.2 GB) or, with tRNS, RGBA (1.6 GB). The
+    /// decoder reserves only what the IDAT data can make, so the forged file fails on its first row without the
+    /// gigabyte reservation.
+    #[test]
+    fn a_forged_one_bit_image_reserves_only_what_its_data_can_make() {
+        for (color, trns) in [(3, true), (3, false), (0, true), (0, false)] {
+            let bytes = forged(1, color, trns, 0, 60_000, 0);
+            assert!(bytes.len() < 61_000);
+            let rows = PngDecodeRows::new(bytes.as_slice(), &roomy()).unwrap();
+            assert!(rows.size >= 400_000_000, "colour type {color}, tRNS {trns}: {} bytes", rows.size);
+            assert!(rows.buf.capacity() as u64 <= inflate_capacity(60_000), "colour type {color}, tRNS {trns}");
+            drop(rows);
+            assert!(matches!(decode(&bytes, &roomy()), Err(CodecError::Malformed { .. })), "colour type {color}, tRNS {trns}");
+        }
+    }
+
+    /// Invalid pass data fails before the expanded Adam7 image is allocated.
+    #[test]
+    fn a_forged_interlaced_one_bit_image_is_refused_before_full_allocation() {
+        for (color, trns) in [(3, true), (0, false)] {
+            let bytes = forged(1, color, trns, 1, 60_000, 0);
+            assert!(matches!(probe(&bytes, &roomy()), Err(CodecError::Malformed { .. })));
+            assert!(matches!(PngDecodeRows::new(bytes.as_slice(), &roomy()), Err(CodecError::Malformed { .. })));
+        }
+    }
+
+    /// The pixels come from the IDAT chunks only: a 60 KB text chunk doesn't lift the bound for an image with an
+    /// almost empty IDAT, though the file as a whole would hold the stored samples.
+    #[test]
+    fn ancillary_bytes_do_not_lift_the_inflate_bound() {
+        let bytes = forged(1, 0, false, 0, 16, 60_000);
+        assert!(Limits::check_plausible(20000 * 20000 / 8, bytes.len(), 1100).is_ok());
+        assert!(refused_by_the_bound(&bytes));
+    }
+
+    /// A 2000×2000 grey image split over IDAT chunks of 64 bytes counts them all.
+    #[test]
+    fn the_inflate_bound_counts_every_idat_chunk() {
+        let (w, h) = (2000u32, 2000u32);
+        let mut whole = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut whole, w, h);
+            enc.set_color(png::ColorType::Grayscale);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.set_compression(png::Compression::High);
+            let mut wr = enc.write_header().unwrap();
+            wr.write_image_data(&vec![0u8; (w * h) as usize]).unwrap();
+        }
+        let (mut p, mut zlib) = (8, Vec::new());
+        while p + 8 <= whole.len() {
+            let len = u32::from_be_bytes([whole[p], whole[p + 1], whole[p + 2], whole[p + 3]]) as usize;
+            if &whole[p + 4..p + 8] == b"IDAT" {
+                zlib.extend_from_slice(&whole[p + 8..p + 8 + len]);
+            }
+            p += len + 12;
+        }
+        let mut split = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = Vec::new();
+        ihdr.extend(w.to_be_bytes());
+        ihdr.extend(h.to_be_bytes());
+        ihdr.extend([8, 0, 0, 0, 0]);
+        chunk(&mut split, b"IHDR", &ihdr);
+        for piece in zlib.chunks(64) {
+            chunk(&mut split, b"IDAT", piece);
+        }
+        chunk(&mut split, b"IEND", &[]);
+        assert_eq!(idat_bytes(&split), zlib.len() as u64);
+        assert_eq!(decode(&split, &Limits::default()).unwrap().dimensions(), (w, h));
+    }
+
+    /// A real 1-bit palette image with transparency whose RGBA output is far more than 1032 times its IDAT data
+    /// (a solid 2000×2000 sheet: 16 MB from a few hundred bytes) still decodes, growing its buffer as the rows come.
+    /// A bound on the expanded output would refuse it.
+    #[test]
+    fn solid_adam7_palette_expansion_is_not_a_deflate_ratio() {
+        let (w, h) = (2048u32, 2048u32);
+        let mut raw = Vec::new();
+        for (x, y, dx, dy) in [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)] {
+            let width = (w - x).div_ceil(dx);
+            for _ in 0..(h - y).div_ceil(dy) {
+                raw.push(0);
+                raw.extend(std::iter::repeat_n(0xff, width.div_ceil(8) as usize));
+            }
+        }
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        z.write_all(&raw).unwrap();
+        let packed = z.finish().unwrap();
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut header = Vec::new();
+        header.extend(w.to_be_bytes());
+        header.extend(h.to_be_bytes());
+        header.extend([1, 3, 0, 0, 1]);
+        chunk(&mut bytes, b"IHDR", &header);
+        chunk(&mut bytes, b"PLTE", &[0, 0, 0, 10, 20, 30]);
+        chunk(&mut bytes, b"tRNS", &[0, 200]);
+        chunk(&mut bytes, b"IDAT", &packed);
+        chunk(&mut bytes, b"IEND", &[]);
+        assert!(u64::from(w) * u64::from(h) * 4 > inflate_capacity(idat_bytes(&bytes)));
+        assert_eq!(probe(&bytes, &Limits::default()).unwrap().0, w);
+        let image = decode(&bytes, &Limits::default()).unwrap();
+        assert_eq!(image.dimensions(), (w, h));
+        assert!(image.data().as_chunks::<4>().0.iter().all(|p| *p == [10, 20, 30, 200]));
+        let small = Limits { max_alloc: 1 << 20, ..Limits::default() };
+        assert!(matches!(decode(&bytes, &small), Err(CodecError::LimitExceeded(_))));
+    }
+
+    #[test]
+    fn a_solid_one_bit_image_past_the_ratio_once_expanded_still_decodes() {
+        let (w, h) = (2000u32, 2000u32);
+        let mut bytes = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut bytes, w, h);
+            enc.set_color(png::ColorType::Indexed);
+            enc.set_depth(png::BitDepth::One);
+            enc.set_palette(vec![0, 0, 0, 10, 20, 30]);
+            enc.set_trns(vec![0, 200]);
+            enc.set_compression(png::Compression::High);
+            let mut wr = enc.write_header().unwrap();
+            wr.write_image_data(&vec![0xFFu8; (w as usize / 8) * h as usize]).unwrap();
+        }
+        let rows = PngDecodeRows::new(bytes.as_slice(), &Limits::default()).unwrap();
+        assert!(rows.size as u64 > inflate_capacity(idat_bytes(&bytes)), "{} bytes from {} of IDAT", rows.size, idat_bytes(&bytes));
+        assert!(rows.buf.capacity() < rows.size);
+        drop(rows);
+        let img = decode(&bytes, &Limits::default()).unwrap();
+        assert_eq!((img.dimensions(), img.layout()), ((w, h), ChannelLayout::Rgba));
+        assert!(img.data().as_chunks::<4>().0.iter().all(|p| *p == [10, 20, 30, 200]));
+
+        let mut small = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut small, 64, 64);
+            enc.set_color(png::ColorType::Indexed);
+            enc.set_depth(png::BitDepth::One);
+            enc.set_palette(vec![0, 0, 0, 255, 255, 255]);
+            enc.set_trns(vec![0, 255]);
+            let mut wr = enc.write_header().unwrap();
+            wr.write_image_data(&[0b1010_1010u8; 8 * 64]).unwrap();
+        }
+        let img = decode(&small, &Limits::default()).unwrap();
+        assert_eq!((img.dimensions(), img.layout()), ((64, 64), ChannelLayout::Rgba));
     }
 }

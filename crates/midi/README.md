@@ -16,14 +16,15 @@ app reads or writes them.
 - `Note`: pitch, note-on velocity, release velocity, channel, start and length in ticks.
 - `CtrlEvent`: a channel event at a tick: control change, pitch bend (centred, -8192..=8191),
   channel pressure, polyphonic pressure or program change.
-- `Sequence`: the notes and channel events of one track, with sorting, range queries and
+- `SysExEvent`: one F0 or F7 System Exclusive packet, with its tick and exact payload bytes.
+- `Sequence`: the notes, channel events and SysEx packets of one track, with sorting, range queries and
   duplicate removal.
 - `Smf`: the file: its format, its tracks (`SmfTrack`: a name and a `Sequence`) and the
   file-wide tempo, meter, marker and key-signature lists. `Smf::default()` is an empty format-1
   file.
 
 All ticks are at `PPQ` (960) per quarter note, whatever the file's division. The `serde` feature
-derives `Serialize` and `Deserialize` on `Note`, `CtrlEvent`, `CtrlKind` and `Sequence`.
+derives `Serialize` and `Deserialize` on `Note`, `CtrlEvent`, `CtrlKind`, `SysExEvent` and `Sequence`.
 
 ## Reading
 
@@ -34,9 +35,12 @@ derives `Serialize` and `Deserialize` on `Note`, `CtrlEvent`, `CtrlKind` and `Se
 - pairs note-ons with note-offs: running status, note-on with velocity 0 as note-off, overlapping
   notes of one pitch first in first out, an unmatched note-off ignored, a note still sounding at
   the end of its track closed there, a zero-length note given one tick;
-- folds the leading conductor track of a format-1 file (no notes, no channel events) into the
-  file-wide lists; its name is not kept;
-- skips unknown chunks, unknown meta events and System Exclusive events;
+- folds the leading conductor track of a format-1 file when it has no notes, channel events,
+  or SysEx packets. Its track name is discarded when folded. A leading track carrying setup
+  SysEx remains a track, with its name and packets, while tempo and meter stay file-wide.
+- retains F0 and F7 packets in `Sequence::sysex` with exact payloads and ticks, up to
+  `MAX_SYSEX_BYTES` (16 MiB) and 262,144 packets per file. The separate `source_timed` reader skips them.
+- skips unknown chunks and unknown meta events.
 - accepts a header track count that differs from the number of `MTrk` chunks and reads every
   chunk present.
 
@@ -73,6 +77,14 @@ meters, key signatures and markers, then one track per `SmfTrack`. When `smf.for
 pitch that overlap are trimmed so that the file reads back with the same starts, and of two that
 start together the longer is written. An invalid tempo, a meter denominator that is not a power
 of two, more than 65535 tracks or a gap beyond the 28-bit delta limit is an error.
+
+Same-tick events normally write as note-offs, SysEx, controllers, then note-ons.
+A split SysEx message opens after same-tick channel events and continues before channel
+events on later ticks. Same-tick packets from that track retain their order, including
+packets following the split. Interleaving a transmittable event within an actual split
+returns a write error, including when merging tracks. Exhausting continuation packets
+without a terminating F7 leaves the split open for this check. Meta events may appear between packets. A legacy
+F0 with no continuation is exported with its original payload and tick.
 
 ## Sources and clean room
 

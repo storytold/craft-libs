@@ -1,0 +1,43 @@
+{
+  "schema": "craft-design-theme",
+  "schema_version": 1,
+  "id": "craft.pro-light-gray",
+  "name": "Pro Light Gray",
+  "version": 1,
+  "variants": "light",
+  "contrast_intent": "standard",
+  "seeds": {
+    "accent": "#378ef0",
+    "neutral": "#b8b8b8",
+    "status": {
+      "bad": "#ec5b62",
+      "good": "#4e712e",
+      "info": "#378ef0",
+      "warn": "#e8b046"
+    }
+  },
+  "shape": null,
+  "light": {
+    "accent.soft": "#d0d0d0",
+    "accent.solid": "#378ef0",
+    "accent.text": "#004296",
+    "caption.close_hover": "#c42b1c",
+    "caption.close_text": "#ffffff",
+    "line.border": "#a0a0a0",
+    "line.control_edge": "#8c8c8c",
+    "line.divider": "#9e9e9e",
+    "line.knob_edge": "#282828",
+    "state.hover": "#c6c6c6",
+    "state.pressed": "#aaaaaa",
+    "state.selected": "#d4d4d4",
+    "surface.background": "#a8a8a8",
+    "surface.canvas": "#a0a0a0",
+    "surface.panel": "#b8b8b8",
+    "surface.shadow": "#00000046",
+    "surface.sunken": "#d6d6d6",
+    "text.faint": "#606060",
+    "text.muted": "#343434",
+    "text.normal": "#141414",
+    "text.on_accent": "#ffffff"
+  }
+}

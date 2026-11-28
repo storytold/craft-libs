@@ -2,10 +2,7 @@
 
 use alloc::vec::Vec;
 
-use super::{
-    AdaptiveTemplatePixel, RefinementTemplate, RegionBitmap, RegionSegmentInfo,
-    parse_refinement_at_pixels, parse_region_segment_info,
-};
+use super::{AdaptiveTemplatePixel, RefinementTemplate, RegionBitmap, RegionSegmentInfo, parse_refinement_at_pixels, parse_region_segment_info};
 use crate::ScratchBuffers;
 use crate::arithmetic_decoder::{ArithmeticDecoder, ArithmeticDecoderContext};
 use crate::bitmap::{Bitmap, WORD_BITS, WORD_SHIFT, Word};
@@ -14,25 +11,13 @@ use crate::error::{ParseError, RegionError, Result, bail};
 use crate::reader::Reader;
 
 /// Generic refinement region decoding procedure (6.3).
-pub(crate) fn decode(
-    header: &GenericRefinementRegionHeader<'_>,
-    reference: &Bitmap,
-    ctx: &mut ScratchBuffers,
-) -> Result<RegionBitmap> {
-    let mut region = Bitmap::new_with(
-        header.region_info.width,
-        header.region_info.height,
-        header.region_info.x_location,
-        header.region_info.y_location,
-        false,
-    )?;
+pub(crate) fn decode(header: &GenericRefinementRegionHeader<'_>, reference: &Bitmap, ctx: &mut ScratchBuffers) -> Result<RegionBitmap> {
+    let mut region =
+        Bitmap::new_with(header.region_info.width, header.region_info.height, header.region_info.x_location, header.region_info.y_location, false)?;
 
     decode_into(header, reference, &mut region, ctx)?;
 
-    Ok(RegionBitmap {
-        bitmap: region,
-        combination_operator: header.region_info.combination_operator,
-    })
+    Ok(RegionBitmap { bitmap: region, combination_operator: header.region_info.combination_operator })
 }
 
 /// Decode a generic refinement region directly into an existing bitmap.
@@ -62,8 +47,7 @@ pub(crate) fn decode_into(
     let mut decoder = ArithmeticDecoder::new(data);
     let num_context_bits = header.template.context_bits();
     ctx.contexts.clear();
-    ctx.contexts
-        .resize(1 << num_context_bits, ArithmeticDecoderContext::default());
+    ctx.contexts.resize(1 << num_context_bits, ArithmeticDecoderContext::default());
 
     decode_bitmap(
         &mut decoder,
@@ -96,28 +80,14 @@ pub(crate) fn parse<'a>(reader: &mut Reader<'a>) -> Result<GenericRefinementRegi
     let flags = reader.read_byte().ok_or(ParseError::UnexpectedEof)?;
     let template = RefinementTemplate::from_byte(flags);
     let tpgron = flags & 0x02 != 0;
-    let adaptive_template_pixels = if template == RefinementTemplate::Template0 {
-        parse_refinement_at_pixels(reader)?
-    } else {
-        Vec::new()
-    };
+    let adaptive_template_pixels = if template == RefinementTemplate::Template0 { parse_refinement_at_pixels(reader)? } else { Vec::new() };
     let data = reader.tail().ok_or(ParseError::UnexpectedEof)?;
 
-    Ok(GenericRefinementRegionHeader {
-        region_info,
-        template,
-        tpgron,
-        adaptive_template_pixels,
-        data,
-    })
+    Ok(GenericRefinementRegionHeader { region_info, template, tpgron, adaptive_template_pixels, data })
 }
 
 fn has_default_at_pixels(at_pixels: &[AdaptiveTemplatePixel]) -> bool {
-    at_pixels.len() >= 2
-        && at_pixels[0].x == -1
-        && at_pixels[0].y == -1
-        && at_pixels[1].x == -1
-        && at_pixels[1].y == -1
+    at_pixels.len() >= 2 && at_pixels[0].x == -1 && at_pixels[0].y == -1 && at_pixels[1].x == -1 && at_pixels[1].y == -1
 }
 
 pub(crate) struct RefinementContextGatherer<'a> {
@@ -142,14 +112,8 @@ const SHIFT_MASK_T0_CUSTOM: u16 = 0b0_1000_1011_0110;
 const SHIFT_MASK_T1: u16 = 0b11_0001_1010;
 
 impl<'a> RefinementContextGatherer<'a> {
-    pub(crate) fn new(
-        template: RefinementTemplate,
-        at_pixels: &'a [AdaptiveTemplatePixel],
-        reference_dx: i32,
-        reference_dy: i32,
-    ) -> Self {
-        let use_default_at =
-            template == RefinementTemplate::Template0 && has_default_at_pixels(at_pixels);
+    pub(crate) fn new(template: RefinementTemplate, at_pixels: &'a [AdaptiveTemplatePixel], reference_dx: i32, reference_dy: i32) -> Self {
+        let use_default_at = template == RefinementTemplate::Template0 && has_default_at_pixels(at_pixels);
         Self {
             template,
             at_pixels,
@@ -178,11 +142,7 @@ impl<'a> RefinementContextGatherer<'a> {
         let ref_x0 = self.reference_dx.wrapping_neg() as u32;
 
         self.reg_cur_x = 0;
-        self.reg_m1 = if y >= 1 {
-            ContextGatherer::load_word(region, y - 1, 0)
-        } else {
-            0
-        };
+        self.reg_m1 = if y >= 1 { ContextGatherer::load_word(region, y - 1, 0) } else { 0 };
         self.reg_cur = 0;
 
         // PdfCraft patch: the buffers start a column left of the reference column the row starts
@@ -193,16 +153,10 @@ impl<'a> RefinementContextGatherer<'a> {
         // below −31, which a refined text instance has from a narrower bitmap or an RDX below −31,
         // and a refined symbol from such an RDX). The region decoded to other pixels than were
         // coded, or failed.
-        self.ref_cur_x = self
-            .reference_dx
-            .checked_neg()
-            .and_then(|column| u32::try_from(column).ok())
-            .map_or(0, |column| column.saturating_sub(1));
-        self.ref_m1 =
-            ContextGatherer::load_word(reference, ref_y.wrapping_sub(1) as u32, self.ref_cur_x);
+        self.ref_cur_x = self.reference_dx.checked_neg().and_then(|column| u32::try_from(column).ok()).map_or(0, |column| column.saturating_sub(1));
+        self.ref_m1 = ContextGatherer::load_word(reference, ref_y.wrapping_sub(1) as u32, self.ref_cur_x);
         self.ref_cur = ContextGatherer::load_word(reference, ref_y as u32, self.ref_cur_x);
-        self.ref_p1 =
-            ContextGatherer::load_word(reference, ref_y.wrapping_add(1) as u32, self.ref_cur_x);
+        self.ref_p1 = ContextGatherer::load_word(reference, ref_y.wrapping_add(1) as u32, self.ref_cur_x);
 
         self.ctx = match self.template {
             RefinementTemplate::Template1 => {
@@ -225,13 +179,7 @@ impl<'a> RefinementContextGatherer<'a> {
                 let ref_p1_m1 = ContextGatherer::get_buf_pixel(self.ref_p1, rbx.wrapping_sub(1));
                 let ref_p1_0 = ContextGatherer::get_buf_pixel(self.ref_p1, rbx);
 
-                (reg_m1_0 << 10)
-                    | (ref_m1_m1 << 7)
-                    | (ref_m1_0 << 6)
-                    | (ref_cur_m1 << 4)
-                    | (ref_cur_0 << 3)
-                    | (ref_p1_m1 << 1)
-                    | ref_p1_0
+                (reg_m1_0 << 10) | (ref_m1_m1 << 7) | (ref_m1_0 << 6) | (ref_cur_m1 << 4) | (ref_cur_0 << 3) | (ref_p1_m1 << 1) | ref_p1_0
             }
             RefinementTemplate::Template0 => {
                 let rbx = ref_x0.wrapping_sub(self.ref_cur_x);
@@ -241,12 +189,7 @@ impl<'a> RefinementContextGatherer<'a> {
                 let ref_cur_0 = ContextGatherer::get_buf_pixel(self.ref_cur, rbx);
                 let ref_p1_m1 = ContextGatherer::get_buf_pixel(self.ref_p1, rbx.wrapping_sub(1));
                 let ref_p1_0 = ContextGatherer::get_buf_pixel(self.ref_p1, rbx);
-                (reg_m1_0 << 10)
-                    | (ref_m1_0 << 6)
-                    | (ref_cur_m1 << 4)
-                    | (ref_cur_0 << 3)
-                    | (ref_p1_m1 << 1)
-                    | ref_p1_0
+                (reg_m1_0 << 10) | (ref_m1_0 << 6) | (ref_cur_m1 << 4) | (ref_cur_0 << 3) | (ref_p1_m1 << 1) | ref_p1_0
             }
         };
     }
@@ -256,11 +199,7 @@ impl<'a> RefinementContextGatherer<'a> {
         if x + 1 >= self.reg_cur_x + WORD_BITS {
             let new_start = x.saturating_sub(1);
             self.reg_cur_x = new_start;
-            self.reg_m1 = if self.reg_y >= 1 {
-                ContextGatherer::load_word(region, self.reg_y - 1, new_start)
-            } else {
-                0
-            };
+            self.reg_m1 = if self.reg_y >= 1 { ContextGatherer::load_word(region, self.reg_y - 1, new_start) } else { 0 };
             self.reg_cur = ContextGatherer::load_word(region, self.reg_y, new_start);
         }
 
@@ -278,11 +217,9 @@ impl<'a> RefinementContextGatherer<'a> {
             let new_start = ref_x.saturating_sub(1);
             let ref_y = (self.reg_y as i32).wrapping_sub(self.reference_dy);
             self.ref_cur_x = new_start;
-            self.ref_m1 =
-                ContextGatherer::load_word(reference, ref_y.wrapping_sub(1) as u32, new_start);
+            self.ref_m1 = ContextGatherer::load_word(reference, ref_y.wrapping_sub(1) as u32, new_start);
             self.ref_cur = ContextGatherer::load_word(reference, ref_y as u32, new_start);
-            self.ref_p1 =
-                ContextGatherer::load_word(reference, ref_y.wrapping_add(1) as u32, new_start);
+            self.ref_p1 = ContextGatherer::load_word(reference, ref_y.wrapping_add(1) as u32, new_start);
         }
     }
 
@@ -363,16 +300,10 @@ impl<'a> RefinementContextGatherer<'a> {
         let at1 = self.at_pixels[0];
         let at2 = self.at_pixels[1];
 
-        let new_pixels = ((region.get_pixel((xi + at1.x as i32) as u32, (yi + at1.y as i32) as u32)
-            as u16)
-            << 12)
+        let new_pixels = ((region.get_pixel((xi + at1.x as i32) as u32, (yi + at1.y as i32) as u32) as u16) << 12)
             | (ContextGatherer::get_buf_pixel(self.reg_m1, bx + 1) << 10)
             | (ContextGatherer::get_buf_pixel(self.reg_cur, bx.wrapping_sub(1)) << 9)
-            | ((reference.get_pixel(
-                ref_x_i.wrapping_add(at2.x as i32) as u32,
-                ref_y.wrapping_add(at2.y as i32) as u32,
-            ) as u16)
-                << 8)
+            | ((reference.get_pixel(ref_x_i.wrapping_add(at2.x as i32) as u32, ref_y.wrapping_add(at2.y as i32) as u32) as u16) << 8)
             | (ContextGatherer::get_buf_pixel(self.ref_m1, rbx.wrapping_add(1)) << 6)
             | (ContextGatherer::get_buf_pixel(self.ref_cur, rbx.wrapping_add(1)) << 3)
             | ContextGatherer::get_buf_pixel(self.ref_p1, rbx.wrapping_add(1));
@@ -478,12 +409,7 @@ pub(crate) fn decode_bitmap(
         }};
     }
 
-    let mut gatherer = RefinementContextGatherer::new(
-        gr_template,
-        adaptive_template_pixels,
-        reference_dx,
-        reference_dy,
-    );
+    let mut gatherer = RefinementContextGatherer::new(gr_template, adaptive_template_pixels, reference_dx, reference_dy);
 
     // Context for SLTP depends on template (Figures 14, 15).
     let sltp_context: u16 = match gr_template {
@@ -492,24 +418,13 @@ pub(crate) fn decode_bitmap(
     };
 
     match gr_template {
-        RefinementTemplate::Template0 if gatherer.use_default_at => refinement_decode_loop!(
-            &mut gatherer,
-            tpgron,
-            sltp_context,
-            RefinementContextGatherer::gather_template0_default
-        ),
-        RefinementTemplate::Template0 => refinement_decode_loop!(
-            &mut gatherer,
-            tpgron,
-            sltp_context,
-            RefinementContextGatherer::gather_template0_custom
-        ),
-        RefinementTemplate::Template1 => refinement_decode_loop!(
-            &mut gatherer,
-            tpgron,
-            sltp_context,
-            RefinementContextGatherer::gather_template1
-        ),
+        RefinementTemplate::Template0 if gatherer.use_default_at => {
+            refinement_decode_loop!(&mut gatherer, tpgron, sltp_context, RefinementContextGatherer::gather_template0_default)
+        }
+        RefinementTemplate::Template0 => {
+            refinement_decode_loop!(&mut gatherer, tpgron, sltp_context, RefinementContextGatherer::gather_template0_custom)
+        }
+        RefinementTemplate::Template1 => refinement_decode_loop!(&mut gatherer, tpgron, sltp_context, RefinementContextGatherer::gather_template1),
     }
 
     Ok(())

@@ -7,7 +7,7 @@ use pgp::ser::Serialize;
 use pgp::types::{Duration, Password, Tag};
 
 use crate::fixtures::*;
-use crate::keys::Budget;
+use crate::keys::{Budget, max_checks, with_max_checks};
 use crate::{CantCheck, Fingerprint, KeyRing, NotVerified, Outcome, PublicKey, verify};
 
 const ALICE: &str = "Alice <alice@example.org>";
@@ -253,28 +253,69 @@ fn a_copy_with_junk_subkey_bindings_from_the_future_never_pushes_out_the_real_on
 
 #[test]
 fn a_copy_that_costs_more_checks_than_a_key_may_is_refused_not_cut_short() {
+    // Forging and checking more signatures than the cap: nightly only. The revocation test below
+    // proves the same refusal with a smaller cap at the gate.
+    if craft_testkit::hostile::divisor() > 1 {
+        return;
+    }
     let alice = secret(ALICE, Make { subkey: true, ..Make::default() });
     let mallory = secret("Mallory <mallory@example.org>", Make { seed: 6, ..Make::default() });
-    let mut copy = SignedPublicKey::from(alice.clone());
-    // Junk User IDs with junk certifications before the subkey: checking them all would leave
-    // no checks for the subkey's binding.
-    for n in 0..5 {
-        let id = pgp::packet::UserId::from_str(Default::default(), format!("Alice {n} <alice@example.org>")).unwrap();
-        let sigs = (0..110)
-            .map(|i| {
-                forged(&alice, &mallory, SignatureType::CertPositive, made(&alice) + i, vec![])
-                    .sign_certification(&mallory.primary_key, &copy.primary_key, &Password::empty(), Tag::UserId, &id)
-                    .unwrap()
-            })
-            .collect();
-        copy.details.users.push(pgp::types::SignedUser::new(id, sigs));
-    }
-    let junk = copy.to_bytes().unwrap();
-    assert!(PublicKey::parse(&junk).is_err(), "a key not checked whole is no key");
-    let mut keys = KeyRing::new();
-    keys.insert(public(&alice));
-    offer(&mut keys, &junk);
-    assert!(matches!(outcome(&signed_at(&alice, made(&alice) + 10), ALICE, &keys), Outcome::Verified(_)));
+    assert_eq!(max_checks(), 512);
+    let real = public(&alice);
+    let message = signed_at(&alice, made(&alice) + 10);
+    let nine_checks = with_max_checks(8, || {
+        assert_eq!(max_checks(), 8);
+        let mut copy = SignedPublicKey::from(alice.clone());
+        assert_eq!(copy.details.users.len(), 1);
+        assert_eq!(copy.public_subkeys.len(), 1);
+        // Junk User IDs with junk certifications before the subkey: checking them all would leave
+        // no checks for the subkey's binding. Five users with two forged certs need 13 slots,
+        // including the real user's certification, the subkey binding and its back-signature.
+        for n in 0..5 {
+            let id = pgp::packet::UserId::from_str(Default::default(), format!("Alice {n} <alice@example.org>")).unwrap();
+            let sigs = (0..2)
+                .map(|i| {
+                    forged(&alice, &mallory, SignatureType::CertPositive, made(&alice) + i, vec![])
+                        .sign_certification(&mallory.primary_key, &copy.primary_key, &Password::empty(), Tag::UserId, &id)
+                        .unwrap()
+                })
+                .collect();
+            copy.details.users.push(pgp::types::SignedUser::new(id, sigs));
+        }
+        let junk = copy.to_bytes().unwrap();
+        assert!(PublicKey::parse(&junk).is_err(), "a key not checked whole is no key");
+        let mut keys = KeyRing::new();
+        keys.insert(public(&alice));
+        offer(&mut keys, &junk);
+        assert!(matches!(outcome(&signed_at(&alice, made(&alice) + 10), ALICE, &keys), Outcome::Verified(_)));
+
+        // Reuse one actual forged packet per junk user: five unsuccessful checks plus the
+        // genuine key's three checks must still reach and verify the signing subkey.
+        let mut exact = SignedPublicKey::from(alice.clone());
+        for user in copy.details.users.iter().skip(1) {
+            assert_eq!(user.signatures.len(), 2);
+            exact.details.users.push(pgp::types::SignedUser::new(user.id.clone(), vec![user.signatures[0].clone()]));
+        }
+        let accepted = PublicKey::parse(&exact.to_bytes().unwrap()).unwrap();
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(accepted[0].to_bytes(), real.to_bytes(), "discard only the forged certifications");
+        let keys: KeyRing = accepted.into_iter().collect();
+        assert!(matches!(outcome(&message, ALICE, &keys), Outcome::Verified(_)));
+
+        // A sixth existing forged packet costs the last slot needed by the back-signature:
+        // refuse the whole key, rather than returning one with an unusable signing subkey.
+        exact.details.users[1].signatures.push(copy.details.users[1].signatures[1].clone());
+        let nine = exact.to_bytes().unwrap();
+        assert!(PublicKey::parse(&nine).is_err(), "nine checks do not fit an eight-check key budget");
+        nine
+    });
+    // Leaving the scope restores the real default, through both its getter and its consumer.
+    assert_eq!(max_checks(), 512);
+    let restored = PublicKey::parse(&nine_checks).unwrap();
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].to_bytes(), real.to_bytes());
+    let keys: KeyRing = restored.into_iter().collect();
+    assert!(matches!(outcome(&message, ALICE, &keys), Outcome::Verified(_)));
 }
 
 #[test]

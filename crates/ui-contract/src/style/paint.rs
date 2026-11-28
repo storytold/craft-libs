@@ -1,0 +1,324 @@
+//! What the small painters (rules, handles, colour markers, scroll bars, the reset mark, the auto-scroll mark) draw,
+//! read from tokens.
+
+use super::tokens::UiTokens;
+use craft_theme::{Rgba, Stateful};
+use egui::Color32;
+
+use super::look::StyleColor;
+
+#[doc(hidden)]
+pub fn color(c: Rgba) -> Color32 {
+    let [r, g, b, a] = c.0;
+    Color32::from_rgba_unmultiplied(r, g, b, a)
+}
+
+fn style_color(c: Rgba) -> StyleColor {
+    StyleColor(color(c))
+}
+
+/// The line a rule draws.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RuleLook {
+    /// The colour.
+    pub color: Color32,
+    /// The width.
+    pub width: RuleWidth,
+}
+
+/// The width of a rule.
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
+#[non_exhaustive]
+pub enum RuleWidth {
+    /// One physical pixel at every scale.
+    #[default]
+    Hairline,
+    /// A width in points, rounded to whole physical pixels and never thinner than one.
+    Points(f32),
+}
+
+impl RuleWidth {
+    /// The width in whole physical pixels on a display of `pixels_per_point`.
+    pub fn pixels(self, pixels_per_point: f32) -> f32 {
+        match self {
+            RuleWidth::Hairline => 1.0,
+            RuleWidth::Points(width) => (width * pixels_per_point).round().max(1.0),
+        }
+    }
+
+    /// The width in points on a display of `pixels_per_point`.
+    pub fn points(self, pixels_per_point: f32) -> f32 {
+        self.pixels(pixels_per_point) / pixels_per_point.max(f32::EPSILON)
+    }
+}
+
+/// Which rule a look is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RuleKind {
+    /// A separator between neighbours: `line.divider`, `stroke.thin` wide.
+    Divider,
+    /// The edge of a surface or region: `line.border`, `stroke.thin` wide.
+    Edge,
+    /// A grid line: `overlay.grid`, one physical pixel wide.
+    Grid,
+    /// The insertion mark of a drop.
+    DropMark,
+}
+
+pub(crate) fn rule_look(tokens: &UiTokens, kind: RuleKind) -> RuleLook {
+    let c = &tokens.color;
+    let thin = RuleWidth::Points(tokens.stroke.thin);
+    match kind {
+        RuleKind::Divider => RuleLook { color: color(c.line.divider), width: thin },
+        RuleKind::Edge => RuleLook { color: color(c.line.border), width: thin },
+        // A grid over the document stays finer than the chrome around it.
+        RuleKind::Grid => RuleLook { color: color(c.overlay.grid), width: RuleWidth::Hairline },
+        RuleKind::DropMark => RuleLook { color: color(c.accent.solid), width: RuleWidth::Points(tokens.stroke.thick) },
+    }
+}
+
+/// The line of a resize divider: a split handle between panes, a table column's edge.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ResizeLineLook {
+    /// A line drawn at rest too: `line.border`, the accent under the pointer and while dragged.
+    pub line: Stateful<StyleColor>,
+    /// A line drawn only under the pointer and while dragged, in the accent: an edge something else draws at rest, or
+    /// none does.
+    pub edge: Stateful<StyleColor>,
+    /// The width: thin at rest, thick under the pointer and while dragged.
+    pub width: Stateful<f32>,
+    /// The line while the keyboard resizes it: `line.focus`.
+    pub focus: StyleColor,
+    /// The line's width while the keyboard resizes it: thick.
+    pub focus_width: f32,
+}
+
+/// The resize divider's line, read from `tokens`.
+pub fn resize_line_look(tokens: &UiTokens) -> ResizeLineLook {
+    let c = &tokens.color;
+    let (rest, accent, clear) = (style_color(c.line.border), style_color(c.accent.solid), style_color(Rgba::TRANSPARENT));
+    let (thin, thick) = (tokens.stroke.thin, tokens.stroke.thick);
+    ResizeLineLook {
+        line: Stateful::new(rest).off(craft_theme::States::new(rest, accent, accent, rest)),
+        edge: Stateful::new(clear).off(craft_theme::States::new(clear, accent, accent, clear)),
+        width: Stateful::new(thin).off(craft_theme::States::new(thin, thick, thick, thin)),
+        focus: style_color(c.line.focus),
+        focus_width: thick,
+    }
+}
+
+/// A canvas handle's fills and stroke.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct HandleLook {
+    /// The side or diameter.
+    pub side: f32,
+    /// The fill per state.
+    pub fill: Stateful<StyleColor>,
+    /// The stroke colour.
+    pub stroke: StyleColor,
+    /// The stroke width.
+    pub stroke_width: f32,
+}
+
+pub(crate) fn handle_look(tokens: &UiTokens) -> HandleLook {
+    let c = &tokens.color;
+    let fill = Stateful::new(style_color(c.overlay.handle_fill)).off(craft_theme::States::new(
+        style_color(c.overlay.handle_fill),
+        style_color(c.accent.hover),
+        style_color(c.accent.pressed),
+        style_color(c.state.disabled_fill),
+    ));
+    HandleLook { side: tokens.size.handle.md, fill, stroke: style_color(c.overlay.handle_stroke), stroke_width: tokens.stroke.thin }
+}
+
+/// A colour marker: the mark on a colour field, wheel, disc or gradient line that shows where a colour sits. Its ring
+/// and the halo just outside it make one of the two read on any colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct MarkerLook {
+    /// The radius of a marker, out to the inner edge of its ring.
+    pub radius: f32,
+    /// The radius of a large marker (a set's base colour).
+    pub large: f32,
+    /// The ring colour.
+    pub ring: StyleColor,
+    /// The ring colour of a selected marker.
+    pub selected: StyleColor,
+    /// The ring's width.
+    pub ring_width: f32,
+    /// The halo ring's colour, just outside the ring.
+    pub halo: StyleColor,
+    /// The halo ring's width.
+    pub halo_width: f32,
+    /// The fill under a translucent marked colour.
+    pub backing: StyleColor,
+}
+
+pub(crate) fn marker_look(tokens: &UiTokens) -> MarkerLook {
+    let (o, stroke, handle) = (&tokens.color.overlay, &tokens.stroke, &tokens.size.handle);
+    MarkerLook {
+        radius: handle.sm,
+        large: handle.md,
+        ring: style_color(o.handle_fill),
+        selected: style_color(o.handle_stroke),
+        ring_width: stroke.medium,
+        halo: style_color(o.halo),
+        halo_width: stroke.thin,
+        backing: style_color(o.handle_fill),
+    }
+}
+
+/// Which of the two scroll bar looks a bar has.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ScrollBarKind {
+    /// The indicator of a scroll area, over the content at its edge. At rest the thumb is a thin dim line along the
+    /// track's outer edge and the track is clear; under the pointer or while pressed the thumb takes the track's whole
+    /// thickness over a tinted track.
+    #[default]
+    Floating,
+    /// The bar beside a canvas view, always shown: the thumb has the track's whole thickness in every state, on a
+    /// `surface.chrome` track, quiet at rest (`line.control_edge`).
+    Docked,
+}
+
+/// A scroll bar's track and thumb, of a [`ScrollBarKind`].
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ScrollBarLook {
+    /// The track fill per state.
+    pub track: Stateful<StyleColor>,
+    /// The thumb fill per state.
+    pub thumb: Stateful<StyleColor>,
+    /// The bar's thickness: its track, and its thumb at its widest.
+    pub thickness: f32,
+    /// The thumb's thickness per state: thin at rest along the track's outer edge, the bar's thickness under the
+    /// pointer or while pressed.
+    pub thumb_width: Stateful<f32>,
+    /// The shortest the thumb gets along the bar.
+    pub min_thumb: f32,
+}
+
+/// The shortest a scroll bar's thumb gets along the bar, whatever the bar's kind.
+pub(crate) fn min_thumb(tokens: &UiTokens) -> f32 {
+    tokens.size.handle.md * 2.0
+}
+
+pub(crate) fn scroll_bar_look(tokens: &UiTokens) -> ScrollBarLook {
+    scroll_bar_look_of(tokens, ScrollBarKind::Floating)
+}
+
+pub(crate) fn scroll_bar_look_of(tokens: &UiTokens, kind: ScrollBarKind) -> ScrollBarLook {
+    let c = &tokens.color;
+    let clear = style_color(Rgba::TRANSPARENT);
+    let disabled = style_color(c.state.disabled_fill);
+    let thumb = match kind {
+        ScrollBarKind::Floating => Stateful::new(style_color(c.text.faint)).off(craft_theme::States::new(
+            style_color(c.text.faint),
+            style_color(c.text.muted),
+            style_color(c.text.normal),
+            disabled,
+        )),
+        ScrollBarKind::Docked => Stateful::new(style_color(c.line.control_edge)).off(craft_theme::States::new(
+            style_color(c.line.control_edge),
+            style_color(c.text.faint),
+            style_color(c.text.muted),
+            disabled,
+        )),
+    };
+    let hover = style_color(c.state.hover);
+    let (thickness, thin) = match kind {
+        ScrollBarKind::Floating => (tokens.size.handle.sm, tokens.stroke.thick),
+        ScrollBarKind::Docked => (tokens.size.icon.md, tokens.size.icon.md),
+    };
+    let (track, rest) = match kind {
+        ScrollBarKind::Floating => (Stateful::new(clear).off(craft_theme::States::new(clear, hover, hover, clear)), thin),
+        ScrollBarKind::Docked => {
+            let chrome = style_color(c.surface.chrome);
+            (Stateful::new(chrome).off(craft_theme::States::new(chrome, hover, hover, chrome)), thickness)
+        }
+    };
+    ScrollBarLook {
+        track,
+        thumb,
+        thickness,
+        thumb_width: Stateful::new(rest).off(craft_theme::States::new(rest, thickness, thickness, rest)),
+        min_thumb: min_thumb(tokens),
+    }
+}
+
+/// The reset dot's colours and diameter.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ResetMarkLook {
+    /// The dot colour, while the value differs from its reset value.
+    pub color: StyleColor,
+    /// The ring colour, while the value is at its reset value: the slot shows before anything changes.
+    pub ring: StyleColor,
+    /// The ring's line width.
+    pub ring_width: f32,
+    /// The dot diameter.
+    pub diameter: f32,
+}
+
+/// The auto-scroll mark's colours and sizes: a ring on the panel fill, a dot and two arrowheads in text ink.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct AutoScrollMarkLook {
+    /// The ring colour.
+    pub ring: StyleColor,
+    /// The fill inside the ring.
+    pub fill: StyleColor,
+    /// The ink of the dot and the arrowheads.
+    pub ink: StyleColor,
+    /// The ring's line width.
+    pub ring_width: f32,
+    /// The mark's diameter.
+    pub diameter: f32,
+}
+
+/// The state layer: the theme's hover and press fills, clear at rest and while disabled. An opaque state fill takes
+/// the place of the rest fill of a part without a surface of its own.
+pub(crate) fn state_layer_look(tokens: &UiTokens) -> Stateful<StyleColor> {
+    let (clear, state) = (style_color(Rgba::TRANSPARENT), &tokens.color.state);
+    Stateful::new(clear).off(craft_theme::States::new(clear, style_color(state.hover), style_color(state.pressed), clear))
+}
+
+pub(crate) fn reset_mark_look(tokens: &UiTokens) -> ResetMarkLook {
+    ResetMarkLook {
+        color: style_color(tokens.color.accent.solid),
+        ring: style_color(tokens.color.text.disabled),
+        ring_width: tokens.stroke.thin,
+        diameter: tokens.size.handle.sm / 2.0,
+    }
+}
+
+pub(crate) fn auto_scroll_mark_look(tokens: &UiTokens) -> AutoScrollMarkLook {
+    let c = &tokens.color;
+    AutoScrollMarkLook {
+        ring: style_color(c.text.normal),
+        fill: style_color(c.surface.panel),
+        ink: style_color(c.text.normal),
+        ring_width: tokens.stroke.thin,
+        diameter: tokens.size.icon.lg,
+    }
+}
+
+/// The colour of `ink` in `tokens`.
+#[doc(hidden)]
+pub fn ink_color(tokens: &UiTokens, ink: super::key::Ink) -> Color32 {
+    let text = &tokens.color.text;
+    color(match ink {
+        super::key::Ink::OnPanel => text.normal,
+        super::key::Ink::OnDark => text.on_strong,
+        super::key::Ink::Accent => tokens.color.accent.text,
+    })
+}
+
+/// The colour of the scrim behind a modal layer.
+pub(crate) fn scrim_color(tokens: &UiTokens) -> Color32 {
+    color(tokens.color.surface.scrim)
+}

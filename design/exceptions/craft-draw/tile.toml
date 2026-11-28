@@ -1,0 +1,9 @@
+config_version = 1
+
+[[exception]]
+name = "gradient-tile-centre"
+kind = "marker"
+rule = "literal-size/vec2"
+path = "crates/draw/src/ui/gradient/tile.rs"
+reason = "The centre of the tile unit square, a gradient coordinate and not a size."
+count = 1

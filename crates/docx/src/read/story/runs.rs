@@ -23,12 +23,22 @@ impl Reader<'_> {
                 let mut c = ctx.clone();
                 let url = k.attr("r:id").and_then(|id| rels.by_id(id)).map(|r| r.target.trim().to_string()).filter(|u| !u.is_empty());
                 let anchor = k.attr("w:anchor").filter(|a| !a.is_empty());
-                c.link = match (url, anchor) {
+                let link = match (url, anchor) {
                     (Some(u), Some(a)) => Some(format!("{u}#{a}")),
                     (Some(u), None) => Some(u),
                     (None, Some(a)) => Some(format!("#{a}")),
-                    (None, None) => ctx.link.clone(),
+                    (None, None) => None,
                 };
+                if let Some(link) = link {
+                    c.link = Some(link);
+                    c.link_tooltip = k.attr("w:tooltip").and_then(crate::bounded_link_tooltip).map(std::sync::Arc::from);
+                    // History on stays `None`: it is what the writer writes for a link with none.
+                    c.link_history = match k.attr("w:history") {
+                        Some(v) if crate::units::is_off_val(v) => Some(craft_wordmodel::props::LinkHistory::Off),
+                        Some(_) => None,
+                        None => Some(craft_wordmodel::props::LinkHistory::Omitted),
+                    };
+                }
                 self.read_inline_children(sc, pb, k, rels, &c, depth + 1);
             }
             "w:ins" | "w:moveTo" => {
@@ -133,6 +143,8 @@ impl Reader<'_> {
     fn run_props(&mut self, rpr: &El, ctx: &RunCtx) -> CharProps {
         let mut p = self.pc.rpr(rpr);
         p.link = ctx.link.clone();
+        p.link_tooltip = ctx.link_tooltip.clone();
+        p.link_history = ctx.link_history;
         p.ins = ctx.ins;
         p.del = ctx.del;
         p.fmt_change = self.rpr_change(rpr);
@@ -140,7 +152,14 @@ impl Reader<'_> {
     }
 
     fn run_props_none(&self, ctx: &RunCtx) -> CharProps {
-        CharProps { link: ctx.link.clone(), ins: ctx.ins, del: ctx.del, ..Default::default() }
+        CharProps {
+            link: ctx.link.clone(),
+            link_tooltip: ctx.link_tooltip.clone(),
+            link_history: ctx.link_history,
+            ins: ctx.ins,
+            del: ctx.del,
+            ..Default::default()
+        }
     }
 
     fn read_run(&mut self, sc: &mut StoryCtx, pb: &mut PB, r: &El, rels: &Rels, ctx: &RunCtx, depth: usize) {
@@ -253,21 +272,23 @@ impl Reader<'_> {
             },
             "w:drawing" => {
                 if let Some(o) = self.read_drawing(sc, k, rels) {
-                    self.emit_linked_obj(sc, pb, o, props, Self::drawing_link(k, rels));
+                    let link = self.drawing_link(k, rels);
+                    self.emit_linked_obj(sc, pb, o, props, link);
                 }
             }
             "w:pict" => {
-                if let Some(o) = self.read_signature_line(sc, k, rels) {
-                    self.emit_obj(sc, pb, o, props);
+                if let Some((o, link)) = self.read_signature_line(sc, k, rels) {
+                    self.emit_linked_obj(sc, pb, o, props, link);
                 } else {
-                    for o in self.read_vml_all(sc, k, rels) {
-                        self.emit_obj(sc, pb, o, props);
+                    for (o, target) in self.read_vml_all(sc, k, rels) {
+                        let link = target.and_then(|target| self.keep_drawing_link(target));
+                        self.emit_linked_obj(sc, pb, o, props, link);
                     }
                 }
             }
             "w:object" => {
-                if let Some(o) = self.read_object(sc, k, rels) {
-                    self.emit_obj(sc, pb, o, props);
+                if let Some((o, link)) = self.read_object(sc, k, rels) {
+                    self.emit_linked_obj(sc, pb, o, props, link);
                 }
             }
             "w:contentPart" => {
@@ -349,7 +370,7 @@ impl Reader<'_> {
         let (base, base_props) = part("w:rubyBase");
         let (ruby, ruby_props) = part("w:rt");
         let mut bp = base_props.unwrap_or_default();
-        (bp.link, bp.ins, bp.del) = (props.link.clone(), props.ins, props.del);
+        (bp.link, bp.link_history, bp.ins, bp.del) = (props.link.clone(), props.link_history, props.ins, props.del);
         if base.is_empty() {
             return;
         }
@@ -395,7 +416,10 @@ impl Reader<'_> {
     /// [`Self::emit_obj`] for a drawing that carries its own `link`: a link around the run wins.
     fn emit_linked_obj(&mut self, sc: &mut StoryCtx, pb: &mut PB, o: InlineObject, props: &CharProps, link: Option<String>) {
         match link.filter(|_| props.link.is_none()) {
-            Some(link) => self.emit_obj(sc, pb, o, &CharProps { link: Some(link), ..props.clone() }),
+            Some(link) => {
+                let link_tooltip = if props.link.as_deref() == Some(link.as_str()) { props.link_tooltip.clone() } else { None };
+                self.emit_obj(sc, pb, o, &CharProps { link: Some(link), link_tooltip, ..props.clone() });
+            }
             None => self.emit_obj(sc, pb, o, props),
         }
     }

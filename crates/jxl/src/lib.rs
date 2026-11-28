@@ -9,6 +9,8 @@
 //! The first image frame is returned, with orientation already applied to its pixels.
 
 #[cfg(feature = "decode")]
+mod brob;
+#[cfg(feature = "decode")]
 mod decode;
 #[cfg(feature = "encode")]
 mod encode;

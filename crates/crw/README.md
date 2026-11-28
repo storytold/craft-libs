@@ -102,14 +102,14 @@ end-of-block code.
 ### Performance
 
 About 60 ms for a 6.5 MP EOS file and 70 ms for the 7.4 MP G6 in release mode on a 2024 laptop
-(`cargo test -p craft-crw --release --test samples -- --nocapture` prints the times).
+(`cargo test -p craft-crw --release -- integration::samples --nocapture` prints the times).
 
 ## Tests
 
 - `cargo test -p craft-crw`: synthetic CIFF files round-tripped through a test-only encoder (the
-  model's inverse), the frozen tables' structure (prefix-free, all 162 symbols), hostile inputs
-  (every truncation and byte mutation of a valid file, self-referencing heaps), and a proptest
-  mutation sweep (`tests/robust.rs`). None needs sample files.
+  model's inverse), the frozen tables' coverage (all 162 symbols), and hostile inputs (every
+  truncation and byte mutation of a valid file in `tests/robust.rs`, self-referencing heaps).
+  None needs sample files.
 - `tests/samples.rs` pins the eleven CC0 sample files of [`tests/samples.json`](tests/samples.json)
   (raw.pixls.us): each decodes to exactly the samples the derivation verified against the
   reference, recorded as the SHA-256 of the sample buffer, with its levels, white balance and
@@ -117,15 +117,12 @@ About 60 ms for a 6.5 MP EOS file and 70 ms for the 7.4 MP G6 in release mode on
 
   ```sh
   python scripts/fetch-crw-samples.py ~/crw-samples        # downloads and verifies by SHA-256
-  CRAFT_CRW_SAMPLES=~/crw-samples cargo test -p craft-crw --release --test samples -- --nocapture
+  CRAFT_CRW_SAMPLES=~/crw-samples cargo test -p craft-crw --release -- integration::samples --nocapture
   ```
 
   Unset, the test prints that it skipped; CI sets `CRAFT_CRW_REQUIRE_SAMPLES=1` and runs it on
   Linux (`.github/workflows/crw.yml`; lint and the synthetic tests run on Linux, Windows and
   macOS, plus a wasm32 check).
-- `CRAFT_CRW_ORACLE=<dir>` additionally compares against `<name>.crw.tiff` references next to the
-  files (the reference decoder's `unprocessed_raw -T` output), the check the derivation used.
-  Those references are not distributable and stay outside the repository.
 
 ## Origin
 

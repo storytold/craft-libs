@@ -1,0 +1,31 @@
+[package]
+name = "craft-theme-editor"
+description = "The theme editor's panels: the token browser, token detail, problems list and app size overrides over an explained theme."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+autotests = false
+
+[lib]
+# The lib's test target runs the stories registered by the crate.
+harness = false
+
+[features]
+suite = ["screen-testing", "craft-ui/suite"]
+default = []
+# The panels' stories.
+screen-testing = ["craft-ui/testing"]
+
+[dependencies]
+craft-behavior = { workspace = true }
+craft-theme = { workspace = true }
+craft-ui = { workspace = true }
+egui = { workspace = true }
+
+[dev-dependencies]
+craft-ui = { workspace = true, features = ["suite"] }
+
+[lints]
+workspace = true

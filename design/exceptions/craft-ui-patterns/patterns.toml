@@ -1,0 +1,17 @@
+config_version = 1
+
+[[exception]]
+name = "dock-top-inset-measured"
+kind = "marker"
+rule = "props/point-size"
+path = "crates/ui-patterns/src/patterns/dock/area.rs"
+reason = "The top inset is the measured height of the bars the app shows over the dock (notices), content the floating windows keep clear of, not a size the dock area chooses."
+count = 1
+
+[[exception]]
+name = "dock-rail-footer-icons"
+kind = "marker"
+rule = "contract/allocate"
+path = "crates/ui-patterns/src/patterns/dock/area.rs"
+reason = "A rail with a host footer shows its icons in a panel body: the iconic rail lays its icons out in a rect of its own, so the body claims their height and the footer sits under them."
+count = 1

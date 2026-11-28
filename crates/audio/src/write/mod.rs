@@ -8,7 +8,7 @@ mod aiff;
 mod coded;
 #[cfg(feature = "flac-encode")]
 pub(crate) mod flac;
-mod pcm;
+pub(crate) mod pcm;
 #[cfg(feature = "vorbis-encode")]
 mod vorbis;
 #[cfg(feature = "vorbis-encode")]
@@ -449,51 +449,32 @@ impl EncodeOptions {
 /// ```
 #[cfg(feature = "pcm-encode")]
 pub fn wav_float_header(sample_rate: u32, channels: u16, frames: u64) -> Result<Vec<u8>> {
+    float_header(sample_rate, channels, None, frames)
+}
+
+/// [`wav_float_header`] with a BWF `bext` chunk holding `bwf` before the format chunk. The length
+/// still doesn't depend on `frames`, so the header is rewritten in place the same way.
+///
+/// ```
+/// use craft_audio::{BwfInfo, wav_float_header_with_bwf};
+///
+/// let bwf = BwfInfo::default().with_originator("Recorder").with_time_reference(48_000 * 3_600);
+/// let mut file = wav_float_header_with_bwf(48_000, 2, 0, &bwf).unwrap();
+/// let samples = [0.25f32, -0.25, 0.5, -0.5];
+/// file.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
+/// let header = wav_float_header_with_bwf(48_000, 2, 2, &bwf).unwrap();
+/// file[..header.len()].copy_from_slice(&header);
+/// assert!(header.windows(4).any(|id| id == b"bext"));
+/// ```
+#[cfg(feature = "pcm-encode")]
+pub fn wav_float_header_with_bwf(sample_rate: u32, channels: u16, frames: u64, bwf: &crate::BwfInfo) -> Result<Vec<u8>> {
+    float_header(sample_rate, channels, Some(bwf), frames)
+}
+
+#[cfg(feature = "pcm-encode")]
+fn float_header(sample_rate: u32, channels: u16, bwf: Option<&crate::BwfInfo>, frames: u64) -> Result<Vec<u8>> {
     if channels == 0 || sample_rate == 0 {
         return Err(AudioError::Encode("a WAV needs channels and a sample rate".into()));
     }
-    wav::header(usize::from(channels), sample_rate, (32, true), None, None, frames, false)
-}
-
-// With only one of `pcm-encode` and `flac-encode`, the other's formats are refused, not silently
-// written as something else.
-#[cfg(all(test, any(feature = "pcm-encode", feature = "flac-encode"), not(all(feature = "pcm-encode", feature = "flac-encode"))))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unbuilt_format_is_unsupported() {
-        let (format, name) = if cfg!(feature = "pcm-encode") { (EncodeFormat::Flac, "flac") } else { (EncodeFormat::Wav, "wav") };
-        let opts = EncodeOptions::new(format);
-        let buf = AudioBuffer::new(48_000, 1, 16);
-        assert!(matches!(encode(&buf, &opts), Err(AudioError::Unsupported(_))));
-        let enc = FileEncoder::new(std::io::Cursor::new(Vec::new()), &opts, 48_000, 1);
-        assert!(matches!(enc, Err(AudioError::Unsupported(_))));
-        assert_eq!(encode_format_for(name), None);
-        assert!(!format.is_built() && EncodeFormat::ALL.iter().any(|f| f.is_built()));
-        // Also with a layout it could not use.
-        let opts = opts.with_layout(ChannelLayout::STEREO);
-        assert!(matches!(encode(&buf, &opts), Err(AudioError::Unsupported(_))));
-        let enc = FileEncoder::new(std::io::Cursor::new(Vec::new()), &opts, 48_000, 1);
-        assert!(matches!(enc, Err(AudioError::Unsupported(_))));
-    }
-
-    /// Streaming in any block sizes writes the bytes `encode` writes.
-    #[cfg(feature = "flac-encode")]
-    #[test]
-    fn streamed_flac_matches_encode() {
-        let channels: Vec<Vec<f32>> = (0..2).map(|c| (0..20_000).map(|i| ((i * (c + 3)) as f32 * 0.01).sin() * 0.5).collect()).collect();
-        let buf = AudioBuffer { sample_rate: 48_000, channels };
-        let opts = EncodeOptions::new(EncodeFormat::Flac);
-        let whole = encode(&buf, &opts).unwrap();
-        let mut enc = FileEncoder::new(std::io::Cursor::new(Vec::new()), &opts, 48_000, 2).unwrap();
-        let mut at = 0;
-        for n in [1000, 4096, 1, 9000, 5903] {
-            let block: Vec<&[f32]> = buf.channels.iter().map(|c| &c[at..at + n]).collect();
-            enc.write(&block, n).unwrap();
-            at += n;
-        }
-        assert_eq!(at, buf.frames());
-        assert_eq!(enc.finish().unwrap().into_inner(), whole);
-    }
+    wav::header(usize::from(channels), sample_rate, (32, true), bwf, None, frames, false)
 }

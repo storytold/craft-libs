@@ -6,7 +6,7 @@
 //! fall in fitness classes more than one apart (a tight line next to a loose one).
 //!
 //! - **Justified** lines: word spacing, letter spacing and glyph scaling may stretch and shrink
-//!   within the paragraph's Justification options (each glyph's [`Flexibility`]); the badness comes from
+//!   within the paragraph's Justification options (each glyph's [`Flexibility`](crate::composer::Flexibility)); the badness comes from
 //!   the stretch/shrink ratio, so loose lines are traded for evenly spaced ones.
 //! - **Ragged** lines (left/centre/right aligned): spaces keep their width, so a line never
 //!   shrinks (it must fit). The badness comes from the line's leftover space measured against a
@@ -16,14 +16,19 @@
 
 /// Glyph measurements needed by the paragraph composer.
 pub trait Glyph {
+    /// The glyph's natural width.
     fn advance(&self) -> f64;
+    /// Whether the glyph is a space (glue between words).
     fn is_space(&self) -> bool;
+    /// Whether the glyph is a soft hyphen (a break opportunity that shows a hyphen when taken).
     fn is_soft_hyphen(&self) -> bool;
 }
 
 /// Stretch and shrink available for a glyph.
 pub trait Flexibility {
+    /// How much the glyph's width may grow.
     fn stretch(&self) -> f64;
+    /// How much the glyph's width may shrink.
     fn shrink(&self) -> f64;
 }
 
@@ -50,7 +55,9 @@ const EPS: f64 = 1e-6;
 /// added when breaking there (0 = no hyphen).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Breakpoint {
+    /// Index of the glyph the line ends before (exclusive).
     pub end: usize,
+    /// Width of the hyphen added when breaking here; 0 when none is added.
     pub hyphen: f64,
 }
 
@@ -334,8 +341,9 @@ pub fn compose_with<G: Glyph, F: Flexibility, M: Measure>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
     struct Unit(char);
     impl Glyph for Unit {
@@ -358,7 +366,7 @@ mod tests {
             0.0
         }
     }
-    #[test]
+    #[trial]
     fn rejects_breaks_that_move_backwards() {
         let glyphs: Vec<_> = "abcd".chars().map(Unit).collect();
         let candidates = [Breakpoint { end: 3, hyphen: 0.0 }, Breakpoint { end: 1, hyphen: 0.0 }];
@@ -366,7 +374,7 @@ mod tests {
         assert_eq!(compose(&glyphs, &|_| 3.0, &|_| 0.0, &|_| 0.0, &candidates, &[] as &[Rigid], &params), None);
     }
 
-    #[test]
+    #[trial]
     fn composes_ragged_paragraph_and_trims_spaces() {
         let glyphs: Vec<_> = "aa bb cc".chars().map(Unit).collect();
         let candidates = [Breakpoint { end: 3, hyphen: 0.0 }, Breakpoint { end: 6, hyphen: 0.0 }];
@@ -405,7 +413,7 @@ mod tests {
         Breakpoint { end, hyphen }
     }
 
-    #[test]
+    #[trial]
     fn fitness_classes_and_adjustment_ratios() {
         assert_eq!([-0.6, 0.0, 0.7, 2.0].map(|r| fitness(r, false)), [0, 1, 2, 3]);
         assert_eq!([0.1, 0.3, 0.5, 0.9].map(|r| fitness(r, true)), [0, 1, 2, 3]);
@@ -422,7 +430,7 @@ mod tests {
         assert_eq!(adjustment_ratio(11.0, 10.0, 0.0, 0.0, false, &ragged), None);
     }
 
-    #[test]
+    #[trial]
     fn empty_and_unmeasurable_paragraphs() {
         let none: [Unit; 0] = [];
         assert_eq!(compose(&none, &|_| 3.0, &|_| 0.0, &|_| 0.0, &[], &[] as &[Rigid], &justified()), Some(vec![]));
@@ -430,7 +438,7 @@ mod tests {
         assert_eq!(compose(&huge, &|_| 3.0, &|_| 0.0, &|_| 0.0, &[], &[] as &[Rigid], &justified()), None);
     }
 
-    #[test]
+    #[trial]
     fn justified_lines_stretch_and_shrink_within_tolerance() {
         let glyphs = units("a a b b");
         let flex: Vec<_> = glyphs.iter().map(|g| if g.0 == ' ' { Flex(1.0, 0.5) } else { Flex(0.0, 0.0) }).collect();
@@ -450,7 +458,7 @@ mod tests {
         assert_eq!(compose(&word, &|_| 4.0, &|_| 0.0, &|_| 0.0, &[], &[Rigid, Rigid], &all), Some(vec![(2, false)]));
     }
 
-    #[test]
+    #[trial]
     fn hyphen_limit_and_soft_hyphens() {
         // "ab-cd-ef" with hyphenation points after each pair: every line wants a hyphen.
         let glyphs = units("abcdef");
@@ -468,7 +476,7 @@ mod tests {
         assert_eq!(out, vec![(3, true), (6, true), (8, false)]);
     }
 
-    #[test]
+    #[trial]
     fn credits_are_clamped_to_the_glyph_and_ignored_when_not_finite() {
         let glyphs = units("aa bb");
         let cands = [brk(3, 0.0)];
@@ -504,7 +512,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[trial]
     fn measure_can_end_reach_widen_or_exhaust() {
         let ragged = Params { justify_last: false, ragged: true, tolerance: 100.0, uniform_from: 0, hyphen_limit: 0 };
         let two = units("aa bb");

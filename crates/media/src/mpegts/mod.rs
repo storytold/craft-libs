@@ -9,12 +9,14 @@
 //!   LPCM).
 //! - **Elementary streams** are split into access units on open — coded frames for MPEG-1/2
 //!   video (picture start codes, field pairs), H.264 and HEVC (access unit delimiters / first
-//!   slice of a picture), audio frames for MPEG audio, ADTS / LATM AAC, AC-3 and E-AC-3, PES
-//!   packets for LPCM — each with its PTS/DTS (a PES timestamp belongs to the first access unit
-//!   that starts in the packet), random-access flag and, for MPEG video, picture type, temporal
-//!   reference and field structure. That index is the seeking table.
+//!   slice of a picture), audio frames for MPEG audio, ADTS / LATM AAC, AC-3 and E-AC-3, Opus
+//!   access units (by their control headers), PES packets for LPCM, AV1 and MPEG-4 Part 2 video.
+//!   Each unit has its PTS/DTS (a PES timestamp belongs to the first access unit that starts in
+//!   the packet), random-access flag and, for MPEG video, picture type, temporal reference and field
+//!   structure. That index is the seeking table.
 //! - Units are read back on demand by re-reading the file from the unit's first packet, so the
 //!   index costs a few dozen bytes per access unit.
+//! - [`mux`] writes one program as a transport stream to any `io::Write`, frame by frame.
 //!
 //! The module does no decoding. No dependencies beyond `std`, no `unsafe`, builds for
 //! `wasm32-unknown-unknown`.
@@ -26,6 +28,7 @@
 
 mod es;
 pub use es::{FrameInfo, frame_bytes, frame_info, sei_has_recovery_point};
+pub mod mux;
 mod pes;
 mod ps;
 mod ts;
@@ -160,6 +163,13 @@ pub enum Codec {
     H264,
     /// H.265 / HEVC, Annex B.
     Hevc,
+    /// MPEG-4 Part 2 visual (ISO/IEC 14496-2), stream type 0x10.
+    Mpeg4Part2,
+    /// AV1 (stream type 0x06 with the registration descriptor "AV01"). [`File::read_unit`]
+    /// returns each access unit in the low overhead bitstream format, without start codes,
+    /// emulation prevention bytes or temporal delimiters; the AV1 video descriptor is in
+    /// [`Stream::av1c`].
+    Av1,
     /// MPEG-1/2 audio (layers I-III; the layer is in each frame header).
     MpegAudio,
     /// AAC in ADTS frames.
@@ -172,6 +182,10 @@ pub enum Codec {
     Eac3,
     /// DTS.
     Dts,
+    /// Opus (stream type 0x06 with the registration descriptor "Opus"). Each unit is one Opus
+    /// access unit without its control header; the channel configuration and the trims are in
+    /// [`Stream::opus`].
+    Opus,
     /// Dolby TrueHD.
     TrueHd,
     /// Blu-ray / AVCHD LPCM (a 4-byte header per PES packet, big-endian samples).
@@ -192,12 +206,15 @@ impl Codec {
             Codec::Mpeg2Video => "MPEG-2 Video".into(),
             Codec::H264 => "H.264".into(),
             Codec::Hevc => "HEVC".into(),
+            Codec::Mpeg4Part2 => "MPEG-4 Part 2".into(),
+            Codec::Av1 => "AV1".into(),
             Codec::MpegAudio => "MPEG Audio".into(),
             Codec::AacAdts => "AAC (ADTS)".into(),
             Codec::AacLatm => "AAC (LATM)".into(),
             Codec::Ac3 => "AC-3".into(),
             Codec::Eac3 => "E-AC-3".into(),
             Codec::Dts => "DTS".into(),
+            Codec::Opus => "Opus".into(),
             Codec::TrueHd => "Dolby TrueHD".into(),
             Codec::LpcmBluray => "LPCM (Blu-ray)".into(),
             Codec::LpcmDvd => "LPCM (DVD)".into(),
@@ -218,10 +235,13 @@ impl Codec {
             Codec::Mpeg1Video | Codec::Mpeg2Video => Id::Mpeg2Video,
             Codec::H264 => Id::H264,
             Codec::Hevc => Id::Hevc,
+            Codec::Mpeg4Part2 => Id::Mpeg4Video,
+            Codec::Av1 => Id::Av1,
             Codec::MpegAudio => Id::Mp2,
             Codec::AacAdts | Codec::AacLatm => Id::Aac,
             Codec::Ac3 => Id::Ac3,
             Codec::Eac3 => Id::Eac3,
+            Codec::Opus => Id::Opus,
             Codec::LpcmBluray | Codec::LpcmDvd => Id::Pcm,
             Codec::Dts | Codec::TrueHd | Codec::Subtitle(_) | Codec::Unknown(_) => Id::Unknown,
         }
@@ -230,13 +250,14 @@ impl Codec {
     /// The kind of media.
     pub fn kind(&self) -> Kind {
         match self {
-            Codec::Mpeg1Video | Codec::Mpeg2Video | Codec::H264 | Codec::Hevc => Kind::Video,
+            Codec::Mpeg1Video | Codec::Mpeg2Video | Codec::H264 | Codec::Hevc | Codec::Mpeg4Part2 | Codec::Av1 => Kind::Video,
             Codec::MpegAudio
             | Codec::AacAdts
             | Codec::AacLatm
             | Codec::Ac3
             | Codec::Eac3
             | Codec::Dts
+            | Codec::Opus
             | Codec::TrueHd
             | Codec::LpcmBluray
             | Codec::LpcmDvd => Kind::Audio,
@@ -278,11 +299,14 @@ pub struct Unit {
     pub pts: Option<i64>,
     /// See `pts`.
     pub dts: Option<i64>,
-    /// Decoding can start here (I / IDR / IRAP pictures; every audio frame).
+    /// Decoding can start here (I / IDR / IRAP pictures, MPEG-4 Part 2 I-VOPs, AV1 units whose
+    /// packet sets the random access indicator; every audio frame).
     pub key: bool,
-    /// No other unit depends on it (B pictures of MPEG-1/2 video, non-reference H.264/HEVC).
+    /// No other unit depends on it (B pictures of MPEG-1/2 video, MPEG-4 Part 2 B-VOPs,
+    /// non-reference H.264/HEVC).
     pub disposable: bool,
-    /// Bytes of elementary stream.
+    /// Bytes of elementary stream (for AV1, with its start codes and emulation prevention
+    /// bytes).
     pub size: u32,
     /// TS: byte offset of the packet holding the first byte; PS: byte offset of its PES packet.
     pub(crate) pos: u64,
@@ -301,6 +325,59 @@ pub struct LpcmFormat {
     pub channels: u32,
     /// Bits per sample (16, 20 or 24).
     pub bits: u32,
+}
+
+/// An Opus stream's channel configuration (the Opus audio descriptor of the Opus transport
+/// draft, with the fixed configurations of its table 4-3 written out) and its trims.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpusConfig {
+    /// Output channels.
+    pub channels: u8,
+    /// Channel mapping family (RFC 7845 §5.1.1): 0, 1 or 255.
+    pub family: u8,
+    /// Opus streams in each access unit.
+    pub streams: u8,
+    /// Streams that decode to two channels.
+    pub coupled: u8,
+    /// For each output channel, the coded channel it is taken from, or 255 for silence.
+    pub mapping: Vec<u8>,
+    /// The units whose control header carries a start or end trim, in unit order.
+    pub trims: Vec<OpusTrim>,
+}
+
+/// Samples at 48 kHz that a unit's control header says to discard.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OpusTrim {
+    /// Index of the unit in [`Stream::units`].
+    pub unit: usize,
+    /// Samples to discard from the start of the unit.
+    pub start: u16,
+    /// Samples to discard from the end of the unit.
+    pub end: u16,
+}
+
+impl OpusConfig {
+    /// The `OpusHead` identification header (RFC 7845 §5.1) for this configuration. Its pre-skip
+    /// is the sum of the start trims of the units that open the stream (units 0, 1, 2 and so on,
+    /// as long as each one has a start trim), at most 65 535; a start trim later in the stream,
+    /// after a discontinuity, stays in [`OpusConfig::trims`] only. Its input sample rate is 48 kHz
+    /// and its output gain 0.
+    pub fn opus_head(&self) -> Vec<u8> {
+        let pre_skip =
+            self.trims.iter().enumerate().take_while(|&(k, t)| t.unit == k && t.start > 0).fold(0u16, |a, (_, t)| a.saturating_add(t.start));
+        let mut v = b"OpusHead".to_vec();
+        v.push(1);
+        v.push(self.channels);
+        v.extend_from_slice(&pre_skip.to_le_bytes());
+        v.extend_from_slice(&48_000u32.to_le_bytes());
+        v.extend_from_slice(&0i16.to_le_bytes());
+        v.push(self.family);
+        if self.family != 0 {
+            v.extend_from_slice(&[self.streams, self.coupled]);
+            v.extend_from_slice(&self.mapping);
+        }
+        v
+    }
 }
 
 /// Where a stream's PES packets come from.
@@ -332,6 +409,13 @@ pub struct Stream {
     pub units: Vec<Unit>,
     /// DVD LPCM: the sample format.
     pub lpcm: Option<LpcmFormat>,
+    /// Opus: the channel configuration from the PMT's Opus audio descriptor, and the trims of the
+    /// units' control headers. `None` when the descriptor is missing or not valid.
+    pub opus: Option<OpusConfig>,
+    /// AV1: the first four bytes of an ISOBMFF `av1C` record, from the PMT's AV1 video
+    /// descriptor (marker and version, profile and level, tier and color format, initial
+    /// presentation delay). `None` without a valid descriptor.
+    pub av1c: Option<[u8; 4]>,
     /// PES packets seen.
     pub pes_packets: u64,
     /// Bytes of payload ignored because the stream could not be split (e.g. before the first
@@ -345,15 +429,23 @@ impl Stream {
         self.codec.kind()
     }
     /// What a decoder needs for this stream, in the container-neutral form the codec crates take:
-    /// the codec ([`Codec::codec_id`]) and, for DVD LPCM, the sample format (big-endian). These
-    /// streams carry their configuration in band, so `extradata` is empty: H.264 and HEVC are
-    /// Annex B with their parameter sets, AAC is ADTS or LATM frames, and a Blu-ray LPCM packet
-    /// starts with its own 4-byte format header.
+    /// the codec ([`Codec::codec_id`]) and, for DVD LPCM, the sample format (big-endian). Opus
+    /// gets its `OpusHead` header ([`OpusConfig::opus_head`]), 48 kHz and its channel count, and
+    /// AV1 the four bytes of [`Stream::av1c`]. The other streams carry their configuration in
+    /// band, so `extradata` is empty: H.264 and HEVC are Annex B with their parameter sets,
+    /// MPEG-4 Part 2 has its configuration headers before its keyframes, AAC is ADTS or LATM
+    /// frames, and a Blu-ray LPCM packet starts with its own 4-byte format header.
     pub fn codec_params(&self) -> crate::CodecParams {
         let mut p = crate::CodecParams::new(self.codec.codec_id());
         if let Some(f) = self.lpcm {
             let n = |v: u32| u16::try_from(v).unwrap_or(0);
             p = p.with_sample_rate(f.sample_rate).with_channels(n(f.channels)).with_pcm(crate::PcmFormat::int(n(f.bits), true, true));
+        }
+        if let (Codec::Opus, Some(o)) = (&self.codec, &self.opus) {
+            p = p.with_sample_rate(48_000).with_channels(u16::from(o.channels)).with_extradata(o.opus_head());
+        }
+        if let (Codec::Av1, Some(c)) = (&self.codec, self.av1c) {
+            p = p.with_extradata(c.to_vec());
         }
         p
     }
@@ -395,7 +487,8 @@ impl File {
         self.streams.iter().position(|s| s.kind() == kind && !s.units.is_empty() && f(&s.codec))
     }
 
-    /// Read access unit `i` of stream `s`.
+    /// Read access unit `i` of stream `s`. An AV1 unit comes back in the low overhead bitstream
+    /// format ([`Codec::Av1`]), so it can be shorter than [`Unit::size`].
     pub fn read_unit<S: ByteSource + ?Sized>(&self, src: &S, s: usize, i: usize) -> Result<Vec<u8>> {
         let st = self.streams.get(s).ok_or_else(|| Error::Invalid("no such stream".into()))?;
         let u = st.units.get(i).ok_or_else(|| Error::Invalid("no such unit".into()))?;
@@ -410,6 +503,9 @@ impl File {
         }
         if out.len() < u.size as usize {
             return Err(Error::Invalid(format!("unit {i} truncated ({} of {} bytes)", out.len(), u.size)));
+        }
+        if st.codec == Codec::Av1 {
+            es::av1_obus(&mut out);
         }
         Ok(out)
     }

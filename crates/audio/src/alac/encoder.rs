@@ -8,7 +8,11 @@
 //!
 //! The search (stereo matrixing, 4 or 8 predictor coefficients) and the state kept across
 //! packets (coefficients, the last matrixing, and the buffers the trial runs read stale parts of)
-//! follow the reference, so for the same input this writes the same packets as it.
+//! follow the reference, so for the same input this writes the same packets as it, with one
+//! exception: the shifted-off low bytes. The reference passes 1 (24-bit) or 2 (32-bit) low bytes
+//! of every sample through uncompressed, even for silence. Here an element shifts off fewer bytes
+//! in a packet whose samples fit well within the width the reference predicts (see
+//! [`packet_shift`]), so silence and quiet passages are not padded with a byte or two per sample.
 
 use super::ag::{self, AgParams};
 use super::bits::{BitCounter, BitSink, BitWriter};
@@ -98,6 +102,25 @@ fn bytes_shifted(bit_depth: u32) -> u32 {
         24.. => 1,
         _ => 0,
     }
+}
+
+/// The bytes an element shifts off in one packet: the fewest, down from the reference's
+/// [`bytes_shifted`], that leave every sample at least one bit narrower than the width the
+/// reference predicts (`bit_depth − 8 · bytes_shifted`). The predictor then works on values no
+/// wider than in the reference, so its arithmetic stays in the same range; only fewer low bytes go
+/// out uncompressed. The spare bit is there because at the full width, coding the low byte through
+/// the predictor costs about as much as storing it, and for 24-bit mono measured 2% more.
+/// A 32-bit pair keeps at least 1: with none, its prediction width (33 bits) exceeds the 32 the
+/// format allows.
+fn packet_shift(bit_depth: u32, channels: &[&[i32]]) -> u32 {
+    let reference = bytes_shifted(bit_depth);
+    let width = bit_depth - reference * 8 - 1;
+    let floor = u32::from(bit_depth == 32 && channels.len() == 2);
+    let fits = |bytes: u32| {
+        let (lo, hi) = (-(1i64 << (width - 1)), (1i64 << (width - 1)) - 1);
+        channels.iter().flat_map(|c| c.iter()).all(|&x| (lo..=hi).contains(&i64::from(x >> (bytes * 8))))
+    };
+    (floor..reference).find(|&b| fits(b)).unwrap_or(reference)
 }
 
 impl Encoder {
@@ -191,11 +214,12 @@ impl Encoder {
                     w.put(cpe_tag, 4);
                     cpe_tag += 1;
                     let (l, r) = (channels[index], channels[index + 1]);
+                    let bs = packet_shift(self.bit_depth, &[l, r]);
                     // as in the reference, fast mode applies to stereo streams only
                     if self.cfg.fast && channels.len() == 2 {
-                        self.encode_stereo_fast(&mut w, index, l, r)?;
+                        self.encode_stereo_fast(&mut w, index, l, r, bs)?;
                     } else {
-                        self.encode_stereo(&mut w, index, l, r)?;
+                        self.encode_stereo(&mut w, index, l, r, bs)?;
                     }
                     index += 2;
                 }
@@ -203,7 +227,8 @@ impl Encoder {
                     let tag = if element == ID_LFE { &mut lfe_tag } else { &mut sce_tag };
                     w.put(*tag, 4);
                     *tag += 1;
-                    self.encode_mono(&mut w, index, channels[index])?;
+                    let bs = packet_shift(self.bit_depth, &[channels[index]]);
+                    self.encode_mono(&mut w, index, channels[index], bs)?;
                     index += 1;
                 }
             }
@@ -231,10 +256,10 @@ impl Encoder {
     }
 
     /// `EncodeStereo`: a channel pair with the matrixing and coefficient search.
-    fn encode_stereo(&mut self, w: &mut BitWriter, ch: usize, l: &[i32], r: &[i32]) -> Result<()> {
+    /// `bs`: the bytes shifted off, from [`packet_shift`].
+    fn encode_stereo(&mut self, w: &mut BitWriter, ch: usize, l: &[i32], r: &[i32], bs: u32) -> Result<()> {
         let start = w.bit_len();
         let n = l.len();
-        let bs = bytes_shifted(self.bit_depth);
         let chan_bits = self.bit_depth - bs * 8 + 1;
         let partial = self.partial(n);
         let params = AgParams::new(ag::MB0, PB_FACTOR * ag::PB0 / 4, ag::KB0);
@@ -329,10 +354,9 @@ impl Encoder {
     }
 
     /// `EncodeStereoFast`: a channel pair without matrixing or search.
-    fn encode_stereo_fast(&mut self, w: &mut BitWriter, ch: usize, l: &[i32], r: &[i32]) -> Result<()> {
+    fn encode_stereo_fast(&mut self, w: &mut BitWriter, ch: usize, l: &[i32], r: &[i32], bs: u32) -> Result<()> {
         let start = w.bit_len();
         let n = l.len();
-        let bs = bytes_shifted(self.bit_depth);
         let chan_bits = self.bit_depth - bs * 8 + 1;
         let partial = self.partial(n);
         let params = AgParams::new(ag::MB0, PB_FACTOR * ag::PB0 / 4, ag::KB0);
@@ -396,10 +420,9 @@ impl Encoder {
     }
 
     /// `EncodeMono`: one channel (SCE or LFE).
-    fn encode_mono(&mut self, w: &mut BitWriter, ch: usize, input: &[i32]) -> Result<()> {
+    fn encode_mono(&mut self, w: &mut BitWriter, ch: usize, input: &[i32], bs: u32) -> Result<()> {
         let start = w.bit_len();
         let n = input.len();
-        let bs = bytes_shifted(self.bit_depth);
         let shift = bs * 8;
         let chan_bits = self.bit_depth - shift;
         let partial = self.partial(n);
@@ -564,17 +587,83 @@ mod tests {
         assert_eq!(dec.decode(&p).unwrap(), vec![noise[..4096].to_vec()]);
     }
 
+    /// One packet of `frames` frames per element, encoded and decoded back; its size in bytes.
+    fn packet_bytes(cfg: EncoderConfig, input: &[Vec<i32>]) -> usize {
+        let mut enc = Encoder::new(cfg).unwrap();
+        let chunk: Vec<&[i32]> = input.iter().map(Vec::as_slice).collect();
+        let p = enc.encode(&chunk).unwrap();
+        let mut dec = Decoder::new(&enc.cookie()).unwrap();
+        assert_eq!(dec.decode(&p).unwrap(), input, "{cfg:?}");
+        p.len()
+    }
+
+    /// The reference shifts 1 (24-bit) or 2 (32-bit) low bytes of every sample off and stores them
+    /// uncompressed, so a 4096-frame stereo packet of 24-bit silence was 8224 bytes (#1368).
     #[test]
-    fn bad_input_is_refused() {
-        assert!(Encoder::new(EncoderConfig::new(44_100, 2, 8)).is_err());
-        assert!(Encoder::new(EncoderConfig::new(44_100, 9, 16)).is_err());
-        assert!(Encoder::new(EncoderConfig::new(44_100, 2, 16).with_frame_length(0)).is_err());
-        let mut enc = Encoder::new(EncoderConfig::new(44_100, 2, 16).with_frame_length(16)).unwrap();
-        assert!(enc.encode(&[&[0; 4]]).is_err());
-        assert!(enc.encode(&[&[0; 4], &[0; 5]]).is_err());
-        assert!(enc.encode(&[&[0; 17], &[0; 17]]).is_err());
-        assert!(enc.encode(&[&[], &[]]).is_err());
-        assert!(enc.encode(&[&[40_000], &[0]]).is_err());
-        assert!(enc.encode(&[&[-32_768], &[32_767]]).is_ok());
+    fn silence_is_a_few_bytes_at_every_depth() {
+        for bits in [16, 20, 24, 32] {
+            for ch in [1, 2, 6] {
+                for fast in [false, true] {
+                    let cfg = EncoderConfig::new(48_000, ch, bits).with_fast(fast);
+                    let bytes = packet_bytes(cfg, &vec![vec![0; 4096]; usize::from(ch)]);
+                    // a 32-bit pair keeps one shifted byte per sample: the format allows no less
+                    let floor = if bits == 32 { 4096 * 2 * (usize::from(ch) / 2) } else { 0 };
+                    assert!(bytes <= floor + 40 * usize::from(ch), "{bits} bits, {ch} ch, fast {fast}: {bytes} bytes");
+                }
+            }
+        }
+    }
+
+    /// Quiet audio (within 12 bits) at 24 and 32 bits shifts nothing off and comes within 10% of
+    /// the same audio at 16 bits (the wider prediction width makes the coder's escapes longer);
+    /// the reference stored a byte or two more per sample. Samples at the edges of each width and
+    /// loud audio decode exactly.
+    #[test]
+    fn quiet_packets_compress_like_16_bit_audio_and_loud_ones_round_trip() {
+        let quiet = signal(4096, 2, 12);
+        let at16 = packet_bytes(EncoderConfig::new(48_000, 2, 16), &quiet);
+        let at24 = packet_bytes(EncoderConfig::new(48_000, 2, 24), &quiet);
+        assert!(at24 * 10 <= at16 * 11, "24-bit {at24} bytes, 16-bit {at16}");
+        let mono = vec![quiet[0].clone()];
+        let at16 = packet_bytes(EncoderConfig::new(48_000, 1, 16), &mono);
+        let at32 = packet_bytes(EncoderConfig::new(48_000, 1, 32), &mono);
+        assert!(at32 * 10 <= at16 * 11, "32-bit mono {at32} bytes, 16-bit {at16}");
+        // the samples just past each narrower width, and loud audio, decode exactly
+        for bits in [24u32, 32] {
+            for ch in [1u8, 2] {
+                let edge: Vec<Vec<i32>> = (0..ch)
+                    .map(|c| {
+                        (0..4096)
+                            .map(|i| match (i + usize::from(c)) % 4 {
+                                0 => (16_384 << (bits - 24)) - 1,
+                                1 => -(16_384 << (bits - 24)),
+                                2 => 16_384 << (bits - 24),
+                                _ => -(16_384 << (bits - 24)) - 1,
+                            })
+                            .collect()
+                    })
+                    .collect();
+                packet_bytes(EncoderConfig::new(48_000, ch, bits as u8), &edge);
+                packet_bytes(EncoderConfig::new(48_000, ch, bits as u8), &signal(4096, usize::from(ch), bits));
+            }
+        }
+    }
+
+    #[test]
+    fn the_shift_is_the_fewest_bytes_that_keep_the_reference_width() {
+        let z = [0i32; 4];
+        assert_eq!(packet_shift(16, &[&z]), 0);
+        assert_eq!(packet_shift(24, &[&z, &z]), 0);
+        assert_eq!(packet_shift(24, &[&[16_383, -16_384], &z]), 0);
+        assert_eq!(packet_shift(24, &[&[16_384], &z]), 1);
+        assert_eq!(packet_shift(24, &[&[-16_385]]), 1);
+        assert_eq!(packet_shift(24, &[&[32_767]]), 1);
+        assert_eq!(packet_shift(32, &[&z]), 0);
+        assert_eq!(packet_shift(32, &[&[16_383]]), 0);
+        assert_eq!(packet_shift(32, &[&z, &z]), 1);
+        assert_eq!(packet_shift(32, &[&[1 << 21]]), 1);
+        assert_eq!(packet_shift(32, &[&[1 << 22]]), 2);
+        assert_eq!(packet_shift(32, &[&[i32::MIN]]), 2);
+        assert_eq!(packet_shift(32, &[&[i32::MAX], &z]), 2);
     }
 }

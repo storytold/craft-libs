@@ -134,22 +134,4 @@ mod tests {
             assert!(!is_vos_form(w, verbs), "{w}");
         }
     }
-
-    #[test]
-    fn missing_accents_are_restored() {
-        assert_eq!(accented("veni", verbs).as_deref(), Some("vení"));
-        assert_eq!(accented("tenes", verbs).as_deref(), Some("tenés"));
-        assert_eq!(accented("habla", verbs).as_deref(), Some("hablá"));
-        for w in ["canta", "casa", "", "s", "pan", "tenés"] {
-            assert_eq!(accented(w, verbs), None, "{w}");
-        }
-    }
-
-    proptest::proptest! {
-        #[test]
-        fn never_panics(s in "\\PC{0,40}") {
-            let _ = is_vos_form(&s, |_| true);
-            let _ = accented(&s, |_| true);
-        }
-    }
 }

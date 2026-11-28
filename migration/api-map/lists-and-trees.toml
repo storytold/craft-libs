@@ -1,0 +1,503 @@
+# API map of the "Lists and trees" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Lists and trees"
+new_module = "craft_ui::list"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "List"
+old = "craft_ui::list::view::List"
+new = "craft_ui::list::List"
+status = "moved"
+note = "A generic `Collection` component `List<K>`: `List::new(label)` then `.show_items(ui, &source, &mut |key, icx| ListRow::new(..))`. The rows are a `DisplayOrder` plus `ItemSource` (`size_hint` gives a row's height, `Auto` rows measure themselves); the output is `CollectionResponse<K, RowEvent>` whose events replace `ListEvent`. `ListOutput::rows` and `drop_target` have no counterpart (the item step draws the drop mark)."
+
+[[type]]
+name = "ListRow"
+old = "craft_ui::list::row::ListRow"
+new = "craft_ui::list::ListRow"
+status = "moved"
+note = "The item component of a `List`: `ListRow::new(label)` (no key; the item step names the row) built in the `show_items` closure from the `ItemCx`: `.cells(icx.cells())` for toggle cells, `.renaming(icx.row.renaming)`, `.depth(icx.depth)`. It is a leaf `Component`: `show` is the pipeline's and the output is `RowOutput { response, event, label }`. Selection, focus, the lead, hover, the drop mark, the drag ghost, the row menu, rename keys and double-click rename belong to the collection."
+
+[[type]]
+name = "ToggleColumn"
+old = "craft_ui::list::toggle::ToggleColumn"
+new = ""
+status = "replaced"
+note = "The column is the collection's (`ColumnSpec::new(key, header, width).kind(ColumnKind::Toggle(ToggleColumn::sweepable()))`, `craft_ui::contract::ToggleColumn`), which flips cells and sweeps; the source reports each cell with `ItemSource::toggled`. A row draws its cell with `ListRow::toggle(ToggleCell::eye(column, on))`, `ToggleCell::lock`, `ToggleCell::check` or `ToggleCell::new(column, ToggleFace::Icons { on, off }, state, name)`. The sweep, its edit gesture and `CollectionEvent::Toggle(EditEvent<ToggleEdit>)` replace `RowEvent::Toggle`."
+
+[[type]]
+name = "ToggleEdit"
+old = "craft_ui::list::toggle::ToggleEdit"
+new = "craft_ui::contract::ToggleEdit"
+status = "moved"
+note = "`ToggleEdit { key, column: ColumnKey, on }`: the column is a key, not an index, and the row is `key`."
+
+[[type]]
+name = "RowResponse"
+old = "craft_ui::list::row::RowResponse"
+new = ""
+status = "replaced"
+note = "`RowOutput { response, event, label }`. The `toggles` responses, `events` list and `min_width` are gone: toggles report through the collection, a row reports one `RowEvent` per pass, and `ListRow::measure_in(ui, Proposal::Min)` gives the least width."
+
+[[type]]
+name = "RowEvent"
+old = "craft_ui::list::row::RowEvent"
+new = "craft_ui::list::RowEvent"
+status = "replaced"
+note = "Only what a row's own parts report remains: `Open { open, all }` (`all` while Alt is held), `LinkToggled { thumb, linked }`, `ThumbClicked { target: ThumbTarget, mods: Mods, clicks: u32 }` (was a tuple variant; `mods` are the modifiers held at the click, none for a key; `clicks` is the press count, 1 for a key), `ThumbDrag(ThumbTarget)`, and `Trailing { part: TrailingPart, mods: Mods }` for a press on a trailing part (`ListRow::trailing_part`). `Toggle`, `Renamed`, `RenameStarted`, `RenameEnded`, `Menu` and `LabelDoubleClicked` are `CollectionEvent::Toggle`, `CollectionEvent::Rename`, `CollectionEvent::ContextMenu` and `CollectionEvent::Activate`."
+
+[[type]]
+name = "ThumbSize"
+old = "craft_ui::list::row::ThumbSize"
+new = "craft_ui::list::ThumbSize"
+status = "moved"
+note = "`ThumbSize::label(&ListWords)` is the name in the user's language; `name()` and `ThumbSizeLabels` are gone."
+
+[[type]]
+name = "ThumbTarget"
+old = "craft_ui::list::row::ThumbTarget"
+new = "craft_ui::list::ThumbTarget"
+status = "moved"
+
+[[type]]
+name = "ListRowStyle"
+old = "craft_ui::list::row::ListRowStyle"
+new = "craft_ui::list::ListRowStyle"
+status = "replaced"
+note = "A `ComponentStyle` built from the tokens; its fields are private. `ListRow::row_height(cx, thumb, detail)` is `ListRowStyle::height(thumb, detail)` for an item layout."
+
+[[type]]
+name = "DropMark"
+old = "craft_ui::list::row::DropMark"
+new = "craft_ui::contract::DropMark"
+status = "replaced"
+note = "The item step draws the drop mark of a row and the insertion line; `ListRow::drop_mark` is gone."
+
+[[type]]
+name = "paint_ghost"
+old = "craft_ui::list::paint_ghost"
+new = ""
+status = "removed"
+note = "Drag ghosts and drop marks are behaviour of the item step and the drag session."
+
+[[type]]
+name = "drop_line"
+old = "craft_ui::list::drop_line"
+new = ""
+status = "removed"
+note = "Drag ghosts and drop marks are behaviour of the item step and the drag session."
+
+[[type]]
+name = "paint_drop_mark"
+old = "craft_ui::list::paint_drop_mark"
+new = ""
+status = "removed"
+note = "Drag ghosts and drop marks are behaviour of the item step and the drag session."
+
+[[type]]
+name = "GhostThumb"
+old = "craft_ui::list::GhostThumb"
+new = ""
+status = "removed"
+note = "Drag ghosts and drop marks are behaviour of the item step and the drag session."
+
+[[type]]
+name = "RowCommand"
+old = "craft_ui::list::RowCommand"
+new = ""
+status = "removed"
+note = "The row's menu is the app's (`CollectionEvent::ContextMenu`); a rename ends in `CollectionEvent::Rename(EditEvent<Rename>)` with `Commit` or `Cancel`."
+
+[[type]]
+name = "RowMenuLabels"
+old = "craft_ui::list::RowMenuLabels"
+new = ""
+status = "removed"
+note = "The row's menu is the app's (`CollectionEvent::ContextMenu`); a rename ends in `CollectionEvent::Rename(EditEvent<Rename>)` with `Commit` or `Cancel`."
+
+[[type]]
+name = "RenameEnd"
+old = "craft_ui::list::RenameEnd"
+new = ""
+status = "removed"
+note = "The row's menu is the app's (`CollectionEvent::ContextMenu`); a rename ends in `CollectionEvent::Rename(EditEvent<Rename>)` with `Commit` or `Cancel`."
+
+[[type]]
+name = "TrailingItem"
+old = "craft_ui::list::row::TrailingItem"
+new = ""
+status = "replaced"
+note = "A trailing item is a caption-role text as wide as it measures: `ListRow::trailing(text)` and `ListRow::optional(text)`; the optional one drops out when the label would get narrower than its least width. `TrailingPaint` is removed."
+
+[[type]]
+name = "TreeState"
+old = "craft_ui::list::tree::TreeState"
+new = ""
+status = "replaced"
+note = "Plain app data (`OpenSet<K>`, no egui memory): the app keeps it and reports `ItemSource::open` from it. `apply(key, open, all, groups)` takes the parts of `RowEvent::Open` and `CollectionEvent::Open`."
+
+[[type]]
+name = "OpenChange"
+old = "craft_ui::list::tree::OpenChange"
+new = "craft_ui::contract::OpenChange"
+status = "moved"
+note = "`OpenChange { key, open }`: no `all` field (see the report)."
+
+[[type]]
+name = "TreeText"
+old = "craft_ui::list::tree::TreeText"
+new = ""
+status = "replaced"
+note = "`ListWords::expand` and `collapse`, built-in words with `{row}`."
+
+[[type]]
+name = "paint_disclosure"
+old = "craft_ui::list::paint_disclosure"
+new = ""
+status = "replaced"
+note = "A row's disclosure part is a `Disclosure` face."
+
+[[type]]
+name = "TreeRow"
+old = "craft_ui::list::tree::TreeRow"
+new = ""
+status = "replaced"
+note = "`TreeRow::new(row, depth, has_children, open)` is `row.depth(depth)` plus `.group(open)` for a row that has children: one component, no wrapper. `TreeRow::text` is `ListWords`; `into_row` and `show` are gone."
+
+[[type]]
+name = "UndoRowEvent"
+old = "craft_ui::list::UndoRowEvent"
+new = ""
+status = "removed"
+note = "An undo row reports nothing of its own: a press on the row is `CollectionEvent::Activate`, which `undo_count(&events)` reads."
+
+[[type]]
+name = "UndoRowOutput"
+old = "craft_ui::list::UndoRowOutput"
+new = ""
+status = "removed"
+note = "See `UndoRowEvent`."
+
+[[type]]
+name = "UndoRow"
+old = "craft_ui::list::UndoRow"
+new = ""
+status = "removed"
+note = "An undo list shows `ListRow`s: `UndoRows::row(at)` is `ListRow::new(label).option()`, the option role of a listbox. The list's selection marks the rows."
+
+[[type]]
+name = "UndoRowStyle"
+old = "craft_ui::list::UndoRowStyle"
+new = ""
+status = "removed"
+note = "See `UndoRow`; the look is `ListRowStyle`."
+
+[[type]]
+name = "FindingsList"
+old = "craft_ui::list::findings::FindingsList"
+new = "craft_ui::list::FindingsList"
+status = "moved"
+note = "A `Collection`: `FindingsList::new(label).show_items(ui, &Findings::new(&findings), &mut |key, icx| findings[*key].row(&icx.words::<FindingsWords>()))`. `FindingLevel` is `Severity` (with `Info`), `Finding::message` is `text`, `Finding::page` is `detail` (the app writes the words), `Finding::target` stays in the app (filter `Activate` events by it). The list is keyed by `Finding::id` (`Finding::new(id, severity, text)`), so the selection survives findings that come and go. The summary line is `FindingsSummary::new(&findings)`; `findings_summary(ctx, findings, labels)` is `summary_text(&FindingsWords, findings)`."
+
+[[type]]
+name = "EventLog"
+old = "craft_ui::list::events::EventLog"
+new = "craft_ui::list::EventLog"
+status = "replaced"
+note = "`EventLog` is the item source (events at or above `EventLogState::min_level`, newest first, keyed by event id) shown by `EventList`, which is striped, with `LogEvent::row(age, words, icx.row.striped)`. The bar (level select, counts, Clear All) and the details box are not ported: they need `Button`, `Select`, `Notice` and a `Pattern` type that this revision lacks. `EventLogState::selected` is the app's `Selection<u64>`; `EventLogOutput::clear_all` goes with the bar. `EventLogLabels` is `EventWords`."
+
+[[type]]
+name = "UndoList"
+old = "craft_ui::edit::history_panel::undo_list::UndoList"
+new = "craft_ui::list::UndoList"
+status = "replaced"
+note = "A `Collection` over `UndoRows::new(&labels)` (labels newest first, built by the app from its history) with a `UndoMark` selection; `undo_count(&events)` is `UndoListEvent::UndoThrough(n)`, `footer_text(&UndoWords, &format, &mark)` is the footer text (the count in the scope's digits) (`None` is the Cancel row). `UndoList::marked(Some(i))` is `Bind::given(UndoMark::at(i))`. Hover marking and the footer row are not ported."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+[[setter]]
+type = "ListRow"
+old = "new(key, label)"
+new = "new(label)"
+
+[[setter]]
+type = "ListRow"
+old = "spacer(key)"
+new = "spacer()"
+
+[[setter]]
+type = "ListRow"
+old = "selected(bool)"
+new = "selected(bool) (Props)"
+
+[[setter]]
+type = "ListRow"
+old = "focused(bool)"
+new = "removed: the item step gives the lead flag"
+
+[[setter]]
+type = "ListRow"
+old = "selectable(bool)"
+new = "removed: `ItemSource::enabled` and `is_section`"
+
+[[setter]]
+type = "ListRow"
+old = "strong(bool), muted(bool), dimmed(bool)"
+new = "strong(bool); ink(RowInk::Muted) and ink(RowInk::Dimmed)"
+
+[[setter]]
+type = "ListRow"
+old = "italic(bool), clipped(bool), highlight(bool), rule(bool), striped(bool), layer(bool), renaming(bool), leading_first(bool)"
+new = "same names and signatures"
+
+[[setter]]
+type = "ListRow"
+old = "thumb_drags(bool)"
+new = "thumb_drag(ThumbTarget, payload)"
+note = "A drag from the thumbnail starts the drag session with `payload` (a ghost as large as the thumbnail) and still reports `RowEvent::ThumbDrag`; a drop target reads the payload as for row drags (`FooterAction::accepts_drops::<P>`, `DropTarget<P>`). It also covers the first thumbnail. Trailing items beyond text: `trailing_icon(icon, name)` (an icon with a node and tooltip) and `trailing_part(TrailingPart, TrailingFace, name)` (a pressable face; `RowEvent::Trailing`)."
+
+[[setter]]
+type = "ListRow"
+old = "detail(String), lines(String, max_lines)"
+new = "detail(impl Into<Label>), lines(impl Into<Label>): the `max_lines` limit is gone"
+
+[[setter]]
+type = "ListRow"
+old = "tooltip(WidgetText), description(String), accessible_name(String)"
+new = "tooltip(impl Into<Tooltip>), description(String), accessible_name(String)"
+
+[[setter]]
+type = "ListRow"
+old = "icon(Icon)"
+new = "icon(IconSpec::svg(IconId::new(name)))"
+
+[[setter]]
+type = "ListRow"
+old = "glyph(paint), glyph_sized(width, paint)"
+new = "icon(IconSpec::glyph(&glyph)): a `Glyph` value draws it; `glyph_sized` is removed"
+
+[[setter]]
+type = "ListRow"
+old = "thumb(size, paint(&Painter, Rect))"
+new = "thumb(size, paint(&ContentPainterCx, Rect))"
+
+[[setter]]
+type = "ListRow"
+old = "extra_thumb(paint), thumb_link(linked, name), thumb_target(target)"
+new = "same names; `paint` takes `&ContentPainterCx`"
+
+[[setter]]
+type = "ListRow"
+old = "thumb_sized(Vec2, paint), ThumbSize::Px(u16)"
+new = "thumb_aspect(size, aspect, paint): the height is a `ThumbSize` token step and the width is `aspect` times it; `ThumbSize::Px` is removed"
+
+[[setter]]
+type = "ListRow"
+old = "toggle(ToggleColumn)"
+new = "toggle(ToggleCell) with `.cells(icx.cells())`"
+
+[[setter]]
+type = "ListRow"
+old = "trailing_item(width, add(&mut Ui)), optional_item(width, add)"
+new = "trailing(text), optional(text): the item is a caption-role text measured by the row"
+
+[[setter]]
+type = "ListRow"
+old = "indent(f32), paint_depth(usize), indented_toggles(bool)"
+new = "depth(usize); `indent` and `indented_toggles` are removed"
+
+[[setter]]
+type = "ListRow"
+old = "body(add(&mut Ui))"
+new = "removed: use `trailing(text)` or a second line"
+
+[[setter]]
+type = "ListRow"
+old = "drop_mark, menu, rename_on_double_click, rename_field_name, rename_draft, role, position_in_set"
+new = "removed: the collection owns them"
+
+[[setter]]
+type = "ListRow"
+old = "height_in(ui, width), min_width(ui), min_width_in_tree"
+new = "row_height(cx, thumb, detail) for an item layout; `measure_in(ui, Proposal::Min)`"
+
+[[setter]]
+type = "ListRow"
+old = "take_rename_draft, take_open_rename_draft"
+new = "removed: the item step owns the rename lifecycle"
+
+[[setter]]
+type = "ToggleColumn"
+old = "eye(name, on), lock(name, on)"
+new = "ToggleCell::eye(column, on), ToggleCell::lock(column, on)"
+
+[[setter]]
+type = "ToggleColumn"
+old = "check_box(name, CheckState)"
+new = "ToggleCell::check(column, ToggleState, name)"
+
+[[setter]]
+type = "ToggleColumn"
+old = "new(name, on_icon, off_icon, on)"
+new = "ToggleCell::new(column, ToggleFace::Icons { on, off }, ToggleState::of(on), name)"
+
+[[setter]]
+type = "ToggleColumn"
+old = "tooltip(String), always_visible(bool), mixed(bool), check(bool)"
+new = "tooltip(impl Into<Label>), always_visible(), ToggleState::Mixed, ToggleCell::check"
+
+[[setter]]
+type = "ToggleColumn"
+old = "label(LabelColor)"
+new = "fill(DataColor)"
+
+[[setter]]
+type = "ToggleColumn"
+old = "at_end(bool), exclusive(bool), key(KeyboardShortcut)"
+new = "removed: column order is the item layout's, `exclusive` is the app ignoring the other edits, a key is a command"
+
+[[setter]]
+type = "TreeRow"
+old = "new(row, depth, has_children, open)"
+new = "ListRow::depth(depth).group(open)"
+
+[[setter]]
+type = "List"
+old = "new(id_salt, label, &rows)"
+new = "new(label)` and `.id_salt(salt)"
+
+[[setter]]
+type = "List"
+old = "mode(SelectionMode::Single)"
+new = "select(SelectMode::Single)"
+
+[[setter]]
+type = "List"
+old = "mode(SelectionMode::Multiple)"
+new = "select(SelectMode::Multi)"
+
+[[setter]]
+type = "List"
+old = "selection(&mut selection)"
+new = "selection(Bind::bound(&mut selection))"
+
+[[setter]]
+type = "List"
+old = "reorder(Reorder)"
+new = "reorder(ReorderRule)"
+
+[[setter]]
+type = "List"
+old = "renamable(true)"
+new = "rename(true)"
+
+[[setter]]
+type = "List"
+old = "reveal(key)"
+new = "reveal(key)"
+
+[[setter]]
+type = "List"
+old = "tree(true)"
+new = "tree(true)"
+
+[[setter]]
+type = "List"
+old = "show(ui, |at, key| ListRow)"
+new = "show_items(ui, &source, &mut |key, icx| ListRow)"
+
+[[setter]]
+type = "List"
+old = "allow_empty, thumbnails, detail_lines, row_height, heights, measured"
+new = "removed: a row measures its own height and the source gives `size_hint`"
+
+[[setter]]
+type = "List"
+old = "max_height, scroll_bar_label, type_ahead, tree_text"
+new = "removed: the caller bounds the list; the other words and type-ahead belong to the item step"
+
+[[setter]]
+type = "List"
+old = "can_rename, can_drag, accept_from, rename_draft, start_rename, row_menu"
+new = "removed: no counterpart in the contract (see the report)"
+
+[[setter]]
+type = "FindingsList"
+old = "new(id_salt, &findings).summary(bool)"
+new = "FindingsSummary::new(&findings)` shown above `FindingsList::new(label)"
+
+[[setter]]
+type = "EventLog"
+old = "new(id_salt, &events, &mut state, now_ms).show(ui)"
+new = "EventLog::new(&events, &state)` with `EventList::new(label).show_items(..)"
+
+[[call]]
+old = "craft_ui::list::toggle::ToggleColumn"
+new = "craft_ui::list::ToggleCell"
+note = "Type `ToggleColumn` is replaced; the type entry above has the details."
+
+[[call]]
+old = "craft_ui::list::row::RowResponse"
+new = "craft_ui::list::RowOutput"
+note = "Type `RowResponse` is replaced; the type entry above has the details."
+
+[[call]]
+old = "craft_ui::list::row::TrailingItem"
+new = "craft_ui::list::ListRow::trailing"
+note = "Type `TrailingItem` is replaced; the type entry above has the details."
+
+[[call]]
+old = "craft_ui::list::tree::TreeState"
+new = "craft_ui::list::OpenSet"
+note = "Type `TreeState` is replaced; the type entry above has the details."
+
+[[call]]
+old = "craft_ui::list::tree::TreeText"
+new = "craft_ui::list::ListWords"
+note = "Type `TreeText` is replaced; the type entry above has the details."
+
+[[call]]
+old = "craft_ui::list::paint_disclosure"
+new = "craft_ui::controls::disclosure::Disclosure"
+note = "Type `paint_disclosure` is replaced; the type entry above has the details."
+
+[[call]]
+old = "craft_ui::list::tree::TreeRow"
+new = "craft_ui::list::ListRow"
+note = "Type `TreeRow` is replaced; the type entry above has the details."
+
+[[type]]
+name = "LabelColors"
+old = "craft_ui::style::labels::LabelColors"
+new = ""
+status = "replaced"
+note = "`LabelColor::swatch()`, `fill()` and `icon()` (`craft_theme::LabelColor`, `const fn`s returning the fixed data colours; `label_colors(color)` is the three calls). Paint a toggle cell with `ToggleCell::fill(DataColor::new(color.fill().into()))` and list the colour with `Entry::swatch`; tiles take `swatch()`."
+
+[[type]]
+name = "label_color_label"
+old = ""
+new = "craft_ui::list::label_color_label"
+status = "pending"
+note = "`label_color_label(Option<LabelColor>, &ListWords) -> Label`: one word per label colour and for no label (ids `list.labelRed` to `list.labelGray`, `list.labelNone`), beside `ThumbSize::label`."
+
+# fwk-sweepapply
+[[type]]
+name = "SweepApply"
+old = ""
+new = "craft_ui::contract::SweepApply"
+status = "pending"
+note = "`SweepApply::new()` (also `Default`; plain: Alt is ignored) or `SweepApply::show_only()` (Alt plus the first press shows only that cell), then `feed(&EditEvent<ToggleEdit<K>>) -> Option<SweepStep<K>>` for every `CollectionEvent::Toggle` of a pass, in order: the one host-side reader of a toggle column's events; `gesture()` is the running sweep's first gesture, which a host that records a sweep as one undo step uses for all its events. It replaces each host's own reading of `Update`, `Cancel` and `Alt`."
+
+[[type]]
+name = "SweepStep"
+old = ""
+new = "craft_ui::contract::SweepStep"
+status = "pending"
+note = "`SweepStep<K> { Flip(ToggleEdit<K>), ShowOnly(ToggleEdit<K>), Restore(ToggleEdit<K>), UndoShowOnly(ToggleEdit<K>) }`, `#[non_exhaustive]` (matches outside craft-ui need a wildcard arm): what the host applies for one toggle event. `ShowOnly` and `UndoShowOnly` come only from a `SweepApply::show_only()` column."

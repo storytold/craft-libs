@@ -402,6 +402,56 @@ fn decodes_bc5_as_red_and_green_with_blue_zero() {
 }
 
 #[test]
+fn sixteen_bit_textures_open_at_16_bits() {
+    let samples = |n: usize| -> Vec<u16> { (0..n).map(|i| (i as u32 * 7919 % 65536) as u16).collect() };
+    let le = |s: &[u16]| -> Vec<u8> { s.iter().flat_map(|v| v.to_le_bytes()).collect() };
+    let (gray, rg, rgba) = (samples(6), samples(12), samples(24));
+    let mut files = vec![];
+    for (dxgi, stored) in [(56, &gray), (53, &gray), (35, &rg), (33, &rg), (11, &rgba), (9, &rgba)] {
+        let mut b = dx10(3, 2, dxgi, 3, 0, 1);
+        b.extend(le(stored));
+        files.push((format!("DXGI {dxgi}"), b));
+    }
+    // D3DFMT_A16B16G16R16, the legacy FourCC 36.
+    let mut b = compressed(3, 2, &36u32.to_le_bytes());
+    b.extend(le(&rgba));
+    files.push(("FourCC 36".into(), b));
+    // A 16-bit luminance mask (L16).
+    let mut b = header(3, 2, DDPF_LUMINANCE, &[0; 4], 16, [0xffff, 0, 0, 0]);
+    b.extend(le(&gray));
+    files.push(("L16".into(), b));
+    let rgb: Vec<u16> = rg.chunks(2).flat_map(|p| [p[0], p[1], 0]).collect();
+    for (name, b) in files {
+        let im = decode(&b).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(im.sample_type(), SampleType::U16, "{name}");
+        let (layout, want) = match name.as_str() {
+            "DXGI 56" | "DXGI 53" | "L16" => (ChannelLayout::Gray, &gray),
+            // R16G16 is red and green, not gray and alpha: blue is 0, as for BC5.
+            "DXGI 35" | "DXGI 33" => (ChannelLayout::Rgb, &rgb),
+            _ => (ChannelLayout::Rgba, &rgba),
+        };
+        assert_eq!((im.dimensions(), im.layout()), ((3, 2), layout), "{name}");
+        assert_eq!(&im.to_u16_samples().unwrap(), want, "{name}");
+    }
+    // The limit counts two bytes a sample.
+    let mut b = dx10(3, 2, 11, 3, 0, 1);
+    b.extend(le(&rgba));
+    let limits = |max_alloc| DecodeOptions { limits: Limits { max_alloc, ..Limits::default() }, ..DecodeOptions::default() };
+    assert!(matches!(decode_as_with(Format::Dds, &b, &limits(47)), Err(CodecError::LimitExceeded(_))));
+    assert!(decode_as_with(Format::Dds, &b, &limits(48)).is_ok());
+    // A2R10G10B10 masks: 10-bit fields open at 16 bits, rescaled from their own width.
+    let mut b = header(1, 1, DDPF_RGB | DDPF_ALPHAPIXELS, &[0; 4], 32, [0x3ff0_0000, 0xf_fc00, 0x3ff, 0xc000_0000]);
+    b.extend((1023u32 << 20 | 512 << 10 | 1 | 3 << 30).to_le_bytes());
+    let im = decode(&b).unwrap();
+    assert_eq!((im.sample_type(), im.layout()), (SampleType::U16, ChannelLayout::Rgba));
+    assert_eq!(im.to_u16_samples().unwrap(), [65535, 32800, 64, 65535]);
+    // Fields of 8 bits or fewer still open at 8 bits.
+    let mut b = header(1, 1, DDPF_LUMINANCE | DDPF_ALPHAPIXELS, &[0; 4], 16, [0xff, 0, 0, 0xff00]);
+    b.extend([7, 9]);
+    assert_eq!(decode(&b).unwrap().sample_type(), SampleType::U8);
+}
+
+#[test]
 fn refuses_signed_bc4_and_bc5() {
     for mut b in [compressed(4, 4, b"BC4S"), compressed(4, 4, b"BC5S"), dx10(4, 4, 81, 3, 0, 1), dx10(4, 4, 84, 3, 0, 1)] {
         b.extend([0; 16]);

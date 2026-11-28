@@ -167,3 +167,37 @@ fn bytes_supplied_for_a_linked_asset_are_not_written() -> Result<(), Box<dyn std
     assert_eq!(load::<Value>(&bytes)?.assets, [("8".to_owned(), b"kept".to_vec())]);
     Ok(())
 }
+
+#[test]
+fn preview_uses_the_strict_signature_path_without_losing_cursor_independence() -> Result<(), Box<dyn std::error::Error>> {
+    struct Counted {
+        cursor: std::io::Cursor<Vec<u8>>,
+        bytes_read: usize,
+    }
+    impl std::io::Read for Counted {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.cursor.read(out)?;
+            self.bytes_read += n;
+            Ok(n)
+        }
+    }
+    impl std::io::Seek for Counted {
+        fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.cursor.seek(position)
+        }
+    }
+    let mut non_zip = Counted { cursor: std::io::Cursor::new(vec![0x42; 1 << 20]), bytes_read: 0 };
+    non_zip.cursor.set_position(100);
+    assert_eq!(read_preview(&mut non_zip), None);
+    assert!(non_zip.bytes_read <= 4);
+
+    let bytes = save(&json!({}), "DesignCraft test", Some(b"png"), &[], &[])?;
+    let mut cursor = std::io::Cursor::new(&bytes);
+    cursor.set_position(bytes.len() as u64);
+    assert_eq!(read_preview(cursor), Some(b"png".to_vec()));
+    let mut prefixed = b"MZsynthetic-prefix".to_vec();
+    prefixed.extend(bytes);
+    assert_eq!(craft_document_bundle::read_preview_from(std::io::Cursor::new(&prefixed), PREVIEW), Some(b"png".to_vec()));
+    assert_eq!(read_preview(std::io::Cursor::new(prefixed)), None);
+    Ok(())
+}

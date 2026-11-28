@@ -32,3 +32,9 @@ fn tests_build_with_the_test_support_feature() {
     assert_eq!(file.header.version, craft_psd::Version::Psd);
     let _sample: fn(u32, u32, u32, bool) -> u8 = craft_psd::fixtures::sample;
 }
+
+mod atn_sidecar;
+mod csh;
+mod metadata_resources;
+mod resource_limits;
+mod tbr;

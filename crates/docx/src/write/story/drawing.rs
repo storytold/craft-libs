@@ -14,6 +14,14 @@ pub(super) struct DrawingInfo<'a> {
     pub link: Option<&'a str>,
 }
 
+/// The non-visual identity, placement and hyperlink relationship of one group member.
+/// Top-level objects keep their link on `wp:docPr` instead.
+pub(super) struct MemberInfo<'a> {
+    pub id: Option<&'a str>,
+    pub off: (f32, f32),
+    pub link: Option<&'a str>,
+}
+
 impl Writer<'_> {
     /// The relationship of the hyperlink a drawing in a run with `props` carries on itself, as
     /// Word writes a picture's link (`wp:docPr/a:hlinkClick`, #5267): a web or file address. A
@@ -24,13 +32,13 @@ impl Writer<'_> {
     }
 
     /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
-    pub(super) fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
+    pub(super) fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, member: MemberInfo<'_>, rels: &mut PartRels) {
         let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, fx, .. } = o else { return };
         let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
         self.used_media.insert(media.clone());
         w.open("pic:pic", &[]);
         w.open("pic:nvPicPr", &[]);
-        nv_props(w, "pic:cNvPr", ("0", file), alt, &float.alt, float.hidden, None);
+        nv_props(w, "pic:cNvPr", (member.id.unwrap_or("0"), file), alt, &float.alt, float.hidden, member.link);
         w.open("pic:cNvPicPr", &[]);
         w.empty("a:picLocks", &[("noChangeAspect", "1"), ("noChangeArrowheads", "1")]);
         w.close("pic:cNvPicPr");
@@ -39,7 +47,7 @@ impl Writer<'_> {
         // Brightness, contrast and transparency (#1711, #1766) as `a:blip` effects (ECMA-376
         // §20.1.8.13 CT_Blip: an unbounded choice of effects, in any order).
         let fx = fx.clamped();
-        if fx.is_identity() {
+        if !fx.changes_pixels() && fx.transparency == 0 {
             w.empty("a:blip", &[("r:embed", &rid)]);
         } else {
             w.open("a:blip", &[("r:embed", &rid)]);
@@ -60,10 +68,15 @@ impl Writer<'_> {
         w.close("a:stretch");
         w.close("pic:blipFill");
         w.open("pic:spPr", &[("bwMode", "auto")]);
-        xfrm(w, off, *iw, *ih, float.spin());
+        xfrm(w, member.off, *iw, *ih, float.spin());
         w.open("a:prstGeom", &[("prst", "rect")]);
         w.empty("a:avLst", &[]);
         w.close("a:prstGeom");
+        if let Some(radius) = fx.soft_edge_emu {
+            w.open("a:effectLst", &[]);
+            w.empty("a:softEdge", &[("rad", &n(i64::from(radius)))]);
+            w.close("a:effectLst");
+        }
         w.close("pic:spPr");
         w.close("pic:pic");
     }
@@ -75,17 +88,16 @@ impl Writer<'_> {
         &mut self,
         w: &mut W,
         o: &InlineObject,
-        id: Option<&str>,
-        off: (f32, f32),
+        member: MemberInfo<'_>,
         rels: &mut PartRels,
         depth: usize,
     ) -> Option<std::ops::Range<usize>> {
         let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, float, freeform, extra } = o else { return None };
         let geom = freeform.as_deref().filter(|_| *kind == ShapeKind::Freeform);
         w.open("wps:wsp", &[]);
-        if let Some(id) = id {
+        if let Some(id) = member.id {
             let name = shape_name(*kind, freeform.as_deref(), id);
-            nv_props(w, "wps:cNvPr", (id, &name), &float.alt.text, &float.alt, float.hidden, None);
+            nv_props(w, "wps:cNvPr", (id, &name), &float.alt.text, &float.alt, float.hidden, member.link);
         }
         if kind.is_connector() {
             // A connector's glued ends (ECMA-376 §20.1.2.2.8 `cNvCxnSpPr`).
@@ -107,7 +119,7 @@ impl Writer<'_> {
             w.empty("wps:cNvSpPr", &[]);
         }
         w.open("wps:spPr", &[]);
-        xfrm(w, off, *sw, *sh, float.spin());
+        xfrm(w, member.off, *sw, *sh, float.spin());
         let prst = match kind {
             ShapeKind::Rectangle | ShapeKind::TextBox | ShapeKind::Freeform => "rect",
             ShapeKind::RoundedRectangle => "roundRect",
@@ -328,9 +340,9 @@ impl Writer<'_> {
             }
         }
         w.empty("wp:extent", &[("cx", &cx), ("cy", &cy)]);
-        // Word's effect extent also covers a rotated object's overhang (its rotated bounds), unless
+        // Word's effect extent also covers a rotated object's overhang (`Float::effect_spin_pad`), unless
         // the file it came from kept none.
-        let (px, py) = if float.is_bare_turn() { (0.0, 0.0) } else { float.spin_pad(iw, ih) };
+        let (px, py) = if float.is_bare_turn() { (0.0, 0.0) } else { float.effect_spin_pad(iw, ih) };
         let [el, et, er, eb] = float.effect_extent();
         let [el, et, er, eb] = [el + px, et + py, er + px, eb + py].map(emu);
         w.empty("wp:effectExtent", &[("l", &el), ("t", &et), ("r", &er), ("b", &eb)]);

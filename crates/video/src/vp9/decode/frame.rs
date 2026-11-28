@@ -180,26 +180,6 @@ impl Frame {
         }
         Some((&self.band(r).planes[p], (y0 % bh + BAND_PAD) * self.strides[p]))
     }
-
-    /// A complete frame from full planes (tests).
-    #[cfg(test)]
-    pub fn from_planes(info: FrameInfo, planes: [&[u16]; 3]) -> Frame {
-        let f = Frame::new(info, Default::default());
-        for r in 0..f.sb_rows() {
-            let mut b = f.new_band();
-            for p in 0..3 {
-                let (s, bh) = (f.strides[p], f.band_h[p]);
-                for k in 0..bh {
-                    let y = r * bh + k;
-                    if let Some(src) = planes[p].get(y * s..y * s + s) {
-                        b.planes[p][(k + BAND_PAD) * s..(k + BAND_PAD + 1) * s].copy_from_slice(src);
-                    }
-                }
-            }
-            f.publish(r, b);
-        }
-        f
-    }
 }
 
 impl Drop for Frame {

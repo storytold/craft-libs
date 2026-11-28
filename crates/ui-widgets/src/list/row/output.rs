@@ -1,0 +1,122 @@
+//! What a row reports: RowEvent and RowOutput.
+
+#[cfg(doc)]
+use super::ListRow;
+use super::RowDragSpot;
+use super::thumb::ThumbTarget;
+use super::trailing::TrailingPart;
+use crate::contract::{ItemOutput, NoValue, OpenChange, Outcome};
+use crate::runtime::commands::FireSource;
+use craft_behavior::ColumnKey;
+use craft_keymap::Mods;
+use egui::{Rect, Response};
+
+/// What a row reports besides what the collection reads from its pointer input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RowEvent {
+    /// The link glyph before an extra thumbnail was clicked: `linked` is the state it asks for.
+    #[non_exhaustive]
+    LinkToggled {
+        /// The extra thumbnail the glyph belongs to, counted from 0 in the order added.
+        thumb: usize,
+        /// The requested state.
+        linked: bool,
+    },
+    /// A click landed on a thumbnail.
+    #[non_exhaustive]
+    ThumbClicked {
+        /// The thumbnail.
+        target: ThumbTarget,
+        /// The modifiers held at the click; none for a key activation.
+        mods: Mods,
+        /// The press count of the click (`craft_behavior::press::count_clicks`): 1 for a single click, 2 for a double
+        /// click, reported after the single click's own report. An activation by key or AccessKit counts 1.
+        clicks: u32,
+    },
+    /// A drag started on a part of a row with [`ListRow::part_drag`] for it: the part is dragged, not the row, and
+    /// the drag session runs with the payload given.
+    PartDrag(RowDragSpot),
+    /// A trailing part ([`ListRow::trailing_part`]) was activated; the selection is unchanged.
+    #[non_exhaustive]
+    Trailing {
+        /// The part.
+        part: TrailingPart,
+        /// The modifiers held at the click; none for a key activation.
+        mods: Mods,
+        /// The press count of the click, as [`ThumbClicked`](Self::ThumbClicked) counts it.
+        clicks: u32,
+        /// The row held the collection's lead when the press began (a press on a part moves the lead to its row);
+        /// true for a key activation.
+        was_lead: bool,
+        /// What activated the part: the pointer, a key or an accessibility action.
+        source: FireSource,
+    },
+    /// A click landed on the leading text ([`ListRow::lead_text`]); an unmodified click also picked the row.
+    #[non_exhaustive]
+    LeadClicked {
+        /// The modifiers held at the click.
+        mods: Mods,
+        /// The press count of the click, as [`ThumbClicked`](Self::ThumbClicked) counts it.
+        clicks: u32,
+    },
+    /// The action of a status cell ([`ListRow::cell_status`]) was activated.
+    #[non_exhaustive]
+    CellAction {
+        /// The column of the cell.
+        column: ColumnKey,
+    },
+}
+
+/// What a row returns.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct RowOutput {
+    /// The row's response.
+    pub response: Response,
+    /// What the row's parts reported this pass.
+    pub event: Option<RowEvent>,
+    /// The disclosure of a group row was clicked: the state it asks for. The collection reports it as
+    /// `CollectionEvent::Open`, as it does the keys.
+    pub open: Option<OpenChange<()>>,
+    /// The row's menu button was clicked: where the menu hangs, in the row's layer.
+    pub menu: Option<Rect>,
+    /// Where the label and detail are drawn, the full height of the row.
+    pub label: Rect,
+    pub(super) lead_fill: Option<craft_theme::Rgba>,
+    pub(super) lead_focus_bounds: Option<Rect>,
+}
+
+impl Outcome for RowOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
+impl ItemOutput<RowEvent> for RowOutput {
+    fn into_event(self) -> Option<RowEvent> {
+        self.event
+    }
+
+    fn open_request(&self) -> Option<OpenChange<()>> {
+        self.open.clone()
+    }
+
+    fn menu_request(&self) -> Option<Rect> {
+        self.menu
+    }
+
+    fn label_rect(&self) -> Option<Rect> {
+        Some(self.label)
+    }
+
+    fn lead_fill(&self) -> Option<craft_theme::Rgba> {
+        self.lead_fill
+    }
+
+    fn lead_focus_bounds(&self) -> Option<Rect> {
+        self.lead_focus_bounds
+    }
+}
