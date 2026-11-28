@@ -570,6 +570,95 @@ fn css_important_casing_and_spacing() {
 }
 
 #[test]
+fn source_whitespace_mode_keeps_spaces_and_preformatted_lines() {
+    let html = "<p> A  <a href='#x'>B\n C</a> D </p><pre>first  line\n  second</pre>";
+    let ordinary = parse_with(html, &|_| None);
+    let flow = parse_with_source_whitespace(html, &|_| None);
+    let paragraphs = paras(&flow);
+    assert_eq!(paragraphs.len(), 2);
+    assert_eq!(paragraphs[0].text(), " A  B\n C D ");
+    assert_eq!(paragraphs[1].text(), "first  line\n  second");
+    assert!(paragraphs[0].inlines.iter().any(|i| matches!(i, Inline::Text(text, fmt) if text == "B\n C" && fmt.link.as_deref() == Some("#x"))));
+    assert_ne!(paras(&ordinary)[0].text(), paragraphs[0].text());
+}
+
+#[test]
+fn source_whitespace_and_image_fallback_compose() {
+    let bytes = Arc::new(b"<svg xmlns='http://www.w3.org/2000/svg'/>".to_vec());
+    let loader = |_: &str| Some(bytes.clone());
+    let fallback = |_: &str, data: Arc<Vec<u8>>, width: Option<f32>, height: Option<f32>, alt: &str| {
+        Some(model::sized_img(data, "svg", None, width, height, alt))
+    };
+    let html = "<p> A  <img src='diagram.svg' alt='diagram'/> B\n C </p><pre>first  line\n  second</pre>";
+    craft_flow::begin_import();
+    let flow = parse_with_source_whitespace_and_image_fallback(html, &loader, &fallback);
+    let paragraphs = paras(&flow);
+    assert_eq!(paragraphs.len(), 2);
+    assert_eq!(paragraphs[0].text(), " A   B\n C ");
+    assert_eq!(paragraphs[1].text(), "first  line\n  second");
+    assert!(
+        paragraphs[0]
+            .inlines
+            .iter()
+            .any(|inline| matches!(inline, Inline::Image(image) if Arc::ptr_eq(&image.data, &bytes) && image.alt == "diagram"))
+    );
+    assert!(!craft_flow::Dropped::HtmlImage.reported());
+    craft_flow::begin_import();
+    let _ = parse_with_source_whitespace_and_image_fallback(html, &loader, &|_, _, _, _, _| None);
+    assert!(craft_flow::Dropped::HtmlImage.reported());
+}
+
+#[test]
+fn source_whitespace_keeps_adjacent_link_identity_including_image_alt() {
+    let html = "<p><a href='#x'>a<b>b</b>c</a><a href='#x'>d<img src='missing' alt='e'/>f</a></p>";
+    craft_flow::begin_import();
+    let flow = parse_with_source_whitespace_and_image_fallback(html, &|_| None, &|_, _, _, _, _| None);
+    let paragraphs = paras(&flow);
+    let links: Vec<_> = paragraphs[0]
+        .inlines
+        .iter()
+        .filter_map(|inline| match inline {
+            Inline::Text(text, fmt) => fmt.link.as_ref().map(|link| (text.as_str(), link)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(links.iter().map(|(text, _)| *text).collect::<String>(), "abcdef");
+    assert_eq!(links.len(), 4);
+    assert!(Arc::ptr_eq(links[0].1, links[1].1));
+    assert!(Arc::ptr_eq(links[1].1, links[2].1));
+    assert!(!Arc::ptr_eq(links[2].1, links[3].1));
+    assert_eq!(links[3].0, "def");
+    assert!(craft_flow::Dropped::HtmlImage.reported());
+}
+
+#[test]
+fn image_fallback_can_retain_unrecognized_bytes_without_changing_default_import() {
+    let bytes = Arc::new(b"<svg xmlns='http://www.w3.org/2000/svg'/>".to_vec());
+    let loader = |_: &str| Some(bytes.clone());
+    let fallback = |src: &str, data: Arc<Vec<u8>>, width: Option<f32>, height: Option<f32>, alt: &str| {
+        (src == "diagram.svg").then(|| model::sized_img(data, "svg", None, width, height, alt))
+    };
+    let html = "<p>before <img src='diagram.svg' alt='diagram' width='96'/> after</p>";
+    craft_flow::begin_import();
+    let ordinary = parse_with(html, &loader);
+    assert!(paras(&ordinary)[0].text().contains("diagram"));
+    assert!(craft_flow::Dropped::HtmlImage.reported());
+    craft_flow::begin_import();
+    let flow = parse_with_image_fallback(html, &loader, &fallback);
+    assert!(!craft_flow::Dropped::HtmlImage.reported());
+    let images: Vec<_> = paras(&flow)[0].inlines.iter().filter_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).collect();
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].ext, "svg");
+    assert!(Arc::ptr_eq(&images[0].data, &bytes));
+    assert_eq!(images[0].alt, "diagram");
+    assert_eq!(images[0].w, 72.0);
+    craft_flow::begin_import();
+    let rejected = parse_with_image_fallback(html, &loader, &|_, _, _, _, _| None);
+    assert!(paras(&rejected)[0].text().contains("diagram"));
+    assert!(craft_flow::Dropped::HtmlImage.reported());
+}
+
+#[test]
 fn table_cell_vertical_alignment() {
     let f = parse("<table><tr><td valign=top>top</td><td valign=\"center\">mid</td><td style=\"vertical-align: bottom\">bot</td></tr></table>");
     let FBlock::Table(t) = &f.blocks[0] else { panic!() };
@@ -2197,4 +2286,25 @@ fn the_fragment_leaves_code_and_table_cells_unspaced() {
     let fragment = export_fragment(&d);
     assert!(fragment.contains("One") && fragment.contains("code"), "{fragment}");
     assert!(!fragment.contains("margin-"), "{fragment}");
+}
+
+#[test]
+fn reports_an_image_replaced_by_its_alt_text() {
+    let svg = std::sync::Arc::new(b"<svg xmlns='http://www.w3.org/2000/svg'/>".to_vec());
+    craft_flow::begin_import();
+    let flow = parse_with("<p>before <img src='test.svg' alt='diagram'> after</p>", &|_| Some(svg.clone()));
+    assert!(craft_flow::Dropped::HtmlImage.reported());
+    assert!(paras(&flow)[0].text().contains("diagram"));
+
+    craft_flow::begin_import();
+    let _ = parse_with("<p><img src='missing.png'></p>", &|_| None);
+    assert!(craft_flow::Dropped::HtmlImage.reported());
+
+    let png = std::sync::Arc::new(
+        craft_flow::base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==").unwrap(),
+    );
+    craft_flow::begin_import();
+    let flow = parse_with("<p><img src='pixel.png'></p>", &|_| Some(png.clone()));
+    assert!(!craft_flow::Dropped::HtmlImage.reported());
+    assert!(paras(&flow)[0].inlines.iter().any(|inline| matches!(inline, Inline::Image(_))));
 }
