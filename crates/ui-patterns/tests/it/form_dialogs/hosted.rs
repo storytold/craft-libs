@@ -421,12 +421,32 @@ fn export_as_keeps_scale_all_within_its_limits_and_enter_in_a_field_only_commits
 fn image_size_readout_counts_whole_byte_rows_and_says_was_only_after_a_change() {
     let host = Rc::new(RefCell::new(DialogHost::new()));
     let mut fixture = fixture(&host);
-    host.borrow_mut()
+    let id = host
+        .borrow_mut()
         .open(HostedImageSize::new(ImageSizeValues::new(PixelSize::new(9, 8)), |values| ImageSize::new(values).bytes_per_pixel(1.0 / 8.0)));
     fixture.settle();
     let texts = |fixture: &Fixture| fixture.texts().iter().map(|painted| painted.text.clone()).collect::<Vec<_>>();
     assert!(texts(&fixture).iter().any(|text| text == "16 bytes"), "2 bytes a row, 8 rows: {:?}", texts(&fixture));
     assert!(!texts(&fixture).iter().any(|text| text.contains("(was")), "no (was …) at the document's size");
+
+    let ctx = fixture.ctx().clone();
+    let fields = || host.borrow().get_by_id::<HostedImageSize>(id).expect("Image Size is open").json_fields().expect("Image Size lists its fields");
+    let linked = fields()["constrain"].clone();
+    let set = |field, value| host.borrow_mut().set_json_field(&ctx, id, field, value).unwrap();
+    set("constrain", json!(false));
+    set("width", json!(10));
+    fixture.idle(2);
+    let resized = fields();
+    assert_eq!((resized["width"].as_f64(), resized["height"].as_f64()), (Some(10.0), Some(8.0)));
+    assert!(
+        texts(&fixture).iter().any(|text| text == "16 bytes (was 16 bytes)"),
+        "a changed width still takes two bytes a row: {:?}",
+        texts(&fixture)
+    );
+
+    set("width", json!(9));
+    set("constrain", linked);
+    fixture.idle(2);
     let width = fixture.by_label("Width").expect("the Width field");
     fixture.click(&width).settle();
     fixture.key(Key::A, Modifiers::COMMAND).type_text("18");
