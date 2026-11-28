@@ -404,9 +404,11 @@ fn edits_leave_kept_markup_well_formed() {
         let d = import(&package(&s)).unwrap();
         let mut edits: Vec<craft_wordmodel::Document> = Vec::new();
         for i in ((k % step) % d.body.len().max(1)..d.body.len()).step_by(step) {
+            // A picked block that isn't a paragraph types into the next paragraph before the next
+            // pick instead, so the gate still types into every sample that has one.
             let mut e = d.clone();
-            if e.body.get(i).is_some_and(|b| b.as_para().is_some()) {
-                e.insert_text(&Pos::body(i, 0), "Edited ", &Default::default()).unwrap();
+            if let Some(p) = (i..d.body.len()).take(step).find(|&p| d.body[p].as_para().is_some()) {
+                e.insert_text(&Pos::body(p, 0), "Edited ", &Default::default()).unwrap();
             }
             edits.push(e);
             if d.body.len() > 1 {
