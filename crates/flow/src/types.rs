@@ -50,8 +50,7 @@ pub fn kept_link(target: &str) -> Option<Arc<str>> {
     kept
 }
 
-/// What an importer leaves out to stay within a limit (review of #3873: no limit drops data
-/// without saying so).
+/// Content an importer leaves out, for example to stay within a limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dropped {
     /// A font name over [`MAX_FONT_NAME`].
@@ -66,6 +65,12 @@ pub enum Dropped {
     Spaces,
     /// Markdown table rows and columns past the table limits or the document's cell budget.
     TableCells,
+    /// An HTML image could not be loaded or recognized and was replaced by its alt text.
+    HtmlImage,
+    /// An HTML table nested beyond the supported table depth was flattened.
+    HtmlTableDepth,
+    /// Table rows or span coverage were omitted due to import limits.
+    TableLayout,
 }
 
 impl Dropped {
@@ -80,6 +85,9 @@ impl Dropped {
             Dropped::Spaces => {
                 "import: the document's `text:s` elements ask for more spaces than it keeps; past that each stands for one".to_string()
             }
+            Dropped::HtmlImage => "import: an HTML image could not be loaded or recognized; alt text is used if available".to_string(),
+            Dropped::HtmlTableDepth => format!("import: HTML tables nested beyond {MAX_DEPTH} levels are flattened"),
+            Dropped::TableLayout => "import: table rows or span coverage exceed limits; table structure is incomplete".to_string(),
             Dropped::TableCells => format!(
                 "import: Markdown tables keep {} columns and {} rows at most, and {} cells in all; the rest are left out",
                 craft_wordmodel::table::MAX_COLS,
@@ -91,14 +99,14 @@ impl Dropped {
 
     /// Whether this thread's import has logged this kind ([`dropped`]).
     pub fn reported(self) -> bool {
-        REPORTED.with(|r| r.get() & (1u8 << (self as u8)) != 0)
+        REPORTED.with(|r| r.get() & (1u16 << (self as u8)) != 0)
     }
 }
 
 /// Log that the importer left something of `kind` out: once per kind per imported document
 /// ([`begin_import`]), not once per item.
 pub fn dropped(kind: Dropped) {
-    let bit = 1u8 << (kind as u8);
+    let bit = 1u16 << (kind as u8);
     if REPORTED.with(|r| r.replace(r.get() | bit)) & bit == 0 {
         log::warn!("{}", kind.message());
     }
@@ -1021,6 +1029,7 @@ impl FTable {
                     for k in 1..rs {
                         work += 1;
                         if work > MAX_COVERED_WORK {
+                            dropped(Dropped::TableLayout);
                             return;
                         }
                         let Some(row) = self.rows.get_mut(r + k) else { break };
@@ -1034,6 +1043,11 @@ impl FTable {
                             }
                             x += cc.colspan.clamp(1, 63) as usize;
                         }
+                        if x > g {
+                            // The vertical span reaches into a cell already spanning across its
+                            // column; inserting a placeholder here shifts the represented grid.
+                            dropped(Dropped::TableLayout);
+                        }
                         if at < row.len() && x == g && row[at].covered && (vmerge_restart || row[at].synthetic_covered) {
                             // Row already has a matching explicit continuation (when this cell had
                             // `mso-yfti-vmerge:restart`) or a synthetic placeholder from an earlier
@@ -1042,6 +1056,8 @@ impl FTable {
                         }
                         if row.len() < 64 {
                             row.insert(at, Cell { colspan: span as u32, covered: true, synthetic_covered: true, ..Default::default() });
+                        } else {
+                            dropped(Dropped::TableLayout);
                         }
                     }
                 }

@@ -47,7 +47,7 @@ thread_local! {
     /// The kinds of [`Dropped`] already reported for the document being imported on this thread.
     /// Per thread because a document is parsed and built on one, and the parsers drop things
     /// from places that have no log of their own to hand.
-    static REPORTED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static REPORTED: std::cell::Cell<u16> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -113,6 +113,15 @@ mod tests {
         assert_eq!(percent_decode("%-A"), b"%-A".to_vec());
         assert_eq!(percent_decode("%G1"), b"%G1".to_vec());
         assert_eq!(percent_decode("%41"), b"A".to_vec());
+    }
+
+    #[test]
+    fn reports_missing_span_coverage_when_a_row_is_full() {
+        let first = Cell { rowspan: 2, ..Cell::default() };
+        let mut table = FTable { rows: vec![vec![first], vec![Cell::default(); 64]], ..FTable::default() };
+        begin_import();
+        table.insert_covered();
+        assert!(Dropped::TableLayout.reported());
     }
 
     #[test]
