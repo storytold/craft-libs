@@ -7,13 +7,13 @@ use super::auto::AutoEdit;
 use super::bezier::{EditSubpath, HandleSide, Knot, KnotRef};
 use super::{PathOptionsSettings, PenMode, PenWords};
 use craft_behavior::geometry::turn_to_45;
-use craft_behavior::kurbo::{Point, Rect as DocRect};
+use craft_behavior::kurbo::{BezPath, Point, Rect as DocRect};
 use craft_behavior::{CancelReason, CanvasView, Cursor, CursorBadge, EditEvent, GestureId, Mixed, PaintedCursor, PointerButton};
 use craft_keymap::{Key, Mods};
 use craft_theme::Rgba;
 use craft_ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolAnchor, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::canvas_controls::path_runs;
-use craft_ui::primitives::{Dashes, Draw, PaintShape, StrokeWidth, ToolIcon};
+use craft_ui::primitives::{Dashes, DataStrokeWidth, DataWidth, Draw, PaintShape, StrokeWidth, ToolIcon};
 use craft_ui::style::{HandleLook, StyleColor, StyleCx};
 use egui::{CornerRadius, Pos2, Rect, Vec2};
 
@@ -90,10 +90,15 @@ pub struct PenStyle {
     pub dash: f32,
     /// Gap length of the rubber band.
     pub gap: f32,
+    /// The width of the path so far: the Path Options' thickness, else the theme's medium line.
+    pub path_width: DataStrokeWidth,
+    /// The width of the rubber band and the Curvature mode's preview: the Path Options' thickness, else the theme's
+    /// thin line.
+    pub preview_width: DataStrokeWidth,
 }
 
 impl PenStyle {
-    /// The look in `cx` with the colour of `options`. The tool reads it in `paint` only, from
+    /// The look in `cx` with the colour and thickness of `options`. The tool reads it in `paint` only, from
     /// [`ToolContext::style`].
     pub fn of(cx: &StyleCx<'_>, options: &PathOptionsSettings) -> PenStyle {
         let tokens = cx.tokens;
@@ -101,7 +106,21 @@ impl PenStyle {
             Some([r, g, b]) => cx.color(Rgba::rgb(r, g, b)),
             None => cx.color(tokens.color.overlay.line),
         };
-        PenStyle { line, handle: cx.handle(), selected: cx.color(tokens.color.accent.solid), dash: tokens.stroke.dash, gap: tokens.stroke.dash_gap }
+        // A thickness from a hand-edited preference file is kept to the popover's range; one that is not a number
+        // leaves the theme's widths.
+        let thickness = options.thickness.filter(|t| t.is_finite()).map(|t| {
+            let range = PathOptionsSettings::THICKNESS_RANGE;
+            DataStrokeWidth::from(DataWidth::points(t.clamp(*range.start(), *range.end())))
+        });
+        PenStyle {
+            line,
+            handle: cx.handle(),
+            selected: cx.color(tokens.color.accent.solid),
+            dash: tokens.stroke.dash,
+            gap: tokens.stroke.dash_gap,
+            path_width: thickness.unwrap_or(StrokeWidth::Medium.into()),
+            preview_width: thickness.unwrap_or(StrokeWidth::Thin.into()),
+        }
     }
 }
 
@@ -153,9 +172,11 @@ struct Run {
 ///   path has fewer than two anchors); Backspace and Delete remove the last anchor, the only one discarding the
 ///   draft, and the host's Undo does the same through [`remove_last`](Self::remove_last), except on a
 ///   [`PenDraft::Foreign`] draft, whose anchors both leave to the app. Each ending is [`PenEvent::Finished`].
-/// - Look: the path so far, a dashed rubber band from the last anchor to where a click would land (with Path
-///   Options' Rubber Band), the last anchor's handles, the anchors with the last one filled, and over the first
-///   anchor the close cue.
+/// - Look: the path so far, a dashed rubber band (with Path Options' Rubber Band), the last anchor's handles, the
+///   anchors with the last one filled, and over the first anchor the close cue. The rubber band is the segment a click
+///   would add: it leaves the last anchor along that anchor's out handle and ends where the click would land, or,
+///   over the first anchor, is the closing segment, which arrives along the first anchor's in handle. The path and
+///   the rubber band take the Path Options' colour and thickness.
 /// - The draft gesture cannot be cancelled: Escape ends the path and keeps it. An interrupted draft (a cancel for
 ///   any reason, such as a tool switch) commits: anchors are the user's work. A path option or focus change leaves
 ///   the draft open.
@@ -743,11 +764,18 @@ impl PenTool {
             && auto.is_none()
             && self.rubber_band()
         {
-            let mut end = view.to_doc(pointer);
-            if cx.mods.shift {
-                end = turn_to_45(last.anchor, end);
-            }
-            draw.dashed(&[view.to_screen(last.anchor), view.to_screen(end)], Dashes::new(look.dash, look.gap), StrokeWidth::Thin, look.line);
+            let first = draft.knots[0];
+            let segment = if self.closes_at(draft, pointer, view, reach(cx)) {
+                rubber_band(&last, first.in_ctrl, first.anchor)
+            } else {
+                let mut end = view.to_doc(pointer);
+                if cx.mods.shift {
+                    end = turn_to_45(last.anchor, end);
+                }
+                rubber_band(&last, end, end)
+            };
+            let line: Vec<Pos2> = path_runs(view, &segment).into_iter().flat_map(|(run, _)| run).collect();
+            draw.dashed(&line, Dashes::new(look.dash, look.gap), look.preview_width, look.line);
         }
         for side in [HandleSide::In, HandleSide::Out] {
             if !last.retracted(side) {
@@ -777,8 +805,18 @@ pub(super) fn paint_path(draw: &Draw<'_>, look: &PenStyle, view: &CanvasView, dr
         if closed {
             run.push(run[0]);
         }
-        draw.stroke(&PaintShape::Path(run), StrokeWidth::Medium, look.line);
+        draw.stroke(&PaintShape::Path(run), look.path_width, look.line);
     }
+}
+
+/// The rubber band: the segment a click adds after `last`, as a cubic that leaves `last` along its out handle (a
+/// dragged, smooth anchor bends it) and arrives at `end` along `end_ctrl`. A click elsewhere puts a corner anchor
+/// there (`end_ctrl` is `end`); the closing click arrives along the first anchor's in handle.
+fn rubber_band(last: &Knot, end_ctrl: Point, end: Point) -> BezPath {
+    let mut segment = BezPath::new();
+    segment.move_to(last.anchor);
+    segment.curve_to(last.out_ctrl, end_ctrl, end);
+    segment
 }
 
 /// The anchors as squares, the last one filled.

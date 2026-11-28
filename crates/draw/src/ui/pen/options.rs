@@ -42,8 +42,8 @@ pub const PATH_OPTIONS_COLOR_KEY: &str = "pathOptions.color";
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct PathOptionsSettings {
-    /// The Pen's rubber band from the last anchor to the pointer. Off by default, as Photoshop. The Curvature mode
-    /// always draws its preview curve.
+    /// The Pen's rubber band, the segment the next click adds, from the last anchor to the pointer. Off by default, as
+    /// Photoshop. The Curvature mode always draws its preview curve.
     pub rubber_band: bool,
     /// The path colour as sRGB bytes; `None` uses the overlay line colour. Paths with a colour of their own (a layer
     /// colour) keep it.
@@ -102,11 +102,13 @@ impl Outcome for PathOptionsOutput {
 
 /// The Pen's gear button in the options bar and its Path Options popover (Photoshop's): a Thickness number field
 /// (pixels, [`THICKNESS_RANGE`](PathOptionsSettings::THICKNESS_RANGE), empty while the theme's line is used), a Color
-/// swatch with a Default button that clears it, and a Rubber Band checkbox.
+/// swatch with a Default button that clears it, and a Rubber Band checkbox. The Rubber Band is the Pen's: a gear of
+/// another path tool (the Freeform Pen, the shape tools, Path Selection) leaves it out with
+/// [`rubber_band`](Self::rubber_band).
 ///
 /// - The gear is an icon button named by [`PathOptionsWords::title`]; a click or Enter toggles the popover below it.
-///   Focus moves into the popover; Tab goes Thickness, Color, Default, Rubber Band; Escape closes it and returns
-///   focus to the gear; a press outside closes it.
+///   Focus moves into the popover; Tab goes Thickness, Color, Default, Rubber Band (when shown); Escape closes it
+///   and returns focus to the gear; a press outside closes it.
 /// - The popover reports every change at once; there is no OK button.
 #[must_use = "show the popover with `show`"]
 #[derive(craft_ui::contract::Pattern)]
@@ -114,12 +116,20 @@ pub struct PathOptionsPopover<'a> {
     label: Label,
     settings: Bind<'a, PathOptionsSettings>,
     default_color: Option<Srgba>,
+    rubber_band: bool,
 }
 
 impl<'a> PathOptionsPopover<'a> {
     /// The gear and popover for the host's `settings`, named `label` for assistive technology.
     pub fn new(label: impl Into<Label>, settings: Bind<'a, PathOptionsSettings>) -> Self {
-        Self { label: label.into(), settings, default_color: None }
+        Self { label: label.into(), settings, default_color: None, rubber_band: true }
+    }
+
+    /// Whether the popover shows the Rubber Band checkbox; true by default. A gear of a path tool other than the Pen
+    /// passes false: it holds Thickness and Color only, and the setting's `rubber_band` is left as it is.
+    pub fn rubber_band(mut self, shown: bool) -> Self {
+        self.rubber_band = shown;
+        self
     }
 
     /// The colour the swatch shows while the settings hold none (the overlay line colour the pen draws in). Without
@@ -133,8 +143,12 @@ impl<'a> PathOptionsPopover<'a> {
     pub fn show(mut self, ui: &mut Ui, open: &mut bool) -> PathOptionsOutput {
         let words = Env::of(ui).words::<PathOptionsWords>();
         let gear = IconButton::new(IconId::new("settings")).label(words.title.clone()).show(ui).response;
+        // The popover hangs from the gear with a manual opener: the gear's click is the pattern's to apply.
+        if craft_ui::contract::clicked(&gear) {
+            *open = !*open;
+        }
         let (mut edit, mut pick_color) = (None, None);
-        let (settings, default_color) = (&mut self.settings, self.default_color);
+        let (settings, default_color, rubber_band) = (&mut self.settings, self.default_color, self.rubber_band);
         let _shown = Popover::new(self.label.clone(), Bind::bound(open)).opened_by(&gear).show(ui, |ui, cx| {
             let before = match settings.reborrow().read(cx) {
                 Some(Mixed::Same(held)) => held,
@@ -163,9 +177,11 @@ impl<'a> PathOptionsPopover<'a> {
                         now.color = None;
                     }
                 });
-                let rubber = Checkbox::new(Bind::given(before.rubber_band)).label(words.rubber_band.clone()).show(ui);
-                if let Some(rubber_band) = rubber.value().copied() {
-                    now.rubber_band = rubber_band;
+                if rubber_band {
+                    let rubber = Checkbox::new(Bind::given(before.rubber_band)).label(words.rubber_band.clone()).show(ui);
+                    if let Some(rubber_band) = rubber.value().copied() {
+                        now.rubber_band = rubber_band;
+                    }
                 }
             });
             if now != before {
