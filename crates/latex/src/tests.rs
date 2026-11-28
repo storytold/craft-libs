@@ -692,3 +692,109 @@ fn a_starred_line_break_shows_no_star() {
     assert_eq!(t.rows.len(), 2, "{t:?}");
     assert_eq!(t.rows[1].iter().map(|c| c.text().trim().to_string()).collect::<Vec<_>>(), ["c", "d"]);
 }
+
+/// Export `linear` as one inline equation, read the file back and export it again.
+fn equation_saves(linear: &str) -> (String, String) {
+    let save = |linear: &str| {
+        let mut d = Document::new();
+        let mut p = craft_wordmodel::Paragraph::new();
+        p.insert_object(
+            0,
+            craft_wordmodel::para::InlineObject::Equation { linear: linear.into(), display: false, math: Default::default() },
+            &Default::default(),
+        )
+        .unwrap();
+        d.body = vec![craft_wordmodel::para_block(p)];
+        export(&d)
+    };
+    let first = save(linear);
+    let back = import(first.as_bytes());
+    let craft_wordmodel::Block::Para(bp) = &*back.body[0] else { panic!("{first}") };
+    let again = bp
+        .objects
+        .iter()
+        .find_map(|o| match o {
+            craft_wordmodel::para::InlineObject::Equation { linear, .. } => Some(linear.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no equation in {first}"));
+    (first, save(&again))
+}
+
+/// The equation between the `$`s of an exported file.
+fn exported_math(tex: &str) -> &str {
+    tex.split('$').nth(1).unwrap_or_default()
+}
+
+/// #3388: standard symbols outside the text path's own table (`\star`, `\vdash`, `\rtimes`…)
+/// read as their characters and are written back as the same commands, not `\backslash star`.
+#[test]
+fn standard_math_symbols_survive_an_open_and_save() {
+    for src in [r"a \star b", r"f: A \longrightarrow B", r"\Gamma \vdash t", r"x \longmapsto y", r"G \rtimes H", r"\varkappa \flat \complement"] {
+        let tex = format!("\\begin{{document}}${src}$\\end{{document}}");
+        let back = import(tex.as_bytes());
+        let craft_wordmodel::Block::Para(bp) = &*back.body[0] else { panic!("{src}") };
+        let Some(craft_wordmodel::para::InlineObject::Equation { linear, .. }) = bp.objects.first() else { panic!("{src}: {:?}", bp.objects) };
+        assert!(!linear.contains('\\'), "{src} read as {linear}");
+        let (first, second) = equation_saves(linear);
+        assert_eq!(exported_math(&first), src, "{src} → {linear}");
+        assert_eq!(exported_math(&second), src, "{src}, saved twice");
+    }
+    // A norm is ‖ and keeps its one backslash, however often the file is saved.
+    assert_eq!(craft_math::latex_text::latex_to_linear(r"A \| B"), "A ‖ B");
+    let (first, second) = equation_saves("A ‖ B");
+    assert_eq!((exported_math(&first), exported_math(&second)), (r"A \Vert B", r"A \Vert B"));
+    // Names the preamble's packages don't define, and the linear format's own operators, stay
+    // as they were written.
+    for src in [r"\norm", r"\qed", r"\dd", r"\square", r"\over", r"\matrix"] {
+        assert!(craft_math::latex_text::latex_to_linear(src).is_ascii(), "{src}");
+    }
+    for c in ['■', '□', '/', '¦'] {
+        assert!(!craft_math::latex_text::linear_to_latex(&c.to_string()).starts_with('\\'), "{c}");
+    }
+}
+
+/// #3388: an accent is written as its command around the whole atom it sits on, never as a
+/// combining mark (pdfLaTeX stops on U+0302), and its scope survives a save.
+#[test]
+fn math_accents_export_as_commands_over_their_whole_argument() {
+    for src in [
+        r"\hat{x}",
+        r"\tilde{y}",
+        r"\bar{z}",
+        r"\vec{v}",
+        r"\dot{q}",
+        r"\ddot{q}",
+        r"\acute{x} \grave{y} \breve{z} \check{w}",
+        r"\hat{\alpha}+\bar{\beta}",
+        r"\hat{x_i}",
+        r"\hat{AB}",
+        r"\tilde{\hat{x}}",
+        r"\hat{12}",
+        r"\vec{10}+\bar{3}",
+    ] {
+        let linear = craft_math::latex_text::latex_to_linear(src);
+        let (first, second) = equation_saves(&linear);
+        assert_eq!(exported_math(&first), src, "{src} → {linear}");
+        assert_eq!(exported_math(&second), src, "{src}, saved twice");
+    }
+    // The wide accents keep their whole argument (written back as the narrow command).
+    let (first, _) = equation_saves(&craft_math::latex_text::latex_to_linear(r"\widehat{AB}"));
+    assert_eq!(exported_math(&first), r"\hat{AB}");
+    // Accents in linear text from an equation editor: on a group, a control word, a script.
+    for (linear, tex) in [
+        ("(a+b)\u{302}", r"\hat{a+b}"),
+        ("〖AB〗\u{303}", r"\tilde{AB}"),
+        ("α\u{302}", r"\hat{\alpha}"),
+        ("\\beta\u{307}", r"\dot{\beta}"),
+        ("x_i\u{302}", r"x_{\hat{i}}"),
+        ("x^2\u{20D7}", r"x^{\vec{2}}"),
+        ("z\u{302}+1", r"\hat{z}+1"),
+        ("\u{302}x", r"\hat{}x"),
+        ("x\u{302}\u{303}\u{307}", r"\dot{\tilde{\hat{x}}}"),
+        ("a^b\u{302}\u{303}", r"a^{\tilde{\hat{b}}}"),
+    ] {
+        let out = craft_math::latex_text::linear_to_latex(linear);
+        assert_eq!(out, tex, "{linear}");
+    }
+}
