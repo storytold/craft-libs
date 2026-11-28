@@ -2,13 +2,15 @@
 //! opens the picker at a point without its field; a resized picker keeps its size; the head edits angle and
 //! roundness; Escape reverts the head's edits.
 
-use craft_draw::ui::brush_presets::{BrushCardParts, BrushPick, BrushPickerState, BrushPickerValues, BrushPresetPicker, BrushRowPaint, brush_row};
+use craft_draw::ui::brush_presets::{
+    BrushCardPart, BrushCardParts, BrushPick, BrushPickerSettings, BrushPickerState, BrushPickerValues, BrushPresetPicker, BrushRowPaint, brush_row,
+};
 use craft_draw::ui::brush_settings::TipAngle;
 use craft_ui::contract::{Bind, Role, SaveKey};
 use craft_ui::patterns::presets::{PresetEvent, PresetFns, PresetRow, PresetSource};
 use craft_ui::primitives::FacePaint;
 use craft_ui::runtime::env::Env;
-use craft_ui::testing::pointer::{moved, press, release};
+use craft_ui::testing::pointer::{moved, press, release, secondary, wheel};
 use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Vec2};
 use std::cell::RefCell;
@@ -142,8 +144,8 @@ fn the_app_opens_the_picker_at_a_point_without_its_field() {
     assert!(fixture.by_role(Role::DIALOG).is_empty(), "the popover is gone");
 }
 
-/// A resized popover keeps only its size: each opening places it from its field or point at that size. Its grips
-/// stand only on the edges its anchor leaves free.
+/// A resized popover keeps only its size: each opening places it from its field or point at that size. Every edge
+/// has a grip, the one at the field's start too: dragged, that edge moves out while the popover stays open.
 #[trial]
 fn a_resized_picker_reopens_at_the_size_its_grip_left() {
     let (mut fixture, host) = opened_rig(false, true);
@@ -153,12 +155,18 @@ fn a_resized_picker_reopens_at_the_size_its_grip_left() {
     let first = popover(&fixture);
     fixture.drag_at(first.left_center() + Vec2::new(1.0, 0.0), Vec2::new(-60.0, 0.0));
     fixture.idle(3);
-    let held = popover(&fixture);
-    assert!((held.width() - first.width()).abs() < 1.0, "the edge at the field's start has no grip: {first:?} -> {held:?}");
-    fixture.drag_at(first.right_bottom() - Vec2::splat(1.0), Vec2::new(60.0, 80.0));
+    let widened = popover(&fixture);
+    assert!(
+        widened.width() > first.width() + 30.0 && widened.left() < first.left() - 30.0 && (widened.right() - first.right()).abs() < 1.0,
+        "the edge at the field's start moves out: {first:?} -> {widened:?}"
+    );
+    fixture.drag_at(widened.right_bottom() - Vec2::splat(1.0), Vec2::new(60.0, 80.0));
     fixture.idle(3);
     let resized = popover(&fixture);
-    assert!(resized.width() > first.width() + 30.0 && resized.height() > first.height() + 40.0, "the corner grip resizes: {first:?} -> {resized:?}");
+    assert!(
+        resized.width() > widened.width() + 30.0 && resized.height() > widened.height() + 40.0,
+        "the corner grip resizes: {widened:?} -> {resized:?}"
+    );
     fixture.key(Key::Escape, Modifiers::NONE);
     fixture.idle(3);
     assert!(fixture.by_role(Role::DIALOG).is_empty(), "Escape closes the popover");
@@ -256,4 +264,92 @@ fn a_size_drag_runs_the_head_and_replays_the_preset_list() {
     }
     fixture.frame(vec![release(from + Vec2::new(32.0, 0.0))]);
     assert_ne!(host.borrow().values.diameter, OPENED.diameter, "the drag edited the size");
+}
+
+/// The tip alone is a grid of bare tips: each tile square, no caption under it, the tiles side by side with no room
+/// between them, and the name and size kept for the tooltip and the accessible name.
+#[trial]
+fn the_tip_grid_packs_square_tiles_without_captions() {
+    let (mut fixture, host) = opened_rig(true, false);
+    host.borrow_mut().state.parts = BrushCardParts { name: false, stroke: false, tip: true };
+    fixture.settle();
+    let tiles: Vec<Rect> = fixture
+        .by_role(Role::LIST_ITEM)
+        .into_iter()
+        .filter(|target| fixture.tree().name_of(target.node).is_some_and(|name| name.contains("Round")))
+        .map(|target| target.rect)
+        .collect();
+    assert_eq!(tiles.len(), 2, "both presets show as tiles: {tiles:?}");
+    for tile in &tiles {
+        assert!((tile.width() - tile.height()).abs() <= 2.0, "a square tile: {tile:?}");
+    }
+    let (a, b) = (tiles[0], tiles[1]);
+    assert!((a.min.y - b.min.y).abs() < 1.0, "side by side: {a:?} {b:?}");
+    assert!(b.min.x - a.max.x <= 2.0, "no room between them: {a:?} {b:?}");
+    let painted: Vec<String> = fixture.texts().iter().map(|text| text.text.clone()).collect();
+    assert!(!painted.iter().any(|text| text.contains("Soft Round") || text.contains("45 px")), "no caption is painted: {painted:?}");
+}
+
+/// Below a scale the presets show as the grid of tips whatever parts are chosen; above it, the chosen parts. The saved
+/// parts stay the chosen ones.
+#[trial]
+fn a_small_scale_shows_the_grid_of_tips_and_a_larger_one_the_chosen_parts() {
+    let mut state = BrushPickerState::<u32>::new();
+    state.parts = BrushCardParts::ALL.set(BrushCardPart::Tip, false);
+    state.browser.zoom = 1.0;
+    assert_eq!(state.shown_parts(), state.parts, "the chosen parts at scale 1");
+    state.browser.zoom = f64::from(*BrushPickerSettings::SCALE_RANGE.start());
+    assert!(state.shown_parts().tip_only(), "the grid of tips at the smallest scale");
+    assert_eq!(state.settings().parts, state.parts, "the saved parts stay the chosen ones");
+}
+
+/// Thirty presets, Brush 0 to Brush 29.
+fn many_rows(parts: &BrushCardParts, env: &Env) -> Vec<PresetRow<u32>> {
+    let paint = BrushRowPaint::new(FacePaint::new(1, |_, _| {}), FacePaint::new(2, |_, _| {}));
+    (0..30).map(|n| brush_row(n, format!("Brush {n}"), 0, 12.0, *parts, env, &paint)).collect()
+}
+
+/// The app opens the picker from a right press on a canvas under it: the wheel over the picker scrolls its list at
+/// once, with no click in it first.
+#[trial]
+fn the_wheel_scrolls_a_picker_a_right_press_opened_without_a_click() {
+    let host = Rc::new(RefCell::new((Some(1u32), BrushPickerState::<u32>::new(), false, POINT)));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut host = shown.borrow_mut();
+        let (current, state, open, at) = &mut *host;
+        let rect = ui.max_rect();
+        #[allow(deprecated)]
+        let canvas = ui.interact(rect, egui::Id::new("canvas"), egui::Sense::click_and_drag());
+        if canvas.hovered() && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
+            *open = true;
+            *at = ui.input(|i| i.pointer.interact_pos()).unwrap_or(POINT);
+        }
+        let rows = PresetSource::new(state.parts, PresetFns::new(many_rows));
+        let picker =
+            BrushPresetPicker::new("Brush Preset picker", Bind::bound(current), &rows, Bind::bound(state), OPENED).open_at(*at, Bind::bound(open));
+        let _ = picker.show(ui);
+    });
+    fixture.room(Vec2::new(640.0, 760.0));
+    fixture.settle();
+    fixture.frame(vec![moved(POINT)]);
+    fixture.frame(vec![secondary(POINT, true)]);
+    fixture.frame(vec![secondary(POINT, false)]).settle();
+    assert!(host.borrow().2, "the right press opens the picker");
+    let items = |fixture: &Fixture| {
+        let mut all = fixture.by_role(Role::LIST_ITEM);
+        all.extend(fixture.by_role(Role::GRID_CELL));
+        all.extend(fixture.by_role(Role::TREE_ITEM));
+        assert!(!fixture.by_role(Role::DIALOG).is_empty(), "the popover shows");
+        all
+    };
+    let first = items(&fixture).first().expect("the picker shows its presets").rect;
+    let over = Pos2::new(first.center().x, first.center().y + 20.0);
+    fixture.frame(vec![moved(over)]).settle();
+    fixture.frame(vec![wheel(-200.0)]).settle();
+    let after = items(&fixture).first().map(|target| target.rect);
+    assert!(
+        after.is_some_and(|rect| rect.top() < first.top() - 1.0) || after.is_some_and(|rect| rect != first),
+        "the wheel scrolls the list: {first:?} -> {after:?}"
+    );
 }

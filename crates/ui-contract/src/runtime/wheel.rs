@@ -280,7 +280,8 @@ pub(crate) fn begin(ctx: &Context, pointer_scoped_field_wheel: bool) {
                     .touch_rotation(touch_rotation)
                     .touch_pan(touch_pan)
                     .at(at);
-                let focus = WheelFocus::new(focused).app_field(app_field).by_position(by_position);
+                let in_popup = focus::over_focused_popup(ctx, at);
+                let focus = WheelFocus::new(focused).app_field(app_field).by_position(by_position).in_popup(in_popup);
                 let swipe = state.open_gesture(source, now);
                 // A point over a modal admits its own wheel takers, not a canvas below the modal.
                 let eligible: Vec<_> = state

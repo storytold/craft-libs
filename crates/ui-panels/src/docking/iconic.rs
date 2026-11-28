@@ -581,7 +581,7 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         let plan = self.plan(rect, &sizes, cx.flow.is_rtl());
         self.bar_rect = plan.bar;
         if self.bar == ColumnBar::Own {
-            let (chevron, _) = bar_slots(plan.bar, self.edge, cx.flow.is_rtl());
+            let (chevron, _) = bar_slots(plan.bar, self.edge, cx.flow.is_rtl(), sizes.column.reach);
             let name = ColumnArrow::Collapse.name(&cx.words::<DockWords>(), self.expanded());
             let _ = cx.header_part(chevron_edge(self.edge), CHEVRON, chevron).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
         }

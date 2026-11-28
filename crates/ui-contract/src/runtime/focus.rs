@@ -914,6 +914,15 @@ pub(crate) fn held_for_member(ctx: &Context, root: Id) -> bool {
     egui_focus::focused(ctx) == Some(root) && focused_stop(ctx).is_some_and(|(id, _)| id != root)
 }
 
+/// Whether the pointer at `at` is over the popup that holds key focus: a popup's own field yields the wheel to a
+/// scroll region of the popup under the pointer.
+pub(crate) fn over_focused_popup(ctx: &Context, at: egui::Pos2) -> bool {
+    let focus_layer = egui_focus::focused(ctx).and_then(|widget| ctx.read_response(widget)).map(|response| response.layer_id);
+    crate::runtime::egui::areas::layer_at(ctx, at)
+        .zip(focus_layer)
+        .is_some_and(|(layer, focused)| layer == focused && crate::runtime::overlay::is_popup(ctx, layer))
+}
+
 /// Whether `at` (screen points) lies in a popup layer opened above the layer of the widget that holds egui focus: a
 /// press or a wheel there is the popup's, not the focused widget's. The layer under `at` is the layer test's; the
 /// focused widget's layer is egui's last-pass record of it, since a stop records no layer of its own.

@@ -468,8 +468,7 @@ impl OutlineDraft {
             return false;
         }
         let zoom = at.zoom.max(0.01);
-        let near = |q: Point, reach: f64| (q - at.at).hypot() < reach / zoom;
-        near(self.points[0], self.close_reach(zoom)) || self.points.last().is_some_and(|&last| near(last, self.reach.same_point))
+        self.on_first(at) || self.points.last().is_some_and(|&last| (last - at.at).hypot() < self.reach.same_point / zoom)
     }
 
     /// The reach of a press on the first point, in screen points: a quarter of the narrower side of the outline's
@@ -482,6 +481,26 @@ impl OutlineDraft {
         let narrow = bounds.width().min(bounds.height()) * zoom;
         // `max` then `min`, not `clamp`: a reach under 1 point would make `clamp` panic.
         (narrow / 4.0).max(1.0).min(self.reach.close)
+    }
+
+    /// Where the tool shows its close cursor at `at`. With the button up: whether a press there would close the open
+    /// outline, the same test as [`press`](Self::press). With it down in a freehand stroke, which a release closes
+    /// anywhere: whether the stroke is back on its first point, so the release meets the start instead of cutting
+    /// across to it.
+    pub fn closes_at(&self, at: DraftPoint) -> bool {
+        if !at.at.x.is_finite() || !at.at.y.is_finite() {
+            return false;
+        }
+        if self.down {
+            return !self.polygonal && self.on_first(at);
+        }
+        self.hits_start(at)
+    }
+
+    /// Whether `at` is within the closing reach of the first point of an outline of 3 or more.
+    fn on_first(&self, at: DraftPoint) -> bool {
+        let zoom = at.zoom.max(0.01);
+        self.points.len() >= 3 && (self.points[0] - at.at).hypot() < self.close_reach(zoom) / zoom
     }
 
     /// Whether an outline is open.

@@ -548,12 +548,15 @@ pub struct WheelFocus<O> {
     /// above the field's layer, or the canvas a modal dialog around the field keeps open below it. The field takes no
     /// share, and the wheel goes by position.
     pub by_position: bool,
+    /// The pointer is over the popup that holds the focused field: the field yields the wheel to a scroll region of the
+    /// popup under the pointer, so a popup's list scrolls before any click in it.
+    pub in_popup: bool,
 }
 
 impl<O> WheelFocus<O> {
     /// Focus on `taker`, or on nothing that takes the wheel.
     pub const fn new(taker: Option<O>) -> Self {
-        WheelFocus { taker, app_field: false, by_position: false }
+        WheelFocus { taker, app_field: false, by_position: false, in_popup: false }
     }
 
     /// The same focus, in a text field the app drew itself when `on`.
@@ -568,6 +571,14 @@ impl<O> WheelFocus<O> {
     #[must_use]
     pub const fn by_position(mut self, on: bool) -> Self {
         self.by_position = on;
+        self
+    }
+
+    /// The same focus, with the pointer over the popup that holds the focused field when `on`
+    /// ([`in_popup`](Self::in_popup)).
+    #[must_use]
+    pub const fn in_popup(mut self, on: bool) -> Self {
+        self.in_popup = on;
         self
     }
 }
@@ -637,7 +648,19 @@ pub fn split<O: Copy + PartialEq>(
     if !running {
         *gesture = WheelGesture::default();
     }
-    let field = focus.taker.filter(|focused| !focus.by_position && takers.iter().any(|taker| taker.field && taker.owner == *focused));
+    // In a popup, a focused field yields the wheel while the pointer is over a scroll region outside it: the list under
+    // a popup's search field scrolls as soon as it opens, before any click in it.
+    let over_region = |focused: O| {
+        if !focus.in_popup {
+            return false;
+        }
+        let inside_field = takers.iter().any(|taker| taker.owner == focused && taker.rect.contains(at));
+        !inside_field && takers.iter().any(|taker| taker.owner != focused && taker.scrolls && !taker.value && taker.rect.contains(at))
+    };
+    let field = focus
+        .taker
+        .filter(|focused| !focus.by_position && takers.iter().any(|taker| taker.field && taker.owner == *focused))
+        .filter(|focused| !over_region(*focused));
     let app_field = focus.app_field && !focus.by_position;
     // A value control keeps its gesture only while the pointer is over it: once the pointer leaves, the gesture goes
     // on by position as a running one (value controls excluded) and the control hears its end now, so its edit run

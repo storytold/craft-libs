@@ -84,7 +84,7 @@ pub(crate) fn state(p: &mut dyn ErasedPass<'_>, style: &dyn StyleView, open: boo
     }
     core.sync_focus();
     // A faded component shows no hover or press: its rest look is its disabled look.
-    let (hovered, pressed) = if core.faded { (false, false) } else { (core.response.hovered(), core.press.phase.is_press()) };
+    let (hovered, pressed) = if core.faded { (false, false) } else { (core.response.hovered() || core.held_hover, core.press.phase.is_press()) };
     let (focused, visible) = (core.focus.focused, core.focus.visible);
     if focused {
         flags |= Flags::FOCUSED;

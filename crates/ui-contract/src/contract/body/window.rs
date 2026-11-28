@@ -552,6 +552,11 @@ impl BodyHooks<'_> {
             (_, Some(_)) => Placement::at(next),
             (_, None) => Placement { pos: Some(next.min.into()), size: current.size },
         });
+        // A hung layer places itself from its anchor at the size it keeps, so a grip that moves its left or top edge
+        // (one the placement leaves free only on a movable layer) keeps where the corner went while it stays open.
+        if grip.is_some() && (dx < 0 || dy < 0) {
+            super::placement::shift(&cx.core.ctx, id, (gesture != GesturePhase::Cancel).then_some(next.min));
+        }
         if matches!(gesture, GesturePhase::Commit | GesturePhase::Cancel) {
             self.mode.began = None;
             self.mode.held = None;

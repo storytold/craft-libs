@@ -232,8 +232,8 @@ impl Opened {
 ///   (enabled with a current preset); the Brush Name, Brush Stroke and Brush Tip boxes (at least one stays on); Show
 ///   Search Bar; Import Brushes… with [`import`](Self::import). The app adds its own rows to each section with
 ///   [`gear_rows`](Self::gear_rows).
-/// - **Presets.** The browser, with the scale slider (0.15 to 2.0) in its footer. The tip alone is a grid with the
-///   size as each caption; the name or the stroke is a list, with the stroke band while the stroke shows. A click
+/// - **Presets.** The browser, with the scale slider ([`BrushPickerSettings::SCALE_RANGE`]) in its footer. The tip alone is a grid with the
+///   name and size as each tile's tooltip; the name or the stroke is a list, with the stroke band while the stroke shows. A click
 ///   picks and keeps the picker open; a double click or Enter picks and closes it.
 /// - **Compact form.** [`compact`](Self::compact) leaves out the search row, the gear and the browser and keeps the
 ///   field, the popover with its head, the revert and the chip; [`rows`](Self::rows) draws the app's rows under the head.
@@ -392,7 +392,7 @@ impl<'a, K: Value + Eq + Hash + MemoProps> BrushPresetPicker<'a, K> {
                 .caption(NumberCodec::new(env.units().reader(None), 0).format(&Some(values.diameter.round())))
                 .caption_range((1.0..=max_diameter.round(), 0))
                 .cell_shape(CellShape::Square)
-                .view(if parts.tip_only() { PresetView::Grid } else { PresetView::List })
+                .view(if before.shown_parts().tip_only() { PresetView::Grid } else { PresetView::List })
                 .browser(!compact)
                 .toolbar(true)
                 .search(before.search)

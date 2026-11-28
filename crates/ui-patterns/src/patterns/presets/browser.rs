@@ -66,10 +66,6 @@ pub enum PresetItemCommands {
     RenameGroup,
 }
 
-/// The zoom from which list rows show their large thumbnail, and the zoom up to which they show the small one.
-const LARGE_FROM: f64 = 1.5;
-const SMALL_UNTIL: f64 = 0.75;
-
 /// The key of a row of the browser's collections: a preset or group of the app's rows, the action row at an index of
 /// `PresetBrowser::actions`, or the line between the presets and the actions. The browser maps it back to the app's key
 /// at every edge it reports through.
@@ -624,14 +620,11 @@ fn query_stamp(query: &str) -> u64 {
     hasher.finish()
 }
 
+/// The thumbnail of a list row at `zoom`: the medium thumbnail scaled by it, so the footer's slider sizes the rows
+/// smoothly.
 fn list_thumb(zoom: f64) -> ThumbSize {
-    if zoom >= LARGE_FROM {
-        ThumbSize::Large
-    } else if zoom < SMALL_UNTIL {
-        ThumbSize::Small
-    } else {
-        ThumbSize::Medium
-    }
+    let hundredths = if zoom.is_finite() { (zoom * 100.0).round().clamp(1.0, f64::from(u16::MAX)) } else { 100.0 };
+    ThumbSize::Scaled(hundredths as u16)
 }
 
 fn card_aspect(shape: CellShape) -> f32 {

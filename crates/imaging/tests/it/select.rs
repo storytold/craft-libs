@@ -680,6 +680,61 @@ fn polygon_shift_constrains_to_45_degrees() {
     assert_eq!(points[2], Point::new(140.0, 170.0), "Shift with Alt keeps the point");
 }
 
+// Over the first vertex of an open outline of 3 or more, where a click closes it, the Polygonal Lasso's cursor
+// carries the close ring; with two vertices, away from the start, and after closing, it does not.
+#[trial]
+fn the_polygonal_lasso_shows_the_close_ring_where_a_click_closes() {
+    use craft_behavior::{Cursor, CursorBadge, PaintedCursor};
+    let mut rig = rig("Polygonal Lasso", PolygonLassoTool::new(), Fake::empty());
+    focus(&mut rig);
+    let ctx = rig.fixture().ctx().clone();
+    let badge_at = |rig: &mut Rig<PolygonLassoTool>, point: (f64, f64)| {
+        rig.fixture().frame(vec![pointer::moved(at(point))]).frame(Vec::new());
+        match craft_ui::runtime::cursor::current(&ctx) {
+            Some(Cursor::Painted(PaintedCursor::Tool { badge, .. })) => badge,
+            other => panic!("the lasso shows its own cursor: {other:?}"),
+        }
+    };
+    click(&mut rig, (100.0, 100.0), NONE);
+    click(&mut rig, (200.0, 100.0), NONE);
+    assert_ne!(badge_at(&mut rig, (100.0, 100.0)), Some(CursorBadge::Close), "two vertices do not close");
+    click(&mut rig, (200.0, 200.0), NONE);
+    assert_eq!(badge_at(&mut rig, (101.0, 101.0)), Some(CursorBadge::Close), "over the first vertex");
+    // A hand aiming at the start lands a few points off it: the ring shows there, and a click there closes.
+    let near_miss = (100.0 + f64::from(craft_ui::testing::input::slop(&ctx)) + 2.0, 100.0);
+    assert_eq!(badge_at(&mut rig, near_miss), Some(CursorBadge::Close), "a near miss of the first vertex");
+    assert_ne!(badge_at(&mut rig, (150.0, 180.0)), Some(CursorBadge::Close), "away from the start");
+    click(&mut rig, near_miss, NONE);
+    assert_eq!(rig.tool().phase(), SelectPhase::Idle, "the click there closed the outline");
+    assert_ne!(badge_at(&mut rig, (100.0, 100.0)), Some(CursorBadge::Close), "no outline, no ring");
+}
+
+// A freehand Lasso stroke that comes back to its first point, where the release meets the start, carries the close
+// ring; earlier in the stroke and away from the start it does not.
+#[trial]
+fn the_lasso_shows_the_close_ring_where_a_stroke_meets_its_start() {
+    use craft_behavior::{Cursor, CursorBadge, PaintedCursor};
+    let mut rig = rig("Lasso", LassoTool::new(), Fake::empty());
+    focus(&mut rig);
+    let ctx = rig.fixture().ctx().clone();
+    let badge_at = |rig: &mut Rig<LassoTool>, point: (f64, f64)| {
+        rig.fixture().frame(vec![pointer::moved(at(point))]).frame(Vec::new());
+        match craft_ui::runtime::cursor::current(&ctx) {
+            Some(Cursor::Painted(PaintedCursor::Tool { badge, .. })) => badge,
+            other => panic!("the lasso shows its own cursor: {other:?}"),
+        }
+    };
+    rig.fixture().frame(vec![pointer::moved(at((100.0, 100.0)))]).frame(vec![pointer::press(at((100.0, 100.0)))]);
+    assert_ne!(badge_at(&mut rig, (101.0, 101.0)), Some(CursorBadge::Close), "a stroke just begun is not back");
+    for point in [(150.0, 100.0), (200.0, 100.0), (200.0, 150.0), (200.0, 200.0), (150.0, 200.0), (100.0, 200.0)] {
+        badge_at(&mut rig, point);
+    }
+    assert_ne!(badge_at(&mut rig, (100.0, 150.0)), Some(CursorBadge::Close), "away from the start");
+    assert_eq!(badge_at(&mut rig, (101.0, 102.0)), Some(CursorBadge::Close), "back on the start");
+    rig.fixture().frame(vec![pointer::release(at((101.0, 102.0)))]).frame(Vec::new());
+    assert_eq!(rig.tool().phase(), SelectPhase::Idle, "the release closed the outline");
+}
+
 // One outline: Alt at the first click with a selection latches Subtract for every later click; Backspace and a
 // secondary press each retract a vertex; an Alt drag adds freehand points; a double click closes. A second outline
 // closes on a click on its start, with the operation New.

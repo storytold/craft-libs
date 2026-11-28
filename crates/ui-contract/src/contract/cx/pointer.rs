@@ -29,6 +29,9 @@ pub trait Pointer {
     fn press(&self) -> &PressState;
     /// The pointer is over the component's own shapes.
     fn hit(&self) -> bool;
+    /// The press that opened the popup this component is in is still held with the pointer over it: egui hovers
+    /// nothing else meanwhile, so a row that a release here picks shows itself as the pointed-at row from this.
+    fn held_over(&self) -> bool;
     /// The pointer's stay over the component: over it, entered, left, and clicked while it has stayed over.
     fn hover(&self) -> Hover;
     /// Set only when the component's own shapes won the press and it was released as a click, or
@@ -124,6 +127,10 @@ impl Pointer for CxCore<'_> {
 
     fn hit(&self) -> bool {
         self.response.hovered()
+    }
+
+    fn held_over(&self) -> bool {
+        self.held_hover
     }
 
     fn activation(&self) -> Option<Activation> {
@@ -257,6 +264,10 @@ impl<C: Component> Pointer for Cx<'_, C> {
 
     fn hit(&self) -> bool {
         self.core.hit()
+    }
+
+    fn held_over(&self) -> bool {
+        self.core.held_over()
     }
 
     fn activation(&self) -> Option<Activation> {
