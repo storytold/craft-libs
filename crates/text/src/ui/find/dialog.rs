@@ -15,6 +15,7 @@ use craft_ui::form::{Field as FormField, Help};
 use craft_ui::menu::Menu;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::focus;
 use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::tabs::{Tab, TabKind, TabStrip};
 use craft_ui::text::TextField;
@@ -331,6 +332,9 @@ impl FindReplaceDialog {
     /// selection). Replace with, the options, Search Options and the Go To target stay as they are.
     pub fn show_tab(&mut self, tab: FindTab, query: Option<String>) {
         self.tab = tab;
+        if tab != FindTab::Replace {
+            self.last_field = Field::Find;
+        }
         if let Some(query) = query {
             self.query = query;
         }
@@ -617,7 +621,7 @@ impl StackDialog for FindReplaceDialog {
                     field = field.replace_selection(code.clone());
                 }
                 let edit = field.show(ui);
-                if edit.response.has_focus() {
+                if focus::is_focused(ui.ctx(), edit.response.id) {
                     last_field = Field::Find;
                 }
                 if let Some(value) = edit.events.value() {
@@ -632,7 +636,7 @@ impl StackDialog for FindReplaceDialog {
                         field = field.replace_selection(code.clone());
                     }
                     let edit = field.show(ui);
-                    if edit.response.has_focus() {
+                    if focus::is_focused(ui.ctx(), edit.response.id) {
                         last_field = Field::With;
                     }
                     if let Some(value) = edit.events.value() {
@@ -666,11 +670,11 @@ impl StackDialog for FindReplaceDialog {
                     check(ui, &words.ignore_punctuation.clone(), &mut options.ignore_punctuation, free);
                     check(ui, &words.ignore_space.clone(), &mut options.ignore_space, free);
                     check(ui, &words.regular_expressions.clone(), &mut options.regex, true);
-                    let entries = special_entries(&words, tab == FindTab::Replace, options.wildcards);
+                    let target_field = if last_field == Field::With && tab == FindTab::Replace { Field::With } else { Field::Find };
+                    let entries = special_entries(&words, target_field == Field::With, options.wildcards);
                     let button = Button::new(words.special.clone()).show(ui);
                     if let Some(code) = Menu::new(words.special.clone()).opened_by(&button, Trigger::Press).pick(ui, &entries).picked {
-                        let field = if last_field == Field::With && tab == FindTab::Replace { Field::With } else { Field::Find };
-                        picked_code = Some((field, code.to_owned()));
+                        picked_code = Some((target_field, code.to_owned()));
                     }
                 }
                 if !word || more {
@@ -687,7 +691,7 @@ impl StackDialog for FindReplaceDialog {
         self.with = with;
         self.options = options;
         self.more = more;
-        self.last_field = last_field;
+        self.last_field = if next_tab == FindTab::Replace { last_field } else { Field::Find };
         if go_kind != kind_at {
             target.clear();
             self.message.clear();
