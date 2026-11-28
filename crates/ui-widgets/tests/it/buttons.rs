@@ -1,7 +1,7 @@
 //! Buttons: the stacked arrangement's height, the hover report of a click the pointer stays on, the press a button
 //! reports as held, the compact group level, under which an inline button drops its label and keeps it as its name and
-//! tooltip, the room a button keeps for its widest text, the chord a command button shows, and a picture in the leading
-//! icon's place.
+//! tooltip, the room a button keeps for its widest text, the chord a command button shows (also for a command whose keys
+//! the app runs itself), and a picture in the leading icon's place.
 
 use craft_behavior::{IconId, PartKey};
 use craft_theme::ControlSize;
@@ -16,8 +16,10 @@ use craft_ui::list::ThumbAspect;
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::pickers::ComboBox;
 use craft_ui::primitives::IconSpec;
-use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, Commands as _, Scope};
+use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, Commands as _, Dispatch, Scope};
 use craft_ui::runtime::env::{Env, InBar, in_room, with_env};
+use craft_ui::runtime::frame::take_output;
+use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::pictures::sample_picture;
@@ -1133,6 +1135,52 @@ fn command_shown(command: &str, chord: ButtonChord, width: f32) -> (Vec<(String,
     frames.commands(CommandInput::new().catalog(catalog()));
     frames.idle(3, &mut show);
     (frames.texts().iter().map(|text| (text.text.clone(), text.elided)).collect(), button_width.get())
+}
+
+/// The catalog of the display-only trial: `trial.mark` on J, whose keys the app runs itself with `own`.
+fn mark_catalog(own: bool) -> AppCatalog {
+    let mark =
+        CommandDef::new(CommandRef::new("trial.mark"), "Mark", Scope::app()).with_default(Binding::parse("J").expect("the trial's chord parses"));
+    let mark = if own { mark.with_dispatch(Dispatch::App) } else { mark };
+    AppCatalog::new(vec![mark], 1).expect("the trial's catalog is valid")
+}
+
+/// A command button for `trial.mark` with its chord trailing in a wide room: the texts it painted, the commands the
+/// board fired on a press of J, and whether egui's input still held that press, with the catalog marking the command as
+/// the app's with `own`.
+fn mark_shown_and_pressed(own: bool) -> (Vec<(String, bool)>, Vec<String>, bool) {
+    let kept = Cell::new(false);
+    let mut show = |ui: &mut Ui| {
+        let room = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 40.0));
+        in_region(ui, room, |ui| Button::command(CommandRef::new("trial.mark")).chord(ButtonChord::Trailing).show(ui));
+        let pressed = ui.input(|input| input.key_pressed(Key::J));
+        kept.set(kept.get() || pressed);
+    };
+    let mut frames = Frames::new();
+    frames.commands(CommandInput::new().catalog(mark_catalog(own)));
+    frames.idle(3, &mut show);
+    frames.frame(vec![key_press(Key::J, Modifiers::NONE)], &mut show);
+    let texts = frames.texts().iter().map(|text| (text.text.clone(), text.elided)).collect();
+    let fired = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
+    frames.frame(vec![key_release(Key::J, Modifiers::NONE)], &mut show);
+    (texts, fired, kept.get())
+}
+
+/// A command whose keys the app runs itself still shows its chord on a bound button, and a press of the key fires
+/// nothing on the board: the key stays in egui's input, for the app's own key handling. A binding the keymap runs fires.
+#[trial]
+fn a_command_the_app_runs_itself_shows_its_chord_and_its_key_fires_nothing() {
+    let (texts, fired, kept) = mark_shown_and_pressed(true);
+    assert!(texts.iter().any(|(text, _)| text == "J"), "the chord shows on the button: {texts:?}");
+    assert!(fired.is_empty(), "the board runs nothing for it: {fired:?}");
+    assert!(kept, "the key stays in egui's input, which the app reads");
+
+    let (texts, fired, _) = mark_shown_and_pressed(false);
+    assert!(texts.iter().any(|(text, _)| text == "J"), "a bound command shows its chord too: {texts:?}");
+    assert_eq!(fired, ["trial.mark"], "the same key fires the command when the keymap runs it");
+    // This case's press stays in egui's input as the app's does: the key stage leaves every press a shortcut may match
+    // to egui, and routing withdraws only a focused component's held ones. So `kept` separates the two cases not at
+    // all; the fired list does.
 }
 
 #[trial]
