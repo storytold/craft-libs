@@ -1,5 +1,5 @@
 //! `PaintBar`: which members each tool disables, the smoothing options, the gestures, the combinations list, what the
-//! load swatch shows and a click on its menu.
+//! load swatch shows, a click on its menu and the percents each field holds.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -13,6 +13,7 @@ use craft_ui::contract::{Entry, ShowContainer as _};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Fixture, Room, trial};
+use craft_ui::text::RangeAlert;
 use egui::{Color32, ColorImage, Key, Modifiers, Pos2, Shape, TextureId};
 
 struct Host {
@@ -21,16 +22,18 @@ struct Host {
     edits: Vec<EditEvent<PaintValues<u32>>>,
     /// How many passes reported Clean Brush.
     cleans: u32,
+    /// The range alerts the passes reported.
+    alerts: Vec<RangeAlert>,
 }
 
 fn harness(tool: PaintTool, eraser: EraserMode, prepare: impl FnOnce(&mut PaintValues<u32>)) -> (Fixture, Rc<RefCell<Host>>) {
     let mut values = PaintValues::new(0u32);
     prepare(&mut values);
-    let host = Rc::new(RefCell::new(Host { values, eraser, edits: Vec::new(), cleans: 0 }));
+    let host = Rc::new(RefCell::new(Host { values, eraser, edits: Vec::new(), cleans: 0, alerts: Vec::new() }));
     let shown = Rc::clone(&host);
     let mut fixture = Fixture::new(move |ui| {
         let mut host = shown.borrow_mut();
-        let Host { values, eraser, edits, cleans } = &mut *host;
+        let Host { values, eraser, edits, cleans, alerts } = &mut *host;
         let modes = [Entry::new(0u32, "Normal"), Entry::new(1u32, "Multiply")];
         Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
             let mut bar = PaintBar::new(tool, &mut *values).modes(&modes);
@@ -40,6 +43,7 @@ fn harness(tool: PaintTool, eraser: EraserMode, prepare: impl FnOnce(&mut PaintV
             let out = bar.show(ui);
             edits.extend(out.edits);
             *cleans += u32::from(out.mixer_clean);
+            alerts.extend(out.out_of_range);
         });
     });
     // The options bar spans an application window; its members still run past it, and the bar scrolls.
@@ -187,4 +191,47 @@ fn the_load_swatch_shows_each_mixer_load() {
         let (mut fixture, _) = harness(PaintTool::MixerBrush, EraserMode::Brush, move |v| v.mixer.current_load = shown);
         assert_eq!(load_swatch(&mut fixture), (value, pictures), "{load:?}");
     }
+}
+
+fn type_into(fixture: &mut Fixture, label: &str, text: &str) {
+    let field = fixture.by_label(label).unwrap_or_else(|| panic!("the bar shows {label}"));
+    fixture.click(&field);
+    fixture.key(Key::A, Modifiers::COMMAND);
+    fixture.type_text(text);
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+}
+
+/// Opacity and Flow hold 1 to 100 % on every tool that shows them (photocraft#16809): a typed 0 or -5 keeps 1 % and
+/// 150 keeps 100 %, each reported once with a range that starts at 1 %. Smoothing still takes 0 with no alert.
+#[trial]
+fn opacity_and_flow_hold_one_to_a_hundred_percent_and_smoothing_still_takes_zero() {
+    let fields = [
+        (PaintTool::Brush, "Opacity"),
+        (PaintTool::Brush, "Flow"),
+        (PaintTool::Eraser, "Opacity"),
+        (PaintTool::Eraser, "Flow"),
+        (PaintTool::Pencil, "Opacity"),
+    ];
+    for (tool, label) in fields {
+        for (typed, kept) in [("0", 0.01), ("-5", 0.01), ("150", 1.0)] {
+            let (mut fixture, host) = harness(tool, EraserMode::Brush, |v| {
+                v.opacity = 0.5;
+                v.flow = 0.5;
+            });
+            type_into(&mut fixture, label, typed);
+            let host = host.borrow();
+            let value = if label == "Opacity" { host.values.opacity } else { host.values.flow };
+            assert_eq!(value, kept, "{tool:?} {label}: {typed} keeps {kept}");
+            assert_eq!(host.alerts.len(), 1, "{tool:?} {label}: {typed} is reported once: {:?}", host.alerts);
+            assert_eq!(host.alerts[0].range, 1.0..=100.0, "{tool:?} {label}: the alert names 1 to 100 %");
+        }
+    }
+
+    let (mut fixture, host) = harness(PaintTool::Brush, EraserMode::Brush, |v| v.smoothing.amount = 0.5);
+    page_to_end(&mut fixture);
+    type_into(&mut fixture, "Smoothing", "0");
+    let host = host.borrow();
+    assert_eq!(host.values.smoothing.amount, 0.0, "Smoothing takes 0");
+    assert!(host.alerts.is_empty(), "and reports nothing: {:?}", host.alerts);
 }

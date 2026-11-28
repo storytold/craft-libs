@@ -58,6 +58,49 @@ fn stems_typos_and_a_substring_find_what_the_words_do_not() {
 }
 
 #[trial]
+fn words_only_descriptions_hold_leave_room_for_the_label_word_a_typo_stands_for() {
+    // 50 description words are 1 edit from the query and the label word is 2 edits from it; only words of labels and
+    // paths are counted against the typo limit.
+    let last = ('a'..='z').filter(|&c| c != 'e').map(|c| format!("rectangl{c}"));
+    let first = ('a'..='z').filter(|&c| c != 'r').map(|c| format!("{c}ectangle"));
+    let near: Vec<String> = last.chain(first).collect();
+    let entries = vec![entry("t0", "Zip").with_words(near.join(" ")), entry("t1", "Rectanqqe")];
+    assert_eq!(find(entries, "rectangle"), vec![1]);
+}
+
+/// Entries 0, 3 and 5 start with `word`; 1 and 4 hold it after a shorter word, so their labels are shorter; 2 does not
+/// hold it. The word's entries are first, between and last among those that hold it.
+fn starts_and_holds(word: &str) -> Vec<HelpEntry> {
+    let labels = [format!("{word} Qqq"), format!("Q {word}"), "Other".to_owned(), format!("{word} Www"), format!("W {word}"), format!("{word} Zzz")];
+    labels.iter().enumerate().map(|(at, label)| entry(&format!("t{at}"), label)).collect()
+}
+
+/// Asserts that every entry of `starts` and `holds` is in `found` and that each entry of `starts` ranks above each entry
+/// of `holds`.
+fn starts_rank_first(found: &[usize], starts: &[usize], holds: &[usize], what: &str) {
+    let place = |e: usize| found.iter().position(|&f| f == e);
+    for s in starts {
+        for h in holds {
+            let (Some(s_at), Some(h_at)) = (place(*s), place(*h)) else {
+                panic!("{what}: entries {s} and {h} are both found in {found:?}");
+            };
+            assert!(s_at < h_at, "{what}: entry {s} ranks above entry {h} in {found:?}");
+        }
+    }
+}
+
+#[trial]
+fn a_typo_or_a_synonym_is_read_as_the_word_each_entry_holds() {
+    // The query is read with the word each entry holds, so an entry it starts ranks above one with a shorter label
+    // that holds it later, wherever the entry is among those that hold the word.
+    let found = find(starts_and_holds("Shadow"), "shdaow");
+    starts_rank_first(&found, &[0, 3, 5], &[1, 4], "a typo");
+    assert!(!found.contains(&2), "an entry without the word is not found through a typo");
+    let found = find(starts_and_holds("Delete"), "erase");
+    starts_rank_first(&found, &[0, 3, 5], &[1, 4], "a synonym");
+}
+
+#[trial]
 fn a_synonym_group_finds_its_members_and_a_translated_row_adds_more() {
     let entries = || vec![entry("t0", "Delete Layer"), entry("t1", "Effacer Tout"), entry("t2", "Phrase")];
     assert_eq!(find(entries(), "erase"), vec![0], "a word of a group finds a command labelled with another");

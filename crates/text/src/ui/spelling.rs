@@ -225,6 +225,7 @@ impl CheckSpellingDialog {
     /// Replaces the list and shows its first item (Change To from its first suggestion): a host that walks its text
     /// itself hands the dialog the words from its current place.
     pub fn restart(&mut self, items: Vec<SpellingItem>) {
+        self.action = None;
         self.index = 0;
         self.set_items(items);
     }

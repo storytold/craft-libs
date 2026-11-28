@@ -252,20 +252,20 @@ impl Component for ComboBox<'_> {
         }
         // A list closed by any path (a pick, Escape, a click outside, the draft ending) ends its preview.
         self.end_preview(cx);
-        let text = cx.value().cloned().unwrap_or_default();
         while let Some((step, mods)) = cx.intents().take_move() {
             let forward = match step {
                 NavMove::Down if !mods.fine => true,
                 NavMove::Up if !mods.fine => false,
                 _ => continue,
             };
-            if let Some(value) = self.neighbour(&text, forward).and_then(|at| self.options[at].value()) {
+            let text = cx.value().map_or("", String::as_str);
+            if let Some(value) = self.neighbour(text, forward).and_then(|at| self.options[at].value()) {
                 cx.set(value.clone());
             }
         }
         if let Some(wheel) = cx.take_wheel()
             && wheel.scroll.y != 0.0
-            && let Some(value) = self.neighbour(&text, wheel.scroll.y < 0.0).and_then(|at| self.options[at].value())
+            && let Some(value) = self.neighbour(cx.value().map_or("", String::as_str), wheel.scroll.y < 0.0).and_then(|at| self.options[at].value())
         {
             cx.set(value.clone());
         }
