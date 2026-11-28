@@ -204,6 +204,49 @@ fn header_cells_past_the_view_have_bounds_only_inside_it() {
     }
 }
 
+/// Removable columns that the app makes narrower than the header's height: each remove control's bounds stay inside its
+/// own header cell, so its node and its press area do not reach into the cell before it.
+#[trial]
+fn a_narrow_column_keeps_its_remove_control_in_its_cell() {
+    const NAMES: [&str; 3] = ["a", "b", "c"];
+    const NARROW: f32 = 8.0;
+    let columns = || {
+        let specs = NAMES
+            .iter()
+            .enumerate()
+            .map(|(at, name)| {
+                let width = if at == 0 { COL } else { NARROW };
+                ColumnSpec::new(ColumnKey::new(name), *name, ColumnWidth::Fixed(width)).removable(format!("Remove {name}"), true)
+            })
+            .collect();
+        CollectionProps::new().columns(specs)
+    };
+    let (rows, source) = (Rows::default(), Count(4));
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            Table::new(columns()).id_salt("table").show_items(ui, &source, &mut |key, cx| {
+                rows.note(*key, cx.rect);
+                Row::new()
+            });
+        });
+    };
+    frames.idle(3, &mut show);
+    let tree = frames.platform_tree();
+    let bounds = |role: Role, name: &str| {
+        let key = tree.with_role(role).into_iter().find(|key| tree.name_of(*key) == Some(name)).unwrap_or_else(|| panic!("a node named {name}"));
+        tree.bounds_of(key).unwrap_or_else(|| panic!("the platform gets the bounds of {name}"))
+    };
+    for name in NAMES {
+        let cell = bounds(Role::COLUMN_HEADER, name);
+        let remove = bounds(Role::BUTTON, &format!("Remove {name}"));
+        assert!(
+            remove.min.x >= cell.min.x - SAME && remove.max.x <= cell.max.x + SAME,
+            "the remove control of {name} has bounds {remove:?} inside its header cell {cell:?}"
+        );
+    }
+}
+
 /// A table bound to a layout that moves a column and hides another shows the bound order, and a resize by a header
 /// edge drag writes the width into the binding in the pass that reports it. Guards restoring a saved layout.
 #[trial]
