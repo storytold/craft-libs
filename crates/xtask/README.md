@@ -11,12 +11,14 @@ The crate is native only and is a dependency of an app's `xtask` package only.
 | `names` | always | `Policy`, `Input`, `scan`, `scan_source`, `literals`, `test_path`: the display-name scanner, which looks for the words an app lists in its string literals, `Cargo.toml` descriptions and text files |
 | `lock` | `lock` | `LockConfig`, `try_acquire`, `acquire`, `holders`: 1 to 64 slots held across processes through file locks in a directory the app chooses |
 | `report` | `report` | `write` and `to_json`: the per-step JSON report (schema 1), replaced atomically through `craft-atomic` |
+| `pins` | `pins` | `run`, `check`, `check_commits`: the version, source and features of pinned dependencies, packages the app forbids, and one commit per git repository, read from `cargo metadata`; `run_target_features`: one target's features, read from `cargo tree`; `host_target`: the host target, read from `rustc -vV`; each command's output is read within size limits |
 | `stats` | `stats` | `run`, `collect` and `write_table`: files, lines and tests of Rust per workspace crate (`cargo xtask stats`) |
 | `icon` | always | `ico::pack`, `icns::pack`, `png_size`, `png_info`, `read_pngs`, `Limits`, and `ico::read_file` and `icns::read_file` for an app's test of its committed icons |
 | `version` | `version` | `run`, `run_with`, `Limits`, `lock_dirs`, `read`, `replace`, `validate`: `cargo xtask version [set X.Y.Z[-pre]]` on the root `Cargo.toml` |
 
-No feature is on by default. `report` adds `serde_json` and `craft-atomic`, and `stats` adds
-`serde_json`. `version` adds `craft-atomic` and `toml_edit` and turns on `lock`.
+No feature is on by default. `report` adds `serde_json` and `craft-atomic`, and `pins` and `stats` each
+add `serde_json`.
+`version` adds `craft-atomic` and `toml_edit` and turns on `lock`.
 
 ## Use
 
@@ -281,6 +283,74 @@ cancel while waiting) runs no step and writes no report. The report looks like t
 so a reader never sees a partial report, and a failed write leaves the previous report in place.
 Machine, GPU, corpus and skip details stay in the app's own report.
 
+## Pins
+
+`cargo xtask pdf-deps` checks that pinned dependencies resolve to the pinned version and source, with
+the allowed features, and that packages the app forbids are not in the graph. The app enables the
+`pins` feature, keeps its own table and passes it with a function that builds its `cargo` command:
+
+```rust
+use craft_xtask::pins::{FeatureRule, Forbidden, Name, Pin, Policy, Scope};
+
+const REV: &str = "9f75d3dc19b4b514c4f3d4847ed1ec1b0e86b4ef";
+
+Some("pdf-deps") => {
+    let source = craft_xtask::pins::git_source("https://github.com/storytold/craft-libs", REV);
+    let pins = [Pin { name: "craft-pdf", version: "0.1.0", source: &source, features: FeatureRule::Exactly(&["read"]) }];
+    let forbidden = [Forbidden { name: Name::Exact("krilla"), scope: Scope::Active }];
+    craft_xtask::pins::run(cargo, &Policy { pins: &pins, forbidden: &forbidden }, &Default::default())
+        .map_err(|e| e.to_string())
+}
+```
+
+- `run` runs `cargo metadata --locked --format-version 1` and passes the JSON to `check`.
+- Each `Pin` name has exactly one package, with the pinned `version` and `source`. `git_source(url, rev)`
+  gives the source Cargo writes for a git dependency pinned to a full commit hash, and `CRATES_IO` the
+  source for crates.io. `git_source` and `check_commits` write a git URL as Cargo does: the `.` and
+  `..` segments of the path resolved (`https://github.com/o/./r` becomes `https://github.com/o/r`),
+  and for `http` and `https` the scheme and host in lowercase, a port written as its number, and
+  without the default port (`https://github.com:0443/o/r` becomes `https://github.com/o/r`).
+- `FeatureRule::Contains` requires the listed features and allows others. `FeatureRule::Exactly`
+  requires every listed feature and allows no others. Both read the package's node in `resolve.nodes`.
+- `Scope::Active` rejects a forbidden package that has a resolved node, development dependencies
+  included. `Scope::ProductionFrom(root)` rejects a forbidden package reached from `root` over normal
+  or build edges; one reached only through development edges is allowed. `Name::Family("hayro")`
+  matches `hayro` and every `hayro-*` name.
+- Packages the policy does not name are allowed. An empty policy sets no rule on the packages, but
+  the metadata must still be within `metadata_bytes`, parse, and have a `packages` list with a `name`
+  for each package.
+- `check_commits` reads the same JSON against `OneCommit` rules. Every package whose source is the
+  rule's git repository must resolve from one commit, the text after the source's `#`. An `Extra`
+  names a package allowed at its own commit, for a dependency the app declares at a second revision
+  (DesignCraft's `craft-xml-dtd = { package = "craft-xml", … }`). A violation lists each commit with
+  the packages resolved from it:
+
+  ```rust
+  let json = craft_xtask::pins::metadata(cargo, &limits)?;
+  let rule = OneCommit { url: "https://github.com/storytold/craft-libs", extra: &[Extra { name: "craft-xml", rev: DTD_REV }] };
+  craft_xtask::pins::check_commits(&json, &[rule], &limits)?;
+  ```
+
+- JSON that does not parse, or lacks a field a rule needs (`resolve.nodes`, a package `id`, a node's
+  `features` or `deps`, an edge's `dep_kinds`), is an error.
+- Cargo merges every target's features into one metadata result. `run_target_features` runs
+  `cargo tree --target <target>` from a root package and checks that each line for one package has
+  exactly the given features; `host_target` reads the host target from `rustc -vV`.
+- `Limits` bounds each command's output. More standard output than the limit stops the command and
+  returns an error, and so does standard output that a process the command started keeps open for 2
+  seconds after the command exits. Standard error is read to its end, and its first `stderr_bytes`
+  are kept for the error message; after a failing exit it is read for at most 2 seconds more:
+
+  | Limit | Default |
+  |---|---|
+  | `metadata_bytes`: the `cargo metadata` JSON, also for JSON passed to `check` | 64 MiB |
+  | `tree_bytes`: one `cargo tree` output | 64 MiB |
+  | `version_bytes`: the `rustc -vV` output | 64 KiB |
+  | `stderr_bytes`: standard error kept for a message | 64 KiB |
+
+- `pins::Error` tells apart a command that could not start, could not be read, exited without
+  success or printed too much; output that is not valid; and a `Violation` of the policy.
+
 ## Icons
 
 ```rust,no_run
@@ -434,6 +504,11 @@ fn version(rest: &[&str]) -> Result<(), String> {
 | `assets`: folder-only extensions and the tests in `assets::tests::gridcraft` | GridCraft `xtask/src/assets.rs` at [f204433](https://github.com/storytold/gridcraft/blob/f2044337c7e195bdf6bec1b3914937a3dd386749/xtask/src/assets.rs) |
 | `assets`: first-cell rows, folder patterns, forbidden extensions and names, the license column and the tests in `assets::tests::lightcraft` | LightCraft `xtask/src/assets.rs` at [25ffe3e](https://github.com/storytold/lightcraft/blob/25ffe3e5d4ac754829b99dd7368d94185adbf8d5/xtask/src/assets.rs) |
 | `assets`: the policy checks, the cell parser, bad-entry and near-row reports, the size limits, UTF-8 names, skipped folders and the regular-file test | written here |
+| `pins`: exact feature sets, the production walk over normal and build edges, the per-target `cargo tree` feature check, and their five tests | DeckCraft `xtask/src/pdf_deps.rs` at `aa3a1baa01` |
+| `pins`: one package per name with an exact version and source, and its three tests | VectorCraft `xtask/src/pdf_deps.rs` at `34627134fa` |
+| `pins`: required features that allow others, and its five tests | DesignCraft `xtask/src/pdf_deps.rs` at `18246dddd2` |
+| `pins`: packages forbidden when resolved, and its five tests | EffectCraft `xtask/src/pdf_deps.rs` at `f31a6b0aef` |
+| `pins`: the output size limits, an empty feature list in `cargo tree`, and the errors for missing fields, features that are not strings, edges without a kind and packages without a name | written here |
 
 ## Migration
 
@@ -445,6 +520,7 @@ No app uses this crate yet.
 | AniCraft, CADCraft, DeckCraft, FigCraft, GridCraft, LightCraft, PhotoCraft, WordCraft | Planned: the lexer and matcher of `display_names.rs` move to `names`, with `MatchCase::Exact`. `BANNED`, `ALLOWED`, `ROOTS`, the prefix exceptions (LightCraft, WordCraft), PhotoCraft's catalog test and the tests named after them stay in the app. |
 | VectorCraft | Planned: `cargo xtask brands` calls `names::scan` with `MatchCase::AsciiInsensitive`, byte and C strings, `brand-ok` and its desktop entry as `Input::text_mark_above`. The word list, the file selection from `git ls-files` and the message stay in the app. |
 | LightCraft | Planned: `ci_lock.rs` moves to `lock`, with `LIGHTCRAFT_CI_LOCK` and `LIGHTCRAFT_CI_SLOTS` read by the app. The machine, GPU, corpus and skip report stays in the app. |
+| DeckCraft, DesignCraft, EffectCraft, VectorCraft | Planned: `xtask/src/pdf_deps.rs` moves to `pins`. Each app keeps its `pdf-deps` command and its table, and runs `cargo xtask pdf-deps` before and after the switch. |
 | DeckCraft | Planned: `xtask/src/ico.rs` moves to `icon::ico`. The `ico` command and `packaging/icons.sh` stay in the app. |
 | CADCraft | Planned: `xtask/src/ico.rs` moves to `icon::ico`. The `ico` command and `packaging/icons.sh` stay in the app. |
 | craft-launcher | Planned: `xtask/src/ico.rs` and `icns.rs` move to `icon`. The `ico` and `icns` commands stay in the app. |
