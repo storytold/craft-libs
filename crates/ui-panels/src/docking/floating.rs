@@ -29,7 +29,7 @@ use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::dock::DockEdge;
 use craft_behavior::{GesturePhase, IconId, Metrics, Sense};
 use craft_ui_widgets::popover::WholeWindow;
-use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
+use egui::{Event, Id, Modifiers, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::RefCell;
 use std::hash::Hash;
 
@@ -197,6 +197,15 @@ pub struct FloatingGroupOutput {
     pub collapsed_width: Option<f32>,
     /// The files dropped on the group's window that no target there took.
     pub files: Vec<OsFile>,
+    /// The key, text and clipboard events (`Key`, `Text`, `Copy`, `Cut`, `Paste`, `PasteImage`) of the group's own OS window that
+    /// nothing took this pass, for an app that runs shortcuts of its own: the key stage and the window's widgets took
+    /// theirs, and so did a command the shortcut dispatcher fired. egui hands each OS window only its own input, so
+    /// the app's main window never sees these. Empty while a component of the window has keyboard focus, and for a
+    /// group that shows in the app window, whose keys are the app window's.
+    pub forwarded_events: Vec<Event>,
+    /// The modifiers held in the window when `forwarded_events` is not empty. A clipboard event stands for its chord
+    /// without the key, so these tell Ctrl+C from the keyboard's own Copy key.
+    pub forwarded_modifiers: Option<Modifiers>,
     /// The band the group is moved by this pass, with the id of its accessibility node; `None` when it has none.
     pub grip: Option<(Rect, Id)>,
     /// The grips the group is resized by this pass, each with the edge or corner it moves and the id of its
@@ -444,12 +453,25 @@ impl<'a> FloatingGroup<'a> {
         let window = UiTokens::corner(env.tokens.shape.radius.window);
         let lower = egui::CornerRadius { nw: 0, ne: 0, sw: window.sw, se: window.se };
         let rounded = self.rounded_body;
-        let shown = self.show(ui, |ui, cx| {
+        // A group in an OS window runs its body in the window's own pass; one that fell back to a layer, or an
+        // embedded window, runs in this one, whose keys are not the window's.
+        let (viewport, native) = (ui.ctx().viewport_id(), self.native.is_some());
+        let (mut keys, mut shown_modifiers) = (Vec::new(), None);
+        let mut shown = self.show(ui, |ui, cx| {
             if rounded {
                 crate::primitives::frame_surfaces(ui, cx.rect, lower);
             }
-            (!minimized).then(|| body(ui, cx))
+            let inner = (!minimized).then(|| body(ui, cx));
+            if native && !ui.is_sizing_pass() && ui.ctx().viewport_id() != viewport {
+                keys.extend(crate::runtime::keys::leftover_events(ui.ctx()));
+                if !keys.is_empty() {
+                    shown_modifiers = Some(ui.input(|input| input.modifiers));
+                }
+            }
+            inner
         });
+        shown.output.forwarded_events = keys;
+        shown.output.forwarded_modifiers = shown_modifiers;
         Inner { output: shown.output, inner: shown.inner.flatten(), settle: shown.settle }
     }
 
@@ -605,6 +627,8 @@ impl Component for FloatingGroup<'_> {
             iconic,
             collapsed_width: self.collapsed_width,
             files: self.files,
+            forwarded_events: Vec::new(),
+            forwarded_modifiers: None,
             grip: cx.move_band(),
             resize: cx.resize_grips(),
             files_at: self.files_at,

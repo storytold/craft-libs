@@ -3,8 +3,9 @@
 /// The longest step motion integrates, in seconds, so a stalled pass never jumps the view.
 pub const FRAME_STEP_MAX: f64 = 0.1;
 
-/// The step of a pass that came `dt` seconds after the previous one, `dt` being the time between two readings of the
-/// caller's pass clock: `dt` within `0..=FRAME_STEP_MAX`, and 0 where it is not a number.
+/// The step of a pass that came `dt` seconds after the previous one, kept within `0..=FRAME_STEP_MAX`.
+///
+/// `dt` is the time between two readings of the caller's pass clock; where it is not a number, the step is 0.
 pub fn frame_step(dt: f64) -> f64 {
     if dt.is_finite() { dt.clamp(0.0, FRAME_STEP_MAX) } else { 0.0 }
 }

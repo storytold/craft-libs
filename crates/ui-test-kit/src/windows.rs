@@ -7,13 +7,17 @@
 
 use craft_host::target::ShellInfo;
 use craft_ui::runtime::InstallSpec;
+use craft_ui::runtime::commands::CommandInput;
 use craft_ui::runtime::env::RootEnv;
 use craft_ui::runtime::frame::{FrameInput, WindowInput, input_pending, set_input};
 use craft_ui::testing::Frames;
 use craft_ui::testing::access::{AccessTree, tree_of};
 use craft_ui::testing::windows::FakeSystem;
 use craft_ui::testing::windows::{FullOutput, RawInput};
-use egui::{Context, Event, HoveredFile, Pos2, Rect, TextureId, TexturesDelta, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportId, ViewportInfo};
+use egui::{
+    Context, Event, HoveredFile, Modifiers, Pos2, Rect, TextureId, TexturesDelta, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportId,
+    ViewportInfo,
+};
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -25,6 +29,8 @@ thread_local! {
     /// The events of the running frame's child passes (the renderer runs on the trial's thread), each for the child it
     /// is addressed to, or else for the first child pass.
     static CHILD_EVENTS: RefCell<Vec<(Option<ViewportId>, Event)>> = const { RefCell::new(Vec::new()) };
+    /// The modifiers held in the child's window, which every child pass reports.
+    static CHILD_MODIFIERS: Cell<Modifiers> = const { Cell::new(Modifiers::NONE) };
     /// The files hovering over and dropped on the child's window in the next child pass.
     static CHILD_FILES: RefCell<(Vec<HoveredFile>, Vec<String>)> = const { RefCell::new((Vec::new(), Vec::new())) };
     /// The window facts every child opened from the root reports.
@@ -205,12 +211,14 @@ fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
     patch_window(viewport.ids, viewport.builder);
     let mut callback = viewport.viewport_ui_cb;
     let this = viewport.ids.this;
-    let events = CHILD_EVENTS.with(|events| {
+    let mut events: Vec<Event> = CHILD_EVENTS.with(|events| {
         let mut events = events.borrow_mut();
         let (own, others): (Vec<_>, Vec<_>) = events.drain(..).partition(|(to, _)| to.is_none_or(|to| to == this));
         *events = others;
         own.into_iter().map(|(_, event)| event).collect()
     });
+    // This egui takes the held modifiers as an event, not a RawInput field.
+    events.insert(0, egui::Event::ModifiersChanged(CHILD_MODIFIERS.with(Cell::get)));
     let (hovered_files, dropped) = CHILD_FILES.with(|files| std::mem::take(&mut *files.borrow_mut()));
     let dropped_files = dropped.into_iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
     let mut info = with_facts(viewport.ids.this, |info| info.clone());
@@ -318,6 +326,7 @@ pub struct Windows {
     root: RefCell<RootEnv>,
     app_modal: Cell<Option<ViewportId>>,
     window_input: Cell<WindowInput>,
+    commands: RefCell<CommandInput>,
 }
 
 impl Default for Windows {
@@ -340,6 +349,7 @@ impl Windows {
         Context::set_immediate_viewport_renderer(render_child);
         CHILD_EVENTS.with(|events| events.borrow_mut().clear());
         CHILD_FILES.with(|files| *files.borrow_mut() = Default::default());
+        CHILD_MODIFIERS.with(|held| held.set(Modifiers::NONE));
         CHILD_INFO.with(|info| *info.borrow_mut() = ViewportInfo::default());
         OWN_INFO.with(|own| own.borrow_mut().clear());
         CHILDREN.with(|children| children.borrow_mut().clear());
@@ -353,6 +363,7 @@ impl Windows {
             root: RefCell::new(RootEnv::default()),
             app_modal: Cell::new(None),
             window_input: Cell::new(WindowInput::Live),
+            commands: RefCell::new(CommandInput::new()),
         }
     }
 
@@ -365,6 +376,11 @@ impl Windows {
     /// [`child_info`](Self::child_info) gave.
     pub fn facts(&self, viewport: ViewportId) -> ViewportInfo {
         with_facts(viewport, |info| info.clone())
+    }
+
+    /// The modifiers held in the child's window, which its passes report from now on.
+    pub fn child_modifiers(&self, held: Modifiers) {
+        CHILD_MODIFIERS.with(|kept| kept.set(held));
     }
 
     /// The window in which the app's own egui code shows a modal (`FrameInput::app_modal`), from the next frame on.
@@ -385,6 +401,12 @@ impl Windows {
     /// The app's root values every frame gives from now on, the defaults until then.
     pub fn root_env(&self, root: RootEnv) {
         *self.root.borrow_mut() = root;
+    }
+
+    /// The command input every following frame is given, as an app's `FrameInput.commands`: its catalog, states and
+    /// gate.
+    pub fn commands(&self, commands: CommandInput) {
+        *self.commands.borrow_mut() = commands;
     }
 
     /// Gives the next frame's pass of the child `viewport` these `events`, as a popup window's, which runs inside its
@@ -421,7 +443,13 @@ impl Windows {
         TREES.with(|kept| kept.borrow_mut().clear());
         SHAPES.with(|kept| kept.borrow_mut().clear());
         if !input_pending(&self.ctx) {
-            set_input(&self.ctx, FrameInput::new(self.root.borrow().clone()).app_modal(self.app_modal.get()).window_input(self.window_input.get()));
+            set_input(
+                &self.ctx,
+                FrameInput::new(self.root.borrow().clone())
+                    .app_modal(self.app_modal.get())
+                    .window_input(self.window_input.get())
+                    .commands(self.commands.borrow().clone()),
+            );
         }
         let mut input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, ROOT_SIZE)),

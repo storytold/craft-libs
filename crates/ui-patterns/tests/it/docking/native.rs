@@ -15,19 +15,23 @@ use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::popover::DropVeil;
 use craft_ui::runtime::InstallSpec;
+use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandSet as _, EditCommands, FirePhase, Scope};
 use craft_ui::runtime::env::RootEnv;
+use craft_ui::runtime::frame::take_output;
 use craft_ui::runtime::{drag, keys};
 use craft_ui::testing::access::{AccessTree, focused_key};
 use craft_ui::testing::focus::key_release;
-use craft_ui::testing::input::key_press;
+use craft_ui::testing::input::{key_press, key_repeat};
 use craft_ui::testing::pointer::{gone, moved, press, release, secondary};
 use craft_ui::testing::trial;
 use craft_ui::testing::windows::{FakeSystem, HeldButtons};
-use craft_ui::text::NumberField;
+use craft_ui::text::{NumberField, TextField};
 use craft_ui_test_kit::windows::{AppKitWindow, FilesOver, Out, Windows};
 use egui::{
     Event, HoveredFile, Key, Modifiers, Pos2, Rect, Shape, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo,
 };
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// The root window and the palette overlap; the palette is the larger.
@@ -1481,6 +1485,257 @@ fn a_file_dropped_on_a_native_float_reaches_window_files_once() {
     };
     assert_eq!(reached(false), 1, "a file no target took arrives once");
     assert_eq!(reached(true), 0, "a file a target in the window took does not");
+}
+
+/// Palettes whose body is a text field, which takes the keys of its window while it has focus. `at` is where it showed.
+struct Fielded {
+    text: String,
+    at: Rc<Cell<Rect>>,
+}
+
+impl DockPanels<u32> for Fielded {
+    fn body(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        self.at.set(TextField::new("Name", Bind::bound(&mut self.text)).show(ui).response.rect);
+    }
+}
+
+/// A key pressed in a native float's own OS window that nothing there took reaches `DockAreaOutput::forwarded_events`, with the
+/// modifiers held in that window, so an app can run its shortcuts from its main window's input while the float has the
+/// focus; the same key is the field's own while a text field in that window has focus, and is not forwarded.
+#[trial]
+fn a_key_nothing_took_in_a_native_float_is_forwarded_unless_a_field_in_it_has_focus() {
+    let windows = Windows::new();
+    windows.root_info(info(true, ROOT_AT));
+    windows.child_info(info(true, PALETTE_AT));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
+    let at = Rc::new(Cell::new(Rect::NOTHING));
+    let mut panels = Fielded { text: String::new(), at: at.clone() };
+    let mut frame = |child: Vec<Event>| {
+        let mut forwarded = (Vec::new(), None);
+        windows.frame(vec![], child, |ui| {
+            let config = DockConfig::default().native_windows(true);
+            let shown = DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut panels, config).show(ui);
+            forwarded = (shown.forwarded_events, shown.forwarded_modifiers);
+        });
+        forwarded
+    };
+    for _ in 0..5 {
+        frame(vec![]);
+    }
+    let saved = key_press(Key::S, Modifiers::COMMAND);
+    let is_saved = |event: &Event| matches!(event, Event::Key { key: Key::S, pressed: true, .. });
+
+    // Nothing in the window has focus: the key is left to the app, with the modifiers held.
+    windows.child_modifiers(Modifiers::COMMAND);
+    let (keys, modifiers) = frame(vec![saved.clone()]);
+    windows.child_modifiers(Modifiers::NONE);
+    assert!(keys.iter().any(is_saved), "the key nothing took is forwarded: {keys:?}");
+    assert_eq!(modifiers, Some(Modifiers::COMMAND), "with the modifiers held in the window");
+    assert!(frame(vec![]).0.is_empty(), "a pass with no key forwards none");
+
+    // A click focuses the field: its keys are its own.
+    let field = at.get().center();
+    for events in [vec![moved(field)], vec![press(field)], vec![release(field)], vec![]] {
+        frame(events);
+    }
+    windows.child_modifiers(Modifiers::COMMAND);
+    let (keys, modifiers) = frame(vec![saved, Event::Text("s".to_owned())]);
+    windows.child_modifiers(Modifiers::NONE);
+    assert!(keys.is_empty(), "no key is forwarded while a field in the window has focus: {keys:?}");
+    assert_eq!(modifiers, None);
+}
+
+/// A key the app's command fired for in a native float's own OS window is the command's while it is held: neither the
+/// press nor its auto-repeats in later passes nor its release are forwarded, whether the repeats run the command again
+/// (`RootEnv::shortcuts_repeat` on) or not. A key no command is bound to is forwarded with its repeats.
+#[trial]
+fn a_held_key_a_command_fired_for_in_a_native_float_forwards_none_of_its_repeats() {
+    for repeats in [false, true] {
+        let windows = Windows::new();
+        windows.root_info(info(true, ROOT_AT));
+        windows.child_info(info(true, PALETTE_AT));
+        let mut root = RootEnv::new();
+        root.shortcuts_repeat = repeats;
+        windows.root_env(root);
+        let binding = Binding::parse("F1").expect("the trial's chord parses");
+        let help = CommandDef::new("nativeKeysTrial.help", "Help", Scope::app()).with_default(binding);
+        let catalog = AppCatalog::new(vec![help], 1).expect("the trial's catalog is valid");
+        windows.commands(CommandInput::new().catalog(catalog));
+        let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
+        let fired = std::cell::RefCell::new(Vec::new());
+        let mut frame = |child: Vec<Event>| {
+            let mut forwarded = Vec::new();
+            windows.frame(vec![], child, |ui| {
+                let config = DockConfig::default().native_windows(true);
+                forwarded = DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Palettes, config)
+                    .show(ui)
+                    .forwarded_events;
+            });
+            fired.borrow_mut().extend(take_output(&windows.ctx).fired.into_iter().map(|fired| fired.phase));
+            forwarded
+        };
+        for _ in 0..5 {
+            frame(vec![]);
+        }
+        fired.borrow_mut().clear();
+        let keys_of = |events: &[Event]| -> Vec<(Key, bool, bool)> {
+            events
+                .iter()
+                .filter_map(|event| if let Event::Key { key, pressed, repeat, .. } = event { Some((*key, *pressed, *repeat)) } else { None })
+                .collect()
+        };
+
+        let none: Vec<(Key, bool, bool)> = Vec::new();
+        assert_eq!(keys_of(&frame(vec![key_press(Key::F1, Modifiers::NONE)])), none, "repeats {repeats}: the press the command fired for is its own");
+        assert_eq!(keys_of(&frame(vec![key_repeat(Key::F1, Modifiers::NONE)])), none, "repeats {repeats}: so is its repeat in a later pass");
+        assert_eq!(keys_of(&frame(vec![key_repeat(Key::F1, Modifiers::NONE)])), none, "repeats {repeats}: and the next one");
+        assert_eq!(keys_of(&frame(vec![key_release(Key::F1, Modifiers::NONE)])), none, "repeats {repeats}: and its release");
+        let ran = if repeats { vec![FirePhase::Press, FirePhase::Repeat, FirePhase::Repeat] } else { vec![FirePhase::Press] };
+        assert_eq!(*fired.borrow(), ran, "repeats {repeats}: the command ran at the press, and again at each repeat only with repeats on");
+
+        assert_eq!(
+            keys_of(&frame(vec![key_press(Key::F4, Modifiers::NONE)])),
+            [(Key::F4, true, false)],
+            "repeats {repeats}: an unbound key is forwarded"
+        );
+        assert_eq!(keys_of(&frame(vec![key_repeat(Key::F4, Modifiers::NONE)])), [(Key::F4, true, true)], "repeats {repeats}: with its repeats");
+        assert_eq!(keys_of(&frame(vec![key_release(Key::F4, Modifiers::NONE)])), [(Key::F4, false, false)], "repeats {repeats}: and its release");
+    }
+}
+
+/// The hold of a key a command fired for in a native float's own OS window ends at the key's release wherever it lands:
+/// released in the main window, it leaves the float's next press and release of that key (with Shift, which no command
+/// is bound to) forwarded, as they are no command's.
+#[trial]
+fn a_key_a_command_fired_for_in_a_native_float_and_released_elsewhere_forwards_its_next_press_and_release() {
+    let windows = Windows::new();
+    windows.root_info(info(true, ROOT_AT));
+    windows.child_info(info(true, PALETTE_AT));
+    let binding = Binding::parse("F1").expect("the trial's chord parses");
+    let help = CommandDef::new("nativeKeysTrial.help", "Help", Scope::app()).with_default(binding);
+    let catalog = AppCatalog::new(vec![help], 1).expect("the trial's catalog is valid");
+    windows.commands(CommandInput::new().catalog(catalog));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
+    let mut frame = |root: Vec<Event>, child: Vec<Event>| {
+        let mut forwarded = Vec::new();
+        windows.frame(root, child, |ui| {
+            let config = DockConfig::default().native_windows(true);
+            forwarded = DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Palettes, config)
+                .show(ui)
+                .forwarded_events;
+        });
+        let fired = take_output(&windows.ctx).fired.len();
+        // The key and whether it went down: egui may still count the key down in the float, and read its next press as
+        // a repeat.
+        let keys: Vec<(Key, bool)> =
+            forwarded.iter().filter_map(|event| if let Event::Key { key, pressed, .. } = event { Some((*key, *pressed)) } else { None }).collect();
+        (keys, fired)
+    };
+    for _ in 0..5 {
+        frame(vec![], vec![]);
+    }
+    take_output(&windows.ctx);
+
+    let none: Vec<(Key, bool)> = Vec::new();
+    assert_eq!(frame(vec![], vec![key_press(Key::F1, Modifiers::NONE)]), (none.clone(), 1), "the command fires, and its press is its own");
+    frame(vec![key_release(Key::F1, Modifiers::NONE)], vec![]);
+    assert_eq!(
+        frame(vec![], vec![key_press(Key::F1, Modifiers::SHIFT)]),
+        (vec![(Key::F1, true)], 0),
+        "the release in the main window ended the hold: the next press of the key is forwarded"
+    );
+    assert_eq!(frame(vec![], vec![key_release(Key::F1, Modifiers::SHIFT)]), (vec![(Key::F1, false)], 0), "and so is its release");
+}
+
+/// A clipboard chord no command takes in a native float's own OS window is forwarded as its clipboard event in its place
+/// among the window's other leftover events: a Paste and a typed text in one pass are forwarded in the order they
+/// arrived, whichever comes first.
+#[trial]
+fn a_paste_and_a_text_in_one_pass_of_a_native_float_are_forwarded_in_their_order() {
+    let windows = Windows::new();
+    windows.root_info(info(true, ROOT_AT));
+    windows.child_info(info(true, PALETTE_AT));
+    // No command takes the paste chord, so the paste is the app's to read.
+    let mut unbound = craft_keymap::Overrides::new();
+    unbound.insert(EditCommands::Paste.id(), Vec::new());
+    windows.commands(CommandInput::new().overrides(Arc::new(unbound)));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
+    let mut frame = |child: Vec<Event>| {
+        let mut forwarded = Vec::new();
+        windows.frame(vec![], child, |ui| {
+            let config = DockConfig::default().native_windows(true);
+            forwarded = DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Palettes, config)
+                .show(ui)
+                .forwarded_events;
+        });
+        forwarded
+    };
+    for _ in 0..5 {
+        frame(vec![]);
+    }
+    let (paste, text) = (Event::Paste("pasted".to_owned()), Event::Text("ab".to_owned()));
+    assert_eq!(frame(vec![paste.clone(), text.clone()]), [paste.clone(), text.clone()], "the paste, then the text");
+    assert_eq!(frame(vec![text.clone(), paste.clone()]), [text, paste], "the text, then the paste");
+}
+
+/// Two native floats' own OS windows in one pass: each window's events reach `DockAreaOutput::window_events` in a batch
+/// of its own, with the modifiers held in that window, in the order the windows were drawn. A clipboard event carries
+/// no modifiers of its own, so a host that reads both floats' input in one pass cannot tell their chords apart unless
+/// each window's modifiers come with its own events.
+#[trial]
+fn two_native_floats_forward_a_batch_each_with_the_modifiers_held_in_its_window() {
+    let windows = Windows::new();
+    windows.root_info(info(true, ROOT_AT));
+    windows.child_info(info(true, FLOAT_AT));
+    // No command takes the paste chord, so each window's paste is the app's to read.
+    let mut unbound = craft_keymap::Overrides::new();
+    unbound.insert(EditCommands::Paste.id(), Vec::new());
+    windows.commands(CommandInput::new().overrides(Arc::new(unbound)));
+    let (first, second) = (1, 2);
+    // Both windows take the facts the trial gives them, so they ask for the same rect and the frame settles.
+    let at = Rect::from_min_size(Pos2::new(40.0, 40.0), FLOAT_AT.size());
+    let layout = Layout::new(None, vec![Floating::single(110, vec![first], 0, at), Floating::single(111, vec![second], 0, at)]);
+    let mut workspace = Arc::new(Workspace::new(layout));
+    let mut frame = |child: Vec<Event>| {
+        let mut opened: Vec<(u32, ViewportId)> = Vec::new();
+        let mut batches: Vec<(u32, Modifiers, Vec<Event>)> = Vec::new();
+        windows.frame(vec![], child, |ui| {
+            let config = DockConfig::default().native_windows(true);
+            let shown = DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Palettes, config).show(ui);
+            opened = shown.windows;
+            batches = shown.window_events.into_iter().map(|window| (window.panel, window.modifiers, window.events)).collect();
+        });
+        (opened, batches)
+    };
+    for _ in 0..5 {
+        frame(vec![]);
+    }
+    let (opened, batches) = frame(vec![]);
+    assert!(batches.is_empty(), "a pass with no key forwards none");
+    let viewport =
+        |panel: u32| opened.iter().find(|(named, _)| *named == panel).map(|(_, viewport)| *viewport).expect("the float has a window of its own");
+    let (upper, lower) = (viewport(first), viewport(second));
+    assert_ne!(upper, lower, "each float has a window of its own");
+
+    // Each window's passed events carry the modifiers held in it: a clipboard event has none of its own to read.
+    windows.send(upper, vec![Event::ModifiersChanged(Modifiers::SHIFT), Event::Paste("upper".to_owned())]);
+    windows.send(lower, vec![Event::ModifiersChanged(Modifiers::NONE), Event::Paste("lower".to_owned())]);
+    let (_, batches) = frame(vec![]);
+    assert_eq!(
+        batches,
+        [(first, Modifiers::SHIFT, vec![Event::Paste("upper".to_owned())]), (second, Modifiers::NONE, vec![Event::Paste("lower".to_owned())]),],
+        "each window's batch keeps the modifiers held in it, in the order the windows were drawn"
+    );
+
+    // The other way round: the last window's modifiers are not the first window's.
+    windows.send(upper, vec![Event::ModifiersChanged(Modifiers::NONE), Event::Paste("upper".to_owned())]);
+    windows.send(lower, vec![Event::ModifiersChanged(Modifiers::SHIFT), Event::Paste("lower".to_owned())]);
+    let (_, batches) = frame(vec![]);
+    assert_eq!(
+        batches,
+        [(first, Modifiers::NONE, vec![Event::Paste("upper".to_owned())]), (second, Modifiers::SHIFT, vec![Event::Paste("lower".to_owned())]),],
+        "a host reads each window's modifiers with its events, whichever window holds what"
+    );
 }
 
 /// Palettes that record where each group showed, by its panels, in the window it showed in.

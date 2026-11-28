@@ -9,7 +9,7 @@ pub(crate) mod workspace_dialogs;
 // Task panes: docked panes as shell panes, floating panes as floating frames.
 pub(crate) mod panes;
 
-pub use area::{DockArea, DockAreaOutput, InvalidGeometry, WindowFiles};
+pub use area::{DockArea, DockAreaOutput, InvalidGeometry, WindowEvents, WindowFiles};
 pub use panes::{
     PaneArea, PaneAreaOutput, PaneCommands, PaneContent, PaneEdges, PaneFrame, PaneFrameOutput, PaneFrameStyle, PanePlace, PaneRequest, PaneSpec,
     PaneState, SidePolicy,
