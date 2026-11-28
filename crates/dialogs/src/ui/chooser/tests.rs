@@ -228,7 +228,12 @@ fn an_unavailable_or_forced_pick_opens_the_chooser_and_settles_its_answer() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("report.docx"), b"x").unwrap();
 
-    let (service, panels) = FileService::scripted(Wake::none(), [Answer::Unavailable("no portal".to_owned())]);
+    // The service lists the real folder on its own threads and wakes the app when each listing is in.
+    let (woke, wakes) = std::sync::mpsc::channel();
+    let wake = Wake::new(move || {
+        let _ = woke.send(());
+    });
+    let (service, panels) = FileService::scripted(wake, [Answer::Unavailable("no portal".to_owned())]);
     let panels = Rc::new(RefCell::new(panels));
     let host = Rc::new(RefCell::new(DialogHost::new()));
     let (pumped, shown) = (panels.clone(), host.clone());
@@ -236,18 +241,15 @@ fn an_unavailable_or_forced_pick_opens_the_chooser_and_settles_its_answer() {
         pumped.borrow_mut().pump_with(&mut shown.borrow_mut(), NONE);
         shown.borrow_mut().run(ui);
     });
-    // The service lists the real folder on its own threads: wait until the chooser is listed.
-    let listed = |fixture: &mut Fixture| {
-        for _ in 0..400 {
-            fixture.idle(1);
-            if fields(&host).get("listed") == Some(&Value::Bool(true)) {
-                // The chooser lays out its listing in the next passes: a click reads where the controls rest.
-                fixture.settle();
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(5));
+    // A pass takes in the listings that are in; until the chooser is listed, the next pass waits for the next wake.
+    let listed = |fixture: &mut Fixture| loop {
+        fixture.idle(1);
+        if fields(&host).get("listed") == Some(&Value::Bool(true)) {
+            // The chooser lays out its listing in the next passes: a click reads where the controls rest.
+            fixture.settle();
+            return;
         }
-        panic!("the chooser listed the folder");
+        wakes.recv_timeout(Duration::from_secs(10)).expect("a finished listing wakes the app");
     };
     let click = |fixture: &mut Fixture, label: &str| {
         let target = fixture.by_label(label).unwrap_or_else(|| panic!("`{label}` is shown"));
