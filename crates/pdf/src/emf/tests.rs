@@ -205,6 +205,18 @@ fn an_image_past_the_pixel_budget_is_the_limit_even_when_its_mask_is_finer() {
     assert!(matches!(result, Err(Error::OutputLimit)), "{result:?}");
 }
 
+#[test]
+fn a_pattern_painted_stencil_past_the_pixel_budget_is_the_limit() {
+    let resources = "<< /Pattern << /P 5 0 R >> >>";
+    let content = "/Pattern cs /P scn q 50 0 0 50 10 10 cm BI /W 1 /H 1 /IM true /F /AHx ID 00> EI Q";
+    let shading = "<< /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 1 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> >>";
+    let result = drawn_with(content, resources, &[shading.to_string()], Limits { max_image_pixels: 0, ..Limits::default() });
+    assert!(matches!(result, Err(Error::OutputLimit)), "{result:?}");
+    // Within the budget the pattern is what the picture cannot draw.
+    let result = drawn_with(content, resources, &[shading.to_string()], Limits::default());
+    assert!(matches!(result, Err(Error::NeedsRaster(_))), "{result:?}");
+}
+
 /// A 1 x 1 grey image XObject (object 5) with `smask` in its dictionary.
 fn masked_image(smask: &str) -> String {
     format!(

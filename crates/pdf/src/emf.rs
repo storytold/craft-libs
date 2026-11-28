@@ -277,7 +277,9 @@ impl Emitter {
                     },
                     None,
                 );
+                // A stencil past the budget is the limit, whatever paints it.
                 match paint_rgb {
+                    _ if over => {}
                     Some(Err(())) => return self.refuse("a pattern or shading"),
                     Some(Ok([.., a])) if a != 255 => return self.refuse("translucent paint"),
                     _ => {}
