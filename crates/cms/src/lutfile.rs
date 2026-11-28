@@ -2,7 +2,9 @@
 //! (Autodesk Lustre / Flame) and `.look` (SpeedGrade XML), plus a few generated (CC0) looks.
 //!
 //! Every table is normalised to [`LutFile`]: `size`³ RGB triplets in 0..=1, **red varying
-//! fastest** (`((b·size + g)·size + r)·3`). Formats follow their public descriptions: the Adobe
+//! fastest** (`((b·size + g)·size + r)·3`). A `.3dl` also carries its input shaper beside the
+//! table, as its own 1-D step: [`sample`] shapes the input and then reads the table, which is the
+//! order Photoshop renders in (#11452). Formats follow their public descriptions: the Adobe
 //! "Cube LUT Specification 1.0", the Lustre 3DL layout as documented by OpenColorIO, and the
 //! SpeedGrade `.look` XML (hex-encoded little-endian float32 RGB triplets).
 
@@ -15,6 +17,13 @@ pub struct LutFile {
     pub size: usize,
     /// `size`³ × 3 values, red fastest.
     pub data: Vec<f32>,
+    /// The `.3dl` input shaper as its 0..=1 knots: a 1-D curve on every input channel *ahead of*
+    /// the table, which [`sample`] applies as a pre-step (#11452, #8982). `None` for every other
+    /// format, for a file without a shaper row, and for the even ramp, which changes nothing.
+    /// Baking it into `data` instead is only exact for an identity table: the composed function
+    /// has breakpoints where the shaper reaches a table node value, and no uniform cube grid holds
+    /// those in general. [`write_3dl`] is the writer that carries it.
+    pub shaper: Option<std::sync::Arc<Vec<f32>>>,
     /// The input domain the table expects (`.cube` `DOMAIN_MIN`/`DOMAIN_MAX`,
     /// `LUT_3D_INPUT_RANGE`): an input `c` samples the table at `(c - min) / (max - min)`,
     /// saturating outside. `[0, 1]` is the identity default; applying a table with any other
@@ -72,7 +81,7 @@ impl LutFile {
                 }
             }
         }
-        Ok(LutFile { title: title.to_string(), size, data, domain_min: [0.0; 3], domain_max: [1.0; 3] })
+        Ok(LutFile { title: title.to_string(), size, data, shaper: None, domain_min: [0.0; 3], domain_max: [1.0; 3] })
     }
 
     /// Whether the table expects plain 0..1 inputs (the common case; Photoshop's default).
@@ -323,7 +332,7 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
         return err(format!("DOMAIN_MIN {:?} must lie below DOMAIN_MAX {:?}", dmin, dmax));
     }
     if size3 > 0 {
-        return LutFile { title, size: size3, data: rows, domain_min: dmin, domain_max: dmax }.check();
+        return LutFile { title, size: size3, data: rows, shaper: None, domain_min: dmin, domain_max: dmax }.check();
     }
     if size1 >= 2 {
         let expected_rows = size1.checked_mul(3).ok_or_else(|| LutError(format!("unsupported 1D LUT size {size1}")))?;
@@ -391,7 +400,8 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
 /// `Mesh` line declares the cube edge (2^inBits + 1) and the output code range (up to
 /// 2^outBits − 1), and Photoshop honours both (#9073, #9078); without it the edge is the cube
 /// root of the row count and the range is inferred from the largest value (#9121). A shaper that
-/// isn't the even ramp is applied before the table, as Photoshop does (#8982): see `apply_shaper`.
+/// isn't the even ramp is kept as a 1-D curve on [`LutFile::shaper`], applied to the input ahead of
+/// the table as Photoshop does (#8982, #11452): see [`shaper_knots`] and [`sample`].
 pub fn parse_3dl(text: &str) -> Result<LutFile, LutError> {
     let mut mesh: Option<(u32, u32)> = None;
     let mut rows: Vec<[f64; 3]> = Vec::new();
@@ -484,80 +494,72 @@ pub fn parse_3dl(text: &str) -> Result<LutFile, LutError> {
             data[at + k] = (row[k] / scale) as f32;
         }
     }
-    let lut = LutFile { title: String::new(), size: n, data, domain_min: [0.0; 3], domain_max: [1.0; 3] }.check()?;
-    Ok(match shaper {
-        Some(shaper) => apply_shaper(lut, &shaper)?,
-        None => lut,
-    })
+    let shaper = shaper_knots(shaper.as_deref().unwrap_or(&[]))?;
+    LutFile { title: String::new(), size: n, data, shaper, domain_min: [0.0; 3], domain_max: [1.0; 3] }.check()
 }
 
-/// Bakes a `.3dl` shaper into the table. Photoshop applies the shaper row as a 1-D curve on each
-/// input channel ahead of the 3-D table (input `x` reads the shaper, sampled evenly over 0..1,
-/// at `x`, interpolated linearly), so each node of the table becomes the table's own trilinear
-/// value at the shaped input. An even ramp (the usual shaper) changes nothing and is skipped.
-/// The table is baked on a grid holding both its own nodes and the shaper's knots: exact for an
-/// identity table, an approximation at that resolution otherwise. A shaper that would need more
-/// than [`MAX_SIZE`] nodes for that, or that holds a value that isn't finite, is refused.
-fn apply_shaper(lut: LutFile, shaper: &[f64]) -> Result<LutFile, LutError> {
+/// The shaper row of a `.3dl` as the knots of its 1-D curve, scaled to 0..=1: `None` when there is
+/// no row or the row is the even ramp (the usual shaper, and a no-op), an error when it holds a
+/// value that isn't finite. Photoshop reads the row as a curve on each input channel ahead of the
+/// table (#8982); keeping it as a curve instead of baking it into the table is what makes that
+/// order exact for a table that isn't the identity (#11452).
+///
+/// The row's own depth is inferred from its largest value by [`inferred_3dl_scale`] (10-bit and
+/// up, or 0..1 floats), independently of the `Mesh` output depth, which governs only the table.
+/// [`write_3dl`] picks the codes it writes through the same function, so a row written there is
+/// read back at the scale it was written at. A `0..1023` ramp is the even ramp with or without a
+/// header. Shapers round their ramp, so a knot within one code of even is still even: one code
+/// for an integer shaper, one 10-bit step for a float one (0..1).
+fn shaper_knots(shaper: &[f64]) -> Result<Option<std::sync::Arc<Vec<f32>>>, LutError> {
     let m = shaper.len();
     if m < 2 {
-        return Ok(lut);
+        return Ok(None);
     }
     // Apply or refuse: a shaper that can't be applied never leaves the table to render alone.
     if shaper.iter().any(|v| !v.is_finite()) {
         return err("the .3dl shaper holds a value that isn't finite");
     }
-    // The shaper's own depth, from 10 bits up: a 0..1023 ramp is the even ramp with or without a header.
     let scale = inferred_3dl_scale(shaper.iter().fold(0.0f64, |a, &b| a.max(b)), true);
     let even = |k: usize| scale * k as f64 / (m - 1) as f64;
-    // Shapers round their ramp: within one code is still the even ramp. An integer shaper's code
-    // is 1; a float shaper (0..1) is held to one 10-bit step.
     let code = if scale > 1.0 { 1.0 } else { 1.0 / 1023.0 };
     if shaper.iter().enumerate().all(|(k, &v)| (v - even(k)).abs() <= code) {
-        return Ok(lut);
+        return Ok(None);
     }
-    // Scaled to 0..1 first, so interpolating between two extreme values can't overflow.
-    let shaped: Vec<f64> = shaper.iter().map(|v| v / scale).collect();
-    let curve = |x: f64| -> f32 {
-        let p = x.clamp(0.0, 1.0) * (m - 1) as f64;
-        let i = (p.floor() as usize).min(m - 2);
-        let f = p - i as f64;
-        let (a, b) = (shaped.get(i).copied().unwrap_or(0.0), shaped.get(i + 1).copied().unwrap_or(0.0));
-        (a + (b - a) * f).clamp(0.0, 1.0) as f32
-    };
-    // The bake grid holds both the table's nodes and the shaper's knots (lcm of their intervals),
-    // so the curve keeps its breakpoints whatever the table's size: exact on an identity table. A
-    // grid that would pass MAX_SIZE is refused: sampled more coarsely, a bent shaper could read as
-    // even and be lost without a word.
-    let gcd = |mut a: usize, mut b: usize| {
-        while b != 0 {
-            (a, b) = (b, a % b);
-        }
-        a
-    };
-    let (a, k) = (lut.size - 1, m - 1);
-    let aligned = (a / gcd(a, k)).checked_mul(k).map(|l| l + 1).filter(|&l| l <= MAX_SIZE);
-    let Some(n) = aligned else {
-        return err(format!("the .3dl shaper's {m} points can't be kept on a table of at most {MAX_SIZE} nodes"));
-    };
-    let step = (n - 1) as f64;
-    let mut out = LutFile { size: n, data: vec![0.0; n * n * n * 3], ..lut.clone() };
-    for b in 0..n {
-        for g in 0..n {
-            for r in 0..n {
-                let at = ((b * n + g) * n + r) * 3;
-                let v = sample(&lut, [curve(r as f64 / step), curve(g as f64 / step), curve(b as f64 / step)]);
-                if let Some(dst) = out.data.get_mut(at..at + 3) {
-                    dst.copy_from_slice(&v);
-                }
-            }
-        }
-    }
-    out.check()
+    // Scaled to 0..1 before any interpolation, so interpolating between two extreme values
+    // can't overflow.
+    Ok(Some(std::sync::Arc::new(shaper.iter().map(|&v| (v / scale) as f32).collect())))
 }
 
-/// Trilinear lookup of `rgb` (0..1) in a [`LutFile`] (red fastest).
-fn sample(l: &LutFile, rgb: [f32; 3]) -> [f32; 3] {
+/// The `.3dl` shaper's curve at `v`: knots evenly spaced over 0..=1, linear between them, input
+/// and result clamped to 0..=1. Fewer than two knots is the identity, so a caller can pass
+/// [`LutFile::shaper`]'s value without a branch. One curve bends every input channel.
+///
+/// The segment is interpolated in f64 as `a*(1-f) + b*f`, which holds both ends, rather than
+/// `a + (b-a)*f`: a shaper row is hostile input, and with a knot far outside 0..=1 `b - a` is as
+/// wide as the knot is deep, so rounding swallows the range and white comes out black; between
+/// opposite-signed extremes it overflows, and `inf * 0` is NaN at the segment's own endpoints. A
+/// convex combination can neither cancel nor overflow. A NaN `v` reads as 0.
+pub fn shape(knots: &[f32], v: f32) -> f32 {
+    let m = knots.len();
+    if m < 2 {
+        return v;
+    }
+    let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+    let p = f64::from(v) * (m - 1) as f64;
+    let i = (p.floor() as usize).min(m - 2);
+    let f = p - i as f64;
+    let at = |k: usize| f64::from(knots.get(k).copied().unwrap_or(0.0));
+    let (a, b) = (at(i), at(i + 1));
+    (a * (1.0 - f) + b * f).clamp(0.0, 1.0) as f32
+}
+
+/// Trilinear lookup of `rgb` (0..1) in a [`LutFile`] (red fastest), after its shaper's 1-D
+/// pre-step: the order Photoshop renders a `.3dl` in (#8982, #11452).
+pub fn sample(l: &LutFile, rgb: [f32; 3]) -> [f32; 3] {
+    let rgb = match l.shaper.as_deref() {
+        Some(k) => [shape(k, rgb[0]), shape(k, rgb[1]), shape(k, rgb[2])],
+        None => rgb,
+    };
     let n = l.size;
     let loc = |v: f32| {
         let p = v.clamp(0.0, 1.0) * (n - 1) as f32;
@@ -581,7 +583,6 @@ fn sample(l: &LutFile, rgb: [f32; 3]) -> [f32; 3] {
     }
     o
 }
-
 /// The code range a `.3dl` node table without a declared output depth was written with: the
 /// smallest common integer depth that covers the largest value; a table of 0..1 floats passes
 /// through. A headerless table has no 10-bit reading — 255 and 1023 are on the 12-bit scale, as
@@ -627,7 +628,7 @@ pub fn parse_look(text: &str) -> Result<LutFile, LutError> {
     let floats: Vec<f32> = bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
     let rgba_entries = entries.checked_mul(4).ok_or_else(|| LutError(format!("unsupported LUT size {size}")))?;
     let data = if floats.len() == rgba_entries { floats.as_chunks::<4>().0.iter().flat_map(|c| [c[0], c[1], c[2]]).collect() } else { floats };
-    LutFile { title: tag("title").unwrap_or_default(), size, data, domain_min: [0.0; 3], domain_max: [1.0; 3] }.check()
+    LutFile { title: tag("title").unwrap_or_default(), size, data, shaper: None, domain_min: [0.0; 3], domain_max: [1.0; 3] }.check()
 }
 
 /// Writes a `.cube` file (what Photoshop embeds in a Color Lookup layer).
@@ -670,6 +671,104 @@ fn cube_rows(mut s: String, rows: impl Iterator<Item = [f32; 3]>) -> String {
     s
 }
 
+/// A `.3dl` carrying `l`, for [`parse_3dl`] to read back: a `Mesh` line declaring the cube edge and
+/// a 16-bit output, then the shaper row and the nodes as integer codes with **blue** varying
+/// fastest. This is the only format here that carries a shaper, so it is what a lookup with a
+/// curve is saved as (#11452).
+///
+/// A 2-node table, which `.3dl` cannot declare (the edge is `2^bits + 1` with `bits` in 1..=7, and
+/// an undeclared 3-value shaper row would read as a node, #9078), is written as the 3-node table
+/// that renders the same: the look is kept, curve included, rather than refused into a `.cube`
+/// that would drop the curve (photocraft#11581 review). It reopens with `size` 3.
+///
+/// What `.3dl` cannot hold is refused with an error the caller should report, never written as
+/// something else:
+/// - an edge that isn't `2^bits + 1` (other than 2);
+/// - a non-default input domain (the format has no such keyword);
+/// - a shaper with fewer than two finite knots, or a knot above 1 (the reader never produces one,
+///   and no row can state a scale for it).
+///
+/// The table's codes are integers on the declared 16-bit range, which the parser honours exactly
+/// (#9073), so the table comes back within half a step (1.5e-5, a hundredth of an 8-bit code).
+///
+/// The shaper row's scale is not the table's: the reader infers it from the row's largest code
+/// ([`shaper_knots`]), so the writer must pick codes that infer to the scale it wrote at. A row
+/// whose largest knot rounds above 16383 at 65535 reads back as 16-bit and is written as 16-bit
+/// integers. A lower-range row (every knot at most about 0.25) would be read at a smaller depth
+/// than it was written at, so it is written as plain 0..1 decimals instead, which read back
+/// exactly as floats (`[0, 1/1023, 2/1023]` stays `[0, 1/1023, 2/1023]`, not `[0, 64/1023,
+/// 128/1023]`). A 3-knot row on a cube wider than 3 would read as a node row, so its midpoints
+/// are added first: the same piecewise-linear curve with 5 knots. Knots below black are kept.
+pub fn write_3dl(l: &LutFile) -> Result<String, LutError> {
+    if !l.domain_is_default() {
+        return err("a .3dl has no input domain keyword: the table's non-default domain can't be saved");
+    }
+    checked_data_len(l.size).and_then(|(_, len)| if l.data.len() == len { Ok(()) } else { err("the table doesn't match its size") })?;
+    // A 2-node table has no `Mesh` edge (`2^bits + 1`, bits 1 to 7), so it is written as the 3-node
+    // table holding the same function: trilinear interpolation of 2 nodes is multilinear, and its
+    // samples at the halfway points interpolate back to it exactly. The shaper stays as it is.
+    let refined;
+    let l = if l.size == 2 {
+        let flat = LutFile { shaper: None, ..l.clone() };
+        refined = LutFile { shaper: l.shaper.clone(), ..LutFile::from_fn(&l.title, 3, |c| sample(&flat, c))? };
+        &refined
+    } else {
+        l
+    };
+    let edge = l.size - 1;
+    if !edge.is_power_of_two() || edge > 128 {
+        return err(format!("a {}-node table can't be saved as .3dl: the edge must be 2^bits + 1 with bits 1 to 7", l.size));
+    }
+    let in_bits = edge.trailing_zeros();
+    let mut s = format!("3DMESH\nMesh {in_bits} 16\n");
+    if let Some(knots) = l.shaper.as_deref() {
+        s.push_str(&shaper_row(knots, l.size)?);
+        s.push('\n');
+    }
+    let scale = f64::from(u16::MAX);
+    let node = |v: f32| (f64::from(v.clamp(0.0, 1.0)) * scale).round() as u32;
+    for r in 0..l.size {
+        for g in 0..l.size {
+            for b in 0..l.size {
+                let at = ((b * l.size + g) * l.size + r) * 3;
+                let Some(c) = l.data.get(at..at + 3) else { return err("the table doesn't match its size") };
+                s.push_str(&format!("{} {} {}\n", node(c[0]), node(c[1]), node(c[2])));
+            }
+        }
+    }
+    Ok(s)
+}
+
+/// The shaper row [`write_3dl`] writes for `knots` on a cube of `size` nodes, in a form
+/// [`shaper_knots`] reads back at the scale it was written at.
+fn shaper_row(knots: &[f32], size: usize) -> Result<String, LutError> {
+    if knots.len() < 2 || knots.iter().any(|k| !k.is_finite()) {
+        return err("a .3dl shaper needs at least two finite knots");
+    }
+    // A 3-value row is a node row to the reader unless the cube is 3 wide.
+    let knots: Vec<f32> = if knots.len() == 3 && size != 3 {
+        let mid = |a: f32, b: f32| ((f64::from(a) + f64::from(b)) / 2.0) as f32;
+        vec![knots[0], mid(knots[0], knots[1]), knots[1], mid(knots[1], knots[2]), knots[2]]
+    } else {
+        knots.to_vec()
+    };
+    let max = knots.iter().fold(f64::NEG_INFINITY, |a, &k| a.max(f64::from(k)));
+    if max > 1.0 {
+        return err("a .3dl shaper knot above 1 can't be saved: the row has no way to state its scale");
+    }
+    let top = f64::from(u16::MAX);
+    // `+ 0.0` turns a rounded -0 into 0.
+    let codes = |k: f32| (f64::from(k) * top).round() + 0.0;
+    let join = |it: Vec<String>| it.join(" ");
+    if inferred_3dl_scale(codes(max as f32), true) == top {
+        Ok(join(knots.iter().map(|&k| format!("{}", codes(k))).collect()))
+    } else if inferred_3dl_scale(max, true) == 1.0 {
+        // Decimals in 0..1: the reader takes a row that peaks at 1 or below as floats, exactly.
+        Ok(join(knots.iter().map(|k| format!("{k}")).collect()))
+    } else {
+        err("the .3dl shaper has no unambiguous scale")
+    }
+}
 /// Annotated identity-domain CUBE export, streamed in red-fastest order without a table copy.
 /// Callers supply exactly `size³` rows for a valid size (2..=[`MAX_SIZE`]), as with [`write_cube`].
 /// Integer-depth exports clamp/round to 1/32768 steps; floating exports clamp without rounding.
@@ -884,20 +983,20 @@ mod tests {
         assert_eq!(sample(&small, [1.0, 0.0, 1.0]), [1.0, 0.0, 1.0], "the ends stay put");
     }
 
-    /// #9170 review: a finite but extreme shaper can't overflow into NaN when it is baked.
+    /// #9170 review: a finite but extreme shaper can't overflow into NaN, in the table or the curve.
     #[test]
-    fn three_dl_extreme_shaper_bakes_only_finite_values() {
+    fn three_dl_extreme_shaper_keeps_only_finite_values() {
         let table = identity_3dl(&[0, 1, 2, 3], 2);
         let text = format!("0 1e308 -1e308 0\n{}", table.split_once('\n').unwrap().1);
-        // Refused or baked, but never a table holding NaN.
+        // Refused or kept, but never a table or a curve holding NaN.
         if let Ok(l) = parse_3dl(&text) {
-            assert!(l.data.iter().all(|v| v.is_finite()), "baked a non-finite value");
+            assert!(l.data.iter().all(|v| v.is_finite()), "non-finite table value");
+            assert!(l.shaper.iter().all(|k| k.iter().all(|v| v.is_finite())), "non-finite knot");
+            assert!(sample(&l, [0.5; 3]).iter().all(|v| v.is_finite()), "non-finite sample");
         }
     }
-
     /// #9170 review (bommerts): the shaper's breakpoints survive a table whose grid doesn't line
-    /// up with them. The bake grid holds both the table's nodes and the shaper's knots, so on an
-    /// identity table the curve is exact: `0 0 512 1023` is 0 at ⅓ over 5³ and 17³ tables.
+    /// up with them. The curve is its own step, so on an identity table it is exact: `0 0 512 1023` is 0 at ⅓ over 5³ and 17³ tables.
     #[test]
     fn three_dl_shaper_knots_survive_a_nonaligned_table() {
         for n in [5, 17] {
@@ -1002,18 +1101,254 @@ mod tests {
         assert!(parse_3dl(&format!("3DMESH\nTitle lut 12\n0 114 455 1023\n{body}")).is_ok(), "headers still skip");
     }
 
-    /// #9170 review: a bent shaper whose knots can't all be kept within MAX_SIZE is refused rather
-    /// than sampled where it may look even (here a 257-point shaper bent only at odd knots, whose
-    /// 129-node fallback would read the identity).
+    /// #11452: the curve is applied as its own step, so a bent shaper finer than any table is kept
+    /// at full resolution. #9170 had to hold its knots by baking the table on a grid of at most
+    /// [`MAX_SIZE`] nodes and refused a file whose grid didn't fit there; there is no grid now.
     #[test]
-    fn three_dl_shaper_too_fine_to_keep_is_refused() {
-        let shaper: Vec<u32> = (0..257u32).map(|i| (i * 1023 / 256 + if i % 2 == 1 { 40 } else { 0 }).min(1023)).collect();
-        assert!(parse_3dl(&identity_3dl(&shaper, 2)).is_err());
-        // As many knots as nodes stays within reach.
+    fn three_dl_shaper_finer_than_the_table_is_kept() {
+        let codes: Vec<u32> = (0..257u32).map(|i| (i * 1023 / 256 + if i % 2 == 1 { 40 } else { 0 }).min(1023)).collect();
+        let l = parse_3dl(&identity_3dl(&codes, 2)).unwrap();
+        assert_eq!(l.shaper.as_deref().map(|k| k.len()), Some(257), "every knot survives");
+        assert_eq!(l.size, 2, "the table keeps its own size");
+        // Grey 128 lands between knots 128 and 129, which the odd knots lift by 40 codes: read as
+        // even it would be 128, bent it is 133.
+        let grey = sample(&l, [128.0 / 255.0; 3])[0] * 255.0;
+        assert!((grey - 132.9).abs() < 0.5, "{grey}");
+        // As many knots as nodes still loads.
         let same: Vec<u32> = (0..17u32).map(|i| (1023.0 * (f64::from(i) / 16.0).powi(2)).round() as u32).collect();
         assert!(parse_3dl(&identity_3dl(&same, 17)).is_ok());
     }
 
+    /// A `Mesh 1 12` 3^3 `.3dl` under a 10-bit `shaper`, whose red output is `reds` (12-bit codes)
+    /// and whose green and blue outputs are black: a table that isn't the identity.
+    fn red_only_3dl(shaper: &[u32; 3], reds: &[u32; 3]) -> String {
+        let mut t = format!("3DMESH\nMesh 1 12\n{} {} {}\n", shaper[0], shaper[1], shaper[2]);
+        for red in reds {
+            for _ in 0..9 {
+                t += &format!("{red} 0 0\n");
+            }
+        }
+        t
+    }
+
+    /// The piecewise-linear curve through `codes / scale`, at knots evenly spaced over 0..=1.
+    fn ramp(codes: &[u32], scale: f64, x: f64) -> f64 {
+        let p = x.clamp(0.0, 1.0) * (codes.len() - 1) as f64;
+        let i = (p.floor() as usize).min(codes.len() - 2);
+        let (a, b) = (f64::from(codes[i]) / scale, f64::from(codes[i + 1]) / scale);
+        a + (b - a) * (p - i as f64)
+    }
+
+    /// #11452's worked example: the shaper is a 1-D pre-step, so a bent shaper ahead of a table that
+    /// isn't the identity renders the composition, not an interpolation of a baked table.
+    #[test]
+    fn three_dl_shaper_before_a_non_identity_table_is_exact() {
+        // Table red output [0, 0, 1] over nodes 0, 1/2, 1; shaper [0, 256, 1023] (10-bit). At red
+        // 0.75 the curve gives 639.5 codes, which the table reads 1/4 of the way from its middle to
+        // its top node: 256/1023 = 0.2502, the issue's "about 0.2502". Both pieces are linear
+        // there, so the value is exact up to the f32 rounding of the knots.
+        let l = parse_3dl(&red_only_3dl(&[0, 256, 1023], &[0, 0, 4095])).unwrap();
+        assert!(l.shaper.is_some(), "the row is a shaper, not a 28th node");
+        assert_eq!(l.size, 3, "the table keeps its own size");
+        // The curve travels beside the table: the table's nodes are the file's, not a bake.
+        let red = |r: usize| l.data[r * 3];
+        assert_eq!((red(0), red(1), red(2)), (0.0, 0.0, 1.0));
+        let at = |x: f32| sample(&l, [x, 0.0, 0.0])[0];
+        assert!((at(0.75) - 256.0 / 1023.0).abs() < 1e-4, "shaper, then table: {}", at(0.75));
+        // Baking the shaper into the 3-node table gave 0.5 here.
+        assert!(at(0.75) < 0.3, "{}", at(0.75));
+        assert_eq!(at(0.0), 0.0);
+        assert!((at(1.0) - 1.0).abs() < 1e-6, "{}", at(1.0));
+        assert!(at(0.5).abs() < 1e-6, "S(0.5) = 256/1023 is below the node at 0.5");
+        assert_eq!(sample(&l, [0.75, 0.75, 0.75])[1], 0.0, "a red-only table stays red-only");
+    }
+
+    /// A linear shaper ahead of a linear table composes analytically, on every channel.
+    #[test]
+    fn three_dl_shaper_and_linear_table_compose() {
+        // The table halves every channel (nodes 0, 1024, 2047 of 4095), the shaper is a 0.8 ramp
+        // (codes 409 and 818 of 1023).
+        let (table, shaper) = ([0u32, 1024, 2047], [0u32, 409, 818]);
+        let mut text = format!("3DMESH\nMesh 1 12\n{} {} {}\n", shaper[0], shaper[1], shaper[2]);
+        for red in &table {
+            for green in &table {
+                for blue in &table {
+                    text += &format!("{red} {green} {blue}\n");
+                }
+            }
+        }
+        let l = parse_3dl(&text).unwrap();
+        let want = |x: f64| ramp(&table, 4095.0, ramp(&shaper, 1023.0, x));
+        for x in [0.0, 0.25, 0.4, 0.5, 0.62, 0.75, 1.0] {
+            let got = sample(&l, [x as f32, (1.0 - x) as f32, (x * 0.5) as f32]);
+            for (k, v) in [x, 1.0 - x, x * 0.5].into_iter().enumerate() {
+                assert!((f64::from(got[k]) - want(v)).abs() < 1e-4, "channel {k} at {v}: {} vs {}", got[k], want(v));
+            }
+        }
+        let shaped = sample(&l, [0.75, 0.0, 0.0])[0];
+        assert!((f64::from(shaped) - ramp(&table, 4095.0, 0.75)).abs() > 0.05, "{shaped} is the unshaped table");
+    }
+
+    /// A hostile row must not lose the curve's endpoints to the segment arithmetic.
+    #[test]
+    fn shape_keeps_its_endpoints_under_extreme_knots() {
+        // `a + (b - a) * f` with a knot a trillion codes under black cancels white to black.
+        let deep = [-1e12_f32 / 1023.0, 1.0];
+        assert_eq!(shape(&deep, 0.0), 0.0, "black stays black");
+        assert_eq!(shape(&deep, 1.0), 1.0, "white stays white");
+        assert_eq!(shape(&deep, 0.5), 0.0, "the lower half is still below black");
+        // Opposite extremes: `b - a` overflows f32 to inf and inf * 0 is NaN at the endpoints.
+        let wild = [3.4e38, -3.4e38];
+        assert_eq!(shape(&wild, 0.0), 1.0);
+        assert_eq!(shape(&wild, 1.0), 0.0);
+        for v in [0.0, 0.25, 0.5, 0.75, 1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(shape(&wild, v).is_finite(), "{v} gave a non-finite curve");
+        }
+        assert_eq!(shape(&[], 0.3), 0.3, "no knots is the identity");
+        let bent = [0.0, 256.0 / 1023.0, 1.0];
+        assert!((f64::from(shape(&bent, 0.75)) - (256.0 / 1023.0 + 1.0) / 2.0).abs() < 1e-6);
+        // End to end over an identity table: white still reaches white.
+        let mut text = String::from("-1e12 1023\n");
+        for r in 0..2 {
+            for g in 0..2 {
+                for b in 0..2 {
+                    text += &format!("{} {} {}\n", r * 4095, g * 4095, b * 4095);
+                }
+            }
+        }
+        let l = parse_3dl(&text).unwrap();
+        assert_eq!(sample(&l, [1.0; 3]), [1.0; 3]);
+        assert_eq!(sample(&l, [0.0; 3]), [0.0; 3]);
+    }
+
+    /// The curves of `a` and `b` agree to `tol` on a spread of inputs, and so do the renders.
+    fn assert_same_look(a: &LutFile, b: &LutFile, tol: f32) {
+        for i in 0..=20 {
+            let x = i as f32 / 20.0;
+            for c in [[x, x, x], [x, 1.0 - x, 0.5 * x], [1.0 - x, 0.3, x]] {
+                let (pa, pb) = (sample(a, c), sample(b, c));
+                for k in 0..3 {
+                    assert!((pa[k] - pb[k]).abs() <= tol, "{c:?}: {pa:?} vs {pb:?}");
+                }
+            }
+        }
+    }
+
+    /// A table that is not the identity, so a shaper that moved is visible in the render.
+    fn warped(size: usize) -> LutFile {
+        LutFile::from_fn("warped", size, |c| [c[0] * c[0], 0.5 * c[1] + 0.25 * c[0], 1.0 - c[2]]).unwrap()
+    }
+
+    fn with_shaper(mut l: LutFile, knots: &[f32]) -> LutFile {
+        l.shaper = Some(std::sync::Arc::new(knots.to_vec()));
+        l
+    }
+
+    /// Review of photocraft#11581: `write_3dl` scaled every knot by 65535 while the reader infers the
+    /// shaper's scale from its largest code, so `[0, 1/1023, 2/1023]` wrote `0 64 128` and read back
+    /// as `[0, 64/1023, 128/1023]`: white changed from 0.001955 to 0.125122.
+    #[test]
+    fn write_3dl_keeps_a_low_range_shaper_across_a_save_and_reopen() {
+        let knots = [0.0, 1.0 / 1023.0, 2.0 / 1023.0];
+        let l = with_shaper(LutFile::identity(3).unwrap(), &knots);
+        let back = parse_3dl(&write_3dl(&l).unwrap()).unwrap();
+        let kept = back.shaper.clone().expect("the curve survives the save");
+        assert_eq!(kept.len(), 3);
+        for (a, b) in knots.iter().zip(kept.iter()) {
+            assert!((a - b).abs() <= 1e-6, "{a} vs {b}");
+        }
+        let white = sample(&back, [1.0; 3]);
+        assert!((white[0] - 2.0 / 1023.0).abs() < 1e-5, "white reloaded as {white:?}, was 0.001955");
+        assert!(white[0] < 0.01, "the reviewer's wrong answer was 0.125122");
+        assert_same_look(&l, &back, 2e-5);
+    }
+
+    /// Every depth the shaper can sit at round-trips, on every declarable table edge: small and
+    /// large ranges, the threshold between the two forms, a knot below black, 2, 3 and many knots.
+    #[test]
+    fn write_3dl_round_trips_shapers_of_every_range() {
+        let cases: [&[f32]; 9] = [
+            &[0.0, 1.0 / 1023.0, 2.0 / 1023.0],
+            &[0.0, 0.1, 0.2],
+            &[0.0, 0.2, 0.25],
+            &[0.0, 0.2501, 0.26],
+            &[0.0, 0.5],
+            &[0.0, 0.3, 1.0],
+            &[0.0, 0.1, 0.9, 1.0],
+            &[-0.1, 0.4, 1.0, 1.0],
+            &[0.0, 0.01, 0.02, 0.1, 0.2, 0.21, 0.22, 0.23, 0.24],
+        ];
+        for knots in cases {
+            for size in [3, 5, 9, 17] {
+                let l = with_shaper(warped(size), knots);
+                let text = write_3dl(&l).unwrap_or_else(|e| panic!("{knots:?} on {size}: {e}"));
+                let back = parse_3dl(&text).unwrap_or_else(|e| panic!("{knots:?} on {size}: {e}\n{text}"));
+                assert_eq!(back.size, size);
+                assert!(back.shaper.is_some(), "{knots:?} on {size} lost its curve");
+                assert_same_look(&l, &back, 3e-5);
+            }
+        }
+    }
+
+    /// A 3-value shaper row is a node row to the reader unless the cube is 3 wide, so a 3-knot curve
+    /// on a wider cube is written with its midpoints added: the same piecewise-linear curve.
+    #[test]
+    fn write_3dl_writes_a_three_knot_shaper_on_a_wider_cube() {
+        let l = with_shaper(warped(5), &[0.0, 0.3, 1.0]);
+        let text = write_3dl(&l).unwrap();
+        let back = parse_3dl(&text).unwrap();
+        assert_eq!(back.size, 5);
+        assert_eq!(back.shaper.as_deref().map(|k| k.len()), Some(5), "{text}");
+        assert_same_look(&l, &back, 3e-5);
+    }
+
+    /// The table of a shaped lookup comes back within half a 16-bit step, with the curve.
+    #[test]
+    fn write_3dl_round_trips_a_shaped_table() {
+        let l = parse_3dl(&red_only_3dl(&[0, 256, 1023], &[0, 0, 4095])).unwrap();
+        let text = write_3dl(&l).unwrap();
+        assert!(text.starts_with("3DMESH\nMesh 1 16\n"), "{text}");
+        let back = parse_3dl(&text).unwrap();
+        assert_eq!((back.size, back.data.len()), (l.size, l.data.len()));
+        for (a, b) in l.data.iter().zip(&back.data) {
+            assert!((a - b).abs() <= 1e-5, "{a} vs {b}");
+        }
+        assert!((sample(&back, [0.75, 0.0, 0.0])[0] - 256.0 / 1023.0).abs() < 1e-4, "the same look");
+    }
+
+    /// A shaped 2-node table has no `.3dl` edge to declare (`2^bits + 1`, bits 1 to 7), so it is
+    /// written as the 3-node table with the same render, curve kept (photocraft#11581 review):
+    /// saving it as `.cube` instead would drop the curve.
+    #[test]
+    fn write_3dl_keeps_the_look_of_a_shaped_two_node_table() {
+        for knots in [&[0.0, 0.25, 1.0][..], &[0.0, 0.5][..]] {
+            let l = with_shaper(warped(2), knots);
+            let text = write_3dl(&l).unwrap();
+            assert!(text.starts_with("3DMESH\nMesh 1 16\n"), "{text}");
+            let back = parse_3dl(&text).unwrap();
+            assert_eq!(back.size, 3);
+            assert_eq!(back.shaper.as_deref().map(Vec::len), Some(knots.len()), "{text}");
+            assert_same_look(&l, &back, 3e-5);
+        }
+        assert_same_look(&warped(2), &parse_3dl(&write_3dl(&warped(2)).unwrap()).unwrap(), 3e-5);
+    }
+
+    /// What `.3dl` cannot declare is refused, never written as something else.
+    #[test]
+    fn write_3dl_refuses_what_it_cannot_declare() {
+        let bent = [0.0, 0.25, 0.5, 1.0];
+        assert!(write_3dl(&with_shaper(LutFile::identity(32).unwrap(), &bent)).is_err(), "32 is not 2^bits + 1");
+        assert!(write_3dl(&with_shaper(LutFile::identity(65).unwrap(), &bent)).is_ok(), "65 is declarable");
+        let mut d = with_shaper(LutFile::identity(3).unwrap(), &bent);
+        d.domain_min = [0.25; 3];
+        assert!(write_3dl(&d).is_err(), "the format has no input domain");
+        for knots in [&[0.0, 1.5][..], &[0.0][..], &[][..], &[0.0, f32::NAN, 1.0][..], &[0.0, f32::INFINITY][..]] {
+            assert!(write_3dl(&with_shaper(LutFile::identity(3).unwrap(), knots)).is_err(), "{knots:?}");
+        }
+        let mut short = with_shaper(LutFile::identity(3).unwrap(), &bent);
+        short.data.pop();
+        assert!(write_3dl(&short).is_err(), "a table that doesn't match its size");
+    }
     #[test]
     fn cube_title_with_hash_round_trips() {
         let l = LutFile::from_fn("Look #3", 2, |c| c).unwrap();
