@@ -211,6 +211,12 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   every frame's position, delay, disposal and transparent colour, the loop count and the first
   frame's colour table, without decompressing pixels. Tells an animation from a still and whether
   a file can hold the picture it declares before a decoder runs.
+- [`craft-gpu-yuv`](crates/gpu-yuv/README.md): the `craft.yuv` GPU provider. It converts RGBA to
+  NV12, P010 and I420, scaled to the output size, in BT.601, BT.709 and BT.2020 at limited or full
+  range, through the `craft-gpu` job registry on the null context or on a device. Each output texel
+  averages the part of the source it covers. The crate also has the render passes for a caller's
+  own encoder, read-back layouts with unpacking to a packed frame, and the same conversion on the
+  CPU. Encoders and scopes stay in each app.
 - [`craft-gpu-device`](crates/gpu-device/README.md): choosing and opening a wgpu device: Auto,
   low power, a named adapter that survives a reordered list and a driver update, or software;
   corrections for drivers that crash; the next adapter and then a software one when a device fails

@@ -226,6 +226,7 @@ craft-gpu-device = { workspace = true, optional = true }
 craft-gpu-null = { workspace = true, optional = true }
 craft-gpu-providers = { workspace = true, optional = true }
 craft-gpu-wgpu = { workspace = true, optional = true }
+craft-gpu-yuv = { workspace = true, optional = true }
 craft-ipp = { workspace = true, optional = true }
 craft-ppt-binary = { workspace = true, optional = true }
 craft-sqlite = { workspace = true, optional = true }
@@ -551,6 +552,8 @@ gpu-wgpu-native-dx12 = ["gpu-wgpu", "craft-gpu-wgpu/native-dx12"]
 gpu-wgpu-native-gles = ["gpu-wgpu", "craft-gpu-wgpu/native-gles"]
 gpu-wgpu-native-metal = ["gpu-wgpu", "craft-gpu-wgpu/native-metal"]
 gpu-wgpu-native-vulkan = ["gpu-wgpu", "craft-gpu-wgpu/native-vulkan"]
+
+gpu-yuv = ["dep:craft-gpu-yuv"]
 
 gridcraft-format = ["dep:craft-gridcraft-format"]
 
