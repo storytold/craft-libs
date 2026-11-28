@@ -42,7 +42,7 @@ The format layer ends where arithmetic on the picture begins.
 
 `RawImage` carries no Exif/XMP/IPTC model. `Camera` holds the make, the model and DNG's
 `UniqueCameraModel` (decoders and colour lookups need them) and, for a container without an Exif
-block (CRW), the capture time. A metadata reader reads the rest from the same bytes (#783).
+block (CRW, Light LRI), the capture time. A metadata reader reads the rest from the same bytes (#783).
 
 ## Formats
 
@@ -63,6 +63,7 @@ One module and one Cargo feature per maker or container family. All are on by de
 | `mrw` | Minolta / Konica Minolta MRW | The `\0MRM` block container (`PRD`, `WBG`, `TTW`), 12-bit packed and 16-bit word mosaics, as-shot white balance from `WBG`, white from the saturation plateau |
 | `erf` | Epson ERF (R-D1, R-D1s, R-D1x) | 12-bit samples in 16-byte blocks, black levels from the maker note, the measured picture origin. No white balance (the file states none) |
 | `mef` | Mamiya MEF (ZD) | Uncompressed 12-bit packed; default crop from the RGB preview's measured window. No white balance (the file states none) |
+| `lri` | Light LRI (L16) | The `LELR` block chain and its protocol-buffers messages; the lowest-numbered colour module's 10-bit LSB-first packed samples, the file's black and white levels, the A and D65 colour and forward matrices (singular ones dropped), the as-shot white balance and the vignetting grid as a `GainMap` opcode. The modules are not fused into one picture; the capture time is `Camera::capture_unix` (no Exif block) |
 | `kodak` | Kodak DCS520C TIFF | Two-component lossless JPEG CFA with the `GrayResponseCurve`, white balance from the `KodakIFD` |
 | `pef` | Pentax PEF | Uncompressed (packed 12-bit or 16-bit words, also under the PackBits tag some bodies write) and Pentax's Huffman coding (compression 65535, the table from the maker note); image area from the maker note's crop tags, else the dark borders trimmed from the samples; black from `BlackPoint` or the masked columns; as-shot white balance from the maker note; the layout from the Exif `CFAPattern` |
 | `srw` | Samsung SRW | The uncompressed variants: 16-bit words (compression 32769) and 12 bits packed (32770 with exactly the packed size; the bit order is decided from the samples); levels and white balance from the keyed maker-note vectors; framing from `SensorAreas`. The compressed codings (32770 with fewer bytes, 32772, 32773) are reported as unsupported |

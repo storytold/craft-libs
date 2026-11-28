@@ -31,6 +31,7 @@
 //! | `mrw` | Minolta / Konica Minolta MRW: 12-bit packed and 16-bit word mosaics in the `\0MRM` block container |
 //! | `erf` | Epson ERF (R-D1 family): 12-bit samples in 16-byte blocks |
 //! | `mef` | Mamiya MEF (ZD): uncompressed 12-bit packed |
+//! | `lri` | Light LRI (L16): one camera module, 10-bit packed, with the file's colour and vignetting calibration |
 //! | `kodak` | Kodak DCS520C TIFF: two-component lossless JPEG with a response curve |
 //! | `nef` | Nikon NEF and NRW: uncompressed, packed, Nikon's Huffman coding (lossless and lossy, 12 and 14 bits), small raw |
 //! | `rw2` | Panasonic RW2, Leica RWL and the older Panasonic / Leica RAW: packed, formats 4 and 6, format 8 prefix-coded strips, 16-bit words |
@@ -115,6 +116,8 @@ pub mod ljpeg;
 pub mod ljpeg_lines;
 #[cfg(feature = "arw")]
 mod llvc;
+#[cfg(feature = "lri")]
+mod lri;
 #[cfg(feature = "mef")]
 mod mef;
 #[cfg(feature = "mrw")]
@@ -383,6 +386,8 @@ pub enum RawFormat {
     Erf,
     /// Mamiya MEF: an uncompressed 12-bit packed CFA sub-IFD (`vendor::mef`).
     Mef,
+    /// Light LRI (L16): `LELR` blocks of protocol-buffers messages and packed 10-bit module captures (`lri`).
+    Lri,
     /// Another TIFF-based raw (3FR, IIQ, ERF, KDC, DCR, MOS, …).
     OtherTiff,
 }
@@ -398,6 +403,7 @@ impl RawFormat {
             || (self == RawFormat::Mrw && cfg!(feature = "mrw"))
             || (self == RawFormat::Erf && cfg!(feature = "erf"))
             || (self == RawFormat::Mef && cfg!(feature = "mef"))
+            || (self == RawFormat::Lri && cfg!(feature = "lri"))
             || (self == RawFormat::Cr2 && cfg!(feature = "cr2"))
             || (matches!(self, RawFormat::Nef | RawFormat::Nrw) && cfg!(feature = "nef"))
             || (self == RawFormat::Rw2 && cfg!(feature = "rw2"))
@@ -429,6 +435,9 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
     }
     if bytes.starts_with(b"FOVb") {
         return Some(RawFormat::X3f);
+    }
+    if bytes.starts_with(b"LELR") {
+        return Some(RawFormat::Lri);
     }
     // (either byte order: the rule of craft-crw, the CRW decoder)
     if bytes.len() >= 14 && (bytes.starts_with(b"II") || bytes.starts_with(b"MM")) && &bytes[6..14] == b"HEAPCCDR" {
@@ -714,6 +723,8 @@ fn decode_format(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> 
         RawFormat::Erf => erf::decode(bytes, mode, limits),
         #[cfg(feature = "mef")]
         RawFormat::Mef => mef::decode(bytes, mode, limits),
+        #[cfg(feature = "lri")]
+        RawFormat::Lri => lri::decode(bytes, mode, limits),
         #[cfg(feature = "cr2")]
         RawFormat::Cr2 => cr2::decode(bytes, mode, limits),
         #[cfg(feature = "nef")]
