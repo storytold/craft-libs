@@ -510,6 +510,34 @@ fn the_thumbs_a_press_would_move_wear_the_ring_and_a_click_on_the_span_focuses_t
     assert_eq!(rings(&fixture.frame_shapes(), FIELD) - rest, 1, "over the bare track the slider's thumb wears the ring");
 }
 
+/// The pass on which a range slider's thumb drag starts already moves that thumb under the pointer (#3614).
+#[trial]
+fn a_range_thumb_drag_moves_the_thumb_on_the_pass_it_starts() {
+    use craft_behavior::Mixed;
+    use craft_ui::value_drag::RangeSlider;
+    let range = RefCell::new((Mixed::Same(20.0), Mixed::Same(80.0)));
+    let upper = || match range.borrow().1 {
+        Mixed::Same(value) => value,
+        Mixed::Mixed => f64::NAN,
+    };
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        RangeSlider::new(Bind::bound(&mut *range.borrow_mut()), 0.0..=100.0).label("Hue").show_at(ui, FIELD);
+    };
+    frames.idle(3, &mut show);
+    // The upper thumb's centre, four fifths along the thumbs' travel.
+    let from = Pos2::new(FIELD.left() + 4.0 + (FIELD.width() - 8.0) * 0.8, FIELD.center().y);
+    let to = from - Vec2::new(20.0, 0.0);
+    frames.frame(vec![pointer::moved(from)], &mut show);
+    frames.frame(vec![pointer::press(from)], &mut show);
+    frames.frame(vec![pointer::moved(to)], &mut show);
+    let started = upper();
+    assert!(started < 80.0, "the pass that starts the drag moved the upper thumb: {started}");
+    frames.frame(vec![pointer::release(to)], &mut show);
+    frames.idle(2, &mut show);
+    assert!((upper() - started).abs() < 1e-3, "a release where the drag started it adds nothing: {started} then {}", upper());
+}
+
 /// The filled rects a frame paints inside `within`.
 fn fills(shapes: &[egui::Shape], within: Rect) -> usize {
     shapes.iter().filter(|shape| matches!(shape, egui::Shape::Rect(rect) if rect.fill.a() > 0 && within.expand(8.0).contains_rect(rect.rect))).count()

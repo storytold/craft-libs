@@ -265,7 +265,8 @@ impl Component for RangeSlider<'_> {
             match press.phase {
                 PressPhase::DragStart { start, pos, .. } => {
                     let from = Self::current(cx);
-                    if let Some(picked) = press_at(&from, start.origin.x) {
+                    let picked = press_at(&from, start.origin.x);
+                    if let Some(picked) = picked {
                         let xs = thumbs_at(&from);
                         // A span focuses the thumb nearer the press.
                         let thumb = picked.thumb(start.origin.x, pos.x).or_else(|| {
@@ -279,6 +280,10 @@ impl Component for RangeSlider<'_> {
                         }
                     }
                     cx.begin();
+                    // The pass that starts the drag already follows the pointer, as each `Drag` pass does.
+                    if let Some(next) = picked.and_then(|picked| moved(&from, picked, &press, true)) {
+                        cx.propose(next);
+                    }
                 }
                 PressPhase::Drag { .. } => {
                     if let Some((from, picked)) = cx.memory::<Held>().drag
