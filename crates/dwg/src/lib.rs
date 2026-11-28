@@ -1129,6 +1129,25 @@ mod native {
         missing_rows > 0 && s.modern_overrides.len().saturating_add(missing_rows) <= 64
     }
 
+    /// Whether a row cell style carries margin overrides (or has no cell style data at all, which
+    /// the writer leaves out so that the row inherits the style's own margins).
+    fn has_margins(c: &acadrust::objects::TableCellStyleData) -> bool {
+        c.data_flags == 0 || c.margin_override_flags & 1 != 0
+    }
+
+    /// Whether a row cell style the table style carries already is one of the three built-in rows
+    /// that needs work: its margins aren't overridden (the writer then reads the style's margins
+    /// as 0.06), or its name is not spelled as the DWG reader knows it (`_title`, which the reader
+    /// would not take for the title row).
+    fn row_needs_work(o: &acadrust::objects::NamedTableCellStyle) -> bool {
+        ROW_NAMES.iter().any(|n| o.name.eq_ignore_ascii_case(n) && (o.name != *n || !has_margins(&o.cell_style)))
+    }
+
+    /// Whether any of the table style's rows needs [`row_needs_work`].
+    fn rows_need_work(s: &acadrust::objects::TableStyle) -> bool {
+        s.modern_overrides.iter().any(|(_, o)| row_needs_work(o))
+    }
+
     /// The lowest cell style id from 101 up to `max` that nothing in `held` holds; `None` when
     /// they are all held.
     fn free_id(held: &std::collections::HashSet<i32>, max: i32) -> Option<i32> {
@@ -1205,10 +1224,36 @@ mod native {
         };
         for o in doc.objects.values_mut() {
             let ObjectType::TableStyle(s) = o else { continue };
-            if !gets_rows(s) {
+            let adds_rows = gets_rows(s);
+            if !adds_rows && !rows_need_work(s) {
                 continue;
             }
             let (v, hz) = (s.vertical_margin, s.horizontal_margin);
+            // The rows the style carries already: one whose margins aren't overridden gets the
+            // style's (an override it has is its own and stays), and a built-in row spelled in
+            // another case takes the DWG reader's spelling (keeping its id and formatting), unless
+            // the style has that spelling already.
+            for name in ROW_NAMES {
+                let mut spelled = s.modern_overrides.iter().any(|(_, o)| o.name == name);
+                for (_, o) in &mut s.modern_overrides {
+                    if !o.name.eq_ignore_ascii_case(name) {
+                        continue;
+                    }
+                    if !spelled {
+                        o.name = name.to_string();
+                        spelled = true;
+                    }
+                    let c = &mut o.cell_style;
+                    if !has_margins(c) {
+                        c.margin_override_flags |= 1;
+                        (c.vertical_margin, c.bottom_margin) = (v, v);
+                        (c.horizontal_margin, c.right_margin) = (hz, hz);
+                    }
+                }
+            }
+            if !adds_rows {
+                continue;
+            }
             let row_style = |row: &RowCellStyle, id: i32, style_type: i32, name: &str, merge_flags: i32| {
                 // R2010+ edge order; the grid flag is set for a hidden edge, the reverse of the
                 // row border's `is_invisible`.
@@ -1825,11 +1870,12 @@ mod native {
             assert!(rows > 0);
         }
 
-        /// A row a style carries already is the drawing's own: one with no margin override
-        /// inherits the style's base cell style, which carries the style's margins, and stays
-        /// as it is (review on #2921, finding 3).
+        /// A row a style carries already gets the style's margins when it has no margin override
+        /// of its own, and keeps the ones it has (review on #1960). After a DWG save and reopen the
+        /// two are told apart: `_TITLE` (no override) carries the style's margins, `_HEADER` (its
+        /// own) its own.
         #[test]
-        fn a_row_without_a_margin_override_inherits_the_style_margins() {
+        fn an_existing_row_gets_the_style_margins_only_where_it_has_no_override() {
             use acadrust::objects::{NamedTableCellStyle, ObjectType};
             let mut doc = acadrust::CadDocument::new();
             doc.version = acadrust::DxfVersion::AC1032;
@@ -1837,25 +1883,79 @@ mod native {
                 let ObjectType::TableStyle(s) = o else { continue };
                 s.horizontal_margin = 1.0;
                 s.vertical_margin = 0.25;
-                let title = NamedTableCellStyle { id: 1, style_type: 1, name: "_TITLE".into(), ..NamedTableCellStyle::default() };
+                let mut title = NamedTableCellStyle { id: 1, style_type: 1, name: "_TITLE".into(), ..NamedTableCellStyle::default() };
+                title.cell_style.data_flags = 1;
                 assert_eq!(title.cell_style.margin_override_flags, 0);
-                s.modern_overrides = vec![(1, title)];
+                let mut header = NamedTableCellStyle { id: 2, style_type: 1, name: "_HEADER".into(), ..NamedTableCellStyle::default() };
+                header.cell_style.data_flags = 1;
+                header.cell_style.margin_override_flags = 1;
+                (header.cell_style.horizontal_margin, header.cell_style.right_margin) = (9.0, 9.0);
+                (header.cell_style.vertical_margin, header.cell_style.bottom_margin) = (7.0, 7.0);
+                s.modern_overrides = vec![(1, title), (2, header)];
             }
             table_style_row_margins(&mut doc).expect("row ids");
             let back = through_dwg(&doc);
             let mut styles = 0;
             for o in back.objects.values() {
                 let ObjectType::TableStyle(s) = o else { continue };
-                let base = s
-                    .modern_style
-                    .as_ref()
-                    .map(|b| (b.cell_style.margin_override_flags, b.cell_style.horizontal_margin, b.cell_style.vertical_margin));
-                assert_eq!(base, Some((1, 1.0, 0.25)), "the base cell style carries the margins");
-                let flags: Vec<_> = s.modern_overrides.iter().map(|(_, r)| (r.name.as_str(), r.cell_style.margin_override_flags)).collect();
-                assert_eq!(flags, [("_TITLE", 0), ("_HEADER", 1), ("_DATA", 1)]);
+                let rows: Vec<_> = s
+                    .modern_overrides
+                    .iter()
+                    .map(|(_, r)| {
+                        let c = &r.cell_style;
+                        (r.name.as_str(), c.margin_override_flags, c.horizontal_margin, c.vertical_margin, c.right_margin, c.bottom_margin)
+                    })
+                    .collect();
+                assert_eq!(
+                    rows,
+                    [("_TITLE", 1, 1.0, 0.25, 1.0, 0.25), ("_HEADER", 1, 9.0, 7.0, 9.0, 7.0), ("_DATA", 1, 1.0, 0.25, 1.0, 0.25)],
+                    "an existing row without an override takes the style's margins, one with its own keeps them"
+                );
                 styles += 1;
             }
             assert!(styles > 0);
+        }
+
+        /// A built-in row in another case (`_title`) is written under the spelling the DWG reader
+        /// knows, with its id and formatting, so its formatting survives a reopen; a style holding
+        /// both spellings keeps both as they are.
+        #[test]
+        fn a_title_row_in_lower_case_keeps_its_formatting_through_a_dwg() {
+            use acadrust::objects::{NamedTableCellStyle, ObjectType};
+            let mut doc = acadrust::CadDocument::new();
+            doc.version = acadrust::DxfVersion::AC1032;
+            for o in doc.objects.values_mut() {
+                let ObjectType::TableStyle(s) = o else { continue };
+                let mut title = NamedTableCellStyle { id: 5, style_type: 1, name: "_title".into(), ..NamedTableCellStyle::default() };
+                title.cell_style.data_flags = 1;
+                title.cell_style.content_format.text_height = 2.5;
+                s.modern_overrides = vec![(5, title)];
+            }
+            table_style_row_margins(&mut doc).expect("row ids");
+            let back = through_dwg(&doc);
+            let mut styles = 0;
+            for o in back.objects.values() {
+                let ObjectType::TableStyle(s) = o else { continue };
+                let title: Vec<_> = s.modern_overrides.iter().filter(|(_, r)| r.name.eq_ignore_ascii_case("_TITLE")).collect();
+                assert_eq!(title.len(), 1);
+                assert_eq!((title[0].1.name.as_str(), title[0].1.id, title[0].1.cell_style.content_format.text_height), ("_TITLE", 5, 2.5));
+                assert_eq!(s.title_row_style.text_height, 2.5, "the reader applies the title height");
+                styles += 1;
+            }
+            assert!(styles > 0);
+            // Both spellings are left alone.
+            for o in doc.objects.values_mut() {
+                let ObjectType::TableStyle(s) = o else { continue };
+                s.modern_overrides = [(5, "_title"), (1, "_TITLE")]
+                    .map(|(k, n)| (k, NamedTableCellStyle { id: k, name: n.into(), ..NamedTableCellStyle::default() }))
+                    .into();
+            }
+            table_style_row_margins(&mut doc).expect("row ids");
+            for o in doc.objects.values() {
+                let ObjectType::TableStyle(s) = o else { continue };
+                let names: Vec<_> = s.modern_overrides.iter().map(|(_, r)| r.name.as_str()).collect();
+                assert_eq!(names, ["_title", "_TITLE", "_HEADER", "_DATA"]);
+            }
         }
 
         /// `(key, id, name)` of each cell style a table style ends with when it starts with `start`.
@@ -1873,7 +1973,7 @@ mod native {
             let mut out = Vec::new();
             for o in doc.objects.values() {
                 let ObjectType::TableStyle(s) = o else { continue };
-                for (_, row) in s.modern_overrides.iter().filter(|(_, r)| !start.iter().any(|&(_, _, n)| n == r.name)) {
+                for (_, row) in s.modern_overrides.iter().filter(|(_, r)| !start.iter().any(|&(_, _, n)| n.eq_ignore_ascii_case(&r.name))) {
                     assert_eq!((row.cell_style.margin_override_flags, row.cell_style.horizontal_margin), (1, 1.0), "{} has the margins", row.name);
                 }
                 out.push(s.modern_overrides.iter().map(|(k, row)| (*k, row.id, row.name.clone())).collect());
@@ -1916,7 +2016,7 @@ mod native {
         #[test]
         fn rows_are_found_in_any_case_and_added_in_row_order() {
             for rows in rows_after(&[(5, 5, "_title")]) {
-                assert_eq!(rows, owned(&[(5, 5, "_title"), (2, 2, "_HEADER"), (3, 3, "_DATA")]));
+                assert_eq!(rows, owned(&[(5, 5, "_TITLE"), (2, 2, "_HEADER"), (3, 3, "_DATA")]));
             }
             for rows in rows_after(&[(101, 101, "Custom"), (2, 2, "_HEADER")]) {
                 assert_eq!(rows, owned(&[(1, 1, "_TITLE"), (101, 101, "Custom"), (2, 2, "_HEADER"), (3, 3, "_DATA")]));
