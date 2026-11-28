@@ -382,7 +382,13 @@ impl<'a> AxisRelations<'a> {
         }
         let second = second?;
         let value = group_value_axis(val_map, group)?;
-        let cross = if value == first { second } else if value == second { first } else { return None };
+        let cross = if value == first {
+            second
+        } else if value == second {
+            first
+        } else {
+            return None;
+        };
         let axis = self.values.get(&(value.as_str(), cross)).copied().flatten()?;
         // The reciprocal partner must itself be eligible and unique, not a foreign pair.
         self.partners.get(&(cross, value.as_str())).copied().flatten()?;
@@ -392,7 +398,12 @@ impl<'a> AxisRelations<'a> {
 
 /// The primary value axis is the one on the left (bottom for bar charts); the secondary one
 /// sits on the right or top, or crosses the category axis at its maximum.
-fn primary_value_axis<'a>(pa: &'a El, val_map: &std::collections::HashMap<&str, bool>, version: u16, relations: Option<&AxisRelations<'a>>) -> Option<&'a El> {
+fn primary_value_axis<'a>(
+    pa: &'a El,
+    val_map: &std::collections::HashMap<&str, bool>,
+    version: u16,
+    relations: Option<&AxisRelations<'a>>,
+) -> Option<&'a El> {
     let legacy = version == 0;
     let secondary_placed = |a: &El| {
         a.child(Local("crosses")).and_then(|c| c.attr_local("val")) == Some("max")
@@ -816,15 +827,19 @@ fn category_axis_for_value<'a>(pa: &'a El, value_axis: &El, reciprocal: bool) ->
 }
 
 /// Resolve the pair belonging to the group that actually supplied the categories.
-fn group_category_axis<'a>(pa: &'a El, group: &El, primary_axis: Option<&'a El>, val_map: &std::collections::HashMap<&str, bool>, relations: Option<&AxisRelations<'a>>) -> Option<&'a El> {
+fn group_category_axis<'a>(
+    pa: &'a El,
+    group: &El,
+    primary_axis: Option<&'a El>,
+    val_map: &std::collections::HashMap<&str, bool>,
+    relations: Option<&AxisRelations<'a>>,
+) -> Option<&'a El> {
     let value_id = group_value_axis(val_map, group);
     let value_axis = relations.and_then(|index| index.value_axis(group, val_map)).or_else(|| {
-        primary_axis
-            .filter(|a| value_id.is_some() && a.child(Local("axId")).and_then(|a| a.attr_local("val")) == value_id.as_deref())
-            .or_else(|| {
-                pa.children(Local("valAx"))
-                    .find(|a| value_id.is_some() && a.child(Local("axId")).and_then(|a| a.attr_local("val")) == value_id.as_deref())
-            })
+        primary_axis.filter(|a| value_id.is_some() && a.child(Local("axId")).and_then(|a| a.attr_local("val")) == value_id.as_deref()).or_else(|| {
+            pa.children(Local("valAx"))
+                .find(|a| value_id.is_some() && a.child(Local("axId")).and_then(|a| a.attr_local("val")) == value_id.as_deref())
+        })
     });
     value_axis
         .and_then(|a| category_axis_for_value(pa, a, true))
@@ -1021,7 +1036,8 @@ mod tests {
         let xml = review6_axis_pairs();
         let bad = r#"<c:valAx><c:axId val="40"/><c:scaling><c:max val="1"/></c:scaling><c:axPos val="r"/><c:crossAx val="999"/><c:numFmt formatCode="0.00" sourceLinked="0"/></c:valAx>"#;
         let good = r#"<c:valAx><c:axId val="40"/><c:scaling><c:max val="90"/></c:scaling><c:axPos val="r"/><c:crossAx val="30"/><c:numFmt formatCode="0.000" sourceLinked="0"/></c:valAx>"#;
-        let category = r#"<c:catAx><c:axId val="30"/><c:axPos val="t"/><c:crossAx val="40"/><c:numFmt formatCode="mmm-yy" sourceLinked="0"/></c:catAx>"#;
+        let category =
+            r#"<c:catAx><c:axId val="30"/><c:axPos val="t"/><c:crossAx val="40"/><c:numFmt formatCode="mmm-yy" sourceLinked="0"/></c:catAx>"#;
         let foreign = r#"<c:catAx><c:axId val="999"/><c:axPos val="t"/><c:crossAx val="40"/></c:catAx>"#;
         for reverse in [false, true] {
             for stray_reciprocal in [false, true] {
@@ -1038,11 +1054,17 @@ mod tests {
         // No unique group-owned pair: retain the old first-ID fallback, not a guessed pair.
         let ambiguous = xml.replace(good, &format!("{good}{}", good.replace(r#"val="90""#, r#"val="80""#)));
         let no_partner = xml.replace(category, "");
-        let too_many_ids = xml.replace(r#"<c:axId val="30"/><c:axId val="40"/></c:barChart>"#, r#"<c:axId val="30"/><c:axId val="40"/><c:axId val="70"/></c:barChart>"#);
+        let too_many_ids = xml.replace(
+            r#"<c:axId val="30"/><c:axId val="40"/></c:barChart>"#,
+            r#"<c:axId val="30"/><c:axId val="40"/><c:axId val="70"/></c:barChart>"#,
+        );
         for fixture in [ambiguous, no_partner, too_many_ids] {
             assert_eq!(read_chart_xml(fixture.as_bytes()).unwrap().y2_max, Some(1.0), "unresolved evidence retains the historical fallback");
         }
-        let repeated_id = xml.replace(r#"<c:axId val="30"/><c:axId val="40"/></c:barChart>"#, r#"<c:axId val="30"/><c:axId val="40"/><c:axId val="30"/></c:barChart>"#);
+        let repeated_id = xml.replace(
+            r#"<c:axId val="30"/><c:axId val="40"/></c:barChart>"#,
+            r#"<c:axId val="30"/><c:axId val="40"/><c:axId val="30"/></c:barChart>"#,
+        );
         assert_eq!(read_chart_xml(repeated_id.as_bytes()).unwrap().y2_max, Some(90.0), "two unique IDs still define one pair");
     }
 
@@ -1050,8 +1072,10 @@ mod tests {
     fn review6_secondary_category_format_keeps_the_selected_value_element() {
         let xml = review6_axis_pairs();
         let bad = r#"<c:valAx><c:axId val="40"/><c:scaling><c:max val="1"/></c:scaling><c:axPos val="r"/><c:crossAx val="999"/><c:numFmt formatCode="0.00" sourceLinked="0"/></c:valAx>"#;
-        let category = r#"<c:catAx><c:axId val="30"/><c:axPos val="t"/><c:crossAx val="40"/><c:numFmt formatCode="mmm-yy" sourceLinked="0"/></c:catAx>"#;
-        let unrelated = r#"<c:catAx><c:axId val="30"/><c:axPos val="t"/><c:crossAx val="777"/><c:numFmt formatCode="0.00" sourceLinked="0"/></c:catAx>"#;
+        let category =
+            r#"<c:catAx><c:axId val="30"/><c:axPos val="t"/><c:crossAx val="40"/><c:numFmt formatCode="mmm-yy" sourceLinked="0"/></c:catAx>"#;
+        let unrelated =
+            r#"<c:catAx><c:axId val="30"/><c:axPos val="t"/><c:crossAx val="777"/><c:numFmt formatCode="0.00" sourceLinked="0"/></c:catAx>"#;
         let fixture = xml.replace(category, &format!("{unrelated}{category}"));
         // Removing the invalid value is a legitimate existing reciprocal-category control.
         for fixture in [fixture.clone(), fixture.replace(bad, "")] {

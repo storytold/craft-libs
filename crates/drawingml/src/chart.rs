@@ -863,7 +863,11 @@ impl Chart {
                 for (i, value) in series.values.iter().take(slots).enumerate() {
                     let Some(value) = value.filter(|v| v.is_finite()) else { continue };
                     let (positive, negative) = &mut totals[i];
-                    if value >= 0.0 { *positive += value } else { *negative += value }
+                    if value >= 0.0 {
+                        *positive += value
+                    } else {
+                        *negative += value
+                    }
                     // Positive sums only grow and negative sums only fall. Updating the
                     // extent here also distinguishes a finite zero from an empty slot.
                     ext.1 = ext.1.max(*positive);
