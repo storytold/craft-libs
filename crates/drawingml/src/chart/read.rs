@@ -765,21 +765,23 @@ fn read_axes<'a>(
                 .filter_map(|g| relations.and_then(|index| index.value_axis(g, val_map)))
                 .find(|axis| !std::ptr::eq(*axis, primary))
         });
-        let secondary_axis = resolved_secondary.or_else(|| if legacy {
-            pa.children(Local("valAx")).find(|a| a.child(Local("axId")).and_then(|c| c.attr_local("val")) != primary_id && vertical(a))
-        } else {
-            // Resolve the other used value axis through its group, excluding unused axes and
-            // the horizontal x axis of a scatter group.
-            let secondary_group = pa
-                .elements()
-                .filter(|g| group_chart_type(g.local(), g).is_some() && g.children(Local("ser")).next().is_some())
-                .find(|g| group_value_axis(val_map, g).is_some_and(|id| Some(id.as_str()) != primary_id));
-            secondary_group.and_then(|g| {
-                relations.and_then(|index| index.value_axis(g, val_map)).or_else(|| {
-                    let id = group_value_axis(val_map, g)?;
-                    pa.children(Local("valAx")).find(|a| a.child(Local("axId")).and_then(|c| c.attr_local("val")) == Some(id.as_str()))
+        let secondary_axis = resolved_secondary.or_else(|| {
+            if legacy {
+                pa.children(Local("valAx")).find(|a| a.child(Local("axId")).and_then(|c| c.attr_local("val")) != primary_id && vertical(a))
+            } else {
+                // Resolve the other used value axis through its group, excluding unused axes and
+                // the horizontal x axis of a scatter group.
+                let secondary_group = pa
+                    .elements()
+                    .filter(|g| group_chart_type(g.local(), g).is_some() && g.children(Local("ser")).next().is_some())
+                    .find(|g| group_value_axis(val_map, g).is_some_and(|id| Some(id.as_str()) != primary_id));
+                secondary_group.and_then(|g| {
+                    relations.and_then(|index| index.value_axis(g, val_map)).or_else(|| {
+                        let id = group_value_axis(val_map, g)?;
+                        pa.children(Local("valAx")).find(|a| a.child(Local("axId")).and_then(|c| c.attr_local("val")) == Some(id.as_str()))
+                    })
                 })
-            })
+            }
         });
         if let Some(a) = secondary_axis {
             let sc = a.child(Local("scaling"));
@@ -2790,12 +2792,16 @@ mod tests {
 
     // Original synthetic pairs: numeric IDs are local references, not element identities.
     fn review_6095656137_group(category: u32, value: u32, name: &str, format: &str) -> String {
-        format!(r#"<c:barChart><c:barDir val="col"/><c:ser><c:tx><c:v>{name}</c:v></c:tx><c:val><c:numRef><c:f>{name}!B1</c:f><c:numCache><c:formatCode>{format}</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>7</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:axId val="{category}"/><c:axId val="{value}"/></c:barChart>"#)
+        format!(
+            r#"<c:barChart><c:barDir val="col"/><c:ser><c:tx><c:v>{name}</c:v></c:tx><c:val><c:numRef><c:f>{name}!B1</c:f><c:numCache><c:formatCode>{format}</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>7</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:axId val="{category}"/><c:axId val="{value}"/></c:barChart>"#
+        )
     }
 
     fn review_6095656137_axis(kind: &str, id: u32, cross: u32, pos: &str, max: u32, format: &str) -> String {
         let min = if kind == "valAx" { 2 } else { 0 };
-        format!(r#"<c:{kind}><c:axId val="{id}"/><c:scaling><c:max val="{max}"/><c:min val="{min}"/></c:scaling><c:axPos val="{pos}"/>{format}<c:title><c:tx><c:v>Axis{id}-{cross}</c:v></c:tx></c:title><c:crossAx val="{cross}"/></c:{kind}>"#)
+        format!(
+            r#"<c:{kind}><c:axId val="{id}"/><c:scaling><c:max val="{max}"/><c:min val="{min}"/></c:scaling><c:axPos val="{pos}"/>{format}<c:title><c:tx><c:v>Axis{id}-{cross}</c:v></c:tx></c:title><c:crossAx val="{cross}"/></c:{kind}>"#
+        )
     }
 
     #[test]
@@ -2832,7 +2838,11 @@ mod tests {
         let xml = metadata_chart(&format!("{groups}{invalid_left}{right}{cats}{unused}"));
         let chart = read_chart_xml(xml.as_bytes()).unwrap();
         assert_eq!(chart.y_max, Some(70.0));
-        assert_eq!(chart.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, false], "an unresolved primary retains ID fallback even when another group resolves");
+        assert_eq!(
+            chart.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(),
+            [false, false],
+            "an unresolved primary retains ID fallback even when another group resolves"
+        );
         assert_eq!(chart.y2_max, None);
     }
 
@@ -2845,11 +2855,17 @@ mod tests {
         let y = review_6095656137_axis("valAx", 20, 10, "r", 90, "");
         let stray = review_6095656137_axis("valAx", 10, 999, "l", 999, r#"<c:numFmt formatCode="0%" sourceLinked="0"/>"#);
         let foreign = review_6095656137_axis("catAx", 999, 10, "b", 1, "");
-        for (axes, primary_resolves) in [(format!("{x}{y}{stray}"), true), (format!("{stray}{y}{x}"), true), (format!("{x}{foreign}{stray}{y}"), false)] {
+        for (axes, primary_resolves) in
+            [(format!("{x}{y}{stray}"), true), (format!("{stray}{y}{x}"), true), (format!("{x}{foreign}{stray}{y}"), false)]
+        {
             let xml = metadata_chart(&format!("{primary}{scatter}{primary_axes}{axes}"));
             let chart = read_chart_xml(xml.as_bytes()).unwrap();
             assert_eq!(chart.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, true]);
-            assert_eq!((chart.y_max, chart.y2_max), (Some(50.0), Some(90.0)), "secondary scale belongs to Y, not the horizontal X sharing an ID with a stray");
+            assert_eq!(
+                (chart.y_max, chart.y2_max),
+                (Some(50.0), Some(90.0)),
+                "secondary scale belongs to Y, not the horizontal X sharing an ID with a stray"
+            );
             assert_eq!(chart.category_format.as_deref(), Some("0.0"));
             assert_eq!(chart.category_label(0), "30.0");
             assert_eq!(chart.series[1].x_values, [Some(30.0)]);
@@ -2875,7 +2891,10 @@ mod tests {
             let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
             let old = read_chart(&root, MAX_CHART_POINTS, 6).unwrap();
             let current = read_chart_xml(xml.as_bytes()).unwrap();
-            assert_eq!(current.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), old.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>());
+            assert_eq!(
+                current.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(),
+                old.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>()
+            );
             assert_eq!((current.y2_max, current.category_format), (old.y2_max, old.category_format));
         }
         // Two horizontal value candidates are equally eligible, not an arbitrarily picked Y.
@@ -2894,7 +2913,9 @@ mod tests {
         for format in ["", r#"<c:numFmt formatCode="General" sourceLinked="1"/>"#] {
             let l = review_6095656137_axis("valAx", 40, 10, "l", 50, format);
             let r = review_6095656137_axis("valAx", 40, 30, "r", 90, format);
-            for (groups, flags) in [(format!("{foreign}{left}{right}"), vec![false, false, true]), (format!("{right}{foreign}{left}"), vec![true, false, false])] {
+            for (groups, flags) in
+                [(format!("{foreign}{left}{right}"), vec![false, false, true]), (format!("{right}{foreign}{left}"), vec![true, false, false])]
+            {
                 for axes in [format!("{l}{r}{cats}"), format!("{cats}{r}{l}")] {
                     let xml = metadata_chart(&format!("{groups}{axes}"));
                     let chart = read_chart_xml(xml.as_bytes()).unwrap();
@@ -2914,8 +2935,11 @@ mod tests {
         assert_eq!(read_chart_xml(xml.as_bytes()).unwrap().y_format.as_deref(), Some("0%"));
         // Multiple resolved owners still use the first source-order cache on that element.
         let alias = review_6095656137_group(10, 40, "LaterLeft", "0.0000");
-        let xml = metadata_chart(&format!("{left}{alias}{right}{cats}{}{}", review_6095656137_axis("valAx", 40, 10, "l", 50, ""), review_6095656137_axis("valAx", 40, 30, "r", 90, "")));
+        let xml = metadata_chart(&format!(
+            "{left}{alias}{right}{cats}{}{}",
+            review_6095656137_axis("valAx", 40, 10, "l", 50, ""),
+            review_6095656137_axis("valAx", 40, 30, "r", 90, "")
+        ));
         assert_eq!(read_chart_xml(xml.as_bytes()).unwrap().y_format.as_deref(), Some("0.00"));
     }
-
 }
