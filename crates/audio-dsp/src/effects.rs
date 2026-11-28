@@ -22,7 +22,7 @@ pub(crate) mod util;
 pub(crate) mod voice;
 
 pub(crate) use channel::{Amplify, Balance, ChannelVolume, Invert, Route, Routing};
-pub use character::{Bitcrusher, RingMod};
+pub use character::{Bitcrusher, RingMod, Tremolo, Vibrato};
 pub(crate) use declick::ClickRemover;
 pub use dither::Dither;
 pub use dynamics::{Compressor, Gate, Limiter, Maximizer};
@@ -151,6 +151,8 @@ static REGISTRY: &[EffectInfo] = &[
     entry!("flanger", "Flanger", Modulation, Flanger),
     entry!("phaser", "Phaser", Modulation, Phaser),
     entry!("ring_mod", "Ring Modulator", Modulation, RingMod),
+    entry!("tremolo", "Tremolo", Modulation, Tremolo),
+    entry!("vibrato", "Vibrato", Modulation, Vibrato),
     entry!("analog_delay", "Analog Delay", Time, AnalogDelay),
     entry!("multitap_delay", "Multitap Delay", Time, MultitapDelay),
     entry!("convolution_reverb", "Convolution Reverb", Reverb, ConvolutionReverb),

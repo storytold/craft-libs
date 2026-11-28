@@ -114,21 +114,25 @@ The tests that call the copies in VectorCraft, DesignCraft and WordCraft need ea
 
 The `deadline` module is not built for `wasm32`.
 
-`with_deadline(limit, label, f)` runs `f` on its own thread and returns its value. When `f` does not
-finish within the limit, the test fails with a message that names `label`, the limit and the variable
-that sets it. A panic in `f` is raised again in the test with its original payload. The limit counts
-from the call, including the time spent starting the thread. When `f` returns or panics after the
-limit has passed, the test fails with the label and the limit, and with the panic's message if it has
-one.
+The limits in this module guard against a hang. Elapsed time does not decide a result: a test fails on
+a limit only when nothing has arrived by then.
 
-`wait_until(limit, what, cond)` calls `cond` on the test's thread until it returns `true`. It calls
-`cond` at once, then after pauses that start at 1 ms and double up to 50 ms, and does not call it
-again once the limit has passed. When the limit passes first, or `cond` returns `true` only after the
-limit has passed, the test fails with a message that names `what`.
+`with_deadline(limit, label, f)` runs `f` on its own thread and returns its value. A panic in `f` is
+raised again in the test with its original payload. A value or panic that arrives after the limit is
+still the result. When `f` has neither returned nor panicked within the limit, the test fails with a
+message that names `label`, the limit and the variable that sets it. The limit counts from the start
+of the thread.
+
+`wait_until(limit, what, &signal, cond)` calls `cond` on the test's thread at once, and again each
+time another thread calls `signal.raise()`, until `cond` returns `true`. The thread that changes the
+state `cond` reads raises the `Signal` after each change. A raise that comes while `cond` runs makes
+`wait_until` call `cond` again straight after. The limit counts from the start of the call. When the
+limit has passed and the latest call of `cond` returned `false`, the test fails with a message that
+names `what`, even if the signal is still being raised.
 
 ```rust
 use std::time::Duration;
-use craft_testkit::deadline::{DeadlineLimit, wait_until, with_deadline};
+use craft_testkit::deadline::{DeadlineLimit, Signal, wait_until, with_deadline};
 
 // The default of 30 s; CRAFT_TEST_TIMEOUT_SECS replaces it.
 let pixels = with_deadline(Duration::from_secs(30), "decode seed 7", move || decode(&bytes));
@@ -137,7 +141,9 @@ let pixels = with_deadline(Duration::from_secs(30), "decode seed 7", move || dec
 let limit = DeadlineLimit::new(Duration::from_secs(30)).with_variable("FILMCRAFT_HOSTILE_TIMEOUT_SECS");
 with_deadline(limit, "hostile input 12", move || parse(&input));
 
-wait_until(Duration::from_secs(10), "the export to finish", || job.is_done());
+// The export job calls `done.raise()` after it changes its state.
+let done = Signal::new();
+wait_until(Duration::from_secs(10), "the export to finish", &done, || job.is_done());
 ```
 
 ### The limit variable
@@ -161,12 +167,14 @@ calls this module's.
 
 ### Limits
 
-- A body that runs past its limit fails the test, but its thread is left running until the test
-  process exits. A body that never returns can keep the test binary alive after its tests finish.
-- `wait_until` checks its limit only between calls of `cond`. A `cond` that blocks is not interrupted,
-  so it must return promptly.
-- Neither function returns elapsed time. Tests of this crate use channel handshakes, and the only time
-  bounds in them are the limits under test.
+- When a body has no result within its limit, the test fails, but the body's thread is left running
+  until the test process exits. A body that never returns can keep the test binary alive after its
+  tests finish.
+- A `cond` that blocks is not interrupted, so it must return promptly.
+- A state change that nobody signals is not seen: when the signal is not raised, `wait_until` fails
+  at the limit even if `cond` would now return `true`.
+- Neither function returns elapsed time. Tests of this crate use channel handshakes and an injected
+  wait in place of the limits.
 
 ## hostile
 
@@ -180,8 +188,10 @@ yields no copies. `mutations` and `Rng` build for `wasm32`.
 
 `hammer(&config, seed, parse)` runs `parse` on the unmodified seed, on every truncation of it
 (lengths 0 to one less than its length), and on `mutations(seed, rounds)`. The cases run one after
-another on one worker thread, and the test's thread fails the test when a case runs past its limit.
-A case that finishes after its limit also fails the test. The test fails on the first case that
+another on one worker thread, and the test's thread fails the test when a case is still running once
+its limit has passed since it started. The limit guards against a hang: a case that finishes passes
+or fails on what `parse` did, however long it took, and the number of cases depends only on the seed,
+the rounds and the divisor. The test fails on the first case that
 panics or does not finish, with a message that names the config's label, the case
 (`the unmodified seed`, `truncation to N` or the edits), the input's length and the panic's message.
 `parse` must be `Fn(&[u8]) + Send + Sync + 'static`, since a case that does not finish keeps running
@@ -256,6 +266,58 @@ Changes from `craft-media-testkit`'s `hammer`:
 let dir = craft_testkit::TempDir::new("export")?;
 std::fs::write(dir.file("out.png")?, &png)?;
 ```
+
+## mcp
+
+The `mcp` feature adds `craft_testkit::mcp` and the `serde_json` dependency. The module is built on every target except `wasm32`, and it opens no network connection.
+
+`McpChild::spawn(path, args, env)` starts an MCP server program with its stdin and stdout piped. The variables in `env` are set for the child only; the test process's environment is not changed. `McpChild::connect(reader, writer, limits)` talks to a server that runs in the test process; its reading thread stops when the server drops its end of `reader`, or at the next line the server writes after `close()`. Each message is one line of JSON-RPC 2.0, as the [MCP stdio transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports) describes.
+
+| Call | What it does |
+|---|---|
+| `initialize(version)` | Sends `initialize` with `version` (`mcp::PROTOCOL_VERSION` is `2025-06-18`), validates the reply, then sends `notifications/initialized`. The result must contain `capabilities` and `serverInfo` objects, with string `serverInfo.name` and `serverInfo.version` fields. Invalid fields return `Protocol` and close the connection. A reply with another version returns `UnsupportedVersion` and closes the connection. |
+| `request(method, params)`, `request_within(.., timeout)` | Sends a request with a new numeric id and returns the `result` of the reply with that id. Well-formed replies with other ids are skipped. An error reply returns `Rpc` with its code, message and data, and the connection stays usable. |
+| `call_tool(name, args)`, `call_tool_within(.., timeout)` | Sends `tools/call` and returns the tool result unchanged, `content` and `isError` included. |
+| `list_tools()` | Reads `tools/list` pages through `nextCursor` and returns the tools as sent. More than `max_pages` pages returns `TooManyPages`, and tools that add up to more than `max_line_bytes` of JSON return `ToolListTooLarge`. |
+| `notify(method, params)` | Sends a notification, which has no id and gets no reply. |
+| `take_notifications()` | Returns the notifications kept so far without waiting. |
+| `close()` | Closes the child's stdin, waits for it to exit, stops it after the grace period, and returns its exit status, whether it was stopped, and the stderr kept. After the child exits, it waits up to 5 s for the rest of stderr to be read. |
+
+Tool results require a `content` array. Optional `isError` must be a boolean, and optional
+`structuredContent` and `_meta` must be objects. Both tool helpers reject a malformed envelope
+with `Protocol` and close the connection. Requests and notifications from the server require
+object-valued `params` when that field is present. `close()` drains and discards stdout while
+waiting for the child; incoming output does not extend the grace period.
+
+While a call waits, the client answers the child's `ping` with an empty result and its other requests with error -32601. Server requests require string or integer IDs. A line on stdout that is not a JSON-RPC 2.0 message, a reply with neither or both of `result` and `error`, a line over the length limit, a missed deadline and the end of stdout each return an error and close the connection; later calls return `Closed`. A terminal failure discards queued writes and unread messages. A write already in progress may finish. After the end of stdout or an I/O error, `close()` or dropping the connection reaps the child. Other terminal failures stop and reap it immediately. Dropping an `McpChild` stops and reaps a child that is still running. Setup returns a `Result` and nothing in the module panics.
+
+`McpLimits` holds the limits. These defaults are the crate's own values:
+
+| Field | Default | Range |
+|---|---|---|
+| `max_line_bytes` | 64 MiB, for one stdout line, for the whole `list_tools` result, and for the total compact JSON bytes of retained notifications | at least 1 |
+| `request_timeout` | 30 s | more than zero, at most 1 hour |
+| `initialize_timeout` | 60 s | more than zero, at most 1 hour |
+| `close_grace` | 2 s | at most 1 hour |
+| `max_pages` | 64 | at least 1 |
+| `max_notifications` | 0 (notifications are not kept); oldest entries are dropped to satisfy both this count and the `max_line_bytes` byte budget | at most 4096 |
+| `stderr_tail_bytes` | 0 (stderr goes to the null device); otherwise the last bytes written are kept | at most 16 MiB |
+
+A notification whose compact JSON encoding exceeds `max_line_bytes` is discarded without removing previously retained notifications.
+
+`McpLimits::timeouts_from_var(name)` sets both deadlines from a variable that holds a whole number of seconds from 1 to 3600; `mcp::TIMEOUT_VAR` (`CRAFT_TEST_MCP_TIMEOUT_SECS`) is the default name. Any other value returns an error.
+
+```rust
+use craft_testkit::mcp::{McpChild, PROTOCOL_VERSION};
+
+let mut mcp = McpChild::spawn(env!("CARGO_BIN_EXE_my-cli"), ["mcp"], [("MYCRAFT_CONFIG_DIR", dir.path())])?;
+mcp.initialize(PROTOCOL_VERSION)?;
+let result = mcp.call_tool("doc.new", serde_json::json!({}))?;
+assert!(!result["isError"].as_bool().unwrap_or(false));
+assert!(mcp.close()?.status.is_some_and(|s| s.success()));
+```
+
+The tests that start a real child are in `tests/mcp_child.rs`, a target with `harness = false`: the child is that test program, and the standard harness writes its own lines on stdout. Both test targets build to nothing on `wasm32`.
 
 ## corpus
 
@@ -407,6 +469,14 @@ PhotoCraft and DeckCraft. `holders_take_turns` waits on channels where the copie
 | `private_dir` | storytold/craft-libs | `crates/media-testkit/src/lib.rs` | `75a654f4f8` |
 | `TempDir` | storytold/cadcraft | `crates/engine/tests/support/temp_dir.rs`, `crates/ui-egui/tests/support/temp_dir.rs` | `8e69890223` |
 
+### mcp
+
+| Code | Repository | Path | SHA |
+|---|---|---|---|
+| `Conn`, `request`, `call_tool`, `MAX_LINE`, deadlines, and the 14 tests of `child_tests.rs`, written again here | storytold/craft-ai-integrations | `crates/ai-mcp/src/apps/child.rs` | `e8b31cb0` |
+| The MCP end-to-end helpers | storytold/vectorcraft | `apps/vectorcraft-cli/tests/it/mcp_e2e.rs` | `460d2119` |
+| `mcp_recv` | storytold/photocraft | `apps/photocraft-cli/tests/it/cli.rs` | `58d11d91` |
+
 ### corpus
 
 | Code | Repository | Path | SHA |
@@ -489,6 +559,16 @@ cases change, and keep the test names.
 | PdfCraft | `ScratchDir` in `crates/testkit/src/scratch.rs` (#6124) | Pending. `ScratchFile` has no counterpart; `TempDir::file` returns a path in a `TempDir`. |
 | CADCraft | `crates/engine/tests/support/temp_dir.rs`, `crates/ui-egui/tests/support/temp_dir.rs` | Pending. Its `TempDir` empties a leftover folder of the same name; `temp` makes a new one. |
 | `craft-media-testkit` | `private_dir()` in `crates/media-testkit/src/lib.rs` | Pending. `private_dir()` is unchanged. |
+
+### mcp
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| VectorCraft | `apps/vectorcraft-cli/tests/it/mcp_e2e.rs` | Pending |
+| PhotoCraft | `apps/photocraft-cli/tests/it/cli.rs` | Pending |
+| CADCraft, DeckCraft, DesignCraft, EffectCraft | the MCP helpers in their CLI tests | Pending |
+| FigCraft, FilmCraft, GridCraft, LightCraft, PdfCraft, SoundCraft | the MCP helpers in their CLI tests | Pending |
+| craft-ai-integrations | `crates/ai-mcp/src/apps/child.rs`, production code | Kept as it is |
 
 ### corpus
 
