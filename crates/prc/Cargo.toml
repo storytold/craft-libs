@@ -13,6 +13,11 @@ workspace = true
 [dependencies]
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 thiserror = { workspace = true }
+craft-mesh = { workspace = true, optional = true }
+
+[features]
+# `mesh_scene_from`: a craft-mesh scene (glTF, OBJ, STL, ...) as a `MeshScene`.
+mesh = ["dep:craft-mesh"]
 
 [dev-dependencies]
 proptest = { workspace = true }

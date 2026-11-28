@@ -54,3 +54,16 @@ MeshScene::bounds() -> Option<[[f64; 3]; 2]>                      // the placed 
 - The whole scene is checked before a bit is written: indices, finite numbers, a tree (one parent per node, no repeated root, nesting at most `MAX_NODE_DEPTH`, 64, the reader's walk limit), and each texture's header. A failure is `PrcWriteError`, never a partial stream.
 - `PrcWriteReport` holds the stream and counts what the writer supplied itself: flat normals for primitives without normals, and empty primitives dropped.
 - Not written: lights, markups, views, B-rep, compressed tessellation.
+
+### From a craft-mesh scene (feature `mesh`)
+
+```rust
+mesh_scene_from(&craft_mesh::Scene, units_in_mm: f64, up: UpAxis) -> FromMesh   // { scene: MeshScene, warnings }
+```
+
+- The caller names the unit (1000 for glTF's metres) and the file's up axis; `UpAxis::Y` turns each root so +Y becomes PRC's +Z.
+- Linear colours become display (sRGB) values. `Blend` keeps its alpha, `Opaque` is 1, and `Mask` is drawn wholly opaque or invisible by the base alpha, since the texture is not cut out.
+- Each part becomes one primitive, one vertex per distinct corner. Normals are kept when every corner has one. A base-colour texture keeps its UV set, transform and wraps, with v flipped to a bottom-left origin; only embedded PNG and JPEG images are kept.
+- The hierarchy is copied from the roots, so a shared node is copied under each parent; copying stops at `MAX_NODE_DEPTH` levels or `MAX_NODE_COPIES` nodes. Indices out of range are dropped.
+- `warnings` counts what was left out: other texture maps, vertex colours, skins, cameras, lights, animations, unusable images and out-of-range indices (node warnings count each copy).
+- `write_prc` still refuses a result that draws nothing, holds a non-finite number, or has a node matrix whose bottom row is not 0 0 0 1.

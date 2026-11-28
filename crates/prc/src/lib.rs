@@ -8,7 +8,8 @@
 //! ([`PrcFile::placements`], [`PrcFile::model_tree`]).
 //!
 //! [`write_prc`] writes a triangle-mesh scene ([`MeshScene`]: named nodes, shared meshes, colours,
-//! PNG/JPEG base-colour textures) as a single-file-structure stream.
+//! PNG/JPEG base-colour textures) as a single-file-structure stream. With the `mesh` feature,
+//! `mesh_scene_from` builds one from a craft-mesh scene.
 //!
 //! Clause numbers in `[WD x.y]` refer to the PRC working draft, ISO/TC 171/SC 2 N570.
 //!
@@ -39,6 +40,8 @@ pub use geometry::Matrix;
 pub use schema::Schema;
 pub use tess::{Tessellation, TriangleMesh, TriangleStyle, WireTessellation};
 pub use tree::{EntityOverrides, MAX_PLACEMENTS, ModelNode, ModelUnits, NameSource, Placement, Rgba, StyleAlpha};
+#[cfg(feature = "mesh")]
+pub use write::{FromMesh, MAX_NODE_COPIES, UpAxis, mesh_scene_from};
 pub use write::{
     MAX_NODE_DEPTH, MeshScene, PrcWriteError, PrcWriteReport, SceneMaterial, SceneMesh, SceneNode, ScenePrimitive, SceneTexture, TextureWrap,
     write_prc,

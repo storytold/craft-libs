@@ -11,12 +11,16 @@
 mod bits;
 mod bounds;
 mod container;
+#[cfg(feature = "mesh")]
+mod from_mesh;
 mod sections;
 mod tess;
 mod textures;
 mod validate;
 mod vec3;
 
+#[cfg(all(test, feature = "mesh"))]
+mod from_mesh_tests;
 #[cfg(test)]
 pub(crate) mod readback;
 #[cfg(test)]
@@ -25,6 +29,8 @@ mod tests;
 use crate::UniqueId;
 
 pub(crate) use bits::BitWriter;
+#[cfg(feature = "mesh")]
+pub use from_mesh::{FromMesh, MAX_NODE_COPIES, UpAxis, mesh_scene_from};
 
 /// How a texture repeats outside the 0–1 coordinate range.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]

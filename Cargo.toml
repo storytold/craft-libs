@@ -133,7 +133,7 @@ craft-flow = { path = "crates/flow" }
 craft-gcode = { path = "crates/gcode" }
 craft-gif = { path = "crates/gif" }
 craft-hdr = { path = "crates/hdr" }
-craft-mesh = { path = "crates/mesh" }
+craft-mesh = { path = "crates/mesh", default-features = false }
 craft-html = { path = "crates/html" }
 craft-ipp = { path = "crates/ipp" }
 craft-heif = { path = "crates/heif" }
