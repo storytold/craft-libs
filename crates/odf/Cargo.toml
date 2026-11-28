@@ -1,6 +1,6 @@
 [package]
 name = "craft-odf"
-description = "OpenDocument packages: the ZIP container with its mimetype and manifest, password protection (AES-256-CBC, PBKDF2) and flat single-file documents, read and written."
+description = "OpenDocument packages: the ZIP container with its mimetype and manifest, password protection (AES-256-CBC, PBKDF2) and flat single-file documents, read and written; styles, data styles and units shared by every ODF type."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
