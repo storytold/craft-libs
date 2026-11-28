@@ -12,7 +12,8 @@
 //!
 //! HEIF records orientation in the container (`irot`/`imir`, plus a `clap` crop), not in EXIF.
 //! [`Options::apply_transforms`] applies them; with it off, the pixels come back as coded.
-//! Auxiliary images other than alpha (HDR gain maps, depth maps) are ignored.
+//! Auxiliary images other than alpha (HDR gain maps, depth maps, mattes) are left out of [`decode`]; they are
+//! listed by [`auxiliary_images`] and decoded one at a time by [`decode_auxiliary`].
 //!
 //! Never panics: heic-rs is young, so every call into it runs under `catch_unwind` and a panic
 //! inside it becomes [`Error::Malformed`].
@@ -298,6 +299,177 @@ pub fn read_metadata(bytes: &[u8]) -> Result<(Option<Vec<u8>>, Option<String>), 
         })?;
         Ok(metadata(&ctx))
     })
+}
+
+/// What an auxiliary image is for, from its `auxC` type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuxKind {
+    /// Transparency (`urn:mpeg:hevc:2015:auxid:1`, `…:auxiliary:alpha`).
+    Alpha,
+    /// Depth or disparity (`urn:mpeg:hevc:2015:auxid:2`, `…:auxiliary:depth`), as in an iPhone Portrait photo.
+    Depth,
+    /// Anything else, named by [`Auxiliary::urn`]: Apple's HDR gain map and Portrait mattes, among others.
+    Other,
+}
+
+/// An auxiliary image of the primary image (`auxl`), as the container describes it: nothing is decoded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Auxiliary {
+    /// The item id [`decode_auxiliary`] takes.
+    pub id: u32,
+    pub kind: AuxKind,
+    /// The `auxC` type, verbatim (e.g. `urn:com:apple:photo:2018:aux:portraiteffectsmatte`).
+    pub urn: String,
+    /// Size after the item's own transforms, as [`decode_auxiliary`] returns it with
+    /// [`Options::apply_transforms`]. Usually smaller than the primary image (a depth map is a quarter of it on
+    /// iPhones); the caller scales it.
+    pub width: u32,
+    pub height: u32,
+    /// Bits per sample from `pixi`, when the item has one.
+    pub bit_depth: Option<u8>,
+    /// The XMP packet that describes this item (`cdsc`): how to read its samples. iPhones put a depth map's
+    /// format and range there (`apdi:`), and the Portrait settings (`depthBlurEffect:`).
+    pub xmp: Option<String>,
+}
+
+/// A decoded auxiliary image: one sample per pixel, as coded (a depth map's or matte's values, not scaled to
+/// 16 bits), row-major, no padding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Plane {
+    pub width: u32,
+    pub height: u32,
+    /// Bits per sample as coded: samples run from 0 to `2^bit_depth - 1`.
+    pub bit_depth: u8,
+    pub data: Vec<u16>,
+}
+
+#[cfg(feature = "decode")]
+/// Most auxiliary images listed for one photo (an iPhone Portrait photo has six).
+const MAX_AUXILIARY: usize = 64;
+
+#[cfg(feature = "decode")]
+/// The auxiliary images of the primary image, in `iref` order, read from the container alone. An item whose
+/// properties can't be read, or that has no `auxC`, is left out: one broken auxiliary image never hides the others,
+/// and never affects [`decode`].
+pub fn auxiliary_images(bytes: &[u8]) -> Result<Vec<Auxiliary>, Error> {
+    guarded(|| {
+        let ctx = open_container(bytes)?;
+        let mut out: Vec<Auxiliary> = Vec::new();
+        // the visits of every packet read share one budget, as in `metadata`
+        let mut visits = 0_usize;
+        for id in auxiliary_ids(&ctx) {
+            if out.len() >= MAX_AUXILIARY {
+                break;
+            }
+            let Ok(p) = ctx.props(id) else { continue };
+            let Some(auxc) = p.auxc else { continue };
+            let Ok((cw, ch)) = ctx.coded_size(id, &p) else { continue };
+            let Ok((width, height)) = heic_rs::transform::transformed_size(cw, ch, &p.transforms) else { continue };
+            let xmp = ctx.xmp_item(id).filter(|&x| item_visits(&ctx, x, 0, &mut visits).is_ok()).and_then(|x| packet(&ctx, x));
+            out.push(Auxiliary {
+                id,
+                kind: match auxc.kind {
+                    heic_rs::props::simple::AuxKind::Alpha => AuxKind::Alpha,
+                    heic_rs::props::simple::AuxKind::Depth => AuxKind::Depth,
+                    _ => AuxKind::Other,
+                },
+                urn: auxc.urn.to_string(),
+                width,
+                height,
+                bit_depth: p.pixi.as_ref().and_then(|px| px.bits_per_channel.first().copied()),
+                xmp,
+            });
+        }
+        Ok(out)
+    })
+}
+
+#[cfg(feature = "decode")]
+/// Decodes one auxiliary image of the primary image ([`Auxiliary::id`]): its luma samples as coded, with the item's
+/// own rotation, mirror and crop applied when [`Options::apply_transforms`] (iPhones give each auxiliary image the
+/// primary's rotation, so it lines up with the decoded photo). The same limits as [`decode`] apply; an id that isn't
+/// an auxiliary image of the primary image is refused.
+pub fn decode_auxiliary(bytes: &[u8], id: u32, options: &Options) -> Result<Plane, Error> {
+    guarded(|| {
+        let ctx = open_container(bytes)?;
+        if !auxiliary_ids(&ctx).contains(&id) {
+            return Err(Error::Unsupported("the item is not an auxiliary image of the primary image"));
+        }
+        // the same pre-scan as `probe`: the item and every tile reference are counted before heic-rs rebuilds any
+        let mut visits = 0_usize;
+        item_visits(&ctx, id, 0, &mut visits)?;
+        if let Some((_, tiles)) = ctx.grid(id).map_err(err)? {
+            for &tile in tiles.iter().filter(|&&t| t != id) {
+                item_visits(&ctx, tile, 0, &mut visits)?;
+            }
+        }
+        let p = ctx.props(id).map_err(err)?;
+        if p.transforms.len() > MAX_TRANSFORMS {
+            return Err(Error::Limit(format!(
+                "the image carries {} transform properties, over the {MAX_TRANSFORMS}-property cap",
+                p.transforms.len()
+            )));
+        }
+        check_item_parameter_sets(&p)?;
+        let limit = options.max_pixels;
+        let (cw, ch) = ctx.coded_size(id, &p).map_err(err)?;
+        heic_rs::image::check_pixels(cw, ch, limit).map_err(err)?;
+        let coded = Coded::decode(&ctx, id, &p, limit)?;
+        let planes = coded.planes()?;
+        let (w, h) = planes.size();
+        match (u32::try_from(w), u32::try_from(h)) {
+            (Ok(wu), Ok(hu)) => {
+                heic_rs::image::check_pixels(wu, hu, limit).map_err(err)?;
+            }
+            _ => return Err(Error::Limit(format!("the image canvas is {w}x{h}, beyond the {limit}-pixel limit"))),
+        }
+        let data = ycc::luma(&planes).ok_or_else(|| Error::Malformed("the decoded pictures don't cover the image".into()))?;
+        let bit_depth = planes.bit_depth();
+        let mut img = orient::to_declared(orient::Pixels { width: w, height: h, ch: 1, data }, cw as usize, ch as usize)?;
+        if options.apply_transforms {
+            img = orient::apply(img, &p.transforms)?;
+        }
+        Ok(Plane {
+            width: u32::try_from(img.width).map_err(|_| Error::Limit("image too wide".into()))?,
+            height: u32::try_from(img.height).map_err(|_| Error::Limit("image too tall".into()))?,
+            bit_depth,
+            data: img.data,
+        })
+    })
+}
+
+#[cfg(feature = "decode")]
+/// Opens the container as [`read_metadata`] does: the file size census first, and an image sequence refused with a
+/// clear message.
+fn open_container(bytes: &[u8]) -> Result<Context<'_>, Error> {
+    census::cap(bytes)?;
+    Context::open(bytes).map_err(|e| match e {
+        heic_rs::Error::MissingBox("meta") => Error::Unsupported(SEQUENCE),
+        e => err(e),
+    })
+}
+
+#[cfg(feature = "decode")]
+/// The items auxiliary to the primary image (`auxl`), each once, in `iref` order.
+fn auxiliary_ids(ctx: &Context<'_>) -> Vec<u32> {
+    let primary = ctx.meta.primary;
+    let mut ids = Vec::new();
+    for r in ctx.meta.refs.iter().filter(|r| r.kind == heic_rs::meta::iref::RefKind::Auxl && r.to.contains(&primary)) {
+        if r.from != primary && !ids.contains(&r.from) {
+            ids.push(r.from);
+        }
+    }
+    ids
+}
+
+#[cfg(feature = "decode")]
+/// An XMP item's packet as text, without the NUL padding some writers leave.
+fn packet(ctx: &Context<'_>, item: u32) -> Option<String> {
+    let text = match ctx.item_data(item).ok()? {
+        Cow::Borrowed(b) => String::from_utf8(b.to_vec()).ok()?,
+        Cow::Owned(b) => String::from_utf8(b).ok()?,
+    };
+    Some(text.trim_end_matches('\0').to_string())
 }
 
 #[cfg(feature = "decode")]

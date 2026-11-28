@@ -15,7 +15,8 @@ result matches libheif to within one code value:
 - a grid's ICC profile may sit on its tiles.
 
 Single pictures and grid-tiled photos, 4:2:0 and monochrome, 8- to 10-bit, alpha auxiliary images
-(other auxiliary images — HDR gain maps, depth — are ignored), the container's rotation/mirror/crop,
+(the others — depth maps, mattes, HDR gain maps — are left out of `decode`, and listed and decoded on their own by
+`auxiliary_images` / `decode_auxiliary`), the container's rotation/mirror/crop,
 ICC, EXIF and XMP, and the file's thumbnail item. 4:2:2 and 4:4:4 (Canon/Sony "HIF") are refused
 with `Error::Unsupported`: heic-rs 0.1.1 loses sync on them. Read-only.
 
@@ -25,6 +26,9 @@ let img = craft_heif::decode(&bytes, &craft_heif::Options::default())?;
 // img.width, img.height, img.has_alpha, img.bit_depth, img.data (RGB/RGBA u16), img.colour, img.icc, img.exif, img.xmp
 let thumb = craft_heif::decode_thumbnail(&bytes, 256, &Default::default())?; // Option<Decoded>
 let (exif, xmp) = craft_heif::read_metadata(&bytes)?;  // no picture decoded: for cataloguing
+for aux in craft_heif::auxiliary_images(&bytes)? {           // depth map, mattes…: type, size, XMP
+    let plane = craft_heif::decode_auxiliary(&bytes, aux.id, &Default::default())?; // samples as coded
+}
 ```
 
 Chroma is upsampled like libheif by default.
