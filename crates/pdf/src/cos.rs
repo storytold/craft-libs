@@ -24,6 +24,8 @@ mod writer;
 
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod testkit;
+#[cfg(test)]
+pub(crate) use security::{ALL_FOLLOWED, ALL_FOLLOWED_LIMIT, MAX_FOLLOWED};
 
 pub use crate::crypt::{
     Algorithm, Auth, Method as CryptMethod, NewEncryption, Permissions, SecurityHandler, effective_password, pdfdoc_byte, pdfdoc_char,

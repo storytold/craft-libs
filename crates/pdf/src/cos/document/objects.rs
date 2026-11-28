@@ -767,9 +767,22 @@ impl Document {
             Some(XrefEntry::InFile { offset, .. }) => {
                 let resolve = |r: ObjRef| self.stream_length(r);
                 let off = offset as usize;
-                let at = |off: usize| match parse_indirect_shared(&self.data, off, &resolve, &self.endstreams) {
-                    Ok((id, o)) if id.num == num => Some(self.decrypted(id, o)),
-                    _ => None,
+                let at = |off: usize| {
+                    #[cfg(test)]
+                    {
+                        let parses = super::tests::OFFSET_PARSES.with(|parses| {
+                            let mut parses = parses.borrow_mut();
+                            let count = parses.entry(num).or_default();
+                            *count += 1;
+                            *count
+                        });
+                        let limit = super::tests::OFFSET_PARSE_LIMIT.with(std::cell::Cell::get);
+                        assert!(parses <= limit, "object {num} parsed {parses} times at an offset, more than the {limit} allowed");
+                    }
+                    match parse_indirect_shared(&self.data, off, &resolve, &self.endstreams) {
+                        Ok((id, o)) if id.num == num => Some(self.decrypted(id, o)),
+                        _ => None,
+                    }
                 };
                 // Offsets relative to a shifted header, or simply wrong: try both fixes.
                 at(off)
