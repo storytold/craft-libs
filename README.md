@@ -421,7 +421,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-table`](crates/table/README.md): spreadsheet widgets: the cell grid with Excel's
   keys, outline bands, the PivotTable field list, the condition builder, chart painting, slicers,
   reference picking, selection statistics, error tags and filter buttons (`ui` feature).
-- [`craft-testkit`](crates/testkit/README.md): test support for the apps' own tests. Its `guards` module
+- [`craft-testkit`](crates/testkit/README.md): test support for the apps and the craft-libs crates. Its `bin` module
+  finds a package's binary from its integration tests, also from a relocated nextest archive, and runs it with a
+  limit on its output; SoundCraft, VectorCraft, TextureCraft, FilmCraft and DeckCraft each carry a copy of the
+  lookup today. Its `guards` module
   reports source patterns that broke platforms before: muda's predefined Quit item, WGSL float literals
   out of range, and `std::time::Instant` in code the web build runs. Its `fonts` module makes test fonts
   from font bytes the caller supplies: a face with a renamed family and a TrueType collection. Its
@@ -432,7 +435,8 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   prints a `SKIPPED:` line when a test lacks a program, a corpus or the craft-fonts faces, or fails the
   test when the variable the caller names is `1`. Any other value of that variable except empty fails
   the test as a configuration error. Its `corpus` module (the `corpus` feature) checks a corpus folder
-  against a pinned SHA-256 list. Not published.
+  against a pinned SHA-256 list. Its `oracle` module finds external programs such as ffmpeg and qpdf for
+  tests and reads their version under a byte limit and a timeout. Not published.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each). With `ui`, the canvas text editor, Character and

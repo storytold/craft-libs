@@ -1,9 +1,15 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
-//! Source-level platform regression guards and verification utilities for the Craft application suite.
+
+//! Test support shared by the Craft apps and the craft-libs crates. Apps and craft-libs crates
+//! take it under `[dev-dependencies]`.
 //!
-//! This crate provides non-panicking source analysis guards that detect known platform hazards
-//! and lifecycle regressions across Craft applications:
+//! [`bin`] finds the executable of one of the package's binaries from an integration test, also
+//! when the test runs from a relocated nextest archive ([`bin_path!`]), and runs it with a limit on
+//! the bytes it may write to stdout and stderr ([`bin::run`]). It is native only.
+//!
+//! The source-level platform regression guards detect known platform hazards and lifecycle
+//! regressions across Craft applications:
 //!
 //! * [`guards::predefined_quit`]: flags direct calls to `muda`'s predefined Quit item that bypass
 //!   dirty document save prompts and window teardown on macOS.
@@ -41,6 +47,11 @@
 //! configuration error. `skip::required` reads such a variable under this rule for any caller.
 //! It is not built for `wasm32`. `skip::craft_fonts_cover` needs the `font-coverage` feature.
 //!
+//! `oracle` finds external oracle programs such as ffmpeg and qpdf, probes their version under a
+//! byte limit and a timeout, and caches the result for the process. Its `require_oracle!`,
+//! `require_ffmpeg!` and `require_ffprobe!` macros skip or fail the calling test through `skip`
+//! when a program is missing. It is not built for `wasm32`.
+//!
 //! With the `corpus` feature, `corpus` (native only) parses pinned-corpus manifests and checks a
 //! corpus folder against them: `corpus::Manifest`, `corpus::verify` and the test gate
 //! `corpus::pinned`, which skips or fails under the rule of `skip`.
@@ -65,6 +76,8 @@
 //! [`fonts::rename_family`] gives a face a family name of the same length, and
 //! [`fonts::collection`] builds a TrueType collection from standalone faces.
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod bin;
 #[cfg(all(feature = "corpus", not(target_arch = "wasm32")))]
 pub mod corpus;
 #[cfg(not(target_arch = "wasm32"))]
@@ -74,6 +87,10 @@ pub mod guards;
 pub mod hostile;
 #[cfg(all(feature = "mcp", not(target_arch = "wasm32")))]
 pub mod mcp;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod oracle;
+#[cfg(not(target_arch = "wasm32"))]
+mod process;
 pub mod rng;
 pub mod sample_damage;
 #[cfg(not(target_arch = "wasm32"))]
