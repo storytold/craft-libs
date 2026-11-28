@@ -268,9 +268,14 @@ impl Bvh {
         (&self.tris, &self.order)
     }
 
-    fn slab(lo: Vec3A, hi: Vec3A, o: Vec3A, inv: Vec3A, tmax: f32) -> Option<f32> {
+    fn slab(lo: Vec3A, hi: Vec3A, o: Vec3A, d: Vec3A, inv: Vec3A, tmax: f32) -> Option<f32> {
         let t0 = (lo - o) * inv;
         let t1 = (hi - o) * inv;
+        // On an axis the ray moves along, a difference or a reciprocal past the f32 range gives an
+        // infinite or NaN time where the real time may be finite.
+        if !((t0.is_finite_mask() & t1.is_finite_mask()) | d.cmpeq(Vec3A::ZERO)).all() {
+            return Self::slab_wide(lo, hi, o, d, tmax);
+        }
         // A ray lying in a slab plane gives 0·∞ = NaN: it is inside that slab, so the axis does
         // not bound the hit.
         let open = t0.is_nan_mask() | t1.is_nan_mask();
@@ -278,6 +283,22 @@ impl Bvh {
         let tf = Vec3A::select(open, Vec3A::INFINITY, t0.max(t1)).min_element().min(tmax);
         let margin = 4.0 * f32::EPSILON * tn.abs().max(tf.abs()).min(f32::MAX);
         (tn - margin <= tf + margin).then_some((tn - margin).max(0.0))
+    }
+
+    fn slab_wide(lo: Vec3A, hi: Vec3A, o: Vec3A, d: Vec3A, tmax: f32) -> Option<f32> {
+        let (lo, hi, o) = (Vec3::from(lo).as_dvec3(), Vec3::from(hi).as_dvec3(), Vec3::from(o).as_dvec3());
+        let inv = glam::DVec3::ONE / Vec3::from(d).as_dvec3();
+        let t0 = (lo - o) * inv;
+        let t1 = (hi - o) * inv;
+        // A ray lying in a slab plane gives 0·∞ = NaN: it is inside that slab, so the axis does
+        // not bound the hit.
+        let open = t0.is_nan_mask() | t1.is_nan_mask();
+        let tn = glam::DVec3::select(open, glam::DVec3::NEG_INFINITY, t0.min(t1)).max_element().max(0.0);
+        let tf = glam::DVec3::select(open, glam::DVec3::INFINITY, t0.max(t1)).min_element().min(f64::from(tmax));
+        let margin = 4.0 * f64::from(f32::EPSILON) * tn.abs().max(tf.abs()).min(f64::MAX);
+        // Rounding to f32 moves the entry time by less than the margin, so it stays at or before
+        // the box.
+        (tn - margin <= tf + margin).then_some((tn - margin).max(0.0) as f32)
     }
 
     /// Möller–Trumbore, double sided.
@@ -348,10 +369,11 @@ impl Bvh {
             return None;
         }
         let root = self.nodes.first().filter(|_| !self.tris.is_empty())?;
-        let (oa, inv) = (Vec3A::from(o), Vec3A::ONE / Vec3A::from(d));
+        let (oa, da) = (Vec3A::from(o), Vec3A::from(d));
+        let inv = Vec3A::ONE / da;
         let mut best = None;
         let mut stack = Stack::default();
-        stack.push((0, Self::slab(root.lo, root.hi, oa, inv, tmax)?));
+        stack.push((0, Self::slab(root.lo, root.hi, oa, da, inv, tmax)?));
         // Entries carry their entry distance: nodes behind a closer hit are skipped unopened.
         while let Some((ni, tn)) = stack.pop() {
             let Some(n) = self.nodes.get(ni as usize).filter(|_| tn <= tmax) else { continue };
@@ -373,8 +395,8 @@ impl Bvh {
             } else {
                 // Visit the nearer child first.
                 let (l, r) = (n.first, n.first + 1);
-                let dl = self.nodes.get(l as usize).and_then(|c| Self::slab(c.lo, c.hi, oa, inv, tmax));
-                let dr = self.nodes.get(r as usize).and_then(|c| Self::slab(c.lo, c.hi, oa, inv, tmax));
+                let dl = self.nodes.get(l as usize).and_then(|c| Self::slab(c.lo, c.hi, oa, da, inv, tmax));
+                let dr = self.nodes.get(r as usize).and_then(|c| Self::slab(c.lo, c.hi, oa, da, inv, tmax));
                 match (dl, dr) {
                     (Some(a), Some(b)) if a <= b => {
                         stack.push((r, b));
@@ -528,6 +550,27 @@ mod tests {
         let hit = bvh.closest(Vec3::new(-1.0, 0.0, 41.0), Vec3::new(1.0, 0.0, -41.0), 2.0).unwrap();
         assert!((hit.t - 1.0).abs() < 1e-6);
         assert!(bvh.closest(Vec3::new(-1.0, -0.1, 41.0), Vec3::new(1.0, 0.0, -41.0), 2.0).is_none());
+    }
+
+    #[test]
+    fn slab_times_stay_finite_when_the_origin_is_past_the_f32_range_from_the_box() {
+        // The origin and the triangle are 2^128 apart, past f32::MAX.
+        let h = 2.0_f32.powi(127);
+        let bvh = review_triangle([Vec3::new(0.0, 0.0, -h), Vec3::new(1.0, 0.0, -h), Vec3::new(0.0, 1.0, -h)]);
+        let hit = bvh.closest(Vec3::new(0.25, 0.25, h), Vec3::new(0.0, 0.0, -h), 3.0).unwrap();
+        assert_eq!((hit.t, hit.u, hit.v), (2.0, 0.25, 0.25));
+        assert!(bvh.occluded(Vec3::new(0.25, 0.25, h), Vec3::new(0.0, 0.0, -h), 3.0));
+        assert!(bvh.closest(Vec3::new(0.25, 0.25, h), Vec3::new(0.0, 0.0, -h), 1.5).is_none());
+    }
+
+    #[test]
+    fn slab_times_stay_finite_for_a_subnormal_direction() {
+        // The reciprocal of the direction is past f32::MAX.
+        let bvh = review_triangle([Vec3::ZERO, Vec3::X, Vec3::Y]);
+        let s = 2.0_f32.powi(-70) * 2.0_f32.powi(-70);
+        let hit = bvh.closest(Vec3::new(0.25, 0.25, 2.0 * s), Vec3::new(0.0, 0.0, -s), 3.0).unwrap();
+        assert_eq!((hit.t, hit.u, hit.v), (2.0, 0.25, 0.25));
+        assert!(bvh.closest(Vec3::new(0.25, 0.25, 2.0 * s), Vec3::new(0.0, 0.0, -s), 1.5).is_none());
     }
 
     #[test]
