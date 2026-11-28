@@ -279,7 +279,7 @@ struct ThumbGeometry {
 }
 
 struct KeyState<K> {
-    geometry: HashMap<K, ThumbGeometry>,
+    geometry: HashMap<K, (Revision, ThumbGeometry)>,
     pending_geometry: HashMap<K, (Revision, ThumbGeometry)>,
     force_full: HashSet<K>,
 }
@@ -290,9 +290,14 @@ impl<K> Default for KeyState<K> {
     }
 }
 
+struct Hub<K> {
+    inner: Arc<Mutex<Inner>>,
+    keys: Arc<Mutex<KeyState<K>>>,
+}
+
 /// The shared state of the thumbnails of one context and key type, by the store's salt.
 struct Hubs<K> {
-    by_salt: HashMap<u64, (Arc<Mutex<Inner>>, Arc<Mutex<KeyState<K>>>)>,
+    by_salt: HashMap<u64, Hub<K>>,
     key: std::marker::PhantomData<fn() -> K>,
 }
 
@@ -355,11 +360,11 @@ impl<K: TextureKey> Thumbnails<K> {
         let loader = TextureLoader::in_context(ctx, &salt, loader_options);
         let id = loader.cache().salt();
         let (inner, keys) = memory::with(ctx, |hubs: &mut Hubs<K>| {
-            let entry = hubs
-                .by_salt
-                .entry(id)
-                .or_insert_with(|| (Arc::new(Mutex::new(Inner { options, hold: false, frame: None, renders: 0 })), Arc::new(Mutex::new(KeyState::default()))));
-            (Arc::clone(&entry.0), Arc::clone(&entry.1))
+            let entry = hubs.by_salt.entry(id).or_insert_with(|| Hub {
+                inner: Arc::new(Mutex::new(Inner { options, hold: false, frame: None, renders: 0 })),
+                keys: Arc::new(Mutex::new(KeyState::default())),
+            });
+            (Arc::clone(&entry.inner), Arc::clone(&entry.keys))
         });
         Self { loader, inner, keys }
     }
@@ -379,9 +384,9 @@ impl<K: TextureKey> Thumbnails<K> {
         }
     }
 
-    fn record_resident_geometry(&self, key: &K, geom: ThumbGeometry) {
+    fn record_resident_geometry(&self, key: &K, revision: Revision, geom: ThumbGeometry) {
         let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
-        keys.geometry.insert(key.clone(), geom);
+        keys.geometry.insert(key.clone(), (revision, geom));
         keys.pending_geometry.remove(key);
         keys.force_full.remove(key);
     }
@@ -400,29 +405,46 @@ impl<K: TextureKey> Thumbnails<K> {
     }
 
     fn prune_stale_geometry(&self, ctx: &Context) {
-        let cached_entries = self.loader.cache().statistics(ctx).entries;
-        let (geom_candidates, pending_candidates): (Vec<K>, Vec<K>) = {
+        const SWEEP_LIMIT: usize = 16;
+        let threshold = self.loader.cache().statistics(ctx).entries.max(64);
+        let (geom_candidates, pending_candidates, full_candidates): (Vec<K>, Vec<K>, Vec<K>) = {
             let keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
-            let geom = if keys.geometry.len() > cached_entries { keys.geometry.keys().cloned().collect() } else { Vec::new() };
-            let pending = if keys.pending_geometry.len() > cached_entries {
-                keys.pending_geometry.keys().cloned().collect()
+            let geom = if keys.geometry.len() > threshold {
+                keys.geometry.keys().take(SWEEP_LIMIT).cloned().collect()
             } else {
                 Vec::new()
             };
-            (geom, pending)
+            let pending = if keys.pending_geometry.len() > threshold {
+                keys.pending_geometry.keys().take(SWEEP_LIMIT).cloned().collect()
+            } else {
+                Vec::new()
+            };
+            let full = if keys.force_full.len() > threshold {
+                keys.force_full.iter().take(SWEEP_LIMIT).cloned().collect()
+            } else {
+                Vec::new()
+            };
+            (geom, pending, full)
         };
         let gone_geom: Vec<K> = geom_candidates.into_iter().filter(|k| !self.loader.cache().has_texture(ctx, k)).collect();
         let gone_pending: Vec<K> = pending_candidates
             .into_iter()
             .filter(|k| self.loader.waited(ctx, k).is_none() && !self.loader.cache().has_texture(ctx, k))
             .collect();
-        if !gone_geom.is_empty() || !gone_pending.is_empty() {
+        let gone_full: Vec<K> = full_candidates
+            .into_iter()
+            .filter(|k| self.loader.waited(ctx, k).is_none() && !self.loader.cache().has_texture(ctx, k))
+            .collect();
+        if !gone_geom.is_empty() || !gone_pending.is_empty() || !gone_full.is_empty() {
             let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
             for k in &gone_geom {
                 keys.geometry.remove(k);
             }
             for k in &gone_pending {
                 keys.pending_geometry.remove(k);
+            }
+            for k in &gone_full {
+                keys.force_full.remove(k);
             }
         }
     }
@@ -441,7 +463,7 @@ impl<K: TextureKey> Thumbnails<K> {
                     if let Some((pending_rev, pending_geom)) = keys.pending_geometry.get(key).copied()
                         && pending_rev == res_rev
                     {
-                        keys.geometry.insert(key.clone(), pending_geom);
+                        keys.geometry.insert(key.clone(), (res_rev, pending_geom));
                         keys.pending_geometry.remove(key);
                     }
                 }
@@ -449,7 +471,8 @@ impl<K: TextureKey> Thumbnails<K> {
                     keys.geometry.remove(key);
                 }
             }
-            (keys.geometry.get(key) == Some(&geom), keys.force_full.contains(key))
+            let matches = resident_revision.is_some_and(|res_rev| keys.geometry.get(key) == Some(&(res_rev, geom)));
+            (matches, keys.force_full.contains(key))
         };
         let patchable = !force_full && matches_geom && self.loader.cache().is_patchable(ctx, key);
         let request = ThumbRequest { side, patchable, resident_revision: if patchable { resident_revision } else { None }, ..*request };
@@ -461,13 +484,16 @@ impl<K: TextureKey> Thumbnails<K> {
                     if let Some((pending_rev, pending_geom)) = keys.pending_geometry.get(key).copied()
                         && pending_rev == revision
                     {
-                        keys.geometry.insert(key.clone(), pending_geom);
+                        keys.geometry.insert(key.clone(), (revision, pending_geom));
                         keys.pending_geometry.remove(key);
                     }
                     keys.force_full.remove(key);
                 }
                 TextureState::Empty | TextureState::Failed { .. } => {
-                    self.keys.lock().unwrap_or_else(PoisonError::into_inner).pending_geometry.remove(key);
+                    let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+                    if keys.pending_geometry.get(key).is_some_and(|(pending_rev, _)| *pending_rev == revision) {
+                        keys.pending_geometry.remove(key);
+                    }
                 }
                 TextureState::Loading { .. } | TextureState::Missing => {}
             }
@@ -493,7 +519,7 @@ impl<K: TextureKey> Thumbnails<K> {
             ThumbRender::Ready(image) => {
                 self.loader.cancel(ctx, key);
                 let texture = self.loader.cache().put(ctx, key.clone(), revision, image);
-                self.record_resident_geometry(key, geom);
+                self.record_resident_geometry(key, revision, geom);
                 let mut inner = self.lock();
                 inner.renders += 1;
                 TextureState::Ready(texture)
@@ -504,7 +530,7 @@ impl<K: TextureKey> Thumbnails<K> {
                     self.loader.cache().put_region_checked(ctx, key, Some(base), revision, origin, image)
                 });
                 if let Some(texture) = patched {
-                    self.record_resident_geometry(key, geom);
+                    self.record_resident_geometry(key, revision, geom);
                     let mut inner = self.lock();
                     inner.renders += 1;
                     TextureState::Ready(texture)
@@ -512,7 +538,12 @@ impl<K: TextureKey> Thumbnails<K> {
                     let can_fallback = {
                         let mut inner = self.lock();
                         inner.renders += 1;
-                        !inner.over_budget()
+                        if inner.over_budget() {
+                            false
+                        } else {
+                            inner.renders += 1;
+                            true
+                        }
                     };
                     if !can_fallback {
                         self.keys.lock().unwrap_or_else(PoisonError::into_inner).force_full.insert(key.clone());
@@ -524,9 +555,7 @@ impl<K: TextureKey> Thumbnails<K> {
                         ThumbRender::Ready(image) => {
                             self.loader.cancel(ctx, key);
                             let texture = self.loader.cache().put(ctx, key.clone(), revision, image);
-                            self.record_resident_geometry(key, geom);
-                            let mut inner = self.lock();
-                            inner.renders += 1;
+                            self.record_resident_geometry(key, revision, geom);
                             TextureState::Ready(texture)
                         }
                         ThumbRender::Blank => {
@@ -612,14 +641,16 @@ impl<K: TextureKey> Thumbnails<K> {
     }
 
     /// Keeps only the pictures whose key `keep` accepts (the open documents changed).
-    /// `keep` runs outside the lock; keys inserted concurrently after the snapshot are left untouched.
+    /// `keep` runs once per unique key outside the locks; keys inserted concurrently after the snapshot are left untouched.
     pub fn retain(&self, ctx: &Context, mut keep: impl FnMut(&K) -> bool) {
-        self.loader.cache().retain(ctx, &mut keep);
+        let mut decisions: HashMap<K, bool> = HashMap::new();
+        let mut decide = |k: &K| *decisions.entry(k.clone()).or_insert_with(|| keep(k));
+        self.loader.cache().retain(ctx, &mut decide);
         let snapshot: Vec<K> = {
             let keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
             keys.geometry.keys().chain(keys.pending_geometry.keys()).chain(keys.force_full.iter()).cloned().collect()
         };
-        let dropped: Vec<K> = snapshot.into_iter().filter(|k| !keep(k)).collect();
+        let dropped: Vec<K> = snapshot.into_iter().filter(|k| !decide(k)).collect();
         if !dropped.is_empty() {
             let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
             for k in &dropped {

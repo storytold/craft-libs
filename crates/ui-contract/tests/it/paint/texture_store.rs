@@ -769,3 +769,82 @@ fn thumbnails_background_geometry_reconciles_before_next_request() {
     });
     assert!(!source.seen_patchable.get(), "small request must not patch against newly installed large texture");
 }
+
+#[trial]
+fn packed_cancelled_job_does_not_publish_over_replacement() {
+    let mut frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    let jobs = Arc::new(ManualJobs::new());
+    let loader = TextureLoader::<u32>::in_context(
+        &ctx,
+        "test-packed-cancel",
+        LoaderOptions::new()
+            .store(TextureStoreOptions::thumbnails().packed(64))
+            .jobs(Arc::clone(&jobs) as Arc<dyn craft_host::Jobs>),
+    );
+    let rev = Revision::new(1);
+
+    // Submit a packed-size job, then cancel and replace at the exact same revision before it runs.
+    frame(&mut frames, || {
+        loader.submit(&ctx, 1, rev, Priority::VISIBLE, |_| Ok(LoadedPicture::Image(square(SMALL, shade(10)))));
+    });
+    loader.cancel(&ctx, &1);
+    frame(&mut frames, || {
+        loader.submit(&ctx, 1, rev, Priority::VISIBLE, |_| Ok(LoadedPicture::Image(square(SMALL, shade(200)))));
+    });
+    jobs.run_all();
+    frame(&mut frames, || {
+        assert!(matches!(loader.ask(&ctx, &1, rev, Priority::VISIBLE), Some(TextureState::Ready(_))));
+    });
+    assert!(matches!(loader.cache().state(&ctx, &1, rev), TextureState::Ready(_)));
+
+    // Also verify put_unless_cancelled / packed cancellation stops before publishing when no replacement exists.
+    let rev_2 = Revision::new(2);
+    frame(&mut frames, || {
+        loader.submit(&ctx, 2, rev_2, Priority::VISIBLE, |_| Ok(LoadedPicture::Image(square(SMALL, shade(50)))));
+    });
+    loader.cancel(&ctx, &2);
+    jobs.run_all();
+    frame(&mut frames, || {
+        assert_eq!(loader.ask(&ctx, &2, rev_2, Priority::VISIBLE), None);
+    });
+    assert!(matches!(loader.cache().state(&ctx, &2, rev_2), TextureState::Missing));
+}
+
+#[trial]
+fn put_region_checked_honors_mark_unpatchable_and_texture_size_reflects_reduction() {
+    let frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    ctx.input_mut(|i| i.max_texture_side = 256);
+    let store = TextureStore::<u32>::in_context(&ctx, "test-unpatchable-and-size", TextureStoreOptions::thumbnails());
+    let rev_1 = Revision::new(1);
+    let rev_2 = Revision::new(2);
+
+    store.put(&ctx, 1, rev_1, ColorImage::filled([512, 512], shade(50)));
+    assert_eq!(store.texture_size(&ctx, &1), Some(PixelSize::new(256, 256)));
+
+    store.put(&ctx, 2, rev_1, square(LARGE, shade(50)));
+    store.mark_unpatchable(&ctx, &2);
+    assert!(store.put_region_checked(&ctx, &2, Some(rev_1), rev_2, [0, 0], square(SMALL, shade(200))).is_none());
+    assert_eq!(store.texture_revision(&ctx, &2), Some(rev_1));
+}
+
+#[trial]
+fn thumbnails_geometry_invalidated_when_cache_put_directly() {
+    let mut frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    let thumbs = Thumbnails::<u32>::in_context(&ctx, "test-direct-put-geom", ThumbnailOptions::new());
+    let source = TestPatchSource { seen_patchable: Cell::new(false), seen_resident_revision: Cell::new(None), render_count: Cell::new(0) };
+    let req = ThumbRequest::for_cell(LARGE as f32, 1.0);
+
+    frame(&mut frames, || {
+        assert!(matches!(thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE), TextureState::Ready(_)));
+    });
+    // Replace directly in the store at a different revision
+    thumbs.cache().put(&ctx, 1, Revision::new(999), square(64, shade(90)));
+
+    frame(&mut frames, || {
+        assert!(matches!(thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE), TextureState::Ready(_)));
+    });
+    assert!(!source.seen_patchable.get(), "direct store put must invalidate old geometry");
+}

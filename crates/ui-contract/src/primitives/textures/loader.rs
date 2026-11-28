@@ -1,6 +1,6 @@
 //! `TextureLoader<K>`: a `TextureStore` fed by background jobs on a `craft_host::queue::JobQueue` per context.
 
-use super::store::{Revision, TextureKey, TextureState, TextureStore, TextureStoreOptions};
+use super::store::{RegionPatch, Revision, TextureKey, TextureState, TextureStore, TextureStoreOptions};
 use super::words::TextureWords;
 use crate::runtime::egui::{memory, pass, repaint};
 use crate::runtime::env::Env;
@@ -284,7 +284,7 @@ impl<K: TextureKey> TextureLoader<K> {
         let stand_in = self.store.state(ctx, &key, revision).shown();
         let frame = pass::root_frame_nr(ctx);
         let queued = pass::now(ctx);
-        let id = self.with(ctx, |pool| {
+        self.with(ctx, |pool| {
             pool.next_id += 1;
             let id = pool.next_id;
             if let Some(old) = pool.asked.insert(
@@ -294,12 +294,11 @@ impl<K: TextureKey> TextureLoader<K> {
                 old.cancelled.store(true, Ordering::Release);
             }
             pool.rejected_patches.remove(&key);
-            id
-        });
-        // A panicking job is a failure, not a key that stays Loading for good.
-        self.queue.submit(key, priority, move |cancel| {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(cancel))).unwrap_or(Err(LoadFailure::Panicked));
-            (id, revision, result)
+            // A panicking job is a failure, not a key that stays Loading for good.
+            pool.queue.submit(key, priority, move |cancel| {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(cancel))).unwrap_or(Err(LoadFailure::Panicked));
+                (id, revision, result)
+            });
         });
         if self.lanes == 0 {
             // The job runs in the next frame's `run_frame_work`; the web repaints only on input.
@@ -408,7 +407,7 @@ impl<K: TextureKey> TextureLoader<K> {
                         need_repaint = true;
                         break;
                     }
-                    if self.store.put_unless_cancelled(ctx, key.clone(), revision, image, Some(&cancelled)).is_some() {
+                    if self.store.put_unless_cancelled(ctx, key.clone(), revision, image, &cancelled).is_some() {
                         stored.push((key, id));
                     }
                 }
@@ -419,7 +418,12 @@ impl<K: TextureKey> TextureLoader<K> {
                         need_repaint = true;
                         break;
                     }
-                    match self.store.put_region_unless_cancelled(ctx, &key, Some(baseline), revision, origin, image, Some(&cancelled)) {
+                    match self.store.put_region_unless_cancelled(
+                        ctx,
+                        &key,
+                        revision,
+                        RegionPatch { baseline: Some(baseline), origin, image, cancelled: Some(&cancelled) },
+                    ) {
                         Ok(Some(_)) => stored.push((key, id)),
                         Ok(None) => {
                             rejected.push((key, id, revision));
@@ -447,14 +451,14 @@ impl<K: TextureKey> TextureLoader<K> {
             for (key, id) in stored {
                 if pool.asked.get(&key).is_some_and(|a| a.id == id) {
                     pool.asked.remove(&key);
+                    pool.rejected_patches.remove(&key);
                 }
-                pool.rejected_patches.remove(&key);
             }
             for (key, id, revision) in rejected {
                 if pool.asked.get(&key).is_some_and(|a| a.id == id) {
                     pool.asked.remove(&key);
+                    pool.rejected_patches.insert(key, revision);
                 }
-                pool.rejected_patches.insert(key, revision);
             }
             pool.waiting.splice(0..0, deferred);
         });
