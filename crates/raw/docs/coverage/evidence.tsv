@@ -270,6 +270,29 @@ Nikon	COOLPIX 8800	unsupported	bulk: raw.pixls.us CC0 file decodes wrongly (two 
 Olympus	E-1	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Olympus	EVOLT E-400	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Olympus	Stylus XZ-2 iHS	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Olympus	E-3	verified	crates/raw/tests/orf_corpus.rs: CC0 1803, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	EVOLT E-410	verified	crates/raw/tests/orf_corpus.rs: CC0 1173, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	E-620	verified	crates/raw/tests/orf_corpus.rs: CC0 1805, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M1	verified	crates/raw/tests/orf_corpus.rs: CC0 1051, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M1 Mark II	verified	crates/raw/tests/orf_corpus.rs: CC0 1993, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M1 Mark III	verified	crates/raw/tests/orf_corpus.rs: CC0 3800, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M5 Mark II	verified	crates/raw/tests/orf_corpus.rs: CC0 2857 ORI companion (compressed ORF container), full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M5 Mark III	verified	crates/raw/tests/orf_corpus.rs: CC0 3573 compressed 80 MP high-res, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M10 Mark III	verified	crates/raw/tests/orf_corpus.rs: CC0 1787, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M10 Mark IV	verified	crates/raw/tests/orf_corpus.rs: CC0 4126, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	PEN E-P1	verified	crates/raw/tests/orf_corpus.rs: CC0 5099, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	PEN E-P3	verified	crates/raw/tests/orf_corpus.rs: CC0 241, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	PEN E-P7	verified	crates/raw/tests/orf_corpus.rs: CC0 5980, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	PEN E-PL7	verified	crates/raw/tests/orf_corpus.rs: CC0 1431, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	PEN-F	verified	crates/raw/tests/orf_corpus.rs: CC0 2977 80 MP 12.8-bpp high-res, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	Stylus SH-2	verified	crates/raw/tests/orf_corpus.rs: CC0 792, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	Stylus Tough TG-6	verified	crates/raw/tests/orf_corpus.rs: CC0 3210, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM System OM-1	verified	crates/raw/tests/orf_corpus.rs: CC0 5283, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM System OM-1 MARK II	verified	crates/raw/tests/orf_corpus.rs: CC0 7262, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM System OM-3	verified	crates/raw/tests/orf_corpus.rs: CC0 7796, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM System OM-5	verified	crates/raw/tests/orf_corpus.rs: CC0 6343, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM-5 Mark II	verified	crates/raw/tests/orf_corpus.rs: CC0 8549, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM System TG - 7	verified	crates/raw/tests/orf_corpus.rs: CC0 6946, full sensor SHA256 exact against unprocessed_raw 0.22.2
 Panasonic	LUMIX DC - G97 (DC-G99M2)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
 Panasonic	LUMIX DC-FZ1000M2 (DC-FZ10002)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
 Panasonic	LUMIX DC-FZ80 (DC-FZ82, DC-FZ85)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
@@ -514,15 +537,12 @@ Olympus	SP-550 UZ	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs
 Olympus	E-10	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash)
 Olympus	Camedia C-5060 Zoom	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	SP-565 UZ	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	OM-D E-M5 Mark II	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	EVOLT E-300	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	Stylus SH-2	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	Camedia C-7070 Wide Zoom	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	Stylus XZ-10	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	EVOLT E-330	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	SP-570 UZ	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	SP-510 UZ	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	PEN-F	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	EVOLT E-500	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Samsung	TL350 (WB2000)	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Samsung	NX1000	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -576,5 +596,3 @@ Canon	EOS 300D (EOS Digital Rebel, EOS Kiss Digital)	verified	corpus: crates/raw
 Canon	PowerShot G1	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Canon	PowerShot G6	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Canon	PowerShot G5	preview	CRW entropy anomaly (craft-libs crates/crw/clean-room/02-crw-format.md section 4); embedded JPEG
-Olympus	OM-D E-M1	preview	compressed ORF support withdrawn pending provenance review; embedded JPEG
-Olympus	OM-D E-M10 Mark III	preview	compressed ORF support withdrawn pending provenance review; embedded JPEG
