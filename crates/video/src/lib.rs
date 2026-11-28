@@ -21,7 +21,8 @@
 //! | `av1` | `av1` | AV1 (AOMedia Video 1): decoder (`av1-decode`) and encoder (`av1-encode`) |
 //! | `smacker` | `smacker` | Smacker video (8-bit paletted): decoder (`smacker-decode`) |
 //! | `vmd` | `vmd` | Sierra VMD video (8-bit paletted): decoder (`vmd-decode`) |
-//! | `bink` | `bink` | Bink video (Bink 1, revisions `f` and `i`): decoder (`bink-decode`) |//!
+//! | `bink` | `bink` | Bink video (Bink 1, revisions `f` and `i`): decoder (`bink-decode`) |
+//!
 //! No codec is on by default. Feature `threads` spreads the work of the codecs that support it
 //! over rayon worker threads.
 //!
