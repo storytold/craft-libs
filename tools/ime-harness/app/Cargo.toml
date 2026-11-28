@@ -1,0 +1,32 @@
+[package]
+name = "ime-harness-app"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Standalone: not a member of the craft-libs workspace.
+[workspace]
+
+[dependencies]
+eframe = { version = "0.37", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "wayland",
+    "x11",
+] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# To test patched toolkits, uncomment, run `cargo update` and rebuild the image (README.md).
+# Every egui crate in the build must come from the same source.
+# [patch.crates-io]
+# egui = { git = "https://github.com/aiongg/egui", branch = "craft/0.37" }
+# egui-winit = { git = "https://github.com/aiongg/egui", branch = "craft/0.37" }
+# egui_glow = { git = "https://github.com/aiongg/egui", branch = "craft/0.37" }
+# epaint = { git = "https://github.com/aiongg/egui", branch = "craft/0.37" }
+# emath = { git = "https://github.com/aiongg/egui", branch = "craft/0.37" }
+# ecolor = { git = "https://github.com/aiongg/egui", branch = "craft/0.37" }
+# eframe = { git = "https://github.com/aiongg/egui", branch = "craft/0.37" }
+# epaint_default_fonts = { git = "https://github.com/aiongg/egui", branch = "craft/0.37" }
+# winit = { git = "https://github.com/storytold/winit", branch = "<branch>" }

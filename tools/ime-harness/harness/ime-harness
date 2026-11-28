@@ -1,0 +1,352 @@
+#!/usr/bin/env bash
+# Runs IME cases against the egui test app inside the harness container.
+#
+#   ime-harness list
+#   ime-harness run <backend> <case>
+#   ime-harness all
+#
+# Each run starts its own display server, D-Bus session and IME framework, so cases are isolated.
+# Logs go to $IME_HARNESS_RESULTS/<backend>-<case>/ when that directory is set (mount one with
+# `-v`), otherwise to a directory under /tmp inside the container.
+
+set -uo pipefail
+
+HERE=$(dirname "$(readlink -f "$0")")
+
+BACKENDS=(fcitx5-x11 fcitx5-x11-onthespot fcitx5-sway ibus-x11)
+ENGINES=(pinyin hangul telex anthy)
+# A case is an engine name, optionally with an action the harness performs after switching the
+# input method and before typing:
+#   -click    click into the already focused TextEdit, as a user does (X11 only: wlrctl's virtual
+#             pointer exists only for the duration of one command, so its click never arrives)
+#   -hotplug  add and remove a pointer device on the seat (sway only), as when a mouse or tablet
+#             connects
+CASES=("${ENGINES[@]}" pinyin-click pinyin-hotplug)
+
+# Keys are X keysym names; both xdotool and wtype take them.
+engine_keys() {
+    case $1 in
+        pinyin) echo "n i h a o space" ;;
+        hangul) echo "g k s r m f space" ;;
+        telex) echo "t i e e s n g space" ;;
+        anthy) echo "n i h o n g o space Return" ;;
+    esac
+}
+
+engine_expect() {
+    case $1 in
+        pinyin) printf '你好' ;;
+        hangul) printf '한글 ' ;;
+        telex) printf 'tiếng ' ;;
+        anthy) printf '日本語' ;;
+    esac
+}
+
+fcitx5_im() {
+    case $1 in
+        pinyin) echo pinyin ;;
+        hangul) echo hangul ;;
+        telex) echo unikey ;;
+        anthy) echo anthy ;;
+    esac
+}
+
+ibus_engine() {
+    case $1 in
+        pinyin) echo libpinyin ;;
+        hangul) echo hangul ;;
+        telex) echo Unikey ;;
+        anthy) echo anthy ;;
+    esac
+}
+
+log() { printf '[%s] %s\n' "$(date +%T.%3N)" "$*" >&2; }
+
+# wait_for <seconds> <command...>: retries the command every 100 ms.
+wait_for() {
+    local deadline=$((SECONDS + $1))
+    shift
+    until "$@" >/dev/null 2>&1; do
+        ((SECONDS < deadline)) || return 1
+        sleep 0.1
+    done
+}
+
+bus_has_name() {
+    dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+        org.freedesktop.DBus.NameHasOwner "string:$1" | grep -q 'boolean true'
+}
+
+start_dbus() {
+    DBUS_SESSION_BUS_ADDRESS=$(dbus-daemon --session --fork --print-address=1) || return 1
+    export DBUS_SESSION_BUS_ADDRESS
+}
+
+start_xvfb() {
+    Xvfb :99 -screen 0 1024x768x24 -nolisten tcp >"$LOGS/xvfb.log" 2>&1 &
+    export DISPLAY=:99
+    wait_for 10 xdpyinfo || { log "Xvfb did not start"; return 1; }
+}
+
+start_sway() {
+    export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
+    unset DISPLAY
+    sway --config "$HERE/sway.config" >"$LOGS/sway.log" 2>&1 &
+    local sock
+    wait_for 10 compgen -G "$XDG_RUNTIME_DIR/wayland-*.lock" || { log "sway did not start"; return 1; }
+    sock=$(compgen -G "$XDG_RUNTIME_DIR/wayland-*.lock" | head -n1)
+    sock=${sock%.lock}
+    export WAYLAND_DISPLAY=${sock##*/}
+    wait_for 10 compgen -G "$XDG_RUNTIME_DIR/sway-ipc.*.sock" || { log "no sway IPC socket"; return 1; }
+    SWAYSOCK=$(compgen -G "$XDG_RUNTIME_DIR/sway-ipc.*.sock" | head -n1)
+    export SWAYSOCK
+    # A headless seat has no keyboard, and winit creates its text-input object only once the seat
+    # has one; sway then never sends it `enter` for the already focused window. Hold a virtual
+    # keyboard for the whole run, as a real seat would have.
+    wtype -s 86400000 >"$LOGS/wtype-hold.log" 2>&1 &
+    wait_for 5 sway_has_keyboard || { log "no virtual keyboard"; return 1; }
+}
+
+sway_has_keyboard() {
+    swaymsg -t get_inputs | grep -q '"type": "keyboard"'
+}
+
+# Writes a fcitx5 profile with the case's input method as the group's second entry; the harness
+# activates it once the app has focus.
+write_fcitx5_config() {
+    local im=$1 dir=$XDG_CONFIG_HOME/fcitx5
+    mkdir -p "$dir/conf"
+    cat >"$dir/profile" <<EOF
+[Groups/0]
+Name=Default
+Default Layout=us
+DefaultIM=$im
+
+[Groups/0/Items/0]
+Name=keyboard-us
+Layout=
+
+[Groups/0/Items/1]
+Name=$im
+Layout=
+
+[GroupOrder]
+0=Default
+EOF
+    cat >"$dir/config" <<EOF
+[Behavior]
+ShowInputMethodInformation=False
+EOF
+    # Pinyin's cloud lookup needs the network and changes candidate order.
+    printf 'CloudPinyinEnabled=False\n' >"$dir/conf/pinyin.conf"
+    # fcitx5 offers only over-the-spot XIM styles unless this is set; winit then gets no preedit.
+    if [[ $BACKEND == fcitx5-x11-onthespot ]]; then
+        printf 'UseOnTheSpot=True\n' >"$dir/conf/xim.conf"
+    fi
+}
+
+start_fcitx5() {
+    write_fcitx5_config "$1"
+    WAYLAND_DEBUG=${FCITX_WAYLAND_DEBUG:-} fcitx5 --verbose="${FCITX5_VERBOSE:-*=4}" >"$LOGS/fcitx5.log" 2>&1 &
+    # Not `fcitx5-remote`: it would start a second fcitx5 through D-Bus activation.
+    wait_for 15 bus_has_name org.fcitx.Fcitx5 || { log "fcitx5 did not start"; return 1; }
+    sleep 1
+}
+
+start_ibus() {
+    local engine=$1
+    # ibus-hangul and ibus-anthy start in Latin mode unless told otherwise (anthy: 0 = hiragana).
+    gsettings set org.freedesktop.ibus.engine.hangul initial-input-mode hangul >/dev/null 2>&1
+    gsettings set org.freedesktop.ibus.engine.anthy.common input-mode 0 >/dev/null 2>&1
+    ibus-daemon --xim --replace --daemonize --verbose >"$LOGS/ibus.log" 2>&1
+    wait_for 15 ibus engine || { log "ibus did not start"; return 1; }
+    # `ibus engine <name>` can exit 1 although it switched; check the result instead.
+    ibus engine "$engine" >/dev/null 2>&1
+    [[ $(ibus engine 2>/dev/null) == "$engine" ]] || { log "ibus cannot select $engine"; return 1; }
+    sleep 1
+}
+
+launch_app() {
+    WAYLAND_DEBUG=${APP_WAYLAND_DEBUG:-} IME_HARNESS_OUT=$OUT ime-harness-app >"$LOGS/app.log" 2>&1 &
+    case $DISPLAY_SERVER in
+        x11)
+            # No window manager on Xvfb, so focus the window explicitly.
+            local wid
+            wid=$(timeout 20 xdotool search --sync --onlyvisible --name '^ime-harness$' | head -n1)
+            [[ -n $wid ]] || { log "app window did not appear"; return 1; }
+            xdotool windowfocus --sync "$wid"
+            ;;
+        sway)
+            wait_for 20 sway_has_app || { log "app window did not appear"; return 1; }
+            ;;
+    esac
+}
+
+sway_has_app() {
+    swaymsg -t get_tree | grep -q '"app_id": "ime-harness"'
+}
+
+# The app reports ready once its window and its TextEdit both have keyboard focus.
+wait_ready() {
+    wait_for 20 grep -q 'ime-harness: ready' "$LOGS/app.log" && return 0
+    log "app not ready (window focus or TextEdit focus missing)"
+    return 1
+}
+
+activate_im() {
+    case $FRAMEWORK in
+        fcitx5)
+            fcitx5-remote -s "$(fcitx5_im "$ENGINE")"
+            fcitx5-remote -o
+            log "fcitx5 state $(fcitx5-remote 2>/dev/null), IM $(fcitx5-remote -n 2>/dev/null)"
+            ;;
+        ibus)
+            ibus engine "$(ibus_engine "$ENGINE")" >/dev/null 2>&1
+            log "ibus engine $(ibus engine 2>/dev/null)"
+            ;;
+    esac
+    sleep 0.5
+}
+
+# The TextEdit fills the window, so any point inside it works.
+click_text_edit() {
+    local wid
+    wid=$(xdotool search --name '^ime-harness$' | head -n1)
+    xdotool mousemove --window "$wid" 100 60 click 1
+    sleep 0.5
+}
+
+hotplug_pointer() {
+    wlrctl pointer move 10 10
+    sleep 0.5
+}
+
+send_keys() {
+    local keys
+    read -ra keys <<<"$(engine_keys "$ENGINE")"
+    case $DISPLAY_SERVER in
+        x11) xdotool key --delay 120 "${keys[@]}" ;;
+        sway)
+            local args=(-d 120) k
+            for k in "${keys[@]}"; do args+=(-k "$k"); done
+            wtype "${args[@]}"
+            ;;
+    esac
+}
+
+# Matches process names (not command lines), so the harness script itself is never matched.
+SERVICES='^(Xvfb|sway|wtype|fcitx5|ibus.*|dbus-daemon|ime-harness-app)$'
+
+stop_all() {
+    pkill -u "$(id -u)" "$SERVICES" 2>/dev/null
+    wait_for 5 bash -c "! pgrep -u $(id -u) '$SERVICES'" || pkill -9 -u "$(id -u)" "$SERVICES" 2>/dev/null
+}
+
+run_case() {
+    BACKEND=$1 CASE=$2
+    case $BACKEND in
+        fcitx5-x11 | fcitx5-x11-onthespot) FRAMEWORK=fcitx5 DISPLAY_SERVER=x11 ;;
+        fcitx5-sway) FRAMEWORK=fcitx5 DISPLAY_SERVER=sway ;;
+        ibus-x11) FRAMEWORK=ibus DISPLAY_SERVER=x11 ;;
+        *) echo "unknown backend: $BACKEND" >&2; return 2 ;;
+    esac
+    ENGINE=${CASE%%-*}
+    ACTION=
+    [[ $CASE == *-* ]] && ACTION=${CASE#*-}
+    [[ -n $(engine_keys "$ENGINE") ]] || { echo "unknown case: $CASE" >&2; return 2; }
+    case $ACTION:$DISPLAY_SERVER in
+        :* | click:x11 | hotplug:sway) ;;
+        click:* | hotplug:*)
+            echo "SKIP $BACKEND $CASE: not available on $DISPLAY_SERVER"
+            return 0
+            ;;
+        *) echo "unknown case: $CASE" >&2; return 2 ;;
+    esac
+
+    local work
+    work=$(mktemp -d /tmp/ime-harness.XXXXXX)
+    if [[ -n ${IME_HARNESS_RESULTS:-} ]]; then
+        LOGS=$IME_HARNESS_RESULTS/$BACKEND-$CASE
+    else
+        LOGS=$work/logs
+    fi
+    rm -rf "$LOGS"
+    mkdir -p "$LOGS"
+    OUT=$work/out.txt
+    export HOME=$work/home XDG_CONFIG_HOME=$work/home/.config XDG_RUNTIME_DIR=$work/run
+    mkdir -p "$HOME" "$XDG_CONFIG_HOME"
+    mkdir -m 700 "$XDG_RUNTIME_DIR"
+    # Xlib converts XIM commits through the locale; under the C locale CJK commits come back empty.
+    export LANG=C.UTF-8 LC_ALL=C.UTF-8
+    export LIBGL_ALWAYS_SOFTWARE=1 GSETTINGS_BACKEND=dconf
+    unset XMODIFIERS GTK_IM_MODULE QT_IM_MODULE
+
+    (
+        exec 2> >(tee -a "$LOGS/harness.log" >&2)
+        trap stop_all EXIT
+        start_dbus || exit 3
+        case $DISPLAY_SERVER in
+            x11) start_xvfb || exit 3 ;;
+            sway) start_sway || exit 3 ;;
+        esac
+        case $FRAMEWORK in
+            fcitx5)
+                start_fcitx5 "$(fcitx5_im "$ENGINE")" || exit 3
+                [[ $DISPLAY_SERVER == x11 ]] && export XMODIFIERS=@im=fcitx
+                ;;
+            ibus)
+                start_ibus "$(ibus_engine "$ENGINE")" || exit 3
+                export XMODIFIERS=@im=ibus
+                ;;
+        esac
+        launch_app || exit 3
+        wait_ready || exit 3
+        activate_im
+        case $ACTION in
+            click) click_text_edit ;;
+            hotplug) hotplug_pointer ;;
+        esac
+        send_keys || { log "key injection failed"; exit 3; }
+        sleep 1.5
+
+        local got expect
+        got=$(cat "$OUT"; printf x)
+        got=${got%x}
+        expect=$(engine_expect "$ENGINE")
+        printf '%s' "$got" >"$LOGS/committed.txt"
+        if [[ $got == "$expect" ]]; then
+            echo "PASS $BACKEND $CASE: $(printf '%q' "$got")"
+            exit 0
+        fi
+        echo "FAIL $BACKEND $CASE: expected $(printf '%q' "$expect"), got $(printf '%q' "$got")"
+        grep -E 'ime-harness: (event|text)' "$LOGS/app.log" | sed 's/^/    /' | head -40
+        exit 1
+    )
+    local status=$?
+    ((status == 3)) && echo "ERROR $BACKEND $CASE: setup failed, logs in $LOGS"
+    return $status
+}
+
+case ${1:-list} in
+    list)
+        echo "backends: ${BACKENDS[*]}"
+        echo "cases:    ${CASES[*]}"
+        ;;
+    run)
+        [[ $# -eq 3 ]] || { echo "usage: ime-harness run <backend> <case>" >&2; exit 2; }
+        run_case "$2" "$3"
+        ;;
+    all)
+        status=0
+        for b in "${BACKENDS[@]}"; do
+            for c in "${CASES[@]}"; do
+                run_case "$b" "$c" 2>/dev/null | grep -v '^    ' || status=1
+            done
+        done
+        exit $status
+        ;;
+    *)
+        echo "usage: ime-harness list | run <backend> <case> | all" >&2
+        exit 2
+        ;;
+esac
