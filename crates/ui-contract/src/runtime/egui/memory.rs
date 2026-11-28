@@ -3,7 +3,7 @@
 use egui::util::IdTypeMap;
 use egui::util::id_type_map::RawKey;
 use egui::{Context, Id};
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -170,14 +170,98 @@ pub fn service_lookups() -> u64 {
     LOOKUPS.with(std::cell::Cell::get)
 }
 
+/// The context data slot every service sits under, one per type.
+fn service_slot() -> Id {
+    static SLOT: OnceLock<Id> = OnceLock::new();
+    *SLOT.get_or_init(|| unique("craft_ui.service"))
+}
+
+/// How to move one service type's handle out of context data and back: every type a context created, so
+/// [`keep_own_services`] can tell runtime state from the rest of a context's data.
+#[derive(Clone, Copy)]
+struct Kind {
+    take: fn(&mut Map) -> Option<Removed>,
+    put: fn(&mut Map, Removed) -> Option<Removed>,
+}
+
+fn kinds() -> &'static Mutex<FastMap<TypeId, Kind>> {
+    static KINDS: OnceLock<Mutex<FastMap<TypeId, Kind>>> = OnceLock::new();
+    KINDS.get_or_init(Mutex::default)
+}
+
+fn take_service<S: Send + 'static>(data: &mut Map) -> Option<Removed> {
+    take_raw::<Service<S>>(data, service_slot())
+}
+
+fn put_service<S: Send + 'static>(data: &mut Map, handle: Removed) -> Option<Removed> {
+    match handle.downcast::<Service<S>>() {
+        Ok(handle) => put_boxed(data, service_slot(), handle),
+        Err(other) => Some(other),
+    }
+}
+
+/// Whether `from` and `to` are one context: two handles to the same egui `Context` share their data, so a fork would
+/// copy a context onto itself and detach the original's own state instead of a copy's.
+///
+/// `Context::ptr_eq` answers exactly that: the handles are `Clone` around one `Arc`, so a clone compares equal and any
+/// two contexts an app built separately do not, whatever either holds. (A probe written into one context and read from
+/// the other would answer the same question, but two forks running in opposite directions at once would each see the
+/// other's probe and both would refuse a pair that is not aliased.)
+pub(crate) fn aliased(from: &Context, to: &Context) -> bool {
+    from.ptr_eq(to)
+}
+
+/// Replaces `to`'s egui memory with a copy of `from`'s, and leaves `to` with its own runtime services (see
+/// [`keep_own_services`]). Both contexts' egui memory closures stay in this module, the one layer the workspace's
+/// `contract/egui-import` rule lets at egui's memory.
+pub(crate) fn copy_memory(from: &Context, to: &Context) {
+    let copied = from.memory(Clone::clone);
+    let mut replaced = None;
+    let gone = keep_own_services(to, || replaced = Some(to.memory_mut(|memory| std::mem::replace(memory, copied))));
+    drop(replaced);
+    drop(gone);
+}
+
+/// Runs `copy` (which replaces `to`'s egui memory) and leaves `to` with the runtime services it had before: the
+/// handles `copy` brought in share another context's state (a `Service` clone shares it), so they are dropped, and a
+/// type `to` had none of starts fresh on first use. Returns what was moved out, to drop outside every lock.
+pub(crate) fn keep_own_services(to: &Context, copy: impl FnOnce()) -> Vec<Removed> {
+    /// The service types a context has created, read with context data held: `Service::of` registers a type's kind under
+    /// that same lock before it publishes the handle, so a snapshot taken here holds every handle already in the data.
+    /// Returns them with context data held, as `of` takes them in that order too (data, then kinds).
+    fn kinds_of() -> Vec<Kind> {
+        kinds().lock().unwrap_or_else(PoisonError::into_inner).values().copied().collect()
+    }
+    let own: Vec<(Kind, Removed)> = locked(to, |data| kinds_of().iter().filter_map(|kind| (kind.take)(data).map(|handle| (*kind, handle))).collect());
+    copy();
+    // Read after the copy: a type created while it ran is in this list too, so the handle it brought in is removed.
+    let kinds = kinds_of();
+    locked(to, |data| {
+        let mut gone: Vec<Removed> = kinds.iter().filter_map(|kind| (kind.take)(data)).collect();
+        gone.extend(own.into_iter().filter_map(|(kind, handle)| (kind.put)(data, handle)));
+        gone
+    })
+}
+
 impl<S: Default + Send + 'static> Service<S> {
     /// The context's service of type `S`, created on first use.
     pub(crate) fn of(ctx: &Context) -> Service<S> {
         #[cfg(feature = "testing")]
         LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
-        static SLOT: OnceLock<Id> = OnceLock::new();
-        let slot = *SLOT.get_or_init(|| unique("craft_ui.service"));
-        locked(ctx, |data| data.get_temp_mut_or_default::<Service<S>>(slot).clone())
+        let slot = service_slot();
+        locked(ctx, |data| match data.get_temp::<Service<S>>(slot) {
+            Some(handle) => handle,
+            None => {
+                // The kind goes in before the handle does, under the data lock a fork holds while it copies: a fork
+                // that copies this handle therefore finds its kind and removes it from the copy.
+                kinds()
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .entry(TypeId::of::<S>())
+                    .or_insert(Kind { take: take_service::<S>, put: put_service::<S> });
+                data.get_temp_mut_or_default::<Service<S>>(slot).clone()
+            }
+        })
     }
 
     /// Runs `f` on the context's service of type `S`, created on first use.

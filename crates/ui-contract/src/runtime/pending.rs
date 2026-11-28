@@ -224,8 +224,45 @@ pub fn finish_jobs(ctx: &Context, timeout: Duration) -> bool {
     queue.is_none_or(|queue| queue.finish(timeout))
 }
 
+/// The slot types a fork detaches, one entry per type, added when its first slot is tracked.
+/// Detaches the copied slot `Id` in the context the fork made: the `PendingSlot` type states what it drops.
+type Detacher = fn(&Context, Id);
+
+static DETACHERS: Mutex<Vec<(TypeId, Detacher)>> = Mutex::new(Vec::new());
+
+/// Detaches the pending results of the copied slot `id`: the fork keeps what the slot showed and drops the `Started`
+/// it shared with the context it was copied from, so it neither takes that context's landed result nor holds its
+/// cancellation.
+fn detach_slot<T: Clone + Send + Sync + 'static, E: Clone + Send + Sync + 'static>(ctx: &Context, id: Id) {
+    memory::edit_shown::<PendingSlot<T, E>>(ctx, id, |slot| slot.started = None);
+}
+
+/// Detaches the pending results `from` started from `to`, which copied `from`'s memory (`memory::fork_into`): each
+/// copied slot drops the `Started` handle it shares with `from`, so neither context takes the other's landed result, and
+/// the window alone keeps the handle whose drop cancels the job. `to` submits its own job on its next real pass.
+pub(crate) fn detach_fork(from: &Context, to: &Context) {
+    let ids: Vec<Id> = Service::<PendingState>::run(from, |state| state.tracked.keys().copied().collect());
+    if ids.is_empty() {
+        return;
+    }
+    let detachers: Vec<Detacher> = DETACHERS.lock().unwrap_or_else(PoisonError::into_inner).iter().map(|(_, detach)| *detach).collect();
+    for id in ids {
+        for detach in &detachers {
+            detach(to, id);
+        }
+    }
+}
+
 /// Notes that `id` was asked for in this pass of the running viewport.
 fn track<T: Clone + Send + Sync + 'static, E: Clone + Send + Sync + 'static>(ctx: &Context, id: Id, owner: Id) {
+    // Keyed by the slot type: a `static` inside a generic function is one item for every instantiation, so a
+    // first-seen flag would keep every later type from registering.
+    let slot_type = TypeId::of::<PendingSlot<T, E>>();
+    let mut detachers = DETACHERS.lock().unwrap_or_else(PoisonError::into_inner);
+    if !detachers.iter().any(|(known, _)| *known == slot_type) {
+        detachers.push((slot_type, detach_slot::<T, E>));
+    }
+    drop(detachers);
     let viewport = pass::current_viewport(ctx);
     let pass = pass::pass_nr(ctx, viewport);
     frame::register_end_sweep(ctx, TypeId::of::<PendingState>(), sweep);

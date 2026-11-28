@@ -208,6 +208,7 @@ struct OwnerRecord {
 }
 
 /// One entry the runtime keeps for a component, and the owner that is tested for its eviction.
+#[derive(Clone, Copy)]
 struct SlotRecord {
     owner: Id,
     remove: Remover,
@@ -453,6 +454,20 @@ fn forget_tier(ctx: &Context, id: Id, tier: u8) {
     drop(moved);
 }
 
+/// Takes the destination's registry records for every slot a fork copied into it: `Registry` is per-context framework
+/// state while `fork_into` copies egui memory, so without this the copied slots read as `recorded` (that flag comes from
+/// finding the slot in context data) and `write_back` never records them — no owner, so `evict` and `forget_tier` could
+/// never reach them. The owner kept is the source's: the slot is that component's state, and the destination's passes
+/// record it under their own owner as soon as they write it again.
+pub(crate) fn adopt_copied_slots(from: &Context, to: &Context) {
+    let copied: Vec<((Id, u8, TypeId), SlotRecord)> = pass_state::with::<Registry, _>(from, |reg| reg.slots.iter().map(|(k, v)| (*k, *v)).collect());
+    pass_state::with::<Registry, _>(to, |reg| {
+        for (key, record) in copied {
+            reg.slots.insert(key, record);
+        }
+    });
+}
+
 /// Registers a slot the motion service wrote straight into context data, so it goes with its owner's shown entries.
 pub(crate) fn adopt<T: Any + Clone + Send + Sync>(ctx: &Context, owner: Id, id: Id) {
     fn remove<T: Any + Send + Sync>(data: &mut Map, id: Id) -> Option<Removed> {
@@ -461,6 +476,14 @@ pub(crate) fn adopt<T: Any + Clone + Send + Sync>(ctx: &Context, owner: Id, id: 
     pass_state::with::<Registry, _>(ctx, |reg| {
         reg.slots.insert((id, SHOWN, TypeId::of::<T>()), SlotRecord { owner, remove: remove::<T> });
     });
+}
+
+/// Edits the shown slot of type `T` under `id` in place, outside a memory stage: the slot moves out of context data,
+/// `f` edits it, and it moves back. `f` runs no call that reaches the context.
+pub(crate) fn edit_shown<T: Slot>(ctx: &Context, id: Id, f: impl FnOnce(&mut T)) {
+    let Some(mut moved) = store::take::<Wrapped<SHOWN, T>>(ctx, id) else { return };
+    f(&mut moved.0);
+    store::put(ctx, id, moved);
 }
 
 /// Moves the shown slot of type `T` under `id` out of context data into the graveyard, as eviction does.
@@ -473,6 +496,13 @@ pub(crate) fn dispose_shown<T: Slot>(ctx: &Context, id: Id) {
         QUEUED.fetch_add(1, Ordering::Release);
         pass_state::with::<Registry, _>(ctx, |reg| reg.graveyard.push(moved));
     }
+}
+
+/// How many slot records the registry of `ctx` holds: a fork copies its source's, so the destination can evict and forget
+/// what it was given instead of keeping it for ever.
+#[cfg(feature = "testing")]
+pub(crate) fn slot_records(ctx: &Context) -> usize {
+    pass_state::with::<Registry, _>(ctx, |reg| reg.slots.len())
 }
 
 /// How many slot records write-back has written in `ctx` so far.
@@ -1002,4 +1032,49 @@ pub fn with_session<T: Slot, R>(ctx: &Context, id: Id, f: impl FnOnce(&mut T) ->
 #[doc(hidden)]
 pub fn unique(source: impl std::hash::Hash + std::fmt::Debug) -> Id {
     store::unique(source)
+}
+
+/// Why [`fork_into`] refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ForkError {
+    /// `to` is running a pass: fork into a context between its passes.
+    DuringPass,
+    /// `from` and `to` are the same context: a fork needs a second one to copy into.
+    SameContext,
+}
+
+impl std::fmt::Display for ForkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ForkError::DuringPass => f.write_str("fork into a context between its passes, not during one"),
+            ForkError::SameContext => f.write_str("fork into a second context, not into the one copied from"),
+        }
+    }
+}
+
+impl std::error::Error for ForkError {}
+
+/// Gives `to` a copy of `from`'s UI memory, for a second context that draws what `from` shows (a headless capture of a
+/// window): egui's memory (areas, scroll areas, collapsing states, options) and the components' remembered state
+/// (scroll offsets, open sections, the session and shown slots of every component), copied by value. `to` keeps its
+/// own runtime: its pass state, focus, overlays, commands, windows and the rest of the services its install made, so
+/// a pass of `to` neither reads nor moves `from`'s, and `to` may run a pass inside one of `from`'s. A runtime service
+/// `to` has none of yet starts fresh in `to` on first use.
+///
+/// Copying egui's memory alone (`to.memory_mut(|m| *m = from.memory(Clone::clone))`) shares the runtime's state
+/// between the two: its services are handles, and a copy of a handle reaches the same state.
+pub fn fork_into(from: &Context, to: &Context) -> Result<(), ForkError> {
+    if frame::in_pass(to) {
+        return Err(ForkError::DuringPass);
+    }
+    // Two handles to one context share its data: copying it onto itself would detach the original's own state.
+    if store::aliased(from, to) {
+        return Err(ForkError::SameContext);
+    }
+    store::copy_memory(from, to);
+    // the copied slots' registry records follow them, or nothing in the destination could ever evict them
+    adopt_copied_slots(from, to);
+    pending::detach_fork(from, to);
+    Ok(())
 }
