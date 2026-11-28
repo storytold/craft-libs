@@ -211,6 +211,12 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   every frame's position, delay, disposal and transparent colour, the loop count and the first
   frame's colour table, without decompressing pixels. Tells an animation from a still and whether
   a file can hold the picture it declares before a decoder runs.
+- [`craft-gpu-yuv`](crates/gpu-yuv/README.md): the `craft.yuv` GPU provider. It converts RGBA to
+  NV12, P010 and I420, scaled to the output size, in BT.601, BT.709 and BT.2020 at limited or full
+  range, through the `craft-gpu` job registry on the null context or on a device. Each output texel
+  averages the part of the source it covers. The crate also has the render passes for a caller's
+  own encoder, read-back layouts with unpacking to a packed frame, and the same conversion on the
+  CPU. Encoders and scopes stay in each app.
 - [`craft-gpu-device`](crates/gpu-device/README.md): choosing and opening a wgpu device: Auto,
   low power, a named adapter that survives a reordered list and a driver update, or software;
   corrections for drivers that crash; the next adapter and then a software one when a device fails
@@ -417,15 +423,16 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   reference picking, selection statistics, error tags and filter buttons (`ui` feature).
 - [`craft-testkit`](crates/testkit/README.md): test support for the apps' own tests. Its `guards` module
   reports source patterns that broke platforms before: muda's predefined Quit item, WGSL float literals
-  out of range, and `std::time::Instant` in code the web build runs. Its `deadline` module fails a test
-  whose body runs past a limit, or whose condition does not hold in time; a variable the caller names
-  replaces each limit. Its `hostile` module runs a parser on every truncation and on seeded damaged
-  copies of a valid input, and fails the test with the case that panicked or did not finish. Its `rng`
-  module holds two seeded generators for repeatable test input. Its `skip` module prints a `SKIPPED:`
-  line when a test lacks a program, a corpus or the craft-fonts faces, or fails the test when the
-  variable the caller names is `1`. Any other value of that variable except empty fails the test as a
-  configuration error. Its `corpus` module (the `corpus` feature) checks a corpus folder against a
-  pinned SHA-256 list. Not published.
+  out of range, and `std::time::Instant` in code the web build runs. Its `fonts` module makes test fonts
+  from font bytes the caller supplies: a face with a renamed family and a TrueType collection. Its
+  `deadline` module fails a test whose body runs past a limit, or whose condition does not hold in time;
+  a variable the caller names replaces each limit. Its `hostile` module runs a parser on every truncation
+  and on seeded damaged copies of a valid input, and fails the test with the case that panicked or did
+  not finish. Its `rng` module holds two seeded generators for repeatable test input. Its `skip` module
+  prints a `SKIPPED:` line when a test lacks a program, a corpus or the craft-fonts faces, or fails the
+  test when the variable the caller names is `1`. Any other value of that variable except empty fails
+  the test as a configuration error. Its `corpus` module (the `corpus` feature) checks a corpus folder
+  against a pinned SHA-256 list. Not published.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each). With `ui`, the canvas text editor, Character and

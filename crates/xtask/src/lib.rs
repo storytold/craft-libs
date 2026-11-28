@@ -12,6 +12,8 @@
 //! - [`assets`]: the asset attribution check. The app supplies its attribution document, folders
 //!   and extra extensions as an [`assets::Policy`]; [`assets::run`] lists the files through Git and
 //!   reports each asset without a row.
+//! - [`names`]: the display-name scanner. [`names::scan`] looks for the words an app lists in its
+//!   Rust string literals, `Cargo.toml` descriptions and text files, and returns what it finds.
 //! - `lock` (feature `lock`): a fixed number of slots, held across processes through file locks, so
 //!   that gate runs in several checkouts of one machine take turns.
 //! - `report` (feature `report`): the per-step JSON report, replaced atomically.
@@ -47,6 +49,7 @@
 pub mod assets;
 #[cfg(feature = "lock")]
 pub mod lock;
+pub mod names;
 #[cfg(feature = "pins")]
 pub mod pins;
 #[cfg(feature = "report")]
