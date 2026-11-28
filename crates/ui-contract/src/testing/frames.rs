@@ -31,6 +31,7 @@ pub struct Frames {
     /// The modifiers the app holds down for the user in every following frame.
     latched: craft_keymap::Mods,
     tree: Option<AccessTree>,
+    platform_tree: Option<AccessTree>,
     ime: Option<fixture::ImeSeen>,
     copied: Vec<String>,
     opened: Vec<(String, bool)>,
@@ -131,6 +132,7 @@ impl Frames {
             commands: CommandInput::new(),
             latched: craft_keymap::Mods::NONE,
             tree: None,
+            platform_tree: None,
             ime: None,
             copied: Vec::new(),
             opened: Vec::new(),
@@ -341,6 +343,7 @@ impl Frames {
         self.cursor_image = result.cursor_image;
         self.repaint_delay = result.repaint_delay;
         self.tree = result.tree;
+        self.platform_tree = result.platform_tree;
         self.ime = result.ime;
         self.copied = result.copied;
         self.opened.extend(result.opened);
@@ -380,9 +383,15 @@ impl Frames {
         &self.overshoot
     }
 
-    /// The AccessKit tree the last frame produced.
+    /// The AccessKit tree the last frame produced, each node's bounds as the runtime laid it out.
     pub fn tree(&mut self) -> AccessTree {
         self.tree.take().unwrap_or_else(AccessTree::none)
+    }
+
+    /// The AccessKit tree the last frame gave the platform: each node's bounds clamped into the clip it shows under,
+    /// as assistive technology hit-tests them.
+    pub fn platform_tree(&mut self) -> AccessTree {
+        self.platform_tree.take().unwrap_or_else(AccessTree::none)
     }
 
     /// The wait the last frame asked for before the next pass: `Duration::ZERO` for an immediate repaint,

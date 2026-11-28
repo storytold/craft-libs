@@ -54,6 +54,9 @@ impl NodeAction {
 pub(crate) struct NodeSpec {
     pub role: NodeRole,
     pub rect: Option<Rect>,
+    /// The part of the screen the node can show in: the clip of the `Ui` it runs in, which a scrolling body narrows
+    /// to its view. The tree keeps `rect` as the bounds; the update the platform gets has them clamped into it.
+    pub clip: Rect,
     pub hidden: bool,
     pub label: Option<String>,
     pub description: Option<String>,
@@ -104,6 +107,7 @@ impl NodeSpec {
         NodeSpec {
             role,
             rect: None,
+            clip: Rect::EVERYTHING,
             hidden: false,
             label: None,
             description: None,
@@ -147,6 +151,25 @@ fn ids(ids: &[Id]) -> Vec<accesskit::NodeId> {
 
 fn bounds(rect: Rect) -> accesskit::Rect {
     accesskit::Rect { x0: f64::from(rect.min.x), y0: f64::from(rect.min.y), x1: f64::from(rect.max.x), y1: f64::from(rect.max.y) }
+}
+
+/// The part of `bounds` inside `clip`, as assistive technology gets it. A node scrolled wholly out of view keeps bounds
+/// of no area on the view's nearest edge, so a hit test there does not find it under the controls beside the view; a
+/// node under a clip that shows nothing (`Rect::NOTHING`) keeps no area at its middle.
+pub(crate) fn clipped(bounds: accesskit::Rect, clip: Rect) -> accesskit::Rect {
+    let (x0, x1) = shown_along((bounds.x0, bounds.x1), (f64::from(clip.min.x), f64::from(clip.max.x)));
+    let (y0, y1) = shown_along((bounds.y0, bounds.y1), (f64::from(clip.min.y), f64::from(clip.max.y)));
+    accesskit::Rect { x0, y0, x1, y1 }
+}
+
+/// The part of the span `(min, max)` inside the span `(from, to)` along one axis.
+fn shown_along((min, max): (f64, f64), (from, to): (f64, f64)) -> (f64, f64) {
+    if from <= to {
+        let start = min.max(from).min(to);
+        return (start, max.min(to).max(start));
+    }
+    let middle = min + (max - min) / 2.0;
+    (middle, middle)
 }
 
 fn write_numeric(node: &mut accesskit::Node, numeric: &Numeric) {
@@ -324,10 +347,13 @@ fn write_actions(node: &mut accesskit::Node, spec: &NodeSpec) {
 pub(crate) fn write_node(ctx: &Context, id: Id, spec: &NodeSpec) {
     crate::runtime::egui::widgets::note_node(ctx, id);
     super::note_written(ctx, id);
-    ctx.accesskit_node_builder(id, |node| {
+    let written = ctx.accesskit_node_builder(id, |node| {
         write_identity(node, spec);
         write_relations(node, spec);
         write_states(node, spec);
         write_actions(node, spec);
     });
+    if written.is_some() && spec.rect.is_some() && spec.clip != Rect::EVERYTHING {
+        super::note_clip(ctx, id, spec.clip);
+    }
 }

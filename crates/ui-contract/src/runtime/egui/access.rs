@@ -69,8 +69,10 @@ struct Settled {
     /// pass, when the running viewport is the parent's again, so the hook takes the viewport the pass-end step
     /// recorded. A nested viewport's pass ends, hook included, inside its parent's, which keeps the order a stack.
     ending: Vec<ViewportId>,
-    /// One update per viewport, replaced by each of its passes.
+    /// One update per viewport, replaced by each of its passes, with each node's bounds as the runtime laid it out.
     trees: HashMap<ViewportId, accesskit::TreeUpdate>,
+    /// The clip each node of a viewport's last pass shows under ([`note_clip`]), taken when the pass settles.
+    clips: HashMap<ViewportId, HashMap<accesskit::NodeId, egui::Rect>>,
 }
 
 /// Records that the running viewport's pass is ending, for the output hook that follows it ([`settle_output`]).
@@ -79,16 +81,26 @@ pub(crate) fn note_pass_end(ctx: &Context) {
     memory::with::<Settled, _>(ctx, |settled| settled.ending.push(viewport));
 }
 
-/// The output step of a pass: settles the update's focus ([`settle_focus`]) and records the settled update as the
-/// ending viewport's, or forgets that viewport's update while AccessKit is off.
+/// Records that the node of `id` shows under `clip` in the running pass: the update the platform gets carries its
+/// bounds clamped into the clip ([`settle_output`]), so a node a scrolling body hides has no bounds over the controls
+/// beside the body. A replay of the run that wrote the node records it again, with the clip at the replay's place.
+pub(crate) fn note_clip(ctx: &Context, id: Id, clip: egui::Rect) {
+    let clip = crate::runtime::shift::Clip::new(clip);
+    crate::runtime::replay::journal(ctx, || (id, clip), |ctx, &(id, clip)| note_clip(ctx, id, clip.rect()));
+    with_emitted(ctx, |emitted| emitted.clips.insert(id.accesskit_id(), clip.rect()));
+}
+
+/// The output step of a pass: settles the update's focus ([`settle_focus`]), records the settled update as the
+/// ending viewport's, or forgets that viewport's update while AccessKit is off, and then clamps the bounds of the
+/// update the platform gets into the clips its nodes show under ([`note_clip`]).
 pub(crate) fn settle_output(ctx: &Context, output: &mut egui::FullOutput) {
     settle_focus(output);
     // A closed window never runs again to replace or drop its entry, so the begin hook prunes the store to the viewports
     // that are open as a frame begins.
     crate::runtime::frame::register_prune(ctx, std::any::TypeId::of::<Settled>(), prune_settled);
     let update = output.platform_output.accesskit_update.clone();
-    memory::with::<Settled, _>(ctx, |settled| {
-        let Some(viewport) = settled.ending.pop() else { return };
+    let clips = memory::with::<Settled, _>(ctx, |settled| {
+        let viewport = settled.ending.pop()?;
         match update {
             Some(update) => {
                 settled.trees.insert(viewport, update);
@@ -97,12 +109,43 @@ pub(crate) fn settle_output(ctx: &Context, output: &mut egui::FullOutput) {
                 settled.trees.remove(&viewport);
             }
         }
+        settled.clips.remove(&viewport)
     });
+    if let (Some(clips), Some(update)) = (clips, output.platform_output.accesskit_update.as_mut()) {
+        clip_bounds(update, &clips);
+    }
+}
+
+/// Clamps the bounds of each node of `update` that `clips` names into its clip. A text run's character positions count
+/// from the edge its text starts at, so they move by as much as that edge does and keep each character where it was.
+fn clip_bounds(update: &mut accesskit::TreeUpdate, clips: &HashMap<accesskit::NodeId, egui::Rect>) {
+    for (id, node) in &mut update.nodes {
+        let (Some(clip), Some(bounds)) = (clips.get(id), node.bounds()) else { continue };
+        let shown = node::clipped(bounds, *clip);
+        node.set_bounds(shown);
+        let moved = match node.text_direction() {
+            Some(accesskit::TextDirection::LeftToRight) => shown.x0 - bounds.x0,
+            Some(accesskit::TextDirection::RightToLeft) => bounds.x1 - shown.x1,
+            Some(accesskit::TextDirection::TopToBottom) => shown.y0 - bounds.y0,
+            Some(accesskit::TextDirection::BottomToTop) => bounds.y1 - shown.y1,
+            None => continue,
+        };
+        let moved = moved as f32;
+        if moved != 0.0
+            && let Some(positions) = node.character_positions()
+        {
+            let positions: Vec<f32> = positions.iter().map(|at| at - moved).collect();
+            node.set_character_positions(positions);
+        }
+    }
 }
 
 /// Drops the settled updates of the viewports that are no longer open.
 fn prune_settled(ctx: &Context, live: &[ViewportId]) {
-    memory::with::<Settled, _>(ctx, |settled| settled.trees.retain(|viewport, _| live.contains(viewport)));
+    memory::with::<Settled, _>(ctx, |settled| {
+        settled.trees.retain(|viewport, _| live.contains(viewport));
+        settled.clips.retain(|viewport, _| live.contains(viewport));
+    });
 }
 
 /// The settled update of `viewport`'s last pass; `None` while AccessKit is off or before the viewport has run.
@@ -215,6 +258,8 @@ struct Emitted {
     focus: Option<Id>,
     /// Components that offer a context menu this pass (a `Trigger::Context` opener on them).
     context: IdSet,
+    /// The clip each node shows under this pass ([`note_clip`]).
+    clips: HashMap<accesskit::NodeId, egui::Rect>,
 }
 
 impl Emitted {
@@ -309,6 +354,8 @@ pub(crate) fn order_children(ctx: &Context) {
         reported.emitted.remove(&viewport)
     })
     .unwrap_or_default();
+    // The pass's clips replace an earlier pass's of the same run: the update the run settles holds this pass's nodes.
+    memory::with::<Settled, _>(ctx, |settled| settled.clips.insert(viewport, emitted.clips));
     let widget = ctx.memory(|memory| memory.focused());
     let folded = widget.and_then(|widget| emitted.folded.get(&widget).copied());
     if emitted.focus.is_none()

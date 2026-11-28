@@ -42,8 +42,10 @@ pub(crate) struct FrameResult {
     pub cursor_image: Option<egui::CustomCursorImage>,
     /// The wait egui asks for before the root viewport's next pass; `Duration::MAX` when it asks for none.
     pub repaint_delay: std::time::Duration,
-    /// The AccessKit tree update of the frame.
+    /// The AccessKit tree update of the frame, each node's bounds as the runtime laid it out.
     pub tree: Option<crate::runtime::egui::access::AccessTree>,
+    /// The AccessKit tree update of the frame as the platform gets it: each node's bounds clamped into its clip.
+    pub platform_tree: Option<crate::runtime::egui::access::AccessTree>,
     /// What the frame's `PlatformOutput.ime` said.
     pub ime: Option<ImeSeen>,
     /// The texts the frame put on the clipboard.
@@ -339,6 +341,10 @@ pub(crate) fn run_frame(
         .iter()
         .filter_map(|command| if let egui::OutputCommand::OpenUrl(open) = command { Some((open.url.clone(), open.new_tab)) } else { None })
         .collect();
+    let platform_tree = crate::runtime::egui::access::tree_of(&mut output);
+    // A context without the runtime keeps no settled update, and its platform update carries the bounds as laid out.
+    let tree = crate::runtime::egui::access::kept_tree(ctx, viewport)
+        .or_else(|| platform_tree.as_ref().map(|tree| crate::runtime::egui::access::AccessTree::new(tree.update().clone())));
     FrameResult {
         closed,
         copied,
@@ -349,7 +355,8 @@ pub(crate) fn run_frame(
         cursor: output.platform_output.cursor_icon,
         cursor_image: output.platform_output.cursor_image.clone(),
         repaint_delay,
-        tree: crate::runtime::egui::access::tree_of(&mut output),
+        tree,
+        platform_tree,
         ime: output.platform_output.ime.as_ref().map(|ime| ImeSeen {
             owner: ime.owner,
             interrupt: ime.should_interrupt_composition,

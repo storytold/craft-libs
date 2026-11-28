@@ -14,6 +14,8 @@ pub(crate) struct RunNode<'a> {
     pub id: Id,
     pub parent: Id,
     pub rect: Rect,
+    /// The part of the screen the run can show in; see [`super::node::NodeSpec::clip`].
+    pub clip: Rect,
     pub text: &'a str,
     pub rtl: bool,
     /// Each character's start offset from the run's left edge, and its advance.
@@ -53,7 +55,7 @@ fn word_starts(text: &str) -> Vec<u8> {
 pub(crate) fn write_run(ctx: &Context, run: &RunNode<'_>) {
     super::register_parent(ctx, run.id, run.parent);
     crate::runtime::egui::widgets::note_node(ctx, run.id);
-    ctx.accesskit_node_builder(run.id, |node| {
+    let written = ctx.accesskit_node_builder(run.id, |node| {
         node.set_role(accesskit::Role::TextRun);
         node.set_bounds(accesskit::Rect {
             x0: f64::from(run.rect.min.x),
@@ -68,6 +70,9 @@ pub(crate) fn write_run(ctx: &Context, run: &RunNode<'_>) {
         node.set_word_starts(word_starts(run.text));
         node.set_text_direction(if run.rtl { accesskit::TextDirection::RightToLeft } else { accesskit::TextDirection::LeftToRight });
     });
+    if written.is_some() && run.clip != Rect::EVERYTHING {
+        super::note_clip(ctx, run.id, run.clip);
+    }
 }
 
 /// Adds the text value, the text actions and the selection to the node of `id`.

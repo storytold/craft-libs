@@ -119,6 +119,7 @@ pub struct Fixture {
     states: Tracked<CommandStates>,
     room: Vec2,
     tree: AccessTree,
+    platform_tree: AccessTree,
     shown: Rect,
     data: Rc<RefCell<StoryData>>,
     outputs: Rc<RefCell<Vec<StoryOutput>>>,
@@ -159,6 +160,7 @@ impl Fixture {
             states: Tracked::default(),
             room: Vec2::new(400.0, 300.0),
             tree: AccessTree::none(),
+            platform_tree: AccessTree::none(),
             shown: Rect::NOTHING,
             data: Rc::default(),
             outputs: Rc::default(),
@@ -502,6 +504,7 @@ impl Fixture {
             *shown = used;
         });
         self.tree = self.frames.tree();
+        self.platform_tree = self.frames.platform_tree();
         self
     }
 
@@ -599,6 +602,12 @@ impl Fixture {
     /// The AccessKit tree of the latest frame.
     pub fn tree(&self) -> &AccessTree {
         &self.tree
+    }
+
+    /// The AccessKit tree of the latest frame as the platform got it: each node's bounds clamped into the clip it shows
+    /// under, so a node a scrolling body hides has bounds only inside the body's view.
+    pub fn platform_tree(&self) -> &AccessTree {
+        &self.platform_tree
     }
 
     /// The node by key, with its bounds, when the latest tree has it.

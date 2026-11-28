@@ -433,12 +433,14 @@ impl Header {
             let part = pcx.part(HEADER.at(hash), shown(rect)).sense(sense);
             let part = if hosted { part } else { part.focusable() };
             part.priority(HitPriority::new(HitLevel::Body, 0)).state_layer().tooltip(spec.tip.clone().unwrap_or_else(|| help.clone()));
+            // The span from `start` to `end` kept inside the cell, so the grip and the remove control of a column
+            // narrower than them stay out of the cell before it.
+            let within = |start: f32, end: f32| {
+                let x = start.clamp(rect.min.x, rect.max.x);
+                Rect::from_x_y_ranges(x..=end.clamp(x, rect.max.x), rect.y_range())
+            };
             if spec.resizable {
-                let edge = if rtl {
-                    Rect::from_min_size(rect.min, Vec2::new(grip, rect.height()))
-                } else {
-                    Rect::from_min_max(Pos2::new(rect.max.x - grip, rect.min.y), rect.max)
-                };
+                let edge = if rtl { within(rect.min.x, rect.min.x + grip) } else { within(rect.max.x - grip, rect.max.x) };
                 pcx.part(GRIP.at(hash), shown(edge))
                     .sense(Sense::DRAG | Sense::CLICK)
                     .priority(HitPriority::new(HitLevel::Body, 1))
@@ -446,13 +448,12 @@ impl Header {
                     .pointer_only("Resize Column… resizes from the keyboard");
             }
             let remove = spec.remove.as_ref().map(|remove| {
-                let side = self.height.min(rect.width());
-                let end = if rtl { rect.min.x + grip } else { rect.max.x - grip };
-                let place = if rtl {
-                    Rect::from_min_max(Pos2::new(end, rect.min.y), Pos2::new(end + side, rect.max.y))
-                } else {
-                    Rect::from_min_max(Pos2::new(end - side, rect.min.y), Pos2::new(end, rect.max.y))
-                };
+                // Only a resizable column keeps room for its grip, and at most half its width, so the control keeps a
+                // press area in a column narrower than the grip.
+                let reserve = if spec.resizable { grip.min(rect.width() / 2.0) } else { 0.0 };
+                let side = self.height.min(rect.width() - reserve);
+                let end = if rtl { rect.min.x + reserve } else { rect.max.x - reserve };
+                let place = if rtl { within(end, end + side) } else { within(end - side, end) };
                 pcx.part(REMOVE.at(hash), shown(place))
                     .sense(Sense::CLICK | Sense::FOCUS)
                     .focusable()
@@ -874,7 +875,9 @@ impl Header {
                 sort: self.sort_of(&self.specs[cell.spec].key),
             })
             .collect();
-        report_header(ctx, id, cx.core.resolved.enabled, &cells);
+        // The cells and remove controls show only in the header's view, as `paint` clips them.
+        let clip = self.view.map_or(cx.core.clip, |view| cx.core.clip.intersect(view));
+        report_header(ctx, id, (cx.core.resolved.enabled, clip), &cells);
         for cell in &self.cells {
             let (Some(rect), Some(remove)) = (cell.remove, &self.specs[cell.spec].remove) else { continue };
             let name = cx.core.env.resolve(&remove.name).as_str().to_owned();
@@ -889,6 +892,7 @@ impl Header {
                     component: "Collection",
                     node: &node,
                     rect,
+                    clip,
                     enabled,
                     focusable: enabled,
                     clickable: enabled,

@@ -15,6 +15,8 @@ pub(crate) struct Own<'a> {
     pub component: &'static str,
     pub role: NodeRole,
     pub rect: Rect,
+    /// The clip of the `Ui` the component runs in: the node's bounds are the part of `rect` inside it.
+    pub clip: Rect,
     pub label: &'a str,
     /// The node's one control carries its label as its name: the node itself has no name.
     pub names_nothing: bool,
@@ -72,6 +74,8 @@ pub struct SubDecl<'a> {
     pub component: &'static str,
     pub node: &'a SubNode,
     pub rect: Rect,
+    /// The clip the part shows under: the node's bounds are the part of its rect inside it.
+    pub clip: Rect,
     pub enabled: bool,
     pub focusable: bool,
     pub clickable: bool,
@@ -288,6 +292,7 @@ pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
     let numeric = access.numeric.as_ref();
     let mut spec = NodeSpec::new(own.role);
     spec.rect = Some(own.rect);
+    spec.clip = own.clip;
     spec.hidden = name.hidden;
     spec.label = name.text.clone();
     spec.description = description.map(str::to_owned);
@@ -376,6 +381,7 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
                 id,
                 parent: decl.parent,
                 rect: node.bounds.unwrap_or(decl.rect),
+                clip: decl.clip,
                 text: &run.text,
                 rtl: run.rtl,
                 positions: &run.positions,
@@ -395,6 +401,7 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
     let expanded = expanded_of(flags, node.expanded.or_else(|| decl.face.as_ref().and_then(|face| face.expanded)));
     let mut spec = NodeSpec::new(role);
     spec.rect = Some(node.bounds.unwrap_or(decl.rect));
+    spec.clip = decl.clip;
     spec.label = name.text.clone();
     spec.labelled_by = name.labelled_by.clone();
     spec.description = node.description.clone();

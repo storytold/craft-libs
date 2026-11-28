@@ -11,13 +11,14 @@ use egui::{Context, Id, Rect};
 
 impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// The access sub-node of each toggle cell of row `(at, key)`, named by its cell, else by its column's header, and carrying its state,
-    /// below the row's node for the cell, else the row's node `item`; an AccessKit click on it reaches `toggle_by_access`.
+    /// below the row's node for the cell, else the row's node `item`, clamped into the row's `clip`.
+    /// An AccessKit click on it reaches `toggle_by_access`.
     pub(super) fn report_toggle_cells(
         &self,
         ctx: &Context,
         (id, item): (Id, Id),
         (at, key): (usize, &C::Key),
-        (cells, enabled): (&[(ColumnKey, Rect)], bool),
+        (cells, clip, enabled): (&[(ColumnKey, Rect)], Rect, bool),
         env: &crate::runtime::env::EnvView<'_>,
     ) {
         for (column, toggle) in self.header.toggle_columns() {
@@ -40,6 +41,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 component: "",
                 node: &node,
                 rect: *rect,
+                clip,
                 enabled: enabled && self.source.enabled(at) && self.toggle_open(at, &column),
                 focusable: false,
                 clickable: true,
@@ -53,8 +55,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     }
 
     /// The collection's node for the section row `at` that the component does not lay out itself: a heading named by
-    /// the row's text, expandable when it has children, that serves Click, Expand and Collapse.
-    pub(super) fn report_section_node(&self, ctx: &Context, id: Id, at: usize, rect: Rect, enabled: bool) {
+    /// the row's text, expandable when it has children, that serves Click, Expand and Collapse. Its bounds are the row's
+    /// `rect` clamped into the rows' `clip`.
+    pub(super) fn report_section_node(&self, ctx: &Context, id: Id, at: usize, (rect, clip): (Rect, Rect), enabled: bool) {
         let mut node = access::SubNode::new(section_part(&self.source.key(at)), Role::HEADING);
         node.name = access::Name::Text(self.source.text(at).map(|text| text.into_owned()).unwrap_or_default());
         node.level(self.source.depth(at) + 1);
@@ -66,6 +69,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             component: "",
             node: &node,
             rect,
+            clip,
             enabled: enabled && self.source.enabled(at),
             focusable: false,
             clickable: true,

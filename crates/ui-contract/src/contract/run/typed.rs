@@ -918,6 +918,7 @@ pub(crate) fn member_show<C: Show>(
     core.content_rect = flow.inset(item.padding(row, &style));
     core.flow = flow;
     core.visible = row.intersect(ui.clip_rect());
+    core.clip = ui.clip_rect();
     core.part_cursors = crate::primitives::sensing::hovered_cursor(decls.parts(), &sensed.parts).into_iter().collect();
     core.results = sensed.parts;
     core.press = sensed.press;
@@ -978,6 +979,7 @@ fn report_member(core: &CxCore<'_>, access: &Access, node: &MemberNode, role: cr
         component: "",
         node: &sub,
         rect: core.rect,
+        clip: core.clip,
         enabled: node.enabled,
         focusable: node.enabled && node.item_sense.contains(Sense::FOCUS),
         clickable: node.enabled && node.item_sense.contains(Sense::CLICK),

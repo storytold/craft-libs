@@ -341,3 +341,15 @@ fn a_routed_access_request_runs_its_settled_view_once() {
     let (routed, passes) = count(&mut frames, inside_id);
     assert_eq!(routed, 1, "a Focus routed into the settled view runs it once ({passes} passes in the frame)");
 }
+
+/// A frame that runs before `install` still gives the trial the AccessKit tree it produced, in both of the frames'
+/// trees: without the runtime the platform gets the bounds as laid out.
+#[trial]
+fn a_frame_before_install_keeps_its_tree() {
+    let mut frames = Frames::uninstalled();
+    let button = Cell::new(None);
+    frames.frame(Vec::new(), |ui| button.set(Some(ui.button("Go").id)));
+    let id = button.get().unwrap_or_else(|| panic!("the frame showed the button"));
+    assert!(frames.platform_tree().has(id), "the platform gets the button's node");
+    assert!(frames.tree().has(id), "the frames' tree has the button's node");
+}

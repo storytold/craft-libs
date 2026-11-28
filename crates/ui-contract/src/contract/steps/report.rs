@@ -196,6 +196,7 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         component: facts.name,
         role,
         rect: core.rect,
+        clip: core.clip,
         label: resolved.label,
         names_nothing: access.value.is_none() && carried.as_deref() == Some(resolved.label),
         tooltip,
@@ -242,7 +243,7 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         pass_state::with::<EditorRecords, _>(ctx, |records| records.0.remove(&widget))
     };
     if let Some(facts) = core.text_access.take().or_else(editor_record) {
-        crate::runtime::access::text::report_text(ctx, id, &facts, access.unit.as_deref(), access.value.as_deref());
+        crate::runtime::access::text::report_text(ctx, (id, core.clip), &facts, access.unit.as_deref(), access.value.as_deref());
     } else if let Some(editor) = &core.editor {
         crate::runtime::access::text::fold_editor(ctx, editor.widget, id);
     }
@@ -307,6 +308,7 @@ fn report_sub(core: &CxCore<'_>, decls: &Decls, node: &SubNode, face: Option<&Fa
         component: "",
         node: &node,
         rect: result.map_or(core.rect, |result| result.rect),
+        clip: core.clip,
         enabled: core.resolved.enabled && face.is_none_or(|face| face.enabled),
         focusable: takes_focus(core.resolved) && declared.is_some_and(|(_, extras)| extras.focusable),
         clickable: core.resolved.enabled && declared.is_some_and(|(decl, extras)| decl.sense.contains(Sense::CLICK) && !extras.no_access_click),
@@ -337,6 +339,7 @@ pub(crate) fn report_inert(core: &CxCore<'_>, facts: &TypeFacts) {
             component: facts.name,
             role,
             rect: core.rect,
+            clip: core.clip,
             label: "",
             names_nothing: false,
             tooltip: None,

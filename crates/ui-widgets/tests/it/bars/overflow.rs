@@ -5,10 +5,11 @@
 use craft_behavior::IconId;
 use craft_behavior::geometry::Constraint;
 use craft_i18n::Direction;
+use craft_theme::Size;
 use craft_ui::bars::{Bar, BarItem, BarItems, BarKind, ConstraintFields, ItemDisplay};
 use craft_ui::buttons::{Button, IconButton};
-use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Entry, MemoProps, MemoView, Props as _, Show as _, ShowContainer as _, Sizing};
+use craft_ui::choice::{Checkbox, Segmented};
+use craft_ui::contract::{Bind, Entry, MemoProps, MemoView, Props as _, Role, Show as _, ShowContainer as _, Sizing};
 use craft_ui::display::{Divider, Elide, Text};
 use craft_ui::form::Field;
 use craft_ui::pickers::Select;
@@ -147,12 +148,58 @@ fn a_member_the_bar_shows_in_part_is_not_shown_until_it_is_whole() {
         let (mut fixture, clicks) = buttons(width);
         fixture.click_at(egui::pos2(rect.min.x + 2.0, rect.center().y));
         assert_eq!(clicks.get()[at], 0, "at {width}: Button {at} at {rect:?}, shown in part, took a click");
+        let node = fixture.by_label(&format!("Button {at}")).expect("the button shown in part").node;
+        let bounds = fixture.platform_tree().bounds_of(node).expect("the platform gets the button's bounds");
+        assert!(!bounds.is_positive(), "at {width}: Button {at}, shown in part, has bounds {bounds:?} a hit test finds");
         let first = fixture.by_label("Button 0").expect("the first button");
         fixture.click(&first);
         assert_eq!(clicks.get()[0], 1, "at {width}: the first button, shown whole, took no click");
         checked += 1;
     }
     assert!(checked > 0, "no width put a button across the bar's end");
+}
+
+/// The radio buttons of an options bar `width` wide whose body holds a select and a segmented control the end region
+/// repeats, each with the bounds of its node as the platform gets them.
+fn radio_bounds(width: f32) -> Vec<(String, Rect)> {
+    let mut fixture = Fixture::new(|ui| {
+        let themes = [Entry::new(0u8, "Theme A"), Entry::new(1, "Theme B")];
+        let modes = [Entry::new(0u8, "Light"), Entry::new(1, "Dark"), Entry::new(2, "System")];
+        Bar::new("Appearance", BarKind::Options)
+            .trailing(|ui, _| {
+                Field::new("Workspace").show(ui, |ui, _| Segmented::new("Workspace", Bind::given(0u8), &modes).show(ui));
+            })
+            .show(ui, |ui, _| {
+                Field::new("Theme").show(ui, |ui, _| Select::new("Theme", Bind::given(0u8), &themes).show(ui));
+                Field::new("Mode").show(ui, |ui, _| Segmented::new("Mode", Bind::given(1u8), &modes).show(ui));
+            });
+    });
+    fixture.density(Size::Compact).room(Vec2::new(width, 80.0)).settle();
+    let tree = fixture.platform_tree();
+    tree.with_role(Role::RADIO_BUTTON)
+        .into_iter()
+        .filter_map(|node| Some((tree.name_of(node).unwrap_or_default().to_owned(), tree.bounds_of(node)?)))
+        .collect()
+}
+
+/// A member the bar hides in whole or in part has no bounds over a control of the end region, where a hit test by
+/// assistive technology would find the hidden member.
+#[trial]
+fn a_member_the_bar_hides_has_no_bounds_over_the_end_region() {
+    for width in (300..=520).step_by(20) {
+        let width = width as f32;
+        let radios = radio_bounds(width);
+        assert!(radios.len() >= 6, "at {width}: both segmented controls report their radio buttons: {radios:?}");
+        for (at, (name, rect)) in radios.iter().enumerate() {
+            for (other, other_rect) in &radios[at + 1..] {
+                let overlap = rect.intersect(*other_rect);
+                assert!(
+                    overlap.width() <= 0.0 || overlap.height() <= 0.0,
+                    "at {width}: the bounds of {name} {rect:?} and {other} {other_rect:?} overlap"
+                );
+            }
+        }
+    }
 }
 
 /// A bar `width` wide holding an icon button, a rule and a second icon button; `rects` gets the parts of the two

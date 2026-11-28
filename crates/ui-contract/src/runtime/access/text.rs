@@ -99,8 +99,8 @@ pub(crate) fn fold_editor(ctx: &Context, widget: Id, owner: Id) {
 /// the widget's own node folds into it, so a component whose root edits its value through the text (a text field, a
 /// spin button, an editable combo box) is one node that takes focus and the text actions. The value reads `unit`, the
 /// unit the component draws after the text, after a shown text, or `value_override` when the text is empty. Call it
-/// after the node's common facts.
-pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts, unit: Option<&str>, value_override: Option<&str>) {
+/// after the node's common facts. `clip` is the part of the screen the owner can show in, which the runs share.
+pub(crate) fn report_text(ctx: &Context, (owner, clip): (Id, Rect), facts: &TextFacts, unit: Option<&str>, value_override: Option<&str>) {
     adapter::fold_widget(ctx, facts.widget, owner);
     let mut entries = Vec::new();
     if !facts.masked {
@@ -110,7 +110,7 @@ pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts, unit: Opt
                 let text = line.text.get(run.bytes.clone()).unwrap_or_default();
                 adapter::write_run(
                     ctx,
-                    &RunNode { id, parent: owner, rect: line.rect, text, rtl: run.rtl, positions: &run.positions, widths: &run.widths },
+                    &RunNode { id, parent: owner, rect: line.rect, clip, text, rtl: run.rtl, positions: &run.positions, widths: &run.widths },
                 );
                 let index = u64::try_from(entries.len()).ok();
                 keys::register_node(ctx, id, owner, Some(PartRef { key: RUN, index }), false);

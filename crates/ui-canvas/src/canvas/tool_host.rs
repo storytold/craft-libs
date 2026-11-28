@@ -727,7 +727,7 @@ impl<'m> ToolHost<'m> {
         // A disabled host delivers no key, so it holds none from the app.
         state.claims = if disabled { ToolClaims::NONE } else { effective.claims() };
         if let Some(access) = effective.access(&cx) {
-            report_access(&ctx, pass, rect, &access, state.claims.nudges);
+            report_access(&ctx, pass, (rect, ui.clip_rect()), &access, state.claims.nudges);
         }
         if over {
             let wanted = effective.cursor(&cx);
@@ -867,7 +867,7 @@ const TOOL_ANCHOR: PartKey = PartKey::new("tool anchor");
 /// graphics object over the drawing's bounds (no size at the canvas centre without bounds), and a child object of no
 /// size at each anchor, clamped to the canvas. The object declares Increment and Decrement while the tool claims the
 /// nudges. The ids derive from the canvas id, so they stay the same from pass to pass.
-fn report_access(ctx: &Context, canvas: &ToolPass, rect: Rect, tool: &ToolAccess, nudges: bool) {
+fn report_access(ctx: &Context, canvas: &ToolPass, (rect, clip): (Rect, Rect), tool: &ToolAccess, nudges: bool) {
     let owner = canvas.id;
     let to_screen = |point: kurbo::Point| canvas.space.map(|space| space.view.to_screen(point));
     let bounds = tool.bounds.and_then(|bounds| {
@@ -886,14 +886,14 @@ fn report_access(ctx: &Context, canvas: &ToolPass, rect: Rect, tool: &ToolAccess
     if nudges {
         node.steps();
     }
-    access::report_sub(ctx, &sub_decl(owner, &node, bounds.unwrap_or(at_centre), owner));
+    access::report_sub(ctx, &sub_decl(owner, &node, (bounds.unwrap_or(at_centre), clip), owner));
     let parent = access::sub_node_id(owner, tool_part);
     for (index, anchor) in (0u64..).zip(&tool.anchors) {
         let mut node = SubNode::new(PartRef::from((TOOL_ANCHOR, index)), Role::GRAPHICS_OBJECT);
         node.name = Name::Text(anchor.name.clone());
         node.description.clone_from(&anchor.description);
         let place = to_screen(anchor.at).map_or(at_centre, |at| Rect::from_center_size(rect.clamp(at), Vec2::ZERO));
-        access::report_sub(ctx, &sub_decl(owner, &node, place, parent));
+        access::report_sub(ctx, &sub_decl(owner, &node, (place, clip), parent));
     }
 }
 
@@ -908,9 +908,23 @@ fn is_tool_step(request: &AccessRequest) -> bool {
     matches!(request.action, AccessAction::Increment | AccessAction::Decrement) && request.target == Some(TOOL_NODE.into())
 }
 
-/// A sub-node of the canvas that is read only: not focusable, not clickable, never the active part.
-fn sub_decl(owner: Id, node: &SubNode, rect: Rect, parent: Id) -> SubDecl<'_> {
-    SubDecl { owner, component: "", node, rect, enabled: true, focusable: false, clickable: false, active: false, face: None, label: "", parent }
+/// A sub-node of the canvas that is read only: not focusable, not clickable, never the active part. `clip` is the part
+/// of the screen the canvas shows in.
+fn sub_decl(owner: Id, node: &SubNode, (rect, clip): (Rect, Rect), parent: Id) -> SubDecl<'_> {
+    SubDecl {
+        owner,
+        component: "",
+        node,
+        rect,
+        clip,
+        enabled: true,
+        focusable: false,
+        clickable: false,
+        active: false,
+        face: None,
+        label: "",
+        parent,
+    }
 }
 
 /// Paints the tool over the canvas, under the clip of the body it runs in: the canvas's view.
