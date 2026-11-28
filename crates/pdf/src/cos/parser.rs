@@ -149,6 +149,14 @@ impl<'a> Lexer<'a> {
                             break;
                         }
                         _ => {
+                            // A keyword that is no object, as the `R` of `[219 0 R 0 R << >>]`
+                            // whose reference lost its object number, is left out and the rest
+                            // of the array read (ISO 32000-2 §7.3.6: an array holds objects).
+                            if let Some(end) = self.stray_keyword_end() {
+                                self.pos = end;
+                                note_syntax_repair(STRAY_KEYWORD);
+                                continue;
+                            }
                             let before = self.pos;
                             match self.object_depth(depth + 1) {
                                 Ok(o) => items.push(o),
@@ -353,7 +361,26 @@ impl<'a> Lexer<'a> {
             key.push(b' ');
             key.extend(word);
         }
-        let _ = SPACED_KEYS.try_with(|c| c.set(c.get().saturating_add(1)));
+        note_syntax_repair(SPACED_KEY);
+    }
+
+    /// Where a keyword at the cursor ends, when it is no PDF object (`true`, `false` and `null`
+    /// are) and no keyword of the file's structure. `endobj`, `stream`, `obj`, `xref` and the
+    /// like say the array was never closed: skipping them would read on into the next object, so
+    /// the array fails as before. Nothing is consumed.
+    fn stray_keyword_end(&self) -> Option<usize> {
+        let first = self.peek()?;
+        if !is_regular(first) || matches!(first, b'+' | b'-' | b'.' | b'0'..=b'9') {
+            return None;
+        }
+        let rest = self.data.get(self.pos..)?;
+        let len = rest.iter().position(|b| !is_regular(*b)).unwrap_or(rest.len());
+        let keyword = rest.get(..len)?;
+        let not_stray = [&b"true"[..], b"false", b"null", b"obj", b"endobj", b"stream", b"endstream", b"xref", b"trailer", b"startxref"];
+        if not_stray.contains(&keyword) {
+            return None;
+        }
+        self.pos.checked_add(len)
     }
 
     /// The most bare words [`Self::spaced_key_words`] joins to one key.
@@ -439,15 +466,34 @@ fn real_prefix_len(s: &[u8]) -> usize {
 }
 
 thread_local! {
-    /// Keys [`Lexer::spaced_key_words`] joined on this thread (see [`swap_spaced_keys`]).
-    static SPACED_KEYS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The syntax repairs [`Lexer`] made on this thread, a set of the repair bits such as
+    /// [`SPACED_KEY`] (see [`swap_syntax_repairs`]).
+    static SYNTAX_REPAIRS: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
-/// Set the count of keys joined from words written with spaces, returning the count it replaces:
-/// a reader swaps in 0 before parsing an object and the old count back after, so the count it gets
-/// is that object's alone, objects parsed meanwhile included only through their own swaps.
-pub(crate) fn swap_spaced_keys(count: u64) -> u64 {
-    SPACED_KEYS.try_with(|c| c.replace(count)).unwrap_or(0)
+/// A dictionary key written with raw spaces was joined into one key ([`Lexer::spaced_key_words`]).
+pub(crate) const SPACED_KEY: u8 = 1;
+/// A keyword in an array that is no object was left out ([`Lexer::stray_keyword_end`]).
+pub(crate) const STRAY_KEYWORD: u8 = 2;
+
+fn note_syntax_repair(repair: u8) {
+    let _ = SYNTAX_REPAIRS.try_with(|c| c.set(c.get() | repair));
+}
+
+/// Set the syntax repairs made on this thread, returning the set it replaces: a reader swaps in
+/// none before parsing an object and the old set back after, so the set it gets is that object's
+/// alone, objects parsed meanwhile included only through their own swaps.
+pub(crate) fn swap_syntax_repairs(repairs: u8) -> u8 {
+    SYNTAX_REPAIRS.try_with(|c| c.replace(repairs)).unwrap_or(0)
+}
+
+/// What the repairs in `repairs` did, for a repaired-object note; empty for none.
+pub(crate) fn syntax_repair_reasons(repairs: u8) -> String {
+    let reasons = [
+        (SPACED_KEY, "a dictionary key written with spaces was read as one key"),
+        (STRAY_KEYWORD, "a keyword in an array that is no object was left out"),
+    ];
+    reasons.iter().filter(|(bit, _)| repairs & bit != 0).map(|(_, reason)| *reason).collect::<Vec<_>>().join("; ")
 }
 
 #[cfg(test)]
@@ -690,6 +736,38 @@ mod tests {
         ] {
             assert!(Lexer::new(bad, 0).object().is_err(), "{}", String::from_utf8_lossy(bad));
         }
+    }
+
+    /// A keyword in an array that is no object, as the `R` of a reference that lost its object
+    /// number, is left out and the rest of the array kept: before, the whole array failed.
+    #[test]
+    fn a_stray_keyword_in_an_array_is_left_out() {
+        let _ = swap_syntax_repairs(0);
+        let Ok(Object::Array(items)) = Lexer::new(b"[ 219 0 R 0 R << /Obj 12 0 R /Type /OBJR >> foo true null [1 R] ]", 0).object() else {
+            panic!("the array did not parse")
+        };
+        assert_eq!(items.len(), 6, "{items:?}");
+        assert_eq!(items[0], Object::Ref(ObjRef::new(219, 0)));
+        assert_eq!(items[1], Object::Int(0));
+        assert!(items[2].as_dict().is_some_and(|d| d.name(b"Type") == Some(&b"OBJR"[..])), "{items:?}");
+        assert_eq!(items[3..5], [Object::Bool(true), Object::Null]);
+        assert_eq!(items[5], Object::Array(vec![Object::Int(1)]));
+        assert_eq!(swap_syntax_repairs(0), STRAY_KEYWORD, "the repair is recorded");
+        assert_eq!(syntax_repair_reasons(STRAY_KEYWORD), "a keyword in an array that is no object was left out");
+    }
+
+    /// A keyword of the file's structure in an array says it was never closed: the array fails
+    /// as before rather than reading on into the next object, even one a `]` ends. A sound array
+    /// records no repair.
+    #[test]
+    fn a_structure_keyword_still_fails_an_unclosed_array() {
+        for keyword in ["obj", "endobj", "stream", "endstream", "xref", "trailer", "startxref"] {
+            let bad = format!("[1 2 {keyword}\n2 0 obj\n3 ]");
+            assert!(Lexer::new(bad.as_bytes(), 0).object().is_err(), "{bad}");
+        }
+        let _ = swap_syntax_repairs(0);
+        assert!(Lexer::new(b"[1 0 R true false null /R (R)]", 0).object().is_ok());
+        assert_eq!(swap_syntax_repairs(0), 0);
     }
 
     #[test]
