@@ -1230,6 +1230,116 @@ fn t_def_table(edges: &[i16]) -> Vec<u8> {
     v
 }
 
+/// A `sprmTDefTable` Prl for `edges` whose TC80s carry the `TCGRF` words in `rgfs` (one per
+/// TC80, the rest of each TC80 zero); `rgfs` may be shorter than the cell count, as Word may
+/// write fewer TC80s than cells.
+fn t_def_table_tcgrf(edges: &[i16], rgfs: &[u16]) -> Vec<u8> {
+    let itc = edges.len() as u8 - 1;
+    let mut body = vec![itc];
+    for e in edges {
+        body.extend_from_slice(&e.to_le_bytes());
+    }
+    for rgf in rgfs {
+        body.extend_from_slice(&rgf.to_le_bytes());
+        body.extend_from_slice(&[0u8; 18]);
+    }
+    let cb = (body.len() + 1) as u16;
+    let mut v = (0xD608u16).to_le_bytes().to_vec();
+    v.extend_from_slice(&cb.to_le_bytes());
+    v.extend_from_slice(&body);
+    v
+}
+
+/// `TCGRF` bits ([MS-DOC] `TCGRF`): `vertMerge` in bits 5-6, `vertAlign` in bits 7-8.
+const TCGRF_VMERGE_RESTART: u16 = 3 << 5;
+const TCGRF_VMERGE_CONTINUE: u16 = 1 << 5;
+const TCGRF_VALIGN_CENTER: u16 = 1 << 7;
+const TCGRF_VALIGN_BOTTOM: u16 = 2 << 7;
+
+/// Word 2016 saves a vertically merged cell and a cell's vertical alignment in a `.doc` with
+/// no `sprmTVertMerge` or `sprmTVertAlign`: only the `TCGRF` of each cell's TC80 has them (a
+/// table made in Word and saved as `.doc` and `.docx`; the `.docx` has `w:vMerge` and
+/// `w:vAlign` on exactly the cells whose TC80 has the bits). A two-row table: the first
+/// column merged over both rows and centred, the second cell of row 1 bottom-aligned.
+#[test]
+fn vertical_merge_and_alignment_kept_only_in_tc80s_are_read() {
+    use craft_wordmodel::props::{VAlign, VMerge};
+    let edges = [0i16, 2880, 5760];
+    let text = "a\u{7}b\u{7}\u{7}c\u{7}d\u{7}\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let ttp = |rgfs: &[u16]| -> Vec<u8> { [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), t_def_table_tcgrf(&edges, rgfs)].concat() };
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (0, 0, in_tbl.clone()),                                                          // "a"
+            (2, 0, in_tbl.clone()),                                                          // "b"
+            (4, 0, ttp(&[TCGRF_VMERGE_RESTART | TCGRF_VALIGN_CENTER, TCGRF_VALIGN_BOTTOM])), // row 1 end
+            (5, 0, in_tbl.clone()),                                                          // "c"
+            (7, 0, in_tbl),                                                                  // "d"
+            (9, 0, ttp(&[TCGRF_VMERGE_CONTINUE | TCGRF_VALIGN_CENTER, 0])),                  // row 2 end
+            (10, 0, Vec::new()),                                                             // "tail"
+        ],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert_eq!(tbl.rows.len(), 2);
+    assert!(tbl.rows.iter().all(|r| r.cells.len() == 2), "two cells in each row");
+    let cell = |r: usize, c: usize| &tbl.rows[r].cells[c].props;
+    assert_eq!(cell(0, 0).vmerge, VMerge::Restart, "the merge starts in row 1");
+    assert_eq!(cell(1, 0).vmerge, VMerge::Continue, "row 2 continues it");
+    assert_eq!(cell(0, 1).vmerge, VMerge::None);
+    assert_eq!(cell(1, 1).vmerge, VMerge::None);
+    assert_eq!(cell(0, 0).valign, Some(VAlign::Center));
+    assert_eq!(cell(0, 1).valign, Some(VAlign::Bottom));
+    assert_eq!(cell(1, 1).valign, None, "a top-aligned cell sets nothing");
+}
+
+/// An explicit `sprmTVertMerge` or `sprmTVertAlign` for a cell wins over its TC80; the cells
+/// it does not name keep their TC80's. Word writes the modifiers after the `sprmTDefTable`;
+/// the case with them before it pins the reader's robustness choice, not Word's behaviour.
+#[test]
+fn an_explicit_vertical_merge_or_alignment_overrides_the_tc80() {
+    use craft_wordmodel::props::{VAlign, VMerge};
+    let def = t_def_table_tcgrf(&[0, 2880, 5760], &[TCGRF_VMERGE_RESTART | TCGRF_VALIGN_CENTER, TCGRF_VMERGE_RESTART | TCGRF_VALIGN_BOTTOM]);
+    // sprmTVertMerge: cb 2, itc 0, flag 1 (continues). sprmTVertAlign: cb 3, itc 0..1, 0 (top).
+    let vert_merge = [0x2Bu8, 0xD6, 2, 0, 1];
+    let vert_align = [0x2Cu8, 0xD6, 3, 0, 1, 0];
+    for papx in [[&vert_merge[..], &vert_align, &def].concat(), [&def[..], &vert_merge, &vert_align].concat()] {
+        let row = crate::table::decode(&papx);
+        assert_eq!(row.vmerge_of(0), Some(VMerge::Continue));
+        assert_eq!(row.valign_of(0), Some(VAlign::Top));
+        assert_eq!(row.vmerge_of(1), Some(VMerge::Restart));
+        assert_eq!(row.valign_of(1), Some(VAlign::Bottom));
+    }
+}
+
+/// TC80s are read only as far as the operand holds whole ones: a cut-off TC80 and the cells
+/// after it get nothing, and a `sprmTDefTable` with edges only (as the Word 6.0/95 translation
+/// writes) keeps every cell as it was.
+#[test]
+fn tc80_flags_are_read_only_from_whole_tc80s() {
+    use craft_wordmodel::props::VAlign;
+    let full = t_def_table_tcgrf(&[0, 1440, 2880, 4320], &[TCGRF_VALIGN_CENTER, TCGRF_VMERGE_RESTART]);
+    // Drop the last byte of the second TC80, and cb with it.
+    let mut cut = full[..full.len() - 1].to_vec();
+    let cb = u16::from_le_bytes([cut[2], cut[3]]) - 1;
+    cut[2..4].copy_from_slice(&cb.to_le_bytes());
+    let row = crate::table::decode(&cut);
+    assert_eq!(row.valign_of(0), Some(VAlign::Center), "the whole first TC80 is read");
+    assert_eq!(row.vmerge_of(1), None, "the cut-off second TC80 is not");
+    assert_eq!(row.overrides(), 1);
+    assert_eq!(crate::table::decode(&t_def_table_tcgrf(&[0, 1440, 2880], &[])).overrides(), 0);
+}
+
 #[test]
 fn table_assembled_from_marks() {
     // A 2×2 table: "a\x07 b\x07|ttp  c\x07 d\x07|ttp" then a normal paragraph.

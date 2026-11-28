@@ -106,6 +106,18 @@ impl RowInfo {
         self.widths.iter().rfind(|(k, _)| *k == i).map(|(_, w)| *w)
     }
 
+    /// The vertical merge cell `i` ends up with, for tests.
+    #[cfg(test)]
+    pub(crate) fn vmerge_of(&self, i: u8) -> Option<VMerge> {
+        self.vmerge.iter().find(|(k, _)| *k == i).map(|(_, m)| *m)
+    }
+
+    /// The vertical alignment cell `i` ends up with, for tests.
+    #[cfg(test)]
+    pub(crate) fn valign_of(&self, i: u8) -> Option<VAlign> {
+        self.valign.iter().rfind(|(k, _)| *k == i).map(|(_, v)| *v)
+    }
+
     /// How many per-cell overrides the row keeps, for tests.
     #[cfg(test)]
     pub(crate) fn overrides(&self) -> usize {
@@ -132,6 +144,7 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
     let mut r = RowInfo::default();
     let mut gap_half: Option<i16> = None;
     let mut dxa_left: Option<i16> = None;
+    let mut tc_flags: Vec<TcFlags> = Vec::new();
     for prl in sprm::iter(papx) {
         // The membership sprms are paragraph sprms (sgc 1); the rest here are table sprms
         // (sgc 5), so match opcodes directly.
@@ -139,7 +152,10 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
             P_IN_TABLE => r.in_table = prl.operand.first().copied().unwrap_or(0) != 0,
             P_TTP => r.ttp = prl.operand.first().copied().unwrap_or(0) != 0,
             P_ITAP => r.depth = i32_of(&prl).unwrap_or(0).max(0) as u32,
-            T_DEF_TABLE => r.edges = def_table_edges(prl.operand),
+            T_DEF_TABLE => {
+                r.edges = def_table_edges(prl.operand);
+                tc_flags = def_table_cell_flags(prl.operand);
+            }
             T_TABLE_HEADER => r.header = prl.operand.first().copied().unwrap_or(0) != 0,
             T_CANT_SPLIT | T_CANT_SPLIT_90 => r.cant_split = prl.operand.first().copied().unwrap_or(0) != 0,
             T_ROW_HEIGHT => {
@@ -253,6 +269,22 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                 }
             }
             _ => {}
+        }
+    }
+    // The TC80s are each cell's starting point; an explicit `sprmTVertMerge` or
+    // `sprmTVertAlign` for the cell overrides them wherever it stands in the grpprl. Word
+    // writes the modifiers after the `sprmTDefTable`; letting them win when a file puts one
+    // before it too is a robustness choice, not an observed Word behaviour.
+    for f in tc_flags {
+        if let Some(m) = f.vmerge
+            && !r.vmerge.iter().any(|(k, _)| *k == f.cell)
+        {
+            r.vmerge.push((f.cell, m));
+        }
+        if let Some(v) = f.valign
+            && !r.valign.iter().any(|(k, _)| *k == f.cell)
+        {
+            r.valign.push((f.cell, v));
         }
     }
     // The table indent is the row origin minus half the cell gap.
@@ -458,6 +490,50 @@ fn def_table_edges(operand: &[u8]) -> Vec<f32> {
         }
     }
     edges
+}
+
+/// What one cell's `TC80` in a `sprmTDefTable` says about its vertical merge and alignment.
+struct TcFlags {
+    cell: u8,
+    vmerge: Option<VMerge>,
+    valign: Option<VAlign>,
+}
+
+/// Bytes in one `TC80`: `TCGRF` (u16), `wWidth` (u16), then four `Brc80MayBeNil`s.
+const TC80_LEN: usize = 20;
+
+/// The vertical merge and alignment in the `TCGRF` of each `TC80` that follows the edges of a
+/// `sprmTDefTable` operand ([MS-DOC] `TC80`, `TCGRF`): bits 5-6 are `vertMerge` (1 = continues
+/// the merge from the cell above, 3 = starts one) and bits 7-8 `vertAlign` (1 = centre,
+/// 2 = bottom). Current Word (checked with Microsoft 365) writes a cell's vertical merge and alignment only here,
+/// with no `sprmTVertMerge` or `sprmTVertAlign`. A top-aligned or unmerged cell gives `None`,
+/// as do cells whose TC80 the operand does not hold (Word may write fewer TC80s than cells;
+/// the Word 6.0/95 translation writes none).
+fn def_table_cell_flags(operand: &[u8]) -> Vec<TcFlags> {
+    let itc = operand.get(2).copied().unwrap_or(0) as usize;
+    // cb (2 bytes), itcMac (1), then itcMac + 1 edges of 2 bytes each.
+    let first = 3 + (itc + 1) * 2;
+    let mut out = Vec::new();
+    for i in 0..itc.min(MAX_COLS) {
+        let at = first + i * TC80_LEN;
+        // Only a complete TC80 counts: a cut-off one is the end of the array.
+        let Some(&[lo, hi, ..]) = operand.get(at..at + TC80_LEN) else { break };
+        let rgf = u16::from_le_bytes([lo, hi]);
+        let vmerge = match (rgf >> 5) & 3 {
+            3 => Some(VMerge::Restart),
+            1 => Some(VMerge::Continue),
+            _ => None,
+        };
+        let valign = match (rgf >> 7) & 3 {
+            1 => Some(VAlign::Center),
+            2 => Some(VAlign::Bottom),
+            _ => None,
+        };
+        if vmerge.is_some() || valign.is_some() {
+            out.push(TcFlags { cell: i as u8, vmerge, valign });
+        }
+    }
+    out
 }
 
 /// Table borders from `sprmTTableBorders80`: cb (0x18) then six Brc80s in the order top,
