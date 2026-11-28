@@ -228,21 +228,23 @@ impl Chart {
     /// for any chart that varies colours by point (even when a series colour keeps the points one
     /// colour, as Word does), and for a one-series chart that could vary with a point coloured on
     /// its own (#5978); else one entry per series. Points without a category name (scatter) are
-    /// numbered.
-    pub(super) fn legend_entries(&self) -> Vec<(String, Rgb)> {
+    /// numbered. The key of a bar or slice left empty (`a:noFill`, its own or the series') is
+    /// `None`: Word leaves it blank and keeps its name.
+    pub(super) fn legend_entries(&self) -> Vec<(String, Option<Rgb>)> {
         if self.point_legend {
             let n = if self.cats.is_empty() { self.n } else { self.cats.len() };
+            let hollow = |i: usize| matches!(self.kind, Kind::Bar | Kind::Pie | Kind::Doughnut) && self.series.first().is_some_and(|s| !s.fills(i));
             return (0..n)
                 .map(|i| {
                     let name = self.cats.get(i).filter(|c| !c.is_empty()).cloned().unwrap_or_else(|| (i + 1).to_string());
-                    (name, self.key_colour(0, i))
+                    (name, (!hollow(i)).then(|| self.key_colour(0, i)))
                 })
                 .collect();
         }
         self.series
             .iter()
             .enumerate()
-            .map(|(j, s)| (if s.name.is_empty() { format!("Series {}", j + 1) } else { s.name.clone() }, self.series_colour(j)))
+            .map(|(j, s)| (if s.name.is_empty() { format!("Series {}", j + 1) } else { s.name.clone() }, Some(self.series_colour(j))))
             .collect()
     }
 }

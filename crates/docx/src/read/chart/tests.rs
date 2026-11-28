@@ -1939,6 +1939,19 @@ fn a_point_with_only_a_no_fill_leaves_its_bar_or_slice_empty() {
     assert!(filled(&chart_items(&space(&pie), &theme(), 200.0, 150.0)).is_empty(), "pie series");
 }
 
+#[test]
+fn a_hidden_points_legend_key_is_blank_and_keeps_its_name() {
+    let hide = r#"<c:dPt><c:idx val="1"/><c:spPr><a:noFill/></c:spPr></c:dPt>"#;
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), hide);
+    let pie = format!(r#"<c:pieChart><c:varyColors val="1"/>{s}</c:pieChart>"#);
+    // A one-series column chart with a formatted point lists its categories too (#5978).
+    for (plot, what) in [(pie, "pie"), (column_chart("", std::slice::from_ref(&s)), "column")] {
+        let items = with_legend(&plot, "r", 300.0, 200.0);
+        assert_eq!(swatch_colours(&items).len(), 2, "{what}: no key for Q2");
+        assert!(CATS.iter().all(|c| text_centre(&items, c).is_some()), "{what}: every name stays");
+    }
+}
+
 /// The centre of the text item that reads `text`.
 fn text_centre(items: &[GraphicItem], text: &str) -> Option<(f32, f32)> {
     items.iter().find_map(|it| match it {
