@@ -240,6 +240,9 @@ impl Writer<'_> {
         if body.anchor != craft_wordmodel::props::VAlign::Top {
             attrs.push(("anchor", craft_wordmodel::props::anchor_ooxml(body.anchor)));
         }
+        if body.no_wrap {
+            attrs.push(("wrap", "none"));
+        }
         // Internal margins, when the box has its own.
         let inset = body.inset.map(|i| i.map(|v| v.min(craft_wordmodel::MAX_TEXT_BOX_INSET).to_string()));
         if let Some(inset) = &inset {
