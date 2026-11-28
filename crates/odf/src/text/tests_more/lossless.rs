@@ -397,10 +397,13 @@ fn edits_leave_kept_markup_well_formed() {
     // Whatever is edited (a paragraph that opens a section deleted, text typed into each
     // paragraph, a style changed), what is written stays well-formed and reads back.
     use craft_wordmodel::Pos;
-    for s in SAMPLES {
+    // The gate edits every divisor-th block, from a different one in each sample; nightly edits
+    // each one.
+    let step = craft_testkit::hostile::divisor();
+    for (k, s) in SAMPLES.into_iter().enumerate() {
         let d = import(&package(&s)).unwrap();
         let mut edits: Vec<craft_wordmodel::Document> = Vec::new();
-        for i in 0..d.body.len() {
+        for i in ((k % step) % d.body.len().max(1)..d.body.len()).step_by(step) {
             let mut e = d.clone();
             if e.body.get(i).is_some_and(|b| b.as_para().is_some()) {
                 e.insert_text(&Pos::body(i, 0), "Edited ", &Default::default()).unwrap();
