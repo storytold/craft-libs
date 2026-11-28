@@ -379,7 +379,7 @@ fn is_pre_2007_dos864(bytes: &[u8]) -> bool {
 /// The text state of a binary DXF file, learnt from the header as the tags go by: `$ACADVER`
 /// (R2007+ strings are UTF-8) and `$DWGCODEPAGE` (the code page of older files). Both come
 /// first in the HEADER section and are ASCII, so every later string is decoded right.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct BinaryText {
     /// The header variable whose value comes next (after a group 9).
     var: Option<HeaderVar>,
@@ -421,8 +421,29 @@ impl BinaryText {
     /// except under an East Asian code page, where a file of all-valid-UTF-8 strings is taken
     /// as UTF-8 (see [`Self::needs_code_page_pass`]).
     pub(crate) fn string(&mut self, code: i32, raw: &[u8]) -> String {
+        let s = self.decode_string(raw);
+        self.learn(code, &s, true);
+        s
+    }
+
+    /// Move past a string of group `code` whose text isn't needed, leaving the state as
+    /// [`Self::string`] would for the strings after it. The text is decoded only where it can
+    /// change that state (a header variable's name, or the value after `$ACADVER` or
+    /// `$DWGCODEPAGE`), and an unknown code page isn't logged a second time. Skipped strings
+    /// aren't counted for [`Self::needs_code_page_pass`], so skip on a copy of the state.
+    pub(crate) fn skip(&mut self, code: i32, raw: &[u8]) {
+        if code == 9 || matches!((code, self.var), (1, Some(HeaderVar::AcadVer)) | (3, Some(HeaderVar::CodePage))) {
+            let s = self.decode_string(raw);
+            self.learn(code, &s, false);
+        } else {
+            self.var = None;
+        }
+    }
+
+    /// Decode one string in the current state, noting whether an East Asian one is valid UTF-8.
+    fn decode_string(&mut self, raw: &[u8]) -> String {
         let d = if self.utf8 { Decoder::Utf8 } else { self.code_page.unwrap_or(Decoder::Utf8) };
-        let s = if d.is_east_asian() && !self.code_page_only {
+        if d.is_east_asian() && !self.code_page_only {
             if !raw.is_ascii() {
                 if std::str::from_utf8(raw).is_ok() {
                     self.ea_utf8 = true;
@@ -433,7 +454,11 @@ impl BinaryText {
             decode_text(raw, d).into_owned()
         } else {
             decode(raw, d).into_owned()
-        };
+        }
+    }
+
+    /// Update the state from the string `s` of group `code`.
+    fn learn(&mut self, code: i32, s: &str, log_unknown: bool) {
         match (code, self.var.take()) {
             (9, _) => {
                 self.var = match s.trim() {
@@ -442,16 +467,15 @@ impl BinaryText {
                     _ => None,
                 }
             }
-            (1, Some(HeaderVar::AcadVer)) => self.utf8 = Version::for_acadver(&s).is_some_and(Version::utf8),
+            (1, Some(HeaderVar::AcadVer)) => self.utf8 = Version::for_acadver(s).is_some_and(Version::utf8),
             (3, Some(HeaderVar::CodePage)) => {
-                self.code_page = decoder(&s);
-                if self.code_page.is_none() {
+                self.code_page = decoder(s);
+                if log_unknown && self.code_page.is_none() {
                     log::warn!("DXF: unknown code page {}; reading the text as ANSI_1252", loggable(s.trim()));
                 }
             }
             _ => {}
         }
-        s
     }
 }
 

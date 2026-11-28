@@ -321,9 +321,10 @@ fn count_ascii_pairs(bytes: &[u8]) -> usize {
     tags
 }
 
-/// [`parse`] with an explicit group-code limit. For ASCII DXF the limit is checked up front from
-/// the line count, before the text is decoded or any tag allocated, so an oversized file fails in
-/// milliseconds instead of after it has filled memory.
+/// [`parse`] with an explicit group-code limit. The limit is checked up front, before any tag is
+/// allocated (for ASCII DXF from the line count, before the text is decoded; for binary DXF by
+/// reading the groups once without keeping them), so an oversized file fails in milliseconds
+/// instead of after it has filled memory.
 ///
 /// # Errors
 ///
@@ -565,7 +566,7 @@ struct Cur<'a> {
 }
 
 impl<'a> Cur<'a> {
-    fn take(&mut self, n: usize) -> Result<&[u8]> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let end = self.p.checked_add(n).ok_or(DxfError::Eof)?;
         let s = self.b.get(self.p..end).ok_or(DxfError::Eof)?;
         self.p = end;
@@ -646,34 +647,84 @@ fn parse_binary_with_limit(b: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
     parse_binary_pass(b, max_tags, &mut codepage::BinaryText::code_page_pass())
 }
 
-fn parse_binary_pass(b: &[u8], max_tags: usize, text: &mut codepage::BinaryText) -> Result<Vec<Tag>> {
+/// A binary group's value as it is stored, before its text is decoded.
+enum BinaryValue<'a> {
+    Str(&'a [u8]),
+    Real(f64),
+    Int(i64),
+    Bool(bool),
+    Hex(&'a [u8]),
+}
+
+/// The group at the cursor: its code and its value, read by the code's kind.
+fn binary_group<'a>(c: &mut Cur<'a>, legacy: bool) -> Result<(i32, BinaryValue<'a>)> {
+    // 255 escapes a 2-byte code only in the 1-byte layout; in R13+ it is an ordinary code.
+    let code = if legacy {
+        match c.u8()? {
+            255 => i32::from(c.i16()?),
+            x => i32::from(x),
+        }
+    } else {
+        i32::from(c.i16()?)
+    };
+    let value = match kind_of(code) {
+        Kind::Str => BinaryValue::Str(c.cstr()?),
+        Kind::Real => BinaryValue::Real(c.f64()?),
+        Kind::Int16 => BinaryValue::Int(i64::from(c.i16()?)),
+        Kind::Int32 => BinaryValue::Int(i64::from(c.i32()?)),
+        Kind::Int64 => BinaryValue::Int(c.i64()?),
+        Kind::Bool => BinaryValue::Bool(c.u8()? != 0),
+        Kind::Hex => {
+            let n = usize::from(c.u8()?);
+            BinaryValue::Hex(c.take(n)?)
+        }
+    };
+    Ok((code, value))
+}
+
+/// The number of tags [`parse_binary_pass`] makes of `b` when it starts in the text state `text`:
+/// the groups are read the same way, up to the same EOF group, but nothing is kept, and a string
+/// is decoded only when it can end the file or change the text state. Its errors are those the
+/// parse would meet, found before any tag is allocated: a group cut short, the group past
+/// `max_tags`. (A body with no group counts 0, and the parse reports it.)
+fn count_binary_groups(b: &[u8], legacy: bool, max_tags: usize, mut text: codepage::BinaryText) -> Result<usize> {
     let mut c = Cur { b, p: 0 };
-    let mut tags = Vec::new();
-    let legacy = legacy_binary_layout(b);
+    let mut count = 0;
     while c.p < b.len() {
-        // 255 escapes a 2-byte code only in the 1-byte layout; in R13+ it is an ordinary code.
-        let code = if legacy {
-            match c.u8()? {
-                255 => i32::from(c.i16()?),
-                x => i32::from(x),
-            }
-        } else {
-            i32::from(c.i16()?)
-        };
-        let v = match kind_of(code) {
-            Kind::Str => Value::Str(unescape_unicode(&text.string(code, c.cstr()?))),
-            Kind::Real => {
-                let r = c.f64()?;
-                if r.is_finite() { Value::Real(r) } else { Value::Invalid(r.to_string()) }
-            }
-            Kind::Int16 => Value::Int(i64::from(c.i16()?)),
-            Kind::Int32 => Value::Int(i64::from(c.i32()?)),
-            Kind::Int64 => Value::Int(c.i64()?),
-            Kind::Bool => Value::Bool(c.u8()? != 0),
-            Kind::Hex => {
-                let n = usize::from(c.u8()?);
-                let bytes = c.take(n)?;
-                let mut s = String::with_capacity(n * 2);
+        let (code, value) = binary_group(&mut c, legacy)?;
+        count += 1;
+        if count > max_tags {
+            return Err(DxfError::TooLarge { tags: count, limit: max_tags });
+        }
+        let BinaryValue::Str(raw) = value else { continue };
+        if code != 0 {
+            text.skip(code, raw);
+        } else if unescape_owned(text.string(code, raw)).trim_end() == "EOF" {
+            break;
+        }
+    }
+    Ok(count)
+}
+
+/// The tags of a binary body, in a list reserved once at its final length: counted first (see
+/// [`count_binary_groups`]), because a list grown by doubling holds its old and new buffers at
+/// once at its last growth, up to three times the tags' size.
+fn parse_binary_pass(b: &[u8], max_tags: usize, text: &mut codepage::BinaryText) -> Result<Vec<Tag>> {
+    let legacy = legacy_binary_layout(b);
+    let count = count_binary_groups(b, legacy, max_tags, text.clone())?;
+    let mut tags = Vec::new();
+    tags.try_reserve_exact(count).map_err(|_| DxfError::OutOfMemory { tags: count })?;
+    let mut c = Cur { b, p: 0 };
+    while c.p < b.len() {
+        let (code, value) = binary_group(&mut c, legacy)?;
+        let v = match value {
+            BinaryValue::Str(raw) => Value::Str(unescape_unicode(&text.string(code, raw))),
+            BinaryValue::Real(r) if r.is_finite() => Value::Real(r),
+            BinaryValue::Real(r) => Value::Invalid(r.to_string()),
+            BinaryValue::Int(i) => Value::Int(i),
+            BinaryValue::Bool(x) => Value::Bool(x),
+            BinaryValue::Hex(bytes) => {
+                let mut s = String::with_capacity(bytes.len() * 2);
                 for &x in bytes {
                     s.push(char::from(HEX_DIGITS[usize::from(x >> 4)]));
                     s.push(char::from(HEX_DIGITS[usize::from(x & 15)]));
@@ -682,6 +733,8 @@ fn parse_binary_pass(b: &[u8], max_tags: usize, text: &mut codepage::BinaryText)
             }
         };
         let eof = code == 0 && matches!(&v, Value::Str(s) if s.trim_end() == "EOF");
+        // Allocates nothing when the count is right; kept so that a miscount grows the list with an
+        // allocation that can fail instead of one that ends the app.
         reserve_tags(&mut tags, 1)?;
         tags.push(Tag { code, value: v });
         if tags.len() > max_tags {
