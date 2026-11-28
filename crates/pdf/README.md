@@ -14,7 +14,7 @@ No feature is enabled by default.
 | `write-pdf` | `write` plus Krilla's embedded-PDF support |
 | `write-simple-text` | `write` plus Krilla's optional text shaper and `draw_text` |
 | `filters` | The `/Filter` chain for editing and writing PDF files: decode and encode, with limits and accounting. No reader or writer dependency |
-| `crypt` | The standard security handler: decrypt, encrypt and create encryption. No reader or writer dependency |
+| `crypt` | Password security and the supported public-key handler: decrypt, encrypt and create encryption. No reader or writer dependency |
 | `cos` | `crypt` and `filters` plus the object layer: open, edit and save PDF files (incremental and full saves). No reader or writer dependency |
 | `test-support` | `cos` plus `testing::Pdf`, a builder of small synthetic PDF files for tests |
 | `content` | `cos` plus `cos::content`: parse content streams into operators with source spans, write them back, and the matrix arithmetic. Uses hayro-syntax's tokenizer for inline images |
@@ -80,6 +80,16 @@ prefix without a failure status. Use fresh caches for checks, while retaining th
 Native unwinding panics become errors; discard partial devices, buffers, parsers and caches
 after backend failure. WASM aborts and process-wide allocation failure cannot be caught.
 During interpretation, cancellation is polled between operators, so a decoder may finish before noticing it.
+
+## Certificate security
+
+The object layer reads and writes the document-wide `adbe.pkcs7.s5` profile with one
+`DefaultCryptFilter`, AES-128 or AES-256, and optional clear metadata. The caller supplies a
+`cos::SecurityResolver` that authenticates a recipient and returns a security handler.
+Applications own CMS envelope processing, certificate policy, private-key operations and PIN
+handling. The object layer can reuse the resulting credential for the same encryption dictionary
+and file identifier. The syntax reader accepts an authenticated object decryptor after the caller
+has validated those parameters. Other public-key profiles are unsupported.
 
 ## Backend provenance and consumer pins
 

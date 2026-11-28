@@ -13,6 +13,8 @@ use crate::crypt::{EncryptDict, Method, SecurityHandler, StreamKind};
 use crate::filters::MAX_CHAIN;
 
 use crate::cos::document::Held;
+
+pub(crate) mod public_key;
 use crate::cos::{Dict, Document, Object, PdfString, Stream};
 
 /// How many references one read or write of an object may follow, with all that it loads on the
@@ -119,6 +121,7 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
         p: int(b"P", -1) as i32,
         encrypt_metadata: !matches!(d.get(b"EncryptMetadata").map(|v| doc.resolve(v)).as_deref(), Some(Object::Bool(false))),
         crypt_filters,
+        public_key: None,
         stm_f: name(d, b"StmF").unwrap_or_else(|| b"Identity".to_vec()),
         str_f: name(d, b"StrF").unwrap_or_else(|| b"Identity".to_vec()),
         ef_f: name(d, b"EFF").unwrap_or_default(),

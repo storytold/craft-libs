@@ -400,6 +400,15 @@ constructors, decode limits, and object sizes are preserved. Cryptographic and i
 run to completion between checkpoints. Synthetic API and backend tests cover interruption inside
 the supported stages.
 
+## Authenticated public-key documents
+
+`Pdf::new_with_external_decryptor` reads the original encrypted bytes after the caller
+authenticates and validates the object-layer encryption parameters. The callback only
+decrypts object values. It receives stream type and explicit crypt filter information,
+and the reader consumes a single leading `/Crypt` stage before decoding the remaining
+filters. Xref repair carries the same credential and decode limits. Password loading
+keeps its existing path and cancellation behavior.
+
 ## Craft patches for the flattener
 
 Local changes for craft-prepress's PDF-in adapter (`craft_prepress::flatten::pdf`), which reads

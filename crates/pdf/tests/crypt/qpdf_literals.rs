@@ -64,6 +64,7 @@ impl Case {
     fn dict(&self) -> EncryptDict {
         EncryptDict {
             filter: b"Standard".to_vec(),
+            public_key: None,
             v: self.v,
             r: self.r,
             length_bits: self.length_bits,

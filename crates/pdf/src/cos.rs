@@ -26,7 +26,8 @@ mod writer;
 pub(crate) mod testkit;
 
 pub use crate::crypt::{
-    Algorithm, Auth, Method as CryptMethod, NewEncryption, Permissions, SecurityHandler, effective_password, pdfdoc_byte, pdfdoc_char,
+    Algorithm, Auth, EncryptDict, Method as CryptMethod, NewEncryption, Permissions, SecurityHandler, StreamKind as CryptStreamKind,
+    effective_password, pdfdoc_byte, pdfdoc_char,
 };
 pub use budget::{DecodeBudget, ImageBudget, MAX_PAGE_DECODED, MAX_PAGE_FORMS, MAX_REDACTED_IMAGE_PIXELS};
 pub use bytes::Bytes;
@@ -34,6 +35,21 @@ pub use document::{DECODE_PARMS_KEYS, Document, ReadState, Revision, SourceIdent
 pub use object::{Dict, MAX_DECODED, MAX_JBIG2_GLOBALS, Name, ObjRef, Object, PdfString, Stream, TextChars};
 pub use parser::{Lexer, is_whitespace, parse_indirect};
 pub use writer::{SaveOptions, civil_from_days, new_file_id, pdf_date, reachable_objects, serialize, write_full, write_incremental};
+
+/// Supplies an authenticated handler without coupling the object layer to cards or CMS.
+/// Implementations must recover the seed and permissions from a matching recipient envelope.
+pub trait SecurityResolver {
+    fn authenticate(&self, params: &EncryptDict, id0: &[u8]) -> Result<SecurityHandler, CosError>;
+}
+
+impl<F> SecurityResolver for F
+where
+    F: Fn(&EncryptDict, &[u8]) -> Result<SecurityHandler, CosError>,
+{
+    fn authenticate(&self, params: &EncryptDict, id0: &[u8]) -> Result<SecurityHandler, CosError> {
+        self(params, id0)
+    }
+}
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum CosError {
@@ -49,6 +65,8 @@ pub enum CosError {
     Filter(String),
     #[error("the document is protected by a password")]
     NeedsPassword,
+    #[error("the document requires a certificate private key")]
+    NeedsCertificate,
     #[error("the password is incorrect")]
     WrongPassword,
     #[error("unsupported security: {0}")]
