@@ -204,8 +204,12 @@ pub trait AudioEffect: Send {
     }
     /// How long the output keeps sounding after the input stops, in samples (reverb and delay
     /// tails), so an offline render can run past the end of its input. The count starts after
-    /// the latency: a render that keeps all of the output runs `latency() + tail_samples()`
-    /// samples past the end of its input.
+    /// the latency: a render that keeps the tail runs `latency() + tail_samples()` samples past
+    /// the end of its input. An effect whose output decays without reaching zero (a feedback
+    /// delay, a resonator) reports where the decay falls below a cutoff, 60 dB under its start
+    /// for the feedback delays and resonators, so quieter output can still follow that point.
+    /// Those effects also cap the tail they report at 60 s, which is what a feedback of 1 or more
+    /// reports.
     fn tail_samples(&self) -> usize {
         0
     }
@@ -466,6 +470,37 @@ pub(crate) mod testutil {
         pub fn uniform(&mut self) -> f32 {
             ((self.next_u64() >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0
         }
+    }
+
+    /// Speech-like test signal: voiced syllables (harmonics of a gliding pitch under an envelope),
+    /// noise bursts (consonants) and pauses.
+    pub fn speechy(sr: f64, secs: f64, seed: u64) -> Vec<f32> {
+        let n = (sr * secs) as usize;
+        let mut rng = Rng::new(seed);
+        let mut out = vec![0.0f32; n];
+        let mut i = 0usize;
+        while i < n {
+            let len = ((0.08 + 0.25 * (rng.uniform() * 0.5 + 0.5) as f64) * sr) as usize;
+            let kind = rng.uniform();
+            let f0 = 110.0 + 120.0 * (rng.uniform() as f64 * 0.5 + 0.5);
+            let glide = 1.0 + 0.3 * rng.uniform() as f64;
+            let amp = 0.2 + 0.3 * (rng.uniform() * 0.5 + 0.5);
+            for k in 0..len.min(n - i) {
+                let t = k as f64 / sr;
+                let env = (std::f64::consts::PI * k as f64 / len as f64).sin() as f32;
+                let v = if kind > 0.3 {
+                    let f = f0 * (1.0 + (glide - 1.0) * k as f64 / len as f64);
+                    (1..8).map(|h| ((2.0 * std::f64::consts::PI * f * h as f64 * t).sin() / h as f64) as f32).sum::<f32>()
+                } else if kind > -0.4 {
+                    rng.uniform()
+                } else {
+                    0.0
+                };
+                out[i + k] = v * env * amp;
+            }
+            i += len + ((rng.uniform() * 0.5 + 0.5) * 0.15 * sr as f32) as usize;
+        }
+        out
     }
 
     pub fn sine(freq: f64, amp: f64, sr: f64, n: usize, phase: f64) -> Vec<f32> {

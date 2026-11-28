@@ -487,20 +487,40 @@ pub fn configure_stream(stream: &std::net::TcpStream) -> std::io::Result<()> {
     stream.set_write_timeout(Some(IO_TIMEOUT))
 }
 
+/// The time an [`AuthDeadlineStream`] reads its deadline against: [`Instant::now`] in a server, or a time a test sets
+/// by hand.
+pub type DeadlineClock = std::sync::Arc<dyn Fn() -> Instant + Send + Sync>;
+
+/// The real clock, [`Instant::now`].
+pub fn real_clock() -> DeadlineClock {
+    std::sync::Arc::new(Instant::now)
+}
+
 /// A read wrapper that fails once [`AUTH_DEADLINE`] passes without [`Self::authenticated`] being
 /// called, whatever the client sends meanwhile; after that only [`IO_TIMEOUT`] applies.
-#[derive(Debug)]
 pub struct AuthDeadlineStream {
     inner: std::net::TcpStream,
     deadline: Option<std::time::Instant>,
+    clock: DeadlineClock,
+}
+
+impl std::fmt::Debug for AuthDeadlineStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthDeadlineStream").field("inner", &self.inner).field("deadline", &self.deadline).finish_non_exhaustive()
+    }
 }
 
 impl AuthDeadlineStream {
     /// Wraps `inner`; reads fail once `auth_deadline` has passed unauthenticated.
     pub fn new(inner: std::net::TcpStream, auth_deadline: Duration) -> Self {
+        Self::with_clock(inner, auth_deadline, real_clock())
+    }
+
+    /// [`Self::new`] with the deadline read against `clock` instead of the real clock.
+    pub fn with_clock(inner: std::net::TcpStream, auth_deadline: Duration, clock: DeadlineClock) -> Self {
         // A limit too large to represent expires at once rather than never.
-        let now = Instant::now();
-        Self { inner, deadline: Some(now.checked_add(auth_deadline).unwrap_or(now)) }
+        let now = clock();
+        Self { inner, deadline: Some(now.checked_add(auth_deadline).unwrap_or(now)), clock }
     }
 
     /// The handshake succeeded: lift the deadline and restore the idle timeout.
@@ -513,7 +533,7 @@ impl AuthDeadlineStream {
 impl std::io::Read for AuthDeadlineStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if let Some(deadline) = self.deadline {
-            let left = deadline.saturating_duration_since(Instant::now());
+            let left = deadline.saturating_duration_since((self.clock)());
             if left.is_zero() {
                 return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "not authenticated in time"));
             }

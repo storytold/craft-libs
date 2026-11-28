@@ -7,6 +7,7 @@ Provider ids:
   - `craft.mask`: CPU stand-in for FilmCraft mask composite until WGSL lands on wgpu
   - `craft.composite.premul`: CPU premultiplied "over" (Normal path from `composite.wgsl`) until WGSL lands on wgpu
   - `craft.readback`: CPU decode of staging buffers (`f16` RGBA → `f32`, or `fmt:u8` passthrough); uses [`chunk_buffer`](../crates/gpu/src/chunk.rs) against device caps and [`f16_to_f32*`](../crates/gpu/src/readback.rs) from **craft-gpu**
+- `craft.yuv`: RGBA8 to NV12, P010 or I420 with scaling, registered from **craft-gpu-yuv** (`YuvProvider`, see [its README](../crates/gpu-yuv/README.md)). It is not in `register_all()`, since it depends on wgpu. `YuvProvider::new()` converts on the CPU on any context; `YuvProvider::with_device` runs its WGSL render passes on a device the host passes in.
 - `{app}.*`: registered by application wasm at init
 
 Generic worker code must only call `ProviderRegistry::dispatch`: never import app gpu crates.

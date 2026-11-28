@@ -1823,6 +1823,7 @@ dependencies = [
  "craft-gpu-null",
  "craft-gpu-providers",
  "craft-gpu-wgpu",
+ "craft-gpu-yuv",
  "craft-gridcraft-format",
  "craft-gzip",
  "craft-har",
@@ -2958,6 +2959,17 @@ dependencies = [
  "craft-gpu-providers",
  "pollster 0.4.0",
  "wgpu",
+]
+
+[[package]]
+name = "craft-gpu-yuv"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "craft-gpu-null",
+ "pollster 0.4.0",
+ "wgpu",
+ "yuv",
 ]
 
 [[package]]
@@ -4317,7 +4329,10 @@ dependencies = [
 name = "craft-testkit"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rustix 1.1.6",
+ "serde_json",
+ "sha2 0.10.9",
  "skrifa 0.47.0",
 ]
 
@@ -15059,6 +15074,15 @@ dependencies = [
  "quote",
  "syn 3.0.6",
  "synstructure 0.14.0",
+]
+
+[[package]]
+name = "yuv"
+version = "0.8.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d109d1eacc7b034329873d2d848039b365c65ab7d751b19ee84e4921c62c607"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]

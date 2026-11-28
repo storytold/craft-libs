@@ -39,6 +39,7 @@ log = "0.4"
 craft-plist = { path = "crates/plist" }
 craft-gpu-device = { path = "crates/gpu-device" }
 craft-wasm = { path = "crates/wasm" }
+craft-gpu-yuv = { path = "crates/gpu-yuv" }
 craft-platform = { path = "crates/platform" }
 craft-png = { path = "crates/png" }
 craft-aep = { path = "crates/aep" }
