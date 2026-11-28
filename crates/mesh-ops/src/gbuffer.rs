@@ -237,7 +237,8 @@ pub fn surface_at(mesh: &Mesh, t: u32, b1: f32, b2: f32) -> Option<Surface> {
     let geo_nrm = (db - da).cross(dc - da).try_normalize().map_or(nrm, |n| n.as_vec3());
     let tan = *mesh.tangents.get(a)? * b0 + *mesh.tangents.get(b)? * b1 + *mesh.tangents.get(c)? * b2;
     let uv = *mesh.uvs.get(a)? * b0 + *mesh.uvs.get(b)? * b1 + *mesh.uvs.get(c)? * b2;
-    let tdir = tan.truncate().try_normalize().unwrap_or_else(|| nrm.any_orthonormal_vector());
+    let tdir = tan.truncate() - nrm * nrm.dot(tan.truncate());
+    let tdir = tdir.try_normalize().unwrap_or_else(|| nrm.any_orthonormal_vector());
     let w = mesh.tangents.get(a).map(|t| if t.w < 0.0 { -1.0 } else { 1.0 }).unwrap_or(1.0);
     Some(Surface { pos, nrm, geo_nrm, tangent: tdir.extend(w), uv, tri: t })
 }
@@ -362,6 +363,18 @@ mod tests {
             m.normals = vec![Vec3::X; 3];
             let surface = surface_at(&m, 0, 0.25, 0.25).unwrap();
             assert!((surface.geo_nrm - Vec3::Y).length() < 1e-6, "scale {s}: {}", surface.geo_nrm);
+        }
+    }
+
+    #[test]
+    fn torus_surface_tangents_are_orthogonal_to_normals() {
+        let m = primitives::torus(2.0, 0.5, 12, 8);
+        let g = UvGBuffer::new(&m, 0, 64, 64);
+        assert!(g.covered_count() > 0);
+        for i in 0..g.tri.len() {
+            if let Some(s) = g.surface(&m, i) {
+                assert!(s.nrm.dot(s.tangent.truncate()).abs() < 1e-4, "texel {i}: {s:?}");
+            }
         }
     }
 

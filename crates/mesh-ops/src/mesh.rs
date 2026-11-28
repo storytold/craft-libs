@@ -71,7 +71,7 @@ impl Mesh {
     /// Bounding-sphere radius around the bounds center (at least a small epsilon).
     pub fn radius(&self) -> f32 {
         let (lo, hi) = self.bounds();
-        ((hi - lo).length() * 0.5).max(1e-4)
+        ((hi.as_dvec3() - lo.as_dvec3()).length() * 0.5).max(1e-4) as f32
     }
 
     /// Vertex indices of triangle `t`.
@@ -531,10 +531,11 @@ impl Mesh {
     /// Uniformly scale and translate so the mesh is centered with the given bounding radius.
     pub fn normalize_to(&mut self, radius: f32) {
         let (lo, hi) = self.bounds();
+        let (lo, hi) = (lo.as_dvec3(), hi.as_dvec3());
         let c = (lo + hi) * 0.5;
-        let s = radius / self.radius();
+        let s = f64::from(radius) / ((hi - lo).length() * 0.5).max(1e-4);
         for p in &mut self.positions {
-            *p = (*p - c) * s;
+            *p = ((p.as_dvec3() - c) * s).as_vec3();
         }
     }
 
@@ -616,6 +617,25 @@ mod tests {
             "Default",
         )
         .unwrap()
+    }
+
+    #[test]
+    fn normalize_huge_translated_quad() {
+        for (scale, offset) in [(1e20, 2e20), (1e37, 2e38)] {
+            let mut m = quad();
+            for p in &mut m.positions {
+                *p = *p * scale + Vec3::splat(offset);
+            }
+            assert!(m.radius().is_finite() && m.radius() > scale * 0.5);
+            m.normalize_to(1.0);
+            assert!((m.radius() - 1.0).abs() < 1e-5);
+            for (i, p) in m.positions.iter().enumerate() {
+                assert!((p.length() - 1.0).abs() < 1e-5);
+                for q in &m.positions[..i] {
+                    assert!((*p - *q).length() > 1.0);
+                }
+            }
+        }
     }
 
     #[test]
