@@ -645,6 +645,18 @@ fn opcode_lists_round_trip() {
     assert_eq!(craft_raw::probe_info(&bytes).unwrap().opcodes, raw.opcodes);
 }
 
+/// A lateral CA map (a Sony decoder's, corrected before demosaic) is not a DNG opcode: the writer leaves it out and
+/// keeps the three lists.
+#[test]
+fn lateral_ca_map_is_never_written_to_a_dng() {
+    let mut raw = synthetic(32, 24, Some(Cfa::bayer("RGGB").unwrap()), 1);
+    raw.opcodes.list3 = vec![Opcode::FixVignetteRadial { k: [0.0; 5], center: [0.5, 0.5] }];
+    raw.opcodes.lateral_ca = craft_raw::LateralCa::new([15.5, 11.5], 4.0, vec![1e-3, 2e-3], vec![-1e-3, 0.0]);
+    assert!(raw.opcodes.lateral_ca.is_some());
+    let back = decode(&write_dng(&raw, &DngWriteOptions::default()).unwrap()).unwrap();
+    assert_eq!(back.opcodes, craft_raw::OpcodeLists { lateral_ca: None, ..raw.opcodes.clone() });
+}
+
 #[test]
 fn preview_and_probe() {
     let raw = synthetic(16, 16, Some(Cfa::bayer("RGGB").unwrap()), 1);

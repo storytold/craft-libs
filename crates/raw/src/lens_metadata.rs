@@ -137,7 +137,9 @@ pub enum SonySettingMeaning {
 /// Whether a component is applied, and if not, why.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SonyLensStatus {
-    /// Converted into the image's `OpcodeList3` (ILCE-7RM4A, ILCE-7RM6 or eligible full-frame ILCE-7CR Bayer distortion).
+    /// Converted into the image's `OpcodeList3` (ILCE-7RM4A, ILCE-7RM6 or eligible full-frame ILCE-7CR Bayer distortion),
+    /// or into its pre-demosaic lateral CA map (`OpcodeLists::lateral_ca`: the ILCE-7RM6's CA, for the lenses it was
+    /// measured to improve).
     Applied,
     /// No usable table.
     NoTable,

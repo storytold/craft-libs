@@ -1,5 +1,6 @@
-//! Sony ARW lens corrections from the tables in the raw IFD, as the equivalent DNG `OpcodeList3` opcodes, so they
-//! reach the same "profile corrections" (`optics.lens_profile`) as a DNG's embedded warp.
+//! Sony ARW lens corrections from the tables in the raw IFD: distortion as the equivalent DNG `OpcodeList3` opcode,
+//! so it reaches the same "profile corrections" (`optics.lens_profile`) as a DNG's embedded warp, and, on the
+//! ILCE-7RM6, lateral CA as the mosaic's pre-demosaic map ([`LateralCa`]).
 //!
 //! These are the ILCE-7RM6 conventions, measured against the camera JPEG. [`crate::arw_lens`] holds the ILCE-7RM4A
 //! conventions, measured against Sony's Imaging Edge exports (unit 16384, the table indexed at the output radius).
@@ -36,6 +37,9 @@
 //!   `lateral_ca: false`, because applied after demosaic they made the render's CA worse (numbers there). To turn
 //!   them on in code, pass `true` there. When on, a CA value beyond [`CA_MAX_RELATIVE`] or a colour plane that fails
 //!   the fit gate above drops both colour planes, and G alone is applied to all three channels.
+//!   Instead, [`lateral_ca`] turns the table into a map corrected on the mosaic before demosaic
+//!   (`OpcodeLists::lateral_ca`), on the full-frame bodies of [`FULL_FRAME_CROP`] only, always: it is not governed by
+//!   Lens Corrections (`optics.lens_profile`) and never written to a DNG.
 //!
 //! The correction is produced whatever the in-camera flag says. Only bodies listed in [`FULL_FRAME_CROP`] or
 //! [`APSC_BODIES`] get it: the unit and the knot spacing are verified on the ILCE-7RM6 and, for distortion, on the
@@ -47,7 +51,7 @@
 
 use crate::opcodes::max_radius;
 use crate::shared::fit_radial_warp;
-use crate::{Opcode, Rect};
+use crate::{LateralCa, Opcode, Rect};
 use craft_tiff::Ifd;
 use std::ops::RangeInclusive;
 
@@ -104,6 +108,11 @@ const CA_UNIT: f64 = 3.36e6;
 /// corner; the largest value in the 54 measured photos' tables is 1724 (FE 24–70 mm), 1724 / 3.36·10⁶ ≈ 5.1·10⁻⁴.
 /// A table beyond it is refused.
 const CA_MAX_RELATIVE: f64 = 2e-3;
+/// The lenses (Exif `LensModel`) whose render corner CA the pre-demosaic map lowered in the verification
+/// (docs/sony-ilce7rm6-lens-corrections.md, rms 0.028 → 0.024, 0.041 → 0.025 and 0.013 → 0.009 px). It is applied
+/// whatever Lens Corrections says, so a lens it made worse (the FE 200–600 mm G, 0.032 → 0.068 px) or one never
+/// measured gets none until the unit is settled per lens.
+const CA_IMPROVES: &[&str] = &["FE 24-70mm F2.8 GM II", "FE 16-35mm F2.8 GM II", "FE 100mm F2.8 Macro GM OSS"];
 /// Crop border radii scanned by the frame-filling zoom.
 const ZOOM_SCAN: usize = 4096;
 /// Largest polynomial fit error accepted at the fit samples the crop shows, px at a 1440 px long edge.
@@ -252,14 +261,34 @@ fn gated_warp_opcode(t: &LensTables, knot_spacing: f64, unit: f64, active: Rect,
     Some(Opcode::WarpRectilinear { planes: rgb.unwrap_or_else(|| vec![g]), center: [cx / (aw - 1.0), cy / (ah - 1.0)] })
 }
 
+/// The lateral CA table of a Sony raw IFD for a verified full-frame body `model` ([`FULL_FRAME_CROP`]; the unit is
+/// measured on the ILCE-7RM6 alone, so an APS-C body gets none) as the pre-demosaic map: knots c / 3.36·10⁶
+/// (provisional unit) at i · knot_spacing px of the sensor about the default-crop centre `(crop.x + (cw − 1)/2,
+/// crop.y + (ch − 1)/2)`; red's source radius is ρ·(1 + c_R(ρ) / U). Needs no distortion table (CA is relative to
+/// green on the sensor). Only for the lenses whose corner CA it measurably lowered ([`CA_IMPROVES`]). `None` for
+/// another lens or body, an empty crop (as [`warp_opcode`]), an absent or malformed table,
+/// a value beyond `lateral_ca::MAX_SCALE` (6720; the largest in the 54 measured photos' tables is 1724) or an
+/// all-zero table.
+pub(crate) fn lateral_ca(raw: &Ifd, model: &str, lens: Option<&str>, crop: Rect) -> Option<LateralCa> {
+    if crop.width == 0 || crop.height == 0 || !lens.is_some_and(|l| CA_IMPROVES.contains(&l.trim())) {
+        return None;
+    }
+    let model = model.trim();
+    let &(_, (w, h)) = FULL_FRAME_CROP.iter().find(|(m, _)| *m == model)?;
+    let (red, blue) = read_tables(raw).ca?;
+    let unit = |c: Vec<f64>| c.into_iter().map(|v| v / CA_UNIT).collect();
+    let (cw, ch) = (crop.width as f64, crop.height as f64);
+    LateralCa::new([crop.x as f64 + (cw - 1.0) / 2.0, crop.y as f64 + (ch - 1.0) / 2.0], w.hypot(h) / 30.0, unit(red), unit(blue))
+}
+
 /// The `OpcodeList3` lens corrections of a Sony raw IFD for the body `model` (Exif `Model`); empty for a body whose
 /// tables are not verified.
 ///
-/// Distortion only: the lateral CA planes are off (`lateral_ca: false`). Our demosaic already hides about 70 % of the
-/// lens CA (the render shows 0.29 × the CA measured on the raw CFA), while the warp, which runs after demosaic, moves
-/// R and B by 0.84 × the table. Over the 43 verified photos with enough corner detail, the render's corner R/G and B/G
-/// CA went from rms 0.032 / max 0.125 px (off) to 0.052 / 0.219 px (on) at a 1440 px long edge; only the 16–35 mm
-/// improved. Follow-up: warp the CFA colour planes before demosaic, then turn the planes on here.
+/// Distortion only: the lateral CA planes are off (`lateral_ca: false`); lateral CA is the separate pre-demosaic map
+/// ([`lateral_ca`]). Our demosaic already hides about 70 % of the lens CA (the render shows 0.29 × the CA measured on
+/// the raw CFA), while the warp, which runs after demosaic, moves R and B by 0.84 × the table. Over the 43 verified
+/// photos with enough corner detail, the render's corner R/G and B/G CA went from rms 0.032 / max 0.125 px (off) to
+/// 0.052 / 0.219 px (on) at a 1440 px long edge; only the 16–35 mm improved.
 ///
 /// `lens` (Exif `LensModel`) and `focal_mm` (Exif `FocalLength`) select a measured lens exception's spacing and unit.
 pub(crate) fn lens_opcodes(raw: &Ifd, model: &str, lens: Option<&str>, focal_mm: Option<f64>, active: Rect, crop: Rect) -> Vec<Opcode> {
@@ -703,5 +732,74 @@ mod tests {
         let ops = lens_opcodes(&ifd, " ILCE-7RM6 ", None, None, FF_ACTIVE, FF_CROP);
         assert_eq!(ops, warp_opcode(&read_tables(&ifd), knots(), FF_ACTIVE, FF_CROP, false).into_iter().collect::<Vec<_>>());
         assert_eq!(ops.len(), 1);
+    }
+
+    /// A lens whose corner CA the map lowered in the verification.
+    const FE_24_70: &str = "FE 24-70mm F2.8 GM II";
+
+    #[test]
+    fn ca_table_becomes_lateral_ca() {
+        let ifd_ff = sony_lens_ifd(&FF_DISTORTION, &FF_VIGNETTING, &FF_HQ_CA, [0, 2, 1]);
+        let ca = lateral_ca(&ifd_ff, "ILCE-7RM6", Some(FE_24_70), FF_CROP).expect("a map");
+        assert_eq!(ca.center, [12.0 + 4991.5, 8.0 + 3327.5]);
+        assert_eq!(ca.spacing, knots());
+        let v = values(&FF_HQ_CA);
+        assert_eq!(ca.red, v[..16].iter().map(|c| c / 3.36e6).collect::<Vec<_>>());
+        assert_eq!(ca.blue, v[16..].iter().map(|c| c / 3.36e6).collect::<Vec<_>>());
+        assert!((ca.red[0] - 7.202380952380953e-5).abs() < 1e-18 && (ca.blue[0] + 8.035714285714285e-5).abs() < 1e-18);
+        // the APS-C example: 11 knots on the same sensor spacing, centred on its own crop
+        let apsc =
+            lateral_ca(&sony_lens_ifd(&APSC_DISTORTION, &APSC_VIGNETTING, &APSC_CA, [0, 2, 1]), "ILCE-7RM6", Some(FE_24_70), APSC_CROP).unwrap();
+        assert_eq!((apsc.center, apsc.red.len(), apsc.blue.len(), apsc.spacing), ([16.0 + 3263.5, 10.0 + 2175.5], 11, 11, knots()));
+        // no distortion table needed; the warp ignores the CA table
+        let ca_only = ifd(vec![(CA_PARAMS, Value::SShort(FF_HQ_CA.to_vec()))]);
+        assert!(lateral_ca(&ca_only, "ILCE-7RM6", Some(FE_24_70), FF_CROP).is_some());
+        assert!(lens_opcodes(&ca_only, "ILCE-7RM6", None, None, FF_ACTIVE, FF_CROP).is_empty());
+        let with_ca = read_tables(&ifd_ff);
+        assert_eq!(
+            warp_opcode(&with_ca, knots(), FF_ACTIVE, FF_CROP, false),
+            warp_opcode(&tables_with_distortion(&values(&FF_DISTORTION)), knots(), FF_ACTIVE, FF_CROP, false)
+        );
+        // an APS-C body's CA unit isn't measured: no map
+        assert!(lateral_ca(&ifd_ff, "ILCE-6700", Some(FE_24_70), FF_CROP).is_none());
+        assert!(lateral_ca(&ifd_ff, "ILCE-7M4", Some(FE_24_70), FF_CROP).is_none());
+        assert!(lateral_ca(&ifd(vec![]), "ILCE-7RM6", Some(FE_24_70), FF_CROP).is_none());
+        // only the lenses it measurably improves: not the FE 200–600 mm G (worse), an unmeasured lens or no lens name
+        for lens in [Some("FE 200-600mm F5.6-6.3 G OSS"), Some("FE 70-200mm F2.8 GM OSS II"), None] {
+            assert!(lateral_ca(&ifd_ff, "ILCE-7RM6", lens, FF_CROP).is_none(), "{lens:?}");
+        }
+        for lens in CA_IMPROVES {
+            assert!(lateral_ca(&ifd_ff, "ILCE-7RM6", Some(&format!(" {lens} ")), FF_CROP).is_some(), "{lens}");
+        }
+    }
+
+    #[test]
+    fn implausible_ca_tables_get_no_map() {
+        let mut odd = FF_HQ_CA.to_vec();
+        odd[0] = 31;
+        let mut huge = vec![i64::MAX / 4; 33];
+        huge[0] = 32;
+        let filled = |v: i16| {
+            let mut t = vec![v; 33];
+            t[0] = 32;
+            t
+        };
+        // 32767 (the SShort maximum) would shift red ~59 px at the full-resolution corner
+        for (what, ca) in [
+            ("odd count", Value::SShort(odd)),
+            ("huge", Value::SLong8(huge)),
+            ("constant 32767", Value::SShort(filled(32767))),
+            ("just beyond the bound", Value::SShort(filled(6721))),
+            ("all zero", Value::SShort(filled(0))),
+        ] {
+            assert!(lateral_ca(&ifd(vec![(CA_PARAMS, ca)]), "ILCE-7RM6", Some(FE_24_70), FF_CROP).is_none(), "{what}");
+        }
+        // values up to the bound (2·10⁻³ relative = 6720) are kept
+        assert!(lateral_ca(&ifd(vec![(CA_PARAMS, Value::SShort(filled(6720)))]), "ILCE-7RM6", Some(FE_24_70), FF_CROP).is_some());
+        // an empty crop (a corrupt DefaultCrop clipped to nothing) has no centre: no map, as no warp
+        let ok = ifd(vec![(CA_PARAMS, Value::SShort(FF_HQ_CA.to_vec()))]);
+        for crop in [Rect::new(10016, 6672, 0, 0), Rect::new(12, 8, 0, 6656), Rect::new(12, 8, 9984, 0)] {
+            assert!(lateral_ca(&ok, "ILCE-7RM6", Some(FE_24_70), crop).is_none(), "{crop:?}");
+        }
     }
 }

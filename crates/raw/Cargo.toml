@@ -72,6 +72,8 @@ jxl-oxide = { version = "0.12", default-features = false, optional = true }
 [dev-dependencies]
 craft-testkit = { workspace = true }
 proptest = { workspace = true }
+# The serde round trip of the lateral CA map (`lateral_ca`).
+serde_json = { workspace = true }
 # The SHA-256 of the SR2 keystream known answer.
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
 # Encodes the lossy-JPEG tiles of the tests.

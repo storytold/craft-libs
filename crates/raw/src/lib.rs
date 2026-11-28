@@ -109,6 +109,7 @@ mod jxl;
 pub mod kelvin;
 #[cfg(feature = "kodak")]
 mod kodak;
+pub mod lateral_ca;
 pub mod lens_metadata;
 pub mod ljpeg;
 /// Optimized lossless JPEG decoder for streams with line-aligned restarts.
@@ -160,6 +161,7 @@ mod unpack;
 
 #[cfg(feature = "dng")]
 pub use dngwrite::{DngCompression, DngWriteOptions, write_dng};
+pub use lateral_ca::LateralCa;
 pub use lens_metadata::LensMetadata;
 pub use opcodes::{Opcode, OpcodeLists};
 #[cfg(feature = "arw")]
