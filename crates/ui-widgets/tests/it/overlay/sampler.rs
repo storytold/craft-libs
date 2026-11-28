@@ -308,14 +308,19 @@ fn a_kept_view_passes_the_wheel_and_the_middle_pan_and_blocks_the_primary_press(
     assert!(scene.canvas.borrow().wheels == 0 && !scene.took(PointerButton::Middle), "the canvas is blocked");
 }
 
-/// A focused field in the dialog takes the wheel wherever the pointer is in the dialog, but over the canvas the dialog
-/// keeps open the wheel goes by position: the canvas scrolls and the field keeps its value.
+/// A field the user focused in the dialog takes the wheel wherever the pointer is in the dialog, but over the canvas the
+/// dialog keeps open the wheel goes by position: the canvas scrolls and the field keeps its value.
 #[trial]
 fn the_wheel_over_a_kept_canvas_scrolls_it_while_a_field_in_the_dialog_has_focus() {
     let mut frames = Frames::new();
     let scene = Scene::new(Arm::View);
     *scene.field.borrow_mut() = Some(Some(5.0));
     scene.open_dialog(&mut frames);
+    // Tab away and back, so the field holds focus the user gave it, not the focus it got when the dialog opened.
+    scene.frame(&mut frames, vec![key_press(Key::Tab, Modifiers::NONE)]);
+    scene.settle(&mut frames, 2);
+    scene.frame(&mut frames, vec![key_press(Key::Tab, Modifiers::SHIFT)]);
+    scene.settle(&mut frames, 2);
     let in_dialog = frames.ctx.read_response(scene.armer_id.get()).expect("the armer shows").rect.center();
     scene.frame(&mut frames, vec![moved(in_dialog)]);
     scene.frame(&mut frames, vec![wheel(-40.0)]);

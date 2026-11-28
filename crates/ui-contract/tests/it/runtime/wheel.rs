@@ -83,6 +83,57 @@ fn pointer_scoped_field_wheel_scrolls_the_panel_outside_the_focused_field() {
     assert_eq!(read.get(), (true, false), "the panel scrolls when the pointer is outside the focused field");
 }
 
+/// #4078: a dialog that opens with the focus on its first field does not hand that field the wheel over the rest of
+/// its body, so scrolling the body does not change the number. A field the user chose keeps the wheel everywhere.
+#[trial]
+fn a_field_focused_by_its_dialog_opening_takes_the_wheel_only_under_the_pointer() {
+    use craft_behavior::Input;
+    use craft_ui::runtime::focus::{FocusPolicy, FocusTarget, KeyUse, request};
+    use craft_ui::testing::focus::{Stop, egui_focused, named_id, pop_scope, push_scope, register_stop, widget};
+
+    let body = named_id("opening_dialog_body");
+    let field = named_id("opening_dialog_field");
+    let other = named_id("opening_dialog_other");
+    let field_rect = Cell::new(Rect::NOTHING);
+    let body_rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0));
+    let read = Cell::new((false, false));
+    let mut show_frame = |ui: &mut Ui| {
+        push_scope(ui.ctx(), named_id("opening_dialog"), FocusPolicy::DIALOG, None);
+        field_rect.set(widget(ui, field));
+        register_stop(ui.ctx(), Stop::new(field, KeyUse::of(Input::Pointer)).text());
+        widget(ui, other);
+        register_stop(ui.ctx(), Stop::new(other, KeyUse::of(Input::Pointer)));
+        pop_scope(ui.ctx());
+        register(ui.ctx(), WheelTaker::new(body, body_rect).vertical(true).scrolls(true));
+        register(ui.ctx(), WheelTaker::new(field, field_rect.get()).vertical(true).value(true).field(true).gated(true));
+        let moved = |owner| take_share(ui.ctx(), owner).is_some_and(|share| share.scroll.y != 0.0);
+        read.set((moved(body), moved(field)));
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show_frame);
+    assert_eq!(egui_focused(&frames.ctx), Some(field), "the dialog opens with the focus on its field");
+    let away = Pos2::new(300.0, 300.0);
+    assert!(!field_rect.get().contains(away), "the pointer is over the body, away from the field");
+    frames.frame(vec![pointer::moved(away)], &mut show_frame);
+    frames.frame(vec![pointer::wheel(-30.0)], &mut show_frame);
+    assert_eq!(read.get(), (true, false), "away from the field the wheel scrolls the body");
+
+    frames.advance(GESTURE_GAP);
+    frames.frame(vec![pointer::moved(field_rect.get().center())], &mut show_frame);
+    frames.frame(vec![pointer::wheel(-30.0)], &mut show_frame);
+    assert_eq!(read.get(), (false, true), "over the field the wheel steps it");
+
+    frames.advance(GESTURE_GAP);
+    // The user moves the focus off the field and back, as Tab and Shift+Tab do.
+    request(&frames.ctx, FocusTarget::Id(other));
+    frames.frame(Vec::new(), &mut show_frame);
+    request(&frames.ctx, FocusTarget::Id(field));
+    frames.frame(vec![pointer::moved(away)], &mut show_frame);
+    assert_eq!(egui_focused(&frames.ctx), Some(field), "the focus is back on the field");
+    frames.frame(vec![pointer::wheel(-30.0)], &mut show_frame);
+    assert_eq!(read.get(), (false, true), "a field the user moved the focus to keeps the wheel away from it");
+}
+
 /// A wheel event of `delta` in `unit` with `modifiers`, in device phase `phase`.
 fn wheel_event(unit: MouseWheelUnit, delta: Vec2, phase: TouchPhase, modifiers: Modifiers) -> Event {
     Event::MouseWheel { unit, delta, phase, modifiers, source: MouseWheelSource::Wheel }
