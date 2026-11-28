@@ -51,11 +51,13 @@ pub struct HistoryRow {
     pub icon: Option<IconId>,
     /// The state is one that was undone and can be redone.
     pub redo: bool,
+    /// The name in italics, on top of whatever ink the row has.
+    pub italic: bool,
 }
 
 impl HistoryRow {
     fn new(key: HistoryKey, label: Label) -> Self {
-        HistoryRow { key, label, icon: None, redo: false }
+        HistoryRow { key, label, icon: None, redo: false, italic: false }
     }
 
     /// A row for the snapshot `id` named `label`.
@@ -79,6 +81,13 @@ impl HistoryRow {
     #[must_use]
     pub fn redo(mut self, redo: bool) -> Self {
         self.redo = redo;
+        self
+    }
+
+    /// Draws the name in italics; it composes with [`HistoryRow::redo`], which dims the row, and it changes no ink.
+    #[must_use]
+    pub fn italic(mut self, italic: bool) -> Self {
+        self.italic = italic;
         self
     }
 }
@@ -362,6 +371,9 @@ impl<'a> HistoryPanel<'a> {
                 }
                 if row.redo {
                     item = item.ink(RowInk::Dimmed);
+                }
+                if row.italic {
+                    item = item.italic(true);
                 }
                 if has_source {
                     let on = ToggleState::of(source == Some(row.key));
