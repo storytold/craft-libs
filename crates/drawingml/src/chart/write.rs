@@ -1292,6 +1292,66 @@ mod tests {
     use crate::color::{ColorTransform, Rgba};
     use crate::style::ColorRef;
 
+    // Native JSON deliberately keeps the baseline compilable before source_group exists.
+    fn review_source_group(series: Series, group: Option<u32>) -> Series {
+        let mut value = serde_json::to_value(series).unwrap();
+        if let Some(group) = group {
+            value["sourceGroup"] = serde_json::json!(group);
+        }
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn review_4725002253_stacks_follow_kind_axis_and_source_group() {
+        for (left, right, kind, secondary, expected) in [
+            (None, None, ChartType::StackedColumn, false, (-7.0, 15.0)),
+            (Some(4), Some(4), ChartType::StackedColumn, false, (-7.0, 15.0)),
+            (Some(4), Some(5), ChartType::StackedColumn, false, (-4.0, 8.0)),
+            (Some(4), None, ChartType::StackedColumn, false, (-4.0, 8.0)),
+            (None, None, ChartType::StackedArea, false, (-4.0, 8.0)),
+            (None, None, ChartType::StackedColumn, true, (-4.0, 8.0)),
+        ] {
+            let chart = Chart {
+                kind: ChartType::StackedColumn,
+                categories: vec!["x".into(), "y".into()],
+                series: vec![
+                    review_source_group(
+                        Series { kind: Some(ChartType::StackedColumn), values: vec![Some(7.0), Some(-3.0)], ..Default::default() },
+                        left,
+                    ),
+                    review_source_group(
+                        Series { kind: Some(kind), secondary_axis: secondary, values: vec![Some(8.0), Some(-4.0)], ..Default::default() },
+                        right,
+                    ),
+                ],
+                ..Default::default()
+            };
+            assert_eq!(chart.value_range(), expected, "groups={left:?}/{right:?}, kind={kind:?}, secondary={secondary}");
+            assert_eq!(chart.axis_range(false), Some(if secondary { (-3.0, 7.0) } else { expected }));
+            assert_eq!(chart.axis_range(true), secondary.then_some((-4.0, 8.0)));
+        }
+    }
+
+    #[test]
+    fn review_4725002254_explicit_general_overrides_percent_defaults_on_both_axes() {
+        let mut chart = Chart {
+            kind: ChartType::PercentColumn,
+            series: vec![
+                Series { values: vec![Some(0.5)], ..Default::default() },
+                Series { secondary_axis: true, values: vec![Some(0.5)], ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        for secondary in [false, true] {
+            assert_eq!(chart.axis_label(secondary, 0.5), "50%");
+        }
+        chart.y_format = Some("General".into());
+        chart.y2_format = Some("General".into());
+        for secondary in [false, true] {
+            assert_eq!(chart.axis_label(secondary, 0.5), "0.5");
+        }
+    }
+
     /// A legend entry's own text (`c:legendEntry/c:txPr`: size, bold, colour) is read, and a
     /// rebuilt part writes it back, in schema order before `c:overlay` (DeckCraft #2067).
     #[test]

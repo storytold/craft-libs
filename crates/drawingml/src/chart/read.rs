@@ -2379,4 +2379,122 @@ mod tests {
         let _ = chart.axis_range(false);
         assert_eq!(count(), 0, "matching retained kinds need no raw-kind decision");
     }
+
+    #[test]
+    fn review_6095125890_selected_value_axis_keeps_the_exact_duplicate_element_metadata() {
+        // Original synthetic pair: the first duplicate is not the reciprocal primary axis.
+        let plot = r#"<c:barChart><c:barDir val="col"/><c:ser><c:tx><c:v>Secondary</c:v></c:tx><c:val><c:numLit><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:val></c:ser><c:axId val="30"/><c:axId val="40"/></c:barChart>
+<c:valAx><c:axId val="20"/><c:axPos val="r"/><c:scaling><c:min val="0"/><c:max val="1"/></c:scaling><c:numFmt formatCode="0.00" sourceLinked="0"/><c:delete val="1"/><c:title><c:tx><c:v>Wrong value</c:v></c:tx></c:title><c:txPr><a:p><a:pPr><a:defRPr sz="1000"/></a:pPr></a:p></c:txPr><c:crossAx val="999"/></c:valAx>
+<c:valAx><c:axId val="20"/><c:axPos val="l"/><c:scaling><c:min val="2"/><c:max val="10"/></c:scaling><c:majorUnit val="2"/><c:numFmt formatCode="0%" sourceLinked="0"/><c:delete val="0"/><c:title><c:tx><c:v>Selected value</c:v></c:tx></c:title><c:txPr><a:p><a:pPr><a:defRPr sz="1600"/></a:pPr></a:p></c:txPr><c:crossAx val="10"/></c:valAx>
+<c:catAx><c:axId val="10"/><c:axPos val="b"/><c:title><c:tx><c:v>Selected category</c:v></c:tx></c:title><c:crossAx val="20"/></c:catAx>
+<c:catAx><c:axId val="30"/><c:axPos val="t"/><c:crossAx val="40"/></c:catAx><c:valAx><c:axId val="40"/><c:axPos val="r"/><c:scaling><c:max val="90"/></c:scaling><c:crossAx val="30"/></c:valAx>"#;
+        let xml = metadata_chart(plot).replace("</c:chartSpace>", r#"<c:extLst><c:ext uri="urn:craft:selected-axis-original"><own:preserved xmlns:own="urn:craft:original"/></c:ext></c:extLst></c:chartSpace>"#);
+        let current = read_chart_xml(xml.as_bytes()).unwrap();
+        assert_eq!((current.y_min, current.y_max, current.y_major), (Some(2.0), Some(10.0), Some(2.0)));
+        assert_eq!(current.y_format.as_deref(), Some("0%"));
+        assert!(!current.y_hidden, "visibility belongs to the same selected element");
+        assert_eq!(current.axis_titles, (Some("Selected category".into()), Some("Selected value".into())));
+        assert_eq!(current.text_size, Some(16.0), "text style belongs to the selected element too");
+        assert!(current.series[0].secondary_axis);
+        assert_eq!(current.y2_max, Some(90.0));
+
+        let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+        for version in 0..=4 {
+            let mut previous = read_chart(&root, MAX_CHART_POINTS, version).unwrap();
+            assert_eq!(previous.y_max, Some(if version < 2 { 90.0 } else { 1.0 }), "exact historical interpretation{version}");
+            assert!(serde_json::to_value(&previous.series[0]).unwrap().get("sourceGroup").is_none());
+            previous.raw = Some(xml.clone());
+            assert!(crate::chart::write::chart_xml(&previous).1, "old native interpretation{version} must keep its raw part");
+        }
+        assert!(crate::chart::write::chart_xml(&current).1, "unchanged current model keeps raw too");
+        let mut edited = current;
+        edited.y_max = Some(12.0);
+        let (written, kept) = crate::chart::write::chart_xml(&edited);
+        assert!(!kept, "an actual metadata edit must rebuild");
+        assert_eq!(read_chart_xml(&written).unwrap().y_max, Some(12.0));
+    }
+
+    #[test]
+    fn review_6095125890_numeric_categories_use_the_reciprocal_supplied_group_format() {
+        let plot = r#"<c:barChart><c:barDir val="col"/><c:ser><c:cat><c:numLit><c:formatCode>General</c:formatCode><c:pt idx="0"><c:v>45292</c:v></c:pt></c:numLit></c:cat><c:val><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser><c:axId val="10"/><c:axId val="20"/></c:barChart>
+<c:catAx><c:axId val="10"/><c:axPos val="b"/><c:title><c:tx><c:v>Unrelated</c:v></c:tx></c:title><c:numFmt formatCode="0.00" sourceLinked="0"/><c:crossAx val="999"/></c:catAx>
+<c:catAx><c:axId val="10"/><c:axPos val="b"/><c:title><c:tx><c:v>Reciprocal</c:v></c:tx></c:title><c:numFmt formatCode="mmm-yy" sourceLinked="0"/><c:crossAx val="20"/></c:catAx>
+<c:valAx><c:axId val="20"/><c:axPos val="l"/><c:crossAx val="10"/></c:valAx>"#;
+        let xml = metadata_chart(plot);
+        let mut current = read_chart_xml(xml.as_bytes()).unwrap();
+        assert_eq!(current.axis_titles.0.as_deref(), Some("Reciprocal"));
+        assert_eq!(current.category_format.as_deref(), Some("mmm-yy"));
+        assert_eq!(current.category_label(0), "Jan-24");
+        assert_eq!(current.categories, ["45292"]);
+        current.title = Some("Rebuilt date categories".into());
+        let back = read_chart_xml(&crate::chart::write::chart_xml(&current).0).unwrap();
+        assert_eq!(back.category_label(0), current.category_label(0));
+        assert_eq!(back.categories, current.categories);
+
+        let fallback = xml.replace(r#"<c:crossAx val="20"/>"#, r#"<c:crossAx val="998"/>"#);
+        let fallback = read_chart_xml(fallback.as_bytes()).unwrap();
+        assert_eq!(fallback.category_format.as_deref(), Some("0.00"), "no reciprocal partner retains the ID-only fallback");
+        assert_eq!(fallback.category_label(0), "45292.00");
+        let explicit_general = xml.replace(r#"formatCode="mmm-yy" sourceLinked="0""#, r#"formatCode="General" sourceLinked="0""#);
+        assert_eq!(read_chart_xml(explicit_general.as_bytes()).unwrap().category_label(0), "45292");
+        let linked = xml.replace("<c:formatCode>General</c:formatCode>", "<c:formatCode>0.0</c:formatCode>")
+            .replace(r#"formatCode="mmm-yy" sourceLinked="0""#, r#"formatCode="mmm-yy" sourceLinked="1""#);
+        assert_eq!(read_chart_xml(linked.as_bytes()).unwrap().category_label(0), "45292.0", "source-linked format still comes from the supplied cache");
+        let text = xml.replace("<c:numLit><c:formatCode>General</c:formatCode><c:pt idx=\"0\"><c:v>45292</c:v></c:pt></c:numLit>", "<c:strLit><c:pt idx=\"0\"><c:v>45292</c:v></c:pt></c:strLit>");
+        let text = read_chart_xml(text.as_bytes()).unwrap();
+        assert_eq!(text.category_format, None);
+        assert_eq!(text.category_label(0), "45292");
+
+        let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+        for version in 0..=4 {
+            let mut previous = read_chart(&root, MAX_CHART_POINTS, version).unwrap();
+            assert_eq!(previous.category_format.as_deref(), Some("0.00"), "retain the exact older numeric category interpretation{version}");
+            previous.raw = Some(xml.clone());
+            assert!(crate::chart::write::chart_xml(&previous).1);
+        }
+    }
+
+    #[test]
+    fn review_6095125890_source_groups_survive_title_edits_without_cross_group_stacking_or_loss() {
+        for grouping in ["clustered", "stacked"] {
+            let mut plot = String::new();
+            for group in 0..2 {
+                plot.push_str(&format!(r#"<c:barChart><c:barDir val="col"/><c:grouping val="{grouping}"/>"#));
+                for offset in 0..600 {
+                    let id = group * 600 + offset;
+                    // Interleave display order: group membership must travel with the whole record.
+                    let order = offset * 2 + group;
+                    plot.push_str(&format!(r#"<c:ser><c:idx val="{id}"/><c:order val="{order}"/><c:tx><c:v>Group{group}-{offset}</c:v></c:tx><c:val><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser>"#));
+                }
+                plot.push_str(r#"<c:axId val="10"/><c:axId val="20"/></c:barChart>"#);
+            }
+            plot.push_str(r#"<c:catAx><c:axId val="10"/><c:axPos val="b"/><c:crossAx val="20"/></c:catAx><c:valAx><c:axId val="20"/><c:axPos val="l"/><c:crossAx val="10"/></c:valAx>"#);
+            let mut current = read_chart_xml(metadata_chart(&plot).as_bytes()).unwrap();
+            assert_eq!(current.series.len(), 1200);
+            let membership = |chart: &Chart| {
+                let records = serde_json::to_value(&chart.series).unwrap();
+                let group0 = records[0].get("sourceGroup").cloned().expect("current imports retain a source group");
+                let group1 = records[1].get("sourceGroup").cloned().expect("both groups retain membership");
+                assert_ne!(group0, group1);
+                for (i, record) in records.as_array().unwrap().iter().enumerate() {
+                    assert_eq!(record.get("sourceGroup"), Some(if i % 2 == 0 { &group0 } else { &group1 }));
+                }
+            };
+            let names: Vec<_> = current.series.iter().map(|s| s.name.clone()).collect();
+            current.title = Some("Title-only rebuild".into());
+            let (written, kept) = crate::chart::write::chart_xml(&current);
+            assert!(!kept);
+            let back = read_chart_xml(&written).unwrap();
+            assert_eq!(back.series.len(), 1200, "{grouping}: no retained source group may exceed the reader cap on rebuild");
+            membership(&current);
+            assert_eq!(back.series.iter().map(|s| s.name.clone()).collect::<Vec<_>>(), names);
+            assert_eq!(back.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(), current.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>());
+            assert_eq!(back.series.iter().map(|s| serde_json::to_value(s).unwrap()["sourceIdx"].clone()).collect::<Vec<_>>(), current.series.iter().map(|s| serde_json::to_value(s).unwrap()["sourceIdx"].clone()).collect::<Vec<_>>());
+            membership(&back); // Numeric tokens may renumber; this checks the membership relation.
+            if grouping == "stacked" {
+                assert_eq!(current.axis_range(false), Some((0.0, 600.0)), "the two independent source stacks do not sum together");
+                assert_eq!(back.axis_range(false), current.axis_range(false));
+            }
+        }
+    }
 }
