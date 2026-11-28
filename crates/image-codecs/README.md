@@ -14,7 +14,8 @@ It follows the "Avoiding GIMP's hole" rules in `docs/architecture.md` §1.1:
 * **Depth-preserving.** An image can hold U8, U16, F16 or F32 samples, and each format keeps
   what it can hold.
 * **Metadata-preserving.** ICC, EXIF, XMP, DPI and text are kept wherever the format supports
-  them.
+  them. `EncodeOptions::embed_metadata = false` leaves out EXIF, XMP and text; the resolution is
+  still written to JPEG, PNG and TIFF whenever `Metadata::dpi` is `Some`.
 * **Honest.** `caps(format)` says what each format holds, and
   `fidelity_warnings(&image, format)` lists what an export will lose before you write it. Both
   functions use the same encode plan as `encode`, so a warning appears exactly when the file

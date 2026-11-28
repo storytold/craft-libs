@@ -552,3 +552,160 @@ fn thumbnail_removal_never_panics_on_truncated_exif() {
         }
     }
 }
+
+/// The IFD0 tags of a TIFF-structured EXIF block.
+fn ifd0_tags(exif: &[u8]) -> Vec<u16> {
+    let big = exif.starts_with(b"MM");
+    let u16_at = |i: usize| if big { u16::from_be_bytes([exif[i], exif[i + 1]]) } else { u16::from_le_bytes([exif[i], exif[i + 1]]) };
+    let ifd = exif[4..8].try_into().map(|b| if big { u32::from_be_bytes(b) } else { u32::from_le_bytes(b) }).unwrap() as usize;
+    (0..u16_at(ifd) as usize).map(|n| u16_at(ifd + 2 + n * 12)).collect()
+}
+
+/// A 300 × 150 ppi image with camera EXIF, XMP and text, in `layout` and `sample`.
+fn tagged(layout: ChannelLayout, sample: SampleType) -> Image {
+    let n = 8 * 4 * layout.channels();
+    let img = Image::from_raw(8, 4, layout, SampleType::U8, (0..n).map(|i| (i * 7) as u8).collect()).unwrap();
+    let mut img = img.convert(layout, sample);
+    img.meta = Metadata {
+        exif: Some(camera_exif(&LE)),
+        xmp: Some("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>".into()),
+        dpi: Some((300.0, 150.0)),
+        text: vec![("Title".into(), "secret".into())],
+        ..Default::default()
+    };
+    img
+}
+
+/// Metadata "None" leaves out EXIF, XMP and text, never the resolution (#10105).
+#[test]
+fn resolution_is_written_with_metadata_off() {
+    use ChannelLayout::*;
+    use SampleType::*;
+    let off = EncodeOptions { embed_metadata: false, ..Default::default() };
+    let mut cases = vec![(Format::Jpeg, Gray, U8), (Format::Jpeg, Rgb, U8), (Format::Jpeg, Cmyk, U8), (Format::Tiff, Rgb, F32)];
+    for sample in [U8, U16] {
+        cases.extend([Gray, GrayA, Rgb, Rgba].map(|l| (Format::Png, l, sample)));
+        cases.extend([Gray, Rgb, Cmyk].map(|l| (Format::Tiff, l, sample)));
+    }
+    for (format, layout, sample) in cases {
+        let what = format!("{format:?} {layout:?} {sample:?}");
+        let back = decode(&encode(&tagged(layout, sample), format, &off).unwrap()).unwrap();
+        assert_eq!(back.meta.dpi, Some((300.0, 150.0)), "{what}");
+        assert!(back.meta.xmp.is_none() && back.meta.text.is_empty(), "{what}");
+        // CMYK JPEG has no JFIF density: its resolution is in an EXIF block of its own.
+        if (format, layout) != (Format::Jpeg, Cmyk) {
+            assert!(back.meta.exif.is_none(), "{what}");
+        }
+    }
+}
+
+/// A CMYK JPEG with metadata off keeps its resolution in an EXIF block that holds nothing else.
+#[test]
+fn cmyk_jpeg_with_metadata_off_writes_a_resolution_only_exif() {
+    let off = EncodeOptions { embed_metadata: false, ..Default::default() };
+    let jpeg = encode(&tagged(ChannelLayout::Cmyk, SampleType::U8), Format::Jpeg, &off).unwrap();
+    let segments = app_segments(&jpeg);
+    assert!(!segments.iter().any(|(m, p)| *m == 0xE0 && p.starts_with(b"JFIF\0")));
+    assert_eq!(segments.iter().filter(|(m, _)| *m == 0xE1).count(), 1, "one APP1: the EXIF, no XMP");
+    let mut tags = ifd0_tags(&exif_of(&jpeg));
+    tags.sort_unstable();
+    assert_eq!(tags, [X, Y, UNIT]);
+    assert_eq!(dpi_of(&jpeg), Some((300.0, 150.0)));
+}
+
+/// Without a resolution none is made up, with metadata on or off.
+#[test]
+fn no_resolution_is_written_when_the_image_has_none() {
+    for embed_metadata in [false, true] {
+        let opts = EncodeOptions { embed_metadata, ..Default::default() };
+        for (format, layout) in [
+            (Format::Png, ChannelLayout::Rgb),
+            (Format::Jpeg, ChannelLayout::Rgb),
+            (Format::Jpeg, ChannelLayout::Cmyk),
+            (Format::Tiff, ChannelLayout::Rgb),
+        ] {
+            let mut img = tagged(layout, SampleType::U8);
+            img.meta = Metadata::default();
+            let bytes = encode(&img, format, &opts).unwrap();
+            assert_eq!(dpi_of(&bytes), None, "{format:?} {layout:?} metadata {embed_metadata}");
+            assert!(!bytes.windows(4).any(|w| w == b"pHYs"), "{format:?}");
+        }
+    }
+}
+
+/// WebP holds the resolution only in EXIF; with metadata off it stays out.
+#[test]
+fn webp_with_metadata_off_writes_no_exif() {
+    for webp_lossless in [true, false] {
+        let opts = EncodeOptions { embed_metadata: false, webp_lossless, ..Default::default() };
+        let bytes = encode(&tagged(ChannelLayout::Rgb, SampleType::U8), Format::WebP, &opts).unwrap();
+        assert!(!bytes.windows(4).any(|w| w == b"EXIF" || w == b"XMP "), "lossless {webp_lossless}");
+        assert_eq!(dpi_of(&bytes), None, "lossless {webp_lossless}");
+    }
+}
+
+/// A PNG written a band at a time gets the same `pHYs` as a whole one, with metadata off too.
+#[test]
+fn png_rows_write_the_resolution_with_metadata_off() {
+    let off = EncodeOptions { embed_metadata: false, ..Default::default() };
+    let img = tagged(ChannelLayout::Rgb, SampleType::U8);
+    let mut bytes = Vec::new();
+    let mut rows = PngRows::new(&mut bytes, &img, img.height(), &off).unwrap();
+    rows.push(&img).unwrap();
+    rows.finish().unwrap();
+    let back = decode(&bytes).unwrap();
+    assert_eq!(back.meta.dpi, Some((300.0, 150.0)));
+    assert!(back.meta.exif.is_none() && back.meta.xmp.is_none() && back.meta.text.is_empty());
+}
+
+/// Formats without a resolution field warn about dropping it only when metadata is embedded:
+/// with metadata off the user asked for none.
+#[test]
+fn dpi_dropped_warning_follows_the_metadata_choice() {
+    let img = tagged(ChannelLayout::Rgb, SampleType::U8);
+    for format in [Format::Tga, Format::Ico, Format::Jxl] {
+        for embed_metadata in [false, true] {
+            let w = fidelity_warnings_with(&img, format, &EncodeOptions { embed_metadata, ..Default::default() });
+            assert_eq!(w.contains(&FidelityWarning::DpiDropped), embed_metadata, "{format:?} metadata {embed_metadata}: {w:?}");
+        }
+    }
+    for format in [Format::Png, Format::Jpeg, Format::Tiff] {
+        let w = fidelity_warnings_with(&img, format, &EncodeOptions { embed_metadata: false, ..Default::default() });
+        assert!(!w.contains(&FidelityWarning::DpiDropped), "{format:?}: {w:?}");
+    }
+}
+
+/// Clearing `meta.dpi` leaves out only the format's own resolution field. With metadata on, the
+/// source EXIF and XMP are written with the resolution they record; a TIFF's Photoshop image
+/// resources are written either way (#1329 review).
+#[test]
+fn cleared_dpi_keeps_the_resolution_in_embedded_metadata() {
+    let on = EncodeOptions::default();
+    let off = EncodeOptions { embed_metadata: false, ..Default::default() };
+    let base = || {
+        let mut img = tagged(ChannelLayout::Rgb, SampleType::U8);
+        img.meta = Metadata::default();
+        img
+    };
+    // EXIF: JPEG and PNG carry the source IFD0 resolution; TIFF writes only the EXIF sub-IFD.
+    let mut img = base();
+    img.meta.exif = Some(exif_with_resolution(&camera_exif(&LE), (240.0, 240.0)).into_owned());
+    for format in [Format::Jpeg, Format::Png] {
+        assert_eq!(decode(&encode(&img, format, &on).unwrap()).unwrap().meta.dpi, Some((240.0, 240.0)), "{format:?} EXIF on");
+        assert_eq!(decode(&encode(&img, format, &off).unwrap()).unwrap().meta.dpi, None, "{format:?} EXIF off");
+    }
+    // XMP: written with its `tiff:` resolution in all three.
+    let mut img = base();
+    img.meta.xmp = Some(r#"<rdf:Description tiff:XResolution="200/1" tiff:YResolution="200/1" tiff:ResolutionUnit="2"/>"#.into());
+    for format in [Format::Jpeg, Format::Png, Format::Tiff] {
+        let back = decode(&encode(&img, format, &on).unwrap()).unwrap();
+        assert!(back.meta.xmp.as_deref().is_some_and(|x| x.contains(r#"tiff:XResolution="200/1""#)), "{format:?} XMP on");
+        let back = decode(&encode(&img, format, &off).unwrap()).unwrap();
+        assert!(back.meta.xmp.is_none(), "{format:?} XMP off");
+    }
+    // A TIFF's Photoshop image resources (with ResolutionInfo) are document content.
+    let mut img = base();
+    img.meta.photoshop_resources = Some(irb(300.0));
+    let back = decode(&encode(&img, Format::Tiff, &off).unwrap()).unwrap();
+    assert_eq!(back.meta.photoshop_resources, Some(irb(300.0)));
+}

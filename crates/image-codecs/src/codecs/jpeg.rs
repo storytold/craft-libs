@@ -698,34 +698,37 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     let optimized = opts.jpeg_format == JpegFormat::Optimized && !subsampled;
     enc.set_optimized_huffman_tables(progressive || optimized);
     let e = |e: jpeg_encoder::EncodingError| CodecError::encode(F, e);
-    if opts.embed_metadata {
-        if img.layout() != ChannelLayout::Cmyk
-            && let Some((x, y)) = img.meta.dpi
-            && x >= 1.0
-            && y >= 1.0
-        {
-            let dpi_x = x.round().min(65535.0) as u16;
-            let dpi_y = y.round().min(65535.0) as u16;
-            enc.set_density(jpeg_encoder::PixelDensity { density: (dpi_x, dpi_y), unit: jpeg_encoder::PixelDensityUnit::Inches });
+    // The resolution is written whenever it is known, with or without the other metadata.
+    if img.layout() != ChannelLayout::Cmyk
+        && let Some((x, y)) = img.meta.dpi
+        && x >= 1.0
+        && y >= 1.0
+    {
+        let dpi_x = x.round().min(65535.0) as u16;
+        let dpi_y = y.round().min(65535.0) as u16;
+        enc.set_density(jpeg_encoder::PixelDensity { density: (dpi_x, dpi_y), unit: jpeg_encoder::PixelDensityUnit::Inches });
+    }
+    // Metadata too large for its one segment is left out (and reported by the fidelity
+    // warnings) rather than failing the whole export. CMYK has no JFIF density, so its
+    // resolution goes into EXIF: without the source EXIF when metadata is off.
+    let source_exif = if opts.embed_metadata { img.meta.exif.as_deref() } else { None };
+    let exif = if img.layout() == ChannelLayout::Cmyk {
+        match source_exif {
+            Some(exif) => exif_segment_with_resolution(exif, img.meta.dpi),
+            None if usable_dpi(img.meta.dpi) => exif_segment_with_resolution(&[], img.meta.dpi),
+            None => None,
         }
-        // Metadata too large for its one segment is left out (and reported by the fidelity
-        // warnings) rather than failing the whole export.
-        let exif = if img.layout() == ChannelLayout::Cmyk {
-            match img.meta.exif.as_deref() {
-                Some(exif) => exif_segment_with_resolution(exif, img.meta.dpi),
-                None if usable_dpi(img.meta.dpi) => exif_segment_with_resolution(&[], img.meta.dpi),
-                None => None,
-            }
-        } else {
-            img.meta.exif.as_deref().and_then(|x| exif_segment(x, img.meta.dpi))
-        };
-        if let Some(seg) = exif {
-            // Complete APP1 payload includes Exif\0\0; add_exif_metadata would duplicate it.
-            enc.add_app_segment(1, seg).map_err(e)?;
-        }
-        if let Some(seg) = img.meta.xmp.as_deref().and_then(|x| xmp_segment(x, img.meta.dpi)) {
-            enc.add_app_segment(1, seg).map_err(e)?;
-        }
+    } else {
+        source_exif.and_then(|x| exif_segment(x, img.meta.dpi))
+    };
+    if let Some(seg) = exif {
+        // Complete APP1 payload includes Exif\0\0; add_exif_metadata would duplicate it.
+        enc.add_app_segment(1, seg).map_err(e)?;
+    }
+    if opts.embed_metadata
+        && let Some(seg) = img.meta.xmp.as_deref().and_then(|x| xmp_segment(x, img.meta.dpi))
+    {
+        enc.add_app_segment(1, seg).map_err(e)?;
     }
     if opts.embed_icc
         && let Some(icc) = &img.icc
