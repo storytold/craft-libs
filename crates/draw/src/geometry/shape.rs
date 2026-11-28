@@ -184,16 +184,19 @@ pub struct BoxRule {
     pub fixed: Option<(f64, f64)>,
     /// A width to height ratio: the largest box of this ratio inside the dragged one, from the press.
     pub ratio: Option<(f64, f64)>,
+    /// The box keeps the drag's fractions instead of landing on whole pixels (Photoshop's Align Edges off).
+    pub keep_fractions: bool,
 }
 
-/// The box a drag from `start` to `end` draws under `rule`, in whole pixels, or `None` when a side is under
-/// [`MIN_SIDE`].
+/// The box a drag from `start` to `end` draws under `rule`, in whole pixels unless `keep_fractions`, or `None`
+/// when a side is under [`MIN_SIDE`].
 ///
 /// - `fixed` (both sides finite and above 0): that size at the release; `square` and `ratio` do not apply.
 /// - `square`: both sides take the drag's shorter extent, each keeping its direction.
 /// - `ratio` (both parts finite and above 0): the largest box of that ratio inside the (squared) drag.
 /// - `from_centre`: `start` is the centre; the box is twice the extent.
-/// - The top left and the size round to whole pixels, as PhotoCraft rounds `[x, y, w, h]`.
+/// - The top left and the size round to whole pixels, as PhotoCraft rounds `[x, y, w, h]`; with `keep_fractions`
+///   they stay as dragged, and a side under [`MIN_SIDE`] still draws nothing.
 pub fn box_drag(start: Point, end: Point, rule: BoxRule) -> Option<Rect> {
     // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs `drag_box` (⇧: `m = w.abs().min(h.abs())` with the
     // signs kept, #13222; ⌥: origin `start - (w, h)`, size doubled; the Rectangle gear's Fixed Size and
@@ -214,7 +217,8 @@ pub fn box_drag(start: Point, end: Point, rule: BoxRule) -> Option<Rect> {
         }
         if rule.from_centre { (start.x - w, start.y - h, w * 2.0, h * 2.0) } else { (start.x, start.y, w, h) }
     };
-    let (x, y, w, h) = (x0.min(x0 + w).round(), y0.min(y0 + h).round(), w.abs().round(), h.abs().round());
+    let (x, y, w, h) = (x0.min(x0 + w), y0.min(y0 + h), w.abs(), h.abs());
+    let (x, y, w, h) = if rule.keep_fractions { (x, y, w, h) } else { (x.round(), y.round(), w.round(), h.round()) };
     (w >= MIN_SIDE && h >= MIN_SIDE).then(|| Rect::new(x, y, x + w, y + h))
 }
 

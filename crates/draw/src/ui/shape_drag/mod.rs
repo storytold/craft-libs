@@ -129,6 +129,9 @@ pub struct ShapeDragOptions {
     /// What the drag makes: a Rectangle in Shape mode ends a click within 1 screen point, every other drag within
     /// the press slop.
     pub mode: VectorMode,
+    /// A box drag lands on whole pixels (Photoshop's Align Edges, on by default); off, the box keeps the drag's
+    /// fractions. Lines and the radial frame are not boxes and ignore it.
+    pub whole_pixels: bool,
 }
 
 impl ShapeDragOptions {
@@ -178,11 +181,18 @@ impl ShapeDragOptions {
         self.mode = mode;
         self
     }
+
+    /// Whether a box drag lands on whole pixels (the options bar's Align Edges).
+    #[must_use]
+    pub fn whole_pixels(mut self, whole: bool) -> Self {
+        self.whole_pixels = whole;
+        self
+    }
 }
 
 impl Default for ShapeDragOptions {
-    /// Rectangle, square corners, 5 sides, a plain polygon, weight 3, unconstrained, Shape mode (PhotoCraft's
-    /// defaults).
+    /// Rectangle, square corners, 5 sides, a plain polygon, weight 3, unconstrained, Shape mode, whole pixels
+    /// (PhotoCraft's defaults).
     fn default() -> Self {
         ShapeDragOptions {
             kind: ShapeKind::Rectangle,
@@ -192,6 +202,7 @@ impl Default for ShapeDragOptions {
             line_weight: 3.0,
             constraints: BoxConstraints::default(),
             mode: VectorMode::Shape,
+            whole_pixels: true,
         }
     }
 }
