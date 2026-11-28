@@ -1,11 +1,18 @@
 //! Limits on how long a test waits.
 //!
-//! [`with_deadline`] runs a test body on its own thread and returns its value. When the body does not
-//! finish within the limit, the test fails with the call's label, the limit and the variable that sets
-//! it. A panic in the body is raised again in the test with its original payload.
+//! A limit here guards against a hang and does not decide a result. A value or panic that a body
+//! produces is the call's result whenever it arrives, and a test fails on the limit only when nothing
+//! has arrived by then.
 //!
-//! [`wait_until`] calls a condition on the test's thread until it returns `true`, pausing between
-//! calls, and fails the test with its description when the limit passes first.
+//! [`with_deadline`] runs a test body on its own thread and returns its value. A panic in the body is
+//! raised again in the test with its original payload. When the body has neither returned nor
+//! panicked within the limit, the test fails with the call's label, the limit and the variable that
+//! sets it.
+//!
+//! [`wait_until`] calls a condition on the test's thread, and calls it again each time another
+//! thread raises the [`Signal`] the call waits on. It returns when the condition returns `true`, and
+//! fails the test with its description when the limit has passed since the call began and the latest
+//! call of the condition returned `false`.
 //!
 //! A limit is a default [`Duration`] and the name of a variable that replaces it. A plain `Duration`
 //! reads [`DEFAULT_VARIABLE`]; [`DeadlineLimit::with_variable`] names another one. The variable holds
@@ -13,29 +20,22 @@
 //! fractional, not Unicode, zero, or larger than a `u64` fails the test that reads it, as does a zero
 //! default and a limit past the latest time the platform's clock can represent.
 //!
-//! Neither function can stop code that does not return. A body that runs past its limit fails the
-//! test, and its thread is left running until the test process exits. A condition that blocks is
-//! not interrupted: [`wait_until`] checks its limit only between calls, so a condition must return
-//! promptly.
+//! Neither function can stop code that does not return. When a body does not finish within its
+//! limit, the test fails and the body's thread is left running until the test process exits. A
+//! condition that blocks is not interrupted, so a condition must return promptly.
 
 use std::any::Any;
 use std::ffi::OsString;
 use std::fmt;
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 /// The variable a limit reads unless [`DeadlineLimit::with_variable`] names another.
 pub const DEFAULT_VARIABLE: &str = "CRAFT_TEST_TIMEOUT_SECS";
-
-/// The first pause of [`wait_until`] between two calls of its condition.
-const FIRST_PAUSE: Duration = Duration::from_millis(1);
-
-/// The longest pause of [`wait_until`]: each pause doubles up to this.
-const MAX_PAUSE: Duration = Duration::from_millis(50);
 
 /// The name of the thread [`with_deadline`] runs a body on.
 const WORKER_NAME: &str = "craft-testkit deadline";
@@ -91,15 +91,50 @@ impl From<Duration> for DeadlineLimit<'static> {
     }
 }
 
-/// Runs `f` on its own thread and returns its value, failing the calling test when `f` does not
-/// finish within `limit`.
+/// A signal that [`wait_until`] waits on: the thread that changes the state a condition reads raises
+/// it after each change, and every call waiting on it then calls its condition again.
 ///
-/// The failure names `label`, the limit and the variable that sets it. A panic in `f` is raised
-/// again here with its original payload. The limit is read and checked before `f` starts, and a
-/// limit that is not valid fails the test without running `f`. The limit counts from the call, so
-/// the time spent starting the thread counts against it. When `f` returns or panics after the limit
-/// has passed, the test fails with the label and the limit, and with the panic's message if it has
-/// one. When the limit passes, the thread running `f` is left running.
+/// ```
+/// use craft_testkit::deadline::Signal;
+///
+/// let signal = Signal::new();
+/// // A raise with no call waiting is kept: the next wait sees it and calls its condition again.
+/// signal.raise();
+/// ```
+#[derive(Debug, Default)]
+pub struct Signal {
+    /// How many times the signal has been raised, wrapping.
+    raised: Mutex<u64>,
+    changed: Condvar,
+}
+
+impl Signal {
+    /// A signal that has not been raised.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Wakes every [`wait_until`] call waiting on this signal, so that each calls its condition again.
+    pub fn raise(&self) {
+        let mut raised = self.lock();
+        *raised = raised.wrapping_add(1);
+        self.changed.notify_all();
+    }
+
+    fn lock(&self) -> MutexGuard<'_, u64> {
+        self.raised.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Runs `f` on its own thread and returns its value, failing the calling test when `f` has neither
+/// returned nor panicked within `limit`.
+///
+/// A panic in `f` is raised again here with its original payload. The limit guards against a hang:
+/// a value or panic that `f` produces is the result whenever it arrives, and the test fails on the
+/// limit only when `f` has produced neither by then. That failure names `label`, the limit and the
+/// variable that sets it, and the thread running `f` is left running. The limit is read and checked
+/// before `f` starts, and a limit that is not valid fails the test without running `f`. The limit
+/// counts from the start of the thread running `f`.
 ///
 /// ```
 /// use std::time::Duration;
@@ -112,46 +147,51 @@ impl From<Duration> for DeadlineLimit<'static> {
 #[allow(clippy::panic)]
 #[track_caller]
 pub fn with_deadline<'a, T: Send + 'static>(limit: impl Into<DeadlineLimit<'a>>, label: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
-    let start = Instant::now();
-    match run_with_deadline(limit.into(), label, f, read_variable, spawn_worker, Arc::new(move || start.elapsed())) {
+    match run_with_deadline(limit.into(), label, f, read_variable, spawn_worker, |rx, limit| rx.recv_timeout(limit)) {
         Ok(value) => value,
         Err(Failure::Panic(payload)) => resume_unwind(payload),
         Err(Failure::Message(message)) => panic!("{message}"),
     }
 }
 
-/// Calls `cond` on the calling thread until it returns `true`, failing the calling test when the
-/// limit passes first.
+/// Calls `cond` on the calling thread, and again each time `signal` is raised, until it returns
+/// `true`, failing the calling test when the limit has passed since the call began and the latest
+/// call of `cond` returned `false`.
 ///
-/// `cond` is called at once, and then after pauses that grow from 1 ms to 50 ms, but not again once
-/// the limit has passed. The failure names `what`, the limit and the variable that sets it. A `true`
-/// that `cond` returns after the limit has passed also fails the test. A panic in `cond` reaches the
-/// caller unchanged. `cond` runs on the calling thread and is not interrupted, so it must return
-/// promptly.
+/// `cond` is called at once. A raise that comes while `cond` runs is not lost: `cond` is called
+/// again straight after. The limit guards against a hang and counts from the start of the call, so
+/// a signal that keeps being raised while `cond` stays `false` still fails the test. `cond` is
+/// called before the limit is checked, so a condition that holds is never failed by it. The failure
+/// names `what`, the limit and the
+/// variable that sets it. A panic in `cond` reaches the caller unchanged. `cond` runs on the calling
+/// thread and is not interrupted, so it must return promptly. The threads that change what `cond`
+/// reads raise `signal` after each change.
 ///
 /// ```
 /// use std::sync::atomic::{AtomicBool, Ordering};
 /// use std::time::Duration;
-/// use craft_testkit::deadline::wait_until;
+/// use craft_testkit::deadline::{Signal, wait_until};
 ///
 /// let ready = AtomicBool::new(false);
+/// let signal = Signal::new();
 /// std::thread::scope(|s| {
-///     s.spawn(|| ready.store(true, Ordering::SeqCst));
-///     wait_until(Duration::from_secs(30), "the worker to start", || ready.load(Ordering::SeqCst));
+///     s.spawn(|| {
+///         ready.store(true, Ordering::SeqCst);
+///         signal.raise();
+///     });
+///     wait_until(Duration::from_secs(30), "the worker to start", &signal, || ready.load(Ordering::SeqCst));
 /// });
 /// ```
 // Failing the calling test is what this function is for.
 #[allow(clippy::panic)]
 #[track_caller]
-pub fn wait_until<'a>(limit: impl Into<DeadlineLimit<'a>>, what: &str, mut cond: impl FnMut() -> bool) {
+pub fn wait_until<'a>(limit: impl Into<DeadlineLimit<'a>>, what: &str, signal: &Signal, mut cond: impl FnMut() -> bool) {
     let limit = limit.into();
-    let start = Instant::now();
-    let resolved = match resolve(&limit, read_variable, start) {
+    let resolved = match resolve(&limit, read_variable, Instant::now()) {
         Ok(resolved) => resolved,
         Err(error) => panic!("waiting for {what}: {error}"),
     };
-    let mut elapsed = || start.elapsed();
-    if let Err(message) = poll_until(&resolved, what, &mut cond, &mut elapsed, &mut thread::sleep) {
+    if let Err(message) = wait_for_signal(&resolved, what, signal, &mut cond, Instant::now, wait_for_raise) {
         panic!("{message}");
     }
 }
@@ -265,8 +305,8 @@ fn spawn_worker(job: Job, done: Sender<()>) -> io::Result<()> {
         .map(drop)
 }
 
-/// The body's result and the clock reading when it finished, filled in by the worker.
-type Slot<T> = Arc<Mutex<Option<(thread::Result<T>, Duration)>>>;
+/// The body's result, filled in by the worker.
+type Slot<T> = Arc<Mutex<Option<thread::Result<T>>>>;
 
 /// How a [`with_deadline`] call failed.
 enum Failure {
@@ -276,52 +316,32 @@ enum Failure {
     Message(String),
 }
 
-/// A clock that returns the time since a [`with_deadline`] call started.
-type Clock = Arc<dyn Fn() -> Duration + Send + Sync>;
-
-/// The text of a panic payload that holds a message.
-fn panic_text(payload: &(dyn Any + Send)) -> Option<&str> {
-    payload.downcast_ref::<String>().map(String::as_str).or_else(|| payload.downcast_ref::<&str>().copied())
-}
-
-/// [`with_deadline`] with the variable lookup, the thread start and the clock passed in. Starting
-/// the worker counts against the limit. The worker stores the body's result with the clock reading
-/// when it finished, under a lock, and then sends on the channel `spawn` receives. When the wait
-/// times out, the stored result is still used if it is there, so a body that finished in time passes
-/// even when its thread sends late.
+/// [`with_deadline`] with the variable lookup, the thread start and the wait for the worker passed
+/// in. The worker stores the body's result under a lock and then sends on the channel `spawn`
+/// receives. `wait` waits on that channel for at most the limit. Whatever `wait` returns, a stored
+/// result is the call's result, so the limit fails the call only when the body has produced nothing.
 fn run_with_deadline<T: Send + 'static>(
     limit: DeadlineLimit<'_>,
     label: &str,
     f: impl FnOnce() -> T + Send + 'static,
     lookup: impl FnOnce(&str) -> Option<OsString>,
     spawn: impl FnOnce(Job, Sender<()>) -> io::Result<()>,
-    clock: Clock,
+    wait: impl FnOnce(&Receiver<()>, Duration) -> Result<(), RecvTimeoutError>,
 ) -> Result<T, Failure> {
     let resolved = resolve(&limit, lookup, Instant::now()).map_err(|error| Failure::Message(format!("{label}: {error}")))?;
     let (tx, rx) = mpsc::channel();
     let slot: Slot<T> = Arc::new(Mutex::new(None));
     let worker_slot = Arc::clone(&slot);
-    let worker_clock = Arc::clone(&clock);
     let job: Job = Box::new(move || {
         let result = catch_unwind(AssertUnwindSafe(f));
-        // The clock is read under the lock: once the caller finds the slot empty after its limit,
-        // any later reading is past the limit too.
-        let mut stored = worker_slot.lock().unwrap_or_else(PoisonError::into_inner);
-        *stored = Some((result, worker_clock()));
+        *worker_slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
     });
     spawn(job, tx).map_err(|error| Failure::Message(format!("{label}: could not start the worker thread: {error}")))?;
-    let waited = rx.recv_timeout(resolved.limit.saturating_sub(clock()));
+    let waited = wait(&rx, resolved.limit);
     let stored = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
     match (stored, waited) {
-        (Some((result, finished)), _) if finished > resolved.limit => {
-            let panicked = match &result {
-                Ok(_) => String::new(),
-                Err(payload) => format!(" (it panicked: {})", panic_text(payload.as_ref()).unwrap_or("a payload that is not a message")),
-            };
-            Err(Failure::Message(format!("{label} finished only after its limit of {resolved}{panicked}")))
-        }
-        (Some((Ok(value), _)), _) => Ok(value),
-        (Some((Err(payload), _)), _) => Err(Failure::Panic(payload)),
+        (Some(Ok(value)), _) => Ok(value),
+        (Some(Err(payload)), _) => Err(Failure::Panic(payload)),
         (None, Err(RecvTimeoutError::Timeout)) => {
             Err(Failure::Message(format!("{label} did not finish within {resolved}; its thread is left running")))
         }
@@ -329,44 +349,49 @@ fn run_with_deadline<T: Send + 'static>(
     }
 }
 
-/// The loop of [`wait_until`], with the clock and the pause passed in. `elapsed` returns the time
-/// since the wait started.
-fn poll_until(
+/// Waits on `changed` while `raised` still reads `seen`, for at most `limit`. Returns the guard and
+/// whether the limit passed with no raise.
+fn wait_for_raise<'g>(changed: &Condvar, raised: MutexGuard<'g, u64>, seen: u64, limit: Duration) -> (MutexGuard<'g, u64>, bool) {
+    let (raised, result) = changed.wait_timeout_while(raised, limit, |count| *count == seen).unwrap_or_else(PoisonError::into_inner);
+    (raised, result.timed_out())
+}
+
+/// The loop of [`wait_until`], with the clock and the wait for a raise passed in. The raise count is
+/// read before each call of `cond`, so a raise during the call ends the next wait at once. The limit
+/// counts from the start of the loop, and each wait lasts at most the time left.
+fn wait_for_signal(
     resolved: &Resolved<'_>,
     what: &str,
+    signal: &Signal,
     cond: &mut dyn FnMut() -> bool,
-    elapsed: &mut dyn FnMut() -> Duration,
-    pause: &mut dyn FnMut(Duration),
+    now: impl Fn() -> Instant,
+    wait: impl for<'g> Fn(&Condvar, MutexGuard<'g, u64>, u64, Duration) -> (MutexGuard<'g, u64>, bool),
 ) -> Result<(), String> {
-    let mut next_pause = FIRST_PAUSE;
-    let mut first = true;
+    let start = now();
+    let mut seen = *signal.lock();
     loop {
-        // After the first call, the condition is called only while the limit has not passed.
-        if !first && elapsed() >= resolved.limit {
-            return Err(format!("timed out waiting for {what} within {resolved}"));
-        }
-        first = false;
-        let held = cond();
-        let spent = elapsed();
-        if held && spent <= resolved.limit {
+        if cond() {
             return Ok(());
         }
-        if held {
-            return Err(format!("timed out waiting for {what} within {resolved} (it held only after the limit had passed)"));
+        let remaining = resolved.limit.saturating_sub(now().saturating_duration_since(start));
+        if remaining.is_zero() {
+            return Err(format!("timed out waiting for {what} within {resolved}: the condition still returned false at the limit"));
         }
-        if spent < resolved.limit {
-            pause(next_pause.min(resolved.limit - spent));
+        let (raised, timed_out) = wait(&signal.changed, signal.lock(), seen, remaining);
+        if timed_out {
+            return Err(format!("timed out waiting for {what} within {resolved}: the signal was not raised after the last check"));
         }
-        next_pause = next_pause.saturating_mul(2).min(MAX_PAUSE);
+        seen = *raised;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::ffi::OsStr;
     use std::process::Command;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     /// A variable no test sets, so the environment cannot lengthen a test's short limit.
     const UNSET: &str = "CRAFT_TESTKIT_DEADLINE_UNSET_IN_TESTS";
@@ -398,6 +423,27 @@ mod tests {
             Err(Failure::Panic(payload)) => message(payload),
             Err(Failure::Message(text)) => text,
         }
+    }
+
+    /// A wait for the worker that returns at once, as when the limit passes with nothing received.
+    fn limit_passes(_: &Receiver<()>, _: Duration) -> Result<(), RecvTimeoutError> {
+        Err(RecvTimeoutError::Timeout)
+    }
+
+    /// Runs `run_with_deadline` with its limit passing before the body has a result, and returns the
+    /// failure's message. The body runs on its own thread and blocks until the call has returned.
+    fn hung<T: Send + 'static>(limit: DeadlineLimit<'_>, label: &str, value: T) -> String {
+        let (gate, gate_rx) = mpsc::channel::<()>();
+        let (done_tx, done) = mpsc::channel();
+        let body = move || {
+            let _ = gate_rx.recv();
+            done_tx.send(()).unwrap();
+            value
+        };
+        let result = run_with_deadline(limit, label, body, |_| None, spawn_worker, limit_passes);
+        drop(gate);
+        done.recv().unwrap();
+        failure_message(result)
     }
 
     /// Runs `child_reads_its_variable` in a child process with `CHILD_VARIABLE` set to `value`, and
@@ -442,21 +488,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "seed 7 byte 3 did not finish within 50ms")]
     fn a_hang_fails_and_names_the_input() {
-        let (gate, gate_rx) = mpsc::channel::<()>();
-        let (done_tx, done) = mpsc::channel();
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            with_deadline(short(), "seed 7 byte 3", move || {
-                let _ = gate_rx.recv();
-                done_tx.send(()).unwrap();
-            })
-        }));
-        drop(gate);
-        done.recv().unwrap();
-        if let Err(payload) = result {
-            resume_unwind(payload);
-        }
+        let text = hung(short(), "seed 7 byte 3", ());
+        assert!(text.contains("seed 7 byte 3 did not finish within 50ms"), "{text}");
     }
 
     #[test]
@@ -467,14 +501,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "did not finish within")]
     fn with_deadline_times_out() {
-        let (gate, gate_rx) = mpsc::channel::<()>();
-        let result = catch_unwind(AssertUnwindSafe(|| with_deadline(short(), "blocked body", move || gate_rx.recv().unwrap_or_default())));
-        drop(gate);
-        if let Err(payload) = result {
-            resume_unwind(payload);
-        }
+        let text = hung(short(), "blocked body", 7u8);
+        assert!(text.contains("did not finish within") && text.contains("its thread is left running"), "{text}");
     }
 
     #[test]
@@ -492,14 +521,7 @@ mod tests {
 
     #[test]
     fn timeout_names_this_call_only() {
-        let call = |label: &'static str| {
-            thread::spawn(move || {
-                let (gate, gate_rx) = mpsc::channel::<()>();
-                let result = catch_unwind(AssertUnwindSafe(|| with_deadline(short(), label, move || gate_rx.recv().unwrap_or_default())));
-                drop(gate);
-                message(result.unwrap_err())
-            })
-        };
+        let call = |label: &'static str| thread::spawn(move || hung(short(), label, ()));
         let first = call("first call");
         let second = call("second call");
         let first = first.join().unwrap();
@@ -517,13 +539,10 @@ mod tests {
                 7
             })
         });
-        let (gate, gate_rx) = mpsc::channel::<()>();
-        let short_call = catch_unwind(AssertUnwindSafe(|| with_deadline(short(), "short call", move || gate_rx.recv().unwrap_or_default())));
-        let text = message(short_call.unwrap_err());
+        let text = hung(short(), "short call", ());
         assert!(text.contains("short call") && text.contains("50ms") && !text.contains("long call"), "{text}");
         release.send(()).unwrap();
         assert_eq!(long_call.join().unwrap(), 7);
-        drop(gate);
     }
 
     #[test]
@@ -533,7 +552,7 @@ mod tests {
             ran.store(true, Ordering::SeqCst);
             Err(io::Error::other("no threads left"))
         };
-        let result = run_with_deadline(long(), "no thread", || (), |_| None, spawn, Arc::new(|| Duration::ZERO));
+        let result = run_with_deadline(long(), "no thread", || (), |_| None, spawn, limit_passes);
         let text = failure_message(result);
         assert!(ran.load(Ordering::SeqCst));
         assert!(text.contains("no thread: could not start the worker thread: no threads left"), "{text}");
@@ -579,10 +598,10 @@ mod tests {
             ran.store(true, Ordering::SeqCst);
             Ok(())
         };
-        let text = failure_message(run_with_deadline(huge, "huge", || (), |_| None, spawn, Arc::new(|| Duration::ZERO)));
+        let text = failure_message(run_with_deadline(huge, "huge", || (), |_| None, spawn, limit_passes));
         assert!(text.contains("ends past the latest time"), "{text}");
         assert!(!ran.load(Ordering::SeqCst), "the body started");
-        let text = message(catch_unwind(|| wait_until(huge, "a huge limit", || true)).unwrap_err());
+        let text = message(catch_unwind(|| wait_until(huge, "a huge limit", &Signal::new(), || true)).unwrap_err());
         assert!(text.contains("waiting for a huge limit: the limit of") && text.contains("ends past the latest time"), "{text}");
     }
 
@@ -619,22 +638,20 @@ mod tests {
     #[test]
     fn wait_until_returns_on_condition() {
         let ready = &AtomicBool::new(false);
+        let signal = &Signal::new();
         let (asked, asked_rx) = mpsc::channel();
-        let (stored, stored_rx) = mpsc::channel();
         thread::scope(|s| {
             s.spawn(move || {
                 asked_rx.recv().unwrap();
                 ready.store(true, Ordering::SeqCst);
-                stored.send(()).unwrap();
+                signal.raise();
             });
             let mut calls = 0;
-            wait_until(long(), "the flag", || {
+            wait_until(long(), "the flag", signal, || {
                 calls += 1;
                 if calls == 1 {
-                    // The flag is set before this call returns, and it still answers false, so the
-                    // condition is called a second time whatever order the threads run in.
+                    // The other thread sets the flag only after this call has started.
                     asked.send(()).unwrap();
-                    stored_rx.recv().unwrap();
                     return false;
                 }
                 ready.load(Ordering::SeqCst)
@@ -644,145 +661,137 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "timed out waiting for the export to finish within 50ms")]
-    fn wait_until_times_out_with_label() {
-        wait_until(short(), "the export to finish", || false);
+    fn a_raise_during_the_condition_ends_the_next_wait_at_once() {
+        let signal = Signal::new();
+        let mut calls = 0;
+        let mut cond = || {
+            calls += 1;
+            if calls == 1 {
+                signal.raise();
+            }
+            calls == 2
+        };
+        let result = wait_for_signal(&fake_resolved(Duration::from_secs(600)), "a raise", &signal, &mut cond, Instant::now, |_, raised, seen, _| {
+            assert_ne!(*raised, seen, "the raise made during the condition was lost");
+            (raised, false)
+        });
+        assert_eq!(result, Ok(()));
+        assert_eq!(calls, 2);
     }
 
     #[test]
+    fn wait_until_times_out_with_label() {
+        let mut calls = 0;
+        let mut cond = || {
+            calls += 1;
+            false
+        };
+        let resolved = fake_resolved(Duration::from_millis(50));
+        let text = wait_for_signal(&resolved, "the export to finish", &Signal::new(), &mut cond, Instant::now, |_, raised, _, _| (raised, true))
+            .unwrap_err();
+        assert!(text.starts_with("timed out waiting for the export to finish within 50ms"), "{text}");
+        assert!(text.ends_with("the signal was not raised after the last check"), "{text}");
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn raises_that_never_satisfy_the_condition_fail_at_the_limit() {
+        // A clock that moves 20 s on each reading, and a wait that always reports a raise.
+        let start = Instant::now();
+        let readings = std::cell::Cell::new(0u32);
+        let now = || {
+            let n = readings.get();
+            readings.set(n + 1);
+            start + Duration::from_secs(20) * n
+        };
+        let mut calls = 0;
+        let mut cond = || {
+            calls += 1;
+            false
+        };
+        let resolved = fake_resolved(Duration::from_secs(60));
+        let text = wait_for_signal(&resolved, "a progress tick", &Signal::new(), &mut cond, now, |_, mut raised, _, _| {
+            *raised = raised.wrapping_add(1);
+            (raised, false)
+        })
+        .unwrap_err();
+        assert!(text.starts_with("timed out waiting for a progress tick within 60s"), "{text}");
+        assert!(text.ends_with("the condition still returned false at the limit"), "{text}");
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn a_thread_raising_in_a_loop_cannot_hold_wait_until_past_the_limit() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let signal = Arc::new(Signal::new());
+        let raiser = {
+            let (stop, signal) = (Arc::clone(&stop), Arc::clone(&signal));
+            thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    signal.raise();
+                    thread::yield_now();
+                }
+            })
+        };
+        let waiter_signal = Arc::clone(&signal);
+        let guard = DeadlineLimit::new(Duration::from_secs(30)).with_variable(UNSET);
+        let outcome = with_deadline(guard, "wait_until under constant raises", move || {
+            catch_unwind(AssertUnwindSafe(|| wait_until(short(), "a condition that never holds", &waiter_signal, || false))).map_err(message)
+        });
+        stop.store(true, Ordering::SeqCst);
+        raiser.join().unwrap();
+        let text = outcome.unwrap_err();
+        assert!(text.contains("timed out waiting for a condition that never holds within 50ms"), "{text}");
+    }
+    #[test]
     #[should_panic(expected = "condition boom")]
     fn wait_until_propagates_condition_panic() {
-        wait_until(long(), "a panicking condition", || panic!("condition boom"));
+        wait_until(long(), "a panicking condition", &Signal::new(), || panic!("condition boom"));
     }
 
     #[test]
     fn wait_until_keeps_a_typed_condition_payload() {
         #[derive(Debug, PartialEq)]
         struct Marker(u32);
-        let payload = catch_unwind(|| wait_until(long(), "a typed panic", || std::panic::panic_any(Marker(9)))).unwrap_err();
+        let payload = catch_unwind(|| wait_until(long(), "a typed panic", &Signal::new(), || std::panic::panic_any(Marker(9)))).unwrap_err();
         assert_eq!(payload.downcast_ref::<Marker>(), Some(&Marker(9)));
     }
 
-    /// A default limit for the loop tests, which pass their own clock.
+    /// A limit for the loop tests, which pass their own wait.
     fn fake_resolved(limit: Duration) -> Resolved<'static> {
         Resolved { limit, variable: UNSET, from_variable: false }
     }
 
-    #[test]
-    fn wait_until_rejects_a_true_after_the_limit() {
-        let resolved = fake_resolved(Duration::from_millis(10));
-        let mut now = Duration::ZERO;
-        let mut cond = || true;
-        // The condition took 11 ms to return.
-        let mut elapsed = || {
-            now += Duration::from_millis(11);
-            now
-        };
-        let result = poll_until(&resolved, "a late flag", &mut cond, &mut elapsed, &mut |_| panic!("paused"));
-        let text = result.unwrap_err();
-        assert!(text.contains("timed out waiting for a late flag") && text.contains("held only after the limit"), "{text}");
-    }
-
-    #[test]
-    fn wait_until_pauses_grow_and_stop_at_the_limit() {
-        let resolved = fake_resolved(Duration::from_millis(100));
-        let now = std::cell::Cell::new(Duration::ZERO);
-        let mut pauses = Vec::new();
-        let mut calls = 0;
-        let mut cond = || {
-            calls += 1;
-            false
-        };
-        let mut elapsed = || now.get();
-        let mut pause = |d: Duration| {
-            pauses.push(d);
-            now.set(now.get() + d);
-        };
-        let result = poll_until(&resolved, "never", &mut cond, &mut elapsed, &mut pause);
-        assert!(result.is_err());
-        let ms: Vec<u128> = pauses.iter().map(Duration::as_millis).collect();
-        // 1 + 2 + 4 + 8 + 16 + 32 = 63, then the 37 ms left, after which the limit is reached.
-        assert_eq!(ms, [1, 2, 4, 8, 16, 32, 37]);
-        // One call before each pause, and none after the last one.
-        assert_eq!(calls, 7);
-    }
-
-    #[test]
-    fn wait_until_stops_calling_after_an_overshooting_pause() {
-        let resolved = fake_resolved(Duration::from_millis(100));
-        let now = std::cell::Cell::new(Duration::from_millis(99));
-        let mut calls = 0;
-        let mut cond = || {
-            calls += 1;
-            false
-        };
-        let mut elapsed = || now.get();
-        // The thread wakes 50 ms late from the 1 ms pause.
-        let mut pause = |d: Duration| now.set(now.get() + d + Duration::from_millis(50));
-        let result = poll_until(&resolved, "late wake", &mut cond, &mut elapsed, &mut pause);
-        assert!(result.unwrap_err().contains("timed out waiting for late wake"));
-        assert_eq!(calls, 1);
-    }
-
-    /// Runs `run_with_deadline` with a 5 s limit on a fake clock. The worker runs on the calling
-    /// thread: the clock reads `start_secs` while the body runs and `received_secs` when the result
-    /// is received. When `sends` is false, the worker stores its result but does not send, as if its
-    /// thread stopped running between the two.
-    fn on_fake_clock<T: Send + 'static>(
-        f: impl FnOnce() -> T + Send + 'static,
-        start_secs: u64,
-        received_secs: u64,
-        sends: bool,
-    ) -> Result<T, Failure> {
-        let now = Arc::new(AtomicU64::new(0));
-        let clock_now = Arc::clone(&now);
-        let clock: Clock = Arc::new(move || Duration::from_secs(clock_now.load(Ordering::SeqCst)));
-        let unsent = std::cell::RefCell::new(None);
+    /// Runs `run_with_deadline` on `f` with the body's result arriving only after the limit has
+    /// passed: the body does not start until the wait for it, which runs it on the calling thread
+    /// and then reports that the limit passed. The worker never sends.
+    fn finishing_after_the_limit<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, Failure> {
+        let held = RefCell::new(None);
         let spawn = |job: Job, done: Sender<()>| {
-            now.store(start_secs, Ordering::SeqCst);
-            job();
-            now.store(received_secs, Ordering::SeqCst);
-            if sends {
-                let _ = done.send(());
-            } else {
-                // Kept alive so that the wait times out instead of seeing a closed channel.
-                *unsent.borrow_mut() = Some(done);
-            }
+            *held.borrow_mut() = Some((job, done));
             Ok(())
         };
-        let limit = DeadlineLimit::new(Duration::from_secs(5)).with_variable(UNSET);
-        run_with_deadline(limit, "fake clock", f, |_| None, spawn, clock)
+        let wait = |_: &Receiver<()>, _: Duration| {
+            if let Some((job, _done)) = held.borrow_mut().take() {
+                job();
+            }
+            Err(RecvTimeoutError::Timeout)
+        };
+        run_with_deadline(short(), "late body", f, |_| None, spawn, wait)
     }
 
     #[test]
-    fn a_value_returned_after_the_limit_fails() {
-        let text = failure_message(on_fake_clock(|| 1, 6, 6, true));
-        assert!(text.contains("fake clock finished only after its limit of 5s"), "{text}");
+    fn a_value_that_arrives_after_the_limit_is_returned() {
+        assert!(matches!(finishing_after_the_limit(|| 1), Ok(1)));
     }
 
     #[test]
-    fn a_value_finished_in_time_but_received_late_passes() {
-        assert!(matches!(on_fake_clock(|| 1, 1, 6, true), Ok(1)));
-    }
-
-    #[test]
-    fn a_value_finished_in_time_but_sent_late_passes() {
-        assert!(matches!(on_fake_clock(|| 1, 1, 6, false), Ok(1)));
-    }
-
-    #[test]
-    fn a_panic_finished_in_time_but_sent_late_keeps_its_payload() {
-        let payload = match on_fake_clock(|| -> u8 { panic!("early boom") }, 1, 6, false) {
+    fn a_panic_that_arrives_after_the_limit_keeps_its_payload() {
+        let payload = match finishing_after_the_limit(|| -> u8 { panic!("late boom") }) {
             Err(Failure::Panic(payload)) => payload,
             Ok(_) => panic!("the call did not fail"),
             Err(Failure::Message(text)) => panic!("the payload was replaced: {text}"),
         };
-        assert_eq!(message(payload), "early boom");
-    }
-
-    #[test]
-    fn a_panic_after_the_limit_names_the_limit_and_the_panic() {
-        let text = failure_message(on_fake_clock(|| -> u8 { panic!("late boom") }, 6, 6, true));
-        assert!(text.contains("fake clock finished only after its limit of 5s") && text.ends_with("(it panicked: late boom)"), "{text}");
+        assert_eq!(message(payload), "late boom");
     }
 }

@@ -1,10 +1,13 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-//! MCP server initialization and tool envelopes, independent of transport and tools. Sessions
-//! answer 2025-03-26 by default and can negotiate any of `SUPPORTED_PROTOCOL_VERSIONS`.
+//! MCP server initialization and the envelopes of tools, resources, prompts and completion,
+//! independent of transport and of what the server serves. Sessions answer 2025-03-26 by default
+//! and can negotiate any of `SUPPORTED_PROTOCOL_VERSIONS`.
 //! The caller owns routing, transport and JSON-RPC batching. Compatibility mode preserves servers
 //! that accepted calls before initialization and initialize in a batch; strict mode enforces the
 //! initialization ordering and batch prohibition. Create one session per connection.
+
+use std::collections::BTreeMap;
 
 use craft_jsonrpc::{Limits, Request, RpcError};
 use serde_json::{Value, json};
@@ -238,6 +241,196 @@ pub fn text_tool_result(text: &str, is_error: bool) -> Value {
     json!({"content": [{"type": "text", "text": text}], "isError": is_error})
 }
 
+/// Most values one `completion/complete` result may carry.
+pub const MAX_COMPLETIONS: usize = 100;
+
+/// One page of a `resources/list`, `resources/templates/list` or `prompts/list` result.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Page {
+    pub items: Vec<Value>,
+    /// The cursor a client sends to get the next page; `None` on the last page.
+    pub next_cursor: Option<String>,
+}
+
+impl Page {
+    /// Every item in one page, for a server that does not paginate.
+    pub fn all(items: Vec<Value>) -> Self {
+        Self { items, next_cursor: None }
+    }
+}
+
+/// Take the page of `items` that starts at the `cursor` in a list request's parameters, with at most
+/// `page_size` items (0 puts every item in one page). The helper accepts canonical positive
+/// decimal offsets divisible by `page_size`. Parameters that are not an object, and malformed
+/// cursors, are rejected with -32602. The helper returns an empty last page for a cursor past
+/// the list's end, including after the list shrinks.
+pub fn page(params: Option<&Value>, mut items: Vec<Value>, page_size: usize) -> Result<Page, RpcError> {
+    if params.is_some_and(|p| !p.is_object()) {
+        return Err(RpcError::new(-32602, "List parameters must be an object"));
+    }
+    let start = match params.and_then(|p| p.get("cursor")) {
+        None => 0,
+        Some(Value::String(cursor)) => match cursor.parse::<usize>() {
+            Ok(offset) if page_size > 0 && offset > 0 && offset % page_size == 0 && offset.to_string() == *cursor => offset,
+            _ => return Err(invalid_cursor()),
+        },
+        Some(_) => return Err(invalid_cursor()),
+    };
+    let start = start.min(items.len());
+    items.drain(..start);
+    let mut next_cursor = None;
+    if page_size > 0 && items.len() > page_size {
+        items.truncate(page_size);
+        next_cursor = Some((start + page_size).to_string());
+    }
+    Ok(Page { items, next_cursor })
+}
+
+fn invalid_cursor() -> RpcError {
+    RpcError::new(-32602, "Invalid cursor")
+}
+
+/// Wrap a page of MCP `Resource` objects in the `resources/list` result.
+pub fn resource_list(page: Page) -> Value {
+    list_result("resources", page)
+}
+
+/// Wrap a page of MCP `ResourceTemplate` objects in the `resources/templates/list` result.
+pub fn resource_template_list(page: Page) -> Value {
+    list_result("resourceTemplates", page)
+}
+
+/// Wrap a page of MCP `Prompt` objects in the `prompts/list` result.
+pub fn prompt_list(page: Page) -> Value {
+    list_result("prompts", page)
+}
+
+fn list_result(key: &str, page: Page) -> Value {
+    let mut result = serde_json::Map::new();
+    result.insert(key.to_owned(), Value::Array(page.items));
+    if let Some(cursor) = page.next_cursor {
+        result.insert("nextCursor".to_owned(), Value::String(cursor));
+    }
+    Value::Object(result)
+}
+
+/// Validate `resources/read` parameters and return the requested URI.
+pub fn resource_read(params: &Value) -> Result<&str, RpcError> {
+    params.get("uri").and_then(Value::as_str).ok_or_else(|| RpcError::new(-32602, "Missing resource URI"))
+}
+
+/// The error MCP specifies for a `resources/read` of a URI the server does not have.
+pub fn resource_not_found(uri: &str) -> RpcError {
+    RpcError { code: -32002, message: "Resource not found".into(), data: Some(json!({"uri": uri})) }
+}
+
+/// Text contents of a resource, for [`read_result`].
+pub fn text_contents(uri: &str, mime_type: Option<&str>, text: &str) -> Value {
+    contents(uri, mime_type, "text", text)
+}
+
+/// Binary contents of a resource, for [`read_result`]. `base64` is the data in standard base64.
+pub fn blob_contents(uri: &str, mime_type: Option<&str>, base64: &str) -> Value {
+    contents(uri, mime_type, "blob", base64)
+}
+
+fn contents(uri: &str, mime_type: Option<&str>, key: &str, value: &str) -> Value {
+    let mut result = serde_json::Map::new();
+    result.insert("uri".to_owned(), json!(uri));
+    if let Some(mime_type) = mime_type {
+        result.insert("mimeType".to_owned(), json!(mime_type));
+    }
+    result.insert(key.to_owned(), json!(value));
+    Value::Object(result)
+}
+
+/// Wrap resource contents in the `resources/read` result.
+pub fn read_result(contents: Vec<Value>) -> Value {
+    json!({"contents": contents})
+}
+
+/// Validate `prompts/get` parameters and return the prompt name and its arguments. MCP prompt
+/// arguments are strings, so an argument of any other type is rejected with -32602.
+pub fn prompt_get(params: &Value) -> Result<(&str, BTreeMap<&str, &str>), RpcError> {
+    let name = params.get("name").and_then(Value::as_str).ok_or_else(|| RpcError::new(-32602, "Missing prompt name"))?;
+    let arguments = match params.get("arguments") {
+        None => BTreeMap::new(),
+        Some(Value::Object(map)) => map
+            .iter()
+            .map(|(key, value)| value.as_str().map(|v| (key.as_str(), v)))
+            .collect::<Option<BTreeMap<_, _>>>()
+            .ok_or_else(|| RpcError::new(-32602, "Prompt arguments must be strings"))?,
+        Some(_) => return Err(RpcError::new(-32602, "Prompt arguments must be an object")),
+    };
+    Ok((name, arguments))
+}
+
+/// Wrap prompt messages (MCP `PromptMessage` objects) in the `prompts/get` result.
+pub fn prompt_result(description: Option<&str>, messages: Vec<Value>) -> Value {
+    let mut result = json!({"messages": messages});
+    if let Some(description) = description {
+        result["description"] = json!(description);
+    }
+    result
+}
+
+/// A prompt message with one text block, from `"user"` or `"assistant"`.
+pub fn text_message(role: &str, text: &str) -> Value {
+    json!({"role": role, "content": {"type": "text", "text": text}})
+}
+
+/// What a `completion/complete` request refers to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompletionRef<'a> {
+    /// A prompt, by name (`ref/prompt`).
+    Prompt(&'a str),
+    /// A resource or resource template, by URI or URI template (`ref/resource`).
+    Resource(&'a str),
+}
+
+/// The parameters of a `completion/complete` request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Completion<'a> {
+    pub reference: CompletionRef<'a>,
+    /// The name of the argument being completed.
+    pub argument: &'a str,
+    /// What the user has typed for it so far.
+    pub value: &'a str,
+}
+
+/// Validate `completion/complete` parameters.
+pub fn completion_request(params: &Value) -> Result<Completion<'_>, RpcError> {
+    let invalid = |message: &str| RpcError::new(-32602, message);
+    let reference = params.get("ref").ok_or_else(|| invalid("Missing completion reference"))?;
+    let field = |key: &str| reference.get(key).and_then(Value::as_str);
+    let reference = match reference.get("type").and_then(Value::as_str) {
+        Some("ref/prompt") => CompletionRef::Prompt(field("name").ok_or_else(|| invalid("Missing prompt name"))?),
+        Some("ref/resource") => CompletionRef::Resource(field("uri").ok_or_else(|| invalid("Missing resource URI"))?),
+        _ => return Err(invalid("Unknown completion reference type")),
+    };
+    let argument = params.get("argument");
+    let text = |key: &str| argument.and_then(|a| a.get(key)).and_then(Value::as_str);
+    let (Some(name), Some(value)) = (text("name"), text("value")) else {
+        return Err(invalid("Completion argument needs a name and a value"));
+    };
+    Ok(Completion { reference, argument: name, value })
+}
+
+/// Build the `completion/complete` result from every matching value. The result carries the first
+/// [`MAX_COMPLETIONS`] values, the number of matches in `total`, and whether any were left out in
+/// `hasMore`.
+pub fn completion_result(values: impl IntoIterator<Item = String>) -> Value {
+    let mut kept = Vec::new();
+    let mut total = 0usize;
+    for value in values {
+        if kept.len() < MAX_COMPLETIONS {
+            kept.push(value);
+        }
+        total += 1;
+    }
+    json!({"completion": {"values": kept, "total": total, "hasMore": total > MAX_COMPLETIONS}})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,5 +615,90 @@ mod tests {
         assert_eq!(reply[1]["id"], "tools");
         assert_eq!(reply[1]["result"]["tools"], json!([]));
         assert_eq!(session.borrow().state(), State::Ready);
+    }
+
+    #[test]
+    fn list_pages_follow_their_cursors_to_the_end() {
+        let items: Vec<Value> = (0..5).map(|i| json!({"name": i})).collect();
+        let mut params = None;
+        let mut names = Vec::new();
+        let mut pages = 0;
+        loop {
+            let page = page(params.as_ref(), items.clone(), 2).unwrap();
+            let result = prompt_list(page);
+            pages += 1;
+            names.extend(result["prompts"].as_array().unwrap().iter().map(|p| p["name"].clone()));
+            match result.get("nextCursor") {
+                Some(cursor) => params = Some(json!({"cursor": cursor})),
+                None => break,
+            }
+        }
+        assert_eq!((pages, names), (3, (0..5).map(|i| json!(i)).collect::<Vec<_>>()));
+        assert_eq!(resource_list(page(None, items.clone(), 0).unwrap()), json!({"resources": items}));
+        let past_the_end = page(Some(&json!({"cursor": "8"})), items, 2).unwrap();
+        assert_eq!(resource_template_list(past_the_end), json!({"resourceTemplates": []}));
+    }
+
+    #[test]
+    fn list_cursors_that_were_not_handed_out_are_invalid_params() {
+        for cursor in [json!(""), json!("-1"), json!("+1"), json!("1.0"), json!("abc"), json!(2), json!(null), json!("99999999999999999999999")] {
+            let error = page(Some(&json!({"cursor": cursor})), vec![json!(1)], 1).unwrap_err();
+            assert_eq!(error.code, -32602, "{cursor}");
+        }
+        for cursor in ["1", "02", "0"] {
+            assert_eq!(page(Some(&json!({"cursor": cursor})), vec![json!(1); 5], 2).unwrap_err().code, -32602, "{cursor}");
+        }
+        assert_eq!(page(Some(&json!({"cursor": "2"})), vec![json!(1); 5], 0).unwrap_err().code, -32602);
+        for params in [json!(null), json!([]), json!("0")] {
+            assert_eq!(page(Some(&params), vec![json!(1)], 1).unwrap_err().code, -32602, "{params}");
+        }
+    }
+
+    #[test]
+    fn resource_reads_validate_the_uri_and_build_contents() {
+        assert_eq!(resource_read(&json!({"uri": "x://a"})).unwrap(), "x://a");
+        assert_eq!(resource_read(&json!({"uri": 1})).unwrap_err().code, -32602);
+        let missing = resource_not_found("x://b");
+        assert_eq!((missing.code, missing.data), (-32002, Some(json!({"uri": "x://b"}))));
+        let result = read_result(vec![text_contents("x://a", Some("text/markdown"), "# A"), blob_contents("x://c", None, "AAE=")]);
+        assert_eq!(result, json!({"contents": [{"uri": "x://a", "mimeType": "text/markdown", "text": "# A"}, {"uri": "x://c", "blob": "AAE="}]}));
+    }
+
+    #[test]
+    fn prompt_arguments_must_be_strings() {
+        let params = json!({"name": "describe", "arguments": {"part": "bracket"}});
+        let (name, args) = prompt_get(&params).unwrap();
+        assert_eq!((name, args.get("part").copied()), ("describe", Some("bracket")));
+        assert!(prompt_get(&json!({"name": "describe"})).unwrap().1.is_empty());
+        for params in [json!({}), json!({"name": "d", "arguments": {"n": 1}}), json!({"name": "d", "arguments": ["x"]})] {
+            assert_eq!(prompt_get(&params).unwrap_err().code, -32602, "{params}");
+        }
+        let result = prompt_result(Some("Describe a part"), vec![text_message("user", "Describe bracket")]);
+        assert_eq!(result["messages"][0]["content"], json!({"type": "text", "text": "Describe bracket"}));
+        assert_eq!(result["description"], "Describe a part");
+    }
+
+    #[test]
+    fn completion_requests_name_a_prompt_or_a_resource() {
+        let prompt = json!({"ref": {"type": "ref/prompt", "name": "describe"}, "argument": {"name": "part", "value": "br"}});
+        assert_eq!(completion_request(&prompt).unwrap(), Completion { reference: CompletionRef::Prompt("describe"), argument: "part", value: "br" });
+        let resource = json!({"ref": {"type": "ref/resource", "uri": "lib://parts/{part}"}, "argument": {"name": "part", "value": ""}});
+        assert_eq!(completion_request(&resource).unwrap().reference, CompletionRef::Resource("lib://parts/{part}"));
+        for params in [
+            json!({"ref": {"type": "ref/tool", "name": "x"}, "argument": {"name": "a", "value": ""}}),
+            json!({"ref": {"type": "ref/prompt"}, "argument": {"name": "a", "value": ""}}),
+            json!({"ref": {"type": "ref/prompt", "name": "x"}, "argument": {"name": "a"}}),
+            json!({"argument": {"name": "a", "value": ""}}),
+        ] {
+            assert_eq!(completion_request(&params).unwrap_err().code, -32602, "{params}");
+        }
+    }
+
+    #[test]
+    fn completion_results_carry_at_most_a_hundred_values() {
+        let result = completion_result((0..150).map(|i| i.to_string()));
+        assert_eq!(result["completion"]["values"].as_array().map(Vec::len), Some(MAX_COMPLETIONS));
+        assert_eq!((&result["completion"]["total"], &result["completion"]["hasMore"]), (&json!(150), &json!(true)));
+        assert_eq!(completion_result(["a".to_owned()]), json!({"completion": {"values": ["a"], "total": 1, "hasMore": false}}));
     }
 }

@@ -13,6 +13,7 @@ The crate is native only and is a dependency of an app's `xtask` package only.
 | `report` | `report` | `write` and `to_json`: the per-step JSON report (schema 1), replaced atomically through `craft-atomic` |
 | `fetch` | `fetch` | `fetch_pinned`, `fetch_archive`, `extract`, `sha256_hex`: files of a pinned list downloaded over HTTPS and checked against SHA-256, and tar archives extracted under entry and size limits |
 | `stats` | `stats` | `run`, `collect` and `write_table`: files, lines and tests of Rust per workspace crate (`cargo xtask stats`) |
+| `icon` | always | `ico::pack`, `icns::pack`, `png_size`, `png_info`, `read_pngs`, `Limits`, and `ico::read_file` and `icns::read_file` for an app's test of its committed icons |
 | `version` | `version` | `run`, `run_with`, `Limits`, `lock_dirs`, `read`, `replace`, `validate`: `cargo xtask version [set X.Y.Z[-pre]]` on the root `Cargo.toml` |
 
 No feature is on by default. `report` adds `serde_json` and `craft-atomic`, and `stats` adds
@@ -345,6 +346,49 @@ caller chooses `fetch_archive` or `fetch_pinned`.
 
 The pins come from the caller. Reading a manifest file into pins is left to the caller.
 
+## Icons
+
+```rust,no_run
+use std::path::Path;
+use craft_xtask::icon::{self, Limits, ico};
+
+fn cmd_ico(out: &Path, inputs: &[&Path]) -> Result<(), icon::Error> {
+    let limits = Limits::default();
+    let pngs = icon::read_pngs(inputs, &limits)?;
+    let file = ico::pack(&pngs, &limits)?;
+    std::fs::write(out, &file).map_err(|e| icon::Error::io(out, &e))?;
+    Ok(())
+}
+```
+
+The app renders the PNGs and chooses the sizes, the paths and the command name. Both formats store
+each PNG as is; no image is decoded.
+
+- Every PNG is checked whole: the signature, each chunk's length and CRC, a first `IHDR` of 13 bytes
+  with valid fields, at most one `PLTE` before the first `IDAT`, at least one `IDAT` with no other
+  chunk between two of them, no other critical chunk, and a final empty `IEND` with nothing after
+  it. Images must be square and at least 1 px.
+- `ico::pack` takes 1 to 256 px images in 8-bit RGBA, the form a PNG entry of an `.ico` holds
+  ([ICO format, part 4](https://devblogs.microsoft.com/oldnewthing/20101022-00/?p=12473/)). A 256 px
+  side is written as 0.
+- `icns::pack` takes 16, 32, 64, 128, 256, 512 and 1024 px images and writes each into every slot of
+  its size: 16 `icp4`; 32 `icp5`, `ic11`; 64 `icp6`, `ic12`; 128 `ic07`; 256 `ic08`, `ic13`; 512
+  `ic09`, `ic14`; 1024 `ic10` ([ICNS format](https://hexbase.dev/formats/icns/)).
+- Both write the images in increasing size, whatever the input order. Two images of one size are an
+  error.
+- `Limits` bounds the image count (default 16), each PNG (16 MiB) and the packed file (128 MiB). The
+  formats' 32-bit offsets and lengths also cap a file at 4 GiB - 1 byte. Sizes are checked and the
+  file's memory reserved before any byte is written. `read_pngs` stops reading a file one byte past
+  the smaller of the PNG limit and what the total limit has left.
+- `ico::read_file` and `icns::read_file` read a file within the same limits and check its structure.
+  `ico::read` accepts only the entries `ico::pack` writes. Both readers hold each image to the PNG
+  limit. `icns::read` returns at most four elements for each image `Limits` allows, and returns
+  elements that are not PNGs as stored. An app's `committed_icon_is_valid` test passes its own icon
+  path, for example `assets/app-icon/<app>.ico`.
+
+Errors are `icon::Error`: `Empty`, `TooManyImages`, `InvalidPng`, `NotSquare`, `UnsupportedSize`,
+`DuplicateSize`, `TooLarge`, `Allocation`, `InvalidIcon` or `Io`.
+
 ## Stats
 
 `cargo xtask stats [--exact]` prints the `.rs` files, lines, `#[test]` attributes and `proptest!` blocks
@@ -441,6 +485,10 @@ fn version(rest: &[&str]) -> Result<(), String> {
 | `stats`: regular files only, and `a_walk_does_not_follow_directory_links` | WordCraft `xtask/src/stats.rs` at `6b163b33dc` |
 | `stats`: the entry budget that returns an error, and its two tests | CADCraft `xtask/src/stats.rs` at `ca87680fb0` |
 | `stats`: the per-file size limit, and its two tests | GridCraft `xtask/src/stats.rs` at `9e9f13114f` |
+| `icon::ico`: `pack`, `png_size` and the tests `packs_directory_and_payloads`, `rejects_bad_input`, `committed_icon_is_valid` | DeckCraft `xtask/src/ico.rs` at [ae9d525](https://github.com/storytold/deckcraft/blob/ae9d525bce365083bb62b4754bdd346feb2a79b0/xtask/src/ico.rs); CADCraft's copy differs only in its icon path |
+| `icon::icns`: `pack`, the slot table and the tests `fills_every_slot_of_each_size`, `rejects_bad_input`, `committed_icon_is_valid`, `packs_icns_elements` | craft-launcher `xtask/src/icns.rs` at [019330f](https://github.com/storytold/craft-launcher/blob/019330f99aa90a3d6501e134fc48df8d719e15a2/xtask/src/icns.rs); MaterialCraft `xtask/src/ico.rs` at [6e952a9](https://github.com/storytold/materialcraft/blob/6e952a9a10f9bce77f330e430a828c066be6ad9b/xtask/src/ico.rs) |
+| `icon`: the test `rejects_non_png` | VectorCraft `xtask/src/ico.rs` at [4373205](https://github.com/storytold/vectorcraft/blob/437320509da102f5d9aca44d411ffb254f071932/xtask/src/ico.rs) |
+| The whole-PNG check, the RGBA check for `.ico`, the size order and duplicate check, `Limits`, the checked lengths and offsets, `read_pngs` and the readers | written here |
 | The root and slot-count errors, the `--exclude` of the xtask package, cancellation, the bounded owner read and the atomic report; in `names`, the full escape decoder, byte and C strings as an option, every `#[cfg(test)]` item form and `#![cfg(test)]`, the syntax errors, the marker only in comments, word boundaries in every script, the limits, the sorted findings and the skipped folder links; in `stats`, the metadata, total-size, depth and `--list` output limits, the metadata checks and the line naming failed listings | written here |
 | `version`: `read`, `validate` with the overflow and prerelease checks, the restore after a failed update, and the tests `reads_the_workspace_version`, `replaces_only_the_workspace_version`, `keeps_crlf_line_endings`, `validates_versions`, `rejects_what_cargo_rejects`, `a_failed_update_restores_the_manifest` | SoundCraft `xtask/src/version.rs` at [6c84416](https://github.com/storytold/soundcraft/blob/6c84416c3cffb72d8d350ddfefc4fc9ee954ca1a/xtask/src/version.rs) |
 | `version`: the path dependency pins and the test `moves_the_workspace_crates_pins_with_it` | PdfCraft `xtask/src/version.rs` at [3e30645](https://github.com/storytold/pdfcraft/blob/3e3064532f04fd6ec769c6bd7b2c97464757970e/xtask/src/version.rs) |
@@ -466,6 +514,10 @@ No app uses this crate yet.
 | AniCraft, CADCraft, DeckCraft, FigCraft, GridCraft, LightCraft, PhotoCraft, WordCraft | Planned: the lexer and matcher of `display_names.rs` move to `names`, with `MatchCase::Exact`. `BANNED`, `ALLOWED`, `ROOTS`, the prefix exceptions (LightCraft, WordCraft), PhotoCraft's catalog test and the tests named after them stay in the app. |
 | VectorCraft | Planned: `cargo xtask brands` calls `names::scan` with `MatchCase::AsciiInsensitive`, byte and C strings, `brand-ok` and its desktop entry as `Input::text_mark_above`. The word list, the file selection from `git ls-files` and the message stay in the app. |
 | LightCraft | Planned: `ci_lock.rs` moves to `lock`, with `LIGHTCRAFT_CI_LOCK` and `LIGHTCRAFT_CI_SLOTS` read by the app. The machine, GPU, corpus and skip report stays in the app. |
+| DeckCraft | Planned: `xtask/src/ico.rs` moves to `icon::ico`. The `ico` command and `packaging/icons.sh` stay in the app. |
+| CADCraft | Planned: `xtask/src/ico.rs` moves to `icon::ico`. The `ico` command and `packaging/icons.sh` stay in the app. |
+| craft-launcher | Planned: `xtask/src/ico.rs` and `icns.rs` move to `icon`. The `ico` and `icns` commands stay in the app. |
+| MaterialCraft | Planned: `pack_ico` and `pack_icns` move to `icon`. The `ico` and `icns` commands stay in the app. |
 | CADCraft, DeckCraft, DesignCraft, GridCraft, LightCraft, PhotoCraft, VectorCraft, WordCraft | Planned: `xtask/src/stats.rs` moves to `stats`. Each app's switch lists its per-crate counts before and after in its pull request. |
 | SoundCraft, PdfCraft | Planned: `xtask/src/version.rs` moves to `version`, with the app's root and `CARGO` passed to `run`. `the_real_manifest_has_a_valid_version`, and PdfCraft's `workspace_rust_version_covers_the_ui_crate`, stay in the app. |
 | VectorCraft, DesignCraft, CADCraft, DeckCraft, WordCraft, GridCraft, LightCraft | Planned: `xtask/src/assets.rs` moves to `assets`, each with its own document, folders and row mode; LightCraft with `RowMode::Patterns`, its forbidden extensions and names, and `license_column: Some(4)`. The `cargo xtask assets` output stays in the app. |
