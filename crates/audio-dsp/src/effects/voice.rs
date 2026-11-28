@@ -459,8 +459,9 @@ impl AudioEffect for VoicePitch {
             let mut sum = 0.0f32;
             for (c, line) in self.lines.iter_mut().enumerate() {
                 // A non-finite sample is stored as silence, so it never reaches the output. A
-                // channel the block leaves out is stored as silence too, so its line holds none
-                // of its earlier audio when it comes back.
+                // channel the block leaves out is stored as silence too while its line advances,
+                // so after a gap of at least `latency() + tail_samples()` samples it holds none of
+                // its earlier audio; after a shorter gap, audio still in the line can sound.
                 let x = channels.get(c).map_or(0.0, |io| flush32(io[i]));
                 line[self.pos] = x;
                 sum += x;
@@ -759,8 +760,9 @@ impl AudioEffect for VoiceFormant {
         for i in 0..len {
             for c in 0..self.stage.stft.len() {
                 // A non-finite sample is taken as silence, so it never reaches the output. A
-                // channel the block leaves out is fed silence, so it holds none of its earlier
-                // audio when it comes back.
+                // channel the block leaves out is fed silence while its state advances, so after
+                // a gap of at least `latency() + tail_samples()` samples it holds none of its
+                // earlier audio; after a shorter gap, audio still pending can sound.
                 match channels.get_mut(c) {
                     Some(io) => io[i] = self.stage.tick(c, flush32(io[i]), self.ratio),
                     None => {
@@ -1197,8 +1199,9 @@ mod tests {
     }
 
     /// A block that leaves channels out feeds them silence, so when they come back without a
-    /// reset none of their earlier audio sounds. Checked for the formant shifter and for the
-    /// pitch shifter with and without Keep Formants.
+    /// reset, after a gap at least as long as the latency and the tail, none of their earlier
+    /// audio sounds. Checked for the formant shifter and for the pitch shifter with and without
+    /// Keep Formants.
     #[test]
     fn channels_left_out_of_a_block_come_back_silent() {
         let mut rng = Rng::new(19);
@@ -1213,6 +1216,7 @@ mod tests {
         keep.reset();
         let fxs: [&mut dyn AudioEffect; 3] = [&mut f, &mut plain, &mut keep];
         for fx in fxs {
+            assert!(fx.latency() + fx.tail_samples() <= noise.len(), "{}: the gap is shorter than the latency and the tail", fx.id());
             let (mut a, mut b, mut c) = (noise.clone(), noise.clone(), noise.clone());
             fx.process(&mut [&mut a, &mut b, &mut c]);
             let mut a = noise.clone();
@@ -1244,6 +1248,33 @@ mod tests {
             assert!(a.iter().any(|v| v.abs() > 0.01), "{semitones}: the impulse never came out");
             assert_eq!(a, b, "{semitones}: the left-out channel lost the impulse");
         }
+    }
+
+    /// A block that leaves a channel out gives the same output, once the channel is back, as a
+    /// block that holds silence for it: with Keep Formants on, an impulse just before the block
+    /// still sounds afterward.
+    #[test]
+    fn a_channel_left_out_of_a_block_runs_as_silence() {
+        let mut out = Vec::new();
+        for omit in [false, true] {
+            let mut p = VoicePitch::new(SR, 2);
+            assert!(p.set_param("formant_follow", 1.0));
+            p.reset();
+            let (mut l, mut r) = (vec![0.0f32; 480], vec![0.0f32; 480]);
+            r[479] = 1.0;
+            p.process(&mut [&mut l, &mut r]);
+            let (mut l, mut r) = (vec![0.0f32; 480], vec![0.0f32; 480]);
+            if omit {
+                p.process(&mut [&mut l]);
+            } else {
+                p.process(&mut [&mut l, &mut r]);
+            }
+            let (mut l, mut r) = (vec![0.0f32; 4_000], vec![0.0f32; 4_000]);
+            p.process(&mut [&mut l, &mut r]);
+            assert!(r.iter().any(|v| *v != 0.0), "omit {omit}: the impulse did not sound");
+            out.push((l, r));
+        }
+        assert!(out[0] == out[1], "leaving the channel out changed the output");
     }
 
     /// Leaving a silent third channel out of a block does not change the pitch the tracker finds,
