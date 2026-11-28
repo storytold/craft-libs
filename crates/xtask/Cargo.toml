@@ -16,6 +16,8 @@ default = []
 lock = ["dep:libc"]
 # The per-step JSON report, replaced atomically.
 report = ["dep:serde_json", "dep:craft-atomic"]
+# Downloads named in a pinned list, checked against SHA-256, and bounded tar extraction.
+fetch = ["dep:craft-atomic", "dep:flate2", "dep:sha2", "dep:tar", "dep:unicode-normalization"]
 # `cargo xtask stats`: files, lines and tests of Rust per workspace crate, read from `cargo metadata`.
 stats = ["dep:serde_json"]
 # `cargo xtask version [set X.Y.Z[-pre]]`, with Cargo.toml and Cargo.lock replaced atomically and one
@@ -24,12 +26,18 @@ version = ["lock", "dep:craft-atomic", "dep:toml_edit"]
 
 [dependencies]
 craft-atomic = { workspace = true, optional = true }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"], optional = true }
 serde_json = { workspace = true, optional = true }
+sha2 = { version = "0.10", default-features = false, features = ["std"], optional = true }
+tar = { version = "0.4", default-features = false, optional = true }
 toml_edit = { version = "0.25", optional = true }
+unicode-normalization = { version = "0.1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 # O_NONBLOCK and O_NOFOLLOW for lock and owner opens that must not wait on a FIFO or follow a symlink. Constants only.
 libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+tar = { version = "0.4", default-features = false }
 tempfile = "3"

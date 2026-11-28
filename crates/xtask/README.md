@@ -11,12 +11,15 @@ The crate is native only and is a dependency of an app's `xtask` package only.
 | `names` | always | `Policy`, `Input`, `scan`, `scan_source`, `literals`, `test_path`: the display-name scanner, which looks for the words an app lists in its string literals, `Cargo.toml` descriptions and text files |
 | `lock` | `lock` | `LockConfig`, `try_acquire`, `acquire`, `holders`: 1 to 64 slots held across processes through file locks in a directory the app chooses |
 | `report` | `report` | `write` and `to_json`: the per-step JSON report (schema 1), replaced atomically through `craft-atomic` |
+| `fetch` | `fetch` | `fetch_pinned`, `fetch_archive`, `extract`, `sha256_hex`: files of a pinned list downloaded over HTTPS and checked against SHA-256, and tar archives extracted under entry and size limits |
 | `stats` | `stats` | `run`, `collect` and `write_table`: files, lines and tests of Rust per workspace crate (`cargo xtask stats`) |
 | `icon` | always | `ico::pack`, `icns::pack`, `png_size`, `png_info`, `read_pngs`, `Limits`, and `ico::read_file` and `icns::read_file` for an app's test of its committed icons |
 | `version` | `version` | `run`, `run_with`, `Limits`, `lock_dirs`, `read`, `replace`, `validate`: `cargo xtask version [set X.Y.Z[-pre]]` on the root `Cargo.toml` |
 
 No feature is on by default. `report` adds `serde_json` and `craft-atomic`, and `stats` adds
-`serde_json`. `version` adds `craft-atomic` and `toml_edit` and turns on `lock`.
+`serde_json`. `fetch` adds `craft-atomic`, `sha2`, `tar`, `flate2` and
+`unicode-normalization`, and runs the system `curl`. `version` adds `craft-atomic` and `toml_edit` and
+turns on `lock`.
 
 ## Use
 
@@ -281,6 +284,68 @@ cancel while waiting) runs no step and writes no report. The report looks like t
 so a reader never sees a partial report, and a failed write leaves the previous report in place.
 Machine, GPU, corpus and skip details stay in the app's own report.
 
+## Fetch
+
+| Function | What it does |
+|---|---|
+| `fetch_pinned(dest, pins)` | puts each `Pin { name, url, sha256, max_bytes }` at `dest/name`: a regular file already there with the pinned SHA-256 is kept, any other file there is deleted, and the file is downloaded to a temporary file beside it, counted and hashed while it is written, and renamed into place only when its size stays within `max_bytes` and its SHA-256 matches |
+| `fetch_archive(dest, pin, options)` | downloads one pinned tar archive, plain or gzip-compressed, checks that its size stays within `max_bytes` and that its SHA-256 matches, and writes its regular files and folders under `dest` |
+| `extract(dest, name, bytes, options)` | the archive step of `fetch_archive`, for archive bytes the caller already holds |
+| `fetch_pinned_with`, `fetch_archive_with` | the same, through a caller's `Transport` instead of `curl` |
+| `sha256_hex(bytes)` | the lowercase hexadecimal SHA-256 |
+
+`fetch_pinned` checks every pin before anything is downloaded. The name of a pin given to
+`fetch_pinned`, and the path of every archive entry, follow these name rules: the name is a relative
+path with `/` between folders; it may not be empty or absolute, hold an empty, `.` or `..` part, a
+part longer than 255 bytes, a backslash, a control character or a character Windows does not allow
+in names (`:`, `<`, `>`, `"`, `|`, `?`, `*`), end a part with a dot or a space, or use a Windows
+device name (`CON`, `NUL`, `COM1` and the rest). Two pins may not name the same file ignoring case
+and Unicode normalization (a composed `é` and `e` followed by a combining accent are one name, and
+so are `ß`, `ẞ` and `ss`), and a file name may not also be used as a folder. The address starts with
+`https://`, the SHA-256 has 64 hexadecimal digits, and `max_bytes` is at least 1. The name of the
+pin given to `fetch_archive` only labels the archive and follows the rules below.
+
+`curl` runs with `-q` (no `.curlrc`), `--globoff` (brackets and braces in the address are sent as
+they are), `--path-as-is` (`.` and `..` parts of the address are sent as they are),
+`--proto =https` and `--proto-redir =https`, `--fail`, `--max-filesize` set to
+`max_bytes` (capped at `i64::MAX`, the largest value `curl` reads), a 10-second connect timeout, and a stop when a transfer stays under 1 KiB per second for
+60 seconds. The crate counts the bytes itself as well, so a response of unknown length stops at
+`max_bytes` with any version of `curl`. A body over `max_bytes` is reported as `TooLarge` whether
+`curl` refuses it from its advertised size or the crate stops it while counting; a `Transport`
+reports such a refusal with an error of kind `FileTooLarge`.
+
+Neither `dest` nor any path under it may be a link. A link, or a folder where a file goes, or a
+file where a folder goes, stops the fetch with `FetchError::NotRegular`. The folders above `dest`
+are followed like any other path, links included. The link checks run before the writes, not as
+part of them, so another process that replaces `dest` or a folder under it with a link after it was
+checked can redirect a write. Every folder on the way to a written file (`dest`, the folders above
+it and the folders under it) must be writable only by the user running the fetch or the system.
+
+The archive is held in memory. The pin's `max_bytes` limits the archive's downloaded size only;
+peak memory is higher, because the entries' file data is held as well, up to `max_expanded_bytes`.
+The pin's name labels the archive in messages and must not be empty, longer than 4096 bytes or hold
+a control character. A trailing `/` is accepted on a folder entry only, and only a folder entry may
+name the archive's root (`.` or `./`). Before anything is
+written, every entry is checked: a symbolic or hard link, a device, a FIFO or any other special
+entry, a path that is absolute, holds `..`, is not UTF-8 or fails the name rules above, and a file
+name repeated ignoring case and Unicode normalization each stop the extraction. `ExtractOptions` holds the limits:
+
+| Field | Default |
+|---|---|
+| `max_entries` | 1000, folders included |
+| `max_entry_bytes` | 4 MiB |
+| `max_expanded_bytes` | 16 MiB for all files together |
+| `strip_components` | 0; leading folders removed from every path, as `tar --strip-components`, except that leading `.` parts are not counted and the removed names must pass the name rules |
+
+The tar data, decompressed or plain, is bounded too: `max_expanded_bytes` plus 12 KiB for headers,
+padding and long-name records for each entry `max_entries` allows, plus one more. A gzip archive is
+read to its end, so a damaged checksum or a cut trailer stops the extraction. Each file is written through a temporary file and a rename, so an
+existing file at its name is replaced whole. Files are written one at a time, so a write error
+after the checks leaves the files written before it in place. Archives are not inferred from a file name: the
+caller chooses `fetch_archive` or `fetch_pinned`.
+
+The pins come from the caller. Reading a manifest file into pins is left to the caller.
+
 ## Icons
 
 ```rust,no_run
@@ -434,6 +499,10 @@ fn version(rest: &[&str]) -> Result<(), String> {
 | `assets`: folder-only extensions and the tests in `assets::tests::gridcraft` | GridCraft `xtask/src/assets.rs` at [f204433](https://github.com/storytold/gridcraft/blob/f2044337c7e195bdf6bec1b3914937a3dd386749/xtask/src/assets.rs) |
 | `assets`: first-cell rows, folder patterns, forbidden extensions and names, the license column and the tests in `assets::tests::lightcraft` | LightCraft `xtask/src/assets.rs` at [25ffe3e](https://github.com/storytold/lightcraft/blob/25ffe3e5d4ac754829b99dd7368d94185adbf8d5/xtask/src/assets.rs) |
 | `assets`: the policy checks, the cell parser, bad-entry and near-row reports, the size limits, UTF-8 names, skipped folders and the regular-file test | written here |
+| `fetch`: a list of name, address and SHA-256; a file with another SHA-256 is deleted so the next run downloads it again | LightCraft `xtask/src/corpus.rs` (`fetch_pinned`) at [6b2b7e6](https://github.com/storytold/lightcraft/blob/6b2b7e6d1117e683a1701568e56f979d061e4699/xtask/src/corpus.rs) |
+| `fetch`: HTTPS-only `curl` arguments, a regular-file check before reuse, a per-file byte limit, and a download staged beside its destination and renamed after its check | VectorCraft `xtask/src/pngsuite.rs` at [ed96a12](https://github.com/storytold/vectorcraft/blob/ed96a1219620b5b6ab13e25369f7b55cddd664f6/xtask/src/pngsuite.rs) |
+| `fetch`: the archive limits (1 MiB archive, 1000 entries, 16 MiB extracted) | DesignCraft `xtask/src/main.rs` (PngSuite download) at [f5087ea](https://github.com/storytold/designcraft/blob/f5087eae963c6f8474abb45669ce2b7275761e6d/xtask/src/main.rs) |
+| `fetch`: the pin and entry name rules, the link checks, the bounded decompression and the in-process `Transport` | written here |
 
 ## Migration
 
@@ -452,6 +521,7 @@ No app uses this crate yet.
 | CADCraft, DeckCraft, DesignCraft, GridCraft, LightCraft, PhotoCraft, VectorCraft, WordCraft | Planned: `xtask/src/stats.rs` moves to `stats`. Each app's switch lists its per-crate counts before and after in its pull request. |
 | SoundCraft, PdfCraft | Planned: `xtask/src/version.rs` moves to `version`, with the app's root and `CARGO` passed to `run`. `the_real_manifest_has_a_valid_version`, and PdfCraft's `workspace_rust_version_covers_the_ui_crate`, stay in the app. |
 | VectorCraft, DesignCraft, CADCraft, DeckCraft, WordCraft, GridCraft, LightCraft | Planned: `xtask/src/assets.rs` moves to `assets`, each with its own document, folders and row mode; LightCraft with `RowMode::Patterns`, its forbidden extensions and names, and `license_column: Some(4)`. The `cargo xtask assets` output stays in the app. |
+| LightCraft, VectorCraft, PhotoCraft, DesignCraft, WordCraft | Not switched: each app's own pinned-download code for its test corpora can move to `fetch`. |
 
 Maintainers: the craft-libs maintainers, until a responsible maintainer or team is agreed in the
 review of this crate's first pull request.

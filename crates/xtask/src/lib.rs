@@ -17,6 +17,8 @@
 //! - `lock` (feature `lock`): a fixed number of slots, held across processes through file locks, so
 //!   that gate runs in several checkouts of one machine take turns.
 //! - `report` (feature `report`): the per-step JSON report, replaced atomically.
+//! - `fetch` (feature `fetch`): files named in a pinned list, each checked against its SHA-256 before
+//!   it is written in place, and tar archives extracted under entry and size limits.
 //! - `stats` (feature `stats`): files, lines and tests of Rust per workspace crate (`cargo xtask stats`).
 //! - [`icon`]: PNG images packed into a Windows `.ico` ([`icon::ico::pack`]) or a macOS `.icns`
 //!   ([`icon::icns::pack`]), with [`icon::png_size`] and readers for an app's test of its committed
@@ -48,6 +50,8 @@
 //! ```
 
 pub mod assets;
+#[cfg(feature = "fetch")]
+pub mod fetch;
 pub mod icon;
 #[cfg(feature = "lock")]
 pub mod lock;

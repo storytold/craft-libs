@@ -4970,10 +4970,14 @@ name = "craft-xtask"
 version = "0.1.0"
 dependencies = [
  "craft-atomic",
+ "flate2",
  "libc",
  "serde_json",
+ "sha2 0.10.9",
+ "tar",
  "tempfile",
  "toml_edit",
+ "unicode-normalization",
 ]
 
 [[package]]
