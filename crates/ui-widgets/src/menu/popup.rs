@@ -418,7 +418,7 @@ impl Component for Menu<'_> {
     /// row, and Enter, which runs the active row, or else the first enabled one; the focus stays in the field.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let level = MenuLevel::of(cx.memory::<LevelMemory>());
-        level.resume(cx.core.ctx.cumulative_pass_nr());
+        level.resume(crate::runtime::overlay::opening(&cx.core.ctx, cx.core.resolved.id));
         while let Some((mv, _)) = cx.intents().take_move() {
             if level.step_active(mv) {
                 frame::request_repaint(&cx.core.ctx);

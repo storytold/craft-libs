@@ -168,12 +168,13 @@ impl MenuLevel {
         self.with(|state| state.pad)
     }
 
-    /// Starts a run of the menu in pass `pass`. A menu that did not run in the pass before (it was closed, and a
-    /// closed menu does not run) drops what its last open run left for the next: the letters shown, a typed row, a
-    /// close or a step not yet taken.
-    pub(crate) fn resume(&self, pass: u64) {
+    /// Starts a run of the menu. A menu that `opens` in this pass (it was closed, and a closed menu does not run)
+    /// drops what its last open run left for the next: the letters shown, a typed row, a close or a step not yet
+    /// taken. A menu that stayed open keeps them, though passes went by without it running: a memo view around it
+    /// replays them.
+    pub(crate) fn resume(&self, opens: bool) {
         self.with(|state| {
-            if state.pass.saturating_add(1) < pass {
+            if opens {
                 state.now.clear();
                 state.shown.clear();
                 state.run = None;

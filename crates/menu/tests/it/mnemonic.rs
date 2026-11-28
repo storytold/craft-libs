@@ -91,3 +91,26 @@ fn turkic_labels_keep_dotted_and_dotless_i_apart() {
     assert_eq!(opened_by(Key::I), (false, true), "Alt+I opens ı");
     assert_eq!(opened_by(Key::X), (true, false), "Alt+X opens ix");
 }
+
+/// A menu Alt with a letter opened takes its rows' letters after Alt comes up in a later frame, as a keyboard sends it.
+#[trial]
+fn a_menu_alt_with_a_letter_opened_takes_a_row_letter_after_alt_is_released() {
+    let recent = Node::submenu("Recent", vec![Item::new("file.open", "Open").into()]);
+    let bar = Tracked::new(MenuBar::new(vec![Menu::new("File", vec![recent])]));
+    let mut fixture = Fixture::new(move |ui| {
+        MenuBarUi::new(&bar).show(ui);
+    });
+    fixture.os(Os::Windows);
+    fixture.settle().idle(2);
+    let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+    fixture.frame(vec![egui::Event::ModifiersChanged(Modifiers::ALT), key(Key::F, true, Modifiers::ALT), key(Key::F, false, Modifiers::ALT)]);
+    fixture.idle(2);
+    assert!(fixture.by_label("Recent").is_some(), "Alt+F opens File");
+    fixture.frame(vec![egui::Event::ModifiersChanged(Modifiers::NONE)]);
+    fixture.idle(2);
+    assert!(fixture.by_label("Recent").is_some(), "the Alt release leaves File open");
+    fixture.frame(vec![key(Key::R, true, Modifiers::NONE), egui::Event::Text("r".into())]);
+    fixture.frame(vec![key(Key::R, false, Modifiers::NONE)]);
+    fixture.settle();
+    assert!(fixture.by_label("Open").is_some(), "R opens Recent");
+}
