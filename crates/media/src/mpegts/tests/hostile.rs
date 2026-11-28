@@ -67,6 +67,26 @@ fn hostile_input_never_panics() {
     }
 }
 
+/// Saved indexes damaged behind a checksum that matches: decoding refuses them or gives tables
+/// that are checked against the file and read without a panic.
+#[test]
+fn saved_indexes_never_panic() {
+    for (i, data) in [ts_seed(true), ps_seed()].into_iter().enumerate() {
+        let len = data.len() as u64;
+        let saved = index_store::encode(&open(&data).unwrap(), len).unwrap();
+        let body = saved[..saved.len() - 8].to_vec();
+        craft_media_testkit::hostile::hammer(&format!("mpegts saved index {i}"), &body, 4_000, move |d| {
+            let mut bytes = d.to_vec();
+            index_store::seal(&mut bytes);
+            let Some(f) = index_store::decode(&bytes, len) else { return };
+            let _ = index_store::fits(&f, f.format, &data[..]);
+            for s in 0..f.streams.len() {
+                let _ = f.read_unit(&data, s, 0);
+            }
+        });
+    }
+}
+
 #[test]
 fn elementary_stream_frame_parsers_never_panic() {
     let codecs = [

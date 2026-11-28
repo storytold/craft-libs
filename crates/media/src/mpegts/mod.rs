@@ -17,6 +17,8 @@
 //! - Units are read back on demand by re-reading the file from the unit's first packet, so the
 //!   index costs a few dozen bytes per access unit.
 //! - [`mux`] writes one program as a transport stream to any `io::Write`, frame by frame.
+//! - An app can keep indexes between runs: [`open`] takes a file's index from the [`IndexStore`]
+//!   registered with [`set_index_store`] when the store has it, and saves it there after a scan.
 //!
 //! The module does no decoding. No dependencies beyond `std`, no `unsafe`, builds for
 //! `wasm32-unknown-unknown`.
@@ -28,6 +30,8 @@
 
 mod es;
 pub use es::{FrameInfo, frame_bytes, frame_info, sei_has_recovery_point};
+mod index_store;
+pub use index_store::{IndexStore, set_index_store};
 pub mod mux;
 mod pes;
 mod ps;
@@ -512,11 +516,35 @@ impl File {
 }
 
 /// Scan a transport or program stream and index its access units.
+///
+/// The index is taken from the [`IndexStore`] registered with [`set_index_store`] when the store
+/// holds this file's, and saved there after a scan (see the store for how a file is known and its
+/// saved index checked).
 pub fn open<S: ByteSource + ?Sized>(src: &S) -> Result<File> {
     let mut head = vec![0u8; 64 * 1024];
     let n = read_some(src, 0, &mut head)?;
     head.truncate(n);
-    match sniff(&head).ok_or(Error::NotMpeg)? {
+    let format = sniff(&head).ok_or(Error::NotMpeg)?;
+    let Some(store) = index_store::index_store() else { return scan(src, format) };
+    let len = src.len();
+    let key = index_store::key_of(src, len, &head);
+    let saved = key.as_deref().and_then(|key| store.load(key)).and_then(|bytes| index_store::decode(&bytes, len));
+    // An index that does not fit the file: scanned as if there were none, and saved again.
+    if let Some(file) = saved.filter(|file| index_store::fits(file, format, src)) {
+        return Ok(file);
+    }
+    let file = scan(src, format)?;
+    if let Some(key) = key.as_deref()
+        && let Some(bytes) = index_store::encode(&file, len)
+    {
+        store.save(key, &bytes);
+    }
+    Ok(file)
+}
+
+/// Build the index of a file of `format` by reading all of it.
+fn scan<S: ByteSource + ?Sized>(src: &S, format: Format) -> Result<File> {
+    match format {
         Format::Ts { packet_size, sync_offset } => ts::scan(src, packet_size, sync_offset),
         Format::Ps { mpeg1 } => ps::scan(src, mpeg1),
     }
