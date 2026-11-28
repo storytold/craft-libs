@@ -4945,6 +4945,7 @@ dependencies = [
  "libc",
  "serde_json",
  "tempfile",
+ "toml_edit",
 ]
 
 [[package]]
