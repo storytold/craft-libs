@@ -9,6 +9,11 @@ use craft_behavior::{Flow, ItemLayout, PointerEvent, SelectionChange, SelectionM
 use craft_keymap::Mods;
 use egui::{Context, Id, Pos2, Rect, Vec2};
 use std::any::TypeId;
+use std::collections::HashSet;
+
+/// With more rows than this in a Shift+Cmd range, the selected keys are looked up in a set; with fewer, each row
+/// searches the selected keys.
+const RANGE_SET_ABOVE: usize = 8;
 
 /// What made a selection change, reported with it (`CollectionEvent::Selection`): a key, or a pointer pick with the
 /// modifiers it was made with.
@@ -169,7 +174,13 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
         if let Some(held) = keys.iter().position(|key| *key == anchor_key) {
             keys[..=held].rotate_right(1);
         }
-        let added: Vec<C::Key> = self.range(anchor, at).into_iter().filter(|key| !keys.contains(key)).collect();
+        let range = self.range(anchor, at);
+        let added: Vec<C::Key> = if range.len() > RANGE_SET_ABOVE {
+            let held: HashSet<&C::Key> = keys.iter().collect();
+            range.into_iter().filter(|key| !held.contains(key)).collect()
+        } else {
+            range.into_iter().filter(|key| !keys.contains(key)).collect()
+        };
         keys.extend(added);
         let end = self.source.key(at);
         if let Some(held) = keys.iter().position(|key| *key == end) {

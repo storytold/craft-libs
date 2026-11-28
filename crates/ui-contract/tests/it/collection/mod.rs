@@ -7,6 +7,7 @@ pub(crate) mod keys;
 pub(crate) mod kit;
 pub(crate) mod list;
 pub(crate) mod middle_scroll;
+pub(crate) mod range_lookup;
 pub(crate) mod reorder_groups;
 pub(crate) mod review;
 pub(crate) mod rows;
