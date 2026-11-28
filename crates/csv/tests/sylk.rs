@@ -148,3 +148,25 @@ fn decodes_excels_character_escapes_in_text() {
     // ASCII), so they stay a space with the combining mark.
     assert_eq!(value("A9"), text("´|¯|˘|˙|¨|˚|¸|˝|˛|ˇ| \u{300}| \u{302}"));
 }
+
+#[test]
+fn reads_the_date_system_from_the_options_record() {
+    // Excel writes the options record with `V4` for a workbook on the 1904 date system and `V0`
+    // for the 1900 one; the cells keep their serials either way.
+    let file = |options: &str| format!("ID;PWXL;N;E\r\n{options}\r\nC;Y1;X1;K42428.5\r\nE\r\n");
+    for (options, date_1904) in [
+        ("O;L;D;V4;K47;G100 0.001", true),
+        ("O;V4", true),
+        ("O;L;D;V0;K47;G100 0.001", false),
+        // A date system other than 0 or 4, a broken one and none at all are the 1900 one.
+        ("O;L;D;V7;K47;G100 0.001", false),
+        ("O;L;D;V;K47", false),
+        ("", false),
+        // `V` is the date system only in the options record.
+        ("F;V4;Y1;X1", false),
+    ] {
+        let sh = read(file(options).as_bytes()).unwrap();
+        assert_eq!(sh.date_1904, date_1904, "{options}");
+        assert_eq!(sh.cells.get(&at("A1")).map(|c| c.value.clone()), Some(Value::Number(42428.5)), "{options}");
+    }
+}
