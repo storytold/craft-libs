@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::style::{ColorRef, Fill, Line};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ChartType {
     #[default]
@@ -221,6 +221,16 @@ impl Default for Trendline {
 #[serde(default, rename_all = "camelCase")]
 pub struct Series {
     pub name: String,
+    /// The imported classic DrawingML `c:idx`, independent of the series' display order.
+    /// Missing or invalid IDs and new series get an unused ID when the chart is rebuilt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_idx: Option<u32>,
+    /// Membership in an imported classic plot group, scoped to this chart. Clones retain
+    /// membership; a new default series forms the default group for its type and axis.
+    /// To join an imported stack, carry its group token. Clear/rebind it when copying charts.
+    /// Rebuilding may renumber tokens; only the membership relation is meaningful.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_group: Option<u32>,
     pub values: Vec<Option<f64>>,
     /// X values for scatter/bubble.
     pub x_values: Vec<Option<f64>>,
@@ -231,9 +241,20 @@ pub struct Series {
     pub point_fills: Vec<(usize, Fill)>,
     pub data_labels: Option<bool>,
     pub smooth: bool,
+    /// The marker symbol, including explicit `"none"`; `None` means no symbol was specified.
     pub marker: Option<String>,
-    /// Combo charts: this series' own type.
+    /// Effective marker visibility of an imported stacked line series, independent of its
+    /// symbol and stacking kind. An explicit symbol takes precedence unless a chart-wide
+    /// line-type edit against the raw baseline overrides retained marker settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marker_visible: Option<bool>,
+    /// The series' plot type, including its line-marker override. DrawingML reads retain this
+    /// even when all plot groups have the same type. On rebuild, supported series types
+    /// take precedence unless a non-Combo `Chart::kind` differs from its raw chart's
+    /// provenance-matched original type. That chart-wide edit overrides retained kinds;
+    /// without a raw baseline, an explicit series type remains authoritative.
     pub kind: Option<ChartType>,
+    /// Whether the series uses a value axis other than the chart's primary value axis.
     pub secondary_axis: bool,
     /// The number format of the series' data labels (Excel code): the labels' own, else the
     /// source data's.
@@ -251,9 +272,13 @@ pub struct Series {
 }
 
 /// The formulas (`c:f`) a series' data comes from, such as `Sheet1!$B$2:$B$5`. A writer uses the
-/// ones given and makes up the rest for an embedded workbook laid out one series per column
-/// (names in row 1, categories in column A). A caller that changes the data so that a given
-/// range no longer covers it clears that formula.
+/// ones given unchanged. If no series has references, missing formulas use the historical
+/// default worksheet layout (names in row 1, categories in column A, one series per column).
+/// If any series has references, missing positional name/value/size formulas are written as
+/// literals: the writer cannot infer a caller-owned workbook's populated series columns.
+/// Categories keep their explicit reference or the stable default column A. A caller that
+/// changes the data so that a given range no longer covers it clears that formula; it must
+/// also update its workbook.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SeriesRefs {
@@ -370,6 +395,7 @@ pub struct Chart {
     pub kind: ChartType,
     pub title: Option<String>,
     pub categories: Vec<String>,
+    /// Retained series in display order (`c:order` for DrawingML charts).
     pub series: Vec<Series>,
     pub legend: Option<String>,
     /// `c:legend/c:overlay`: the legend is drawn over the plot instead of shrinking it.
@@ -389,6 +415,7 @@ pub struct Chart {
     pub gridlines: bool,
     /// `c:minorGridlines` on the value axis: five to a major unit, between the major ones.
     pub minor_gridlines: bool,
+    /// Titles of the primary category (or scatter x) and value axes.
     pub axis_titles: (Option<String>, Option<String>),
     /// Chart style number (1–48) and colour palette (`colorful1`, `monochrome3`…).
     pub style: u32,
@@ -465,6 +492,21 @@ pub struct Chart {
     /// Original chart XML part kept for round-trip of unmodelled options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
+    /// Metadata interpretation of retained classic chart XML: 0 is the former reader, 1 is
+    /// the first typed-metadata reader, 2 adds stacked marker visibility and secondary-only
+    /// axis ownership, 3 retains series IDs, 4 selects reciprocal duplicate-axis partners,
+    /// 5 retains plot-group membership and selected axes' metadata, and 6 resolves group-owned
+    /// duplicate value-axis elements, and 7 preserves resolved element identity through
+    /// ownership, scatter direction and source-linked formats. Version 8 validates scatter
+    /// roles, shares ownership fallback and applies source-linked boolean defaults. Version 9
+    /// retains resolved secondary ownership without a primary pair, literal source formats
+    /// and source-linked General without substituting a stored axis format. Version 10
+    /// prioritizes exact secondary and format owners and retains literal and General
+    /// source formats on value axes. Version 11 confines fallback formats to the value-axis
+    /// role and the retained series prefix.
+    /// Missing fields are version 0. Preserve when editing.
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub raw_metadata_version: u16,
     /// The chart was too large to model: `raw` and `kept` are written back unchanged on save.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub verbatim: bool,
@@ -582,9 +624,53 @@ impl Default for Chart {
             first_slice_angle: 0,
             pivot_source: None,
             raw: None,
+            raw_metadata_version: 0,
             verbatim: false,
             kept: ChartKept::default(),
         }
+    }
+}
+
+/// Effective classic plot types for one immutable chart operation. Reuse this context for
+/// loops: an ambiguous chart-wide edit may need one version-matched read of the original XML.
+pub struct SeriesKinds<'a> {
+    chart: &'a Chart,
+    main: ChartType,
+    override_kind: Option<ChartType>,
+    first: ChartType,
+    combo: bool,
+}
+
+impl<'a> SeriesKinds<'a> {
+    fn new(chart: &'a Chart, raw_kind: Option<ChartType>) -> Self {
+        let main = match chart.kind {
+            ChartType::Combo => chart.series.first().and_then(|s| s.kind).unwrap_or(ChartType::Column),
+            kind => kind,
+        };
+        let override_kind = (chart.kind != ChartType::Combo && raw_kind.is_some_and(|kind| kind != chart.kind)).then_some(chart.kind);
+        let effective = |s: &Series| override_kind.unwrap_or(s.kind.unwrap_or(main));
+        let first = chart.series.first().map_or(main, effective);
+        let combo = chart.kind == ChartType::Combo || chart.series.iter().any(|s| effective(s) != first);
+        Self { chart, main, override_kind, first, combo }
+    }
+
+    /// The type the classic writer actually emits, including its existing unsupported-mix fallback.
+    pub fn kind(&self, series: &Series) -> ChartType {
+        let kind = self.override_kind.unwrap_or(series.kind.unwrap_or(self.main));
+        if self.combo && matches!(kind, ChartType::Pie | ChartType::Doughnut | ChartType::Sunburst | ChartType::Scatter | ChartType::Bubble) {
+            ChartType::Column
+        } else {
+            kind
+        }
+    }
+
+    fn all_chart_kind(&self) -> bool {
+        self.chart.series.iter().all(|s| self.kind(s) == self.chart.kind)
+    }
+
+    fn percent_axis(&self, secondary: bool) -> bool {
+        self.chart.series.iter().any(|s| s.secondary_axis == secondary && self.kind(s).percent())
+            || (!secondary && self.chart.series.is_empty() && self.chart.kind.percent())
     }
 }
 
@@ -668,29 +754,34 @@ impl Chart {
         }
         c
     }
-    /// A series' own chart type: its own in a combo chart (columns when it names none), else the
-    /// chart's.
+    /// Resolve effective types once for an immutable operation, with the same precedence and
+    /// mixed-kind fallback as the classic writer. No raw parse is needed without a possible
+    /// chart-wide override; legacy saves use their exact original metadata projection.
+    pub fn series_kinds(&self) -> SeriesKinds<'_> {
+        let ambiguous = self.kind != ChartType::Combo && self.series.iter().any(|s| s.kind.is_some_and(|kind| kind != self.kind));
+        let raw_kind = if ambiguous { read::original_kind(self) } else { None };
+        SeriesKinds::new(self, raw_kind)
+    }
+
+    /// The series' effective classic plot type. For a loop, reuse [`Self::series_kinds`].
     pub fn series_kind(&self, s: &Series) -> ChartType {
-        match (self.kind, s.kind) {
-            (ChartType::Combo, Some(k)) if k != ChartType::Combo => k,
-            (ChartType::Combo, _) => ChartType::Column,
-            (k, _) => k,
-        }
+        self.series_kinds().kind(s)
     }
 
-    /// Whether a series is plotted against the secondary value axis (combo charts only).
+    /// Whether a series is plotted against the secondary value axis, including same-type groups.
     pub fn on_secondary(&self, s: &Series) -> bool {
-        self.kind == ChartType::Combo && s.secondary_axis
+        s.secondary_axis
     }
 
-    /// The value range of one value axis: the primary axis (`y_min`/`y_max` apply), or a combo
-    /// chart's secondary axis. A combo chart stacks only its stacked series. `None` when no series
-    /// uses that axis.
+    /// The value range of one value axis: primary (`y_min`/`y_max` apply), or the secondary
+    /// data extent. A combo chart stacks only its stacked series. `None` when no series uses
+    /// that axis, except the existing empty single-axis chart's primary default.
     pub fn axis_range(&self, secondary: bool) -> Option<(f64, f64)> {
-        if self.kind != ChartType::Combo {
-            return (!secondary).then(|| self.value_range());
+        let kinds = self.series_kinds();
+        if self.kind != ChartType::Combo && !self.series.iter().any(|s| s.secondary_axis) && kinds.all_chart_kind() {
+            return (!secondary).then(|| self.value_range_with(&kinds));
         }
-        let (lo, hi) = self.plotted_extent(secondary)?;
+        let (lo, hi) = self.plotted_extent(secondary, &kinds)?;
         let (lo, hi) = (lo.min(0.0), hi.max(0.0));
         Some(if secondary { (lo, hi) } else { (self.y_min.unwrap_or(lo), self.y_max.unwrap_or(hi)) })
     }
@@ -698,21 +789,21 @@ impl Chart {
     /// The smallest and largest value plotted against one value axis: plain values as they are,
     /// stacked series as running sums from zero, 100 % series as 0–1. `(0, 0)` without finite
     /// values; `None` when no series uses the axis.
-    fn plotted_extent(&self, secondary: bool) -> Option<(f64, f64)> {
+    fn plotted_extent(&self, secondary: bool, kinds: &SeriesKinds<'_>) -> Option<(f64, f64)> {
         if self.kind == ChartType::Waterfall {
-            return (!secondary).then(|| self.value_range());
+            return (!secondary).then(|| self.value_range_with(kinds));
         }
         let ser: Vec<&Series> = self.series.iter().filter(|s| self.on_secondary(s) == secondary).collect();
         if ser.is_empty() {
-            return (!secondary && self.kind != ChartType::Combo).then_some((0.0, 0.0));
+            return (!secondary && self.kind != ChartType::Combo && self.series.is_empty()).then_some((0.0, 0.0));
         }
         let mut ext = (f64::INFINITY, f64::NEG_INFINITY);
         let has_stacked_or_percent = ser.iter().any(|s| {
-            let k = self.series_kind(s);
+            let k = kinds.kind(s);
             k.stacked() || k.percent()
         });
         let percent = if has_stacked_or_percent {
-            self.fold_stacked(&ser, &mut ext)
+            self.fold_stacked(&ser, &mut ext, kinds)
         } else {
             for s in &ser {
                 for v in s.values.iter().flatten().copied().filter(|v| v.is_finite()) {
@@ -721,9 +812,7 @@ impl Chart {
             }
             false
         };
-        if !percent {
-            self.fold_trendlines(&ser, &mut ext);
-        }
+        self.fold_trendlines(&ser, &mut ext, kinds);
         if percent {
             ext.0 = ext.0.min(0.0);
             ext.1 = ext.1.max(1.0);
@@ -734,40 +823,74 @@ impl Chart {
 
     /// Widens `ext` by the points of the stacked and 100 % series in `ser`; returns whether a
     /// 100 % series is among them.
-    fn fold_stacked(&self, ser: &[&Series], ext: &mut (f64, f64)) -> bool {
-        let mut percent = false;
-        let n = ser.iter().map(|s| s.values.len()).max().unwrap_or(0);
-        let budget = (ser.len() * n).min(10_000_000);
-        let n_clamped = if ser.is_empty() { 0 } else { n.min(budget / ser.len()) };
-        for i in 0..n_clamped {
-            let (mut p, mut m, mut stacked) = (0.0, 0.0, false);
-            for s in ser {
-                let k = self.series_kind(s);
-                let Some(v) = s.values.get(i).copied().flatten().filter(|v| v.is_finite()) else { continue };
-                if k.percent() {
-                    percent = true;
-                } else if k.stacked() {
-                    stacked = true;
-                    if v >= 0.0 { p += v } else { m += v }
-                } else {
-                    widen(ext, v);
+    fn fold_stacked(&self, ser: &[&Series], ext: &mut (f64, f64), kinds: &SeriesKinds<'_>) -> bool {
+        // Charge actual value slots, including missing values, not nonexistent cells in a
+        // rectangular series-by-longest-vector grid. Imported caches already share a 1M cap;
+        // the 10M work limit also bounds models constructed directly by callers.
+        let mut remaining = 10_000_000;
+        let mut slots_by_group = std::collections::HashMap::new();
+        let mut stack_groups: Vec<Vec<(&Series, usize)>> = Vec::new();
+        // A percentage axis has normalized defaults even when every cache slot is missing.
+        let percent = ser.iter().any(|s| kinds.kind(s).percent());
+        for s in ser {
+            if remaining == 0 {
+                break;
+            }
+            let slots = s.values.len().min(remaining);
+            remaining -= slots;
+            if slots == 0 {
+                continue;
+            }
+            let kind = kinds.kind(s);
+            if kind.percent() {
+                // The normalized range follows the effective kind; slots still consume the budget.
+                continue;
+            }
+            if kind.stacked() {
+                let next = stack_groups.len();
+                let group = *slots_by_group.entry((kind, s.source_group)).or_insert_with(|| {
+                    stack_groups.push(Vec::new());
+                    next
+                });
+                stack_groups[group].push((*s, slots));
+            } else {
+                for value in s.values.iter().take(slots).flatten().copied().filter(|v| v.is_finite()) {
+                    widen(ext, value);
                 }
             }
-            if stacked {
-                ext.1 = ext.1.max(p);
-                ext.0 = ext.0.min(m);
+        }
+        // Process one stack at a time. Its longest visited prefix cannot exceed the actual
+        // slots charged to that group, so neither allocation nor traversal multiplies group
+        // count by a chart-wide longest vector.
+        for group in stack_groups {
+            let n = group.iter().map(|(_, slots)| *slots).max().unwrap_or(0);
+            let mut totals = vec![(0.0_f64, 0.0_f64); n];
+            for (series, slots) in group {
+                for (i, value) in series.values.iter().take(slots).enumerate() {
+                    let Some(value) = value.filter(|v| v.is_finite()) else { continue };
+                    let (positive, negative) = &mut totals[i];
+                    if value >= 0.0 {
+                        *positive += value
+                    } else {
+                        *negative += value
+                    }
+                    // Positive sums only grow and negative sums only fall. Updating the
+                    // extent here also distinguishes a finite zero from an empty slot.
+                    ext.1 = ext.1.max(*positive);
+                    ext.0 = ext.0.min(*negative);
+                }
             }
         }
         percent
     }
 
     /// Widens `ext` by the trendlines of the series in `ser` that are not stacked.
-    fn fold_trendlines(&self, ser: &[&Series], ext: &mut (f64, f64)) {
+    fn fold_trendlines(&self, ser: &[&Series], ext: &mut (f64, f64), kinds: &SeriesKinds<'_>) {
         for s in ser {
-            if self.series_kind(s).stacked() {
+            if kinds.kind(s).stacked() {
                 continue;
             }
-            for y in s.trendline_ys(crate::trendline::series_is_scatter(self.series_kind(s))) {
+            for y in s.trendline_ys(crate::trendline::series_is_scatter(kinds.kind(s))) {
                 widen(ext, y);
             }
         }
@@ -799,9 +922,10 @@ impl Chart {
     /// the bounds and unit the chart fixes, else Office's automatic ones ([`axis_scale`](fn@axis_scale)).
     /// `None` when no series uses the axis.
     pub fn axis_scale(&self, secondary: bool, max_intervals: usize) -> Option<(f64, f64, f64)> {
-        let (lo, hi) = self.plotted_extent(secondary)?;
+        let kinds = self.series_kinds();
+        let (lo, hi) = self.plotted_extent(secondary, &kinds)?;
         let (fmin, fmax, major) = if secondary { (self.y2_min, self.y2_max, self.y2_major) } else { (self.y_min, self.y_max, self.y_major) };
-        let full_percent = !secondary && self.kind.percent();
+        let full_percent = kinds.percent_axis(secondary);
         Some(axis_scale(lo, hi, fmin, fmax, major, max_intervals, !full_percent))
     }
 
@@ -826,7 +950,7 @@ impl Chart {
         let code = if secondary { &self.y2_format } else { &self.y_format };
         // A 100 % stacked chart's value axis counts in percent unless the file says otherwise.
         let code = match code.as_deref() {
-            None | Some("General") if !secondary && self.kind.percent() => "0%",
+            None if self.series_kinds().percent_axis(secondary) => "0%",
             c => c.unwrap_or("General"),
         };
         crate::numfmt::format_dated(code, v, self.lang.as_deref(), self.date_1904)
@@ -887,8 +1011,23 @@ impl Chart {
 
     /// Value range across series (stacked sums for stacked types).
     pub fn value_range(&self) -> (f64, f64) {
+        self.value_range_with(&self.series_kinds())
+    }
+
+    fn value_range_with(&self, kinds: &SeriesKinds<'_>) -> (f64, f64) {
         if self.kind == ChartType::Waterfall {
             return self.waterfall_value_range();
+        }
+        if !kinds.all_chart_kind() || (self.kind.stacked() && self.series.iter().any(|s| s.source_group.is_some() || self.on_secondary(s))) {
+            // Keep the aggregate value_range contract while respecting each actual plot's kind.
+            let mut extent = (0.0_f64, 0.0_f64);
+            for secondary in [false, true] {
+                if let Some((lo, hi)) = self.plotted_extent(secondary, kinds) {
+                    extent.0 = extent.0.min(lo);
+                    extent.1 = extent.1.max(hi);
+                }
+            }
+            return (self.y_min.unwrap_or(extent.0), self.y_max.unwrap_or(extent.1));
         }
         let n = self.categories.len().max(self.series.iter().map(|s| s.values.len()).max().unwrap_or(0));
         let (mut lo, mut hi) = if self.kind.stacked() {
@@ -907,11 +1046,11 @@ impl Chart {
             (l, h)
         };
         if self.kind.percent() {
-            return (0.0, 1.0);
+            return (self.y_min.unwrap_or(0.0), self.y_max.unwrap_or(1.0));
         }
         if !self.kind.stacked() {
             for s in &self.series {
-                for y in s.trendline_ys(crate::trendline::series_is_scatter(self.series_kind(s))) {
+                for y in s.trendline_ys(crate::trendline::series_is_scatter(kinds.kind(s))) {
                     hi = hi.max(y);
                     lo = lo.min(y);
                 }
@@ -1262,6 +1401,48 @@ mod tests {
     }
 
     #[test]
+    fn review_6095873677_line_forecasts_survive_a_same_axis_percent_cache() {
+        let mut chart = Chart {
+            kind: ChartType::Combo,
+            categories: ["a", "b", "c", "d"].into_iter().map(str::to_owned).collect(),
+            series: vec![
+                Series {
+                    kind: Some(ChartType::Line),
+                    values: vec![Some(3.0), Some(5.0), Some(7.0), Some(9.0)],
+                    trendlines: vec![Trendline { forward: Some(1.0), ..Default::default() }],
+                    source_group: Some(0),
+                    ..Default::default()
+                },
+                Series { kind: Some(ChartType::PercentColumn), source_group: Some(1), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let mut line_only = chart.clone();
+        line_only.series.truncate(1);
+        assert!(line_only.axis_range(false).unwrap().1 >= 11.0 - 1e-6, "the ordinary line forecast is visible without its sibling");
+
+        for values in [vec![None], vec![], vec![Some(f64::NAN), Some(f64::INFINITY)], vec![Some(0.25), Some(0.5)]] {
+            chart.series[1].values = values;
+            let (lo, hi) = chart.axis_range(false).unwrap();
+            assert_eq!(lo, 0.0, "the percentage default still supplies zero");
+            assert!(hi >= 11.0 - 1e-6, "a percentage sibling must not hide the ordinary forecast: {hi}");
+            assert!(chart.axis_scale(false, 10).unwrap().1 >= 11.0 - 1e-6);
+        }
+
+        chart.series[1].secondary_axis = true;
+        assert!(chart.axis_range(false).unwrap().1 >= 11.0 - 1e-6, "the other axis cannot suppress the forecast");
+        assert_eq!(chart.axis_range(true), Some((0.0, 1.0)), "the independent percent axis keeps its normalized extent");
+        chart.series[0].secondary_axis = true;
+        assert_eq!(chart.axis_range(false), None);
+        assert!(chart.axis_range(true).unwrap().1 >= 11.0 - 1e-6, "the same-axis forecast also reaches the secondary extent");
+        chart.y2_max = Some(10.0);
+        assert_eq!(chart.axis_scale(true, 10).unwrap().1, 10.0, "an explicit bound still takes precedence over the forecast");
+
+        chart.series.remove(0);
+        assert_eq!(chart.axis_range(true), Some((0.0, 1.0)), "without the ordinary series only normalized percent defaults remain");
+    }
+
+    #[test]
     fn axis_labels_use_the_format_and_language() {
         let mut c = Chart::sample(ChartType::Column);
         c.y_format = Some(r#"_-* #\ ##0\ "₽"_-;\-* #\ ##0\ "₽"_-;_-* "-"??\ "₽"_-;_-@_-"#.into());
@@ -1337,6 +1518,93 @@ mod tests {
         let (_, hi) = c.value_range();
         assert!(hi > 10.0);
         assert_eq!(Chart::sample(ChartType::Pie).series.len(), 1);
+    }
+
+    #[test]
+    fn review_6095656137_percent_axes_keep_normalized_missing_cache_defaults() {
+        for source_group in [None, Some(0)] {
+            for values in [vec![None], vec![], vec![Some(f64::NAN), Some(f64::INFINITY)]] {
+                let mut chart = Chart {
+                    kind: ChartType::PercentColumn,
+                    series: vec![Series { values, source_group, ..Default::default() }],
+                    y_min: Some(0.2),
+                    ..Default::default()
+                };
+                assert_eq!(chart.value_range(), (0.2, 1.0), "missing data retains percentage defaults with group {source_group:?}");
+                assert_eq!(chart.axis_range(false), Some((0.2, 1.0)));
+                let (lo, hi, _) = chart.axis_scale(false, 5).unwrap();
+                assert_eq!(lo, 0.2);
+                assert!(hi >= 1.0);
+                chart.y_max = Some(0.8);
+                assert_eq!(chart.value_range(), (0.2, 0.8), "explicit bounds still win");
+                assert_eq!(chart.axis_range(false), Some((0.2, 0.8)));
+                chart.y_min = None;
+                chart.y_max = None;
+                assert_eq!(chart.value_range(), (0.0, 1.0));
+                chart.series[0].secondary_axis = true;
+                assert_eq!(chart.axis_range(true), Some((0.0, 1.0)), "secondary percentage defaults also follow kind, not finite cache presence");
+                chart.y2_min = Some(0.2);
+                chart.y2_max = Some(0.8);
+                let (lo, hi, _) = chart.axis_scale(true, 5).unwrap();
+                assert_eq!((lo, hi), (0.2, 0.8));
+            }
+        }
+    }
+
+    #[test]
+    fn review_6095266494_sparse_stacks_retain_late_points_without_charging_empty_series() {
+        // Original sparse imported-model shape: one retained 20k-slot cache and 999 empty
+        // peers in the same source group, well within the reader's shared point budget.
+        let mut chart = Chart {
+            kind: ChartType::StackedColumn,
+            series: (0..1000).map(|_| Series { kind: Some(ChartType::StackedColumn), source_group: Some(0), ..Default::default() }).collect(),
+            ..Default::default()
+        };
+        chart.series[0].values = vec![None; 20_000];
+        chart.series[0].values[19_999] = Some(500.0);
+        assert_eq!(chart.value_range(), (0.0, 500.0), "empty peers must not hide a finite point retained by the reader");
+        assert_eq!(chart.axis_range(false), Some((0.0, 500.0)));
+        assert!(chart.axis_scale(false, 5).unwrap().1 >= 500.0);
+        let mut alone = chart.clone();
+        alone.series.truncate(1);
+        assert_eq!(chart.value_range(), alone.value_range(), "adding empty series does not change the data extent");
+
+        chart.series[1].values = vec![None; 20_000];
+        chart.series[1].values[19_999] = Some(250.0);
+        assert_eq!(chart.value_range(), (0.0, 750.0), "the same kind and group still share a stack");
+        chart.series[1].source_group = Some(1);
+        assert_eq!(chart.value_range(), (0.0, 500.0), "independent source stacks do not add together");
+        chart.series[1].source_group = Some(0);
+        chart.series[1].kind = Some(ChartType::StackedArea);
+        assert_eq!(chart.axis_range(false), Some((0.0, 500.0)), "independent effective kinds stay separate");
+        chart.series[1].kind = Some(ChartType::StackedColumn);
+        chart.series[1].values[19_999] = Some(-250.0);
+        assert_eq!(chart.axis_range(false), Some((-250.0, 500.0)), "positive and negative stack sums stay independent");
+        chart.series[1].secondary_axis = true;
+        assert_eq!(chart.axis_range(false), Some((0.0, 500.0)));
+        assert_eq!(chart.axis_range(true), Some((-250.0, 0.0)), "the selected value axis still owns its own extent");
+    }
+
+    #[test]
+    fn review_6095266494_percent_range_bounds_are_independent_of_source_group_tokens() {
+        for source_group in [None, Some(0)] {
+            let mut chart = Chart::sample(ChartType::PercentColumn);
+            for series in &mut chart.series {
+                series.source_group = source_group;
+            }
+            assert_eq!(chart.value_range(), (0.0, 1.0));
+            assert_eq!(chart.axis_range(false), Some((0.0, 1.0)));
+            chart.y_max = Some(0.8);
+            assert_eq!(chart.value_range(), (0.0, 0.8), "explicit maximum wins with group {source_group:?}");
+            assert_eq!(chart.axis_range(false), Some((0.0, 0.8)));
+            chart.y_min = Some(0.2);
+            assert_eq!(chart.value_range(), (0.2, 0.8));
+            assert_eq!(chart.axis_range(false), Some((0.2, 0.8)));
+            chart.y_max = None;
+            assert_eq!(chart.value_range(), (0.2, 1.0), "an absent maximum still defaults to one");
+            chart.y_min = None;
+            assert_eq!(chart.value_range(), (0.0, 1.0));
+        }
     }
 }
 

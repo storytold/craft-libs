@@ -194,16 +194,18 @@ fn str_cache(w: &mut Writer, f: &str, vals: &[String]) {
     w.close();
 }
 
-fn num_cache(w: &mut Writer, f: &str, vals: &[Option<f64>]) {
+fn num_cache(w: &mut Writer, f: Option<&str>, vals: &[Option<f64>]) {
     num_cache_fmt(w, f, vals, "General");
 }
 
 /// [`num_cache`] with the cells' number format (the date format of date categories).
-fn num_cache_fmt(w: &mut Writer, f: &str, vals: &[Option<f64>], format_code: &str) {
+fn num_cache_fmt(w: &mut Writer, f: Option<&str>, vals: &[Option<f64>], format_code: &str) {
     let vals = capped(vals);
-    w.open("c:numRef", &[]);
-    w.leaf("c:f", &[], f);
-    w.open("c:numCache", &[]);
+    if let Some(f) = f {
+        w.open("c:numRef", &[]);
+        w.leaf("c:f", &[], f);
+    }
+    w.open(if f.is_some() { "c:numCache" } else { "c:numLit" }, &[]);
     w.leaf("c:formatCode", &[], format_code);
     w.tag("c:ptCount").attr("val", vals.len()).empty();
     for (i, v) in vals.iter().enumerate() {
@@ -214,7 +216,9 @@ fn num_cache_fmt(w: &mut Writer, f: &str, vals: &[Option<f64>], format_code: &st
         }
     }
     w.close();
-    w.close();
+    if f.is_some() {
+        w.close();
+    }
 }
 
 /// Numbers written into the chart itself (`c:numLit`), with no worksheet range behind them.
@@ -304,14 +308,76 @@ fn point_fills(w: &mut Writer, s: &Series, g: Group) {
 /// Data points (categories and values counted per series) one chart group writes to its caches.
 const MAX_EXPORT_POINTS: usize = 4_000_000;
 
-fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: Group) {
+#[derive(Clone, Copy)]
+enum SourceKind {
+    DefaultLayout,
+    Mixed,
+}
+
+impl SourceKind {
+    fn formula(self, given: &Option<String>, default: String) -> Option<String> {
+        given.clone().or(match self {
+            Self::DefaultLayout => Some(default),
+            Self::Mixed => None,
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SeriesIndex {
+    order: usize,
+    id: usize,
+    source: SourceKind,
+}
+
+fn indexed_series(c: &Chart) -> Vec<(SeriesIndex, &Series)> {
+    // Only an entirely unreferenced chart uses the historical default worksheet layout.
+    // In a mixed layout there is no producer-owned column for a missing reference.
+    let source = if c.series.iter().any(|s| !s.refs.is_empty()) { SourceKind::Mixed } else { SourceKind::DefaultLayout };
+    // Reserve later imported IDs before assigning new series, so an insertion at the front
+    // cannot steal them. Duplicate IDs keep their first occurrence; the rest get free IDs.
+    let reserved: std::collections::HashSet<usize> = c.series.iter().filter_map(|s| s.source_idx.map(|id| id as usize)).collect();
+    let mut used = std::collections::HashSet::new();
+    let mut next = 0usize;
+    c.series
+        .iter()
+        .enumerate()
+        .map(|(order, s)| {
+            let id = s.source_idx.map(|id| id as usize).filter(|id| used.insert(*id)).unwrap_or_else(|| {
+                while reserved.contains(&next) || used.contains(&next) {
+                    next += 1;
+                }
+                used.insert(next);
+                next
+            });
+            (SeriesIndex { order, id, source }, s)
+        })
+        .collect()
+}
+
+fn line_markers(s: &Series, kind: ChartType, override_markers: Option<bool>) -> bool {
+    override_markers.unwrap_or_else(|| match s.marker.as_deref() {
+        Some("none") => false,
+        Some(m) if !m.is_empty() => true,
+        _ if kind == ChartType::StackedLine => s.marker_visible.unwrap_or(false),
+        _ => kind == ChartType::LineMarkers,
+    })
+}
+
+fn series(w: &mut Writer, c: &Chart, s: &Series, index: SeriesIndex, kind: ChartType, g: Group, markers: (Option<bool>, bool)) {
+    let i = index.order;
     w.open("c:ser", &[]);
-    w.tag("c:idx").attr("val", i).empty();
+    w.tag("c:idx").attr("val", index.id).empty();
     w.tag("c:order").attr("val", i).empty();
     w.open("c:tx", &[]);
     let r = &s.refs;
-    let or = |given: &Option<String>, made: String| given.clone().unwrap_or(made);
-    str_cache(w, &or(&r.name, format!("Sheet1!${}$1", col(i + 1))), std::slice::from_ref(&s.name));
+    let reference = |given: &Option<String>, default: String| index.source.formula(given, default);
+    let category = |given: &Option<String>, default: String| given.clone().unwrap_or(default);
+    if let Some(f) = reference(&r.name, format!("Sheet1!${}$1", col(i + 1))) {
+        str_cache(w, &f, std::slice::from_ref(&s.name));
+    } else {
+        w.leaf("c:v", &[], &s.name);
+    }
     w.close();
     if g == Group::Stock && s.line.is_none() {
         // A stock chart's series are points joined by the high-low lines, not lines of their own.
@@ -343,11 +409,20 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: G
         w.tag("c:invertIfNegative").attr("val", 0).empty();
     }
     if matches!(g, Group::Line | Group::Scatter | Group::Radar) {
-        let sym = match (&s.marker, kind) {
-            (Some(m), _) if !m.is_empty() => Some(m.as_str()),
-            (_, ChartType::LineMarkers) => None,
-            (_, ChartType::Scatter) => None,
-            _ => Some("none"),
+        let sym = if g == Group::Line {
+            match (s.marker.as_deref().filter(|m| !m.is_empty()), markers.0) {
+                (_, Some(false)) => Some("none"),
+                (Some("none"), Some(true)) => None,
+                (Some(m), _) => Some(m),
+                (None, _) if !line_markers(s, kind, markers.0) && markers.1 => Some("none"),
+                _ => None,
+            }
+        } else {
+            match (&s.marker, kind) {
+                (Some(m), _) if !m.is_empty() => Some(m.as_str()),
+                (_, ChartType::LineMarkers | ChartType::Scatter) => None,
+                _ => Some("none"),
+            }
         };
         if let Some(sym) = sym.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric())) {
             w.open("c:marker", &[]);
@@ -356,8 +431,9 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: G
         }
     }
     point_fills(w, s, g);
-    if let Some(d) = s.data_labels {
-        data_labels(w, c, d);
+    let label_format = s.number_format.as_deref().filter(|f| !f.is_empty());
+    if s.data_labels.is_some() || label_format.is_some() {
+        data_labels(w, c, s.data_labels, label_format);
     }
     // After labels, before the category and value caches (ECMA-376 series content order).
     if matches!(g, Group::Bar | Group::Line | Group::Area | Group::Scatter) {
@@ -373,15 +449,15 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: G
     if matches!(g, Group::Scatter | Group::Bubble) {
         let xs: Vec<Option<f64>> = if s.x_values.is_empty() { (1..=s.values.len()).map(|v| Some(v as f64)).collect() } else { s.x_values.clone() };
         w.open("c:xVal", &[]);
-        num_cache_fmt(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &xs, c.category_format.as_deref().unwrap_or("General"));
+        num_cache_fmt(w, Some(&category(&r.categories, format!("Sheet1!$A$2:$A${last}"))), &xs, c.category_format.as_deref().unwrap_or("General"));
         w.close();
         w.open("c:yVal", &[]);
-        num_cache(w, &or(&r.values, format!("Sheet1!${0}$2:${0}${last}", col(i + 1))), &s.values);
+        num_cache(w, reference(&r.values, format!("Sheet1!${0}$2:${0}${last}", col(i + 1))).as_deref(), &s.values);
         w.close();
         if g == Group::Bubble {
             let sizes: Vec<Option<f64>> = if s.sizes.is_empty() { s.values.iter().map(|_| Some(1.0)).collect() } else { s.sizes.clone() };
             w.open("c:bubbleSize", &[]);
-            num_cache(w, &or(&r.sizes, format!("Sheet1!${0}$2:${0}${last}", col(i + 2))), &sizes);
+            num_cache(w, reference(&r.sizes, format!("Sheet1!${0}$2:${0}${last}", col(i + 2))).as_deref(), &sizes);
             w.close();
             w.tag("c:bubble3D").attr("val", 0).empty();
         } else {
@@ -397,17 +473,17 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: G
                 .collect()
         });
         match (&c.category_format, nums) {
-            (Some(code), Some(nums)) => num_cache_fmt(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &nums, code),
+            (Some(code), Some(nums)) => num_cache_fmt(w, Some(&category(&r.categories, format!("Sheet1!$A$2:$A${last}"))), &nums, code),
             // Mixed number and text categories are strings, as Excel writes them: the numbers as
             // their formatted labels, which a reload could not rebuild from the raw serials.
             _ => {
                 let labels: Vec<String> = (0..c.categories.len()).map(|i| c.category_label(i)).collect();
-                str_cache(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &labels)
+                str_cache(w, &category(&r.categories, format!("Sheet1!$A$2:$A${last}")), &labels)
             }
         }
         w.close();
         w.open("c:val", &[]);
-        num_cache(w, &or(&r.values, format!("Sheet1!${0}$2:${0}${last}", col(i + 1))), &s.values);
+        num_cache(w, reference(&r.values, format!("Sheet1!${0}$2:${0}${last}", col(i + 1))).as_deref(), &s.values);
         w.close();
         if g == Group::Line {
             w.tag("c:smooth").attr("val", if s.smooth { 1 } else { 0 }).empty();
@@ -461,37 +537,55 @@ fn trendline(w: &mut Writer, t: &Trendline) {
     w.close();
 }
 
-fn data_labels(w: &mut Writer, c: &Chart, show: bool) {
+fn data_labels(w: &mut Writer, c: &Chart, show: Option<bool>, format: Option<&str>) {
     w.open("c:dLbls", &[]);
+    if let Some(format) = format.filter(|f| !f.is_empty()) {
+        w.tag("c:numFmt").attr("formatCode", format).attr("sourceLinked", 0).empty();
+    }
     tx_pr(w, c);
     for (n, v) in [
-        ("c:showLegendKey", false),
+        ("c:showLegendKey", Some(false)),
         ("c:showVal", show),
-        ("c:showCatName", false),
-        ("c:showSerName", false),
-        ("c:showPercent", false),
-        ("c:showBubbleSize", false),
+        ("c:showCatName", Some(false)),
+        ("c:showSerName", Some(false)),
+        ("c:showPercent", Some(false)),
+        ("c:showBubbleSize", Some(false)),
     ] {
-        w.tag(n).attr("val", if v { 1 } else { 0 }).empty();
+        if let Some(v) = v {
+            w.tag(n).attr("val", if v { 1 } else { 0 }).empty();
+        }
     }
     w.close();
 }
 
 const AX_CAT: u32 = 50_001;
 const AX_VAL: u32 = 50_002;
+const AX_CAT_SECONDARY: u32 = 50_003;
+const AX_VAL_SECONDARY: u32 = 50_004;
 
-fn axes(w: &mut Writer, c: &Chart, g: Group) {
-    let horizontal = c.kind.horizontal() && g == Group::Bar;
-    let (cat_pos, val_pos) = if horizontal { ("l", "b") } else { ("b", "l") };
+fn axis_ids(secondary: bool) -> (u32, u32) {
+    if secondary { (AX_CAT_SECONDARY, AX_VAL_SECONDARY) } else { (AX_CAT, AX_VAL) }
+}
+
+fn axes(w: &mut Writer, c: &Chart, g: Group, kind: ChartType, secondary: bool) {
+    let (ax_cat, ax_val) = axis_ids(secondary);
+    let (y_min, y_max, y_format) = if secondary { (c.y2_min, c.y2_max, c.y2_format.as_deref()) } else { (c.y_min, c.y_max, c.y_format.as_deref()) };
+    let horizontal = kind.horizontal() && g == Group::Bar;
+    let (cat_pos, val_pos) = match (horizontal, secondary) {
+        (true, false) => ("l", "b"),
+        (true, true) => ("r", "t"),
+        (false, false) => ("b", "l"),
+        (false, true) => ("t", "r"),
+    };
     if g == Group::Scatter || g == Group::Bubble {
         w.open("c:valAx", &[]);
-        w.tag("c:axId").attr("val", AX_CAT).empty();
+        w.tag("c:axId").attr("val", ax_cat).empty();
         w.open("c:scaling", &[]);
         w.tag("c:orientation").attr("val", "minMax").empty();
         w.close();
         w.tag("c:delete").attr("val", 0).empty();
-        w.tag("c:axPos").attr("val", "b").empty();
-        if let Some(t) = &c.axis_titles.0 {
+        w.tag("c:axPos").attr("val", if secondary { "t" } else { "b" }).empty();
+        if !secondary && let Some(t) = &c.axis_titles.0 {
             title(w, t, c);
         }
         w.tag("c:numFmt")
@@ -502,19 +596,19 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         w.tag("c:minorTickMark").attr("val", "none").empty();
         w.tag("c:tickLblPos").attr("val", "nextTo").empty();
         tx_pr(w, c);
-        w.tag("c:crossAx").attr("val", AX_VAL).empty();
+        w.tag("c:crossAx").attr("val", ax_val).empty();
         w.tag("c:crosses").attr("val", "autoZero").empty();
         w.tag("c:crossBetween").attr("val", "midCat").empty();
         w.close();
     } else {
         w.open("c:catAx", &[]);
-        w.tag("c:axId").attr("val", AX_CAT).empty();
+        w.tag("c:axId").attr("val", ax_cat).empty();
         w.open("c:scaling", &[]);
         w.tag("c:orientation").attr("val", if c.cat_reversed { "maxMin" } else { "minMax" }).empty();
         w.close();
         w.tag("c:delete").attr("val", 0).empty();
         w.tag("c:axPos").attr("val", cat_pos).empty();
-        if let Some(t) = &c.axis_titles.0 {
+        if !secondary && let Some(t) = &c.axis_titles.0 {
             title(w, t, c);
         }
         w.tag("c:numFmt")
@@ -525,7 +619,7 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         w.tag("c:minorTickMark").attr("val", "none").empty();
         w.tag("c:tickLblPos").attr("val", "nextTo").empty();
         tx_pr(w, c);
-        w.tag("c:crossAx").attr("val", AX_VAL).empty();
+        w.tag("c:crossAx").attr("val", ax_val).empty();
         w.tag("c:crosses").attr("val", "autoZero").empty();
         w.tag("c:auto").attr("val", 1).empty();
         w.tag("c:lblAlgn").attr("val", "ctr").empty();
@@ -534,41 +628,50 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         w.close();
     }
     w.open("c:valAx", &[]);
-    w.tag("c:axId").attr("val", AX_VAL).empty();
+    w.tag("c:axId").attr("val", ax_val).empty();
     w.open("c:scaling", &[]);
-    if let Some(b) = c.y_log_base {
+    if !secondary && let Some(b) = c.y_log_base {
         w.tag("c:logBase").attr("val", fmt_num(b)).empty();
     }
     w.tag("c:orientation").attr("val", "minMax").empty();
-    if let Some(m) = c.y_max.filter(|v| v.is_finite()) {
+    if let Some(m) = y_max.filter(|v| v.is_finite()) {
         w.tag("c:max").attr("val", fmt_num(m)).empty();
     }
-    if let Some(m) = c.y_min.filter(|v| v.is_finite()) {
+    if let Some(m) = y_min.filter(|v| v.is_finite()) {
         w.tag("c:min").attr("val", fmt_num(m)).empty();
     }
     w.close();
-    w.tag("c:delete").attr("val", 0).empty();
+    w.tag("c:delete").attr("val", u8::from(secondary && c.y2_hidden)).empty();
     w.tag("c:axPos").attr("val", val_pos).empty();
-    if c.gridlines {
+    if !secondary && c.gridlines {
         w.empty("c:majorGridlines", &[]);
     }
-    if c.minor_gridlines {
+    if !secondary && c.minor_gridlines {
         w.empty("c:minorGridlines", &[]);
     }
-    if let Some(t) = &c.axis_titles.1 {
+    if !secondary && let Some(t) = &c.axis_titles.1 {
         title(w, t, c);
     }
-    match c.y_format.as_deref().filter(|f| !f.is_empty()) {
+    match y_format.filter(|f| !f.is_empty()) {
         Some(f) => w.tag("c:numFmt").attr("formatCode", f).attr("sourceLinked", 0).empty(),
-        None => w.tag("c:numFmt").attr("formatCode", if c.kind.percent() { "0%" } else { "General" }).attr("sourceLinked", 1).empty(),
+        // A generated General value cache is not an authored source format. Keep the
+        // typed percent default authoritative instead of linking it to that synthetic code.
+        None => w
+            .tag("c:numFmt")
+            .attr("formatCode", if kind.percent() { "0%" } else { "General" })
+            .attr("sourceLinked", u8::from(!kind.percent()))
+            .empty(),
     }
     w.tag("c:majorTickMark").attr("val", "none").empty();
     w.tag("c:minorTickMark").attr("val", "none").empty();
     w.tag("c:tickLblPos").attr("val", "nextTo").empty();
     tx_pr(w, c);
-    w.tag("c:crossAx").attr("val", AX_CAT).empty();
+    w.tag("c:crossAx").attr("val", ax_cat).empty();
     w.tag("c:crosses").attr("val", "autoZero").empty();
     w.tag("c:crossBetween").attr("val", if g == Group::Area || g == Group::Scatter { "midCat" } else { "between" }).empty();
+    if secondary && let Some(unit) = c.y2_major.filter(|v| v.is_finite() && *v > 0.0) {
+        w.tag("c:majorUnit").attr("val", fmt_num(unit)).empty();
+    }
     w.close();
 }
 
@@ -590,7 +693,7 @@ fn series_points(c: &Chart, s: &Series, g: Group) -> usize {
     }
 }
 
-fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Series)]) {
+fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(SeriesIndex, &Series)], secondary: bool, override_markers: Option<bool>) {
     let g = group_of(kind);
     let grouping = if kind.percent() {
         "percentStacked"
@@ -628,21 +731,20 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Serie
     if g != Group::Stock {
         w.tag("c:varyColors").attr("val", vary).empty();
     }
-    // Each series repeats the categories in its own cache, so the output grows with series times
-    // categories: stop adding series once a group's caches pass the budget (the first is always written).
-    // The first series is always written; each of its caches is cut at MAX_CACHE_POINTS.
-    let mut left = MAX_EXPORT_POINTS;
-    for (n, (i, s)) in list.iter().enumerate() {
-        let cost = series_points(c, s, g);
-        if n > 0 && cost > left {
-            log::warn!("pptx: chart export stopped after {n} series; the data caches passed {MAX_EXPORT_POINTS} points");
-            break;
+    // Explicit symbols override this default. Do not split stacked groups by visibility:
+    // that would change which series are stacked together.
+    let markers = override_markers.unwrap_or_else(|| {
+        if list.is_empty() {
+            kind == ChartType::LineMarkers
+        } else {
+            list.iter().any(|(_, s)| s.marker.as_deref().is_none_or(str::is_empty) && line_markers(s, kind, None))
         }
-        left = left.saturating_sub(cost);
-        series(w, c, s, *i, kind, g);
+    });
+    for (i, s) in list {
+        series(w, c, s, *i, kind, g, (override_markers, markers));
     }
     if c.data_labels {
-        data_labels(w, c, true);
+        data_labels(w, c, Some(true), None);
     }
     match g {
         Group::Bar => {
@@ -652,7 +754,7 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Serie
                 w.tag("c:overlap").attr("val", ov).empty();
             }
         }
-        Group::Line => w.tag("c:marker").attr("val", 1).empty(),
+        Group::Line => w.tag("c:marker").attr("val", u8::from(markers)).empty(),
         Group::Stock => {
             w.open("c:hiLowLines", &[]);
             w.open("c:spPr", &[]);
@@ -679,10 +781,64 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Serie
         _ => {}
     }
     if !matches!(g, Group::Pie | Group::Doughnut) {
-        w.tag("c:axId").attr("val", AX_CAT).empty();
-        w.tag("c:axId").attr("val", AX_VAL).empty();
+        let (cat, val) = axis_ids(secondary);
+        w.tag("c:axId").attr("val", cat).empty();
+        w.tag("c:axId").attr("val", val).empty();
     }
     w.close();
+}
+
+/// Partition in first-occurrence order without changing source IDs or global display order.
+/// None is the synthetic default group; imported group tokens are scoped to this chart.
+fn source_groups<'a>(list: &[(SeriesIndex, &'a Series)]) -> Vec<Vec<(SeriesIndex, &'a Series)>> {
+    let mut positions = std::collections::HashMap::new();
+    let mut groups: Vec<Vec<(SeriesIndex, &'a Series)>> = Vec::new();
+    for &(index, series) in list {
+        let next = groups.len();
+        let group = *positions.entry(series.source_group).or_insert(next);
+        if group == groups.len() {
+            groups.push(Vec::new());
+        }
+        groups[group].push((index, series));
+    }
+    if groups.is_empty() {
+        groups.push(Vec::new());
+    }
+    groups
+}
+
+/// Retain the old per-kind cache budget before axis and source-group partitioning.
+fn plot_kind(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(SeriesIndex, &Series)], override_markers: Option<bool>) -> [Option<ChartType>; 2] {
+    let g = group_of(kind);
+    let mut left = MAX_EXPORT_POINTS;
+    let mut end = list.len();
+    for (n, (_, s)) in list.iter().enumerate() {
+        let cost = series_points(c, s, g);
+        if n > 0 && cost > left {
+            log::warn!("pptx: chart export stopped after {n} series; the data caches passed {MAX_EXPORT_POINTS} points");
+            end = n;
+            break;
+        }
+        left = left.saturating_sub(cost);
+    }
+    let retained = &list[..end];
+    if matches!(g, Group::Pie | Group::Doughnut) {
+        for group in source_groups(retained) {
+            plot_group(w, c, kind, &group, false, override_markers);
+        }
+        return [None, None];
+    }
+    let mut emitted = [None, None];
+    for secondary in [false, true] {
+        let part = retained.iter().filter(|(_, s)| s.secondary_axis == secondary).copied().collect::<Vec<_>>();
+        if !part.is_empty() || (!secondary && retained.is_empty()) {
+            for group in source_groups(&part) {
+                plot_group(w, c, kind, &group, secondary, override_markers);
+            }
+            emitted[usize::from(secondary)] = Some(kind);
+        }
+    }
+    emitted
 }
 
 /// The `chartEx` part of an Office 2016 chart (waterfall, funnel…): the kept part when the chart
@@ -717,6 +873,88 @@ fn kept_chartex(c: &Chart) -> Option<Vec<u8>> {
     Some(w.into_bytes())
 }
 
+fn merge_axis_kinds(axis_kinds: &mut [Option<ChartType>; 2], emitted: [Option<ChartType>; 2]) {
+    for (axis, kind) in axis_kinds.iter_mut().zip(emitted) {
+        if let Some(kind) = kind {
+            // A Line encountered first must not override a horizontal Bar on that pair.
+            // Shared pairs keep the existing limitation for incompatible orientations;
+            // use horizontal Bar placement and percentage defaults when plots need them.
+            let horizontal = kind.horizontal() || axis.is_some_and(ChartType::horizontal);
+            let percent = kind.percent() || axis.is_some_and(ChartType::percent);
+            *axis = Some(match (horizontal, percent) {
+                (true, true) => ChartType::PercentBar,
+                (true, false) => ChartType::Bar,
+                (false, true) => ChartType::PercentColumn,
+                _ => axis.unwrap_or(kind),
+            });
+        }
+    }
+}
+
+fn plots_and_axes(w: &mut Writer, c: &Chart, raw_kind: Option<ChartType>) {
+    let indexed = indexed_series(c);
+    let policy = super::SeriesKinds::new(c, raw_kind);
+    let main = policy.main;
+    let first = policy.first;
+    let combo = policy.combo;
+    let override_kind = policy.override_kind;
+    let effective = indexed.iter().map(|(i, s)| (*i, *s, policy.kind(s))).collect::<Vec<_>>();
+    let mut kinds = Vec::new();
+    for (_, _, kind) in &effective {
+        let kind = *kind;
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+    if kinds.is_empty() && !combo {
+        kinds.push(main);
+    }
+    let override_markers = match override_kind {
+        Some(ChartType::Line) => Some(false),
+        Some(ChartType::LineMarkers) => Some(true),
+        _ => None,
+    };
+    let mut axis_kinds: [Option<ChartType>; 2] = [None, None];
+    for kind in &kinds {
+        let list = effective.iter().filter(|(_, _, k)| *k == *kind).map(|(i, s, _)| (*i, *s)).collect::<Vec<_>>();
+        let emitted = plot_kind(w, c, *kind, &list, override_markers);
+        merge_axis_kinds(&mut axis_kinds, emitted);
+    }
+    if !combo
+        && !matches!(
+            first,
+            ChartType::Column
+                | ChartType::StackedColumn
+                | ChartType::PercentColumn
+                | ChartType::Bar
+                | ChartType::StackedBar
+                | ChartType::PercentBar
+                | ChartType::Line
+                | ChartType::LineMarkers
+                | ChartType::StackedLine
+                | ChartType::Area
+                | ChartType::StackedArea
+                | ChartType::Pie
+                | ChartType::Doughnut
+                | ChartType::Scatter
+                | ChartType::Bubble
+                | ChartType::Radar
+                | ChartType::FilledRadar
+                | ChartType::Stock
+        )
+    {
+        log::warn!("pptx: {} chart written as a column chart", first.label());
+    }
+    let axis_group = if combo { Group::Bar } else { group_of(first) };
+    if !matches!(axis_group, Group::Pie | Group::Doughnut) {
+        let primary_kind = if combo { axis_kinds[0].or(axis_kinds[1]).unwrap_or(first) } else { first };
+        axes(w, c, axis_group, primary_kind, false);
+        if let Some(secondary_kind) = axis_kinds[1] {
+            axes(w, c, axis_group, if combo { secondary_kind } else { first }, true);
+        }
+    }
+}
+
 /// The chart part XML, and whether it is the original part (so its relationships still apply).
 pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
     // A chart too large to model is written back as it was read.
@@ -732,6 +970,7 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
         return (w.into_bytes(), true);
     }
     // Reuse the kept part when the chart is unchanged since it was read.
+    let mut raw_kind = None;
     if let Some(raw) = &c.raw
         && !raw.contains(NS_CX)
         && let Ok(doc) = crate::xmlx::parse(raw.as_bytes())
@@ -739,7 +978,12 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
     {
         let mut root = doc.clone();
         crate::xmlx::resolve_mc(&mut root);
-        if let Some(back) = super::read::chart_from(&root) {
+        // Native saves without provenance used the former metadata projection. Comparing
+        // that exact projection only on the legacy path preserves raw XML without treating
+        // current-reader metadata edits as unchanged legacy state.
+        let back = super::read::chart_for_version(&root, c.raw_metadata_version);
+        if let Some(back) = back {
+            raw_kind = Some(back.kind);
             let mut me = c.clone();
             me.raw = None;
             // The sidecar is not modelled chart state. Comparing it would throw away an unchanged chart.
@@ -775,65 +1019,7 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
     }
     w.open("c:plotArea", &[]);
     w.empty("c:layout", &[]);
-    let indexed: Vec<(usize, &Series)> = c.series.iter().enumerate().collect();
-    let main = match c.kind {
-        ChartType::Combo => c.series.first().and_then(|s| s.kind).unwrap_or(ChartType::Column),
-        k => k,
-    };
-    if c.kind == ChartType::Combo {
-        // One plot group per series type, sharing the axes.
-        let mut kinds: Vec<ChartType> = vec![];
-        for s in &c.series {
-            let k = s.kind.unwrap_or(main);
-            let k = if matches!(group_of(k), Group::Pie | Group::Doughnut | Group::Scatter | Group::Bubble) { ChartType::Column } else { k };
-            if !kinds.contains(&k) {
-                kinds.push(k);
-            }
-        }
-        for k in kinds {
-            let list: Vec<(usize, &Series)> = indexed
-                .iter()
-                .filter(|(_, s)| {
-                    let sk = s.kind.unwrap_or(main);
-                    let sk =
-                        if matches!(group_of(sk), Group::Pie | Group::Doughnut | Group::Scatter | Group::Bubble) { ChartType::Column } else { sk };
-                    sk == k
-                })
-                .copied()
-                .collect();
-            plot_group(&mut w, c, k, &list);
-        }
-        axes(&mut w, c, Group::Bar);
-    } else {
-        if !matches!(
-            c.kind,
-            ChartType::Column
-                | ChartType::StackedColumn
-                | ChartType::PercentColumn
-                | ChartType::Bar
-                | ChartType::StackedBar
-                | ChartType::PercentBar
-                | ChartType::Line
-                | ChartType::LineMarkers
-                | ChartType::StackedLine
-                | ChartType::Area
-                | ChartType::StackedArea
-                | ChartType::Pie
-                | ChartType::Doughnut
-                | ChartType::Scatter
-                | ChartType::Bubble
-                | ChartType::Radar
-                | ChartType::FilledRadar
-                | ChartType::Stock
-        ) {
-            log::warn!("pptx: {} chart written as a column chart", c.kind.label());
-        }
-        plot_group(&mut w, c, main, &indexed);
-        let g = group_of(main);
-        if !matches!(g, Group::Pie | Group::Doughnut) {
-            axes(&mut w, c, g);
-        }
-    }
+    plots_and_axes(&mut w, c, raw_kind);
     if let Some(dt) = &c.data_table {
         w.open("c:dTable", &[]);
         if dt.horizontal_border {
@@ -1141,6 +1327,66 @@ mod tests {
     use crate::color::{ColorTransform, Rgba};
     use crate::style::ColorRef;
 
+    // Native JSON deliberately keeps the baseline compilable before source_group exists.
+    fn review_source_group(series: Series, group: Option<u32>) -> Series {
+        let mut value = serde_json::to_value(series).unwrap();
+        if let Some(group) = group {
+            value["sourceGroup"] = serde_json::json!(group);
+        }
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn review_4725002253_stacks_follow_kind_axis_and_source_group() {
+        for (left, right, kind, secondary, expected) in [
+            (None, None, ChartType::StackedColumn, false, (-7.0, 15.0)),
+            (Some(4), Some(4), ChartType::StackedColumn, false, (-7.0, 15.0)),
+            (Some(4), Some(5), ChartType::StackedColumn, false, (-4.0, 8.0)),
+            (Some(4), None, ChartType::StackedColumn, false, (-4.0, 8.0)),
+            (None, None, ChartType::StackedArea, false, (-4.0, 8.0)),
+            (None, None, ChartType::StackedColumn, true, (-4.0, 8.0)),
+        ] {
+            let chart = Chart {
+                kind: ChartType::StackedColumn,
+                categories: vec!["x".into(), "y".into()],
+                series: vec![
+                    review_source_group(
+                        Series { kind: Some(ChartType::StackedColumn), values: vec![Some(7.0), Some(-3.0)], ..Default::default() },
+                        left,
+                    ),
+                    review_source_group(
+                        Series { kind: Some(kind), secondary_axis: secondary, values: vec![Some(8.0), Some(-4.0)], ..Default::default() },
+                        right,
+                    ),
+                ],
+                ..Default::default()
+            };
+            assert_eq!(chart.value_range(), expected, "groups={left:?}/{right:?}, kind={kind:?}, secondary={secondary}");
+            assert_eq!(chart.axis_range(false), Some(if secondary { (-3.0, 7.0) } else { expected }));
+            assert_eq!(chart.axis_range(true), secondary.then_some((-4.0, 8.0)));
+        }
+    }
+
+    #[test]
+    fn review_4725002254_explicit_general_overrides_percent_defaults_on_both_axes() {
+        let mut chart = Chart {
+            kind: ChartType::PercentColumn,
+            series: vec![
+                Series { values: vec![Some(0.5)], ..Default::default() },
+                Series { secondary_axis: true, values: vec![Some(0.5)], ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        for secondary in [false, true] {
+            assert_eq!(chart.axis_label(secondary, 0.5), "50%");
+        }
+        chart.y_format = Some("General".into());
+        chart.y2_format = Some("General".into());
+        for secondary in [false, true] {
+            assert_eq!(chart.axis_label(secondary, 0.5), "0.5");
+        }
+    }
+
     /// A legend entry's own text (`c:legendEntry/c:txPr`: size, bold, colour) is read, and a
     /// rebuilt part writes it back, in schema order before `c:overlay` (DeckCraft #2067).
     #[test]
@@ -1278,6 +1524,155 @@ mod tests {
         assert!(crate::chart::read::read_chart_xml(&xml).unwrap().cat_reversed);
         c.cat_reversed = false;
         assert!(!crate::chart::read::read_chart_xml(&super::chart_xml(&c).0).unwrap().cat_reversed);
+    }
+
+    #[test]
+    fn review_6096417042_percent_defaults_survive_rebuild_without_masking_source_general() {
+        // Original two-axis percent chart: only the optional source/axis format differs.
+        // No authored source format means the model's 0% default; authored General means
+        // a numeric axis. An explicitly unlinked custom axis remains authoritative too.
+        for (source_format, axis_format, expected) in [(None, None, "50%"), (Some("General"), None, "0.5"), (Some("General"), Some("0.0%"), "50.0%")]
+        {
+            let source = source_format.map(|f| format!("<c:formatCode>{f}</c:formatCode>")).unwrap_or_default();
+            let axis = axis_format.map(|f| format!(r#"<c:numFmt formatCode="{f}" sourceLinked="0"/>"#)).unwrap_or_default();
+            let mut plot = String::new();
+            let mut axes = String::new();
+            for (name, category, value, pos) in [("Primary", 1, 2, "l"), ("Secondary", 3, 4, "r")] {
+                let index = category / 2;
+                plot.push_str(&format!(r#"<c:barChart><c:barDir val="col"/><c:grouping val="percentStacked"/><c:ser><c:idx val="{index}"/><c:order val="{index}"/><c:tx><c:v>{name}</c:v></c:tx><c:cat><c:strLit><c:pt idx="0"><c:v>x</c:v></c:pt></c:strLit></c:cat><c:val><c:numRef><c:f>{name}!B2</c:f><c:numCache>{source}<c:ptCount val="1"/><c:pt idx="0"><c:v>0.5</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:dLbls><c:showVal val="1"/></c:dLbls><c:axId val="{category}"/><c:axId val="{value}"/></c:barChart>"#));
+                axes.push_str(&format!(r#"<c:catAx><c:axId val="{category}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="b"/><c:crossAx val="{value}"/></c:catAx><c:valAx><c:axId val="{value}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="{pos}"/>{axis}<c:crossAx val="{category}"/></c:valAx>"#));
+            }
+            let xml = format!(
+                r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea>{plot}{axes}</c:plotArea></c:chart></c:chartSpace>"#
+            );
+            let mut chart = crate::chart::read::read_chart_xml(xml.as_bytes()).unwrap();
+            assert_eq!(chart.kind, ChartType::PercentColumn);
+            assert_eq!(chart.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, true]);
+            for secondary in [false, true] {
+                assert_eq!(chart.axis_label(secondary, 0.5), expected);
+            }
+            assert!(super::chart_xml(&chart).1, "unchanged source still retains its raw part");
+            let data_labels: Vec<_> = chart.series.iter().map(|s| chart.data_label(s, 0.5)).collect();
+            chart.title = Some("Only the title was edited".into());
+            let (written, kept) = super::chart_xml(&chart);
+            assert!(!kept, "the title edit really exercises the writer");
+            let back = crate::chart::read::read_chart_xml(&written).unwrap();
+            for secondary in [false, true] {
+                assert_eq!(
+                    back.axis_label(secondary, 0.5),
+                    expected,
+                    "source={source_format:?}, authored axis={axis_format:?}, secondary={secondary}"
+                );
+            }
+            assert_eq!(back.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, true]);
+            assert_eq!(
+                back.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(),
+                chart.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                back.series.iter().map(|s| back.data_label(s, 0.5)).collect::<Vec<_>>(),
+                data_labels,
+                "do not change effective data labels while repairing the axis default"
+            );
+            let root = crate::xmlx::parse(&written).unwrap();
+            let pa = root.path(&[craft_xml::Local("chart"), craft_xml::Local("plotArea")]).unwrap();
+            for ax in pa.children(craft_xml::Local("valAx")) {
+                let fmt = ax.child(craft_xml::Local("numFmt")).unwrap();
+                assert_eq!(fmt.attr_local("sourceLinked"), Some("0"), "axis intent must not be linked to a generated General cache");
+                assert_eq!(fmt.attr_local("formatCode"), Some(axis_format.or(source_format).unwrap_or("0%")));
+            }
+            // Cache and label synthesis remain unchanged; genuine source General is still
+            // honored by the reader, while an axis default no longer points at synthetic General.
+            for group in pa.children(craft_xml::Local("barChart")) {
+                let cache = group.child(craft_xml::Local("ser")).unwrap().find(craft_xml::Local("numCache")).unwrap();
+                assert_eq!(cache.child(craft_xml::Local("formatCode")).unwrap().deep_text(), "General");
+            }
+        }
+        // The ordinary non-percent default keeps the pre-existing source-linked General.
+        let chart = Chart { series: vec![Series { values: vec![Some(0.5)], ..Default::default() }], ..Default::default() };
+        let back = crate::chart::read::read_chart_xml(&super::chart_xml(&chart).0).unwrap();
+        assert_eq!(back.axis_label(false, 0.5), "0.5");
+    }
+
+    #[test]
+    fn review_6096658774_series_formats_survive_rebuild_without_freezing_label_visibility() {
+        for enabled in [true, false] {
+            let mut groups = String::new();
+            let mut axes = String::new();
+            let expected_options = [None, Some(false), Some(true), None, Some(false), Some(true)];
+            let expected_formats = ["0%", "General", "0.00", "0%", "General", "0.00"];
+            for (category, value, pos) in [(1, 2, "l"), (3, 4, "r")] {
+                let first = if category == 1 { 0 } else { 3 };
+                groups.push_str(r#"<c:barChart><c:barDir val="col"/><c:grouping val="percentStacked"/>"#);
+                for offset in 0..3 {
+                    let i = first + offset;
+                    let show = expected_options[i]
+                        .map(|v| format!(r#"<c:dLbls><c:showVal val="{}"/></c:dLbls>"#, if v { 1 } else { 0 }))
+                        .unwrap_or_default();
+                    let format = expected_formats[i];
+                    groups.push_str(&format!(r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:tx><c:v>Series{i}</c:v></c:tx>{show}<c:cat><c:strLit><c:pt idx="0"><c:v>x</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:formatCode>{format}</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>0.5</c:v></c:pt></c:numLit></c:val></c:ser>"#));
+                }
+                // Omit the group setting when off, so None really means inheritance rather
+                // than the reader's established explicit-group-false projection.
+                if enabled {
+                    groups.push_str(r#"<c:dLbls><c:showVal val="1"/></c:dLbls>"#);
+                }
+                groups.push_str(&format!(r#"<c:axId val="{category}"/><c:axId val="{value}"/></c:barChart>"#));
+                axes.push_str(&format!(r#"<c:catAx><c:axId val="{category}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="b"/><c:crossAx val="{value}"/></c:catAx><c:valAx><c:axId val="{value}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="{pos}"/><c:crossAx val="{category}"/></c:valAx>"#));
+            }
+            let xml = format!(
+                r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea>{groups}{axes}</c:plotArea></c:chart></c:chartSpace>"#
+            );
+            let mut chart = crate::chart::read::read_chart_xml(xml.as_bytes()).unwrap();
+            assert_eq!(chart.kind, ChartType::PercentColumn);
+            assert_eq!(chart.data_labels, enabled);
+            assert_eq!(chart.series.iter().map(|s| s.data_labels).collect::<Vec<_>>(), expected_options);
+            assert_eq!(chart.series.iter().map(|s| s.number_format.as_deref()).collect::<Vec<_>>(), expected_formats.map(Some));
+            let labels: Vec<_> = chart.series.iter().map(|s| chart.data_label(s, 0.5)).collect();
+            assert_eq!(labels, ["50%", "0.5", "0.50", "50%", "0.5", "0.50"]);
+            let shown: Vec<_> = chart.series.iter().map(|s| chart.series_data_labels(s)).collect();
+            assert!(super::chart_xml(&chart).1);
+            chart.title = Some("Only the title changed".into());
+            let (written, kept) = super::chart_xml(&chart);
+            assert!(!kept, "the title edit must exercise the rebuilding writer");
+            let mut back = crate::chart::read::read_chart_xml(&written).unwrap();
+            assert_eq!(back.series.iter().map(|s| back.data_label(s, 0.5)).collect::<Vec<_>>(), labels);
+            assert_eq!(back.series.iter().map(|s| s.number_format.as_deref()).collect::<Vec<_>>(), expected_formats.map(Some));
+            assert_eq!(
+                back.series.iter().map(|s| s.data_labels).collect::<Vec<_>>(),
+                expected_options,
+                "a format must not freeze inherited visibility into an explicit bool"
+            );
+            assert_eq!(back.data_labels, enabled);
+            assert_eq!(back.series.iter().map(|s| back.series_data_labels(s)).collect::<Vec<_>>(), shown);
+            assert_eq!(back.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, false, false, true, true, true]);
+            assert_eq!(
+                back.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(),
+                chart.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>()
+            );
+            for secondary in [false, true] {
+                assert_eq!(back.axis_label(secondary, 0.5), chart.axis_label(secondary, 0.5));
+            }
+            for chart_wide in [false, true] {
+                back.data_labels = chart_wide;
+                for (s, original) in back.series.iter().zip(expected_options) {
+                    assert_eq!(back.series_data_labels(s), original.unwrap_or(chart_wide));
+                }
+            }
+            let root = crate::xmlx::parse(&written).unwrap();
+            let pa = root.path(&[craft_xml::Local("chart"), craft_xml::Local("plotArea")]).unwrap();
+            for (i, ser) in pa.children(craft_xml::Local("barChart")).flat_map(|g| g.children(craft_xml::Local("ser"))).enumerate() {
+                let labels = ser.child(craft_xml::Local("dLbls")).unwrap();
+                let format = labels.child(craft_xml::Local("numFmt")).unwrap();
+                assert_eq!(format.attr_local("formatCode"), Some(expected_formats[i]));
+                assert_eq!(format.attr_local("sourceLinked"), Some("0"));
+                let show = labels.child(craft_xml::Local("showVal")).and_then(|e| e.attr_local("val"));
+                assert_eq!(show, expected_options[i].map(|v| if v { "1" } else { "0" }));
+                let children: Vec<_> = labels.elements().map(|e| e.local()).collect();
+                let format_position = children.iter().position(|n| *n == "numFmt").unwrap();
+                assert!(children.iter().position(|n| *n == "txPr").is_none_or(|tx| format_position < tx));
+            }
+        }
     }
 }
 
