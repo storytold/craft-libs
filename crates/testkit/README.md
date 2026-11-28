@@ -258,6 +258,30 @@ Changes from `craft-media-testkit`'s `hammer`:
 - `parse` is owned and runs on a worker thread. A closure that borrows from the test needs its data
   moved or shared with an `Arc`.
 
+## `image` feature
+
+`craft-testkit = { ..., features = ["image"] }` adds `craft_testkit::image` and `assert_similar!`. It depends on `png` 0.18.
+
+| Item | What it does |
+|---|---|
+| `Rgba8`, `Gray8` | Borrowed 8-bit views. `new` returns an error when a side is 0 or the buffer is not exactly `width × height × channels` bytes. |
+| `diff_rgba`, `diff_gray` | `DiffStats`: differing pixels, maximum and mean absolute sample difference, nearest-rank p99 of each pixel's largest difference, and PSNR with a peak of 255. RGBA counts alpha as a fourth sample. |
+| `psnr(a, b, peak)` | PSNR of two `u8` or `u16` planes. The caller passes the peak (255, 1023, 4095, 65535). Equal planes give `f64::INFINITY`; empty or unequal planes and a peak that is not finite and positive are errors. |
+| `Tolerance`, `compare_rgba`, `compare_gray` | Gates for maximum difference, p99, minimum PSNR and the share of bad pixels, each inclusive. With `neighborhood`, a pixel is bad only when nothing in the other image's 3×3 window is within `channel`, checked in both directions. |
+| `diff_image` | An opaque RGBA image of each absolute sample difference times 8, with alpha differences shown in every color channel. |
+| `decode_png`, `encode_png`, `encode_gray_png`, `read_png`, `write_png`, `write_gray_png` | 8-bit PNG reading and writing under `PngLimits` (default 16,384 × 16,384 pixels, 64 MiB encoded, 256 MiB decoded). Palette, low bit depths, 16-bit samples, `tRNS` and interlacing are converted to 8-bit gray or RGBA. Gamma, ICC and sRGB chunks are not applied. |
+| `check_golden`, `assert_similar!` | Compare an image with a reference PNG. The reference is written only when the variable named in `GoldenOptions::bless_var` (default `CRAFT_BLESS`) is exactly `1`; otherwise a missing reference is an error. A failed check writes `<name>.actual.png` and `<name>.diff.png` into `GoldenOptions::failures_dir`, using `<name>-1`, `<name>-2` and so on rather than replacing a file. `assert_similar!` fails the calling test. |
+
+The views, statistics, PSNR, tolerances, the difference image and the in-memory PNG functions build for `wasm32`. The file functions, the bless variable and the golden check are native only.
+
+```rust
+use craft_testkit::image::{GoldenOptions, Rgba8, Tolerance};
+
+let options = GoldenOptions { bless_var: "FILMCRAFT_BLESS", ..GoldenOptions::new(&failures, "title_card") };
+let tolerance = Tolerance { min_psnr: Some(45.0), max_abs: Some(12), max_p99: Some(2), ..Tolerance::EXACT };
+craft_testkit::assert_similar!(&reference, Rgba8::new(width, height, &pixels)?, tolerance, options);
+```
+
 ## mcp
 
 The `mcp` feature adds `craft_testkit::mcp` and the `serde_json` dependency. The module is built on every target except `wasm32`, and it opens no network connection.
@@ -451,6 +475,14 @@ PhotoCraft and DeckCraft. `holders_take_turns` waits on channels where the copie
 |---|---|---|---|
 | `Rng`, the edits of `mutations` and `hammer` | storytold/craft-libs | `crates/media-testkit/src/hostile.rs` | `75a654f4` |
 
+### image
+
+| Code | Source |
+|---|---|
+| Statistics, PNG reading and writing, golden check | FilmCraft `crates/testkit/src/golden.rs` at `e4ab3c6a99` |
+| Per-pixel channel tolerance and bad-pixel share | AniCraft `crates/engine/tests/golden/mod.rs` at `3435e98681` |
+| Gray view and 3×3 neighborhood comparison | PdfCraft `crates/oracle/src/pixels.rs` at `eead454105` |
+
 ### mcp
 
 | Code | Repository | Path | SHA |
@@ -532,6 +564,16 @@ An adoption keeps the variable name the app uses today.
 
 CADCraft's and TextureCraft's loops make other edits than `mutations`. Their adoptions say which
 cases change, and keep the test names.
+
+### image
+
+| Consumer | Today | State |
+|---|---|---|
+| FilmCraft | `golden.rs`, `FILMCRAFT_BLESS` | Not started |
+| AniCraft | `crates/engine/tests/golden/mod.rs`, `UPDATE_GOLDENS` | Not started |
+| PdfCraft | `pdfcraft-oracle` `pixels.rs` | Not started |
+| VectorCraft | `crates/testkit/src/raster.rs` (comparison only) | Not started |
+| DesignCraft | `crates/render/tests/it/effects.rs`, `DESIGNCRAFT_BLESS` | Not started |
 
 ### mcp
 

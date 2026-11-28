@@ -13,6 +13,9 @@
 //!   where `std::time::Instant::now()` panics on `wasm32`.
 //! * `guards::rust_sources`: directory crawler collecting `.rs` sources while excluding tests, with
 //!   size limits (`guards::rust_sources_with_limits`). It is not built for `wasm32`.
+//! * `image` (feature `image`): RGBA8 and gray views, difference statistics, PSNR for `u8` and
+//!   `u16` planes, tolerances with an optional 3×3 neighborhood, a difference image, PNG reading
+//!   and writing with size limits, golden reference checks and `assert_similar!`.
 //!
 //! [`rng`] holds two seeded generators for repeatable test input, [`rng::XorShift64`] and
 //! [`rng::XorShift64Star`], each with `next`, `below`, `byte` and `fill`.
@@ -72,6 +75,8 @@ pub mod deadline;
 pub mod fonts;
 pub mod guards;
 pub mod hostile;
+#[cfg(feature = "image")]
+pub mod image;
 #[cfg(all(feature = "mcp", not(target_arch = "wasm32")))]
 pub mod mcp;
 pub mod rng;
