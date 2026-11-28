@@ -122,31 +122,46 @@ impl<D: Dictionary> DictSlot<D> {
             }
             s.reloads
         };
-        self.keep(reloads, Arc::new(self.load_installed()))
+        let (loaded, registered) = self.load_installed();
+        self.keep(reloads, Arc::new(loaded), registered)
     }
 
-    /// Keep a dictionary loaded after `reloads` reloads. If the folder was reloaded since, the
-    /// load may have read the old folder: it serves this one check and the next one loads again.
-    fn keep(&self, reloads: u64, loaded: Arc<D>) -> Arc<D> {
+    /// Keep a dictionary loaded after `reloads` reloads (`in_memory`: it is a registered pair, with
+    /// no file). If the folder was reloaded since, the load may have read the old folder: it serves
+    /// this one check and the next one loads again.
+    fn keep(&self, reloads: u64, loaded: Arc<D>, in_memory: bool) -> Arc<D> {
         let mut s = self.write();
         if s.reloads != reloads {
             return s.dict.clone().unwrap_or(loaded);
         }
         // Another thread (or an install) may have filled it meanwhile: that one wins.
-        s.dict.get_or_insert(loaded).clone()
+        if let Some(d) = s.dict.as_ref() {
+            return d.clone();
+        }
+        s.dict = Some(loaded.clone());
+        s.in_memory = in_memory;
+        loaded
     }
 
-    fn load_installed(&self) -> D {
+    /// The dictionary found for the language now, and whether it is a registered pair (which has
+    /// no file): the dictionaries folders first, then a registered pair, then the packs and the
+    /// system's folders.
+    fn load_installed(&self) -> (D, bool) {
+        use crate::registered::Located;
         let name = self.name();
-        let Some((aff, dic)) = crate::hunspell::find(self.names) else {
-            crate::hunspell::clear_load_error(name);
-            log::info!("{} spelling: no Hunspell {name} dictionary installed", self.english);
-            return D::default();
-        };
-        crate::hunspell::note_load(name, &dic, D::load(&aff, &dic)).unwrap_or_else(|e| {
+        let failed = |e: String| {
             log::warn!("{} spelling: {e}", self.english);
             D::default()
-        })
+        };
+        match crate::registered::locate(self.names) {
+            Located::File(aff, dic) => (crate::hunspell::note_load(name, &dic, D::load(&aff, &dic)).unwrap_or_else(failed), false),
+            Located::Registered(pair) => (crate::hunspell::note_load(name, &pair.label, D::parse(&pair.aff, &pair.dic)).unwrap_or_else(failed), true),
+            Located::Missing => {
+                crate::hunspell::clear_load_error(name);
+                log::info!("{} spelling: no Hunspell {name} dictionary installed", self.english);
+                (D::default(), false)
+            }
+        }
     }
 
     /// Use this dictionary from now on (Hunspell `.aff` and `.dic` text, decoded to UTF-8), for
@@ -170,12 +185,16 @@ impl<D: Dictionary> DictSlot<D> {
 
     /// The `.dic` file of the installed dictionary, searching the dictionaries folder and the
     /// system locations now (File › Options › Proofing shows it); `None` when there is none, or
-    /// when the dictionary in use was given with [`Self::install`] and so has no file.
+    /// when the dictionary in use was given with [`Self::install`] or registered
+    /// ([`crate::register_dictionary`]) and so has no file.
     pub(crate) fn installed_path(&self) -> Option<PathBuf> {
         if self.read().in_memory {
             return None;
         }
-        crate::hunspell::find(self.names).map(|(_, dic)| dic)
+        match crate::registered::locate(self.names) {
+            crate::registered::Located::File(_, dic) => Some(dic),
+            _ => None,
+        }
     }
 
     /// Is a dictionary available (spelling is checked)?

@@ -102,6 +102,7 @@ pub mod packs;
 pub mod patterns;
 pub mod pl;
 pub mod pt;
+mod registered;
 pub mod ru;
 pub mod scowl;
 mod script_checks;
@@ -136,9 +137,11 @@ impl Default for Options {
 pub use english::EnglishSource;
 pub use grammar_en::check_grammar;
 use grammar_en::grammar_en;
+pub use hunspell::{HostFolders, app_folders};
 pub use lang::{PackLocale, ProofLang};
-pub use languages::{dictionary_load_error, english_source, installed_dictionaries, pack_dictionary_file, set_dictionaries_folder};
+pub use languages::{dictionary_load_error, english_source, installed_dictionaries, pack_dictionary_file, set_dictionaries_folder, set_host_folders};
 pub(crate) use languages::{language, reload_dictionaries};
+pub use registered::{MAX_FILE_BYTES, MAX_REGISTERED, RegisterError, register_dictionary, registered_dictionaries, unregister_dictionary};
 pub(crate) use user_dict::in_user_dictionary;
 pub use user_dict::{
     MAX_CUSTOM_WORD_CHARS, add_word, custom_word, ignore_word, load_user_dictionary, remove_word, save_user_dictionary, user_dictionary,
@@ -302,8 +305,10 @@ pub fn has_dictionary(lang: Option<&str>) -> bool {
 
 /// The Hunspell dictionary name (`pl_PL`, `it_IT`, `nl_NL`) a proofing language needs but doesn't
 /// have installed, for a status-bar hint (#1167). `None` when the language's dictionary is
-/// available, when it needs none (English has a built-in word list), or for a tag that is no
-/// language (`x-none`, `zxx`). Any other language is named by its tag, even one no Hunspell
+/// available, when it needs none (English has a built-in word list, unless the build leaves out
+/// that and SCOWL with the `builtin-moby` and `embed-english` features: an English with no source
+/// then needs `en_US`, `en_GB`, `en_CA` or `en_AU`), or for a tag that is no language (`x-none`,
+/// `zxx`). Any other language is named by its tag, even one no Hunspell
 /// dictionary exists for (`ja`, `zh`, `th`): the caller decides whether to show the hint. Reads
 /// the dictionary once (it is cached afterwards).
 pub fn missing_dictionary(lang: Option<&str>) -> Option<&'static str> {
@@ -321,8 +326,13 @@ pub fn unreadable_dictionary(lang: Option<&str>) -> Option<(&'static str, std::p
     hunspell::load_error(name).map(|(file, reason)| (name, file, reason))
 }
 
-/// Did the Hunspell dictionary of `lang` load? `None` for languages that use none (English).
+/// Did the Hunspell dictionary of `lang` load? For an English: does it have a source of spelling
+/// (always, unless the build leaves out SCOWL and the built-in list). `None` for a language that
+/// uses none.
 fn dictionary_loaded(lang: ProofLang) -> Option<bool> {
+    if lang.is_english() {
+        return Some(english::has_source(lang));
+    }
     if let Some(l) = lang.spelling_locale() {
         return Some(pack_lang::has_dictionary(l));
     }
@@ -334,6 +344,9 @@ fn dictionary_loaded(lang: ProofLang) -> Option<bool> {
 fn dictionary_needed(lang: ProofLang, installed: bool) -> Option<&'static str> {
     if installed {
         return None;
+    }
+    if lang.is_english() {
+        return Some(english::registered_name(lang));
     }
     if let Some(l) = lang.spelling_locale() {
         return pack_lang::names(l).first().map(|n| interned(n));

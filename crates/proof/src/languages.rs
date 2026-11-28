@@ -151,6 +151,17 @@ pub fn set_dictionaries_folder(dir: Option<std::path::PathBuf>) {
     reload_dictionaries();
 }
 
+/// Name the host application's own dictionaries: an environment variable and folders searched
+/// after the one set with [`set_dictionaries_folder`] and before the installed Language packs and
+/// the system's folders (none are searched unless the host names them: the default
+/// [`HostFolders`](crate::HostFolders) clears them). [`app_folders`](crate::app_folders) gives an
+/// application's usual per-user folders. The dictionaries
+/// load again from the new search path, and text is checked again.
+pub fn set_host_folders(host: crate::hunspell::HostFolders) {
+    hunspell::set_host(host);
+    reload_dictionaries();
+}
+
 /// Forget every loaded dictionary, so the next check looks for them again (the dictionaries
 /// folder or the installed Language packs changed), and check text again.
 pub(crate) fn reload_dictionaries() {
@@ -191,8 +202,9 @@ pub fn dictionary_load_error(lang: ProofLang) -> Option<String> {
 
 /// Where the spelling of an English `lang` comes from now (`None` for other languages), in this
 /// order: a Hunspell dictionary of its own (`en_US`, `en_GB`, `en_CA`) in the dictionaries
-/// folder, the SCOWL dictionary embedded at build time, one of its own on the system, else the
-/// Moby word list built into the crate. Another English's dictionary is never used. Reads the
+/// folder, a dictionary registered as bytes ([`crate::register_dictionary`]), the SCOWL
+/// dictionary embedded at build time, one of its own on the system, else the Moby word list
+/// built into the crate. Another English's dictionary is never used. Reads the
 /// Hunspell dictionary once (it is cached afterwards).
 pub fn english_source(lang: ProofLang) -> Option<EnglishSource> {
     lang.is_english().then(|| english::source(lang))
