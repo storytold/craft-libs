@@ -2020,7 +2020,7 @@ mod tests {
             assert_eq!(value.child(Local("axPos")).and_then(|a| a.attr_local("val")), Some(if kind.horizontal() { "b" } else { "l" }));
             let format = value.child(Local("numFmt")).unwrap();
             assert_eq!(format.attr_local("formatCode"), Some(if kind.percent() { "0%" } else { "General" }));
-            assert_eq!(format.attr_local("sourceLinked"), Some("1"), "the format is the effective type's default, not an explicit override");
+            assert_eq!(format.attr_local("sourceLinked"), Some(if kind.percent() { "0" } else { "1" }), "a percent default must not link to the generated General cache");
         }
     }
 
@@ -2191,7 +2191,7 @@ mod tests {
                         if tag == "valAx" {
                             let format = axis.child(Local("numFmt")).unwrap();
                             assert_eq!(format.attr_local("formatCode"), Some(code));
-                            assert_eq!(format.attr_local("sourceLinked"), Some(if explicit { "0" } else { "1" }));
+                            assert_eq!(format.attr_local("sourceLinked"), Some(if explicit || code == "0%" { "0" } else { "1" }));
                         }
                     }
                 }
