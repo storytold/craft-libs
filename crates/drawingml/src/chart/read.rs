@@ -2891,6 +2891,7 @@ mod tests {
             }
         }
         // An unused primary fallback is not proof that either populated group owns it.
+        // The unresolved left group keeps ID fallback; the uniquely resolved right is secondary.
         let invalid_left = left.replace(r#"<c:crossAx val="10"/>"#, r#"<c:crossAx val="777"/>"#);
         let unused = format!("{}{}", review_6095656137_axis("valAx", 40, 999, "l", 70, ""), review_6095656137_axis("catAx", 999, 40, "b", 1, ""));
         let xml = metadata_chart(&format!("{groups}{invalid_left}{right}{cats}{unused}"));
@@ -2898,10 +2899,14 @@ mod tests {
         assert_eq!(chart.y_max, Some(70.0));
         assert_eq!(
             chart.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(),
-            [false, false],
-            "an unresolved primary retains ID fallback even when another group resolves"
+            [false, true],
+            "the unresolved group keeps ID fallback while the resolved right group is secondary"
         );
-        assert_eq!(chart.y2_max, None);
+        assert_eq!(chart.y2_max, Some(90.0));
+        let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+        let old8 = read_chart(&root, MAX_CHART_POINTS, 8).unwrap();
+        assert_eq!(old8.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, false]);
+        assert_eq!(old8.y2_max, None, "saved8 retains its original ownership interpretation");
     }
 
     #[test]
@@ -2937,10 +2942,13 @@ mod tests {
                 assert_eq!(pure.category_label(0), "30.0");
             } else {
                 // A valid unused primary pair remains the anchor, as when primary series
-                // are deleted. Without resolved primary ownership, retain the ID fallback.
+                // are deleted. Its resolved overlay still owns the distinct right Y element.
+                assert_eq!((pure.series[0].secondary_axis, pure.y_max, pure.y2_max), (true, Some(999.0), Some(90.0)));
                 let root = crate::xmlx::parse(pure_xml.as_bytes()).unwrap();
                 let old = read_chart(&root, MAX_CHART_POINTS, 6).unwrap();
-                assert_eq!((pure.series[0].secondary_axis, pure.y_max, pure.y2_max), (old.series[0].secondary_axis, old.y_max, old.y2_max));
+                assert_eq!((old.series[0].secondary_axis, old.y_max, old.y2_max), (false, Some(999.0), None));
+                let old8 = read_chart(&root, MAX_CHART_POINTS, 8).unwrap();
+                assert_eq!((old8.series[0].secondary_axis, old8.y_max, old8.y2_max), (false, Some(999.0), None));
             }
         }
         // Ambiguous duplicate elements and an unresolved pair keep the ID-only fallback.
@@ -3300,5 +3308,166 @@ mod tests {
         let (written, kept) = crate::chart::write::chart_xml(&previous);
         assert!(kept, "unchanged interpretation8 source-General saves retain their raw chart");
         assert_eq!(crate::xmlx::parse(&written).unwrap().to_xml(), root.to_xml());
+    }
+
+    #[test]
+    fn review_6096226526_exact_secondary_owner_precedes_unresolved_source_groups() {
+        let unresolved = review_6095656137_group(30, 40, "Unresolved", "0%");
+        let scatter = r#"<c:scatterChart><c:ser><c:tx><c:v>Resolved</c:v></c:tx><c:xVal><c:numLit><c:formatCode>General</c:formatCode><c:pt idx="0"><c:v>30</c:v></c:pt></c:numLit></c:xVal><c:yVal><c:numLit><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:yVal></c:ser><c:axId val="10"/><c:axId val="20"/></c:scatterChart>"#;
+        let x = review_6095656137_axis("valAx", 10, 20, "b", 12, r#"<c:numFmt formatCode="0.0" sourceLinked="0"/>"#);
+        let y = review_6095656137_axis("valAx", 20, 10, "r", 90, r#"<c:numFmt formatCode="0.000" sourceLinked="0"/>"#).replace("</c:valAx>", r#"<c:majorUnit val="5"/></c:valAx>"#);
+        let stray = review_6095656137_axis("valAx", 40, 888, "r", 70, r#"<c:numFmt formatCode="0%" sourceLinked="0"/>"#);
+        let anchor = review_6095656137_axis("valAx", 10, 999, "l", 50, r#"<c:numFmt formatCode="0.00" sourceLinked="0"/>"#);
+        let category = review_6095656137_axis("catAx", 999, 10, "b", 1, "");
+        let axes = format!("{x}{y}{stray}{category}{anchor}");
+        for (groups, old_y2) in [(format!("{unresolved}{scatter}"), 70.0), (format!("{scatter}{unresolved}"), 90.0)] {
+            let xml = metadata_chart(&format!("{groups}{axes}"));
+            let chart = read_chart_xml(xml.as_bytes()).unwrap();
+            assert_eq!((chart.y_max, chart.y2_max), (Some(50.0), Some(90.0)), "the later exact owner must outrank an earlier unresolved group");
+            assert!(chart.series.iter().all(|s| s.secondary_axis));
+            assert_eq!(chart.y2_format.as_deref(), Some("0.000"));
+            assert_eq!(chart.y2_major, Some(5.0));
+            assert_eq!(chart.axis_titles.1.as_deref(), Some("Axis10-999"), "the unused primary anchor stays selected");
+            let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+            let mut old9 = read_chart(&root, MAX_CHART_POINTS, 9).unwrap();
+            assert_eq!(old9.y2_max, Some(old_y2), "saved9 keeps its source-order fallback when primary ownership is unresolved");
+            old9.raw = Some(xml.clone());
+            let old9: Chart = serde_json::from_str(&serde_json::to_string(&old9).unwrap()).unwrap();
+            let (written, kept) = crate::chart::write::chart_xml(&old9);
+            assert!(kept, "old9 native comparison retains the exact original part");
+            assert_eq!(crate::xmlx::parse(&written).unwrap().to_xml(), root.to_xml());
+        }
+        // With no resolved secondary group, the existing ID-only fallback remains useful.
+        let only_unresolved = read_chart_xml(metadata_chart(&format!("{unresolved}{axes}")).as_bytes()).unwrap();
+        assert_eq!((only_unresolved.y_max, only_unresolved.y2_max), (Some(50.0), Some(70.0)));
+        assert!(only_unresolved.series[0].secondary_axis);
+        assert_eq!(only_unresolved.y2_format.as_deref(), Some("0%"));
+        // A populated primary owner keeps the already-correct resolved-secondary preference.
+        let primary = review_6095656137_group(999, 10, "Primary", "0.00");
+        let owned = read_chart_xml(metadata_chart(&format!("{primary}{unresolved}{scatter}{axes}")).as_bytes()).unwrap();
+        assert_eq!(owned.series.iter().map(|s| (s.name.as_str(), s.secondary_axis)).collect::<Vec<_>>(), [("Primary", false), ("Unresolved", true), ("Resolved", true)]);
+        assert_eq!((owned.y_max, owned.y2_max, owned.y2_major), (Some(50.0), Some(90.0), Some(5.0)));
+    }
+
+
+
+    #[test]
+    fn review_6096226526_linked_formats_do_not_borrow_another_resolved_axis() {
+        let scatter = r#"<c:scatterChart><c:ser><c:tx><c:v>Overlay</c:v></c:tx><c:xVal><c:numLit><c:pt idx="0"><c:v>30</c:v></c:pt></c:numLit></c:xVal><c:yVal><c:numRef><c:f>Overlay!B1</c:f><c:numCache><c:formatCode>0%</c:formatCode><c:pt idx="0"><c:v>0.5</c:v></c:pt></c:numCache></c:numRef></c:yVal></c:ser><c:axId val="10"/><c:axId val="20"/></c:scatterChart>"#;
+        let x = review_6095656137_axis("valAx", 10, 20, "b", 12, "");
+        let y = review_6095656137_axis("valAx", 20, 10, "r", 90, "");
+        let category = review_6095656137_axis("catAx", 999, 20, "b", 1, "");
+        let anchor = review_6095656137_axis("valAx", 20, 999, "l", 50, r#"<c:numFmt formatCode="0.00" sourceLinked="true"/>"#);
+        for axes in [format!("{x}{y}{category}{anchor}"), format!("{category}{y}{x}{anchor}")] {
+            let xml = metadata_chart(&format!("{scatter}{axes}"));
+            let current = read_chart_xml(xml.as_bytes()).unwrap();
+            assert_eq!((current.y_format.as_deref(), current.y2_format.as_deref()), (Some("0.00"), Some("0%")));
+            assert_eq!((current.axis_label(false, 0.5), current.axis_label(true, 0.5)), (String::from("0.50"), String::from("50%")));
+            assert_eq!(current.series[0].values, [Some(0.5)]);
+            // Unresolved groups still have the established numeric-ID fallback.
+            let unresolved = review_6095656137_group(888, 20, "Unresolved", "0.000");
+            let fallback = read_chart_xml(metadata_chart(&format!("{unresolved}{scatter}{axes}")).as_bytes()).unwrap();
+            assert_eq!(fallback.y_format.as_deref(), Some("0.000"));
+            assert_eq!(fallback.y2_format.as_deref(), Some("0%"));
+            // A real owner takes priority over an earlier unresolved ID alias.
+            let owner = review_6095656137_group(999, 20, "Owner", "0.0000");
+            let owned = read_chart_xml(metadata_chart(&format!("{unresolved}{owner}{scatter}{axes}")).as_bytes()).unwrap();
+            assert_eq!(owned.y_format.as_deref(), Some("0.0000"));
+            let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+            let mut old = read_chart(&root, MAX_CHART_POINTS, 9).unwrap();
+            assert_eq!(old.y_format.as_deref(), Some("0%"), "interpretation9 retains its former numeric-ID format fallback");
+            old.raw = Some(xml);
+            let old: Chart = serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
+            let (written, kept) = crate::chart::write::chart_xml(&old);
+            assert!(kept, "unchanged interpretation9 native chart keeps its original XML");
+            assert_eq!(crate::xmlx::parse(&written).unwrap().to_xml(), root.to_xml());
+        }
+    }
+
+    #[test]
+    fn review_6096226526_linked_value_axes_use_literal_and_cached_source_formats() {
+        for scatter in [false, true] {
+            for literal in [false, true] {
+                let points = r#"<c:formatCode>0%</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>0.5</c:v></c:pt>"#;
+                let data = if literal { format!("<c:numLit>{points}</c:numLit>") } else {
+                    format!("<c:numRef><c:f>Sheet1!$B$2</c:f><c:numCache>{points}</c:numCache></c:numRef>")
+                };
+                let group = if scatter {
+                    format!(r#"<c:scatterChart><c:ser><c:xVal><c:numLit><c:pt idx="0"><c:v>30</c:v></c:pt></c:numLit></c:xVal><c:yVal>{data}</c:yVal></c:ser><c:axId val="10"/><c:axId val="20"/></c:scatterChart>"#)
+                } else {
+                    format!(r#"<c:barChart><c:barDir val="col"/><c:ser><c:val>{data}</c:val></c:ser><c:axId val="10"/><c:axId val="20"/></c:barChart>"#)
+                };
+                let category = review_6095656137_axis(if scatter { "valAx" } else { "catAx" }, 10, 20, "b", 30, "");
+                for attr in [r#"sourceLinked="true""#, r#"sourceLinked="1""#, ""] {
+                    let fmt = format!(r#"<c:numFmt formatCode="0.000" {attr}/>"#);
+                    let y = review_6095656137_axis("valAx", 20, 10, "l", 1, &fmt);
+                    let xml = metadata_chart(&format!("{group}{category}{y}"));
+                    let chart = read_chart_xml(xml.as_bytes()).unwrap();
+                    assert_eq!(chart.y_format.as_deref(), Some("0%"), "scatter={scatter}, literal={literal}, {attr}");
+                    assert_eq!(chart.axis_label(false, 0.5), "50%");
+                    assert_eq!(chart.series[0].values, [Some(0.5)]);
+                    let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+                    let mut old = read_chart(&root, MAX_CHART_POINTS, 9).unwrap();
+                    assert_eq!(old.y_format.as_deref(), Some(if literal { "0.000" } else { "0%" }));
+                    old.raw = Some(xml);
+                    let old: Chart = serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
+                    let (written, kept) = crate::chart::write::chart_xml(&old);
+                    assert!(kept);
+                    assert_eq!(crate::xmlx::parse(&written).unwrap().to_xml(), root.to_xml());
+                }
+                for attr in [r#"sourceLinked="false""#, r#"sourceLinked="0""#] {
+                    let fmt = format!(r#"<c:numFmt formatCode="0.000" {attr}/>"#);
+                    let y = review_6095656137_axis("valAx", 20, 10, "l", 1, &fmt);
+                    let chart = read_chart_xml(metadata_chart(&format!("{group}{category}{y}")).as_bytes()).unwrap();
+                    assert_eq!(chart.y_format.as_deref(), Some("0.000"));
+                    assert_eq!(chart.axis_label(false, 0.5), "0.500");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn review_6096226526_source_general_overrides_stored_value_axis_format() {
+        for literal in [false, true] {
+            for percent in [false, true] {
+                for source in [Some("General"), Some("0%"), Some(""), None] {
+                    let code = source.map(|s| format!("<c:formatCode>{s}</c:formatCode>")).unwrap_or_default();
+                    let points = format!(r#"{code}<c:pt idx="0"><c:v>0.5</c:v></c:pt>"#);
+                    let data = if literal { format!("<c:numLit>{points}</c:numLit>") } else {
+                        format!("<c:numRef><c:f>Sheet1!$B$2</c:f><c:numCache>{points}</c:numCache></c:numRef>")
+                    };
+                    let grouping = if percent { "percentStacked" } else { "clustered" };
+                    let group = format!(r#"<c:barChart><c:barDir val="col"/><c:grouping val="{grouping}"/><c:ser><c:val>{data}</c:val></c:ser><c:axId val="10"/><c:axId val="20"/></c:barChart>"#);
+                    let cat = review_6095656137_axis("catAx", 10, 20, "b", 1, "");
+                    for attr in [r#"sourceLinked="true""#, r#"sourceLinked="1""#, "", r#"sourceLinked="false""#, r#"sourceLinked="0""#] {
+                        let fmt = format!(r#"<c:numFmt formatCode="0.000" {attr}/>"#);
+                        let y = review_6095656137_axis("valAx", 20, 10, "l", 1, &fmt);
+                        let xml = metadata_chart(&format!("{group}{cat}{y}"));
+                        let chart = read_chart_xml(xml.as_bytes()).unwrap();
+                        let linked = !matches!(attr, r#"sourceLinked="false""# | r#"sourceLinked="0""#);
+                        let expected = if linked { source.filter(|s| !s.is_empty()).unwrap_or("0.000") } else { "0.000" };
+                        assert_eq!(chart.y_format.as_deref(), Some(expected), "literal={literal}, percent={percent}, {source:?}, {attr}");
+                        assert_eq!(chart.axis_label(false, 0.5), match expected { "General" => "0.5", "0%" => "50%", _ => "0.500" });
+                        if source == Some("General") && linked {
+                            let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+                            let mut old = read_chart(&root, MAX_CHART_POINTS, 9).unwrap();
+                            assert_eq!(old.y_format.as_deref(), Some("0.000"));
+                            old.raw = Some(xml);
+                            let old: Chart = serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
+                            let (written, kept) = crate::chart::write::chart_xml(&old);
+                            assert!(kept);
+                            assert_eq!(crate::xmlx::parse(&written).unwrap().to_xml(), root.to_xml());
+                        }
+                    }
+                    // No local numFmt is also source-linked; General must not activate
+                    // the percent-axis default merely because it normalizes like no format.
+                    let y = review_6095656137_axis("valAx", 20, 10, "l", 1, "");
+                    let chart = read_chart_xml(metadata_chart(&format!("{group}{cat}{y}")).as_bytes()).unwrap();
+                    let expected = source.filter(|s| !s.is_empty());
+                    assert_eq!(chart.y_format.as_deref(), expected);
+                    assert_eq!(chart.axis_label(false, 0.5), if expected == Some("0%") || (expected.is_none() && percent) { "50%" } else { "0.5" });
+                }
+            }
+        }
     }
 }
