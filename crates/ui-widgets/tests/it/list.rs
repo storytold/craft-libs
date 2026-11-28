@@ -2237,3 +2237,44 @@ fn tight_thumbnail_rows_stand_lower_and_indent_less() {
     assert!(tight_height < roomy_height, "the tight row ({tight_height}) is lower than the roomy one ({roomy_height})");
     assert!(0.0 < tight_indent && tight_indent < roomy_indent, "a level indents less ({tight_indent}) than an icon slot ({roomy_indent})");
 }
+
+/// How far a row two levels down starts after the one a level down, under `indent` (a leaf inside a group steps one
+/// level past its parent's disclosure column, so two leaves one level apart differ by exactly one indent step).
+fn tree_indent_step(indent: Option<craft_ui::list::TreeIndent>) -> f32 {
+    let mut fixture = Fixture::new(|ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = List::new("Folders").show_items(ui, &source, &mut |key, _| ListRow::new(NAMES[*key]).depth(*key));
+    });
+    if let Some(indent) = indent {
+        fixture.root_value(indent);
+    }
+    fixture.room(Vec2::new(300.0, 200.0)).settle();
+    let label_x = |name: &str| fixture.texts().iter().find(|text| text.text == name).expect("the row paints its label").rect.left();
+    label_x(NAMES[2]) - label_x(NAMES[1])
+}
+
+/// A list whose scope sets `TreeIndent` indents a level by that many points, whatever the size set's own step; with no
+/// value (or `TreeIndent::new(0.0)`) a level keeps the size set's step, so no other list changes.
+#[trial]
+fn a_scope_tree_indent_sets_how_far_a_level_steps_in() {
+    use craft_ui::list::TreeIndent;
+    let own = tree_indent_step(None);
+    let unset = tree_indent_step(Some(TreeIndent::new(0.0)));
+    let set = tree_indent_step(Some(TreeIndent::new(10.0)));
+    assert!((unset - own).abs() < 0.01, "a zero value keeps the size set's step ({} with none, {} with zero)", own, unset);
+    assert!((set - 10.0).abs() < 0.01, "a level steps in by the value the scope sets: {set}");
+    assert!(own > set, "the size set's own step ({own}) is wider than the 10 pt the scope sets");
+}
+
+/// A host's step must be a real length: `+inf` (or NaN) is no step, so a level keeps the size set's, and a depth-0 row's
+/// `0 * step` never turns into a NaN that fails the row's own fit.
+#[trial]
+fn a_tree_indent_that_is_not_a_finite_length_keeps_the_size_sets_step() {
+    use craft_ui::list::TreeIndent;
+    let own = tree_indent_step(None);
+    for bad in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN, -4.0] {
+        let step = tree_indent_step(Some(TreeIndent::new(bad)));
+        assert_eq!(step, own, "TreeIndent({bad}) is no step, so a level keeps the size set's {own}");
+    }
+}

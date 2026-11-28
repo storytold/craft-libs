@@ -104,6 +104,33 @@ pub enum ThumbRows {
     Tight,
 }
 
+/// How far a tree row indents per level, in points: a host whose tree narrows its step as it deepens sets it on the
+/// scope of the lists (`with_env`), and changes it when the room its names need does. `0`, the default, keeps the size
+/// set's own step: an icon slot, or `ThumbRows::Tight`'s small icon and `space.gap.tight`. The label, the icon and the
+/// disclosure all follow it, and so does the `AccessKit` tree's level: only the step changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+pub struct TreeIndent(f32);
+
+impl TreeIndent {
+    /// A host's step, in points; `0` (or no value) keeps the size set's own step.
+    pub const fn new(step: f32) -> Self {
+        TreeIndent(step)
+    }
+
+    /// The step in points, as given.
+    pub const fn step(self) -> f32 {
+        self.0
+    }
+}
+
+impl std::hash::Hash for TreeIndent {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // (a length folded into the style key by its bits: `f32` has no `Hash` of its own)
+        std::hash::Hash::hash(&self.0.to_bits(), state);
+    }
+}
+
 /// What the row fill depends on.
 #[derive(Clone, Copy)]
 pub(super) struct FillKey {

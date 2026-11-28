@@ -2,7 +2,7 @@
 
 use super::ListRow;
 use super::show::{TOGGLE_CELL, named};
-use super::style::{ListRowStyle, ThumbRows};
+use super::style::{ListRowStyle, ThumbRows, TreeIndent};
 use super::thumb::{Thumb, ThumbSize};
 use super::trailing::{TrailingFace, TrailingItem, trailing_run};
 use crate::buttons::Link;
@@ -26,7 +26,7 @@ pub(super) struct Sizes {
     pub(super) row: f32,
     /// The slot of an icon or a toggle cell's mark.
     pub(super) icon: f32,
-    /// A level of indent (`ThumbRows`).
+    /// A level of indent (`TreeIndent`, else `ThumbRows`).
     indent: f32,
     /// The side the row's icon and its toggle marks draw at in their slots: the control's icon side, the small
     /// control's in a sub-row.
@@ -59,10 +59,14 @@ impl Sizes {
         let small = cx.control_of(ControlSize::Sm);
         let row = if sub_row { small.height } else { rows.of(cx) };
         let tight = cx.env::<ThumbRows>() == ThumbRows::Tight;
+        let own_indent = if tight { small.icon + tokens.space.gap.tight } else { control.icon };
+        // A host's own step (`TreeIndent`) wins over the size set's; 0, or no value, keeps the size set's.
+        let set_indent = cx.env::<TreeIndent>().step();
         Sizes {
             row,
             icon: control.icon,
-            indent: if tight { small.icon + tokens.space.gap.tight } else { control.icon },
+            // (a host's step must be a real length: `+inf` would make a depth-0 row's `0 * step` a NaN and fail every fit)
+            indent: if set_indent.is_finite() && set_indent > 0.0 { set_indent } else { own_indent },
             mark: if sub_row { small.icon } else { control.icon },
             pad: control.pad_x,
             gap: control.gap,

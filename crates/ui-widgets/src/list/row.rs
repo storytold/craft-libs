@@ -41,7 +41,7 @@ pub use placement::indent_steps;
 #[doc(hidden)]
 pub use placement::placement_under_fixed_sizes;
 pub use placement::{TreeLeaves, tree_steps};
-pub use style::{CommandHighlight, ListRowStyle, RowStyleCx, ThumbRows};
+pub use style::{CommandHighlight, ListRowStyle, RowStyleCx, ThumbRows, TreeIndent};
 pub(crate) use thumb::RowThumb;
 pub(super) use thumb::Thumb;
 use thumb::ThumbPayload;
