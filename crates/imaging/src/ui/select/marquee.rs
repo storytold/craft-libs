@@ -169,13 +169,19 @@ impl MarqueeTool {
         }
         let corners = press.corners.filter(|_| press.gesture.has_begun())?;
         let (a, b) = (corners.a, corners.b);
+        if let Constraint::Ratio(w, h) = self.constraint
+            && w > 0.0
+            && h > 0.0
+        {
+            let rect = press.gesture.ratio_pixels(w, h, press.size);
+            return (rect.width() > 0.0 && rect.height() > 0.0).then_some(rect);
+        }
         let mut rect = match self.constraint {
             Constraint::Size(w, h) => fixed_size_pixels(a, b, (w, h)),
             _ => marquee_pixels(a, b),
         };
         let square = match self.constraint {
             Constraint::Size(..) => false,
-            Constraint::Ratio(w, h) if w > 0.0 && h > 0.0 => w == h,
             _ => press.gesture.square_and_centre().0,
         };
         if square {
@@ -198,7 +204,11 @@ impl MarqueeTool {
         if press.gesture.has_begun() && !kind.is_line() {
             let mut corners = press.gesture.size_to(at, space, constraint);
             if space {
-                let by = cx.snap_rect(corners.rect());
+                let rect = match constraint {
+                    Constraint::Ratio(w, h) if w > 0.0 && h > 0.0 => press.gesture.ratio_pixels(w, h, press.size),
+                    _ => corners.rect(),
+                };
+                let by = cx.snap_rect(rect);
                 if by != Vec2::ZERO {
                     // A second Space step by the snap offset moves both corners by it.
                     corners = press.gesture.size_to(at + by, true, constraint);
