@@ -58,17 +58,26 @@ pub struct Divider {
     #[common]
     common: Common,
     axis: Axis,
+    /// How far the line stops short of each end of its box, in points.
+    inset: f32,
 }
 
 impl Divider {
     /// A line across the width offered.
     pub fn horizontal() -> Self {
-        Divider { common: Common::new(), axis: Axis::Horizontal }
+        Divider { common: Common::new(), axis: Axis::Horizontal, inset: 0.0 }
     }
 
     /// A line down the full height of its row.
     pub fn vertical() -> Self {
-        Divider { common: Common::new(), axis: Axis::Vertical }
+        Divider { common: Common::new(), axis: Axis::Vertical, inset: 0.0 }
+    }
+
+    /// The line stops `points` short of each end of the length it takes (a ribbon's group separator stops short of the
+    /// body's edges); the box it measures is unchanged.
+    pub fn inset(mut self, points: f32) -> Self {
+        self.inset = points.max(0.0);
+        self
     }
 }
 
@@ -117,9 +126,14 @@ impl Component for Divider {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let rect = cx.rect;
+        // Never inset past the middle: a short box keeps a dot of line rather than none.
+        let inset = match self.axis {
+            Axis::Horizontal => self.inset.min(rect.width() / 2.0),
+            Axis::Vertical => self.inset.min(rect.height() / 2.0),
+        };
         let (from, to) = match self.axis {
-            Axis::Horizontal => (rect.left_center(), rect.right_center()),
-            Axis::Vertical => (rect.center_top(), rect.center_bottom()),
+            Axis::Horizontal => (rect.left_center() + egui::vec2(inset, 0.0), rect.right_center() - egui::vec2(inset, 0.0)),
+            Axis::Vertical => (rect.center_top() + egui::vec2(0.0, inset), rect.center_bottom() - egui::vec2(0.0, inset)),
         };
         ui.draw().rule(RuleKind::Divider, from, to);
     }

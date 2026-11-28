@@ -148,7 +148,10 @@ impl<'a> RibbonGroup<'a> {
                     } else {
                         self.open(ui, add, room);
                     }
-                    Divider::vertical().show(ui);
+                    // The separator stops a row gap short of the body's top and of the ribbon's foot, so it reads as
+                    // a light break between groups rather than a frame.
+                    let inset = Gap::Row.points(ui);
+                    Divider::vertical().inset(inset).show(ui);
                 });
             })
             .output
