@@ -493,6 +493,107 @@ fn closed_field_preserves_multiple_host_steps_while_properties_load() {
     assert_eq!(current.borrow().as_str(), "c", "both queued arrows advance through host rows");
 }
 
+/// Queued closed-field steps that pass a host row and stop on a family pick that family: the last stop decides, so
+/// no host key is reported, and the family is the pick. `wheel` takes the second step with the wheel.
+fn host_then_family_steps(wheel: bool) {
+    use craft_font_manager::picker::{HostFontGroup, HostFontRow};
+    use craft_ui::testing::pointer::{moved, wheel_lines};
+    #[derive(Default)]
+    struct Out {
+        host: Vec<String>,
+        picks: Vec<String>,
+    }
+    let jobs = Arc::new(craft_host::ManualJobs::new());
+    let seen = Rc::new(RefCell::new(Out::default()));
+    let shown = Rc::clone(&seen);
+    let catalog = catalog_of(&[face("Book")]);
+    let rows = [HostFontRow::face("a", "A", None), HostFontRow::face("b", "B", None)];
+    let mut family = String::new();
+    let mut filters = FontFilters::default();
+    filters.properties.height = Some(Grade::Medium);
+    let mut fx = Fixture::new(move |ui| {
+        let out = FontPicker::new("Font family", Bind::bound(&mut family), &catalog)
+            .filters(Bind::bound(&mut filters))
+            .host(&[HostFontGroup::new(None, &rows)])
+            .current_host("a".to_owned())
+            .show(ui);
+        let mut seen = shown.borrow_mut();
+        seen.host.extend(out.host_picked);
+        seen.picks.extend(out.picked);
+    });
+    let host = craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs.clone()).build();
+    fx.host(Arc::new(host));
+    fx.in_room(Room::Window);
+    fx.settle();
+    fx.key(Key::Tab, Modifiers::NONE);
+    fx.key(Key::ArrowDown, Modifiers::NONE);
+    if wheel {
+        let field = fx.by_label("Font family").expect("the family field");
+        fx.frame(vec![moved(field.center()), wheel_lines(-1.0)]);
+    } else {
+        fx.key(Key::ArrowDown, Modifiers::NONE);
+    }
+    assert!(seen.borrow().host.is_empty() && seen.borrow().picks.is_empty(), "the steps wait for the outline reads");
+    jobs.run_all();
+    fx.settle();
+    if wheel {
+        // The wheel's run picks its family when the gesture ends.
+        fx.advance(craft_behavior::GESTURE_GAP * 2.0).idle(3);
+    }
+    let seen = seen.borrow();
+    assert!(seen.host.is_empty(), "a later family stop reports no host key, got {:?}", seen.host);
+    assert_eq!(seen.picks, ["Book"], "the family the steps stopped on is the pick");
+}
+
+/// How many host jobs an open list over Book and Poster runs for its height reads, with the Document set (Book only)
+/// on when `set_on`.
+fn outline_reads_with_set(set_on: bool) -> usize {
+    use craft_font_manager::picker::FamilySet;
+    let jobs = Arc::new(craft_host::ManualJobs::new());
+    let catalog = catalog_of(&[face("Book"), Face { style: "Black", weight: 900, ..face("Poster") }]);
+    let members = vec!["book".to_owned()];
+    let mut family = "Book".to_owned();
+    let mut filters = FontFilters::default();
+    filters.properties.height = Some(Grade::Medium);
+    if set_on {
+        filters.sets = vec!["document".to_owned()];
+    }
+    let mut fx = Fixture::new(move |ui| {
+        let sets = [FamilySet::new("document", "Document", &members)];
+        FontPicker::new("Font family", Bind::bound(&mut family), &catalog).filters(Bind::bound(&mut filters)).sets(&sets).show(ui);
+    });
+    let host = craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs.clone()).build();
+    fx.host(Arc::new(host));
+    fx.in_room(Room::Window);
+    fx.settle();
+    fx.key(Key::Tab, Modifiers::NONE);
+    fx.key(Key::ArrowDown, Modifiers::ALT);
+    fx.settle();
+    let mut ran = 0;
+    for _ in 0..4 {
+        ran += jobs.run_all();
+        fx.settle();
+    }
+    assert!(listed(&fx, "Book"), "Book is in the set and matches the height");
+    ran
+}
+
+/// An enabled family set narrows the list before the property filters, so families outside it queue no outline reads.
+#[trial]
+fn an_enabled_set_keeps_families_outside_it_from_queuing_outline_reads() {
+    assert!(outline_reads_with_set(true) < outline_reads_with_set(false), "the set's other family is never read");
+}
+
+#[trial]
+fn closed_field_arrows_from_a_host_row_to_a_family_pick_the_family() {
+    host_then_family_steps(false);
+}
+
+#[trial]
+fn closed_field_wheel_from_a_host_row_to_a_family_picks_the_family() {
+    host_then_family_steps(true);
+}
+
 /// Picks Heavy in the open list's Weight dropdown.
 fn pick_heavy(fx: &mut Fixture) {
     let weight = fx.by_label("Weight").expect("the weight dropdown");

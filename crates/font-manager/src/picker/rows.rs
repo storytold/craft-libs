@@ -439,18 +439,15 @@ struct PreviewChoices<'s, 'a> {
 
 /// The `Chips` filter area: the script row; Favorites, the host sets, Any Kind and the classes; Font Technology,
 /// Variable and, when `properties` is given, the Font Properties chip, which opens the property dropdowns under it and,
-/// turned off, clears them; the similar chip while Show Similar Fonts is on; and, while samples show, the Font Preview
-/// Size row and the Sample Text dropdown when the host offers sample texts.
+/// turned off, clears them; and the similar chip while Show Similar Fonts is on.
 fn filter_chips(
     ui: &mut egui::Ui,
     filters: &mut FontFilters,
-    choices: PreviewChoices<'_, '_>,
     sets: &[FamilySet<'_>],
     scripts: &[FontScript],
     mut properties: Option<&mut bool>,
     words: &FontPickerWords,
 ) {
-    let PreviewChoices { size: preview, texts, chosen: sample, key } = choices;
     Stack::new().show(ui, |ui, _| {
         if !scripts.is_empty() {
             Row::new().wrap(true).show(ui, |ui, _| {
@@ -498,6 +495,19 @@ fn filter_chips(
                 }
             });
         }
+    });
+}
+
+/// Whether the `Chips` preview area shows: while samples show at a size.
+fn previews_shown(size: Option<FontPreviewSize>) -> bool {
+    size.is_some_and(|size| size != FontPreviewSize::None)
+}
+
+/// The `Chips` preview area, while samples show: the Font Preview Size row and the Sample Text dropdown when the host
+/// offers sample texts. It shows whether or not the filters are bound.
+fn preview_chips(ui: &mut egui::Ui, choices: PreviewChoices<'_, '_>, words: &FontPickerWords) {
+    let PreviewChoices { size: preview, texts, chosen: sample, key } = choices;
+    Stack::new().show(ui, |ui, _| {
         if let Some(size) = preview.as_mut().filter(|size| **size != FontPreviewSize::None) {
             let last = PREVIEW_SIZES.len() as u8 - 1;
             let before = PREVIEW_SIZES.iter().position(|s| s == size).map_or(last, |at| at as u8);
@@ -705,14 +715,20 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
             }
             if let Some(filters) = filters.as_mut() {
                 if chips {
-                    let choices = PreviewChoices { size: &mut preview_size, texts, chosen, key: &mut sample_key };
-                    filter_chips(ui, filters, choices, sets, scripts, properties.then_some(&mut properties_open), &words);
+                    filter_chips(ui, filters, sets, scripts, properties.then_some(&mut properties_open), &words);
                 } else {
                     filter_bar(ui, filters, &mut hide_classes, &family, &words);
                     if properties {
                         property_rows(ui, &mut filters.properties, true, &words);
                     }
                 }
+            }
+            let previews = chips && !plain && previews_shown(preview_size);
+            if previews {
+                let choices = PreviewChoices { size: &mut preview_size, texts, chosen, key: &mut sample_key };
+                preview_chips(ui, choices, &words);
+            }
+            if has_filters || previews {
                 Divider::horizontal().show(ui);
             }
             Row::new().show(ui, |ui, _| {

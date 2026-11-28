@@ -867,7 +867,7 @@ pub struct FontPicker<'a> {
     /// the `Toolbar` layout, and in the `Chips` layout behind a Font Properties chip after Font Technology, which
     /// clears them when turned off. Off: no dropdowns, and only properties already in the bound filters narrow the list.
     /// Outline properties load through the host's jobs. The list shows a loading message until those reads finish.
-    /// WebAssembly runs at most one queued family read per frame on the UI thread.
+    /// On WebAssembly each picker runs at most one queued family read per frame on the UI thread.
     /// Closed-field arrows and wheel steps wait until the filtered family order is ready.
     /// Moving focus away cancels pending steps.
     #[prop]
@@ -1256,6 +1256,7 @@ impl Component for FontPicker<'_> {
                     match to.and_then(|at| all.get(at)) {
                         Some(Stop::Host(key)) => self.host_picked = Some(key.clone()),
                         Some(Stop::Family(family)) => {
+                            self.host_picked = None;
                             self.picked = Some(family.clone());
                             cx.set(family.clone());
                         }
@@ -1274,7 +1275,10 @@ impl Component for FontPicker<'_> {
                 current = stop;
                 match stop.and_then(|at| all.get(at)) {
                     Some(Stop::Host(key)) => self.host_picked = Some(key.clone()),
-                    Some(Stop::Family(family)) => cx.wheel_run(phase, Some(family.clone())),
+                    Some(Stop::Family(family)) => {
+                        self.host_picked = None;
+                        cx.wheel_run(phase, Some(family.clone()));
+                    }
                     None => {}
                 }
             }

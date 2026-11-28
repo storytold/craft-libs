@@ -99,8 +99,8 @@ adds is an index at an https URL; its families are never curated.
 The font picker reads outline properties and script coverage through the host's jobs. While those
 reads are pending, the list shows "Font information is loading." Matching families appear as their
 reads finish. The headless `family_rows` function reads these properties synchronously.
-The default native job service runs these reads on background threads. WebAssembly runs at most one
-queued family read per frame on the UI thread.
+The default native job service runs these reads on background threads. On WebAssembly each picker
+runs at most one queued family read per frame on the UI thread.
 Closed-field arrow and wheel inputs wait for the complete filtered order before changing the family.
 Moving focus away cancels pending steps.
 

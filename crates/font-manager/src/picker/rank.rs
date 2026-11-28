@@ -778,15 +778,16 @@ fn list_with_read(
     if let Some(class) = filters.class {
         rows.retain(|r| r.class == Some(class));
     }
+    // The sets narrow the rows before the script and property filters, so families outside them queue no reads.
+    let on = active(listing.sets, filters);
+    for set in &on {
+        rows.retain(|r| set.position(&r.family).is_some());
+    }
     if let Some(script) = filters.script {
         rows.retain(|r| matches!(read(&r.family, ReadKind::Scripts), Some(FontRead::Scripts(scripts)) if scripts.contains(&script)));
     }
     if filters.properties.any() {
         rows.retain(|r| infos.has(&r.family, &filters.properties, read));
-    }
-    let on = active(listing.sets, filters);
-    for set in &on {
-        rows.retain(|r| set.position(&r.family).is_some());
     }
     // The first set that is on and ordered gives the order; the others only filter.
     if let Some(set) = on.iter().find(|set| set.ordered) {
