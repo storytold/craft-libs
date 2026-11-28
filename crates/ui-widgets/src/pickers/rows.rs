@@ -2,7 +2,7 @@
 
 use super::dress::{RowDress, SelectPicture};
 use crate::contract::{Entry, Props as _, TooltipSpec};
-use crate::list::{ListRow, ThumbSize};
+use crate::list::{ListRow, ThumbAspect, ThumbSize};
 use crate::runtime::env::Label;
 use craft_behavior::{DisplayOrder, ItemSource};
 use std::borrow::Cow;
@@ -20,13 +20,14 @@ impl<'e, 'l, T> EntryRows<'e, 'l, T> {
     }
 
     /// The row of the entry at `at`: its label and icon as an option, checked when it is the `chosen` entry, a caption
-    /// for a heading, a separator row for a separator, the host's picture as the thumbnail and its dress over the rest.
+    /// for a heading, a separator row for a separator, the host's picture as the thumbnail at its aspect and its dress
+    /// over the rest.
     pub(super) fn row<'r>(
         &self,
         at: usize,
         chosen: Option<usize>,
         dress: Option<&RowDress<'r, T>>,
-        picture: Option<&SelectPicture<'r, T>>,
+        picture: Option<(&SelectPicture<'r, T>, ThumbAspect)>,
     ) -> ListRow<'r>
     where
         'e: 'r,
@@ -42,9 +43,9 @@ impl<'e, 'l, T> EntryRows<'e, 'l, T> {
             None => row,
         };
         let row = match picture {
-            Some(picture) => {
+            Some((picture, aspect)) => {
                 let picture = picture.clone();
-                row.thumb(ThumbSize::Small, move |cx, rect| picture.paint(value, cx, rect))
+                row.thumb_aspect(ThumbSize::Small, aspect, move |cx, rect| picture.paint(value, cx, rect))
             }
             None => row,
         };

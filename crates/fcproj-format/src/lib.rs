@@ -1,6 +1,8 @@
 //! FilmCraft `.fcproj` JSON envelope, version detection and historical migrations.
 //! Project and editor-view types are supplied by the caller.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
+pub mod records;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 /// The `format` tag written in every envelope.
@@ -13,7 +15,7 @@ pub type Migration = fn(Value) -> Result<Value, String>;
 /// edit a shipped one.
 pub const MIGRATIONS: &[Migration] = &[
     v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6, v6_to_v7, v7_to_v8, v8_to_v9, v9_to_v10, v10_to_v11, v11_to_v12, v12_to_v13, v13_to_v14,
-    v14_to_v15, v15_to_v16, v16_to_v17, v17_to_v18, v18_to_v19,
+    v14_to_v15, v15_to_v16, v16_to_v17, v17_to_v18, v18_to_v19, v19_to_v20,
 ];
 
 /// The schema version this build writes (and the newest it reads).
@@ -260,9 +262,16 @@ fn v17_to_v18(doc: Value) -> Result<Value, String> {
     Ok(doc)
 }
 
-/// v18 → v19: media may have independently identified audio and picture components.
-/// Existing media references need no change.
+/// v18 → v19: Script Project items (`ItemKind::Script`: script lines, slates with linked takes,
+/// marks and independently positioned thumbnails). Existing data needs no change; older builds
+/// must refuse such projects instead of failing on or dropping the Script items when saving.
 fn v18_to_v19(doc: Value) -> Result<Value, String> {
+    Ok(doc)
+}
+
+/// v19 → v20: media references can describe independently identified MXF audio and picture
+/// components. Existing Script items and media references retain their stored representation.
+fn v19_to_v20(doc: Value) -> Result<Value, String> {
     Ok(doc)
 }
 
@@ -311,17 +320,57 @@ mod tests {
         assert_eq!(up["project"], v17["project"]);
         let raw = json!({"white_balance": {"Custom": {"temperature": 3200.0, "tint": 12.5}}, "exposure": -0.75});
         let mut v18 = up;
-        v18["schema_version"] = Value::from(18);
+        v18["schema_version"] = json!(18);
         v18["project"]["items"]["1"]["kind"]["Media"]["interpret"]["raw"] = raw.clone();
         let bytes = serde_json::to_vec(&v18).unwrap();
         let (file, version): (EnvelopeIn<Value>, _) = decode(&bytes).unwrap();
         assert_eq!(version, 18);
         assert_eq!(file.project["items"]["1"]["kind"]["Media"]["interpret"]["raw"], raw);
     }
+    /// Schema 19 (Script items): a v18 project upgrades with its data untouched, and a v19 project
+    /// with a Script item is read rather than refused as too new.
+    #[test]
+    fn v18_upgrades_and_v19_script_items_are_read() {
+        let media = json!({"Media": {"interpret": {"par": [1, 1]}}});
+        let v18 = json!({"format": FORMAT_ID, "schema_version": 18, "project": {"items": {"1": {"kind": media}}, "root": {}}});
+        let up = migrate_with(MIGRATIONS, v18.clone(), 18).unwrap();
+        assert!(up["schema_version"].as_u64().unwrap() > 18);
+        assert_eq!(up["project"], v18["project"]);
+        let script = json!({"Script": {"lines": [{"id": 1, "text": "one"}], "slates": [{"id": 2, "takes": [{"id": 3, "source": 1}]}], "next_id": 4}});
+        let mut v19 = up;
+        v19["schema_version"] = json!(19);
+        v19["project"]["items"]["2"] = json!({"kind": script.clone()});
+        let bytes = serde_json::to_vec(&v19).unwrap();
+        let (file, version): (EnvelopeIn<Value>, _) = decode(&bytes).unwrap();
+        assert_eq!(version, 19);
+        assert_eq!(file.project["items"]["2"]["kind"], script);
+        assert_eq!(file.project["items"]["1"]["kind"], media);
+    }
+    #[test]
+    fn saving_component_media_preserves_script_and_raw_data_from_v19() {
+        let project = json!({"items": {
+            "1": {"kind": {"Script": {"lines":[{"id":1,"text":"Scene one"}]}}},
+            "2": {"kind": {"Media": {"media":{"File":{"path":"original.mxf"}}, "interpret":{"raw":{"exposure":-0.75}}}}}
+        }});
+        let old = json!({"format":FORMAT_ID,"schema_version":19,"project":project,"view":{"active":1}});
+        let (mut file, _): (EnvelopeIn<Value>, _) = decode(&serde_json::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(file.project, project);
+        let components = json!({"Components":{
+            "picture":{"track":1,"file_package":vec![1;32],"path":"picture.mxf","source_start":0,"length":100},
+            "channels":[{"track":2,"file_package":vec![2;32],"path":null,"stream":0,"channel":0,"source_start":0,"length":100}]
+        }});
+        file.project["items"]["2"]["kind"]["Media"]["media"] = components;
+        let saved = encode(&file.project, file.view.as_ref(), "FilmCraft test".into(), false);
+        let (reopened, version): (EnvelopeIn<Value>, _) = decode(&saved).unwrap();
+        assert!(version > 19);
+        assert_eq!(reopened.project, file.project);
+        assert_eq!(reopened.view, Some(old["view"].clone()));
+    }
+
     #[test]
     fn rejects_wrong_future_and_damaged_envelopes() {
         assert!(matches!(detect_bytes(br#"{"format":"other","schema_version":1}"#), Err(FormatError::NotAProject(_))));
-        assert!(matches!(detect_bytes(br#"{"schema_version":20}"#), Err(FormatError::TooNew { found: 20, supported: 19 })));
+        assert!(matches!(detect_bytes(br#"{"schema_version":21}"#), Err(FormatError::TooNew { found: 21, supported: 20 })));
         assert!(matches!(detect_bytes(br#"{"schema_version":0}"#), Err(FormatError::TooOld { found: 0, oldest: 1 })));
         assert!(matches!(detect_bytes(b"{"), Err(FormatError::Corrupt(_))));
         assert!(matches!(migrate_with(MIGRATIONS, json!([]), 1), Err(FormatError::Migration { from: 1, .. })));

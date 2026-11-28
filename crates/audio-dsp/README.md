@@ -12,8 +12,11 @@ and contains no `unsafe` code.
   (compressor, expander and gate, limiter, maximizer, multiband and tube-modeled compressors),
   delays and reverbs (including convolution and surround), modulation, restoration (denoise,
   dehum, click remover, de-esser, de-reverb, speech enhancement), channel tools, distortion,
-  dither, a signal generator, a loudness meter, and a pitch shifter for a live voice with 10 ms
-  of latency.
+  dither, a signal generator, a loudness meter, a pitch shifter for a live voice with 10 ms of
+  latency, and a formant shifter for a live voice with 10.7 ms of latency at 48 kHz (its size
+  depends on the sample rate; `latency()` reports it in samples). The pitch shifter's Keep
+  Formants switch adds the formant shifter's latency, and `latency()` reports it while the switch
+  is on.
 - `loudness`: an ITU-R BS.1770-4 / EBU R128 meter with momentary, short-term and integrated
   loudness, loudness range (EBU Tech 3342), sample peak and true peak.
 - `pan`: stereo pan laws, a surround panner over any layout of up to 16 speakers, and first-order

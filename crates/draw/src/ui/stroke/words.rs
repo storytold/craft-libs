@@ -30,6 +30,8 @@ craft_ui::words! {
         butt: "strokeEditor.butt" = "Butt / Flat";
         /// The round cap.
         round_cap: "strokeEditor.roundCap" = "Round";
+        /// The tooltip and accessible name of the round cap icon.
+        round_cap_icon: "strokeEditor.roundCapIcon" = "Round Cap";
         /// The square cap.
         square: "strokeEditor.square" = "Square";
         /// The Corners row.
@@ -38,6 +40,8 @@ craft_ui::words! {
         miter: "strokeEditor.miter" = "Miter";
         /// The round corner.
         round_join: "strokeEditor.roundJoin" = "Round";
+        /// The tooltip and accessible name of the round join icon.
+        round_join_icon: "strokeEditor.roundJoinIcon" = "Round Join";
         /// The bevelled corner.
         bevel: "strokeEditor.bevel" = "Bevel";
         /// The Miter limit row.

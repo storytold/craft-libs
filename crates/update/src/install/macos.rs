@@ -389,7 +389,9 @@ if [ "$quiet" = false ]; then printf '%s\n' "$reason" >&2; fi
 exit 16
 "#;
     for (scenario, expected_calls, expected_waits) in [("busy", 3, 1), ("success", 1, 0), ("permanent", 2, 0)] {
-        let dir = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir();
+        assert!(directory.is_ok(), "temporary directory creation failed: {directory:?}");
+        let Ok(dir) = directory else { return };
         let state = dir.path().join("attempts");
         let calls = std::cell::RefCell::new(Vec::new());
         let waits = std::cell::RefCell::new(Vec::new());
