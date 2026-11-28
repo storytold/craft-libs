@@ -1172,8 +1172,12 @@ impl<'r> Builder<'r> {
                 let fmt = self.fmt();
                 match image {
                     Some(image) => self.start_para().inlines.push(Inline::Image(image)),
-                    None if !alt.is_empty() => self.start_para().push_text(&alt, &fmt),
-                    None => {}
+                    None => {
+                        model::dropped(model::Dropped::HtmlImage);
+                        if !alt.is_empty() {
+                            self.start_para().push_text(&alt, &fmt);
+                        }
+                    }
                 }
             }
             _ => return false,
@@ -1283,6 +1287,7 @@ impl<'r> Builder<'r> {
         }
         let mut kind = block_kind(name).unwrap_or(ElKind::Inline);
         if matches!(kind, ElKind::Table | ElKind::Tr | ElKind::Cell) && !in_table {
+            model::dropped(model::Dropped::HtmlTableDepth);
             kind = ElKind::Block;
         }
         if matches!(kind, ElKind::Tr | ElKind::Cell) && self.tables.is_empty() {
