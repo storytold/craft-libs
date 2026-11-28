@@ -10,8 +10,8 @@ use craft_behavior::PixelSize;
 use craft_behavior::geometry::selection_op::SelectionOperation;
 use craft_behavior::kurbo::Rect;
 use craft_imaging::ui::fill::{
-    ContentAwareFillWorkspace, FillAreaEdit, FillEvent, FillLimit, FillLimits, FillOpen, FillOverlay, FillPreviewRequest, FillSession, FillSettings,
-    FillSource, FillStrokeEvent, SamplingPlane, SamplingStroke,
+    ContentAwareFillWorkspace, FillAreaEdit, FillCommands, FillEvent, FillLimit, FillLimits, FillOpen, FillOverlay, FillPreviewRequest, FillSession,
+    FillSettings, FillSource, FillStrokeEvent, SamplingPlane, SamplingStroke,
 };
 use craft_imaging::ui::select_mask::EditMode;
 use craft_imaging::ui::wide_angle::PreviewDone;
@@ -19,6 +19,7 @@ use craft_ui::canvas::{PixelRect, RasterSource};
 use craft_ui::dialog::{DialogHost, DialogResult, FullWindowWorkspace as _, HostedWorkspace};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::access::Role;
+use craft_ui::runtime::commands::{self, FireSource};
 use craft_ui::runtime::memory::{SaveKey, saved_value};
 use craft_ui::runtime::pending::Job;
 use craft_ui::testing::{Fixture, pointer, trial};
@@ -152,6 +153,15 @@ impl Rig {
     fn line(&mut self, steps: usize) {
         let through: Vec<Pos2> = (1..=steps).map(|i| self.canvas() + vec2(12.0 * i as f32, 0.0)).collect();
         self.stroke(self.canvas(), &through, NONE);
+    }
+
+    fn set(&self, field: &str, value: serde_json::Value) {
+        let ctx = self.fixture.ctx().clone();
+        self.with(|workspace| workspace.set_json_field(&ctx, &Source, field, value)).expect("the workspace accepts the control field");
+    }
+
+    fn tool(&self) -> String {
+        self.with(|workspace| workspace.json_fields(&Source).unwrap()["tool"].as_str().unwrap().to_owned())
     }
 }
 
@@ -312,4 +322,252 @@ fn expand_and_contract_keys_edit_the_fill_area() {
     assert!(set("expand", serde_json::json!("wide")).is_err(), "text is not an amount");
     let edits = rig.with(|workspace| workspace.session().fill_edits.clone());
     assert_eq!(edits, vec![FillAreaEdit::grow(true, 3.0), FillAreaEdit::grow(false, 2.0)]);
+}
+
+/// A real rail flyout, not a separate fifth slot: both opening gestures share the order and remember the choice.
+#[trial]
+fn the_fill_lasso_flyout_remembers_its_polygonal_tool() {
+    let mut rig = Rig::new(FillSettings::default(), FillLimits::new(10, 1000));
+    let lasso = rig.fixture.by_label("Lasso Tool").expect("the Lasso slot shows");
+    let at = lasso.center();
+    rig.fixture.frame(vec![pointer::moved(at)]);
+    rig.fixture.frame(vec![pointer::secondary(at, true)]);
+    rig.fixture.frame(vec![pointer::secondary(at, false)]);
+    rig.fixture.idle(3);
+    let rows = rig.fixture.by_role(Role::MENU_ITEM_CHECK_BOX);
+    let names: Vec<_> = rows.iter().map(|row| rig.fixture.tree().name_of(row.node)).collect();
+    assert_eq!(names, [Some("Lasso Tool"), Some("Polygonal Lasso Tool")]);
+    rig.fixture.click(&rows[1]).idle(2);
+    assert_eq!(rig.tool(), "polygonalLasso");
+
+    let hand = rig.fixture.by_label("Hand Tool").expect("the Hand slot shows");
+    rig.fixture.click(&hand).idle(2);
+    assert_eq!(rig.tool(), "hand");
+    // Rail clicks select tools without taking keyboard focus. Establish the real keyboard target
+    // after the flyout before testing the workspace's letter shortcut.
+    rig.fixture.access(craft_ui::testing::focus::AccessActionKind::Focus, &hand).idle(2);
+    assert_eq!(craft_ui::testing::access::focused_key(rig.fixture.tree()), hand.node, "the Hand button owns keyboard focus");
+    rig.fixture.key(egui::Key::L, NONE).idle(2);
+    assert_eq!(rig.tool(), "polygonalLasso", "L recalls the selected member of the Lasso slot");
+
+    let polygon = rig.fixture.by_label("Polygonal Lasso Tool").expect("the slot shows its last choice");
+    rig.fixture.press(&polygon).advance(0.7).idle(3);
+    let rows = rig.fixture.by_role(Role::MENU_ITEM_CHECK_BOX);
+    let names: Vec<_> = rows.iter().map(|row| rig.fixture.tree().name_of(row.node)).collect();
+    assert_eq!(names, [Some("Lasso Tool"), Some("Polygonal Lasso Tool")], "holding opens the same ordered flyout");
+    rig.fixture.frame(vec![pointer::moved(rows[0].center())]);
+    rig.fixture.release_at(rows[0].center()).idle(2);
+    assert_eq!(rig.tool(), "lasso");
+    rig.set("tool", serde_json::json!("hand"));
+    rig.fixture.idle(2);
+    let lasso = rig.fixture.by_label("Lasso Tool").expect("the slot keeps the last freehand choice");
+    rig.fixture.click(&lasso).idle(2);
+    assert_eq!(rig.tool(), "lasso");
+
+    // A named command selects that member; only the plain letter recalls the slot's last choice.
+    for source in [FireSource::Automation, FireSource::Menu] {
+        for (command, expected) in [(FillCommands::PolygonalLasso, "polygonalLasso"), (FillCommands::Lasso, "lasso")] {
+            assert!(commands::fire(rig.fixture.ctx(), command, source), "the explicit member command is queued");
+            rig.fixture.frame(Vec::new()).idle(2);
+            assert_eq!(rig.tool(), expected, "an explicit {source:?} command selects its named member");
+            assert!(commands::fire(rig.fixture.ctx(), FillCommands::Hand, source));
+            rig.fixture.frame(Vec::new()).idle(2);
+            assert_eq!(rig.tool(), "hand");
+            let hand = rig.fixture.by_label("Hand Tool").expect("the Hand tool remains available");
+            rig.fixture.access(craft_ui::testing::focus::AccessActionKind::Focus, &hand).idle(2);
+            rig.fixture.key(egui::Key::L, NONE).idle(2);
+            assert_eq!(rig.tool(), expected, "L recalls the last explicitly selected member");
+        }
+    }
+}
+
+/// Clicks survive their releases, close once, and reach the same operation/history path as a freehand lasso.
+#[trial]
+fn polygonal_fill_commits_each_bar_mode_as_one_edit() {
+    for (mode, label, closing) in [
+        (SelectionOperation::New, "New selection", 0),
+        (SelectionOperation::Add, "Add to selection", 1),
+        (SelectionOperation::Subtract, "Subtract from selection", 2),
+        (SelectionOperation::Intersect, "Intersect with selection", 3),
+    ] {
+        let mut rig = Rig::new(FillSettings::default(), FillLimits::new(10, 1000));
+        rig.set("tool", serde_json::json!("polygonalLasso"));
+        rig.fixture.idle(2);
+        assert_eq!(rig.tool(), "polygonalLasso", "the control route reports its selected tool");
+        let choice = rig.fixture.by_label(label).expect("the polygon uses the Lasso's mode buttons");
+        rig.fixture.click(&choice).idle(2);
+        let a = rig.canvas() + vec2(-40.0, -30.0);
+        let b = rig.canvas() + vec2(35.0, -30.0);
+        let c = rig.canvas() + vec2(0.0, 40.0);
+        for at in [a, b, c] {
+            rig.fixture.click_at(at);
+            assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()), "a release does not close the polygon");
+        }
+        assert!(!rig.events().iter().any(|event| matches!(event, FillEvent::FillArea(_))));
+        match closing {
+            0 => {
+                rig.fixture.click_at(a);
+            }
+            1 => {
+                rig.fixture.click_at(c);
+            }
+            2 => {
+                rig.fixture.key(egui::Key::Enter, NONE);
+            }
+            _ => {
+                let d = rig.canvas() + vec2(60.0, 30.0);
+                rig.fixture.click_at(d);
+                rig.fixture.click_at(d);
+            }
+        }
+        rig.fixture.idle(2);
+        assert!(rig.host.borrow().is_open::<Hosted>(), "Enter closes the polygon, not the workspace");
+        let edits: Vec<_> = rig
+            .events()
+            .into_iter()
+            .filter_map(|event| match event {
+                FillEvent::FillArea(edit) => Some(edit),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(edits.len(), 1, "one completed polygon is one fill-area event");
+        let correct_mode = matches!(
+            (&edits[0], mode),
+            (FillAreaEdit::New { .. }, SelectionOperation::New)
+                | (FillAreaEdit::Add { .. }, SelectionOperation::Add)
+                | (FillAreaEdit::Subtract { .. }, SelectionOperation::Subtract)
+                | (FillAreaEdit::Intersect { .. }, SelectionOperation::Intersect)
+        );
+        assert!(correct_mode, "the bar's operation survives every click: {edits:?}");
+        let points = match &edits[0] {
+            FillAreaEdit::New { points, .. }
+            | FillAreaEdit::Add { points, .. }
+            | FillAreaEdit::Subtract { points, .. }
+            | FillAreaEdit::Intersect { points, .. } => points,
+            _ => panic!("the pointer committed a polygon"),
+        };
+        assert_eq!(points.len(), if closing == 3 { 4 } else { 3 }, "only clicked vertices enter the edit");
+        assert!((points[0][1] - points[1][1]).abs() < 1e-6, "the horizontal edge stays horizontal");
+        assert!(points[0][0] < points[2][0] && points[2][0] < points[1][0] && points[2][1] > points[0][1], "the third corner stays below that edge");
+        assert_eq!(rig.with(|workspace| workspace.session().fill_edits.clone()), edits);
+        rig.with(ContentAwareFillWorkspace::undo);
+        assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()), "one undo removes the whole polygon");
+        rig.with(ContentAwareFillWorkspace::redo);
+        assert_eq!(rig.with(|workspace| workspace.session().fill_edits.clone()), edits, "redo restores the same edit");
+    }
+
+    // A double-click on the last vertex closes on its first press. Its continuation must not
+    // leave a new one-point draft that steals the next independent polygon's starting point.
+    let mut rig = Rig::new(FillSettings::default(), FillLimits::new(10, 1000));
+    rig.set("tool", serde_json::json!("polygonalLasso"));
+    rig.fixture.idle(2);
+    let new_selection = rig.fixture.by_label("New selection").expect("the polygon's operation is explicit");
+    rig.fixture.click(&new_selection).idle(2);
+    let a = rig.canvas() + vec2(-40.0, -30.0);
+    let b = rig.canvas() + vec2(35.0, -30.0);
+    let c = rig.canvas() + vec2(0.0, 40.0);
+    for at in [a, b, c] {
+        rig.fixture.click_at(at);
+    }
+    let click_delay = rig.fixture.ctx().options(|options| options.input_options.max_double_click_delay);
+    rig.fixture.advance(click_delay + 1.0);
+    for _ in 0..2 {
+        rig.fixture.frame(vec![pointer::moved(c)]);
+        rig.fixture.frame(vec![pointer::press(c)]);
+        rig.fixture.frame(vec![pointer::release(c)]);
+    }
+    rig.fixture.idle(2);
+    let first = rig.with(|workspace| workspace.session().fill_edits.clone());
+    assert_eq!(first.len(), 1, "the proximity double-click commits only one polygon");
+    let FillAreaEdit::New { points: first_points, .. } = &first[0] else {
+        panic!("the first polygon uses New selection");
+    };
+    assert_eq!(first_points.len(), 3);
+
+    // Start a separate three-corner polygon, at a point one quarter along the old top edge.
+    rig.fixture.advance(click_delay + 1.0);
+    for at in [a + (b - a) * 0.25, a + (b - a) * 0.75, rig.canvas() + vec2(0.0, 10.0)] {
+        rig.fixture.click_at(at);
+    }
+    rig.fixture.key(egui::Key::Enter, NONE).idle(2);
+    let edits = rig.with(|workspace| workspace.session().fill_edits.clone());
+    assert_eq!(edits.len(), 2, "the next independent polygon commits separately");
+    let FillAreaEdit::New { points, .. } = &edits[1] else {
+        panic!("the next polygon keeps New selection");
+    };
+    assert_eq!(points.len(), 3, "no continuation vertex leaks into the next polygon");
+    let expected_start = [first_points[0][0] * 0.75 + first_points[1][0] * 0.25, first_points[0][1]];
+    assert!(
+        (points[0][0] - expected_start[0]).abs() < 1e-3 && (points[0][1] - expected_start[1]).abs() < 1e-3,
+        "the next polygon starts at the new click, not at the old closing vertex"
+    );
+}
+
+#[trial]
+fn polygonal_fill_retracts_and_cancels_without_committing_a_partial_edit() {
+    let mut rig = Rig::new(FillSettings::default(), FillLimits::new(10, 1000));
+    rig.set("tool", serde_json::json!("polygonalLasso"));
+    rig.fixture.idle(2);
+    let a = rig.canvas() + vec2(-40.0, -30.0);
+    let b = rig.canvas() + vec2(35.0, -30.0);
+    let c = rig.canvas() + vec2(0.0, 40.0);
+    for retract in 0..3 {
+        for at in [a, b, c] {
+            rig.fixture.click_at(at);
+        }
+        match retract {
+            0 => {
+                rig.fixture.key(egui::Key::Backspace, NONE);
+            }
+            1 => {
+                rig.fixture.key(egui::Key::Delete, NONE);
+            }
+            _ => {
+                rig.fixture.frame(vec![pointer::secondary(c, true)]);
+                rig.fixture.frame(vec![pointer::secondary(c, false)]);
+                assert!(rig.fixture.by_role(Role::MENU).is_empty(), "the secondary click retracts, rather than opening a menu");
+            }
+        }
+        rig.fixture.key(egui::Key::Enter, NONE);
+        assert!(rig.host.borrow().is_open::<Hosted>());
+        assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()), "each retract leaves only two vertices, which cannot commit");
+    }
+
+    for at in [a, b, c] {
+        rig.fixture.click_at(at);
+    }
+    rig.fixture.key(egui::Key::Escape, NONE);
+    assert!(rig.host.borrow().is_open::<Hosted>(), "Escape drops the outline before it can close the workspace");
+    assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()));
+    for at in [a, b, c] {
+        rig.fixture.click_at(at);
+    }
+    rig.fixture.key(egui::Key::H, NONE).idle(2);
+    assert_eq!(rig.tool(), "hand", "tool letters still work between polygon clicks");
+    assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()));
+    rig.set("tool", serde_json::json!("polygonalLasso"));
+    rig.fixture.idle(2);
+    for at in [a, b, c] {
+        rig.fixture.click_at(at);
+    }
+    rig.set("tool", serde_json::json!("lasso"));
+    rig.fixture.idle(2);
+    assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()), "a tool switch drops the unfinished polygon");
+    let through = [b, c, a];
+    rig.stroke(a, &through, NONE);
+    assert_eq!(rig.with(|workspace| workspace.session().fill_edits.len()), 1, "freehand still closes on release");
+}
+
+#[trial]
+fn polygonal_fill_uses_the_existing_edit_limits() {
+    let mut rig = Rig::new(FillSettings::default(), FillLimits::new(10, 2));
+    rig.set("tool", serde_json::json!("polygonalLasso"));
+    rig.fixture.idle(2);
+    for delta in [vec2(-40.0, -30.0), vec2(35.0, -30.0), vec2(0.0, 40.0)] {
+        let at = rig.canvas() + delta;
+        rig.fixture.click_at(at);
+    }
+    rig.fixture.key(egui::Key::Enter, NONE);
+    assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()));
+    assert!(rig.events().iter().any(|event| matches!(event, FillEvent::Refused(FillLimit::Vertices(2)))), "the existing refusal reaches the host");
 }

@@ -5,7 +5,7 @@ use craft_behavior::geometry::selection_op::SelectionOperation;
 use craft_behavior::kurbo::Point;
 use craft_behavior::{CancelReason, Cursor, CursorIcon, PaintedCursor, PointerButton};
 use craft_keymap::Mods;
-use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
+use craft_ui::canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::canvas_controls::CanvasControlWords;
 use craft_ui::canvas_controls::brush::{BrushCursor, BrushCursorOptions, BrushDimensions, BrushResize, BrushResizeOptions, BrushTip, PaintingCursor};
 use craft_ui::primitives::Draw;
@@ -17,7 +17,7 @@ use super::lasso::FillAreaEdit;
 use super::session::{FillLimit, FillLimits, FillSession, FillStrokeEvent, SamplingStroke};
 use crate::ui::select_mask::EditMode;
 
-/// The tools of Content-Aware Fill's strip: Sampling Brush (B), Lasso (L), Hand (H), Zoom (Z).
+/// The tools of Content-Aware Fill's strip: Sampling Brush (B), Lasso and Polygonal Lasso (L), Hand (H), Zoom (Z).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub enum FillTool {
@@ -26,6 +26,8 @@ pub enum FillTool {
     SamplingBrush,
     /// The Lasso.
     Lasso,
+    /// The Polygonal Lasso.
+    PolygonalLasso,
     /// The Hand.
     Hand,
     /// The Zoom.
@@ -33,19 +35,18 @@ pub enum FillTool {
 }
 
 impl FillTool {
-    /// The four tools, in strip order.
-    pub const ALL: [FillTool; 4] = [FillTool::SamplingBrush, FillTool::Lasso, FillTool::Hand, FillTool::Zoom];
+    /// The tools, in strip and flyout order.
+    pub const ALL: [FillTool; 5] = [FillTool::SamplingBrush, FillTool::Lasso, FillTool::PolygonalLasso, FillTool::Hand, FillTool::Zoom];
 
-    /// One slot per tool, a group ending after the Lasso; each tool's label, icon and letter are its command's.
+    /// Four slots; the Lasso slot lists Lasso then Polygonal Lasso. Labels, icons and letters come from the commands.
     pub fn slots() -> Vec<ToolSlot<FillTool>> {
-        // pc: crates/ui-egui/src/dialogs/caf_ui/controls.rs:180 `tool_icon`, :189 `tool_tip`.
-        (0_u32..)
-            .zip(Self::ALL)
-            .map(|(id, tool)| {
-                let entry = RailTool::new(tool, FillCommands::of(tool));
-                if tool == FillTool::Lasso { ToolSlot::ending_group(id, vec![entry]) } else { ToolSlot::new(id, vec![entry]) }
-            })
-            .collect()
+        let entry = |tool| RailTool::new(tool, FillCommands::of(tool));
+        vec![
+            ToolSlot::new(0, vec![entry(FillTool::SamplingBrush)]),
+            ToolSlot::ending_group(1, vec![entry(FillTool::Lasso), entry(FillTool::PolygonalLasso)]),
+            ToolSlot::new(2, vec![entry(FillTool::Hand)]),
+            ToolSlot::new(3, vec![entry(FillTool::Zoom)]),
+        ]
     }
 }
 
@@ -141,6 +142,26 @@ impl FillCanvas {
         self.lasso.as_ref().map(|(draft, _)| draft.points()).filter(|points| points.len() >= 2)
     }
 
+    /// The Polygonal Lasso's next segment while it waits for another click.
+    pub fn lasso_rubber_band(&self) -> Option<[Point; 2]> {
+        self.lasso.as_ref().and_then(|(draft, _)| draft.rubber_band())
+    }
+
+    /// Keeps a click-built outline between presses and reports only its completed polygon.
+    fn lasso_event(&mut self, event: Option<DraftEvent>) {
+        match event {
+            Some(DraftEvent::Closed { points, .. }) => {
+                if let Some((_, operation)) = self.lasso.take()
+                    && let Some(edit) = FillAreaEdit::lasso(operation, points.into_iter().map(|p| [p.x, p.y]).collect())
+                {
+                    self.events.push(FillEvent::FillArea(edit));
+                }
+            }
+            Some(DraftEvent::Cancelled) => self.lasso = None,
+            _ => {}
+        }
+    }
+
     /// The brush resize in progress, for the outline preview.
     pub fn resize(&self) -> &BrushResize {
         &self.resize
@@ -172,6 +193,9 @@ impl FillCanvas {
 ///   Shift (Add), Alt (Subtract), Shift+Alt (Intersect) at the press; the release reports
 ///   [`FillEvent::FillArea`] with [`FillAreaEdit::lasso`](super::FillAreaEdit::lasso) when it has
 ///   3 points or more.
+/// - **Polygonal Lasso**: the same operation and edit, drawn by `DraftKind::Polygonal`. Clicks add vertices;
+///   a click near the start or last point, a double-click or Enter closes. Backspace, Delete and secondary click
+///   retract; Escape cancels. The draft supplies the main Polygonal Lasso's modifier and close rules.
 /// - **Brush resize**: Alt + right-drag or Control + Alt + drag, size only, `max_diameter` 5000.
 /// - The lasso path and the resize preview are canvas controls the workspace shows from the state
 ///   ([`FillCanvas::lasso_points`], [`FillCanvas::resize`]), since a tool paints no styled colours.
@@ -241,7 +265,7 @@ impl CanvasTool for FillCanvasTool<'_> {
                 let tip = BrushTip::round(size, size / 2.0);
                 BrushCursor::new(&tip).painting(self.canvas.stroke.is_some()).cursor(cx, self.cursor, &space.view)
             }
-            FillTool::Lasso => Cursor::Painted(PaintedCursor::Crosshair),
+            FillTool::Lasso | FillTool::PolygonalLasso => Cursor::Painted(PaintedCursor::Crosshair),
             FillTool::Hand | FillTool::Zoom => Cursor::System(CursorIcon::Default),
         }
     }
@@ -250,6 +274,7 @@ impl CanvasTool for FillCanvasTool<'_> {
         // The brush takes the resize chord's buttons (`BrushResize::takes`); the lasso only the primary button.
         match self.tool {
             FillTool::SamplingBrush => BrushResize::takes(button, mods),
+            FillTool::PolygonalLasso => button == PointerButton::Primary || (button == PointerButton::Secondary && self.canvas.lasso.is_some()),
             _ => button == PointerButton::Primary,
         }
     }
@@ -279,24 +304,48 @@ impl CanvasTool for FillCanvasTool<'_> {
                 cx.request_repaint();
                 ToolAction::Claimed
             }
-            FillTool::Lasso => {
+            FillTool::Lasso | FillTool::PolygonalLasso => {
+                if pointer.button == PointerButton::Secondary {
+                    if self.tool != FillTool::PolygonalLasso {
+                        return ToolAction::Ignored;
+                    }
+                    let event = self.canvas.lasso.as_mut().and_then(|(draft, _)| draft.retract());
+                    self.canvas.lasso_event(event);
+                    cx.request_repaint();
+                    return ToolAction::Done;
+                }
                 if pointer.button != PointerButton::Primary {
                     return ToolAction::Ignored;
                 }
+                // A proximity close may have consumed the first press of a double-click.
+                // Its continuation must not start another polygon after that draft was removed.
+                if self.tool == FillTool::PolygonalLasso && self.canvas.lasso.is_none() && pointer.clicks >= 2 {
+                    return ToolAction::Done;
+                }
                 let reach = f64::from(cx.slop);
-                let mut draft = OutlineDraft::new(DraftKind::Freehand, DraftReach::new(reach, reach));
+                let kind = if self.tool == FillTool::PolygonalLasso { DraftKind::Polygonal } else { DraftKind::Freehand };
+                let (draft, operation) =
+                    self.canvas.lasso.get_or_insert_with(|| (OutlineDraft::new(kind, DraftReach::new(reach, reach)), self.options.lasso));
+                draft.set_reach(DraftReach::new(reach, reach));
                 let doc = space.view.to_doc(pointer.pos);
                 // The fill area always has something to combine with: Shift adds, Alt subtracts,
                 // both intersect, else the bar's operation.
-                match draft.press(DraftPoint::new(doc, pointer.mods, space.view.zoom), true) {
-                    Some(DraftEvent::Started { intent, .. }) => {
-                        let operation = SelectionOperation::resolve(self.options.lasso, intent, true);
-                        self.canvas.lasso = Some((draft, operation));
-                        cx.request_repaint();
-                        ToolAction::Claimed
-                    }
-                    _ => ToolAction::Ignored,
+                let event = if kind == DraftKind::Polygonal && draft.is_open() && pointer.clicks >= 2 {
+                    draft.close()
+                } else {
+                    draft.press(DraftPoint::new(doc, pointer.mods, space.view.zoom), true)
+                };
+                let handled = event.is_some() || draft.is_open();
+                if let Some(DraftEvent::Started { intent, .. }) = &event {
+                    *operation = SelectionOperation::resolve(self.options.lasso, *intent, true);
                 }
+                if !handled {
+                    self.canvas.lasso = None;
+                    return ToolAction::Ignored;
+                }
+                self.canvas.lasso_event(event);
+                cx.request_repaint();
+                ToolAction::Claimed
             }
             FillTool::Hand | FillTool::Zoom => ToolAction::Ignored,
         }
@@ -333,12 +382,29 @@ impl CanvasTool for FillCanvasTool<'_> {
             }
             return;
         }
-        let Some((mut draft, operation)) = self.canvas.lasso.take() else { return };
-        if let Some(DraftEvent::Closed { points, .. }) = draft.release(DraftPoint::new(doc, pointer.mods, space.view.zoom)) {
-            let points = points.iter().map(|p| [p.x, p.y]).collect();
-            if let Some(edit) = FillAreaEdit::lasso(operation, points) {
-                self.canvas.events.push(FillEvent::FillArea(edit));
-            }
+        let event = self.canvas.lasso.as_mut().and_then(|(draft, _)| draft.release(DraftPoint::new(doc, pointer.mods, space.view.zoom)));
+        self.canvas.lasso_event(event);
+    }
+
+    fn hover(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        let Some(space) = cx.space() else { return };
+        if let Some((draft, _)) = self.canvas.lasso.as_mut()
+            && draft.hover(DraftPoint::new(space.view.to_doc(pointer.pos), pointer.mods, space.view.zoom)).is_some()
+        {
+            cx.request_repaint();
+        }
+    }
+
+    fn autoscrolls_on_hover(&self) -> bool {
+        self.tool == FillTool::PolygonalLasso && self.canvas.lasso.is_some()
+    }
+
+    fn claims(&self) -> ToolClaims {
+        if self.canvas.lasso.as_ref().is_some_and(|(draft, _)| draft.takes_retract()) {
+            // Keep the workspace's tool letters and history chords available between clicks.
+            ToolClaims::NONE.deletes()
+        } else {
+            ToolClaims::NONE
         }
     }
 
@@ -347,14 +413,25 @@ impl CanvasTool for FillCanvasTool<'_> {
         self.canvas.abandon(reason);
     }
 
-    fn key(&mut self, key: &ToolKey, _cx: &mut ToolContext<'_>) -> bool {
+    fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
         // Esc cancels a stroke or lasso in progress (the host does it first during a gesture; this
         // covers a key that arrives with one still open).
         if *key == ToolKey::Cancel && self.canvas.busy() {
             self.canvas.abandon(CancelReason::Escape);
             return true;
         }
-        false
+        let Some((draft, _)) = self.canvas.lasso.as_mut() else { return false };
+        if !draft.takes_retract() || cx.mods.cmd || cx.mods.ctrl {
+            return false;
+        }
+        let event = match key {
+            ToolKey::Submit => draft.close(),
+            ToolKey::Delete { .. } => draft.retract(),
+            _ => return false,
+        };
+        self.canvas.lasso_event(event);
+        cx.request_repaint();
+        true
     }
 
     fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
@@ -363,6 +440,7 @@ impl CanvasTool for FillCanvasTool<'_> {
         match self.tool {
             FillTool::SamplingBrush => ToolPath::Freehand("none; a sampling brush stroke follows the pointer"),
             FillTool::Lasso => ToolPath::Freehand("none; a lasso stroke follows the pointer"),
+            FillTool::PolygonalLasso => ToolPath::Command("the fill workspace's lasso action with polygon points"),
             FillTool::Hand => ToolPath::Command("the scroll keys and the scroll bars"),
             FillTool::Zoom => ToolPath::Command("the Zoom In, Zoom Out and Fit commands"),
         }

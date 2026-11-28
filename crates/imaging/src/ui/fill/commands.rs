@@ -8,7 +8,7 @@ use super::tool::FillTool;
 /// scope is the workspace's dialog, so the letters work while focus is anywhere inside it and not in a text field.
 /// The zoom chords are the dialog's own view commands.
 ///
-/// Each tool has its own slot in the strip, so a tool's letter picks that tool.
+/// Lasso and Polygonal Lasso share a slot: L recalls the slot's last-used tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, CommandSet)]
 #[command(prefix = "fill", scope = "fill")]
 #[non_exhaustive]
@@ -17,8 +17,11 @@ pub enum FillCommands {
     #[command(modal = "in_dialogs", label = "Sampling Brush Tool", icon = "brush", kind = "tool", default = "B")]
     SamplingBrush,
     /// Lasso.
-    #[command(modal = "in_dialogs", label = "Lasso Tool", icon = "lasso", kind = "tool", default = "L")]
+    #[command(modal = "in_dialogs", label = "Lasso Tool", icon = "lasso", kind = "tool", group = "l", default = "L")]
     Lasso,
+    /// Polygonal Lasso.
+    #[command(modal = "in_dialogs", label = "Polygonal Lasso Tool", icon = "pentagon", kind = "tool", group = "l", default = "L")]
+    PolygonalLasso,
     /// Hand.
     #[command(modal = "in_dialogs", label = "Hand Tool", icon = "hand", kind = "tool", default = "H")]
     Hand,
@@ -42,6 +45,7 @@ impl FillCommands {
         match tool {
             FillTool::SamplingBrush => FillCommands::SamplingBrush,
             FillTool::Lasso => FillCommands::Lasso,
+            FillTool::PolygonalLasso => FillCommands::PolygonalLasso,
             FillTool::Hand => FillCommands::Hand,
             FillTool::Zoom => FillCommands::Zoom,
         }
@@ -52,6 +56,7 @@ impl FillCommands {
         match self {
             FillCommands::SamplingBrush => Some(FillTool::SamplingBrush),
             FillCommands::Lasso => Some(FillTool::Lasso),
+            FillCommands::PolygonalLasso => Some(FillTool::PolygonalLasso),
             FillCommands::Hand => Some(FillTool::Hand),
             FillCommands::Zoom => Some(FillTool::Zoom),
             _ => None,

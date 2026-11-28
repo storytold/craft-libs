@@ -42,7 +42,7 @@ impl Outcome for FillBarOutput {
 /// The options bar across the top, per tool:
 ///
 /// - **Sampling Brush**: Add and Subtract (a segmented choice of icons) and Size (px, 1..=5000).
-/// - **Lasso**: the four selection operations (New, Add, Subtract, Intersect), Expand and Contract with
+/// - **Lasso**, **Polygonal Lasso**: the four selection operations (New, Add, Subtract, Intersect), Expand and Contract with
 ///   their amount (px, 1..=100) and a Reset icon button for the fill area.
 /// - **Hand**, **Zoom**: no options.
 #[derive(Pattern)]
@@ -80,7 +80,7 @@ impl<'a> FillBar<'a> {
                     options.brush_size = size;
                 }
             }
-            FillTool::Lasso => {
+            FillTool::Lasso | FillTool::PolygonalLasso => {
                 let operations = selection_operations(&env.words::<SelectionOpWords>());
                 let picked = Segmented::new(words.options.clone(), Bind::given(options.lasso), &operations).show(ui).value().copied();
                 if let Some(operation) = picked {

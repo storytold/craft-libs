@@ -2,7 +2,7 @@
 //!
 //! [`ContentAwareFillWorkspace`] is a [`FullWindowDialog`] with the title strip "Content-Aware Fill
 //! (layer, 66%)", the full-width options bar ([`FillBar`]), the tool strip (Sampling Brush, Lasso,
-//! Hand, Zoom), the canvas with the sampling tint ([`FillOverlay`]) and the fill area's ants, and
+//! Polygonal Lasso in the Lasso flyout, Hand, Zoom), the canvas with the sampling tint ([`FillOverlay`]) and the fill area's ants, and
 //! two side columns from the end edge inwards: the Content-Aware Fill panel ([`FillPanel`]) with the
 //! footer (Reset; OK, Apply, Cancel), and the Preview panel ([`FillPreviewPane`]).
 //!
@@ -71,7 +71,7 @@ use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::{FormDialogWords, ParamDialogWords};
 use craft_ui::primitives::{Checker, IconSpec};
 use craft_ui::rails::{LastUsed, RailTool, ToolRail, ToolSlot};
-use craft_ui::runtime::commands::{CommandSet as _, Commands as _, FirePhase};
+use craft_ui::runtime::commands::{CommandSet as _, Commands as _, FirePhase, FireSource};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
 use craft_ui::runtime::pending::{Job, Pending};
@@ -627,7 +627,12 @@ impl ContentAwareFillWorkspace {
                     let slot = self.slots.iter().find(|slot| slot.tools.iter().any(|entry| entry.id == tool));
                     let tools: Vec<&RailTool<FillTool>> = slot.into_iter().flat_map(|slot| slot.tools.iter()).collect();
                     let picked = slot.and_then(|slot| {
-                        tool_pick(&tools, slot.id, &self.tool, &self.last_used, PickStep::of(&fired), |_| true).map(|entry| (slot.id, entry.id))
+                        if fired.source == FireSource::Key {
+                            tool_pick(&tools, slot.id, &self.tool, &self.last_used, PickStep::of(&fired), |_| true).map(|entry| (slot.id, entry.id))
+                        } else {
+                            // Named commands select their member; only shortcuts recall or cycle the slot.
+                            Some((slot.id, tool))
+                        }
                     });
                     if let Some((slot_id, tool)) = picked {
                         self.pick(Some(&ctx), tool);
@@ -679,7 +684,10 @@ impl ContentAwareFillWorkspace {
             .filter(|_| self.settings.show_overlay && !self.tint_hidden)
             .map(|plane| FillOverlay::new(plane, source.fill_area(), image.size()).excluded(self.settings.excluded));
         let ants = source.fill_area().map(|plane| self.ants_of(plane));
-        let lasso: Option<Vec<Point>> = self.canvas.lasso_points().map(<[Point]>::to_vec);
+        let mut lasso: Option<Vec<Point>> = self.canvas.lasso_points().map(<[Point]>::to_vec);
+        if let Some([from, to]) = self.canvas.lasso_rubber_band() {
+            lasso.get_or_insert_with(|| vec![from]).push(to);
+        }
         let falloff = self.canvas.resize().dimensions().map(|dimensions| TipFalloff::hard(dimensions.diameter / 2.0));
         let resize = falloff.as_ref().and_then(|falloff| self.canvas.resize().preview(falloff));
         let fill_area_name = words.fill_area.clone();
@@ -704,7 +712,7 @@ impl ContentAwareFillWorkspace {
         let shown = match self.tool {
             FillTool::Hand => canvas.tool(&mut self.hand).show(ui),
             FillTool::Zoom => canvas.tool(&mut self.zoom).show(ui),
-            FillTool::SamplingBrush | FillTool::Lasso => {
+            FillTool::SamplingBrush | FillTool::Lasso | FillTool::PolygonalLasso => {
                 let mut tool = self.canvas.tool(self.tool, &mut self.options, &self.session, &self.limits, &self.cursor_options);
                 canvas.tool(&mut tool).show(ui)
             }
@@ -834,6 +842,9 @@ impl ContentAwareFillWorkspace {
             self.cancel_gesture(ctx, CancelReason::Removed);
             self.tool = tool;
         }
+        if let Some(slot) = self.slots.iter().find(|slot| slot.tools.iter().any(|entry| entry.id == tool)) {
+            self.last_used.set(slot.id, tool);
+        }
     }
 
     /// Cancels the gesture the current tool holds (a stroke, a lasso or a resize, or the Hand's or Zoom's drag)
@@ -844,7 +855,7 @@ impl ContentAwareFillWorkspace {
             match self.tool {
                 FillTool::Hand => ToolHost::new().cancel(ctx, id, &mut self.hand, reason),
                 FillTool::Zoom => ToolHost::new().cancel(ctx, id, &mut self.zoom, reason),
-                FillTool::SamplingBrush | FillTool::Lasso => {
+                FillTool::SamplingBrush | FillTool::Lasso | FillTool::PolygonalLasso => {
                     let mut tool = self.canvas.tool(self.tool, &mut self.options, &self.session, &self.limits, &self.cursor_options);
                     ToolHost::new().cancel(ctx, id, &mut tool, reason)
                 }
@@ -858,8 +869,13 @@ impl ContentAwareFillWorkspace {
 }
 
 /// The names the automation surface gives the tools.
-const TOOL_KEYS: [(&str, FillTool); 4] =
-    [("samplingBrush", FillTool::SamplingBrush), ("lasso", FillTool::Lasso), ("hand", FillTool::Hand), ("zoom", FillTool::Zoom)];
+const TOOL_KEYS: [(&str, FillTool); 5] = [
+    ("samplingBrush", FillTool::SamplingBrush),
+    ("lasso", FillTool::Lasso),
+    ("polygonalLasso", FillTool::PolygonalLasso),
+    ("hand", FillTool::Hand),
+    ("zoom", FillTool::Zoom),
+];
 
 /// The names the automation surface gives the lasso's operations.
 const LASSO_KEYS: [(&str, SelectionOperation); 4] = [
