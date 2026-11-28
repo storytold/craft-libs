@@ -243,11 +243,38 @@ pub use craft_dds::{DdsCompression, DdsOptions};
 /// the first one no longer than this ([`EncodeOptions::tiff_pyramid`]).
 pub const TIFF_PYRAMID_MIN: u32 = 64;
 
+/// The JPEG quantisation tables a caller wants written, each in the natural (row) order the
+/// Annex-K tables in `source_settings` are printed in: entry `y * 8 + x` is the coefficient in row
+/// `y`, column `x`. The writer lays them out in the zig-zag order T.81 asks for inside the DQT
+/// segment, and `source_settings`' reader hands them back in this same natural order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JpegQuantisationTables {
+    /// The luma table (DQT id 0).
+    pub luma: [u8; 64],
+    /// The chroma table (DQT id 1); a gray image uses only the luma table, and the writer still
+    /// emits an id-1 chroma DQT that nothing in the file refers to.
+    pub chroma: [u8; 64],
+}
+
+impl JpegQuantisationTables {
+    /// The two tables with every entry at least 1: a 0 would leave a coefficient unrecoverable, and
+    /// 255 is the most an 8-bit DQT entry holds, which a `u8` cannot pass.
+    #[must_use]
+    pub fn new(luma: [u8; 64], chroma: [u8; 64]) -> Self {
+        JpegQuantisationTables { luma: luma.map(|v| v.max(1)), chroma: chroma.map(|v| v.max(1)) }
+    }
+}
+
 /// Options for [`crate::encode`].
 #[derive(Debug, Clone)]
 pub struct EncodeOptions {
     /// JPEG quality 1..=100 (also AVIF quality when enabled).
     pub jpeg_quality: u8,
+    /// The JPEG quantisation tables to write, in place of the ones the writer scales from
+    /// [`Self::jpeg_quality`]. `None`, which every caller used before this option existed, keeps
+    /// the quality-scaled Annex-K / mozjpeg tables; what the quality still decides is the entropy
+    /// tables the writer picks.
+    pub jpeg_quantisation_tables: Option<JpegQuantisationTables>,
     /// JPEG 4:2:0 chroma subsampling (`false` = 4:4:4).
     pub jpeg_chroma_subsampling: bool,
     /// JPEG scan layout (baseline, baseline optimized or progressive).
@@ -293,6 +320,7 @@ impl Default for EncodeOptions {
     fn default() -> Self {
         EncodeOptions {
             jpeg_quality: 90,
+            jpeg_quantisation_tables: None,
             jpeg_chroma_subsampling: true,
             jpeg_format: JpegFormat::Baseline,
             jpeg_progressive_scans: None,

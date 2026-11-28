@@ -681,6 +681,14 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     };
     let mut out = Vec::new();
     let mut enc = jpeg_encoder::Encoder::new(&mut out, opts.jpeg_quality.clamp(1, 100));
+    // A caller that names its own tables gets exactly those in the DQT: the writer takes them
+    // verbatim in natural order, with no quality scaling applied to them.
+    if let Some(tables) = opts.jpeg_quantisation_tables {
+        enc.set_quantization_tables(
+            jpeg_encoder::QuantizationTableType::Custom(Box::new(tables.luma.map(u16::from))),
+            jpeg_encoder::QuantizationTableType::Custom(Box::new(tables.chroma.map(u16::from))),
+        );
+    }
     // CMYK is always written 4:4:4: subsampled 4-component JPEGs are not
     // decoded consistently across implementations.
     let subsampled = opts.jpeg_chroma_subsampling && img.layout() == ChannelLayout::Rgb;
@@ -855,6 +863,7 @@ fn remove_element(xmp: &str, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::options::JpegQuantisationTables;
     use crate::{Format, Metadata};
 
     /// Build a little-endian TIFF with an empty IFD0 for metadata tests.
@@ -1298,6 +1307,59 @@ mod tests {
     }
 
     // --- Arithmetic-coded and 12-bit files, decoded by craft-jpeg ---
+
+    /// A caller that names the quantisation tables gets exactly those in the DQT, in natural order
+    /// and as 8-bit entries, and the file still decodes.
+    #[test]
+    fn named_quantisation_tables_are_written_verbatim() {
+        let mut luma = [7u8; 64];
+        luma[..8].copy_from_slice(&[2, 2, 2, 2, 3, 4, 5, 6]);
+        let mut chroma = [9u8; 64];
+        chroma[..8].copy_from_slice(&[3, 3, 5, 9, 13, 15, 15, 15]);
+        let pixels = vec![96u8; 8 * 8 * 3];
+        let img = Image::from_raw(8, 8, ChannelLayout::Rgb, SampleType::U8, pixels.clone()).unwrap();
+        let opts = EncodeOptions {
+            jpeg_quantisation_tables: Some(JpegQuantisationTables::new(luma, chroma)),
+            jpeg_chroma_subsampling: false,
+            jpeg_format: JpegFormat::Progressive,
+            ..Default::default()
+        };
+        let bytes = crate::encode(&img, Format::Jpeg, &opts).unwrap();
+        let tables = crate::source_settings::jpeg_tables(&bytes);
+        let written_luma = tables[0].expect("a luma table");
+        let written_chroma = tables[1].expect("a chroma table");
+        assert!(!written_luma.wide && !written_chroma.wide, "8-bit DQT entries");
+        assert_eq!(written_luma.values, luma.map(u16::from), "the luma table as the caller named it");
+        assert_eq!(written_chroma.values, chroma.map(u16::from), "the chroma table as the caller named it");
+        let back = crate::decode_as(Format::Jpeg, &bytes).unwrap();
+        assert_eq!(back.dimensions(), (8, 8), "and the named tables still encode");
+    }
+
+    /// Without named tables the writer scales the Annex-K / mozjpeg tables by quality, exactly as
+    /// a bare `jpeg_encoder` write at that quality does.
+    #[test]
+    fn an_unnamed_table_set_keeps_the_quality_scaled_tables() {
+        let pixels = vec![96u8; 8 * 8 * 3];
+        let img = Image::from_raw(8, 8, ChannelLayout::Rgb, SampleType::U8, pixels.clone()).unwrap();
+        let ours =
+            crate::encode(&img, Format::Jpeg, &EncodeOptions { jpeg_quality: 75, jpeg_chroma_subsampling: false, ..Default::default() }).unwrap();
+        let mut plain = Vec::new();
+        let mut enc = jpeg_encoder::Encoder::new(&mut plain, 75);
+        enc.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_4_4);
+        enc.encode(&pixels, 8, 8, jpeg_encoder::ColorType::Rgb).unwrap();
+        let mine = crate::source_settings::jpeg_tables(&ours);
+        let theirs = crate::source_settings::jpeg_tables(&plain);
+        assert_eq!(mine[0].expect("our luma").values, theirs[0].expect("the writer's luma").values, "quality alone still writes its luma table");
+        assert_eq!(mine[1].expect("our chroma").values, theirs[1].expect("the writer's chroma").values, "... and its chroma table");
+    }
+
+    /// A named table cannot hold a 0 entry: it would leave that coefficient unrecoverable.
+    #[test]
+    fn a_named_table_raises_a_zero_entry_to_one() {
+        let tables = JpegQuantisationTables::new([0u8; 64], [255u8; 64]);
+        assert!(tables.luma.iter().all(|&v| v == 1), "every luma entry at 1");
+        assert!(tables.chroma.iter().all(|&v| v == 255), "255, the most an 8-bit entry holds, stays");
+    }
 
     fn segment(out: &mut Vec<u8>, marker: u8, body: &[u8]) {
         out.extend_from_slice(&[0xFF, marker]);
