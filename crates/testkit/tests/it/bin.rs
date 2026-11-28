@@ -102,13 +102,13 @@ fn hyphenated_name_reads_each_variable_in_order() {
         None
     })
     .unwrap_err();
-    assert_eq!(read, ["NEXTEST_BIN_EXE_my_program", "NEXTEST_BIN_EXE_my-program", "CARGO_BIN_EXE_my-program"]);
+    assert_eq!(read, ["NEXTEST_BIN_EXE_my-program", "CARGO_BIN_EXE_my-program", "NEXTEST_BIN_EXE_my_program"]);
     assert_eq!(
         candidates(error),
         [
-            (Source::NextestUnderscore, "NEXTEST_BIN_EXE_my_program".to_owned(), Rejection::NotSet),
             (Source::NextestExact, "NEXTEST_BIN_EXE_my-program".to_owned(), Rejection::NotSet),
             (Source::CargoRuntime, "CARGO_BIN_EXE_my-program".to_owned(), Rejection::NotSet),
+            (Source::NextestUnderscore, "NEXTEST_BIN_EXE_my_program".to_owned(), Rejection::NotSet),
             (Source::CargoCompileTime, "CARGO_BIN_EXE_my-program".to_owned(), Rejection::NotSet),
         ]
     );
@@ -125,8 +125,8 @@ fn name_without_hyphen_reads_the_nextest_variable_once() {
 }
 
 #[test]
-fn nextest_underscore_precedes_hyphen() {
-    let dir = scratch("nextest_underscore_precedes_hyphen");
+fn nextest_exact_name_precedes_underscore() {
+    let dir = scratch("nextest_exact_name_precedes_underscore");
     let underscore = file(&dir, "underscore").into_os_string();
     let hyphen = file(&dir, "hyphen").into_os_string();
     let runtime = file(&dir, "runtime").into_os_string();
@@ -136,7 +136,37 @@ fn nextest_underscore_precedes_hyphen() {
         lookup(&[("NEXTEST_BIN_EXE_my_program", &underscore), ("NEXTEST_BIN_EXE_my-program", &hyphen), ("CARGO_BIN_EXE_my-program", &runtime)]),
     )
     .unwrap();
-    assert_eq!(found.into_os_string(), underscore);
+    assert_eq!(found.into_os_string(), hyphen);
+}
+
+#[test]
+fn runtime_cargo_precedes_nextest_underscore() {
+    let dir = scratch("runtime_cargo_precedes_nextest_underscore");
+    let underscore = file(&dir, "underscore").into_os_string();
+    let runtime = file(&dir, "runtime").into_os_string();
+    let found = resolve_binary_in("my-program", None, lookup(&[("NEXTEST_BIN_EXE_my_program", &underscore), ("CARGO_BIN_EXE_my-program", &runtime)]))
+        .unwrap();
+    assert_eq!(found.into_os_string(), runtime);
+}
+
+#[test]
+fn hyphen_and_underscore_binaries_resolve_to_their_own_files() {
+    // A package with both `cli-tool` and `cli_tool`: the underscore variable names `cli_tool`.
+    let dir = scratch("hyphen_and_underscore_binaries_resolve_to_their_own_files");
+    let hyphen = file(&dir, "cli-tool").into_os_string();
+    let underscore = file(&dir, "cli_tool").into_os_string();
+    let vars = [
+        ("NEXTEST_BIN_EXE_cli-tool", &hyphen),
+        ("NEXTEST_BIN_EXE_cli_tool", &underscore),
+        ("CARGO_BIN_EXE_cli-tool", &hyphen),
+        ("CARGO_BIN_EXE_cli_tool", &underscore),
+    ];
+    assert_eq!(resolve_binary_in("cli-tool", None, lookup(&vars)).unwrap().into_os_string(), hyphen);
+    assert_eq!(resolve_binary_in("cli_tool", None, lookup(&vars)).unwrap().into_os_string(), underscore);
+    // Cargo alone sets only the exact names.
+    let cargo = [("CARGO_BIN_EXE_cli-tool", &hyphen), ("CARGO_BIN_EXE_cli_tool", &underscore)];
+    assert_eq!(resolve_binary_in("cli-tool", None, lookup(&cargo)).unwrap().into_os_string(), hyphen);
+    assert_eq!(resolve_binary_in("cli_tool", None, lookup(&cargo)).unwrap().into_os_string(), underscore);
 }
 
 #[test]
@@ -221,7 +251,7 @@ fn all_candidates_invalid_names_reasons() {
     let message = error.to_string();
     assert_eq!(
         candidates(error).into_iter().map(|(_, _, rejection)| rejection).collect::<Vec<_>>(),
-        [Rejection::Empty, Rejection::Relative, Rejection::NotAFile, Rejection::Missing]
+        [Rejection::Relative, Rejection::NotAFile, Rejection::Empty, Rejection::Missing]
     );
     for part in ["set to an empty value", "target/debug/my-program (a relative path)", "(not a regular file)", "(does not exist)"] {
         assert!(message.contains(part), "{part} missing from: {message}");
@@ -259,7 +289,7 @@ fn bare_path_is_not_given_an_exe_suffix() {
     let dir = scratch("bare_path_is_not_given_an_exe_suffix");
     file(&dir, "my-program.exe");
     let bare = dir.join("my-program").into_os_string();
-    let error = resolve_binary_in("my-program", None, lookup(&[("NEXTEST_BIN_EXE_my_program", &bare)])).unwrap_err();
+    let error = resolve_binary_in("my-program", None, lookup(&[("NEXTEST_BIN_EXE_my-program", &bare)])).unwrap_err();
     assert_eq!(candidates(error)[0].2, Rejection::Missing);
 }
 
@@ -283,13 +313,13 @@ fn non_utf8_candidate_is_preserved() {
     let path = OsString::from_vec(name);
     match std::fs::write(&path, b"") {
         Ok(()) => {
-            let found = resolve_binary_in("my-program", None, lookup(&[("NEXTEST_BIN_EXE_my_program", &path)])).unwrap();
+            let found = resolve_binary_in("my-program", None, lookup(&[("NEXTEST_BIN_EXE_my-program", &path)])).unwrap();
             assert_eq!(found.as_os_str().as_bytes(), path.as_bytes());
         }
         // APFS refuses names that are not UTF-8 with EILSEQ (92 on macOS), so the
         // file cannot exist there. The rejected candidate still carries the bytes unchanged.
         Err(error) if cfg!(target_os = "macos") && error.raw_os_error() == Some(92) => {
-            let error = resolve_binary_in("my-program", None, lookup(&[("NEXTEST_BIN_EXE_my_program", &path)])).unwrap_err();
+            let error = resolve_binary_in("my-program", None, lookup(&[("NEXTEST_BIN_EXE_my-program", &path)])).unwrap_err();
             let BinPathError::NotFound { candidates, .. } = error else { panic!("expected NotFound, got {error:?}") };
             let value = candidates[0].value.as_ref().map(|value| value.as_bytes());
             assert_eq!(value, Some(path.as_bytes()));

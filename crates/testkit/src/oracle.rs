@@ -282,9 +282,11 @@ pub fn ffmpeg_version(ff: &Oracle) -> Option<String> {
 
 fn ffmpeg_version_in(output: &str) -> Option<String> {
     let first = output.lines().next()?;
-    let rest = first.strip_prefix("ffmpeg version")?.trim_start();
-    let version: String = rest.chars().take_while(|c| !c.is_whitespace()).collect();
-    if version.is_empty() { None } else { Some(version) }
+    let mut words = first.split_whitespace();
+    if words.next()? != "ffmpeg" || words.next()? != "version" {
+        return None;
+    }
+    words.next().map(str::to_owned)
 }
 
 /// Whether `ffmpeg -formats` output lists `format_name` in its name column.
@@ -877,6 +879,8 @@ mod tests {
         assert_eq!(ffmpeg_version_in(""), None);
         assert_eq!(ffmpeg_version_in("ffprobe version 6.1"), None);
         assert_eq!(ffmpeg_version_in("ffmpeg version "), None);
+        assert_eq!(ffmpeg_version_in("ffmpeg versioning 1.0"), None);
+        assert_eq!(ffmpeg_version_in("ffmpeg version\t6.1"), Some("6.1".to_string()));
     }
 
     /// A stand-in ffmpeg answers the format query the way its listing says.

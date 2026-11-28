@@ -3,16 +3,22 @@
 //! [`bin_path!`](crate::bin_path) expands in the calling test and looks the binary up in this
 //! order:
 //!
-//! 1. `NEXTEST_BIN_EXE_<name>` with each `-` of the name written as `_` (nextest 0.9.113 and later),
-//! 2. `NEXTEST_BIN_EXE_<name>` with the name as written,
-//! 3. `CARGO_BIN_EXE_<name>` read when the test runs (Cargo 1.94 and later, nextest 0.9.130 and
+//! 1. `NEXTEST_BIN_EXE_<name>` with the name as written,
+//! 2. `CARGO_BIN_EXE_<name>` read when the test runs (Cargo 1.94 and later, nextest 0.9.130 and
 //!    later),
+//! 3. `NEXTEST_BIN_EXE_<name>` with each `-` of the name written as `_` (nextest 0.9.113 and later),
+//!    read only when the name holds a `-`,
 //! 4. `CARGO_BIN_EXE_<name>` as Cargo set it when it compiled the test.
 //!
 //! A value counts only when it names an absolute path to an existing regular file. An empty,
 //! relative or missing path, or one that names a folder, is passed over, and the next variable is
-//! read. When a test runs from an extracted nextest archive, nextest sets the first two variables
-//! to the extracted path, so the compile-time path of the build machine is not used. When no
+//! read. When a test runs from an extracted nextest archive, nextest sets the nextest variables
+//! to the extracted path, so the compile-time path of the build machine is not used.
+//!
+//! The variables that carry the exact name are read first, so a package with both `cli-tool` and
+//! `cli_tool` finds each binary under its own name whenever one of those variables is set. When
+//! only the underscore form is set, step 3 cannot tell
+//! the two binaries apart, and `cli-tool` may resolve to `cli_tool`'s file. When no
 //! variable names a file, the macro fails the test with a message that lists every variable it
 //! read and why each value was passed over, before anything is started. The `.exe` suffix is never
 //! added or removed: Cargo and nextest set the whole file name.
@@ -192,15 +198,15 @@ pub fn resolve_binary_in(
     }
     let cargo = format!("CARGO_BIN_EXE_{binary}");
     let steps = [
-        (Source::NextestUnderscore, format!("NEXTEST_BIN_EXE_{}", binary.replace('-', "_"))),
         (Source::NextestExact, format!("NEXTEST_BIN_EXE_{binary}")),
         (Source::CargoRuntime, cargo.clone()),
+        (Source::NextestUnderscore, format!("NEXTEST_BIN_EXE_{}", binary.replace('-', "_"))),
         (Source::CargoCompileTime, cargo),
     ];
     let mut candidates = Vec::with_capacity(steps.len());
     for (source, variable) in steps {
         // A name without `-` gives the same nextest variable twice; read it once.
-        if source == Source::NextestExact && !binary.contains('-') {
+        if source == Source::NextestUnderscore && !binary.contains('-') {
             continue;
         }
         let value = match source {

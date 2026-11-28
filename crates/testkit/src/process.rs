@@ -284,7 +284,8 @@ fn wait_for_exit(child: &mut Child, deadline: Option<Instant>) -> Result<ExitSta
 }
 
 /// The deadline is checked before each look at the child, so the child is never signaled after it
-/// was reaped, and an exit first seen after the deadline is a timeout.
+/// was reaped. It is checked again when an exit is seen, so an exit first seen after the deadline
+/// is a timeout.
 fn wait_for_exit_with_clock(child: &mut Child, deadline: Option<Instant>, mut now: impl FnMut() -> Instant) -> Result<ExitStatus, Option<io::Error>> {
     let mut pause = Duration::from_millis(1);
     loop {
@@ -294,6 +295,8 @@ fn wait_for_exit_with_clock(child: &mut Child, deadline: Option<Instant>, mut no
             return Err(None);
         }
         match child_exit(child) {
+            // The child is reaped here, so a late exit is not signaled.
+            Ok(Some(_)) if deadline.is_some_and(|deadline| now() > deadline) => return Err(None),
             Ok(Some(status)) => return Ok(status),
             Ok(None) => {}
             Err(e) => {
@@ -343,6 +346,16 @@ mod tests {
         let result = wait_for_exit_with_clock(&mut exited_child(), Some(deadline), || observed);
         assert!(matches!(result, Err(None)), "{result:?}");
         assert!(wait_for_exit_with_clock(&mut exited_child(), Some(deadline), || deadline).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_exit_seen_after_the_deadline_passes_mid_look_is_a_timeout() {
+        // The clock is before the deadline when it is checked, and past it once the exit is seen.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut clock = [deadline - Duration::from_secs(1), deadline + Duration::from_secs(1)].into_iter();
+        let result = wait_for_exit_with_clock(&mut exited_child(), Some(deadline), || clock.next().unwrap_or(deadline + Duration::from_secs(1)));
+        assert!(matches!(result, Err(None)), "{result:?}");
     }
 
     #[test]
@@ -407,13 +420,16 @@ mod tests {
     fn a_descendant_without_the_pipes_does_not_hold_up_a_successful_run() {
         let mut seen = Observed::default();
         let limits = RunLimits { max_output_bytes: 1024, timeout: None };
-        let got = run(sh("sleep 1000 </dev/null >/dev/null 2>&1 & echo started"), limits, &mut seen);
+        // The child prints the descendant's process id.
+        let got = run(sh("sleep 1000 </dev/null >/dev/null 2>&1 & echo $!"), limits, &mut seen);
         let pid = seen.pid.unwrap();
+        let descendant = got.as_ref().ok().and_then(|out| String::from_utf8_lossy(&out.stdout).trim().parse::<u32>().ok());
+        let running = descendant.map(process_exists);
         // A successful run leaves the rest of the child's group running; end it here.
         let _ = Command::new("/bin/sh").args(["-c", &format!("kill -s KILL -- -{pid}")]).status();
         let out = got.unwrap();
         assert!(out.status.success());
-        assert_eq!(out.stdout, b"started\n");
+        assert_eq!(running, Some(true), "the descendant {descendant:?} was not running when the run returned");
     }
 
     /// On Windows, a successful run waits for the child alone. A descendant that holds neither

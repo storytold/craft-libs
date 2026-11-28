@@ -8,61 +8,6 @@ under `[dev-dependencies]`:
 craft-testkit = { git = "https://github.com/storytold/craft-libs", rev = "<commit>" }
 ```
 
-## `bin`
-
-`bin` is native only: it is not built for `wasm32`.
-
-`bin_path!("my-program")` expands in the calling integration test and returns the path of the
-package's binary `my-program`. The name is the binary target's name with its hyphens. It reads, in
-order:
-
-1. `NEXTEST_BIN_EXE_my_program` (nextest 0.9.113 and later),
-2. `NEXTEST_BIN_EXE_my-program`,
-3. `CARGO_BIN_EXE_my-program` when the test runs (Cargo 1.94 and later, nextest 0.9.130 and later),
-4. `CARGO_BIN_EXE_my-program` as Cargo set it when it compiled the test.
-
-A value counts only when it is an absolute path to an existing regular file; an empty, relative or
-missing path, or a folder, is passed over. A test run from an extracted nextest archive therefore
-starts the extracted binary, and not the build machine's path that Cargo compiled into the test
-([nextest: archiving](https://nexte.st/docs/ci-features/archiving/),
-[nextest: environment variables](https://nexte.st/docs/configuration/env-vars/),
-[Cargo: environment variables](https://doc.rust-lang.org/cargo/reference/environment-variables.html)).
-When no variable names a file, the macro fails the test with a message that lists each variable,
-its value and why it was passed over. `.exe` is never added. `resolve_binary` returns that message
-as a `BinPathError` instead.
-
-`run(path, args, env, max_output)` starts the program with stdin connected to nothing and returns
-its `Output`. The child inherits the test's environment with the `env` pairs set on top; the test's
-own environment is not changed. stdout and stderr are read at the same time, each into at most
-`max_output` bytes. A stream that passes the limit stops the child, waits for it and returns an
-`io::Error` holding `OutputLimitExceeded`. `DEFAULT_MAX_OUTPUT` is 1 MiB for each stream, a value of
-this crate. A non-zero exit status is returned in the `Output`. `run` has no time limit.
-
-`run` goes through the same process runner as `oracle`. On Unix the child runs in its own process
-group, so it does not receive a terminal's Ctrl-C, and when a stream passes the limit the whole
-group is killed. On Windows the child and its descendants run in a Job Object, which is closed when
-`run` returns, so a process the child started that is still running then ends. After a failure,
-`run` waits up to 2 seconds for the readers of the child's output.
-
-```rust
-use std::ffi::OsString;
-
-#[test]
-fn help_prints_usage() {
-    let output = craft_testkit::bin::run(
-        &craft_testkit::bin_path!("soundcraft-cli"),
-        &[OsString::from("--help")],
-        &[(OsString::from("SOUNDCRAFT_NO_PREFS"), OsString::from("1"))],
-        craft_testkit::bin::DEFAULT_MAX_OUTPUT,
-    )
-    .unwrap();
-    assert!(output.status.success());
-}
-```
-
-Shared test support for the Craft apps. The crate is not published, and apps and craft-libs crates
-take it under `[dev-dependencies]`.
-
 ## Overview
 
 `craft-testkit` provides lightweight, non-panicking source guards that prevent applications in the Craft ecosystem from repeating platform defects that were previously diagnosed and resolved in peer applications:
@@ -294,6 +239,63 @@ Changes from `craft-media-testkit`'s `hammer`:
   each label ended with one.
 - `parse` is owned and runs on a worker thread. A closure that borrows from the test needs its data
   moved or shared with an `Arc`.
+
+## bin
+
+`bin` is native only: it is not built for `wasm32`.
+
+`bin_path!("my-program")` expands in the calling integration test and returns the path of the
+package's binary `my-program`. The name is the binary target's name with its hyphens. It reads, in
+order:
+
+1. `NEXTEST_BIN_EXE_my-program`,
+2. `CARGO_BIN_EXE_my-program` when the test runs (Cargo 1.94 and later, nextest 0.9.130 and later),
+3. `NEXTEST_BIN_EXE_my_program` (nextest 0.9.113 and later), read only when the name holds a `-`,
+4. `CARGO_BIN_EXE_my-program` as Cargo set it when it compiled the test.
+
+The variables with the exact name come first, so a package with both `cli-tool` and `cli_tool`
+finds each binary under its own name when one of them is set. When only
+`NEXTEST_BIN_EXE_cli_tool` is set, `bin_path!("cli-tool")` cannot tell the two apart and may
+return `cli_tool`.
+
+A value counts only when it is an absolute path to an existing regular file; an empty, relative or
+missing path, or a folder, is passed over. A test run from an extracted nextest archive therefore
+starts the extracted binary, and not the build machine's path that Cargo compiled into the test
+([nextest: archiving](https://nexte.st/docs/ci-features/archiving/),
+[nextest: environment variables](https://nexte.st/docs/configuration/env-vars/),
+[Cargo: environment variables](https://doc.rust-lang.org/cargo/reference/environment-variables.html)).
+When no variable names a file, the macro fails the test with a message that lists each variable,
+its value and why it was passed over. `.exe` is never added. `resolve_binary` returns that message
+as a `BinPathError` instead.
+
+`run(path, args, env, max_output)` starts the program with stdin connected to nothing and returns
+its `Output`. The child inherits the test's environment with the `env` pairs set on top; the test's
+own environment is not changed. stdout and stderr are read at the same time, each into at most
+`max_output` bytes. A stream that passes the limit stops the child, waits for it and returns an
+`io::Error` holding `OutputLimitExceeded`. `DEFAULT_MAX_OUTPUT` is 1 MiB for each stream, a value of
+this crate. A non-zero exit status is returned in the `Output`. `run` has no time limit.
+
+`run` goes through the same process runner as `oracle`. On Unix the child runs in its own process
+group, so it does not receive a terminal's Ctrl-C, and when a stream passes the limit the whole
+group is killed. On Windows the child and its descendants run in a Job Object, which is closed when
+`run` returns, so a process the child started that is still running then ends. After a failure,
+`run` waits up to 2 seconds for the readers of the child's output.
+
+```rust
+use std::ffi::OsString;
+
+#[test]
+fn help_prints_usage() {
+    let output = craft_testkit::bin::run(
+        &craft_testkit::bin_path!("soundcraft-cli"),
+        &[OsString::from("--help")],
+        &[(OsString::from("SOUNDCRAFT_NO_PREFS"), OsString::from("1"))],
+        craft_testkit::bin::DEFAULT_MAX_OUTPUT,
+    )
+    .unwrap();
+    assert!(output.status.success());
+}
+```
 
 ## oracle
 
