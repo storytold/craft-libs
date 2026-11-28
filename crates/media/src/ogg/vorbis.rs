@@ -2,7 +2,7 @@
 //! the identification header (§4.2.2), the modes at the end of the setup header (§4.2.4), the
 //! samples a packet returns (§4.3.8) and the Ogg granule positions (§A.2).
 
-use super::{MAX_OPUS_GRANULE, Stream, VorbisInfo};
+use super::{MAX_OPUS_GRANULE, Packet, Stream, VorbisInfo};
 
 /// The most modes a setup header can declare (a 6-bit count plus one).
 const MAX_MODES: usize = 64;
@@ -92,6 +92,11 @@ pub struct VorbisTiming {
     pub first: i64,
     /// Playable samples from `first`, with the final page's end trimming applied.
     pub total: i64,
+    /// The first page's granule position is damaged: it lies above where the next page places
+    /// that page's end, or above the final page's granule position when only two pages place
+    /// the stream. The first page's packets are then placed to end where the next page starts,
+    /// or from 0 when the next page is the last.
+    pub first_damaged: bool,
 }
 
 impl VorbisTiming {
@@ -127,12 +132,34 @@ impl VorbisTiming {
                 n
             })
             .collect();
-        let n = durations.len();
+        VorbisTiming::place(stream, durations, overlap)
+    }
+
+    /// Timing of `stream` with the samples each packet returns given by `duration`, called once
+    /// per packet in stream order; a decoder passes the durations it decodes to, including those it
+    /// gives a packet it conceals, as [`OpusTiming::of_with_durations`](super::OpusTiming::of_with_durations)
+    /// takes them. A negative start may discard at most the samples of the first two packets.
+    pub fn of_with_durations(stream: &Stream, duration: impl FnMut(&Packet) -> u32) -> VorbisTiming {
+        let durations: Vec<u32> = stream.packets.iter().map(duration).collect();
+        let overlap = durations.iter().take(2).fold(0i64, |a, &d| a.saturating_add(i64::from(d)));
+        VorbisTiming::place(stream, durations, overlap)
+    }
+
+    /// Places the packets of `stream`, which return `durations` samples, from the pages' granule
+    /// positions (§A.2); a negative start discards at most `overlap` samples.
+    fn place(stream: &Stream, durations: Vec<u32>, overlap: i64) -> VorbisTiming {
+        // Granule positions come straight from the file, so the arithmetic saturates.
+        let n = durations.len().min(stream.packets.len());
+        let dur = |k: usize| i64::from(durations[k]);
         let granule_of = |k: usize| stream.packets.get(k).and_then(|p| p.granule).filter(|g| (0..=MAX_OPUS_GRANULE).contains(g));
         let mut ends: Vec<i64> = vec![0; n];
         let mut cursor: Option<i64> = None;
         let mut trimmed_end: Option<i64> = None;
         let mut start: Option<i64> = None;
+        // pages with a granule position so far, the granule position of a page holding only the
+        // priming packet, and the last packet of the first page that placed the stream
+        let (mut pages, mut primed, mut placed_at) = (0usize, None::<i64>, None::<usize>);
+        let mut first_damaged = false;
         let mut i = 0;
         while i < n {
             // packets completing on the same page: i..=j, the last carries the page's granule
@@ -140,7 +167,27 @@ impl VorbisTiming {
             while j < n && granule_of(j).is_none() {
                 j += 1;
             }
-            let sum = durations[i..j.min(n - 1) + 1].iter().fold(0i64, |a, &d| a.saturating_add(i64::from(d)));
+            let sum = (i..=j.min(n - 1)).fold(0i64, |a, k| a.saturating_add(dur(k)));
+            // A final page after the first whose granule position is below the first page's: the
+            // first page's granule position is damaged, so that page is placed from 0.
+            if let Some(g) = granule_of(j)
+                && stream.packets[j].eos
+                && pages == 1
+                && cursor.or(primed).is_some_and(|c| g < c)
+            {
+                let mut e = 0i64;
+                for (k, end) in ends.iter_mut().enumerate().take(i) {
+                    e = e.saturating_add(dur(k));
+                    *end = e;
+                }
+                cursor = Some(e);
+                start = Some(0);
+                first_damaged = true;
+            }
+            // a page holding only the priming packet places nothing, so it is not counted
+            if granule_of(j).is_some() && !(cursor.is_none() && sum == 0 && !stream.packets[j].eos) {
+                pages += 1;
+            }
             let end = match (granule_of(j), cursor) {
                 // trailing packets without a granule (a truncated file): continue from the cursor
                 (None, c) => c.unwrap_or(0).saturating_add(sum),
@@ -152,12 +199,14 @@ impl VorbisTiming {
                 // a page that returns no samples (only the priming packet) does not place the stream
                 (Some(g), None) if sum == 0 && !stream.packets[j].eos => {
                     ends[i..=j].fill(g);
+                    primed = Some(g);
                     i = j + 1;
                     continue;
                 }
                 // the first page with audio: its granule places the stream, which may start before
                 // or after 0 (§A.2)
                 (Some(g), None) => {
+                    placed_at = Some(j);
                     let s = g.saturating_sub(sum);
                     start = Some(s);
                     if stream.packets[j].eos && s < 0 {
@@ -176,10 +225,23 @@ impl VorbisTiming {
             let mut e = end;
             for k in (i..=j.min(n - 1)).rev() {
                 ends[k] = e;
-                e = e.saturating_sub(i64::from(durations[k]));
+                e = e.saturating_sub(dur(k));
             }
             cursor = Some(end);
             i = j + 1;
+        }
+        // A first page placed after where the next page starts (the granule positions come back
+        // down after it) has a damaged granule position: it ends where the next page starts.
+        // A page holding only the priming packet places nothing, so it is not checked.
+        if let Some(j) = placed_at.filter(|&j| j + 1 < n) {
+            let back = ends[j].saturating_sub(ends[j + 1].saturating_sub(dur(j + 1)));
+            if back > 0 {
+                for end in &mut ends[..=j] {
+                    *end = end.saturating_sub(back);
+                }
+                start = start.map(|s| s.saturating_sub(back));
+                first_damaged = true;
+            }
         }
         let starts: Vec<i64> = ends.iter().zip(&durations).map(|(e, &d)| e.saturating_sub(i64::from(d))).collect();
         let origin = start.unwrap_or(0);
@@ -188,7 +250,7 @@ impl VorbisTiming {
         let first = origin.saturating_add(skip).max(0);
         let end = trimmed_end.or(cursor).unwrap_or(0);
         let total = end.saturating_sub(first).max(0);
-        VorbisTiming { starts, durations, skip: u32::try_from(skip).unwrap_or(u32::MAX), first, total }
+        VorbisTiming { starts, durations, skip: u32::try_from(skip).unwrap_or(u32::MAX), first, total, first_damaged }
     }
 }
 

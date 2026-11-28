@@ -54,3 +54,6 @@ mod vorbis_decode_oracle;
 #[cfg(feature = "vorbis-decode")]
 #[path = "vorbis_decode_synthetic.rs"]
 mod vorbis_decode_synthetic;
+#[cfg(all(feature = "decode-native", feature = "vorbis-encode"))]
+#[path = "vorbis_stream.rs"]
+mod vorbis_stream;

@@ -15,6 +15,8 @@ use crate::mpa;
 #[cfg(feature = "opus-decode")]
 use crate::opus;
 use crate::pcm::{PcmKind, deinterleave};
+#[cfg(feature = "vorbis-decode")]
+use crate::vorbis::decoder as vorbis;
 use crate::{AudioBuffer, AudioError, ChannelLayout, CodecId, CodecParams, Result, SampleFormat};
 
 #[cfg(feature = "flac-decode")]
@@ -66,6 +68,11 @@ enum Inner {
         samples: usize,
         several: bool,
     },
+    #[cfg(feature = "vorbis-decode")]
+    Vorbis {
+        dec: Box<vorbis::Decoder>,
+        order: Option<&'static [usize]>,
+    },
     Pcm {
         kind: PcmKind,
         channels: usize,
@@ -82,8 +89,8 @@ pub(crate) type PacketFrames = fn(&[u8], u64) -> Option<u64>;
 /// It takes the track's [`CodecParams`] (from `isobmff::Track::codec_params`,
 /// `matroska::Track::codec_params`, `ogg::Stream::codec_params`, or built by hand for another
 /// container) and decodes AAC (LC, and HE-AAC with its SBR high band), ALAC, FLAC, Opus, AC-3/E-AC-3,
-/// MP1/MP2, MP3 and PCM. Container timing (AAC priming, Opus pre-skip, end trimming) is the caller's:
-/// every decoded sample is returned.
+/// MP1/MP2, MP3, Vorbis and PCM. Container timing (AAC priming, Opus pre-skip, end trimming) is the
+/// caller's: every decoded sample is returned.
 ///
 /// ```no_run
 /// # fn demo(params: &craft_audio::CodecParams, packets: &[Vec<u8>]) -> craft_audio::Result<()> {
@@ -136,7 +143,8 @@ impl TrackDecoder {
     /// missing configuration is [`AudioError::Malformed`].
     ///
     /// FLAC needs the `fLaC` magic and metadata blocks, starting with STREAMINFO, in `extradata`.
-    /// ALAC needs its magic cookie in `extradata`.
+    /// ALAC needs its magic cookie in `extradata`, and Vorbis its three header packets
+    /// (identification, comment and setup), Xiph-laced as Ogg and Matroska give them.
     ///
     /// Unavailable packet codecs return [`AudioError::Unsupported`].
     pub fn new(params: &CodecParams, lookahead: &[&[u8]]) -> Result<TrackDecoder> {
@@ -289,6 +297,18 @@ impl TrackDecoder {
                     SampleFormat::Compressed,
                 ),
             },
+            #[cfg(feature = "vorbis-decode")]
+            CodecId::Vorbis => {
+                let headers = xiph_unlace(&params.extradata)
+                    .filter(|h| h.len() == 3)
+                    .ok_or_else(|| AudioError::Malformed("Vorbis track without its three header packets (extradata)".into()))?;
+                let [id, comment, setup] = [&headers[0], &headers[1], &headers[2]];
+                let dec = vorbis::Decoder::new(id, comment, setup)?;
+                let channels = usize::from(dec.identification().channels);
+                let (layout, order) = vorbis_layout(channels);
+                let rate = dec.identification().sample_rate;
+                (Inner::Vorbis { dec: Box::new(dec), order }, CodecId::Vorbis, rate, layout, SampleFormat::Compressed)
+            }
             CodecId::Pcm => {
                 let pcm = params.pcm.ok_or_else(|| AudioError::Malformed("PCM track without a sample format".into()))?;
                 let (kind, sample_format) = pcm_kind(pcm.bits, pcm.float, pcm.big_endian, !pcm.signed)
@@ -441,6 +461,11 @@ impl TrackDecoder {
                 let out = dec.decode(Some(packet))?;
                 reorder(out, *order)
             }
+            #[cfg(feature = "vorbis-decode")]
+            Inner::Vorbis { dec, order } => {
+                let out = dec.decode_packet(packet)?;
+                reorder(out, *order)
+            }
             Inner::Pcm { kind, channels } => {
                 let frames = (packet.len() / (kind.bytes() * *channels).max(1)) as u64;
                 deinterleave(packet, *kind, *channels, frames)?
@@ -456,9 +481,9 @@ impl TrackDecoder {
     }
 
     /// What stands in for a lost or undecodable packet (`packet` when its bytes are at hand):
-    /// Opus's loss concealment, or silence, as long as the packet would have been (from its TOC or
-    /// frame header, the codec's frame length, or the last packet). Empty when the length is
-    /// unknown.
+    /// Opus's loss concealment, the tail of the last Vorbis block, or silence, as long as the packet
+    /// would have been (from its TOC, frame header or Vorbis mode, the codec's frame length, or the
+    /// last packet). Empty when the length is unknown.
     /// Fails with [`AudioError::TooLarge`](crate::AudioError::TooLarge) when that silence would pass
     /// the decode limit (2^30 samples, as [`decode`](Self::decode) has) or cannot be allocated,
     /// rather than return less than the packet's length.
@@ -472,6 +497,12 @@ impl TrackDecoder {
                     return Ok(AudioBuffer { sample_rate: self.sample_rate, channels: reorder(out, order) });
                 }
                 None
+            }
+            // the previous block's tail, as long as the packet would have been
+            #[cfg(feature = "vorbis-decode")]
+            Inner::Vorbis { dec, order } => {
+                let order = *order;
+                return Ok(AudioBuffer { sample_rate: self.sample_rate, channels: reorder(dec.conceal(packet), order) });
             }
             #[cfg(feature = "aac-decode")]
             Inner::Aac { sbr, .. } => {
@@ -546,6 +577,8 @@ impl TrackDecoder {
             Inner::Mp3 { several: true, .. } => None,
             #[cfg(feature = "mp3-decode")]
             Inner::Mp3 { samples, .. } => Some(*samples),
+            #[cfg(feature = "vorbis-decode")]
+            Inner::Vorbis { .. } => None,
             Inner::Pcm { .. } => None,
         }
     }
@@ -559,6 +592,27 @@ impl TrackDecoder {
             #[cfg(feature = "alac-decode")]
             Inner::Alac { dec, .. } => Some(dec.config().frame_length as usize),
             _ => self.frames_per_packet(),
+        }
+    }
+
+    /// The block size a Vorbis packet counts as, read from its first byte: its mode's, else the
+    /// previous block's (`prev`), else the short one, as its concealment counts it; `None` for
+    /// other codecs.
+    #[cfg(feature = "decode-native")]
+    pub(crate) fn vorbis_block_size(&self, packet: &[u8], prev: Option<usize>) -> Option<usize> {
+        match &self.inner {
+            Inner::Vorbis { dec, .. } => Some(dec.block_size_or(Some(packet), prev)),
+            _ => None,
+        }
+    }
+
+    /// Whether a Vorbis packet's first byte names a mode of the stream, so that its block size
+    /// does not depend on the packet before it; `false` for other codecs.
+    #[cfg(feature = "decode-native")]
+    pub(crate) fn vorbis_mode_readable(&self, packet: &[u8]) -> bool {
+        match &self.inner {
+            Inner::Vorbis { dec, .. } => dec.block_size(packet).is_some(),
+            _ => false,
         }
     }
 
@@ -577,8 +631,10 @@ impl TrackDecoder {
     /// is reached: two AAC frames, 80 ms of Opus (RFC 7845 §4.6), one AC-3 or MP1/MP2 frame
     /// (their filter banks overlap one frame), for MP3 the frames its bit reservoir can reach back
     /// over and two more, none for ALAC (its packets decode independently)
-    /// and PCM. E-AC-3 syncframes of fewer than six blocks may reuse exponents from any syncframe
-    /// before them, so once one has been read the stream decodes from its start (`usize::MAX`).
+    /// and PCM. Vorbis is none too, but after a reset its first packet only primes the overlap and
+    /// decodes to no frames, so a caller starts decoding one packet before the target. E-AC-3
+    /// syncframes of fewer than six blocks may reuse exponents from any syncframe before them, so
+    /// once one has been read the stream decodes from its start (`usize::MAX`).
     pub fn preroll(&self) -> usize {
         match &self.inner {
             #[cfg(feature = "aac-decode")]
@@ -598,6 +654,8 @@ impl TrackDecoder {
             // the bit reservoir reaches up to 511 bytes back: as many frames as that takes
             #[cfg(feature = "mp3-decode")]
             Inner::Mp3 { dec, samples, .. } => dec.preroll().unwrap_or(MP3_PREROLL_FRAMES * *samples),
+            #[cfg(feature = "vorbis-decode")]
+            Inner::Vorbis { .. } => 0,
             Inner::Pcm { .. } => 0,
         }
     }
@@ -623,6 +681,8 @@ impl TrackDecoder {
             Inner::Mpa { dec, .. } => dec.reset(),
             #[cfg(feature = "mp3-decode")]
             Inner::Mp3 { dec, .. } => dec.reset(),
+            #[cfg(feature = "vorbis-decode")]
+            Inner::Vorbis { dec, .. } => dec.reset(),
             Inner::Pcm { .. } => {}
         }
     }
@@ -637,12 +697,13 @@ fn unsupported(codec: CodecId) -> AudioError {
         CodecId::Opus => Some("opus-decode"),
         CodecId::Mp1 | CodecId::Mp2 => Some("mpa-decode"),
         CodecId::Mp3 => Some("mp3-decode"),
+        CodecId::Vorbis => Some("vorbis-decode"),
         _ => None,
     };
     match feature {
         // A codec this crate decodes, in a build without its feature.
         Some(f) => AudioError::Unsupported(format!("decoding {} needs the `{f}` feature", codec.name())),
-        None if cfg!(feature = "symphonia") && codec == CodecId::Vorbis => {
+        None if cfg!(feature = "symphonia") && matches!(codec, CodecId::Flac | CodecId::Vorbis) => {
             AudioError::Unsupported(format!("no native {} packet decoder yet (craft_audio::decode reads it through symphonia)", codec.name()))
         }
         None => AudioError::Unsupported(format!("no native {} packet decoder yet", codec.name())),
@@ -651,7 +712,7 @@ fn unsupported(codec: CodecId) -> AudioError {
 
 /// `channels` reordered by `order` (output channel → decoded channel); unchanged when the counts
 /// differ.
-#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode"))]
+#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "vorbis-decode"))]
 fn reorder(mut channels: Vec<Vec<f32>>, order: Option<&[usize]>) -> Vec<Vec<f32>> {
     match order {
         Some(order) if order.len() == channels.len() => order.iter().map(|&c| channels.get_mut(c).map(std::mem::take).unwrap_or_default()).collect(),
@@ -929,6 +990,42 @@ pub(crate) fn opus_layout(head: &opus::OpusHead) -> ChannelLayout {
     }
 }
 
+/// The speakers of a Vorbis stream and the order that puts its channels in WAV order
+/// ([`crate::vorbis::layout`] and [`crate::vorbis::wav_order`]).
+#[cfg(feature = "vorbis-decode")]
+fn vorbis_layout(channels: usize) -> (ChannelLayout, Option<&'static [usize]>) {
+    (crate::vorbis::layout(crate::layout::count(channels)), crate::vorbis::wav_order(channels))
+}
+
+/// The packets of Xiph lacing (Ogg and Matroska codec headers): a count less one, the sizes of
+/// all but the last packet as runs of 255 ended by a smaller byte, then the packets. `None` when
+/// the sizes run past the data.
+#[cfg(feature = "vorbis-decode")]
+fn xiph_unlace(data: &[u8]) -> Option<Vec<&[u8]>> {
+    let (&count, mut rest) = data.split_first()?;
+    let mut sizes = Vec::with_capacity(usize::from(count));
+    for _ in 0..count {
+        let mut size = 0usize;
+        loop {
+            let (&b, tail) = rest.split_first()?;
+            rest = tail;
+            size = size.checked_add(usize::from(b))?;
+            if b < 255 {
+                break;
+            }
+        }
+        sizes.push(size);
+    }
+    let mut packets = Vec::with_capacity(sizes.len() + 1);
+    for size in sizes {
+        let (packet, tail) = rest.split_at_checked(size)?;
+        packets.push(packet);
+        rest = tail;
+    }
+    packets.push(rest);
+    Some(packets)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1189,6 +1286,14 @@ mod tests {
         assert_eq!(dec.decode(&damaged).unwrap().channels[0].len(), 256);
         assert_eq!(dec.conceal(None).unwrap().channels[0].len(), 1536, "a lost packet is as long as the last whole one");
         assert_eq!(dec.frames_per_packet(), Some(1536), "a damaged packet does not make the packets' lengths differ");
+    }
+
+    #[test]
+    fn vorbis_needs_its_feature_and_its_header_packets() {
+        #[cfg(not(feature = "vorbis-decode"))]
+        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Vorbis), &[]), Err(AudioError::Unsupported(m)) if m.contains("vorbis-decode")));
+        #[cfg(feature = "vorbis-decode")]
+        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Vorbis), &[]), Err(AudioError::Malformed(_))));
     }
 
     /// ALAC 5.1 comes out in WAV order at full scale, and a lost packet is as long as the last.

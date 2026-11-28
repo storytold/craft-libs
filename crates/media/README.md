@@ -470,7 +470,10 @@ reached. `OggFile::read_packet_into` reads a packet into a reused buffer.
 `VorbisTiming` gives each Vorbis packet's start and duration (from the block sizes of the modes that
 `VorbisModes` reads from the setup header), the samples to discard before a negative starting
 position, the offset of a stream that starts after 0, and the end trimming of the final page
-(Vorbis I §4.3.8 and §A.2).
+(Vorbis I §4.3.8 and §A.2). A first page whose granule position lies above the next page's is
+placed to end where that page starts and is reported in `first_damaged`.
+`VorbisTiming::of_with_durations` takes the packet durations from a decoder instead, as
+`OpusTiming::of_with_durations` does.
 
 The muxer side is `PageWriter`, from FilmCraft's `filmcraft-oggmux` by @JordyUSA
 (storytold/filmcraft#4481): it laces the packets of one logical stream into pages (continued

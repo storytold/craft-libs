@@ -1,13 +1,13 @@
 //! The native decode path: craft-media's demuxers (ISO BMFF / QuickTime, Matroska / WebM), raw
 //! ADTS, AC-3 and MPEG audio streams, and WAV / AIFF PCM, feeding [`TrackDecoder`].
-//! [`Native::open`] answers `None` for a stream with no native codec (FLAC, Vorbis, ...) or a
-//! container these demuxers do not read; the caller then uses symphonia.
+//! [`Native::open`] answers `None` for a stream with no native codec (FLAC, Vorbis in Matroska,
+//! ...) or a container these demuxers do not read; the caller then uses symphonia.
 //!
 //! Every container is a [`Packets`] source over a [`Src`], read packet by packet, so a decode
 //! streams. Timing follows the containers: MP4 edit lists (AAC priming, Opus pre-skip), Matroska
-//! `CodecDelay` and per-block `DiscardPadding`, and Ogg Opus pre-skip and end trimming (RFC 7845
-//! §4) are applied, and so are an MP3's encoder delay and padding from its LAME tag, so a file
-//! decodes to exactly its presentation length.
+//! `CodecDelay` and per-block `DiscardPadding`, Ogg Opus pre-skip and end trimming (RFC 7845 §4)
+//! and Ogg Vorbis start and end trimming (Vorbis I §A.2) are applied, and so are an MP3's encoder
+//! delay and padding from its LAME tag, so a file decodes to exactly its presentation length.
 
 use super::aiff::{self, AiffParse};
 use super::id3v2_len;
@@ -34,6 +34,9 @@ const PCM_PACKET_FRAMES: u64 = 4096;
 struct Packet {
     data: Vec<u8>,
     trim_end: u64,
+    /// The packet follows an Ogg granule position jump that [`bound_gaps`] took out of the
+    /// timeline: reading it counts one damaged packet.
+    jumped: bool,
 }
 
 /// Where a track's packets come from.
@@ -71,6 +74,13 @@ enum Packets<'a> {
         next: usize,
         /// Output frame of each packet's first decoded sample (the pre-skip negative).
         starts: Vec<i64>,
+        /// Vorbis, whose first packet after a seek decodes to nothing (its blocks overlap): whether
+        /// each packet can prime the decoder, which a packet whose mode can be read does. A seek
+        /// starts at the latest such packet before the target's, so the packets between are
+        /// concealed at the block sizes the timeline gave them. `None` for Opus.
+        primers: Option<Vec<bool>>,
+        /// The packets that follow a granule position jump [`bound_gaps`] took out.
+        jumps: Vec<bool>,
     },
     /// Frames of a raw stream: `(offset, length, decoded frames)`.
     Raw { frames: Vec<(u64, u32, u32)>, src: Src<'a>, next: usize },
@@ -81,7 +91,7 @@ enum Packets<'a> {
 impl Packets<'_> {
     /// The next packet of the track, or `None` at its end.
     fn next(&mut self) -> Option<Result<Packet>> {
-        let whole = |data: Vec<u8>| Packet { data, trim_end: 0 };
+        let whole = |data: Vec<u8>| Packet { data, trim_end: 0, jumped: false };
         match self {
             Packets::Mp4 { file, src, track, next, .. } => {
                 let i = *next;
@@ -90,11 +100,12 @@ impl Packets<'_> {
                     file.read_sample(src, *track, i).map(whole).map_err(mp4_error)
                 })
             }
-            Packets::Ogg { file, src, stream, next, .. } => {
+            Packets::Ogg { file, src, stream, next, jumps, .. } => {
                 let i = *next;
+                let jumped = jumps.get(i).copied().unwrap_or(false);
                 (i < file.streams.get(*stream).map_or(0, |s| s.packets.len())).then(|| {
                     *next += 1;
-                    file.read_packet(src, *stream, i).map(whole).map_err(ogg_error)
+                    file.read_packet(src, *stream, i).map(|data| Packet { jumped, ..whole(data) }).map_err(ogg_error)
                 })
             }
             Packets::Raw { frames, src, next } => {
@@ -116,6 +127,19 @@ impl Packets<'_> {
                 Some(p) => Some(Ok(p)),
                 None => mkv_next(demux, *track, *rate).map(|r| r.map(|(p, _)| p)),
             },
+        }
+    }
+
+    /// Where the next packet's decoded audio starts on the decoded timeline, for Ogg: a packet
+    /// after a lost page is placed by its page's granule position, after a gap. `None` for the
+    /// other containers and at the end.
+    fn next_start(&self) -> Option<u64> {
+        match self {
+            Packets::Ogg { next, starts, .. } => {
+                let base = starts.first().copied()?;
+                starts.get(*next).map(|&s| u64::try_from(s.saturating_sub(base)).unwrap_or(0))
+            }
+            _ => None,
         }
     }
 
@@ -149,11 +173,21 @@ impl Packets<'_> {
                 *next = i;
                 Ok(s)
             }
-            Packets::Ogg { next, starts, .. } => {
+            Packets::Ogg { next, starts, primers, .. } => {
                 let base = starts.first().copied().unwrap_or(0);
-                let (i, s) = at_or_before(starts.iter().map(|&s| u64::try_from(s.saturating_sub(base)).unwrap_or(0)), frame);
-                *next = i;
-                Ok(s)
+                let start = |k: usize| starts.get(k).map_or(0, |&s| u64::try_from(s.saturating_sub(base)).unwrap_or(0));
+                let (i, s) = at_or_before((0..starts.len()).map(start), frame);
+                let Some(primers) = primers.as_ref().filter(|_| i > 0) else {
+                    *next = i;
+                    return Ok(s);
+                };
+                // The packet before primes the decoder. A packet whose mode cannot be read is
+                // concealed at the previous block's size, which a reset forgets, so the seek backs
+                // up to a packet whose mode can be read, or to the first packet (which has no block
+                // before it, as after a reset). Decoding then resumes at the packet after it.
+                let p = (0..i).rev().find(|&k| primers.get(k).copied().unwrap_or(false)).unwrap_or(0);
+                *next = p;
+                Ok(start(p + 1))
             }
             Packets::Raw { frames, next, .. } => {
                 let mut acc = 0u64;
@@ -301,7 +335,7 @@ fn mkv_next(demux: &mut matroska::Demuxer<Src<'_>>, track: usize, rate: u32) -> 
         match demux.next_packet() {
             Ok(Some(p)) if p.track == track => {
                 let pad = p.discard_padding_ns.and_then(|ns| u64::try_from(ns).ok()).unwrap_or(0);
-                let packet = Packet { data: p.data, trim_end: rescale_round(pad, 1_000_000_000, u64::from(rate)) };
+                let packet = Packet { data: p.data, trim_end: rescale_round(pad, 1_000_000_000, u64::from(rate)), jumped: false };
                 return Some(Ok((packet, p.pts_ns)));
             }
             Ok(Some(_)) => continue,
@@ -341,6 +375,9 @@ pub(crate) struct Native<'a> {
     info: AudioInfo,
     /// Whether `info.frames` came from the container (else it is 0 until decoded).
     frames_known: bool,
+    /// Whether a known length of 0 means the stream is empty, so decoding nothing is not an error.
+    /// False for Ogg Vorbis, whose length is inferred from the pages' granule positions.
+    empty_ok: bool,
     /// Decoded frames at the start that are not presented (AAC priming, Opus pre-skip).
     skip: u64,
     /// Presented frames, when the container says.
@@ -408,30 +445,50 @@ impl<'a> Native<'a> {
     pub(crate) fn next_block(&mut self) -> Result<Option<AudioBuffer>> {
         loop {
             if self.limit.is_some_and(|l| self.pos >= l.saturating_add(self.skip)) {
+                self.check_decoded()?;
                 return Ok(None);
             }
-            let Some(next) = self.packets.next() else {
-                // A track that declares no frames (an empty WAV or AIFF) is empty, not broken.
-                let empty = self.frames_known && self.info.frames == 0 && self.errors == 0;
-                if !(self.decoded || empty || self.seeked && self.errors == 0) {
-                    return Err(self.no_audio("stream contains no audio"));
+            // The frames of a lost Ogg page are silence, so the packets after it keep the places
+            // their granule positions give them; a long gap is filled a block at a time, and its
+            // part before a seek target is passed over.
+            if let Some(s) = self.packets.next_start().filter(|&s| s > self.pos && self.info.channels > 0) {
+                if self.pos < self.from {
+                    self.pos = s.min(self.from);
+                    continue;
                 }
+                let n = usize::try_from((s - self.pos).min(PCM_PACKET_FRAMES)).unwrap_or(0);
+                let block = AudioBuffer { sample_rate: self.info.sample_rate, channels: crate::pcm::silence(usize::from(self.info.channels), n)? };
+                if let Some(out) = self.present(block, 0) {
+                    return Ok(Some(out));
+                }
+                continue;
+            }
+            let Some(next) = self.packets.next() else {
+                self.check_decoded()?;
                 return Ok(None);
             };
             let (block, trim_end) = match next {
-                Ok(p) => match self.dec.decode(&p.data) {
-                    Ok(block) => {
-                        if block.channels.is_empty() {
-                            continue;
+                Ok(p) => {
+                    let decoded = self.dec.decode(&p.data);
+                    // A packet after a damaged granule position counts once, also when it fails.
+                    if p.jumped && decoded.is_ok() {
+                        self.error(AudioError::Malformed("granule position jumps past what the file can hold".into()))?;
+                    }
+                    match decoded {
+                        Ok(block) => {
+                            // A block of no frames (a first Vorbis packet) is not decoded audio.
+                            if block.frames() == 0 {
+                                continue;
+                            }
+                            self.decoded = true;
+                            (block, p.trim_end)
                         }
-                        self.decoded = true;
-                        (block, p.trim_end)
+                        Err(e) => {
+                            self.error(e)?;
+                            (self.dec.conceal(Some(&p.data))?, p.trim_end)
+                        }
                     }
-                    Err(e) => {
-                        self.error(e)?;
-                        (self.dec.conceal(Some(&p.data))?, p.trim_end)
-                    }
-                },
+                }
                 // The source failing is not damage in the file: the caller decides whether to retry.
                 Err(e @ AudioError::Io(_)) => return Err(e),
                 Err(e) => {
@@ -485,6 +542,19 @@ impl<'a> Native<'a> {
         Ok(())
     }
 
+    /// At the end of the stream: an error when no packet decoded, unless the track declares no
+    /// frames (an empty WAV or AIFF is empty, not broken) or a seek reached the end.
+    fn check_decoded(&mut self) -> Result<()> {
+        let empty = self.frames_known && self.empty_ok && self.info.frames == 0 && self.errors == 0;
+        let end_seek = self.seeked
+            && self.errors == 0
+            && (self.empty_ok || self.frames_known && self.info.frames > 0 && self.from >= self.info.frames.saturating_add(self.skip));
+        if self.decoded || empty || end_seek {
+            return Ok(());
+        }
+        Err(self.no_audio("stream contains no audio"))
+    }
+
     fn no_audio(&mut self, msg: &str) -> AudioError {
         self.unsupported.take().unwrap_or_else(|| AudioError::Malformed(format!("no decodable packets: {msg}")))
     }
@@ -533,14 +603,20 @@ fn native<'a>(
 ) -> Option<Native<'a>> {
     let lookahead: Vec<&[u8]> = lookahead.iter().map(Vec::as_slice).collect();
     let dec = TrackDecoder::new(params, &lookahead).ok()?;
+    Some(with_decoder(container, packets, dec, skip, limit, frames))
+}
+
+/// A native track from its packets and a decoder made for them.
+fn with_decoder(container: Container, packets: Packets<'_>, dec: TrackDecoder, skip: u64, limit: Option<u64>, frames: Option<u64>) -> Native<'_> {
     let mut info = AudioInfo::new(container, dec.codec(), dec.sample_format(), dec.sample_rate(), dec.layout(), frames.unwrap_or(0));
     if dec.channels() == 0 || dec.sample_rate() == 0 {
         info.frames = 0;
     }
-    Some(Native {
+    Native {
         packets,
         info,
         frames_known: frames.is_some() && dec.channels() > 0 && dec.sample_rate() > 0,
+        empty_ok: true,
         dec,
         skip,
         limit,
@@ -550,7 +626,7 @@ fn native<'a>(
         decoded: false,
         seeked: false,
         unsupported: None,
-    })
+    }
 }
 
 fn open_wav<'a>(src: &Src<'a>) -> Option<Result<Native<'a>>> {
@@ -902,9 +978,11 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         return None;
     }
     let params = t.codec_params();
+    // Vorbis in Matroska is left to symphonia: its first packet decodes to nothing, which the
+    // timestamp-based timing here does not model.
     // The Matroska file API needs FLAC frame counts to undo timestamp rounding on seeks.
     // Keep its existing fallback until it can index those counts.
-    if params.codec == CodecId::Flac {
+    if matches!(params.codec, CodecId::Vorbis | CodecId::Flac) {
         return None;
     }
     let lookahead: Vec<Vec<u8>> =
@@ -1041,6 +1119,9 @@ fn open_ogg<'a>(src: &Src<'a>, track: Option<usize>) -> Option<Result<Native<'a>
         Err(e) => return Some(Err(e)),
     };
     let s = file.streams.get(stream)?;
+    if s.codec == ogg::Codec::Vorbis {
+        return open_ogg_vorbis(src, file, stream);
+    }
     if s.codec != ogg::Codec::Opus {
         return None;
     }
@@ -1051,12 +1132,138 @@ fn open_ogg<'a>(src: &Src<'a>, track: Option<usize>) -> Option<Result<Native<'a>
         Err(crate::opus::Error::Unsupported(_)) => return None,
         Err(e) => return Some(Err(e.into())),
     };
-    let timing = ogg::OpusTiming::of(s, u32::from(head.pre_skip));
-    let limit = u64::try_from(timing.total).ok();
+    let mut last_duration = 960;
+    let timing = ogg::OpusTiming::of_with_durations(s, u32::from(head.pre_skip), |packet| {
+        if let Some(duration) = ogg::opus_packet_samples(packet.prefix, packet.size) {
+            last_duration = duration;
+        }
+        last_duration
+    });
+    let mut starts = timing.starts.clone();
+    let mut total = timing.total;
+    let durations: Vec<u64> = timing.durations.iter().map(|&d| u64::from(d)).collect();
+    let jumps = bound_gaps(&mut starts, &durations, &mut total, src.size());
+    let limit = u64::try_from(total).ok();
     let skip = u64::from(timing.pre_skip);
-    let starts = timing.starts.clone();
-    let packets = Packets::Ogg { file: Box::new(file), src: src.clone(), stream, next: 0, starts };
+    let packets = Packets::Ogg { file: Box::new(file), src: src.clone(), stream, next: 0, starts, primers: None, jumps };
     native(Container::Ogg, packets, &params, &[], skip, limit, limit).map(Ok)
+}
+
+/// Stream `stream` of `file`, an Ogg Vorbis stream. Packets are read one at a time; their places
+/// on the timeline come from their block sizes and the pages' granule positions, with the start
+/// and end trimming those positions call for (Vorbis I §A.2).
+fn open_ogg_vorbis<'a>(src: &Src<'a>, file: ogg::OggFile, stream: usize) -> Option<Result<Native<'a>>> {
+    let s = file.streams.get(stream)?;
+    let params = s.codec_params();
+    let dec = match TrackDecoder::new(&params, &[]) {
+        Ok(dec) => dec,
+        // With symphonia, it reads the stream or reports it; without, the header's fault stands.
+        Err(_) if cfg!(feature = "symphonia") => return None,
+        Err(e) => return Some(Err(e)),
+    };
+    // A packet whose mode cannot be read counts as its concealment counts it.
+    let mut prev: Option<usize> = None;
+    let timing = ogg::VorbisTiming::of_with_durations(s, |p| {
+        let n = dec.vorbis_block_size(vorbis_head(p), prev);
+        let frames = match (prev, n) {
+            (Some(a), Some(b)) => u32::try_from(a / 4 + b / 4).unwrap_or(u32::MAX),
+            _ => 0,
+        };
+        prev = n;
+        frames
+    });
+    let first_damaged = timing.first_damaged;
+    let durations: Vec<u64> = timing.durations.iter().map(|&d| u64::from(d)).collect();
+    // The presented timeline starts at the first sample to play (a stream cut from a longer one
+    // starts later than 0); decoded frames before it keep negative places. Leading packets that
+    // decode to nothing (the priming packet, on a page of its own or not) take the place of the
+    // first packet that decodes to frames.
+    let mut starts: Vec<i64> = timing.starts.iter().map(|s| s.saturating_sub(timing.first)).collect();
+    if let Some(k) = timing.durations.iter().position(|&d| d > 0) {
+        let place = starts[k];
+        starts[..k].fill(place);
+    }
+    let mut total = timing.total;
+    let mut jumps = bound_gaps(&mut starts, &durations, &mut total, src.size());
+    // a damaged first granule position counts as damage at the first packet
+    if let Some(first) = jumps.first_mut() {
+        *first |= first_damaged;
+    }
+    let primers = s.packets.iter().map(|p| dec.vorbis_mode_readable(vorbis_head(p))).collect();
+    // Decoded frames before the first page's granule position are not presented.
+    let skip = u64::try_from(starts.first().copied().unwrap_or(0).saturating_neg()).unwrap_or(0);
+    let limit = u64::try_from(total).ok();
+    let packets = Packets::Ogg { file: Box::new(file), src: src.clone(), stream, next: 0, starts, primers: Some(primers), jumps };
+    let mut n = with_decoder(Container::Ogg, packets, dec, skip, limit, limit);
+    // a stream with no audio packets, or only the first (which decodes to no frames), is an error
+    n.empty_ok = false;
+    Some(Ok(n))
+}
+
+/// The first bytes of a Vorbis packet, which hold its mode number.
+fn vorbis_head(p: &ogg::Packet) -> &[u8] {
+    p.prefix.get(..(p.size as usize).min(p.prefix.len())).unwrap_or_default()
+}
+
+/// Bounds the silence that gaps between Ogg packets' places leave (lost pages, filled by
+/// [`Native::next_block`]): `starts` holds each packet's place, `durations` the frames each decodes
+/// to and `total` the presented frames, on one timeline. The gaps of a file of `file_bytes` bytes
+/// may hold, in all, the frames of one longest packet per byte of the file. A gap that does not
+/// fit in what is left is a damaged granule position: the packets from it on move back by the gap
+/// to follow the packet before it, and the packet after it is marked in the result, to count as
+/// damaged when read. A later packet placed before the end of the one before it (the granule
+/// positions come back down after one damaged page) moves forward to that end. A `total` past
+/// the last packet's end shrinks by what stays taken off at the end.
+fn bound_gaps(starts: &mut [i64], durations: &[u64], total: &mut i64, file_bytes: u64) -> Vec<bool> {
+    let longest = durations.iter().copied().max().unwrap_or(0).max(1);
+    let mut budget = file_bytes.saturating_mul(longest);
+    let mut jumps = vec![false; starts.len()];
+    // frames taken off the starts from the last damaged granule position on
+    let mut shift = 0i64;
+    for k in 1..starts.len().min(durations.len()) {
+        let expected = starts[k - 1].saturating_add(i64::try_from(durations[k - 1]).unwrap_or(i64::MAX));
+        let mut start = starts[k].saturating_sub(shift);
+        if start < expected {
+            let back = expected.saturating_sub(start);
+            shift = shift.saturating_sub(back).max(0);
+            start = expected;
+        }
+        if let Some(frames) = u64::try_from(start.saturating_sub(expected)).ok().filter(|&f| f > 0) {
+            if frames <= budget {
+                budget -= frames;
+            } else {
+                shift = shift.saturating_add(start.saturating_sub(expected));
+                start = expected;
+                jumps[k] = true;
+            }
+        }
+        starts[k] = start;
+    }
+    // A total past the last packet's end is on the jumped timeline; one within it (a last page
+    // whose granule position came back down) already leaves the jump out.
+    let n = starts.len().min(durations.len());
+    let end = n.checked_sub(1).map_or(0, |k| starts[k].saturating_add(i64::try_from(durations[k]).unwrap_or(i64::MAX)));
+    if shift > 0 && *total > end {
+        *total = total.saturating_sub(shift).max(0);
+    }
+    jumps
+}
+
+#[cfg(test)]
+mod ogg_timing_tests {
+    #[test]
+    fn backward_packet_starts_are_clamped_without_removing_real_gaps_or_end_trimming() {
+        let durations = [0, 128, 128, 128, 128];
+        for last in [384, 512] {
+            let mut starts = [0, 0, 128, 0, last];
+            let mut total = last + 64;
+            let jumps = super::bound_gaps(&mut starts, &durations, &mut total, 1024);
+            assert!(starts.windows(2).zip(durations).all(|(pair, duration)| pair[1] >= pair[0] + duration as i64));
+            assert_eq!(starts[4], last);
+            assert_eq!(total, last + 64);
+            assert!(jumps.iter().all(|jump| !jump));
+        }
+    }
 }
 
 /// The audio tracks of `src` the native path reads, described for a track list; `None` when it

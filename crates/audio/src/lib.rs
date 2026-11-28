@@ -9,10 +9,10 @@
 //!
 //! - [`decode`], [`probe`], [`Decoder`] (streaming, seekable), [`tracks`], [`detect_container`]
 //!   (feature `decode`): WAV and AIFF are read natively; AAC, ALAC, Opus, AC-3/E-AC-3,
-//!   MP1/MP2/MP3 and PCM in MP4/MOV, Matroska/WebM, Ogg or raw streams go through craft-media's
-//!   demuxers and [`TrackDecoder`]; everything else (FLAC, Vorbis, CAF, ADPCM, A-law, µ-law) through
-//!   `symphonia`, which is to be replaced by native decoders. Feature `decode-native` is the
-//!   same without symphonia.
+//!   MP1/MP2/MP3 and PCM in MP4/MOV, Matroska/WebM, Ogg or raw streams, and Vorbis in Ogg, go
+//!   through craft-media's demuxers and [`TrackDecoder`]; everything else (FLAC, Vorbis in
+//!   Matroska, CAF, ADPCM, A-law, µ-law) through `symphonia`, which is to be replaced by native
+//!   decoders. Feature `decode-native` is the same without symphonia.
 //! - [`vorbis::decoder`] (feature `vorbis-decode`): the pure-Rust Vorbis I decoder, packets and Ogg files.
 //! - [`encode_ogg_vorbis`] and [`vorbis::encoder`] (feature `vorbis-encode`): Ogg Vorbis files
 //!   and Vorbis packets from a pure-Rust encoder, 1 to 8 channels, quality -1 to 10, with tags.
@@ -83,6 +83,7 @@ mod packet;
     feature = "opus-decode",
     feature = "ac3-decode",
     feature = "mpa-decode",
+    feature = "vorbis-decode",
     feature = "flac-decode"
 ))]
 mod pcm;
@@ -102,6 +103,7 @@ pub mod sbc;
     feature = "opus-decode",
     feature = "ac3-decode",
     feature = "mpa-decode",
+    feature = "vorbis-decode",
     feature = "flac-decode"
 ))]
 mod track;
@@ -196,6 +198,7 @@ pub use read::{RawPcm, aiff_pcm, wav_pcm};
     feature = "opus-decode",
     feature = "ac3-decode",
     feature = "mpa-decode",
+    feature = "vorbis-decode",
     feature = "flac-decode"
 ))]
 pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
@@ -332,6 +335,16 @@ impl From<vmd::Error> for AudioError {
     fn from(e: vmd::Error) -> Self {
         match e {
             vmd::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "vorbis-decode")]
+impl From<vorbis::decoder::Error> for AudioError {
+    fn from(e: vorbis::decoder::Error) -> Self {
+        match e {
+            vorbis::decoder::Error::Limit(_) => AudioError::TooLarge(e.to_string()),
             _ => AudioError::Malformed(e.to_string()),
         }
     }

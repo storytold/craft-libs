@@ -151,6 +151,7 @@ impl TryFrom<RawLayout> for ChannelLayout {
     feature = "opus-decode",
     feature = "ac3-decode",
     feature = "mpa-decode",
+    feature = "vorbis-decode",
     feature = "flac-decode",
     feature = "pcm-encode"
 ))]

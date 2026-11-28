@@ -317,6 +317,8 @@ fn a_page_with_only_the_priming_packet_does_not_place_the_stream() {
     let negative = VorbisTiming::of(&stream(&[(&[SHORT], 0), (&[LONG], 476), (&[LONG, SHORT], 2076)])).unwrap();
     assert_eq!(negative.starts[1], -100);
     assert_eq!((negative.skip, negative.first, negative.total), (100, 0, 2076));
+    assert!(!negative.first_damaged, "a priming page above a negative start is not damage");
+    assert_eq!(negative.starts[0], 0);
     let offset = VorbisTiming::of(&stream(&[(&[SHORT], 0), (&[LONG], 44_676), (&[LONG, SHORT], 46_276)])).unwrap();
     assert_eq!(offset.starts[1], 44_100);
     assert_eq!((offset.skip, offset.first, offset.total), (0, 44_100, 2176));
@@ -335,6 +337,49 @@ fn one_page_shorter_than_its_packets_trims_the_end() {
     let t = VorbisTiming::of(&stream(&[(&[SHORT, LONG, SHORT], 1000)])).unwrap();
     assert_eq!((t.skip, t.first, t.total), (0, 0, 1000));
     assert_eq!(t.starts[1], 0);
+}
+
+#[test]
+fn a_first_page_above_the_next_page_ends_where_it_starts() {
+    let t = VorbisTiming::of(&stream(&[(&[SHORT, LONG], 5000), (&[LONG, LONG], 2624), (&[SHORT], 3200)])).unwrap();
+    assert!(t.first_damaged);
+    assert_eq!(t.starts, [0, 0, 576, 1600, 2624]);
+    assert_eq!((t.skip, t.first, t.total), (0, 0, 3200));
+    let sound = VorbisTiming::of(&stream(&[(&[SHORT, LONG], 576), (&[LONG, LONG], 2624), (&[SHORT], 3200)])).unwrap();
+    assert!(!sound.first_damaged);
+}
+
+#[test]
+fn a_first_page_above_the_final_page_is_placed_from_zero() {
+    let t = VorbisTiming::of(&stream(&[(&[SHORT, LONG], 5000), (&[LONG, LONG, SHORT], 2500)])).unwrap();
+    assert!(t.first_damaged);
+    assert_eq!(t.starts, [0, 0, 576, 1600, 2624]);
+    assert_eq!((t.skip, t.first, t.total), (0, 0, 2500), "the final page still trims the end");
+}
+
+#[test]
+fn a_priming_page_does_not_hide_a_first_page_above_the_final_page() {
+    let s = stream(&[(&[SHORT], 0), (&[LONG, LONG], 5000), (&[LONG, SHORT], 2500)]);
+    let mut given = [0, 576, 1024, 1024, 576].into_iter();
+    let t = VorbisTiming::of_with_durations(&s, |_| given.next().unwrap_or(0));
+    assert!(t.first_damaged);
+    assert_eq!(t.starts, [0, 0, 576, 1600, 2624]);
+    assert_eq!((t.skip, t.first, t.total), (0, 0, 2500));
+}
+
+#[test]
+fn given_durations_place_packets_as_the_block_sizes_do() {
+    let s = stream(&[(&[SHORT, LONG], 476), (&[LONG, LONG, SHORT], 3100)]);
+    let mut given = [0, 576, 1024, 1024, 576].into_iter();
+    let t = VorbisTiming::of_with_durations(&s, |_| given.next().unwrap_or(0));
+    assert_eq!(t, VorbisTiming::of(&s).unwrap());
+    // a concealed packet keeps the duration the decoder gives it
+    let mut concealed = [0, 576, 1024, 1024, 576].into_iter();
+    let mut s = s;
+    s.packets[3].prefix = [0xFF, 0];
+    let t = VorbisTiming::of_with_durations(&s, |_| concealed.next().unwrap_or(0));
+    assert_eq!(t.durations[3], 1024);
+    assert_eq!(t.starts, [-100, -100, 476, 1500, 2524]);
 }
 
 #[test]

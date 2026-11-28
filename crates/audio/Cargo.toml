@@ -16,11 +16,11 @@ workspace = true
 
 [features]
 # Probe and decode files: WAV and AIFF natively; AAC, ALAC, Opus, AC-3/E-AC-3, MP1/MP2/MP3 and
-# PCM through craft-media's demuxers and this crate's decoders; FLAC, Vorbis, CAF, ADPCM, A-law,
-# µ-law and free-format MP3 through symphonia.
+# PCM through craft-media's demuxers and this crate's decoders, and Vorbis in Ogg the same way;
+# FLAC, Vorbis in Matroska, CAF, ADPCM, A-law, µ-law and free-format MP3 through symphonia.
 decode = ["decode-native", "symphonia"]
 # `decode` without symphonia: only the formats with a native decoder (others are Unsupported).
-decode-native = ["aac-decode", "alac-decode", "opus-decode", "ac3-decode", "mpa-decode", "mp3-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log", "dep:craft-xml"]
+decode-native = ["aac-decode", "alac-decode", "opus-decode", "ac3-decode", "mpa-decode", "mp3-decode", "vorbis-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log", "dep:craft-xml"]
 # The symphonia fallback for the formats with no native decoder yet.
 symphonia = ["decode-native", "dep:symphonia"]
 # Every encoder: the lossless file writers and the AAC, ALAC, AC-3/E-AC-3, MP3 and Opus encoders.

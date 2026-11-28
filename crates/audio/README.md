@@ -27,7 +27,7 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | Feature | Provides | Pulls in |
 |---|---|---|
 | `decode` | `decode`, `probe`, `Decoder`, `tracks`, `TrackDecoder`; every format in [Format support](#format-support) | `decode-native`, `symphonia` |
-| `decode-native` | the same, native formats only (others are `Unsupported`); `wav_pcm`, `aiff_pcm` (a file's integer PCM bit for bit, as `RawPcm`) | the six decoders below, craft-media `isobmff`/`matroska`/`ogg`, `log` |
+| `decode-native` | the same, native formats only (others are `Unsupported`); `wav_pcm`, `aiff_pcm` (a file's integer PCM bit for bit, as `RawPcm`) | the seven decoders below, craft-media `isobmff`/`matroska`/`ogg`, `log` |
 | `symphonia` | the fallback for formats with no native decoder; turning it on is the same as `decode` | `decode-native`, symphonia |
 | `encode` | every encoder, and every format of `encode` and `FileEncoder` | `lossless-encode`, `aac-encode`, `alac-encode`, `ac3-encode`, `eac3-encode`, `mp3-encode`, `opus-encode`, `vorbis-encode` |
 | `lossless-encode` | WAV, AIFF and FLAC writing | `pcm-encode`, `flac-encode` |
@@ -39,7 +39,7 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `alac-encode` | `alac::Encoder`; `encode`, `FileEncoder` for ALAC in M4A; `PacketEncoder` for ALAC | craft-media `isobmff` |
 | `opus-decode`, `opus-encode` | `opus::Decoder`/`StreamDecoder`, `opus::Encoder`; with `opus-encode`, `PacketEncoder` for Opus | none |
 | `vorbis-encode` | `vorbis::encoder::Encoder` (pure Rust); `encode_ogg_vorbis`, `encode_ogg` and `encode` for Ogg Vorbis files (whole buffer; not `FileEncoder`) | craft-media `ogg` |
-| `vorbis-decode` | `vorbis::decoder::Decoder` (packets), `vorbis::decoder::decode_ogg` (whole Ogg Vorbis files); native Vorbis I: floors 0 and 1, residues 0 to 2, channel coupling, both block sizes. `decode` still reads Vorbis files through symphonia | craft-media `ogg` |
+| `vorbis-decode` | `vorbis::decoder::Decoder` (packets), `vorbis::decoder::decode_ogg` (whole Ogg Vorbis files); native Vorbis I: floors 0 and 1, residues 0 to 2, channel coupling, both block sizes. `decode` and `Decoder` use it for Ogg Vorbis files | craft-media `ogg` |
 | `ac3-decode` | `ac3::Decoder`, `ac3::ProgrammeDecoder` | craft-media `bitstream` |
 | `ac3-encode`, `eac3-encode` | `ac3::encoder::Encoder`; `encode`, `FileEncoder` for AC-3 and E-AC-3 streams; `PacketEncoder` for them | craft-media `bitstream` |
 | `mpa-decode` | `mpa::Decoder` | craft-media `bitstream` |
@@ -185,6 +185,12 @@ A damaged packet is concealed and counted in `info().damaged`. A source that fai
 network drop) returns `AudioError::Io` from `next_block` instead, and that packet is skipped. To
 retry it, keep the position: start from the frame the last `seek` returned (0 without one), add
 each block's frames, and `seek` to that position.
+
+Ogg decoding clamps backward packet positions to the previous packet's end and fills missing
+pages with silence. An Opus packet with an invalid duration uses the previous packet's duration,
+or 960 samples before the first packet. A readable Opus TOC sets the concealment length even if
+the framing is malformed. A Vorbis stream containing only a primer packet returns
+an error even after seeking to frame 0.
 
 ### Decode packets from your own demuxer
 
@@ -521,13 +527,14 @@ match craft_audio::decode(&bytes, None) {
 | MP3 (Layer III) | native | native; `.mp3` through `encode` / `FileEncoder`, frames through `mp3::Encoder` |
 | Opus | native | native, packets (`opus::Encoder`; no file writer) |
 | AC-3, E-AC-3 | native | native; `.ac3` / `.eac3` through `encode` / `FileEncoder`, packets through `ac3::encoder::Encoder` |
-| Vorbis, ADPCM, A-law, µ-law | symphonia | — |
+| Vorbis | native in Ogg; symphonia in Matroska | native, Ogg Vorbis files (`encode_ogg_vorbis`) |
+| ADPCM, A-law, µ-law | symphonia | — |
 
 | Container | Demuxer | Timing |
 |---|---|---|
 | MP4, M4A, MOV | `craft_media::isobmff` for native codecs; symphonia for the others (FLAC) | edit lists (AAC priming, Opus pre-skip) |
 | Matroska, WebM | `craft_media::matroska` for native codecs; symphonia for the others (Vorbis, FLAC) | `CodecDelay`, `DiscardPadding` |
-| Ogg | `craft_media::ogg` (Opus); symphonia (Vorbis, FLAC) | pre-skip, end trimming |
+| Ogg | `craft_media::ogg` (Opus, Vorbis); symphonia (FLAC) | Opus pre-skip and end trimming; Vorbis start and end trimming |
 | Raw ADTS AAC, AC-3, E-AC-3, MP1/MP2 | native frame sync | — |
 | Raw MP3 | native frame sync; symphonia for the free format | Xing / Info / VBRI frame skipped; LAME tag encoder delay and padding |
 | FLAC | symphonia | — |
@@ -577,8 +584,8 @@ match craft_audio::decode(&bytes, None) {
 - `ChannelLayout::unordered` is written to FLAC as mask `0x0000`, as RFC 9639 §8.6.2 allows, but
   ffmpeg and `flac -d` ignore that mask and use their default layout for the channel count.
 - Not decoded at all: Speex.
-- `TrackDecoder` returns `Unsupported` for FLAC and Vorbis; `decode` and `Decoder` read
-  those through symphonia. ALAC in CAF still goes through symphonia (craft-media has no CAF
+- `TrackDecoder` returns `Unsupported` for FLAC; `decode` and `Decoder` read it through
+  symphonia. Vorbis in Matroska and ALAC in CAF also go through symphonia (craft-media has no CAF
   demuxer).
 - ALAC: craft-media's MP4 muxer writes no `chan` box, so an M4A of more than two channels (from
   `EncodeFormat::Alac` or muxed from `alac::Encoder` packets) carries no explicit layout; decoders

@@ -1,6 +1,6 @@
 //! RFC 7845 Opus timing and the Vorbis identification header.
 
-use super::Stream;
+use super::{Packet, Stream};
 
 /// Duration of an Opus packet in 48 kHz samples from its TOC (RFC 6716 §3.1); `None` if invalid.
 pub fn opus_packet_samples(prefix: [u8; 2], size: u32) -> Option<u32> {
@@ -53,9 +53,15 @@ impl OpusTiming {
     /// absurdly large one) is treated like a missing granule: the page's packets continue from the
     /// previous position instead of jumping to a nonsense one.
     pub fn of(stream: &Stream, pre_skip: u32) -> OpusTiming {
+        Self::of_with_durations(stream, pre_skip, |packet| opus_packet_samples(packet.prefix, packet.size).unwrap_or(0))
+    }
+
+    /// Timing with decoded packet durations in 48 kHz samples, in stream order.
+    /// The callback also supplies the duration used to conceal an invalid packet.
+    pub fn of_with_durations(stream: &Stream, pre_skip: u32, duration: impl FnMut(&Packet) -> u32) -> OpusTiming {
         // Granule positions come straight from the file, so the arithmetic saturates: a hostile
         // value gives wrong positions, never an overflow.
-        let durations: Vec<u32> = stream.packets.iter().map(|p| opus_packet_samples(p.prefix, p.size).unwrap_or(0)).collect();
+        let durations: Vec<u32> = stream.packets.iter().map(duration).collect();
         let n = durations.len();
         let mut ends: Vec<Option<i64>> = vec![None; n];
         let mut i = 0;
