@@ -115,7 +115,8 @@ impl Default for BoxConstraints {
 pub struct ShapeDragOptions {
     /// Which shape the drag draws.
     pub kind: ShapeKind,
-    /// The Rectangle's corner radius; over 0 draws four equal radii.
+    /// The Rectangle's corner radius, over 0 drawing four equal radii; for a Triangle, the radius of its three
+    /// corners.
     pub corner_radius: f64,
     /// The polygon's sides or the star's points, in [`SIDES`](crate::geometry::shape::SIDES).
     pub sides: u32,
@@ -136,7 +137,7 @@ impl ShapeDragOptions {
         ShapeDragOptions { kind, ..ShapeDragOptions::default() }
     }
 
-    /// The Rectangle's corner radius.
+    /// The Rectangle's or the Triangle's corner radius.
     #[must_use]
     pub fn corner_radius(mut self, radius: f64) -> Self {
         self.corner_radius = radius;

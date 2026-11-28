@@ -68,6 +68,7 @@ craft_ui::words! {
         not_assigned: "keyboardShortcuts.notAssigned" = "Not assigned";
         label_scope_both_work: template "keyboardShortcuts.labelScopeBothWork" = "{label} ({scope}, both work)";
         add_a_shortcut_to_label: template "keyboardShortcuts.addAShortcutToLabel" = "Add a shortcut to {label}";
+        replace_chord_for_label: template "keyboardShortcuts.replaceChordForLabel" = "Replace {chord} for {label}";
         remove_chord_from_label: template "keyboardShortcuts.removeChordFromLabel" = "Remove {chord} from {label}";
         restore_the_default_for_label: template "keyboardShortcuts.restoreTheDefaultForLabel" = "Restore the default for {label}";
         label_chord: template "keyboardShortcuts.labelChord" = "{label}: {chord}";
@@ -113,6 +114,7 @@ craft_ui::words! {
         also_used_by_label: template "keyboardShortcuts.alsoUsedByLabel" = "Also used by {label}";
         chord_is_reserved_by_the_system: template "keyboardShortcuts.chordIsReservedByTheSystem" = "{chord} is reserved by the system";
         a_command_can_have_at_most: template "keyboardShortcuts.aCommandCanHaveAtMost" = "A command can have at most {n} shortcuts";
+        shortcut_cannot_be_saved_in_its_scope: template "keyboardShortcuts.shortcutCannotBeSavedInItsScope" = "{chord} for {command} cannot be saved in its current scope";
         the_scope_scope_is_unknown: template "keyboardShortcuts.theScopeScopeIsUnknown" = "The scope {scope} is unknown";
         too_many_shortcuts_are_assigned: "keyboardShortcuts.tooManyShortcutsAreAssigned" = "Too many shortcuts are assigned";
         this_command_is_unknown: "keyboardShortcuts.thisCommandIsUnknown" = "This command is unknown";
@@ -121,6 +123,8 @@ craft_ui::words! {
         keep_both: "keyboardShortcuts.keepBoth" = "Keep Both";
         go_to_conflict: "keyboardShortcuts.goToConflict" = "Go to Conflict";
         undo_changes: "keyboardShortcuts.undoChanges" = "Undo Changes";
+        replace_old_for_command_with_chord_used_by_label: template "keyboardShortcuts.replaceOldForCommandWithChordUsedByLabel" = "Replace {old} for {command} with {chord}, which is used by {label}";
+        the_shortcuts_changed_try_replacing_again: "keyboardShortcuts.theShortcutsChangedTryReplacingAgain" = "The shortcuts changed. Try the replacement again.";
         dismiss: "keyboardShortcuts.dismiss" = "Dismiss";
         // Saved shortcuts that could not be used.
         key_no_command_has_this_name: template "keyboardShortcuts.keyNoCommandHasThisName" = "{key}: no command has this name";

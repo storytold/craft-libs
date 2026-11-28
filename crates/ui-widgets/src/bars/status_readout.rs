@@ -11,7 +11,7 @@ use crate::runtime::commands::{self, CommandRef};
 use crate::runtime::env::{Env, Label, Units};
 use crate::text::{InvalidZoom, ZoomField};
 use craft_behavior::kurbo::Size;
-use craft_behavior::{CanvasView, EditEvents, IconId, Mixed, PixelSize};
+use craft_behavior::{EditEvents, IconId, Mixed, PixelSize};
 use egui::{Response, Ui};
 use std::time::Duration;
 
@@ -153,9 +153,9 @@ pub struct StatusReadoutOutput {
     pub response: Response,
     /// The zoom field's response; `None` when the row did not run.
     pub zoom: Option<Response>,
-    /// The view changes of this pass (a typed or scrubbed zoom about the view's centre), for a binding that does not
-    /// write through.
-    pub view: EditEvents<CanvasView>,
+    /// The zoom changes of this pass (a typed or scrubbed zoom, in view points per document unit), for a binding that
+    /// does not write through. Applying a zoom to a view about its centre is the host's.
+    pub zoom_edits: EditEvents<f64>,
     /// The item chosen in the menu this pass; the host stores it.
     pub item: Option<StatusItem>,
     /// The zoom field's cut entry of this pass ([`ZoomFieldOutput::invalid_zoom`](crate::text::ZoomFieldOutput)),
@@ -172,18 +172,19 @@ impl Outcome for StatusReadoutOutput {
 
     #[cfg(feature = "testing")]
     fn story_facts(&self) -> crate::testing::StoryOutput {
-        crate::testing::StoryOutput::of_edit(&self.response, &self.view)
+        crate::testing::StoryOutput::of_edit(&self.response, &self.zoom_edits)
     }
 }
 
 /// The zoom field, the chosen item's text and the menu that chooses it, shown as children of a status `Bar`.
 ///
-/// - The field shows the bound view's zoom in percent of device pixels, as the Navigator's zoom row does. A typed or
-///   scrubbed zoom is clamped to the document's zoom range and written into the view about its centre.
+/// - The field shows the bound zoom (view points per document unit, as `CanvasView::zoom`) in percent of device
+///   pixels, as the Navigator's zoom row does. A typed or scrubbed zoom is clamped to the document's zoom range and
+///   written into the binding.
 /// - The item is the caller's value, and a pick comes back in the output.
 #[derive(crate::contract::Pattern, crate::contract::MemoProps)]
 pub struct StatusReadout<'a> {
-    view: Bind<'a, CanvasView>,
+    zoom: Bind<'a, f64>,
     document: Size,
     item: StatusItem,
     values: &'a StatusValues,
@@ -191,9 +192,9 @@ pub struct StatusReadout<'a> {
 }
 
 impl<'a> StatusReadout<'a> {
-    /// A readout of the zoom of `view` over a document of `document` units that shows `item` from `values`.
-    pub fn new(view: Bind<'a, CanvasView>, document: Size, item: StatusItem, values: &'a StatusValues) -> Self {
-        StatusReadout { view, document, item, values, tips: Vec::new() }
+    /// A readout of `zoom` over a document of `document` units that shows `item` from `values`.
+    pub fn new(zoom: Bind<'a, f64>, document: Size, item: StatusItem, values: &'a StatusValues) -> Self {
+        StatusReadout { zoom, document, item, values, tips: Vec::new() }
     }
 
     /// A tooltip for the info text while `item` is the one shown.
@@ -213,20 +214,20 @@ impl<'a> StatusReadout<'a> {
         let mut events = EditEvents::new();
         let mut invalid_zoom = None;
         let shown = Row::new().show(ui, |ui, cx| {
-            let current = match self.view.reborrow().read(cx) {
+            let current = match self.zoom.reborrow().read(cx) {
                 Some(Mixed::Same(current)) => Some(current),
                 _ => None,
             };
             let field = Field::new(words.readout_zoom.clone())
                 .side(SideLabel::new().kind(LabelKind::Hidden))
-                .show(ui, |ui, _| ZoomField::new(words.readout_zoom.clone(), current, document).scrub(true).status_bar().show(ui));
+                .show(ui, |ui, _| ZoomField::of_zoom(words.readout_zoom.clone(), current, document).scrub(true).status_bar().show_zoom(ui));
             let field = field.inner.map(|zoom| {
                 invalid_zoom = zoom.invalid_zoom;
-                events = zoom.view;
+                events = zoom.zoom;
                 zoom.response
             });
             for edit in &events {
-                self.view.reborrow().write(cx, edit);
+                self.zoom.reborrow().write(cx, edit);
             }
             let mut info = Text::new(text.clone()).shade(Shade::Muted).elide(Elide::End);
             if let Some((_, tip)) = self.tips.iter().find(|(item, _)| *item == self.item) {
@@ -240,6 +241,6 @@ impl<'a> StatusReadout<'a> {
             (field, menu.picked)
         });
         let (zoom, item) = shown.inner.unzip();
-        StatusReadoutOutput { response: shown.output, zoom: zoom.flatten(), view: events, item: item.flatten(), invalid_zoom }
+        StatusReadoutOutput { response: shown.output, zoom: zoom.flatten(), zoom_edits: events, item: item.flatten(), invalid_zoom }
     }
 }

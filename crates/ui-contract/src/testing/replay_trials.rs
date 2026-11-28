@@ -120,8 +120,8 @@ fn replayed_focus_stops_keep_their_own_target() {
         let ctx = ui.ctx();
         let from = focus::stop_count(ctx);
         focus::replay(ctx, &recorded.focus);
-        assert_eq!(focus::first_stop_inside(ctx, parent, from), Some(focus::FocusTarget::Id(child)));
-        assert_eq!(focus::first_stop_inside(ctx, child, from), None);
+        assert_eq!(focus::first_stop_inside(ctx, parent, from, None), Some(focus::FocusTarget::Id(child)));
+        assert_eq!(focus::first_stop_inside(ctx, child, from, None), None);
     });
 }
 

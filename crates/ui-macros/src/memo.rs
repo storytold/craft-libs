@@ -91,7 +91,8 @@ fn is_static_ref(ty: &syn::Type) -> bool {
 }
 
 /// The field escapes of `MemoProps`: `hash` binds a type parameter only such fields name by what `MemoKey::feed_hash`
-/// needs (a dock's panel type); `address` and `covered_by` fields are not checked and keep the trait's bound.
+/// needs (a dock's panel type); a `covered_by` field feeds nothing, so a type parameter only such fields name takes no
+/// bound (the app state a shell slot's view holds); `address` fields are not checked and keep the trait's bound.
 struct MemoEscapes;
 
 impl EscapeRule for MemoEscapes {
@@ -99,7 +100,8 @@ impl EscapeRule for MemoEscapes {
         Ok(match feed_of(field)? {
             Feed::Props => None,
             Feed::Hash => Some(Some(quote!(::core::hash::Hash + ::core::marker::Sync))),
-            Feed::Address | Feed::Covered(_) => Some(None),
+            Feed::Covered(_) => Some(Some(TokenStream::new())),
+            Feed::Address => Some(None),
         })
     }
 }

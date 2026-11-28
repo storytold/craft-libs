@@ -5,11 +5,12 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use craft_keymap::Mods;
 use craft_menu::{
-    Alternate, Backend, Builtin, Chord, ClipboardKeys, CommandRef, Dispatch, Event, Gate, ItemState, LayoutOptions, MenuBar, NativeMenu, apply_state,
-    mac_layout, structure_key,
+    Alternate, Attempt, Backend, Builtin, Chord, ClipboardKeys, CommandRef, Dispatch, Event, Gate, ItemState, LayoutOptions, MenuBar, NativeMenu,
+    REBUILD_RETRY, RebuildRetry, apply_state, mac_layout, structure_key,
 };
 use craft_ui::contract::{Props as _, Show as _, Tracked};
 use craft_ui::testing::focus::key_release;
@@ -378,4 +379,57 @@ fn apply_state_with_no_change_keeps_the_revision() {
     let moved = model.revision();
     apply_state(&mut model, |command| ItemState::default().enabled(*command != cmd("file.new")));
     assert_eq!(model.revision(), moved, "and the same changed state again does not");
+}
+
+/// Menus whose build failed are not built again before their retry is due, are built once when it
+/// is due, and are not built again after that fails too; changed menus are built and get their own
+/// retry.
+#[trial]
+fn a_failed_rebuild_is_tried_once_more() {
+    let (first, second) = (sample(false, true), sample(true, true));
+    let mut retry = RebuildRetry::default();
+    let start = Instant::now();
+    let clock = Cell::new(start);
+    let builds = Cell::new(0);
+    let fail = || {
+        builds.set(builds.get() + 1);
+        false
+    };
+    assert_eq!(retry.attempt(&first, || clock.get(), fail), Attempt::Retry(REBUILD_RETRY), "a failed build waits for its retry");
+    clock.set(start + REBUILD_RETRY / 2);
+    let Attempt::Retry(left) = retry.attempt(&first, || clock.get(), fail) else { panic!("the retry is not due yet") };
+    assert!(left < REBUILD_RETRY, "a sync before the retry learns the time left: {left:?}");
+    assert_eq!(builds.get(), 1, "nothing is built before the retry is due");
+    clock.set(start + REBUILD_RETRY);
+    assert_eq!(retry.attempt(&first, || clock.get(), fail), Attempt::Failed, "the retry fails too");
+    clock.set(start + REBUILD_RETRY * 10);
+    assert_eq!(retry.attempt(&first, || clock.get(), fail), Attempt::Failed);
+    assert_eq!(builds.get(), 2, "the same menus are tried once more, and only once");
+    assert_eq!(retry.attempt(&second, || clock.get(), fail), Attempt::Retry(REBUILD_RETRY), "changed menus are built and get their own retry");
+    assert_eq!(builds.get(), 3);
+    clock.set(start + REBUILD_RETRY * 11);
+    assert_eq!(retry.attempt(&second, || clock.get(), || true), Attempt::Built, "the retry builds them");
+    assert_eq!(retry.attempt(&second, || clock.get(), || true), Attempt::Built, "built menus can be built again");
+}
+
+/// A build that fails slowly gets the whole delay, counted from when it failed.
+#[trial]
+fn a_retry_waits_from_when_the_build_failed() {
+    let bar = sample(false, true);
+    let mut retry = RebuildRetry::default();
+    let start = Instant::now();
+    let clock = Cell::new(start);
+    let slow = Duration::from_millis(1200);
+    let slow_failure = || {
+        clock.set(start + slow);
+        false
+    };
+    assert_eq!(retry.attempt(&bar, || clock.get(), slow_failure), Attempt::Retry(REBUILD_RETRY));
+    clock.set(start + REBUILD_RETRY);
+    let Attempt::Retry(left) = retry.attempt(&bar, || clock.get(), || panic!("built before the retry was due")) else {
+        panic!("the retry is not due a delay after the build began")
+    };
+    assert_eq!(left, slow, "the delay runs from the failure, not from when the build began");
+    clock.set(start + slow + REBUILD_RETRY);
+    assert_eq!(retry.attempt(&bar, || clock.get(), || true), Attempt::Built, "the retry runs when it is due");
 }

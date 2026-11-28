@@ -69,8 +69,8 @@ pub use new_document::{
 pub(crate) mod about;
 
 pub use about::{
-    AboutAppTab, AboutDialog, AboutImage, AboutInfo, AboutLayout, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor,
-    ContributorSort, Credits, HostedAbout, ModelCredit, NameMode,
+    AboutAppTab, AboutDialog, AboutImage, AboutInfo, AboutLayout, AboutLicense, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare,
+    Contributor, ContributorSort, Credits, HostedAbout, ModelCredit, NameMode,
 };
 
 mod color_choice;
