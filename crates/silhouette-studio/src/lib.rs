@@ -1,5 +1,6 @@
 //! Reader for Silhouette Studio documents: `.studio` (header `silhouette04;`) and
-//! `.studio3` (header `silhouette05;`).
+//! `.studio3` (header `silhouette05;`), and writers for `.studio3` ([`write`]) and `.studio` ([`write_v2`]) for pages and
+//! shapes of straight and Bézier contours with line colour, width and fill.
 //!
 //! It reads every object's outline (open and closed paths, lines and Bézier curves, compound
 //! paths, text as outlines), each outline's line colour and the page size. Coordinates are
@@ -16,7 +17,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod write;
 use kurbo::{BezPath, Point, Vec2};
+pub use write::{MAX_WRITE_POINTS, MAX_WRITE_SHAPES, WriteContour, WriteDocument, WriteNode, WriteShape, write, write_v2};
 
 /// Largest file read (store designs and saved samples are far smaller).
 pub const MAX_FILE_BYTES: usize = 64 * 1024 * 1024;
@@ -357,7 +360,8 @@ fn line_color_before(d: &[u8], from: usize, to: usize) -> Option<[u8; 3]> {
             let v = f32_at(d, record - 24 + 4 * i)?;
             (v.is_finite() && (0.0..=1.0).contains(&v)).then(|| (v * 255.0).round() as u8)
         };
-        if let (Some(b), Some(g), Some(r)) = (channel(0), channel(1), channel(2)) {
+        // R, G, B, A: a red line saved in Silhouette Studio 5.0.556 stores 1, 0, 0, 1 here.
+        if let (Some(r), Some(g), Some(b)) = (channel(0), channel(1), channel(2)) {
             found = Some([r, g, b]);
         }
     }
@@ -460,7 +464,7 @@ mod tests {
     /// then the cut-action record (`01 L`, name "cut").
     fn style(rgb: [u8; 3]) -> Vec<u8> {
         let mut out = vec![1];
-        for c in [rgb[2], rgb[1], rgb[0], 255] {
+        for c in [rgb[0], rgb[1], rgb[2], 255] {
             out.extend_from_slice(&(f32::from(c) / 255.0).to_le_bytes());
         }
         out.extend_from_slice(&[0; 8]);
