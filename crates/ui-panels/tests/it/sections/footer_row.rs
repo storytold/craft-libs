@@ -6,7 +6,9 @@ use craft_ui::buttons::IconButton;
 use craft_ui::choice::Segmented;
 use craft_ui::contract::{Bind, Entry, ListDrag, Props as _, RowAlign, Show as _, ShowContainer as _};
 use craft_ui::layout_components::{Row, Stack};
-use craft_ui::sections::{DropAction, FooterAction, FooterBar, ReorderableSections, SectionKey, SectionLayout, SectionSpec};
+use craft_ui::sections::{
+    DialogRole, DropAction, FooterAction, FooterBar, FooterButton, ReorderableSections, SectionKey, SectionLayout, SectionSpec,
+};
 use craft_ui::testing::{Fixture, pointer, trial};
 use craft_ui::tile_grid::{ThumbnailSlider, TileZoom};
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Ui, Vec2};
@@ -212,4 +214,268 @@ fn the_start_and_end_groups_of_a_footer_bar_sit_at_their_edges() {
     assert!(ltr[3].max.x < ltr[2].min.x, "the end group reads from the end edge: {ltr:?}");
     let rtl = split(Direction::Rtl);
     assert!(rtl[0].min.x > rtl[2].max.x, "right to left the start group sits at the right: {rtl:?}");
+}
+
+/// A bar of eight icon actions too narrow for them on one line keeps every action inside it, with or without a start
+/// group or leading controls.
+#[trial]
+fn a_footer_bar_too_narrow_for_its_actions_keeps_them_inside_it() {
+    for (start, leading) in [(0, false), (2, false), (0, true), (2, true)] {
+        let seen = Rc::new(RefCell::new((Rect::NOTHING, Vec::new())));
+        let out = Rc::clone(&seen);
+        let mut fixture = Fixture::new(move |ui| {
+            let icons = ["ban", "check", "copy", "trash", "plus", "more", "list", "grid"];
+            let bar = FooterBar::actions(icons.map(|icon| FooterAction::new(IconId::new(icon), icon))).at_start(start);
+            let output = if leading {
+                bar.show_footer_leading(ui, |ui, _| {
+                    IconButton::new(IconId::new("settings")).label("Settings").show(ui);
+                })
+                .0
+            } else {
+                bar.show_footer(ui)
+            };
+            *out.borrow_mut() = (output.response.rect, output.responses.iter().map(|response| response.rect).collect::<Vec<_>>());
+        });
+        fixture.room(Vec2::new(120.0, 200.0)).settle();
+        let (bar, actions) = seen.borrow().clone();
+        assert_eq!(actions.len(), 8);
+        for rect in &actions {
+            assert!(bar.expand(0.5).contains_rect(*rect), "start {start}, leading {leading}: {rect:?} lies outside the bar {bar:?}");
+        }
+    }
+}
+
+/// A bar too narrow for its start group and end group side by side, even with an action on each of their lines, keeps
+/// every action inside it, and a focused action keeps the focus as the bar narrows.
+#[trial]
+fn a_footer_bar_too_narrow_for_its_two_groups_side_by_side_keeps_them_inside_it() {
+    let seen = Rc::new(RefCell::new((Rect::NOTHING, Vec::new())));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let actions = ["ban", "check", "copy", "trash"].map(|icon| FooterAction::new(IconId::new(icon), icon));
+        let output = FooterBar::actions(actions).at_start(2).show_footer(ui);
+        *out.borrow_mut() = (output.response.rect, output.responses.iter().map(|response| response.rect).collect::<Vec<_>>());
+    });
+    fixture.room(Vec2::new(WIDE, 300.0)).settle();
+    let trash = fixture.by_label("trash").expect("the trash action");
+    fixture.access(craft_ui::testing::focus::AccessActionKind::Focus, &trash).settle();
+    let tree = fixture.tree();
+    assert_eq!(tree.name_of(craft_ui::testing::access::focused_key(tree)), Some("trash"), "the action takes the focus");
+    fixture.room(Vec2::new(40.0, 300.0)).settle();
+    let tree = fixture.tree();
+    assert_eq!(tree.name_of(craft_ui::testing::access::focused_key(tree)), Some("trash"), "the focused action keeps its focus");
+    let (bar, actions) = seen.borrow().clone();
+    assert_eq!(actions.len(), 4);
+    for rect in &actions {
+        assert!(bar.expand(0.5).contains_rect(*rect), "{rect:?} lies outside the bar {bar:?}");
+    }
+}
+
+/// The slider's rect and the rects of three actions of a footer bar whose leading control is a thumbnail slider, in a
+/// room `width` wide.
+fn slider_footer(width: f32) -> (Rect, Vec<Rect>) {
+    slider_footer_in(width, craft_ui::runtime::env::Direction::Ltr)
+}
+
+fn slider_footer_in(width: f32, direction: craft_ui::runtime::env::Direction) -> (Rect, Vec<Rect>) {
+    let seen = Rc::new(RefCell::new((Rect::NOTHING, Vec::new())));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut zoom = 1.0;
+        let actions = ["trash", "plus", "new_folder"].map(|icon| FooterAction::new(IconId::new(icon), icon));
+        let (output, slider) = FooterBar::actions(actions)
+            .show_footer_leading(ui, |ui, _| ThumbnailSlider::new("Size", Bind::bound(&mut zoom), TileZoom::Ladder).show(ui).response.rect);
+        *out.borrow_mut() = (slider.unwrap_or(Rect::NOTHING), output.responses.iter().map(|response| response.rect).collect());
+    });
+    fixture.direction(direction).room(Vec2::new(width, 200.0)).settle();
+    seen.borrow().clone()
+}
+
+/// Beside a leading slider, the slider narrows before the actions continue on a new line: a bar with room for the
+/// actions and half the slider keeps the actions on one line at its end edge.
+#[trial]
+fn a_footer_bar_narrows_its_leading_slider_before_its_actions_wrap() {
+    let (wide, actions) = slider_footer(900.0);
+    let span =
+        actions.iter().map(|rect| rect.max.x).fold(f32::NEG_INFINITY, f32::max) - actions.iter().map(|rect| rect.min.x).fold(f32::INFINITY, f32::min);
+    let width = (wide.width() / 2.0 + span + 32.0).ceil();
+    let (slider, actions) = slider_footer(width);
+    assert_eq!(actions.len(), 3);
+    assert!(actions.iter().all(|rect| (rect.min.y - actions[0].min.y).abs() < 0.5), "the actions stay on one line: {actions:?}");
+    assert!(actions.iter().all(|rect| rect.max.x <= width + 0.5), "the actions end inside the {width}-point bar: {actions:?}");
+    assert!(slider.width() < wide.width() - 0.5, "the slider kept its width {} in a narrow bar", slider.width());
+}
+
+#[trial]
+fn a_footer_bar_moves_its_actions_below_a_leading_control_that_cannot_narrow_further() {
+    let width = 40.0;
+    for direction in [craft_ui::runtime::env::Direction::Ltr, craft_ui::runtime::env::Direction::Rtl] {
+        let (slider, actions) = slider_footer_in(width, direction);
+        assert!(actions.iter().all(|rect| rect.min.x >= -0.5 && rect.max.x <= width + 0.5), "the actions overflow: {actions:?}");
+        assert!(actions.iter().all(|rect| rect.min.y >= slider.max.y), "the actions must follow the slider on later lines: {slider:?}, {actions:?}");
+    }
+}
+
+/// A bar whose actions wrapped beside a leading slider puts them back on one line, narrowing the slider, once fewer of
+/// them fit there.
+#[trial]
+fn a_footer_bar_whose_wrapped_actions_shorten_puts_them_back_on_one_line() {
+    let (wide, three) = slider_footer(900.0);
+    let span =
+        three.iter().map(|rect| rect.max.x).fold(f32::NEG_INFINITY, f32::max) - three.iter().map(|rect| rect.min.x).fold(f32::INFINITY, f32::min);
+    let width = (wide.width() / 2.0 + span + 32.0).ceil();
+    let count = Rc::new(std::cell::Cell::new(8));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let (asked, out) = (Rc::clone(&count), Rc::clone(&seen));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut zoom = 1.0;
+        let icons = ["trash", "plus", "new_folder", "ban", "check", "copy", "more", "list"];
+        let actions = icons.into_iter().take(asked.get()).map(|icon| FooterAction::new(IconId::new(icon), icon));
+        let (output, _) = FooterBar::actions(actions)
+            .show_footer_leading(ui, |ui, _| ThumbnailSlider::new("Size", Bind::bound(&mut zoom), TileZoom::Ladder).show(ui));
+        *out.borrow_mut() = output.responses.iter().map(|response| response.rect).collect::<Vec<_>>();
+    });
+    fixture.room(Vec2::new(width, 200.0)).settle();
+    let eight = seen.borrow().clone();
+    assert!(eight.iter().any(|rect| (rect.min.y - eight[0].min.y).abs() >= 0.5), "eight actions take more lines: {eight:?}");
+    count.set(3);
+    fixture.settle();
+    let three = seen.borrow().clone();
+    assert_eq!(three.len(), 3);
+    assert!(three.iter().all(|rect| (rect.min.y - three[0].min.y).abs() < 0.5), "three actions share one line: {three:?}");
+    assert!(three.iter().all(|rect| rect.max.x <= width + 0.5), "the three actions end inside the bar: {three:?}");
+
+    // A focused action keeps the focus as the bar widens and its actions go back on one line.
+    count.set(8);
+    fixture.settle();
+    let trash = fixture.by_label("trash").expect("the trash action");
+    fixture.access(craft_ui::testing::focus::AccessActionKind::Focus, &trash).settle();
+    fixture.room(Vec2::new(900.0, 200.0)).settle();
+    let eight = seen.borrow().clone();
+    assert!(eight.iter().all(|rect| (rect.min.y - eight[0].min.y).abs() < 0.5), "eight actions share one line in a wide bar: {eight:?}");
+    let tree = fixture.tree();
+    assert_eq!(tree.name_of(craft_ui::testing::access::focused_key(tree)), Some("trash"), "the focused action keeps its focus");
+    fixture.room(Vec2::new(40.0, 400.0)).frame(Vec::new());
+    let tree = fixture.tree();
+    assert_eq!(
+        tree.name_of(craft_ui::testing::access::focused_key(tree)),
+        Some("trash"),
+        "the focused action keeps its focus below the leading control"
+    );
+}
+
+/// A bar with a leading control narrowed until its actions wrap keeps them inside it in the first frame at the new
+/// width, and each action keeps its id on the new lines.
+#[trial]
+fn a_footer_bar_wraps_its_actions_beside_a_leading_control_in_the_first_frame() {
+    let seen = Rc::new(RefCell::new((Rect::NOTHING, Vec::new())));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let icons = ["ban", "check", "copy", "trash", "plus", "more", "list", "grid"];
+        let (output, _) = FooterBar::actions(icons.map(|icon| FooterAction::new(IconId::new(icon), icon))).show_footer_leading(ui, |ui, _| {
+            IconButton::new(IconId::new("settings")).label("Settings").show(ui);
+        });
+        *out.borrow_mut() = (output.response.rect, output.responses.iter().map(|response| (response.id, response.rect)).collect::<Vec<_>>());
+    });
+    fixture.room(Vec2::new(900.0, 200.0)).settle();
+    let wide = seen.borrow().1.clone();
+    assert!(wide.iter().all(|(_, rect)| (rect.min.y - wide[0].1.min.y).abs() < 0.5), "one line in a wide bar: {wide:?}");
+    for width in [120.0, 40.0] {
+        fixture.room(Vec2::new(width, 400.0)).frame(Vec::new());
+        let (bar, narrow) = seen.borrow().clone();
+        assert_eq!(narrow.len(), 8);
+        assert!(narrow.iter().any(|(_, rect)| (rect.min.y - narrow[0].1.min.y).abs() >= 0.5), "the actions take more lines: {narrow:?}");
+        for (_, rect) in &narrow {
+            assert!(bar.expand(0.5).contains_rect(*rect), "{rect:?} lies outside the bar {bar:?} in the first narrow frame");
+        }
+        for ((was, _), (now, _)) in wide.iter().zip(&narrow) {
+            assert_eq!(was, now, "an action's id changed when the actions wrapped");
+        }
+    }
+}
+
+const DIALOG_BUTTONS: [&str; 4] = ["Reset", "Don't Save", "Cancel", "OK"];
+
+#[trial]
+fn a_footer_bar_moves_its_buttons_below_leading_controls_when_they_do_not_fit_beside_them() {
+    let (_, wide) = dialog_buttons(900.0, false);
+    let width = wide.iter().map(Rect::width).fold(0.0, f32::max) + 8.0;
+    let (bar, buttons) = dialog_buttons(width, true);
+    assert!(buttons.iter().all(|rect| bar.expand(0.5).contains_rect(*rect)), "buttons overflow the bar {bar:?}: {buttons:?}");
+}
+
+/// A focused leading control keeps the focus when the bar narrows and its end group moves below it, for a bar of
+/// actions and a bar of dialog buttons.
+#[trial]
+fn a_focused_leading_control_keeps_its_focus_when_the_end_group_moves_below_it() {
+    for buttons in [false, true] {
+        let mut fixture = Fixture::new(move |ui| {
+            let leading = |ui: &mut Ui, _: &mut craft_ui::contract::BodyCx<'_>| {
+                IconButton::new(IconId::new("settings")).label("Settings").show(ui);
+            };
+            if buttons {
+                let roles = [DialogRole::Other, DialogRole::Alternate, DialogRole::Cancel, DialogRole::Accept];
+                FooterBar::buttons(DIALOG_BUTTONS.into_iter().zip(roles).map(|(label, role)| FooterButton::new(label, role)))
+                    .show_footer_leading(ui, leading);
+            } else {
+                let icons = ["trash", "plus", "new_folder"];
+                FooterBar::actions(icons.into_iter().map(|icon| FooterAction::new(IconId::new(icon), icon))).show_footer_leading(ui, leading);
+            }
+        });
+        fixture.room(Vec2::new(900.0, 200.0)).settle();
+        let settings = fixture.by_label("Settings").expect("the leading control");
+        fixture.access(craft_ui::testing::focus::AccessActionKind::Focus, &settings).settle();
+        let tree = fixture.tree();
+        assert_eq!(tree.name_of(craft_ui::testing::access::focused_key(tree)), Some("Settings"), "buttons {buttons}: the control takes the focus");
+        fixture.room(Vec2::new(60.0, 400.0)).frame(Vec::new());
+        let tree = fixture.tree();
+        assert_eq!(
+            tree.name_of(craft_ui::testing::access::focused_key(tree)),
+            Some("Settings"),
+            "buttons {buttons}: the leading control keeps its focus once the end group moves below it"
+        );
+    }
+}
+
+/// The rect of a bar of four dialog buttons and the rect of each button, in a room `width` wide; `leading` puts a
+/// control at the start of the buttons' line.
+fn dialog_buttons(width: f32, leading: bool) -> (Rect, Vec<Rect>) {
+    let seen = Rc::new(RefCell::new(Rect::NOTHING));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let roles = [DialogRole::Other, DialogRole::Alternate, DialogRole::Cancel, DialogRole::Accept];
+        let buttons = DIALOG_BUTTONS.into_iter().zip(roles).map(|(label, role)| FooterButton::new(label, role));
+        let bar = FooterBar::buttons(buttons);
+        let output = if leading {
+            bar.show_footer_leading(ui, |ui, _| {
+                IconButton::new(IconId::new("settings")).label("Settings").show(ui);
+            })
+            .0
+        } else {
+            bar.show_footer(ui)
+        };
+        *out.borrow_mut() = output.response.rect;
+    });
+    fixture.room(Vec2::new(width, 200.0)).settle();
+    let buttons = DIALOG_BUTTONS.iter().map(|label| fixture.by_label(label).map_or(Rect::NOTHING, |target| target.rect)).collect();
+    (*seen.borrow(), buttons)
+}
+
+/// A bar of dialog buttons too narrow for them on one line keeps every button inside it, on more lines; a bar wide
+/// enough keeps them on one line at its end edge.
+#[trial]
+fn a_footer_bar_too_narrow_for_its_dialog_buttons_keeps_them_inside_it() {
+    for leading in [false, true] {
+        let (bar, buttons) = dialog_buttons(240.0, leading);
+        for (label, rect) in DIALOG_BUTTONS.iter().zip(&buttons) {
+            assert!(rect.is_positive(), "leading {leading}: {label} is shown: {rect:?}");
+            assert!(bar.expand(0.5).contains_rect(*rect), "leading {leading}: {label} at {rect:?} lies outside the bar {bar:?}");
+        }
+        assert!(buttons.iter().any(|rect| rect.min.y > buttons[0].max.y - 0.5), "leading {leading}: the buttons take more lines: {buttons:?}");
+
+        let (bar, buttons) = dialog_buttons(900.0, leading);
+        assert!(buttons.iter().all(|rect| (rect.min.y - buttons[0].min.y).abs() < 0.5), "leading {leading}: one line in a wide bar: {buttons:?}");
+        let end = buttons.iter().map(|rect| rect.max.x).fold(f32::NEG_INFINITY, f32::max);
+        assert!(end > bar.max.x - 1.0, "leading {leading}: the buttons end at {end}, short of the bar's end {}", bar.max.x);
+    }
 }

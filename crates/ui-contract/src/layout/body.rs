@@ -2118,7 +2118,14 @@ fn run_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, (wrap, align): (bool, RowAlign
         if lines {
             open_wraps(&ctx, sizing, id);
         }
-        let inner = if wrap { body(ui) } else { run_shrinking(ui, &row, id, &mut body) };
+        // A wrapped row runs its body in a child as `run_shrinking` does, so its children take the same ids on the
+        // frame the row starts or stops wrapping and keep their focus and state.
+        let inner = if wrap {
+            let layout = *ui.layout();
+            child::block(ui, None, layout, |ui| Env::run_in(ui, row.clone(), &mut body)).0
+        } else {
+            run_shrinking(ui, &row, id, &mut body)
+        };
         if lines {
             close_wraps(&ctx, sizing, id, room.size());
         }
