@@ -459,8 +459,9 @@ impl AudioEffect for VoicePitch {
             let mut sum = 0.0f32;
             for (c, line) in self.lines.iter_mut().enumerate() {
                 // A non-finite sample is stored as silence, so it never reaches the output. A
-                // channel the block leaves out is stored as silence too, so its line holds none
-                // of its earlier audio when it comes back.
+                // channel the block leaves out is stored as silence too while its line advances,
+                // so after a gap of at least `latency() + tail_samples()` samples it holds none of
+                // its earlier audio; after a shorter gap, audio still in the line can sound.
                 let x = channels.get(c).map_or(0.0, |io| flush32(io[i]));
                 line[self.pos] = x;
                 sum += x;
@@ -759,8 +760,9 @@ impl AudioEffect for VoiceFormant {
         for i in 0..len {
             for c in 0..self.stage.stft.len() {
                 // A non-finite sample is taken as silence, so it never reaches the output. A
-                // channel the block leaves out is fed silence, so it holds none of its earlier
-                // audio when it comes back.
+                // channel the block leaves out is fed silence while its state advances, so after
+                // a gap of at least `latency() + tail_samples()` samples it holds none of its
+                // earlier audio; after a shorter gap, audio still pending can sound.
                 match channels.get_mut(c) {
                     Some(io) => io[i] = self.stage.tick(c, flush32(io[i]), self.ratio),
                     None => {
@@ -1197,8 +1199,9 @@ mod tests {
     }
 
     /// A block that leaves channels out feeds them silence, so when they come back without a
-    /// reset none of their earlier audio sounds. Checked for the formant shifter and for the
-    /// pitch shifter with and without Keep Formants.
+    /// reset, after a gap at least as long as the latency and the tail, none of their earlier
+    /// audio sounds. Checked for the formant shifter and for the pitch shifter with and without
+    /// Keep Formants.
     #[test]
     fn channels_left_out_of_a_block_come_back_silent() {
         let mut rng = Rng::new(19);
@@ -1213,6 +1216,7 @@ mod tests {
         keep.reset();
         let fxs: [&mut dyn AudioEffect; 3] = [&mut f, &mut plain, &mut keep];
         for fx in fxs {
+            assert!(fx.latency() + fx.tail_samples() <= noise.len(), "{}: the gap is shorter than the latency and the tail", fx.id());
             let (mut a, mut b, mut c) = (noise.clone(), noise.clone(), noise.clone());
             fx.process(&mut [&mut a, &mut b, &mut c]);
             let mut a = noise.clone();
