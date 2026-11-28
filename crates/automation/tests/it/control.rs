@@ -135,11 +135,14 @@ fn is_closed(reader: &mut impl BufRead) -> bool {
 }
 
 /// A server whose `ended` receiver gets `()` each time one of its connections has ended. Its clock stands still, so no
-/// connection reaches the authentication deadline: only the client or a refusal ends one.
+/// connection reaches the authentication deadline: only the client or a refusal ends one. The frozen clock does not
+/// stop the socket's read timeout, which runs on real time and is the time left to the deadline capped at the idle
+/// timeout. The deadline is a minute, so a waiting connection's read times out after the 30-second idle timeout
+/// instead of after 10 seconds.
 fn serve_counting_ends() -> (Receiver<ControlRequest>, server::Listening, Receiver<()>) {
     let (ended, connection_ended) = channel();
     let start = motion::now();
-    let options = ServeOptions { clock: Arc::new(move || start), ended: Some(ended), ..ServeOptions::default() };
+    let options = ServeOptions { auth_deadline: Duration::from_secs(60), clock: Arc::new(move || start), ended: Some(ended) };
     let (rx, server) = server::serve_with(TcpListener::bind("127.0.0.1:0").expect("bound"), TOKEN.into(), host(), options).expect("started");
     (rx, server, connection_ended)
 }
