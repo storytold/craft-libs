@@ -732,6 +732,91 @@ fn the_art_tab_shows_the_grids_in_pixels_and_the_postcard_in_inches() {
     assert!(shows(&fixture, "4 × 6 in @ 300 ppi"), "the postcard's card is in inches");
 }
 
+/// The tab titles left to right, as painted.
+fn tab_order(fixture: &Fixture) -> Vec<String> {
+    let names = ["Recent", "Saved", "Photo", "Print", "Art & Illustration", "Web", "Mobile", "Film & Video"];
+    let mut tabs: Vec<_> = fixture.texts().iter().filter(|painted| names.contains(&painted.text.as_str())).collect();
+    tabs.sort_by(|a, b| a.rect.left().total_cmp(&b.rect.left()));
+    tabs.dedup_by(|a, b| a.text == b.text);
+    tabs.into_iter().map(|painted| painted.text.clone()).collect()
+}
+
+#[trial]
+fn saved_after_recent_lists_saved_second() {
+    // The strip shows the first tabs; the rest wait behind its overflow button.
+    for (after_recent, expected) in [(false, ["Recent", "Photo", "Print"]), (true, ["Recent", "Saved", "Photo"])] {
+        let mut options = DocumentOptions::default();
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = NewDocumentDialog::new(Bind::bound(&mut options)).saved_after_recent(after_recent).show(ui);
+        });
+        fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+        assert_eq!(tab_order(&fixture)[..3], expected, "saved_after_recent({after_recent})");
+    }
+}
+
+#[trial]
+fn grey_create_on_empty_saved_greys_create_only_there() {
+    for grey in [false, true] {
+        let mut options = DocumentOptions::default();
+        let created = Rc::new(RefCell::new(0));
+        let count = created.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            // Saved after Recent, so its tab is in the strip to click.
+            let shown = NewDocumentDialog::new(Bind::bound(&mut options)).saved_after_recent(true).grey_create_on_empty_saved(grey).show(ui);
+            *count.borrow_mut() += usize::from(shown.result.is_some());
+        });
+        fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+        let create_disabled = |fixture: &Fixture| fixture.tree().is_disabled_key(fixture.by_label("Create").expect("Create").node);
+        assert!(!create_disabled(&fixture), "Recent keeps Create on");
+        let saved = fixture.by_label("Saved").expect("the Saved tab");
+        fixture.click(&saved).idle(10);
+        assert!(shows(&fixture, "No saved presets yet."), "the Saved tab is empty");
+        assert_eq!(create_disabled(&fixture), grey, "Create on an empty Saved tab, grey_create_on_empty_saved({grey})");
+        if grey {
+            let create = fixture.by_label("Create").expect("Create");
+            fixture.click(&create).idle(10);
+            assert_eq!(*created.borrow(), 0, "a greyed Create creates nothing");
+            // A saved preset gives the tab something to create from.
+            save_preset(&mut fixture, "Poster");
+            assert!(!create_disabled(&fixture), "a saved preset turns Create back on");
+        } else {
+            let create = fixture.by_label("Create").expect("Create");
+            fixture.click(&create).idle(10);
+            assert_eq!(*created.borrow(), 1, "without the option Create creates from the details");
+        }
+    }
+}
+
+/// The dialog's Enter shortcut cannot create or close while its Create action is disabled.
+#[trial]
+fn enter_respects_create_disabled_on_empty_saved() {
+    use std::cell::Cell;
+
+    for grey in [false, true] {
+        let mut options = DocumentOptions::default();
+        let entered = Rc::new(Cell::new((false, false)));
+        let events = Rc::clone(&entered);
+        let mut fixture = Fixture::new(move |ui| {
+            let shown = NewDocumentDialog::new(Bind::bound(&mut options)).saved_after_recent(true).grey_create_on_empty_saved(grey).show(ui);
+            let (closed, created) = events.get();
+            events.set((closed || shown.closed.is_some(), created || shown.result.is_some()));
+        });
+        fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+        let saved = fixture.by_label("Saved").expect("the Saved tab");
+        fixture.click(&saved).idle(10);
+        assert!(shows(&fixture, "No saved presets yet."), "the Saved tab is empty");
+
+        // Test the dialog shortcut, not Enter on a focused tab or field.
+        fixture.ctx().memory_mut(|memory| {
+            if let Some(focus) = memory.focused() {
+                memory.surrender_focus(focus);
+            }
+        });
+        fixture.key(Key::Enter, Modifiers::NONE).idle(10);
+        assert_eq!(entered.get(), (!grey, !grey), "Enter closes and creates only when Create is enabled");
+    }
+}
+
 /// The preset cards fill the left column's width, and each card's title and size line are painted whole and centred
 /// under the page outline.
 #[trial]

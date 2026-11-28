@@ -125,8 +125,12 @@ pub(super) fn clipboard_at<S: DocumentSettings>(session: &Session<S>, values: &S
 /// Shows the full-width category strip above the two columns.
 pub(super) fn tabs<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, read: &Read<'_, S>, left: &mut Left<S>) {
     let words = read.words;
-    let tabs: Vec<TabId> =
-        std::iter::once(TabId::Recent).chain((0..read.categories.len()).map(TabId::Category)).chain(std::iter::once(TabId::Saved)).collect();
+    let categories = (0..read.categories.len()).map(TabId::Category);
+    let tabs: Vec<TabId> = if read.saved_after_recent {
+        [TabId::Recent, TabId::Saved].into_iter().chain(categories).collect()
+    } else {
+        std::iter::once(TabId::Recent).chain(categories).chain(std::iter::once(TabId::Saved)).collect()
+    };
     let source = keyed(&tabs, |tab| *tab);
     let strip = TabStrip::new(words.tabs.clone())
         .kind(TabKind::Text)

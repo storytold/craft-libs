@@ -142,6 +142,7 @@ craft_ui::words! {
 /// What the columns read besides the session: the setup, the categories, the remembered lists, the words and the units.
 struct Read<'a, S: DocumentSettings> {
     setup: &'a S::Setup,
+    saved_after_recent: bool,
     categories: &'a [PresetCategory<S::Preset>],
     recents: &'a [S],
     library: &'a PresetLibrary<S>,
@@ -171,6 +172,8 @@ struct Bound<'a, S: DocumentSettings> {
 struct Shared<'a, S: DocumentSettings> {
     bound: Bound<'a, S>,
     setup: &'a S::Setup,
+    saved_after_recent: bool,
+    grey_create_on_empty_saved: bool,
     categories: &'a [PresetCategory<S::Preset>],
     recents: &'a [S],
     recent_items: bool,
@@ -366,6 +369,7 @@ fn body<S: DocumentSettings>(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mu
 
     let read = Read {
         setup,
+        saved_after_recent: shared.saved_after_recent,
         categories: shared.categories,
         recents: &recents,
         library: &library,
@@ -438,6 +442,8 @@ fn body<S: DocumentSettings>(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mu
             session.name_tried = true;
         }
     }
+    // Check the same usable presets the Saved tab displays, after applying saves and deletes.
+    let empty_saved = shared.grey_create_on_empty_saved && session.tab == TabId::Saved && !library.items().iter().any(|item| item.value.fits());
     if changed {
         match bound.saved {
             Some(cell) => *cell.borrow_mut() = library,
@@ -454,16 +460,18 @@ fn body<S: DocumentSettings>(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mu
         cell.borrow_mut().clone_from(&session.memory);
     }
     *form.memory::<Session<S>>() = session;
-    true
+    !empty_saved
 }
 
 /// File > New: category tabs over a grid of preset cards, a details column and Create and Close.
 ///
-/// - Tabs: Recent, the categories and Saved. Recent lists the clipboard's image size first when the app gives one,
-///   then the recent documents kept under [`remember_recent`](NewDocumentDialog::remember_recent) (the last 20), then the built-in defaults not yet among them
-///   ([`recent_items`](NewDocumentDialog::recent_items): only while there are no recent documents, under "Your Recent
-///   Items (n)", four cards to a row). Saved lists the user's presets in a list
-///   whose Delete key removes the picked ones, with "No saved presets yet." when there are none.
+/// - Tabs: Recent, the categories and Saved. [`saved_after_recent`](NewDocumentDialog::saved_after_recent) lists Saved
+///   second. Recent lists the clipboard's image size first when the app gives one, then the recent documents kept
+///   under [`remember_recent`](NewDocumentDialog::remember_recent) (the last 20), then the built-in defaults not yet
+///   among them. With [`recent_items`](NewDocumentDialog::recent_items), defaults only appear when there are no
+///   recent documents, and "Your Recent Items (n)" shows four cards to a row. Delete removes the picked saved presets.
+///   When none are shown, Saved says "No saved presets yet." and
+///   [`grey_create_on_empty_saved`](NewDocumentDialog::grey_create_on_empty_saved) disables Create.
 /// - Cards: a click or an arrow fills the details; Enter on a card or a double click creates. A built-in card turns with
 ///   the orientation control. Saved and recent cards restore every setting but the name. A Web or Mobile card turns
 ///   Artboards on; a card of another category turns it off again only when such a card turned it on.
@@ -521,6 +529,12 @@ pub struct NewDocumentDialog<'a, S: DocumentSettings = DocumentOptions> {
     /// a host that sets the settings from outside the dialog (`DocumentSettings::note_set`) keeps it with them.
     #[prop]
     memory: Option<&'a mut S::Memory>,
+    /// Lists Saved second, right after Recent, instead of after the categories.
+    #[prop]
+    saved_after_recent: bool,
+    /// Disables Create, including its Enter shortcut, when the Saved tab shows no presets.
+    #[prop]
+    grey_create_on_empty_saved: bool,
     /// Keeps the dialog's place and size across runs under `key`.
     #[prop]
     remember: Option<SaveKey>,
@@ -556,6 +570,8 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
             tab: None,
             recent_items: false,
             memory: None,
+            saved_after_recent: false,
+            grey_create_on_empty_saved: false,
             remember: None,
             answers: Vec::new(),
             opening: None,
@@ -634,6 +650,8 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
             mut tab,
             recent_items,
             memory,
+            saved_after_recent,
+            grey_create_on_empty_saved,
             remember,
             answers,
             opening,
@@ -661,6 +679,8 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
         let shared = Shared {
             bound: Bound { saved: saved_cell.as_ref(), tab: tab_cell.as_ref(), memory: memory_cell.as_ref(), events: &events, actions: &actions },
             setup: &setup,
+            saved_after_recent,
+            grey_create_on_empty_saved,
             categories: &categories,
             recents: &recent,
             recent_items,
