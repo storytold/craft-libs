@@ -20,7 +20,7 @@ pub use fill::{GradientFill, GradientStyle};
 pub use fill_editor::{GradientFillEditor, GradientFillEditorOutput, GradientFillWords};
 pub use gradient_line::{GradientLine, LineGradient, LinePart};
 pub use gradient_overlay::{GradientLineWords, GradientOverlay, GradientOverlayOutput, GradientOverlayStyle};
-pub use map::{GradientMap, GradientMapEditor, GradientMapOutput};
+pub use map::{GradientMap, GradientMapEditor, GradientMapOutput, GradientMethod};
 pub use palette::{GradientGroup, GradientItem, GradientPalette, GradientPaletteOutput, GradientRef, RampSampler};
 pub use swatch::{GradientSwatch, GradientSwatchOutput};
 pub use tile::{FocusOutline, GradientTile};
