@@ -213,6 +213,7 @@ fn macos_offers_auto_select_where_the_driver_would_pick_its_default_tray() {
 pub(crate) mod lpstat_limits {
     use super::*;
     use craft_ui::testing::trial;
+    use std::cell::Cell;
     use std::process::Command;
     use std::time::{Duration, Instant};
 
@@ -222,16 +223,25 @@ pub(crate) mod lpstat_limits {
         c
     }
 
-    /// Discovery that hangs only loses the driverless printers; the queues are listed.
+    /// Discovery that hangs only loses the driverless printers; the queues are listed. The limits
+    /// are kept on a clock that moves 10 ms at each check on a command, so the hanging discovery
+    /// is stopped at its 30th check however slowly the checks run, and its late answer is never
+    /// read.
     #[trial]
     fn discovery_that_hangs_keeps_the_queues() {
         let mut queues =
             sh("printf 'printer Office_Laser is idle.  enabled since Mon\\n\\tDescription: Office\\nsystem default destination: Office_Laser\\n'");
-        let started = Instant::now();
-        let found = printers_via(&mut queues, Duration::from_secs(5), &mut sh("sleep 30"), Duration::from_millis(300));
-        assert_eq!(found.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Office_Laser"]);
+        let now = Cell::new(Instant::now());
+        let pause = || {
+            // The queue listing needs real time to finish between checks.
+            std::thread::sleep(Duration::from_millis(10));
+            now.set(now.get() + Duration::from_millis(10));
+        };
+        let clock = Clock { now: &|| now.get(), pause: &pause };
+        let mut hangs = sh("sleep 30; echo Late_Printer");
+        let found = printers_via(&mut queues, Duration::from_secs(5), &mut hangs, Duration::from_millis(300), &clock);
+        assert_eq!(found.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Office_Laser"], "the late answer is not waited for");
         assert!(found[0].default);
-        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
     }
 }
 /// Driver settings `len` bytes long whose header says `size` + `extra`, filled with `fill`.

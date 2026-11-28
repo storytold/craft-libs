@@ -5,11 +5,14 @@ use super::*;
 use crate as spool;
 use crate::cups::{self as ipp, Server};
 use craft_ui::testing::trial;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -19,6 +22,8 @@ const TIMEOUT: Duration = Duration::from_secs(2);
 struct FakeCups {
     server: Server,
     requests: Receiver<Vec<u8>>,
+    stopping: Arc<AtomicBool>,
+    listener: JoinHandle<()>,
 }
 
 impl FakeCups {
@@ -28,15 +33,17 @@ impl FakeCups {
         let listener = std::os::unix::net::UnixListener::bind(&path)?;
         // The socket must outlive this function; the folder is left for the process to reap.
         std::mem::forget(dir);
-        let requests = listen_unix(listener, replies);
-        Ok(FakeCups { server: Server::Unix(path), requests })
+        let stopping = Arc::new(AtomicBool::new(false));
+        let (requests, listener) = listen_unix(listener, replies, stopping.clone());
+        Ok(FakeCups { server: Server::Unix(path), requests, stopping, listener })
     }
 
     fn on_tcp(replies: Vec<Vec<u8>>) -> std::io::Result<Self> {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let server = Server::Tcp(listener.local_addr()?);
-        let requests = listen_tcp(listener, replies);
-        Ok(FakeCups { server, requests })
+        let stopping = Arc::new(AtomicBool::new(false));
+        let (requests, listener) = listen_tcp(listener, replies, stopping.clone());
+        Ok(FakeCups { server, requests, stopping, listener })
     }
 
     fn request(&self) -> Result<Vec<u8>, mpsc::RecvTimeoutError> {
@@ -47,28 +54,44 @@ impl FakeCups {
     fn endpoint(&self) -> &[Server] {
         std::slice::from_ref(&self.server)
     }
+
+    /// Stops the server once it has served every connection made before this call, and returns
+    /// the requests it recorded: the channel is closed after the last of them.
+    fn stop(self) -> Receiver<Vec<u8>> {
+        self.stopping.store(true, Ordering::SeqCst);
+        // A connection of its own wakes the listener; it carries no request.
+        let _ = super::connect(&self.server);
+        self.listener.join().unwrap();
+        self.requests
+    }
 }
 
-fn listen_unix(listener: std::os::unix::net::UnixListener, replies: Vec<Vec<u8>>) -> Receiver<Vec<u8>> {
+fn listen_unix(listener: std::os::unix::net::UnixListener, replies: Vec<Vec<u8>>, stopping: Arc<AtomicBool>) -> (Receiver<Vec<u8>>, JoinHandle<()>) {
     let (tx, rx) = mpsc::channel();
     let replies = Mutex::new(VecDeque::from(replies));
-    std::thread::spawn(move || {
+    let listening = std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             serve(stream, &replies, &tx);
+            if stopping.load(Ordering::SeqCst) {
+                break;
+            }
         }
     });
-    rx
+    (rx, listening)
 }
 
-fn listen_tcp(listener: std::net::TcpListener, replies: Vec<Vec<u8>>) -> Receiver<Vec<u8>> {
+fn listen_tcp(listener: std::net::TcpListener, replies: Vec<Vec<u8>>, stopping: Arc<AtomicBool>) -> (Receiver<Vec<u8>>, JoinHandle<()>) {
     let (tx, rx) = mpsc::channel();
     let replies = Mutex::new(VecDeque::from(replies));
-    std::thread::spawn(move || {
+    let listening = std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             serve(stream, &replies, &tx);
+            if stopping.load(Ordering::SeqCst) {
+                break;
+            }
         }
     });
-    rx
+    (rx, listening)
 }
 
 fn serve(mut stream: impl Read + Write, replies: &Mutex<VecDeque<Vec<u8>>>, requests: &mpsc::Sender<Vec<u8>>) {
@@ -399,7 +422,8 @@ fn uncertain_submission_never_tries_the_second_endpoint() {
     let destination = super::Destination { name: "Studio".into(), is_class: false };
     assert!(super::submit_at(&[first.server.clone(), second.server.clone()], &destination, b"pdf", &Job::default()).is_err());
     let _ = first.request().unwrap();
-    assert!(second.requests.recv_timeout(Duration::from_millis(100)).is_err());
+    // Every connection the client made has been served once the second server stops.
+    assert!(matches!(second.stop().try_recv(), Err(mpsc::TryRecvError::Disconnected)), "the second endpoint got no request");
 }
 
 #[trial]
@@ -440,34 +464,62 @@ fn reply_identity_and_metadata_request_are_checked() {
     assert!(super::validate_reply_identity(&request, &reply).is_err());
 }
 
+/// A peer that trickles: each read gives one byte and each write takes one, and each takes 20 ms
+/// on the clock `now` holds. It records every timeout it is given.
+struct Trickle<'a> {
+    now: &'a Cell<Instant>,
+    timeouts: RefCell<Vec<Duration>>,
+}
+
+impl Trickle<'_> {
+    fn step(&self) -> usize {
+        self.now.set(self.now.get() + Duration::from_millis(20));
+        1
+    }
+}
+
+impl Read for Trickle<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let Some(first) = buf.first_mut() else { return Ok(0) };
+        *first = b'x';
+        Ok(self.step())
+    }
+}
+
+impl Write for Trickle<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.is_empty() { Ok(0) } else { Ok(self.step()) }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl super::Connection for Trickle<'_> {
+    fn set_timeouts(&self, timeout: Duration) -> std::io::Result<()> {
+        self.timeouts.borrow_mut().push(timeout);
+        Ok(())
+    }
+}
+
 #[trial]
 fn slow_reply_cannot_reset_the_absolute_deadline() {
-    let (client, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
-    let producer = std::thread::spawn(move || {
-        // Finite work and a joined handle: no abandoned timeout worker.
-        for _ in 0..20 {
-            if peer.write_all(b"x").is_err() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    });
-    let start = std::time::Instant::now();
-    let mut stream = super::Stream::Unix(client);
-    let mut reader = super::DeadlineReader { stream: &mut stream, end: start + Duration::from_millis(80) };
+    let start = Instant::now();
+    let now = Cell::new(start);
+    let mut peer = Trickle { now: &now, timeouts: RefCell::default() };
+    let mut reader = super::DeadlineReader { stream: &mut peer, end: start + Duration::from_millis(80), now: &|| now.get() };
     let mut bytes = [0; 20];
-    assert!(reader.read_exact(&mut bytes).is_err(), "trickle reads must not extend the absolute deadline");
-    drop(stream);
-    producer.join().unwrap();
-    assert!(start.elapsed() < Duration::from_secs(3));
+    let error = reader.read_exact(&mut bytes).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut, "trickle reads must not extend the absolute deadline");
+    assert_eq!(*peer.timeouts.borrow(), [80, 60, 40, 20].map(Duration::from_millis), "each read gets only the time left");
 }
 
 #[trial]
 fn blocked_upload_obeys_the_same_absolute_deadline() {
-    let (client, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
-    let start = std::time::Instant::now();
-    let mut stream = super::Stream::Unix(client);
-    let mut writer = super::DeadlineReader { stream: &mut stream, end: start + Duration::from_millis(80) };
+    let start = Instant::now();
+    let now = Cell::new(start);
+    let mut peer = Trickle { now: &now, timeouts: RefCell::default() };
+    let mut writer = super::DeadlineReader { stream: &mut peer, end: start + Duration::from_millis(80), now: &|| now.get() };
     let chunk = [0u8; 64 * 1024];
     let mut timed_out = false;
     // A peer that never drains cannot turn each partial write into a fresh timeout budget.
@@ -478,7 +530,7 @@ fn blocked_upload_obeys_the_same_absolute_deadline() {
         }
     }
     assert!(timed_out, "blocked upload must terminate without a reader");
-    assert!(start.elapsed() < Duration::from_secs(3));
+    assert_eq!(*peer.timeouts.borrow(), [80, 60, 40, 20].map(Duration::from_millis), "each partial write gets only the time left");
 }
 
 #[trial]
@@ -573,24 +625,28 @@ fn closed_unix_peer_keeps_its_buffered_reply_readable_with_a_deadline() {
     peer.write_all(&http_reply(&body)).unwrap();
     drop(peer);
     let mut stream = super::Stream::Unix(client);
-    let mut reader = super::DeadlineReader { stream: &mut stream, end: std::time::Instant::now() + Duration::from_secs(1) };
+    let start = Instant::now();
+    let mut reader = super::DeadlineReader { stream: &mut stream, end: start + Duration::from_secs(1), now: &|| start };
     assert_eq!(super::read_reply(&mut reader).unwrap(), body);
     let mut byte = [0];
     assert_eq!(reader.read(&mut byte).unwrap(), 0);
-    reader.end = std::time::Instant::now();
+    reader.end = start;
     assert_eq!(reader.read(&mut byte).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
 }
 
+/// The read waits on the socket for the time left, then fails: the deadline is the socket's
+/// timeout, never a blocking read.
 #[trial]
 fn stalled_unix_peer_still_fails_within_the_absolute_read_deadline() {
     let (client, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let mut stream = super::Stream::Unix(client);
-    let mut reader = super::DeadlineReader { stream: &mut stream, end: start + Duration::from_millis(80) };
+    let mut reader = super::DeadlineReader { stream: &mut stream, end: start + Duration::from_millis(80), now: &|| start };
     let mut byte = [0];
     let error = reader.read(&mut byte).unwrap_err();
     assert!(matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock));
-    assert!(start.elapsed() < Duration::from_secs(3));
+    let super::Stream::Unix(client) = &stream else { panic!("the stream is the unix socket") };
+    assert_eq!(client.read_timeout().unwrap(), Some(Duration::from_millis(80)), "the socket waits only for the time left");
 }
 
 #[test]
