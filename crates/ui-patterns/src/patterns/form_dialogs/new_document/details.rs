@@ -179,6 +179,8 @@ fn raster_rows(ui: &mut Ui, values: &mut DocumentOptions, memory: &mut RasterMem
         working.map_or_else(|| words.working.clone(), |profiles| Label::from(words.working_profile.fill(&[("name", profiles.working.as_str())])));
     let others: Vec<&String> = working.map_or_else(Vec::new, |profiles| profiles.others.iter().collect());
     let mut profiles = vec![Entry::new(None, working_label)];
+    let unmanaged = setup.unmanaged_profile.as_ref();
+    profiles.extend(unmanaged.map(|id| Entry::new(Some(id.clone()), words.dont_color_manage.clone())));
     profiles.extend(others.iter().map(|name| Entry::new(Some((*name).clone()), (*name).clone())));
     let mut backgrounds = vec![
         Entry::new(BackgroundKind::White, words.white.clone()),
@@ -277,8 +279,10 @@ fn raster_rows(ui: &mut Ui, values: &mut DocumentOptions, memory: &mut RasterMem
             let shown = Select::new(words.color_mode.clone(), Bind::given(values.color_mode), &modes).sizing(Sizing::FillWidth).show(ui);
             if let Some(mode) = shown.value().cloned() {
                 values.color_mode = mode;
-                // A profile of the old mode's colour space does not suit the new one.
-                values.profile = None;
+                // A profile of the old mode's colour space does not suit the new one; Don't Color Manage suits every mode.
+                if values.profile.as_ref() != unmanaged {
+                    values.profile = None;
+                }
             }
         });
         Field::new(words.depth.clone()).layout(FieldLayout::Above).id_salt("depth").show(ui, |ui, _| {
@@ -309,7 +313,7 @@ fn raster_rows(ui: &mut Ui, values: &mut DocumentOptions, memory: &mut RasterMem
         });
     });
     Field::new(words.profile.clone()).layout(FieldLayout::Above).id_salt("profile").show(ui, |ui, _| {
-        let current = values.profile.clone().filter(|profile| others.contains(&profile));
+        let current = values.profile.clone().filter(|profile| others.contains(&profile) || Some(profile) == unmanaged);
         let shown = Select::new(words.profile.clone(), Bind::given(current), &profiles).sizing(Sizing::FillWidth).show(ui);
         if let Some(profile) = shown.value().cloned() {
             values.profile = profile;

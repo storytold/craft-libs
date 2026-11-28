@@ -4,8 +4,8 @@ use craft_behavior::geometry::{SnapOptions, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{CancelReason, CanvasView, RulerUnits, TickLabels, Ticks};
 use craft_ui::canvas::{
-    Canvas, CanvasTool, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, PageFrame, Pasteboard, RulerText, Rulers, Snap, StepLadder, TickRule,
-    ToolAction, ToolContext, ToolPath, ToolPointer,
+    CENTIMETRE_LABEL_STEP_MIN, Canvas, CanvasTool, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, PageFrame, Pasteboard, RulerText, Rulers, Snap,
+    StepLadder, TickRule, ToolAction, ToolContext, ToolPath, ToolPointer,
 };
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::TickRank;
@@ -58,6 +58,24 @@ fn labelled_ticks_never_touch_at_any_zoom() {
             assert!(gap >= f64::from(ladder.label_gap) - 1e-9, "the step ladder at zoom {zoom}: labels {gap} points apart");
         }
     }
+}
+
+/// A document ruler labels every whole centimetre at 100% (28.35 points each), and thins the labels out when zoomed
+/// out so they never touch.
+#[trial]
+fn a_centimetre_document_ruler_labels_each_centimetre_and_thins_out_zoomed_out() {
+    let centimetres = RulerUnits::new(2.54 / 72.0, Ticks::decimal(false));
+    let rule = TickRule::of_unit(UnitKind::Centimetres);
+    let at_full = least_label_gap(&centimetres, rule, 1.0);
+    assert!(at_full < f64::from(LABEL_STEP_MIN), "labels at 100% are closer than the generic metric step: {at_full}");
+    let one_cm = 72.0 / 2.54;
+    assert!((at_full - one_cm).abs() < 1e-6, "labels at 100% are one centimetre apart: {at_full}");
+    let least = f64::from(CENTIMETRE_LABEL_STEP_MIN) - 1e-9;
+    for zoom in ZOOMS {
+        let gap = least_label_gap(&centimetres, rule, zoom);
+        assert!(gap >= least, "centimetre labels at zoom {zoom}: {gap} points apart");
+    }
+    assert!(least_label_gap(&centimetres, rule, 0.25) > at_full, "labels thin out when zoomed out");
 }
 
 /// A vertical label stacks its characters one label-role size apart; the longest label the metric rule gives at the
@@ -220,6 +238,36 @@ fn with_rulers_on_the_tool_and_a_canvas_control_paint_inside_the_view_and_the_ru
     assert!(strips_keep_the_canvas, "the rulers paint inside the top strip under the canvas's rect: {strip:?} in {shapes:?}");
 }
 
+/// The units menu names each unit as a list of units does ("Points", "Millimetres"), not by the symbol a number
+/// carries ("pt", "mm").
+#[trial]
+fn the_units_menu_names_each_unit() {
+    const UNITS: [UnitKind; 4] = [UnitKind::Points, UnitKind::Picas, UnitKind::Inches, UnitKind::Millimetres];
+    let zero = Rc::new(RefCell::new(Point::ZERO));
+    let shown_zero = Rc::clone(&zero);
+    let room = Rc::new(Cell::new(Rect::NOTHING));
+    let shown_room = Rc::clone(&room);
+    let mut fixture = Fixture::new(move |ui| {
+        let at = ui.available_rect_before_wrap();
+        shown_room.set(at);
+        let view = CanvasView::new(at, Point::new(f64::from(at.center().x), f64::from(at.center().y)), 1.0);
+        let mut zero = shown_zero.borrow_mut();
+        let _ =
+            Canvas::new("Document").view(view).with_rulers(Some(Rulers::new("Rulers", Bind::bound(&mut *zero)).units(&UNITS))).show(ui, |_, _| {});
+    });
+    fixture.room(Vec2::new(500.0, 400.0)).settle();
+    let at = egui::pos2(room.get().center().x, room.get().min.y + 4.0);
+    fixture.frame(vec![craft_ui::testing::pointer::moved(at)]);
+    fixture.frame(vec![craft_ui::testing::pointer::secondary(at, true)]);
+    fixture.frame(vec![craft_ui::testing::pointer::secondary(at, false)]);
+    fixture.settle();
+    assert!(fixture.by_label("Reset Zero Point").is_some(), "the units menu is open");
+    for (name, symbol) in [("Points", "pt"), ("Picas", "pica"), ("Inches", "in"), ("Millimetres", "mm")] {
+        assert!(fixture.by_label(name).is_some(), "the menu lists {name}");
+        assert!(fixture.by_label(symbol).is_none(), "no row reads {symbol}");
+    }
+}
+
 /// A drag of the rulers' corner with one move past the drag threshold, released there, moves the zero point to where it
 /// was released: the drag proposes its landing at its start and at its release, not only on the moves between.
 #[trial]
@@ -264,6 +312,65 @@ fn a_corner_drag_the_host_cancelled_lands_nothing_at_its_release() {
     fixture.frame(vec![craft_ui::testing::pointer::release(to + Vec2::splat(10.0))]);
     fixture.settle();
     assert_eq!(*zero.borrow(), host, "the release after the host's change leaves the zero point where the host put it");
+}
+
+/// The strokes of the vertical cross hair that a corner drag shows in `mode` and `contrast`, in paint order, and the
+/// colour of the pasteboard under them.
+fn cross_hair_strokes(mode: craft_theme::Mode, contrast: craft_theme::Contrast) -> (Vec<Color32>, craft_theme::Rgba) {
+    let zero = Rc::new(RefCell::new(Point::ZERO));
+    let view = |room: Rect| CanvasView::new(room, Point::new(f64::from(room.center().x), f64::from(room.center().y)), 1.0);
+    let snap = Snap::new(std::sync::Arc::new(SnapTargets::new()), SnapOptions::default());
+    let mut fixture = ToolFixture::with_rulers("Document", Overpaint, view, snap, zero, |_, _| {});
+    fixture.fixture().theme(mode, contrast).room(Vec2::new(500.0, 400.0)).settle();
+    let canvas = fixture.canvas().rect;
+    let (from, to) = (canvas.min + Vec2::splat(4.0), canvas.center());
+    let fixture = fixture.fixture();
+    fixture.frame(vec![craft_ui::testing::pointer::moved(from)]);
+    fixture.frame(vec![craft_ui::testing::pointer::press(from)]);
+    fixture.frame(vec![craft_ui::testing::pointer::moved(to)]);
+    let shapes = fixture.frame_shapes();
+    let vertical = |points: &[Pos2]| {
+        points.len() == 2
+            && (points[0].x - to.x).abs() < 1.0
+            && (points[1].x - to.x).abs() < 1.0
+            && (points[0].y - points[1].y).abs() > canvas.height() / 2.0
+    };
+    let strokes = shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            Shape::LineSegment { points, stroke } if vertical(points) => Some(stroke.color),
+            Shape::Path(path) if vertical(&path.points) => match path.stroke.color {
+                egui::epaint::ColorMode::Solid(color) => Some(color),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    let pasteboard = craft_ui::testing::style::tokens(mode, contrast).color.surface.canvas;
+    (strokes, pasteboard)
+}
+
+/// With artboards hidden the paper fills the canvas, so the zero point's cross hairs cross the paper as well as the
+/// pasteboard and dark art. Over each, the top line contrasts with what lies under it (the strokes below it over the
+/// backdrop) by the minimum the theme sets for overlay strokes on their halo: 3 to 1, and 4.5 to 1 in high contrast.
+#[trial]
+fn the_zero_point_cross_hairs_contrast_with_the_paper_and_the_pasteboard() {
+    use craft_theme::{Contrast, Mode, Rgba, contrast_ratio, over};
+    let rgba = |color: Color32| Rgba(color.to_srgba_unmultiplied());
+    for mode in [Mode::Light, Mode::Dark] {
+        for contrast in [Contrast::Standard, Contrast::High] {
+            let (strokes, pasteboard) = cross_hair_strokes(mode, contrast);
+            let Some((line, under)) = strokes.split_last() else {
+                panic!("{mode:?} {contrast:?}: a corner drag shows a vertical cross hair");
+            };
+            let min = if contrast == Contrast::High { 4.5 } else { 3.0 };
+            for (name, backdrop) in [("the paper", Rgba::WHITE), ("dark art", Rgba::BLACK), ("the pasteboard", pasteboard)] {
+                let below = under.iter().fold(backdrop, |bg, stroke| over(rgba(*stroke), bg));
+                let ratio = contrast_ratio(over(rgba(*line), below), below);
+                assert!(ratio >= min, "{mode:?} {contrast:?}: the cross hair over {name} contrasts {ratio:.2} to 1, needs {min}");
+            }
+        }
+    }
 }
 
 /// A right-click on a ruler strip or on the corner is the rulers': they report the part, for their units menu, and

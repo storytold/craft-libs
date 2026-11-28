@@ -748,9 +748,10 @@ fn nested(instances: bool) -> Kv<'static> {
     let mut nodes = vec![node(0, None, "DOCUMENT", "D", vec![]), node(1, Some((0, "!")), "CANVAS", "P", vec![])];
     let levels = 270;
     if instances {
+        // Index every main, but map only a long and a short chain plus the top instance.
         for i in 0..levels {
             let id = 10 + 2 * i;
-            nodes.push(node(id, Some((1, "!")), "SYMBOL", "M", vec![("size", xy(1.0, 1.0))]));
+            nodes.push(node(id, (i == 0 || i + 2 == levels).then_some((1, "!")), "SYMBOL", "M", vec![("size", xy(1.0, 1.0))]));
             if i + 1 < levels {
                 nodes.push(node(
                     id + 1,

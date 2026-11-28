@@ -11,5 +11,14 @@ fields, 256 MiB session byte limit, character limits, and duplicate/exhausted ID
 fields use `craft_time::soundcraft`, the exact sample-index time API retained by `craft-time`.
 MIDI sequence values use `craft-midi`'s serde representation.
 
+## Format versions
+
+A session file declares the lowest `format_version` able to read it back, not the writer's own
+version: `Session::to_json` writes 1 unless the document holds a `Route::Instrument` (an
+instrument's auxiliary output bus, used as a track input), which serializes an enum tag v1 cannot
+parse — those files declare 2. A reader refuses anything above `Session::FORMAT_VERSION` with
+`SessionError::Version`, so an older build fails such files with the newer-version message rather
+than a generic parse error.
+
 The application still maps sessions to UI state, engine state, media paths and audio pools. The
 session schema and its format-specific parsing, writing, sanitization and validation live here.

@@ -41,6 +41,9 @@ serde_json = { workspace = true }
 log = "0.4"
 tempfile = "3"
 sha2 = "0.10"
+base64 = "0.22"
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std", "fast", "pem"] }
+toml = { version = "=1.1.8", default-features = false, features = ["parse", "serde", "std"] }
 ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring", "gzip", "platform-verifier"] }
 chrono = { workspace = true }
 semver = { version = "1", features = ["serde"] }

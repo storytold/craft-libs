@@ -49,7 +49,7 @@ impl TransformPreset {
 
 /// How the transform resamples the moving pixels: PhotoCraft's three choices (LC11). The app maps
 /// them to its engine; [`id`](Self::id) gives PhotoCraft's ids.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum Interpolation {
@@ -100,7 +100,7 @@ pub enum TransformChoice {
 
 /// Free Transform's persisted section: the app keeps it with its preferences. Unknown fields are
 /// ignored, missing ones take their defaults.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct TransformSettings {

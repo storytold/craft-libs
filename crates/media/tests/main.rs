@@ -16,6 +16,8 @@ mod mpegts_mux_readback;
 mod oracle_avi;
 #[cfg(feature = "avi")]
 mod oracle_avi_mux;
+#[cfg(feature = "bink")]
+mod oracle_bink;
 #[cfg(feature = "isobmff")]
 mod oracle_demux;
 #[cfg(feature = "matroska")]
