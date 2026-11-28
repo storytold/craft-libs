@@ -106,7 +106,8 @@ impl<'a> TrackFace<'a> {
     }
 }
 
-/// The room marks keep: the gap below a tick before its label, and how near a mark a drag snaps to it.
+/// The room marks keep: the gap below a tick before its label and between two labels side by side, and how near a
+/// mark a drag snaps to it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct MarkSpace {
     pub label_gap: f32,
@@ -161,6 +162,15 @@ impl Marks {
     pub fn below(&self, look: &TrackLook) -> f32 {
         let tallest = self.shaped.iter().map(|(_, _, size)| size.y).fold(0.0, f32::max);
         if self.shaped.is_empty() { 0.0 } else { tallest + look.mark_length + self.space.label_gap }
+    }
+
+    /// The least width that holds the labels in the range on one line with the label gap between each two: the width
+    /// at which [`paint_marks`] keeps them all apart; none without labels.
+    pub fn least_width(&self, scale: &Scale) -> f32 {
+        let widths: Vec<f32> =
+            self.shaped.iter().filter(|(value, _, _)| (scale.min..=scale.max).contains(value)).map(|(_, _, size)| size.x).collect();
+        let gaps = widths.len().saturating_sub(1) as f32 * self.space.label_gap;
+        widths.iter().sum::<f32>() + gaps
     }
 
     /// The part of `rect` the track and thumbs use: all of it, less the room of the labels.
@@ -246,13 +256,35 @@ pub(crate) fn paint_marks(draw: &Draw<'_>, look: &TrackLook, marks: &Marks, scal
         draw.fill(&PaintShape::Rect(line, CornerRadius::ZERO), ink.marks);
     }
     let label_top = top + look.mark_length + marks.space.label_gap;
-    for (value, text, size) in &marks.shaped {
-        if !(scale.min..=scale.max).contains(value) {
-            continue;
-        }
-        let left = (along.x(scale.position(*value)) - size.x / 2.0).clamp(whole.left(), (whole.right() - size.x).max(whole.left()));
-        draw.text(Rect::from_min_size(Pos2::new(left, label_top), *size), &TextRun::new(text.as_str()).role(ink.role).color(ink.labels));
+    for (left, text, size) in label_lefts(marks, scale, along, whole) {
+        draw.text(Rect::from_min_size(Pos2::new(left, label_top), size), &TextRun::new(text).role(ink.role).color(ink.labels));
     }
+}
+
+/// The left edges of the labels in the range: each centered under its mark and kept inside `whole`. Where neighbors
+/// would come closer than the label gap, they move apart, as far as `whole` allows.
+fn label_lefts<'m>(marks: &'m Marks, scale: &Scale, along: Along, whole: Rect) -> Vec<(f32, &'m str, Vec2)> {
+    let mut labels: Vec<(f32, &str, Vec2)> = marks
+        .shaped
+        .iter()
+        .filter(|(value, _, _)| (scale.min..=scale.max).contains(value))
+        .map(|(value, text, size)| (along.x(scale.position(*value)), text.as_str(), *size))
+        .collect();
+    // In the order of the marks across the track, so a label never passes the label of a neighboring mark.
+    labels.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for label in &mut labels {
+        label.0 = (label.0 - label.2.x / 2.0).clamp(whole.left(), (whole.right() - label.2.x).max(whole.left()));
+    }
+    let gap = marks.space.label_gap;
+    for i in 1..labels.len() {
+        labels[i].0 = labels[i].0.max(labels[i - 1].0 + labels[i - 1].2.x + gap);
+    }
+    let mut right = whole.right() + gap;
+    for label in labels.iter_mut().rev() {
+        label.0 = label.0.min(right - gap - label.2.x).max(whole.left());
+        right = label.0;
+    }
+    labels
 }
 
 /// The two ends of a trimmed span (`start`, `end`), each a line `height` high across the middle of the track in

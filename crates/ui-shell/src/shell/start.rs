@@ -1153,10 +1153,12 @@ fn greeting_body(
     if !templates.is_empty() {
         templates_grid(page, ui, templates);
     }
-    if let Some(label) = more_templates
-        && clicked(&Link::new(label.clone()).id_salt("more-templates").show(ui))
-    {
-        page.push(StartAction::MoreTemplates);
+    if let Some(label) = more_templates {
+        // The theme holds link text to the text minimum on the panel surface, not on the surround.
+        let panel = Stack::new().id_salt("more-templates-panel").surface(SurfaceKind::Panel).pad(Pad::Control);
+        if panel.show(ui, |ui, _| clicked(&Link::new(label.clone()).id_salt("more-templates").show(ui))).inner == Some(true) {
+            page.push(StartAction::MoreTemplates);
+        }
     }
     let mut list = RecentList::new(recent).max_recent(max_recent).now(page.now);
     if let Some((thumbnails, source)) = page.thumbnails {
@@ -1212,7 +1214,8 @@ fn column_heading(page: &Page<'_>, ui: &mut Ui, title: Option<&Label>, subtitle:
 
 /// The links of a Column page under their heading, each centred: the call to action ([`StartLink::primary`]) as a
 /// pill with its icon, the others as links without their icons, each run of them in rows `size.page.link` high a
-/// page link gap apart. A URL opens in the browser (the URL is its tooltip); a command fires as a pointer activation.
+/// page link gap apart, on the panel surface. A URL opens in the browser (the URL is its tooltip); a command fires as a
+/// pointer activation.
 fn column_links(page: &Page<'_>, ui: &mut Ui, title: Option<&Label>, links: &[StartLink]) {
     if links.is_empty() {
         return;
@@ -1227,7 +1230,9 @@ fn column_links(page: &Page<'_>, ui: &mut Ui, title: Option<&Label>, links: &[St
             if run[0].primary {
                 column_link(ui, cx, at, &run[0]);
             } else {
-                let _ = Stack::new().gap(Gap::PageLink).fill_width().show(ui, |ui, cx| {
+                // The theme holds link text to the text minimum on the panel surface, not on the page.
+                let panel = Stack::new().id_salt(("start-link-panel", at)).surface(SurfaceKind::Panel).pad(Pad::Control).gap(Gap::PageLink);
+                let _ = panel.fill_width().show(ui, |ui, cx| {
                     for (offset, link) in run.iter().enumerate() {
                         column_link(ui, cx, at + offset, link);
                     }
@@ -1286,9 +1291,16 @@ fn new_and_open(page: &Page<'_>, ui: &mut Ui, sizing: Sizing) {
     }
 }
 
-/// The links, one under another: a URL opens through its `Link` (the URL is its tooltip), a command fires as a
-/// pointer activation.
+/// The links, one under another on the panel surface: a URL opens through its `Link` (the URL is its tooltip), a
+/// command fires as a pointer activation.
 fn link_items(ui: &mut Ui, links: &[StartLink], home: bool) {
+    // The theme holds link text to the text minimum on the panel surface, not on the surround.
+    let panel = Stack::new().id_salt("start-link-panel").surface(SurfaceKind::Panel).pad(Pad::Control).gap(Gap::Tight);
+    let _ = panel.show(ui, |ui, _| link_rows(ui, links, home));
+}
+
+/// The rows of `link_items`.
+fn link_rows(ui: &mut Ui, links: &[StartLink], home: bool) {
     for (at, link) in links.iter().enumerate() {
         match &link.target {
             StartLinkTarget::Url(url) => {

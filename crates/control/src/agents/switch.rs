@@ -44,7 +44,11 @@ impl AgentSwitch {
         if !flag {
             return Self::fixed(false, false);
         }
-        Self::watch_with(flag, move || craft_ai_agents::allowed(app_id), POLL, wake)
+        let tick = || {
+            std::thread::sleep(POLL);
+            true
+        };
+        Self::watch_with(flag, move || craft_ai_agents::allowed(app_id), tick, wake)
     }
 
     /// A switch that never changes: tests, the web, an app without agents.
@@ -52,14 +56,20 @@ impl AgentSwitch {
         Self { mcp_flag, on: Arc::new(AtomicBool::new(launcher)) }
     }
 
-    /// [`Self::watch`] with the flag given, `probe` asked once now and then every `poll`.
+    /// [`Self::watch`] with the flag given and `probe` asked once now. The watch thread then calls
+    /// `tick`, which returns when the next poll is due ([`Self::watch`] sleeps [`POLL`]), and asks
+    /// `probe` again; the watch ends when `tick` returns `false`.
     #[doc(hidden)]
-    pub fn watch_with(mcp_flag: bool, probe: impl Fn() -> bool + Send + 'static, poll: Duration, wake: impl Fn() + Send + 'static) -> Self {
+    pub fn watch_with(
+        mcp_flag: bool,
+        probe: impl Fn() -> bool + Send + 'static,
+        mut tick: impl FnMut() -> bool + Send + 'static,
+        wake: impl Fn() + Send + 'static,
+    ) -> Self {
         let on = Arc::new(AtomicBool::new(probe()));
         let seen: Weak<AtomicBool> = Arc::downgrade(&on);
         let started = std::thread::Builder::new().name("launcher-agents".into()).spawn(move || {
-            loop {
-                std::thread::sleep(poll);
+            while tick() {
                 let now = probe();
                 let Some(seen) = seen.upgrade() else { return };
                 if seen.swap(now, Ordering::Relaxed) != now {

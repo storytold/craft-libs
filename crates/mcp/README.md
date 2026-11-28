@@ -1,5 +1,6 @@
 # craft-mcp
 
+Transport-independent MCP server initialization and tool result helpers.
 Transport-independent MCP 2025-03-26 server initialization and result helpers for tools,
 resources, prompts and completion.
 Use one `Session` per client connection with `craft-jsonrpc` for message parsing and
@@ -14,9 +15,18 @@ request IDs that MCP forbids. `process` does not check the message size.
 initialization, initialization can occur in a batch, and client information needs only
 to be an object. `Policy::Strict` requires initialization first (except ping),
 rejects batched or repeated initialization, and requires client name and version.
-Both respond with the sole supported version, 2025-03-26, even if the client offered
-a different version. Instructions set with `Session::set_instructions` are returned by
-every initialize response, in either policy and with or without legacy initialization.
+By default both respond with 2025-03-26, even if the client offered a different version.
+`Session::with_versions` sets the accepted versions, in order of preference, from
+`SUPPORTED_PROTOCOL_VERSIONS` (2025-06-18, 2025-03-26 and 2024-11-05). A client that
+asks for one of them gets it back, and any other request gets the first.
+`Session::negotiated_version` returns the version the session answered with, for
+features that depend on it, such as the `MCP-Protocol-Version` HTTP header. Once
+2025-06-18 is negotiated, `Policy::Strict` rejects every batched request and
+`Session::accepts_batches` returns false. Reject a batch envelope with -32600 before
+dispatching it when `accepts_batches` is false, because `Session::notification` cannot
+tell a batched notification from a single one. Instructions set with
+`Session::set_instructions` are returned by every initialize response, in either policy
+and with or without legacy initialization.
 An initialized notification moves the session to `Ready`.
 This crate does not enforce every MCP lifecycle or capability rule; applications
 must validate any additional requirements they depend on.
@@ -40,7 +50,8 @@ roots without both kinds. A path is checked before it is opened, so another
 program that replaces a folder with a link between the two steps can still reach
 outside the roots.
 
-See the [MCP lifecycle specification](https://modelcontextprotocol.io/specification/2025-03-26/basic/lifecycle).
+See the [MCP lifecycle specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle)
+and the [2025-06-18 changes](https://modelcontextprotocol.io/specification/2025-06-18/changelog).
 
 The crate also checks the parameters of the resource, prompt and completion methods and
 builds their results, for a server that routes those methods itself:

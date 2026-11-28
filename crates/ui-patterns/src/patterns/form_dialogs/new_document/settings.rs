@@ -235,6 +235,8 @@ pub struct RasterSetup {
     pub screen_ppi: f64,
     /// The colour profiles each mode offers.
     pub profiles: Vec<ColorProfiles>,
+    /// The profile id of the Don't Color Manage entry, when the app offers one.
+    pub unmanaged_profile: Option<String>,
     /// The application's name, for the "Default {app} Size" card.
     pub app_name: Option<Label>,
     /// The app's own pixel aspect ratios as `(id, name)`.
@@ -250,6 +252,7 @@ impl Default for RasterSetup {
             print_ppi: 300.0,
             screen_ppi: 72.0,
             profiles: Vec::new(),
+            unmanaged_profile: None,
             app_name: None,
             custom_pixel_aspects: Vec::new(),
         }

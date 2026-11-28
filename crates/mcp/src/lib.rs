@@ -1,7 +1,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-//! MCP 2025-03-26 server initialization and the envelopes of tools, resources, prompts and
-//! completion, independent of transport and of what the server serves.
+//! MCP server initialization and the envelopes of tools, resources, prompts and completion,
+//! independent of transport and of what the server serves. Sessions answer 2025-03-26 by default
+//! and can negotiate any of `SUPPORTED_PROTOCOL_VERSIONS`.
 //! The caller owns routing, transport and JSON-RPC batching. Compatibility mode preserves servers
 //! that accepted calls before initialization and initialize in a batch; strict mode enforces the
 //! initialization ordering and batch prohibition. Create one session per connection.
@@ -13,7 +14,14 @@ use serde_json::{Value, json};
 
 pub mod roots;
 
+/// The version a session answers with unless `Session::with_versions` sets others.
 pub const PROTOCOL_VERSION: &str = "2025-03-26";
+
+/// Protocol versions whose initialization this crate implements, newest first.
+pub const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// Versions that removed JSON-RPC batching.
+const BATCHLESS_VERSIONS: [&str; 1] = ["2025-06-18"];
 
 /// JSON-RPC limits for an MCP connection. MCP requires a string or integer request ID, so
 /// `craft_jsonrpc::process` answers a null or fractional ID with an invalid-request error and does
@@ -51,6 +59,7 @@ pub struct Session {
     permissive_initialize: bool,
     server_info: Option<Value>,
     instructions: Option<String>,
+    negotiated: Option<String>,
     initialized: bool,
 }
 
@@ -66,8 +75,28 @@ impl Session {
             permissive_initialize: false,
             server_info: None,
             instructions: None,
+            negotiated: None,
             initialized: false,
         }
+    }
+
+    /// Set the protocol versions the session accepts, in order of preference. A client that asks
+    /// for one of them gets it back; any other request gets the first. Each version must be in
+    /// `SUPPORTED_PROTOCOL_VERSIONS`, and the list must be non-empty and free of repeats.
+    pub fn with_versions(mut self, versions: &[&str]) -> Result<Self, RpcError> {
+        if versions.is_empty() {
+            return Err(RpcError::new(-32602, "Protocol versions must not be empty"));
+        }
+        for (i, version) in versions.iter().enumerate() {
+            if !SUPPORTED_PROTOCOL_VERSIONS.contains(version) {
+                return Err(RpcError::new(-32602, format!("Unsupported protocol version {version}")));
+            }
+            if versions[..i].contains(version) {
+                return Err(RpcError::new(-32602, format!("Repeated protocol version {version}")));
+            }
+        }
+        self.versions = versions.iter().map(|v| (*v).to_owned()).collect();
+        Ok(self)
     }
 
     /// Set the server capabilities returned at initialization. The value must be an object.
@@ -104,9 +133,32 @@ impl Session {
         self.state
     }
 
+    /// The protocol version the last successful initialize answered with.
+    pub fn negotiated_version(&self) -> Option<&str> {
+        self.negotiated.as_deref()
+    }
+
+    fn answer_version(&self, asked: Option<&str>) -> String {
+        asked
+            .filter(|v| self.versions.iter().any(|supported| supported == v))
+            .unwrap_or_else(|| self.versions.first().map(String::as_str).unwrap_or(PROTOCOL_VERSION))
+            .to_owned()
+    }
+
+    /// Whether the caller may dispatch a JSON-RPC batch. False in strict mode once a version
+    /// without batching (2025-06-18) is negotiated; reject such a batch envelope with
+    /// -32600 before dispatching it, since `notification` cannot tell a batched notification apart.
+    pub fn accepts_batches(&self) -> bool {
+        self.policy != Policy::Strict || !self.negotiated.as_deref().is_some_and(|v| BATCHLESS_VERSIONS.contains(&v))
+    }
+
     /// Handles `initialize` and `ping`. Returns `None` for a request the app should route.
-    /// `in_batch` must describe the outer JSON-RPC envelope.
+    /// `in_batch` must describe the outer JSON-RPC envelope. A batched request is rejected
+    /// when `accepts_batches` is false.
     pub fn request(&mut self, request: Request<'_>, in_batch: bool) -> Option<Result<Value, RpcError>> {
+        if in_batch && !self.accepts_batches() {
+            return Some(Err(RpcError::new(-32600, "Invalid Request")));
+        }
         if request.method == "ping" {
             return Some(Ok(json!({})));
         }
@@ -116,27 +168,29 @@ impl Session {
             }
             if self.permissive_initialize {
                 let asked = request.params.and_then(|p| p.get("protocolVersion")).and_then(Value::as_str);
-                let version = asked
-                    .filter(|v| self.versions.iter().any(|supported| supported == v))
-                    .unwrap_or_else(|| self.versions.first().map(String::as_str).unwrap_or(PROTOCOL_VERSION));
+                let version = self.answer_version(asked);
                 let result = json!({"protocolVersion": version, "capabilities": self.capabilities, "serverInfo": self.server_info});
                 self.state = State::AwaitingInitialized;
+                self.negotiated = Some(version);
                 return Some(Ok(self.with_instructions(result)));
             }
             let Some(params) = request.params.and_then(Value::as_object) else {
                 return Some(Err(invalid_initialize()));
             };
-            let valid = params.get("protocolVersion").and_then(Value::as_str).is_some()
-                && params.get("capabilities").is_some_and(Value::is_object)
-                && params.get("clientInfo").is_some_and(Value::is_object);
+            let asked = params.get("protocolVersion").and_then(Value::as_str);
+            let valid =
+                asked.is_some() && params.get("capabilities").is_some_and(Value::is_object) && params.get("clientInfo").is_some_and(Value::is_object);
             let identity = params.get("clientInfo").and_then(Value::as_object);
             let strict_identity = identity
                 .is_some_and(|info| info.get("name").and_then(Value::as_str).is_some() && info.get("version").and_then(Value::as_str).is_some());
             if !valid || (self.policy == Policy::Strict && !strict_identity) {
                 return Some(Err(invalid_initialize()));
             }
+            let version = self.answer_version(asked);
+            let result =
+                json!({"protocolVersion": version, "capabilities": self.capabilities, "serverInfo": {"name": self.name, "version": self.version}});
             self.state = State::AwaitingInitialized;
-            let result = json!({"protocolVersion": PROTOCOL_VERSION, "capabilities": self.capabilities, "serverInfo": {"name": self.name, "version": self.version}});
+            self.negotiated = Some(version);
             return Some(Ok(self.with_instructions(result)));
         }
         if self.policy == Policy::Strict && self.state == State::New {
@@ -398,6 +452,7 @@ mod tests {
             assert_eq!(result["protocolVersion"], expected);
             assert_eq!(result["serverInfo"]["title"], "Title");
             assert_eq!(result["instructions"], "help");
+            assert_eq!(s.negotiated_version(), Some(expected));
         }
     }
 
@@ -457,6 +512,54 @@ mod tests {
             assert_eq!(s.request(call("initialize", Some(&p)), false).unwrap().unwrap_err().code, -32602);
             assert_eq!(s.state(), State::New);
         }
+    }
+
+    #[test]
+    fn validated_initialize_negotiates_configured_versions() {
+        let mut s = Session::new("test", "1", Policy::Compatible).with_versions(&SUPPORTED_PROTOCOL_VERSIONS).unwrap();
+        assert_eq!(s.negotiated_version(), None);
+        for (asked, expected) in [("2024-11-05", "2024-11-05"), ("2025-03-26", "2025-03-26"), ("2025-06-18", "2025-06-18"), ("1.0.0", "2025-06-18")] {
+            let p = json!({"protocolVersion": asked, "capabilities": {}, "clientInfo": {}});
+            let r = s.request(call("initialize", Some(&p)), false).unwrap().unwrap();
+            assert_eq!(r["protocolVersion"], expected);
+            assert_eq!(s.negotiated_version(), Some(expected));
+        }
+        let mut old_first = Session::new("test", "1", Policy::Compatible).with_versions(&["2025-03-26", "2025-06-18"]).unwrap();
+        let p = json!({"protocolVersion": "2099-01-01", "capabilities": {}, "clientInfo": {}});
+        assert_eq!(old_first.request(call("initialize", Some(&p)), false).unwrap().unwrap()["protocolVersion"], "2025-03-26");
+    }
+
+    #[test]
+    fn version_lists_reject_empty_unknown_and_repeated_entries() {
+        let new = || Session::new("test", "1", Policy::Compatible);
+        assert!(new().with_versions(&[]).is_err());
+        assert!(new().with_versions(&["2099-01-01"]).is_err());
+        assert!(new().with_versions(&["2025-06-18", "2025-06-18"]).is_err());
+        let mut s = new();
+        let p = json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {}});
+        assert!(s.request(call("initialize", Some(&json!({}))), false).unwrap().is_err());
+        assert_eq!(s.negotiated_version(), None);
+        assert_eq!(s.request(call("initialize", Some(&p)), false).unwrap().unwrap()["protocolVersion"], PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn strict_rejects_batches_after_negotiating_a_version_without_them() {
+        let p = |v: &str| json!({"protocolVersion": v, "capabilities": {}, "clientInfo": {"name": "client", "version": "1"}});
+        let mut s = Session::new("test", "1", Policy::Strict).with_versions(&SUPPORTED_PROTOCOL_VERSIONS).unwrap();
+        assert!(s.accepts_batches());
+        assert!(s.request(call("initialize", Some(&p("2025-06-18"))), false).unwrap().is_ok());
+        assert!(!s.accepts_batches());
+        assert_eq!(s.request(call("ping", None), true).unwrap().unwrap_err().code, -32600);
+        assert_eq!(s.request(call("tools/list", None), true).unwrap().unwrap_err().code, -32600);
+        assert!(s.request(call("tools/list", None), false).is_none());
+        let mut older = Session::new("test", "1", Policy::Strict).with_versions(&SUPPORTED_PROTOCOL_VERSIONS).unwrap();
+        assert!(older.request(call("initialize", Some(&p("2025-03-26"))), false).unwrap().is_ok());
+        assert!(older.accepts_batches());
+        assert!(older.request(call("tools/list", None), true).is_none());
+        let mut compatible = Session::new("test", "1", Policy::Compatible).with_versions(&SUPPORTED_PROTOCOL_VERSIONS).unwrap();
+        assert!(compatible.request(call("initialize", Some(&p("2025-06-18"))), false).unwrap().is_ok());
+        assert!(compatible.accepts_batches());
+        assert!(compatible.request(call("tools/list", None), true).is_none());
     }
 
     #[test]

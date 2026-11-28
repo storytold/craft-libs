@@ -150,6 +150,13 @@ impl PaintUi<'_> {
         self.child_with(id, rect, child, None, None)
     }
 
+    /// Makes the child shown with `key` the one a click on the composite's label focuses, in place of the composite's
+    /// first stop, such as the number field of a row whose slider comes first in Tab order. A child with no stop this
+    /// pass leaves the first stop.
+    pub fn label_target(&mut self, key: impl Hash + Debug) {
+        access::scope::label_target(self.ui.ctx(), self.id, self.id.with(key));
+    }
+
     /// Shows a child with rich tooltip content.
     pub fn child_with_tip<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C, tip: impl FnOnce(&mut Ui)) -> C::Output {
         self.child_with(self.id.with(key), rect, child, Some(Box::new(tip)), None)
@@ -163,7 +170,9 @@ impl PaintUi<'_> {
         let env = Env::of(self.ui);
         let mut child = child;
         let under = label::leaf_under(&env, &side, &child, (self.enabled, self.size));
-        let at = LeafLabel { id, owner: self.id, parent: Some(self.id), row: rect, egui_cell: false, text: &label, side: &side, under: &under };
+        // Without a node of its own the composite leaves the label to the node its own `Ui` sits under.
+        let parent = self.node.then_some(self.id);
+        let at = LeafLabel { id, owner: self.id, parent, row: rect, egui_cell: false, text: &label, side: &side, under: &under };
         let ctx = self.ui.ctx().clone();
         layout_memory::boundary(&ctx, true, || {
             let placed = crate::layout::ColumnGroup::field(&mut *self.ui, |ui| label::leaf(ui, &env, &at, &mut child, None));
@@ -187,7 +196,8 @@ impl PaintUi<'_> {
         let outer = Env::of(parent);
         let kids = self.kids.get_or_insert_with(|| {
             let builder = egui::UiBuilder::new().layout(child::pinned_layout()).scope_id(scope).max_rect(self.rect);
-            alloc::child(parent, access::with_parent(builder, self.id))
+            // Without a node of its own the composite leaves its children to the node its own `Ui` sits under.
+            alloc::child(parent, if self.node { access::with_parent(builder, self.id) } else { builder })
         });
         let ctx = kids.ctx().clone();
         let env = super::cx::child_env(&outer, &super::cx::Under { enabled: self.enabled, size: self.size, inside });
@@ -201,10 +211,11 @@ impl PaintUi<'_> {
             }
             None => env,
         };
-        let installed = Env::install_for(kids, env);
+        let installed = Env::install_for(kids, env.clone());
         // The child sits in a rect its owner chose, and the owner's own measure answers for it: no body's transcript
         // holds it.
-        let output = layout_memory::boundary(&ctx, true, || run::show_leaf(&mut Some(super::Props::id(child, id)), kids, ShowAt::Rect(rect), tip));
+        let output =
+            layout_memory::boundary(&ctx, true, || run::show_leaf(&mut Some(super::Props::id(child, id)), kids, (ShowAt::Rect(rect), env), tip));
         Env::restore(&ctx, installed);
         output
     }

@@ -3,12 +3,13 @@
 //! process cleanup are the production ones, with no printer.
 
 use std::collections::VecDeque;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use craft_host::ManualJobs;
 use craft_ui::testing::trial;
@@ -26,6 +27,8 @@ const PRINT_MODE: &str = "CRAFT_TEST_PRINT_MODE";
 /// Set on the child: where it marks the stages it reached, apart from the input folder, which
 /// the parent removes.
 const PRINT_MARKS: &str = "CRAFT_TEST_PRINT_MARKS";
+/// Set on the child: the loopback address of the [`Stages`] it reports each stage to.
+const PRINT_STAGES: &str = "CRAFT_TEST_PRINT_STAGES";
 const PDF: &[u8] = b"synthetic PDF";
 
 /// One prepared job of [`Fake`]: its cancel's answer, whether it answers after a cancel, and the
@@ -161,8 +164,16 @@ fn stand_in_print_helper() {
     let directory = PathBuf::from(directory);
     let marks = PathBuf::from(std::env::var_os(PRINT_MARKS).unwrap());
     let mode = std::env::var(PRINT_MODE).unwrap_or_default();
+    let stages = std::env::var(PRINT_STAGES).ok().map(|address| TcpStream::connect(address).unwrap());
+    // Each stage is marked in the folder and reported to the parent.
+    let reached = |stage: &str| {
+        std::fs::write(marks.join(stage), stage).unwrap();
+        if let Some(mut stages) = stages.as_ref() {
+            writeln!(stages, "{stage}").and_then(|()| stages.flush()).unwrap();
+        }
+    };
     if mode == "waking" {
-        std::fs::write(marks.join("waking"), b"starting").unwrap();
+        reached("waking");
         loop {
             std::thread::park();
         }
@@ -174,7 +185,7 @@ fn stand_in_print_helper() {
         |pdf, job, _token| {
             assert_eq!(pdf, PDF);
             assert_eq!(job.printer.as_deref(), Some("test queue"));
-            std::fs::write(marks.join("driver"), b"driver entered").unwrap();
+            reached("driver");
             match mode.as_str() {
                 "held" => {
                     let provider = Mutex::new(());
@@ -185,10 +196,11 @@ fn stand_in_print_helper() {
                 }
                 "crash" => std::process::exit(7),
                 "sending" => {
-                    std::fs::write(marks.join("sending"), b"sending").unwrap();
-                    while !marks.join("release").exists() {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
+                    reached("sending");
+                    // Sends until the parent releases it.
+                    let mut release = String::new();
+                    BufReader::new(stages.as_ref().unwrap()).read_line(&mut release).unwrap();
+                    assert_eq!(release.trim_end(), "release");
                     Ok("spooled synthetic job".into())
                 }
                 _ => Ok("spooled synthetic job".into()),
@@ -198,14 +210,18 @@ fn stand_in_print_helper() {
     std::process::exit(i32::from(result.is_err()));
 }
 
-/// Launches [`stand_in_print_helper`] over `directory` in `mode`, marking its stages in `marks`.
-fn helper_command(directory: &Path, marks: &Path, mode: &str, may_be_killed: bool) -> std::io::Result<Command> {
+/// Launches [`stand_in_print_helper`] over `directory` in `mode`, marking its stages in `marks`
+/// and reporting them to `stages` when there is one.
+fn helper_command(directory: &Path, marks: &Path, stages: Option<SocketAddr>, mode: &str, may_be_killed: bool) -> std::io::Result<Command> {
     let mut command = Command::new(std::env::current_exe()?);
     command
         .args(["--exact", "spool_tests::stand_in_print_helper", "--nocapture", "--"])
         .env(PRINT_DIR, directory)
         .env(PRINT_MARKS, marks)
         .env(PRINT_MODE, mode);
+    if let Some(stages) = stages {
+        command.env(PRINT_STAGES, stages.to_string());
+    }
     // A force-killed child can leave a partial LLVM profile; keep it in this trial's
     // temporary directory while normally exiting children retain their coverage.
     if may_be_killed && std::env::var_os("LLVM_PROFILE_FILE").is_some() {
@@ -219,29 +235,69 @@ fn job() -> Job {
     Job { printer: Some("test queue".into()), ..Job::default() }
 }
 
-/// Waits until the child has marked `path`, failing after [`LIMIT`].
-fn wait_for(path: &Path) {
-    let deadline = Instant::now() + LIMIT;
-    while !path.exists() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
+/// The parent's end of one child's stage reports: the child connects once and sends a line for
+/// each stage it reaches, and a child in `sending` waits for a line back.
+struct Stages {
+    address: SocketAddr,
+    reached: Receiver<String>,
+    connection: Receiver<TcpStream>,
+}
+
+impl Stages {
+    fn new() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (report, reached) = channel();
+        let (accepted, connection) = channel();
+        std::thread::spawn(move || {
+            let Ok((stream, _)) = listener.accept() else { return };
+            if let Ok(writer) = stream.try_clone() {
+                let _ = accepted.send(writer);
+            }
+            for line in BufReader::new(stream).lines() {
+                let Ok(line) = line else { break };
+                if report.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Stages { address, reached, connection }
     }
-    assert!(path.exists(), "the child never reached {path:?}");
+
+    /// Waits until the child reports `stage`; [`LIMIT`] only guards against a hang.
+    fn wait_for(&self, stage: &str) {
+        loop {
+            match self.reached.recv_timeout(LIMIT) {
+                Ok(line) if line == stage => return,
+                Ok(_) => {}
+                Err(error) => panic!("the child never reached {stage}: {error}"),
+            }
+        }
+    }
+
+    /// Lets a child in `sending` finish.
+    fn release(&self) {
+        let mut connection = self.connection.recv_timeout(LIMIT).unwrap();
+        connection.write_all(b"release\n").and_then(|()| connection.flush()).unwrap();
+    }
 }
 
 /// Runs `submission` on a thread with the child in `mode`; the receiver gets its input folder.
 fn submit_in(
     submission: &Submission,
     marks: &Path,
+    stages: &Stages,
     mode: &'static str,
     may_be_killed: bool,
 ) -> (std::thread::JoinHandle<Result<String, String>>, Receiver<PathBuf>) {
     let worker = submission.clone();
     let marks = marks.to_path_buf();
+    let stages = stages.address;
     let (folder, folders) = channel();
     let running = std::thread::spawn(move || {
         worker.submit_with(PDF, &job(), |directory| {
             folder.send(directory.to_path_buf()).unwrap();
-            helper_command(directory, &marks, mode, may_be_killed)
+            helper_command(directory, &marks, Some(stages), mode, may_be_killed)
         })
     });
     (running, folders)
@@ -271,7 +327,7 @@ fn a_cancel_during_startup_never_starts_the_driver() {
         worker.submit_with(PDF, &job(), |directory| {
             started.send(directory.to_path_buf()).unwrap();
             wait.recv().unwrap();
-            helper_command(directory, &held, "held", true)
+            helper_command(directory, &held, None, "held", true)
         })
     });
     let directory = starting.recv_timeout(LIMIT).unwrap();
@@ -282,9 +338,10 @@ fn a_cancel_during_startup_never_starts_the_driver() {
 
     // Cancelled while the child is waking and has not acknowledged anything.
     let submission = Submission::new();
-    let (running, folders) = submit_in(&submission, marks.path(), "waking", true);
+    let stages = Stages::new();
+    let (running, folders) = submit_in(&submission, marks.path(), &stages, "waking", true);
     let directory = folders.recv_timeout(LIMIT).unwrap();
-    wait_for(&marks.path().join("waking"));
+    stages.wait_for("waking");
     assert!(submission.cancel(), "a process without a start grant cannot send anything");
     assert_eq!(running.join().unwrap(), Err(CANCELLED.into()));
     assert!(!directory.exists());
@@ -296,13 +353,14 @@ fn a_cancel_during_startup_never_starts_the_driver() {
 fn a_refusal_while_sending_keeps_the_job() {
     let marks = tempfile::tempdir().unwrap();
     let submission = Submission::new();
-    let (running, folders) = submit_in(&submission, marks.path(), "sending", false);
+    let stages = Stages::new();
+    let (running, folders) = submit_in(&submission, marks.path(), &stages, "sending", false);
     let directory = folders.recv_timeout(LIMIT).unwrap();
-    wait_for(&marks.path().join("sending"));
+    stages.wait_for("sending");
     assert!(!submission.cancel(), "a sending job refuses cancellation");
     assert!(!submission.cancel(), "and keeps refusing it");
     assert!(!running.is_finished(), "the child is retained until it finishes sending");
-    std::fs::write(marks.path().join("release"), b"continue").unwrap();
+    stages.release();
     assert_eq!(running.join().unwrap(), Ok("spooled synthetic job".into()));
     assert!(!directory.exists());
 }
@@ -313,15 +371,16 @@ fn a_refusal_while_sending_keeps_the_job() {
 fn a_cancelled_driver_does_not_block_the_next_job() {
     let marks = tempfile::tempdir().unwrap();
     let submission = Submission::new();
-    let (running, folders) = submit_in(&submission, marks.path(), "held", true);
+    let stages = Stages::new();
+    let (running, folders) = submit_in(&submission, marks.path(), &stages, "held", true);
     let directory = folders.recv_timeout(LIMIT).unwrap();
-    wait_for(&marks.path().join("driver"));
+    stages.wait_for("driver");
     assert!(!directory.join("input.pdf").exists(), "the stalled driver retains no plaintext PDF");
     assert!(!directory.join("job.json").exists(), "loaded settings were erased before driver work");
     assert!(submission.cancel(), "a stalled driver still acknowledges cancellation");
     let next_marks = tempfile::tempdir().unwrap();
     let next = Submission::new();
-    assert_eq!(next.submit_with(PDF, &job(), |dir| helper_command(dir, next_marks.path(), "ready", false)), Ok("spooled synthetic job".into()));
+    assert_eq!(next.submit_with(PDF, &job(), |dir| helper_command(dir, next_marks.path(), None, "ready", false)), Ok("spooled synthetic job".into()));
     assert_eq!(running.join().unwrap(), Err(CANCELLED.into()));
     assert!(!directory.exists(), "the reaped helper's PDF and settings were removed");
     assert!(!next.cancel(), "a completed job keeps its receipt");
@@ -338,7 +397,7 @@ fn helper_crashes_are_errors_and_inputs_are_bounded() {
         Submission::new()
             .submit_with(PDF, &job(), |dir| {
                 inputs = Some(dir.to_path_buf());
-                helper_command(dir, marks.path(), "crash", false)
+                helper_command(dir, marks.path(), None, "crash", false)
             })
             .is_err()
     );
@@ -363,7 +422,8 @@ fn helper_crashes_are_errors_and_inputs_are_bounded() {
     let folder = tempfile::tempdir().unwrap();
     std::fs::write(folder.path().join("job.json"), serde_json::to_vec(&Request::from_job(&job())).unwrap()).unwrap();
     std::fs::write(folder.path().join("input.pdf"), PDF).unwrap();
-    let mut child = helper_command(folder.path(), marks.path(), "held", false)
+    let stages = Stages::new();
+    let mut child = helper_command(folder.path(), marks.path(), Some(stages.address), "held", false)
         .unwrap()
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -372,7 +432,7 @@ fn helper_crashes_are_errors_and_inputs_are_bounded() {
         .unwrap();
     let mut input = child.stdin.take().unwrap();
     input.write_all(b"start\n").and_then(|_| input.flush()).unwrap();
-    wait_for(&marks.path().join("driver"));
+    stages.wait_for("driver");
     drop(input);
     assert!(child.wait().unwrap().success(), "a vanished parent ends the waiting child");
     assert!(!folder.path().join("input.pdf").exists());

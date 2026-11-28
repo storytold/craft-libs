@@ -492,6 +492,11 @@ pub struct TransformBox<'a> {
     /// Whether the corner and side handles are circles (a rounded document editor's look) instead of squares.
     #[prop]
     round_handles: bool,
+    /// The side of the corner and side handles in points, for a host with a handle size preference; `None` uses the
+    /// theme's (`size.handle.md`), as does a side that is zero, negative or not finite. A handle's reach grows with a
+    /// larger side and stays at least the theme's.
+    #[prop(quantity = "points, from the host's handle size preference")]
+    handle_side: Option<f32>,
     /// Draws the box as a live line's controls (the Line tool's live line as the whole selection). Only the two ends
     /// take a press and the keys, each as the box handle it points to ([`LineLook`]), so an end drag scales the box as
     /// that handle does; while it is dragged, the box shows as it scales. No other part is declared.
@@ -538,6 +543,7 @@ impl<'a> TransformBox<'a> {
             session_arrows: true,
             centre_mark: false,
             round_handles: false,
+            handle_side: None,
             line: None,
             reach: TransformReach::Box,
             color: None,
@@ -578,6 +584,21 @@ impl<'a> TransformBox<'a> {
     /// The colour of a stroke that is `theme` unless the host gave the box its own.
     fn ink(&self, theme: StyleColor) -> StrokeColor {
         self.color.map_or(StrokeColor::from(theme), StrokeColor::from)
+    }
+
+    /// The host's handle side when it is a finite side above zero; `None` for none or any other value.
+    fn host_handle_side(&self) -> Option<f32> {
+        self.handle_side.filter(|side| side.is_finite() && *side > 0.0)
+    }
+
+    /// The side of a corner or side handle: the host's, else the theme's.
+    fn side_of_handles(&self, style: &TransformBoxStyle) -> f32 {
+        self.host_handle_side().unwrap_or(style.handle.side)
+    }
+
+    /// The hit radius of a corner or side handle: the theme's, or more for a host's larger handle.
+    fn reach_of_handles(&self, style: &TransformBoxStyle) -> f32 {
+        self.host_handle_side().map_or(style.handle_reach, |side| style.handle_reach.max(side * HANDLE_REACH_IN_HANDLES))
     }
 
     /// Whether the middle of the box is a move part: the reference point is hidden, so it does not take that place.
@@ -827,7 +848,7 @@ impl<'a> TransformBox<'a> {
         let suspend = suspend_key(snap.as_ref());
         for (reference, part) in self.pointer_parts() {
             let Some(result) = cx.part_if_declared(reference) else { continue };
-            let (press, hover) = (result.press, result.hover_pos.filter(|_| result.hovered));
+            let (press, hover) = (result.press, cx.hover_pos(reference));
             let mods = self.mods.unwrap_or(press.mods);
             let acting = drag_mods(mods, suspend);
             if let Some(pos) = hover
@@ -1032,7 +1053,8 @@ impl TransformBox<'_> {
     /// press; `enlarged` with the overflow plus.
     fn paint_handle(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, part: BoxPart, at: Pos2, enlarged: bool) {
         let look = &cx.style.handle;
-        let side = if enlarged { look.side * OVERFLOW_IN_HANDLES } else { look.side };
+        let side = self.side_of_handles(cx.style);
+        let side = if enlarged { side * OVERFLOW_IN_HANDLES } else { side };
         self.paint_handle_shape(draw, cx, self.handle_shape(at, side), self.rules.allows(part).then(|| BOX.at(part.index())));
         if enlarged {
             Handle::plus(draw, look, at, side);
@@ -1048,14 +1070,14 @@ impl TransformBox<'_> {
             paint_frame(draw, style, self.ink(style.line), corners);
             for k in 0..4 {
                 let middle = corners[k].lerp(corners[(k + 1) % 4], 0.5);
-                self.paint_handle_shape(draw, cx, self.handle_shape(middle, style.handle.side), None);
+                self.paint_handle_shape(draw, cx, self.handle_shape(middle, self.side_of_handles(style)), None);
             }
         }
         for (part, end) in line.end_parts() {
             self.paint_handle(draw, cx, part, view.to_screen(end), false);
         }
         for (end, at) in line.free_ends() {
-            self.paint_handle_shape(draw, cx, self.handle_shape(view.to_screen(at), style.handle.side), Some(LINE_END.at(end.index())));
+            self.paint_handle_shape(draw, cx, self.handle_shape(view.to_screen(at), self.side_of_handles(style)), Some(LINE_END.at(end.index())));
         }
         paint_widget(draw, view.to_screen(line.from.midpoint(line.to)), &style.widget, None);
     }
@@ -1278,7 +1300,7 @@ impl Component for TransformBox<'_> {
                 handle => {
                     let at = self.part_point(&state, handle).map_or(Pos2::ZERO, |at| space.view.to_screen(at));
                     (
-                        HitShape::circle(at, style.handle_reach),
+                        HitShape::circle(at, self.reach_of_handles(style)),
                         Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS,
                         HitPriority::new(HitLevel::Handle, HANDLE_SUB),
                         FocusShape::Circle,
@@ -1290,7 +1312,7 @@ impl Component for TransformBox<'_> {
         }
         if let Some(line) = self.line {
             for (end, at) in line.free_ends() {
-                cx.part(LINE_END.at(end.index()), HitShape::circle(space.view.to_screen(at), style.handle_reach))
+                cx.part(LINE_END.at(end.index()), HitShape::circle(space.view.to_screen(at), self.reach_of_handles(style)))
                     .sense(Sense::DRAG | Sense::CLICK | context)
                     .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
                     .pointer_only(LINE_END_BY_KEY);
