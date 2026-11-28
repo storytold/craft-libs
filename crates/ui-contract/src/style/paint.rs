@@ -56,9 +56,9 @@ impl RuleWidth {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum RuleKind {
-    /// A separator between neighbours: `line.divider`, `stroke.thin` wide.
+    /// A separator between neighbours: `line.divider`, one physical pixel wide.
     Divider,
-    /// The edge of a surface or region: `line.border`, `stroke.thin` wide.
+    /// The edge of a surface or region: `line.border`, one physical pixel wide.
     Edge,
     /// A grid line: `overlay.grid`, one physical pixel wide.
     Grid,
@@ -68,12 +68,13 @@ pub enum RuleKind {
 
 pub(crate) fn rule_look(tokens: &UiTokens, kind: RuleKind) -> RuleLook {
     let c = &tokens.color;
-    let thin = RuleWidth::Points(tokens.stroke.thin);
+    // Dividers, edges and a grid over the document are one physical pixel at every scale: 1 point on a standard
+    // display, half a point on a high-density one, where a 1-point rule (two pixels) reads heavy.
+    let fine = RuleWidth::Hairline;
     match kind {
-        RuleKind::Divider => RuleLook { color: color(c.line.divider), width: thin },
-        RuleKind::Edge => RuleLook { color: color(c.line.border), width: thin },
-        // A grid over the document stays finer than the chrome around it.
-        RuleKind::Grid => RuleLook { color: color(c.overlay.grid), width: RuleWidth::Hairline },
+        RuleKind::Divider => RuleLook { color: color(c.line.divider), width: fine },
+        RuleKind::Edge => RuleLook { color: color(c.line.border), width: fine },
+        RuleKind::Grid => RuleLook { color: color(c.overlay.grid), width: fine },
         RuleKind::DropMark => RuleLook { color: color(c.accent.solid), width: RuleWidth::Points(tokens.stroke.thick) },
     }
 }
