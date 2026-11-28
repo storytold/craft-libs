@@ -2,8 +2,8 @@
 //! the door open for wasm later). CPU only for now; GPU comes from the
 //! app's wgpu adapter in a later milestone.
 //!
-//! Both supported architectures speak ChatML — one prompt template covers
-//! Qwen2.5 and SmolLM2.
+//! The supported architectures speak ChatML. Qwen3 also needs thinking
+//! forced off — see [`LocalGguf::chat`].
 
 use std::fs::File;
 use std::path::Path;
@@ -11,7 +11,7 @@ use std::path::Path;
 use candle_core::quantized::gguf_file;
 use candle_core::{Device, IndexOp, Tensor};
 use candle_transformers::generation::LogitsProcessor;
-use candle_transformers::models::{quantized_llama, quantized_qwen2};
+use candle_transformers::models::{quantized_llama, quantized_qwen2, quantized_qwen3};
 use tokenizers::Tokenizer;
 
 use crate::error::AiError;
@@ -20,6 +20,7 @@ use crate::registry::{Arch, ModelEntry};
 
 enum Weights {
     Qwen2(quantized_qwen2::ModelWeights),
+    Qwen3(quantized_qwen3::ModelWeights),
     Llama(quantized_llama::ModelWeights),
 }
 
@@ -27,7 +28,17 @@ impl Weights {
     fn forward(&mut self, ids: &Tensor, pos: usize) -> Result<Tensor, candle_core::Error> {
         match self {
             Self::Qwen2(w) => w.forward(ids, pos),
+            Self::Qwen3(w) => w.forward(ids, pos),
             Self::Llama(w) => w.forward(ids, pos),
+        }
+    }
+
+    /// Qwen3's attention appends to its KV cache instead of overwriting at
+    /// `pos`, so a second completion on the same loaded model must start
+    /// empty. Qwen2/Llama index the cache by position and need no reset.
+    fn reset(&mut self) {
+        if let Self::Qwen3(w) = self {
+            w.clear_kv_cache();
         }
     }
 }
@@ -66,6 +77,10 @@ impl LocalGguf {
                     quantized_qwen2::ModelWeights::from_gguf(content, &mut file, &device)
                         .map_err(|e| AiError::Inference(format!("cannot load {}: {e}", entry.file)))?,
                 )),
+                Arch::Qwen3 => Ok(Weights::Qwen3(
+                    quantized_qwen3::ModelWeights::from_gguf(content, &mut file, &device)
+                        .map_err(|e| AiError::Inference(format!("cannot load {}: {e}", entry.file)))?,
+                )),
                 Arch::Llama => Ok(Weights::Llama(
                     quantized_llama::ModelWeights::from_gguf(content, &mut file, &device)
                         .map_err(|e| AiError::Inference(format!("cannot load {}: {e}", entry.file)))?,
@@ -78,17 +93,26 @@ impl LocalGguf {
         Ok(Self { weights, tokenizer, device, eos, entry })
     }
 
-    /// ChatML wrap — Qwen2.5 and SmolLM2 both ship this template.
-    fn chat(prompt: &str) -> String {
+    /// ChatML wrap. Qwen3 runs in thinking mode by default, which would
+    /// put a reasoning trace in front of every translation; its chat
+    /// template disables it with `/no_think` in the user turn and an empty
+    /// `think` block opening the assistant turn. Both are needed: the
+    /// marker alone is only a soft switch.
+    fn chat(arch: Arch, prompt: &str) -> String {
+        let (user_hint, assistant_prefix) = match arch {
+            Arch::Qwen3 => (" /no_think", "<think>\n\n</think>\n\n"),
+            Arch::Qwen2 | Arch::Llama => ("", ""),
+        };
         format!(
-            "<|im_start|>system\nYou are a precise translation engine. Follow the instructions exactly.<|im_end|>\n<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n",
+            "<|im_start|>system\nYou are a precise translation engine. Follow the instructions exactly.<|im_end|>\n<|im_start|>user\n{prompt}{user_hint}<|im_end|>\n<|im_start|>assistant\n{assistant_prefix}",
         )
     }
 
     fn generate(&mut self, prompt: &str, opts: &GenOpts) -> Result<String, AiError> {
-        let text = Self::chat(prompt);
+        let text = Self::chat(self.entry.arch, prompt);
         let encoding = self.tokenizer.encode(text, true).map_err(|e| AiError::Inference(format!("encode failed: {e}")))?;
         let mut tokens: Vec<u32> = encoding.get_ids().to_vec();
+        self.weights.reset();
 
         let temp = if opts.temperature <= 0.02 { None } else { Some(f64::from(opts.temperature)) };
         let mut sampler = LogitsProcessor::new(SEED, temp, None);
@@ -140,5 +164,56 @@ impl Provider for LocalGguf {
 
     fn is_local(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::Quality;
+
+    static QWEN3: ModelEntry = ModelEntry {
+        id: "test-qwen3",
+        name: "test Qwen3",
+        url: "",
+        file: "test.gguf",
+        tokenizer_url: "",
+        sha256: None,
+        size_mb: 1,
+        min_ram_gb: 0.0,
+        rec_ram_gb: 0.0,
+        license: "Apache-2.0",
+        quality: Quality::Tiny,
+        arch: Arch::Qwen3,
+        langs: "",
+    };
+
+    #[test]
+    fn qwen3_prompt_forces_thinking_off() {
+        let prompt = LocalGguf::chat(Arch::Qwen3, "translate this");
+        assert!(prompt.contains("translate this /no_think<|im_end|>"));
+        assert!(prompt.ends_with("<|im_start|>assistant\n<think>\n\n</think>\n\n"));
+    }
+
+    #[test]
+    fn qwen2_prompt_keeps_the_plain_assistant_turn() {
+        for arch in [Arch::Qwen2, Arch::Llama] {
+            let prompt = LocalGguf::chat(arch, "translate this");
+            assert!(prompt.contains("translate this<|im_end|>"), "{arch:?}");
+            assert!(!prompt.contains("/no_think"), "{arch:?}");
+            assert!(prompt.ends_with("<|im_start|>assistant\n"), "{arch:?}");
+        }
+    }
+
+    #[test]
+    fn truncated_or_empty_gguf_is_an_error_not_a_panic() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tokenizer = dir.path().join("tokenizer.json");
+        for (name, bytes) in [("short.gguf", b"\x08\x07".as_slice()), ("empty.gguf", b"")] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).expect("write fixture");
+            let Err(err) = LocalGguf::load(&QWEN3, &path, &tokenizer) else { panic!("{name} loaded") };
+            assert!(matches!(err, AiError::Inference(_)), "{name}: {err:?}");
+        }
     }
 }
