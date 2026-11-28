@@ -9,6 +9,7 @@ pub(crate) mod render;
 pub(crate) mod focus;
 pub(crate) mod panel_menu;
 pub(crate) mod runs;
+pub(crate) mod tab_menu;
 
 pub(crate) mod split;
 

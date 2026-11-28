@@ -420,6 +420,10 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// it.
     #[prop(func = "FnMut() -> Vec<PanelRow>")]
     menu: Option<MenuRows<'a>>,
+    /// The rows a context request on a tab opens instead of the group menu, when it has any: the tab menu, named by
+    /// `DockConfig::tab_context_menu` at the dock. The panel menu button still opens the group menu.
+    #[prop]
+    tab_menu: Vec<PanelRow>,
     /// Whether the panel menu button shows beside the tabs; a context request on a tab opens the menu either way.
     #[prop]
     panel_menu_shown: bool,
@@ -467,6 +471,7 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
             in_window: false,
             host_body: false,
             menu: None,
+            tab_menu: Vec::new(),
             panel_menu_shown: true,
             panel_menu_icon: IconId::new("more"),
             command_states: Vec::new(),
@@ -608,9 +613,12 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
     }
 
     /// The group menu, opened by the panel menu button, under it, or by a context request on a tab, at the request's
-    /// point. Its rows are built only while it is open.
+    /// point. A context request opens the tab menu when the dock gave one, and the group menu otherwise; the button
+    /// always opens the group menu. Its rows are built only while it is open.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
-        let Some(menu) = self.menu.as_mut() else { return };
+        if self.menu.is_none() && self.tab_menu.is_empty() {
+            return;
+        }
         let popup = cx.popup("panel_menu");
         let at_id = sub(cx.core.id, MENU_AT);
         if !popup.is_open(cx) {
@@ -624,7 +632,10 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
             None => Anchor::Pointer,
         };
         let name = cx.words::<DockWords>().panel_menu.clone();
-        let rows = menu.rows();
+        let rows = match at {
+            Some(_) if !self.tab_menu.is_empty() => self.tab_menu.clone(),
+            _ => self.menu.as_mut().map_or_else(Vec::new, |menu| menu.rows()),
+        };
         let layer = crate::menu::layer(false).anchor(anchor);
         if let Some(item) = ui.show(popup, layer, |ui, _| {
             Menu::inline(name.clone()).show(ui, |ui, _| PanelMenu::new(Vec::new(), rows.clone()).show(ui).picked).inner.flatten()
@@ -644,9 +655,9 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         self.size = cx.rect.size();
-        // A context request on a tab in the last pass opens the group menu at its point.
+        // A context request on a tab in the last pass opens the group or tab menu at its point.
         let asked = std::mem::take(&mut cx.core.memory.shown::<MenuAsked>(sub(cx.core.id, MENU_ASKED)).0);
-        if self.menu.is_some() {
+        if self.menu.is_some() || !self.tab_menu.is_empty() {
             let popup = cx.popup("panel_menu");
             if let Some(at) = asked {
                 cx.core.memory.shown::<MenuAt>(sub(cx.core.id, MENU_AT)).0 = Some(at);

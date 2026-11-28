@@ -11,10 +11,10 @@ use crate::buttons::{ActiveLook, IconButton};
 use crate::contract::overlay::Anchor;
 use crate::contract::{
     Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, Edit as _, EditResponse, HeaderEdge, HeaderParts, HeaderRegion,
-    MeasureCx, Name, Outcome, OverlayUi, Overlays as _, Pad, PaintUi, PartsCx, Pointer as _, Props as _, Role, ShowContainer as _, Sizing,
+    MeasureCx, Name, Outcome, OverlayUi, Overlays as _, Pad, PaintUi, PartsCx, Pointer as _, Props as _, Role, ShowContainer as _, Sizing, Trigger,
     WordSetCx as _,
 };
-use crate::menu::GroupItem;
+use crate::menu::{GroupItem, Menu, PanelMenu, PanelRow};
 use crate::primitives::{IconSpec, TextRun};
 use crate::runtime::env::{Env, EnvValue, Label, with_env};
 use crate::runtime::focus::KeyUse;
@@ -136,6 +136,8 @@ pub struct IconicColumnOutput<P> {
     pub front: Option<P>,
     /// The dock row the user picked in the column menu.
     pub picked: Option<GroupItem>,
+    /// The dock row the user picked in the context menu of an icon, by the panel of that icon.
+    pub icon_picked: Option<(P, GroupItem)>,
     /// The width the user gave a docked iconic column on its inner edge this pass. A floating window's sides set the
     /// width of the column it holds (`FloatingGroupOutput::collapsed_width`).
     pub width: Option<f32>,
@@ -203,7 +205,9 @@ pub struct IconicColumnStyle {
 /// opens the flyout of its panel beside the column, switches it to that panel or closes it; one flyout is open at a
 /// time. A drag of an icon starts a move of its panel, a drag of the grip on top of a group a move of the group, a
 /// drag of the bar beside its button a move of the column; each starts through the drag session. Escape closes the
-/// flyout; with `auto_collapse` a press outside it and the focus leaving it do too.
+/// flyout; with `auto_collapse` a press outside it and the focus leaving it do too. With `icon_menu` rows for a panel,
+/// a context request on its icon (a right click, the Menu key) opens that panel's menu at the pointer, and the
+/// picked row comes back by its panel.
 ///
 /// The open flyout is the bound `Option<P>` of [`new`](IconicColumn::new), owned by the host like the layout: a click
 /// on an icon, Escape and auto-collapse write it, and the host opens a panel (the Window menu) by writing it. The
@@ -255,6 +259,11 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     /// palette window, the work area.
     #[prop]
     within: Rect,
+    /// The rows of an icon's context menu, one entry per panel: a context request on that panel's icon opens them.
+    /// Empty, or empty rows for a panel, leaves the icon with no menu. The dock names these for a docked iconic
+    /// column with `DockConfig::tab_context_menu`.
+    #[prop]
+    icon_menu: Vec<(P, Vec<PanelRow>)>,
     /// Which inset the outer side of the docked column's card takes, when it shows as one
     /// ([`DockConfig::column_cards`](super::DockConfig::column_cards), [`DockSizes::card_place`]): its bar and icons
     /// sit inside the card, inset by that on its outer side and by [`DockSizes::card`] on its top and bottom.
@@ -281,6 +290,8 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     expand: bool,
     /// The size the user gave the open flyout this pass.
     flyout: Option<FlyoutResize<P>>,
+    /// The row the user picked in an icon menu, by the icon's panel.
+    menu_picked: Option<(P, GroupItem)>,
     /// In rail mode, what a click on an icon asked for this pass: the column collapsed (`true`) or expanded.
     rail_iconic: Option<bool>,
     /// In rail mode, the panel a click on its icon brought to the front this pass.
@@ -329,6 +340,7 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
             auto_collapse: false,
             mode: IconicMode::Flyouts,
             within: Rect::NOTHING,
+            icon_menu: Vec::new(),
             card: None,
             tab_look: PanelTabLook::Plain,
             framed: false,
@@ -341,6 +353,7 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
             laid: None,
             expand: false,
             flyout: None,
+            menu_picked: None,
             rail_iconic: None,
             front: None,
         }
@@ -455,6 +468,17 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
 
     fn panel(&self, group: usize, panel: usize) -> Option<&P> {
         self.column.groups.get(group).and_then(|group| group.panels.get(panel))
+    }
+
+    /// The panel of the icon cell `at`, in the flat order of the cells.
+    fn panel_at(&self, at: usize) -> Option<&P> {
+        let (group, panel) = *self.flat().get(at)?;
+        self.panel(group, panel)
+    }
+
+    /// The rows of the icon menu of the cell `at`: empty when the icon has no menu.
+    fn icon_rows_at(&self, at: usize) -> Vec<PanelRow> {
+        self.panel_at(at).map_or(Vec::new(), |panel| self.icon_menu.iter().find(|(one, _)| one == panel).map_or(Vec::new(), |(_, rows)| rows.clone()))
     }
 
     /// Where the parts sit in the column's `rect`: inside its card, if it shows as one.
@@ -620,6 +644,17 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let sizes = cx.style.sizes;
         let (rect, rtl, ctx) = (cx.rect, cx.flow.is_rtl(), cx.core.ctx.clone());
+        // Register each cell's icon menu popup for the pass, so the pass's open states include them, and close any
+        // whose rows the dock no longer gives.
+        if !self.icon_menu.is_empty() {
+            let menus = cx.popup("icon_menu");
+            let cells = self.flat().len();
+            for at in 0..cells {
+                if menus.at(at).is_open(cx) && self.icon_rows_at(at).is_empty() {
+                    menus.at(at).close(cx);
+                }
+            }
+        }
         self.expand = self.bar == ColumnBar::Own && cx.part_activated(CHEVRON).is_some();
         let Some(plan) = self.laid.take() else { return };
         let flat = self.flat();
@@ -833,6 +868,7 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             cx.set(None);
         }
         self.flyout = resized;
+        self.icon_menu_show(ui, cx);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> IconicColumnOutput<P> {
@@ -844,6 +880,7 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             iconic,
             front: self.front,
             picked: self.record.picked,
+            icon_picked: self.menu_picked,
             width: self.width,
             flyout: self.flyout,
         }
@@ -851,6 +888,38 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
 }
 
 impl<P: Value + Debug + Hash + 'static> IconicColumn<'_, P> {
+    /// The icon menu: a context request on a cell whose panel has rows opens that cell's menu at the pointer, and
+    /// what the user picks comes back by that panel. The request may come at the icon's square or, in a wide column,
+    /// at the name beside it: both parts carry the cell's flat index. A request at another part, or no rows for the
+    /// cell's panel, opens nothing; the open popup carries the menu between passes.
+    fn icon_menu_show(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        if self.icon_menu.is_empty() {
+            return;
+        }
+        let base = cx.popup("icon_menu");
+        let cells = self.flat().len();
+        let asked = cx.context_part().filter(|part| part.key == CELL || part.key == NAME).and_then(|part| part.index).map(|at| at as usize);
+        if let Some(at) = asked.filter(|at| !self.icon_rows_at(*at).is_empty()) {
+            for other in 0..cells {
+                if other != at {
+                    base.at(other).close(cx);
+                }
+            }
+            base.at(at).open(cx);
+        }
+        let Some(at) = (0..cells).find(|at| base.at(*at).is_open(cx)) else { return };
+        let Some(panel) = self.panel_at(at).cloned() else { return };
+        let name = cx.words::<DockWords>().panel_menu.clone();
+        let rows = self.icon_rows_at(at);
+        let layer = crate::menu::layer(false).opened_by(&cx.core.response, Trigger::Context);
+        if let Some(Some(item)) = ui.show(base.at(at), layer, |ui, _| {
+            Menu::inline(name.clone()).show(ui, |ui, _| PanelMenu::new(Vec::new(), rows.clone()).show(ui).picked).inner.flatten()
+        }) && self.menu_picked.is_none()
+        {
+            self.menu_picked = Some((panel.clone(), item));
+        }
+    }
+
     /// Registers the drop spots of the column the way an expanded column registers them: the bands of a dock
     /// column's two edges (a new column beside it), the seam on the separator between two icon groups (a new group
     /// between them), the top of the first group and the bottom of the last down to the column's foot (a new group

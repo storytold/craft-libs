@@ -686,20 +686,23 @@ struct Passed<P> {
     sources: Vec<DockSource<P>>,
 }
 
-/// How a group is shown: minimized, whether it is an accordion section (with its open state), and whether it is in
-/// a floating window, where nothing goes beside it.
+/// How a group is shown: minimized, whether it is an accordion section (with its open state), whether it is in
+/// a floating window, where nothing goes beside it, and whether it shows in an iconic flyout, whose tabs keep
+/// today's context menu.
 #[derive(Clone, Copy)]
 struct Look {
     minimized: bool,
     section: Option<bool>,
     in_window: bool,
+    flyout: bool,
 }
 
 /// What a group's header shows besides its panels' bodies: the tab titles, the panel menu's rows and whether the host
-/// gave any, and the panel commands' states.
+/// gave any, the tab menu's rows when the dock shows one, and the panel commands' states.
 struct GroupParts {
     titles: Titles,
     hosted: bool,
+    tab: Vec<PanelRow>,
     states: Vec<(DockCommands, CommandState)>,
 }
 
@@ -734,6 +737,8 @@ struct ColumnAt<P> {
 struct ColumnWork<P> {
     iconic: Option<bool>,
     picked: Option<GroupItem>,
+    /// The row picked in the context menu of an iconic column's icon, by the panel of that icon.
+    icon_picked: Option<(P, GroupItem)>,
     resized: Vec<(P, f32)>,
     /// The expanded width the user gave an expanded column, or the iconic width of an iconic one.
     width: Option<f32>,
@@ -1236,6 +1241,54 @@ fn panel_menu_rows<P: Clone + Eq + Hash>(
     (rows, hosted)
 }
 
+/// The Auto-Collapse Iconic Panels row of a tab or icon menu: the dock's own item row, checked from the dock's
+/// Auto-Collapse setting, which its pick reports back as the host's toggle event.
+fn auto_collapse_row(words: &MenuWords, on: bool) -> PanelRow {
+    let name = Label::from(words.panel_auto_collapse.as_str().to_owned());
+    PanelRow::Item(Entry::new(GroupItem::AutoCollapse, name).checked(on))
+}
+
+/// The rows of the tab menu of a docked group's shown panel, with `DockConfig::tab_context_menu`: the Close rows the
+/// config shows first, then the Minimize row it shows, a separator, the column's Collapse to Icons row and the
+/// Auto-Collapse Iconic Panels row, and the host's `tab_rows` rows after them. The command rows reach the group's
+/// command scope, whose published states enable and check the Close and Collapse rows.
+fn panel_tab_menu_rows<P: Clone + Eq + Hash>(scene: &Scene<'_, P>, panels: &mut dyn DockPanels<P>, words: &MenuWords, panel: &P) -> Vec<PanelRow> {
+    let config = scene.config;
+    let command = |command: DockCommands| PanelRow::Command(CommandRef::from(command));
+    let mut rows = Vec::new();
+    if config.close_menu_items {
+        rows.extend([command(DockCommands::ClosePanel), command(DockCommands::CloseGroup)]);
+    }
+    if config.group_order_items {
+        rows.push(command(DockCommands::ToggleMinimized));
+    }
+    if !rows.is_empty() {
+        rows.push(PanelRow::Separator);
+    }
+    rows.push(command(DockCommands::CollapseToIcons));
+    rows.push(auto_collapse_row(words, scene.auto_collapse));
+    rows.extend(panels.tab_rows(panel));
+    rows
+}
+
+/// The rows of the context menu of a docked iconic column's icon: the Close rows the config shows, a separator,
+/// Expand Panels and the Auto-Collapse Iconic Panels row, and the host's `tab_rows` rows after them. The icons sit
+/// outside any group command scope, so the dock rows are item rows named by the menu words that match the dock
+/// command labels.
+fn panel_icon_menu_rows<P: Clone + Eq + Hash>(scene: &Scene<'_, P>, panels: &mut dyn DockPanels<P>, words: &MenuWords, panel: &P) -> Vec<PanelRow> {
+    let mut rows = Vec::new();
+    if scene.config.close_menu_items {
+        let closable = scene.permissions(panel).closable;
+        let item = |item: GroupItem, word: &Label| PanelRow::Item(Entry::new(item, word.clone()).enabled(closable));
+        rows.extend([item(GroupItem::ClosePanel, &words.panel_close), item(GroupItem::CloseGroup, &words.panel_close_group)]);
+        rows.push(PanelRow::Separator);
+    }
+    rows.push(PanelRow::Item(Entry::new(GroupItem::CollapseToIcons, Label::from(words.panel_expand_panels.as_str().to_owned()))));
+    rows.push(auto_collapse_row(words, scene.auto_collapse));
+    rows.extend(panels.tab_rows(panel));
+    rows
+}
+
 /// Whether `spec` is a document's: its group shows its body edge to edge. Every other docked body fills its group's
 /// body, inset from its edges by the panel padding: the group is the body's panel and its tab the body's title, so a
 /// docked body pads and frames nothing itself.
@@ -1249,7 +1302,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let scene = self.scene;
         match node {
             Node::Tabs { panels: members, active, .. } => {
-                self.group(ui, body, members, *active, Look { minimized: false, section: None, in_window: false }, GroupAt::Show(rect));
+                self.group(
+                    ui,
+                    body,
+                    members,
+                    *active,
+                    Look { minimized: false, section: None, in_window: false, flyout: false },
+                    GroupAt::Show(rect),
+                );
             }
             Node::Stack { entries, .. } => {
                 let sections: Vec<StackSection> = entries
@@ -1265,7 +1325,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     for (entry, height) in entries.iter().zip(&heights) {
                         let section = Rect::from_min_size(Pos2::new(rect.left(), top), Vec2::new(rect.width(), *height));
                         top += height;
-                        let look = Look { minimized: !entry.open, section: Some(entry.open), in_window: false };
+                        let look = Look { minimized: !entry.open, section: Some(entry.open), in_window: false, flyout: false };
                         self.group(ui, inner, std::slice::from_ref(&entry.panel), 0, look, GroupAt::Show(section));
                     }
                 });
@@ -1321,6 +1381,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             GroupItem::MoveTo(at) => self.move_to(panel, at),
             GroupItem::CollapseToIcons => self.run(panel, DockCommands::CollapseToIcons, None),
             GroupItem::AutoCollapse => self.run(panel, DockCommands::AutoCollapse, None),
+            GroupItem::ClosePanel => self.run(panel, DockCommands::ClosePanel, None),
+            GroupItem::CloseGroup => self.run(panel, DockCommands::CloseGroup, None),
         }
     }
 
@@ -1400,22 +1462,28 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 });
                 let titles = Titles::clone(&titles);
                 let hosted = !panels.borrow_mut().panel_rows(shown).is_empty();
+                let tab = if scene.config.tab_context_menu && !look.flyout && matches!(scene.layout.place(shown), Some(PanelPlace::Dock { .. })) {
+                    panel_tab_menu_rows(scene, &mut **panels.borrow_mut(), &words, shown)
+                } else {
+                    Vec::new()
+                };
                 let permissions = |panel: &P| scene.permissions(panel);
                 let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &permissions).floated(scene.floated), shown);
-                GroupParts { titles, hosted, states }
+                GroupParts { titles, hosted, tab, states }
             })
         };
         // The group with `members[at]` shown: as it shows, or as it is measured.
         let make = |at: usize, minimized: bool| {
             let panels = &panels;
             let words = &words;
-            let GroupParts { titles, hosted, states } = parts_of();
+            let GroupParts { titles, hosted, tab, states } = parts_of();
             let mut group = DockGroup::new(anchor.clone(), titles.clone(), PanelKey::of(&members[at]))
                 .extra(move |ui, body| scene.hosted(&members[at], HostPart::Header, ui, |ui| panels.borrow_mut().group_header(members, at, ui, body)))
                 .dock(self.dock)
                 .zones(scene.config.zone_rule())
                 .movable(scene.permissions(shown).movable)
                 .menu(move || panel_menu_rows(scene, &mut **panels.borrow_mut(), words, shown).0)
+                .tab_menu(tab.clone())
                 .panel_menu_shown(*hosted || scene.config.panel_menu_always)
                 .panel_menu_icon(scene.config.panel_menu_icon.clone())
                 .tab_look(scene.config.tab_look)
@@ -1599,9 +1667,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         None
     }
 
-    /// A group of a column, docked or in a floating window (`in_window`).
-    fn group_of(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, group: &Group<P>, at: GroupAt, in_window: bool) -> Option<f32> {
-        let look = Look { minimized: group.minimized, section: None, in_window };
+    /// A group of a column, docked or in a floating window (`in_window`), shown in a flyout or in place (`flyout`).
+    fn group_of(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, group: &Group<P>, at: GroupAt, in_window: bool, flyout: bool) -> Option<f32> {
+        let look = Look { minimized: group.minimized, section: None, in_window, flyout };
         self.group(ui, body, &group.panels, group.active, look, at)
     }
 
@@ -1861,7 +1929,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
         let mut height = 0.0;
         for group in &column.groups {
-            height += self.group_of(ui, body, group, GroupAt::Measure(width), in_window).unwrap_or(0.0);
+            height += self.group_of(ui, body, group, GroupAt::Measure(width), in_window, false).unwrap_or(0.0);
         }
         Some(height)
     }
@@ -1903,6 +1971,18 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let mode = if in_window { IconicMode::Flyouts } else { scene.config.iconic_mode };
         // The width the user gives a column by its inner edge leaves out its card's inset.
         let inset = card.map_or(0.0, |place| scene.sizes.inset(place));
+        // The icon menus' rows, per panel of the column, built once for the pass when the dock shows them.
+        let menus: Vec<(P, Vec<PanelRow>)> = if scene.config.tab_context_menu && bar == ColumnBar::Own {
+            let words = body.words::<MenuWords>();
+            column
+                .groups
+                .iter()
+                .flat_map(|group| group.panels.iter())
+                .map(|panel| (panel.clone(), panel_icon_menu_rows(scene, &mut *self.panels, &words, panel)))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let mut icons = |cell: Rect, open: Option<P>, card: Option<CardInset>| {
             let footer = scene.rail_footer.filter(|panel| mode == IconicMode::Rail && column.panels().any(|item| item == *panel));
             let pass = RefCell::new(&mut *self);
@@ -1915,12 +1995,13 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .auto_collapse(scene.auto_collapse)
                     .mode(mode)
                     .tab_look(scene.config.tab_look)
-                    .framed(scene.config.flush_docks && !in_window);
+                    .framed(scene.config.flush_docks && !in_window)
+                    .icon_menu(menus.clone());
                 let shown = match card {
                     Some(place) => shown.card(place),
                     None => shown,
                 };
-                shown.show_flyouts_at(ui, rect, |group, at, ui, body| pass.borrow_mut().group_of(ui, body, group, at, in_window))
+                shown.show_flyouts_at(ui, rect, |group, at, ui, body| pass.borrow_mut().group_of(ui, body, group, at, in_window, true))
             };
             if let Some(panel) = footer {
                 let height = IconicSizes::of(ui.ctx()).icons_height(column) + scene.sizes.bar;
@@ -1948,7 +2029,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             self.report.flyout.extend(output.edit.events);
             self.rail_work(output.front);
             let width = output.width.map(|width| width - inset);
-            ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width, flyout: output.flyout }
+            ColumnWork {
+                iconic: output.iconic,
+                picked: output.picked,
+                icon_picked: output.icon_picked,
+                resized: Vec::new(),
+                width,
+                flyout: output.flyout,
+            }
         } else {
             if !in_window && scene.rail_beside(column) {
                 // The rail keeps to the dock's window edge and the expanded column shows inward of it.
@@ -1964,7 +2052,17 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 let Some(output) = icons(rail_cell, None, None) else { return };
                 self.rail_work(output.front);
                 // The rail's inner edge sets its own width, not the expanded column's.
-                self.column_work(column, ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: None, flyout: None });
+                self.column_work(
+                    column,
+                    ColumnWork {
+                        iconic: output.iconic,
+                        picked: output.picked,
+                        icon_picked: output.icon_picked,
+                        resized: Vec::new(),
+                        width: None,
+                        flyout: None,
+                    },
+                );
                 if let (Some(width), Some(first)) = (output.width, column.groups.first().and_then(|group| group.panels.first())) {
                     self.report.actions.push(Action::resize_iconic(first.clone(), Some(width)));
                 }
@@ -1981,14 +2079,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 None => shown,
             };
             let output = shown.show_groups_at(ui, cell, |group, rect, ui, body| {
-                self.group_of(ui, body, group, GroupAt::Show(rect), in_window);
+                self.group_of(ui, body, group, GroupAt::Show(rect), in_window, false);
             });
             if crate::runtime::measure::effect(ui.ctx(), "dock::divider_report") {
                 let dividers = output.dividers.into_iter().map(|(divider, rect, node)| DockSource::new(SourceKind::Divider(divider), rect, node));
                 self.report.sources.extend(dividers);
             }
             let width = output.width.map(|width| width - inset);
-            ColumnWork { iconic: output.iconic, picked: output.picked, resized: output.resized, width, flyout: None }
+            ColumnWork { iconic: output.iconic, picked: output.picked, icon_picked: None, resized: output.resized, width, flyout: None }
         };
         self.column_work(column, work);
     }
@@ -2007,6 +2105,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
         if let Some(item) = work.picked {
             self.pick(first, item);
+        }
+        if let Some((panel, item)) = work.icon_picked {
+            self.pick(&panel, item);
         }
         for (anchor, height) in work.resized {
             self.report.actions.push(Action::resize_group(anchor, Some(height)));
@@ -2272,7 +2373,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
             // The sides of a collapsed window set its column's width, as a docked collapsed column's inner edge does.
             if let Some(width) = output.collapsed_width {
-                let work = ColumnWork { iconic: None, picked: None, resized: Vec::new(), width: Some(width), flyout: None };
+                let work = ColumnWork { iconic: None, picked: None, icon_picked: None, resized: Vec::new(), width: Some(width), flyout: None };
                 self.column_work(&window.column, work);
             }
             // The OS close of a native window arrives here as well, also where the title row offers no Close.

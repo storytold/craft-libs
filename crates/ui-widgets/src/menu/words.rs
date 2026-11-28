@@ -15,5 +15,9 @@ craft_ui::words! {
         panel_expand: "menu.panelExpand" = "Expand";
         panel_collapse_to_icons: "menu.panelCollapseToIcons" = "Collapse to Icons";
         panel_expand_panels: "menu.panelExpandPanels" = "Expand Panels";
+        /// The Close row of a menu outside a group's command scope, such as the context menu of a collapsed column's
+        /// icon: the same words as the dock's Close and Close Tab Group commands, which only run through a scope.
+        panel_close: "menu.panelClose" = "Close";
+        panel_close_group: "menu.panelCloseGroup" = "Close Tab Group";
     }
 }
