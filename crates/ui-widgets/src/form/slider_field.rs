@@ -53,7 +53,9 @@ pub struct SliderFieldStyle {
 /// The step moves the slider's keys and wheel and the field's keys, wheel and scrub; typed values snap to it unless
 /// `typed_decimals` sets their independent precision. Without a step the field steps by a hundredth on a range 10 wide
 /// or less and by 1 on a longer one, and by default rounds typed values to the places that step needs. The field and
-/// then the slider are Tab stops. A log or power scale curves the
+/// the slider are Tab stops in the order they are read: the field and then the slider when stacked, the slider and then
+/// the field when inline. A click on the row's label focuses the number field in either layout. A log or power scale
+/// curves the
 /// slider's track only: the field, typing and steps stay linear.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct SliderField<'a> {
@@ -61,8 +63,8 @@ pub struct SliderField<'a> {
     common: Common,
     value: Bind<'a, f64>,
     range: RangeInclusive<f64>,
-    /// Whether the caption and the number field share a line over the slider, or the number field comes first on the
-    /// slider's line for a row labelled by an enclosing `Field`.
+    /// Whether the caption and the number field share a line over the slider, or the slider and then the number field
+    /// share one line for a row labelled by an enclosing `Field`.
     #[prop]
     layout: SliderFieldLayout,
     /// How positions along the slider's track map to values.
@@ -404,27 +406,43 @@ impl Component for SliderField<'_> {
         };
         let flow = Flow::new(cx.rect, cx.env.direction().is_rtl());
         let place = |logical: Rect| flow.to_physical(logical.translate(cx.rect.min.to_vec2()));
-        // The field is shown first, so it is the first Tab stop.
+        // The parts are shown in the order they are read, which is their Tab order: the field's line comes first when
+        // stacked, and the slider comes before the field on the inline line.
         // The group has no stop, so its tooltip, and with it the reason it is disabled, is carried by the first stop.
         let face = self.track_face.take();
         let bind = self.value.reborrow();
         let field_view = look.field(&name, shown, Some(bind.check_of()));
-        let field_view = match cx.resolved.tooltip {
-            Some(tooltip) => field_view.tooltip(tooltip.clone()),
-            None => field_view,
-        };
-        let typed = match self.layout {
-            // The label step puts the caption at the line's start and the field in the number cell at its end.
-            SliderFieldLayout::Stacked => {
-                ui.labelled("field", place(field), name.clone(), SideLabel::new().layout(FieldLayout::Line).scrub(true), field_view)
-            }
-            SliderFieldLayout::Inline => ui.child("field", place(field), field_view),
-        };
-        self.out_of_range = typed.out_of_range.clone();
         // A read-only field's track is read-only too: no press on it edits the value, whatever `track_press` is, and an
         // inert composite arms no first-Down gesture in its child for a later writable release.
         let slider = look.slider(&name, shown, Some(bind.check_of()), face).read_only(cx.resolved.read_only);
-        let dragged = ui.child("slider", place(track), slider);
+        let (typed, dragged) = match self.layout {
+            // The label step puts the caption at the line's start and the field in the number cell at its end.
+            SliderFieldLayout::Stacked => {
+                let field_view = match cx.resolved.tooltip {
+                    Some(tooltip) => field_view.tooltip(tooltip.clone()),
+                    None => field_view,
+                };
+                let typed = ui.labelled("field", place(field), name.clone(), SideLabel::new().layout(FieldLayout::Line).scrub(true), field_view);
+                (typed, ui.child("slider", place(track), slider))
+            }
+            SliderFieldLayout::Inline => {
+                let slider = match cx.resolved.tooltip {
+                    Some(tooltip) => slider.tooltip(tooltip.clone()),
+                    None => slider,
+                };
+                // The number field the label focuses shows the tooltip too while enabled. Disabled, the slider alone
+                // carries the reason and stays the one Tab stop.
+                let field_view = match cx.resolved.tooltip {
+                    Some(tooltip) if cx.resolved.enabled => field_view.tooltip(tooltip.clone()),
+                    _ => field_view,
+                };
+                let dragged = ui.child("slider", place(track), slider);
+                // A click on the enclosing field's label focuses the number field, the part that takes typing.
+                ui.label_target("field");
+                (ui.child("field", place(field), field_view), dragged)
+            }
+        };
+        self.out_of_range = typed.out_of_range.clone();
         let start = *self.range.start();
         cx.adopt(&typed, &start, |value, mine| {
             if let Some(value) = value {

@@ -202,6 +202,50 @@ impl WheelRig {
     }
 }
 
+/// The names focus takes from the hue ring of a wheel shown in an arena (a split area's body) between two buttons,
+/// one per Tab in `keys` (with its modifiers).
+fn arena_tab_walk(inner: WheelInner, keys: &[Modifiers]) -> Vec<Option<String>> {
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = craft_ui::buttons::Button::new("Before").show(ui);
+        let limits = |_: &usize| craft_ui::contract::SizeLimits::default();
+        let rules = craft_ui::docking::tree::FrameRules::new(&limits);
+        let area = Rect::from_min_size(ui.max_rect().min + vec2(0.0, 40.0), vec2(400.0, 340.0));
+        let _ = craft_ui::docking::SplitArea::pair("Panels", craft_behavior::Axis::X, (0usize, 1usize), 0.99, rules, 0).show_at(ui, area, |ui, _| {
+            let _ = ColorWheel::new("Color wheel", Bind::given(ModelValues::new("hsb", &[200.0, 50.0, 50.0]))).inner(inner).show(ui);
+        });
+        let _ = craft_ui::buttons::Button::new("After").show(ui);
+    });
+    fixture.room(vec2(420.0, 420.0));
+    fixture.settle();
+    let hue = fixture.by_label("Hue").expect("the ring");
+    fixture.access(AccessActionKind::Focus, &hue);
+    fixture.idle(2);
+    let focused = |fixture: &Fixture| {
+        let tree = fixture.tree();
+        tree.name_of(craft_ui::testing::access::focused_key(tree)).map(str::to_owned)
+    };
+    assert_eq!(focused(&fixture).as_deref(), Some("Hue"), "{inner:?}: the ring takes focus");
+    keys.iter()
+        .map(|mods| {
+            fixture.key(Key::Tab, *mods);
+            fixture.idle(2);
+            focused(&fixture)
+        })
+        .collect()
+}
+
+/// In an arena, as in a docked panel, Tab from the hue ring lands on the saturation and brightness control, also when a
+/// square shows it through its own folded picker, then goes on past the wheel; Shift-Tab comes back the same way.
+#[trial]
+fn in_an_arena_tab_from_the_ring_reaches_the_saturation_and_brightness_control() {
+    let (on, back) = (Modifiers::NONE, Modifiers::SHIFT);
+    for inner in [WheelInner::Triangle, WheelInner::Square] {
+        let walk = arena_tab_walk(inner, &[on, on, back, back]);
+        let expected = ["Saturation and brightness", "After", "Saturation and brightness", "Hue"].map(|name| Some(name.to_owned()));
+        assert_eq!(walk, expected, "{inner:?}");
+    }
+}
+
 /// A square wheel hands a press between the square and the ring to the square; its named markers speak their colour,
 /// pick on a click, and a press held on one still drags the ring; Shift snaps a ring drag to 45 degrees, in both
 /// variants.

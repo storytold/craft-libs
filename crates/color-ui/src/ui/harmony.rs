@@ -522,7 +522,7 @@ impl<'a> HarmonyPanel<'a> {
                 Variation::WarmCool => (&words.cool, &words.warm),
                 Variation::VividMuted => (&words.muted, &words.vivid),
             };
-            Row::new().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
+            Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
                 Text::new(left.clone()).show(ui);
                 Text::new(right.clone()).show(ui);
             });

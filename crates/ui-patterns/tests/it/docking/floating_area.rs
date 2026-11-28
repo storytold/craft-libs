@@ -5,7 +5,7 @@ use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace};
 use craft_ui::contract::{Bind, BodyCx, Role, Show as _, ShowContainer as _, Tracked};
 use craft_ui::display::Text;
-use craft_ui::docking::{DockConfig, DockPanels, GroupDrag, IconicSizes, request_actions};
+use craft_ui::docking::{DockConfig, DockPanels, GroupDrag, IconicSizes, PanelSpec, PanelSpecs, request_actions};
 use craft_ui::layout_components::Stack;
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag::{self, DropMark};
@@ -24,12 +24,24 @@ const SECOND: usize = 3;
 const SHORT: usize = 4;
 /// A panel whose content fills its body.
 const FILL: usize = 5;
+/// A panel whose floating window cannot be resized by its edges.
+const FIXED: usize = 6;
 /// Inside the fixture's room, so the area's bounds clamp neither the window nor the moves and resizes made of it.
 const WINDOW_AT: Rect = Rect { min: Pos2::new(130.0, 90.0), max: Pos2::new(330.0, 210.0) };
 const SLACK: f32 = 1.5;
 
 fn title(panel: usize) -> String {
     format!("Panel {panel}")
+}
+
+#[derive(craft_ui::contract::PlainData)]
+struct FloatingSpecs;
+
+impl PanelSpecs<usize> for FloatingSpecs {
+    fn spec(&self, panel: &usize) -> PanelSpec {
+        let spec = Numbered.spec(panel);
+        if *panel == FIXED { spec.allow_float_resize(false) } else { spec }
+    }
 }
 
 struct Panels;
@@ -89,7 +101,7 @@ fn bed_with(layout: Layout<usize>, config: DockConfig) -> Bed {
     let popup: Rc<Cell<Option<Rect>>> = Rc::default();
     let (shown_popup, hands_over) = (Rc::clone(&popup), Rc::clone(&hand_over));
     let mut other = Arc::new(Workspace::new(Layout::new(Some(Node::tabs(vec![SECOND], 0)), Vec::new())));
-    let specs = Tracked::new(Numbered);
+    let specs = Tracked::new(FloatingSpecs);
     let mut fixture = Fixture::new(move |ui| {
         let mut workspace = held.borrow().clone();
         let mut panels = Panels;
@@ -143,6 +155,29 @@ fn press_and_move(fixture: &mut Fixture, from: Pos2, by: Vec2) {
     for step in 1..=4 {
         fixture.frame(vec![moved(from + by * (step as f32 / 4.0))]);
     }
+}
+
+#[trial]
+fn a_fixed_floating_window_ignores_edge_drags_and_still_moves_by_its_title() {
+    let window = Floating::single(100, vec![FIXED], 0, WINDOW_AT);
+    let layout = Layout::new(Some(Node::tabs(vec![DOCKED], 0)), vec![window]);
+    let mut bed = bed_with(layout, DockConfig::default().title_bar_docks(false));
+    let right = Pos2::new(WINDOW_AT.right() - 1.0, WINDOW_AT.center().y);
+    let bottom = Pos2::new(WINDOW_AT.center().x, WINDOW_AT.bottom() - 1.0);
+    for (from, by) in [(right, Vec2::new(40.0, 0.0)), (bottom, Vec2::new(0.0, 40.0))] {
+        press_and_move(&mut bed.fixture, from, by);
+        bed.fixture.frame(vec![release(from + by)]).settle();
+        assert_eq!(bed.workspace.borrow().layout().floating[0].rect, WINDOW_AT, "edge drag at {from:?} moves and resizes nothing");
+    }
+
+    let by = Vec2::new(-35.0, 20.0);
+    let from = window_title();
+    press_and_move(&mut bed.fixture, from, by);
+    assert!(dragging(&bed));
+    bed.fixture.frame(vec![release(from + by)]).settle();
+    let rect = bed.workspace.borrow().layout().floating.first().expect("the window stays floating").rect;
+    assert_ne!(rect.min, WINDOW_AT.min, "title drag moves the fixed window");
+    assert_eq!(rect.size(), WINDOW_AT.size(), "title drag keeps the fixed window's size");
 }
 
 #[trial]
@@ -620,7 +655,11 @@ fn an_icon_floated_in_the_middle_band_lands_collapsed_under_the_pointer() {
 
 /// The rect of the collapsed window's layer: the smallest layer around its icon.
 fn strip_window(bed: &Bed) -> Rect {
-    let icon = button_rect(bed, &title(WINDOW)).expect("the collapsed window shows its icon");
+    strip_window_for(bed, WINDOW)
+}
+
+fn strip_window_for(bed: &Bed, panel: usize) -> Rect {
+    let icon = button_rect(bed, &title(panel)).expect("the collapsed window shows its icon");
     let layers = layer_rects(bed.fixture.ctx()).into_iter().filter(|rect| rect.contains(icon.center()));
     layers.min_by(|a, b| a.area().total_cmp(&b.area())).expect("the window's layer holds its icon")
 }
@@ -676,6 +715,32 @@ fn a_collapsed_windows_sides_resize_its_width_and_show_names_from_the_docked_col
     let again = strip_window(&bed);
     assert!((again.width() - resized.width()).abs() <= SLACK, "collapsed again, the strip keeps its width: {resized:?}, then {again:?}");
     assert_eq!(bed.workspace.borrow().layout().floating[0].rect, WINDOW_AT, "the expanded rect is unchanged");
+}
+
+/// The same side drag that widens a default collapsed column leaves an opted-out column unchanged.
+#[trial]
+fn a_collapsed_windows_side_resizes_only_if_the_panel_allows_it() {
+    for panel in [WINDOW, FIXED] {
+        let mut window = Floating::single(101, vec![panel], 0, WINDOW_AT);
+        window.column.iconic = true;
+        let mut bed = bed(Layout::new(None, vec![window]));
+        let before = strip_window_for(&bed, panel);
+        let side = Pos2::new(before.left() + 2.0, before.center().y);
+        let by = Vec2::new(-40.0, 0.0);
+        press_and_move(&mut bed.fixture, side, by);
+        bed.fixture.frame(vec![release(side + by)]).settle();
+
+        let after = strip_window_for(&bed, panel);
+        let active_width = bed.workspace.borrow().layout().floating[0].column.iconic_width;
+        if panel == WINDOW {
+            assert!(after.width() > before.width() + SLACK, "the default side grip widens the strip: {before:?}, {after:?}");
+            assert!(active_width.is_some());
+        } else {
+            assert!((after.width() - before.width()).abs() <= SLACK, "the fixed strip keeps its width: {before:?}, {after:?}");
+            assert!(active_width.is_none(), "the fixed strip did not record a resize");
+        }
+        assert!((after.height() - before.height()).abs() <= SLACK, "side drag preserves the collapsed height: {after:?}");
+    }
 }
 
 /// A floating window whose every group is minimized shows its title row and tab strip at its place and width. Its free

@@ -89,6 +89,9 @@ impl Layout {
         }
         let rows = samples / row;
         let (width, height) = (row / mcu * 2, rows * vertical);
+        if width == 0 || height == 0 || width > u32::MAX as usize || height > u32::MAX as usize {
+            return Err(RawError::Limit("sRAW dimensions exceed u32::MAX"));
+        }
         if width.checked_mul(height).and_then(|p| p.checked_mul(3)).is_none_or(|s| s > limits.samples()) {
             return Err(RawError::Limit("sRAW image too large"));
         }
@@ -347,12 +350,27 @@ pub(super) fn decode(bytes: &[u8], tiff: &Tiff, raw: &Ifd, mode: Mode, limits: &
     let mn =
         tiff.exif().and_then(|e| e.get(t::MAKER_NOTE)).and_then(|e| makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make));
     let (w, h) = (layout.width, layout.height);
+    if w > u32::MAX as usize || h > u32::MAX as usize {
+        return Err(RawError::Limit("sRAW dimensions exceed u32::MAX"));
+    }
     let mut active = Rect::new(0, 0, w, h);
     if let Some(si) = mn.as_ref().and_then(|m| m.ifd.u64s(SENSOR_INFO)).filter(|v| v.len() >= 9) {
-        let (l, tp, r, b) = (si[5] as usize, si[6] as usize, si[7] as usize, si[8] as usize);
-        if r > l && b > tp && r < w && b < h {
-            active = Rect::new(l, tp, r - l + 1, b - tp + 1);
+        let coords = [si[5], si[6], si[7], si[8]].map(|v| usize::try_from(v).ok());
+        if let [Some(l), Some(tp), Some(r), Some(b)] = coords
+            && r > l
+            && b > tp
+            && r < w
+            && b < h
+        {
+            let cw = r - l + 1;
+            let ch = b - tp + 1;
+            if cw <= w - l && ch <= h - tp {
+                active = Rect::new(l, tp, cw, ch);
+            }
         }
+    }
+    if active.width == 0 || active.height == 0 {
+        active = Rect::new(0, 0, w, h);
     }
     let colour_data = mn.as_ref().and_then(|m| m.ifd.value(COLOR_BALANCE).map(|v| words(v, m.order)));
     let black_counts = colour_data.as_deref().and_then(colour_data_black);

@@ -2,7 +2,7 @@
 
 use super::app_values::EnvValue;
 use super::label::Label;
-use super::units::{PointSize, UnitWords, Units};
+use super::units::{PointSize, UnitWords, Units, ZoomPrecision};
 use super::values::{MotionPolicy, Scale};
 use super::{Held, ItemFacts, Scoped};
 use crate::runtime::commands::CommandChain;
@@ -30,6 +30,12 @@ impl<'a> EnvView<'a> {
     /// The height, icon side, padding, gap and field widths of a control of `size`.
     pub(crate) fn control(&self, size: craft_theme::ControlSize) -> craft_behavior::ControlMetrics {
         self.scoped.control(size)
+    }
+
+    /// Whether an enclosing body is measuring the smallest width its children can use.
+    #[doc(hidden)]
+    pub fn measuring_least_width(&self) -> bool {
+        self.scoped.least
     }
 
     /// The facts the collection recorded for the item `id`.
@@ -163,6 +169,7 @@ impl<'a> EnvView<'a> {
     /// The scope's number format and unit words, to read and write numbers with their unit.
     pub fn units(&self) -> Units {
         Units::new(self.scoped.format.clone(), self.words::<UnitWords>(), self.scoped.words.clone(), self.scoped.values.get::<PointSize>())
+            .with_zoom_precision(self.scoped.values.get::<ZoomPrecision>())
     }
 
     /// How long ago `seconds` was, in the scope's language and digits: "Just now", "3 minutes ago", "Yesterday".

@@ -21,9 +21,10 @@ pub trait Pointer {
     /// condition.
     fn part_if_declared(&self, part: impl Into<PartRef>) -> Option<&PartResult>;
     /// Where the pointer is over `part` this pass, in the component's layer space; `None` when `part` is not hovered.
-    fn hover_pos(&self, part: impl Into<PartRef>) -> Option<Pos2> {
-        self.part_if_declared(part).and_then(|result| result.hover_pos)
-    }
+    /// The read marks the part as following the pointer (`pointer::follows_pointer`): a memoized view around the
+    /// component runs on each move over the part, and the pointer-move gate runs a pass for it. A component that only
+    /// asks whether the part is hovered reads `PartResult::hovered`.
+    fn hover_pos(&self, part: impl Into<PartRef>) -> Option<Pos2>;
     /// The component's own press.
     fn press(&self) -> &PressState;
     /// The pointer is over the component's own shapes.
@@ -108,6 +109,13 @@ impl Pointer for CxCore<'_> {
     fn part_if_declared(&self, part: impl Into<PartRef>) -> Option<&PartResult> {
         let part = part.into();
         self.results.get(&(part.key, part.index))
+    }
+
+    fn hover_pos(&self, part: impl Into<PartRef>) -> Option<Pos2> {
+        let result = self.part_if_declared(part)?;
+        let at = result.hover_pos?;
+        pointer::follows_part(&self.ctx, self.response.layer_id, result.rect);
+        Some(at)
     }
 
     fn press(&self) -> &PressState {
@@ -237,6 +245,10 @@ impl<C: Component> Pointer for Cx<'_, C> {
 
     fn part_if_declared(&self, part: impl Into<PartRef>) -> Option<&PartResult> {
         self.core.part_if_declared(part)
+    }
+
+    fn hover_pos(&self, part: impl Into<PartRef>) -> Option<Pos2> {
+        self.core.hover_pos(part)
     }
 
     fn press(&self) -> &PressState {

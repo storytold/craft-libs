@@ -42,6 +42,11 @@ fn header<A: CloudApp>(app: &mut A, ui: &mut Ui) {
             let line = if account.display.is_empty() { app.tr("Signed in") } else { account.display.clone() };
             dim(ui, &style, &line);
         }
+        // Nothing is asked after a sign-out, so there is nothing to wait for.
+        (None, None) if app.cloud().signed_out => {
+            let signed_out = app.tr("Signed out");
+            dim(ui, &style, &signed_out);
+        }
         (None, None) => {
             let waiting = app.tr("Connecting to your cloud account…");
             dim(ui, &style, &waiting);

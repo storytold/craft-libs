@@ -1,6 +1,6 @@
 //! Per-track mixer state: inserts, sends, routing, fader, pan, mute/solo.
 
-use crate::{AutomationMode, BusId, SourceId};
+use crate::{AutomationMode, BusId, SourceId, TrackId};
 use std::collections::BTreeMap;
 
 pub const INSERT_SLOTS: usize = 10;
@@ -418,6 +418,15 @@ pub enum Route {
     Bus(BusId),
     /// Hardware input/output by path name.
     Hardware(String),
+    /// An instrument's auxiliary output bus, picked as another track's input so a
+    /// multi-out instrument's extra outs can land on their own tracks: `track` holds
+    /// the instrument and `bus` is its output bus (0 is the main output the hosting
+    /// track's own channel already carries). Input-side only: it is not a valid
+    /// output or send target.
+    Instrument {
+        track: TrackId,
+        bus: u8,
+    },
 }
 
 /// A plugin instance on an insert slot.
@@ -561,7 +570,15 @@ impl Mixer {
         }
         self.inserts.resize(INSERT_SLOTS, None);
         self.sends.resize(SEND_SLOTS, None);
+        // An instrument's output bus is only ever an input: a file naming it as the
+        // output or a send target gets the unrouted default for that field.
+        if matches!(self.output, Route::Instrument { .. }) {
+            self.output = Route::Main;
+        }
         for s in self.sends.iter_mut().flatten() {
+            if matches!(s.target, Route::Instrument { .. }) {
+                s.target = Route::None;
+            }
             s.level_db = finite_or(s.level_db, -144.0).clamp(-144.0, 12.0);
             s.pan = finite_or(s.pan, 0.0).clamp(-1.0, 1.0);
             if let Some(sp) = &mut s.surround {
@@ -662,6 +679,33 @@ mod tests {
         }
         assert_eq!(fader_pos_to_db(0.0), -144.0);
         assert_eq!(fader_db_to_pos(f32::NAN), 0.0);
+    }
+
+    #[test]
+    fn plugin_output_route_round_trips() {
+        let r = Route::Instrument { track: TrackId(42), bus: 7 };
+        let json = serde_json::to_string(&r).unwrap();
+        assert_eq!(serde_json::from_str::<Route>(&json).unwrap(), r);
+        // Routes saved before multi-out routing still load.
+        assert_eq!(serde_json::from_str::<Route>(r#"{"Hardware":"in 1-2"}"#).unwrap(), Route::Hardware("in 1-2".to_string()));
+    }
+
+    #[test]
+    fn sanitize_clears_an_instrument_route_used_as_output_or_send() {
+        // Route::Instrument is input-side only: a file naming it as the output or a send
+        // target deserializes, then sanitize resets the field instead of keeping it.
+        let mut m = Mixer::new(ChannelFormat::Stereo);
+        m.output = Route::Instrument { track: TrackId(9), bus: 1 };
+        m.sends[0] = Some(SendSlot::new(Route::Instrument { track: TrackId(9), bus: 2 }));
+        m.sends[1] = Some(SendSlot::new(Route::Bus(BusId(3))));
+        m.sanitize();
+        assert_eq!(m.output, Route::Main);
+        assert_eq!(m.sends[0].as_ref().unwrap().target, Route::None);
+        assert_eq!(m.sends[1].as_ref().unwrap().target, Route::Bus(BusId(3)), "other routes are untouched");
+        // And an instrument route stays valid as an input.
+        m.input = Route::Instrument { track: TrackId(9), bus: 1 };
+        m.sanitize();
+        assert_eq!(m.input, Route::Instrument { track: TrackId(9), bus: 1 });
     }
 
     #[test]

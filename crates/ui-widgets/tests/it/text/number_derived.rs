@@ -37,6 +37,29 @@ fn a_derived_number_shows_in_parentheses_and_edits_from_the_plain_number() {
     assert_eq!(fixture.tree().numeric(id.get()).and_then(|numeric| numeric.value), Some(12.0), "the field reports the committed number");
 }
 
+/// A derived reading that is wider than the field's text area with its padding, "(12.5 pt)" in a one-cell field, takes
+/// room from the padding and shows whole inside the field, and the field is as wide as the same field showing the plain
+/// number with its unit. Guards against sizing the text area by the plain number, which cut the closing parenthesis.
+#[trial]
+fn a_derived_number_shows_whole_inside_its_field() {
+    let boxes = Rc::new(Cell::new([egui::Rect::NOTHING; 2]));
+    let seen = boxes.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut derived = Some(12.5);
+        let mut plain = Some(12.5);
+        let at = NumberField::new("Leading", Bind::bound(&mut derived)).unit_kind(UnitKind::Points).derived(true).show(ui).response.rect;
+        let beside = NumberField::new("Size", Bind::bound(&mut plain)).unit_kind(UnitKind::Points).show(ui).response.rect;
+        seen.set([at, beside]);
+    });
+    fixture.settle();
+    fixture.idle(3);
+    let [field, plain] = boxes.get();
+    let text = fixture.texts().iter().find(|text| text.text == "(12.5 pt)").expect("the derived reading is painted").clone();
+    assert!(field.contains_rect(text.rect), "the reading {:?} lies inside the field {field:?}", text.rect);
+    assert!(text.clip.contains_rect(text.rect), "the reading {:?} is not cut by its clip {:?}", text.rect, text.clip);
+    assert_eq!(field.width(), plain.width(), "the derived field is as wide as the same field with the plain number");
+}
+
 /// A blank value is no number to derive: the field shows it as it would without `derived`, never as empty
 /// parentheses, and an edit from the blank still starts from nothing.
 #[trial]
