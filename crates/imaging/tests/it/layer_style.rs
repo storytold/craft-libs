@@ -184,3 +184,30 @@ fn page_shows_defaults_under_the_values_and_writes_only_edits() {
     assert!(written.number("distance") > defaults.number("distance"), "the arrow key steps the distance up from its default");
     assert_eq!(written.number("opacity"), None, "only the edited key is written");
 }
+
+/// Bevel & Emboss shows two contour fields; a click on either thumbnail asks for the Contour Editor on that field
+/// (photocraft#16632: the later field cleared the Gloss Contour's request in the same pass).
+#[trial]
+fn each_contour_thumbnail_on_a_page_asks_for_its_editor() {
+    let kind = EffectKind::BevelEmboss;
+    let spec = EffectSpec::photoshop(kind);
+    let effects = vec![EffectInstance { id: EffectId(1), kind, on: true, params: spec.defaults.clone() }];
+    let draft = LayerStyleDraft::new(LayerStyle { effects, ..LayerStyle::default() });
+    let (specs, channels) = (vec![spec], ["R", "G", "B"].map(String::from).to_vec());
+    let asked = Rc::new(RefCell::new(Vec::<String>::new()));
+    let seen = asked.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let out = LayerStyleDialog::new("Layer Style", &draft, &channels).specs(&specs).show(ui);
+        seen.borrow_mut().extend(out.edit_contour.map(|request| request.key));
+    });
+    fixture.room(ROOM).settle();
+    let thumbnails = [one(&fixture, Role::COMBO_BOX, "Gloss Contour"), one(&fixture, Role::COMBO_BOX, "Contour")];
+    for thumbnail in &thumbnails {
+        fixture.click_at(egui::pos2(thumbnail.rect.left() + thumbnail.rect.height() / 2.0, thumbnail.rect.center().y));
+        fixture.idle(3);
+    }
+    let asked = asked.borrow();
+    assert_eq!(asked.len(), 2, "each thumbnail click asks once: {asked:?}");
+    assert_ne!(asked[0], asked[1], "each request names its own field: {asked:?}");
+    assert!(asked.iter().all(|key| key.starts_with("fx1/")), "on the clicked effect: {asked:?}");
+}
