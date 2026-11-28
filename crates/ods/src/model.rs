@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use craft_sheet::{CellRef, Range, Value};
+use craft_xml::El;
 
 /// `office:value-type` (ODF 1.3 Part 3, 19.389), and `calcext:value-type="error"`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,7 +38,7 @@ impl ValueType {
 }
 
 /// One `table:table-cell` or `table:covered-table-cell`.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Cell {
     /// `None` when the cell has no value type (or one ODF does not define).
     pub value_type: Option<ValueType>,
@@ -57,12 +58,53 @@ pub struct Cell {
     pub style: Option<String>,
     /// A `table:covered-table-cell`: hidden under a merged cell.
     pub covered: bool,
+    /// `table:content-validation-name`.
+    pub validation: Option<String>,
+    /// The columns and rows of the matrix formula this cell holds
+    /// (`table:number-matrix-columns-spanned`, `table:number-matrix-rows-spanned`).
+    pub matrix: Option<(u32, u32)>,
+    /// The first link (`text:a`) in the cell's paragraphs.
+    pub link: Option<Link>,
+    /// The stretches of [`Cell::text`] inside a `text:span` with a style, in order; where spans
+    /// nest, the innermost one with a style. At most 4,096 per cell.
+    pub runs: Vec<Run>,
+    /// `office:annotation`, the cell's note, as written.
+    pub annotation: Option<El>,
+    /// Drawings anchored to the cell (`draw:frame`, `draw:custom-shape`, `draw:g` and the
+    /// other `draw:` elements among its children), as written.
+    pub drawings: Vec<El>,
+}
+
+/// A `text:a` in a cell.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Link {
+    /// `xlink:href`.
+    pub href: String,
+    /// `office:title`.
+    pub title: Option<String>,
+    /// `office:target-frame-name`.
+    pub target_frame: Option<String>,
+}
+
+/// A stretch of a cell's text in a character style: byte offsets into [`Cell::text`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Run {
+    pub start: usize,
+    pub end: usize,
+    /// `text:style-name` of the span.
+    pub style: String,
 }
 
 impl Cell {
-    /// Nothing to keep: no value, no text, no formula.
+    /// Nothing to keep but a style or a validation: no value, no text, no formula, no note,
+    /// no drawing.
     pub fn is_blank(&self) -> bool {
-        self.formula.is_none() && self.text.is_empty() && matches!(self.value_type, None | Some(ValueType::Void)) && self.raw.is_none()
+        self.formula.is_none()
+            && self.text.is_empty()
+            && matches!(self.value_type, None | Some(ValueType::Void))
+            && self.raw.is_none()
+            && self.annotation.is_none()
+            && self.drawings.is_empty()
     }
 
     /// The value the cell shows: a number for the numeric types, a serial number (1900 date
@@ -90,24 +132,116 @@ impl Cell {
     }
 }
 
-/// One `table:table`.
+/// `table:visibility` of a row or column.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Visibility {
+    #[default]
+    Visible,
+    /// Hidden (`collapse`).
+    Collapse,
+    /// Hidden by a filter (`filter`).
+    Filter,
+}
+
+/// A run of `table:table-row` or `table:table-column` elements' lines (one element and its
+/// repeats) that states a style, a default cell style or a visibility. Lines that state none of
+/// these are not listed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Line {
+    /// The first row or column, from 0.
+    pub first: u32,
+    /// Lines in the run, held to the grid.
+    pub count: u32,
+    /// `table:style-name`: a row or column style (its height or width, its page break).
+    pub style: Option<String>,
+    /// `table:default-cell-style-name`.
+    pub default_cell_style: Option<String>,
+    pub visibility: Visibility,
+}
+
+/// A `table:table-row-group` or `table:table-column-group`: the lines it holds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Group {
+    pub first: u32,
+    /// Lines in the group; 0 for an empty group.
+    pub count: u32,
+    /// 1 for a group directly in the table, 2 for one inside that, and so on.
+    pub level: u32,
+    /// `table:display`: `false` when the group is collapsed.
+    pub display: bool,
+}
+
+/// Blank cells ([`Cell::is_blank`]) that state a style or a validation, over a range: a cell
+/// element and its repeats. Not expanded into [`Sheet::cells`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Blank {
+    pub range: Range,
+    pub style: Option<String>,
+    pub validation: Option<String>,
+}
+
+/// One `table:table`.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Sheet {
     /// `table:name` as written.
     pub name: String,
+    /// The `table:table` element's attributes as written, the name included: `table:style-name`,
+    /// `table:print`, `table:print-ranges`, `table:protected`, `table:protection-key` and so on.
+    pub attrs: Vec<(String, String)>,
     /// Cells that are not blank ([`Cell::is_blank`]), repeats expanded.
     pub cells: BTreeMap<CellRef, Cell>,
     /// Merged ranges, from their top left cell.
     pub merges: Vec<Range>,
+    /// Blank cells with a style or a validation, as ranges.
+    pub blanks: Vec<Blank>,
+    /// Columns with a style, a default cell style or a visibility, in order.
+    pub columns: Vec<Line>,
+    /// Rows with a style, a default cell style or a visibility, in order.
+    pub rows: Vec<Line>,
+    pub column_groups: Vec<Group>,
+    pub row_groups: Vec<Group>,
+    /// `table:table-header-columns`: (first column, count).
+    pub header_columns: Option<(u32, u32)>,
+    /// `table:table-header-rows`: (first row, count).
+    pub header_rows: Option<(u32, u32)>,
+    /// The table's other child elements as written: `table:shapes`, `calcext:conditional-formats`,
+    /// `table:named-expressions`, `table:table-source`, `table:scenario`, `office:forms` and so on.
+    pub elements: Vec<El>,
 }
 
-/// The tables of a spreadsheet document, in order.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+impl Sheet {
+    /// An attribute of the `table:table` element.
+    pub fn attr(&self, name: &str) -> Option<&str> {
+        self.attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+    }
+}
+
+/// The tables of a spreadsheet document, in order, and what `content.xml` holds besides them.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Workbook {
     pub sheets: Vec<Sheet>,
     /// [`Options::truncate_text`](crate::Options::truncate_text) cut the text short: the cells
     /// after the point where it passed `max_text` were left out.
     pub text_truncated: bool,
+    /// The `office:spreadsheet` element's attributes (`table:structure-protected`,
+    /// `table:protection-key`, …).
+    pub attrs: Vec<(String, String)>,
+    /// The spreadsheet's child elements other than tables, as written: `table:named-expressions`,
+    /// `table:database-ranges`, `table:content-validations`, `table:data-pilot-tables`,
+    /// `table:calculation-settings` and so on.
+    pub body: Vec<El>,
+    /// `content.xml`'s `office:font-face-decls`.
+    pub font_faces: Option<El>,
+    /// `content.xml`'s `office:automatic-styles`: the styles its cells, rows, columns and tables
+    /// name.
+    pub automatic_styles: Option<El>,
+}
+
+impl Workbook {
+    /// An attribute of the `office:spreadsheet` element.
+    pub fn attr(&self, name: &str) -> Option<&str> {
+        self.attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+    }
 }
 
 fn digits(s: &str) -> Option<&str> {
