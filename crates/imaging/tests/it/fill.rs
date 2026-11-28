@@ -313,3 +313,16 @@ fn expand_and_contract_keys_edit_the_fill_area() {
     let edits = rig.with(|workspace| workspace.session().fill_edits.clone());
     assert_eq!(edits, vec![FillAreaEdit::grow(true, 3.0), FillAreaEdit::grow(false, 2.0)]);
 }
+
+/// The Sampling Brush's two mode buttons are named like the reference application's options bar buttons (Add to
+/// sampling area, Subtract from sampling area; storytold/photocraft#9514), and the second makes the next stroke
+/// subtract.
+#[trial]
+fn sampling_brush_modes_name_the_sampling_area() {
+    let mut rig = Rig::new(FillSettings::default(), FillLimits::new(10, 100));
+    assert!(rig.fixture.by_label("Add to sampling area").is_some(), "the bar names the add button");
+    let subtract = rig.fixture.by_label("Subtract from sampling area").expect("the bar names the subtract button");
+    rig.fixture.click(&subtract);
+    rig.line(2);
+    assert_eq!(committed(&rig.events()).map(|stroke| stroke.mode), Some(EditMode::Subtract), "the stroke subtracts");
+}
