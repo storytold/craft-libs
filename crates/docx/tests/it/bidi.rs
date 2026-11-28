@@ -92,6 +92,162 @@ fn bidi_markup_is_written_in_schema_order() {
     assert!(pos("<w:rtl/>") < pos("<w:lang"));
 }
 
+/// Thai text WordCraft draws in the complex-script formatting is written `w:cs`, since Word draws
+/// Thai outside a complex-script run in the run's other font and `w:sz` (measured in Word for
+/// Windows). Only the Thai is marked: spaces and Latin text keep the run's own formatting.
+#[test]
+fn thai_text_is_written_complex_script_where_its_formatting_differs() {
+    let text = "ทดสอบ ภาษาไทย ABC 123";
+    let drawn = |d: &Document| -> Vec<(String, f32, bool)> {
+        let p = paras(d)[0];
+        let mut out = Vec::new();
+        let mut at = 0;
+        for r in &p.runs {
+            let rc = d.styles.resolve_char(p.props.style.as_deref(), &r.props);
+            for ch in p.text[at..at + r.len].chars() {
+                let c = if rc.uses_complex(ch) { rc.complex() } else { rc.clone() };
+                out.push((c.font, c.size, c.bold));
+            }
+            at += r.len;
+        }
+        out
+    };
+    let doc = |defaults: CharProps, run: CharProps| {
+        let mut d = Document::new();
+        std::sync::Arc::make_mut(&mut d.styles).default_chr = defaults;
+        d.body = vec![para_block(Paragraph::with_text(text, run))];
+        d
+    };
+    let differing = CharProps {
+        font: Some("Angsana New".into()),
+        font_cs: Some("Tahoma".into()),
+        size: Some(22.0),
+        size_cs: Some(11.0),
+        bold_cs: Some(true),
+        ..Default::default()
+    };
+    let d = doc(differing.clone(), CharProps::default());
+    let bytes = craft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    assert_eq!(xml.matches("<w:cs/>").count(), 2, "the two Thai words, not the space, Latin or digits: {xml}");
+    let again = craft_docx::read(&bytes).unwrap();
+    assert_eq!(paras(&again)[0].text, text);
+    assert_eq!(drawn(&again), drawn(&d), "drawn the same after a save");
+    let thai = drawn(&again)[0].clone();
+    assert_eq!(thai, ("Tahoma".to_string(), 11.0, true));
+
+    // A tracked formatting change gets the same mark in its "before" copy.
+    let tracked = CharProps {
+        fmt_change: craft_wordmodel::props::PropChange::boxed(1, CharProps { italic: Some(true), ..Default::default() }),
+        ..Default::default()
+    };
+    let xml = document_xml(&craft_docx::write(&doc(differing.clone(), tracked)).unwrap());
+    assert_eq!(xml.matches("<w:cs/>").count(), 4, "{xml}");
+
+    // Formatting that is the same either way: only the Thai is marked (with the space between
+    // its words), so Word breaks it by word, and it looks the same.
+    let same = CharProps { font: Some("TH Sarabun New".into()), font_cs: Some("TH Sarabun New".into()), size: Some(16.0), ..Default::default() };
+    let d = doc(same, CharProps::default());
+    let bytes = craft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    assert_eq!(xml.matches("<w:cs/>").count(), 1, "{xml}");
+    assert!(xml.contains("ทดสอบ ภาษาไทย </w:t>"), "{xml}");
+    assert_eq!(drawn(&craft_docx::read(&bytes).unwrap()), drawn(&d), "same formatting: drawn the same after a save");
+    // A run that says whether it is complex script is written as it is.
+    let xml = document_xml(&craft_docx::write(&doc(differing.clone(), CharProps { cs: Some(false), ..Default::default() })).unwrap());
+    assert!(!xml.contains("<w:cs/>"), "run cs off: {xml}");
+    assert_eq!(xml.matches("<w:r>").count() + xml.matches("<w:r ").count(), 1, "run cs off: one run: {xml}");
+}
+
+/// What Word counts for a run being complex script, measured in Word for Windows: its table
+/// style's `w:cs` and run formatting do count, a character style's `w:cs` (or `w:cs w:val="0"`)
+/// doesn't, for Latin and Thai text alike. Text is written so Word draws it as WordCraft does.
+#[test]
+fn text_is_written_complex_script_by_what_word_counts() {
+    use craft_wordmodel::{Block, Cell, Row, Style, StyleKind, Table};
+    use std::sync::Arc;
+    let text = "ทดสอบ ABC";
+    // Each character's font, size and bold as WordCraft draws it, a table cell's with the table
+    // style's run formatting.
+    let drawn = |d: &Document| -> Vec<(String, f32, bool)> {
+        let (p, table) = match &*d.body[0] {
+            Block::Table(t) => (t.rows[0].cells[0].blocks[0].as_para().unwrap(), d.styles.table_cells_chr(t).map(|c| c[0][0].clone())),
+            b => (b.as_para().unwrap(), None),
+        };
+        let mut out = Vec::new();
+        for (range, props) in p.run_ranges() {
+            let rc = d.styles.resolve_char_in(p.props.style.as_deref(), table.as_ref(), props);
+            for ch in p.text[range].chars() {
+                let c = if rc.uses_complex(ch) { rc.complex() } else { rc.clone() };
+                out.push((c.font, c.size, c.bold));
+            }
+        }
+        out
+    };
+    let doc = |defaults: CharProps, styles: Vec<Style>, run: CharProps, table: Option<&str>| {
+        let mut d = Document::new();
+        let sheet = Arc::make_mut(&mut d.styles);
+        sheet.default_chr = defaults;
+        for s in styles {
+            sheet.upsert(s);
+        }
+        let para = para_block(Paragraph::with_text(text, run));
+        d.body = vec![match table {
+            Some(id) => {
+                let mut t = Table { grid: vec![300.0], ..Default::default() };
+                t.props.style = Some(id.into());
+                let cell = Cell {
+                    props: craft_wordmodel::props::CellProps { span: 1, ..Default::default() },
+                    blocks: vec![para],
+                    controls: Default::default(),
+                };
+                t.rows = vec![Row { props: Default::default(), cells: vec![cell], controls: Default::default() }];
+                Arc::new(Block::Table(t))
+            }
+            None => para,
+        }];
+        d
+    };
+    let style = |id: &str, kind: StyleKind, chr: CharProps| Style { id: id.into(), name: id.into(), kind, chr, ..Default::default() };
+    let tahoma = CharProps { font: Some("Tahoma".into()), font_cs: Some("Tahoma".into()), ..Default::default() };
+    let differing =
+        CharProps { font: Some("Angsana New".into()), font_cs: Some("Tahoma".into()), size: Some(10.0), size_cs: Some(20.0), ..Default::default() };
+    let cs_on = CharProps { cs: Some(true), ..Default::default() };
+    let in_char_style = |id: &str| CharProps { style: Some(id.into()), ..Default::default() };
+    let cases = [
+        // A table style's sizes make the two formattings differ: the Thai word is marked.
+        (
+            "table style sizes",
+            doc(
+                tahoma,
+                vec![style("T", StyleKind::Table, CharProps { size: Some(20.0), size_cs: Some(10.0), ..Default::default() })],
+                CharProps::default(),
+                Some("T"),
+            ),
+            1,
+        ),
+        // A table style's `w:cs` makes the run complex script for Word too: nothing to mark.
+        ("table style cs", doc(differing.clone(), vec![style("T", StyleKind::Table, cs_on.clone())], CharProps::default(), Some("T")), 0),
+        // A character style's `w:cs` doesn't count in Word: the whole run, Latin too, is marked.
+        ("character style cs", doc(differing.clone(), vec![style("CsOn", StyleKind::Character, cs_on.clone())], in_char_style("CsOn"), None), 1),
+    ];
+    for (name, d, marks) in cases {
+        let bytes = craft_docx::write(&d).unwrap();
+        let xml = document_xml(&bytes);
+        assert_eq!(xml.matches("<w:cs/>").count(), marks, "{name}: {xml}");
+        assert_eq!(drawn(&craft_docx::read(&bytes).unwrap()), drawn(&d), "{name}: drawn the same after a save");
+    }
+    // A character style's `w:cs w:val="0"` doesn't turn off its paragraph style's `w:cs` in Word:
+    // the text WordCraft draws in the run's other formatting is written `w:cs w:val="0"`.
+    let normal = Style { id: "Normal".into(), name: "Normal".into(), kind: StyleKind::Paragraph, chr: cs_on, ..Default::default() };
+    let cs_off = style("CsOff", StyleKind::Character, CharProps { cs: Some(false), ..Default::default() });
+    let d = doc(differing, vec![normal, cs_off], in_char_style("CsOff"), None);
+    let bytes = craft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    assert!(xml.contains(r#"<w:cs w:val="0"/>"#), "{xml}");
+    assert_eq!(drawn(&craft_docx::read(&bytes).unwrap()), drawn(&d), "drawn the same after a save");
+}
+
 #[test]
 fn reads_word_style_bidi_markup() {
     // What a right-to-left paragraph looks like in a Word document: w:bidi, logical
@@ -326,4 +482,185 @@ fn a_fields_thai_result_takes_the_complex_script_formatting_only_in_a_complex_sc
         let again = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
         assert_eq!(drawn(&again), (want.0.to_string(), want.1), "a run with {what}: after a save");
     }
+}
+
+/// A tracked formatting change's "before" copy is marked by what it draws itself. Here Normal says
+/// `w:cs` and the run's character style says `w:cs w:val="0"`, which Word doesn't count, so the
+/// run is written `w:cs w:val="0"`; before the change the run had no character style and was
+/// complex script by its paragraph style, so rejecting the change in Word must leave it so.
+#[test]
+fn a_tracked_changes_before_copy_is_marked_by_its_own_formatting() {
+    use craft_wordmodel::props::PropChange;
+    use craft_wordmodel::{Revision, RevisionKind, Style, StyleKind};
+    use std::sync::Arc;
+    let mut d = Document::new();
+    let sheet = Arc::make_mut(&mut d.styles);
+    sheet.default_chr =
+        CharProps { font: Some("Angsana New".into()), font_cs: Some("Tahoma".into()), size: Some(10.0), size_cs: Some(20.0), ..Default::default() };
+    let cs = |on: bool| CharProps { cs: Some(on), ..Default::default() };
+    sheet.upsert(Style { id: "Normal".into(), name: "Normal".into(), kind: StyleKind::Paragraph, chr: cs(true), ..Default::default() });
+    sheet.upsert(Style { id: "CsOff".into(), name: "CsOff".into(), kind: StyleKind::Character, chr: cs(false), ..Default::default() });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "A".into(), date: String::new(), move_name: None });
+    let run = CharProps { style: Some("CsOff".into()), fmt_change: PropChange::boxed(0, CharProps::default()), ..Default::default() };
+    d.body = vec![para_block(Paragraph::with_text("ABC", run))];
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
+    // The text's run (the paragraph mark's properties come first and have a change of their own).
+    let run = xml.split("<w:r>").find(|r| r.contains(">ABC</w:t>")).unwrap_or_else(|| panic!("no run: {xml}"));
+    let (now, before) = run.split_once("<w:rPrChange").expect("the change is written");
+    assert!(now.contains(r#"<w:cs w:val="0"/>"#), "the run as WordCraft draws it: {now}");
+    assert!(!before.contains(r#"<w:cs w:val="0"/>"#), "the before copy stays complex script: {before}");
+    // Read back, the before copy draws as it did.
+    let r = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+    let old = paras(&r)[0].runs[0].props.fmt_change.as_ref().map(|c| c.old.clone()).expect("kept");
+    assert!(r.styles.resolve_char(Some("Normal"), &old).uses_complex('A'));
+}
+
+/// A tracked formatting change's "before" copy is marked where it needs it, even where the run
+/// itself needs nothing. Here the run has no character style, so only its Thai letter is marked;
+/// before the change it had a character style saying `w:cs`, which Word doesn't count, so WordCraft
+/// drew all of it, the space and Latin text too, in the complex-script formatting. Rejecting the
+/// change in Word must bring that back.
+#[test]
+fn a_tracked_changes_before_copy_is_marked_where_only_it_needs_it() {
+    use craft_wordmodel::props::PropChange;
+    use craft_wordmodel::{Revision, RevisionKind, Style, StyleKind};
+    use std::sync::Arc;
+    let mut d = Document::new();
+    let sheet = Arc::make_mut(&mut d.styles);
+    sheet.default_chr =
+        CharProps { font: Some("Angsana New".into()), font_cs: Some("Tahoma".into()), size: Some(10.0), size_cs: Some(20.0), ..Default::default() };
+    sheet.upsert(Style {
+        id: "CsOn".into(),
+        name: "CsOn".into(),
+        kind: StyleKind::Character,
+        chr: CharProps { cs: Some(true), ..Default::default() },
+        ..Default::default()
+    });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "A".into(), date: String::new(), move_name: None });
+    let before = CharProps { style: Some("CsOn".into()), ..Default::default() };
+    let run = CharProps { fmt_change: PropChange::boxed(0, before), ..Default::default() };
+    d.body = vec![para_block(Paragraph::with_text("\u{0E17} ABC", run))];
+    let bytes = craft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    let run = xml.split("<w:r>").find(|r| r.contains("ABC</w:t>")).unwrap_or_else(|| panic!("no run: {xml}"));
+    let (now, before) = run.split_once("<w:rPrChange").expect("the change is written");
+    assert!(!now.contains("<w:cs"), "the Latin text needs nothing itself: {now}");
+    assert!(before.contains("<w:cs/>"), "its before copy is complex script as WordCraft drew it: {before}");
+    // As Word reads the before copy (a character style's `w:cs` doesn't count), each character
+    // takes the complex-script formatting, as WordCraft drew it.
+    let r = craft_docx::read(&bytes).unwrap();
+    let p = paras(&r)[0];
+    for (range, props) in p.run_ranges() {
+        let old = props.fmt_change.as_ref().map(|c| CharProps { style: None, ..c.old.clone() }).expect("kept");
+        let rc = r.styles.resolve_char(None, &old);
+        for ch in p.text[range].chars() {
+            assert!(rc.uses_complex(ch), "{ch:?} in {:?}", p.text);
+        }
+    }
+}
+/// Each run of `p` as (text, `w:cs`).
+fn run_cs(p: &Paragraph) -> Vec<(&str, Option<bool>)> {
+    p.run_ranges().map(|(r, c)| (&p.text[r], c.cs)).collect()
+}
+
+#[test]
+fn thai_pieces_are_written_complex_script() {
+    // Word breaks Thai by word only in `w:cs` runs, and marks typed Thai that way; a Latin name
+    // and Western digits stay outside them.
+    let text = "ประชุม WordCraft วันที่ 29 ตุลาคม";
+    let font = CharProps { font: Some("TH Sarabun New".into()), ..Default::default() };
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text(text, font.clone()))];
+    let r = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+    let ps = paras(&r);
+    assert_eq!(ps[0].text, text);
+    assert_eq!(run_cs(ps[0]), vec![("ประชุม ", Some(true)), ("WordCraft ", None), ("วันที่ ", Some(true)), ("29 ", None), ("ตุลาคม", Some(true))]);
+    assert!(ps[0].runs.iter().all(|run| run.props.font == font.font), "the Latin font is kept");
+
+    // A file whose Thai runs don't say it (as WPS writes them): Word draws that Thai in the run's
+    // own font and size (measured, #1280), so the run reads as saying it isn't complex script,
+    // and a save keeps it so, looking the same in Word.
+    let wps = docx(r#"<w:p><w:r><w:rPr><w:rFonts w:cs="TH SarabunPSK"/><w:lang w:bidi="th-TH"/></w:rPr><w:t>ตามที่ได้แจ้งไว้</w:t></w:r></w:p>"#);
+    let read = craft_docx::read(&wps).unwrap();
+    assert_eq!(paras(&read)[0].runs[0].props.cs, Some(false));
+    let xml = document_xml(&craft_docx::write(&read).unwrap());
+    assert_eq!(xml.matches("<w:cs/>").count(), 0, "{xml}");
+
+    // A run that says `w:cs="0"` keeps it.
+    let off = docx(r#"<w:p><w:r><w:rPr><w:cs w:val="0"/></w:rPr><w:t>ไทย</w:t></w:r></w:p>"#);
+    let xml = document_xml(&craft_docx::write(&craft_docx::read(&off).unwrap()).unwrap());
+    assert!(!xml.contains("<w:cs/>"), "{xml}");
+}
+
+/// The first `<w:r>` of `xml` whose text is `text`.
+fn run_xml<'a>(xml: &'a str, text: &str) -> &'a str {
+    xml.split("<w:r>").find(|r| r.contains(&format!(">{text}</w:t>"))).unwrap_or_else(|| panic!("{text} missing: {xml}"))
+}
+
+#[test]
+fn marked_thai_keeps_the_font_size_bold_and_italic_it_was_drawn_with() {
+    // Word draws a `w:cs` run with the complex-script values alone, 10 pt without `w:szCs`: a
+    // marked piece also gets the ordinary ones, from the run or the defaults, where nothing sets
+    // complex-script values; a tracked change's "before" copy too.
+    use craft_wordmodel::props::PropChange;
+    use craft_wordmodel::{Revision, RevisionKind};
+    let mut d = Document::new();
+    std::sync::Arc::make_mut(&mut d.styles).default_chr.size = Some(14.0);
+    std::sync::Arc::make_mut(&mut d.styles).default_chr.size_cs = None;
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "A".into(), date: String::new(), move_name: None });
+    let direct = CharProps { font: Some("Leelawadee UI".into()), bold: Some(true), italic: Some(true), ..Default::default() };
+    let tracked = CharProps { fmt_change: PropChange::boxed(0, CharProps { size: Some(20.0), ..Default::default() }), ..Default::default() };
+    d.body = vec![para_block(Paragraph::with_text("ตัวหนา", direct)), para_block(Paragraph::with_text("ติดตาม", tracked))];
+    let bytes = craft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    let bold = run_xml(&xml, "ตัวหนา");
+    for want in [r#"w:cs="Leelawadee UI""#, "<w:bCs/>", "<w:iCs/>", r#"<w:szCs w:val="28"/>"#, "<w:cs/>"] {
+        assert!(bold.contains(want), "{want} in {bold}");
+    }
+    let (now, before) = run_xml(&xml, "ติดตาม").split_once("<w:rPrChange").unwrap();
+    assert!(now.contains(r#"<w:szCs w:val="28"/>"#) && now.contains("<w:cs/>"), "{now}");
+    assert!(before.contains(r#"<w:szCs w:val="40"/>"#) && before.contains("<w:cs/>"), "the before-copy keeps its own size: {before}");
+
+    // Read back, WordCraft draws the Thai as before.
+    let r = craft_docx::read(&bytes).unwrap();
+    for (p, orig) in paras(&r).iter().zip(paras(&d)) {
+        let (now, was) = (r.styles.resolve_char(None, &p.runs[0].props).complex(), d.styles.resolve_char(None, &orig.runs[0].props).complex());
+        assert_eq!((&now.font, now.size, now.bold, now.italic), (&was.font, was.size, was.bold, was.italic));
+    }
+
+    // Complex-script values the defaults set are left to them.
+    let mut d = Document::new();
+    std::sync::Arc::make_mut(&mut d.styles).default_chr.size_cs = Some(18.0);
+    std::sync::Arc::make_mut(&mut d.styles).default_chr.font_cs = Some("TH SarabunPSK".into());
+    d.body = vec![para_block(Paragraph::with_text("ค่าเริ่มต้น", CharProps::default()))];
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
+    let run = run_xml(&xml, "ค่าเริ่มต้น");
+    assert!(run.contains("<w:cs/>") && !run.contains("w:szCs") && !run.contains("w:cs=\""), "{run}");
+}
+
+#[test]
+fn a_run_already_marked_complex_script_round_trips_unchanged() {
+    // A Thai run that already says `w:cs`, with its complex-script font, is written as it came,
+    // digits and all (the writer marks only runs that don't say it):
+    // one `<w:cs/>`, the `w:rFonts w:cs` attribute kept. Read back, the marks are what they were,
+    // not direct formatting added to the run, and saving again writes the same document.
+    let marked = docx(
+        r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="TH SarabunPSK" w:hAnsi="TH SarabunPSK" w:cs="TH SarabunPSK"/><w:cs/><w:lang w:bidi="th-TH"/></w:rPr><w:t>ตามที่ได้แจ้งไว้ 2569</w:t></w:r></w:p>"#,
+    );
+    let first = craft_docx::read(&marked).unwrap();
+    let saved = craft_docx::write(&first).unwrap();
+    let xml = document_xml(&saved);
+    assert_eq!(xml.matches("<w:cs/>").count(), 1, "{xml}");
+    assert!(run_xml(&xml, "ตามที่ได้แจ้งไว้ 2569").contains(r#"w:cs="TH SarabunPSK""#), "{xml}");
+    let again = craft_docx::read(&saved).unwrap();
+    let props = |d: &Document| paras(d)[0].runs.iter().map(|r| r.props.clone()).collect::<Vec<_>>();
+    assert_eq!(run_cs(paras(&again)[0]), vec![("ตามที่ได้แจ้งไว้ 2569", Some(true))]);
+    assert_eq!(props(&again)[0].font_cs, props(&first)[0].font_cs);
+    assert_eq!(props(&again)[0].font, props(&first)[0].font);
+    assert_eq!((props(&again)[0].bold, props(&again)[0].size, props(&again)[0].italic), (None, None, None), "no formatting added");
+    assert_eq!(document_xml(&craft_docx::write(&again).unwrap()), xml, "a second save writes the same document");
+    // The WPS run, left unmarked, keeps its complex-script font too.
+    let wps = docx(r#"<w:p><w:r><w:rPr><w:rFonts w:cs="TH SarabunPSK"/><w:lang w:bidi="th-TH"/></w:rPr><w:t>ตามที่ได้แจ้งไว้</w:t></w:r></w:p>"#);
+    let xml = document_xml(&craft_docx::write(&craft_docx::read(&wps).unwrap()).unwrap());
+    assert!(run_xml(&xml, "ตามที่ได้แจ้งไว้").contains(r#"w:cs="TH SarabunPSK""#), "{xml}");
 }

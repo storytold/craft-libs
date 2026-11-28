@@ -433,6 +433,13 @@ impl StyleSheet {
     /// paragraph is in. Order: document defaults, the table style, the paragraph style chain, the
     /// character style chain, direct formatting (ECMA-376 §17.7.2).
     pub fn resolve_char_in(&self, para_style: Option<&str>, table: Option<&CharProps>, c: &CharProps) -> ResolvedChar {
+        ResolvedChar::from(&self.char_props_in(para_style, table, c))
+    }
+
+    /// The formatting [`Self::resolve_char_in`] resolves: what the document defaults, the table
+    /// style, the paragraph style chain, the character style chain and `c` set, merged in that
+    /// order but not resolved (a value nothing sets stays unset).
+    pub fn char_props_in(&self, para_style: Option<&str>, table: Option<&CharProps>, c: &CharProps) -> CharProps {
         let mut defaults = self.default_chr.clone();
         if let Some(t) = table {
             defaults.overlay(&CharProps { style: None, ..t.clone() });
@@ -450,7 +457,7 @@ impl StyleSheet {
         let mut direct = c.clone();
         direct.style = None;
         cp.overlay(&direct);
-        ResolvedChar::from(&cp)
+        cp
     }
 }
 
