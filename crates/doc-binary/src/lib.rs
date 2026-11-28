@@ -623,6 +623,9 @@ struct ParaBuild {
     run_gen: Option<u64>,
     /// Inline objects, each anchored at a U+FFFC pushed into `text`.
     objects: Vec<InlineObject>,
+    /// The paragraph's style was looked up from its mark ahead of its characters
+    /// ([`para_style_ahead`]).
+    style_looked_up: bool,
 }
 
 impl ParaBuild {
@@ -676,7 +679,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
     // Field assembly state: instruction characters are swallowed, the result is kept until
     // the end character, then emitted as one object (hyperlinks keep their result text).
     let mut field: Option<FieldBuild> = None;
-    let mut fmt = FmtState::default();
+    let mut fmt = FmtState { cp_end, ..FmtState::default() };
     while cp < cp_end {
         // Bookmark boundaries at this CP (main-document walks only; subdocument walks get
         // an empty table and `cp` never matches the main-document CPs).
@@ -880,6 +883,11 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
             row: None,
         });
     }
+    // Word draws a run's text with the complex-script formatting only when the run is complex
+    // script by its own properties, its paragraph style or the defaults, in a .doc as in a DOCX.
+    for p in &mut out {
+        ctx.sheet.mark_runs_as_word_draws_them(&mut p.para, None);
+    }
     out
 }
 
@@ -1005,6 +1013,29 @@ fn num_of(ilfo: i32) -> Option<u32> {
     }
 }
 
+/// The style of the paragraph `cp` is in, before `cp_end`: the style its mark's PAPX names, as the
+/// mark reads it in [`walk`]. A paragraph's characters come before its mark, and their
+/// style-relative toggles need the style. Text that can't be read is skipped a piece at a time.
+fn para_style_ahead(ctx: &WalkCtx<'_>, mut cp: u32, cp_end: u32) -> Option<String> {
+    let cp_end = cp_end.min(ctx.pieces.cp_end());
+    while cp < cp_end {
+        let (c, units) = match ctx.pieces.char_at(ctx.word, cp) {
+            Ok(found) => found,
+            Err(next) => {
+                cp = next;
+                continue;
+            }
+        };
+        if matches!(c, '\r' | '\u{7}') || (c == '\u{C}' && ctx.sect_ends.binary_search(&cp.saturating_add(1)).is_ok()) {
+            let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
+            let (istd, _) = ctx.papx_bins.papx(ctx.word, fc);
+            return ctx.raw_styles.get(istd as usize).filter(|s| !s.name.is_empty()).map(|st| fmt::style_id(&st.name));
+        }
+        cp = cp.saturating_add(units);
+    }
+    None
+}
+
 /// Resolve the character properties for the character at `cp`: the CHPX grpprl of its FC,
 /// plus the piece's Prm, over the paragraph style's base character props. Inside a field,
 /// the character is recorded into the instruction or the cached result instead of (or as
@@ -1029,20 +1060,23 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
     };
     let grpprl = run.grpprl;
     let prm = span.map_or(0, |s| s.prm());
+    // The paragraph's style, from its mark's PAPX, before its first character is formatted: a
+    // style-relative toggle (0x80, 0x81) reads the style's value.
+    if !pb.style_looked_up {
+        pb.style_looked_up = true;
+        if let Some(id) = para_style_ahead(ctx, cp, st.cp_end) {
+            pb.props.style = Some(id);
+        }
+    }
     let style = pb.props.style.as_deref();
     let hit = st.memo.as_ref().is_some_and(|m| std::ptr::eq(m.chpx, grpprl) && m.prm == prm && m.style.as_deref() == style);
     if !hit {
-        let default;
-        let base = match style.and_then(|id| ctx.sheet.get(id)) {
-            Some(sty) => &sty.chr,
-            None => {
-                default = CharProps::default();
-                &default
-            }
-        };
-        let mut props = char_props(grpprl, ctx.fonts, base);
+        // What the paragraph style gives, through its chain ([MS-DOC] 2.9.336 ToggleOperand: a
+        // toggle is relative to the style's value).
+        let base = style.filter(|id| ctx.sheet.get(id).is_some()).map(|id| ctx.sheet.para_style_props(id).1).unwrap_or_default();
+        let mut props = char_props(grpprl, ctx.fonts, &base);
         let piece_prm = ctx.pieces.piece_prm(cp);
-        apply_prm(&mut props, piece_prm, ctx.fonts, base, ctx.work);
+        apply_prm(&mut props, piece_prm, ctx.fonts, &base, ctx.work);
         ctx.revs.mark(&mut props, grpprl, piece_prm);
         st.memo = Some(FmtMemo { chpx: grpprl, prm, style: style.map(str::to_owned), props });
         st.generation += 1;
@@ -1084,6 +1118,8 @@ struct FmtState<'a> {
     span: Option<piece::PieceSpan<'a>>,
     chpx: Option<fkp::ChpxRun<'a>>,
     memo: Option<FmtMemo<'a>>,
+    /// The end of the CP range being walked, as far as a paragraph's mark is looked for.
+    cp_end: u32,
     /// Counts the memo's replacements, so equal values mean the same properties.
     generation: u64,
 }
@@ -1156,9 +1192,10 @@ fn apply_prm(props: &mut CharProps, prm: PrmRef<'_>, fonts: &[String], base: &Ch
     }
 }
 
-/// Character props from a CHPX grpprl applied over `base`.
+/// Character props from a CHPX grpprl: the run's direct formatting, its style-relative toggles
+/// (0x80, 0x81) read against `base` (what the paragraph style gives), which the run doesn't copy.
 fn char_props(grpprl: &[u8], fonts: &[String], base: &CharProps) -> CharProps {
-    let mut p = base.clone();
+    let mut p = CharProps::default();
     for prl in sprm::iter(grpprl) {
         if prl.sgc() == 2 {
             fmt::apply_char(&mut p, &prl, base, fonts);

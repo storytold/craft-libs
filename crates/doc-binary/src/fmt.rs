@@ -25,6 +25,13 @@ const C_FTC1: u16 = 0x4A50; // East Asian font index (sprmCRgFtc1)
 const C_FTC_BI: u16 = 0x4A5E; // complex-script font index (sprmCFtcBi)
 const C_HIGHLIGHT: u16 = 0x2A0C;
 const C_ISTD: u16 = 0x4A30; // character style
+// Complex script ([MS-DOC] 2.6.1): the run is complex script (`w:cs`), right to left (`w:rtl`), and
+// its complex-script bold, italic and size (`w:bCs`, `w:iCs`, `w:szCs`).
+const C_F_COMPLEX_SCRIPTS: u16 = 0x0882; // sprmCFComplexScripts
+const C_F_BIDI: u16 = 0x085A; // sprmCFBiDi
+const C_F_BOLD_BI: u16 = 0x085C; // sprmCFBoldBi
+const C_F_ITALIC_BI: u16 = 0x085D; // sprmCFItalicBi
+const C_HPS_BI: u16 = 0x4A61; // sprmCHpsBi, half-points
 
 // Paragraph sprms ([MS-DOC] §2.6.2).
 const P_JC: u16 = 0x2461;
@@ -202,6 +209,20 @@ fn set(props: &mut Option<bool>, t: Toggle, base: bool) {
     });
 }
 
+/// A complex-script toggle (sprmCFBoldBi, sprmCFItalicBi) against the style's own complex-script
+/// value, `style`, which is off where the style leaves it out: the ordinary bold or italic plays
+/// no part ([MS-DOC] 2.9.336 ToggleOperand). The style's value (0x80) is set too, so the run's
+/// ordinary bold or italic isn't taken for it where the model would fall back to it.
+fn set_bi(props: &mut Option<bool>, t: Toggle, style: Option<bool>) {
+    let base = style.unwrap_or(false);
+    *props = Some(match t {
+        Toggle::On => true,
+        Toggle::Off => false,
+        Toggle::Invert => !base,
+        Toggle::Keep => base,
+    });
+}
+
 /// Apply a character-property sprm. `base` carries the style-inherited values so toggle
 /// operands can invert them; `fonts` maps sprmCRgFtc0 indices to names.
 pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: &[String]) {
@@ -213,6 +234,15 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
         C_SMALL_CAPS => set(&mut p.small_caps, sprm::toggle(prl), base.small_caps.unwrap_or(false)),
         C_CAPS => set(&mut p.caps, sprm::toggle(prl), base.caps.unwrap_or(false)),
         C_HIDDEN => set(&mut p.hidden, sprm::toggle(prl), base.hidden.unwrap_or(false)),
+        C_F_COMPLEX_SCRIPTS => set(&mut p.cs, sprm::toggle(prl), base.cs.unwrap_or(false)),
+        C_F_BIDI => set(&mut p.rtl, sprm::toggle(prl), base.rtl.unwrap_or(false)),
+        C_F_BOLD_BI => set_bi(&mut p.bold_cs, sprm::toggle(prl), base.bold_cs),
+        C_F_ITALIC_BI => set_bi(&mut p.italic_cs, sprm::toggle(prl), base.italic_cs),
+        C_HPS_BI => {
+            if let Some(hps) = u16_of(prl) {
+                p.size_cs = Some((hps as f32 / 2.0).clamp(1.0, 1638.0));
+            }
+        }
         C_KUL => {
             p.underline = match prl.operand.first().copied().unwrap_or(0) {
                 0x00 => Some(Underline::None),
