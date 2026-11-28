@@ -227,6 +227,14 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   libheif (VUI range and matrix, chroma upsampling, `imir`, ICC on grid tiles). Also orientation,
   alpha, EXIF/XMP and thumbnails. It never panics, and apps put it behind a non-default feature.
 - [`craft-html`](crates/html/README.md): the bottom layer of reading and writing HTML: a tolerant tokenizer (text, start tags, end tags; elements to drop or to read as raw text are options), character references with the legacy names browsers accept without `;`, escaping, and the character set a page declares. With the `flow` feature, HTML documents read into and written from the craft-flow model.
+- [`craft-hwp`](crates/hwp/README.md): HWP 5.0, the binary format of Hancom Hangul documents (a
+  compound file of record streams), read into `craft-wordmodel`. The records are rebuilt as OWPML
+  and read through `craft-hwpx`, so both formats read the same way. WordCraft's reader, on
+  `craft-cfb`.
+- [`craft-hwpx`](crates/hwpx/README.md): HWPX, the XML format of Hancom Hangul documents (OWPML,
+  KS X 6101), read into `craft-wordmodel` and written: edits saved back into the file read (only
+  what changed rewritten), or a new package. WordCraft's reader and writer, on `craft-zip` and
+  `craft-xml`.
 - [`craft-i18n`](crates/i18n/README.md): translations over the embedded craft-i18n catalogs:
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their

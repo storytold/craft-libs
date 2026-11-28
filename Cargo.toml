@@ -136,6 +136,8 @@ craft-gif = { path = "crates/gif" }
 craft-hdr = { path = "crates/hdr" }
 craft-mesh = { path = "crates/mesh" }
 craft-html = { path = "crates/html" }
+craft-hwp = { path = "crates/hwp" }
+craft-hwpx = { path = "crates/hwpx" }
 craft-ipp = { path = "crates/ipp" }
 craft-heif = { path = "crates/heif" }
 craft-fig = { path = "crates/fig" }

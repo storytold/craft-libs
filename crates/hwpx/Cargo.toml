@@ -1,0 +1,22 @@
+[package]
+name = "craft-hwpx"
+description = "HWPX (OWPML, KS X 6101) reader and writer for Hancom Hangul documents, on the craft-wordmodel document model."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-wordmodel = { workspace = true }
+craft-xml = { workspace = true }
+craft-zip = { workspace = true }
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+log = "0.4"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+craft-testkit = { workspace = true }
