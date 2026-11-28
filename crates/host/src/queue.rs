@@ -47,9 +47,20 @@ impl Priority {
 /// The cancel flag a running job reads. The queue sets it when the job's key is dropped
 /// ([`JobQueue::reprioritize`] returning `None`, [`JobQueue::shutdown`], dropping the queue); a
 /// long job checks [`is_cancelled`](Cancel::is_cancelled) between steps and returns early. A
-/// cancelled job's result is never delivered. Cloning shares the flag.
+/// cancelled job's result is never delivered. A job that has nothing to do until it is cancelled
+/// blocks in [`wait`](Cancel::wait) or [`wait_timeout`](Cancel::wait_timeout). Cloning shares the
+/// flag.
 #[derive(Clone, Debug, Default)]
-pub struct Cancel(Arc<AtomicBool>);
+pub struct Cancel(Arc<CancelFlag>);
+
+/// The shared state behind a [`Cancel`]: the flag, and the lock and condition variable that wake
+/// its waiters when it is set.
+#[derive(Debug, Default)]
+struct CancelFlag {
+    set: AtomicBool,
+    lock: Mutex<()>,
+    changed: Condvar,
+}
 
 impl Cancel {
     /// A flag that is not set (tests call a decoder with it).
@@ -59,12 +70,32 @@ impl Cancel {
 
     /// Whether the job should stop.
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
+        self.0.set.load(Ordering::Relaxed)
     }
 
-    /// Sets the flag.
+    /// Sets the flag and wakes every thread blocked in [`wait`](Cancel::wait) or
+    /// [`wait_timeout`](Cancel::wait_timeout).
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Relaxed);
+        let guard = self.0.lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.0.set.store(true, Ordering::Relaxed);
+        drop(guard);
+        self.0.changed.notify_all();
+    }
+
+    /// Blocks the calling thread until the flag is set, and returns at once when it already is.
+    /// Another thread must call [`cancel`](Cancel::cancel): on wasm32, where a job runs on the
+    /// thread that would cancel it, a call that has to wait never returns.
+    pub fn wait(&self) {
+        let guard = self.0.lock.lock().unwrap_or_else(|e| e.into_inner());
+        drop(self.0.changed.wait_while(guard, |_| !self.0.set.load(Ordering::Relaxed)).unwrap_or_else(|e| e.into_inner()));
+    }
+
+    /// Blocks the calling thread until the flag is set or `timeout` has passed, and returns
+    /// whether the flag is set. A zero `timeout` reads the flag without waiting.
+    pub fn wait_timeout(&self, timeout: Duration) -> bool {
+        let guard = self.0.lock.lock().unwrap_or_else(|e| e.into_inner());
+        drop(self.0.changed.wait_timeout_while(guard, timeout, |_| !self.0.set.load(Ordering::Relaxed)).unwrap_or_else(|e| e.into_inner()));
+        self.is_cancelled()
     }
 }
 

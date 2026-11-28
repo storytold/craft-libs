@@ -146,9 +146,7 @@ impl FilterGallerySource for Flat {
             Job::new(|_, _| Ok(PreviewDone::new(Duration::from_millis(12))))
         } else {
             Job::new(|_, cancel| {
-                while !cancel.is_cancelled() {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
+                cancel.wait();
                 Err(String::new())
             })
         }
