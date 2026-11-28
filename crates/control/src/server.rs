@@ -226,12 +226,9 @@ const EVENT_GAP: Duration = Duration::from_millis(100);
 /// [`MAX_CONNECTIONS`] goes to someone else.
 const TOKEN_WAIT: Duration = Duration::from_secs(5);
 
-/// A new random token: 32 bytes from the operating system, as hex.
-pub fn new_token() -> Option<String> {
-    let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes).ok()?;
-    Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
-}
+/// A new random token: 32 bytes from the operating system, as hex. The generator lives in
+/// [`craft_control_protocol`], so this crate and servers built on that crate make the same tokens.
+pub use craft_control_protocol::new_token;
 
 /// One line without its newline (and a `\r` before it), or `None` at the end of the stream, read
 /// with [`craft_control_protocol::read_bounded_line`]. A line of more than `max` bytes, not

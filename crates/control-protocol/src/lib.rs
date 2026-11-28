@@ -9,6 +9,15 @@ pub fn valid_token(token: &str) -> bool {
     token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// A new session token that [`valid_token`] accepts: 32 bytes from the operating system's random
+/// source, as lowercase hexadecimal. `None` when the system cannot supply random bytes.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn new_token() -> Option<String> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).ok()?;
+    Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
 /// Encode one client request, including its terminating newline.
 pub fn request_line(id: u64, token: Option<&str>, method: &str, params: &Value) -> String {
     format!("{}\n", json!({"id": id, "token": token, "method": method, "params": params}))
@@ -247,6 +256,19 @@ mod tests {
         assert!(valid_token(&"aB09".repeat(16)));
         assert!(!valid_token(&"a".repeat(63)));
         assert!(!valid_token(&"g".repeat(64)));
+    }
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn new_tokens_are_valid_and_distinct() {
+        let first = new_token().unwrap();
+        let second = new_token().unwrap();
+        assert!(valid_token(&first));
+        assert!(valid_token(&second));
+        assert_ne!(first, second);
+        let input = request_line(1, Some(&first), "status", &json!({}));
+        let mut output = Vec::new();
+        serve_lines(input.as_bytes(), &mut output, &first, 4096, |_, _| Some(json!({"ok": true})));
+        assert_eq!(serde_json::from_slice::<Value>(&output).unwrap(), json!({"ok": true, "id": 1}));
     }
     #[test]
     fn authenticates_each_request_and_closes_after_failure() {
