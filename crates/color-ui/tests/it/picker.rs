@@ -5,12 +5,12 @@ use std::rc::Rc;
 
 use craft_behavior::Mixed;
 use craft_color_ui::ui::{
-    ColorPicker, ColorPickerDialog, ColorPickerDialogLayout, ColorPickerLayout, ColorPickerTab, ColorPopover, ColorReadout, ColorWarning,
-    PickedColor, PickerLibrary, PickerSwatches,
+    ChannelRow, ChannelRowOutput, ChannelRule, ColorPicker, ColorPickerDialog, ColorPickerDialogLayout, ColorPickerLayout, ColorPickerTab,
+    ColorPopover, ColorReadout, ColorWarning, PickedColor, PickerLibrary, PickerSwatches,
 };
 use craft_host::{AppInfo, Host};
 use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, OklchModel, RgbModel, Rgba, Size, Srgba, ThemeId};
-use craft_ui::contract::{Bind, Role, ShowContainer as _};
+use craft_ui::contract::{Bind, EditResponse, Role, ShowContainer as _};
 use craft_ui::dialog::{DialogHost, DialogResult, StackDialog, dialog_id};
 use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::Row;
@@ -175,6 +175,45 @@ fn the_dialogs_rgb_fields_show_the_hosts_working_values() {
         let shown = shown.unwrap_or_else(|| panic!("{layout:?}: the Red field"));
         assert!((shown - f64::from(kept.values[0])).abs() < 0.5, "{layout:?}: Red shows the working value {kept:?}, not {shown}");
     }
+}
+
+/// `ChannelRow::show` returns the row's edit, and `show_with_units` returns the same edit with the units cell's
+/// double click, which typing into the field does not report.
+#[trial]
+fn a_channel_rows_show_returns_its_edit_and_show_with_units_adds_the_units_cell() {
+    let rule = ChannelRule { range: 0.0..=100.0, step: 1.0, decimals: 0 };
+    /// Each edit: the row, the value and whether the units cell was double-clicked.
+    type Seen = Rc<RefCell<Vec<(&'static str, f64, bool)>>>;
+    let got: Seen = Rc::default();
+    let seen = Rc::clone(&got);
+    let mut fixture = Fixture::new(move |ui| {
+        let edit: Option<EditResponse<f64>> = ChannelRow::new("Plain", Bind::given(40.0), rule.clone()).show(ui);
+        for event in edit.into_iter().flat_map(|edit| edit.events) {
+            if let Some(v) = event.value() {
+                seen.borrow_mut().push(("Plain", *v, false));
+            }
+        }
+        let row: ChannelRowOutput = ChannelRow::new("Units", Bind::given(40.0), rule.clone()).show_with_units(ui);
+        for event in row.edit.into_iter().flat_map(|edit| edit.events) {
+            if let Some(v) = event.value() {
+                seen.borrow_mut().push(("Units", *v, row.units_double_clicked));
+            }
+        }
+    });
+    fixture.room(vec2(320.0, 200.0));
+    fixture.idle(2);
+    for (i, text) in [(0, "70"), (1, "20")] {
+        let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().nth(i).unwrap_or_else(|| panic!("number field {i}"));
+        fixture.click(&field);
+        fixture.key(Key::A, Modifiers::COMMAND);
+        fixture.type_text(text);
+        fixture.key(Key::Enter, Modifiers::NONE);
+        fixture.settle();
+    }
+    let got = got.borrow();
+    assert!(got.iter().any(|&(row, v, _)| row == "Plain" && v == 70.0), "show reports the typed value: {got:?}");
+    assert!(got.iter().any(|&(row, v, _)| row == "Units" && v == 20.0), "show_with_units reports the typed value: {got:?}");
+    assert!(got.iter().all(|&(_, _, clicked)| !clicked), "typing is not a double click on the units cell: {got:?}");
 }
 
 /// The densities and themes every layout trial runs in: compact and comfortable, a Pro and a Studio theme.

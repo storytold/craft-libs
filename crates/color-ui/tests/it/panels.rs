@@ -38,6 +38,7 @@ type Edits = Rc<RefCell<Vec<(PanelTarget, EditEvent<PickedColor>)>>>;
 /// The Color panel on a state and two colours the test can change, collecting what it reports.
 struct PanelRig {
     fixture: Fixture,
+    state: Rc<RefCell<ColorPanelState>>,
     colors: Rc<Cell<[Srgba; 2]>>,
     edits: Edits,
 }
@@ -48,15 +49,19 @@ impl PanelRig {
     }
 
     fn in_room(mode: ColorPanelMode, room: Vec2) -> Self {
-        let start = ColorPanelState { mode, ..Default::default() };
+        Self::with_state(ColorPanelState { mode, ..Default::default() }, room, true)
+    }
+
+    /// The panel from `start`, with the RGB units cells where `units` is set.
+    fn with_state(start: ColorPanelState, room: Vec2, units: bool) -> Self {
         let state = Rc::new(RefCell::new(start));
         let colors = Rc::new(Cell::new([RED, BLUE]));
         type Shared = (Edits, Rc<RefCell<Vec<ColorRequest>>>, Rc<RefCell<Vec<PanelTarget>>>);
         let (edits, opened, added): Shared = Default::default();
-        let (s, c, e, o, a) = (state, colors.clone(), edits.clone(), opened, added);
+        let (s, c, e, o, a) = (state.clone(), colors.clone(), edits.clone(), opened, added);
         let mut fixture = Fixture::new(move |ui| {
             let mut current = *s.borrow();
-            let shown = ColorPanel::new(Bind::bound(&mut current), c.get()).show(ui);
+            let shown = ColorPanel::new(Bind::bound(&mut current), c.get()).rgb_units_cell(units).show(ui);
             *s.borrow_mut() = current;
             e.borrow_mut().extend(shown.edits);
             o.borrow_mut().extend(shown.pick_color);
@@ -64,7 +69,7 @@ impl PanelRig {
         });
         fixture.room(room);
         fixture.settle();
-        PanelRig { fixture, colors, edits }
+        PanelRig { fixture, state, colors, edits }
     }
 
     fn set_colors(&mut self, colors: [Srgba; 2]) {
@@ -195,6 +200,145 @@ fn a_channel_step_keeps_the_other_channels_unrounded() {
     for channel in [1, 2] {
         assert!((before[channel] - after[channel]).abs() < 0.01, "channel {channel} kept ({before:?}, {after:?})");
     }
+}
+
+/// A point in the units cell right of `field`, on its line.
+fn right_of(field: &craft_ui::testing::Target) -> egui::Pos2 {
+    egui::pos2(field.rect.right() + 6.0, field.rect.center().y)
+}
+
+/// The number fields' values, top to bottom, and the end of the first one's range.
+fn field_values(fixture: &Fixture) -> (Vec<f64>, f64) {
+    let tree = fixture.tree();
+    let fields = fixture.by_role(Role::SPIN_BUTTON);
+    let numbers: Vec<_> = fields.iter().map(|field| tree.numeric_of(field.node).expect("a field's value and range")).collect();
+    let values = numbers.iter().map(|number| number.value.expect("a field's value")).collect();
+    (values, *numbers[0].range.end())
+}
+
+/// A double click right of the R, G or B field switches all three rows between 0 to 255 and percent, and the next one
+/// switches them back. The colour does not change.
+#[trial]
+fn a_double_click_right_of_an_rgb_field_switches_the_rgb_units() {
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    rig.set_colors([Srgba::rgb(1.0, 0.5, 0.0), BLUE]);
+    let (bytes, end) = field_values(&rig.fixture);
+    assert!(!rig.state.borrow().rgb_percent && end > 100.0, "the rows start at 0 to 255 ({bytes:?}, to {end})");
+
+    let fields = rig.fixture.by_role(Role::SPIN_BUTTON);
+    let at = right_of(&fields[0]);
+    rig.fixture.click_at(at).click_at(at).settle();
+    assert!(rig.state.borrow().rgb_percent, "a double click right of R switches to percent");
+    let (percents, end) = field_values(&rig.fixture);
+    assert_eq!(end, 100.0, "the fields count to 100 %");
+    for (percent, byte) in percents.iter().zip(&bytes) {
+        assert!((percent - byte / 2.55).abs() < 0.51, "every row shows its percent ({percents:?}, {bytes:?})");
+    }
+
+    rig.fixture.advance(1.0);
+    let fields = rig.fixture.by_role(Role::SPIN_BUTTON);
+    let at = right_of(&fields[2]);
+    rig.fixture.click_at(at).click_at(at).settle();
+    assert!(!rig.state.borrow().rgb_percent, "a double click right of B switches back");
+    assert_eq!(field_values(&rig.fixture).0, bytes, "the rows count 0 to 255 again");
+    assert!(rig.edits.borrow().is_empty(), "switching the units changes no colour: {:?}", rig.edits.borrow());
+}
+
+/// A single click right of an RGB field, and a double click on the field itself, leave the units as they are.
+#[trial]
+fn only_a_double_click_on_the_units_cell_switches_the_rgb_units() {
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    let fields = rig.fixture.by_role(Role::SPIN_BUTTON);
+    rig.fixture.click_at(right_of(&fields[1])).settle();
+    assert!(!rig.state.borrow().rgb_percent, "a single click right of G switches nothing");
+    rig.fixture.advance(1.0);
+    let field = rig.fixture.by_role(Role::SPIN_BUTTON).remove(1);
+    rig.fixture.click(&field).click(&field).settle();
+    assert!(!rig.state.borrow().rgb_percent, "a double click on the G field switches nothing");
+}
+
+/// A click at the right edge of an RGB field followed at once by a click on the units cell beside it is not a double
+/// click on the cell, though the two presses are close enough to count as one, nor are two clicks on the cell with a
+/// click on the field between them.
+#[trial]
+fn a_click_on_the_field_then_one_on_the_units_cell_switches_nothing() {
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    let field = rig.fixture.by_role(Role::SPIN_BUTTON).remove(0);
+    let (edge, cell) = (egui::pos2(field.rect.right() - 0.4, field.rect.center().y), egui::pos2(field.rect.right() + 2.4, field.rect.center().y));
+    rig.fixture.click_at(cell).click_at(cell).settle();
+    assert!(rig.state.borrow().rgb_percent, "a double click at {cell:?} is on the units cell");
+    rig.fixture.advance(1.0);
+    rig.fixture.click_at(edge).click_at(cell).settle();
+    assert!(rig.state.borrow().rgb_percent, "a click on the field's edge and one on the cell switch nothing");
+    rig.fixture.advance(1.0);
+    rig.fixture.click_at(cell).click_at(edge).click_at(cell).settle();
+    assert!(rig.state.borrow().rgb_percent, "two clicks on the cell with one on the field between them switch nothing");
+}
+
+/// Two clicks on the units cell with a click on the field between them switch nothing when the field click is too far
+/// from the first to continue its click run, and the second cell click is close enough to the field click to count as
+/// its second click.
+#[trial]
+fn a_field_click_that_starts_a_new_run_between_two_units_cell_clicks_switches_nothing() {
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    let field = rig.fixture.by_role(Role::SPIN_BUTTON).remove(0);
+    let (top, bottom) = (field.rect.top() + 1.0, field.rect.bottom() - 1.0);
+    let (first, edge, second) =
+        (egui::pos2(field.rect.right() + 2.4, top), egui::pos2(field.rect.right() - 0.4, bottom), egui::pos2(field.rect.right() + 2.4, bottom));
+    rig.fixture.click_at(second).click_at(second).settle();
+    assert!(rig.state.borrow().rgb_percent, "a double click at {second:?} is on the units cell");
+    rig.fixture.advance(1.0);
+    rig.fixture.click_at(first).click_at(edge).click_at(second).settle();
+    assert!(rig.state.borrow().rgb_percent, "a field click that starts a new run between two cell clicks switches nothing");
+}
+
+/// Rows of other modes have no units cell, nor do the RGB rows of a panel whose host did not ask for them, and Web
+/// Color keeps 0 to 255 while the RGB rows show percent.
+#[trial]
+fn rows_other_than_rgb_keep_their_units() {
+    let rgb = ColorPanelState { mode: ColorPanelMode::RgbSliders, ..Default::default() };
+    let mut rigs = vec![("RGB without units cells".to_owned(), PanelRig::with_state(rgb, COLOR_ROOM, false))];
+    for mode in [ColorPanelMode::CmykSliders, ColorPanelMode::HsbSliders, ColorPanelMode::WebColorSliders] {
+        rigs.push((format!("{mode:?}"), PanelRig::new(mode)));
+    }
+    for (case, mut rig) in rigs {
+        let fields = rig.fixture.by_role(Role::SPIN_BUTTON);
+        let at = right_of(&fields[0]);
+        rig.fixture.click_at(at).click_at(at).settle();
+        assert!(!rig.state.borrow().rgb_percent, "{case}: a double click right of a field switches nothing");
+    }
+    let start = ColorPanelState { mode: ColorPanelMode::WebColorSliders, rgb_percent: true, ..Default::default() };
+    let rig = PanelRig::with_state(start, COLOR_ROOM, true);
+    let (_, end) = field_values(&rig.fixture);
+    assert!(end > 100.0, "Web Color counts 0 to 255 while the RGB rows show percent (to {end})");
+}
+
+/// The FillStroke layout's RGB rows switch their units the same way, and not while a mixed selection disables them.
+#[trial]
+fn a_disabled_fill_stroke_rgb_row_does_not_switch_its_units() {
+    let state = Rc::new(RefCell::new(ColorPanelState::default()));
+    let edited = Rc::new(Cell::new(Some(PickedColor::rgb(RED))));
+    let (s, e) = (state.clone(), edited.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut current = *s.borrow();
+        let _ = ColorPanel::new(Bind::bound(&mut current), [RED, BLUE])
+            .layout(ColorPanelLayout::FillStroke)
+            .shown(ColorPanelShown::Mode(ColorPanelMode::RgbSliders))
+            .rgb_units_cell(true)
+            .edited(e.get())
+            .show(ui);
+        *s.borrow_mut() = current;
+    });
+    fixture.room(COLOR_ROOM).settle();
+    let fields = fixture.by_role(Role::SPIN_BUTTON);
+    let at = right_of(&fields[0]);
+    fixture.click_at(at).click_at(at).settle();
+    assert!(state.borrow().rgb_percent, "a double click right of R switches the FillStroke rows to percent");
+
+    edited.set(None);
+    fixture.settle().advance(1.0);
+    fixture.click_at(at).click_at(at).settle();
+    assert!(state.borrow().rgb_percent, "with the rows disabled a double click switches nothing");
 }
 
 /// A Color panel whose host supplies authoritative native CMYK components.

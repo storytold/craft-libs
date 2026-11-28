@@ -245,7 +245,8 @@ pub struct ColorPanelState {
     pub hide_options: bool,
     /// The FillStroke layout shows the Recent Colors slot.
     pub recent_colors: bool,
-    /// The R, G and B rows count percents, 0 to 100, in place of 0 to 255.
+    /// The R, G and B rows count percents, 0 to 100, in place of 0 to 255; Web Color's rows keep 0 to 255. A double
+    /// click on a units cell ([`ColorPanel::rgb_units_cell`]) switches it.
     pub rgb_percent: bool,
 }
 
@@ -446,6 +447,7 @@ pub struct ColorPanel<'a> {
     cmyk: Option<&'a CmykConverter>,
     rgb: Option<&'a dyn ColorModel>,
     dynamic: bool,
+    rgb_units: bool,
     layout: ColorPanelLayout,
     wells: Option<([PairWell; 2], Bind<'a, Well>)>,
     buttons: Option<[Label; 2]>,
@@ -488,6 +490,7 @@ impl<'a> ColorPanel<'a> {
             cmyk: None,
             rgb: None,
             dynamic: true,
+            rgb_units: false,
             layout: ColorPanelLayout::default(),
             wells: None,
             buttons: None,
@@ -517,6 +520,14 @@ impl<'a> ColorPanel<'a> {
     /// colours with the other channels as they are. Off, the tracks keep the colours they had when a drag began.
     pub fn dynamic_tracks(mut self, on: bool) -> Self {
         self.dynamic = on;
+        self
+    }
+
+    /// A units cell right of each R, G and B field (not Web Color's): a double click on it switches
+    /// [`ColorPanelState::rgb_percent`]. The cell has no keyboard stop, so a host that turns it on offers the same
+    /// switch as a command that writes `rgb_percent`. Off by default.
+    pub fn rgb_units_cell(mut self, on: bool) -> Self {
+        self.rgb_units = on;
         self
     }
 
@@ -577,7 +588,8 @@ impl<'a> ColorPanel<'a> {
 
     /// Shows the panel and returns this pass's edits and requests.
     pub fn show(self, ui: &mut Ui) -> ColorPanelOutput {
-        let ColorPanel { state, colors, cmyk, rgb, dynamic, layout, wells, buttons, edited, shown: rows, recent, recent_setup, gamut } = self;
+        let ColorPanel { state, colors, cmyk, rgb, dynamic, rgb_units, layout, wells, buttons, edited, shown: rows, recent, recent_setup, gamut } =
+            self;
         let env = Env::of(ui);
         let (words, dialog) = (env.words::<ColorPanelWords>(), env.words::<ColorPickerDialogWords>());
         let mut held = Held::new(state);
@@ -609,6 +621,7 @@ impl<'a> ColorPanel<'a> {
                 rgb,
                 gamut: &gamut,
                 dynamic,
+                rgb_units,
                 words: &words,
                 dialog: &dialog,
                 inputs: Inputs {
@@ -908,6 +921,8 @@ struct Body<'a> {
     rgb: &'a dyn ColorModel,
     gamut: &'a Gamut<'a>,
     dynamic: bool,
+    /// The R, G and B rows have units cells ([`ColorPanel::rgb_units_cell`]).
+    rgb_units: bool,
     words: &'a ColorPanelWords,
     dialog: &'a ColorPickerDialogWords,
     /// The state as this pass leaves it.
@@ -1159,15 +1174,18 @@ impl Body<'_> {
             self.kept.tracks.retain(|(id, target, _)| (*id, *target) != slot);
             self.kept.tracks.push((slot.0, slot.1, current));
         }
+        // The R, G and B rows are not Web Color's. The units are read once, so a double click on one units cell
+        // switches all three rows together, from the next pass.
+        let rgb = !web && model.id() == self.rgb.id();
+        let rgb_percent = self.now.rgb_percent;
         for (i, ch) in model.channels().iter().enumerate() {
             let mut rule = ChannelRule::of(ch);
             if web {
                 rule.step = WEB_STEP;
             }
-            // The R, G and B rows count percents of the channel's range; an edit goes back through `scale`.
-            // PLAN: a double click on the units cell flips `rgb_percent` while the rows are enabled; `ChannelRow`
-            // (color-w2) reports no signal for its units cell, so the panel cannot read it.
-            let percent = self.now.rgb_percent && model.id() == self.rgb.id();
+            // With `rgb_percent` the R, G and B rows count percents of the channel's range; an edit goes back through
+            // `scale`.
+            let percent = rgb && rgb_percent;
             let scale = if percent { 100.0 / *rule.range.end() } else { 1.0 };
             let unit = if percent { ChannelUnit::Percent } else { ChannelUnit::of(ch.unit) };
             if percent {
@@ -1183,8 +1201,17 @@ impl Body<'_> {
             // The field shows the channel's places, as Photoshop's; the edits start from the unrounded values.
             let places = 10f64.powi(i32::from(rule.decimals));
             let shown = (f64::from(current.values[i]) * scale * places).round() / places;
-            let row = ChannelRow::new(channel_name(model, i, &[model]), Bind::given(shown), rule).short(ch.label).unit(unit).track(track).show(ui);
-            for event in row.into_iter().flat_map(|row| row.events) {
+            let row = ChannelRow::new(channel_name(model, i, &[model]), Bind::given(shown), rule).short(ch.label).unit(unit).track(track);
+            let edit = if rgb && self.rgb_units {
+                let row = row.show_with_units(ui);
+                if row.units_double_clicked {
+                    self.now.rgb_percent = !rgb_percent;
+                }
+                row.edit
+            } else {
+                row.show(ui)
+            };
+            for event in edit.into_iter().flat_map(|row| row.events) {
                 self.channel_event(model, current, i, event.map(|x| x / scale));
             }
         }
