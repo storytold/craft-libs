@@ -3,17 +3,30 @@
 //! The strip fits, places and runs the items; this file gives each item its two faces (with its label, and icon only),
 //! its measure for the fit, its part's state and its menu.
 
+use crate::buttons::icon_button::IconButtonStyle;
 use crate::buttons::{Button, IconButton};
 use crate::contract::{Component, Entry, MeasureCx, PaintUi, Props as _};
 use crate::menu::entry_rows;
 use crate::primitives::IconSpec;
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
-use crate::style::StyleCx;
+use crate::style::{ComponentStyle as _, StyleCx};
 use craft_behavior::PartRef;
 use craft_behavior::fit::{FitItem, FitKeep};
-use craft_theme::Variant;
+use craft_theme::{Variant, variant::Emphasis};
 use egui::Ui;
+
+/// The look of the icon-only face for an end's variant: the end's tone as an icon button's ghost look, since an icon
+/// button has no filled or outlined faces; a look it has no ghost of gives the neutral one.
+fn icon_variant(variant: Variant) -> Variant {
+    match variant {
+        Variant::Look { tone, .. } => {
+            let ghost = Variant::look(Emphasis::Ghost, tone);
+            if IconButtonStyle::VARIANTS.contains(&ghost) { ghost } else { Variant::GHOST }
+        }
+        _ => Variant::GHOST,
+    }
+}
 
 /// What an end item does when pressed.
 #[derive(Clone)]
@@ -84,7 +97,7 @@ impl<'a> StripEnd<'a> {
 
     /// The face with the icon only; the label stays its name and tooltip.
     fn short_face(&self) -> IconButton<'a> {
-        let face = IconButton::new(self.icon.clone()).variant(self.variant);
+        let face = IconButton::new(self.icon.clone()).variant(icon_variant(self.variant));
         match self.command_ref() {
             Some(command) => face.command(command.clone()).label(self.label.clone()),
             None => face.label(self.label.clone()),
@@ -114,5 +127,20 @@ impl<'a> StripEnd<'a> {
         let EndAction::Menu(entries) = &self.action else { return None };
         let ran = entry_rows(ui, entries)?;
         entries.get(ran)?.value().cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use craft_theme::variant::Tone;
+
+    #[test]
+    fn the_icon_face_takes_a_look_an_icon_button_accepts() {
+        for variant in [Variant::SECONDARY, Variant::PRIMARY, Variant::DANGER, Variant::GHOST, Variant::look(Emphasis::Soft, Tone::Accent)] {
+            assert!(IconButtonStyle::VARIANTS.contains(&icon_variant(variant)), "{variant:?}");
+        }
+        assert_eq!(icon_variant(Variant::SECONDARY), Variant::GHOST);
+        assert_eq!(icon_variant(Variant::DANGER), Variant::look(Emphasis::Ghost, Tone::Bad));
     }
 }
