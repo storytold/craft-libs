@@ -100,6 +100,12 @@ fn op_cost(op: &Opcode, w: usize, h: usize, cpp: usize) -> usize {
 }
 
 pub fn apply_list(list: &[Opcode], buf: &mut [f32], w: usize, h: usize, cpp: usize, cfa: Option<&Cfa>, scale: f32) {
+    apply_list_capped(list, buf, w, h, cpp, cfa, scale, MAX_BAD_PIXELS);
+}
+
+/// [`apply_list`] with each bad-pixel opcode repairing at most `max_bad_pixels` pixels.
+#[allow(clippy::too_many_arguments)]
+fn apply_list_capped(list: &[Opcode], buf: &mut [f32], w: usize, h: usize, cpp: usize, cfa: Option<&Cfa>, scale: f32, max_bad_pixels: usize) {
     let mut budget = w.saturating_mul(h).saturating_mul(cpp).max(1).saturating_mul(MAX_LIST_PASSES);
     for op in list {
         let cost = op_cost(op, w, h, cpp);
@@ -175,17 +181,17 @@ pub fn apply_list(list: &[Opcode], buf: &mut [f32], w: usize, h: usize, cpp: usi
             Opcode::FixBadPixelsConstant { constant, .. } => {
                 let c = (*constant as f64 / 65535.0 * scale as f64) as f32;
                 let bad: Vec<(usize, usize)> =
-                    (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| cpp == 1 && buf[y * w + x] == c).take(MAX_BAD_PIXELS).collect();
+                    (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| cpp == 1 && buf[y * w + x] == c).take(max_bad_pixels).collect();
                 fix_pixels(buf, w, h, cpp, cfa, &bad);
             }
             Opcode::FixBadPixelsList { points, rects, .. } => {
                 let mut bad: Vec<(usize, usize)> =
-                    points.iter().map(|&(r, c)| (c as usize, r as usize)).filter(|&(x, y)| x < w && y < h).take(MAX_BAD_PIXELS).collect();
+                    points.iter().map(|&(r, c)| (c as usize, r as usize)).filter(|&(x, y)| x < w && y < h).take(max_bad_pixels).collect();
                 'rects: for r in rects {
                     let [t, l, b, rr] = r.map(|v| v as usize);
                     for y in t..b.min(h) {
                         for x in l..rr.min(w) {
-                            if bad.len() >= MAX_BAD_PIXELS {
+                            if bad.len() >= max_bad_pixels {
                                 break 'rects;
                             }
                             bad.push((x, y));

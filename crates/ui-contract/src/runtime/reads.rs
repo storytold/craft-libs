@@ -1,0 +1,203 @@
+//! The read record: which components read which binding, inspection record or command state in the running pass, in
+//! which run kind, and what their measure took. An edit reruns the pass only when this record shows an earlier reader
+//! its change would make stale.
+
+use crate::runtime::egui::pass;
+use crate::runtime::frame::{PerViewport, Stamped};
+use crate::runtime::layout_memory::{self, Contribution};
+use craft_behavior::Proposal;
+use egui::{Context, Id, Vec2};
+use smallvec::SmallVec;
+use std::any::TypeId;
+use std::sync::Arc;
+
+/// The identity of a binding's value across the components of one pass: the bound place, or where a kept value
+/// lives. A given value has none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum BindKey {
+    /// A write-through place: its address and the type stored there. An address names the place in its pass only:
+    /// a record kept for a later pass keeps no such read.
+    Place(usize, TypeId),
+    /// A field of a `Tracked` value (`bind_tracked!`) or a story value: the value's source id, the field's offset in
+    /// it, its size and its type.
+    Tracked(u64, usize, usize, TypeId),
+    /// Session memory under this component id.
+    Kept(Id),
+    /// The saved tier under the key with this hash.
+    Saved(Id),
+    /// An inspection record, or the element its list points at, under this key.
+    Record(Id),
+    /// A command's state on the board: the command's number and the instance whose state it is, `None` for the app's.
+    Command(u32, Option<Id>),
+    /// A command the focused stop answers for (an edit it takes): the command's number.
+    FocusedEdit(u32),
+}
+
+impl BindKey {
+    /// Whether an edit of `self` changes the value a reader of `read` read: the same value, or, within one source, a
+    /// value whose span overlaps the edited one's. A whole story value's edit changes each field of it a story binds
+    /// (`StoryData::value_at`), and a field's edit changes the whole value the Properties editor reads.
+    pub(crate) fn reaches(self, read: BindKey) -> bool {
+        match (self, read) {
+            (BindKey::Tracked(source, offset, size, _), BindKey::Tracked(read_source, at, read_size, _)) if size > 0 && read_size > 0 => {
+                source == read_source && (at.wrapping_sub(offset) < size || offset.wrapping_sub(at) < read_size)
+            }
+            _ => self == read,
+        }
+    }
+}
+
+/// One measure a reader made from the value it read: what it was offered and the size it took.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Sample {
+    pub proposal: Proposal,
+    pub room: Option<f32>,
+    pub took: Vec2,
+}
+
+crate::stays!(Read);
+
+#[derive(Clone, Debug, PartialEq)]
+struct Read {
+    key: BindKey,
+    reader: Id,
+    measuring: bool,
+    /// The measuring runs the read happened in, outermost first: the measured components' ids.
+    runs: Vec<Id>,
+    samples: Samples,
+}
+
+/// The measures a reader made from one read: its ideal size, and its least in a label scope.
+type Samples = SmallVec<[Sample; 2]>;
+
+#[derive(Default)]
+pub(crate) struct Reads {
+    reads: Vec<Read>,
+}
+
+/// The measuring runs in progress, outermost first: each opened and closed by [`measuring`].
+#[derive(Default)]
+pub(crate) struct Runs(Vec<Id>);
+
+fn with<R>(ctx: &Context, f: impl FnOnce(&mut Reads) -> R) -> R {
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    PerViewport::<Stamped<Reads>>::with_pass(ctx, viewport, pass_nr, |reads, _| *reads = Reads::default(), f)
+}
+
+fn with_runs<R>(ctx: &Context, f: impl FnOnce(&mut Vec<Id>) -> R) -> R {
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    PerViewport::<Stamped<Runs>>::with_pass(ctx, viewport, pass_nr, |runs, _| *runs = Runs::default(), |runs| f(&mut runs.0))
+}
+
+/// Runs `f` as the measuring run of the component `id`: the reads inside it are attributed to it.
+pub(crate) fn measuring<R>(ctx: &Context, id: Id, f: impl FnOnce() -> R) -> R {
+    let depth = with_runs(ctx, |runs| {
+        runs.push(id);
+        runs.len() - 1
+    });
+    let out = f();
+    with_runs(ctx, |runs| runs.truncate(depth));
+    out
+}
+
+/// Notes that `reader` read the binding `key`, in a measuring run when `measuring`, and the measures it made from it.
+/// A read in a measuring run is handed forward through layout memory, so a pass that takes the body's kept
+/// transcript instead of running it holds the read as well. Only a measuring read is attributed to the measuring runs
+/// open at it; nothing asks which runs a real read was inside.
+pub(crate) fn note(ctx: &Context, key: BindKey, reader: Id, measuring: bool, samples: &[Sample]) {
+    let runs = if measuring { with_runs(ctx, |runs| runs.clone()) } else { Vec::new() };
+    let samples = Samples::from_slice(samples);
+    if measuring && crate::runtime::measure::active(ctx) {
+        // The records open around a measuring run (a measure-only child's) hold the read too.
+        crate::runtime::replay::note_read(ctx, key);
+        layout_memory::contribute(ctx, Arc::new(MeasuredRead { key, reader, runs, samples }));
+    } else {
+        let read = Read { key, reader, measuring, runs, samples };
+        crate::runtime::replay::note_read(ctx, key);
+        // The reads are a set to what reads them: a run that measures a component again (a kept transcript's check)
+        // reads nothing new. A place's address names it in this pass only: a replay in a later pass notes no such read.
+        if !matches!(key, BindKey::Place(..)) {
+            crate::runtime::replay::journal_distinct(ctx, || read.clone(), |ctx, read| with(ctx, |reads| reads.reads.push(read.clone())));
+        }
+        with(ctx, |reads| reads.reads.push(read));
+    }
+}
+
+/// A read a measuring run made, as its body's transcript keeps it.
+struct MeasuredRead {
+    key: BindKey,
+    reader: Id,
+    /// The measuring runs open at the read, outermost first.
+    runs: Vec<Id>,
+    samples: Samples,
+}
+
+impl Contribution for MeasuredRead {
+    fn apply(&self, ctx: &Context) {
+        // Made again from a kept transcript, inside the measuring run of the body that keeps it: the runs open now,
+        // then those the read was inside within that body.
+        let runs: Vec<Id> = with_runs(ctx, |open| {
+            let inner = open.last().and_then(|body| self.runs.iter().rposition(|id| id == body)).map_or(0, |at| at + 1);
+            open.iter().chain(&self.runs[inner..]).copied().collect()
+        });
+        with(ctx, |reads| {
+            reads.reads.push(Read { key: self.key, reader: self.reader, measuring: true, runs, samples: self.samples.clone() });
+        });
+    }
+
+    fn report(&self) -> Option<(Id, f32)> {
+        None
+    }
+
+    fn undo(&self, ctx: &Context) -> layout_memory::TakeBack {
+        let made = with(ctx, |reads| reads.reads.len());
+        Box::new(move |ctx| with(ctx, |reads| reads.reads.truncate(made)))
+    }
+}
+
+/// The reads of a binding made so far in this pass, as an edit of it by one component sees them.
+#[derive(Default)]
+pub(crate) struct EarlierReads {
+    /// Another component read it, in a real or a measuring run.
+    pub other: bool,
+    /// The editor read it in a measuring run.
+    pub measured: bool,
+    /// The measures the editor made from the value it read, each once.
+    pub samples: Vec<Sample>,
+}
+
+/// The reads `key` reaches (`BindKey::reaches`) made so far in this pass, as `editor`'s edit of it sees them.
+pub(crate) fn earlier(ctx: &Context, key: BindKey, editor: Id) -> EarlierReads {
+    with(ctx, |reads| {
+        let mut earlier = EarlierReads::default();
+        for read in reads.reads.iter().filter(|read| key.reaches(read.key)) {
+            if read.reader != editor {
+                earlier.other = true;
+                continue;
+            }
+            earlier.measured |= read.measuring;
+            for sample in &read.samples {
+                if !earlier.samples.contains(sample) {
+                    earlier.samples.push(*sample);
+                }
+            }
+        }
+        earlier
+    })
+}
+
+/// The bindings read inside the measuring runs of `body` in this pass, nested measuring runs included.
+#[expect(dead_code, reason = "the measure reuse of a body reads it")]
+pub(crate) fn measured(ctx: &Context, body: Id) -> Vec<BindKey> {
+    with(ctx, |reads| {
+        let mut keys = Vec::new();
+        for read in reads.reads.iter().filter(|read| read.measuring && read.runs.contains(&body)) {
+            if !keys.contains(&read.key) {
+                keys.push(read.key);
+            }
+        }
+        keys
+    })
+}

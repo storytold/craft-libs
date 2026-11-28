@@ -33,13 +33,15 @@ pub struct Lexer<'a> {
     pub pos: usize,
     /// Objects built by the current top-level [`Lexer::object`] call.
     nodes: usize,
+    /// Maximum objects one top-level [`Lexer::object`] call may build.
+    max_nodes: usize,
     /// Whether the current top-level [`Lexer::object`] call reached [`MAX_DEPTH`].
     too_deep: bool,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(data: &'a [u8], pos: usize) -> Self {
-        Self { data, pos: pos.min(data.len()), nodes: 0, too_deep: false }
+        Self { data, pos: pos.min(data.len()), nodes: 0, max_nodes: MAX_NODES, too_deep: false }
     }
 
     fn peek(&self) -> Option<u8> {
@@ -97,7 +99,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn over_budget(&self) -> bool {
-        self.nodes > MAX_NODES
+        self.nodes > self.max_nodes
     }
 
     /// Whether the last [`Lexer::object`] call failed because the object nests deeper than the
@@ -972,18 +974,36 @@ mod tests {
 
     #[test]
     fn one_object_has_a_node_budget() {
-        // A wide array (from a tiny compressed object stream) must not grow without bound.
-        let wide = |n: usize| format!("[{}]", "0 ".repeat(n));
-        let at_cap = Lexer::new(wide(MAX_NODES - 1).as_bytes(), 0).object();
-        assert!(matches!(at_cap, Ok(Object::Array(ref items)) if items.len() == MAX_NODES - 1));
-        assert!(Lexer::new(wide(MAX_NODES).as_bytes(), 0).object().is_err());
-        // The same inside a dictionary value and behind tolerated junk.
-        assert!(Lexer::new(format!("<< /A {} >>", wide(MAX_NODES)).as_bytes(), 0).object().is_err());
-        assert!(Lexer::new(format!("[[{}] ]", "0 ".repeat(MAX_NODES)).as_bytes(), 0).object().is_err());
-        // The budget is per top-level object: a lexer reused for many operands keeps working.
-        let two = wide(MAX_NODES - 1).repeat(2);
-        let mut lx = Lexer::new(two.as_bytes(), 0);
-        assert!(lx.object().is_ok() && lx.object().is_ok());
+        fn capped(data: &[u8], max: usize) -> Lexer<'_> {
+            let mut lx = Lexer::new(data, 0);
+            if max != MAX_NODES {
+                lx.max_nodes = max;
+            }
+            lx
+        }
+
+        assert_eq!(MAX_NODES, 1 << 22);
+        // Exercise every budget path with small inputs in the gate; nightly also keeps the real cap.
+        // wasm32 has no divisor and always runs the gate's part.
+        #[cfg(not(target_arch = "wasm32"))]
+        let full = craft_testkit::hostile::divisor() == 1;
+        #[cfg(target_arch = "wasm32")]
+        let full = false;
+        let caps = [1000].into_iter().chain(full.then_some(MAX_NODES));
+        for max in caps {
+            // A wide array (from a tiny compressed object stream) must not grow without bound.
+            let wide = |n: usize| format!("[{}]", "0 ".repeat(n));
+            let at_cap = capped(wide(max - 1).as_bytes(), max).object();
+            assert!(matches!(at_cap, Ok(Object::Array(ref items)) if items.len() == max - 1));
+            assert!(capped(wide(max).as_bytes(), max).object().is_err());
+            // The same inside a dictionary value and a nested array.
+            assert!(capped(format!("<< /A {} >>", wide(max)).as_bytes(), max).object().is_err());
+            assert!(capped(format!("[[{}] ]", "0 ".repeat(max)).as_bytes(), max).object().is_err());
+            // The budget is per top-level object: a lexer reused for many operands keeps working.
+            let two = wide(max - 1).repeat(2);
+            let mut lx = capped(two.as_bytes(), max);
+            assert!(lx.object().is_ok() && lx.object().is_ok());
+        }
     }
 
     /// A plain real is read without a cleaned copy of its token; the forms that need one read

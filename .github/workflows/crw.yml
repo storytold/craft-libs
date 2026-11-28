@@ -52,14 +52,23 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-      - name: Cache the CC0 sample files
-        uses: actions/cache@v6.1.0
+      # Pull requests restore the entry main saved and never write their own: the same
+      # files saved once per pull request took a share of the 10 GB cache budget.
+      - name: Restore the CC0 sample files
+        id: samples
+        uses: actions/cache/restore@v6.1.0
         with:
           path: ${{ runner.temp }}/crw-samples
           key: crw-samples-${{ hashFiles('crates/crw/tests/samples.json') }}
       - name: Fetch the pinned CC0 sample files (raw.pixls.us)
         run: python scripts/fetch-crw-samples.py "$RUNNER_TEMP/crw-samples"
-      - run: cargo test -p craft-crw --release --locked --test samples -- --nocapture
+      - name: Save the CC0 sample files
+        if: github.event_name != 'pull_request' && steps.samples.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: ${{ runner.temp }}/crw-samples
+          key: ${{ steps.samples.outputs.cache-primary-key }}
+      - run: cargo test -p craft-crw --release --locked --lib -- integration::samples --nocapture
         env:
           CRAFT_CRW_SAMPLES: ${{ runner.temp }}/crw-samples
           CRAFT_CRW_REQUIRE_SAMPLES: "1"

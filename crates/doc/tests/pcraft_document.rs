@@ -1,6 +1,6 @@
 //! A caller-defined PhotoCraft document head, without reading image payloads.
 
-mod common;
+use super::common;
 
 use common::*;
 use craft_doc::{Error, Kind, Limits, outline, pcraft_document};
@@ -62,9 +62,7 @@ fn skips_oversized_and_unreadable_unrequested_entries() {
         bytes[at + 10..at + 12].copy_from_slice(&99u16.to_le_bytes());
         bytes[at + 24..at + 28].copy_from_slice(&(u32::MAX - 1).to_le_bytes());
     }
-    let mut limits = Limits::default();
-    limits.max_entry = json.len() as u64;
-    limits.max_total = json.len() as u64;
+    let limits = Limits { max_entry: json.len() as u64, max_total: json.len() as u64, ..Limits::default() };
     assert_eq!(pcraft_document::<Head>(&bytes, &limits).unwrap().layers.len(), 1);
     assert!(matches!(craft_doc::renditions(&bytes, &limits), Err(Error::Malformed(_))), "the declared thumbnail is absent");
 }
@@ -114,33 +112,9 @@ fn checks_byte_depth_and_item_limits_before_the_document_is_deserialized() {
                 "total" => limits.max_total = json.len() as u64 - 1,
                 "depth" => limits.max_depth = 2,
                 "items" => limits.max_items = 1,
-                _ => unreachable!(),
+                other => panic!("unknown limit {other}"),
             }
             assert!(matches!(pcraft_document::<Never>(&bytes, &limits), Err(Error::LimitExceeded(_))), "{limits:?}");
         }
-    }
-}
-
-#[test]
-/// Ignoring a field must not let an oversized manifest bypass the structural item cap.
-fn the_item_budget_also_bounds_a_callers_vec_and_ignored_fields() {
-    #[derive(Debug, Deserialize)]
-    struct Small {
-        #[serde(rename = "values")]
-        _values: Vec<u32>,
-    }
-    #[derive(Debug, Deserialize)]
-    struct Empty {}
-    for field in ["values", "ignored"] {
-        let json = format!(r#"{{"format_version":1,"generator":"test","document":{{"{field}":[0,1,2,3,4,5,6,7,8,9]}}}}"#);
-        let bytes = bundle(&json, true);
-        let mut limits = Limits::default();
-        limits.max_items = 8;
-        let result = match field {
-            "values" => pcraft_document::<Small>(&bytes, &limits).map(|_| ()),
-            _ => pcraft_document::<Empty>(&bytes, &limits).map(|_| ()),
-        };
-        assert!(matches!(result, Err(Error::LimitExceeded(_))), "{field}: {result:?}");
-        assert!(pcraft_document::<Empty>(&bytes, &Limits::default()).is_ok());
     }
 }

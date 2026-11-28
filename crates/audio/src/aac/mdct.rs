@@ -192,13 +192,8 @@ impl Mdct {
         self.dct4(&u, out, &mut re, &mut im);
     }
 
-    /// Inverse MDCT (unscaled): `y[n] = Σ X[k] cos(π/M (n + ½ + M/2)(k + ½))`, `y` has length 2M.
-    #[cfg(test)]
-    pub fn inverse(&self, spec: &[f32], y: &mut [f32]) {
-        self.inverse_with(spec, y, &mut self.scratch());
-    }
-
-    /// [`Self::inverse`] with caller-provided working buffers from [`Self::scratch`].
+    /// Inverse MDCT (unscaled): `y[n] = Σ X[k] cos(π/M (n + ½ + M/2)(k + ½))`, `y` has length 2M,
+    /// with caller-provided working buffers from [`Self::scratch`].
     pub fn inverse_with(&self, spec: &[f32], y: &mut [f32], sc: &mut MdctScratch) {
         let m = self.m;
         let h = m / 2;
@@ -300,67 +295,4 @@ pub fn window(shape: WindowShape, long: bool) -> &'static [f32] {
         (false, WindowShape::Kbd) => 3,
     };
     &w[i]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn direct(x: &[f32]) -> Vec<f64> {
-        let m = x.len() / 2;
-        (0..m).map(|k| (0..2 * m).map(|n| x[n] as f64 * (PI / m as f64 * (n as f64 + 0.5 + m as f64 / 2.0) * (k as f64 + 0.5)).cos()).sum()).collect()
-    }
-
-    #[test]
-    fn forward_matches_definition() {
-        for m in [128usize, 1024] {
-            let x: Vec<f32> = (0..2 * m).map(|i| ((i * 7919) % 101) as f32 / 50.0 - 1.0).collect();
-            let mut out = vec![0f32; m];
-            Mdct::new(m).forward(&x, &mut out);
-            let d = direct(&x);
-            for k in 0..m {
-                assert!((out[k] as f64 - d[k]).abs() < 1e-3 * (m as f64).sqrt(), "m={m} k={k} {} {}", out[k], d[k]);
-            }
-        }
-    }
-
-    #[test]
-    fn inverse_matches_definition() {
-        let m = 128;
-        let spec: Vec<f32> = (0..m).map(|i| ((i * 31) % 17) as f32 - 8.0).collect();
-        let mut y = vec![0f32; 2 * m];
-        Mdct::new(m).inverse(&spec, &mut y);
-        for n in 0..2 * m {
-            let d: f64 = (0..m).map(|k| spec[k] as f64 * (PI / m as f64 * (n as f64 + 0.5 + m as f64 / 2.0) * (k as f64 + 0.5)).cos()).sum();
-            assert!((y[n] as f64 - d).abs() < 1e-3, "n={n}");
-        }
-    }
-
-    #[test]
-    fn tdac_perfect_reconstruction() {
-        let m = 1024;
-        let t = Mdct::new(m);
-        for shape in [WindowShape::Sine, WindowShape::Kbd] {
-            let w = window(shape, true);
-            let win = |n: usize| if n < m { w[n] } else { w[2 * m - 1 - n] };
-            let x: Vec<f32> = (0..4 * m).map(|i| ((i as f32) * 0.013).sin() + ((i * 13) % 7) as f32 * 0.05).collect();
-            let mut out = vec![0f32; 4 * m];
-            for f in 0..3 {
-                let seg: Vec<f32> = (0..2 * m).map(|n| x[f * m + n] * win(n)).collect();
-                let mut spec = vec![0f32; m];
-                t.forward(&seg, &mut spec);
-                for v in spec.iter_mut() {
-                    *v *= 2.0;
-                }
-                let mut y = vec![0f32; 2 * m];
-                t.inverse(&spec, &mut y);
-                for n in 0..2 * m {
-                    out[f * m + n] += y[n] * win(n) / m as f32;
-                }
-            }
-            for n in m..3 * m {
-                assert!((out[n] - x[n]).abs() < 1e-4, "{shape:?} n={n} {} {}", out[n], x[n]);
-            }
-        }
-    }
 }

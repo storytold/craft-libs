@@ -338,25 +338,30 @@ fn blank_g4(h: u32) -> Vec<u8> {
 
 #[test]
 fn a_blank_fax_page_wider_than_4096_px_passes_the_bomb_guard() {
-    // A blank 600 dpi page (A4 landscape, A3) codes each row in one bit, past 4096:1: it must
-    // open, with or without the metadata and other pages that used to raise the bound.
-    for (w, h) in [(7016u32, 4961u32), (7016, 9921)] {
-        let mut d = Dir { entries: base(w, h, 1, 1, 0), chunks: vec![blank_g4(h)], tiled: false }.tag(278, LONG, &[u64::from(h)]);
-        d.entries.retain(|e| e.0 != 259);
-        let d = d.tag(259, SHORT, &[4]);
-        let pages: Vec<Dir> = (0..3).map(|_| d.clone()).collect();
-        for (what, bytes) in
-            [("one page", build(true, false, std::slice::from_ref(&d), &[0]).bytes), ("three pages", build(true, false, &pages, &[0, 1, 2]).bytes)]
-        {
-            let img = decode(&bytes).unwrap_or_else(|e| panic!("{w}x{h} {what}: {e}"));
-            assert_eq!(img.dimensions(), (w, h), "{what}");
-            assert!(img.data().iter().all(|&v| v == 255), "{w}x{h} {what}: not white");
-        }
-    }
-    let mut d = Dir { entries: base(7016, 4961, 1, 1, 0), chunks: vec![blank_g4(4961)], tiled: false }.tag(278, LONG, &[4961]);
+    // A blank page codes each row in one bit, so a row wider than 4096 pixels is past 4096:1: it
+    // must open, with or without the metadata and other pages that used to raise the bound. The
+    // page has enough rows to hold more than the guard's fixed 1 MiB of slack: (w - 4096) * h / 8
+    // bytes past 4096:1, so a wider page needs fewer pixels. The gate decodes the one-page file;
+    // nightly also the two-page file and the banded decode.
+    let full = craft_media_testkit::hostile::divisor() == 1;
+    let (w, h) = (60_000u32, 160u32);
+    let mut d = Dir { entries: base(w, h, 1, 1, 0), chunks: vec![blank_g4(h)], tiled: false }.tag(278, LONG, &[u64::from(h)]);
     d.entries.retain(|e| e.0 != 259);
-    let bytes = build(true, false, &[d.tag(259, SHORT, &[4])], &[0]).bytes;
-    assert!(banded(&bytes, None, &Limits::banded(), true).unwrap().data() == decode(&bytes).unwrap().data());
+    let d = d.tag(259, SHORT, &[4]);
+    let one_page = build(true, false, std::slice::from_ref(&d), &[0]).bytes;
+    let mut files = vec![("one page", one_page.clone())];
+    if full {
+        let pages: Vec<Dir> = (0..2).map(|_| d.clone()).collect();
+        files.push(("two pages", build(true, false, &pages, &[0, 1]).bytes));
+    }
+    for (what, bytes) in files {
+        let img = decode(&bytes).unwrap_or_else(|e| panic!("{w}x{h} {what}: {e}"));
+        assert_eq!(img.dimensions(), (w, h), "{what}");
+        assert!(img.data().iter().all(|&v| v == 255), "{w}x{h} {what}: not white");
+    }
+    if full {
+        assert!(banded(&one_page, None, &Limits::banded(), true).unwrap().data() == decode(&one_page).unwrap().data());
+    }
     // Still a bound: 100 bytes of Group 4 can't hold that page (4096:1 for Group 3, which is not decoded).
     for compression in [4, 3] {
         let mut d = Dir { entries: base(7016, 4961, 1, 1, 0), chunks: vec![vec![0x80; 100]], tiled: false }.tag(278, LONG, &[4961]);

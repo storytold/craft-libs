@@ -1,7 +1,7 @@
 //! Histograms of display-encoded images (what the Histogram panel shows).
 //!
 //! An HDR histogram ([`Histogram::of_hdr`]) keeps the same 256 bins: the first
-//! [`Histogram::hdr_from`] cover SDR black to SDR white (sRGB-encoded, as an SDR histogram), the
+//! `Histogram::hdr_from` cover SDR black to SDR white (sRGB-encoded, as an SDR histogram), the
 //! rest cover the HDR range above SDR white in equal stops.
 
 use serde::Serialize;

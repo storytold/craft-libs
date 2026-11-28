@@ -525,7 +525,8 @@ mod tests {
             let clean = std::sync::Arc::new(FailOnce { bytes: bytes.clone(), fail_at: usize::MAX, reads: 0.into() });
             PsdFile::from_source(Source::from_arc(clean.clone())).unwrap();
             let reads = clean.reads.load(std::sync::atomic::Ordering::SeqCst);
-            for fail_at in 0..reads {
+            // The gate fails every divisor-th read; nightly fails each one.
+            for fail_at in (0..reads).step_by(craft_testkit::hostile::divisor()) {
                 let src = FailOnce { bytes: bytes.clone(), fail_at, reads: 0.into() };
                 match PsdFile::from_source(Source::new(src)) {
                     Err(PsdError::Read(_)) => {}

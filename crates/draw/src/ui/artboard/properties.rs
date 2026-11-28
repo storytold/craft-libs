@@ -1,0 +1,123 @@
+//! [`ArtboardProperties`]: an artboard's section in the Properties panel.
+
+use super::background::background_cells;
+use super::bar::SIDE;
+use super::{ArtboardBackground, ArtboardItem, ArtboardPreset, ArtboardWords};
+use craft_behavior::EditEvents;
+use craft_behavior::kurbo::Rect;
+use craft_ui::contract::{Bind, Entry, GlyphLabel, LabelKind, LabelScheme, NoValue, Outcome, Show as _, ShowContainer as _, SideLabel};
+use craft_ui::form::{Field, FieldGroup};
+use craft_ui::layout_components::Row;
+use craft_ui::pickers::Select;
+use craft_ui::runtime::env::{Env, Label, UnitKind};
+use craft_ui::runtime::requests::ColorRequest;
+use craft_ui::sections::Section;
+use craft_ui::text::NumberField;
+use egui::{Response, Ui};
+use std::ops::RangeInclusive;
+
+/// The range of X and Y, in pixels.
+const OFFSET: RangeInclusive<f64> = -300_000.0..=300_000.0;
+
+/// What [`ArtboardProperties::show`] reports.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct ArtboardPropertiesOutput {
+    /// The section's response.
+    pub response: Response,
+    /// The board's new rects, in order, from the preset, W, H, X or Y (a `Set`, or a caption scrub's gesture).
+    pub rect: EditEvents<Rect>,
+    /// A background picked from the select (White, Black or Transparent).
+    pub background: Option<ArtboardBackground>,
+    /// Other… was chosen, or the swatch of the custom colour was clicked: the app opens its colour picker with this
+    /// request (titled "Artboard Background Color") and sets `Custom(color)` from the answer.
+    pub pick_color: Option<ColorRequest>,
+    /// The index of the size preset picked from the Size select this pass.
+    pub preset: Option<usize>,
+}
+
+impl Outcome for ArtboardPropertiesOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
+/// The Artboard section: Size preset, W and H (1 to 300,000 px), X and Y (±300,000 px, all four in pixels) and
+/// Background (White, Black, Transparent, Other… with a swatch of the custom colour). Every field is a Tab stop in
+/// reading order.
+#[must_use = "show the section with `show`"]
+#[derive(craft_ui::contract::Pattern)]
+pub struct ArtboardProperties<'a> {
+    board: &'a ArtboardItem,
+    presets: &'a [ArtboardPreset],
+}
+
+impl<'a> ArtboardProperties<'a> {
+    /// The section of `board`, with the app's `presets`.
+    pub fn new(board: &'a ArtboardItem, presets: &'a [ArtboardPreset]) -> Self {
+        ArtboardProperties { board, presets }
+    }
+
+    /// Shows the section.
+    pub fn show(self, ui: &mut Ui) -> ArtboardPropertiesOutput {
+        let words = Env::of(ui).words::<ArtboardWords>();
+        let rect = self.board.rect.abs();
+        let (width, height) = (rect.width(), rect.height());
+        let background = self.board.background;
+        let mut rect_events = EditEvents::new();
+        let mut picked = None;
+        let mut pick_color = None;
+        let mut preset_picked = None;
+        let mut presets = vec![Entry::new(None, words.custom.clone())];
+        presets.extend(self.presets.iter().enumerate().map(|(i, preset)| Entry::new(Some(i), preset.name.clone())));
+        let section = Section::new(words.artboard.clone()).show(ui, |ui, _| {
+            FieldGroup::new(words.artboard.clone()).labels(LabelScheme::Inspector).show(ui, |ui, _| {
+                let current = self.presets.iter().position(|preset| preset.size.width == width && preset.size.height == height);
+                Field::new(words.size.clone()).show(ui, |ui, _| {
+                    let pick = Select::new(words.size.clone(), Bind::given(current), &presets).show(ui);
+                    if let Some(Some(i)) = pick.value().copied()
+                        && let Some(preset) = self.presets.get(i)
+                    {
+                        let moved = Rect::new(rect.x0, rect.y0, rect.x0 + preset.size.width, rect.y0 + preset.size.height);
+                        rect_events.extend(pick.events.map(|_| moved));
+                        preset_picked = Some(i);
+                    }
+                });
+                // A glyph-labelled number field; the pairs share a row, as W and H in the shape panel.
+                let field = |ui: &mut Ui, glyph: &Label, name: &Label, value: f64, range: &RangeInclusive<f64>| {
+                    let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::caption(glyph.clone()))).scrub(true);
+                    Field::new(name.clone())
+                        .side(side)
+                        .show(ui, |ui, _| {
+                            NumberField::new(name.clone(), Bind::given(Some(value)))
+                                .range(range.clone())
+                                .unit_kind(UnitKind::Pixels)
+                                .show(ui)
+                                .edit
+                                .events
+                        })
+                        .inner
+                        .unwrap_or_default()
+                };
+                let resized = |size: (f64, f64)| Rect::new(rect.x0, rect.y0, rect.x0 + size.0, rect.y0 + size.1);
+                let moved = |at: (f64, f64)| Rect::new(at.0, at.1, at.0 + width, at.1 + height);
+                Row::new().fill_width().show(ui, |ui, _| {
+                    rect_events.extend(field(ui, &words.width, &words.width_name, width, &SIDE).map(|v| resized((v.unwrap_or(width), height))));
+                    rect_events.extend(field(ui, &words.height, &words.height_name, height, &SIDE).map(|v| resized((width, v.unwrap_or(height)))));
+                });
+                Row::new().fill_width().show(ui, |ui, _| {
+                    rect_events.extend(field(ui, &words.x, &words.x, rect.x0, &OFFSET).map(|v| moved((v.unwrap_or(rect.x0), rect.y0))));
+                    rect_events.extend(field(ui, &words.y, &words.y, rect.y0, &OFFSET).map(|v| moved((rect.x0, v.unwrap_or(rect.y0)))));
+                });
+                Field::new(words.background.clone()).show(ui, |ui, _| {
+                    let cells = background_cells(ui, &words, background);
+                    picked = cells.picked;
+                    pick_color = cells.pick_color;
+                });
+            });
+        });
+        ArtboardPropertiesOutput { response: section.response.clone(), rect: rect_events, background: picked, pick_color, preset: preset_picked }
+    }
+}

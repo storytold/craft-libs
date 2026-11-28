@@ -1,0 +1,96 @@
+# API map of the "Keymap UI: words and import" family: old path to new path and setter renames.
+
+family = "Keymap UI: words and import"
+new_module = "craft_menu::shortcuts"
+
+[[type]]
+name = "ImportOffer"
+old = "craft_keymap::ui::ImportOffer"
+new = "craft_menu::shortcuts::ImportOffer"
+status = "moved"
+
+[[type]]
+name = "ImportOfferLabels"
+old = "craft_keymap::ui::ImportOfferLabels"
+new = ""
+status = "removed"
+note = "`ImportOfferWords` is the words table; `ImportOffer::labels` is `ImportOffer::words`."
+
+[[type]]
+name = "ImportOfferWords"
+old = ""
+new = "craft_menu::shortcuts::ImportOfferWords"
+status = "replaced"
+note = "A `words!` table with ids `importOffer.<camelCase>`; the `{app}`, `{set}`, `{n}` and `{error}` rows are templates filled with `fill`."
+
+[[type]]
+name = "NoOffer"
+old = "craft_keymap::ui::NoOffer"
+new = "craft_menu::shortcuts::NoOffer"
+status = "moved"
+
+[[type]]
+name = "OfferAnswer"
+old = "craft_keymap::ui::OfferAnswer"
+new = "craft_menu::shortcuts::OfferAnswer"
+status = "moved"
+
+[[type]]
+name = "OfferRecord"
+old = "craft_keymap::ui::OfferRecord"
+new = "craft_menu::shortcuts::OfferRecord"
+status = "moved"
+note = "Non-exhaustive: build one with `OfferRecord::new(source, imported)`."
+
+[[type]]
+name = "trigger_text"
+old = "craft_keymap::ui::trigger_text"
+new = "craft_menu::shortcuts::trigger_text"
+status = "moved"
+
+[[type]]
+name = "WORDS"
+old = "craft_keymap::ui::WORDS"
+new = ""
+status = "removed"
+note = "Words register themselves with `craft_ui::words!`; there is no list to hand to the catalog."
+
+[[type]]
+name = "COUNTS"
+old = "craft_keymap::ui::COUNTS"
+new = ""
+status = "removed"
+note = "The counts are `count` rows of `ShortcutWords`; they register themselves."
+
+[[type]]
+name = "kbd"
+old = "craft_keymap::ui::kbd"
+new = ""
+status = "removed"
+note = "`craft_ui::display::Kbd::chord` shows a chord; menu rows are command rows."
+
+[[type]]
+name = "DialogStyle"
+old = "craft_keymap::ui::DialogStyle"
+new = ""
+status = "removed"
+note = "The theme gives the looks: the keyboard pane's key colours are the accent, warning and error tones."
+
+[[type]]
+name = "text"
+old = "craft_keymap::import::kys::KysError::text"
+new = ""
+status = "removed"
+note = "`craft_menu::shortcuts::kys_error_text(&KysError, &ShortcutWords)` writes the sentence."
+
+[[type]]
+name = "kys_error_text"
+old = ""
+new = "craft_menu::shortcuts::kys_error_text"
+status = "replaced"
+note = "Writes the sentence `KysError::text` wrote, in the shortcut words: `kys_error_text(&KysError, &ShortcutWords)`."
+
+[[setter]]
+type = "trigger_text"
+old = "trigger_text(words: &Words, ..)"
+new = "trigger_text(words: &DisplayWords, ..), read with Env::of(ui).words::<DisplayWords>()"

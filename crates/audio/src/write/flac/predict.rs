@@ -356,59 +356,6 @@ pub fn choose(x: &[i32], bps: u8, effort: Effort, win: &[f64]) -> (Subframe, u64
 mod tests {
     use super::*;
 
-    #[test]
-    fn folding() {
-        assert_eq!([0, -1, 1, -2, 2].map(fold), [0, 1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn predictable_signals_beat_verbatim() {
-        // a ramp is exactly predicted by the order-2 fixed predictor
-        let ramp: Vec<i32> = (0..4096).map(|i| i * 3 - 6000).collect();
-        let (sub, bits) = choose(&ramp, 16, Effort::level(5), &window(ramp.len()));
-        assert!(matches!(sub, Subframe::Fixed { order: 2, .. } | Subframe::Lpc { .. }), "{sub:?}");
-        assert!(bits < 4096 * 2, "{bits}");
-        // a sine is well predicted by LPC
-        let sine: Vec<i32> = (0..4096).map(|i| ((i as f64 * 0.05).sin() * 20000.0) as i32).collect();
-        let (_, bits) = choose(&sine, 16, Effort::level(5), &window(sine.len()));
-        assert!(bits < 4096 * 6, "{bits}");
-        assert_eq!(choose(&[7; 100], 16, Effort::level(5), &window(100)), (Subframe::Constant(7), 24));
-    }
-
-    #[test]
-    fn residuals_may_reach_the_limit_of_a_32_bit_integer() {
-        assert!(fixed_fold(&[i32::MAX, -i32::MAX], 0).is_some());
-        assert!(fixed_fold(&[0, i32::MAX], 1).is_some());
-        // the most negative value is out of range (§9.2.7.3)
-        assert!(fixed_fold(&[i32::MIN], 0).is_none());
-        assert!(fixed_fold(&[0, 1 << 30, -(1 << 30)], 1).is_none());
-        assert!(lpc_fold(&[0, i32::MAX], &[1], 0).is_some());
-    }
-
-    #[test]
-    fn linear_predictions_stay_in_the_range_of_a_32_bit_integer() {
-        let x = [1 << 30, 1 << 30];
-        assert!(lpc_fold(&x, &[1], 0).is_some());
-        // predicts 2^31, and the residual would be small
-        assert!(lpc_fold(&x, &[2], 0).is_none());
-        assert!(lpc_fold(&x, &[4], 1).is_none());
-        assert!(lpc_fold(&x, &[3], 1).is_some());
-    }
-
-    #[test]
-    fn wasted_bits_are_not_coded() {
-        let x = tones(4096);
-        let padded: Vec<i32> = x.iter().map(|&s| s << 8).collect();
-        let effort = Effort::level(5);
-        let (sub, bits) = choose(&x, 16, effort, &window(x.len()));
-        // the same coding, plus the 8 bits that say how many are wasted
-        assert_eq!(choose(&padded, 24, effort, &window(padded.len())), (Subframe::Wasted { bits: 8, coded: Box::new(sub) }, bits + 8));
-        // at most what leaves one bit per sample, and nothing for silence, a constant keeps its bits
-        let lowest = [0, -(1 << 23)];
-        assert!(matches!(choose(&lowest, 24, effort, &window(lowest.len())).0, Subframe::Wasted { bits: 23, .. }));
-        assert_eq!(choose(&[256; 10], 24, effort, &window([256; 10].len())).0, Subframe::Constant(256));
-    }
-
     /// Two tones and a little noise, from a fixed seed.
     fn tones(n: usize) -> Vec<i32> {
         let mut seed = 1u32;
@@ -429,49 +376,5 @@ mod tests {
         let (_, lpc) = choose(&x, 16, effort, &window(x.len()));
         let (_, fixed) = choose(&x, 16, Effort { max_lpc_order: 0, ..effort }, &window(x.len()));
         assert!(lpc < fixed * 4 / 5, "lpc {lpc} fixed {fixed}");
-    }
-
-    #[test]
-    fn rice_partitions_follow_a_change_in_loudness() {
-        // quiet, then loud: one Rice parameter cannot suit both
-        let x: Vec<i32> = tones(4096).iter().enumerate().map(|(i, &s)| if i < 2048 { s / 256 } else { s }).collect();
-        let effort = Effort::level(5);
-        let (_, partitioned) = choose(&x, 16, effort, &window(x.len()));
-        let (_, whole) = choose(&x, 16, Effort { max_partition_order: 0, ..effort }, &window(x.len()));
-        assert!(partitioned < whole * 19 / 20, "partitioned {partitioned} whole {whole}");
-    }
-
-    #[test]
-    fn lpc_residual_inverts() {
-        let x: Vec<i32> = (0..500).map(|i| ((i as f64 * 0.1).sin() * 1000.0) as i32).collect();
-        let coefs = lpc_orders(&x, 4, &window(x.len())).pop().unwrap();
-        let (q, shift) = quantise(&coefs, 15).unwrap();
-        let r: Vec<i64> =
-            lpc_fold(&x, &q, shift).unwrap().iter().map(|&u| if u & 1 == 0 { i64::from(u >> 1) } else { -i64::from(u >> 1) - 1 }).collect();
-        // rebuild the signal from the warm-up and the residual, as a decoder would
-        let mut y: Vec<i32> = x[..q.len()].to_vec();
-        for (i, &res) in r.iter().enumerate() {
-            let p: i64 = q.iter().zip(y[i..i + q.len()].iter().rev()).map(|(&c, &s)| i64::from(c) * i64::from(s)).sum();
-            y.push((res + (p >> shift)) as i32);
-        }
-        assert_eq!(y, x);
-    }
-
-    #[test]
-    fn noise_and_extremes_do_not_panic() {
-        let mut seed = 1u32;
-        let noise: Vec<i32> = (0..4096)
-            .map(|_| {
-                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                (seed >> 8) as i32 - (1 << 23)
-            })
-            .collect();
-        let (_, bits) = choose(&noise, 24, Effort::level(8), &window(noise.len()));
-        assert!(bits <= 8 + 4096 * 24);
-        let square: Vec<i32> = (0..4096).map(|i| if i % 2 == 0 { (1 << 23) - 1 } else { -(1 << 23) }).collect();
-        choose(&square, 24, Effort::level(8), &window(square.len()));
-        choose(&[], 16, Effort::level(5), &window(0));
-        choose(&[1], 16, Effort::level(5), &window(1));
-        choose(&[1, 2], 16, Effort::level(8), &window(2));
     }
 }

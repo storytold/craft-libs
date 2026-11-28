@@ -8,7 +8,8 @@
 //! tag (namespace declarations, `mc:Ignorable`) and every child the model doesn't own are kept
 //! byte for byte; owned children come from the generated part (or go, when the model turned
 //! them off); owned children the original lacks are inserted at their CT_Settings position; in
-//! `w:compat` only the `compatibilityMode` setting is replaced. Kept children that refer to a
+//! `w:compat` only the switches the model writes and the `compatibilityMode` setting come from the
+//! generated part, and a block left empty goes. Kept children that refer to a
 //! relationship are dropped unless owned: mail merge is regenerated with remapped external
 //! sources by `mail_merge`. Anything unexpected returns `None`, and the generated part is written as before.
 
@@ -20,6 +21,8 @@ const OWNED: &[&str] = &[
     "w:displayBackgroundShape",
     "w:mirrorMargins",
     "w:gutterAtTop",
+    "w:hideSpellingErrors",
+    "w:hideGrammaticalErrors",
     "w:attachedTemplate",
     "w:linkStyles",
     "w:mailMerge",
@@ -230,29 +233,125 @@ fn children(xml: &str, root: &str) -> Option<(usize, usize, Vec<Child>)> {
     Some((open_end, close, out))
 }
 
-/// The original `w:compat` with its `compatibilityMode` taken from the generated one.
+/// The `w:compat` switches the model writes (`super::settings`).
+const OWNED_COMPAT_SWITCHES: &[&str] = &["w:doNotExpandShiftReturn", "w:doNotUseHTMLParagraphAutoSpacing", "w:allowSpaceOfSameStyleInTable"];
+
+/// CT_Compat's sequence (ECMA-376 §17.15.3.9), for placing inserted switches.
+const CT_COMPAT_ORDER: &[&str] = &[
+    "useSingleBorderforContiguousCells",
+    "wpJustification",
+    "noTabHangInd",
+    "noLeading",
+    "spaceForUL",
+    "noColumnBalance",
+    "balanceSingleByteDoubleByteWidth",
+    "noExtraLineSpacing",
+    "doNotLeaveBackslashAlone",
+    "ulTrailSpace",
+    "doNotExpandShiftReturn",
+    "spacingInWholePoints",
+    "lineWrapLikeWord6",
+    "printBodyTextBeforeHeader",
+    "printColBlack",
+    "wpSpaceWidth",
+    "showBreaksInFrames",
+    "subFontBySize",
+    "suppressBottomSpacing",
+    "suppressTopSpacing",
+    "suppressSpacingAtTopOfPage",
+    "suppressTopSpacingWP",
+    "suppressSpBfAfterPgBrk",
+    "swapBordersFacingPages",
+    "convMailMergeEsc",
+    "truncateFontHeightsLikeWP6",
+    "mwSmallCaps",
+    "usePrinterMetrics",
+    "doNotSuppressParagraphBorders",
+    "wrapTrailSpaces",
+    "footnoteLayoutLikeWW8",
+    "shapeLayoutLikeWW8",
+    "alignTablesRowByRow",
+    "forgetLastTabAlignment",
+    "adjustLineHeightInTable",
+    "autoSpaceLikeWord95",
+    "noSpaceRaiseLower",
+    "doNotUseHTMLParagraphAutoSpacing",
+    "layoutRawTableWidth",
+    "layoutTableRowsApart",
+    "useWord97LineBreakRules",
+    "doNotBreakWrappedTables",
+    "doNotSnapToGridInCell",
+    "selectFldWithFirstOrLastChar",
+    "applyBreakingRules",
+    "doNotWrapTextWithPunct",
+    "doNotUseEastAsianBreakRules",
+    "useWord2002TableStyleRules",
+    "growAutofit",
+    "useFELayout",
+    "useNormalStyleForList",
+    "doNotUseIndentAsNumberingTabStop",
+    "useAltKinsokuLineBreakRules",
+    "allowSpaceOfSameStyleInTable",
+    "doNotSuppressIndentation",
+    "doNotAutofitConstrainedTables",
+    "autofitToFirstFixedWidthCell",
+    "underlineTabInNumList",
+    "displayHangulFixedWidth",
+    "splitPgBreakAndParaMark",
+    "doNotVertAlignCellWithSp",
+    "doNotBreakConstrainedForcedTable",
+    "doNotVertAlignInTxbx",
+    "useAnsiKerningPairs",
+    "cachedColBalance",
+    "compatSetting",
+];
+
+/// Position of a `w:`-prefixed `w:compat` child in [`CT_COMPAT_ORDER`]; `None` for anything else.
+fn compat_rank(name: &str) -> Option<usize> {
+    let local = name.strip_prefix("w:")?;
+    CT_COMPAT_ORDER.iter().position(|n| *n == local)
+}
+
+/// Is this `w:compat` child Word's `compatibilityMode` setting?
+fn is_compat_mode(child: &str) -> bool {
+    let mut reader = quick_xml::Reader::from_str(child);
+    let Ok(quick_xml::events::Event::Start(e) | quick_xml::events::Event::Empty(e)) = reader.read_event() else { return false };
+    e.name().as_ref() == b"w:compatSetting"
+        && e.attributes().with_checks(false).flatten().any(|a| a.key.as_ref() == b"w:name" && a.value.as_ref() == b"compatibilityMode")
+}
+
+/// The original `w:compat` with what the model owns in it taken from the generated one (`""`
+/// when the model writes none): its switches, and the `compatibilityMode` setting. A block left
+/// without children goes (`""`).
 fn merge_compat(orig: &str, generated: &str) -> Option<String> {
-    let mode = |s: &str| -> Option<(usize, usize)> {
-        let at = s.find("w:name=\"compatibilityMode\"")?;
-        let tag_start = s.get(..at)?.rfind('<')?;
-        let tag_end = tag_start + s.get(tag_start..)?.find('>')? + 1;
-        Some((tag_start, tag_end))
+    let g_kids = children(generated, "w:compat").map(|(_, _, kids)| kids).unwrap_or_default();
+    let g_child = |pred: &dyn Fn(&Child, &str) -> bool| g_kids.iter().find_map(|k| generated.get(k.start..k.end).filter(|text| pred(k, text)));
+    let mut out = match orig.strip_suffix("/>") {
+        Some(open) => format!("{}></w:compat>", open.trim_end()),
+        None => orig.to_string(),
     };
-    match (mode(orig), mode(generated)) {
-        (Some((a, b)), Some((c, d))) => Some(format!("{}{}{}", orig.get(..a)?, generated.get(c..d)?, orig.get(b..)?)),
-        (None, Some((c, d))) => {
-            // No mode in the original: add the generated one before `</w:compat>`, or expand a self-closing `<w:compat/>`.
-            if let Some(close) = orig.rfind("</w:compat>") {
-                Some(format!("{}{}{}", orig.get(..close)?, generated.get(c..d)?, orig.get(close..)?))
-            } else if let Some(slash) = orig.rfind("/>") {
-                let open = orig.get(..slash)?.trim_end();
-                Some(format!("{open}>{}</w:compat>", generated.get(c..d)?))
-            } else {
-                None
-            }
+    for sw in OWNED_COMPAT_SWITCHES {
+        let (_, _, kids) = children(&out, "w:compat")?;
+        for k in kids.iter().rev().filter(|k| k.name == *sw) {
+            out.replace_range(k.start..k.end, "");
         }
-        _ => Some(orig.to_string()),
+        if let Some(g) = g_child(&|k, _| k.name == *sw) {
+            let (_, close, kids) = children(&out, "w:compat")?;
+            let rank = compat_rank(sw);
+            let at = kids.iter().find(|k| compat_rank(&k.name) > rank).map_or(close, |k| k.start);
+            out.insert_str(at, g);
+        }
     }
+    let (_, close, kids) = children(&out, "w:compat")?;
+    let o_mode = kids.iter().find(|k| out.get(k.start..k.end).is_some_and(is_compat_mode)).map(|k| k.start..k.end);
+    match (o_mode, g_child(&|_, text| is_compat_mode(text))) {
+        (Some(span), Some(g)) => out.replace_range(span, g),
+        (Some(span), None) => out.replace_range(span, ""),
+        (None, Some(g)) => out.insert_str(close, g),
+        (None, None) => {}
+    }
+    let (_, _, kids) = children(&out, "w:compat")?;
+    Some(if kids.is_empty() { String::new() } else { out })
 }
 
 /// Does `original` (a settings part) hold anything the model doesn't write? Then the reader keeps
@@ -356,11 +455,11 @@ pub fn merge(original: &[u8], generated: &[u8]) -> Option<Vec<u8>> {
                 out.push((k.name.clone(), g_text(g_kids.get(gi)?)?));
             }
         } else if k.name == "w:compat" {
-            let merged = match mark("w:compat", &mut used) {
-                Some(gi) => merge_compat(text, &g_text(g_kids.get(gi)?)?)?,
-                None => text.to_string(),
-            };
-            out.push((k.name.clone(), merged));
+            let g_compat = mark("w:compat", &mut used).and_then(|gi| g_text(g_kids.get(gi)?));
+            let merged = merge_compat(text, g_compat.as_deref().unwrap_or(""))?;
+            if !merged.is_empty() {
+                out.push((k.name.clone(), merged));
+            }
         } else if !text.contains("r:id=") {
             out.push((k.name.clone(), text.to_string()));
         }
@@ -472,5 +571,96 @@ mod tests {
         assert!(at("<w:mirrorMargins/>") < at("<w:gutterAtTop/>") && at("<w:gutterAtTop/>") < at("<w:proofState"), "{out}");
         // A file whose only extra setting is this one has nothing foreign to keep.
         assert!(!has_unowned(br#"<w:settings xmlns:w="w"><w:zoom w:percent="100"/><w:gutterAtTop/></w:settings>"#));
+    }
+
+    #[test]
+    fn compatibility_mode_removal_handles_paired_tags_quotes_and_whitespace() {
+        let gen_no_mode = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:zoom w:percent="100"/></w:settings>"#;
+
+        // Paired tag with closing </w:compatSetting>
+        let orig_paired = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"></w:compatSetting><w:compatSetting w:name="overrideTableStyleFontSizeAndJustification" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/></w:compat></w:settings>"#;
+        assert!(has_unowned(orig_paired.as_bytes()));
+        let out_paired = String::from_utf8(merge(orig_paired.as_bytes(), gen_no_mode.as_bytes()).unwrap()).unwrap();
+        assert!(!out_paired.contains("compatibilityMode"), "{out_paired}");
+        assert!(!out_paired.contains("</w:compatSetting>"), "{out_paired}");
+        assert!(out_paired.contains("overrideTableStyleFontSizeAndJustification"), "{out_paired}");
+
+        // Single quotes
+        let orig_single_quotes = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:compat><w:compatSetting w:name='compatibilityMode' w:uri='http://schemas.microsoft.com/office/word' w:val='15'/><w:compatSetting w:name="overrideTableStyleFontSizeAndJustification" w:val="1"/></w:compat></w:settings>"#;
+        let out_sq = String::from_utf8(merge(orig_single_quotes.as_bytes(), gen_no_mode.as_bytes()).unwrap()).unwrap();
+        assert!(!out_sq.contains("compatibilityMode"), "{out_sq}");
+        assert!(out_sq.contains("overrideTableStyleFontSizeAndJustification"), "{out_sq}");
+
+        // Whitespace around equals
+        let orig_spaces = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:compat><w:compatSetting w:name = "compatibilityMode" w:uri = "http://schemas.microsoft.com/office/word" w:val = "15"/><w:compatSetting w:name="overrideTableStyleFontSizeAndJustification" w:val="1"/></w:compat></w:settings>"#;
+        let out_sp = String::from_utf8(merge(orig_spaces.as_bytes(), gen_no_mode.as_bytes()).unwrap()).unwrap();
+        assert!(!out_sp.contains("compatibilityMode"), "{out_sp}");
+        assert!(out_sp.contains("overrideTableStyleFontSizeAndJustification"), "{out_sp}");
+
+        // Foreign vendor compatSetting element is preserved
+        let orig_foreign = r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="m" xmlns:r="r" xmlns:x="urn:vendor"><w:compat><x:compatSetting x:name="compatibilityMode" x:uri="urn:vendor" x:val="1"/><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>"#;
+        let gen_foreign =
+            r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:zoom w:percent="100"/></w:settings>"#;
+        let out_foreign = String::from_utf8(merge(orig_foreign.as_bytes(), gen_foreign.as_bytes()).unwrap()).unwrap();
+        assert!(out_foreign.contains("x:compatSetting"), "{out_foreign}");
+        assert!(!out_foreign.contains(r#"w:name="compatibilityMode""#), "{out_foreign}");
+    }
+
+    #[test]
+    fn repeated_compat_switches_are_all_removed_when_disabled_and_deduplicated_when_enabled() {
+        let orig_two = r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:compat><w:doNotExpandShiftReturn/><w:useFELayout/><w:doNotExpandShiftReturn/></w:compat></w:settings>"#;
+        // Disabled in generated: both must be removed
+        let gen_disabled =
+            r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:zoom w:percent="100"/></w:settings>"#;
+        let out_disabled = String::from_utf8(merge(orig_two.as_bytes(), gen_disabled.as_bytes()).unwrap()).unwrap();
+        assert!(!out_disabled.contains("doNotExpandShiftReturn"), "{out_disabled}");
+        assert!(out_disabled.contains("<w:useFELayout/>"), "{out_disabled}");
+
+        // Enabled in generated: exactly one occurrence emitted
+        let gen_enabled = r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:compat><w:doNotExpandShiftReturn/></w:compat></w:settings>"#;
+        let out_enabled = String::from_utf8(merge(orig_two.as_bytes(), gen_enabled.as_bytes()).unwrap()).unwrap();
+        assert_eq!(out_enabled.matches("doNotExpandShiftReturn").count(), 1, "{out_enabled}");
+        assert!(out_enabled.contains("<w:useFELayout/>"), "{out_enabled}");
+    }
+
+    #[test]
+    fn new_compat_switches_are_inserted_in_schema_order() {
+        // spacingInWholePoints is ranked after doNotExpandShiftReturn in CT_Compat
+        let orig = r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:compat><w:spacingInWholePoints/></w:compat></w:settings>"#;
+        let gen_xml = r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:compat><w:doNotExpandShiftReturn/></w:compat></w:settings>"#;
+        let merged = String::from_utf8(merge(orig.as_bytes(), gen_xml.as_bytes()).unwrap()).unwrap();
+        let idx_shift = merged.find("<w:doNotExpandShiftReturn/>").unwrap();
+        let idx_spacing = merged.find("<w:spacingInWholePoints/>").unwrap();
+        assert!(idx_shift < idx_spacing, "doNotExpandShiftReturn must precede spacingInWholePoints: {merged}");
+    }
+
+    #[test]
+    fn foreign_child_is_ignored_when_finding_switch_insertion_point() {
+        // x:spacingInWholePoints precedes w:ulTrailSpace
+        let orig = r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:vendor"><w:compat><x:spacingInWholePoints/><w:ulTrailSpace/><w:spacingInWholePoints/></w:compat></w:settings>"#;
+        let gen_xml = r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:compat><w:doNotExpandShiftReturn/></w:compat></w:settings>"#;
+        let merged = String::from_utf8(merge(orig.as_bytes(), gen_xml.as_bytes()).unwrap()).unwrap();
+        let idx_custom = merged.find("<x:spacingInWholePoints/>").unwrap();
+        let idx_trail = merged.find("<w:ulTrailSpace/>").unwrap();
+        let idx_shift = merged.find("<w:doNotExpandShiftReturn/>").unwrap();
+        let idx_spacing = merged.find("<w:spacingInWholePoints/>").unwrap();
+        assert!(idx_custom < idx_trail, "custom before trail: {merged}");
+        assert!(idx_trail < idx_shift, "trail before shift: {merged}");
+        assert!(idx_shift < idx_spacing, "shift before spacing: {merged}");
+    }
+
+    #[test]
+    fn a_bare_self_closing_compat_block_goes_like_an_empty_paired_one() {
+        let gen_xml = r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:zoom w:percent="100"/></w:settings>"#;
+        let merged_with = |compat: &str| {
+            let orig = format!(
+                r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{compat}<w:rsids><w:rsidRoot w:val="00112233"/></w:rsids></w:settings>"#
+            );
+            String::from_utf8(merge(orig.as_bytes(), gen_xml.as_bytes()).unwrap()).unwrap()
+        };
+        let self_closing = merged_with("<w:compat/>");
+        assert!(!self_closing.contains("compat"), "{self_closing}");
+        assert!(self_closing.contains(r#"<w:rsidRoot w:val="00112233"/>"#), "{self_closing}");
+        assert_eq!(self_closing, merged_with("<w:compat></w:compat>"));
     }
 }

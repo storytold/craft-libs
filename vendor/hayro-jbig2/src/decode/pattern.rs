@@ -13,24 +13,15 @@ use alloc::vec::Vec;
 const MAX_SHIFTED_WORDS: u64 = 1 << 22;
 
 /// Decode a pattern dictionary segment (7.4.4.2, 6.7).
-pub(crate) fn decode(
-    header: &PatternDictionaryHeader<'_>,
-    scratch: &mut ScratchBuffers,
-    room: u64,
-) -> Result<PatternDictionary> {
+pub(crate) fn decode(header: &PatternDictionaryHeader<'_>, scratch: &mut ScratchBuffers, room: u64) -> Result<PatternDictionary> {
     let pattern_width = header.pattern_width as u32;
     let pattern_height = header.pattern_height as u32;
-    let num_patterns = header
-        .num_patterns
-        .checked_add(1)
-        .ok_or(OverflowError::BitmapDimension)?;
+    let num_patterns = header.num_patterns.checked_add(1).ok_or(OverflowError::BitmapDimension)?;
 
     // "1) Create a bitmap B_HDC. The height of this bitmap is HDPH. The width
     // of the bitmap is (GRAYMAX + 1) × HDPW. This bitmap contains all the
     // patterns concatenated left to right." (6.7.5)
-    let collective_width = num_patterns
-        .checked_mul(pattern_width)
-        .ok_or(OverflowError::BitmapDimension)?;
+    let collective_width = num_patterns.checked_mul(pattern_width).ok_or(OverflowError::BitmapDimension)?;
 
     let mut collective_bitmap = Bitmap::new(collective_width, pattern_height)?;
 
@@ -41,19 +32,13 @@ pub(crate) fn decode(
     } else {
         let at_pixels = match header.template {
             Template::Template0 => [
-                AdaptiveTemplatePixel {
-                    x: -(pattern_width as i8),
-                    y: 0,
-                },
+                AdaptiveTemplatePixel { x: -(pattern_width as i8), y: 0 },
                 AdaptiveTemplatePixel { x: -3, y: -1 },
                 AdaptiveTemplatePixel { x: 2, y: -2 },
                 AdaptiveTemplatePixel { x: -2, y: -2 },
             ],
             Template::Template1 | Template::Template2 | Template::Template3 => [
-                AdaptiveTemplatePixel {
-                    x: -(pattern_width as i8),
-                    y: 0,
-                },
+                AdaptiveTemplatePixel { x: -(pattern_width as i8), y: 0 },
                 // Unused.
                 AdaptiveTemplatePixel::default(),
                 AdaptiveTemplatePixel::default(),
@@ -63,19 +48,9 @@ pub(crate) fn decode(
 
         let mut decoder = ArithmeticDecoder::new(header.data);
         scratch.contexts.clear();
-        scratch.contexts.resize(
-            1 << header.template.context_bits(),
-            ArithmeticDecoderContext::default(),
-        );
+        scratch.contexts.resize(1 << header.template.context_bits(), ArithmeticDecoderContext::default());
 
-        generic::decode_bitmap_arithmetic_coding(
-            &mut collective_bitmap,
-            &mut decoder,
-            &mut scratch.contexts,
-            header.template,
-            false,
-            &at_pixels,
-        )?;
+        generic::decode_bitmap_arithmetic_coding(&mut collective_bitmap, &mut decoder, &mut scratch.contexts, header.template, false, &at_pixels)?;
     }
 
     // "3) Set: GRAY = 0" (6.7.5)
@@ -101,17 +76,9 @@ pub(crate) fn decode(
 
             for w in 0..dst_stride {
                 let s1 = collective_bitmap.data[src_row + w as usize];
-                let s2 = collective_bitmap
-                    .data
-                    .get(src_row + w as usize + 1)
-                    .copied()
-                    .unwrap_or(0);
+                let s2 = collective_bitmap.data.get(src_row + w as usize + 1).copied().unwrap_or(0);
 
-                let word: Word = if src_bit_offset == 0 {
-                    s1
-                } else {
-                    (s1 << src_bit_offset) | (s2 >> (WORD_BITS - src_bit_offset))
-                };
+                let word: Word = if src_bit_offset == 0 { s1 } else { (s1 << src_bit_offset) | (s2 >> (WORD_BITS - src_bit_offset)) };
 
                 pattern.data[dst_row + w as usize] = word;
             }
@@ -142,9 +109,7 @@ pub(crate) fn decode(
     // PdfCraft patch: only when the table is small, and fits what the page may still hold
     // (`room`), so that a speed-up never gets an image refused. It can be left out:
     // `shifted_pattern` then returns `None` and the patterns are combined the slow way.
-    let shifted_words = (patterns.len() as u64)
-        .saturating_mul(32 * 2)
-        .saturating_mul(u64::from(pattern_height));
+    let shifted_words = (patterns.len() as u64).saturating_mul(32 * 2).saturating_mul(u64::from(pattern_height));
     let pattern_words = patterns.iter().map(|p| p.words() as u64).fold(0, u64::saturating_add);
     let shifted_patterns = if pattern_width <= WORD_BITS
         && pattern_height <= WORD_BITS
@@ -172,12 +137,7 @@ pub(crate) fn decode(
         Vec::new()
     };
 
-    Ok(PatternDictionary {
-        patterns,
-        pattern_width,
-        pattern_height,
-        shifted_patterns,
-    })
+    Ok(PatternDictionary { patterns, pattern_width, pattern_height, shifted_patterns })
 }
 
 /// A decoded pattern dictionary.
@@ -234,21 +194,10 @@ pub(crate) fn parse<'a>(reader: &mut Reader<'a>) -> Result<PatternDictionaryHead
     let flags_byte = reader.read_byte().ok_or(ParseError::UnexpectedEof)?;
     let mmr = flags_byte & 0x01 != 0;
     let template = Template::from_byte(flags_byte >> 1);
-    let pattern_width = reader
-        .read_nonzero_byte()
-        .ok_or(ParseError::UnexpectedEof)?;
-    let pattern_height = reader
-        .read_nonzero_byte()
-        .ok_or(ParseError::UnexpectedEof)?;
+    let pattern_width = reader.read_nonzero_byte().ok_or(ParseError::UnexpectedEof)?;
+    let pattern_height = reader.read_nonzero_byte().ok_or(ParseError::UnexpectedEof)?;
     let num_patterns = reader.read_u32().ok_or(ParseError::UnexpectedEof)?;
     let data = reader.tail().ok_or(ParseError::UnexpectedEof)?;
 
-    Ok(PatternDictionaryHeader {
-        mmr,
-        template,
-        pattern_width,
-        pattern_height,
-        num_patterns,
-        data,
-    })
+    Ok(PatternDictionaryHeader { mmr, template, pattern_width, pattern_height, num_patterns, data })
 }

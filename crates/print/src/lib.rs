@@ -5,25 +5,31 @@
 //! with the options as a PrintTicket, all in this process (`windows.rs`): no PowerShell or other
 //! program is started, so printing works where scripts are locked down. Other platforms report
 //! that printing isn't available yet; the print-ready PDF can still be saved.
-
+#![warn(missing_docs)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// Printing in the browser.
+#[cfg(target_arch = "wasm32")]
+pub mod browser;
 /// Direct local-CUPS transport, independent of command-line spooler selection.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cups;
+pub mod spool;
 
 #[cfg(any(test, windows))]
-mod progress;
+pub(crate) mod progress;
 #[cfg(any(test, windows))]
-mod sheets;
+pub(crate) mod sheets;
 #[cfg(test)]
-mod tests;
+pub(crate) mod spool_tests;
+#[cfg(test)]
+pub(crate) mod tests;
 #[cfg(any(test, windows))]
-mod ticket;
+pub(crate) mod ticket;
 #[cfg(windows)]
-mod windows;
+pub(crate) mod windows;
 #[cfg(any(test, windows))]
-mod xml;
+pub(crate) mod xml;
 
 /// Native Windows driver settings, printable geometry and explicit RGB/GDI transport.
 /// Callers perform ICC conversion and compose page pixels/vector strokes. Other platforms
@@ -32,9 +38,22 @@ pub mod rgb {
     pub use craft_winprint_gdi::*;
 }
 
+/// Printer selection and job settings for egui (`ui` feature).
+#[cfg(feature = "ui")]
+pub mod ui;
+
+/// The registrations of this crate's UI types, for its integration binary.
+#[cfg(feature = "screen-testing")]
+pub mod testing {
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
+}
+
 /// A system spooler failure. Document permissions belong to the caller.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
+    /// The spooler failed or refused; the text is its message.
     Spool(String),
 }
 impl std::fmt::Display for Error {
@@ -46,6 +65,7 @@ impl std::fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
+/// A printer the system knows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Printer {
     /// The destination `lp -d` and the spooler know the printer by.
@@ -54,19 +74,25 @@ pub struct Printer {
     /// queue name can't hold dots or spaces, so a printer added as `192.0.2.15` is the queue
     /// `_192_0_2_15` described as `192.0.2.15`. Windows names are already human: empty there.
     pub description: String,
+    /// Whether this is the system default printer.
     pub default: bool,
     /// Whether the Windows driver reports duplex support; None when unknown (CUPS).
     pub two_sided: Option<bool>,
 }
 
+/// Two-sided printing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Duplex {
+    /// One side of each sheet.
     #[default]
     Off,
+    /// Both sides, flipping on the long edge (books, portrait pages).
     LongEdge,
+    /// Both sides, flipping on the short edge (calendars, landscape pages).
     ShortEdge,
 }
 
+/// How sheets are fitted to the paper.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Scaling {
     /// Preserve the PDF's physical sheet size, even when hardware margins clip it.
@@ -78,21 +104,27 @@ pub enum Scaling {
     ShrinkToFit,
 }
 
+/// The settings of one print job.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Job {
     /// `None` = the system default printer.
     pub printer: Option<String>,
+    /// Number of copies; clamped to 1..=999 when sent.
     pub copies: u32,
+    /// Whether copies of a multi-page document come out as complete sets.
     pub collate: bool,
     /// `None` preserves the printer's duplex default; `Some(Off)` forces simplex.
     pub duplex: Option<Duplex>,
+    /// How sheets are fitted to the paper.
     pub scaling: Scaling,
+    /// Whether to print in monochrome.
     pub grayscale: bool,
     /// The caller has already made the pages grey (storytold/pdfcraft#5806): `grayscale` is then
     /// asked of the driver where it has a grey option, but a driver that has none, or doesn't keep
     /// it, still prints the job instead of refusing it. Off, a driver that drops `grayscale` is
     /// refused, since the pages would come out in colour. Windows only; CUPS never refuses.
     pub grey_pages: bool,
+    /// The job's name in the print queue.
     pub title: String,
     /// The printer driver's own job options (a PPD keyword and the chosen value), such as the
     /// paper tray or paper type; see [`printer_options`]. CUPS only.
@@ -588,12 +620,12 @@ const DISCOVERY_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The printers the system knows (empty when there are none or no spooler): its queues, then the
 /// driverless destinations CUPS can print to without one. On CUPS neither question may take more
-/// than [`QUEUES_LIMIT`] and [`DISCOVERY_LIMIT`]: a scheduler that doesn't answer gives an empty
+/// than `QUEUES_LIMIT` and `DISCOVERY_LIMIT`: a scheduler that doesn't answer gives an empty
 /// list rather than a Print dialog that waits forever.
 pub fn printers() -> Vec<Printer> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        printers_via(&mut lpstat_command(), QUEUES_LIMIT, &mut lpstat_e_command(), DISCOVERY_LIMIT)
+        printers_via(&mut lpstat_command(), QUEUES_LIMIT, &mut lpstat_e_command(), DISCOVERY_LIMIT, &Clock::REAL)
     }
     #[cfg(windows)]
     {
@@ -605,18 +637,19 @@ pub fn printers() -> Vec<Printer> {
     }
 }
 
-/// [`printers`] with the two `lpstat` commands and their limits supplied, so tests can stand in a
-/// command that hangs.
+/// [`printers`] with the two `lpstat` commands, their limits and the clock the limits are kept
+/// against supplied, so tests can stand in a command that hangs.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 fn printers_via(
     queues: &mut std::process::Command,
     queues_limit: std::time::Duration,
     available: &mut std::process::Command,
     available_limit: std::time::Duration,
+    clock: &Clock<'_>,
 ) -> Vec<Printer> {
     // Exits 1 with only driverless printers ("No destinations added"); `-e` still finds them, so
     // the exit status isn't checked.
-    let queues = match output_within(queues, queues_limit) {
+    let queues = match output_within(queues, queues_limit, clock) {
         Ok(out) => String::from_utf8_lossy(&out).into_owned(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // A Flatpak needs lpstat/lp bundled plus the CUPS socket and Avahi (see README).
@@ -630,7 +663,7 @@ fn printers_via(
     };
     // A spooler without `-e`, or one whose discovery doesn't answer in time, only loses the
     // driverless names.
-    let available = match output_within(available, available_limit) {
+    let available = match output_within(available, available_limit, clock) {
         Ok(out) => Some(String::from_utf8_lossy(&out).into_owned()),
         Err(e) => {
             log::info!("lpstat -e gave no driverless printers ({e})");
@@ -644,18 +677,32 @@ fn printers_via(
 /// output capped, and given `limit` to answer (none when it doesn't).
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 fn queue_defaults(command: &mut std::process::Command, limit: std::time::Duration) -> Vec<(String, String)> {
-    output_within(command, limit).map(|out| parse_lpoptions(&String::from_utf8_lossy(&out))).unwrap_or_default()
+    output_within(command, limit, &Clock::REAL).map(|out| parse_lpoptions(&String::from_utf8_lossy(&out))).unwrap_or_default()
 }
 
 /// The most of a command's output that is read: far more than any `lpstat` listing.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 const OUTPUT_CAP: u64 = 4 << 20;
 
-/// Run `command` and collect its standard output, giving it `limit`: a command still running
-/// then is killed and reaped, and the error is `TimedOut`. Standard input and error are not
-/// connected. The exit status is not checked, as `Command::output` leaves it to the caller.
+/// The time [`output_within`] keeps a command's limit against (`now`), and how it waits before
+/// it checks on the command again (`pause`).
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn output_within(command: &mut std::process::Command, limit: std::time::Duration) -> std::io::Result<Vec<u8>> {
+struct Clock<'a> {
+    now: &'a dyn Fn() -> std::time::Instant,
+    pause: &'a dyn Fn(),
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+impl Clock<'static> {
+    /// The real clock, checking on the command every 10 ms.
+    const REAL: Clock<'static> = Clock { now: &std::time::Instant::now, pause: &|| std::thread::sleep(std::time::Duration::from_millis(10)) };
+}
+
+/// Run `command` and collect its standard output, giving it `limit` on `clock`: a command still
+/// running then is killed and reaped, and the error is `TimedOut`. Standard input and error are
+/// not connected. The exit status is not checked, as `Command::output` leaves it to the caller.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn output_within(command: &mut std::process::Command, limit: std::time::Duration, clock: &Clock<'_>) -> std::io::Result<Vec<u8>> {
     use std::io::Read as _;
     use std::process::Stdio;
     let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
@@ -685,83 +732,28 @@ fn output_within(command: &mut std::process::Command, limit: std::time::Duration
         return Err(e);
     }
     let timed_out = || std::io::Error::new(std::io::ErrorKind::TimedOut, format!("the command did not answer within {limit:?}"));
-    let deadline = std::time::Instant::now() + limit;
+    let deadline = (clock.now)() + limit;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => {
                 // A moment's grace, so output written just before an exit at the deadline counts.
-                let left = deadline.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_millis(100));
+                let left = deadline.saturating_duration_since((clock.now)()).max(std::time::Duration::from_millis(100));
                 return match rx.recv_timeout(left) {
                     Ok(read) => read,
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(timed_out()),
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::other("the command's output was lost")),
                 };
             }
-            Ok(None) if std::time::Instant::now() >= deadline => {
+            Ok(None) if (clock.now)() >= deadline => {
                 stop(&mut child);
                 return Err(timed_out());
             }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Ok(None) => (clock.pause)(),
             Err(e) => {
                 stop(&mut child);
                 return Err(e);
             }
         }
-    }
-}
-
-#[cfg(all(test, unix, not(target_arch = "wasm32")))]
-mod lpstat_limits {
-    use super::*;
-    use std::process::Command;
-    use std::time::{Duration, Instant};
-
-    fn sh(script: &str) -> Command {
-        let mut c = Command::new("sh");
-        c.args(["-c", script]);
-        c
-    }
-
-    /// storytold/pdfcraft#6761: a scheduler that never answers gives an empty list in time.
-    #[test]
-    fn a_scheduler_that_never_answers_gives_no_printers_in_time() {
-        let started = Instant::now();
-        let found = printers_via(&mut sh("sleep 30"), Duration::from_millis(300), &mut sh("sleep 30"), Duration::from_millis(300));
-        assert!(found.is_empty());
-        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
-    }
-
-    /// Discovery that hangs only loses the driverless printers; the queues are listed.
-    #[test]
-    fn discovery_that_hangs_keeps_the_queues() {
-        let mut queues =
-            sh("printf 'printer Office_Laser is idle.  enabled since Mon\\n\\tDescription: Office\\nsystem default destination: Office_Laser\\n'");
-        let started = Instant::now();
-        let found = printers_via(&mut queues, Duration::from_secs(5), &mut sh("sleep 30"), Duration::from_millis(300));
-        assert_eq!(found.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Office_Laser"]);
-        assert!(found[0].default);
-        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
-    }
-
-    /// `lpoptions` that never answers or prints without end gives no defaults, in time and in bounded memory.
-    #[test]
-    fn lpoptions_is_bounded_in_time_and_output() {
-        let started = Instant::now();
-        assert!(queue_defaults(&mut sh("sleep 30"), Duration::from_millis(300)).is_empty());
-        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
-        let answer = queue_defaults(&mut sh("printf 'Duplex/2-Sided: None *DuplexNoTumble\\n'"), Duration::from_secs(5));
-        assert_eq!(answer, [("Duplex".to_string(), "DuplexNoTumble".to_string())]);
-        // Endless output stops at the cap (the command is killed at the deadline), and does not hang.
-        let started = Instant::now();
-        let _ = queue_defaults(&mut sh("yes 'Key/Label: a *b c'"), Duration::from_millis(500));
-        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
-    }
-
-    /// A command that isn't there is no printers, at once.
-    #[test]
-    fn no_lpstat_is_no_printers() {
-        let found = printers_via(&mut Command::new("craft-print-no-such-lpstat"), Duration::from_secs(5), &mut sh("true"), Duration::from_secs(5));
-        assert!(found.is_empty());
     }
 }
 
@@ -837,7 +829,7 @@ pub fn printers_parsed(queues: &str, available: Option<&str>) -> Vec<Printer> {
 /// The Print dialog's printers from the Windows spooler's queues (name, and whether the driver
 /// takes two-sided settings when that is known): sorted by name, each once, the default marked
 /// when it is one of them.
-#[cfg(any(test, windows))]
+#[cfg(windows)]
 pub(crate) fn printer_list(queues: impl IntoIterator<Item = (String, Option<bool>)>, default: Option<&str>) -> Vec<Printer> {
     let mut queues: Vec<(String, Option<bool>)> = queues.into_iter().filter(|(n, _)| !n.trim().is_empty()).collect();
     queues.sort_by(|a, b| a.0.cmp(&b.0));
@@ -890,10 +882,13 @@ pub struct Cancel(std::sync::Arc<std::sync::atomic::AtomicU8>);
 
 const PENDING: u8 = 0;
 const CANCELLED: u8 = 1;
+#[cfg(any(test, windows, all(unix, not(target_arch = "wasm32"))))]
 const SENDING: u8 = 2;
+#[cfg(any(test, windows, all(unix, not(target_arch = "wasm32"))))]
 const CANCELLED_MESSAGE: &str = "the print job was cancelled before anything was sent to the printer";
 
 impl Cancel {
+    /// A token for a job that hasn't been cancelled.
     pub fn new() -> Self {
         Self::default()
     }
@@ -911,6 +906,7 @@ impl Cancel {
 
     /// The last point before anything reaches the spooler: the job is being sent from here on,
     /// unless it was cancelled.
+    #[cfg(any(test, windows, all(unix, not(target_arch = "wasm32"))))]
     pub(crate) fn start_sending(&self) -> Result<(), Error> {
         use std::sync::atomic::Ordering::{AcqRel, Acquire};
         match self.0.compare_exchange(PENDING, SENDING, AcqRel, Acquire) {
@@ -1075,10 +1071,13 @@ fn windows_preview(job: &Job, default: Option<&str>) -> Vec<String> {
 /// The platform backend. No backend is available in the browser.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
+    /// CUPS, through `lp` and `lpstat` (Linux, macOS, BSDs).
     Cups,
+    /// The Windows print spooler, given the PDF.
     WindowsPdf,
 }
 
+/// The backend of this platform, or `None` where printing is unavailable.
 pub const fn backend() -> Option<Backend> {
     if cfg!(windows) {
         Some(Backend::WindowsPdf)
@@ -1105,4 +1104,16 @@ pub fn command_preview(job: &Job) -> Result<Vec<String>, Error> {
         }
         None => Err(Error::Spool("printing to a printer isn't available on this platform yet; save the print-ready PDF instead".into())),
     }
+}
+
+#[cfg(all(test, feature = "screen-testing"))]
+extern crate self as craft_print;
+#[cfg(all(test, feature = "screen-testing"))]
+#[path = "../tests/it/main.rs"]
+pub(crate) mod integration;
+
+#[cfg(test)]
+fn main() {
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

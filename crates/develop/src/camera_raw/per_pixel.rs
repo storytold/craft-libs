@@ -1,11 +1,11 @@
 //! Develop's stages resolved for one image: every constant and table the per-pixel ones use, so
 //! another implementation of them (the GPU preview, `photocraft_gpu::CameraRawDevelop`) runs the
 //! same maths. [`develop`](super::develop) builds its own constants with the same functions.
-//! The spatial stages other than Detail come as their parameters: Dehaze, Clarity and Texture
-//! (see [`spatial`](super::spatial)), Shadows and Highlights as a [`LocalTone`].
+//! The spatial stages come as their parameters: Dehaze, Clarity, Texture and Detail (see
+//! [`spatial`](super::spatial)), Shadows and Highlights as a [`LocalTone`].
 
 use super::local_tone::{LocalTone, WORK_SIDE};
-use super::spatial::{Clarity, Dehaze, Texture};
+use super::spatial::{Clarity, Dehaze, Detail, Texture};
 use super::types::VignetteStyle as StoredStyle;
 use super::{
     CameraRaw, DevelopInputs, Encoding, Wheel, calibration_neutral, curve_lut, grade_neutral, hsl_neutral, hsv_to_rgb, is_linear, luma,
@@ -177,7 +177,7 @@ pub struct PerPixel {
     /// 3b. Whites and Blacks, in the document's encoding.
     pub whites_blacks: Option<WhitesBlacks>,
     /// 3b. Whites and Blacks to measure the image's points for (the sliders, −100 … 100), when a
-    ///     spatial stage is set: the points then depend on its output, so whatever runs it
+    ///     spatial stage before them is set (any but Detail): the points then depend on its output, so whatever runs it
     ///     measures them and picks the curves from [`whites_blacks_model`]. `whites_blacks` is
     ///     then `None`.
     pub measure_whites_blacks: Option<[f32; 2]>,
@@ -193,6 +193,8 @@ pub struct PerPixel {
     pub hsl: Option<[[f32; 8]; 3]>,
     /// 7. Color Grading.
     pub grade: Option<Grade>,
+    /// 8. Detail: noise reduction and sharpening.
+    pub detail: Option<Detail>,
     /// 9. Vignette.
     pub vignette: Option<Vignette>,
     /// 9. Grain.
@@ -204,20 +206,22 @@ pub struct PerPixel {
 /// Whether developing needs a stage that reads neighbouring pixels: Dehaze, Shadows and
 /// Highlights, Texture, Clarity, sharpening or noise reduction.
 pub fn spatial(p: &CameraRaw) -> bool {
-    p.dehaze != 0.0 || [p.highlights, p.shadows, p.texture, p.clarity].iter().any(|v| *v != 0.0) || detail_on(p)
+    spatial_tone(p) || p.sharpen_amount > 0.0 || p.noise_luminance > 0.0 || p.noise_color > 0.0
 }
 
-/// Whether developing needs Detail: sharpening or noise reduction.
-fn detail_on(p: &CameraRaw) -> bool {
-    p.sharpen_amount > 0.0 || p.noise_luminance > 0.0 || p.noise_color > 0.0
+/// Whether a stage before Whites and Blacks reads neighbouring pixels: Dehaze, Shadows and
+/// Highlights, Texture or Clarity (all of [`spatial`] but Detail). The image's points then
+/// depend on its output.
+pub fn spatial_tone(p: &CameraRaw) -> bool {
+    p.dehaze != 0.0 || [p.highlights, p.shadows, p.texture, p.clarity].iter().any(|v| *v != 0.0)
 }
 
 /// The image's black and white points that Whites and Blacks adapt to, for `px` (`w × h`,
 /// display-encoded) developed per pixel with `p`: what [`develop`](super::develop) measures
 /// after white balance and Contrast. `None` when Whites and Blacks are 0 or `p` needs a
-/// spatial stage.
+/// spatial stage before them ([`spatial_tone`]; Detail comes after).
 pub fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &DevelopInputs) -> Option<(f32, f32)> {
-    if (p.whites == 0.0 && p.blacks == 0.0) || spatial(p) || px.len() != w.saturating_mul(h) {
+    if (p.whites == 0.0 && p.blacks == 0.0) || spatial_tone(p) || px.len() != w.saturating_mul(h) {
         return None;
     }
     let enc = Encoding::of(inputs.encoding_gamma);
@@ -228,14 +232,14 @@ pub fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw, in
     }))
 }
 
-/// Develop's stages for settings without Detail or Calibration, on a `w × h` image; `points` are
-/// the image's [`white_black_points`]. `None` when `p` needs Detail or Calibration (these stages
-/// run neither), Shadows or Highlights on a frame wider than the filter's working copy (the
+/// Develop's stages for settings without Calibration, on a `w × h` image; `points` are the image's
+/// [`white_black_points`]. `None` when `p` needs Calibration (these stages don't run it), Shadows
+/// or Highlights on a frame wider than the filter's working copy (the
 /// develop then filters a reduced copy) or only 2 pixels on its short side, or Whites or Blacks
 /// without a spatial stage and without `points`. The points themselves leave Calibration out, so a
 /// caller may cache them across Calibration changes.
 pub fn per_pixel(p: &CameraRaw, inputs: &DevelopInputs, w: usize, h: usize, float: bool, points: Option<(f32, f32)>) -> Option<PerPixel> {
-    if detail_on(p) || !calibration_neutral(p) {
+    if !calibration_neutral(p) {
         return None;
     }
     // The develop leaves frames under 2 pixels on a side alone.
@@ -277,6 +281,7 @@ pub fn per_pixel(p: &CameraRaw, inputs: &DevelopInputs, w: usize, h: usize, floa
         point: [pts(&p.point_curve), pts(&p.point_curve_red), pts(&p.point_curve_green), pts(&p.point_curve_blue)],
         hsl: (!hsl_neutral(p)).then_some([p.hsl_hue, p.hsl_sat, p.hsl_lum]),
         grade: (!grade_neutral(p)).then(|| Grade::new(p)),
+        detail: Detail::new(p, inputs),
         vignette: (p.vignette_amount != 0.0).then(|| Vignette::new(w, h, p)),
         grain: (p.grain_amount > 0.0).then(|| Grain::new(p, inputs)),
         clamp: !float && !identity,

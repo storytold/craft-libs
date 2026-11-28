@@ -1,0 +1,9 @@
+config_version = 1
+
+[[exception]]
+name = "page-preview-page-box"
+kind = "marker"
+rule = "contract/allocate"
+path = "crates/pages/src/ui/preview.rs"
+reason = "The preview dialog sizes from its content, and the page has no size of its own: the body claims a box sized from the window for the page picture to fill."
+count = 1

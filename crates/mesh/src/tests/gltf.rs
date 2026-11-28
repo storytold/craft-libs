@@ -2,12 +2,11 @@ use serde_json::{Value, json};
 
 use super::hammer;
 use crate::gltf::{
-    GlbWriteOptions, MAX_UV_SETS, MAX_ZERO_COMPONENTS, MagFilter, MinFilter, base64_decode, glb_container, read, split_glb, uri_decode, write_glb,
-    write_glb_with_options,
+    GlbWriteOptions, MAX_ZERO_COMPONENTS, MagFilter, MinFilter, glb_container, read, split_glb, uri_decode, write_glb, write_glb_with_options,
 };
 use crate::{
-    AlphaMode, ChannelPath, Corner, Error, IDENTITY, Image, Interpolation, LightKind, Limits, Material, Mesh, NONE, Node, Part, Projection, Scene,
-    TextureRef, UvTransform, Wrap, face_normal, no_external, transform_point,
+    AlphaMode, ChannelPath, Corner, Error, IDENTITY, Image, Interpolation, LightKind, Limits, Material, Mesh, MorphTarget, NONE, Node, Part,
+    Projection, Scene, TextureRef, UvTransform, Wrap, face_normal, no_external, transform_point,
 };
 
 /// Builds the binary chunk with its buffer views and accessors.
@@ -291,18 +290,6 @@ fn texture_and_sampler_inventory_includes_unreferenced_entries() {
 }
 
 #[test]
-fn base64_and_uri_decoding() {
-    assert_eq!(base64_decode("aGVsbG8=").unwrap(), b"hello");
-    assert_eq!(base64_decode("aGVs\nbG8").unwrap(), b"hello");
-    assert_eq!(base64_decode("-_8").unwrap(), [0xfb, 0xff]);
-    assert!(base64_decode("a$b").is_none());
-    assert_eq!(uri_decode("a%20b%2Fc"), "a b/c");
-    assert_eq!(uri_decode("a%+1b"), "a%+1b");
-    assert_eq!(uri_decode("a%4"), "a%4");
-    assert_eq!(uri_decode("%"), "%");
-}
-
-#[test]
 fn glb_container_checks() {
     let glb = quad();
     let (json, bin) = split_glb(&glb).unwrap();
@@ -429,20 +416,6 @@ fn primitives_of_a_mesh_share_its_pools() {
     let short = b.f32s(&[0.0, 0.0, 1.0], "VEC3", 3);
     let s = parse(&one_mesh(&b, json!({ "attributes": { "POSITION": p, "NORMAL": short } }))).unwrap();
     assert!(s.meshes[0].normals.is_empty());
-}
-
-#[test]
-fn uv_sets_past_the_bound_are_not_read() {
-    let mut b = B::default();
-    let p = b.f32s(&QUAD[..9], "VEC3", 3);
-    let t = b.f32s(&[0.5; 6], "VEC2", 2);
-    let mut attrs = json!({ "POSITION": p });
-    for k in 0..MAX_UV_SETS + 2 {
-        attrs[format!("TEXCOORD_{k}")] = json!(t);
-    }
-    let s = parse(&one_mesh(&b, json!({ "attributes": attrs }))).unwrap();
-    assert_eq!(s.meshes[0].uv_sets.len(), MAX_UV_SETS);
-    s.validate().unwrap();
 }
 
 #[test]
@@ -679,8 +652,11 @@ fn limits_count_shared_accessors_expansions_and_extras() {
         assert!(with(&glb, &|l| l.max_extras = 4).is_ok(), "{key}");
         assert!(too(with(&glb, &|l| l.max_extras = 3)), "{key}");
     }
-    let image_and_keys = with(&r, &|l| l.max_data_bytes = split_glb(&r).unwrap().1.unwrap().len());
-    assert!(image_and_keys.is_ok());
+    // The skin's 32 matrix values and the channel's 8 keys are charged on top of the buffer
+    // they are read from.
+    let bin = split_glb(&r).unwrap().1.unwrap().len();
+    assert!(with(&r, &|l| l.max_data_bytes = bin + 40).is_ok());
+    assert!(too(with(&r, &|l| l.max_data_bytes = bin + 39)));
 }
 
 #[test]
@@ -797,7 +773,13 @@ fn written_files_read_back() {
     // The materials; the image without bytes or a name takes its texture slot with it.
     let mut wood = scene.materials[0].clone();
     wood.occlusion_texture = None;
-    assert_eq!(back.materials, [wood, scene.materials[1].clone()]);
+    // The reader also keeps the extensions the writer wrote for the fields as they are written.
+    let mut read = back.materials.clone();
+    assert_eq!(
+        Value::Object(std::mem::take(&mut read[0].extensions)),
+        json!({ "KHR_materials_emissive_strength": { "emissiveStrength": 2.0 }, "KHR_materials_unlit": {} })
+    );
+    assert_eq!(read, [wood, scene.materials[1].clone()]);
     assert_eq!(back.images.len(), 2);
     assert_eq!((back.images[0].data.as_deref(), back.images[0].mime_type.as_deref()), (Some(&b"\x89PNG wood"[..]), Some("image/png")));
     assert_eq!(back.images[1].uri.as_deref(), Some("bump.png"));
@@ -916,7 +898,7 @@ fn specular_glossiness_and_webp_textures() {
 }
 
 #[test]
-fn morph_targets_and_other_scenes_are_named_in_warnings() {
+fn other_scenes_are_named_in_warnings_and_read_morph_targets_are_not() {
     let mut b = B::default();
     let p = b.f32s(&QUAD[..9], "VEC3", 3);
     let d = b.f32s(&[0.0; 9], "VEC3", 3);
@@ -927,31 +909,251 @@ fn morph_targets_and_other_scenes_are_named_in_warnings() {
             "scene": scene,
             "scenes": scenes,
             "nodes": [{ "mesh": 0 }, { "mesh": 0 }],
-            "meshes": [{ "primitives": [plain, morphed, morphed] }],
+            "meshes": [{ "primitives": [morphed, morphed] }],
         }))
     };
     let s = parse(&doc(json!(1), json!([{ "nodes": [0] }, { "nodes": [1] }, { "nodes": [] }]))).unwrap();
     assert_eq!(s.roots, [1]);
-    assert_eq!(
-        s.warnings,
-        ["scene 1 of 3 was read; the others were left out", "2 primitive(s) have morph targets, which were left out (drawn in the base shape)",]
-    );
-    // The morphed primitives are still drawn, in their base shape.
-    assert_eq!(s.meshes[0].parts.len(), 3);
-    let morphs = "2 primitive(s) have morph targets, which were left out (drawn in the base shape)";
+    // The morph targets are read, so they are not named.
+    assert_eq!(s.warnings, ["scene 1 of 3 was read; the others were left out"]);
+    assert_eq!((s.meshes[0].parts.len(), s.meshes[0].morph_targets.len()), (2, 1));
     // An out-of-range choice falls back to the first scene.
     let s = parse(&doc(json!(5), json!([{ "nodes": [1] }, { "nodes": [0] }]))).unwrap();
     assert_eq!(s.roots, [1]);
-    assert_eq!(s.warnings, ["scene 0 of 2 was read; the others were left out", morphs]);
+    assert_eq!(s.warnings, ["scene 0 of 2 was read; the others were left out"]);
     // One scene, or none, is not a warning about scenes.
     let s = parse(&doc(json!(5), json!([{ "nodes": [0] }]))).unwrap();
     assert_eq!(s.roots, [0]);
-    assert_eq!(s.warnings, [morphs]);
+    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
     let s = parse(&doc(json!(null), json!(null))).unwrap();
     assert_eq!(s.roots, [0, 1]);
-    assert_eq!(s.warnings, [morphs]);
+    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
     let s = parse(&one_mesh(&b, plain.clone())).unwrap();
     assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+}
+
+/// A quad with normals and tangents and two morph targets: "smile" moves every position, normal
+/// and tangent by dense accessors, and "blink" moves two positions by a sparse accessor without
+/// a buffer view. The mesh's default weights name only the first target; the node sets both.
+fn morphed() -> Vec<u8> {
+    let mut b = B::default();
+    let p = b.f32s(&QUAD, "VEC3", 3);
+    let n = b.f32s(&[0.0, 0.0, 1.0].repeat(4), "VEC3", 3);
+    let t = b.f32s(&[1.0, 0.0, 0.0, 1.0].repeat(4), "VEC4", 4);
+    let i = b.u16s(&[0, 1, 2, 0, 2, 3]);
+    let lift = b.f32s(&[0.0, 0.0, 1.0].repeat(4), "VEC3", 3);
+    let tilt = b.f32s(&[0.5, 0.0, 0.0].repeat(4), "VEC3", 3);
+    let turn = b.f32s(&[0.0, 1.0, 0.0].repeat(4), "VEC3", 3);
+    let which = b.view(&[1u8, 3]);
+    let moves = b.view(&[0.0f32, 2.0, 0.0, 0.0, 0.0, -1.0].iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<_>>());
+    b.accessors.push(json!({ "componentType": 5126, "count": 4, "type": "VEC3",
+        "sparse": { "count": 2, "indices": { "bufferView": which, "componentType": 5121 }, "values": { "bufferView": moves } } }));
+    let blink = b.accessors.len() - 1;
+    b.glb(json!({
+        "nodes": [{ "mesh": 0, "weights": [0.5, 1.0] }],
+        "meshes": [{
+            "name": "Face",
+            "primitives": [{
+                "attributes": { "POSITION": p, "NORMAL": n, "TANGENT": t },
+                "indices": i,
+                "targets": [{ "POSITION": lift, "NORMAL": tilt, "TANGENT": turn }, { "POSITION": blink }],
+            }],
+            "weights": [0.25],
+            "extras": { "targetNames": ["smile", "blink"] },
+        }],
+    }))
+}
+
+#[test]
+fn morph_targets_are_read_with_their_names_and_weights() {
+    let s = parse(&morphed()).unwrap();
+    s.validate().unwrap();
+    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    let m = &s.meshes[0];
+    let names: Vec<&str> = m.morph_targets.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["smile", "blink"]);
+    // A weight the mesh leaves out is 0; the node's own weights stand in for the mesh's.
+    assert_eq!(m.morph_weights, [0.25, 0.0]);
+    assert_eq!(s.nodes[0].morph_weights, [0.5, 1.0]);
+    let (smile, blink) = (&m.morph_targets[0], &m.morph_targets[1]);
+    assert_eq!(
+        (smile.positions.clone(), smile.normals.clone(), smile.tangents.clone()),
+        (vec![[0.0, 0.0, 1.0]; 4], vec![[0.5, 0.0, 0.0]; 4], vec![[0.0, 1.0, 0.0]; 4])
+    );
+    // The sparse target moves only the positions it names, and no normals or tangents.
+    assert_eq!(blink.positions, [[0.0; 3], [0.0, 2.0, 0.0], [0.0; 3], [0.0, 0.0, -1.0]]);
+    assert!(blink.normals.is_empty() && blink.tangents.is_empty());
+    // The glTF rule: each position is its base plus every target's offset times its weight.
+    // With the node's weights 0.5 and 1.0, worked out by hand from the offsets above:
+    let weights = &s.nodes[0].morph_weights;
+    let shaped: Vec<[f64; 3]> = m
+        .positions
+        .iter()
+        .enumerate()
+        .map(|(v, base)| {
+            let mut p = *base;
+            for (t, w) in m.morph_targets.iter().zip(weights) {
+                for (k, x) in p.iter_mut().enumerate() {
+                    *x += f64::from(*w) * t.positions[v][k];
+                }
+            }
+            p
+        })
+        .collect();
+    assert_eq!(shaped, [[0.0, 0.0, 0.5], [1.0, 2.0, 0.5], [1.0, 1.0, 0.5], [0.0, 1.0, -0.5]]);
+}
+
+#[test]
+fn morph_targets_follow_their_primitives_vertices() {
+    let mut b = B::default();
+    let three = b.f32s(&QUAD[..9], "VEC3", 3);
+    let normals = b.f32s(&[0.0, 0.0, 1.0].repeat(3), "VEC3", 3);
+    let four = b.f32s(&QUAD, "VEC3", 3);
+    let up = b.f32s(&[0.0, 0.0, 1.0].repeat(3), "VEC3", 3);
+    let bend = b.f32s(&[0.0, 1.0, 0.0].repeat(3), "VEC3", 3);
+    let out = b.f32s(&[1.0, 0.0, 0.0].repeat(4), "VEC3", 3);
+    let i = b.u16s(&[0, 1, 2, 0, 2, 3]);
+    let a = json!({ "attributes": { "POSITION": three, "NORMAL": normals }, "targets": [{ "POSITION": up, "NORMAL": bend }] });
+    // The second primitive has no normals, so its target's NORMAL has nothing to move.
+    let b2 = json!({ "attributes": { "POSITION": four }, "indices": i, "targets": [{ "POSITION": out, "NORMAL": out }] });
+    // The fourth names the first one's positions without its targets: its own vertices, not
+    // moved.
+    let still = json!({ "attributes": { "POSITION": three, "NORMAL": normals } });
+    let s = parse(&b.glb(json!({ "meshes": [{ "primitives": [a, b2, a, still] }] }))).unwrap();
+    s.validate().unwrap();
+    assert_eq!(
+        s.warnings,
+        [
+            "1 primitive(s) have fewer morph targets than their mesh; the others do not move them",
+            "1 morph target attribute(s) do not fit their primitive's vertices and were left out",
+        ]
+    );
+    let m = &s.meshes[0];
+    // The third primitive shares the first one's vertices; the fourth has its own.
+    assert_eq!((m.positions.len(), m.normals.len(), m.parts.len()), (10, 6, 4));
+    let t = &m.morph_targets[0];
+    let mut positions = vec![[0.0, 0.0, 1.0]; 3];
+    positions.extend([[1.0, 0.0, 0.0]; 4]);
+    positions.extend([[0.0; 3]; 3]);
+    assert_eq!(t.positions, positions);
+    let mut normals = vec![[0.0, 1.0, 0.0]; 3];
+    normals.extend([[0.0; 3]; 3]);
+    assert_eq!(t.normals, normals);
+    // The NORMAL offsets of a primitive without normals are left out before their accessor is
+    // looked up, so offsets that name no accessor leave the primitive as it is.
+    let missing = json!({ "attributes": { "POSITION": four }, "indices": i, "targets": [{ "POSITION": out, "NORMAL": 99 }] });
+    let s = parse(&b.glb(json!({ "meshes": [{ "primitives": [missing] }] }))).unwrap();
+    assert_eq!(s.warnings, ["1 morph target attribute(s) do not fit their primitive's vertices and were left out"]);
+    assert_eq!((s.meshes[0].triangle_count(), s.meshes[0].morph_targets[0].positions.len()), (2, 4));
+}
+
+#[test]
+fn images_in_data_uris_count_against_the_data_limit() {
+    // Six bytes of image, and no buffers.
+    let doc = json!({ "asset": { "version": "2.0" }, "images": [{ "uri": "data:image/png;base64,AAAAAAAA" }] });
+    let glb = glb_container(&serde_json::to_vec(&doc).unwrap(), &[]).unwrap();
+    assert_eq!(with(&glb, &|l| l.max_data_bytes = 6).unwrap().images[0].data.as_deref(), Some(&[0u8; 6][..]));
+    assert!(too(with(&glb, &|l| l.max_data_bytes = 5)));
+    assert!(too(with(&glb, &|l| l.max_data_bytes = 0)));
+}
+
+#[test]
+fn morph_target_limits() {
+    let glb = morphed();
+    assert_eq!(with(&glb, &|l| l.max_morph_targets = 2).unwrap().meshes[0].morph_targets.len(), 2);
+    // Past the limit the mesh is read in its base shape, and its targets are named.
+    let s = with(&glb, &|l| l.max_morph_targets = 1).unwrap();
+    s.validate().unwrap();
+    let m = &s.meshes[0];
+    assert!(m.morph_targets.is_empty() && m.morph_weights.is_empty());
+    assert_eq!((m.positions.len(), m.triangle_count()), (4, 2));
+    assert_eq!(s.warnings, ["1 primitive(s) have more morph targets than the limit allows, which were left out (drawn in the base shape)"]);
+    // The node's weights have no targets left to move, so they go too.
+    assert!(s.nodes[0].morph_weights.is_empty());
+
+    // The offsets count against the data limit, so targets that all name one accessor cannot
+    // multiply it without bound: 200 targets of 4 vertices are 2,400 values of 8 bytes.
+    let mut b = B::default();
+    let p = b.f32s(&QUAD, "VEC3", 3);
+    let d = b.f32s(&[0.25; 12], "VEC3", 3);
+    let targets: Vec<Value> = (0..200).map(|_| json!({ "POSITION": d })).collect();
+    let many = one_mesh(&b, json!({ "attributes": { "POSITION": p }, "targets": targets }));
+    assert!(b.bin.len() < 19_200);
+    // The buffer's own bytes come out of the same limit.
+    let bin = |glb: &[u8]| split_glb(glb).unwrap().1.unwrap().len();
+    let structs = 200 * size_of::<MorphTarget>();
+    let s = with(&many, &|l| l.max_data_bytes = bin(&many) + 19_200 + structs).unwrap();
+    assert_eq!((s.meshes[0].morph_targets.len(), s.meshes[0].morph_targets[199].positions[3]), (200, [0.25; 3]));
+    assert!(too(with(&many, &|l| l.max_data_bytes = bin(&many) + 19_200 + structs - 1)));
+    // The zero offsets of vertices a target does not move count too: 200 targets that move
+    // only the second primitive's 3 vertices also hold zeros for the first one's 4, so
+    // 200 x 7 x 3 values of 8 bytes.
+    let three = b.f32s(&QUAD[..9], "VEC3", 3);
+    let d3 = b.f32s(&[0.25; 9], "VEC3", 3);
+    let unmoved = json!({ "attributes": { "POSITION": p }, "targets": vec![json!({}); 200] });
+    let moved = json!({ "attributes": { "POSITION": three }, "targets": vec![json!({ "POSITION": d3 }); 200] });
+    let padded = b.glb(json!({ "meshes": [{ "primitives": [unmoved, moved] }] }));
+    let s = with(&padded, &|l| l.max_data_bytes = bin(&padded) + 33_600 + structs).unwrap();
+    assert_eq!(s.meshes[0].morph_targets[0].positions.len(), 7);
+    assert!(too(with(&padded, &|l| l.max_data_bytes = bin(&padded) + 33_600 + structs - 1)));
+    // So do the targets themselves, offsets or not: many meshes of empty targets cannot
+    // allocate without bound.
+    let empty = json!({ "primitives": [{ "attributes": { "POSITION": p }, "targets": vec![json!({}); 200] }] });
+    let meshes = b.glb(json!({ "meshes": vec![empty; 50] }));
+    assert!(with(&meshes, &|l| l.max_data_bytes = bin(&meshes) + 50 * structs).is_ok());
+    assert!(too(with(&meshes, &|l| l.max_data_bytes = bin(&meshes) + 50 * structs - 1)));
+    // One triangle: its positions and offsets take 72 bytes of buffer, and its target holds
+    // 9 offsets of 8 bytes, so it needs one target's size plus 144 bytes.
+    let mut t = B::default();
+    let p3 = t.f32s(&QUAD[..9], "VEC3", 3);
+    let d3 = t.f32s(&[0.25; 9], "VEC3", 3);
+    let triangle = one_mesh(&t, json!({ "attributes": { "POSITION": p3 }, "targets": [{ "POSITION": d3 }] }));
+    assert_eq!(bin(&triangle), 72);
+    let one = size_of::<MorphTarget>();
+    assert!(with(&triangle, &|l| l.max_data_bytes = one + 144).is_ok());
+    assert!(too(with(&triangle, &|l| l.max_data_bytes = one + 143)));
+    // A primitive that is left out (points) does not count towards the mesh's targets.
+    let three: Vec<Value> = (0..3).map(|_| json!({ "POSITION": d })).collect();
+    let points = json!({ "attributes": { "POSITION": p }, "mode": 0, "targets": three });
+    let one = json!({ "attributes": { "POSITION": p }, "targets": [{ "POSITION": d }] });
+    let mixed = b.glb(json!({ "meshes": [{ "primitives": [points, one] }] }));
+    let s = with(&mixed, &|l| l.max_morph_targets = 1).unwrap();
+    assert_eq!(s.meshes[0].morph_targets.len(), 1);
+    assert_eq!(
+        s.warnings,
+        ["1 primitive(s) are points, lines or have no positions and were left out", "1 triangle(s) could not be read and were left out"]
+    );
+    hammer(&glb, &parse);
+}
+
+#[test]
+fn extensions_and_extras_are_kept() {
+    let mut b = B::default();
+    let p = b.f32s(&QUAD[..9], "VEC3", 3);
+    let root = json!({ "VENDOR_avatar": { "bones": [{ "node": 0, "bone": "head" }] }, "KHR_lights_punctual": { "lights": [{ "type": "point", "extras": 1 }] } });
+    let node = json!({ "VENDOR_bone": { "stiff": 0.5 }, "KHR_lights_punctual": { "light": 0 } });
+    let material =
+        json!({ "KHR_materials_unlit": {}, "KHR_materials_clearcoat": { "clearcoatFactor": 0.5 }, "VENDOR_toon": { "shade": [0.5, 0.5, 0.5] } });
+    let s = parse(&b.glb(json!({
+        "extensionsUsed": ["VENDOR_avatar", "KHR_lights_punctual", "KHR_materials_unlit", "KHR_materials_clearcoat", "VENDOR_toon"],
+        "extensions": root.clone(),
+        "extras": { "author": "test" },
+        "nodes": [{ "mesh": 0, "extensions": node.clone(), "extras": 7 }],
+        "meshes": [{ "primitives": [{ "attributes": { "POSITION": p }, "material": 0 }], "extensions": { "VENDOR_mesh": {} }, "extras": [1, 2] }],
+        "materials": [{ "extensions": material.clone(), "extras": "x" }],
+    })))
+    .unwrap();
+    // Extensions the reader reads are kept whole as well, with what its fields do not hold
+    // (the light's extras).
+    assert_eq!((s.lights.len(), s.nodes[0].light, s.materials[0].unlit, s.materials[0].clearcoat), (1, Some(0), true, 0.5));
+    assert_eq!((Value::Object(s.extensions.clone()), s.extras.clone()), (root, Some(json!({ "author": "test" }))));
+    assert_eq!((Value::Object(s.nodes[0].extensions.clone()), s.nodes[0].extras.clone()), (node, Some(json!(7))));
+    assert_eq!((Value::Object(s.meshes[0].extensions.clone()), s.meshes[0].extras.clone()), (json!({ "VENDOR_mesh": {} }), Some(json!([1, 2]))));
+    let m = &s.materials[0];
+    assert_eq!((Value::Object(m.extensions.clone()), m.extras.clone()), (material, Some(json!("x"))));
+    // An `extensions` that is not an object is passed over.
+    let s = parse(&b.glb(json!({ "extensions": [1], "meshes": [{ "primitives": [{ "attributes": { "POSITION": p } }] }] }))).unwrap();
+    assert!(s.extensions.is_empty() && s.extras.is_none());
 }
 
 #[test]

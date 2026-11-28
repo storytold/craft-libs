@@ -1,0 +1,567 @@
+//! `LayersPanel`: the whole panel, its output and events (F11.01).
+//!
+//! The panel shows the app's [`LayerTree`] and reports what the user did as [`LayersEvent`]s in
+//! the order they happened; the app applies them with its own commands and undo (owner
+//! question 1). It holds no document and no selection of its own.
+
+mod body;
+mod context;
+mod drag;
+mod events;
+mod footer;
+mod menu;
+mod row;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+
+pub use drag::{LayersDrag, document_hash};
+pub use events::{
+    ActivateOn, LayerColumn, LayerDrop, LayerMove, LayerPosition, LayerSelect, LayerToggle, LayersEvent, MaskMove, MenuTarget, RowTransfer,
+    SubRowMove,
+};
+pub use footer::{LayersFooterAction, LayersFooterButton};
+pub use menu::{LayersMenuAction, LayersPanelCommands, LayersPanelKeys, panel_rows};
+#[cfg(feature = "screen-testing")]
+pub(crate) use row::FX_BADGE;
+
+use std::cell::RefCell;
+
+use craft_ui::contract::{
+    Bind, CommandSet as _, Commands as _, Entry, MemoProps, MemoView, NoValue, Outbox, Outcome, Show, ShowContainer as _, Tracked,
+};
+use craft_ui::layout_components::Stack;
+use craft_ui::list::ListWords;
+use craft_ui::menu::MenuRow;
+use craft_ui::primitives::textures::{ThumbSource, Thumbnails};
+use craft_ui::runtime::env::Env;
+use craft_ui::runtime::memory::Remember as _;
+use egui::{Response, Ui};
+
+use body::{LayerRows, ToggleSweeps, reveal_plan, show_body, start_rename};
+use context::{HostCell, HostDrop, HostDrops, PanelContext, ThumbHost, TrailingCell};
+use footer::show_footer;
+use menu::{OpenMenu, RowMenu, show_row_menus};
+use std::marker::PhantomData;
+
+use super::filter::{FilterBy, LayerFilter, LayerFilterBar};
+use super::options::LayersSettings;
+use super::rows::{BlendRows, LayerPropertyEdit};
+use super::thumbs::LayerThumb;
+use super::tree::{LayerInfo, LayerProperties, LayerRowKey, LayerTree};
+
+craft_ui::words! {
+    /// The words of the Layers panel's rows, footer and menus. Patterns with `{row}`, `{layer}` and
+    /// `{mask}` are whole phrases, so a language puts the name where its grammar wants it.
+    pub struct LayersPanelWords {
+        list: "layersPanel.list" = "Layers";
+        visibility: "layersPanel.visibility" = "Visibility {row}";
+        lock_cell: "layersPanel.lockCell" = "Lock {row}";
+        unlock: "layersPanel.unlock" = "Unlock {row}";
+        unlock_layer: "layersPanel.unlockLayer" = "Unlock Layer";
+        link_mask: "layersPanel.linkMask" = "Link {mask} of {layer}";
+        unlink_mask: "layersPanel.unlinkMask" = "Unlink {mask} of {layer}";
+        expand_effects: "layersPanel.expandEffects" = "Expand effects {layer}";
+        collapse_effects: "layersPanel.collapseEffects" = "Collapse effects {layer}";
+        smart_filters: "layersPanel.smartFilters" = "Smart Filters";
+        effect_of: "layersPanel.effectOf" = "effect of {layer}";
+        smart_filter_of: "layersPanel.smartFilterOf" = "Smart Filter of {layer}";
+        blending_options: "layersPanel.blendingOptions" = "Blending Options ({row})";
+        kind_pixel: "layersPanel.kindPixel" = "pixel layer";
+        kind_group: "layersPanel.kindGroup" = "group";
+        kind_adjustment: "layersPanel.kindAdjustment" = "adjustment layer";
+        kind_fill: "layersPanel.kindFill" = "fill layer";
+        kind_text: "layersPanel.kindText" = "type layer";
+        kind_shape: "layersPanel.kindShape" = "shape layer";
+        kind_smart_object: "layersPanel.kindSmartObject" = "smart object";
+        kind_artboard: "layersPanel.kindArtboard" = "artboard";
+        kind_path: "layersPanel.kindPath" = "path";
+        kind_image: "layersPanel.kindImage" = "image";
+        kind_object: "layersPanel.kindObject" = "object";
+        kind_frame: "layersPanel.kindFrame" = "frame";
+        kind_layer: "layersPanel.kindLayer" = "layer";
+        kind_guide: "layersPanel.kindGuide" = "guide";
+        kind_spine: "layersPanel.kindSpine" = "spine";
+        clipped: "layersPanel.clipped" = "clipped";
+        locked: "layersPanel.locked" = "locked";
+        linked: "layersPanel.linked" = "linked";
+        layer_mask: "layersPanel.layerMask" = "layer mask";
+        vector_mask: "layersPanel.vectorMask" = "vector mask";
+        disabled_mask: "layersPanel.disabledMask" = "disabled mask";
+        has_effects: "layersPanel.hasEffects" = "effects";
+        has_smart_filters: "layersPanel.hasSmartFilters" = "Smart Filters";
+        hidden: "layersPanel.hidden" = "hidden";
+        pixels_targeted: "layersPanel.pixelsTargeted" = "pixels targeted";
+        layer_mask_targeted: "layersPanel.layerMaskTargeted" = "layer mask targeted";
+        vector_mask_targeted: "layersPanel.vectorMaskTargeted" = "vector mask targeted";
+        filter_mask_targeted: "layersPanel.filterMaskTargeted" = "filter mask targeted";
+        frame_shape_targeted: "layersPanel.frameShapeTargeted" = "frame targeted";
+        frame_content_targeted: "layersPanel.frameContentTargeted" = "frame content targeted";
+        link_layers: "layersPanel.linkLayers" = "Link layers";
+        add_mask: "layersPanel.addMask" = "Add a mask";
+        add_style: "layersPanel.addStyle" = "Add a layer style";
+        add_adjustment: "layersPanel.addAdjustment" = "Create new fill or adjustment layer";
+        new_group: "layersPanel.newGroup" = "Create a new group";
+        new_layer: "layersPanel.newLayer" = "Create a new layer";
+        filter_options: "layersPanel.filterOptions" = "Filter Options";
+        row_menu: "layersPanel.rowMenu" = "Layer";
+        label_color_menu: "layersPanel.labelColorMenu" = "Label Color";
+    }
+}
+
+/// What the panel keeps between passes, in its root slot.
+#[derive(Clone)]
+pub(super) struct Session<Id> {
+    /// The selection anchor the list left, with the layers of the pick that left it.
+    anchor: Option<LayerRowKey<Id>>,
+    produced: Vec<Id>,
+    /// The menu the last context request chose.
+    menu: Option<OpenMenu<Id>>,
+    /// The eye or lock sweep in progress, with the look its claims were made for.
+    sweeps: Option<(LayerRowLook, ToggleSweeps)>,
+    /// The filter the panel keeps when the app gives none.
+    filter: LayerFilter,
+}
+
+impl<Id> Default for Session<Id> {
+    fn default() -> Self {
+        Session { anchor: None, produced: Vec::new(), menu: None, sweeps: None, filter: LayerFilter::default() }
+    }
+}
+
+impl<Id> Session<Id> {
+    /// The sweep readers for `look`. A look's claims are added when its readers are made, so a new look starts new ones.
+    fn sweeps_for(&mut self, look: LayerRowLook) -> &mut ToggleSweeps {
+        if self.sweeps.as_ref().is_some_and(|(held, _)| *held != look) {
+            self.sweeps = None;
+        }
+        &mut self.sweeps.get_or_insert_with(|| (look, ToggleSweeps::for_look(look))).1
+    }
+}
+
+/// The host's footer (`LayersPanel::footer`).
+type FooterFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
+
+/// The Layers panel over the app's [`LayerTree`].
+///
+/// ```ignore
+/// let tree = DocLayers::new(&doc, &ui_state);
+/// let out = LayersPanel::new(&tree)
+///     .settings(&prefs.layers)
+///     .thumbnails(&app.layer_thumbs, &DocLayerThumbs::new(&doc))
+///     .filter(Bind::bound(&mut ui_state.layer_filter))
+///     .row_menu(|target| layer_menu_rows(&doc, target))
+///     .show(ui);
+/// for event in out.events { app.apply(event) }
+/// ```
+///
+/// Top to bottom: the filter bar ([`LayerFilterBar`], while Show Filters is on and
+/// [`filter_bar`](Self::filter_bar) is not off), the blend, Opacity, Lock and Fill rows
+/// ([`BlendRows`] over `tree.properties()`), the rows (a [`List`](craft_ui::list::List) in tree
+/// mode filling the height left), the footer. Row heights and thumbnail sizes come from the control
+/// size and the Panel Options' thumbnail size.
+///
+/// - **Keys**: the rows are one Tab stop (the list's keys: arrows, Home, End and Page with Shift;
+///   Cmd/Ctrl moves the lead alone; Left and Right close and open a group, Alt for every group;
+///   Cmd/Ctrl+] and [ move the selected layers, Shift to the ends; Enter activates; F2 renames; the app's
+///   [`visibility_key`](Self::visibility_key) flips the selected layers' eyes). Shift+Right and Shift+Left open and
+///   close the active layer's effects, Alt for every layer ([`LayersPanelKeys`], on the panel's scope, so they work
+///   wherever focus is in the panel). The panel-menu rows and the stacking keys outside the rows are the app's
+///   commands ([`LayersPanelCommands`]).
+/// - **Pointer**: clicks select (Cmd/Ctrl toggles, Shift extends, the empty space clears), the eye
+///   and lock columns sweep, Alt-click on an eye shows only that layer, the eye's right-click opens
+///   its colour menu, a modified thumbnail click is a [`LayersEvent::ThumbClick`], double clicks
+///   rename or activate, rows drag to reorder (Alt copies) and onto the footer, a mask thumbnail drags onto
+///   another layer's row to move the mask there and the `fx` badge to move every effect (Alt copies). The empty space's
+///   right-click opens the host's menu for no row ([`MenuTarget::row`] `None`). With Cmd/Ctrl held over a thumbnail
+///   that loads a selection, the cursor is the pointing hand with the operation's mark.
+/// - **Right to left**: the list and the footer mirror.
+#[must_use = "show the panel with `show`"]
+#[derive(craft_ui::contract::Pattern)]
+#[pattern(probe(LayersPanel<'static, crate::ui::mock::FakeLayers>))]
+pub struct LayersPanel<'a, T: LayerTree> {
+    tree: &'a Tracked<T>,
+    settings: Option<&'a LayersSettings>,
+    thumbnails: Option<ThumbHost<'a, T::Id>>,
+    filter: Option<Bind<'a, LayerFilter>>,
+    lock_column: bool,
+    visibility_key: Option<craft_keymap::Chord>,
+    blend_rows: bool,
+    filter_bar: bool,
+    filter_types: Vec<FilterBy>,
+    find_name: bool,
+    row_menu: Option<Box<RowMenu<'a, T::Id>>>,
+    trailing: Option<Box<dyn TrailingCell<T::Id> + 'a>>,
+    reveal: Option<(T::Id, Groups)>,
+    rename: Option<T::Id>,
+    document: Option<u64>,
+    look: LayerRowLook,
+    drops: Option<Box<dyn HostDrops<T::Id> + 'a>>,
+    footer: Option<FooterFn<'a>>,
+    deletable: bool,
+}
+
+/// How a layer row is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LayerRowLook {
+    /// The row look of the base: an eye and a label.
+    #[default]
+    EyeLabel,
+    /// VectorCraft: each row shows `LayerInfo::color` as a stripe, `Heavy` on `LayerKind::Layer` rows and `Thick` on
+    /// the others; the active layer's row gets a corner mark and no target brackets, and the eye cell no label fill.
+    ColorBar,
+}
+
+/// What a reveal ([`LayersPanel::reveal`]) does with the closed groups that hold the layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Groups {
+    /// They open ([`LayersEvent::Open`]) and the layer's own row scrolls into view.
+    Open,
+    /// They stay closed and the row of the outermost one scrolls into view: the row that stands for the layer.
+    Keep,
+}
+
+/// What [`LayersPanel::show`] returns.
+#[derive(Debug)]
+#[must_use = "the app applies the panel's events"]
+#[non_exhaustive]
+pub struct LayersOutput<Id> {
+    /// What the user did this pass, in order.
+    pub events: Vec<LayersEvent<Id>>,
+    /// While rows are dragged and Preview on Canvas When Reordering Layers is on, the layer move the release would
+    /// make, for the app's canvas preview; `None` otherwise.
+    pub drop_preview: Option<LayerMove<Id>>,
+    /// The layer whose row is under the pointer, for the app's canvas outline of it (PhotoCraft's Move tool); `None`
+    /// over an effects or Smart Filter row and away from the rows.
+    pub hovered: Option<Id>,
+    /// Key focus is in the rows this pass.
+    pub focused: bool,
+    /// The pass's real run applied its one-time requests ([`start_rename`](LayersPanel::start_rename),
+    /// [`reveal`](LayersPanel::reveal), [`focus_filter_name`](LayersPanel::focus_filter_name)). A measuring run or a
+    /// replay applies none, so the host keeps them and passes them again until this is set.
+    pub requests_taken: bool,
+    /// The panel.
+    pub response: Response,
+}
+
+impl<Id> Outcome for LayersOutput<Id> {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
+impl<'a, T: LayerTree> LayersPanel<'a, T> {
+    /// The panel showing `tree`. The panel derives the display order from the tracked revision, so an edit of the tree
+    /// through the `Tracked` is what makes it walk the tree again.
+    pub fn new(tree: &'a Tracked<T>) -> Self {
+        Self {
+            tree,
+            settings: None,
+            thumbnails: None,
+            filter: None,
+            lock_column: false,
+            visibility_key: None,
+            blend_rows: true,
+            filter_bar: true,
+            filter_types: FilterBy::ALL.to_vec(),
+            find_name: false,
+            row_menu: None,
+            trailing: None,
+            reveal: None,
+            rename: None,
+            document: None,
+            look: LayerRowLook::default(),
+            drops: None,
+            footer: None,
+            deletable: false,
+        }
+    }
+
+    /// The panel's persisted section: the Panel Options and Show Filters. Without it the panel uses
+    /// [`LayersSettings::default`].
+    pub fn settings(mut self, settings: &'a LayersSettings) -> Self {
+        self.settings = Some(settings);
+        self
+    }
+
+    /// The thumbnail cache and the app's source of the rows' pictures (one [`LayerThumb`] key per
+    /// thumbnail). Without it the rows draw no pictures.
+    pub fn thumbnails(mut self, thumbnails: &'a Thumbnails<LayerThumb<T::Id>>, source: &'a dyn ThumbSource<LayerThumb<T::Id>>) -> Self {
+        self.thumbnails = Some(ThumbHost { thumbnails, source });
+        self
+    }
+
+    /// The filter bar's criteria, which the app stores; the bar edits them. Without it the panel
+    /// keeps its own.
+    pub fn filter(mut self, filter: Bind<'a, LayerFilter>) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+
+    /// A lock toggle column after the eye (default off): its edits are [`LayersEvent::Toggle`] with
+    /// [`LayerColumn::Lock`].
+    pub fn lock_column(mut self, lock_column: bool) -> Self {
+        self.lock_column = lock_column;
+        self
+    }
+
+    /// The app's key that flips the eyes of the selected layers as one gesture while the rows have focus (PhotoCraft's
+    /// Cmd+, for Hide Layers), shown in the eye's tooltip.
+    pub fn visibility_key(mut self, key: craft_keymap::Chord) -> Self {
+        self.visibility_key = Some(key);
+        self
+    }
+
+    /// Shows the blend, Opacity, Lock and Fill rows (default on).
+    pub fn blend_rows(mut self, blend_rows: bool) -> Self {
+        self.blend_rows = blend_rows;
+        self
+    }
+
+    /// Allows the filter bar (default on; it shows while Show Filters is on). An app that filters
+    /// `children()` itself turns it off.
+    pub fn filter_bar(mut self, filter_bar: bool) -> Self {
+        self.filter_bar = filter_bar;
+        self
+    }
+
+    /// The filter types the filter bar offers (default: all of [`FilterBy::ALL`]), listed in the order `FilterBy` declares
+    /// them. A filter whose type is not offered falls back to the first offered type: the bar shows it, the rows are
+    /// listed as if it were chosen, and the correction is a [`LayersEvent::Filter`]. An empty list draws no bar.
+    pub fn filter_types(mut self, types: impl Into<Vec<FilterBy>>) -> Self {
+        self.filter_types = types.into();
+        self
+    }
+
+    /// Find Layers (PhotoCraft's Select › Find Layers): this pass the filter bar switches to Name and its field takes
+    /// the focus with its text selected, so typing replaces it. A hidden filter bar stays hidden and takes no focus.
+    pub fn focus_filter_name(mut self) -> Self {
+        self.find_name = true;
+        self
+    }
+
+    /// How the rows are drawn; the base's eye and label by default.
+    pub fn row_look(mut self, look: LayerRowLook) -> Self {
+        self.look = look;
+        self
+    }
+
+    /// The rows take a `P` dragged from outside the list, before, after or into a layer, wherever `accepts` passes.
+    pub fn takes_drop<P: Send + Sync + 'static>(mut self, accepts: impl Fn(&P, &T::Id, LayerPosition) -> bool + 'a) -> Self {
+        self.drops = Some(Box::new(HostDrop { accepts, payload: PhantomData::<fn() -> P> }));
+        self
+    }
+
+    /// The host's footer, in the panel's footer slot in place of the panel's own buttons: the panel then reports no
+    /// `Footer` or `FooterDrop` and never calls `LayerTree::footer`.
+    pub fn footer(mut self, footer: impl FnMut(&mut Ui) + 'a) -> Self {
+        self.footer = Some(Box::new(footer));
+        self
+    }
+
+    /// Delete or Backspace in the rows reports [`LayersEvent::Delete`]; off by default.
+    pub fn deletable(mut self, on: bool) -> Self {
+        self.deletable = on;
+        self
+    }
+
+    /// The host's row menu: called with where it was opened (a layer row, an effects row) each pass
+    /// while a row menu is chosen; a pick is [`LayersEvent::Menu`]. A right-click outside the
+    /// selection selects the row first.
+    pub fn row_menu(mut self, menu: impl Fn(&MenuTarget<T::Id>) -> Vec<MenuRow<String>> + 'a) -> Self {
+        self.row_menu = Some(Box::new(menu));
+        self
+    }
+
+    /// The host's component at each layer row's trailing end, after the indicators and never dropped for the name
+    /// (Illustrator's target circle, a selection square): `build` makes the layer's component and `output` gets what
+    /// it reports, with the layer, in the pass it is shown.
+    pub fn trailing<C: Show + 'a>(mut self, build: impl Fn(&T::Id, &LayerInfo) -> C + 'a, output: impl FnMut(&T::Id, C::Output) + 'a) -> Self {
+        self.trailing = Some(Box::new(HostCell { build, output: RefCell::new(output), component: PhantomData }));
+        self
+    }
+
+    /// Reveals `layer` this pass: its row, or with [`Groups::Keep`] the row of its outermost closed group, scrolls
+    /// into view when it is not wholly in view; with [`Groups::Open`] its closed groups open ([`LayersEvent::Open`]).
+    /// The app calls it in the pass its active layer changes, with the layer and its own rule for the groups.
+    pub fn reveal(mut self, layer: T::Id, groups: Groups) -> Self {
+        self.reveal = Some((layer, groups));
+        self
+    }
+
+    /// The document the panel shows: the rows keep their scroll position and lead per document, so each document
+    /// shows again where it was left. Without it every document shares one.
+    pub fn document(mut self, key: impl std::hash::Hash) -> Self {
+        self.document = Some(drag::document_hash(key));
+        self
+    }
+
+    /// Opens the rename field of `layer`'s row this pass, where the layer is renamable: the app calls
+    /// it in the pass it handles its Rename Layer command from the row menu.
+    pub fn start_rename(mut self, layer: T::Id) -> Self {
+        self.rename = Some(layer);
+        self
+    }
+
+    /// Draws the panel over the available rect: the filter bar and [`BlendRows`] in the header, the
+    /// rows, the footer. Events are reported in that order.
+    pub fn show(self, ui: &mut Ui) -> LayersOutput<T::Id> {
+        let LayersPanel {
+            tree: tracked,
+            settings,
+            thumbnails,
+            mut filter,
+            lock_column,
+            visibility_key,
+            blend_rows,
+            filter_bar,
+            filter_types,
+            find_name,
+            row_menu,
+            trailing,
+            reveal,
+            rename,
+            document,
+            look,
+            drops,
+            footer: mut host_footer,
+            deletable,
+        } = self;
+        let tree: &T = tracked;
+        let env = Env::of(ui);
+        let words = env.words::<LayersPanelWords>();
+        let list_words = env.words::<ListWords>();
+        let fallback = LayersSettings::default();
+        let settings = settings.unwrap_or(&fallback);
+        let list = match document {
+            Some(document) => ui.scope_id().with(("layers-rows", document)),
+            None => ui.scope_id().with("layers-rows"),
+        };
+        let cx = PanelContext {
+            list,
+            document,
+            tree,
+            selection: tree.selection(),
+            options: &settings.options,
+            thumbs: thumbnails,
+            words: &words,
+            list_words: &list_words,
+            lock_column,
+            visibility_key,
+            trailing: trailing.as_deref(),
+            held: craft_ui::runtime::pointer::mods(ui.ctx()),
+            look,
+            deletable,
+            drops: drops.as_deref(),
+        };
+        let events = RefCell::new(Vec::new());
+        let current = RefCell::new(LayerFilter::default());
+        let unlock_label = words.unlock_layer.clone();
+
+        let mut shown = Stack::new()
+            .fill()
+            .command_scope(LayersPanelKeys::SCOPE)
+            .header(|ui, stack| {
+                let held = |filter: &mut Option<Bind<'_, LayerFilter>>, stack: &mut craft_ui::contract::BodyCx<'_>| -> LayerFilter {
+                    match filter.as_mut() {
+                        Some(bind) => bind.reborrow().read(stack).and_then(|value| value.same().cloned()).unwrap_or_default(),
+                        None => stack.memory::<Session<T::Id>>().filter.clone(),
+                    }
+                };
+                let before = held(&mut filter, stack);
+                let mut edited = false;
+                if filter_bar && settings.show_filters && !filter_types.is_empty() {
+                    let modes = tree.blend_modes(false, &before.mode);
+                    match filter.as_mut() {
+                        Some(bind) => {
+                            let out = LayerFilterBar::new(bind.reborrowed())
+                                .filter_types(filter_types.as_slice())
+                                .blend_modes(&modes)
+                                .focus_name(find_name)
+                                .show(ui);
+                            edited = out.edit.is_some();
+                            events.borrow_mut().extend(out.edit.map(|edit| LayersEvent::Filter(Box::new(edit))));
+                        }
+                        None => {
+                            let own = &mut stack.memory::<Session<T::Id>>().filter;
+                            edited = LayerFilterBar::new(Bind::bound(own))
+                                .filter_types(filter_types.as_slice())
+                                .blend_modes(&modes)
+                                .focus_name(find_name)
+                                .show(ui)
+                                .changed;
+                        }
+                    }
+                }
+                let mut listed = held(&mut filter, stack);
+                if !filter_types.is_empty() {
+                    listed.by = listed.by.among(&filter_types);
+                }
+                // A filter the bar just applied deselects the layers it hides; the list picks no row in their place.
+                if edited && let Some(select) = listed.deselect_hidden(tree) {
+                    events.borrow_mut().push(LayersEvent::Select(select));
+                }
+                *current.borrow_mut() = listed;
+                if blend_rows {
+                    let properties = tree.properties();
+                    let modes =
+                        tree.blend_modes(properties.as_ref().is_some_and(|p| p.group), properties.as_ref().map_or("normal", |p| &p.blend_key));
+                    let mut edits = Vec::new();
+                    let props = BlendProps { properties: properties.as_ref(), modes: &modes, edits: Outbox::new(&mut edits) };
+                    let _ = MemoView::new("layers-blend-rows", props, show_blend_rows).show(ui);
+                    events.borrow_mut().extend(edits.into_iter().map(LayersEvent::Properties));
+                }
+            })
+            .footer(|ui, _| match host_footer.as_mut() {
+                Some(footer) => footer(ui),
+                None => {
+                    let out = show_footer(ui, &cx, &words);
+                    events.borrow_mut().extend(out);
+                }
+            })
+            .show(ui, |ui, stack| {
+                let filter = current.borrow().clone();
+                let plan = reveal_plan(tree, reveal.clone());
+                let rows = LayerRows::new(stack, tracked, &filter, &plan.opened());
+                let session = stack.memory::<Session<T::Id>>();
+                if let Some(layer) = rename.clone() {
+                    start_rename(ui, list, layer);
+                }
+                let body = show_body(ui, &cx, &rows, session, &plan, rows.filtered(), &unlock_label);
+                let menus = show_row_menus(ui, &cx, &body.response, row_menu.as_deref(), session);
+                let focused = body.response.has_focus();
+                let mut reported = body.events;
+                reported.extend(menus);
+                while let Some((key, _)) = stack.take_command::<LayersPanelKeys>() {
+                    reported.extend(key.event(tree));
+                }
+                (reported, body.drop_preview, body.hovered, focused)
+            });
+        let requests_taken = shown.settle(|_, _| ()).is_some();
+        // Only the real run's result comes back, so the reveal's opens and the list's events are reported once.
+        let mut events = events.into_inner();
+        let (body, drop_preview, hovered, focused) = shown.inner.unwrap_or_default();
+        events.extend(body);
+        LayersOutput { events, drop_preview, hovered, focused, requests_taken, response: shown.output }
+    }
+}
+
+/// The header's blend, Opacity, Fill and lock rows as a memoized view: they show the active layer's properties and
+/// the modes it offers, so a frame whose pointer is over the rows or elsewhere replays them instead of running every
+/// control. They were about half of the panel's time in such a frame (photocraft#17131). Input that reaches them (a
+/// press, a scrub, the open blend list) runs them.
+#[derive(MemoProps)]
+struct BlendProps<'a> {
+    properties: Option<&'a LayerProperties>,
+    modes: &'a [Entry<String>],
+    edits: Outbox<'a, LayerPropertyEdit>,
+}
+
+fn show_blend_rows(props: &mut BlendProps<'_>, ui: &mut Ui) {
+    for edit in BlendRows::new(props.properties, props.modes).show(ui).events {
+        props.edits.send(edit);
+    }
+}

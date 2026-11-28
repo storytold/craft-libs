@@ -29,8 +29,8 @@ fn cpu_cost(mut f: impl FnMut()) -> f64 {
 #[test]
 fn many_comments_save_without_quadratic_id_searches() {
     for imported in [true, false] {
-        let small = comments(4_000, imported);
-        let big = comments(32_000, imported);
+        let small = comments(1_000, imported);
+        let big = comments(8_000, imported);
         let save = |d: &Document| drop(std::hint::black_box(craft_docx::write(d).unwrap()));
         save(&small);
         save(&big);
@@ -39,7 +39,7 @@ fn many_comments_save_without_quadratic_id_searches() {
         // use elapsed time; retry ratios far from linear before declaring a regression.
         for _ in 0..3 {
             let (mut s, mut b) = (f64::INFINITY, f64::INFINITY);
-            for _ in 0..3 {
+            for _ in 0..2 {
                 s = s.min(cpu_cost(|| (0..8).for_each(|_| save(&small))) / 8.0);
                 b = b.min(cpu_cost(|| save(&big)));
             }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Check the Workspace workflow's cancellation policy: pull requests and pushes to main cancel the
-run they supersede; release tags, manual runs and scheduled runs are never cancelled.
+"""Check the Workspace workflow's cancellation policy: pull requests and pushes to main cancel
+the run they supersede; release tags, manual runs and scheduled runs are never cancelled.
 
 The policy is the top-level `concurrency` block of .github/workflows/workspace.yml. This script
 reads those fields, requires the documented expression shapes, and checks which group each event
@@ -29,7 +29,10 @@ PULL_REQUEST, PUSH, DISPATCH, SCHEDULE = "pull_request", "push", "workflow_dispa
 # false". This exact condition is the whole of the expression language this script understands, so
 # a reworded policy has to be reworded here too, on purpose. github.ref, never github.head_ref or
 # github.sha.
-SUPERSEDED = "github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main'"
+SUPERSEDED = (
+    "github.event_name == 'pull_request'"
+    " || github.event_name == 'push' && github.ref == 'refs/heads/main'"
+)
 GROUP_SHAPE = re.compile(
     r"(?P<prefix>[A-Za-z0-9._-]+)-\$\{\{\s*\(\s*(?P<condition>[^()]+?)\s*\)\s*"
     r"&&\s*github\.ref\s*\|\|\s*github\.run_id\s*\}\}"

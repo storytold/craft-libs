@@ -102,9 +102,32 @@ const MAX_FOUND: usize = 1_000;
 /// in: as many as fit the longest line read, at the longest a UID is written.
 pub const MAX_GMAIL_FOUND: usize = 5_000;
 
+/// Budgets shared by the commands of one session. Public constructors use the production caps.
+#[derive(Clone, Copy)]
+struct Limits {
+    responses: usize,
+    command_text: usize,
+    fetch_text: usize,
+    flag_bytes: usize,
+    label_bytes: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            responses: MAX_RESPONSES,
+            command_text: MAX_COMMAND_TEXT,
+            fetch_text: MAX_FETCH_TEXT,
+            flag_bytes: MAX_FLAG_BYTES,
+            label_bytes: MAX_GMAIL_LABEL_BYTES,
+        }
+    }
+}
+
 /// An IMAP session on a stream.
 pub struct Imap<S> {
     wire: Wire<S>,
+    limits: Limits,
     /// The number in the next command's tag.
     next_tag: u32,
     secrets: Secrets,
@@ -470,8 +493,8 @@ impl Wanted {
 
     /// Most responses a fetch of this mailbox may bring: one for each message it may report, but
     /// never fewer than any other command.
-    fn responses(&self) -> usize {
-        self.cap.max(MAX_RESPONSES)
+    fn responses(&self, minimum: usize) -> usize {
+        self.cap.max(minimum)
     }
 
     fn wants(&self, uid: u32) -> bool {
@@ -612,7 +635,7 @@ fn is_date_time(text: &str) -> bool {
 }
 
 /// Whether [`Imap::uid_search_header`] can look for `text`: printable ASCII, at most
-/// [`MAX_QUOTED`] bytes. What it can't be asked for, it refuses unsent.
+/// `MAX_QUOTED` bytes. What it can't be asked for, it refuses unsent.
 pub fn searchable(text: &str) -> bool {
     !text.is_empty() && text.len() <= MAX_QUOTED && text.bytes().all(|b| matches!(b, b' '..=b'~'))
 }
@@ -678,8 +701,13 @@ impl<S: Read + Write> Imap<S> {
 
     /// Continue on a stream that already greeted (after the caller wrapped it in TLS).
     pub fn resume(stream: S) -> Self {
+        Self::resume_with_limits(stream, Limits::default())
+    }
+
+    fn resume_with_limits(stream: S, limits: Limits) -> Self {
         Imap {
             wire: Wire::new(stream),
+            limits,
             next_tag: 1,
             secrets: Secrets::default(),
             capabilities: None,
@@ -689,8 +717,8 @@ impl<S: Read + Write> Imap<S> {
             appended: Vec::new(),
             leaving: false,
             text_seen: 0,
-            response_cap: MAX_RESPONSES,
-            text_cap: MAX_COMMAND_TEXT,
+            response_cap: limits.responses,
+            text_cap: limits.command_text,
             skip_long: false,
             skipped: false,
             idle_tag: None,
@@ -812,7 +840,7 @@ impl<S: Read + Write> Imap<S> {
     }
 
     /// [`list`](Self::list), and how many more mailboxes the server listed that were read and
-    /// dropped because the list was full ([`MAX_MAILBOXES`], [`MAX_LIST_BYTES`]): 0 when it
+    /// dropped because the list was full (`MAX_MAILBOXES`, `MAX_LIST_BYTES`): 0 when it
     /// was kept whole.
     pub fn list_counted(&mut self) -> Result<(Vec<Mailbox>, usize), ProtoError> {
         let mut out: Vec<Mailbox> = Vec::new();
@@ -857,7 +885,7 @@ impl<S: Read + Write> Imap<S> {
         Ok(self.selected.clone())
     }
 
-    /// UID FETCH <set> (UID FLAGS): every message in the set with its flags. `set` like "1:*" or "5,9,12:20".
+    /// UID FETCH `<set>` (UID FLAGS): every message in the set with its flags. `set` like "1:*" or "5,9,12:20".
     ///
     /// The messages come back in UID order, each once.
     pub fn uid_fetch_flags(&mut self, set: &str) -> Result<Vec<Fetched>, ProtoError> {
@@ -868,7 +896,7 @@ impl<S: Read + Write> Imap<S> {
     /// well (`UID FETCH <set> (UID FLAGS X-GM-MSGID X-GM-LABELS)`, in [`Fetched::gmail_id`] and
     /// [`Fetched::gmail_labels`]): for Gmail's server alone, which documents them among its IMAP
     /// extensions. A message it gives no id, or one that isn't a number, has none; one it gives
-    /// no labels has `None` there, and one past [`MAX_GMAIL_LABEL_BYTES`] of labels in the fetch
+    /// no labels has `None` there, and one past `MAX_GMAIL_LABEL_BYTES` of labels in the fetch
     /// too.
     pub fn uid_fetch_flags_gmail(&mut self, set: &str) -> Result<Vec<Fetched>, ProtoError> {
         self.fetch_flags(set, true, true)
@@ -884,6 +912,7 @@ impl<S: Read + Write> Imap<S> {
 
     fn fetch_flags(&mut self, set: &str, ids: bool, labels_wanted: bool) -> Result<Vec<Fetched>, ProtoError> {
         type FetchedFlags = (Vec<String>, Option<u64>, Option<Vec<String>>);
+        let limits = self.limits;
         let mut found: BTreeMap<u32, FetchedFlags> = BTreeMap::new();
         // The bytes of labels and of flags kept so far, all messages together.
         let mut label_bytes = 0usize;
@@ -896,12 +925,12 @@ impl<S: Read + Write> Imap<S> {
         };
         let command = Self::fetch(set, items)?;
         let mut wanted = Wanted::new(set, &self.selected).ok_or_else(|| ProtoError::Protocol(said!("not a set of messages")))?;
-        self.response_cap = wanted.responses();
+        self.response_cap = wanted.responses(self.limits.responses);
         let claimed = usize::try_from(self.selected.exists).unwrap_or(usize::MAX);
-        self.text_cap = claimed.saturating_mul(FETCH_TEXT_PER_MESSAGE).clamp(MAX_COMMAND_TEXT, MAX_FETCH_TEXT);
+        self.text_cap = claimed.saturating_mul(FETCH_TEXT_PER_MESSAGE).clamp(limits.command_text, limits.fetch_text);
         let answered = self.run(command, &mut |values| {
             // A response with a UID shows the message is there, even one that forgot the flags.
-            if flag_bytes <= MAX_FLAG_BYTES
+            if flag_bytes <= limits.flag_bytes
                 && let Some(item) = Item::from(values)
                 && wanted.wants(item.uid)
                 && (found.contains_key(&item.uid) || wanted.room(found.len()))
@@ -911,7 +940,7 @@ impl<S: Read + Write> Imap<S> {
                 let size = item.flags.iter().flatten().map(|flag| flag.len().saturating_add(FLAG_OVERHEAD)).sum::<usize>();
                 let entry = if found.contains_key(&item.uid) { 0 } else { ENTRY_OVERHEAD };
                 flag_bytes = flag_bytes.saturating_add(size).saturating_add(entry);
-                if flag_bytes > MAX_FLAG_BYTES {
+                if flag_bytes > limits.flag_bytes {
                     return;
                 }
                 let (flags, id, labels) = found.entry(item.uid).or_default();
@@ -924,17 +953,17 @@ impl<S: Read + Write> Imap<S> {
                 }
                 if labels_wanted && let Some(later) = item.gmail_labels {
                     let size = later.iter().map(|label| label.len().saturating_add(LABEL_OVERHEAD)).sum::<usize>();
-                    if label_bytes.saturating_add(size) <= MAX_GMAIL_LABEL_BYTES {
+                    if label_bytes.saturating_add(size) <= limits.label_bytes {
                         label_bytes = label_bytes.saturating_add(size);
                         *labels = Some(later);
                     }
                 }
             }
         });
-        self.response_cap = MAX_RESPONSES;
-        self.text_cap = MAX_COMMAND_TEXT;
+        self.response_cap = limits.responses;
+        self.text_cap = limits.command_text;
         answered?;
-        if flag_bytes > MAX_FLAG_BYTES {
+        if flag_bytes > limits.flag_bytes {
             return Err(ProtoError::Protocol(said!("more flags than one listing keeps")));
         }
         wanted.check()?;
@@ -944,12 +973,12 @@ impl<S: Read + Write> Imap<S> {
             .collect())
     }
 
-    /// UID FETCH <set> (UID RFC822.SIZE): the size in bytes of every message in the set, in UID order.
+    /// UID FETCH `<set>` (UID RFC822.SIZE): the size in bytes of every message in the set, in UID order.
     pub fn uid_fetch_sizes(&mut self, set: &str) -> Result<Vec<(u32, u64)>, ProtoError> {
         let mut out: Vec<(u32, u64)> = Vec::new();
         let command = Self::fetch(set, "(UID RFC822.SIZE)")?;
         let mut wanted = Wanted::new(set, &self.selected).ok_or_else(|| ProtoError::Protocol(said!("not a set of messages")))?;
-        self.response_cap = wanted.responses();
+        self.response_cap = wanted.responses(self.limits.responses);
         let answered = self.run(command, &mut |values| {
             if let Some(Item { uid, size: Some(size), .. }) = Item::from(values)
                 && wanted.wants(uid)
@@ -958,7 +987,7 @@ impl<S: Read + Write> Imap<S> {
                 out.push((uid, size));
             }
         });
-        self.response_cap = MAX_RESPONSES;
+        self.response_cap = self.limits.responses;
         answered?;
         wanted.check()?;
         out.sort_by_key(|(uid, _)| *uid);
@@ -966,12 +995,12 @@ impl<S: Read + Write> Imap<S> {
         Ok(out)
     }
 
-    /// UID FETCH <uid> (UID FLAGS INTERNALDATE BODY.PEEK[]); `None` when the UID is gone.
+    /// UID FETCH `<uid>` (UID FLAGS INTERNALDATE BODY.PEEK[]); `None` when the UID is gone.
     pub fn uid_fetch_message(&mut self, uid: u32) -> Result<Option<Fetched>, ProtoError> {
         self.fetch_one(uid, "(UID FLAGS INTERNALDATE BODY.PEEK[])", false)
     }
 
-    /// UID FETCH <uid> (UID FLAGS INTERNALDATE BODY.PEEK[HEADER]): the header alone of a message
+    /// UID FETCH `<uid>` (UID FLAGS INTERNALDATE `BODY.PEEK[HEADER]`): the header alone of a message
     /// that is not taken whole (one that is too large), in [`Fetched::body`], up to and with the
     /// empty line that ends it. `None` when the UID is gone.
     pub fn uid_fetch_header(&mut self, uid: u32) -> Result<Option<Fetched>, ProtoError> {
@@ -1003,7 +1032,7 @@ impl<S: Read + Write> Imap<S> {
         Ok(found.filter(|message| message.body.is_some()))
     }
 
-    /// UID STORE <uid> +FLAGS.SILENT / -FLAGS.SILENT (flags).
+    /// UID STORE `<uid>` +FLAGS.SILENT / -FLAGS.SILENT (flags).
     pub fn uid_store(&mut self, uid: u32, add: bool, flags: &[&str]) -> Result<(), ProtoError> {
         let flags = flag_list(flags)?;
         if uid == 0 {
@@ -1012,7 +1041,7 @@ impl<S: Read + Write> Imap<S> {
         self.store(&uid.to_string(), add, &flags)
     }
 
-    /// UID STORE <set> +FLAGS.SILENT / -FLAGS.SILENT (flags): the same change for every message
+    /// UID STORE `<set>` +FLAGS.SILENT / -FLAGS.SILENT (flags): the same change for every message
     /// the set names (number by number, as [`uid_sets`] writes it; `1:*` is refused). A UID that
     /// is no longer there is passed over by the server without a word.
     pub fn uid_store_set(&mut self, set: &str, add: bool, flags: &[&str]) -> Result<(), ProtoError> {
@@ -1020,9 +1049,9 @@ impl<S: Read + Write> Imap<S> {
         self.store(named(set)?, add, &flags)
     }
 
-    /// UID SEARCH UNDELETED HEADER <field> <text>: the messages of the open mailbox, other than
+    /// UID SEARCH UNDELETED HEADER `<field>` `<text>`: the messages of the open mailbox, other than
     /// those marked as deleted, whose header field `field` has `text` in it (the server matches a
-    /// part of the field, whatever its case), by UID in UID order, at most [`MAX_FOUND`] of them.
+    /// part of the field, whatever its case), by UID in UID order, at most `MAX_FOUND` of them.
     /// `field` is a field's name, and `text` one that [`searchable`] lets through: anything else
     /// is refused unsent.
     pub fn uid_search_header(&mut self, field: &str, text: &str) -> Result<Vec<u32>, ProtoError> {
@@ -1048,15 +1077,15 @@ impl<S: Read + Write> Imap<S> {
         Ok(found.into_iter().collect())
     }
 
-    /// UID SEARCH UID <set> UNDELETED X-GM-RAW "<query>": the messages of the open mailbox, among
+    /// UID SEARCH UID `<set>` UNDELETED X-GM-RAW "`<query>`": the messages of the open mailbox, among
     /// those `set` names and not marked as deleted, that Gmail's own search finds for `query`
     /// (`category:social`), by UID in UID order. `X-GM-RAW` is Gmail's (Google's "Gmail IMAP extensions"): for Gmail's server alone.
     ///
     /// The query goes in quotes, without the CR, LF and NUL that could end the command early; one
-    /// that is empty then, or isn't printable ASCII within [`MAX_QUOTED`] bytes, is refused unsent.
+    /// that is empty then, or isn't printable ASCII within `MAX_QUOTED` bytes, is refused unsent.
     /// Of the answer, only UIDs inside `set` are taken, at most [`MAX_GMAIL_FOUND`] of them: a
     /// caller that wants them all asks for sets of fewer messages than that. An answer longer than
-    /// [`MAX_LINE`](crate::MAX_LINE) is read past and refused ([`ProtoError::Rejected`]): the
+    /// [`MAX_LINE`] is read past and refused ([`ProtoError::Rejected`]): the
     /// session goes on.
     pub fn uid_search_gmail(&mut self, set: &str, query: &str) -> Result<Vec<u32>, ProtoError> {
         if !is_set(set) {
@@ -1101,14 +1130,14 @@ impl<S: Read + Write> Imap<S> {
         self.run(command, &mut ignore).map(|_| ())
     }
 
-    /// UID MOVE <set> <mailbox> (RFC 6851, for a server that offers `MOVE`): the messages leave
+    /// UID MOVE `<set>` `<mailbox>` (RFC 6851, for a server that offers `MOVE`): the messages leave
     /// the open mailbox for the named one in one step. Answers where they are now when the
     /// server says so beyond doubt (`COPYUID`), `None` otherwise.
     pub fn uid_move(&mut self, set: &str, raw_name: &str) -> Result<Option<Copied>, ProtoError> {
         self.transfer("UID MOVE", set, raw_name)
     }
 
-    /// UID COPY <set> <mailbox>: copies of the messages are added to the named mailbox. Answers
+    /// UID COPY `<set>` `<mailbox>`: copies of the messages are added to the named mailbox. Answers
     /// like [`uid_move`](Self::uid_move).
     pub fn uid_copy(&mut self, set: &str, raw_name: &str) -> Result<Option<Copied>, ProtoError> {
         self.transfer("UID COPY", set, raw_name)
@@ -1126,7 +1155,7 @@ impl<S: Read + Write> Imap<S> {
         done.map(|_| copied)
     }
 
-    /// UID EXPUNGE <set> (RFC 4315): the messages of the set that are marked `\Deleted` go for
+    /// UID EXPUNGE `<set>` (RFC 4315): the messages of the set that are marked `\Deleted` go for
     /// good, and no others. Refused unsent unless the server has said `UIDPLUS`: a server
     /// without it only knows the EXPUNGE that takes every marked message of the mailbox.
     pub fn uid_expunge(&mut self, set: &str) -> Result<(), ProtoError> {
@@ -1137,13 +1166,13 @@ impl<S: Read + Write> Imap<S> {
         self.run(Command::new("UID EXPUNGE").arg(set), &mut ignore).map(|_| ())
     }
 
-    /// CREATE <mailbox>. `raw_name` is the name as the server wants it: in modified UTF-7
+    /// CREATE `<mailbox>`. `raw_name` is the name as the server wants it: in modified UTF-7
     /// ([`encode_utf7`]), its levels joined with the server's own delimiter.
     pub fn create(&mut self, raw_name: &str) -> Result<(), ProtoError> {
         self.run(Command::new("CREATE").string(raw_name.as_bytes()), &mut ignore).map(|_| ())
     }
 
-    /// SUBSCRIBE <mailbox>: other mail programs list subscribed mailboxes only.
+    /// SUBSCRIBE `<mailbox>`: other mail programs list subscribed mailboxes only.
     pub fn subscribe(&mut self, raw_name: &str) -> Result<(), ProtoError> {
         self.run(Command::new("SUBSCRIBE").string(raw_name.as_bytes()), &mut ignore).map(|_| ())
     }

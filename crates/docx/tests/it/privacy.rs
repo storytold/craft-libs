@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
 
 const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+const W16DU_NS: &str = r#"xmlns:w16du="http://schemas.microsoft.com/office/word/2023/wordml/word16du""#;
 const RT: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
 
 fn zip(entries: &[(&str, String)]) -> Vec<u8> {
@@ -29,11 +30,11 @@ fn unzip(bytes: &[u8]) -> BTreeMap<String, String> {
     parts
 }
 
-/// A package with two named commenters, a tracked insertion and deletion, the document
-/// properties' creator and last-modified-by, and `settings` inside `w:settings`.
+/// A package with two named commenters, a tracked insertion (with its UTC time) and deletion, the
+/// document properties' creator and last-modified-by, and `settings` inside `w:settings`.
 fn fixture(settings: &str) -> Vec<u8> {
     let body = r#"<w:p><w:commentRangeStart w:id="1"/><w:r><w:t>Clause one.</w:t></w:r><w:commentRangeEnd w:id="1"/><w:r><w:commentReference w:id="1"/></w:r></w:p>
-<w:p><w:commentRangeStart w:id="2"/><w:ins w:id="10" w:author="Quill Ramsey" w:date="2026-03-04T05:06:07Z"><w:r><w:t>Added</w:t></w:r></w:ins><w:del w:id="11" w:author="Ona Vettel" w:date="2026-03-05T05:06:07Z"><w:r><w:delText>Removed</w:delText></w:r></w:del><w:commentRangeEnd w:id="2"/><w:r><w:commentReference w:id="2"/></w:r></w:p>"#;
+<w:p><w:commentRangeStart w:id="2"/><w:ins w:id="10" w:author="Quill Ramsey" w:date="2026-03-04T05:06:07Z" w16du:dateUtc="2026-03-04T13:06:07Z"><w:r><w:t>Added</w:t></w:r></w:ins><w:del w:id="11" w:author="Ona Vettel" w:date="2026-03-05T05:06:07Z"><w:r><w:delText>Removed</w:delText></w:r></w:del><w:commentRangeEnd w:id="2"/><w:r><w:commentReference w:id="2"/></w:r></w:p>"#;
     let comments = format!(
         r#"<w:comments {W_NS}><w:comment w:id="1" w:author="Quill Ramsey" w:initials="QR" w:date="2026-03-01T10:00:00Z"><w:p><w:r><w:t>Check this.</w:t></w:r></w:p></w:comment><w:comment w:id="2" w:author="Ona Vettel" w:initials="OV" w:date="2026-03-02T10:00:00Z"><w:p><w:r><w:t>Agreed.</w:t></w:r></w:p></w:comment></w:comments>"#
     );
@@ -46,7 +47,7 @@ fn fixture(settings: &str) -> Vec<u8> {
     );
     zip(&[
         ("_rels/.rels", root_rels),
-        ("word/document.xml", format!(r#"<w:document {W_NS}><w:body>{body}</w:body></w:document>"#)),
+        ("word/document.xml", format!(r#"<w:document {W_NS} {W16DU_NS}><w:body>{body}</w:body></w:document>"#)),
         ("word/_rels/document.xml.rels", doc_rels),
         ("word/comments.xml", comments),
         ("word/settings.xml", format!(r#"<w:settings {W_NS}>{settings}</w:settings>"#)),
@@ -77,7 +78,7 @@ fn remove_personal_information_and_dates_on_save() {
     for name in NAMES {
         assert!(!all.contains(name), "{name} saved");
     }
-    assert!(!all.contains("w:date="), "annotation date saved");
+    assert!(!all.contains("w:date=") && !all.contains("dateUtc="), "annotation date saved");
     assert!(!all.contains("2026-03-0"), "annotation date saved");
     let comments = &parts["word/comments.xml"];
     assert_eq!(comments.matches(r#"w:author="Author""#).count(), 2, "{comments}");
@@ -103,7 +104,7 @@ fn each_privacy_setting_works_alone() {
     // Dates only: names stay.
     let doc = craft_docx::read(&fixture("<w:removeDateAndTime/>")).unwrap();
     let (parts, all) = saved(&doc);
-    assert!(!all.contains("w:date="));
+    assert!(!all.contains("w:date=") && !all.contains("dateUtc="));
     assert!(all.contains("Quill Ramsey") && all.contains("Ona Vettel"));
     assert!(parts["docProps/core.xml"].contains("<dc:creator>Quill Ramsey</dc:creator>"));
     assert!(!parts["word/settings.xml"].contains("removePersonalInformation"));
@@ -121,6 +122,7 @@ fn each_privacy_setting_works_alone() {
         let (parts, all) = saved(&doc);
         assert!(all.contains("Quill Ramsey") && all.contains(r#"w:initials="OV""#));
         assert_eq!(all.matches("w:date=").count(), 4);
+        assert!(all.contains(r#"w16du:dateUtc="2026-03-04T13:06:07Z""#), "the insertion keeps its UTC time");
         assert!(parts["docProps/core.xml"].contains("<cp:lastModifiedBy>Ona Vettel</cp:lastModifiedBy>"));
         assert!(!parts["word/settings.xml"].contains("removeDateAndTime"));
     }

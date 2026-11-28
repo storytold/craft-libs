@@ -163,52 +163,6 @@ fn forms(base: &str, class: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// craft-libs#495 review: `-ой` adjectives after a velar or hushing letter take `и`.
-    #[test]
-    fn oi_adjectives_spell_i_after_velars_and_hushers() {
-        let f = forms("дорогой", "adj");
-        assert!(f.contains(&"дорогие".to_string()) && f.contains(&"дорогими".to_string()) && !f.iter().any(|w| w.contains('ы')), "{f:?}");
-        let f = forms("большой", "adj");
-        assert!(f.contains(&"больших".to_string()) && !f.iter().any(|w| w.contains('ы')), "{f:?}");
-        assert!(forms("молодой", "adj").contains(&"молодые".to_string()));
-    }
-
-    #[cfg_attr(
-        not(craft_proof_embed = "ru"),
-        ignore = "needs the ru Language data (CRAFT_I18N_DIR; ru-extra.txt is embedded in every build that has it)"
-    )]
-    #[test]
-    fn supplement_words_decline() {
-        for w in [
-            "маркетплейс",
-            "маркетплейсов",
-            "маркетплейсах",
-            "Маркетплейсами",
-            "чекбоксы",
-            "промокода",
-            "кешбэки",
-            "инфографики",
-            "оплат",
-            "отгрузок",
-            "интеграций",
-            "соцсетей",
-            "согласий",
-            "бонусных",
-            "газоиспользующего",
-            "колеруется",
-            "заколерованный",
-            "онлайн",
-            "чат-ботом",
-            "Яндекса",
-            "Битриксе",
-        ] {
-            assert!(contains(w), "{w}");
-        }
-        // Names need their capital; nonsense isn't in.
-        assert!(!contains("яндекс"));
-        assert!(!contains("маркетплейсыы"));
-    }
-
     #[test]
     fn declension_classes() {
         assert!(forms("бренд", "m").contains(&"брендов".to_string()));

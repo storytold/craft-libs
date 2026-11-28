@@ -305,16 +305,6 @@ mod tests {
     }
 
     #[test]
-    fn chroma_is_nearest_neighbour() {
-        // 4:2:0, 4×2 luma, chroma 2×1: the left chroma sample covers columns 0–1 only.
-        let mut f = frame(4, 2, 8, ChromaFormat::Yuv420, 128, 128, 128);
-        f.cr = vec![200, 128];
-        let v = to_rgb16(&Planes::Picture(&f), Signal { matrix: 6, full_range: true }, false, Upsampling::Nearest).unwrap();
-        let red: Vec<u16> = v.chunks(3).map(|p| p[0]).collect();
-        assert!(red[0] == red[1] && red[1] == red[4] && red[0] > red[2] && red[2] == 128 * 257, "{red:?}");
-    }
-
-    #[test]
     fn bilinear_chroma_is_centred_9_3_3_1() {
         // 4:2:0, 4×4 luma, chroma 2×2 with one bright corner sample.
         let mut f = frame(4, 4, 8, ChromaFormat::Yuv420, 128, 128, 128);

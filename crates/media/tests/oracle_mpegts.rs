@@ -2,7 +2,7 @@
 //! demuxer's streams, access-unit counts, sizes, timestamps and key flags are compared with
 //! ffprobe's packets, and every unit reads back.
 
-mod common;
+use super::common;
 
 use craft_media::CodecId;
 use craft_media::mpegts::{Codec, File, Format, Kind, open};
@@ -22,6 +22,7 @@ const ALL: &[&str] = &[
     "m2ts_h264_ac3.mts",
     "ts_hevc_latm.ts",
     "ts_h264_eac3.ts",
+    "ts_mpeg4_opus.ts",
     "ps_mpeg2_mp2.vob",
     "ps_mpeg2_lpcm.vob",
     "ps_mpeg2_ac3.vob",
@@ -72,6 +73,10 @@ fn spec(name: &str) -> Vec<&'static str> {
             &["-c:a", "aac", "-b:a", "96k", "-f", "mpegts", "-mpegts_flags", "latm"],
         ]),
         "ts_h264_eac3.ts" => cat(&[PIC, NOISE, &["-t", "1"], x264, &["-c:a", "eac3", "-b:a", "192k", "-f", "mpegts"]]),
+        // stream type 0x10, and Opus with its registration and audio descriptors and control headers
+        "ts_mpeg4_opus.ts" => {
+            cat(&[PIC, NOISE, &["-t", "1.2", "-c:v", "mpeg4", "-bf", "2", "-g", "12", "-c:a", "libopus", "-b:a", "96k", "-f", "mpegts"]])
+        }
         // DVD-style program streams
         "ps_mpeg2_mp2.vob" => cat(&[
             &["-f", "lavfi", "-i", "testsrc2=size=720x480:rate=30000/1001"],
@@ -112,7 +117,9 @@ fn expected_codec(name: &str, format: Format) -> Codec {
         "mpeg2video" => Codec::Mpeg2Video,
         "h264" => Codec::H264,
         "hevc" => Codec::Hevc,
+        "mpeg4" => Codec::Mpeg4Part2,
         "mp2" | "mp3" => Codec::MpegAudio,
+        "opus" => Codec::Opus,
         "aac" => Codec::AacAdts,
         "aac_latm" => Codec::AacLatm,
         "ac3" => Codec::Ac3,
@@ -184,7 +191,7 @@ fn check(name: &str) -> Option<File> {
 
 #[test]
 fn transport_streams_match_ffprobe() {
-    for name in ["ts_mpeg2_mp2.ts", "ts_h264_aac.ts", "ts_hevc_latm.ts", "ts_h264_eac3.ts"] {
+    for name in ["ts_mpeg2_mp2.ts", "ts_h264_aac.ts", "ts_hevc_latm.ts", "ts_h264_eac3.ts", "ts_mpeg4_opus.ts"] {
         let Some(f) = check(name) else { return };
         assert_eq!(f.format, Format::Ts { packet_size: 188, sync_offset: 0 }, "{name}");
         assert_eq!(f.program, Some(1), "{name}");
@@ -195,9 +202,17 @@ fn transport_streams_match_ffprobe() {
             "ts_mpeg2_mp2.ts" => [CodecId::Mpeg2Video, CodecId::Mp2],
             "ts_h264_aac.ts" => [CodecId::H264, CodecId::Aac],
             "ts_hevc_latm.ts" => [CodecId::Hevc, CodecId::Aac],
+            "ts_mpeg4_opus.ts" => [CodecId::Mpeg4Video, CodecId::Opus],
             _ => [CodecId::H264, CodecId::Eac3],
         };
         assert_eq!(ids, want, "{name}");
+        if name == "ts_mpeg4_opus.ts" {
+            // stereo from the Opus audio descriptor, and libopus's 312-sample start trim as the
+            // pre-skip
+            let p = f.streams[1].codec_params();
+            assert_eq!((p.sample_rate, p.channels), (Some(48_000), Some(2)));
+            assert_eq!(&p.extradata[..12], &[b"OpusHead".as_slice(), &[1, 2], &312u16.to_le_bytes()].concat()[..]);
+        }
     }
 }
 

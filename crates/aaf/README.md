@@ -5,7 +5,7 @@ composition model.
 
 | Module | What |
 |---|---|
-| `model` | `Document`: compositions (tracks of fillers, source clips and overlapping transitions; clip gain, constant or keyframed; markers; start timecode), nested compositions, and the media `Source`s they reference (file path or embedded PCM, picture size and rate, sound channels / rate / bits, start timecode, markers). Times are exact `craft_timeline::time::Tick`s. |
+| `model` | `Document`: compositions (tracks of fillers, source clips and overlapping transitions; clip gain, constant or keyframed; markers; start timecode), nested compositions, and the media `Source`s they reference (file path or embedded PCM, picture size and rate, sound channels / rate / bits, start timecode, markers). Times are exact `craft_timeline::Tick`s. |
 | `aaf` | `read`, `write`, `sniff`: AAF Edit Protocol in structured storage (`craft-cfb`). |
 | `omf` | `read`, `write`, `sniff`: OMF Interchange 2.0 in a Bento container. Sound only. |
 

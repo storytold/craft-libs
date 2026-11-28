@@ -355,7 +355,7 @@ pub fn format(code: &str, v: f64, lang: Option<&str>) -> String {
     format_dated(code, v, lang, false)
 }
 
-/// [`format`] with the workbook's date system: `date_1904` counts serial dates from 1 January
+/// [`format()`] with the workbook's date system: `date_1904` counts serial dates from 1 January
 /// 1904 (`c:date1904`) instead of 1900.
 pub fn format_dated(code: &str, v: f64, lang: Option<&str>, date_1904: bool) -> String {
     let code = if code.len() > MAX_CODE_LEN * 4 || code.chars().count() > MAX_CODE_LEN { "General" } else { code };

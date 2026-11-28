@@ -24,4 +24,5 @@ rayon = { workspace = true }
 
 [dev-dependencies]
 craft-render-parity = { workspace = true }
+craft-testkit = { workspace = true }
 proptest = { workspace = true }

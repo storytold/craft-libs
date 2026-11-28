@@ -12,17 +12,17 @@ use craft_audio::opus::encoder::{Bandwidth, Mode, OpusEncoder};
 /// ffmpeg, found and skipped by craft-media's oracle rules (EffectCraft looked in Homebrew's
 /// directory, then `PATH`).
 fn ffmpeg() -> Option<std::path::PathBuf> {
-    crate::testkit::ffmpeg_or_skip("opus encoder ffmpeg oracle")
+    crate::integration::codecs::testkit::ffmpeg_or_skip("opus encoder ffmpeg oracle")
 }
 
 /// Decodes an Ogg Opus file with ffmpeg's decoder `codec`; returns interleaved f32 output.
 fn ffmpeg_decode(exe: &std::path::Path, codec: &str, file: &[u8], channels: usize, tag: &str) -> Option<Vec<f32>> {
     let has = match Command::new(exe).args(["-hide_banner", "-decoders"]).output() {
         Ok(out) => out,
-        Err(e) => return crate::common::skip(&format!("ffmpeg -decoders failed: {e}")),
+        Err(e) => return crate::integration::codecs::common::skip(&format!("ffmpeg -decoders failed: {e}")),
     };
     if !String::from_utf8_lossy(&has.stdout).lines().any(|l| l.split_whitespace().nth(1) == Some(codec)) {
-        return crate::common::skip(&format!("ffmpeg has no {codec} decoder"));
+        return crate::integration::codecs::common::skip(&format!("ffmpeg has no {codec} decoder"));
     }
     let path = std::env::temp_dir().join(format!("effectcraft-opusenc-{}-{tag}.opus", std::process::id()));
     std::fs::write(&path, file).unwrap();

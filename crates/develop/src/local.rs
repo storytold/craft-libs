@@ -508,7 +508,7 @@ pub struct NrColor {
 }
 
 /// Output pixels per pixel of the original photo for an output of `px_per_long` pixels per unit
-/// of the long edge of an original `native_long` pixels long, at most 1 ([`crate::Plan::detail_scale`]).
+/// of the long edge of an original `native_long` pixels long, at most 1 (`crate::Plan::detail_scale`).
 pub fn detail_scale(px_per_long: f64, native_long: usize) -> f32 {
     let k = (px_per_long / native_long.max(1) as f64) as f32;
     if k.is_finite() { k.clamp(0.0, 1.0) } else { 1.0 }
@@ -533,10 +533,10 @@ fn nr_radius(sigma: f32) -> (f32, f32) {
 }
 
 /// Noise-reduction parameters at `scale` output pixels per pixel of the original
-/// ([`crate::Plan::detail_scale`]; see [`denoise`]). Noise lives at the original's pixels, so the
+/// (`crate::Plan::detail_scale`; see [`denoise`]). Noise lives at the original's pixels, so the
 /// radii are the full-size radii times `scale`, and the guided filter's `eps` (the variance it
 /// treats as noise) follows the noise variance, which averaging `1/scale × 1/scale` pixels into one
-/// multiplies by `scale²`. A radius below [`NR_MIN_SIGMA`] fades instead ([`nr_radius`]): previews look like
+/// multiplies by `scale²`. A radius below `NR_MIN_SIGMA` fades instead (`nr_radius`): previews look like
 /// the full-size render scaled down (issue #960). At `scale` 1 these are the full-size parameters.
 pub fn nr_params(s: &DevelopSettings, scale: f32) -> (Option<NrLum>, Option<NrColor>) {
     let lum = (s.detail.nr_luminance / 100.0) as f32;
@@ -558,7 +558,7 @@ pub fn nr_params(s: &DevelopSettings, scale: f32) -> (Option<NrLum>, Option<NrCo
 /// Noise reduction at output resolution: luminance via an edge-aware self-guided filter on
 /// log-luminance, colour by blurring chromaticity (rgb / Y) and re-applying the original luminance.
 /// `scale`: output pixels per pixel of the original ([`nr_params`]). `colour_noise`: the whole
-/// frame's noise model for the joint colour NR ([`crate::colour_noise`]; `None`: measured on `img`).
+/// frame's noise model for the joint colour NR (`crate::colour_noise`; `None`: measured on `img`).
 pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, scale: f32, colour_noise: Option<&crate::nrc_joint::JointNoise>) {
     let (lum, col) = nr_params(s, scale);
     if col.is_some() && joint_colour_nr(s) {
@@ -628,7 +628,7 @@ pub struct NrcParams {
 }
 
 /// The new colour noise reduction's parameters at `scale` output pixels per pixel of the original
-/// ([`crate::Plan::detail_scale`]), `None` when Color is 0.
+/// (`crate::Plan::detail_scale`), `None` when Color is 0.
 pub fn nrc_params(s: &DevelopSettings, scale: f32) -> Option<NrcParams> {
     let amount = (s.detail.nr_color / 100.0) as f32;
     if amount <= 0.0 {

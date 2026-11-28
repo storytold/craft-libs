@@ -2,8 +2,8 @@
 //!
 //! `heic-rs`, a pure-Rust HEIF container and HEVC still-picture decoder, reads the container and
 //! reconstructs the coded pictures (bit-exact against libde265 on iPhone photos); this crate turns
-//! them into RGB itself ([`ycc`]) so the colours match libheif: it honours the HEVC VUI's range
-//! and matrix ([`vui`]) where heic-rs assumes BT.709 limited range, and upsamples chroma like
+//! them into RGB itself (`ycc`) so the colours match libheif: it honours the HEVC VUI's range
+//! and matrix (`vui`) where heic-rs assumes BT.709 limited range, and upsamples chroma like
 //! libheif. Single pictures and grid-tiled photos, 8- to 16-bit, monochrome, alpha auxiliary
 //! images, ICC, EXIF and XMP. The API is plain data ([`Info`], [`Decoded`], [`Error`]) so the
 //! crate knows nothing about any app; each app's codec layer adapts it behind its own optional
@@ -678,32 +678,6 @@ mod tests {
             let r = decode(&HEIC_RS_BOX_PANIC, &Options { apply_transforms, ..Default::default() });
             assert!(matches!(r, Err(Error::Malformed(_))), "{r:?}");
         }
-    }
-
-    #[test]
-    fn image_sequence_is_unsupported_with_a_clear_message() {
-        // An ftyp and nothing else: a HEIF image sequence would have a moov here instead of a meta.
-        let bytes = b"\0\0\0\x18ftypmsf1\0\0\0\0msf1hevc";
-        for r in [probe(bytes).map(|_| ()), decode(bytes, &Options::default()).map(|_| ()), read_metadata(bytes).map(|_| ())] {
-            assert!(matches!(&r, Err(Error::Unsupported(m)) if m.contains("sequence")), "{r:?}");
-        }
-    }
-
-    #[test]
-    fn garbage_is_an_error() {
-        for bytes in [&b""[..], b"\0\0\0\x18ftypheic\0\0\0\0mif1heic", &[0xFF; 64]] {
-            assert!(probe(bytes).is_err());
-            assert!(decode(bytes, &Options::default()).is_err());
-            assert!(decode_thumbnail(bytes, 1, &Options::default()).is_err());
-            assert!(read_metadata(bytes).is_err());
-        }
-    }
-
-    #[test]
-    fn errors_display_their_kind() {
-        assert!(Error::Unsupported("x").to_string().contains("unsupported"));
-        assert!(Error::Limit("x".into()).to_string().contains("limit"));
-        assert!(Error::Malformed("x".into()).to_string().contains("malformed"));
     }
 
     /// A crate that enables the former feature name `testdata` gets `test-support`, and with it

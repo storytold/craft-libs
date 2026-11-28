@@ -1,8 +1,8 @@
 //! What an import or export could not represent exactly.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 /// Severity of a report entry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Level {
     /// Informational (an assumption the importer made).
     Info,
@@ -10,8 +10,7 @@ pub enum Level {
     Warning,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ReportEntry {
     pub level: Level,
     pub message: String,
@@ -20,8 +19,7 @@ pub struct ReportEntry {
 }
 
 /// What an import/export could not represent exactly. Identical messages are merged with a count.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Report {
     pub entries: Vec<ReportEntry>,
 }
@@ -98,10 +96,11 @@ impl std::fmt::Display for Report {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
-    #[test]
+    #[trial]
     fn limited_entries_share_one_budget_and_keep_existing_counts() {
         let mut r = Report::default();
         r.info_limited(Some(2), "a");

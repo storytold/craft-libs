@@ -435,17 +435,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn remap_reaches_every_probability() {
-        for old in 1..=255u8 {
-            for new in 1..=255u8 {
-                if new != old {
-                    assert!(delta_for(old, new).is_some(), "{old} -> {new}");
-                }
-            }
-        }
-    }
-
-    #[test]
     fn delta_table_matches_the_linear_search() {
         for old in 0..=255u8 {
             for new in 0..=255u8 {

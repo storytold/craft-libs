@@ -19,6 +19,7 @@ pub mod decode;
 #[cfg(feature = "apv-encode")]
 pub mod encode;
 pub mod header;
+mod raw;
 pub mod tables;
 
 #[cfg(feature = "apv-decode")]
@@ -26,6 +27,7 @@ pub use decode::{DecodeOptions, decode_frame, decode_frame_into, decode_frame_wi
 #[cfg(feature = "apv-encode")]
 pub use encode::{Encoder, EncoderConfig};
 pub use header::{AU_SIGNATURE, FrameHeader, split_raw_bitstream, unwrap_au};
+pub use raw::{RawAccessUnit, raw_access_units, sniff_raw_bitstream};
 
 /// APV codec errors.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

@@ -60,3 +60,7 @@ mod vml_shapes;
 mod word_xml;
 mod wordml2003_write;
 mod wps_fallback;
+
+mod application_name;
+mod matrix_save_size;
+mod protection;

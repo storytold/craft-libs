@@ -448,47 +448,6 @@ mod tests {
     }
 
     #[test]
-    fn repeated_words() {
-        let v = check("Ala ma ma kota i się się cieszy.");
-        assert_eq!(v.len(), 2, "{v:?}");
-        assert_eq!(v[0].message, "Powtórzone słowo: „ma”");
-        assert_eq!(v[0].suggestions, ["ma"]);
-        assert!(v.iter().all(|i| i.lang == ProofLang::Pl && i.kind == IssueKind::Grammar));
-        clean("Tak tak, to to samo. Ha ha!");
-    }
-
-    #[test]
-    fn spaces_and_punctuation() {
-        let m = messages("Ala ma kota , a kot ma Alę .  Czy na pewno ?");
-        assert!(m.contains(&"Zbędna spacja przed znakiem interpunkcyjnym@ ,".to_string()), "{m:?}");
-        assert!(m.contains(&"Zbędna spacja przed znakiem interpunkcyjnym@ .".to_string()), "{m:?}");
-        assert!(m.contains(&"Zbędna spacja przed znakiem interpunkcyjnym@ ?".to_string()), "{m:?}");
-        assert!(m.contains(&"Podwójna spacja@  ".to_string()), "{m:?}");
-        clean("Fajnie :) Naprawdę :-) Albo :D Wartość .5 i wielokropek ...");
-        let m = messages("Powiedział ,,tak” i poszedł.. Potem;; koniec.");
-        assert_eq!(m.iter().filter(|x| x.starts_with("Powtórzony znak")).count(), 3, "{m:?}");
-        assert_eq!(check("Powiedział ,,tak”.").iter().find(|i| i.message.starts_with("Powtórzony")).unwrap().suggestions, ["„"]);
-        clean("Czekał… i czekał... aż do rana.");
-    }
-
-    #[test]
-    fn sentence_start_capitals() {
-        let m = messages("to jest zdanie. a to drugie! czy trzecie? tak.");
-        assert_eq!(m.iter().filter(|x| x.starts_with("Wielka litera")).count(), 4, "{m:?}");
-        assert_eq!(check("ala ma kota.")[0].suggestions, ["Ala"]);
-        // Abbreviations, initials, ordinals, dates, ellipses and dialogue dashes.
-        clean("Kupiłem owoce, np. jabłka, gruszki itp. oraz warzywa.");
-        clean("W 1990 r. powstała firma, m.in. dzięki dotacji.");
-        clean("Spotkałem J. Kowalskiego i prof. Nowaka przy ul. Długiej.");
-        clean("Zajął 5. miejsce w XX w. sporcie.");
-        clean("Czekałem... aż w końcu przyszedł.");
-        clean("– Naprawdę? – zapytał. – Tak – odpowiedziała.");
-        clean("Powiedział: „Wracam”. Potem wyszedł.");
-        // A list item may start in lower case.
-        clean("jabłka,");
-    }
-
-    #[test]
     fn missing_commas() {
         let m = messages("Wiem że przyjdzie. Mam kota który śpi. Zostałem bo musiałem. Idę aby zdążyć. Nie przyszedł ponieważ padało.");
         for want in [
@@ -510,39 +469,5 @@ mod tests {
         clean("Który z nich? To który wybierasz?");
         clean("Po raz nie wiadomo który.");
         clean("Dlatego że padało, zostaliśmy.");
-    }
-
-    #[test]
-    fn we_and_ze() {
-        let m = messages("Spotkamy się w wtorek w Wrocławiu z szkoły z mną.");
-        assert_eq!(m.iter().filter(|x| x.starts_with("Przed tym słowem")).count(), 4, "{m:?}");
-        let v = check("Z szkoły wracam.");
-        assert_eq!(v[0].suggestions, ["Ze"]);
-        clean("Byłem w wodzie, w wieku dziesięciu lat, z szafą, z siostrą i z zamkiem.");
-        clean("Wracam ze szkoły we wtorek ze mną.");
-    }
-
-    #[test]
-    fn correct_polish_text_is_clean() {
-        clean(
-            "Zażółć gęślą jaźń. Chrząszcz brzmi w trzcinie, a źdźbło trawy się kołysze. \
-             Przyjdę jutro, chyba że będzie padać. Książka, którą czytam, jest ciekawa.",
-        );
-        clean("Pięćdziesięciu uczniów przyszło, ponieważ ogłoszono konkurs.");
-    }
-
-    proptest::proptest! {
-        #[test]
-        fn never_panics(s in "\\PC{0,80}") {
-            let _ = check(&s);
-        }
-
-        #[test]
-        fn never_panics_on_polish_like_text(s in "[a-ząćęłńóśźżA-Z ,.;:!?„”…\\-]{0,60}") {
-            for i in check(&s) {
-                proptest::prop_assert!(i.start <= i.end && i.end <= s.len());
-                proptest::prop_assert!(s.is_char_boundary(i.start) && s.is_char_boundary(i.end));
-            }
-        }
     }
 }

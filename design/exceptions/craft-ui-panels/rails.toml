@@ -1,0 +1,9 @@
+config_version = 1
+
+[[exception]]
+name = "tool-rail-trial-rooms"
+kind = "exempt"
+rule = "literal-size"
+path = "crates/ui-panels/src/rails/tool/trials.rs"
+reason = "Trial rooms, not looks."
+count = 1

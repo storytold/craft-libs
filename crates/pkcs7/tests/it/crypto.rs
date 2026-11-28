@@ -162,11 +162,16 @@ fn signatures_round_trip_for_every_key_type() {
     }
 }
 
+/// New digital ids are self-signed, survive a `.p12` round trip, and are written with the stronger
+/// round count for the key and the MAC. Key derivation takes the time here, so one file per key
+/// type is written and opened once: the wrong password only for the P-256 file (it stops at the
+/// MAC, which is the same code for both), and the round count read off the P-256 file.
 #[test]
 fn new_digital_ids_are_self_signed_and_survive_a_p12_round_trip() {
     let name = Name::build("Grace Hopper", "Compilers", "Navy", "grace@example.com", "us");
     let now = Time { year: 2026, month: 10, day: 2, hour: 12, minute: 0, second: 0 };
     for key in [craft_pkcs7::PrivateKey::generate_rsa(2048).unwrap(), craft_pkcs7::PrivateKey::generate_p256().unwrap()] {
+        let is_p256 = matches!(key.public_key(), PublicKey::P256(_));
         let cert = Certificate::self_signed(&name, &key, now, 5, &[0x42, 0x01]).unwrap();
         assert!(cert.is_self_signed());
         assert_eq!(cert.subject.display(), "C=US, O=Navy, OU=Compilers, CN=Grace Hopper, E=grace@example.com");
@@ -177,32 +182,23 @@ fn new_digital_ids_are_self_signed_and_survive_a_p12_round_trip() {
         let back = pkcs12::open(&p12, "s3cret").unwrap();
         assert_eq!(back.certificate, id.certificate);
         assert_eq!(back.friendly_name.as_deref(), Some("Grace Hopper"));
-        assert!(matches!(pkcs12::open(&p12, "wrong"), Err(Error::WrongPassword)));
+        if is_p256 {
+            assert!(matches!(pkcs12::open(&p12, "wrong"), Err(Error::WrongPassword)));
+            // OWASP's figure for PBKDF2-HMAC-SHA-256, spelled out so lowering the constant fails here.
+            const ROUNDS: u64 = 600_000;
+            // MacData's iteration count, the last field of the file.
+            let pfx = Tlv::parse_all(&p12).unwrap().children().unwrap();
+            let mac = pfx[2].children().unwrap();
+            assert_eq!(mac[2].u64().unwrap(), ROUNDS);
+            // The same INTEGER three times: the MAC and the PBKDF2 parameters of both encrypted parts.
+            let rounds = craft_pkcs7::der::int(ROUNDS);
+            assert_eq!(p12.windows(rounds.len()).filter(|w| *w == rounds.as_slice()).count(), 3);
+        }
         let d = DigestAlg::Sha256.digest(&[b"x"]);
         let sig = cms::sign_detached(&back.key, &back.certificate, &[], DigestAlg::Sha256, &d).unwrap();
         let sd = cms::SignedData::parse(&sig).unwrap();
         assert!(sd.verify_signature(&back.certificate, &d).unwrap());
     }
-}
-
-#[test]
-fn new_digital_ids_use_the_stronger_round_count_for_the_key_and_the_mac() {
-    let name = Name::build("Grace Hopper", "", "", "", "");
-    let now = Time { year: 2026, month: 10, day: 14, hour: 12, minute: 0, second: 0 };
-    let key = craft_pkcs7::PrivateKey::generate_p256().unwrap();
-    let certificate = Certificate::self_signed(&name, &key, now, 5, &[0x42]).unwrap();
-    let id = pkcs12::DigitalId { key, certificate, chain: Vec::new(), friendly_name: None };
-    let p12 = pkcs12::write(&id, "s3cret12").unwrap();
-    // OWASP's figure for PBKDF2-HMAC-SHA-256, spelled out so lowering the constant fails here.
-    const ROUNDS: u64 = 600_000;
-    // MacData's iteration count, the last field of the file.
-    let pfx = Tlv::parse_all(&p12).unwrap().children().unwrap();
-    let mac = pfx[2].children().unwrap();
-    assert_eq!(mac[2].u64().unwrap(), ROUNDS);
-    // The same INTEGER three times: the MAC and the PBKDF2 parameters of both encrypted parts.
-    let rounds = craft_pkcs7::der::int(ROUNDS);
-    assert_eq!(p12.windows(rounds.len()).filter(|w| *w == rounds.as_slice()).count(), 3);
-    assert_eq!(pkcs12::open(&p12, "s3cret12").unwrap().certificate, id.certificate);
 }
 
 /// A `.p12` whose MAC asks for `rounds` iterations. Its content is empty: opening it must stop

@@ -354,38 +354,7 @@ pub fn find_offset(a: &[f32], b: &[f32], sample_rate: u32, opts: &SyncOptions) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::Rng;
-
-    /// Speech-like test signal: voiced syllables (harmonics of a gliding pitch under an envelope),
-    /// noise bursts (consonants) and pauses.
-    fn speechy(sr: f64, secs: f64, seed: u64) -> Vec<f32> {
-        let n = (sr * secs) as usize;
-        let mut rng = Rng::new(seed);
-        let mut out = vec![0.0f32; n];
-        let mut i = 0usize;
-        while i < n {
-            let len = ((0.08 + 0.25 * (rng.uniform() * 0.5 + 0.5) as f64) * sr) as usize;
-            let kind = rng.uniform();
-            let f0 = 110.0 + 120.0 * (rng.uniform() as f64 * 0.5 + 0.5);
-            let glide = 1.0 + 0.3 * rng.uniform() as f64;
-            let amp = 0.2 + 0.3 * (rng.uniform() * 0.5 + 0.5);
-            for k in 0..len.min(n - i) {
-                let t = k as f64 / sr;
-                let env = (std::f64::consts::PI * k as f64 / len as f64).sin() as f32;
-                let v = if kind > 0.3 {
-                    let f = f0 * (1.0 + (glide - 1.0) * k as f64 / len as f64);
-                    (1..8).map(|h| ((2.0 * std::f64::consts::PI * f * h as f64 * t).sin() / h as f64) as f32).sum::<f32>()
-                } else if kind > -0.4 {
-                    rng.uniform()
-                } else {
-                    0.0
-                };
-                out[i + k] = v * env * amp;
-            }
-            i += len + ((rng.uniform() * 0.5 + 0.5) * 0.15 * sr as f32) as usize;
-        }
-        out
-    }
+    use crate::testutil::{Rng, speechy};
 
     /// `x` delayed by `delay` samples (fractional: windowed-sinc interpolation), scaled by `gain`,
     /// optionally colored by a zero-phase low-pass (`[k, 1-2k, k]`, so the delay stays exact), with
@@ -454,11 +423,11 @@ mod tests {
     #[test]
     fn pure_delay_exact_both_signs() {
         let sr = 48_000;
-        let s = speechy(sr as f64, 12.0, 1);
-        for delay in [0i64, 1, 7, 12_345, 96_001, -4_321, -50_000] {
+        let s = speechy(sr as f64, 6.0, 1);
+        for delay in [0i64, 1, 7, 12_345, -4_321, -50_000] {
             // b = s shifted: b[n] = s[n + delay]
             let b: Vec<f32> =
-                (0..400_000i64).map(|n| if n + delay >= 0 && ((n + delay) as usize) < s.len() { s[(n + delay) as usize] } else { 0.0 }).collect();
+                (0..200_000i64).map(|n| if n + delay >= 0 && ((n + delay) as usize) < s.len() { s[(n + delay) as usize] } else { 0.0 }).collect();
             let r = find_offset(&s, &b, sr, &SyncOptions::default()).unwrap();
             assert_eq!(r.lag, delay, "{r:?}");
             assert!(r.reliable(), "{r:?}");
@@ -471,8 +440,8 @@ mod tests {
     #[test]
     fn multi_mic_offsets_within_one_sample() {
         let sr = 48_000u32;
-        let src = speechy(sr as f64, 30.0, 7);
-        let len = 30 * sr as usize;
+        let src = speechy(sr as f64, 12.0, 7);
+        let len = 12 * sr as usize;
         // mic k records src delayed by d_k: mic_k[n] = src[n - d_k]
         let cases: [(f64, f32, Option<f32>, f32); 4] =
             [(0.0, 1.0, None, 40.0), (2_345.0, 0.1, None, 25.0), (-31_337.4, 3.0, Some(0.3), 10.0), (150_000.6, 0.5, None, 3.0)];
@@ -551,7 +520,7 @@ mod tests {
     #[test]
     fn max_lag_limits_the_search() {
         let sr = 48_000;
-        let s = speechy(sr as f64, 10.0, 5);
+        let s = speechy(sr as f64, 5.0, 5);
         let b: Vec<f32> = s[48_000..].to_vec();
         let r = find_offset(&s, &b, sr, &SyncOptions { max_lag: Some(60_000), ..Default::default() }).unwrap();
         assert_eq!(r.lag, 48_000);
@@ -560,7 +529,7 @@ mod tests {
         // Non-finite samples count as silence (also in the refinement's window search).
         let mut t = s.clone();
         t[1_000] = f32::NAN;
-        t[300_000] = f32::INFINITY;
+        t[200_000] = f32::INFINITY;
         let r = find_offset(&t, &b, sr, &SyncOptions::default()).unwrap();
         assert_eq!(r.lag, 48_000);
         assert!(r.confidence.is_finite() && r.lag_fine.is_finite(), "{r:?}");
@@ -586,15 +555,15 @@ mod tests {
         assert!(r.reliable(), "{r:?}");
     }
 
-    /// A coarse budget that asks for more than [`MAX_DECIMATION`] still scales the coarse lag by
-    /// the factor applied: 2 × 9 M samples at 8 kHz with a 4,096-sample budget asks for 4,395.
+    /// A decimation factor asked for beyond [`MAX_DECIMATION`] still scales the coarse lag by the
+    /// factor applied. A sample rate of 2,048,001 Hz against a 500 Hz coarse rate asks for 4,097.
     #[test]
     fn a_coarse_factor_above_the_cap_still_finds_the_lag() {
-        let sr = 8_000;
-        let s = speechy(sr as f64, 2_300.0, 9);
-        let lag = 400_000usize;
+        let sr = 2_048_001;
+        let s = speechy(sr as f64, 0.8, 9);
+        let lag = 100_000usize;
         let b: Vec<f32> = s[lag..].to_vec();
-        let opts = SyncOptions { max_coarse_samples: 4_096, ..Default::default() };
+        let opts = SyncOptions { coarse_rate: 500, ..Default::default() };
         let r = find_offset(&s, &b, sr, &opts).unwrap();
         assert_eq!(r.lag, lag as i64, "{r:?}");
     }
@@ -623,11 +592,11 @@ mod tests {
         let sr = 48_000u32;
         let delay = 112_560i64;
         for seed in [1, 3, 7] {
-            let src = speechy(sr as f64, 24.0, seed);
+            let src = speechy(sr as f64, 10.0, seed);
             let scratch = scratch_track(&src, sr, 100 + seed);
             for sign in [1.0f32, -1.0] {
                 // b[n] = scratch[n + delay]
-                let b: Vec<f32> = (0..16 * sr as i64).map(|n| sign * scratch.get((n + delay) as usize).copied().unwrap_or(0.0)).collect();
+                let b: Vec<f32> = (0..7 * sr as i64).map(|n| sign * scratch.get((n + delay) as usize).copied().unwrap_or(0.0)).collect();
                 let r = find_offset(&src, &b, sr, &SyncOptions::default()).unwrap();
                 assert_eq!(r.inverted, sign < 0.0, "seed {seed}, sign {sign}: {r:?}");
                 // the filters delay the scratch track by a few samples

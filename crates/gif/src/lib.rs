@@ -10,7 +10,7 @@
 //! headers alone. [`palette`] gives the colour table of the first frame, for opening a GIF as an
 //! indexed image.
 //!
-//! With feature `frames`, [`frames::read_frames`] decodes every frame through the `image` crate's
+//! With feature `frames`, `frames::read_frames` decodes every frame through the `image` crate's
 //! GIF decoder, after the checks [`scan`] makes possible, with bounded memory.
 //! [`write::animation`] writes full-canvas RGBA8 animation frames with GIF palette quantization,
 //! timing, loop and disposal metadata. Parallel producers can quantize frames with

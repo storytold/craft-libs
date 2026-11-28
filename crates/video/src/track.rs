@@ -177,6 +177,22 @@ impl TrackDecoder {
         self.threads
     }
 
+    /// Tighten the Motion JPEG decoder's working allocation cap in bytes.
+    ///
+    /// The cap persists across reset. Requests above the current cap leave it at the current value.
+    /// Other codecs return a video unsupported error.
+    #[cfg(feature = "mjpeg")]
+    pub fn limit_mjpeg_allocation(&mut self, max_bytes: u64) -> Result<(), VideoError> {
+        match &mut self.inner {
+            Inner::Mjpeg(decoder) => {
+                decoder.limit_allocation(max_bytes);
+                Ok(())
+            }
+            #[allow(unreachable_patterns)]
+            _ => Err(VideoError::Unsupported("allocation cap is a Motion JPEG track option".to_string())),
+        }
+    }
+
     /// Whether draft mode is enabled (for reduced-resolution playback only; never for export).
     pub fn draft(&self) -> bool {
         self.draft

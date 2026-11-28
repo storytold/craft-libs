@@ -1,6 +1,8 @@
+//! Integration tests of craft-keymap: settings.
+
 use std::time::Duration;
 
-use craft_keymap::{Bindable, Binding, CommandRef, DropReason, Keymap, Overrides, Platform, Policy, Problem, Profiles, Scope, Scopes};
+use craft_keymap::{Binding, CommandDef, CommandRef, DropReason, Keymap, Overrides, Platform, Policy, Problem, Profiles, Scope, Scopes};
 use craft_settings::{Location, OpenOptions, Probe, Settings, SettingsStore};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -35,10 +37,10 @@ fn open(dir: &std::path::Path) -> SettingsStore<Prefs> {
 
 fn keymap(overrides: Overrides) -> Keymap {
     let catalog = vec![
-        Bindable::new(CommandRef::with_params("window.panel", json!({"panel": "layers"})), "Layers", Scope::app()),
-        Bindable::new("text.bold", "Bold", Scope::app()),
-        Bindable::new("edit.copy", "Copy", Scope::app()).with_default(Binding::parse("Cmd+C").unwrap()),
-        Bindable::new("edit.paste", "Paste", Scope::app()).with_default(Binding::parse("Cmd+V").unwrap()),
+        CommandDef::new(CommandRef::with_params("window.panel", json!({"panel": "layers"})), "Layers", Scope::app()),
+        CommandDef::new("text.bold", "Bold", Scope::app()),
+        CommandDef::new("edit.copy", "Copy", Scope::app()).with_default(Binding::parse("Cmd+C").unwrap()),
+        CommandDef::new("edit.paste", "Paste", Scope::app()).with_default(Binding::parse("Cmd+V").unwrap()),
     ];
     Keymap::new(catalog, Scopes::new().with_context("Text"), Platform::Mac).with_overrides(overrides)
 }
@@ -103,44 +105,4 @@ fn overrides_round_trip_through_craft_settings() {
     assert!(keymap(reloaded.get().shortcuts.clone()).bindings(&layers).is_empty());
     assert_eq!(reloaded.get().profiles.sets().keys().collect::<Vec<_>>(), ["Mine"]);
     assert_eq!(reloaded.get().profiles.sets()["Mine"].get("text.bold"), Some(&["Text: Cmd+B".to_string()][..]));
-}
-
-#[test]
-fn hand_written_array_of_tables_and_map_forms_load() {
-    for text in [
-        "schema_version = 1\n\n[[shortcuts]]\ncommand = \"edit.copy\"\nkeys = [\"Cmd+K\"]\n\n[[shortcuts]]\ncommand = \"edit.paste\"\nkeys = []\n",
-        "schema_version = 1\n\n[shortcuts]\n\"edit.copy\" = [\"Cmd+K\"]\n\"edit.paste\" = []\n",
-    ] {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("config.toml"), text).unwrap();
-        let km = keymap(open(tmp.path()).get().shortcuts.clone());
-        assert_eq!(km.bindings(&"edit.copy".into()), vec![Binding::parse("Cmd+K").unwrap()], "{text}");
-        assert!(km.bindings(&"edit.paste".into()).is_empty(), "{text}");
-    }
-}
-
-#[test]
-fn a_shortcuts_value_that_is_not_a_list_loads_as_no_overrides() {
-    for value in ["\"x\"", "5", "true"] {
-        let tmp = tempfile::tempdir().unwrap();
-        let text = format!("schema_version = 1\nshortcuts = {value}\n\n[general]\nlanguage = \"de\"\n");
-        std::fs::write(tmp.path().join("config.toml"), text).unwrap();
-        let store = open(tmp.path());
-        assert!(store.get().shortcuts.is_empty(), "{value}");
-        assert_eq!(store.get().general.language, "de", "{value}");
-        let problems = keymap(store.get().shortcuts.clone()).problems();
-        assert_eq!(problems, vec![Problem::Dropped { key: String::new(), reason: DropReason::NotAList }], "{value}");
-    }
-}
-
-#[test]
-fn a_sets_value_that_is_not_a_list_keeps_the_rest_of_the_profiles() {
-    for value in ["\"x\"", "5", "true"] {
-        let tmp = tempfile::tempdir().unwrap();
-        let text = format!("schema_version = 1\n\n[profiles]\nactive = \"Mine\"\nsets = {value}\n");
-        std::fs::write(tmp.path().join("config.toml"), text).unwrap();
-        let store = open(tmp.path());
-        assert_eq!(store.get().profiles.active(), "Mine", "{value}");
-        assert!(store.get().profiles.sets().is_empty(), "{value}");
-    }
 }

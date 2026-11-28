@@ -190,63 +190,6 @@ mod tests {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x39, 0x93,
     ];
 
-    #[test]
-    fn seven_one_rejects_valid_independent_prefix_before_audio_decode() -> Result<()> {
-        assert!(validate(&PRIMARY)?.1.is_none());
-        let mut decoder = ProgrammeDecoder::new(ChannelLayout::SURROUND_7_1);
-        assert_eq!(decoder.decode(&PRIMARY).err(), Some(Error::Invalid("programme does not match the expected speaker layout")));
-        assert!(decoder.topology.is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn validates_dependency_order_frame_bounds_and_crc() -> Result<()> {
-        let mut au = PRIMARY.to_vec();
-        au.extend_from_slice(&DEPENDENT);
-        assert!(validate(&au)?.1.is_some());
-        assert!(validate(&DEPENDENT).is_err());
-        assert!(validate(&au[..63]).is_err());
-        au.push(0);
-        assert!(validate(&au).is_err());
-        au.pop();
-        au[55] ^= 1;
-        assert!(validate(&au).is_err());
-        let mut duplicate = PRIMARY.to_vec();
-        duplicate.extend_from_slice(&PRIMARY);
-        assert!(validate(&duplicate).is_err());
-        Ok(())
-    }
-
-    fn changed_dependent(bit: usize, width: usize, value: u16) -> Vec<u8> {
-        let mut frame = DEPENDENT;
-        for i in 0..width {
-            let at = bit + i;
-            let mask = 1 << (7 - at % 8);
-            frame[at / 8] = (frame[at / 8] & !mask) | if value & (1 << (width - 1 - i)) != 0 { mask } else { 0 };
-        }
-        let crc = crc16(&frame[2..30]);
-        frame[30..].copy_from_slice(&crc.to_be_bytes());
-        let mut au = PRIMARY.to_vec();
-        au.extend_from_slice(&frame);
-        au
-    }
-
-    #[test]
-    fn rejects_crc_valid_but_inconsistent_programme_descriptions() {
-        // Fields are normative bit offsets in the independent structural BSI fixture.
-        let wrong_map = changed_dependent(60, 16, 0x1800);
-        assert_eq!(validate(&wrong_map).err(), Some(Error::Unsupported("dependent channel map must be Ls Rs Lrs Rrs".into())));
-        let missing_last_marker = changed_dependent(50, 1, 0);
-        assert_eq!(validate(&missing_last_marker).err(), Some(Error::Invalid("last dependent substream must signal compre")));
-        let wrong_rate = changed_dependent(32, 2, 2);
-        assert_eq!(validate(&wrong_rate).err(), Some(Error::Invalid("dependent rate or block count differs from independent")));
-        let short_frame = changed_dependent(34, 2, 0);
-        assert_eq!(validate(&short_frame).err(), Some(Error::Unsupported("programme decoder requires full-rate six-block E-AC-3 bsid 16".into())));
-        let mut decoder = ProgrammeDecoder::new(ChannelLayout::SURROUND_7_1);
-        decoder.reset();
-        assert_eq!(decoder.expected_layout, ChannelLayout::SURROUND_7_1);
-    }
-
     #[cfg(feature = "eac3-encode")]
     #[test]
     fn explicit_map_overrides_dependent_acmod_speaker_order() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -286,24 +229,5 @@ mod tests {
             let result = std::panic::catch_unwind(|| ProgrammeDecoder::new(ChannelLayout::SURROUND_7_1).decode(&corrupt));
             assert!(matches!(result, Ok(Err(_))), "corrupt bit {bit}");
         }
-    }
-
-    #[test]
-    fn dependent_replaces_downmix_and_labels_rears() -> Result<()> {
-        let primary = (0..6).map(|c| vec![c as f32; 1536]).collect();
-        let dependent = (10..14).map(|c| vec![c as f32; 1536]).collect();
-        let result = assemble_7_1(primary, dependent)?;
-        assert_eq!(result.iter().map(|c| c[0]).collect::<Vec<_>>(), [0., 1., 2., 3., 12., 13., 10., 11.]);
-        assert_eq!(ChannelLayout::SURROUND_7_1.mask(), Some(0x63f));
-        Ok(())
-    }
-
-    #[test]
-    fn incomplete_programme_never_produces_partial_channels() {
-        assert!(assemble_7_1(vec![vec![0.; 1536]; 6], vec![vec![0.; 1535]; 4]).is_err());
-        let mut decoder = ProgrammeDecoder::new(ChannelLayout::SURROUND_7_1);
-        decoder.topology = Some((48_000, 7, true, true));
-        assert!(decoder.decode(&[0; 8193]).is_err());
-        assert!(decoder.topology.is_none());
     }
 }

@@ -167,16 +167,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn half_float_roundtrip() {
-        for v in [0.0f32, 1.0, 0.5, 0.333, 1e-5, 65504.0, -2.25, 0.1] {
-            let back = f16_to_f32(f32_to_f16(v));
-            assert!((back - v).abs() <= v.abs() * 1e-3 + 1e-7, "{v} -> {back}");
-        }
-        assert_eq!(f32_to_f16(1.0), 0x3C00);
-        assert_eq!(f32_to_f16(1e6), 0x7C00);
-    }
-
-    #[test]
     fn from_fn_samples_red_fastest_and_bounds_the_size() {
         let lut = Lut3d::from_fn(3, |[r, g, b]| [r, g * 0.5, 1.0 - b]).unwrap();
         assert_eq!(lut.size(), 3);

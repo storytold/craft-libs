@@ -1,6 +1,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-//! Native file and message dialogs that never block the event loop.
+//! Native only (rfd does not build for the web): file and message dialogs that never block the event loop.
 //!
 //! A blocking `rfd::FileDialog` or `rfd::MessageDialog` runs AppKit's modal loop
 //! (`-[NSSavePanel runModal]`) inside winit's event handler on macOS. An event that arrives while
@@ -17,20 +17,39 @@
 //! On macOS, Open and Folder show as a free-standing panel that doesn't block the window, as
 //! native apps do; Save and message boxes show as a sheet on the parent window. Elsewhere every
 //! dialog is a modal owned by the parent window.
+#![warn(missing_docs)]
 
 mod filter;
+#[cfg(any(target_os = "macos", test))]
+mod format_menu;
 mod native;
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
+pub(crate) mod portal;
+pub(crate) mod probe;
+pub mod save;
+#[cfg(test)]
+pub(crate) mod save_tests;
+pub mod service;
+#[cfg(feature = "ui")]
+pub mod ui;
+
+/// The registrations of this crate's UI types, for its integration binary.
+#[cfg(feature = "screen-testing")]
+pub mod testing {
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
+}
 
 #[cfg(target_os = "macos")]
 mod macos;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -39,7 +58,11 @@ pub use filter::Filter;
 
 /// Wakes the app's event loop so it runs a frame (`ctx.request_repaint()` in an egui app). Called
 /// from any thread when a dialog has answered or stopped.
-pub type Wake = Arc<dyn Fn() + Send + Sync>;
+pub use craft_host::Wake;
+
+/// Runs around a native dialog's blocking show: it gets the show as a closure and calls it once, so the app can mark
+/// the wait as waiting for the user.
+pub type ShowHook = Box<dyn FnMut(&mut dyn FnMut())>;
 
 /// Answers every request instead of a native dialog (tests and automation).
 pub type Override = Box<dyn FnMut(&Request) -> Answer>;
@@ -48,7 +71,10 @@ pub type Override = Box<dyn FnMut(&Request) -> Answer>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     /// Choose existing files: one, or several when `multiple`.
-    Open { multiple: bool },
+    Open {
+        /// Whether the user may choose more than one file.
+        multiple: bool,
+    },
     /// Choose one folder.
     Folder,
     /// Choose where to write a file.
@@ -58,6 +84,7 @@ pub enum Kind {
 /// A file dialog request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileDialog {
+    /// Which dialog to show.
     pub kind: Kind,
     /// The dialog's title, or its message line on macOS, where panels have no title bar.
     pub title: Option<String>,
@@ -67,12 +94,18 @@ pub struct FileDialog {
     pub directory: Option<PathBuf>,
     /// The file name a Save dialog suggests.
     pub file_name: Option<String>,
+    /// The label of the file type menu a macOS Save panel with two or more file types shows; `None` shows
+    /// [`FORMAT_LABEL`]. Other platforms' dialogs label their menu themselves.
+    pub format_label: Option<String>,
 }
+
+/// The English label of the macOS Save panel's file type menu.
+pub const FORMAT_LABEL: &str = "Format:";
 
 impl FileDialog {
     /// A dialog of `kind` with nothing else set.
     pub fn new(kind: Kind) -> Self {
-        Self { kind, title: None, filters: Vec::new(), directory: None, file_name: None }
+        Self { kind, title: None, filters: Vec::new(), directory: None, file_name: None, format_label: None }
     }
 
     /// Choose one existing file.
@@ -95,6 +128,7 @@ impl FileDialog {
         Self::new(Kind::Save)
     }
 
+    /// Sets the dialog's title (its message line on macOS).
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
@@ -106,13 +140,21 @@ impl FileDialog {
         self
     }
 
+    /// Sets the folder the dialog opens in.
     pub fn directory(mut self, directory: impl Into<PathBuf>) -> Self {
         self.directory = Some(directory.into());
         self
     }
 
+    /// Sets the file name a Save dialog suggests.
     pub fn file_name(mut self, file_name: impl Into<String>) -> Self {
         self.file_name = Some(file_name.into());
+        self
+    }
+
+    /// Sets the label of the macOS Save panel's file type menu, in the app's language.
+    pub fn format_label(mut self, label: impl Into<String>) -> Self {
+        self.format_label = Some(label.into());
         self
     }
 }
@@ -120,9 +162,12 @@ impl FileDialog {
 /// The icon a message box shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MessageLevel {
+    /// An informational icon.
     #[default]
     Info,
+    /// A warning icon.
     Warning,
+    /// An error icon.
     Error,
 }
 
@@ -130,39 +175,57 @@ pub enum MessageLevel {
 /// plain variant they replace.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum MessageButtons {
+    /// One OK button.
     #[default]
     Ok,
+    /// OK and Cancel.
     OkCancel,
+    /// Yes and No.
     YesNo,
+    /// Yes, No and Cancel.
     YesNoCancel,
+    /// One button with this label.
     OkCustom(String),
+    /// Two buttons with these labels, in the order of OK and Cancel.
     OkCancelCustom(String, String),
+    /// Three buttons with these labels, in the order of Yes, No and Cancel.
     YesNoCancelCustom(String, String, String),
 }
 
 /// The button a message box was closed with. A custom button answers with its label.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MessageResult {
+    /// OK.
     Ok,
+    /// Cancel.
     Cancel,
+    /// Yes.
     Yes,
+    /// No.
     No,
+    /// A custom button, by its label.
     Custom(String),
 }
 
 /// A message box request.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Message {
+    /// The icon.
     pub level: MessageLevel,
+    /// The box's title.
     pub title: String,
+    /// The body text.
     pub description: String,
+    /// The buttons offered.
     pub buttons: MessageButtons,
 }
 
 /// What [`Dialogs`] was asked to show, as an [`Override`] sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
+    /// A file dialog.
     File(FileDialog),
+    /// A message box.
     Message(Message),
 }
 
@@ -171,8 +234,16 @@ pub enum Request {
 pub enum Answer {
     /// The user closed a file dialog without choosing.
     Cancelled,
-    /// The chosen files, folder or save path.
+    /// The chosen files or folder.
     Paths(Vec<PathBuf>),
+    /// A Save panel's answer: the name as typed and the file type picked, when the panel reports it (the portal's
+    /// current filter, or the macOS panel's Format menu; rfd reports `None`).
+    Saved {
+        /// The name as typed.
+        path: PathBuf,
+        /// The index of the picked filter, when the panel reports it.
+        filter: Option<usize>,
+    },
     /// The button a message box was closed with.
     Message(MessageResult),
     /// No dialog could be shown, or it stopped without an answer; the text says why. Report it as
@@ -204,7 +275,7 @@ impl Drop for Reply {
     fn drop(&mut self) {
         // The sender goes first, so the woken app sees either the answer or the disconnect.
         self.tx = None;
-        (self.wake)();
+        self.wake.wake();
     }
 }
 
@@ -214,14 +285,13 @@ enum Show {
     Override(Override),
     /// Tests: a stand-in for the native dialog that answers (or doesn't) through the reply.
     #[cfg(test)]
-    Custom(Box<dyn FnMut(Request, Reply)>),
+    Custom(Box<dyn FnMut(Request, Reply) -> native::Shown>),
 }
 
 /// The dialog on screen.
 struct Open<T> {
     then: T,
     answer: Receiver<Answer>,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     shown: native::Shown,
 }
 
@@ -234,11 +304,18 @@ pub struct Dialogs<T> {
     open: Option<Open<T>>,
     answers: Vec<(T, Answer)>,
     show: Show,
+    hook: Option<ShowHook>,
 }
 
 impl<T> Dialogs<T> {
+    /// A dialog queue that calls `wake` when an answer arrives.
     pub fn new(wake: Wake) -> Self {
-        Self { wake, queue: VecDeque::new(), open: None, answers: Vec::new(), show: Show::Native }
+        Self { wake, queue: VecDeque::new(), open: None, answers: Vec::new(), show: Show::Native, hook: None }
+    }
+
+    /// Runs `hook` around every native dialog's blocking show.
+    pub fn set_show_hook(&mut self, hook: ShowHook) {
+        self.hook = Some(hook);
     }
 
     /// Queues a file dialog. It shows at the next [`Self::show_pending`] once the dialogs asked
@@ -257,7 +334,7 @@ impl<T> Dialogs<T> {
             self.raise();
         }
         self.queue.push_back((request, then));
-        (self.wake)();
+        self.wake.wake();
     }
 
     /// Shows the next queued request unless a dialog is open. Call it on the main thread at the end
@@ -271,10 +348,24 @@ impl<T> Dialogs<T> {
             let reply = Reply { tx: Some(tx), wake: self.wake.clone() };
             // A panic while showing (rfd's own checks) must not unwind into winit's handler.
             let shown = match &mut self.show {
-                Show::Override(answer_with) => catch_unwind(AssertUnwindSafe(|| reply.send(answer_with(&request)))).map(|()| None),
-                Show::Native => catch_unwind(AssertUnwindSafe(|| native::show(request, parent, reply))),
+                Show::Override(answer_with) => {
+                    catch_unwind(AssertUnwindSafe(|| reply.send(answer_with(&request)))).map(|()| native::Shown::default())
+                }
+                Show::Native => catch_unwind(AssertUnwindSafe(|| {
+                    let (mut asked, mut shown) = (Some((request, reply)), None);
+                    let mut run = || {
+                        if let Some((request, reply)) = asked.take() {
+                            shown = Some(native::show(request, parent, reply));
+                        }
+                    };
+                    match &mut self.hook {
+                        Some(hook) => hook(&mut run),
+                        None => run(),
+                    }
+                    shown.unwrap_or_default()
+                })),
                 #[cfg(test)]
-                Show::Custom(show) => catch_unwind(AssertUnwindSafe(|| show(request, reply))).map(|()| None),
+                Show::Custom(show) => catch_unwind(AssertUnwindSafe(|| show(request, reply))),
             };
             let shown = match shown {
                 Ok(shown) => shown,
@@ -305,7 +396,7 @@ impl<T> Dialogs<T> {
     /// that would show it again. Does nothing elsewhere, where dialogs are modal to the window.
     pub fn raise(&self) {
         #[cfg(target_os = "macos")]
-        if let Some(panel) = self.open.as_ref().and_then(|open| open.shown.as_ref()) {
+        if let Some(panel) = self.open.as_ref().and_then(|open| open.shown.panel.as_ref()) {
             macos::raise(panel);
         }
     }
@@ -322,9 +413,20 @@ impl<T> Dialogs<T> {
         self.show = answer_with.map_or(Show::Native, Show::Override);
     }
 
+    /// Stops the open dialog when `gone` says nobody waits for its answer any more (its pick was
+    /// forgotten): a portal Save closes. Other dialogs cannot be closed from outside; their answer
+    /// comes as usual and the caller drops it.
+    pub(crate) fn cancel_open_if(&mut self, gone: impl FnOnce(&T) -> bool) {
+        if let Some(open) = &mut self.open
+            && gone(&open.then)
+        {
+            open.shown.cancel_save();
+        }
+    }
+
     /// Tests: show requests through `show` instead of a native dialog.
     #[cfg(test)]
-    fn set_custom(&mut self, show: impl FnMut(Request, Reply) + 'static) {
+    fn set_custom(&mut self, show: impl FnMut(Request, Reply) -> native::Shown + 'static) {
         self.show = Show::Custom(Box::new(show));
     }
 
@@ -344,4 +446,16 @@ impl<T> Dialogs<T> {
 
 fn panic_text(panic: &(dyn std::any::Any + Send)) -> Option<&str> {
     panic.downcast_ref::<&str>().copied().or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+}
+
+#[cfg(all(test, feature = "screen-testing"))]
+extern crate self as craft_dialogs;
+#[cfg(all(test, feature = "screen-testing"))]
+#[path = "../tests/it/main.rs"]
+pub(crate) mod integration;
+
+#[cfg(test)]
+fn main() {
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-atomic"
 version.workspace = true
 edition.workspace = true
@@ -10,5 +11,8 @@ description = "Crash-safe atomic file writing and replacement for the Craft suit
 [lints]
 workspace = true
 
+# Plain fsync where F_FULLFSYNC is refused, and the replaced file's extended attributes (`fs`), with
+# explicit size queries (`fgetxattr_query`).
+
 [target.'cfg(target_vendor = "apple")'.dependencies]
-rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
+rustix = { version = "1.1.6", default-features = false, features = ["std", "fs"] }

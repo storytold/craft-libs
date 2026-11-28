@@ -3,7 +3,7 @@
 // Test code: a failed unwrap is a failed test.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod mpegts_mux;
+use super::mpegts_mux;
 
 use craft_media::mpegts::mux::{Av1Config, Codec, Config, Error, Frame, MAX_PCR_INTERVAL, Muxer, OpusMapping, Stream};
 use craft_media::mpegts::{self, Codec as Demuxed, StreamId};
@@ -90,7 +90,7 @@ fn every_codec_in_one_program() {
     for k in 0..150i64 {
         let mut p = vec![0xFC];
         fill(&mut p, 1 + (k as usize * 41) % 700, k as u8);
-        items.push(Item { stream: 2, expect: opus_unit(&p), data: p, pts: t0 + k * 1800, dts: t0 + k * 1800, key: true });
+        items.push(Item { stream: 2, expect: p.clone(), data: p, pts: t0 + k * 1800, dts: t0 + k * 1800, key: true });
     }
     for k in 0..90i64 {
         let f = ac3(k as u8);
@@ -100,7 +100,7 @@ fn every_codec_in_one_program() {
         let f = mp3(false, k as u8);
         items.push(Item { stream: 4, expect: f.clone(), data: f, pts: t0 + k * 2160, dts: t0 + k * 2160, key: true });
     }
-    let want = [Demuxed::H264, Demuxed::AacAdts, Demuxed::Unknown(6), Demuxed::Ac3, Demuxed::MpegAudio];
+    let want = [Demuxed::H264, Demuxed::AacAdts, Demuxed::Opus, Demuxed::Ac3, Demuxed::MpegAudio];
     let (ts, pcrs) = round_trip(Config::default(), &streams, &mut items, &want);
     let file = mpegts::open(&ts).unwrap();
     assert_eq!(file.pcr_range, Some((pcrs[0], *pcrs.last().unwrap())));
@@ -108,6 +108,10 @@ fn every_codec_in_one_program() {
     // the frames' own headers read back with the demuxer's frame parser
     let aac = file.read_unit(&ts, 1, 0).unwrap();
     assert_eq!(mpegts::frame_info(&Demuxed::AacAdts, &aac).map(|i| (i.sample_rate, i.channels)), Some((48_000, 2)));
+    // a stereo Opus stream (channel_config_code 2): one coupled stream, no start trim
+    let opus = file.streams[2].codec_params();
+    assert_eq!((opus.codec, opus.sample_rate, opus.channels), (craft_media::CodecId::Opus, Some(48_000), Some(2)));
+    assert_eq!(opus.extradata, [b"OpusHead".as_slice(), &[1, 2, 0, 0, 0x80, 0xBB, 0, 0, 0, 0, 0]].concat());
 }
 
 #[test]
@@ -162,9 +166,9 @@ fn timestamps_run_past_the_33_bit_wrap() {
     for k in 0..140i64 {
         let p = vec![0x08, k as u8 | 1, 0x55];
         let t = start + k * 1800;
-        items.push(Item { stream: 1, expect: opus_unit(&p), data: p, pts: t, dts: t, key: true });
+        items.push(Item { stream: 1, expect: p.clone(), data: p, pts: t, dts: t, key: true });
     }
-    round_trip(Config::default(), &streams, &mut items, &[Demuxed::H264, Demuxed::Unknown(6)]);
+    round_trip(Config::default(), &streams, &mut items, &[Demuxed::H264, Demuxed::Opus]);
 }
 
 #[test]
@@ -185,7 +189,7 @@ fn eac3_mpeg1_video_and_mpeg4_part2() {
         let t = 100_000 + k * 2880;
         items.push(Item { stream: 1, expect: f.clone(), data: f, pts: t, dts: t, key: true });
     }
-    round_trip(Config::default(), &streams, &mut items, &[Demuxed::Mpeg1Video, Demuxed::Eac3, Demuxed::Unknown(0x10)]);
+    round_trip(Config::default(), &streams, &mut items, &[Demuxed::Mpeg1Video, Demuxed::Eac3, Demuxed::Mpeg4Part2]);
 }
 
 #[test]
@@ -200,20 +204,61 @@ fn av1_reads_back_as_its_obus() {
         let t = 90_000 + k * 3000;
         m.write_frame(0, &Frame { data: &tu, pts: t, dts: None, key }).unwrap();
         m.write_frame(1, &Frame { data: &[0xFC, k as u8 | 1], pts: t, dts: None, key: true }).unwrap();
-        tus.push((tu, t));
+        tus.push((tu, t, key));
     }
     let ts = m.finish().unwrap();
     check_packets(&ts, 0x100, 3600 * 300);
     let file = mpegts::open(&ts).unwrap();
     assert!(file.warnings.is_empty(), "{:?}", file.warnings);
-    assert_eq!(file.streams[0].codec, Demuxed::Unknown(6));
+    assert_eq!(file.streams[0].codec, Demuxed::Av1);
     assert_eq!(file.streams[0].stream_type, 0x06);
+    assert_eq!(file.streams[1].codec, Demuxed::Opus);
+    // the descriptor's fields come back as the av1C record they were taken from
+    let params = file.streams[0].codec_params();
+    assert_eq!(params.codec, craft_media::CodecId::Av1);
+    assert_eq!(Av1Config::from_av1c(&params.extradata).unwrap(), config);
     let units = &file.streams[0].units;
     assert_eq!(units.len(), tus.len());
-    for (n, (u, (tu, t))) in units.iter().zip(&tus).enumerate() {
+    let written = pes_payloads(&ts, 0x100);
+    assert_eq!(written.len(), tus.len());
+    for (n, (u, (tu, t, key))) in units.iter().zip(&tus).enumerate() {
         assert_eq!(u.pts, Some(*t));
-        let es = file.read_unit(&ts, 0, n).unwrap();
-        assert_eq!(av1_unescape(&es), av1_without_delimiters(tu), "unit {n}");
+        assert_eq!(u.key, *key, "unit {n}");
+        // the writer's start code form, and the demuxer's OBUs
+        assert_eq!(av1_unescape(&written[n]), av1_without_delimiters(tu), "unit {n}");
+        assert_eq!(file.read_unit(&ts, 0, n).unwrap(), av1_without_delimiters(tu), "unit {n}");
+    }
+}
+
+#[test]
+fn opus_channel_configurations_read_back() {
+    let opened = |codec: Codec| {
+        let mut m = Muxer::new(Vec::new(), Config::default(), &[Stream::new(0x100, codec)]).unwrap();
+        for k in 0..10i64 {
+            m.write_frame(0, &Frame { data: &[0xFC, 1, 0x55], pts: 90_000 + k * 1800, dts: None, key: true }).unwrap();
+        }
+        let ts = m.finish().unwrap();
+        let s = mpegts::open(&ts).unwrap().streams.remove(0);
+        assert_eq!(s.codec, Demuxed::Opus);
+        let o = s.opus.unwrap();
+        (o.channels, o.family, o.streams, o.coupled, o.mapping)
+    };
+    // the fixed configurations: family 0 for one or two channels, the RFC 7845 surround orders
+    // for more
+    assert_eq!(opened(Codec::Opus { channels: 1 }), (1, 0, 1, 0, vec![0]));
+    assert_eq!(opened(Codec::Opus { channels: 2 }), (2, 0, 1, 1, vec![0, 1]));
+    assert_eq!(opened(Codec::Opus { channels: 6 }), (6, 1, 4, 2, vec![0, 4, 1, 2, 3, 5]));
+    assert_eq!(opened(Codec::Opus { channels: 8 }), (8, 1, 5, 3, vec![0, 6, 1, 2, 3, 4, 5, 7]));
+    // explicit configurations come back field for field, silent channels included
+    for m in [
+        OpusMapping { channels: 6, family: 1, streams: 4, coupled: 2, mapping: [0, 4, 1, 2, 3, 5, 0, 0] },
+        OpusMapping { channels: 3, family: 255, streams: 3, coupled: 0, mapping: [2, 255, 0, 0, 0, 0, 0, 0] },
+        OpusMapping { channels: 8, family: 255, streams: 8, coupled: 0, mapping: [7, 6, 5, 4, 3, 2, 1, 0] },
+        OpusMapping { channels: 2, family: 0, streams: 1, coupled: 1, mapping: [0, 1, 0, 0, 0, 0, 0, 0] },
+        OpusMapping { channels: 1, family: 1, streams: 1, coupled: 0, mapping: [0, 0, 0, 0, 0, 0, 0, 0] },
+    ] {
+        let ch = usize::from(m.channels);
+        assert_eq!(opened(Codec::OpusMapped(m)), (m.channels, m.family, m.streams, m.coupled, m.mapping[..ch].to_vec()), "{m:?}");
     }
 }
 
@@ -226,23 +271,32 @@ fn opus_with_an_explicit_mapping_and_trims() {
     for k in 0..20i64 {
         // three streams of 20 ms: two self-delimited packets, then the last one
         let au = [0xFC, 1, 0x55, 0xFC, 1, 0x66, 0xFC, 0x77];
-        let trim = if k == 0 { craft_media::mpegts::mux::OpusTrim { start: 312, end: 0 } } else { Default::default() };
+        let trim = match k {
+            0 => craft_media::mpegts::mux::OpusTrim { start: 312, end: 0 },
+            19 => craft_media::mpegts::mux::OpusTrim { start: 0, end: 100 },
+            _ => Default::default(),
+        };
         let t = 90_000 + k * 1800;
         m.write_frame_with_trim(0, &Frame { data: &au, pts: t, dts: None, key: true }, trim).unwrap();
-        let mut unit = if k == 0 { vec![0x7F, 0xF0, 8] } else { vec![0x7F, 0xE0, 8] };
-        if k == 0 {
-            unit.extend_from_slice(&312u16.to_be_bytes());
-        }
-        unit.extend_from_slice(&au);
-        want.push(unit);
+        want.push(au.to_vec());
     }
     let ts = m.finish().unwrap();
     let file = mpegts::open(&ts).unwrap();
     assert!(file.warnings.is_empty(), "{:?}", file.warnings);
-    assert_eq!(file.streams[0].units.len(), want.len());
+    let s = &file.streams[0];
+    assert_eq!(s.codec, Demuxed::Opus);
+    assert_eq!(s.units.len(), want.len());
     for (n, w) in want.iter().enumerate() {
         assert_eq!(&file.read_unit(&ts, 0, n).unwrap(), w);
     }
+    let opus = s.opus.as_ref().unwrap();
+    assert_eq!((opus.channels, opus.family, opus.streams, opus.coupled, &opus.mapping[..]), (3, 255, 3, 0, &[0, 1, 2][..]));
+    assert_eq!(opus.trims, [mpegts::OpusTrim { unit: 0, start: 312, end: 0 }, mpegts::OpusTrim { unit: 19, start: 0, end: 100 }]);
+    // the OpusHead header (RFC 7845 §5.1) carries the start trim as its pre-skip
+    let head = s.codec_params().extradata;
+    assert_eq!(&head[..8], b"OpusHead");
+    assert_eq!(u16::from_le_bytes([head[10], head[11]]), 312);
+    assert_eq!(&head[18..], &[255, 3, 0, 0, 1, 2]);
 }
 
 #[test]

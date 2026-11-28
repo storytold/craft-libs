@@ -117,15 +117,15 @@ fn map_table_raw_scale_and_bad_pixels() {
 
 /// A mosaic equal to the bad-pixel constant, or one rectangle over the whole image, used to list every pixel as
 /// bad: w × h entries (plus a set of them), tens of GB at the decoder's size limit. Here the rows between a good
-/// first row (500) and a good last row (900) are bad: 2052 rows of 2048 pixels, four rows more than the 1 << 22
-/// cap. Row 1, within the cap, is repaired from the first row; the second-last row, past the cap, must be left
-/// as it is (uncapped, it was rewritten from the last row).
+/// first row (500) and a good last row (900) are bad: 8 rows of 64 pixels, four rows more than the cap of 256 the
+/// test passes. Row 1, within the cap, is repaired from the first row; the second-last row, past the cap, must be
+/// left as it is (uncapped, it was rewritten from the last row).
 fn assert_bad_pixels_capped(op: Opcode) {
-    let (w, h) = (2048, 2054);
+    let (w, h) = (64, 10);
     let mut buf = vec![0.0f32; w * h];
     buf[..w].fill(500.0);
     buf[(h - 1) * w..].fill(900.0);
-    apply_list(&[op], &mut buf, w, h, 1, None, 65535.0);
+    apply_list_capped(&[op], &mut buf, w, h, 1, None, 65535.0, 256);
     assert!(buf[w..2 * w].iter().all(|&v| v == 500.0), "row 1 (within the cap) not repaired: {:?}", &buf[w..w + 4]);
     let past = &buf[(h - 2) * w..(h - 1) * w];
     assert!(past.iter().all(|&v| v == 0.0), "a row past the cap was rewritten: {:?}", &past[..4]);
@@ -139,7 +139,7 @@ fn bad_pixels_constant_is_capped() {
 #[test]
 fn bad_pixels_list_is_capped_inside_a_rectangle() {
     // top, left, bottom, right: every row but the first and the last
-    assert_bad_pixels_capped(Opcode::FixBadPixelsList { bayer_phase: 0, points: vec![], rects: vec![[1, 0, 2053, 2048]] });
+    assert_bad_pixels_capped(Opcode::FixBadPixelsList { bayer_phase: 0, points: vec![], rects: vec![[1, 0, 9, 64]] });
 }
 
 #[test]

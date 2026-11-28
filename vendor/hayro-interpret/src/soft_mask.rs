@@ -83,6 +83,9 @@ struct Repr<'a> {
     device_cmyk: bool,
     /// Craft patch (CMYK masks): the page plate's printing condition, for [`SoftMask::plate`].
     simulation: Option<CmykSimulation>,
+    /// PdfCraft patch (89): the forms being drawn where the mask was set; its group is drawn
+    /// nested in them, not in the forms that paint through it.
+    forms_drawing: Vec<ObjectIdentifier>,
 }
 
 impl Hash for Repr<'_> {
@@ -179,6 +182,7 @@ impl<'a> SoftMask<'a> {
         let root_transform = context.get().ctm;
         let bbox = context.bbox();
         let resources_key = resources_cache_key(&parent_resources);
+        let forms_drawing = crate::context::forms_drawing();
         let simulation = context
             .settings
             .plate
@@ -191,6 +195,7 @@ impl<'a> SoftMask<'a> {
             [bbox.x0.to_bits(), bbox.y0.to_bits(), bbox.x1.to_bits(), bbox.y1.to_bits()],
             resources_key,
             nesting_depth,
+            &forms_drawing,
         ));
 
         Some(Self(Rc::new(Repr {
@@ -216,6 +221,7 @@ impl<'a> SoftMask<'a> {
             nesting_depth,
             device_cmyk,
             simulation,
+            forms_drawing,
         })))
     }
 
@@ -256,7 +262,9 @@ impl<'a> SoftMask<'a> {
             state,
             self.0.nesting_depth,
         );
-        draw_form_xobject(&self.0.parent_resources, &self.0.group, &mut ctx, device);
+        crate::context::drawing_within(&self.0.forms_drawing, || {
+            draw_form_xobject(&self.0.parent_resources, &self.0.group, &mut ctx, device);
+        });
     }
 
     /// Interpret the contents of the mask into the given device.
@@ -272,7 +280,9 @@ impl<'a> SoftMask<'a> {
             self.0.nesting_depth,
         );
         ctx.luminosity_in_device_cmyk = self.0.luminosity_in_device_cmyk;
-        draw_form_xobject(&self.0.parent_resources, &self.0.group, &mut ctx, device);
+        crate::context::drawing_within(&self.0.forms_drawing, || {
+            draw_form_xobject(&self.0.parent_resources, &self.0.group, &mut ctx, device);
+        });
     }
 
     /// Return the object identifier of the mask.

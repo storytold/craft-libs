@@ -8,9 +8,9 @@
 //!   every patch overlapping the hole, its most similar fully-known patch, then re-estimates hole
 //!   pixels by a similarity-weighted vote of the overlapping matches. Coarse-to-fine over an image
 //!   pyramid (the coarsest level is initialised by membrane interpolation), so large holes stay cheap.
-//! * [`best_offset`], proximity match: the single displacement whose surrounding ring best matches the
+//! * `best_offset`, proximity match: the single displacement whose surrounding ring best matches the
 //!   ring around the hole (sum of squared differences), i.e. an automatic Healing Brush source.
-//! * [`synthesize`], create texture: patch-based texture synthesis in the style of A. Efros,
+//! * `synthesize`, create texture: patch-based texture synthesis in the style of A. Efros,
 //!   W. Freeman, *Image Quilting for Texture Synthesis and Transfer*, SIGGRAPH 2001 (blocks picked from
 //!   random candidates by overlap error, feathered overlap instead of a min-cut seam).
 //!

@@ -3,17 +3,24 @@
 /// One indexed AAF property. The payload borrows the original stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Property<'a> {
+    /// The property ID (pid).
     pub id: u16,
+    /// The stored form of the value, as the index records it.
     pub form: u16,
+    /// The value's bytes.
     pub payload: &'a [u8],
 }
 
 /// Malformed property-stream framing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PropertyError {
+    /// The stream ends before its 4-byte header.
     ShortHeader,
+    /// The header's byte-order mark is not little-endian (0x4c).
     UnsupportedByteOrder,
+    /// The stream ends inside the property index.
     TruncatedIndex,
+    /// A property's length runs past the end of the stream.
     TruncatedValue,
 }
 

@@ -1,7 +1,7 @@
 use super::parse::column_grid;
 use super::state::{
-    CellDef, CommentData, Dest, HeaderFooter, MARK_CLOSE, MARK_OPEN, MAX_GROUPS, MAX_NOTE_BLOCKS, MAX_NOTES, MAX_REV_AUTHORS, MAX_SECTIONS, NoteData,
-    Output, PageGeom, SecFmt, St, Sub,
+    CellDef, CommentData, Dest, HeaderFooter, ListLevel, MARK_CLOSE, MARK_OPEN, MAX_GROUPS, MAX_NOTE_BLOCKS, MAX_NOTES, MAX_REV_AUTHORS,
+    MAX_SECTIONS, NoteData, Output, PageGeom, SecFmt, St, Sub,
 };
 use super::styles::{StyleDef, drop_style_formatting, style_fmt};
 use super::{Arc, Cell, FBlock, FTable, Fmt, HashMap, HashSet, Inline, Kind, Meta, Para, Rgb, model};
@@ -48,9 +48,9 @@ pub(super) struct Reader {
     pub(super) style_def_cur: StyleDef,
     pub(super) meta: Meta,
     pub(super) info_text: String,
-    // Lists: list id → ordered per level; override ls → list id.
-    pub(super) lists: HashMap<i32, Vec<bool>>,
-    pub(super) list_cur: Vec<bool>,
+    // Lists: list id → its levels; override ls → list id.
+    pub(super) lists: HashMap<i32, Vec<ListLevel>>,
+    pub(super) list_cur: Vec<ListLevel>,
     pub(super) list_cur_id: i32,
     pub(super) overrides: HashMap<i32, i32>,
     pub(super) ov_list: i32,

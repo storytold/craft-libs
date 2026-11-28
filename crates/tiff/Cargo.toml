@@ -10,9 +10,14 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+plain-rgba16 = ["dep:tiff"]
+
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }
+tiff = { version = "0.11", default-features = false, optional = true }
 
 [dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["tiff"] }
 proptest = { workspace = true }

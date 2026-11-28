@@ -1,4 +1,4 @@
-//! Crystal-layer film grain, the grain of process V7 and later ([`crate::finish::GrainModel`]).
+//! Crystal-layer film grain, the grain of process V7 and later (`crate::finish::GrainModel`).
 //!
 //! After the model of Aurélien Pierre, *Stochastic photographic grain synthesis from
 //! crystallographic structure simulation* (2023), implemented from the article's description of
@@ -1025,7 +1025,7 @@ impl CrystalGrain {
     }
 
     /// [`Self::new`] for a draft render (a drag): while its tile is drawn, the last tile drawn for
-    /// the same seed stands in for it (see [`tile`]).
+    /// the same seed stands in for it (see `tile`).
     pub fn draft(g: &Grain, px_per_long: f64) -> Option<CrystalGrain> {
         Self::with(g, px_per_long, false)
     }

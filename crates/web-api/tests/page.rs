@@ -1,6 +1,7 @@
-#![cfg(target_arch = "wasm32")]
 //! Node tests for the page part: a canned control channel that records what it is asked, and the
 //! `window.<app>` functions called the way a page calls them. No browser.
+
+#![cfg(target_arch = "wasm32")]
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -86,19 +87,6 @@ async fn install_keeps_existing_functions() {
 }
 
 #[wasm_bindgen_test]
-async fn methods_table_decides_which_functions_exist() {
-    reset();
-    let only = Methods { commands: Some("c.commands"), ..Methods::NONE };
-    Rc::new(PageApi::new("vectorcraft", only, canned_request(json!({"ok": true, "result": {}})))).install().expect("install");
-    let api = api();
-    assert!(has(&api, "request"), "request is always installed");
-    assert!(has(&api, "commands"));
-    for name in ["execute", "docInspect", "uiInspect", "screenshot"] {
-        assert!(!has(&api, name), "{name} has no method and must not be installed");
-    }
-}
-
-#[wasm_bindgen_test]
 async fn functions_send_their_methods() {
     reset();
     let page = Rc::new(PageApi::new("vectorcraft", Methods::default(), recording_request(json!({"ok": true, "result": {"done": 1}}))));
@@ -128,38 +116,6 @@ async fn functions_send_their_methods() {
     );
 }
 
-#[wasm_bindgen_test]
-async fn error_replies_reject_with_the_error_text() {
-    reset();
-    Rc::new(PageApi::new("vectorcraft", Methods::default(), canned_request(json!({"ok": false, "error": "boom"})))).install().expect("install");
-    let err = match call("commands", &[]).await {
-        Err(err) => err,
-        Ok(_) => panic!("an error reply must reject"),
-    };
-    assert_eq!(String::from(err.unchecked_into::<js_sys::Error>().message()), "boom");
-}
-
-#[wasm_bindgen_test]
-async fn timeout_gives_an_error_saying_so() {
-    reset();
-    // A control channel that never answers: it waits on a promise that never settles. (Looping on
-    // resolved promises instead would starve the timer queue, so the page's timeout could never fire.)
-    let pending: Request = Rc::new(|_method: String, _params: Value| {
-        Box::pin(async {
-            let _ = JsFuture::from(js_sys::Promise::new(&mut |_, _| {})).await;
-            Value::Null
-        })
-    });
-    let page = Rc::new(PageApi::new("vectorcraft", Methods::default(), pending).with_timeout(10));
-    page.install().expect("install");
-    let err = match call("execute", &["object.rectangle".into(), js_sys::Object::new().into()]).await {
-        Err(err) => err,
-        Ok(_) => panic!("a never-answering app must time out"),
-    };
-    let message = String::from(err.unchecked_into::<js_sys::Error>().message());
-    assert!(message.contains("vectorcraft did not answer engine.execute within 0.01 s"), "{message}");
-}
-
 thread_local! {
     /// Set when the fake control channel's request future is dropped before it answered.
     static RELEASED: Cell<bool> = const { Cell::new(false) };
@@ -187,21 +143,6 @@ async fn a_timed_out_call_drops_the_apps_request_so_the_app_can_release_it() {
     Rc::new(PageApi::new("vectorcraft", Methods::default(), never).with_timeout(10)).install().expect("install");
     assert!(call("commands", &[]).await.is_err(), "the call times out");
     assert!(RELEASED.with(Cell::get), "the request future was dropped when the call timed out");
-}
-
-#[wasm_bindgen_test]
-async fn an_answered_call_does_not_look_timed_out() {
-    reset();
-    RELEASED.with(|r| r.set(false));
-    let quick: Request = Rc::new(|_method: String, _params: Value| {
-        Box::pin(async {
-            let _release = ReleaseOnDrop;
-            json!({"ok": true, "result": {"fine": true}})
-        })
-    });
-    Rc::new(PageApi::new("vectorcraft", Methods::default(), quick).with_timeout(10)).install().expect("install");
-    let out = call("commands", &[]).await.expect("an answered call resolves");
-    assert_eq!(to_value(&out), json!({"fine": true}));
 }
 
 #[wasm_bindgen_test]

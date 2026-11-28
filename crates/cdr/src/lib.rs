@@ -3,11 +3,15 @@
 //! packages of versions 14 on with their data streams, then pages, layers, guidelines, groups,
 //! curves, rectangles, ellipses, arcs and polygons with uniform fills and outlines. It also reads
 //! `.cmx` exchange files with 32-bit coordinates ([`read_cmx`]): their pages, layers, groups and
-//! curves with uniform fills and outlines.
+//! curves with uniform fills and outlines. [`preview()`] gives the picture a `.cdr` file keeps of its
+//! drawing, without reading the drawing.
 //!
 //! Every record layout the reader relies on is listed in `PROVENANCE.md` with its public source
 //! and status; code cites the row ids (R1 ...). Reading is bounded by [`Limits`], never recurses and does not
-//! panic. Nothing here writes `.cdr` or `.cmx` files.
+//! panic.
+//!
+//! [`write()`] writes a [`Drawing`] as a `.cdr` file of version 15, laying out each record as the
+//! reader reads it. [`write_cmx`] writes `.cmx` files in the layouts the reader reads.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -16,12 +20,14 @@ use std::fmt;
 mod build;
 mod bytes;
 mod cmx;
+mod cmx_write;
 mod geometry;
 mod inline;
 mod layout;
 mod limits;
 pub mod model;
 mod package;
+mod preview;
 mod records;
 mod riff;
 mod styles;
@@ -30,10 +36,14 @@ pub mod synth;
 #[cfg(any(test, feature = "synth"))]
 pub mod synth_cmx;
 mod wl;
+mod write;
 mod zip;
 
+pub use cmx_write::{MAX_CURVE_POINTS, Written};
 pub use limits::Limits;
 pub use model::{Drawing, Warning};
+pub use preview::{Preview, PreviewFormat, preview};
+pub use write::{WRITTEN_VERSION, WriteError, write};
 
 /// Does `bytes` look like a `.cdr` drawing: a RIFF file, a ZIP package holding one, or a `WL` file
 /// of version 1 or 2 whose header offsets fit the file?
@@ -58,10 +68,13 @@ pub enum Error {
     Version(u16),
     /// A container structure that doesn't parse.
     Damaged(&'static str),
-    /// Past one of the [`Limits`].
+    /// Past one of the [`Limits`]; from [`write_cmx`], also past what a `.cmx` file holds, or an
+    /// outline width that is negative or NaN.
     Limit(&'static str),
     /// A file this reader doesn't open: an encrypted, ZIP64 or split package, or a RIFF file that
-    /// names a version before 3; a big-endian `.cmx` file or one with 16-bit coordinates.
+    /// names a version before 3; a big-endian `.cmx` file or one with 16-bit coordinates; a
+    /// `DISP` preview that is not an uncompressed bitmap with a 40-byte header; a version 2 file's
+    /// picture.
     Unsupported(&'static str),
 }
 
@@ -107,4 +120,41 @@ pub fn read_cmx(bytes: &[u8], limits: Limits) -> Result<Drawing, Error> {
     }
     let mut budget = limits::Budget::new(limits);
     cmx::drawing(bytes, &mut budget)
+}
+
+/// Write `drawing` as a `.cmx` exchange file with 32-bit coordinates, in the layouts
+/// [`read_cmx`] reads: its pages, layers, groups and shapes (as curves) with uniform fills and
+/// outlines. [`read_cmx`] reading the file within `limits` leaves nothing out because of them;
+/// what the file holds differently from the drawing, such as a name the reader shortens, is
+/// reported in [`Written`].
+///
+/// It fails with [`Error::Limit`], and writes nothing, for:
+/// - a coordinate, page side or outline width past the 32-bit range, a negative or NaN outline
+///   width, or a page side that rounds to 0;
+/// - more than 65,535 pages, layers on a page, or different colors, pens, line types, dash
+///   patterns or outlines, or a dash pattern of more than 32,765 lengths;
+/// - groups nested deeper than the depth of `limits`, a depth of 0, at which the reader leaves out
+///   the index list, more than 65,535 groups directly inside one group, or more chunks, objects,
+///   coordinates or dashes than a read within `limits` takes;
+/// - a file longer than the input size of `limits`, or a chunk past what its 32-bit size holds.
+///
+/// [`Written`] reports what the file holds differently from the drawing; its fields name each
+/// case. A rounded rectangle under a scale that keeps right angles but differs along its sides is
+/// written with round corners of its radii times the square root of the scales' product, not with
+/// stretched corners, and is not reported.
+///
+/// Each color entry holds the color twice: as the property list [`read_cmx`] reads, and as the
+/// model and value fields that other readers read. In those fields a spot color is written as its
+/// look at its tint, and the registration color as 100 percent cyan, magenta, yellow and black.
+///
+/// The file holds an index, so that a reader that finds the tables and pages through it, rather
+/// than by their chunk ids, opens it: the header gives where the master index starts, the index
+/// list (`LIST indx`) gives where each table, page, page reference list and layer starts, and the
+/// page, layer and group records give their instruction counts. A page's record also gives where
+/// its end-page instruction starts, and a group's record gives where the instruction after its
+/// end-group instruction starts and the edges of its curves. The record of a page with a size holds the edges of
+/// its curves, or of the page when it has none. The header's bounds and instruction count are not
+/// written.
+pub fn write_cmx(drawing: &Drawing, limits: Limits) -> Result<Written, Error> {
+    cmx_write::write(drawing, limits)
 }
