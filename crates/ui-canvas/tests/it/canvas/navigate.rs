@@ -1294,6 +1294,33 @@ fn autoscroll_stops_at_the_shown_image_edge() {
 }
 
 #[trial]
+fn autoscroll_stops_at_quarter_turned_edges_with_a_mirrored_hidpi_view() {
+    let rect = egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 400.0));
+    let document = Size::new(600.0, 1200.0);
+    let zoom = CanvasView::points_per_unit(2.0, 2.0);
+    let start = Point::new(300.0, 600.0);
+    let down = Vec2::new(0.0, 10_000.0);
+    let right = Vec2::new(10_000.0, 0.0);
+
+    // At two device pixels per point, 200% is one point per document unit. Aspect 2 stretches
+    // the turned document's X axis along the screen's Y axis, which mirroring does not reverse.
+    for (rotation, flip, down_x, right_y) in
+        [(-90.0, false, 100.0, 800.0), (-90.0, true, 100.0, 400.0), (90.0, false, 500.0, 400.0), (90.0, true, 500.0, 800.0)]
+    {
+        let shown = CanvasView::new(rect, start, zoom).aspect(2.0).rotation(rotation).flip_x(flip);
+        let mut vertical = shown;
+        assert!(Autoscroll::scroll(&mut vertical, down, document).is_some());
+        assert_eq!(vertical.center, Point::new(down_x, 600.0), "rotation={rotation}, flip={flip}");
+        assert_eq!(Autoscroll::scroll(&mut vertical, down, document), None, "stopped at the bottom edge");
+
+        let mut horizontal = shown;
+        assert!(Autoscroll::scroll(&mut horizontal, right, document).is_some());
+        assert_eq!(horizontal.center, Point::new(300.0, right_y), "rotation={rotation}, flip={flip}");
+        assert_eq!(Autoscroll::scroll(&mut horizontal, right, document), None, "stopped at the right edge");
+    }
+}
+
+#[trial]
 fn the_document_scheme_zooms_by_rungs_on_ctrl_or_cmd_wheel_and_drops_the_residual_on_a_scroll() {
     const DOCUMENT: Size = Size::new(4000.0, 4000.0);
     let mut options = NavigationOptions::default();
