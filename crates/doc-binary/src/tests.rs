@@ -2631,6 +2631,182 @@ fn second_table_gets_its_own_grid() {
     assert_eq!(tables[1].props.indent, None, "indent reset");
 }
 
+/// A two-cell, two-row table followed by an empty paragraph and a paragraph with text. Each
+/// row-end mark carries `row_end` after the membership sprms and the cell edges; the cell marks
+/// carry `cell` after theirs.
+fn one_table_doc(row_end: &[u8], cell: &[u8]) -> craft_wordmodel::Document {
+    let text = "a\u{7}b\u{7}\u{7}c\u{7}d\u{7}\u{7}\rtail\r";
+    let in_tbl = [grpprl(&[(0x2416, &[0x01]), (0x6649, &[1, 0, 0, 0])]), cell.to_vec()].concat();
+    let ttp = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x6649, &[1, 0, 0, 0])]), t_def_edges(&[0, 1440, 2880]), row_end.to_vec()].concat();
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, in_tbl.clone()), (4, 0, ttp.clone()), (5, 0, in_tbl), (9, 0, ttp), (10, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    read(&struct_doc(&spec)).expect("opens")
+}
+
+fn table_float_of(doc: &craft_wordmodel::Document) -> Option<craft_wordmodel::props::TableFloat> {
+    let tables: Vec<_> = doc.body.iter().filter_map(|b| b.as_table()).collect();
+    assert_eq!(tables.len(), 1, "one table");
+    tables[0].props.float
+}
+
+#[test]
+fn a_row_with_position_sprms_makes_a_floating_table() {
+    // #1823. [MS-DOC] §2.6.3: sprmTPc (0x360D) with a PositionCodeOperand (§2.9.208) whose
+    // pcVert (bits 4-5) is 2, below the preceding paragraph, and pcHorz (bits 6-7) is 1, the
+    // margin; sprmTDxaAbs (0x940E) 0xFFFC, centred (§2.9.351); sprmTDyaAbs (0x940F) 121, which
+    // is 120 twips once decremented by one (§2.9.357); the four distances from text (§2.9.350,
+    // §2.9.356); sprmTFNoAllowOverlap (0x3465) 1.
+    use craft_wordmodel::para::{Anchor, FloatAlign};
+    let row_end = grpprl(&[
+        (0x360D, &[0x60]),
+        (0x940E, &(-4i16).to_le_bytes()),
+        (0x940F, &121i16.to_le_bytes()),
+        (0x9410, &144u16.to_le_bytes()),
+        (0x9411, &40u16.to_le_bytes()),
+        (0x941E, &100u16.to_le_bytes()),
+        (0x941F, &60u16.to_le_bytes()),
+        (0x3465, &[1]),
+    ]);
+    let doc = one_table_doc(&row_end, &[]);
+    let f = table_float_of(&doc).expect("the table floats");
+    assert_eq!((f.h_rel, f.v_rel), (Anchor::Margin, Anchor::Paragraph));
+    assert_eq!(f.h_align, Some(FloatAlign::Center));
+    assert_eq!(f.v_align, None);
+    assert_eq!(f.y, 6.0, "120 twips below the paragraph");
+    assert_eq!(f.dist, [7.2, 2.0, 5.0, 3.0], "left, top, right, bottom");
+    assert!(!f.overlap);
+    // The paragraphs after the table stay paragraphs.
+    assert_eq!(body_texts(&doc).last().map(String::as_str), Some("tail"));
+}
+
+#[test]
+fn table_position_special_values_differ_by_axis() {
+    // [MS-DOC] §2.9.351 XAS_plusOne and §2.9.357 YAS_plusOne: 0xFFF8 is "right" across but
+    // "center" down, 0xFFF4 "inside" across but "bottom" down; 0x0000 is "left" across but
+    // "inline" (no alignment) down. Any other value is twips plus one.
+    use craft_wordmodel::para::{Anchor, FloatAlign};
+    let doc_with = |pc: u8, x: i16, y: i16| one_table_doc(&grpprl(&[(0x360D, &[pc]), (0x940E, &x.to_le_bytes()), (0x940F, &y.to_le_bytes())]), &[]);
+    // pcVert 1 (page), pcHorz 2 (page).
+    let f = table_float_of(&doc_with(0x90, -8, -8)).expect("floats");
+    assert_eq!((f.h_rel, f.v_rel), (Anchor::Page, Anchor::Page));
+    assert_eq!((f.h_align, f.v_align), (Some(FloatAlign::End), Some(FloatAlign::Center)));
+    let f = table_float_of(&doc_with(0x00, -12, -12)).expect("floats");
+    assert_eq!((f.h_rel, f.v_rel), (Anchor::Column, Anchor::Margin));
+    assert_eq!((f.h_align, f.v_align), (Some(FloatAlign::Inside), Some(FloatAlign::End)));
+    let f = table_float_of(&doc_with(0x00, -16, -20)).expect("floats");
+    assert_eq!((f.h_align, f.v_align), (Some(FloatAlign::Outside), Some(FloatAlign::Outside)));
+    let f = table_float_of(&doc_with(0x00, 0, -4)).expect("floats");
+    assert_eq!((f.h_align, f.v_align), (Some(FloatAlign::Start), Some(FloatAlign::Start)));
+    let f = table_float_of(&doc_with(0x00, 1441, 0)).expect("floats");
+    assert_eq!((f.h_align, f.v_align), (None, None));
+    assert_eq!((f.x, f.y), (72.0, 0.0));
+    let f = table_float_of(&doc_with(0x00, -41, 1)).expect("floats");
+    assert_eq!((f.x, f.y), (-2.1, 0.0), "a negative offset that is no special value");
+}
+
+#[test]
+fn a_table_without_row_position_sprms_stays_in_the_flow() {
+    // No position sprms at all.
+    assert_eq!(table_float_of(&one_table_doc(&[], &[])), None);
+    // Frame sprms on the cell paragraphs only (sprmPPc, sprmPDxaAbs, sprmPDyaAbs, sprmPWr,
+    // sprmPDxaFromText, [MS-DOC] §2.6.2) do not position the table.
+    let cell = grpprl(&[
+        (0x261B, &[0x60]),
+        (0x8418, &(-4i16).to_le_bytes()),
+        (0x8419, &121i16.to_le_bytes()),
+        (0x2423, &[2]),
+        (0x842F, &144u16.to_le_bytes()),
+    ]);
+    assert_eq!(table_float_of(&one_table_doc(&[], &cell)), None);
+    // Distances from text and the overlap flag alone position nothing.
+    let row_end = grpprl(&[(0x9410, &144u16.to_le_bytes()), (0x941E, &144u16.to_le_bytes()), (0x3465, &[1])]);
+    assert_eq!(table_float_of(&one_table_doc(&row_end, &[])), None);
+    // pcVert and pcHorz both 3: "not absolutely positioned" (§2.9.208).
+    let row_end = grpprl(&[(0x360D, &[0xF0]), (0x940E, &0i16.to_le_bytes()), (0x940F, &0i16.to_le_bytes())]);
+    assert_eq!(table_float_of(&one_table_doc(&row_end, &[])), None);
+}
+
+#[test]
+fn table_position_with_one_axis_unpositioned_keeps_that_axis_default() {
+    // pcVert 3 ("none") with pcHorz 2 (page): the horizontal anchor is read, the vertical one
+    // falls back to the default the sprm gives a positioned table, the top margin (§2.6.3).
+    use craft_wordmodel::para::Anchor;
+    let f = table_float_of(&one_table_doc(&grpprl(&[(0x360D, &[0xB0])]), &[])).expect("floats");
+    assert_eq!((f.h_rel, f.v_rel), (Anchor::Page, Anchor::Margin));
+}
+
+#[test]
+fn a_position_offset_without_sprm_t_pc_positions_from_the_defaults() {
+    // §2.6.3: a positioned table with no sprmTPc is measured from the top margin and the
+    // column. A non-default sprmTDyaAbs alone positions it.
+    use craft_wordmodel::para::Anchor;
+    let f = table_float_of(&one_table_doc(&grpprl(&[(0x940F, &1441i16.to_le_bytes())]), &[])).expect("floats");
+    assert_eq!((f.h_rel, f.v_rel), (Anchor::Column, Anchor::Margin));
+    assert_eq!(f.y, 72.0);
+}
+
+#[test]
+fn truncated_and_out_of_range_position_operands_are_safe() {
+    // Operands cut short read as absent; distances out of XAS_nonNeg/YAS_nonNeg's range clamp.
+    for papx in [vec![0x0D, 0x36], vec![0x0E, 0x94, 0x01], vec![0x0F, 0x94]] {
+        let row = crate::table::decode(&papx);
+        assert!(row.float.is_none(), "{papx:02X?}");
+    }
+    // After a sprmTPc, so the table floats: a cut-short distance stays 0 and a cut-short overlap
+    // flag leaves overlapping allowed.
+    for tail in [vec![0x10, 0x94, 0x05], vec![0x65, 0x34]] {
+        let f = crate::table::decode(&[vec![0x0D, 0x36, 0x60], tail.clone()].concat()).float.expect("floats");
+        assert_eq!((f.dist[0], f.overlap), (0.0, true), "{tail:02X?}");
+    }
+    let row = crate::table::decode(&grpprl(&[(0x360D, &[0x60]), (0x9410, &0xFFFFu16.to_le_bytes()), (0x940E, &i16::MIN.to_le_bytes())]));
+    let f = row.float.expect("floats");
+    assert!(f.dist[0] <= 1584.0 && f.x >= -1584.0, "{f:?}");
+}
+
+#[test]
+fn the_next_table_does_not_inherit_a_position() {
+    // A positioned table, a paragraph, then an ordinary table: the second stays in the flow.
+    let text = "a\u{7}\u{7}between\rb\u{7}\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01]), (0x6649, &[1, 0, 0, 0])]);
+    let ttp = |extra: Vec<u8>| [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x6649, &[1, 0, 0, 0])]), t_def_edges(&[0, 1440]), extra].concat();
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (0, 0, in_tbl.clone()),
+            (2, 0, ttp(grpprl(&[(0x360D, &[0x60]), (0x940E, &(-4i16).to_le_bytes())]))),
+            (3, 0, Vec::new()),
+            (11, 0, in_tbl),
+            (13, 0, ttp(Vec::new())),
+            (14, 0, Vec::new()),
+        ],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tables: Vec<_> = doc.body.iter().filter_map(|b| b.as_table()).collect();
+    assert_eq!(tables.len(), 2);
+    assert!(tables[0].props.float.is_some());
+    assert_eq!(tables[1].props.float, None);
+}
+
 #[test]
 fn repeated_cell_sprms_keep_one_override_per_cell() {
     // A PAPX repeating cell-range sprms (shared by every paragraph mark that names it) keeps one
