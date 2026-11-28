@@ -6,7 +6,7 @@
 //! that says whose storage this is, a Save As page that picks a folder and
 //! names a file, and a save that refuses to overwrite somebody else's work.
 //!
-//! Three things shape the implementation.
+//! Four things shape the implementation.
 //!
 //! Nothing here opens a socket. Every call goes through [`CloudBackend`]. A
 //! host writes that half. This module never learns what it reaches. That keeps
@@ -20,6 +20,12 @@
 //! drawn only where the service reported the capability behind it. An empty
 //! list under a heading reads to a user as a broken window. A feature the
 //! provider does not have is therefore absent, heading and all.
+//!
+//! Nothing here acts on a stale answer. Every answer carries the account
+//! generation its job was issued in, and [`pump`] drops one whose generation
+//! is no longer current, so a reply that arrives after a sign-out or a new
+//! sign-in is not applied to the session that replaced its own. A new kind of
+//! answer follows the same rule.
 //!
 //! The application supplies [`CloudApp`]. That is what it alone can answer.
 //! What its documents are, how bytes become one and back, and the words it

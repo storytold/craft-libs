@@ -5,12 +5,11 @@
 //! look or change, add a note, decide whether an email goes out, and see who
 //! already has access so one of them can be taken away again.
 //!
-//! Three things shape the implementation.
+//! Four things shape the implementation.
 //!
 //! Nothing here opens a socket. Every call goes through [`ShareBackend`], and
 //! nothing here reaches the network. A host writes the backend, and this
 //! module never learns what it talks to.
-//! this file.
 //!
 //! Nothing here blocks. Answers arrive on a channel and are read once per
 //! frame. Autocomplete waits [`DEBOUNCE`] after the last keystroke before it
@@ -21,6 +20,17 @@
 //! false until the service says sharing exists, and an app hides its Share
 //! control rather than offering a button that fails. Contacts and mail are
 //! reported separately and are hidden the same way.
+//!
+//! Nothing here acts on a stale answer. Every request carries a sequence
+//! number, and its answer comes back with it. An answer is applied only while
+//! the request it answers still stands: an answer to a query the
+//! user has typed past, a link granted or an account linked for a sheet that
+//! has since closed or moved to another document, and a capabilities answer
+//! to a question asked before [`ShareDialog::refresh`],
+//! [`ShareDialog::connect`] or [`ShareDialog::signed_out`] are dropped. A
+//! withdrawal is the one answer applied by share id instead: the share is gone
+//! on the service, so it leaves every list that still shows it. A new kind of
+//! answer follows the sequence rule.
 
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
@@ -226,7 +236,9 @@ struct Sheet {
     /// Where it could be saved. `None` until the answer arrives.
     destinations: Option<Vec<Destination>>,
     destinations_seq: Option<u64>,
-    link_seq: Option<u64>,
+    /// Account links in flight, by request. More than one can be: every
+    /// unlinked destination stays clickable while another one links.
+    linking: Vec<u64>,
     /// Which one is selected, by id.
     destination: Option<String>,
     /// The name typed while the document still has nowhere to live.
@@ -248,7 +260,7 @@ impl Sheet {
         Sheet {
             destinations: None,
             destinations_seq: None,
-            link_seq: None,
+            linking: Vec::new(),
             destination: None,
             save_as: title.clone(),
             saving: None,
@@ -740,16 +752,16 @@ impl ShareDialog {
                 }
             }
             Answer::Linked => {
-                // An account arrived, so the list is stale. With no sheet open
-                // there is no list to reload.
-                if self.open.is_some() {
-                    if let Some(sheet) = &mut self.open {
-                        sheet.destinations = None;
-                    }
-                    let seq = self.issue(Request::Destinations);
-                    if let Some(sheet) = &mut self.open {
-                        sheet.destinations_seq = Some(seq);
-                    }
+                // Only for the sheet that asked: after the sheet closed, moved
+                // to another document or the account signed out, a late
+                // answer asks the service for nothing.
+                let Some(sheet) = self.open.as_mut().filter(|sheet| sheet.linking.contains(&seq)) else { return };
+                // An account arrived, so the list is stale.
+                sheet.linking.retain(|s| *s != seq);
+                sheet.destinations = None;
+                let seq = self.issue(Request::Destinations);
+                if let Some(sheet) = &mut self.open {
+                    sheet.destinations_seq = Some(seq);
                 }
             }
             Answer::Withdrawn { share_id } => {
@@ -802,8 +814,8 @@ impl ShareDialog {
             sheet.destinations_seq = None;
             sheet.destinations = Some(Vec::new());
             sheet.save_error = Some(reason);
-        } else if sheet.link_seq == Some(seq) {
-            sheet.link_seq = None;
+        } else if sheet.linking.contains(&seq) {
+            sheet.linking.retain(|s| *s != seq);
             sheet.save_error = Some(reason);
         }
     }
@@ -845,7 +857,7 @@ impl ShareDialog {
                     // application's business and not this crate's.
                     let seq = self.issue(Request::Link { destination });
                     if let Some(sheet) = &mut self.open {
-                        sheet.link_seq = Some(seq);
+                        sheet.linking.push(seq);
                         sheet.error = None;
                     }
                 }
