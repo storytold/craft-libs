@@ -14,7 +14,7 @@ mod icon_theme;
 #[cfg(target_os = "linux")]
 pub use icon_theme::{IconTheme, base_dirs, read_small};
 
-pub use craft_host::target::{Backend, DesktopKind};
+pub use craft_host::target::{Backend, DesktopKind, DoubleClick};
 
 /// What the running desktop is and offers.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,6 +67,47 @@ pub fn theme_svgs<const N: usize>(theme: &str, icons: [&str; N]) -> [Option<Vec<
     }
 }
 
+/// What a double click on an app-drawn title bar does on the running desktop: GNOME's
+/// `action-double-click-titlebar` on GNOME (Budgie included), read with `gsettings` (500 ms at
+/// most), and zoom when it cannot be read and on every other desktop and OS. Pass it to
+/// `ShellInfo::double_click`.
+pub fn double_click() -> DoubleClick {
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    {
+        let kind = kind_from_env(&|k: &str| std::env::var(k).ok());
+        desktop_double_click(kind, || crate::platform::gsettings_wm_preference("action-double-click-titlebar"))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd")))]
+    {
+        DoubleClick::Zoom
+    }
+}
+
+/// The value of GNOME's `org.gnome.desktop.wm.preferences action-double-click-titlebar`, as
+/// `gsettings get` prints it (single-quoted). `toggle-maximize`, the GNOME default, and its
+/// `-horizontally` and `-vertically` forms zoom; `minimize` minimizes; `none`, `lower`, `menu` and
+/// `toggle-shade` do nothing, since an egui window cannot be lowered, shaded or given the window
+/// menu. Anything else zooms.
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", test))]
+fn parse_gnome_double_click(gsettings_output: &str) -> DoubleClick {
+    match gsettings_output.trim().trim_matches(|c| c == '\'' || c == '"') {
+        "minimize" => DoubleClick::Minimize,
+        "none" | "lower" | "menu" | "toggle-shade" => DoubleClick::Nothing,
+        _ => DoubleClick::Zoom,
+    }
+}
+
+/// The double-click action on desktop `kind`: on GNOME, GNOME's setting as `read` returns it, and
+/// zoom when `read` returns nothing. Other desktops zoom, and `read` is not called, so a GNOME
+/// setting saved on the same machine does not apply on KDE or Xfce.
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", test))]
+fn desktop_double_click(kind: DesktopKind, read: impl FnOnce() -> Option<String>) -> DoubleClick {
+    if kind != DesktopKind::Gnome {
+        return DoubleClick::Zoom;
+    }
+    read().map_or(DoubleClick::Zoom, |v| parse_gnome_double_click(&v))
+}
+
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
 /// Compositors and window managers that tile, matched against the `XDG_CURRENT_DESKTOP` entries.
 const TILING: &[&str] = &["sway", "hyprland", "i3", "niri", "river", "bspwm", "awesome", "dwl", "qtile", "herbstluftwm", "leftwm", "xmonad", "dwm"];
@@ -99,5 +140,34 @@ pub(crate) fn kind_from_env(var: &dyn Fn(&str) -> Option<String>) -> DesktopKind
         DesktopKind::Gnome
     } else {
         DesktopKind::Other
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_the_gnome_double_click_setting() {
+        for zoom in ["'toggle-maximize'\n", "'toggle-maximize-horizontally'\n", "'toggle-maximize-vertically'\n"] {
+            assert_eq!(parse_gnome_double_click(zoom), DoubleClick::Zoom, "{zoom:?}");
+        }
+        assert_eq!(parse_gnome_double_click("'minimize'\n"), DoubleClick::Minimize);
+        for nothing in ["'none'\n", "'lower'\n", "'menu'\n", "'toggle-shade'\n", "none"] {
+            assert_eq!(parse_gnome_double_click(nothing), DoubleClick::Nothing, "{nothing:?}");
+        }
+        for junk in ["", "''", "'Minimize'", "'maximize'", "No such key"] {
+            assert_eq!(parse_gnome_double_click(junk), DoubleClick::Zoom, "{junk:?}");
+        }
+    }
+
+    #[test]
+    fn only_gnome_reads_the_gnome_double_click_setting() {
+        assert_eq!(desktop_double_click(DesktopKind::Gnome, || Some("'minimize'\n".into())), DoubleClick::Minimize);
+        assert_eq!(desktop_double_click(DesktopKind::Gnome, || None), DoubleClick::Zoom);
+        for kind in [DesktopKind::Kde, DesktopKind::Tiling, DesktopKind::Other] {
+            let read = || -> Option<String> { panic!("read the GNOME setting on {kind:?}") };
+            assert_eq!(desktop_double_click(kind, read), DoubleClick::Zoom, "{kind:?}");
+        }
     }
 }

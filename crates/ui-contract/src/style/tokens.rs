@@ -1,6 +1,6 @@
 //! `UiTokens`: the runtime's egui-ready view of one resolved token set.
 
-use crate::fonts::{SEMIBOLD, StackFacts};
+use crate::fonts::{SEMIBOLD, StackFacts, TAB_TITLE};
 use crate::primitives::IconSet;
 use craft_theme::{AppId, AppSizes, Appearance, Contrast, GroupValues, IconPackId, Size, ThemeDef, Tokens, TypeRole, resolve_sized};
 use egui::{CornerRadius, FontFamily, FontId};
@@ -107,7 +107,8 @@ impl UiTokens {
 
     /// The font of `role`, or the mono face for a mono run. The semibold slot draws in the `semibold` family when the font
     /// stack of `facts` has one, and in the proportional family otherwise, so text never lands in a family with no
-    /// faces.
+    /// faces. The condensed slot draws in the [`TAB_TITLE`] family when the stack has one, and as the semibold slot
+    /// otherwise.
     pub(crate) fn font(&self, facts: StackFacts, role: TypeRole, mono: bool) -> FontId {
         self.font_weighted(facts, role, mono, false)
     }
@@ -120,7 +121,8 @@ impl UiTokens {
         let family = match slot {
             craft_theme::FontSlot::Mono => FontFamily::Monospace,
             craft_theme::FontSlot::Ui => FontFamily::Proportional,
-            craft_theme::FontSlot::UiSemibold => {
+            craft_theme::FontSlot::UiCondensed if facts.tab_title => FontFamily::Name(TAB_TITLE.into()),
+            craft_theme::FontSlot::UiSemibold | craft_theme::FontSlot::UiCondensed => {
                 if facts.semibold {
                     FontFamily::Name(SEMIBOLD.into())
                 } else {

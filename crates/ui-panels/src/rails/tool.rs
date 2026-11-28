@@ -130,7 +130,8 @@ type FooterFn<'a> = Box<dyn FnMut(&mut Ui, RailFooter) + 'a>;
 /// and the slots fill the rows in reading order. The control padding surrounds the buttons; a slot that ends a group
 /// leaves `space.gap.inline` after its row; slots within a group sit `space.gap.tight` apart. The Edit Toolbar button
 /// follows the last slot; the host's footer stays in view under the slots, which scroll when the room is short under
-/// an overlay bar in the end padding that shows only under the pointer (`Scroll::overlay`), and its
+/// an overlay bar in the end padding that shows only under the pointer (`Scroll::overlay`), or at rest too with
+/// [`bar_at_rest`](ToolRail::bar_at_rest), and its
 /// buttons show the rail's glyphs. The rail is exactly as tall as its rows and footer at the width it gets
 /// ([`measure_rail`](ToolRail::measure_rail)). The buttons are one roving group: arrow keys move between them by the
 /// grid. While the toolbar is edited the buttons are dragged and the rail takes drops, and reports the drop in the
@@ -242,6 +243,14 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
     #[must_use]
     pub fn theme(mut self, scope: ThemeScope) -> Self {
         self.props = std::mem::take(&mut self.props).theme(scope);
+        self
+    }
+
+    /// The overlay bar of a rail too short for its rows also shows while the pointer is away from the rail
+    /// ([`Scroll::at_rest`]).
+    #[must_use]
+    pub fn bar_at_rest(mut self) -> Self {
+        self.props = std::mem::take(&mut self.props).scroll(Scroll::vertical().overlay().at_rest());
         self
     }
 

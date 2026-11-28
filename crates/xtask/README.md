@@ -12,9 +12,11 @@ The crate is native only and is a dependency of an app's `xtask` package only.
 | `report` | `report` | `write` and `to_json`: the per-step JSON report (schema 1), replaced atomically through `craft-atomic` |
 | `pins` | `pins` | `run`, `check`, `run_target_features`, `host_target`: the version, source and features of pinned dependencies, and packages the app forbids, read from `cargo metadata` within size limits |
 | `stats` | `stats` | `run`, `collect` and `write_table`: files, lines and tests of Rust per workspace crate (`cargo xtask stats`) |
+| `version` | `version` | `run`, `run_with`, `Limits`, `lock_dirs`, `read`, `replace`, `validate`: `cargo xtask version [set X.Y.Z[-pre]]` on the root `Cargo.toml` |
 
 No feature is on by default. `report` adds `serde_json` and `craft-atomic`, and `pins` and `stats`
 each add `serde_json`.
+`version` adds `craft-atomic` and `toml_edit` and turns on `lock`.
 
 ## Use
 
@@ -269,6 +271,47 @@ Some("stats") => {
   A folder or file that cannot be read and a `.rs` file that is not UTF-8 are errors too.
 - `collect` returns the `Report` without writing it, and `write_table` writes a `Report`.
 
+## Version
+
+```rust,no_run
+use std::path::Path;
+use craft_xtask::runner;
+
+/// `rest` holds the words after `version`.
+fn version(rest: &[&str]) -> Result<(), String> {
+    let root = runner::root(Path::new(env!("CARGO_MANIFEST_DIR")))?;
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    craft_xtask::version::run(&root, &cargo, rest)
+}
+```
+
+- `cargo xtask version` prints the `version` of `[workspace.package]`.
+- `cargo xtask version set X.Y.Z[-pre]` checks the new version, writes it into `Cargo.toml`, runs
+  `cargo update --workspace --offline` in the root and, when that fails, `cargo update --workspace`,
+  and prints `version: OLD -> NEW`. It also moves the `version` of each path dependency in
+  `[workspace.dependencies]` whose requirement is `"OLD"` or `"=OLD"`; registry dependencies and path
+  dependencies at other versions keep theirs. Trailing ASCII spaces in a matching requirement are retained.
+- A version is `MAJOR.MINOR.PATCH` with an optional `-pre.release`: no leading zeros, numbers up to
+  `u64::MAX`, and no build metadata (`+...`).
+- When both updates fail, `Cargo.toml` and `Cargo.lock` are put back as they were (a lock file that did
+  not exist is removed) and the error says so. Both files are replaced atomically through
+  `craft-atomic`.
+- Setting the current version prints `version: OLD (unchanged)` and writes only its lock file.
+- One `set` runs at a time in a workspace. Before it reads `Cargo.toml`, it takes its locks and
+  holds them until it returns. On Unix it locks the workspace directory itself; on Windows it locks
+  `workspace.lock` in the first directory below, opened so that the file cannot be deleted while it
+  is held. Every process that writes the workspace shares that lock, and `cargo clean` cannot remove
+  it. It also takes the locks in `lock_dirs(root)`:
+  `target/xtask-version/version-<hash of the canonical root>/` (required; its owner file names the
+  run) and `~/.cache/craft-xtask/version-<hash of the canonical root>/` (when its file can be
+  opened). A `set` that finds a lock held returns an error naming the other run and writes
+  nothing.
+- The root manifest is read and written with `toml_edit`, keeping comments, quotes and line endings
+  (LF and CRLF), and the version may be `[workspace.package]` `version`, a dotted key or an inline
+  table. A manifest that is not valid TOML (a duplicate key included), a version that is not a
+  one-line string, or a current version that is not valid is an error before anything is written. `Cargo.toml` is read up to 1 MiB
+  and `Cargo.lock` up to 64 MiB by default; `run_with` takes other `Limits`.
+
 ## Origin
 
 | Part | Source |
@@ -280,6 +323,9 @@ Some("stats") => {
 | `stats`: regular files only, and `a_walk_does_not_follow_directory_links` | WordCraft `xtask/src/stats.rs` at `6b163b33dc` |
 | `stats`: the entry budget that returns an error, and its two tests | CADCraft `xtask/src/stats.rs` at `ca87680fb0` |
 | `stats`: the per-file size limit, and its two tests | GridCraft `xtask/src/stats.rs` at `9e9f13114f` |
+| `version`: `read`, `validate` with the overflow and prerelease checks, the restore after a failed update, and the tests `reads_the_workspace_version`, `replaces_only_the_workspace_version`, `keeps_crlf_line_endings`, `validates_versions`, `rejects_what_cargo_rejects`, `a_failed_update_restores_the_manifest` | SoundCraft `xtask/src/version.rs` at [6c84416](https://github.com/storytold/soundcraft/blob/6c84416c3cffb72d8d350ddfefc4fc9ee954ca1a/xtask/src/version.rs) |
+| `version`: the path dependency pins and the test `moves_the_workspace_crates_pins_with_it` | PdfCraft `xtask/src/version.rs` at [3e30645](https://github.com/storytold/pdfcraft/blob/3e3064532f04fd6ec769c6bd7b2c97464757970e/xtask/src/version.rs) |
+| `version`: the `toml_edit` edit that keeps quotes and line endings, the `=OLD` pins, the `Cargo.lock` restore, the size limits, the unchanged-version case and the one-`set`-at-a-time lock | written here |
 | The root and slot-count errors, the `--exclude` of the xtask package, cancellation, the bounded owner read and the atomic report; in `stats`, the metadata, total-size, depth and `--list` output limits, the metadata checks and the line naming failed listings | written here |
 | `assets`: `is_asset`, the exact-row check, `run`, the three asset folders and the test `detects_unattributed_assets` | VectorCraft `xtask/src/assets.rs` at [bada8e1](https://github.com/storytold/vectorcraft/blob/bada8e17103db9917de44e40a1cead5a7fc71c3c/xtask/src/assets.rs) and DesignCraft `xtask/src/assets.rs` at [8b169f8](https://github.com/storytold/designcraft/blob/8b169f8ee7832e60ed1ac4c9f5dd34f954d3a992/xtask/src/assets.rs) |
 | `assets`: the CADCraft and WordCraft extension lists, the `-z` listing, the exit-status check and the tests in `assets::tests::wordcraft` | CADCraft `xtask/src/assets.rs` at [8e69890](https://github.com/storytold/cadcraft/blob/8e6989022398ff5f79adaab77d19fdd7137591f3/xtask/src/assets.rs), WordCraft `xtask/src/assets.rs` at [42a5df5](https://github.com/storytold/wordcraft/blob/42a5df5f94e03288037f731ffd86dee7c7cf1332/xtask/src/assets.rs) |
@@ -303,6 +349,7 @@ No app uses this crate yet.
 | LightCraft | Planned: `ci_lock.rs` moves to `lock`, with `LIGHTCRAFT_CI_LOCK` and `LIGHTCRAFT_CI_SLOTS` read by the app. The machine, GPU, corpus and skip report stays in the app. |
 | DeckCraft, DesignCraft, EffectCraft, VectorCraft | Planned: `xtask/src/pdf_deps.rs` moves to `pins`. Each app keeps its `pdf-deps` command and its table, and runs `cargo xtask pdf-deps` before and after the switch. |
 | CADCraft, DeckCraft, DesignCraft, GridCraft, LightCraft, PhotoCraft, VectorCraft, WordCraft | Planned: `xtask/src/stats.rs` moves to `stats`. Each app's switch lists its per-crate counts before and after in its pull request. |
+| SoundCraft, PdfCraft | Planned: `xtask/src/version.rs` moves to `version`, with the app's root and `CARGO` passed to `run`. `the_real_manifest_has_a_valid_version`, and PdfCraft's `workspace_rust_version_covers_the_ui_crate`, stay in the app. |
 | VectorCraft, DesignCraft, CADCraft, DeckCraft, WordCraft, GridCraft, LightCraft | Planned: `xtask/src/assets.rs` moves to `assets`, each with its own document, folders and row mode; LightCraft with `RowMode::Patterns`, its forbidden extensions and names, and `license_column: Some(4)`. The `cargo xtask assets` output stays in the app. |
 
 Maintainers: the craft-libs maintainers, until a responsible maintainer or team is agreed in the

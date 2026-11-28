@@ -89,8 +89,12 @@ impl ScrollBar {
 
     /// The shapes of the bar in `track` along `axis` for `span`, in `state` (the bar's: hovered while the pointer is
     /// anywhere on it): the track and the fully round thumb, `look.thumb_width` thick along the track's outer edge (its
-    /// bottom, or its end side in the reading direction).
+    /// bottom, or its end side in the reading direction). No shapes when the track has no room: a view shorter or
+    /// narrower than its padding gives its bar a track of no length, or one whose ends cross.
     pub fn shapes(look: &ScrollBarLook, track: Rect, axis: Axis, rtl: bool, span: &ScrollSpan, state: &StateSet) -> Vec<Shape> {
+        if !track.is_positive() {
+            return Vec::new();
+        }
         let full = Self::thumb(look.min_thumb, track, axis, rtl, span);
         let thumb = Self::along_edge(full, state.resolve(&look.thumb_width), axis, rtl);
         let round = |rect: Rect| CornerRadius::from(rect.width().min(rect.height()) / 2.0);

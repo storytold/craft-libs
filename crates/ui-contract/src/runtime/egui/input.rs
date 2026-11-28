@@ -571,6 +571,51 @@ pub(crate) fn wheel_read(ctx: &Context, line: f32, page: f32) -> Option<(Vec2, W
     })
 }
 
+/// The wheel motion of the pass that zooms instead of scrolling, in wheel lines (`Wheel::zoom_lines`): its wheel events
+/// under egui's zoom modifier, which `pointer_read` turns into the pass's zoom factor and `wheel_read` leaves out of the
+/// scroll, and the Ctrl+wheel steps `fold_legacy_pinch` turned into pinch steps in the same input. A line event counts
+/// its lines, a point event its points over egui's line scroll speed and a page event its page's points over it. Zero
+/// when there were none; a delta that is not finite is left out.
+pub(crate) fn zoom_wheel_lines(ctx: &Context) -> Vec2 {
+    let (zoom_modifier, line) = ctx.options(|options| (options.input_options.zoom_modifier, options.input_options.line_scroll_speed));
+    let page = ctx.content_rect().height();
+    let speed = crate::runtime::frame::root_input(ctx).wheel;
+    let folded = PerViewport::<RawState>::with(ctx, super::pass::current_viewport(ctx), |state| state.folded_lines);
+    ctx.input(|input| {
+        input.raw.events.iter().fold(folded, |sum, event| match event {
+            Event::MouseWheel { unit, delta, modifiers, .. } if modifiers.matches_any(zoom_modifier) => {
+                sum + wheel_lines(*unit, unscaled(*unit, *delta, modifiers, speed), line, page)
+            }
+            _ => sum,
+        })
+    })
+}
+
+/// `delta` of a wheel event in `unit` with `modifiers` as the device sent it, before `scale_wheel` multiplied it by the
+/// user's `speed`.
+fn unscaled(unit: MouseWheelUnit, delta: Vec2, modifiers: &egui::Modifiers, speed: crate::runtime::env::WheelSpeed) -> Vec2 {
+    if modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
+        return delta;
+    }
+    let factor = match unit {
+        MouseWheelUnit::Line => speed.line,
+        MouseWheelUnit::Point => speed.point,
+        MouseWheelUnit::Page => return delta,
+    };
+    if factor.is_finite() && factor > 0.0 { delta / factor } else { delta }
+}
+
+/// `delta` of a wheel event in `unit` as wheel lines of `line` points, pages being `page` points; zero when it is not
+/// finite.
+fn wheel_lines(unit: MouseWheelUnit, delta: Vec2, line: f32, page: f32) -> Vec2 {
+    let lines = match unit {
+        MouseWheelUnit::Line => delta,
+        MouseWheelUnit::Point => delta / line,
+        MouseWheelUnit::Page => delta * page / line,
+    };
+    if lines.is_finite() { lines } else { Vec2::ZERO }
+}
+
 /// Removes the events a modal layer in another viewport blocks: button and key presses, wheel, text, clipboard and
 /// touch. Pointer moves and releases stay, so the pointer position stays right and no press or key sticks down. The
 /// events `keep` admits stay too (the canvas the modal leaves open, `runtime::sampler`); `pointer` is where the pointer
@@ -716,6 +761,7 @@ pub(crate) fn fold_legacy_pinch(ctx: &Context, input: &mut RawInput) {
             }
             let points = if unit == MouseWheelUnit::Line { delta * line } else { delta };
             *event = Event::Zoom((speed * (points.x + points.y)).exp());
+            state.folded_lines += wheel_lines(unit, delta, line, 0.0);
             state.last_pinch = now.or(state.last_pinch);
         }
     });
@@ -726,6 +772,8 @@ pub(crate) fn fold_legacy_pinch(ctx: &Context, input: &mut RawInput) {
 pub(crate) struct RawState {
     /// The input time of the last Ctrl+wheel folded into a pinch step.
     last_pinch: Option<f64>,
+    /// The wheel lines of the Ctrl+wheel events folded into pinch steps in the running pass's input (`zoom_wheel_lines`).
+    folded_lines: Vec2,
     control_click: ControlClick,
     /// The Alt+numpad entry in progress.
     alt_code: super::alt_code::AltCodeEntry,
@@ -744,6 +792,8 @@ pub(crate) struct RawState {
 pub(crate) fn prepare(ctx: &Context, input: &mut RawInput) {
     // This frame's `RootEnv`, which `set_input` stored before egui ran the input hook.
     let root = crate::runtime::frame::root_input(ctx);
+    // Each pass's input folds its own steps: a later pass of the frame, whose input holds no events, reads none.
+    PerViewport::<RawState>::with(ctx, input.viewport_id, |state| state.folded_lines = Vec2::ZERO);
     if root.ctrl_wheel_pinch {
         fold_legacy_pinch(ctx, input);
     }
