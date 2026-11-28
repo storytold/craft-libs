@@ -497,17 +497,22 @@ pub fn words(text: &str) -> Vec<(usize, usize)> {
 fn words_for(text: &str, language: impl Fn(usize) -> ProofLang) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
+    let mut first_letter: Option<usize> = None;
     let is_w = |c: char| c.is_alphanumeric() || c == '\'' || c == '’' || c == '-' || unicode_normalization::char::is_combining_mark(c);
     for (i, c) in text.char_indices() {
         let catalan_dot = c == '·'
-            && start.is_some_and(|s| language(s).pack_locale().is_some_and(|l| l.primary() == "ca"))
+            && first_letter.is_some_and(|s| language(s).pack_locale().is_some_and(|l| l.primary() == "ca"))
             && text.get(..i).is_some_and(|left| left.ends_with(['l', 'L']))
             && text.get(i + c.len_utf8()..).is_some_and(|right| right.starts_with(['l', 'L']));
+        if c.is_alphabetic() && first_letter.is_none() {
+            first_letter = Some(i);
+        }
         match (start, is_w(c) || catalan_dot) {
             (None, true) => start = Some(i),
             (Some(s), false) => {
                 out.push((s, i));
                 start = None;
+                first_letter = None;
             }
             _ => {}
         }
@@ -530,7 +535,9 @@ fn words_for(text: &str, language: impl Fn(usize) -> ProofLang) -> Vec<(usize, u
                 language(from).pack_locale().is_some_and(|l| l.primary() == "nl") && text.get(from..end).is_some_and(pack_lang::dutch_elision);
             let start = if dutch_prefix {
                 match text.get(a..from).and_then(|prefix| prefix.chars().next_back()) {
-                    Some(apostrophe @ ('\'' | '’')) => from - apostrophe.len_utf8(),
+                    Some(apostrophe @ ('\'' | '’')) if !text.get(end..b).is_some_and(|suffix| suffix.starts_with(apostrophe)) => {
+                        from - apostrophe.len_utf8()
+                    }
                     _ => from,
                 }
             } else {
@@ -819,6 +826,11 @@ mod language_token_tests {
         let words = words_for(text, |at| if at < dutch_start { catalan } else { dutch });
         let words: Vec<_> = words.into_iter().map(|(start, end)| &text[start..end]).collect();
         assert_eq!(words, ["col·legi", "vol", "fort", "’s-Hertogenbosh", "een"]);
+        let quoted_ca = "'col·legi'";
+        assert_eq!(words_for(quoted_ca, |at| if at == 0 { ProofLang::En } else { catalan }), [(1, quoted_ca.len() - 1)]);
+        let quoted_nl = "'T-profiel'";
+        assert_eq!(words_for(quoted_nl, |_| dutch), [(1, quoted_nl.len() - 1)]);
+
         assert!(!super::words(text).into_iter().any(|(a, b)| &text[a..b] == "col·legi"));
     }
 }

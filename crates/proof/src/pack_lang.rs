@@ -351,20 +351,18 @@ pub(crate) fn dutch_elision(word: &str) -> bool {
 
 fn check_word(d: &AffixDict, original: &str, word: &str, language: &str) -> bool {
     let known = |w: &str| d.check(w) || crate::in_user_dictionary(&w.to_lowercase());
+    let dutch = language == "nl" && dutch_elision(word);
+    if dutch && original.starts_with(['\'', '’']) {
+        return known(&format!("'{word}"));
+    }
     if known(word) {
         return true;
     }
     if matches!(language, "ca" | "nl") && d.explicitly_forbidden(word) {
         return false;
     }
-    if language == "nl" && dutch_elision(word) {
-        let prefixed = format!("'{word}");
-        if original.starts_with(['\'', '’']) {
-            return known(&prefixed);
-        }
-        if known(&prefixed) {
-            return false;
-        }
+    if dutch && known(&format!("'{word}")) {
+        return false;
     }
     word.contains('-') && word.split('-').all(|part| part.chars().count() <= 1 || known(part))
 }
@@ -430,6 +428,10 @@ mod tests {
         assert!(!check_word(&nl, "s-Hertogenbosch", "s-Hertogenbosch", "nl"));
         assert!(dutch_suggestions(&nl, "’s-Hertogenbosh", 5).contains(&"’s-Hertogenbosch".into()));
         assert!(dutch_suggestions(&nl, "s-Hertogenbosch", 5).contains(&"'s-Hertogenbosch".into()));
+        let nl = AffixDict::from_hunspell("SET UTF-8\nFORBIDDENWORD Z\n", "3\nt-shirt\n't-shirt/Z\nprofiel\n", &[]).unwrap();
+        assert!(check_word(&nl, "t-shirt", "t-shirt", "nl"));
+        assert!(!check_word(&nl, "’t-shirt", "t-shirt", "nl"));
+        assert!(check_word(&nl, "T-profiel", "T-profiel", "nl"));
     }
 
     /// Review follow-up (craft-libs#485): a panic inside a check (caught by the app) doesn't leave
