@@ -807,12 +807,14 @@ fn run_as_root(args: &[&std::ffi::OsStr]) -> Result<(), String> {
 }
 
 /// What `pkexec`'s exit code says about the command it ran.
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[cfg(any(target_os = "linux", target_os = "freebsd", test))]
 fn root_outcome(code: Option<i32>) -> Result<(), String> {
     match code {
         Some(0) => Ok(()),
-        // pkexec: 126 = the password prompt was dismissed, 127 = not authorized.
-        Some(126 | 127) => Err("cancelled".into()),
+        // pkexec: 126 = the password prompt was dismissed.
+        Some(126) => Err(CANCELLED.into()),
+        // pkexec: 127 = not authorized, no authentication agent to show the prompt, or another pkexec error.
+        Some(127) => Err("the system installer stopped with error 127 (usually refused permission or no polkit authentication agent)".into()),
         Some(c) => Err(format!("the system installer stopped with error {c}")),
         None => Err("the system installer was interrupted".into()),
     }

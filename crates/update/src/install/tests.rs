@@ -1257,3 +1257,12 @@ pub(crate) mod macos_checks {
         assert!(super::macos::unmounted_attachments("hdiutil: info failed", &paths).is_empty());
     }
 }
+
+#[trial]
+fn only_a_dismissed_password_prompt_counts_as_a_cancel() {
+    assert_eq!(root_outcome(Some(126)), Err(CANCELLED.into()));
+    // No polkit agent (a bare window manager) or refused permission: a failure that says so.
+    let refused = root_outcome(Some(127)).unwrap_err();
+    assert_ne!(refused, CANCELLED);
+    assert!(refused.contains("polkit authentication agent"), "{refused}");
+}
