@@ -414,8 +414,11 @@ fn dutch_suggestions(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
     if let Some(apostrophe) = apostrophe {
         let mut seen = std::collections::HashSet::new();
         for suggestion in &mut found {
-            let body = suggestion.strip_prefix(['\'', '’']).unwrap_or(suggestion);
-            *suggestion = format!("{apostrophe}{body}");
+            if let Some(body) = suggestion.strip_prefix(['\'', '’']) {
+                *suggestion = format!("{apostrophe}{body}");
+            } else if apostrophe == '\'' {
+                suggestion.insert(0, apostrophe);
+            }
         }
         found.retain(|suggestion| suggestion != word && seen.insert(suggestion.clone()));
     }
@@ -470,6 +473,7 @@ mod tests {
         let quoted = dutch_suggestions(&nl, "'t-shrit", 5);
         assert!(quoted.contains(&"'t-shirt".into()));
         assert!(quoted.iter().all(|word| word.starts_with('\'')));
+        assert!(dutch_suggestions(&nl, "’t-shrit", 5).contains(&"t-shirt".into()));
     }
 
     /// Review follow-up (craft-libs#485): a panic inside a check (caught by the app) doesn't leave
