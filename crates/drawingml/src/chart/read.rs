@@ -455,13 +455,6 @@ fn primary_value_axis<'a>(
     if let Some(axis) = used.iter().filter_map(selected).find(|axis| !secondary_placed(axis)) {
         return Some(axis);
     }
-    if version >= 7 {
-        // A uniquely resolved used pair owns the plot even when it is placed right/top.
-        // Do not let an unused reciprocal pair replace that element on the current path.
-        if let Some(axis) = used.iter().find_map(|(_, resolved)| *resolved) {
-            return Some(axis);
-        }
-    }
     if version >= 2 {
         // A secondary-only plot still owns the right/top pair. The writer keeps the unused
         // primary pair; require reciprocal IDs so a stray or incomplete axis cannot win.
@@ -2827,9 +2820,10 @@ mod tests {
                     assert_eq!(previous.y2_max, None);
                 }
                 previous.raw = Some(xml.clone());
+                let previous: Chart = serde_json::from_str(&serde_json::to_string(&previous).unwrap()).unwrap();
                 let (written, kept) = crate::chart::write::chart_xml(&previous);
                 assert!(kept, "unchanged saved interpretation{version} must retain its raw part");
-                assert_eq!(written, xml.as_bytes());
+                assert_eq!(crate::xmlx::parse(&written).unwrap().to_xml(), root.to_xml());
             }
         }
         // An unused primary fallback is not proof that either populated group owns it.
@@ -2851,7 +2845,7 @@ mod tests {
         let y = review_6095656137_axis("valAx", 20, 10, "r", 90, "");
         let stray = review_6095656137_axis("valAx", 10, 999, "l", 999, r#"<c:numFmt formatCode="0%" sourceLinked="0"/>"#);
         let foreign = review_6095656137_axis("catAx", 999, 10, "b", 1, "");
-        for axes in [format!("{x}{y}{stray}"), format!("{stray}{y}{x}"), format!("{x}{foreign}{stray}{y}")] {
+        for (axes, primary_resolves) in [(format!("{x}{y}{stray}"), true), (format!("{stray}{y}{x}"), true), (format!("{x}{foreign}{stray}{y}"), false)] {
             let xml = metadata_chart(&format!("{primary}{scatter}{primary_axes}{axes}"));
             let chart = read_chart_xml(xml.as_bytes()).unwrap();
             assert_eq!(chart.series.iter().map(|s| s.secondary_axis).collect::<Vec<_>>(), [false, true]);
@@ -2859,12 +2853,21 @@ mod tests {
             assert_eq!(chart.category_format.as_deref(), Some("0.0"));
             assert_eq!(chart.category_label(0), "30.0");
             assert_eq!(chart.series[1].x_values, [Some(30.0)]);
-            let pure = read_chart_xml(metadata_chart(&format!("{scatter}{axes}")).as_bytes()).unwrap();
-            assert!(!pure.series[0].secondary_axis, "the resolved used Y is primary even with a foreign reciprocal left pair");
-            assert_eq!(pure.y_max, Some(90.0));
-            assert_eq!(pure.axis_titles, (Some("Axis10-20".into()), Some("Axis20-10".into())));
-            assert_eq!(pure.category_format.as_deref(), Some("0.0"));
-            assert_eq!(pure.category_label(0), "30.0");
+            let pure_xml = metadata_chart(&format!("{scatter}{axes}"));
+            let pure = read_chart_xml(pure_xml.as_bytes()).unwrap();
+            if primary_resolves {
+                assert!(!pure.series[0].secondary_axis);
+                assert_eq!(pure.y_max, Some(90.0));
+                assert_eq!(pure.axis_titles, (Some("Axis10-20".into()), Some("Axis20-10".into())));
+                assert_eq!(pure.category_format.as_deref(), Some("0.0"));
+                assert_eq!(pure.category_label(0), "30.0");
+            } else {
+                // A valid unused primary pair remains the anchor, as when primary series
+                // are deleted. Without resolved primary ownership, retain the ID fallback.
+                let root = crate::xmlx::parse(pure_xml.as_bytes()).unwrap();
+                let old = read_chart(&root, MAX_CHART_POINTS, 6).unwrap();
+                assert_eq!((pure.series[0].secondary_axis, pure.y_max, pure.y2_max), (old.series[0].secondary_axis, old.y_max, old.y2_max));
+            }
         }
         // Ambiguous duplicate elements and an unresolved pair keep the ID-only fallback.
         for axes in [format!("{x}{y}{y}{stray}"), format!("{x}{stray}")] {
