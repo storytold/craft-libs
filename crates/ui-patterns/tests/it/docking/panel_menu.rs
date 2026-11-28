@@ -5,7 +5,7 @@ use craft_behavior::Axis;
 use craft_behavior::PartKey;
 use craft_behavior::dock::{Action, Column, DockEdge, Group, Layout, Node, SplitSize, Workspace};
 use craft_ui::contract::{Bind, BodyCx, PlainData, Role, ShowContainer as _, Tracked};
-use craft_ui::docking::{DockConfig, DockPanels, PanelSpec, PanelSpecs, WindowMenuRows};
+use craft_ui::docking::{DockConfig, DockPanels, PanelDocument, PanelSpec, PanelSpecs, WindowMenuRows};
 use craft_ui::menu::{Menu, PanelRow};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::testing::{Fixture, Target, trial};
@@ -113,6 +113,63 @@ fn tab_reaches_the_tabs_then_the_drag_band_then_the_panel_menu_button() {
         parts.push(fixture.focused_stop().and_then(|(_, part)| part).map(|part| part.key));
     }
     assert_eq!(parts, vec![Some(PartKey::new("grip")), Some(PartKey::new("panel_menu"))], "Tab order after the tabs");
+}
+
+/// The header parts Tab reaches, in order, in a dock of one lone panel 400 points wide with `config`.
+fn lone_group_parts(config: DockConfig) -> Vec<Option<PartKey>> {
+    let mut workspace = Arc::new(Workspace::new(Layout::new(Some(Node::tabs(vec![0], 0)), Vec::new())));
+    let specs = Tracked::new(Specs);
+    let mut fixture = Fixture::new(move |ui| {
+        DockArea::new("Dock", Bind::bound(&mut workspace), &specs, &mut Panels, config.clone()).show(ui);
+    });
+    fixture.room(Vec2::new(400.0, 600.0)).settle();
+    let mut parts = Vec::new();
+    for _ in 0..3 {
+        fixture.key(Key::Tab, Modifiers::NONE).idle(1);
+        parts.push(fixture.focused_stop().and_then(|(_, part)| part).map(|part| part.key));
+    }
+    parts
+}
+
+/// A lone group narrower than `DockConfig::tab_only_narrower_than` drops its drag band and menu button, since its tab
+/// drags it and opens its menu; a titled header has no tab, so it keeps both.
+#[trial]
+fn a_titled_header_keeps_its_drag_band_and_menu_button_under_tab_only() {
+    let (grip, menu) = (Some(PartKey::new("grip")), Some(PartKey::new("panel_menu")));
+    let narrow = DockConfig::default().tab_only_narrower_than(1000);
+    let tab_only = lone_group_parts(narrow.clone());
+    assert!(!tab_only.contains(&grip) && !tab_only.contains(&menu), "the tab alone: {tab_only:?}");
+    let titled = lone_group_parts(narrow.titled_headers(true));
+    assert!(titled.contains(&grip) && titled.contains(&menu), "the titled header keeps both: {titled:?}");
+}
+
+/// Panels named by number, each with an open document: a lone panel shows two tabs, its own and the document's.
+#[derive(PlainData)]
+struct WithDocuments;
+
+impl PanelSpecs<usize> for WithDocuments {
+    fn spec(&self, panel: &usize) -> PanelSpec {
+        PanelSpec::new(format!("Panel {panel}")).documents(vec![PanelDocument::new(1, "Doc 1").shown(true)])
+    }
+}
+
+/// A lone panel with a document shows two tabs, so a narrow group keeps its drag band and menu button.
+#[trial]
+fn a_lone_panel_with_documents_keeps_its_drag_band_and_menu_button_under_tab_only() {
+    let mut workspace = Arc::new(Workspace::new(Layout::new(Some(Node::tabs(vec![0], 0)), Vec::new())));
+    let specs = Tracked::new(WithDocuments);
+    let config = DockConfig::default().tab_only_narrower_than(1000);
+    let mut fixture = Fixture::new(move |ui| {
+        DockArea::new("Dock", Bind::bound(&mut workspace), &specs, &mut Panels, config.clone()).show(ui);
+    });
+    fixture.room(Vec2::new(400.0, 600.0)).settle();
+    let mut parts = Vec::new();
+    for _ in 0..4 {
+        fixture.key(Key::Tab, Modifiers::NONE).idle(1);
+        parts.push(fixture.focused_stop().and_then(|(_, part)| part).map(|part| part.key));
+    }
+    let (grip, menu) = (Some(PartKey::new("grip")), Some(PartKey::new("panel_menu")));
+    assert!(parts.contains(&grip) && parts.contains(&menu), "two tabs keep both: {parts:?}");
 }
 
 /// A panel in a column collapsed to icons shows in its flyout: its Window menu row opens the flyout, is checked while

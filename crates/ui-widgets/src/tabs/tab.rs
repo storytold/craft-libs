@@ -203,6 +203,10 @@ pub struct Tab<'a> {
     #[style_key]
     #[prop(flag)]
     large: bool,
+    /// A tight tab: one control pad on each side of the label instead of two, for a lone tab in a narrow header.
+    #[style_key]
+    #[prop(flag)]
+    compact: bool,
     /// The look of a panel tab ([`TabKind::Panel`]); the other kinds have their own.
     #[style_key]
     #[prop]
@@ -247,6 +251,7 @@ impl<'a> Tab<'a> {
             kind: TabKind::Document,
             role: TabRole::default(),
             large: false,
+            compact: false,
             panel_look: PanelTabLook::Plain,
             detail: None,
             icon: None,
@@ -420,6 +425,8 @@ impl Component for Tab<'_> {
             ribbon_pad(tokens)
         } else if text_only {
             0.0
+        } else if key.compact {
+            space.pad.control
         } else {
             2.0 * space.pad.control
         };

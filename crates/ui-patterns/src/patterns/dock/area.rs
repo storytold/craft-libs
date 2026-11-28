@@ -1405,6 +1405,16 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 GroupParts { titles, hosted, states }
             })
         };
+        // A group with one tab (one panel, no documents), narrower than the dock's bound, shows only its tab
+        // (`DockConfig::tab_only_narrower_than`);
+        // not a titled header, which has no tab to drag the group by or open its menu from.
+        let width = match at {
+            GroupAt::Measure(width) => width,
+            GroupAt::Show(rect) => rect.width(),
+        };
+        let narrow = width < f32::from(scene.config.tab_only_narrower_than);
+        let lone_tab = members.len() == 1 && scene.spec(&members[0]).documents.is_empty();
+        let tab_only = lone_tab && !look.in_window && !scene.config.titled_headers && narrow;
         // The group with `members[at]` shown: as it shows, or as it is measured.
         let make = |at: usize, minimized: bool| {
             let panels = &panels;
@@ -1446,6 +1456,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
             if scene.config.wheel_selects_tabs {
                 group = group.wheel_selects_tabs();
+            }
+            if tab_only {
+                group = group.tab_only();
             }
             group
         };

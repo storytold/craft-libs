@@ -548,6 +548,9 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     /// Ctrl or Cmd held.
     #[prop(flag)]
     wheel_selects: bool,
+    /// The tabs are tight: one control pad on each side of their labels (`Tab::compact`).
+    #[prop(flag)]
+    compact_tabs: bool,
     /// Which tabs may be dragged.
     #[prop(func = "Fn(&K) -> bool")]
     can_drag: Option<RowTest<'a, K>>,
@@ -613,6 +616,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
             shown: None,
             tear_off: false,
             wheel_selects: false,
+            compact_tabs: false,
             can_drag: None,
             can_close: None,
             roles: None,
@@ -1082,6 +1086,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
     /// Every tab takes the strip's kind, panel look and size.
     fn dress<'r>(&self, tab: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
         let tab = tab.kind(self.kind).panel_look(self.panel_look);
+        let tab = if self.compact_tabs { tab.compact() } else { tab };
         if self.large { tab.large() } else { tab }
     }
 
