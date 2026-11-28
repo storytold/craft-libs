@@ -72,6 +72,11 @@ fn prop(pr: Option<&El>, name: &str, default: bool) -> bool {
     pr.and_then(|p| p.child(name)).map(on).unwrap_or(default)
 }
 
+/// An on/off property `name` in `pr`: `None` when absent.
+fn opt_prop(pr: Option<&El>, name: &str) -> Option<bool> {
+    pr.and_then(|p| p.child(name)).map(on)
+}
+
 /// A character property (`m:chr`, `m:begChr`…): `None` when absent, `Some(None)` when empty.
 fn chr(pr: Option<&El>, name: &str) -> Option<Option<char>> {
     let c = pr?.child(name)?;
@@ -152,7 +157,7 @@ fn node(k: &El, depth: usize, out: &mut Arg) {
             out.push(MNode::Nary {
                 chr,
                 lim_loc,
-                grow: prop(pr, "m:grow", false),
+                grow: opt_prop(pr, "m:grow"),
                 sub_hide: prop(pr, "m:subHide", false),
                 sup_hide: prop(pr, "m:supHide", false),
                 sub: sub_arg(k, "m:sub", d),
