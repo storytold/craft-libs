@@ -324,6 +324,9 @@ impl Subtags {
         let base = tag.split(['.', '@']).next().unwrap_or("").replace('_', "-");
         let mut parts = base.split('-').filter(|p| !p.is_empty());
         let language = parts.next().unwrap_or("").to_owned();
+        if language.len() == 1 {
+            return Subtags { language, script: None, region: None };
+        }
         let mut script = match tag.split_once('@').map(|(_, m)| m) {
             Some("latin") => Some("latn".to_owned()),
             Some("cyrillic") => Some("cyrl".to_owned()),
@@ -331,6 +334,11 @@ impl Subtags {
         };
         let mut region = None;
         for part in parts {
+            // Stop at BCP 47 extension or private-use singletons (`-u-`, `-t-`, `-x-`) so their
+            // subtags are never mistaken for a script or region.
+            if part.len() == 1 {
+                break;
+            }
             if part.len() == 4 && part.bytes().all(|b| b.is_ascii_alphabetic()) {
                 script.get_or_insert_with(|| part.to_owned());
             } else if super::is_region(part) {

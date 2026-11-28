@@ -316,3 +316,23 @@ fn plural_forms_follow_cldr_for_every_offered_language() {
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(found[0].starts_with("de/common: line 1: expected 2"), "{found:?}");
 }
+
+#[test]
+fn extensions_and_private_use_do_not_set_script_or_region() {
+    use Script::{Guru, Hebr, Latn};
+    for (tag, want, dir) in [
+        ("en-u-arab", &[Latn][..], Direction::Ltr),
+        ("en-u-nu-arab", &[Latn], Direction::Ltr),
+        ("en-t-hebr", &[Latn], Direction::Ltr),
+        ("en-x-arab", &[Latn], Direction::Ltr),
+        ("x-arab", &[Latn], Direction::Ltr),
+        ("x-he-arab", &[Latn], Direction::Ltr),
+        ("he-u-latn", &[Hebr], Direction::Rtl),
+        ("he-u-nu-latn", &[Hebr], Direction::Rtl),
+        ("sr-Latn-u-arab", &[Latn], Direction::Ltr),
+        ("pa-u-pk", &[Guru], Direction::Ltr),
+    ] {
+        assert_eq!(scripts(tag), want, "{tag}");
+        assert_eq!(direction(tag), dir, "{tag}");
+    }
+}
