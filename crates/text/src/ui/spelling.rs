@@ -204,6 +204,13 @@ impl CheckSpellingDialog {
         &self.items
     }
 
+    /// The misspelling the dialog is showing: the one at its position in the list, or `None` when
+    /// the list is empty or the walk has passed its end. Ignore moves to the next one; after an
+    /// action, [`set_items`](Self::set_items) keeps the position, so it shows the next misspelling.
+    pub fn current(&self) -> Option<&SpellingItem> {
+        self.items.get(self.index)
+    }
+
     /// Over `items` from a first search (the current layer: Check All Layers off).
     pub fn new(items: Vec<SpellingItem>) -> Self {
         let change_to = items.first().and_then(|i| i.suggestions.first()).cloned().unwrap_or_default();
