@@ -36,7 +36,7 @@ cos = ["crypt", "filters", "dep:chrono", "dep:js-sys", "dep:wasm-bindgen"]
 # Content streams on the object layer (`cos::content`); inline images end where hayro-syntax's
 # tokenizer ends them.
 content = ["cos", "dep:hayro-syntax"]
-crypt = ["dep:aes", "dep:md-5", "dep:sha2", "dep:stringprep", "dep:zeroize", "dep:thiserror"]
+crypt = ["dep:aes", "dep:getrandom", "dep:md-5", "dep:sha2", "dep:stringprep", "dep:zeroize", "dep:thiserror"]
 # `testing`: a builder of small synthetic PDF files, for the tests of crates that read them.
 test-support = ["cos"]
 # Standard-14 font metrics and ISO 32000-2 Annex D single-byte encodings.
@@ -67,11 +67,17 @@ zeroize = { version = "1", optional = true }
 chrono = { workspace = true, optional = true }
 kurbo = { workspace = true, optional = true }
 
+# AES initialization vectors (`crypt`) come from the operating system's random source.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+getrandom = { version = "0.4", optional = true }
+
 # On the web, a rewrite's fresh file identifier (`cos`) takes its entropy from the browser
 # (`crypto.getRandomValues`); native builds compile neither.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { version = "0.3", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
+# AES initialization vectors (`crypt`), from Web Crypto.
+getrandom = { version = "0.4", features = ["wasm_js"], optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
