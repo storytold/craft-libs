@@ -14,6 +14,9 @@ nothing.
 | `Comments::read_with_header_limit` | The same comments with a caller-selected header scan limit capped at 256 KiB; `read` defaults to 64 KiB |
 | `epsi` | The device-independent preview (`%%BeginPreview`, 1, 2, 4 or 8 bits) as an 8-bit grey bitmap |
 | `ascii85::encode`, `ascii85::decode` | The ASCII85 data encoding; lines never start with `%`, decoding is bounded |
+| `ascii85::Decoder` | ASCII85 decoded as it is read from a `BufRead`, with the same results as `decode`; it stops right after `~>` |
+| `ai_lex::Lexer` | The tokens of `.ai` editing data in a byte slice |
+| `ai_stream::Lexer` | The same tokens, owned, read from an `io::Read`: image samples by the `%%BeginData:` byte count, each token at most `MAX_TOKEN` bytes or a limit the caller gives, and `raw` for the bytes between tokens |
 
 ```rust
 let parts = craft_eps::sections(bytes)?;
@@ -67,4 +70,6 @@ last 64 KiB (`MAX_HEADER`, `MAX_TRAILER`); a bounding box is four finite numbers
 of a finite size; the binary header's offsets are checked against the file; an EPSI preview is
 at most 8192 pixels a side and must have all its samples; `ascii85::decode` takes the most bytes
 it may produce; a PDF is scanned for the Illustrator keys in its first and last mebibyte
-(`MAX_PDF_SCAN`). Each limit has a test. No `unsafe`, no panics outside tests.
+(`MAX_PDF_SCAN`); `ai_stream::Lexer` reads at most its token limit past the start of a token
+and holds 1,032 bytes before it (`LOOKBEHIND`), and `ascii85::Decoder` stops reading when its
+output passes the most bytes it may produce. Each limit has a test. No `unsafe`, no panics outside tests.

@@ -237,3 +237,114 @@ fn ascii85_refuses_malformed_and_oversized_text() {
     assert_eq!(ascii85::decode(&bomb, 1 << 16), None);
     assert_eq!(ascii85::decode(&bomb, 4 << 20).map(|v| v.len()), Some(4 << 20));
 }
+
+/// `text` decoded by [`ascii85::Decoder`] from reads of at most `size` bytes, into buffers of
+/// `out` bytes, and what is left of `text` after it.
+fn ascii85_streamed(text: &[u8], max: usize, size: usize, out: usize) -> (Result<Vec<u8>, std::io::Error>, Vec<u8>) {
+    use std::io::{BufReader, Read};
+    let mut d = ascii85::Decoder::new(BufReader::with_capacity(size, text), max);
+    let mut got = vec![];
+    let mut buf = vec![0; out];
+    let result = loop {
+        match d.read(&mut buf) {
+            Ok(0) => break Ok(got),
+            Ok(n) => got.extend_from_slice(&buf[..n]),
+            Err(e) => break Err(e),
+        }
+    };
+    let mut rest = vec![];
+    d.into_inner().read_to_end(&mut rest).unwrap();
+    (result, rest)
+}
+
+#[test]
+fn ascii85_decoder_reads_across_buffer_boundaries() {
+    // Groups, a `z`, a short last group and the `~` `>` pair split at every point.
+    let text = b" 9jq\no^ z 9jqo^9j ~\n> trailing";
+    for size in 1..text.len() {
+        for out in [1, 3, 64] {
+            let (got, rest) = ascii85_streamed(text, 100, size, out);
+            assert_eq!(got.unwrap(), b"Man \0\0\0\0Man M", "reads of {size}, buffers of {out}");
+            assert_eq!(rest, b" trailing", "the reader goes on right after the end");
+        }
+    }
+    let data: Vec<u8> = (0..4000u32).flat_map(|i| (i.wrapping_mul(2_654_435_761)).to_be_bytes()).collect();
+    let text = ascii85::encode(&data);
+    for size in [1, 7, 4096] {
+        assert_eq!(ascii85_streamed(text.as_bytes(), data.len(), size, 1000).0.unwrap(), data);
+    }
+}
+
+#[test]
+fn ascii85_decoder_refuses_what_decode_refuses() {
+    use std::io::{ErrorKind, Read};
+    for (text, kind) in [
+        (&b"9jqo^"[..], ErrorKind::UnexpectedEof),
+        (b"9jqo^~", ErrorKind::UnexpectedEof),
+        (b"9~>", ErrorKind::InvalidData),
+        (b"9jzo^~>", ErrorKind::InvalidData),
+        (b"9jqov~>", ErrorKind::InvalidData),
+        (b"s8W-\"~>", ErrorKind::InvalidData),
+    ] {
+        let err = ascii85_streamed(text, 100, 2, 2).0.unwrap_err();
+        assert_eq!(err.kind(), kind, "{:?}", String::from_utf8_lossy(text));
+    }
+    // `z` that never ends: refused when the output passes the limit, having read just past it.
+    let mut zs = std::io::BufReader::with_capacity(1, std::io::repeat(b'z')).take(1 << 40);
+    let mut d = ascii85::Decoder::new(&mut zs, 1 << 16);
+    let err = std::io::copy(&mut d, &mut std::io::sink()).unwrap_err();
+    let inner = err.get_ref().and_then(|e| e.downcast_ref::<ascii85::DecodeError>());
+    assert_eq!(inner, Some(&ascii85::DecodeError::TooLarge));
+    // The error stays.
+    assert!(d.read(&mut [0; 8]).is_err());
+    assert_eq!((1u64 << 40) - zs.limit(), (1 << 14) + 1);
+}
+
+#[test]
+fn ascii85_decoder_gives_out_decoded_bytes_before_a_reader_error() {
+    use std::io::{BufReader, ErrorKind, Read};
+    /// Gives each of its answers in turn.
+    struct Answers(Vec<Result<&'static [u8], ErrorKind>>);
+    impl Read for Answers {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            if self.0.is_empty() {
+                return Ok(0);
+            }
+            match self.0.remove(0) {
+                Ok(bytes) => {
+                    out[..bytes.len()].copy_from_slice(bytes);
+                    Ok(bytes.len())
+                }
+                Err(kind) => Err(kind.into()),
+            }
+        }
+    }
+    let reader = BufReader::new(Answers(vec![Ok(b"9jqo^"), Err(ErrorKind::WouldBlock), Ok(b"9jqo^~>")]));
+    let mut d = ascii85::Decoder::new(reader, 100);
+    let mut buf = [0u8; 64];
+    assert_eq!(d.read(&mut buf).unwrap(), 4, "the bytes decoded before the error");
+    assert_eq!(&buf[..4], b"Man ");
+    let mut rest = vec![];
+    d.read_to_end(&mut rest).unwrap();
+    assert_eq!(rest, b"Man ", "the next read asks the reader again");
+}
+
+proptest::proptest! {
+    #[test]
+    fn ascii85_decoder_agrees_with_decode(
+        text in proptest::collection::vec(proptest::sample::select(&b"!9u z~>\n\t%vs8W-\"^jqo"[..]), 0..40),
+        max in 0usize..40,
+        size in 1usize..9,
+        out in 1usize..9,
+    ) {
+        let (got, rest) = ascii85_streamed(&text, max, size, out);
+        let want = ascii85::decode(&text, max);
+        proptest::prop_assert_eq!(got.ok(), want.clone());
+        if want.is_some() {
+            // Nothing past the `>` that ends it was read: the first `~`, any whitespace, then `>`.
+            let tilde = text.iter().position(|b| *b == b'~').unwrap();
+            let end = tilde + 1 + text[tilde + 1..].iter().take_while(|b| b.is_ascii_whitespace()).count() + 1;
+            proptest::prop_assert_eq!(rest, text[end..].to_vec());
+        }
+    }
+}

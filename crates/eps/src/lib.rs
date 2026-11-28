@@ -7,7 +7,9 @@
 //!   preview beside the PostScript, read and written.
 //! - [`Comments`]: the DSC header comments, with the bounding box also when it is `(atend)`.
 //! - [`epsi`]: the device-independent preview bitmap in `%%BeginPreview` comments.
-//! - [`ascii85`]: the ASCII85 data encoding, both ways.
+//! - [`ascii85`]: the ASCII85 data encoding, both ways, and decoded as it is read.
+//! - [`ai_lex`] / [`ai_stream`]: the tokens of `.ai` editing data, from a byte slice or
+//!   read from a stream with a limit on each token.
 //!
 //! Written from the PostScript Language Document Structuring Conventions 3.0 and the
 //! Encapsulated PostScript File Format Specification 3.0 (Adobe Technical Notes 5001 and 5002),
@@ -16,6 +18,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod ai_lex;
+pub mod ai_stream;
 pub mod ascii85;
 mod container;
 mod dsc;

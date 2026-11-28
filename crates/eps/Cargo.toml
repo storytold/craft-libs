@@ -16,6 +16,9 @@ vectorcraft-doc = { workspace = true, optional = true }
 vectorcraft-eps = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 
+[dev-dependencies]
+proptest = { workspace = true }
+
 [features]
 default = []
 paths = ["dep:kurbo", "dep:thiserror", "dep:vectorcraft-doc", "dep:vectorcraft-eps"]

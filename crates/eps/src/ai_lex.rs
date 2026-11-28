@@ -45,24 +45,24 @@ pub struct Token<'a> {
 }
 
 /// A placed file's preview (binary): (begin, end) markers.
-const PREVIEW: (&[u8], &[u8]) = (b"%AI26_BeginPlacedObjectPreview", b"%AI26_EndPlacedObjectPreview");
+pub(crate) const PREVIEW: (&[u8], &[u8]) = (b"%AI26_BeginPlacedObjectPreview", b"%AI26_EndPlacedObjectPreview");
 /// A placed file's markers, which a hidden one has on `%_` lines.
-const PLACE: [&[u8]; 2] = [b"%AI5_BeginPlace", b"%AI5_EndPlace"];
+pub(crate) const PLACE: [&[u8]; 2] = [b"%AI5_BeginPlace", b"%AI5_EndPlace"];
 /// A path's note comments, also read on `%_` lines.
-const NOTES: [&[u8]; 3] = [b"%AI3_Note:", b"%%Note:", b"%AI5_NoteMore:"];
+pub(crate) const NOTES: [&[u8]; 3] = [b"%AI3_Note:", b"%%Note:", b"%AI5_NoteMore:"];
 /// The markers around a placed file's relative folder, which a hidden one has on `%_` lines too.
-const RELATIVE: [&[u8]; 2] = [b"%AI28_BeginPlacedRelativePath", b"%AI28_EndPlacedRelativePath"];
+pub(crate) const RELATIVE: [&[u8]; 2] = [b"%AI28_BeginPlacedRelativePath", b"%AI28_EndPlacedRelativePath"];
 /// A document included whole: (begin, end) markers.
-const DOCUMENT: (&[u8], &[u8]) = (b"%%BeginDocument", b"%%EndDocument");
+pub(crate) const DOCUMENT: (&[u8], &[u8]) = (b"%%BeginDocument", b"%%EndDocument");
 
-fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+pub(crate) fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() {
         return Some(0);
     }
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
-fn hex_decode(bytes: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn hex_decode(bytes: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(bytes.len() / 2);
     let mut high: Option<u8> = None;
     for &b in bytes {
@@ -83,7 +83,7 @@ fn hex_decode(bytes: &[u8]) -> Option<Vec<u8>> {
 
 /// The line of `src` before the one that starts at `at`, without its line end, when it ends within
 /// [`OPERAND_LINE`] bytes of `at` and is no longer than that.
-fn previous_line(src: &[u8], at: usize) -> Option<&[u8]> {
+pub(crate) fn previous_line(src: &[u8], at: usize) -> Option<&[u8]> {
     let before = src.get(at.saturating_sub(OPERAND_LINE)..at)?;
     let end = before.iter().rposition(|b| !is_eol(*b))? + 1;
     let start = before.get(..end)?.iter().rposition(|b| is_eol(*b))? + 1;
@@ -91,12 +91,12 @@ fn previous_line(src: &[u8], at: usize) -> Option<&[u8]> {
 }
 
 /// The longest line of an image's `XI` operands looked at.
-const OPERAND_LINE: usize = 1024;
+pub(crate) const OPERAND_LINE: usize = 1024;
 
 /// How many bytes the alpha channel of an image whose `XI` operands are on `line` takes (`[matrix]
 /// llx lly urx ury w h bits type alpha …`, `%_` before them in a hidden object): a byte a pixel when
 /// the alpha count isn't 0, else none (or when the operands aren't of that shape).
-fn alpha_bytes(line: &[u8]) -> usize {
+pub(crate) fn alpha_bytes(line: &[u8]) -> usize {
     let line = line.strip_prefix(b"%_").unwrap_or(line);
     let Some(after) = line.iter().rposition(|b| *b == b']').and_then(|i| line.get(i + 1..)) else { return 0 };
     let nums: Vec<f64> = std::str::from_utf8(after).unwrap_or_default().split_whitespace().take(9).map_while(|w| w.parse().ok()).collect();
@@ -131,15 +131,15 @@ fn end_data(w: &[u8]) -> Option<usize> {
     first
 }
 
-fn is_space(b: u8) -> bool {
+pub(crate) fn is_space(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\r' | b'\n' | b'\x0c' | b'\0')
 }
 
-fn is_delim(b: u8) -> bool {
+pub(crate) fn is_delim(b: u8) -> bool {
     matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
 }
 
-fn is_eol(b: u8) -> bool {
+pub(crate) fn is_eol(b: u8) -> bool {
     matches!(b, b'\r' | b'\n')
 }
 
