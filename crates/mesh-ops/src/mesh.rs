@@ -224,19 +224,10 @@ impl Mesh {
     }
 
     /// MikkTSpace tangents (falls back to per-triangle tangents if generation fails).
-    /// Non-finite entries of a complete normal array are recomputed; finite entries are retained.
     pub fn compute_tangents(&mut self) {
         self.tangents = vec![Vec4::new(1.0, 0.0, 0.0, 1.0); self.positions.len()];
         if self.normals.len() != self.positions.len() {
             self.compute_normals();
-        } else if self.normals.iter().any(|normal| !normal.is_finite()) {
-            let supplied = std::mem::take(&mut self.normals);
-            self.compute_normals();
-            for (normal, supplied) in self.normals.iter_mut().zip(supplied) {
-                if supplied.is_finite() {
-                    *normal = supplied;
-                }
-            }
         }
         if self.uvs.len() != self.positions.len() {
             self.uvs = vec![Vec2::ZERO; self.positions.len()];
@@ -553,37 +544,6 @@ mod tests {
         mesh.positions[0].x = f32::NAN;
         mesh.compute_tangents();
         assert!(mesh.tangents.iter().all(|tangent| tangent.is_finite()));
-    }
-
-    #[test]
-    fn from_parts_repairs_non_finite_normals() {
-        for normals in [vec![Vec3::NAN; 3], vec![Vec3::NAN, Vec3::Y, Vec3::Z]] {
-            let mesh =
-                Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], Some(normals.clone()), vec![Vec2::ZERO, Vec2::X, Vec2::Y], vec![0, 1, 2], "m")
-                    .unwrap();
-            assert!(mesh.normals.iter().all(|normal| normal.is_finite()));
-            assert!(mesh.tangents.iter().all(|tangent| tangent.is_finite()));
-            for (actual, supplied) in mesh.normals.iter().zip(normals) {
-                if supplied.is_finite() {
-                    assert_eq!(*actual, supplied);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn direct_tangents_repair_non_finite_normals() {
-        let mut mesh = quad();
-        let supplied = vec![Vec3::NAN, Vec3::Y, Vec3::Z, Vec3::NAN];
-        mesh.normals = supplied.clone();
-        mesh.compute_tangents();
-        assert!(mesh.normals.iter().all(|normal| normal.is_finite()));
-        assert!(mesh.tangents.iter().all(|tangent| tangent.is_finite()));
-        for (actual, supplied) in mesh.normals.iter().zip(supplied) {
-            if supplied.is_finite() {
-                assert_eq!(*actual, supplied);
-            }
-        }
     }
 
     fn quad() -> Mesh {
