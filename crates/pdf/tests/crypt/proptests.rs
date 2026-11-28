@@ -500,22 +500,25 @@ proptest! {
 
 /// Bytes 13-16 of `/Perms` are the non-repeating filler. Nothing reads them, so pinning that
 /// they move with the seed is the only way to notice a producer that freezes them at zero.
+/// Keep that relation with metadata encryption both on and off.
 #[test]
 fn perms_filler_follows_the_seed() {
-    let perms = |seed: u8| {
-        let h = create(
-            &NewEncryption {
-                algorithm: Algorithm::Aes256,
-                user_password: "user",
-                owner_password: "owner",
-                permissions: -1,
-                encrypt_metadata: true,
-                seed: [seed; 32],
-            },
-            ID,
-        )
-        .unwrap();
-        aes_cbc_decrypt(h.file_key(), &[0u8; 16], &h.dict().perms, false)
-    };
-    assert_ne!(&perms(0x5e)[12..16], &perms(0x11)[12..16], "the four filler bytes of /Perms must follow the seed, not sit constant");
+    for encrypt_metadata in [true, false] {
+        let perms = |seed: u8| {
+            let h = create(
+                &NewEncryption {
+                    algorithm: Algorithm::Aes256,
+                    user_password: "user",
+                    owner_password: "owner",
+                    permissions: -1,
+                    encrypt_metadata,
+                    seed: [seed; 32],
+                },
+                ID,
+            )
+            .unwrap();
+            aes_cbc_decrypt(h.file_key(), &[0u8; 16], &h.dict().perms, false)
+        };
+        assert_ne!(&perms(0x5e)[12..16], &perms(0x11)[12..16], "the four filler bytes of /Perms must follow the seed, not sit constant");
+    }
 }

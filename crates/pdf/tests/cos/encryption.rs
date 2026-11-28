@@ -597,8 +597,9 @@ fn an_edited_object_that_encrypt_names_is_encrypted() {
 #[test]
 fn a_crypt_filter_selected_by_reference_is_used() {
     for alg in [Algorithm::Aes128, Algorithm::Aes256] {
+        let protected = protect(alg, "", "owner", -1);
         for form in 0.. {
-            let mut doc = Document::open(Arc::new(protect(alg, "", "owner", -1))).unwrap();
+            let mut doc = Document::open(Arc::new(protected.clone())).unwrap();
             let Some(selected) = selector(&mut doc, form, "StdCF") else { break };
             select(&mut doc, selected);
             let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();

@@ -283,6 +283,16 @@ fn random(n: usize) -> Result<Vec<u8>, CryptError> {
 /// A package encrypted with `password`: every file but the `mimetype` and the manifest, the
 /// manifest saying how.
 pub fn encrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, CryptError> {
+    encrypt_with_iterations(bytes, password, ITERATIONS)
+}
+
+// Test-only access; public saves keep the production count.
+#[cfg(all(test, feature = "text"))]
+pub(crate) fn encrypt_with(bytes: &[u8], password: &str, iterations: u32) -> Result<Vec<u8>, CryptError> {
+    encrypt_with_iterations(bytes, password, iterations)
+}
+
+fn encrypt_with_iterations(bytes: &[u8], password: &str, iterations: u32) -> Result<Vec<u8>, CryptError> {
     let err = |e: craft_zip::Error| CryptError::Unsupported(e.to_string());
     let io = |e: std::io::Error| CryptError::Unsupported(e.to_string());
     let mut z = open_zip(bytes)?;
@@ -313,12 +323,12 @@ pub fn encrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, CryptError> {
         }
         deflated.extend_from_slice(&tail);
         let (salt, iv) = (random(16)?, random(16)?);
-        let key = pbkdf2(&start, &salt, ITERATIONS, 32)?;
+        let key = pbkdf2(&start, &salt, iterations, 32)?;
         let enc = cbc(&key, &iv, &deflated, true)?;
         data_of.push((
             name.clone(),
             format!(
-                " manifest:size=\"{size}\"><manifest:encryption-data manifest:checksum-type=\"{SHA256_1K}\" manifest:checksum=\"{}\"><manifest:algorithm manifest:algorithm-name=\"{AES256_CBC}\" manifest:initialisation-vector=\"{}\"/><manifest:start-key-generation manifest:start-key-generation-name=\"{SHA256}\" manifest:key-size=\"32\"/><manifest:key-derivation manifest:key-derivation-name=\"PBKDF2\" manifest:iteration-count=\"{ITERATIONS}\" manifest:salt=\"{}\" manifest:key-size=\"32\"/></manifest:encryption-data></manifest:file-entry>",
+                " manifest:size=\"{size}\"><manifest:encryption-data manifest:checksum-type=\"{SHA256_1K}\" manifest:checksum=\"{}\"><manifest:algorithm manifest:algorithm-name=\"{AES256_CBC}\" manifest:initialisation-vector=\"{}\"/><manifest:start-key-generation manifest:start-key-generation-name=\"{SHA256}\" manifest:key-size=\"32\"/><manifest:key-derivation manifest:key-derivation-name=\"PBKDF2\" manifest:iteration-count=\"{iterations}\" manifest:salt=\"{}\" manifest:key-size=\"32\"/></manifest:encryption-data></manifest:file-entry>",
                 STANDARD.encode(&sum),
                 STANDARD.encode(&iv),
                 STANDARD.encode(&salt)

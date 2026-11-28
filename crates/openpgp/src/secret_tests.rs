@@ -3,7 +3,7 @@
 
 use pgp::composed::{ArmorOptions, SignedSecretKey};
 use pgp::ser::Serialize;
-use pgp::types::Password;
+use pgp::types::{KeyVersion, Password, S2kParams, StringToKey};
 use proptest::prelude::*;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -12,14 +12,27 @@ use crate::fixtures::{Make, armoured_public, public, secret};
 use crate::secret::{SigningKind, holds_secret, read};
 use crate::{Error, KeyRing};
 
+// Accept/reject fixtures keep the same V4 protection, with less derivation work. The default API is exercised below.
+fn test_s2k(seed: u64) -> S2kParams {
+    let mut params = S2kParams::new_default(StdRng::seed_from_u64(seed), KeyVersion::V4);
+    let reduced = if let S2kParams::Cfb { s2k: StringToKey::IteratedAndSalted { count, .. }, .. } = &mut params {
+        *count = 0;
+        true
+    } else {
+        false
+    };
+    assert!(reduced, "the synthetic fixtures use V4 iterated-and-salted S2K");
+    params
+}
+
 fn protect(key: &mut SignedSecretKey, primary: bool, subkeys: bool) {
     let password: Password = "correct horse".into();
     if primary {
-        key.primary_key.set_password(StdRng::seed_from_u64(3), &password).unwrap();
+        key.primary_key.set_password_with_s2k(&password, test_s2k(3)).unwrap();
     }
     if subkeys {
         for sub in &mut key.secret_subkeys {
-            sub.key.set_password(StdRng::seed_from_u64(4), &password).unwrap();
+            sub.key.set_password_with_s2k(&password, test_s2k(4)).unwrap();
         }
     }
 }
@@ -106,9 +119,9 @@ fn a_file_with_more_than_one_key_is_refused() {
 fn an_empty_passphrase_is_no_protection() {
     let mut key = secret("Ada <ada@example.org>", Make { subkey: true, ..Make::default() });
     let empty = Password::empty();
-    key.primary_key.set_password(StdRng::seed_from_u64(3), &empty).unwrap();
+    key.primary_key.set_password_with_s2k(&empty, test_s2k(3)).unwrap();
     for sub in &mut key.secret_subkeys {
-        sub.key.set_password(StdRng::seed_from_u64(4), &empty).unwrap();
+        sub.key.set_password_with_s2k(&empty, test_s2k(4)).unwrap();
     }
     assert!(key.primary_key.secret_params().is_encrypted());
     assert!(!read(&key.to_bytes().unwrap()).unwrap().protected, "it opens with nothing typed");
@@ -116,7 +129,7 @@ fn an_empty_passphrase_is_no_protection() {
     let mut key = secret("Ada <ada@example.org>", Make { subkey: true, ..Make::default() });
     protect(&mut key, true, false);
     for sub in &mut key.secret_subkeys {
-        sub.key.set_password(StdRng::seed_from_u64(4), &empty).unwrap();
+        sub.key.set_password_with_s2k(&empty, test_s2k(4)).unwrap();
     }
     assert!(!read(&key.to_bytes().unwrap()).unwrap().protected);
     for sub in &mut key.secret_subkeys {
@@ -124,6 +137,15 @@ fn an_empty_passphrase_is_no_protection() {
     }
     protect(&mut key, false, true);
     assert!(read(&key.to_bytes().unwrap()).unwrap().protected);
+}
+
+/// The production-default derivation still recognizes an empty passphrase as no protection.
+#[test]
+fn a_default_s2k_empty_passphrase_is_no_protection() {
+    let mut key = secret("Ada <ada@example.org>", Make::default());
+    key.primary_key.set_password(StdRng::seed_from_u64(3), &Password::empty()).unwrap();
+    assert!(key.primary_key.secret_params().is_encrypted());
+    assert!(!read(&key.to_bytes().unwrap()).unwrap().protected, "the default derivation opens with nothing typed");
 }
 
 #[test]
