@@ -1,6 +1,6 @@
 //! `TextureLoader<K>`: a `TextureStore` fed by background jobs on a `craft_host::queue::JobQueue` per context.
 
-use super::store::{Revision, TextureKey, TextureState, TextureStore, TextureStoreOptions};
+use super::store::{RegionPatch, Revision, TextureKey, TextureState, TextureStore, TextureStoreOptions};
 use super::words::TextureWords;
 use crate::runtime::egui::{memory, pass, repaint};
 use crate::runtime::env::Env;
@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use craft_host::queue::Priority;
 
@@ -75,6 +76,15 @@ impl Debug for LoaderOptions {
 pub enum LoadedPicture {
     /// The picture to upload.
     Image(ColorImage),
+    /// Replaces the part of the existing picture at `origin` with `image` in place (`TextureStore::put_region_checked`).
+    Region {
+        /// Expected baseline revision of the resident texture. Rejected if the texture's revision has changed.
+        baseline: Revision,
+        /// Top-left texel [x, y] of the region to replace in the stored image.
+        origin: [u32; 2],
+        /// The new pixels for the region.
+        image: ColorImage,
+    },
     /// The key has no picture (a file the decoder doesn't read): stored with `TextureStore::put_empty`, so its state
     /// is `Empty` and the row paints its own tile.
     Blank,
@@ -118,24 +128,30 @@ pub type LoadResult = Result<LoadedPicture, LoadFailure>;
 
 /// A key's job in flight: the revision it makes and when it was last asked for.
 struct Asked {
+    id: u64,
     revision: Revision,
     priority: Priority,
     /// The last frame a painter asked for the key.
     frame: u64,
     /// The pass time the job was queued, for `TextureLoader::waited`.
     queued: f64,
+    /// Set when the request is cancelled or superseded, checked atomically under the store lock.
+    cancelled: Arc<AtomicBool>,
 }
 
-type Finished<K> = (K, Revision, LoadResult);
+type Finished<K> = (K, u64, Revision, LoadResult);
 
 struct Pool<K> {
     lanes: usize,
-    queue: Arc<JobQueue<K, (Revision, LoadResult)>>,
+    queue: Arc<JobQueue<K, (u64, Revision, LoadResult)>>,
     asked: HashMap<K, Asked>,
+    next_id: u64,
     /// The frame the pass work last ran in, so it runs once per frame.
     polled: Option<u64>,
     /// Finished results waiting for upload allowance, oldest first.
     waiting: Vec<Finished<K>>,
+    /// Revisions whose `LoadedPicture::Region` patch was rejected for a key, so callers can submit a full image.
+    rejected_patches: HashMap<K, Revision>,
 }
 
 /// The loaders of one context and key type, by salt.
@@ -169,7 +185,7 @@ impl<K> Default for Pools<K> {
 /// - **Without lanes** (`lanes == 0`) the first call in a frame runs one job inline.
 pub struct TextureLoader<K: TextureKey> {
     store: TextureStore<K>,
-    queue: Arc<JobQueue<K, (Revision, LoadResult)>>,
+    queue: Arc<JobQueue<K, (u64, Revision, LoadResult)>>,
     lanes: usize,
 }
 
@@ -268,11 +284,21 @@ impl<K: TextureKey> TextureLoader<K> {
         let stand_in = self.store.state(ctx, &key, revision).shown();
         let frame = pass::root_frame_nr(ctx);
         let queued = pass::now(ctx);
-        self.with(ctx, |pool| pool.asked.insert(key.clone(), Asked { revision, priority, frame, queued }));
-        // A panicking job is a failure, not a key that stays Loading for good.
-        self.queue.submit(key, priority, move |cancel| {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(cancel))).unwrap_or(Err(LoadFailure::Panicked));
-            (revision, result)
+        self.with(ctx, |pool| {
+            pool.next_id += 1;
+            let id = pool.next_id;
+            if let Some(old) = pool.asked.insert(
+                key.clone(),
+                Asked { id, revision, priority, frame, queued, cancelled: Arc::new(AtomicBool::new(false)) },
+            ) {
+                old.cancelled.store(true, Ordering::Release);
+            }
+            pool.rejected_patches.remove(&key);
+            // A panicking job is a failure, not a key that stays Loading for good.
+            pool.queue.submit(key, priority, move |cancel| {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(cancel))).unwrap_or(Err(LoadFailure::Panicked));
+                (id, revision, result)
+            });
         });
         if self.lanes == 0 {
             // The job runs in the next frame's `run_frame_work`; the web repaints only on input.
@@ -280,6 +306,35 @@ impl<K: TextureKey> TextureLoader<K> {
         }
         replay::note_unsettled(ctx);
         TextureState::Loading { stand_in, waited: None }
+    }
+
+    /// Returns `true` if the most recent `LoadedPicture::Region` for `key` at `revision` was rejected by the store.
+    /// Polls finished work first so direct callers can check this before `request`/`submit` to fall back to `LoadedPicture::Image`.
+    pub fn patch_rejected(&self, ctx: &Context, key: &K, revision: Revision) -> bool {
+        self.poll(ctx);
+        self.with(ctx, |pool| pool.rejected_patches.get(key) == Some(&revision))
+    }
+
+    /// Runs this frame's work if not yet run in this frame: receiving finished jobs from the queue and uploading
+    /// results to the store within the frame upload allowance.
+    pub fn poll(&self, ctx: &Context) {
+        self.run_frame_work(ctx);
+    }
+
+    /// Discards any pending asked or waiting request for `key`, and cancels its running queue job.
+    pub fn cancel(&self, ctx: &Context, key: &K) {
+        self.with(ctx, |pool| {
+            pool.queue.reprioritize(|k, priority| if k == key { None } else { Some(priority) });
+            while let Some(finished) = pool.queue.try_recv() {
+                let (id, revision, result) = finished.result;
+                pool.waiting.push((finished.key, id, revision, result));
+            }
+            if let Some(old) = pool.asked.remove(key) {
+                old.cancelled.store(true, Ordering::Release);
+            }
+            pool.waiting.retain(|(k, _, _, _)| k != key);
+            pool.rejected_patches.remove(key);
+        });
     }
 
     /// Stops the loader's queue: waiting jobs are dropped, running ones are cancelled, and the call waits up to
@@ -314,36 +369,96 @@ impl<K: TextureKey> TextureLoader<K> {
             let asked = &mut pool.asked;
             pool.queue.reprioritize(|key, _| asked.get(key).filter(|asked| asked.frame >= recent).map(|asked| asked.priority));
             // A key nobody asked for recently loses its record, so its finished result is discarded below too.
-            asked.retain(|_, asked| asked.frame >= recent);
+            asked.retain(|_, asked| {
+                if asked.frame >= recent {
+                    true
+                } else {
+                    asked.cancelled.store(true, Ordering::Release);
+                    false
+                }
+            });
             while let Some(finished) = pool.queue.try_recv() {
-                let (revision, result) = finished.result;
-                pool.waiting.push((finished.key, revision, result));
+                let (id, revision, result) = finished.result;
+                pool.waiting.push((finished.key, id, revision, result));
             }
             let waiting = std::mem::take(&mut pool.waiting);
-            waiting.into_iter().filter(|(key, revision, _)| pool.asked.get(key).is_some_and(|asked| asked.revision == *revision)).collect::<Vec<_>>()
+            waiting
+                .into_iter()
+                .filter_map(|(key, id, revision, result)| {
+                    let asked = pool.asked.get(&key).filter(|asked| asked.id == id && asked.revision == revision)?;
+                    Some((key, id, revision, result, Arc::clone(&asked.cancelled)))
+                })
+                .collect::<Vec<_>>()
         });
         let mut batch = batch.into_iter();
-        let mut stored = Vec::new();
-        let mut deferred = Vec::new();
-        while let Some((key, revision, result)) = batch.next() {
+        let mut stored: Vec<(K, u64)> = Vec::new();
+        let mut rejected: Vec<(K, u64, Revision)> = Vec::new();
+        let mut deferred: Vec<Finished<K>> = Vec::new();
+        let mut need_repaint = false;
+        while let Some((key, id, revision, result, cancelled)) = batch.next() {
+            if cancelled.load(Ordering::Acquire) {
+                continue;
+            }
             match result {
                 Ok(LoadedPicture::Image(image)) => {
                     if !self.store.allow_upload(ctx, image.pixels.len() * size_of::<Color32>()) {
-                        deferred.push((key, revision, Ok(LoadedPicture::Image(image))));
-                        deferred.extend(batch);
-                        repaint::request(ctx);
+                        deferred.push((key, id, revision, Ok(LoadedPicture::Image(image))));
+                        deferred.extend(batch.map(|(k, id, r, res, _)| (k, id, r, res)));
+                        need_repaint = true;
                         break;
                     }
-                    self.store.put(ctx, key.clone(), revision, image);
+                    if self.store.put_unless_cancelled(ctx, key.clone(), revision, image, &cancelled).is_some() {
+                        stored.push((key, id));
+                    }
                 }
-                Ok(LoadedPicture::Blank) => self.store.put_empty(ctx, key.clone(), revision),
-                Err(failure) => self.store.put_failure(ctx, key.clone(), revision, failure),
+                Ok(LoadedPicture::Region { baseline, origin, image }) => {
+                    if !self.store.allow_upload(ctx, image.pixels.len() * size_of::<Color32>()) {
+                        deferred.push((key, id, revision, Ok(LoadedPicture::Region { baseline, origin, image })));
+                        deferred.extend(batch.map(|(k, id, r, res, _)| (k, id, r, res)));
+                        need_repaint = true;
+                        break;
+                    }
+                    match self.store.put_region_unless_cancelled(
+                        ctx,
+                        &key,
+                        revision,
+                        RegionPatch { baseline: Some(baseline), origin, image, cancelled: Some(&cancelled) },
+                    ) {
+                        Ok(Some(_)) => stored.push((key, id)),
+                        Ok(None) => {
+                            rejected.push((key, id, revision));
+                            need_repaint = true;
+                        }
+                        Err(()) => {}
+                    }
+                }
+                Ok(LoadedPicture::Blank) => {
+                    if self.store.put_empty_unless_cancelled(ctx, key.clone(), revision, &cancelled) {
+                        stored.push((key, id));
+                    }
+                }
+                Err(failure) => {
+                    if self.store.put_failure_unless_cancelled(ctx, key.clone(), revision, failure, &cancelled) {
+                        stored.push((key, id));
+                    }
+                }
             }
-            stored.push(key);
+        }
+        if need_repaint {
+            repaint::request(ctx);
         }
         self.with(ctx, |pool| {
-            for key in &stored {
-                pool.asked.remove(key);
+            for (key, id) in stored {
+                if pool.asked.get(&key).is_some_and(|a| a.id == id) {
+                    pool.asked.remove(&key);
+                    pool.rejected_patches.remove(&key);
+                }
+            }
+            for (key, id, revision) in rejected {
+                if pool.asked.get(&key).is_some_and(|a| a.id == id) {
+                    pool.asked.remove(&key);
+                    pool.rejected_patches.insert(key, revision);
+                }
             }
             pool.waiting.splice(0..0, deferred);
         });
@@ -351,7 +466,7 @@ impl<K: TextureKey> TextureLoader<K> {
 }
 
 impl<K: TextureKey> Pool<K> {
-    fn new(queue: Arc<JobQueue<K, (Revision, LoadResult)>>, lanes: usize) -> Self {
-        Self { lanes, queue, asked: HashMap::new(), polled: None, waiting: Vec::new() }
+    fn new(queue: Arc<JobQueue<K, (u64, Revision, LoadResult)>>, lanes: usize) -> Self {
+        Self { lanes, queue, asked: HashMap::new(), next_id: 0, polled: None, waiting: Vec::new(), rejected_patches: HashMap::new() }
     }
 }

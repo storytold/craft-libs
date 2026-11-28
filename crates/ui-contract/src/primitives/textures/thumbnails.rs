@@ -13,7 +13,7 @@ use craft_host::Jobs;
 use craft_host::queue::{Cancel, QueueOptions};
 use egui::emath::GuiRounding as _;
 use egui::{Color32, ColorImage, Context, Rect, Vec2, pos2, vec2};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -30,6 +30,11 @@ pub struct ThumbRequest {
     /// view and shows its detail. The region is part of the picture's revision, so each region has its own
     /// texture.
     pub region: Option<Rect>,
+    /// Whether an existing unpacked GPU texture for `key` is resident in the store and can accept an in-place
+    /// region patch (`ThumbRender::Region` or `LoadedPicture::Region`).
+    pub patchable: bool,
+    /// The revision of `key`'s unpacked GPU texture resident in the store, if any.
+    pub resident_revision: Option<Revision>,
 }
 
 /// Requested sides are multiples of this many pixels.
@@ -46,7 +51,7 @@ impl ThumbRequest {
         let pixels = points * pixels_per_point;
         let steps = if pixels.is_finite() { (pixels / SIZE_STEP as f32).ceil().max(1.0) as u32 } else { 1 };
         let side = steps.saturating_mul(SIZE_STEP).min(MAX_TEXTURE / SIZE_STEP * SIZE_STEP);
-        ThumbRequest { side, pixels_per_point, region: None }
+        ThumbRequest { side, pixels_per_point, region: None, patchable: false, resident_revision: None }
     }
 
     /// The request for the part `region` of the frame (fractions of the frame, 0 to 1).
@@ -71,6 +76,13 @@ pub type ThumbJob = Box<dyn FnOnce(&Cancel) -> Result<LoadedPicture, LoadFailure
 pub enum ThumbRender {
     /// The picture, made now on the UI thread (a light layer, a fill colour).
     Ready(ColorImage),
+    /// A region of the picture to patch in place, made now on the UI thread.
+    Region {
+        /// Top-left texel [x, y] of the region to replace in the stored image.
+        origin: [u32; 2],
+        /// The new pixels for the region.
+        image: ColorImage,
+    },
     /// A job that makes it on a queue lane (a heavy node, a PDF page, a decoded file).
     Later(ThumbJob),
     /// No picture: state `Empty`, and the row paints its own tile (a group's folder, an adjustment's glyph).
@@ -260,9 +272,32 @@ impl Inner {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ThumbGeometry {
+    side: u32,
+    region: Option<[u32; 4]>,
+}
+
+struct KeyState<K> {
+    geometry: HashMap<K, (Revision, ThumbGeometry)>,
+    pending_geometry: HashMap<K, (Revision, ThumbGeometry)>,
+    force_full: HashSet<K>,
+}
+
+impl<K> Default for KeyState<K> {
+    fn default() -> Self {
+        Self { geometry: HashMap::new(), pending_geometry: HashMap::new(), force_full: HashSet::new() }
+    }
+}
+
+struct Hub<K> {
+    inner: Arc<Mutex<Inner>>,
+    keys: Arc<Mutex<KeyState<K>>>,
+}
+
 /// The shared state of the thumbnails of one context and key type, by the store's salt.
 struct Hubs<K> {
-    by_salt: HashMap<u64, Arc<Mutex<Inner>>>,
+    by_salt: HashMap<u64, Hub<K>>,
     key: std::marker::PhantomData<fn() -> K>,
 }
 
@@ -294,11 +329,12 @@ impl<K> Default for Hubs<K> {
 pub struct Thumbnails<K: TextureKey> {
     loader: TextureLoader<K>,
     inner: Arc<Mutex<Inner>>,
+    keys: Arc<Mutex<KeyState<K>>>,
 }
 
 impl<K: TextureKey> Clone for Thumbnails<K> {
     fn clone(&self) -> Self {
-        Self { loader: self.loader.clone(), inner: Arc::clone(&self.inner) }
+        Self { loader: self.loader.clone(), inner: Arc::clone(&self.inner), keys: Arc::clone(&self.keys) }
     }
 }
 
@@ -323,10 +359,14 @@ impl<K: TextureKey> Thumbnails<K> {
         }
         let loader = TextureLoader::in_context(ctx, &salt, loader_options);
         let id = loader.cache().salt();
-        let inner = memory::with(ctx, |hubs: &mut Hubs<K>| {
-            Arc::clone(hubs.by_salt.entry(id).or_insert_with(|| Arc::new(Mutex::new(Inner { options, hold: false, frame: None, renders: 0 }))))
+        let (inner, keys) = memory::with(ctx, |hubs: &mut Hubs<K>| {
+            let entry = hubs.by_salt.entry(id).or_insert_with(|| Hub {
+                inner: Arc::new(Mutex::new(Inner { options, hold: false, frame: None, renders: 0 })),
+                keys: Arc::new(Mutex::new(KeyState::default())),
+            });
+            (Arc::clone(&entry.inner), Arc::clone(&entry.keys))
         });
-        Self { loader, inner }
+        Self { loader, inner, keys }
     }
 
     /// What `key` shows now; renders or queues it when its revision has no picture yet.
@@ -344,12 +384,119 @@ impl<K: TextureKey> Thumbnails<K> {
         }
     }
 
+    fn record_resident_geometry(&self, key: &K, revision: Revision, geom: ThumbGeometry) {
+        let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+        keys.geometry.insert(key.clone(), (revision, geom));
+        keys.pending_geometry.remove(key);
+        keys.force_full.remove(key);
+    }
+
+    fn clear_resident_geometry(&self, key: &K) {
+        let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+        keys.geometry.remove(key);
+        keys.pending_geometry.remove(key);
+        keys.force_full.remove(key);
+    }
+
+    fn record_pending_geometry(&self, key: &K, revision: Revision, geom: ThumbGeometry) {
+        let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+        keys.pending_geometry.insert(key.clone(), (revision, geom));
+        keys.force_full.remove(key);
+    }
+
+    fn prune_stale_geometry(&self, ctx: &Context) {
+        const SWEEP_LIMIT: usize = 16;
+        let threshold = self.loader.cache().statistics(ctx).entries.max(64);
+        let (geom_candidates, pending_candidates, full_candidates): (Vec<K>, Vec<K>, Vec<K>) = {
+            let keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+            let geom = if keys.geometry.len() > threshold {
+                keys.geometry.keys().take(SWEEP_LIMIT).cloned().collect()
+            } else {
+                Vec::new()
+            };
+            let pending = if keys.pending_geometry.len() > threshold {
+                keys.pending_geometry.keys().take(SWEEP_LIMIT).cloned().collect()
+            } else {
+                Vec::new()
+            };
+            let full = if keys.force_full.len() > threshold {
+                keys.force_full.iter().take(SWEEP_LIMIT).cloned().collect()
+            } else {
+                Vec::new()
+            };
+            (geom, pending, full)
+        };
+        let gone_geom: Vec<K> = geom_candidates.into_iter().filter(|k| !self.loader.cache().has_texture(ctx, k)).collect();
+        let gone_pending: Vec<K> = pending_candidates
+            .into_iter()
+            .filter(|k| self.loader.waited(ctx, k).is_none() && !self.loader.cache().has_texture(ctx, k))
+            .collect();
+        let gone_full: Vec<K> = full_candidates
+            .into_iter()
+            .filter(|k| self.loader.waited(ctx, k).is_none() && !self.loader.cache().has_texture(ctx, k))
+            .collect();
+        if !gone_geom.is_empty() || !gone_pending.is_empty() || !gone_full.is_empty() {
+            let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+            for k in &gone_geom {
+                keys.geometry.remove(k);
+            }
+            for k in &gone_pending {
+                keys.pending_geometry.remove(k);
+            }
+            for k in &gone_full {
+                keys.force_full.remove(k);
+            }
+        }
+    }
+
     fn resolve(&self, ctx: &Context, source: &dyn ThumbSource<K>, key: &K, request: &ThumbRequest, priority: Priority) -> TextureState {
+        self.loader.poll(ctx);
         let max_side = self.lock().options.max_side;
         let side = request.side.min((max_side / SIZE_STEP * SIZE_STEP).max(SIZE_STEP));
-        let request = ThumbRequest { side, ..*request };
-        let revision = Revision::of(&(source.revision(key, &request), side, region_bits(request.region)));
+        let geom = ThumbGeometry { side, region: region_bits(request.region) };
+        let resident_revision = self.loader.cache().texture_revision(ctx, key);
+        self.prune_stale_geometry(ctx);
+        let (matches_geom, force_full) = {
+            let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+            match resident_revision {
+                Some(res_rev) => {
+                    if let Some((pending_rev, pending_geom)) = keys.pending_geometry.get(key).copied()
+                        && pending_rev == res_rev
+                    {
+                        keys.geometry.insert(key.clone(), (res_rev, pending_geom));
+                        keys.pending_geometry.remove(key);
+                    }
+                }
+                None => {
+                    keys.geometry.remove(key);
+                }
+            }
+            let matches = resident_revision.is_some_and(|res_rev| keys.geometry.get(key) == Some(&(res_rev, geom)));
+            (matches, keys.force_full.contains(key))
+        };
+        let patchable = !force_full && matches_geom && self.loader.cache().is_patchable(ctx, key);
+        let request = ThumbRequest { side, patchable, resident_revision: if patchable { resident_revision } else { None }, ..*request };
+        let revision = Revision::of(&(source.revision(key, &request), side, geom.region));
         if let Some(state) = self.loader.ask(ctx, key, revision, priority) {
+            match &state {
+                TextureState::Ready(_) => {
+                    let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+                    if let Some((pending_rev, pending_geom)) = keys.pending_geometry.get(key).copied()
+                        && pending_rev == revision
+                    {
+                        keys.geometry.insert(key.clone(), (revision, pending_geom));
+                        keys.pending_geometry.remove(key);
+                    }
+                    keys.force_full.remove(key);
+                }
+                TextureState::Empty | TextureState::Failed { .. } => {
+                    let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+                    if keys.pending_geometry.get(key).is_some_and(|(pending_rev, _)| *pending_rev == revision) {
+                        keys.pending_geometry.remove(key);
+                    }
+                }
+                TextureState::Loading { .. } | TextureState::Missing => {}
+            }
             return state;
         }
         let stand_in = || TextureState::Loading { stand_in: self.loader.cache().state(ctx, key, revision).shown(), waited: None };
@@ -370,16 +517,75 @@ impl<K: TextureKey> Thumbnails<K> {
         }
         match source.render(key, &request) {
             ThumbRender::Ready(image) => {
+                self.loader.cancel(ctx, key);
                 let texture = self.loader.cache().put(ctx, key.clone(), revision, image);
+                self.record_resident_geometry(key, revision, geom);
                 let mut inner = self.lock();
                 inner.renders += 1;
                 TextureState::Ready(texture)
             }
+            ThumbRender::Region { origin, image } => {
+                let patched = request.resident_revision.and_then(|base| {
+                    self.loader.cancel(ctx, key);
+                    self.loader.cache().put_region_checked(ctx, key, Some(base), revision, origin, image)
+                });
+                if let Some(texture) = patched {
+                    self.record_resident_geometry(key, revision, geom);
+                    let mut inner = self.lock();
+                    inner.renders += 1;
+                    TextureState::Ready(texture)
+                } else {
+                    let can_fallback = {
+                        let mut inner = self.lock();
+                        inner.renders += 1;
+                        if inner.over_budget() {
+                            false
+                        } else {
+                            inner.renders += 1;
+                            true
+                        }
+                    };
+                    if !can_fallback {
+                        self.keys.lock().unwrap_or_else(PoisonError::into_inner).force_full.insert(key.clone());
+                        repaint::request(ctx);
+                        return stand_in();
+                    }
+                    let full_request = ThumbRequest { patchable: false, resident_revision: None, ..request };
+                    match source.render(key, &full_request) {
+                        ThumbRender::Ready(image) => {
+                            self.loader.cancel(ctx, key);
+                            let texture = self.loader.cache().put(ctx, key.clone(), revision, image);
+                            self.record_resident_geometry(key, revision, geom);
+                            TextureState::Ready(texture)
+                        }
+                        ThumbRender::Blank => {
+                            self.loader.cancel(ctx, key);
+                            self.loader.cache().put_empty(ctx, key.clone(), revision);
+                            self.clear_resident_geometry(key);
+                            TextureState::Empty
+                        }
+                        ThumbRender::Later(job) => {
+                            self.record_pending_geometry(key, revision, geom);
+                            self.loader.submit(ctx, key.clone(), revision, priority, job)
+                        }
+                        ThumbRender::Region { .. } => {
+                            self.keys.lock().unwrap_or_else(PoisonError::into_inner).force_full.insert(key.clone());
+                            repaint::request(ctx);
+                            stand_in()
+                        }
+                    }
+                }
+            }
             ThumbRender::Blank => {
+                self.loader.cancel(ctx, key);
                 self.loader.cache().put_empty(ctx, key.clone(), revision);
+                self.clear_resident_geometry(key);
                 TextureState::Empty
             }
-            ThumbRender::Later(job) => self.loader.submit(ctx, key.clone(), revision, priority, job),
+            ThumbRender::Later(job) => {
+                self.record_pending_geometry(key, revision, geom);
+                self.loader.submit(ctx, key.clone(), revision, priority, job)
+            }
         }
     }
 
@@ -435,8 +641,24 @@ impl<K: TextureKey> Thumbnails<K> {
     }
 
     /// Keeps only the pictures whose key `keep` accepts (the open documents changed).
-    pub fn retain(&self, ctx: &Context, keep: impl FnMut(&K) -> bool) {
-        self.loader.cache().retain(ctx, keep);
+    /// `keep` runs once per unique key outside the locks; keys inserted concurrently after the snapshot are left untouched.
+    pub fn retain(&self, ctx: &Context, mut keep: impl FnMut(&K) -> bool) {
+        let mut decisions: HashMap<K, bool> = HashMap::new();
+        let mut decide = |k: &K| *decisions.entry(k.clone()).or_insert_with(|| keep(k));
+        self.loader.cache().retain(ctx, &mut decide);
+        let snapshot: Vec<K> = {
+            let keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+            keys.geometry.keys().chain(keys.pending_geometry.keys()).chain(keys.force_full.iter()).cloned().collect()
+        };
+        let dropped: Vec<K> = snapshot.into_iter().filter(|k| !decide(k)).collect();
+        if !dropped.is_empty() {
+            let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+            for k in &dropped {
+                keys.geometry.remove(k);
+                keys.pending_geometry.remove(k);
+                keys.force_full.remove(k);
+            }
+        }
     }
 
     /// The store under the thumbnails, for `forget`, `clear` and `statistics`.
