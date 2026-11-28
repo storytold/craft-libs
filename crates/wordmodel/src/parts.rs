@@ -121,6 +121,9 @@ pub struct PermRange {
     pub group: String,
     /// The one editor the range is for; empty for a group.
     pub editor: String,
+    /// The table columns the range is limited to, first and last; see
+    /// [`crate::para::InlineObject::PermStart`].
+    pub cols: Option<[u32; 2]>,
     pub start: Pos,
     pub end: Pos,
 }

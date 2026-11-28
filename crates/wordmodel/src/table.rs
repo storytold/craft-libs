@@ -3,9 +3,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use std::sync::Arc;
+
 use crate::control::ControlWrap;
 use crate::props::{CellProps, RowProps, TableProps, VMerge};
-use crate::{Blocks, Paragraph, para_block};
+use crate::walk::{each_para, each_para_mut};
+use crate::{Block, Blocks, InlineObject, Paragraph, para_block};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct Cell {
@@ -254,7 +257,16 @@ impl Table {
     /// around rows on both sides closes after this table's last row and opens again (without its
     /// `w:id`) before the new table's first row. Content controls that close after this table
     /// close after the new one.
-    pub fn split_off(&mut self, at: usize) -> Table {
+    ///
+    /// A permission range limited to columns that starts in this table and ends in the new one is
+    /// closed at the end of this table's last row and opened again, with its group, editor and
+    /// columns, at the start of the new table's first row, under the id `next_perm_id` gives
+    /// (which then moves on): ECMA-376-1:2016 §17.13.7.2 limits a range to columns only within one
+    /// table, so each table gets a pair of its own. Pass the [`crate::Document::next_perm_id`] of
+    /// the document the table is in. `u32::MAX` means no id is left, and is never given out: the
+    /// new table's part of the range is then dropped instead. A range never runs from one table
+    /// into the other.
+    pub fn split_off(&mut self, at: usize, next_perm_id: &mut u32) -> Table {
         let at = at.min(self.rows.len());
         let mut open = Vec::new();
         for row in self.rows.iter().take(at) {
@@ -293,6 +305,7 @@ impl Table {
                 x.props.vmerge = if more { VMerge::Restart } else { VMerge::None };
             }
         }
+        split_column_ranges(self, &mut tail, next_perm_id);
         tail
     }
 
@@ -635,6 +648,134 @@ impl Table {
 
     pub fn total_width(&self) -> f32 {
         self.grid.iter().sum()
+    }
+}
+
+/// The permission ranges limited to columns that `head` starts and `tail` ends, closed in `head`
+/// and opened again in `tail` (see [`Table::split_off`]). Starts and ends pair as
+/// [`crate::Document::perm_ranges`] pairs them: an end closes the latest open start of its id.
+/// Only a start in one of `head`'s own cells counts; one in a table inside a cell belongs to that
+/// table, which moves whole.
+fn split_column_ranges(head: &mut Table, tail: &mut Table, next_perm_id: &mut u32) {
+    // Open starts by id, latest last, with the start itself when it is one of `head`'s ranges.
+    let mut open: Vec<(u32, Option<InlineObject>)> = Vec::new();
+    for b in head.rows.iter().flat_map(|r| r.cells.iter()).flat_map(|c| c.blocks.iter()) {
+        let own = matches!(**b, Block::Para(_));
+        each_para(b, 0, &mut |p| {
+            for o in &p.objects {
+                match o {
+                    InlineObject::PermStart { id, cols, .. } => open.push((*id, (own && cols.is_some()).then(|| o.clone()))),
+                    InlineObject::PermEnd { id } => {
+                        if let Some(i) = open.iter().rposition(|(x, _)| x == id) {
+                            open.remove(i);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+    if open.iter().all(|(_, start)| start.is_none()) {
+        return;
+    }
+    // The ends in `tail` that close them: (the start, the end's paragraph in document order, its
+    // object there), innermost range first.
+    let mut cut: Vec<(InlineObject, usize, usize)> = Vec::new();
+    let mut k = 0;
+    for b in tail.rows.iter().flat_map(|r| r.cells.iter()).flat_map(|c| c.blocks.iter()) {
+        each_para(b, 0, &mut |p| {
+            for (j, o) in p.objects.iter().enumerate() {
+                match o {
+                    InlineObject::PermStart { id, .. } => open.push((*id, None)),
+                    InlineObject::PermEnd { id } => {
+                        if let Some(i) = open.iter().rposition(|(x, _)| x == id)
+                            && let (_, Some(start)) = open.remove(i)
+                        {
+                            cut.push((start, k, j));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            k += 1;
+        });
+    }
+    if cut.is_empty() {
+        return;
+    }
+    // Each range's new id, or `None` with none left (its part in `tail` is then dropped).
+    let ids: Vec<Option<u32>> = cut
+        .iter()
+        .map(|_| {
+            let id = *next_perm_id;
+            (id < u32::MAX).then(|| {
+                *next_perm_id = id + 1;
+                id
+            })
+        })
+        .collect();
+    // Its end in `tail` takes the new id (or goes). First, before starts go into `tail`.
+    let mut k = 0;
+    for b in tail.rows.iter_mut().flat_map(|r| r.cells.iter_mut()).flat_map(|c| c.blocks.iter_mut()) {
+        each_para_mut(Arc::make_mut(b), 0, &mut |p| {
+            let mine: Vec<(usize, Option<u32>)> = cut.iter().zip(&ids).filter(|((_, at, _), _)| *at == k).map(|((_, _, j), id)| (*j, *id)).collect();
+            // Last first, so an earlier object's offset still holds.
+            for (j, id) in mine.into_iter().rev() {
+                match id {
+                    Some(id) => {
+                        if let Some(o) = p.objects.get_mut(j) {
+                            *o = InlineObject::PermEnd { id };
+                        }
+                    }
+                    None => {
+                        let off = p.objects_with_offsets().nth(j).map(|(off, _)| off);
+                        if let Some(off) = off {
+                            let _ = p.delete(off, off + crate::para::OBJ.len_utf8());
+                        }
+                    }
+                }
+            }
+            p.touch();
+            k += 1;
+        });
+    }
+    // `head` ends each range at the end of its last row, innermost first.
+    if let Some(p) = edge_para(head.rows.last_mut().and_then(|r| r.cells.last_mut()), true) {
+        for (start, ..) in &cut {
+            if let InlineObject::PermStart { id, .. } = start {
+                let props = p.runs.last().map(|r| r.props.clone()).unwrap_or_else(|| p.mark.clone());
+                let _ = p.insert_object(p.len(), InlineObject::PermEnd { id: *id }, &props);
+            }
+        }
+    }
+    // `tail` starts each again at the start of its first row, outermost first.
+    if let Some(p) = edge_para(tail.rows.first_mut().and_then(|r| r.cells.first_mut()), false) {
+        for ((start, ..), id) in cut.iter().zip(&ids) {
+            if let (InlineObject::PermStart { group, editor, cols, .. }, Some(id)) = (start, id) {
+                let props = p.props_of_char(0).clone();
+                let again = InlineObject::PermStart { id: *id, group: group.clone(), editor: editor.clone(), cols: *cols };
+                let _ = p.insert_object(0, again, &props);
+            }
+        }
+    }
+}
+
+/// The last (`last`) or first of a cell's own paragraphs, not one in a table inside it; a cell
+/// with none gets an empty one at its end, as saving gives a cell that ends with a table.
+fn edge_para(cell: Option<&mut Cell>, last: bool) -> Option<&mut Paragraph> {
+    let cell = cell?;
+    let own = |b: &Arc<Block>| matches!(**b, Block::Para(_));
+    let i = if last { cell.blocks.iter().rposition(own) } else { cell.blocks.iter().position(own) };
+    let i = match i {
+        Some(i) if !last || i + 1 == cell.blocks.len() => i,
+        _ => {
+            cell.blocks.push(para_block(Paragraph::new()));
+            cell.blocks.len() - 1
+        }
+    };
+    match Arc::make_mut(cell.blocks.get_mut(i)?) {
+        Block::Para(p) => Some(p),
+        Block::Table(_) => None,
     }
 }
 

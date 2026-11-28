@@ -684,7 +684,8 @@ impl Reader<'_> {
     }
 
     pub(super) fn read_textbox(&mut self, sc: &StoryCtx, content: &El, rels: &Rels) -> u32 {
-        let mut inner = StoryCtx { story_depth: sc.story_depth + 1, ..Default::default() };
+        let mut inner = StoryCtx::new(content);
+        inner.story_depth = sc.story_depth + 1;
         let mut blocks = Blocks::new();
         // Shapes in the text aren't members of a group the box may be in.
         let group = self.group_fill.take();

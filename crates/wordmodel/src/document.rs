@@ -897,11 +897,23 @@ impl Document {
     }
 
     /// Ranges that stay editable while the document is protected (Restrict Editing exceptions),
-    /// in document order across every story: the [`InlineObject::PermStart`]'s id, group and
-    /// editor, its start (just after the marker) and its end (at the matching
-    /// [`InlineObject::PermEnd`], or the end of the story when it has none).
+    /// in document order across every story: the [`InlineObject::PermStart`]'s id, group,
+    /// editor and columns, its start (just after the marker) and its end (at the matching
+    /// [`InlineObject::PermEnd`]: the first end with its id after it, in the same story; with
+    /// several open, the latest closes first).
+    ///
+    /// Only matched pairs are ranges. A start that never ends (its end deleted, or moved before
+    /// it), an end nothing opened and a pair split across stories are orphans: they stay in the
+    /// document, and in the file it saves, but make nothing editable, so a damaged file or an
+    /// edit can't open the rest of a protected story.
+    ///
+    /// The columns are the file's numbers, not checked against the table: a caller that enforces
+    /// ranges applies them, from the row of the start to the row of the end of the table the
+    /// start is in, and must not read a pair that names none of that table's columns (in the
+    /// wrong order, or past its last column) as one over the whole table, which would widen it.
     pub fn perm_ranges(&self) -> Vec<PermRange> {
         let mut out: Vec<PermRange> = Vec::new();
+        let mut closed: Vec<bool> = Vec::new();
         let stories = std::iter::once(StoryRef::Body).chain(self.parts.keys().map(|k| StoryRef::Part(*k)));
         for story in stories {
             // Open ranges by id, latest last (an end closes the latest open range of its id).
@@ -910,31 +922,65 @@ impl Document {
                 let Some(p) = self.para(story, &path) else { continue };
                 for (off, o) in p.objects_with_offsets() {
                     match o {
-                        InlineObject::PermStart { id, group, editor } => {
+                        InlineObject::PermStart { id, group, editor, cols } => {
                             let start = Pos { story, path: path.clone(), off: off + para::OBJ.len_utf8() };
                             open.entry(*id).or_default().push(out.len());
-                            out.push(PermRange { id: *id, group: group.clone(), editor: editor.clone(), start: start.clone(), end: start });
+                            out.push(PermRange {
+                                id: *id,
+                                group: group.clone(),
+                                editor: editor.clone(),
+                                cols: *cols,
+                                start: start.clone(),
+                                end: start,
+                            });
+                            closed.push(false);
                         }
                         InlineObject::PermEnd { id } => {
                             if let Some(i) = open.get_mut(id).and_then(Vec::pop)
                                 && let Some(r) = out.get_mut(i)
                             {
                                 r.end = Pos { story, path: path.clone(), off };
+                                if let Some(c) = closed.get_mut(i) {
+                                    *c = true;
+                                }
                             }
                         }
                         _ => {}
                     }
                 }
             }
-            // A range left open runs to the end of its story.
-            let end = self.end_of(story);
-            for i in open.into_values().flatten() {
-                if let Some(r) = out.get_mut(i) {
-                    r.end = end.clone();
-                }
-            }
         }
-        out
+        out.into_iter().zip(closed).filter_map(|(r, c)| c.then_some(r)).collect()
+    }
+
+    /// The id for a new permission range (as [`crate::table::Table::split_off`] takes it): one past
+    /// the highest id any permission marker in the document has, matched or not, in its body, its
+    /// parts (headers, footers, notes, comments, text boxes), its glossary entries and its note
+    /// separators, so that no marker has it or any id after it.
+    ///
+    /// With a marker at `u32::MAX` no id is left after it, and this returns `u32::MAX`, which is
+    /// then in use. [`crate::table::Table::split_off`] takes `u32::MAX` to mean that no id is left,
+    /// and never gives it to a range.
+    pub fn next_perm_id(&self) -> u32 {
+        let separators = [&self.footnote_separators, &self.endnote_separators]
+            .into_iter()
+            .flat_map(|s| [&s.separator, &s.continuation_separator, &s.continuation_notice])
+            .flatten();
+        let lists = std::iter::once(&self.body)
+            .chain(self.parts.values().map(|p| &p.blocks))
+            .chain(self.glossary.iter().map(|entry| &entry.blocks))
+            .chain(separators);
+        let mut next = 0u32;
+        for b in lists.flatten() {
+            crate::walk::each_para(b, 0, &mut |p| {
+                for o in &p.objects {
+                    if let InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id } = o {
+                        next = next.max(id.saturating_add(1));
+                    }
+                }
+            });
+        }
+        next
     }
 
     /// Bookmark names in the body, in order.

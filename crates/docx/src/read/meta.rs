@@ -131,7 +131,7 @@ impl Reader<'_> {
             let (pk, kind) = if foot { (PartKind::Footnote, NoteKind::Footnote) } else { (PartKind::Endnote, NoteKind::Endnote) };
             let id = self.doc.add_part(pk, Blocks::new());
             self.doc.missing_pictures.part_names.insert(id, self.story.clone());
-            let mut sc = StoryCtx::default();
+            let mut sc = StoryCtx::new(n);
             let mut blocks = Blocks::new();
             self.current_note = Some((kind, id));
             self.read_blocks(&mut sc, n, &rels, &mut blocks, self.chunks.depth);
@@ -163,7 +163,7 @@ impl Reader<'_> {
         if taken {
             return;
         }
-        let mut sc = StoryCtx::default();
+        let mut sc = StoryCtx::new(n);
         let mut blocks = Blocks::new();
         self.in_note_sep = true;
         self.read_blocks(&mut sc, n, rels, &mut blocks, self.chunks.depth);
@@ -223,7 +223,7 @@ impl Reader<'_> {
             };
             // Taken before its text is read: a chunk there brings comments of its own.
             self.doc.comments.insert(id, Comment::default());
-            let mut sc = StoryCtx::default();
+            let mut sc = StoryCtx::new(c);
             let mut blocks = Blocks::new();
             self.read_blocks(&mut sc, c, &rels, &mut blocks, self.chunks.depth);
             self.flush_pending(&mut sc, &mut blocks);

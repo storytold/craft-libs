@@ -93,10 +93,18 @@ pub(crate) struct Reader<'p> {
     pub comment_map: HashMap<String, u32>,
     pub comments_ended: HashSet<u32>,
     pub bookmarks: HashMap<String, String>,
-    /// Restrict Editing exception ranges (`w:permStart`): the file's id → ours.
-    pub perms: HashMap<String, u32>,
+    /// The `w:id`s of the Restrict Editing exception starts (`w:permStart`) read so far: an end
+    /// that closes none of the starts read is kept only after one of them (see `perm_end`).
+    pub perm_ids: HashSet<String>,
     /// The next permission range id to give out (chunks' ranges take theirs from it too).
     pub next_perm: u32,
+    /// The ids of the permission starts the reader placed elsewhere than the file has them: read
+    /// in a table's structure, or held past a table (each start has an id of its own).
+    pub relocated_perms: HashSet<u32>,
+    /// Permission ranges to drop, start and end, when the read ends (see `finish_perms`).
+    pub perms_dropped: HashSet<u32>,
+    /// How many more cells the checks of column ranges may look at (see `check_columns`).
+    pub column_checks: usize,
     /// Chart and diagram parts by path, parsed once.
     graphic_parts: HashMap<String, Option<Arc<El>>>,
     /// Charts and diagrams by (kind, part path, width bits, height bits), built once.
@@ -191,8 +199,11 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         comment_map: HashMap::new(),
         comments_ended: HashSet::new(),
         bookmarks: HashMap::new(),
-        perms: HashMap::new(),
+        perm_ids: HashSet::new(),
         next_perm: 0,
+        relocated_perms: HashSet::new(),
+        perms_dropped: HashSet::new(),
+        column_checks: story::MAX_COLUMN_CHECKS,
         graphic_parts: HashMap::new(),
         graphics: HashMap::new(),
         glued: HashSet::new(),
@@ -321,7 +332,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         }
     }
     if let Some(body) = root.child("w:body") {
-        let mut sc = StoryCtx::default();
+        let mut sc = StoryCtx::new(body);
         let mut blocks = Blocks::new();
         r.read_blocks(&mut sc, body, &rels, &mut blocks, r.chunks.depth);
         r.flush_pending(&mut sc, &mut blocks);
@@ -372,6 +383,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         r.doc.passthrough.insert(EMBEDDED_PARTS.into(), Arc::new(manifest));
     }
     r.finish_moves();
+    r.finish_perms();
     let links = std::mem::take(&mut r.txbx_links);
     link_text_boxes(&mut r.doc, links);
     if r.shape_ids {

@@ -61,7 +61,7 @@ impl Reader<'_> {
                 self.end_field(sc, pb);
             }
             "w:bookmarkStart" | "w:bookmarkEnd" | "w:commentRangeStart" | "w:commentRangeEnd" | "w:permStart" | "w:permEnd" => {
-                if let Some(o) = self.marker(k) {
+                if let Some(o) = self.marker(sc, k, false) {
                     let props = self.run_props_none(ctx);
                     // Markers go straight into the paragraph (never into a field's cached result).
                     pb.push_obj(o, &props);

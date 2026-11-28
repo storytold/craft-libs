@@ -1,5 +1,6 @@
 //! Stories: blocks, paragraphs, runs, fields, drawings, tables.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use craft_wordmodel::connector::{ConnEnd, ShapeExtra};
@@ -18,11 +19,14 @@ use crate::package::{ContentTypes, Rels, rt};
 use crate::units::{int, measure, u32_of};
 use crate::xml::{El, Node};
 use craft_wordmodel::wordart::TextWarp;
+pub(crate) use perms::MAX_COLUMN_CHECKS;
+use perms::{ColumnRange, PermPairs, TableFrame};
 
 mod blocks;
 mod drawing;
 mod fields;
 mod locked_canvas;
+mod perms;
 mod runs;
 mod vml;
 
@@ -107,7 +111,6 @@ fn sink(sc: &mut StoryCtx) -> Option<&mut FieldState> {
 
 /// Per-story parsing state (fields may span paragraphs; block-level markers wait for the next
 /// paragraph).
-#[derive(Default)]
 pub struct StoryCtx {
     fields: Vec<FieldState>,
     ignored_begins: usize,
@@ -118,6 +121,33 @@ pub struct StoryCtx {
     pub in_hf: bool,
     /// Reading a table cell's paragraphs (not a text box inside one).
     in_cell: bool,
+    /// How the file pairs the story's permission markers.
+    pairs: PermPairs,
+    /// The tables being read, outermost first.
+    open_tables: Vec<TableFrame>,
+    /// Tables read so far in the story: the next one's number.
+    tables_read: u32,
+    /// The ranges limited to columns read, by the model id of their start.
+    columns: HashMap<u32, ColumnRange>,
+}
+
+impl StoryCtx {
+    /// The state for reading the story whose blocks are `root`'s: a `w:body`, `w:hdr`, `w:ftr`,
+    /// note, comment, text box's `w:txbxContent` or glossary entry's `w:docPartBody`.
+    pub fn new(root: &El) -> StoryCtx {
+        StoryCtx {
+            fields: Vec::new(),
+            ignored_begins: 0,
+            pending: Vec::new(),
+            story_depth: 0,
+            in_hf: false,
+            in_cell: false,
+            pairs: PermPairs::of(root),
+            open_tables: Vec::new(),
+            tables_read: 0,
+            columns: HashMap::new(),
+        }
+    }
 }
 
 /// Paragraph content under construction.
@@ -173,7 +203,9 @@ fn children_of_choice(ac: &El) -> Option<&El> {
 
 /// Gather `name` children (rows, cells), looking through content controls, custom XML and the
 /// selected alternate-content branch; each with the content controls that open before it and how
-/// many close after it. `pending` holds controls opened but not yet given to an element.
+/// many close after it. `pending` holds controls opened but not yet given to an element. The
+/// comment and permission range markers among them are gathered too, in document order and with
+/// no controls, for the table reader to place.
 fn collect<'a>(e: &'a El, name: &str, out: &mut Vec<(&'a El, ControlWrap)>, pending: &mut Vec<ContentControl>, depth: usize) {
     if depth > 8 {
         return;
@@ -181,6 +213,8 @@ fn collect<'a>(e: &'a El, name: &str, out: &mut Vec<(&'a El, ControlWrap)>, pend
     for k in e.els() {
         if k.name == name {
             out.push((k, ControlWrap { open: std::mem::take(pending), close: 0 }));
+        } else if matches!(k.name.as_str(), "w:commentRangeStart" | "w:commentRangeEnd" | "w:permStart" | "w:permEnd") {
+            out.push((k, ControlWrap::default()));
         } else if k.name == "w:sdt" {
             if let Some(c) = k.child("w:sdtContent") {
                 let mut ctl = super::sdt::sdt_pr(k.child("w:sdtPr"), true);
@@ -189,9 +223,9 @@ fn collect<'a>(e: &'a El, name: &str, out: &mut Vec<(&'a El, ControlWrap)>, pend
                 pending.push(ctl);
                 collect(c, name, out, pending, depth + 1);
                 let grew = out.len() > before;
-                match out.last_mut() {
+                match out.iter_mut().skip(before).rev().find(|(e, _)| e.name == name) {
                     Some((_, w)) if grew => w.close = w.close.saturating_add(1),
-                    // Nothing inside: the control goes (as before).
+                    // No row or cell inside (range markers at most): the control goes (as before).
                     _ => {
                         pending.pop();
                     }

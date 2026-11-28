@@ -981,7 +981,7 @@ fn adopted_styles_never_become_our_defaults() {
 
 #[test]
 fn adopted_permission_ranges_keep_ids_of_their_own() {
-    let perm = |id, editor: &str| InlineObject::PermStart { id, group: String::new(), editor: editor.into() };
+    let perm = |id, editor: &str| InlineObject::PermStart { id, group: String::new(), editor: editor.into(), cols: None };
     let mut ours = doc(&["ours"]);
     ours.insert_object(&Pos::body(0, 4), InlineObject::PermEnd { id: 0 }, &CharProps::default()).unwrap();
     ours.insert_object(&Pos::body(0, 0), perm(0, "us"), &CharProps::default()).unwrap();

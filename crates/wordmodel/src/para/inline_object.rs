@@ -154,6 +154,14 @@ pub enum InlineObject {
         group: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         editor: String,
+        /// The zero-based first and last table columns the range covers (`w:colFirst`,
+        /// `w:colLast`, ECMA-376-1:2016 §17.13.7.2): in the table its start is in, from the row
+        /// of its start to the row of its end, the range covers only those columns. As the file
+        /// gives them, so a save writes them back: in a damaged file the first can come after
+        /// the last, or either can be past the table's last column, and the standard then has
+        /// the range apply to the entire table. `None`: an ordinary range.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cols: Option<[u32; 2]>,
     },
     /// The end of the editable range [`InlineObject::PermStart`] with the same `id` opened.
     PermEnd {
