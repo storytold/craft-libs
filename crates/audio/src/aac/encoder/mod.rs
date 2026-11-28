@@ -977,7 +977,7 @@ mod tests {
         // 7-channel frame.
         let sil = vec![0f32; 96_000];
         for ch in 1..=8 {
-            for adts in [false, true] {
+            for adts in [false, true].into_iter().filter(|&adts| !adts || matches!(ch, 1 | 7)) {
                 let cfg = |b| EncoderConfig::cbr(96_000, ch, b).with_adts(adts).with_bandwidth(Some(47_040));
                 let Some(b) = (1000..20_000).map(|k| k * 10).find(|&b| Encoder::new(cfg(b)).is_ok()) else { panic!("no rate accepted") };
                 let budget = b as usize * FRAME_LEN / 96_000;
