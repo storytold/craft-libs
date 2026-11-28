@@ -2,6 +2,7 @@
 
 pub(crate) mod blend_rows;
 pub(crate) mod comps;
+pub(crate) mod panel_disabled_scope;
 pub(crate) mod panel_drag_menu;
 pub(crate) mod panel_eye;
 pub(crate) mod panel_filter;
