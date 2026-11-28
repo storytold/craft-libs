@@ -2435,3 +2435,17 @@ fn metadata_text_controls_keep_punctuation_and_use_the_selected_font_code_page()
     assert_eq!(flow.meta.title, "A—аà");
     assert_eq!(texts(&flow), ["Normal:Body"]);
 }
+
+/// Widow control is off unless the file asks for it: `\widowctrl` or `\widctlpar` turn it on
+/// and `\nowidctlpar` turns it back off, instead of every paragraph importing as on (#7098).
+#[test]
+fn widow_control_follows_the_widow_words() {
+    let d = import(br"{\rtf1\ansi\pard\sl-240 Two lines\line here\par}").unwrap();
+    assert_eq!(d.body[0].as_para().unwrap().props.widow_control, Some(false), "off without the words");
+    let on = import(br"{\rtf1\ansi\widowctrl\pard\sl-240 Two lines\line here\par}").unwrap();
+    assert_eq!(on.body[0].as_para().unwrap().props.widow_control, Some(true), "\\widowctrl turns it on");
+    let on2 = import(br"{\rtf1\ansi\pard\widctlpar\sl-240 Two lines\line here\par}").unwrap();
+    assert_eq!(on2.body[0].as_para().unwrap().props.widow_control, Some(true), "\\widctlpar turns it on");
+    let off = import(br"{\rtf1\ansi\widowctrl\pard\widctlpar\nowidctlpar\sl-240 Two lines\line here\par}").unwrap();
+    assert_eq!(off.body[0].as_para().unwrap().props.widow_control, Some(false), "\\nowidctlpar turns it off");
+}

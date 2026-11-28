@@ -229,6 +229,11 @@ pub(super) struct St {
     pub(super) ilvl: u8,
     pub(super) outline: Option<u8>,
     pub(super) pagebb: bool,
+    /// Widow control for this paragraph: `\widctlpar` on, `\nowidctlpar` off, none set
+    /// follows the document-level `\widowctrl` (`w:widowControl`).
+    pub(super) widctlpar: Option<bool>,
+    /// The document-level `\widowctrl`, which `\pard` leaves alone like the other defaults.
+    pub(super) widow_doc: bool,
     pub(super) field: Option<usize>,
     /// Inside a group of shapes (`\shpgrp`), whose members are not read as shapes of their own.
     pub(super) in_shpgrp: bool,
@@ -269,6 +274,8 @@ impl Default for St {
             ilvl: 0,
             outline: None,
             pagebb: false,
+            widctlpar: None,
+            widow_doc: false,
             field: None,
             in_shpgrp: false,
             cp: None,

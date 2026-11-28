@@ -91,6 +91,11 @@ impl Reader {
         // Direct `\rtlpar`/`\ltrpar` wins over the style's direction.
         p.rtl = st.rtldir.or_else(|| self.file_style(st.style).rtl).unwrap_or(false);
         p.page_break = st.pagebb;
+        // The widow words carry the state: the paragraph's own `\widctlpar`/`\nowidctlpar`
+        // wins, and without them the document-level `\widowctrl` (which `\pard` leaves
+        // alone) decides — off by default, not every paragraph importing as on (#7098).
+        let x = p.extra.get_or_insert_with(Default::default);
+        x.widow_control = Some(st.widctlpar.unwrap_or(st.widow_doc));
         p.spacing = spacing(st);
         p.borders = st.borders.any_visible().then_some(st.borders);
         if let Some(ls) = st.ls {
@@ -212,6 +217,9 @@ pub(super) fn is_format_word(w: &str) -> bool {
             | "s"
             | "outlinelevel"
             | "pagebb"
+            | "widowctrl"
+            | "widctlpar"
+            | "nowidctlpar"
             | "rtlpar"
             | "ltrpar"
             | "rtldir"

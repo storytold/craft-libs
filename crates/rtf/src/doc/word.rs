@@ -125,8 +125,10 @@ impl Reader {
                 let field = self.st.field;
                 // Revision marks are character formatting, which `\pard` leaves alone.
                 let (dest, fmt, rev, uc, hidden) = (self.st.dest, self.st.fmt.clone(), self.st.rev, self.st.uc, self.st.hidden);
+                // The document-level `\widowctrl` is a default like the code page: it survives.
+                let widow_doc = self.st.widow_doc;
                 let chg_c = std::mem::take(&mut self.st.chg_c);
-                self.st = St { dest, fmt, rev, chg_c, uc, hidden, field, ..Default::default() };
+                self.st = St { dest, fmt, rev, chg_c, uc, hidden, field, widow_doc, ..Default::default() };
             }
             "revised" => self.st.rev.ins = on,
             "deleted" => self.st.rev.del = on,
@@ -200,6 +202,9 @@ impl Reader {
             "s" => self.st.style = pv,
             "outlinelevel" => self.st.outline = Some(pv.clamp(0, 9) as u8),
             "pagebb" => self.st.pagebb = on,
+            "widowctrl" => self.st.widow_doc = on,
+            "widctlpar" => self.st.widctlpar = Some(on),
+            "nowidctlpar" => self.st.widctlpar = Some(false),
             "intbl" => self.st.intbl = true,
             "ls" => self.st.ls = Some(pv),
             "ilvl" => self.st.ilvl = pv.clamp(0, 8) as u8,
