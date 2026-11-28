@@ -54,11 +54,16 @@ impl OrbitCamera {
         let far = self.distance + r * 50.0;
         let aspect = if aspect.is_finite() && aspect > 1e-4 { aspect } else { 1.0 };
         if self.ortho {
-            let h = self.distance * (self.fov.to_radians() * 0.5).tan();
+            let h = self.distance * self.half_fov_tan();
             Mat4::orthographic_rh(-h * aspect, h * aspect, -h, h, near.min(0.01), far)
         } else {
             Mat4::perspective_rh(self.fov.clamp(5.0, 150.0).to_radians(), aspect, near, far)
         }
+    }
+
+    /// Tangent of half the field of view the projection uses (clamped to 5°..150°).
+    fn half_fov_tan(&self) -> f32 {
+        (self.fov.clamp(5.0, 150.0).to_radians() * 0.5).tan()
     }
 
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
@@ -83,7 +88,7 @@ impl OrbitCamera {
         let f = self.forward();
         let right = f.cross(Vec3::Y).try_normalize().unwrap_or(Vec3::X);
         let up = right.cross(f);
-        let scale = self.distance * (self.fov.to_radians() * 0.5).tan() * 2.0;
+        let scale = self.distance * self.half_fov_tan() * 2.0;
         self.target += (-right * dx + up * dy) * scale;
     }
 
@@ -104,6 +109,10 @@ impl OrbitCamera {
 
     /// Project a world point to NDC (x, y in -1..1, y up; z depth). None behind the camera.
     pub fn project(&self, p: Vec3, aspect: f32) -> Option<Vec3> {
+        // The view looks down -z; an orthographic projection keeps w at 1 behind the camera.
+        if self.view().transform_point3(p).z >= 0.0 {
+            return None;
+        }
         let c = self.view_proj(aspect) * p.extend(1.0);
         (c.w > 1e-6).then(|| c.truncate() / c.w)
     }
@@ -136,5 +145,26 @@ mod tests {
         }
         assert!(c.distance > 0.0 && c.distance.is_finite());
         let _ = c.proj(f32::NAN);
+    }
+
+    #[test]
+    fn points_behind_the_camera_do_not_project() {
+        for ortho in [false, true] {
+            let c = OrbitCamera { ortho, ..OrbitCamera::default() };
+            let behind = c.eye() - c.forward();
+            assert_eq!(c.project(behind, 1.0), None, "ortho {ortho}");
+            assert!(c.project(c.target, 1.0).is_some(), "ortho {ortho}");
+        }
+    }
+
+    #[test]
+    fn pan_and_ortho_extent_use_the_clamped_field_of_view() {
+        let mut narrow = OrbitCamera { fov: 1.0, ortho: true, ..OrbitCamera::default() };
+        let clamped = OrbitCamera { fov: 5.0, ..narrow };
+        assert_eq!(narrow.proj(1.0), clamped.proj(1.0));
+        let mut panned = clamped;
+        narrow.pan(0.1, 0.0);
+        panned.pan(0.1, 0.0);
+        assert!((narrow.target - panned.target).length() < 1e-6);
     }
 }
