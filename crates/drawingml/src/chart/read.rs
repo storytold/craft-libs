@@ -3470,4 +3470,37 @@ mod tests {
             }
         }
     }
+
+
+    #[test]
+    fn review_6096226526_empty_axis_source_format_does_not_hide_a_later_usable_cache() {
+        for first_format in [Some(""), None, Some("General")] {
+            let first_code = first_format.map(|code| format!("<c:formatCode>{code}</c:formatCode>")).unwrap_or_default();
+            let first = format!(r#"<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>First</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$B$2</c:f><c:numCache>{first_code}<c:pt idx="0"><c:v>0.25</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"#);
+            let second = r#"<c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Second</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$C$2</c:f><c:numCache><c:formatCode>0%</c:formatCode><c:pt idx="0"><c:v>0.5</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"#;
+            let group = format!(r#"<c:barChart><c:barDir val="col"/>{first}{second}<c:axId val="10"/><c:axId val="20"/></c:barChart>"#);
+            let category = review_6095656137_axis("catAx", 10, 20, "b", 1, "");
+            let value = review_6095656137_axis("valAx", 20, 10, "l", 1, r#"<c:numFmt formatCode="0.000" sourceLinked="true"/>"#);
+            let xml = metadata_chart(&format!("{group}{category}{value}"));
+            let chart = read_chart_xml(xml.as_bytes()).unwrap();
+            let expected = if first_format == Some("General") { "General" } else { "0%" };
+            assert_eq!(chart.y_format.as_deref(), Some(expected), "first source format {first_format:?}");
+            assert_eq!(chart.axis_label(false, 0.5), if expected == "General" { "0.5" } else { "50%" });
+            assert_eq!(chart.series.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["First", "Second"]);
+            assert_eq!(chart.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(), [vec![Some(0.25)], vec![Some(0.5)]]);
+            assert!(chart.series.iter().all(|s| !s.secondary_axis), "both caches supply the same exact primary axis");
+            let explicit = xml.replace(r#"sourceLinked="true""#, r#"sourceLinked="false""#);
+            assert_eq!(read_chart_xml(explicit.as_bytes()).unwrap().y_format.as_deref(), Some("0.000"));
+            // Missing formatCode already continued historically; an empty element and
+            // explicit General both triggered interpretation9's stored-format fallback.
+            let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+            let mut old = read_chart(&root, MAX_CHART_POINTS, 9).unwrap();
+            assert_eq!(old.y_format.as_deref(), Some(if first_format.is_none() { "0%" } else { "0.000" }));
+            old.raw = Some(xml);
+            let old: Chart = serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
+            let (written, kept) = crate::chart::write::chart_xml(&old);
+            assert!(kept, "interpretation9's existing typed choice still retains its original native part");
+            assert_eq!(crate::xmlx::parse(&written).unwrap().to_xml(), root.to_xml());
+        }
+    }
 }
