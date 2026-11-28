@@ -22,7 +22,7 @@ craft_ui::words! {
         split_vertically: "warpFields.splitVertically" = "Split Warp Vertically";
         split_horizontally: "warpFields.splitHorizontally" = "Split Warp Horizontally";
         grid: "warpFields.grid" = "Grid";
-        custom: "warpFields.custom" = "Custom";
+        custom: "warpFields.custom" = "Custom…";
         default_grid: "warpFields.defaultGrid" = "Default";
         three: "warpFields.three" = "3 x 3";
         four: "warpFields.four" = "4 x 4";
@@ -91,11 +91,12 @@ impl WarpStyleEntry {
 }
 
 /// The Grid menu's reading of a mesh (PhotoCraft `warp_grid_id`): Default is one patch, the
-/// numbered entries uniform n × n patches, anything split by hand Custom.
+/// numbered entries uniform n × n patches, anything else — split by hand or a grid with its own
+/// column and row counts — Custom.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum WarpGridChoice {
-    /// A mesh split by hand.
+    /// The menu's Custom… entry, and the reading of a mesh no listed size covers.
     Custom,
     /// One patch.
     #[default]
@@ -176,8 +177,15 @@ impl WarpFieldValues {
 pub enum WarpFieldsEdit {
     /// A Split tool armed or disarmed; `None` disarms. View state, not a warp change.
     Split(Option<WarpSplit>),
-    /// A Grid pick: an even n × n mesh over the box (Custom is never picked, only read).
+    /// A size pick from the Grid menu: an even n × n mesh over the box.
     Grid(usize),
+    /// Custom… picked: the app opens its Custom Grid Size dialog and builds the chosen columns and
+    /// rows; the framework only asks for the dialog, the counts never pass through it. Every pick of
+    /// Custom… asks, also while the Grid already reads Custom, as the Custom… rows of the form
+    /// dialogs ask for the app's picker. A move that only highlights the row — a step over the closed
+    /// field, a key move in the open list — is not a pick: Custom… is [not
+    /// stepped](Entry::stepped), and a key move in the list only proposes.
+    CustomGrid,
     /// A style pick, by [`WarpStyleEntry::key`]. PhotoCraft's rule for the app: Custom keeps the
     /// current surface as a one-patch mesh, None resets to the box, a preset keeps the bend when
     /// coming from a preset and takes 50 otherwise.
@@ -215,9 +223,11 @@ pub struct WarpFieldsOutput {
 /// reads the edits from the output.
 ///
 /// - In order: "Split" and three toggle buttons (Crosswise, Vertically, Horizontally; the armed
-///   one pressed, a press on it disarms), a divider, "Grid" and a select (Custom, Default,
-///   3 x 3, 4 x 4, 5 x 5), a divider, "Warp" and the style select, the orientation toggle
-///   (pressed when vertical), and Bend, H, V number fields (−100 to 100 %).
+///   one pressed, a press on it disarms), a divider, "Grid" and a select (Custom…, a separator,
+///   then Default, 3 x 3, 4 x 4, 5 x 5), a divider, "Warp" and the style select, the orientation
+///   toggle (pressed when vertical), and Bend, H, V number fields (−100 to 100 %). Picking
+///   Custom… reports [`CustomGrid`](WarpFieldsEdit::CustomGrid) so the app opens its Custom Grid
+///   Size dialog.
 /// - [`on_type`](Self::on_type): Split and Grid draw disabled and the styles with no
 ///   [`over_type`](WarpStyleEntry::over_type) are not offered (PhotoCraft #3004). Split and Grid are also
 ///   disabled while the current style has no [`splits`](WarpStyleEntry::splits).
@@ -272,7 +282,9 @@ impl<'a> WarpFields<'a> {
                 Divider::vertical().show(ui);
                 Field::new(words.grid.clone()).layout(caption).sizing(Sizing::Content).show(ui, |ui, _| {
                     let entries = [
-                        Entry::new(WarpGridChoice::Custom, words.custom.clone()),
+                        // Custom… is an action, not a size to step onto: it opens the app's dialog.
+                        Entry::new(WarpGridChoice::Custom, words.custom.clone()).stepped(false),
+                        Entry::separator(),
                         Entry::new(WarpGridChoice::Default, words.default_grid.clone()),
                         Entry::new(WarpGridChoice::Three, words.three.clone()),
                         Entry::new(WarpGridChoice::Four, words.four.clone()),
@@ -284,6 +296,13 @@ impl<'a> WarpFields<'a> {
                         && let Some(size) = picked.size()
                     {
                         edits.push(WarpFieldsEdit::Grid(size));
+                    }
+                    // Every pick of Custom… asks, also while the readout already shows Custom, like the
+                    // Custom… rows of the form dialogs ask for the app's picker. Only a committed pick
+                    // counts: a key move that only highlights the row, or a step over the closed field,
+                    // never commits Custom… — it is [not stepped](Entry::stepped).
+                    if pick.events.committed() == Some(&WarpGridChoice::Custom) {
+                        edits.push(WarpFieldsEdit::CustomGrid);
                     }
                 });
             });

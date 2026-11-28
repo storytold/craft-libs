@@ -2,11 +2,14 @@
 
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_behavior::{CanvasView, EditEvent};
-use craft_imaging::ui::warp::{CylinderValues, CylinderWarp, WarpEdit, WarpGrid, WarpMesh, WarpSplit};
+use craft_imaging::ui::warp::{
+    CylinderValues, CylinderWarp, WarpEdit, WarpFieldValues, WarpFields, WarpFieldsEdit, WarpGrid, WarpGridChoice, WarpMesh, WarpSplit,
+    WarpStyleEntry,
+};
 use craft_ui::canvas::Canvas;
-use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Role, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, pointer, trial};
-use egui::{Id, Modifiers, Pos2, Vec2};
+use egui::{Id, Key, Modifiers, Pos2, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -383,4 +386,148 @@ fn cylinder_handles_drag_their_values_and_keep_them_sound() {
     h.fixture.key(egui::Key::ArrowRight, Modifiers::SHIFT);
     near(h.values(), [100.0, 200.0, 291.0, 80.0, 0.5, 0.5, 0.85], "Shift and an arrow");
     assert_eq!(h.count(Seen::Set), 2);
+}
+
+/// The options-bar group over one preset style, keeping every edit each pass reported.
+fn fields_fixture(values: WarpFieldValues) -> (Fixture, Rc<RefCell<Vec<WarpFieldsEdit>>>) {
+    let edits = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&edits);
+    let styles = [WarpStyleEntry::new("arc", "Arc").preset(true)];
+    let mut fixture = Fixture::new(move |ui| {
+        seen.borrow_mut().extend(WarpFields::new(&styles, values.clone()).show(ui).edits);
+    });
+    fixture.settle();
+    (fixture, edits)
+}
+
+/// Opens the Grid select's list on the focused fixture.
+fn open_grid(fixture: &mut Fixture) {
+    let grid = fixture.by_label("Grid").expect("the Grid select");
+    fixture.click(&grid);
+    fixture.settle();
+}
+
+/// Clicks the open list's row named `label`.
+fn pick_row(fixture: &mut Fixture, label: &str) {
+    let row = fixture.by_label(label).unwrap_or_else(|| panic!("no {label:?} row in the open Grid list"));
+    fixture.click(&row);
+    fixture.settle();
+}
+
+/// The edits reported since the last call.
+fn reported(edits: &Rc<RefCell<Vec<WarpFieldsEdit>>>) -> Vec<WarpFieldsEdit> {
+    std::mem::take(&mut edits.borrow_mut())
+}
+
+#[trial]
+fn picking_custom_reports_the_pick_and_nothing_else() {
+    let (mut fixture, edits) = fields_fixture(WarpFieldValues::new("arc"));
+    open_grid(&mut fixture);
+    pick_row(&mut fixture, "Custom…");
+    let seen = reported(&edits);
+    let [edit] = seen.as_slice() else { panic!("one edit for the Custom pick, got {seen:?}") };
+    assert_eq!(*edit, WarpFieldsEdit::CustomGrid, "the app is asked for its Custom Grid Size dialog");
+}
+
+#[trial]
+fn custom_asks_again_while_the_grid_reads_custom() {
+    let mut values = WarpFieldValues::new("arc");
+    values.grid = WarpGridChoice::Custom;
+    let (mut fixture, edits) = fields_fixture(values);
+    open_grid(&mut fixture);
+    pick_row(&mut fixture, "Custom…");
+    assert_eq!(reported(&edits), vec![WarpFieldsEdit::CustomGrid], "every pick of Custom… asks for the dialog");
+}
+
+#[trial]
+fn the_grid_list_reads_custom_then_a_rule_then_the_sizes() {
+    let (mut fixture, _) = fields_fixture(WarpFieldValues::new("arc"));
+    open_grid(&mut fixture);
+    assert_eq!(fixture.by_role(Role::LIST_BOX_OPTION).len(), 5, "Custom… and the four sizes");
+    let custom = fixture.by_label("Custom…").expect("Custom… leads the list").rect;
+    let default = fixture.by_label("Default").expect("Default follows it").rect;
+    assert!(custom.bottom() <= default.top(), "Custom… is above Default");
+    let gap = default.top() - custom.bottom();
+    assert!(gap > 0.0 && gap < custom.height(), "the rule's room is lower than a row: {gap}");
+    let rule = fixture.shape_bounds().iter().any(|shape| {
+        shape.top() >= custom.bottom() - 0.5 && shape.bottom() <= default.top() + 0.5 && shape.width() > custom.width() / 2.0 && shape.height() < gap
+    });
+    assert!(rule, "a rule across the list between Custom… and Default");
+}
+
+#[trial]
+fn a_size_pick_still_reports_just_its_grid() {
+    let (mut fixture, edits) = fields_fixture(WarpFieldValues::new("arc"));
+    open_grid(&mut fixture);
+    pick_row(&mut fixture, "4 x 4");
+    assert_eq!(reported(&edits), vec![WarpFieldsEdit::Grid(4)], "the size entries still report their size");
+}
+
+#[trial]
+fn picking_the_grid_it_already_reads_reports_nothing() {
+    let (mut fixture, edits) = fields_fixture(WarpFieldValues::new("arc"));
+    open_grid(&mut fixture);
+    pick_row(&mut fixture, "Default");
+    assert!(reported(&edits).is_empty(), "picking the shown Default reports no edit");
+}
+
+#[trial]
+fn the_closed_select_steps_between_sizes_and_the_reported_rule_never_fires_for_custom() {
+    let (mut fixture, edits) = fields_fixture(WarpFieldValues::new("arc"));
+    let grid = fixture.by_label("Grid").expect("the Grid select");
+    fixture.click(&grid);
+    fixture.settle();
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    assert!(reported(&edits).is_empty(), "opening the list and closing it with Escape picks nothing");
+    fixture.key(Key::ArrowUp, Modifiers::NONE);
+    fixture.settle();
+    assert!(
+        reported(&edits).is_empty(),
+        "the step back from Default reports nothing to the app: the un-stepped entry and the committed-only rule together keep keys from ever picking Custom…"
+    );
+    fixture.key(Key::ArrowDown, Modifiers::NONE);
+    fixture.settle();
+    assert_eq!(reported(&edits), vec![WarpFieldsEdit::Grid(3)], "the steps between the sizes keep working");
+}
+
+#[trial]
+fn the_open_list_keys_only_highlight_custom_and_enter_picks_it() {
+    let (mut fixture, edits) = fields_fixture(WarpFieldValues::new("arc"));
+    let grid = fixture.by_label("Grid").expect("the Grid select");
+    fixture.click(&grid);
+    fixture.settle();
+    fixture.key(Key::ArrowUp, Modifiers::NONE);
+    fixture.settle();
+    assert!(!fixture.by_role(Role::LIST_BOX).is_empty(), "the list is still open");
+    assert!(reported(&edits).is_empty(), "Up from Default only moves the lead onto Custom…: no pick");
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    assert_eq!(reported(&edits), vec![WarpFieldsEdit::CustomGrid], "Enter picks the highlighted Custom… row");
+}
+
+#[trial]
+fn the_listed_grids_keep_their_sizes_and_other_meshes_read_custom() {
+    assert_eq!(WarpFieldValues::new("arc").grid, WarpGridChoice::Default, "a fresh warp reads Default");
+    for (choice, size) in [
+        (WarpGridChoice::Default, Some(1)),
+        (WarpGridChoice::Three, Some(3)),
+        (WarpGridChoice::Four, Some(4)),
+        (WarpGridChoice::Five, Some(5)),
+        (WarpGridChoice::Custom, None),
+    ] {
+        assert_eq!(choice.size(), size, "{choice:?}");
+    }
+    // Counts the menu does not list — a dialog's 4 x 2, an even 2 x 2, a huge 50 x 50 — read as
+    // Custom, and a zero count stays one patch (the model clamps it), so no zero grid reads.
+    for (columns, rows) in [(4, 2), (2, 4), (2, 2), (50, 50)] {
+        assert_eq!(WarpGridChoice::of(&WarpMesh::identity(RECT, columns, rows)), WarpGridChoice::Custom, "{columns} x {rows}");
+    }
+    assert_eq!(WarpGridChoice::of(&WarpMesh::identity(RECT, 0, 0)), WarpGridChoice::Default, "0 x 0 reads as one patch");
+    for (columns, rows, want) in
+        [(1, 1, WarpGridChoice::Default), (3, 3, WarpGridChoice::Three), (4, 4, WarpGridChoice::Four), (5, 5, WarpGridChoice::Five)]
+    {
+        assert_eq!(WarpGridChoice::of(&WarpMesh::identity(RECT, columns, rows)), want, "{columns} x {rows}");
+    }
+    assert_eq!(WarpGridChoice::of(&uneven()), WarpGridChoice::Custom, "an uneven split stays Custom");
 }

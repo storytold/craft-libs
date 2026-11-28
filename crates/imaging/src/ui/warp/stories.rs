@@ -95,6 +95,8 @@ impl Warp {
         for edit in edits {
             match edit {
                 WarpFieldsEdit::Split(split) => self.split = split,
+                // The story app has no Custom Grid Size dialog: the pick changes nothing here.
+                WarpFieldsEdit::CustomGrid => {}
                 WarpFieldsEdit::Grid(size) => {
                     self.values.grid = match size {
                         3 => WarpGridChoice::Three,
