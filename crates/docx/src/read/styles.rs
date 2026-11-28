@@ -82,6 +82,7 @@ impl Reader<'_> {
         /// Largest `w:latentStyles` kept (Word's has ~380 exceptions, ~40 KB).
         const MAX_LATENT_STYLES_XML: usize = 1 << 20;
         let Some(root) = self.xml(path)? else { return Ok(()) };
+        self.pc.styles_read = true;
         // The default paragraph style must be called `Normal` in our model.
         let has_normal = root.children("w:style").any(|s| s.attr("w:styleId") == Some("Normal"));
         if !has_normal
@@ -169,6 +170,7 @@ impl Reader<'_> {
                     ),
                 ..Default::default()
             };
+            self.note_table_style(s, &st);
             let mut old_para = None;
             let mut old_chr = None;
             if let Some(p) = s.child("w:pPr") {
@@ -269,8 +271,23 @@ impl Reader<'_> {
         if !sheet.styles.iter().any(|s| s.quick) {
             sheet.add_default_gallery();
         }
+        base_table_grid_on_normal_table(&mut sheet);
         self.doc.styles = Arc::new(sheet);
         Ok(())
+    }
+
+    /// What deciding where a table starts needs from a table style as the file wrote it.
+    fn note_table_style(&mut self, s: &El, st: &Style) {
+        if st.kind != StyleKind::Table {
+            return;
+        }
+        if s.attr("w:default").is_some_and(|v| v == "1" || v == "true") {
+            self.pc.default_normal_table |= st.is_normal_table();
+            self.pc.default_table_styles.push(st.id.clone());
+        }
+        if !st.is_normal_table() && s.child("w:tblPr").is_some_and(|p| p.child("w:tblInd").is_some()) {
+            self.pc.table_styles_with_indent.push(st.id.clone());
+        }
     }
 
     /// A table style's table-level formatting and conditional formats. The `wholeTable` region
@@ -453,4 +470,14 @@ impl Reader<'_> {
 /// leaves the label at the paragraph's left edge, as Word shows it), no text.
 fn default_level(_i: usize) -> Level {
     Level { indent: 0.0, hanging: 0.0, text: String::new(), ..Level::default() }
+}
+
+/// WordCraft used to save Table Grid with no base, so Word gave those tables no cell margins though
+/// they were written with them in view: they keep what WordCraft showed, and Word shows the same
+/// after a save. Word itself always writes this base.
+fn base_table_grid_on_normal_table(sheet: &mut StyleSheet) {
+    let Some(normal) = sheet.styles.iter().find(|s| s.is_normal_table()).map(|s| s.id.clone()) else { return };
+    for st in sheet.styles.iter_mut().filter(|s| s.kind == StyleKind::Table && s.based_on.is_none() && s.name.eq_ignore_ascii_case("Table Grid")) {
+        st.based_on = Some(normal.clone());
+    }
 }

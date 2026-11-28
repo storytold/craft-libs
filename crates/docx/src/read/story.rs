@@ -116,6 +116,8 @@ pub struct StoryCtx {
     pub story_depth: usize,
     /// Reading a header or footer (not a text box inside one): where Word keeps its watermark.
     pub in_hf: bool,
+    /// How many table cells around the content being read (a text box starts again).
+    pub cell_depth: usize,
     /// Reading a table cell's paragraphs (not a text box inside one).
     in_cell: bool,
 }
