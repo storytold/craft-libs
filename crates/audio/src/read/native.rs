@@ -1161,8 +1161,29 @@ fn open_ogg_vorbis<'a>(src: &Src<'a>, file: ogg::OggFile, stream: usize) -> Opti
         Err(_) if cfg!(feature = "symphonia") => return None,
         Err(e) => return Some(Err(e)),
     };
-    let durations = vorbis_durations(&dec, &s.packets);
-    let (mut starts, mut total, first_damaged) = granule_starts(s, &durations);
+    // A packet whose mode cannot be read counts as its concealment counts it.
+    let mut prev: Option<usize> = None;
+    let timing = ogg::VorbisTiming::of_with_durations(s, |p| {
+        let n = dec.vorbis_block_size(vorbis_head(p), prev);
+        let frames = match (prev, n) {
+            (Some(a), Some(b)) => u32::try_from(a / 4 + b / 4).unwrap_or(u32::MAX),
+            _ => 0,
+        };
+        prev = n;
+        frames
+    });
+    let first_damaged = timing.first_damaged;
+    let durations: Vec<u64> = timing.durations.iter().map(|&d| u64::from(d)).collect();
+    // The presented timeline starts at the first sample to play (a stream cut from a longer one
+    // starts later than 0); decoded frames before it keep negative places. Leading packets that
+    // decode to nothing (the priming packet, on a page of its own or not) take the place of the
+    // first packet that decodes to frames.
+    let mut starts: Vec<i64> = timing.starts.iter().map(|s| s.saturating_sub(timing.first)).collect();
+    if let Some(k) = timing.durations.iter().position(|&d| d > 0) {
+        let place = starts[k];
+        starts[..k].fill(place);
+    }
+    let mut total = timing.total;
     let mut jumps = bound_gaps(&mut starts, &durations, &mut total, src.size());
     // a damaged first granule position counts as damage at the first packet
     if let Some(first) = jumps.first_mut() {
@@ -1179,117 +1200,9 @@ fn open_ogg_vorbis<'a>(src: &Src<'a>, file: ogg::OggFile, stream: usize) -> Opti
     Some(Ok(n))
 }
 
-/// The frames each Vorbis packet decodes to: none for the first, then a quarter of the previous
-/// block and a quarter of its own (Vorbis I §4.3.8). A packet whose mode cannot be read counts
-/// as its concealment counts it.
-fn vorbis_durations(dec: &TrackDecoder, packets: &[ogg::Packet]) -> Vec<u64> {
-    let mut prev: Option<usize> = None;
-    packets
-        .iter()
-        .map(|p| {
-            let n = dec.vorbis_block_size(vorbis_head(p), prev);
-            let frames = match (prev, n) {
-                (Some(a), Some(b)) => (a / 4 + b / 4) as u64,
-                _ => 0,
-            };
-            prev = n;
-            frames
-        })
-        .collect()
-}
-
 /// The first bytes of a Vorbis packet, which hold its mode number.
 fn vorbis_head(p: &ogg::Packet) -> &[u8] {
     p.prefix.get(..(p.size as usize).min(p.prefix.len())).unwrap_or_default()
-}
-
-/// Largest granule position [`granule_starts`] trusts, as for Opus.
-const MAX_GRANULE: i64 = ogg::MAX_OPUS_GRANULE;
-
-/// The decoded-timeline start of each packet of `stream`, given the frames each decodes to, and
-/// the frames presented, from the pages' granule positions: the presented timeline starts at 0,
-/// and decoded frames before it (a first page whose granule position is below the frames it
-/// decodes to) have negative places. A last page whose granule position is below its frames trims
-/// the end. A granule position outside `0..=MAX_GRANULE` is treated as missing. The third value
-/// is true when the first page's granule position is above where the next page places its end;
-/// that page is then placed to end where the next one starts. When the next page is the last and
-/// its granule position is below the first page's, the first page is placed from 0 instead, and
-/// the last page trims the end as usual.
-fn granule_starts(stream: &ogg::Stream, durations: &[u64]) -> (Vec<i64>, i64, bool) {
-    let n = durations.len().min(stream.packets.len());
-    let dur = |k: usize| i64::try_from(durations[k]).unwrap_or(i64::MAX);
-    let granule_of = |k: usize| stream.packets.get(k).and_then(|p| p.granule).filter(|g| (0..=MAX_GRANULE).contains(g));
-    let mut ends: Vec<i64> = vec![0; n];
-    let (mut i, mut cursor, mut trimmed_end, mut pages) = (0, None::<i64>, None::<i64>, 0usize);
-    let mut first_damaged = false;
-    while i < n {
-        // packets completing on the same page: i..=j, the last carries the page's granule position
-        let Some(j) = (i..n).find(|&k| granule_of(k).is_some()) else {
-            // trailing packets without one (a truncated file) continue from the cursor
-            let mut c = cursor.unwrap_or(0);
-            for (k, end) in ends.iter_mut().enumerate().skip(i) {
-                c = c.saturating_add(dur(k));
-                *end = c;
-            }
-            cursor = Some(c);
-            break;
-        };
-        let g = granule_of(j).unwrap_or(0);
-        let sum = (i..=j).fold(0i64, |a, k| a.saturating_add(dur(k)));
-        let eos = stream.packets[j].eos;
-        // A last page after the first whose granule position is below the first page's: the
-        // first page's granule position is damaged, so that page is placed from 0.
-        if eos && pages == 1 && cursor.is_some_and(|c| g < c) {
-            let mut e = 0i64;
-            for (k, end) in ends.iter_mut().enumerate().take(i) {
-                e = e.saturating_add(dur(k));
-                *end = e;
-            }
-            cursor = Some(e);
-            first_damaged = true;
-        }
-        let end = match cursor.map(|c| c.saturating_add(sum)) {
-            // end trimming on the last page: the packets keep their forward places
-            Some(f) if eos && g < f => {
-                trimmed_end = Some(g);
-                f
-            }
-            Some(f) if f == g => f,
-            // the only page with audio is also the last: its shortfall is trimmed at the end
-            None if eos && g < sum => {
-                trimmed_end = Some(g);
-                sum
-            }
-            // the first page (a granule position below its frames trims the start), or a
-            // discontinuity: the granule position places the page
-            _ => g,
-        };
-        let mut e = end;
-        for k in (i..=j).rev() {
-            ends[k] = e;
-            e = e.saturating_sub(dur(k));
-        }
-        cursor = Some(end);
-        pages += 1;
-        i = j + 1;
-    }
-    // A first page placed after where the next page starts (the granule positions come back down
-    // after it) has a damaged granule position: it ends where the next page starts.
-    if let Some(j) = (0..n).find(|&k| granule_of(k).is_some()).filter(|&j| j + 1 < n) {
-        let back = ends[j].saturating_sub(ends[j + 1].saturating_sub(dur(j + 1)));
-        if back > 0 {
-            for end in &mut ends[..=j] {
-                *end = end.saturating_sub(back);
-            }
-            first_damaged = true;
-        }
-    }
-    let starts: Vec<i64> = (0..n).map(|k| ends[k].saturating_sub(dur(k))).collect();
-    // a stream that starts later than 0 (cut from a longer one) is presented from its first packet
-    let base = starts.first().copied().unwrap_or(0).max(0);
-    let starts = starts.into_iter().map(|s| s.saturating_sub(base)).collect();
-    let total = trimmed_end.or(cursor).unwrap_or(0).saturating_sub(base).max(0);
-    (starts, total, first_damaged)
 }
 
 /// Bounds the silence that gaps between Ogg packets' places leave (lost pages, filled by
