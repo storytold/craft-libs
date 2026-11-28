@@ -599,12 +599,22 @@ impl<K: TextureKey> Thumbnails<K> {
     }
 
     /// Keeps only the pictures whose key `keep` accepts (the open documents changed).
+    /// `keep` runs outside the lock; keys inserted concurrently after the snapshot are left untouched.
     pub fn retain(&self, ctx: &Context, mut keep: impl FnMut(&K) -> bool) {
         self.loader.cache().retain(ctx, &mut keep);
-        let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
-        keys.geometry.retain(|k, _| keep(k));
-        keys.pending_geometry.retain(|k, _| keep(k));
-        keys.force_full.retain(|k| keep(k));
+        let snapshot: Vec<K> = {
+            let keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+            keys.geometry.keys().chain(keys.pending_geometry.keys()).chain(keys.force_full.iter()).cloned().collect()
+        };
+        let dropped: Vec<K> = snapshot.into_iter().filter(|k| !keep(k)).collect();
+        if !dropped.is_empty() {
+            let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+            for k in &dropped {
+                keys.geometry.remove(k);
+                keys.pending_geometry.remove(k);
+                keys.force_full.remove(k);
+            }
+        }
     }
 
     /// The store under the thumbnails, for `forget`, `clear` and `statistics`.
