@@ -15,7 +15,11 @@ struct Node {
     count: u32,
 }
 
-/// A ray hit: distance, triangle and barycentrics (weights of vertices 1 and 2).
+/// A hit: `t`, triangle and barycentrics (weights of vertices 1 and 2).
+///
+/// From [`Bvh::closest`] and [`Bvh::closest_filtered`], `t` is the ray parameter: the hit point
+/// is `o + t·d`, so `t` is a distance only when `d` has unit length. From [`Bvh::nearest`], `t` is
+/// the distance from the query point.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hit {
     pub t: f32,
@@ -35,7 +39,7 @@ pub struct Bvh {
 
 const LEAF: usize = 4;
 
-/// Traversal stack of (node, entry distance): inline for typical depths (no allocation per
+/// Traversal stack of (node, ray parameter at entry): inline for typical depths (no allocation per
 /// ray), spilling to the heap for degenerate trees.
 struct Stack {
     inline: [(u32, f32); 64],
@@ -286,7 +290,7 @@ impl Bvh {
         let mut best = None;
         let mut stack = Stack::default();
         stack.push((0, Self::slab(root.lo, root.hi, oa, inv, tmax)?));
-        // Entries carry their entry distance: nodes behind a closer hit are skipped unopened.
+        // Entries carry their ray parameter at entry: nodes behind a closer hit are skipped unopened.
         while let Some((ni, tn)) = stack.pop() {
             let Some(n) = self.nodes.get(ni as usize).filter(|_| tn <= tmax) else { continue };
             if n.count > 0 {
@@ -674,5 +678,26 @@ mod tests {
         let hit = bvh.closest_filtered(Vec3::new(0.0, 0.0, 10.0), Vec3::NEG_Z, 100.0, &|t| t == 500).unwrap();
         assert_eq!(hit.tri, 500);
         assert_eq!(hit.t, 10.0);
+    }
+
+    #[test]
+    fn ray_hit_t_is_the_parameter_of_the_direction_given() {
+        let m = Mesh {
+            positions: vec![Vec3::new(-1.0, -1.0, 0.0), Vec3::new(1.0, -1.0, 0.0), Vec3::new(0.0, 1.0, 0.0)],
+            indices: vec![0, 1, 2],
+            ..Default::default()
+        };
+        let bvh = Bvh::new(&m);
+        let o = Vec3::new(0.0, 0.0, 1.0);
+        // The triangle is 1 unit away; a direction of length 2 reaches it at t = 0.5.
+        let d = Vec3::new(0.0, 0.0, -2.0);
+        assert_eq!(bvh.closest(o, d, 10.0).map(|h| h.t), Some(0.5));
+        assert_eq!(bvh.closest_filtered(o, d, 10.0, &|_| true).map(|h| h.t), Some(0.5));
+        assert_eq!(o + d * 0.5, Vec3::ZERO);
+        // `tmax` is in the same units: the hit at t = 0.5 lies beyond 0.4 and before 0.6.
+        assert!(!bvh.occluded(o, d, 0.4));
+        assert!(bvh.occluded(o, d, 0.6));
+        // `nearest` reports the distance itself.
+        assert_eq!(bvh.nearest(o, 10.0, &|_| true).map(|h| h.t), Some(1.0));
     }
 }
