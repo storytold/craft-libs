@@ -1473,6 +1473,37 @@ mod tests {
     }
 
     #[test]
+    fn review_6095656137_percent_axes_keep_normalized_missing_cache_defaults() {
+        for source_group in [None, Some(0)] {
+            for values in [vec![None], vec![], vec![Some(f64::NAN), Some(f64::INFINITY)]] {
+                let mut chart = Chart {
+                    kind: ChartType::PercentColumn,
+                    series: vec![Series { values, source_group, ..Default::default() }],
+                    y_min: Some(0.2),
+                    ..Default::default()
+                };
+                assert_eq!(chart.value_range(), (0.2, 1.0), "missing data retains percentage defaults with group {source_group:?}");
+                assert_eq!(chart.axis_range(false), Some((0.2, 1.0)));
+                let (lo, hi, _) = chart.axis_scale(false, 5).unwrap();
+                assert_eq!(lo, 0.2);
+                assert!(hi >= 1.0);
+                chart.y_max = Some(0.8);
+                assert_eq!(chart.value_range(), (0.2, 0.8), "explicit bounds still win");
+                assert_eq!(chart.axis_range(false), Some((0.2, 0.8)));
+                chart.y_min = None;
+                chart.y_max = None;
+                assert_eq!(chart.value_range(), (0.0, 1.0));
+                chart.series[0].secondary_axis = true;
+                assert_eq!(chart.axis_range(true), Some((0.0, 1.0)), "secondary percentage defaults also follow kind, not finite cache presence");
+                chart.y2_min = Some(0.2);
+                chart.y2_max = Some(0.8);
+                let (lo, hi, _) = chart.axis_scale(true, 5).unwrap();
+                assert_eq!((lo, hi), (0.2, 0.8));
+            }
+        }
+    }
+
+    #[test]
     fn review_6095266494_sparse_stacks_retain_late_points_without_charging_empty_series() {
         // Original sparse imported-model shape: one retained 20k-slot cache and 999 empty
         // peers in the same source group, well within the reader's shared point budget.
