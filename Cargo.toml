@@ -4,7 +4,7 @@ members = ["crates/*"]
 exclude = ["vendor/krilla", "vendor/hayro", "vendor/hayro-interpret", "vendor/hayro-syntax", "vendor/hayro-jbig2", "vendor/hayro-cmap", "vendor/hayro-postscript", "vendor/linesweeper", "vendor/vello_common", "vendor/vello_cpu"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -50,9 +50,9 @@ craft-cdr = { path = "crates/cdr" }
 craft-ai = { path = "crates/ai" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-anicraft-format = { path = "crates/anicraft-format" }
-craft-pdf = { path = "crates/pdf", version = "=0.2.0" }
+craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
 craft-pe = { path = "crates/pe" }
-craft-ps = { path = "crates/ps", version = "=0.2.0" }
+craft-ps = { path = "crates/ps", version = "=0.1.0" }
 craft-pdn = { path = "crates/pdn" }
 craft-plate-test = { path = "crates/plate-test" }
 pdf-writer = "0.15"
