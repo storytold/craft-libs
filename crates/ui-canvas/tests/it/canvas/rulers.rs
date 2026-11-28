@@ -2,7 +2,7 @@
 
 use craft_behavior::geometry::{SnapOptions, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
-use craft_behavior::{CancelReason, CanvasView, RulerUnits, TickLabels, Ticks};
+use craft_behavior::{CancelReason, CanvasView, Mixed, RulerUnits, TickLabels, Ticks};
 use craft_ui::canvas::{
     CENTIMETRE_LABEL_STEP_MIN, Canvas, CanvasTool, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, PageFrame, Pasteboard, RulerText, Rulers, Snap,
     StepLadder, TickRule, ToolAction, ToolContext, ToolPath, ToolPointer,
@@ -266,6 +266,43 @@ fn the_units_menu_names_each_unit() {
         assert!(fixture.by_label(name).is_some(), "the menu lists {name}");
         assert!(fixture.by_label(symbol).is_none(), "no row reads {symbol}");
     }
+}
+
+/// A ruler counting Feet & Inches checks the Feet & Inches row of the units menu, not the Feet row beside it, and
+/// picking Feet & Inches reports that unit rather than Feet.
+#[trial]
+fn the_units_menu_tells_feet_and_inches_from_feet() {
+    const UNITS: [UnitKind; 3] = [UnitKind::Inches, UnitKind::Feet, UnitKind::FeetInches];
+    let text = RulerText::new(RulerUnits::new(1.0 / 864.0, Ticks::decimal(false)), UnitKind::FeetInches);
+    let zero = Rc::new(RefCell::new(Point::ZERO));
+    let shown_zero = Rc::clone(&zero);
+    let room = Rc::new(Cell::new(Rect::NOTHING));
+    let shown_room = Rc::clone(&room);
+    let picked = Rc::new(Cell::new(None));
+    let seen = Rc::clone(&picked);
+    let mut fixture = Fixture::new(move |ui| {
+        let at = ui.available_rect_before_wrap();
+        shown_room.set(at);
+        let view = CanvasView::new(at, Point::new(f64::from(at.center().x), f64::from(at.center().y)), 1.0);
+        let mut zero = shown_zero.borrow_mut();
+        let rulers = Rulers::new("Rulers", Bind::bound(&mut *zero)).units(&UNITS);
+        let shown = Canvas::new("Document").view(view).with_rulers(Some(rulers)).rulers(text, text).show(ui, |_, _| {});
+        if let Some(kind) = shown.output.rulers.and_then(|rulers| rulers.unit_picked) {
+            seen.set(Some(kind));
+        }
+    });
+    fixture.room(Vec2::new(500.0, 400.0)).settle();
+    let at = egui::pos2(room.get().center().x, room.get().min.y + 4.0);
+    fixture.frame(vec![craft_ui::testing::pointer::moved(at)]);
+    fixture.frame(vec![craft_ui::testing::pointer::secondary(at, true)]);
+    fixture.frame(vec![craft_ui::testing::pointer::secondary(at, false)]);
+    fixture.settle();
+    let feet_inches = fixture.by_label("Feet & Inches").expect("the menu lists Feet & Inches");
+    let feet = fixture.by_label("Feet").expect("the menu lists Feet");
+    assert_eq!(fixture.tree().toggled_of(feet_inches.node), Some(Mixed::Same(true)), "the ruler's unit is checked");
+    assert_ne!(fixture.tree().toggled_of(feet.node), Some(Mixed::Same(true)), "Feet is not checked for a Feet & Inches ruler");
+    fixture.click(&feet_inches).settle();
+    assert_eq!(picked.get(), Some(UnitKind::FeetInches), "the pick names Feet & Inches");
 }
 
 /// A drag of the rulers' corner with one move past the drag threshold, released there, moves the zero point to where it

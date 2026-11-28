@@ -502,8 +502,10 @@ impl Component for Rulers<'_> {
         let numbers = cx.env.units();
         let words = cx.words::<CanvasWords>();
         let shown = self.published().x.kind;
+        // A menu row's `&` marks its mnemonic, so the `&` of a unit's name ("Feet & Inches") is doubled to show as written.
+        let row_name = |kind: UnitKind| Label::from(numbers.name(kind).as_str().replace('&', "&&"));
         let mut entries: Vec<Entry<MenuRow>> =
-            units.iter().map(|&kind| Entry::new(MenuRow::Unit(kind), numbers.name(kind)).checked(kind == shown)).collect();
+            units.iter().map(|&kind| Entry::new(MenuRow::Unit(kind), row_name(kind)).checked(kind == shown)).collect();
         entries.push(Entry::separator());
         entries.push(Entry::new(MenuRow::ResetZero, Label::from(words.ruler_reset_zero.as_str().to_owned())).enabled(!self.origin_locked));
         let name = Label::from(words.ruler_menu.as_str().to_owned());

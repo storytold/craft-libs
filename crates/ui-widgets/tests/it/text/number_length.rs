@@ -64,6 +64,37 @@ fn a_length_field_types_and_steps_in_the_shown_unit() {
     assert!((stepped - tenth_up).abs() < SAME, "an arrow moves a tenth of an inch: {stepped} against {tenth_up}");
 }
 
+/// A Feet & Inches length is written, typed and stepped as feet, as a Feet length is, and only its name tells the two
+/// apart.
+#[trial]
+fn a_feet_and_inches_length_counts_feet() {
+    let feet = LengthUnits::new(UnitKind::Points, UnitKind::Feet, START);
+    let feet_inches = LengthUnits::new(UnitKind::Points, UnitKind::FeetInches, START);
+    for text in ["1.5", "18 in", "1.5 ft"] {
+        let plain = in_lengths(feet, START, type_and_commit(text));
+        let both = in_lengths(feet_inches, START, type_and_commit(text));
+        assert!((both - plain).abs() < SAME && both != START, "{text} reads as feet: {both} against {plain}");
+    }
+    let stepped = |lengths: LengthUnits| {
+        in_lengths(lengths, START, |frames, show| {
+            frames.frame(vec![key_press(Key::ArrowUp, Modifiers::NONE)], show);
+        })
+    };
+    assert!((stepped(feet_inches) - stepped(feet)).abs() < SAME, "an arrow steps both by the same tenth of a foot");
+
+    let mut frames = Frames::new();
+    frames.frame(vec![], |ui| {
+        let units = Env::of(ui).units();
+        assert_eq!(units.show(UnitKind::FeetInches, 1.5), units.show(UnitKind::Feet, 1.5), "both write feet");
+        assert_ne!(units.name(UnitKind::FeetInches), units.name(UnitKind::Feet), "a list of units tells them apart");
+        for kind in [UnitKind::Feet, UnitKind::FeetInches] {
+            let reader = units.length_reader(LengthUnits::new(UnitKind::Points, kind, START));
+            let named = reader.read_tagged("1.5 ft", None).ok().and_then(|(_, tag)| tag).and_then(UnitKind::from_tag);
+            assert_eq!(named, Some(kind), "a typed ft names the field's own unit");
+        }
+    });
+}
+
 /// With bare numbers in points, a bare number in a picas field reads as points; a spelled unit still reads as written.
 #[trial]
 fn a_bare_number_reads_in_the_lengths_bare_unit() {
