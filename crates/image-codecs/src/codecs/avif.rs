@@ -225,7 +225,7 @@ pub fn encode_avif_hdr(
 mod tests {
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     #[test]
-    fn sdr_avif_uses_requested_alpha_quality() {
+    fn feature_config_sdr_avif_uses_requested_alpha_quality() {
         use crate::{ChannelLayout, Image};
 
         let pixels: Vec<ravif::RGBA8> = (0..1024).map(|i| ravif::RGBA8::new(100, 120, 140, ((i * 37) % 256) as u8)).collect();
@@ -246,7 +246,7 @@ mod tests {
 
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     #[test]
-    fn sdr_avif_keeps_exif_metadata() {
+    fn feature_config_sdr_avif_keeps_exif_metadata() {
         use crate::{ChannelLayout, Image};
 
         let exif = b"II*\0shared-avif-exif".to_vec();
@@ -259,7 +259,7 @@ mod tests {
 
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     #[test]
-    fn hlg_mapping_matches_reference_white_and_peak() {
+    fn feature_config_hlg_mapping_matches_reference_white_and_peak() {
         let white = super::hlg_signal([1.0; 3]);
         assert!(white.iter().all(|&value| (value - 0.75).abs() < 0.005), "{white:?}");
 
@@ -272,7 +272,7 @@ mod tests {
 
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     #[test]
-    fn hlg_encoded_output_signals_bt2020_hlg() {
+    fn feature_config_hlg_encoded_output_signals_bt2020_hlg() {
         let avif = super::encode_avif_hdr(1, 1, &[1.0; 3], 100, 10, None, super::HdrTransfer::Hlg).unwrap();
         let nclx = avif.windows(4).position(|window| window == b"nclx").expect("the AVIF has nclx color metadata");
         let color = avif.get(nclx + 4..nclx + 11).expect("complete nclx color metadata");
@@ -284,7 +284,7 @@ mod tests {
 
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     #[test]
-    fn hlg_encoded_pixels_preserve_reference_white_and_peak() {
+    fn feature_config_hlg_encoded_pixels_preserve_reference_white_and_peak() {
         let mut rgb = Vec::new();
         for _ in 0..32 {
             for x in 0..64 {

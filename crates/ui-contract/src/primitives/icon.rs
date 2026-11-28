@@ -1,5 +1,6 @@
 //! `IconSpec`: an icon to paint, and the icon sets a theme's icon pack picks among.
 
+use super::Draw;
 use super::svg_set;
 use super::textures::TextureCache;
 use crate::contract::{MemoKey, MemoProps};
@@ -36,6 +37,15 @@ pub trait Glyph: Any + MemoProps + Sync {
     /// Paints the glyph into `rect` in `color`, with the strokes of `tokens`. `mirrored` is set when a directional
     /// glyph is painted under right-to-left: the glyph draws itself flipped.
     fn paint(&self, painter: &Painter, tokens: &UiTokens, rect: Rect, color: Color32, mirrored: bool);
+
+    /// Paints the glyph into `rect` in `color` with `draw`, the content painter of the component that shows the icon
+    /// ([`Draw::icon`](super::Draw::icon)). A glyph that lays out text implements it, so the text is a
+    /// [`TextRun`](super::TextRun) in the theme's fonts. The default calls [`paint`](Self::paint) with the painter and
+    /// tokens `draw` paints with. [`paint_icon`] has no `Draw`, so it always calls `paint`.
+    fn paint_draw(&self, draw: &Draw<'_>, rect: Rect, color: Color32, mirrored: bool) {
+        let (painter, tokens) = draw.painter_and_tokens();
+        self.paint(painter, tokens, rect, color, mirrored);
+    }
 }
 
 /// Where an icon's drawing comes from.
@@ -279,7 +289,6 @@ pub fn paint_icon(painter: &Painter, tokens: &UiTokens, direction: Direction, re
 /// icon's colour, since `accent.solid` would vanish on the brand fill.
 pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, rect: Rect, spec: &IconSpec<'_>, single_ink: bool, on_dark: bool) {
     let color = spec.color_in(tokens);
-    let rtl = direction == Direction::Rtl;
     let side = rect.width().min(rect.height());
     let square = Rect::from_center_size(rect.center(), vec2(side, side));
     match &spec.source {
@@ -288,7 +297,7 @@ pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, 
         IconSource::Disc => {
             painter.circle_filled(square.center(), side / 2.0, color);
         }
-        IconSource::Glyph(glyph) => glyph.paint(painter, tokens, square, color, rtl && glyph.directional() && spec.mirror == Mirror::Auto),
+        IconSource::Glyph(glyph) => glyph.paint(painter, tokens, square, color, glyph_mirrored(*glyph, spec, direction)),
         IconSource::Svg(id) => {
             if let Some(icon) = SvgIcon::of(tokens, direction, side, id, spec.mirror) {
                 icon.paint_layers(painter, square, LayerInks::of(tokens, color, single_ink, on_dark || spec.ink == Ink::OnDark));
@@ -296,6 +305,12 @@ pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, 
         }
         IconSource::Mark(badge) => super::pointer_art::paint_badge(painter, tokens, direction, square, *badge, color),
     }
+}
+
+/// Whether `glyph`, the glyph of `spec`, paints flipped under `direction`: a directional glyph under right-to-left,
+/// unless the spec never mirrors.
+pub(crate) fn glyph_mirrored(glyph: &dyn Glyph, spec: &IconSpec<'_>, direction: Direction) -> bool {
+    direction == Direction::Rtl && glyph.directional() && spec.mirror == Mirror::Auto
 }
 
 impl IconSet {

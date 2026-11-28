@@ -79,7 +79,7 @@ fn assert_common_detail_fields(s: &DevelopSettings) {
 }
 
 fn assert_common_geometry_fields(s: &DevelopSettings) {
-    assert_eq!(s.geometry.upright, Upright::Level);
+    assert_eq!(s.geometry.upright, Upright::Full);
     assert_eq!(s.geometry.vertical, -10.0);
     assert!(s.optics.remove_ca);
     assert_eq!(s.treatment, crate::Treatment::Color);
@@ -90,6 +90,19 @@ fn assert_common_geometry_fields(s: &DevelopSettings) {
     );
     let c = s.crop.geometry;
     assert_eq!((c.rect.x0, c.rect.y0, c.rect.x1, c.rect.y1, c.angle), (0.05, 0.1, 0.8, 0.9, 1.5));
+}
+
+/// `crs:PerspectiveUpright` 2, 3 and 4 name Full, Level and Vertical, in that order.
+#[test]
+fn upright_mode_numbers_name_full_level_and_vertical() {
+    for (value, mode) in [(2, Upright::Full), (3, Upright::Level), (4, Upright::Vertical)] {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:PerspectiveUpright="{value}"/></rdf:RDF></x:xmpmeta>"#
+        );
+        let partial = to_partial(&props(&xmp), Target::Any);
+        let s = apply_partial(&DevelopSettings::default(), &partial, 1.0);
+        assert_eq!(s.geometry.upright, mode, "crs:PerspectiveUpright={value}");
+    }
 }
 
 /// A sidecar curve with a `NaN` or `inf` point (Rust's `parse` reads both) is not a curve:

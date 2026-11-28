@@ -171,7 +171,9 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         placed.at += nudge.offset();
     }
     let tier = overlay::layer_tier(ctx, overlay.rank);
-    if (sized || layer.size.is_some()) && areas::layer_rect(ctx, area).is_none() {
+    // A toast or a tooltip shows first at its room, never in egui's hidden sizing pass; a container's layer starts its
+    // `Area` at its measured size (`LayerSpec::size`).
+    if sized && areas::layer_rect(ctx, area).is_none() {
         areas::seed_area(ctx, areas::layer_of(tier, area), placed.at, placed.room);
     }
     // A modal's cover: it takes the presses below the modal while the modal is open, and paints the scrim if it has one.
@@ -190,7 +192,14 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     };
     let parent = overlay::drawing_parent(ctx);
     let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);
-    let mut spec = LayerSpec { id: area, tier, at: placed.at, interactable: overlay.rank != Rank::Tooltip && !layer.exiting, root: None };
+    let mut spec = LayerSpec {
+        id: area,
+        tier,
+        at: placed.at,
+        size: layer.size.and(size),
+        interactable: overlay.rank != Rank::Tooltip && !layer.exiting,
+        root: None,
+    };
     // A popup's or a modal's layer, and any layer while it fades out, has a root node, made before its `Area` shows so
     // egui hangs the layer's content below it. A sizing pass of the `Area` reports nothing.
     if layer.exiting || matches!(overlay.rank, Rank::Popup | Rank::Modal { .. }) {
@@ -254,6 +263,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     }
     let mut entry = OpenEntry::new(layer.id, overlay.rank, overlay.keys, shown.rect, shown.layer);
     entry.parent = parent;
+    entry.role = overlay.role;
     entry.anchor = matches!(overlay.place, Place::Anchored { .. }).then_some(anchor);
     entry.side = placed.side;
     entry.asked = placed.asked;
@@ -334,6 +344,7 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     }
     let mut entry = OpenEntry::new(layer.id, overlay.rank, overlay.keys, rect, areas::layer_of(tier, area_id(layer.id)));
     entry.parent = parent;
+    entry.role = overlay.role;
     entry.anchor = matches!(overlay.place, Place::Anchored { .. }).then_some(anchor);
     entry.side = placed.side;
     entry.asked = placed.asked;
@@ -384,7 +395,14 @@ fn show_in_popup(
     // The layer's content starts from its opener's env, on the popup window's own root: its scale and window facts.
     let opener = layer.env.capture().env();
     let env = Env::root_of(&ctx).map_or_else(|| opener.clone(), |root| opener.rebase(&root));
-    let mut spec = LayerSpec { id: area, tier, at: window.min, interactable: overlay.rank != Rank::Tooltip && !layer.exiting, root: None };
+    let mut spec = LayerSpec {
+        id: area,
+        tier,
+        at: window.min,
+        size: layer.size.map(|size| Vec2::new(size.x.max(min_width), size.y)),
+        interactable: overlay.rank != Rank::Tooltip && !layer.exiting,
+        root: None,
+    };
     // The layer's root node, made before its `Area` shows, as in `host`.
     if layer.exiting || matches!(overlay.rank, Rank::Popup | Rank::Modal { .. }) {
         spec.root = areas::content_rect(&ctx, &spec).map(|rect| access::report_layer(&ctx, layer.id, rect, layer.exiting));
@@ -418,6 +436,7 @@ fn show_in_popup(
     });
     overlay::end_layer(&ctx);
     let mut entry = OpenEntry::new(layer.id, overlay.rank, overlay.keys, shown.rect, shown.layer);
+    entry.role = overlay.role;
     entry.side = placed.side;
     entry.asked = placed.asked;
     entry.exiting = layer.exiting;
@@ -529,6 +548,7 @@ pub(crate) fn host_window(ctx: &Context, layer: &Layer<'_>, rect: Rect) -> Layer
     let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);
     let mut entry =
         OpenEntry::new(layer.id, overlay.rank, overlay.keys, rect, areas::layer_of(overlay::layer_tier(ctx, overlay.rank), area_id(layer.id)));
+    entry.role = overlay.role;
     entry.scoped = scope.is_some();
     entry.window = true;
     overlay::record(ctx, entry);

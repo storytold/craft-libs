@@ -25,8 +25,8 @@ pub(crate) mod stories;
 
 use craft_behavior::{ColumnKey, ColumnWidth, EditEvent, IconId, Mixed, Selection, SelectionChange, keyed};
 use craft_ui::contract::{
-    Bind, CollectionEvent, ColumnSpec, ContextMenuRequest, ListDrag, NoValue, Outcome, ReorderMove, ReorderRule, SelectMode, ShowCollection as _,
-    ShowContainer as _, request_rename,
+    Bind, CollectionEvent, ColumnSpec, ContextMenuRequest, ListDrag, NoValue, Outcome, Props as _, ReorderMove, ReorderRule, SelectMode,
+    ShowCollection as _, ShowContainer as _, request_rename,
 };
 use craft_ui::list::{ListRow, RowEvent, TrailingFace, TrailingPart};
 use craft_ui::primitives::IconSpec;
@@ -197,13 +197,26 @@ pub struct PageList<'a> {
     picked: &'a mut Selection<usize>,
     active: usize,
     rename: Option<usize>,
+    document: Option<u64>,
 }
 
 impl<'a> PageList<'a> {
     /// A list named `label` of `rows`, with `picked` as the selection and `active` as the page or artboard being
     /// edited.
     pub fn new(label: impl Into<Label>, rows: &'a [PageListRow], picked: &'a mut Selection<usize>, active: usize) -> Self {
-        PageList { label: label.into(), rows, picked, active, rename: None }
+        PageList { label: label.into(), rows, picked, active, rename: None, document: None }
+    }
+
+    /// The document the list shows, so the list's own state (rename, scroll, lead) is per document: a rename left
+    /// open in one document does not open on the row with the same number in another. Without it every document
+    /// shares one.
+    #[must_use]
+    pub fn document(mut self, key: impl std::hash::Hash) -> Self {
+        use std::hash::Hasher as _;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        key.hash(&mut hasher);
+        self.document = Some(hasher.finish());
+        self
     }
 
     /// Starts renaming `row` (the app's Rename command): its field opens at the list's next pass.
@@ -215,7 +228,14 @@ impl<'a> PageList<'a> {
 
     /// Shows the list and returns its response and the events for the app to apply.
     pub fn show(self, ui: &mut Ui) -> PageListOutput {
-        let PageList { label, rows, picked, active, rename } = self;
+        let PageList { label, rows, picked, active, rename, document } = self;
+        // Row numbers restart in every document, so with a document the list's state (the panel's scroll and the
+        // table inside it) is keyed by the list's label and the document.
+        let panel = Panel::new(label.clone());
+        let panel = match document {
+            Some(document) => panel.id(ui.scope_id().with(("page-list", label.as_str(), document))),
+            None => panel,
+        };
         let env = Env::of(ui);
         let words = env.words::<PageListWords>();
         let unlocked = |from: &[usize]| from.iter().copied().filter(|&row| rows.get(row).is_some_and(|r| !r.locked)).collect::<Vec<_>>();
@@ -235,7 +255,7 @@ impl<'a> PageList<'a> {
             let after = ReorderMove::new(active, vec![active], to, false);
             PageListEvent::Reorder(EditEvent::set(Mixed::Same(before), after, Arc::from(label.as_str()), None))
         };
-        let response = Panel::new(label.clone())
+        let response = panel
             .footer(|ui, _| {
                 let list = *list_id.borrow();
                 let ours = move |drag: &ListDrag<usize>| Some(drag.list) == list;

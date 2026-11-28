@@ -161,6 +161,8 @@ pub use craft_geom as geom;
 pub use craft_gif as gif;
 #[cfg(feature = "gpu")]
 pub use craft_gpu as gpu;
+#[cfg(feature = "gpu-device")]
+pub use craft_gpu_device as gpu_device;
 #[cfg(feature = "gpu-null")]
 pub use craft_gpu_null as gpu_null;
 #[cfg(feature = "gpu-providers")]
@@ -331,6 +333,8 @@ pub use craft_review as review;
 pub use craft_rtf as rtf;
 #[cfg(feature = "sbs")]
 pub use craft_sbs as sbs;
+#[cfg(feature = "scopes")]
+pub use craft_scopes as scopes;
 #[cfg(feature = "score")]
 pub use craft_score as score;
 #[cfg(feature = "scraft-format")]
@@ -339,6 +343,8 @@ pub use craft_scraft_format as scraft_format;
 pub use craft_settings as settings;
 #[cfg(feature = "sf2")]
 pub use craft_sf2 as sf2;
+#[cfg(feature = "shared-vec")]
+pub use craft_shared_vec as shared_vec;
 #[cfg(feature = "sheet")]
 pub use craft_sheet as sheet;
 #[cfg(feature = "shx")]
