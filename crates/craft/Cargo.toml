@@ -706,6 +706,8 @@ pages = ["dep:craft-pages", "keymap", "text"]
 palette = ["dep:craft-palette"]
 
 pbr = ["dep:craft-pbr"]
+pbr-materialx = ["pbr", "craft-pbr/materialx"]
+pbr-mesh = ["pbr", "craft-pbr/mesh"]
 pbr-parallel = ["pbr", "craft-pbr/parallel"]
 
 pcap = ["dep:craft-pcap"]

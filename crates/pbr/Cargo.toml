@@ -10,16 +10,25 @@ repository.workspace = true
 [features]
 default = []
 parallel = ["dep:rayon"]
+# The conversion from craft-mesh's glTF metallic-roughness material.
+mesh = ["dep:craft-mesh"]
+# The conversion from craft-materialx's resolved shader inputs.
+materialx = ["dep:craft-materialx"]
 
 [lints]
 workspace = true
 
 [dependencies]
+craft-materialx = { workspace = true, optional = true }
+craft-mesh = { path = "../mesh", default-features = false, optional = true }
 craft-texture = { workspace = true }
 rayon = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+craft-materialx = { workspace = true }
+craft-mesh = { path = "../mesh", default-features = false }
+craft-pbr = { path = ".", features = ["parallel", "mesh", "materialx"] }
 # The differential tests run verbatim copies of the apps' previous code, which uses glam and rayon.
 glam = "0.30"
 # Parses and validates the WGSL text of `SHADE_WGSL`.

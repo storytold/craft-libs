@@ -109,8 +109,47 @@ It has no UI, does no file or network I/O and has no `unsafe` code.
   `PbrError::BadDirection`.
   After size and byte checks pass, a filtering work count above `u64::MAX` returns
   `PbrError::BadOption`, including when `max_work` is `u64::MAX`. `hammersley` returns coordinates in `0..1`.
-- **Features.** `parallel` computes rows on several threads with rayon. The default build is
-  serial and builds for `wasm32-unknown-unknown`. Results are the same either way.
+- **Surfaces.** A `Surface` holds a `Material` and the state a renderer applies around it: alpha
+  and `AlphaMode`, linear emission, the double-sided and unlit flags, optional `Clearcoat` and
+  `Sheen` layers, `TextureBinding`s (the image or file, UV set, wrap modes, UV transform, encoding
+  and a scale) and `other_inputs`. Textures are not loaded. `try_direct` shades only the
+  `Material`; the layers, textures and other inputs are kept for a renderer that shades them, and
+  an unlit surface shows its base color without lighting.
+- **Conversions.** `try_from_mesh` (feature `mesh`) converts a `craft_mesh::Material` and
+  `try_from_materialx` (feature `materialx`) converts the `craft_materialx::StrictMaterial` that
+  `Document::read_material_strict` reads. Each returns
+  a `Conversion`: the `Surface` and a `ConversionReport` that lists what was kept without being
+  shaded, what was approximated and how, what was dropped and why, and the MaterialX reader's
+  warnings. No value is clamped: one that is not finite, is out of its range or has the wrong
+  number of components gives a `ConvertError` naming the source field.
+  - From craft-mesh, the glTF 2.0 metallic-roughness material
+    (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#materials>): base color, alpha,
+    metallic, roughness, emissive, alpha mode and cutoff, double-sided and unlit map as they are.
+    Every texture is kept with its UV state; base color, emissive and sheen color textures are
+    sRGB and the others linear. Clearcoat (`KHR_materials_clearcoat`) and sheen
+    (`KHR_materials_sheen`) are kept when on; a clearcoat factor of 0 or a black sheen color turns
+    the layer off, and its textures are dropped.
+  - From MaterialX, OpenPBR Surface, Standard Surface and glTF PBR inputs take the defaults of
+    their node definitions when absent
+    (<https://github.com/AcademySoftwareFoundation/MaterialX/tree/main/libraries/bxdf>). The base
+    color is multiplied by the base weight, the specular weight becomes the weight times
+    `((ior − 1) / (ior + 1))² / 0.04` (at most `MAX_SPECULAR`), emission is the color times its
+    strength, and the coat, fuzz or sheen become the layers. Color constants are decoded to linear
+    Rec.709 from the color space in effect (`srgb_texture`, `srgb_rec709_scene`, the Rec.709
+    gamma spaces, `lin_rec709`, `lin_rec709_scene`, `data`); another color space is an error. An
+    image becomes a texture binding and the core holds 1 times any weight in its place. A coat or
+    sheen roughness image binds as `ClearcoatRoughnessFirst` or `SheenRoughnessFirst`, which read
+    the first channel; the glTF bindings `ClearcoatRoughness` and `SheenRoughness` read G and A.
+    Tangent-space normal textures require an image connected through a `normalmap` node.
+    Direct world-space normal images are dropped with a report entry. Literal normal-map
+    inputs and authored normal-map frames are unsupported and reported. Authored `constant`,
+    `clamp`, and `mirror` image addressing modes are also reported. Other inputs of the shader's
+    table are kept in `other_inputs`.
+- **Features.** `parallel` computes rows on several threads with rayon. `mesh` and `materialx`
+  add the conversions and depend on craft-mesh and craft-materialx. The default build has none of
+  them, is serial and builds for `wasm32-unknown-unknown`, as do `mesh` and `materialx`. Results
+  are the same either way.
+  The `craft` facade forwards the conversion features as `pbr-mesh` and `pbr-materialx`.
 
 On a 256 × 128 source, the default `try_prefilter` evaluates 1,396,736 samples (10,912 output
 pixels in levels 1 to 5, 128 samples each).
