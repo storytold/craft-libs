@@ -1,5 +1,8 @@
 //! Hold shortcuts in the dialog: the switch, the Hold column, and what Cancel and OK leave of the setting.
 
+use std::sync::Arc;
+
+use craft_host::{AppInfo, Host};
 use craft_keymap::{Binding, CommandRef, Platform, Policy};
 use craft_menu::shortcuts::{HoldSetting, Outcome};
 use craft_ui::contract::Role;
@@ -11,6 +14,15 @@ use super::fixture::{self, Rig};
 /// The setting a trial starts from, at a delay inside its range.
 fn setting(on: bool) -> HoldSetting {
     HoldSetting::new(on, 0.5, 0.2..=2.0)
+}
+
+/// A host whose numbers are written as in `en-US`, so the delay field reads `1.5` whatever the region of the
+/// machine that runs the trial.
+fn decimal_point() -> Arc<Host> {
+    let (i18n, problems) = craft_i18n::I18n::from_owned(std::iter::empty(), &[]);
+    assert!(problems.is_empty(), "{problems:?}");
+    i18n.set_format(craft_i18n::Format::from_tag("en-US"));
+    Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).i18n(Arc::new(i18n)).build())
 }
 
 /// The hold texts the keymap's overrides hold for the command `key`.
@@ -27,6 +39,7 @@ fn says(rig: &Rig, part: &str) -> bool {
 #[trial]
 fn the_hold_column_records_a_hold_and_cancel_restores_the_setting() {
     let mut rig = Rig::with_holds(fixture::keymap(Platform::Mac), fixture::options(), setting(false));
+    rig.fixture.host(decimal_point());
     assert!(!rig.has("Add a hold shortcut to Save"), "no Hold column while holds are off");
 
     rig.click("Hold Shortcuts");
