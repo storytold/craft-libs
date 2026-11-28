@@ -269,6 +269,28 @@ impl Playlist {
     }
 }
 
+/// A MIDI track's clip destination. Channels are numbered 1–16.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct MidiDestination {
+    pub track: TrackId,
+    pub channel: u8,
+}
+
+fn deserialize_midi_destination<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<MidiDestination>, D::Error> {
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct SavedDestination {
+        track: TrackId,
+        channel: serde_json::Number,
+    }
+
+    Ok(Option::<SavedDestination>::deserialize(deserializer)?.and_then(|saved| {
+        let channel = saved.channel.as_u64().filter(|channel| (1..=16).contains(channel))?;
+        Some(MidiDestination { track: saved.track, channel: channel as u8 })
+    }))
+}
+
 /// A track.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Track {
@@ -300,6 +322,9 @@ pub struct Track {
     /// Instrument plugin (instrument tracks) — registry id.
     #[serde(default)]
     pub instrument: Option<crate::Insert>,
+    /// Route MIDI clips to another track's instrument.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_midi_destination")]
+    pub midi_destination: Option<MidiDestination>,
     /// Ticks (musical) or samples timebase for clips.
     #[serde(default)]
     pub ticks_timebase: bool,
@@ -345,6 +370,7 @@ impl Track {
             folder: None,
             folder_open: true,
             instrument: None,
+            midi_destination: None,
             ticks_timebase: kind.is_midi(),
             elastic: None,
             pinned: false,
@@ -392,6 +418,19 @@ impl Track {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn midi_destination_is_optional_and_round_trips() {
+        let mut track = Track::new(TrackId(1), "Bass", TrackKind::Midi, ChannelFormat::Mono, [0; 3]);
+        let legacy = serde_json::to_value(&track).unwrap();
+        assert!(legacy.get("midi_destination").is_none());
+        assert_eq!(serde_json::from_value::<Track>(legacy).unwrap().midi_destination, None);
+        let route = MidiDestination { track: TrackId(4), channel: 2 };
+        track.midi_destination = Some(route);
+        let json = serde_json::to_value(&track).unwrap();
+        assert_eq!(json["midi_destination"], serde_json::json!({"track": 4, "channel": 2}));
+        assert_eq!(serde_json::from_value::<Track>(json).unwrap().midi_destination, Some(route));
+    }
 
     #[test]
     fn legacy_fit_string_loads_as_default_height() {
