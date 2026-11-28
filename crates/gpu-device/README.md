@@ -80,7 +80,8 @@ Licensed under MIT OR Apache-2.0.
   `Device::poll` raises on a lost device and record the loss.
 - wgpu keeps one device-lost callback per device, and a later `set_device_lost_callback`
   replaces the one `DeviceHealth::watch` set. A `craft-gpu` context on a watched device reads
-  `DeviceHealth::device_status` instead of setting its own callback.
+  `DeviceHealth::device_status` instead of setting its own callback, as `craft-gpu-wgpu`'s
+  `WgpuContext` does.
 - After an out-of-memory error, polls and waits keep running, so staging memory is reclaimed.
   The app reads `DeviceHealth::out_of_memory_count` when it handles the error, frees memory, and
   passes the count to `DeviceHealth::clear_out_of_memory`. The device is then healthy again,

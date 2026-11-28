@@ -245,13 +245,14 @@ pub fn intel_gen9_to_gen11(device: u32) -> bool {
 
 /// Whether `c` is an Intel Gen 9 to Gen 11 integrated GPU listed through Intel's Windows Vulkan
 /// driver ([`intel_gen9_to_gen11`]). Mesa's Vulkan driver for the same GPUs on Linux reports a
-/// driver name with "Mesa" in it and is not included.
+/// driver name or driver information with "Mesa" in it and is not included.
 pub(crate) fn intel_vulkan_crashes(c: &Candidate) -> bool {
     c.backend == Backend::Vulkan
         && c.device_type == DeviceType::IntegratedGpu
         && c.vendor == INTEL
         && intel_gen9_to_gen11(c.device)
         && !c.driver.to_ascii_lowercase().contains("mesa")
+        && !c.driver_info.to_ascii_lowercase().contains("mesa")
 }
 
 /// For an Intel Gen 9 to Gen 11 integrated GPU listed through Intel's Windows Vulkan driver, the
@@ -503,6 +504,16 @@ pub(crate) mod tests {
         let discrete: Vec<Candidate> =
             uhd_630().into_iter().map(|c| if c.vendor == INTEL { Candidate { device_type: DiscreteGpu, ..c } } else { c }).collect();
         assert_eq!(choose(&discrete, HighPerformance), Some(0));
+    }
+
+    #[test]
+    fn mesa_driver_info_keeps_dozen_eligible() {
+        let adapters = vec![gpu("Intel(R) UHD Graphics 630", Vulkan, IntegratedGpu, INTEL, 0x3e91, "", "Dozen", "Mesa 26.1.0", 44)];
+        for power in POWERS {
+            assert_eq!(choose(&adapters, power), Some(0));
+        }
+        assert!(!intel_vulkan_crashes(&adapters[0]));
+        assert!(intel_vulkan_crashes(&uhd_630()[0]), "the Intel Windows driver remains excluded");
     }
 
     #[test]

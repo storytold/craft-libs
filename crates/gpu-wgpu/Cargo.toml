@@ -12,20 +12,20 @@ workspace = true
 [dependencies]
 craft-gpu = { workspace = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wgpu = { workspace = true, features = ["webgpu"] }
-
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Chooses and opens the device, and watches it for a loss (`adapter-probe`).
+craft-gpu-device = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
-wgpu = { workspace = true }
+# Native code uses wgpu only with `adapter-probe`.
+wgpu = { workspace = true, optional = true }
 
 [features]
 default = []
-adapter-probe = ["dep:pollster"]
-native-vulkan = ["wgpu/vulkan"]
-native-dx12 = ["wgpu/dx12"]
-native-metal = ["wgpu/metal"]
-native-gles = ["wgpu/gles"]
+adapter-probe = ["dep:pollster", "dep:craft-gpu-device", "dep:wgpu"]
+native-vulkan = ["wgpu?/vulkan"]
+native-dx12 = ["wgpu?/dx12"]
+native-metal = ["wgpu?/metal"]
+native-gles = ["wgpu?/gles"]
 
 [dev-dependencies]
 pollster = { workspace = true }
@@ -33,3 +33,7 @@ pollster = { workspace = true }
 # providers against a real WgpuContext, not just craft-gpu-null, per RFC-0022 acceptance
 # requirement 2. Dev-only: no cycle (craft-gpu-providers never depends on craft-gpu-wgpu).
 craft-gpu-providers = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# The noop backend opens devices without a GPU in the tests.
+wgpu = { workspace = true, features = ["noop"] }

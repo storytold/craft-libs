@@ -1,10 +1,14 @@
 //! wgpu-backed [`GpuContext`].
 //!
 //! WebGPU on `wasm32`; native APIs when backend features are enabled. With the `adapter-probe`
-//! feature (native only, pollster) and at least one `native-*` backend feature,
-//! [`WgpuContext::new`] requests a real device and builds [`DeviceCaps`] from what that device
-//! actually enabled (`Device::limits()` / `Device::features()`), never from the adapter's
-//! advertised maximum. Without a usable adapter (the features above are off, no GPU is present,
+//! feature (native only), [`WgpuContext::new`] opens a real device through `craft-gpu-device`
+//! (its adapter choice for `Preference::Auto`, its driver corrections and its fallback order) and
+//! builds [`DeviceCaps`] from what that device actually enabled (`Device::limits()` /
+//! `Device::features()`), never from the adapter's advertised maximum.
+//! With the native `adapter-probe` feature, `WgpuContext::from_opened` and `WgpuContext::with_device`
+//! take a device the caller opened.
+//! A loss is read from the device's `craft_gpu_device::DeviceHealth`, which owns the device's
+//! device-lost callback. Without a usable adapter (`adapter-probe` is off, no GPU is present,
 //! or on `wasm32` where real device creation needs the async worker-init path noted in
 //! `docs/gpu-backends.md`), the context degrades to the same in-memory staging behavior as
 //! `craft_gpu_null::NullContext` (not a dependency of this crate; named here only for context);
@@ -32,29 +36,17 @@ fn probe_fallback(backend_name: &str, device_name: &str) -> DeviceCaps {
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
 fn probe_caps_native() -> DeviceCaps {
-    let instance = native::instance();
-    let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) {
-        Ok(adapter) => adapter,
-        Err(_) => return probe_fallback("wgpu", "no-adapter"),
-    };
-    let info = adapter.get_info();
-    let limits = adapter.limits();
-    DeviceCaps {
-        backend_name: format!("{:?}", info.backend),
-        device_name: info.name,
-        max_storage_buffer_binding_size: limits.max_storage_buffer_binding_size,
-        max_buffer_size: limits.max_buffer_size,
-        max_texture_dimension_2d: limits.max_texture_dimension_2d,
-        features: Vec::new(),
-        vendor_id: info.vendor,
-        software: info.device_type == wgpu::DeviceType::Cpu,
-    }
+    native::probe_caps_on(&native::instance())
 }
 
 /// Adapter-advertised limits, when an adapter is available; otherwise conservative defaults. This
 /// is the quick, device-free probe for UI surfaces that want a number before any context exists
 /// (Settings). It is advisory only: these are the adapter's maximums, not a device's granted
-/// ones. [`WgpuContext::caps`] is the authoritative, device-truth source once a context exists.
+/// ones. With `adapter-probe` it reports the adapter `craft_gpu_device::pick` chooses for
+/// `Preference::Auto` without opening a device on it; when a device then fails to open there,
+/// [`WgpuContext::new`] opens the next adapter in `craft_gpu_device::ranked` order, or a software
+/// one, which this probe does not report. [`WgpuContext::caps`] is the authoritative, device-truth
+/// source once a context exists.
 pub fn probe_caps() -> DeviceCaps {
     #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
     {
@@ -74,11 +66,10 @@ pub fn probe_caps() -> DeviceCaps {
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
 mod native {
-    use std::sync::{Arc, Mutex};
+    use craft_gpu::DeviceCaps;
+    use craft_gpu_device::{Capabilities, DeviceHealth, Opened, Preference, Request};
 
-    use craft_gpu::{DeviceCaps, GpuFault};
-
-    use crate::{Backing, DeviceBacking};
+    use crate::{Backing, DeviceBacking, probe_fallback};
 
     /// Features this context asks a device for. No provider dispatches a real WGSL job on wgpu
     /// yet (`craft-gpu-providers` ships CPU stand-ins, by design, until that lands); extend this
@@ -86,12 +77,12 @@ mod native {
     /// [`create_device`].
     const DESIRED_FEATURES: wgpu::Features = wgpu::Features::empty();
 
-    /// An instance over whichever native backends were compiled in (`native-vulkan`,
-    /// `native-dx12`, `native-metal`, `native-gles`), honoring `WGPU_BACKEND` when set, so the
+    /// An instance over `craft_gpu_device::native_descriptor`'s backends (Vulkan, Metal and
+    /// DirectX 12, plus OpenGL except on Windows), honoring `WGPU_BACKEND` when set, so the
     /// same build can be pointed at a software Vulkan adapter (lavapipe/llvmpipe) in a local container run or a CI lane.
-    /// `new_without_display_handle` because this context never has a window (no surface is ever
-    /// requested); FilmCraft's own off-screen export device uses the same constructor for the
-    /// same reason (`filmcraft-gpu`'s `export_renderer.rs`, see `docs/gpu-backends.md`).
+    /// The descriptor has no display handle because this context never has a window (no surface
+    /// is ever requested); FilmCraft's own off-screen export device uses the same constructor for
+    /// the same reason (`filmcraft-gpu`'s `export_renderer.rs`, see `docs/gpu-backends.md`).
     ///
     /// The process holds one instance, made on the first call and returned by every later one,
     /// so `WGPU_BACKEND` is read once. Every context and every probe requests its adapter from
@@ -102,7 +93,7 @@ mod native {
         static SHARED: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
         SHARED
             .get_or_init(|| {
-                let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+                let mut desc = craft_gpu_device::native_descriptor();
                 if let Some(backends) = wgpu::Backends::from_env() {
                     desc.backends = backends;
                 }
@@ -111,46 +102,42 @@ mod native {
             .clone()
     }
 
-    /// Request a real device. `None` on the defined no-adapter path (no usable adapter): the
-    /// caller degrades to the staging backing, identical in shape to `craft-gpu-null`.
+    /// Open a real device on `instance` with `craft-gpu-device`'s choice for
+    /// `Preference::Auto`. `None` on the defined no-adapter path (no usable adapter): the caller
+    /// degrades to the staging backing, identical in shape to `craft-gpu-null`.
     ///
-    /// Never panics: `required_features` is intersected with what the adapter actually
-    /// advertises, and `required_limits` is set to the adapter's own limits (never more), so
+    /// Never panics: `craft_gpu_device::open` asks only for the features from
+    /// [`DESIRED_FEATURES`] the adapter has, and for the adapter's own limits (never more), so
     /// `request_device`'s documented panics ("features/limits not supported by this adapter")
     /// cannot trigger here.
+    pub(crate) fn create_device_on(instance: &wgpu::Instance) -> Option<(DeviceCaps, Backing)> {
+        let request = Request { label: Some("craft-gpu-wgpu"), optional_features: DESIRED_FEATURES, ..Default::default() };
+        let opened = craft_gpu_device::open(instance, None, &Preference::Auto, &request).ok()?;
+        Some(backing_of(&opened))
+    }
+
     pub(crate) fn create_device() -> Option<(DeviceCaps, Backing)> {
-        let instance = instance();
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
-        let features = DESIRED_FEATURES & adapter.features();
-        let limits = adapter.limits();
-        let desc =
-            wgpu::DeviceDescriptor { label: Some("craft-gpu-wgpu"), required_features: features, required_limits: limits, ..Default::default() };
-        let (device, queue) = pollster::block_on(adapter.request_device(&desc)).ok()?;
+        create_device_on(&instance())
+    }
 
-        let lost = Arc::new(Mutex::new(None));
-        {
-            let lost = Arc::clone(&lost);
-            device.set_device_lost_callback(move |reason, message| {
-                if let Ok(mut slot) = lost.lock() {
-                    *slot = Some(GpuFault::DeviceLost(format!("{reason:?}: {message}")));
-                }
-            });
+    pub(crate) fn backing_of(opened: &Opened) -> (DeviceCaps, Backing) {
+        backing_with(opened.device.clone(), opened.queue.clone(), opened.health.clone())
+    }
+
+    /// The device's own caps, and a backing that reads the loss from `health`.
+    pub(crate) fn backing_with(device: wgpu::Device, queue: wgpu::Queue, health: DeviceHealth) -> (DeviceCaps, Backing) {
+        let caps = craft_gpu_device::device_caps(&device);
+        (caps, Backing::Device(DeviceBacking { device, queue, buffers: Vec::new(), health, pending: Vec::new() }))
+    }
+
+    /// The adapter `craft-gpu-device` would open for `Preference::Auto`, with its advertised
+    /// limits and no features (no device was opened to grant any).
+    pub(crate) fn probe_caps_on(instance: &wgpu::Instance) -> DeviceCaps {
+        let (adapters, _) = craft_gpu_device::list(instance, None);
+        match craft_gpu_device::pick(&adapters, None, &Preference::Auto) {
+            Ok((adapter, _)) => DeviceCaps { features: Vec::new(), ..Capabilities::of_adapter(&adapter).into_device_caps() },
+            Err(_) => probe_fallback("wgpu", "no-adapter"),
         }
-
-        let info = device.adapter_info();
-        let device_limits = device.limits();
-        let caps = DeviceCaps {
-            backend_name: format!("{:?}", info.backend),
-            device_name: info.name,
-            max_storage_buffer_binding_size: device_limits.max_storage_buffer_binding_size,
-            max_buffer_size: device_limits.max_buffer_size,
-            max_texture_dimension_2d: device_limits.max_texture_dimension_2d,
-            features: device.features().iter_names().map(|(name, _)| name.to_string()).collect(),
-            vendor_id: info.vendor,
-            software: info.device_type == wgpu::DeviceType::Cpu,
-        };
-        let backing = Backing::Device(DeviceBacking { device, queue, buffers: Vec::new(), lost, pending: Vec::new() });
-        Some((caps, backing))
     }
 }
 
@@ -180,9 +167,9 @@ struct DeviceBacking {
     /// matching the staging path and `craft-gpu-null` exactly, with no padding visible. `None`
     /// once freed: see the `Backing::Staging` doc for why the slot stays rather than shifting.
     buffers: Vec<Option<(wgpu::Buffer, u64)>>,
-    /// Set by the device-lost callback registered in [`native::create_device`]; checked before
-    /// every call that would otherwise touch the (now invalid) device.
-    lost: std::sync::Arc<std::sync::Mutex<Option<GpuFault>>>,
+    /// The device's health from `craft-gpu-device`, which holds its device-lost callback; its
+    /// loss is checked before every call that would otherwise touch the (now invalid) device.
+    health: craft_gpu_device::DeviceHealth,
     pending: Vec<PendingRead>,
 }
 
@@ -262,6 +249,37 @@ impl WgpuContext {
         Self { caps, worker_kind, backing: Backing::Staging(Vec::new()), next_request: 0, ready: Vec::new() }
     }
 
+    /// A context on a device `craft_gpu_device::open` (or `open_async`) opened, sharing its
+    /// device, queue and [`DeviceHealth`](craft_gpu_device::DeviceHealth). The caps are the
+    /// device's own (`Opened::device_caps`). A loss the health records, from the device-lost
+    /// callback it set or from any other user of the device, is this context's
+    /// `GpuFault::DeviceLost`.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
+    pub fn from_opened(worker_kind: WorkerKind, opened: &craft_gpu_device::Opened) -> Self {
+        let (caps, backing) = native::backing_of(opened);
+        Self { caps, worker_kind, backing, next_request: 0, ready: Vec::new() }
+    }
+
+    /// A context on a device the caller opened, such as the one egui-wgpu's render state holds.
+    /// `health` is the device's [`DeviceHealth::watch`](craft_gpu_device::DeviceHealth::watch);
+    /// wgpu keeps one device-lost callback per device, so this context sets none of its own. The
+    /// caps are the device's own: the features and limits it was opened with, whatever they are.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
+    pub fn with_device(worker_kind: WorkerKind, device: wgpu::Device, queue: wgpu::Queue, health: craft_gpu_device::DeviceHealth) -> Self {
+        let (caps, backing) = native::backing_with(device, queue, health);
+        Self { caps, worker_kind, backing, next_request: 0, ready: Vec::new() }
+    }
+
+    /// The health of this context's device, when it has one: share it with the rest of the app,
+    /// and with `craft_gpu_device::Recovery` after a loss.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
+    pub fn health(&self) -> Option<&craft_gpu_device::DeviceHealth> {
+        match &self.backing {
+            Backing::Device(d) => Some(&d.health),
+            Backing::Staging(_) => None,
+        }
+    }
+
     /// True when this context holds a real device (`request_device` succeeded), false on the
     /// staging/no-adapter path. Settings UI can use this to show "no GPU" honestly instead of
     /// implying a device that was never created; tests use it to skip rather than fail when the
@@ -283,7 +301,7 @@ impl WgpuContext {
     pub fn is_device_lost(&self) -> bool {
         #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
         if let Backing::Device(d) = &self.backing {
-            return d.lost.lock().map(|g| g.is_some()).unwrap_or(false);
+            return d.health.device_status().is_err();
         }
         false
     }
@@ -291,7 +309,44 @@ impl WgpuContext {
     fn take_lost_fault(&self) -> Option<GpuFault> {
         #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
         if let Backing::Device(d) = &self.backing {
-            return d.lost.lock().ok().and_then(|g| g.clone());
+            return d.health.device_status().err();
+        }
+        None
+    }
+
+    /// `read_buffer`'s wait for the device between polls, for the work submitted so far.
+    /// `DeviceHealth::wait` does not wait once the device reported an error other than out of
+    /// memory, stops after its current 100 ms slice when another user of the device records
+    /// such an error, and fails when its poll fails. Then the read of `request` is dropped and
+    /// fails with that error, instead of polling in a loop until a map that may never complete;
+    /// a loss is left to the next `poll_reads`, which fails every pending read with it.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg_attr(not(feature = "adapter-probe"), allow(unused_variables, clippy::unused_self))]
+    fn wait_between_reads(&mut self, request: ReadRequest) -> Option<GpuFault> {
+        #[cfg(feature = "adapter-probe")]
+        if let Backing::Device(d) = &mut self.backing
+            // a recorded fault other than out of memory: no empty submission to wait on
+            && (d.health.fault().is_some_and(|f| !f.is_out_of_memory()) || !d.health.wait(&d.device, d.queue.submit([])))
+        {
+            d.health.probe(&d.device);
+            if d.health.device_status().is_err() {
+                return None;
+            }
+            d.pending.retain(|p| p.request != request);
+            return Some(
+                d.health.fault().map(GpuFault::from).unwrap_or_else(|| GpuFault::Operation("read_buffer: waiting for the device failed".into())),
+            );
+        }
+        None
+    }
+
+    /// Why no new work may go to the device: a loss as `GpuFault::DeviceLost`, and any other
+    /// fault its health recorded (an uncaptured error, or an out-of-memory error the app has not
+    /// cleared with `DeviceHealth::clear_out_of_memory`) as `GpuFault::Operation`.
+    fn take_work_fault(&self) -> Option<GpuFault> {
+        #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
+        if let Backing::Device(d) = &self.backing {
+            return d.health.fault().map(GpuFault::from);
         }
         None
     }
@@ -308,7 +363,7 @@ impl GpuContext for WgpuContext {
 
     #[cfg_attr(not(all(not(target_arch = "wasm32"), feature = "adapter-probe")), allow(unused_variables))]
     fn upload_buffer(&mut self, label: &str, bytes: &[u8]) -> Result<HandleId, GpuFault> {
-        if let Some(fault) = self.take_lost_fault() {
+        if let Some(fault) = self.take_work_fault() {
             return Err(fault);
         }
         match &mut self.backing {
@@ -345,6 +400,8 @@ impl GpuContext for WgpuContext {
                     mapped_at_creation: false,
                 });
                 if let Some(err) = pollster::block_on(create_scope.pop()) {
+                    // The scope kept it from the device's health; every user of the device sees it.
+                    d.health.caught(&d.device, &err);
                     return Err(GpuFault::Operation(format!("upload_buffer: device reported an allocation error creating the buffer: {err}")));
                 }
                 // write_buffer makes its own staging allocation to carry `bytes` to the device, a
@@ -367,6 +424,7 @@ impl GpuContext for WgpuContext {
                 // is still a submission as far as that flush is concerned, so it is enough.
                 d.queue.submit(std::iter::empty());
                 if let Some(err) = pollster::block_on(write_scope.pop()) {
+                    d.health.caught(&d.device, &err);
                     return Err(GpuFault::Operation(format!("upload_buffer: device reported an allocation error writing the buffer: {err}")));
                 }
                 let id = u32::try_from(d.buffers.len()).map_err(|_| GpuFault::Operation("too many buffers".into()))?;
@@ -394,7 +452,7 @@ impl GpuContext for WgpuContext {
     }
 
     fn request_read(&mut self, handle: HandleId) -> Result<ReadRequest, GpuFault> {
-        if let Some(fault) = self.take_lost_fault() {
+        if let Some(fault) = self.take_work_fault() {
             return Err(fault);
         }
         match &mut self.backing {
@@ -443,6 +501,7 @@ impl GpuContext for WgpuContext {
                     mapped_at_creation: false,
                 });
                 if let Some(err) = pollster::block_on(create_scope.pop()) {
+                    d.health.caught(&d.device, &err);
                     return Err(GpuFault::Operation(format!("request_read: device reported an allocation error creating the staging buffer: {err}")));
                 }
                 // The copy and its submission get their own scope rather than reusing the one
@@ -452,6 +511,7 @@ impl GpuContext for WgpuContext {
                 encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, copy_len);
                 d.queue.submit(Some(encoder.finish()));
                 if let Some(err) = pollster::block_on(copy_scope.pop()) {
+                    d.health.caught(&d.device, &err);
                     return Err(GpuFault::Operation(format!("request_read: device reported an allocation error copying the buffer: {err}")));
                 }
                 let state = std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -506,11 +566,14 @@ impl GpuContext for WgpuContext {
         let mut outcomes = std::mem::take(&mut self.ready);
         #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
         if let Backing::Device(d) = &mut self.backing {
-            if let Some(fault) = d.lost.lock().ok().and_then(|g| g.clone()) {
+            // A non-blocking poll that also runs after an error other than a loss was recorded,
+            // and records a loss instead of panicking when the device is gone.
+            d.health.probe(&d.device);
+            let fault = d.health.polling_fault().map(GpuFault::from);
+            if let Some(fault) = fault {
                 outcomes.extend(d.pending.drain(..).map(|p| ReadOutcome { request: p.request, handle: p.handle, result: Err(fault.clone()) }));
                 return outcomes;
             }
-            let _ = d.device.poll(wgpu::PollType::Poll);
             let mut remaining = Vec::with_capacity(d.pending.len());
             for pending in d.pending.drain(..) {
                 let is_ready = pending.state.lock().map(|g| g.is_some()).unwrap_or(false);
@@ -547,9 +610,8 @@ impl GpuContext for WgpuContext {
             // Block on the GPU between polls instead of busy-spinning the CPU. A no-op when
             // `backing` is `Staging` (nothing to wait for; the request already resolved above)
             // or when wgpu is itself WebGPU under the hood, which self-polls.
-            #[cfg(feature = "adapter-probe")]
-            if let Backing::Device(d) = &self.backing {
-                let _ = d.device.poll(wgpu::PollType::wait_indefinitely());
+            if let Some(fault) = self.wait_between_reads(request) {
+                return Err(fault);
             }
         }
     }

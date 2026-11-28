@@ -2956,6 +2956,7 @@ name = "craft-gpu-wgpu"
 version = "0.1.0"
 dependencies = [
  "craft-gpu",
+ "craft-gpu-device",
  "craft-gpu-providers",
  "pollster 0.4.0",
  "wgpu",

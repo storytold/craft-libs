@@ -377,3 +377,168 @@ fn real_device_empty_buffer_and_interleaved_read_buffer_behave_like_staging() {
     }
     assert!(seen_a, "a's completion must still arrive through poll_reads after b's read_buffer");
 }
+
+/// Devices from `craft-gpu-device`, on wgpu's noop backend, so these run without a GPU.
+#[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
+mod device_from_craft_gpu_device {
+    use craft_gpu::{GpuContext, GpuFault, WorkerKind};
+    use craft_gpu_device::{DeviceHealth, Fault, Preference, Request};
+
+    use crate::{Backing, WgpuContext, native};
+
+    /// An instance whose only adapter is wgpu's noop one, which wgpu 30 lists as a software
+    /// adapter.
+    fn noop() -> wgpu::Instance {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::NOOP;
+        desc.backend_options.noop = wgpu::NoopBackendOptions { enable: true, ..Default::default() };
+        wgpu::Instance::new(desc)
+    }
+
+    fn opened() -> craft_gpu_device::Opened {
+        craft_gpu_device::open(&noop(), None, &Preference::Software, &Request::default()).expect("the noop adapter opens")
+    }
+
+    #[test]
+    fn the_default_device_is_the_one_craft_gpu_device_opens() {
+        let (caps, backing) = native::create_device_on(&noop()).expect("the noop adapter opens");
+        let Backing::Device(d) = &backing else { panic!("a device backing") };
+        assert_eq!(caps, craft_gpu_device::device_caps(&d.device));
+        assert!(caps.software, "{caps:?}");
+        assert!(d.health.is_ok() && d.health.device_status().is_ok());
+        // no adapter at all: the staging path
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::NOOP;
+        assert!(native::create_device_on(&wgpu::Instance::new(desc)).is_none());
+    }
+
+    #[test]
+    fn the_probe_reports_the_adapter_craft_gpu_device_picks() {
+        let opened = opened();
+        let caps = native::probe_caps_on(&noop());
+        assert_eq!(caps.device_name, opened.candidate.name);
+        assert!(caps.software && caps.features.is_empty(), "{caps:?}");
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::NOOP;
+        assert_eq!(native::probe_caps_on(&wgpu::Instance::new(desc)).device_name, "no-adapter");
+    }
+
+    #[test]
+    fn a_context_on_an_opened_device_reads_the_loss_from_its_health() {
+        let opened = opened();
+        let mut ctx = WgpuContext::from_opened(WorkerKind::Main, &opened);
+        assert!(ctx.has_device());
+        assert_eq!(ctx.caps(), opened.device_caps());
+        assert_eq!(ctx.device_status(), Ok(()));
+        // a loss another user of the device records is this context's loss too
+        opened.health.mark(Fault::Lost("the driver reset the GPU".into()));
+        assert!(ctx.health().is_some_and(|h| h.device_status().is_err()));
+        assert_eq!(ctx.device_status(), Err(GpuFault::DeviceLost("the driver reset the GPU".into())));
+        assert!(ctx.is_device_lost());
+        assert!(matches!(ctx.upload_buffer("after-loss", b"x"), Err(GpuFault::DeviceLost(_))));
+    }
+
+    #[test]
+    fn a_destroyed_device_is_lost_through_the_health_that_watches_it() {
+        let opened = opened();
+        let health = DeviceHealth::watch(&opened.device);
+        let mut ctx = WgpuContext::with_device(WorkerKind::DedicatedWorker, opened.device.clone(), opened.queue.clone(), health.clone());
+        assert_eq!(ctx.caps(), opened.device_caps());
+        opened.device.destroy();
+        let _ = ctx.poll_reads();
+        assert!(health.device_status().is_err(), "{health:?}");
+        assert!(matches!(ctx.device_status(), Err(GpuFault::DeviceLost(_))));
+        assert!(matches!(ctx.request_read(craft_gpu::HandleId(0)), Err(GpuFault::DeviceLost(_))));
+    }
+
+    #[test]
+    fn no_work_goes_to_a_device_whose_health_recorded_an_error() {
+        let opened = opened();
+        let mut ctx = WgpuContext::from_opened(WorkerKind::Main, &opened);
+        let handle = ctx.upload_buffer("before", b"abcd").expect("upload on a healthy device");
+        // an out-of-memory error stops new work until the app clears it
+        opened.health.mark(Fault::Error(craft_gpu_device::OUT_OF_MEMORY.into()));
+        assert!(matches!(ctx.upload_buffer("oom", b"x"), Err(GpuFault::Operation(_))));
+        assert!(matches!(ctx.request_read(handle), Err(GpuFault::Operation(_))));
+        assert_eq!(ctx.device_status(), Ok(()), "only a loss is a device_status fault");
+        ctx.free_buffer(handle);
+        opened.health.clear_out_of_memory(opened.health.out_of_memory_count());
+        let handle = ctx.upload_buffer("after", b"abcd").expect("upload once the error is cleared");
+        assert_eq!(ctx.buffer_len(handle), Ok(4));
+        // another error stops it for good
+        opened.health.mark(Fault::Error("Validation Error".into()));
+        assert_eq!(ctx.upload_buffer("validation", b"x"), Err(GpuFault::Operation("Validation Error".into())));
+        assert_eq!(ctx.device_status(), Ok(()));
+    }
+
+    #[test]
+    fn a_read_waiting_when_the_device_reports_an_error_fails_instead_of_polling_forever() {
+        let opened = opened();
+        let mut ctx = WgpuContext::from_opened(WorkerKind::Main, &opened);
+        let handle = ctx.upload_buffer("pending", b"abcd").expect("upload");
+        let request = ctx.request_read(handle).expect("request_read");
+        opened.health.mark(Fault::Error("Validation Error".into()));
+        assert_eq!(ctx.wait_between_reads(request), Some(GpuFault::Operation("Validation Error".into())));
+        let Backing::Device(d) = &ctx.backing else { panic!("a device backing") };
+        assert!(d.pending.iter().all(|p| p.request != request), "the failed read is dropped");
+        // a loss is left to poll_reads, which fails every pending read with it
+        let other = ctx.request_read(handle);
+        assert!(other.is_err());
+        opened.health.mark(Fault::Lost("gone".into()));
+        assert_eq!(ctx.wait_between_reads(request), None);
+    }
+
+    #[test]
+    fn a_staging_context_has_no_health() {
+        let ctx = WgpuContext::with_caps(WorkerKind::Main, craft_gpu::DeviceCaps::default());
+        assert!(ctx.health().is_none());
+    }
+
+    #[test]
+    fn a_pending_read_fails_when_validation_and_out_of_memory_coexist() {
+        for oom_first in [true, false] {
+            let device = opened();
+            let mut ctx = WgpuContext::from_opened(WorkerKind::Main, &device);
+            let handle = ctx.upload_buffer("pending", b"abcd").expect("upload");
+            let request = ctx.request_read(handle).expect("read");
+            let faults = [Fault::Error(craft_gpu_device::OUT_OF_MEMORY.into()), Fault::Error("Validation Error".into())];
+            for index in if oom_first { [0, 1] } else { [1, 0] } {
+                device.health.mark(faults[index].clone());
+            }
+            let outcomes = ctx.poll_reads();
+            assert_eq!(outcomes.len(), 1);
+            assert_eq!(outcomes[0].request, request);
+            assert_eq!(outcomes[0].result, Err(GpuFault::Operation("Validation Error".into())));
+            assert!(ctx.poll_reads().is_empty());
+        }
+    }
+
+    #[test]
+    fn polling_faults_complete_all_pending_reads_once() {
+        let device = opened();
+        let mut ctx = WgpuContext::from_opened(WorkerKind::Main, &device);
+        let handle = ctx.upload_buffer("pending", b"abcd").expect("upload");
+        let first = ctx.request_read(handle).expect("first read");
+        let second = ctx.request_read(handle).expect("second read");
+        device.health.mark(Fault::Error("Validation Error".into()));
+        let outcomes = ctx.poll_reads();
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes.iter().any(|outcome| outcome.request == first));
+        assert!(outcomes.iter().any(|outcome| outcome.request == second));
+        for outcome in outcomes {
+            assert_eq!(outcome.handle, handle);
+            assert_eq!(outcome.result, Err(GpuFault::Operation("Validation Error".into())));
+        }
+        assert!(ctx.poll_reads().is_empty(), "failed requests complete only once");
+
+        let device = opened();
+        let mut ctx = WgpuContext::from_opened(WorkerKind::Main, &device);
+        let handle = ctx.upload_buffer("oom", b"abcd").expect("upload");
+        let request = ctx.request_read(handle).expect("read");
+        device.health.mark(Fault::Error(craft_gpu_device::OUT_OF_MEMORY.into()));
+        let outcomes = ctx.poll_reads();
+        assert!(outcomes.iter().all(|outcome| outcome.request == request && outcome.result.is_ok()));
+        let Backing::Device(backing) = &ctx.backing else { panic!("device backing") };
+        assert_eq!(outcomes.len() + backing.pending.len(), 1, "out of memory does not discard or fail the read");
+    }
+}

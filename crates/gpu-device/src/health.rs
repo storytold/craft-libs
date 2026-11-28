@@ -236,6 +236,11 @@ impl DeviceHealth {
         self.0.error.get().map(|text| Fault::Error(text.clone()))
     }
 
+    /// A recorded device loss or error other than out of memory that stops polls and waits.
+    pub fn polling_fault(&self) -> Option<Fault> {
+        self.0.lost.get().map(|text| Fault::Lost(text.clone())).or_else(|| self.0.error.get().map(|text| Fault::Error(text.clone())))
+    }
+
     /// The device loss in the form of `craft_gpu::GpuContext::device_status`:
     /// [`GpuFault::DeviceLost`](craft_gpu::GpuFault::DeviceLost) once a loss is recorded,
     /// otherwise `Ok`. Other errors are reported by [`fault`](Self::fault). wgpu keeps one
