@@ -36,6 +36,8 @@ fn is_video_fourcc(f: &[u8; 4]) -> bool {
             | b"raw "
             | b"2vuy"
             | b"v210"
+            | b"cvid"
+            | b"CVID"
     )
 }
 
@@ -112,7 +114,8 @@ pub(crate) fn parse_sample_entry(format: FourCc, payload: &[u8], handler: FourCc
         let n = (name[0] as usize).min(31);
         v.compressor_name = String::from_utf8_lossy(&name[1..1 + n]).into_owned();
         v.depth = c.u16()?;
-        let _ctab = c.i16()?;
+        let ctab = c.i16()?;
+        let color_table_bytes = if matches!(f, b"cvid" | b"CVID") && ctab == 0 { parse_qt_color_table(&mut c) } else { None };
         let mut codec = None;
         let mut bitrate = None;
         let mut log_seen = false;
@@ -155,16 +158,7 @@ pub(crate) fn parse_sample_entry(format: FourCc, payload: &[u8], handler: FourCc
                 _ => {}
             }
         }
-        let codec = match codec {
-            Some(c) => c,
-            None => match f {
-                b"apch" | b"apcn" | b"apcs" | b"apco" | b"ap4h" | b"ap4x" => CodecConfig::ProRes { fourcc: format },
-                b"jpeg" | b"mjpa" | b"mjpb" => CodecConfig::Jpeg { fourcc: format },
-                b"AVdn" | b"AVdh" => CodecConfig::Dnx { fourcc: format },
-                b"apv1" => CodecConfig::Apv(ApvConfig::default()),
-                _ => unknown(),
-            },
-        };
+        let codec = resolve_video_codec(format, f, codec, ctab, color_table_bytes, payload);
         return Ok(SampleEntry { format, data_reference_index, codec, video: Some(v), audio: None, bitrate });
     }
     if audio_like {
@@ -380,4 +374,76 @@ fn parse_esds(p: &[u8]) -> Result<CodecConfig> {
         });
     }
     Err(Error::Invalid("esds without DecoderConfigDescriptor".into()))
+}
+
+fn resolve_video_codec(
+    format: FourCc,
+    f: &[u8; 4],
+    codec: Option<CodecConfig>,
+    ctab: i16,
+    color_table: Option<Vec<u8>>,
+    payload: &[u8],
+) -> CodecConfig {
+    if let Some(c) = codec {
+        return c;
+    }
+    let unknown = || CodecConfig::Unknown { fourcc: format, raw: payload.to_vec() };
+    match f {
+        b"apch" | b"apcn" | b"apcs" | b"apco" | b"ap4h" | b"ap4x" => CodecConfig::ProRes { fourcc: format },
+        b"jpeg" | b"mjpa" | b"mjpb" => CodecConfig::Jpeg { fourcc: format },
+        b"AVdn" | b"AVdh" => CodecConfig::Dnx { fourcc: format },
+        b"apv1" => CodecConfig::Apv(ApvConfig::default()),
+        b"cvid" | b"CVID" => match ctab {
+            0 => color_table.map_or_else(unknown, |ct| CodecConfig::Cinepak { fourcc: format, color_table_id: 0, color_table: Some(ct) }),
+            -1 => CodecConfig::Cinepak { fourcc: format, color_table_id: -1, color_table: None },
+            _ => unknown(),
+        },
+        _ => unknown(),
+    }
+}
+
+fn parse_qt_color_table(c: &mut Cur<'_>) -> Option<Vec<u8>> {
+    let mut probe = c.clone();
+    if probe.rest().len() < 8 {
+        return None;
+    }
+    let ct_seed = probe.u32().ok()?;
+    let ct_flags = probe.u16().ok()?;
+    let ct_size = probe.u16().ok()?;
+    let num_entries = (ct_size as usize).checked_add(1)?;
+    let payload_len = num_entries.checked_mul(8)?;
+    if probe.rest().len() < payload_len {
+        return None;
+    }
+    let entries = probe.bytes(payload_len).ok()?;
+    *c = probe;
+    let mut ct = Vec::with_capacity(8 + payload_len);
+    ct.extend_from_slice(&ct_seed.to_be_bytes());
+    ct.extend_from_slice(&ct_flags.to_be_bytes());
+    ct.extend_from_slice(&ct_size.to_be_bytes());
+    ct.extend_from_slice(entries);
+    Some(ct)
+}
+
+pub(crate) fn parse_qt_palette(ct: &[u8]) -> Option<[u8; 768]> {
+    if ct.len() < 8 {
+        return None;
+    }
+    let size = u16::from_be_bytes([ct[6], ct[7]]);
+    let num_entries = usize::from(size).checked_add(1)?;
+    let payload = &ct[8..];
+    if payload.len() < num_entries.checked_mul(8)? {
+        return None;
+    }
+    let mut palette = [0u8; 768];
+    for i in 0..num_entries.min(256) {
+        let chunk = &payload[i * 8..(i + 1) * 8];
+        let r = chunk[2];
+        let g = chunk[4];
+        let b = chunk[6];
+        palette[i * 3] = r;
+        palette[i * 3 + 1] = g;
+        palette[i * 3 + 2] = b;
+    }
+    Some(palette)
 }

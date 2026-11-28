@@ -100,6 +100,7 @@ impl VideoSpec {
             CodecId::Vp8 => *b"VP80",
             CodecId::Vp9 => *b"VP90",
             CodecId::Av1 => *b"AV01",
+            CodecId::Cinepak => *b"cvid",
             _ => return None,
         };
         let mut v = VideoSpec::new(fourcc, params.width?, params.height?, rate, scale);

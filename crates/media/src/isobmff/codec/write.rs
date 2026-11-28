@@ -51,6 +51,7 @@ impl SampleEntry {
                 _ => "Apple ProRes 4444 XQ",
             },
             CodecConfig::Jpeg { .. } => "Photo - JPEG",
+            CodecConfig::Cinepak { .. } => "Cinepak",
             _ => "",
         };
         SampleEntry {
@@ -126,6 +127,18 @@ impl SampleEntry {
     pub fn jpeg(width: u16, height: u16) -> Self {
         let f = FourCc(*b"jpeg");
         Self::video(f, CodecConfig::Jpeg { fourcc: f }, width, height)
+    }
+    /// Cinepak entry (`cvid`).
+    pub fn cinepak(width: u16, height: u16) -> Self {
+        let f = FourCc(*b"cvid");
+        Self::video(f, CodecConfig::Cinepak { fourcc: f, color_table_id: -1, color_table: None }, width, height)
+    }
+    /// If this sample entry provides a custom color palette (such as for 8-bit Cinepak with a
+    /// QuickTime color table), returns the 256-color RGB palette (768 bytes, 3 bytes per entry)
+    /// suitable for passing to `craft_video::cinepak::Decoder::with_palette` or
+    /// `craft_video::cinepak::decode_frame_with_palette`.
+    pub fn palette(&self) -> Option<[u8; 768]> {
+        self.codec.cinepak_palette()
     }
     /// AAC entry (`mp4a` + `esds`) from an AudioSpecificConfig.
     pub fn aac(asc: Vec<u8>, channels: u32, sample_rate: u32) -> Self {
@@ -316,7 +329,14 @@ impl SampleEntry {
         nb[1..1 + n].copy_from_slice(&name[..n]);
         b.bytes(&nb);
         b.u16(v.depth);
-        b.i16(-1);
+        if let CodecConfig::Cinepak { color_table_id, color_table, .. } = &self.codec {
+            b.i16(*color_table_id);
+            if let Some(ct) = color_table {
+                b.bytes(ct);
+            }
+        } else {
+            b.i16(-1);
+        }
         write_video_codec_config(b, &self.codec);
         write_video_descriptive_boxes(b, v);
         if let Some(br) = self.bitrate {

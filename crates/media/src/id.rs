@@ -148,6 +148,8 @@ pub enum CodecId {
     VmdVideo,
     /// Sierra VMD audio (8-bit PCM or 16-bit DPCM).
     VmdAudio,
+    /// Cinepak video.
+    Cinepak,
     /// Bink Video (Bink 1).
     BinkVideo,
     /// A codec this crate has no identifier for.
@@ -191,6 +193,7 @@ impl CodecId {
             CodecId::Apv => "APV",
             CodecId::VmdVideo => "VMD video",
             CodecId::VmdAudio => "VMD audio",
+            CodecId::Cinepak => "Cinepak",
             CodecId::BinkVideo => "Bink Video",
             CodecId::Unknown => "unknown",
         }
@@ -240,6 +243,7 @@ impl CodecId {
                 | CodecId::Dnxhd
                 | CodecId::Apv
                 | CodecId::VmdVideo
+                | CodecId::Cinepak
                 | CodecId::BinkVideo
         )
     }
@@ -321,12 +325,24 @@ pub struct CodecParams {
     pub width: Option<u32>,
     /// Video: coded picture height in pixels.
     pub height: Option<u32>,
+    /// Video: 256-color RGB palette (768 bytes, 3 bytes per entry) for paletted video.
+    pub palette: Option<Vec<u8>>,
 }
 
 impl CodecParams {
     /// Parameters for `codec`, with nothing else known yet.
     pub fn new(codec: CodecId) -> CodecParams {
-        CodecParams { codec, extradata: Vec::new(), tag: None, sample_rate: None, channels: None, pcm: None, width: None, height: None }
+        CodecParams {
+            codec,
+            extradata: Vec::new(),
+            tag: None,
+            sample_rate: None,
+            channels: None,
+            pcm: None,
+            width: None,
+            height: None,
+            palette: None,
+        }
     }
 
     /// Sets `tag`.
@@ -362,6 +378,12 @@ impl CodecParams {
     /// Sets `pcm`.
     pub fn with_pcm(mut self, pcm: PcmFormat) -> CodecParams {
         self.pcm = Some(pcm);
+        self
+    }
+
+    /// Sets `palette`.
+    pub fn with_palette(mut self, palette: impl Into<Vec<u8>>) -> CodecParams {
+        self.palette = Some(palette.into());
         self
     }
 }

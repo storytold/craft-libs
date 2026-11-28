@@ -80,6 +80,10 @@ mod hevc;
 #[path = "av1/main.rs"]
 mod av1;
 
+#[cfg(feature = "cinepak")]
+#[path = "../cinepak.rs"]
+mod cinepak;
+
 #[cfg(feature = "theora")]
 #[path = "theora.rs"]
 mod theora;

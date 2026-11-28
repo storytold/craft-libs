@@ -193,6 +193,9 @@ impl Track {
         if let Some(v) = &entry.video {
             p = p.with_size(u32::from(v.width), u32::from(v.height));
         }
+        if let Some(pal) = entry.palette() {
+            p = p.with_palette(pal.to_vec());
+        }
         if let Some(a) = &entry.audio {
             p = p.with_sample_rate(a.sample_rate.round() as u32).with_channels(u16::try_from(a.channels).unwrap_or(0));
         }
@@ -219,6 +222,15 @@ impl Track {
     /// Video parameters of the track's first sample description, or `None` for other track kinds.
     pub fn video(&self) -> Option<&crate::isobmff::codec::VideoParams> {
         self.entries.first().and_then(|e| e.video.as_ref())
+    }
+    /// The color palette for the first sample entry, if present (e.g. 8-bit Cinepak with a custom color table).
+    pub fn palette(&self) -> Option<[u8; 768]> {
+        self.palette_for(1)
+    }
+    /// The color palette for the given 1-based sample description index, if present.
+    pub fn palette_for(&self, description_index: u32) -> Option<[u8; 768]> {
+        let i = description_index.checked_sub(1)? as usize;
+        self.entries.get(i)?.palette()
     }
     /// Clockwise quarter turns (0–3) the `tkhd` matrix applies for display, or None when it is not
     /// a pure 0/90/180/270° rotation (mirrored, scaled or sheared — left to the caller).

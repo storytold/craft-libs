@@ -61,6 +61,15 @@ pub enum CodecConfig {
     },
     /// Advanced Professional Video (`apv1` + `apvC`).
     Apv(ApvConfig),
+    /// Cinepak (`cvid` / `CVID`).
+    Cinepak {
+        #[allow(missing_docs)]
+        fourcc: FourCc,
+        /// QuickTime color table id (`0` when a table follows, `-1` for the default).
+        color_table_id: i16,
+        /// Raw QuickTime color table bytes when `color_table_id` is `0`.
+        color_table: Option<Vec<u8>>,
+    },
     #[allow(missing_docs)]
     Aac(AacConfig),
     /// MPEG-1/2 audio (esds object type 0x69/0x6B, or QuickTime `.mp3` / `.mp2`). Usually layer
@@ -121,6 +130,7 @@ impl CodecConfig {
             CodecConfig::Eac3 { .. } => CodecId::Eac3,
             CodecConfig::Dnx { .. } => CodecId::Dnxhd,
             CodecConfig::Apv(_) => CodecId::Apv,
+            CodecConfig::Cinepak { .. } => CodecId::Cinepak,
             CodecConfig::Timecode(_) | CodecConfig::Unknown { .. } => CodecId::Unknown,
         }
     }
@@ -156,6 +166,7 @@ impl CodecConfig {
             CodecConfig::Jpeg { .. } => "mjpeg",
             CodecConfig::Dnx { .. } => "dnxhd",
             CodecConfig::Apv(_) => "apv",
+            CodecConfig::Cinepak { .. } => "cinepak",
             CodecConfig::Aac(_) => "aac",
             CodecConfig::Mp3 => "mp3",
             CodecConfig::Pcm(_) => "pcm",
@@ -168,6 +179,15 @@ impl CodecConfig {
             CodecConfig::Unknown { .. } => "unknown",
         }
     }
+
+    /// If this is a Cinepak configuration with a custom QuickTime color table, returns the 256-color
+    /// RGB palette (768 bytes: 256 triplets of `[R, G, B]`) suitable for passing to Cinepak decoders.
+    pub fn cinepak_palette(&self) -> Option<[u8; 768]> {
+        match self {
+            CodecConfig::Cinepak { color_table: Some(ct), .. } => parse_qt_palette(ct),
+            _ => None,
+        }
+    }
 }
 
 mod audio;
@@ -176,7 +196,7 @@ mod video;
 mod write;
 
 pub use audio::{AacConfig, AudioParams, FlacConfig, OpusConfig, PcmConfig, TimecodeConfig, parse_asc};
-pub(crate) use parse::parse_sample_entry;
+pub(crate) use parse::{parse_qt_palette, parse_sample_entry};
 
 /// What a `logs` box may hold: a non-empty identifier of at most 255 bytes with no NUL.
 fn valid_log_identifier(s: &str) -> bool {
@@ -195,6 +215,89 @@ mod tests {
         e.write(&mut b, qt).unwrap();
         let bx = crate::isobmff::bytes::boxes(&b.buf).next().unwrap().unwrap();
         parse_sample_entry(bx.kind, bx.payload, FourCc(*handler), qt).unwrap()
+    }
+
+    #[test]
+    fn cinepak_palette_roundtrip() {
+        let f = FourCc(*b"cvid");
+        let mut ct = Vec::new();
+        ct.extend_from_slice(&0u32.to_be_bytes()); // ctSeed
+        ct.extend_from_slice(&0u16.to_be_bytes()); // ctFlags
+        ct.extend_from_slice(&3u16.to_be_bytes()); // ctSize = 3 (4 entries)
+        for i in 0..4u16 {
+            ct.extend_from_slice(&i.to_be_bytes()); // value
+            ct.extend_from_slice(&(i * 1000).to_be_bytes()); // r
+            ct.extend_from_slice(&(i * 2000).to_be_bytes()); // g
+            ct.extend_from_slice(&(i * 3000).to_be_bytes()); // b
+        }
+        let entry = SampleEntry {
+            format: f,
+            data_reference_index: 1,
+            codec: CodecConfig::Cinepak { fourcc: f, color_table_id: 0, color_table: Some(ct.clone()) },
+            video: Some(VideoParams { width: 320, height: 240, depth: 8, compressor_name: "Cinepak".into(), ..Default::default() }),
+            audio: None,
+            bitrate: None,
+        };
+        let parsed = roundtrip(&entry, true, b"vide");
+        assert_eq!(parsed.format, f);
+        match parsed.codec {
+            CodecConfig::Cinepak { color_table_id, color_table, .. } => {
+                assert_eq!(color_table_id, 0);
+                assert_eq!(color_table, Some(ct));
+            }
+            other => panic!("expected Cinepak codec, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cinepak_uppercase_fourcc_palette_roundtrip() {
+        let f = FourCc(*b"CVID");
+        let mut ct = Vec::new();
+        ct.extend_from_slice(&0u32.to_be_bytes()); // ctSeed
+        ct.extend_from_slice(&0u16.to_be_bytes()); // ctFlags
+        ct.extend_from_slice(&1u16.to_be_bytes()); // ctSize = 1 (2 entries)
+        for i in 0..2u16 {
+            ct.extend_from_slice(&i.to_be_bytes());
+            ct.extend_from_slice(&(i * 500).to_be_bytes());
+            ct.extend_from_slice(&(i * 1000).to_be_bytes());
+            ct.extend_from_slice(&(i * 1500).to_be_bytes());
+        }
+        let entry = SampleEntry {
+            format: f,
+            data_reference_index: 1,
+            codec: CodecConfig::Cinepak { fourcc: f, color_table_id: 0, color_table: Some(ct.clone()) },
+            video: Some(VideoParams { width: 320, height: 240, depth: 8, compressor_name: "Cinepak".into(), ..Default::default() }),
+            audio: None,
+            bitrate: None,
+        };
+        let parsed = roundtrip(&entry, true, b"vide");
+        assert_eq!(parsed.format, f);
+        match parsed.codec {
+            CodecConfig::Cinepak { color_table_id, color_table, .. } => {
+                assert_eq!(color_table_id, 0);
+                assert_eq!(color_table, Some(ct));
+            }
+            other => panic!("expected Cinepak codec, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_qt_palette_with_flags_0x8000_and_zero_values_writes_sequentially() {
+        let mut ct = Vec::new();
+        ct.extend_from_slice(&0u32.to_be_bytes()); // ctSeed
+        ct.extend_from_slice(&0x8000u16.to_be_bytes()); // ctFlags = 0x8000
+        ct.extend_from_slice(&2u16.to_be_bytes()); // ctSize = 2 (3 entries)
+        for i in 0..3u8 {
+            ct.extend_from_slice(&0u16.to_be_bytes()); // zero-valued entry value field
+            ct.extend_from_slice(&[10 * (i + 1), 0]); // r
+            ct.extend_from_slice(&[20 * (i + 1), 0]); // g
+            ct.extend_from_slice(&[30 * (i + 1), 0]); // b
+        }
+        let pal = parse_qt_palette(&ct).expect("parse qt palette");
+        // Entries must be written sequentially at indices 0, 1, 2 rather than all overwriting index 0
+        assert_eq!(&pal[0..3], &[10, 20, 30]);
+        assert_eq!(&pal[3..6], &[20, 40, 60]);
+        assert_eq!(&pal[6..9], &[30, 60, 90]);
     }
 
     /// A QuickTime `logs` box keeps its identifier whatever curve it names; the reader does not
