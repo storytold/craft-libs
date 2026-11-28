@@ -390,6 +390,7 @@ fn dutch_suggestions(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
     let mut found = if apostrophe.is_none() {
         let mut ordinary = crate::affix_suggest::suggest_in(d, word, max, &Tuning::DEFAULT);
         if d.can_suggest(&full) {
+            ordinary.retain(|suggestion| suggestion != &full);
             ordinary.insert(0, full.clone());
             ordinary.truncate(max);
         }

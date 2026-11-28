@@ -560,10 +560,15 @@ fn paired_straight_quotes(text: &str) -> std::collections::HashSet<usize> {
         if c == '\'' {
             let next_word = chars.peek().is_some_and(|(_, c)| c.is_alphanumeric());
             if !prev_word && next_word {
-                open.get_or_insert(offset);
+                let elision = text.get(offset + 1..).is_some_and(pack_lang::dutch_elision);
+                // Prefer a clear quote opener to an apostrophe that could be part of a
+                // Dutch word, without swallowing an elision after a clear opener.
+                if open.is_none() || (open.is_some_and(|(_, maybe_elision)| maybe_elision) && !elision) {
+                    open = Some((offset, elision));
+                }
             } else if prev_word
                 && !next_word
-                && let Some(start) = open.take()
+                && let Some((start, _)) = open.take()
             {
                 starts.insert(start);
             }
@@ -859,6 +864,8 @@ mod language_token_tests {
         let name_in_quote = "'Welkom in 's-Hertogenbosch'";
         let name_start = name_in_quote.find("'s-").unwrap();
         assert_eq!(words_for(name_in_quote, |_| dutch).last().copied(), Some((name_start, name_in_quote.len() - 1)));
+        let quoted_after_name = "'s-Hertogenbosch is een 'stad'.";
+        assert_eq!(words_for(quoted_after_name, |_| dutch)[0], (0, "'s-Hertogenbosch".len()));
         let curved_nl = "‘’s-Hertogenbosch’";
         assert_eq!(words_for(curved_nl, |_| dutch), [('‘'.len_utf8(), curved_nl.len() - '’'.len_utf8())]);
 
