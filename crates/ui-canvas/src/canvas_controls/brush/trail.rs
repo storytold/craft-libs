@@ -4,7 +4,7 @@ use crate::canvas::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
 use crate::primitives::{Revision, Serials, TextureState, TextureStore, TextureStoreOptions};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleColor, StyleCx};
+use crate::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{Input, Metrics};
 use egui::epaint::{Mesh, Vertex};
@@ -192,6 +192,21 @@ pub enum TrailTone {
     Danger,
 }
 
+impl TrailTone {
+    /// The share of the tone's colour a full-coverage texel shows. A host that lets a person set a
+    /// trail's opacity shows this while the person has set none. The share scales the colour's
+    /// channels as well as its alpha - a host's `#208060` at 0.5 shows as `#104030` - so the value
+    /// an "Opacity" control shows is a colour change, not only a strength change.
+    #[must_use]
+    pub const fn share(self) -> f32 {
+        match self {
+            TrailTone::Shade => SHADE_SHARE,
+            TrailTone::Danger => DANGER_SHARE,
+            TrailTone::Light => LIGHT_SHARE,
+        }
+    }
+}
+
 /// The style of the stroke trail: the colour of each tone. The texture holds coverage only; the quad's vertex colour
 /// carries the tone.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -218,12 +233,22 @@ pub struct StrokeTrail<'a> {
     /// What the footprint shows as.
     #[prop]
     tone: TrailTone,
+    /// The host's own footprint colour, in place of the tone's themed colour. `None` keeps the tone's,
+    /// which is how every trail painted today looks.
+    #[prop]
+    color: Option<DataColor>,
+    /// The share of that colour a full-coverage texel shows, clamped to 0..=1; `None`, or a share
+    /// that is not a finite number, keeps the tone's own share. The share scales the colour's
+    /// channels as well as its alpha - a host's `#208060` at 0.5 shows as `#104030` - so a control
+    /// labelled "Opacity" fades the footprint's colour too, not only its strength.
+    #[prop]
+    share: Option<f32>,
 }
 
 impl<'a> StrokeTrail<'a> {
     /// A trail named `label` over `mask`.
     pub fn new(label: impl Into<Label>, mask: &'a mut CoverageMask) -> Self {
-        StrokeTrail { common: Common::new(), mask, tone: TrailTone::Light }.label(label)
+        StrokeTrail { common: Common::new(), mask, tone: TrailTone::Light, color: None, share: None }.label(label)
     }
 }
 
@@ -278,12 +303,20 @@ impl Component for StrokeTrail<'_> {
                 }
             }
         };
-        let (color, share) = match self.tone {
+        let (tone, tone_share) = match self.tone {
             TrailTone::Shade => (cx.style.shade, SHADE_SHARE),
             TrailTone::Danger => (cx.style.danger, DANGER_SHARE),
             _ => (cx.style.light, LIGHT_SHARE),
         };
-        let tint = color.egui().gamma_multiply(share);
+        // A host's colour and share stand in for the tone's own; with neither set the quad is tinted
+        // exactly as before. A share outside 0..=1 shows no footprint or a full one; a share that is
+        // not a finite number fails closed to the tone's own, so a bad value never reaches
+        // `gamma_multiply`. The host's colour joins the tone's in egui space, as the outline,
+        // smart-guide, grid and falloff controls do, instead of building a `StyleColor` outside its
+        // `StyleCx::color` constructor.
+        let color = self.color.map_or(tone.egui(), |color| color.0);
+        let share = self.share.filter(|share| share.is_finite()).unwrap_or(tone_share).clamp(0.0, 1.0);
+        let tint = color.gamma_multiply(share);
         // The mask's texels may reach past the bounds by less than one texel: the quad shows the used part.
         let (u, v) = (
             (bounds.width() / (f64::from(self.mask.size.0) * self.mask.scale)) as f32,
