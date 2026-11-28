@@ -286,3 +286,22 @@ fn an_unavailable_or_forced_pick_opens_the_chooser_and_settles_its_answer() {
     assert!(!host.borrow().is_open::<FileChooser>(), "the chooser closed");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// A request's default-button label replaces the kind's own ("Place" for "Open"; the title still reads
+// "Open"), and that button still accepts; without one, or with a blank one, the button keeps the
+// kind's label and accepts as before.
+#[trial]
+fn a_request_s_accept_label_names_the_default_button() {
+    let mut place = Chooser::open(PickRequest::open("document").accept_label("Place").directory("/d"));
+    assert!(place.fixture.by_label("Open").is_some(), "the title still reads Open");
+    place.click("report.docx");
+    place.click("Place");
+    assert_eq!(place.answer(), picked("/d/report.docx"), "the relabelled button opens the selected file");
+    for request in [PickRequest::open("document"), PickRequest::open("document").accept_label("  ")] {
+        let mut open = Chooser::open(request.directory("/d"));
+        assert!(open.fixture.by_label("Place").is_none(), "no label, the kind's own button");
+        open.click("report.docx");
+        open.click("Open");
+        assert_eq!(open.answer(), picked("/d/report.docx"), "the kind's own button opens the selected file");
+    }
+}

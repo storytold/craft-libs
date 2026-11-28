@@ -405,6 +405,7 @@ impl FileChooser {
             PickKind::Folder => (words.folder_title.clone(), words.choose.clone()),
         };
         let title = self.request.title.clone().map_or_else(|| title, craft_ui::runtime::env::Label::from);
+        let ok = self.request.accept_label.clone().filter(|label| !label.trim().is_empty()).map_or_else(|| ok, craft_ui::runtime::env::Label::from);
         let mut types: Vec<Choice<usize>> =
             self.request.filters.iter().enumerate().map(|(at, filter)| Choice::new(at, filter.name.clone())).collect();
         types.push(Choice::new(self.request.filters.len(), words.all_files.clone()));

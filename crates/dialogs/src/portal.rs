@@ -57,6 +57,8 @@ pub(crate) struct SaveRequest {
     pub filters: Vec<Filter>,
     /// The filter the dialog starts on.
     pub current: Option<usize>,
+    /// The default button's label (the portal's `accept_label`).
+    pub accept_label: Option<String>,
 }
 
 impl SaveRequest {
@@ -74,6 +76,7 @@ impl SaveRequest {
             folder: dialog.directory.clone(),
             filters: dialog.filters.clone(),
             current: current.filter(|_| !dialog.filters.is_empty()),
+            accept_label: dialog.accept_label.clone().filter(|label| !label.trim().is_empty()),
         }
     }
 }
@@ -302,6 +305,9 @@ fn options<'a>(req: &'a SaveRequest, token: &'a str) -> HashMap<&'static str, Va
     }
     if let Some(f) = req.current.and_then(|i| req.filters.get(i)) {
         o.insert("current_filter", Value::from(wire(f)));
+    }
+    if let Some(label) = &req.accept_label {
+        o.insert("accept_label", Value::from(label.as_str()));
     }
     o
 }

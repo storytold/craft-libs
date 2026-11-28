@@ -218,6 +218,10 @@ pub(crate) fn show_panel(d: &FileDialog, reply: Reply) -> Option<Panel> {
         // Panels have no title bar on current macOS; the message line shows above the files.
         panel.setMessage(Some(&NSString::from_str(title)));
     }
+    if let Some(label) = d.accept_label.as_deref().filter(|label| !label.trim().is_empty()) {
+        // The panel's default button ("Open" until set).
+        panel.setPrompt(Some(&NSString::from_str(label)));
+    }
     let extensions: Vec<_> =
         d.filters.iter().flat_map(|f| &f.extensions).map(|e| e.trim_start_matches('.')).filter(|e| !e.is_empty()).map(NSString::from_str).collect();
     if !extensions.is_empty() {

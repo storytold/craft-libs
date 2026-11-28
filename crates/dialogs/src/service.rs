@@ -651,6 +651,7 @@ impl FilePanels {
             PickKind::Save => Kind::Save,
         });
         dialog.title = request.title.clone();
+        dialog.accept_label = request.accept_label.clone().filter(|label| !label.trim().is_empty());
         dialog.filters = request.filters.iter().map(|f| Filter { name: f.name.clone(), extensions: f.extensions.clone() }).collect();
         dialog.directory = start_folder(request, last_folder);
         if request.kind == PickKind::Save {
@@ -1271,5 +1272,26 @@ pub(crate) mod service_tests {
         assert!(service.exists(&present));
         assert!(!service.exists(&missing));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The system dialog gets the request's default-button label to show where the platform can;
+    // a request without one leaves the system's button.
+    #[trial]
+    fn the_panel_gets_the_request_s_accept_label() {
+        let (service, mut panels, log) = service_with(vec![Answer::Cancelled, Answer::Cancelled]);
+        let labelled = service.pick(PickRequest::open("document").accept_label("Place"));
+        panels.pump(NONE);
+        let plain = service.pick(PickRequest::open("document"));
+        panels.pump(NONE);
+        assert_eq!((answered(&service, labelled), answered(&service, plain)), (Picked::Cancelled, Picked::Cancelled));
+        let labels: Vec<Option<String>> = log
+            .borrow()
+            .iter()
+            .map(|request| match request {
+                Request::File(dialog) => dialog.accept_label.clone(),
+                Request::Message(_) => panic!("only file panels were shown"),
+            })
+            .collect();
+        assert_eq!(labels, vec![Some("Place".to_string()), None]);
     }
 }
