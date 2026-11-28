@@ -351,6 +351,65 @@ fn a_corner_drag_the_host_cancelled_lands_nothing_at_its_release() {
     assert_eq!(*zero.borrow(), host, "the release after the host's change leaves the zero point where the host put it");
 }
 
+/// The strokes of the vertical cross hair that a corner drag shows in `mode` and `contrast`, in paint order, and the
+/// colour of the pasteboard under them.
+fn cross_hair_strokes(mode: craft_theme::Mode, contrast: craft_theme::Contrast) -> (Vec<Color32>, craft_theme::Rgba) {
+    let zero = Rc::new(RefCell::new(Point::ZERO));
+    let view = |room: Rect| CanvasView::new(room, Point::new(f64::from(room.center().x), f64::from(room.center().y)), 1.0);
+    let snap = Snap::new(std::sync::Arc::new(SnapTargets::new()), SnapOptions::default());
+    let mut fixture = ToolFixture::with_rulers("Document", Overpaint, view, snap, zero, |_, _| {});
+    fixture.fixture().theme(mode, contrast).room(Vec2::new(500.0, 400.0)).settle();
+    let canvas = fixture.canvas().rect;
+    let (from, to) = (canvas.min + Vec2::splat(4.0), canvas.center());
+    let fixture = fixture.fixture();
+    fixture.frame(vec![craft_ui::testing::pointer::moved(from)]);
+    fixture.frame(vec![craft_ui::testing::pointer::press(from)]);
+    fixture.frame(vec![craft_ui::testing::pointer::moved(to)]);
+    let shapes = fixture.frame_shapes();
+    let vertical = |points: &[Pos2]| {
+        points.len() == 2
+            && (points[0].x - to.x).abs() < 1.0
+            && (points[1].x - to.x).abs() < 1.0
+            && (points[0].y - points[1].y).abs() > canvas.height() / 2.0
+    };
+    let strokes = shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            Shape::LineSegment { points, stroke } if vertical(points) => Some(stroke.color),
+            Shape::Path(path) if vertical(&path.points) => match path.stroke.color {
+                egui::epaint::ColorMode::Solid(color) => Some(color),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    let pasteboard = craft_ui::testing::style::tokens(mode, contrast).color.surface.canvas;
+    (strokes, pasteboard)
+}
+
+/// With artboards hidden the paper fills the canvas, so the zero point's cross hairs cross the paper as well as the
+/// pasteboard and dark art. Over each, the top line contrasts with what lies under it (the strokes below it over the
+/// backdrop) by the minimum the theme sets for overlay strokes on their halo: 3 to 1, and 4.5 to 1 in high contrast.
+#[trial]
+fn the_zero_point_cross_hairs_contrast_with_the_paper_and_the_pasteboard() {
+    use craft_theme::{Contrast, Mode, Rgba, contrast_ratio, over};
+    let rgba = |color: Color32| Rgba(color.to_srgba_unmultiplied());
+    for mode in [Mode::Light, Mode::Dark] {
+        for contrast in [Contrast::Standard, Contrast::High] {
+            let (strokes, pasteboard) = cross_hair_strokes(mode, contrast);
+            let Some((line, under)) = strokes.split_last() else {
+                panic!("{mode:?} {contrast:?}: a corner drag shows a vertical cross hair");
+            };
+            let min = if contrast == Contrast::High { 4.5 } else { 3.0 };
+            for (name, backdrop) in [("the paper", Rgba::WHITE), ("dark art", Rgba::BLACK), ("the pasteboard", pasteboard)] {
+                let below = under.iter().fold(backdrop, |bg, stroke| over(rgba(*stroke), bg));
+                let ratio = contrast_ratio(over(rgba(*line), below), below);
+                assert!(ratio >= min, "{mode:?} {contrast:?}: the cross hair over {name} contrasts {ratio:.2} to 1, needs {min}");
+            }
+        }
+    }
+}
+
 /// A right-click on a ruler strip or on the corner is the rulers': they report the part, for their units menu, and
 /// the tool host under them asks for no menu of its own.
 #[trial]

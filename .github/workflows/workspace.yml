@@ -2,7 +2,7 @@ name: Workspace
 
 on:
   push:
-    branches: [main, next]
+    branches: [main]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -16,13 +16,12 @@ permissions:
   contents: read
 
 concurrency:
-  # A pull request, main and next each have one group, so a newer push cancels the run it
-  # supersedes; the newest push's run still tests everything before it. Every other run (a release
-  # tag, a manual run, the scheduled run, nightly.yml's run on next) gets a group of its own and is
-  # neither cancelled nor replaced while queued: a release run always finishes, the scheduled run
-  # saves the caches, and next gets one complete macOS and Windows run a day.
-  group: workspace-${{ (github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'push' && github.ref == 'refs/heads/next') && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'push' && github.ref == 'refs/heads/next' }}
+  # A pull request and main each have one group, so a newer push cancels the run it supersedes; the
+  # newest push's run still tests everything before it. Every other run (a release tag, a manual
+  # run, the scheduled run) gets a group of its own and is neither cancelled nor replaced while
+  # queued: a release run always finishes, and the scheduled run saves the caches.
+  group: workspace-${{ (github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
   # Whether this run needs the macOS and Windows legs, and which tests every leg runs
@@ -71,7 +70,7 @@ jobs:
       # The macOS and Windows legs cache dependencies only, so `deps-profile` hashes only the
       # settings that reach a dependency: `[profile.dev]` and `[profile.dev.package."*"]`. Every
       # other override names a workspace crate (scripts/test-workspace-tests.py), so changing one
-      # keeps those entries, and next's runs restore main's.
+      # keeps those entries.
       - uses: actions/checkout@v7.0.1
         if: github.event_name != 'pull_request'
         with:
@@ -104,13 +103,10 @@ jobs:
   # The Linux leg keeps the compiled workspace crates between runs (`cache-workspace-crates`): each
   # main run saves a rolling cache entry of its own, every run restores the newest one, and Cargo
   # rebuilds only the crates a change reaches. `cache-prune` keeps the newest entry. The midnight
-  # scheduled run builds from source (`cold-build`) and starts the entry afresh. next has an entry
-  # of its own, since main's is built from different code and lockfile and a pull request into next
-  # rebuilt nearly everything from it (15.5 minutes): nightly.yml's daily manual run on next builds
-  # from source and saves it (`cache-save-on-dispatch`), and pull requests into next restore it
-  # before main's. The macOS and Windows legs keep a dependency-only entry: their workspace crates
-  # would not fit the 10 GB cache budget beside Linux's. The lint legs keep no cache
-  # (`lint-cache: false`) for the same reason; a cold lint leg is still shorter than its gate leg.
+  # scheduled run builds from source (`cold-build`) and starts the entry afresh. The macOS and
+  # Windows legs keep a dependency-only entry: their workspace crates would not fit the 10 GB cache
+  # budget beside Linux's. The lint legs keep no cache (`lint-cache: false`) for the same reason; a
+  # cold lint leg is still shorter than its gate leg.
   native:
     name: Workspace
     needs: platforms
@@ -118,9 +114,8 @@ jobs:
     with:
       os: '["ubuntu-latest"]'
       cache-workspace-crates: true
-      cache-save-on-dispatch: true
       cache-version: &cache-version v2-${{ needs.platforms.outputs.profile }}
-      cold-build: ${{ github.event.schedule == '17 0 * * *' || github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/next' }}
+      cold-build: ${{ github.event.schedule == '17 0 * * *' }}
       lint-cache: false
       # The vendored crates are on the workspace `exclude` list and craft-pdf's read-only contract is a
       # workspace of its own (pdf.yml tests it), so unreached-rs has no module tree for them.
@@ -182,7 +177,7 @@ jobs:
 
   # The macOS and Windows legs, with the Linux leg's inputs. They take 1.5-2 hours against the Linux
   # leg's 15-40 minutes, so a pull request does not wait for them: they run after the merge, on
-  # every push to main and next, on main's scheduled runs and on nightly.yml's daily run on next.
+  # every push to main and on main's scheduled runs.
   # A pull request that needs them before it merges gets the full-ci label.
   native-platforms:
     name: Workspace
@@ -192,7 +187,7 @@ jobs:
     with:
       os: '["windows-latest","macos-latest"]'
       lint-cache: false
-      # Named by the dependency settings alone (`deps-profile`), so next restores main's entries.
+      # Named by the dependency settings alone (`deps-profile`).
       cache-version: v2-${{ needs.platforms.outputs.deps-profile }}
       timeout-minutes: *timeout
       tools: *tools
@@ -212,15 +207,14 @@ jobs:
       lint-command: *lint
       command: *command
 
-  # Each main run's Linux leg saves a rolling cache entry of its own (`cache-workspace-crates`), as
-  # does the daily manual run on next, and every run restores only the newest. This deletes the
-  # older ones of the run's branch as soon as the Linux leg is done, instead of leaving them to the
-  # 10 GB budget's eviction, which would evict other entries too. The only job with
-  # `actions: write`; it checks out and runs nothing from the repository.
+  # Each main run's Linux leg saves a rolling cache entry of its own (`cache-workspace-crates`), and
+  # every run restores only the newest. This deletes the older ones as soon as the Linux leg is
+  # done, instead of leaving them to the 10 GB budget's eviction, which would evict other entries
+  # too. The only job with `actions: write`; it checks out and runs nothing from the repository.
   cache-prune:
     name: cache prune
     needs: native
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next') }}
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -234,11 +228,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           # `<version>-rust-<profile>-<job>-crates-<os>-<arch>-<run>-<attempt>-...`, newest first.
-          gh cache list --repo "$REPO" --ref "$REF" --limit 100 --sort created_at --order desc --json id,key \
+          gh cache list --repo "$REPO" --ref refs/heads/main --limit 100 --sort created_at --order desc --json id,key \
             --jq '.[] | "\(.id) \(.key)"' > "$RUNNER_TEMP/caches"
           declare -A kept
           while read -r id key; do

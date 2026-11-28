@@ -188,7 +188,7 @@ pub fn actions<P: Clone + Eq + Hash>(scene: &DockScene<'_, P>, command: DockComm
             let back = scene.floated.iter().find(|(p, _)| p == panel).and_then(|(_, location)| {
                 let anchor = location.anchor.clone()?;
                 let docked = layout.place(&anchor).is_some_and(|place| !matches!(place, PanelPlace::Floating { .. }));
-                docked.then(|| Action::move_beside(panel.clone(), anchor, location.placement.clone()))
+                docked.then(|| Action::restore(panel.clone(), location.clone()))
             });
             match back {
                 Some(action) => one(action),

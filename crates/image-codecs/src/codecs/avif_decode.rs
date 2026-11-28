@@ -601,9 +601,10 @@ fn coefficients(matrix: u16, primaries: u16) -> Result<Option<(f32, f32)>> {
         // 9 is BT.2020 non-constant luminance; 10 (constant luminance) needs other equations and
         // is refused below.
         9 => Some((0.2627, 0.0593)),
-        // Chromaticity-derived non-constant luminance.
+        // Chromaticity-derived non-constant luminance; unspecified primaries are read as BT.709,
+        // as `cicp::linearize` reads them for the HLG gain.
         12 => {
-            let [kr, _, kb] = crate::cicp::luma_weights(primaries);
+            let [kr, _, kb] = crate::cicp::luma_weights(crate::cicp::primaries_or_bt709(primaries));
             Some((kr, kb))
         }
         // 2 (unspecified: AVIF readers assume BT.601), 5, 6 (BT.601) and reserved values.
@@ -1003,7 +1004,7 @@ mod tests {
     }
 
     #[test]
-    fn libaom_420_limited_range_matches_dav1d() {
+    fn feature_config_libaom_420_limited_range_matches_dav1d() {
         let img = crate::decode(QUAD_420).unwrap();
         assert_eq!((img.width(), img.height(), img.layout(), img.sample_type()), (33, 17, ChannelLayout::Rgb, SampleType::U8));
         assert_eq!(img.cicp.map(|c| (c.matrix, c.full_range)), Some((1, false)), "BT.709 matrix, limited range");
@@ -1024,7 +1025,7 @@ mod tests {
     }
 
     #[test]
-    fn libaom_lossless_identity_matrix_is_exact() {
+    fn feature_config_libaom_lossless_identity_matrix_is_exact() {
         let img = crate::decode(QUAD_GBR_LOSSLESS).unwrap();
         assert_eq!((img.width(), img.height(), img.sample_type()), (33, 17, SampleType::U8));
         assert_eq!(img.cicp.map(|c| (c.matrix, c.full_range)), Some((0, true)));
@@ -1032,7 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn limits_are_checked_before_decoding() {
+    fn feature_config_limits_are_checked_before_decoding() {
         let tight = |max_pixels, max_alloc| DecodeOptions { limits: Limits { max_pixels, max_alloc, ..Limits::default() }, ..Default::default() };
         assert!(matches!(crate::decode_with(QUAD_420, &tight(33 * 17 - 1, u64::MAX)), Err(CodecError::LimitExceeded(_))));
         // The 16-bit intermediate counts: 33 × 17 RGB at 2 bytes.
@@ -1048,14 +1049,14 @@ mod tests {
     }
 
     #[test]
-    fn a_picture_that_differs_from_its_ispe_is_refused() {
+    fn feature_config_a_picture_that_differs_from_its_ispe_is_refused() {
         let (av1, cfg) = av1_of(QUAD_420);
         let file = build(&[(1, b"av01", &av1, &[1, 2])], &[ispe(32, 17), bx(b"av1C", &[&[0x81, 0, 0, 0][..], &cfg].concat())], &[]);
         assert!(matches!(crate::decode(&file), Err(CodecError::Malformed { .. })));
     }
 
     #[test]
-    fn a_grid_is_assembled_from_its_tiles_and_cropped() {
+    fn feature_config_a_grid_is_assembled_from_its_tiles_and_cropped() {
         // Two copies of the 33 × 17 picture side by side, cropped to 60 × 15 by the grid.
         let (av1, cfg) = av1_of(QUAD_GBR_LOSSLESS);
         let av1c = bx(b"av1C", &[&[0x81, 0, 0, 0][..], &cfg].concat());
@@ -1086,7 +1087,7 @@ mod tests {
     }
 
     #[test]
-    fn container_rotation_and_mirror_are_applied_unless_kept() {
+    fn feature_config_container_rotation_and_mirror_are_applied_unless_kept() {
         let (av1, cfg) = av1_of(QUAD_GBR_LOSSLESS);
         let av1c = bx(b"av1C", &[&[0x81, 0, 0, 0][..], &cfg].concat());
         let file = build(&[(1, b"av01", &av1, &[1, 2, 3, 4])], &[ispe(33, 17), av1c, bx(b"irot", &[1]), bx(b"imir", &[0])], &[]);
@@ -1111,7 +1112,7 @@ mod tests {
     }
 
     #[test]
-    fn clean_aperture_sizes_are_unsigned() {
+    fn feature_config_clean_aperture_sizes_are_unsigned() {
         let (av1, cfg) = av1_of(QUAD_GBR_LOSSLESS);
         let av1c = bx(b"av1C", &[&[0x81, 0, 0, 0][..], &cfg].concat());
         // A 2 × 2 aperture with its width written as 0x80000000 / 0x40000000, centred one pixel
@@ -1133,7 +1134,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_transforms_are_refused() {
+    fn feature_config_repeated_transforms_are_refused() {
         let (av1, cfg) = av1_of(QUAD_GBR_LOSSLESS);
         let av1c = bx(b"av1C", &[&[0x81, 0, 0, 0][..], &cfg].concat());
         // the same irot associated twice, and through two ipma entries for the item
@@ -1170,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn alpha_with_transforms_of_its_own_is_refused() {
+    fn feature_config_alpha_with_transforms_of_its_own_is_refused() {
         let (av1, cfg) = av1_of(QUAD_GBR_LOSSLESS);
         let av1c = bx(b"av1C", &[&[0x81, 0, 0, 0][..], &cfg].concat());
         let auxc = fbx(b"auxC", b"urn:mpeg:mpegB:cicp:systems:auxiliary:alpha\0");
@@ -1187,7 +1188,7 @@ mod tests {
     }
 
     #[test]
-    fn transforms_rotate_mirror_and_crop() {
+    fn feature_config_transforms_rotate_mirror_and_crop() {
         // 3 × 2, one channel, value = index
         let cv = || Canvas { w: 3, h: 2, ch: 1, data: (0..6).collect() };
         let r = apply_transforms(cv(), &[Transform::Rot(1)]);
@@ -1205,7 +1206,7 @@ mod tests {
     }
 
     #[test]
-    fn hostile_files_are_errors_not_panics() {
+    fn feature_config_hostile_files_are_errors_not_panics() {
         for file in [QUAD_420, QUAD_GBR_LOSSLESS] {
             // every truncation
             for n in 0..file.len() {
@@ -1232,14 +1233,14 @@ mod tests {
     }
 
     #[test]
-    fn an_animated_avif_is_unsupported() {
+    fn feature_config_an_animated_avif_is_unsupported() {
         let mut b = bx(b"ftyp", b"avis\0\0\0\0avis");
         b.extend(bx(b"moov", &[]));
         assert!(matches!(crate::decode(&b), Err(CodecError::Unsupported { format: Format::Avif, .. })));
     }
 
     #[test]
-    fn zero_width_iloc_extents_are_capped() {
+    fn feature_config_zero_width_iloc_extents_are_capped() {
         // iloc v2 with zero-byte offset/length/base/index fields: each extent costs no input bytes
         let mut iloc = vec![2, 0, 0, 0, 0, 0];
         iloc.extend_from_slice(&3u32.to_be_bytes());
@@ -1255,7 +1256,7 @@ mod tests {
     }
 
     #[test]
-    fn item_data_larger_than_the_file_is_refused() {
+    fn feature_config_item_data_larger_than_the_file_is_refused() {
         // one item whose 1000 extents each repeat the whole file (length 0 = to the end)
         let mut iloc = vec![1, 0, 0, 0, 0x44, 0];
         iloc.extend_from_slice(&1u16.to_be_bytes());
@@ -1274,12 +1275,22 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_matrices_are_errors() {
+    fn feature_config_unsupported_matrices_are_errors() {
         for m in [8u16, 10, 11, 13, 14] {
             assert!(matches!(coefficients(m, 1), Err(CodecError::Unsupported { .. })), "{m}");
         }
         assert_eq!(coefficients(0, 1).unwrap(), None);
         assert!(coefficients(12, 9).unwrap().is_some());
+    }
+
+    #[test]
+    fn chromaticity_derived_matrix_reads_unspecified_primaries_as_bt709() {
+        // Matrix 12 derives Kr and Kb from the primaries; `linearize` reads primaries 2 as BT.709
+        // for the HLG gain, so reconstruction uses the same weights.
+        let [kr, _, kb] = crate::cicp::luma_weights(crate::cicp::primaries_or_bt709(2));
+        assert_eq!(coefficients(12, 2).unwrap(), Some((kr, kb)));
+        assert_eq!(coefficients(12, 2).unwrap(), coefficients(12, 1).unwrap());
+        assert_ne!(coefficients(12, 9).unwrap(), coefficients(12, 1).unwrap());
     }
 
     #[cfg(feature = "avif")]
@@ -1300,7 +1311,7 @@ mod tests {
         }
 
         #[test]
-        fn ravif_rgb_round_trip_is_10_bit() {
+        fn feature_config_ravif_rgb_round_trip_is_10_bit() {
             let (w, h) = (48, 32);
             let src = Image::from_u8(w as u32, h as u32, ChannelLayout::Rgb, card(w, h, 3)).unwrap();
             let file = encode_avif_with_speed(&src, 95, 10).unwrap();
@@ -1314,7 +1325,7 @@ mod tests {
         }
 
         #[test]
-        fn ravif_alpha_round_trips() {
+        fn feature_config_ravif_alpha_round_trips() {
             let (w, h) = (40, 24);
             let src = Image::from_u8(w as u32, h as u32, ChannelLayout::Rgba, card(w, h, 4)).unwrap();
             let file = encode_avif_with_speed(&src, 95, 10).unwrap();
@@ -1328,7 +1339,7 @@ mod tests {
         }
 
         #[test]
-        fn exif_is_read_from_its_item() {
+        fn feature_config_exif_is_read_from_its_item() {
             let mut src = Image::from_u8(16, 8, ChannelLayout::Rgb, card(16, 8, 3)).unwrap();
             let exif = b"II*\0\x08\0\0\0\0\0\0\0\0\0".to_vec();
             src.meta.exif = Some(exif.clone());
@@ -1338,7 +1349,7 @@ mod tests {
         }
 
         #[test]
-        fn hdr_round_trips_keep_highlights_above_white() {
+        fn feature_config_hdr_round_trips_keep_highlights_above_white() {
             let (w, h) = (32usize, 16usize);
             // linear BT.2020: left half grey 0.18, right half 4 × SDR white
             let rgb: Vec<f32> = (0..w * h).flat_map(|i| if i % w < w / 2 { [0.18f32; 3] } else { [4.0; 3] }).collect();

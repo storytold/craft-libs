@@ -33,10 +33,10 @@
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Instant;
 
 use craft_keymap::{Chord, CommandRef, Key, Mods};
 use craft_ui::menu::Alternate;
+use craft_ui::runtime::{frame, motion};
 use craft_window::native_menu as native;
 
 use crate::driver::{Attempt, Backend, Dispatch, Event, NativeMenu, RebuildRetry, native_ok};
@@ -154,7 +154,7 @@ impl Native {
     fn update(&mut self, bar: &MenuBar) {
         let (spec, targets) = lower(bar);
         let (native, live) = (&mut self.bar, &self.targets);
-        let attempt = self.retry.attempt(&spec, Instant::now, || {
+        let attempt = self.retry.attempt(&spec, motion::now, || {
             let rebuilt = native.apply(&spec);
             if rebuilt {
                 *lock(live) = targets;
@@ -165,7 +165,7 @@ impl Native {
         // due asks again.
         if let Attempt::Retry(wait) = attempt {
             self.pending = Some(bar.clone());
-            self.ctx.request_repaint_after(wait);
+            frame::request_repaint_after(&self.ctx, wait.as_secs_f64());
         }
     }
 }

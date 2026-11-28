@@ -533,6 +533,254 @@ mod shadowed {
 }
 
 #[test]
+fn predefined_quit_reads_an_absolute_path_through_a_root_extern_crate_alias() {
+    let source = r#"
+extern crate muda as menu;
+use ::menu::PredefinedMenuItem as Item;
+fn menu_bar() {
+    let a = ::menu::PredefinedMenuItem::quit(None);
+    let b = <::menu::PredefinedMenuItem>::quit(None);
+    let c = Item::quit(None);
+}
+mod nested {
+    extern crate muda as native;
+    fn menu_bar() { let d = ::native::PredefinedMenuItem::quit(None); let e = ::menu::PredefinedMenuItem::quit(None); }
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/main.rs", source)])), vec![5, 6, 7, 11]);
+    // In a module file the declaration binds `menu` in that module only; `::menu` is the crate root's.
+    let module = "extern crate muda as menu;\nfn menu_bar() {\n    let a = ::menu::PredefinedMenuItem::quit(None);\n    let b = menu::PredefinedMenuItem::quit(None);\n}\n";
+    assert_eq!(lines(&predefined_quit([("src/child.rs", module)])), vec![4]);
+    assert_eq!(lines(&predefined_quit([("src/bin/tool.rs", module)])), vec![3, 4]);
+    // Cargo's auto-discovery builds a `mod.rs` directly in `src/bin` or `tests` as a target, but not one below.
+    assert_eq!(lines(&predefined_quit([("src/bin/mod.rs", module)])), vec![3, 4]);
+    assert_eq!(lines(&predefined_quit([("tests/mod.rs", module)])), vec![3, 4]);
+    assert_eq!(lines(&predefined_quit([("src/bin/tool/mod.rs", module)])), vec![4]);
+    // A `lib.rs` that another file loads through a `#[path]` attribute is a module.
+    let root = "#[path = \"nested/lib.rs\"]\nmod nested;\n";
+    assert_eq!(lines(&predefined_quit([("src/lib.rs", root), ("src/nested/lib.rs", module)])), vec![4]);
+    // The root's alias reaches the module files it declares.
+    let root = "extern crate muda as menu;\nmod child;\n";
+    let child = "fn menu_bar() {\n    let a = ::menu::PredefinedMenuItem::quit(None);\n}\nuse ::menu::PredefinedMenuItem as Item;\nfn b() { Item::quit(None); }\n\
+                 fn c() { menu::PredefinedMenuItem::quit(None); }\nuse menu::PredefinedMenuItem as Other;\nfn d() { Other::quit(None); }\n\
+                 mod shadowed {\n    use other_menu as menu;\n    fn e() { menu::PredefinedMenuItem::quit(None); }\n}\n";
+    let found = predefined_quit([("src/lib.rs", root), ("src/child.rs", child)]);
+    assert_eq!(
+        found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(),
+        vec![("src/child.rs", 2), ("src/child.rs", 5), ("src/child.rs", 6), ("src/child.rs", 8)]
+    );
+    // Without the root that declares the alias, `menu` is not muda.
+    assert!(predefined_quit([("src/child.rs", child)]).is_empty());
+    // The alias follows the library's modules, not the binary's module of the same name, and `src/lib.rs`
+    // stays a root when another file also declares it as a module.
+    let call = "fn f() { ::menu::PredefinedMenuItem::quit(None); }\n";
+    let found = predefined_quit([
+        ("src/lib.rs", "extern crate muda as menu;\nmod outer;\nfn g() { ::menu::PredefinedMenuItem::quit(None); }\n"),
+        ("src/outer.rs", "mod child;\n"),
+        ("src/outer/child.rs", call),
+        ("src/main.rs", "mod child;\n#[path = \"lib.rs\"]\nmod lib;\n"),
+        ("src/child.rs", call),
+    ]);
+    assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("src/lib.rs", 3), ("src/outer/child.rs", 1)]);
+    // A module file in a folder named `tests` is not a test crate's root.
+    let local = "extern crate muda as menu;\nfn f() { ::menu::PredefinedMenuItem::quit(None); }\n";
+    assert!(predefined_quit([("src/tests/mod.rs", "mod child;\n"), ("src/tests/child.rs", local)]).is_empty());
+    assert_eq!(lines(&predefined_quit([("tests/child.rs", local)])), vec![2]);
+    // A test that another test also loads by path stays a root, and its alias reaches its modules, which
+    // are in the root's own folder.
+    let found = predefined_quit([
+        ("tests/foo.rs", "extern crate muda as menu;\nmod part;\n"),
+        ("tests/part.rs", call),
+        ("tests/foo/part.rs", call),
+        ("tests/bar.rs", "#[path = \"foo.rs\"]\nmod foo;\n"),
+    ]);
+    assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("tests/part.rs", 1)]);
+    // A binary's root in `src/bin` declares its modules beside it, not in a folder named after it.
+    let found = predefined_quit([
+        ("src/bin/tool.rs", "extern crate muda as menu;\nmod child;\n"),
+        ("src/bin/child/mod.rs", call),
+        ("src/bin/tool/child.rs", call),
+    ]);
+    assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("src/bin/child/mod.rs", 1)]);
+    // A file in `tests` or `src/bin` is its own crate's root also when another target declares it as a module.
+    let found = predefined_quit([
+        ("tests/foo.rs", "mod part;\n"),
+        ("tests/part.rs", local),
+        ("src/bin/tool.rs", "mod helper;\n"),
+        ("src/bin/helper.rs", local),
+    ]);
+    assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("tests/part.rs", 2), ("src/bin/helper.rs", 2)]);
+    // A package's `build.rs` and a binary's `main.rs` stay roots when a file loads them through `#[path]`.
+    let found = predefined_quit([
+        ("src/lib.rs", "#[path = \"../build.rs\"]\nmod build;\n#[path = \"bin/tool/main.rs\"]\nmod tool;\n"),
+        ("build.rs", local),
+        ("src/bin/tool/main.rs", local),
+    ]);
+    assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("build.rs", 2), ("src/bin/tool/main.rs", 2)]);
+    // A folder named `src` above the package, as in a path `rust_sources` returns, does not change that.
+    let found = predefined_quit([
+        ("/home/dev/src/app/src/bin/tool.rs", "mod helper;\n"),
+        ("/home/dev/src/app/src/bin/helper.rs", local),
+        ("/home/dev/src/app/src/lib.rs", "#[path = \"../build.rs\"]\nmod build;\n"),
+        ("/home/dev/src/app/build.rs", local),
+    ]);
+    assert_eq!(
+        found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(),
+        vec![("/home/dev/src/app/src/bin/helper.rs", 2), ("/home/dev/src/app/build.rs", 2)]
+    );
+    // A `tests` folder inside a test's module folder holds modules, so a declared file there is not a root.
+    assert!(
+        predefined_quit([
+            ("tests/support/mod.rs", "mod tests;\n"),
+            ("tests/support/tests/mod.rs", "mod helper;\n"),
+            ("tests/support/tests/helper.rs", local)
+        ])
+        .is_empty()
+    );
+    // A child's own `menu` module, imported through `self::`, is not the crate.
+    let found = predefined_quit([
+        ("src/lib.rs", "extern crate muda as menu;\nmod child;\n"),
+        ("src/child.rs", "mod menu {}\nuse self::menu as other;\nfn f() { other::PredefinedMenuItem::quit(None); }\n"),
+    ]);
+    assert!(found.is_empty());
+}
+
+#[test]
+fn predefined_quit_skips_root_aliases_that_are_never_compiled_or_in_macro_input() {
+    let call = "fn f() { ::menu::PredefinedMenuItem::quit(None); }\n";
+    let paths = |found: &[Finding]| found.iter().map(|f| (f.path.clone(), f.line)).collect::<Vec<_>>();
+    // A module declaration that is never compiled does not carry the alias to the file it names.
+    for gate in ["#[cfg(any())]", "#[cfg(false)]", "#[cfg(not(all()))]"] {
+        let lib = format!("extern crate muda as menu;\n{gate}\nmod shared;\n{gate}\n#[path = \"other.rs\"]\nmod other;\n");
+        let main = "extern crate other_menu as menu;\nmod shared;\n";
+        let found = predefined_quit([("src/lib.rs", lib.as_str()), ("src/main.rs", main), ("src/shared.rs", call), ("src/other.rs", call)]);
+        assert!(found.is_empty(), "{gate}: {found:?}");
+    }
+    // One that a target may compile still does, plainly or through `#[path]`.
+    let lib = "extern crate muda as menu;\n#[cfg(unix)]\nmod shared;\n#[cfg(feature = \"x\")]\n#[path = \"other.rs\"]\nmod other;\n";
+    let found = predefined_quit([("src/lib.rs", lib), ("src/shared.rs", call), ("src/other.rs", call)]);
+    assert_eq!(paths(&found), vec![("src/shared.rs".to_owned(), 1), ("src/other.rs".to_owned(), 1)]);
+    // An `extern crate` that is never compiled adds no name to the prelude; one that is false only on some
+    // targets does.
+    let lib = "#[cfg(any())]\nextern crate muda as menu;\nextern crate other_menu as menu;\nmod child;\nfn g() { ::menu::PredefinedMenuItem::quit(None); }\n";
+    assert!(predefined_quit([("src/lib.rs", lib), ("src/child.rs", call)]).is_empty());
+    let lib = "#[cfg(target_os = \"macos\")]\nextern crate muda as menu;\nmod child;\n";
+    assert_eq!(paths(&predefined_quit([("src/lib.rs", lib), ("src/child.rs", call)])), vec![("src/child.rs".to_owned(), 1)]);
+    // Neither does an `extern crate` in a macro's input, while a real one beside it does.
+    for input in ["ignore!(extern crate muda as menu;);", "ignore![extern crate muda as menu;];", "ignore! { extern crate muda as menu; }"] {
+        let lib = format!("{input}\nmod child;\n");
+        assert!(predefined_quit([("src/lib.rs", lib.as_str()), ("src/child.rs", call)]).is_empty(), "{input}");
+        let lib = format!("{input}\nextern crate muda as native;\nmod child;\n");
+        let child = "fn f() { ::native::PredefinedMenuItem::quit(None); ::menu::PredefinedMenuItem::quit(None); }\n";
+        assert_eq!(paths(&predefined_quit([("src/lib.rs", lib.as_str()), ("src/child.rs", child)])), vec![("src/child.rs".to_owned(), 1)]);
+    }
+    // In a file, a never-compiled or macro-input `extern crate muda as menu;` does not bind `menu` to muda.
+    let module = "mod a {\n    #[cfg(any())]\n    extern crate muda as menu;\n    fn f() { menu::PredefinedMenuItem::quit(None); }\n}\n\
+                  mod b {\n    ignore!(extern crate muda as menu;);\n    fn f() { menu::PredefinedMenuItem::quit(None); }\n}\n";
+    assert!(predefined_quit([("src/child.rs", module)]).is_empty());
+}
+
+#[test]
+fn predefined_quit_reads_target_folders_below_the_package_folder_only() {
+    let local = "extern crate muda as menu;\nfn f() { ::menu::PredefinedMenuItem::quit(None); }\n";
+    let lib = "#[path = \"../build.rs\"]\nmod build;\n#[path = \"../tests/t.rs\"]\nmod t;\n";
+    for dir in ["/work/tests/app", "tests/app", "C:/src/bin/app"] {
+        let (lib_path, build, test) = (format!("{dir}/src/lib.rs"), format!("{dir}/build.rs"), format!("{dir}/tests/t.rs"));
+        let found = predefined_quit([(lib_path.as_str(), lib), (build.as_str(), local), (test.as_str(), local)]);
+        let found: Vec<(&str, usize)> = found.iter().map(|f| (f.path.as_str(), f.line)).collect();
+        assert_eq!(found, vec![(build.as_str(), 2), (test.as_str(), 2)], "{dir}");
+    }
+    // Inside the package a `tests` folder in `src` still holds modules.
+    let lib = "mod tests;\n";
+    assert!(predefined_quit([("/work/tests/app/src/lib.rs", lib), ("/work/tests/app/src/tests/mod.rs", local)]).is_empty());
+    // So do target folder names deeper in the package's modules.
+    let found = predefined_quit([
+        ("src/lib.rs", "mod foo;\nmod src;\n"),
+        ("src/foo.rs", "mod tests;\nmod src;\n"),
+        ("src/foo/tests.rs", "mod helper;\n"),
+        ("src/foo/tests/helper.rs", local),
+        ("src/foo/src.rs", "mod bin;\n"),
+        ("src/foo/src/bin.rs", "mod helper;\n"),
+        ("src/foo/src/bin/helper.rs", local),
+        ("src/src.rs", "mod bin;\n"),
+        ("src/src/bin.rs", "mod helper;\n"),
+        ("src/src/bin/helper.rs", local),
+    ]);
+    assert!(found.is_empty(), "{found:?}");
+    // A package with only binaries, beside the one with a library, keeps its binaries as roots.
+    let found =
+        predefined_quit([("outer/src/lib.rs", ""), ("outer/tools/src/bin/tool.rs", "mod helper;\n"), ("outer/tools/src/bin/helper.rs", local)]);
+    assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("outer/tools/src/bin/helper.rs", 2)]);
+    // A file in the package's modules that a `#[path]` attribute loads from a `tests` folder is a module too,
+    // so its `extern crate` does not reach the crate's extern prelude.
+    let lib = "extern crate other_menu as menu;\n#[path = \"foo/tests/helper.rs\"]\nmod helper;\n";
+    let found = predefined_quit([("src/lib.rs", lib), ("src/foo/tests/helper.rs", local)]);
+    assert!(found.is_empty(), "{found:?}");
+    // So is a `src/lib.rs` below the package's `src` folder that a `#[path]` attribute loads.
+    let lib = "extern crate other_menu as menu;\n#[path = \"nested/src/lib.rs\"]\nmod nested;\n";
+    let found = predefined_quit([("src/lib.rs", lib), ("src/nested/src/lib.rs", local)]);
+    assert!(found.is_empty(), "{found:?}");
+    // A nested package's library that only its own binary loads stays a crate root, so its alias reaches its modules.
+    let nested = "extern crate muda as menu;\nmod child;\n";
+    let found = predefined_quit([
+        ("src/lib.rs", ""),
+        ("src/nested/src/lib.rs", nested),
+        ("src/nested/src/child.rs", "fn f() { ::menu::PredefinedMenuItem::quit(None); }\n"),
+        ("src/nested/src/bin/tool.rs", "#[path = \"../lib.rs\"]\nmod lib;\n"),
+    ]);
+    assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("src/nested/src/child.rs", 1)]);
+    // One that a module beside its `src` folder loads is a module of the outer crate.
+    let found = predefined_quit([
+        ("src/lib.rs", "mod nested;\n"),
+        ("src/nested/mod.rs", "#[path = \"src/lib.rs\"]\nmod inner;\n"),
+        ("src/nested/src/lib.rs", nested),
+        ("src/nested/src/child.rs", "fn f() { ::menu::PredefinedMenuItem::quit(None); }\n"),
+    ]);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn predefined_quit_does_not_follow_a_mod_declaration_in_a_macro_input() {
+    let call = "fn f() { ::menu::PredefinedMenuItem::quit(None); }\n";
+    for lib in [
+        "extern crate muda as menu;\nignore!(mod child;);\n",
+        "extern crate muda as menu;\nignore! {\n    mod child;\n}\n",
+        "extern crate muda as menu;\n#[attr(mod child;)]\nfn h() {}\n",
+    ] {
+        assert!(predefined_quit([("src/lib.rs", lib), ("src/child.rs", call)]).is_empty(), "{lib}");
+    }
+    let lib = "extern crate muda as menu;\nmod child;\n";
+    assert_eq!(lines(&predefined_quit([("src/lib.rs", lib), ("src/child.rs", call)])), vec![1]);
+}
+
+#[test]
+fn predefined_quit_reads_an_extern_crate_in_a_block_inside_call_arguments() {
+    let call = "fn f() {\n    consume({\n        extern crate muda as menu;\n        menu::PredefinedMenuItem::quit(None)\n    });\n}\n";
+    assert_eq!(lines(&predefined_quit([("src/child.rs", call)])), vec![4]);
+    let array = "fn f() {\n    let items = [{\n        extern crate muda as menu;\n        menu::PredefinedMenuItem::quit(None)\n    }];\n}\n";
+    assert_eq!(lines(&predefined_quit([("src/child.rs", array)])), vec![4]);
+    // In a crate root, a block in an argument binds the name in the block, not in the extern prelude.
+    let lib = "fn f() {\n    consume({\n        extern crate muda as menu;\n    });\n}\nmod child;\n";
+    let child = "fn g() { ::menu::PredefinedMenuItem::quit(None); }\n";
+    assert!(predefined_quit([("src/lib.rs", lib), ("src/child.rs", child)]).is_empty());
+    // A `macro_rules!` template is not a declaration where it is written, in any delimiter.
+    for body in [
+        "macro_rules! m {\n    () => (\n        extern crate muda as menu;\n        menu::PredefinedMenuItem::quit(None)\n    );\n}\n",
+        "macro_rules! m {\n    () => [\n        extern crate muda as menu;\n        menu::PredefinedMenuItem::quit(None)\n    ];\n}\n",
+        "macro_rules! m (\n    () => {\n        extern crate muda as menu;\n        menu::PredefinedMenuItem::quit(None)\n    };\n);\n",
+    ] {
+        assert!(predefined_quit([("src/child.rs", body)]).is_empty(), "{body}");
+    }
+    // Nor is an attribute's input, in a crate root or a module.
+    for attr in ["#[attr(extern crate muda as menu;)]\nfn h() {}\n", "#![attr(extern crate muda as menu;)]\n"] {
+        let lib = format!("{attr}mod child;\n");
+        assert!(predefined_quit([("src/lib.rs", lib.as_str()), ("src/child.rs", child)]).is_empty(), "{attr}");
+        let module = format!("{attr}fn g() {{ menu::PredefinedMenuItem::quit(None); }}\n");
+        assert!(predefined_quit([("src/child.rs", module.as_str())]).is_empty(), "{attr}");
+    }
+}
+
+#[test]
 fn predefined_quit_reads_a_crate_name_in_an_import_where_the_import_is() {
     let source = r#"
 mod native {
@@ -1009,6 +1257,32 @@ fn run(ready: bool, items: Vec<u64>) {
 }
 
 #[test]
+fn std_instant_ends_a_native_cfg_loop_at_its_body_after_an_if_or_match_in_its_head() {
+    let source = r#"
+fn run(flag: bool, n: u8) {
+    #[cfg(unix)]
+    for _ in if flag { [0] } else { [1] } {
+        let _a = std::time::Instant::now();
+    }
+    let b = std::time::Instant::now();
+    #[cfg(unix)]
+    for _ in if flag { [0] } else if n > 1 { [1] } else { [2] }.iter() { let _c = std::time::Instant::now(); }
+    let d = std::time::Instant::now();
+    #[cfg(unix)]
+    if let Some(_) = match n { 0 => None, _ => Some(n) } { let _e = std::time::Instant::now(); }
+    let f = std::time::Instant::now();
+    #[cfg(unix)]
+    while n == if if flag { true } else { false } { 1 } else { 2 } { let _g = std::time::Instant::now(); }
+    let h = std::time::Instant::now();
+    #[cfg(unix)]
+    if flag { let _i = std::time::Instant::now(); } else if if flag { true } else { false } { let _j = std::time::Instant::now(); }
+    let k = std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![7, 10, 13, 16, 19]);
+}
+
+#[test]
 fn std_instant_ends_a_native_cfg_let_else_and_match_with_struct_patterns_where_they_end() {
     let source = r#"
 enum State { Ready { at: u64 }, Idle }
@@ -1230,6 +1504,22 @@ fn run() {
 }
 
 #[test]
+fn std_instant_does_not_read_an_absolute_path_through_a_local_alias() {
+    let source = r#"
+use std::time as web_time;
+use ::web_time::{Instant};
+use ::web_time::Instant as Clock;
+
+fn now() {
+    let a = ::web_time::Instant::now();
+    let b = web_time::Instant::now();
+    let c = ::std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/now.rs", source)])), vec![8, 9]);
+}
+
+#[test]
 fn std_instant_reads_a_use_group_split_over_several_lines() {
     let source = r#"
 use std::time::{
@@ -1301,6 +1591,21 @@ fn a_long_name_shared_by_many_use_leaves_is_read_without_copying_it_to_each() {
     let source = format!("use {}::{{{}}};\nuse std::time::Instant;\n", "n".repeat(40_000), ["self"; 10_000].join(", "));
     assert_eq!(lines(&std_instant([("src/wide.rs", source.as_str())])), vec![2]);
     assert!(predefined_quit([("src/wide.rs", source.as_str())]).is_empty());
+}
+
+#[test]
+fn guards_read_names_that_hold_combining_marks() {
+    // `t` with U+0301 (a nonspacing mark) and Devanagari `ka` with U+093E (a spacing mark) are each one
+    // identifier, as rustc reads them.
+    let time = "use std::time as t\u{301};\nuse std::time as \u{915}\u{93E};\nfn run() {\n    let a = t\u{301}::Instant::now();\n    let b = \u{915}\u{93E}::Instant::now();\n}\n";
+    assert_eq!(lines(&std_instant([("src/run.rs", time)])), vec![4, 5]);
+
+    let menu = "use muda::{PredefinedMenuItem as Ite\u{301}m};\nfn menu() {\n    let a = Ite\u{301}m::quit(None);\n}\n";
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", menu)])), vec![3]);
+
+    // A byte order mark and the left-to-right and right-to-left marks are not part of a name.
+    let marked = "\u{FEFF}use std::time::Instant;\nuse std::time as\u{200E}t;\nfn run() { t\u{200F}::Instant::now(); }\n";
+    assert_eq!(lines(&std_instant([("src/marked.rs", marked)])), vec![1, 3]);
 }
 
 #[test]

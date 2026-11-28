@@ -992,6 +992,116 @@ fn a_toggle_column_holds_one_toggle_with_room_on_each_side() {
     assert!(cell.width() < 2.0 * cell.height(), "the toggle column holds one toggle: {cell:?}");
 }
 
+/// Each cell node of a row lies in its own column: a leading and a trailing toggle cell, the label cell, a text cell
+/// and a status cell each take their column's span of the row, not the whole row.
+#[trial]
+fn each_cell_node_of_a_row_takes_its_columns_bounds() {
+    use craft_behavior::{ColumnKey, ColumnWidth};
+    use craft_theme::variant::Tone;
+    use craft_ui::contract::{ColumnSpec, Role, ToggleColumn};
+    use craft_ui::list::{CellStatus, ToggleCell};
+    const EYE: ColumnKey = ColumnKey::new("eye");
+    const NAME: ColumnKey = ColumnKey::new("name");
+    const SIZE: ColumnKey = ColumnKey::new("size");
+    const WARNINGS: ColumnKey = ColumnKey::new("warnings");
+    const LOCK: ColumnKey = ColumnKey::new("lock");
+    let cells = Rc::new(RefCell::new(Vec::new()));
+    let held = cells.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![
+            ColumnSpec::toggle(EYE, "", ToggleColumn::sweepable()),
+            ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)),
+            ColumnSpec::new(SIZE, "Size", ColumnWidth::fill(1.0)),
+            ColumnSpec::new(WARNINGS, "Warnings", ColumnWidth::fill(1.0)),
+            ColumnSpec::toggle(LOCK, "", ToggleColumn::sweepable()),
+        ];
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = List::new("Layers").columns(columns).show_items(ui, &source, &mut |_, icx| {
+            held.replace(icx.cells().to_vec());
+            ListRow::new("Layer 1")
+                .cells(icx.cells())
+                .toggle(ToggleCell::eye(EYE, true))
+                .cell(SIZE, "12 KB")
+                .cell_status(WARNINGS, CellStatus::new(Tone::Warn, "2 warnings"))
+                .toggle(ToggleCell::lock(LOCK, false))
+        });
+    });
+    fixture.room(Vec2::new(600.0, 200.0));
+    fixture.settle();
+    let cells = cells.borrow();
+    let column = |key: &ColumnKey| cells.iter().find(|(column, _)| column == key).map(|(_, rect)| *rect).expect("the row lists the column");
+    let nodes = fixture.by_role(Role::CELL);
+    assert_eq!(nodes.len(), 5, "one cell node per column: {nodes:?}");
+    for node in &nodes {
+        let tree = fixture.tree();
+        let key = match tree.name_of(node.node) {
+            Some("12 KB") => SIZE,
+            Some("2 warnings") => WARNINGS,
+            Some("Layer 1") => match tree.children_of(node.node).first().and_then(|child| tree.name_of(*child)) {
+                Some(name) if name.contains("Lock") => LOCK,
+                Some(_) => EYE,
+                None => NAME,
+            },
+            other => panic!("an unexpected cell node {other:?}"),
+        };
+        let span = column(&key);
+        assert!(
+            (node.rect.left() - span.left()).abs() < 0.5 && (node.rect.right() - span.right()).abs() < 0.5,
+            "the {key:?} cell spans its column: {:?}, the column {span:?}",
+            node.rect
+        );
+    }
+}
+
+/// Each toggle cell of a row has one node, under its cell node and inside the cell: a leading eye reads as a switch
+/// and a trailing check as a check box, each with its state and a click.
+#[trial]
+fn each_toggle_cell_of_a_row_has_one_node_with_its_state_and_click() {
+    use craft_behavior::{ColumnKey, ColumnWidth, Mixed};
+    use craft_ui::contract::{ColumnSpec, Role, ToggleColumn};
+    use craft_ui::list::{ToggleCell, ToggleState};
+    use craft_ui::testing::access::Declared;
+    const EYE: ColumnKey = ColumnKey::new("eye");
+    const NAME: ColumnKey = ColumnKey::new("name");
+    const KEEP: ColumnKey = ColumnKey::new("keep");
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![
+            ColumnSpec::toggle(EYE, "", ToggleColumn::sweepable()),
+            ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)),
+            ColumnSpec::toggle(KEEP, "", ToggleColumn::default()),
+        ];
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key).with_toggled(|_, column| *column == EYE);
+        let _ = List::new("Layers").columns(columns).show_items(ui, &source, &mut |_, icx| {
+            let keep = ToggleCell::check(KEEP, ToggleState::Off, "Keep {row}");
+            ListRow::new("Layer 1").cells(icx.cells()).toggle(ToggleCell::eye(EYE, true)).toggle(keep)
+        });
+    });
+    fixture.room(Vec2::new(400.0, 200.0));
+    fixture.settle();
+    let tree = fixture.tree();
+    let toggles: Vec<_> = tree
+        .keys()
+        .into_iter()
+        .filter(|key| matches!(tree.role_of(*key), Some(role) if role == Role::SWITCH || role == Role::CHECK_BOX || role == Role::BUTTON))
+        .collect();
+    let found: Vec<_> = toggles.iter().map(|key| (tree.role_of(*key), tree.name_of(*key))).collect();
+    assert_eq!(toggles.len(), 2, "one node per toggle cell: {found:?}");
+    for key in toggles {
+        let name = tree.name_of(key).unwrap_or_default().to_owned();
+        assert!(name.contains("Layer 1"), "each toggle node is named after its row: {found:?}");
+        let (role, state) = if name == "Keep Layer 1" { (Role::CHECK_BOX, false) } else { (Role::SWITCH, true) };
+        assert_eq!(tree.role_of(key), Some(role), "{name} has its cell's role");
+        assert_eq!(tree.toggled_of(key), Some(Mixed::Same(state)), "{name} carries its state");
+        assert!(tree.declares_key(key, Declared::Click), "{name} takes a click");
+        let cell = tree.parent_of_key(key).unwrap_or_else(|| panic!("{name} has a parent"));
+        assert_eq!(tree.role_of(cell), Some(Role::CELL), "{name} sits under its cell node");
+        let (inner, outer) = (tree.bounds_of(key).unwrap_or(egui::Rect::NOTHING), tree.bounds_of(cell).unwrap_or(egui::Rect::NOTHING));
+        assert!(outer.expand(0.5).contains_rect(inner), "{name} lies inside its cell: {inner:?} in {outer:?}");
+    }
+}
+
 /// A toggle cell's glyph rests in `text.muted` and reads in `text.normal` under the pointer.
 #[trial]
 fn a_toggle_glyph_rests_muted_and_reads_normal_under_the_pointer() {
@@ -1042,6 +1152,106 @@ fn a_toggle_glyph_rests_muted_and_reads_normal_under_the_pointer() {
         !hovered.is_empty() && hovered.iter().all(|tint| *tint == normal),
         "the eye reads in text.normal {normal:?} under the pointer: {hovered:?}"
     );
+}
+
+/// Two rows whose eye cell is on and whose lock cell is off; the source does not flip the first row's cells.
+struct LockedFirst;
+
+const LOCKED_EYE: craft_behavior::ColumnKey = craft_behavior::ColumnKey::new("eye");
+
+impl craft_behavior::DisplayOrder<usize> for LockedFirst {
+    fn len(&self) -> usize {
+        2
+    }
+
+    fn key(&self, at: usize) -> usize {
+        at
+    }
+}
+
+impl craft_behavior::ItemSource<usize> for LockedFirst {
+    fn toggled(&self, _: usize, column: &craft_behavior::ColumnKey) -> bool {
+        *column == LOCKED_EYE
+    }
+
+    fn toggle_enabled(&self, at: usize, _: &craft_behavior::ColumnKey) -> bool {
+        at != 0
+    }
+}
+
+/// A toggle cell the source does not flip paints its glyph in `text.disabled` at rest, under the pointer and under a
+/// press, shows no off glyph under the pointer, and its node reads disabled; the cells of a row that flips keep
+/// `text.muted`, their off glyph under the pointer and enabled nodes.
+#[trial]
+fn a_toggle_cell_that_does_not_flip_paints_disabled_and_ignores_the_pointer() {
+    use craft_behavior::{ColumnKey, ColumnWidth};
+    use craft_ui::contract::{ColumnSpec, Role, ToggleColumn};
+    use craft_ui::list::ToggleCell;
+    use craft_ui::runtime::env::Env;
+    use craft_ui::testing::pointer;
+    use egui::Color32;
+    use std::cell::Cell;
+    const LOCK: ColumnKey = ColumnKey::new("lock");
+    const NAME: ColumnKey = ColumnKey::new("name");
+    // The eye and lock cells of each row.
+    let seen = Rc::new(Cell::new(([[egui::Rect::NOTHING; 2]; 2], Color32::TRANSPARENT, Color32::TRANSPARENT)));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let text = Env::of(ui).tokens.tokens().color.text;
+        let color = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        let columns = vec![
+            ColumnSpec::toggle(LOCKED_EYE, "", ToggleColumn::sweepable()),
+            ColumnSpec::toggle(LOCK, "", ToggleColumn::sweepable()),
+            ColumnSpec::new(NAME, "", ColumnWidth::fill(1.0)),
+        ];
+        let _ = List::new("Layers").columns(columns).show_items(ui, &LockedFirst, &mut |key, icx| {
+            let (mut cells, ..) = held.get();
+            cells[*key] = [LOCKED_EYE, LOCK].map(|column| icx.cell(&column).unwrap_or(egui::Rect::NOTHING));
+            held.set((cells, color(text.disabled.0), color(text.muted.0)));
+            ListRow::new(NAMES[*key]).cells(icx.cells()).toggle(ToggleCell::eye(LOCKED_EYE, true)).toggle(ToggleCell::lock(LOCK, false))
+        });
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    let tints = |shapes: &[egui::Shape], cell: egui::Rect| -> Vec<Color32> {
+        let mut tints: Vec<Color32> = shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Mesh(mesh) if cell.contains(mesh.calc_bounds().center()) => Some(mesh.vertices.iter().map(|vertex| vertex.color)),
+                _ => None,
+            })
+            .flatten()
+            .filter(|color| color.a() > 0)
+            .collect();
+        tints.dedup();
+        tints
+    };
+    let ([[locked, locked_lock], [open, open_lock]], disabled, muted) = seen.get();
+    let shapes = fixture.frame_shapes();
+    let (rest, open_rest) = (tints(&shapes, locked), tints(&shapes, open));
+    let mut hover = |cell: egui::Rect| {
+        fixture.frame(vec![pointer::moved(cell.center())]);
+        fixture.frame(Vec::new());
+        tints(&fixture.frame_shapes(), cell)
+    };
+    let (locked_off, open_off) = (hover(locked_lock), hover(open_lock));
+    let hovered = hover(locked);
+    fixture.frame(vec![pointer::press(locked.center())]);
+    let pressed = tints(&fixture.frame_shapes(), locked);
+    fixture.frame(vec![pointer::release(locked.center())]);
+    for (when, found) in [("at rest", &rest), ("under the pointer", &hovered), ("under a press", &pressed)] {
+        assert!(!found.is_empty() && found.iter().all(|tint| *tint == disabled), "the locked eye reads text.disabled {disabled:?} {when}: {found:?}");
+    }
+    assert!(!open_rest.is_empty() && open_rest.iter().all(|tint| *tint == muted), "the open eye rests in text.muted {muted:?}: {open_rest:?}");
+    assert!(locked_off.is_empty(), "the locked row's off lock shows no glyph under the pointer: {locked_off:?}");
+    assert!(!open_off.is_empty(), "the open row's off lock shows its glyph under the pointer");
+    let tree = fixture.tree();
+    let switches: Vec<_> = tree.keys().into_iter().filter(|key| tree.role_of(*key) == Some(Role::SWITCH)).collect();
+    let states = |row: &str| -> Vec<bool> {
+        switches.iter().filter(|key| tree.name_of(**key).is_some_and(|name| name.contains(row))).map(|key| tree.is_disabled_key(*key)).collect()
+    };
+    assert_eq!(states(NAMES[0]), [true, true], "the locked row's toggle nodes read disabled");
+    assert_eq!(states(NAMES[1]), [false, false], "the open row's toggle nodes read enabled");
 }
 
 /// Every filled rect among `shapes`, nested lists included.

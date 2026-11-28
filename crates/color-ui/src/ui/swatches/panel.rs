@@ -1,6 +1,6 @@
 //! `SwatchesPanel`: the panel body, its state and what it reports.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -20,7 +20,7 @@ use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Count, Env};
 use egui::{AsIdSalt, IdSalt, Response, Ui};
 
-use super::library::{HostThumb, find_swatch, has, panel_source};
+use super::library::{HostThumb, find_swatch, group_of, has, panel_source};
 use super::menu::event_edits;
 use super::{SWATCH_ZOOM, SwatchAt, SwatchEdit, SwatchKey, SwatchesFileOutput, SwatchesState, SwatchesWords};
 use crate::palette::{SwatchGroup, SwatchNote, SwatchReport};
@@ -40,6 +40,7 @@ pub struct SwatchesPanelOutput {
     pub edits: Vec<SwatchEdit>,
     /// The browser events the panel does not turn into `used` or `edits`, in the order they happened: `Activate`,
     /// `Menu`, `DropAt`, `Dropped` and `Reorder`. `Reorder` is also in `edits`; a host runs one of the two.
+    /// When enabled by [`SwatchesPanel::report_invalid_renames`], rejected inline renames appear here as `Rename`.
     pub events: Vec<PresetEvent<SwatchKey>>,
 }
 
@@ -89,16 +90,19 @@ pub struct SwatchesPanel<'a> {
     foreground: Srgba,
     thumb: Option<HostThumb<'a>>,
     tools: Option<ToolsFn<'a>>,
+    tools_at_start: bool,
     drop_zone: Option<DropZone>,
     footer: Option<Option<PresetFooterOptions<'a>>>,
     reveal: Option<SwatchKey>,
     search: bool,
     row_icons: Option<RowIconsFn<'a>>,
     select: SelectMode,
+    report_invalid_renames: bool,
     takes_drop: Option<DropMaker<'a>>,
     payloads: Vec<PayloadAdder<'a>>,
     row_items: Option<RowItemsFn<'a>>,
     document: Option<IdSalt>,
+    select_groups: bool,
 }
 
 /// What the body decided; `show` stores the state and reports the rest after the real run.
@@ -120,16 +124,19 @@ impl<'a> SwatchesPanel<'a> {
             foreground,
             thumb: None,
             tools: None,
+            tools_at_start: false,
             drop_zone: None,
             footer: None,
             reveal: None,
             search: true,
             row_icons: None,
             select: SelectMode::Single,
+            report_invalid_renames: false,
             takes_drop: None,
             payloads: Vec::new(),
             row_items: None,
             document: None,
+            select_groups: false,
         }
     }
 
@@ -151,6 +158,12 @@ impl<'a> SwatchesPanel<'a> {
     /// The host's tools, shown beside the browser's toolbar.
     pub fn tools(mut self, tools: impl FnMut(&mut Ui) + 'a) -> Self {
         self.tools = Some(Box::new(tools));
+        self
+    }
+
+    /// Places the host's tools before the browser controls in the toolbar. Off by default.
+    pub fn tools_at_start(mut self, at_start: bool) -> Self {
+        self.tools_at_start = at_start;
         self
     }
 
@@ -191,6 +204,13 @@ impl<'a> SwatchesPanel<'a> {
         self
     }
 
+    /// Reports committed inline renames rejected by the panel in [`SwatchesPanelOutput::events`], so the host can
+    /// explain the rejection. Accepted renames produce their usual edit. Off by default.
+    pub fn report_invalid_renames(mut self, enabled: bool) -> Self {
+        self.report_invalid_renames = enabled;
+        self
+    }
+
     /// A host payload of type `P` can be dropped onto a swatch or between swatches at `place` where `accepts` agrees;
     /// the drop comes back as `PresetEvent::Dropped`.
     pub fn takes_drop<P: Send + Sync + 'static>(mut self, place: DropPlace, accepts: impl Fn(&P, &DropAt<SwatchKey>) -> bool + 'a) -> Self {
@@ -228,6 +248,12 @@ impl<'a> SwatchesPanel<'a> {
         self
     }
 
+    /// Lets panel interactions select group rows alongside swatches in both views. Off by default.
+    pub fn select_groups(mut self, enabled: bool) -> Self {
+        self.select_groups = enabled;
+        self
+    }
+
     /// Draws the panel and returns the user's actions this pass.
     pub fn show(self, ui: &mut Ui) -> SwatchesPanelOutput {
         let SwatchesPanel {
@@ -237,16 +263,19 @@ impl<'a> SwatchesPanel<'a> {
             foreground,
             thumb,
             mut tools,
+            tools_at_start,
             drop_zone,
             footer,
             reveal,
             search,
             row_icons,
             select,
+            report_invalid_renames,
             takes_drop,
             payloads,
             row_items,
             document,
+            select_groups,
         } = self;
         let cmyk = cmyk.unwrap_or_else(|| CmykConverter::coated());
         let words = Env::of(ui).words::<SwatchesWords>();
@@ -278,8 +307,10 @@ impl<'a> SwatchesPanel<'a> {
                 let mut browser = PresetBrowser::new(words.title.clone(), Bind::bound(&mut st.browser), &source)
                     .thumb_range(SWATCH_ZOOM)
                     .toolbar(true)
+                    .tools_at_start(tools_at_start)
                     .search(search)
                     .select(select)
+                    .select_groups(select_groups)
                     .reorder(PresetReorder::items_and_groups())
                     .selection(Bind::bound(&mut st.selection));
                 if let Some(id) = document_id {
@@ -311,7 +342,21 @@ impl<'a> SwatchesPanel<'a> {
             let mut used = None;
             let mut edits = Vec::new();
             let mut events = Vec::new();
+            let deleting_groups: BTreeSet<_> = out
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    PresetEvent::Delete(key @ SwatchKey::Group(_)) => group_of(groups, key),
+                    _ => None,
+                })
+                .collect();
             for event in out.events {
+                if !deleting_groups.is_empty()
+                    && let PresetEvent::Delete(key @ SwatchKey::Swatch(_)) = &event
+                    && group_of(groups, key).is_some_and(|group| deleting_groups.contains(&group))
+                {
+                    continue;
+                }
                 if let PresetEvent::Select { key: SwatchKey::Swatch(name), mods, .. } = &event
                     && let Some(at) = find_swatch(groups, name)
                     && let Some(entry) = groups.get(at.group).and_then(|g| g.entries.get(at.index))
@@ -327,7 +372,15 @@ impl<'a> SwatchesPanel<'a> {
                         | PresetEvent::Reorder { .. }
                 )
                 .then(|| event.clone());
-                edits.extend(event_edits(groups, &mut st, event, foreground, &words));
+                // The browser has discarded empty and unchanged names. Keep a live target's attempt for diagnostics
+                // if translating it into an edit fails. Validation and its selection updates still run in one place.
+                let attempted_rename =
+                    (report_invalid_renames && matches!(&event, PresetEvent::Rename { key, .. } if live(key))).then(|| event.clone());
+                let resolved = event_edits(groups, &mut st, event, foreground, &words);
+                if resolved.is_empty() {
+                    events.extend(attempted_rename);
+                }
+                edits.extend(resolved);
                 events.extend(forwarded);
             }
             Some(Settled { before_state, st, used, edits, events })

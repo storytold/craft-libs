@@ -1,13 +1,13 @@
 //! The family card and the collection of cards the panel lists.
 
 use craft_ui::buttons::{SplitButton, SplitOutput};
-use craft_ui::contract::{Entry, Props as _, Styled as _, clicked};
+use craft_ui::contract::{ActivateOn, Entry, Props as _, Styled as _, clicked};
 
 use super::{
-    Access, Arc, Badge, Button, Catalog, Collection, CollectionProps, CollectionResponse, Common, Component, ComponentStyle, ContainerProps, Cow, Cx,
-    DisplayOrder, Emphasis, FaceInfo, Flow, FontSample, FontsBrowseWords, Ink, ItemOutput, ItemSource, Kind, Label, Link, MeasureCx, Metrics, Name,
-    NoValue, Outcome, Owner, PartsCx, Pos2, Progress, Proposal, Rect, Response, Role, RuleKind, SampleFace, SelectMode, Selection, Shade, Sizing,
-    SpanLayout, Stateful, StyleCx, Text, TextLook, TextRun, Tone, TypeRole, Variant, Vec2,
+    Access, Badge, Button, Collection, CollectionProps, CollectionResponse, Common, Component, ComponentStyle, ContainerProps, Cow, Cx, DisplayOrder,
+    Emphasis, Flow, FontSample, FontsBrowseWords, HeldFace, Ink, ItemOutput, ItemSource, Kind, Label, Link, MeasureCx, Metrics, Name, NoValue,
+    Outcome, PartsCx, Pos2, Progress, Proposal, Rect, Response, Role, RuleKind, SelectMode, Selection, Shade, Sizing, SpanLayout, Stateful, StyleCx,
+    Text, TextLook, TextRun, Tone, TypeRole, Variant, Vec2,
 };
 use craft_ui::primitives::RectSide;
 
@@ -66,8 +66,8 @@ pub struct CardData {
     pub curated: bool,
     /// What is at the reading end.
     pub state: CardState,
-    /// The face the sample is drawn in, and whose catalog holds it.
-    pub face: Option<(Owner, FaceInfo, Arc<Catalog>)>,
+    /// The face the sample is drawn in.
+    pub(crate) face: Option<HeldFace>,
 }
 
 /// The pieces of a card at the reading end, in reading order.
@@ -318,16 +318,8 @@ impl FamilyCard {
         ends
     }
 
-    /// The face the sample is drawn in: the card's own, or none.
-    fn face(&self) -> SampleFace<'_> {
-        match &self.data.face {
-            Some((owner, face, catalog)) => SampleFace::Face { catalog, owner: *owner, face },
-            None => SampleFace::Missing,
-        }
-    }
-
     fn sample<'a>(&'a self, words: &FontsBrowseWords) -> FontSample<'a> {
-        FontSample::new(words.card_sample.clone(), self.data.sample.as_str(), self.face(), self.data.points)
+        FontSample::new(words.card_sample.clone(), self.data.sample.as_str(), HeldFace::sample(self.data.face.as_ref()), self.data.points)
     }
 
     /// The sizes of the parts at `width`.
@@ -448,7 +440,7 @@ pub struct FamilyCardsStyle {
     metrics: Metrics,
 }
 
-/// The family cards of one list: one Tab stop, Up and Down move the lead, Enter or a double click activates a card.
+/// The family cards of one list: one Tab stop, Up and Down move the lead, Enter or a click activates a card.
 #[derive(craft_ui::contract::Component)]
 #[component(collection)]
 pub struct FamilyCards {
@@ -465,7 +457,7 @@ impl FamilyCards {
         FamilyCards {
             common: Common::new(),
             props: ContainerProps::new().sizing(Sizing::Fill),
-            items: CollectionProps::new().select(SelectMode::Single),
+            items: CollectionProps::new().select(SelectMode::Single).activate(ActivateOn::Click),
         }
         .label(label)
     }

@@ -85,8 +85,8 @@ pub fn plain_text(s: &str) -> String {
     out
 }
 
-use crate::TICKS_PER_MS;
 use crate::time::{TICKS_PER_SECOND, Tick};
+use crate::{Cue, Document, TICKS_PER_MS};
 
 /// How long the last cue of a format that gives only start times lasts: such a file says when a
 /// caption appears, and the next one ends it.
@@ -129,6 +129,62 @@ pub(crate) fn escape_markup(s: &str) -> String {
 /// The cue's text as plain lines (tags gone, entities decoded, empty lines dropped).
 pub(crate) fn plain_lines(text: &str) -> Vec<String> {
     text.lines().map(plain_text).map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+}
+
+/// The style a whole line of cue text carries: `<i>`, `<b>` and `<u>` around all of it.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(crate) struct LineStyle {
+    pub italic: bool,
+    pub bold: bool,
+    pub underline: bool,
+}
+
+/// The style that wraps the whole of `line`, and the line without it. `<i>a</i> b <i>c</i>` is not
+/// italic as a whole.
+pub(crate) fn whole_line_style(line: &str) -> (LineStyle, &str) {
+    let mut style = LineStyle::default();
+    let mut rest = line.trim();
+    loop {
+        let mut changed = false;
+        for (open, close, flag) in [("<i>", "</i>", 0), ("<b>", "</b>", 1), ("<u>", "</u>", 2)] {
+            if let Some(inner) = rest.strip_prefix(open).and_then(|r| r.strip_suffix(close))
+                && !inner.contains(open)
+                && !inner.contains(close)
+            {
+                match flag {
+                    0 => style.italic = true,
+                    1 => style.bold = true,
+                    _ => style.underline = true,
+                }
+                rest = inner.trim();
+                changed = true;
+            }
+        }
+        if !changed {
+            return (style, rest);
+        }
+    }
+}
+
+/// Cue text from a line's style and its (already escaped) text.
+pub(crate) fn wrap_style(style: LineStyle, color: Option<&str>, text: &str) -> String {
+    let mut out = text.to_string();
+    for (on, tag) in [(style.underline, "u"), (style.bold, "b"), (style.italic, "i")] {
+        if on {
+            out = format!("<{tag}>{out}</{tag}>");
+        }
+    }
+    match color {
+        Some(c) => format!("<font color=\"{c}\">{out}</font>"),
+        None => out,
+    }
+}
+
+/// The cues of `doc` in time order with no overlaps, for a format that holds one caption at a time.
+pub(crate) fn sequential(doc: &Document) -> Vec<Cue> {
+    let mut copy = Document { cues: doc.cues.clone(), ..Default::default() };
+    copy.normalize();
+    copy.cues
 }
 
 #[cfg(test)]

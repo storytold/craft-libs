@@ -745,6 +745,8 @@ impl ImportPlan {
     /// earlier entry stays with that entry. That includes taking a chord from another command,
     /// or from a command whose own change failed: both commands keep the bindings they had. With
     /// [`Start::Defaults`] that cannot happen.
+    /// All conflicts removed from one command are saved together, so only its final binding
+    /// list must fit in the overrides, rather than each intermediate list.
     pub fn apply(&self, keymap: &mut Keymap) -> ImportReport {
         let before: Vec<Vec<Binding>> = self.commands.iter().map(|p| keymap.bindings(&p.command)).collect();
         // Dropping every entry leaves room for all of them: each catalog command takes at most one
@@ -802,7 +804,9 @@ impl ImportPlan {
             // A command that cannot take a chord from another command is dropped, so both keep
             // the bindings they had. That includes a command whose own change failed: freeing an
             // entry later must not take its chord away.
-            let mut unbind_failed = false;
+            let mut removals: Vec<(CommandRef, Vec<Binding>, Vec<usize>)> = Vec::new();
+            let mut removal_index = HashMap::new();
+            let mut cleared = Vec::new();
             for (c, (p, list)) in self.commands.iter().zip(&accepted).enumerate() {
                 if list.is_empty() || !decided.contains(&p.command.key()) {
                     continue;
@@ -811,12 +815,27 @@ impl ImportPlan {
                     if decided.contains(&h.command.key()) {
                         continue;
                     }
-                    let home = home_of(keymap, &h.command);
-                    let label = label_of(keymap, &h.command);
-                    let shortcut = h.binding.text(&home);
-                    if !failed_here.contains(&h.command.key()) && keymap.remove(&h.command, &h.binding) {
-                        report.conflicts_cleared.push(Cleared { command: h.command, label, shortcut });
-                    } else {
+                    let index = *removal_index.entry(h.command.key()).or_insert_with(|| {
+                        removals.push((h.command.clone(), Vec::new(), Vec::new()));
+                        removals.len() - 1
+                    });
+                    let Some((_, bindings, claimants)) = removals.get_mut(index) else { continue };
+                    if !claimants.contains(&c) {
+                        claimants.push(c);
+                    }
+                    if !bindings.contains(&h.binding) {
+                        bindings.push(h.binding.clone());
+                        cleared.push(h);
+                    }
+                }
+            }
+            let mut unbind_failed = false;
+            for (command, bindings, claimants) in removals {
+                let remaining = keymap.bindings(&command).into_iter().filter(|binding| !bindings.contains(binding)).collect();
+                if failed_here.contains(&command.key()) || keymap.set_bindings(&command, remaining, Policy::Keep).is_err() {
+                    for c in claimants {
+                        let Some(p) = self.commands.get(c) else { continue };
+                        let Some(list) = accepted.get(c) else { continue };
                         let home = home_of(keymap, &p.command);
                         let list = in_default_order(keymap, &p.command, list);
                         let shortcuts = list.iter().map(|b| b.text(&home)).collect();
@@ -824,14 +843,20 @@ impl ImportPlan {
                             c,
                             Failed { command: p.command.clone(), label: label_of(keymap, &p.command), change: FailedChange::Bind, shortcuts },
                         );
-                        unbind_failed = true;
-                        break;
                     }
+                    unbind_failed = true;
+                    break;
                 }
             }
             if unbind_failed {
                 *keymap = start.clone();
                 continue 'attempt;
+            }
+            for h in cleared {
+                let home = home_of(keymap, &h.command);
+                let label = label_of(keymap, &h.command);
+                let shortcut = h.binding.text(&home);
+                report.conflicts_cleared.push(Cleared { command: h.command, label, shortcut });
             }
 
             for (p, from) in self.commands.iter().zip(&before) {

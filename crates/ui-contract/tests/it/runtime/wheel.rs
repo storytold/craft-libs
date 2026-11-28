@@ -50,6 +50,39 @@ fn a_press_arms_a_gated_taker_until_the_pointer_leaves() {
     assert_eq!(read.get(), (scroll, None), "once the pointer leaves, the panel takes it again");
 }
 
+#[trial]
+fn pointer_scoped_field_wheel_scrolls_the_panel_outside_the_focused_field() {
+    let panel = Id::unique("pointer_scoped_wheel_panel");
+    let field = Cell::new(Id::NULL);
+    let field_rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(100.0, 20.0));
+    let panel_rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0));
+    let seen = RefCell::new(Seen::default());
+    let read = Cell::new((false, false));
+    let mut show_frame = |ui: &mut Ui| {
+        field.set(Probe::new(&seen).size(field_rect.size()).sense(Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS).show(ui).id);
+        register(ui.ctx(), WheelTaker::new(panel, panel_rect).vertical(true).scrolls(true));
+        register(ui.ctx(), WheelTaker::new(field.get(), field_rect).vertical(true).value(true).field(true).gated(true));
+        let moved = |owner| take_share(ui.ctx(), owner).is_some_and(|share| share.scroll.y != 0.0);
+        read.set((moved(panel), moved(field.get())));
+    };
+    let mut frames = Frames::new();
+    frames.root(RootEnv::default().pointer_scoped_field_wheel(true));
+    frames.idle(2, &mut show_frame);
+    let on_field = field_rect.center();
+    frames.frame(vec![pointer::moved(on_field)], &mut show_frame);
+    frames.frame(vec![pointer::wheel(-30.0)], &mut show_frame);
+    assert_eq!(read.get(), (true, false), "an unfocused field leaves the wheel with its panel");
+
+    pointer::click(&mut frames, on_field, &mut show_frame);
+    frames.frame(vec![pointer::wheel(-30.0)], &mut show_frame);
+    assert_eq!(read.get(), (false, true), "the wheel steps the focused field under the pointer");
+
+    frames.advance(GESTURE_GAP);
+    frames.frame(vec![pointer::moved(Pos2::new(300.0, 300.0))], &mut show_frame);
+    frames.frame(vec![pointer::wheel(-30.0)], &mut show_frame);
+    assert_eq!(read.get(), (true, false), "the panel scrolls when the pointer is outside the focused field");
+}
+
 /// A wheel event of `delta` in `unit` with `modifiers`, in device phase `phase`.
 fn wheel_event(unit: MouseWheelUnit, delta: Vec2, phase: TouchPhase, modifiers: Modifiers) -> Event {
     Event::MouseWheel { unit, delta, phase, modifiers, source: MouseWheelSource::Wheel }
@@ -112,6 +145,57 @@ fn a_fractional_ctrl_wheel_is_a_pinch_and_a_whole_notch_stays_a_scroll() {
         let unfolded = step(&mut fixture, vec![ctrl_lines(0.4)]);
         assert!(scrolled(&unfolded), "{os:?}: with `ctrl_wheel_pinch` off a fractional Ctrl+wheel is a wheel event: {unfolded:?}");
     }
+}
+
+#[trial]
+fn a_wheel_that_zooms_carries_its_lines_and_the_gesture_gathers_them() {
+    // egui reports the Ctrl key as `ctrl` and `command` off macOS; Ctrl is egui's zoom modifier there.
+    let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    let ctrl_lines = |dy: f32| wheel_event(MouseWheelUnit::Line, Vec2::new(0.0, dy), TouchPhase::Move, ctrl);
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let shares = Rc::clone(&seen);
+    let view = Id::unique("zoom_lines_view");
+    let mut fixture = Fixture::new(move |ui| {
+        register(ui.ctx(), WheelTaker::new(view, Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))).vertical(true).zoom(true));
+        shares.borrow_mut().extend(take_share(ui.ctx(), view));
+    });
+    fixture.os(Os::Windows);
+    fixture.settle();
+    fixture.frame(vec![pointer::moved(Pos2::new(200.0, 150.0))]);
+    seen.borrow_mut().clear();
+    let step = |fixture: &mut Fixture, events: Vec<Event>| -> Vec<Wheel> {
+        fixture.frame(events);
+        std::mem::take(&mut *seen.borrow_mut())
+    };
+    let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-4;
+
+    // Two notches in one pass zoom as one factor and count as two lines; the next notch of the gesture gathers on.
+    let two = step(&mut fixture, vec![ctrl_lines(1.0), ctrl_lines(1.0)]);
+    assert!(two.len() == 1 && two[0].zoom > 1.0 && two[0].scroll == Vec2::ZERO, "two notches zoom: {two:?}");
+    assert_eq!((two[0].zoom_lines, two[0].zoom_gathered), (Vec2::new(0.0, 2.0), Vec2::new(0.0, 2.0)), "{two:?}");
+    let down = step(&mut fixture, vec![ctrl_lines(-1.0)]);
+    assert_eq!((down[0].zoom_lines, down[0].zoom_gathered), (Vec2::new(0.0, -1.0), Vec2::new(0.0, 1.0)), "{down:?}");
+
+    // A touchpad driver's fractional Ctrl+wheel reaches the view as a pinch step and carries its lines too.
+    fixture.advance(1.0);
+    let folded = step(&mut fixture, vec![ctrl_lines(0.4)]);
+    assert!(folded.len() == 1 && folded[0].zoom > 1.0, "a pinch step: {folded:?}");
+    assert!(near(folded[0].zoom_lines, Vec2::new(0.0, 0.4)) && near(folded[0].zoom_gathered, Vec2::new(0.0, 0.4)), "a new gesture: {folded:?}");
+
+    // A native pinch and a wheel without the modifier carry none.
+    fixture.advance(1.0);
+    let native = step(&mut fixture, vec![Event::Zoom(1.1)]);
+    assert!(native.len() == 1 && native[0].zoom_lines == Vec2::ZERO, "a native pinch: {native:?}");
+    fixture.advance(1.0);
+    let plain = step(&mut fixture, vec![pointer::wheel_lines(1.0)]);
+    assert!(plain.len() == 1 && plain[0].zoom_lines == Vec2::ZERO && plain[0].zoom == 1.0, "a plain wheel: {plain:?}");
+
+    // With Alt as the zoom modifier, the user's wheel speed scales the notch it zooms by but not the lines it counts.
+    fixture.ctx().options_mut(|options| options.input_options.zoom_modifier = Modifiers::ALT);
+    fixture.root(RootEnv::default().wheel_speed(WheelSpeed::new(3.0, 3.0)));
+    fixture.advance(1.0);
+    let alt = step(&mut fixture, vec![wheel_event(MouseWheelUnit::Line, Vec2::new(0.0, 1.0), TouchPhase::Move, Modifiers::ALT)]);
+    assert!(alt.len() == 1 && near(alt[0].zoom_lines, Vec2::new(0.0, 1.0)), "one notch at three times the speed: {alt:?}");
 }
 
 #[trial]
