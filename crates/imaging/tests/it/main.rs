@@ -14,6 +14,7 @@ pub(crate) mod filter_gallery;
 pub(crate) mod histogram;
 pub(crate) mod hosted_dialogs;
 pub(crate) mod layer_style;
+pub(crate) mod layer_style_channel_names;
 pub(crate) mod liquify;
 pub(crate) mod live_preview;
 pub(crate) mod perspective_warp;

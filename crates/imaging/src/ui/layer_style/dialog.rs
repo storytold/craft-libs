@@ -119,6 +119,7 @@ pub struct LayerStyleDialog<'a> {
     label: Label,
     draft: &'a LayerStyleDraft,
     channel_names: &'a [String],
+    blend_if_names: Option<&'a [String]>,
     specs: Option<&'a [EffectSpec]>,
     blend_keys: Option<&'a HashMap<String, String>>,
     blend_modes: &'a [Entry<String>],
@@ -131,12 +132,14 @@ pub struct LayerStyleDialog<'a> {
 
 impl<'a> LayerStyleDialog<'a> {
     /// The body named `label` over `draft`; `channel_names` are the document's colour channels ("R", "G", "B"; "C", "M",
-    /// "Y", "K"; "L", "a", "b"; "Gray") for the Channels checks and Blend If.
+    /// "Y", "K"; "L", "a", "b"; "Gray") for the Channels checks, and for Blend If without
+    /// [`blend_if_names`](Self::blend_if_names).
     pub fn new(label: impl Into<Label>, draft: &'a LayerStyleDraft, channel_names: &'a [String]) -> Self {
         LayerStyleDialog {
             label: label.into(),
             draft,
             channel_names,
+            blend_if_names: None,
             specs: None,
             blend_keys: None,
             blend_modes: &[],
@@ -146,6 +149,16 @@ impl<'a> LayerStyleDialog<'a> {
             style_presets: None,
             gradient_presets: &[],
         }
+    }
+
+    /// The names of the Blend If entries, one per entry of
+    /// [`Blending::blend_if`](crate::layer_style::Blending::blend_if) in order ("Gray", "Red", "Green",
+    /// "Blue"; "Lightness", "a", "b"), used as given. Without them the entries take the channel names, with Gray first
+    /// when the style has one entry more than names. The Channels checks keep the channel names, so an empty list
+    /// there draws the Channels label with no check box.
+    pub fn blend_if_names(mut self, names: &'a [String]) -> Self {
+        self.blend_if_names = Some(names);
+        self
     }
 
     /// The gradient presets a Gradient field's select offers, by name. Without presets the field shows only the editor.
@@ -208,6 +221,7 @@ impl<'a> LayerStyleDialog<'a> {
             label,
             draft,
             channel_names,
+            blend_if_names,
             specs,
             blend_keys,
             blend_modes,
@@ -250,6 +264,7 @@ impl<'a> LayerStyleDialog<'a> {
                     sampler,
                     gradient_presets,
                     channel_names,
+                    blend_if_names,
                     words: &words,
                     units: &units,
                 };
@@ -332,6 +347,7 @@ struct PageEnv<'a> {
     sampler: Option<ContourSampler>,
     gradient_presets: &'a [(String, GradientStops)],
     channel_names: &'a [String],
+    blend_if_names: Option<&'a [String]>,
     words: &'a LayerStyleWords,
     units: &'a craft_ui::runtime::env::Units,
 }
@@ -409,6 +425,7 @@ impl Work {
                     style: &draft.style,
                     blend_if_channel: self.next.blend_if_channel,
                     channel_names: env.channel_names,
+                    blend_if_names: env.blend_if_names,
                     blend_modes: env.blend_modes,
                 };
                 let out = blending_page(ui, &input);
