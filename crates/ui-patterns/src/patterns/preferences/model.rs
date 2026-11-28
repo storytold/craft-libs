@@ -126,6 +126,8 @@ pub struct RowSpec<'a> {
     /// default a drop-down, and on a card ([`PreferencesLayout::Cards`](super::PreferencesLayout::Cards)) a short
     /// choice of up to five options is segmented. Ignored by other kinds.
     pub pills: Option<bool>,
+    /// A [`RowKind::Text`] row: the translated text shown while the field is empty. Ignored by other kinds.
+    pub placeholder: Option<&'a str>,
     /// The control and the value it shows.
     pub kind: RowKind<'a>,
 }
@@ -133,7 +135,7 @@ pub struct RowSpec<'a> {
 impl<'a> RowSpec<'a> {
     /// A visible, enabled row with no keywords or help.
     pub fn new(key: &'a str, label: &'a str, kind: RowKind<'a>) -> Self {
-        Self { key, label, keywords: "", help: None, visible: true, enabled: true, step: None, pills: None, kind }
+        Self { key, label, keywords: "", help: None, visible: true, enabled: true, step: None, pills: None, placeholder: None, kind }
     }
 
     /// Sets extra search text for the row.
@@ -168,6 +170,13 @@ impl<'a> RowSpec<'a> {
     #[must_use]
     pub fn pills(mut self, pills: bool) -> Self {
         self.pills = Some(pills);
+        self
+    }
+
+    /// Sets the text a [`RowKind::Text`] row shows while empty.
+    #[must_use]
+    pub fn placeholder(mut self, placeholder: &'a str) -> Self {
+        self.placeholder = Some(placeholder);
         self
     }
 

@@ -320,3 +320,33 @@ fn the_search_shows_how_many_settings_match() {
     fixture.click(&search).type_text("snap").settle();
     assert!(fixture.texts().iter().any(|t| t.text == "1 match"), "{:?}", fixture.texts().iter().map(|t| &t.text).collect::<Vec<_>>());
 }
+
+/// A text row with a placeholder shows it while the field is empty; one without shows none.
+#[trial]
+fn a_text_rows_placeholder_shows_while_empty() {
+    struct Initials(bool);
+    impl PreferencesModel for Initials {
+        fn pages(&self) -> Vec<PageSpec<'_>> {
+            let row = RowSpec::new("general.initials", "Initials", RowKind::Text(""));
+            vec![PageSpec::new("general", "General", vec![if self.0 { row.placeholder("AB") } else { row }])]
+        }
+        fn set(&mut self, _: &str, _: PrefValue) {}
+        fn custom_row(&mut self, _: &mut Ui, _: &str) -> bool {
+            false
+        }
+        fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
+            false
+        }
+        fn reset_page(&mut self, _: &str) {}
+    }
+    let shown = |placeholder| {
+        let mut state = PreferencesState::default();
+        let mut fixture = Fixture::new(move |ui| {
+            PreferencesPage::new(Bind::bound(&mut state)).show(ui, &mut Initials(placeholder));
+        });
+        fixture.settle();
+        craft_ui::testing::text::painted(&fixture.frame_shapes()).iter().any(|text| text == "AB")
+    };
+    assert!(shown(true), "the placeholder is painted");
+    assert!(!shown(false), "no placeholder, none painted");
+}

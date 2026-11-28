@@ -39,7 +39,7 @@ pub(super) enum Kind {
     Int { value: i64, range: RangeInclusive<i64>, unit: Option<UnitKind>, unit_text: Option<Label> },
     Float { value: f64, range: RangeInclusive<f64>, decimals: u8, step: Option<f64>, unit: Option<UnitKind>, unit_text: Option<Label> },
     Length { value: f64, range: RangeInclusive<f64>, lengths: LengthUnits },
-    Text(String),
+    Text { value: String, placeholder: Option<Label> },
     Custom,
     CustomRows,
 }
@@ -72,7 +72,7 @@ impl ShownRow {
                 unit_text: unit_text.map(|text| Label::from(text.to_owned())),
             },
             RowKind::Length { value, range, lengths } => Kind::Length { value: *value, range: range.clone(), lengths: *lengths },
-            RowKind::Text(text) => Kind::Text((*text).to_owned()),
+            RowKind::Text(text) => Kind::Text { value: (*text).to_owned(), placeholder: row.placeholder.map(|text| Label::from(text.to_owned())) },
             RowKind::Custom => Kind::Custom,
             RowKind::CustomRows => Kind::CustomRows,
         };
@@ -229,10 +229,14 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(
             });
             record(next.map(PrefValue::Float));
         }
-        Kind::Text(value) => {
+        Kind::Text { value, placeholder } => {
             let mut next = None;
             control(ui, row, cards, |ui| {
-                next = TextField::new(label.clone(), Bind::given(value.clone())).show(ui).events.landed().cloned();
+                let mut field = TextField::new(label.clone(), Bind::given(value.clone()));
+                if let Some(placeholder) = placeholder {
+                    field = field.placeholder(placeholder.clone());
+                }
+                next = field.show(ui).events.landed().cloned();
             });
             record(next.map(PrefValue::Text));
         }
