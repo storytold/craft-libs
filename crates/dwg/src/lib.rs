@@ -1122,30 +1122,41 @@ mod native {
     }
 
     /// Whether a table style gets row cell styles: it lacks some and they all fit. The DWG reader
-    /// keeps only 64 cell styles per table style, so a style with no room for every missing row is
-    /// left exactly as it is (nothing added, nothing dropped) and the drawing still converts.
+    /// keeps only 64 cell styles per table style, so a style with no room for every missing row gets
+    /// none (nothing added, nothing dropped; the rows it has still get their margins, see
+    /// [`table_style_row_margins`]) and the drawing still converts.
     fn gets_rows(s: &acadrust::objects::TableStyle) -> bool {
         let missing_rows = ROW_NAMES.iter().filter(|n| missing(s, n)).count();
         missing_rows > 0 && s.modern_overrides.len().saturating_add(missing_rows) <= 64
     }
 
-    /// Whether a row cell style carries margin overrides (or has no cell style data at all, which
-    /// the writer leaves out so that the row inherits the style's own margins).
+    /// The spacing the writer gives the base cell style, and the rows added here, between cells.
+    const ROW_SPACING: f64 = 0.18;
+
+    /// The row of the table style a built-in row name stands for: the cell style spelled exactly
+    /// so, else the first one spelled in another case (cell style names ignore case; the DWG
+    /// reader only takes the exact spelling for the row).
+    fn row_index(s: &acadrust::objects::TableStyle, name: &str) -> Option<usize> {
+        let at = |exact: bool| s.modern_overrides.iter().position(|(_, o)| if exact { o.name == name } else { o.name.eq_ignore_ascii_case(name) });
+        at(true).or_else(|| at(false))
+    }
+
+    /// Whether a row cell style needs no margins of its own: it carries margin overrides, judged as
+    /// the DWG writer and reader judge them (any nonzero `margin_override_flags`), or has no cell
+    /// style data at all (`data_flags` 0: the writer leaves everything past the flag out, so the
+    /// row sets nothing and the base cell style, which carries the style's margins, applies).
     fn has_margins(c: &acadrust::objects::TableCellStyleData) -> bool {
-        c.data_flags == 0 || c.margin_override_flags & 1 != 0
+        c.data_flags == 0 || c.margin_override_flags != 0
     }
 
-    /// Whether a row cell style the table style carries already is one of the three built-in rows
-    /// that needs work: its margins aren't overridden (the writer then reads the style's margins
-    /// as 0.06), or its name is not spelled as the DWG reader knows it (`_title`, which the reader
-    /// would not take for the title row).
-    fn row_needs_work(o: &acadrust::objects::NamedTableCellStyle) -> bool {
-        ROW_NAMES.iter().any(|n| o.name.eq_ignore_ascii_case(n) && (o.name != *n || !has_margins(&o.cell_style)))
-    }
-
-    /// Whether any of the table style's rows needs [`row_needs_work`].
+    /// Whether any of the three built-in rows a table style carries needs work: the row is not
+    /// spelled as the DWG reader knows it (`_title`, which it would take for a custom cell style,
+    /// not the title row), or it has no margins ([`has_margins`]; the writer then reads the style's
+    /// margins as 0.06).
     fn rows_need_work(s: &acadrust::objects::TableStyle) -> bool {
-        s.modern_overrides.iter().any(|(_, o)| row_needs_work(o))
+        ROW_NAMES
+            .iter()
+            .any(|n| row_index(s, n).is_some_and(|i| s.modern_overrides.get(i).is_some_and(|(_, o)| o.name != *n || !has_margins(&o.cell_style))))
     }
 
     /// The lowest cell style id from 101 up to `max` that nothing in `held` holds; `None` when
@@ -1159,19 +1170,21 @@ mod native {
     /// 0.6.6's DWG writer builds them with no margin override, and the reference app then reads
     /// the style's margins as 0.06 where the drawing has another value. They are built here the
     /// way that writer builds them, with the margins the writer gives the base `Table` cell
-    /// style. Only missing rows are added, so every style ends with all three: a row a style
-    /// carries already keeps its values, and a row whose id another cell style holds gets a free
-    /// one.
+    /// style. Only missing rows are added, so every style ends with all three (when they fit): a
+    /// row a style carries already keeps its values, except that one with no margin overrides
+    /// gets the style's margins and spacing and one spelled `_title` takes the reader's spelling
+    /// `_TITLE`; a row whose id another cell style holds gets a free one.
     ///
     /// Versions before 2010 return at once, as does a drawing none of whose styles is missing a
-    /// row: it is left exactly as it is. Otherwise the one thing changed besides the rows is the
+    /// row or has a row that needs work (see above): it is left exactly as it is. Otherwise the
+    /// one thing changed besides the rows is the
     /// handle of a text style that an added row names and that was read without one (R12,
     /// HANDLING 0): it is numbered here, as the writer would number it later, so the row finds
     /// its style as it would there rather than falling to Standard. Other table entries without
     /// a handle are left for the writer, so the drawing's handle numbering stays the writer's
-    /// own. A style with no room for all its missing rows (64 cell styles at most) is left as it
-    /// is. An `Err` means a style has no free cell style id (not possible short of two
-    /// billion cell styles).
+    /// own. A style with no room for all its missing rows (64 cell styles at most) gets none, and
+    /// is otherwise changed only as above. An `Err` means a style has no free cell style id (not
+    /// possible short of two billion cell styles).
     fn table_style_row_margins(doc: &mut acadrust::CadDocument) -> Result<(), String> {
         table_style_row_margins_up_to(doc, i32::MAX)
     }
@@ -1229,26 +1242,21 @@ mod native {
                 continue;
             }
             let (v, hz) = (s.vertical_margin, s.horizontal_margin);
-            // The rows the style carries already: one whose margins aren't overridden gets the
-            // style's (an override it has is its own and stays), and a built-in row spelled in
-            // another case takes the DWG reader's spelling (keeping its id and formatting), unless
-            // the style has that spelling already.
+            // The rows the style carries already. A built-in row spelled in another case (and
+            // with no exact spelling in the style) takes the DWG reader's spelling, keeping its id
+            // and formatting, so the reader takes it for the row. One with no margin overrides gets
+            // the style's margins with the spacing the writer gives its base cell style; an
+            // override it has, in any of its flags, is its own and stays. When the style holds the
+            // exact spelling too, only that row is the row: the other spelling is left as it is.
             for name in ROW_NAMES {
-                let mut spelled = s.modern_overrides.iter().any(|(_, o)| o.name == name);
-                for (_, o) in &mut s.modern_overrides {
-                    if !o.name.eq_ignore_ascii_case(name) {
-                        continue;
-                    }
-                    if !spelled {
-                        o.name = name.to_string();
-                        spelled = true;
-                    }
-                    let c = &mut o.cell_style;
-                    if !has_margins(c) {
-                        c.margin_override_flags |= 1;
-                        (c.vertical_margin, c.bottom_margin) = (v, v);
-                        (c.horizontal_margin, c.right_margin) = (hz, hz);
-                    }
+                let Some((_, o)) = row_index(s, name).and_then(|i| s.modern_overrides.get_mut(i)) else { continue };
+                o.name = name.to_string();
+                let c = &mut o.cell_style;
+                if !has_margins(c) {
+                    c.margin_override_flags |= 1;
+                    (c.vertical_margin, c.bottom_margin) = (v, v);
+                    (c.horizontal_margin, c.right_margin) = (hz, hz);
+                    (c.horizontal_spacing, c.vertical_spacing) = (ROW_SPACING, ROW_SPACING);
                 }
             }
             if !adds_rows {
@@ -1295,8 +1303,8 @@ mod native {
                         horizontal_margin: hz,
                         bottom_margin: v,
                         right_margin: hz,
-                        horizontal_spacing: 0.18,
-                        vertical_spacing: 0.18,
+                        horizontal_spacing: ROW_SPACING,
+                        vertical_spacing: ROW_SPACING,
                         borders,
                         ..TableCellStyleData::default()
                     },
@@ -1306,7 +1314,7 @@ mod native {
                 }
             };
             // Only the rows the style doesn't already carry (a DXF's CELLSTYLEMAP may hold some of
-            // them); the ones it has keep their values. A row's id held already by another cell
+            // them); the ones it has are dealt with above. A row's id held already by another cell
             // style (as key or id) gives the row a free id instead, so no two styles share one. An
             // added row goes right after the last row that comes before it (or first), so the rows
             // keep _TITLE, _HEADER, _DATA order.
@@ -1685,7 +1693,8 @@ mod native {
         }
 
         /// A style that carries some row cell styles already (a DXF's partial CELLSTYLEMAP) gets
-        /// the missing rows, and the ones it has keep their values (review on #2921).
+        /// the missing rows, and the ones it has keep their values: a margin of its own is not
+        /// replaced (review on #2921).
         #[test]
         fn partial_row_cell_styles_get_the_missing_rows() {
             use acadrust::objects::{NamedTableCellStyle, ObjectType};
@@ -1870,10 +1879,12 @@ mod native {
             assert!(rows > 0);
         }
 
-        /// A row a style carries already gets the style's margins when it has no margin override
-        /// of its own, and keeps the ones it has (review on #1960). After a DWG save and reopen the
-        /// two are told apart: `_TITLE` (no override) carries the style's margins, `_HEADER` (its
-        /// own) its own.
+        /// A row a style carries already gets the style's margins and spacing when it has no margin
+        /// override, and keeps the ones it has (review on #1960). After a DWG save and reopen the
+        /// cases are told apart: `_TITLE` (no override) carries the style's margins and the base
+        /// spacing, `_HEADER` (flags 2, which the writer and reader also take for margins) its own
+        /// margins and spacing, `_DATA` (no cell style data at all) nothing, so it inherits the
+        /// base cell style, which carries the style's margins.
         #[test]
         fn an_existing_row_gets_the_style_margins_only_where_it_has_no_override() {
             use acadrust::objects::{NamedTableCellStyle, ObjectType};
@@ -1888,10 +1899,12 @@ mod native {
                 assert_eq!(title.cell_style.margin_override_flags, 0);
                 let mut header = NamedTableCellStyle { id: 2, style_type: 1, name: "_HEADER".into(), ..NamedTableCellStyle::default() };
                 header.cell_style.data_flags = 1;
-                header.cell_style.margin_override_flags = 1;
+                header.cell_style.margin_override_flags = 2;
                 (header.cell_style.horizontal_margin, header.cell_style.right_margin) = (9.0, 9.0);
                 (header.cell_style.vertical_margin, header.cell_style.bottom_margin) = (7.0, 7.0);
-                s.modern_overrides = vec![(1, title), (2, header)];
+                (header.cell_style.horizontal_spacing, header.cell_style.vertical_spacing) = (5.0, 4.0);
+                let data = NamedTableCellStyle { id: 3, style_type: 2, name: "_DATA".into(), ..NamedTableCellStyle::default() };
+                s.modern_overrides = vec![(1, title), (2, header), (3, data)];
             }
             table_style_row_margins(&mut doc).expect("row ids");
             let back = through_dwg(&doc);
@@ -1903,17 +1916,59 @@ mod native {
                     .iter()
                     .map(|(_, r)| {
                         let c = &r.cell_style;
-                        (r.name.as_str(), c.margin_override_flags, c.horizontal_margin, c.vertical_margin, c.right_margin, c.bottom_margin)
+                        let margins = (c.margin_override_flags, c.horizontal_margin, c.vertical_margin, c.right_margin, c.bottom_margin);
+                        (r.name.as_str(), margins, (c.horizontal_spacing, c.vertical_spacing))
                     })
                     .collect();
                 assert_eq!(
                     rows,
-                    [("_TITLE", 1, 1.0, 0.25, 1.0, 0.25), ("_HEADER", 1, 9.0, 7.0, 9.0, 7.0), ("_DATA", 1, 1.0, 0.25, 1.0, 0.25)],
-                    "an existing row without an override takes the style's margins, one with its own keeps them"
+                    [
+                        ("_TITLE", (1, 1.0, 0.25, 1.0, 0.25), (0.18, 0.18)),
+                        ("_HEADER", (2, 9.0, 7.0, 9.0, 7.0), (5.0, 4.0)),
+                        ("_DATA", (0, 0.0, 0.0, 0.0, 0.0), (0.0, 0.0)),
+                    ],
+                    "an existing row without margins takes the style's margins and spacing, one with its own keeps them"
                 );
+                let base = s
+                    .modern_style
+                    .as_ref()
+                    .map(|b| (b.cell_style.margin_override_flags, b.cell_style.horizontal_margin, b.cell_style.vertical_margin));
+                assert_eq!(base, Some((1, 1.0, 0.25)), "the base cell style carries the margins the _DATA row inherits");
                 styles += 1;
             }
             assert!(styles > 0);
+        }
+
+        /// With both spellings in a style only the exact one (`_TITLE`) is the row, as the DWG reader
+        /// takes it: it gets the margins, and `_title` (a custom cell style to the reader) is left
+        /// as it is, name and values.
+        #[test]
+        fn with_both_spellings_only_the_exact_row_is_filled() {
+            use acadrust::objects::{NamedTableCellStyle, ObjectType};
+            let mut doc = acadrust::CadDocument::new();
+            doc.version = acadrust::DxfVersion::AC1032;
+            for o in doc.objects.values_mut() {
+                let ObjectType::TableStyle(s) = o else { continue };
+                s.horizontal_margin = 1.0;
+                s.vertical_margin = 0.25;
+                s.modern_overrides = [(5, "_title"), (1, "_TITLE")]
+                    .map(|(k, n)| {
+                        let mut row = NamedTableCellStyle { id: k, name: n.into(), ..NamedTableCellStyle::default() };
+                        row.cell_style.data_flags = 1;
+                        (k, row)
+                    })
+                    .into();
+            }
+            table_style_row_margins(&mut doc).expect("row ids");
+            for o in doc.objects.values() {
+                let ObjectType::TableStyle(s) = o else { continue };
+                let rows: Vec<_> = s
+                    .modern_overrides
+                    .iter()
+                    .map(|(_, r)| (r.name.as_str(), r.cell_style.margin_override_flags, r.cell_style.horizontal_margin))
+                    .collect();
+                assert_eq!(rows, [("_title", 0, 0.0), ("_TITLE", 1, 1.0), ("_HEADER", 1, 1.0), ("_DATA", 1, 1.0)]);
+            }
         }
 
         /// A built-in row in another case (`_title`) is written under the spelling the DWG reader
