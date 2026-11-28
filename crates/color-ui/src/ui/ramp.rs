@@ -6,8 +6,8 @@ use craft_cms::convert::CmykConverter;
 use craft_theme::{Hsb, Srgba};
 use craft_ui::canvas::context_click;
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, Name, Outcome, PaintUi, PartsCx,
-    Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Outcome, PaintUi,
+    PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
 use craft_ui::primitives::{Marker, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::FireSource;
@@ -240,6 +240,11 @@ pub struct ColorRamp<'a> {
     /// Whether the white and black boxes follow the bar; on by default.
     #[prop]
     boxes: bool,
+    /// Whether the ramp is at least as tall as its two end boxes stacked, each as tall as it is wide, in place of a
+    /// color band; off by default. A ramp that takes the room under other rows keeps this height in a host sized by
+    /// its content and in a short one.
+    #[prop]
+    square_boxes: bool,
     /// The ramp's kind as the host names it ("RGB Spectrum"), the bar's accessible value.
     #[prop(into)]
     kind_name: Option<Label>,
@@ -265,6 +270,7 @@ impl<'a> ColorRamp<'a> {
             web_safe: false,
             recolor_clicks: false,
             boxes: true,
+            square_boxes: false,
             kind_name: None,
             colors: Arc::default(),
             shown_ends: ends,
@@ -414,6 +420,12 @@ impl Component for ColorRamp<'_> {
 
     fn fills(&self) -> Option<Axis> {
         Some(Axis::X)
+    }
+
+    /// With [`square_boxes`](ColorRamp::square_boxes), as tall as its two end boxes stacked, each as tall as it is wide;
+    /// else the style's least, a color band.
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        if self.square_boxes { Vec2::new(0.0, cx.style.boxes * 2.0) } else { Vec2::ZERO }
     }
 
     fn sense(&self) -> Sense {

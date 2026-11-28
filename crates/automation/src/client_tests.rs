@@ -103,10 +103,8 @@ fn an_unasked_line_makes_the_connection_unusable_before_sending() {
     let mut client = ControlClient::connect(addr, TOKEN).unwrap();
     assert!(client.is_usable(), "an idle connection with nothing pending is usable");
     said.send(()).unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while client.is_usable() && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    // A blocking peek (under the client's read timeout) returns once the line has arrived.
+    assert!(client.stream.peek(&mut [0]).unwrap() > 0, "the unasked line arrived");
     assert!(!client.is_usable(), "the unasked line makes the connection unusable");
     assert_eq!(client.call("next", json!({})), Err("connection closed".to_string()));
     assert!(client.is_broken(), "the unusable connection is closed");

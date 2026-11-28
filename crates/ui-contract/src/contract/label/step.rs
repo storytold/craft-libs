@@ -125,7 +125,7 @@ impl LeafPlaced {
 /// and calls `LeafPlaced::finish`.
 pub(crate) fn decide_leaf<C: Show>(ui: &mut Ui, env: &Env, at: &LeafLabel<'_>, child: &mut C, trailing: Vec2) -> Decided {
     // Read before the child measures: nothing it does there may count as a child placed in flow.
-    let in_column = in_column(ui);
+    let in_column = in_column(ui, env);
     // An egui grid's cell is as wide as the row takes, and the control shows at its ideal width there.
     let proposal = if at.egui_cell { craft_behavior::Proposal::Ideal } else { craft_behavior::Proposal::Min };
     let control_min = crate::contract::run::measure_under(child, &*ui, Some(at.id), proposal, Some(at.under)).x;
@@ -335,13 +335,13 @@ fn show(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, decided: Decided, trailing:
 
 /// Whether a row shown in `flow` is a row of a vertical flow, not a member of a row's line. The first child of an
 /// unwrapped row that is itself a row of a vertical flow (`Scoped::column_row`) starts where that flow's rows start,
-/// so it counts as one of them: a check box that starts a row of a form lines up with the form's controls.
-pub(crate) fn in_column(flow: &Ui) -> bool {
+/// so it counts as one of them: a check box that starts a row of a form lines up with the form's controls. `env` is the
+/// env `flow`'s children are placed under.
+pub(crate) fn in_column(flow: &Ui, env: &Env) -> bool {
     if !flow.layout().is_horizontal() {
         return true;
     }
-    let env = Env::of(flow);
-    env.column_row && crate::layout::at_flow_start(flow.ctx(), &env)
+    env.column_row && crate::layout::at_flow_start(flow.ctx(), env)
 }
 
 /// A control with its label after it that the label step moved into the control column (its `control` starts past
@@ -361,7 +361,7 @@ pub(crate) fn report_after_reach(ctx: &egui::Context, env: &Env, side: &SideLabe
 /// child's id, `owner` the component whose eviction takes the label scope's facts, and `under` the enabled state and
 /// size the child inherits. `trailing` is content shown inside the label, after its text.
 pub(crate) fn flow_leaf<C: Show>(
-    ui: &mut Ui,
+    (ui, env): (&mut Ui, Env),
     (id, owner): (Id, Id),
     under: (bool, craft_theme::ControlSize),
     label: Label,
@@ -371,28 +371,26 @@ pub(crate) fn flow_leaf<C: Show>(
 ) -> C::Output {
     // In a grid the row is the grid's next cell, read under its column's group, as `run` shows any other cell: the
     // room before the row is the whole grid's, and a row placed there would stand under the one before it.
-    match crate::layout::grid_cell(ui) {
-        Some((grid, column, sized)) => {
-            let ctx = ui.ctx().clone();
-            crate::layout::ColumnGroup::cell(&ctx, grid, column, sized, || flow_leaf_row(ui, (id, owner), under, label, side, child, trailing, true))
-        }
-        None => flow_leaf_row(ui, (id, owner), under, label, side, child, trailing, false),
+    let ctx = ui.ctx().clone();
+    match crate::layout::grid_cell(&ctx, &env) {
+        Some((grid, column, sized)) => crate::layout::ColumnGroup::cell(&ctx, grid, column, sized, || {
+            flow_leaf_row((ui, env), (id, owner), under, label, side, child, (trailing, true))
+        }),
+        None => flow_leaf_row((ui, env), (id, owner), under, label, side, child, (trailing, false)),
     }
 }
 
-/// `flow_leaf` for a row in the flow of `ui`; `in_cell`: the row is the next cell of the grid around it.
-#[expect(clippy::too_many_arguments, reason = "flow_leaf's arguments and whether its row is a grid cell")]
+/// `flow_leaf` for a row in the flow of `ui`, whose children are placed under `env`; `in_cell`: the row is the next
+/// cell of the grid around it.
 fn flow_leaf_row<C: Show>(
-    ui: &mut Ui,
+    (ui, env): (&mut Ui, Env),
     (id, owner): (Id, Id),
     under: (bool, craft_theme::ControlSize),
     label: Label,
     side: SideLabel,
     child: C,
-    trailing: Option<Trailing<'_>>,
-    in_cell: bool,
+    (trailing, in_cell): (Option<Trailing<'_>>, bool),
 ) -> C::Output {
-    let env = Env::of(ui);
     let mut child = child;
     let under = leaf_under(&env, &side, &child, under);
     let ideal = crate::contract::run::measure_under(&mut child, &*ui, Some(id), craft_behavior::Proposal::Ideal, Some(&under));
@@ -401,7 +399,7 @@ fn flow_leaf_row<C: Show>(
     }
     // A grid's cell; a probe offers it unbounded room, and the row then spans the grid's flow so it has an end edge.
     let flow = ui.available_rect_before_wrap();
-    let avail = match crate::layout::flow_region(ui) {
+    let avail = match crate::layout::flow_region(ui, &env) {
         region if in_cell && region.width().is_finite() => region,
         region if in_cell => Rect::from_min_size(region.min, Vec2::new(flow.width(), region.height())),
         _ => flow,
@@ -438,7 +436,8 @@ fn flow_leaf_row<C: Show>(
     // below it.
     let height = (decided_control.bottom().max(decided_label.bottom()) - row.top()).max(ideal.y);
     let first = decided_control.top() - row.top() + ideal.y / 2.0;
-    let took = crate::layout::place_in_cell(ui, Vec2::new(extent, height), crate::layout::InFlow { fill: false, first: Some(first), line: true });
+    let took =
+        crate::layout::place_in_cell(ui, &env, Vec2::new(extent, height), crate::layout::InFlow { fill: false, first: Some(first), line: true });
     let placed = show_leaf(ui, &env, &at, decided, took.top() - row.top(), trailing);
     let control = span(placed.control);
     // A control beside its label in a content-sized column reports how far it reaches past the label column, so
@@ -451,10 +450,8 @@ fn flow_leaf_row<C: Show>(
         report_after_reach(ui.ctx(), &env, &side, (avail, control), extent);
     }
     // The child runs under the inside label its measures saw.
-    let installed = under
-        .inside
-        .clone()
-        .map(|inside| Env::install_for(ui, env.derive_local(|scoped| scoped.inside_label = Some(inside as crate::runtime::env::Held))));
+    let inside = under.inside.clone().map(|inside| env.derive_local(|scoped| scoped.inside_label = Some(inside as crate::runtime::env::Held)));
+    let installed = inside.clone().map(|inside| Env::install_for(ui, inside));
     // The control and its label are one member of a bar's line: judged together, and hidden together, as the label
     // step hid the label.
     let shown_clip = ui.clip_rect();
@@ -462,8 +459,13 @@ fn flow_leaf_row<C: Show>(
     if cut {
         ui.set_clip_rect(Rect::NOTHING);
     }
-    let output =
-        crate::contract::run::show_leaf(&mut Some(crate::contract::Props::id(child, id)), ui, crate::contract::run::ShowAt::Rect(control), None);
+    let place = inside.unwrap_or_else(|| env.clone());
+    let output = crate::contract::run::show_leaf(
+        &mut Some(crate::contract::Props::id(child, id)),
+        ui,
+        (crate::contract::run::ShowAt::Rect(control), place),
+        None,
+    );
     if cut {
         ui.set_clip_rect(shown_clip);
     }
@@ -515,7 +517,7 @@ pub(crate) fn show_leaf_in_flow<C: Show>(mut child: C, ui: &mut Ui) -> C::Output
     let named_by_scope = env.arena.is_none() && scope::in_label(ui.ctx());
     let shows = C::LABELLED_AFTER && child.shows_label() && child.common(crate::contract::Internal::new()).label != Label::Empty && !named_by_scope;
     if !shows {
-        return crate::contract::run::show_leaf(&mut Some(child), ui, crate::contract::run::ShowAt::Flow, None);
+        return crate::contract::run::show_leaf(&mut Some(child), ui, (crate::contract::run::ShowAt::Flow, env), None);
     }
     let label = std::mem::take(&mut child.common_mut(crate::contract::Internal::new()).label);
     let facts = crate::contract::run::TypeFacts::of::<C>();
@@ -525,5 +527,6 @@ pub(crate) fn show_leaf_in_flow<C: Show>(mut child: C, ui: &mut Ui) -> C::Output
         Some(detail) => side.detail(detail),
         None => side,
     };
-    flow_leaf(ui, (id, id), (env.enabled, env.size), label, side, child, None)
+    let under = (env.enabled, env.size);
+    flow_leaf((ui, env), (id, id), under, label, side, child, None)
 }

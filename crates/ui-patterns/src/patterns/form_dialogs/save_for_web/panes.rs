@@ -6,7 +6,7 @@ use super::{
 };
 use crate::buttons::Button;
 use crate::choice::Segmented;
-use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, TooltipSpec, clicked};
+use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Sizing, TooltipSpec, clicked};
 use crate::display::{Shade, Text};
 use crate::layout_components::{Row, Stack};
 use crate::patterns::form_dialogs::{PreviewPane, PreviewState, PreviewView, PreviewZoom};
@@ -149,12 +149,13 @@ fn zoom_row(ui: &mut Ui, panes: &Panes<'_>, live: &mut Live, pressed: &mut bool)
 }
 
 /// The panes of the view, two to a row, over the one shared view: the first view any pane reports is applied to all.
+/// The rows share the height the preview column has below the zoom row, which is the height of the settings beside it.
 fn pane_grid(ui: &mut Ui, panes: &Panes<'_>, live: &mut Live, slice: &mut Option<SliceClick>) {
     let list = live.view.panes();
     let mut reported = Reported::default();
-    Stack::new().id_salt("panes").show(ui, |ui, _| {
+    Stack::new().fill().id_salt("panes").show(ui, |ui, _| {
         for (line, row) in list.chunks(2).enumerate() {
-            Row::new().id_salt(line).show(ui, |ui, _| {
+            Row::new().fill().id_salt(line).show(ui, |ui, _| {
                 for (at, pane) in row.iter().enumerate() {
                     one_pane(ui, panes, live, *pane, line * 2 + at, &mut reported);
                 }
@@ -182,8 +183,8 @@ fn one_pane(ui: &mut Ui, panes: &Panes<'_>, live: &Live, pane: WebPane, at: usiz
     ]));
     let state = state_of(panes, pane);
     let shade = if live.selected == pane { Shade::Normal } else { Shade::Muted };
-    Stack::new().id_salt(at).show(ui, |ui, _| {
-        let mut preview = PreviewPane::state(name.clone(), state.clone(), &live.shared).click_centres(false).id_salt("pane");
+    Stack::new().fill().id_salt(at).show(ui, |ui, _| {
+        let mut preview = PreviewPane::state(name.clone(), state.clone(), &live.shared).click_centres(false).sizing(Sizing::Fill).id_salt("pane");
         if !panes.slices.is_empty() {
             let (slices, chosen) = (panes.slices, panes.chosen);
             preview = preview.overlay(move |painter: &ContentPainterCx, view: CanvasTransform, picture: Rect| {

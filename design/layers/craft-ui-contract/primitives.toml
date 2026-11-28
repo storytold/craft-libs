@@ -4,6 +4,11 @@ config_version = 1
 path = "primitives"
 layer = 3
 
+# color_ranges depends only on std, so it sits with runtime::egui's text editor, which paints its inks.
+[[module]]
+path = "primitives::color_ranges"
+layer = 2
+
 [[module]]
 path = "primitives::textures"
 layer = 3
