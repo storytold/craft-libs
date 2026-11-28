@@ -3,8 +3,9 @@
 //! affix engine. Most use default suggestion tuning and no grammar rules; French locales add
 //! the spelling tuning and conservative typography in [`crate::fr`] without a separate cache.
 //!
-//! The loaded dictionaries share a memory budget ([`MAX_LOADED_BYTES`], estimated from their
-//! files); the one used least recently goes first, but never one used during the current
+//! The loaded dictionaries share a memory budget ([`DEFAULT_BUDGET`] until the host sets its own with
+//! [`set_budget`]; estimated from their files, with the pairs registered as bytes,
+//! [`crate::register_dictionary`], which [`memory_estimate`] reports); the one used least recently goes first, but never one used during the current
 //! [`in_one_check`] call, so a paragraph in many languages loads each dictionary once. Locales
 //! with no dictionary are remembered apart and take no room.
 //!
@@ -21,15 +22,16 @@ use crate::affix::AffixDict;
 use crate::affix_suggest::Tuning;
 use crate::lang::PackLocale;
 
-/// The memory budget of the loaded dictionaries, in estimated bytes.
-pub(crate) const MAX_LOADED_BYTES: u64 = 256 << 20;
+/// The memory budget of the loaded dictionaries until the host sets one ([`set_budget`]): 256 MiB, in
+/// estimated bytes.
+pub const DEFAULT_BUDGET: u64 = 256 << 20;
 /// Estimated memory per byte of `.aff` and `.dic` file.
-const BYTES_PER_FILE_BYTE: u64 = 6;
+pub(crate) const BYTES_PER_FILE_BYTE: u64 = 6;
 /// Most locales remembered as having no dictionary (the oldest is forgotten first when full).
 const MAX_MISSING: usize = 256;
 
 /// The budget in force (tests lower it).
-static BUDGET: AtomicU64 = AtomicU64::new(MAX_LOADED_BYTES);
+static BUDGET: AtomicU64 = AtomicU64::new(DEFAULT_BUDGET);
 /// Dictionaries loaded from disk so far (tests count them).
 static LOADS: AtomicU64 = AtomicU64::new(0);
 
@@ -162,9 +164,56 @@ pub(crate) fn loads() -> u64 {
     LOADS.load(Ordering::Relaxed)
 }
 
-#[cfg(test)]
-pub(crate) fn set_budget(bytes: u64) {
+/// Set the memory budget of the loaded dictionaries, in estimated bytes (six times the bytes of a
+/// dictionary's `.aff` and `.dic` files; [`DEFAULT_BUDGET`] until this is called): 256 MiB suits a
+/// desktop, 64 MiB a browser. The budget holds the dictionaries loaded for the languages that read
+/// packs, Hunspell folders or the system (the ones [`crate::ProofLang::Pack`], German and Bulgarian use)
+/// and the pairs registered as bytes ([`crate::register_dictionary`]).
+///
+/// **A lowered budget takes effect at once**: the dictionaries least recently used are dropped until
+/// what is loaded and registered fits, except those the check running on this thread uses, and a
+/// dropped one loads again on its next use. A registered pair is never dropped (the host removes it
+/// with [`crate::unregister_dictionary`]), and a dictionary larger than the whole budget still loads,
+/// alone. The built-in languages with a dictionary slot of their own (Polish, Russian, Spanish, and the
+/// others of [`crate::ProofLang::PROOFED`]) and the Englishes are not governed by it: they keep what
+/// they load until the folders change ([`crate::set_dictionaries_folder`]), so [`memory_estimate`]
+/// does not count them either.
+pub fn set_budget(bytes: u64) {
     BUDGET.store(bytes, Ordering::Relaxed);
+    let mut c = CACHE.write().unwrap_or_else(PoisonError::into_inner);
+    make_room(&mut c, 0);
+}
+
+/// The memory budget in force, in estimated bytes ([`set_budget`]).
+pub fn budget() -> u64 {
+    BUDGET.load(Ordering::Relaxed)
+}
+
+/// The estimated memory of what the budget governs ([`set_budget`]): the dictionaries loaded now and
+/// the pairs registered as bytes, in the same bytes as the budget. It is what a host shows or compares
+/// with [`budget`]; it can pass it by one dictionary larger than the budget, or by the registered
+/// pairs, which are never dropped.
+pub fn memory_estimate() -> u64 {
+    let c = CACHE.read().unwrap_or_else(PoisonError::into_inner);
+    c.loaded.iter().map(|l| l.bytes).fold(crate::registered::bytes(), u64::saturating_add)
+}
+
+/// Drop the dictionaries least recently used until what is loaded, the registered pairs and
+/// `incoming` more bytes fit the budget, never one used by the check running on this thread
+/// ([`in_one_check`]) and never a registered pair; stops when nothing else can go.
+fn make_room(c: &mut Cache, incoming: u64) {
+    let budget = BUDGET.load(Ordering::Relaxed);
+    let pinned_from = CHECK_FROM.with(Cell::get).unwrap_or(u64::MAX);
+    // The registered pairs are charged to the same budget and never evicted.
+    let mut total: u64 = c.loaded.iter().map(|l| l.bytes).fold(crate::registered::bytes(), u64::saturating_add);
+    while total.saturating_add(incoming) > budget {
+        // The least recently used dictionary not used during this check.
+        let Some(oldest) = c.loaded.iter().enumerate().filter(|(_, l)| l.used < pinned_from).min_by_key(|(_, l)| l.used).map(|(i, _)| i) else {
+            break;
+        };
+        let gone = c.loaded.swap_remove(oldest);
+        total = total.saturating_sub(gone.bytes);
+    }
 }
 
 /// Hunspell file names for `locale`, best first: `fr-fr` → `fr_FR`, `fr-FR`, `fr`;
@@ -276,30 +325,33 @@ fn get_with_scripts(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, Arc
         return (dict, file, scripts);
     }
     LOADS.fetch_add(1, Ordering::Relaxed);
-    let budget = BUDGET.load(Ordering::Relaxed);
-    let pinned_from = CHECK_FROM.with(Cell::get).unwrap_or(u64::MAX);
-    let mut total: u64 = c.loaded.iter().map(|l| l.bytes).sum();
-    while total.saturating_add(bytes) > budget {
-        // The least recently used dictionary not used during this check.
-        let Some(oldest) = c.loaded.iter().enumerate().filter(|(_, l)| l.used < pinned_from).min_by_key(|(_, l)| l.used).map(|(i, _)| i) else {
-            break;
-        };
-        let gone = c.loaded.swap_remove(oldest);
-        total = total.saturating_sub(gone.bytes);
-    }
+    make_room(&mut c, bytes);
     let used = c.clock;
     c.loaded.push(Loaded { locale, dict: dict.clone(), scripts: scripts.clone(), file: file.clone(), bytes, used });
     (dict, file, scripts)
 }
 
-/// Load `locale`'s dictionary, with its estimated memory.
+/// Load `locale`'s dictionary, with its estimated memory (none for a registered pair: it is
+/// charged to the budget as it is registered).
 fn load(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, u64) {
     let names = names(locale);
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let key = names.first().map_or("", String::as_str);
-    let Some((aff, dic)) = crate::hunspell::find(&refs) else {
-        crate::hunspell::clear_load_error(key);
-        return (Arc::default(), None, 0);
+    let (aff, dic) = match crate::registered::locate(&refs) {
+        crate::registered::Located::File(aff, dic) => (aff, dic),
+        crate::registered::Located::Registered(pair) => {
+            return match crate::hunspell::note_load(key, &pair.label, AffixDict::from_hunspell(&pair.aff, &pair.dic, &[])) {
+                Ok(d) => (Arc::new(d), None, 0),
+                Err(e) => {
+                    log::warn!("{locale} spelling: {e}");
+                    (Arc::default(), None, 0)
+                }
+            };
+        }
+        crate::registered::Located::Missing => {
+            crate::hunspell::clear_load_error(key);
+            return (Arc::default(), None, 0);
+        }
     };
     let size = |p: &std::path::Path| std::fs::metadata(p).map_or(0, |m| m.len());
     let bytes = size(&aff).saturating_add(size(&dic)).saturating_mul(BYTES_PER_FILE_BYTE).max(1);

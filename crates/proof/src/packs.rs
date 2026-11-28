@@ -13,9 +13,9 @@
 //!                        /LICENCES/<file>  the upstream licence texts
 //! ```
 //!
-//! Lookup order for a language's spelling: the dictionaries folder, then an installed pack, then
-//! the system's Hunspell dictionaries, then (English only) the core word list built into the
-//! crate. For hyphenation: an installed pack, then the patterns embedded at build time.
+//! Lookup order for a language's spelling: the dictionaries folder, then a registered dictionary
+//! ([`crate::register_dictionary`]), then an installed pack, then the system's Hunspell
+//! dictionaries, then (English only) the core word list built into the crate. For hyphenation: an installed pack, then the patterns embedded at build time.
 //!
 //! Every file is size-capped and read only when it is a regular file (never through a symbolic
 //! link); a pack whose `pack.toml` is missing, unreadable or names a path outside the pack is
@@ -37,7 +37,7 @@ const MAX_HYPHENATION_LOOKUPS: usize = 256;
 /// The memory budget of the remembered pack patterns, in estimated bytes ([`pattern_bytes`]):
 /// a pack's patterns may be as large as a dictionary (64 MB of file), and up to
 /// [`MAX_HYPHENATION_LOOKUPS`] of them are kept, so they get a budget of their own, as the
-/// dictionaries do (`pack_lang::MAX_LOADED_BYTES`).
+/// dictionaries do (`pack_lang::DEFAULT_BUDGET`).
 const MAX_HYPHENATION_BYTES: u64 = 256 << 20;
 /// Estimated memory per pattern (its packed key, its values and the map's own room).
 const BYTES_PER_PATTERN: u64 = 64;
@@ -160,11 +160,12 @@ pub fn load_errors() -> Vec<(String, String)> {
 /// embedded at build time, then each installed pack's `LICENCES/` files (About › Language data).
 pub fn licence_texts() -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
-    // One Moby entry: the embedded data's, else the copy built into the crate (`en-words.dic`).
-    if crate::data::EN_US_DIC.is_empty() {
-        out.push(("English word list (Moby Hyphenator II)".into(), BUILT_IN_MOBY_NOTICE.into()));
-    } else {
+    // One Moby entry: the embedded data's, else the copy built into the crate (`en-words.dic`),
+    // none when the build has neither (the `builtin-moby` feature is off).
+    if !crate::data::EN_US_DIC.is_empty() {
         out.push(("English word list and hyphenation (Moby Hyphenator II)".into(), MOBY_NOTICE.into()));
+    } else if cfg!(feature = "builtin-moby") {
+        out.push(("English word list (Moby Hyphenator II)".into(), BUILT_IN_MOBY_NOTICE.into()));
     }
     out.push(("English word supplement (en-extra.txt)".into(), EXTRA_EN_NOTICE.into()));
     out.extend(crate::data::EMBEDDED_LICENCES.iter().map(|(t, x)| ((*t).to_string(), (*x).to_string())));

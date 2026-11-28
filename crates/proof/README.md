@@ -38,10 +38,20 @@ let breaks = hyphen_points_in("hyphenation", &Limits::default(), ProofLang::En);
 ```
 
 Hunspell dictionaries are not bundled; they are read from, in order: the folder given to
-`set_dictionaries_folder`, `WORDCRAFT_DICTIONARIES`, WordCraft's own folder under the user's
-application data (`%LOCALAPPDATA%\WordCraft\dictionaries` and `%APPDATA%\WordCraft\dictionaries`,
-`~/Library/Application Support/WordCraft/dictionaries`, `$XDG_DATA_HOME/wordcraft/dictionaries`),
-then the usual Hunspell and LibreOffice locations. None on the web.
+`set_dictionaries_folder`, the host's own environment variable and folders, then the usual Hunspell
+and LibreOffice locations. None on the web.
+
+The host names its own: no application's variable or folder is built in, so an app never reads
+another app's dictionaries.
+
+```rust
+use craft_proof::{HostFolders, app_folders, set_host_folders};
+
+// At start: the app's variable and its usual per-user folders (`%LOCALAPPDATA%\Example\dictionaries`
+// and `%APPDATA%\Example\dictionaries` on Windows, `~/Library/Application Support/Example/dictionaries`
+// on macOS, `$XDG_DATA_HOME/example/dictionaries` elsewhere), or any folders it likes.
+set_host_folders(HostFolders { env_var: Some("EXAMPLE_DICTIONARIES".into()), folders: app_folders("Example") });
+```
 
 French remains a `ProofLang::Pack` locale: use its full `tag()` for settings and issue identity.
 The shared pack loader keeps regional dictionary overrides, fallback to `fr`, reloads and its
@@ -72,6 +82,31 @@ Tests that pin results of the data run only when every file the build embeds is 
   Language packs), `de,pl`, or `all`. Making `en` the default is **CP4.4**, done in the release
   that publishes and pins `language-packs-1`.
   `craft_proof::packs::embedded_locales()` lists what a build embeds.
+
+## Features
+
+| Feature | Default | What it embeds |
+|---|---|---|
+| `embed-english` | on | The SCOWL Hunspell dictionaries of the four Englishes and their notice, embedded from craft-i18n when `CRAFT_I18N_DIR` is set (about 2.1 MB) |
+| `builtin-moby` | on | The Moby word list: the crate's own copy (`data/en-words.dic`) and craft-i18n's (`en-us.dic`, for hyphenation), English's last source of spelling and suggestions (about 0.4 MB) |
+
+A target that fetches its English dictionaries (the web: [register them as
+bytes](#dictionaries-from-bytes)) turns both off and keeps them out of its binary:
+
+```toml
+craft-proof = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", default-features = false }
+```
+
+Measured on a `wasm32-unknown-unknown` `cdylib` that links the spelling and suggestion paths
+(`opt-level = "s"`, `lto`), with `CRAFT_I18N_DIR` set: 3,290,035 bytes with both features and
+862,805 without.
+
+Without them an English that has none of the five sources below (a registered pair, a dictionary in
+the folders or on the system, SCOWL, the built-in list) is **not proofed**: `is_proofed()` and
+`has_dictionary` say no, nothing is marked or suggested, `english_source` answers
+`EnglishSource::Missing`, and `missing_dictionary` names the file to register or install (`en_US`,
+`en_GB`, `en_CA`, `en_AU`). Every other language is unchanged. Embedded data is never "missing" for
+`CRAFT_I18N_REQUIRED=1` when a feature leaves it out.
 
 ## Language packs
 
@@ -105,7 +140,7 @@ spelling message and the conservative French grammar and typography described ab
 spelling has no marks and hyphenation falls back to English; French grammar and typography
 still apply independently of a spelling dictionary.
 `has_dictionary(tag)` / `ProofLang::is_proofed()` say whether a `Pack` language has a dictionary
-now (read on first use, cached). Loaded `Pack` dictionaries share a 256 MB budget (estimated from their files); the least recently used goes first, but never one used in the paragraph being checked, and languages with no dictionary take no room. Downstream `match`es on `ProofLang` need a `Pack(_)` arm; `code()` stays `&'static str`
+now (read on first use, cached). Loaded `Pack` dictionaries share a [memory budget](#the-memory-budget) (256 MiB until the host sets one, estimated from their files); the least recently used goes first, but never one used in the paragraph being checked, and languages with no dictionary take no room. Downstream `match`es on `ProofLang` need a `Pack(_)` arm; `code()` stays `&'static str`
 and is `""` for it, as for `Other`: anything that keys, saves or reports a language (settings, caches, JSON/MCP output) uses `tag()`, which is `code()` for the built-ins and the locale (`nl`, `fr-fr`) for a pack language.
 
 **Which pack serves a language:** its locale, then shorter prefixes (`fr-ca` → `fr`), then another
@@ -136,8 +171,9 @@ locale (`nl`, `pt-br`, `sr-latn`):
 | `hyphenation.pat` | UTF-8 TeX or plain Liang patterns (optional) |
 | `LICENCES/<file>` | upstream licence texts, shown by `licence_texts()` |
 
-**Lookup order.** Spelling: the dictionaries folder, then an installed pack, then the system's
-Hunspell dictionaries, then (English only) the built-in core list. A slot's Hunspell names map to
+**Lookup order.** Spelling: the dictionaries folder, then a registered dictionary
+([below](#dictionaries-from-bytes)), then an installed pack, then the system's Hunspell
+dictionaries, then (English only) the built-in core list. A slot's Hunspell names map to
 pack locales (`pt_BR` → `pt-br`, then `pt`, then any other `pt-*` pack). Hyphenation, every
 language but English: an installed pack's patterns for a word in the language's script (Russian,
 Bulgarian, Turkish: their script; others: letters the patterns know), then the embedded ones, then the language's rules or the English fallback as before.
@@ -151,14 +187,70 @@ that leaves the pack (`..`, an absolute path, a drive, a backslash). Folders sta
 (the store's temporary folders) are ignored. A dictionary that fails to load is reported by
 `dictionary_load_error` like any other; nothing panics.
 
+### Dictionaries from bytes
+
+A host with no folder to read (the web, where a dictionary is fetched) hands a Hunspell pair over
+as bytes, for any language, the Englishes included:
+
+```rust
+use craft_proof::{RegisterError, register_dictionary, unregister_dictionary};
+
+match register_dictionary("en-US", &aff_bytes, &dic_bytes) {
+    Ok(()) => {}                                      // en-US text is now checked against this pair
+    Err(why) => eprintln!("not registered: {why}"),   // a `RegisterError`: the reason, in words
+}
+unregister_dictionary("en-US");                       // back to the next source
+```
+
+- **Rank:** after the dictionaries folders (`set_dictionaries_folder`, `set_host_folders`) and
+  before the installed packs, the system's dictionaries and the embedded English. The pair acts
+  as `<tag>.aff` and `<tag>.dic` in a folder of its own: `de` serves `de-DE`, `de-AT` and every
+  German region with no pair of its own; `pl-PL` ranks before `pl`. An English is registered under
+  its own tag: `en` and `en-US` are American English's, `en-GB` (and `en-NZ` and the other
+  British-spelling Englishes) British English's, `en-CA` and `en-AU` their own.
+- **Cost:** a registered pair is charged to the memory budget with the loaded pack dictionaries
+  (six times the bytes of its two files) until it is replaced or removed, and the loaded packs
+  give way to it. It is never evicted.
+- **Refused, with the reason (`RegisterError`):** a tag that names no language (`x-none`, `und`,
+  an empty or malformed tag); a file over 64 MiB (`MAX_FILE_BYTES`); bytes that can't be decoded
+  (an encoding the reader doesn't know, a stem that isn't valid) or a `.dic` with no words; an
+  estimate that takes the registered pairs past the budget; more than `MAX_REGISTERED` (64)
+  languages.
+- The pair is parsed when first used, as a file is. One that decodes but doesn't parse is
+  registered and reported by `dictionary_load_error`; the language then reads the next source.
+  `pack_dictionary_file` and `installed_dictionaries` name no file for it, and `english_source`
+  says `EnglishSource::Registered`.
+- Registering or removing a pair loads every dictionary again (`dictionary_generation()` changes),
+  so register at start or when a language is first needed.
+
+### The memory budget
+
+```rust
+craft_proof::set_budget(64 << 20);          // a browser: 64 MiB (`DEFAULT_BUDGET` is 256 MiB)
+let used = craft_proof::memory_estimate();  // what the budget governs, in the same bytes
+let room = craft_proof::budget();
+```
+
+The budget governs the dictionaries loaded for the languages that read packs, the dictionaries
+folders or the system (`ProofLang::Pack`, German and Bulgarian) and the pairs registered as bytes. An
+estimate is six times the bytes of a dictionary's `.aff` and `.dic` files, and `memory_estimate()`
+adds them up. **A lowered budget takes effect at once:** the least recently used dictionaries are
+dropped until what is left fits, except those the check running on the thread uses, and a dropped one
+loads again on its next use. A registered pair is never dropped (`unregister_dictionary` removes it),
+and a dictionary larger than the whole budget still loads, alone. The languages with a dictionary slot
+of their own (`ProofLang::PROOFED` but the Englishes, such as Polish, Russian, Spanish) and the
+Englishes keep what they load until the folders change, and `memory_estimate()` does not count them.
+
 ### English is always checked
 
 English spelling uses the first of these that is there; `english_source(lang)` says which.
 
 1. **Dictionaries folder:** the English's own `.aff`/`.dic` pair (`en_US`, `en_GB` or `en_CA`)
-   that the user put in the folder set with `set_dictionaries_folder`, in `WORDCRAFT_DICTIONARIES`
-   or in WordCraft's own `dictionaries` folder. The user's choice comes first.
-2. **Installed English pack:** reserved for Language packs (craft-libs#485, CP4.2).
+   that the user put in the folder set with `set_dictionaries_folder` or in the host's own folders
+   (`set_host_folders`). The user's choice comes first.
+2. **Registered dictionary:** a pair handed over as bytes under the English's own tag
+   ([below](#dictionaries-from-bytes)). Installed English pack: reserved for Language packs
+   (craft-libs#485, CP4.2).
 3. **Embedded SCOWL:** the English's own SCOWL `rel-2026.02.25` Hunspell dictionary from
    `CRAFT_I18N_DIR` (`language-data/en-us`, `en-gb` (British `-ise`), `en-au` or `en-ca`,
    `spelling.aff` + `spelling.dic`), read by the affix engine. Australian English reads en-AU
@@ -222,6 +314,8 @@ CRAFT_I18N_DIR=/abs/path/craft-i18n cargo test -p craft-proof
 CRAFT_PROOF_EMBED=en CRAFT_I18N_DIR=/abs/path/craft-i18n cargo test -p craft-proof    # the English-only build (CP4.4)
 cargo test -p craft-proof   # without Language data
 cargo check -p craft-proof --target wasm32-unknown-unknown
+cargo check -p craft-proof --target wasm32-unknown-unknown --no-default-features   # no SCOWL, no Moby list
+cargo test -p craft-proof --no-default-features --test it                          # what such a build does
 ```
 
 CI: `.github/workflows/proof.yml`.
