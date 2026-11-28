@@ -38,6 +38,39 @@ pub struct OutputPath {
     pub close_open_contours: bool,
 }
 
+/// A placed raster picture: straight RGBA pixels, row by row from the top, and the box it
+/// fills in view-box coordinates (millimetres for the PDF writer).
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutputImage {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub width_px: u32,
+    pub height_px: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// The largest side of an [`OutputImage`], in pixels.
+pub const MAX_IMAGE_SIDE_PX: u32 = 16_384;
+
+/// The most images one scene or page holds.
+pub const MAX_IMAGES: usize = 1_000;
+
+impl OutputImage {
+    /// Whether the box is finite and positive and `rgba` holds exactly `width_px × height_px`
+    /// pixels within [`MAX_IMAGE_SIDE_PX`].
+    pub fn is_valid(&self) -> bool {
+        let pixels = u64::from(self.width_px) * u64::from(self.height_px);
+        [self.x, self.y, self.width, self.height].iter().all(|v| v.is_finite())
+            && self.width > 0.0
+            && self.height > 0.0
+            && (1..=MAX_IMAGE_SIDE_PX).contains(&self.width_px)
+            && (1..=MAX_IMAGE_SIDE_PX).contains(&self.height_px)
+            && u64::try_from(self.rgba.len()).is_ok_and(|len| Some(len) == pixels.checked_mul(4))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutputScene {
     pub width_mm: f64,
@@ -45,6 +78,9 @@ pub struct OutputScene {
     pub view_box: [f64; 4],
     pub layers: Vec<OutputLayer>,
     pub paths: Vec<OutputPath>,
+    /// Placed pictures, drawn under the paths in order. The PDF writer embeds them; the SVG,
+    /// DXF and cutter writers leave them out.
+    pub images: Vec<OutputImage>,
 }
 
 /// One page for the shared PDF path writer. Coordinates and stroke widths are millimetres.
@@ -54,6 +90,8 @@ pub struct PdfPage {
     pub height_mm: f64,
     pub view_box: [f64; 4],
     pub paths: Vec<PdfPath>,
+    /// Placed pictures in view-box coordinates, drawn under the paths in order.
+    pub images: Vec<OutputImage>,
 }
 
 /// A PDF path with either a fill or a stroke. `None` fills the path; `Some(width)` strokes it.
@@ -175,7 +213,13 @@ fn write_pdf(scene: &OutputScene) -> Result<Vec<u8>, Error> {
         .flat_map(|(layer_index, _)| paths_by_layer[layer_index].iter().copied())
         .map(|path| PdfPath { path: path.path.clone(), color_rgb: path.color_rgb, stroke_width_mm: Some(path.stroke_width_mm) })
         .collect();
-    write_pdf_pages(&[PdfPage { width_mm: scene.width_mm, height_mm: scene.height_mm, view_box: scene.view_box, paths }])
+    write_pdf_pages(&[PdfPage {
+        width_mm: scene.width_mm,
+        height_mm: scene.height_mm,
+        view_box: scene.view_box,
+        paths,
+        images: scene.images.clone(),
+    }])
 }
 
 /// Group the neutral paths once so writing does not rescan all paths for every layer.
@@ -234,6 +278,26 @@ pub fn write_pdf_pages(pages: &[PdfPage]) -> Result<Vec<u8>, Error> {
             let offset_y = (source_page.height_mm - view_height * view_scale) / 2.0;
             if !(view_scale.is_finite() && view_scale > 0.0 && offset_x.is_finite() && offset_y.is_finite()) {
                 return Err(Error::InvalidGeometry);
+            }
+            if source_page.images.len() > MAX_IMAGES {
+                return Err(Error::Write(format!("more than {MAX_IMAGES} images on a page")));
+            }
+            for image in &source_page.images {
+                if !image.is_valid() {
+                    return Err(Error::Write("an image's box or pixels are not usable".into()));
+                }
+                let x = ((image.x - view_x) * view_scale + offset_x) * PT_PER_MM;
+                let y = ((image.y - view_y) * view_scale + offset_y) * PT_PER_MM;
+                let w = image.width * view_scale * PT_PER_MM;
+                let h = image.height * view_scale * PT_PER_MM;
+                if ![x, y, w, h].iter().all(|v| v.is_finite() && v.abs() <= f64::from(f32::MAX)) {
+                    return Err(Error::Write("an image is outside the PDF range".into()));
+                }
+                let size = backend::geom::Size::from_wh(w as f32, h as f32).ok_or_else(|| Error::Write("an image has no size".into()))?;
+                let picture = backend::image::Image::from_rgba8(image.rgba.clone(), image.width_px, image.height_px);
+                surface.push_transform(&backend::geom::Transform::from_translate(x as f32, y as f32));
+                surface.draw_image(picture, size);
+                surface.pop();
             }
             for source in &source_page.paths {
                 let mut path = backend::geom::PathBuilder::new();
@@ -420,6 +484,9 @@ fn validate_scene(scene: &OutputScene) -> Result<(), Error> {
     if !(scene.width_mm.is_finite() && scene.height_mm.is_finite() && scene.width_mm > 0.0 && scene.height_mm > 0.0) {
         return Err(Error::InvalidGeometry);
     }
+    if scene.images.len() > MAX_IMAGES || scene.images.iter().any(|image| !image.is_valid()) {
+        return Err(Error::InvalidGeometry);
+    }
     if !(scene.view_box.iter().all(|value| value.is_finite()) && scene.view_box[2] > 0.0 && scene.view_box[3] > 0.0)
         || scene.paths.len() > crate::MAX_SHAPES
         || scene.paths.iter().any(|path| {
@@ -444,4 +511,53 @@ fn point_is_finite(point: Point) -> bool {
 
 fn format_float(value: f64) -> String {
     value.to_string()
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+
+    fn page(images: Vec<OutputImage>) -> PdfPage {
+        let mut square = BezPath::new();
+        square.move_to((10.0, 10.0));
+        square.line_to((20.0, 10.0));
+        square.line_to((20.0, 20.0));
+        square.close_path();
+        PdfPage {
+            width_mm: 100.0,
+            height_mm: 100.0,
+            view_box: [0.0, 0.0, 100.0, 100.0],
+            paths: vec![PdfPath { path: square, color_rgb: [255, 0, 0], stroke_width_mm: Some(0.25) }],
+            images,
+        }
+    }
+
+    fn picture(width_px: u32, height_px: u32) -> OutputImage {
+        OutputImage { x: 30.0, y: 30.0, width: 40.0, height: 20.0, width_px, height_px, rgba: vec![200; (width_px * height_px * 4) as usize] }
+    }
+
+    #[test]
+    fn a_placed_picture_is_embedded_under_the_paths() {
+        let plain = write_pdf_pages(&[page(Vec::new())]).unwrap();
+        let with = write_pdf_pages(&[page(vec![picture(4, 2)])]).unwrap();
+        let text = String::from_utf8_lossy(&with);
+        assert!(text.contains("/Subtype/Image"), "an image XObject");
+        assert!(!String::from_utf8_lossy(&plain).contains("/Subtype/Image"));
+    }
+
+    #[test]
+    fn unusable_pictures_are_errors_not_crashes() {
+        let mut short = picture(4, 2);
+        short.rgba.pop();
+        for bad in [
+            short,
+            OutputImage { width: f64::NAN, ..picture(4, 2) },
+            OutputImage { height: 0.0, ..picture(4, 2) },
+            OutputImage { width_px: 0, rgba: Vec::new(), ..picture(4, 2) },
+            OutputImage { width_px: MAX_IMAGE_SIDE_PX + 1, ..picture(4, 2) },
+        ] {
+            assert!(!bad.is_valid());
+            assert!(write_pdf_pages(&[page(vec![bad])]).is_err());
+        }
+    }
 }
