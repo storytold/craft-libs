@@ -48,12 +48,13 @@ RFC 9043, *FFV1 Video Coding Format Versions 0, 1, and 3* (August 2021). The dec
 - 4.2: the Parameters of versions 0, 1 and 3, with the values inferred when absent (4.2.7 and
   4.2.11 to 4.2.17);
 - 4.3 to 4.9: configuration record, frame, slice, slice header, slice content and slice footer;
-- 5: a non-keyframe repeats the slice raster of the frame before it.
+- 4.4 and 5: a frame has as many slices as its packet holds, and each place on the slice raster is
+  covered by exactly one of them; a non-keyframe repeats the slices of the frame before it.
 
 ## Notes on the format
 
 Found by comparing with ffmpeg's FFV1 streams (ffmpeg run as a separate program only), where
-RFC 9043 leaves the behaviour open:
+RFC 9043 leaves the behaviour open or ffmpeg's streams depart from it:
 
 - The Parameters are range coded with the *default* state transition table, in the configuration
   record and in the keyframes of versions 0 and 1. A custom table (`coder_type` 2) applies to the
@@ -70,7 +71,9 @@ RFC 9043 leaves the behaviour open:
   decoder has read to after the keyframe's Parameters (or a non-keyframe's `keyframe` bit).
 - Golomb-Rice run mode: the run count and run mode start afresh on every line. `run_index` belongs
   to a plane and lives on from line to line, except in RGB slices, where the planes take turns line
-  by line and share one `run_index`.
+  by line and share one `run_index` that starts at 0 for each slice. This departs from section
+  3.8.2.2.1, which resets `run_index` for each plane: with one index per plane, ffmpeg's 8-bit RGB
+  (`bgr0`) Golomb-Rice streams do not decode.
 - The context is the sum of five quantised differences. With the default tables this encoder
   writes 15125 contexts; FFmpeg refuses tables that multiply to more than 32768, so the encoder
   stays below that although the RFC's limit (on half the product) is looser.
