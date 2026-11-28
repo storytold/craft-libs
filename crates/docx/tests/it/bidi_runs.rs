@@ -193,3 +193,77 @@ fn an_inherited_bidi_language_is_not_repeated() {
     Arc::make_mut(&mut d.styles).default_chr.lang_bidi = Some("fa-IR".into());
     assert_eq!(langs(&d), vec![(true, None), (false, None), (true, None)]);
 }
+
+/// The runs of the first paragraph of `xml` (a table cell's when it starts with a table): (has
+/// `w:rtl`, has `w:bCs`, has `w:iCs`, text).
+fn complex_toggles(xml: &str) -> Vec<(bool, bool, bool, String)> {
+    let body = xml.split("<w:body>").nth(1).unwrap();
+    let para = body.split("</w:p>").next().unwrap();
+    para.split("<w:r>")
+        .skip(1)
+        .map(|r| {
+            let r = r.split("</w:r>").next().unwrap();
+            let text = r.split("<w:t").nth(1).and_then(|t| t.split_once('>')).map_or("", |(_, t)| t.split('<').next().unwrap_or(""));
+            (r.contains("<w:rtl/>"), r.contains("<w:bCs/>"), r.contains("<w:iCs/>"), text.to_string())
+        })
+        .collect()
+}
+
+/// Word draws a `w:rtl` run bold and italic only by `w:bCs`/`w:iCs` (Hebrew with `<w:b/><w:rtl/>`
+/// is plain, measured in Word for Windows), while WordCraft draws an unmarked run's Hebrew bold
+/// by `w:b`. The pieces the writer marks `w:rtl` say `w:bCs`/`w:iCs` where WordCraft draws them,
+/// whether from the run, its paragraph style or its table style (storytold/craft-libs#2728).
+#[test]
+fn rtl_pieces_say_the_complex_script_bold_and_italic_wordcraft_draws() {
+    use craft_wordmodel::{Block, Cell, Row, Style, StyleKind, Table};
+    let text = "abc עברית def";
+    let style = |id: &str, kind: StyleKind, chr: CharProps| Style { id: id.into(), name: id.into(), kind, chr, ..Default::default() };
+    let bold_italic = CharProps { bold: Some(true), italic: Some(true), ..Default::default() };
+    let hebrew = |d: &Document| {
+        let pieces = complex_toggles(&document_xml(&craft_docx::write(d).unwrap()));
+        assert_eq!(pieces.iter().map(|p| p.3.as_str()).collect::<Vec<_>>(), ["abc ", "עברית", " def"], "{pieces:?}");
+        assert!(!pieces[0].0 && !pieces[2].0 && pieces[1].0, "{pieces:?}");
+        assert!(!pieces[0].1 && !pieces[0].2 && !pieces[2].1 && !pieces[2].2, "Latin pieces are as they were: {pieces:?}");
+        (pieces[1].1, pieces[1].2)
+    };
+
+    // The run's own `w:b`/`w:i`, in a left-to-right and a right-to-left paragraph.
+    assert_eq!(hebrew(&doc_of(text, false, bold_italic.clone())), (true, true), "direct, LTR paragraph");
+    let mut d = doc_of("עברית abc עברית", true, bold_italic.clone());
+    let pieces = complex_toggles(&document_xml(&craft_docx::write(&d).unwrap()));
+    assert!(pieces.iter().filter(|p| p.0).all(|p| p.1 && p.2) && pieces.iter().any(|p| p.0), "direct, RTL paragraph: {pieces:?}");
+
+    // Bold from the paragraph style.
+    d = Document::new();
+    Arc::make_mut(&mut d.styles).upsert(style("Strong", StyleKind::Paragraph, CharProps { bold: Some(true), ..Default::default() }));
+    let mut p = Paragraph::with_text(text, CharProps::default());
+    p.props.style = Some("Strong".into());
+    d.body = vec![para_block(p)];
+    assert_eq!(hebrew(&d), (true, false), "paragraph style");
+
+    // Italic from the table style.
+    let mut d = Document::new();
+    Arc::make_mut(&mut d.styles).upsert(style("T", StyleKind::Table, CharProps { italic: Some(true), ..Default::default() }));
+    let mut t = Table { grid: vec![300.0], ..Default::default() };
+    t.props.style = Some("T".into());
+    let cell = Cell {
+        props: craft_wordmodel::props::CellProps { span: 1, ..Default::default() },
+        blocks: vec![para_block(Paragraph::with_text(text, CharProps::default()))],
+        controls: Default::default(),
+    };
+    t.rows = vec![Row { props: Default::default(), cells: vec![cell], controls: Default::default() }];
+    d.body = vec![Arc::new(Block::Table(t))];
+    assert_eq!(hebrew(&d), (false, true), "table style");
+
+    // Nothing to add: plain text, a run that says `w:bCs` off, a `w:cs` run (bold in neither), and
+    // a run whose `w:bCs`/`w:iCs` come from the defaults, which Word reads too.
+    assert_eq!(hebrew(&doc_of(text, false, CharProps::default())), (false, false), "plain");
+    let mut d = doc_of(text, false, bold_italic.clone());
+    let sheet = Arc::make_mut(&mut d.styles);
+    sheet.default_chr.bold_cs = Some(true);
+    sheet.default_chr.italic_cs = Some(true);
+    assert_eq!(hebrew(&d), (false, false), "w:bCs/w:iCs from the defaults");
+    let off = CharProps { bold_cs: Some(false), italic_cs: Some(false), ..bold_italic.clone() };
+    assert_eq!(hebrew(&doc_of(text, false, off)), (false, false), "w:bCs/w:iCs off");
+    assert_eq!(hebrew(&doc_of(text, false, CharProps { cs: Some(true), ..bold_italic })), (false, false), "w:cs run");
+}

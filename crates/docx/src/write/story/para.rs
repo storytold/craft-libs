@@ -143,9 +143,21 @@ impl Writer<'_> {
         let styles = &self.doc.styles;
         let para_style = p.props.style.as_deref();
         let para_lang = crate::write::bidi::para_inherits_lang_bidi(styles, para_style);
-        let spans = crate::write::bidi::direction_spans(&p.text, rtl_para, p.run_ranges(), |c| {
-            para_lang || crate::write::bidi::char_style_has_lang_bidi(styles, c)
-        });
+        let table = self.table_chr.as_ref();
+        let spans = crate::write::bidi::direction_spans(
+            &p.text,
+            rtl_para,
+            p.run_ranges(),
+            |c| para_lang || crate::write::bidi::char_style_has_lang_bidi(styles, c),
+            // What the run's complex-script text borrows from `w:b`/`w:i`: drawn bold (italic)
+            // where nothing sets `w:bCs` (`w:iCs`) on, which turning the Latin value off shows.
+            // A run marked `w:cs` borrows nothing, in WordCraft as in Word.
+            |c| {
+                let r = styles.resolve_char_in(para_style, table, c);
+                let own = styles.resolve_char_in(para_style, table, &CharProps { bold: Some(false), italic: Some(false), ..c.clone() });
+                (r.bold_cs && !own.bold_cs && !r.cs, r.italic_cs && !own.italic_cs && !r.cs)
+            },
+        );
         for (range, props) in &spans {
             let props: &CharProps = props;
             let range = range.clone();
