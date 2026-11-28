@@ -432,9 +432,16 @@ fn pack(sizes: &[DVec2], res: f32, pad: f32) -> Result<(f64, f32, Vec<DVec2>)> {
             return Ok((0.0, res, out));
         }
         let (mut lo, mut hi) = (0.0f64, (f64::from(res) - 2.0 * pad).max(0.0) / largest);
-        if hi > 0.0 && place(hi, res, &mut out) {
-            lo = hi;
+        // Halve the upper bound until a positive scale fits, so the refinement below starts
+        // from a feasible lower bound however far below the first guess the answer lies.
+        while hi > 0.0 {
+            if place(hi, res, &mut out) {
+                lo = hi;
+                break;
+            }
+            hi *= 0.5;
         }
+        hi = if lo > 0.0 { (2.0 * lo).min((f64::from(res) - 2.0 * pad).max(0.0) / largest) } else { hi };
         for _ in 0..40 {
             if hi - lo <= lo * 1e-4 {
                 break;
@@ -522,6 +529,14 @@ mod tests {
         let (_, resolution, offsets) = pack(&[DVec2::ONE; 2], 128.0, 4.0).unwrap();
         assert_eq!(resolution, 128.0);
         assert_eq!((offsets[0].x + 4.0) / f64::from(resolution) * 128.0, 4.0);
+    }
+
+    #[test]
+    fn packing_finds_a_small_scale_far_below_the_first_guess() {
+        let pad = 1.0 + 262_657.0 / 8_388_608.0;
+        let (scale, _, _) = pack(&vec![DVec2::ONE; 511 * 511], 1054.0, pad as f32).unwrap();
+        assert!(scale > 0.0);
+        assert!(pack(&vec![DVec2::ONE; 600 * 600], 1054.0, pad as f32).is_err());
     }
 
     #[test]
