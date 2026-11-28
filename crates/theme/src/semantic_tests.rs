@@ -228,3 +228,27 @@ fn the_grip_ink_lies_a_little_apart_from_the_panel_and_a_theme_can_pin_it() {
     let r = resolve(&pinned, standard(Mode::Dark), None);
     assert_eq!(r.tokens.color.line.grip, hex("#5a6b7c"), "a theme's pinned line.grip is used");
 }
+
+/// A painted pointer's colour is `overlay.stroke` in a theme that does not pin `overlay.cursor`, in every appearance;
+/// a theme that pins it gets its pin with `overlay.stroke` unchanged, and a pin that misses the halo minimum is
+/// reported.
+#[test]
+fn the_cursor_colour_follows_the_overlay_stroke_and_a_theme_can_pin_it() {
+    for def in [grey_blue(), violet()] {
+        for a in appearances() {
+            let c = &resolve(&def, a, None).tokens.color;
+            assert_eq!(c.overlay.cursor, c.overlay.stroke, "{} {a:?}: overlay.cursor follows overlay.stroke", def.name);
+        }
+    }
+    let reported = |r: &Resolved| r.warnings.iter().any(|w| w.fg == T::OverlayCursor && w.bg == T::OverlayHalo);
+    let unpinned = resolve(&grey_blue(), app(Mode::Dark, Contrast::Standard), None).tokens.color.overlay.stroke;
+    let mut pinned = grey_blue();
+    pinned.pins.dark = Pins::from_iter([(T::OverlayCursor, Rgba::WHITE)]);
+    let r = resolve(&pinned, app(Mode::Dark, Contrast::Standard), None);
+    assert_eq!(r.tokens.color.overlay.cursor, Rgba::WHITE, "a theme's pinned overlay.cursor is used");
+    assert_eq!(r.tokens.color.overlay.stroke, unpinned, "the pin leaves overlay.stroke as it was");
+    assert!(!reported(&r), "white reads on the halo: {:?}", r.warnings);
+    pinned.pins.dark = Pins::from_iter([(T::OverlayCursor, hex("#404040"))]);
+    let r = resolve(&pinned, app(Mode::Dark, Contrast::Standard), None);
+    assert!(reported(&r), "a dark grey on the dark halo is reported: {:?}", r.warnings);
+}

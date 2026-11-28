@@ -195,13 +195,24 @@ pub fn av1_unescape(es: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The Opus control header and packet the demuxer gives back for an Opus frame.
-pub fn opus_unit(packet: &[u8]) -> Vec<u8> {
-    let mut v = vec![0x7F, 0xE0];
-    v.extend(std::iter::repeat_n(0xFF, packet.len() / 255));
-    v.push((packet.len() % 255) as u8);
-    v.extend_from_slice(packet);
-    v
+/// The payload of every PES packet on `pid`, as the muxer wrote it (the PES header left out).
+pub fn pes_payloads(ts: &[u8], pid: u16) -> Vec<Vec<u8>> {
+    let mut out: Vec<Vec<u8>> = Vec::new();
+    for p in ts.chunks(PACKET_SIZE) {
+        if ((p[1] & 0x1F) as u16) << 8 | p[2] as u16 != pid || p[3] & 0x10 == 0 {
+            continue;
+        }
+        let start = if p[3] & 0x20 != 0 { 5 + p[4] as usize } else { 4 };
+        let mut payload = &p[start..];
+        if p[1] & 0x40 != 0 {
+            payload = &payload[9 + payload[8] as usize..];
+            out.push(Vec::new());
+        }
+        if let Some(last) = out.last_mut() {
+            last.extend_from_slice(payload);
+        }
+    }
+    out
 }
 
 /// What the demuxer gives back for a video frame: an access unit delimiter first.

@@ -186,7 +186,8 @@ pub trait Props: Meta + Sized {
     /// The component's horizontal axis keeps its left-to-right order under a right-to-left interface: a time axis, a
     /// ruler, a document view. The component sits where its parent's flow puts it (mirrored); its own content flow,
     /// keys and roving order, the components inside it, and its access node do not mirror. A container declares it on
-    /// the one part of its content that is such an axis, and its other parts mirror.
+    /// the one part of its content that is such an axis, and its other parts mirror. A layer opened from inside it (a
+    /// popover, a bar, a menu) mirrors as the interface does.
     fn ltr_axis(mut self) -> Self {
         self.common_mut(Internal::new()).ltr_axis = true;
         self
