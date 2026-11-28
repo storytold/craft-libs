@@ -38,6 +38,7 @@ enum TransitionType INSTANT_TRANSITION DISSOLVE SMART_ANIMATE
 enum EasingType IN_CUBIC OUT_CUBIC
 enum ConstraintType MIN CENTER MAX STRETCH SCALE
 enum LeadingTrim NONE CAP_HEIGHT
+enum OpenTypeFeature LIGA SS16
 struct GUID uint sessionID, uint localID
 struct Color float r, float g, float b, float a
 struct Vector float x, float y
@@ -78,7 +79,7 @@ message Event InteractionType interactionType
 message Action GUID transitionNodeID, TransitionType transitionType, float transitionDuration, EasingType easingType, ConnectionType connectionType, NavigationType navigationType, VariableTarget targetVariable, VariableData targetVariableData, VariableSetID targetVariableSetID, GUID targetVariableModeID, ConditionalActions[] conditionalActions
 message Interaction Event event, Action[] actions
 message StartingPoint string name, string position
-message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, bool visible, float opacity, Vector size, Matrix transform, Paint[] fillPaints, Paint[] strokePaints, float strokeWeight, float cornerRadius, bool resizeToFit, bool internalOnly, float fontSize, FontName fontName, TextData textData, uint styleID, Path[] fillGeometry, Path[] strokeGeometry, StyleType styleType, StyleId styleIdForFill, SymbolData symbolData, PropDef[] componentPropDefs, PropAssignment[] componentPropAssignments, VariableDataMap parameterConsumptionMap, SetMode[] variableSetModes, VariableID variableSetID, ResolvedType variableResolvedType, Values variableDataValues, ModeMap variableModeBySetMap, Interaction[] prototypeInteractions, StartingPoint prototypeStartingPoint, GUIDPath guidPath, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, uint count, float starInnerScale, VectorData vectorData, StrokeCap strokeCap, StrokeJoin strokeJoin, VectorMirror handleMirroring, ShapeWithTextType shapeWithTextType, ConnectorEndpoint connectorStart, ConnectorEndpoint connectorEnd, StrokeCap connectorStartCap, StrokeCap connectorEndCap, ConnectorLineStyle connectorLineStyle, ConstraintType horizontalConstraint, ConstraintType verticalConstraint, NodeChange[] derivedSymbolData, string key, string version, LeadingTrim leadingTrim, float[] dashPattern, ConnectorControlPoint[] connectorControlPoints, NodePhase phase, GUID overriddenSymbolID
+message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, bool visible, float opacity, Vector size, Matrix transform, Paint[] fillPaints, Paint[] strokePaints, float strokeWeight, float cornerRadius, bool resizeToFit, bool internalOnly, float fontSize, FontName fontName, TextData textData, uint styleID, Path[] fillGeometry, Path[] strokeGeometry, StyleType styleType, StyleId styleIdForFill, SymbolData symbolData, PropDef[] componentPropDefs, PropAssignment[] componentPropAssignments, VariableDataMap parameterConsumptionMap, SetMode[] variableSetModes, VariableID variableSetID, ResolvedType variableResolvedType, Values variableDataValues, ModeMap variableModeBySetMap, Interaction[] prototypeInteractions, StartingPoint prototypeStartingPoint, GUIDPath guidPath, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, uint count, float starInnerScale, VectorData vectorData, StrokeCap strokeCap, StrokeJoin strokeJoin, VectorMirror handleMirroring, ShapeWithTextType shapeWithTextType, ConnectorEndpoint connectorStart, ConnectorEndpoint connectorEnd, StrokeCap connectorStartCap, StrokeCap connectorEndCap, ConnectorLineStyle connectorLineStyle, ConstraintType horizontalConstraint, ConstraintType verticalConstraint, NodeChange[] derivedSymbolData, string key, string version, LeadingTrim leadingTrim, float[] dashPattern, ConnectorControlPoint[] connectorControlPoints, NodePhase phase, GUID overriddenSymbolID, OpenTypeFeature[] toggledOnOTFeatures, OpenTypeFeature[] toggledOffOTFeatures
 message Blob byte[] bytes
 message Message NodeChange[] nodeChanges, Blob[] blobs
 ";
@@ -282,6 +283,8 @@ fn message() -> Kv<'static> {
                 ("fontSize", f(16.0)),
                 ("fontName", font("Regular")),
                 ("leadingTrim", e("CAP_HEIGHT")),
+                ("toggledOnOTFeatures", arr(vec![e("SS16")])),
+                ("toggledOffOTFeatures", arr(vec![e("LIGA")])),
                 ("textData", text),
             ],
         ),
@@ -393,6 +396,8 @@ fn the_fixture_maps_onto_the_rest_shape() {
     let title = named(json, "Title");
     assert_eq!(title["characters"], "Hi there");
     assert_eq!(title["style"]["fontSize"], 16.0);
+    // OpenType features it turns on and off.
+    assert_eq!((&title["style"]["opentypeFlags"]["SS16"], &title["style"]["opentypeFlags"]["LIGA"]), (&serde_json::json!(1), &serde_json::json!(0)));
     let runs: Vec<f64> = title["characterStyleOverrides"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
     assert_eq!(runs, [0.0, 0.0, 0.0, 5.0, 5.0, 5.0]);
     assert_eq!(title["styleOverrideTable"]["5"]["fontStyle"], "Bold");

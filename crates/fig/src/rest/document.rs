@@ -53,6 +53,8 @@ impl<'a> Mapper<'a> {
     fn referenced_component_mains(&mut self, visible_pages: &[String]) -> BTreeSet<String> {
         let mut mains = BTreeSet::new();
         let mut visited = BTreeSet::new();
+        // The component sets already taken in whole.
+        let mut sets = BTreeSet::new();
         let mut pending: Vec<(String, usize)> = visible_pages.iter().flat_map(|page| self.children(page)).map(|id| (id, 1)).collect();
         while let Some((id, depth)) = pending.pop() {
             if depth > MAX_DEPTH {
@@ -68,7 +70,11 @@ impl<'a> Mapper<'a> {
                 break;
             }
             let Some(node) = self.nodes.get(&id) else { continue };
-            for target in self.component_main_targets(node) {
+            let (mut targets, whole_sets) = self.component_main_targets(node);
+            for m in whole_sets {
+                targets.extend(self.variant_siblings(&m, &mut sets));
+            }
+            for target in targets {
                 if mains.insert(target.clone()) {
                     pending.push((target, 1));
                 }
@@ -80,7 +86,9 @@ impl<'a> Mapper<'a> {
 
     /// The mains a layer names: an instance's own, the ones its overrides swap in, the instance-swap
     /// defaults and values of component properties.
-    fn component_main_targets(&self, node: &Kv<'a>) -> Vec<String> {
+    /// Also the mains whose whole set is needed besides.
+    fn component_main_targets(&self, node: &Kv<'a>) -> (Vec<String>, Vec<String>) {
+        let mut whole_sets = Vec::new();
         let mut targets: Vec<String> = node
             .get("componentPropDefs")
             .map(Kv::list)
@@ -92,7 +100,7 @@ impl<'a> Mapper<'a> {
             })
             .collect();
         if node.get("type").and_then(Kv::str) != Some("INSTANCE") {
-            return targets;
+            return (targets, whole_sets);
         }
         // The instance and the override rows below it (rows carry the same fields, nested).
         let mut pending: Vec<(&Kv<'a>, usize)> = vec![(node, 0)];
@@ -103,8 +111,16 @@ impl<'a> Mapper<'a> {
                 break;
             }
             let data = row.get("symbolData");
-            targets.extend(row.get("overriddenSymbolID").and_then(swap_guid));
-            targets.extend(data.and_then(|d| d.get("symbolID")).and_then(guid));
+            let swapped = row.get("overriddenSymbolID").and_then(swap_guid);
+            let main = data.and_then(|d| d.get("symbolID")).and_then(guid);
+            // A variant property bound to a variable can pick any variant of the main's set (a
+            // kit's Dark variants, which no instance names): the whole set is needed, of the main
+            // swapped in when there is one (as the instance shows).
+            if let Some(m) = swapped.as_ref().or(main.as_ref()).filter(|_| binds_variant(row)) {
+                whole_sets.push(m.clone());
+            }
+            targets.extend(swapped);
+            targets.extend(main);
             for assignment in row.get("componentPropAssignments").map(Kv::list).unwrap_or_default() {
                 if assignment.get("defID").is_some_and(|def| self.is_instance_swap(def).is_some()) {
                     targets.extend(assigned(assignment).and_then(prop_guid));
@@ -114,7 +130,19 @@ impl<'a> Mapper<'a> {
             let derived = row.get("derivedSymbolData").map(Kv::list).unwrap_or_default();
             pending.extend(overrides.iter().chain(derived).map(|row| (row, depth + 1)));
         }
-        targets
+        (targets, whole_sets)
+    }
+
+    /// The other variants in the set holding main `id` (the components beside it), unless that set
+    /// is in `done` already (each set is listed once). The walk that collects them stops at the
+    /// layer limit, not at a count of its own.
+    fn variant_siblings(&self, id: &str, done: &mut BTreeSet<String>) -> Vec<String> {
+        let Some(parent) = self.nodes.get(id).and_then(|n| n.get("parentIndex")?.get("guid")).and_then(guid) else { return Vec::new() };
+        if !done.insert(parent.clone()) {
+            return Vec::new();
+        }
+        let symbol = |c: &String| self.nodes.get(c).and_then(|n| n.get("type")).and_then(Kv::str) == Some("SYMBOL");
+        self.children(&parent).into_iter().filter(|c| c != id && symbol(c)).collect()
     }
 
     /// The branches of the internal canvas `id` that hold the `required_mains` (with the frames
@@ -330,4 +358,17 @@ fn sorted_modes(n: &Kv) -> Vec<(String, Value)> {
         .collect();
     modes.sort_by(|a, b| a.0.cmp(&b.0));
     modes
+}
+
+/// Whether layer or override row `row` binds a variant property to a variable
+/// (`VARIANT_PROPERTIES` in its variable or parameter consumption map).
+fn binds_variant(row: &Kv) -> bool {
+    ["variableConsumptionMap", "parameterConsumptionMap"].iter().any(|m| {
+        row.get(m)
+            .and_then(|m| m.get("entries"))
+            .map(Kv::list)
+            .unwrap_or_default()
+            .iter()
+            .any(|e| e.get("variableField").and_then(Kv::str) == Some("VARIANT_PROPERTIES"))
+    })
 }
