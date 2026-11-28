@@ -72,6 +72,37 @@ mod track;
 ))]
 pub use track::{TrackDecoder, TrackDecoderOptions};
 
+#[cfg(any(
+    feature = "h264-encode",
+    feature = "hevc-encode",
+    feature = "av1-encode",
+    feature = "vp9-encode",
+    feature = "vp8-encode",
+    feature = "mpeg2-encode",
+    feature = "mpeg4-encode",
+    feature = "prores",
+    feature = "dnx",
+    feature = "apv-encode",
+    feature = "ffv1",
+    feature = "mjpeg"
+))]
+mod encode;
+#[cfg(any(
+    feature = "h264-encode",
+    feature = "hevc-encode",
+    feature = "av1-encode",
+    feature = "vp9-encode",
+    feature = "vp8-encode",
+    feature = "mpeg2-encode",
+    feature = "mpeg4-encode",
+    feature = "prores",
+    feature = "dnx",
+    feature = "apv-encode",
+    feature = "ffv1",
+    feature = "mjpeg"
+))]
+pub use encode::{EncodedPacket, RateControlMode, TrackEncoder, TrackEncoderConfig};
+
 #[cfg(any(feature = "apv-decode", feature = "apv-encode"))]
 pub mod apv;
 
