@@ -445,7 +445,12 @@ fn a_read_only_ruler_paints_and_takes_no_press() {
         paths(&|points: &[egui::Pos2]| points.iter().any(|p| close(*p, screen(ruler.start))) && points.iter().any(|p| close(*p, end))) > 0,
         "the line paints"
     );
-    assert!(paths(&|points: &[egui::Pos2]| points.len() == 2 && close(points[0].lerp(points[1], 0.5), end)) >= 2, "the cross at the end paints");
+    // photocraft#11988 removed the crosses at the ruler's ends; the protractor arm's free end keeps its cross.
+    let arm_end = screen(ruler.protractor.expect("the drawn line carries a protractor arm"));
+    assert!(
+        paths(&|points: &[egui::Pos2]| points.len() == 2 && close(points[0].lerp(points[1], 0.5), arm_end)) >= 2,
+        "the cross at the arm end paints"
+    );
 
     fixture.press_at(end).release_at(end);
     let started = (*line.borrow()).is_none();

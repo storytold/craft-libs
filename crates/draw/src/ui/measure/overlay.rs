@@ -25,7 +25,8 @@ pub(super) const POINT: PartKey = PartKey::new("point");
 /// The line between the ends, of a ruler without a protractor: `LINE.at(0)`.
 const LINE: PartKey = PartKey::new("line");
 
-/// The style of the Ruler overlay: a cross at each point in the look of the line (a thin line over a thick halo).
+/// The style of the Ruler overlay: the protractor's marks - a small dot on the vertex and a cross at the arm's
+/// free end, the cross in the look of a line (a thin line over a thick halo).
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct RulerOverlayStyle {
@@ -33,7 +34,11 @@ pub struct RulerOverlayStyle {
     metrics: Metrics,
     /// The length of each arm of a cross, from its point.
     arm: f32,
-    /// The cross's line per state: the line's colour at rest, the accent while hovered or dragged.
+    /// The radius of the dot on a protractor's vertex: the small handle's half, so about 6 screen points across
+    /// (the reference application measures about 7; the handle tokens sm 6 and md 8 tie for that, and the smaller
+    /// was chosen).
+    dot: f32,
+    /// The marks' line per state: the line's colour at rest, the accent while hovered or dragged.
     line: Stateful<StyleColor>,
     /// The halo under the cross, so it reads on any image.
     halo: StyleColor,
@@ -106,10 +111,11 @@ pub(super) fn ruler_cursor(precise: bool, protractor: bool) -> Cursor {
 ///   crosshair while the canvas shows precise cursors.
 /// - **Keyboard:** the points are one Tab stop; Page Up and Page Down pick a point, the arrows move it 1 unit and
 ///   Shift 10, Delete and Backspace clear the line.
-/// - It paints a cross at each point, in the line's look; the app shows the line and the arm with `StraightLinePreview`
-///   ([`RulerPass::show_line`](super::RulerPass::show_line)).
-/// - [Read only](craft_ui::contract::Props::read_only), it paints the crosses at rest and takes no press, key or focus: the ruler drawn
-///   under the other tools ([`show_ruler`](super::show_ruler)).
+/// - It paints the protractor's marks - the dot on its vertex and the cross on the arm's free end - in the line's
+///   colour; a plain ruler's ends show no mark. The app shows the line and the arm from
+///   [`RulerPass::show_line`](super::RulerPass::show_line).
+/// - [Read only](craft_ui::contract::Props::read_only), it paints these marks at rest and takes no press, key or focus: the ruler
+///   drawn under the other tools ([`show_ruler`](super::show_ruler)).
 /// - **AccessKit:** the group's value reads "Length L, angle A°" in the ruler's units; each point is named and valued
 ///   "x, y" in the ruler's units.
 #[derive(Component, craft_ui::contract::Props)]
@@ -178,6 +184,7 @@ impl Component for RulerOverlay<'_> {
         RulerOverlayStyle {
             metrics: Metrics::new().min_size(Vec2::splat(2.0 * arm)),
             arm,
+            dot: cx.tokens.size.handle.sm / 2.0,
             line,
             halo: cx.color(overlay.halo),
             reach: cx.tokens.size.hit.target,
@@ -303,15 +310,29 @@ impl Component for RulerOverlay<'_> {
         for part in [RulerPart::Start, RulerPart::End, RulerPart::Protractor] {
             let Some(at) = line.point(part) else { continue };
             let centre = space.view.to_screen(at);
-            let arms = [Vec2::new(style.arm, 0.0), Vec2::new(0.0, style.arm)].map(|arm| PaintShape::Path(vec![centre - arm, centre + arm]));
-            // A point the pass's edit just added has no part yet; it shows as the control at rest.
-            let at_rest = cx.part_if_declared(POINT.at(part.key())).is_none();
-            let ink = if at_rest { cx.resolve(&style.line) } else { cx.resolve_part(POINT.at(part.key()), &style.line) };
-            for arm in &arms {
-                draw.stroke(arm, StrokeWidth::Thick, style.halo);
-            }
-            for arm in &arms {
-                draw.stroke(arm, StrokeWidth::Thin, ink);
+            match part {
+                // A plain ruler's ends paint nothing (photocraft#11988); a protractor's vertex shows the small dot
+                // in the line's colour, which is the colour `show_lines` paints the line in.
+                RulerPart::Start if line.protractor.is_some() => {
+                    // A point the pass's edit just added has no part yet; it shows as the control at rest.
+                    let at_rest = cx.part_if_declared(POINT.at(RulerPart::Start.key())).is_none();
+                    let ink = if at_rest { cx.resolve(&style.line) } else { cx.resolve_part(POINT.at(RulerPart::Start.key()), &style.line) };
+                    draw.fill(&PaintShape::Circle(centre, style.dot), ink);
+                }
+                // The arm's free end keeps today's cross: the issue leaves that marker unmeasured.
+                RulerPart::Protractor => {
+                    let arms = [Vec2::new(style.arm, 0.0), Vec2::new(0.0, style.arm)].map(|arm| PaintShape::Path(vec![centre - arm, centre + arm]));
+                    // A point the pass's edit just added has no part yet; it shows as the control at rest.
+                    let at_rest = cx.part_if_declared(POINT.at(part.key())).is_none();
+                    let ink = if at_rest { cx.resolve(&style.line) } else { cx.resolve_part(POINT.at(part.key()), &style.line) };
+                    for arm in &arms {
+                        draw.stroke(arm, StrokeWidth::Thick, style.halo);
+                    }
+                    for arm in &arms {
+                        draw.stroke(arm, StrokeWidth::Thin, ink);
+                    }
+                }
+                _ => {}
             }
         }
     }

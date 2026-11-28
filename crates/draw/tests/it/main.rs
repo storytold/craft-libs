@@ -34,6 +34,7 @@ pub(crate) mod artboard;
 
 // draw-bars
 pub(crate) mod measure;
+pub(crate) mod ruler_look;
 pub(crate) mod slice;
 
 // draw-stroke
