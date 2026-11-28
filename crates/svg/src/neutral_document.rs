@@ -37,11 +37,35 @@ pub struct Error(pub String);
 /// A shape's original geometry before its affine transform.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Primitive {
-    Rect { x: f64, y: f64, width: f64, height: f64 },
-    Circle { center: Point, radius: f64 },
-    Ellipse { center: Point, rx: f64, ry: f64 },
-    Line { a: Point, b: Point },
-    Polyline { points: Vec<Point>, closed: bool },
+    /// `rx` and `ry` are the corner radii, resolved as SVG says: a missing, negative or
+    /// unreadable radius takes the other one's value, and each is at most half the side it
+    /// rounds. Both are 0 for square corners: both missing, or either one 0 (SVG draws a
+    /// zero-radius corner square).
+    Rect {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        rx: f64,
+        ry: f64,
+    },
+    Circle {
+        center: Point,
+        radius: f64,
+    },
+    Ellipse {
+        center: Point,
+        rx: f64,
+        ry: f64,
+    },
+    Line {
+        a: Point,
+        b: Point,
+    },
+    Polyline {
+        points: Vec<Point>,
+        closed: bool,
+    },
     Path(Vec<Subpath>),
 }
 /// A primitive with its layer and SVG affine matrix `[a,b,c,d,e,f]`.
@@ -66,6 +90,8 @@ pub enum Skipped {
     Image,
     Use,
     Style,
+    /// A `rect` corner radius given as a percentage when the root has no viewport size to
+    /// refer it to; those corners are left square.
     RoundedCorners,
 }
 
@@ -175,6 +201,69 @@ fn viewport(e: &BytesStart<'_>) -> [f64; 6] {
     let (x, y, h) = vb.map_or((0., 0., 0.), |(x, y, _, h)| (x, y, h));
     [unit, 0., 0., -unit, -x * unit, (y + h) * unit]
 }
+/// The root viewport's size in user units: the `viewBox`, else a bare or `px` `width` and
+/// `height`.
+fn viewport_size(e: &BytesStart<'_>) -> Option<(f64, f64)> {
+    let positive = |v: f64| v.is_finite() && v > 0.;
+    if let Some(raw) = attr(e, b"viewBox")
+        && let [_, _, w, h] = numbers(&raw).take(5).collect::<Vec<_>>()[..]
+        && positive(w)
+        && positive(h)
+    {
+        return Some((w, h));
+    }
+    let px = |name: &[u8]| {
+        let raw = attr(e, name)?;
+        let n = raw.trim();
+        n.strip_suffix("px").unwrap_or(n).trim().parse::<f64>().ok().filter(|v| positive(*v))
+    };
+    Some((px(b"width")?, px(b"height")?))
+}
+/// Whether a radius's unit is one SVG defines (`%` is handled apart). `em` and `ex` count,
+/// although `length` reads them as `px`.
+fn radius_unit_is_known(raw: &str) -> bool {
+    let s = raw.trim();
+    let cut = s.find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E'))).unwrap_or(s.len());
+    matches!(s[cut..].trim(), "" | "px" | "mm" | "cm" | "in" | "pt" | "pc" | "em" | "ex")
+}
+/// A `rect`'s corner radii, and whether a percentage radius could not be resolved for want of
+/// a viewport, in which case the corners stay square. A percentage is of the root viewport's
+/// width (`rx`) or height (`ry`), also inside a nested `svg`.
+fn corner_radii(e: &BytesStart<'_>, w: f64, h: f64, viewport: Option<(f64, f64)>) -> (f64, f64, bool) {
+    let mut unresolved = false;
+    let mut radius = |name: &[u8], of: Option<f64>| {
+        let raw = attr(e, name)?;
+        let r = match raw.trim().strip_suffix('%') {
+            Some(pct) => {
+                // A negative percentage is invalid like any negative radius, whether or not
+                // there is a viewport to resolve it against.
+                let pct = pct.trim().parse::<f64>().ok().filter(|p| p.is_finite() && *p >= 0.)?;
+                let Some(of) = of else {
+                    unresolved = true;
+                    return None;
+                };
+                pct / 100. * of
+            }
+            // An unknown unit makes the radius invalid; `length` would read its number.
+            None if radius_unit_is_known(&raw) => length(&raw)?,
+            None => return None,
+        };
+        (r >= 0.).then_some(r)
+    };
+    let (rx, ry) = (radius(b"rx", viewport.map(|v| v.0)), radius(b"ry", viewport.map(|v| v.1)));
+    if unresolved {
+        return (0., 0., true);
+    }
+    let (rx, ry) = match (rx, ry) {
+        (Some(rx), Some(ry)) => (rx, ry),
+        (Some(r), None) | (None, Some(r)) => (r, r),
+        (None, None) => (0., 0.),
+    };
+    if rx <= 0. || ry <= 0. {
+        return (0., 0., false);
+    }
+    (rx.min(w / 2.), ry.min(h / 2.), unresolved)
+}
 fn layer_name(raw: &str) -> String {
     let s: String = raw.trim().chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '$') { c } else { '_' }).take(128).collect();
     let s = s.trim_matches('_');
@@ -189,6 +278,8 @@ pub enum Event {
 struct Walker<'a> {
     doc: Document,
     stack: Vec<[f64; 6]>,
+    /// The root viewport's width and height in user units, which percentage radii refer to.
+    viewport_size: Option<(f64, f64)>,
     layer: String,
     skip: usize,
     points: usize,
@@ -236,6 +327,7 @@ impl Walker<'_> {
             && let Some(root) = self.stack.first_mut()
         {
             *root = viewport(e);
+            self.viewport_size = viewport_size(e);
         }
         if name == b"g"
             && attr(e, b"inkscape:groupmode").as_deref() == Some("layer")
@@ -280,10 +372,11 @@ impl Walker<'_> {
                 if w <= 0. || h <= 0. {
                     return Ok(());
                 }
-                if num(e, b"rx", 0.) > 0. || num(e, b"ry", 0.) > 0. {
+                let (rx, ry, unresolved) = corner_radii(e, w, h, self.viewport_size);
+                if unresolved {
                     self.note(Skipped::RoundedCorners);
                 }
-                Primitive::Rect { x, y, width: w, height: h }
+                Primitive::Rect { x, y, width: w, height: h, rx, ry }
             }
             b"circle" => {
                 let r = num(e, b"r", 0.);
@@ -332,7 +425,8 @@ impl Walker<'_> {
 /// Walk supported SVG geometry without retaining a second copy of the document's shapes.
 /// The sink receives each layer before its first shape and each shape in input order.
 pub fn visit(text: &str, sink: &mut dyn FnMut(Event) -> Result<(), Error>) -> Result<Document, Error> {
-    let mut walker = Walker { doc: Document::default(), stack: vec![ID], layer: "0".into(), skip: 0, points: 0, shapes: 0, sink };
+    let mut walker =
+        Walker { doc: Document::default(), stack: vec![ID], viewport_size: None, layer: "0".into(), skip: 0, points: 0, shapes: 0, sink };
     let mut reader = Reader::from_str(text);
     reader.config_mut().trim_text(true);
     loop {
@@ -397,6 +491,46 @@ mod tests {
         });
         assert!(result.is_err());
         assert_eq!(events, ["cut", "shape"]);
+    }
+
+    #[test]
+    fn rect_corner_radii_follow_svg() {
+        let radii = |rect: &str| {
+            let d = import(&format!(r#"<svg viewBox="0 0 200 100">{rect}</svg>"#)).unwrap();
+            match d.shapes[0].primitive {
+                Primitive::Rect { rx, ry, .. } => (rx, ry),
+                _ => panic!("{rect}"),
+            }
+        };
+        assert_eq!(radii(r#"<rect width="40" height="20"/>"#), (0., 0.));
+        // One radius given: the other takes its value.
+        assert_eq!(radii(r#"<rect width="40" height="20" rx="3"/>"#), (3., 3.));
+        assert_eq!(radii(r#"<rect width="40" height="20" ry="4"/>"#), (4., 4.));
+        assert_eq!(radii(r#"<rect width="40" height="20" rx="3" ry="5"/>"#), (3., 5.));
+        // A negative or unreadable radius counts as missing.
+        assert_eq!(radii(r#"<rect width="40" height="20" rx="-2" ry="5"/>"#), (5., 5.));
+        assert_eq!(radii(r#"<rect width="40" height="20" rx="auto" ry="5"/>"#), (5., 5.));
+        // Each radius is at most half the side it rounds.
+        assert_eq!(radii(r#"<rect width="40" height="20" rx="30" ry="30"/>"#), (20., 10.));
+        // A percentage is of the viewport's width (rx) or height (ry).
+        assert_eq!(radii(r#"<rect width="40" height="20" rx="5%" ry="10%"/>"#), (10., 10.));
+        // A negative percentage, or an unknown unit, is invalid and takes the other radius.
+        assert_eq!(radii(r#"<rect width="40" height="20" rx="3oops" ry="5"/>"#), (5., 5.));
+        let d = import(r#"<svg><rect width="40" height="20" rx="-5%" ry="2"/></svg>"#).unwrap();
+        assert!(matches!(d.shapes[0].primitive, Primitive::Rect { rx: 2., ry: 2., .. }));
+        assert_eq!(d.skipped.get(&Skipped::RoundedCorners), None);
+        // Either radius 0 means square corners.
+        assert_eq!(radii(r#"<rect width="40" height="20" rx="0" ry="5"/>"#), (0., 0.));
+        assert_eq!(radii(r#"<rect width="40" height="20" rx="1" ry="0"/>"#), (0., 0.));
+    }
+    #[test]
+    fn a_percentage_radius_without_a_viewport_leaves_square_corners_and_is_counted() {
+        let d = import(r#"<svg><rect width="40" height="20" rx="5%" ry="2"/></svg>"#).unwrap();
+        assert!(matches!(d.shapes[0].primitive, Primitive::Rect { rx: 0., ry: 0., .. }));
+        assert_eq!(d.skipped.get(&Skipped::RoundedCorners), Some(&1));
+        let d = import(r#"<svg width="400" height="200"><rect width="40" height="20" rx="5%"/></svg>"#).unwrap();
+        assert!(matches!(d.shapes[0].primitive, Primitive::Rect { rx: 20., ry: 10., .. }));
+        assert_eq!(d.skipped.get(&Skipped::RoundedCorners), None);
     }
 
     #[test]
