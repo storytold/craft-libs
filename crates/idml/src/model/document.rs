@@ -209,14 +209,23 @@ pub struct ConditionValues {
 }
 
 impl ConditionValues {
-    /// Reads condition fields and its optional three-channel indicator color.
+    /// Reads condition fields and its optional three-channel indicator color: InDesign writes it as
+    /// `<Properties><IndicatorColor type="list">` with three `ListItem`s (a named UI color is an
+    /// `enumeration` and gives `None`); a plain `IndicatorColor="r g b"` attribute is read as well.
     pub fn from_el(el: &El) -> Self {
         let values = Values::of(el);
-        let rgb: Vec<u8> = values
-            .get("IndicatorColor")
-            .unwrap_or("")
-            .split_whitespace()
-            .filter_map(|value| value.parse::<f64>().ok())
+        let parts: Vec<String> = match values.get("IndicatorColor") {
+            Some(attr) => attr.split_whitespace().map(str::to_owned).collect(),
+            None => values
+                .prop_el("IndicatorColor")
+                .filter(|p| p.attr("type") != Some("enumeration"))
+                .map(|p| p.elements().filter(|i| i.local() == "ListItem").map(El::deep_text).collect())
+                .unwrap_or_default(),
+        };
+        let rgb: Vec<u8> = parts
+            .iter()
+            .filter_map(|value| value.trim().parse::<f64>().ok())
+            .filter(|value| value.is_finite())
             .map(|value| value.clamp(0.0, 255.0) as u8)
             .collect();
         Self {
@@ -232,13 +241,19 @@ impl ConditionValues {
         let name = self.name.as_deref().unwrap_or("");
         let self_id = self.self_id.clone().unwrap_or_else(|| format!("Condition/{}", escape_id(name)));
         let rgb = self.indicator_rgb.unwrap_or([0, 0, 0]);
-        El::new("Condition")
+        // InDesign rejects the color as an attribute ("Invalid parameter" on opening, once per
+        // condition); it is a `<Properties>` list of three doubles.
+        let mut color = El::new("IndicatorColor").with_attr("type", "list");
+        for c in rgb {
+            color.push(prop("ListItem", "double", c.to_string()));
+        }
+        let el = El::new("Condition")
             .with_attr("Self", self_id)
             .with_attr("Name", name)
-            .with_attr("IndicatorColor", format!("{} {} {}", rgb[0], rgb[1], rgb[2]))
             .with_attr("IndicatorMethod", "UseUnderline")
             .with_attr("UnderlineIndicatorAppearance", "Solid")
-            .with_attr("Visible", bool_str(self.visible))
+            .with_attr("Visible", bool_str(self.visible));
+        with_props(el, vec![color])
     }
 }
 

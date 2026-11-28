@@ -331,8 +331,20 @@ fn designmap_schema_elements_roundtrip_expected_attributes() {
 
     let cond = ConditionValues { self_id: None, name: Some("A:B".into()), indicator_rgb: Some([10, 20, 30]), visible: true }.to_el();
     assert_eq!(cond.attr("Self"), Some("Condition/A%3aB"));
-    assert_eq!(cond.attr("IndicatorColor"), Some("10 20 30"));
+    assert_eq!(cond.attr("IndicatorColor"), None, "InDesign rejects the color as an attribute");
+    let color = cond.child("Properties").and_then(|p| p.child("IndicatorColor")).unwrap();
+    assert_eq!(color.attr("type"), Some("list"));
+    let items: Vec<String> = color.elements().map(|i| i.deep_text()).collect();
+    assert_eq!(items, ["10", "20", "30"]);
     assert_eq!(cond.attr("Visible"), Some("true"));
+    assert_eq!(ConditionValues::from_el(&cond).indicator_rgb, Some([10, 20, 30]), "round trip");
+    let legacy = El::new("Condition").with_attr("Self", "Condition/X").with_attr("Name", "X").with_attr("IndicatorColor", "1 2 3");
+    assert_eq!(ConditionValues::from_el(&legacy).indicator_rgb, Some([1, 2, 3]));
+    let mut named = El::new("Condition").with_attr("Self", "Condition/Y").with_attr("Name", "Y");
+    let mut props = El::new("Properties");
+    props.push(El::new("IndicatorColor").with_attr("type", "enumeration").with_text("Pink"));
+    named.push(props);
+    assert_eq!(ConditionValues::from_el(&named).indicator_rgb, None);
 
     let xrefs = default_xref_text_variables();
     assert_eq!(xrefs[0].attr("VariableType"), Some("XrefChapterNumberType"));
