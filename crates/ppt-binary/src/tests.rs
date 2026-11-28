@@ -550,6 +550,8 @@ fn a_notes_pages_outline_text_goes_to_one_slide() {
 /// Text with very many formatting runs is laid into runs in about linear time. Each lookup used to
 /// scan the run starts from the beginning, so the cost grew with runs²: in a debug build these 640k
 /// one-character runs (about 6 MB of file) took 75 s that way, and take about 2 s with binary search.
+/// The presentation's text makes at most [`crate::text::MAX_TEXT_ITEMS`] paragraphs and runs
+/// together (each is kilobytes in memory), so the runs past that are left out.
 #[test]
 fn many_character_runs_are_not_quadratic() {
     const N: usize = 640_000;
@@ -573,8 +575,26 @@ fn many_character_runs_are_not_quadratic() {
     let t = std::time::Instant::now();
     let p = import(&bytes).unwrap();
     assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
-    let runs = &p.slides[0].shapes[0].text.as_ref().unwrap().paragraphs[0].runs;
-    assert_eq!(runs.iter().filter(|r| r.kind == RunKind::Break).count(), N / 2);
+    let paragraphs = &p.slides[0].shapes[0].text.as_ref().unwrap().paragraphs;
+    // One paragraph, and runs (letters and line breaks) up to the budget.
+    assert_eq!((paragraphs.len(), paragraphs[0].runs.len()), (1, crate::text::MAX_TEXT_ITEMS - 1));
+    assert!(paragraphs[0].runs.iter().any(|r| r.kind == RunKind::Break));
+}
+
+/// A presentation's text makes at most [`crate::text::MAX_TEXT_ITEMS`] paragraphs and runs
+/// together, across all its shapes (each is kilobytes in memory, from a character or two of file):
+/// a text of 40,000 one-letter paragraphs stops there, and a later shape's text gets nothing.
+#[test]
+fn text_makes_a_bounded_number_of_paragraphs_and_runs() {
+    let box_of = |id: u32, text: &str| container(rt::SP_CONTAINER, 0, &[fsp(202, id, 0xA00), anchor(0, 0, 1000, 1000), text_box(4, text, &[])]);
+    let many = "a\r".repeat(40_000);
+    let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[box_of(2060, &many), box_of(2061, "after")])]);
+    let (cu, doc, pics) = streams_of(0xE391_C05F, 1, slide, None);
+    let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
+    let texts: Vec<_> = p.slides[0].shapes.iter().filter_map(|s| s.text.as_ref()).collect();
+    let items: usize = texts.iter().flat_map(|t| &t.paragraphs).map(|para| 1 + para.runs.len()).sum();
+    assert_eq!(items, crate::text::MAX_TEXT_ITEMS);
+    assert!(!texts.iter().any(|t| t.text() == "after"), "the budget is the presentation's, not each shape's");
 }
 
 /// A slide naming a master that doesn't exist falls back to the first main master, every time. The
@@ -1146,6 +1166,40 @@ fn a_slides_own_footer_wins_over_the_documents() {
     let footer = p.slides[0].shapes.iter().find(|s| s.ph_type() == Some(PhType::Footer)).expect("a footer");
     assert_eq!(footer.text.as_ref().unwrap().text(), "This slide");
     assert_eq!(p.header_footer.footer_text, "Every slide");
+}
+
+/// A footer's text counts against the presentation's text budget too: it becomes a paragraph per
+/// line, on every slide that shows it. The lines past the budget are never made: the footer
+/// doesn't keep room for them either.
+#[test]
+fn footer_text_counts_against_the_text_budget() {
+    let many = "a\r".repeat(100_000);
+    let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[]), footer_record(0, &many)]);
+    let p = open_streams(streams_with_document(0xE391_C05F, 1, master(), slide, None, &[], &[]));
+    let footer = p.slides[0].shapes.iter().find(|s| s.ph_type() == Some(PhType::Footer)).expect("a footer");
+    let paragraphs = &footer.text.as_ref().unwrap().paragraphs;
+    let items: usize = paragraphs.iter().map(|para| 1 + para.runs.len()).sum();
+    assert!(items > 0 && items <= crate::text::MAX_TEXT_ITEMS, "{items} paragraphs and runs");
+    assert!(paragraphs.capacity() <= crate::text::MAX_TEXT_ITEMS, "room for {} paragraphs", paragraphs.capacity());
+}
+
+/// A slide number with room in the text budget for its paragraph but not its field is left out,
+/// not added as an empty placeholder.
+#[test]
+fn a_slide_number_the_budget_cannot_fit_is_left_out() {
+    // 32,767 one-letter lines and a last empty one: one item short of the budget.
+    let footer = "a\r".repeat(crate::text::MAX_TEXT_ITEMS / 2 - 1);
+    let flags: u16 = 0x20 | 0x08;
+    let hf = container(
+        rt::HEADERS_FOOTERS,
+        0,
+        &[atom(rt::HEADERS_FOOTERS_ATOM, 0, &[&0u16.to_le_bytes()[..], &flags.to_le_bytes()].concat()), atom(rt::CSTRING, 2, &utf16(&footer))],
+    );
+    let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[]), hf]);
+    let p = open_streams(streams_with_document(0xE391_C05F, 1, master(), slide, None, &[], &[]));
+    let shapes = &p.slides[0].shapes;
+    assert!(shapes.iter().any(|s| s.ph_type() == Some(PhType::Footer)), "the footer fits");
+    assert!(!shapes.iter().any(|s| s.ph_type() == Some(PhType::SlideNum)), "a slide number with no field");
 }
 
 /// A text box that points at an outline block keeps its own `TextRulerAtom`: the margin it sets

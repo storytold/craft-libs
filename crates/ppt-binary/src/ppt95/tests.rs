@@ -969,7 +969,7 @@ fn text_is_windows_1252() {
 /// Damaged text never panics and stays bounded: runs past the text, huge run lengths and counts,
 /// truncated entries, control characters, empty text, and a character atom past the cap.
 /// Paragraphs and runs are about 4 and 2 KB each, so the document's text makes at most
-/// [`super::text::MAX_TEXT_ITEMS`] of them together, across all its shapes; text past that is
+/// [`crate::text::MAX_TEXT_ITEMS`] of them together, across all its shapes; text past that is
 /// left out.
 #[test]
 fn text_makes_a_bounded_number_of_paragraphs_and_runs() {
@@ -978,9 +978,9 @@ fn text_makes_a_bounded_number_of_paragraphs_and_runs() {
     let many = [b'a', 13].repeat(40_000);
     let p = deck_of(vec![shape_95(bx, Some(simple_text(&many, bx, BODY))), shape_95(bx, Some(simple_text(b"after", bx, BODY)))], &[]);
     let items: usize = p.slides[0].shapes.iter().filter_map(|s| s.text.as_ref()).flat_map(|t| &t.paragraphs).map(|para| 1 + para.runs.len()).sum();
-    assert_eq!(items, super::text::MAX_TEXT_ITEMS);
+    assert_eq!(items, crate::text::MAX_TEXT_ITEMS);
     let first = body_of(&p.slides[0].shapes[0]);
-    assert_eq!((first.paragraphs.len(), first.paragraphs[0].runs[0].text.as_str()), (super::text::MAX_TEXT_ITEMS / 2, "a"));
+    assert_eq!((first.paragraphs.len(), first.paragraphs[0].runs[0].text.as_str()), (crate::text::MAX_TEXT_ITEMS / 2, "a"));
     assert!(!texts(&p).iter().any(|t| t == "after"), "the budget is the document's, not each shape's");
 }
 

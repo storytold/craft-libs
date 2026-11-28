@@ -2,8 +2,27 @@
 //! (Latin-1), formatting as runs of paragraph exceptions (`TextPFException`) and character
 //! exceptions (`TextCFException`) over the master's per-level text styles.
 
+use std::cell::Cell;
+
 use crate::doc::rt;
 use crate::record::{Cursor, Rec};
+
+/// Paragraphs and runs made from a whole presentation's text at most, both paths (PowerPoint 97 and
+/// 95) alike. Each is about 2 to 4 KB in memory, so a text of nothing but paragraph or line breaks
+/// would otherwise make gigabytes from a megabyte of file; a real deck makes a few thousand.
+pub(crate) const MAX_TEXT_ITEMS: usize = 1 << 16;
+
+/// Counts one more paragraph or run against [`MAX_TEXT_ITEMS`], `items` being those made so far;
+/// `false` once the presentation's text has made that many, when the rest of it is left out (with
+/// one warning).
+pub(crate) fn take_text_item(items: &Cell<usize>) -> bool {
+    let n = items.get();
+    if n == MAX_TEXT_ITEMS {
+        log::warn!("ppt: the text passes {MAX_TEXT_ITEMS} paragraphs and runs; the rest is left out");
+    }
+    items.set(n.saturating_add(1));
+    n < MAX_TEXT_ITEMS
+}
 
 /// A colour as text formatting stores it: an RGB value or an index into the colour scheme.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -26,7 +26,8 @@ assert!(craft_ppt_binary::import(b"not a .ppt", &craft_pptx::Plain).is_err());
   fields, numbering, headers and footers, notes, and hidden slides.
 - Damaged files read as far as they can: a broken edit chain falls back to a scan of the edits,
   and unknown or damaged records are skipped. Sizes, counts, nesting and picture decoding are
-  bounded.
+  bounded, and a presentation's text makes at most 65,536 paragraphs and runs in all (text past
+  that is left out, with a warning). This limit applies to PowerPoint 95 files too.
 - Password-protected files are refused (`PptError::Encrypted`). Formats older than PowerPoint 95
   aren't read: a compound file whose current user record has neither of [MS-PPT]'s tokens and
   that has no edit record is refused as too old (`PptError::TooOld`), and a file that isn't a

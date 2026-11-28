@@ -93,6 +93,8 @@ struct Ctx<'a> {
     /// Notes pages converted already. Distinct slides can share a slide id, and so a notes page:
     /// it goes to the first of them only, so its text isn't copied into every one.
     used_notes: HashSet<usize>,
+    /// Paragraphs and runs made so far, against [`text::MAX_TEXT_ITEMS`].
+    text_items: std::cell::Cell<usize>,
 }
 
 /// A page side in master units as points, else `fallback` when it is missing or out of range.
@@ -119,6 +121,7 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
         master_props: HashMap::new(),
         app,
         used_notes: HashSet::new(),
+        text_items: std::cell::Cell::new(0),
     };
     let environment = d.document.child(rt::ENVIRONMENT);
     if let Some(hf) = doc::headers_footers(&d.document, 3) {
@@ -479,13 +482,14 @@ impl<'a> Ctx<'a> {
     /// The date, footer and slide number placeholders `hf` turns on, for those the slide doesn't
     /// hold itself. They take their place and look from the layout and master.
     fn footers(&mut self, shapes: &mut Vec<Shape>, hf: &doc::HeadersFooters) {
-        let field = |text: &str, field: String| TextBody {
-            paragraphs: vec![Paragraph {
-                runs: vec![Run { text: text.into(), props: Default::default(), kind: RunKind::Field { field } }],
-                ..Default::default()
-            }],
+        let field = |(text, field): (&str, String)| Paragraph {
+            runs: vec![Run { text: text.into(), props: Default::default(), kind: RunKind::Field { field } }],
             ..Default::default()
         };
+        /// A line per paragraph, split as `TextBody::from_text` splits it, without copying `text`.
+        fn lines(text: &str) -> impl Iterator<Item = &str> {
+            text.split("\r\n").flat_map(|line| line.split(['\r', '\n']))
+        }
         let wanted = [
             (PhType::Date, hf.date, "Date Placeholder"),
             (PhType::Footer, hf.footer && !hf.footer_text.is_empty(), "Footer Placeholder"),
@@ -495,13 +499,18 @@ impl<'a> Ctx<'a> {
             if !on || shapes.iter().any(|s| s.ph_type() == Some(kind)) {
                 continue;
             }
+            // A footer repeats on every slide, and its text splits into a paragraph per line, so
+            // it is made only as far as the text budget allows.
             let text = match kind {
-                PhType::SlideNum => field("‹#›", "slidenum".into()),
-                PhType::Date if hf.user_date => TextBody::from_text(&hf.date_text),
+                PhType::SlideNum => self.within_budget(std::iter::once(("‹#›", "slidenum".into())), field),
+                PhType::Date if hf.user_date => self.within_budget(lines(&hf.date_text), Paragraph::new),
                 // formatId 0–12 are the thirteen date formats, in DrawingML's order.
-                PhType::Date => field("", format!("datetime{}", hf.format.min(12) + 1)),
-                _ => TextBody::from_text(&hf.footer_text),
+                PhType::Date => self.within_budget(std::iter::once(("", format!("datetime{}", hf.format.min(12) + 1))), field),
+                _ => self.within_budget(lines(&hf.footer_text), Paragraph::new),
             };
+            if text.paragraphs.is_empty() {
+                continue;
+            }
             let Some(id) = self.alloc() else { return };
             shapes.push(Shape {
                 id: ShapeId(id),
@@ -511,6 +520,28 @@ impl<'a> Ctx<'a> {
                 ..Default::default()
             });
         }
+    }
+
+    /// A text body made here rather than read from a text block: a paragraph `make`s from each of
+    /// `items`, while the presentation's text budget allows. Each is made only once the budget has
+    /// taken it, so the rest are never made; one cut down to no runs at all is left out.
+    fn within_budget<T>(&self, items: impl Iterator<Item = T>, make: impl Fn(T) -> Paragraph) -> TextBody {
+        let mut paragraphs = vec![];
+        for item in items {
+            if !text::take_text_item(&self.text_items) {
+                break;
+            }
+            let mut para = make(item);
+            if let Some(runs) = (0..para.runs.len()).find(|_| !text::take_text_item(&self.text_items)) {
+                if runs > 0 {
+                    para.runs.truncate(runs);
+                    paragraphs.push(para);
+                }
+                break;
+            }
+            paragraphs.push(para);
+        }
+        TextBody { paragraphs, ..Default::default() }
     }
 
     /// The text of a notes page's notes placeholder.
@@ -869,6 +900,9 @@ impl<'a> Ctx<'a> {
         let mut out = vec![];
         let mut start = 0usize;
         loop {
+            if !text::take_text_item(&self.text_items) {
+                break;
+            }
             let end = chars.get(start..).and_then(|rest| rest.iter().position(|&c| c == 0x0D)).map_or(total, |e| start + e);
             let (level, pf_exc) = run_at(&para_starts, start).and_then(|i| block.para_runs.get(i)).map_or((0, None), |r| (r.1, Some(&r.2)));
             let (mut pf, base_cf) = scope.styles.resolve(block.text_type, level);
@@ -908,6 +942,9 @@ impl<'a> Ctx<'a> {
             }
             let mut i = start;
             while i < end {
+                if !text::take_text_item(&self.text_items) {
+                    break;
+                }
                 let props = self.run_props(&cf_at(i), &scope.scheme);
                 let c = chars.get(i).copied().unwrap_or(0);
                 if let Some(k) = fields.get(&i) {
