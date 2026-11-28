@@ -1230,6 +1230,194 @@ fn t_def_table(edges: &[i16]) -> Vec<u8> {
     v
 }
 
+/// A `sprmTDefTable` Prl for `edges` whose TC80s carry the `TCGRF` words in `rgfs` (one per
+/// TC80, the rest of each TC80 zero); `rgfs` may be shorter than the cell count, as Word may
+/// write fewer TC80s than cells.
+fn t_def_table_tcgrf(edges: &[i16], rgfs: &[u16]) -> Vec<u8> {
+    let itc = edges.len() as u8 - 1;
+    let mut body = vec![itc];
+    for e in edges {
+        body.extend_from_slice(&e.to_le_bytes());
+    }
+    for rgf in rgfs {
+        body.extend_from_slice(&rgf.to_le_bytes());
+        body.extend_from_slice(&[0u8; 18]);
+    }
+    let cb = (body.len() + 1) as u16;
+    let mut v = (0xD608u16).to_le_bytes().to_vec();
+    v.extend_from_slice(&cb.to_le_bytes());
+    v.extend_from_slice(&body);
+    v
+}
+
+/// `TCGRF` bits ([MS-DOC] `TCGRF`): `vertMerge` in bits 5-6, `vertAlign` in bits 7-8.
+const TCGRF_VMERGE_RESTART: u16 = 3 << 5;
+const TCGRF_VMERGE_CONTINUE: u16 = 1 << 5;
+const TCGRF_VALIGN_CENTER: u16 = 1 << 7;
+const TCGRF_VALIGN_BOTTOM: u16 = 2 << 7;
+
+/// Word 2016 saves a vertically merged cell and a cell's vertical alignment in a `.doc` with
+/// no `sprmTVertMerge` or `sprmTVertAlign`: only the `TCGRF` of each cell's TC80 has them (a
+/// table made in Word and saved as `.doc` and `.docx`; the `.docx` has `w:vMerge` and
+/// `w:vAlign` on exactly the cells whose TC80 has the bits). A two-row table: the first
+/// column merged over both rows and centred, the second cell of row 1 bottom-aligned.
+#[test]
+fn vertical_merge_and_alignment_kept_only_in_tc80s_are_read() {
+    use craft_wordmodel::props::{VAlign, VMerge};
+    let edges = [0i16, 2880, 5760];
+    let text = "a\u{7}b\u{7}\u{7}c\u{7}d\u{7}\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let ttp = |rgfs: &[u16]| -> Vec<u8> { [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), t_def_table_tcgrf(&edges, rgfs)].concat() };
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (0, 0, in_tbl.clone()),                                                          // "a"
+            (2, 0, in_tbl.clone()),                                                          // "b"
+            (4, 0, ttp(&[TCGRF_VMERGE_RESTART | TCGRF_VALIGN_CENTER, TCGRF_VALIGN_BOTTOM])), // row 1 end
+            (5, 0, in_tbl.clone()),                                                          // "c"
+            (7, 0, in_tbl),                                                                  // "d"
+            (9, 0, ttp(&[TCGRF_VMERGE_CONTINUE | TCGRF_VALIGN_CENTER, 0])),                  // row 2 end
+            (10, 0, Vec::new()),                                                             // "tail"
+        ],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert_eq!(tbl.rows.len(), 2);
+    assert!(tbl.rows.iter().all(|r| r.cells.len() == 2), "two cells in each row");
+    let cell = |r: usize, c: usize| &tbl.rows[r].cells[c].props;
+    assert_eq!(cell(0, 0).vmerge, VMerge::Restart, "the merge starts in row 1");
+    assert_eq!(cell(1, 0).vmerge, VMerge::Continue, "row 2 continues it");
+    assert_eq!(cell(0, 1).vmerge, VMerge::None);
+    assert_eq!(cell(1, 1).vmerge, VMerge::None);
+    assert_eq!(cell(0, 0).valign, Some(VAlign::Center));
+    assert_eq!(cell(0, 1).valign, Some(VAlign::Bottom));
+    assert_eq!(cell(1, 1).valign, None, "a top-aligned cell sets nothing");
+}
+
+/// An explicit `sprmTVertMerge` or `sprmTVertAlign` for a cell wins over its TC80; the cells
+/// it does not name keep their TC80's. Word writes the modifiers after the `sprmTDefTable`;
+/// the case with them before it pins the reader's robustness choice, not Word's behaviour.
+#[test]
+fn an_explicit_vertical_merge_or_alignment_overrides_the_tc80() {
+    use craft_wordmodel::props::{VAlign, VMerge};
+    let def = t_def_table_tcgrf(&[0, 2880, 5760], &[TCGRF_VMERGE_RESTART | TCGRF_VALIGN_CENTER, TCGRF_VMERGE_RESTART | TCGRF_VALIGN_BOTTOM]);
+    // sprmTVertMerge: cb 2, itc 0, flag 1 (continues). sprmTVertAlign: cb 3, itc 0..1, 0 (top).
+    let vert_merge = [0x2Bu8, 0xD6, 2, 0, 1];
+    let vert_align = [0x2Cu8, 0xD6, 3, 0, 1, 0];
+    for papx in [[&vert_merge[..], &vert_align, &def].concat(), [&def[..], &vert_merge, &vert_align].concat()] {
+        let row = crate::table::decode(&papx);
+        assert_eq!(row.vmerge_of(0), Some(VMerge::Continue));
+        assert_eq!(row.valign_of(0), Some(VAlign::Top));
+        assert_eq!(row.vmerge_of(1), Some(VMerge::Restart));
+        assert_eq!(row.valign_of(1), Some(VAlign::Bottom));
+    }
+}
+
+/// TC80s are read only as far as the operand holds whole ones: a cut-off TC80 and the cells
+/// after it get nothing, and a `sprmTDefTable` with edges only (as the Word 6.0/95 translation
+/// writes) keeps every cell as it was.
+#[test]
+fn tc80_flags_are_read_only_from_whole_tc80s() {
+    use craft_wordmodel::props::VAlign;
+    let full = t_def_table_tcgrf(&[0, 1440, 2880, 4320], &[TCGRF_VALIGN_CENTER, TCGRF_VMERGE_RESTART]);
+    // Drop the last byte of the second TC80, and cb with it.
+    let mut cut = full[..full.len() - 1].to_vec();
+    let cb = u16::from_le_bytes([cut[2], cut[3]]) - 1;
+    cut[2..4].copy_from_slice(&cb.to_le_bytes());
+    let row = crate::table::decode(&cut);
+    assert_eq!(row.valign_of(0), Some(VAlign::Center), "the whole first TC80 is read");
+    assert_eq!(row.vmerge_of(1), None, "the cut-off second TC80 is not");
+    assert_eq!(row.overrides(), 1);
+    assert_eq!(crate::table::decode(&t_def_table_tcgrf(&[0, 1440, 2880], &[])).overrides(), 0);
+}
+
+/// `TCGRF.textFlow` (bits 2-4): 1 = `tbRl`, 3 = `btLr`, 4 = `lrTbV`, 5 = `tbRlV`.
+const TCGRF_FLOW_TBRL: u16 = 1 << 2;
+const TCGRF_FLOW_BTLR: u16 = 3 << 2;
+const TCGRF_FLOW_LRTBV: u16 = 4 << 2;
+const TCGRF_FLOW_TBRLV: u16 = 5 << 2;
+
+/// A turned cell's direction is in the `textFlow` of its TC80 (a table made in Word 16 and
+/// saved as `.doc` and `.docx`: the `.docx` has `w:textDirection` `btLr` / `tbRl` on exactly
+/// the cells whose TC80 has 3 / 1). A one-row table: up, down, horizontal, down with
+/// vertical glyphs, and horizontal with vertical glyphs.
+#[test]
+fn text_direction_kept_in_tc80s_is_read() {
+    use craft_wordmodel::props::TextDirection;
+    let edges = [0i16, 1440, 2880, 4320, 5760, 7200];
+    let text = "a\u{7}b\u{7}c\u{7}d\u{7}e\u{7}\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let ttp = [
+        grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]),
+        t_def_table_tcgrf(&edges, &[TCGRF_FLOW_BTLR | TCGRF_VALIGN_CENTER, TCGRF_FLOW_TBRL, 0, TCGRF_FLOW_TBRLV, TCGRF_FLOW_LRTBV]),
+        // sprmTTextFlow stating cell 2 horizontal outright.
+        vec![0x29, 0x76, 2, 3, 0, 0],
+    ]
+    .concat();
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (0, 0, in_tbl.clone()), // "a"
+            (2, 0, in_tbl.clone()), // "b"
+            (4, 0, in_tbl.clone()), // "c"
+            (6, 0, in_tbl.clone()), // "d"
+            (8, 0, in_tbl),         // "e"
+            (10, 0, ttp),           // row end
+            (11, 0, Vec::new()),    // "tail"
+        ],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    let cells = &tbl.rows[0].cells;
+    assert_eq!(cells.len(), 5);
+    let dir: Vec<TextDirection> = cells.iter().map(|c| c.props.text_direction).collect();
+    assert_eq!(dir, [TextDirection::Up, TextDirection::Down, TextDirection::Horizontal, TextDirection::Down, TextDirection::Horizontal]);
+    let set: Vec<bool> = cells.iter().map(|c| c.props.text_direction_set).collect();
+    assert_eq!(set, [false, false, true, false, false], "a horizontal TC80 states nothing; an explicit sprmTTextFlow does");
+    assert_eq!(cells[0].props.valign, Some(craft_wordmodel::props::VAlign::Center), "the other TCGRF bits still read");
+}
+
+/// Word also writes `sprmTTextFlow` (0x7629: itcFirst, itcLim, then the text flow as a u16)
+/// for each turned cell range, with the same value as the TC80. An explicit one wins over the
+/// TC80, before or after the `sprmTDefTable`, and covers cells the TC80s do not reach.
+#[test]
+fn an_explicit_text_flow_overrides_the_tc80() {
+    use craft_wordmodel::props::TextDirection;
+    let def = t_def_table_tcgrf(&[0, 1440, 2880, 4320], &[TCGRF_FLOW_BTLR, TCGRF_FLOW_BTLR]);
+    // Cell 0 back to horizontal, cell 2 (no TC80 here) down.
+    let flow0 = [0x29u8, 0x76, 0, 1, 0, 0];
+    let flow2 = [0x29u8, 0x76, 2, 3, 1, 0];
+    for papx in [[&flow0[..], &flow2, &def].concat(), [&def[..], &flow0, &flow2].concat()] {
+        let row = crate::table::decode(&papx);
+        assert_eq!(row.text_flow_of(0), Some(TextDirection::Horizontal));
+        assert_eq!(row.text_flow_of(1), Some(TextDirection::Up));
+        assert_eq!(row.text_flow_of(2), Some(TextDirection::Down));
+    }
+    // A cell range past the row's cells is cut at the column limit, and an empty one sets nothing.
+    let row = crate::table::decode(&[0x29u8, 0x76, 3, 3, 3, 0, 0x29, 0x76, 60, 255, 3, 0]);
+    assert_eq!(row.text_flow_of(3), None);
+    assert_eq!(row.text_flow_of(62), Some(TextDirection::Up));
+    assert_eq!(row.text_flow_of(63), None);
+}
+
 #[test]
 fn table_assembled_from_marks() {
     // A 2×2 table: "a\x07 b\x07|ttp  c\x07 d\x07|ttp" then a normal paragraph.

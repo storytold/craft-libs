@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use craft_wordmodel::Rgb;
 use craft_wordmodel::para::Paragraph;
-use craft_wordmodel::props::{Align, Borders, CellProps, HeightRule, RowProps, TableProps, VAlign, VMerge};
+use craft_wordmodel::props::{Align, Borders, CellProps, HeightRule, RowProps, TableProps, TextDirection, VAlign, VMerge};
 use craft_wordmodel::table::{Cell, Row, Table};
 use craft_wordmodel::{Block, Blocks, para_block};
 
@@ -44,6 +44,7 @@ const T_VERT_ALIGN: u16 = 0xD62C;
 const T_SET_SHD: u16 = 0xD62D;
 const T_CANT_SPLIT: u16 = 0x3466;
 const T_CELL_WIDTH: u16 = 0xD635;
+const T_TEXT_FLOW: u16 = 0x7629;
 
 /// Most grid columns we build from a `sprmTDefTable` (the model's own cap is 63; one more
 /// edge is fine but merged rows can sum spans slightly over, so clamp when assembling).
@@ -79,6 +80,8 @@ pub(crate) struct RowInfo {
     widths: Vec<(u8, f32)>,
     width_pcts: Vec<(u8, f32)>,
     valign: Vec<(u8, VAlign)>,
+    /// Later entries win, as for `valign`.
+    text_flow: Vec<(u8, TextDirection)>,
 }
 
 /// Read the table context out of a paragraph mark's PAPX grpprl.
@@ -106,10 +109,53 @@ impl RowInfo {
         self.widths.iter().rfind(|(k, _)| *k == i).map(|(_, w)| *w)
     }
 
+    /// The vertical merge cell `i` ends up with, for tests.
+    #[cfg(test)]
+    pub(crate) fn vmerge_of(&self, i: u8) -> Option<VMerge> {
+        self.vmerge.iter().find(|(k, _)| *k == i).map(|(_, m)| *m)
+    }
+
+    /// The vertical alignment cell `i` ends up with, for tests.
+    #[cfg(test)]
+    pub(crate) fn valign_of(&self, i: u8) -> Option<VAlign> {
+        self.valign.iter().rfind(|(k, _)| *k == i).map(|(_, v)| *v)
+    }
+
+    /// The text direction cell `i` ends up with, for tests.
+    #[cfg(test)]
+    pub(crate) fn text_flow_of(&self, i: u8) -> Option<TextDirection> {
+        self.text_flow.iter().rfind(|(k, _)| *k == i).map(|(_, d)| *d)
+    }
+
     /// How many per-cell overrides the row keeps, for tests.
     #[cfg(test)]
     pub(crate) fn overrides(&self) -> usize {
-        self.vmerge.len() + self.shading.len() + self.widths.len() + self.width_pcts.len() + self.valign.len() + self.merges.len()
+        self.vmerge.len()
+            + self.shading.len()
+            + self.widths.len()
+            + self.width_pcts.len()
+            + self.valign.len()
+            + self.text_flow.len()
+            + self.merges.len()
+    }
+
+    /// Start each cell from its TC80. An explicit `sprmTVertMerge`, `sprmTVertAlign` or
+    /// `sprmTTextFlow` for the cell overrides it wherever it stands in the grpprl. Word writes
+    /// the modifiers after the `sprmTDefTable`; letting them win when a file puts one before it
+    /// too is a robustness choice, not an observed Word behaviour.
+    fn apply_tc80s(&mut self, tc_flags: Vec<TcFlags>) {
+        fn fill<T>(slots: &mut Vec<(u8, T)>, c: u8, v: Option<T>) {
+            if let Some(v) = v
+                && !slots.iter().any(|(k, _)| *k == c)
+            {
+                slots.push((c, v));
+            }
+        }
+        for f in tc_flags {
+            fill(&mut self.vmerge, f.cell, f.vmerge);
+            fill(&mut self.valign, f.cell, f.valign);
+            fill(&mut self.text_flow, f.cell, f.turn);
+        }
     }
 
     /// The width percentage cell `i` ends up with, for tests.
@@ -128,10 +174,18 @@ fn set<T>(slots: &mut Vec<(u8, T)>, c: u8, v: T) {
     }
 }
 
+/// [`set`] for each cell from `first` up to `lim` (exclusive), within [`MAX_COLS`].
+fn set_range<T: Copy>(slots: &mut Vec<(u8, T)>, first: u8, lim: u8, v: T) {
+    for c in first..lim.min(MAX_COLS as u8) {
+        set(slots, c, v);
+    }
+}
+
 pub(crate) fn decode(papx: &[u8]) -> RowInfo {
     let mut r = RowInfo::default();
     let mut gap_half: Option<i16> = None;
     let mut dxa_left: Option<i16> = None;
+    let mut tc_flags: Vec<TcFlags> = Vec::new();
     for prl in sprm::iter(papx) {
         // The membership sprms are paragraph sprms (sgc 1); the rest here are table sprms
         // (sgc 5), so match opcodes directly.
@@ -139,7 +193,10 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
             P_IN_TABLE => r.in_table = prl.operand.first().copied().unwrap_or(0) != 0,
             P_TTP => r.ttp = prl.operand.first().copied().unwrap_or(0) != 0,
             P_ITAP => r.depth = i32_of(&prl).unwrap_or(0).max(0) as u32,
-            T_DEF_TABLE => r.edges = def_table_edges(prl.operand),
+            T_DEF_TABLE => {
+                r.edges = def_table_edges(prl.operand);
+                tc_flags = def_table_cell_flags(prl.operand);
+            }
             T_TABLE_HEADER => r.header = prl.operand.first().copied().unwrap_or(0) != 0,
             T_CANT_SPLIT | T_CANT_SPLIT_90 => r.cant_split = prl.operand.first().copied().unwrap_or(0) != 0,
             T_ROW_HEIGHT => {
@@ -252,9 +309,16 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                     }
                 }
             }
+            T_TEXT_FLOW => {
+                // itcFirst, itcLim, then the text flow as a u16, coded as in the TC80s.
+                if let [a, b, lo, hi, ..] = prl.operand {
+                    set_range(&mut r.text_flow, *a, *b, text_flow(u16::from_le_bytes([*lo, *hi])));
+                }
+            }
             _ => {}
         }
     }
+    r.apply_tc80s(tc_flags);
     // The table indent is the row origin minus half the cell gap.
     if let Some(l) = dxa_left {
         let gap = gap_half.unwrap_or(0) as f32 / 20.0;
@@ -310,6 +374,11 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             }
             if let Some((_, v)) = info.valign.iter().rfind(|(k, _)| *k == i) {
                 c.props.valign = Some(*v);
+            }
+            // Only an explicit `sprmTTextFlow` keeps a horizontal entry: the file states it.
+            if let Some((_, d)) = info.text_flow.iter().rfind(|(k, _)| *k == i) {
+                c.props.text_direction = *d;
+                c.props.text_direction_set = !d.is_turned();
             }
         }
         for &(a, b) in info.merges.iter().take(MAX_COLS) {
@@ -458,6 +527,66 @@ fn def_table_edges(operand: &[u8]) -> Vec<f32> {
         }
     }
     edges
+}
+
+/// What one cell's `TC80` in a `sprmTDefTable` says about its vertical merge and alignment.
+struct TcFlags {
+    cell: u8,
+    vmerge: Option<VMerge>,
+    valign: Option<VAlign>,
+    /// A turned direction; a horizontal cell gives `None`.
+    turn: Option<TextDirection>,
+}
+
+/// The cell direction a `TextFlow` value names ([MS-DOC] `TCGRF.textFlow`, `sprmTTextFlow`):
+/// 1 `tbRl` and 5 `tbRlV` turn down, 3 `btLr` turns up; 0 `lrTb`, 4 `lrTbV` and anything
+/// else are horizontal, as [`TextDirection::from_ooxml`] reads the same names.
+fn text_flow(v: u16) -> TextDirection {
+    match v {
+        1 | 5 => TextDirection::Down,
+        3 => TextDirection::Up,
+        _ => TextDirection::Horizontal,
+    }
+}
+
+/// Bytes in one `TC80`: `TCGRF` (u16), `wWidth` (u16), then four `Brc80MayBeNil`s.
+const TC80_LEN: usize = 20;
+
+/// The text direction, vertical merge and alignment in the `TCGRF` of each `TC80` that follows
+/// the edges of a `sprmTDefTable` operand ([MS-DOC] `TC80`, `TCGRF`): bits 2-4 are `textFlow`
+/// (see [`text_flow`]; Word 16 writes a turned cell's direction here and in a
+/// `sprmTTextFlow`), bits 5-6 are `vertMerge` (1 = continues
+/// the merge from the cell above, 3 = starts one) and bits 7-8 `vertAlign` (1 = centre,
+/// 2 = bottom). Current Word (checked with Microsoft 365) writes a cell's vertical merge and alignment only here,
+/// with no `sprmTVertMerge` or `sprmTVertAlign`. A top-aligned or unmerged cell gives `None`,
+/// as do cells whose TC80 the operand does not hold (Word may write fewer TC80s than cells;
+/// the Word 6.0/95 translation writes none).
+fn def_table_cell_flags(operand: &[u8]) -> Vec<TcFlags> {
+    let itc = operand.get(2).copied().unwrap_or(0) as usize;
+    // cb (2 bytes), itcMac (1), then itcMac + 1 edges of 2 bytes each.
+    let first = 3 + (itc + 1) * 2;
+    let mut out = Vec::new();
+    for i in 0..itc.min(MAX_COLS) {
+        let at = first + i * TC80_LEN;
+        // Only a complete TC80 counts: a cut-off one is the end of the array.
+        let Some(&[lo, hi, ..]) = operand.get(at..at + TC80_LEN) else { break };
+        let rgf = u16::from_le_bytes([lo, hi]);
+        let vmerge = match (rgf >> 5) & 3 {
+            3 => Some(VMerge::Restart),
+            1 => Some(VMerge::Continue),
+            _ => None,
+        };
+        let valign = match (rgf >> 7) & 3 {
+            1 => Some(VAlign::Center),
+            2 => Some(VAlign::Bottom),
+            _ => None,
+        };
+        let turn = Some(text_flow((rgf >> 2) & 7)).filter(|d| d.is_turned());
+        if vmerge.is_some() || valign.is_some() || turn.is_some() {
+            out.push(TcFlags { cell: i as u8, vmerge, valign, turn });
+        }
+    }
+    out
 }
 
 /// Table borders from `sprmTTableBorders80`: cb (0x18) then six Brc80s in the order top,
