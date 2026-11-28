@@ -7,3 +7,8 @@ Stories: `patterns/color/{picker-dialog, panel, swatches, eyedropper-bar, sample
 Without `ui`: `CmykModel` (CMYK through a craft-cms profile), swatch files (`palette`: `.aco`, `.act`, `.ase`, `.gpl`, `.css`), the display transform and its caches (`display`), and colour harmonies (`harmony`).
 
 The colour model and conversions are in `craft-theme`; profiles and transforms in `craft-cms`.
+
+`ColorPanel::edited` can supply a colour's native components. Editing one channel preserves the other components,
+even when the host renders the colour through a different working-space transform. Current host components take
+precedence over the panel's remembered values. Canceling a channel gesture restores the host's complete opening
+colour, including its display colour, alpha and native components.

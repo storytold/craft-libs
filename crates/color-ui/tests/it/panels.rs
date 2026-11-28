@@ -197,6 +197,98 @@ fn a_channel_step_keeps_the_other_channels_unrounded() {
     }
 }
 
+/// A Color panel whose host supplies authoritative native CMYK components.
+fn native_cmyk_panel(picked: PickedColor) -> (Fixture, Rc<RefCell<PickedColor>>, Edits) {
+    let host = Rc::new(RefCell::new(picked));
+    let edits: Edits = Default::default();
+    let (color, output) = (host.clone(), edits.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let picked = *color.borrow();
+        let mut state = ColorPanelState { mode: ColorPanelMode::CmykSliders, ..Default::default() };
+        let shown = ColorPanel::new(Bind::bound(&mut state), [picked.color; 2])
+            .layout(ColorPanelLayout::FillStroke)
+            .edited(Some(picked))
+            .shown(ColorPanelShown::Mode(ColorPanelMode::CmykSliders))
+            .show(ui);
+        for (_, event) in &shown.edits {
+            if let Some(picked) = event.landed() {
+                *color.borrow_mut() = *picked;
+            }
+        }
+        output.borrow_mut().extend(shown.edits);
+    });
+    fixture.room(COLOR_ROOM).settle();
+    (fixture, host, edits)
+}
+
+fn step_cyan(fixture: &mut Fixture) {
+    let cyan = fixture.by_role(Role::SLIDER).into_iter().next().expect("the Cyan slider");
+    fixture.access(AccessActionKind::Focus, &cyan).settle();
+    fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+}
+
+fn last_native_pick(edits: &Edits) -> PickedColor {
+    edits.borrow().iter().rev().find_map(|(_, event)| event.value().copied()).expect("the channel edit")
+}
+
+/// A host may render its native CMYK through a different working-space transform. Editing one ink still keeps
+/// the other explicit components, rather than deriving them from the rendered RGB.
+#[trial]
+fn a_channel_edit_keeps_native_host_components_with_a_different_transform() {
+    let native = craft_theme::ModelValues::new("cmyk", &[12.345, 45.678, 78.912, 23.456]);
+    let picked = PickedColor::in_model(Srgba::rgb(0.2, 0.4, 0.6), native);
+    let (mut fixture, _, edits) = native_cmyk_panel(picked);
+    step_cyan(&mut fixture);
+    let after = last_native_pick(&edits).model.expect("native component values");
+    assert!(after.values[0] > native.values[0], "Cyan changed");
+    assert_eq!(&after.values[1..4], &native.values[1..4], "the other native inks stay exact");
+}
+
+/// Fresh host components win over remembered components even when both still give the same display pixel.
+#[trial]
+fn fresh_host_components_replace_the_panels_remembered_components() {
+    let model = craft_color_ui::CmykModel::new(craft_cms::convert::CmykConverter::coated().clone());
+    let native = craft_theme::ModelValues::new("cmyk", &[12.345, 45.678, 78.912, 23.456]);
+    let picked = PickedColor::in_model(model.to_srgb(&native.values), native);
+    let (mut fixture, host, edits) = native_cmyk_panel(picked);
+    step_cyan(&mut fixture);
+    let kept = last_native_pick(&edits);
+    let mut fresh = kept.model.expect("remembered native values");
+    fresh.values[1] += 0.001;
+    assert!(model.to_srgb(&fresh.values).same_rgb8(kept.color), "the host update keeps the display pixel");
+    *host.borrow_mut() = PickedColor::in_model(kept.color, fresh);
+    fixture.settle();
+    step_cyan(&mut fixture);
+    let after = last_native_pick(&edits).model.expect("the next channel edit");
+    assert!(after.values[0] > fresh.values[0], "Cyan changed again");
+    assert_eq!(&after.values[1..4], &fresh.values[1..4], "fresh host inks replace the older cache");
+}
+
+/// Cancel restores both the native inks and the host's display colour, even after the host applies live updates.
+#[trial]
+fn a_canceled_native_channel_drag_restores_the_hosts_original_color() {
+    let native = craft_theme::ModelValues::new("cmyk", &[12.345, 45.678, 78.912, 23.456]);
+    let picked = PickedColor::in_model(Srgba::new(0.2, 0.4, 0.6, 0.7), native);
+    let (mut fixture, host, edits) = native_cmyk_panel(picked);
+    let cyan = fixture.by_role(Role::SLIDER).into_iter().next().expect("the Cyan slider");
+    fixture.drag_hold_at(cyan.center(), Vec2::new(25.0, 0.0)).settle();
+    assert_ne!(*host.borrow(), picked, "the host applies the live channel preview");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    let canceled = edits
+        .borrow()
+        .iter()
+        .rev()
+        .find_map(|(_, event)| match event {
+            EditEvent::Cancel { before: Some(Mixed::Same(before)), .. } => Some(*before),
+            _ => None,
+        })
+        .expect("the channel drag cancels");
+    assert_eq!(canceled, picked, "Cancel carries the host's exact opening colour and model");
+    assert_eq!(*host.borrow(), picked, "the host restores the complete opening colour");
+    fixture.release_at(cyan.center() + Vec2::new(25.0, 0.0)).settle();
+    assert_eq!(*host.borrow(), picked, "release after Cancel cannot reapply the preview");
+}
+
 /// The rect of the FillStroke spectrum in Web Color for a foreground of `color`.
 fn spectrum_rect(color: Srgba) -> egui::Rect {
     let mut fixture = Fixture::new(move |ui| {
