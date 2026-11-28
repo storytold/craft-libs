@@ -3754,6 +3754,7 @@ dependencies = [
  "craft-docpath",
  "craft-host",
  "craft-i18n",
+ "craft-testkit",
  "craft-theme",
  "fmv-macos-events",
  "futures-lite",
