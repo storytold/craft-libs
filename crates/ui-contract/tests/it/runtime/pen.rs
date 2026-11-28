@@ -6,7 +6,7 @@ use craft_ui::runtime::pen::PenSource;
 use craft_ui::runtime::pointer::with_pass_pointer;
 use craft_ui::testing::pointer::{self, moved};
 use craft_ui::testing::{Frames, install_spec, trial};
-use egui::{Event, Pos2, ViewportId};
+use egui::{Event, Pos2, TouchDeviceId, TouchId, TouchPhase, ViewportId};
 use std::cell::RefCell;
 
 /// The pressure each pointer move of the running pass carries.
@@ -92,4 +92,20 @@ fn as_many_moves_as_readings_take_one_each_and_a_lifted_tap_keeps_its_contact_pr
     pen.set(None);
     frames.frame(vec![pointer::press(at), pointer::release(at)], |ui| taps.borrow_mut().push(pass_pressure(ui.ctx())));
     assert_eq!(taps.take(), [(Some(0.6), true)], "the tap is the pen's, at its contact pressure");
+}
+
+/// A new touch in a pass that also carries an earlier touch's lift supplies the pointer's force.
+#[trial]
+fn a_new_touch_supplies_the_force_when_an_earlier_touch_lifts_in_the_same_pass() {
+    let mut frames = Frames::new();
+    frames.idle(2, |_| {});
+    let at = Pos2::new(10.0, 10.0);
+    let touch = |id, phase, force| Event::Touch { device_id: TouchDeviceId(1), id: TouchId(id), phase, pos: at, force };
+    let events = vec![touch(1, TouchPhase::Start, Some(0.6)), touch(1, TouchPhase::End, None), touch(2, TouchPhase::Start, Some(0.2)), moved(at)];
+    let mut seen = Vec::new();
+    frames.frame(events, |ui| {
+        let reading = with_pass_pointer(ui.ctx(), |pass| pass.frame.as_ref().map(|frame| (frame.kind, frame.sample.map(|sample| sample.pressure))));
+        seen.push((reading, move_pressures(ui.ctx())));
+    });
+    assert_eq!(seen, [(Some((PointerKind::Touch, Some(0.2))), vec![Some(0.2)])]);
 }
