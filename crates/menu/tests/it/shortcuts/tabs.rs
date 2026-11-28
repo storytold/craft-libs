@@ -1,5 +1,8 @@
 //! The app's pages share the Keyboard Shortcuts dialog's width and navigation.
 
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
 use craft_host::target::Os;
 use craft_keymap::{Platform, Profiles};
 use craft_menu::shortcuts::{Area, DialogState, DialogTab, ShortcutsDialog};
@@ -8,8 +11,41 @@ use craft_ui::contract::Role;
 use craft_ui::runtime::egui::access::AccessTree;
 use craft_ui::runtime::env::RootEnv;
 use craft_ui::testing::{Fixture, Frames, pointer, trial};
+use serde_json::json;
 
 use super::fixture;
+
+#[trial]
+fn shortcut_replacement_is_unavailable_on_an_app_tab() {
+    for (tab, app_tab) in [("menus", true), ("unknown", false)] {
+        let result = Rc::new(RefCell::new(None));
+        let observed = result.clone();
+        let drawn = Rc::new(Cell::new(false));
+        let app_page_drawn = drawn.clone();
+        let mut keys = fixture::keymap(Platform::Mac);
+        let mut state = DialogState::new().with_tab(tab);
+        let mut fixture = Fixture::new(move |ui| {
+            let mut tabs = [DialogTab::new("menus", "Menus", |_| {
+                app_page_drawn.set(true);
+                false
+            })];
+            if observed.borrow().is_none() {
+                ShortcutsDialog::new(&mut keys).tabs(&mut tabs).set_json_field(ui, &mut state, "command", &json!("file.save")).unwrap();
+                let answer = ShortcutsDialog::new(&mut keys).tabs(&mut tabs).set_json_field(
+                    ui,
+                    &mut state,
+                    "replace",
+                    &json!({"old": "Cmd+S", "new": "Cmd+E"}),
+                );
+                *observed.borrow_mut() = Some(answer);
+            }
+            ShortcutsDialog::new(&mut keys).tabs(&mut tabs).show(ui, &mut state);
+        });
+        fixture.settle();
+        assert_eq!(drawn.get(), app_tab);
+        assert_eq!(result.borrow().as_ref().unwrap().is_err(), app_tab);
+    }
+}
 
 fn dialog_at_125_percent(toolbar_label: &str) -> (Frames, impl FnMut(&mut egui::Ui) + '_) {
     // Use the Windows test context and a 1600 × 1000 physical-pixel window at 125%.
@@ -72,6 +108,16 @@ fn app_tabs_show_full_labels_at_125_percent_and_switch_pages() {
         pointer::click(&mut frames, tab.center(), &mut show);
         assert!(frames.texts().iter().any(|text| text.text == page), "click should show {page}");
     }
+}
+
+#[trial]
+fn app_tabs_are_named_after_the_dialog() {
+    let (mut frames, mut show) = dialog_at_125_percent("Toolbar");
+    frames.idle(12, &mut show);
+    let tree = frames.tree();
+    let lists: Vec<&str> =
+        tree.keys().into_iter().filter(|&key| tree.role_of(key) == Some(Role::TAB_LIST)).filter_map(|key| tree.name_of(key)).collect();
+    assert_eq!(lists, ["Keyboard Shortcuts and Menus"]);
 }
 
 #[trial]

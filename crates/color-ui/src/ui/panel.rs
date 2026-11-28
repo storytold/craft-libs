@@ -5,7 +5,7 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
-use craft_behavior::{EditEvent, GesturePhase, IconId, Mixed};
+use craft_behavior::{EditEvent, GestureId, GesturePhase, IconId, Mixed};
 use craft_cms::convert::CmykConverter;
 use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, RgbModel, Srgba};
 use craft_ui::buttons::IconButton;
@@ -414,6 +414,8 @@ struct Kept {
     tracks: Vec<(&'static str, usize, ModelValues)>,
     /// A channel gesture is running.
     dragging: bool,
+    /// The host's complete colour before a model gesture, independent of the panel's transform.
+    opening: Option<(GestureId, PanelTarget, PickedColor)>,
     /// The ramp gesture in progress picks for the colour not edited.
     other: bool,
 }
@@ -446,9 +448,10 @@ pub struct ColorPanel<'a> {
     dynamic: bool,
     layout: ColorPanelLayout,
     wells: Option<([PairWell; 2], Bind<'a, Well>)>,
+    buttons: Option<[Label; 2]>,
     edited: Option<Option<PickedColor>>,
     shown: Option<ColorPanelShown>,
-    recent: &'a [Srgba],
+    recent: Option<&'a [Srgba]>,
     recent_setup: Option<RecentSetup>,
     gamut: Option<Gamut<'a>>,
 }
@@ -469,9 +472,10 @@ fn recent_setup<P: Send + Sync + 'static>(map: impl Fn(usize) -> Option<P> + Sen
 #[derive(Clone, Copy)]
 struct Inputs<'a> {
     wells: Option<&'a [PairWell; 2]>,
+    buttons: Option<&'a [Label; 2]>,
     edited: Option<&'a Option<PickedColor>>,
     shown: &'a ColorPanelShown,
-    recent: &'a [Srgba],
+    recent: Option<&'a [Srgba]>,
     recent_setup: Option<&'a RecentSetup>,
 }
 
@@ -486,9 +490,10 @@ impl<'a> ColorPanel<'a> {
             dynamic: true,
             layout: ColorPanelLayout::default(),
             wells: None,
+            buttons: None,
             edited: None,
             shown: None,
-            recent: &[],
+            recent: None,
             recent_setup: None,
             gamut: None,
         }
@@ -528,8 +533,18 @@ impl<'a> ColorPanel<'a> {
         self
     }
 
+    /// The names of the [`ColorPanelLayout::FillStroke`] layout's swap and default buttons, which are also their
+    /// tooltips: a host names the keys of its own commands there ("Swap Fill and Stroke (Shift+X)"). The panel's
+    /// words by default.
+    pub fn buttons(mut self, swap: impl Into<Label>, default: impl Into<Label>) -> Self {
+        self.buttons = Some([swap.into(), default.into()]);
+        self
+    }
+
     /// The colour the rows edit, with its model values; `None` disables the rows (mixed, None, a pattern). The edited
     /// well's colour by default.
+    /// Explicit components take precedence over remembered values for their model, including when the host uses a
+    /// different working-space transform to render the colour.
     pub fn edited(mut self, color: Option<PickedColor>) -> Self {
         self.edited = Some(color);
         self
@@ -541,9 +556,10 @@ impl<'a> ColorPanel<'a> {
         self
     }
 
-    /// The Recent Colors, a spaced `SwatchPalette` that wraps and drags.
+    /// The Recent Colors, a spaced `SwatchPalette` that wraps and drags. The FillStroke layout shows the captioned row
+    /// for a host that gives them, an empty list included; without them it shows no row.
     pub fn recent(mut self, colors: &'a [Srgba]) -> Self {
-        self.recent = colors;
+        self.recent = Some(colors);
         self
     }
 
@@ -561,7 +577,7 @@ impl<'a> ColorPanel<'a> {
 
     /// Shows the panel and returns this pass's edits and requests.
     pub fn show(self, ui: &mut Ui) -> ColorPanelOutput {
-        let ColorPanel { state, colors, cmyk, rgb, dynamic, layout, wells, edited, shown: rows, recent, recent_setup, gamut } = self;
+        let ColorPanel { state, colors, cmyk, rgb, dynamic, layout, wells, buttons, edited, shown: rows, recent, recent_setup, gamut } = self;
         let env = Env::of(ui);
         let (words, dialog) = (env.words::<ColorPanelWords>(), env.words::<ColorPickerDialogWords>());
         let mut held = Held::new(state);
@@ -597,6 +613,7 @@ impl<'a> ColorPanel<'a> {
                 dialog: &dialog,
                 inputs: Inputs {
                     wells: wells.as_ref(),
+                    buttons: buttons.as_ref(),
                     edited: edited.as_ref(),
                     shown: rows.as_ref().unwrap_or(&default_rows),
                     recent,
@@ -981,7 +998,8 @@ impl Body<'_> {
     }
 
     /// The foreground over the background (the host's wells when it gave them): a click on the other well edits it, a
-    /// click on the edited one asks for the picker. `FillStroke` adds the pair's swap and default buttons.
+    /// click on the edited one asks for the picker. `FillStroke` adds the pair's swap and default buttons, named by the
+    /// host's [`ColorPanel::buttons`] when it gave them.
     fn wells(&mut self, ui: &mut Ui) {
         let was = self.active;
         let mut active = was;
@@ -991,7 +1009,11 @@ impl Body<'_> {
         let pair = SwatchPair::<()>::new(self.words.wells.clone(), wells, Bind::bound(&mut active)).popover(false).frame_active(true);
         let pair = match self.layout {
             ColorPanelLayout::ForegroundBackground => pair,
-            ColorPanelLayout::FillStroke => pair.swap_button(self.words.swap_colors.clone()).default_button(self.words.default_colors.clone()),
+            ColorPanelLayout::FillStroke => {
+                let [swap, default] =
+                    self.inputs.buttons.cloned().unwrap_or_else(|| [self.words.swap_colors.clone(), self.words.default_colors.clone()]);
+                pair.swap_button(swap).default_button(default)
+            }
         };
         let pair = pair.show(ui);
         self.active = active;
@@ -1034,12 +1056,11 @@ impl Body<'_> {
     /// The model's values for the edited colour, unrounded: an edit of one channel leaves the others as they are.
     fn values(&self, model: &dyn ColorModel) -> ModelValues {
         let color = self.color();
-        // The host's own values of the colour (typed CMYK, a working space's numbers) stand when they give the colour.
-        let given = self.picked().and_then(|picked| picked.model);
-        let kept = self.kept.values[self.target.index()]
-            .iter()
-            .chain(given.as_ref())
-            .find(|v| v.model == model.id() && model.to_srgb(&v.values).same_rgb8(color));
+        // Current host values are authoritative: its working-space transform may differ from the panel's.
+        if let Some(values) = self.picked().and_then(|picked| picked.model).filter(|values| values.model == model.id()) {
+            return finite_values(values);
+        }
+        let kept = self.kept.values[self.target.index()].iter().find(|v| v.model == model.id() && model.to_srgb(&v.values).same_rgb8(color));
         finite_values(kept.copied().unwrap_or_else(|| self.read(model, color)))
     }
 
@@ -1078,11 +1099,39 @@ impl Body<'_> {
     fn model_event(&mut self, model: &dyn ColorModel, event: EditEvent<ModelValues>) {
         let event = event.map(finite_values);
         self.kept.dragging = matches!(event.phase(), Some(GesturePhase::Begin | GesturePhase::Update));
+        if let EditEvent::Begin { id, .. } = &event {
+            self.kept.opening = self.picked().copied().map(|picked| (*id, self.target, picked));
+        }
         if let Some(values) = event.value() {
             self.remember(model, *values);
         }
         let alpha = self.color().a;
-        let event = event.map(|values| PickedColor { color: model.to_srgb(&values.values).with_alpha(alpha), model: Some(values) });
+        let mut event = event.map(|values| PickedColor { color: model.to_srgb(&values.values).with_alpha(alpha), model: Some(values) });
+        let opening = self.kept.opening.filter(|(id, target, _)| Some(*id) == event.id() && *target == self.target).map(|(_, _, picked)| picked);
+        match &mut event {
+            EditEvent::Begin { before, .. } | EditEvent::Commit { before, .. } => {
+                if let (Mixed::Same(value), Some(picked)) = (before, opening) {
+                    *value = picked;
+                }
+            }
+            EditEvent::Cancel { before: Some(Mixed::Same(value)), .. } => {
+                if let Some(picked) = opening {
+                    *value = picked;
+                    if let Some(values) = picked.model.filter(|values| values.model == model.id()) {
+                        self.remember(model, values);
+                    }
+                }
+            }
+            EditEvent::Set { before: Mixed::Same(value), .. } => {
+                if let Some(picked) = self.picked() {
+                    *value = *picked;
+                }
+            }
+            _ => {}
+        }
+        if matches!(event.phase(), Some(GesturePhase::Commit | GesturePhase::Cancel) | None) {
+            self.kept.opening = None;
+        }
         self.push(self.target, event);
     }
 

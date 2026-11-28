@@ -24,6 +24,19 @@ fn recovery_charges_only_bytes_read_again() {
     assert_eq!(find_capture(&b"junk, no pattern".to_vec(), 0, 16, &mut r).unwrap(), Capture::End);
 }
 
+/// A source that counts the bytes read from it.
+struct Counted(Vec<u8>, std::cell::Cell<u64>);
+
+impl ByteSource for Counted {
+    fn len(&self) -> u64 {
+        self.0.len() as u64
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        self.1.set(self.1.get() + buf.len() as u64);
+        self.0.read_at(offset, buf)
+    }
+}
+
 /// Write one page holding `segments` (lacing already computed by `lace`).
 fn page(out: &mut Vec<u8>, flags: u8, granule: i64, serial: u32, seq: u32, lacing: &[u8], body: &[u8]) {
     let start = out.len();
@@ -127,6 +140,22 @@ fn packets_spanning_pages() {
     let t = OpusTiming::of(st, 0);
     assert_eq!(t.starts, vec![0, 960]);
     assert_eq!(t.total, 1920);
+}
+
+/// Opus header pages for `serial` (with the beginning-of-stream flag), then data pages of one
+/// 960-sample packet of `pk_len` bytes each; sequence numbers continue from the header pages.
+fn opus_pages(f: &mut Vec<u8>, serial: u32, npk: usize, pk_len: usize, eos: bool) {
+    let head = opus_head(0);
+    let (l, b) = lace(&[&head], false);
+    page(f, 0x02, 0, serial, 0, &l, &b);
+    let (l, b) = lace(&[b"OpusTags\x00\x00\x00\x00\x00\x00\x00\x00"], false);
+    page(f, 0, 0, serial, 1, &l, &b);
+    for i in 0..npk {
+        let p = pkt(i, pk_len);
+        let (l, b) = lace(&[&p], false);
+        let last = eos && i + 1 == npk;
+        page(f, if last { 0x04 } else { 0 }, (i as i64 + 1) * 960, serial, i as u32 + 2, &l, &b);
+    }
 }
 
 fn page_starts(f: &[u8]) -> Vec<usize> {

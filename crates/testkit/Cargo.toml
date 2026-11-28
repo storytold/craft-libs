@@ -5,15 +5,24 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Source-level platform regression guards, test deadlines, hostile-input helpers and a reentrant test lock for the Craft application suite"
+description = "Source-level platform regression guards, test deadlines, hostile-input helpers, a reentrant test lock and skip-or-fail helpers for the Craft application suite"
 publish = false
 
+[features]
+# Pinned-corpus manifests and the `corpus::pinned` test gate (native only).
+corpus = ["dep:sha2", "dep:libc"]
+# `font-coverage`: `skip::craft_fonts_cover`, which parses font data with skrifa.
+font-coverage = ["dep:skrifa"]
+
 [dependencies]
+sha2 = { version = "0.10", default-features = false, features = ["std"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+skrifa = { workspace = true, optional = true }
 tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", optional = true }
 rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
 
 [lints]

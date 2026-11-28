@@ -56,6 +56,7 @@ pub(crate) struct Preedit {
 /// What the adapter keeps per text part between passes.
 #[derive(Clone, Default)]
 pub(crate) struct TextState {
+    pub edit_target: Option<egui::IdSalt>,
     pub draft: Option<String>,
     /// The value when the run began (a `K::Value`).
     pub start: Option<Arc<dyn Any + Send + Sync>>,
@@ -98,10 +99,16 @@ pub(crate) fn text_id(id: Id, key: PartKey) -> Id {
     crate::runtime::memory::sub(id, ("text", key))
 }
 
-/// The keys the text part keeps, from its options.
-pub(crate) fn keys_of(base: KeyUse, options: &TextOptions) -> KeyUse {
-    // A part whose Tab inserts, rewrites or reports keeps Tab, so the focus service never moves focus on it.
-    let keys = if options.tab != TabKey::Moves {
+/// The keys the text part keeps, from its options and whether it holds a draft (`drafting`).
+pub(crate) fn keys_of(base: KeyUse, options: &TextOptions, drafting: bool) -> KeyUse {
+    // A part whose Tab inserts or reports keeps Tab, so the focus service never moves focus on it. A part whose Tab
+    // rewrites keeps it only while it holds a draft to rewrite; with nothing typed, Tab moves focus on.
+    let keeps_tab = match options.tab {
+        TabKey::Moves => false,
+        TabKey::Rewrites => drafting,
+        TabKey::Inserts | TabKey::Reports => true,
+    };
+    let keys = if keeps_tab {
         base.with_keep(KeepKeys::Tab)
     } else if options.multiline() {
         base.with_keep(KeepKeys::BlockArrows)
@@ -435,6 +442,11 @@ pub(crate) fn select(ctx: &Context, id: Id, anchor: usize, caret: usize) {
     text_edit::select(ctx, id, anchor, caret);
 }
 
+/// Forgets the Undo/Redo history of the text widget `id`.
+pub(crate) fn clear_history(ctx: &Context, id: Id) {
+    text_edit::clear_history(ctx, id);
+}
+
 /// `TextOptions::arrows_from_end`: before the widget reads a plain Left or Right, a selection of the whole text
 /// collapses to its end.
 fn arrows_from_end(ctx: &Context, widget: Id, len: usize) {
@@ -511,8 +523,9 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     }
     let draft_takes = state.draft.is_some() && !dialog_escape && !(focused_before && keys::focus_in_modal_dialog(ctx));
     // With `RootEnv::escape_leaves_fields` a field takes Escape with nothing to revert too, and gives up the focus;
-    // in a dialog that Escape closes, the Escape stays the dialog's.
-    let leaves = !input.options.clear_on_escape && !closes_dialog && crate::runtime::env::Env::of(input.ui).escape_leaves_fields;
+    // in a dialog that Escape closes, modal or modeless, the Escape stays the dialog's and the field keeps the focus.
+    let in_closing_dialog = focused_before && crate::runtime::focus::escape_reaches_dialog(ctx);
+    let leaves = !input.options.clear_on_escape && !in_closing_dialog && crate::runtime::env::Env::of(input.ui).escape_leaves_fields;
     let takes_escape = keep_on_escape
         || if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() || leaves };
     let list_first = input.list_open && !input.options.clear_on_escape;
@@ -542,7 +555,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     let mut tab = None;
     if input.focused && state.preedit.is_none() {
         match input.options.tab {
-            TabKey::Rewrites if !input.read_only => {
+            TabKey::Rewrites if !input.read_only && state.draft.is_some() => {
                 if egui_input::take_tab(ctx).is_some() {
                     state.end = Some(End::Rewrite { refuses: true });
                 }
@@ -572,6 +585,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         multiline: input.options.multiline(),
         password: input.options.mask,
         hint: input.placeholder,
+        muted_hint: input.options.look == crate::style::FieldLook::Quiet,
         mono: input.options.mono,
         role: input.options.role,
         ink: input.ink,
@@ -587,6 +601,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         baseline,
         scroll,
         line_break: line_break(input.options.submit_key),
+        colors: input.options.color_ranges.as_deref(),
     };
     // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do;
     // egui's widget moves the caret to any press, so the selection from before the press is put back.
@@ -709,6 +724,7 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
             multiline,
             password: false,
             hint: None,
+            muted_hint: false,
             mono: false,
             role: run.role,
             ink,
@@ -724,6 +740,7 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
             baseline: None,
             scroll: 0.0,
             line_break: line_break(SubmitKey::default()),
+            colors: None,
         },
     );
     crate::runtime::pointer::record_text_widget(&ctx, widget, owner);

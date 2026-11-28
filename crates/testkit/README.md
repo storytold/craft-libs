@@ -99,6 +99,17 @@ fn no_std_instant_in_code_the_web_build_runs() {
 }
 ```
 
+## Test fonts
+
+The `fonts` module makes test fonts from font bytes the caller supplies. It reads no file and no environment variable, prints nothing, and builds for `wasm32-unknown-unknown`.
+
+- **`fonts::rename_family(bytes, from, to)`** returns a copy of one standalone face with the family name `from` replaced by `to`, which must have the same length in UTF-16 code units. It changes the family name records (name IDs 1, 16 and 21) whose value is `from`, and full names (ID 4) that are `from` or start with `from` and a space. At least one family record must hold `from`. It reads UTF-16BE and Macintosh Roman records, writes only ASCII names into Macintosh Roman records, leaves the PostScript name (ID 6), other names and other tables as they are, and writes the `name` table checksum and the `head` table's `checkSumAdjustment`.
+- **`fonts::collection(faces)`** returns a TrueType collection (TTC 1.0) holding standalone faces. Each face gets its own copy of every table, tables start on four-byte boundaries, offsets count from the start of the collection, `checkSumAdjustment` is zero, and every table checksum matches the bytes in the collection.
+
+Both return a `fonts::FontError` instead of panicking: names of different lengths, a name that no family record holds, a face shorter than its table directory, a table or name string out of range, a collection given as a face, or output past the 4 GiB a collection's offsets reach. The layouts come from the OpenType font file and `name` table chapters: <https://learn.microsoft.com/en-us/typography/opentype/spec/otff> and <https://learn.microsoft.com/en-us/typography/opentype/spec/name>.
+
+The tests that call the copies in VectorCraft, DesignCraft and WordCraft need each app's font database and its bundled fonts, so they stay in the apps. `tests/it/fonts.rs` tests the module on faces it assembles from bytes.
+
 ## deadline
 
 The `deadline` module is not built for `wasm32`.
@@ -246,6 +257,79 @@ let dir = craft_testkit::TempDir::new("export")?;
 std::fs::write(dir.file("out.png")?, &png)?;
 ```
 
+## corpus
+
+`craft_testkit::corpus` is behind the `corpus` feature and is native only. It parses a corpus manifest and checks a folder of files against it.
+
+A manifest has one row per file, with tab-separated columns: the SHA-256 as 64 hexadecimal digits in either case, the path relative to the corpus folder with `/` between its parts, and optional license and URL columns. Blank lines and lines whose first character other than a space or a tab is `#` are skipped. LF and CRLF line endings are both read.
+
+- `Manifest::parse(text)` returns a `ManifestError` naming the line for a row with fewer than 2 or more than 4 columns, a digest that is not 64 hexadecimal digits, a path that is empty, starts with `/`, has an empty, `.` or `..` part, or holds a `\`, a `:` or a control character (NUL included), and a path listed twice. An empty optional column is `None`. The parser does not check that a name is valid on a given file system: a name Windows reserves (`<`, `>`, `"`, `|`, `?`, `*`, a trailing `.` or space, a device name such as `NUL`) or two names that differ only in case are accepted, so a manifest must use names that every file system it is verified on supports.
+- `Manifest::read(path, &limits)` reads a manifest file, stopping one byte past the size limit. A path that is not a regular file, such as a folder or a named pipe, returns `ManifestError::NotAFile` without being opened.
+- `verify(dir, &manifest)` checks that each listed file resolves inside `dir` after symbolic links are followed, is a regular file within the size limit, and has the listed SHA-256. It returns a `VerifyError` naming the path. A manifest with no rows is an error.
+- On Unix, `Manifest::read` and `verify` open each file with `O_NONBLOCK` and check the opened file's type again, so a path replaced by a named pipe after the first check fails at once. After the open, `verify` also checks that the opened file is inside `dir`: on Linux, Android and Apple platforms by the path the kernel reports for the open file, and on other Unix systems, or on Linux and Android when `/proc/self/fd` cannot be read, by resolving the listed path again and comparing its device and inode with the opened file's. On Apple platforms an error from the path query fails verification with `VerifyError::Read` instead of falling back to the second lookup. That second lookup goes through the path again, so a folder changed during it is not detected. On Windows the location of the opened file is not checked again, so a part of the path changed into a link out of `dir` between the check and the open is not detected. In every case the opened file must still have the listed SHA-256.
+- `pinned(var, manifest)` is the gate a test calls. `var` names the folder variable, and `None` reads `CRAFT_CORPUS`. With the folder variable unset, it calls `skip::skip` with the reason `corpus not given: set <var> to its folder` and the required variable `<var>_REQUIRED` (by default `CRAFT_CORPUS_REQUIRED`), so the [skip](#skip) rule applies: unset or empty prints `SKIPPED: corpus not given: set <var> to its folder` to stderr and returns `None`, `1` fails the test, and any other value, `0` included, fails the test as a configuration error. With the folder variable set to an empty value, a manifest that does not parse or a folder that does not match, it fails the test. A `var` that is empty or holds `=` or a NUL character fails the test before the environment is read. Otherwise it returns the folder.
+
+`Limits` sets the size limits: by default a manifest of at most 1 MiB and 10,000 rows, and files of at most 8 GiB each, read 64 KiB at a time. No function downloads a file or changes the process environment.
+
+## skip
+
+The `skip` module is not built for `wasm32`. A test that needs something a test environment may lack
+(a program, a corpus file, the craft-fonts faces) skips or fails under one rule:
+
+The variable is read only when something is missing.
+
+| Value | Result |
+|---|---|
+| Not set or empty | The helper prints `SKIPPED: <reason>` and one line feed to stderr, and the test returns and passes. Carriage returns and line feeds in the reason are printed as `\r` and `\n`. |
+| `1` | The test fails. No skip line is printed. |
+| Any other value, such as `0`, `true`, `yes`, ` 1` or `1` followed by a line feed | The test fails with the reason and the variable's name and value. No skip line is printed. |
+| Not Unicode | The test fails with the reason and the variable's name. No skip line is printed. |
+
+A variable name that is empty or holds `=` or a NUL character also fails the test, before the
+environment is read.
+
+`skip::required(var)` returns the same decision without failing the test: `Ok(false)`, `Ok(true)`,
+or a `RequiredError` that names the variable. Every module of this crate that reads a required
+variable reads it with `skip::required`, so one rule applies to all of them.
+
+The caller passes the name its repository uses today, such as `CRAFT_MEDIA_REQUIRE_ORACLES`,
+`CRAFT_PDF_ORACLES_REQUIRED`, `PDFCRAFT_ORACLES_REQUIRED` or `FILMCRAFT_REQUIRE_ORACLES`.
+`skip::REQUIRED_VAR` (`CRAFT_TEST_REQUIRED`) is the default name.
+
+```rust
+use craft_testkit::skip::{REQUIRED_VAR, craft_fonts, skip};
+
+#[test]
+fn renders_with_qpdf() {
+    let qpdf = craft_testkit::or_skip!(find_qpdf(), REQUIRED_VAR);
+    // ...
+}
+
+#[test]
+fn draws_japanese() {
+    if !craft_fonts(HAS_CRAFT_FONTS, CRAFT_FONTS_REQUIRED) {
+        return;
+    }
+    // ...
+}
+```
+
+`or_skip!` evaluates a `Result` once, binds the `Ok` value, and on `Err` skips with the error's
+`Display` text as the reason. The two-argument form returns `()`; a test that returns a `Result`
+passes the value to return as the third argument, for example `Ok(())`.
+
+`craft_fonts(present, required)` takes both values from the caller's build: a build constant, an
+`option_env!` value, or the table `craft-fonts-build` generates. A required failure names
+`CRAFT_FONTS_REQUIRED=1`.
+
+`craft_fonts_cover(text, faces)` needs the `font-coverage` feature, which adds skrifa. It returns
+`true` when one face maps every character of `text` that is not whitespace. Each face is font data
+with its index in a collection (`0` for a single font). A face that does not parse covers nothing,
+and coverage is not combined across faces.
+
+The module does not change the process environment. Its tests that read a real variable run the
+test binary again as a child process with that variable set.
+
 ## serial
 
 `serial` is native only.
@@ -285,6 +369,16 @@ PhotoCraft and DeckCraft. `holders_take_turns` waits on channels where the copie
 |---|---|---|---|
 | `guards` | storytold/craft-libs#163 (zachshallbetter), with the rules of PhotoCraft's shader float test and FilmCraft's web clock test | `crates/testkit/src/guards.rs` | `e92825e427` |
 
+### fonts
+
+| Module | Source | Path | Commit |
+|---|---|---|---|
+| `fonts` | storytold/vectorcraft, `rename` and `collection` | `crates/text/src/tests/sysfonts.rs` | `bada8e1710` |
+| `fonts` | storytold/vectorcraft, `renamed` | `crates/testkit/src/fonts.rs` | `bada8e1710` |
+| `fonts` | storytold/designcraft, the family renaming and `collection` | `crates/fonts/src/fontdb/tests/sysfonts.rs` | `8b169f8ee7` |
+| `fonts` | storytold/wordcraft, `renamed_to` and `collection` | `crates/fonts/src/fontdb/tests/sysfonts.rs` | `f8c66d0692` |
+| `fonts` | storytold/wordcraft, `renamed` | `crates/fonts/src/fontdb/user/tests.rs` | `f8c66d0692` |
+
 ### deadline
 
 | Code | Repository | Path | SHA |
@@ -313,6 +407,22 @@ PhotoCraft and DeckCraft. `holders_take_turns` waits on channels where the copie
 | `private_dir` | storytold/craft-libs | `crates/media-testkit/src/lib.rs` | `75a654f4f8` |
 | `TempDir` | storytold/cadcraft | `crates/engine/tests/support/temp_dir.rs`, `crates/ui-egui/tests/support/temp_dir.rs` | `8e69890223` |
 
+### corpus
+
+| Code | Repository | Path | SHA |
+|---|---|---|---|
+| The manifest rows and the digest check of `pinned` | storytold/craft-libs | `crates/affinity/tests/support/corpus.rs:18-35` | `75a654f4` |
+
+### skip
+
+| Code | Repository | Path | Commit |
+|---|---|---|---|
+| `skip!`, `record` | storytold/lightcraft | `crates/testkit/src/lib.rs` | `7ebbb17a82` |
+| `or_skip!`, `REQUIRED_VAR` | storytold/pdfcraft | `crates/oracle/src/lib.rs` | `ee9bf28126` |
+| `require_*!`, `skip` | storytold/filmcraft | `crates/testkit/src/lib.rs`, `crates/testkit/src/oracle.rs` | `cff7e1442e` |
+| `skip`, `skip_with` | storytold/craft-libs | `crates/media-testkit/src/lib.rs` | `75a654f4f8` |
+| `craft_fonts_cover` | storytold/gridcraft | `crates/ui-egui/src/theme.rs` | `06c2b1440b` |
+
 ### rng
 
 | Module | Source | Path | Commit |
@@ -329,6 +439,14 @@ PhotoCraft and DeckCraft. `holders_take_turns` waits on channels where the copie
 |---|---|---|---|
 | PhotoCraft | `wgsl_float_literals` | `crates/gpu/src/tests.rs` scanner | Not started |
 | FilmCraft | `std_instant` | `crates/engine/src/wasm_clock_tests.rs` search | Not started |
+
+### fonts
+
+| Consumer | Guard | Replaces | State |
+|---|---|---|---|
+| VectorCraft | `fonts::rename_family`, `fonts::collection` | `crates/text/src/tests/sysfonts.rs` and `crates/testkit/src/fonts.rs` helpers | Not started |
+| DesignCraft | `fonts::rename_family`, `fonts::collection` | `crates/fonts/src/fontdb/tests/sysfonts.rs` helpers | Not started |
+| WordCraft | `fonts::rename_family`, `fonts::collection` | `crates/fonts/src/fontdb/tests/sysfonts.rs` and `crates/fonts/src/fontdb/user/tests.rs` helpers | Not started |
 
 ### rng
 
@@ -371,6 +489,33 @@ cases change, and keep the test names.
 | PdfCraft | `ScratchDir` in `crates/testkit/src/scratch.rs` (#6124) | Pending. `ScratchFile` has no counterpart; `TempDir::file` returns a path in a `TempDir`. |
 | CADCraft | `crates/engine/tests/support/temp_dir.rs`, `crates/ui-egui/tests/support/temp_dir.rs` | Pending. Its `TempDir` empties a leftover folder of the same name; `temp` makes a new one. |
 | `craft-media-testkit` | `private_dir()` in `crates/media-testkit/src/lib.rs` | Pending. `private_dir()` is unchanged. |
+
+### corpus
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| craft-libs `affinity` | `tests/support/corpus.rs`, which parses `corpus.tsv` (four tab-separated columns) and checks the folder `AFFINITY_CORPUS` names | Pending |
+| craft-libs `raw` | `tests/it/raf_corpus_manifest.rs`, which checks the rows of the tab-separated `docs/raf-corpus.sha256` but not the files | Pending |
+| LightCraft | `crates/raw/tests/it/corpus.rs` checks the RAF list | Pending |
+| PhotoCraft | `crates/io/tests/it/corpus.rs` and `xtask/*-corpus.sha256` (two-space lists, to be converted to tabs) | Pending |
+| CADCraft | `crates/io/src/roundtrip/tests.rs` scans `CADCRAFT_CORPUS_DIR` without a checksum list | Pending: needs a pinned list first |
+| VectorCraft | `crates/affinity/tests/support/corpus.rs` reads a two-space list, to be converted to tabs | Pending |
+
+### skip
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| LightCraft | `lightcraft-testkit`'s `skip!`, which keeps its JSON skip log on top of `skip` | Not started |
+| PdfCraft | `pdfcraft-oracle`'s `or_skip!`, which reads any value of `PDFCRAFT_ORACLES_REQUIRED` | Not started |
+| FilmCraft | `filmcraft-testkit`'s `require_*!` and `skip`, which accept `1`, `true`, `yes` and `on` | Not started |
+| GridCraft | `craft_fonts_cover`, which reads GridCraft's embedded face table | Not started |
+| craft-libs `craft-media-testkit` | `skip` and `skip_with`, which accept `1`, `true`, `yes` and `on` | Not started |
+| craft-libs `pdf` tests | `or_skip!` in `crates/pdf/tests/cos/oracle.rs`, which reads any value of `CRAFT_PDF_ORACLES_REQUIRED` | Not started |
+
+After an adoption, an app that reads any value as required skips on an empty value, and fails as
+a configuration error on every other value except `1`, `0` included. An app that accepts `true`, `yes`
+and `on` fails on those values as a configuration error.
+Each adoption says which values change and keeps the variable name.
 
 ### serial
 
