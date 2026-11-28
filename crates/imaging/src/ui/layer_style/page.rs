@@ -116,7 +116,8 @@ pub(super) struct PageOutput {
 /// - `Gradient`: a `GradientEditor` under a `Select` of the host's gradient presets (none without presets), with Custom
 ///   first while the stops match no preset; a pick is one edit of the stops, an editor click on a stop's colour reports
 ///   `pick_color` keyed `"{instance id}/{parameter key}/{stop index}"`.
-/// - `GradientMethod`: Smooth, Perceptual, Linear, Classic, with Custom first while the value names none of them.
+/// - `GradientMethod`: Perceptual, Linear, Classic, Smooth, with Custom first while the value names none of them (an
+///   imported gradient without a method, kept as it is until one is picked).
 /// - `Pattern`: a `PresetPicker` over `patterns`; an empty value shows the first pattern and reports it as
 ///   `fill_default`, not as an edit.
 /// - `Contour`: a [`ContourField`] with the Anti-aliased check of the field's `anti_alias` key.
@@ -300,14 +301,14 @@ fn field_row(ui: &mut Ui, input: &PageInput<'_>, field: &EffectField, shown: &St
             }
         }
         FieldKind::GradientMethod => {
-            const METHODS: [&str; 4] = ["smooth", "perceptual", "linear", "classic"];
+            const METHODS: [&str; 4] = ["perceptual", "linear", "classic", "smooth"];
             let stored = text_of(shown.get(key)).unwrap_or("custom");
             let current = if METHODS.contains(&stored) { stored } else { "custom" };
             let mut entries = Vec::new();
             if current == "custom" {
                 entries.push(Entry::new("custom".to_owned(), words.custom.clone()));
             }
-            for (value, text) in METHODS.into_iter().zip([&words.smooth, &words.perceptual, &words.linear, &words.classic]) {
+            for (value, text) in METHODS.into_iter().zip([&words.perceptual, &words.linear, &words.classic, &words.smooth]) {
                 entries.push(Entry::new(value.to_owned(), text.clone()));
             }
             if let Some(response) = pick(ui, key, &label, current, &entries) {

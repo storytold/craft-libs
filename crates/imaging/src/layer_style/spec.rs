@@ -137,7 +137,7 @@ impl EffectSpec {
     /// - Gradient Overlay: blend; opacity; stops Gradient (Gradient); reverse Reverse; style
     ///   Style (linear Linear, radial Radial, angle Angle, reflected Reflected, diamond Diamond);
     ///   angle; scale Scale 10..150 %; method Method (GradientMethod). Defaults: Normal, 100,
-    ///   black to white, false, linear, 90, 100, custom, and `offset` (0, 0), a point with no
+    ///   black to white, false, linear, 90, 100, smooth, and `offset` (0, 0), a point with no
     ///   field that the drag on the image moves.
     /// - Pattern Overlay: blend; opacity; pattern Pattern; angle; scale Scale 1..1000 %; link Link
     ///   with Layer. Defaults: Normal, 100, "", 0, 100, true.
@@ -332,7 +332,7 @@ impl EffectSpec {
                     ("style", text("linear")),
                     ("angle", num(90.0)),
                     ("scale", num(100.0)),
-                    ("method", text("custom")),
+                    ("method", text("smooth")),
                 ],
             ),
             EffectKind::PatternOverlay => (
