@@ -156,6 +156,12 @@ pub struct RibbonLook {
     /// The height of a non-stacked button, so three of them, a tight gap apart, fill the ribbon's body (the old
     /// ribbon's 22-point pitch); 0 keeps the control's height.
     pub row: u8,
+    /// The top and bottom inset of the group row inside its rules, in points: 0 keeps the framework's edge. The old
+    /// ribbon's 4-point inner margin plus its 1-point rule is 5.
+    pub row_pad: u8,
+    /// The height of a group's title line, in points: 0 uses the caption role's line height. The old ribbon's label
+    /// row was 18.
+    pub title: u8,
     /// Whether a ribbon strip's tabs rest in the normal text colour, as the old ribbon's did, not the muted one.
     pub tab_ink: bool,
     /// The height of a ribbon strip's underline under the shown tab; 0 keeps the thick stroke.
@@ -167,7 +173,19 @@ pub struct RibbonLook {
 impl RibbonLook {
     /// Stacked icons `large` points square and the others `small`; 0 keeps the framework's side.
     pub const fn new(large: u8, small: u8) -> Self {
-        RibbonLook { large, small, arrow: 0, row: 0, tab_ink: false, underline: 0, body: false }
+        RibbonLook { large, small, arrow: 0, row: 0, row_pad: 0, title: 0, tab_ink: false, underline: 0, body: false }
+    }
+
+    /// The group row `row_pad` points in from its rules at the top and bottom; 0 keeps the framework's edge.
+    pub const fn row_pad(mut self, row_pad: u8) -> Self {
+        self.row_pad = row_pad;
+        self
+    }
+
+    /// A group's title line `title` points high; 0 uses the caption role's line height.
+    pub const fn title(mut self, title: u8) -> Self {
+        self.title = title;
+        self
     }
 
     /// The strip's tabs in the normal text colour at rest, and its underline `underline` points high (0 keeps the

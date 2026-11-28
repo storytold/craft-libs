@@ -9,7 +9,7 @@ use std::sync::Arc;
 use craft_behavior::{IconId, MotionMode};
 use craft_keymap::CommandRef;
 use craft_menu::{GroupLevel, GroupWidths, Ribbon, RibbonGroup, RibbonMenuRequest, RibbonRow, RibbonTab, plan};
-use craft_ui::buttons::{Arrangement, Button, SplitButton};
+use craft_ui::buttons::{Arrangement, Button, RibbonLook, SplitButton};
 use craft_ui::contract::{Bind, BodyCx, Entry, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::layout_components::Stack;
 use craft_ui::menu::MenuItem;
@@ -514,4 +514,55 @@ fn group_titles_sit_at_the_foot_in_the_first_frame() {
         );
         assert!((settled.bottom() - foot).abs() < 0.5, "once settled the group {title} {settled:?} ends on the row's foot ({foot})");
     }
+}
+
+/// The group row's height in the latest frame for `look`.
+fn row_height(look: RibbonLook) -> f32 {
+    let height = Rc::new(Cell::new(f32::NAN));
+    let seen = height.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [RibbonTab::new(0_usize, "Home")];
+        let out = Ribbon::new("Ribbon", &tabs, Bind::given(0_usize)).look(look).show(ui, |row, _| {
+            row.group(RibbonGroup::new("g", "Group", IconId::new("list").into()), |ui| {
+                Button::new("One").arrangement(Arrangement::Stacked).show(ui);
+            });
+        });
+        seen.set(out.row.map_or(f32::NAN, |row| row.height()));
+    });
+    fixture.room(vec2(600.0, 300.0));
+    fixture.settle();
+    height.get()
+}
+
+/// #7680: the app look restores v0.18.1's 64-point body + 18-point label + 6-point frame, and the two fields are
+/// independent of the body.
+#[trial]
+fn a_ribbon_look_can_restore_the_v018_body_and_label_height() {
+    let default = row_height(RibbonLook::new(32, 17).arrow(10).row(20).tabs(3).body());
+    let old = row_height(RibbonLook::new(32, 17).arrow(10).row(20).tabs(3).body().row_pad(6).title(18));
+    let pad_only = row_height(RibbonLook::new(32, 17).arrow(10).row(20).tabs(3).body().row_pad(6));
+    let title_only = row_height(RibbonLook::new(32, 17).arrow(10).row(20).tabs(3).body().title(18));
+    assert!((default - 78.0).abs() < 0.5, "the framework look is 64 body + 14 caption line: {default}");
+    assert!((old - 94.0).abs() < 0.5, "v0.18.1 is 64 + 18 + 2 x 6: {old}");
+    assert!((pad_only - 90.0).abs() < 0.5, "pad without the old label is 64 + 14 + 12: {pad_only}");
+    assert!((title_only - 82.0).abs() < 0.5, "label without the frame is 64 + 18: {title_only}");
+}
+
+/// #7680: a minimised ribbon shows no group row, so it reports none.
+#[trial]
+fn a_minimised_ribbon_reports_no_group_row() {
+    let output_row: Rc<Cell<Option<egui::Rect>>> = Rc::new(Cell::new(None));
+    let seen = output_row.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [RibbonTab::new(0_usize, "Home")];
+        let out = Ribbon::new("Ribbon", &tabs, Bind::given(0_usize)).minimised(Bind::given(true)).show(ui, |row, _| {
+            row.group(RibbonGroup::new("g", "Group", IconId::new("list").into()), |ui| {
+                Button::new("One").show(ui);
+            });
+        });
+        seen.set(out.row);
+    });
+    fixture.room(vec2(600.0, 300.0));
+    fixture.settle();
+    assert!(output_row.get().is_none(), "a minimised ribbon shows no group row: {:?}", output_row.get());
 }

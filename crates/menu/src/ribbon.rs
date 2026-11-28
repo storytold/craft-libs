@@ -210,7 +210,8 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
             context_menu(ui, id, asked, openers, body);
         }
         let tabs_rect = strip_response.as_ref().map(|response| response.rect);
-        RibbonOutput { shown: chosen.or(current), picked, tab_ids, controls, tabs: tabs_rect }
+        let row = region.as_ref().map(|region| region.response.rect);
+        RibbonOutput { shown: chosen.or(current), picked, tab_ids, controls, tabs: tabs_rect, row }
     }
 }
 
@@ -311,7 +312,14 @@ fn show_row<T: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
                 row => 3.0 * f32::from(row) + 2.0 * craft_ui::contract::Gap::Tight.points(ui),
             };
             let title_line = cx.style::<Region>().map_or(0.0, |style| style.title);
+            let pad = cx.style::<Region>().map_or(0.0, |style| style.pad);
             let start = cx.style::<Region>().map_or(0.0, |style| style.start);
+            // The pad insets the row from the body's rules; it sits outside the slide so it never scrolls sideways.
+            // `add_space` adds the body's gap before and after each pad as well, so the gap goes for the pad's span:
+            // the row takes the pad alone, and a look with no pad keeps the framework's own edge.
+            let item_spacing = ui.spacing().item_spacing.y;
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.add_space(pad);
             // The row moves through the slide container's own offset, which places its body on a layer of its own.
             let shown = Region::slide(lead)
                 .show(ui, |ui, _| {
@@ -327,6 +335,8 @@ fn show_row<T: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
                     (row.output.id, row.output.rect, row.inner.unwrap_or_default())
                 })
                 .inner;
+            ui.add_space(pad);
+            ui.spacing_mut().item_spacing.y = item_spacing;
             if let Some((owner, view, groups)) = shown {
                 chevrons(ui, owner, view, &groups, chevron, lead);
             }
@@ -432,6 +442,8 @@ pub struct RibbonOutput<T> {
     pub controls: Option<Arc<inspect::Recorded>>,
     /// The tab row's rect this pass; `None` while no strip shows.
     pub tabs: Option<Rect>,
+    /// The group row's rect this pass; `None` while no row shows (minimised, Read Mode, no document).
+    pub row: Option<Rect>,
 }
 
 /// A request for the ribbon's context menu, on a control, a tab or the row's background.
@@ -468,8 +480,11 @@ struct RegionStyle {
     /// row gap between them, the ribbon's three rows of small buttons. Taller content lowers every title with it.
     body: f32,
     /// The height of a group's title line, directly under its body: one line of the caption role
-    /// (`typography.caption.line_height`), which the dialog launcher's square also takes.
+    /// (`typography.caption.line_height`), or the look's title height where it sets one
+    /// (`RibbonLook::title`); the dialog launcher's square also takes it.
     title: f32,
+    /// The row's inset from its rules at the top and bottom (`RibbonLook::row_pad`); 0 keeps the framework's edge.
+    pad: f32,
     /// The room before the first group (`space.pad.regular`), as the old ribbon kept it.
     start: f32,
     /// The body's own fill where the look asks for one (`RibbonLook::body`): the raised surface laid thinly
@@ -532,16 +547,18 @@ impl Component for Region {
     type Output = RegionOutput;
 
     fn style(cx: &StyleCx<'_>, _: RegionStyleKey) -> RegionStyle {
+        let look = cx.env::<RibbonLook>();
         let body = 3.0 * cx.control().height + 2.0 * cx.tokens.space.gap.row;
-        let title = cx.tokens.typography.caption.line_height;
+        let title = if look.title == 0 { cx.tokens.typography.caption.line_height } else { f32::from(look.title) };
         RegionStyle {
             metrics: Metrics::new(),
             slide: cx.tokens.motion.slide as f32,
             chevron: cx.tokens.size.hit.target,
             body,
             title,
+            pad: f32::from(look.row_pad),
             start: cx.tokens.space.pad.regular,
-            fill: cx.env::<RibbonLook>().body.then(|| cx.color(cx.tokens.color.surface.raised.with_alpha(BODY_LIFT))),
+            fill: look.body.then(|| cx.color(cx.tokens.color.surface.raised.with_alpha(BODY_LIFT))),
         }
     }
 
