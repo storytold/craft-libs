@@ -69,3 +69,7 @@ Shared Rust libraries for the Craft Apps: a Cargo workspace (edition 2024, resol
 - **No app code.** A crate here is useful to more than one app and does not depend on any app.
 - **`unsafe`:** the workspace sets `unsafe_code = "forbid"`, so no module here may use `unsafe`, with two exceptions: vendored upstream code in `vendor/hayro-syntax`, and `crates/font-os-windows`, because loading a font into the running Windows session needs `AddFontResourceW`, which the Windows crates offer only as an unsafe call. That crate copies the workspace lints with `unsafe_code = "deny"` instead of `[lints] workspace = true`, and allows `unsafe` only on the functions that make Win32 calls.
 - **Checks for the crates you changed:** `cargo fmt --check`, `cargo clippy -p <crate> --all-targets -- -D warnings`, `cargo test -p <crate>`.
+- **Public items:** before changing or removing a `pub` item, find its callers in the other storytold repositories and list them in the PR.
+- **Breaking changes:** a change to a public signature, a feature default, a theme token's meaning or framework-wide behaviour starts the PR title with `Breaking:` and states before, after and the exact edit each caller needs.
+- **App-specific looks and behaviour** are a named option on the shared component; the shared default stays as it is.
+- **Red base branch:** while a branch is red, only the PR that fixes the failure or reverts its cause merges into it.
