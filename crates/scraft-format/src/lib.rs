@@ -22,7 +22,7 @@ pub use craft_time::soundcraft as soundcraft_time;
 
 pub use automation::{AutoParam, AutomationLane, AutomationMode, AutomationPoint};
 pub use bundle::{BUNDLE_EXTENSION, BundleError, BundleLimits, DEFAULT_BUNDLE_LIMITS, check_session_size, read_bundle, write_bundle};
-pub use clip::{Clip, ClipContent, Fade, FadeShape};
+pub use clip::{Clip, ClipContent, Fade, FadeShape, crossfade_cut};
 pub use ids::{BusId, ClipId, GroupId, MarkerId, SourceId, TrackId};
 pub use markers::{Group, MarkerKind, MemoryLocation};
 pub use mixer::{

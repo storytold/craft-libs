@@ -173,6 +173,12 @@ pub struct EditState {
     /// Clips explicitly selected (Grabber selection).
     #[serde(default)]
     pub selected_clips: Vec<ClipId>,
+    /// The later clip of the crossfade that the edit selection is: the selection then holds its zone, on
+    /// its track, and no clip. Set by `edit.select {crossfade}`, cleared by any other change of the
+    /// selection; only counts while the crossfade and the selection still agree (the engine's
+    /// `edit::selected_crossfade` says), as undo and other edits can leave it behind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_crossfade: Option<ClipId>,
     /// Audio files selected in the Clip List.
     #[serde(default)]
     pub selected_sources: Vec<SourceId>,
@@ -262,6 +268,7 @@ impl Default for EditState {
             selection: Range::default(),
             selected_tracks: Vec::new(),
             selected_clips: Vec::new(),
+            selected_crossfade: None,
             selected_sources: Vec::new(),
             playhead: 0,
             grid: GridValue::default(),
@@ -1196,6 +1203,64 @@ mod tests {
         let mut c = c.clone();
         c.trim_start_to(100);
         assert_eq!(c.source_offset(), 580);
+    }
+
+    #[test]
+    fn a_crossfade_cut_round_trips_and_a_session_saved_without_one_loads() {
+        fn strip_cut(v: &mut serde_json::Value) {
+            match v {
+                serde_json::Value::Object(m) => {
+                    m.remove("cut");
+                    m.values_mut().for_each(strip_cut);
+                }
+                serde_json::Value::Array(a) => a.iter_mut().for_each(strip_cut),
+                _ => {}
+            }
+        }
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        let (a, b) = (s.new_clip_id(), s.new_clip_id());
+        if let Some(p) = s.track_mut(t).and_then(Track::playlist_mut) {
+            p.clips.push(Clip::audio(a, "a", SourceId(99), 0, 0, 1100));
+            let mut later = Clip::audio(b, "b", SourceId(99), 0, 900, 1100);
+            later.cut = Some(150);
+            p.clips.push(later);
+        }
+        let text = s.to_json().unwrap();
+        let back = Session::from_json(&text).unwrap();
+        assert_eq!(back, s);
+        let cuts = |s: &Session| s.track(t).unwrap().clips().iter().map(|c| c.cut).collect::<Vec<_>>();
+        assert_eq!(cuts(&back), cuts(&s));
+        assert!(cuts(&back).iter().any(Option::is_some));
+        // Before the cut was stored, no clip had the key: the crossfade is cut in the middle.
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        strip_cut(&mut v);
+        let old = Session::from_json(&v.to_string()).unwrap();
+        assert!(cuts(&old).iter().all(Option::is_none));
+        // Without a stored cut the crossfade is still cut somewhere inside its overlap.
+        let clips = old.track(t).unwrap().clips();
+        let at = crate::crossfade_cut(&clips[0], &clips[1]);
+        assert!((clips[1].start..=clips[0].end()).contains(&at));
+    }
+
+    #[test]
+    fn a_selected_crossfade_round_trips_is_omitted_when_unset_and_a_session_without_it_loads() {
+        let mut s = Session::default();
+        // Unset: the key is not written at all.
+        assert_eq!(s.edit.selected_crossfade, None);
+        assert!(!s.to_json().unwrap().contains("selected_crossfade"));
+        // Set: written, and read back equal.
+        s.edit.selected_crossfade = Some(ClipId(7));
+        let text = s.to_json().unwrap();
+        assert!(text.contains("selected_crossfade"));
+        let back = Session::from_json(&text).unwrap();
+        assert_eq!(back.edit.selected_crossfade, s.edit.selected_crossfade);
+        assert_eq!(back, s);
+        // A session saved before the field existed has no key and loads with none selected.
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(v["edit"].as_object_mut().unwrap().remove("selected_crossfade").is_some());
+        let old = Session::from_json(&v.to_string()).unwrap();
+        assert_eq!(old.edit.selected_crossfade, None);
     }
 
     #[test]
