@@ -1,4 +1,5 @@
 use super::bands::convert_ab;
+use super::relayout::{Failure, Layout, relayout};
 use super::tags::{F, TAG_IMAGE_SOURCE_DATA, TAG_PHOTOSHOP, TAG_XMP, TEXT_TAGS};
 use super::{
     ChannelLayout, CmykA16, CmykA32F, CodecError, Cow, EncodeOptions, ExifDirs, GrayA8, GrayA16, GrayA32F, Image, Lab8, Lab16, LabA8, LabA16,
@@ -548,17 +549,23 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
 }
 
 fn encode_ready(img: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
+    // The `tiff` encoder writes interleaved samples in the machine's byte order only. Any other
+    // Byte Order or Pixel Order is written by it uncompressed, then rewritten (`relayout`), which
+    // compresses the new strips.
+    let relay = Layout::wanted(opts);
     let compression = match opts.tiff_compression {
+        _ if relay.is_some() => tiff::encoder::Compression::Uncompressed,
         TiffCompression::None => tiff::encoder::Compression::Uncompressed,
         TiffCompression::Lzw => tiff::encoder::Compression::Lzw,
         TiffCompression::Deflate => tiff::encoder::Compression::Deflate(tiff::encoder::DeflateLevel::Balanced),
         TiffCompression::PackBits => tiff::encoder::Compression::Packbits,
     };
-    let predictor = if !img.sample_type().is_float() && matches!(opts.tiff_compression, TiffCompression::Lzw | TiffCompression::Deflate) {
-        tiff::encoder::Predictor::Horizontal
-    } else {
-        tiff::encoder::Predictor::None
-    };
+    let predictor =
+        if relay.is_none() && !img.sample_type().is_float() && matches!(opts.tiff_compression, TiffCompression::Lzw | TiffCompression::Deflate) {
+            tiff::encoder::Predictor::Horizontal
+        } else {
+            tiff::encoder::Predictor::None
+        };
     let text: Vec<(Tag, &str)> = if opts.embed_metadata {
         img.meta
             .text
@@ -626,7 +633,7 @@ fn encode_ready(img: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError
         // estimate would hold a second full-size buffer while encoding, which wasm32 never
         // returns and Windows counts as committed memory.
         let mut out = Vec::new();
-        if matches!(opts.tiff_compression, TiffCompression::None) {
+        if relay.is_some() || matches!(opts.tiff_compression, TiffCompression::None) {
             // Best effort: without the room the buffer grows as before.
             let _ = out.try_reserve(usize::try_from(estimate).unwrap_or(usize::MAX));
         }
@@ -647,15 +654,41 @@ fn encode_ready(img: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError
         // Growth (or an estimate that was too high) can leave spare capacity: give it back
         // instead of holding it while the file is saved.
         let mut out = cursor.into_inner();
-        if out.capacity() - out.len() > out.len() / 8 {
+        // A file to be rewritten is dropped as soon as it is.
+        if relay.is_none() && out.capacity() - out.len() > out.len() / 8 {
             out.shrink_to_fit();
         }
         Ok(out)
     };
+    let attempt = |big: bool| -> Attempt {
+        match write(big) {
+            Ok(v) => match relay {
+                None => Attempt::Done(v),
+                Some(layout) => match relayout(&v, layout) {
+                    Ok(v) => Attempt::Done(v),
+                    Err(Failure::TooBig) => Attempt::Bigger(CodecError::encode(F, "the file passes what a TIFF can address")),
+                    Err(Failure::Error(e)) => Attempt::Failed(e),
+                },
+            },
+            Err(e @ tiff::TiffError::IntSizeError) => Attempt::Bigger(CodecError::encode(F, e)),
+            Err(e) => Attempt::Failed(CodecError::encode(F, e)),
+        }
+    };
     let big = opts.tiff_bigtiff || estimate > CLASSIC_LIMIT;
-    match write(big) {
-        Ok(v) => Ok(v),
-        Err(tiff::TiffError::IntSizeError) if !big => write(true).map_err(|e| CodecError::encode(F, e)),
-        Err(e) => Err(CodecError::encode(F, e)),
+    match attempt(big) {
+        Attempt::Done(v) => Ok(v),
+        Attempt::Bigger(_) if !big => match attempt(true) {
+            Attempt::Done(v) => Ok(v),
+            Attempt::Bigger(e) | Attempt::Failed(e) => Err(e),
+        },
+        Attempt::Bigger(e) | Attempt::Failed(e) => Err(e),
     }
+}
+
+/// One try at writing the file, classic or BigTIFF.
+enum Attempt {
+    Done(Vec<u8>),
+    /// Offsets ran out of 32 bits: a classic file is redone as BigTIFF.
+    Bigger(CodecError),
+    Failed(CodecError),
 }

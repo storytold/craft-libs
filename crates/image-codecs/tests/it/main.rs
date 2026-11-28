@@ -33,6 +33,7 @@ mod source_settings;
 mod tga;
 mod tiff_bands;
 mod tiff_bench;
+mod tiff_byte_order;
 mod tiff_exif;
 mod tiff_lab;
 mod tiff_pages;

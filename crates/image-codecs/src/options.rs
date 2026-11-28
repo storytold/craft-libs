@@ -162,6 +162,65 @@ pub enum TiffCompression {
     PackBits,
 }
 
+/// TIFF byte order: TIFF Options › Byte Order, the `II` / `MM` of the TIFF 6.0 header. The
+/// default is little-endian (Photoshop's "IBM PC"; big-endian is its "Macintosh"); every TIFF
+/// reader reads both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TiffByteOrder {
+    /// `II`, little-endian.
+    #[default]
+    LittleEndian,
+    /// `MM`, big-endian.
+    BigEndian,
+}
+
+impl TiffByteOrder {
+    /// `"little"` or `"big"`, as parameters and scripts spell it.
+    pub fn name(self) -> &'static str {
+        match self {
+            TiffByteOrder::LittleEndian => "little",
+            TiffByteOrder::BigEndian => "big",
+        }
+    }
+
+    /// The inverse of [`Self::name`].
+    pub fn parse(s: &str) -> Option<Self> {
+        [TiffByteOrder::LittleEndian, TiffByteOrder::BigEndian].into_iter().find(|o| o.name() == s)
+    }
+
+    /// `true` for little-endian (`II`).
+    pub fn is_little(self) -> bool {
+        self == TiffByteOrder::LittleEndian
+    }
+}
+
+/// How a TIFF stores the samples of its pixels: TIFF Options › Pixel Order, the TIFF 6.0
+/// `PlanarConfiguration` (284). The default is interleaved, which every TIFF reader opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TiffPixelOrder {
+    /// `PlanarConfiguration` 1: the samples of each pixel together (RGBRGB…).
+    #[default]
+    Interleaved,
+    /// `PlanarConfiguration` 2: each channel on its own, one set of strips per channel
+    /// (RR…GG…BB…).
+    PerChannel,
+}
+
+impl TiffPixelOrder {
+    /// `"interleaved"` or `"perChannel"`, as parameters and scripts spell it.
+    pub fn name(self) -> &'static str {
+        match self {
+            TiffPixelOrder::Interleaved => "interleaved",
+            TiffPixelOrder::PerChannel => "perChannel",
+        }
+    }
+
+    /// The inverse of [`Self::name`].
+    pub fn parse(s: &str) -> Option<Self> {
+        [TiffPixelOrder::Interleaved, TiffPixelOrder::PerChannel].into_iter().find(|o| o.name() == s)
+    }
+}
+
 /// JPEG scan layout: Photoshop's JPEG Options › Format Options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum JpegFormat {
@@ -275,6 +334,11 @@ pub struct EncodeOptions {
     /// [`crate::TIFF_PYRAMID_MIN`] px on the longer side. Readers that don't know pyramids open
     /// the full image, which comes first.
     pub tiff_pyramid: bool,
+    /// TIFF byte order. The layer data of a layered TIFF ([`crate::Metadata::photoshop_layers`])
+    /// is written as given, so it must be in this order.
+    pub tiff_byte_order: TiffByteOrder,
+    /// TIFF pixel order: interleaved or one plane per channel.
+    pub tiff_pixel_order: TiffPixelOrder,
     pub exr_compression: ExrCompression,
     /// OpenEXR `chromaticities` attribute (`[red, green, blue, white]` CIE xy), written into the
     /// image header when set.
@@ -304,6 +368,8 @@ impl Default for EncodeOptions {
             tiff_compression: TiffCompression::None,
             tiff_bigtiff: false,
             tiff_pyramid: false,
+            tiff_byte_order: TiffByteOrder::LittleEndian,
+            tiff_pixel_order: TiffPixelOrder::Interleaved,
             exr_compression: ExrCompression::Zip16,
             exr_chromaticities: None,
             dpx_bits: None,

@@ -25,8 +25,12 @@
 //! resources) and 37724 (`ImageSourceData`, the layers of a layered TIFF). They are read with
 //! a bounds-checked walk of the first directory ([`photoshop_tags`]) rather than through the
 //! decoder, which would materialize a multi-megabyte layer block as one `Value` per byte, and
-//! written back as BYTE / UNDEFINED tags. The encoder writes files in the native byte order
-//! (see [`writes_little_endian`]), which the layer data must match.
+//! written back as BYTE / UNDEFINED tags, as given: the layer data must be in the byte order
+//! the file is written in ([`EncodeOptions::tiff_byte_order`], see [`writes_little_endian`]).
+//!
+//! **Byte Order and Pixel Order.** Files are little-endian and interleaved unless the options
+//! ask for big-endian or Per Channel; those are written by `relayout`, which rewrites what the
+//! `tiff` encoder wrote.
 
 use std::borrow::Cow;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -265,6 +269,7 @@ pub fn encode_plain_rgba16(width: u32, height: u32, samples: &[u16]) -> Result<V
 mod bands;
 mod decode;
 mod encode;
+mod relayout;
 mod tags;
 mod ycbcr;
 

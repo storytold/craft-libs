@@ -72,7 +72,7 @@ pub use crate::image::{
 pub use crate::inspection::{RasterColorType, RasterInspection, ToneClass, classify_tone, embedded_icc, inspect_raster};
 pub use crate::options::{
     DdsCompression, DdsOptions, DecodeOptions, DpxBits, EncodeOptions, ExrCompression, JpegFormat, Limits, PngCompression, PngStereo,
-    TIFF_PYRAMID_MIN, TiffCompression,
+    TIFF_PYRAMID_MIN, TiffByteOrder, TiffCompression, TiffPixelOrder,
 };
 pub use crate::orientation::{OrientSteps, exif_orientation, upright_exif, upright_xmp};
 pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
