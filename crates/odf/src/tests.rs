@@ -416,3 +416,64 @@ fn encrypting_and_decrypting_refuse_a_file_past_the_limit() {
     // The same file declaring its real size encrypts.
     assert!(crate::crypt::encrypt(&lying_zip(b"<a/>", 4), "pw").is_ok());
 }
+
+/// The caller's limits apply to decrypting: a file that decrypts past `max_entry` is refused
+/// for its size, not taken for a wrong password, though its ciphertext is small.
+#[test]
+fn decrypting_keeps_to_the_limits_given() {
+    use crate::crypt::decrypt_with;
+    let big = vec![b'a'; 100_000];
+    let mut w = PackageWriter::new(mime::TEXT);
+    w.file("content.xml", "text/xml", &big);
+    let plain = w.finish().unwrap();
+    let locked = encrypt(&plain, "pw").unwrap();
+    assert!((locked.len() as u64) < big.len() as u64 / 10, "the file is compressible");
+    let opened = decrypt(&locked, "pw").unwrap();
+
+    let small = Limits { max_entry: locked.len() as u64, ..Limits::DEFAULT };
+    let refused = decrypt_with(&locked, "pw", &small).unwrap_err();
+    assert!(matches!(refused, CryptError::Unsupported(_)), "{refused:?}");
+
+    for roomy in [Limits { max_entry: big.len() as u64, ..Limits::DEFAULT }, Limits { max_entry: u64::MAX, max_total: u64::MAX, ..Limits::DEFAULT }] {
+        assert_eq!(decrypt_with(&locked, "pw", &roomy).as_ref(), Ok(&opened));
+    }
+    let few = Limits { max_entries: 2, ..Limits::DEFAULT };
+    assert!(matches!(decrypt_with(&locked, "pw", &few), Err(CryptError::Unsupported(_))));
+    let total = Limits { max_total: big.len() as u64 - 1, ..Limits::DEFAULT };
+    assert!(matches!(decrypt_with(&locked, "pw", &total), Err(CryptError::Unsupported(_))));
+
+    // The package `locked` is, its manifest changed by `edit` and a plain file added.
+    let repack = |edit: &dyn Fn(String) -> String, extra: &[u8]| {
+        let mut z = craft_zip::Archive::open(&locked, craft_zip::Limits { max_entries: 100, max_total_bytes: u64::MAX }).unwrap();
+        let mut w = craft_zip::Writer::new();
+        for name in z.names().map(|n| n.into_owned()).collect::<Vec<_>>() {
+            let mut data = z.read(&name, u64::MAX).unwrap().unwrap();
+            if name == "META-INF/manifest.xml" {
+                data = edit(String::from_utf8(data).unwrap()).into_bytes();
+            }
+            w.add(&name, &data, craft_zip::Compression::Stored).unwrap();
+        }
+        w.add("extra.bin", extra, craft_zip::Compression::Stored).unwrap();
+        w.finish().unwrap()
+    };
+    // A plain file counts toward the total with the decrypted ones.
+    let mixed = repack(&|m| m, &vec![b'b'; 1000]);
+    let roomy_for_content = Limits { max_total: big.len() as u64 + 500, ..Limits::DEFAULT };
+    assert!(decrypt_with(&repack(&|m| m, b""), "pw", &roomy_for_content).is_ok());
+    assert!(matches!(decrypt_with(&mixed, "pw", &roomy_for_content), Err(CryptError::Unsupported(_))));
+
+    // A file past the size its manifest declares is damaged, also when that size is the limit.
+    let declared = big.len() / 2;
+    let short = repack(
+        &|m| {
+            let size = format!("manifest:size=\"{}\"", big.len());
+            assert!(m.contains(&size), "{m}");
+            m.replace(&size, &format!("manifest:size=\"{declared}\""))
+        },
+        b"",
+    );
+    let at_limit = Limits { max_entry: declared as u64, ..Limits::DEFAULT };
+    for limits in [Limits::DEFAULT, at_limit] {
+        assert_eq!(decrypt_with(&short, "pw", &limits), Err(CryptError::WrongPassword), "{limits:?}");
+    }
+}

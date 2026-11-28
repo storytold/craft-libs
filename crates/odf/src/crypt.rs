@@ -7,8 +7,9 @@
 //!
 //! Blowfish (the old default, §3.4.2) isn't supported: such files say so.
 //!
-//! [`decrypt`] gives a plain package, which a reader opens as any other; [`encrypt`] takes a
-//! plain package. Neither looks at what the files hold.
+//! [`decrypt`] gives a plain package, which a reader opens as any other ([`decrypt_with`] under
+//! the caller's [`Limits`]); [`encrypt`] takes a plain package. Neither looks at what the files
+//! hold.
 
 use std::io::{Read, Write};
 
@@ -22,9 +23,9 @@ use zeroize::Zeroizing;
 use crate::manifest::{Encryption as Params, MANIFEST_PATH, Manifest};
 use crate::{Limits, zip_guard};
 
-/// Most bytes one file of a package decrypts or inflates to.
+/// Most bytes one file of a package is read as, by [`is_encrypted`] and [`encrypt`].
 const MAX_ENTRY: u64 = Limits::DEFAULT.max_entry;
-/// Most entries a package may declare.
+/// Most entries a package may declare, for [`is_encrypted`] and [`encrypt`].
 const MAX_ZIP_ENTRIES: u64 = Limits::DEFAULT.max_entries;
 
 /// Why an encrypted package can't be opened, or a package can't be encrypted.
@@ -80,21 +81,29 @@ fn read_manifest(xml: &[u8]) -> Vec<(String, Params, Option<usize>)> {
         .collect()
 }
 
-/// The package, its declared entry count checked before it is indexed (with
-/// [`zip_guard`]'s wording).
-fn open_zip(bytes: &[u8]) -> Result<craft_zip::Archive<'_>, CryptError> {
-    zip_guard::check(bytes, MAX_ZIP_ENTRIES).map_err(CryptError::Unsupported)?;
-    craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: MAX_ZIP_ENTRIES, max_total_bytes: u64::MAX })
-        .map_err(|e| CryptError::Unsupported(format!("not a valid package ({e})")))
+/// The package, its declared entry count checked against `max_entries` before it is indexed
+/// (with [`zip_guard`]'s wording), its reads together at most `max_total` bytes.
+fn open_zip(bytes: &[u8], max_entries: u64, max_total: u64) -> Result<craft_zip::Archive<'_>, CryptError> {
+    zip_guard::check(bytes, max_entries).map_err(CryptError::Unsupported)?;
+    craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries, max_total_bytes: max_total }).map_err(zip_error)
 }
 
-/// `name` read from `z`, at most [`MAX_ENTRY`] bytes of it. `None` when it is missing, damaged
-/// or larger.
-fn read_entry(z: &mut craft_zip::Archive<'_>, name: &str) -> Option<Vec<u8>> {
-    z.read(name, MAX_ENTRY).ok().flatten()
+/// A ZIP error as a [`CryptError`]: a limit says so, anything else is a broken package.
+fn zip_error(e: craft_zip::Error) -> CryptError {
+    if e.is_limit() {
+        CryptError::Unsupported(format!("the package is larger than its limits allow ({e})"))
+    } else {
+        CryptError::Unsupported(format!("not a valid package ({e})"))
+    }
 }
 
-/// The files of a package in its order, folders left out, each at most [`MAX_ENTRY`] bytes.
+/// `name` read from `z`, at most `max` bytes of it. `None` when it is missing, damaged or
+/// larger.
+fn read_entry(z: &mut craft_zip::Archive<'_>, name: &str, max: u64) -> Option<Vec<u8>> {
+    z.read(name, max).ok().flatten()
+}
+
+/// The files of a package in its order, folders left out.
 fn files_of(z: &craft_zip::Archive<'_>) -> Vec<String> {
     z.names().filter(|n| !n.ends_with('/')).map(|n| n.into_owned()).collect()
 }
@@ -102,8 +111,8 @@ fn files_of(z: &craft_zip::Archive<'_>) -> Vec<String> {
 /// Does this package hold encrypted files?
 pub fn is_encrypted(bytes: &[u8]) -> bool {
     // A package with too many entries isn't parsed here: opening it refuses it (`zip_guard`).
-    let Ok(mut z) = open_zip(bytes) else { return false };
-    read_entry(&mut z, MANIFEST_PATH).is_some_and(|m| !read_manifest(&m).is_empty())
+    let Ok(mut z) = open_zip(bytes, MAX_ZIP_ENTRIES, u64::MAX) else { return false };
+    read_entry(&mut z, MANIFEST_PATH, MAX_ENTRY).is_some_and(|m| !read_manifest(&m).is_empty())
 }
 
 /// The start key: the password's UTF-8 digest (§4.16.6), `size` bytes of it.
@@ -192,8 +201,9 @@ fn checksum(kind: &str, deflated: &[u8]) -> Result<Vec<u8>, CryptError> {
     }
 }
 
-/// One encrypted file decrypted and inflated.
-fn decrypt_file(data: &[u8], p: &Params, size: Option<usize>, password: &str) -> Result<Vec<u8>, CryptError> {
+/// One encrypted file decrypted and inflated, to at most `max_entry` bytes and at most the
+/// `room` the package's files before it left of `max_total`.
+fn decrypt_file(data: &[u8], p: &Params, size: Option<usize>, password: &str, limits: &Limits, room: u64) -> Result<Vec<u8>, CryptError> {
     if p.algorithm != AES256_CBC {
         let what = if p.algorithm.to_ascii_lowercase().contains("blowfish") { "Blowfish".to_string() } else { format!("{:?}", p.algorithm) };
         return Err(CryptError::Unsupported(format!("this file is encrypted with {what}, which isn't supported")));
@@ -206,15 +216,33 @@ fn decrypt_file(data: &[u8], p: &Params, size: Option<usize>, password: &str) ->
     if !p.checksum.is_empty() && checksum(&p.checksum_type, deflated)? != p.checksum {
         return Err(CryptError::WrongPassword);
     }
-    let limit = size.unwrap_or(MAX_ENTRY as usize).min(MAX_ENTRY as usize);
-    inflate(deflated, limit).ok_or(CryptError::WrongPassword)
+    // A file that inflates past the size its manifest declares is damaged, or not decrypted
+    // right; one past a limit is refused for its size, so the password isn't asked for again.
+    let max_entry = usize::try_from(limits.max_entry).unwrap_or(usize::MAX);
+    let limit = max_entry.min(usize::try_from(room).unwrap_or(usize::MAX));
+    let declared = size.filter(|s| *s <= limit);
+    match inflate(deflated, declared.unwrap_or(limit)) {
+        Ok(Some(out)) => Ok(out),
+        Ok(None) if declared.is_none() && limit < max_entry => Err(too_large_together(limits)),
+        Ok(None) if declared.is_none() => {
+            Err(CryptError::Unsupported(format!("a file of the package is larger than the limit of {max_entry} bytes")))
+        }
+        _ => Err(CryptError::WrongPassword),
+    }
 }
 
-/// Raw deflate data inflated, `None` when it is damaged or longer than `limit`.
-fn inflate(deflated: &[u8], limit: usize) -> Option<Vec<u8>> {
+/// The refusal of a package whose plain files are larger than `max_total` together.
+fn too_large_together(limits: &Limits) -> CryptError {
+    CryptError::Unsupported(format!("the package's files are larger than the limit of {} bytes together", limits.max_total))
+}
+
+/// Raw deflate data inflated: `Ok(None)` when it is longer than `limit`, an error when it is
+/// damaged.
+fn inflate(deflated: &[u8], limit: usize) -> std::io::Result<Option<Vec<u8>>> {
     let mut out = Vec::new();
-    flate2::read::DeflateDecoder::new(deflated).take(limit as u64 + 1).read_to_end(&mut out).ok()?;
-    (out.len() <= limit).then_some(out)
+    let most = u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1);
+    flate2::read::DeflateDecoder::new(deflated).take(most).read_to_end(&mut out)?;
+    Ok((out.len() <= limit).then_some(out))
 }
 
 fn deflate(data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
@@ -238,28 +266,43 @@ fn plain_manifest(xml: &str) -> String {
     out
 }
 
-/// A password-protected package decrypted into a plain one.
+/// A password-protected package decrypted into a plain one, under [`Limits::DEFAULT`].
 pub fn decrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, CryptError> {
+    decrypt_with(bytes, password, &Limits::DEFAULT)
+}
+
+/// A password-protected package decrypted into a plain one, under `limits`: at most
+/// `max_entries` entries, each file read and decrypted to at most `max_entry` bytes, and the
+/// files read, and the plain package's files, together at most `max_total` bytes each. A package past them is refused as
+/// [`CryptError::Unsupported`], not [`CryptError::WrongPassword`].
+pub fn decrypt_with(bytes: &[u8], password: &str, limits: &Limits) -> Result<Vec<u8>, CryptError> {
     let broken = |e: craft_zip::Error| CryptError::Unsupported(format!("not a valid package ({e})"));
-    let mut z = open_zip(bytes)?;
-    let manifest = read_entry(&mut z, MANIFEST_PATH).unwrap_or_default();
+    let mut z = open_zip(bytes, limits.max_entries, limits.max_total)?;
+    let manifest = read_entry(&mut z, MANIFEST_PATH, limits.max_entry).unwrap_or_default();
     let encrypted = read_manifest(&manifest);
     let mut w = craft_zip::Writer::new();
     let mut checked = false;
     let mut work = 0u64;
+    // What the plain package holds: encrypted files as they decrypt to, the others as read.
+    // The archive charges only what it reads.
+    let mut written = 0u64;
     for name in files_of(&z).into_iter().take(MAX_FILES) {
         // A file past the limit is refused, not cut short.
-        let Some(data) = z.read(&name, MAX_ENTRY).map_err(broken)? else { continue };
+        let Some(data) = z.read(&name, limits.max_entry).map_err(zip_error)? else { continue };
         let data = match encrypted.iter().find(|(p, ..)| *p == name) {
             Some((_, p, size)) => {
                 charge(&mut work, p)?;
-                let plain = decrypt_file(&data, p, *size, password)?;
+                let plain = decrypt_file(&data, p, *size, password, limits, limits.max_total.saturating_sub(written))?;
                 checked = true;
                 plain
             }
             None if name == MANIFEST_PATH => plain_manifest(&String::from_utf8_lossy(&data)).into_bytes(),
             None => data,
         };
+        written = written.saturating_add(data.len() as u64);
+        if written > limits.max_total {
+            return Err(too_large_together(limits));
+        }
         let compression = if name == "mimetype" { craft_zip::Compression::Stored } else { craft_zip::Compression::Deflated };
         w.add(&name, &data, compression).map_err(broken)?;
     }
@@ -285,7 +328,7 @@ fn random(n: usize) -> Result<Vec<u8>, CryptError> {
 pub fn encrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, CryptError> {
     let err = |e: craft_zip::Error| CryptError::Unsupported(e.to_string());
     let io = |e: std::io::Error| CryptError::Unsupported(e.to_string());
-    let mut z = open_zip(bytes)?;
+    let mut z = open_zip(bytes, MAX_ZIP_ENTRIES, u64::MAX)?;
     let start = start_key(SHA256, Some(32), password)?;
     let mut files: Vec<(String, Vec<u8>, bool)> = Vec::new();
     let mut manifest = String::new();
