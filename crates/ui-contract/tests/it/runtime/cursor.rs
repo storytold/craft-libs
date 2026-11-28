@@ -121,6 +121,7 @@ fn a_painted_pointer_is_the_window_cursor_image_where_the_window_takes_one() {
     let ring = vec![Pos2::new(-8.0, -4.0), Pos2::new(8.0, -4.0), Pos2::new(0.0, 9.0)];
     for cursor in [
         PaintedCursor::Crosshair,
+        PaintedCursor::DiagonalCrosshair,
         PaintedCursor::circle(12.0).marked(true, Some(CursorBadge::Add)),
         PaintedCursor::outline(vec![ring]).marked(true, None),
         PaintedCursor::Hand,

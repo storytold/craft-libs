@@ -118,6 +118,8 @@ pub enum CountMark {
 pub enum PaintedCursor {
     /// A crosshair.
     Crosshair,
+    /// A crosshair turned 45°: the same arms and line as [`Crosshair`](PaintedCursor::Crosshair), on the diagonals.
+    DiagonalCrosshair,
     /// A circle of `radius` points: a round brush tip at this zoom.
     #[non_exhaustive]
     Circle {
