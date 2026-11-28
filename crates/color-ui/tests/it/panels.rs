@@ -274,6 +274,23 @@ fn a_click_on_the_field_then_one_on_the_units_cell_switches_nothing() {
     assert!(rig.state.borrow().rgb_percent, "two clicks on the cell with one on the field between them switch nothing");
 }
 
+/// Two clicks on the units cell with a click on the field between them switch nothing when the field click is too far
+/// from the first to continue its click run, and the second cell click is close enough to the field click to count as
+/// its second click.
+#[trial]
+fn a_field_click_that_starts_a_new_run_between_two_units_cell_clicks_switches_nothing() {
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    let field = rig.fixture.by_role(Role::SPIN_BUTTON).remove(0);
+    let (top, bottom) = (field.rect.top() + 1.0, field.rect.bottom() - 1.0);
+    let (first, edge, second) =
+        (egui::pos2(field.rect.right() + 2.4, top), egui::pos2(field.rect.right() - 0.4, bottom), egui::pos2(field.rect.right() + 2.4, bottom));
+    rig.fixture.click_at(second).click_at(second).settle();
+    assert!(rig.state.borrow().rgb_percent, "a double click at {second:?} is on the units cell");
+    rig.fixture.advance(1.0);
+    rig.fixture.click_at(first).click_at(edge).click_at(second).settle();
+    assert!(rig.state.borrow().rgb_percent, "a field click that starts a new run between two cell clicks switches nothing");
+}
+
 /// Rows of other modes have no units cell, nor do the RGB rows of a panel whose host did not ask for them, and Web
 /// Color keeps 0 to 255 while the RGB rows show percent.
 #[trial]

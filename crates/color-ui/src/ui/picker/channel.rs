@@ -14,6 +14,7 @@ use craft_ui::form::{Field, SliderField, SliderFieldLayout};
 use craft_ui::layout_components::Row;
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{Label, UnitKind};
+use craft_ui::runtime::pointer;
 use craft_ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
 use craft_ui::value_drag::{SliderThumb, TrackFace};
 use egui::{Color32, CornerRadius, Ui, Vec2};
@@ -348,11 +349,16 @@ impl Component for UnitsCell {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        let first = cx.id.with("units-first-click");
+        let ctx = &cx.response.ctx;
+        // A press off the cell ends the cell's click run, even when it starts a new count that the next click on the
+        // cell continues.
+        if pointer::frame(ctx).press.is_some_and(|press| !cx.response.rect.contains(press.origin)) {
+            ctx.data_mut(|data| data.remove::<(f64, u32)>(first));
+        }
         let PressPhase::Release { start, click: true, .. } = cx.part(UNITS).press.phase else { return };
         // The click count also counts a press just beside the cell, on the number field, so a click is the second of a
         // double click only when the click just before it, by the count, was a click on this cell.
-        let first = cx.id.with("units-first-click");
-        let ctx = &cx.response.ctx;
         let earlier = ctx.data(|data| data.get_temp::<(f64, u32)>(first));
         let follows = earlier.is_some_and(|(time, clicks)| start.clicks == clicks + 1 && start.time - time <= MULTI_CLICK_TIME);
         if start.clicks >= 2 && follows {
