@@ -357,6 +357,14 @@ pub(crate) fn select(ctx: &Context, id: Id, anchor: usize, caret: usize) {
     state.store(ctx, id);
 }
 
+/// Discards Undo and Redo belonging to the previous target while keeping the widget's caret and focus.
+pub(crate) fn clear_history(ctx: &Context, id: Id) {
+    if let Some(mut state) = TextEditState::load(ctx, id) {
+        state.set_undoer(Default::default());
+        state.store(ctx, id);
+    }
+}
+
 /// Whether the widget's field has an undo step and a redo step, as `(undo, redo)`, against its current text `text`
 /// (egui's undoer compares its steps with the text, which the widget's state does not hold). It reads the undoer and
 /// steps nothing, so it agrees with what [`undo`] would do now.

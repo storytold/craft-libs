@@ -2,6 +2,7 @@
 
 mod auto_scroll_mark;
 pub mod backdrop;
+mod color_ranges;
 mod content;
 mod draw;
 mod face;
@@ -35,6 +36,7 @@ pub mod textures;
 mod tool;
 
 pub use auto_scroll_mark::AutoScrollMark;
+pub use color_ranges::{COLORED_TEXT_LIMIT, ColorRange, ColorRanges, RangeInk};
 pub use content::{ContentPainterCx, DocRun, DocText, FaceRun};
 pub use draw::{Dashes, DataStrokeWidth, DataWidth, Draw, PaintShape, StrokeColor, StrokePlace, StrokeWidth, WellFill};
 pub use face::FacePaint;
@@ -65,8 +67,7 @@ pub(crate) use svg_set::Layer;
 pub use svg_set::{AppIcons, register_app_icons};
 pub use text::{ChordText, HAlign, LayoutRun, LeastLayout, ReadingMeasure, Span, TextLayout, TextRun, Wrap};
 pub use text_input::{
-    COLORED_TEXT_LIMIT, ColorRange, ColorRanges, Completer, Completion, EditorLine, EditorPurpose, EditorRun, EditorState, EditorSurrounding,
-    ImeStamp, RangeInk, SubmitKey, TabKey, TextKey, TextOptions,
+    Completer, Completion, EditorLine, EditorPurpose, EditorRun, EditorState, EditorSurrounding, ImeStamp, SubmitKey, TabKey, TextKey, TextOptions,
 };
 pub use textures::TextureCache;
 pub use tool::ToolIcon;

@@ -1819,6 +1819,7 @@ dependencies = [
  "craft-geom",
  "craft-gif",
  "craft-gpu",
+ "craft-gpu-device",
  "craft-gpu-null",
  "craft-gpu-providers",
  "craft-gpu-wgpu",
@@ -1905,6 +1906,7 @@ dependencies = [
  "craft-review",
  "craft-rtf",
  "craft-sbs",
+ "craft-scopes",
  "craft-score",
  "craft-scraft-format",
  "craft-settings",
@@ -2284,7 +2286,6 @@ dependencies = [
  "craft-flags",
  "craft-platform",
  "dirs",
- "getrandom 0.3.4",
  "log",
  "proptest",
  "serde",
@@ -2297,6 +2298,7 @@ dependencies = [
 name = "craft-control-protocol"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
  "serde_json",
  "subtle",
 ]
@@ -2919,6 +2921,18 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-gpu-device"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "log",
+ "pollster 0.4.0",
+ "serde",
+ "serde_json",
+ "wgpu",
 ]
 
 [[package]]
@@ -3581,7 +3595,6 @@ version = "0.1.0"
 name = "craft-pbr"
 version = "0.1.0"
 dependencies = [
- "craft-pbr",
  "craft-texture",
  "glam 0.30.10",
  "naga",
@@ -4044,6 +4057,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-scopes"
+version = "0.1.0"
+dependencies = [
+ "craft-color",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-score"
 version = "0.1.0"
 dependencies = [
@@ -4296,7 +4318,10 @@ dependencies = [
 name = "craft-testkit"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rustix 1.1.6",
+ "sha2 0.10.9",
+ "skrifa 0.47.0",
 ]
 
 [[package]]
@@ -4936,6 +4961,7 @@ dependencies = [
  "libc",
  "serde_json",
  "tempfile",
+ "toml_edit",
 ]
 
 [[package]]
