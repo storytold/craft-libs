@@ -12,142 +12,35 @@
 //! In all three the WordDocument stream (past its first 68 bytes), the Table stream (past its
 //! header, for RC4) and the whole Data stream are transformed. The password is checked against
 //! the stored verifier before anything is decrypted, so a wrong password is reported and never
-//! yields a garbled document. Everything is written from the public specifications.
+//! yields a garbled document. Everything is written from the public specifications. The two RC4
+//! schemes are `craft-offcrypto`'s `rc4` module, shared with the other binary formats; XOR
+//! obfuscation, which only Word uses in this form, is here.
 
-use sha1::{Digest, Sha1};
+use craft_offcrypto::rc4;
 
 use crate::DocbinError;
 
 /// Bytes at the start of the WordDocument stream that are stored untransformed.
 pub(crate) const FIB_PLAIN: usize = 68;
-/// RC4 re-keys every this many bytes of a stream.
-const BLOCK: usize = 512;
-/// Longest password considered (the specifications' limit for the RC4 schemes).
-const MAX_PASSWORD_CHARS: usize = 255;
 /// XOR obfuscation uses at most this many single-byte password characters.
 const MAX_XOR_PASSWORD: usize = 15;
 /// `FibBase.flags`: the document is encrypted (`fEncrypted`) / obfuscated (`fObfuscated`).
 pub(crate) const F_ENCRYPTED: u16 = 0x0100;
 pub(crate) const F_OBFUSCATED: u16 = 0x8000;
-/// `EncryptionHeaderFlags`: `fCryptoAPI`, `fExternal`, `fAES`.
-const H_CRYPTO_API: u32 = 0x04;
-const H_EXTERNAL: u32 = 0x10;
-const H_AES: u32 = 0x20;
 
-fn unsupported(what: &str) -> DocbinError {
-    DocbinError::Encryption(what.into())
-}
-
-// ---------------------------------------------------------------------------------------------
-// Primitives
-
-/// MD5 ([RFC 1321]); the RC4 scheme is defined on it.
-pub(crate) fn md5(data: &[u8]) -> [u8; 16] {
-    const S: [u32; 64] = [
-        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16,
-        23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
-    ];
-    // K[i] = floor(2^32 * abs(sin(i + 1))), as the RFC defines it.
-    let k: Vec<u32> = (0..64u32).map(|i| (f64::from(i + 1).sin().abs() * 4_294_967_296.0) as u32).collect();
-    let (mut a0, mut b0, mut c0, mut d0) = (0x6745_2301u32, 0xefcd_ab89u32, 0x98ba_dcfeu32, 0x1032_5476u32);
-    let mut msg = Vec::with_capacity(data.len() + 72);
-    msg.extend_from_slice(data);
-    msg.push(0x80);
-    while msg.len() % 64 != 56 {
-        msg.push(0);
+/// The Word error for an RC4 header `craft-offcrypto` didn't open.
+fn rc4_error(e: craft_offcrypto::Error) -> DocbinError {
+    match e {
+        craft_offcrypto::Error::WrongPassword => DocbinError::WrongPassword,
+        // [MS-OFFCRYPTO] defines AES only for the encrypted packages of Word 2007 and later
+        // (which open through the .docx reader whatever their extension); a Word 97-2003 file
+        // may only use XOR, RC4 or RC4 CryptoAPI, so there is no public scheme to follow here.
+        craft_offcrypto::Error::Unsupported(what) if what == "AES" => DocbinError::Encryption(
+            "this Word 97-2003 file claims AES encryption, which is only defined for the newer encrypted-package format; it can't be opened".into(),
+        ),
+        craft_offcrypto::Error::Malformed(m) => DocbinError::Malformed(m),
+        other => DocbinError::Encryption(other.to_string()),
     }
-    msg.extend_from_slice(&(data.len() as u64).wrapping_mul(8).to_le_bytes());
-    for chunk in msg.as_chunks::<64>().0 {
-        let mut m = [0u32; 16];
-        let words = chunk.as_chunks::<4>().0;
-        for (w, b) in m.iter_mut().zip(words) {
-            *w = u32::from_le_bytes(*b);
-        }
-        let (mut a, mut b, mut c, mut d) = (a0, b0, c0, d0);
-        for i in 0..64usize {
-            let (f, g) = match i / 16 {
-                0 => ((b & c) | (!b & d), i),
-                1 => ((d & b) | (!d & c), (5 * i + 1) % 16),
-                2 => (b ^ c ^ d, (3 * i + 5) % 16),
-                _ => (c ^ (b | !d), (7 * i) % 16),
-            };
-            let f = f.wrapping_add(a).wrapping_add(k[i]).wrapping_add(m[g]);
-            a = d;
-            d = c;
-            c = b;
-            b = b.wrapping_add(f.rotate_left(S[i]));
-        }
-        a0 = a0.wrapping_add(a);
-        b0 = b0.wrapping_add(b);
-        c0 = c0.wrapping_add(c);
-        d0 = d0.wrapping_add(d);
-    }
-    let mut out = [0u8; 16];
-    let (cells, _) = out.as_chunks_mut::<4>();
-    for (o, v) in cells.iter_mut().zip([a0, b0, c0, d0]) {
-        *o = v.to_le_bytes();
-    }
-    out
-}
-
-/// SHA-1, as [MS-OFFCRYPTO] §2.3.5 specifies for the RC4 CryptoAPI key derivation.
-/// The digest is part of the file format, not a choice made here: a stronger hash would
-/// make password-protected `.doc` files written by Word unreadable.
-fn sha1(parts: &[&[u8]]) -> Vec<u8> {
-    let mut h = Sha1::new(); // NOSONAR: required by the MS-OFFCRYPTO RC4 CryptoAPI format
-    for p in parts {
-        h.update(p);
-    }
-    h.finalize().to_vec()
-}
-
-/// The RC4 stream cipher.
-pub(crate) struct Rc4 {
-    s: [u8; 256],
-    i: u8,
-    j: u8,
-}
-
-impl Rc4 {
-    pub(crate) fn new(key: &[u8]) -> Rc4 {
-        let mut s = [0u8; 256];
-        for (n, v) in s.iter_mut().enumerate() {
-            *v = n as u8;
-        }
-        let kl = key.len().max(1);
-        let mut j = 0u8;
-        for i in 0..256usize {
-            let k = key.get(i % kl).copied().unwrap_or(0);
-            j = j.wrapping_add(s[i]).wrapping_add(k);
-            s.swap(i, usize::from(j));
-        }
-        Rc4 { s, i: 0, j: 0 }
-    }
-
-    fn next(&mut self) -> u8 {
-        self.i = self.i.wrapping_add(1);
-        self.j = self.j.wrapping_add(self.s[usize::from(self.i)]);
-        self.s.swap(usize::from(self.i), usize::from(self.j));
-        self.s[usize::from(self.s[usize::from(self.i)].wrapping_add(self.s[usize::from(self.j)]))]
-    }
-
-    pub(crate) fn apply(&mut self, data: &mut [u8]) {
-        for b in data {
-            *b ^= self.next();
-        }
-    }
-}
-
-fn utf16le(password: &str) -> Vec<u8> {
-    password.encode_utf16().take(MAX_PASSWORD_CHARS).flat_map(u16::to_le_bytes).collect()
-}
-
-fn u16_at(d: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(d.get(at..at.checked_add(2)?)?.try_into().ok()?))
-}
-
-fn u32_at(d: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(d.get(at..at.checked_add(4)?)?.try_into().ok()?))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -238,7 +131,7 @@ fn xor_candidates(password: &str) -> Vec<Vec<u8>> {
 /// How the streams of one file are transformed, once the password has been verified.
 pub(crate) enum Cipher {
     Xor { array: [u8; 16] },
-    Rc4 { base: Vec<u8>, crypto_api: bool, key_len: usize, table_skip: usize },
+    Rc4 { key: rc4::Key, table_skip: usize },
 }
 
 impl Cipher {
@@ -253,123 +146,8 @@ impl Cipher {
             }
             return Err(DocbinError::WrongPassword);
         }
-        let short = || DocbinError::Malformed("the encryption header is truncated".into());
-        let major = u16_at(table, 0).ok_or_else(short)?;
-        let minor = u16_at(table, 2).ok_or_else(short)?;
-        match (major, minor) {
-            (1, 1) => Self::open_rc4(table, password),
-            (2..=4, 2) => Self::open_crypto_api(table, password),
-            _ => Err(unsupported(&format!("unknown encryption version {major}.{minor}"))),
-        }
-    }
-
-    fn open_rc4(table: &[u8], password: &str) -> Result<Cipher, DocbinError> {
-        let short = || DocbinError::Malformed("the encryption header is truncated".into());
-        let salt = table.get(4..20).ok_or_else(short)?;
-        let enc_verifier = table.get(20..36).ok_or_else(short)?;
-        let enc_hash = table.get(36..52).ok_or_else(short)?;
-        let h0 = md5(&utf16le(password));
-        let mut buf = Vec::with_capacity(336);
-        for _ in 0..16 {
-            buf.extend_from_slice(&h0[..5]);
-            buf.extend_from_slice(salt);
-        }
-        let base = md5(&buf)[..5].to_vec();
-        let cipher = Cipher::Rc4 { base, crypto_api: false, key_len: 16, table_skip: 52 };
-        let mut rc4 = Rc4::new(&cipher.block_key(0));
-        let mut verifier = [0u8; 16];
-        verifier.copy_from_slice(enc_verifier);
-        let mut hash = [0u8; 16];
-        hash.copy_from_slice(enc_hash);
-        rc4.apply(&mut verifier);
-        rc4.apply(&mut hash);
-        if md5(&verifier) != hash {
-            return Err(DocbinError::WrongPassword);
-        }
-        Ok(cipher)
-    }
-
-    fn open_crypto_api(table: &[u8], password: &str) -> Result<Cipher, DocbinError> {
-        let short = || DocbinError::Malformed("the encryption header is truncated".into());
-        let hflags = u32_at(table, 4).ok_or_else(short)?;
-        if hflags & H_EXTERNAL != 0 {
-            return Err(unsupported("the document uses an external encryption provider"));
-        }
-        // [MS-OFFCRYPTO] defines AES only for the encrypted packages of Word 2007 and later
-        // (which open through the .docx reader whatever their extension); a Word 97-2003 file
-        // may only use XOR, RC4 or RC4 CryptoAPI, so there is no public scheme to follow here.
-        if hflags & H_AES != 0 {
-            return Err(unsupported(
-                "this Word 97-2003 file claims AES encryption, which is only defined for the newer encrypted-package format; it can't be opened",
-            ));
-        }
-        if hflags & H_CRYPTO_API == 0 {
-            return Err(unsupported("unknown encryption header"));
-        }
-        let hsize = usize::try_from(u32_at(table, 8).ok_or_else(short)?).unwrap_or(usize::MAX);
-        // EncryptionHeader: flags, sizeExtra, algId, algIdHash, keySize, providerType, 2 reserved
-        // words and the CSP name; it starts at byte 12.
-        if hsize < 32 || hsize > table.len() {
-            return Err(DocbinError::Malformed("the encryption header has a bad size".into()));
-        }
-        let alg_id = u32_at(table, 20).ok_or_else(short)?;
-        let alg_hash = u32_at(table, 24).ok_or_else(short)?;
-        if !matches!(alg_id, 0 | 0x6801) {
-            return Err(unsupported(&format!("encryption algorithm 0x{alg_id:X}")));
-        }
-        if !matches!(alg_hash, 0 | 0x8004) {
-            return Err(unsupported(&format!("hash algorithm 0x{alg_hash:X}")));
-        }
-        let mut bits = u32_at(table, 28).ok_or_else(short)?;
-        if bits == 0 {
-            bits = 40;
-        }
-        if !(40..=128).contains(&bits) || bits % 8 != 0 {
-            return Err(unsupported(&format!("a {bits}-bit key")));
-        }
-        let key_len = (bits / 8) as usize;
-        // EncryptionVerifier: saltSize, salt[16], encryptedVerifier[16], verifierHashSize,
-        // encryptedVerifierHash[20].
-        let v = 12 + hsize;
-        if u32_at(table, v) != Some(16) {
-            return Err(DocbinError::Malformed("the encryption salt has a bad size".into()));
-        }
-        let salt = table.get(v + 4..v + 20).ok_or_else(short)?;
-        let enc_verifier = table.get(v + 20..v + 36).ok_or_else(short)?;
-        if u32_at(table, v + 36) != Some(20) {
-            return Err(unsupported("a verifier hash that is not SHA-1"));
-        }
-        let enc_hash = table.get(v + 40..v + 60).ok_or_else(short)?;
-        let mut pw = utf16le(password);
-        let base = sha1(&[salt, &pw]);
-        pw.fill(0);
-        let cipher = Cipher::Rc4 { base, crypto_api: true, key_len, table_skip: v + 60 };
-        let mut rc4 = Rc4::new(&cipher.block_key(0));
-        let mut verifier = enc_verifier.to_vec();
-        let mut hash = enc_hash.to_vec();
-        rc4.apply(&mut verifier);
-        rc4.apply(&mut hash);
-        if sha1(&[&verifier]) != hash {
-            return Err(DocbinError::WrongPassword);
-        }
-        Ok(cipher)
-    }
-
-    /// The RC4 key of stream block `block`.
-    fn block_key(&self, block: u32) -> Vec<u8> {
-        match self {
-            Cipher::Xor { .. } => Vec::new(),
-            Cipher::Rc4 { base, crypto_api: false, .. } => md5(&[base.as_slice(), &block.to_le_bytes()].concat()).to_vec(),
-            Cipher::Rc4 { base, crypto_api: true, key_len, .. } => {
-                let mut k = sha1(&[base, &block.to_le_bytes()]);
-                k.truncate(*key_len);
-                // A 40-bit key is zero-padded to 128 bits.
-                if *key_len == 5 {
-                    k.resize(16, 0);
-                }
-                k
-            }
-        }
+        let (key, table_skip) = rc4::Key::open(table, password).map_err(rc4_error)?;
+        Ok(Cipher::Rc4 { key, table_skip })
     }
 
     /// Decrypt `data` in place; its first `skip` bytes are stored untransformed.
@@ -384,20 +162,7 @@ impl Cipher {
                     }
                 }
             }
-            Cipher::Rc4 { .. } => {
-                for (n, chunk) in data.chunks_mut(BLOCK).enumerate() {
-                    let Ok(block) = u32::try_from(n) else { return };
-                    let mut rc4 = Rc4::new(&self.block_key(block));
-                    let start = n * BLOCK;
-                    // The keystream runs over the untransformed bytes too.
-                    let plain = skip.saturating_sub(start).min(chunk.len());
-                    let head = chunk.get(..plain).map(<[u8]>::to_vec).unwrap_or_default();
-                    rc4.apply(chunk);
-                    if let Some(dst) = chunk.get_mut(..plain) {
-                        dst.copy_from_slice(&head);
-                    }
-                }
-            }
+            Cipher::Rc4 { key, .. } => key.decrypt_blocks(data, skip),
         }
     }
 
@@ -421,29 +186,6 @@ impl Cipher {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn hex(b: &[u8]) -> String {
-        b.iter().map(|x| format!("{x:02x}")).collect()
-    }
-
-    #[test]
-    fn md5_matches_the_rfc_1321_vectors() {
-        assert_eq!(hex(&md5(b"")), "d41d8cd98f00b204e9800998ecf8427e");
-        assert_eq!(hex(&md5(b"a")), "0cc175b9c0f1b6a831c399e269772661");
-        assert_eq!(hex(&md5(b"abc")), "900150983cd24fb0d6963f7d28e17f72");
-        assert_eq!(hex(&md5(b"message digest")), "f96b697d7cb7938d525a2f31aaf161d0");
-        assert_eq!(
-            hex(&md5(b"12345678901234567890123456789012345678901234567890123456789012345678901234567890")),
-            "57edf4a22be3c955ac49da2e2107b67a"
-        );
-    }
-
-    #[test]
-    fn rc4_matches_a_published_vector() {
-        let mut d = b"Plaintext".to_vec();
-        Rc4::new(b"Key").apply(&mut d);
-        assert_eq!(hex(&d), "bbf316e8d940af0ad3");
-    }
 
     #[test]
     fn xor_candidates_cut_to_fifteen_and_skip_empty() {

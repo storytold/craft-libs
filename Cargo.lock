@@ -2468,6 +2468,7 @@ dependencies = [
  "chrono",
  "craft-cfb",
  "craft-codepage",
+ "craft-offcrypto",
  "craft-wordmodel",
  "image",
  "log",

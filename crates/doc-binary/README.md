@@ -19,7 +19,7 @@ assert_eq!(doc.body[0].as_para().map(|p| p.text.as_str()), Some("Hello"));
 - Text in pieces (8-bit and UTF-16), paragraph and character formatting, styles, lists,
   tables, sections, headers and footers, notes, comments, fields, bookmarks, pictures and
   OfficeArt shapes, document properties.
-- XOR obfuscation, RC4 and RC4 CryptoAPI password protection.
+- XOR obfuscation, RC4 and RC4 CryptoAPI password protection (the RC4 schemes through `craft-offcrypto`).
 - Tracked insertions and deletions, with their author and time.
 
 `write` produces a Word 97-2003 file (nFib 0x00C1, a version 3 compound file): text, character

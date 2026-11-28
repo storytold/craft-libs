@@ -3,11 +3,12 @@
 
 use std::io::Read;
 
+use craft_offcrypto::rc4::{Rc4, md5};
 use sha1::{Digest, Sha1};
 
 use super::{Piece, body_texts, cfb_file, text_doc};
 use crate::DocbinError;
-use crate::crypt::{F_ENCRYPTED, F_OBFUSCATED, Rc4, md5, xor_array, xor_verifier};
+use crate::crypt::{F_ENCRYPTED, F_OBFUSCATED, xor_array, xor_verifier};
 use crate::{is_encrypted, read, read_with_password};
 
 const TEXT: &str = "Secret \u{20ac} plans";
