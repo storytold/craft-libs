@@ -620,7 +620,7 @@ pub(crate) fn run<C: Component>(
             cx.cancel(CancelReason::HostChanged);
         }
         let widget = adapter::text_id(id, part.key);
-        crate::runtime::egui::text_edit::clear_history(&ctx, widget);
+        adapter::clear_history(&ctx, widget);
         crate::runtime::ime::request_interrupt(&ctx, widget);
         // Input was folded before this part ran; discard events already queued for the old target too.
         let _ = crate::runtime::ime::take(&ctx, widget, false);
