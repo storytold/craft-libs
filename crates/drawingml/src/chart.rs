@@ -997,9 +997,7 @@ impl Chart {
         if self.kind == ChartType::Waterfall {
             return self.waterfall_value_range();
         }
-        if !kinds.all_chart_kind()
-            || (self.kind.stacked() && self.series.iter().any(|s| s.source_group.is_some() || self.on_secondary(s)))
-        {
+        if !kinds.all_chart_kind() || (self.kind.stacked() && self.series.iter().any(|s| s.source_group.is_some() || self.on_secondary(s))) {
             // Keep the aggregate value_range contract while respecting each actual plot's kind.
             let mut extent = (0.0_f64, 0.0_f64);
             for secondary in [false, true] {

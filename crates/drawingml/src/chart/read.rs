@@ -614,7 +614,8 @@ fn read_axes<'a>(
     };
     // Earlier native projections deliberately preserve their first-by-ID interpretation.
     let selected = if version >= 5 { primary_axis } else { None };
-    let val_ax = selected.or_else(|| by_id(primary_val)).or_else(|| pa.children(Local("valAx")).find(vertical)).or_else(|| pa.children(Local("valAx")).last());
+    let val_ax =
+        selected.or_else(|| by_id(primary_val)).or_else(|| pa.children(Local("valAx")).find(vertical)).or_else(|| pa.children(Local("valAx")).last());
     let num = |a: &El, k: &str| a.child(Local(k)).and_then(|c| c.attr_local("val")).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
     // An axis' number format: its own unless linked to the source (`sourceLinked="1"`, or no
     // c:numFmt at all), in which case the data's format of the first series plotted on it.
@@ -747,9 +748,7 @@ fn category_axis_for_value<'a>(pa: &'a El, value_axis: &El, reciprocal: bool) ->
     };
     let paired = if reciprocal {
         let value_id = value_axis.child(Local("axId")).and_then(|a| a.attr_local("val"));
-        pa.elements().find(|axis| {
-            eligible(axis) && value_id.is_some() && axis.child(Local("crossAx")).and_then(|a| a.attr_local("val")) == value_id
-        })
+        pa.elements().find(|axis| eligible(axis) && value_id.is_some() && axis.child(Local("crossAx")).and_then(|a| a.attr_local("val")) == value_id)
     } else {
         None
     };
@@ -761,7 +760,10 @@ fn group_category_axis<'a>(pa: &'a El, group: &El, primary_axis: Option<&'a El>,
     let value_id = group_value_axis(val_map, group);
     let value_axis = primary_axis
         .filter(|a| value_id.is_some() && a.child(Local("axId")).and_then(|a| a.attr_local("val")) == value_id.as_deref())
-        .or_else(|| pa.children(Local("valAx")).find(|a| value_id.is_some() && a.child(Local("axId")).and_then(|a| a.attr_local("val")) == value_id.as_deref()));
+        .or_else(|| {
+            pa.children(Local("valAx"))
+                .find(|a| value_id.is_some() && a.child(Local("axId")).and_then(|a| a.attr_local("val")) == value_id.as_deref())
+        });
     value_axis
         .and_then(|a| category_axis_for_value(pa, a, true))
         .filter(|a| {
@@ -2231,7 +2233,11 @@ mod tests {
             assert_eq!(chart.series_kind(&chart.series[0]), ChartType::StackedColumn, "version{version}: explicit edit on unchanged raw chart kind");
             assert_eq!(chart.value_range(), (0.0, 10.0), "the imported explicit primary bound remains authoritative");
             chart.y_max = None;
-            assert_eq!(chart.value_range(), (0.0, if version >= 5 { 7.0 } else { 9.0 }), "version{version}: retained source groups remain independent");
+            assert_eq!(
+                chart.value_range(),
+                (0.0, if version >= 5 { 7.0 } else { 9.0 }),
+                "version{version}: retained source groups remain independent"
+            );
             if version >= 5 {
                 // Moving plots onto one axis does not itself merge imported stack membership.
                 let group = chart.series[0].source_group;
@@ -2482,10 +2488,18 @@ mod tests {
         assert_eq!(fallback.category_label(0), "45292.00");
         let explicit_general = xml.replace(r#"formatCode="mmm-yy" sourceLinked="0""#, r#"formatCode="General" sourceLinked="0""#);
         assert_eq!(read_chart_xml(explicit_general.as_bytes()).unwrap().category_label(0), "45292");
-        let linked = xml.replace("<c:formatCode>General</c:formatCode>", "<c:formatCode>0.0</c:formatCode>")
+        let linked = xml
+            .replace("<c:formatCode>General</c:formatCode>", "<c:formatCode>0.0</c:formatCode>")
             .replace(r#"formatCode="mmm-yy" sourceLinked="0""#, r#"formatCode="mmm-yy" sourceLinked="1""#);
-        assert_eq!(read_chart_xml(linked.as_bytes()).unwrap().category_label(0), "45292.0", "source-linked format still comes from the supplied cache");
-        let text = xml.replace("<c:numLit><c:formatCode>General</c:formatCode><c:pt idx=\"0\"><c:v>45292</c:v></c:pt></c:numLit>", "<c:strLit><c:pt idx=\"0\"><c:v>45292</c:v></c:pt></c:strLit>");
+        assert_eq!(
+            read_chart_xml(linked.as_bytes()).unwrap().category_label(0),
+            "45292.0",
+            "source-linked format still comes from the supplied cache"
+        );
+        let text = xml.replace(
+            "<c:numLit><c:formatCode>General</c:formatCode><c:pt idx=\"0\"><c:v>45292</c:v></c:pt></c:numLit>",
+            "<c:strLit><c:pt idx=\"0\"><c:v>45292</c:v></c:pt></c:strLit>",
+        );
         let text = read_chart_xml(text.as_bytes()).unwrap();
         assert_eq!(text.category_format, None);
         assert_eq!(text.category_label(0), "45292");
@@ -2533,8 +2547,14 @@ mod tests {
             assert_eq!(back.series.len(), 1200, "{grouping}: no retained source group may exceed the reader cap on rebuild");
             membership(&current);
             assert_eq!(back.series.iter().map(|s| s.name.clone()).collect::<Vec<_>>(), names);
-            assert_eq!(back.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(), current.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>());
-            assert_eq!(back.series.iter().map(|s| serde_json::to_value(s).unwrap()["sourceIdx"].clone()).collect::<Vec<_>>(), current.series.iter().map(|s| serde_json::to_value(s).unwrap()["sourceIdx"].clone()).collect::<Vec<_>>());
+            assert_eq!(
+                back.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>(),
+                current.series.iter().map(|s| s.values.clone()).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                back.series.iter().map(|s| serde_json::to_value(s).unwrap()["sourceIdx"].clone()).collect::<Vec<_>>(),
+                current.series.iter().map(|s| serde_json::to_value(s).unwrap()["sourceIdx"].clone()).collect::<Vec<_>>()
+            );
             membership(&back); // Numeric tokens may renumber; this checks the membership relation.
             if grouping == "stacked" {
                 assert_eq!(current.axis_range(false), Some((0.0, 600.0)), "the two independent source stacks do not sum together");
