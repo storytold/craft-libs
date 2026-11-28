@@ -367,6 +367,15 @@ palette decodes to 8 bits whatever `/BitsPerComponent` the dictionary gives.
 `hayro-syntax` compiles `filter::ccitt_max_rows` and its unit tests only with the
 `images` feature, matching `filter::ccitt`.
 
+From [PdfCraft #7407](https://github.com/storytold/pdfcraft/pull/7407), open when it was ported,
+marked `PdfCraft patch (#7407)` because PdfCraft's numbers for its open pull requests overlap
+(it numbered this one 112): a version 2.0 `post` table whose glyphs all have standard
+Macintosh names has no strings of its own, and read-fonts gives it no string data.
+`glyph_names` dropped every name with it and now reads the standard ones, so a symbolic
+TrueType font without an encoding, whose codes hayro-interpret (79) reads by their glyphs'
+`post` names, no longer reads as WinAnsi (PdfCraft #7406). Test:
+`font::blob::tests::a_post_table_naming_only_standard_glyphs_keeps_their_names`.
+
 This remains the patched 0.7 backend. It retains the existing Bradford Lab conversion,
 floating component precision and codec versions, rather than claiming full 0.8
 equivalence. The independent color oracles, backend tests and facade contracts cover
