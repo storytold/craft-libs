@@ -558,6 +558,59 @@ fn a_file_of_only_thumbnails_still_opens() {
     assert_eq!(probe_size(&b.bytes).unwrap(), (4, 3));
 }
 
+/// The TIFF/EP layout film scanners write (Nikon Scan's NEF, storytold/craft-libs#3134): IFD0 a
+/// reduced-resolution RGB thumbnail holding the ICC profile, the primary image an RGB SubIFD.
+/// `subs` are the SubIFDs' sizes; each is filled with `fill` and the first may carry `own_icc`.
+pub(crate) fn scan_layout(little: bool, big: bool, bits: u16, subs: &[(u32, u32)], own_icc: Option<&[u8]>) -> Built {
+    let sub_ty = if big { IFD8 } else { IFD };
+    let px = |w: u32, h: u32, fill: u8| {
+        let n = (w * h * 3) as usize;
+        if bits == 16 { u16s(&vec![u16::from(fill) * 257; n], little) } else { vec![fill; n] }
+    };
+    let thumb = strips(4, 3, bits, 3, 2, 3, &px(4, 3, 1))
+        .tag(254, LONG, &[1])
+        .bytes(34675, UNDEFINED, &common::sample_icc(64))
+        .sub_ifds(sub_ty, &(1..=subs.len()).collect::<Vec<_>>());
+    let mut dirs = vec![thumb];
+    for (i, &(w, h)) in subs.iter().enumerate() {
+        let mut d = strips(w, h, bits, 3, 2, h, &px(w, h, 10 + i as u8)).tag(254, LONG, &[0]);
+        if let (0, Some(icc)) = (i, own_icc) {
+            d = d.bytes(34675, UNDEFINED, icc);
+        }
+        dirs.push(d);
+    }
+    build(little, big, &dirs, &[0])
+}
+
+#[test]
+fn a_thumbnail_ifd0_opens_its_largest_full_resolution_sub_ifd_with_its_profile() {
+    for (little, big) in ORDERS {
+        for bits in [8u16, 16] {
+            let what = format!("little {little} big {big} bits {bits}");
+            // the larger of two primary SubIFDs opens, whatever their order
+            let b = scan_layout(little, big, bits, &[(9, 7), (12, 8)], None);
+            let info = tiff_info(&b.bytes).unwrap();
+            assert_eq!(info.default_page(), Some(2), "{what}");
+            let img = decode_ok(&b.bytes);
+            assert_eq!(img.dimensions(), (12, 8), "{what}");
+            assert_eq!(img.data()[0], 11, "{what}: the pixels are the SubIFD's, not the thumbnail's");
+            assert_eq!(probe_size(&b.bytes).unwrap(), (12, 8), "{what}: the header probe sizes the page decode opens");
+            assert_eq!(img.icc.as_deref(), Some(&common::sample_icc(64)[..]), "{what}: IFD0's profile applies to its SubIFD");
+            assert_eq!(img.warnings, [], "{what}");
+            // a SubIFD's own profile wins over IFD0's
+            let own = common::sample_icc(80);
+            let b = scan_layout(little, big, bits, &[(9, 7)], Some(&own));
+            assert_eq!(decode_ok(&b.bytes).icc, Some(own), "{what}");
+        }
+        // a grey SubIFD can't take the RGB profile of its parent
+        let sub_ty = if big { IFD8 } else { IFD };
+        let thumb = strips(4, 3, 8, 3, 2, 3, &[1; 36]).tag(254, LONG, &[1]).bytes(34675, UNDEFINED, &common::sample_icc(64)).sub_ifds(sub_ty, &[1]);
+        let b = build(little, big, &[thumb, gray_page(9, 7, 5, Some(0))], &[0]);
+        let img = decode_ok(&b.bytes);
+        assert_eq!((img.dimensions(), img.icc), ((9, 7), None), "little {little} big {big}: grey SubIFD");
+    }
+}
+
 #[test]
 fn cyclic_chains_and_subifds_terminate() {
     for (little, big) in ORDERS {
@@ -801,6 +854,8 @@ fn zoo() -> Vec<Vec<u8>> {
         let dirs = vec![gray_page(3, 2, 1, Some(1)), tiles.sub_ifds(sub_ty, &[3]), planar, gray_page(2, 2, 4, Some(1)).tag(274, SHORT, &[6])];
         v.push(build(little, big, &dirs, &[0, 1, 2]).bytes);
         v.push(build(little, big, &[strips(5, 3, 1, 1, 0, 2, &[0xa5; 3])], &[0]).bytes);
+        // the primary image in a SubIFD of a thumbnail IFD0, which holds the profile
+        v.push(scan_layout(little, big, 8, &[(6, 5), (5, 3)], None).bytes);
     }
     v
 }

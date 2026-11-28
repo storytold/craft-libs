@@ -110,6 +110,31 @@ fn thumbnail_with_a_bigger_sub_ifd_is_an_undecodable_raw() {
     assert_eq!(probe(&write(&[ifd0])), None);
 }
 
+/// A film scan (Nikon Scan's NEF, storytold/craft-libs#3134): IFD0 a thumbnail marked as a reduced
+/// copy, the bigger SubIFD marked as the primary image and holding 8- or 16-bit RGB, is an ordinary
+/// picture, not a raw image in a private block. A SubIFD of grey samples stays one.
+#[test]
+fn a_primary_rgb_sub_ifd_under_a_reduced_ifd0_is_not_a_raw() {
+    let scan = |bits: u16, spp: u16, photometric: u16| {
+        let (w, h) = (64u32, 48u32);
+        let mut sub = rgb_ifd(w, h);
+        sub.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]))
+            .set(t::BITS_PER_SAMPLE, Value::Short(vec![bits; usize::from(spp)]))
+            .set(t::SAMPLES_PER_PIXEL, Value::Short(vec![spp]))
+            .set(t::PHOTOMETRIC, Value::Short(vec![photometric]))
+            .set_image(ImageData::Strips { rows_per_strip: h, strips: vec![vec![90u8; (w * h) as usize * usize::from(spp * bits / 8)]] });
+        let mut ifd0 = rgb_ifd(16, 12);
+        ifd0.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![1])).add_sub_ifd(sub);
+        write(&[ifd0])
+    };
+    for bits in [8, 16] {
+        let bytes = scan(bits, 3, t::photometric::RGB);
+        assert_eq!(probe(&bytes), None, "{bits}-bit RGB");
+        assert!(matches!(decode(&bytes), Err(RawError::NotRaw)), "{bits}-bit RGB");
+    }
+    assert_eq!(probe(&scan(8, 1, t::photometric::BLACK_IS_ZERO)), Some(RawFormat::OtherTiff), "a grey mosaic");
+}
+
 /// Exif says the picture is far bigger than IFD0 and the file holds a block that could carry it.
 #[test]
 fn thumbnail_with_a_private_block_behind_the_exif_size_is_an_undecodable_raw() {

@@ -207,6 +207,14 @@ fn other_pages_and_the_more_pages_warning_match() {
     assert!(matches!(TiffBands::open(&bytes, Some(9), &Limits::banded()), Err(CodecError::InvalidImage(_))));
 }
 
+/// A film scan's layout (an IFD0 thumbnail holding the profile, the primary image in a SubIFD)
+/// opens the same page with the same profile in bands.
+#[test]
+fn a_primary_sub_ifd_under_a_thumbnail_matches() {
+    let b = crate::tiff_pages::scan_layout(true, false, 16, &[(W, H)], None);
+    assert_same(&b.bytes, W as usize * 6 * H as usize, "primary SubIFD");
+}
+
 #[test]
 fn a_cut_off_page_of_several_warns_in_the_whole_image_order() {
     // Truncated before MorePages, as the whole-image decode reports them (#8536 review).

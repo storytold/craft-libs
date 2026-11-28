@@ -17,7 +17,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
 /// the same page choice and refusals (camera raw, no directory), checked against `limits`,
 /// without reading any strips or tiles.
 pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32, u16), CodecError> {
-    let (file, dir, _) = open_page(bytes, None)?;
+    let Opened { file, dir, .. } = open_page(bytes, None)?;
     let side = |tag: u16| file.tag_uint(&dir, tag).and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
     let (w, h) = (side(ifd::TAG_WIDTH), side(ifd::TAG_HEIGHT));
     limits.check_size(w, h)?;
@@ -28,10 +28,10 @@ pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32, u16), Co
 /// carries the page's metadata, a [`DecodeWarning::MorePages`] when the file holds more
 /// full-resolution pages, and a [`DecodeWarning::Truncated`] when image data is cut off.
 pub(crate) fn decode_page(bytes: &[u8], page: Option<usize>, limits: &Limits) -> Result<Image, CodecError> {
-    let (file, dir, more) = open_page(bytes, page)?;
+    let Opened { file, dir, parent, more } = open_page(bytes, page)?;
     let mut img = decode_ifd(&file, &dir, limits)?;
     let extra_samples = std::mem::take(&mut img.meta.extra_samples);
-    img.meta = metadata(&file, &dir, &mut img.icc);
+    img.meta = metadata(&file, &dir, parent.as_ref(), &mut img.icc);
     img.meta.extra_samples = extra_samples;
     img.warnings.extend(more);
     Ok(img)
@@ -53,9 +53,19 @@ pub(crate) fn has_unretained_samples(bytes: &[u8], offset: u64) -> Result<bool, 
     Ok(prepare(&file, &dir, &Limits::default(), true)?.extras_dropped > 0)
 }
 
-/// The file, page `page`'s directory (`None`: the default page) and the
-/// [`DecodeWarning::MorePages`] the page opens with when the file holds more.
-fn open_page(bytes: &[u8], page: Option<usize>) -> Result<(File<'_>, Ifd, Option<DecodeWarning>), CodecError> {
+/// A page chosen by [`open_page`].
+struct Opened<'a> {
+    file: File<'a>,
+    dir: Ifd,
+    /// For a SubIFD: the directory that lists it.
+    parent: Option<Ifd>,
+    /// The [`DecodeWarning::MorePages`] the page opens with when the file holds more.
+    more: Option<DecodeWarning>,
+}
+
+/// The file and page `page`'s directory (`None`: the default page), with its parent directory
+/// and the warning it opens with.
+fn open_page(bytes: &[u8], page: Option<usize>) -> Result<Opened<'_>, CodecError> {
     if camera_raw(bytes) {
         return Err(CodecError::unsupported(
             F,
@@ -73,9 +83,10 @@ fn open_page(bytes: &[u8], page: Option<usize>) -> Result<(File<'_>, Ifd, Option
         .get(index)
         .ok_or_else(|| CodecError::InvalidImage(format!("TIFF page {index} does not exist (the file has {} directories)", info.pages.len())))?;
     let dir = file.ifd(p.ifd_offset).ok_or_else(|| err("image directory cut off"))?;
+    let parent = p.parent.and_then(|i| info.pages.get(i)).and_then(|q| file.ifd(q.ifd_offset));
     let pages = info.page_count();
     let more = (pages > 1).then(|| DecodeWarning::MorePages { total: info.complete.then_some(u32::try_from(pages).unwrap_or(u32::MAX)) });
-    Ok((file, dir, more))
+    Ok(Opened { file, dir, parent, more })
 }
 
 /// Output bytes [`TiffBands::decode`] aims to decode at once (at least one band per worker): small
@@ -107,7 +118,7 @@ impl<'a> TiffBands<'a> {
     /// against `limits`; on 64-bit targets its `max_alloc` bounds each group of bands, not the
     /// whole image.
     pub fn open(bytes: &'a [u8], page: Option<usize>, limits: &Limits) -> Result<Self, CodecError> {
-        let (file, dir, more) = open_page(bytes, page)?;
+        let Opened { file, dir, parent, more } = open_page(bytes, page)?;
         // On 32-bit targets the whole image must still fit `max_alloc`, as it did before: the
         // document holding it shares the same small address space (wasm32: 4 GiB).
         let p = prepare(&file, &dir, limits, cfg!(target_pointer_width = "32"))?;
@@ -119,7 +130,7 @@ impl<'a> TiffBands<'a> {
             )));
         }
         let mut icc = None;
-        let meta = metadata(&file, &dir, &mut icc);
+        let meta = metadata(&file, &dir, parent.as_ref(), &mut icc);
         let stored = ifd::orientation_of(&file, &dir);
         // Extra samples are dropped here only on 32-bit targets, where the whole image counts.
         let mut warnings = prepared_warnings(&p);
@@ -282,9 +293,15 @@ pub(crate) fn orientation(bytes: &[u8], page: Option<usize>) -> u16 {
         .map_or(1, |d| ifd::orientation_of(&file, &d))
 }
 
-/// The page's metadata; the ICC profile goes to `icc`.
-fn metadata(f: &File<'_>, dir: &Ifd, icc: &mut Option<Vec<u8>>) -> Metadata {
-    *icc = f.tag_bytes(dir, Tag::IccProfile.to_u16()).filter(|b| !b.is_empty()).map(<[u8]>::to_vec);
+/// The page's metadata; the ICC profile goes to `icc`. A SubIFD without a profile of its own
+/// takes the profile of `parent`, the directory listing it, when both have the same
+/// PhotometricInterpretation: such a SubIFD is part of the same image (a reduced copy, or the
+/// primary image under an IFD0 thumbnail), and some writers keep the profile only in IFD0. A
+/// SubIFD of another colour model (a grey mask under an RGB page) can't use that profile.
+fn metadata(f: &File<'_>, dir: &Ifd, parent: Option<&Ifd>, icc: &mut Option<Vec<u8>>) -> Metadata {
+    let profile = |d: &Ifd| f.tag_bytes(d, Tag::IccProfile.to_u16()).filter(|b| !b.is_empty()).map(<[u8]>::to_vec);
+    let photometric = |d: &Ifd| f.tag_uint(d, ifd::TAG_PHOTOMETRIC);
+    *icc = profile(dir).or_else(|| parent.filter(|p| photometric(p).is_some() && photometric(p) == photometric(dir)).and_then(profile));
     let text = |tag: u16| {
         let b = f.tag_bytes(dir, tag)?;
         let s = std::str::from_utf8(b).ok()?.trim_end_matches('\0');
@@ -926,7 +943,7 @@ mod tests {
         let mut img = Image::from_raw(w, h, ChannelLayout::Rgb, SampleType::U8, vec![90; 3 * n]).unwrap();
         img.meta.extra_samples = vec![ExtraSample { kind: 0, data: vec![7; n] }];
         let bytes = crate::encode(&img, Format::Tiff, &EncodeOptions::default()).unwrap();
-        let (file, dir, _) = open_page(&bytes, None).unwrap();
+        let Opened { file, dir, .. } = open_page(&bytes, None).unwrap();
         let tight = Limits { max_alloc: 3 * n as u64, ..Limits::default() };
         let p = prepare(&file, &dir, &tight, true).unwrap();
         assert_eq!(prepared_warnings(&p), vec![DecodeWarning::ExtraSamplesDropped { format: F, count: 1 }]);
