@@ -404,6 +404,39 @@ fn a_footer_bar_moves_its_buttons_below_leading_controls_when_they_do_not_fit_be
     assert!(buttons.iter().all(|rect| bar.expand(0.5).contains_rect(*rect)), "buttons overflow the bar {bar:?}: {buttons:?}");
 }
 
+/// A focused leading control keeps the focus when the bar narrows and its end group moves below it, for a bar of
+/// actions and a bar of dialog buttons.
+#[trial]
+fn a_focused_leading_control_keeps_its_focus_when_the_end_group_moves_below_it() {
+    for buttons in [false, true] {
+        let mut fixture = Fixture::new(move |ui| {
+            let leading = |ui: &mut Ui, _: &mut craft_ui::contract::BodyCx<'_>| {
+                IconButton::new(IconId::new("settings")).label("Settings").show(ui);
+            };
+            if buttons {
+                let roles = [DialogRole::Other, DialogRole::Alternate, DialogRole::Cancel, DialogRole::Accept];
+                FooterBar::buttons(DIALOG_BUTTONS.into_iter().zip(roles).map(|(label, role)| FooterButton::new(label, role)))
+                    .show_footer_leading(ui, leading);
+            } else {
+                let icons = ["trash", "plus", "new_folder"];
+                FooterBar::actions(icons.into_iter().map(|icon| FooterAction::new(IconId::new(icon), icon))).show_footer_leading(ui, leading);
+            }
+        });
+        fixture.room(Vec2::new(900.0, 200.0)).settle();
+        let settings = fixture.by_label("Settings").expect("the leading control");
+        fixture.access(craft_ui::testing::focus::AccessActionKind::Focus, &settings).settle();
+        let tree = fixture.tree();
+        assert_eq!(tree.name_of(craft_ui::testing::access::focused_key(tree)), Some("Settings"), "buttons {buttons}: the control takes the focus");
+        fixture.room(Vec2::new(60.0, 400.0)).frame(Vec::new());
+        let tree = fixture.tree();
+        assert_eq!(
+            tree.name_of(craft_ui::testing::access::focused_key(tree)),
+            Some("Settings"),
+            "buttons {buttons}: the leading control keeps its focus once the end group moves below it"
+        );
+    }
+}
+
 /// The rect of a bar of four dialog buttons and the rect of each button, in a room `width` wide; `leading` puts a
 /// control at the start of the buttons' line.
 fn dialog_buttons(width: f32, leading: bool) -> (Rect, Vec<Rect>) {
