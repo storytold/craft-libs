@@ -24,7 +24,7 @@ pub use menu::{LayersMenuAction, LayersPanelCommands, LayersPanelKeys, panel_row
 #[cfg(feature = "screen-testing")]
 pub(crate) use row::FX_BADGE;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use craft_ui::contract::{
     Bind, CommandSet as _, Commands as _, Entry, MemoProps, MemoView, NoValue, Outbox, Outcome, Show, ShowContainer as _, Tracked,
@@ -120,11 +120,13 @@ pub(super) struct Session<Id> {
     sweeps: Option<(LayerRowLook, ToggleSweeps)>,
     /// The filter the panel keeps when the app gives none.
     filter: LayerFilter,
+    /// Whether the previous rows pass had no matches, even while its search was unfocused.
+    no_matches: bool,
 }
 
 impl<Id> Default for Session<Id> {
     fn default() -> Self {
-        Session { anchor: None, produced: Vec::new(), menu: None, sweeps: None, filter: LayerFilter::default() }
+        Session { anchor: None, produced: Vec::new(), menu: None, sweeps: None, filter: LayerFilter::default(), no_matches: false }
     }
 }
 
@@ -281,6 +283,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
     /// A host-localized label centred in the rows body when filtering leaves no rows listed.
     /// Absent by default. An actually empty tree, an unfiltered tree and a filter with a match
     /// show no message. The text is display-only; the list still owns its input and empty-area menu.
+    /// Entering no matches with search focus politely announces the host wording once, without moving focus.
     pub fn no_matches_message(mut self, message: impl Into<Label>) -> Self {
         self.no_matches_message = Some(message.into());
         self
@@ -466,6 +469,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
         };
         let events = RefCell::new(Vec::new());
         let current = RefCell::new(LayerFilter::default());
+        let filter_focused = Cell::new(false);
         let unlock_label = words.unlock_layer.clone();
 
         let shown = Stack::new()
@@ -489,17 +493,19 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                                 .blend_modes(&modes)
                                 .focus_name(find_name)
                                 .show(ui);
+                            filter_focused.set(out.search_focused);
                             edited = out.edit.is_some();
                             events.borrow_mut().extend(out.edit.map(|edit| LayersEvent::Filter(Box::new(edit))));
                         }
                         None => {
                             let own = &mut stack.memory::<Session<T::Id>>().filter;
-                            edited = LayerFilterBar::new(Bind::bound(own))
+                            let out = LayerFilterBar::new(Bind::bound(own))
                                 .filter_types(filter_types.as_slice())
                                 .blend_modes(&modes)
                                 .focus_name(find_name)
-                                .show(ui)
-                                .changed;
+                                .show(ui);
+                            filter_focused.set(out.search_focused);
+                            edited = out.changed;
                         }
                     }
                 }
@@ -537,7 +543,15 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                 if let Some(layer) = rename.clone() {
                     start_rename(ui, list, layer);
                 }
-                let body = show_body(ui, &cx, &rows, session, &plan, no_matches_message.as_ref(), &unlock_label);
+                let body = show_body(
+                    ui,
+                    &cx,
+                    &rows,
+                    session,
+                    &plan,
+                    no_matches_message.as_ref().map(|message| (message, filter_focused.get())),
+                    &unlock_label,
+                );
                 let menus = show_row_menus(ui, &cx, &body.response, row_menu.as_deref(), session);
                 let focused = body.response.has_focus();
                 let mut reported = body.events;

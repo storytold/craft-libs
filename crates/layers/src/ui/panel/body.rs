@@ -12,13 +12,13 @@ use rows::{RevealPlan, list_selection};
 use craft_behavior::{ColumnWidth, CopyKeys, IconId};
 use craft_keymap::Mods;
 use craft_ui::contract::{
-    Bind, CollectionEvent, ColumnSpec, DropAt, DropKind, DropPlace, ListDrag, PendingDrop, Props as _, ReorderRule, RowAlign, Show as _,
-    ShowCollection as _, ShowContainer as _, ToggleColumn,
+    Bind, CollectionEvent, ColumnSpec, DropAt, DropKind, DropPlace, ListDrag, PendingDrop, Politeness, Props as _, ReorderRule, RowAlign, Show as _,
+    ShowCollection as _, ShowContainer as _, ToggleColumn, announce,
 };
 use craft_ui::display::Text;
 use craft_ui::layout_components::Row;
 use craft_ui::list::List;
-use craft_ui::runtime::env::Label;
+use craft_ui::runtime::env::{Env, Label};
 use egui::Ui;
 
 use super::Session;
@@ -45,7 +45,7 @@ pub(super) fn show_body<T: LayerTree>(
     rows: &LayerRows<'_, T>,
     session: &mut Session<T::Id>,
     reveal: &RevealPlan<T::Id>,
-    no_matches_message: Option<&Label>,
+    no_matches_message: Option<(&Label, bool)>,
     lock_name: &Label,
 ) -> BodyOutput<T::Id> {
     let tree = cx.tree;
@@ -115,10 +115,13 @@ pub(super) fn show_body<T: LayerTree>(
     // The memoized order is the only filtering truth. Keep the list present even with no
     // rows: it owns selection, keys, drops, focus and the empty-area menu. This nonallocating,
     // display-only layer uses its exact body rect, never the panel/header/footer bounds.
-    if filtered
-        && order.is_empty()
-        && let Some(message) = no_matches_message
-    {
+    let no_matches = filtered && order.is_empty();
+    let became_empty = no_matches && !session.no_matches;
+    session.no_matches = no_matches;
+    if no_matches && let Some((message, filter_focused)) = no_matches_message {
+        if became_empty && filter_focused {
+            announce(ui.ctx(), Env::of(ui).resolve(message).as_str().to_owned(), Politeness::Polite);
+        }
         let clip = ui.clip_rect();
         let room = out.response.rect.intersect(clip);
         if room.is_positive() {

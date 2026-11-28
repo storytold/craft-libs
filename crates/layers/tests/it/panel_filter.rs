@@ -504,3 +504,75 @@ fn the_no_matches_text_preserves_list_pointer_focus_and_tab_order() {
     }
     assert_eq!(observations[0], observations[1], "the optional text leaves list input and focus unchanged");
 }
+
+fn take_message_announcements(fixture: &Fixture) -> Vec<String> {
+    craft_ui::runtime::frame::take_output(fixture.ctx()).announcements
+}
+
+/// Real typing keeps the search focus and announces its empty transition politely once;
+/// idle passes and another no-match query stay quiet, and a positive result resets it.
+#[trial]
+fn a_focused_empty_filter_announces_politely_once_and_resets_after_matches() {
+    use craft_ui::contract::Politeness;
+    use craft_ui::runtime::access::Role;
+
+    let (mut rig, _, _) = message_rig(Some(NO_MATCHES), ONE_PANEL);
+    let search = rig.fixture.by_label("Search layers").expect("the existing Name search");
+    rig.fixture.click(&search);
+    let focus = rig.fixture.focused_stop();
+    assert!(focus.is_some());
+    assert!(take_message_announcements(&rig.fixture).is_empty());
+    rig.fixture.frame(vec![egui::Event::Text(String::from("zz"))]);
+    assert!(rig.rows().is_empty());
+    assert_eq!(take_message_announcements(&rig.fixture), [NO_MATCHES]);
+    assert_eq!(rig.fixture.focused_stop(), focus, "the message does not move search focus");
+    let status = rig
+        .fixture
+        .by_role(Role::STATUS)
+        .into_iter()
+        .find(|target| rig.fixture.tree().name(target.node).is_some_and(|text| text.starts_with(NO_MATCHES)))
+        .expect("the existing announcement service exposes a live status node");
+    assert_eq!(rig.fixture.tree().live(status.node), Some(Politeness::Polite));
+    for _ in 0..3 {
+        rig.fixture.frame(Vec::new());
+        assert!(take_message_announcements(&rig.fixture).is_empty(), "idle/repaint does not repeat the announcement");
+    }
+    rig.fixture.frame(vec![egui::Event::Text(String::from("z"))]);
+    assert!(rig.rows().is_empty());
+    assert!(take_message_announcements(&rig.fixture).is_empty(), "empty to empty is not another transition");
+    // The existing search-field contract clears its criterion on Escape.
+    rig.fixture.key(egui::Key::Escape, egui::Modifiers::NONE);
+    assert_eq!(rig.rows(), BOARDS);
+    assert!(take_message_announcements(&rig.fixture).is_empty(), "positive results reset without an empty report");
+    let search = rig.fixture.by_label("Search layers").unwrap();
+    rig.fixture.click(&search);
+    let _ = take_message_announcements(&rig.fixture);
+    rig.fixture.frame(vec![egui::Event::Text(String::from("zz"))]);
+    assert!(rig.rows().is_empty());
+    assert_eq!(take_message_announcements(&rig.fixture), [NO_MATCHES], "a new positive-to-empty transition reports again");
+}
+
+/// The state follows results even without search focus: entering an already-empty search does
+/// not create a transition. An absent host message never adds an announcement.
+#[trial]
+fn an_unfocused_or_default_absent_empty_filter_does_not_announce_on_refocus() {
+    for message in [None, Some(NO_MATCHES)] {
+        let (mut rig, _, _) = message_rig(message, ONE_PANEL);
+        let footer = rig.fixture.by_label("Create a new layer").unwrap();
+        rig.fixture.click(&footer);
+        let _ = take_message_announcements(&rig.fixture);
+        rig.filter.borrow_mut().name = String::from("no match");
+        rig.fixture.frame(Vec::new());
+        assert!(rig.rows().is_empty());
+        assert!(!take_message_announcements(&rig.fixture).iter().any(|text| text == NO_MATCHES));
+        let search = rig.fixture.by_label("Search layers").unwrap();
+        rig.fixture.click(&search);
+        assert!(!take_message_announcements(&rig.fixture).iter().any(|text| text == NO_MATCHES), "focus alone is not a result transition");
+        if message.is_none() {
+            rig.fixture.key(egui::Key::Escape, egui::Modifiers::NONE);
+            rig.fixture.frame(vec![egui::Event::Text(String::from("zz"))]);
+            assert!(rig.rows().is_empty());
+            assert!(!take_message_announcements(&rig.fixture).iter().any(|text| text == NO_MATCHES), "default absence also stays quiet while typing");
+        }
+    }
+}

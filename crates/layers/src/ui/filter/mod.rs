@@ -807,6 +807,8 @@ pub struct LayerFilterBar<'a> {
 pub struct LayerFilterOutput {
     /// The bar's row.
     pub response: Response,
+    /// Key focus is in the Name or Objects search field this pass.
+    pub(crate) search_focused: bool,
     /// The criteria changed this pass (a toggle, a typed letter, a pick, the type select).
     pub changed: bool,
     /// The change as an edit, for a binding that does not write through.
@@ -868,10 +870,11 @@ impl<'a> LayerFilterBar<'a> {
     pub fn show(self, ui: &mut Ui) -> LayerFilterOutput {
         let Self { mut filter, blend_modes, focus_name, types: offered } = self;
         if offered.is_empty() {
-            return LayerFilterOutput { response: Row::new().show(ui, |_, _| {}).output, changed: false, edit: None };
+            return LayerFilterOutput { response: Row::new().show(ui, |_, _| {}).output, search_focused: false, changed: false, edit: None };
         }
         let words = Env::of(ui).words::<LayerFilterWords>();
         let mut edit = None;
+        let mut search_focused = false;
         // A filling search field needs a row as wide as the bar to fill.
         let fill = Env::of(ui).get::<ObjectsSearch>() == ObjectsSearch::Fill;
         let row = if fill { Row::new().fill_width() } else { Row::new() };
@@ -913,6 +916,7 @@ impl<'a> LayerFilterBar<'a> {
                         field = field.select_on_focus();
                     }
                     let typed = field.show(ui);
+                    search_focused = focus::is_focused(ui.ctx(), typed.response.id);
                     if let Some(text) = typed.value() {
                         next.name.clone_from(text);
                     }
@@ -970,6 +974,7 @@ impl<'a> LayerFilterBar<'a> {
                         field = field.sizing(Sizing::FillWidth);
                     }
                     let typed = field.show(ui);
+                    search_focused = focus::is_focused(ui.ctx(), typed.response.id);
                     if let Some(text) = typed.value() {
                         next.name.clone_from(text);
                     }
@@ -1013,7 +1018,7 @@ impl<'a> LayerFilterBar<'a> {
                 edit = Some(event);
             }
         });
-        LayerFilterOutput { response: row.output, changed: edit.is_some(), edit }
+        LayerFilterOutput { response: row.output, search_focused, changed: edit.is_some(), edit }
     }
 }
 
