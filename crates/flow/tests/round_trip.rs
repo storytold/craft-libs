@@ -100,6 +100,43 @@ fn pictures_are_sniffed_and_sized_from_their_headers() {
     assert_eq!((wide.w, wide.h), (468.0, 234.0));
 }
 
+/// A table style's "no colour" (`w:fill="auto"`) covers the shading beneath it, as in Word: a
+/// header row that says so over a red whole table, and a cell that says so itself, have no fill.
+/// A part that says nothing (or `w:val="nil"`) lets the red show.
+#[test]
+fn a_no_colour_fill_covers_the_table_style_shading_beneath_it() {
+    use craft_wordmodel::props::{Rgb, TableLook};
+    use craft_wordmodel::styles::{FillOff, Style, StyleKind, TablePart, TableStyleParts};
+    use craft_wordmodel::{Block, Document, Paragraph, Table};
+    let red = Rgb(0xC0, 0, 0);
+    let mut parts = TableStyleParts { fill: Some(red), ..Default::default() };
+    parts.fills_off.insert(TablePart::FirstRow, FillOff::Auto);
+    parts.fills_off.insert(TablePart::LastRow, FillOff::Nil);
+    let mut d = Document::from_text("");
+    std::sync::Arc::make_mut(&mut d.styles).upsert(Style {
+        id: "Shaded".into(),
+        name: "Shaded".into(),
+        kind: StyleKind::Table,
+        table: Some(parts),
+        ..Default::default()
+    });
+    let mut t = Table::new(3, 2, 200.0);
+    t.props.style = Some("Shaded".into());
+    t.props.look = TableLook { header_row: true, total_row: true, ..Default::default() };
+    for row in &mut t.rows {
+        for c in &mut row.cells {
+            c.blocks = vec![craft_wordmodel::para_block(Paragraph::with_text("x", Default::default()))];
+        }
+    }
+    t.rows[1].cells[1].props.shading_auto = true;
+    d.body = vec![std::sync::Arc::new(Block::Table(t))];
+    // As the formats that keep cell formatting (ODT, LaTeX) ask for it.
+    let flow = craft_flow::from_doc_with(&d, craft_flow::FlowOpts { paras: true, ..Default::default() });
+    let Some(FBlock::Table(t)) = flow.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table") };
+    let shading: Vec<Vec<Option<Rgb>>> = t.rows.iter().map(|r| r.iter().map(|c| c.shading).collect()).collect();
+    assert_eq!(shading, vec![vec![None, None], vec![Some(red), None], vec![Some(red), Some(red)]]);
+}
+
 #[test]
 fn drop_cap_not_repeated_after_page_break() {
     let mut doc = craft_wordmodel::Document::default();
