@@ -4,11 +4,13 @@
 use craft_behavior::CanvasView;
 use craft_behavior::geometry::CropBox;
 use craft_behavior::kurbo::{Point, Rect, Size};
-use craft_draw::ui::crop::{CropDocKey, CropDocument, CropEvent, CropInput, CropRatio, CropSession, CropSettings, CropTool};
+use craft_draw::ui::crop::{
+    CropDocKey, CropDocument, CropEvent, CropInput, CropLength, CropPresetChoice, CropRatio, CropSession, CropSettings, CropTool, ResolutionUnit,
+};
 use craft_ui::canvas::{Canvas, NavigationOptions, Snap, ToolHost, tool_pass};
 use craft_ui::contract::ShowContainer as _;
 use craft_ui::runtime::access::Role;
-use craft_ui::runtime::env::{Env, Units};
+use craft_ui::runtime::env::{Env, UnitKind, Units};
 use craft_ui::testing::{Fixture, Frames, pointer, trial};
 use egui::{Key, Modifiers, Pos2, Vec2};
 use std::cell::RefCell;
@@ -320,6 +322,297 @@ fn typing_a_ratio_in_several_steps_fits_from_the_frame_the_edit_began_with() {
     assert!((frame.rect.width() / frame.rect.height() - 16.0 / 6.0).abs() < 1e-6, "{frame:?}");
     assert!((frame.rect.width() - base.rect.width()).abs() < 1e-6, "fitted from the frame the edit began with: {frame:?}");
     assert_eq!(frame.rect.center(), base.rect.center());
+}
+
+// The W × H × Resolution fields typed into the options bar (photocraft#16367): a typed size sets the
+// frame to that document size, bigger numbers make a bigger crop, and the view's zoom only decides
+// how big that document size looks on screen. The measurement behind the rule is the report in
+// photocraft#16367: the Crop options bar's W and H fields at one view zoom left unchanged, and
+// entering bigger values made the preview smaller; the red trials below drive that same repro
+// through `CropTool::refit` (typed 500 px and then 1000 px on one document, and inches likewise).
+
+/// W × H × Resolution settings with W and H typed as `(value, unit)`, or left empty.
+fn sized_fields(width: Option<(f64, UnitKind)>, height: Option<(f64, UnitKind)>) -> CropSettings {
+    let mut settings = classic();
+    settings.ratio = CropRatio::Size;
+    settings.size.width = width.map(|(value, unit)| CropLength::new(value, unit));
+    settings.size.height = height.map(|(value, unit)| CropLength::new(value, unit));
+    settings
+}
+
+#[trial]
+fn a_typed_w_and_h_set_the_frame_to_the_typed_size_and_grow_it() {
+    let mut tool = CropTool::new();
+    let doc = sized(1, 2000.0, 1500.0);
+    let px = |value: f64| Some((value, UnitKind::Pixels));
+    tool.crop_to(upright(0.0, 0.0, 2000.0, 1500.0));
+    let small = sized_fields(px(500.0), px(400.0));
+    assert!(matches!(tool.refit(&small, &doc, &units(), false), Some(CropEvent::Frame(_))), "a typed size changes the frame");
+    let frame = tool.frame().expect("a frame");
+    assert_eq!((frame.rect.width(), frame.rect.height()), (500.0, 400.0), "the frame is the typed document size, not a fit of its ratio");
+    let big = sized_fields(px(1000.0), px(800.0));
+    assert!(matches!(tool.refit(&big, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let grown = tool.frame().expect("a frame");
+    assert_eq!((grown.rect.width(), grown.rect.height()), (1000.0, 800.0), "bigger typed numbers make a bigger crop (#16367)");
+    assert_eq!(grown.rect.center(), frame.rect.center(), "the frame keeps the centre the edit began with");
+}
+
+#[trial]
+fn typed_inches_set_the_frame_at_the_documents_resolution() {
+    let mut tool = CropTool::new();
+    let doc = sized(1, 2000.0, 1500.0); // 72 px/in
+    let inch = |value: f64| Some((value, UnitKind::Inches));
+    tool.crop_to(upright(0.0, 0.0, 2000.0, 1500.0));
+    let settings = sized_fields(inch(2.0), inch(1.0));
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let frame = tool.frame().expect("a frame");
+    assert!(
+        (frame.rect.width() - 144.0).abs() < 1e-9 && (frame.rect.height() - 72.0).abs() < 1e-9,
+        "2 in x 1 in at the document's 72 px/in is 144 x 72 document px: {frame:?}"
+    );
+}
+
+#[trial]
+fn a_typed_size_bigger_than_the_canvas_fits_the_canvas_nearest_the_frame() {
+    // From an off-centre start, so re-centring on the canvas would show: a frame at the top-left
+    // corner and a typed 3000 x 600 (5 : 1) on a 2000 x 1500 document.
+    let mut tool = CropTool::new();
+    let doc = sized(1, 2000.0, 1500.0);
+    let px = |value: f64| Some((value, UnitKind::Pixels));
+    tool.crop_to(upright(0.0, 0.0, 100.0, 100.0));
+    let settings = sized_fields(px(3000.0), px(600.0));
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let frame = tool.frame().expect("a frame");
+    assert_eq!(frame.rect, Rect::new(0.0, 0.0, 2000.0, 400.0), "the largest 5 : 1 frame the canvas holds, slid nearest the frame that was");
+}
+
+#[trial]
+fn a_typed_size_bigger_than_the_canvas_extends_it_when_pixels_are_kept() {
+    let mut tool = CropTool::new();
+    let doc = document(1); // 400 x 300
+    let px = |value: f64| Some((value, UnitKind::Pixels));
+    tool.crop_to(upright(0.0, 0.0, 400.0, 300.0));
+    let mut settings = sized_fields(px(800.0), px(400.0));
+    settings.delete_pixels = false;
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let frame = tool.frame().expect("a frame");
+    assert_eq!(frame.rect, Rect::new(-200.0, -50.0, 600.0, 350.0), "with the pixels kept the typed frame hangs past the canvas, as a drag may");
+}
+
+#[trial]
+fn a_typed_frame_that_hangs_past_the_canvas_is_slid_wholly_in() {
+    let mut tool = CropTool::new();
+    let doc = document(1); // 400 x 300
+    let px = |value: f64| Some((value, UnitKind::Pixels));
+    tool.crop_to(upright(0.0, 0.0, 100.0, 100.0));
+    let settings = sized_fields(px(250.0), px(125.0));
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let frame = tool.frame().expect("a frame");
+    assert_eq!((frame.rect.width(), frame.rect.height()), (250.0, 125.0), "the typed size is kept; only its place moves in");
+    assert_eq!(frame.rect, Rect::new(0.0, 0.0, 250.0, 125.0), "the least move that brings it wholly in");
+}
+
+#[trial]
+fn one_typed_side_leaves_the_frame_to_the_free_crop_it_was() {
+    let mut tool = CropTool::new();
+    let doc = sized(1, 2000.0, 1500.0);
+    let px = |value: f64| Some((value, UnitKind::Pixels));
+    tool.crop_to(upright(10.0, 10.0, 210.0, 160.0));
+    let settings = sized_fields(px(500.0), None);
+    assert!(tool.refit(&settings, &doc, &units(), false).is_none(), "W without H is a free crop: the frame stays as it is");
+    assert_eq!(tool.frame().expect("a frame").rect, Rect::new(10.0, 10.0, 210.0, 160.0));
+}
+
+#[trial]
+fn a_typed_size_keeps_the_frames_turn() {
+    let mut tool = CropTool::new();
+    let doc = sized(1, 2000.0, 1500.0);
+    let px = |value: f64| Some((value, UnitKind::Pixels));
+    tool.crop_to(CropBox::new(Rect::new(100.0, 50.0, 500.0, 250.0), 30.0));
+    let settings = sized_fields(px(500.0), px(400.0));
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let frame = tool.frame().expect("a frame");
+    // The turned frame's bounds hang past the top-left, so Delete Cropped Pixels slides it in: the
+    // typed size is kept to within the rule's float hair.
+    assert!((frame.rect.width() - 500.0).abs() < 1e-6 && (frame.rect.height() - 400.0).abs() < 1e-6, "the typed size on a turned frame: {frame:?}");
+    assert_eq!(frame.angle, 30.0, "the turn is kept, as a ratio refit keeps it");
+}
+
+#[trial]
+fn a_typed_size_on_a_turned_frame_is_contained_by_its_turned_bounds() {
+    // The canvas rule of Delete Cropped Pixels is about the TURNED bounds, as a drag's is: base
+    // 450 x 250 turned 30 degrees, typed 1000 x 800, so the turned frame would poke past the top
+    // and left of a 2000 x 1500 document.
+    let mut tool = CropTool::new();
+    let doc = sized(1, 2000.0, 1500.0);
+    let px = |value: f64| Some((value, UnitKind::Pixels));
+    tool.crop_to(CropBox::new(Rect::new(100.0, 50.0, 550.0, 300.0), 30.0));
+    let settings = sized_fields(px(1000.0), px(800.0));
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let frame = tool.frame().expect("a frame");
+    assert!(
+        (frame.rect.width() - 1000.0).abs() < 1e-6 && (frame.rect.height() - 800.0).abs() < 1e-6,
+        "the size is kept; only the place moves in: {frame:?}"
+    );
+    assert_eq!(frame.angle, 30.0, "the typed size keeps the turn");
+    let bounds = frame.turned_bounds();
+    // The same float hair the rule allows: the least move lands the bounds on the edge.
+    assert!(
+        bounds.x0 >= -1e-6 && bounds.y0 >= -1e-6 && bounds.x1 <= 2000.0 + 1e-6 && bounds.y1 <= 1500.0 + 1e-6,
+        "the TURNED bounds stay on the canvas, as a drag's do: {bounds:?} from {frame:?}"
+    );
+}
+
+#[trial]
+fn a_hair_of_an_overshoot_does_not_move_the_typed_frame() {
+    // The rule's float tolerance: a px field can hold a size a hair past the canvas width (the
+    // value below is written by hand for the trial - length conversions move through pixels and
+    // CAN land a hair past an edge, but do not reliably, so the construction is not the point).
+    // The typed size must be kept to the bit: not snapped to the canvas and not slid.
+    let mut tool = CropTool::new();
+    let doc = CropDocument::new(CropDocKey::new(1), Size::new(330.0, 300.0), 72.0);
+    let px = |value: f64| Some((value, UnitKind::Pixels));
+    tool.crop_to(upright(0.0, 0.0, 330.0, 300.0));
+    let settings = sized_fields(px(330.0000000000001), px(300.0));
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let frame = tool.frame().expect("a frame");
+    assert!(frame.rect.width() > 330.0 && frame.rect.width() - 330.0 < 1e-6, "the typed width is kept, overshoot and all: {:?}", frame.rect.width());
+    let center = frame.rect.center();
+    assert!((center.x - 165.0).abs() < 1e-9 && (center.y - 150.0).abs() < 1e-9, "a sub-pixel past the edge does not move the frame: {center:?}");
+}
+
+#[trial]
+fn an_absurd_typed_size_stays_finite_and_on_the_canvas() {
+    let mut tool = CropTool::new();
+    let doc = sized(1, 2000.0, 1500.0);
+    let px = |value: f64| Some((value, UnitKind::Pixels));
+    tool.crop_to(upright(0.0, 0.0, 2000.0, 1500.0));
+    let settings = sized_fields(px(1e9), px(1e9));
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let frame = tool.frame().expect("a frame");
+    assert!(frame.is_finite(), "the typed giant stays finite: {frame:?}");
+    assert_eq!(
+        frame.rect,
+        Rect::new(250.0, 0.0, 1750.0, 1500.0),
+        "Delete Cropped Pixels clamps it to the largest square the canvas holds, nearest the frame"
+    );
+    let mut kept = settings.clone();
+    kept.delete_pixels = false;
+    assert!(matches!(tool.refit(&kept, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let huge = tool.frame().expect("a frame");
+    assert!(
+        huge.is_finite() && huge.rect.width() == 1e9 && huge.rect.height() == 1e9,
+        "pixels kept: the typed size stands and stays finite: {huge:?}"
+    );
+}
+
+#[trial]
+fn the_default_frame_of_a_saved_size_still_fits_the_canvas() {
+    // Not measured by #16367 and kept as today: picking the tool with saved W x H makes the default
+    // frame the ratio fits to the canvas, not the typed size.
+    let rig = Rig::new(sized_fields(Some((100.0, UnitKind::Pixels)), Some((50.0, UnitKind::Pixels))));
+    assert_eq!(rig.frame(), Some(upright(0.0, 50.0, 400.0, 250.0)), "the untouched default frame still fits the ratio to the canvas");
+    assert!(rig.host.borrow().tool.session().is_default());
+}
+
+#[trial]
+fn retyping_the_resolution_never_resizes_the_typed_frame() {
+    // #3003 review: the size cells report every edit, the Resolution cell too. The Resolution
+    // field names the commit's resample, not the frame: at 4 x 5 in it must not resize the frame
+    // between 1200 x 1500 and 288 x 360 document px.
+    let mut tool = CropTool::new();
+    let doc = sized(1, 2000.0, 1500.0); // 72 px/in
+    let inch = |value: f64| Some((value, UnitKind::Inches));
+    tool.crop_to(upright(0.0, 0.0, 2000.0, 1500.0));
+    let mut settings = sized_fields(inch(4.0), inch(5.0));
+    settings.size.resolution = "300".to_owned();
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let framed = tool.frame().expect("a frame");
+    assert!(
+        (framed.rect.width() - 288.0).abs() < 1e-6 && (framed.rect.height() - 360.0).abs() < 1e-6,
+        "4 in x 5 in at the document's 72 px/in, not the field's 300: {framed:?}"
+    );
+    settings.size.resolution = "72".to_owned();
+    tool.refit(&settings, &doc, &units(), false);
+    let kept = tool.frame().expect("a frame");
+    assert_eq!(kept.rect, framed.rect, "retyping the resolution 300 -> 72 leaves the frame's pixel size alone");
+    settings.size.resolution_unit = ResolutionUnit::PixelsPerCentimetre;
+    tool.refit(&settings, &doc, &units(), false);
+    assert_eq!(tool.frame().expect("a frame").rect, framed.rect, "switching the resolution unit leaves the frame alone");
+}
+
+#[trial]
+fn a_size_preset_sizes_the_frame_to_the_preset_size() {
+    // #3003 review: the preset list's W x H pick runs the same typed-size rule - the frame takes
+    // the preset's size, as when the user types it (the 1024 x 768 px preset, CROP_SIZES[2]).
+    let mut tool = CropTool::new();
+    let doc = sized(1, 2000.0, 1500.0);
+    let mut settings = classic();
+    assert!(settings.choose(CropPresetChoice::SizePreset(2), &doc, &[]), "the preset fills W, H and the resolution");
+    tool.crop_to(upright(0.0, 0.0, 2000.0, 1500.0));
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let frame = tool.frame().expect("a frame");
+    assert_eq!((frame.rect.width(), frame.rect.height()), (1024.0, 768.0), "the frame is the preset's size, not a fit of its ratio");
+}
+
+#[trial]
+fn reset_after_a_typed_size_returns_the_default_frame() {
+    // #3003 review: two W x H meanings by intent - absolute for the typed or preset frame (the
+    // trials above), but Reset hands back the unconstrained default frame, ratio-fitted to the
+    // canvas, as it did before #16367 and as the untouched default stays.
+    let mut tool = CropTool::new();
+    let doc = document(1); // 400 x 300
+    let px = |value: f64| Some((value, UnitKind::Pixels));
+    let settings = sized_fields(px(200.0), px(100.0));
+    tool.crop_to(upright(0.0, 0.0, 400.0, 300.0));
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    assert_eq!(tool.frame().expect("a frame").rect, Rect::new(100.0, 100.0, 300.0, 200.0), "the typed 200 x 100, centred");
+    assert!(matches!(tool.reset_frame(&settings, &doc, &units()), Some(CropEvent::Frame(_))));
+    assert_eq!(
+        tool.frame().expect("a frame").rect,
+        Rect::new(0.0, 50.0, 400.0, 250.0),
+        "Reset fits the 2 : 1 ratio to the canvas, unconstrained by the typed size"
+    );
+}
+
+#[trial]
+fn a_mixed_unit_typed_size_drags_hold_the_frame_s_proportions() {
+    // #3003 review round 2: with W and H in different units and a typed Resolution, the drag's
+    // held ratio came from the typed resolution while the frame's geometry came from the
+    // document's - the gesture held proportions the frame never had. W 4 in, H 500 px,
+    // Resolution 300 on a 72 px/in document: the frame is 288 x 500, and so is the ratio.
+    let mut tool = CropTool::new();
+    let doc = sized(1, 2000.0, 1500.0); // 72 px/in
+    let mut settings = sized_fields(Some((4.0, UnitKind::Inches)), Some((500.0, UnitKind::Pixels)));
+    settings.size.resolution = "300".to_owned();
+    tool.crop_to(upright(0.0, 0.0, 2000.0, 1500.0));
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let frame = tool.frame().expect("a frame");
+    assert!(
+        (frame.rect.width() - 288.0).abs() < 1e-6 && (frame.rect.height() - 500.0).abs() < 1e-6,
+        "the frame is 4 in and 500 px at the document's 72 px/in: {frame:?}"
+    );
+    let held = settings.ratio_value(&doc, &units()).expect("W x H x Resolution holds a ratio");
+    assert!((held - 288.0 / 500.0).abs() < 1e-6, "the ratio the overlay follows is the frame's, not 1200 / 500: {held}");
+
+    // And the overlay really drags with it: the same mix on the rig's 400 x 300 document
+    // (1 in x 200 px, Resolution 300), a corner drag of the typed frame at (164, 50).
+    let mut rig_settings = sized_fields(Some((1.0, UnitKind::Inches)), Some((200.0, UnitKind::Pixels)));
+    rig_settings.size.resolution = "300".to_owned();
+    let mut rig = Rig::new(rig_settings);
+    {
+        let mut host = rig.host.borrow_mut();
+        let Host { tool, settings, document, .. } = &mut *host;
+        assert!(matches!(tool.refit(settings, document, &units(), false), Some(CropEvent::Frame(_))));
+        let typed = tool.frame().expect("a frame");
+        assert!((typed.rect.width() - 72.0).abs() < 1e-6 && (typed.rect.height() - 200.0).abs() < 1e-6, "1 in x 200 px at 72 px/in: {typed:?}");
+    }
+    rig.drag((164.0, 50.0), (140.0, 30.0));
+    let dragged = rig.frame().expect("the dragged frame");
+    assert!(
+        (dragged.rect.width() / dragged.rect.height() - 72.0 / 200.0).abs() < 1e-6,
+        "the drag holds the frame's 72 : 200 proportions: {dragged:?}"
+    );
 }
 
 #[trial]

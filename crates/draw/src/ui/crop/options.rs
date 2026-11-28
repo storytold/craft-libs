@@ -306,19 +306,18 @@ impl CropSettings {
     }
 
     /// The width-to-height ratio every frame gesture holds: the document's for
-    /// [`CropRatio::Original`], the sides' for [`CropRatio::Sides`], W : H of the
-    /// [`target`](Self::target) for [`CropRatio::Size`]; `None` for a free ratio and for any
-    /// ratio that is not a positive finite number.
+    /// [`CropRatio::Original`], the sides' for [`CropRatio::Sides`], the frame's own W : H of
+    /// [`frame_size`](Self::frame_size) for [`CropRatio::Size`] -- the drag's constraint always
+    /// matches the geometry `refit` gives the frame, even when W and H were entered in different
+    /// units and a typed Resolution names only the commit's resample (#3003 review round 2);
+    /// `None` for a free ratio and for any ratio that is not a positive finite number.
     pub fn ratio_value(&self, document: &CropDocument, units: &Units) -> Option<f64> {
         // pc: crates/ui-egui/src/tools/crop_ui.rs:217 `preset_ratio`; crop_size.rs:146 `ratio`.
         let (width, height) = match self.ratio {
             CropRatio::Free => return None,
             CropRatio::Original => (document.size.width, document.size.height),
             CropRatio::Sides { width, height } => (width, height),
-            CropRatio::Size => {
-                let target = self.target(document, units)?;
-                (target.width, target.height)
-            }
+            CropRatio::Size => self.frame_size(document, units)?,
         };
         Some(width / height).filter(|k| k.is_finite() && *k > 0.0)
     }

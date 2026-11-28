@@ -395,9 +395,14 @@ impl CropTool {
     }
 
     /// The bar changed the ratio or W x H x Resolution ([`CropBarOutput::ratio`](super::CropBarOutput::ratio)):
-    /// the frame refits to [`CropSettings::ratio_value`] about its centre, from the frame the field edit
-    /// began with while `editing`, as one box step. Returns the frame's `Set` for the host's mirror, or
-    /// `None` when nothing changed. In image mode the next pass turns the view with the frame.
+    /// a ratio refits the frame to [`CropSettings::ratio_value`] about its centre, and W x H x Resolution
+    /// sets the frame to the size the fields name, centred on it (photocraft#16367: the typed size is
+    /// the crop, and the view's zoom only changes how large that document size looks). The frame
+    /// converts at the document's resolution ([`CropSettings::frame_size`]); the Resolution field
+    /// names only the commit's resample, so editing it never moves the frame. From the frame the
+    /// field edit began with while `editing`, as one box step. Returns the frame's `Set` for the
+    /// host's mirror, or `None` when nothing changed. In image mode the next pass turns the view
+    /// with the frame.
     pub fn refit(&mut self, settings: &CropSettings, document: &CropDocument, units: &Units, editing: bool) -> Option<CropEvent> {
         self.session.show_frame();
         let base = self.session.ratio_base(editing);
@@ -406,11 +411,65 @@ impl CropTool {
             return None;
         }
         let (current, base) = (self.session.frame()?, base?);
-        let rect = fitted_ratio(base.rect, settings.ratio_value(document, units)?)?;
-        let next = CropBox::new(rect, base.angle);
-        // W x H x Resolution can change the output size even when the frame already fits, so it
-        // makes the frame a pending crop.
-        let sized = settings.target(document, units).is_some();
+        let frame_size = settings.frame_size(document, units);
+        let next = match frame_size {
+            // Both W and H typed: the frame takes that document size (converted at the
+            // document's resolution) about the centre of the frame the edit began with. The view's
+            // zoom only changes how large that document size looks.
+            Some((width, height)) => {
+                let center = base.rect.center();
+                let typed_rect = craft_behavior::kurbo::Rect::new(
+                    center.x - width / 2.0,
+                    center.y - height / 2.0,
+                    center.x + width / 2.0,
+                    center.y + height / 2.0,
+                );
+                // Guarded like `fitted_ratio` guards its rect: only a finite converted rect builds
+                // a frame (a typed FIELD_MAX length converts to at most about 1e18 px, finite).
+                if ![typed_rect.x0, typed_rect.y0, typed_rect.x1, typed_rect.y1].iter().all(|v| v.is_finite()) {
+                    return None;
+                }
+                let typed = CropBox::new(typed_rect, base.angle);
+                if settings.delete_pixels {
+                    // Delete Cropped Pixels keeps the frame's TURNED bounds on the canvas, the rule
+                    // drags hold: a typed frame that hangs past an edge slides back in with the
+                    // least move, and one the canvas cannot hold at all becomes the largest box of
+                    // that shape at the frame's turn, put as near the frame as the canvas allows.
+                    // `eps`: the typed size lands a float hair past an edge far too often for an
+                    // exact compare to be fair.
+                    let canvas = document.canvas();
+                    let eps = 1e-6;
+                    let bounds = typed.turned_bounds();
+                    if bounds.x0 >= canvas.x0 - eps && bounds.y0 >= canvas.y0 - eps && bounds.x1 <= canvas.x1 + eps && bounds.y1 <= canvas.y1 + eps {
+                        typed
+                    } else if bounds.width() <= canvas.width() + eps && bounds.height() <= canvas.height() + eps {
+                        // Never `None` here: a box the canvas can hold always slides in.
+                        typed.within(canvas, false, false).unwrap_or(typed)
+                    } else {
+                        // `fitted` keeps the shape and the turn, centred on the canvas; its box
+                        // carries `normalized_angle`'s form of the turn - the same turn, its
+                        // canonical number (accepted here). Move it to the typed frame's centre,
+                        // then slide it in whole (never `None`: `fitted`'s turned bounds already
+                        // fit the canvas, so the slide only corrects the move).
+                        let fitted = typed.fitted(document.size, base.angle)?;
+                        let to_frame = typed.rect.center() - fitted.rect.center();
+                        fitted.moved(to_frame).within(canvas, false, false).unwrap_or(fitted)
+                    }
+                } else {
+                    typed
+                }
+            }
+            // A ratio (or W x H x Resolution with one side empty): the frame fits it, as before.
+            None => {
+                let rect = fitted_ratio(base.rect, settings.ratio_value(document, units)?)?;
+                CropBox::new(rect, base.angle)
+            }
+        };
+        // Key the pending-crop marking on the same rule that sized the frame: a W x H the frame
+        // carries makes the crop pending even when the frame already fits, because the commit
+        // resamples to it. (The commit's `target` may name a different resample, with its
+        // Resolution; the frame's numbers are the ones the user sees.)
+        let sized = frame_size.is_some();
         // The untouched selection frame leaves its state with the first refit, even when it already fits.
         let selection = self.session.from_selection();
         if next == current && !selection && (editing || !sized) {
