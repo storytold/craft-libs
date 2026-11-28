@@ -199,6 +199,10 @@ pub struct ShapeExtra {
     pub start_style: ArrowStyle,
     #[serde(skip_serializing_if = "ArrowStyle::is_default")]
     pub end_style: ArrowStyle,
+    /// A connector's preset and adjust values when they aren't the default elbow or curve through
+    /// the middle of its frame: what a document from Word routes around shapes with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connector: Option<ConnectorGeom>,
     /// A rounded rectangle's corner radius (`roundRect`'s `adj`, ECMA-376 §20.1.10.56): in
     /// 100000ths of the shorter side, at most [`MAX_CORNER`]; `None` draws [`DEFAULT_CORNER`].
     /// A [`ShapeKind::Frame`]'s border width (`frame`'s `adj1`), in the same units; `None`
@@ -274,6 +278,58 @@ pub const MAX_CORNER: u32 = 50_000;
 
 /// A rounded rectangle's corner radius without its own: 16% of the shorter side.
 pub const DEFAULT_CORNER: f32 = 0.16;
+
+/// An elbow or curved connector's DrawingML preset (`bentConnector2`…`5`, `curvedConnector2`…`5`)
+/// and adjust values, ECMA-376 presetShapeDefinitions: 3 bends where `adj1` says (a fraction of the
+/// frame's width), 4 adds a crossing leg at `adj2` (of its height), 5 a third leg at `adj3` (of
+/// its width), and 2 is a single bend at the far corner.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectorGeom {
+    /// The number in the preset's name, 2 to 5.
+    pub preset: u8,
+    /// The adjust values in 100000ths, as many as the preset takes; a missing one is
+    /// [`ConnectorGeom::DEFAULT_ADJ`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adj: Vec<i32>,
+}
+
+impl ConnectorGeom {
+    /// Every adjust value's default (the middle).
+    pub const DEFAULT_ADJ: i32 = 50_000;
+    /// The largest adjust value kept. The file's value is kept as it is across what an `i32`
+    /// holds: a connector Word draws in a frame a fraction of a point wide routes its legs with
+    /// values far outside 0..100000, so a tighter limit would move them (review). A file can hold
+    /// larger numbers still, which are clamped to this and [`Self::MIN_ADJ`].
+    pub const MAX_ADJ: i64 = i32::MAX as i64;
+    /// The smallest adjust value kept (see [`Self::MAX_ADJ`]).
+    pub const MIN_ADJ: i64 = i32::MIN as i64;
+
+    /// How many adjust values `preset` takes.
+    pub fn adj_count(preset: u8) -> usize {
+        usize::from(preset.clamp(2, 5)) - 2
+    }
+
+    /// `preset` with `adj` (missing ones take the default, extra ones are dropped, every one is
+    /// clamped to [`Self::MIN_ADJ`]..=[`Self::MAX_ADJ`]); `None` for the default: preset 3 bending at the middle.
+    pub fn new(preset: u8, adj: impl IntoIterator<Item = Option<i64>>) -> Option<ConnectorGeom> {
+        let preset = preset.clamp(2, 5);
+        let mut adj: Vec<i32> = adj
+            .into_iter()
+            .take(Self::adj_count(preset))
+            .map(|v| v.map_or(Self::DEFAULT_ADJ, |v| v.clamp(Self::MIN_ADJ, Self::MAX_ADJ) as i32))
+            .collect();
+        adj.resize(Self::adj_count(preset), Self::DEFAULT_ADJ);
+        (preset != 3 || adj != [Self::DEFAULT_ADJ]).then_some(ConnectorGeom { preset, adj })
+    }
+
+    /// This geometry as [`ConnectorGeom::new`] would make it: the preset clamped to 2..=5, as
+    /// many adjust values as it takes, each clamped. Geometry read back from a saved document
+    /// doesn't go through `new`, so writers normalize it first.
+    pub fn normalized(&self) -> Option<ConnectorGeom> {
+        Self::new(self.preset, self.adj.iter().map(|&v| Some(i64::from(v))))
+    }
+}
 
 /// A frame's border width without its own: `frame`'s default `adj1`, 12.5% of the shorter side.
 pub const DEFAULT_FRAME: f32 = 0.125;
@@ -488,6 +544,42 @@ pub fn reroute_group(group: &mut InlineObject) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A preset with no adjust values saves without `adj`, and must read back.
+    #[test]
+    fn connector_geometry_round_trips_through_json() {
+        for g in [ConnectorGeom::new(2, []), ConnectorGeom::new(4, [Some(20000), Some(80000)]), ConnectorGeom::new(5, [Some(-1), None, Some(3)])] {
+            let extra = ShapeExtra { connector: g.clone(), ..ShapeExtra::default() };
+            let json = serde_json::to_value(&extra).unwrap();
+            let back: ShapeExtra = serde_json::from_value(json.clone()).unwrap_or_else(|e| panic!("{json}: {e}"));
+            assert_eq!(back.connector, g, "{json}");
+        }
+        // Without one, nothing is written: older documents and the default stay as they were.
+        assert!(serde_json::to_value(ShapeExtra::default()).unwrap().get("connector").is_none());
+    }
+
+    // What a document says is normalized before it is written: a preset clamped, extra values
+    // dropped, every value clamped.
+    #[test]
+    fn normalized_geometry_is_what_new_makes() {
+        let raw = |preset, adj: Vec<i32>| ConnectorGeom { preset, adj };
+        assert_eq!(raw(2, vec![25000]).normalized(), Some(raw(2, vec![])));
+        assert_eq!(raw(9, vec![1, 2, 3, 4]).normalized(), Some(raw(5, vec![1, 2, 3])));
+        assert_eq!(raw(4, vec![i32::MAX]).normalized(), Some(raw(4, vec![i32::MAX, 50000])), "every i32 value is kept");
+        assert_eq!(raw(3, vec![i32::MIN]).normalized(), Some(raw(3, vec![i32::MIN])), "and i32::MIN");
+        assert_eq!(raw(3, vec![50000]).normalized(), None, "the default");
+    }
+
+    #[test]
+    fn connector_geometry_keeps_only_what_differs_from_the_default() {
+        assert_eq!(ConnectorGeom::new(3, []), None);
+        assert_eq!(ConnectorGeom::new(3, [Some(50000)]), None);
+        assert_eq!(ConnectorGeom::new(3, [None, Some(1)]), None, "an extra value is dropped");
+        assert_eq!(ConnectorGeom::new(4, [None, Some(1)]), Some(ConnectorGeom { preset: 4, adj: vec![50000, 1] }));
+        assert_eq!(ConnectorGeom::new(9, []).map(|g| g.preset), Some(5), "clamped to 2..=5");
+        assert_eq!(ConnectorGeom::new(3, [Some(i64::MIN)]).unwrap().adj, [i32::MIN]);
+        assert_eq!(ConnectorGeom::new(3, [Some(15_000_000)]).unwrap().adj, [15_000_000], "a narrow frame's far leg");
+    }
     use crate::para::{Float, GroupChild};
 
     /// Older JSON retains flat ends without adding a property; non-flat values round-trip.
