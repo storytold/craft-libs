@@ -405,8 +405,11 @@ fn corrupted_files_never_panic() {
         let bytes = img.write();
         assert!(read_all(&bytes).is_ok());
         let mut state = 0x9e37_79b9_u32;
-        // The gate runs a divisor's fraction of the rounds; nightly runs all.
-        for _ in 0..2000 / craft_testkit::hostile::divisor() {
+        let rounds = 2_000;
+        // The native gate can sample the sweep. The divisor reads a process environment variable.
+        #[cfg(not(target_arch = "wasm32"))]
+        let rounds = rounds / craft_testkit::hostile::divisor();
+        for _ in 0..rounds {
             let mut b = bytes.clone();
             for _ in 0..3 {
                 state ^= state << 13;
@@ -1002,6 +1005,54 @@ fn the_pixel_budget_is_charged_before_decoding_and_decoding_can_be_cancelled() {
     assert!(xcf.layer_pixels(0, &mut budget, GO).is_ok());
     assert_eq!(budget, 5);
     assert_eq!(xcf.layer_pixels(0, &mut MAX_PIXEL_BYTES.clone(), &|| false), Err(Error::Cancelled));
+}
+
+#[test]
+fn tile_tables_are_terminated_and_cannot_point_into_themselves() {
+    let mut img = TestImage::rgb8(1, 1);
+    img.compression = Compression::None;
+    img.layers.push(TestLayer::rgba("L", 1, 1, vec![22, 44, 66, 255]));
+    let mut file = W { out: img.write(), wide: true };
+    let xcf = open(&file.out).unwrap();
+    let hierarchy = xcf.image.layers[0].hierarchy;
+    let level = xcf.c.at(hierarchy + 12).ptr().unwrap();
+    let tile_slot = level + 8;
+    let terminator = tile_slot + 8;
+    assert_eq!(pixels(&xcf, 0).data[3], 1.0);
+
+    let valid = file.out.clone();
+    file.patch(terminator, 1);
+    assert!(read_all(&file.out).is_err(), "a nonzero tile-list terminator must be rejected");
+
+    file.out = valid;
+    file.patch(tile_slot, terminator);
+    assert!(read_all(&file.out).is_err(), "a tile cannot use the pointer table as pixel data");
+}
+
+#[test]
+fn nonincreasing_tile_offsets_are_rejected() {
+    let mut img = TestImage::rgb8(TILE + 1, 1);
+    img.compression = Compression::None;
+    img.layers.push(TestLayer::rgba("L", TILE + 1, 1, rgba(TILE + 1, 1, |_, _| [22, 44, 66, 255])));
+    let mut file = W { out: img.write(), wide: true };
+    let xcf = open(&file.out).unwrap();
+    let hierarchy = xcf.image.layers[0].hierarchy;
+    let level = xcf.c.at(hierarchy + 12).ptr().unwrap();
+    let first_tile = xcf.c.at(level + 8).ptr().unwrap();
+    assert!(read_all(&file.out).is_ok());
+    file.patch(level + 16, first_tile);
+    assert!(read_all(&file.out).is_err());
+}
+
+#[test]
+fn cancellation_precedes_drawable_traversal_and_budget_charge() {
+    let mut img = TestImage::rgb8(1, 1);
+    img.layers.push(TestLayer::rgba("L", 1, 1, vec![22, 44, 66, 255]));
+    let bytes = img.write();
+    let xcf = open(&bytes).unwrap();
+    let mut budget = 16;
+    assert_eq!(xcf.layer_pixels(0, &mut budget, &|| false), Err(Error::Cancelled));
+    assert_eq!(budget, 16);
 }
 
 #[test]
