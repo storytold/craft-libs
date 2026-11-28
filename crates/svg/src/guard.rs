@@ -185,10 +185,39 @@ fn references(text: &str) -> impl Iterator<Item = &str> {
     text.match_indices('&').filter_map(|(at, _)| {
         let rest = text.get(at + 1..)?;
         // Look no further than the longest name: a file of `&`s without `;` would be read quadratically.
-        let end = rest.bytes().take(MAX_NAME + 1).position(|b| b == b';')?;
-        let name = rest.get(..end)?;
+        let mut read = 0usize;
+        let end = rest.bytes().take(MAX_NAME + 1).position(|b| {
+            read += 1;
+            b == b';'
+        });
+        count_name_bytes(read);
+        let name = rest.get(..end?)?;
         (!name.is_empty() && name.len() <= MAX_NAME && !name.starts_with('#') && !name.contains(char::is_whitespace)).then_some(name)
     })
+}
+
+// The bytes `references` reads after each `&` while looking for the `;`, on this thread, and the
+// most a test lets it read: past that the count fails the test at once rather than after the rest
+// of the work.
+#[cfg(test)]
+std::thread_local! {
+    static NAME_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static NAME_BYTE_LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+
+#[inline]
+fn count_name_bytes(count: usize) {
+    #[cfg(test)]
+    {
+        let read = NAME_BYTES.with(|read| {
+            read.set(read.get().saturating_add(count));
+            read.get()
+        });
+        let limit = NAME_BYTE_LIMIT.with(std::cell::Cell::get);
+        assert!(read <= limit, "{read} bytes read for reference names, more than the {limit} allowed");
+    }
+    #[cfg(not(test))]
+    let _ = count;
 }
 
 /// What entity `name` expands to (bytes), references in its value followed.
@@ -501,11 +530,12 @@ mod tests {
         assert!(!expansion_too_large("<svg a=\"&amp;&#10;\"/>"));
         // Many `&`s with no `;` after them are read in linear time.
         let ampersands = format!("<!DOCTYPE svg [<!ENTITY a \"x\">]><svg id=\"{}\"/>", "&".repeat(1 << 20));
-        let start = std::time::Instant::now();
+        // At most the longest name and its `;` after each `&`; a quadratic read is past this limit
+        // long before its end.
+        NAME_BYTES.with(|read| read.set(0));
+        NAME_BYTE_LIMIT.with(|limit| limit.set(ampersands.matches('&').count() * (MAX_NAME + 1)));
         assert!(!expansion_too_large(&ampersands));
-        eprintln!("DIAG svg ampersand run read in {:?}", start.elapsed());
-        // A quadratic read would take hours; the bound is loose for a loaded machine.
-        assert!(start.elapsed() < std::time::Duration::from_secs(120), "{:?}", start.elapsed());
+        NAME_BYTE_LIMIT.with(|limit| limit.set(usize::MAX));
     }
 
     #[test]
