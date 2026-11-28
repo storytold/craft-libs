@@ -421,21 +421,40 @@ impl<'a> Parser<'a> {
     /// Skip a dropped command's arguments, as its `DROP_WITH_ARGS` entry lists them.
     fn drop_args(&mut self, name: &str) {
         if name == "let" {
-            for _ in 0..2 {
-                self.skip_spaces();
-                if matches!(self.t.get(self.pos), Some(Tok::Cmd(_))) {
-                    self.pos += 1;
+            // `\let\a=\b`: the new name, an optional `=` with one optional space after it, and the
+            // token whose meaning it takes. That token can be one character of text (`\let\a=x`)
+            // or a brace (`\let\bgroup={`), which then opens or closes no group.
+            self.skip_spaces();
+            if !matches!(self.t.get(self.pos), Some(Tok::Cmd(_))) {
+                return;
+            }
+            self.pos += 1;
+            let t = self.t;
+            if let Some(Tok::Text(s)) = t.get(self.pos) {
+                self.pos += 1;
+                let s = s.trim_start_matches(' ');
+                let s = s.strip_prefix('=').map_or(s, |r| r.strip_prefix(' ').unwrap_or(r));
+                let mut chars = s.chars();
+                if chars.next().is_some() {
+                    if !chars.as_str().is_empty() {
+                        self.pending = Some(chars.as_str());
+                    }
+                    return;
                 }
+            }
+            if matches!(t.get(self.pos), Some(Tok::Cmd(_) | Tok::Open | Tok::Close | Tok::Amp | Tok::Tie)) {
+                self.pos += 1;
             }
             return;
         }
         if name == "def" {
-            // `\def\x#1{…}`: the macro name and its parameter text come before the body.
+            // `\def\x#1{…}`: the macro name and its parameter text come before the body. The
+            // parameter text runs to the first `{` and can hold commands, as in `\def\x#1\stop{…}`.
             self.skip_spaces();
             if matches!(self.t.get(self.pos), Some(Tok::Cmd(_))) {
                 self.pos += 1;
             }
-            while matches!(self.t.get(self.pos), Some(Tok::Text(_))) {
+            while matches!(self.t.get(self.pos), Some(Tok::Text(_) | Tok::Cmd(_) | Tok::Amp | Tok::Tie)) {
                 self.pos += 1;
             }
         }
