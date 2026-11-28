@@ -201,8 +201,9 @@ fn checksum(kind: &str, deflated: &[u8]) -> Result<Vec<u8>, CryptError> {
     }
 }
 
-/// One encrypted file decrypted and inflated, to at most `max_entry` bytes.
-fn decrypt_file(data: &[u8], p: &Params, size: Option<usize>, password: &str, max_entry: usize) -> Result<Vec<u8>, CryptError> {
+/// One encrypted file decrypted and inflated, to at most `max_entry` bytes and at most the
+/// `room` the package's files before it left of `max_total`.
+fn decrypt_file(data: &[u8], p: &Params, size: Option<usize>, password: &str, limits: &Limits, room: u64) -> Result<Vec<u8>, CryptError> {
     if p.algorithm != AES256_CBC {
         let what = if p.algorithm.to_ascii_lowercase().contains("blowfish") { "Blowfish".to_string() } else { format!("{:?}", p.algorithm) };
         return Err(CryptError::Unsupported(format!("this file is encrypted with {what}, which isn't supported")));
@@ -216,15 +217,23 @@ fn decrypt_file(data: &[u8], p: &Params, size: Option<usize>, password: &str, ma
         return Err(CryptError::WrongPassword);
     }
     // A file that inflates past the size its manifest declares is damaged, or not decrypted
-    // right; one past the limit is refused for its size, so the password isn't asked for again.
-    let declared = size.filter(|s| *s <= max_entry);
-    match inflate(deflated, declared.unwrap_or(max_entry)) {
+    // right; one past a limit is refused for its size, so the password isn't asked for again.
+    let max_entry = usize::try_from(limits.max_entry).unwrap_or(usize::MAX);
+    let limit = max_entry.min(usize::try_from(room).unwrap_or(usize::MAX));
+    let declared = size.filter(|s| *s <= limit);
+    match inflate(deflated, declared.unwrap_or(limit)) {
         Ok(Some(out)) => Ok(out),
+        Ok(None) if declared.is_none() && limit < max_entry => Err(too_large_together(limits)),
         Ok(None) if declared.is_none() => {
             Err(CryptError::Unsupported(format!("a file of the package is larger than the limit of {max_entry} bytes")))
         }
         _ => Err(CryptError::WrongPassword),
     }
+}
+
+/// The refusal of a package whose plain files are larger than `max_total` together.
+fn too_large_together(limits: &Limits) -> CryptError {
+    CryptError::Unsupported(format!("the package's files are larger than the limit of {} bytes together", limits.max_total))
 }
 
 /// Raw deflate data inflated: `Ok(None)` when it is longer than `limit`, an error when it is
@@ -268,7 +277,6 @@ pub fn decrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, CryptError> {
 /// [`CryptError::Unsupported`], not [`CryptError::WrongPassword`].
 pub fn decrypt_with(bytes: &[u8], password: &str, limits: &Limits) -> Result<Vec<u8>, CryptError> {
     let broken = |e: craft_zip::Error| CryptError::Unsupported(format!("not a valid package ({e})"));
-    let max_entry = usize::try_from(limits.max_entry).unwrap_or(usize::MAX);
     let mut z = open_zip(bytes, limits.max_entries, limits.max_total)?;
     let manifest = read_entry(&mut z, MANIFEST_PATH, limits.max_entry).unwrap_or_default();
     let encrypted = read_manifest(&manifest);
@@ -284,7 +292,7 @@ pub fn decrypt_with(bytes: &[u8], password: &str, limits: &Limits) -> Result<Vec
         let data = match encrypted.iter().find(|(p, ..)| *p == name) {
             Some((_, p, size)) => {
                 charge(&mut work, p)?;
-                let plain = decrypt_file(&data, p, *size, password, max_entry)?;
+                let plain = decrypt_file(&data, p, *size, password, limits, limits.max_total.saturating_sub(written))?;
                 checked = true;
                 plain
             }
@@ -293,7 +301,7 @@ pub fn decrypt_with(bytes: &[u8], password: &str, limits: &Limits) -> Result<Vec
         };
         written = written.saturating_add(data.len() as u64);
         if written > limits.max_total {
-            return Err(CryptError::Unsupported(format!("the package's files are larger than the limit of {} bytes together", limits.max_total)));
+            return Err(too_large_together(limits));
         }
         let compression = if name == "mimetype" { craft_zip::Compression::Stored } else { craft_zip::Compression::Deflated };
         w.add(&name, &data, compression).map_err(broken)?;
