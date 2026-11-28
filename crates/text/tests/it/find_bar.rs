@@ -4,7 +4,11 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use craft_text::find::{FindMatches, FindOptions};
-use craft_text::ui::find::{FindBar, FindBarState};
+use craft_text::ui::find::{FindBar, FindBarState, FindStep};
+use craft_ui::runtime::commands::CommandState;
+use craft_ui::runtime::env::WindowKey;
+use craft_ui::runtime::frame::take_output;
+use craft_ui::shell::AppShell;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Event, ImeEvent, Key, Modifiers};
 
@@ -131,4 +135,45 @@ fn the_find_field_has_no_clear_button_and_escape_clears_it() {
     bar.fixture.key(Key::Escape, Modifiers::NONE);
     bar.fixture.frame(Vec::new()).settle();
     assert_eq!(bar.query(), "", "Escape clears the query");
+}
+
+/// Previous and Next are pressed with the pointer, not only by their keys: each press steps the current match.
+#[trial]
+fn pressing_next_and_previous_steps_the_current_match() {
+    let matches = Rc::new(RefCell::new(FindMatches::new(0)));
+    matches.borrow_mut().set_page(0, vec![0..3, 10..13, 20..23]);
+    let stepped = Rc::new(Cell::new(0));
+    let (shown_matches, shown_stepped) = (Rc::clone(&matches), Rc::clone(&stepped));
+    let mut query = String::from("cat");
+    let mut options = FindOptions::default();
+    // In an app's shell, as an app shows the bar: the shell's body is where app commands are delivered. Before each
+    // frame the app takes the frame's output, with the app commands no body took (`embed::before_input`): a command
+    // the bar leaves for a later pass is the app's by then.
+    let mut fixture = Fixture::new(move |ui| {
+        if ui.ctx().current_pass_index() == 0 {
+            let _ = take_output(ui.ctx());
+        }
+        AppShell::new(WindowKey::main())
+            .body(|ui, _, _| {
+                if FindBar::new(&mut query, &mut options, &mut shown_matches.borrow_mut()).show(ui).stepped {
+                    shown_stepped.set(shown_stepped.get() + 1);
+                }
+            })
+            .show(ui, &mut ());
+    });
+    // The app enables its find commands while a document is open.
+    fixture.command_state(FindStep::Next, CommandState::new()).command_state(FindStep::Previous, CommandState::new());
+    fixture.frame(Vec::new()).settle();
+    let start = matches.borrow().current();
+
+    let next = fixture.by_label("Find Next").expect("the Next button");
+    fixture.click(&next).idle(2);
+    let after_next = matches.borrow().current();
+    assert_ne!(after_next, start, "pressing Next moved the current match");
+    assert_eq!(stepped.get(), 1, "the bar reported the step");
+
+    let previous = fixture.by_label("Find Previous").expect("the Previous button");
+    fixture.click(&previous).idle(2);
+    assert_eq!(matches.borrow().current(), start, "pressing Previous went back to the match before");
+    assert_eq!(stepped.get(), 2, "the bar reported the step");
 }
