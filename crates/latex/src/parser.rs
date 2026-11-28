@@ -266,7 +266,7 @@ impl<'a> Parser<'a> {
         if let Some(p) = self.pending.take() {
             // Text left after the previous argument's `]` comes first: in `\makebox[3cm][l]` the
             // second argument is in the first one's token and waits there.
-            let Some(body) = p.trim_start().strip_prefix('[') else {
+            let Some(body) = p.trim_ascii_start().strip_prefix('[') else {
                 self.pending = Some(p);
                 return None;
             };
@@ -281,8 +281,9 @@ impl<'a> Parser<'a> {
                 return None;
             };
             // LaTeX skips spaces before an optional argument, and in `\\begin{figure} [h]` the
-            // space and the `[` share one text token.
-            let Some(body) = s.trim_start().strip_prefix('[') else {
+            // space and the `[` share one text token. A no-break space is not skipped, so a `[` after
+            // it is text.
+            let Some(body) = s.trim_ascii_start().strip_prefix('[') else {
                 self.pos = save;
                 return None;
             };
@@ -372,6 +373,27 @@ impl<'a> Parser<'a> {
                 self.t.get(i..i + 1).unwrap_or_default()
             }
             _ => &[],
+        }
+    }
+
+    /// The first character of the text waiting after a `]`, taken as a one-character argument:
+    /// TeX reads the `0` in `\rotatebox[origin=c]0{x}` as the angle. The rest keeps waiting. None
+    /// when nothing but ASCII spaces waits, which TeX skips before an argument.
+    fn pending_char(&mut self) -> Option<&'a str> {
+        let p = self.pending.take()?.trim_ascii_start();
+        let n = p.chars().next()?.len_utf8();
+        let c = p.get(..n)?;
+        let rest = p.get(n..).unwrap_or("");
+        if !rest.is_empty() {
+            self.pending = Some(rest);
+        }
+        Some(c)
+    }
+
+    /// Skips a mandatory argument that can follow an optional one.
+    fn skip_arg(&mut self) {
+        if self.pending_char().is_none() {
+            let _ = self.arg_tokens();
         }
     }
 
@@ -771,33 +793,36 @@ impl<'a> Parser<'a> {
             }
             "parbox" | "raisebox" | "scalebox" | "resizebox" | "resizebox*" | "rotatebox" => {
                 // The box's position, size, scale or angle place it; only its last argument is
-                // text.
+                // text. An argument after a `]` can be the next character in the same token.
                 match name {
                     "parbox" => {
                         let _ = self.opt_arg();
                         let _ = self.opt_arg();
                         let _ = self.opt_arg();
-                        let _ = self.arg_raw();
+                        self.skip_arg();
                     }
                     "raisebox" => {
-                        let _ = self.arg_raw();
+                        self.skip_arg();
                         let _ = self.opt_arg();
                         let _ = self.opt_arg();
                     }
                     "scalebox" => {
-                        let _ = self.arg_raw();
+                        self.skip_arg();
                         let _ = self.opt_arg();
                     }
                     "rotatebox" => {
                         let _ = self.opt_arg();
-                        let _ = self.arg_raw();
+                        self.skip_arg();
                     }
                     _ => {
-                        let _ = self.arg_raw();
-                        let _ = self.arg_raw();
+                        self.skip_arg();
+                        self.skip_arg();
                     }
                 }
-                self.with_arg(|_| {});
+                match self.pending_char() {
+                    Some(c) => self.text(&ligatures(c)),
+                    None => self.with_arg(|_| {}),
+                }
             }
             "multicolumn" | "multirow" => {
                 // Outside a tabular: keep the content.
