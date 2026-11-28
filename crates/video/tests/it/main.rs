@@ -16,6 +16,10 @@ mod mjpeg;
 #[path = "dnx/main.rs"]
 mod dnx;
 
+#[cfg(feature = "dv-decode")]
+#[path = "dv.rs"]
+mod dv;
+
 #[cfg(feature = "apv")]
 #[path = "apv/main.rs"]
 mod apv;

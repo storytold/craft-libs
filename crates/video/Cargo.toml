@@ -82,6 +82,9 @@ theora-decode = ["craft-media/bitstream"]
 theora-encode = ["craft-media/bitstream"]
 # Tiled AV1 fallback for frames that exceed the clean-room encoder's single-tile limits.
 av1-large-encode = ["av1-encode", "dep:rav1e"]
+# DV (IEC 61834-2, SMPTE ST 314): decoder of the 25 Mb/s and DVCPRO50 pictures; `dv` turns it on too.
+dv = ["dv-decode"]
+dv-decode = []
 # Sierra VMD video (8-bit paletted): decoder; `vmd` turns it on too.
 vmd = ["vmd-decode"]
 vmd-decode = []

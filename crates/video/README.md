@@ -5,8 +5,8 @@ ProRes and H.264.
 
 - Input and output are byte slices and planar sample buffers; the crate opens no files itself
   and performs no filesystem I/O.
-- Implemented from published standards and RFCs (SMPTE ST 2019-1, RFC 6386, SMPTE RDD 36 and
-  ITU-T H.264). Bink has no published specification: its decoder was derived by black-box
+- Implemented from published standards and RFCs (SMPTE ST 2019-1, RFC 6386, SMPTE RDD 36,
+  ITU-T H.264, and IEC 61834-2 / SMPTE ST 314 for DV). Bink has no published specification: its decoder was derived by black-box
   probing, as its README describes.
 - Tested against ffmpeg as an external oracle with roundtrips, hostile fuzzing, and conformance vectors.
   No `unsafe`, no panics on corrupt streams. Builds for `wasm32-unknown-unknown`.
@@ -34,6 +34,7 @@ No codec feature is on by default.
 | `av1` | [`av1`](src/av1/decode/README.md) | AV1 (AOMedia Video 1): decoder (`av1-decode` alone) and clean-room encoder (`av1-encode`); tiled rav1e fallback for large frames (`av1-large-encode`) |
 | `vmd` | `vmd` | Sierra VMD video (the 8-bit paletted pictures of Sierra and Coktel Vision game videos): decoder (`vmd-decode`) |
 | `bink` | [`bink`](src/bink/README.md) | Bink video (Bink 1, revisions `f` and `i`): decoder (`bink-decode`) |
+| `dv` | [`dv`](src/dv/README.md) | DV (IEC 61834-2, SMPTE ST 314): consumer DV, DVCAM and DVCPRO at 25 Mb/s (4:1:1, 4:2:0) and DVCPRO50 (4:2:2): decoder (`dv-decode`) |
 | `threads` | — | Multi-threaded slice/row parallelism via `rayon` |
 
 ## Decoded frames
