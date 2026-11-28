@@ -1757,7 +1757,8 @@ fn deflate_rows(
 /// and completes the flush: when a sync flush fills the buffer, miniz_oxide (flate2's former Rust
 /// backend) can return before compressing the last lookahead bytes, and the next call only
 /// drains the pending output, so a resumed flush silently drops data. `None` (the caller then
-/// uses the serial encoder) if the single call did not finish.
+/// uses the serial encoder) if the single call did not finish. The returned bytes keep no
+/// spare capacity, because the caller holds every band until it joins them into one stream.
 fn deflate_band(filtered: &[u8], lvl: flate2::Compression, last: bool) -> Option<Vec<u8>> {
     let mut c = flate2::Compress::new(lvl, false);
     // Stored blocks cost 5 bytes per 64 KiB, the flush an empty stored block: 1/8 is ample.
@@ -1766,7 +1767,10 @@ fn deflate_band(filtered: &[u8], lvl: flate2::Compression, last: bool) -> Option
     let flush = if last { flate2::FlushCompress::Finish } else { flate2::FlushCompress::Sync };
     let status = c.compress_vec(filtered, &mut z, flush).ok()?;
     let done = if last { status == flate2::Status::StreamEnd } else { c.total_in() as usize == filtered.len() && z.len() < z.capacity() };
-    done.then_some(z)
+    done.then(|| {
+        z.shrink_to_fit();
+        z
+    })
 }
 
 /// One scanline with the adaptive filter choice, appended to `out` (type byte + data).
@@ -2253,6 +2257,19 @@ mod parallel_tests {
                 d.decompress_vec(&z, &mut back, flate2::FlushDecompress::Sync).unwrap();
                 assert!(back == data, "k {k} len {len} last {last}: {} of {len} bytes", back.len());
             }
+        }
+    }
+
+    /// Every band is held until the stream is joined, so a band keeps only the bytes it holds,
+    /// not the worst-case buffer it was deflated into (about 1.125 times the image in all).
+    #[test]
+    fn deflated_bands_keep_no_spare_capacity() {
+        let (w, h, bpp) = (1024usize, 600usize, 3usize);
+        let px: Vec<u8> = (0..w * h * bpp).map(|i| (i % 7) as u8).collect();
+        let parts = deflate_rows(&px, None, w * bpp, bpp, band_rows(w * bpp), flate2::Compression::default(), true, 2).unwrap();
+        assert!(parts.len() > 2);
+        for (i, p) in parts.iter().enumerate() {
+            assert!(p.z.capacity() <= p.z.len() + 64, "band {i}: capacity {} for {} bytes of {}", p.z.capacity(), p.z.len(), p.len);
         }
     }
 
