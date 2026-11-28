@@ -309,6 +309,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(feature = "ui")]
     const APP: AppInfo = AppInfo { id: "test", name: "Test", version: "1.0" };
 
     /// A write to a path set with `failing_writes` returns the refused-write error and keeps what the path held; every
