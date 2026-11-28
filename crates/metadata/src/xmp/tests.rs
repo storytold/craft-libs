@@ -886,9 +886,39 @@ fn paths_are_not_built_past_the_key_budget() {
         doc.push_str(&format!("</lc:{level}>"));
     }
     doc.push_str("</rdf:Description></rdf:RDF></x:xmpmeta>");
-    let t = std::time::Instant::now();
+    PATH_BYTES.with(|bytes| bytes.set(0));
     let _ = parse_xmp(&doc);
-    assert!(t.elapsed().as_secs() < 10, "took {:?}", t.elapsed());
+    // Each path built is charged to the budget, or is a charged struct path and its "/".
+    let built = PATH_BYTES.with(std::cell::Cell::get);
+    let structs = 100_004;
+    assert!(built <= 2 * MAX_KEY_BYTES + structs, "{built} bytes of paths built");
+}
+
+/// A field attribute whose path no longer fits the budget, while its element's own path still
+/// does, left the budget as it was: each of its siblings then copied the long ancestor path again.
+#[test]
+fn field_paths_past_the_key_budget_are_not_built_for_each_sibling() {
+    // One struct of n letters, then a field that spends the budget down to n + 10 bytes: room for
+    // the path of `lc:e` under the struct (n + 8 bytes) but not for that of its field `lc:f`
+    // (n + 13).
+    let n = 200_000;
+    let level = "n".repeat(n);
+    let drain = "a".repeat(MAX_KEY_BYTES - 3 * n - 25);
+    let mut doc = format!(
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:lc=\"{}\"><rdf:RDF><rdf:Description><lc:{level} rdf:parseType=\"Resource\"><lc:d lc:{drain}=\"1\"/>",
+        LC.uri
+    );
+    for _ in 0..20_000 {
+        doc.push_str("<lc:e lc:f=\"1\"/>");
+    }
+    doc.push_str(&format!("</lc:{level}></rdf:Description></rdf:RDF></x:xmpmeta>"));
+    PATH_BYTES.with(|bytes| bytes.set(0));
+    let data = parse_xmp(&doc).unwrap_or_else(|e| panic!("{e}"));
+    assert!(data.properties_truncated);
+    assert!(data.properties.contains_key(&format!("lc:{level}/lc:d/lc:{drain}")));
+    assert!(!data.properties.contains_key(&format!("lc:{level}/lc:e/lc:f")));
+    let built = PATH_BYTES.with(std::cell::Cell::get);
+    assert!(built <= 2 * MAX_KEY_BYTES, "{built} bytes of paths built");
 }
 
 /// The caller's namespace is declared where the read-only `crs` sits in the table, is known to the

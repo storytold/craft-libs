@@ -567,7 +567,7 @@ fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<
             *truncated = true;
             continue;
         }
-        let key = format!("{prefix}{k}");
+        let key = build_path(format!("{prefix}{k}"));
         if take_key_bytes(&key, budget, truncated) {
             props.entry(key).or_default().push(v.clone());
         }
@@ -575,6 +575,20 @@ fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<
     for c in &d.children {
         collect_property(c, prefix, props, budget, truncated);
     }
+}
+
+// The bytes of every property path `collect_description` and `collect_property` build, on this
+// thread.
+#[cfg(test)]
+std::thread_local! {
+    static PATH_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[inline]
+fn build_path(path: String) -> String {
+    #[cfg(test)]
+    PATH_BYTES.with(|bytes| bytes.set(bytes.get().saturating_add(path.len())));
+    path
 }
 
 /// Charge one flattened key's length to the key budget; `false` when the budget is spent (the
@@ -596,8 +610,11 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
         *truncated = true;
         return;
     }
-    let key = format!("{prefix}{}", p.name);
+    // Every path built below is charged to the budget, a struct's prefix with its key: a path
+    // built and then refused would be copied again for each sibling while the budget stays put.
+    let path = || build_path(format!("{prefix}{}", p.name));
     if let Some(arr) = p.children.iter().find(|c| matches!(c.name.as_str(), "rdf:Seq" | "rdf:Bag" | "rdf:Alt")) {
+        let key = path();
         let mut items: Vec<(bool, String)> = arr
             .children
             .iter()
@@ -614,32 +631,39 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
         }
         return;
     }
-    let struct_prefix = format!("{key}/");
     // a struct's path is charged like a key before its fields copy it: that work too is bounded
     // by the budget, kept fields or not
     let is_struct = p.attr("rdf:parseType") == Some("Resource") || p.children.iter().any(|c| c.name == "rdf:Description");
-    if is_struct && !take_key_bytes(&key, budget, truncated) {
-        return;
-    }
-    if p.attr("rdf:parseType") == Some("Resource") {
-        // a Resource struct carries fields as attributes as well as child elements, like a nested Description
-        collect_description(p, &struct_prefix, props, budget, truncated);
-        return;
-    }
-    if let Some(d) = p.children.iter().find(|c| c.name == "rdf:Description") {
-        collect_description(d, &struct_prefix, props, budget, truncated);
+    if is_struct {
+        let key = path();
+        if !take_key_bytes(&key, budget, truncated) {
+            return;
+        }
+        let struct_prefix = build_path(format!("{key}/"));
+        if p.attr("rdf:parseType") == Some("Resource") {
+            // a Resource struct carries fields as attributes as well as child elements, like a nested Description
+            collect_description(p, &struct_prefix, props, budget, truncated);
+        } else if let Some(d) = p.children.iter().find(|c| c.name == "rdf:Description") {
+            collect_description(d, &struct_prefix, props, budget, truncated);
+        }
         return;
     }
     let field_attrs: Vec<&(String, String)> = p.attrs.iter().filter(|(k, _)| !is_rdf_meta_attr(k)).collect();
     if !field_attrs.is_empty() && p.children.is_empty() && p.text.trim().is_empty() {
         for (k, v) in field_attrs {
-            let full = format!("{struct_prefix}{k}");
+            // the budget is checked before the path is built, as for a description's attributes
+            if *budget < prefix.len().saturating_add(p.name.len()).saturating_add(1).saturating_add(k.len()) {
+                *truncated = true;
+                continue;
+            }
+            let full = build_path(format!("{prefix}{}/{k}", p.name));
             if take_key_bytes(&full, budget, truncated) {
                 props.entry(full).or_default().push(v.clone());
             }
         }
         return;
     }
+    let key = path();
     let v = p.attr("rdf:resource").map(str::to_string).unwrap_or_else(|| p.text.trim().to_string());
     if take_key_bytes(&key, budget, truncated) {
         props.entry(key).or_default().push(v);
