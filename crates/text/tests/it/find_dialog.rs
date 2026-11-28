@@ -109,3 +109,64 @@ fn escape_in_find_what_closes_the_dialog_and_returns_the_focus() {
         }
     }
 }
+
+#[trial]
+fn special_menu_includes_section_paragraph_and_wildcard_helpers() {
+    let dialog = Rc::new(RefCell::new(FindReplaceDialog::new("", FindTab::Find).word(true)));
+    let shown = Rc::clone(&dialog);
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = shown.borrow_mut().show(ui, &DialogStack::default());
+    });
+    fixture.room(egui::vec2(900.0, 1000.0)).settle();
+
+    let menu_labels = |fixture: &Fixture| -> Vec<String> {
+        fixture.by_role(Role::MENU_ITEM).iter().filter_map(|item| fixture.tree().name_of(item.node).map(str::to_owned)).collect()
+    };
+    let pick_item = |fixture: &mut Fixture, label: &str| {
+        let item = fixture
+            .by_role(Role::MENU_ITEM)
+            .into_iter()
+            .find(|item| fixture.tree().name_of(item.node) == Some(label))
+            .unwrap_or_else(|| panic!("menu item {label}"));
+        fixture.click(&item).settle();
+    };
+
+    press(&mut fixture, "Search Options");
+    press(&mut fixture, "Special");
+    let find_labels = menu_labels(&fixture);
+    assert!(find_labels.iter().any(|l| l == "Section Character  ^%"), "missing Section Character in {find_labels:?}");
+    assert!(find_labels.iter().any(|l| l == "Paragraph Character  ^v"), "missing Paragraph Character in {find_labels:?}");
+    pick_item(&mut fixture, "Section Character  ^%");
+    assert_eq!(dialog.borrow().json_fields().expect("fields")["find"], json!("^%"));
+
+    let wildcards = fixture.by_label("Use wildcards").expect("Use wildcards checkbox");
+    fixture.click(&wildcards).settle();
+    press(&mut fixture, "Special");
+    let wild_labels = menu_labels(&fixture);
+    for expected in [
+        "Character in Range  [-]",
+        "Expression  ()",
+        "Not  [!]",
+        "Num Occurrences  {,}",
+        "Previous 1 or More  @",
+        "Section Character  ^%",
+        "Paragraph Character  ^v",
+    ] {
+        assert!(wild_labels.iter().any(|l| l == expected), "missing `{expected}` in {wild_labels:?}");
+    }
+    pick_item(&mut fixture, "Character in Range  [-]");
+    assert_eq!(dialog.borrow().json_fields().expect("fields")["find"], json!("^%[-]"));
+
+    let replace_tab = fixture.by_role(Role::TAB).into_iter().find(|t| fixture.tree().name_of(t.node) == Some("Replace")).expect("Replace tab");
+    fixture.click(&replace_tab).settle();
+    let replace_box = fixture
+        .by_role(Role::TEXT_INPUT)
+        .into_iter()
+        .find(|input| fixture.tree().name_of(input.node) == Some("Replace with:"))
+        .expect("Replace with input");
+    fixture.click(&replace_box).settle();
+    press(&mut fixture, "Special");
+    let replace_labels = menu_labels(&fixture);
+    assert!(replace_labels.iter().any(|l| l == "Section Character  ^%"), "missing Section Character in Replace {replace_labels:?}");
+    assert!(replace_labels.iter().any(|l| l == "Paragraph Character  ^v"), "missing Paragraph Character in Replace {replace_labels:?}");
+}
