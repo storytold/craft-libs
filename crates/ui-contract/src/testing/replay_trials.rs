@@ -27,6 +27,29 @@ fn a_repaint_from_a_job_thread_leaves_the_running_pass_s_records_alone() {
     assert_eq!(joined, Some(true), "the job thread's repaint request returns");
 }
 
+// The same for a timed wake (the control server's `WindowHost::repaint_in`): it reads no pass state either. Reading the
+// pass clock there took the state from the UI thread, and a pass that started meanwhile ran on an empty one, with no
+// command sets: every command showed its id as its label, and a tool rail lost its icons.
+#[trial]
+fn a_timed_repaint_from_a_job_thread_reads_no_pass_state() {
+    let mut frames = Frames::new();
+    let mut unbound = None;
+    frames.frame(Vec::new(), |ui| {
+        let ctx = ui.ctx().clone();
+        replay::open(&ctx);
+        let worker = ctx.clone();
+        unbound = std::thread::spawn(move || {
+            let before = crate::runtime::pass_state::unbound_reads();
+            repaint::request_after(&worker, egui::ViewportId::ROOT, 0.5);
+            crate::runtime::pass_state::unbound_reads() - before
+        })
+        .join()
+        .ok();
+        let _record = replay::close(&ctx, fixture::layer_of(ui));
+    });
+    assert_eq!(unbound, Some(0), "the job thread's timed repaint request returns and reads no pass state");
+}
+
 /// Records one frame's run of `run` in `frames`.
 fn record(frames: &mut Frames, mut run: impl FnMut(&egui::Context)) -> replay::Record {
     let mut record = None;

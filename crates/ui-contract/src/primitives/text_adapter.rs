@@ -442,6 +442,11 @@ pub(crate) fn select(ctx: &Context, id: Id, anchor: usize, caret: usize) {
     text_edit::select(ctx, id, anchor, caret);
 }
 
+/// Forgets the Undo/Redo history of the text widget `id`.
+pub(crate) fn clear_history(ctx: &Context, id: Id) {
+    text_edit::clear_history(ctx, id);
+}
+
 /// `TextOptions::arrows_from_end`: before the widget reads a plain Left or Right, a selection of the whole text
 /// collapses to its end.
 fn arrows_from_end(ctx: &Context, widget: Id, len: usize) {

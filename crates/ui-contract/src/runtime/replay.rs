@@ -566,6 +566,15 @@ pub(crate) fn note_wake(ctx: &Context, at: f64) {
     with_open(ctx, |facts| facts.wake = min_wake(facts.wake, Some(at)));
 }
 
+/// Notes that the running code asks to be shown again `seconds` from now on the pass clock. The clock is read only
+/// while a record is open: a timed wake from a job's thread or the control server's reads no pass state, so it never
+/// takes the state from a pass that starts meanwhile (which would run on an empty one).
+pub(crate) fn note_wake_in(ctx: &Context, seconds: f64) {
+    if any_open() {
+        note_wake(ctx, frame::clock(ctx) + seconds);
+    }
+}
+
 /// Notes that the running code showed the overlay layer `layer` at the screen rect `rect`. Called by the journaled
 /// registration of the layer's `Area`, so a record that replays it notes it again in the records open around it.
 pub(crate) fn note_overlay(ctx: &Context, layer: Layer, rect: Rect) {
