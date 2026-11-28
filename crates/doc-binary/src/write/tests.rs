@@ -705,3 +705,52 @@ fn compound_border_lines_round_trip() {
     let got: Vec<_> = r.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.borders.as_ref()?.bottom.map(|b| b.style)).collect();
     assert_eq!(got, styles);
 }
+
+/// Original [MS-DOC] section-property records: the compatibility start precedes the
+/// full-width version (2.2.5), with the recommended legacy limit and required u32 limit (2.6.4).
+#[test]
+fn section_page_numbers_writer_emits_legacy_then_full_start() {
+    for (start, expected) in [(Some(70_007), Some((32_766u16, 70_007u32))), (Some(u32::MAX), Some((32_766, 0x7FFF_FFFE))), (None, None)] {
+        let props = SectionProps { page_num_start: start, page_num_format: craft_wordmodel::section::NumFormat::LowerRoman, ..Default::default() };
+        let encoded = super::grpprl::sepx(&props);
+        let numbering: Vec<_> = crate::sprm::iter(&encoded.0)
+            .filter(|prl| matches!(prl.op, 0x3011 | 0x501C | 0x7044 | 0x300E))
+            .map(|prl| (prl.op, prl.operand.to_vec()))
+            .collect();
+        let operand = |op| numbering.iter().rev().find(|(code, _)| *code == op).map(|(_, bytes)| bytes.as_slice());
+        assert_eq!(operand(0x300E), Some([2].as_slice()), "the numbering format is independent from restart");
+        if let Some((legacy, full)) = expected {
+            assert_eq!(operand(0x3011), Some([1].as_slice()));
+            assert_eq!(operand(0x501C), Some(legacy.to_le_bytes().as_slice()));
+            assert_eq!(operand(0x7044), Some(full.to_le_bytes().as_slice()));
+            let legacy_at = numbering.iter().rposition(|(op, _)| *op == 0x501C).expect("legacy start");
+            let full_at = numbering.iter().rposition(|(op, _)| *op == 0x7044).expect("full-width start");
+            assert!(legacy_at < full_at, "the newer start must take effect after its compatibility form");
+        } else {
+            for op in [0x3011, 0x501C, 0x7044] {
+                assert!(operand(op).is_none(), "a continuing section does not save a restart/start property");
+            }
+        }
+    }
+}
+
+#[test]
+fn section_page_numbers_survive_public_write_read() {
+    for start in [70_007, 0x7FFF_FFFE] {
+        let mut first = para("Opening");
+        first.section = Some(Box::new(SectionProps {
+            page_num_start: Some(start),
+            page_num_format: craft_wordmodel::section::NumFormat::LowerRoman,
+            ..Default::default()
+        }));
+        let mut doc = doc_of(vec![first, para("Continuation")]);
+        doc.last_section.page_num_format = craft_wordmodel::section::NumFormat::UpperLetter;
+        let reopened = round(&doc);
+        assert_eq!(texts(&reopened), texts(&doc));
+        let first = reopened.body[0].as_para().and_then(|p| p.section.as_ref()).expect("saved first section");
+        assert_eq!(first.page_num_start, Some(start), "save must not reduce the start to the legacy operand's range");
+        assert_eq!(first.page_num_format, craft_wordmodel::section::NumFormat::LowerRoman);
+        assert_eq!(reopened.last_section.page_num_start, None, "the last section still continues");
+        assert_eq!(reopened.last_section.page_num_format, craft_wordmodel::section::NumFormat::UpperLetter);
+    }
+}

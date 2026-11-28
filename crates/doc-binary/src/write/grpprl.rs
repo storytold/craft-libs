@@ -663,7 +663,8 @@ const S_HDR_TOP: u16 = 0xB017;
 const S_HDR_BOTTOM: u16 = 0xB018;
 const S_VJC: u16 = 0x301A;
 const S_LNN_MIN: u16 = 0x501B;
-const S_PGN_START: u16 = 0x501C;
+const S_PGN_START97: u16 = 0x501C;
+const S_PGN_START: u16 = 0x7044;
 const S_ORIENTATION: u16 = 0x301D;
 const S_XA_PAGE: u16 = 0xB01F;
 const S_YA_PAGE: u16 = 0xB020;
@@ -700,7 +701,10 @@ pub(crate) fn sepx(s: &SectionProps) -> Grpprl {
     }
     if let Some(start) = s.page_num_start {
         g.u8(S_PGN_RESTART, 1);
-        g.u16(S_PGN_START, start.min(0x7FFF) as u16);
+        // [MS-DOC] 2.6.4 recommends a legacy start <= 32766 and requires the
+        // full-width start <= 0x7FFFFFFE. Emit the older version first (2.2.5).
+        g.u16(S_PGN_START97, start.min(32_766) as u16);
+        g.u32(S_PGN_START, start.min(0x7FFF_FFFE));
     }
     if s.page_num_format != NumFormat::Decimal {
         g.u8(S_NFC_PGN, nfc(s.page_num_format));
