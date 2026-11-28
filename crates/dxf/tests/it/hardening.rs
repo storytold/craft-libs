@@ -1,6 +1,6 @@
 //! Hostile-input hardening of the DXF reader and writer (#1025): one regression test per finding.
 
-use craft_dxf::{Tag, Value, parse, parse_with_limit, sections, write_ascii, write_binary};
+use craft_dxf::{DxfError, Tag, Value, parse, parse_with_limit, sections, write_ascii, write_binary};
 
 const SENTINEL: &[u8] = b"AutoCAD Binary DXF\r\n\x1a\0";
 
@@ -285,4 +285,93 @@ fn east_asian_file_that_is_all_utf8_reads_as_utf8() {
         assert_eq!(t[3].str(), "ñ");
         assert_eq!(t[4].str(), "plain");
     }
+}
+
+/// A binary DXF body in the R13+ layout: each group is its code and its value's bytes as stored
+/// (a string with its terminating zero).
+fn binary(groups: &[(i16, &[u8])]) -> Vec<u8> {
+    let mut b = SENTINEL.to_vec();
+    for (code, value) in groups {
+        b.extend_from_slice(&code.to_le_bytes());
+        b.extend_from_slice(value);
+    }
+    b
+}
+
+/// storytold/cadcraft#1922 (F-06 e): the binary reader grew its tag list by doubling, so near the
+/// tag limit it briefly held up to three times its tags' size. It counts the groups first and
+/// reserves once, so the count has to stop where the parse stops, in every text state.
+#[test]
+fn a_binary_tag_list_is_allocated_once_at_its_final_length() {
+    let real = 1.5f64.to_le_bytes();
+    let (i16_, i32_, i64_) = (7i16.to_le_bytes(), 7i32.to_le_bytes(), 7i64.to_le_bytes());
+    let mut r12 = SENTINEL.to_vec();
+    for group in [&b"\0SECTION\0\x02ENTITIES\0\0LINE\0\x080\0\x0A"[..], &real, b"\xFF\xE8\x03x\0\x3E", &i16_, b"\0ENDSEC\0\0EOF\0"] {
+        r12.extend_from_slice(group);
+    }
+    let cases = [
+        (
+            "every kind of value, a look-alike with a leading space, an EOF with trailing spaces and a group after it",
+            binary(&[
+                (0, b"SECTION\0"),
+                (2, b"ENTITIES\0"),
+                (0, b"LINE\0"),
+                (8, b"0\0"),
+                (10, &real),
+                (62, &i16_),
+                (90, &i32_),
+                (160, &i64_),
+                (290, b"\x01"),
+                (310, b"\x02\xAB\xCD"),
+                (0, b"ENDSEC\0"),
+                (0, b" EOF\0"),
+                (0, b"EOF  \0"),
+                (1, b"after\0"),
+            ]),
+        ),
+        ("EOF spelled with an escape", binary(&[(0, b"SECTION\0"), (2, b"ENTITIES\0"), (0, b"\\U+0045OF\0"), (1, b"after\0")])),
+        // In Windows-1252 these bytes are "EOF\u{C2}\u{A0}", no EOF; in UTF-8 they are EOF and a
+        // no-break space, which the parse trims.
+        (
+            "an EOF look-alike in a declared code page",
+            binary(&[(9, b"$DWGCODEPAGE\0"), (3, b"ANSI_1252\0"), (0, b"EOF\xC2\xA0\0"), (1, b"x\0"), (0, b"EOF\0")]),
+        ),
+        (
+            "a code page left unset because a string comes between the name and the value",
+            binary(&[(9, b"$DWGCODEPAGE\0"), (2, b"x\0"), (3, b"ANSI_1252\0"), (1, b"y\0"), (0, b"EOF\xC2\xA0\0"), (1, b"after\0")]),
+        ),
+        (
+            "an R2007 file, whose strings are UTF-8 whatever its code page",
+            binary(&[(9, b"$ACADVER\0"), (1, b"AC1021\0"), (9, b"$DWGCODEPAGE\0"), (3, b"ANSI_1252\0"), (0, b"EOF\xC2\xA0\0"), (1, b"after\0")]),
+        ),
+        ("the pre-R13 layout with 1-byte codes", r12),
+        // The first pass reads E3 80 80 as UTF-8, an ideographic space, and stops there; the
+        // Shift-JIS string before it makes the file be read again in Shift-JIS, where it is no EOF.
+        (
+            "a second pass in the code page that ends elsewhere",
+            binary(&[
+                (9, b"$DWGCODEPAGE\0"),
+                (3, b"ANSI_932\0"),
+                (1, b"\x90\x7D\x96\xCA\0"),
+                (0, b"EOF\xE3\x80\x80\0"),
+                (1, b"after\0"),
+                (0, b"EOF\0"),
+            ]),
+        ),
+    ];
+    for (case, bytes) in cases {
+        let tags = parse(&bytes).unwrap();
+        assert_eq!(tags.capacity(), tags.len(), "{case}");
+    }
+}
+
+/// The limit is met as the groups are read, as it was before the count came first: a file with
+/// more groups than the limit fails on the limit even when it is cut short further on.
+#[test]
+fn a_binary_file_past_the_limit_fails_on_the_limit_before_a_later_cut() {
+    let mut b = binary(&[(1, b"A\0"), (1, b"B\0"), (1, b"C\0")]);
+    b.extend_from_slice(&1i16.to_le_bytes());
+    b.extend_from_slice(b"no terminating zero");
+    assert!(matches!(parse_with_limit(&b, 2), Err(DxfError::TooLarge { limit: 2, .. })));
+    assert!(matches!(parse_with_limit(&b, 3), Err(DxfError::Eof)));
 }
