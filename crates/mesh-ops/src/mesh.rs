@@ -276,7 +276,8 @@ impl Mesh {
     }
 
     /// Remap the UVs of material `m`'s triangles with `f`. Vertices they share with other
-    /// materials are duplicated first, so the other triangles keep their UVs.
+    /// materials are duplicated first, so the other triangles keep their UVs and tangents. The
+    /// tangents of the material's vertices are then computed again from the new UVs.
     pub fn map_material_uvs(&mut self, m: usize, f: impl Fn(Vec2) -> Vec2) {
         self.map_material_uvs_with(m, |_, uv| f(uv));
     }
@@ -325,9 +326,69 @@ impl Mesh {
 
         vertices.sort_by_key(|(v, _)| *v);
         vertices.dedup_by_key(|(v, _)| *v);
-        for (v, centroid) in vertices {
+        for &(v, centroid) in &vertices {
             if let Some(uv) = self.uvs.get_mut(v) {
                 *uv = f(centroid, *uv);
+            }
+        }
+
+        let vertices: Vec<usize> = vertices.into_iter().map(|(v, _)| v).collect();
+        self.recompute_tangents_of(&material_triangles, &vertices);
+    }
+
+    /// Recompute the tangents of `vertices` (ascending) from `triangles`, the only triangles
+    /// that use them, so the tangents of other triangles are unchanged. Where
+    /// [`Mesh::compute_tangents`] adds copies of a vertex, the copies are appended to this mesh
+    /// and the corners of `triangles` that use them are pointed at them.
+    fn recompute_tangents_of(&mut self, triangles: &[usize], vertices: &[usize]) {
+        let n = self.positions.len();
+        let triangles: Vec<(usize, [usize; 3])> = triangles.iter().filter_map(|&t| Some((t, self.tri(t)?))).collect();
+        if triangles.is_empty() {
+            return;
+        }
+
+        let local = |v: usize| vertices.binary_search(&v).map_or(0, |l| l as u32);
+        let mut part = Mesh {
+            positions: vertices.iter().map(|&v| self.positions.get(v).copied().unwrap_or_default()).collect(),
+            normals: if self.normals.len() == n {
+                vertices.iter().map(|&v| self.normals.get(v).copied().unwrap_or(Vec3::Y)).collect()
+            } else {
+                Vec::new()
+            },
+            uvs: vertices.iter().map(|&v| self.uvs.get(v).copied().unwrap_or_default()).collect(),
+            colors: if self.colors.len() == n {
+                vertices.iter().map(|&v| self.colors.get(v).copied().unwrap_or(Vec4::ONE)).collect()
+            } else {
+                Vec::new()
+            },
+            indices: triangles.iter().flat_map(|(_, tri)| tri.map(local)).collect(),
+            ..Mesh::default()
+        };
+        part.compute_tangents();
+
+        let mut global: Vec<u32> = vertices.iter().map(|&v| v as u32).collect();
+        for (l, t) in part.tangents.iter().enumerate() {
+            if let Some(&v) = global.get(l) {
+                if let Some(x) = self.tangents.get_mut(v as usize) {
+                    *x = *t;
+                }
+                continue;
+            }
+            global.push(self.positions.len() as u32);
+            self.positions.push(part.positions.get(l).copied().unwrap_or_default());
+            self.normals.push(part.normals.get(l).copied().unwrap_or(Vec3::Y));
+            self.tangents.push(*t);
+            self.uvs.push(part.uvs.get(l).copied().unwrap_or_default());
+            if !self.colors.is_empty() {
+                self.colors.push(part.colors.get(l).copied().unwrap_or(Vec4::ONE));
+            }
+        }
+
+        for (&(t, _), corners) in triangles.iter().zip(part.indices.as_chunks::<3>().0) {
+            for (k, l) in corners.iter().enumerate() {
+                if let (Some(&v), Some(i)) = (global.get(*l as usize), self.indices.get_mut(t * 3 + k)) {
+                    *i = v;
+                }
             }
         }
     }
@@ -643,5 +704,39 @@ mod tests {
         }
         assert_eq!(m.uv_tiles(1).into_iter().collect::<Vec<_>>(), vec![(1, 0)]);
         assert_eq!(m.uv_tiles(0).into_iter().collect::<Vec<_>>(), vec![(0, 0)]);
+    }
+
+    #[test]
+    fn material_uv_remaps_recompute_the_material_tangents() {
+        let two_materials = || {
+            let mut m = quad();
+            m.materials = vec!["a".into(), "b".into()];
+            m.submeshes =
+                vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 3 }, SubMesh { name: "b".into(), material: 1, start: 3, count: 3 }];
+            // Tangents as a file might store them, which tangent generation would not give.
+            m.tangents = vec![Vec4::new(0.6, 0.8, 0.0, -1.0); 4];
+            m
+        };
+        // quad(): u grows along +X, so a generated tangent is +X. A map that mirrors the UVs
+        // flips the generated bitangent sign; the others keep it.
+        let w = quad().tangents[0].w;
+        let cases = [
+            ("a quarter turn", Vec4::new(0.0, -1.0, 0.0, w), (|uv: Vec2| Vec2::new(uv.y, 1.0 - uv.x)) as fn(Vec2) -> Vec2),
+            ("a mirror in u", Vec4::new(-1.0, 0.0, 0.0, -w), |uv: Vec2| Vec2::new(1.0 - uv.x, uv.y)),
+            ("a move to the next tile", Vec4::new(1.0, 0.0, 0.0, w), |uv: Vec2| uv + Vec2::X),
+            ("a stretch", Vec4::new(1.0, 0.0, 0.0, w), |uv: Vec2| uv * Vec2::new(0.25, 2.0)),
+        ];
+        for (name, expected, map) in cases {
+            let mut m = two_materials();
+            let before = m.clone();
+            m.map_material_uvs(1, map);
+            m.validate().unwrap();
+            for k in 0..3 {
+                let (old, new) = (before.indices[k] as usize, m.indices[k] as usize);
+                assert_eq!(m.tangents[new], before.tangents[old], "{name}: material a keeps its tangents");
+                let t = m.tangents[m.indices[3 + k] as usize];
+                assert!((t - expected).length() < 1e-4, "{name}: material b tangent {t:?}, expected {expected:?}");
+            }
+        }
     }
 }
