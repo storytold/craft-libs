@@ -16,6 +16,7 @@ pub(crate) mod hosted_dialogs;
 pub(crate) mod layer_style;
 pub(crate) mod liquify;
 pub(crate) mod live_preview;
+pub(crate) mod marquee_shift_shorter_side;
 pub(crate) mod perspective_warp;
 pub(crate) mod pin_warp;
 pub(crate) mod raw_develop;

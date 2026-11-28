@@ -18,5 +18,6 @@ fn shift_held_at_the_press_squares_only_after_a_release_and_press() {
     assert_eq!(corners(&mut gesture, Point::new(100.0, 50.0)), (origin, Point::new(100.0, 50.0)));
     gesture.follow(None, Mods::NONE);
     gesture.follow(None, Mods::SHIFT);
-    assert_eq!(corners(&mut gesture, Point::new(100.0, 50.0)), (origin, Point::new(100.0, 100.0)));
+    // The square takes the drag's shorter side (photocraft#16790).
+    assert_eq!(corners(&mut gesture, Point::new(100.0, 50.0)), (origin, Point::new(50.0, 50.0)));
 }

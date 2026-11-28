@@ -355,14 +355,14 @@ fn marquee_corners_follow_constraint_and_modifiers() {
     assert_eq!(events, [commit((10.0, 10.0, 51.0, 31.0), SelectionOperation::New)]);
 
     let events = stroke(&mut marquee, (10.5, 10.5), (50.5, 30.5), NONE, Mods::SHIFT);
-    assert_eq!(events, [commit((10.0, 10.0, 51.0, 51.0), SelectionOperation::New)], "Shift after the press squares");
+    assert_eq!(events, [commit((10.0, 10.0, 31.0, 31.0), SelectionOperation::New)], "Shift after the press squares");
 
     let events = stroke(&mut marquee, (100.0, 100.0), (110.0, 120.0), NONE, Mods::ALT);
     assert_eq!(events, [commit((90.0, 80.0, 110.0, 120.0), SelectionOperation::New)], "Alt after the press centres");
 
     // #11389: with nothing selected the press modifiers count from the first move.
     let events = stroke(&mut marquee, (10.5, 10.5), (50.5, 30.5), Mods::SHIFT, Mods::SHIFT);
-    assert_eq!(events, [commit((10.0, 10.0, 51.0, 51.0), SelectionOperation::Add)], "Shift at the press squares with nothing selected");
+    assert_eq!(events, [commit((10.0, 10.0, 31.0, 31.0), SelectionOperation::Add)], "Shift at the press squares with nothing selected");
     let events = stroke(&mut marquee, (100.0, 100.0), (110.0, 120.0), Mods::ALT, Mods::ALT);
     assert_eq!(events, [commit((90.0, 80.0, 110.0, 120.0), SelectionOperation::New)], "Alt at the press centres with nothing selected");
 
