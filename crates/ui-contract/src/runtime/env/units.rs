@@ -648,6 +648,20 @@ impl Units {
         }
     }
 
+    /// `reader` that also reads a count of columns: the spellings of Columns (`2 col`) read the count as written,
+    /// tagged as Columns, since no unit factor converts columns to a length. The field converts the count through
+    /// its [`ColumnSize`] when the tag names Columns.
+    pub fn with_columns(&self, mut reader: Reader) -> Reader {
+        let tag = UnitKind::ALL.iter().position(|kind| *kind == UnitKind::Columns).unwrap_or(0) as u32;
+        let english = Units::new(self.format.clone(), english_words(), Arc::new(Words::english()), self.point_size);
+        for spelling in [self.symbol(UnitKind::Columns), english.symbol(UnitKind::Columns)] {
+            if is_unit_spelling(&spelling) {
+                reader = reader.unit_tagged(&spelling, 1.0, tag);
+            }
+        }
+        reader
+    }
+
     /// The index of the reader for `kind` in `readers`: 0 for plain numbers, then one per unit kind.
     fn reader_slot(kind: Option<UnitKind>) -> usize {
         kind.map_or(0, |kind| 1 + UnitKind::ALL.iter().position(|other| *other == kind).unwrap_or(0))

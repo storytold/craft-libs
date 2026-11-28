@@ -109,6 +109,11 @@ pub struct CropSizeFields {
     pub resolution: String,
     /// The unit of `resolution`.
     pub resolution_unit: ResolutionUnit,
+    /// The unit an empty W shows and reads a bare number in, as picked from its units menu; `None` is pixels. A set
+    /// W keeps its own unit ([`CropLength::unit`]).
+    pub width_unit: Option<UnitKind>,
+    /// The unit an empty H shows and reads a bare number in; see [`width_unit`](Self::width_unit).
+    pub height_unit: Option<UnitKind>,
 }
 
 /// What the area a turned or extending crop uncovers is filled with.
@@ -365,6 +370,7 @@ impl CropSettings {
                         height: Some(preset.height),
                         resolution: preset.resolution.to_owned(),
                         resolution_unit: ResolutionUnit::PixelsPerInch,
+                        ..CropSizeFields::default()
                     };
                 }
             }

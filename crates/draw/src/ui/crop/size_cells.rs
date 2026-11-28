@@ -6,14 +6,19 @@ use craft_behavior::{IconId, NumberCodec};
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, clicked};
 use craft_ui::form::Field;
+use craft_ui::menu::Menu;
 use craft_ui::pickers::Select;
-use craft_ui::runtime::env::{LengthUnits, UnitKind, Units};
+use craft_ui::runtime::env::{ColumnSize, Label, LengthUnits, UnitKind, Units};
 use craft_ui::text::{NumberField, RangeAlert};
 use egui::Ui;
 use std::ops::RangeInclusive;
 
 /// Pixels per inch in one pixel per centimetre: 1 px/cm is 2.54 px/in.
 const CM_PER_INCH: f64 = 2.54;
+
+/// The units of the W and H menus, in the menu's order; Columns follows when the document has a column size.
+const MENU_UNITS: [UnitKind; 6] =
+    [UnitKind::Pixels, UnitKind::Inches, UnitKind::Centimetres, UnitKind::Millimetres, UnitKind::Points, UnitKind::Picas];
 
 /// The ranges of the cells' fields.
 ///
@@ -31,6 +36,9 @@ pub(super) struct SizeLimits {
     pub in_pixels: bool,
     /// The decimals the resolution field keeps.
     pub resolution_decimals: usize,
+    /// Whether a right click on W or H opens its units menu (and the fields take Columns when the document has a
+    /// column size).
+    pub unit_menu: bool,
 }
 
 /// What the cells reported this pass.
@@ -43,9 +51,11 @@ pub(super) struct SizeCells {
 
 impl SizeLimits {
     /// The crop bar's ranges, in the field's own unit; its fields never alert.
-    pub(super) const CROP: Self = Self { length: (LENGTH_MIN, FIELD_MAX), resolution: (0.0, FIELD_MAX), in_pixels: false, resolution_decimals: 2 };
+    pub(super) const CROP: Self =
+        Self { length: (LENGTH_MIN, FIELD_MAX), resolution: (0.0, FIELD_MAX), in_pixels: false, resolution_decimals: 2, unit_menu: true };
     /// The perspective bar's ranges: 1 to 300 000 px and 1 to 29 999.999 px/in.
-    pub(super) const PERSPECTIVE: Self = Self { length: (1.0, 300_000.0), resolution: (1.0, 29_999.999), in_pixels: true, resolution_decimals: 3 };
+    pub(super) const PERSPECTIVE: Self =
+        Self { length: (1.0, 300_000.0), resolution: (1.0, 29_999.999), in_pixels: true, resolution_decimals: 3, unit_menu: false };
 
     /// The length range in `unit`, at `pixels_per_inch` and `points_per_inch`.
     fn length_range(&self, unit: UnitKind, pixels_per_inch: f64, points_per_inch: f64) -> RangeInclusive<f64> {
@@ -75,6 +85,37 @@ impl SizeLimits {
     }
 }
 
+/// The numbers a length converts through: the resolution, the point size and the column size, when there is one.
+#[derive(Clone, Copy, Debug)]
+struct Lengths {
+    pixels_per_inch: f64,
+    points_per_inch: f64,
+    columns: Option<ColumnSize>,
+}
+
+impl Lengths {
+    /// `value` in `unit` as pixels; Columns through the column size, `None` without one.
+    fn to_pixels(self, value: f64, unit: UnitKind) -> Option<f64> {
+        match unit {
+            UnitKind::Columns => Some(self.columns?.points(value, false) / self.points_per_inch * self.pixels_per_inch.max(1.0)),
+            _ => unit.to_pixels(value, 1.0, self.pixels_per_inch, self.points_per_inch),
+        }
+    }
+
+    /// `pixels` in `unit`; the inverse of [`to_pixels`](Self::to_pixels).
+    fn in_unit(self, pixels: f64, unit: UnitKind) -> Option<f64> {
+        match unit {
+            UnitKind::Columns => Some(self.columns?.columns(pixels / self.pixels_per_inch.max(1.0) * self.points_per_inch, false)),
+            _ => unit.from_pixels(pixels, 1.0, self.pixels_per_inch, self.points_per_inch),
+        }
+    }
+
+    /// `value` in `from` as the same length in `to`.
+    fn convert(self, value: f64, from: UnitKind, to: UnitKind) -> Option<f64> {
+        self.in_unit(self.to_pixels(value, from)?, to).filter(|v| v.is_finite())
+    }
+}
+
 /// W, swap, H, Resolution and its unit.
 pub(super) fn show(
     ui: &mut Ui,
@@ -88,12 +129,21 @@ pub(super) fn show(
     let mut out_of_range = None;
     let points_per_inch = units.points_per_inch();
     let pixels_per_inch = size.resolution_ppi().unwrap_or(document.resolution);
-    changed |= length_field(ui, "size-width", &words.width, &mut size.width, pixels_per_inch, points_per_inch, &limits, &mut out_of_range);
+    let columns = document.columns.filter(|_| limits.unit_menu);
+    let lengths = Lengths { pixels_per_inch, points_per_inch, columns };
+    let menu: Option<Vec<Entry<UnitKind>>> = limits.unit_menu.then(|| {
+        let kinds = MENU_UNITS.into_iter().chain(columns.map(|_| UnitKind::Columns));
+        kinds.map(|kind| Entry::new(kind, units.name(kind))).collect()
+    });
+    let menu = menu.as_deref();
+    let width = LengthCell { salt: "size-width", caption: &words.width, menu };
+    changed |= width.show(ui, &mut size.width, &mut size.width_unit, lengths, &limits, units, &mut out_of_range);
     if clicked(&IconButton::new(IconId::new("swap_horizontal")).label(words.swap.clone()).show(ui)) {
         size.swap();
         changed = true;
     }
-    changed |= length_field(ui, "size-height", &words.height, &mut size.height, pixels_per_inch, points_per_inch, &limits, &mut out_of_range);
+    let height = LengthCell { salt: "size-height", caption: &words.height, menu };
+    changed |= height.show(ui, &mut size.height, &mut size.height_unit, lengths, &limits, units, &mut out_of_range);
 
     let unit = size.resolution_unit;
     let (low, high) = limits.resolution_bounds(unit);
@@ -137,48 +187,91 @@ pub(super) fn show(
     SizeCells { changed, out_of_range }
 }
 
-/// A length field over a length kept in its own unit: a typed number is in that unit (pixels while unset), a typed
-/// unit is converted into it, and a cleared field is unset. Returns whether `value` changed; a typed value outside
-/// the range of `limits` is clamped and reported in `out_of_range`.
-#[expect(clippy::too_many_arguments, reason = "the cells' inputs")]
-fn length_field(
-    ui: &mut Ui,
+/// One of W and H: a length field over a length kept in its own unit.
+struct LengthCell<'a> {
     salt: &'static str,
-    caption: &craft_ui::runtime::env::Label,
-    value: &mut Option<CropLength>,
-    pixels_per_inch: f64,
-    points_per_inch: f64,
-    limits: &SizeLimits,
-    out_of_range: &mut Option<RangeAlert>,
-) -> bool {
-    let unit = value.map_or(UnitKind::Pixels, |length| length.unit);
-    let mut typed = None;
-    let mut typed_unit = None;
-    let mut alert = None;
-    Field::new(caption.clone()).id_salt(salt).show(ui, |ui, _| {
-        let lengths = LengthUnits::new(unit, unit, pixels_per_inch);
-        let range = limits.length_range(unit, pixels_per_inch, points_per_inch);
-        let field = NumberField::length(caption.clone(), Bind::given(value.map(|length| length.value)), lengths).range(range).show(ui);
-        typed = field.value().copied();
-        typed_unit = field.typed_unit;
-        alert = field.out_of_range;
-    });
-    if alert.is_some() {
-        *out_of_range = alert;
-    }
-    let Some(next) = typed else { return false };
-    let next = next.map(|length| match typed_unit {
-        // The value is in the stored unit; a typed unit becomes the stored one, as in Photoshop.
-        Some(to) if to != unit => {
-            let pixels = unit.to_pixels(length, 1.0, pixels_per_inch, points_per_inch);
-            let converted = pixels.and_then(|pixels| to.from_pixels(pixels, 1.0, pixels_per_inch, points_per_inch));
-            converted.map_or(CropLength::new(length, unit), |value| CropLength::new(value, to))
+    caption: &'a Label,
+    /// The units menu a right click opens, when the bar has one.
+    menu: Option<&'a [Entry<UnitKind>]>,
+}
+
+impl LengthCell<'_> {
+    /// A typed number is in the field's unit (`empty_unit` while the field is empty, pixels while that is unset), a
+    /// typed unit is converted into it and becomes the field's unit, and a cleared field is unset. A typed count of
+    /// columns (`2 col`) is kept in Columns. A unit picked from the menu converts the length into that unit, or becomes
+    /// `empty_unit` of an empty field. Returns whether `value` or `empty_unit` changed; a typed value outside the
+    /// range of `limits` is clamped and reported in `out_of_range`.
+    #[expect(clippy::too_many_arguments, reason = "the cell's inputs")]
+    fn show(
+        &self,
+        ui: &mut Ui,
+        value: &mut Option<CropLength>,
+        empty_unit: &mut Option<UnitKind>,
+        lengths: Lengths,
+        limits: &SizeLimits,
+        units: &Units,
+        out_of_range: &mut Option<RangeAlert>,
+    ) -> bool {
+        let unit = value.map_or(empty_unit.unwrap_or(UnitKind::Pixels), |length| length.unit);
+        // The unit a typed length is read in: the field's, or inches for a Columns field, whose bare numbers count
+        // columns.
+        let base = if unit == UnitKind::Columns { UnitKind::Inches } else { unit };
+        let range = limits.length_range(unit, lengths.pixels_per_inch, lengths.points_per_inch);
+        let mut typed = None;
+        let mut typed_unit = None;
+        let mut alert = None;
+        let mut picked = None;
+        Field::new(self.caption.clone()).id_salt(self.salt).show(ui, |ui, _| {
+            let shown = LengthUnits::new(unit, unit, lengths.pixels_per_inch);
+            let mut field = NumberField::length(self.caption.clone(), Bind::given(value.map(|length| length.value)), shown).range(range.clone());
+            if self.menu.is_some() {
+                // Columns are no factor of a length: a typed `2 col` is read as a count, beside the lengths in `base`.
+                // The right click is the units menu, so the field opens no edit menu of its own.
+                let reader = units.length_reader(LengthUnits::new(base, base, lengths.pixels_per_inch));
+                let reader = if unit == UnitKind::Columns || lengths.columns.is_some() { units.with_columns(reader) } else { reader };
+                field = field.codec(NumberCodec::new(reader, *unit.decimals().end())).own_context_menu();
+            }
+            let field = field.show(ui);
+            typed = field.value().copied();
+            typed_unit = field.typed_unit;
+            alert = field.out_of_range;
+            if let Some(entries) = self.menu {
+                let entries: Vec<Entry<UnitKind>> = entries.iter().map(|entry| entry.clone().checked(entry.value() == Some(&unit))).collect();
+                picked = Menu::context(self.caption.clone(), &field.edit.response).values().pick(ui, &entries).picked;
+            }
+        });
+        if alert.is_some() {
+            *out_of_range = alert;
         }
-        _ => CropLength::new(length, unit),
-    });
-    let changed = next != *value;
-    *value = next;
-    changed
+        let mut changed = false;
+        if let Some(to) = picked.filter(|to| *to != unit) {
+            match *value {
+                // The same length in the picked unit, unrounded and unclamped, so the target size stays; a length the
+                // picked unit cannot hold (past `FIELD_MAX`) keeps its unit.
+                Some(length) => {
+                    if let Some(converted) = lengths.convert(length.value, unit, to).filter(|v| v.is_finite() && *v > 0.0 && *v <= FIELD_MAX) {
+                        *value = Some(CropLength::new(converted, to));
+                        changed = true;
+                    }
+                }
+                None => {
+                    *empty_unit = Some(to);
+                    changed = true;
+                }
+            }
+        }
+        let Some(next) = typed else { return changed };
+        let next = next.map(|length| match typed_unit {
+            // A count of columns as typed.
+            Some(UnitKind::Columns) => CropLength::new(length, UnitKind::Columns),
+            // The value is in the field's unit; a typed unit becomes the field's.
+            Some(to) if to != unit => lengths.convert(length, base, to).map_or(CropLength::new(length, unit), |value| CropLength::new(value, to)),
+            _ => CropLength::new(length, unit),
+        });
+        changed |= next != *value;
+        *value = next;
+        changed
+    }
 }
 
 /// The size a crop commit resamples to.
@@ -197,6 +290,7 @@ impl CropSizeFields {
     /// Swaps W and H.
     pub fn swap(&mut self) {
         std::mem::swap(&mut self.width, &mut self.height);
+        std::mem::swap(&mut self.width_unit, &mut self.height_unit);
     }
 
     /// Fills W and H with the document's size in pixels and the resolution with the document's, in the field's unit.
@@ -215,23 +309,27 @@ impl CropSizeFields {
         };
     }
 
-    /// Empties W, H and the resolution and resets the resolution unit to pixels per inch.
+    /// Empties W, H and the resolution and resets the units of empty W and H to pixels and the resolution unit to
+    /// pixels per inch.
     pub fn clear_size(&mut self) {
         self.width = None;
         self.height = None;
+        self.width_unit = None;
+        self.height_unit = None;
         self.resolution.clear();
         self.resolution_unit = ResolutionUnit::PixelsPerInch;
     }
 
     /// The size the fields name: each length in pixels (physical lengths at the typed resolution, else the
-    /// document's; points and picas at `units`' points per inch; a bare number in pixels), each side `None` while it
-    /// is empty or not a positive length of at most [`FIELD_MAX`].
+    /// document's; points and picas at `units`' points per inch; columns through the document's column size; a bare
+    /// number in pixels), each side `None` while it is empty or not a positive length of at most [`FIELD_MAX`].
     pub fn target(&self, document: &CropDocument, units: &Units) -> CropSizeTarget {
         let resolution = self.resolution_ppi();
-        let dpi = resolution.unwrap_or(document.resolution);
+        let pixels_per_inch = resolution.unwrap_or(document.resolution);
+        let lengths = Lengths { pixels_per_inch, points_per_inch: units.points_per_inch(), columns: document.columns };
         let pixels = |length: Option<CropLength>| {
             let length = CropLength::usable(length)?;
-            let px = length.unit.to_pixels(length.value, 0.0, dpi, units.points_per_inch())?;
+            let px = lengths.to_pixels(length.value, length.unit)?;
             (px.is_finite() && px > 0.0).then_some(px)
         };
         CropSizeTarget { width: pixels(self.width), height: pixels(self.height), resolution }

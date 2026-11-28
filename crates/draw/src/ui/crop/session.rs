@@ -10,6 +10,7 @@ use craft_behavior::geometry::CropBox;
 use craft_behavior::kurbo::{Rect, Size};
 use craft_behavior::{CanvasView, EditEvent, GestureId, Mixed};
 use craft_ui::runtime::edit::next_gesture_id;
+use craft_ui::runtime::env::ColumnSize;
 
 /// The app's identity of a document (its id, never reused while the app runs). A frame belongs
 /// to the document it was made for.
@@ -58,12 +59,20 @@ pub struct CropDocument {
     pub resolution: f64,
     /// The selection's bounds clipped to the canvas, when there is a selection.
     pub selection: Option<Rect>,
+    /// The column size of the Units preferences: with one, the Crop bar's W and H also take Columns.
+    pub columns: Option<ColumnSize>,
 }
 
 impl CropDocument {
     /// Document `key` of `size` at `resolution` px/in, no selection.
     pub fn new(key: CropDocKey, size: Size, resolution: f64) -> Self {
-        Self { key, size, resolution, selection: None }
+        Self { key, size, resolution, selection: None, columns: None }
+    }
+
+    /// The column size the Crop bar's W and H convert Columns through; without one they offer no Columns.
+    pub fn column_size(mut self, columns: ColumnSize) -> Self {
+        self.columns = Some(columns);
+        self
     }
 
     /// The resolution in px/in.
