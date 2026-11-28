@@ -45,9 +45,12 @@ pub(super) enum Kind {
     Doughnut,
     Scatter,
     Radar,
+    Bubble,
 }
 
 impl Kind {
+    /// The kind of a plot-area chart type element (`c:barChart`, `c:bubbleChart`…); `None` for
+    /// types WordCraft doesn't draw.
     pub(super) fn of(name: &str) -> Option<Kind> {
         Some(match name {
             "c:barChart" => Kind::Bar,
@@ -57,9 +60,27 @@ impl Kind {
             "c:doughnutChart" => Kind::Doughnut,
             "c:scatterChart" => Kind::Scatter,
             "c:radarChart" => Kind::Radar,
+            "c:bubbleChart" => Kind::Bubble,
             _ => return None,
         })
     }
+
+    /// Whether points sit at their own x values (`c:xVal`) on a horizontal value axis, not in
+    /// categories: scatter and bubble charts.
+    pub(super) fn xy(self) -> bool {
+        matches!(self, Kind::Scatter | Kind::Bubble)
+    }
+}
+
+/// A bubble chart's sizing (`c:bubbleChart`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct BubbleOpts {
+    /// `c:bubbleScale`, percent of the default size, 0..=300.
+    pub(super) scale: f64,
+    /// `c:sizeRepresents val="w"`: sizes set the bubbles' widths, not their areas.
+    pub(super) by_width: bool,
+    /// `c:showNegBubbles`: negative sizes are drawn, at their magnitude.
+    pub(super) negative: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,12 +152,33 @@ impl Symbol {
     }
 }
 
+/// One point's own colours, from its `c:dPt`: the fill (bars, slices, bubbles), the line into
+/// it (line, scatter and radar: `c:spPr/a:ln`) and its marker (`c:marker/c:spPr`). `no_fill`
+/// is an explicit `c:spPr/a:noFill` (a hollow bubble), unlike an absent fill.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct PointFmt {
+    pub(super) fill: Option<Rgb>,
+    pub(super) no_fill: bool,
+    pub(super) line: Option<Rgb>,
+    pub(super) marker: Option<Rgb>,
+}
+
+impl PointFmt {
+    /// Whether the point has a colour of its own (fill, line or marker).
+    pub(super) fn coloured(&self) -> bool {
+        self.fill.is_some() || self.line.is_some() || self.marker.is_some()
+    }
+}
+
 pub(super) struct Series {
     pub(super) name: String,
     /// The series' `c:idx` (an `xsd:unsignedInt`), which picks its automatic colour; `None`
     /// when missing or not a valid number.
     pub(super) idx: Option<usize>,
     pub(super) color: Option<Rgb>,
+    /// The series' own fill (`c:spPr` fill, not its outline or marker): what keeps a bar, slice
+    /// or bubble from varying by point.
+    pub(super) fill: Option<Rgb>,
     /// Fixed line width in points, `None`: the chart's default.
     pub(super) line_w: Option<f32>,
     /// Whether the series is drawn as a line (scatter series without one get markers).
@@ -155,8 +197,14 @@ pub(super) struct Series {
     pub(super) values: Vec<Option<f64>>,
     /// Scatter x values (index + 1 when the file has none).
     pub(super) xs: Vec<Option<f64>>,
+    /// Bubble sizes (`c:bubbleSize`): `None` for other chart types or when the series has no
+    /// `c:bubbleSize`, empty when it has one with no cached values.
+    pub(super) sizes: Option<Vec<Option<f64>>>,
     /// Per-point colours from `c:dPt`.
-    pub(super) points: Vec<Option<Rgb>>,
+    pub(super) points: Vec<PointFmt>,
+    /// Outline colour of each point (bubbles): its `c:dPt`'s `a:ln` when it has one, else the
+    /// series'; `None` for no line (`a:noFill`, or no colour).
+    pub(super) outlines: Vec<Option<Rgb>>,
     pub(super) fmt: Option<String>,
     /// Format code of the scatter x values' cache.
     pub(super) x_fmt: Option<String>,
@@ -172,4 +220,16 @@ pub(super) struct Series {
     /// The values as the file has them, for data labels (`values` become shares in a 100%
     /// stacked chart); empty when the series shows no labels.
     pub(super) raw: Vec<Option<f64>>,
+}
+
+impl Series {
+    /// Whether point `i` (a bar or bubble) is filled: the point's own fill or `a:noFill` wins,
+    /// else the series' `a:noFill` leaves it empty.
+    pub(super) fn fills(&self, i: usize) -> bool {
+        match self.points.get(i) {
+            Some(p) if p.fill.is_some() => true,
+            Some(p) if p.no_fill => false,
+            _ => !self.no_fill,
+        }
+    }
 }
