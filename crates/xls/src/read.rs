@@ -612,12 +612,18 @@ fn resolve_pending(
 
 /// The other cells of a legacy array formula hold only cached results: blanked, so that the
 /// formula fills its range on recalculation. If the formula itself couldn't be read, they keep
-/// their values.
+/// their values. Stored non-empty follower results remain in `Sheet::array_results` for callers
+/// that open without recalculating; no cells are synthesized for missing results.
 fn blank_array_followers(st: &mut SheetState<'_>, pending: &[Pending]) {
     for p in pending {
         let filled = st.formula_at(p.anchor).and_then(|f| f.array).is_some_and(|r| r.contains(p.pos));
         if p.pos == p.anchor || !filled {
             continue;
+        }
+        if let Some(cell) = st.sheet.cells.get(&p.pos)
+            && cell.value != Value::Empty
+        {
+            st.sheet.array_results.insert(p.pos, (p.anchor, cell.value.clone()));
         }
         match st.sheet.cells.get_mut(&p.pos) {
             Some(cell) if cell.format.is_some() => *cell = Cell { value: Value::Empty, format: cell.format, formula: None },

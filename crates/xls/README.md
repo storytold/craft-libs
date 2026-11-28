@@ -104,3 +104,10 @@ Moved from GridCraft's `gridcraft-xlsx` crate (`crates/xlsx/src/xls.rs` and `xls
 `5cf52c5f`), where it read straight into GridCraft's workbook model. RString cells come from
 WordCraft's mail-merge reader (`crates/formats/src/sheet/xls.rs`), as does the fixture writer
 in `craft_xls::testing`.
+
+### Opening with saved array results
+
+`Sheet::array_results` retains each stored non-empty array follower result with its anchor.
+The anchor's formula still declares the whole range; missing followers are not synthesized.
+Ordinary follower cells remain blank for callers that recalculate. A caller opening without
+recalculation can use the separate results while retaining the follower's formatting.
