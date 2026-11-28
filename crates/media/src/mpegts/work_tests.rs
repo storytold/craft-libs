@@ -94,9 +94,22 @@ fn program_stream_with_large_pes_packets_gives_back_every_frame() {
         assert_eq!(f.streams.len(), 2);
         for (s, frames) in f.streams.iter().zip([&a, &b]) {
             assert_eq!(s.units.len(), frames.len());
-            // a read refills a 1 MiB window: every seventh unit and the last ones keep a debug build quick
-            for (i, fr) in frames.iter().enumerate().filter(|(i, _)| i % 7 == 0 || i + 4 > frames.len()) {
-                assert_eq!(&f.read_unit(&data, f.streams.iter().position(|x| std::ptr::eq(x, s)).unwrap(), i).unwrap(), fr, "mpeg1 {mpeg1} unit {i}");
+            // Sparse reads keep the debug build quick; also force PES-boundary and end reads.
+            let mut read_unit = frames.iter().enumerate().map(|(i, _)| i % 7 == 0 || i + 4 > frames.len()).collect::<Vec<_>>();
+            for boundary in (60_000..frames.len() * 576).step_by(60_000) {
+                read_unit[(boundary - 1) / 576] = true;
+                if boundary % 576 == 0 {
+                    read_unit[boundary / 576] = true;
+                }
+            }
+            for (i, (fr, should_read)) in frames.iter().zip(read_unit).enumerate() {
+                if should_read {
+                    assert_eq!(
+                        &f.read_unit(&data, f.streams.iter().position(|x| std::ptr::eq(x, s)).unwrap(), i).unwrap(),
+                        fr,
+                        "mpeg1 {mpeg1} unit {i}"
+                    );
+                }
             }
         }
         // cut inside the last packets: never panics, and the units before the cut are intact
