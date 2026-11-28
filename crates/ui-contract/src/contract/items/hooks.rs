@@ -392,7 +392,18 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let known = self.known(comp, false);
         let known_at_read = self.known(comp, true);
         let declared = self.offset;
+        let revealing = self.revealing;
         let revealed = self.place_reveal(comp, ui, (id, cx.core.env, &base_env), (&mut layout, &known), rect);
+        // A capped collection that shows all its rows has nothing of its own to scroll: the page's scroll owner shows the
+        // row, as for a collection with the natural height (`page_reveal`). Passed on once, in the real run.
+        let quiet = cx.core.memory.is_peek() || crate::runtime::measure::active(&ctx);
+        if !quiet
+            && self.max_offset(rect.height()) <= 0.0
+            && let Some(at) = revealing.filter(|&at| layout.shown(at))
+        {
+            let offset = ScrollPos { x: self.offset_x, y: self.offset };
+            cx.core.reveal = Some(self.screen(&layout, rect, at, offset, rtl).intersect(rect));
+        }
         // The parts (the scroll bar's thumb among them) stand at the offset before the reveal moved it: the next pass
         // declares them where the rows now are, and a memoized view around the rows runs it instead of replaying this.
         if self.offset != declared {
@@ -840,7 +851,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
 
     fn settle(&mut self, comp: &mut C, cx: &mut Cx<'_, C>) {
         let id = cx.core.id;
-        // A collection's focus move reveals through its lead (`page_reveal`), never the collection's whole rect. A
+        // A collection's focus move reveals through its lead (`page_reveal`, or `content` for a capped collection that
+        // shows all its rows), never the collection's whole rect. A
         // header cell's reveal moves the sideways offset the header and the rows share, to show the whole cell.
         if let Some(Some(part)) = focus::take_reveal_of(&cx.core.ctx, id)
             && self.scrolls

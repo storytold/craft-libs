@@ -25,7 +25,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     }
 
     /// Brings row `at` into view: the collection's own scroll moves before the rows are built (`place_reveal`), or,
-    /// without one, the page's scroll owner is asked at the end of the item step (`page_reveal`).
+    /// without one, the page's scroll owner is asked at the end of the item step (`page_reveal`). A capped collection
+    /// that shows all its rows has nothing to move and asks the page's scroll owner after `place_reveal` (`content`).
     pub(super) fn reveal_with(&mut self, layout: &C::ItemLayout, at: usize) {
         if !layout.shown(at) {
             return;
