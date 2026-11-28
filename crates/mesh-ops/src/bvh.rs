@@ -488,7 +488,14 @@ impl Bvh {
 /// by Voronoi region (Ericson, Real-Time Collision Detection, 5.1.5). Degenerate triangles give
 /// a non-finite distance and are never nearest.
 fn closest_on_triangle(p: Vec3, t: &[Vec3; 3]) -> (Vec3, f32, f32) {
-    let [a, b, c] = *t;
+    // The region tests multiply four coordinates, which overflows f32 for finite inputs past
+    // about 1e9, so the whole test runs in f64.
+    let (q, v, w) = closest_on_triangle_f64(p.as_dvec3(), [t[0].as_dvec3(), t[1].as_dvec3(), t[2].as_dvec3()]);
+    (q.as_vec3(), v as f32, w as f32)
+}
+
+fn closest_on_triangle_f64(p: DVec3, t: [DVec3; 3]) -> (DVec3, f64, f64) {
+    let [a, b, c] = t;
     let (ab, ac, ap) = (b - a, c - a, p - a);
     let (d1, d2) = (ab.dot(ap), ac.dot(ap));
     if d1 <= 0.0 && d2 <= 0.0 {
@@ -539,6 +546,15 @@ mod tests {
         let hit = bvh.closest(Vec3::new(-1.0, 0.0, 41.0), Vec3::new(1.0, 0.0, -41.0), 2.0).unwrap();
         assert!((hit.t - 1.0).abs() < 1e-6);
         assert!(bvh.closest(Vec3::new(-1.0, -0.1, 41.0), Vec3::new(1.0, 0.0, -41.0), 2.0).is_none());
+    }
+
+    #[test]
+    fn nearest_point_survives_products_that_overflow_f32() {
+        // The region tests multiply four coordinates: (2.5e9)^2 · (1e10)^2 is past f32::MAX.
+        let bvh = review_triangle([Vec3::ZERO, Vec3::X * 1e10, Vec3::Y * 1e10]);
+        let hit = bvh.nearest(Vec3::new(2.5e9, 2.5e9, 1.0), 10.0, &|_| true).unwrap();
+        assert!((hit.t - 1.0).abs() < 1e-3, "t = {}", hit.t);
+        assert!((hit.u - 0.25).abs() < 1e-6 && (hit.v - 0.25).abs() < 1e-6, "u = {}, v = {}", hit.u, hit.v);
     }
 
     #[test]
