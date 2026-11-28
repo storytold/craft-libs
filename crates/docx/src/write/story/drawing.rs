@@ -207,6 +207,7 @@ impl Writer<'_> {
         // from another (Create Link) shows the rest of that box's text: it names the chain and
         // its place in it instead.
         let part = (*story).and_then(|id| self.doc.parts.get(&id).filter(|p| p.kind == craft_wordmodel::PartKind::TextBox).map(|p| (id, p)));
+        text_box_style(w, part.and_then(|(_, p)| p.body.auto_color));
         let link = part.and_then(|(id, _)| self.txbx_links.get(&id).copied());
         let mut content = None;
         if let Some((n, seq)) = link.filter(|(_, seq)| *seq > 0) {
@@ -387,6 +388,22 @@ pub(super) fn shape_name(kind: ShapeKind, freeform: Option<&craft_wordmodel::fre
 
 /// A freeform's geometry as DrawingML custom geometry (`a:custGeom`): each path in EMUs of its
 /// own coordinate space (the shape's size when it has none), from `a:moveTo` along `a:lnTo`.
+fn text_box_style(w: &mut W, color: Option<Rgb>) {
+    let Some(color) = color else { return };
+    // Only the resolved text colour is known. Neutral style references and `none` retain
+    // the explicit shape formatting and leave the themed font family unspecified.
+    w.open("wps:style", &[]);
+    for tag in ["a:lnRef", "a:fillRef", "a:effectRef"] {
+        w.open(tag, &[("idx", "0")]);
+        w.empty("a:srgbClr", &[("val", "000000")]);
+        w.close(tag);
+    }
+    w.open("a:fontRef", &[("idx", "none")]);
+    w.empty("a:srgbClr", &[("val", &color.hex())]);
+    w.close("a:fontRef");
+    w.close("wps:style");
+}
+
 fn cust_geom(w: &mut W, f: &craft_wordmodel::freeform::Freeform, sw: f32, sh: f32) {
     let (pw, ph) = (if f.w > 0.0 { f.w } else { sw.max(0.0) }, if f.h > 0.0 { f.h } else { sh.max(0.0) });
     w.open("a:custGeom", &[]);
