@@ -161,35 +161,40 @@ struct CellDraft {
     cell: Cell,
     paragraph: Option<usize>,
     paragraph_started: bool,
-    /// White space waiting to be written as one space, and how many spans were open where it
-    /// was: it takes their style, not that of a span opened after it.
-    pending_space: Option<usize>,
+    /// White space waiting to be written as one space, with the style it was written in: not
+    /// that of a span opened after it.
+    pending_space: Option<Option<String>>,
     /// The spans open in the paragraph: their depth and style.
     spans: Vec<(usize, Option<String>)>,
 }
 
 impl CellDraft {
-    /// Appends `text` to the cell's text, in the style of the innermost styled span open.
-    fn push(&mut self, text: &str, max: usize) -> Result<(), Error> {
-        if let Some(open) = self.pending_space.take() {
-            self.push_in(" ", open, max)?;
-        }
-        self.push_in(text, self.spans.len(), max)
+    /// The style of the innermost styled span open.
+    fn style(&self) -> Option<String> {
+        self.spans.iter().rev().find_map(|(_, s)| s.clone())
     }
 
-    /// Appends `text` in the style of the innermost styled span among the first `open`.
-    fn push_in(&mut self, text: &str, open: usize, max: usize) -> Result<(), Error> {
+    /// Appends `text` to the cell's text, in the style of the innermost styled span open.
+    fn push(&mut self, text: &str, max: usize) -> Result<(), Error> {
+        if let Some(style) = self.pending_space.take() {
+            self.push_in(" ", style, max)?;
+        }
+        let style = self.style();
+        self.push_in(text, style, max)
+    }
+
+    fn push_in(&mut self, text: &str, style: Option<String>, max: usize) -> Result<(), Error> {
         let start = self.cell.text.len();
         push_text(&mut self.cell.text, text, max)?;
-        let Some(style) = self.spans.get(..open).unwrap_or(&self.spans).iter().rev().find_map(|(_, s)| s.as_ref()) else { return Ok(()) };
+        let Some(style) = style else { return Ok(()) };
         let end = self.cell.text.len();
         if let Some(last) = self.cell.runs.last_mut()
             && last.end == start
-            && last.style == *style
+            && last.style == style
         {
             last.end = end;
         } else if self.cell.runs.len() < MAX_RUNS {
-            self.cell.runs.push(Run { start, end, style: style.clone() });
+            self.cell.runs.push(Run { start, end, style });
         }
         Ok(())
     }
@@ -212,6 +217,11 @@ struct Import<'o> {
 
 /// Reads the tables of a `content.xml` (the XML alone, for a caller with its own package).
 pub fn read_content(bytes: &[u8], options: &Options) -> Result<Workbook, Error> {
+    read_content_kept(bytes, options).map(|(wb, _)| wb)
+}
+
+/// [`read_content`], and what it charged against [`Options::max_kept`].
+pub(crate) fn read_content_kept(bytes: &[u8], options: &Options) -> Result<(Workbook, u64), Error> {
     let canonical = Canonical::new(NAMESPACES);
     let xml = XmlOptions { doctype: Doctype::Reject, ..XmlOptions::canonical(&canonical).strict() };
     let text = craft_xml::to_utf8(bytes);
@@ -253,7 +263,7 @@ pub fn read_content(bytes: &[u8], options: &Options) -> Result<Workbook, Error> 
     if import.wb.sheets.is_empty() {
         return Err(Error::Invalid("the spreadsheet has no tables".into()));
     }
-    Ok(import.wb)
+    Ok((import.wb, import.kept))
 }
 
 /// What a tree costs against [`Options::max_kept`].
@@ -271,6 +281,20 @@ pub(crate) fn tree_cost(e: &El) -> u64 {
 /// What a cell's trees cost, for each further copy of it.
 fn cell_trees_cost(cell: &Cell) -> u64 {
     cell.annotation.iter().chain(&cell.drawings).map(tree_cost).fold(0, u64::saturating_add)
+}
+
+fn attrs_cost(attrs: &[(String, String)]) -> u64 {
+    attrs.iter().map(|(k, v)| NODE_COST + (k.len() + v.len()) as u64).fold(0, u64::saturating_add)
+}
+
+/// What a non-blank cell's copy keeps besides its text and trees: its styled stretches and link.
+fn cell_extras_cost(cell: &Cell) -> u64 {
+    let runs = cell.runs.iter().map(|r| NODE_COST + r.style.len() as u64).fold(0, u64::saturating_add);
+    let link = cell
+        .link
+        .as_ref()
+        .map_or(0, |l| NODE_COST + (l.href.len() + l.title.as_ref().map_or(0, String::len) + l.target_frame.as_ref().map_or(0, String::len)) as u64);
+    runs.saturating_add(link)
 }
 
 fn line_cost(a: Option<&String>, b: Option<&String>) -> u64 {
@@ -376,6 +400,7 @@ impl Import<'_> {
                     return Err(xml_error("multiple spreadsheets in one document"));
                 }
                 self.check_attrs(&attrs)?;
+                self.charge_kept(attrs_cost(&attrs))?;
                 self.spreadsheet_seen = true;
                 self.wb.attrs = attrs;
             }
@@ -384,6 +409,7 @@ impl Import<'_> {
                     return Err(Error::TooLarge(format!("more than {MAX_SHEETS} sheets")));
                 }
                 self.check_attrs(&attrs)?;
+                self.charge_kept(attrs_cost(&attrs))?;
                 let keep = self.options.only_sheet.is_none_or(|i| i == self.wb.sheets.len());
                 let name = self.attr(&attrs, "table:name")?.unwrap_or_default();
                 self.sheet = Some(SheetDraft {
@@ -585,7 +611,7 @@ impl Import<'_> {
         for ch in text.chars() {
             if matches!(ch, ' ' | '\t' | '\n' | '\r') {
                 if cell.paragraph_started && cell.pending_space.is_none() {
-                    cell.pending_space = Some(cell.spans.len());
+                    cell.pending_space = Some(cell.style());
                 }
             } else {
                 cell.push(ch.encode_utf8(&mut [0; 4]), max)?;
@@ -808,8 +834,12 @@ impl Import<'_> {
             // The first row's copies were charged with the cell.
             let copies = if first_charged { count.saturating_sub(u64::from(entry.repeat)) } else { count };
             self.text = self.text.saturating_add(copies.saturating_mul(charged(&entry.cell)));
-            // The cell's trees were charged once, as they were read.
-            self.charge_kept(count.saturating_sub(1).saturating_mul(cell_trees_cost(&entry.cell)))?;
+            // The trees of the first row's first copy were charged as they were read; its runs
+            // and link, and every other copy, are charged here.
+            let further = if first_charged { count.saturating_sub(1) } else { count };
+            self.charge_kept(
+                further.saturating_mul(cell_trees_cost(&entry.cell)).saturating_add(count.saturating_mul(cell_extras_cost(&entry.cell))),
+            )?;
         }
         let merged = entry.width > 1 || entry.height > 1;
         if merged {

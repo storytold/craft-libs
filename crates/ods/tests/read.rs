@@ -413,6 +413,11 @@ fn a_cell_keeps_its_note_link_styled_text_validation_matrix_and_drawings() {
     assert_eq!((link.href.as_str(), link.title.as_deref()), ("https://example.org/", Some("Example")));
     let styled: Vec<_> = c.runs.iter().map(|r| (&c.text[r.start..r.end], r.style.as_str())).collect();
     assert_eq!(styled, [("to the", "T1")]);
+    // A space keeps the style it was written in, even when another span follows it.
+    let next = open(&row(r#"<table:table-cell office:value-type="string"><text:p><text:span text:style-name="A">a </text:span><text:span text:style-name="B">b</text:span></text:p></table:table-cell>"#)).unwrap();
+    let c2 = &next.sheets[0].cells[&CellRef::new(0, 0)];
+    let styled: Vec<_> = c2.runs.iter().map(|r| (&c2.text[r.start..r.end], r.style.as_str())).collect();
+    assert_eq!(styled, [("a ", "A"), ("b", "B")]);
     assert_eq!(c.validation.as_deref(), Some("val1"));
     assert_eq!(c.drawings.len(), 1);
     assert_eq!(c.drawings[0].child("draw:image").and_then(|i| i.attr("xlink:href")), Some("Pictures/a.png"));
@@ -528,4 +533,22 @@ fn kept_trees_count_every_copy_against_their_bound() {
     let names: String = (0..20_000).map(|i| format!(r#"<table:named-range table:name="n{i}" table:cell-range-address="$Data.$A$1"/>"#)).collect();
     let many = ods(&format!(r#"<table:table table:name="Data"/><table:named-expressions>{names}</table:named-expressions>"#));
     assert!(matches!(read(&many, &small), Err(Error::TooLarge(_))));
+}
+
+#[test]
+fn the_other_parts_share_one_bound_with_what_the_content_kept() {
+    let names: String = (0..2_000).map(|i| format!(r#"<table:named-range table:name="n{i}" table:cell-range-address="$Data.$A$1"/>"#)).collect();
+    let body = content(&format!(r#"<table:table table:name="Data"/><table:named-expressions>{names}</table:named-expressions>"#));
+    let styles = format!(
+        r#"<office:document-styles {NAMESPACES}><office:styles>{}</office:styles></office:document-styles>"#,
+        r#"<style:style style:name="s" style:family="table-cell"/>"#.repeat(2_000)
+    );
+    let bytes = files(&[("content.xml", body.as_bytes()), ("styles.xml", styles.as_bytes())]).unwrap();
+    let all = Document::open(&bytes, None, &Options::default()).unwrap();
+    assert!(all.styles.is_some());
+    // A bound each part fits alone, but not with the content's names.
+    let tight = Options { max_kept: 600 << 10, ..Options::default() };
+    let doc = Document::open(&bytes, None, &tight).unwrap();
+    assert!(!doc.workbook.body.is_empty());
+    assert!(doc.styles.is_none() && doc.warnings.iter().any(|w| w.contains("styles.xml")), "{:?}", doc.warnings);
 }

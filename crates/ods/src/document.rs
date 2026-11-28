@@ -9,7 +9,7 @@ use craft_odf::crypt::{self, CryptError};
 use craft_odf::flat;
 use craft_xml::{Canonical, Doctype, El, Options as XmlOptions};
 
-use crate::content::{read_content, tree_cost};
+use crate::content::{read_content_kept, tree_cost};
 use crate::model::Workbook;
 use crate::ns::NAMESPACES;
 use crate::{Error, Options};
@@ -36,6 +36,8 @@ pub struct Document<'a> {
     pub warnings: Vec<String>,
     files: Files<'a>,
     options: Options,
+    /// What `content.xml` and the parts kept so far charged against [`Options::max_kept`].
+    kept: u64,
 }
 
 impl std::fmt::Debug for Document<'_> {
@@ -81,9 +83,9 @@ impl<'a> Document<'a> {
             if !is_spreadsheet(doc.mimetype.as_deref()) {
                 return Err(Error::Invalid("missing or invalid ODS mimetype".into()));
             }
-            let workbook = read_content(doc.content.as_bytes(), options)?;
-            let mut d =
-                Document { workbook, styles: None, settings: None, meta: None, warnings: vec![], files: Files::Flat(doc.files), options: *options };
+            let (workbook, kept) = read_content_kept(doc.content.as_bytes(), options)?;
+            let files = Files::Flat(doc.files);
+            let mut d = Document { workbook, styles: None, settings: None, meta: None, warnings: vec![], files, options: *options, kept };
             d.styles = d.part_tree("styles.xml", doc.styles.as_bytes(), "office:document-styles");
             d.settings = d.part_tree("settings.xml", doc.settings.as_bytes(), "office:document-settings");
             d.meta = d.part_tree("meta.xml", doc.meta.as_bytes(), "office:document-meta");
@@ -105,7 +107,7 @@ impl<'a> Document<'a> {
         };
         let mut package = craft_odf::Package::open(&bytes, &options.package)?;
         let content = package.read("content.xml")?.ok_or_else(|| Error::Invalid("content.xml is missing".into()))?;
-        let workbook = read_content(&content, options)?;
+        let (workbook, kept) = read_content_kept(&content, options)?;
         let mut warnings = vec![];
         let mut read = |name: &str| {
             package.read(name).unwrap_or_else(|e| {
@@ -115,7 +117,7 @@ impl<'a> Document<'a> {
         };
         let (styles, settings, meta) = (read("styles.xml"), read("settings.xml"), read("meta.xml"));
         drop(package);
-        let mut d = Document { workbook, styles: None, settings: None, meta: None, warnings, files: Files::Package(bytes), options: *options };
+        let mut d = Document { workbook, styles: None, settings: None, meta: None, warnings, files: Files::Package(bytes), options: *options, kept };
         d.styles = styles.and_then(|x| d.part_tree("styles.xml", &x, "office:document-styles"));
         d.settings = settings.and_then(|x| d.part_tree("settings.xml", &x, "office:document-settings"));
         d.meta = meta.and_then(|x| d.part_tree("meta.xml", &x, "office:document-meta"));
@@ -129,7 +131,16 @@ impl<'a> Document<'a> {
             return None;
         }
         match self.parse(xml) {
-            Ok(el) if el.name == root => Some(el),
+            Ok(el) if el.name == root => {
+                // The parts share one budget with what content.xml kept.
+                let kept = self.kept.saturating_add(tree_cost(&el));
+                if kept > self.options.max_kept {
+                    self.warnings.push(format!("{name} was left out: what is kept besides cells passed {} MiB", self.options.max_kept >> 20));
+                    return None;
+                }
+                self.kept = kept;
+                Some(el)
+            }
             Ok(_) => {
                 self.warnings.push(format!("{name} is not an OpenDocument {root} part"));
                 None
