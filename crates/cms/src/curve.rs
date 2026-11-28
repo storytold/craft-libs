@@ -361,15 +361,33 @@ fn edge_index(t: &[f32], start: bool) -> f32 {
     if start {
         let v = t[0];
         // The first value that differs, given they do so from there on.
-        let first_other = t.partition_point(|x| (*x - v).abs() <= 1e-7);
+        let first_other = t.partition_point(|x| {
+            count_edge_read();
+            (*x - v).abs() <= 1e-7
+        });
         let i = if first_other >= n { n - 1 } else { first_other.saturating_sub(1) };
         i as f32 / (n - 1) as f32
     } else {
         let v = t[n - 1];
         // The start of the trailing run equal to the last value.
-        let i = t.partition_point(|x| (*x - v).abs() > 1e-7);
+        let i = t.partition_point(|x| {
+            count_edge_read();
+            (*x - v).abs() > 1e-7
+        });
         i as f32 / (n - 1) as f32
     }
+}
+
+// Each table entry `edge_index` reads on this thread.
+#[cfg(test)]
+std::thread_local! {
+    static EDGE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[inline]
+fn count_edge_read() {
+    #[cfg(test)]
+    EDGE_READS.with(|reads| reads.set(reads.get().saturating_add(1)));
 }
 
 #[cfg(test)]
@@ -381,13 +399,18 @@ mod tests {
         // Four million zeros and a one: a scan per call would be 8·10¹¹ steps for these calls.
         let mut t = vec![0.0f32; 4_000_000];
         t.push(1.0);
+        // Bisection reads one entry per halving of the table, and a scan reads the whole run.
+        let per_call = t.len().ilog2() as usize + 2;
         let c = Curve::Table(t);
-        let started = std::time::Instant::now();
-        let mut last = 0.0;
-        for _ in 0..200_000 {
+        EDGE_READS.with(|reads| reads.set(0));
+        let mut last = c.eval_inverse(0.0);
+        let one_call = EDGE_READS.with(std::cell::Cell::get);
+        assert!(one_call <= per_call, "one inversion read {one_call} entries");
+        for _ in 1..200_000 {
             last = c.eval_inverse(0.0);
         }
         assert!(last > 0.99, "the flat start ends at the last zero: {last}");
-        assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+        let total = EDGE_READS.with(std::cell::Cell::get);
+        assert!(total <= 200_000 * per_call, "200,000 inversions read {total} entries");
     }
 }
