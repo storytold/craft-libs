@@ -679,7 +679,6 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let mut stamp = DefaultHasher::new();
     let narrowed_by = (narrowing.class, narrowing.favorites, narrowing.variable, &narrowing.similar, narrowing.script, &narrowing.sets);
     (&query, narrowed_by, &narrowing.properties, on_white, chips).hash(&mut stamp);
-    infos.read_revision().hash(&mut stamp);
     let banner_family = lead.unwrap_or_else(|| family.clone());
     let texts = picker.sample_texts;
     let chosen = chosen_sample(texts, settings.as_ref());

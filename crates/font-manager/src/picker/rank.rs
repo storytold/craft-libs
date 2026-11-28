@@ -3,7 +3,6 @@
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use craft_font_catalog::{Catalog, FaceInfo, LocalizedName, Outlines, is_private_family};
@@ -159,7 +158,6 @@ pub struct FamilyInfos {
     samples: Mutex<HashMap<(String, String), String>>,
     fallback_jobs: Arc<dyn craft_host::Jobs>,
     reads: Mutex<Option<Reads>>,
-    read_revision: AtomicU64,
 }
 
 impl FamilyInfos {
@@ -193,7 +191,6 @@ impl FamilyInfos {
             samples: Mutex::new(HashMap::new()),
             fallback_jobs: craft_host::default_jobs(),
             reads: Mutex::new(None),
-            read_revision: AtomicU64::new(0),
         }
     }
 
@@ -223,7 +220,6 @@ impl FamilyInfos {
                     lock(&self.scripts).insert(family, scripts);
                 }
             }
-            self.read_revision.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -267,10 +263,6 @@ impl FamilyInfos {
                 reads.queue.run_inline(1);
             }
         }
-    }
-
-    pub(super) fn read_revision(&self) -> u64 {
-        self.read_revision.load(Ordering::Relaxed)
     }
 
     /// What the family's regular face's outlines show, read on first use; nothing when the face can't be read.

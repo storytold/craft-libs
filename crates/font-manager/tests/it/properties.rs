@@ -584,6 +584,52 @@ fn an_enabled_set_keeps_families_outside_it_from_queuing_outline_reads() {
     assert!(outline_reads_with_set(true) < outline_reads_with_set(false), "the set's other family is never read");
 }
 
+/// An outline read that finishes while the list is open keeps the keyboard lead where the arrows left it: the next
+/// arrow moves on from that row.
+#[trial]
+fn finished_outline_reads_keep_the_open_lists_lead() {
+    use craft_behavior::Preview;
+    let jobs = Arc::new(craft_host::ManualJobs::new());
+    let preview = Rc::new(RefCell::new(None::<String>));
+    let shown = Rc::clone(&preview);
+    let catalog = catalog_of(&[face("Book"), face("Middle"), face("Poster")]);
+    let mut family = "Book".to_owned();
+    let mut filters = FontFilters::default();
+    filters.properties.height = Some(Grade::Medium);
+    let mut fx = Fixture::new(move |ui| {
+        let out = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).filters(Bind::bound(&mut filters)).show(ui);
+        match out.preview {
+            Preview::Shows(family) => *shown.borrow_mut() = Some(family),
+            Preview::Ended => *shown.borrow_mut() = None,
+            _ => {}
+        }
+    });
+    let host = craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs.clone()).build();
+    fx.host(Arc::new(host));
+    fx.in_room(Room::Window);
+    fx.settle();
+    fx.key(Key::Tab, Modifiers::NONE);
+    fx.key(Key::ArrowDown, Modifiers::ALT);
+    fx.settle();
+    // Book is the field's text, so only Middle and Poster show whether their rows are read.
+    while !(listed(&fx, "Middle") && listed(&fx, "Poster")) && jobs.run_next() {
+        fx.settle();
+    }
+    assert!(fx.texts().iter().any(|text| text.text == "Font information is loading."), "a read is still pending");
+    // The lead starts on the first row read (Poster); the arrow moves it up to Middle.
+    fx.key(Key::ArrowUp, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(preview.borrow().as_deref(), Some("Middle"), "the arrow leads Middle");
+    jobs.run_all();
+    fx.settle();
+    jobs.run_all();
+    fx.settle();
+    assert!(!fx.texts().iter().any(|text| text.text == "Font information is loading."), "every read finished");
+    fx.key(Key::ArrowUp, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(preview.borrow().as_deref(), Some("Book"), "the next arrow moves on from Middle to the row read last");
+}
+
 #[trial]
 fn closed_field_arrows_from_a_host_row_to_a_family_pick_the_family() {
     host_then_family_steps(false);
