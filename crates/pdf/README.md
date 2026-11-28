@@ -157,6 +157,8 @@ interpretation needs.
 - Reads every cross-reference form (tables, streams, hybrid `/XRefStm`) and object streams. A
   file whose cross-reference data is wrong or missing is rebuilt by scanning for object headers,
   and each repair is recorded (`repair_log`). Malformed input gives `CosError`, never a panic.
+- `Dict::retain` keeps the entries a closure says to in one pass, where removing them one at a
+  time would renumber the key index for each (added for storytold/pdfcraft#6948).
 - Encryption on open and save through `crypt`: revisions 2 to 6, crypt filters, `/EFF` and
   `/EncryptMetadata`. `set_encryption` and `remove_encryption` change it.
 - `write_incremental` appends the edited objects with a cross-reference section in the style of
@@ -171,8 +173,8 @@ interpretation needs.
 - Not here: streaming files larger than memory, linearized output.
 
 The code comes from PdfCraft's `pdfcraft-cos` crate (revision
-`1d2af9907ba772b368f6b54811359805fa5428e9`), unchanged apart from module paths and doc
-comments. Its test helpers come along: `src/cos/testkit.rs` (synthetic files, from
+`1d2af9907ba772b368f6b54811359805fa5428e9`), unchanged apart from module paths, doc comments
+and the changes noted above. Its test helpers come along: `src/cos/testkit.rs` (synthetic files, from
 `pdfcraft-testkit`) and `tests/cos/oracle.rs` (qpdf runs, from `pdfcraft-oracle`; a missing
 `qpdf` skips those tests, or fails them when `CRAFT_PDF_ORACLES_REQUIRED` is set). Tests:
 `cargo test -p craft-pdf --no-default-features --features cos`. Other crates' tests use the
