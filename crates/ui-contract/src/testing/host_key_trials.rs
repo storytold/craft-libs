@@ -1270,6 +1270,39 @@ fn a_host_canvas_marks_the_window_and_tab_toggles_its_panels() {
     );
 }
 
+#[trial]
+fn the_tab_a_focused_editor_keeps_does_not_toggle_panels() {
+    let editor = named_id("editor");
+    let canvas = named_id("canvas");
+    let inserted = Cell::new(false);
+    let mut show = |ui: &mut Ui| {
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
+        widget(ui, editor);
+        register_stop(ui.ctx(), Stop::new(editor, KeyUse::CODE).text());
+        if crate::runtime::keys::intents_of(ui.ctx(), Some(editor), false).take(Intent::Tab) {
+            inserted.set(true);
+        }
+    };
+    let mut frames = Frames::new();
+    let mut root = RootEnv::default();
+    root.tab_toggles_chrome = true;
+    frames.root(root);
+    frames.idle(2, &mut show);
+    request(&frames.ctx, FocusTarget::Id(editor));
+    frames.idle(2, &mut show);
+
+    press_key(&mut frames, &mut show, Key::Tab);
+    assert!(inserted.get(), "the editor receives its tab");
+    assert_eq!(egui_focused(&frames.ctx), Some(editor), "focus stays in the editor");
+    assert!(take_output(&frames.ctx).chrome_toggles.is_empty(), "the same press must not toggle the panels");
+
+    request(&frames.ctx, FocusTarget::Id(canvas));
+    frames.idle(2, &mut show);
+    press_key(&mut frames, &mut show, Key::Tab);
+    assert_eq!(take_output(&frames.ctx).chrome_toggles, vec![(ViewportId::ROOT, ChromeToggle::Panels)], "Tab on the canvas still toggles the panels");
+}
+
 /// Focus that Tab moves to the app's canvas in a layer returns to the stop it came from when the layer goes away, also
 /// when the group the canvas sits in first appears in the pass of the Tab: declaring the canvas enters nothing.
 #[trial]
