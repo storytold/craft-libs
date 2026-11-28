@@ -876,6 +876,122 @@ mod tests {
         check_table(&DC_CHROMA_BITS, &DC_VALS);
     }
 
+    /// The widest level in `bits`: the most codes at one length, and that length.
+    fn widest_level(bits: &[u8; 16]) -> (usize, usize) {
+        bits.iter().enumerate().map(|(i, &n)| (i + 1, n as usize)).max_by_key(|&(_, n)| n).unwrap_or((0, 0))
+    }
+
+    /// splitmix64; the seed only has to be fixed, not good.
+    fn next_rand(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// One symbol per shape that can change the merge order or the K.3 limiting: empty, one, two,
+    /// all equal, all saturated, one dominant symbol, and mostly-zero sparse counts.
+    fn random_freq(shape: u64, r: &mut u64) -> Freq {
+        std::array::from_fn(|_| match shape % 6 {
+            0 => next_rand(r) % 4,
+            1 => next_rand(r) % 64,
+            2 => next_rand(r),
+            3 => next_rand(r) % 1000 + 1,
+            4 => u64::MAX - next_rand(r) % 3,
+            _ => (next_rand(r) % 3).saturating_mul(next_rand(r)),
+        })
+    }
+
+    /// Every distribution shape arrives as a valid `DHT`. The shape that matters most is the
+    /// saturated one: the merge uses `saturating_add`, so counts stop growing well before they
+    /// could wrap, and the table must still be valid.
+    #[test]
+    fn optimal_tables_hold_across_distribution_shapes() {
+        let mut shapes: Vec<(String, Freq)> = Vec::new();
+        let mut push = |name: &str, f: Freq| shapes.push((name.to_string(), f));
+        push("all zero", [0; 256]);
+        push("all one", [1; 256]);
+        push("all max", [u64::MAX; 256]);
+        push("all max/2", [u64::MAX / 2; 256]);
+        push("one symbol", {
+            let mut f = [0u64; 256];
+            f[0] = 1;
+            f
+        });
+        push("one dominant, 255 ones", {
+            let mut f = [1u64; 256];
+            f[0] = u64::MAX;
+            f
+        });
+        push("two symbols, extreme ratio", {
+            let mut f = [0u64; 256];
+            f[0] = 1;
+            f[255] = u64::MAX;
+            f
+        });
+        push("geometric", std::array::from_fn(|s| 1u64 << (s % 63)));
+        for n in [17usize, 20, 25, 30, 33, 40, 60, 94, 256] {
+            let mut f = [0u64; 256];
+            let (mut a, mut b) = (1u64, 1u64);
+            for x in f.iter_mut().take(n) {
+                *x = a;
+                (a, b) = (b, a.saturating_add(b));
+            }
+            push(&format!("fibonacci {n}"), f);
+        }
+        for (name, f) in &shapes {
+            let (bits, vals) = optimal_table(f);
+            check_table(&bits, &vals);
+            let used = f.iter().filter(|&&c| c > 0).count();
+            assert_eq!(vals.len(), used.max(1), "{name}: listed symbols");
+        }
+        // the shape that pins the `min(255)` clamp at its exact edge: 257 equal weights (256 real
+        // plus the reserved symbol) give 255 codes at 8 bits and 2 at 9; dropping the reserved one
+        // leaves 255. A strict `< 255` bound would be a false failure here.
+        let (bits, _) = optimal_table(&[1; 256]);
+        assert_eq!(bits[7] as usize, 255, "8-bit codes: {}", bits[7]);
+        assert_eq!(bits[8] as usize, 1, "9-bit codes: {}", bits[8]);
+        // one dominant symbol with 255 equal small ones: the whole small side sits at 9 bits
+        let mut dominant = [1u64; 256];
+        dominant[0] = u64::MAX;
+        let (bits, vals) = optimal_table(&dominant);
+        check_table(&bits, &vals);
+        assert_eq!(bits[8] as usize, 255, "9-bit codes: {}", bits[8]);
+    }
+
+    /// The sweep behind the property test: 100_000 vectors, every shape.
+    /// Offline, in release: `cargo test -p craft-jpeg --release --lib -- --ignored --nocapture`.
+    ///
+    /// Monotonicity is deliberately not asserted. The reserved symbol of K.2 costs a real symbol
+    /// one extra bit in some inputs: sweep vector 135 gives count 6 a 16-bit code and count 4 a
+    /// 15-bit one, 6 bits over plain 256-leaf Huffman. T.81 prescribes the dummy, so the table is
+    /// as specified; it is just not optimal for the 256-symbol problem, and the claim "a more
+    /// frequent symbol never gets a longer code" only holds for some inputs (the `typical` vector
+    /// of `optimal_tables_are_valid_and_bounded`), not all.
+    #[test]
+    #[ignore = "offline sweep: 100_000 vectors"]
+    fn optimal_tables_cover_the_frequency_space() {
+        let n = 100_000u64;
+        let mut r = 0x9E37_79B9_7F4A_7C15u64;
+        let (mut widest, mut widest_at, mut longest, mut saturated) = (0usize, 0usize, 0usize, 0u32);
+        for k in 0..n {
+            let f = random_freq(k, &mut r);
+            let (bits, vals) = optimal_table(&f);
+            check_table(&bits, &vals);
+            assert_eq!(vals.len(), f.iter().filter(|&&c| c > 0).count().max(1), "vector {k}: listed symbols");
+            let (level, count) = widest_level(&bits);
+            if count > widest {
+                (widest, widest_at) = (count, level);
+            }
+            longest = longest.max(level);
+            if f.iter().try_fold(0u64, |a, &c| a.checked_add(c)).is_none() {
+                saturated += 1;
+            }
+        }
+        println!("{n} vectors: widest {widest} codes at {widest_at} bits, longest code {longest} bits, {saturated} with a saturating total");
+    }
+
     /// Issue #1373: tables made for the image give a smaller file with exactly the same pixels as
     /// the Annex K example tables (the quantized coefficients are the same), at every quality and
     /// subsampling, and both decoders read it.
