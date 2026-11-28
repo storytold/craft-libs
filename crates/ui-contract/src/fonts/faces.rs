@@ -7,6 +7,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 use egui::epaint::text::Tag;
 use egui::{FallbackRequest, FontData, FontFamily, FontInsert, FontPriority, FontProvider, InsertFontFamily};
 use skrifa::MetadataProvider as _;
+use skrifa::raw::TableProvider as _;
 
 use super::FontRef;
 
@@ -220,9 +221,127 @@ impl FontProvider for Installed {
     }
 }
 
-/// Whether the face's character map has `c`.
+/// An [`OutlinePen`](skrifa::outline::OutlinePen) that counts the drawable segments of a glyph,
+/// ignoring zero-length collapsed lines and curves whose control points and endpoint all coincide
+/// with the current point.
+#[derive(Default)]
+struct ContourCount {
+    segments: usize,
+    start: Option<(f32, f32)>,
+    current: Option<(f32, f32)>,
+}
+
+impl skrifa::outline::OutlinePen for ContourCount {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.start = Some((x, y));
+        self.current = Some((x, y));
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        if self.current != Some((x, y)) {
+            self.segments = self.segments.saturating_add(1);
+        }
+        self.current = Some((x, y));
+    }
+
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        if self.current != Some((cx0, cy0)) || self.current != Some((x, y)) {
+            self.segments = self.segments.saturating_add(1);
+        }
+        self.current = Some((x, y));
+    }
+
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        if self.current != Some((cx0, cy0)) || self.current != Some((cx1, cy1)) || self.current != Some((x, y)) {
+            self.segments = self.segments.saturating_add(1);
+        }
+        self.current = Some((x, y));
+    }
+
+    fn close(&mut self) {
+        self.current = self.start;
+    }
+}
+
+/// Whether `font` draws at least one outline segment for `glyph_id`.
+fn has_outline_contour(font: &skrifa::FontRef<'_>, glyph_id: skrifa::GlyphId) -> bool {
+    let Some(outline) = font.outline_glyphs().get(glyph_id) else { return false };
+    let mut pen = ContourCount::default();
+    let settings = skrifa::outline::DrawSettings::unhinted(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+    outline.draw(settings, &mut pen).is_ok() && pen.segments > 0
+}
+
+/// Whether `font` stores a readable, non-empty `COLR` glyph for `glyph_id`.
+fn has_color_glyph(font: &skrifa::FontRef<'_>, glyph_id: skrifa::GlyphId) -> bool {
+    if font.color_glyphs().get_with_format(glyph_id, skrifa::color::ColorGlyphFormat::ColrV1).is_some() {
+        return true;
+    }
+    let Ok(colr) = font.colr() else { return false };
+    let Ok(Some(range)) = colr.v0_base_glyph(glyph_id) else { return false };
+    let Some(layers) = colr.layer_records().and_then(Result::ok) else { return false };
+    let Some(slice) = layers.get(range) else { return false };
+    !slice.is_empty() && slice.iter().any(|layer| layer.glyph_id().to_u16() != 0 && has_outline_contour(font, layer.glyph_id().into()))
+}
+
+/// Whether `font` stores a non-empty bitmap strike glyph for `glyph_id`.
+fn has_bitmap_glyph(font: &skrifa::FontRef<'_>, glyph_id: skrifa::GlyphId) -> bool {
+    font.bitmap_strikes().glyph_for_size(skrifa::instance::Size::unscaled(), glyph_id).is_some_and(|bitmap| bitmap.width > 0 && bitmap.height > 0)
+}
+
+/// Whether `font` stores a non-empty `SVG ` document slice for `glyph_id` with valid bounds.
+fn has_svg_glyph(font: &skrifa::FontRef<'_>, glyph_id: skrifa::GlyphId) -> bool {
+    let Ok(svg) = font.svg() else { return false };
+    let Ok(list) = svg.svg_document_list() else { return false };
+    let Ok(glyph_id) = skrifa::raw::types::GlyphId16::try_from(glyph_id) else { return false };
+    let records = list.document_records();
+    let Ok(index) = records.binary_search_by(|record| {
+        if record.start_glyph_id() > glyph_id {
+            std::cmp::Ordering::Greater
+        } else if record.end_glyph_id() < glyph_id {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Equal
+        }
+    }) else {
+        return false;
+    };
+    let Some(record) = records.get(index) else { return false };
+    let Ok(start) = usize::try_from(record.svg_doc_offset()) else { return false };
+    let Ok(len) = usize::try_from(record.svg_doc_length()) else { return false };
+    let Some(end) = start.checked_add(len) else { return false };
+    list.offset_data().as_bytes().get(start..end).is_some_and(|data| !data.is_empty())
+}
+
+/// Whether `font` stores colour, bitmap or SVG glyph data for `glyph_id`.
+fn has_non_outline_glyph(font: &skrifa::FontRef<'_>, glyph_id: skrifa::GlyphId) -> bool {
+    has_color_glyph(font, glyph_id) || has_bitmap_glyph(font, glyph_id) || has_svg_glyph(font, glyph_id)
+}
+
+/// Maps `c` to a non-`.notdef` glyph ID in `font`.
+fn mapped_glyph_id(font: &skrifa::FontRef<'_>, c: char) -> Option<skrifa::GlyphId> {
+    font.charmap().map(c).filter(|&id| id != skrifa::GlyphId::NOTDEF)
+}
+
+/// Whether `font` maps `c` to a non-`.notdef` glyph that the active renderer draws
+/// (a drawable outline, or when `color_fonts` is enabled a `COLR` or bitmap glyph, or any
+/// mapped glyph for whitespace).
+pub(crate) fn font_is_drawable(font: &skrifa::FontRef<'_>, c: char) -> bool {
+    let Some(id) = mapped_glyph_id(font, c) else { return false };
+    if c.is_whitespace() || has_outline_contour(font, id) {
+        return true;
+    }
+    #[cfg(feature = "color_fonts")]
+    return has_color_glyph(font, id) || has_bitmap_glyph(font, id);
+    #[cfg(not(feature = "color_fonts"))]
+    false
+}
+
+/// Whether the face maps `c` to a non-`.notdef` glyph with a drawable outline (or colour, bitmap
+/// or SVG data, or any mapped glyph for whitespace).
 pub(crate) fn has_char(data: &FontData, c: char) -> bool {
-    skrifa::FontRef::from_index(data.bytes(), data.index).is_ok_and(|font| font.charmap().map(c).is_some())
+    let Ok(font) = skrifa::FontRef::from_index(data.bytes(), data.index) else { return false };
+    let Some(id) = mapped_glyph_id(&font, c) else { return false };
+    c.is_whitespace() || has_non_outline_glyph(&font, id) || has_outline_contour(&font, id)
 }
 
 /// Whether `c` shows a glyph: not whitespace, a control, a format character or another invisible

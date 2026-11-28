@@ -16,7 +16,7 @@ use egui::{Context, FontData, Shape};
 use skrifa::MetadataProvider as _;
 use skrifa::raw::{FileRef, TableProvider as _};
 
-use super::faces::{baseline_fallback, set_weight};
+use super::faces::{baseline_fallback, font_is_drawable, set_weight};
 use super::script::{EMOJI, MATH, SYMBOLS, script_of};
 use super::stack::is_cjk;
 use crate::runtime::egui::fonts as egui_fonts;
@@ -34,7 +34,8 @@ pub trait FontCandidates: Send + Sync {
     /// Files that may cover `script` (ISO 15924), most preferred first. For Han the `han`
     /// preference orders the regional faces (Japanese before Simplified for a `ja` locale).
     fn files(&self, script: &str, han: Option<Han>) -> Vec<PathBuf>;
-    /// The face index in `data` whose character map has `c`; `None` when none has it.
+    /// The face index in `data` that maps `c` to a drawable glyph (or any mapped glyph for
+    /// whitespace); `None` when none covers it.
     fn covers(&self, data: &[u8], c: char) -> Option<u32>;
     /// A background lookup (fontconfig's CJK scan) is still running: the loader waits for the
     /// preferred script instead of falling through to another one.
@@ -125,6 +126,8 @@ pub struct OnDemandFonts {
     reads: Vec<(String, usize)>,
     /// Faces registered so far: (font name, file, face index).
     registered: Vec<(String, PathBuf, u32)>,
+    /// Face counts learned when reading candidate files, so a path is skipped once all its faces are registered.
+    face_counts: Vec<(PathBuf, u32)>,
     /// The pass after an install registers nothing: egui applies `set_fonts` at the start of the
     /// next pass, so this pass's shapes were laid out with the old stack.
     skip_pass: bool,
@@ -137,7 +140,34 @@ pub struct OnDemandFonts {
 impl OnDemandFonts {
     /// A loader over `candidates`, with the Han preference of the effective locale.
     pub fn new(candidates: Arc<dyn FontCandidates>, han: Option<Han>) -> Self {
-        OnDemandFonts { candidates, han, reads: Vec::new(), registered: Vec::new(), skip_pass: false, adding: false, waiting: false }
+        OnDemandFonts {
+            candidates,
+            han,
+            reads: Vec::new(),
+            registered: Vec::new(),
+            face_counts: Vec::new(),
+            skip_pass: false,
+            adding: false,
+            waiting: false,
+        }
+    }
+
+    fn is_registered(&self, path: &Path, index: u32) -> bool {
+        self.registered.iter().any(|(_, p, i)| p == path && *i == index)
+    }
+
+    fn all_faces_registered(&self, path: &Path) -> bool {
+        let Some((_, total)) = self.face_counts.iter().find(|(p, _)| p == path) else {
+            return false;
+        };
+        let registered = self.registered.iter().filter(|(_, p, _)| p == path).count();
+        registered >= usize::try_from(*total).unwrap_or(usize::MAX)
+    }
+
+    fn record_face_count(&mut self, path: &Path, count: u32) {
+        if !self.face_counts.iter().any(|(p, _)| p == path) {
+            self.face_counts.push((path.to_path_buf(), count));
+        }
     }
 
     /// Installs the loader on `ctx`, replacing an earlier one: `set_fonts` drops the registered faces, so an earlier
@@ -235,17 +265,24 @@ impl OnDemandFonts {
             if self.reads_of(script) >= MAX_SCRIPT_READS {
                 break;
             }
-            if self.registered.iter().any(|(_, p, _)| *p == path) {
+            if self.all_faces_registered(&path) {
                 continue;
             }
             let Some(bytes) = read_font(&path) else { continue };
             self.count_read(script);
-            if !file_is_readable(&bytes) {
+            let Some(face_count) = file_face_count(&bytes) else {
                 continue;
-            }
+            };
+            self.record_face_count(&path, face_count);
             let Some(mut index) = self.candidates.covers(&bytes, c) else { continue };
-            if let Some(region) = region.filter(|_| cjk) {
-                index = regional_face(&bytes, c, region).unwrap_or(index);
+            if let Some(region) = region.filter(|_| cjk)
+                && let Some(regional) = regional_face(&bytes, c, region)
+                && !self.is_registered(&path, regional)
+            {
+                index = regional;
+            }
+            if self.is_registered(&path, index) {
+                continue;
             }
             if !face_is_readable(&bytes, index) {
                 continue;
@@ -348,12 +385,11 @@ fn read_font(path: &Path) -> Option<Vec<u8>> {
     std::fs::read(path).ok()
 }
 
-/// Whether the text engine can parse the file: it is a font or a collection with a face.
-fn file_is_readable(bytes: &[u8]) -> bool {
-    match FileRef::new(bytes) {
-        Ok(FileRef::Font(_)) => true,
-        Ok(FileRef::Collection(collection)) => !collection.is_empty(),
-        Err(_) => false,
+/// Face count in `bytes`, or `None` when the text engine cannot parse it or the collection is empty.
+fn file_face_count(bytes: &[u8]) -> Option<u32> {
+    match FileRef::new(bytes).ok()? {
+        FileRef::Font(_) => Some(1),
+        FileRef::Collection(collection) => Some(collection.len()).filter(|&n| n > 0),
     }
 }
 
@@ -364,18 +400,19 @@ fn face_is_readable(bytes: &[u8], index: u32) -> bool {
     font.head().is_ok() && font.hhea().is_ok() && font.maxp().is_ok() && font.cmap().is_ok()
 }
 
-/// The index of the first face in `bytes` (a font or a collection) whose character map has `c`.
-/// `None` for fonts without it and for data that doesn't parse.
+/// The index of the first face in `bytes` (a font or a collection) that maps `c` to a drawable
+/// glyph supported by the active renderer (or any mapped glyph for whitespace). `None` for fonts
+/// without it and for data that doesn't parse.
 fn covering_face(bytes: &[u8], c: char) -> Option<u32> {
     match FileRef::new(bytes).ok()? {
-        FileRef::Font(font) => font.charmap().map(c).map(|_| 0),
+        FileRef::Font(font) => font_is_drawable(&font, c).then_some(0),
         FileRef::Collection(collection) => {
-            collection.iter().position(|font| font.is_ok_and(|font| font.charmap().map(c).is_some())).and_then(|i| u32::try_from(i).ok())
+            collection.iter().position(|font| font.is_ok_and(|font| font_is_drawable(&font, c))).and_then(|i| u32::try_from(i).ok())
         }
     }
 }
 
-/// In a collection of regional faces (Noto Sans CJK JP, SC, TC, HK, KR), the first face that has
+/// In a collection of regional faces (Noto Sans CJK JP, SC, TC, HK, KR), the first face that draws
 /// `c` and is the `region`'s: its family name ends with the region's code. `None` for a single
 /// font or a collection without such a face, which leaves the first covering face.
 fn regional_face(bytes: &[u8], c: char, region: Han) -> Option<u32> {
@@ -390,7 +427,7 @@ fn regional_face(bytes: &[u8], c: char, region: Han) -> Option<u32> {
     };
     let index = collection.iter().position(|font| {
         font.is_ok_and(|font| {
-            font.charmap().map(c).is_some()
+            font_is_drawable(&font, c)
                 && font
                     .localized_strings(skrifa::string::StringId::FAMILY_NAME)
                     .english_or_first()

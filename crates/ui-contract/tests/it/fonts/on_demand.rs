@@ -348,3 +348,158 @@ fn the_deflated_defaults_are_eguis_default_faces_and_draw_its_icons() {
         }
     }
 }
+
+#[trial]
+fn candidates_with_empty_outlines_are_skipped_for_the_next_usable_font() {
+    let ghost = super::synthetic_ttf("GhostArabic", &[('ع', false)], false);
+    assert_eq!(SystemCandidates.covers(&ghost, 'ع'), None, "mapped glyph without contours must not cover");
+    let ghost_path = write("ghost-arabic.ttf", &ghost);
+    let arabic_path = write("usable-arabic.ttf", ARABIC);
+    let files = Files::new(vec![("Arab", vec![ghost_path, arabic_path.clone()])]);
+    let mut frames = Frames::new();
+    install(&frames, &files);
+
+    show(&mut frames, "ع");
+    assert!(draws(&frames, 'ع'));
+    assert_eq!(registered(&frames), [(arabic_path, 0)]);
+
+    // Collection regional lookup also skips a regional face whose glyph has no outline contours.
+    let ghost_jp = super::synthetic_ttf("Noto Sans CJK JP", &[('日', false)], false);
+    let usable_sc = super::synthetic_ttf("Noto Sans CJK SC", &[('日', true)], false);
+    let ttc = write("ghost-regional.ttc", &collection(&[&ghost_jp, &usable_sc]));
+    let files = Files::new(vec![("Hani", vec![ttc.clone()])]);
+    let mut frames = Frames::new();
+    UiFonts::new(&I18nScripts)
+        .app_face("ui", egui_face("Ubuntu-Light"), &[FontRef::proportional()])
+        .system_fonts(SystemFonts::Off)
+        .ui_language("ja")
+        .on_demand(Arc::clone(&files) as Arc<dyn FontCandidates>)
+        .install(&frames.ctx);
+
+    show(&mut frames, "日");
+    assert_eq!(registered(&frames), [(ttc, 1)], "regional face with empty outline is skipped for the next covering face");
+}
+
+#[trial]
+fn candidates_with_collapsed_outlines_are_skipped_for_the_next_usable_font() {
+    let collapsed = super::synthetic_collapsed_ttf("CollapsedArabic", 'ع');
+    assert_eq!(SystemCandidates.covers(&collapsed, 'ع'), None, "collapsed zero-length contour must not cover");
+    let collapsed_path = write("collapsed-arabic.ttf", &collapsed);
+    let arabic_path = write("usable-after-collapsed.ttf", ARABIC);
+    let files = Files::new(vec![("Arab", vec![collapsed_path, arabic_path.clone()])]);
+    let mut frames = Frames::new();
+    install(&frames, &files);
+
+    show(&mut frames, "ع");
+    assert!(draws(&frames, 'ع'));
+    assert_eq!(registered(&frames), [(arabic_path, 0)]);
+}
+
+#[trial]
+fn ideographic_space_requires_cmap_coverage_and_allows_zero_contours() {
+    let no_space = super::synthetic_ttf("NoSpace", &[('日', true)], false);
+    let with_space = super::synthetic_ttf("WithSpace", &[('\u{3000}', false)], false);
+    assert_eq!(SystemCandidates.covers(&no_space, '\u{3000}'), None, "whitespace still requires a cmap entry");
+    assert_eq!(SystemCandidates.covers(&with_space, '\u{3000}'), Some(0), "mapped whitespace is allowed with zero contours");
+
+    let no_space_path = write("no-ideographic-space.ttf", &no_space);
+    let with_space_path = write("with-ideographic-space.ttf", &with_space);
+    let files = Files::new(vec![("Hani", vec![no_space_path, with_space_path.clone()])]);
+    let mut frames = Frames::new();
+    install(&frames, &files);
+
+    show(&mut frames, "\u{3000}");
+    assert_eq!(registered(&frames), [(with_space_path, 0)]);
+
+    // Sample check (as used by fontconfig::fc_match) rejects a font if any sample character is a ghost glyph.
+    let partial_sample = super::synthetic_ttf("PartialSample", &[('图', true), ('层', false)], false);
+    let full_sample = super::synthetic_ttf("FullSample", &[('图', true), ('层', true)], false);
+    assert!(!"图层".chars().all(|c| SystemCandidates.covers(&partial_sample, c).is_some()));
+    assert!("图层".chars().all(|c| SystemCandidates.covers(&full_sample, c).is_some()));
+}
+
+#[trial]
+fn unregistered_sibling_faces_in_a_collection_are_selected_while_preserving_read_budget() {
+    let face0 = super::synthetic_ttf("Sibling0", &[('ب', true)], false);
+    let face1 = super::synthetic_ttf("Sibling1", &[('ع', true)], false);
+    let col = write("siblings.ttc", &collection(&[&face0, &face1]));
+    let third = write("sibling-third.ttf", &super::synthetic_ttf("Sibling2", &[('پ', true)], false));
+    let mut candidates = vec![col.clone()];
+    candidates.extend(non_covering(MAX_SCRIPT_READS - 3));
+    candidates.push(third.clone());
+    let files = Files::new(vec![("Arab", candidates)]);
+    let mut frames = Frames::new();
+    install(&frames, &files);
+
+    show(&mut frames, "ب");
+    assert!(draws(&frames, 'ب'));
+    assert_eq!(registered(&frames), [(col.clone(), 0)]);
+    assert_eq!(files.checks(), 1);
+
+    // A later request for the same script selects the unregistered sibling face (col, 1).
+    show(&mut frames, "ع");
+    assert!(draws(&frames, 'ع'));
+    assert_eq!(registered(&frames), [(col.clone(), 0), (col.clone(), 1)]);
+    assert_eq!(files.checks(), 2);
+
+    // Once all faces of `col` are registered, `col` is skipped without spending the read budget,
+    // allowing the remaining `MAX_SCRIPT_READS - 2` reads to reach `third`.
+    show(&mut frames, "پ");
+    assert!(draws(&frames, 'پ'));
+    assert_eq!(registered(&frames), [(col.clone(), 0), (col, 1), (third, 0)]);
+    assert_eq!(files.checks(), MAX_SCRIPT_READS);
+}
+
+#[trial]
+fn registered_path_index_pair_is_excluded_even_when_covers_repeats_it() {
+    let face0 = super::synthetic_ttf("Repeat0", &[('ب', true)], false);
+    let face1 = super::synthetic_ttf("Repeat1", &[('日', true)], false);
+    let col = write("repeat.ttc", &collection(&[&face0, &face1]));
+    let fallback = write("repeat-fallback.ttf", &super::synthetic_ttf("RepeatFallback", &[('ع', true)], false));
+    let files = Files::new(vec![("Arab", vec![col.clone(), fallback.clone()])]);
+    files.cover_all.store(true, Ordering::Relaxed);
+    let mut frames = Frames::new();
+    install(&frames, &files);
+
+    // `cover_all` returns face 0 for `col`: `(col, 0)` is registered, which only draws `'ب'`.
+    show(&mut frames, "ب");
+    assert!(draws(&frames, 'ب'));
+    assert_eq!(registered(&frames), [(col.clone(), 0)]);
+
+    // On a later request for `'ع'`, `cover_all` still returns face 0 for `col`; `(col, 0)` is
+    // already registered so it is excluded instead of being registered twice, moving on to `fallback`.
+    show(&mut frames, "ع");
+    assert!(draws(&frames, 'ع'));
+    assert_eq!(registered(&frames), [(col, 0), (fallback, 0)]);
+}
+
+#[trial]
+fn on_demand_coverage_matches_active_renderer_for_bitmap_color_and_outline_glyphs() {
+    let bitmap = super::synthetic_bitmap_ttf("BitmapCJK", '日');
+    let colr = super::synthetic_ttf("ColrCJK", &[('日', false)], true);
+    let svg_only = super::synthetic_svg_ttf("SvgCJK", '日', 14, 6, b"<svg/>");
+    let ghost = super::synthetic_ttf("GhostCJK", &[('日', false)], false);
+    let expected_color_or_bitmap = cfg!(feature = "color_fonts").then_some(0);
+
+    assert_eq!(SystemCandidates.covers(&bitmap, '日'), expected_color_or_bitmap);
+    assert_eq!(SystemCandidates.covers(&colr, '日'), expected_color_or_bitmap);
+    assert_eq!(SystemCandidates.covers(&svg_only, '日'), None, "SVG-only glyphs are unsupported by the active renderer");
+    assert_eq!(SystemCandidates.covers(&ghost, '日'), None, "cmap-only ghost glyphs never cover");
+
+    // Collection and regional override respect the active renderer's bitmap support as well.
+    let outline_sc = super::synthetic_ttf("Noto Sans CJK SC", &[('日', true)], false);
+    let bitmap_jp = super::synthetic_bitmap_ttf("Noto Sans CJK JP", '日');
+    let ttc = write("renderer-regional.ttc", &collection(&[&outline_sc, &bitmap_jp]));
+    let files = Files::new(vec![("Hani", vec![ttc.clone()])]);
+    let mut frames = Frames::new();
+    UiFonts::new(&I18nScripts)
+        .app_face("ui", egui_face("Ubuntu-Light"), &[FontRef::proportional()])
+        .system_fonts(SystemFonts::Off)
+        .ui_language("ja")
+        .on_demand(Arc::clone(&files) as Arc<dyn FontCandidates>)
+        .install(&frames.ctx);
+
+    show(&mut frames, "日");
+    let expected_index = u32::from(cfg!(feature = "color_fonts"));
+    assert_eq!(registered(&frames), [(ttc, expected_index)]);
+}
