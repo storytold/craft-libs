@@ -540,7 +540,8 @@ fn math_seq(t: &[MTok], pos: &mut usize, depth: usize, in_opt: bool) -> String {
                             None => o.push_str(&format!("√({a})")),
                         }
                     }
-                    "left" | "right" | "big" | "Big" | "bigg" | "Bigg" | "bigl" | "bigr" | "Bigl" | "Bigr" | "middle" => {
+                    "left" | "right" | "middle" | "big" | "Big" | "bigg" | "Bigg" | "bigl" | "Bigl" | "biggl" | "Biggl" | "bigr" | "Bigr"
+                    | "biggr" | "Biggr" | "bigm" | "Bigm" | "biggm" | "Biggm" => {
                         // Keep the delimiter, drop the sizing; `\left.` is no delimiter.
                         if t.get(*pos) == Some(&MTok::Char('.')) {
                             *pos += 1;
@@ -643,6 +644,22 @@ mod tests {
             ("√(3&x)", r"\sqrt[3]{x}"),
         ] {
             assert_eq!(linear_to_latex(linear), tex, "{linear}");
+        }
+    }
+
+    /// #4076: every delimiter-sizing command is dropped on import with its delimiter kept, so a
+    /// save writes the delimiter and not `\backslash biggl`, and a second save writes the same.
+    #[test]
+    fn delimiter_sizes_are_dropped_and_saves_are_stable() {
+        for size in ["big", "Big", "bigg", "Bigg"] {
+            for side in ["", "l", "r", "m"] {
+                let src = format!(r"\{size}{side}( x \{size}{side}| y \{size}{side})");
+                let linear = latex_to_linear(&src);
+                assert!(!linear.contains('\\') && linear.contains('(') && linear.contains('|'), "{src} → {linear}");
+                let first = linear_to_latex(&linear);
+                assert!(!first.contains("backslash"), "{src} → {first}");
+                assert_eq!(linear_to_latex(&latex_to_linear(&first)), first, "{src}, saved twice");
+            }
         }
     }
 
