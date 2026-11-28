@@ -9,7 +9,7 @@ use craft_ui::buttons::Button;
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::layout_components::Row;
 use craft_ui::runtime::commands::{CommandRef, CommandState, EditCommands, FireSource, fire};
-use craft_ui::runtime::env::Env;
+use craft_ui::runtime::env::{Env, ZoomPrecision, with_env};
 use craft_ui::runtime::frame;
 use craft_ui::style::StyleCx;
 use craft_ui::testing::{Fixture, pointer, trial};
@@ -412,4 +412,33 @@ fn rail_width_zoom_shows_its_whole_value() {
         let run = fixture.texts().iter().find(|run| run.text == text).expect("the zoom value is painted");
         assert!(!run.elided && run.clip.contains_rect(run.rect), "{text} must be visible: {run:?}");
     }
+}
+
+/// A zoom field follows the env's zoom precision as the print preview's row does: whole under `Whole`, with its
+/// fraction under the default.
+#[trial]
+fn a_zoom_field_follows_the_env_zoom_precision() {
+    let shown = |precision: Option<ZoomPrecision>| {
+        let mut fixture = Fixture::new(move |ui| {
+            let show = |ui: &mut Ui| {
+                let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+                ZoomField::new(ZOOM, Some(CanvasView::new(canvas, Point::new(1000.0, 750.0), 1.2575)), DOCUMENT).show(ui);
+            };
+            match precision {
+                Some(precision) => with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(precision);
+                    },
+                    show,
+                ),
+                None => show(ui),
+            }
+        });
+        fixture.settle();
+        fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>()
+    };
+    let (whole, fractional) = (shown(Some(ZoomPrecision::Whole)), shown(None));
+    assert!(whole.iter().all(|text| !text.contains('.') && !text.contains(',')), "{whole:?}");
+    assert!(fractional.iter().any(|text| text.contains('.') || text.contains(',')), "{fractional:?}");
 }

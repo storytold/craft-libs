@@ -135,9 +135,19 @@ The module documentation lists every `Outcome`, `Options` and the words (`Shortc
 app translates. The dialog never opens a file dialog or touches the file system. Enable
 `screen-testing` for the stories and the `it` trials.
 
+Automation can select a command and set `replace` to `{"old":"Text: Cmd+B","new":"Cmd+K"}`
+through `ShortcutsDialog::set_json_field`. The old text must identify exactly one current binding;
+the new trigger keeps its scope and regular or Hold column. An equivalent trigger changes nothing,
+and a changed replacement has one Undo step. Ask mode leaves the original binding until the user
+answers the conflict bar; Steal and Keep follow the host's configured policy. A stale confirmation
+cannot replace bindings that changed after its prompt opened. Unavailable edits and replacements
+that cannot be stored return a refusal.
+
 ## Windows, Linux and web: the in-window bar
 
-`MenuBarUi` draws a laid-out bar and returns the titles' rect (`MenuBarOutput`). Show it inside a
+`MenuBarUi` draws a laid-out bar and returns the titles' rect and the width every title takes side by
+side (`MenuBarOutput`). A host that puts controls after the titles on the same row compares that
+width with the room it leaves the bar. Show it inside a
 `Stack` (a top panel's body) or the title bar's row: there the titles that don't fit its room fold
 into "…".
 Each item is a command row: its enabled state, check mark and chord follow the command in the

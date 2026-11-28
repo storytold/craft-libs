@@ -574,6 +574,11 @@ impl Catalog {
         self.config.read().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Whether scans ask the platform's font service ([`Catalog::with_font_service`]).
+    pub(crate) fn uses_font_service(&self) -> bool {
+        self.read_config().font_service
+    }
+
     /// The environment the catalog was made for.
     pub fn env(&self) -> &FontEnv {
         &self.env
@@ -583,12 +588,20 @@ impl Catalog {
     /// it. Does nothing once it has started or run, or when no thread can be started (the first
     /// lookup then scans).
     pub fn scan_in_background(self: &Arc<Self>) {
-        if self.ready.get().is_none() && !self.scanning.swap(true, Ordering::AcqRel) {
-            let me = Arc::clone(self);
-            if std::thread::Builder::new().name("font-catalog-scan".into()).spawn(move || me.background_scan()).is_err() {
-                self.scanning.store(false, Ordering::Release);
-            }
+        drop(self.start_background_scan());
+    }
+
+    /// [`Catalog::scan_in_background`], returning the thread it started, if it started one.
+    pub(crate) fn start_background_scan(self: &Arc<Self>) -> Option<std::thread::JoinHandle<()>> {
+        if self.ready.get().is_some() || self.scanning.swap(true, Ordering::AcqRel) {
+            return None;
         }
+        let me = Arc::clone(self);
+        let thread = std::thread::Builder::new().name("font-catalog-scan".into()).spawn(move || me.background_scan());
+        if thread.is_err() {
+            self.scanning.store(false, Ordering::Release);
+        }
+        thread.ok()
     }
 
     /// The background thread's scan. A scan that panics leaves the catalog unscanned and not

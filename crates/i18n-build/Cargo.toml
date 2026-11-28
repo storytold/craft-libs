@@ -1,0 +1,15 @@
+[package]
+name = "craft-i18n-build"
+description = "Embeds the optional craft-i18n translation catalogs from an app's build.rs as the table craft-i18n reads."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dev-dependencies]
+craft-i18n = { workspace = true }
+craft-i18n-build-consumer = { path = "tests/consumer" }
+
+[lints]
+workspace = true

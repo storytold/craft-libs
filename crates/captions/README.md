@@ -60,6 +60,11 @@ lists at most 20 characters per stream.
 | TTML `.ttml` (IMSC1) | yes | yes | Writes the IMSC1 Text profile (TTML2 namespaces) with the document's language as `xml:lang` (read back on import): `<p>` per cue, `<br/>`, styled `<span>`s for `<i>` / `<b>` / `<u>`, `ttm:agent` speakers, exact frame times (`123f`) at the sequence rate. Reads any TTML (TTML1, TTML2, the 2006 `ttaf1` drafts): clock / frame / offset / tick times, `dur`, nested time containers (`body` / `div` begins offset and ends clip their contents; `seq` containers are read as `par` with a warning), timed spans, referenced styles. |
 | DFXP `.dfxp` | yes | yes | TTML1 with the DFXP presentation profile; clock times in milliseconds (frame-exact after `snap_to_frames`). |
 | ASS / SSA `.ass`, `.ssa` | yes | yes (ASS v4+) | The `[Events]` section: `Dialogue:` lines through the file's `Format:` line, `Name` as the speaker, `\N`, `\n`, `\h` and the `\i`, `\b`, `\u` override tags kept (as `<i>`, `<b>`, `<u>`); other override tags and drawing lines are dropped. Times are centiseconds. Written files have one `Default` style. |
+| MicroDVD `.sub` | yes | yes | `{first}{last}text` with frame numbers; the `{1}{1}fps` line or 23.976 fps. `\|` breaks a line; `{y:i,b,u}` and `{c:$BBGGRR}` style a line (capital `Y` / `C`: the rest of the cue too); other controls are dropped. Writing always names the rate (`WriteOptions::rate`, 23.976 by default) and styles only a line that `<i>`, `<b>` or `<u>` wraps whole. |
+| MPL2 `.mpl` | yes | yes | `[start][end]text` in tenths of a second; `\|` breaks a line, a leading `/` makes it italic. |
+| SubViewer 2 `.sbv` (also `.sub`) | yes | yes | `start,end` in hundredths of a second after the `[INFORMATION]` header; `[br]` breaks a line. Text only; no styles. |
+| VPlayer `.vpl` (also `.txt`) | yes | yes | `HH:MM:SS[.cc]=text` (`:` or a space also separate); only start times, a caption lasts to the next line (empty text clears), four seconds for the last. Text only. |
+| SAMI `.smi` | yes | yes | `<SYNC Start=ms>` blocks, `&nbsp;` clears; `<br>`, `<i>`, `<b>`, `<u>`, `<font color>` kept; first language class only. |
 
 All cue times are exact `Tick`s. Milliseconds convert exactly (1 ms = 254 016 000 ticks); SCC
 frames map through `FrameRate::FPS_29_97`. `Document::snap_to_frames` snaps cues to a frame grid and

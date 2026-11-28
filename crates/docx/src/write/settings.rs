@@ -54,6 +54,13 @@ pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, temp
     if s.gutter_at_top {
         w.empty("w:gutterAtTop", &[]);
     }
+    // After `w:gutterAtTop` and before `w:proofState` in CT_Settings.
+    if s.hide_spelling_errors {
+        w.empty("w:hideSpellingErrors", &[]);
+    }
+    if s.hide_grammar_errors {
+        w.empty("w:hideGrammaticalErrors", &[]);
+    }
     if let Some(id) = template_rel {
         w.empty("w:attachedTemplate", &[("r:id", id)]);
     }
@@ -144,6 +151,13 @@ fn write_note_settings(
 }
 
 fn write_compatibility_settings(w: &mut W, doc: &Document) {
+    let has_compat = doc.settings.do_not_expand_shift_return
+        || doc.settings.sum_paragraph_spacing
+        || doc.settings.allow_space_of_same_style_in_table
+        || doc.settings.compat_mode.is_some();
+    if !has_compat {
+        return;
+    }
     w.open("w:compat", &[]);
     // CT_Compat: the older switches come before the `w:compatSetting`s.
     if doc.settings.do_not_expand_shift_return {
@@ -155,8 +169,10 @@ fn write_compatibility_settings(w: &mut W, doc: &Document) {
     if doc.settings.allow_space_of_same_style_in_table {
         w.empty("w:allowSpaceOfSameStyleInTable", &[]);
     }
-    let mode = doc.settings.compat_mode.clamp(11, 15).to_string();
-    w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", &mode)]);
+    if let Some(mode) = doc.settings.compat_mode {
+        let mode = mode.clamp(11, 15).to_string();
+        w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", &mode)]);
+    }
     w.close("w:compat");
 }
 

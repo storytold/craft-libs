@@ -32,13 +32,22 @@ The layout follows Adobe Fonts' and Google Fonts' browse pages.
   Preview, Installed, a progress bar while downloading,
   Couldn't install with Retry, "Not curated" for a source the user added), and a large sample in
   the face below. The list is virtual: only the cards on screen are laid out, and their faces load
-  as they come into view. The arrow keys step through the cards and Enter opens one.
-- **Sample toolbar**: a preset (a sentence in the language filtered by, or in the family's own
-  script when it has no Latin; the alphabet; numerals), the sample text, and the size.
+  as they come into view. With a preview service set, families that aren't installed draw from
+  small subsets of their face: the sample for the cards on screen, then one screen above and two
+  below, then ASCII for the Latin cards on screen; typed text outside those asks for its own
+  characters once typing pauses. A card the service draws offers no Preview; one whose subset
+  failed does, and so does its details sheet. The arrow keys step through the cards and Enter
+  opens one.
+- **Sample toolbar**: a preset (a sentence in the language filtered by, else the family's own
+  sample from the index, by its `sample_script`; the alphabet; numerals), the sample text, and the
+  size.
 - **Details sheet** over the list: every style in its own face with Install or Remove for each,
   Install all (with the same menu) and Remove all, whether the family is available to all apps
   with the switch that changes it, the source, designer, licence, scripts and languages, and what a
-  preview downloads.
+  preview downloads. With a preview service, styles not installed draw with its subsets: a static
+  file's sample, and one subset of each variable file with every axis kept, drawn at each named
+  instance and at the values of its axis sliders. The copyright and the upstream link, and
+  an Apache family's NOTICE and, on request, the licence text, read through the store.
 - **Installed**: system and font store fonts as the same cards, filtered by source. Only font
   store families can be removed; system fonts are removed with the system's own tools.
 - **Sources** (`sources_ui`, for a host's settings page): the built-in sources, the index URLs the
@@ -81,6 +90,10 @@ panel.ui(ui);
 | `set_look(look)` | The host's palettes (dark and light) and font families, and whether labels are set in capitals |
 | `settings()` | The panel's `FontsPanelSettings`: the sample text, preset and size, and whether the downloads note was closed. The panel reads them from the Host's `fonts_panel` section on its first frame and writes the section when they change; without a Host they stay in memory |
 | `downloads_allowed()`, `set_downloads_allowed(on)` | The download consent, for a host's settings page. It is the font store's own setting, shared by every Craft app |
+| `use_default_filters(language)` | Starts the catalogue on sans-serif families in the host's interface language (English when the index has none for it). Called once, after building the panel |
+| `with_previews(previews)` | The preview service's client (craft-font-store's `preview::Previews`), for a host that builds its own (native only) |
+| `reload_preview_settings()` | Reads the preview service and the previews setting again, after a host's settings page changed them. The panel also reads them when it first shows and when its window regains focus |
+| `loading_previews()` | Whether previews are being fetched |
 | `show_downloads_switch(false)` | For a host with the switch in its own settings |
 | `sources_ui(ui)` | The font sources, for a host's settings page |
 | `set_index(index)` | The indexes, after the host fetched them |
@@ -88,17 +101,30 @@ panel.ui(ui);
 
 ## Network use
 
-Nothing is downloaded until the user allows it. Downloads are off by default; the first Install or
-Preview asks first. Files come from each source's repositories at the commit or tag its index
+No font is installed or downloaded whole until the user allows it. Downloads are off by default; the
+first Install or Preview asks first. With a preview service set and previews on (a user setting, on by
+default), the panel fetches the small preview subsets of the fonts it shows without asking; with
+previews off it uses only those in the disk cache. Files come from each source's repositories at the commit or tag its index
 records, through jsDelivr (raw GitHub as the fallback), and each is checked against the index's
 size and sha256 before use. Previews stay in memory and are never installed. A source the user
 adds is an index at an https URL; its families are never curated.
 
 ## Strings
 
-Every interface string goes through craft-i18n with the English text as the key. The panel embeds
-its own Japanese and Arabic catalogs (`src/panel/catalogs/`) until its rows are part of
-craft-i18n; style and weight names, licence names and product names stay in English.
+Every interface string is a word of the Host's `I18n` (`craft_ui::words!`), so the panel is in the Host's
+language when the app's catalogs have its rows and in English where they have none. `CATALOGS` holds the
+Japanese and Arabic rows, until they are part of craft-i18n's shared catalog, as data the app passes to
+its Host's `I18n`:
+
+```rust
+// An app with no shared catalog of its own; one with a shared catalog joins the rows to it for
+// `I18n::from_owned`.
+let (i18n, problems) = craft_i18n::I18n::new(craft_font_manager::CATALOGS, &["ja", "ar"]);
+let lang = i18n.match_tag(language).unwrap_or(craft_i18n::Lang::EN);
+Host::builder(app).i18n(Arc::new(i18n)).lang(lang).install(ctx);
+```
+
+Style and weight names, licence names and product names stay in English.
 
 ## Testing
 

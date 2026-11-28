@@ -9,7 +9,7 @@ use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, Corners, DataColor, Metrics, StyleColor, StyleCx, SurfaceKind};
 use egui::{Color32, Pos2, Rect, Vec2};
 
-use crate::panel::faces;
+use crate::panel::faces::{self, Sample};
 use crate::panel::specimen::SampleFace;
 
 use super::SAMPLE_EM;
@@ -92,7 +92,8 @@ impl Component for FontPreviewBanner<'_> {
         let inner = cx.room.map(|room| (room - 2.0 * style.pad).max(0.0));
         let sample = self.face.ready(cx).map_or(0.0, |font| {
             let ink = DataColor::new(Color32::PLACEHOLDER);
-            faces::sample_line(|doc| cx.layout_doc(doc), &font, self.text, style.band * SAMPLE_EM, style.band, inner, ink).layout.size().x
+            let sample = Sample::new(self.text, &font, style.band * SAMPLE_EM, ink);
+            faces::sample_line(|doc| cx.layout_doc(doc), sample, style.band, inner).layout.size().x
         });
         let name = TextRun::new(self.name).role(TypeRole::Caption);
         let name = inner.map_or_else(|| cx.layout(&name), |width| cx.layout_at(&name, width)).size().x;
@@ -114,7 +115,7 @@ impl Component for FontPreviewBanner<'_> {
         let painter = ui.content_painter(cx);
         let ink = faces::sample_ink(&painter, band, self.on_white, style.ink.egui());
         if let Some(font) = self.face.ready(cx) {
-            faces::paint_sample(&painter, band, &font, self.text, points, ink);
+            faces::paint_sample(&painter, band, Sample::new(self.text, &font, points, ink));
         }
     }
 

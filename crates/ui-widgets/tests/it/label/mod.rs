@@ -1,5 +1,6 @@
 //! The label step: scrub across a pointer warp and the label beside or above a fill-width control.
 
+pub(crate) mod after_wrap;
 pub(crate) mod align;
 pub(crate) mod baseline;
 pub(crate) mod bracket;

@@ -211,6 +211,41 @@ pub fn normalise(service: &str) -> String {
     service.trim().trim_end_matches('/').to_owned()
 }
 
+/// Plain `http://` on loopback, with a numeric port. The host is exactly `127.0.0.1`, `localhost`
+/// or `[::1]`; a userinfo prefix in front of another host does not count. The same spelling
+/// `craft-update` uses for a local mirror.
+fn loopback_http(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else { return false };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let Some((host, port)) = authority.rsplit_once(':') else { return false };
+    matches!(host, "127.0.0.1" | "localhost" | "[::1]") && !port.is_empty() && port.parse::<u16>().is_ok()
+}
+
+/// Whether a stored deployment address is one a caller may present a token to.
+///
+/// `https://` is allowed. Plain `http://` is only allowed on loopback, with a numeric port. Empty
+/// is not: there is no deployment to send a token to. A row in `accounts.json` can name any
+/// string; this is the gate that stops a caller sending the keychain token to it.
+pub fn allowed_service_base(service: &str) -> bool {
+    service.starts_with("https://") || loopback_http(service)
+}
+
+/// The checks [`crate::Store::shared`] applies before handing a token back.
+///
+/// The address has to be one a Craft app may dial ([`allowed_service_base`]). The row's `id` has
+/// to still be the handle its own `service` and `user` hash to. The second check is what catches
+/// a row whose `service` was edited in place while its `id` was left alone: the address changes,
+/// but nothing re-derives the handle, so an address check alone would wave it through.
+pub fn validate_target(account: &Account) -> Result<(), String> {
+    if !allowed_service_base(&account.service) {
+        return Err("the stored account's service address is not one a Craft app may send a token to".to_owned());
+    }
+    if handle(&account.service, &account.user) != account.id {
+        return Err("the stored account's service or user no longer matches its handle".to_owned());
+    }
+    Ok(())
+}
+
 /// Just the file's name, for an error a log might show.
 ///
 /// The full path sits under a user's profile folder and names them. [`Store::shared`] logs a
