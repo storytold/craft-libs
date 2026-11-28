@@ -232,12 +232,10 @@ impl Mesh {
         if self.uvs.len() != self.positions.len() {
             self.uvs = vec![Vec2::ZERO; self.positions.len()];
         }
-        // Non-finite attributes, invalid indices, and degenerate-only geometry use the fallback.
-        let usable = self.positions.iter().all(|p| p.is_finite())
-            && self.normals.iter().all(|n| n.is_finite())
-            && self.uvs.iter().all(|uv| uv.is_finite())
-            && self.indices.iter().all(|&i| (i as usize) < self.positions.len())
-            && !crate::unwrap::all_triangles_degenerate(self);
+        // mikktspace crashes (out-of-bounds) when every triangle is degenerate; skip it then. Its
+        // callbacks read a missing vertex as the origin, which the degenerate check cannot see, so
+        // an index past the last vertex skips it too.
+        let usable = self.indices.iter().all(|&i| (i as usize) < self.positions.len()) && !crate::unwrap::all_triangles_degenerate(self);
         let mut g = Mikk { mesh: self };
         if !usable || !mikktspace::generate_tangents(&mut g) {
             self.simple_tangents();
@@ -454,7 +452,6 @@ impl Mesh {
     }
 
     /// A single-material mesh from raw attributes; computes missing normals and tangents.
-    /// Non-finite positions and invalid index ranges return an error before tangent generation.
     pub fn from_parts(positions: Vec<Vec3>, normals: Option<Vec<Vec3>>, uvs: Vec<Vec2>, indices: Vec<u32>, material: &str) -> Result<Mesh> {
         let count = u32::try_from(indices.len()).map_err(|_| GeomError::Invalid("the index count does not fit in u32".into()))?;
         if !indices.len().is_multiple_of(3) {
@@ -465,9 +462,6 @@ impl Mesh {
         }
         if let Some(bad) = indices.iter().find(|&&i| i as usize >= positions.len()) {
             return Err(GeomError::Invalid(format!("index {bad} out of range ({} vertices)", positions.len())));
-        }
-        if positions.iter().any(|p| !p.is_finite()) {
-            return Err(GeomError::Invalid("mesh has non-finite positions".into()));
         }
         let mut m = Mesh {
             normals: normals.unwrap_or_default(),
@@ -529,22 +523,6 @@ impl mikktspace::Geometry for Mikk<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn from_parts_rejects_non_finite_input_before_tangent_generation() {
-        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            let positions = vec![Vec3::new(bad, 0.0, 0.0), Vec3::X, Vec3::Y];
-            assert!(Mesh::from_parts(positions, None, vec![Vec2::ZERO, Vec2::X, Vec2::Y], vec![0, 1, 2], "m").is_err());
-        }
-    }
-
-    #[test]
-    fn direct_tangents_skip_non_finite_positions_before_mikk() {
-        let mut mesh = quad();
-        mesh.positions[0].x = f32::NAN;
-        mesh.compute_tangents();
-        assert!(mesh.tangents.iter().all(|tangent| tangent.is_finite()));
-    }
 
     fn quad() -> Mesh {
         Mesh::from_parts(

@@ -6,8 +6,7 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
 
 - **`Mesh`.** Positions, normals, tangents, UVs, vertex colors, indices, per-material submeshes
   and polygon-diagonal flags, with `validate`, `append`, `subdivided`, `normalize_to`, wireframe
-  and UV-seam edges, and UV-tile helpers. `from_parts` rejects non-finite positions and invalid
-  index ranges before tangent generation.
+  and UV-seam edges, and UV-tile helpers.
 - **Normals and tangents.** Smooth normals are area weighted. Tangents come from MikkTSpace, which
   glTF 2.0 recommends for meshes without tangents
   (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html>): `w` holds the bitangent sign.
