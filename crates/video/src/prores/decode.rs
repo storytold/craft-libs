@@ -380,7 +380,10 @@ fn decode_slice(ctx: &Ctx, d: &[u8], mb_x: usize, mbs: usize, band: &mut Band, i
         let w = mbs * 16;
         let n = w * 16;
         let buf = &mut s.alpha[..n];
-        decode_alpha(adata, ctx.alpha, buf)?;
+        // A partial bottom macroblock row may code alpha for its visible lines only (Apple's
+        // encoder does; FFmpeg codes all 16), so only those lines must be complete.
+        let visible = (0..16).take_while(|py| py * step + parity < band.rows).count();
+        decode_alpha(adata, ctx.alpha, buf, visible * w)?;
         let depth = ctx.depth as u32;
         let conv = |v: u16| -> u16 {
             let v = v as u32;
@@ -472,9 +475,22 @@ fn decode_component(data: &[u8], log2_blocks: u32, scan: &[u8; 64], q: &[f32; 64
     Ok(())
 }
 
+/// The alpha stream ended before `out` was full: complete when its first `done` values (each
+/// with its continuation bit or run) include every `required` value. The last value repeats into
+/// the rest (lines below the picture that are never shown). A stream that decoded into the last
+/// slot (`filled == out.len()`) but lacks its final run is still corrupt.
+fn alpha_ended(out: &mut [u16], done: usize, filled: usize, required: usize) -> std::result::Result<(), ()> {
+    if done == 0 || done < required || filled == out.len() {
+        return Err(());
+    }
+    let last = out[done - 1];
+    out[done..].fill(last);
+    Ok(())
+}
+
 /// Decode a slice's alpha plane (raster order over the slice's 16 lines) into `out`
-/// (native 8- or 16-bit values).
-fn decode_alpha(data: &[u8], ty: AlphaType, out: &mut [u16]) -> std::result::Result<(), ()> {
+/// (native 8- or 16-bit values). The stream may end once the first `required` values are coded.
+fn decode_alpha(data: &[u8], ty: AlphaType, out: &mut [u16], required: usize) -> std::result::Result<(), ()> {
     if data.is_empty() || out.is_empty() {
         return Err(());
     }
@@ -486,13 +502,16 @@ fn decode_alpha(data: &[u8], ty: AlphaType, out: &mut [u16]) -> std::result::Res
     let n = out.len();
     let mut idx = 0;
     loop {
+        // Every value before `done` ended with its continuation bit or run. Byte-alignment
+        // padding can decode as a value but never as a terminated one, so it never counts.
+        let done = idx;
         if r.bits_left() < 1 {
-            return Err(());
+            return alpha_ended(out, done, idx, required);
         }
         let full = r.read_bit();
         let delta_bits = if full { bits } else { short_bits };
         if r.bits_left() < delta_bits as isize {
-            return Err(());
+            return alpha_ended(out, done, idx, required);
         }
         let d = if full {
             r.read(bits)
@@ -506,7 +525,7 @@ fn decode_alpha(data: &[u8], ty: AlphaType, out: &mut [u16]) -> std::result::Res
         idx += 1;
 
         if r.bits_left() < 1 {
-            return Err(());
+            return alpha_ended(out, done, idx, required);
         }
         if r.read_bit() {
             if idx == n {
@@ -515,12 +534,12 @@ fn decode_alpha(data: &[u8], ty: AlphaType, out: &mut [u16]) -> std::result::Res
             continue;
         }
         if r.bits_left() < 4 {
-            return Err(());
+            return alpha_ended(out, done, idx, required);
         }
         let short_run = r.read(4) as usize;
         let run = if short_run == 0 {
             if r.bits_left() < 11 {
-                return Err(());
+                return alpha_ended(out, done, idx, required);
             }
             let long_run = r.read(11) as usize;
             if long_run < 16 {
@@ -625,23 +644,132 @@ mod alpha_decode_tests {
     #[test]
     fn alpha_decoder_requires_complete_bounded_runs() {
         let mut out = [0u16; 1];
-        assert!(decode_alpha(&[], AlphaType::Bits16, &mut out).is_err());
+        assert!(decode_alpha(&[], AlphaType::Bits16, &mut out, 1).is_err());
 
         let mut missing_run = Writer::new();
         missing_run.put(1, 1);
         missing_run.put(0, 16);
-        assert!(decode_alpha(&missing_run.finish(), AlphaType::Bits16, &mut out).is_err());
+        assert!(decode_alpha(&missing_run.finish(), AlphaType::Bits16, &mut out, 1).is_err());
 
         let mut oversized_run = Writer::new();
         oversized_run.put(1, 1);
         oversized_run.put(0, 16);
         oversized_run.put(0, 1);
         oversized_run.put(1, 4);
-        assert!(decode_alpha(&oversized_run.finish(), AlphaType::Bits16, &mut out).is_err());
+        assert!(decode_alpha(&oversized_run.finish(), AlphaType::Bits16, &mut out, 1).is_err());
 
         let mut valid = Writer::new();
         encode_alpha(&mut valid, &[u16::MAX as u32], 16);
-        assert!(decode_alpha(&valid.finish(), AlphaType::Bits16, &mut out).is_ok());
+        assert!(decode_alpha(&valid.finish(), AlphaType::Bits16, &mut out, 1).is_ok());
         assert_eq!(out, [u16::MAX]);
+
+        // A partial row whose stream fills every slot but drops the last run is still corrupt.
+        let mut full_no_run = Writer::new();
+        for _ in 0..255 {
+            full_no_run.put(0, 1);
+            full_no_run.put(0, 7);
+            full_no_run.put(1, 1);
+        }
+        full_no_run.put(0, 1);
+        full_no_run.put(0, 7);
+        let mut full = [0u16; 256];
+        assert!(decode_alpha(&full_no_run.finish(), AlphaType::Bits16, &mut full, 128).is_err());
+    }
+
+    /// The bottom macroblock row of a 1080-line frame has 8 visible lines. Apple's encoder
+    /// codes their alpha only; the hidden lines repeat the last value.
+    #[test]
+    fn alpha_may_end_after_the_visible_lines_of_a_partial_row() {
+        let width = 16;
+        let visible: Vec<u32> = (0..width * 8).map(|i| [0, 0xffff, 0x8000, 0x8000, 0x1234][i % 5]).collect();
+        let mut compact = Writer::new();
+        encode_alpha(&mut compact, &visible, 16);
+        let compact = compact.finish();
+
+        let mut out = vec![0u16; width * 16];
+        assert!(decode_alpha(&compact, AlphaType::Bits16, &mut out, width * 8).is_ok());
+        assert!(out[..width * 8].iter().zip(&visible).all(|(&o, &v)| u32::from(o) == v));
+        assert!(out[width * 8..].iter().all(|&o| u32::from(o) == visible[width * 8 - 1]));
+
+        // Byte padding after a stream one value short must not supply the last visible value.
+        let mut short8 = Writer::new();
+        encode_alpha(&mut short8, &vec![0x80; width * 8 - 1], 8);
+        let short8 = short8.finish();
+        assert!(decode_alpha(&short8, AlphaType::Bits8, &mut out, width * 8).is_err());
+
+        // A stream that stops inside the visible lines is still corrupt.
+        assert!(decode_alpha(&compact, AlphaType::Bits16, &mut out, width * 8 + 1).is_err());
+        assert!(decode_alpha(&compact, AlphaType::Bits16, &mut out, width * 16).is_err());
+    }
+
+    /// Whole frame: a 4444 frame whose height is not a multiple of 16, with the bottom row's
+    /// alpha recoded for its visible lines only, decodes to the same alpha as the 16-line coding.
+    #[test]
+    fn bottom_row_alpha_coded_for_visible_lines_only_decodes() {
+        use crate::prores::header::row_slice_widths;
+        use crate::prores::{Encoder, EncoderConfig, Profile};
+        let (w, h) = (48usize, 40usize);
+        let mut src = Frame::new(w as u32, h as u32, ChromaFormat::Yuv444, 16, true).unwrap();
+        for (i, v) in src.y.iter_mut().enumerate() {
+            *v = (4096 + (i * 37) % 50000) as u16;
+        }
+        for (i, a) in src.alpha.as_mut().unwrap().iter_mut().enumerate() {
+            let (x, y) = (i % w, i / w);
+            *a = if x < 20 { 0xffff } else { (y * 1600 + x * 7) as u16 };
+        }
+        let cfg = EncoderConfig { threads: false, ..EncoderConfig::new(Profile::P4444, w as u32, h as u32) };
+        let frame = Encoder::with_config(cfg).encode(&src).unwrap();
+        let opts = DecodeOptions { bit_depth: Some(16), threads: false };
+        let full = decode_frame_with(&frame, &opts).unwrap();
+
+        // Rebuild the frame with the bottom row's alpha coded for its 8 visible lines.
+        let (hdr, off, _) = FrameHeader::parse(&frame).unwrap();
+        assert_eq!((hdr.width as usize, hdr.height as usize), (w, h));
+        let ph = PictureHeader::parse(&frame[off..]).unwrap();
+        let widths = row_slice_widths(w.div_ceil(16), ph.log2_slice_mbs);
+        let rows = h.div_ceil(16);
+        let n = widths.len() * rows;
+        let table = off + ph.header_size;
+        let mut pos = table + 2 * n;
+        let mut slices = Vec::new();
+        for i in 0..n {
+            let size = be16(&frame, table + 2 * i);
+            slices.push(frame[pos..pos + size].to_vec());
+            pos += size;
+        }
+        let visible = h - 16 * (rows - 1);
+        let alpha = full.alpha.as_ref().unwrap();
+        let mut mb_x = 0;
+        for (k, &mbs) in widths.iter().enumerate() {
+            let s = &mut slices[(rows - 1) * widths.len() + k];
+            let keep = (s[0] >> 3) as usize + be16(s, 2) + be16(s, 4) + be16(s, 6);
+            let mut vals = Vec::new();
+            for y in 0..visible {
+                for x in mb_x * 16..(mb_x + mbs) * 16 {
+                    vals.push(u32::from(alpha[((rows - 1) * 16 + y) * w + x.min(w - 1)]));
+                }
+            }
+            s.truncate(keep);
+            let mut coded = Writer::new();
+            encode_alpha(&mut coded, &vals, 16);
+            s.extend(coded.finish());
+            mb_x += mbs;
+        }
+        let mut compact = frame[..off + ph.header_size].to_vec();
+        let picture_size = ph.header_size + 2 * n + slices.iter().map(Vec::len).sum::<usize>();
+        compact[off + 1..off + 5].copy_from_slice(&(picture_size as u32).to_be_bytes());
+        for s in &slices {
+            compact.extend_from_slice(&(s.len() as u16).to_be_bytes());
+        }
+        for s in &slices {
+            compact.extend_from_slice(s);
+        }
+        let total = compact.len() as u32;
+        compact[..4].copy_from_slice(&total.to_be_bytes());
+        assert_ne!(compact, frame, "the bottom row is coded differently");
+
+        let decoded = decode_frame_with(&compact, &opts).unwrap();
+        assert_eq!(decoded.alpha, full.alpha);
+        assert_eq!(decoded.y, full.y);
     }
 }
