@@ -158,6 +158,7 @@ const NAMED: &[Role] = &[
     Role::ComboBox,
     Role::TextInput,
     Role::MultilineTextInput,
+    Role::SearchInput,
 ];
 
 /// The rules `rule` breaks, each as a short phrase.

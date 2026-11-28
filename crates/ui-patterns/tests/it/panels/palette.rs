@@ -334,7 +334,7 @@ fn the_in_place_field_is_named_by_the_palettes_label_closed_and_open() {
     for state in ["closed", "open"] {
         let tree = fixture.tree();
         let names: Vec<String> =
-            fixture.by_role(Role::TEXT_INPUT).iter().map(|field| tree.name_of(field.node).unwrap_or_default().to_owned()).collect();
+            fixture.by_role(Role::SEARCH_INPUT).iter().map(|field| tree.name_of(field.node).unwrap_or_default().to_owned()).collect();
         assert_eq!(names, vec!["Commands".to_owned()], "{state}: one search field, named by the palette's label");
         open.set(true);
         fixture.settle();

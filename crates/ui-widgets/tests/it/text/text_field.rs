@@ -379,6 +379,58 @@ fn without_keeps_on_escape_plain_and_search_fields_keep_their_escape() {
     assert_eq!(*search.borrow(), "", "a search field's Escape still clears");
 }
 
+/// A search field is a search input and a plain field stays a text input. A search field that keeps its text on
+/// Escape is still a search input, and Escape after a query typed in it keeps the query.
+#[trial]
+fn a_search_field_is_a_search_input_whether_it_clears_or_keeps_on_escape() {
+    use craft_ui::contract::Role;
+    let query = Rc::new(RefCell::new(String::new()));
+    let held = query.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        TextField::search("Filter", Bind::bound(&mut *held.borrow_mut())).id_salt("filter").keeps_on_escape().show(ui);
+        TextField::search("Search", Bind::given(String::new())).id_salt("search").show(ui);
+        TextField::new("Name", Bind::given(String::new())).id_salt("name").show(ui);
+    });
+    fixture.settle();
+    let names = |fixture: &Fixture, role: Role| -> Vec<String> {
+        let tree = fixture.tree();
+        fixture.by_role(role).iter().map(|node| tree.name_of(node.node).unwrap_or_default().to_owned()).collect()
+    };
+    assert_eq!(names(&fixture, Role::SEARCH_INPUT), ["Filter", "Search"], "both search fields are search inputs");
+    assert_eq!(names(&fixture, Role::TEXT_INPUT), ["Name"], "a plain field is a text input");
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.type_text("abc");
+    fixture.idle(2);
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.idle(3);
+    assert_eq!(*query.borrow(), "abc", "Escape keeps the query of a search field that keeps it");
+    assert_eq!(names(&fixture, Role::SEARCH_INPUT), ["Filter", "Search"], "and the field is still a search input");
+}
+
+/// A masked or multi-line search field keeps the role a masked or multi-line plain field has, so the search role never
+/// hides that the text is secret or spans lines.
+#[trial]
+fn a_masked_or_multi_line_search_field_keeps_its_editor_role() {
+    use craft_ui::contract::Role;
+    let ids = Rc::new(RefCell::new(Vec::new()));
+    let seen = ids.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let fields = [
+            TextField::search("Secret search", Bind::given(String::new())).id_salt("ms").masked().show(ui).response.id,
+            TextField::new("Secret", Bind::given(String::new())).id_salt("mp").masked().show(ui).response.id,
+            TextField::search("Long search", Bind::given(String::new())).id_salt("ls").lines(3).show(ui).response.id,
+            TextField::new("Long", Bind::given(String::new())).id_salt("lp").lines(3).show(ui).response.id,
+        ];
+        *seen.borrow_mut() = fields.to_vec();
+    });
+    fixture.settle();
+    let tree = fixture.tree();
+    let roles: Vec<_> = ids.borrow().iter().map(|id| tree.role(*id)).collect();
+    assert!(roles.iter().all(|role| role.is_some_and(|role| role != Role::SEARCH_INPUT && role != Role::TEXT_INPUT)), "{roles:?}");
+    assert_eq!(roles[0], roles[1], "a masked search field has a masked field's role");
+    assert_eq!(roles[2], roles[3], "a multi-line search field has a multi-line field's role");
+}
+
 /// `text_lost_focus` reports a real focus loss without an edit, and nothing while the field keeps focus.
 #[trial]
 fn text_lost_focus_reports_a_focus_loss_without_an_edit() {

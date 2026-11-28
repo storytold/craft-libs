@@ -6,8 +6,8 @@ pub(crate) mod stories;
 use super::adorn::{self, Adornment};
 use super::{FieldStyle, completions, lines_inset, text_part, words};
 use crate::contract::{
-    Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, OverlayUi, PaintUi, PartsCx, Pointer as _, Props as _, Role, Sizing,
-    Styled as _, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, OverlayUi, PaintUi, PartsCx, Pointer as _, Props as _, Role,
+    Sizing, Styled as _, WordSetCx as _,
 };
 use crate::primitives::{Completer, IconSpec, SubmitKey, TabKey, TextOptions, TextRun, Wrap};
 use crate::runtime::env::{Label, Message};
@@ -372,9 +372,18 @@ impl<C: Codec + Clone + 'static> TextField<'_, C> {
 
 impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
     const ROLE: Role = Role::TEXT_INPUT;
+    const ALT_ROLES: &'static [Role] = &[Role::SEARCH_INPUT];
     const INPUT: crate::contract::Input = crate::contract::Input::Text;
     type Style = FieldStyle;
     type Output = EditResponse<C::Value>;
+
+    /// A search field is a search input, so a screen reader can name it as one. A masked or multi-line search field
+    /// keeps the password or multi-line role its editor gives it.
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        if self.search && !self.options.mask && !self.options.multiline() {
+            access.role(Role::SEARCH_INPUT);
+        }
+    }
 
     /// The field's shortest width (`size.length.short`) is `measure`'s, so a content-sized field can go without it.
     fn style(cx: &crate::style::StyleCx<'_>, key: TextFieldStyleKey<C>) -> FieldStyle {
