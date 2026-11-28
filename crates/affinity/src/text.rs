@@ -240,12 +240,26 @@ pub(crate) fn story_runs(r: &mut Reader, story: ObjId, world: Affine) -> (Vec<Te
         // Sorted by end (they are in order in every file), so both lookups below are binary
         // searches: a block can have as many paragraphs and runs as characters.
         paragraphs.sort_by_key(|(end, _)| *end);
-        let align_at = |i: usize| paragraphs.get(paragraphs.partition_point(|(end, _)| *end <= i)).map(|(_, a)| *a).or(open).unwrap_or_default();
+        let align_at = |i: usize| {
+            let at = paragraphs.partition_point(|(end, _)| {
+                count_match_read();
+                *end <= i
+            });
+            paragraphs.get(at).map(|(_, a)| *a).or(open).unwrap_or_default()
+        };
         let mut cuts: Vec<usize> = paragraphs.iter().map(|(end, _)| *end).filter(|e| *e < chars.len()).collect();
         cuts.dedup();
         let push = |r: &mut Reader, runs: &mut Vec<TextRun>, attrs: Option<ObjId>, from: usize, to: usize, budget: &mut Option<usize>| {
             // Split at paragraph ends so every run has one paragraph format.
-            let inside = cuts.get(cuts.partition_point(|c| *c <= from)..cuts.partition_point(|c| *c < to)).unwrap_or_default();
+            let first = cuts.partition_point(|c| {
+                count_match_read();
+                *c <= from
+            });
+            let past = cuts.partition_point(|c| {
+                count_match_read();
+                *c < to
+            });
+            let inside = cuts.get(first..past).unwrap_or_default();
             let mut a = from;
             for &c in inside.iter().chain(std::iter::once(&to)) {
                 push_run(r, runs, attrs, characters(&chars, a, c), world, budget, align_at(a));
@@ -280,6 +294,18 @@ pub(crate) fn story_runs(r: &mut Reader, story: ObjId, world: Affine) -> (Vec<Te
         r.warn("text fields such as page numbers (left out of the text)");
     }
     (runs, first_align.unwrap_or(Align::Left))
+}
+
+// Each paragraph end `story_runs` reads to match character runs to paragraphs, on this thread.
+#[cfg(any(test, feature = "synth"))]
+std::thread_local! {
+    pub(crate) static MATCH_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[inline]
+fn count_match_read() {
+    #[cfg(any(test, feature = "synth"))]
+    MATCH_READS.with(|reads| reads.set(reads.get().saturating_add(1)));
 }
 
 fn characters(chars: &[char], start: usize, end: usize) -> String {

@@ -257,3 +257,11 @@ pub fn container(entries: &[(&str, &[u8], Method)], thumbnail_png: Option<&[u8]>
     }
     out
 }
+
+/// What `f` gives, and how many paragraph ends the reader looked up on this thread while it ran
+/// to give each character run its paragraph's format.
+pub fn count_paragraph_lookups<T>(f: impl FnOnce() -> T) -> (T, usize) {
+    crate::text::MATCH_READS.with(|reads| reads.set(0));
+    let value = f();
+    (value, crate::text::MATCH_READS.with(std::cell::Cell::get))
+}
