@@ -479,11 +479,33 @@ fn is_valid_bg_layer(layer: &BgLayer<'_>) -> bool {
     remaining_after.iter().all(|t| is_valid_non_slash_bg_token(t))
 }
 
+/// A `text-align` value as stated. `left` and `right` are physical edges in CSS and HTML, while the
+/// model's [`Align`] is logical (`Left` is the start edge); they become logical only once the
+/// paragraph's direction is known ([`TextAlign::logical`]). `start`, `end`, `center` and `justify`
+/// already are.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct TextAlign {
+    align: Align,
+    physical: bool,
+}
+
+impl TextAlign {
+    /// A physical edge (`left`, `right`) or a direction-free value (`center`, `justify`).
+    pub(super) fn physical(align: Align) -> Self {
+        Self { align, physical: true }
+    }
+
+    /// The model alignment in a paragraph that reads right to left when `rtl`.
+    pub(super) fn logical(self, rtl: bool) -> Align {
+        if self.physical { self.align.visual(rtl) } else { self.align }
+    }
+}
+
 /// Apply CSS `style` declarations to formatting and block properties, updating character and block attributes.
 pub(super) fn apply_style(
     css: &str,
     f: &mut Fmt,
-    align: &mut Option<Align>,
+    (align, rtl): (&mut Option<TextAlign>, &mut bool),
     preserve: &mut bool,
     page_break: &mut bool,
     page_break_after: &mut bool,
@@ -608,12 +630,21 @@ pub(super) fn apply_style(
                 f.sup = lv == "super";
                 f.sub = lv == "sub";
             }
+            "direction" => match lv.as_str() {
+                "rtl" => *rtl = true,
+                "ltr" => *rtl = false,
+                // `initial` is the initial value, `ltr` (an unknown value is ignored).
+                "initial" => *rtl = false,
+                _ => {}
+            },
             "text-align" => {
                 *align = match lv.as_str() {
-                    "center" => Some(Align::Center),
-                    "right" | "end" => Some(Align::Right),
-                    "justify" => Some(Align::Justify),
-                    "left" | "start" => Some(Align::Left),
+                    "center" => Some(TextAlign::physical(Align::Center)),
+                    "right" => Some(TextAlign::physical(Align::Right)),
+                    "justify" => Some(TextAlign::physical(Align::Justify)),
+                    "left" => Some(TextAlign::physical(Align::Left)),
+                    "end" => Some(TextAlign { align: Align::Right, physical: false }),
+                    "start" => Some(TextAlign { align: Align::Left, physical: false }),
                     _ => *align,
                 }
             }

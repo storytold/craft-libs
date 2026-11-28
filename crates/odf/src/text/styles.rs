@@ -968,14 +968,20 @@ fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
     if let Some(c) = get(a, "style:contextual-spacing") {
         s.contextual = Some(c.trim() == "true");
     }
-    // `page` (the page's direction) is left to the section.
-    match get(a, "style:writing-mode").map(str::trim) {
-        Some("rl-tb" | "rl" | "tb-rl") => s.rtl = Some(true),
-        Some("lr-tb" | "lr" | "tb-lr") => s.rtl = Some(false),
-        _ => {}
+    if let Some(rtl) = paragraph_rtl(a) {
+        s.rtl = Some(rtl);
     }
     if let Some(bg) = get(a, "fo:background-color") {
         s.para_shading = Some(if bg.trim() == "transparent" { None } else { model::parse_color(bg) });
+    }
+}
+
+fn paragraph_rtl(attrs: &Attrs) -> Option<bool> {
+    // `page` (the page's direction) is left to the section.
+    match get(attrs, "style:writing-mode").map(str::trim) {
+        Some("rl-tb" | "rl" | "tb-rl") => Some(true),
+        Some("lr-tb" | "lr" | "tb-lr") => Some(false),
+        _ => None,
     }
 }
 
@@ -1104,6 +1110,8 @@ pub(super) struct Styles {
     default_size: Option<f32>,
     /// Spacing of `style:default-style` for paragraphs.
     default_spacing: Spacing,
+    /// The paragraph default's writing mode, when stated.
+    pub(super) default_rtl: Option<bool>,
     /// Tab stops are measured from the paragraph's indent (LibreOffice's `TabsRelativeToIndent`
     /// setting in `settings.xml`, on unless it says otherwise).
     pub(super) tabs_from_indent: bool,
@@ -1195,6 +1203,7 @@ impl Styles {
                 }
                 "paragraph-properties" if in_default && cur.is_none() => {
                     paragraph_spacing(&a, &mut self.default_spacing);
+                    self.default_rtl = paragraph_rtl(&a).or(self.default_rtl);
                     self.default_widows = widows(&a);
                     if let Some(d) = get(&a, "style:tab-stop-distance").and_then(length).filter(|d| d.is_finite() && *d > 0.0) {
                         self.default_tab = Some(d.clamp(1.0, MAX_LEN));
@@ -1644,6 +1653,12 @@ impl Styles {
         {
             fmt.extra.get_or_insert_with(Default::default).lang = Some(lang.clone());
         }
+        // Built-in Word styles do not carry the direction of remapped ODF parents. Keep the
+        // direction of Standard or another remapped parent unless the custom style sets its own.
+        let rtl = s.rtl.or_else(|| match &parent {
+            Parent::Normal | Parent::Kind(_) => self.chain(odt).into_iter().skip(1).find_map(|(_, style)| style.rtl),
+            Parent::Named(_) => None,
+        });
         let look = ParaLook {
             align: s.align,
             keep_next: s.keep_next == Some(true),
@@ -1653,7 +1668,7 @@ impl Styles {
             borders: s.para_borders.filter(|b| b.takes_room()),
             shading: s.para_shading.flatten(),
             contextual: s.contextual,
-            rtl: s.rtl,
+            rtl,
             ..Default::default()
         };
         let name = s.display.clone().unwrap_or_else(|| odt.replace("_20_", " "));
@@ -1720,7 +1735,14 @@ impl Styles {
         let borders = own().find_map(|(_, s)| s.para_borders).filter(|b| b.takes_room());
         let shading = own().find_map(|(_, s)| s.para_shading).flatten();
         let contextual = own().find_map(|(_, s)| s.contextual);
-        let rtl = own().find_map(|(_, s)| s.rtl);
+        let rtl = if named.is_some() {
+            // A named style keeps its direction. Emit an LTR override when the style under it is RTL.
+            let under_rtl = chain.iter().skip(kind_at).find_map(|(_, s)| s.rtl).or(self.default_rtl) == Some(true);
+            own().find_map(|(_, s)| s.rtl).filter(|r| *r || under_rtl)
+        } else {
+            // A kind maps to a built-in Word style, so the paragraph keeps the ODF style chain's direction.
+            chain.iter().find_map(|(_, s)| s.rtl).filter(|r| *r || self.default_rtl == Some(true))
+        };
         let drop_cap = own().find_map(|(_, s)| s.drop_cap);
         let keep_lines = own().find_map(|(_, s)| s.keep_lines);
         let widow_control = own().find_map(|(_, s)| s.widow_control);

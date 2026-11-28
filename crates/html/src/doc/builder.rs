@@ -1,4 +1,4 @@
-use super::css::{apply_style, css_len_pt, strip_important};
+use super::css::{TextAlign, apply_style, css_len_pt, strip_important};
 use super::import::{PAGE_FONT, PAGE_HEADING_SIZES, collapse_ws};
 use super::{
     Align, Arc, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, LineSpacing, ListInfo, Meta, Para, Rgb, Spacing, VAlign, data_uri, make_img, model,
@@ -42,7 +42,9 @@ struct El {
     /// A page's `p` or heading: margins its CSS leaves out (or writes invalidly) are HTML's
     /// automatic spacing.
     auto_margins: bool,
-    align: Option<Align>,
+    align: Option<TextAlign>,
+    /// Effective paragraph direction for this element and its descendants.
+    rtl: bool,
     preserve: bool,
     page_break: bool,
     page_break_after: bool,
@@ -100,7 +102,8 @@ impl TableB {
 struct ElementStyle {
     fmt: Fmt,
     block_background: Option<Rgb>,
-    align: Option<Align>,
+    align: Option<TextAlign>,
+    rtl: bool,
     preserve: bool,
     page_break: bool,
     page_break_after: bool,
@@ -621,7 +624,8 @@ impl<'r> Builder<'r> {
     /// Paragraph context from the open elements (innermost first, up to the enclosing cell).
     pub(super) fn start_para(&mut self) -> &mut Para {
         if self.para.is_none() {
-            let mut p = Para::default();
+            let mut p = Para { rtl: self.paragraph_rtl(), ..Default::default() };
+            let mut align: Option<TextAlign> = None;
             let mut list_level: Option<(bool, usize)> = None;
             let mut li_at: Option<usize> = None;
             let mut lists = 0usize;
@@ -639,8 +643,8 @@ impl<'r> Builder<'r> {
                     ElKind::Cell => {
                         // CSS inherits `text-align` from the cell, its row, row group and table
                         // (#1381); the paragraph's own (found above) wins.
-                        if p.align.is_none() {
-                            p.align = self.stack.get(..=i).and_then(|outer| {
+                        if align.is_none() {
+                            align = self.stack.get(..=i).and_then(|outer| {
                                 outer
                                     .iter()
                                     .rev()
@@ -664,8 +668,8 @@ impl<'r> Builder<'r> {
                     }
                     _ => {}
                 }
-                if p.align.is_none() && e.align.is_some() && e.kind != ElKind::Inline {
-                    p.align = e.align;
+                if align.is_none() && e.align.is_some() && e.kind != ElKind::Inline {
+                    align = e.align;
                 }
                 // Margins belong to the paragraph's own block, not to those around it.
                 if !spaced && e.kind != ElKind::Inline {
@@ -710,6 +714,7 @@ impl<'r> Builder<'r> {
             if let Some(bg) = block_shading {
                 p.extra.get_or_insert_with(Default::default).shading = Some(bg);
             }
+            p.align = align.map(|a| a.logical(p.rtl));
             self.para = Some(p);
         }
         self.para.get_or_insert_with(Para::default)
@@ -1185,6 +1190,14 @@ impl<'r> Builder<'r> {
     fn element_style(&self, name: &str, attrs: &[(String, String)], kind: ElKind, css: &str) -> ElementStyle {
         let mut fmt = self.fmt();
         let mut align = None;
+        // Direction inherits through inline ancestors too (`<span dir=rtl><div>`), unlike a
+        // paragraph's, which is its block's.
+        let mut rtl = match attr(attrs, "dir").map(str::trim) {
+            Some(dir) if dir.eq_ignore_ascii_case("rtl") => true,
+            Some(dir) if dir.eq_ignore_ascii_case("ltr") => false,
+            // Automatic direction needs the HTML subtree to distinguish isolated descendants.
+            _ => self.stack.last().is_some_and(|e| e.rtl),
+        };
         let mut preserve = self.preserve();
         let mut page_break = false;
         let mut page_break_after = false;
@@ -1210,15 +1223,15 @@ impl<'r> Builder<'r> {
         }
         if let Some(value) = attr(attrs, "align").filter(|_| kind != ElKind::Table) {
             align = match value.to_ascii_lowercase().as_str() {
-                "center" | "middle" => Some(Align::Center),
-                "right" => Some(Align::Right),
-                "justify" => Some(Align::Justify),
-                "left" => Some(Align::Left),
+                "center" | "middle" => Some(TextAlign::physical(Align::Center)),
+                "right" => Some(TextAlign::physical(Align::Right)),
+                "justify" => Some(TextAlign::physical(Align::Justify)),
+                "left" => Some(TextAlign::physical(Align::Left)),
                 _ => None,
             };
         }
         if name == "center" {
-            align = Some(Align::Center);
+            align = Some(TextAlign::physical(Align::Center));
         }
         if self.page
             && let ElKind::Heading(n) = kind
@@ -1239,7 +1252,7 @@ impl<'r> Builder<'r> {
             .stack
             .last()
             .and_then(|e| if !self.page && matches!(e.name.as_str(), "body" | "html") { None } else { e.fmt.background.or(e.block_background) });
-        apply_style(css, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after, parent_bg);
+        apply_style(css, &mut fmt, (&mut align, &mut rtl), &mut preserve, &mut page_break, &mut page_break_after, parent_bg);
         if kind == ElKind::Pre {
             preserve = true;
         }
@@ -1256,7 +1269,11 @@ impl<'r> Builder<'r> {
             // background, so drop it too rather than painting light text on the page default.
             fmt.color = None;
         }
-        ElementStyle { fmt, block_background, align, preserve, page_break, page_break_after }
+        ElementStyle { fmt, block_background, align, rtl, preserve, page_break, page_break_after }
+    }
+
+    fn paragraph_rtl(&self) -> bool {
+        self.stack.iter().rev().find(|e| e.kind != ElKind::Inline).is_some_and(|e| e.rtl)
     }
 
     pub(super) fn start(&mut self, name: &str, attrs: &[(String, String)], self_close: bool) {
@@ -1292,7 +1309,8 @@ impl<'r> Builder<'r> {
             self.flush();
         }
         let css = self.css_of(name, attrs);
-        let ElementStyle { mut fmt, block_background, align, preserve, page_break, page_break_after } = self.element_style(name, attrs, kind, &css);
+        let ElementStyle { mut fmt, block_background, align, rtl, preserve, page_break, page_break_after } =
+            self.element_style(name, attrs, kind, &css);
         match kind {
             ElKind::Table => self.tables.push(TableB {
                 rows: Vec::new(),
@@ -1393,6 +1411,7 @@ impl<'r> Builder<'r> {
             spacing,
             auto_margins,
             align,
+            rtl,
             preserve,
             page_break,
             page_break_after,

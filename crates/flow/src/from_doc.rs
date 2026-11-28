@@ -225,7 +225,7 @@ fn para_extra(doc: &Document, p: &craft_wordmodel::props::ParaProps) -> Option<B
         shading: doc.styles.resolve_para(p).shading,
         style,
         contextual_spacing: p.contextual_spacing,
-        bidi: p.bidi.filter(|b| *b),
+        bidi: p.bidi,
         drop_cap: p.drop_cap.filter(|l| *l > 1),
         drop_cap_distance: p.drop_cap_distance.filter(|_| p.drop_cap.is_some_and(|l| l > 1)),
         keep_lines: p.keep_lines.filter(|k| *k),

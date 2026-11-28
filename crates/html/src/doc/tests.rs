@@ -242,6 +242,126 @@ fn cell_text_align_reaches_the_cell_paragraphs() {
 }
 
 #[test]
+fn rtl_paragraphs_read_and_keep_their_direction() {
+    // #2693: Word writes an RTL paragraph's direction as dir="rtl" (or CSS direction:rtl);
+    // reading it keeps the paragraph's bidi flag, and the export writes dir="rtl" back.
+    for src in [r#"<p dir="rtl">مرها</p>"#, r#"<p style="direction:rtl">مرها</p>"#, r#"<div dir="rtl"><p>مرها</p></div>"#] {
+        let parsed = parse(src);
+        let Some(FBlock::Para(p)) = parsed.blocks.first() else { panic!("no paragraph") };
+        assert!(p.rtl, "{src}");
+    }
+    let ltr = parse(r#"<p dir="ltr">مرها</p>"#);
+    let Some(FBlock::Para(p)) = ltr.blocks.first() else { panic!("no paragraph") };
+    assert!(!p.rtl, "ltr is not RTL");
+    // An explicit ltr wins over an RTL ancestor.
+    for src in [r#"<div dir="rtl"><p dir="ltr">abc</p></div>"#, r#"<div dir="rtl"><p style="direction:ltr">abc</p></div>"#] {
+        let parsed = parse(src);
+        let Some(FBlock::Para(p)) = parsed.blocks.first() else { panic!("no paragraph") };
+        assert!(!p.rtl, "{src}");
+    }
+    // The document keeps it as `w:bidi`, and the export writes dir="rtl" back.
+    let doc = craft_flow::to_doc(&parse(r#"<p dir="rtl">مرها</p>"#));
+    assert!(doc.body.iter().any(|b| if let craft_wordmodel::Block::Para(p) = &**b { p.props.bidi.unwrap_or(false) } else { false }));
+    let out = export_fragment(&doc);
+    assert!(out.contains("dir=\"rtl\""), "{out}");
+    let back = craft_flow::to_doc(&parse(out.as_str()));
+    assert!(back.body.iter().any(|b| if let craft_wordmodel::Block::Para(p) = &**b { p.props.bidi.unwrap_or(false) } else { false }));
+}
+
+#[test]
+fn paragraph_direction_set_by_its_style_is_kept_on_export() {
+    let mut doc = craft_flow::to_doc(&parse("<p>abc</p>"));
+    std::sync::Arc::make_mut(&mut doc.styles).get_mut("Heading1").expect("builtin style").para.bidi = Some(true);
+    for b in doc.body.iter_mut() {
+        if let craft_wordmodel::Block::Para(p) = std::sync::Arc::make_mut(b) {
+            p.props.style = Some("Heading1".into());
+            assert!(p.props.bidi.is_none());
+        }
+    }
+    assert!(export_fragment(&doc).contains("dir=\"rtl\""));
+}
+
+#[test]
+fn paragraph_direction_comes_from_the_nearest_block_cell_and_list_item() {
+    fn flags(f: &Flow) -> Vec<bool> {
+        f.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.rtl) } else { None }).collect()
+    }
+    // The nearest enclosing block decides, by `dir` or CSS, at any depth.
+    for src in [
+        r#"<div dir="rtl"><div dir="ltr"><p>abc</p></div></div>"#,
+        r#"<div dir="rtl"><div style="direction:ltr"><p>abc</p></div></div>"#,
+        r#"<div dir="rtl"><div dir="ltr"><div><p>abc</p></div></div></div>"#,
+    ] {
+        assert_eq!(flags(&parse(src)), [false], "{src}");
+    }
+    for src in
+        [r#"<div dir="ltr"><div dir="rtl"><p>abc</p></div></div>"#, r#"<div dir="rtl"><div dir="ltr"><div dir="rtl"><p>abc</p></div></div></div>"#]
+    {
+        assert_eq!(flags(&parse(src)), [true], "{src}");
+    }
+    // A paragraph with its own direction still wins inside both.
+    assert_eq!(flags(&parse(r#"<div dir="rtl"><div dir="ltr"><p dir="rtl">a</p><p>b</p></div></div>"#)), [true, false]);
+    // Export and reimport keep each paragraph's direction.
+    let src = r#"<div dir="rtl"><p>a</p><div dir="ltr"><p>b</p></div><p>c</p></div>"#;
+    let doc = craft_flow::to_doc(&parse(src));
+    let bidi = |d: &craft_wordmodel::Document| {
+        d.body
+            .iter()
+            .filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p.props.bidi.unwrap_or(false)) } else { None })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(bidi(&doc), [true, false, true]);
+    assert_eq!(bidi(&craft_flow::to_doc(&parse(export_fragment(&doc).as_str()))), [true, false, true]);
+
+    // Text directly in a table cell takes the cell's direction; blocks in the cell their own.
+    let cells = |src: &str| -> Vec<bool> { cell_paras(&parse(src))[0].iter().flatten().map(|p| p.rtl).collect() };
+    assert_eq!(cells(r#"<table><tr><td dir="rtl">text</td></tr></table>"#), [true]);
+    assert_eq!(cells(r#"<table><tr><td style="direction:rtl">text</td></tr></table>"#), [true]);
+    assert_eq!(cells(r#"<table><tr><td>text</td></tr></table>"#), [false]);
+    assert_eq!(cells(r#"<table dir="rtl"><tr><td>text</td><td dir="ltr">x</td></tr></table>"#), [true, false]);
+    assert_eq!(cells(r#"<table><tr><td dir="rtl"><p dir="ltr">a</p><p>b</p></td></tr></table>"#), [false, true]);
+    // A cell with no direction of its own inherits the surrounding block's.
+    assert_eq!(cells(r#"<div dir="rtl"><table><tr><td><p>a</p></td></tr></table></div>"#), [true]);
+
+    // Text directly in a table, outside any cell, and a caption take the table's direction.
+    for src in [r#"<table dir="rtl">loose<tr><td>x</td></tr></table>"#, r#"<table dir="rtl"><caption>cap</caption><tr><td>x</td></tr></table>"#] {
+        assert_eq!(flags(&parse(src)).first(), Some(&true), "{src}");
+    }
+    assert_eq!(flags(&parse(r#"<table>loose<tr><td>x</td></tr></table>"#)).first(), Some(&false));
+
+    // A continuation paragraph in a list item does not change the item's direction.
+    let f = parse(r#"<ul><li><p dir="ltr">first</p><p dir="rtl">second</p></li></ul>"#);
+    assert_eq!(flags(&f), [false], "the item keeps the first paragraph's direction");
+}
+
+#[test]
+fn left_to_right_list_items_can_nest_inside_right_to_left_items() {
+    let input = r#"<ul><li dir="rtl">First<ul><li dir="ltr">Child</li><li>Other child</li></ul></li><li>Next</li></ul>"#;
+    let flags = |flow: &Flow| {
+        flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { p.list.map(|li| (li.level, p.rtl)) } else { None }).collect::<Vec<_>>()
+    };
+    let expected = [(0, true), (1, false), (1, true), (0, false)];
+    let flow = parse(input);
+    assert_eq!(flags(&flow), expected);
+    let exported = export_fragment(&craft_flow::to_doc(&flow));
+    assert_eq!(flags(&parse(&exported)), expected, "{exported}");
+}
+
+#[test]
+fn rtl_direction_survives_export_in_single_paragraph_cells_and_code() {
+    // A cell with one RTL paragraph and a run of code paragraphs keep their direction.
+    let flow = parse(
+        r#"<table><tr><td><p dir="rtl">abc</p></td></tr></table><pre dir="rtl">one
+two</pre><pre>three</pre>"#,
+    );
+    let out = export_flow(&flow, "en");
+    let back = parse(&out);
+    assert_eq!(cell_paras(&back)[0].iter().flatten().map(|p| p.rtl).collect::<Vec<_>>(), [true], "{out}");
+    let code: Vec<bool> = back.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.rtl) } else { None }).collect();
+    assert_eq!(code, [true, true, false], "{out}");
+}
+
+#[test]
 fn reporter_sample_header_bold_and_right_aligned_cells() {
     // #1381: the reporter's table.
     let f = parse(
@@ -2197,4 +2317,82 @@ fn the_fragment_leaves_code_and_table_cells_unspaced() {
     let fragment = export_fragment(&d);
     assert!(fragment.contains("One") && fragment.contains("code"), "{fragment}");
     assert!(!fragment.contains("margin-"), "{fragment}");
+}
+
+fn dir_align(src: &str) -> Vec<(bool, Option<Align>)> {
+    paras(&parse(src)).iter().map(|p| (p.rtl, p.align)).collect()
+}
+
+#[test]
+fn physical_left_right_become_logical_with_the_paragraph_direction() {
+    // CSS `left`/`right` are physical, the model's `Left`/`Right` are start/end.
+    let ltr = |a| (false, Some(a));
+    let rtl = |a| (true, Some(a));
+    assert_eq!(dir_align(r#"<p style="text-align:right">a</p>"#), [ltr(Align::Right)]);
+    assert_eq!(dir_align(r#"<p style="text-align:left">a</p>"#), [ltr(Align::Left)]);
+    assert_eq!(dir_align(r#"<p dir="rtl" style="text-align:right">a</p>"#), [rtl(Align::Left)]);
+    assert_eq!(dir_align(r#"<p dir="rtl" style="text-align:left">a</p>"#), [rtl(Align::Right)]);
+    // Logical values and direction-free ones stay as they are.
+    assert_eq!(dir_align(r#"<p dir="rtl" style="text-align:start">a</p>"#), [rtl(Align::Left)]);
+    assert_eq!(dir_align(r#"<p dir="rtl" style="text-align:end">a</p>"#), [rtl(Align::Right)]);
+    assert_eq!(dir_align(r#"<p dir="rtl" style="text-align:center">a</p>"#), [rtl(Align::Center)]);
+    // The direction may come after the alignment, from CSS or an ancestor, and the `align` attribute is physical.
+    assert_eq!(dir_align(r#"<p style="text-align:right;direction:rtl">a</p>"#), [rtl(Align::Left)]);
+    assert_eq!(dir_align(r#"<div dir="rtl" style="text-align:right"><p>a</p></div>"#), [rtl(Align::Left)]);
+    assert_eq!(dir_align(r#"<div style="text-align:right"><p dir="rtl">a</p></div>"#), [rtl(Align::Left)]);
+    assert_eq!(dir_align(r#"<p dir="rtl" align="right">a</p>"#), [rtl(Align::Left)]);
+}
+
+#[test]
+fn rtl_cell_inherits_physical_alignment() {
+    let f = parse(r#"<table><tr><td dir="rtl" style="text-align:right">a</td></tr></table>"#);
+    let p = &cell_paras(&f)[0][0][0];
+    assert_eq!((p.rtl, p.align), (true, Some(Align::Left)));
+}
+
+#[test]
+fn rtl_alignment_round_trips_through_html() {
+    let again = |src: &str| {
+        let out = export_fragment(&craft_flow::to_doc(&parse(src)));
+        (dir_align(&out), out)
+    };
+    for (src, want, css) in [
+        (r#"<p dir="rtl" style="text-align:right">a</p>"#, (true, None), None),
+        (r#"<p dir="rtl" style="text-align:left">a</p>"#, (true, Some(Align::Right)), Some("text-align:left")),
+        (r#"<p style="text-align:right">a</p>"#, (false, Some(Align::Right)), Some("text-align:right")),
+        (r#"<p style="text-align:left">a</p>"#, (false, None), None),
+    ] {
+        let (got, out) = again(src);
+        assert_eq!(got, [want], "{src} -> {out}");
+        // The start edge is what a browser does without a rule; `(rtl, end)` is the physical left edge.
+        match css {
+            Some(css) => assert!(out.contains(css), "{src} -> {out}"),
+            None => assert!(!out.contains("text-align"), "{src} -> {out}"),
+        }
+    }
+}
+
+#[test]
+fn deferred_auto_direction_does_not_use_isolated_text_for_physical_alignment() {
+    // Until subtree-aware automatic direction is supported, inherit paragraph direction.
+    assert_eq!(dir_align(r#"<p dir="auto" style="text-align:right"><span dir="rtl">שלום</span> hello</p>"#), [(false, Some(Align::Right))]);
+    assert_eq!(
+        dir_align(r#"<div dir="rtl"><p dir="auto" style="text-align:right"><bdi dir="ltr">hello</bdi> مرحبا</p></div>"#),
+        [(true, Some(Align::Left))]
+    );
+}
+
+#[test]
+fn direction_initial_is_ltr() {
+    assert_eq!(dir_align(r#"<div dir="rtl"><p style="direction:initial">a</p></div>"#), [(false, None)]);
+}
+
+#[test]
+fn direction_passes_through_inline_ancestors() {
+    let rtl = |src: &str| paras(&parse(src)).iter().map(|p| p.rtl).collect::<Vec<_>>();
+    assert_eq!(rtl(r#"<span dir="rtl"><div>a</div></span>"#), [true]);
+    assert_eq!(rtl(r#"<custom-el dir="rtl"><div>a</div></custom-el>"#), [true]);
+    assert_eq!(rtl(r#"<span dir="rtl"><div dir="ltr">a</div></span>"#), [false]);
+    // An inline's own direction does not make its paragraph's.
+    assert_eq!(rtl(r#"<p>a <span dir="rtl">b</span></p>"#), [false]);
 }
